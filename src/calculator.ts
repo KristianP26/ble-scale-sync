@@ -1,5 +1,33 @@
+export type Gender = 'male' | 'female';
+
+export interface RenphoMetrics {
+  bmi: number;
+  bodyFatPercent: number;
+  waterPercent: number;
+  boneMass: number;
+  muscleMass: number;
+  visceralFat: number;
+  physiqueRating: number;
+  bmr: number;
+  metabolicAge: number;
+}
+
 export class RenphoCalculator {
-  constructor(weight, impedance, height, age, gender, isAthlete = false) {
+  private readonly weight: number;
+  private readonly impedance: number;
+  private readonly height: number;
+  private readonly age: number;
+  private readonly gender: Gender;
+  private readonly isAthlete: boolean;
+
+  constructor(
+    weight: number,
+    impedance: number,
+    height: number,
+    age: number,
+    gender: Gender,
+    isAthlete: boolean = false,
+  ) {
     this.weight = weight;
     this.impedance = impedance;
     this.height = height;
@@ -8,12 +36,12 @@ export class RenphoCalculator {
     this.isAthlete = isAthlete;
   }
 
-  calculate() {
+  calculate(): RenphoMetrics | null {
     if (this.height === 0 || this.weight === 0 || this.impedance === 0) {
       return null;
     }
 
-    let c1, c2, c3, c4;
+    let c1: number, c2: number, c3: number, c4: number;
 
     if (this.gender === 'male') {
       if (this.isAthlete) {
@@ -29,23 +57,23 @@ export class RenphoCalculator {
       }
     }
 
-    const h2r = (this.height ** 2) / this.impedance;
-    let lbm = (c1 * h2r) + (c2 * this.weight) + (c3 * this.age) + c4;
+    const h2r: number = (this.height ** 2) / this.impedance;
+    let lbm: number = (c1 * h2r) + (c2 * this.weight) + (c3 * this.age) + c4;
 
     if (lbm > this.weight) lbm = this.weight * 0.96;
 
-    const bodyFatKg = this.weight - lbm;
-    const bodyFatPercent = Math.max(3.0, Math.min((bodyFatKg / this.weight) * 100, 60.0));
+    const bodyFatKg: number = this.weight - lbm;
+    const bodyFatPercent: number = Math.max(3.0, Math.min((bodyFatKg / this.weight) * 100, 60.0));
 
-    const waterCoeff = this.isAthlete ? 0.74 : 0.73;
-    const waterPercent = (lbm * waterCoeff / this.weight) * 100;
+    const waterCoeff: number = this.isAthlete ? 0.74 : 0.73;
+    const waterPercent: number = (lbm * waterCoeff / this.weight) * 100;
 
-    const boneMass = lbm * 0.042;
+    const boneMass: number = lbm * 0.042;
 
-    const smmFactor = this.isAthlete ? 0.60 : 0.54;
-    const muscleMass = lbm * smmFactor;
+    const smmFactor: number = this.isAthlete ? 0.60 : 0.54;
+    const muscleMass: number = lbm * smmFactor;
 
-    let visceralRating;
+    let visceralRating: number;
     if (bodyFatPercent > 10) {
       visceralRating = (bodyFatPercent * 0.55) - 4 + (this.age * 0.08);
     } else {
@@ -53,7 +81,7 @@ export class RenphoCalculator {
     }
     visceralRating = Math.max(1, Math.min(Math.trunc(visceralRating), 59));
 
-    let physiqueRating = 5;
+    let physiqueRating: number = 5;
 
     if (bodyFatPercent > 25) {
       physiqueRating = muscleMass > (this.weight * 0.4) ? 2 : 1;
@@ -75,16 +103,16 @@ export class RenphoCalculator {
       }
     }
 
-    const heightM = this.height / 100.0;
-    const bmi = this.weight / (heightM * heightM);
+    const heightM: number = this.height / 100.0;
+    const bmi: number = this.weight / (heightM * heightM);
 
-    const baseBmr = (10 * this.weight) + (6.25 * this.height) - (5 * this.age);
-    const offset = this.gender === 'male' ? 5 : -161;
-    let bmr = baseBmr + offset;
+    const baseBmr: number = (10 * this.weight) + (6.25 * this.height) - (5 * this.age);
+    const offset: number = this.gender === 'male' ? 5 : -161;
+    let bmr: number = baseBmr + offset;
     if (this.isAthlete) bmr *= 1.05;
 
-    const idealBmr = (10 * this.weight) + (6.25 * this.height) - (5 * 25) + 5;
-    let metabolicAge = this.age + Math.trunc((idealBmr - bmr) / 15);
+    const idealBmr: number = (10 * this.weight) + (6.25 * this.height) - (5 * 25) + 5;
+    let metabolicAge: number = this.age + Math.trunc((idealBmr - bmr) / 15);
     if (metabolicAge < 12) metabolicAge = 12;
     if (this.isAthlete && metabolicAge > this.age) metabolicAge = this.age - 5;
 
@@ -102,6 +130,6 @@ export class RenphoCalculator {
   }
 }
 
-function round2(v) {
+function round2(v: number): number {
   return Math.round(v * 100) / 100;
 }

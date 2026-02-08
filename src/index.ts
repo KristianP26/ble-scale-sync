@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env tsx
 
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -6,14 +6,19 @@ import { spawn } from 'node:child_process';
 import { config } from 'dotenv';
 
 import { connectAndRead } from './ble.js';
-import { RenphoCalculator } from './calculator.js';
+import { RenphoCalculator, type Gender, type RenphoMetrics } from './calculator.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const ROOT = join(__dirname, '..');
+const __dirname: string = dirname(fileURLToPath(import.meta.url));
+const ROOT: string = join(__dirname, '..');
 config({ path: join(ROOT, '.env') });
 
-function requireEnv(key) {
-  const val = process.env[key];
+interface GarminPayload extends RenphoMetrics {
+  weight: number;
+  impedance: number;
+}
+
+function requireEnv(key: string): string {
+  const val: string | undefined = process.env[key];
   if (!val) {
     console.error(`Missing required env var: ${key}. Check your .env file.`);
     process.exit(1);
@@ -21,19 +26,23 @@ function requireEnv(key) {
   return val;
 }
 
-const SCALE_MAC   = requireEnv('SCALE_MAC');
-const CHAR_NOTIFY = requireEnv('CHAR_NOTIFY');
-const CHAR_WRITE  = requireEnv('CHAR_WRITE');
-const CMD_UNLOCK  = requireEnv('CMD_UNLOCK')
+const SCALE_MAC: string   = requireEnv('SCALE_MAC');
+const CHAR_NOTIFY: string = requireEnv('CHAR_NOTIFY');
+const CHAR_WRITE: string  = requireEnv('CHAR_WRITE');
+const CMD_UNLOCK: number[] = requireEnv('CMD_UNLOCK')
   .split(',')
-  .map((b) => parseInt(b.trim(), 16));
+  .map((b): number => {
+    const parsed = parseInt(b.trim(), 16);
+    if (Number.isNaN(parsed)) throw new Error(`Invalid hex byte in CMD_UNLOCK: "${b.trim()}"`);
+    return parsed;
+  });
 
-const USER_HEIGHT     = Number(requireEnv('USER_HEIGHT'));
-const USER_AGE        = Number(requireEnv('USER_AGE'));
-const USER_GENDER     = requireEnv('USER_GENDER').toLowerCase();
-const USER_IS_ATHLETE = requireEnv('USER_IS_ATHLETE').toLowerCase() === 'true';
+const USER_HEIGHT: number     = Number(requireEnv('USER_HEIGHT'));
+const USER_AGE: number        = Number(requireEnv('USER_AGE'));
+const USER_GENDER: Gender     = requireEnv('USER_GENDER').toLowerCase() as Gender;
+const USER_IS_ATHLETE: boolean = requireEnv('USER_IS_ATHLETE').toLowerCase() === 'true';
 
-async function main() {
+async function main(): Promise<void> {
   console.log(`\n[Sync] Renpho Scale → Garmin Connect`);
   console.log(`[Sync] Target: ${SCALE_MAC}\n`);
 
@@ -42,8 +51,8 @@ async function main() {
     charNotify: CHAR_NOTIFY,
     charWrite: CHAR_WRITE,
     cmdUnlock: CMD_UNLOCK,
-    onLiveData(w, imp) {
-      const impStr = imp > 0 ? `${imp} Ohm` : 'Measuring...';
+    onLiveData(w: number, imp: number): void {
+      const impStr: string = imp > 0 ? `${imp} Ohm` : 'Measuring...';
       process.stdout.write(`\r  Weight: ${w.toFixed(2)} kg | Impedance: ${impStr}      `);
     },
   });
@@ -53,7 +62,7 @@ async function main() {
   const calc = new RenphoCalculator(
     weight, impedance, USER_HEIGHT, USER_AGE, USER_GENDER, USER_IS_ATHLETE,
   );
-  const metrics = calc.calculate();
+  const metrics: RenphoMetrics | null = calc.calculate();
 
   if (!metrics) {
     console.error('[Sync] Calculation failed (zero inputs).');
@@ -65,7 +74,7 @@ async function main() {
     console.log(`  ${k}: ${v}`);
   }
 
-  const payload = {
+  const payload: GarminPayload = {
     weight,
     impedance,
     ...metrics,
@@ -75,9 +84,9 @@ async function main() {
   await uploadToGarmin(payload);
 }
 
-function uploadToGarmin(payload) {
-  return new Promise((resolve, reject) => {
-    const scriptPath = join(ROOT, 'scripts', 'garmin_upload.py');
+function uploadToGarmin(payload: GarminPayload): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const scriptPath: string = join(ROOT, 'scripts', 'garmin_upload.py');
     const py = spawn('python', [scriptPath], {
       stdio: ['pipe', 'inherit', 'inherit'],
       cwd: ROOT,
@@ -86,7 +95,7 @@ function uploadToGarmin(payload) {
     py.stdin.write(JSON.stringify(payload));
     py.stdin.end();
 
-    py.on('close', (code) => {
+    py.on('close', (code: number | null) => {
       if (code === 0) {
         console.log('[Sync] Done.');
         resolve();
@@ -95,13 +104,13 @@ function uploadToGarmin(payload) {
       }
     });
 
-    py.on('error', (err) => {
+    py.on('error', (err: Error) => {
       reject(new Error(`Failed to launch Python: ${err.message}`));
     });
   });
 }
 
-main().catch((err) => {
+main().catch((err: Error) => {
   console.error(`\n[Error] ${err.message}`);
   process.exit(1);
 });

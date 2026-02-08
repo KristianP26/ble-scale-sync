@@ -1,22 +1,28 @@
-import noble from '@abandonware/noble';
+import noble, { Peripheral, Characteristic } from '@abandonware/noble';
 
-export function connectAndRead(opts) {
-  const {
-    scaleMac,
-    charNotify,
-    charWrite,
-    cmdUnlock,
-    onLiveData,
-  } = opts;
+export interface ScaleMeasurement {
+  weight: number;
+  impedance: number;
+}
 
-  const targetId = scaleMac.toLowerCase().replace(/:/g, '');
+export interface ConnectOptions {
+  scaleMac: string;
+  charNotify: string;
+  charWrite: string;
+  cmdUnlock: number[];
+  onLiveData?: (weight: number, impedance: number) => void;
+}
 
-  return new Promise((resolve, reject) => {
-    let unlockInterval = null;
+export function connectAndRead(opts: ConnectOptions): Promise<ScaleMeasurement> {
+  const { scaleMac, charNotify, charWrite, cmdUnlock, onLiveData } = opts;
+  const targetId: string = scaleMac.toLowerCase().replace(/:/g, '');
+
+  return new Promise<ScaleMeasurement>((resolve, reject) => {
+    let unlockInterval: ReturnType<typeof setInterval> | null = null;
     let resolved = false;
-    let writeChar = null;
+    let writeChar: Characteristic | null = null;
 
-    function cleanup(peripheral) {
+    function cleanup(peripheral: Peripheral): void {
       if (unlockInterval) {
         clearInterval(unlockInterval);
         unlockInterval = null;
@@ -27,7 +33,7 @@ export function connectAndRead(opts) {
       }
     }
 
-    noble.on('stateChange', (state) => {
+    noble.on('stateChange', (state: string) => {
       if (state === 'poweredOn') {
         console.log('[BLE] Adapter powered on, scanning...');
         noble.startScanning([], false);
@@ -37,8 +43,9 @@ export function connectAndRead(opts) {
       }
     });
 
-    noble.on('discover', (peripheral) => {
-      const id = peripheral.id?.replace(/:/g, '').toLowerCase()
+    noble.on('discover', (peripheral: Peripheral) => {
+      const id: string =
+        peripheral.id?.replace(/:/g, '').toLowerCase()
         || peripheral.address?.replace(/:/g, '').toLowerCase()
         || '';
 
@@ -47,9 +54,9 @@ export function connectAndRead(opts) {
       console.log(`[BLE] Found scale: ${peripheral.advertisement.localName || peripheral.id}`);
       noble.stopScanning();
 
-      peripheral.connect((err) => {
+      peripheral.connect((err?: string) => {
         if (err) {
-          reject(new Error(`BLE connect failed: ${err.message}`));
+          reject(new Error(`BLE connect failed: ${err}`));
           return;
         }
 
@@ -58,41 +65,46 @@ export function connectAndRead(opts) {
         peripheral.discoverAllServicesAndCharacteristics((err, _services, characteristics) => {
           if (err) {
             cleanup(peripheral);
-            reject(new Error(`Service discovery failed: ${err.message}`));
+            reject(new Error(`Service discovery failed: ${err}`));
             return;
           }
 
-          const notifyChar = characteristics.find(
-            (c) => c.uuid === charNotify.replace(/-/g, '')
+          const notifyChar: Characteristic | undefined = characteristics.find(
+            (c) => c.uuid === charNotify.replace(/-/g, ''),
           );
           writeChar = characteristics.find(
-            (c) => c.uuid === charWrite.replace(/-/g, '')
-          );
+            (c) => c.uuid === charWrite.replace(/-/g, ''),
+          ) ?? null;
 
           if (!notifyChar || !writeChar) {
             cleanup(peripheral);
             reject(new Error(
-              `Required characteristics not found. ` +
-              `Notify: ${!!notifyChar}, Write: ${!!writeChar}`
+              `Required characteristics not found. `
+              + `Notify: ${!!notifyChar}, Write: ${!!writeChar}`,
             ));
             return;
           }
 
-          notifyChar.subscribe((err) => {
+          notifyChar.subscribe((err?: string) => {
             if (err) {
               cleanup(peripheral);
-              reject(new Error(`Subscribe failed: ${err.message}`));
+              reject(new Error(`Subscribe failed: ${err}`));
               return;
             }
             console.log('[BLE] Subscribed to notifications. Step on the scale.');
           });
 
-          notifyChar.on('data', (data) => {
+          notifyChar.on('data', (data: Buffer) => {
             if (resolved) return;
             if (data[0] !== 0x10 || data.length < 10) return;
 
-            const weight = ((data[3] << 8) + data[4]) / 100.0;
-            const impedance = (data[8] << 8) + data[9];
+            const rawWeight: number = (data[3] << 8) + data[4];
+            const rawImpedance: number = (data[8] << 8) + data[9];
+
+            if (Number.isNaN(rawWeight) || Number.isNaN(rawImpedance)) return;
+
+            const weight: number = rawWeight / 100.0;
+            const impedance: number = rawImpedance;
 
             if (onLiveData) {
               onLiveData(weight, impedance);
@@ -105,12 +117,12 @@ export function connectAndRead(opts) {
             }
           });
 
-          const unlockBuf = Buffer.from(cmdUnlock);
-          const sendUnlock = () => {
+          const unlockBuf: Buffer = Buffer.from(cmdUnlock);
+          const sendUnlock = (): void => {
             if (writeChar && !resolved) {
-              writeChar.write(unlockBuf, true, (err) => {
+              writeChar.write(unlockBuf, true, (err?: string) => {
                 if (err && !resolved) {
-                  console.error(`[BLE] Unlock write error: ${err.message}`);
+                  console.error(`[BLE] Unlock write error: ${err}`);
                 }
               });
             }
@@ -129,7 +141,7 @@ export function connectAndRead(opts) {
       });
     });
 
-    if (noble.state === 'poweredOn') {
+    if ((noble as any).state === 'poweredOn') {
       console.log('[BLE] Adapter already on, scanning...');
       noble.startScanning([], false);
     }
