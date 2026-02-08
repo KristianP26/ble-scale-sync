@@ -1,11 +1,31 @@
-# Python cache
+# Environment & secrets
+.env
+
+# Node.js
+node_modules/
+
+# Python
 __pycache__/
 *.py[cod]
-
-# Configuration files (contains secrets)
-config.py
+*.egg-info/
 
 # Virtual environments
-.venv
+.venv/
 env/
 venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Legacy config (pre-v2)
+config.py
+
+# Garmin tokens (should not be committed)
+.garmin_renpho_tokens/

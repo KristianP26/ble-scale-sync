@@ -1,0 +1,27 @@
+{
+  "name": "renpho-scale-garmin-sync",
+  "version": "2.0.0",
+  "description": "Sync Renpho BLE smart scale data (weight + body composition) to Garmin Connect",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "setup-garmin": "python scripts/setup_garmin.py",
+    "scan": "node src/scan.js"
+  },
+  "keywords": [
+    "renpho",
+    "garmin",
+    "scale",
+    "ble",
+    "bluetooth",
+    "body-composition",
+    "health"
+  ],
+  "author": "Kristián Partl",
+  "license": "MIT",
+  "dependencies": {
+    "@abandonware/noble": "^1.9.2-25",
+    "dotenv": "^16.4.7"
+  }
+}

@@ -1,2 +1,2 @@
-bleak
-garminconnect
+garminconnect>=0.2.19
+python-dotenv>=1.0.0
