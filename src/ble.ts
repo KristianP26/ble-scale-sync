@@ -47,6 +47,7 @@ export function scanAndRead(opts: ScanOptions): Promise<GarminPayload> {
   return new Promise<GarminPayload>((resolve, reject) => {
     let unlockInterval: ReturnType<typeof setInterval> | null = null;
     let connectTimer: ReturnType<typeof setTimeout> | null = null;
+    let scanHeartbeat: ReturnType<typeof setInterval> | null = null;
     let resolved = false;
     let retryCount = 0;
     let connecting = false;
@@ -59,6 +60,10 @@ export function scanAndRead(opts: ScanOptions): Promise<GarminPayload> {
       if (connectTimer) {
         clearTimeout(connectTimer);
         connectTimer = null;
+      }
+      if (scanHeartbeat) {
+        clearInterval(scanHeartbeat);
+        scanHeartbeat = null;
       }
     }
 
@@ -100,14 +105,25 @@ export function scanAndRead(opts: ScanOptions): Promise<GarminPayload> {
         if (!resolved) {
           debug('Restarting scan...');
           noble.startScanning([], true);
+          startHeartbeat();
         }
       }, 1000);
+    }
+
+    function startHeartbeat(): void {
+      if (scanHeartbeat) clearInterval(scanHeartbeat);
+      scanHeartbeat = setInterval(() => {
+        if (!resolved && !connecting) {
+          console.log('[BLE] Still scanning...');
+        }
+      }, 10_000);
     }
 
     function onStateChange(state: string): void {
       if (state === 'poweredOn') {
         console.log('[BLE] Adapter powered on, scanning...');
         noble.startScanning([], false);
+        startHeartbeat();
       } else {
         console.log(`[BLE] Adapter state: ${state}`);
         noble.stopScanning();
@@ -305,6 +321,7 @@ export function scanAndRead(opts: ScanOptions): Promise<GarminPayload> {
     if ((noble as any).state === 'poweredOn') {
       console.log('[BLE] Adapter already on, scanning...');
       noble.startScanning([], false);
+      startHeartbeat();
     }
   });
 }

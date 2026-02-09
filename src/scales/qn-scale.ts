@@ -120,9 +120,13 @@ export class QnScaleAdapter implements ScaleAdapter {
     const rawWeight = data.readUInt16BE(3);
     let weight = rawWeight / this.weightScaleFactor;
 
-    // Heuristic fallback (from QNHandler): if weight looks unreasonable, try /10
+    // Heuristic fallback (from QNHandler): if weight looks unreasonable, try alternate factor
     if (weight <= 5 || weight >= 250) {
-      weight = rawWeight / 10;
+      const altFactor = this.weightScaleFactor === 100 ? 10 : 100;
+      const altWeight = rawWeight / altFactor;
+      if (altWeight > 5 && altWeight < 250) {
+        weight = altWeight;
+      }
     }
 
     if (weight <= 0 || !Number.isFinite(weight)) return null;

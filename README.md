@@ -355,6 +355,20 @@ sudo setcap cap_net_raw+eip $(eval readlink -f $(which node))
 - If using auto-discovery, ensure only one recognized scale is powered on nearby.
 - On Linux, ensure the Bluetooth service is running: `sudo systemctl start bluetooth`.
 
+### Scale was found before but now isn't discovered (Linux / Raspberry Pi)
+
+BlueZ (the Linux Bluetooth stack) can sometimes get into a state where it no longer reports a previously-seen device. To fix:
+
+```bash
+sudo systemctl restart bluetooth
+```
+
+Then step on the scale to wake it up and run `npm start` (or `npm run scan` to verify visibility first). If using `setcap`, you may need to re-apply it after a Node.js update:
+
+```bash
+sudo setcap cap_net_raw+eip $(eval readlink -f $(which node))
+```
+
 ### Garmin upload fails
 
 - Re-run `npm run setup-garmin` to refresh tokens.

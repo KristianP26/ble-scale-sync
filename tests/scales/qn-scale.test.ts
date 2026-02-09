@@ -151,7 +151,7 @@ describe('QnScaleAdapter', () => {
       expect(reading!.weight).toBe(80);
     });
 
-    it('applies weight heuristic when weight <= 5 or >= 250', () => {
+    it('applies weight heuristic when weight <= 5 (factor=100, tries /10)', () => {
       const adapter = makeAdapter();
       // With default scaleFactor=100, rawWeight=300 → 300/100=3.00 → <=5, try /10 → 30.00 kg
       const buf = Buffer.alloc(10);
@@ -166,6 +166,30 @@ describe('QnScaleAdapter', () => {
       const reading = adapter.parseNotification(buf);
       expect(reading).not.toBeNull();
       expect(reading!.weight).toBe(30);
+    });
+
+    it('applies weight heuristic when factor=10 gives >= 250 (tries /100)', () => {
+      const adapter = makeAdapter();
+      // 0x12 frame sets weightScaleFactor = 10
+      const infoBuf = Buffer.alloc(11);
+      infoBuf[0] = 0x12;
+      infoBuf[10] = 0; // NOT 1 → scale factor becomes 10
+
+      adapter.parseNotification(infoBuf);
+
+      // rawWeight=8320, 8320/10=832 → >=250, try /100 → 83.20 kg (user's exact scenario)
+      const buf = Buffer.alloc(10);
+      buf[0] = 0x10;
+      buf[1] = 0x0a;
+      buf[2] = 0x01;
+      buf.writeUInt16BE(8320, 3);
+      buf[5] = 1;
+      buf.writeUInt16BE(500, 6);
+      buf.writeUInt16BE(500, 8);
+
+      const reading = adapter.parseNotification(buf);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBeCloseTo(83.2);
     });
   });
 
