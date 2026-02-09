@@ -24,9 +24,9 @@ import { uuid16, buildPayload, xorChecksum, type ScaleBodyComp } from './body-co
 export class HoffenAdapter implements ScaleAdapter {
   readonly name = 'Hoffen BS-8107';
   readonly charNotifyUuid = uuid16(0xffb2);
-  readonly charWriteUuid  = uuid16(0xffb2);
+  readonly charWriteUuid = uuid16(0xffb2);
   /** CMD_SEND_USER: [0xFA, 0x85, 0x03, 0x00, 0x1E, 0xA0, checksum]. */
-  readonly unlockCommand  = (() => {
+  readonly unlockCommand = (() => {
     const cmd = [0xfa, 0x85, 0x03, 0x00, 0x1e, 0xa0];
     const cs = xorChecksum(cmd, 0, cmd.length);
     return [...cmd, cs];

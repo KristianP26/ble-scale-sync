@@ -23,25 +23,67 @@ const SVC_WEIGHT_SHORT = '181d';
 
 /** Device names handled by other specific adapters — excluded from matching. */
 const EXCLUDED = [
-  'qn-scale', 'renpho', 'senssun', 'sencor',
+  'qn-scale',
+  'renpho',
+  'senssun',
+  'sencor',
   'yunmai',
-  'mibcs', 'mibfs', 'mi_scale', 'mi scale',
-  'es-26bb', 'es-cs20m', 'mengii', 'yunchen', 'vscale',
-  'electronic scale', '1byone scale', 'health scale',
-  't9146', 't9147', 'ae bs-06', 'hoffen',
-  'swan', 'icomon', 'shape200', 'shape100', 'shape50', 'style100',
-  '01257b', '11257b', '000fatscale', '042fatscale',
-  'bf-700', 'bf-800', 'rt-libra', 'libra-b', 'libra-w',
-  'bf700', 'bf710', 'sbf70', 'sbf72', 'sbf73', 'sbf75',
-  'bf915', 'aicdscale',
-  '013197', '013198', '0202b6', '0203b',
+  'mibcs',
+  'mibfs',
+  'mi_scale',
+  'mi scale',
+  'es-26bb',
+  'es-cs20m',
+  'mengii',
+  'yunchen',
+  'vscale',
+  'electronic scale',
+  '1byone scale',
+  'health scale',
+  't9146',
+  't9147',
+  'ae bs-06',
+  'hoffen',
+  'swan',
+  'icomon',
+  'shape200',
+  'shape100',
+  'shape50',
+  'style100',
+  '01257b',
+  '11257b',
+  '000fatscale',
+  '042fatscale',
+  'bf-700',
+  'bf-800',
+  'rt-libra',
+  'libra-b',
+  'libra-w',
+  'bf700',
+  'bf710',
+  'sbf70',
+  'sbf72',
+  'sbf73',
+  'sbf75',
+  'bf915',
+  'aicdscale',
+  '013197',
+  '013198',
+  '0202b6',
+  '0203b',
 ];
 
 /** Known brand / model substrings for standard-GATT body-composition scales.
  *  Only models NOT handled by specific adapters should be listed here. */
 const KNOWN_NAMES = [
-  'beurer', 'silvercrest',
-  'bf105', 'bf720', 'bf950', 'bf500', 'bf600', 'bf850',
+  'beurer',
+  'silvercrest',
+  'bf105',
+  'bf720',
+  'bf950',
+  'bf500',
+  'bf600',
+  'bf850',
   'medisana',
 ];
 
@@ -96,7 +138,8 @@ export class StandardGattScaleAdapter implements ScaleAdapter {
     if (data.length < 4) return null;
 
     let offset = 0;
-    const flags = data.readUInt16LE(offset); offset += 2;
+    const flags = data.readUInt16LE(offset);
+    offset += 2;
 
     const isKg = (flags & 0x0001) === 0;
     const tsPresent = (flags & 0x0002) !== 0;
@@ -115,7 +158,8 @@ export class StandardGattScaleAdapter implements ScaleAdapter {
 
     // Body Fat Percentage — mandatory field
     if (offset + 2 > data.length) return null;
-    const bodyFatPct = data.readUInt16LE(offset) * 0.1; offset += 2;
+    const bodyFatPct = data.readUInt16LE(offset) * 0.1;
+    offset += 2;
 
     // Timestamp (7 bytes)
     if (tsPresent) offset += 7;
@@ -129,7 +173,8 @@ export class StandardGattScaleAdapter implements ScaleAdapter {
     // Muscle Percentage
     let musclePct: number | undefined;
     if (musclePctPresent && offset + 2 <= data.length) {
-      musclePct = data.readUInt16LE(offset) * 0.1; offset += 2;
+      musclePct = data.readUInt16LE(offset) * 0.1;
+      offset += 2;
     }
 
     // Muscle Mass
@@ -144,20 +189,23 @@ export class StandardGattScaleAdapter implements ScaleAdapter {
     // Body Water Mass
     let waterMassKg: number | undefined;
     if (waterMassPresent && offset + 2 <= data.length) {
-      const raw = data.readUInt16LE(offset) * massMultiplier; offset += 2;
+      const raw = data.readUInt16LE(offset) * massMultiplier;
+      offset += 2;
       waterMassKg = isKg ? raw : raw * 0.453592;
     }
 
     // Impedance (resolution 0.1 Ohm)
     let impedance = 0;
     if (impedancePresent && offset + 2 <= data.length) {
-      impedance = data.readUInt16LE(offset) * 0.1; offset += 2;
+      impedance = data.readUInt16LE(offset) * 0.1;
+      offset += 2;
     }
 
     // Weight
     let weight = 0;
     if (weightPresent && offset + 2 <= data.length) {
-      const rawW = data.readUInt16LE(offset) * massMultiplier; offset += 2;
+      const rawW = data.readUInt16LE(offset) * massMultiplier;
+      offset += 2;
       weight = isKg ? rawW : rawW * 0.453592;
     }
 
@@ -175,8 +223,12 @@ export class StandardGattScaleAdapter implements ScaleAdapter {
     // When impedance is available, use the full RenphoCalculator (BIA-based)
     if (reading.impedance > 0) {
       const calc = new RenphoCalculator(
-        reading.weight, reading.impedance,
-        profile.height, profile.age, profile.gender, profile.isAthlete,
+        reading.weight,
+        reading.impedance,
+        profile.height,
+        profile.age,
+        profile.gender,
+        profile.isAthlete,
       );
       const metrics = calc.calculate();
       if (metrics) return { weight: reading.weight, impedance: reading.impedance, ...metrics };
@@ -184,14 +236,20 @@ export class StandardGattScaleAdapter implements ScaleAdapter {
 
     // Fallback: derive metrics from GATT body-fat + profile estimations
     const gatt = this.cachedGatt;
-    const waterPercent = gatt?.waterMassKg && reading.weight > 0
-      ? (gatt.waterMassKg / reading.weight) * 100
-      : undefined;
+    const waterPercent =
+      gatt?.waterMassKg && reading.weight > 0
+        ? (gatt.waterMassKg / reading.weight) * 100
+        : undefined;
 
-    return buildPayload(reading.weight, reading.impedance, {
-      fat: gatt?.bodyFatPercent && gatt.bodyFatPercent > 0 ? gatt.bodyFatPercent : undefined,
-      water: waterPercent,
-      muscle: gatt?.musclePct,
-    }, profile);
+    return buildPayload(
+      reading.weight,
+      reading.impedance,
+      {
+        fat: gatt?.bodyFatPercent && gatt.bodyFatPercent > 0 ? gatt.bodyFatPercent : undefined,
+        water: waterPercent,
+        muscle: gatt?.musclePct,
+      },
+      profile,
+    );
   }
 }

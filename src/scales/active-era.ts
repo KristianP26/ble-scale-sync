@@ -25,11 +25,11 @@ import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js
 export class ActiveEraAdapter implements ScaleAdapter {
   readonly name = 'Active Era BS-06';
   readonly charNotifyUuid = uuid16(0xffb2);
-  readonly charWriteUuid  = uuid16(0xffb1);
+  readonly charWriteUuid = uuid16(0xffb1);
   /** 20-byte config packet — simplified with zeros for timestamp/user data. */
-  readonly unlockCommand  = [
-    0xac, 0x27, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  readonly unlockCommand = [
+    0xac, 0x27, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
   ];
   readonly unlockIntervalMs = 0;
 
@@ -59,7 +59,7 @@ export class ActiveEraAdapter implements ScaleAdapter {
 
       // Impedance correction for high values
       if (imp >= 1500) {
-        imp = (((imp - 1000) + (this.cachedWeight * 10 * -0.4)) / 0.6) / 10;
+        imp = (imp - 1000 + this.cachedWeight * 10 * -0.4) / 0.6 / 10;
       }
 
       this.cachedImpedance = imp;

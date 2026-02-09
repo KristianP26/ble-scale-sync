@@ -23,9 +23,9 @@ const ONEBYONE_NAMES = ['t9146', 't9147', 'health scale'];
 export class OneByoneAdapter implements ScaleAdapter {
   readonly name = '1byone (Eufy)';
   readonly charNotifyUuid = uuid16(0xfff4);
-  readonly charWriteUuid  = uuid16(0xfff1);
+  readonly charWriteUuid = uuid16(0xfff1);
   /** Clock sync command — static default for 2026-02-09 00:00:00. */
-  readonly unlockCommand  = [0xf1, 0x07, 0xfa, 0x02, 0x09, 0x00, 0x00, 0x00];
+  readonly unlockCommand = [0xf1, 0x07, 0xfa, 0x02, 0x09, 0x00, 0x00, 0x00];
   readonly unlockIntervalMs = 0;
 
   matches(peripheral: Peripheral): boolean {
@@ -75,10 +75,10 @@ export class OneByoneAdapter implements ScaleAdapter {
 export class OneByoneNewAdapter implements ScaleAdapter {
   readonly name = '1byone Scale (new)';
   readonly charNotifyUuid = uuid16(0xffb2);
-  readonly charWriteUuid  = uuid16(0xffb1);
-  readonly unlockCommand  = [
-    0xab, 0x2a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd7,
+  readonly charWriteUuid = uuid16(0xffb1);
+  readonly unlockCommand = [
+    0xab, 0x2a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0xd7,
   ];
   readonly unlockIntervalMs = 0;
 

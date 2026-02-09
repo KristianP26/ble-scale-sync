@@ -45,7 +45,9 @@ export class ExingtechY1Adapter implements ScaleAdapter {
     const name = (peripheral.advertisement.localName || '').toLowerCase();
     if (name === 'vscale') return true;
 
-    const uuids = (peripheral.advertisement.serviceUuids || []).map((u) => u.toLowerCase().replace(/-/g, ''));
+    const uuids = (peripheral.advertisement.serviceUuids || []).map((u) =>
+      u.toLowerCase().replace(/-/g, ''),
+    );
     return uuids.includes(SVC_UUID);
   }
 

@@ -8,8 +8,8 @@ import type {
 import { uuid16, buildPayload } from './body-comp-helpers.js';
 
 // Renpho ES-26BB custom service / characteristic UUIDs
-const CHR_RESULTS = uuid16(0x2a10);  // notify — measurement results
-const CHR_CONTROL = uuid16(0x2a11);  // write  — commands
+const CHR_RESULTS = uuid16(0x2a10); // notify — measurement results
+const CHR_CONTROL = uuid16(0x2a11); // write  — commands
 
 /**
  * Adapter for the Renpho ES-26BB-B scale.

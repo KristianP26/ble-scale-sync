@@ -44,9 +44,9 @@ export function scanAndRead(opts: ScanOptions): Promise<GarminPayload> {
 
     noble.on('discover', (peripheral: Peripheral) => {
       const id: string =
-        peripheral.id?.replace(/:/g, '').toLowerCase()
-        || peripheral.address?.replace(/:/g, '').toLowerCase()
-        || '';
+        peripheral.id?.replace(/:/g, '').toLowerCase() ||
+        peripheral.address?.replace(/:/g, '').toLowerCase() ||
+        '';
 
       let matchedAdapter: ScaleAdapter | undefined;
 
@@ -57,10 +57,12 @@ export function scanAndRead(opts: ScanOptions): Promise<GarminPayload> {
         matchedAdapter = adapters.find((a) => a.matches(peripheral));
         if (!matchedAdapter) {
           const deviceName: string = peripheral.advertisement.localName || '(unknown)';
-          reject(new Error(
-            `Device found (${deviceName}) but no adapter recognized it. `
-            + `Registered adapters: ${adapters.map((a) => a.name).join(', ')}`,
-          ));
+          reject(
+            new Error(
+              `Device found (${deviceName}) but no adapter recognized it. ` +
+                `Registered adapters: ${adapters.map((a) => a.name).join(', ')}`,
+            ),
+          );
           return;
         }
       } else {
@@ -71,7 +73,9 @@ export function scanAndRead(opts: ScanOptions): Promise<GarminPayload> {
         console.log(`[BLE] Auto-discovered: ${matchedAdapter.name} (${peripheral.id})`);
       }
 
-      console.log(`[BLE] Found scale: ${peripheral.advertisement.localName || peripheral.id} [${matchedAdapter.name}]`);
+      console.log(
+        `[BLE] Found scale: ${peripheral.advertisement.localName || peripheral.id} [${matchedAdapter.name}]`,
+      );
       noble.stopScanning();
 
       peripheral.connect((err?: string) => {
@@ -98,11 +102,13 @@ export function scanAndRead(opts: ScanOptions): Promise<GarminPayload> {
 
           if (!notifyChar || !writeChar) {
             cleanup(peripheral);
-            reject(new Error(
-              `Required characteristics not found. `
-              + `Notify (${matchedAdapter.charNotifyUuid}): ${!!notifyChar}, `
-              + `Write (${matchedAdapter.charWriteUuid}): ${!!writeChar}`,
-            ));
+            reject(
+              new Error(
+                `Required characteristics not found. ` +
+                  `Notify (${matchedAdapter.charNotifyUuid}): ${!!notifyChar}, ` +
+                  `Write (${matchedAdapter.charWriteUuid}): ${!!writeChar}`,
+              ),
+            );
             return;
           }
 
@@ -162,6 +168,7 @@ export function scanAndRead(opts: ScanOptions): Promise<GarminPayload> {
       });
     });
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if ((noble as any).state === 'poweredOn') {
       console.log('[BLE] Adapter already on, scanning...');
       noble.startScanning([], false);

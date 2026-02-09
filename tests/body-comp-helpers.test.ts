@@ -41,7 +41,7 @@ describe('xorChecksum()', () => {
   });
 
   it('XORs a single byte', () => {
-    expect(xorChecksum([0xAB, 0xCD], 1, 2)).toBe(0xCD);
+    expect(xorChecksum([0xab, 0xcd], 1, 2)).toBe(0xcd);
   });
 
   it('returns 0 for empty range', () => {
@@ -56,11 +56,17 @@ describe('xorChecksum()', () => {
 
 describe('estimateBodyFat()', () => {
   const maleNonAthlete: UserProfile = {
-    height: 183, age: 30, gender: 'male', isAthlete: false,
+    height: 183,
+    age: 30,
+    gender: 'male',
+    isAthlete: false,
   };
 
   const femaleAthlete: UserProfile = {
-    height: 165, age: 25, gender: 'female', isAthlete: true,
+    height: 165,
+    age: 25,
+    gender: 'female',
+    isAthlete: true,
   };
 
   it('computes male non-athlete body fat', () => {
@@ -79,10 +85,13 @@ describe('estimateBodyFat()', () => {
   it('clamps to minimum 3%', () => {
     // Very low BMI and young male → could produce negative/very low value
     const profile: UserProfile = {
-      height: 180, age: 15, gender: 'male', isAthlete: true,
+      height: 180,
+      age: 15,
+      gender: 'male',
+      isAthlete: true,
     };
-    const bmi = 14; // extremely underweight
-    const raw = (1.2 * 14 + 0.23 * 15 - 10.8 * 1 - 5.4) * 0.85;
+    // bmi=14 extremely underweight
+    // raw = (1.2 * 14 + 0.23 * 15 - 10.8 * 1 - 5.4) * 0.85 = 3.4425
     // raw = (16.8 + 3.45 - 10.8 - 5.4) * 0.85 = 4.05 * 0.85 = 3.4425
     // Actually still above 3, use bmi=10
     const result = estimateBodyFat(10, profile);
@@ -92,12 +101,13 @@ describe('estimateBodyFat()', () => {
 
   it('clamps to maximum 60%', () => {
     const profile: UserProfile = {
-      height: 150, age: 80, gender: 'female', isAthlete: false,
+      height: 150,
+      age: 80,
+      gender: 'female',
+      isAthlete: false,
     };
-    const bmi = 55;
-    const raw = 1.2 * 55 + 0.23 * 80 - 10.8 * 0 - 5.4;
-    // raw = 66 + 18.4 - 0 - 5.4 = 79 → clamped to 60
-    expect(estimateBodyFat(bmi, profile)).toBe(60);
+    // bmi=55, raw = 1.2 * 55 + 0.23 * 80 - 10.8 * 0 - 5.4 = 79 → clamped to 60
+    expect(estimateBodyFat(55, profile)).toBe(60);
   });
 });
 
@@ -138,32 +148,32 @@ describe('computePhysiqueRating()', () => {
 describe('computeBiaFat()', () => {
   it('male normal — matches hand-calculated value', () => {
     const p: UserProfile = { height: 183, age: 26, gender: 'male', isAthlete: false };
-    const h2r = (183 ** 2) / 500;
-    const lbm = 0.503 * h2r + 0.165 * 80 + (-0.158) * 26 + 17.8;
+    const h2r = 183 ** 2 / 500;
+    const lbm = 0.503 * h2r + 0.165 * 80 + -0.158 * 26 + 17.8;
     const expected = Math.max(3, Math.min(((80 - lbm) / 80) * 100, 60));
     expect(computeBiaFat(80, 500, p)).toBeCloseTo(expected, 5);
   });
 
   it('male athlete — uses athlete coefficients', () => {
     const p: UserProfile = { height: 183, age: 26, gender: 'male', isAthlete: true };
-    const h2r = (183 ** 2) / 500;
-    const lbm = 0.637 * h2r + 0.205 * 80 + (-0.180) * 26 + 12.5;
+    const h2r = 183 ** 2 / 500;
+    const lbm = 0.637 * h2r + 0.205 * 80 + -0.18 * 26 + 12.5;
     const expected = Math.max(3, Math.min(((80 - lbm) / 80) * 100, 60));
     expect(computeBiaFat(80, 500, p)).toBeCloseTo(expected, 5);
   });
 
   it('female normal — uses female coefficients', () => {
     const p: UserProfile = { height: 165, age: 30, gender: 'female', isAthlete: false };
-    const h2r = (165 ** 2) / 450;
-    const lbm = 0.490 * h2r + 0.150 * 65 + (-0.130) * 30 + 11.5;
+    const h2r = 165 ** 2 / 450;
+    const lbm = 0.49 * h2r + 0.15 * 65 + -0.13 * 30 + 11.5;
     const expected = Math.max(3, Math.min(((65 - lbm) / 65) * 100, 60));
     expect(computeBiaFat(65, 450, p)).toBeCloseTo(expected, 5);
   });
 
   it('female athlete — uses female athlete coefficients', () => {
     const p: UserProfile = { height: 165, age: 30, gender: 'female', isAthlete: true };
-    const h2r = (165 ** 2) / 450;
-    const lbm = 0.550 * h2r + 0.180 * 65 + (-0.150) * 30 + 8.5;
+    const h2r = 165 ** 2 / 450;
+    const lbm = 0.55 * h2r + 0.18 * 65 + -0.15 * 30 + 8.5;
     const expected = Math.max(3, Math.min(((65 - lbm) / 65) * 100, 60));
     expect(computeBiaFat(65, 450, p)).toBeCloseTo(expected, 5);
   });
@@ -192,21 +202,28 @@ describe('computeBiaFat()', () => {
 
 describe('buildPayload()', () => {
   const profile: UserProfile = {
-    height: 183, age: 30, gender: 'male', isAthlete: false,
+    height: 183,
+    age: 30,
+    gender: 'male',
+    isAthlete: false,
   };
 
   it('uses provided comp fields directly', () => {
     const comp = {
-      fat: 22, water: 55, muscle: 42, bone: 3.2, visceralFat: 8,
+      fat: 22,
+      water: 55,
+      muscle: 42,
+      bone: 3.2,
+      visceralFat: 8,
     };
     const p = buildPayload(80, 500, comp, profile);
 
     expect(p.weight).toBe(80);
     expect(p.impedance).toBe(500);
-    expect(p.bodyFatPercent).toBe(22);   // from comp.fat
-    expect(p.waterPercent).toBe(55);     // from comp.water
-    expect(p.boneMass).toBe(3.2);       // from comp.bone
-    expect(p.visceralFat).toBe(8);      // from comp.visceralFat
+    expect(p.bodyFatPercent).toBe(22); // from comp.fat
+    expect(p.waterPercent).toBe(55); // from comp.water
+    expect(p.boneMass).toBe(3.2); // from comp.bone
+    expect(p.visceralFat).toBe(8); // from comp.visceralFat
 
     // muscleMass = (comp.muscle / 100) * weight = 0.42 * 80 = 33.6
     expect(p.muscleMass).toBe(r2(0.42 * 80));
@@ -228,7 +245,7 @@ describe('buildPayload()', () => {
 
     // waterPercent is estimated from lbm
     const lbm = 80 * (1 - estimatedFat / 100);
-    expect(p.waterPercent).toBe(r2((lbm * 0.73 / 80) * 100));
+    expect(p.waterPercent).toBe(r2(((lbm * 0.73) / 80) * 100));
     expect(p.boneMass).toBe(r2(lbm * 0.042));
     expect(p.muscleMass).toBe(r2(lbm * 0.54));
   });
@@ -241,7 +258,7 @@ describe('buildPayload()', () => {
 
     // Other fields estimated from provided fat
     const lbm = 80 * (1 - 20 / 100); // = 64
-    expect(p.waterPercent).toBe(r2((lbm * 0.73 / 80) * 100));
+    expect(p.waterPercent).toBe(r2(((lbm * 0.73) / 80) * 100));
     expect(p.boneMass).toBe(r2(lbm * 0.042));
     expect(p.muscleMass).toBe(r2(lbm * 0.54));
   });

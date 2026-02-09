@@ -40,7 +40,7 @@ import { uuid16 } from './body-comp-helpers.js';
 
 // Type 2 UUIDs (most common variant)
 const CHR_NOTIFY = uuid16(0xfff1);
-const CHR_WRITE  = uuid16(0xfff2);
+const CHR_WRITE = uuid16(0xfff2);
 
 // Service UUIDs for matching
 const SVC_T1 = 'ffe0';
@@ -49,9 +49,9 @@ const SVC_T2 = 'fff0';
 export class QnScaleAdapter implements ScaleAdapter {
   readonly name = 'QN Scale';
   readonly charNotifyUuid = CHR_NOTIFY;
-  readonly charWriteUuid  = CHR_WRITE;
+  readonly charWriteUuid = CHR_WRITE;
   /** Unit config: [0x13, 0x09, protocolType=0x00, unit=KG, 0x10, ...padding, checksum]. */
-  readonly unlockCommand  = [0x13, 0x09, 0x00, 0x01, 0x10, 0x00, 0x00, 0x00, 0x2d];
+  readonly unlockCommand = [0x13, 0x09, 0x00, 0x01, 0x10, 0x00, 0x00, 0x00, 0x2d];
   readonly unlockIntervalMs = 2000;
 
   /**
@@ -67,16 +67,18 @@ export class QnScaleAdapter implements ScaleAdapter {
    */
   matches(peripheral: Peripheral): boolean {
     const name = (peripheral.advertisement.localName || '').toLowerCase();
-    const nameMatch = name.includes('qn-scale')
-      || name.includes('renpho')
-      || name.includes('senssun')
-      || name.includes('sencor');
+    const nameMatch =
+      name.includes('qn-scale') ||
+      name.includes('renpho') ||
+      name.includes('senssun') ||
+      name.includes('sencor');
     if (!nameMatch) return false;
 
     // Require QN vendor service UUID (matching openScale's supportFor logic)
     const uuids = (peripheral.advertisement.serviceUuids || []).map((u) => u.toLowerCase());
-    return uuids.some((u) => u === SVC_T1 || u === SVC_T2
-      || u === uuid16(0xffe0) || u === uuid16(0xfff0));
+    return uuids.some(
+      (u) => u === SVC_T1 || u === SVC_T2 || u === uuid16(0xffe0) || u === uuid16(0xfff0),
+    );
   }
 
   /**

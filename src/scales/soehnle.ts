@@ -8,7 +8,6 @@ import type {
 import { buildPayload } from './body-comp-helpers.js';
 
 // Soehnle custom 128-bit service / characteristic UUIDs
-const SVC_SOEHNLE = '352e300028e940b8a3616db4cca4147c';
 const CHR_NOTIFY_A = '352e300128e940b8a3616db4cca4147c';
 const CHR_CMD = '352e300228e940b8a3616db4cca4147c';
 

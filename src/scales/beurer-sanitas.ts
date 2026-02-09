@@ -5,18 +5,26 @@ import type {
   UserProfile,
   GarminPayload,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, r2 } from './body-comp-helpers.js';
+import { uuid16, buildPayload } from './body-comp-helpers.js';
 
 // Beurer/Sanitas custom BLE service + characteristic
-const SVC_FFE0 = uuid16(0xffe0);
 const CHR_FFE1 = uuid16(0xffe1);
 
 /** Known device name prefixes/substrings for Beurer / Sanitas / RT-Libra scales. */
 const KNOWN_NAMES = [
-  'bf-700', 'beurer bf700', 'bf-800', 'beurer bf800',
-  'rt-libra-b', 'rt-libra-w', 'libra-b', 'libra-w',
-  'bf700', 'beurer bf710',
-  'sanitas sbf70', 'sbf75', 'aicdscale1',
+  'bf-700',
+  'beurer bf700',
+  'bf-800',
+  'beurer bf800',
+  'rt-libra-b',
+  'rt-libra-w',
+  'libra-b',
+  'libra-w',
+  'bf700',
+  'beurer bf710',
+  'sanitas sbf70',
+  'sbf75',
+  'aicdscale1',
 ];
 
 interface CachedComp {
@@ -55,8 +63,8 @@ export class BeurerSanitasScaleAdapter implements ScaleAdapter {
     const name = (peripheral.advertisement.localName || '').toLowerCase();
     const matched = KNOWN_NAMES.some((n) => name.includes(n));
     if (matched) {
-      this.isBf710Type = name.includes('bf710') || name.includes('sbf7')
-        || name.includes('aicdscale');
+      this.isBf710Type =
+        name.includes('bf710') || name.includes('sbf7') || name.includes('aicdscale');
     }
     return matched;
   }
@@ -80,7 +88,7 @@ export class BeurerSanitasScaleAdapter implements ScaleAdapter {
   parseNotification(data: Buffer): ScaleReading | null {
     if (data.length < 6) return null;
 
-    const weight = data.readUInt16BE(4) * 50 / 1000;
+    const weight = (data.readUInt16BE(4) * 50) / 1000;
     if (weight <= 0 || !Number.isFinite(weight)) return null;
 
     let impedance = 0;
@@ -93,7 +101,7 @@ export class BeurerSanitasScaleAdapter implements ScaleAdapter {
         fat: data.readUInt16BE(8) / 10,
         water: data.readUInt16BE(10) / 10,
         muscle: data.readUInt16BE(12) / 10,
-        bone: data.readUInt16BE(14) * 50 / 1000,
+        bone: (data.readUInt16BE(14) * 50) / 1000,
       };
     }
 
@@ -107,12 +115,17 @@ export class BeurerSanitasScaleAdapter implements ScaleAdapter {
   computeMetrics(reading: ScaleReading, profile: UserProfile): GarminPayload {
     const comp = this.cachedComp;
     if (comp) {
-      return buildPayload(reading.weight, reading.impedance, {
-        fat: comp.fat,
-        water: comp.water,
-        muscle: comp.muscle,
-        bone: comp.bone,
-      }, profile);
+      return buildPayload(
+        reading.weight,
+        reading.impedance,
+        {
+          fat: comp.fat,
+          water: comp.water,
+          muscle: comp.muscle,
+          bone: comp.bone,
+        },
+        profile,
+      );
     }
 
     return buildPayload(reading.weight, reading.impedance, {}, profile);

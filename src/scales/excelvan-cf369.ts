@@ -7,7 +7,6 @@ import type {
 } from '../interfaces/scale-adapter.js';
 import { uuid16, buildPayload, xorChecksum, type ScaleBodyComp } from './body-comp-helpers.js';
 
-const SVC_UUID = uuid16(0xfff0);
 const CHR_NOTIFY = uuid16(0xfff4);
 const CHR_WRITE = uuid16(0xfff1);
 

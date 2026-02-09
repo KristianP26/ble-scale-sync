@@ -3,15 +3,14 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { config } from 'dotenv';
 
 import { scanAndRead } from './ble.js';
 import { adapters } from './scales/index.js';
-import type { Gender, GarminPayload, UserProfile } from './interfaces/scale-adapter.js';
+import { loadConfig } from './validate-env.js';
+import type { GarminPayload } from './interfaces/scale-adapter.js';
 
 const __dirname: string = dirname(fileURLToPath(import.meta.url));
 const ROOT: string = join(__dirname, '..');
-config({ path: join(ROOT, '.env') });
 
 interface UploadResult {
   success: boolean;
@@ -19,26 +18,7 @@ interface UploadResult {
   error?: string;
 }
 
-function requireEnv(key: string): string {
-  const val: string | undefined = process.env[key];
-  if (!val) {
-    console.error(`Missing required env var: ${key}. Check your .env file.`);
-    process.exit(1);
-  }
-  return val;
-}
-
-const SCALE_MAC: string | undefined = process.env.SCALE_MAC || undefined;
-
-const birthYear: number = Number(requireEnv('USER_BIRTH_YEAR'));
-const age: number = new Date().getFullYear() - birthYear;
-
-const profile: UserProfile = {
-  height: Number(requireEnv('USER_HEIGHT')),
-  age,
-  gender: requireEnv('USER_GENDER').toLowerCase() as Gender,
-  isAthlete: requireEnv('USER_IS_ATHLETE').toLowerCase() === 'true',
-};
+const { profile, scaleMac: SCALE_MAC } = loadConfig();
 
 function findPython(): Promise<string> {
   return new Promise((resolve) => {
@@ -63,7 +43,9 @@ async function main(): Promise<void> {
     profile,
     onLiveData(reading) {
       const impStr: string = reading.impedance > 0 ? `${reading.impedance} Ohm` : 'Measuring...';
-      process.stdout.write(`\r  Weight: ${reading.weight.toFixed(2)} kg | Impedance: ${impStr}      `);
+      process.stdout.write(
+        `\r  Weight: ${reading.weight.toFixed(2)} kg | Impedance: ${impStr}      `,
+      );
     },
   });
 

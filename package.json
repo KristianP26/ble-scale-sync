@@ -8,7 +8,11 @@
     "start": "tsx src/index.ts",
     "setup-garmin": "python3 scripts/setup_garmin.py",
     "scan": "tsx src/scan.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "lint": "eslint src tests",
+    "lint:fix": "eslint src tests --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\""
   },
   "keywords": [
     "renpho",
@@ -30,8 +34,12 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.8.1",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.55.0",
     "vitest": "^4.0.18"
   }
 }

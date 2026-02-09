@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { RenphoCalculator, type RenphoMetrics } from '../src/calculator.js';
+import { RenphoCalculator } from '../src/calculator.js';
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
 
@@ -44,18 +44,19 @@ describe('RenphoCalculator', () => {
       const m = calc.calculate()!;
       expect(m).not.toBeNull();
 
-      const h2r = (183 ** 2) / 500;
-      const lbm = 0.503 * h2r + 0.165 * 80 + (-0.158) * 26 + 17.8;
+      const h2r = 183 ** 2 / 500;
+      const lbm = 0.503 * h2r + 0.165 * 80 + -0.158 * 26 + 17.8;
       const fatKg = 80 - lbm;
       const fatPct = Math.max(3, Math.min((fatKg / 80) * 100, 60));
 
       expect(m.bmi).toBe(r2(80 / (1.83 * 1.83)));
       expect(m.bodyFatPercent).toBe(r2(fatPct));
-      expect(m.waterPercent).toBe(r2((lbm * 0.73 / 80) * 100));
+      expect(m.waterPercent).toBe(r2(((lbm * 0.73) / 80) * 100));
       expect(m.boneMass).toBe(r2(lbm * 0.042));
       expect(m.muscleMass).toBe(r2(lbm * 0.54));
-      expect(m.visceralFat).toBe(Math.max(1, Math.min(
-        Math.trunc(fatPct * 0.55 - 4 + 26 * 0.08), 59)));
+      expect(m.visceralFat).toBe(
+        Math.max(1, Math.min(Math.trunc(fatPct * 0.55 - 4 + 26 * 0.08), 59)),
+      );
       expect(m.physiqueRating).toBe(5);
       expect(m.bmr).toBe(Math.trunc(10 * 80 + 6.25 * 183 - 5 * 26 + 5));
       expect(m.metabolicAge).toBe(26);
@@ -84,14 +85,14 @@ describe('RenphoCalculator', () => {
       const calc = new RenphoCalculator(80, 500, 183, 26, 'male', true);
       const m = calc.calculate()!;
 
-      const h2r = (183 ** 2) / 500;
-      const lbm = 0.637 * h2r + 0.205 * 80 + (-0.180) * 26 + 12.5;
+      const h2r = 183 ** 2 / 500;
+      const lbm = 0.637 * h2r + 0.205 * 80 + -0.18 * 26 + 12.5;
       const fatKg = 80 - lbm;
       const fatPct = Math.max(3, Math.min((fatKg / 80) * 100, 60));
 
       expect(m.bodyFatPercent).toBe(r2(fatPct));
-      expect(m.waterPercent).toBe(r2((lbm * 0.74 / 80) * 100));
-      expect(m.muscleMass).toBe(r2(lbm * 0.60));
+      expect(m.waterPercent).toBe(r2(((lbm * 0.74) / 80) * 100));
+      expect(m.muscleMass).toBe(r2(lbm * 0.6));
       expect(m.physiqueRating).toBe(9); // fat<18, muscle>0.45w
       expect(m.bmr).toBe(Math.trunc((10 * 80 + 6.25 * 183 - 5 * 26 + 5) * 1.05));
     });
@@ -121,8 +122,8 @@ describe('RenphoCalculator', () => {
       const calc = new RenphoCalculator(65, 450, 165, 30, 'female');
       const m = calc.calculate()!;
 
-      const h2r = (165 ** 2) / 450;
-      const lbm = 0.490 * h2r + 0.150 * 65 + (-0.130) * 30 + 11.5;
+      const h2r = 165 ** 2 / 450;
+      const lbm = 0.49 * h2r + 0.15 * 65 + -0.13 * 30 + 11.5;
       const fatPct = Math.max(3, Math.min(((65 - lbm) / 65) * 100, 60));
 
       expect(m.bodyFatPercent).toBe(r2(fatPct));
@@ -147,13 +148,13 @@ describe('RenphoCalculator', () => {
       const calc = new RenphoCalculator(65, 450, 165, 30, 'female', true);
       const m = calc.calculate()!;
 
-      const h2r = (165 ** 2) / 450;
-      const lbm = 0.550 * h2r + 0.180 * 65 + (-0.150) * 30 + 8.5;
+      const h2r = 165 ** 2 / 450;
+      const lbm = 0.55 * h2r + 0.18 * 65 + -0.15 * 30 + 8.5;
       const fatPct = Math.max(3, Math.min(((65 - lbm) / 65) * 100, 60));
 
       expect(m.bodyFatPercent).toBe(r2(fatPct));
-      expect(m.waterPercent).toBe(r2((lbm * 0.74 / 65) * 100));
-      expect(m.muscleMass).toBe(r2(lbm * 0.60));
+      expect(m.waterPercent).toBe(r2(((lbm * 0.74) / 65) * 100));
+      expect(m.muscleMass).toBe(r2(lbm * 0.6));
       expect(m.bmr).toBe(Math.trunc((10 * 65 + 6.25 * 165 - 5 * 30 - 161) * 1.05));
     });
   });

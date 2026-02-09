@@ -24,9 +24,9 @@ import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js
 export class MgbAdapter implements ScaleAdapter {
   readonly name = 'MGB (Swan/Icomon/YG)';
   readonly charNotifyUuid = uuid16(0xffb2);
-  readonly charWriteUuid  = uuid16(0xffb1);
+  readonly charWriteUuid = uuid16(0xffb1);
   /** Magic init: [0xAC, 0x02, 0xF7, 0x00, 0x00, 0x00, 0xCC, checksum]. */
-  readonly unlockCommand  = (() => {
+  readonly unlockCommand = (() => {
     const checksum = (0xf7 + 0x00 + 0x00 + 0x00 + 0xcc) & 0xff;
     return [0xac, 0x02, 0xf7, 0x00, 0x00, 0x00, 0xcc, checksum];
   })();

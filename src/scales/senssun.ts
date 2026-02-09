@@ -8,11 +8,11 @@ import type {
 import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
 
 /** Bitmask flags for tracking which frame types have been received. */
-const FRAME_WEIGHT  = 0x01;  // 0xA5
-const FRAME_FAT     = 0x02;  // 0xB0
-const FRAME_MUSCLE  = 0x04;  // 0xC0
-const FRAME_BMR     = 0x08;  // 0xD0
-const FRAME_ALL     = FRAME_WEIGHT | FRAME_FAT | FRAME_MUSCLE | FRAME_BMR;
+const FRAME_WEIGHT = 0x01; // 0xA5
+const FRAME_FAT = 0x02; // 0xB0
+const FRAME_MUSCLE = 0x04; // 0xC0
+const FRAME_BMR = 0x08; // 0xD0
+const FRAME_ALL = FRAME_WEIGHT | FRAME_FAT | FRAME_MUSCLE | FRAME_BMR;
 
 /**
  * Adapter for the Senssun Fat Scale.
@@ -31,9 +31,9 @@ const FRAME_ALL     = FRAME_WEIGHT | FRAME_FAT | FRAME_MUSCLE | FRAME_BMR;
 export class SenssunAdapter implements ScaleAdapter {
   readonly name = 'Senssun Fat Scale';
   readonly charNotifyUuid = uuid16(0xfff1);
-  readonly charWriteUuid  = uuid16(0xfff2);
+  readonly charWriteUuid = uuid16(0xfff2);
   /** User sync command: [0xA5, 0x10, 0x11, 0x1E, 0xA0, 0x00, 0x00, xor, 0x00]. */
-  readonly unlockCommand  = (() => {
+  readonly unlockCommand = (() => {
     const bytes = [0xa5, 0x10, 0x11, 0x1e, 0xa0, 0x00, 0x00];
     let xor = 0;
     for (let i = 1; i <= 6; i++) xor ^= bytes[i];

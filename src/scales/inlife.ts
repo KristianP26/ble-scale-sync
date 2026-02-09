@@ -82,9 +82,9 @@ export class InlifeScaleAdapter implements ScaleAdapter {
       this.cachedComp = {};
     } else {
       // Legacy mode — body comp values embedded
-      const lbm = ((data[4] << 16) | (data[5] << 8) | data[6]) / 1000;
+      const _lbm = ((data[4] << 16) | (data[5] << 8) | data[6]) / 1000;
       const visceral = data.readUInt16BE(7) / 10;
-      const bmr = data.readUInt16BE(9) / 10;
+      const _bmr = data.readUInt16BE(9) / 10;
 
       this.cachedComp = {
         visceralFat: visceral > 0 ? visceral : undefined,

@@ -87,11 +87,7 @@ export class MiScale2Adapter implements ScaleAdapter {
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): GarminPayload {
     const { weight, impedance } = reading;
-    const mi = new MiScaleCalc(
-      profile.gender === 'male' ? 1 : 0,
-      profile.age,
-      profile.height,
-    );
+    const mi = new MiScaleCalc(profile.gender === 'male' ? 1 : 0, profile.age, profile.height);
 
     const fat = mi.bodyFat(weight, impedance);
     const water = mi.water(fat);
@@ -99,9 +95,18 @@ export class MiScale2Adapter implements ScaleAdapter {
     const muscle = mi.muscle(weight, impedance);
     const visceralFat = mi.visceralFat(weight);
 
-    return buildPayload(weight, impedance, {
-      fat, water, muscle, bone, visceralFat,
-    }, profile);
+    return buildPayload(
+      weight,
+      impedance,
+      {
+        fat,
+        water,
+        muscle,
+        bone,
+        visceralFat,
+      },
+      profile,
+    );
   }
 }
 
@@ -121,7 +126,7 @@ class MiScaleCalc {
   ) {}
 
   private lbmCoeff(weight: number, impedance: number): number {
-    let lbm = (this.height * 9.058 / 100) * (this.height / 100);
+    let lbm = ((this.height * 9.058) / 100) * (this.height / 100);
     lbm += weight * 0.32 + 12.226;
     lbm -= impedance * 0.0068;
     lbm -= this.age * 0.0542;
@@ -159,7 +164,7 @@ class MiScaleCalc {
 
   boneMass(weight: number, impedance: number): number {
     const base = this.sex === 0 ? 0.245691014 : 0.18016894;
-    let bone = (base - (this.lbmCoeff(weight, impedance) * 0.05158)) * -1;
+    let bone = (base - this.lbmCoeff(weight, impedance) * 0.05158) * -1;
     bone = bone > 2.2 ? bone + 0.1 : bone - 0.1;
 
     if (this.sex === 0 && bone > 5.1) bone = 8;
@@ -194,24 +199,23 @@ class MiScaleCalc {
     let vf = 0;
 
     if (this.sex === 0) {
-      if (weight > (13 - (this.height * 0.5)) * -1) {
-        const sub = ((this.height * 1.45) + (this.height * 0.1158) * this.height) - 120;
-        vf = (weight * 500 / sub) - 6 + (this.age * 0.07);
+      if (weight > (13 - this.height * 0.5) * -1) {
+        const sub = this.height * 1.45 + this.height * 0.1158 * this.height - 120;
+        vf = (weight * 500) / sub - 6 + this.age * 0.07;
       } else {
-        const sub = 0.691 + (this.height * -0.0024) + (this.height * -0.0024);
-        vf = (((this.height * 0.027) - (sub * weight)) * -1) + (this.age * 0.07) - this.age;
+        const sub = 0.691 + this.height * -0.0024 + this.height * -0.0024;
+        vf = (this.height * 0.027 - sub * weight) * -1 + this.age * 0.07 - this.age;
       }
     } else {
       if (this.height < weight * 1.6) {
-        const sub = ((this.height * 0.4) - (this.height * (this.height * 0.0826))) * -1;
-        vf = ((weight * 305) / (sub + 48)) - 2.9 + (this.age * 0.15);
+        const sub = (this.height * 0.4 - this.height * (this.height * 0.0826)) * -1;
+        vf = (weight * 305) / (sub + 48) - 2.9 + this.age * 0.15;
       } else {
         const sub = 0.765 + this.height * -0.0015;
-        vf = (((this.height * 0.143) - (weight * sub)) * -1) + (this.age * 0.15) - 5;
+        vf = (this.height * 0.143 - weight * sub) * -1 + this.age * 0.15 - 5;
       }
     }
 
     return vf;
   }
 }
-

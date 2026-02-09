@@ -27,8 +27,8 @@ import { uuid16, buildPayload } from './body-comp-helpers.js';
  *   Devices WITH 0xFFE0/0xFFF0 are handled by QnScaleAdapter (QNHandler.kt).
  */
 
-const CHR_WEIGHT = uuid16(0x2a9d);    // notify — proprietary weight encoding
-const CHR_CUSTOM0 = uuid16(0xffe2);   // write  — vendor magic commands
+const CHR_WEIGHT = uuid16(0x2a9d); // notify — proprietary weight encoding
+const CHR_CUSTOM0 = uuid16(0xffe2); // write  — vendor magic commands
 
 // QN vendor service UUIDs (used for exclusion)
 const SVC_QN_T1 = 'ffe0';
@@ -37,9 +37,9 @@ const SVC_QN_T2 = 'fff0';
 export class RenphoScaleAdapter implements ScaleAdapter {
   readonly name = 'Renpho ES-WBE28';
   readonly charNotifyUuid = CHR_WEIGHT;
-  readonly charWriteUuid  = CHR_CUSTOM0;
+  readonly charWriteUuid = CHR_CUSTOM0;
   /** MAGIC0 — kicks the device into measurement mode. */
-  readonly unlockCommand  = [0x10, 0x01, 0x00, 0x11];
+  readonly unlockCommand = [0x10, 0x01, 0x00, 0x11];
   readonly unlockIntervalMs = 3000;
 
   /**
@@ -52,8 +52,9 @@ export class RenphoScaleAdapter implements ScaleAdapter {
 
     // Reject QN-protocol devices (mutual exclusion from RenphoHandler.kt)
     const uuids = (peripheral.advertisement.serviceUuids || []).map((u) => u.toLowerCase());
-    const hasQn = uuids.some((u) => u === SVC_QN_T1 || u === SVC_QN_T2
-      || u === uuid16(0xffe0) || u === uuid16(0xfff0));
+    const hasQn = uuids.some(
+      (u) => u === SVC_QN_T1 || u === SVC_QN_T2 || u === uuid16(0xffe0) || u === uuid16(0xfff0),
+    );
     return !hasQn;
   }
 

@@ -8,10 +8,6 @@ import type {
 import { buildPayload } from './body-comp-helpers.js';
 
 // Sanitas SBF72/73 / Beurer BF915 custom service + characteristic UUIDs (full 128-bit)
-const SVC_FFFF = '0000ffff00001000800000805f9b34fb';
-const CHR_USER_LIST = '0000000100001000800000805f9b34fb';
-const CHR_TAKE_MEAS = '0000000600001000800000805f9b34fb';
-
 // Standard BCS characteristic for body composition measurement (inherited from StandardWeightProfileHandler)
 const CHR_BODY_COMP_MEAS = '00002a9c00001000800000805f9b34fb';
 const CHR_USER_CONTROL_POINT = '00002a9f00001000800000805f9b34fb';
@@ -61,7 +57,8 @@ export class SanitasSbf72Adapter implements ScaleAdapter {
     if (data.length < 4) return null;
 
     let offset = 0;
-    const flags = data.readUInt16LE(offset); offset += 2;
+    const flags = data.readUInt16LE(offset);
+    offset += 2;
 
     const isKg = (flags & 0x0001) === 0;
     const tsPresent = (flags & 0x0002) !== 0;
@@ -80,7 +77,8 @@ export class SanitasSbf72Adapter implements ScaleAdapter {
 
     // Body Fat Percentage — mandatory field
     if (offset + 2 > data.length) return null;
-    const bodyFatPct = data.readUInt16LE(offset) * 0.1; offset += 2;
+    const bodyFatPct = data.readUInt16LE(offset) * 0.1;
+    offset += 2;
 
     if (tsPresent) offset += 7;
     if (userPresent) offset += 1;
@@ -88,7 +86,8 @@ export class SanitasSbf72Adapter implements ScaleAdapter {
 
     let musclePct: number | undefined;
     if (musclePctPresent && offset + 2 <= data.length) {
-      musclePct = data.readUInt16LE(offset) * 0.1; offset += 2;
+      musclePct = data.readUInt16LE(offset) * 0.1;
+      offset += 2;
     }
 
     if (muscleMassPresent && offset + 2 <= data.length) offset += 2;
@@ -97,18 +96,21 @@ export class SanitasSbf72Adapter implements ScaleAdapter {
 
     let waterMassKg: number | undefined;
     if (waterMassPresent && offset + 2 <= data.length) {
-      const raw = data.readUInt16LE(offset) * massMultiplier; offset += 2;
+      const raw = data.readUInt16LE(offset) * massMultiplier;
+      offset += 2;
       waterMassKg = isKg ? raw : raw * 0.453592;
     }
 
     let impedance = 0;
     if (impedancePresent && offset + 2 <= data.length) {
-      impedance = data.readUInt16LE(offset) * 0.1; offset += 2;
+      impedance = data.readUInt16LE(offset) * 0.1;
+      offset += 2;
     }
 
     let weight = 0;
     if (weightPresent && offset + 2 <= data.length) {
-      const rawW = data.readUInt16LE(offset) * massMultiplier; offset += 2;
+      const rawW = data.readUInt16LE(offset) * massMultiplier;
+      offset += 2;
       weight = isKg ? rawW : rawW * 0.453592;
     }
 
@@ -124,14 +126,20 @@ export class SanitasSbf72Adapter implements ScaleAdapter {
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): GarminPayload {
     const gatt = this.cachedGatt;
-    const waterPercent = gatt?.waterMassKg && reading.weight > 0
-      ? (gatt.waterMassKg / reading.weight) * 100
-      : undefined;
+    const waterPercent =
+      gatt?.waterMassKg && reading.weight > 0
+        ? (gatt.waterMassKg / reading.weight) * 100
+        : undefined;
 
-    return buildPayload(reading.weight, reading.impedance, {
-      fat: gatt?.bodyFatPercent && gatt.bodyFatPercent > 0 ? gatt.bodyFatPercent : undefined,
-      water: waterPercent,
-      muscle: gatt?.musclePct,
-    }, profile);
+    return buildPayload(
+      reading.weight,
+      reading.impedance,
+      {
+        fat: gatt?.bodyFatPercent && gatt.bodyFatPercent > 0 ? gatt.bodyFatPercent : undefined,
+        water: waterPercent,
+        muscle: gatt?.musclePct,
+      },
+      profile,
+    );
   }
 }

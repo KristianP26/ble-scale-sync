@@ -13,8 +13,8 @@ function uuid16(code: number): string {
 }
 
 // Yunmai GATT service / characteristic UUIDs
-const CHR_MEAS = uuid16(0xffe4);   // notify — measurement data
-const CHR_CMD  = uuid16(0xffe9);   // write  — commands
+const CHR_MEAS = uuid16(0xffe4); // notify — measurement data
+const CHR_CMD = uuid16(0xffe9); // write  — commands
 
 // Response-type markers in data[3]
 const RESP_MEASURED = 0x02;
@@ -124,9 +124,18 @@ export class YunmaiScaleAdapter implements ScaleAdapter {
     const bone = ym.boneMass(musclePct, weight);
     const visceralFat = ym.visceralFat(fat, profile.age);
 
-    return buildPayload(weight, impedance, {
-      fat, water, muscle: musclePct, bone, visceralFat,
-    }, profile);
+    return buildPayload(
+      weight,
+      impedance,
+      {
+        fat,
+        water,
+        muscle: musclePct,
+        bone,
+        visceralFat,
+      },
+      profile,
+    );
   }
 }
 
@@ -160,9 +169,9 @@ class YunmaiCalc {
 
     if (r >= 1) r = Math.sqrt(r);
 
-    let f = (weight * 1.5 / h / h) + (age * 0.08);
+    let f = (weight * 1.5) / h / h + age * 0.08;
     if (this.sex === 1) f -= 10.8;
-    f = (f - 7.4) + r;
+    f = f - 7.4 + r;
 
     if (f < 5 || f > 75) f = 0;
     return f;
@@ -179,9 +188,9 @@ class YunmaiCalc {
     let bone: number;
 
     if (this.sex === 1) {
-      bone = ((weight * (musclePct / 100) * 4) / 7 * 0.22 * 0.6) + (h / 100);
+      bone = ((weight * (musclePct / 100) * 4) / 7) * 0.22 * 0.6 + h / 100;
     } else {
-      bone = ((weight * (musclePct / 100) * 4) / 7 * 0.34 * 0.45) + (h / 100);
+      bone = ((weight * (musclePct / 100) * 4) / 7) * 0.34 * 0.45 + h / 100;
     }
 
     bone = (bone * 10 + 0.5) / 10;
@@ -189,12 +198,12 @@ class YunmaiCalc {
   }
 
   leanBodyMass(weight: number, bodyFat: number): number {
-    return weight * (100 - bodyFat) / 100;
+    return (weight * (100 - bodyFat)) / 100;
   }
 
   visceralFat(bodyFat: number, age: number): number {
     let f = bodyFat;
-    const a = (age < 18 || age > 120) ? 18 : age;
+    const a = age < 18 || age > 120 ? 18 : age;
 
     if (!this.fitnessBody) {
       if (this.sex === 1) {
@@ -210,7 +219,7 @@ class YunmaiCalc {
       let d = this.sex === 1 ? 1.4 : 1.8;
       if (f > 0) d = 1.1;
 
-      const vf = (f / d) + 9.5;
+      const vf = f / d + 9.5;
       return Math.max(1, Math.min(vf, 30));
     }
 
@@ -219,9 +228,8 @@ class YunmaiCalc {
     if (bodyFat > 15) {
       vf = (bodyFat - 15) / 1.1 + 12;
     } else {
-      vf = -1 * (15 - bodyFat) / 1.4 + 12;
+      vf = (-1 * (15 - bodyFat)) / 1.4 + 12;
     }
     return Math.max(1, Math.min(vf, 9));
   }
 }
-
