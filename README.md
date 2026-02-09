@@ -1,8 +1,35 @@
 # Renpho Scale → Garmin Connect Sync
 
-A cross-platform CLI tool that reads body composition data from a **BLE smart scale** and uploads it to **Garmin Connect**. Built with an adapter pattern — currently supports **Renpho** (and compatible QN-Scale/Senssun/Sencor devices), extensible to other brands.
+A cross-platform CLI tool that reads body composition data from a **BLE smart scale** and uploads it to **Garmin Connect**. Built with an adapter pattern supporting **20+ scale brands** out of the box.
 
 Works on **Linux** (including Raspberry Pi), **macOS**, and **Windows**.
+
+### Supported Scales
+
+| Brand / Model | Protocol |
+|---|---|
+| **Renpho** / QN-Scale / Sencor | Custom (FFF0) |
+| **Renpho ES-26BB** | Custom (1A10) |
+| **Xiaomi Mi Scale 2** (MIBCS / MIBFS) | Vendor UUID |
+| **Yunmai** Signal / Mini / SE | Custom (FFE0) |
+| **Beurer** BF700 / BF710 / BF800 | Custom (FFE0) |
+| **Sanitas** SBF70 / SBF75 / SBF72 / SBF73 | Custom (FFE0) / BCS |
+| **Beurer BF915** | Standard BCS |
+| **Soehnle** Shape200 / Shape100 / Shape50 / Style100 | Custom UUID |
+| **Medisana** BS430 / BS440 / BS444 | Custom (78B2) |
+| **Trisa** Body Analyze | Custom (7802) |
+| **Excelvan CF369** (Electronic Scale) | Custom (FFF0) |
+| **Hesley** (YunChen) | Custom (FFF0) |
+| **Inlife** (fatscale) | Custom (FFF0) |
+| **Digoo DG-SO38H** (Mengii) | Custom (FFF0) |
+| **Senssun Fat** | Custom (FFF0) |
+| **ES-CS20M** | Custom (1A10) |
+| **Exingtech Y1** (vscale) | Custom UUID |
+| **1byone** / Eufy C1 / Eufy P1 | Custom (FFF0 / FFB0) |
+| **Active Era BF-06** | Custom (FFB0) |
+| **MGB** (Swan / Icomon / YG) | Custom (FFB0) |
+| **Hoffen BS-8107** | Custom (FFB0) |
+| Any **standard BT SIG BCS/WSS** scale | Standard (181B / 181D) |
 
 ## How It Works
 
@@ -13,7 +40,7 @@ Works on **Linux** (including Raspberry Pi), **macOS**, and **Windows**.
 └────────────────┘        └────────────────┘        └────────────────┘
 ```
 
-**TypeScript** (run via `tsx`) scans for a BLE scale, auto-detects the brand via the adapter pattern, and calculates 9 body composition metrics. It passes the results as JSON to a **Python** script that uploads to Garmin Connect and returns a structured JSON response.
+**TypeScript** (run via `tsx`) scans for a BLE scale, auto-detects the brand via the adapter pattern, and calculates up to 10 body composition metrics. It passes the results as JSON to a **Python** script that uploads to Garmin Connect and returns a structured JSON response.
 
 ## Prerequisites
 
@@ -94,7 +121,7 @@ Turn on your Renpho scale (step on it briefly) and run:
 npm run scan
 ```
 
-This scans for nearby BLE devices for 15 seconds. Recognized scales are tagged with the adapter name (e.g. `[Renpho]`). Copy the MAC address into your `.env` file.
+This scans for nearby BLE devices for 15 seconds. Recognized scales are tagged with the adapter name (e.g. `[Renpho]`, `[Xiaomi Mi Scale 2]`, `[Yunmai]`). Copy the MAC address into your `.env` file.
 
 > **Tip:** On macOS, noble uses UUIDs instead of MAC addresses. The scan output will show the correct identifier to use.
 
@@ -147,8 +174,29 @@ renpho-scale-garmin-sync/
 │   ├── interfaces/
 │   │   └── scale-adapter.ts        # ScaleAdapter interface & shared types
 │   └── scales/
-│       ├── index.ts                # Adapter registry
-│       └── renpho.ts               # Renpho/QN-Scale adapter
+│       ├── index.ts                # Adapter registry (all adapters)
+│       ├── body-comp-helpers.ts    # Shared body-comp utilities
+│       ├── renpho.ts               # Renpho / QN-Scale / Sencor
+│       ├── renpho-es26bb.ts        # Renpho ES-26BB-B
+│       ├── mi-scale-2.ts           # Xiaomi Mi Scale 2
+│       ├── yunmai.ts               # Yunmai Signal / Mini / SE
+│       ├── beurer-sanitas.ts       # Beurer BF700/710/800, Sanitas SBF70/75
+│       ├── sanitas-sbf72.ts        # Sanitas SBF72/73, Beurer BF915
+│       ├── soehnle.ts              # Soehnle Shape / Style
+│       ├── medisana-bs44x.ts       # Medisana BS430/440/444
+│       ├── trisa.ts                # Trisa Body Analyze
+│       ├── es-cs20m.ts             # ES-CS20M
+│       ├── exingtech-y1.ts         # Exingtech Y1 (vscale)
+│       ├── excelvan-cf369.ts       # Excelvan CF369
+│       ├── hesley.ts               # Hesley (YunChen)
+│       ├── inlife.ts               # Inlife (fatscale)
+│       ├── digoo.ts                # Digoo DG-SO38H (Mengii)
+│       ├── senssun.ts              # Senssun Fat
+│       ├── one-byone.ts            # 1byone / Eufy C1 / Eufy P1
+│       ├── active-era.ts           # Active Era BF-06
+│       ├── mgb.ts                  # MGB (Swan / Icomon / YG)
+│       ├── hoffen.ts               # Hoffen BS-8107
+│       └── standard-gatt.ts        # Generic BCS/WSS catch-all
 ├── scripts/
 │   ├── garmin_upload.py            # Garmin uploader (JSON stdin → JSON stdout)
 │   └── setup_garmin.py             # One-time Garmin auth setup
@@ -209,6 +257,10 @@ sudo setcap cap_net_raw+eip $(eval readlink -f $(which node))
 ### Windows BLE issues
 - Make sure your Bluetooth adapter uses the WinUSB driver (use [Zadig](https://zadig.akeo.ie/) to switch drivers if needed).
 - Run your terminal as Administrator if you encounter permission errors.
+
+## Credits
+
+Scale adapter protocols and body-composition algorithms were ported from [**openScale**](https://github.com/oliexdev/openScale), an open-source Android app for Bluetooth scales by oliexdev and contributors. Licensed under GPL-3.0.
 
 ## License
 

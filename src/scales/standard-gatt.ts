@@ -25,13 +25,22 @@ const EXCLUDED = [
   'qn-scale', 'renpho', 'senssun', 'sencor',
   'yunmai',
   'mibcs', 'mibfs', 'mi_scale', 'mi scale',
+  'es-26bb', 'es-cs20m', 'mengii', 'yunchen', 'vscale',
+  'electronic scale', '1byone scale', 'health scale',
+  't9146', 't9147', 'ae bs-06', 'hoffen',
+  'swan', 'icomon', 'shape200', 'shape100', 'shape50', 'style100',
+  '01257b', '11257b', '000fatscale', '042fatscale',
+  'bf-700', 'bf-800', 'rt-libra', 'libra-b', 'libra-w',
+  'bf700', 'bf710', 'sbf70', 'sbf72', 'sbf73', 'sbf75',
+  'bf915', 'aicdscale',
+  '013197', '013198', '0202b6', '0203b',
 ];
 
-/** Known brand / model substrings for standard-GATT body-composition scales. */
+/** Known brand / model substrings for standard-GATT body-composition scales.
+ *  Only models NOT handled by specific adapters should be listed here. */
 const KNOWN_NAMES = [
-  'beurer', 'sanitas', 'silvercrest', 'digoo', '1byone',
+  'beurer', 'silvercrest',
   'bf105', 'bf720', 'bf950', 'bf500', 'bf600', 'bf850',
-  'sbf7', 'bs444', 'bs440',
   'medisana',
 ];
 
