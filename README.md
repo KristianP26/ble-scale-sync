@@ -260,8 +260,8 @@ sudo setcap cap_net_raw+eip $(eval readlink -f $(which node))
 
 ## Credits
 
-Scale adapter protocols and body-composition algorithms were ported from [**openScale**](https://github.com/oliexdev/openScale), an open-source Android app for Bluetooth scales by oliexdev and contributors. Licensed under GPL-3.0.
+Scale BLE protocols were ported from [**openScale**](https://github.com/oliexdev/openScale), an open-source Android app for Bluetooth scales by oliexdev and contributors.
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
+GPL-3.0 License — see [LICENSE](LICENSE) for details.
