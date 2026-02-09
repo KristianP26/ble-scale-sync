@@ -22,7 +22,7 @@
   "author": "Kristián Partl",
   "license": "GPL-3.0",
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "dependencies": {
     "@abandonware/noble": "^1.9.2-25",

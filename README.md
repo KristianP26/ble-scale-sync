@@ -47,7 +47,7 @@ Works on **Linux** (including Raspberry Pi), **macOS**, and **Windows**.
 
 ### All Platforms
 
-- [Node.js](https://nodejs.org/) v18 or later
+- [Node.js](https://nodejs.org/) v20 or later
 - [Python](https://python.org/) 3.9 or later
 - Bluetooth Low Energy (BLE) capable adapter
 
