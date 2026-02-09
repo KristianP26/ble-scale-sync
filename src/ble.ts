@@ -8,7 +8,6 @@ import type {
 import type { WeightUnit } from './validate-env.js';
 
 const LBS_TO_KG = 0.453592;
-const BLE_DEBUG = !!process.env.DEBUG;
 const BT_BASE_UUID_SUFFIX = '00001000800000805f9b34fb';
 const CONNECT_TIMEOUT_MS = 15_000;
 const MAX_CONNECT_RETRIES = 5;
@@ -17,7 +16,7 @@ const MAX_CONNECT_RETRIES = 5;
 const SCAN_SETTLE_MS = 500;
 
 function debug(msg: string): void {
-  if (BLE_DEBUG) console.log(`[BLE:debug] ${msg}`);
+  if (process.env.DEBUG) console.log(`[BLE:debug] ${msg}`);
 }
 
 /** Normalize a UUID to lowercase 32-char (no dashes) form for comparison. */

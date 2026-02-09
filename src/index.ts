@@ -1,5 +1,8 @@
 #!/usr/bin/env tsx
 
+// Load .env FIRST — before noble initializes and reads env vars
+import './env.js';
+
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { spawn } from 'node:child_process';
