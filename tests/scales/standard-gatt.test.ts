@@ -139,7 +139,7 @@ describe('StandardGattScaleAdapter', () => {
   });
 
   describe('computeMetrics()', () => {
-    it('uses RenphoCalculator when impedance > 0', () => {
+    it('uses BodyCompCalculator when impedance > 0', () => {
       const adapter = makeAdapter();
       // Trigger a parse to cache GATT data
       const flags = 0x0400 | 0x0200;

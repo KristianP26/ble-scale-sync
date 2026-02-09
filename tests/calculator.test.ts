@@ -1,22 +1,22 @@
 import { describe, it, expect } from 'vitest';
-import { RenphoCalculator } from '../src/calculator.js';
+import { BodyCompCalculator } from '../src/calculator.js';
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
 
-describe('RenphoCalculator', () => {
+describe('BodyCompCalculator', () => {
   describe('null guard', () => {
     it('returns null when height is 0', () => {
-      const calc = new RenphoCalculator(80, 500, 0, 26, 'male');
+      const calc = new BodyCompCalculator(80, 500, 0, 26, 'male');
       expect(calc.calculate()).toBeNull();
     });
 
     it('returns null when weight is 0', () => {
-      const calc = new RenphoCalculator(0, 500, 183, 26, 'male');
+      const calc = new BodyCompCalculator(0, 500, 183, 26, 'male');
       expect(calc.calculate()).toBeNull();
     });
 
     it('returns null when impedance is 0', () => {
-      const calc = new RenphoCalculator(80, 0, 183, 26, 'male');
+      const calc = new BodyCompCalculator(80, 0, 183, 26, 'male');
       expect(calc.calculate()).toBeNull();
     });
   });
@@ -40,7 +40,7 @@ describe('RenphoCalculator', () => {
     // metabolicAge = 26 + trunc((1823.75-1818.75)/15) = 26+0 = 26
 
     it('computes all 9 metrics correctly', () => {
-      const calc = new RenphoCalculator(80, 500, 183, 26, 'male');
+      const calc = new BodyCompCalculator(80, 500, 183, 26, 'male');
       const m = calc.calculate()!;
       expect(m).not.toBeNull();
 
@@ -82,7 +82,7 @@ describe('RenphoCalculator', () => {
     // athlete cap: metabolicAge(21) <= age(26) → no cap
 
     it('uses athlete coefficients and factors', () => {
-      const calc = new RenphoCalculator(80, 500, 183, 26, 'male', true);
+      const calc = new BodyCompCalculator(80, 500, 183, 26, 'male', true);
       const m = calc.calculate()!;
 
       const h2r = 183 ** 2 / 500;
@@ -102,7 +102,7 @@ describe('RenphoCalculator', () => {
       // For age=50: baseBmr = 800 + 1143.75 - 250 + 5 = 1698.75; bmr = 1698.75*1.05 = 1783.6875
       // idealBmr = 1823.75
       // metabolicAge = 50 + trunc((1823.75-1783.6875)/15) = 50+2 = 52 → cap to 50-5=45
-      const calc = new RenphoCalculator(80, 500, 183, 50, 'male', true);
+      const calc = new BodyCompCalculator(80, 500, 183, 50, 'male', true);
       const m = calc.calculate()!;
       expect(m.metabolicAge).toBe(45);
     });
@@ -119,7 +119,7 @@ describe('RenphoCalculator', () => {
     // bmr = 10*65 + 6.25*165 - 5*30 + (-161) = 650+1031.25-150-161 = 1370.25 → trunc=1370
 
     it('uses female coefficients and BMR offset', () => {
-      const calc = new RenphoCalculator(65, 450, 165, 30, 'female');
+      const calc = new BodyCompCalculator(65, 450, 165, 30, 'female');
       const m = calc.calculate()!;
 
       const h2r = 165 ** 2 / 450;
@@ -145,7 +145,7 @@ describe('RenphoCalculator', () => {
     // bmr = (650+1031.25-150-161)*1.05 = 1370.25*1.05 = 1438.7625 → trunc=1438
 
     it('uses female athlete coefficients', () => {
-      const calc = new RenphoCalculator(65, 450, 165, 30, 'female', true);
+      const calc = new BodyCompCalculator(65, 450, 165, 30, 'female', true);
       const m = calc.calculate()!;
 
       const h2r = 165 ** 2 / 450;
@@ -167,7 +167,7 @@ describe('RenphoCalculator', () => {
     // lbm > 60 → capped to 60*0.96 = 57.6
 
     it('caps LBM when it exceeds weight', () => {
-      const calc = new RenphoCalculator(60, 50, 170, 25, 'male');
+      const calc = new BodyCompCalculator(60, 50, 170, 25, 'male');
       const m = calc.calculate()!;
 
       const lbmCapped = 60 * 0.96;
@@ -182,7 +182,7 @@ describe('RenphoCalculator', () => {
       // Very low impedance triggers LBM cap → fat% = (w - 0.96w)/w*100 = 4%
       // That's already > 3. Use negative fat scenario: impossible with cap.
       // With LBM cap, minimum fat% = 4%. Let's verify it stays above 3.
-      const calc = new RenphoCalculator(60, 50, 170, 25, 'male');
+      const calc = new BodyCompCalculator(60, 50, 170, 25, 'male');
       const m = calc.calculate()!;
       expect(m.bodyFatPercent).toBeGreaterThanOrEqual(3);
     });
@@ -194,7 +194,7 @@ describe('RenphoCalculator', () => {
       // lbm = 0.490*11.25 + 0.150*120 + (-0.130)*70 + 11.5 = 5.5125+18-9.1+11.5 = 25.9125
       // fatKg = 120 - 25.9125 = 94.0875
       // fatPct = 94.0875/120*100 = 78.4 → clamped to 60
-      const calc = new RenphoCalculator(120, 2000, 150, 70, 'female');
+      const calc = new BodyCompCalculator(120, 2000, 150, 70, 'female');
       const m = calc.calculate()!;
       expect(m.bodyFatPercent).toBe(60);
     });
@@ -209,7 +209,7 @@ describe('RenphoCalculator', () => {
       //      = 62.29 + 15.375 + (-3.6) + 12.5 = 86.565
       // lbm > 75 → cap to 75*0.96 = 72
       // fatPct = (75-72)/75*100 = 4% → visceral = 1
-      const calc = new RenphoCalculator(75, 350, 185, 20, 'male', true);
+      const calc = new BodyCompCalculator(75, 350, 185, 20, 'male', true);
       const m = calc.calculate()!;
       expect(m.bodyFatPercent).toBeLessThanOrEqual(10);
       expect(m.visceralFat).toBe(1);
@@ -224,7 +224,7 @@ describe('RenphoCalculator', () => {
       // bmr = 1883.75+5 = 1888.75
       // idealBmr = 1823.75
       // metabolicAge = 12 + trunc((1823.75-1888.75)/15) = 12 + (-4) = 8 → capped to 12
-      const calc = new RenphoCalculator(80, 500, 183, 12, 'male');
+      const calc = new BodyCompCalculator(80, 500, 183, 12, 'male');
       const m = calc.calculate()!;
       expect(m.metabolicAge).toBe(12);
     });
@@ -240,7 +240,7 @@ describe('RenphoCalculator', () => {
       // fatPct = (100-39)/100*100 = 61 → clamped to 60
       // muscleMass = 39*0.54 = 21.06
       // 0.4*100 = 40 → 21.06 <= 40 → rating 1
-      const calc = new RenphoCalculator(100, 800, 170, 40, 'female');
+      const calc = new BodyCompCalculator(100, 800, 170, 40, 'female');
       const m = calc.calculate()!;
       expect(m.bodyFatPercent).toBeGreaterThan(25);
       expect(m.muscleMass).toBeLessThanOrEqual(0.4 * 100);
@@ -272,7 +272,7 @@ describe('RenphoCalculator', () => {
       // fatPct = (200-148.56)/200*100 = 25.72 > 25 ✓
       // muscleMass = 148.56*0.54 = 80.22
       // 0.4*200 = 80 → 80.22 > 80 ✓ → rating 2
-      const calc = new RenphoCalculator(200, 159, 180, 30, 'male');
+      const calc = new BodyCompCalculator(200, 159, 180, 30, 'male');
       const m = calc.calculate()!;
       expect(m.bodyFatPercent).toBeGreaterThan(25);
       expect(m.muscleMass).toBeGreaterThan(0.4 * 200);
@@ -310,7 +310,7 @@ describe('RenphoCalculator', () => {
       // h2r: lbm = 0.503*h2r + 0.165*80 - 0.158*26 + 17.8 = 0.503*h2r + 26.592
       // 66 = 0.503*h2r + 26.592 → h2r = 78.45 → h^2/imp=78.45
       // h=180, imp=180^2/78.45 = 32400/78.45 = 413.0 → imp=413
-      const calc = new RenphoCalculator(80, 413, 180, 26, 'male');
+      const calc = new BodyCompCalculator(80, 413, 180, 26, 'male');
       const m = calc.calculate()!;
       expect(m.bodyFatPercent).toBeLessThan(18);
       expect(m.muscleMass).toBeGreaterThan(0.4 * 80);
@@ -319,7 +319,7 @@ describe('RenphoCalculator', () => {
     });
 
     it('returns 9 — fat<18, muscle>0.45w', () => {
-      const calc = new RenphoCalculator(80, 500, 183, 26, 'male', true);
+      const calc = new BodyCompCalculator(80, 500, 183, 26, 'male', true);
       const m = calc.calculate()!;
       expect(m.bodyFatPercent).toBeLessThan(18);
       expect(m.muscleMass).toBeGreaterThan(0.45 * 80);
@@ -336,7 +336,7 @@ describe('RenphoCalculator', () => {
       // Rating 4 is reachable via very specific edge cases or rounding.
       // We'll test this branch directly in body-comp-helpers.test.ts
       // For calculator integration: verify the 18-25 middle branch yields 5 or 6
-      const calc = new RenphoCalculator(80, 500, 183, 26, 'male');
+      const calc = new BodyCompCalculator(80, 500, 183, 26, 'male');
       const m = calc.calculate()!;
       // This male normal case has fat ~24.3%, which is in 18-25 range
       expect(m.bodyFatPercent).toBeGreaterThanOrEqual(18);
@@ -355,7 +355,7 @@ describe('RenphoCalculator', () => {
       // h2r: lbm = 0.637*h2r + 0.205*80 - 0.180*26 + 12.5 = 0.637*h2r + 23.82
       // 62 = 0.637*h2r + 23.82 → h2r = 59.94 → h^2/imp = 59.94
       // h=175, imp=175^2/59.94 = 30625/59.94 = 510.9 → imp=511
-      const calc = new RenphoCalculator(80, 511, 175, 26, 'male', true);
+      const calc = new BodyCompCalculator(80, 511, 175, 26, 'male', true);
       const m = calc.calculate()!;
       expect(m.bodyFatPercent).toBeGreaterThanOrEqual(18);
       expect(m.bodyFatPercent).toBeLessThanOrEqual(25);

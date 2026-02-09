@@ -19,7 +19,11 @@ def get_token_dir():
     custom = os.environ.get("TOKEN_DIR", "").strip()
     if custom:
         return str(Path(custom).expanduser())
-    return str(Path.home() / ".garmin_renpho_tokens")
+    new = Path.home() / ".garmin_tokens"
+    old = Path.home() / ".garmin_renpho_tokens"
+    if old.is_dir() and not new.is_dir():
+        return str(old)
+    return str(new)
 
 
 def main():

@@ -1,5 +1,5 @@
 import type { Peripheral } from '@abandonware/noble';
-import { RenphoCalculator } from '../calculator.js';
+import { BodyCompCalculator } from '../calculator.js';
 import type {
   ScaleAdapter,
   ScaleReading,
@@ -137,7 +137,7 @@ export class QnScaleAdapter implements ScaleAdapter {
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): GarminPayload {
-    const calc = new RenphoCalculator(
+    const calc = new BodyCompCalculator(
       reading.weight,
       reading.impedance,
       profile.height,

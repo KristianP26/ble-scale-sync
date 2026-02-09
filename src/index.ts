@@ -36,7 +36,7 @@ function findPython(): Promise<string> {
 }
 
 async function main(): Promise<void> {
-  console.log(`\n[Sync] Renpho Scale → Garmin Connect`);
+  console.log(`\n[Sync] Scale → Garmin Connect`);
   if (SCALE_MAC) {
     console.log(`[Sync] Scanning for scale ${SCALE_MAC}...`);
   } else {

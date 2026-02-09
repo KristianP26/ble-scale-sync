@@ -18,7 +18,7 @@ export interface ScaleBodyComp {
 }
 
 /**
- * BIA impedance-based body fat estimation (Renpho-style coefficients).
+ * BIA impedance-based body fat estimation (BIA coefficients).
  * Used by scales that report raw impedance instead of pre-computed body fat.
  */
 export function computeBiaFat(weight: number, impedance: number, p: UserProfile): number {

@@ -1,7 +1,7 @@
 {
   "name": "renpho-scale-garmin-sync",
   "version": "2.0.0",
-  "description": "Sync Renpho BLE smart scale data (weight + body composition) to Garmin Connect",
+  "description": "Sync BLE smart scale data (weight + body composition) to Garmin Connect",
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
@@ -15,7 +15,7 @@
     "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\""
   },
   "keywords": [
-    "renpho",
+    "smart-scale",
     "garmin",
     "scale",
     "ble",

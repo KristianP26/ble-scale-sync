@@ -160,11 +160,11 @@ This scans for nearby BLE devices for 15 seconds. Recognized scales are tagged w
 npm run setup-garmin
 ```
 
-This logs into Garmin using the credentials in your `.env` and stores authentication tokens locally (default: `~/.garmin_renpho_tokens/`). You only need to do this once — tokens are reused for subsequent syncs.
+This logs into Garmin using the credentials in your `.env` and stores authentication tokens locally (default: `~/.garmin_tokens/`). You only need to do this once — tokens are reused for subsequent syncs.
 
 > **Note:** On Linux/macOS, if `python` is not available, run the script directly with `python3 scripts/setup_garmin.py`.
 
-> **If authentication fails:** Garmin may block requests from certain IPs (especially cloud/VPN IPs). Try running the setup from a different network, then copy the `~/.garmin_renpho_tokens/` directory to your target machine.
+> **If authentication fails:** Garmin may block requests from certain IPs (especially cloud/VPN IPs). Try running the setup from a different network, then copy the `~/.garmin_tokens/` directory to your target machine.
 
 ## Usage
 
@@ -241,7 +241,7 @@ renpho-scale-garmin-sync/
 ├── src/
 │   ├── index.ts                    # Main orchestrator
 │   ├── ble.ts                      # Generic BLE manager
-│   ├── calculator.ts               # Body composition math (Renpho formulas)
+│   ├── calculator.ts               # Body composition math (BIA formulas)
 │   ├── validate-env.ts             # .env validation & typed config loader
 │   ├── scan.ts                     # BLE device scanner utility
 │   ├── interfaces/
@@ -272,7 +272,7 @@ renpho-scale-garmin-sync/
 │       ├── hoffen.ts               # Hoffen BS-8107
 │       └── standard-gatt.ts        # Generic BCS/WSS catch-all
 ├── tests/
-│   ├── calculator.test.ts          # RenphoCalculator unit tests
+│   ├── calculator.test.ts          # BodyCompCalculator unit tests
 │   ├── body-comp-helpers.test.ts   # Body-comp helper unit tests
 │   ├── validate-env.test.ts        # .env validation unit tests
 │   ├── helpers/
@@ -320,7 +320,7 @@ Setting `USER_IS_ATHLETE=true` in `.env` adjusts the calculation constants for p
 
 ## Token Storage
 
-By default, Garmin tokens are stored in `~/.garmin_renpho_tokens/`. You can change this by setting `TOKEN_DIR` in your `.env`:
+By default, Garmin tokens are stored in `~/.garmin_tokens/`. You can change this by setting `TOKEN_DIR` in your `.env`:
 
 ```ini
 TOKEN_DIR=/custom/path/to/tokens

@@ -3,9 +3,9 @@ import { computeBiaFat, buildPayload } from './scales/body-comp-helpers.js';
 
 export type { Gender };
 
-export type RenphoMetrics = Omit<GarminPayload, 'weight' | 'impedance'>;
+export type BodyCompMetrics = Omit<GarminPayload, 'weight' | 'impedance'>;
 
-export class RenphoCalculator {
+export class BodyCompCalculator {
   private readonly weight: number;
   private readonly impedance: number;
   private readonly profile: UserProfile;
@@ -23,7 +23,7 @@ export class RenphoCalculator {
     this.profile = { height, age, gender, isAthlete };
   }
 
-  calculate(): RenphoMetrics | null {
+  calculate(): BodyCompMetrics | null {
     if (this.profile.height === 0 || this.weight === 0 || this.impedance === 0) {
       return null;
     }

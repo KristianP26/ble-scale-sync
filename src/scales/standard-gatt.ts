@@ -1,5 +1,5 @@
 import type { Peripheral } from '@abandonware/noble';
-import { RenphoCalculator } from '../calculator.js';
+import { BodyCompCalculator } from '../calculator.js';
 import { buildPayload } from './body-comp-helpers.js';
 import type {
   ScaleAdapter,
@@ -221,9 +221,9 @@ export class StandardGattScaleAdapter implements ScaleAdapter {
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): GarminPayload {
-    // When impedance is available, use the full RenphoCalculator (BIA-based)
+    // When impedance is available, use the full BIA-based calculator
     if (reading.impedance > 0) {
-      const calc = new RenphoCalculator(
+      const calc = new BodyCompCalculator(
         reading.weight,
         reading.impedance,
         profile.height,
