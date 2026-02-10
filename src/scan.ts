@@ -17,6 +17,11 @@ async function main(): Promise<void> {
     }
 
     console.log('Scanning for BLE devices... (15 seconds)\n');
+    try {
+      await adapter.stopDiscovery();
+    } catch {
+      /* not discovering — ignore */
+    }
     await adapter.startDiscovery();
 
     const seen = new Set<string>();

@@ -70,9 +70,13 @@ export async function scanAndRead(opts: ScanOptions): Promise<GarminPayload> {
       );
     }
 
-    if (!(await btAdapter.isDiscovering())) {
-      await btAdapter.startDiscovery();
+    // Reset discovery state — previous crashed runs may leave it active
+    try {
+      await btAdapter.stopDiscovery();
+    } catch {
+      /* not discovering — ignore */
     }
+    await btAdapter.startDiscovery();
     debug('Discovery started');
 
     let matchedAdapter: ScaleAdapter;
@@ -131,7 +135,14 @@ export async function scanAndRead(opts: ScanOptions): Promise<GarminPayload> {
 
     // Setup GATT characteristics and wait for a complete reading
     const gatt = await device.gatt();
-    const payload = await setupAndRead(gatt, device, matchedAdapter, profile, weightUnit, onLiveData);
+    const payload = await setupAndRead(
+      gatt,
+      device,
+      matchedAdapter,
+      profile,
+      weightUnit,
+      onLiveData,
+    );
 
     try {
       await device.disconnect();

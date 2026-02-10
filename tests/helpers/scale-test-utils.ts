@@ -1,5 +1,9 @@
 import { expect } from 'vitest';
-import type { BleDeviceInfo, UserProfile, GarminPayload } from '../../src/interfaces/scale-adapter.js';
+import type {
+  BleDeviceInfo,
+  UserProfile,
+  GarminPayload,
+} from '../../src/interfaces/scale-adapter.js';
 
 export function mockPeripheral(name: string, uuids: string[] = []): BleDeviceInfo {
   return {
