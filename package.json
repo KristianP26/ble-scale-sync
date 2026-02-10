@@ -1,5 +1,5 @@
 {
-  "name": "blescalesync",
+  "name": "ble-scale-sync",
   "version": "2.0.0",
   "description": "Sync BLE smart scale data (weight + body composition) to Garmin Connect",
   "type": "module",

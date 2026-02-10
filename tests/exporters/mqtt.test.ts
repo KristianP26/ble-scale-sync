@@ -147,7 +147,7 @@ describe('MqttExporter', () => {
 
       // First call should be a discovery config topic
       const firstCall = mockPublishAsync.mock.calls[0];
-      expect(firstCall[0]).toMatch(/^homeassistant\/sensor\/blescalesync\//);
+      expect(firstCall[0]).toMatch(/^homeassistant\/sensor\/ble-scale-sync\//);
       expect(firstCall[2]).toEqual({ qos: 1, retain: true });
 
       // Last call should be the actual data
@@ -162,21 +162,21 @@ describe('MqttExporter', () => {
       await exporter.export(samplePayload);
 
       const weightCall = mockPublishAsync.mock.calls.find(
-        (c: unknown[]) => c[0] === 'homeassistant/sensor/blescalesync/weight/config',
+        (c: unknown[]) => c[0] === 'homeassistant/sensor/ble-scale-sync/weight/config',
       );
       expect(weightCall).toBeDefined();
 
       const payload = JSON.parse(weightCall![1] as string);
       expect(payload).toMatchObject({
         name: 'Weight',
-        unique_id: 'blescalesync_weight',
+        unique_id: 'ble-scale-sync_weight',
         state_topic: 'scale/body-composition',
         value_template: '{{ value_json.weight }}',
         state_class: 'measurement',
         unit_of_measurement: 'kg',
         device_class: 'weight',
         device: {
-          identifiers: ['blescalesync'],
+          identifiers: ['ble-scale-sync'],
           name: 'BLE Scale',
         },
       });
@@ -192,7 +192,7 @@ describe('MqttExporter', () => {
       await exporter.export(samplePayload);
 
       const bmiCall = mockPublishAsync.mock.calls.find(
-        (c: unknown[]) => c[0] === 'homeassistant/sensor/blescalesync/bmi/config',
+        (c: unknown[]) => c[0] === 'homeassistant/sensor/ble-scale-sync/bmi/config',
       );
       const payload = JSON.parse(bmiCall![1] as string);
       expect(payload.state_topic).toBe('home/my-scale');

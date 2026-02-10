@@ -115,8 +115,8 @@ No additional Bluetooth setup needed — macOS uses its native CoreBluetooth API
 
 ```bash
 # Clone the repository
-git clone https://github.com/KristianP26/blescalesync.git
-cd blescalesync
+git clone https://github.com/KristianP26/ble-scale-sync.git
+cd ble-scale-sync
 
 # Install Node.js dependencies
 npm install
@@ -315,7 +315,7 @@ The project uses [ESLint](https://eslint.org/) with [typescript-eslint](https://
 ## Project Structure
 
 ```
-blescalesync/
+ble-scale-sync/
 ├── src/
 │   ├── index.ts                    # Main orchestrator
 │   ├── ble/

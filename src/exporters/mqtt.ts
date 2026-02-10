@@ -43,17 +43,17 @@ export class MqttExporter implements Exporter {
 
   private async publishDiscovery(client: MqttClient): Promise<void> {
     const device = {
-      identifiers: ['blescalesync'],
+      identifiers: ['ble-scale-sync'],
       name: 'BLE Scale',
       manufacturer: 'BLE Scale Sync',
       model: 'Smart Scale',
     };
 
     for (const metric of HA_METRICS) {
-      const topic = `homeassistant/sensor/blescalesync/${metric.key}/config`;
+      const topic = `homeassistant/sensor/ble-scale-sync/${metric.key}/config`;
       const payload: Record<string, unknown> = {
         name: metric.name,
-        unique_id: `blescalesync_${metric.key}`,
+        unique_id: `ble-scale-sync_${metric.key}`,
         state_topic: this.config.topic,
         value_template: `{{ value_json.${metric.key} }}`,
         state_class: 'measurement',
