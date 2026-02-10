@@ -4,6 +4,7 @@ import type {
   UserProfile,
   GarminPayload,
   ScaleReading,
+  ConnectionContext,
 } from './interfaces/scale-adapter.js';
 import type { WeightUnit } from './validate-env.js';
 
@@ -24,11 +25,6 @@ function normalizeUuid(uuid: string): string {
     return `0000${stripped}${BT_BASE_UUID_SUFFIX}`;
   }
   return stripped;
-}
-
-/** Compare two BLE UUIDs, handling short (4-char) vs long (32-char) forms. */
-function uuidMatch(a: string, b: string): boolean {
-  return normalizeUuid(a) === normalizeUuid(b);
 }
 
 export interface ScanOptions {
@@ -194,52 +190,26 @@ export function scanAndRead(opts: ScanOptions): Promise<GarminPayload> {
           debug(`  Char ${c.uuid} — properties: [${c.properties?.join(', ') ?? 'n/a'}]`);
         }
 
-        debug(
-          `Looking for notify=${adapter.charNotifyUuid}` +
-            (adapter.altCharNotifyUuid ? ` (alt=${adapter.altCharNotifyUuid})` : '') +
-            `, write=${adapter.charWriteUuid}` +
-            (adapter.altCharWriteUuid ? ` (alt=${adapter.altCharWriteUuid})` : ''),
-        );
-
-        const findChar = (uuid: string): Characteristic | undefined =>
-          characteristics.find((c) => uuidMatch(c.uuid, uuid));
-
-        const notifyChar: Characteristic | undefined =
-          findChar(adapter.charNotifyUuid) ??
-          (adapter.altCharNotifyUuid ? findChar(adapter.altCharNotifyUuid) : undefined);
-        const writeChar: Characteristic | undefined =
-          findChar(adapter.charWriteUuid) ??
-          (adapter.altCharWriteUuid ? findChar(adapter.altCharWriteUuid) : undefined);
-
-        if (!notifyChar || !writeChar) {
-          const discoveredUuids = characteristics.map((c) => c.uuid).join(', ');
-          fullCleanup(peripheral);
-          reject(
-            new Error(
-              `Required characteristics not found. ` +
-                `Notify (${adapter.charNotifyUuid}): ${!!notifyChar}, ` +
-                `Write (${adapter.charWriteUuid}): ${!!writeChar}. ` +
-                `Discovered characteristics: [${discoveredUuids}]`,
-            ),
-          );
-          return;
+        // Build a normalized-UUID → Characteristic map for fast lookups
+        const charByUuid = new Map<string, Characteristic>();
+        for (const c of characteristics) {
+          charByUuid.set(normalizeUuid(c.uuid), c);
         }
 
-        debug(`Matched notify=${notifyChar.uuid}, write=${writeChar.uuid}`);
+        /** Resolve a discovered characteristic by adapter-specified UUID. */
+        const resolveChar = (uuid: string): Characteristic | undefined =>
+          charByUuid.get(normalizeUuid(uuid));
 
-        notifyChar.subscribe((err?: string) => {
-          if (err) {
-            fullCleanup(peripheral);
-            reject(new Error(`Subscribe failed: ${err}`));
-            return;
-          }
-          console.log('[BLE] Subscribed to notifications. Step on the scale.');
-        });
-
-        notifyChar.on('data', (data: Buffer) => {
+        /**
+         * Shared notification handler — dispatches via parseCharNotification
+         * when available, otherwise falls back to parseNotification.
+         */
+        const handleNotification = (sourceUuid: string, data: Buffer): void => {
           if (resolved) return;
 
-          const reading: ScaleReading | null = adapter.parseNotification(data);
+          const reading: ScaleReading | null = adapter.parseCharNotification
+            ? adapter.parseCharNotification(sourceUuid, data)
+            : adapter.parseNotification(data);
           if (!reading) return;
 
           // Convert lbs → kg when the user declared lbs and the adapter
@@ -263,21 +233,165 @@ export function scanAndRead(opts: ScanOptions): Promise<GarminPayload> {
               reject(e);
             }
           }
-        });
+        };
 
-        const unlockBuf: Buffer = Buffer.from(adapter.unlockCommand);
-        const sendUnlock = (): void => {
-          if (!resolved) {
-            writeChar.write(unlockBuf, true, (err?: string) => {
-              if (err && !resolved) {
-                console.error(`[BLE] Unlock write error: ${err}`);
-              }
+        /** Subscribe to a characteristic and wire up the notification handler. */
+        const subscribeAndListen = (char: Characteristic): Promise<void> =>
+          new Promise<void>((subResolve, subReject) => {
+            const normalized = normalizeUuid(char.uuid);
+            char.on('data', (data: Buffer) => handleNotification(normalized, data));
+            char.subscribe((subErr?: string) => {
+              if (subErr) subReject(new Error(`Subscribe failed on ${char.uuid}: ${subErr}`));
+              else subResolve();
             });
+          });
+
+        /**
+         * Start adapter init: call onConnected() hook when available,
+         * otherwise fall back to legacy unlockCommand periodic writes.
+         */
+        const startInit = async (): Promise<void> => {
+          if (adapter.onConnected) {
+            const ctx: ConnectionContext = {
+              profile,
+              write: async (charUuid, data, withResponse = true) => {
+                const char = resolveChar(charUuid);
+                if (!char) throw new Error(`Characteristic ${charUuid} not found`);
+                const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+                return new Promise<void>((wRes, wRej) => {
+                  char.write(buf, !withResponse, (wErr?: string) => {
+                    if (wErr) wRej(new Error(`Write to ${charUuid} failed: ${wErr}`));
+                    else wRes();
+                  });
+                });
+              },
+              read: async (charUuid) => {
+                const char = resolveChar(charUuid);
+                if (!char) throw new Error(`Characteristic ${charUuid} not found`);
+                return new Promise<Buffer>((rRes, rRej) => {
+                  char.read((rErr?: string, rData?: Buffer) => {
+                    if (rErr) rRej(new Error(`Read from ${charUuid} failed: ${rErr}`));
+                    else rRes(rData ?? Buffer.alloc(0));
+                  });
+                });
+              },
+              subscribe: async (charUuid) => {
+                const char = resolveChar(charUuid);
+                if (!char) throw new Error(`Characteristic ${charUuid} not found`);
+                await subscribeAndListen(char);
+              },
+            };
+            debug('Calling adapter.onConnected()');
+            await adapter.onConnected(ctx);
+            debug('adapter.onConnected() completed');
+          } else {
+            // Legacy unlock command interval
+            const writeChar =
+              resolveChar(adapter.charWriteUuid) ??
+              (adapter.altCharWriteUuid ? resolveChar(adapter.altCharWriteUuid) : undefined);
+            if (!writeChar) return; // Should not happen — already validated above
+
+            const unlockBuf: Buffer = Buffer.from(adapter.unlockCommand);
+            const sendUnlock = (): void => {
+              if (!resolved) {
+                writeChar.write(unlockBuf, true, (wErr?: string) => {
+                  if (wErr && !resolved) {
+                    console.error(`[BLE] Unlock write error: ${wErr}`);
+                  }
+                });
+              }
+            };
+
+            sendUnlock();
+            unlockInterval = setInterval(sendUnlock, adapter.unlockIntervalMs);
           }
         };
 
-        sendUnlock();
-        unlockInterval = setInterval(sendUnlock, adapter.unlockIntervalMs);
+        /** Handle errors from the async init chain. */
+        const handleInitError = (e: unknown): void => {
+          if (!resolved) {
+            fullCleanup(peripheral);
+            reject(e instanceof Error ? e : new Error(String(e)));
+          }
+        };
+
+        // ─── Multi-char mode (adapter.characteristics defined) ──────────
+        if (adapter.characteristics) {
+          debug(`Multi-char mode: ${adapter.characteristics.length} bindings`);
+
+          const notifyChars: Characteristic[] = [];
+          for (const binding of adapter.characteristics) {
+            const char = resolveChar(binding.uuid);
+            if (!char) {
+              debug(`Characteristic not found: ${binding.type}:${binding.uuid}`);
+              continue;
+            }
+            if (binding.type === 'notify') {
+              notifyChars.push(char);
+            }
+          }
+
+          if (notifyChars.length === 0) {
+            const discoveredUuids = characteristics.map((c) => c.uuid).join(', ');
+            fullCleanup(peripheral);
+            reject(
+              new Error(
+                `No notify characteristics found from adapter bindings. ` +
+                  `Discovered: [${discoveredUuids}]`,
+              ),
+            );
+            return;
+          }
+
+          Promise.all(notifyChars.map(subscribeAndListen))
+            .then(() => {
+              console.log(
+                `[BLE] Subscribed to ${notifyChars.length} notification(s). Step on the scale.`,
+              );
+              return startInit();
+            })
+            .catch(handleInitError);
+
+          return;
+        }
+
+        // ─── Legacy mode (single notify + write pair) ───────────────────
+        debug(
+          `Looking for notify=${adapter.charNotifyUuid}` +
+            (adapter.altCharNotifyUuid ? ` (alt=${adapter.altCharNotifyUuid})` : '') +
+            `, write=${adapter.charWriteUuid}` +
+            (adapter.altCharWriteUuid ? ` (alt=${adapter.altCharWriteUuid})` : ''),
+        );
+
+        const notifyChar: Characteristic | undefined =
+          resolveChar(adapter.charNotifyUuid) ??
+          (adapter.altCharNotifyUuid ? resolveChar(adapter.altCharNotifyUuid) : undefined);
+        const writeChar: Characteristic | undefined =
+          resolveChar(adapter.charWriteUuid) ??
+          (adapter.altCharWriteUuid ? resolveChar(adapter.altCharWriteUuid) : undefined);
+
+        if (!notifyChar || !writeChar) {
+          const discoveredUuids = characteristics.map((c) => c.uuid).join(', ');
+          fullCleanup(peripheral);
+          reject(
+            new Error(
+              `Required characteristics not found. ` +
+                `Notify (${adapter.charNotifyUuid}): ${!!notifyChar}, ` +
+                `Write (${adapter.charWriteUuid}): ${!!writeChar}. ` +
+                `Discovered characteristics: [${discoveredUuids}]`,
+            ),
+          );
+          return;
+        }
+
+        debug(`Matched notify=${notifyChar.uuid}, write=${writeChar.uuid}`);
+
+        subscribeAndListen(notifyChar)
+          .then(() => {
+            console.log('[BLE] Subscribed to notifications. Step on the scale.');
+            return startInit();
+          })
+          .catch(handleInitError);
       });
     }
 
