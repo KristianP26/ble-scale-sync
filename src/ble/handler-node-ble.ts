@@ -93,22 +93,28 @@ async function startDiscoverySafe(btAdapter: Adapter): Promise<boolean> {
 async function connectWithRetries(device: Device, maxRetries: number): Promise<void> {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
+      const t0 = Date.now();
       debug(`Connect attempt ${attempt + 1}/${maxRetries + 1}...`);
       await withTimeout(device.connect(), CONNECT_TIMEOUT_MS, 'Connection timed out');
-      debug('Connected');
+      debug(`Connected (took ${Date.now() - t0}ms)`);
       return;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (attempt >= maxRetries) {
         throw new Error(`Connection failed after ${maxRetries + 1} attempts: ${msg}`);
       }
-      console.log(`[BLE] Connect error: ${msg}. Retrying (${attempt + 1}/${maxRetries})...`);
+      const delay = 1000 + attempt * 500;
+      console.log(
+        `[BLE] Connect error: ${msg}. Retrying (${attempt + 1}/${maxRetries}) in ${delay}ms...`,
+      );
       try {
+        debug('Disconnecting before retry...');
         await device.disconnect();
+        debug('Disconnect OK');
       } catch {
-        /* ignore */
+        debug('Disconnect failed (ignored)');
       }
-      await sleep(1000);
+      await sleep(delay);
     }
   }
 }
@@ -248,6 +254,16 @@ export async function scanAndRead(opts: ScanOptions): Promise<GarminPayload> {
       const name = await device.getName().catch(() => '');
       debug(`Found device: ${name} [${mac}]`);
 
+      // Stop discovery before connecting — BlueZ on low-power devices (e.g. Pi Zero)
+      // often fails with le-connection-abort-by-local while discovery is still active.
+      try {
+        debug('Stopping discovery before connect...');
+        await btAdapter.stopDiscovery();
+        debug('Discovery stopped');
+      } catch {
+        debug('stopDiscovery failed (may already be stopped)');
+      }
+
       await connectWithRetries(device, MAX_CONNECT_RETRIES);
       console.log('[BLE] Connected. Discovering services...');
 
@@ -276,15 +292,18 @@ export async function scanAndRead(opts: ScanOptions): Promise<GarminPayload> {
       device = result.device;
       matchedAdapter = result.adapter;
 
+      // Stop discovery before connecting — BlueZ on low-power devices (e.g. Pi Zero)
+      // often fails with le-connection-abort-by-local while discovery is still active.
+      try {
+        debug('Stopping discovery before connect...');
+        await btAdapter.stopDiscovery();
+        debug('Discovery stopped');
+      } catch {
+        debug('stopDiscovery failed (may already be stopped)');
+      }
+
       await connectWithRetries(device, MAX_CONNECT_RETRIES);
       console.log('[BLE] Connected. Discovering services...');
-    }
-
-    // Stop discovery to save radio resources
-    try {
-      await btAdapter.stopDiscovery();
-    } catch {
-      /* may already be stopped */
     }
 
     // Setup GATT characteristics and wait for a complete reading
