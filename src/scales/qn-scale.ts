@@ -57,8 +57,14 @@ export class QnScaleAdapter implements ScaleAdapter {
   readonly altCharNotifyUuid = CHR_NOTIFY_T1;
   readonly altCharWriteUuid = CHR_WRITE_T1;
   readonly normalizesWeight = true;
-  /** Unit config: [0x13, 0x09, protocolType=0x00, unit=KG, 0x10, ...padding, checksum]. */
-  readonly unlockCommand = [0x13, 0x09, 0x00, 0x01, 0x10, 0x00, 0x00, 0x00, 0x2d];
+  /**
+   * Unlock / unit-config command (6-byte variant).
+   * Confirmed working with Renpho, Sencor, and generic QN-Scale devices.
+   * openScale's QNHandler uses a longer 9-byte variant
+   * [0x13, 0x09, 0x00, 0x01, 0x10, 0x00, 0x00, 0x00, 0x2d] which may not
+   * work with all QN-compatible scales.
+   */
+  readonly unlockCommand = [0x13, 0x09, 0x00, 0x01, 0x01, 0x02];
   readonly unlockIntervalMs = 2000;
 
   /**

@@ -140,6 +140,7 @@ export function scanAndRead(opts: ScanOptions): Promise<GarminPayload> {
         retryOrFail('Connection timed out', peripheral);
       }, CONNECT_TIMEOUT_MS);
 
+      debug('Issuing peripheral.connect()...');
       peripheral.connect((err?: string) => {
         // Ignore callback from a superseded connection attempt
         if (myGen !== connectGen) {
@@ -438,8 +439,38 @@ export function scanAndRead(opts: ScanOptions): Promise<GarminPayload> {
       console.log(
         `[BLE] Found scale: ${peripheral.advertisement.localName || peripheral.id} [${matchedAdapter.name}]`,
       );
+
+      // Set connecting early to prevent duplicate discover handlers from proceeding
+      // while we wait for the scan to fully stop.
+      connecting = true;
+
+      const adapter = matchedAdapter;
+      const doConnect = (): void => {
+        // Reset so connectToPeripheral can set it properly
+        connecting = false;
+        connectToPeripheral(peripheral, adapter);
+      };
+
+      // Wait for scanning to fully stop before issuing LE Create Connection.
+      // On Linux HCI (Raspberry Pi), the controller may ignore or drop the
+      // connect command while scan-disable is still in flight.
+      let scanStopFired = false;
+      noble.once('scanStop', () => {
+        if (scanStopFired) return;
+        scanStopFired = true;
+        debug('Scan stopped (event), connecting...');
+        doConnect();
+      });
       noble.stopScanning();
-      connectToPeripheral(peripheral, matchedAdapter);
+
+      // Fallback: if scanStop event doesn't fire within 300ms, connect anyway.
+      setTimeout(() => {
+        if (!scanStopFired && !resolved) {
+          scanStopFired = true;
+          debug('scanStop timeout, connecting anyway...');
+          doConnect();
+        }
+      }, 300);
     }
 
     noble.on('discover', onDiscover);
