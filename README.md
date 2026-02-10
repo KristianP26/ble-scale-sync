@@ -8,9 +8,11 @@ Works on **Linux** (including Raspberry Pi), **macOS**, and **Windows**.
 
 ## Why This Exists
 
+Garmin sells the **Index S2** scale (~$150) that syncs directly to Garmin Connect — but it uses Wi-Fi (not BLE), has notorious connectivity issues, and the body composition readings are often inconsistent. A $30 BLE scale with better hardware shouldn't require an expensive Garmin-branded replacement just to get data into Garmin Connect.
+
 I own a **Renpho ES-CS20M** scale — it measures weight and body impedance over Bluetooth, but the Renpho app has no way to sync data to **Garmin Connect**. The only workflow was: open the Renpho app on your phone, wait for it to sync, then manually type the numbers into Garmin. Every single time.
 
-I didn't want to depend on a phone app at all. So I built this tool. A **Raspberry Pi Zero 2W** sits next to the scale, always on, always listening. Step on the scale, wait a few seconds, and the reading appears in Garmin Connect — **no phone needed, no app, no manual entry**. It just works.
+I didn't want to depend on a phone app or buy an overpriced Garmin scale. So I built this tool. A **Raspberry Pi Zero 2W** sits next to the scale, always on, always listening. Step on the scale, wait a few seconds, and the reading appears in Garmin Connect — **no phone needed, no app, no manual entry**. It just works.
 
 While the project started for one scale, it now supports **23 scale adapters** covering most popular BLE smart scales, so it works regardless of brand.
 
