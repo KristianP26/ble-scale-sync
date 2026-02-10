@@ -1,5 +1,6 @@
 import type {
   BleDeviceInfo,
+  ConnectionContext,
   ScaleAdapter,
   ScaleReading,
   UserProfile,
@@ -27,27 +28,31 @@ export class ExcelvanCF369Adapter implements ScaleAdapter {
   readonly charWriteUuid = CHR_WRITE;
 
   readonly normalizesWeight = true;
-  /**
-   * Unlock / user-config command:
-   *   [0] = 0xFE (command marker)
-   *   [1] = userId (1)
-   *   [2] = sex (0x01 = male)
-   *   [3] = activity level (1)
-   *   [4] = height (0xA0 = 160 cm)
-   *   [5] = age (0x1E = 30)
-   *   [6] = unit (0x01 = kg)
-   *   [7] = XOR checksum of bytes 1..6
-   */
-  readonly unlockCommand: number[];
+  readonly unlockCommand: number[] = [];
   readonly unlockIntervalMs = 0;
 
   /** Cached body-composition values from the most recent parsed frame. */
   private cachedComp: ScaleBodyComp = {};
 
-  constructor() {
-    const cmd = [0xfe, 0x01, 0x01, 0x01, 0xa0, 0x1e, 0x01];
+  /**
+   * Send user-config command with real profile data:
+   *   [0] = 0xFE (command marker)
+   *   [1] = userId (1)
+   *   [2] = sex (0x01 = male, 0x00 = female)
+   *   [3] = activity level (1)
+   *   [4] = height in cm
+   *   [5] = age
+   *   [6] = unit (0x01 = kg)
+   *   [7] = XOR checksum of bytes 1..6
+   */
+  async onConnected(ctx: ConnectionContext): Promise<void> {
+    const { profile } = ctx;
+    const sex = profile.gender === 'male' ? 0x01 : 0x00;
+    const height = Math.min(0xff, Math.max(0, Math.round(profile.height)));
+    const age = Math.min(0xff, Math.max(0, profile.age));
+    const cmd = [0xfe, 0x01, sex, 0x01, height, age, 0x01];
     cmd.push(xorChecksum(cmd, 1, 7));
-    this.unlockCommand = cmd;
+    await ctx.write(this.charWriteUuid, cmd, false);
   }
 
   matches(device: BleDeviceInfo): boolean {

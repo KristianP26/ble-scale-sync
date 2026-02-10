@@ -74,16 +74,10 @@ export function loadConfig(): Config {
     height = height * 2.54;
   }
 
-  const currentYear = new Date().getFullYear();
-  const birthYear = parseNumber(
-    'USER_BIRTH_YEAR',
-    requireEnv('USER_BIRTH_YEAR'),
-    1900,
-    currentYear,
-  );
-  const age = currentYear - birthYear;
+  const birthDate = parseBirthDate(requireEnv('USER_BIRTH_DATE'));
+  const age = computeAge(birthDate);
   if (age < 5) {
-    fail(`USER_BIRTH_YEAR ${birthYear} results in age ${age}, minimum age is 5`);
+    fail(`USER_BIRTH_DATE results in age ${age}, minimum age is 5`);
   }
 
   const gender = parseGender(requireEnv('USER_GENDER'));
@@ -109,6 +103,32 @@ export function loadConfig(): Config {
     weightUnit,
     dryRun,
   };
+}
+
+function parseBirthDate(raw: string): Date {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (!match) {
+    fail(`USER_BIRTH_DATE must be in YYYY-MM-DD format, got '${raw}'`);
+  }
+  const [, y, m, d] = match.map(Number);
+  const date = new Date(y, m - 1, d);
+  if (date.getFullYear() !== y || date.getMonth() !== m - 1 || date.getDate() !== d) {
+    fail(`USER_BIRTH_DATE is not a valid date: '${raw}'`);
+  }
+  if (date > new Date()) {
+    fail('USER_BIRTH_DATE cannot be in the future');
+  }
+  return date;
+}
+
+function computeAge(birth: Date): number {
+  const today = new Date();
+  let age = today.getFullYear() - birth.getFullYear();
+  const monthDiff = today.getMonth() - birth.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) {
+    age--;
+  }
+  return age;
 }
 
 function parseWeightUnit(raw: string | undefined): WeightUnit {

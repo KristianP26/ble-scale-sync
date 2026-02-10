@@ -121,7 +121,7 @@ GARMIN_EMAIL=you@example.com
 GARMIN_PASSWORD=your_password
 
 USER_HEIGHT=183
-USER_BIRTH_YEAR=2000
+USER_BIRTH_DATE=2000-06-15
 USER_GENDER=male
 USER_IS_ATHLETE=true
 
@@ -149,7 +149,7 @@ All environment variables are validated at startup with clear error messages:
 | `GARMIN_EMAIL`    | Yes      | Validated on Python side                             |
 | `GARMIN_PASSWORD` | Yes      | Validated on Python side                             |
 | `USER_HEIGHT`     | Yes      | Number, 50–250 cm (or 20–100 if `HEIGHT_UNIT=in`)   |
-| `USER_BIRTH_YEAR` | Yes      | Number, 1900–current year, age >= 5                  |
+| `USER_BIRTH_DATE` | Yes      | Date in YYYY-MM-DD format, age >= 5                  |
 | `USER_GENDER`     | Yes      | `male` or `female` (case-insensitive)                |
 | `USER_IS_ATHLETE` | Yes      | `true`/`false`/`yes`/`no`/`1`/`0`                    |
 | `WEIGHT_UNIT`     | No       | `kg` or `lbs` (default: `kg`) — display + scale input |
