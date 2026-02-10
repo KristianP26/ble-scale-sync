@@ -183,6 +183,30 @@ describe('loadExporterConfig()', () => {
       });
     });
 
+    it('parses custom method and headers', () => {
+      vi.stubEnv('EXPORTERS', 'webhook');
+      vi.stubEnv('WEBHOOK_URL', 'https://example.com/hook');
+      vi.stubEnv('WEBHOOK_METHOD', 'PUT');
+      vi.stubEnv('WEBHOOK_HEADERS', 'X-Key: val1, Auth: Bearer tok');
+      const cfg = loadExporterConfig();
+      expect(cfg.webhook!.method).toBe('PUT');
+      expect(cfg.webhook!.headers).toEqual({
+        'X-Key': 'val1',
+        Auth: 'Bearer tok',
+      });
+    });
+
+    it('handles invalid header entries gracefully', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.stubEnv('EXPORTERS', 'webhook');
+      vi.stubEnv('WEBHOOK_URL', 'https://example.com/hook');
+      vi.stubEnv('WEBHOOK_HEADERS', 'invalid, X-Good: value');
+      const cfg = loadExporterConfig();
+      expect(cfg.webhook!.headers).toEqual({ 'X-Good': 'value' });
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Ignoring invalid header'));
+      warnSpy.mockRestore();
+    });
+
     it('skips invalid headers with warning', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       vi.stubEnv('EXPORTERS', 'webhook');
@@ -309,10 +333,26 @@ describe('loadExporterConfig()', () => {
       });
     });
 
+    it('parses custom priority', () => {
+      vi.stubEnv('EXPORTERS', 'ntfy');
+      vi.stubEnv('NTFY_TOPIC', 'my-scale');
+      vi.stubEnv('NTFY_PRIORITY', '5');
+      const cfg = loadExporterConfig();
+      expect(cfg.ntfy!.priority).toBe(5);
+    });
+
     it('rejects invalid NTFY_PRIORITY', () => {
       vi.stubEnv('EXPORTERS', 'ntfy');
       vi.stubEnv('NTFY_TOPIC', 'my-scale');
       vi.stubEnv('NTFY_PRIORITY', '6');
+      expect(() => loadExporterConfig()).toThrow();
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('NTFY_PRIORITY must be 1-5'));
+    });
+
+    it('rejects non-integer priority', () => {
+      vi.stubEnv('EXPORTERS', 'ntfy');
+      vi.stubEnv('NTFY_TOPIC', 'my-scale');
+      vi.stubEnv('NTFY_PRIORITY', '2.5');
       expect(() => loadExporterConfig()).toThrow();
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('NTFY_PRIORITY must be 1-5'));
     });

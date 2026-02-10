@@ -80,6 +80,18 @@ describe('WebhookExporter', () => {
     });
   });
 
+  it('custom headers override Content-Type', async () => {
+    const config: WebhookConfig = {
+      ...defaultConfig,
+      headers: { 'Content-Type': 'text/plain' },
+    };
+    const exporter = new WebhookExporter(config);
+    await exporter.export(samplePayload);
+
+    const callHeaders = mockFetch.mock.calls[0][1].headers;
+    expect(callHeaders['Content-Type']).toBe('text/plain');
+  });
+
   it('returns failure on non-2xx response', async () => {
     mockFetch.mockResolvedValue({ ok: false, status: 500 });
     const exporter = new WebhookExporter(defaultConfig);

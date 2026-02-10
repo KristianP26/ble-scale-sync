@@ -9,15 +9,11 @@ const MAX_RETRIES = 2;
 
 function formatMessage(data: BodyComposition): string {
   return [
-    `Weight: ${data.weight} kg`,
-    `BMI: ${data.bmi}`,
-    `Body Fat: ${data.bodyFatPercent}%`,
-    `Water: ${data.waterPercent}%`,
-    `Muscle Mass: ${data.muscleMass} kg`,
-    `Bone Mass: ${data.boneMass} kg`,
-    `Visceral Fat: ${data.visceralFat}`,
-    `BMR: ${data.bmr} kcal`,
-    `Metabolic Age: ${data.metabolicAge}`,
+    `⚖️ ${data.weight.toFixed(2)} kg | BMI ${data.bmi.toFixed(1)}`,
+    `🏋️ Body Fat ${data.bodyFatPercent.toFixed(1)}% | Muscle ${data.muscleMass.toFixed(1)} kg`,
+    `💧 Water ${data.waterPercent.toFixed(1)}% | 🦴 Bone ${data.boneMass.toFixed(1)} kg`,
+    `🫀 Visceral Fat ${data.visceralFat} | BMR ${data.bmr} kcal`,
+    `📅 Metabolic Age ${data.metabolicAge} yr | Physique ${data.physiqueRating}`,
   ].join('\n');
 }
 

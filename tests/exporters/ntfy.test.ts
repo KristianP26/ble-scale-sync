@@ -48,8 +48,8 @@ describe('NtfyExporter', () => {
     );
   });
 
-  it('trims trailing slash from URL', async () => {
-    const config: NtfyConfig = { ...defaultConfig, url: 'https://ntfy.sh/' };
+  it('strips trailing slashes from URL', async () => {
+    const config: NtfyConfig = { ...defaultConfig, url: 'https://ntfy.sh///' };
     const exporter = new NtfyExporter(config);
     await exporter.export(samplePayload);
 
@@ -67,16 +67,22 @@ describe('NtfyExporter', () => {
     expect(headers.Tags).toBe('scales');
   });
 
-  it('includes body composition in message body', async () => {
+  it('formats message body with emoji', async () => {
     const exporter = new NtfyExporter(defaultConfig);
     await exporter.export(samplePayload);
 
     const body = mockFetch.mock.calls[0][1].body as string;
-    expect(body).toContain('Weight: 80 kg');
-    expect(body).toContain('BMI: 23.9');
-    expect(body).toContain('Body Fat: 18.5%');
-    expect(body).toContain('Muscle Mass: 62.4 kg');
-    expect(body).toContain('BMR: 1750 kcal');
+    expect(body).toContain('⚖️');
+    expect(body).toContain('🏋️');
+    expect(body).toContain('💧');
+    expect(body).toContain('🫀');
+    expect(body).toContain('📅');
+    expect(body).toContain('80.00 kg');
+    expect(body).toContain('BMI 23.9');
+    expect(body).toContain('Body Fat 18.5%');
+    expect(body).toContain('Muscle 62.4 kg');
+    expect(body).toContain('BMR 1750 kcal');
+    expect(body).toContain('Physique 5');
   });
 
   it('uses Bearer token auth when token is set', async () => {
