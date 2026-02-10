@@ -250,10 +250,7 @@ export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
         const devSerialized = `dev_${formatMac(targetMac).replace(/:/g, '_')}`;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const adapterHelper = (btAdapter as any).helper;
-        await adapterHelper.callMethod(
-          'RemoveDevice',
-          `${adapterHelper.object}/${devSerialized}`,
-        );
+        await adapterHelper.callMethod('RemoveDevice', `${adapterHelper.object}/${devSerialized}`);
         bleLog.debug('Removed stale device from BlueZ cache');
       } catch {
         // Device wasn't in cache — expected on first scan
