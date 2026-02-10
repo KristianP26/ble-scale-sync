@@ -2,7 +2,7 @@
 
 > **⚠️ Work in Progress** — This project is under active development and is **not production-ready**. Expect breaking changes, incomplete features, and rough edges. Use at your own risk.
 
-A cross-platform CLI tool that reads body composition data from a **BLE smart scale** and exports it to **Garmin Connect**, **MQTT**, or both. Built with an adapter pattern supporting **23 scale brands** out of the box.
+A cross-platform CLI tool that reads body composition data from a **BLE smart scale** and exports it to **Garmin Connect**, **MQTT**, **Webhook**, **InfluxDB**, **Ntfy**, or any combination. Built with an adapter pattern supporting **23 scale brands** out of the box.
 
 Works on **Linux** (including Raspberry Pi), **macOS**, and **Windows**.
 
@@ -55,16 +55,22 @@ While the project started for one scale, it now supports **23 scale adapters** c
 ```
                                           ┌───────────────────┐
                                    ┌────> │  Garmin Connect   │
-┌──────────────┐    ┌────────────┐ │      └───────────────────┘
-│  BLE Scale   │    │ TypeScript │ │      ┌───────────────────┐
-│  (Bluetooth) │ ─> │ BLE + Body │ ├────> │   MQTT Broker     │
-└──────────────┘    │ Composition│ │      └───────────────────┘
-                    └────────────┘ │      ┌───────────────────┐
-                                   └────> │  Future exports…  │
+                                   │      └───────────────────┘
+                                   │      ┌───────────────────┐
+┌──────────────┐    ┌────────────┐ ├────> │   MQTT Broker     │
+│  BLE Scale   │    │ TypeScript │ │      └───────────────────┘
+│  (Bluetooth) │ ─> │ BLE + Body │ │      ┌───────────────────┐
+└──────────────┘    │ Composition│ ├────> │  Webhook (HTTP)   │
+                    └────────────┘ │      └───────────────────┘
+                                   │      ┌───────────────────┐
+                                   ├────> │  InfluxDB         │
+                                   │      └───────────────────┘
+                                   │      ┌───────────────────┐
+                                   └────> │  Ntfy (push)      │
                                           └───────────────────┘
 ```
 
-**TypeScript** (run via `tsx`) scans for a BLE scale using the OS-appropriate handler (node-ble on Linux, noble on Windows/macOS), auto-detects the brand via the adapter pattern, and calculates up to 10 body composition metrics. Results are dispatched in parallel to all enabled **exporters** — Garmin Connect (via a Python subprocess), MQTT, or both.
+**TypeScript** (run via `tsx`) scans for a BLE scale using the OS-appropriate handler (node-ble on Linux, noble on Windows/macOS), auto-detects the brand via the adapter pattern, and calculates up to 10 body composition metrics. Results are dispatched in parallel to all enabled **exporters** — Garmin Connect, MQTT, Webhook, InfluxDB, Ntfy, or any combination.
 
 All exporters run in parallel. The process reports an error only if every exporter fails.
 
@@ -73,7 +79,7 @@ All exporters run in parallel. The process reports an error only if every export
 ### All Platforms
 
 - [Node.js](https://nodejs.org/) v20 or later
-- [Python](https://python.org/) 3.9 or later (for Garmin upload)
+- [Python](https://python.org/) 3.9 or later (only needed for Garmin upload)
 - Bluetooth Low Energy (BLE) capable adapter
 
 ### Linux (Debian/Ubuntu/Raspberry Pi OS)
@@ -209,10 +215,12 @@ The app supports multiple export targets. Configure which ones to use with the `
 ```ini
 EXPORTERS=garmin              # default — Garmin Connect only
 EXPORTERS=garmin,mqtt         # both in parallel
-EXPORTERS=mqtt                # MQTT only
+EXPORTERS=webhook,influxdb    # HTTP + time-series DB
+EXPORTERS=garmin,ntfy         # Garmin + push notifications
+EXPORTERS=garmin,mqtt,webhook,influxdb,ntfy  # all five
 ```
 
-If `EXPORTERS` is not set, it defaults to `garmin`.
+If `EXPORTERS` is not set, it defaults to `garmin`. All enabled exporters run in parallel.
 
 #### MQTT
 
@@ -230,6 +238,43 @@ Publishes the full body composition payload as a JSON object to the configured t
 | `MQTT_PASSWORD` | No | — | Broker authentication password |
 | `MQTT_CLIENT_ID` | No | `ble-scale-sync` | MQTT client identifier |
 | `MQTT_HA_DISCOVERY` | No | `true` | Publish Home Assistant auto-discovery configs on connect |
+
+#### Webhook
+
+Sends the full body composition payload as a JSON POST to any HTTP endpoint. Useful for integrating with automation platforms (n8n, Make, Zapier, custom APIs).
+
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `WEBHOOK_URL` | Yes (when webhook enabled) | — | Target URL |
+| `WEBHOOK_METHOD` | No | `POST` | HTTP method (`POST`, `PUT`, etc.) |
+| `WEBHOOK_HEADERS` | No | — | Custom headers as comma-separated `Key: Value` pairs |
+| `WEBHOOK_TIMEOUT` | No | `10000` | Request timeout in milliseconds |
+
+#### InfluxDB
+
+Writes body composition metrics to an InfluxDB v2 instance using line protocol. Float fields (`weight`, `bmi`, `bodyFatPercent`, `waterPercent`, `boneMass`, `muscleMass`) are written with 2 decimal places. Integer fields (`impedance`, `visceralFat`, `physiqueRating`, `bmr`, `metabolicAge`) use InfluxDB's integer type.
+
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `INFLUXDB_URL` | Yes (when influxdb enabled) | — | InfluxDB server URL (`http://localhost:8086`) |
+| `INFLUXDB_TOKEN` | Yes (when influxdb enabled) | — | API token with write access |
+| `INFLUXDB_ORG` | Yes (when influxdb enabled) | — | Organization name |
+| `INFLUXDB_BUCKET` | Yes (when influxdb enabled) | — | Destination bucket |
+| `INFLUXDB_MEASUREMENT` | No | `body_composition` | Measurement name in line protocol |
+
+#### Ntfy
+
+Sends a human-readable push notification via [ntfy](https://ntfy.sh). Works with the public ntfy.sh server or a self-hosted instance.
+
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `NTFY_TOPIC` | Yes (when ntfy enabled) | — | Ntfy topic name |
+| `NTFY_URL` | No | `https://ntfy.sh` | Ntfy server URL |
+| `NTFY_TITLE` | No | `Scale Measurement` | Notification title |
+| `NTFY_PRIORITY` | No | `3` | Priority (1=min, 3=default, 5=max) |
+| `NTFY_TOKEN` | No | — | Bearer token for authentication |
+| `NTFY_USERNAME` | No | — | Username for Basic auth |
+| `NTFY_PASSWORD` | No | — | Password for Basic auth |
 
 ## Usage
 
@@ -299,7 +344,7 @@ Unit tests use [Vitest](https://vitest.dev/) and cover:
 - **Body composition math** — `calculator.ts` and `body-comp-helpers.ts`
 - **Environment validation** — `validate-env.ts` (all validation rules and edge cases)
 - **Scale adapters** — `parseNotification()`, `matches()`, `isComplete()`, `computeMetrics()`, and `onConnected()` for all 23 adapters
-- **Exporters** — config parsing, MQTT publish/retry/HA discovery, Garmin subprocess
+- **Exporters** — config parsing, MQTT publish/retry/HA discovery, Garmin subprocess, Webhook/InfluxDB/Ntfy delivery and retry logic
 
 ### Linting & Formatting
 
@@ -326,9 +371,12 @@ ble-scale-sync/
 │   │   └── handler-noble.ts        # Windows/macOS: @abandonware/noble
 │   ├── exporters/
 │   │   ├── index.ts                # Exporter registry — createExporters()
-│   │   ├── config.ts               # Exporter env validation + MQTT config
+│   │   ├── config.ts               # Exporter env validation + config parsing
 │   │   ├── garmin.ts               # Garmin Connect exporter (Python subprocess)
-│   │   └── mqtt.ts                 # MQTT exporter + Home Assistant auto-discovery
+│   │   ├── mqtt.ts                 # MQTT exporter + Home Assistant auto-discovery
+│   │   ├── webhook.ts              # Webhook exporter (generic HTTP)
+│   │   ├── influxdb.ts             # InfluxDB v2 exporter (line protocol)
+│   │   └── ntfy.ts                 # Ntfy push notification exporter
 │   ├── calculator.ts               # Body composition math (BIA formulas)
 │   ├── validate-env.ts             # .env validation & typed config loader
 │   ├── scan.ts                     # BLE device scanner utility
@@ -367,7 +415,7 @@ ble-scale-sync/
 │   ├── helpers/
 │   │   └── scale-test-utils.ts     # Shared test utilities (mock peripheral, etc.)
 │   ├── scales/                     # One test file per adapter (23 files)
-│   └── exporters/                  # Exporter tests (config, garmin, mqtt)
+│   └── exporters/                  # Exporter tests (config, garmin, mqtt, webhook, influxdb, ntfy)
 ├── garmin-scripts/
 │   ├── garmin_upload.py            # Garmin uploader (JSON stdin → JSON stdout)
 │   └── setup_garmin.py             # One-time Garmin auth setup
