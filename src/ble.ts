@@ -43,6 +43,80 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Try to start BlueZ discovery with escalating recovery strategies.
+ * Returns true if discovery is active, false if all attempts failed.
+ * waitDevice()/devices() still work without active discovery (they poll
+ * BlueZ's device cache), so callers can proceed even on false.
+ */
+async function startDiscoverySafe(btAdapter: Adapter): Promise<boolean> {
+  // 1. Normal start
+  try {
+    await btAdapter.startDiscovery();
+    debug('Discovery started');
+    return true;
+  } catch (e) {
+    debug(`startDiscovery failed: ${errMsg(e)}`);
+  }
+
+  // Already running (another D-Bus client owns the session)
+  if (await btAdapter.isDiscovering()) {
+    debug('Discovery already active (owned by another client), continuing');
+    return true;
+  }
+
+  // 2. Force-stop via D-Bus (bypass node-ble's isDiscovering guard) + retry
+  debug('Attempting D-Bus StopDiscovery to reset stale state...');
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (btAdapter as any).helper.callMethod('StopDiscovery');
+    debug('D-Bus StopDiscovery succeeded');
+  } catch (e) {
+    debug(`D-Bus StopDiscovery failed: ${errMsg(e)}`);
+  }
+  await sleep(1000);
+
+  try {
+    await btAdapter.startDiscovery();
+    debug('Discovery started after D-Bus reset');
+    return true;
+  } catch (e) {
+    debug(`startDiscovery after D-Bus reset failed: ${errMsg(e)}`);
+  }
+
+  // 3. Power-cycle the adapter + retry
+  debug('Attempting adapter power cycle...');
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const helper = (btAdapter as any).helper;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { Variant } = (await import('dbus-next')) as any;
+    await helper.set('Powered', new Variant('b', false));
+    debug('Adapter powered off');
+    await sleep(1000);
+    await helper.set('Powered', new Variant('b', true));
+    debug('Adapter powered on');
+    await sleep(1000);
+
+    await btAdapter.startDiscovery();
+    debug('Discovery started after power cycle');
+    return true;
+  } catch (e) {
+    debug(`Power cycle / startDiscovery failed: ${errMsg(e)}`);
+  }
+
+  // All strategies failed — warn but don't throw
+  console.warn(
+    '[BLE] Warning: Could not start active discovery. ' +
+      'Proceeding with passive scanning (device may take longer to appear).',
+  );
+  return false;
+}
+
 export interface ScanOptions {
   targetMac?: string;
   adapters: ScaleAdapter[];
@@ -70,29 +144,7 @@ export async function scanAndRead(opts: ScanOptions): Promise<GarminPayload> {
       );
     }
 
-    // Start discovery — BlueZ may be in a stale/transitional state from a
-    // previous crashed run where Discovering=false but StartDiscovery still
-    // rejects. node-ble's stopDiscovery() has a client-side guard that skips
-    // the D-Bus call when isDiscovering()=false, so we call StopDiscovery
-    // directly on the D-Bus interface to force a clean reset.
-    try {
-      await btAdapter.startDiscovery();
-    } catch {
-      if (await btAdapter.isDiscovering()) {
-        debug('Discovery already active, continuing');
-      } else {
-        debug('startDiscovery failed, force-stopping via D-Bus...');
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          await (btAdapter as any).helper.callMethod('StopDiscovery');
-        } catch {
-          /* ignore — BlueZ may reject if truly not discovering */
-        }
-        await sleep(1000);
-        await btAdapter.startDiscovery();
-      }
-    }
-    debug('Discovery started');
+    await startDiscoverySafe(btAdapter);
 
     let matchedAdapter: ScaleAdapter;
 

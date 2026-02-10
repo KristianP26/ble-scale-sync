@@ -1,8 +1,62 @@
 import NodeBle from 'node-ble';
 import { adapters } from './scales/index.js';
 
+type Adapter = NodeBle.Adapter;
+
 const SCAN_DURATION_MS = 15_000;
 const POLL_INTERVAL_MS = 2_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Try to start discovery with escalating recovery. Returns true if active. */
+async function startDiscoverySafe(btAdapter: Adapter): Promise<boolean> {
+  try {
+    await btAdapter.startDiscovery();
+    return true;
+  } catch (e) {
+    console.log(`[Scan] startDiscovery failed: ${errMsg(e)}`);
+  }
+
+  if (await btAdapter.isDiscovering()) return true;
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (btAdapter as any).helper.callMethod('StopDiscovery');
+  } catch {
+    /* ignore */
+  }
+  await sleep(1000);
+
+  try {
+    await btAdapter.startDiscovery();
+    return true;
+  } catch {
+    /* fall through to power cycle */
+  }
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const helper = (btAdapter as any).helper;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { Variant } = (await import('dbus-next')) as any;
+    await helper.set('Powered', new Variant('b', false));
+    await sleep(1000);
+    await helper.set('Powered', new Variant('b', true));
+    await sleep(1000);
+    await btAdapter.startDiscovery();
+    return true;
+  } catch (e) {
+    console.warn(`[Scan] Warning: Could not start discovery: ${errMsg(e)}`);
+    console.warn('[Scan] Proceeding — cached devices may still appear.');
+    return false;
+  }
+}
 
 async function main(): Promise<void> {
   const { bluetooth, destroy } = NodeBle.createBluetooth();
@@ -17,20 +71,7 @@ async function main(): Promise<void> {
     }
 
     console.log('Scanning for BLE devices... (15 seconds)\n');
-    try {
-      await adapter.startDiscovery();
-    } catch {
-      if (!(await adapter.isDiscovering())) {
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          await (adapter as any).helper.callMethod('StopDiscovery');
-        } catch {
-          /* ignore */
-        }
-        await new Promise((r) => setTimeout(r, 1000));
-        await adapter.startDiscovery();
-      }
-    }
+    await startDiscoverySafe(adapter);
 
     const seen = new Set<string>();
     const recognized: { addr: string; name: string; adapter: string }[] = [];
