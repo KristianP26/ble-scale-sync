@@ -53,21 +53,13 @@ While the project started for one scale, it now supports **23 scale adapters** c
 ## How It Works
 
 ```
-                                          ┌───────────────────┐
-                                   ┌────> │  Garmin Connect   │
-                                   │      └───────────────────┘
-                                   │      ┌───────────────────┐
-┌──────────────┐    ┌────────────┐ ├────> │   MQTT Broker     │
-│  BLE Scale   │    │ TypeScript │ │      └───────────────────┘
-│  (Bluetooth) │ ─> │ BLE + Body │ │      ┌───────────────────┐
-└──────────────┘    │ Composition│ ├────> │  Webhook (HTTP)   │
-                    └────────────┘ │      └───────────────────┘
-                                   │      ┌───────────────────┐
-                                   ├────> │  InfluxDB         │
-                                   │      └───────────────────┘
-                                   │      ┌───────────────────┐
-                                   └────> │  Ntfy (push)      │
-                                          └───────────────────┘
+┌──────────┐    ┌──────────────┐    ┌─────────────────────────────┐
+│          │    │              │    │  ├─ Garmin Connect (Python) │
+│   BLE    │    │  BLE + Body  │    │  ├─ MQTT                   │
+│  Scale   │───>│ Composition  │───>│  ├─ Webhook                │
+│          │    │              │    │  ├─ InfluxDB               │
+│          │    │ (TypeScript) │    │  └─ Ntfy                   │
+└──────────┘    └──────────────┘    └─────────────────────────────┘
 ```
 
 **TypeScript** (run via `tsx`) scans for a BLE scale using the OS-appropriate handler (node-ble on Linux, noble on Windows/macOS), auto-detects the brand via the adapter pattern, and calculates up to 10 body composition metrics. Results are dispatched in parallel to all enabled **exporters** — Garmin Connect, MQTT, Webhook, InfluxDB, Ntfy, or any combination.
