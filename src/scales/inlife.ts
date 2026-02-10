@@ -1,11 +1,12 @@
 import type {
   BleDeviceInfo,
+  ConnectionContext,
   ScaleAdapter,
   ScaleReading,
   UserProfile,
   GarminPayload,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
+import { uuid16, buildPayload, xorChecksum, type ScaleBodyComp } from './body-comp-helpers.js';
 
 const SVC_UUID = uuid16(0xfff0);
 const CHR_NOTIFY = uuid16(0xfff1);
@@ -29,16 +30,7 @@ export class InlifeScaleAdapter implements ScaleAdapter {
   readonly charNotifyUuid = CHR_NOTIFY;
   readonly charWriteUuid = CHR_WRITE;
   readonly normalizesWeight = true;
-  /**
-   * User config command:
-   *   [0] = 0xD2 (command)
-   *   [1] = level (1)
-   *   [2] = sex (0x00 = male)
-   *   [3] = user id (1)
-   *   [4] = age (0x1E = 30)
-   *   [5] = height (0xA0 = 160 cm)
-   */
-  readonly unlockCommand = [0xd2, 0x01, 0x00, 0x01, 0x1e, 0xa0];
+  readonly unlockCommand: number[] = [];
   readonly unlockIntervalMs = 5000;
 
   /** Cached body-composition values from parsed frame. */
@@ -53,6 +45,23 @@ export class InlifeScaleAdapter implements ScaleAdapter {
     // Also match by advertised service UUID
     const uuids = (device.serviceUuids || []).map((u) => u.toLowerCase());
     return uuids.some((u) => u === 'fff0' || u === SVC_UUID);
+  }
+
+  /**
+   * Send user config with real profile:
+   *   [0x02, 0xD2, level, sex, userId, age, height, ...padding, xor1, xor2, 0xAA]
+   *
+   * openScale Inlife: 14 bytes — cmd 0xD2, XOR checksum over payload.
+   */
+  async onConnected(ctx: ConnectionContext): Promise<void> {
+    const { profile } = ctx;
+    const sex = profile.gender === 'male' ? 0x00 : 0x01;
+    const height = Math.min(0xff, Math.max(0, Math.round(profile.height)));
+    const age = Math.min(0xff, Math.max(0, profile.age));
+    const cmd = [0x02, 0xd2, 0x01, sex, 0x01, age, height, 0x00, 0x00, 0x00, 0x00, 0x00];
+    const xor = xorChecksum(cmd, 0, cmd.length);
+    cmd.push(xor, 0xaa);
+    await ctx.write(this.charWriteUuid, cmd, false);
   }
 
   /**

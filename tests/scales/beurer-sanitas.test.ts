@@ -43,6 +43,32 @@ describe('BeurerSanitasScaleAdapter', () => {
     });
   });
 
+  describe('unlockCommand', () => {
+    it('returns 0xF7 for BF700/BF800 type', () => {
+      const adapter = makeAdapter();
+      adapter.matches(mockPeripheral('bf-700'));
+      expect(adapter.unlockCommand[0]).toBe(0xf7);
+    });
+
+    it('returns 0xE7 for BF710/Sanitas type', () => {
+      const adapter = makeAdapter();
+      adapter.matches(mockPeripheral('beurer bf710'));
+      expect(adapter.unlockCommand[0]).toBe(0xe7);
+    });
+
+    it('returns 0xE7 for SBF70', () => {
+      const adapter = makeAdapter();
+      adapter.matches(mockPeripheral('sanitas sbf70'));
+      expect(adapter.unlockCommand[0]).toBe(0xe7);
+    });
+
+    it('returns 0xE7 for aicdscale1', () => {
+      const adapter = makeAdapter();
+      adapter.matches(mockPeripheral('aicdscale1'));
+      expect(adapter.unlockCommand[0]).toBe(0xe7);
+    });
+  });
+
   describe('parseNotification()', () => {
     it('parses weight-only frame (6 bytes)', () => {
       const adapter = makeAdapter();
@@ -80,6 +106,13 @@ describe('BeurerSanitasScaleAdapter', () => {
       const adapter = makeAdapter();
       const buf = Buffer.alloc(6);
       buf.writeUInt16BE(0, 4); // weight = 0
+      expect(adapter.parseNotification(buf)).toBeNull();
+    });
+
+    it('returns null when weight exceeds 300 kg', () => {
+      const adapter = makeAdapter();
+      const buf = Buffer.alloc(6);
+      buf.writeUInt16BE(6100, 4); // 6100 * 50 / 1000 = 305 kg
       expect(adapter.parseNotification(buf)).toBeNull();
     });
   });

@@ -1,5 +1,6 @@
 import type {
   BleDeviceInfo,
+  ConnectionContext,
   ScaleAdapter,
   ScaleReading,
   UserProfile,
@@ -29,8 +30,7 @@ export class MedisanaBs44xAdapter implements ScaleAdapter {
   readonly charWriteUuid = CHR_WRITE;
 
   readonly normalizesWeight = true;
-  /** Time sync command with a static zero timestamp as default. */
-  readonly unlockCommand = [0x02, 0x00, 0x00, 0x00, 0x00];
+  readonly unlockCommand: number[] = [];
   readonly unlockIntervalMs = 0;
 
   /** Cached weight from weight frames. */
@@ -38,6 +38,15 @@ export class MedisanaBs44xAdapter implements ScaleAdapter {
 
   /** Cached body-composition values from feature frames. */
   private cachedComp: ScaleBodyComp = {};
+
+  /** Time sync with real Unix timestamp. */
+  async onConnected(ctx: ConnectionContext): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+    const cmd = Buffer.alloc(5);
+    cmd[0] = 0x02;
+    cmd.writeUInt32LE(now, 1);
+    await ctx.write(this.charWriteUuid, [...cmd], true);
+  }
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();

@@ -29,7 +29,7 @@ Works on **Linux** (including Raspberry Pi), **macOS**, and **Windows**.
 | **ES-CS20M**                                         | Custom (1A10)          |
 | **Exingtech Y1** (vscale)                            | Custom UUID            |
 | **1byone** / Eufy C1 / Eufy P1                       | Custom (FFF0 / FFB0)   |
-| **Active Era BF-06**                                 | Custom (FFB0)          |
+| **Active Era BS-06**                                 | Custom (FFB0)          |
 | **MGB** (Swan / Icomon / YG)                         | Custom (FFB0)          |
 | **Hoffen BS-8107**                                   | Custom (FFB0)          |
 | Any **standard BT SIG BCS/WSS** scale                | Standard (181B / 181D) |
@@ -248,7 +248,7 @@ Unit tests use [Vitest](https://vitest.dev/) and cover:
 
 - **Body composition math** — `calculator.ts` and `body-comp-helpers.ts`
 - **Environment validation** — `validate-env.ts` (all validation rules and edge cases)
-- **Scale adapters** — `parseNotification()`, `matches()`, `isComplete()`, `computeMetrics()` for QN Scale, Standard GATT, Mi Scale 2, Yunmai, and Renpho adapters
+- **Scale adapters** — `parseNotification()`, `matches()`, `isComplete()`, `computeMetrics()`, and `onConnected()` for all 23 adapters
 
 ### Linting & Formatting
 
@@ -309,12 +309,7 @@ blescalesync/
 │   ├── validate-env.test.ts        # .env validation unit tests
 │   ├── helpers/
 │   │   └── scale-test-utils.ts     # Shared test utilities (mock peripheral, etc.)
-│   └── scales/
-│       ├── qn-scale.test.ts        # QN Scale adapter tests
-│       ├── standard-gatt.test.ts   # Standard GATT adapter tests
-│       ├── mi-scale-2.test.ts      # Mi Scale 2 adapter tests
-│       ├── yunmai.test.ts          # Yunmai adapter tests
-│       └── renpho.test.ts          # Renpho ES-WBE28 adapter tests
+│   └── scales/                      # One test file per adapter (23 files)
 ├── scripts/
 │   ├── garmin_upload.py            # Garmin uploader (JSON stdin → JSON stdout)
 │   └── setup_garmin.py             # One-time Garmin auth setup

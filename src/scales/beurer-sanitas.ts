@@ -53,11 +53,14 @@ export class BeurerSanitasScaleAdapter implements ScaleAdapter {
   readonly charNotifyUuid = CHR_FFE1;
   readonly charWriteUuid = CHR_FFE1;
   readonly normalizesWeight = true;
-  /** INIT command — F7 01 for BF700/800, E7 01 for BF710/Sanitas. */
-  readonly unlockCommand = [0xf7, 0x01];
   readonly unlockIntervalMs = 5000;
 
   private isBf710Type = false;
+
+  /** INIT command — F7 01 for BF700/800, E7 01 for BF710/Sanitas. */
+  get unlockCommand(): number[] {
+    return this.isBf710Type ? [0xe7, 0x01] : [0xf7, 0x01];
+  }
   private cachedComp: CachedComp | null = null;
 
   matches(device: BleDeviceInfo): boolean {
@@ -90,7 +93,7 @@ export class BeurerSanitasScaleAdapter implements ScaleAdapter {
     if (data.length < 6) return null;
 
     const weight = (data.readUInt16BE(4) * 50) / 1000;
-    if (weight <= 0 || !Number.isFinite(weight)) return null;
+    if (weight <= 0 || weight > 300 || !Number.isFinite(weight)) return null;
 
     let impedance = 0;
     this.cachedComp = null;

@@ -39,10 +39,7 @@ export class ActiveEraAdapter implements ScaleAdapter {
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
-    if (name.includes('ae bs-06')) return true;
-
-    const uuids = (device.serviceUuids || []).map((u) => u.toLowerCase());
-    return uuids.some((u) => u === 'ffb0' || u === uuid16(0xffb0));
+    return name.includes('ae bs-06');
   }
 
   parseNotification(data: Buffer): ScaleReading | null {

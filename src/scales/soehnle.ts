@@ -16,6 +16,10 @@ const KNOWN_PREFIXES = ['shape200', 'shape100', 'shape50', 'style100'];
 /**
  * Adapter for Soehnle Shape / Style scales (Shape200, Shape100, Shape50, Style100).
  *
+ * **Limitation:** Requires user slot 1 to be configured on the scale via the
+ * manufacturer's official app. openScale has a full user creation workflow
+ * (create user → select user → request history) that is not implemented here.
+ *
  * Protocol ported from openScale's SoehnleHandler:
  *   - Custom service 352e3000-…
  *   - Notify on 352e3001-… (measurement data)

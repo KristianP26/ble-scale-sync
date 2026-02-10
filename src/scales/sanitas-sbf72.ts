@@ -23,6 +23,9 @@ interface CachedGattData {
 /**
  * Adapter for Sanitas SBF72 / SBF73 and Beurer BF915 scales.
  *
+ * **Limitation:** Uses hardcoded UCP consent for user index 1. The scale must
+ * have user slot 1 configured via the manufacturer's official app before use.
+ *
  * Protocol ported from openScale's SanitasSbf72Handler which extends
  * StandardWeightProfileHandler — uses standard BCS (0x181B) measurement
  * characteristic for body composition data, plus a custom service (0xFFFF)

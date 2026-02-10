@@ -1,5 +1,6 @@
 import type {
   BleDeviceInfo,
+  ConnectionContext,
   ScaleAdapter,
   ScaleReading,
   UserProfile,
@@ -28,15 +29,7 @@ export class ExingtechY1Adapter implements ScaleAdapter {
   readonly charWriteUuid = CHR_WRITE;
 
   readonly normalizesWeight = true;
-  /**
-   * User block command:
-   *   [0] = 0x10 (user info marker)
-   *   [1] = userId (1)
-   *   [2] = sex (0x00 = male)
-   *   [3] = age (0x1E = 30)
-   *   [4] = height (0xA0 = 160 cm)
-   */
-  readonly unlockCommand = [0x10, 0x01, 0x00, 0x1e, 0xa0];
+  readonly unlockCommand: number[] = [];
   readonly unlockIntervalMs = 0;
 
   /** Cached body-composition values from the most recent parsed frame. */
@@ -48,6 +41,17 @@ export class ExingtechY1Adapter implements ScaleAdapter {
 
     const uuids = (device.serviceUuids || []).map((u) => u.toLowerCase().replace(/-/g, ''));
     return uuids.includes(SVC_UUID);
+  }
+
+  /**
+   * Send user config: [0x10, userId, sex, age, height].
+   */
+  async onConnected(ctx: ConnectionContext): Promise<void> {
+    const { profile } = ctx;
+    const sex = profile.gender === 'male' ? 0x00 : 0x01;
+    const height = Math.min(0xff, Math.max(0, Math.round(profile.height)));
+    const age = Math.min(0xff, Math.max(0, profile.age));
+    await ctx.write(this.charWriteUuid, [0x10, 0x01, sex, age, height], false);
   }
 
   /**

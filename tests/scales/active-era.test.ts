@@ -18,9 +18,9 @@ describe('ActiveEraAdapter', () => {
       expect(adapter.matches(mockPeripheral('AE BS-06 Pro'))).toBe(true);
     });
 
-    it('matches by service UUID "ffb0"', () => {
+    it('does not match by service UUID alone (removed to avoid MGB collision)', () => {
       const adapter = makeAdapter();
-      expect(adapter.matches(mockPeripheral('Unknown', ['ffb0']))).toBe(true);
+      expect(adapter.matches(mockPeripheral('Unknown', ['ffb0']))).toBe(false);
     });
 
     it('matches case-insensitive', () => {

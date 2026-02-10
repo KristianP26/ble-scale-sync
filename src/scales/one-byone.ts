@@ -1,5 +1,6 @@
 import type {
   BleDeviceInfo,
+  ConnectionContext,
   ScaleAdapter,
   ScaleReading,
   UserProfile,
@@ -25,13 +26,28 @@ export class OneByoneAdapter implements ScaleAdapter {
   readonly charNotifyUuid = uuid16(0xfff4);
   readonly charWriteUuid = uuid16(0xfff1);
   readonly normalizesWeight = true;
-  /** Clock sync command — static default for 2026-02-09 00:00:00. */
-  readonly unlockCommand = [0xf1, 0x07, 0xfa, 0x02, 0x09, 0x00, 0x00, 0x00];
+  readonly unlockCommand: number[] = [];
   readonly unlockIntervalMs = 0;
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
     return ONEBYONE_NAMES.some((n) => name.includes(n));
+  }
+
+  /** Clock sync with current time: [0xF1, yearHi, yearLo, month, day, hour, min, sec]. */
+  async onConnected(ctx: ConnectionContext): Promise<void> {
+    const now = new Date();
+    const cmd = [
+      0xf1,
+      (now.getFullYear() >> 8) & 0xff,
+      now.getFullYear() & 0xff,
+      now.getMonth() + 1,
+      now.getDate(),
+      now.getHours(),
+      now.getMinutes(),
+      now.getSeconds(),
+    ];
+    await ctx.write(this.charWriteUuid, cmd, false);
   }
 
   parseNotification(data: Buffer): ScaleReading | null {

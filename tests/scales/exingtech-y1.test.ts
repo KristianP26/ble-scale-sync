@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ExingtechY1Adapter } from '../../src/scales/exingtech-y1.js';
+import type { ConnectionContext } from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -104,6 +105,35 @@ describe('ExingtechY1Adapter', () => {
     it('returns false when weight is 0', () => {
       const adapter = makeAdapter();
       expect(adapter.isComplete({ weight: 0, impedance: 0 })).toBe(false);
+    });
+  });
+
+  describe('onConnected()', () => {
+    it('sends user config with real profile data', async () => {
+      const adapter = makeAdapter();
+      const writeFn = vi.fn().mockResolvedValue(undefined);
+      const profile = defaultProfile({ gender: 'male', height: 183, age: 30 });
+
+      const ctx: ConnectionContext = {
+        write: writeFn,
+        read: vi.fn(),
+        subscribe: vi.fn(),
+        profile,
+      };
+
+      await adapter.onConnected!(ctx);
+
+      expect(writeFn).toHaveBeenCalledOnce();
+      const [charUuid, data, withResponse] = writeFn.mock.calls[0];
+      expect(charUuid).toBe(adapter.charWriteUuid);
+      expect(withResponse).toBe(false);
+
+      // [0x10, userId, sex, age, height]
+      expect(data[0]).toBe(0x10);
+      expect(data[1]).toBe(0x01); // userId
+      expect(data[2]).toBe(0x00); // male
+      expect(data[3]).toBe(30); // age
+      expect(data[4]).toBe(183); // height
     });
   });
 

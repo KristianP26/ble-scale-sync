@@ -1,5 +1,6 @@
 import type {
   BleDeviceInfo,
+  ConnectionContext,
   ScaleAdapter,
   ScaleReading,
   UserProfile,
@@ -26,12 +27,7 @@ export class HoffenAdapter implements ScaleAdapter {
   readonly charNotifyUuid = uuid16(0xffb2);
   readonly charWriteUuid = uuid16(0xffb2);
   readonly normalizesWeight = true;
-  /** CMD_SEND_USER: [0xFA, 0x85, 0x03, 0x00, 0x1E, 0xA0, checksum]. */
-  readonly unlockCommand = (() => {
-    const cmd = [0xfa, 0x85, 0x03, 0x00, 0x1e, 0xa0];
-    const cs = xorChecksum(cmd, 0, cmd.length);
-    return [...cmd, cs];
-  })();
+  readonly unlockCommand: number[] = [];
   readonly unlockIntervalMs = 0;
 
   private cachedFat = 0;
@@ -43,6 +39,19 @@ export class HoffenAdapter implements ScaleAdapter {
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
     return name === 'hoffen bs-8107';
+  }
+
+  /**
+   * CMD_SEND_USER with real profile: [0xFA, 0x85, 0x03, gender, age, height, xor].
+   */
+  async onConnected(ctx: ConnectionContext): Promise<void> {
+    const { profile } = ctx;
+    const gender = profile.gender === 'male' ? 0x00 : 0x01;
+    const height = Math.min(0xff, Math.max(0, Math.round(profile.height)));
+    const age = Math.min(0xff, Math.max(0, profile.age));
+    const cmd = [0xfa, 0x85, 0x03, gender, age, height];
+    cmd.push(xorChecksum(cmd, 0, cmd.length));
+    await ctx.write(this.charWriteUuid, cmd, false);
   }
 
   parseNotification(data: Buffer): ScaleReading | null {

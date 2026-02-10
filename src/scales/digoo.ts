@@ -1,5 +1,6 @@
 import type {
   BleDeviceInfo,
+  ConnectionContext,
   ScaleAdapter,
   ScaleReading,
   UserProfile,
@@ -28,7 +29,6 @@ export class DigooScaleAdapter implements ScaleAdapter {
   readonly charNotifyUuid = CHR_NOTIFY;
   readonly charWriteUuid = CHR_WRITE;
   readonly normalizesWeight = true;
-  /** Empty initial unlock — user config is sent later when weight stabilizes. */
   readonly unlockCommand: number[] = [];
   readonly unlockIntervalMs = 5000;
 
@@ -42,6 +42,25 @@ export class DigooScaleAdapter implements ScaleAdapter {
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
     return name === 'mengii';
+  }
+
+  /**
+   * Send user config to trigger BIA analysis after connection.
+   *
+   * openScale format:
+   *   [0x09, 0x10, 0x12, 0x11, 0x0D, 0x01, height, age, gender, unit, 0..0, checksum]
+   *   checksum = sum of bytes 3..14 & 0xFF
+   */
+  async onConnected(ctx: ConnectionContext): Promise<void> {
+    const { profile } = ctx;
+    const gender = profile.gender === 'male' ? 0x00 : 0x01;
+    const height = Math.min(0xff, Math.max(0, Math.round(profile.height)));
+    const age = Math.min(0xff, Math.max(0, profile.age));
+    const cmd = [0x09, 0x10, 0x12, 0x11, 0x0d, 0x01, height, age, gender, 0x01, 0, 0, 0, 0, 0];
+    let checksum = 0;
+    for (let i = 3; i <= 14; i++) checksum += cmd[i];
+    cmd.push(checksum & 0xff);
+    await ctx.write(this.charWriteUuid, cmd, false);
   }
 
   /**

@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { DigooScaleAdapter } from '../../src/scales/digoo.js';
+import type { ConnectionContext } from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -120,6 +121,56 @@ describe('DigooScaleAdapter', () => {
     it('returns false when weight is 0', () => {
       const adapter = makeAdapter();
       expect(adapter.isComplete({ weight: 0, impedance: 0 })).toBe(false);
+    });
+  });
+
+  describe('onConnected()', () => {
+    it('sends user config command with profile data', async () => {
+      const adapter = makeAdapter();
+      const writeFn = vi.fn().mockResolvedValue(undefined);
+      const profile = defaultProfile({ gender: 'male', height: 183, age: 30 });
+
+      const ctx: ConnectionContext = {
+        write: writeFn,
+        read: vi.fn(),
+        subscribe: vi.fn(),
+        profile,
+      };
+
+      await adapter.onConnected!(ctx);
+
+      expect(writeFn).toHaveBeenCalledOnce();
+      const [charUuid, data, withResponse] = writeFn.mock.calls[0];
+      expect(charUuid).toBe(adapter.charWriteUuid);
+      expect(withResponse).toBe(false);
+
+      // Verify format: [0x09, 0x10, 0x12, 0x11, 0x0D, 0x01, height, age, gender, unit, ...]
+      expect(data[0]).toBe(0x09);
+      expect(data[5]).toBe(0x01);
+      expect(data[6]).toBe(183); // height
+      expect(data[7]).toBe(30); // age
+      expect(data[8]).toBe(0x00); // male
+      expect(data.length).toBe(16); // 15 bytes + checksum
+    });
+
+    it('sends female gender code for female profile', async () => {
+      const adapter = makeAdapter();
+      const writeFn = vi.fn().mockResolvedValue(undefined);
+      const profile = defaultProfile({ gender: 'female', height: 165, age: 25 });
+
+      const ctx: ConnectionContext = {
+        write: writeFn,
+        read: vi.fn(),
+        subscribe: vi.fn(),
+        profile,
+      };
+
+      await adapter.onConnected!(ctx);
+
+      const data = writeFn.mock.calls[0][1];
+      expect(data[6]).toBe(165);
+      expect(data[7]).toBe(25);
+      expect(data[8]).toBe(0x01); // female
     });
   });
 

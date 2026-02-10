@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { OneByoneAdapter, OneByoneNewAdapter } from '../../src/scales/one-byone.js';
+import type { ConnectionContext } from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -33,6 +34,33 @@ describe('OneByoneAdapter', () => {
     it('does not match unrelated name', () => {
       const adapter = makeAdapter();
       expect(adapter.matches(mockPeripheral('Random Scale'))).toBe(false);
+    });
+  });
+
+  describe('onConnected()', () => {
+    it('sends clock sync with current time', async () => {
+      const adapter = makeAdapter();
+      const writeFn = vi.fn().mockResolvedValue(undefined);
+
+      const ctx: ConnectionContext = {
+        write: writeFn,
+        read: vi.fn(),
+        subscribe: vi.fn(),
+        profile: defaultProfile(),
+      };
+
+      await adapter.onConnected!(ctx);
+
+      expect(writeFn).toHaveBeenCalledOnce();
+      const [charUuid, data, withResponse] = writeFn.mock.calls[0];
+      expect(charUuid).toBe(adapter.charWriteUuid);
+      expect(withResponse).toBe(false);
+
+      expect(data[0]).toBe(0xf1);
+      expect(data.length).toBe(8);
+      // Year should be current year
+      const year = (data[1] << 8) | data[2];
+      expect(year).toBe(new Date().getFullYear());
     });
   });
 

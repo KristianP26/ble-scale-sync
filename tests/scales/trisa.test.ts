@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { TrisaAdapter } from '../../src/scales/trisa.js';
+import type { ConnectionContext } from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -107,6 +108,72 @@ describe('TrisaAdapter', () => {
 
       const buf = Buffer.concat([Buffer.from([flags]), weightFloat, timestamp]);
       expect(adapter.parseNotification(buf)).toBeNull();
+    });
+  });
+
+  describe('characteristics', () => {
+    it('declares three characteristics for multi-char protocol', () => {
+      const adapter = makeAdapter();
+      expect(adapter.characteristics).toHaveLength(3);
+      expect(adapter.characteristics!.map((c) => c.type)).toEqual(['notify', 'notify', 'write']);
+    });
+  });
+
+  describe('challenge-response', () => {
+    it('stores password and responds to challenge with XOR', async () => {
+      const adapter = makeAdapter();
+      const writeFn = vi.fn().mockResolvedValue(undefined);
+
+      const ctx: ConnectionContext = {
+        write: writeFn,
+        read: vi.fn(),
+        subscribe: vi.fn(),
+        profile: defaultProfile(),
+      };
+      await adapter.onConnected!(ctx);
+
+      const uploadUuid = adapter.characteristics![1].uuid; // 0x8A82
+
+      // Step 1: Scale sends password on upload channel
+      const password = Buffer.from([0xa0, 0x11, 0x22, 0x33]);
+      adapter.parseCharNotification!(uploadUuid, password);
+
+      // Step 2: Scale sends challenge on upload channel
+      const challenge = Buffer.from([0xa1, 0xaa, 0xbb, 0xcc]);
+      adapter.parseCharNotification!(uploadUuid, challenge);
+
+      // Verify response was written
+      expect(writeFn).toHaveBeenCalledOnce();
+      const [charUuid, data, withResponse] = writeFn.mock.calls[0];
+      expect(charUuid).toBe(adapter.characteristics![2].uuid); // 0x8A81
+
+      // Response = [0xA1, XOR(challenge, password)]
+      expect(data[0]).toBe(0xa1);
+      expect(data[1]).toBe(0xaa ^ 0x11);
+      expect(data[2]).toBe(0xbb ^ 0x22);
+      expect(data[3]).toBe(0xcc ^ 0x33);
+      expect(withResponse).toBe(true);
+    });
+
+    it('dispatches measurement data via parseCharNotification', () => {
+      const adapter = makeAdapter();
+      const measurementUuid = adapter.characteristics![0].uuid; // 0x8A21
+
+      const flags = 0x00;
+      const weightFloat = encodeFloat(8000, -2);
+      const buf = Buffer.concat([Buffer.from([flags]), weightFloat]);
+
+      const reading = adapter.parseCharNotification!(measurementUuid, buf);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBeCloseTo(80, 1);
+    });
+
+    it('returns null for upload channel notifications', () => {
+      const adapter = makeAdapter();
+      const uploadUuid = adapter.characteristics![1].uuid;
+
+      const data = Buffer.from([0xa0, 0x11, 0x22]);
+      expect(adapter.parseCharNotification!(uploadUuid, data)).toBeNull();
     });
   });
 

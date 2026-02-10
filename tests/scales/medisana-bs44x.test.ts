@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { MedisanaBs44xAdapter } from '../../src/scales/medisana-bs44x.js';
+import type { ConnectionContext } from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -42,6 +43,36 @@ describe('MedisanaBs44xAdapter', () => {
     it('does not match unrelated UUID', () => {
       const adapter = makeAdapter();
       expect(adapter.matches(mockPeripheral('Unknown', ['1234']))).toBe(false);
+    });
+  });
+
+  describe('onConnected()', () => {
+    it('sends time sync with real Unix timestamp', async () => {
+      const adapter = makeAdapter();
+      const writeFn = vi.fn().mockResolvedValue(undefined);
+
+      const ctx: ConnectionContext = {
+        write: writeFn,
+        read: vi.fn(),
+        subscribe: vi.fn(),
+        profile: defaultProfile(),
+      };
+
+      const before = Math.floor(Date.now() / 1000);
+      await adapter.onConnected!(ctx);
+      const after = Math.floor(Date.now() / 1000);
+
+      expect(writeFn).toHaveBeenCalledOnce();
+      const [charUuid, data, withResponse] = writeFn.mock.calls[0];
+      expect(charUuid).toBe(adapter.charWriteUuid);
+      expect(withResponse).toBe(true);
+
+      expect(data[0]).toBe(0x02);
+      // Verify the timestamp is within the expected range
+      const buf = Buffer.from(data);
+      const ts = buf.readUInt32LE(1);
+      expect(ts).toBeGreaterThanOrEqual(before);
+      expect(ts).toBeLessThanOrEqual(after);
     });
   });
 

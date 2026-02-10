@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { InlifeScaleAdapter } from '../../src/scales/inlife.js';
+import type { ConnectionContext } from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -111,6 +112,53 @@ describe('InlifeScaleAdapter', () => {
     it('returns false when weight is 0', () => {
       const adapter = makeAdapter();
       expect(adapter.isComplete({ weight: 0, impedance: 0 })).toBe(false);
+    });
+  });
+
+  describe('onConnected()', () => {
+    it('sends user config with real profile data', async () => {
+      const adapter = makeAdapter();
+      const writeFn = vi.fn().mockResolvedValue(undefined);
+      const profile = defaultProfile({ gender: 'male', height: 183, age: 30 });
+
+      const ctx: ConnectionContext = {
+        write: writeFn,
+        read: vi.fn(),
+        subscribe: vi.fn(),
+        profile,
+      };
+
+      await adapter.onConnected!(ctx);
+
+      expect(writeFn).toHaveBeenCalledOnce();
+      const [charUuid, data, withResponse] = writeFn.mock.calls[0];
+      expect(charUuid).toBe(adapter.charWriteUuid);
+      expect(withResponse).toBe(false);
+
+      expect(data[0]).toBe(0x02);
+      expect(data[1]).toBe(0xd2);
+      expect(data[3]).toBe(0x00); // male
+      expect(data[5]).toBe(30); // age
+      expect(data[6]).toBe(183); // height
+      expect(data[data.length - 1]).toBe(0xaa); // trailer
+    });
+
+    it('sends female gender code for female profile', async () => {
+      const adapter = makeAdapter();
+      const writeFn = vi.fn().mockResolvedValue(undefined);
+      const profile = defaultProfile({ gender: 'female' });
+
+      const ctx: ConnectionContext = {
+        write: writeFn,
+        read: vi.fn(),
+        subscribe: vi.fn(),
+        profile,
+      };
+
+      await adapter.onConnected!(ctx);
+
+      const data = writeFn.mock.calls[0][1];
+      expect(data[3]).toBe(0x01); // female
     });
   });
 

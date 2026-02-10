@@ -48,7 +48,7 @@ export class RenphoEs26bbAdapter implements ScaleAdapter {
   parseNotification(data: Buffer): ScaleReading | null {
     if (data.length < 12) return null;
 
-    const action = data[2] ?? data[3];
+    const action = data[2] === 0x14 || data[2] === 0x15 ? data[2] : data[3];
 
     let weight: number;
     let impedance: number;

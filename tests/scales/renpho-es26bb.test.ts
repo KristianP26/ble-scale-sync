@@ -60,6 +60,20 @@ describe('RenphoEs26bbAdapter', () => {
       expect(reading!.impedance).toBe(480);
     });
 
+    it('falls back to data[3] when data[2] is 0 (nullish coalescing fix)', () => {
+      const adapter = makeAdapter();
+      const buf = Buffer.alloc(12);
+      buf[2] = 0x00; // not 0x14 or 0x15 → falls back to data[3]
+      buf[3] = 0x14; // live action at fallback position
+      buf.writeUInt32BE(8000, 6);
+      buf.writeUInt16BE(500, 10);
+
+      const reading = adapter.parseNotification(buf);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBe(80);
+      expect(reading!.impedance).toBe(500);
+    });
+
     it('returns null for unknown action', () => {
       const adapter = makeAdapter();
       const buf = Buffer.alloc(12);
