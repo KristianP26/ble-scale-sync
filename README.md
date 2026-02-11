@@ -357,6 +357,15 @@ Scales that provide their own body composition values (fat, water, muscle, bone)
 
 ## Development
 
+### Branches
+
+| Branch | Purpose |
+| --- | --- |
+| `main` | Stable release branch |
+| `dev` | Active development — PRs and new features target this branch |
+
+CI runs on both `main` and `dev` (push + pull request).
+
 ### Testing
 
 ```bash
