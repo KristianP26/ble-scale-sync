@@ -70,8 +70,10 @@ vi.mock('node:child_process', () => ({
 }));
 
 describe('GarminExporter', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    const mod = await import('../../src/exporters/garmin.js');
+    mod._resetPythonCache();
   });
 
   it('returns success on successful upload', async () => {

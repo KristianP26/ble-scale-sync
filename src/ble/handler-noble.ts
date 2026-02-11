@@ -14,6 +14,7 @@ import {
   MAX_CONNECT_RETRIES,
   DISCOVERY_TIMEOUT_MS,
   DISCOVERY_POLL_MS,
+  GATT_DISCOVERY_TIMEOUT_MS,
 } from './types.js';
 
 // ─── Noble state management ───────────────────────────────────────────────────
@@ -95,13 +96,31 @@ async function connectWithRetries(peripheral: Peripheral, maxRetries: number): P
       if (attempt >= maxRetries) {
         throw new Error(`Connection failed after ${maxRetries + 1} attempts: ${msg}`);
       }
-      bleLog.warn(`Connect error: ${msg}. Retrying (${attempt + 1}/${maxRetries})...`);
+      const delay = 1000 + attempt * 500;
+      bleLog.warn(
+        `Connect error: ${msg}. Retrying (${attempt + 1}/${maxRetries}) in ${delay}ms...`,
+      );
       try {
         await peripheral.disconnectAsync();
       } catch {
         /* ignore */
       }
-      await sleep(1000);
+
+      // On 3rd+ failure, restart scanning to reset noble's internal radio state
+      if (attempt >= 2) {
+        bleLog.debug('Restarting scan to reset radio state...');
+        try {
+          await noble.stopScanningAsync();
+          await sleep(500);
+          await noble.startScanningAsync([], true);
+          await sleep(500);
+          await noble.stopScanningAsync();
+        } catch {
+          bleLog.debug('Scan restart failed (ignored)');
+        }
+      }
+
+      await sleep(delay);
     }
   }
 }
@@ -254,7 +273,11 @@ export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
     bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
 
     // Build charMap (re-discover if we already called discoverAll above for adapter matching)
-    const charMap = await buildCharMap(peripheral);
+    const charMap = await withTimeout(
+      buildCharMap(peripheral),
+      GATT_DISCOVERY_TIMEOUT_MS,
+      'GATT service discovery timed out',
+    );
     const payload = await waitForReading(
       charMap,
       wrapPeripheral(peripheral),
@@ -271,8 +294,8 @@ export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
     }
     return payload;
   } finally {
-    noble.removeAllListeners('discover');
-    noble.removeAllListeners('stateChange');
+    // Safety net: stop any leftover scanning (targeted — not removeAllListeners)
+    noble.stopScanningAsync().catch(() => {});
   }
 }
 
@@ -284,44 +307,39 @@ export async function scanDevices(
   adapters: ScaleAdapter[],
   durationMs = 15_000,
 ): Promise<ScanResult[]> {
+  await waitForPoweredOn();
+
+  const results: ScanResult[] = [];
+  const seen = new Set<string>();
+
+  const onDiscover = (peripheral: Peripheral): void => {
+    const addr = peripheralAddress(peripheral);
+    if (seen.has(addr)) return;
+    seen.add(addr);
+
+    const name = peripheral.advertisement?.localName ?? '(unknown)';
+    const svcUuids = (peripheral.advertisement?.serviceUuids ?? []).map(normalizeUuid);
+    const info: BleDeviceInfo = { localName: name, serviceUuids: svcUuids };
+    const matched = adapters.find((a) => a.matches(info));
+
+    results.push({
+      address: addr,
+      name,
+      matchedAdapter: matched?.name,
+    });
+  };
+
+  noble.on('discover', onDiscover);
+  await noble.startScanningAsync([], true);
+
+  await sleep(durationMs);
+
+  noble.removeListener('discover', onDiscover);
   try {
-    await waitForPoweredOn();
-
-    const results: ScanResult[] = [];
-    const seen = new Set<string>();
-
-    const onDiscover = (peripheral: Peripheral): void => {
-      const addr = peripheralAddress(peripheral);
-      if (seen.has(addr)) return;
-      seen.add(addr);
-
-      const name = peripheral.advertisement?.localName ?? '(unknown)';
-      const svcUuids = (peripheral.advertisement?.serviceUuids ?? []).map(normalizeUuid);
-      const info: BleDeviceInfo = { localName: name, serviceUuids: svcUuids };
-      const matched = adapters.find((a) => a.matches(info));
-
-      results.push({
-        address: addr,
-        name,
-        matchedAdapter: matched?.name,
-      });
-    };
-
-    noble.on('discover', onDiscover);
-    await noble.startScanningAsync([], true);
-
-    await sleep(durationMs);
-
-    noble.removeListener('discover', onDiscover);
-    try {
-      await noble.stopScanningAsync();
-    } catch {
-      /* ignore */
-    }
-
-    return results;
-  } finally {
-    noble.removeAllListeners('discover');
-    noble.removeAllListeners('stateChange');
+    await noble.stopScanningAsync();
+  } catch {
+    /* ignore */
   }
+
+  return results;
 }

@@ -1,4 +1,4 @@
-import { computeBiaFat, buildPayload } from './body-comp-helpers.js';
+import { computeBiaFat, buildPayload, uuid16 } from './body-comp-helpers.js';
 import type {
   BleDeviceInfo,
   ScaleAdapter,
@@ -6,11 +6,6 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-
-/** Expand a 16-bit UUID to the full 128-bit BLE string (no dashes, lowercase). */
-function uuid16(code: number): string {
-  return `0000${code.toString(16).padStart(4, '0')}00001000800000805f9b34fb`;
-}
 
 // Standard BT SIG characteristic UUIDs
 const CHR_BODY_COMP_MEAS = uuid16(0x2a9c);

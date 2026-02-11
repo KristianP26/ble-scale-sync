@@ -12,12 +12,28 @@ const log = createLogger('Garmin');
 const __dirname: string = dirname(fileURLToPath(import.meta.url));
 const ROOT: string = join(__dirname, '..', '..');
 
+const SUBPROCESS_TIMEOUT_MS = 60_000;
+
+let cachedPython: string | undefined;
+
 function findPython(): Promise<string> {
+  if (cachedPython) return Promise.resolve(cachedPython);
   return new Promise((resolve) => {
     const check = spawn('python3', ['--version'], { stdio: 'ignore' });
-    check.on('error', () => resolve('python'));
-    check.on('close', (code) => resolve(code === 0 ? 'python3' : 'python'));
+    check.on('error', () => {
+      cachedPython = 'python';
+      resolve(cachedPython);
+    });
+    check.on('close', (code) => {
+      cachedPython = code === 0 ? 'python3' : 'python';
+      resolve(cachedPython);
+    });
   });
+}
+
+/** @internal Reset cached python command — for testing only. */
+export function _resetPythonCache(): void {
+  cachedPython = undefined;
 }
 
 function uploadToGarmin(payload: BodyComposition, pythonCmd: string): Promise<ExportResult> {
@@ -26,6 +42,7 @@ function uploadToGarmin(payload: BodyComposition, pythonCmd: string): Promise<Ex
     const py = spawn(pythonCmd, [scriptPath], {
       stdio: ['pipe', 'pipe', 'inherit'],
       cwd: ROOT,
+      timeout: SUBPROCESS_TIMEOUT_MS,
     });
 
     const chunks: Buffer[] = [];
@@ -34,7 +51,11 @@ function uploadToGarmin(payload: BodyComposition, pythonCmd: string): Promise<Ex
     py.stdin.write(JSON.stringify(payload));
     py.stdin.end();
 
-    py.on('close', (code: number | null) => {
+    py.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+      if (signal === 'SIGTERM') {
+        reject(new Error(`Python uploader timed out after ${SUBPROCESS_TIMEOUT_MS / 1000}s`));
+        return;
+      }
       const raw: string = Buffer.concat(chunks).toString().trim();
       if (!raw) {
         reject(new Error(`Python uploader exited with code ${code} and no output`));

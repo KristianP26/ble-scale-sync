@@ -15,6 +15,7 @@ import {
   DISCOVERY_TIMEOUT_MS,
   DISCOVERY_POLL_MS,
   POST_DISCOVERY_QUIESCE_MS,
+  GATT_DISCOVERY_TIMEOUT_MS,
 } from './types.js';
 
 type Device = NodeBle.Device;
@@ -143,7 +144,7 @@ async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<Device>
       bleLog.debug(`Connected (took ${Date.now() - t0}ms)`);
       return device;
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errMsg(err);
       if (attempt >= maxRetries) {
         throw new Error(`Connection failed after ${maxRetries + 1} attempts: ${msg}`);
       }
@@ -296,8 +297,7 @@ async function buildCharMap(gatt: NodeBle.GattServer): Promise<Map<string, BleCh
         charMap.set(normalizeUuid(charUuid), wrapChar(char));
       }
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      bleLog.debug(`  Service ${svcUuid}: error=${msg}`);
+      bleLog.debug(`  Service ${svcUuid}: error=${errMsg(e)}`);
     }
   }
 
@@ -430,7 +430,11 @@ export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
 
     // Setup GATT characteristics and wait for a complete reading
     const gatt = await device.gatt();
-    const charMap = await buildCharMap(gatt);
+    const charMap = await withTimeout(
+      buildCharMap(gatt),
+      GATT_DISCOVERY_TIMEOUT_MS,
+      'GATT service discovery timed out',
+    );
     const payload = await waitForReading(
       charMap,
       wrapDevice(device),

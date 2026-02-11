@@ -1,5 +1,6 @@
 import type { Logger } from '../logger.js';
 import type { ExportResult } from '../interfaces/exporter.js';
+import { errMsg } from './error.js';
 
 export interface RetryOptions {
   /** Maximum number of retry attempts (default: 2). Total attempts = maxRetries + 1. */
@@ -34,7 +35,7 @@ export async function withRetry(
       lastError = result.error;
       opts.log.error(`${opts.label} failed: ${lastError}`);
     } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
+      lastError = errMsg(err);
       opts.log.error(`${opts.label} failed: ${lastError}`);
     }
   }

@@ -3,6 +3,7 @@ import type { BodyComposition } from '../interfaces/scale-adapter.js';
 import type { Exporter, ExportResult } from '../interfaces/exporter.js';
 import type { WebhookConfig } from './config.js';
 import { withRetry } from '../utils/retry.js';
+import { errMsg } from '../utils/error.js';
 
 const log = createLogger('Webhook');
 
@@ -25,7 +26,7 @@ export class WebhookExporter implements Exporter {
       }
       return { success: true };
     } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : String(err) };
+      return { success: false, error: errMsg(err) };
     }
   }
 

@@ -374,7 +374,7 @@ npm test
 
 Unit tests use [Vitest](https://vitest.dev/) and cover:
 
-- **Body composition math** — `calculator.ts` and `body-comp-helpers.ts`
+- **Body composition math** — `body-comp-helpers.ts`
 - **Environment validation** — `validate-env.ts` (all validation rules and edge cases)
 - **Scale adapters** — `parseNotification()`, `matches()`, `isComplete()`, `computeMetrics()`, and `onConnected()` for all 23 adapters
 - **Exporters** — config parsing, MQTT publish/HA discovery, Garmin subprocess, Webhook/InfluxDB/Ntfy delivery
@@ -412,8 +412,8 @@ ble-scale-sync/
 │   │   ├── influxdb.ts             # InfluxDB v2 exporter (line protocol)
 │   │   └── ntfy.ts                 # Ntfy push notification exporter
 │   ├── utils/
-│   │   └── retry.ts                # Shared retry utility (withRetry) used by all exporters
-│   ├── calculator.ts               # Body composition math (BIA formulas)
+│   │   ├── retry.ts                # Shared retry utility (withRetry) used by all exporters
+│   │   └── error.ts                # Shared error utility (errMsg) for unknown→string conversion
 │   ├── validate-env.ts             # .env validation & typed config loader
 │   ├── scan.ts                     # BLE device scanner utility
 │   ├── interfaces/
@@ -445,12 +445,11 @@ ble-scale-sync/
 │       ├── hoffen.ts               # Hoffen BS-8107
 │       └── standard-gatt.ts        # Generic BCS/WSS catch-all
 ├── tests/
-│   ├── calculator.test.ts          # BodyCompCalculator unit tests
 │   ├── body-comp-helpers.test.ts   # Body-comp helper unit tests
 │   ├── validate-env.test.ts        # .env validation unit tests
 │   ├── helpers/
 │   │   └── scale-test-utils.ts     # Shared test utilities (mock peripheral, etc.)
-│   ├── utils/                      # Utility tests (retry)
+│   ├── utils/                      # Utility tests (retry, error)
 │   ├── scales/                     # One test file per adapter (23 files)
 │   └── exporters/                  # Exporter tests (config, garmin, mqtt, webhook, influxdb, ntfy)
 ├── garmin-scripts/

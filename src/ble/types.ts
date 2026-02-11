@@ -1,6 +1,7 @@
 import type { ScaleAdapter, UserProfile, ScaleReading } from '../interfaces/scale-adapter.js';
 import type { WeightUnit } from '../validate-env.js';
 import { createLogger } from '../logger.js';
+export { errMsg } from '../utils/error.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -10,6 +11,9 @@ export const CONNECT_TIMEOUT_MS = 30_000;
 export const MAX_CONNECT_RETRIES = 5;
 export const DISCOVERY_TIMEOUT_MS = 120_000;
 export const DISCOVERY_POLL_MS = 2_000;
+
+/** Timeout for GATT service/characteristic enumeration after connecting. */
+export const GATT_DISCOVERY_TIMEOUT_MS = 30_000;
 
 /** Delay after stopping BlueZ discovery to let the radio quiesce before connecting. */
 export const POST_DISCOVERY_QUIESCE_MS = 500;
@@ -52,10 +56,6 @@ export function formatMac(mac: string): string {
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
-}
-
-export function errMsg(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {

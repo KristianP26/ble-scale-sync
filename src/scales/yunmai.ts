@@ -5,12 +5,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { buildPayload, estimateBodyFat } from './body-comp-helpers.js';
-
-/** Expand a 16-bit UUID to the full 128-bit BLE string (no dashes, lowercase). */
-function uuid16(code: number): string {
-  return `0000${code.toString(16).padStart(4, '0')}00001000800000805f9b34fb`;
-}
+import { buildPayload, estimateBodyFat, uuid16 } from './body-comp-helpers.js';
 
 // Yunmai GATT service / characteristic UUIDs
 const CHR_MEAS = uuid16(0xffe4); // notify — measurement data

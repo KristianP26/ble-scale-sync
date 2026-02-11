@@ -6,7 +6,7 @@ import type {
   ConnectionContext,
 } from '../interfaces/scale-adapter.js';
 import type { WeightUnit } from '../validate-env.js';
-import { LBS_TO_KG, normalizeUuid, bleLog } from './types.js';
+import { LBS_TO_KG, normalizeUuid, errMsg, bleLog } from './types.js';
 
 // ─── Thin abstractions over BLE library objects ───────────────────────────────
 
@@ -96,8 +96,7 @@ function initializeAdapter(
         try {
           await writeChar.write(unlockBuf, false);
         } catch (e: unknown) {
-          const msg = e instanceof Error ? e.message : String(e);
-          if (!isResolved()) bleLog.error(`Unlock write error: ${msg}`);
+          if (!isResolved()) bleLog.error(`Unlock write error: ${errMsg(e)}`);
         }
       };
 

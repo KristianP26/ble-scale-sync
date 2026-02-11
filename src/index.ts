@@ -9,6 +9,7 @@ import { adapters } from './scales/index.js';
 import { loadConfig } from './validate-env.js';
 import { createLogger } from './logger.js';
 import { loadExporterConfig, createExporters } from './exporters/index.js';
+import { errMsg } from './utils/error.js';
 import type { Exporter } from './interfaces/exporter.js';
 import type { BodyComposition } from './interfaces/scale-adapter.js';
 
@@ -70,9 +71,7 @@ async function runHealthchecks(exporters: Exporter[]): Promise<void> {
     } else if (result.status === 'fulfilled') {
       log.warn(`  ${name}: ${result.value.error}`);
     } else {
-      log.warn(
-        `  ${name}: ${result.reason instanceof Error ? result.reason.message : result.reason}`,
-      );
+      log.warn(`  ${name}: ${errMsg(result.reason)}`);
     }
   }
 }
@@ -119,9 +118,7 @@ async function runCycle(exporters?: Exporter[]): Promise<boolean> {
     } else if (result.status === 'fulfilled') {
       log.error(`${name}: ${result.value.error}`);
     } else {
-      log.error(
-        `${name}: ${result.reason instanceof Error ? result.reason.message : result.reason}`,
-      );
+      log.error(`${name}: ${errMsg(result.reason)}`);
     }
   }
 

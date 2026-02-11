@@ -1,5 +1,5 @@
 import type { Exporter } from '../interfaces/exporter.js';
-import type { ExporterConfig } from './config.js';
+import type { ExporterConfig, ExporterName } from './config.js';
 import { GarminExporter } from './garmin.js';
 import { MqttExporter } from './mqtt.js';
 import { WebhookExporter } from './webhook.js';
@@ -28,6 +28,10 @@ export function createExporters(config: ExporterConfig): Exporter[] {
       case 'ntfy':
         exporters.push(new NtfyExporter(config.ntfy!));
         break;
+      default: {
+        const _exhaustive: never = name;
+        throw new Error(`Unhandled exporter: ${_exhaustive as ExporterName}`);
+      }
     }
   }
 

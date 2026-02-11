@@ -4,6 +4,7 @@ import type { BodyComposition } from '../interfaces/scale-adapter.js';
 import type { Exporter, ExportResult } from '../interfaces/exporter.js';
 import type { MqttConfig } from './config.js';
 import { withRetry } from '../utils/retry.js';
+import { errMsg } from '../utils/error.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../../package.json') as { version: string };
@@ -105,7 +106,7 @@ export class MqttExporter implements Exporter {
       await client.endAsync();
       return { success: true };
     } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : String(err) };
+      return { success: false, error: errMsg(err) };
     }
   }
 
