@@ -7,6 +7,7 @@ import { InfluxDbExporter } from './influxdb.js';
 import { NtfyExporter } from './ntfy.js';
 
 export { loadExporterConfig } from './config.js';
+export { createExporterFromEntry, EXPORTER_SCHEMAS, KNOWN_EXPORTER_NAMES } from './registry.js';
 
 export function createExporters(config: ExporterConfig): Exporter[] {
   const exporters: Exporter[] = [];

@@ -1,6 +1,7 @@
 import { createLogger } from '../logger.js';
 import type { BodyComposition } from '../interfaces/scale-adapter.js';
-import type { Exporter, ExportResult } from '../interfaces/exporter.js';
+import type { Exporter, ExportContext, ExportResult } from '../interfaces/exporter.js';
+import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { InfluxDbConfig } from './config.js';
 import { withRetry } from '../utils/retry.js';
 import { errMsg } from '../utils/error.js';
@@ -40,7 +41,39 @@ const _fieldCheck: Record<keyof BodyComposition, true> = {
 };
 void _fieldCheck;
 
-export function toLineProtocol(data: BodyComposition, measurement: string): string {
+export const influxdbSchema: ExporterSchema = {
+  name: 'influxdb',
+  displayName: 'InfluxDB',
+  description: 'Write body composition data to InfluxDB v2 time-series database',
+  fields: [
+    {
+      key: 'url',
+      label: 'InfluxDB URL',
+      type: 'string',
+      required: true,
+      description: 'e.g., http://localhost:8086',
+    },
+    { key: 'token', label: 'API Token', type: 'password', required: true },
+    { key: 'org', label: 'Organization', type: 'string', required: true },
+    { key: 'bucket', label: 'Bucket', type: 'string', required: true },
+    {
+      key: 'measurement',
+      label: 'Measurement',
+      type: 'string',
+      required: false,
+      default: 'body_composition',
+    },
+  ],
+  supportsGlobal: true,
+  supportsPerUser: false,
+};
+
+export function toLineProtocol(
+  data: BodyComposition,
+  measurement: string,
+  userSlug?: string,
+): string {
+  const tags = userSlug ? `,user=${userSlug}` : '';
   const fields: string[] = [];
 
   for (const key of FLOAT_FIELDS) {
@@ -50,7 +83,7 @@ export function toLineProtocol(data: BodyComposition, measurement: string): stri
     fields.push(`${key}=${Math.round(data[key] as number)}i`);
   }
 
-  return `${measurement} ${fields.join(',')} ${Date.now()}`;
+  return `${measurement}${tags} ${fields.join(',')} ${Date.now()}`;
 }
 
 export class InfluxDbExporter implements Exporter {
@@ -75,9 +108,9 @@ export class InfluxDbExporter implements Exporter {
     }
   }
 
-  async export(data: BodyComposition): Promise<ExportResult> {
+  async export(data: BodyComposition, context?: ExportContext): Promise<ExportResult> {
     const { url, token, org, bucket, measurement } = this.config;
-    const lineProtocol = toLineProtocol(data, measurement);
+    const lineProtocol = toLineProtocol(data, measurement, context?.userSlug);
     const writeUrl = `${url.replace(/\/+$/, '')}/api/v2/write?org=${encodeURIComponent(org)}&bucket=${encodeURIComponent(bucket)}&precision=ms`;
 
     return withRetry(

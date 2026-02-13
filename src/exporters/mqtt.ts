@@ -1,7 +1,8 @@
 import { createRequire } from 'node:module';
 import { createLogger } from '../logger.js';
 import type { BodyComposition } from '../interfaces/scale-adapter.js';
-import type { Exporter, ExportResult } from '../interfaces/exporter.js';
+import type { Exporter, ExportContext, ExportResult } from '../interfaces/exporter.js';
+import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { MqttConfig } from './config.js';
 import { withRetry } from '../utils/retry.js';
 import { errMsg } from '../utils/error.js';
@@ -63,6 +64,68 @@ const _haKeysCheck: Record<keyof BodyComposition, true> = {
   metabolicAge: true,
 };
 void _haKeysCheck;
+
+export const mqttSchema: ExporterSchema = {
+  name: 'mqtt',
+  displayName: 'MQTT',
+  description:
+    'Publish body composition data to an MQTT broker (supports Home Assistant auto-discovery)',
+  fields: [
+    {
+      key: 'broker_url',
+      label: 'Broker URL',
+      type: 'string',
+      required: true,
+      description: 'e.g., mqtts://broker.hivemq.com:8883',
+    },
+    {
+      key: 'topic',
+      label: 'Topic',
+      type: 'string',
+      required: false,
+      default: 'scale/body-composition',
+    },
+    {
+      key: 'qos',
+      label: 'QoS',
+      type: 'select',
+      required: false,
+      default: 1,
+      choices: [
+        { label: '0 (At most once)', value: 0 },
+        { label: '1 (At least once)', value: 1 },
+        { label: '2 (Exactly once)', value: 2 },
+      ],
+    },
+    { key: 'retain', label: 'Retain', type: 'boolean', required: false, default: true },
+    { key: 'username', label: 'Username', type: 'string', required: false },
+    { key: 'password', label: 'Password', type: 'password', required: false },
+    {
+      key: 'client_id',
+      label: 'Client ID',
+      type: 'string',
+      required: false,
+      default: 'ble-scale-sync',
+    },
+    {
+      key: 'ha_discovery',
+      label: 'HA Discovery',
+      type: 'boolean',
+      required: false,
+      default: true,
+      description: 'Publish Home Assistant auto-discovery configs',
+    },
+    {
+      key: 'ha_device_name',
+      label: 'HA Device Name',
+      type: 'string',
+      required: false,
+      default: 'BLE Scale',
+    },
+  ],
+  supportsGlobal: true,
+  supportsPerUser: false,
+};
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type MqttClient = { publishAsync: any; endAsync: any };
@@ -134,7 +197,7 @@ export class MqttExporter implements Exporter {
     }
   }
 
-  async export(data: BodyComposition): Promise<ExportResult> {
+  async export(data: BodyComposition, _context?: ExportContext): Promise<ExportResult> {
     const { connectAsync } = await import('mqtt');
     const { brokerUrl, topic, qos, retain, username, password, clientId, haDiscovery } =
       this.config;

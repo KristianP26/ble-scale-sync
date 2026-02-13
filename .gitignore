@@ -1,5 +1,6 @@
 # Environment & secrets
 .env
+config.yaml
 
 # Node.js
 node_modules/
@@ -17,7 +18,6 @@ venv/
 # IDE & tools
 .idea/
 .vscode/
-.claude/
 *.swp
 *.swo
 

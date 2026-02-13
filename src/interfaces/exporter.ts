@@ -1,12 +1,19 @@
 import type { BodyComposition } from './scale-adapter.js';
+import type { UserConfig } from '../config/schema.js';
 
 export interface ExportResult {
   success: boolean;
   error?: string;
 }
 
+export interface ExportContext {
+  userName?: string;
+  userSlug?: string;
+  userConfig?: UserConfig;
+}
+
 export interface Exporter {
   readonly name: string;
-  export(data: BodyComposition): Promise<ExportResult>;
+  export(data: BodyComposition, context?: ExportContext): Promise<ExportResult>;
   healthcheck?(): Promise<ExportResult>;
 }

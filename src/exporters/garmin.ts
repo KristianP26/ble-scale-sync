@@ -4,7 +4,8 @@ import { spawn } from 'node:child_process';
 
 import { createLogger } from '../logger.js';
 import type { BodyComposition } from '../interfaces/scale-adapter.js';
-import type { Exporter, ExportResult } from '../interfaces/exporter.js';
+import type { Exporter, ExportContext, ExportResult } from '../interfaces/exporter.js';
+import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import { withRetry } from '../utils/retry.js';
 
 const log = createLogger('Garmin');
@@ -75,10 +76,61 @@ function uploadToGarmin(payload: BodyComposition, pythonCmd: string): Promise<Ex
   });
 }
 
+export interface GarminEntryConfig {
+  email?: string;
+  password?: string;
+  token_dir?: string;
+}
+
+export const garminSchema: ExporterSchema = {
+  name: 'garmin',
+  displayName: 'Garmin Connect',
+  description: 'Upload body composition data to Garmin Connect',
+  fields: [
+    {
+      key: 'email',
+      label: 'Garmin Email',
+      type: 'string',
+      required: true,
+      description: 'Your Garmin Connect email address',
+    },
+    {
+      key: 'password',
+      label: 'Garmin Password',
+      type: 'password',
+      required: true,
+      description: 'Your Garmin Connect password (supports ${ENV_VAR} references)',
+    },
+    {
+      key: 'token_dir',
+      label: 'Token Directory',
+      type: 'string',
+      required: false,
+      default: './garmin-tokens',
+      description: 'Directory for storing auth tokens',
+    },
+  ],
+  supportsGlobal: false,
+  supportsPerUser: true,
+  dependencies: [
+    {
+      name: 'Python 3',
+      checkCommand: 'python3 --version',
+      fallbackCommand: 'python --version',
+      installInstructions: 'Install Python 3: https://www.python.org/downloads/',
+    },
+  ],
+};
+
 export class GarminExporter implements Exporter {
   readonly name = 'garmin';
+  private readonly entryConfig: GarminEntryConfig;
 
-  async export(data: BodyComposition): Promise<ExportResult> {
+  constructor(config?: GarminEntryConfig) {
+    this.entryConfig = config ?? {};
+  }
+
+  async export(data: BodyComposition, _context?: ExportContext): Promise<ExportResult> {
     const pythonCmd = await findPython();
 
     return withRetry(

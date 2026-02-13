@@ -1,15 +1,58 @@
 import { createLogger } from '../logger.js';
 import type { BodyComposition } from '../interfaces/scale-adapter.js';
-import type { Exporter, ExportResult } from '../interfaces/exporter.js';
+import type { Exporter, ExportContext, ExportResult } from '../interfaces/exporter.js';
+import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { NtfyConfig } from './config.js';
 import { withRetry } from '../utils/retry.js';
 import { errMsg } from '../utils/error.js';
 
 const log = createLogger('Ntfy');
 
-function formatMessage(data: BodyComposition): string {
+export const ntfySchema: ExporterSchema = {
+  name: 'ntfy',
+  displayName: 'Ntfy',
+  description: 'Send push notifications via ntfy.sh or self-hosted ntfy server',
+  fields: [
+    {
+      key: 'topic',
+      label: 'Topic',
+      type: 'string',
+      required: true,
+      description: 'Ntfy topic name',
+    },
+    {
+      key: 'url',
+      label: 'Server URL',
+      type: 'string',
+      required: false,
+      default: 'https://ntfy.sh',
+    },
+    { key: 'title', label: 'Title', type: 'string', required: false, default: 'Scale Measurement' },
+    {
+      key: 'priority',
+      label: 'Priority',
+      type: 'select',
+      required: false,
+      default: 3,
+      choices: [
+        { label: '1 (Min)', value: 1 },
+        { label: '2 (Low)', value: 2 },
+        { label: '3 (Default)', value: 3 },
+        { label: '4 (High)', value: 4 },
+      ],
+    },
+    { key: 'token', label: 'Bearer Token', type: 'password', required: false },
+    { key: 'username', label: 'Username', type: 'string', required: false },
+    { key: 'password', label: 'Password', type: 'password', required: false },
+  ],
+  supportsGlobal: true,
+  supportsPerUser: false,
+};
+
+function formatMessage(data: BodyComposition, userName?: string): string {
+  const prefix = userName ? `[${userName}] ` : '';
   return [
-    `⚖️ ${data.weight.toFixed(2)} kg | BMI ${data.bmi.toFixed(1)}`,
+    `${prefix}⚖️ ${data.weight.toFixed(2)} kg | BMI ${data.bmi.toFixed(1)}`,
     `🏋️ Body Fat ${data.bodyFatPercent.toFixed(1)}% | Muscle ${data.muscleMass.toFixed(1)} kg`,
     `💧 Water ${data.waterPercent.toFixed(1)}% | 🦴 Bone ${data.boneMass.toFixed(1)} kg`,
     `🫀 Visceral Fat ${data.visceralFat} | BMR ${data.bmr} kcal`,
@@ -40,7 +83,7 @@ export class NtfyExporter implements Exporter {
     }
   }
 
-  async export(data: BodyComposition): Promise<ExportResult> {
+  async export(data: BodyComposition, context?: ExportContext): Promise<ExportResult> {
     const { url, topic, title, priority, token, username, password } = this.config;
     const targetUrl = `${url.replace(/\/+$/, '')}/${topic}`;
 
@@ -56,7 +99,7 @@ export class NtfyExporter implements Exporter {
       headers['Authorization'] = `Basic ${btoa(username + ':' + password)}`;
     }
 
-    const body = formatMessage(data);
+    const body = formatMessage(data, context?.userName);
 
     return withRetry(
       async () => {

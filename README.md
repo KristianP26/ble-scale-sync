@@ -16,7 +16,7 @@ Works on **Linux** (including Raspberry Pi), **macOS**, and **Windows**.
 | **InfluxDB** | Time-series database (v2 write API, line protocol) | HTTP | Token |
 | **Ntfy** | Push notifications to phone/desktop via [ntfy.sh](https://ntfy.sh) | HTTP | Optional Bearer/Basic |
 
-All exporters run in parallel. Enable any combination via `EXPORTERS=garmin,mqtt,webhook,influxdb,ntfy`.
+All exporters run in parallel. Enable any combination via `EXPORTERS=garmin,mqtt,webhook,influxdb,ntfy`. Each exporter is self-describing — it declares its configuration fields, display names, and capabilities — making it easy to add new export targets.
 
 ## Why This Exists
 
@@ -140,6 +140,8 @@ pip install -r requirements.txt
 > **Note:** Modern Linux distributions (Debian 12+, Ubuntu 23.04+, Raspberry Pi OS Bookworm) require a virtual environment for pip — installing globally will fail with `error: externally-managed-environment`. The commands above handle this automatically. **Remember to activate the venv** (`source venv/bin/activate`) before running `npm start` or `npm run setup-garmin`.
 
 ## Configuration
+
+> **Coming soon:** A structured `config.yaml` format with multi-user support, an interactive setup wizard (`npm run setup`), and Docker deployment. The `.env` configuration below continues to work and will remain supported as a fallback.
 
 ### 1. Create your `.env` file
 
