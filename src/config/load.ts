@@ -21,6 +21,7 @@ export type ConfigSource = 'yaml' | 'env' | 'none';
 export interface LoadedConfig {
   source: ConfigSource;
   config: AppConfig;
+  configPath?: string;
 }
 
 // --- Env reference resolution ---
@@ -289,9 +290,11 @@ export function loadAppConfig(configPath?: string): LoadedConfig {
   const source = detectConfigSource(configPath);
 
   switch (source) {
-    case 'yaml':
+    case 'yaml': {
+      const yamlPath = configPath ?? DEFAULT_CONFIG_PATH;
       log.info(`Loading config from ${configPath ?? 'config.yaml'}`);
-      return { source: 'yaml', config: loadYamlConfig(configPath) };
+      return { source: 'yaml', config: loadYamlConfig(configPath), configPath: yamlPath };
+    }
 
     case 'env':
       log.info('Loading config from .env (no config.yaml found)');

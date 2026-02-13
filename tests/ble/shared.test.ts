@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { waitForReading } from '../../src/ble/shared.js';
+import { waitForReading, waitForRawReading } from '../../src/ble/shared.js';
 import type { BleChar, BleDevice } from '../../src/ble/shared.js';
 import { normalizeUuid } from '../../src/ble/types.js';
 import type {
@@ -539,6 +539,107 @@ describe('waitForReading() — multi-char mode (characteristics[])', () => {
     await expect(waitForReading(charMap, device, adapter, PROFILE)).rejects.toThrow(
       'No notify characteristics',
     );
+  });
+});
+
+// ─── waitForRawReading tests ────────────────────────────────────────────────
+
+describe('waitForRawReading()', () => {
+  it('returns raw reading and adapter without calling computeMetrics', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const adapter = createLegacyAdapter({
+      parseNotification: vi.fn(() => ({ weight: 75.5, impedance: 500 })),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE);
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    notifyChar.triggerData(Buffer.from([0x01]));
+
+    const result = await promise;
+    expect(result.reading).toEqual({ weight: 75.5, impedance: 500 });
+    expect(result.adapter).toBe(adapter);
+    expect(adapter.computeMetrics).not.toHaveBeenCalled();
+  });
+
+  it('applies lbs-to-kg conversion on raw reading', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const adapter = createLegacyAdapter({
+      normalizesWeight: false,
+      parseNotification: vi.fn(() => ({ weight: 166.45, impedance: 500 })),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, 'lbs');
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    notifyChar.triggerData(Buffer.from([0x01]));
+
+    const result = await promise;
+    expect(result.reading.weight).toBeCloseTo(166.45 * 0.453592, 2);
+    expect(adapter.computeMetrics).not.toHaveBeenCalled();
+  });
+
+  it('rejects on disconnect before reading completes', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const adapter = createLegacyAdapter();
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE);
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    device.triggerDisconnect();
+
+    await expect(promise).rejects.toThrow('Scale disconnected before reading completed');
+  });
+
+  it('calls onLiveData callback for each valid reading', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const onLiveData = vi.fn();
+    let callN = 0;
+    const adapter = createLegacyAdapter({
+      parseNotification: vi.fn(() => {
+        callN++;
+        if (callN === 1) return { weight: 5, impedance: 0 };
+        return { weight: 75, impedance: 500 };
+      }),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, undefined, onLiveData);
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    notifyChar.triggerData(Buffer.from([0x01])); // incomplete
+    notifyChar.triggerData(Buffer.from([0x02])); // complete
+
+    const result = await promise;
+    expect(result.reading).toEqual({ weight: 75, impedance: 500 });
+    expect(onLiveData).toHaveBeenCalledTimes(2);
   });
 });
 

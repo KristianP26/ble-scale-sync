@@ -1,8 +1,8 @@
 import NodeBle from 'node-ble';
 import type { ScaleAdapter, BleDeviceInfo, BodyComposition } from '../interfaces/scale-adapter.js';
 import type { ScanOptions, ScanResult } from './types.js';
-import type { BleChar, BleDevice } from './shared.js';
-import { waitForReading } from './shared.js';
+import type { BleChar, BleDevice, RawReading } from './shared.js';
+import { waitForRawReading } from './shared.js';
 import {
   bleLog,
   normalizeUuid,
@@ -310,7 +310,7 @@ async function buildCharMap(gatt: NodeBle.GattServer): Promise<Map<string, BleCh
  * Scan for a BLE scale, read weight + impedance, and compute body composition.
  * Uses node-ble (BlueZ D-Bus) — requires bluetoothd running on Linux.
  */
-export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
+export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   const { targetMac, adapters, profile, weightUnit, onLiveData, abortSignal } = opts;
   const { bluetooth, destroy } = NodeBle.createBluetooth();
   let device: Device | null = null;
@@ -435,7 +435,7 @@ export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
       GATT_DISCOVERY_TIMEOUT_MS,
       'GATT service discovery timed out',
     );
-    const payload = await waitForReading(
+    const raw = await waitForRawReading(
       charMap,
       wrapDevice(device),
       matchedAdapter,
@@ -449,10 +449,16 @@ export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
     } catch {
       /* ignore */
     }
-    return payload;
+    return raw;
   } finally {
     destroy();
   }
+}
+
+/** Scan, read, and compute body composition. Wrapper around scanAndReadRaw(). */
+export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
+  const { reading, adapter } = await scanAndReadRaw(opts);
+  return adapter.computeMetrics(reading, opts.profile);
 }
 
 /**

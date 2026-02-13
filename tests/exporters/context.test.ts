@@ -158,6 +158,27 @@ describe('NtfyExporter with ExportContext', () => {
     const body = mockFetch.mock.calls[0][1].body as string;
     expect(body).not.toContain('[');
   });
+
+  it('appends drift warning when context has driftWarning', async () => {
+    const exporter = new NtfyExporter(config);
+    await exporter.export(samplePayload, {
+      ...userContext,
+      driftWarning: "Weight 76 kg is near the lower boundary of Dad's range [75–95]",
+    });
+
+    const body = mockFetch.mock.calls[0][1].body as string;
+    expect(body).toMatch(/^\[Dad\] /);
+    expect(body).toContain('⚠️');
+    expect(body).toContain('near the lower boundary');
+  });
+
+  it('does not append drift warning when not present', async () => {
+    const exporter = new NtfyExporter(config);
+    await exporter.export(samplePayload, userContext);
+
+    const body = mockFetch.mock.calls[0][1].body as string;
+    expect(body).not.toContain('⚠️');
+  });
 });
 
 // ─── Orchestrator context propagation ───────────────────────────────────

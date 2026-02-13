@@ -174,19 +174,26 @@ async function subscribeAndInit(
 
 // ─── Shared reading logic ─────────────────────────────────────────────────────
 
+/** Raw scale reading paired with the adapter that produced it. */
+export interface RawReading {
+  reading: ScaleReading;
+  adapter: ScaleAdapter;
+}
+
 /**
- * Subscribe to GATT notifications and wait for a complete scale reading.
- * Shared by both the node-ble (Linux) and noble (Windows/macOS) handlers.
+ * Subscribe to GATT notifications and wait for a complete raw scale reading.
+ * Returns the reading + adapter WITHOUT computing body composition metrics.
+ * Used by the multi-user flow to match a user by weight before computing metrics.
  */
-export function waitForReading(
+export function waitForRawReading(
   charMap: Map<string, BleChar>,
   bleDevice: BleDevice,
   adapter: ScaleAdapter,
   profile: UserProfile,
   weightUnit?: WeightUnit,
   onLiveData?: (reading: ScaleReading) => void,
-): Promise<BodyComposition> {
-  return new Promise<BodyComposition>((resolve, reject) => {
+): Promise<RawReading> {
+  return new Promise<RawReading>((resolve, reject) => {
     let resolved = false;
 
     const handleNotification = (sourceUuid: string, data: Buffer): void => {
@@ -209,11 +216,7 @@ export function waitForReading(
         // Clear any \r progress line before logging
         process.stdout.write('\r' + ' '.repeat(80) + '\r');
         bleLog.info(`Reading complete: ${reading.weight.toFixed(2)} kg / ${reading.impedance} Ohm`);
-        try {
-          resolve(adapter.computeMetrics(reading, profile));
-        } catch (e) {
-          reject(e);
-        }
+        resolve({ reading, adapter });
       }
     };
 
@@ -244,4 +247,22 @@ export function waitForReading(
       }
     });
   });
+}
+
+/**
+ * Subscribe to GATT notifications and wait for a complete scale reading.
+ * Wrapper around waitForRawReading() that computes body composition metrics.
+ * Shared by both the node-ble (Linux) and noble (Windows/macOS) handlers.
+ */
+export function waitForReading(
+  charMap: Map<string, BleChar>,
+  bleDevice: BleDevice,
+  adapter: ScaleAdapter,
+  profile: UserProfile,
+  weightUnit?: WeightUnit,
+  onLiveData?: (reading: ScaleReading) => void,
+): Promise<BodyComposition> {
+  return waitForRawReading(charMap, bleDevice, adapter, profile, weightUnit, onLiveData).then(
+    ({ reading, adapter: matched }) => matched.computeMetrics(reading, profile),
+  );
 }

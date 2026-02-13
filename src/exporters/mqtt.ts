@@ -138,23 +138,30 @@ export class MqttExporter implements Exporter {
     this.config = config;
   }
 
-  private async publishDiscovery(client: MqttClient): Promise<void> {
+  private async publishDiscovery(client: MqttClient, context?: ExportContext): Promise<void> {
+    const slug = context?.userSlug;
+    const dataTopic = slug ? `${this.config.topic}/${slug}` : this.config.topic;
+    const statusTopic = `${dataTopic}/status`;
+
+    const deviceId = slug ? `ble-scale-sync-${slug}` : 'ble-scale-sync';
+    const deviceName = slug
+      ? `${this.config.haDeviceName} (${context?.userName ?? slug})`
+      : this.config.haDeviceName;
+
     const device = {
-      identifiers: ['ble-scale-sync'],
-      name: this.config.haDeviceName,
+      identifiers: [deviceId],
+      name: deviceName,
       manufacturer: 'BLE Scale Sync',
       model: 'Smart Scale',
       sw_version: pkg.version,
     };
 
-    const statusTopic = `${this.config.topic}/status`;
-
     for (const metric of HA_METRICS) {
-      const topic = `homeassistant/sensor/ble-scale-sync/${metric.key}/config`;
+      const topic = `homeassistant/sensor/${deviceId}/${metric.key}/config`;
       const payload: Record<string, unknown> = {
         name: metric.name,
-        unique_id: `ble-scale-sync_${metric.key}`,
-        state_topic: this.config.topic,
+        unique_id: `${deviceId}_${metric.key}`,
+        state_topic: dataTopic,
         value_template: `{{ value_json.${metric.key} }}`,
         state_class: 'measurement',
         availability: [{ topic: statusTopic }],
@@ -170,7 +177,8 @@ export class MqttExporter implements Exporter {
     }
 
     await client.publishAsync(statusTopic, 'online', { qos: 1, retain: true });
-    log.info(`Published HA discovery for ${HA_METRICS.length} metrics.`);
+    const suffix = slug ? ` (user: ${slug})` : '';
+    log.info(`Published HA discovery for ${HA_METRICS.length} metrics${suffix}.`);
   }
 
   async healthcheck(): Promise<ExportResult> {
@@ -197,12 +205,22 @@ export class MqttExporter implements Exporter {
     }
   }
 
-  async export(data: BodyComposition, _context?: ExportContext): Promise<ExportResult> {
+  async export(data: BodyComposition, context?: ExportContext): Promise<ExportResult> {
     const { connectAsync } = await import('mqtt');
-    const { brokerUrl, topic, qos, retain, username, password, clientId, haDiscovery } =
-      this.config;
+    const {
+      brokerUrl,
+      topic: baseTopic,
+      qos,
+      retain,
+      username,
+      password,
+      clientId,
+      haDiscovery,
+    } = this.config;
 
-    const statusTopic = haDiscovery ? `${topic}/status` : undefined;
+    // Multi-user topic routing: {baseTopic}/{slug} when context has a userSlug
+    const dataTopic = context?.userSlug ? `${baseTopic}/${context.userSlug}` : baseTopic;
+    const statusTopic = haDiscovery ? `${dataTopic}/status` : undefined;
 
     return withRetry(
       async () => {
@@ -226,12 +244,12 @@ export class MqttExporter implements Exporter {
 
         try {
           if (haDiscovery) {
-            await this.publishDiscovery(client);
+            await this.publishDiscovery(client, context);
           }
 
           const payload = JSON.stringify(data);
-          await client.publishAsync(topic, payload, { qos, retain });
-          log.info(`Published to ${topic} (qos=${qos}, retain=${retain}).`);
+          await client.publishAsync(dataTopic, payload, { qos, retain });
+          log.info(`Published to ${dataTopic} (qos=${qos}, retain=${retain}).`);
           return { success: true };
         } finally {
           await client.endAsync();

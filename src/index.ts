@@ -1,16 +1,24 @@
 #!/usr/bin/env tsx
 
 import { parseArgs } from 'node:util';
-import { scanAndRead } from './ble/index.js';
+import { writeFileSync } from 'node:fs';
+import { scanAndRead, scanAndReadRaw } from './ble/index.js';
 import { abortableSleep } from './ble/types.js';
 import { adapters } from './scales/index.js';
 import { createLogger } from './logger.js';
 import { errMsg } from './utils/error.js';
 import { createExporterFromEntry } from './exporters/registry.js';
 import { runHealthchecks, dispatchExports } from './orchestrator.js';
-import { loadAppConfig } from './config/load.js';
-import { resolveForSingleUser } from './config/resolve.js';
-import type { Exporter } from './interfaces/exporter.js';
+import { loadAppConfig, loadYamlConfig } from './config/load.js';
+import {
+  resolveForSingleUser,
+  resolveExportersForUser,
+  resolveUserProfile,
+  resolveRuntimeConfig,
+} from './config/resolve.js';
+import { matchUserByWeight, detectWeightDrift } from './config/user-matching.js';
+import { updateLastKnownWeight, withWriteLock } from './config/write.js';
+import type { Exporter, ExportContext } from './interfaces/exporter.js';
 import type { BodyComposition } from './interfaces/scale-adapter.js';
 import type { WeightUnit } from './config/schema.js';
 
@@ -45,22 +53,35 @@ if (cliFlags.help) {
 
 const log = createLogger('Sync');
 
-const { config: appConfig } = loadAppConfig(cliFlags.config as string | undefined);
+const loaded = loadAppConfig(cliFlags.config as string | undefined);
+let appConfig = loaded.config;
+const configSource = loaded.source;
+const configPath = loaded.configPath;
 
 const {
-  profile,
   scaleMac: SCALE_MAC,
   weightUnit,
   dryRun,
   continuousMode,
   scanCooldownSec,
-} = resolveForSingleUser(appConfig);
+} = resolveRuntimeConfig(appConfig);
 
 const KG_TO_LBS = 2.20462;
 
 function fmtWeight(kg: number, unit: WeightUnit): string {
   if (unit === 'lbs') return `${(kg * KG_TO_LBS).toFixed(2)} lbs`;
   return `${kg.toFixed(2)} kg`;
+}
+
+function logBodyComp(payload: BodyComposition, prefix = ''): void {
+  const p = prefix ? `${prefix} ` : '';
+  log.info(`${p}Body composition:`);
+  const kgMetrics = new Set(['boneMass', 'muscleMass']);
+  const { weight: _w, impedance: _i, ...metrics } = payload;
+  for (const [k, v] of Object.entries(metrics)) {
+    const display = kgMetrics.has(k) ? fmtWeight(v, weightUnit) : String(v);
+    log.info(`${p}  ${k}: ${display}`);
+  }
 }
 
 // ─── Abort / signal handling ────────────────────────────────────────────────
@@ -82,16 +103,83 @@ function onSignal(): void {
 process.on('SIGINT', onSignal);
 process.on('SIGTERM', onSignal);
 
-// ─── Build exporters ────────────────────────────────────────────────────────
+// ─── SIGHUP config reload ──────────────────────────────────────────────────
 
-function buildExporters(): Exporter[] {
-  const resolved = resolveForSingleUser(appConfig);
-  return resolved.exporterEntries.map((entry) => createExporterFromEntry(entry));
+let needsReload = false;
+
+if (process.platform !== 'win32') {
+  process.on('SIGHUP', () => {
+    log.info('Received SIGHUP — will reload config before next scan cycle');
+    needsReload = true;
+  });
 }
 
-// ─── Single cycle ───────────────────────────────────────────────────────────
+const exporterCache = new Map<string, Exporter[]>();
 
-async function runCycle(exporters?: Exporter[]): Promise<boolean> {
+async function reloadConfig(): Promise<void> {
+  if (configSource !== 'yaml' || !configPath) return;
+  await withWriteLock(async () => {
+    try {
+      appConfig = loadYamlConfig(configPath);
+      exporterCache.clear();
+      log.info('Config reloaded successfully');
+    } catch (err) {
+      log.error(`Config reload failed — keeping current config: ${errMsg(err)}`);
+    }
+  });
+}
+
+// ─── Heartbeat ──────────────────────────────────────────────────────────────
+
+const HEARTBEAT_PATH = '/tmp/.ble-scale-sync-heartbeat';
+
+function touchHeartbeat(): void {
+  try {
+    writeFileSync(HEARTBEAT_PATH, new Date().toISOString());
+  } catch {
+    // ignore (e.g., /tmp not writable on Windows)
+  }
+}
+
+// ─── Build exporters ────────────────────────────────────────────────────────
+
+function buildSingleUserExporters(): Exporter[] {
+  const { exporterEntries } = resolveForSingleUser(appConfig);
+  return exporterEntries.map((e) => createExporterFromEntry(e));
+}
+
+function getExportersForUser(slug: string): Exporter[] {
+  let exporters = exporterCache.get(slug);
+  if (!exporters) {
+    const user = appConfig.users.find((u) => u.slug === slug);
+    if (!user) return [];
+    const entries = resolveExportersForUser(appConfig, user);
+    exporters = entries.map((e) => createExporterFromEntry(e));
+    exporterCache.set(slug, exporters);
+  }
+  return exporters;
+}
+
+function buildAllUniqueExporters(): Exporter[] {
+  const seen = new Set<string>();
+  const all: Exporter[] = [];
+  for (const user of appConfig.users) {
+    const entries = resolveExportersForUser(appConfig, user);
+    for (const entry of entries) {
+      if (!seen.has(entry.type)) {
+        seen.add(entry.type);
+        all.push(createExporterFromEntry(entry));
+      }
+    }
+  }
+  return all;
+}
+
+// ─── Single-user cycle ──────────────────────────────────────────────────────
+
+async function runSingleUserCycle(exporters?: Exporter[]): Promise<boolean> {
+  const { profile } = resolveForSingleUser(appConfig);
+
   const payload: BodyComposition = await scanAndRead({
     targetMac: SCALE_MAC,
     adapters,
@@ -109,13 +197,7 @@ async function runCycle(exporters?: Exporter[]): Promise<boolean> {
   log.info(
     `\nMeasurement received: ${fmtWeight(payload.weight, weightUnit)} / ${payload.impedance} Ohm`,
   );
-  log.info('Body composition:');
-  const kgMetrics = new Set(['boneMass', 'muscleMass']);
-  const { weight: _w, impedance: _i, ...metrics } = payload;
-  for (const [k, v] of Object.entries(metrics)) {
-    const display = kgMetrics.has(k) ? fmtWeight(v, weightUnit) : String(v);
-    log.info(`  ${k}: ${display}`);
-  }
+  logBodyComp(payload);
 
   if (!exporters) {
     log.info('\nDry run — skipping export.');
@@ -125,11 +207,90 @@ async function runCycle(exporters?: Exporter[]): Promise<boolean> {
   return dispatchExports(exporters, payload);
 }
 
+// ─── Multi-user cycle ───────────────────────────────────────────────────────
+
+async function runMultiUserCycle(): Promise<boolean> {
+  // Use first user's profile for BLE connection (needed by some adapters for onConnected)
+  const defaultProfile = resolveUserProfile(appConfig.users[0], appConfig.scale);
+
+  const raw = await scanAndReadRaw({
+    targetMac: SCALE_MAC,
+    adapters,
+    profile: defaultProfile,
+    weightUnit,
+    abortSignal: signal,
+    onLiveData(reading) {
+      const impStr: string = reading.impedance > 0 ? `${reading.impedance} Ohm` : 'Measuring...';
+      process.stdout.write(
+        `\r  Weight: ${fmtWeight(reading.weight, weightUnit)} | Impedance: ${impStr}      `,
+      );
+    },
+  });
+
+  const weight = raw.reading.weight;
+  log.info(`\nRaw reading: ${fmtWeight(weight, weightUnit)} / ${raw.reading.impedance} Ohm`);
+
+  // Match user by weight
+  const match = matchUserByWeight(appConfig.users, weight, appConfig.unknown_user);
+
+  if (!match.user) {
+    if (match.warning) log.warn(match.warning);
+    return true; // Not a failure — strategy decided to skip
+  }
+
+  const user = match.user;
+  const prefix = `[${user.name}]`;
+  log.info(`${prefix} Matched (tier: ${match.tier})`);
+
+  // Drift detection
+  const drift = detectWeightDrift(user, weight);
+  if (drift) log.warn(`${prefix} ${drift}`);
+
+  // Compute metrics with matched user's profile
+  const profile = resolveUserProfile(user, appConfig.scale);
+  const payload = raw.adapter.computeMetrics(raw.reading, profile);
+
+  log.info(
+    `${prefix} Measurement: ${fmtWeight(payload.weight, weightUnit)} / ${payload.impedance} Ohm`,
+  );
+  logBodyComp(payload, prefix);
+
+  if (dryRun) {
+    log.info(`${prefix} Dry run — skipping export.`);
+    return true;
+  }
+
+  // Build exporters for this user (cached)
+  const exporters = getExportersForUser(user.slug);
+
+  // Build export context
+  const context: ExportContext = {
+    userName: user.name,
+    userSlug: user.slug,
+    userConfig: user,
+    ...(drift ? { driftWarning: drift } : {}),
+  };
+
+  const success = await dispatchExports(exporters, payload, context);
+
+  // Update last known weight in config.yaml (async, debounced)
+  if (configSource === 'yaml' && configPath) {
+    updateLastKnownWeight(configPath, user.slug, weight, user.last_known_weight);
+  }
+
+  return success;
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
+  const isMultiUser = appConfig.users.length > 1;
   const modeLabel = continuousMode ? ' (continuous)' : '';
-  log.info(`\nBLE Scale Sync${dryRun ? ' (dry run)' : ''}${modeLabel}`);
+  const userLabel = isMultiUser ? ` [${appConfig.users.length} users]` : '';
+  log.info(`\nBLE Scale Sync${dryRun ? ' (dry run)' : ''}${modeLabel}${userLabel}`);
+  if (isMultiUser) {
+    log.info(`Users: ${appConfig.users.map((u) => u.name).join(', ')}`);
+  }
   if (SCALE_MAC) {
     log.info(`Scanning for scale ${SCALE_MAC}...`);
   } else {
@@ -139,12 +300,18 @@ async function main(): Promise<void> {
 
   let exporters: Exporter[] | undefined;
   if (!dryRun) {
-    exporters = buildExporters();
-    await runHealthchecks(exporters);
+    if (isMultiUser) {
+      const allExporters = buildAllUniqueExporters();
+      await runHealthchecks(allExporters);
+    } else {
+      exporters = buildSingleUserExporters();
+      await runHealthchecks(exporters);
+    }
   }
 
   if (!continuousMode) {
-    const success = await runCycle(exporters);
+    touchHeartbeat();
+    const success = isMultiUser ? await runMultiUserCycle() : await runSingleUserCycle(exporters);
     if (!success) process.exit(1);
     return;
   }
@@ -152,13 +319,27 @@ async function main(): Promise<void> {
   // Continuous mode loop
   while (!signal.aborted) {
     try {
-      await runCycle(exporters);
+      touchHeartbeat();
 
-      // Cooldown only after a successful reading — the discovery timeout
-      // (120s) already acts as the waiting period between retry attempts
+      if (needsReload) {
+        await reloadConfig();
+        needsReload = false;
+        // Rebuild single-user exporters after reload
+        if (appConfig.users.length === 1 && !dryRun) {
+          exporters = buildSingleUserExporters();
+        }
+      }
+
+      if (appConfig.users.length > 1) {
+        await runMultiUserCycle();
+      } else {
+        await runSingleUserCycle(exporters);
+      }
+
       if (signal.aborted) break;
-      log.info(`\nWaiting ${scanCooldownSec}s before next scan...`);
-      await abortableSleep(scanCooldownSec * 1000, signal);
+      const cooldown = appConfig.runtime?.scan_cooldown ?? scanCooldownSec;
+      log.info(`\nWaiting ${cooldown}s before next scan...`);
+      await abortableSleep(cooldown * 1000, signal);
     } catch (err) {
       if (signal.aborted) break;
       log.info(`No scale found, retrying... (${errMsg(err)})`);

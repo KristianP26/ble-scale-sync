@@ -49,15 +49,19 @@ export const ntfySchema: ExporterSchema = {
   supportsPerUser: false,
 };
 
-function formatMessage(data: BodyComposition, userName?: string): string {
+function formatMessage(data: BodyComposition, userName?: string, driftWarning?: string): string {
   const prefix = userName ? `[${userName}] ` : '';
-  return [
+  const lines = [
     `${prefix}⚖️ ${data.weight.toFixed(2)} kg | BMI ${data.bmi.toFixed(1)}`,
     `🏋️ Body Fat ${data.bodyFatPercent.toFixed(1)}% | Muscle ${data.muscleMass.toFixed(1)} kg`,
     `💧 Water ${data.waterPercent.toFixed(1)}% | 🦴 Bone ${data.boneMass.toFixed(1)} kg`,
     `🫀 Visceral Fat ${data.visceralFat} | BMR ${data.bmr} kcal`,
     `📅 Metabolic Age ${data.metabolicAge} yr | Physique ${data.physiqueRating}`,
-  ].join('\n');
+  ];
+  if (driftWarning) {
+    lines.push(`⚠️ ${driftWarning}`);
+  }
+  return lines.join('\n');
 }
 
 export class NtfyExporter implements Exporter {
@@ -99,7 +103,7 @@ export class NtfyExporter implements Exporter {
       headers['Authorization'] = `Basic ${btoa(username + ':' + password)}`;
     }
 
-    const body = formatMessage(data, context?.userName);
+    const body = formatMessage(data, context?.userName, context?.driftWarning);
 
     return withRetry(
       async () => {

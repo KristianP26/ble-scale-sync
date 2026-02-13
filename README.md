@@ -1,7 +1,5 @@
 # BLE Scale Sync
 
-> **⚠️ Work in Progress** — This project is under active development and is **not production-ready**. Expect breaking changes, incomplete features, and rough edges. Use at your own risk.
-
 A cross-platform CLI tool that reads body composition data from a **BLE smart scale** and exports it to multiple targets. Built with an adapter pattern supporting **23 scale brands** out of the box.
 
 Works on **Linux** (including Raspberry Pi), **macOS**, and **Windows**.
@@ -458,9 +456,10 @@ Unit tests use [Vitest](https://vitest.dev/) and cover:
 - **User matching** — 4-tier weight matching, all strategies (nearest/log/ignore), overlapping ranges, drift detection
 - **Environment validation** — `validate-env.ts` (all validation rules and edge cases)
 - **Scale adapters** — `parseNotification()`, `matches()`, `isComplete()`, `computeMetrics()`, and `onConnected()` for all 23 adapters
-- **Exporters** — config parsing, MQTT publish/HA discovery, Garmin subprocess, Webhook/InfluxDB/Ntfy delivery, ExportContext
+- **Exporters** — config parsing, MQTT publish/HA discovery, MQTT multi-user topic routing + per-user HA discovery, Garmin subprocess, Webhook/InfluxDB/Ntfy delivery, ExportContext, ntfy drift warning
+- **Multi-user flow** — matching → profile resolution → exporter resolution → ExportContext construction, strategy fallback, tiebreak with last_known_weight
 - **Orchestrator** — healthcheck runner, export dispatch, parallel execution, partial/total failure handling
-- **BLE shared logic** — `waitForReading()` in legacy, onConnected, and multi-char modes; weight normalization; disconnect handling
+- **BLE shared logic** — `waitForRawReading()` and `waitForReading()` in legacy, onConnected, and multi-char modes; weight normalization; disconnect handling
 - **BLE utilities** — `formatMac()`, `normalizeUuid()`, `sleep()`, `withTimeout()`, abort signal handling
 - **Logger** — `createLogger()`, `setLogLevel()`
 - **Utilities** — shared retry logic (`withRetry`), error conversion (`errMsg`)
@@ -481,7 +480,7 @@ The project uses [ESLint](https://eslint.org/) with [typescript-eslint](https://
 ```
 ble-scale-sync/
 ├── src/
-│   ├── index.ts                    # Entry point (config, signals, scan cycle, continuous mode)
+│   ├── index.ts                    # Entry point (single/multi-user flow, SIGHUP reload, heartbeat)
 │   ├── orchestrator.ts             # Exported orchestration logic (healthchecks, export dispatch)
 │   ├── config/
 │   │   ├── schema.ts               # Zod schemas (AppConfig, UserConfig, etc.) + WeightUnit
@@ -492,9 +491,9 @@ ble-scale-sync/
 │   │   ├── user-matching.ts       # Weight-based multi-user matching (4-tier)
 │   │   └── write.ts               # Atomic YAML write + debounced weight updates
 │   ├── ble/
-│   │   ├── index.ts                # OS detection + dynamic import barrel
+│   │   ├── index.ts                # OS detection + dynamic import barrel (scanAndRead, scanAndReadRaw)
 │   │   ├── types.ts                # ScanOptions, ScanResult, constants, utilities
-│   │   ├── shared.ts               # BleChar/BleDevice abstractions, waitForReading()
+│   │   ├── shared.ts               # BleChar/BleDevice abstractions, waitForRawReading(), waitForReading()
 │   │   ├── handler-node-ble.ts     # Linux: node-ble (BlueZ D-Bus)
 │   │   ├── handler-noble.ts        # macOS default: @stoprocent/noble
 │   │   └── handler-noble-legacy.ts # Windows default: @abandonware/noble
@@ -545,6 +544,7 @@ ble-scale-sync/
 │   ├── body-comp-helpers.test.ts   # Body-comp helper unit tests
 │   ├── validate-env.test.ts        # .env validation unit tests
 │   ├── orchestrator.test.ts        # Healthcheck + export dispatch tests
+│   ├── multi-user-flow.test.ts     # Multi-user matching → profile → exporters → context integration
 │   ├── logger.test.ts              # Logger utility tests
 │   ├── helpers/
 │   │   └── scale-test-utils.ts     # Shared test utilities (mock peripheral, etc.)
@@ -552,7 +552,7 @@ ble-scale-sync/
 │   ├── ble/                        # BLE tests (shared logic, utilities, abort signal)
 │   ├── utils/                      # Utility tests (retry, error)
 │   ├── scales/                     # One test file per adapter (23 files)
-│   └── exporters/                  # Exporter tests (config, garmin, mqtt, webhook, influxdb, ntfy, context)
+│   └── exporters/                  # Exporter tests (config, garmin, mqtt, mqtt-multiuser, webhook, influxdb, ntfy, context)
 ├── garmin-scripts/
 │   ├── garmin_upload.py            # Garmin uploader (JSON stdin → JSON stdout)
 │   └── setup_garmin.py             # One-time Garmin auth setup
@@ -632,6 +632,40 @@ After matching, the app checks if the weight falls in the outer 10% of the user'
 ### Automatic Weight Tracking
 
 After each successful measurement, the user's `last_known_weight` is automatically updated in `config.yaml`. This improves future matching accuracy for overlapping ranges. Updates are debounced (5 seconds) and skipped if the change is less than 0.5 kg.
+
+### Multi-User Execution Flow
+
+When 2+ users are configured, the main loop uses a different execution path:
+
+1. **Raw scan** — `scanAndReadRaw()` reads weight + impedance without computing body composition
+2. **User matching** — `matchUserByWeight()` identifies who stepped on the scale (4-tier priority)
+3. **Drift detection** — warns if weight is near the boundary of the matched user's range
+4. **Body composition** — computes metrics using the matched user's profile (height, age, gender, athlete)
+5. **Per-user exporters** — resolves and caches exporters for the matched user (user-level + global, deduped by type)
+6. **Export with context** — dispatches to all exporters with `ExportContext` (user name, slug, config, drift warning)
+7. **Weight tracking** — updates `last_known_weight` in `config.yaml` (debounced, atomic write)
+
+**Per-exporter multi-user behavior:**
+
+- **MQTT** — publishes to `{topic}/{slug}`, per-user HA device discovery + LWT
+- **InfluxDB** — adds `user={slug}` tag to line protocol
+- **Webhook** — adds `user_name` + `user_slug` fields to JSON payload
+- **Ntfy** — prepends `[{name}]` to notification, appends drift warning if present
+- **Garmin** — unchanged (one Garmin account per user via per-user exporter config)
+
+### SIGHUP Config Reload
+
+On Linux/macOS, sending `SIGHUP` to the process triggers a config reload between scan cycles:
+
+```bash
+kill -HUP $(pgrep -f "ble-scale-sync")
+```
+
+The reload acquires the write lock (to avoid conflicting with `last_known_weight` writes), re-validates the YAML via Zod, and clears the exporter cache. If validation fails, the previous config is kept.
+
+### Heartbeat
+
+At the start of each scan cycle, the process writes the current ISO timestamp to `/tmp/.ble-scale-sync-heartbeat`. This can be used for Docker health checks or monitoring.
 
 ## Athlete Mode
 

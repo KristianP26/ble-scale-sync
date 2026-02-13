@@ -1,8 +1,10 @@
 import type { ScaleAdapter, BodyComposition } from '../interfaces/scale-adapter.js';
 import type { ScanOptions, ScanResult } from './types.js';
+import type { RawReading } from './shared.js';
 import { bleLog } from './types.js';
 
 export type { ScanOptions, ScanResult } from './types.js';
+export type { RawReading } from './shared.js';
 
 type NobleDriver = 'abandonware' | 'stoprocent';
 
@@ -21,6 +23,40 @@ function resolveHandlerName(driver: NobleDriver | null): string {
   if (process.platform === 'linux') return 'node-ble (BlueZ D-Bus)';
   if (process.platform === 'win32') return 'noble-legacy (@abandonware/noble)';
   return 'noble (@stoprocent/noble)';
+}
+
+/**
+ * Scan for a BLE scale and return the raw weight/impedance reading + matched adapter.
+ * Does NOT compute body composition metrics — use scanAndRead() for the full flow,
+ * or call adapter.computeMetrics(reading, profile) on the result.
+ *
+ * Used by the multi-user flow to match a user by weight before computing metrics.
+ */
+export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
+  const driver = resolveNobleDriver();
+  bleLog.debug(`BLE handler: ${resolveHandlerName(driver)}`);
+
+  if (driver === 'abandonware') {
+    const { scanAndReadRaw: impl } = await import('./handler-noble-legacy.js');
+    return impl(opts);
+  }
+  if (driver === 'stoprocent') {
+    const { scanAndReadRaw: impl } = await import('./handler-noble.js');
+    return impl(opts);
+  }
+
+  // OS defaults (no NOBLE_DRIVER override)
+  if (process.platform === 'linux') {
+    const { scanAndReadRaw: impl } = await import('./handler-node-ble.js');
+    return impl(opts);
+  }
+  if (process.platform === 'win32') {
+    const { scanAndReadRaw: impl } = await import('./handler-noble-legacy.js');
+    return impl(opts);
+  }
+  // macOS and other platforms
+  const { scanAndReadRaw: impl } = await import('./handler-noble.js');
+  return impl(opts);
 }
 
 /**

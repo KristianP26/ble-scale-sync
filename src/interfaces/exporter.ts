@@ -10,6 +10,7 @@ export interface ExportContext {
   userName?: string;
   userSlug?: string;
   userConfig?: UserConfig;
+  driftWarning?: string;
 }
 
 export interface Exporter {

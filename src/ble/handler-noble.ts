@@ -2,8 +2,8 @@ import noble from '@stoprocent/noble';
 import type { Peripheral, Characteristic, Service } from '@stoprocent/noble';
 import type { ScaleAdapter, BleDeviceInfo, BodyComposition } from '../interfaces/scale-adapter.js';
 import type { ScanOptions, ScanResult } from './types.js';
-import type { BleChar, BleDevice } from './shared.js';
-import { waitForReading } from './shared.js';
+import type { BleChar, BleDevice, RawReading } from './shared.js';
+import { waitForRawReading } from './shared.js';
 import {
   bleLog,
   normalizeUuid,
@@ -248,7 +248,7 @@ function discoverPeripheral(
  * Scan for a BLE scale, read weight + impedance, and compute body composition.
  * Uses noble — works on Windows and macOS.
  */
-export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
+export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   const { targetMac, adapters, profile, weightUnit, onLiveData, abortSignal } = opts;
 
   try {
@@ -313,7 +313,7 @@ export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
       bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
 
       const charMap = wrapCharacteristics(services);
-      const payload = await waitForReading(
+      const raw = await waitForRawReading(
         charMap,
         wrapPeripheral(peripheral),
         matchedAdapter,
@@ -322,7 +322,7 @@ export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
         onLiveData,
       );
 
-      return payload;
+      return raw;
     } finally {
       try {
         await peripheral.disconnectAsync();
@@ -334,6 +334,12 @@ export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
     // Safety net: stop any leftover scanning (targeted — not removeAllListeners)
     noble.stopScanningAsync().catch(() => {});
   }
+}
+
+/** Scan, read, and compute body composition. Wrapper around scanAndReadRaw(). */
+export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
+  const { reading, adapter } = await scanAndReadRaw(opts);
+  return adapter.computeMetrics(reading, opts.profile);
 }
 
 /**
