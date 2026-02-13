@@ -12,7 +12,8 @@ LABEL org.opencontainers.image.title="BLE Scale Sync" \
       org.opencontainers.image.source="https://github.com/KristianP26/ble-scale-sync" \
       org.opencontainers.image.licenses="GPL-3.0"
 
-# System dependencies: BLE (BlueZ + D-Bus), Python (Garmin upload), tini (PID 1)
+# System dependencies: BLE (BlueZ + D-Bus), Python (Garmin upload), tini (PID 1),
+# build-essential (node-gyp needs gcc/g++/make for native BLE modules)
 RUN apt-get update && apt-get install -y --no-install-recommends \
       bluetooth \
       bluez \
@@ -20,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libusb-1.0-0-dev \
       libdbus-1-dev \
       dbus \
+      build-essential \
       python3 \
       python3-pip \
       python3-venv \
