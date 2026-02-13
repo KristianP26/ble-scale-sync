@@ -8,6 +8,7 @@
     "start": "tsx src/index.ts",
     "setup-garmin": "python3 garmin-scripts/setup_garmin.py",
     "scan": "tsx src/scan.ts",
+    "validate": "tsx src/config/validate-cli.ts",
     "test": "vitest run",
     "lint": "eslint src tests",
     "lint:fix": "eslint src tests --fix",
@@ -34,6 +35,7 @@
     "dotenv": "^16.4.7",
     "mqtt": "^5.10.0",
     "node-ble": "^1.13.0",
+    "yaml": "^2.8.2",
     "zod": "^4.3.6"
   },
   "devDependencies": {

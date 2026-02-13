@@ -1,5 +1,5 @@
 import type { ScaleAdapter, UserProfile, ScaleReading } from '../interfaces/scale-adapter.js';
-import type { WeightUnit } from '../validate-env.js';
+import type { WeightUnit } from '../config/schema.js';
 import { createLogger } from '../logger.js';
 export { errMsg } from '../utils/error.js';
 

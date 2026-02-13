@@ -141,7 +141,20 @@ pip install -r requirements.txt
 
 ## Configuration
 
-> **Coming soon:** A structured `config.yaml` format with multi-user support, an interactive setup wizard (`npm run setup`), and Docker deployment. The `.env` configuration below continues to work and will remain supported as a fallback.
+The app supports two configuration methods: **`config.yaml`** (recommended) and **`.env`** (legacy fallback). If both exist, `config.yaml` takes priority.
+
+#### CLI Flags
+
+```bash
+npm start -- --config /path/to/config.yaml   # Use a custom config file path
+npm start -- --help                           # Show usage and environment overrides
+npm run validate                              # Validate config.yaml and show summary
+npm run validate -- --config /path/to/config.yaml  # Validate a custom config file
+```
+
+Environment variables (`CONTINUOUS_MODE`, `DRY_RUN`, `DEBUG`, `SCAN_COOLDOWN`, `SCALE_MAC`, `NOBLE_DRIVER`) always override the corresponding values in `config.yaml`, regardless of config source.
+
+> **Coming soon:** An interactive setup wizard (`npm run setup`) and Docker deployment. The `.env` configuration below continues to work and will remain supported as a fallback.
 
 ### 1. Create your `.env` file
 
@@ -375,9 +388,20 @@ CI runs on both `main` and `dev` (push + pull request).
 npm test
 ```
 
+### Validate Config
+
+```bash
+npm run validate                              # Validate config.yaml
+npm run validate -- --config /path/to/config.yaml  # Validate a custom config file
+```
+
+Checks `config.yaml` against the Zod schema and reports the number of users, exporters, and continuous mode status. On error, prints human-readable validation messages with field paths.
+
 Unit tests use [Vitest](https://vitest.dev/) and cover:
 
 - **Body composition math** — `body-comp-helpers.ts`
+- **Config loading** — YAML parsing, env reference resolution, config source detection, BLE config loader, env overrides
+- **Config resolution** — user profile resolution, runtime config extraction, exporter merging, single-user convenience
 - **Environment validation** — `validate-env.ts` (all validation rules and edge cases)
 - **Scale adapters** — `parseNotification()`, `matches()`, `isComplete()`, `computeMetrics()`, and `onConnected()` for all 23 adapters
 - **Exporters** — config parsing, MQTT publish/HA discovery, Garmin subprocess, Webhook/InfluxDB/Ntfy delivery
@@ -403,6 +427,12 @@ ble-scale-sync/
 ├── src/
 │   ├── index.ts                    # Entry point (config, signals, scan cycle, continuous mode)
 │   ├── orchestrator.ts             # Exported orchestration logic (healthchecks, export dispatch)
+│   ├── config/
+│   │   ├── schema.ts               # Zod schemas (AppConfig, UserConfig, etc.) + WeightUnit
+│   │   ├── load.ts                 # Unified config loader (YAML + .env fallback)
+│   │   ├── resolve.ts              # Config → runtime types (UserProfile, exporters, etc.)
+│   │   ├── validate-cli.ts         # CLI entry point for npm run validate
+│   │   └── slugify.ts              # Slug generation + uniqueness validation
 │   ├── ble/
 │   │   ├── index.ts                # OS detection + dynamic import barrel
 │   │   ├── types.ts                # ScanOptions, ScanResult, constants, utilities
@@ -411,7 +441,8 @@ ble-scale-sync/
 │   │   ├── handler-noble.ts        # macOS default: @stoprocent/noble
 │   │   └── handler-noble-legacy.ts # Windows default: @abandonware/noble
 │   ├── exporters/
-│   │   ├── index.ts                # Exporter registry — createExporters()
+│   │   ├── index.ts                # Exporter factory — createExporters()
+│   │   ├── registry.ts             # Self-describing exporter registry (schemas + factories)
 │   │   ├── config.ts               # Exporter env validation + config parsing
 │   │   ├── garmin.ts               # Garmin Connect exporter (Python subprocess)
 │   │   ├── mqtt.ts                 # MQTT exporter + Home Assistant auto-discovery
@@ -421,11 +452,12 @@ ble-scale-sync/
 │   ├── utils/
 │   │   ├── retry.ts                # Shared retry utility (withRetry) used by all exporters
 │   │   └── error.ts                # Shared error utility (errMsg) for unknown→string conversion
-│   ├── validate-env.ts             # .env validation & typed config loader
+│   ├── validate-env.ts             # .env validation & typed config loader (legacy)
 │   ├── scan.ts                     # BLE device scanner utility
 │   ├── interfaces/
 │   │   ├── scale-adapter.ts        # ScaleAdapter interface & shared types
-│   │   └── exporter.ts             # Exporter interface & ExportResult type
+│   │   ├── exporter.ts             # Exporter interface & ExportResult type
+│   │   └── exporter-schema.ts      # ExporterSchema interface for self-describing exporters
 │   └── scales/
 │       ├── index.ts                # Adapter registry (all adapters)
 │       ├── body-comp-helpers.ts    # Shared body-comp utilities

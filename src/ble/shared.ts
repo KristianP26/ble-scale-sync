@@ -5,7 +5,7 @@ import type {
   BodyComposition,
   ConnectionContext,
 } from '../interfaces/scale-adapter.js';
-import type { WeightUnit } from '../validate-env.js';
+import type { WeightUnit } from '../config/schema.js';
 import { LBS_TO_KG, normalizeUuid, errMsg, bleLog } from './types.js';
 
 // ─── Thin abstractions over BLE library objects ───────────────────────────────

@@ -77,6 +77,10 @@ export const AppConfigSchema = z.object({
   docker: DockerSchema.optional(),
 });
 
+// --- Standalone types ---
+
+export type WeightUnit = 'kg' | 'lbs';
+
 // --- Inferred types ---
 
 export type BleConfig = z.infer<typeof BleSchema>;

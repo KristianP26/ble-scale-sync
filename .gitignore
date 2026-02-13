@@ -1,6 +1,8 @@
 # Environment & secrets
 .env
 config.yaml
+config.yaml.bak
+config.yaml.tmp
 
 # Node.js
 node_modules/

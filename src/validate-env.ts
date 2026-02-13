@@ -9,7 +9,8 @@ const log = createLogger('Config');
 const __dirname: string = dirname(fileURLToPath(import.meta.url));
 const ROOT: string = join(__dirname, '..');
 
-export type WeightUnit = 'kg' | 'lbs';
+import type { WeightUnit } from './config/schema.js';
+export type { WeightUnit } from './config/schema.js';
 
 export interface Config {
   profile: UserProfile;
