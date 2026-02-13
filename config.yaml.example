@@ -1,0 +1,120 @@
+# ============================================================
+# BLE Scale Sync — Example Configuration
+# ============================================================
+# Copy this file to config.yaml and edit the values.
+# Run "npm run validate" to check your config.
+# Run "npm run setup" for an interactive wizard.
+#
+# Secrets: use ${ENV_VAR} references (resolved from .env or
+# environment variables at load time).
+# ============================================================
+
+version: 1
+
+# --- BLE Settings (optional — uncomment to pin to a specific scale) ---
+# ble:
+#   scale_mac: "FF:03:00:13:A1:04"   # Run "npm run scan" to find yours
+#   noble_driver: abandonware         # "abandonware" | "stoprocent"
+#
+# scale_mac: omit for auto-discovery. On macOS, use the CoreBluetooth UUID.
+# noble_driver: default is node-ble (Linux), abandonware (Windows), stoprocent (macOS).
+
+# --- Scale Units ---
+
+scale:
+  weight_unit: kg   # kg | lbs (display only — calculations always use kg)
+  height_unit: cm   # cm | in  (for height input below)
+
+# --- Multi-User Matching ---
+# Strategy when weight falls outside all configured ranges:
+#   "nearest" = assign to closest range midpoint (with warning)
+#   "log"     = log warning and skip the measurement
+#   "ignore"  = silently skip the measurement
+unknown_user: nearest
+
+# --- Users ---
+# At least one user is required. For multi-user setups,
+# define weight_range so the app can identify who stepped on the scale.
+
+users:
+  - name: Alice
+    slug: alice                          # unique, lowercase, used in MQTT topics & InfluxDB tags
+    height: 168
+    birth_date: "1995-03-20"
+    gender: female
+    is_athlete: false
+    weight_range: { min: 50, max: 75 }   # always in kg
+    last_known_weight: null               # auto-updated after each measurement
+
+    # Per-user exporters (optional — override global_exporters for this user):
+    # exporters:
+    #   - type: garmin
+    #     email: alice@example.com
+    #     password: "${GARMIN_PASSWORD_ALICE}"
+    #     token_dir: ./garmin-tokens/alice
+
+  - name: Bob
+    slug: bob
+    height: 183
+    birth_date: "1990-06-15"
+    gender: male
+    is_athlete: true
+    weight_range: { min: 75, max: 100 }
+    last_known_weight: 85.5
+
+# --- Global Exporters ---
+# Shared by all users (unless a user defines their own "exporters" list).
+# All enabled exporters run in parallel.
+
+global_exporters:
+  # -- Garmin Connect --
+  - type: garmin
+    email: "${GARMIN_EMAIL}"
+    password: "${GARMIN_PASSWORD}"
+    token_dir: ~/.garmin_tokens
+
+  # -- MQTT (Home Assistant auto-discovery) --
+  # - type: mqtt
+  #   broker_url: "mqtt://localhost:1883"  # use mqtts:// for TLS
+  #   topic: scale/body-composition
+  #   qos: 1                               # 0, 1, or 2
+  #   retain: true
+  #   username: myuser
+  #   password: "${MQTT_PASSWORD}"
+  #   client_id: ble-scale-sync
+  #   ha_discovery: true                   # Home Assistant auto-discovery
+  #   ha_device_name: BLE Scale
+
+  # -- Webhook (generic HTTP) --
+  # - type: webhook
+  #   url: "https://example.com/hook"
+  #   method: POST
+  #   headers:
+  #     X-Api-Key: secret123
+  #   timeout: 10000
+
+  # -- InfluxDB v2 --
+  # - type: influxdb
+  #   url: "http://localhost:8086"
+  #   token: "${INFLUXDB_TOKEN}"
+  #   org: my-org
+  #   bucket: my-bucket
+  #   measurement: body_composition
+
+  # -- Ntfy (push notifications) --
+  # - type: ntfy
+  #   url: "https://ntfy.sh"
+  #   topic: my-scale
+  #   title: Scale Measurement
+  #   priority: 3
+  #   token: "${NTFY_TOKEN}"               # Bearer token auth
+  #   # username: myuser                   # or Basic auth
+  #   # password: "${NTFY_PASSWORD}"
+
+# --- Runtime Settings ---
+
+runtime:
+  continuous_mode: false    # true = keep scanning in a loop (ideal for Raspberry Pi)
+  scan_cooldown: 30         # seconds between scans in continuous mode (5–3600)
+  dry_run: false            # true = read scale + compute body comp, skip all exports
+  debug: false              # true = verbose BLE logging

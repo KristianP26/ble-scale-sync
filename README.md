@@ -1,5 +1,10 @@
 # BLE Scale Sync
 
+![CI](https://github.com/KristianP26/ble-scale-sync/actions/workflows/ci.yml/badge.svg)
+![License: GPL-3.0](https://img.shields.io/github/license/KristianP26/ble-scale-sync)
+![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)
+![Docker](https://img.shields.io/badge/docker-ghcr.io-blue)
+
 A cross-platform CLI tool that reads body composition data from a **BLE smart scale** and exports it to multiple targets. Built with an adapter pattern supporting **23 scale brands** out of the box.
 
 Works on **Linux** (including Raspberry Pi), **macOS**, and **Windows**.
@@ -479,6 +484,8 @@ Scales that provide their own body composition values (fat, water, muscle, bone)
 
 ## Development
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide, including how to add new scale adapters and exporters.
+
 ### Branches
 
 | Branch | Purpose                                                      |
@@ -637,7 +644,10 @@ ble-scale-sync/
 ├── garmin-scripts/
 │   ├── garmin_upload.py            # Garmin uploader (JSON stdin → JSON stdout)
 │   └── setup_garmin.py             # One-time Garmin auth setup
-├── .env.example
+├── config.yaml.example              # Annotated config template (copy to config.yaml)
+├── CONTRIBUTING.md                  # Development guide + how to add adapters/exporters
+├── CHANGELOG.md                     # Version history (Keep a Changelog format)
+├── .env.example                     # Legacy .env template (config.yaml preferred)
 ├── .prettierrc                     # Prettier config
 ├── eslint.config.js                # ESLint flat config
 ├── tsconfig.json                   # TypeScript config (src)
