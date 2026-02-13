@@ -1,0 +1,43 @@
+services:
+  ble-scale-sync:
+    image: ghcr.io/kristianp26/ble-scale-sync:latest
+    container_name: ble-scale-sync
+
+    # Host network is required for BLE (BlueZ uses D-Bus on the host)
+    network_mode: host
+
+    # BLE requires NET_ADMIN + NET_RAW capabilities
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+
+    # Add the bluetooth group so the container can access BLE devices.
+    # Find the correct GID on your host: getent group bluetooth | cut -d: -f3
+    group_add:
+      - '112'
+
+    volumes:
+      # Your config file (create from config.yaml example in README)
+      - ./config.yaml:/app/config.yaml:ro
+      # D-Bus socket (required for BlueZ communication)
+      - /var/run/dbus:/var/run/dbus:ro
+      # Garmin auth tokens (persisted across container restarts)
+      - garmin-tokens:/home/node/.garmin_tokens
+
+    environment:
+      - CONTINUOUS_MODE=true
+      # Secrets referenced via ${ENV_VAR} in config.yaml:
+      # - GARMIN_EMAIL=your_email@example.com
+      # - GARMIN_PASSWORD=your_password
+      # - INFLUXDB_TOKEN=your_token
+
+    restart: unless-stopped
+
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+volumes:
+  garmin-tokens:

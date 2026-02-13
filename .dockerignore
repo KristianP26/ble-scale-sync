@@ -1,0 +1,54 @@
+# Dependencies & build artifacts
+node_modules
+dist
+
+# Version control
+.git
+.gitignore
+
+# Tests
+tests
+
+# CI / GitHub
+.github
+
+# Documentation (not needed at runtime)
+*.md
+LICENSE
+
+# Docker files (avoid recursive COPY)
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Config & secrets (mounted at runtime)
+.env
+.env.example
+config.yaml
+config.yaml.*
+
+# IDE & editor
+.idea
+.vscode
+*.swp
+*.swo
+
+# Garmin tokens (mounted at runtime)
+.garmin_tokens
+.garmin_renpho_tokens
+
+# Python virtual environments
+.venv
+env
+venv
+__pycache__
+
+# Lint / format configs (not needed at runtime)
+eslint.config.js
+.prettierrc
+tsconfig.eslint.json
+
+# OS files
+.DS_Store
+Thumbs.db
+nul
