@@ -79,6 +79,22 @@ The app scans for a BLE scale, auto-detects the brand, reads weight + impedance,
 
 Pre-built multi-arch images are available on GHCR for `linux/amd64`, `linux/arm64`, and `linux/arm/v7`.
 
+**1. Generate `config.yaml` with the interactive wizard:**
+
+```bash
+docker run --rm -it \
+  --network host \
+  --cap-add NET_ADMIN --cap-add NET_RAW \
+  --group-add 112 \
+  -v /var/run/dbus:/var/run/dbus:ro \
+  -v ./config.yaml:/app/config.yaml \
+  ghcr.io/kristianp26/ble-scale-sync:latest setup
+```
+
+The wizard walks you through scale discovery, user profiles, and exporter configuration. The generated `config.yaml` is saved to your current directory.
+
+**2. Run the sync:**
+
 ```bash
 docker run --rm \
   --network host \
@@ -104,11 +120,9 @@ docker compose up -d
 - **Bluetooth group** — add the host's `bluetooth` GID (`getent group bluetooth | cut -d: -f3`, commonly `112`)
 - **Garmin tokens** — mount a volume for `/home/node/.garmin_tokens` to persist auth tokens
 
-### Docker Commands
+### Other Docker Commands
 
 ```bash
-docker run --rm ghcr.io/kristianp26/ble-scale-sync start     # Run sync (default)
-docker run --rm ghcr.io/kristianp26/ble-scale-sync setup     # Interactive setup wizard
 docker run --rm ghcr.io/kristianp26/ble-scale-sync scan      # Discover BLE devices
 docker run --rm ghcr.io/kristianp26/ble-scale-sync validate  # Validate config.yaml
 docker run --rm ghcr.io/kristianp26/ble-scale-sync help      # Show help
