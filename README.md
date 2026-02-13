@@ -137,6 +137,48 @@ pip install -r requirements.txt
 
 > **Note:** Modern Linux distributions (Debian 12+, Ubuntu 23.04+, Raspberry Pi OS Bookworm) require a virtual environment for pip — installing globally will fail with `error: externally-managed-environment`. The commands above handle this automatically. **Remember to activate the venv** (`source venv/bin/activate`) before running `npm start` or `npm run setup-garmin`.
 
+## Docker (Linux only)
+
+Pre-built multi-arch images are available on GHCR for `linux/amd64`, `linux/arm64`, and `linux/arm/v7`.
+
+### Quick Start
+
+```bash
+# Run with a config file
+docker run --rm \
+  --network host \
+  --cap-add NET_ADMIN --cap-add NET_RAW \
+  --group-add 112 \
+  -v /var/run/dbus:/var/run/dbus:ro \
+  -v ./config.yaml:/app/config.yaml:ro \
+  -e CONTINUOUS_MODE=true \
+  ghcr.io/kristianp26/ble-scale-sync:latest
+```
+
+Or use Docker Compose — copy `docker-compose.example.yml` to `docker-compose.yml`, edit the values, and run:
+
+```bash
+docker compose up -d
+```
+
+### Requirements
+
+- **Host network** — BLE uses BlueZ via D-Bus, which requires host networking.
+- **D-Bus socket** — mount `/var/run/dbus` read-only so the container can talk to BlueZ.
+- **Capabilities** — `NET_ADMIN` and `NET_RAW` are required for BLE operations.
+- **Bluetooth group** — add the host's `bluetooth` GID so the `node` user can access BLE. Find it with: `getent group bluetooth | cut -d: -f3` (commonly `112`).
+- **Garmin tokens** — if using the Garmin exporter, mount a volume for `/home/node/.garmin_tokens` to persist auth tokens across restarts.
+
+### Available Commands
+
+```bash
+docker run --rm ghcr.io/kristianp26/ble-scale-sync start     # Run sync (default)
+docker run --rm ghcr.io/kristianp26/ble-scale-sync setup     # Interactive setup wizard
+docker run --rm ghcr.io/kristianp26/ble-scale-sync scan      # Discover BLE devices
+docker run --rm ghcr.io/kristianp26/ble-scale-sync validate  # Validate config.yaml
+docker run --rm ghcr.io/kristianp26/ble-scale-sync help      # Show help
+```
+
 ## Configuration
 
 The easiest way to configure the app is with the **interactive setup wizard**:
@@ -495,6 +537,10 @@ The project uses [ESLint](https://eslint.org/) with [typescript-eslint](https://
 
 ```
 ble-scale-sync/
+├── .github/
+│   └── workflows/
+│       ├── ci.yml                  # CI: lint, format, typecheck, tests (Node 20/22)
+│       └── docker.yml              # Docker: multi-arch build + GHCR push on release
 ├── src/
 │   ├── index.ts                    # Entry point (single/multi-user flow, SIGHUP reload, heartbeat)
 │   ├── orchestrator.ts             # Exported orchestration logic (healthchecks, export dispatch)
@@ -596,6 +642,10 @@ ble-scale-sync/
 ├── eslint.config.js                # ESLint flat config
 ├── tsconfig.json                   # TypeScript config (src)
 ├── tsconfig.eslint.json            # TypeScript config (src + tests, for ESLint)
+├── Dockerfile                      # Multi-arch Docker image (node:20-slim + BlueZ + Python)
+├── docker-entrypoint.sh            # Docker entrypoint (start/setup/scan/validate/help)
+├── docker-compose.example.yml      # Example Compose file (host network + BLE)
+├── .dockerignore
 ├── .gitignore
 ├── package.json
 ├── requirements.txt

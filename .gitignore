@@ -33,3 +33,7 @@ config.py
 # Garmin tokens (should not be committed)
 .garmin_tokens/
 .garmin_renpho_tokens/
+
+# Docker Compose (local overrides — docker-compose.example.yml is tracked)
+docker-compose.yml
+docker-compose.override.yml

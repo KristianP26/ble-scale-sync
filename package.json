@@ -39,6 +39,7 @@
     "dotenv": "^16.4.7",
     "mqtt": "^5.10.0",
     "node-ble": "^1.13.0",
+    "tsx": "^4.19.0",
     "yaml": "^2.8.2",
     "zod": "^4.3.6"
   },
@@ -47,7 +48,6 @@
     "eslint": "^9.39.2",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.8.1",
-    "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.55.0",
     "vitest": "^4.0.18"
