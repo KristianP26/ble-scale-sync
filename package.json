@@ -14,7 +14,10 @@
     "lint": "eslint src tests",
     "lint:fix": "eslint src tests --fix",
     "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
-    "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\""
+    "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
   },
   "keywords": [
     "smart-scale",
@@ -50,6 +53,7 @@
     "prettier": "^3.8.1",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.55.0",
+    "vitepress": "^1.6.4",
     "vitest": "^4.0.18"
   }
 }

@@ -1,51 +1,74 @@
+---
+title: Troubleshooting
+description: Common issues, debug tips, and solutions for BLE Scale Sync.
+---
+
 # Troubleshooting
 
-## "Permission denied" on Linux
+## BLE / Scale Issues
 
-Make sure you've granted BLE capabilities to Node.js:
+### Scale not found
+
+- **Step on the scale** to wake it up — most scales go to sleep after a few seconds of inactivity.
+- Verify with `npm run scan` (or the Docker `scan` command) that your scale is visible.
+- If using `scale_mac`, double-check the address matches the scan output.
+- On Linux, make sure Bluetooth is running: `sudo systemctl status bluetooth`
+
+### Connection fails on Raspberry Pi
+
+The app automatically stops BLE discovery before connecting, which resolves most `le-connection-abort-by-local` errors. If connections still fail:
+
+```bash
+sudo systemctl restart bluetooth
+```
+
+Then step on the scale and try again.
+
+### Scale was found before but now isn't discovered (Linux)
+
+BlueZ can sometimes stop reporting previously-seen devices. Restart Bluetooth and try again:
+
+```bash
+sudo systemctl restart bluetooth
+```
+
+### Permission denied (Linux)
+
+Grant BLE capabilities to Node.js:
 
 ```bash
 sudo setcap cap_net_raw+eip $(eval readlink -f $(which node))
 ```
 
-> After a Node.js update, you may need to re-apply this command.
+You need to re-run this after every Node.js update.
 
-## Scale not found
+### Windows BLE issues
 
-- Make sure the scale is powered on (step on it to wake it up).
-- If using a specific `scale_mac`, verify the address matches (`npm run scan`).
-- If using auto-discovery, ensure only one recognized scale is powered on nearby. Auto-discovery works on all platforms (Linux, macOS, Windows) — all adapters match by device name, so `scale_mac` is never required.
-- On Linux, ensure the Bluetooth service is running: `sudo systemctl start bluetooth`.
+- The default driver (`@abandonware/noble`) works with the native Windows Bluetooth stack — no special setup needed.
+- If using `NOBLE_DRIVER=stoprocent`, install the WinUSB driver via [Zadig](https://zadig.akeo.ie/).
+- Run your terminal as Administrator if you get permission errors.
 
-## Connection errors on Raspberry Pi (le-connection-abort-by-local)
+## Exporter Issues
 
-The app automatically stops BLE discovery before connecting, which resolves most `le-connection-abort-by-local` errors on low-power devices like Pi Zero 2W. If you still see connection failures, try restarting Bluetooth:
+### Garmin upload fails
 
-```bash
-sudo systemctl restart bluetooth
-```
+- Re-run the [setup wizard](/guide/configuration#setup-wizard-recommended) or `npm run setup-garmin` to refresh tokens.
+- Check that your Garmin credentials are correct.
+- Garmin may block requests from cloud/VPN IPs — try authenticating from a different network, then copy `~/.garmin_tokens/` to your target machine.
 
-## Scale was found before but now isn't discovered (Linux)
+### MQTT connection hangs or fails
 
-BlueZ (the Linux Bluetooth stack) can sometimes get into a state where it no longer reports a previously-seen device. To fix:
+- Make sure you're using the right protocol: `mqtt://` for plain, `mqtts://` for TLS. Using `mqtt://` on a TLS port (8883) will hang.
+- Check your broker URL, username, and password.
 
-```bash
-sudo systemctl restart bluetooth
-```
+## Debug Mode
 
-Then step on the scale to wake it up and run `npm start` (or `npm run scan` to verify visibility first).
-
-## Garmin upload fails
-
-- Re-run `npm run setup-garmin` to refresh tokens.
-- Check that your Garmin credentials are correct (in `config.yaml` or environment variables).
-- If you're behind a VPN or on a restricted network, try authenticating from a different connection.
-
-## Debug BLE output
-
-Set `DEBUG=true` to see detailed BLE discovery logs (advertised services, discovered characteristics, UUID matching):
+Set `debug: true` in `config.yaml` or use the environment variable to see detailed BLE logs:
 
 ```bash
+# Docker
+docker run ... -e DEBUG=true ghcr.io/kristianp26/ble-scale-sync:latest
+
 # Linux / macOS
 DEBUG=true npm start
 
@@ -53,20 +76,20 @@ DEBUG=true npm start
 $env:DEBUG="true"; npm start
 ```
 
-## Windows BLE issues
+This shows BLE discovery details, advertised services, discovered characteristics, and UUID matching.
 
-- The default BLE driver on Windows is `@abandonware/noble`, which works with the native Windows Bluetooth stack — no special driver setup needed.
-- If you set `NOBLE_DRIVER=stoprocent`, you'll need the WinUSB driver (use [Zadig](https://zadig.akeo.ie/) to switch drivers).
-- Run your terminal as Administrator if you encounter permission errors.
+## Docker Issues
 
-## Token Storage
+### Container can't find BLE adapter
 
-By default, Garmin tokens are stored in `~/.garmin_tokens/`. You can change this with the `token_dir` field in the Garmin exporter config:
+Make sure you're passing all required flags — see [Getting Started](/guide/getting-started#docker) for the full command. The most common mistake is forgetting `--network host` or the D-Bus volume mount.
 
-```yaml
-global_exporters:
-  - type: garmin
-    token_dir: /custom/path/to/tokens
+### Wrong Bluetooth group GID
+
+The `--group-add` value must match your system's Bluetooth group. Find it with:
+
+```bash
+getent group bluetooth | cut -d: -f3
 ```
 
-See [Exporters](exporters.md#garmin-connect) for full Garmin configuration details.
+Common values: `112` (Debian/Ubuntu), `108` (Arch).

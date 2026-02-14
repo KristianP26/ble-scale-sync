@@ -37,3 +37,7 @@ config.py
 # Docker Compose (local overrides — docker-compose.example.yml is tracked)
 docker-compose.yml
 docker-compose.override.yml
+
+# VitePress
+docs/.vitepress/dist/
+docs/.vitepress/cache/

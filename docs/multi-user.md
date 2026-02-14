@@ -1,78 +1,102 @@
+---
+title: Multi-User Support
+description: Automatic weight-based user identification, drift detection, and per-user exporter configuration.
+---
+
 # Multi-User Support
 
-When using `config.yaml` with multiple users, the app automatically identifies who stepped on the scale based on the measured weight. Each user defines a `weight_range` in their config:
+When multiple users are configured, the app automatically identifies who stepped on the scale based on the measured weight. The [setup wizard](/guide/configuration#setup-wizard-recommended) walks you through adding users and setting weight ranges — no manual YAML editing needed.
+
+## How It Works
+
+1. Someone steps on the scale
+2. The app reads the weight and identifies the user by their weight range
+3. Body composition is calculated using that user's profile (height, age, gender, athlete mode)
+4. Data is exported to that user's configured exporters
+5. `last_known_weight` is updated in `config.yaml` for better future matching
+
+Each user defines a `weight_range` so the app knows who's who:
 
 ```yaml
 users:
   - name: Alice
-    weight_range:
-      min: 50
-      max: 70
+    weight_range: { min: 50, max: 70 }
     last_known_weight: null
   - name: Bob
-    weight_range:
-      min: 75
-      max: 100
+    weight_range: { min: 75, max: 100 }
     last_known_weight: 85.5
 ```
 
-## Weight Matching Algorithm
+## Weight Matching
 
-### Matching Priority (4 tiers)
+The app uses a 4-tier priority system to identify users:
 
-1. **Single user** — always matches (warns if weight is outside the configured range)
-2. **Exact range match** — one user's range contains the weight
-3. **Overlapping ranges** — multiple users match; tiebreak by `last_known_weight` proximity, then config order
-4. **No range match** — matches the user with the closest `last_known_weight`
+| Priority | Condition | Behavior |
+|---|---|---|
+| 1 | Single user | Always matches (warns if weight is outside range) |
+| 2 | Exact range match | One user's range contains the weight |
+| 3 | Overlapping ranges | Multiple matches — tiebreak by `last_known_weight` proximity, then config order |
+| 4 | No range match | Closest `last_known_weight` |
 
-If none of the above produce a match, the `unknown_user` strategy applies:
+If no match is found, the `unknown_user` strategy decides what happens:
 
-| Strategy            | Behavior                                                                      |
-| ------------------- | ----------------------------------------------------------------------------- |
-| `nearest` (default) | Picks the user whose range midpoint is closest to the weight (with a warning) |
-| `log`               | Logs a warning and skips the measurement                                      |
-| `ignore`            | Silently skips the measurement                                                |
+| Strategy | Behavior |
+|---|---|
+| `nearest` (default) | Picks the closest range midpoint (with a warning) |
+| `log` | Logs a warning and skips |
+| `ignore` | Silently skips |
 
 ## Drift Detection
 
-After matching, the app checks if the weight falls in the outer 10% of the user's range and logs a warning. This helps you notice when a user's typical weight is drifting toward a range boundary, so you can adjust the config before mismatches occur.
+After matching, the app checks if the weight falls in the **outer 10%** of the user's range. If it does, a warning is logged — so you can adjust the range before mismatches start happening.
+
+For example, if Alice's range is 50–70 kg and she weighs 68.5 kg, the app warns that she's near the upper boundary.
 
 ## Automatic Weight Tracking
 
-After each successful measurement, the user's `last_known_weight` is automatically updated in `config.yaml`. This improves future matching accuracy for overlapping ranges. Updates are debounced (5 seconds) and skipped if the change is less than 0.5 kg.
+After each measurement, the matched user's `last_known_weight` is automatically updated in `config.yaml`. This improves matching accuracy over time, especially when ranges overlap. Updates are debounced (5s) and skipped for changes under 0.5 kg.
 
-## Execution Flow
+## Per-User Exporters
 
-When 2+ users are configured, the main loop uses a different execution path:
+By default, all users share `global_exporters`. If a user needs different export targets (e.g., separate Garmin accounts), define `exporters` on that user — it completely replaces `global_exporters` for them:
 
-1. **Raw scan** — `scanAndReadRaw()` reads weight + impedance without computing body composition
-2. **User matching** — `matchUserByWeight()` identifies who stepped on the scale (4-tier priority)
-3. **Drift detection** — warns if weight is near the boundary of the matched user's range
-4. **Body composition** — computes metrics using the matched user's profile (height, age, gender, athlete)
-5. **Per-user exporters** — resolves and caches exporters for the matched user (user-level + global, deduped by type)
-6. **Export with context** — dispatches to all exporters with `ExportContext` (user name, slug, config, drift warning)
-7. **Weight tracking** — updates `last_known_weight` in `config.yaml` (debounced, atomic write)
+```yaml
+users:
+  - name: Alice
+    # ...
+    exporters:
+      - type: garmin
+        email: 'alice@example.com'
+        password: '${ALICE_GARMIN_PASSWORD}'
 
-## Per-Exporter Multi-User Behavior
+  - name: Bob
+    # ...
+    exporters:
+      - type: garmin
+        email: 'bob@example.com'
+        password: '${BOB_GARMIN_PASSWORD}'
 
-| Exporter     | Multi-user behavior                                                       |
-| ------------ | ------------------------------------------------------------------------- |
-| **MQTT**     | Publishes to `{topic}/{slug}`, per-user HA device discovery + LWT        |
-| **InfluxDB** | Adds `user={slug}` tag to line protocol                                  |
-| **Webhook**  | Adds `user_name` + `user_slug` fields to JSON payload                    |
-| **Ntfy**     | Prepends `[{name}]` to notification, appends drift warning if present    |
-| **Garmin**   | Unchanged (one Garmin account per user via per-user exporter config)      |
+global_exporters:
+  - type: influxdb
+    # ... shared by users without their own exporters list
+```
 
-## SIGHUP Config Reload
+### Exporter behavior in multi-user mode
 
-On Linux/macOS, sending `SIGHUP` to the process triggers a config reload between scan cycles:
+| Exporter | What changes |
+|---|---|
+| **MQTT** | Publishes to `{topic}/{slug}`, per-user HA device + LWT |
+| **InfluxDB** | Adds `user={slug}` tag to line protocol |
+| **Webhook** | Adds `user_name` + `user_slug` fields to JSON |
+| **Ntfy** | Prepends `[{name}]` to notification |
+| **Garmin** | One account per user via per-user exporter config |
+
+## Live Config Reload
+
+On Linux/macOS, you can reload `config.yaml` without restarting by sending `SIGHUP`:
 
 ```bash
 kill -HUP $(pgrep -f "ble-scale-sync")
 ```
 
-The reload acquires the write lock (to avoid conflicting with `last_known_weight` writes), re-validates the YAML via Zod, and clears the exporter cache. If validation fails, the previous config is kept.
-
-## Heartbeat
-
-At the start of each scan cycle, the process writes the current ISO timestamp to `/tmp/.ble-scale-sync-heartbeat`. This can be used for Docker health checks or monitoring.
+The config is re-validated before applying. If validation fails, the previous config is kept.
