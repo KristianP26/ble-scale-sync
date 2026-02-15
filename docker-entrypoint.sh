@@ -16,6 +16,9 @@ case "$CMD" in
   validate)
     exec npx tsx src/config/validate-cli.ts
     ;;
+  setup-garmin)
+    exec python3 garmin-scripts/setup_garmin.py
+    ;;
   help|--help|-h)
     echo "BLE Scale Sync — Docker Commands"
     echo ""
