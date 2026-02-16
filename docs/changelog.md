@@ -7,7 +7,24 @@ description: Version history for BLE Scale Sync.
 
 All notable changes to this project are documented here. Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## v1.2.2 <Badge type="tip" text="latest" /> {#v1-2-2}
+## v1.3.0 <Badge type="tip" text="latest" /> {#v1-3-0}
+
+_2026-02-16_
+
+### Added
+- **Garmin multi-user Docker authentication** - `setup-garmin --user <name>` and `--all-users` commands
+- `setup_garmin.py --from-config` mode reads users and credentials from `config.yaml`
+- `--token-dir` argument for per-user token directories (persisted via Docker volumes)
+- `pyyaml` dependency for config.yaml parsing in Python scripts
+- Docker multi-user volume examples in `docker-compose.example.yml` and docs
+
+### Fixed
+- Friendly error message when D-Bus socket is not accessible in Docker instead of raw `ENOENT` crash (#25)
+
+### Changed
+- Wizard passes Garmin credentials via environment variables instead of CLI arguments (security)
+
+## v1.2.2 {#v1-2-2}
 
 _2026-02-14_
 
