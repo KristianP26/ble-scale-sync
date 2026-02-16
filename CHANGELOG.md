@@ -15,6 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `pyyaml` dependency for config.yaml parsing in Python scripts
 - Docker multi-user volume examples in `docker-compose.example.yml` and docs
 
+### Fixed
+- Friendly error message when D-Bus socket is not accessible (missing `-v /var/run/dbus:/var/run/dbus:ro` in Docker) instead of raw `ENOENT` crash (#25)
+
 ### Changed
 - Wizard passes Garmin credentials via environment variables instead of CLI arguments (security)
 

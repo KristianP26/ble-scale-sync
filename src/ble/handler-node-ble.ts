@@ -24,6 +24,21 @@ type GattCharacteristic = NodeBle.GattCharacteristic;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+function isDbusConnectionError(err: unknown): boolean {
+  const msg = errMsg(err);
+  return msg.includes('ENOENT') && msg.includes('bus_socket');
+}
+
+function dbusError(): Error {
+  return new Error(
+    'Cannot connect to D-Bus — Bluetooth is not accessible.\n' +
+      'If running in Docker, mount the D-Bus socket:\n' +
+      '  -v /var/run/dbus:/var/run/dbus:ro\n' +
+      'On the host, ensure bluetoothd is running:\n' +
+      '  sudo systemctl start bluetooth',
+  );
+}
+
 /** Stop discovery and wait for the post-discovery quiesce period. */
 async function stopDiscoveryAndQuiesce(btAdapter: Adapter): Promise<void> {
   try {
@@ -312,11 +327,26 @@ async function buildCharMap(gatt: NodeBle.GattServer): Promise<Map<string, BleCh
  */
 export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   const { targetMac, adapters, profile, weightUnit, onLiveData, abortSignal } = opts;
-  const { bluetooth, destroy } = NodeBle.createBluetooth();
+
+  let bluetooth: NodeBle.Bluetooth;
+  let destroy: () => void;
+  try {
+    ({ bluetooth, destroy } = NodeBle.createBluetooth());
+  } catch (err) {
+    if (isDbusConnectionError(err)) throw dbusError();
+    throw err;
+  }
+
   let device: Device | null = null;
 
   try {
-    const btAdapter = await bluetooth.defaultAdapter();
+    let btAdapter: Adapter;
+    try {
+      btAdapter = await bluetooth.defaultAdapter();
+    } catch (err) {
+      if (isDbusConnectionError(err)) throw dbusError();
+      throw err;
+    }
 
     if (!(await btAdapter.isPowered())) {
       throw new Error(
@@ -469,10 +499,23 @@ export async function scanDevices(
   adapters: ScaleAdapter[],
   durationMs = 15_000,
 ): Promise<ScanResult[]> {
-  const { bluetooth, destroy } = NodeBle.createBluetooth();
+  let bluetooth: NodeBle.Bluetooth;
+  let destroy: () => void;
+  try {
+    ({ bluetooth, destroy } = NodeBle.createBluetooth());
+  } catch (err) {
+    if (isDbusConnectionError(err)) throw dbusError();
+    throw err;
+  }
 
   try {
-    const btAdapter = await bluetooth.defaultAdapter();
+    let btAdapter: Adapter;
+    try {
+      btAdapter = await bluetooth.defaultAdapter();
+    } catch (err) {
+      if (isDbusConnectionError(err)) throw dbusError();
+      throw err;
+    }
 
     if (!(await btAdapter.isPowered())) {
       throw new Error(
