@@ -150,10 +150,104 @@ describe('EsCs20mAdapter', () => {
       buf[0] = 0x14;
       expect(adapter.parseNotification(buf)).toBeNull();
     });
+
+    it('rejects weight below 0.5 kg', () => {
+      const adapter = makeAdapter();
+      const buf = Buffer.alloc(10);
+      buf[0] = 0x14;
+      buf[5] = 0x01;
+      buf.writeUInt16BE(10, 8); // 0.10 kg
+      expect(adapter.parseNotification(buf)).toBeNull();
+    });
+
+    it('rejects weight above 300 kg', () => {
+      const adapter = makeAdapter();
+      const buf = Buffer.alloc(10);
+      buf[0] = 0x14;
+      buf[5] = 0x01;
+      buf.writeUInt16BE(30100, 8); // 301.00 kg
+      expect(adapter.parseNotification(buf)).toBeNull();
+    });
+
+    it('parses 0x11 STOP frame and returns accumulated reading', () => {
+      const adapter = makeAdapter();
+
+      // Weight frame first
+      const w = Buffer.alloc(10);
+      w[0] = 0x14;
+      w[5] = 0x00; // not stable
+      w.writeUInt16BE(7500, 8); // 75.00 kg
+      adapter.parseNotification(w);
+
+      // STOP frame
+      const stop = Buffer.alloc(6);
+      stop[0] = 0x11;
+      stop[5] = 0x00; // STOP
+      const reading = adapter.parseNotification(stop);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBe(75);
+    });
+
+    it('parses 0x11 STOP frame with 55 AA header', () => {
+      const adapter = makeAdapter();
+
+      const w = Buffer.alloc(10);
+      w[0] = 0x14;
+      w.writeUInt16BE(8000, 8);
+      adapter.parseNotification(w);
+
+      const stop = Buffer.alloc(8);
+      stop[0] = 0x55;
+      stop[1] = 0xaa;
+      stop[2] = 0x11;
+      stop[5] = 0x00;
+      const reading = adapter.parseNotification(stop);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBe(80);
+    });
+
+    it('0x11 START frame resets state', () => {
+      const adapter = makeAdapter();
+
+      // Weight frame
+      const w = Buffer.alloc(12);
+      w[0] = 0x14;
+      w[5] = 0x01;
+      w.writeUInt16BE(8000, 8);
+      w.writeUInt16BE(500, 10);
+      adapter.parseNotification(w);
+
+      // START frame resets
+      const start = Buffer.alloc(6);
+      start[0] = 0x11;
+      start[5] = 0x01;
+      adapter.parseNotification(start);
+
+      // STOP with no weight accumulated returns null
+      const stop = Buffer.alloc(6);
+      stop[0] = 0x11;
+      stop[5] = 0x00;
+      expect(adapter.parseNotification(stop)).toBeNull();
+    });
+
+    it('0x11 STOP returns null when no weight accumulated', () => {
+      const adapter = makeAdapter();
+      const stop = Buffer.alloc(6);
+      stop[0] = 0x11;
+      stop[5] = 0x00;
+      expect(adapter.parseNotification(stop)).toBeNull();
+    });
+
+    it('returns null for 0x11 frame shorter than 6 bytes', () => {
+      const adapter = makeAdapter();
+      const buf = Buffer.alloc(5);
+      buf[0] = 0x11;
+      expect(adapter.parseNotification(buf)).toBeNull();
+    });
   });
 
   describe('isComplete()', () => {
-    it('returns true when weight > 0 and stable', () => {
+    it('returns true when weight > 0 and stable flag set', () => {
       const adapter = makeAdapter();
       const buf = Buffer.alloc(10);
       buf[0] = 0x14;
@@ -164,7 +258,28 @@ describe('EsCs20mAdapter', () => {
       expect(adapter.isComplete({ weight: 80, impedance: 0 })).toBe(true);
     });
 
-    it('returns false when not stable', () => {
+    it('returns true when weight > 0 and STOP frame received', () => {
+      const adapter = makeAdapter();
+
+      // Weight frame without stable flag
+      const w = Buffer.alloc(10);
+      w[0] = 0x14;
+      w[5] = 0x00;
+      w.writeUInt16BE(8000, 8);
+      adapter.parseNotification(w);
+
+      expect(adapter.isComplete({ weight: 80, impedance: 0 })).toBe(false);
+
+      // STOP frame
+      const stop = Buffer.alloc(6);
+      stop[0] = 0x11;
+      stop[5] = 0x00;
+      adapter.parseNotification(stop);
+
+      expect(adapter.isComplete({ weight: 80, impedance: 0 })).toBe(true);
+    });
+
+    it('returns false when not stable and no STOP frame', () => {
       const adapter = makeAdapter();
       const buf = Buffer.alloc(10);
       buf[0] = 0x14;

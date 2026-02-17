@@ -11,15 +11,20 @@ const CHR_NOTIFY = uuid16(0x2a10);
 const CHR_WRITE = uuid16(0x2a11);
 
 /**
- * Adapter for the ES-CS20M BLE body-composition scale.
+ * Adapter for the ES-CS20M BLE body-composition scale (Yunmai lineage).
  *
  * Protocol details:
  *   - Service 0x1A10, notify 0x2A10, write 0x2A11
  *   - Start measurement command: [0x55, 0xAA, 0x90, ...]
- *   - Message ID 0x14 (weight frame): stability, weight, optional resistance
+ *   - Message ID 0x11 (start/stop frame): byte[5]=0x01 start, byte[5]=0x00 stop
+ *   - Message ID 0x14 (weight frame): weight at [8-9], optional resistance at [10-11]
  *   - Message ID 0x15 (extended frame): resistance at bytes [9-10]
  *   - Weight at [8-9] big-endian uint16 / 100 (kg)
- *   - Complete when weight > 0 and measurement is stable
+ *   - Complete when stable flag is set (some firmware) or STOP frame received (others)
+ *
+ * Per openScale PR #1300, some firmware variants do not use a per-frame stability
+ * flag in 0x14 frames. Instead, stability is signaled by a 0x11 STOP frame.
+ * This adapter supports both paths.
  */
 export class EsCs20mAdapter implements ScaleAdapter {
   readonly name = 'ES-CS20M';
@@ -30,7 +35,9 @@ export class EsCs20mAdapter implements ScaleAdapter {
   readonly unlockIntervalMs = 0;
 
   private stable = false;
+  private stopped = false;
   private resistance = 0;
+  private lastWeight = 0;
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
@@ -44,24 +51,49 @@ export class EsCs20mAdapter implements ScaleAdapter {
   /**
    * Parse an ES-CS20M notification frame.
    *
-   * Two message types are handled:
+   * Three message types are handled:
    *
-   * ID 0x14 — weight frame:
-   *   [5]      stability flag (!=0 means stable)
+   * ID 0x11 - start/stop frame:
+   *   [5]      0x01 = start, 0x00 = stop (measurement complete)
+   *
+   * ID 0x14 - weight frame:
+   *   [5]      stability flag (some firmware only, others always 0)
    *   [8-9]    weight, big-endian uint16 / 100 (kg)
    *   [10-11]  resistance, big-endian uint16 (optional)
    *
-   * ID 0x15 — extended frame:
+   * ID 0x15 - extended frame:
    *   [9-10]   resistance, big-endian uint16
    */
   parseNotification(data: Buffer): ScaleReading | null {
     if (data.length < 2) return null;
 
     // Robust msgId: try data[2] first (with 55 AA header), fall back to data[0] (stripped)
-    const msgId = data.length > 2 && (data[2] === 0x14 || data[2] === 0x15) ? data[2] : data[0];
+    const msgId =
+      data.length > 2 && (data[2] === 0x11 || data[2] === 0x14 || data[2] === 0x15)
+        ? data[2]
+        : data[0];
+
+    // 0x11 - start/stop control frame
+    if (msgId === 0x11) {
+      if (data.length < 6) return null;
+      if (data[5] === 0x01) {
+        // START: reset state for new measurement
+        this.stable = false;
+        this.stopped = false;
+        this.resistance = 0;
+        this.lastWeight = 0;
+      } else if (data[5] === 0x00) {
+        // STOP: measurement complete, return last accumulated reading
+        this.stopped = true;
+        if (this.lastWeight > 0) {
+          return { weight: this.lastWeight, impedance: this.resistance };
+        }
+      }
+      return null;
+    }
 
     if (msgId === 0x15) {
-      // Extended frame — resistance only
+      // Extended frame - resistance only
       if (data.length >= 11) {
         this.resistance = data.readUInt16BE(9);
       }
@@ -74,7 +106,8 @@ export class EsCs20mAdapter implements ScaleAdapter {
     this.stable = data[5] !== 0;
     const weight = data.readUInt16BE(8) / 100;
 
-    if (weight <= 0 || !Number.isFinite(weight)) return null;
+    // Range validation (0.5-300 kg) filters garbage during initial connection
+    if (weight < 0.5 || weight > 300 || !Number.isFinite(weight)) return null;
 
     // Optional resistance in the weight frame
     if (data.length >= 12) {
@@ -82,11 +115,12 @@ export class EsCs20mAdapter implements ScaleAdapter {
       if (r > 0) this.resistance = r;
     }
 
+    this.lastWeight = weight;
     return { weight, impedance: this.resistance };
   }
 
   isComplete(reading: ScaleReading): boolean {
-    return reading.weight > 0 && this.stable;
+    return reading.weight > 0 && (this.stable || this.stopped);
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
