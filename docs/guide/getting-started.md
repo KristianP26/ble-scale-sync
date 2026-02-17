@@ -126,6 +126,11 @@ For always-on deployments (e.g. Raspberry Pi), create a systemd service:
 [Unit]
 Description=BLE Scale Sync
 After=network.target bluetooth.target
+# Disable the default restart rate limit (5 starts per 10s).
+# Without this, systemd stops restarting the service after repeated
+# BLE or network failures -- on a headless device this means silent
+# downtime until you notice and manually intervene.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
