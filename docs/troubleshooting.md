@@ -44,9 +44,26 @@ You need to re-run this after every Node.js update.
 
 ### Windows BLE issues
 
-- The default driver (`@abandonware/noble`) works with the native Windows Bluetooth stack — no special setup needed.
+- The default driver (`@abandonware/noble`) works with the native Windows Bluetooth stack -- no special setup needed.
 - If using `NOBLE_DRIVER=stoprocent`, install the WinUSB driver via [Zadig](https://zadig.akeo.ie/).
 - Run your terminal as Administrator if you get permission errors.
+
+### Switching the BLE handler
+
+BLE Scale Sync ships with three BLE handlers. If you're having connection issues, try a different one by adding this to your `config.yaml`:
+
+```yaml
+ble:
+  noble_driver: stoprocent   # or: abandonware
+```
+
+| Handler | Platforms | Notes |
+|---------|-----------|-------|
+| `node-ble` (default on Linux) | Linux only | Uses BlueZ D-Bus. Most reliable on Raspberry Pi. Service UUIDs not available during scan (only after connecting). |
+| `@abandonware/noble` (default on Windows) | Linux, Windows | Mature driver. Uses WinRT on Windows. |
+| `@stoprocent/noble` (default on macOS) | Linux, macOS, Windows | Newer driver. Exposes service UUIDs during scan. On Windows, requires the [WinUSB driver](https://zadig.akeo.ie/). |
+
+If your scale is not being recognized during scan but you know its MAC address, set `scale_mac` in `config.yaml` -- the adapter will match post-connect using GATT service UUIDs regardless of the handler.
 
 ## Exporter Issues
 
