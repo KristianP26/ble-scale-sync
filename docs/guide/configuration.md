@@ -100,9 +100,14 @@ global_exporters:
   - type: garmin
     email: '${GARMIN_EMAIL}'
     password: '${GARMIN_PASSWORD}'
+    token_dir: /app/tokens
 ```
 
 Shared by all users unless a user defines their own `exporters` list. See [Exporters](/exporters) for all 5 targets and their configuration fields.
+
+::: warning Garmin Connect on Docker
+When using Garmin Connect in Docker, you must configure `token_dir` to a writable path (e.g., `/app/tokens`) and mount a host directory to that path. See [Exporters — Garmin Connect](/exporters#garmin) for details.
+:::
 
 ### Runtime
 

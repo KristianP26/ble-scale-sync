@@ -21,17 +21,18 @@ Exporters are configured in `global_exporters` (shared by all users). For multi-
 
 Automatic body composition upload to Garmin Connect — no phone app needed. Uses a Python subprocess with cached authentication tokens.
 
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `email` | Yes | — | Garmin account email |
-| `password` | Yes | — | Garmin account password |
-| `token_dir` | No | `~/.garmin_tokens` | Directory for cached auth tokens |
+| Field       | Required | Default            | Description                                                       |
+| ----------- | -------- | ------------------ | ----------------------------------------------------------------- |
+| `email`     | Yes      | —                  | Garmin account email                                              |
+| `password`  | Yes      | —                  | Garmin account password                                           |
+| `token_dir` | No       | `~/.garmin_tokens` | Directory for cached auth tokens (required in Docker - see below) |
 
 ```yaml
 global_exporters:
   - type: garmin
     email: '${GARMIN_EMAIL}'
     password: '${GARMIN_PASSWORD}'
+    token_dir: /app/tokens
 ```
 
 ::: tip Authentication
@@ -46,9 +47,10 @@ npm run setup-garmin
 **Docker (single user with env vars):**
 
 ```bash
+mkdir tokens
 docker run --rm -it \
   -v ./config.yaml:/app/config.yaml \
-  -v garmin-tokens:/home/node/.garmin_tokens \
+  -v ./tokens:/app/tokens \
   -e GARMIN_EMAIL \
   -e GARMIN_PASSWORD \
   ghcr.io/kristianp26/ble-scale-sync:latest setup-garmin
@@ -57,9 +59,10 @@ docker run --rm -it \
 **Docker (specific user from config.yaml):**
 
 ```bash
+mkdir tokens
 docker run --rm -it \
   -v ./config.yaml:/app/config.yaml \
-  -v garmin-tokens-alice:/home/node/.garmin_tokens_alice \
+  -v ./tokens:/app/tokens \
   -e GARMIN_EMAIL -e GARMIN_PASSWORD \
   ghcr.io/kristianp26/ble-scale-sync:latest setup-garmin --user Alice
 ```
@@ -67,15 +70,25 @@ docker run --rm -it \
 **Docker (all users from config.yaml):**
 
 ```bash
+mkdir tokens
 docker run --rm -it \
   -v ./config.yaml:/app/config.yaml \
-  -v garmin-tokens-alice:/home/node/.garmin_tokens_alice \
-  -v garmin-tokens-bob:/home/node/.garmin_tokens_bob \
+  -v ./tokens:/app/tokens \
   -e GARMIN_EMAIL -e GARMIN_PASSWORD \
   ghcr.io/kristianp26/ble-scale-sync:latest setup-garmin --all-users
 ```
 
 :::
+
+::: warning Docker Token Directory
+When running in Docker, you **must** set `token_dir` to a writable path inside the container (e.g., `/app/tokens`) and mount a host directory to that path. The default `~/.garmin_tokens` is intended when you run the application natively.
+
+Example:
+
+1. Create a tokens directory: `mkdir tokens`
+2. Set `token_dir: /app/tokens` in your config.yaml
+3. Mount it: `-v ./tokens:/app/tokens`
+   :::
 
 ::: warning IP blocking
 Garmin may block requests from cloud/VPN IPs. If authentication fails, try from a different network, then copy the token directory to your target machine.
