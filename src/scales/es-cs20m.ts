@@ -34,7 +34,11 @@ export class EsCs20mAdapter implements ScaleAdapter {
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
-    return name.includes('es-cs20m');
+    if (name.includes('es-cs20m')) return true;
+
+    // Fallback: match by vendor service UUID (0x1A10) for unnamed devices
+    const uuids = (device.serviceUuids || []).map((u) => u.toLowerCase());
+    return uuids.some((u) => u === '1a10' || u === uuid16(0x1a10));
   }
 
   /**

@@ -32,6 +32,21 @@ describe('EsCs20mAdapter', () => {
       const adapter = makeAdapter();
       expect(adapter.matches(mockPeripheral('Random Scale'))).toBe(false);
     });
+
+    it('matches by vendor service UUID 0x1A10 (unnamed device)', () => {
+      const adapter = makeAdapter();
+      expect(adapter.matches(mockPeripheral('', ['1a10']))).toBe(true);
+    });
+
+    it('matches by full 128-bit vendor service UUID (dashless)', () => {
+      const adapter = makeAdapter();
+      expect(adapter.matches(mockPeripheral('', ['00001a1000001000800000805f9b34fb']))).toBe(true);
+    });
+
+    it('does not match unrelated service UUID', () => {
+      const adapter = makeAdapter();
+      expect(adapter.matches(mockPeripheral('', ['ffe0']))).toBe(false);
+    });
   });
 
   describe('parseNotification()', () => {
