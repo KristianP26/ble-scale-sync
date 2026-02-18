@@ -10,6 +10,7 @@ import { SoehnleScaleAdapter } from './soehnle.js';
 import { MedisanaBs44xAdapter } from './medisana-bs44x.js';
 import { TrisaAdapter } from './trisa.js';
 import { EsCs20mAdapter } from './es-cs20m.js';
+import { RenphoBroadcastAdapter } from './renpho-broadcast.js';
 import { ExingtechY1Adapter } from './exingtech-y1.js';
 import { ExcelvanCF369Adapter } from './excelvan-cf369.js';
 import { HesleyScaleAdapter } from './hesley.js';
@@ -37,6 +38,7 @@ export const adapters: ScaleAdapter[] = [
   new SoehnleScaleAdapter(),
   new MedisanaBs44xAdapter(),
   new TrisaAdapter(),
+  new RenphoBroadcastAdapter(),
   new EsCs20mAdapter(),
   new ExingtechY1Adapter(),
   new ExcelvanCF369Adapter(),

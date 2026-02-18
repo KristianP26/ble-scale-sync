@@ -16,7 +16,12 @@ async function main(): Promise<void> {
 
   log.info('Scanning for BLE devices... (15 seconds)\n');
 
-  const results: ScanResult[] = await scanDevices(adapters, 15_000);
+  const results: ScanResult[] = await scanDevices(
+    adapters,
+    15_000,
+    bleConfig.bleHandler,
+    bleConfig.mqttProxy,
+  );
   const recognized = results.filter((r) => r.matchedAdapter);
 
   for (const r of results) {

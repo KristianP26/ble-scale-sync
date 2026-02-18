@@ -17,7 +17,7 @@ export const bleStep: WizardStep = {
   order: 20,
 
   async run(ctx: WizardContext): Promise<void> {
-    if (!ctx.config.ble) ctx.config.ble = {};
+    if (!ctx.config.ble) ctx.config.ble = { handler: 'auto' };
 
     for (;;) {
       const choice = await ctx.prompts.select('How do you want to identify your scale?', [
@@ -63,8 +63,15 @@ export const bleStep: WizardStep = {
       try {
         const { scanDevices } = await import('../../ble/index.js');
         const { adapters } = await import('../../scales/index.js');
+        const { loadBleConfig } = await import('../../config/load.js');
 
-        const results = await scanDevices(adapters, 15_000);
+        const bleConfig = loadBleConfig();
+        const results = await scanDevices(
+          adapters,
+          15_000,
+          bleConfig.bleHandler,
+          bleConfig.mqttProxy,
+        );
         const recognized = results.filter((r) => r.matchedAdapter);
 
         if (recognized.length === 0) {

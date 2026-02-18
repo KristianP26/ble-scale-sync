@@ -1,0 +1,5 @@
+# MicroPython libraries — installed via mpremote mip (not pip)
+# See flash.sh for the install commands
+aioble
+github:peterhinch/micropython-mqtt
+github:peterhinch/micropython-async/v3/primitives

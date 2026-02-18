@@ -1,0 +1,10 @@
+{
+  "wifi_ssid": "MyNetwork",
+  "wifi_password": "secret",
+  "mqtt_broker": "192.168.1.100",
+  "mqtt_port": 1883,
+  "mqtt_user": null,
+  "mqtt_password": null,
+  "device_id": "esp32-ble-proxy",
+  "topic_prefix": "ble-proxy"
+}

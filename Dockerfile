@@ -1,4 +1,17 @@
-FROM node:20-slim AS base
+# ── Build stage: compile TypeScript ──────────────────────────────────
+ARG BUILDPLATFORM
+FROM --platform=$BUILDPLATFORM node:20-alpine AS build
+
+WORKDIR /app
+
+COPY package.json package-lock.json tsconfig.json ./
+RUN npm ci --ignore-scripts
+
+COPY src/ ./src/
+RUN npm run build
+
+# ── Runtime stage ────────────────────────────────────────────────────
+FROM node:20-alpine
 
 # OCI labels
 ARG VERSION=dev
@@ -13,20 +26,17 @@ LABEL org.opencontainers.image.title="BLE Scale Sync" \
       org.opencontainers.image.licenses="GPL-3.0"
 
 # System dependencies: BLE (BlueZ + D-Bus), Python (Garmin upload), tini (PID 1),
-# build-essential (node-gyp needs gcc/g++/make for native BLE modules)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      bluetooth \
+# build-base (node-gyp needs gcc/g++/make for native BLE modules)
+RUN apk add --no-cache \
       bluez \
-      libbluetooth-dev \
-      libusb-1.0-0-dev \
-      libdbus-1-dev \
+      bluez-dev \
+      libusb-dev \
+      dbus-dev \
       dbus \
-      build-essential \
+      build-base \
       python3 \
-      python3-pip \
-      python3-venv \
-      tini \
-    && rm -rf /var/lib/apt/lists/*
+      py3-pip \
+      tini
 
 WORKDIR /app
 
@@ -34,17 +44,19 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip3 install --break-system-packages --no-cache-dir -r requirements.txt
 
-# Node.js dependencies (production only — tsx is in dependencies)
+# Node.js dependencies (production only)
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-# Application source
-COPY src/ ./src/
+# Compiled application
+COPY --from=build /app/dist/ ./dist/
+
+# Supporting files
 COPY garmin-scripts/ ./garmin-scripts/
-COPY tsconfig.json docker-entrypoint.sh ./
+COPY docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh
 
-# Non-root user (UID 1000 from node:20-slim)
+# Non-root user (UID 1000 from node:20-alpine)
 USER node
 
 # Heartbeat check: /tmp/.ble-scale-sync-heartbeat must be updated within 5 minutes

@@ -5,16 +5,16 @@ CMD="${1:-start}"
 
 case "$CMD" in
   start)
-    exec npx tsx src/index.ts
+    exec node dist/index.js
     ;;
   setup)
-    exec npx tsx src/wizard/index.ts
+    exec node dist/wizard/index.js
     ;;
   scan)
-    exec npx tsx src/scan.ts
+    exec node dist/scan.js
     ;;
   validate)
-    exec npx tsx src/config/validate-cli.ts
+    exec node dist/config/validate-cli.js
     ;;
   setup-garmin)
     shift

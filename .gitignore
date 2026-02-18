@@ -6,6 +6,7 @@ config.yaml.tmp
 
 # Node.js
 node_modules/
+dist/
 
 # Python
 __pycache__/
@@ -29,6 +30,10 @@ Thumbs.db
 
 # Legacy config (pre-v2)
 config.py
+
+# ESP32 firmware config (contains WiFi/MQTT credentials)
+firmware/config.json
+firmware/*.bin
 
 # Garmin tokens (should not be committed)
 .garmin_tokens/
