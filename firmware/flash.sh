@@ -119,6 +119,7 @@ upload_app() {
   mpremote connect "$port" cp config.json :config.json
   mpremote connect "$port" cp boot.py :boot.py
   mpremote connect "$port" cp ble_bridge.py :ble_bridge.py
+  mpremote connect "$port" cp beep.py :beep.py
   mpremote connect "$port" cp main.py :main.py
   green "Application uploaded"
 }

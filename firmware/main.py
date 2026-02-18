@@ -11,6 +11,7 @@ import gc
 import time
 from mqtt_as import MQTTClient, config as mqtt_config
 from ble_bridge import BleBridge
+from beep import beep
 # Load config
 with open("config.json") as f:
     cfg = json.load(f)
@@ -36,6 +37,10 @@ _subs_ready = False
 # Pending commands set by the sync callback, processed in the async main loop
 _pending = []
 
+# Scale MAC detection for instant beep
+_scale_macs = set()
+_last_beep_time = 0
+
 
 def topic(suffix):
     return f"{BASE}/{suffix}"
@@ -57,7 +62,16 @@ mqtt_config["queue_len"] = 0  # callback mode
 
 def on_message(topic_bytes, msg, retained):
     """Sync callback — queue the command for async processing."""
+    global _scale_macs
     t = topic_bytes.decode() if isinstance(topic_bytes, (bytes, bytearray)) else topic_bytes
+    if t == topic("config"):
+        try:
+            data = json.loads(msg)
+            _scale_macs = set(data.get("scales", []))
+            print(f"Config: {len(_scale_macs)} scale MAC(s)")
+        except Exception as e:
+            print(f"Bad config payload: {e}")
+        return
     _pending.append((t, msg))
 
 
@@ -67,6 +81,8 @@ async def on_connect(client_ref):
     _subs_ready = False
     await client_ref.subscribe(topic("connect"), 0)
     await client_ref.subscribe(topic("disconnect"), 0)
+    await client_ref.subscribe(topic("config"), 0)
+    await client_ref.subscribe(topic("beep"), 0)
     # Re-subscribe write/read wildcards if a BLE device is connected
     if _char_subscribed:
         await client_ref.subscribe(topic("write/#"), 0)
@@ -100,7 +116,7 @@ async def publish_error(message):
 
 async def scan_loop():
     """Continuously scan for BLE devices and publish results."""
-    global _busy, _subs_ready
+    global _busy, _subs_ready, _last_beep_time
     _last_scan_time = 0
 
     while True:
@@ -127,6 +143,14 @@ async def scan_loop():
             results = await bridge.scan()
             gc.collect()
             print(f"Scan done: {len(results)} devices (free: {gc.mem_free()})")
+            # Beep if a known scale MAC is present (60s debounce)
+            if _scale_macs and time.ticks_diff(time.ticks_ms(), _last_beep_time) > 60000:
+                for r in results:
+                    if r["address"] in _scale_macs:
+                        _last_beep_time = time.ticks_ms()
+                        print(f"Scale detected: {r['address']}")
+                        beep()
+                        break
             # Wait for mqtt_as to reconnect after BLE radio disruption.
             # If the connection survived (didn't drop), on_connect won't fire,
             # so _subs_ready stays False. Detect this and restore it.
@@ -236,6 +260,12 @@ async def main():
                     await handle_connect(msg)
                 elif t == topic("disconnect"):
                     await handle_disconnect()
+                elif t == topic("beep"):
+                    if msg:
+                        d = json.loads(msg)
+                        beep(d.get("freq", 1000), d.get("duration", 200), d.get("repeat", 1))
+                    else:
+                        beep()
                 elif t.startswith(topic("write/")):
                     uuid_str = t[len(topic("write/")):]
                     await handle_write(uuid_str, msg)

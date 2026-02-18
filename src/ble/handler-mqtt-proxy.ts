@@ -51,6 +51,8 @@ function topics(prefix: string, deviceId: string) {
     connected: `${base}/connected`,
     disconnect: `${base}/disconnect`,
     disconnected: `${base}/disconnected`,
+    config: `${base}/config`,
+    beep: `${base}/beep`,
     notify: (uuid: string) => `${base}/notify/${uuid}`,
     write: (uuid: string) => `${base}/write/${uuid}`,
     read: (uuid: string) => `${base}/read/${uuid}`,
@@ -274,9 +276,12 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
 
     let matchedAdapter: ScaleAdapter;
     let connected: ConnectedPayload | undefined;
+    let resolvedMac: string | undefined;
 
     if (targetMac) {
       // Connect first, then match adapter from GATT characteristics
+      resolvedMac = targetMac;
+      if (config) registerScaleMac(config, resolvedMac).catch(() => {});
       bleLog.info(`Connecting to ${targetMac} via ESP32 proxy...`);
       connected = await mqttConnect(client, t, targetMac);
       const charUuids = connected.chars.map((c) => normalizeUuid(c.uuid));
@@ -326,9 +331,13 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       }
 
       matchedAdapter = matched.adapter;
+      resolvedMac = matched.entry.address;
       bleLog.info(
         `Auto-discovered: ${matchedAdapter.name} (${matched.entry.name || matched.entry.address})`,
       );
+
+      // Register MAC so ESP32 beeps on future scans (before connect attempt)
+      if (config) registerScaleMac(config, resolvedMac).catch(() => {});
 
       // Broadcast adapter — extract reading directly from advertisement data
       if (matchedAdapter.parseBroadcast && matched.entry.manufacturer_data) {
@@ -382,6 +391,62 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
 export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
   const { reading, adapter } = await scanAndReadRaw(opts);
   return adapter.computeMetrics(reading, opts.profile);
+}
+
+/** Tracked scale MACs discovered via adapter matching. */
+const discoveredScaleMacs = new Set<string>();
+
+export async function publishConfig(config: MqttProxyConfig, scales: string[]): Promise<void> {
+  const t = topics(config.topic_prefix, config.device_id);
+  const client = await createMqttClient(config);
+  try {
+    await client.publishAsync(t.config, JSON.stringify({ scales }), { retain: true });
+  } finally {
+    try {
+      await client.endAsync();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/**
+ * Register a discovered scale MAC and publish the updated set to the ESP32.
+ * Called after a successful adapter match so the ESP32 can beep on future scans.
+ */
+export async function registerScaleMac(config: MqttProxyConfig, mac: string): Promise<void> {
+  const upper = mac.toUpperCase();
+  if (discoveredScaleMacs.has(upper)) return; // already known
+  discoveredScaleMacs.add(upper);
+  bleLog.info(`Registered scale MAC ${upper} for ESP32 beep (${discoveredScaleMacs.size} total)`);
+  await publishConfig(config, [...discoveredScaleMacs]);
+}
+
+export async function publishBeep(
+  config: MqttProxyConfig,
+  freq?: number,
+  duration?: number,
+  repeat?: number,
+): Promise<void> {
+  const t = topics(config.topic_prefix, config.device_id);
+  const client = await createMqttClient(config);
+  try {
+    const payload =
+      freq != null || duration != null || repeat != null
+        ? JSON.stringify({
+            ...(freq != null ? { freq } : {}),
+            ...(duration != null ? { duration } : {}),
+            ...(repeat != null ? { repeat } : {}),
+          })
+        : '';
+    await client.publishAsync(t.beep, payload);
+  } finally {
+    try {
+      await client.endAsync();
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 export async function scanDevices(

@@ -3,6 +3,7 @@
 import { parseArgs } from 'node:util';
 import { writeFileSync } from 'node:fs';
 import { scanAndRead, scanAndReadRaw } from './ble/index.js';
+import { publishBeep } from './ble/handler-mqtt-proxy.js';
 import { abortableSleep } from './ble/types.js';
 import { adapters } from './scales/index.js';
 import { createLogger } from './logger.js';
@@ -248,12 +249,21 @@ async function runMultiUserCycle(): Promise<boolean> {
 
   if (!match.user) {
     if (match.warning) log.warn(match.warning);
+    // Beep: unknown / out of range (3× low tone)
+    if (bleHandler === 'mqtt-proxy' && mqttProxy) {
+      publishBeep(mqttProxy, 600, 150, 3).catch(() => {});
+    }
     return true; // Not a failure — strategy decided to skip
   }
 
   const user = match.user;
   const prefix = `[${user.name}]`;
   log.info(`${prefix} Matched (tier: ${match.tier})`);
+
+  // Beep: user matched (2× high tone)
+  if (bleHandler === 'mqtt-proxy' && mqttProxy) {
+    publishBeep(mqttProxy, 1200, 200, 2).catch(() => {});
+  }
 
   // Drift detection
   const drift = detectWeightDrift(user, weight);

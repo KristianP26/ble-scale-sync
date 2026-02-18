@@ -125,7 +125,7 @@ function createMockAdapter(name = 'TestScale'): ScaleAdapter {
 // ─── Import the module under test ────────────────────────────────────────────
 
 // Must import AFTER vi.mock
-const { scanAndReadRaw, scanAndRead, scanDevices } =
+const { scanAndReadRaw, scanAndRead, scanDevices, publishConfig, publishBeep, registerScaleMac } =
   await import('../../src/ble/handler-mqtt-proxy.js');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -684,5 +684,74 @@ describe('handler-mqtt-proxy', () => {
       const remaining = mockClient._listeners.get('message') ?? [];
       expect(remaining).toHaveLength(0);
     }, 35_000);
+  });
+
+  describe('publishConfig', () => {
+    it('publishes scale MACs with retain flag', async () => {
+      await publishConfig(MQTT_PROXY_CONFIG, ['ED:67:39:4B:27:FC']);
+
+      expect(mockClient.publishAsync).toHaveBeenCalledWith(
+        `${PREFIX}/config`,
+        JSON.stringify({ scales: ['ED:67:39:4B:27:FC'] }),
+        { retain: true },
+      );
+      expect(mockClient.endAsync).toHaveBeenCalled();
+    });
+
+    it('publishes empty scales array', async () => {
+      await publishConfig(MQTT_PROXY_CONFIG, []);
+
+      expect(mockClient.publishAsync).toHaveBeenCalledWith(
+        `${PREFIX}/config`,
+        JSON.stringify({ scales: [] }),
+        { retain: true },
+      );
+    });
+  });
+
+  describe('registerScaleMac', () => {
+    it('publishes discovered MAC to config topic', async () => {
+      await registerScaleMac(MQTT_PROXY_CONFIG, 'FF:EE:DD:CC:BB:AA');
+
+      expect(mockClient.publishAsync).toHaveBeenCalledWith(
+        `${PREFIX}/config`,
+        expect.stringContaining('FF:EE:DD:CC:BB:AA'),
+        { retain: true },
+      );
+    });
+
+    it('deduplicates MACs (case-insensitive)', async () => {
+      await registerScaleMac(MQTT_PROXY_CONFIG, 'ff:ee:dd:cc:bb:aa');
+
+      // Should not publish again — same MAC was registered in previous test
+      expect(mockClient.publishAsync).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('publishBeep', () => {
+    it('publishes beep with freq, duration, and repeat', async () => {
+      await publishBeep(MQTT_PROXY_CONFIG, 1200, 200, 2);
+
+      expect(mockClient.publishAsync).toHaveBeenCalledWith(
+        `${PREFIX}/beep`,
+        JSON.stringify({ freq: 1200, duration: 200, repeat: 2 }),
+      );
+      expect(mockClient.endAsync).toHaveBeenCalled();
+    });
+
+    it('publishes empty payload for default beep', async () => {
+      await publishBeep(MQTT_PROXY_CONFIG);
+
+      expect(mockClient.publishAsync).toHaveBeenCalledWith(`${PREFIX}/beep`, '');
+    });
+
+    it('publishes partial params (freq only)', async () => {
+      await publishBeep(MQTT_PROXY_CONFIG, 600);
+
+      expect(mockClient.publishAsync).toHaveBeenCalledWith(
+        `${PREFIX}/beep`,
+        JSON.stringify({ freq: 600 }),
+      );
+    });
   });
 });
