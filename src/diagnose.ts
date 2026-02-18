@@ -79,6 +79,7 @@ async function main(): Promise<void> {
 
   const seen = new Set<string>();
   let targetPeripheral: any = null;
+  let targetConnectable = false;
 
   const onDiscover = (peripheral: any): void => {
     const rawAddr =
@@ -115,7 +116,10 @@ async function main(): Promise<void> {
       log.info(`    Service data [${sd.uuid.toUpperCase()}]: ${hex(sd.data)}`);
     }
 
-    if (isTarget) targetPeripheral = peripheral;
+    if (isTarget) {
+      targetPeripheral = peripheral;
+      targetConnectable = connectable;
+    }
   };
 
   noble.on('discover', onDiscover);
@@ -144,19 +148,38 @@ async function main(): Promise<void> {
   }
 
   log.info('Phase 2: GATT Connection\n');
+
+  if (!targetConnectable) {
+    log.warn('Device is advertising as broadcast-only (non-connectable).');
+    log.warn('GATT connections will fail. Attempting anyway...\n');
+  }
+
   log.info(`Connecting to ${scaleMac}...`);
 
   try {
     await withTimeout(targetPeripheral.connectAsync(), 30_000, 'Connection timed out (30s)');
   } catch (err: unknown) {
     log.error(`Connection FAILED: ${errMsg(err)}\n`);
-    log.info('Possible causes:');
-    log.info('  1. Scale is bonded to another phone/tablet');
-    log.info('     On ALL phones: Settings > Bluetooth > find scale > Forget/Unpair');
-    log.info('  2. ESPHome BT Proxy is occupying a connection slot');
-    log.info('     Temporarily disable ESPHome BT proxies');
-    log.info('  3. BLE adapter/driver issue');
-    log.info('     Update Bluetooth drivers or try a different adapter');
+
+    if (!targetConnectable) {
+      log.info('The device advertised as broadcast-only (ADV_NONCONN_IND).');
+      log.info('No BLE stack can connect to a non-connectable device.\n');
+      log.info('This usually means:');
+      log.info('  1. The scale is bonded to a phone and switched to passive broadcast mode');
+      log.info('     Factory reset the scale (pinhole button or remove batteries for 5+ min)');
+      log.info('     Then test BEFORE opening any scale app on any device');
+      log.info('  2. The scale firmware only broadcasts data in advertisements');
+      log.info('     Weight may be readable from manufacturer data without connecting');
+    } else {
+      log.info('Possible causes:');
+      log.info('  1. Scale is bonded to another phone/tablet');
+      log.info('     On ALL phones: Settings > Bluetooth > find scale > Forget/Unpair');
+      log.info('  2. ESPHome BT Proxy is occupying a connection slot');
+      log.info('     Temporarily disable ESPHome BT proxies');
+      log.info('  3. BLE adapter/driver issue');
+      log.info('     Update Bluetooth drivers or try a different adapter');
+    }
+
     process.exit(1);
   }
 
