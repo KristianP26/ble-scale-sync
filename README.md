@@ -54,6 +54,7 @@ Requires Node.js v20+ and a BLE adapter. See the **[full install guide](https://
 - **[10 body metrics](https://blescalesync.dev/body-composition)** — BIA-based body composition from weight + impedance
 - **[Multi-user](https://blescalesync.dev/multi-user)** — automatic weight-based identification with per-user exporters
 - **[Interactive setup wizard](https://blescalesync.dev/guide/configuration)** — scale discovery, exporter config, connectivity tests
+- **[BLE diagnostic tool](https://blescalesync.dev/troubleshooting)** — `npm run diagnose` for detailed BLE troubleshooting
 - **Cross-platform** — Linux (Docker + native), macOS, Windows
 - **Private** — your data stays on your device, no vendor cloud
 

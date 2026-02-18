@@ -9,6 +9,7 @@
     "setup": "tsx src/wizard/index.ts",
     "setup-garmin": "python3 garmin-scripts/setup_garmin.py",
     "scan": "tsx src/scan.ts",
+    "diagnose": "tsx src/diagnose.ts",
     "validate": "tsx src/config/validate-cli.ts",
     "test": "vitest run",
     "lint": "eslint src tests",
