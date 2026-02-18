@@ -57,78 +57,83 @@ class BleBridge:
                     raw_results.append((bytes(addr), addr_type, rssi, bytes(adv_data)))
 
         _ble.active(True)
-        _ble.irq(_irq)
-        _ble.gap_scan(duration_ms, 100000, 30000, True)  # interval=100ms, window=30ms, active=True
-        await asyncio.sleep_ms(duration_ms + 500)
         try:
-            _ble.gap_scan(None)
-        except Exception:
-            pass
+            _ble.irq(_irq)
+            _ble.gap_scan(duration_ms, 100000, 30000, True)  # interval=100ms, window=30ms, active=True
+            await asyncio.sleep_ms(duration_ms + 500)
+            try:
+                _ble.gap_scan(None)
+            except Exception:
+                pass
 
-        # Post-process results outside the IRQ handler
-        for addr_bytes, addr_type, rssi, raw in raw_results:
-            mac = ":".join("%02X" % b for b in addr_bytes)
-            name = ""
-            services = []
-            mfr_id = None
-            mfr_data = None
+            # Post-process results outside the IRQ handler
+            for addr_bytes, addr_type, rssi, raw in raw_results:
+                mac = ":".join("%02X" % b for b in addr_bytes)
+                name = ""
+                services = []
+                mfr_id = None
+                mfr_data = None
 
-            # Parse AD structures
-            i = 0
-            while i < len(raw):
-                length = raw[i]
-                if length == 0:
-                    break
-                if i + 1 >= len(raw):
-                    break
-                ad_type = raw[i + 1]
-                ad_payload = raw[i + 2:i + 1 + length]
+                # Parse AD structures
+                i = 0
+                while i < len(raw):
+                    length = raw[i]
+                    if length == 0:
+                        break
+                    if i + 1 >= len(raw):
+                        break
+                    ad_type = raw[i + 1]
+                    ad_payload = raw[i + 2:i + 1 + length]
 
-                if ad_type == 0x09 or ad_type == 0x08:  # Local Name
-                    try:
-                        name = ad_payload.decode("utf-8")
-                    except Exception:
-                        pass
-                elif ad_type == 0x03 or ad_type == 0x02:  # 16-bit Service UUIDs
-                    for j in range(0, len(ad_payload) - 1, 2):
-                        uuid = ad_payload[j] | (ad_payload[j + 1] << 8)
-                        services.append("%04x" % uuid)
-                elif ad_type == 0xFF and length >= 3:  # Manufacturer Specific
-                    mfr_id = ad_payload[0] | (ad_payload[1] << 8)
-                    mfr_data = ad_payload[2:].hex()
+                    if ad_type == 0x09 or ad_type == 0x08:  # Local Name
+                        try:
+                            name = ad_payload.decode("utf-8")
+                        except Exception:
+                            pass
+                    elif ad_type == 0x03 or ad_type == 0x02:  # 16-bit Service UUIDs
+                        for j in range(0, len(ad_payload) - 1, 2):
+                            uuid = ad_payload[j] | (ad_payload[j + 1] << 8)
+                            services.append("%04x" % uuid)
+                    elif ad_type == 0xFF and length >= 3:  # Manufacturer Specific
+                        mfr_id = ad_payload[0] | (ad_payload[1] << 8)
+                        mfr_data = ad_payload[2:].hex()
 
-                i += length + 1
+                    i += length + 1
 
-            # Dedup: keep strongest RSSI, but always update mfr data if new
-            if mac in seen:
-                if rssi > seen[mac]["rssi"]:
-                    seen[mac]["rssi"] = rssi
-                if name and not seen[mac]["name"]:
-                    seen[mac]["name"] = name
-                if mfr_data and not seen[mac].get("manufacturer_data"):
-                    seen[mac]["manufacturer_id"] = mfr_id
-                    seen[mac]["manufacturer_data"] = mfr_data
-            else:
-                entry = {
-                    "address": mac,
-                    "name": name,
-                    "rssi": rssi,
-                    "services": services,
-                    "addr_type": addr_type,
-                }
-                if mfr_id is not None:
-                    entry["manufacturer_id"] = mfr_id
-                    entry["manufacturer_data"] = mfr_data
-                seen[mac] = entry
+                # Dedup: keep strongest RSSI, but always update mfr data if new
+                if mac in seen:
+                    if rssi > seen[mac]["rssi"]:
+                        seen[mac]["rssi"] = rssi
+                    if name and not seen[mac]["name"]:
+                        seen[mac]["name"] = name
+                    if mfr_data and not seen[mac].get("manufacturer_data"):
+                        seen[mac]["manufacturer_id"] = mfr_id
+                        seen[mac]["manufacturer_data"] = mfr_data
+                else:
+                    entry = {
+                        "address": mac,
+                        "name": name,
+                        "rssi": rssi,
+                        "services": services,
+                        "addr_type": addr_type,
+                    }
+                    if mfr_id is not None:
+                        entry["manufacturer_id"] = mfr_id
+                        entry["manufacturer_data"] = mfr_data
+                    seen[mac] = entry
 
-        # Only return devices with a name OR manufacturer data (filter noise)
-        results = [v for v in seen.values() if v["name"] or v.get("manufacturer_data")]
-        seen.clear()
-        raw_results.clear()
-        # Deactivate BLE radio so WiFi can reconnect (shared 2.4 GHz radio)
-        _ble.active(False)
-        gc.collect()
-        return results
+            # Only return devices with a name OR manufacturer data (filter noise)
+            results = [v for v in seen.values() if v["name"] or v.get("manufacturer_data")]
+            seen.clear()
+            raw_results.clear()
+            return results
+        finally:
+            # Always deactivate BLE radio so WiFi can reconnect (shared 2.4 GHz radio)
+            try:
+                _ble.active(False)
+            except Exception:
+                pass
+            gc.collect()
 
     async def connect(self, address, addr_type=0):
         """Connect to a BLE peripheral by MAC address, discover services/chars.

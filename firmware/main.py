@@ -170,6 +170,9 @@ async def scan_loop():
             except Exception:
                 print(f"Scan error: {e}")
         finally:
+            # If MQTT survived the (possibly failed) scan, subscriptions are still valid
+            if client.isconnected() and not _subs_ready:
+                _subs_ready = True
             _last_scan_time = time.ticks_ms()
             _busy = False
 
