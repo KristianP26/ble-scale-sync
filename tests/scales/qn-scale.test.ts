@@ -71,6 +71,33 @@ describe('QnScaleAdapter', () => {
       const p = mockPeripheral('qn-scale', ['fff0']);
       expect(adapter.matches(p)).toBe(true);
     });
+
+    it('matches by AABB manufacturer data marker (broadcast-only)', () => {
+      const adapter = makeAdapter();
+      const mfg = Buffer.alloc(26);
+      mfg[2] = 0xaa;
+      mfg[3] = 0xbb;
+      const p = mockPeripheral('', [], mfg);
+      expect(adapter.matches(p)).toBe(true);
+    });
+
+    it('does not match AABB data that is too short', () => {
+      const adapter = makeAdapter();
+      const mfg = Buffer.alloc(10);
+      mfg[2] = 0xaa;
+      mfg[3] = 0xbb;
+      const p = mockPeripheral('', [], mfg);
+      expect(adapter.matches(p)).toBe(false);
+    });
+
+    it('does not match manufacturer data without AABB marker', () => {
+      const adapter = makeAdapter();
+      const mfg = Buffer.alloc(26);
+      mfg[2] = 0x00;
+      mfg[3] = 0x00;
+      const p = mockPeripheral('', [], mfg);
+      expect(adapter.matches(p)).toBe(false);
+    });
   });
 
   describe('parseNotification()', () => {
@@ -210,6 +237,77 @@ describe('QnScaleAdapter', () => {
     });
   });
 
+  describe('parseAdvertisement()', () => {
+    /** Build a valid QN broadcast manufacturer data buffer. */
+    function makeBroadcast(weightRaw: number, stable: boolean): Buffer {
+      const buf = Buffer.alloc(26);
+      buf[0] = 0xff; // company ID
+      buf[1] = 0xff;
+      buf[2] = 0xaa; // QN marker
+      buf[3] = 0xbb;
+      buf.writeUInt16BE(weightRaw, 10);
+      buf[25] = stable ? 0x01 : 0x00;
+      return buf;
+    }
+
+    it('parses stable broadcast reading (22.62 kg)', () => {
+      const adapter = makeAdapter();
+      // 0x08D6 = 2262 / 100 = 22.62 kg (from Tosiman's actual data)
+      const reading = adapter.parseAdvertisement(makeBroadcast(0x08d6, true));
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBeCloseTo(22.62);
+      expect(reading!.impedance).toBe(0);
+    });
+
+    it('parses stable broadcast reading (80.00 kg)', () => {
+      const adapter = makeAdapter();
+      const reading = adapter.parseAdvertisement(makeBroadcast(8000, true));
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBe(80);
+      expect(reading!.impedance).toBe(0);
+    });
+
+    it('returns null for unstable reading', () => {
+      const adapter = makeAdapter();
+      // 0x1300 = 4864 / 100 = 48.64 kg, unstable
+      expect(adapter.parseAdvertisement(makeBroadcast(0x1300, false))).toBeNull();
+    });
+
+    it('returns null for buffer shorter than 26 bytes', () => {
+      const adapter = makeAdapter();
+      const buf = Buffer.alloc(20);
+      buf[2] = 0xaa;
+      buf[3] = 0xbb;
+      expect(adapter.parseAdvertisement(buf)).toBeNull();
+    });
+
+    it('returns null when AABB marker is missing', () => {
+      const adapter = makeAdapter();
+      const buf = Buffer.alloc(26);
+      buf[2] = 0x00;
+      buf[3] = 0x00;
+      buf[25] = 0x01;
+      expect(adapter.parseAdvertisement(buf)).toBeNull();
+    });
+
+    it('returns null when weight is below 5 kg', () => {
+      const adapter = makeAdapter();
+      // 200 / 100 = 2.00 kg (below minimum)
+      expect(adapter.parseAdvertisement(makeBroadcast(200, true))).toBeNull();
+    });
+
+    it('returns null when weight exceeds 300 kg', () => {
+      const adapter = makeAdapter();
+      // 30100 / 100 = 301.00 kg (above maximum)
+      expect(adapter.parseAdvertisement(makeBroadcast(30100, true))).toBeNull();
+    });
+
+    it('returns null for zero weight', () => {
+      const adapter = makeAdapter();
+      expect(adapter.parseAdvertisement(makeBroadcast(0, true))).toBeNull();
+    });
+  });
+
   describe('isComplete()', () => {
     it('returns true for weight > 10 and impedance > 200', () => {
       const adapter = makeAdapter();
@@ -245,6 +343,19 @@ describe('QnScaleAdapter', () => {
       // but computeMetrics itself does not throw — it delegates to buildPayload.
       const payload = adapter.computeMetrics({ weight: 0, impedance: 500 }, profile);
       expect(payload.weight).toBe(0);
+    });
+
+    it('uses Deurenberg fallback when impedance is 0 (broadcast mode)', () => {
+      const adapter = makeAdapter();
+      const profile = defaultProfile();
+      const payload = adapter.computeMetrics({ weight: 80, impedance: 0 }, profile);
+
+      expect(payload.weight).toBe(80);
+      expect(payload.impedance).toBe(0);
+      // Deurenberg formula produces a reasonable body fat estimate from BMI
+      expect(payload.bodyFatPercent).toBeGreaterThan(5);
+      expect(payload.bodyFatPercent).toBeLessThan(40);
+      assertPayloadRanges(payload);
     });
   });
 });

@@ -5,10 +5,15 @@ import type {
   BodyComposition,
 } from '../../src/interfaces/scale-adapter.js';
 
-export function mockPeripheral(name: string, uuids: string[] = []): BleDeviceInfo {
+export function mockPeripheral(
+  name: string,
+  uuids: string[] = [],
+  manufacturerData?: Buffer,
+): BleDeviceInfo {
   return {
     localName: name,
     serviceUuids: uuids,
+    manufacturerData,
   };
 }
 

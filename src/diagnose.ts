@@ -111,6 +111,16 @@ async function main(): Promise<void> {
     }
     if (mfgData && mfgData.length > 0) {
       log.info(`    Manufacturer data: ${hex(mfgData)}`);
+
+      // Parse QN broadcast weight from AABB manufacturer data
+      if (mfgData.length >= 26 && mfgData[2] === 0xaa && mfgData[3] === 0xbb) {
+        const rawWeight = mfgData.readUInt16BE(10);
+        const weight = rawWeight / 100;
+        const stable = mfgData[25] === 0x01;
+        log.info(
+          `    QN broadcast: ${weight.toFixed(2)} kg ${stable ? '(stable)' : '(measuring)'}`,
+        );
+      }
     }
     for (const sd of svcData) {
       log.info(`    Service data [${sd.uuid.toUpperCase()}]: ${hex(sd.data)}`);
@@ -169,7 +179,9 @@ async function main(): Promise<void> {
       log.info('     Factory reset the scale (pinhole button or remove batteries for 5+ min)');
       log.info('     Then test BEFORE opening any scale app on any device');
       log.info('  2. The scale firmware only broadcasts data in advertisements');
-      log.info('     Weight may be readable from manufacturer data without connecting');
+      log.info('     If QN broadcast (AABB) data was shown above, ble-scale-sync can read');
+      log.info('     weight from advertisements automatically (no connection needed)');
+      log.info('     Body composition will use BMI-based estimation (no impedance in broadcast)');
     } else {
       log.info('Possible causes:');
       log.info('  1. Scale is bonded to another phone/tablet');

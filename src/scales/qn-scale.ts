@@ -50,6 +50,13 @@ const CHR_WRITE_T1 = uuid16(0xffe3);
 const SVC_T1 = 'ffe0';
 const SVC_T2 = 'fff0';
 
+// QN broadcast protocol marker bytes
+const QN_MARKER_0 = 0xaa;
+const QN_MARKER_1 = 0xbb;
+
+/** Minimum length of a valid QN broadcast advertisement payload. */
+const QN_BROADCAST_MIN_LEN = 26;
+
 export class QnScaleAdapter implements ScaleAdapter {
   readonly name = 'QN Scale';
   readonly charNotifyUuid = CHR_NOTIFY;
@@ -92,9 +99,21 @@ export class QnScaleAdapter implements ScaleAdapter {
 
     // Fallback: match by QN vendor service UUID for unnamed devices
     const uuids = (device.serviceUuids || []).map((u) => u.toLowerCase());
-    return uuids.some(
-      (u) => u === SVC_T1 || u === SVC_T2 || u === uuid16(0xffe0) || u === uuid16(0xfff0),
-    );
+    if (
+      uuids.some(
+        (u) => u === SVC_T1 || u === SVC_T2 || u === uuid16(0xffe0) || u === uuid16(0xfff0),
+      )
+    ) {
+      return true;
+    }
+
+    // Fallback: match by AABB manufacturer data marker (broadcast-only devices)
+    const mfg = device.manufacturerData;
+    if (mfg && mfg.length >= QN_BROADCAST_MIN_LEN && mfg[2] === QN_MARKER_0 && mfg[3] === QN_MARKER_1) {
+      return true;
+    }
+
+    return false;
   }
 
   /**
@@ -152,12 +171,47 @@ export class QnScaleAdapter implements ScaleAdapter {
     return { weight, impedance };
   }
 
+  /**
+   * Parse QN broadcast advertisement manufacturer data.
+   *
+   * Format (26+ bytes):
+   *   [0-1]   Company ID (FF FF)
+   *   [2-3]   AA BB — QN protocol marker
+   *   [4-9]   MAC address (6 bytes)
+   *   [10-11] weight (BE uint16 / 100 = kg)
+   *   [12-13] reserved
+   *   [14-16] impedance placeholder (FF FF FF = not available)
+   *   [17]    unit/mode
+   *   [18-24] reserved / hardware info
+   *   [25]    stability (0x01 = stable, 0x00 = measuring)
+   *
+   * Returns a ScaleReading only when the reading is stable and weight is in
+   * a valid range. Impedance is always 0 (not available in broadcast mode).
+   */
+  parseAdvertisement(data: Buffer): ScaleReading | null {
+    if (data.length < QN_BROADCAST_MIN_LEN) return null;
+    if (data[2] !== QN_MARKER_0 || data[3] !== QN_MARKER_1) return null;
+
+    const stable = data[25] === 0x01;
+    if (!stable) return null;
+
+    const rawWeight = data.readUInt16BE(10);
+    const weight = rawWeight / 100;
+
+    if (weight < 5 || weight > 300 || !Number.isFinite(weight)) return null;
+
+    return { weight, impedance: 0 };
+  }
+
   isComplete(reading: ScaleReading): boolean {
     return reading.weight > 10 && reading.impedance > 200;
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    const fat = computeBiaFat(reading.weight, reading.impedance, profile);
+    // In broadcast mode impedance is 0 — skip BIA, let buildPayload use Deurenberg fallback
+    const fat = reading.impedance > 0
+      ? computeBiaFat(reading.weight, reading.impedance, profile)
+      : undefined;
     return buildPayload(reading.weight, reading.impedance, { fat }, profile);
   }
 }
