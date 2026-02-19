@@ -25,13 +25,16 @@ I didn't want to depend on a phone app. So I built this tool. A **Raspberry Pi Z
 # Configure
 docker run --rm -it --network host --cap-add NET_ADMIN --cap-add NET_RAW \
   --group-add 112 -v /var/run/dbus:/var/run/dbus:ro \
-  -v ./config.yaml:/app/config.yaml ghcr.io/kristianp26/ble-scale-sync:latest setup
+  -v ./config.yaml:/app/config.yaml \
+  -v ./garmin-tokens:/app/garmin-tokens \
+  ghcr.io/kristianp26/ble-scale-sync:latest setup
 
 # Run (continuous mode, auto-restart)
 docker run -d --restart unless-stopped --network host \
   --cap-add NET_ADMIN --cap-add NET_RAW \
   --group-add 112 -v /var/run/dbus:/var/run/dbus:ro \
   -v ./config.yaml:/app/config.yaml:ro \
+  -v ./garmin-tokens:/app/garmin-tokens:ro \
   -e CONTINUOUS_MODE=true \
   ghcr.io/kristianp26/ble-scale-sync:latest
 ```
