@@ -1,4 +1,5 @@
 {
+  "board": null,
   "wifi_ssid": "MyNetwork",
   "wifi_password": "secret",
   "mqtt_broker": "192.168.1.100",

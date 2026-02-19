@@ -1,21 +1,15 @@
 """BLE Central bridge using aioble — scan, connect, notify, read, write.
 
-Optimized for memory-constrained boards (ESP32-PICO / Atom Echo, no PSRAM).
-
-ESP32 BLE/WiFi coexistence: BLE must be deactivated after scanning so WiFi
-can reconnect (shared 2.4 GHz radio). However, rapid active(False)/active(True)
-cycles cause "BLE_INIT: controller init failed". The caller must rate-limit
-scans (minimum ~15s between cycles).
+Board-specific tuning (scan limits, BLE deactivation) is read from the
+board abstraction layer so this module works on ESP32 and ESP32-S3.
 """
 
 import aioble
 import asyncio
 import bluetooth
+import board
 
 _ble = bluetooth.BLE()
-
-# Maximum raw scan entries to keep (prevents OOM in dense BLE environments)
-_MAX_SCAN_ENTRIES = 200
 
 # Bluetooth Base UUID suffix (matches Node.js normalizeUuid)
 _BT_BASE_SUFFIX = "00001000800000805f9b34fb"
@@ -39,12 +33,15 @@ class BleBridge:
         self._chars = {}  # uuid_str -> characteristic
         self._notify_tasks = []
 
-    async def scan(self, duration_ms=8000):
+    async def scan(self, duration_ms=None):
         """Scan for BLE peripherals using raw BLE API for reliable ad parsing.
 
         Deduplicates by address, keeps strongest RSSI but updates manufacturer
         data from any advertisement that carries it.
         """
+        if duration_ms is None:
+            duration_ms = board.SCAN_DURATION_MS
+
         import gc
         gc.collect()
         seen = {}  # address -> dict
@@ -52,7 +49,7 @@ class BleBridge:
 
         def _irq(event, data):
             if event == 5:  # _IRQ_SCAN_RESULT
-                if len(raw_results) < _MAX_SCAN_ENTRIES:
+                if len(raw_results) < board.MAX_SCAN_ENTRIES:
                     _, addr, addr_type, rssi, adv_data = data
                     raw_results.append((bytes(addr), addr_type, rssi, bytes(adv_data)))
 
@@ -128,11 +125,12 @@ class BleBridge:
             raw_results.clear()
             return results
         finally:
-            # Always deactivate BLE radio so WiFi can reconnect (shared 2.4 GHz radio)
-            try:
-                _ble.active(False)
-            except Exception:
-                pass
+            if board.DEACTIVATE_BLE_AFTER_SCAN:
+                # Deactivate BLE radio so WiFi can reconnect (shared 2.4 GHz radio)
+                try:
+                    _ble.active(False)
+                except Exception:
+                    pass
             gc.collect()
 
     async def connect(self, address, addr_type=0):
@@ -202,7 +200,7 @@ class BleBridge:
         return b""
 
     async def disconnect(self):
-        """Disconnect, cancel notify tasks, clear state, deactivate BLE."""
+        """Disconnect, cancel notify tasks, clear state, optionally deactivate BLE."""
         for task in self._notify_tasks:
             task.cancel()
         self._notify_tasks.clear()
@@ -216,8 +214,9 @@ class BleBridge:
 
         self._chars = {}
 
-        # Deactivate BLE radio so WiFi can recover (shared 2.4 GHz radio)
-        try:
-            _ble.active(False)
-        except Exception:
-            pass
+        if board.DEACTIVATE_BLE_AFTER_SCAN:
+            # Deactivate BLE radio so WiFi can recover (shared 2.4 GHz radio)
+            try:
+                _ble.active(False)
+            except Exception:
+                pass

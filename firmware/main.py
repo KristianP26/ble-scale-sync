@@ -1,17 +1,24 @@
 """ESP32 BLE-to-MQTT bridge — transparent proxy, zero scale-specific logic.
 
 Scans autonomously in a loop; connect/disconnect/write/read are command-driven.
-BLE operations temporarily disrupt WiFi on ESP32 (shared 2.4 GHz radio); the
-bridge deactivates BLE after each scan so WiFi can recover.
+Board-specific tuning (scan interval, GC, BLE/WiFi coexistence) is read from
+the board abstraction layer.
 """
 
 import json
 import asyncio
 import gc
 import time
+import board
 from mqtt_as import MQTTClient, config as mqtt_config
 from ble_bridge import BleBridge
-from beep import beep
+
+if board.HAS_BEEP:
+    from beep import beep
+
+if board.HAS_DISPLAY:
+    import ui
+
 # Load config
 with open("config.json") as f:
     cfg = json.load(f)
@@ -69,6 +76,9 @@ def on_message(topic_bytes, msg, retained):
             data = json.loads(msg)
             _scale_macs = set(data.get("scales", []))
             print(f"Config: {len(_scale_macs)} scale MAC(s)")
+            # Pass user list to display (sync-safe, no-ops if no display)
+            if board.HAS_DISPLAY:
+                ui.on_config_update(data.get("users", []))
         except Exception as e:
             print(f"Bad config payload: {e}")
         return
@@ -83,6 +93,9 @@ async def on_connect(client_ref):
     await client_ref.subscribe(topic("disconnect"), 0)
     await client_ref.subscribe(topic("config"), 0)
     await client_ref.subscribe(topic("beep"), 0)
+    if board.HAS_DISPLAY:
+        await client_ref.subscribe(topic("display/reading"), 0)
+        await client_ref.subscribe(topic("display/result"), 0)
     # Re-subscribe write/read wildcards if a BLE device is connected
     if _char_subscribed:
         await client_ref.subscribe(topic("write/#"), 0)
@@ -129,9 +142,9 @@ async def scan_loop():
             await asyncio.sleep(1)
             continue
 
-        # Minimum 5s between scans
+        # Minimum interval between scans (board-specific)
         now = time.ticks_ms()
-        if time.ticks_diff(now, _last_scan_time) < 5000:
+        if time.ticks_diff(now, _last_scan_time) < board.SCAN_INTERVAL_MS:
             await asyncio.sleep_ms(500)
             continue
 
@@ -139,31 +152,40 @@ async def scan_loop():
         try:
             gc.collect()
             print(f"Scanning... (free: {gc.mem_free()})")
-            _subs_ready = False
+            # On shared-radio boards, BLE disrupts WiFi — mark subs stale
+            if board.DEACTIVATE_BLE_AFTER_SCAN:
+                _subs_ready = False
             results = await bridge.scan()
             gc.collect()
             print(f"Scan done: {len(results)} devices (free: {gc.mem_free()})")
-            # Beep if a known scale MAC is present (60s debounce)
+            if board.HAS_DISPLAY:
+                ui.on_scan_tick(len(results))
+            # Beep/display if a known scale MAC is present (60s debounce)
             if _scale_macs and time.ticks_diff(time.ticks_ms(), _last_beep_time) > 60000:
                 for r in results:
                     if r["address"] in _scale_macs:
                         _last_beep_time = time.ticks_ms()
                         print(f"Scale detected: {r['address']}")
-                        beep()
+                        if board.HAS_BEEP:
+                            beep()
+                        if board.HAS_DISPLAY:
+                            ui.on_scale_detected(r["address"])
                         break
-            # Wait for mqtt_as to reconnect after BLE radio disruption.
-            # If the connection survived (didn't drop), on_connect won't fire,
-            # so _subs_ready stays False. Detect this and restore it.
-            for _ in range(30):
-                if client.isconnected() and _subs_ready:
-                    break
-                if client.isconnected() and not _subs_ready:
-                    # Connection survived the scan — subscriptions still valid
-                    _subs_ready = True
-                    break
-                await asyncio.sleep(1)
+            # On shared-radio boards, wait for mqtt_as to reconnect after BLE disruption
+            if board.DEACTIVATE_BLE_AFTER_SCAN:
+                for _ in range(30):
+                    if client.isconnected() and _subs_ready:
+                        break
+                    if client.isconnected() and not _subs_ready:
+                        # Connection survived the scan — subscriptions still valid
+                        _subs_ready = True
+                        break
+                    await asyncio.sleep(1)
+            board.on_scan_complete(results, bool(_scale_macs))
             await client.publish(topic("scan/results"), json.dumps(results), qos=0)
             print("Results published")
+            if board.HAS_DISPLAY:
+                ui.on_publish_tick()
         except Exception as e:
             try:
                 await publish_error(f"Scan failed: {e}")
@@ -250,6 +272,9 @@ async def handle_read(uuid_str):
 # ─── Main loop ────────────────────────────────────────────────────────────────
 
 async def main():
+    print(f"Board: {board.BOARD_NAME}")
+    if board.HAS_DISPLAY:
+        ui.init()
     await client.connect()
     # Start autonomous BLE scan loop
     asyncio.create_task(scan_loop())
@@ -264,11 +289,31 @@ async def main():
                 elif t == topic("disconnect"):
                     await handle_disconnect()
                 elif t == topic("beep"):
-                    if msg:
+                    if board.HAS_BEEP:
+                        if msg:
+                            d = json.loads(msg)
+                            beep(d.get("freq", 1000), d.get("duration", 200), d.get("repeat", 1))
+                        else:
+                            beep()
+                elif t == topic("display/reading"):
+                    if board.HAS_DISPLAY:
                         d = json.loads(msg)
-                        beep(d.get("freq", 1000), d.get("duration", 200), d.get("repeat", 1))
-                    else:
-                        beep()
+                        ui.on_reading(
+                            d.get("slug", ""),
+                            d.get("name", ""),
+                            d.get("weight", 0),
+                            d.get("impedance"),
+                            d.get("exporters", []),
+                        )
+                elif t == topic("display/result"):
+                    if board.HAS_DISPLAY:
+                        d = json.loads(msg)
+                        ui.on_result(
+                            d.get("slug", ""),
+                            d.get("name", ""),
+                            d.get("weight", 0),
+                            d.get("exports", []),
+                        )
                 elif t.startswith(topic("write/")):
                     uuid_str = t[len(topic("write/")):]
                     await handle_write(uuid_str, msg)
@@ -281,9 +326,11 @@ async def main():
 
         await asyncio.sleep_ms(50)
         gc_counter += 1
-        if gc_counter >= 200:  # ~10 seconds
+        if gc_counter >= board.GC_INTERVAL:
             gc.collect()
             gc_counter = 0
+        if board.HAS_DISPLAY:
+            ui.check_timeout()
 
 
 asyncio.run(main())

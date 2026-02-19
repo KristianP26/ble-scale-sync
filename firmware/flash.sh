@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 #
-# Flash MicroPython + BLE-MQTT bridge firmware to an ESP32.
+# Flash MicroPython + BLE-MQTT bridge firmware to an ESP32 / ESP32-S3.
 #
 # Prerequisites (install once):
 #   pip install esptool mpremote
 #
 # Usage:
-#   ./flash.sh              # full flash (erase + firmware + libs + app)
-#   ./flash.sh --app-only   # just re-upload .py and config.json (fast iteration)
-#   ./flash.sh --libs-only  # just re-install MicroPython libraries
+#   ./flash.sh                          # full flash (auto-detect board)
+#   ./flash.sh --board atom_echo        # full flash for Atom Echo
+#   ./flash.sh --board esp32_s3         # full flash for ESP32-S3
+#   ./flash.sh --app-only               # re-upload .py files (fast iteration)
+#   ./flash.sh --libs-only              # re-install MicroPython libraries
+#   ./flash.sh --board esp32_s3 --app-only
 #
 # The script auto-detects the serial port. Override with:
 #   PORT=/dev/ttyACM0 ./flash.sh
@@ -19,10 +22,19 @@ cd "$(dirname "$0")"
 # ─── Config ───────────────────────────────────────────────────────────────────
 
 MICROPYTHON_VERSION="1.27.0"
-MICROPYTHON_DATE="20260203"
-FIRMWARE_URL="https://micropython.org/resources/firmware/ESP32_GENERIC-${MICROPYTHON_DATE}-v${MICROPYTHON_VERSION}.bin"
-FIRMWARE_FILE="ESP32_GENERIC-v${MICROPYTHON_VERSION}.bin"
-BAUD=460800
+
+# Release dates differ per chip family
+MICROPYTHON_DATE_ESP32="20260203"
+MICROPYTHON_DATE_S3="20251209"
+
+# Board-specific firmware settings (set by configure_board)
+BOARD=""
+CHIP=""
+FIRMWARE_URL=""
+FIRMWARE_FILE=""
+FLASH_OFFSET=""
+BAUD=""
+BOARD_MODULE=""
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -34,6 +46,64 @@ die() { red "Error: $*" >&2; exit 1; }
 
 check_tool() {
   command -v "$1" >/dev/null 2>&1 || die "$1 not found. Install with: pip install $1"
+}
+
+# ─── Board configuration ─────────────────────────────────────────────────────
+
+configure_board() {
+  local board_name="$1"
+  BOARD="$board_name"
+
+  case "$board_name" in
+    atom_echo)
+      CHIP="esp32"
+      FIRMWARE_URL="https://micropython.org/resources/firmware/ESP32_GENERIC-${MICROPYTHON_DATE_ESP32}-v${MICROPYTHON_VERSION}.bin"
+      FIRMWARE_FILE="ESP32_GENERIC-v${MICROPYTHON_VERSION}.bin"
+      FLASH_OFFSET="0x1000"
+      BAUD=115200
+      BOARD_MODULE="board_atom_echo.py"
+      ;;
+    esp32_s3)
+      CHIP="esp32s3"
+      FIRMWARE_URL="https://micropython.org/resources/firmware/ESP32_GENERIC_S3-SPIRAM_OCT-${MICROPYTHON_DATE_S3}-v${MICROPYTHON_VERSION}.bin"
+      FIRMWARE_FILE="ESP32_GENERIC_S3-SPIRAM_OCT-v${MICROPYTHON_VERSION}.bin"
+      FLASH_OFFSET="0x0"
+      BAUD=460800
+      BOARD_MODULE="board_esp32_s3.py"
+      ;;
+    esp32_s3_4848)
+      CHIP="esp32s3"
+      # LVGL-enabled MicroPython firmware — build from source:
+      #   cd ../lvgl_micropython && python3 make.py esp32 --toml=display_configs/ESP32-S3-4848S040.toml
+      # Then copy build/lvgl_micropy_ESP32_GENERIC_S3-SPIRAM_OCT-16.bin to firmware/
+      FIRMWARE_URL=""  # No pre-built binary; use local build
+      FIRMWARE_FILE="lvgl_micropy_ESP32_GENERIC_S3-SPIRAM_OCT-16.bin"
+      FLASH_OFFSET="0x0"
+      BAUD=460800
+      BOARD_MODULE="board_esp32_s3_4848.py"
+      ;;
+    *)
+      die "Unknown board: $board_name (valid: atom_echo, esp32_s3, esp32_s3_4848)"
+      ;;
+  esac
+}
+
+detect_board() {
+  # Auto-detect board from connected chip
+  local port="$1"
+  blue "Auto-detecting board..."
+  local chip_info
+  chip_info=$(esptool.py --port "$port" chip_id 2>&1) || die "Could not identify chip. Is the ESP32 in download mode?"
+
+  if echo "$chip_info" | grep -qi "ESP32-S3"; then
+    green "Detected: ESP32-S3"
+    configure_board "esp32_s3"
+  elif echo "$chip_info" | grep -qi "ESP32"; then
+    green "Detected: ESP32 (assuming Atom Echo)"
+    configure_board "atom_echo"
+  else
+    die "Could not identify chip type from esptool output"
+  fi
 }
 
 # ─── Port detection ──────────────────────────────────────────────────────────
@@ -61,9 +131,9 @@ detect_port() {
   fi
 
   if [[ ${#candidates[@]} -gt 1 ]]; then
-    blue "Multiple serial ports found:"
-    for p in "${candidates[@]}"; do echo "  $p"; done
-    blue "Using first: ${candidates[0]}  (override with PORT=...)"
+    blue "Multiple serial ports found:" >&2
+    for p in "${candidates[@]}"; do echo "  $p" >&2; done
+    blue "Using first: ${candidates[0]}  (override with PORT=...)" >&2
   fi
 
   echo "${candidates[0]}"
@@ -76,7 +146,7 @@ download_firmware() {
     green "Firmware already downloaded: $FIRMWARE_FILE"
     return
   fi
-  blue "Downloading MicroPython v${MICROPYTHON_VERSION}..."
+  blue "Downloading MicroPython v${MICROPYTHON_VERSION} for ${BOARD}..."
   curl -L -o "$FIRMWARE_FILE" "$FIRMWARE_URL"
   green "Downloaded: $FIRMWARE_FILE"
 }
@@ -84,10 +154,10 @@ download_firmware() {
 erase_and_flash() {
   local port="$1"
   blue "Erasing flash..."
-  esptool.py --chip esp32 --port "$port" erase_flash
+  esptool.py --chip "$CHIP" --port "$port" erase_flash
 
-  blue "Flashing MicroPython v${MICROPYTHON_VERSION}..."
-  esptool.py --chip esp32 --port "$port" --baud "$BAUD" write_flash -z 0x1000 "$FIRMWARE_FILE"
+  blue "Flashing MicroPython v${MICROPYTHON_VERSION} (${CHIP})..."
+  esptool.py --chip "$CHIP" --port "$port" --baud "$BAUD" write_flash -z "$FLASH_OFFSET" "$FIRMWARE_FILE"
   green "MicroPython flashed successfully"
 
   blue "Waiting for device to reboot..."
@@ -115,13 +185,18 @@ upload_app() {
     die "config.json not found. Copy config.json.example to config.json and edit WiFi/MQTT settings."
   fi
 
-  blue "Uploading application files..."
+  blue "Uploading application files for ${BOARD}..."
   mpremote connect "$port" cp config.json :config.json
   mpremote connect "$port" cp boot.py :boot.py
+  mpremote connect "$port" cp board.py :board.py
+  mpremote connect "$port" cp "$BOARD_MODULE" ":$BOARD_MODULE"
   mpremote connect "$port" cp ble_bridge.py :ble_bridge.py
   mpremote connect "$port" cp beep.py :beep.py
+  if [[ "$BOARD" == "esp32_s3_4848" ]]; then
+    mpremote connect "$port" cp ui.py :ui.py
+  fi
   mpremote connect "$port" cp main.py :main.py
-  green "Application uploaded"
+  green "Application uploaded (board: ${BOARD})"
 }
 
 reset_device() {
@@ -134,7 +209,26 @@ reset_device() {
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 main() {
-  local mode="${1:-full}"
+  local mode="full"
+  local board_arg=""
+
+  # Parse arguments
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --board)
+        board_arg="$2"
+        shift 2
+        ;;
+      --app-only|--libs-only)
+        mode="$1"
+        shift
+        ;;
+      *)
+        mode="$1"
+        shift
+        ;;
+    esac
+  done
 
   check_tool esptool.py
   check_tool mpremote
@@ -142,6 +236,14 @@ main() {
   local port
   port=$(detect_port)
   blue "Using port: $port"
+
+  # Configure board (explicit or auto-detect)
+  if [[ -n "$board_arg" ]]; then
+    configure_board "$board_arg"
+  else
+    detect_board "$port"
+  fi
+  blue "Board: ${BOARD} (chip: ${CHIP}, baud: ${BAUD})"
 
   case "$mode" in
     --app-only)
@@ -164,6 +266,7 @@ main() {
   echo ""
   green "═══════════════════════════════════════════════════"
   green "  ESP32 BLE-MQTT bridge flashed successfully!"
+  green "  Board: ${BOARD} (${CHIP})"
   green "═══════════════════════════════════════════════════"
   echo ""
   echo "  Next steps:"

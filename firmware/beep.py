@@ -1,25 +1,28 @@
-"""I2S tone generation for M5Stack Atom Echo (NS4168 DAC).
+"""I2S tone generation — pin-agnostic, reads config from board module.
 
-Pins: BCLK=GPIO19, WS=GPIO33, DOUT=GPIO22.
 Generates sine-wave tones at configurable frequency and duration.
+No-ops gracefully on boards without a speaker (board.HAS_BEEP is False).
 """
 
 import math
 import struct
-from machine import I2S, Pin
+import board
 
 _i2s = None
 _SAMPLE_RATE = 8000
 
 
 def init():
-    """Configure I2S output for the NS4168 DAC."""
+    """Configure I2S output using board-specific pin assignments."""
     global _i2s
+    if not board.HAS_BEEP or board.BEEP_PINS is None:
+        return
+    from machine import I2S, Pin
     _i2s = I2S(
         0,
-        sck=Pin(19),
-        ws=Pin(33),
-        sd=Pin(22),
+        sck=Pin(board.BEEP_PINS["sck"]),
+        ws=Pin(board.BEEP_PINS["ws"]),
+        sd=Pin(board.BEEP_PINS["sd"]),
         mode=I2S.TX,
         bits=16,
         format=I2S.STEREO,
@@ -41,8 +44,12 @@ def _generate_tone(freq, duration_ms):
 def beep(freq=1000, duration_ms=200, repeat=1):
     """Play a tone. Blocks until complete. Lazy-inits I2S on first call."""
     global _i2s
+    if not board.HAS_BEEP:
+        return
     if _i2s is None:
         init()
+        if _i2s is None:
+            return
     tone = _generate_tone(freq, duration_ms)
     silence = _generate_tone(0, 400) if repeat > 1 else None
     for i in range(repeat):
