@@ -50,15 +50,22 @@ def resolve_env_ref(value):
 
 
 def authenticate(email, password, token_dir):
-    """Authenticate with Garmin and save tokens."""
+    """Authenticate with Garmin and save tokens (with 2FA/MFA support)."""
     print(f"[Setup] Authenticating as {email}...")
 
     try:
-        garmin = Garmin(email, password)
+        garmin = Garmin(email, password, return_on_mfa=True)
         garmin.garth.sess.headers.update({"User-Agent": FAKE_USER_AGENT})
 
         print("[Setup] Logging in...")
-        garmin.login()
+        result = garmin.login()
+
+        # Handle 2FA/MFA challenge
+        if isinstance(result, tuple) and result[0] == "needs_mfa":
+            print("[Setup] Two-factor authentication required.")
+            mfa_code = input("[Setup] Enter the MFA code from your authenticator app: ").strip()
+            garmin.resume_login(result[1], mfa_code)
+            print("[Setup] MFA verification successful.")
 
         os.makedirs(token_dir, exist_ok=True)
         garmin.garth.dump(token_dir)
