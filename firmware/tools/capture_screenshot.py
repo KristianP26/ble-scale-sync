@@ -5,12 +5,11 @@ Usage:
     python3 firmware/tools/capture_screenshot.py [output.png]
 
 Triggers a screenshot, receives RGB565 data over MQTT, converts to PNG.
+Waits patiently for chunks that arrive between BLE scan WiFi drops.
 """
 
 import sys
 import struct
-import subprocess
-import tempfile
 import time
 
 BROKER = "10.1.1.15"
@@ -24,55 +23,57 @@ EXPECTED_SIZE = W * H * 2  # RGB565
 def main():
     import paho.mqtt.client as mqtt
 
+    CHUNK_SIZE = 4096
+    n_chunks = (EXPECTED_SIZE + CHUNK_SIZE - 1) // CHUNK_SIZE  # 113
     chunks = {}
-    info = {}
-    done = False
 
     def on_message(client, userdata, msg):
-        nonlocal done, info
         t = msg.topic
-        if t == f"{BASE}/screenshot/info":
-            import json
-            info = json.loads(msg.payload)
-            print(f"Screenshot info: {info}")
-        elif t == f"{BASE}/screenshot/done":
-            done = True
-        elif t.startswith(f"{BASE}/screenshot/"):
-            idx = int(t.split("/")[-1])
-            chunks[idx] = msg.payload
+        if t.startswith(f"{BASE}/screenshot/"):
+            try:
+                idx = int(t.split("/")[-1])
+                chunks[idx] = msg.payload
+            except ValueError:
+                pass  # info, done — ignore
 
     client = mqtt.Client()
     client.on_message = on_message
     client.connect(BROKER)
-    client.subscribe(f"{BASE}/screenshot/#")
+    client.subscribe(f"{BASE}/screenshot/#", qos=1)
     client.loop_start()
 
-    # Trigger screenshot
-    time.sleep(0.5)
-    client.publish(f"{BASE}/screenshot", "")
-    print("Screenshot triggered, waiting for data...")
+    for attempt in range(1, 4):
+        client.publish(f"{BASE}/screenshot", "", qos=1)
+        print(f"Screenshot triggered (attempt {attempt}), waiting for {n_chunks} chunks...")
 
-    # Wait for all chunks
-    timeout = time.time() + 30
-    while not done and time.time() < timeout:
-        time.sleep(0.1)
+        timeout = time.time() + 45
+        last_count = 0
+        while time.time() < timeout:
+            time.sleep(1)
+            count = len(chunks)
+            if count != last_count:
+                print(f"  {count}/{n_chunks} chunks received...")
+                last_count = count
+            if count >= n_chunks:
+                break
+        if len(chunks) >= n_chunks:
+            break
+        missing = [i for i in range(n_chunks) if i not in chunks]
+        print(f"  Missing {len(missing)} chunks, retrying...")
 
     client.loop_stop()
     client.disconnect()
 
-    if not done:
-        print("Timeout waiting for screenshot data")
+    missing = [i for i in range(n_chunks) if i not in chunks]
+    if missing:
+        print(f"Missing {len(missing)} chunks: {missing[:20]}...")
         sys.exit(1)
 
-    n_chunks = info.get("chunks", len(chunks))
-    print(f"Received {len(chunks)}/{n_chunks} chunks")
+    print(f"All {n_chunks} chunks received!")
 
     # Reassemble
     raw = b""
     for i in range(n_chunks):
-        if i not in chunks:
-            print(f"Missing chunk {i}")
-            sys.exit(1)
         raw += chunks[i]
 
     print(f"Total size: {len(raw)} bytes (expected {EXPECTED_SIZE})")
