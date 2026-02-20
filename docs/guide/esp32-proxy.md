@@ -5,25 +5,26 @@ description: Use an ESP32 as a remote BLE-to-MQTT bridge for headless or Docker 
 
 # ESP32 BLE Proxy
 
-Use a cheap ESP32 board as a remote Bluetooth radio, communicating over MQTT. This lets you run BLE Scale Sync on machines without local Bluetooth — headless servers, Docker containers, or devices where the built-in radio has poor range.
+Use a cheap ESP32 board as a remote Bluetooth radio, communicating over MQTT. This lets you run BLE Scale Sync on machines without local Bluetooth - headless servers, Docker containers, or devices where the built-in radio has poor range.
 
-The ESP32 is a **transparent BLE-to-MQTT bridge** with zero scale-specific logic. All scale protocol handling, user matching, and body composition calculation stays in BLE Scale Sync.
+The ESP32 scans autonomously for BLE advertisements and publishes results over MQTT. BLE Scale Sync matches scale adapters against broadcast data, identifies users by weight, computes body composition, and dispatches to exporters. All scale-specific logic stays on the server.
 
 ## How It Works
 
 ```
 ┌─────────┐   BLE    ┌──────────┐   MQTT   ┌────────────────┐
 │  Scale   │ ──────── │  ESP32   │ ──────── │ BLE Scale Sync │
-└─────────┘          └──────────┘          └────────────────┘
-                    MicroPython              Docker / Node.js
+└─────────┘  advert  └──────────┘          └────────────────┘
+              only   MicroPython              Docker / Node.js
 ```
 
-1. BLE Scale Sync sends a **scan** command to the ESP32 via MQTT
-2. The ESP32 performs a BLE scan and publishes discovered devices
-3. BLE Scale Sync identifies the scale and either:
-   - **Broadcast scales**: reads weight directly from the advertisement data (no connection)
-   - **GATT scales**: instructs the ESP32 to connect, subscribe to notifications, and forward data
-4. BLE Scale Sync computes body composition and dispatches to exporters
+1. The ESP32 continuously scans for BLE advertisements (~every 10s)
+2. Scan results (names, services, manufacturer data) are published to MQTT
+3. BLE Scale Sync reads weight from broadcast advertisement data
+4. Body composition is computed and dispatched to exporters
+5. Feedback (beep, display updates) is sent back to the ESP32 via MQTT
+
+Only **broadcast scales** are supported via the MQTT proxy - scales that embed weight data in their BLE advertisements. Scales that require a GATT connection are not supported through this handler (use the `auto` BLE handler with a local Bluetooth radio instead).
 
 ## Supported Boards
 
@@ -31,9 +32,11 @@ Any ESP32 board running MicroPython with BLE support works. Tested on:
 
 | Board | Notes |
 |-------|-------|
-| M5Stack Atom Echo (ESP32-PICO) | Tiny, no PSRAM, ~100 KB free RAM — works fine |
-| ESP32-DevKitC | Standard dev board, plenty of RAM |
-| ESP32-S3 | Supported by MicroPython, BLE + WiFi |
+| M5Stack Atom Echo (ESP32-PICO) | Tiny, no PSRAM, ~100 KB free RAM, I2S buzzer for beep feedback |
+| ESP32-S3-DevKitC | Standard dev board, plenty of RAM |
+| Guition ESP32-S3-4848S040 | 480x480 RGB display, shows scan status and export results via LVGL UI |
+
+The board is auto-detected from the chip family. Set `"board"` in `config.json` to override (e.g. `"esp32_s3_4848"` for the display board, `"atom_echo"` for the Atom Echo).
 
 ::: warning Not compatible
 ESP32-C3 and ESP32-C6 boards use a different BLE stack in MicroPython and have not been tested. Classic ESP32 and ESP32-S3 are recommended.
@@ -67,6 +70,7 @@ Edit `config.json`:
 
 ```json
 {
+  "board": null,
   "wifi_ssid": "MyNetwork",
   "wifi_password": "secret",
   "mqtt_broker": "192.168.1.100",
@@ -83,7 +87,7 @@ Edit `config.json`:
 Connect the ESP32 via USB and run the flash script:
 
 ```bash
-# Full flash: erase → MicroPython → libraries → app
+# Full flash: erase -> MicroPython -> libraries -> app
 ./flash.sh
 
 # Or just re-upload the app (fast iteration)
@@ -97,6 +101,10 @@ The script auto-detects the serial port. Override with `PORT=/dev/ttyACM0 ./flas
 
 ::: tip Atom Echo / ESP32-PICO
 Some boards need a slower baud rate. If flashing fails, edit `BAUD=115200` in `flash.sh`.
+:::
+
+::: tip ESP32-S3-4848 (display board)
+This board requires custom LVGL MicroPython firmware built with the ST7701S display driver. See the [LVGL firmware build instructions](../../firmware/README.md) for details. Do NOT upload `display.py` to the filesystem - it shadows the frozen display module and causes a crash loop.
 :::
 
 ### 3. Verify
@@ -134,7 +142,7 @@ ble:
     # password: '${MQTT_PASSWORD}'    # optional
 ```
 
-Then restart BLE Scale Sync. It will connect to the MQTT broker and use the ESP32 for all BLE operations.
+Then restart BLE Scale Sync. In continuous mode, the server maintains a persistent MQTT connection and reacts to scan results as they arrive - no polling delay.
 
 ::: tip Reusing your MQTT exporter broker
 If you already have an MQTT exporter configured, the ESP32 proxy can use the same broker. Just make sure `device_id` and `client_id` don't collide.
@@ -148,21 +156,27 @@ The default `mqtt://` URL transmits data in plaintext, including body weight and
 
 ```
 firmware/
-  config.json.example   # WiFi + MQTT config template
-  flash.sh              # One-command flash script
-  boot.py               # Stub — WiFi managed by mqtt_as
-  main.py               # MQTT command dispatch loop
-  ble_bridge.py         # BLE scan/connect/notify via raw BLE + aioble
-  requirements.txt      # MicroPython library dependencies
+  config.json.example       # WiFi + MQTT config template
+  flash.sh                  # One-command flash script
+  boot.py                   # Stub - WiFi managed by mqtt_as
+  main.py                   # MQTT dispatch + autonomous scan loop
+  ble_bridge.py             # BLE scanning via aioble
+  beep.py                   # I2S buzzer driver (boards with HAS_BEEP)
+  board.py                  # Board auto-detection dispatch
+  board_atom_echo.py        # Atom Echo config (no PSRAM, I2S beep)
+  board_esp32_s3.py         # Generic ESP32-S3 config
+  board_esp32_s3_4848.py    # Guition 4848 config (LVGL display)
+  ui.py                     # LVGL display UI (boards with HAS_DISPLAY)
+  requirements.txt          # MicroPython library dependencies
 ```
 
 ### What the firmware does
 
-- **Scan**: performs a BLE scan, parses advertisement data (names, services, manufacturer data), publishes JSON results
-- **Connect**: connects to a BLE device, discovers GATT services/characteristics, reports them
-- **Notify**: subscribes to BLE notifications and forwards them as MQTT messages
-- **Read/Write**: proxies GATT read and write operations
-- **Radio management**: deactivates BLE after scanning so WiFi can recover (they share the 2.4 GHz radio on ESP32)
+- **Autonomous scanning**: scans for BLE advertisements in a continuous loop (interval is board-specific, ~2-10s)
+- **Scale detection**: beeps when a known scale MAC is seen (MACs registered by the server after adapter matching)
+- **Radio management**: on shared-radio boards (ESP32-PICO), deactivates BLE after each scan so WiFi can recover
+- **Display UI** (4848 board): shows WiFi/MQTT/BLE status, scan activity, user match results, and export outcomes
+- **Config sync**: receives scale MAC list and user info from the server for local feedback
 
 ### MQTT Topics
 
@@ -170,18 +184,13 @@ All topics are prefixed with `{topic_prefix}/{device_id}/` (default: `ble-proxy/
 
 | Topic | Direction | Payload |
 |-------|-----------|---------|
-| `status` | ESP32 → App | `"online"` / `"offline"` (retained, LWT) |
-| `error` | ESP32 → App | Error message string (command failures) |
-| `scan/start` | App → ESP32 | `""` (trigger scan) |
-| `scan/results` | ESP32 → App | JSON array of discovered devices |
-| `connect` | App → ESP32 | `{"address": "AA:BB:CC:DD:EE:FF", "addr_type": 0}` |
-| `connected` | ESP32 → App | `{"chars": [{"uuid": "...", "properties": [...]}]}` |
-| `disconnect` | App → ESP32 | `""` |
-| `disconnected` | ESP32 → App | `""` |
-| `notify/{uuid}` | ESP32 → App | Raw bytes (BLE notification data) |
-| `write/{uuid}` | App → ESP32 | Raw bytes |
-| `read/{uuid}` | App → ESP32 | `""` (trigger read) |
-| `read/{uuid}/response` | ESP32 → App | Raw bytes |
+| `status` | ESP32 -> Server | `"online"` / `"offline"` (retained, LWT) |
+| `error` | ESP32 -> Server | Error message string |
+| `scan/results` | ESP32 -> Server | JSON array of discovered devices |
+| `config` | Server -> ESP32 | `{"scales": ["AA:BB:..."], "users": [...]}` (retained) |
+| `beep` | Server -> ESP32 | `""` or `{"freq": 1000, "duration": 200, "repeat": 1}` |
+| `display/reading` | Server -> ESP32 | `{"slug", "name", "weight", "impedance", "exporters"}` |
+| `display/result` | Server -> ESP32 | `{"slug", "name", "weight", "exports": [{"name", "ok"}]}` |
 
 ## Troubleshooting
 
@@ -192,17 +201,19 @@ All topics are prefixed with `{topic_prefix}/{device_id}/` (default: `ble-proxy/
 
 ### WiFi won't reconnect after BLE scan
 
-The firmware deactivates BLE after each scan to free the shared 2.4 GHz radio. If WiFi still fails:
+On shared-radio boards (ESP32-PICO), the firmware deactivates BLE after each scan to free the 2.4 GHz radio. If WiFi still fails:
 - Check that your WiFi router is on a 2.4 GHz band (5 GHz won't work with ESP32)
-- Try reducing scan duration in `ble_bridge.py` (`duration_ms` parameter)
+- Try reducing `SCAN_DURATION_MS` in the board config
+
+ESP32-S3 boards have hardware radio coexistence and don't need BLE deactivation.
 
 ### Scan timeout (30s) on first scan after boot
 
-The first scan after boot may take longer because the ESP32 needs to establish the WiFi connection. Subsequent scans are faster (~8–10 seconds).
+The first scan after boot may take longer because the ESP32 needs to establish the WiFi connection. Subsequent scans are faster (~8-10 seconds).
 
 ### Out of memory on ESP32-PICO / Atom Echo
 
 Boards without PSRAM have ~100 KB free after boot. If you see `MemoryError`:
 - The firmware already deduplicates scan results and runs `gc.collect()` aggressively
-- Reduce `duration_ms` in the scan method to find fewer devices
+- Reduce `SCAN_DURATION_MS` in `board_atom_echo.py` to find fewer devices
 - Avoid running other MicroPython code alongside the bridge
