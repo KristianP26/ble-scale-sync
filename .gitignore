@@ -39,8 +39,7 @@ firmware/*.bin
 .garmin_tokens/
 .garmin_renpho_tokens/
 
-# Docker Compose (local overrides — docker-compose.example.yml is tracked)
-docker-compose.yml
+# Docker Compose (local overrides)
 docker-compose.override.yml
 
 # Strava tokens (should not be committed)

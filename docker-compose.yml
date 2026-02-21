@@ -1,0 +1,22 @@
+# Production compose for mqtt-proxy deployments (no BLE/BlueZ deps needed).
+# For direct BLE (BlueZ/D-Bus) deployments, see docker-compose.example.yml.
+
+services:
+  ble-scale-sync:
+    image: ghcr.io/kristianp26/ble-scale-sync:latest
+    container_name: ble-scale-sync
+    volumes:
+      # config.yaml is rw so the app can update last_known_weight
+      - ./config.yaml:/app/config.yaml
+      - garmin-tokens:/app/garmin-tokens
+    environment:
+      - CONTINUOUS_MODE=true
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+volumes:
+  garmin-tokens:
