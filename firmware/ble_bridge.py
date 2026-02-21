@@ -32,6 +32,13 @@ class BleBridge:
         self._conn = None
         self._chars = {}  # uuid_str -> characteristic
         self._notify_tasks = []
+        self._on_disconnect = None
+        self._disconnect_fired = False
+
+    def set_on_disconnect(self, callback):
+        """Set callback for unexpected peripheral disconnect (fires at most once)."""
+        self._on_disconnect = callback
+        self._disconnect_fired = False
 
     async def scan(self, duration_ms=None):
         """Scan for BLE peripherals using raw BLE API for reliable ad parsing.
@@ -175,22 +182,28 @@ class BleBridge:
         async def _notify_loop():
             try:
                 while self._conn and self._conn.is_connected():
-                    data = await char.notified(timeout_ms=60000)
+                    data = await char.notified(timeout_ms=10000)
                     if data:
                         await publish_fn(uuid_str, bytes(data))
             except asyncio.CancelledError:
                 pass
             except Exception as e:
                 print(f"Notify loop error ({uuid_str}): {e}")
+            # Fire disconnect callback once if connection was lost (not cancelled)
+            if not self._disconnect_fired and self._conn and not self._conn.is_connected():
+                self._disconnect_fired = True
+                if self._on_disconnect:
+                    self._on_disconnect()
 
         task = asyncio.create_task(_notify_loop())
         self._notify_tasks.append(task)
 
     async def write(self, uuid_str, data):
-        """Write data to a characteristic."""
+        """Write data to a characteristic (auto-detects response mode)."""
         char = self._chars.get(uuid_str)
         if char:
-            await char.write(data, response=True)
+            use_response = bool(char.properties & bluetooth.FLAG_WRITE)
+            await char.write(data, response=use_response)
 
     async def read(self, uuid_str):
         """Read data from a characteristic."""
@@ -201,6 +214,7 @@ class BleBridge:
 
     async def disconnect(self):
         """Disconnect, cancel notify tasks, clear state, optionally deactivate BLE."""
+        self._disconnect_fired = True  # Suppress callback during explicit disconnect
         for task in self._notify_tasks:
             task.cancel()
         self._notify_tasks.clear()

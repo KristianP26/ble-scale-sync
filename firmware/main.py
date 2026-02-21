@@ -244,6 +244,7 @@ async def handle_connect(payload):
 
                 await bridge.start_notify(uuid_str, make_publish_fn(uuid_str))
 
+        bridge.set_on_disconnect(lambda: _pending.append(("__ble_disconnected__", b"")))
         await client.publish(topic("connected"), json.dumps(result), qos=0)
     except Exception as e:
         _scan_paused = False  # Resume scanning on connect failure
@@ -258,6 +259,16 @@ async def handle_disconnect():
     await bridge.disconnect()
     _char_subscribed = False
     _scan_paused = False  # Resume autonomous scanning
+    await client.publish(topic("disconnected"), "", qos=0)
+
+
+async def handle_unexpected_disconnect():
+    """Handle unexpected BLE peripheral disconnect — notify TS, resume scanning."""
+    global _char_subscribed, _scan_paused
+    print("BLE peripheral disconnected unexpectedly")
+    await bridge.disconnect()
+    _char_subscribed = False
+    _scan_paused = False
     await client.publish(topic("disconnected"), "", qos=0)
 
 
@@ -313,7 +324,9 @@ async def main():
         while _pending:
             t, msg = _pending.pop(0)
             try:
-                if t == topic("connect"):
+                if t == "__ble_disconnected__":
+                    await handle_unexpected_disconnect()
+                elif t == topic("connect"):
                     await handle_connect(msg)
                 elif t == topic("disconnect"):
                     await handle_disconnect()
