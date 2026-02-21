@@ -9,7 +9,12 @@ const CB_UUID_REGEX =
 // --- Sub-schemas ---
 
 export const MqttProxySchema = z.object({
-  broker_url: z.string().min(1, 'MQTT broker URL is required'),
+  broker_url: z
+    .string()
+    .min(1, 'MQTT broker URL is required')
+    .refine((v) => /^mqtts?:\/\//.test(v), {
+      message: 'Must start with mqtt:// or mqtts://',
+    }),
   device_id: z.string().default('esp32-ble-proxy'),
   username: z.string().optional().nullable(),
   password: z.string().optional().nullable(),

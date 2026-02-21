@@ -146,6 +146,9 @@ download_firmware() {
     green "Firmware already downloaded: $FIRMWARE_FILE"
     return
   fi
+  if [[ -z "$FIRMWARE_URL" ]]; then
+    die "No pre-built firmware for ${BOARD}. Build from source:\n  cd ../drivers && ./build.sh ${BOARD}\nThen copy the .bin here:\n  cp ../drivers/build/firmware.bin $FIRMWARE_FILE"
+  fi
   blue "Downloading MicroPython v${MICROPYTHON_VERSION} for ${BOARD}..."
   curl -L -o "$FIRMWARE_FILE" "$FIRMWARE_URL"
   green "Downloaded: $FIRMWARE_FILE"

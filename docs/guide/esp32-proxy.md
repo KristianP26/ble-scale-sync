@@ -24,7 +24,7 @@ The ESP32 scans autonomously for BLE advertisements and publishes results over M
 4. Body composition is computed and dispatched to exporters
 5. Feedback (beep, display updates) is sent back to the ESP32 via MQTT
 
-Only **broadcast scales** are supported via the MQTT proxy - scales that embed weight data in their BLE advertisements. Scales that require a GATT connection are not supported through this handler (use the `auto` BLE handler with a local Bluetooth radio instead).
+Both **broadcast scales** (weight embedded in BLE advertisements) and **GATT scales** (requiring a connection for notification-based readings) are supported. When a matched adapter has no broadcast data, the proxy automatically falls back to a GATT connection through the ESP32.
 
 ## Supported Boards
 
@@ -104,7 +104,10 @@ Some boards need a slower baud rate. If flashing fails, edit `BAUD=115200` in `f
 :::
 
 ::: tip ESP32-S3-4848 (display board)
-This board requires custom LVGL MicroPython firmware built with the ST7701S display driver. See the [LVGL firmware build instructions](../../firmware/README.md) for details. Do NOT upload `display.py` to the filesystem - it shadows the frozen display module and causes a crash loop.
+This board requires custom LVGL MicroPython firmware. See [PORTING.md](../../PORTING.md) for build instructions:
+```bash
+cd drivers && ./build.sh guition_4848
+```
 :::
 
 ### 3. Verify
