@@ -107,7 +107,7 @@ sudo systemctl enable --now ble-scale.service
 :::
 
 ::: tip Raspberry Pi Zero 2W
-The ideal setup: a [$15 single-board computer](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/) with built-in BLE, always on, always listening. Step on the scale and your data appears in Garmin Connect within seconds — no phone needed.
+The ideal setup: a [$15 single-board computer](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/) with built-in BLE, always on, always listening. Step on the scale and your data appears in Garmin Connect within seconds — no phone needed. Note: the original Pi Zero W (ARMv6) is [not supported](/troubleshooting#install-fails-on-raspberry-pi-zero-w-first-gen).
 :::
 
 <div style="text-align: center; margin-top: 2rem;">

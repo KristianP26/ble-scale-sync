@@ -95,6 +95,14 @@ $env:DEBUG="true"; npm start
 
 This shows BLE discovery details, advertised services, discovered characteristics, and UUID matching.
 
+## Platform Issues
+
+### Install fails on Raspberry Pi Zero W (first gen)
+
+The original Pi Zero W has an ARMv6 CPU, which is **not supported**. The `esbuild` binary (used by the TypeScript runner `tsx`) requires ARMv7 or later and will crash with `SIGILL` (illegal instruction) on ARMv6. This affects both native installs and Docker.
+
+**Solution:** Use a [Raspberry Pi Zero 2W](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/) (~$15, ARMv7/64-bit) or any Pi 3/4/5.
+
 ## Docker Issues
 
 ### Container can't find BLE adapter

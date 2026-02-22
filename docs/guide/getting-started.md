@@ -164,6 +164,10 @@ sudo systemctl enable --now ble-scale.service
 The Raspberry Pi Zero 2W is the ideal deployment target. It's cheap, tiny, always on, and has built-in Bluetooth. Step on the scale and your data appears in Garmin Connect within seconds — no phone needed.
 :::
 
+::: danger Pi Zero W (first gen) is not supported
+The original Raspberry Pi Zero W has an ARMv6 CPU. Key dependencies (`esbuild`, used by the TypeScript runner) do not provide ARMv6 binaries, so `npm install` will fail with a `SIGILL` (illegal instruction) error. This is an upstream toolchain limitation with no workaround. Use a **Pi Zero 2W** (ARMv7/64-bit) or any **Pi 3/4/5** instead.
+:::
+
 ## What's Next?
 
 - [Configuration](./configuration) — config.yaml reference
