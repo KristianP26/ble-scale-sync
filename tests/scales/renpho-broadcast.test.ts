@@ -1,9 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { RenphoBroadcastAdapter } from '../../src/scales/renpho-broadcast.js';
-import {
-  defaultProfile,
-  assertPayloadRanges,
-} from '../helpers/scale-test-utils.js';
+import { defaultProfile, assertPayloadRanges } from '../helpers/scale-test-utils.js';
 import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
 
 function makeAdapter() {

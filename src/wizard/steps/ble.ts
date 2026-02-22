@@ -62,21 +62,18 @@ export const bleStep: WizardStep = {
     if (!ctx.config.ble) ctx.config.ble = { handler: 'auto' };
 
     // --- Handler selection ---
-    const handler = await ctx.prompts.select(
-      'How does this device connect to your BLE scale?',
-      [
-        {
-          name: 'Directly via Bluetooth (Recommended)',
-          value: 'auto' as const,
-          description: 'This machine has a Bluetooth adapter',
-        },
-        {
-          name: 'Via ESP32 MQTT proxy',
-          value: 'mqtt-proxy' as const,
-          description: 'Remote BLE scanning via an ESP32 device',
-        },
-      ],
-    );
+    const handler = await ctx.prompts.select('How does this device connect to your BLE scale?', [
+      {
+        name: 'Directly via Bluetooth (Recommended)',
+        value: 'auto' as const,
+        description: 'This machine has a Bluetooth adapter',
+      },
+      {
+        name: 'Via ESP32 MQTT proxy',
+        value: 'mqtt-proxy' as const,
+        description: 'Remote BLE scanning via an ESP32 device',
+      },
+    ]);
 
     ctx.config.ble.handler = handler;
 

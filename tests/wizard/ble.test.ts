@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { bleStep, validateMac, validateBrokerUrl, promptMqttProxy } from '../../src/wizard/steps/ble.js';
+import {
+  bleStep,
+  validateMac,
+  validateBrokerUrl,
+  promptMqttProxy,
+} from '../../src/wizard/steps/ble.js';
 import type { WizardContext } from '../../src/wizard/types.js';
 import { createMockPromptProvider } from '../../src/wizard/prompt-provider.js';
 
@@ -63,9 +68,9 @@ describe('promptMqttProxy()', () => {
   it('collects broker details without auth', async () => {
     const ctx = makeCtx([
       'mqtt://10.1.1.15:1883', // broker_url
-      'my-esp32',              // device_id
-      'my-prefix',             // topic_prefix
-      false,                   // hasAuth = no
+      'my-esp32', // device_id
+      'my-prefix', // topic_prefix
+      false, // hasAuth = no
     ]);
 
     const result = await promptMqttProxy(ctx);
@@ -79,11 +84,11 @@ describe('promptMqttProxy()', () => {
   it('collects broker details with auth', async () => {
     const ctx = makeCtx([
       'mqtts://broker.example.com:8883', // broker_url
-      'esp32-device',                     // device_id
-      'ble-proxy',                        // topic_prefix
-      true,                               // hasAuth = yes
-      'myuser',                           // username
-      'mypass',                            // password
+      'esp32-device', // device_id
+      'ble-proxy', // topic_prefix
+      true, // hasAuth = yes
+      'myuser', // username
+      'mypass', // password
     ]);
 
     const result = await promptMqttProxy(ctx);
@@ -102,8 +107,8 @@ describe('promptMqttProxy()', () => {
 describe('bleStep handler selection', () => {
   it('sets handler to auto and clears mqtt_proxy when auto selected', async () => {
     const ctx = makeCtx([
-      'auto',   // handler selection
-      'skip',   // scale discovery → skip
+      'auto', // handler selection
+      'skip', // scale discovery → skip
     ]);
 
     await bleStep.run(ctx);
@@ -114,12 +119,12 @@ describe('bleStep handler selection', () => {
 
   it('sets handler to mqtt-proxy with broker config', async () => {
     const ctx = makeCtx([
-      'mqtt-proxy',                // handler selection
-      'mqtt://10.1.1.15:1883',     // broker_url
-      'esp32-ble-proxy',           // device_id
-      'ble-proxy',                 // topic_prefix
-      false,                       // no auth
-      'skip',                      // scale discovery → skip
+      'mqtt-proxy', // handler selection
+      'mqtt://10.1.1.15:1883', // broker_url
+      'esp32-ble-proxy', // device_id
+      'ble-proxy', // topic_prefix
+      false, // no auth
+      'skip', // scale discovery → skip
     ]);
 
     await bleStep.run(ctx);
@@ -134,15 +139,15 @@ describe('bleStep handler selection', () => {
 
   it('sets handler to mqtt-proxy with auth credentials', async () => {
     const ctx = makeCtx([
-      'mqtt-proxy',                // handler selection
-      'mqtt://broker:1883',        // broker_url
-      'my-esp',                    // device_id
-      'prefix',                    // topic_prefix
-      true,                        // has auth
-      'admin',                     // username
-      'secret',                    // password
-      'manual',                    // scale discovery → manual
-      'AA:BB:CC:DD:EE:FF',        // MAC address
+      'mqtt-proxy', // handler selection
+      'mqtt://broker:1883', // broker_url
+      'my-esp', // device_id
+      'prefix', // topic_prefix
+      true, // has auth
+      'admin', // username
+      'secret', // password
+      'manual', // scale discovery → manual
+      'AA:BB:CC:DD:EE:FF', // MAC address
     ]);
 
     await bleStep.run(ctx);
@@ -154,10 +159,7 @@ describe('bleStep handler selection', () => {
   });
 
   it('initializes ble config if not present', async () => {
-    const ctx = makeCtx([
-      'auto',
-      'skip',
-    ]);
+    const ctx = makeCtx(['auto', 'skip']);
     ctx.config.ble = undefined;
 
     await bleStep.run(ctx);
@@ -172,8 +174,8 @@ describe('bleStep handler selection', () => {
 describe('bleStep scale discovery', () => {
   it('sets scale_mac to undefined when skip is selected', async () => {
     const ctx = makeCtx([
-      'auto',   // handler
-      'skip',   // discovery
+      'auto', // handler
+      'skip', // discovery
     ]);
 
     await bleStep.run(ctx);
@@ -183,9 +185,9 @@ describe('bleStep scale discovery', () => {
 
   it('sets scale_mac when manual entry is used', async () => {
     const ctx = makeCtx([
-      'auto',                   // handler
-      'manual',                 // discovery
-      'AA:BB:CC:DD:EE:FF',     // MAC
+      'auto', // handler
+      'manual', // discovery
+      'AA:BB:CC:DD:EE:FF', // MAC
     ]);
 
     await bleStep.run(ctx);
@@ -195,10 +197,10 @@ describe('bleStep scale discovery', () => {
 
   it('goes back to discovery menu when manual entry is empty', async () => {
     const ctx = makeCtx([
-      'auto',      // handler
-      'manual',    // discovery (first attempt)
-      '',          // empty → go back
-      'skip',      // discovery (second attempt) → skip
+      'auto', // handler
+      'manual', // discovery (first attempt)
+      '', // empty → go back
+      'skip', // discovery (second attempt) → skip
     ]);
 
     await bleStep.run(ctx);
