@@ -7,7 +7,25 @@ description: Version history for BLE Scale Sync.
 
 All notable changes to this project are documented here. Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## v1.3.0 <Badge type="tip" text="latest" /> {#v1-3-0}
+## v1.3.1 <Badge type="tip" text="latest" /> {#v1-3-1}
+
+_2026-02-22_
+
+### Fixed
+- **ES-CS20M**: support 0x11 STOP frame as stability signal for Yunmai-protocol variant (#34)
+- **ES-CS20M**: add service UUID 0x1A10 fallback for unnamed devices (#34)
+
+### Added
+- **Docs**: BLE handler switching guide in troubleshooting
+- **Docs**: Pi Zero W (ARMv6) not supported notice (#42)
+- **Docs**: `StartLimitIntervalSec=0` in systemd service example
+
+### Changed
+- **CI**: PR-triggered Docker image builds with `pr-{id}` tags (#44)
+- **CI**: Node.js 24 added to test matrix
+- **Deps**: ESLint v10, typescript-eslint v8.56
+
+## v1.3.0 {#v1-3-0}
 
 _2026-02-16_
 
