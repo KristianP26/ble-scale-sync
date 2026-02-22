@@ -6,9 +6,11 @@ CMD="${1:-start}"
 reset_bt_adapter() {
   if command -v btmgmt >/dev/null 2>&1; then
     echo "Resetting Bluetooth adapter..."
-    btmgmt power off 2>/dev/null && btmgmt power on 2>/dev/null \
-      && echo "Bluetooth adapter reset OK" \
-      || echo "Bluetooth adapter reset failed (will retry in-app)"
+    if btmgmt --index 0 power off 2>/dev/null && btmgmt --index 0 power on 2>/dev/null; then
+      echo "Bluetooth adapter reset OK"
+    else
+      echo "Bluetooth adapter reset failed (will retry in-app)"
+    fi
     sleep 2
   fi
 }
