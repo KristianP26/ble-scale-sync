@@ -56,14 +56,19 @@ async function stopDiscoveryAndQuiesce(btAdapter: Adapter): Promise<void> {
 
 /**
  * Try to start BlueZ discovery with escalating recovery strategies.
- * Returns true if discovery is active, false if all attempts failed.
+ * Returns the (possibly refreshed) adapter on success, or false if all attempts failed.
+ * When `bluetooth` is provided, Tier 4 (btmgmt) can re-acquire a fresh D-Bus proxy
+ * after the kernel-level reset invalidates the current one.
  */
-async function startDiscoverySafe(btAdapter: Adapter): Promise<boolean> {
+async function startDiscoverySafe(
+  btAdapter: Adapter,
+  bluetooth?: NodeBle.Bluetooth,
+): Promise<Adapter | false> {
   // 1. Normal start
   try {
     await btAdapter.startDiscovery();
     bleLog.debug('Discovery started');
-    return true;
+    return btAdapter;
   } catch (e) {
     bleLog.debug(`startDiscovery failed: ${errMsg(e)}`);
   }
@@ -71,7 +76,7 @@ async function startDiscoverySafe(btAdapter: Adapter): Promise<boolean> {
   // Already running (another D-Bus client owns the session)
   if (await btAdapter.isDiscovering()) {
     bleLog.debug('Discovery already active (owned by another client), continuing');
-    return true;
+    return btAdapter;
   }
 
   // 2. Force-stop via D-Bus (bypass node-ble's isDiscovering guard) + retry
@@ -88,7 +93,7 @@ async function startDiscoverySafe(btAdapter: Adapter): Promise<boolean> {
   try {
     await btAdapter.startDiscovery();
     bleLog.debug('Discovery started after D-Bus reset');
-    return true;
+    return btAdapter;
   } catch (e) {
     bleLog.debug(`startDiscovery after D-Bus reset failed: ${errMsg(e)}`);
   }
@@ -109,7 +114,7 @@ async function startDiscoverySafe(btAdapter: Adapter): Promise<boolean> {
 
     await btAdapter.startDiscovery();
     bleLog.debug('Discovery started after power cycle');
-    return true;
+    return btAdapter;
   } catch (e) {
     bleLog.debug(`Power cycle / startDiscovery failed: ${errMsg(e)}`);
   }
@@ -117,12 +122,26 @@ async function startDiscoverySafe(btAdapter: Adapter): Promise<boolean> {
   // 4. Kernel-level adapter reset via btmgmt (bypasses D-Bus session ownership)
   bleLog.debug('Attempting kernel-level adapter reset via btmgmt...');
   if (await resetAdapterBtmgmt()) {
-    try {
-      await btAdapter.startDiscovery();
-      bleLog.debug('Discovery started after btmgmt reset');
-      return true;
-    } catch (e) {
-      bleLog.debug(`startDiscovery after btmgmt reset failed: ${errMsg(e)}`);
+    // btmgmt power-cycles the adapter at kernel level, which causes BlueZ to
+    // remove and re-create the D-Bus object at /org/bluez/hci0. The existing
+    // proxy is now stale — re-acquire a fresh one if possible.
+    if (bluetooth) {
+      try {
+        const freshAdapter = await bluetooth.defaultAdapter();
+        await freshAdapter.startDiscovery();
+        bleLog.debug('Discovery started after btmgmt reset (fresh adapter)');
+        return freshAdapter;
+      } catch (e) {
+        bleLog.debug(`startDiscovery after btmgmt reset failed: ${errMsg(e)}`);
+      }
+    } else {
+      try {
+        await btAdapter.startDiscovery();
+        bleLog.debug('Discovery started after btmgmt reset');
+        return btAdapter;
+      } catch (e) {
+        bleLog.debug(`startDiscovery after btmgmt reset failed: ${errMsg(e)}`);
+      }
     }
   }
 
@@ -160,7 +179,8 @@ interface ConnectRecoveryContext {
  * Returns the (possibly refreshed) Device reference.
  */
 async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<Device> {
-  const { btAdapter, mac, maxRetries } = ctx;
+  let { btAdapter } = ctx;
+  const { mac, maxRetries } = ctx;
   const formattedMac = formatMac(mac);
   let device = ctx.initialDevice;
 
@@ -199,7 +219,8 @@ async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<Device>
 
       // 4. Re-discover and acquire fresh device reference
       try {
-        await startDiscoverySafe(btAdapter);
+        const result = await startDiscoverySafe(btAdapter);
+        if (result) btAdapter = result;
         device = await withTimeout(
           btAdapter.waitDevice(formattedMac),
           DISCOVERY_TIMEOUT_MS,
@@ -351,9 +372,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   }
 
   let device: Device | null = null;
+  let btAdapter: Adapter | null = null;
 
   try {
-    let btAdapter: Adapter;
     try {
       btAdapter = await bluetooth.defaultAdapter();
     } catch (err) {
@@ -376,7 +397,8 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       await removeDevice(btAdapter, targetMac);
     }
 
-    await startDiscoverySafe(btAdapter);
+    const discoveryResult = await startDiscoverySafe(btAdapter, bluetooth);
+    if (discoveryResult) btAdapter = discoveryResult;
 
     let matchedAdapter: ScaleAdapter;
 
@@ -494,6 +516,16 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     }
     return raw;
   } finally {
+    // Always stop discovery before destroying the D-Bus connection to prevent
+    // orphaned BlueZ discovery sessions that cause "Operation already in progress"
+    // on the next scan cycle in continuous mode.
+    if (btAdapter) {
+      try {
+        await btAdapter.stopDiscovery();
+      } catch {
+        /* may already be stopped */
+      }
+    }
     destroy();
   }
 }
@@ -521,8 +553,9 @@ export async function scanDevices(
     throw err;
   }
 
+  let btAdapter: Adapter | null = null;
+
   try {
-    let btAdapter: Adapter;
     try {
       btAdapter = await bluetooth.defaultAdapter();
     } catch (err) {
@@ -537,7 +570,8 @@ export async function scanDevices(
       );
     }
 
-    await startDiscoverySafe(btAdapter);
+    const discoveryResult = await startDiscoverySafe(btAdapter, bluetooth);
+    if (discoveryResult) btAdapter = discoveryResult;
 
     const seen = new Set<string>();
     const results: ScanResult[] = [];
@@ -569,14 +603,15 @@ export async function scanDevices(
       await sleep(DISCOVERY_POLL_MS);
     }
 
-    try {
-      await btAdapter.stopDiscovery();
-    } catch {
-      /* ignore */
-    }
-
     return results;
   } finally {
+    if (btAdapter) {
+      try {
+        await btAdapter.stopDiscovery();
+      } catch {
+        /* ignore */
+      }
+    }
     destroy();
   }
 }
