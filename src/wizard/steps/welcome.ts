@@ -13,7 +13,9 @@ export const welcomeStep: WizardStep = {
     console.log(dim('  Before you start, make sure you have:'));
     console.log(dim('    - Your scale nearby (powered on)'));
     console.log(dim('    - Garmin credentials (if using Garmin export)'));
-    console.log(dim('    - MQTT/InfluxDB/Webhook/Ntfy details (if using those exporters)\n'));
+    console.log(dim('    - Strava API app created (if using Strava export)'));
+    console.log(dim('    - MQTT/InfluxDB/Webhook/Ntfy details (if using those exporters)'));
+    console.log(dim('    - File path for CSV/JSONL output (if using File export)\n'));
 
     // Check for existing config
     if (existsSync(ctx.configPath)) {

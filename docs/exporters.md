@@ -198,7 +198,7 @@ volumes:
 
 ## Strava {#strava}
 
-Update your weight in the Strava athlete profile. Requires a Strava API application (create one at [strava.com/settings/api](https://www.strava.com/settings/api)).
+Update your weight in the Strava athlete profile. Requires a Strava API application.
 
 | Field | Required | Default | Description |
 |---|---|---|---|
@@ -215,14 +215,40 @@ users:
         client_secret: '${STRAVA_CLIENT_SECRET}'
 ```
 
+### Creating a Strava API Application
+
+1. Go to [strava.com/settings/api](https://www.strava.com/settings/api)
+2. Upload an **Application Icon** (required before you can save the form)
+3. Fill in the application details:
+   - **Application Name**: anything you like (e.g. `BLE Scale Sync`)
+   - **Category**: choose any
+   - **Website**: can be anything (e.g. `https://github.com/KristianP26/ble-scale-sync`)
+   - **Authorization Callback Domain**: set to `localhost` (the OAuth flow redirects here, but the page does not need to load)
+4. Save and copy the **Client ID** and **Client Secret**
+
+::: warning Callback Domain
+The **Authorization Callback Domain** must be set to `localhost`. During the OAuth flow, Strava redirects to `http://localhost?code=XXXX`. The page will not load (nothing is listening), but you only need to copy the `code` parameter from the URL bar.
+:::
+
 ::: tip Authentication
 After adding the Strava exporter to your config, run the setup script to authorize:
+
+**Native:**
 
 ```bash
 npm run setup-strava
 ```
 
-The script opens a browser URL for Strava authorization. After authorizing, paste the code from the redirect URL. Tokens are cached and automatically refreshed.
+**Docker:**
+
+```bash
+docker run --rm -it \
+  -v ./config.yaml:/app/config.yaml \
+  -v strava-tokens:/app/strava-tokens \
+  ghcr.io/kristianp26/ble-scale-sync:latest setup-strava
+```
+
+The script prints a browser URL for Strava authorization. After authorizing, copy the `code` parameter from the redirect URL and paste it back. Tokens are cached and automatically refreshed.
 :::
 
 ## Secrets
