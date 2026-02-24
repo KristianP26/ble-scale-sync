@@ -435,6 +435,12 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         }
       }
 
+      // Broadcast-only adapters (no GATT UUIDs) — wait for next stable advertisement
+      if (!adapter.charNotifyUuid) {
+        bleLog.debug(`${adapter.name} is broadcast-only, waiting for stable reading...`);
+        continue;
+      }
+
       // GATT fallback — adapter matched but no broadcast data
       bleLog.info(`No broadcast data for ${adapter.name}; connecting via GATT proxy...`);
       const { charMap, device } = await mqttGattConnect(
@@ -573,6 +579,9 @@ export class ReadingWatcher {
               continue;
             }
           }
+
+          // Broadcast-only adapters (no GATT UUIDs) — skip, wait for stable advertisement
+          if (!adapter.charNotifyUuid) continue;
 
           // GATT fallback — adapter matched but no broadcast data (or parseBroadcast returned null)
           this.handleGattReading(entry, adapter).catch((err) => {

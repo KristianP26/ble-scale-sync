@@ -12,7 +12,7 @@ function makeBroadcast(weightKg: number, stable: boolean): Buffer {
   const buf = Buffer.alloc(23);
   buf[0] = 0xaa;
   buf[1] = 0xbb;
-  buf[15] = stable ? 0x25 : 0x04;
+  buf[15] = stable ? 0x23 : 0x04;
   buf.writeUInt16LE(Math.round(weightKg * 100), 17);
   return buf;
 }

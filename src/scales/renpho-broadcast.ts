@@ -18,7 +18,7 @@ import { buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
  *   [2-7]   MAC address of the device
  *   [8]     sequence / status byte (changes each broadcast)
  *   [9-14]  unknown
- *   [15]    stability flag (0x25 = stable, other = settling)
+ *   [15]    status flags — bit 5 (0x20) = measurement stable
  *   [16]    unknown
  *   [17-18] weight: little-endian uint16 / 100 = kg
  *   [19-22] unknown (possibly impedance/checksum)
@@ -46,8 +46,8 @@ export class RenphoBroadcastAdapter implements ScaleAdapter {
     if (manufacturerData.length < 19) return null;
     if (manufacturerData[0] !== 0xaa || manufacturerData[1] !== 0xbb) return null;
 
-    // Only accept stable readings (byte 15 == 0x25)
-    if (manufacturerData[15] !== 0x25) return null;
+    // Only accept stable readings (bit 5 of byte 15 = "measurement settled")
+    if ((manufacturerData[15] & 0x20) === 0) return null;
 
     const weight = manufacturerData.readUInt16LE(17) / 100;
     if (weight <= 0 || !Number.isFinite(weight)) return null;
