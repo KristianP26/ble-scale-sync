@@ -216,8 +216,15 @@ export function loadExporterConfig(): ExporterConfig {
       fail('FILE_PATH is required when file exporter is enabled.');
     }
     const rawFormat = process.env.FILE_FORMAT?.trim()?.toLowerCase();
-    const format: 'csv' | 'jsonl' =
-      rawFormat === 'jsonl' ? 'jsonl' : rawFormat === 'csv' || !rawFormat ? 'csv' : 'csv';
+    let format: 'csv' | 'jsonl';
+    if (rawFormat === 'jsonl') {
+      format = 'jsonl';
+    } else if (rawFormat === 'csv' || !rawFormat) {
+      format = 'csv';
+    } else {
+      log.warn(`Invalid FILE_FORMAT "${rawFormat}", falling back to "csv".`);
+      format = 'csv';
+    }
     file = { filePath, format };
   }
 
