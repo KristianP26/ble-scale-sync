@@ -4,11 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.5.0] - 2026-02-24
 
 ### Added
-- **File exporter** (CSV/JSONL) for local measurement logging without external services. Supports auto-header CSV and JSONL formats, per-user file paths, and directory writability healthcheck
-- **Strava exporter** with OAuth2 token management. Updates athlete weight via PUT /api/v3/athlete. Automatic token refresh, persistent storage, and interactive setup script (`npm run setup-strava`)
+- **File exporter** (CSV/JSONL) for local measurement logging without external services. Auto-header CSV, JSONL format, per-user file paths, directory writability healthcheck, and proper CSV escaping for special characters
+- **Strava exporter** with OAuth2 token management. Updates athlete weight via PUT /api/v3/athlete. Automatic token refresh, persistent storage with restricted file permissions (0o600), and interactive setup script (`npm run setup-strava`)
+- Strava API application setup guide in documentation with step-by-step instructions
+
+### Fixed
+- Single-user mode now passes ExportContext to exporters (user name was missing in File CSV output)
+- Strava token files use restricted permissions (0o600) to prevent unauthorized access
+- Malformed Strava token files now show a clear error message instead of a generic JSON parse error
+- Invalid `FILE_FORMAT` env var values now log a warning instead of silently defaulting to CSV
 
 ## [1.4.0] - 2026-02-24
 
@@ -114,6 +121,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Exporter healthchecks at startup
 - 894 unit tests across 49 test files
 
+[1.5.0]: https://github.com/KristianP26/ble-scale-sync/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/KristianP26/ble-scale-sync/compare/v1.3.1...v1.4.0
 [1.3.0]: https://github.com/KristianP26/ble-scale-sync/compare/v1.2.2...v1.3.0
 [1.2.2]: https://github.com/KristianP26/ble-scale-sync/compare/v1.2.1...v1.2.2
