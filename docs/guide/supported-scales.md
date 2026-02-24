@@ -62,6 +62,7 @@ We recommend setting `scale_mac` in `config.yaml` — it prevents the app from a
 | **Soehnle**, **Sanitas** SBF72/73, **Beurer** BF915 | Create user slot 1 in the manufacturer's phone app first |
 | **Standard GATT** | Select user 1 on the scale before measuring |
 | **Senssun** Model B | Not supported yet (only Model A with service 0xFFF0) |
+| **Renpho ES-CS20M** (some hardware variants) | Some units use broadcast-only firmware that does not allow GATT connections. The same model name can ship with different internal hardware. If your ES-CS20M is broadcast-only, ble-scale-sync reads weight directly from BLE advertisements. Body composition is estimated from BMI (Deurenberg formula) instead of impedance, since impedance is not available in broadcast mode. Run `npm run diagnose` to check whether your unit is connectable or broadcast-only. |
 
 ## Don't See Your Scale?
 

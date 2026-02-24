@@ -1,6 +1,11 @@
 import noble from '@stoprocent/noble';
 import type { Peripheral, Characteristic, Service } from '@stoprocent/noble';
-import type { ScaleAdapter, BleDeviceInfo, BodyComposition } from '../interfaces/scale-adapter.js';
+import type {
+  ScaleAdapter,
+  ScaleReading,
+  BleDeviceInfo,
+  BodyComposition,
+} from '../interfaces/scale-adapter.js';
 import type { ScanOptions, ScanResult } from './types.js';
 import type { BleChar, BleDevice, RawReading } from './shared.js';
 import { waitForRawReading } from './shared.js';
@@ -207,6 +212,8 @@ function discoverPeripheral(
         bleLog.debug(`Discovered: ${name || '(no name)'} [${addr}]`);
       }
 
+      const mfgData: Buffer | undefined = peripheral.advertisement?.manufacturerData;
+
       if (targetMac) {
         // Target mode: match by MAC or CoreBluetooth UUID
         if (!matchesTarget(peripheral, targetMac)) return;
@@ -218,7 +225,11 @@ function discoverPeripheral(
         resolve({ peripheral });
       } else {
         // Auto-discovery: try matching adapters by name + advertised service UUIDs
-        const info: BleDeviceInfo = { localName: name, serviceUuids: svcUuids };
+        const info: BleDeviceInfo = {
+          localName: name,
+          serviceUuids: svcUuids,
+          manufacturerData: mfgData,
+        };
         const matched = adapters.find((a) => a.matches(info));
         if (!matched) return;
 
@@ -242,6 +253,84 @@ function discoverPeripheral(
   });
 }
 
+// ─── Broadcast scan (advertisement-based weight reading) ─────────────────────
+
+/**
+ * Read weight from BLE advertisement data without establishing a GATT connection.
+ * Used for broadcast-only devices (ADV_NONCONN_IND) that embed weight in
+ * manufacturer data.
+ *
+ * Restarts scanning with allowDuplicates=true and calls adapter.parseAdvertisement()
+ * on each advertisement from the target device until a stable reading is returned.
+ */
+function broadcastScan(
+  adapter: ScaleAdapter,
+  targetPeripheral: Peripheral,
+  opts: {
+    abortSignal?: AbortSignal;
+    onLiveData?: (reading: ScaleReading) => void;
+  },
+): Promise<RawReading> {
+  const { abortSignal, onLiveData } = opts;
+
+  if (abortSignal?.aborted) {
+    return Promise.reject(abortSignal.reason ?? new DOMException('Aborted', 'AbortError'));
+  }
+
+  return new Promise((resolve, reject) => {
+    const targetAddr = peripheralAddress(targetPeripheral);
+
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`No stable broadcast reading within ${DISCOVERY_TIMEOUT_MS / 1000}s`));
+    }, DISCOVERY_TIMEOUT_MS);
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      noble.removeListener('discover', onDiscover);
+      noble.stopScanningAsync().catch(() => {});
+      abortSignal?.removeEventListener('abort', onAbort);
+    };
+
+    const onAbort = () => {
+      cleanup();
+      reject(abortSignal!.reason ?? new DOMException('Aborted', 'AbortError'));
+    };
+
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
+
+    const onDiscover = (peripheral: Peripheral): void => {
+      if (peripheralAddress(peripheral) !== targetAddr) return;
+
+      const mfgData: Buffer | undefined = peripheral.advertisement?.manufacturerData;
+      if (!mfgData || !adapter.parseAdvertisement) return;
+
+      const reading = adapter.parseAdvertisement(mfgData);
+
+      if (reading && onLiveData) {
+        onLiveData(reading);
+      }
+
+      if (reading) {
+        cleanup();
+        bleLog.info(
+          `Broadcast reading: ${reading.weight.toFixed(2)} kg (no impedance in broadcast mode)`,
+        );
+        resolve({ reading, adapter });
+      }
+    };
+
+    noble.on('discover', onDiscover);
+
+    noble.startScanningAsync([], true).catch((err) => {
+      cleanup();
+      reject(new Error(`Failed to restart scanning for broadcast: ${errMsg(err)}`));
+    });
+
+    bleLog.info('Listening for broadcast weight data. Step on the scale.');
+  });
+}
+
 // ─── Exports ──────────────────────────────────────────────────────────────────
 
 /**
@@ -259,6 +348,34 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       targetMac,
       abortSignal,
     );
+
+    // Broadcast-only device: read weight from advertisements instead of GATT
+    const connectable = peripheral.connectable !== false;
+    if (!connectable) {
+      const mfgData: Buffer | undefined = peripheral.advertisement?.manufacturerData;
+      const name = peripheral.advertisement?.localName ?? '';
+      const svcUuids = (peripheral.advertisement?.serviceUuids ?? []).map(normalizeUuid);
+
+      // Match adapter if not already matched during discovery
+      let adapter = discoveredAdapter;
+      if (!adapter) {
+        const info: BleDeviceInfo = {
+          localName: name,
+          serviceUuids: svcUuids,
+          manufacturerData: mfgData,
+        };
+        adapter = adapters.find((a) => a.matches(info));
+      }
+
+      if (adapter?.parseAdvertisement) {
+        bleLog.info(
+          `Device is broadcast-only (non-connectable). Using advertisement-based reading.`,
+        );
+        return await broadcastScan(adapter, peripheral, { abortSignal, onLiveData });
+      }
+
+      bleLog.warn('Device is broadcast-only but no adapter supports advertisement parsing.');
+    }
 
     await connectWithRetries(peripheral, MAX_CONNECT_RETRIES);
     try {
@@ -362,7 +479,12 @@ export async function scanDevices(
 
     const name = peripheral.advertisement?.localName ?? '(unknown)';
     const svcUuids = (peripheral.advertisement?.serviceUuids ?? []).map(normalizeUuid);
-    const info: BleDeviceInfo = { localName: name, serviceUuids: svcUuids };
+    const mfgData: Buffer | undefined = peripheral.advertisement?.manufacturerData;
+    const info: BleDeviceInfo = {
+      localName: name,
+      serviceUuids: svcUuids,
+      manufacturerData: mfgData,
+    };
     const matched = adapters.find((a) => a.matches(info));
 
     results.push({
