@@ -22,6 +22,7 @@ interface MockMqttClient {
   subscribe: ReturnType<typeof vi.fn>;
   subscribeAsync: ReturnType<typeof vi.fn>;
   unsubscribe: ReturnType<typeof vi.fn>;
+  unsubscribeAsync: ReturnType<typeof vi.fn>;
   publish: ReturnType<typeof vi.fn>;
   publishAsync: ReturnType<typeof vi.fn>;
   endAsync: ReturnType<typeof vi.fn>;
@@ -51,6 +52,7 @@ function createMockMqttClient(): MockMqttClient {
     subscribe: vi.fn(() => client),
     subscribeAsync: vi.fn(async () => []),
     unsubscribe: vi.fn(() => client),
+    unsubscribeAsync: vi.fn(async () => undefined),
     publish: vi.fn(() => client),
     publishAsync: vi.fn(async () => undefined),
     endAsync: vi.fn(async () => undefined),

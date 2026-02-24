@@ -505,6 +505,11 @@ export class ReadingWatcher {
   private profile?: UserProfile;
   private dedup = new Map<string, number>();
   private gattInProgress = false;
+  private gattStartedAt = 0;
+  private _client: MqttClient | null = null;
+  private _lifecycleHandlers: Array<{ event: string; handler: (...args: unknown[]) => void }> = [];
+  private _messageHandler: ((topic: string, payload: Buffer) => void) | null = null;
+  private _subscribedTopics: string[] = [];
 
   constructor(
     config: MqttProxyConfig,
@@ -525,21 +530,33 @@ export class ReadingWatcher {
 
     const t = topics(this.config.topic_prefix, this.config.device_id);
     const client = await getOrCreatePersistentClient(this.config);
+    this._client = client;
 
-    // Lifecycle logging
-    client.on('reconnect', () => bleLog.info('MQTT reconnecting...'));
-    client.on('offline', () => bleLog.warn('MQTT client offline'));
-    client.on('error', (err) => bleLog.warn(`MQTT error: ${err.message}`));
-    client.on('connect', () => bleLog.info('MQTT connected'));
+    // Lifecycle logging — store references for cleanup
+    const onReconnect = () => bleLog.info('MQTT reconnecting...');
+    const onOffline = () => bleLog.warn('MQTT client offline');
+    const onError = (err: Error) => bleLog.warn(`MQTT error: ${err.message}`);
+    const onConnect = () => bleLog.info('MQTT connected');
+    client.on('reconnect', onReconnect);
+    client.on('offline', onOffline);
+    client.on('error', onError);
+    client.on('connect', onConnect);
+    this._lifecycleHandlers = [
+      { event: 'reconnect', handler: onReconnect },
+      { event: 'offline', handler: onOffline },
+      { event: 'error', handler: onError },
+      { event: 'connect', handler: onConnect },
+    ];
 
     // Subscribe to scan results with QoS 1
     await client.subscribeAsync(t.scanResults, { qos: 1 });
     // Subscribe to status for logging only
     await client.subscribeAsync(t.status);
+    this._subscribedTopics = [t.scanResults, t.status];
     bleLog.info('ReadingWatcher started — listening for scan results');
 
-    // Permanent message handler
-    client.on('message', (topic: string, payload: Buffer) => {
+    // Message handler — store reference for cleanup
+    this._messageHandler = (topic: string, payload: Buffer) => {
       if (topic === t.status) {
         bleLog.info(`ESP32 status: ${payload.toString()}`);
         return;
@@ -591,7 +608,39 @@ export class ReadingWatcher {
       } catch (err) {
         bleLog.warn(`Failed to parse scan results: ${err instanceof Error ? err.message : err}`);
       }
-    });
+    };
+    client.on('message', this._messageHandler);
+  }
+
+  /** Stop the watcher — remove listeners and unsubscribe from topics. */
+  async stop(): Promise<void> {
+    if (!this.started || !this._client) return;
+
+    // Remove message handler
+    if (this._messageHandler) {
+      this._client.removeListener('message', this._messageHandler);
+      this._messageHandler = null;
+    }
+
+    // Remove lifecycle handlers
+    for (const { event, handler } of this._lifecycleHandlers) {
+      this._client.removeListener(event, handler);
+    }
+    this._lifecycleHandlers = [];
+
+    // Unsubscribe from topics
+    for (const topic of this._subscribedTopics) {
+      try {
+        await this._client.unsubscribeAsync(topic);
+      } catch {
+        /* ignore — client may already be disconnected */
+      }
+    }
+    this._subscribedTopics = [];
+
+    this.started = false;
+    this._client = null;
+    bleLog.info('ReadingWatcher stopped');
   }
 
   /** Consume the next reading from the queue. Blocks until one arrives. */
@@ -606,12 +655,20 @@ export class ReadingWatcher {
     if (profile) this.profile = profile;
   }
 
+  private static readonly GATT_STALE_MS = 90_000;
+
   private async handleGattReading(entry: ScanResultEntry, adapter: ScaleAdapter): Promise<void> {
     if (this.gattInProgress) {
-      bleLog.debug(`GATT connection already in progress, skipping ${entry.address}`);
-      return;
+      if (Date.now() - this.gattStartedAt > ReadingWatcher.GATT_STALE_MS) {
+        bleLog.warn('gattInProgress stuck for >90s — auto-resetting');
+        this.gattInProgress = false;
+      } else {
+        bleLog.debug(`GATT connection already in progress, skipping ${entry.address}`);
+        return;
+      }
     }
     this.gattInProgress = true;
+    this.gattStartedAt = Date.now();
 
     const t = topics(this.config.topic_prefix, this.config.device_id);
     const client = await getOrCreatePersistentClient(this.config);
