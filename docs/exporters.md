@@ -1,11 +1,11 @@
 ---
 title: Exporters
-description: Configure Garmin Connect, MQTT, Webhook, InfluxDB, and Ntfy export targets.
+description: Configure Garmin Connect, Strava, MQTT, Webhook, InfluxDB, Ntfy, and File export targets.
 ---
 
 # Exporters
 
-BLE Scale Sync exports body composition data to 5 targets. The [setup wizard](/guide/configuration#setup-wizard-recommended) walks you through exporter selection, configuration, and connectivity testing.
+BLE Scale Sync exports body composition data to 7 targets. The [setup wizard](/guide/configuration#setup-wizard-recommended) walks you through exporter selection, configuration, and connectivity testing.
 
 Exporters are configured in `global_exporters` (shared by all users). For multi-user setups with separate accounts, see [Per-User Exporters](/multi-user#per-user-exporters). All enabled exporters run in parallel — the process reports an error only if **every** exporter fails.
 
@@ -16,6 +16,8 @@ Exporters are configured in `global_exporters` (shared by all users). For multi-
 | [**InfluxDB**](#influxdb) | Time-series database (v2 write API) |
 | [**Webhook**](#webhook) | Any HTTP endpoint — n8n, Make, Zapier, custom APIs |
 | [**Ntfy**](#ntfy) | Push notifications to phone/desktop |
+| [**File (CSV/JSONL)**](#file) | Append readings to a local file |
+| [**Strava**](#strava) | Update weight in your Strava athlete profile |
 
 ## Garmin Connect {#garmin}
 
@@ -166,6 +168,53 @@ global_exporters:
     priority: 4
 ```
 
+## File (CSV/JSONL) {#file}
+
+Append each reading to a local CSV or JSONL file. Useful for simple logging without external services.
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `file_path` | Yes | | Path to the output file |
+| `format` | No | `csv` | `csv` or `jsonl` |
+
+```yaml
+global_exporters:
+  - type: file
+    file_path: './measurements.csv'
+    format: csv
+```
+
+CSV files get an automatic header row on first write. JSONL files append one JSON object per line.
+
+## Strava {#strava}
+
+Update your weight in the Strava athlete profile. Requires a Strava API application (create one at [strava.com/settings/api](https://www.strava.com/settings/api)).
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `client_id` | Yes | | Strava API application client ID |
+| `client_secret` | Yes | | Strava API application client secret |
+| `token_dir` | No | `./strava-tokens` | Directory for cached OAuth tokens |
+
+```yaml
+users:
+  - name: Alice
+    exporters:
+      - type: strava
+        client_id: '${STRAVA_CLIENT_ID}'
+        client_secret: '${STRAVA_CLIENT_SECRET}'
+```
+
+::: tip Authentication
+After adding the Strava exporter to your config, run the setup script to authorize:
+
+```bash
+npm run setup-strava
+```
+
+The script opens a browser URL for Strava authorization. After authorizing, paste the code from the redirect URL. Tokens are cached and automatically refreshed.
+:::
+
 ## Secrets
 
 Use `${ENV_VAR}` references in YAML for passwords and tokens. The variable must be defined in the environment or in a `.env` file:
@@ -190,3 +239,5 @@ At startup, exporters are tested for connectivity. Failures are logged as warnin
 | InfluxDB | `/health` endpoint |
 | Ntfy | `/v1/health` endpoint |
 | Garmin | None (Python subprocess) |
+| File | Directory writable check |
+| Strava | None (avoid API rate limits) |

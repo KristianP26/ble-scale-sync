@@ -52,6 +52,10 @@ users:
     #     email: alice@example.com
     #     password: "${GARMIN_PASSWORD_ALICE}"
     #     token_dir: ./garmin-tokens/alice
+    #   - type: strava
+    #     client_id: "${STRAVA_CLIENT_ID}"
+    #     client_secret: "${STRAVA_CLIENT_SECRET}"
+    #     token_dir: ./strava-tokens/alice   # run "npm run setup-strava" after config
 
   - name: Bob
     slug: bob
@@ -110,6 +114,11 @@ global_exporters:
   #   token: "${NTFY_TOKEN}"               # Bearer token auth
   #   # username: myuser                   # or Basic auth
   #   # password: "${NTFY_PASSWORD}"
+
+  # -- File (CSV/JSONL) --
+  # - type: file
+  #   file_path: "./measurements.csv"      # path to output file
+  #   format: csv                          # "csv" or "jsonl"
 
 # --- Runtime Settings ---
 

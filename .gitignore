@@ -38,6 +38,12 @@ config.py
 docker-compose.yml
 docker-compose.override.yml
 
+# Strava tokens (should not be committed)
+strava-tokens/
+
+# Data files
+*.csv
+
 # VitePress
 docs/.vitepress/dist/
 docs/.vitepress/cache/

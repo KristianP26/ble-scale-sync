@@ -4,7 +4,7 @@ layout: home
 hero:
   name: BLE Scale Sync
   text: Automatic body composition sync
-  tagline: Cross-platform CLI for Linux, macOS & Windows. Read weight & impedance from 23 BLE smart scales and export to Garmin Connect, Home Assistant, InfluxDB, Webhooks & Ntfy. No phone app needed.
+  tagline: Cross-platform CLI for Linux, macOS & Windows. Read weight & impedance from 23 BLE smart scales and export to Garmin Connect, Strava, Home Assistant, InfluxDB, Webhooks, Ntfy & local files. No phone app needed.
   image:
     src: /logo.svg
     alt: BLE Scale Sync
@@ -23,8 +23,8 @@ features:
     link: /guide/supported-scales
     linkText: See all scales
   - icon: "\uD83D\uDCE4"
-    title: 5 Export Targets
-    details: Garmin Connect &bull; MQTT (Home Assistant) &bull; InfluxDB &bull; Webhook &bull; Ntfy
+    title: 7 Export Targets
+    details: Garmin Connect &bull; Strava &bull; MQTT (Home Assistant) &bull; InfluxDB &bull; Webhook &bull; Ntfy &bull; File (CSV/JSONL)
     link: /exporters
     linkText: Configure exporters
   - icon: "\uD83E\uDDE0"

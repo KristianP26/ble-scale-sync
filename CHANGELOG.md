@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- **File exporter** (CSV/JSONL) for local measurement logging without external services. Supports auto-header CSV and JSONL formats, per-user file paths, and directory writability healthcheck
+- **Strava exporter** with OAuth2 token management. Updates athlete weight via PUT /api/v3/athlete. Automatic token refresh, persistent storage, and interactive setup script (`npm run setup-strava`)
+
 ## [1.4.0] - 2026-02-24
 
 ### Added
