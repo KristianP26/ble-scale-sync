@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { QnScaleAdapter } from '../../src/scales/qn-scale.js';
+import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -8,6 +9,24 @@ import {
 
 function makeAdapter() {
   return new QnScaleAdapter();
+}
+
+/** Build a fake AABB broadcast buffer with the given weight and stability. */
+function makeBroadcast(weightKg: number, stable: boolean): Buffer {
+  const buf = Buffer.alloc(23);
+  buf[0] = 0xaa;
+  buf[1] = 0xbb;
+  buf[15] = stable ? 0x23 : 0x04;
+  buf.writeUInt16LE(Math.round(weightKg * 100), 17);
+  return buf;
+}
+
+function mockBroadcastDevice(data: Buffer): BleDeviceInfo {
+  return {
+    localName: 'QN-Scale',
+    serviceUuids: [],
+    manufacturerData: { id: 0xffff, data },
+  };
 }
 
 describe('QnScaleAdapter', () => {
@@ -72,31 +91,48 @@ describe('QnScaleAdapter', () => {
       expect(adapter.matches(p)).toBe(true);
     });
 
-    it('matches by AABB manufacturer data marker (broadcast-only)', () => {
+    it('matches AABB broadcast header with company ID 0xFFFF', () => {
       const adapter = makeAdapter();
-      const mfg = Buffer.alloc(26);
-      mfg[2] = 0xaa;
-      mfg[3] = 0xbb;
-      const p = mockPeripheral('', [], mfg);
-      expect(adapter.matches(p)).toBe(true);
+      expect(adapter.matches(mockBroadcastDevice(makeBroadcast(70, true)))).toBe(true);
     });
 
-    it('does not match AABB data that is too short', () => {
+    it('rejects broadcast without manufacturer data', () => {
       const adapter = makeAdapter();
-      const mfg = Buffer.alloc(10);
-      mfg[2] = 0xaa;
-      mfg[3] = 0xbb;
-      const p = mockPeripheral('', [], mfg);
-      expect(adapter.matches(p)).toBe(false);
+      expect(adapter.matches({ localName: 'Unknown', serviceUuids: [] })).toBe(false);
     });
 
-    it('does not match manufacturer data without AABB marker', () => {
+    it('rejects broadcast with wrong company ID', () => {
       const adapter = makeAdapter();
-      const mfg = Buffer.alloc(26);
-      mfg[2] = 0x00;
-      mfg[3] = 0x00;
-      const p = mockPeripheral('', [], mfg);
-      expect(adapter.matches(p)).toBe(false);
+      const dev: BleDeviceInfo = {
+        localName: 'Unknown',
+        serviceUuids: [],
+        manufacturerData: { id: 0x0001, data: makeBroadcast(70, true) },
+      };
+      expect(adapter.matches(dev)).toBe(false);
+    });
+
+    it('rejects broadcast buffer without AABB magic', () => {
+      const adapter = makeAdapter();
+      const buf = Buffer.alloc(23);
+      const dev: BleDeviceInfo = {
+        localName: 'Unknown',
+        serviceUuids: [],
+        manufacturerData: { id: 0xffff, data: buf },
+      };
+      expect(adapter.matches(dev)).toBe(false);
+    });
+
+    it('rejects broadcast with too-short buffer', () => {
+      const adapter = makeAdapter();
+      const buf = Buffer.alloc(10);
+      buf[0] = 0xaa;
+      buf[1] = 0xbb;
+      const dev: BleDeviceInfo = {
+        localName: 'Unknown',
+        serviceUuids: [],
+        manufacturerData: { id: 0xffff, data: buf },
+      };
+      expect(adapter.matches(dev)).toBe(false);
     });
   });
 
@@ -237,96 +273,67 @@ describe('QnScaleAdapter', () => {
     });
   });
 
-  describe('parseAdvertisement()', () => {
-    /** Build a valid QN broadcast manufacturer data buffer. */
-    function makeBroadcast(weightRaw: number, stable: boolean): Buffer {
-      const buf = Buffer.alloc(26);
-      buf[0] = 0xff; // company ID
-      buf[1] = 0xff;
-      buf[2] = 0xaa; // QN marker
-      buf[3] = 0xbb;
-      buf[15] = stable ? 0x25 : 0x04;
-      buf.writeUInt16LE(weightRaw, 17);
-      return buf;
-    }
-
-    it('parses stable broadcast reading (22.62 kg)', () => {
+  describe('parseBroadcast()', () => {
+    it('parses stable reading', () => {
       const adapter = makeAdapter();
-      // 0x08D6 = 2262 / 100 = 22.62 kg (from Tosiman's actual data)
-      const reading = adapter.parseAdvertisement(makeBroadcast(0x08d6, true));
+      const reading = adapter.parseBroadcast(makeBroadcast(72.5, true));
       expect(reading).not.toBeNull();
-      expect(reading!.weight).toBeCloseTo(22.62);
-      expect(reading!.impedance).toBe(0);
-    });
-
-    it('parses stable broadcast reading (80.00 kg)', () => {
-      const adapter = makeAdapter();
-      const reading = adapter.parseAdvertisement(makeBroadcast(8000, true));
-      expect(reading).not.toBeNull();
-      expect(reading!.weight).toBe(80);
+      expect(reading!.weight).toBe(72.5);
       expect(reading!.impedance).toBe(0);
     });
 
     it('returns null for unstable reading', () => {
       const adapter = makeAdapter();
-      // 0x1300 = 4864 / 100 = 48.64 kg, unstable
-      expect(adapter.parseAdvertisement(makeBroadcast(0x1300, false))).toBeNull();
-    });
-
-    it('returns null for buffer shorter than 26 bytes', () => {
-      const adapter = makeAdapter();
-      const buf = Buffer.alloc(20);
-      buf[2] = 0xaa;
-      buf[3] = 0xbb;
-      expect(adapter.parseAdvertisement(buf)).toBeNull();
-    });
-
-    it('returns null when AABB marker is missing', () => {
-      const adapter = makeAdapter();
-      const buf = Buffer.alloc(26);
-      buf[2] = 0x00;
-      buf[3] = 0x00;
-      buf[25] = 0x01;
-      expect(adapter.parseAdvertisement(buf)).toBeNull();
-    });
-
-    it('returns null when weight is below 5 kg', () => {
-      const adapter = makeAdapter();
-      // 200 / 100 = 2.00 kg (below minimum)
-      expect(adapter.parseAdvertisement(makeBroadcast(200, true))).toBeNull();
-    });
-
-    it('returns null when weight exceeds 300 kg', () => {
-      const adapter = makeAdapter();
-      // 30100 / 100 = 301.00 kg (above maximum)
-      expect(adapter.parseAdvertisement(makeBroadcast(30100, true))).toBeNull();
+      expect(adapter.parseBroadcast(makeBroadcast(72.5, false))).toBeNull();
     });
 
     it('returns null for zero weight', () => {
       const adapter = makeAdapter();
-      expect(adapter.parseAdvertisement(makeBroadcast(0, true))).toBeNull();
+      expect(adapter.parseBroadcast(makeBroadcast(0, true))).toBeNull();
+    });
+
+    it('returns null for too-short buffer', () => {
+      const adapter = makeAdapter();
+      expect(adapter.parseBroadcast(Buffer.alloc(10))).toBeNull();
+    });
+
+    it('returns null for wrong magic header', () => {
+      const adapter = makeAdapter();
+      const buf = makeBroadcast(70, true);
+      buf[0] = 0x00;
+      expect(adapter.parseBroadcast(buf)).toBeNull();
     });
   });
 
   describe('isComplete()', () => {
-    it('returns true for weight > 10 and impedance > 200', () => {
+    it('returns true for GATT reading (weight > 10 and impedance > 200)', () => {
       const adapter = makeAdapter();
       expect(adapter.isComplete({ weight: 80, impedance: 500 })).toBe(true);
     });
 
-    it('returns false when weight <= 10', () => {
+    it('returns true for broadcast reading (weight > 0 and impedance = 0)', () => {
+      const adapter = makeAdapter();
+      expect(adapter.isComplete({ weight: 72.5, impedance: 0 })).toBe(true);
+    });
+
+    it('returns false for broadcast reading with zero weight', () => {
+      const adapter = makeAdapter();
+      expect(adapter.isComplete({ weight: 0, impedance: 0 })).toBe(false);
+    });
+
+    it('returns false when GATT weight <= 10', () => {
       const adapter = makeAdapter();
       expect(adapter.isComplete({ weight: 5, impedance: 500 })).toBe(false);
     });
 
-    it('returns false when impedance <= 200', () => {
+    it('returns false when GATT impedance <= 200', () => {
       const adapter = makeAdapter();
       expect(adapter.isComplete({ weight: 80, impedance: 100 })).toBe(false);
     });
   });
 
   describe('computeMetrics()', () => {
-    it('returns all BodyComposition fields', () => {
+    it('returns all BodyComposition fields (GATT with impedance)', () => {
       const adapter = makeAdapter();
       const profile = defaultProfile();
       const payload = adapter.computeMetrics({ weight: 80, impedance: 500 }, profile);
@@ -336,11 +343,18 @@ describe('QnScaleAdapter', () => {
       assertPayloadRanges(payload);
     });
 
+    it('returns BodyComposition for broadcast reading (no impedance)', () => {
+      const adapter = makeAdapter();
+      const profile = defaultProfile();
+      const payload = adapter.computeMetrics({ weight: 75, impedance: 0 }, profile);
+      expect(payload.weight).toBe(75);
+      expect(payload.impedance).toBe(0);
+      assertPayloadRanges(payload);
+    });
+
     it('returns payload even with zero weight (guarded by isComplete in practice)', () => {
       const adapter = makeAdapter();
       const profile = defaultProfile();
-      // Zero weight is prevented by isComplete() (weight > 10 && impedance > 200),
-      // but computeMetrics itself does not throw — it delegates to buildPayload.
       const payload = adapter.computeMetrics({ weight: 0, impedance: 500 }, profile);
       expect(payload.weight).toBe(0);
     });

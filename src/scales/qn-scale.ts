@@ -7,6 +7,7 @@ import type {
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
 import { uuid16 } from './body-comp-helpers.js';
+import type { ScaleBodyComp } from './body-comp-helpers.js';
 
 /**
  * Ported from openScale's QNHandler.kt
@@ -89,6 +90,14 @@ export class QnScaleAdapter implements ScaleAdapter {
    * name-only matching is needed for auto-discovery without SCALE_MAC.
    */
   matches(device: BleDeviceInfo): boolean {
+    // AABB broadcast protocol (0xFFFF company ID + 0xAABB magic header)
+    if (device.manufacturerData) {
+      const { id, data } = device.manufacturerData;
+      if (id === 0xffff && data.length >= 19 && data[0] === 0xaa && data[1] === 0xbb) {
+        return true;
+      }
+    }
+
     const name = (device.localName || '').toLowerCase();
     const nameMatch =
       name.includes('qn-scale') ||
@@ -103,17 +112,6 @@ export class QnScaleAdapter implements ScaleAdapter {
       uuids.some(
         (u) => u === SVC_T1 || u === SVC_T2 || u === uuid16(0xffe0) || u === uuid16(0xfff0),
       )
-    ) {
-      return true;
-    }
-
-    // Fallback: match by AABB manufacturer data marker (broadcast-only devices)
-    const mfg = device.manufacturerData;
-    if (
-      mfg &&
-      mfg.length >= QN_BROADCAST_MIN_LEN &&
-      mfg[2] === QN_MARKER_0 &&
-      mfg[3] === QN_MARKER_1
     ) {
       return true;
     }
@@ -177,38 +175,37 @@ export class QnScaleAdapter implements ScaleAdapter {
   }
 
   /**
-   * Parse QN broadcast advertisement manufacturer data.
+   * Parse AABB broadcast protocol (manufacturer data with company ID 0xFFFF).
    *
-   * Format (26+ bytes):
-   *   [0-1]   Company ID (FF FF)
-   *   [2-3]   AA BB — QN protocol marker
-   *   [4-9]   MAC address (6 bytes)
-   *   [10-11] counter/sequence (increments each packet)
-   *   [12-14] unknown/flags
-   *   [15]    stability (0x25 = stable, other = settling)
+   * Layout (after company ID bytes):
+   *   [0-1]   0xAABB — magic header
+   *   [2-7]   MAC address of the device
+   *   [8]     sequence / status byte
+   *   [9-14]  unknown
+   *   [15]    status flags — bit 5 (0x20) = measurement stable
    *   [16]    unknown
-   *   [17-18] weight (LE uint16 / 100 = kg)
-   *   [19-25] hardware info / unknown
+   *   [17-18] weight: little-endian uint16 / 100 = kg
+   *   [19-22] unknown (possibly impedance/checksum)
    *
-   * Returns a ScaleReading only when the reading is stable and weight is in
-   * a valid range. Impedance is always 0 (not available in broadcast mode).
+   * No impedance is available from the broadcast — body composition is estimated
+   * using the Deurenberg formula (BMI + age + gender).
    */
-  parseAdvertisement(data: Buffer): ScaleReading | null {
-    if (data.length < QN_BROADCAST_MIN_LEN) return null;
-    if (data[2] !== QN_MARKER_0 || data[3] !== QN_MARKER_1) return null;
+  parseBroadcast(manufacturerData: Buffer): ScaleReading | null {
+    if (manufacturerData.length < 19) return null;
+    if (manufacturerData[0] !== 0xaa || manufacturerData[1] !== 0xbb) return null;
 
-    const stable = data[15] === 0x25;
-    if (!stable) return null;
+    // Only accept stable readings (bit 5 of byte 15 = "measurement settled")
+    if ((manufacturerData[15] & 0x20) === 0) return null;
 
-    const rawWeight = data.readUInt16LE(17);
-    const weight = rawWeight / 100;
-
-    if (weight < 5 || weight > 300 || !Number.isFinite(weight)) return null;
+    const weight = manufacturerData.readUInt16LE(17) / 100;
+    if (weight <= 0 || !Number.isFinite(weight)) return null;
 
     return { weight, impedance: 0 };
   }
 
   isComplete(reading: ScaleReading): boolean {
+    // Broadcast readings have impedance=0; GATT readings have impedance>200
+    if (reading.impedance === 0) return reading.weight > 0;
     return reading.weight > 10 && reading.impedance > 200;
   }
 

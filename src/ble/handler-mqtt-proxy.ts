@@ -435,13 +435,13 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         }
       }
 
-      // Broadcast-only adapters (no GATT UUIDs) — wait for next stable advertisement
-      if (!adapter.charNotifyUuid) {
-        bleLog.debug(`${adapter.name} is broadcast-only, waiting for stable reading...`);
+      // Broadcast-capable or broadcast-only adapters — wait for next scan with data
+      if (adapter.parseBroadcast || !adapter.charNotifyUuid) {
+        bleLog.debug(`${adapter.name} supports broadcast, waiting for stable reading...`);
         continue;
       }
 
-      // GATT fallback — adapter matched but no broadcast data
+      // GATT fallback — adapter matched but no broadcast support
       bleLog.info(`No broadcast data for ${adapter.name}; connecting via GATT proxy...`);
       const { charMap, device } = await mqttGattConnect(
         client,
@@ -520,12 +520,11 @@ export class ReadingWatcher {
 
   async start(): Promise<void> {
     if (this.started) return;
+    // Mark immediately to guard against concurrent start() calls
+    this.started = true;
 
     const t = topics(this.config.topic_prefix, this.config.device_id);
     const client = await getOrCreatePersistentClient(this.config);
-
-    // Mark started only after successful connection
-    this.started = true;
 
     // Lifecycle logging
     client.on('reconnect', () => bleLog.info('MQTT reconnecting...'));
@@ -580,10 +579,10 @@ export class ReadingWatcher {
             }
           }
 
-          // Broadcast-only adapters (no GATT UUIDs) — skip, wait for stable advertisement
-          if (!adapter.charNotifyUuid) continue;
+          // Broadcast-capable or broadcast-only — skip, wait for stable advertisement
+          if (adapter.parseBroadcast || !adapter.charNotifyUuid) continue;
 
-          // GATT fallback — adapter matched but no broadcast data (or parseBroadcast returned null)
+          // GATT fallback — adapter matched but no broadcast support
           this.handleGattReading(entry, adapter).catch((err) => {
             bleLog.warn(`GATT reading failed for ${entry.address}: ${errMsg(err)}`);
           });
@@ -622,6 +621,9 @@ export class ReadingWatcher {
       gender: 'male',
       isAthlete: false,
     };
+    if (!this.profile) {
+      bleLog.warn('No user profile configured — using fallback profile for GATT reading');
+    }
 
     bleLog.info(`Connecting via GATT proxy to ${adapter.name} (${entry.address})...`);
     const { charMap, device } = await mqttGattConnect(
