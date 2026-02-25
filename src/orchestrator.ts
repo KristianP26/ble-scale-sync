@@ -5,6 +5,17 @@ import type { BodyComposition } from './interfaces/scale-adapter.js';
 
 const log = createLogger('Sync');
 
+export interface ExportResultDetail {
+  name: string;
+  ok: boolean;
+  error?: string;
+}
+
+export interface DispatchResult {
+  success: boolean;
+  details: ExportResultDetail[];
+}
+
 /**
  * Run healthchecks on all exporters that support them.
  * Results are logged as warnings (non-fatal).
@@ -42,31 +53,36 @@ export async function dispatchExports(
   exporters: Exporter[],
   payload: BodyComposition,
   context?: ExportContext,
-): Promise<boolean> {
+): Promise<DispatchResult> {
   log.info(`Exporting to: ${exporters.map((e) => e.name).join(', ')}...`);
 
   const results = await Promise.allSettled(
     exporters.map((e) => (context ? e.export(payload, context) : e.export(payload))),
   );
 
+  const details: ExportResultDetail[] = [];
   let allFailed = true;
   for (let i = 0; i < results.length; i++) {
     const result = results[i];
     const name = exporters[i].name;
     if (result.status === 'fulfilled' && result.value.success) {
       allFailed = false;
+      details.push({ name, ok: true });
     } else if (result.status === 'fulfilled') {
       log.error(`${name}: ${result.value.error}`);
+      details.push({ name, ok: false, error: result.value.error });
     } else {
-      log.error(`${name}: ${errMsg(result.reason)}`);
+      const msg = errMsg(result.reason);
+      log.error(`${name}: ${msg}`);
+      details.push({ name, ok: false, error: msg });
     }
   }
 
   if (allFailed) {
     log.error('All exports failed.');
-    return false;
+    return { success: false, details };
   }
 
   log.info('Done.');
-  return true;
+  return { success: true, details };
 }

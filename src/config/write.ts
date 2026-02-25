@@ -9,17 +9,25 @@ const log = createLogger('ConfigWrite');
 
 /**
  * Write content to a file atomically via tmp+rename.
- * On Windows, `renameSync` fails if the target exists (EPERM),
- * so we unlink the target first.
+ * Falls back to direct overwrite when the target is a Docker bind mount
+ * (which cannot be unlinked/renamed over — EBUSY).
  */
 export function atomicWrite(filePath: string, content: string): void {
   const tmpPath = filePath + '.tmp';
   try {
     writeFileSync(tmpPath, content, 'utf8');
-    if (existsSync(filePath)) {
-      unlinkSync(filePath);
+    try {
+      if (existsSync(filePath)) unlinkSync(filePath);
+      renameSync(tmpPath, filePath);
+    } catch {
+      // Rename failed (Docker bind mount, Windows EPERM, etc.) — overwrite directly
+      writeFileSync(filePath, content, 'utf8');
+      try {
+        unlinkSync(tmpPath);
+      } catch {
+        /* ignore */
+      }
     }
-    renameSync(tmpPath, filePath);
   } catch (err) {
     // Clean up tmp file on failure
     try {

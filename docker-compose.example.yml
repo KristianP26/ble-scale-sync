@@ -17,8 +17,8 @@ services:
       - '112'
 
     volumes:
-      # Your config file (create from config.yaml example in README)
-      - ./config.yaml:/app/config.yaml:ro
+      # Your config file — rw so the app can update last_known_weight
+      - ./config.yaml:/app/config.yaml
       # D-Bus socket (required for BlueZ communication)
       - /var/run/dbus:/var/run/dbus:ro
       # Garmin auth tokens (persisted across container restarts)

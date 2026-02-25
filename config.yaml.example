@@ -15,9 +15,19 @@ version: 1
 # ble:
 #   scale_mac: "FF:03:00:13:A1:04"   # Run "npm run scan" to find yours
 #   noble_driver: abandonware         # "abandonware" | "stoprocent"
+#   handler: auto                     # "auto" | "mqtt-proxy"
 #
 # scale_mac: omit for auto-discovery. On macOS, use the CoreBluetooth UUID.
 # noble_driver: default is node-ble (Linux), abandonware (Windows), stoprocent (macOS).
+# handler: "auto" uses local Bluetooth. "mqtt-proxy" uses an ESP32 BLE-to-MQTT bridge.
+#
+# --- ESP32 MQTT Proxy (when handler: mqtt-proxy) ---
+#   mqtt_proxy:
+#     broker_url: "mqtt://192.168.1.50:1883"  # MQTT broker URL
+#     device_id: esp32-ble-proxy               # must match ESP32 config.json
+#     topic_prefix: ble-proxy                  # must match ESP32 config.json
+#     username: myuser                         # optional
+#     password: "${MQTT_PASSWORD}"             # optional
 
 # --- Scale Units ---
 

@@ -133,6 +133,35 @@ describe('resolveRuntimeConfig', () => {
     expect(result.scanCooldownSec).toBe(30);
     expect(result.dryRun).toBe(false);
   });
+
+  it('defaults bleHandler to auto when ble is undefined', () => {
+    const config = { ...BASE_CONFIG, ble: undefined };
+    const result = resolveRuntimeConfig(config);
+    expect(result.bleHandler).toBe('auto');
+    expect(result.mqttProxy).toBeUndefined();
+  });
+
+  it('extracts bleHandler and mqttProxy from ble config', () => {
+    const config = {
+      ...BASE_CONFIG,
+      ble: {
+        handler: 'mqtt-proxy' as const,
+        scale_mac: 'FF:03:00:13:A1:04',
+        mqtt_proxy: {
+          broker_url: 'mqtt://localhost:1883',
+          device_id: 'esp32-test',
+          topic_prefix: 'ble-proxy',
+        },
+      },
+    };
+    const result = resolveRuntimeConfig(config);
+    expect(result.bleHandler).toBe('mqtt-proxy');
+    expect(result.mqttProxy).toEqual({
+      broker_url: 'mqtt://localhost:1883',
+      device_id: 'esp32-test',
+      topic_prefix: 'ble-proxy',
+    });
+  });
 });
 
 // --- resolveExportersForUser ---

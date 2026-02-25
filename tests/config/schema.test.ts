@@ -290,6 +290,48 @@ describe('BleSchema', () => {
     const result = BleSchema.safeParse({ noble_driver: 'invalid' });
     expect(result.success).toBe(false);
   });
+
+  it('defaults handler to auto', () => {
+    const result = BleSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.handler).toBe('auto');
+    }
+  });
+
+  it('accepts handler mqtt-proxy with mqtt_proxy config', () => {
+    const result = BleSchema.safeParse({
+      handler: 'mqtt-proxy',
+      mqtt_proxy: {
+        broker_url: 'mqtt://localhost:1883',
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.handler).toBe('mqtt-proxy');
+      expect(result.data.mqtt_proxy?.broker_url).toBe('mqtt://localhost:1883');
+      expect(result.data.mqtt_proxy?.device_id).toBe('esp32-ble-proxy');
+      expect(result.data.mqtt_proxy?.topic_prefix).toBe('ble-proxy');
+    }
+  });
+
+  it('rejects handler mqtt-proxy without mqtt_proxy config', () => {
+    const result = BleSchema.safeParse({ handler: 'mqtt-proxy' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('mqtt_proxy config is required');
+    }
+  });
+
+  it('accepts handler auto without mqtt_proxy', () => {
+    const result = BleSchema.safeParse({ handler: 'auto' });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects invalid handler value', () => {
+    const result = BleSchema.safeParse({ handler: 'noble' });
+    expect(result.success).toBe(false);
+  });
 });
 
 // ─── ScaleSchema ───────────────────────────────────────────────────────────

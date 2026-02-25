@@ -5,6 +5,7 @@
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
+    "build": "tsc",
     "start": "tsx src/index.ts",
     "setup": "tsx src/wizard/index.ts",
     "setup-garmin": "python3 garmin-scripts/setup_garmin.py",

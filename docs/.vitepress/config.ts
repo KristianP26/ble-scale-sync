@@ -54,6 +54,7 @@ export default defineConfig({
           { text: 'Getting Started', link: '/guide/getting-started' },
           { text: 'Configuration', link: '/guide/configuration' },
           { text: 'Supported Scales', link: '/guide/supported-scales' },
+          { text: 'ESP32 BLE Proxy', link: '/guide/esp32-proxy' },
         ],
       },
       {

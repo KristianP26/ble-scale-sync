@@ -1,0 +1,187 @@
+<mxfile host="app.diagrams.net" modified="2026-02-24" agent="Claude" version="24.0" type="device">
+  <diagram name="BLE Scan Modes" id="scan-modes">
+    <mxGraphModel dx="1200" dy="760" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="500" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- Title -->
+        <mxCell id="title" value="ESP32 BLE Scan Modes" style="text;html=1;fontSize=18;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="350" y="20" width="300" height="30" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <!-- STREAMING MODE (ESP32-S3)                              -->
+        <!-- ═══════════════════════════════════════════════════════ -->
+
+        <!-- Section label -->
+        <mxCell id="stream_label" value="Streaming&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;ESP32-S3 / Guition 4848&lt;/font&gt;" style="text;html=1;fontSize=14;fontStyle=1;align=right;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="10" y="80" width="160" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- Continuous scan bar -->
+        <mxCell id="stream_scan" value="" style="rounded=1;whiteSpace=wrap;fillColor=#d5e8d4;strokeColor=#82b366;arcSize=5;" vertex="1" parent="1">
+          <mxGeometry x="185" y="80" width="860" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="stream_scan_lbl" value="gap_scan(0) — continuous indefinite scan" style="text;html=1;fontSize=11;align=center;verticalAlign=middle;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="385" y="82" width="300" height="36" as="geometry"/>
+        </mxCell>
+
+        <!-- Drain markers -->
+        <mxCell id="drain1" value="" style="shape=mxgraph.arrows2.arrow;dy=0.6;dx=20;notch=0;fillColor=#f8cecc;strokeColor=#b85450;rotation=90;" vertex="1" parent="1">
+          <mxGeometry x="270" y="107" width="20" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="drain1_lbl" value="drain +&lt;br&gt;publish" style="text;html=1;fontSize=9;align=center;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="253" y="140" width="54" height="28" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="drain2" value="" style="shape=mxgraph.arrows2.arrow;dy=0.6;dx=20;notch=0;fillColor=#f8cecc;strokeColor=#b85450;rotation=90;" vertex="1" parent="1">
+          <mxGeometry x="470" y="107" width="20" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="drain2_lbl" value="drain +&lt;br&gt;publish" style="text;html=1;fontSize=9;align=center;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="453" y="140" width="54" height="28" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="drain3" value="" style="shape=mxgraph.arrows2.arrow;dy=0.6;dx=20;notch=0;fillColor=#f8cecc;strokeColor=#b85450;rotation=90;" vertex="1" parent="1">
+          <mxGeometry x="670" y="107" width="20" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="drain3_lbl" value="drain +&lt;br&gt;publish" style="text;html=1;fontSize=9;align=center;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="653" y="140" width="54" height="28" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="drain4" value="" style="shape=mxgraph.arrows2.arrow;dy=0.6;dx=20;notch=0;fillColor=#f8cecc;strokeColor=#b85450;rotation=90;" vertex="1" parent="1">
+          <mxGeometry x="870" y="107" width="20" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="drain4_lbl" value="drain +&lt;br&gt;publish" style="text;html=1;fontSize=9;align=center;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="853" y="140" width="54" height="28" as="geometry"/>
+        </mxCell>
+
+        <!-- 2s interval annotations -->
+        <mxCell id="stream_interval" value="2s" style="text;html=1;fontSize=11;fontStyle=1;align=center;verticalAlign=middle;fontColor=#B85450;" vertex="1" parent="1">
+          <mxGeometry x="355" y="60" width="30" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="stream_int_line" value="" style="endArrow=classic;startArrow=classic;html=1;strokeColor=#B85450;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="280" y="70" as="sourcePoint"/>
+            <mxPoint x="480" y="70" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Latency callout -->
+        <mxCell id="stream_latency" value="Worst-case latency: 2s" style="text;html=1;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;fontColor=#2D7600;fillColor=#d5e8d4;strokeColor=#82b366;rounded=1;spacingLeft=4;spacingRight=4;" vertex="1" parent="1">
+          <mxGeometry x="185" y="175" width="170" height="28" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <!-- BATCH MODE (Atom Echo)                                 -->
+        <!-- ═══════════════════════════════════════════════════════ -->
+
+        <!-- Separator -->
+        <mxCell id="sep" value="" style="line;strokeWidth=1;strokeColor=#CCCCCC;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="185" y="220" width="860" height="10" as="geometry"/>
+        </mxCell>
+
+        <!-- Section label -->
+        <mxCell id="batch_label" value="Batch&lt;br&gt;&lt;font style=&quot;font-size:11px;font-weight:normal&quot;&gt;Atom Echo (shared radio)&lt;/font&gt;" style="text;html=1;fontSize=14;fontStyle=1;align=right;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="10" y="250" width="160" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- Cycle 1: Scan -->
+        <mxCell id="batch_scan1" value="BLE Scan&lt;br&gt;8s" style="rounded=1;whiteSpace=wrap;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="185" y="250" width="200" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- Cycle 1: Stop + WiFi reconnect -->
+        <mxCell id="batch_wifi1" value="Stop BLE&lt;br&gt;WiFi reconnect" style="rounded=1;whiteSpace=wrap;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="390" y="250" width="90" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- Cycle 1: Publish -->
+        <mxCell id="batch_pub1" value="Publish" style="rounded=1;whiteSpace=wrap;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="485" y="250" width="55" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- Cycle 1: Wait -->
+        <mxCell id="batch_wait1" value="Wait 2s" style="rounded=1;whiteSpace=wrap;fillColor=#f5f5f5;strokeColor=#CCCCCC;fontSize=10;fontColor=#999999;" vertex="1" parent="1">
+          <mxGeometry x="545" y="250" width="60" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- Cycle 2: Scan -->
+        <mxCell id="batch_scan2" value="BLE Scan&lt;br&gt;8s" style="rounded=1;whiteSpace=wrap;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="610" y="250" width="200" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- Cycle 2: Stop + WiFi -->
+        <mxCell id="batch_wifi2" value="Stop BLE&lt;br&gt;WiFi reconnect" style="rounded=1;whiteSpace=wrap;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="815" y="250" width="90" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- Cycle 2: Publish -->
+        <mxCell id="batch_pub2" value="Publish" style="rounded=1;whiteSpace=wrap;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="910" y="250" width="55" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- Ellipsis -->
+        <mxCell id="batch_dots" value="..." style="text;html=1;fontSize=18;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="970" y="250" width="40" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- Cycle time annotation -->
+        <mxCell id="batch_cycle_line" value="" style="endArrow=classic;startArrow=classic;html=1;strokeColor=#B85450;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="185" y="240" as="sourcePoint"/>
+            <mxPoint x="610" y="240" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="batch_cycle_lbl" value="~10.5s" style="text;html=1;fontSize=11;fontStyle=1;align=center;verticalAlign=middle;fontColor=#B85450;" vertex="1" parent="1">
+          <mxGeometry x="370" y="228" width="50" height="16" as="geometry"/>
+        </mxCell>
+
+        <!-- Latency callout -->
+        <mxCell id="batch_latency" value="Worst-case latency: ~10.5s" style="text;html=1;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;fontColor=#AE4132;fillColor=#f8cecc;strokeColor=#b85450;rounded=1;spacingLeft=4;spacingRight=4;" vertex="1" parent="1">
+          <mxGeometry x="185" y="305" width="195" height="28" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════════════════════════════════════════════ -->
+        <!-- LEGEND                                                 -->
+        <!-- ═══════════════════════════════════════════════════════ -->
+
+        <mxCell id="legend_box" value="" style="rounded=1;whiteSpace=wrap;fillColor=none;strokeColor=#CCCCCC;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="640" y="350" width="400" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="legend_title" value="Legend" style="text;html=1;fontSize=11;fontStyle=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="650" y="350" width="50" height="20" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="leg_scan" value="" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="660" y="378" width="20" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg_scan_lbl" value="BLE scanning" style="text;html=1;fontSize=10;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="686" y="374" width="90" height="22" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="leg_pub" value="" style="rounded=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="660" y="400" width="20" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg_pub_lbl" value="Drain / Publish to MQTT" style="text;html=1;fontSize=10;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="686" y="396" width="150" height="22" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="leg_wifi" value="" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="660" y="422" width="20" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg_wifi_lbl" value="BLE off / WiFi recovery (shared radio only)" style="text;html=1;fontSize=10;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="686" y="418" width="250" height="22" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="leg_wait" value="" style="rounded=1;fillColor=#f5f5f5;strokeColor=#CCCCCC;" vertex="1" parent="1">
+          <mxGeometry x="850" y="378" width="20" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg_wait_lbl" value="Idle / wait" style="text;html=1;fontSize=10;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="876" y="374" width="80" height="22" as="geometry"/>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

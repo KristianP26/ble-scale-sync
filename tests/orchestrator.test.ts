@@ -105,55 +105,77 @@ describe('runHealthchecks()', () => {
 // ─── dispatchExports ────────────────────────────────────────────────────────
 
 describe('dispatchExports()', () => {
-  it('returns true when all exports succeed', async () => {
+  it('returns success true with details when all exports succeed', async () => {
     const e1 = mockExporter('garmin');
     const e2 = mockExporter('mqtt');
     const result = await dispatchExports([e1, e2], SAMPLE_PAYLOAD);
-    expect(result).toBe(true);
+    expect(result.success).toBe(true);
+    expect(result.details).toEqual([
+      { name: 'garmin', ok: true },
+      { name: 'mqtt', ok: true },
+    ]);
     expect(e1.export).toHaveBeenCalledWith(SAMPLE_PAYLOAD);
     expect(e2.export).toHaveBeenCalledWith(SAMPLE_PAYLOAD);
   });
 
-  it('returns true when at least one export succeeds (partial failure)', async () => {
+  it('returns success true when at least one export succeeds (partial failure)', async () => {
     const e1 = mockExporter('garmin', { success: false, error: 'auth failed' });
     const e2 = mockExporter('mqtt');
     const result = await dispatchExports([e1, e2], SAMPLE_PAYLOAD);
-    expect(result).toBe(true);
+    expect(result.success).toBe(true);
+    expect(result.details).toEqual([
+      { name: 'garmin', ok: false, error: 'auth failed' },
+      { name: 'mqtt', ok: true },
+    ]);
   });
 
-  it('returns false when all exports fail (returned error)', async () => {
+  it('returns success false when all exports fail (returned error)', async () => {
     const e1 = mockExporter('garmin', { success: false, error: 'auth failed' });
     const e2 = mockExporter('mqtt', { success: false, error: 'timeout' });
     const result = await dispatchExports([e1, e2], SAMPLE_PAYLOAD);
-    expect(result).toBe(false);
+    expect(result.success).toBe(false);
+    expect(result.details).toHaveLength(2);
+    expect(result.details[0]).toEqual({ name: 'garmin', ok: false, error: 'auth failed' });
+    expect(result.details[1]).toEqual({ name: 'mqtt', ok: false, error: 'timeout' });
   });
 
-  it('returns false when all exports throw', async () => {
+  it('returns success false when all exports throw', async () => {
     const e1 = mockExporter('garmin', new Error('crash'));
     const e2 = mockExporter('mqtt', new Error('boom'));
     const result = await dispatchExports([e1, e2], SAMPLE_PAYLOAD);
-    expect(result).toBe(false);
+    expect(result.success).toBe(false);
+    expect(result.details).toEqual([
+      { name: 'garmin', ok: false, error: 'crash' },
+      { name: 'mqtt', ok: false, error: 'boom' },
+    ]);
   });
 
-  it('returns true with mixed: one succeeds, one throws, one returns error', async () => {
+  it('returns success true with mixed: one succeeds, one throws, one returns error', async () => {
     const e1 = mockExporter('garmin', new Error('crash'));
     const e2 = mockExporter('mqtt');
     const e3 = mockExporter('webhook', { success: false, error: 'HTTP 500' });
     const result = await dispatchExports([e1, e2, e3], SAMPLE_PAYLOAD);
-    expect(result).toBe(true);
+    expect(result.success).toBe(true);
+    expect(result.details).toEqual([
+      { name: 'garmin', ok: false, error: 'crash' },
+      { name: 'mqtt', ok: true },
+      { name: 'webhook', ok: false, error: 'HTTP 500' },
+    ]);
   });
 
-  it('returns true with single successful exporter', async () => {
+  it('returns success true with single successful exporter', async () => {
     const e1 = mockExporter('garmin');
     const result = await dispatchExports([e1], SAMPLE_PAYLOAD);
-    expect(result).toBe(true);
+    expect(result.success).toBe(true);
+    expect(result.details).toEqual([{ name: 'garmin', ok: true }]);
     expect(e1.export).toHaveBeenCalledOnce();
   });
 
-  it('returns false with single failing exporter', async () => {
+  it('returns success false with single failing exporter', async () => {
     const e1 = mockExporter('garmin', { success: false, error: 'fail' });
     const result = await dispatchExports([e1], SAMPLE_PAYLOAD);
-    expect(result).toBe(false);
+    expect(result.success).toBe(false);
+    expect(result.details).toEqual([{ name: 'garmin', ok: false, error: 'fail' }]);
   });
 
   it('runs exports in parallel', async () => {
