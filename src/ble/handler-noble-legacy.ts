@@ -22,6 +22,12 @@ import {
   GATT_DISCOVERY_TIMEOUT_MS,
 } from './types.js';
 
+/** Convert Noble's raw manufacturer data buffer to {id, data} format. */
+function parseMfgData(raw: Buffer | undefined): { id: number; data: Buffer } | undefined {
+  if (!raw || raw.length < 2) return undefined;
+  return { id: raw.readUInt16LE(0), data: raw.subarray(2) };
+}
+
 // ─── Noble state management ───────────────────────────────────────────────────
 
 /** Wait for the Bluetooth adapter to reach 'poweredOn' state. */
@@ -212,7 +218,7 @@ function discoverPeripheral(
         bleLog.debug(`Discovered: ${name || '(no name)'} [${addr}]`);
       }
 
-      const mfgData: Buffer | undefined = peripheral.advertisement?.manufacturerData;
+      const mfgData = parseMfgData(peripheral.advertisement?.manufacturerData);
 
       if (targetMac) {
         // Target mode: match by MAC or CoreBluetooth UUID
@@ -260,7 +266,7 @@ function discoverPeripheral(
  * Used for broadcast-only devices (ADV_NONCONN_IND) that embed weight in
  * manufacturer data.
  *
- * Restarts scanning with allowDuplicates=true and calls adapter.parseAdvertisement()
+ * Restarts scanning with allowDuplicates=true and calls adapter.parseBroadcast()
  * on each advertisement from the target device until a stable reading is returned.
  */
 function broadcastScan(
@@ -302,10 +308,10 @@ function broadcastScan(
     const onDiscover = (peripheral: Peripheral): void => {
       if (peripheralAddress(peripheral) !== targetAddr) return;
 
-      const mfgData: Buffer | undefined = peripheral.advertisement?.manufacturerData;
-      if (!mfgData || !adapter.parseAdvertisement) return;
+      const mfgData = parseMfgData(peripheral.advertisement?.manufacturerData);
+      if (!mfgData || !adapter.parseBroadcast) return;
 
-      const reading = adapter.parseAdvertisement(mfgData);
+      const reading = adapter.parseBroadcast(mfgData.data);
 
       if (reading && onLiveData) {
         onLiveData(reading);
@@ -352,7 +358,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     // Broadcast-only device: read weight from advertisements instead of GATT
     const connectable = peripheral.connectable !== false;
     if (!connectable) {
-      const mfgData: Buffer | undefined = peripheral.advertisement?.manufacturerData;
+      const mfgData = parseMfgData(peripheral.advertisement?.manufacturerData);
       const name = peripheral.advertisement?.localName ?? '';
       const svcUuids = (peripheral.advertisement?.serviceUuids ?? []).map(normalizeUuid);
 
@@ -367,7 +373,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         adapter = adapters.find((a) => a.matches(info));
       }
 
-      if (adapter?.parseAdvertisement) {
+      if (adapter?.parseBroadcast) {
         bleLog.info(
           `Device is broadcast-only (non-connectable). Using advertisement-based reading.`,
         );
@@ -479,7 +485,7 @@ export async function scanDevices(
 
     const name = peripheral.advertisement?.localName ?? '(unknown)';
     const svcUuids = (peripheral.advertisement?.serviceUuids ?? []).map(normalizeUuid);
-    const mfgData: Buffer | undefined = peripheral.advertisement?.manufacturerData;
+    const mfgData = parseMfgData(peripheral.advertisement?.manufacturerData);
     const info: BleDeviceInfo = {
       localName: name,
       serviceUuids: svcUuids,
