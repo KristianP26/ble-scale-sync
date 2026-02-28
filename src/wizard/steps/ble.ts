@@ -69,7 +69,7 @@ export const bleStep: WizardStep = {
         description: 'This machine has a Bluetooth adapter',
       },
       {
-        name: 'Via ESP32 MQTT proxy',
+        name: 'Via ESP32 MQTT proxy (Experimental)',
         value: 'mqtt-proxy' as const,
         description: 'Remote BLE scanning via an ESP32 device',
       },
