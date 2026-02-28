@@ -7,7 +7,37 @@ description: Version history for BLE Scale Sync.
 
 All notable changes to this project are documented here. Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## v1.4.0 <Badge type="tip" text="latest" /> {#v1-4-0}
+## v1.6.0 <Badge type="tip" text="latest" /> {#v1-6-0}
+
+_2026-02-28_
+
+### Added
+- **ESP32 BLE proxy** (experimental) for remote BLE scanning over MQTT. Use a cheap ESP32 board (~8€) as a wireless Bluetooth radio, enabling BLE Scale Sync on machines without local Bluetooth. Supports both broadcast and GATT scales
+- **ESP32 display board** (Guition ESP32-S3-4848S040) with LVGL UI showing scan status, user matches, and export results
+- **Beep feedback** on ESP32 boards with I2S buzzer (Atom Echo) when a known scale is detected
+- **Streaming BLE scan** for ESP32-S3 boards with hardware radio coexistence
+- **Docker mqtt-proxy compose** (`docker-compose.mqtt-proxy.yml`) requiring no BlueZ, D-Bus, or `NET_ADMIN`
+- Setup wizard includes interactive mqtt-proxy configuration
+- `BLE_HANDLER=mqtt-proxy` environment variable as alternative to config.yaml
+- ESP32 proxy documentation page with architecture diagram, flashing guide, and MQTT topics reference
+
+### Changed
+- Renpho broadcast parsing consolidated into QN scale adapter
+- Landing page updated with ESP32 proxy and Setup Wizard feature cards
+
+### Thanks
+- [@APIUM](https://github.com/APIUM) for the ESP32 MQTT proxy implementation ([#45](https://github.com/KristianP26/ble-scale-sync/pull/45))
+
+## v1.5.0 {#v1-5-0}
+
+_2026-02-24_
+
+### Added
+- **File exporter** (CSV/JSONL) for local measurement logging without external services. Auto-header CSV with proper escaping, JSONL one-object-per-line, per-user file paths, and directory writability healthcheck
+- **Strava exporter** with OAuth2 token management. Updates athlete weight via PUT /api/v3/athlete. Automatic token refresh, restricted file permissions (0o600), and interactive setup script (`npm run setup-strava`)
+- Strava API application setup guide in documentation with step-by-step instructions
+
+## v1.4.0 {#v1-4-0}
 
 _2026-02-24_
 
