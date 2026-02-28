@@ -47,6 +47,11 @@ features:
     details: Use a cheap ESP32 as a remote Bluetooth radio over MQTT. No BLE adapter needed on the server. Optional display board for live status.
     link: /guide/esp32-proxy
     linkText: Proxy setup guide
+  - icon: "\uD83E\uDDD9"
+    title: Setup Wizard
+    details: Interactive CLI wizard that discovers scales, configures exporters, tests connectivity, and generates your config.yaml.
+    link: /guide/configuration
+    linkText: Configuration guide
   - icon: "\uD83D\uDD12"
     title: Private & Self-Hosted
     details: Your data stays on your device. No vendor cloud, no account, no tracking. Fully open source.
