@@ -1,5 +1,8 @@
 # MicroPython libraries — installed via mpremote mip (not pip)
 # See flash.sh for the install commands
+#
+# aioble tracks MicroPython releases (part of micropython-lib, no independent versioning).
+# Tested with MicroPython v1.24.x.
 aioble
 github:peterhinch/micropython-mqtt@70b56a7a4aaf
 github:peterhinch/micropython-async@68b5f01e999b/v3/primitives
