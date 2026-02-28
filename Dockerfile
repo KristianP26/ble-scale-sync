@@ -1,4 +1,17 @@
-FROM node:20-slim AS base
+# ── Build stage: compile TypeScript ──────────────────────────────────
+ARG BUILDPLATFORM
+FROM --platform=$BUILDPLATFORM node:20-slim AS build
+
+WORKDIR /app
+
+COPY package.json package-lock.json tsconfig.json ./
+RUN npm ci --ignore-scripts
+
+COPY src/ ./src/
+RUN npm run build
+
+# ── Runtime stage ────────────────────────────────────────────────────
+FROM node:20-slim
 
 # OCI labels
 ARG VERSION=dev
@@ -15,12 +28,10 @@ LABEL org.opencontainers.image.title="BLE Scale Sync" \
 # System dependencies: BLE (BlueZ + D-Bus), Python (Garmin upload), tini (PID 1),
 # build-essential (node-gyp needs gcc/g++/make for native BLE modules)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      bluetooth \
       bluez \
       libbluetooth-dev \
       libusb-1.0-0-dev \
       libdbus-1-dev \
-      dbus \
       build-essential \
       python3 \
       python3-pip \
@@ -34,17 +45,21 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip3 install --break-system-packages --no-cache-dir -r requirements.txt
 
-# Node.js dependencies (production only — tsx is in dependencies)
+# Node.js dependencies (production only)
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-# Application source
-COPY src/ ./src/
+# Compiled application
+COPY --from=build /app/dist/ ./dist/
+
+# Supporting files
 COPY garmin-scripts/ ./garmin-scripts/
-COPY tsconfig.json docker-entrypoint.sh ./
+COPY docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh
 
 # Non-root user (UID 1000 from node:20-slim)
+# chown /app so the node user can create .tmp files for atomic config writes
+RUN chown node:node /app
 USER node
 
 # Heartbeat check: /tmp/.ble-scale-sync-heartbeat must be updated within 5 minutes

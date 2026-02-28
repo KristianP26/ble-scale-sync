@@ -57,6 +57,10 @@ export default defineConfig({
         ],
       },
       {
+        text: 'Deployment',
+        items: [{ text: 'ESP32 BLE Proxy', link: '/guide/esp32-proxy' }],
+      },
+      {
         text: 'Reference',
         items: [
           { text: 'Exporters', link: '/exporters' },

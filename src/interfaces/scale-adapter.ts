@@ -4,7 +4,8 @@ export type Gender = 'male' | 'female';
 export interface BleDeviceInfo {
   localName: string;
   serviceUuids: string[];
-  manufacturerData?: Buffer;
+  /** Manufacturer-specific data from the BLE advertisement (if present). */
+  manufacturerData?: { id: number; data: Buffer };
 }
 
 export interface ScaleReading {
@@ -93,11 +94,11 @@ export interface ScaleAdapter {
   parseCharNotification?(charUuid: string, data: Buffer): ScaleReading | null;
 
   /**
-   * Parse weight data from BLE advertisement manufacturer data (broadcast mode).
-   * Returns a stable ScaleReading when the scale broadcasts a final weight,
-   * or null for unstable/invalid readings.
+   * Parse a weight reading from BLE advertisement manufacturer data.
+   * When defined, the handler can extract a reading during scan without connecting.
+   * Used by broadcast-only scales that embed weight in advertisement data.
    */
-  parseAdvertisement?(manufacturerData: Buffer): ScaleReading | null;
+  parseBroadcast?(manufacturerData: Buffer): ScaleReading | null;
 
   matches(device: BleDeviceInfo): boolean;
   parseNotification(data: Buffer): ScaleReading | null;

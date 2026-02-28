@@ -8,16 +8,36 @@ const CB_UUID_REGEX =
 
 // --- Sub-schemas ---
 
-export const BleSchema = z.object({
-  scale_mac: z
+export const MqttProxySchema = z.object({
+  broker_url: z
     .string()
-    .refine((v) => MAC_REGEX.test(v) || CB_UUID_REGEX.test(v), {
-      message: 'Must be a MAC address (XX:XX:XX:XX:XX:XX) or CoreBluetooth UUID',
-    })
-    .optional()
-    .nullable(),
-  noble_driver: z.enum(['abandonware', 'stoprocent']).optional().nullable(),
+    .min(1, 'MQTT broker URL is required')
+    .refine((v) => /^mqtts?:\/\//.test(v), {
+      message: 'Must start with mqtt:// or mqtts://',
+    }),
+  device_id: z.string().default('esp32-ble-proxy'),
+  username: z.string().optional().nullable(),
+  password: z.string().optional().nullable(),
+  topic_prefix: z.string().default('ble-proxy'),
 });
+
+export const BleSchema = z
+  .object({
+    scale_mac: z
+      .string()
+      .refine((v) => MAC_REGEX.test(v) || CB_UUID_REGEX.test(v), {
+        message: 'Must be a MAC address (XX:XX:XX:XX:XX:XX) or CoreBluetooth UUID',
+      })
+      .optional()
+      .nullable(),
+    noble_driver: z.enum(['abandonware', 'stoprocent']).optional().nullable(),
+    handler: z.enum(['auto', 'mqtt-proxy']).default('auto'),
+    mqtt_proxy: MqttProxySchema.optional(),
+  })
+  .refine((ble) => ble.handler !== 'mqtt-proxy' || ble.mqtt_proxy !== undefined, {
+    message: 'mqtt_proxy config is required when handler is "mqtt-proxy"',
+    path: ['mqtt_proxy'],
+  });
 
 export const ScaleSchema = z.object({
   weight_unit: z.enum(['kg', 'lbs']).default('kg'),
@@ -83,6 +103,7 @@ export type WeightUnit = 'kg' | 'lbs';
 
 // --- Inferred types ---
 
+export type MqttProxyConfig = z.infer<typeof MqttProxySchema>;
 export type BleConfig = z.infer<typeof BleSchema>;
 export type ScaleConfig = z.infer<typeof ScaleSchema>;
 export type ExporterEntry = z.infer<typeof ExporterEntrySchema>;

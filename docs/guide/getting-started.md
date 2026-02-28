@@ -24,6 +24,7 @@ docker run --rm -it \
   --group-add 112 \
   -v /var/run/dbus:/var/run/dbus:ro \
   -v ./config.yaml:/app/config.yaml \
+  -v ./garmin-tokens:/app/garmin-tokens \
   ghcr.io/kristianp26/ble-scale-sync:latest setup
 ```
 
@@ -36,6 +37,7 @@ docker run -d --restart unless-stopped \
   --group-add 112 \
   -v /var/run/dbus:/var/run/dbus:ro \
   -v ./config.yaml:/app/config.yaml:ro \
+  -v ./garmin-tokens:/app/garmin-tokens:ro \
   -e CONTINUOUS_MODE=true \
   ghcr.io/kristianp26/ble-scale-sync:latest
 ```
@@ -56,6 +58,13 @@ docker run --rm --network host --cap-add NET_ADMIN --cap-add NET_RAW \
 docker run --rm -v ./config.yaml:/app/config.yaml:ro \
   ghcr.io/kristianp26/ble-scale-sync:latest validate   # Validate config
 ```
+
+::: tip Garmin tokens permission fix
+If Docker creates the `garmin-tokens/` directory automatically, it may be owned by root. The container runs as a non-root user and will fail to write tokens. Fix with:
+```bash
+sudo chown -R $(id -u):$(id -g) ./garmin-tokens
+```
+:::
 
 ::: details Why these Docker flags?
 | Flag | Why |

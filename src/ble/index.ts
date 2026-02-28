@@ -33,6 +33,12 @@ function resolveHandlerName(driver: NobleDriver | null): string {
  * Used by the multi-user flow to match a user by weight before computing metrics.
  */
 export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
+  if (opts.bleHandler === 'mqtt-proxy') {
+    bleLog.debug('BLE handler: mqtt-proxy (ESP32)');
+    const { scanAndReadRaw: impl } = await import('./handler-mqtt-proxy.js');
+    return impl(opts);
+  }
+
   const driver = resolveNobleDriver();
   bleLog.debug(`BLE handler: ${resolveHandlerName(driver)}`);
 
@@ -59,6 +65,8 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   return impl(opts);
 }
 
+export { ReadingWatcher } from './handler-mqtt-proxy.js';
+
 /**
  * Scan for a BLE scale, read weight + impedance, and compute body composition.
  *
@@ -71,6 +79,12 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
  * Dynamic import() ensures the unused library is never loaded.
  */
 export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
+  if (opts.bleHandler === 'mqtt-proxy') {
+    bleLog.debug('BLE handler: mqtt-proxy (ESP32)');
+    const { scanAndRead: impl } = await import('./handler-mqtt-proxy.js');
+    return impl(opts);
+  }
+
   const driver = resolveNobleDriver();
   bleLog.debug(`BLE handler: ${resolveHandlerName(driver)}`);
 
@@ -104,7 +118,18 @@ export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
 export async function scanDevices(
   adapters: ScaleAdapter[],
   durationMs?: number,
+  bleHandler?: 'auto' | 'mqtt-proxy',
+  mqttProxy?: import('../config/schema.js').MqttProxyConfig,
 ): Promise<ScanResult[]> {
+  if (bleHandler === 'mqtt-proxy') {
+    if (!mqttProxy) {
+      throw new Error('mqtt_proxy config is required when ble.handler is mqtt-proxy');
+    }
+    bleLog.debug('BLE handler: mqtt-proxy (ESP32)');
+    const { scanDevices: impl } = await import('./handler-mqtt-proxy.js');
+    return impl(adapters, durationMs, mqttProxy);
+  }
+
   const driver = resolveNobleDriver();
   bleLog.debug(`BLE handler: ${resolveHandlerName(driver)}`);
 
