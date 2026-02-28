@@ -1,0 +1,42 @@
+name: Docker Cleanup
+
+on:
+  pull_request:
+    types: [closed]
+  schedule:
+    # Daily at 3:00 UTC: prune untagged images
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  packages: write
+
+jobs:
+  # Delete PR image after PR is closed/merged
+  delete-pr-image:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete PR image
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ble-scale-sync
+          package-type: container
+          min-versions-to-keep: 0
+          delete-only-pre-release-versions: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ignore-versions: '^(?!pr-${{ github.event.number }}$).*$'
+
+  # Prune untagged images (leftover manifests from multi-arch builds)
+  prune-untagged:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prune untagged images
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ble-scale-sync
+          package-type: container
+          min-versions-to-keep: 0
+          delete-only-untagged-versions: true
+          token: ${{ secrets.GITHUB_TOKEN }}
