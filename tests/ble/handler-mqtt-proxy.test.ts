@@ -163,8 +163,7 @@ const {
   setDisplayUsers,
   AsyncQueue,
   ReadingWatcher,
-  _resetPersistentClient,
-  _resetDiscoveredMacs,
+  _resetProxyState,
 } = await import('../../src/ble/handler-mqtt-proxy.js');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -207,8 +206,7 @@ function wireBroadcastFlow(
 
 beforeEach(() => {
   vi.clearAllMocks();
-  _resetPersistentClient();
-  _resetDiscoveredMacs();
+  _resetProxyState();
   mockClient = createMockMqttClient();
 });
 

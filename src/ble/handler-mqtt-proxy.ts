@@ -133,21 +133,55 @@ async function createMqttClient(config: MqttProxyConfig): Promise<MqttClient> {
   return client;
 }
 
+// ─── Shared proxy state (grouped for testability and encapsulation) ──────────
+
+export interface DisplayUser {
+  slug: string;
+  name: string;
+  weight_range: { min: number; max: number };
+}
+
+/**
+ * Module-level state shared across MQTT proxy functions.
+ * Grouped into a single object so it can be reset atomically in tests
+ * and to make the shared mutable state explicit.
+ */
+const proxyState = {
+  persistentClient: null as MqttClient | null,
+  discoveredScaleMacs: new Set<string>(),
+  displayUsers: [] as DisplayUser[],
+};
+
+/** Reset all module-level proxy state (for testing only). */
+export function _resetProxyState(): void {
+  proxyState.persistentClient = null;
+  proxyState.discoveredScaleMacs.clear();
+  proxyState.displayUsers = [];
+}
+
+/** @deprecated Use _resetProxyState() instead. */
+export function _resetPersistentClient(): void {
+  proxyState.persistentClient = null;
+}
+
+/** @deprecated Use _resetProxyState() instead. */
+export function _resetDiscoveredMacs(): void {
+  proxyState.discoveredScaleMacs.clear();
+}
+
 // ─── Persistent MQTT client (for continuous mode) ────────────────────────────
 
-let _persistentClient: MqttClient | null = null;
-
 async function getOrCreatePersistentClient(config: MqttProxyConfig): Promise<MqttClient> {
-  if (_persistentClient?.connected) return _persistentClient;
-  if (_persistentClient) {
+  if (proxyState.persistentClient?.connected) return proxyState.persistentClient;
+  if (proxyState.persistentClient) {
     try {
-      await _persistentClient.endAsync();
+      await proxyState.persistentClient.endAsync();
     } catch {
       /* ignore */
     }
   }
   const { connectAsync } = await import('mqtt');
-  _persistentClient = await withTimeout(
+  proxyState.persistentClient = await withTimeout(
     connectAsync(config.broker_url, {
       clientId: `ble-scale-sync-${config.device_id}`,
       username: config.username ?? undefined,
@@ -158,20 +192,15 @@ async function getOrCreatePersistentClient(config: MqttProxyConfig): Promise<Mqt
     COMMAND_TIMEOUT_MS,
     `MQTT broker unreachable at ${config.broker_url}. Check your mqtt_proxy.broker_url config.`,
   );
-  return _persistentClient;
-}
-
-/** Reset the persistent client (for testing only). */
-export function _resetPersistentClient(): void {
-  _persistentClient = null;
+  return proxyState.persistentClient;
 }
 
 /** Get the persistent client if connected, otherwise create an ephemeral one. */
 async function getClient(
   config: MqttProxyConfig,
 ): Promise<{ client: MqttClient; ephemeral: boolean }> {
-  if (_persistentClient?.connected) {
-    return { client: _persistentClient, ephemeral: false };
+  if (proxyState.persistentClient?.connected) {
+    return { client: proxyState.persistentClient, ephemeral: false };
   }
   return { client: await createMqttClient(config), ephemeral: true };
 }
@@ -723,26 +752,8 @@ export class ReadingWatcher {
   }
 }
 
-/** Tracked scale MACs discovered via adapter matching. */
-const discoveredScaleMacs = new Set<string>();
-
-/** Reset discovered MACs (for testing only). */
-export function _resetDiscoveredMacs(): void {
-  discoveredScaleMacs.clear();
-}
-
-// ─── Display user info ───────────────────────────────────────────────────────
-
-export interface DisplayUser {
-  slug: string;
-  name: string;
-  weight_range: { min: number; max: number };
-}
-
-let _displayUsers: DisplayUser[] = [];
-
 export function setDisplayUsers(users: DisplayUser[]): void {
-  _displayUsers = users;
+  proxyState.displayUsers = users;
 }
 
 export async function publishConfig(
@@ -769,10 +780,12 @@ export async function publishConfig(
  */
 export async function registerScaleMac(config: MqttProxyConfig, mac: string): Promise<void> {
   const upper = mac.toUpperCase();
-  if (discoveredScaleMacs.has(upper)) return; // already known
-  discoveredScaleMacs.add(upper);
-  bleLog.info(`Registered scale MAC ${upper} for ESP32 beep (${discoveredScaleMacs.size} total)`);
-  await publishConfig(config, [...discoveredScaleMacs], _displayUsers);
+  if (proxyState.discoveredScaleMacs.has(upper)) return; // already known
+  proxyState.discoveredScaleMacs.add(upper);
+  bleLog.info(
+    `Registered scale MAC ${upper} for ESP32 beep (${proxyState.discoveredScaleMacs.size} total)`,
+  );
+  await publishConfig(config, [...proxyState.discoveredScaleMacs], proxyState.displayUsers);
 }
 
 export async function publishBeep(
