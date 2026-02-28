@@ -46,7 +46,7 @@ Any ESP32 board running MicroPython with BLE support works. Tested on:
 
 The board is auto-detected from the chip family. Set `"board"` in `config.json` to override (e.g. `"guition_4848"` for the display board, `"atom_echo"` for the Atom Echo).
 
-![Guition 4848 display showing scan status and user results](/images/esp32-display.png)
+![Guition 4848 display showing scan status and user results](../images/esp32-display.png)
 
 ::: warning Not compatible
 ESP32-C3 and ESP32-C6 boards use a different BLE stack in MicroPython and have not been tested. Classic ESP32 and ESP32-S3 are recommended.
@@ -226,7 +226,7 @@ Compare this to the standard [Docker deployment](/guide/getting-started#docker) 
 | `board_atom_echo.py`        | Atom Echo config (no PSRAM, I2S beep)              |
 | `board_esp32_s3.py`         | Generic ESP32-S3 config                            |
 | `board_guition_4848.py`     | Guition 4848 config (LVGL display)                 |
-| `panel_init_guition_4848.py`| ST7701S panel init sequence data                   |
+| `panel_init_guition_4848.py` | ST7701S panel init sequence data                   |
 | `ui.py`                     | LVGL display UI (boards with `HAS_DISPLAY`)        |
 | `requirements.txt`          | MicroPython library dependencies                   |
 
