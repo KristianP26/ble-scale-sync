@@ -74,6 +74,7 @@ Requires Node.js v20+ and a BLE adapter. See the **[full install guide](https://
 
 ## Contributors
 
+<a href="https://github.com/KristianP26"><img src="https://avatars.githubusercontent.com/u/28766334?v=4" width="50" height="50" alt="KristianP26" style="border-radius:50%"></a>
 <a href="https://github.com/APIUM"><img src="https://avatars.githubusercontent.com/u/9067013?v=4" width="50" height="50" alt="APIUM" style="border-radius:50%"></a>
 <a href="https://github.com/marcelorodrigo"><img src="https://avatars.githubusercontent.com/u/443962?v=4" width="50" height="50" alt="marcelorodrigo" style="border-radius:50%"></a>
 
