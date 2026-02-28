@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.6.0] - 2026-02-28
+
+### Added
+- **ESP32 BLE proxy** (experimental) for remote BLE scanning over MQTT. Use a cheap ESP32 board (~8€) as a wireless Bluetooth radio, enabling BLE Scale Sync on machines without local Bluetooth. Supports both broadcast and GATT scales
+- **ESP32 display board** (Guition ESP32-S3-4848S040) with LVGL UI showing scan status, user matches, and export results
+- **Beep feedback** on ESP32 boards with I2S buzzer (Atom Echo) when a known scale is detected
+- **Streaming BLE scan** for ESP32-S3 boards with hardware radio coexistence
+- **Docker mqtt-proxy compose** (`docker-compose.mqtt-proxy.yml`) requiring no BlueZ, D-Bus, or `NET_ADMIN`
+- Setup wizard includes interactive mqtt-proxy configuration
+- `BLE_HANDLER=mqtt-proxy` environment variable as alternative to config.yaml
+- ESP32 proxy documentation page with architecture diagram, flashing guide, and MQTT topics reference
+
+### Changed
+- Renpho broadcast parsing consolidated into QN scale adapter
+- Landing page updated with ESP32 proxy and Setup Wizard feature cards
+
+### Thanks
+- [@APIUM](https://github.com/APIUM) for the ESP32 MQTT proxy implementation ([#45](https://github.com/KristianP26/ble-scale-sync/pull/45))
+
 ## [1.5.0] - 2026-02-24
 
 ### Added
@@ -115,6 +134,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Exporter healthchecks at startup
 - 894 unit tests across 49 test files
 
+[1.6.0]: https://github.com/KristianP26/ble-scale-sync/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/KristianP26/ble-scale-sync/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/KristianP26/ble-scale-sync/compare/v1.3.1...v1.4.0
 [1.3.0]: https://github.com/KristianP26/ble-scale-sync/compare/v1.2.2...v1.3.0
