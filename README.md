@@ -72,10 +72,15 @@ Requires Node.js v20+ and a BLE adapter. See the **[full install guide](https://
 - **BLE** - [node-ble](https://github.com/chrvadala/node-ble) (Linux), [@abandonware/noble](https://github.com/abandonware/noble) (Windows), [@stoprocent/noble](https://github.com/stoprocent/noble) (macOS)
 - **ESP32 proxy** - [mqtt_as](https://github.com/peterhinch/micropython-mqtt) by peterhinch, [aioble](https://github.com/micropython/micropython-lib/tree/master/micropython/bluetooth/aioble)
 
+## Contributors
+
+<a href="https://github.com/APIUM"><img src="https://avatars.githubusercontent.com/u/9067013?v=4" width="50" height="50" alt="APIUM" style="border-radius:50%"></a>
+<a href="https://github.com/marcelorodrigo"><img src="https://avatars.githubusercontent.com/u/443962?v=4" width="50" height="50" alt="marcelorodrigo" style="border-radius:50%"></a>
+
 ## Contributing
 
 See **[CONTRIBUTING.md](CONTRIBUTING.md)** for development setup, project structure, and how to add new scale adapters or exporters.
 
 ## License
 
-GPL-3.0 — see [LICENSE](LICENSE) for details.
+GPL-3.0. See [LICENSE](LICENSE) for details.
