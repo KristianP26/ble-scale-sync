@@ -10,13 +10,16 @@ description: How BLE Scale Sync compares to openScale, openScale-sync, manufactu
 | | BLE Scale Sync | openScale | openScale-sync | Manufacturer App |
 |---|---|---|---|---|
 | **Platform** | Linux, macOS, Windows, Docker | Android | Android | iOS / Android |
-| **Headless (always-on)** | Yes — Raspberry Pi, server | No | No | No |
+| **Headless (always-on)** | Yes, Raspberry Pi or server | No | No | No |
 | **Phone required** | No | Yes | Yes | Yes |
+| **BLE connectivity** | Local adapter or [ESP32 proxy](/guide/esp32-proxy) over WiFi | Phone BLE | Phone BLE | Phone BLE |
 | **Garmin Connect** | Automatic upload | No | Via Health Connect | Some (indirect) |
+| **Strava** | Automatic weight sync | No | No | No |
 | **MQTT / Home Assistant** | Auto-discovery, LWT, 10 sensors | No | MQTT 3.1 / 5.0 | No |
 | **InfluxDB** | Built-in | No | No | No |
 | **Webhook** | Built-in | No | No | No |
 | **Push notifications** | Ntfy | No | No | App only |
+| **Local file export** | CSV and JSONL | SQLite | No | No |
 | **Multi-user** | Automatic weight matching | Manual selection | Per-user sync | Per-account |
 | **Supported scales** | 23 brands | 20+ brands | Via openScale | 1 (own brand) |
 | **Body composition** | 10 metrics (BIA) | Varies | 4 metrics | Varies |
@@ -26,10 +29,12 @@ description: How BLE Scale Sync compares to openScale, openScale-sync, manufactu
 ## BLE Scale Sync
 
 **Best for:**
-- Automatic Garmin Connect upload without a phone
+- Automatic Garmin Connect and Strava sync without a phone
 - Home automation integration (MQTT, InfluxDB, webhooks)
 - Headless always-on deployment (Raspberry Pi)
+- Remote BLE via [ESP32 proxy](/guide/esp32-proxy) when the server has no Bluetooth
 - Multi-user households with automatic identification
+- Local data logging (CSV/JSONL) alongside cloud exports
 - Self-hosting and privacy
 
 ## openScale
@@ -65,5 +70,5 @@ Renpho, Yunmai, Xiaomi Mi Fit, and similar apps are the simplest option if you o
 - Locked to one brand's ecosystem
 - No direct Garmin Connect export (some support Health Connect on Android)
 - No MQTT, InfluxDB, or webhook integration
-- No headless operation — requires phone for every measurement
-- **Your data is stored in their cloud** — most manufacturer apps upload your weight, body fat, and other health metrics to servers in China or the US. Their privacy policies typically allow sharing data with "partners" or using it for "business purposes", which may include selling aggregated health data to third parties
+- No headless operation, requires phone for every measurement
+- **Your data is stored in their cloud.** Most manufacturer apps upload your weight, body fat, and other health metrics to servers in China or the US. Their privacy policies typically allow sharing data with "partners" or using it for "business purposes", which may include selling aggregated health data to third parties
