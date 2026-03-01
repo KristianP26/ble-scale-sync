@@ -39,7 +39,7 @@
   "dependencies": {
     "@abandonware/noble": "^1.9.2-26",
     "@inquirer/prompts": "^8.3.0",
-    "@stoprocent/noble": "^2.3.10",
+    "@stoprocent/noble": "^2.3.16",
     "boxen": "^8.0.1",
     "chalk": "^5.6.2",
     "dotenv": "^17.3.1",
