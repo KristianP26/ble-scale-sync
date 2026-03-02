@@ -1,8 +1,6 @@
 name: Docker
 
 on:
-  push:
-    branches: [main]
   release:
     types: [published]
   pull_request:
