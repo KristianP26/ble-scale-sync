@@ -7,7 +7,18 @@ description: Version history for BLE Scale Sync.
 
 All notable changes to this project are documented here. Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## v1.6.2 <Badge type="tip" text="latest" /> {#v1-6-2}
+## v1.6.3 <Badge type="tip" text="latest" /> {#v1-6-3}
+
+_2026-03-04_
+
+### Fixed
+- **Docker**: removed cleanup workflow that was deleting multi-arch platform manifests, making all Docker images unpullable ([#74](https://github.com/KristianP26/ble-scale-sync/issues/74), [#76](https://github.com/KristianP26/ble-scale-sync/issues/76))
+
+### Thanks
+- [@marcelorodrigo](https://github.com/marcelorodrigo) for reporting the broken Docker images ([#74](https://github.com/KristianP26/ble-scale-sync/issues/74))
+- [@mtcerio](https://github.com/mtcerio) for the additional report ([#76](https://github.com/KristianP26/ble-scale-sync/issues/76))
+
+## v1.6.2 {#v1-6-2}
 
 _2026-03-02_
 
