@@ -23,6 +23,12 @@ type Device = NodeBle.Device;
 type Adapter = NodeBle.Adapter;
 type GattCharacteristic = NodeBle.GattCharacteristic;
 
+/** Mutable D-Bus connection state. Tier 4 btmgmt recovery may replace these. */
+interface DbusConnection {
+  bluetooth: NodeBle.Bluetooth;
+  destroy: () => void;
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function isDbusConnectionError(err: unknown): boolean {
@@ -57,12 +63,13 @@ async function stopDiscoveryAndQuiesce(btAdapter: Adapter): Promise<void> {
 /**
  * Try to start BlueZ discovery with escalating recovery strategies.
  * Returns the (possibly refreshed) adapter on success, or false if all attempts failed.
- * When `bluetooth` is provided, Tier 4 (btmgmt) can re-acquire a fresh D-Bus proxy
- * after the kernel-level reset invalidates the current one.
+ * When a DbusConnection is provided, Tier 4 (btmgmt) destroys the stale D-Bus
+ * connection and creates a fresh one, updating `conn` in place so the caller's
+ * finally block uses the new `destroy()`.
  */
 async function startDiscoverySafe(
   btAdapter: Adapter,
-  bluetooth?: NodeBle.Bluetooth,
+  conn?: DbusConnection,
 ): Promise<Adapter | false> {
   // 1. Normal start
   try {
@@ -124,12 +131,22 @@ async function startDiscoverySafe(
   if (await resetAdapterBtmgmt()) {
     // btmgmt power-cycles the adapter at kernel level, which causes BlueZ to
     // remove and re-create the D-Bus object at /org/bluez/hci0. The existing
-    // proxy is now stale — re-acquire a fresh one if possible.
-    if (bluetooth) {
+    // D-Bus connection and its proxies are now stale. When a DbusConnection is
+    // available, destroy the old connection and create a fresh one so the new
+    // adapter proxy points to the re-created BlueZ object.
+    if (conn) {
       try {
-        const freshAdapter = await bluetooth.defaultAdapter();
+        conn.destroy();
+      } catch {
+        /* ignore */
+      }
+      try {
+        const fresh = NodeBle.createBluetooth();
+        conn.bluetooth = fresh.bluetooth;
+        conn.destroy = fresh.destroy;
+        const freshAdapter = await conn.bluetooth.defaultAdapter();
         await freshAdapter.startDiscovery();
-        bleLog.debug('Discovery started after btmgmt reset (fresh adapter)');
+        bleLog.debug('Discovery started after btmgmt reset (fresh connection)');
         return freshAdapter;
       } catch (e) {
         bleLog.debug(`startDiscovery after btmgmt reset failed: ${errMsg(e)}`);
@@ -362,10 +379,11 @@ async function buildCharMap(gatt: NodeBle.GattServer): Promise<Map<string, BleCh
 export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   const { targetMac, adapters, profile, weightUnit, onLiveData, abortSignal } = opts;
 
-  let bluetooth: NodeBle.Bluetooth;
-  let destroy: () => void;
+  const conn: DbusConnection = { bluetooth: null!, destroy: () => {} };
   try {
-    ({ bluetooth, destroy } = NodeBle.createBluetooth());
+    const created = NodeBle.createBluetooth();
+    conn.bluetooth = created.bluetooth;
+    conn.destroy = created.destroy;
   } catch (err) {
     if (isDbusConnectionError(err)) throw dbusError();
     throw err;
@@ -376,7 +394,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
 
   try {
     try {
-      btAdapter = await bluetooth.defaultAdapter();
+      btAdapter = await conn.bluetooth.defaultAdapter();
     } catch (err) {
       if (isDbusConnectionError(err)) throw dbusError();
       throw err;
@@ -397,7 +415,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       await removeDevice(btAdapter, targetMac);
     }
 
-    const discoveryResult = await startDiscoverySafe(btAdapter, bluetooth);
+    const discoveryResult = await startDiscoverySafe(btAdapter, conn);
     if (discoveryResult) btAdapter = discoveryResult;
 
     let matchedAdapter: ScaleAdapter;
@@ -526,7 +544,11 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         /* may already be stopped */
       }
     }
-    destroy();
+    // Give BlueZ time to clean up the discovery session before closing the
+    // D-Bus socket. Without this delay, bluetoothd may not finish session
+    // teardown, leaving an orphaned discovery that blocks future scans.
+    await sleep(POST_DISCOVERY_QUIESCE_MS);
+    conn.destroy();
   }
 }
 
@@ -544,10 +566,11 @@ export async function scanDevices(
   adapters: ScaleAdapter[],
   durationMs = 15_000,
 ): Promise<ScanResult[]> {
-  let bluetooth: NodeBle.Bluetooth;
-  let destroy: () => void;
+  const conn: DbusConnection = { bluetooth: null!, destroy: () => {} };
   try {
-    ({ bluetooth, destroy } = NodeBle.createBluetooth());
+    const created = NodeBle.createBluetooth();
+    conn.bluetooth = created.bluetooth;
+    conn.destroy = created.destroy;
   } catch (err) {
     if (isDbusConnectionError(err)) throw dbusError();
     throw err;
@@ -557,7 +580,7 @@ export async function scanDevices(
 
   try {
     try {
-      btAdapter = await bluetooth.defaultAdapter();
+      btAdapter = await conn.bluetooth.defaultAdapter();
     } catch (err) {
       if (isDbusConnectionError(err)) throw dbusError();
       throw err;
@@ -570,7 +593,7 @@ export async function scanDevices(
       );
     }
 
-    const discoveryResult = await startDiscoverySafe(btAdapter, bluetooth);
+    const discoveryResult = await startDiscoverySafe(btAdapter, conn);
     if (discoveryResult) btAdapter = discoveryResult;
 
     const seen = new Set<string>();
@@ -612,6 +635,7 @@ export async function scanDevices(
         /* ignore */
       }
     }
-    destroy();
+    await sleep(POST_DISCOVERY_QUIESCE_MS);
+    conn.destroy();
   }
 }
