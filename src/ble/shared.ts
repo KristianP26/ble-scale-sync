@@ -90,13 +90,20 @@ function initializeAdapter(
         (adapter.altCharWriteUuid ? resolveChar(charMap, adapter.altCharWriteUuid) : undefined);
       if (!writeChar) return;
 
-      const unlockBuf = Buffer.from(adapter.unlockCommand);
+      const commands = adapter.unlockCommands
+        ? adapter.unlockCommands.map((c) => Buffer.from(c))
+        : [Buffer.from(adapter.unlockCommand)];
       const sendUnlock = async (): Promise<void> => {
         if (isResolved()) return;
-        try {
-          await writeChar.write(unlockBuf, false);
-        } catch (e: unknown) {
-          if (!isResolved()) bleLog.error(`Unlock write error: ${errMsg(e)}`);
+        for (const buf of commands) {
+          try {
+            await writeChar.write(buf, false);
+            bleLog.debug(
+              `Unlock write: [${[...buf].map((b) => b.toString(16).padStart(2, '0')).join(' ')}]`,
+            );
+          } catch (e: unknown) {
+            if (!isResolved()) bleLog.error(`Unlock write error: ${errMsg(e)}`);
+          }
         }
       };
 
