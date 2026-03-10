@@ -98,7 +98,9 @@ function initializeAdapter(
         for (const buf of commands) {
           try {
             await writeChar.write(buf, false);
-            bleLog.debug(`Unlock write: [${[...buf].map((b) => b.toString(16).padStart(2, '0')).join(' ')}]`);
+            bleLog.debug(
+              `Unlock write: [${[...buf].map((b) => b.toString(16).padStart(2, '0')).join(' ')}]`,
+            );
           } catch (e: unknown) {
             if (!isResolved()) bleLog.error(`Unlock write error: ${errMsg(e)}`);
           }
