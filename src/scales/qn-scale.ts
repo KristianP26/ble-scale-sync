@@ -60,11 +60,16 @@ export class QnScaleAdapter implements ScaleAdapter {
   /**
    * Unlock / unit-config command (6-byte variant).
    * Confirmed working with Renpho, Sencor, and generic QN-Scale devices.
-   * openScale's QNHandler uses a longer 9-byte variant
-   * [0x13, 0x09, 0x00, 0x01, 0x10, 0x00, 0x00, 0x00, 0x2d] which may not
-   * work with all QN-compatible scales.
    */
   readonly unlockCommand = [0x13, 0x09, 0x00, 0x01, 0x01, 0x02];
+  /**
+   * Both the 6-byte and 9-byte (openScale QNHandler) unlock variants.
+   * Some firmware versions only respond to one or the other, so we send both.
+   */
+  readonly unlockCommands = [
+    [0x13, 0x09, 0x00, 0x01, 0x01, 0x02],
+    [0x13, 0x09, 0x00, 0x01, 0x10, 0x00, 0x00, 0x00, 0x2d],
+  ];
   readonly unlockIntervalMs = 2000;
 
   /**

@@ -27,6 +27,11 @@ case "$CMD" in
     reset_bt_adapter
     exec node dist/scan.js
     ;;
+  diagnose)
+    reset_bt_adapter
+    shift
+    exec node dist/diagnose.js "$@"
+    ;;
   validate)
     exec node dist/config/validate-cli.js
     ;;
@@ -51,6 +56,7 @@ case "$CMD" in
     echo "  start                         Run the main sync flow (default)"
     echo "  setup                         Interactive setup wizard"
     echo "  scan                          Discover nearby BLE devices"
+    echo "  diagnose [MAC]                BLE diagnostic tool (services, characteristics)"
     echo "  validate                      Validate config.yaml"
     echo "  setup-garmin                  Garmin auth (env vars: GARMIN_EMAIL, GARMIN_PASSWORD)"
     echo "  setup-garmin --user <name>    Garmin auth for a specific user from config.yaml"

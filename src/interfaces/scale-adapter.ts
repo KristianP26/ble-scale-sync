@@ -68,6 +68,8 @@ export interface ScaleAdapter {
   /** Fallback write UUID when the primary isn't found (e.g. QN Type 1 FFE3). */
   readonly altCharWriteUuid?: string;
   readonly unlockCommand: number[];
+  /** Multiple unlock commands to try in sequence (e.g. different firmware variants). */
+  readonly unlockCommands?: number[][];
   readonly unlockIntervalMs: number;
   /** True if parseNotification() already converts any non-kg reading to kg. */
   readonly normalizesWeight?: boolean;
