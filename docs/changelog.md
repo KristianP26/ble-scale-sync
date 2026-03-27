@@ -7,7 +7,20 @@ description: Version history for BLE Scale Sync.
 
 All notable changes to this project are documented here. Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## v1.6.3 <Badge type="tip" text="latest" /> {#v1-6-3}
+## v1.6.4 <Badge type="tip" text="latest" /> {#v1-6-4}
+
+_2026-03-27_
+
+### Fixed
+- **BLE**: use ATT Write Request instead of Reliable Write in node-ble handler, fixing "Operation is not supported" errors on Medisana BS430 and similar scales that do not support reliable writes ([#85](https://github.com/KristianP26/ble-scale-sync/issues/85))
+
+### Improved
+- **BLE**: GATT characteristic flags are now logged during discovery (`DEBUG=true`) for easier troubleshooting
+
+### Thanks
+- [@Ikari34](https://github.com/Ikari34) for reporting the Medisana BS430 issue ([#85](https://github.com/KristianP26/ble-scale-sync/issues/85))
+
+## v1.6.3 {#v1-6-3}
 
 _2026-03-04_
 
