@@ -23,6 +23,47 @@ type Device = NodeBle.Device;
 type Adapter = NodeBle.Adapter;
 type GattCharacteristic = NodeBle.GattCharacteristic;
 
+// ─── Persistent D-Bus connection ─────────────────────────────────────────────
+// A single D-Bus connection is reused across scan cycles in continuous mode.
+// This prevents orphaned BlueZ discovery sessions that occur when D-Bus
+// connections are destroyed while bluetoothd is still cleaning up the session.
+// The same D-Bus client owns the discovery session across cycles, so
+// stopDiscovery() always works and no orphaned sessions accumulate.
+
+let persistentConn: { bluetooth: NodeBle.Bluetooth; destroy: () => void } | null = null;
+
+function getConnection(): { bluetooth: NodeBle.Bluetooth; destroy: () => void } {
+  if (!persistentConn) {
+    persistentConn = NodeBle.createBluetooth();
+    bleLog.debug('D-Bus connection established');
+  }
+  return persistentConn;
+}
+
+function resetConnection(): void {
+  if (persistentConn) {
+    try {
+      persistentConn.destroy();
+    } catch {
+      /* ignore */
+    }
+    persistentConn = null;
+    bleLog.debug('D-Bus connection reset');
+  }
+}
+
+/** Returns true if the error indicates a stale or broken D-Bus connection. */
+function isStaleConnectionError(err: unknown): boolean {
+  const msg = errMsg(err);
+  return (
+    msg.includes('interface not found') ||
+    msg.includes('not found in proxy') ||
+    msg.includes('connection closed') ||
+    msg.includes('The name is not activatable') ||
+    msg.includes('was not provided')
+  );
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function isDbusConnectionError(err: unknown): boolean {
@@ -57,13 +98,8 @@ async function stopDiscoveryAndQuiesce(btAdapter: Adapter): Promise<void> {
 /**
  * Try to start BlueZ discovery with escalating recovery strategies.
  * Returns the (possibly refreshed) adapter on success, or false if all attempts failed.
- * When `bluetooth` is provided, Tier 4 (btmgmt) can re-acquire a fresh D-Bus proxy
- * after the kernel-level reset invalidates the current one.
  */
-async function startDiscoverySafe(
-  btAdapter: Adapter,
-  bluetooth?: NodeBle.Bluetooth,
-): Promise<Adapter | false> {
+async function startDiscoverySafe(btAdapter: Adapter): Promise<Adapter | false> {
   // 1. Normal start
   try {
     await btAdapter.startDiscovery();
@@ -73,9 +109,9 @@ async function startDiscoverySafe(
     bleLog.debug(`startDiscovery failed: ${errMsg(e)}`);
   }
 
-  // Already running (another D-Bus client owns the session)
+  // Already running (same client's previous session still active)
   if (await btAdapter.isDiscovering()) {
-    bleLog.debug('Discovery already active (owned by another client), continuing');
+    bleLog.debug('Discovery already active, continuing');
     return btAdapter;
   }
 
@@ -119,33 +155,24 @@ async function startDiscoverySafe(
     bleLog.debug(`Power cycle / startDiscovery failed: ${errMsg(e)}`);
   }
 
-  // 4. Kernel-level adapter reset via btmgmt (bypasses D-Bus session ownership)
+  // 4. Kernel-level adapter reset via btmgmt + fresh D-Bus connection
   bleLog.debug('Attempting kernel-level adapter reset via btmgmt...');
   if (await resetAdapterBtmgmt()) {
-    // btmgmt power-cycles the adapter at kernel level, which causes BlueZ to
-    // remove and re-create the D-Bus object at /org/bluez/hci0. The existing
-    // proxy is now stale — re-acquire a fresh one if possible.
-    if (bluetooth) {
-      try {
-        const freshAdapter = await bluetooth.defaultAdapter();
-        await freshAdapter.startDiscovery();
-        bleLog.debug('Discovery started after btmgmt reset (fresh adapter)');
-        return freshAdapter;
-      } catch (e) {
-        bleLog.debug(`startDiscovery after btmgmt reset failed: ${errMsg(e)}`);
-      }
-    } else {
-      try {
-        await btAdapter.startDiscovery();
-        bleLog.debug('Discovery started after btmgmt reset');
-        return btAdapter;
-      } catch (e) {
-        bleLog.debug(`startDiscovery after btmgmt reset failed: ${errMsg(e)}`);
-      }
+    // btmgmt power-cycles the adapter at kernel level, invalidating
+    // the current D-Bus proxies. Reset the connection to get fresh ones.
+    resetConnection();
+    try {
+      const { bluetooth } = getConnection();
+      const freshAdapter = await bluetooth.defaultAdapter();
+      await freshAdapter.startDiscovery();
+      bleLog.debug('Discovery started after btmgmt reset (fresh connection)');
+      return freshAdapter;
+    } catch (e) {
+      bleLog.debug(`startDiscovery after btmgmt reset failed: ${errMsg(e)}`);
     }
   }
 
-  // All strategies failed — warn but don't throw
+  // All strategies failed
   bleLog.warn(
     'Could not start active discovery. ' +
       'Proceeding with passive scanning (device may take longer to appear).',
@@ -162,7 +189,7 @@ async function removeDevice(btAdapter: Adapter, mac: string): Promise<void> {
     await adapterHelper.callMethod('RemoveDevice', `${adapterHelper.object}/${devSerialized}`);
     bleLog.debug('Removed device from BlueZ cache');
   } catch {
-    // Device wasn't in cache — expected on first call
+    // Device wasn't in cache
   }
 }
 
@@ -175,7 +202,7 @@ interface ConnectRecoveryContext {
 
 /**
  * Connect to a BLE device with recovery for BlueZ-specific failures.
- * On each failed attempt: disconnect → RemoveDevice → re-discover → quiesce → retry.
+ * On each failed attempt: disconnect -> RemoveDevice -> re-discover -> quiesce -> retry.
  * Returns the (possibly refreshed) Device reference.
  */
 async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<Device> {
@@ -364,14 +391,17 @@ async function buildCharMap(gatt: NodeBle.GattServer): Promise<Map<string, BleCh
 /**
  * Scan for a BLE scale, read weight + impedance, and compute body composition.
  * Uses node-ble (BlueZ D-Bus) — requires bluetoothd running on Linux.
+ *
+ * The D-Bus connection is kept alive across calls (singleton) to prevent
+ * orphaned BlueZ discovery sessions in continuous mode. If the connection
+ * becomes stale (e.g. bluetoothd restart), it is automatically reset.
  */
 export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   const { targetMac, adapters, profile, weightUnit, onLiveData, abortSignal } = opts;
 
-  let bluetooth: NodeBle.Bluetooth;
-  let destroy: () => void;
+  let conn: { bluetooth: NodeBle.Bluetooth; destroy: () => void };
   try {
-    ({ bluetooth, destroy } = NodeBle.createBluetooth());
+    conn = getConnection();
   } catch (err) {
     if (isDbusConnectionError(err)) throw dbusError();
     throw err;
@@ -382,10 +412,18 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
 
   try {
     try {
-      btAdapter = await bluetooth.defaultAdapter();
+      btAdapter = await conn.bluetooth.defaultAdapter();
     } catch (err) {
       if (isDbusConnectionError(err)) throw dbusError();
-      throw err;
+      // Stale connection (e.g. bluetoothd restarted): reset and retry once
+      if (isStaleConnectionError(err)) {
+        bleLog.debug('D-Bus connection stale, resetting...');
+        resetConnection();
+        conn = getConnection();
+        btAdapter = await conn.bluetooth.defaultAdapter();
+      } else {
+        throw err;
+      }
     }
 
     if (!(await btAdapter.isPowered())) {
@@ -396,14 +434,12 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     }
 
     // In continuous mode, BlueZ caches the device from a previous cycle.
-    // The cached D-Bus proxy becomes stale after destroy(), causing
-    // "interface not found in proxy object" errors on reconnect.
     // Removing it forces a fresh discovery + proxy creation.
     if (targetMac) {
       await removeDevice(btAdapter, targetMac);
     }
 
-    const discoveryResult = await startDiscoverySafe(btAdapter, bluetooth);
+    const discoveryResult = await startDiscoverySafe(btAdapter);
     if (discoveryResult) btAdapter = discoveryResult;
 
     let matchedAdapter: ScaleAdapter;
@@ -522,9 +558,8 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     }
     return raw;
   } finally {
-    // Always stop discovery before destroying the D-Bus connection to prevent
-    // orphaned BlueZ discovery sessions that cause "Operation already in progress"
-    // on the next scan cycle in continuous mode.
+    // Stop discovery but keep the D-Bus connection alive for the next cycle.
+    // The same client owns the session, so stopDiscovery() always works.
     if (btAdapter) {
       try {
         await btAdapter.stopDiscovery();
@@ -532,7 +567,6 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         /* may already be stopped */
       }
     }
-    destroy();
   }
 }
 
@@ -545,6 +579,10 @@ export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
 /**
  * Scan for nearby BLE devices and identify recognized scales.
  * Uses node-ble (BlueZ D-Bus) — Linux only.
+ *
+ * Uses its own short-lived D-Bus connection (not the persistent singleton)
+ * because scan operations are one-shot and should not interfere with
+ * continuous mode scanning.
  */
 export async function scanDevices(
   adapters: ScaleAdapter[],
@@ -576,7 +614,7 @@ export async function scanDevices(
       );
     }
 
-    const discoveryResult = await startDiscoverySafe(btAdapter, bluetooth);
+    const discoveryResult = await startDiscoverySafe(btAdapter);
     if (discoveryResult) btAdapter = discoveryResult;
 
     const seen = new Set<string>();
@@ -618,6 +656,7 @@ export async function scanDevices(
         /* ignore */
       }
     }
+    await sleep(POST_DISCOVERY_QUIESCE_MS);
     destroy();
   }
 }
