@@ -329,7 +329,7 @@ function wrapChar(char: GattCharacteristic): BleChar {
     },
     write: async (data, withResponse) => {
       if (withResponse) {
-        await char.writeValue(data);
+        await char.writeValueWithResponse(data);
       } else {
         await char.writeValueWithoutResponse(data);
       }
@@ -360,6 +360,12 @@ async function buildCharMap(gatt: NodeBle.GattServer): Promise<Map<string, BleCh
 
       for (const charUuid of charUuids) {
         const char = await service.getCharacteristic(charUuid);
+        try {
+          const flags = await char.getFlags();
+          bleLog.debug(`    Char ${charUuid}: flags=[${flags.join(', ')}]`);
+        } catch {
+          // Flags not available on all BlueZ versions
+        }
         charMap.set(normalizeUuid(charUuid), wrapChar(char));
       }
     } catch (e: unknown) {
