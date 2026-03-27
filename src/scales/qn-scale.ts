@@ -8,6 +8,10 @@ import type {
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
 import { uuid16 } from './body-comp-helpers.js';
+import { bleLog } from '../ble/types.js';
+
+/** Format bytes as hex string for debug logging. */
+const hex = (data: number[]): string => data.map((b) => b.toString(16).padStart(2, '0')).join(' ');
 
 /**
  * Ported from openScale's QNHandler.kt
@@ -94,26 +98,26 @@ export class QnScaleAdapter implements ScaleAdapter {
       } catch {
         await ctx.write(CHR_WRITE_T1, data, false);
       }
+      bleLog.debug(`QN write: [${hex(data)}]`);
     };
 
     // Step 1: Subscribe to AE02 notifications if available (newer firmware)
     try {
       await ctx.subscribe(CHR_AE02);
+      bleLog.debug('QN: subscribed to AE02');
     } catch {
-      // AE00 service not present on this firmware
+      bleLog.debug('QN: AE02 not available (older firmware)');
     }
 
     // Step 2: Write AE01 init handshake (wakes up FFF1 notifications)
     // Observed in official Renpho app packet capture:
     //   FEDC BAC0 0600 02XX 01EF  (XX = session counter)
+    const ae01Init = [0xfe, 0xdc, 0xba, 0xc0, 0x06, 0x00, 0x02, 0x01, 0x01, 0xef];
     try {
-      await ctx.write(
-        CHR_AE01,
-        [0xfe, 0xdc, 0xba, 0xc0, 0x06, 0x00, 0x02, 0x01, 0x01, 0xef],
-        false,
-      );
+      await ctx.write(CHR_AE01, ae01Init, false);
+      bleLog.debug(`QN: AE01 init written: [${hex(ae01Init)}]`);
     } catch {
-      // AE01 not present on this firmware
+      bleLog.debug('QN: AE01 not available (older firmware)');
     }
 
     // Step 3: Send all unlock variants (different firmware versions respond to different formats)
@@ -126,19 +130,29 @@ export class QnScaleAdapter implements ScaleAdapter {
       try {
         await writeCmd(cmd);
       } catch {
-        // Write characteristic not yet resolved
         break;
       }
     }
 
-    // Step 4: Send user profile (triggers measurement on newer firmware)
+    // Step 4: Send user profile (0xA2)
     // Format: [0xA2, length, userId, param, age, checksum]
-    // Checksum = sum of all bytes & 0xFF
     const age = Math.min(0xff, Math.max(1, ctx.profile.age));
     const profileCmd = [0xa2, 0x06, 0x01, 0x32, age, 0x00];
     profileCmd[5] = profileCmd.reduce((a, b) => a + b, 0) & 0xff;
     try {
       await writeCmd(profileCmd);
+    } catch {
+      // Best-effort
+    }
+
+    // Step 5: Send start measurement command (0x22)
+    // This is the trigger that makes the scale start sending 0x10 weight frames.
+    // Format: [0x22, length, 0xFF, 0x00, measureType, checksum]
+    // measureType 0x03 = weight + impedance
+    const startCmd = [0x22, 0x06, 0xff, 0x00, 0x03, 0x00];
+    startCmd[5] = startCmd.reduce((a, b) => a + b, 0) & 0xff;
+    try {
+      await writeCmd(startCmd);
     } catch {
       // Best-effort
     }
