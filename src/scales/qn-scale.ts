@@ -1,6 +1,7 @@
 import { computeBiaFat, buildPayload } from './body-comp-helpers.js';
 import type {
   BleDeviceInfo,
+  ConnectionContext,
   ScaleAdapter,
   ScaleReading,
   UserProfile,
@@ -17,7 +18,10 @@ import { uuid16 } from './body-comp-helpers.js';
  *   Type 1 (0xFFE0): FFE1 notify, FFE2 indicate, FFE3 write-config, FFE4 write-time
  *   Type 2 (0xFFF0): FFF1 notify, FFF2 write-shared
  *
- * We use Type 2 UUIDs (FFF1/FFF2) as they are the most common variant.
+ * Some newer firmware (e.g. Renpho ES-CS20M / Elis 1) also exposes an AE00
+ * service (AE01 write, AE02 notify) that must be initialized before the scale
+ * starts sending notifications on FFF1. Without the AE01 init handshake,
+ * the scale connects but disconnects without ever sending weight data.
  *
  * 0x10 frame — live/stable weight:
  *   [0]     opcode (0x10)
@@ -25,7 +29,7 @@ import { uuid16 } from './body-comp-helpers.js';
  *   [2]     protocol type (echoed back in config commands)
  *   [3-4]   weight (BE uint16, / weightScaleFactor)
  *   [5]     stability (1 = stable, 0 = measuring)
- *   [6-7]   resistance R1 (BE uint16)
+ *   [6-7]   resistance R1 (BE uint16) — PRIMARY BIA measurement
  *   [8-9]   resistance R2 (BE uint16)
  *
  * 0x12 frame — scale info:
@@ -46,6 +50,10 @@ const CHR_WRITE = uuid16(0xfff2);
 const CHR_NOTIFY_T1 = uuid16(0xffe1);
 const CHR_WRITE_T1 = uuid16(0xffe3);
 
+// AE00 service UUIDs (newer firmware, e.g. Renpho ES-CS20M)
+const CHR_AE01 = uuid16(0xae01);
+const CHR_AE02 = uuid16(0xae02);
+
 // Service UUIDs for matching
 const SVC_T1 = 'ffe0';
 const SVC_T2 = 'fff0';
@@ -57,26 +65,84 @@ export class QnScaleAdapter implements ScaleAdapter {
   readonly altCharNotifyUuid = CHR_NOTIFY_T1;
   readonly altCharWriteUuid = CHR_WRITE_T1;
   readonly normalizesWeight = true;
-  /**
-   * Unlock / unit-config command (6-byte variant).
-   * Confirmed working with Renpho, Sencor, and generic QN-Scale devices.
-   */
-  readonly unlockCommand = [0x13, 0x09, 0x00, 0x01, 0x01, 0x02];
-  /**
-   * Both the 6-byte and 9-byte (openScale QNHandler) unlock variants.
-   * Some firmware versions only respond to one or the other, so we send both.
-   */
-  readonly unlockCommands = [
-    [0x13, 0x09, 0x00, 0x01, 0x01, 0x02],
-    [0x13, 0x09, 0x00, 0x01, 0x10, 0x00, 0x00, 0x00, 0x2d],
-  ];
-  readonly unlockIntervalMs = 2000;
+  readonly unlockCommand: number[] = [];
+  readonly unlockIntervalMs = 0;
 
   /**
-   * Weight divisor — 100 (Type 1 default) or 10 (Type 2).
+   * Weight divisor: 100 (Type 1 default) or 10 (Type 2).
    * Updated dynamically when a 0x12 scale-info frame arrives.
    */
   private weightScaleFactor = 100;
+
+  /**
+   * Multi-step init replacing legacy unlockCommands.
+   *
+   * Newer QN firmware (Renpho ES-CS20M, Elis 1) requires:
+   *  1. Subscribe to AE02 notifications
+   *  2. Write AE01 init handshake (wakes up FFF1 notification channel)
+   *  3. Send unlock command on FFF2
+   *  4. Send user profile on FFF2
+   *
+   * Older firmware ignores AE00 steps and just needs the unlock on FFF2.
+   * Both paths are handled gracefully with try/catch.
+   */
+  async onConnected(ctx: ConnectionContext): Promise<void> {
+    // Helper: write to FFF2, fall back to FFE3 (Type 1)
+    const writeCmd = async (data: number[]): Promise<void> => {
+      try {
+        await ctx.write(CHR_WRITE, data, false);
+      } catch {
+        await ctx.write(CHR_WRITE_T1, data, false);
+      }
+    };
+
+    // Step 1: Subscribe to AE02 notifications if available (newer firmware)
+    try {
+      await ctx.subscribe(CHR_AE02);
+    } catch {
+      // AE00 service not present on this firmware
+    }
+
+    // Step 2: Write AE01 init handshake (wakes up FFF1 notifications)
+    // Observed in official Renpho app packet capture:
+    //   FEDC BAC0 0600 02XX 01EF  (XX = session counter)
+    try {
+      await ctx.write(
+        CHR_AE01,
+        [0xfe, 0xdc, 0xba, 0xc0, 0x06, 0x00, 0x02, 0x01, 0x01, 0xef],
+        false,
+      );
+    } catch {
+      // AE01 not present on this firmware
+    }
+
+    // Step 3: Send all unlock variants (different firmware versions respond to different formats)
+    const unlocks = [
+      [0x13, 0x09, 0x00, 0x01, 0x01, 0x02],
+      [0x13, 0x09, 0x00, 0x01, 0x10, 0x00, 0x00, 0x00, 0x2d],
+      [0x13, 0x09, 0xff, 0x08, 0x10, 0x00, 0x00, 0x00, 0x33],
+    ];
+    for (const cmd of unlocks) {
+      try {
+        await writeCmd(cmd);
+      } catch {
+        // Write characteristic not yet resolved
+        break;
+      }
+    }
+
+    // Step 4: Send user profile (triggers measurement on newer firmware)
+    // Format: [0xA2, length, userId, param, age, checksum]
+    // Checksum = sum of all bytes & 0xFF
+    const age = Math.min(0xff, Math.max(1, ctx.profile.age));
+    const profileCmd = [0xa2, 0x06, 0x01, 0x32, age, 0x00];
+    profileCmd[5] = profileCmd.reduce((a, b) => a + b, 0) & 0xff;
+    try {
+      await writeCmd(profileCmd);
+    } catch {
+      // Best-effort
+    }
+  }
 
   /**
    * Name match is sufficient (brand names are unambiguous).
@@ -119,7 +185,7 @@ export class QnScaleAdapter implements ScaleAdapter {
   /**
    * Parse QN vendor notifications.
    *
-   * 0x10 — weight frame (≥ 10 bytes):
+   * 0x10 — weight frame (>= 10 bytes):
    *   [3-4]  weight (BE uint16 / weightScaleFactor)
    *   [5]    stability (1 = final reading)
    *   [6-7]  R1 resistance (BE uint16) — primary BIA value
