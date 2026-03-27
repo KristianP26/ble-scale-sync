@@ -91,6 +91,8 @@ export class QnScaleAdapter implements ScaleAdapter {
    * Both paths are handled gracefully with try/catch.
    */
   async onConnected(ctx: ConnectionContext): Promise<void> {
+    const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
     // Helper: write to FFF2, fall back to FFE3 (Type 1)
     const writeCmd = async (data: number[]): Promise<void> => {
       try {
@@ -101,9 +103,22 @@ export class QnScaleAdapter implements ScaleAdapter {
       bleLog.debug(`QN write: [${hex(data)}]`);
     };
 
+    // Helper: write to AE01 (best-effort, not all firmware has AE00 service)
+    const writeAe01 = async (data: number[]): Promise<boolean> => {
+      try {
+        await ctx.write(CHR_AE01, data, false);
+        bleLog.debug(`QN AE01 write: [${hex(data)}]`);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
     // Step 1: Subscribe to AE02 notifications if available (newer firmware)
+    let hasAe00 = false;
     try {
       await ctx.subscribe(CHR_AE02);
+      hasAe00 = true;
       bleLog.debug('QN: subscribed to AE02');
     } catch {
       bleLog.debug('QN: AE02 not available (older firmware)');
@@ -112,12 +127,9 @@ export class QnScaleAdapter implements ScaleAdapter {
     // Step 2: Write AE01 init handshake (wakes up FFF1 notifications)
     // Observed in official Renpho app packet capture:
     //   FEDC BAC0 0600 02XX 01EF  (XX = session counter)
-    const ae01Init = [0xfe, 0xdc, 0xba, 0xc0, 0x06, 0x00, 0x02, 0x01, 0x01, 0xef];
-    try {
-      await ctx.write(CHR_AE01, ae01Init, false);
-      bleLog.debug(`QN: AE01 init written: [${hex(ae01Init)}]`);
-    } catch {
-      bleLog.debug('QN: AE01 not available (older firmware)');
+    if (hasAe00) {
+      await writeAe01([0xfe, 0xdc, 0xba, 0xc0, 0x06, 0x00, 0x02, 0x01, 0x01, 0xef]);
+      await wait(200);
     }
 
     // Step 3: Send all unlock variants (different firmware versions respond to different formats)
@@ -133,6 +145,7 @@ export class QnScaleAdapter implements ScaleAdapter {
         break;
       }
     }
+    await wait(300);
 
     // Step 4: Send user profile (0xA2)
     // Format: [0xA2, length, userId, param, age, checksum]
@@ -145,7 +158,17 @@ export class QnScaleAdapter implements ScaleAdapter {
       // Best-effort
     }
 
-    // Step 5: Send start measurement command (0x22)
+    // Step 5: Send "pass" on AE01 (authentication handshake)
+    // The official app exchanges encrypted data on AE00 followed by the plaintext
+    // word "pass" (0x70 0x61 0x73 0x73) in both directions. This may be a default
+    // device password required before the scale accepts measurement commands.
+    if (hasAe00) {
+      await wait(200);
+      await writeAe01([0x02, 0x70, 0x61, 0x73, 0x73]);
+      await wait(300);
+    }
+
+    // Step 6: Send start measurement command (0x22)
     // This is the trigger that makes the scale start sending 0x10 weight frames.
     // Format: [0x22, length, 0xFF, 0x00, measureType, checksum]
     // measureType 0x03 = weight + impedance
