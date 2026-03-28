@@ -410,6 +410,37 @@ describe('QnScaleAdapter', () => {
       expect(reading!.impedance).toBe(480);
     });
 
+    it('skips ES-30M stable frame with impedance=0 (waits for impedance)', () => {
+      const adapter = makeAdapter();
+      const infoBuf = Buffer.alloc(11);
+      infoBuf[0] = 0x12;
+      infoBuf[2] = 0xff;
+      infoBuf[10] = 0;
+      adapter.parseNotification(infoBuf);
+
+      // Stable frame (state=0x02) but R1=R2=0 (impedance not measured yet)
+      const buf = Buffer.alloc(14);
+      buf[0] = 0x10;
+      buf[1] = 0x0e;
+      buf[2] = 0xff;
+      buf[3] = 0x01;
+      buf[4] = 0x02; // stable
+      buf.writeUInt16BE(600, 5); // 60.0 kg
+      buf.writeUInt16BE(0, 7); // R1 = 0
+      buf.writeUInt16BE(0, 9); // R2 = 0
+
+      // Should return null because impedance isn't ready yet
+      expect(adapter.parseNotification(buf)).toBeNull();
+
+      // Next frame with impedance should be accepted
+      buf.writeUInt16BE(509, 7); // R1 = 509
+      buf.writeUInt16BE(507, 9); // R2 = 507
+      const reading = adapter.parseNotification(buf);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBe(60);
+      expect(reading!.impedance).toBe(509);
+    });
+
     it('does not trigger ES-30M detection when weightScaleFactor=100', () => {
       const adapter = makeAdapter();
       // Default weightScaleFactor=100, do not send 0x12

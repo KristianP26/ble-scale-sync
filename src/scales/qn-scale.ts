@@ -93,6 +93,11 @@ export class QnScaleAdapter implements ScaleAdapter {
   /** Whether the AE00 service is available (newer firmware). */
   private hasAe00 = false;
 
+  /** Deduplication guards: prevent duplicate state machine responses. */
+  private configSent = false;
+  private timeSyncSent = false;
+  private historyResponseSent = false;
+
   /** Write to FFF2 (write char), fall back to FFE3 (Type 1). */
   private async writeCmd(data: number[]): Promise<void> {
     if (!this.ctx) return;
@@ -132,6 +137,9 @@ export class QnScaleAdapter implements ScaleAdapter {
     this.seenProtocolType = 0x00;
     this.weightScaleFactor = 100;
     this.hasAe00 = false;
+    this.configSent = false;
+    this.timeSyncSent = false;
+    this.historyResponseSent = false;
 
     const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -301,6 +309,11 @@ export class QnScaleAdapter implements ScaleAdapter {
       rawWeight = data.readUInt16BE(5);
       r1 = data.readUInt16BE(7);
       r2 = data.readUInt16BE(9);
+
+      // ES-30M scales send a weight-only stable frame (R1=R2=0) before the
+      // impedance-bearing one. Skip it so isComplete() doesn't accept an
+      // impedance=0 reading prematurely (which triggers broadcast-mode logic).
+      if (stable && r1 === 0 && r2 === 0) return null;
     } else {
       // Original: [3-4]=weight, [5]=stable(1), [6-7]=R1, [8-9]=R2
       stable = data[5] === 1;
@@ -341,6 +354,8 @@ export class QnScaleAdapter implements ScaleAdapter {
 
   /** Respond to 0x12 (scale info) with 0x13 config using echoed protocol type. */
   private async handleScaleInfo(): Promise<void> {
+    if (this.configSent) return;
+    this.configSent = true;
     // 0x13 config: [opcode, length, protocolType, unitFlags, 0x10, 0x00, 0x00, 0x00, checksum]
     // byte[3]=0x08 observed in Renpho app packet capture
     const cmd = [0x13, 0x09, this.seenProtocolType, 0x08, 0x10, 0x00, 0x00, 0x00, 0x00];
@@ -350,6 +365,8 @@ export class QnScaleAdapter implements ScaleAdapter {
 
   /** Respond to 0x14 (ready) with 0x20 time sync + A2 user profile + AE01 auth. */
   private async handleReady(): Promise<void> {
+    if (this.timeSyncSent) return;
+    this.timeSyncSent = true;
     // 0x20 time sync: seconds since 2000-01-01, little-endian
     const secs = Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
     const timeCmd = [
@@ -381,6 +398,8 @@ export class QnScaleAdapter implements ScaleAdapter {
 
   /** Respond to 0x21 (config request) with A00D history frames + 0x22 start measurement. */
   private async handleConfigRequest(): Promise<void> {
+    if (this.historyResponseSent) return;
+    this.historyResponseSent = true;
     const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
     // A00D response 1 (from openScale QNHandler)
