@@ -201,6 +201,41 @@ export class QnScaleAdapter implements ScaleAdapter {
     } catch {
       // Best-effort
     }
+
+    // Step 7: Fallback for Linux (node-ble / BlueZ D-Bus)
+    // On Linux, FFF1 CCCD subscription runs in parallel with onConnected().
+    // The scale sends 0x12 in response to the CCCD write, but the notification
+    // handler may not be registered yet, so we miss it. Without 0x12 the state
+    // machine never triggers and the scale disconnects after ~25s.
+    // After a 2s delay (by which FFF1 subscription is definitely active),
+    // run the full handshake if the state machine hasn't fired yet.
+    if (this.hasAe00) {
+      setTimeout(() => void this.runFallbackHandshake(), 2000);
+    }
+  }
+
+  /** Run the full state machine handshake if no 0x12 was received (Linux fallback). */
+  private async runFallbackHandshake(): Promise<void> {
+    if (!this.ctx) return;
+    const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+    if (!this.configSent) {
+      this.seenProtocolType = 0xff;
+      bleLog.debug('QN: no scale info received, fallback config with proto=0xFF');
+      await this.handleScaleInfo();
+      await wait(500);
+    }
+
+    if (!this.timeSyncSent) {
+      bleLog.debug('QN: no ready frame received, fallback time sync + profile');
+      await this.handleReady();
+      await wait(500);
+    }
+
+    if (!this.historyResponseSent) {
+      bleLog.debug('QN: no config request received, fallback history + start');
+      await this.handleConfigRequest();
+    }
   }
 
   /**
