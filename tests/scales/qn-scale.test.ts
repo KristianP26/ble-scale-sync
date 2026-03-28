@@ -271,6 +271,164 @@ describe('QnScaleAdapter', () => {
       expect(reading).not.toBeNull();
       expect(reading!.weight).toBeCloseTo(83.2);
     });
+
+    it('returns null for 0x14 ready frame', () => {
+      const adapter = makeAdapter();
+      const buf = Buffer.from([0x14, 0x0b, 0xff, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x1f]);
+      expect(adapter.parseNotification(buf)).toBeNull();
+    });
+
+    it('returns null for 0x21 config request frame', () => {
+      const adapter = makeAdapter();
+      const buf = Buffer.from([0x21, 0x05, 0xff, 0x01, 0x26]);
+      expect(adapter.parseNotification(buf)).toBeNull();
+    });
+
+    it('returns null for 0xA1 acknowledgment frame', () => {
+      const adapter = makeAdapter();
+      const buf = Buffer.from([0xa1, 0x06, 0x04, 0xfe, 0x01, 0xaa]);
+      expect(adapter.parseNotification(buf)).toBeNull();
+    });
+
+    it('returns null for 0xA3 acknowledgment frame', () => {
+      const adapter = makeAdapter();
+      const buf = Buffer.from([0xa3, 0x04, 0x01, 0xa8]);
+      expect(adapter.parseNotification(buf)).toBeNull();
+    });
+
+    it('returns null for 0x23 historical record frame', () => {
+      const adapter = makeAdapter();
+      const buf = Buffer.from([0x23, 0x13, 0xff, 0x01, 0x01, 0xf0, 0x06, 0x4f, 0x43, 0x31]);
+      expect(adapter.parseNotification(buf)).toBeNull();
+    });
+
+    it('0x12 frame captures protocol type', () => {
+      const adapter = makeAdapter();
+      const infoBuf = Buffer.alloc(11);
+      infoBuf[0] = 0x12;
+      infoBuf[2] = 0xff; // protocol type
+      infoBuf[10] = 0;
+      adapter.parseNotification(infoBuf);
+
+      // Verify protocol type was captured by checking ES-30M parsing
+      // works (requires weightScaleFactor=10 which was set by the 0x12 frame)
+      const dataBuf = Buffer.alloc(14);
+      dataBuf[0] = 0x10;
+      dataBuf[1] = 0x0e;
+      dataBuf[2] = 0xff;
+      dataBuf[3] = 0x01;
+      dataBuf[4] = 0x02; // stable (ES-30M)
+      dataBuf.writeUInt16BE(750, 5); // 75.0 kg
+      dataBuf.writeUInt16BE(500, 7); // R1
+      dataBuf.writeUInt16BE(490, 9); // R2
+
+      const reading = adapter.parseNotification(dataBuf);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBe(75);
+      expect(reading!.impedance).toBe(500);
+    });
+  });
+
+  describe('ES-30M format parsing', () => {
+    it('parses ES-30M stable frame (state=0x02) with impedance', () => {
+      const adapter = makeAdapter();
+      // Set weightScaleFactor=10 via 0x12
+      const infoBuf = Buffer.alloc(11);
+      infoBuf[0] = 0x12;
+      infoBuf[2] = 0xff;
+      infoBuf[10] = 0;
+      adapter.parseNotification(infoBuf);
+
+      // From actual Renpho Elis 1 packet capture:
+      // 10 0E FF 01 02 02 58 01 FD 01 FB 00 33 A7
+      const buf = Buffer.from([
+        0x10, 0x0e, 0xff, 0x01, 0x02, 0x02, 0x58, 0x01, 0xfd, 0x01, 0xfb, 0x00, 0x33, 0xa7,
+      ]);
+
+      const reading = adapter.parseNotification(buf);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBe(60); // 0x0258 = 600 / 10
+      expect(reading!.impedance).toBe(509); // R1 = 0x01FD
+    });
+
+    it('returns null for ES-30M measuring frame (state=0x00)', () => {
+      const adapter = makeAdapter();
+      const infoBuf = Buffer.alloc(11);
+      infoBuf[0] = 0x12;
+      infoBuf[10] = 0;
+      adapter.parseNotification(infoBuf);
+
+      const buf = Buffer.alloc(14);
+      buf[0] = 0x10;
+      buf[1] = 0x0e;
+      buf[2] = 0xff;
+      buf[3] = 0x01;
+      buf[4] = 0x00; // measuring
+      buf.writeUInt16BE(560, 5);
+
+      expect(adapter.parseNotification(buf)).toBeNull();
+    });
+
+    it('returns null for ES-30M stabilizing frame (state=0x01)', () => {
+      const adapter = makeAdapter();
+      const infoBuf = Buffer.alloc(11);
+      infoBuf[0] = 0x12;
+      infoBuf[10] = 0;
+      adapter.parseNotification(infoBuf);
+
+      const buf = Buffer.alloc(14);
+      buf[0] = 0x10;
+      buf[1] = 0x0e;
+      buf[2] = 0xff;
+      buf[3] = 0x01;
+      buf[4] = 0x01; // stabilizing (not final)
+      buf.writeUInt16BE(580, 5);
+
+      expect(adapter.parseNotification(buf)).toBeNull();
+    });
+
+    it('uses R2 when R1 is zero in ES-30M format', () => {
+      const adapter = makeAdapter();
+      const infoBuf = Buffer.alloc(11);
+      infoBuf[0] = 0x12;
+      infoBuf[10] = 0;
+      adapter.parseNotification(infoBuf);
+
+      const buf = Buffer.alloc(14);
+      buf[0] = 0x10;
+      buf[1] = 0x0e;
+      buf[2] = 0xff;
+      buf[3] = 0x01;
+      buf[4] = 0x02; // stable
+      buf.writeUInt16BE(700, 5); // 70.0 kg
+      buf.writeUInt16BE(0, 7); // R1 = 0
+      buf.writeUInt16BE(480, 9); // R2 = 480
+
+      const reading = adapter.parseNotification(buf);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBe(70);
+      expect(reading!.impedance).toBe(480);
+    });
+
+    it('does not trigger ES-30M detection when weightScaleFactor=100', () => {
+      const adapter = makeAdapter();
+      // Default weightScaleFactor=100, do not send 0x12
+
+      // Even with data[4]=0x02 and 14 bytes, factor=100 prevents ES-30M detection
+      const buf = Buffer.alloc(14);
+      buf[0] = 0x10;
+      buf[1] = 0x0e;
+      buf[2] = 0x01;
+      buf.writeUInt16BE(8000, 3); // old format: weight at [3-4], data[4] = low byte
+      buf[5] = 1; // old format: stable
+      buf.writeUInt16BE(500, 6); // R1
+      buf.writeUInt16BE(490, 8); // R2
+
+      const reading = adapter.parseNotification(buf);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBe(80); // 8000/100
+      expect(reading!.impedance).toBe(500);
+    });
   });
 
   describe('parseBroadcast()', () => {
