@@ -85,16 +85,18 @@ export async function checkForUpdate(updateCheckEnabled = true): Promise<UpdateI
  * Fire-and-forget: never throws, never blocks startup.
  */
 export function checkAndLogUpdate(updateCheckEnabled = true): void {
-  checkForUpdate(updateCheckEnabled).then((info) => {
-    if (info) {
-      log.info(
-        `Update available: v${info.latest} (current: v${info.current}). ` +
-          'See https://blescalesync.dev/changelog',
-      );
-    }
-  }).catch(() => {
-    // Never propagate errors
-  });
+  checkForUpdate(updateCheckEnabled)
+    .then((info) => {
+      if (info) {
+        log.info(
+          `Update available: v${info.latest} (current: v${info.current}). ` +
+            'See https://blescalesync.dev/changelog',
+        );
+      }
+    })
+    .catch(() => {
+      // Never propagate errors
+    });
 }
 
 /** Reset internal cooldown timer (for testing). */
