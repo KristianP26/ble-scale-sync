@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import type { WizardStep, WizardContext } from '../types.js';
-import { banner, dim } from '../ui.js';
+import { banner, dim, warn } from '../ui.js';
+import { checkForUpdate } from '../../update-check.js';
 
 export const welcomeStep: WizardStep = {
   id: 'welcome',
@@ -9,6 +10,15 @@ export const welcomeStep: WizardStep = {
 
   async run(ctx: WizardContext): Promise<void> {
     banner();
+
+    // Show update notice if a newer version is available
+    const update = await checkForUpdate();
+    if (update) {
+      console.log(
+        warn(`Update available: v${update.latest} (current: v${update.current})`) +
+          '\n    https://blescalesync.dev/changelog\n',
+      );
+    }
 
     console.log(dim('  Before you start, make sure you have:'));
     console.log(dim('    - Your scale nearby (powered on)'));

@@ -152,6 +152,7 @@ describe('runNonInteractive()', () => {
           last_known_weight: null,
         },
       ],
+      update_check: true,
     };
     writeTestConfig(config);
 
