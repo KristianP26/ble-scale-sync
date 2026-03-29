@@ -102,10 +102,47 @@ export async function resetAdapterBtmgmt(adapterIndex = 0): Promise<boolean> {
     await sleep(500);
     await run('btmgmt', ['--index', idx, 'power', 'on'], { timeout: 5000 });
     bleLog.debug('btmgmt: adapter powered on');
-    await sleep(1500);
+    await sleep(2000);
     return true;
   } catch (err) {
     bleLog.debug(`btmgmt reset failed: ${errMsg(err)}`);
+    return false;
+  }
+}
+
+/** Reset Bluetooth adapter via rfkill (RF-level block/unblock). */
+export async function resetAdapterRfkill(): Promise<boolean> {
+  if (process.platform !== 'linux') return false;
+  try {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const run = promisify(execFile);
+    await run('rfkill', ['block', 'bluetooth'], { timeout: 5000 });
+    bleLog.debug('rfkill: bluetooth blocked');
+    await sleep(1000);
+    await run('rfkill', ['unblock', 'bluetooth'], { timeout: 5000 });
+    bleLog.debug('rfkill: bluetooth unblocked');
+    await sleep(3000);
+    return true;
+  } catch (err) {
+    bleLog.debug(`rfkill reset failed: ${errMsg(err)}`);
+    return false;
+  }
+}
+
+/** Restart the bluetoothd service via systemctl (nuclear option). */
+export async function restartBluetoothd(): Promise<boolean> {
+  if (process.platform !== 'linux') return false;
+  try {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const run = promisify(execFile);
+    await run('systemctl', ['restart', 'bluetooth'], { timeout: 15_000 });
+    bleLog.debug('bluetoothd service restarted');
+    await sleep(3000);
+    return true;
+  } catch (err) {
+    bleLog.debug(`bluetoothd restart failed: ${errMsg(err)}`);
     return false;
   }
 }

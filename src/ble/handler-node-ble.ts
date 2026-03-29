@@ -11,6 +11,8 @@ import {
   errMsg,
   withTimeout,
   resetAdapterBtmgmt,
+  resetAdapterRfkill,
+  restartBluetoothd,
   CONNECT_TIMEOUT_MS,
   MAX_CONNECT_RETRIES,
   DISCOVERY_TIMEOUT_MS,
@@ -23,14 +25,19 @@ type Device = NodeBle.Device;
 type Adapter = NodeBle.Adapter;
 type GattCharacteristic = NodeBle.GattCharacteristic;
 
-// ─── Persistent D-Bus connection ─────────────────────────────────────────────
-// A single D-Bus connection is reused across scan cycles in continuous mode.
-// This prevents orphaned BlueZ discovery sessions that occur when D-Bus
-// connections are destroyed while bluetoothd is still cleaning up the session.
-// The same D-Bus client owns the discovery session across cycles, so
-// stopDiscovery() always works and no orphaned sessions accumulate.
+// ─── Persistent D-Bus connection + adapter ──────────────────────────────────
+// Both the D-Bus connection and the BlueZ adapter proxy are reused across scan
+// cycles in continuous mode. This prevents orphaned BlueZ discovery sessions:
+// - Same D-Bus client owns the discovery session across cycles
+// - Same adapter proxy means stopDiscovery() always matches the startDiscovery() caller
+// - Discovery is kept running between idle cycles (only stopped before connecting)
+//
+// This approach minimizes the start/stop cycling that triggers the well-known
+// BlueZ bug where the Discovering property desyncs from the actual controller
+// state (bluez/bluez#807, bluez/bluer#47).
 
 let persistentConn: { bluetooth: NodeBle.Bluetooth; destroy: () => void } | null = null;
+let persistentAdapter: Adapter | null = null;
 
 function getConnection(): { bluetooth: NodeBle.Bluetooth; destroy: () => void } {
   if (!persistentConn) {
@@ -40,7 +47,16 @@ function getConnection(): { bluetooth: NodeBle.Bluetooth; destroy: () => void } 
   return persistentConn;
 }
 
+async function getAdapter(): Promise<Adapter> {
+  const conn = getConnection();
+  if (!persistentAdapter) {
+    persistentAdapter = await conn.bluetooth.defaultAdapter();
+  }
+  return persistentAdapter;
+}
+
 function resetConnection(): void {
+  persistentAdapter = null;
   if (persistentConn) {
     try {
       persistentConn.destroy();
@@ -158,17 +174,42 @@ async function startDiscoverySafe(btAdapter: Adapter): Promise<Adapter | false> 
   // 4. Kernel-level adapter reset via btmgmt + fresh D-Bus connection
   bleLog.debug('Attempting kernel-level adapter reset via btmgmt...');
   if (await resetAdapterBtmgmt()) {
-    // btmgmt power-cycles the adapter at kernel level, invalidating
-    // the current D-Bus proxies. Reset the connection to get fresh ones.
     resetConnection();
     try {
-      const { bluetooth } = getConnection();
-      const freshAdapter = await bluetooth.defaultAdapter();
+      const freshAdapter = await getAdapter();
       await freshAdapter.startDiscovery();
-      bleLog.debug('Discovery started after btmgmt reset (fresh connection)');
+      bleLog.debug('Discovery started after btmgmt reset');
       return freshAdapter;
     } catch (e) {
       bleLog.debug(`startDiscovery after btmgmt reset failed: ${errMsg(e)}`);
+    }
+  }
+
+  // 5. RF-level reset via rfkill (more thorough than btmgmt)
+  bleLog.debug('Attempting rfkill block/unblock...');
+  if (await resetAdapterRfkill()) {
+    resetConnection();
+    try {
+      const freshAdapter = await getAdapter();
+      await freshAdapter.startDiscovery();
+      bleLog.debug('Discovery started after rfkill reset');
+      return freshAdapter;
+    } catch (e) {
+      bleLog.debug(`startDiscovery after rfkill reset failed: ${errMsg(e)}`);
+    }
+  }
+
+  // 6. Restart bluetoothd service (clears all D-Bus session state)
+  bleLog.debug('Attempting bluetoothd service restart...');
+  if (await restartBluetoothd()) {
+    resetConnection();
+    try {
+      const freshAdapter = await getAdapter();
+      await freshAdapter.startDiscovery();
+      bleLog.debug('Discovery started after bluetoothd restart');
+      return freshAdapter;
+    } catch (e) {
+      bleLog.debug(`startDiscovery after bluetoothd restart failed: ${errMsg(e)}`);
     }
   }
 
@@ -399,28 +440,19 @@ async function buildCharMap(gatt: NodeBle.GattServer): Promise<Map<string, BleCh
 export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   const { targetMac, adapters, profile, weightUnit, onLiveData, abortSignal } = opts;
 
-  let conn: { bluetooth: NodeBle.Bluetooth; destroy: () => void };
-  try {
-    conn = getConnection();
-  } catch (err) {
-    if (isDbusConnectionError(err)) throw dbusError();
-    throw err;
-  }
-
   let device: Device | null = null;
-  let btAdapter: Adapter | null = null;
+  let btAdapter: Adapter;
 
   try {
     try {
-      btAdapter = await conn.bluetooth.defaultAdapter();
+      btAdapter = await getAdapter();
     } catch (err) {
       if (isDbusConnectionError(err)) throw dbusError();
       // Stale connection (e.g. bluetoothd restarted): reset and retry once
       if (isStaleConnectionError(err)) {
         bleLog.debug('D-Bus connection stale, resetting...');
         resetConnection();
-        conn = getConnection();
-        btAdapter = await conn.bluetooth.defaultAdapter();
+        btAdapter = await getAdapter();
       } else {
         throw err;
       }
@@ -558,15 +590,19 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     }
     return raw;
   } finally {
-    // Stop discovery but keep the D-Bus connection alive for the next cycle.
-    // The same client owns the session, so stopDiscovery() always works.
-    if (btAdapter) {
+    // Best-effort disconnect if we got partway through a connection
+    if (device) {
       try {
-        await btAdapter.stopDiscovery();
+        await device.disconnect();
       } catch {
-        /* may already be stopped */
+        /* already disconnected or never connected */
       }
     }
+    // Discovery is intentionally kept running between scan cycles.
+    // Stopping and restarting discovery on every cycle triggers a BlueZ bug
+    // where the Discovering property desyncs from the controller state,
+    // causing permanent "Operation already in progress" errors.
+    // Discovery is only stopped before connecting (via stopDiscoveryAndQuiesce).
   }
 }
 
