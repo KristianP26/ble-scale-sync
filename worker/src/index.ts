@@ -160,13 +160,19 @@ function renderDashboard(stats24h: AggregatedStats, stats7d: AggregatedStats, st
       .join('');
   };
 
-  const renderPeriodCard = (s: AggregatedStats): string => `
+  const renderPeriodCard = (s: AggregatedStats): string => {
+    const isDaily = s.days === 1;
+    const avg = s.uniqueDays > 0 ? Math.round(s.totalChecks / s.uniqueDays) : 0;
+    const value = isDaily ? s.totalChecks : avg;
+    const label = isDaily ? 'active installations' : 'avg daily installations';
+    return `
     <div class="card">
       <h2>${s.period}</h2>
-      <div class="big-number">${s.totalChecks}</div>
-      <div class="label">update checks</div>
-      <div class="sub">${s.uniqueDays} active day${s.uniqueDays !== 1 ? 's' : ''}</div>
+      <div class="big-number">${value}</div>
+      <div class="label">${label}</div>
+      <div class="sub">${s.uniqueDays} active day${s.uniqueDays !== 1 ? 's' : ''}${!isDaily ? `, ${s.totalChecks} total checks` : ''}</div>
     </div>`;
+  };
 
   const renderBreakdown = (title: string, data24: Record<string, number>, data7: Record<string, number>, data30: Record<string, number>, total24: number, total7: number, total30: number): string => `
     <div class="breakdown">
