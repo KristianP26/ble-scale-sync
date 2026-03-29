@@ -1,6 +1,7 @@
 # Environment & secrets
 .env
 config.yaml
+!ble-scale-sync-addon/config.yaml
 config.yaml.bak
 config.yaml.tmp
 

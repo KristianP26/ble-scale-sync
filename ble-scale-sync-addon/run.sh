@@ -140,6 +140,11 @@ YAML
     HAVE_EXPORTERS=true
   fi
 
+  if [ "$MQTT_ENABLED" = "true" ] && [ -z "$MQTT_BROKER_URL" ]; then
+    log "WARNING: MQTT is enabled but no broker URL is available"
+    log "Install the Mosquitto add-on or provide a broker URL manually"
+  fi
+
   if [ "$HAVE_EXPORTERS" = "true" ]; then
     echo "global_exporters:" >> "$CONFIG"
 
