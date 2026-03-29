@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - **Update check** with anonymous usage statistics ([#87](https://github.com/KristianP26/ble-scale-sync/issues/87)). After each successful measurement (max once per 24h), the app checks `api.blescalesync.dev` for newer versions. Only the app version, OS, and architecture are sent via the User-Agent header. Disable with `update_check: false` in config.yaml. Automatically disabled in CI environments
-- **Cloudflare Worker** (`worker/`) serving the `/version` endpoint and a public stats dashboard at `/stats` with aggregated anonymous data (version distribution, OS/architecture breakdown)
+- **Cloudflare Worker** (`worker/`) serving the `/version` endpoint and a public stats dashboard at [stats.blescalesync.dev](https://stats.blescalesync.dev) with aggregated anonymous data (version distribution, OS/architecture breakdown)
 - Setup wizard shows an update notice before the first step if a newer version is available
 - **CI**: GitHub Actions workflow for automatic Cloudflare Worker deployment on push to main (`worker.yml`)
 

@@ -302,6 +302,8 @@ function renderDashboard(stats24h: AggregatedStats, stats7d: AggregatedStats, st
     <footer>
       <p>Data from update check requests only. No personal data collected.</p>
       <p><a href="https://blescalesync.dev">blescalesync.dev</a></p>
+      <p style="margin-top: 0.5rem">Released under the <a href="https://github.com/KristianP26/ble-scale-sync/blob/main/LICENSE">GPL-3.0 License</a>.</p>
+      <p>Copyright &copy; 2026 Kristi&aacute;n Partl</p>
     </footer>
   </div>
   <script>
@@ -384,8 +386,9 @@ export default {
       });
     }
 
-    // GET /stats
-    if (url.pathname === '/stats') {
+    // GET /stats (or / on stats.blescalesync.dev)
+    const isStatsDomain = url.hostname === 'stats.blescalesync.dev';
+    if (url.pathname === '/stats' || (isStatsDomain && url.pathname === '/')) {
       const [stats24h, stats7d, stats30d] = await Promise.all([
         aggregateStats(env.STATS, 1),
         aggregateStats(env.STATS, 7),
@@ -400,7 +403,7 @@ export default {
       });
     }
 
-    // GET / (redirect to stats)
+    // GET / on api domain (redirect to stats)
     if (url.pathname === '/') {
       return Response.redirect(new URL('/stats', url.origin).toString(), 302);
     }
