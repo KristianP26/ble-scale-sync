@@ -29,10 +29,7 @@ type GattCharacteristic = NodeBle.GattCharacteristic;
  * Get the Bluetooth adapter. If bleAdapter is specified (e.g., 'hci1'),
  * use bluetooth.getAdapter(). Otherwise fall back to defaultAdapter().
  */
-async function getAdapter(
-  bluetooth: NodeBle.Bluetooth,
-  bleAdapter?: string,
-): Promise<Adapter> {
+async function getAdapter(bluetooth: NodeBle.Bluetooth, bleAdapter?: string): Promise<Adapter> {
   if (bleAdapter) {
     bleLog.debug(`Using adapter: ${bleAdapter}`);
     return bluetooth.getAdapter(bleAdapter);
