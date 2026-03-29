@@ -12,6 +12,11 @@ opt() { jq -r ".$1 // empty" "$OPTIONS"; }
 opt_bool() { jq -r ".$1 // false" "$OPTIONS"; }
 opt_int() { jq -r ".$1 // $2" "$OPTIONS"; }
 
+# Escape a string for safe YAML double-quoted output
+yaml_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+# Read BLE_ADAPTER early (needed for adapter reset in both modes)
+BLE_ADAPTER=$(opt ble_adapter)
 CUSTOM_CONFIG=$(opt_bool custom_config)
 
 # ── Custom config mode ──────────────────────────────────────────────────────
@@ -24,13 +29,15 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
     exit 1
   fi
   log "Using custom config from $CUSTOM_PATH"
-  cp "$CUSTOM_PATH" "$CONFIG"
+  if ! cp "$CUSTOM_PATH" "$CONFIG"; then
+    log "ERROR: Failed to copy custom config from $CUSTOM_PATH"
+    exit 1
+  fi
 else
 
   # ── Read all options ────────────────────────────────────────────────────
 
   SCALE_MAC=$(opt scale_mac)
-  BLE_ADAPTER=$(opt ble_adapter)
 
   USER_NAME=$(opt user_name)
   USER_HEIGHT=$(opt_int user_height 170)
@@ -98,7 +105,7 @@ YAML
   if [ -n "$SCALE_MAC" ] || [ -n "$BLE_ADAPTER" ]; then
     echo "ble:" >> "$CONFIG"
     [ -n "$SCALE_MAC" ] && echo "  scale_mac: \"$SCALE_MAC\"" >> "$CONFIG"
-    [ -n "$BLE_ADAPTER" ] && echo "  adapter: $BLE_ADAPTER" >> "$CONFIG"
+    [ -n "$BLE_ADAPTER" ] && echo "  adapter: \"$BLE_ADAPTER\"" >> "$CONFIG"
     echo "" >> "$CONFIG"
   fi
 
@@ -110,7 +117,7 @@ scale:
 unknown_user: nearest
 
 users:
-  - name: "$USER_NAME"
+  - name: "$(yaml_escape "$USER_NAME")"
     slug: $USER_SLUG
     height: $USER_HEIGHT
     birth_date: "$USER_BIRTH_DATE"
@@ -140,23 +147,23 @@ YAML
     if [ "$MQTT_ENABLED" = "true" ] && [ -n "$MQTT_BROKER_URL" ]; then
       cat >> "$CONFIG" <<YAML
   - type: mqtt
-    broker_url: "$MQTT_BROKER_URL"
-    topic: "$MQTT_TOPIC"
+    broker_url: "$(yaml_escape "$MQTT_BROKER_URL")"
+    topic: "$(yaml_escape "$MQTT_TOPIC")"
     qos: 1
     retain: true
     ha_discovery: $MQTT_HA_DISCOVERY
-    ha_device_name: "$MQTT_HA_DEVICE_NAME"
+    ha_device_name: "$(yaml_escape "$MQTT_HA_DEVICE_NAME")"
 YAML
-      [ -n "$MQTT_USERNAME" ] && echo "    username: \"$MQTT_USERNAME\"" >> "$CONFIG"
-      [ -n "$MQTT_PASSWORD" ] && echo "    password: \"$MQTT_PASSWORD\"" >> "$CONFIG"
+      [ -n "$MQTT_USERNAME" ] && echo "    username: \"$(yaml_escape "$MQTT_USERNAME")\"" >> "$CONFIG"
+      [ -n "$MQTT_PASSWORD" ] && echo "    password: \"$(yaml_escape "$MQTT_PASSWORD")\"" >> "$CONFIG"
     fi
 
     # Garmin exporter
     if [ "$GARMIN_ENABLED" = "true" ] && [ -n "$GARMIN_EMAIL" ] && [ -n "$GARMIN_PASSWORD" ]; then
       cat >> "$CONFIG" <<YAML
   - type: garmin
-    email: "$GARMIN_EMAIL"
-    password: "$GARMIN_PASSWORD"
+    email: "$(yaml_escape "$GARMIN_EMAIL")"
+    password: "$(yaml_escape "$GARMIN_PASSWORD")"
     token_dir: /data/garmin-tokens
 YAML
     fi
