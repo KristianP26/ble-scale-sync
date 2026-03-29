@@ -12,7 +12,7 @@ All notable changes to this project are documented here. Format based on [Keep a
 ### Added
 - **Update check** with anonymous usage statistics ([#87](https://github.com/KristianP26/ble-scale-sync/issues/87)). After each successful measurement (max once per 24h), the app checks for newer versions. Only the app version, OS, and architecture are sent via the User-Agent header. Disable with `update_check: false` in config.yaml
 - Setup wizard shows an update notice before the first step if a newer version is available
-- Public stats dashboard at [stats.blescalesync.dev](https://api.blescalesync.dev/stats) with aggregated anonymous data
+- Public stats dashboard at [api.blescalesync.dev/stats](https://api.blescalesync.dev/stats) with aggregated anonymous data
 
 ## v1.6.4 <Badge type="tip" text="latest" /> {#v1-6-4}
 

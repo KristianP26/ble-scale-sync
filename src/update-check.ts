@@ -37,7 +37,8 @@ export function buildUserAgent(): string {
 }
 
 /**
- * Check for updates. Non-blocking, fire-and-forget with 3s timeout.
+ * Check for updates (awaitable, up to TIMEOUT_MS).
+ * Use `checkAndLogUpdate()` for fire-and-forget usage.
  * Respects update_check config, CI env var, and 24h cooldown.
  * Returns update info if a newer version is available, null otherwise.
  */
@@ -53,16 +54,14 @@ export async function checkForUpdate(updateCheckEnabled = true): Promise<UpdateI
   if (now - lastCheckTime < COOLDOWN_MS) return null;
   lastCheckTime = now;
 
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
+  try {
     const res = await fetch(UPDATE_CHECK_URL, {
       headers: { 'User-Agent': buildUserAgent() },
       signal: controller.signal,
     });
-
-    clearTimeout(timer);
 
     if (!res.ok) return null;
 
@@ -77,6 +76,8 @@ export async function checkForUpdate(updateCheckEnabled = true): Promise<UpdateI
   } catch {
     // Silent on network errors, timeouts, parse errors
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
