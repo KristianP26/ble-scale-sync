@@ -160,6 +160,7 @@ YAML
 
     # Garmin exporter
     if [ "$GARMIN_ENABLED" = "true" ] && [ -n "$GARMIN_EMAIL" ] && [ -n "$GARMIN_PASSWORD" ]; then
+      mkdir -p /data/garmin-tokens
       cat >> "$CONFIG" <<YAML
   - type: garmin
     email: "$(yaml_escape "$GARMIN_EMAIL")"

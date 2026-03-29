@@ -13,6 +13,7 @@ arch:
 startup: services
 boot: auto
 host_network: true
+host_dbus: true
 privileged:
   - NET_ADMIN
   - NET_RAW
