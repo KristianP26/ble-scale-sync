@@ -48,11 +48,20 @@ interface ClientInfo {
   arch: string;
 }
 
+const KNOWN_OS = new Set(['linux', 'darwin', 'win32', 'freebsd', 'openbsd', 'sunos', 'aix']);
+const KNOWN_ARCH = new Set(['arm', 'arm64', 'x64', 'ia32', 'ppc64', 's390x', 'riscv64', 'mips', 'mipsel', 'loong64']);
+const MAX_VERSION_LENGTH = 20;
+
 function parseUserAgent(ua: string | null): ClientInfo | null {
   if (!ua) return null;
   const match = ua.match(/^ble-scale-sync\/([\d.]+)\s+\(([^;]+);\s*([^)]+)\)$/);
   if (!match) return null;
-  return { version: match[1], os: match[2], arch: match[3] };
+
+  const version = match[1].slice(0, MAX_VERSION_LENGTH);
+  const os = KNOWN_OS.has(match[2]) ? match[2] : 'other';
+  const arch = KNOWN_ARCH.has(match[3]) ? match[3] : 'other';
+
+  return { version, os, arch };
 }
 
 // ─── KV helpers ─────────────────────────────────────────────────────────────
@@ -69,6 +78,9 @@ interface DailyStats {
   arch: Record<string, number>;
 }
 
+// Note: read-modify-write is not atomic. Under concurrent requests, some increments
+// may be lost due to KV's eventual consistency. This is acceptable for anonymous
+// aggregate stats where approximate counts are sufficient.
 async function recordHit(kv: KVNamespace, client: ClientInfo): Promise<void> {
   const key = `stats:${todayKey()}`;
   const raw = await kv.get(key);

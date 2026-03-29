@@ -198,6 +198,9 @@ async function processSingleReading(raw: RawReading, exporters?: Exporter[]): Pr
   );
   logBodyComp(payload);
 
+  // Update check after successful reading (fire-and-forget, max once per 24h)
+  checkAndLogUpdate(appConfig.update_check);
+
   if (!exporters) {
     log.info('\nDry run — skipping export.');
     return true;
@@ -225,8 +228,6 @@ async function processSingleReading(raw: RawReading, exporters?: Exporter[]): Pr
   if (bleHandler === 'mqtt-proxy' && mqttProxy) {
     publishDisplayResult(mqttProxy, user.slug, user.name, payload.weight, details).catch(() => {});
   }
-
-  if (success) checkAndLogUpdate(appConfig.update_check);
 
   return success;
 }
@@ -308,6 +309,9 @@ async function processRawReading(raw: RawReading): Promise<boolean> {
   );
   logBodyComp(payload, prefix);
 
+  // Update check after successful reading (fire-and-forget, max once per 24h)
+  checkAndLogUpdate(appConfig.update_check);
+
   if (dryRun) {
     log.info(`${prefix} Dry run — skipping export.`);
     return true;
@@ -332,8 +336,6 @@ async function processRawReading(raw: RawReading): Promise<boolean> {
   if (configSource === 'yaml' && configPath) {
     updateLastKnownWeight(configPath, user.slug, weight, user.last_known_weight);
   }
-
-  if (success) checkAndLogUpdate(appConfig.update_check);
 
   return success;
 }
