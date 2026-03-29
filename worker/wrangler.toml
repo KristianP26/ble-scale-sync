@@ -7,8 +7,4 @@ compatibility_date = "2025-03-01"
 
 [[kv_namespaces]]
 binding = "STATS"
-id = "placeholder-update-after-kv-create"
-
-# To create the KV namespace:
-#   wrangler kv namespace create STATS
-# Then replace the id above with the returned ID.
+id = "716153b9797d4c5589aa976ee6f3cae2"
