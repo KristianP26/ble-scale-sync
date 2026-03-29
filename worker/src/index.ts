@@ -198,6 +198,7 @@ function renderDashboard(stats24h: AggregatedStats, stats7d: AggregatedStats, st
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BLE Scale Sync Stats</title>
+  <link rel="icon" href="https://blescalesync.dev/favicon.svg" type="image/svg+xml">
   <style>
     :root {
       --bg: #0f172a;
