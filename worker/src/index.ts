@@ -164,7 +164,7 @@ function renderDashboard(stats24h: AggregatedStats, stats7d: AggregatedStats, st
     const isDaily = s.days === 1;
     const avg = s.uniqueDays > 0 ? Math.round(s.totalChecks / s.uniqueDays) : 0;
     const value = isDaily ? s.totalChecks : avg;
-    const label = isDaily ? 'active installations' : 'avg daily installations';
+    const label = isDaily ? 'active installations (est.)' : 'avg daily installations (est.)';
     return `
     <div class="card">
       <h2>${s.period}</h2>
