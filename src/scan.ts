@@ -21,6 +21,7 @@ async function main(): Promise<void> {
     15_000,
     bleConfig.bleHandler,
     bleConfig.mqttProxy,
+    bleConfig.bleAdapter,
   );
   const recognized = results.filter((r) => r.matchedAdapter);
 

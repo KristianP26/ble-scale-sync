@@ -84,6 +84,59 @@ export const bleStep: WizardStep = {
       ctx.config.ble.mqtt_proxy = undefined;
     }
 
+    // --- Adapter selection (Linux + auto handler only) ---
+    if (handler === 'auto' && ctx.platform.os === 'linux') {
+      const wantAdapter = await ctx.prompts.confirm(
+        'Do you want to select a specific Bluetooth adapter? (only needed with multiple adapters)',
+        { default: false },
+      );
+
+      if (wantAdapter) {
+        let availableAdapters: string[] = [];
+        try {
+          const NodeBle = await import('node-ble');
+          const { bluetooth, destroy } = NodeBle.default.createBluetooth();
+          try {
+            availableAdapters = await bluetooth.adapters();
+          } finally {
+            destroy();
+          }
+        } catch {
+          // D-Bus not available — fall through to manual entry
+        }
+
+        if (availableAdapters.length > 1) {
+          const choices = availableAdapters.map((a) => ({ name: a, value: a }));
+          choices.push({ name: 'Default (system default)', value: '' });
+
+          const selected = await ctx.prompts.select('Select Bluetooth adapter:', choices);
+          if (selected) {
+            ctx.config.ble!.adapter = selected;
+            console.log(`\n  ${success(`BLE adapter set to: ${selected}`)}`);
+          } else {
+            ctx.config.ble!.adapter = undefined;
+          }
+        } else if (availableAdapters.length === 1) {
+          console.log(
+            `\n  ${info(`Only one adapter found (${availableAdapters[0]}). Using system default.`)}`,
+          );
+          ctx.config.ble!.adapter = undefined;
+        } else {
+          const adapter = await ctx.prompts.input(
+            'Enter adapter name (e.g., hci0, hci1) or leave empty for default:',
+          );
+          if (adapter.trim() && /^hci\d+$/.test(adapter.trim())) {
+            ctx.config.ble!.adapter = adapter.trim();
+            console.log(`\n  ${success(`BLE adapter set to: ${adapter.trim()}`)}`);
+          } else {
+            ctx.config.ble!.adapter = undefined;
+          }
+        }
+      } else {
+        ctx.config.ble!.adapter = undefined;
+      }
+    }
+
     // --- Scale discovery ---
     for (;;) {
       const choice = await ctx.prompts.select('How do you want to identify your scale?', [

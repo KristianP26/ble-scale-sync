@@ -332,6 +332,49 @@ describe('BleSchema', () => {
     const result = BleSchema.safeParse({ handler: 'noble' });
     expect(result.success).toBe(false);
   });
+
+  it('accepts valid adapter name hci0', () => {
+    const result = BleSchema.safeParse({ adapter: 'hci0' });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts valid adapter name hci1', () => {
+    const result = BleSchema.safeParse({ adapter: 'hci1' });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts multi-digit adapter hci12', () => {
+    const result = BleSchema.safeParse({ adapter: 'hci12' });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts null adapter', () => {
+    const result = BleSchema.safeParse({ adapter: null });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts omitted adapter', () => {
+    const result = BleSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.adapter).toBeUndefined();
+    }
+  });
+
+  it('rejects invalid adapter name (eth0)', () => {
+    const result = BleSchema.safeParse({ adapter: 'eth0' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects adapter without hci prefix', () => {
+    const result = BleSchema.safeParse({ adapter: '1' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects adapter with uppercase HCI', () => {
+    const result = BleSchema.safeParse({ adapter: 'HCI0' });
+    expect(result.success).toBe(false);
+  });
 });
 
 // ─── ScaleSchema ───────────────────────────────────────────────────────────

@@ -358,6 +358,13 @@ function broadcastScan(
  * Uses noble — works on Windows and macOS.
  */
 export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
+  if (opts.bleAdapter) {
+    bleLog.warn(
+      `ble.adapter='${opts.bleAdapter}' is only supported on Linux (node-ble). ` +
+        `Ignoring on ${process.platform}.`,
+    );
+  }
+
   const { targetMac, adapters, profile, weightUnit, onLiveData, abortSignal } = opts;
 
   try {

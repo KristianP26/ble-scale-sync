@@ -120,6 +120,7 @@ export async function scanDevices(
   durationMs?: number,
   bleHandler?: 'auto' | 'mqtt-proxy',
   mqttProxy?: import('../config/schema.js').MqttProxyConfig,
+  bleAdapter?: string,
 ): Promise<ScanResult[]> {
   if (bleHandler === 'mqtt-proxy') {
     if (!mqttProxy) {
@@ -145,7 +146,7 @@ export async function scanDevices(
   // OS defaults (no NOBLE_DRIVER override)
   if (process.platform === 'linux') {
     const { scanDevices: impl } = await import('./handler-node-ble.js');
-    return impl(adapters, durationMs);
+    return impl(adapters, durationMs, bleAdapter);
   }
   if (process.platform === 'win32') {
     const { scanDevices: impl } = await import('./handler-noble-legacy.js');

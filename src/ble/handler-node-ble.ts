@@ -25,6 +25,28 @@ type GattCharacteristic = NodeBle.GattCharacteristic;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/**
+ * Get the Bluetooth adapter. If bleAdapter is specified (e.g., 'hci1'),
+ * use bluetooth.getAdapter(). Otherwise fall back to defaultAdapter().
+ */
+async function getAdapter(
+  bluetooth: NodeBle.Bluetooth,
+  bleAdapter?: string,
+): Promise<Adapter> {
+  if (bleAdapter) {
+    bleLog.debug(`Using adapter: ${bleAdapter}`);
+    return bluetooth.getAdapter(bleAdapter);
+  }
+  return bluetooth.defaultAdapter();
+}
+
+/** Extract the numeric index from an hci adapter name (e.g., 'hci1' -> 1). */
+function parseHciIndex(adapterName?: string): number {
+  if (!adapterName) return 0;
+  const match = adapterName.match(/^hci(\d+)$/);
+  return match ? Number(match[1]) : 0;
+}
+
 function isDbusConnectionError(err: unknown): boolean {
   const msg = errMsg(err);
   return msg.includes('ENOENT') && msg.includes('bus_socket');
@@ -63,6 +85,7 @@ async function stopDiscoveryAndQuiesce(btAdapter: Adapter): Promise<void> {
 async function startDiscoverySafe(
   btAdapter: Adapter,
   bluetooth?: NodeBle.Bluetooth,
+  bleAdapter?: string,
 ): Promise<Adapter | false> {
   // 1. Normal start
   try {
@@ -121,13 +144,13 @@ async function startDiscoverySafe(
 
   // 4. Kernel-level adapter reset via btmgmt (bypasses D-Bus session ownership)
   bleLog.debug('Attempting kernel-level adapter reset via btmgmt...');
-  if (await resetAdapterBtmgmt()) {
+  if (await resetAdapterBtmgmt(parseHciIndex(bleAdapter))) {
     // btmgmt power-cycles the adapter at kernel level, which causes BlueZ to
-    // remove and re-create the D-Bus object at /org/bluez/hci0. The existing
+    // remove and re-create the D-Bus object at /org/bluez/hciN. The existing
     // proxy is now stale — re-acquire a fresh one if possible.
     if (bluetooth) {
       try {
-        const freshAdapter = await bluetooth.defaultAdapter();
+        const freshAdapter = await getAdapter(bluetooth, bleAdapter);
         await freshAdapter.startDiscovery();
         bleLog.debug('Discovery started after btmgmt reset (fresh adapter)');
         return freshAdapter;
@@ -171,6 +194,8 @@ interface ConnectRecoveryContext {
   mac: string;
   initialDevice: Device;
   maxRetries: number;
+  bluetooth?: NodeBle.Bluetooth;
+  bleAdapter?: string;
 }
 
 /**
@@ -180,7 +205,7 @@ interface ConnectRecoveryContext {
  */
 async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<Device> {
   let { btAdapter } = ctx;
-  const { mac, maxRetries } = ctx;
+  const { mac, maxRetries, bluetooth, bleAdapter } = ctx;
   const formattedMac = formatMac(mac);
   let device = ctx.initialDevice;
 
@@ -219,7 +244,7 @@ async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<Device>
 
       // 4. Re-discover and acquire fresh device reference
       try {
-        const result = await startDiscoverySafe(btAdapter);
+        const result = await startDiscoverySafe(btAdapter, bluetooth, bleAdapter);
         if (result) btAdapter = result;
         device = await withTimeout(
           btAdapter.waitDevice(formattedMac),
@@ -366,7 +391,7 @@ async function buildCharMap(gatt: NodeBle.GattServer): Promise<Map<string, BleCh
  * Uses node-ble (BlueZ D-Bus) — requires bluetoothd running on Linux.
  */
 export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
-  const { targetMac, adapters, profile, weightUnit, onLiveData, abortSignal } = opts;
+  const { targetMac, adapters, profile, weightUnit, onLiveData, abortSignal, bleAdapter } = opts;
 
   let bluetooth: NodeBle.Bluetooth;
   let destroy: () => void;
@@ -382,9 +407,15 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
 
   try {
     try {
-      btAdapter = await bluetooth.defaultAdapter();
+      btAdapter = await getAdapter(bluetooth, bleAdapter);
     } catch (err) {
       if (isDbusConnectionError(err)) throw dbusError();
+      if (bleAdapter) {
+        throw new Error(
+          `Bluetooth adapter '${bleAdapter}' not found. ` +
+            'Check that the adapter exists (hciconfig or btmgmt info).',
+        );
+      }
       throw err;
     }
 
@@ -403,7 +434,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       await removeDevice(btAdapter, targetMac);
     }
 
-    const discoveryResult = await startDiscoverySafe(btAdapter, bluetooth);
+    const discoveryResult = await startDiscoverySafe(btAdapter, bluetooth, bleAdapter);
     if (discoveryResult) btAdapter = discoveryResult;
 
     let matchedAdapter: ScaleAdapter;
@@ -458,6 +489,8 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         mac: targetMac,
         initialDevice: device,
         maxRetries: MAX_CONNECT_RETRIES,
+        bluetooth,
+        bleAdapter,
       });
       bleLog.info('Connected. Discovering services...');
 
@@ -495,6 +528,8 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         mac: result.mac,
         initialDevice: device,
         maxRetries: MAX_CONNECT_RETRIES,
+        bluetooth,
+        bleAdapter,
       });
       bleLog.info('Connected. Discovering services...');
     }
@@ -549,6 +584,7 @@ export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
 export async function scanDevices(
   adapters: ScaleAdapter[],
   durationMs = 15_000,
+  bleAdapter?: string,
 ): Promise<ScanResult[]> {
   let bluetooth: NodeBle.Bluetooth;
   let destroy: () => void;
@@ -563,9 +599,15 @@ export async function scanDevices(
 
   try {
     try {
-      btAdapter = await bluetooth.defaultAdapter();
+      btAdapter = await getAdapter(bluetooth, bleAdapter);
     } catch (err) {
       if (isDbusConnectionError(err)) throw dbusError();
+      if (bleAdapter) {
+        throw new Error(
+          `Bluetooth adapter '${bleAdapter}' not found. ` +
+            'Check that the adapter exists (hciconfig or btmgmt info).',
+        );
+      }
       throw err;
     }
 
@@ -576,7 +618,7 @@ export async function scanDevices(
       );
     }
 
-    const discoveryResult = await startDiscoverySafe(btAdapter, bluetooth);
+    const discoveryResult = await startDiscoverySafe(btAdapter, bluetooth, bleAdapter);
     if (discoveryResult) btAdapter = discoveryResult;
 
     const seen = new Set<string>();

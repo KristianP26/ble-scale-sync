@@ -61,6 +61,7 @@ Requires Node.js v20.19+ and a BLE adapter. See the **[full install guide](https
 - **[Interactive setup wizard](https://blescalesync.dev/guide/configuration)** — scale discovery, exporter config, connectivity tests
 - **[BLE diagnostic tool](https://blescalesync.dev/troubleshooting)** — `npm run diagnose` for detailed BLE troubleshooting
 - **[ESP32 BLE proxy](https://blescalesync.dev/guide/esp32-proxy)** — use a remote ESP32 as a BLE radio over MQTT, with simplified Docker deployment and optional display
+- **BLE adapter selection** — `ble.adapter: hci1` for multi-adapter setups (Linux)
 - **Broadcast mode** — supports non-connectable scales that only advertise weight via BLE advertisements
 - **Update check** — optional, anonymous version check after each measurement (opt-out via `update_check: false`)
 - **Cross-platform** — Linux (Docker + native), macOS, Windows

@@ -106,6 +106,14 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
   if (process.env.SCALE_MAC !== undefined) {
     ble.scale_mac = process.env.SCALE_MAC;
   }
+  if (process.env.BLE_ADAPTER !== undefined) {
+    const adapter = process.env.BLE_ADAPTER.toLowerCase();
+    if (/^hci\d+$/.test(adapter)) {
+      ble.adapter = adapter;
+    } else {
+      log.warn(`BLE_ADAPTER='${process.env.BLE_ADAPTER}' is not valid (expected hci0, hci1, ...)`);
+    }
+  }
   if (process.env.NOBLE_DRIVER !== undefined) {
     const driver = process.env.NOBLE_DRIVER.toLowerCase();
     if (driver === 'abandonware' || driver === 'stoprocent') {
@@ -270,6 +278,7 @@ export function loadEnvConfig(): AppConfig {
       handler: 'auto' as const,
       scale_mac: envConfig.scaleMac ?? null,
       noble_driver: (process.env.NOBLE_DRIVER as 'abandonware' | 'stoprocent') ?? null,
+      adapter: process.env.BLE_ADAPTER || null,
     },
     scale: {
       weight_unit: envConfig.weightUnit,
@@ -335,6 +344,7 @@ export interface BleLoadedConfig {
   scaleMac?: string;
   nobleDriver?: string;
   bleHandler?: 'auto' | 'mqtt-proxy';
+  bleAdapter?: string;
   mqttProxy?: MqttProxyConfig;
 }
 
@@ -354,6 +364,7 @@ export function loadBleConfig(configPath?: string): BleLoadedConfig {
         scaleMac: ble?.scale_mac ?? undefined,
         nobleDriver: ble?.noble_driver ?? undefined,
         bleHandler: (ble?.handler as 'auto' | 'mqtt-proxy') ?? undefined,
+        bleAdapter: ble?.adapter ?? undefined,
         mqttProxy: ble?.mqtt_proxy ?? undefined,
       };
     } catch {
@@ -370,5 +381,6 @@ export function loadBleConfig(configPath?: string): BleLoadedConfig {
   return {
     scaleMac: process.env.SCALE_MAC || undefined,
     nobleDriver: process.env.NOBLE_DRIVER || undefined,
+    bleAdapter: process.env.BLE_ADAPTER || undefined,
   };
 }

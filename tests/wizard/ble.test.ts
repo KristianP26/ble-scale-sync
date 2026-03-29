@@ -108,6 +108,7 @@ describe('bleStep handler selection', () => {
   it('sets handler to auto and clears mqtt_proxy when auto selected', async () => {
     const ctx = makeCtx([
       'auto', // handler selection
+      false, // adapter selection → no
       'skip', // scale discovery → skip
     ]);
 
@@ -159,7 +160,7 @@ describe('bleStep handler selection', () => {
   });
 
   it('initializes ble config if not present', async () => {
-    const ctx = makeCtx(['auto', 'skip']);
+    const ctx = makeCtx(['auto', false, 'skip']);
     ctx.config.ble = undefined;
 
     await bleStep.run(ctx);
@@ -169,12 +170,58 @@ describe('bleStep handler selection', () => {
   });
 });
 
+// ─── bleStep adapter selection ─────────────────────────────────────────
+
+describe('bleStep adapter selection', () => {
+  it('skips adapter prompt on non-Linux platforms', async () => {
+    const ctx = makeCtx([
+      'auto', // handler
+      'skip', // scale discovery (no adapter prompt expected)
+    ]);
+    ctx.platform.os = 'darwin';
+
+    await bleStep.run(ctx);
+
+    expect(ctx.config.ble?.adapter).toBeUndefined();
+  });
+
+  it('skips adapter prompt when handler is mqtt-proxy', async () => {
+    const ctx = makeCtx([
+      'mqtt-proxy', // handler
+      'mqtt://localhost:1883', // broker_url
+      'esp32-ble-proxy', // device_id
+      'ble-proxy', // topic_prefix
+      false, // no auth
+      'skip', // scale discovery
+    ]);
+    ctx.platform.os = 'linux';
+
+    await bleStep.run(ctx);
+
+    expect(ctx.config.ble?.adapter).toBeUndefined();
+  });
+
+  it('sets adapter to undefined when user declines on Linux', async () => {
+    const ctx = makeCtx([
+      'auto', // handler
+      false, // wantAdapter = no
+      'skip', // scale discovery
+    ]);
+    ctx.platform.os = 'linux';
+
+    await bleStep.run(ctx);
+
+    expect(ctx.config.ble?.adapter).toBeUndefined();
+  });
+});
+
 // ─── bleStep scale discovery (auto handler) ─────────────────────────────
 
 describe('bleStep scale discovery', () => {
   it('sets scale_mac to undefined when skip is selected', async () => {
     const ctx = makeCtx([
       'auto', // handler
+      false, // adapter selection → no
       'skip', // discovery
     ]);
 
@@ -186,6 +233,7 @@ describe('bleStep scale discovery', () => {
   it('sets scale_mac when manual entry is used', async () => {
     const ctx = makeCtx([
       'auto', // handler
+      false, // adapter selection → no
       'manual', // discovery
       'AA:BB:CC:DD:EE:FF', // MAC
     ]);
@@ -198,6 +246,7 @@ describe('bleStep scale discovery', () => {
   it('goes back to discovery menu when manual entry is empty', async () => {
     const ctx = makeCtx([
       'auto', // handler
+      false, // adapter selection → no
       'manual', // discovery (first attempt)
       '', // empty → go back
       'skip', // discovery (second attempt) → skip
