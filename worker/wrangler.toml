@@ -1,0 +1,14 @@
+name = "ble-scale-sync-api"
+main = "src/index.ts"
+compatibility_date = "2025-03-01"
+
+# Custom domain: api.blescalesync.dev
+# Configure via Cloudflare Dashboard > Workers > Custom Domains
+
+[[kv_namespaces]]
+binding = "STATS"
+id = "placeholder-update-after-kv-create"
+
+# To create the KV namespace:
+#   wrangler kv namespace create STATS
+# Then replace the id above with the returned ID.
