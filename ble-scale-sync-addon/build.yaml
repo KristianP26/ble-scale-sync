@@ -1,0 +1,4 @@
+build_from:
+  amd64: ghcr.io/kristianp26/ble-scale-sync:latest
+  aarch64: ghcr.io/kristianp26/ble-scale-sync:latest
+  armv7: ghcr.io/kristianp26/ble-scale-sync:latest
