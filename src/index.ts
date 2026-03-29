@@ -28,6 +28,7 @@ import { updateLastKnownWeight, withWriteLock } from './config/write.js';
 import type { Exporter, ExportContext } from './interfaces/exporter.js';
 import type { BodyComposition } from './interfaces/scale-adapter.js';
 import type { WeightUnit } from './config/schema.js';
+import { checkAndLogUpdate } from './update-check.js';
 
 // ─── CLI flags ──────────────────────────────────────────────────────────────
 
@@ -197,6 +198,9 @@ async function processSingleReading(raw: RawReading, exporters?: Exporter[]): Pr
   );
   logBodyComp(payload);
 
+  // Update check after successful reading (fire-and-forget, max once per 24h)
+  checkAndLogUpdate(appConfig.update_check);
+
   if (!exporters) {
     log.info('\nDry run — skipping export.');
     return true;
@@ -304,6 +308,9 @@ async function processRawReading(raw: RawReading): Promise<boolean> {
     `${prefix} Measurement: ${fmtWeight(payload.weight, weightUnit)} / ${payload.impedance} Ohm`,
   );
   logBodyComp(payload, prefix);
+
+  // Update check after successful reading (fire-and-forget, max once per 24h)
+  checkAndLogUpdate(appConfig.update_check);
 
   if (dryRun) {
     log.info(`${prefix} Dry run — skipping export.`);

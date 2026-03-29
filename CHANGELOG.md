@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.7.0] - 2026-03-29
+
+### Added
+- **Update check** with anonymous usage statistics ([#87](https://github.com/KristianP26/ble-scale-sync/issues/87)). After each successful measurement (max once per 24h), the app checks `api.blescalesync.dev` for newer versions. Only the app version, OS, and architecture are sent via the User-Agent header. Disable with `update_check: false` in config.yaml. Automatically disabled in CI environments
+- **Cloudflare Worker** (`worker/`) serving the `/version` endpoint and a public stats dashboard at [stats.blescalesync.dev](https://stats.blescalesync.dev) with aggregated anonymous data (version distribution, OS/architecture breakdown)
+- Setup wizard shows an update notice before the first step if a newer version is available
+- **CI**: GitHub Actions workflow for automatic Cloudflare Worker deployment on push to main (`worker.yml`)
+
 ## [1.6.4] - 2026-03-27
 
 ### Fixed
@@ -177,6 +185,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Exporter healthchecks at startup
 - 894 unit tests across 49 test files
 
+[1.7.0]: https://github.com/KristianP26/ble-scale-sync/compare/v1.6.4...v1.7.0
+[1.6.4]: https://github.com/KristianP26/ble-scale-sync/compare/v1.6.3...v1.6.4
+[1.6.3]: https://github.com/KristianP26/ble-scale-sync/compare/v1.6.2...v1.6.3
 [1.6.2]: https://github.com/KristianP26/ble-scale-sync/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/KristianP26/ble-scale-sync/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/KristianP26/ble-scale-sync/compare/v1.5.0...v1.6.0
