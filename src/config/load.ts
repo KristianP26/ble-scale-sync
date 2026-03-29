@@ -295,6 +295,7 @@ export function loadEnvConfig(): AppConfig {
       dry_run: envConfig.dryRun,
       debug: process.env.DEBUG === 'true',
     },
+    update_check: true,
   };
 }
 

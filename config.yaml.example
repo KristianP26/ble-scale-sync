@@ -137,3 +137,10 @@ runtime:
   scan_cooldown: 30         # seconds between scans in continuous mode (5–3600)
   dry_run: false            # true = read scale + compute body comp, skip all exports
   debug: false              # true = verbose BLE logging
+
+# --- Update Check ---
+# On each successful measurement (max once per 24h), the app sends a lightweight
+# GET request to check for newer versions. Only the app version, OS, and architecture
+# are sent via the User-Agent header. No personal data is collected.
+# Disable with: update_check: false
+update_check: true

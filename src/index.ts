@@ -28,6 +28,7 @@ import { updateLastKnownWeight, withWriteLock } from './config/write.js';
 import type { Exporter, ExportContext } from './interfaces/exporter.js';
 import type { BodyComposition } from './interfaces/scale-adapter.js';
 import type { WeightUnit } from './config/schema.js';
+import { checkAndLogUpdate } from './update-check.js';
 
 // ─── CLI flags ──────────────────────────────────────────────────────────────
 
@@ -225,6 +226,8 @@ async function processSingleReading(raw: RawReading, exporters?: Exporter[]): Pr
     publishDisplayResult(mqttProxy, user.slug, user.name, payload.weight, details).catch(() => {});
   }
 
+  if (success) checkAndLogUpdate(appConfig.update_check);
+
   return success;
 }
 
@@ -329,6 +332,8 @@ async function processRawReading(raw: RawReading): Promise<boolean> {
   if (configSource === 'yaml' && configPath) {
     updateLastKnownWeight(configPath, user.slug, weight, user.last_known_weight);
   }
+
+  if (success) checkAndLogUpdate(appConfig.update_check);
 
   return success;
 }
