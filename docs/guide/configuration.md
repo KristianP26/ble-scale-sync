@@ -125,6 +125,20 @@ runtime:
 | `dry_run` | No | `false` | Read scale + compute body comp, skip exports |
 | `debug` | No | `false` | Verbose BLE logging |
 
+### Update Check
+
+```yaml
+update_check: true
+```
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `update_check` | No | `true` | Check for newer versions after each measurement (max once per 24h) |
+
+After each successful measurement, the app sends a single GET request to `api.blescalesync.dev/version`. Only the app version, OS, and architecture are sent via the User-Agent header. No personal data is collected. Automatically disabled when `CI=true`.
+
+Anonymous aggregated statistics are visible at [stats.blescalesync.dev](https://stats.blescalesync.dev).
+
 ## Environment Variables
 
 ### Secret references
