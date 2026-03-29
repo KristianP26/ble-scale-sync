@@ -14,8 +14,31 @@ export interface Env {
   STATS: KVNamespace;
 }
 
-// Current latest version (update on each release)
-const LATEST_VERSION = '1.6.4';
+const GITHUB_RELEASES_URL =
+  'https://api.github.com/repos/KristianP26/ble-scale-sync/releases/latest';
+const VERSION_CACHE_KEY = 'latest-version';
+const VERSION_CACHE_TTL = 3600; // 1 hour
+
+/** Fetch latest version from GitHub Releases API, cached in KV for 1h. */
+async function getLatestVersion(kv: KVNamespace): Promise<string> {
+  const cached = await kv.get(VERSION_CACHE_KEY);
+  if (cached) return cached;
+
+  try {
+    const res = await fetch(GITHUB_RELEASES_URL, {
+      headers: { 'User-Agent': 'ble-scale-sync-api-worker' },
+    });
+    if (!res.ok) return cached ?? '0.0.0';
+
+    const data = (await res.json()) as { tag_name?: string };
+    const version = data.tag_name?.replace(/^v/, '') ?? '0.0.0';
+
+    await kv.put(VERSION_CACHE_KEY, version, { expirationTtl: VERSION_CACHE_TTL });
+    return version;
+  } catch {
+    return cached ?? '0.0.0';
+  }
+}
 
 // ─── User-Agent parsing ─────────────────────────────────────────────────────
 
@@ -321,7 +344,9 @@ export default {
         ctx.waitUntil(recordHit(env.STATS, client));
       }
 
-      return new Response(JSON.stringify({ latest: LATEST_VERSION }), {
+      const latest = await getLatestVersion(env.STATS);
+
+      return new Response(JSON.stringify({ latest }), {
         headers: {
           'Content-Type': 'application/json',
           'Cache-Control': 'public, max-age=3600',
