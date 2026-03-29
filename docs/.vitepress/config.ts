@@ -49,6 +49,7 @@ export default defineConfig({
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Exporters', link: '/exporters' },
       { text: 'Changelog', link: '/changelog' },
+      { text: 'Stats', link: 'https://stats.blescalesync.dev' },
       {
         text: `v${pkg.version}`,
         link: `https://github.com/KristianP26/ble-scale-sync/releases/tag/v${pkg.version}`,
