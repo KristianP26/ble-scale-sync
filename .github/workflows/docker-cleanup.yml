@@ -1,0 +1,25 @@
+name: Docker Cleanup
+
+on:
+  schedule:
+    - cron: '0 3 * * 0' # Weekly on Sunday at 3:00 UTC
+  workflow_dispatch:
+
+permissions:
+  packages: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clean up old container images
+        uses: snok/container-retention-policy@v3
+        with:
+          account: KristianP26
+          token: ${{ secrets.GITHUB_TOKEN }}
+          image-names: ble-scale-sync
+          cut-off: 30d
+          keep-n-most-recent: 10
+          skip-tags: "latest|\\d+(\\.\\d+)*"
+          token-type: github-token

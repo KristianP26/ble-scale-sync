@@ -95,6 +95,7 @@ export const AppConfigSchema = z.object({
   global_exporters: z.array(ExporterEntrySchema).optional(),
   runtime: RuntimeSchema.optional(),
   docker: DockerSchema.optional(),
+  update_check: z.boolean().default(true),
 });
 
 // --- Standalone types ---

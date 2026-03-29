@@ -1,0 +1,15 @@
+name = "ble-scale-sync-api"
+main = "src/index.ts"
+compatibility_date = "2025-03-01"
+
+[[routes]]
+pattern = "api.blescalesync.dev"
+custom_domain = true
+
+[[routes]]
+pattern = "stats.blescalesync.dev"
+custom_domain = true
+
+[[kv_namespaces]]
+binding = "STATS"
+id = "716153b9797d4c5589aa976ee6f3cae2"
