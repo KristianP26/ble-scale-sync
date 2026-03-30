@@ -201,7 +201,7 @@ describe('bleStep adapter selection', () => {
     expect(ctx.config.ble?.adapter).toBeUndefined();
   });
 
-  it('sets adapter to undefined when user declines on Linux', async () => {
+  it('leaves adapter undefined when user declines on Linux (no existing adapter)', async () => {
     const ctx = makeCtx([
       'auto', // handler
       false, // wantAdapter = no
@@ -212,6 +212,20 @@ describe('bleStep adapter selection', () => {
     await bleStep.run(ctx);
 
     expect(ctx.config.ble?.adapter).toBeUndefined();
+  });
+
+  it('preserves existing adapter when user declines on Linux', async () => {
+    const ctx = makeCtx([
+      'auto', // handler
+      false, // wantAdapter = no (default is true because adapter exists)
+      'skip', // scale discovery
+    ]);
+    ctx.platform.os = 'linux';
+    ctx.config.ble = { handler: 'auto', adapter: 'hci1' };
+
+    await bleStep.run(ctx);
+
+    expect(ctx.config.ble?.adapter).toBe('hci1');
   });
 });
 

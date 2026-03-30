@@ -86,9 +86,10 @@ export const bleStep: WizardStep = {
 
     // --- Adapter selection (Linux + auto handler only) ---
     if (handler === 'auto' && ctx.platform.os === 'linux') {
+      const existingAdapter = ctx.config.ble!.adapter;
       const wantAdapter = await ctx.prompts.confirm(
         'Do you want to select a specific Bluetooth adapter? (only needed with multiple adapters)',
-        { default: false },
+        { default: !!existingAdapter },
       );
 
       if (wantAdapter) {
@@ -132,9 +133,8 @@ export const bleStep: WizardStep = {
             ctx.config.ble!.adapter = undefined;
           }
         }
-      } else {
-        ctx.config.ble!.adapter = undefined;
       }
+      // When user declines, preserve existing adapter (can be cleared via "Default" option above)
     }
 
     // --- Scale discovery ---
@@ -188,6 +188,7 @@ export const bleStep: WizardStep = {
           15_000,
           ctx.config.ble!.handler,
           ctx.config.ble!.mqtt_proxy,
+          ctx.config.ble!.adapter ?? undefined,
         );
         const recognized = results.filter((r) => r.matchedAdapter);
 

@@ -197,6 +197,42 @@ scale:
     expect(config.ble?.scale_mac).toBe('AA:BB:CC:DD:EE:FF');
   });
 
+  it('applies BLE_ADAPTER env override with trim and lowercase', () => {
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(VALID_YAML);
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.stubEnv('BLE_ADAPTER', '  HCI1  ');
+
+    const config = loadYamlConfig('/test/config.yaml');
+    expect(config.ble?.adapter).toBe('hci1');
+  });
+
+  it('clears adapter when BLE_ADAPTER is empty string', () => {
+    const yamlWithAdapter = VALID_YAML.replace(
+      'scale_mac: "FF:03:00:13:A1:04"',
+      'scale_mac: "FF:03:00:13:A1:04"\n  adapter: hci1',
+    );
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(yamlWithAdapter);
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.stubEnv('BLE_ADAPTER', '');
+
+    const config = loadYamlConfig('/test/config.yaml');
+    expect(config.ble?.adapter).toBeUndefined();
+  });
+
+  it('warns on invalid BLE_ADAPTER and does not override', () => {
+    const yamlWithAdapter = VALID_YAML.replace(
+      'scale_mac: "FF:03:00:13:A1:04"',
+      'scale_mac: "FF:03:00:13:A1:04"\n  adapter: hci0',
+    );
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(yamlWithAdapter);
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.stubEnv('BLE_ADAPTER', 'eth0');
+
+    const config = loadYamlConfig('/test/config.yaml');
+    // Invalid value should not override the YAML value
+    expect(config.ble?.adapter).toBe('hci0');
+  });
+
   it('sets NOBLE_DRIVER env var when configured', () => {
     const yamlWithDriver = VALID_YAML.replace(
       'scale_mac: "FF:03:00:13:A1:04"',
@@ -262,6 +298,22 @@ scale:
     const config = loadBleConfig('/test/config.yaml');
     expect(config.scaleMac).toBeUndefined();
     expect(config.nobleDriver).toBeUndefined();
+  });
+
+  it('validates BLE_ADAPTER env var in fallback path', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+    vi.stubEnv('BLE_ADAPTER', ' HCI1 ');
+
+    const config = loadBleConfig('/nonexistent/config.yaml');
+    expect(config.bleAdapter).toBe('hci1');
+  });
+
+  it('ignores invalid BLE_ADAPTER env var in fallback path', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+    vi.stubEnv('BLE_ADAPTER', 'eth0');
+
+    const config = loadBleConfig('/nonexistent/config.yaml');
+    expect(config.bleAdapter).toBeUndefined();
   });
 
   it('handles invalid YAML gracefully', () => {

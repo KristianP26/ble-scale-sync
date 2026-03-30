@@ -104,8 +104,8 @@ YAML
   # BLE section (only if scale_mac or adapter is set)
   if [ -n "$SCALE_MAC" ] || [ -n "$BLE_ADAPTER" ]; then
     echo "ble:" >> "$CONFIG"
-    [ -n "$SCALE_MAC" ] && echo "  scale_mac: \"$SCALE_MAC\"" >> "$CONFIG"
-    [ -n "$BLE_ADAPTER" ] && echo "  adapter: \"$BLE_ADAPTER\"" >> "$CONFIG"
+    [ -n "$SCALE_MAC" ] && echo "  scale_mac: \"$(yaml_escape "$SCALE_MAC")\"" >> "$CONFIG"
+    [ -n "$BLE_ADAPTER" ] && echo "  adapter: \"$(yaml_escape "$BLE_ADAPTER")\"" >> "$CONFIG"
     echo "" >> "$CONFIG"
   fi
 
@@ -197,7 +197,14 @@ fi
 if command -v btmgmt >/dev/null 2>&1; then
   ADAPTER_INDEX=0
   if [ -n "$BLE_ADAPTER" ]; then
-    ADAPTER_INDEX=$(echo "$BLE_ADAPTER" | sed 's/hci//')
+    case "$BLE_ADAPTER" in
+      hci[0-9]*)
+        ADAPTER_INDEX=${BLE_ADAPTER#hci}
+        ;;
+      *)
+        log "WARNING: Invalid BLE adapter '$BLE_ADAPTER', falling back to hci0 for reset"
+        ;;
+    esac
   fi
   log "Resetting Bluetooth adapter (hci$ADAPTER_INDEX)..."
   if btmgmt --index "$ADAPTER_INDEX" power off 2>/dev/null && \
