@@ -8,9 +8,7 @@ const log = createLogger('Sync');
 
 const UPDATE_CHECK_URL = 'https://api.blescalesync.dev/version';
 const TIMEOUT_MS = 3_000;
-const COOLDOWN_MS = 24 * 60 * 60 * 1_000; // 24 hours
-
-let lastCheckTime = 0;
+let lastCheckDate = '';
 
 export interface UpdateInfo {
   latest: string;
@@ -39,7 +37,7 @@ export function buildUserAgent(): string {
 /**
  * Check for updates (awaitable, up to TIMEOUT_MS).
  * Use `checkAndLogUpdate()` for fire-and-forget usage.
- * Respects update_check config, CI env var, and 24h cooldown.
+ * Respects update_check config, CI env var, and once-per-day cooldown.
  * Returns update info if a newer version is available, null otherwise.
  */
 export async function checkForUpdate(updateCheckEnabled = true): Promise<UpdateInfo | null> {
@@ -49,10 +47,10 @@ export async function checkForUpdate(updateCheckEnabled = true): Promise<UpdateI
   // Disabled in CI
   if (process.env.CI === 'true') return null;
 
-  // 24h cooldown
-  const now = Date.now();
-  if (now - lastCheckTime < COOLDOWN_MS) return null;
-  lastCheckTime = now;
+  // Once per calendar day (UTC)
+  const today = new Date().toISOString().slice(0, 10);
+  if (today === lastCheckDate) return null;
+  lastCheckDate = today;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -100,9 +98,9 @@ export function checkAndLogUpdate(updateCheckEnabled = true): void {
     });
 }
 
-/** Reset internal cooldown timer (for testing). */
+/** Reset internal cooldown (for testing). */
 export function resetUpdateCheckTimer(): void {
-  lastCheckTime = 0;
+  lastCheckDate = '';
 }
 
 /** Get current version from package.json. */

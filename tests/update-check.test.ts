@@ -146,7 +146,7 @@ describe('checkForUpdate()', () => {
     vi.unstubAllGlobals();
   });
 
-  it('respects 24h cooldown (skips second call)', async () => {
+  it('respects once-per-day cooldown (skips second call same day)', async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ latest: '99.0.0' }),

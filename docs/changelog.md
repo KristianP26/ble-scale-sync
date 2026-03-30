@@ -7,7 +7,14 @@ description: Version history for BLE Scale Sync.
 
 All notable changes to this project are documented here. Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## v1.7.0 <Badge type="tip" text="latest" /> {#v1-7-0}
+## v1.7.1 <Badge type="tip" text="latest" /> {#v1-7-1}
+
+_2026-03-30_
+
+### Fixed
+- **Update check**: replaced strict 24-hour cooldown with calendar-day (UTC) comparison. Users who weigh in slightly earlier each day (e.g. 7:00 AM, then 6:55 AM) were being skipped
+
+## v1.7.0 {#v1-7-0}
 
 _2026-03-29_
 
