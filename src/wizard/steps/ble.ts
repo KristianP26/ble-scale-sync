@@ -132,7 +132,9 @@ export const bleStep: WizardStep = {
             console.log(`\n  ${success(`BLE adapter set to: ${normalized}`)}`);
           } else {
             if (normalized) {
-              console.log(`\n  ${warn(`Invalid adapter name "${adapterInput}". Using system default.`)}`);
+              console.log(
+                `\n  ${warn(`Invalid adapter name "${adapterInput}". Using system default.`)}`,
+              );
             }
             ctx.config.ble!.adapter = undefined;
           }
