@@ -151,6 +151,7 @@ YAML
 
     # MQTT exporter
     if [ "$MQTT_ENABLED" = "true" ] && [ -n "$MQTT_BROKER_URL" ]; then
+      MQTT_TOPIC="${MQTT_TOPIC:-scale/body-composition}"
       cat >> "$CONFIG" <<YAML
   - type: mqtt
     broker_url: "$(yaml_escape "$MQTT_BROKER_URL")"

@@ -118,24 +118,31 @@ export const bleStep: WizardStep = {
             ctx.config.ble!.adapter = undefined;
           }
         } else if (availableAdapters.length === 1) {
-          console.log(
-            `\n  ${info(`Only one adapter found (${availableAdapters[0]}). Using system default.`)}`,
-          );
-          ctx.config.ble!.adapter = undefined;
+          if (existingAdapter) {
+            console.log(
+              `\n  ${info(`Only one adapter found (${availableAdapters[0]}). Keeping existing: ${existingAdapter}`)}`,
+            );
+          } else {
+            console.log(
+              `\n  ${info(`Only one adapter found (${availableAdapters[0]}). Using system default.`)}`,
+            );
+          }
         } else {
+          const defaultValue = existingAdapter ?? '';
           const adapterInput = await ctx.prompts.input(
             'Enter adapter name (e.g., hci0, hci1) or leave empty for default:',
+            ...(defaultValue ? [{ default: defaultValue }] : []),
           );
           const normalized = adapterInput.trim().toLowerCase();
           if (normalized && /^hci\d+$/.test(normalized)) {
             ctx.config.ble!.adapter = normalized;
             console.log(`\n  ${success(`BLE adapter set to: ${normalized}`)}`);
+          } else if (normalized) {
+            console.log(
+              `\n  ${warn(`Invalid adapter name "${adapterInput}". Using system default.`)}`,
+            );
+            ctx.config.ble!.adapter = undefined;
           } else {
-            if (normalized) {
-              console.log(
-                `\n  ${warn(`Invalid adapter name "${adapterInput}". Using system default.`)}`,
-              );
-            }
             ctx.config.ble!.adapter = undefined;
           }
         }

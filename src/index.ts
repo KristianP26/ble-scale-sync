@@ -379,7 +379,12 @@ async function main(): Promise<void> {
   if (isMultiUser) {
     log.info(`Users: ${appConfig.users.map((u) => u.name).join(', ')}`);
   }
-  if (bleAdapter) {
+  if (
+    bleAdapter &&
+    process.platform === 'linux' &&
+    bleHandler !== 'mqtt-proxy' &&
+    !process.env.NOBLE_DRIVER
+  ) {
     log.info(`BLE adapter: ${bleAdapter}`);
   }
   if (SCALE_MAC) {
