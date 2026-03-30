@@ -360,8 +360,8 @@ function broadcastScan(
 export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   if (opts.bleAdapter) {
     bleLog.warn(
-      `ble.adapter='${opts.bleAdapter}' is only supported on Linux (node-ble). ` +
-        `Ignoring on ${process.platform}.`,
+      `ble.adapter='${opts.bleAdapter}' is only supported with node-ble (Linux default). ` +
+        `Ignored when using Noble.`,
     );
   }
 

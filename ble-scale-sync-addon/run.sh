@@ -16,7 +16,8 @@ opt_int() { jq -r ".$1 // $2" "$OPTIONS"; }
 yaml_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
 # Read BLE_ADAPTER early (needed for adapter reset in both modes)
-BLE_ADAPTER=$(opt ble_adapter)
+# Normalize: trim whitespace, lowercase (app schema requires /^hci\d+$/)
+BLE_ADAPTER=$(opt ble_adapter | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 CUSTOM_CONFIG=$(opt_bool custom_config)
 
 # ── Custom config mode ──────────────────────────────────────────────────────
@@ -195,25 +196,29 @@ fi
 # ── Reset Bluetooth adapter ────────────────────────────────────────────────
 
 if command -v btmgmt >/dev/null 2>&1; then
-  ADAPTER_INDEX=0
-  if [ -n "$BLE_ADAPTER" ]; then
-    case "$BLE_ADAPTER" in
-      hci[0-9]*)
-        ADAPTER_INDEX=${BLE_ADAPTER#hci}
-        ;;
-      *)
-        log "WARNING: Invalid BLE adapter '$BLE_ADAPTER', falling back to hci0 for reset"
-        ;;
-    esac
-  fi
-  log "Resetting Bluetooth adapter (hci$ADAPTER_INDEX)..."
-  if btmgmt --index "$ADAPTER_INDEX" power off 2>/dev/null && \
-     btmgmt --index "$ADAPTER_INDEX" power on 2>/dev/null; then
-    log "Bluetooth adapter reset OK"
+  if [ "$CUSTOM_CONFIG" = "true" ] && [ -z "$BLE_ADAPTER" ]; then
+    log "Custom config mode without explicit ble_adapter; skipping Bluetooth adapter reset"
   else
-    log "Bluetooth adapter reset failed (will retry in-app)"
+    ADAPTER_INDEX=0
+    if [ -n "$BLE_ADAPTER" ]; then
+      case "$BLE_ADAPTER" in
+        hci[0-9]*)
+          ADAPTER_INDEX=${BLE_ADAPTER#hci}
+          ;;
+        *)
+          log "WARNING: Invalid BLE adapter '$BLE_ADAPTER', falling back to hci0 for reset"
+          ;;
+      esac
+    fi
+    log "Resetting Bluetooth adapter (hci$ADAPTER_INDEX)..."
+    if btmgmt --index "$ADAPTER_INDEX" power off 2>/dev/null && \
+       btmgmt --index "$ADAPTER_INDEX" power on 2>/dev/null; then
+      log "Bluetooth adapter reset OK"
+    else
+      log "Bluetooth adapter reset failed (will retry in-app)"
+    fi
+    sleep 2
   fi
-  sleep 2
 fi
 
 # ── Start ───────────────────────────────────────────────────────────────────

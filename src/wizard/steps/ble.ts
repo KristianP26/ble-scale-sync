@@ -123,13 +123,17 @@ export const bleStep: WizardStep = {
           );
           ctx.config.ble!.adapter = undefined;
         } else {
-          const adapter = await ctx.prompts.input(
+          const adapterInput = await ctx.prompts.input(
             'Enter adapter name (e.g., hci0, hci1) or leave empty for default:',
           );
-          if (adapter.trim() && /^hci\d+$/.test(adapter.trim())) {
-            ctx.config.ble!.adapter = adapter.trim();
-            console.log(`\n  ${success(`BLE adapter set to: ${adapter.trim()}`)}`);
+          const normalized = adapterInput.trim().toLowerCase();
+          if (normalized && /^hci\d+$/.test(normalized)) {
+            ctx.config.ble!.adapter = normalized;
+            console.log(`\n  ${success(`BLE adapter set to: ${normalized}`)}`);
           } else {
+            if (normalized) {
+              console.log(`\n  ${warn(`Invalid adapter name "${adapterInput}". Using system default.`)}`);
+            }
             ctx.config.ble!.adapter = undefined;
           }
         }

@@ -1,3 +1,4 @@
+# Pin to release version tag at release time (e.g. :1.8.0)
 build_from:
   amd64: ghcr.io/kristianp26/ble-scale-sync:latest
   aarch64: ghcr.io/kristianp26/ble-scale-sync:latest
