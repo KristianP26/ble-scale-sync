@@ -12,8 +12,8 @@ opt() { jq -r ".$1 // empty" "$OPTIONS"; }
 opt_bool() { jq -r ".$1 // false" "$OPTIONS"; }
 opt_int() { jq -r ".$1 // $2" "$OPTIONS"; }
 
-# Escape a string for safe YAML double-quoted output
-yaml_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+# Escape a string for safe YAML double-quoted output (backslash, quotes, CR, LF)
+yaml_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\r/\\r/g' | tr '\n' ' '; }
 
 # Read BLE_ADAPTER early (needed for adapter reset in both modes)
 # Normalize: trim whitespace, lowercase (app schema requires /^hci\d+$/)
@@ -93,6 +93,13 @@ else
 
   USER_SLUG=$(echo "$USER_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
   [ -z "$USER_SLUG" ] && USER_SLUG="default"
+
+  # ── Validate inputs ──────────────────────────────────────────────────
+
+  if [ -z "$USER_BIRTH_DATE" ] || ! printf '%s\n' "$USER_BIRTH_DATE" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
+    log "WARNING: Invalid birth date '$USER_BIRTH_DATE' (expected YYYY-MM-DD). Using 2000-01-01."
+    USER_BIRTH_DATE="2000-01-01"
+  fi
 
   # ── Generate config.yaml ──────────────────────────────────────────────
 
