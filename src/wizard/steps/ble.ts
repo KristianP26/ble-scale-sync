@@ -118,13 +118,23 @@ export const bleStep: WizardStep = {
             ctx.config.ble!.adapter = undefined;
           }
         } else if (availableAdapters.length === 1) {
-          if (existingAdapter) {
+          const onlyAdapter = availableAdapters[0];
+          if (existingAdapter && existingAdapter !== onlyAdapter) {
             console.log(
-              `\n  ${info(`Only one adapter found (${availableAdapters[0]}). Keeping existing: ${existingAdapter}`)}`,
+              `\n  ${warn(`Configured adapter "${existingAdapter}" was not found. Only "${onlyAdapter}" is available.`)}`,
+            );
+            const keep = await ctx.prompts.confirm(`Switch to ${onlyAdapter}?`, { default: true });
+            ctx.config.ble!.adapter = keep ? onlyAdapter : existingAdapter;
+            if (keep) {
+              console.log(`\n  ${success(`BLE adapter set to: ${onlyAdapter}`)}`);
+            }
+          } else if (existingAdapter) {
+            console.log(
+              `\n  ${info(`Only one adapter found (${onlyAdapter}). Keeping existing: ${existingAdapter}`)}`,
             );
           } else {
             console.log(
-              `\n  ${info(`Only one adapter found (${availableAdapters[0]}). Using system default.`)}`,
+              `\n  ${info(`Only one adapter found (${onlyAdapter}). Using system default.`)}`,
             );
           }
         } else {

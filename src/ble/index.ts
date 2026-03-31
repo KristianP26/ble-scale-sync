@@ -135,10 +135,20 @@ export async function scanDevices(
   bleLog.debug(`BLE handler: ${resolveHandlerName(driver)}`);
 
   if (driver === 'abandonware') {
+    if (bleAdapter) {
+      bleLog.warn(
+        `ble.adapter='${bleAdapter}' is only supported with node-ble (Linux default). Ignored when using Noble.`,
+      );
+    }
     const { scanDevices: impl } = await import('./handler-noble-legacy.js');
     return impl(adapters, durationMs);
   }
   if (driver === 'stoprocent') {
+    if (bleAdapter) {
+      bleLog.warn(
+        `ble.adapter='${bleAdapter}' is only supported with node-ble (Linux default). Ignored when using Noble.`,
+      );
+    }
     const { scanDevices: impl } = await import('./handler-noble.js');
     return impl(adapters, durationMs);
   }
@@ -147,6 +157,11 @@ export async function scanDevices(
   if (process.platform === 'linux') {
     const { scanDevices: impl } = await import('./handler-node-ble.js');
     return impl(adapters, durationMs, bleAdapter);
+  }
+  if (bleAdapter) {
+    bleLog.warn(
+      `ble.adapter='${bleAdapter}' is only supported on Linux with node-ble. Ignored on ${process.platform}.`,
+    );
   }
   if (process.platform === 'win32') {
     const { scanDevices: impl } = await import('./handler-noble-legacy.js');

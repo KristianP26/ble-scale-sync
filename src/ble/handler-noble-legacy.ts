@@ -357,12 +357,15 @@ function broadcastScan(
  * Scan for a BLE scale, read weight + impedance, and compute body composition.
  * Uses @abandonware/noble — works on Windows, macOS, and Linux.
  */
+let adapterWarningLogged = false;
+
 export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
-  if (opts.bleAdapter) {
+  if (opts.bleAdapter && !adapterWarningLogged) {
     bleLog.warn(
       `ble.adapter='${opts.bleAdapter}' is only supported with node-ble (Linux default). ` +
         `Ignored when using Noble.`,
     );
+    adapterWarningLogged = true;
   }
 
   const { targetMac, adapters, profile, weightUnit, onLiveData, abortSignal } = opts;

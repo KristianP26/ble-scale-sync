@@ -102,6 +102,14 @@ version: 1
 
 YAML
 
+  # Validate BLE_ADAPTER format before writing to config
+  if [ -n "$BLE_ADAPTER" ]; then
+    if ! printf '%s\n' "$BLE_ADAPTER" | grep -Eq '^hci[0-9]+$'; then
+      log "WARNING: Invalid ble_adapter '$BLE_ADAPTER' (expected hci0, hci1, ...). Ignoring."
+      BLE_ADAPTER=""
+    fi
+  fi
+
   # BLE section (only if scale_mac or adapter is set)
   if [ -n "$SCALE_MAC" ] || [ -n "$BLE_ADAPTER" ]; then
     echo "ble:" >> "$CONFIG"
@@ -202,14 +210,11 @@ if command -v btmgmt >/dev/null 2>&1; then
   else
     ADAPTER_INDEX=0
     if [ -n "$BLE_ADAPTER" ]; then
-      case "$BLE_ADAPTER" in
-        hci[0-9]*)
-          ADAPTER_INDEX=${BLE_ADAPTER#hci}
-          ;;
-        *)
-          log "WARNING: Invalid BLE adapter '$BLE_ADAPTER', falling back to hci0 for reset"
-          ;;
-      esac
+      if printf '%s\n' "$BLE_ADAPTER" | grep -Eq '^hci[0-9]+$'; then
+        ADAPTER_INDEX=${BLE_ADAPTER#hci}
+      else
+        log "WARNING: Invalid BLE adapter '$BLE_ADAPTER', falling back to hci0 for reset"
+      fi
     fi
     log "Resetting Bluetooth adapter (hci$ADAPTER_INDEX)..."
     if btmgmt --index "$ADAPTER_INDEX" power off 2>/dev/null && \
