@@ -84,8 +84,9 @@ export const bleStep: WizardStep = {
       ctx.config.ble.mqtt_proxy = undefined;
     }
 
-    // --- Adapter selection (Linux + auto handler only) ---
-    if (handler === 'auto' && ctx.platform.os === 'linux') {
+    // --- Adapter selection (Linux + auto handler + node-ble only) ---
+    const nobleForced = !!ctx.config.ble!.noble_driver || !!process.env.NOBLE_DRIVER;
+    if (handler === 'auto' && ctx.platform.os === 'linux' && !nobleForced) {
       const existingAdapter = ctx.config.ble!.adapter;
       const wantAdapter = await ctx.prompts.confirm(
         'Do you want to select a specific Bluetooth adapter? (only needed with multiple adapters)',
