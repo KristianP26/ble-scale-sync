@@ -18,6 +18,7 @@ yaml_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 # Read BLE_ADAPTER early (needed for adapter reset in both modes)
 # Normalize: trim whitespace, lowercase (app schema requires /^hci\d+$/)
 BLE_ADAPTER=$(opt ble_adapter | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+RESET_BLUETOOTH=$(opt_bool reset_bluetooth)
 CUSTOM_CONFIG=$(opt_bool custom_config)
 
 # ── Custom config mode ──────────────────────────────────────────────────────
@@ -129,7 +130,7 @@ users:
   - name: "$(yaml_escape "$USER_NAME")"
     slug: $USER_SLUG
     height: $USER_HEIGHT
-    birth_date: "$USER_BIRTH_DATE"
+    birth_date: "$(yaml_escape "$USER_BIRTH_DATE")"
     gender: $USER_GENDER
     is_athlete: $USER_IS_ATHLETE
     weight_range: { min: $USER_WEIGHT_MIN, max: $USER_WEIGHT_MAX }
@@ -204,27 +205,29 @@ fi
 
 # ── Reset Bluetooth adapter ────────────────────────────────────────────────
 
-if command -v btmgmt >/dev/null 2>&1; then
-  if [ "$CUSTOM_CONFIG" = "true" ] && [ -z "$BLE_ADAPTER" ]; then
-    log "Custom config mode without explicit ble_adapter; skipping Bluetooth adapter reset"
-  else
-    ADAPTER_INDEX=0
-    if [ -n "$BLE_ADAPTER" ]; then
-      if printf '%s\n' "$BLE_ADAPTER" | grep -Eq '^hci[0-9]+$'; then
-        ADAPTER_INDEX=${BLE_ADAPTER#hci}
-      else
-        log "WARNING: Invalid BLE adapter '$BLE_ADAPTER', falling back to hci0 for reset"
-      fi
-    fi
-    log "Resetting Bluetooth adapter (hci$ADAPTER_INDEX)..."
-    if btmgmt --index "$ADAPTER_INDEX" power off 2>/dev/null && \
-       btmgmt --index "$ADAPTER_INDEX" power on 2>/dev/null; then
-      log "Bluetooth adapter reset OK"
+if [ "$RESET_BLUETOOTH" != "true" ]; then
+  log "Bluetooth adapter reset disabled (reset_bluetooth: false)"
+elif ! command -v btmgmt >/dev/null 2>&1; then
+  log "btmgmt not found; skipping Bluetooth adapter reset"
+elif [ "$CUSTOM_CONFIG" = "true" ] && [ -z "$BLE_ADAPTER" ]; then
+  log "Custom config mode without explicit ble_adapter; skipping Bluetooth adapter reset"
+else
+  ADAPTER_INDEX=0
+  if [ -n "$BLE_ADAPTER" ]; then
+    if printf '%s\n' "$BLE_ADAPTER" | grep -Eq '^hci[0-9]+$'; then
+      ADAPTER_INDEX=${BLE_ADAPTER#hci}
     else
-      log "Bluetooth adapter reset failed (will retry in-app)"
+      log "WARNING: Invalid BLE adapter '$BLE_ADAPTER', falling back to hci0 for reset"
     fi
-    sleep 2
   fi
+  log "Resetting Bluetooth adapter (hci$ADAPTER_INDEX)..."
+  if btmgmt --index "$ADAPTER_INDEX" power off 2>/dev/null && \
+     btmgmt --index "$ADAPTER_INDEX" power on 2>/dev/null; then
+    log "Bluetooth adapter reset OK"
+  else
+    log "Bluetooth adapter reset failed (will retry in-app)"
+  fi
+  sleep 2
 fi
 
 # ── Start ───────────────────────────────────────────────────────────────────

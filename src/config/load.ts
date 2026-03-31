@@ -76,13 +76,13 @@ export function detectConfigSource(configPath?: string): ConfigSource {
 
 /**
  * Parse and validate BLE_ADAPTER from environment variable.
- * Returns the normalized adapter name or undefined for empty/unset/invalid values.
+ * Returns: valid adapter name (string), null (empty = clear override), or undefined (not set / invalid).
  */
-function validateBleAdapterEnv(): string | undefined {
+function parseBleAdapterEnv(): string | null | undefined {
   const raw = process.env.BLE_ADAPTER;
   if (raw === undefined) return undefined;
   const trimmed = raw.trim();
-  if (trimmed === '') return undefined;
+  if (trimmed === '') return null;
   const adapter = trimmed.toLowerCase();
   if (/^hci\d+$/.test(adapter)) return adapter;
   log.warn(`BLE_ADAPTER='${raw}' is not valid (expected hci0, hci1, ...)`);
@@ -121,21 +121,12 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
   if (process.env.SCALE_MAC !== undefined) {
     ble.scale_mac = process.env.SCALE_MAC;
   }
-  if (process.env.BLE_ADAPTER !== undefined) {
-    const trimmed = process.env.BLE_ADAPTER.trim();
-    if (trimmed === '') {
-      // Empty string clears adapter override (useful in Docker/Compose)
-      ble.adapter = undefined;
-    } else {
-      const adapter = trimmed.toLowerCase();
-      if (/^hci\d+$/.test(adapter)) {
-        ble.adapter = adapter;
-      } else {
-        log.warn(
-          `BLE_ADAPTER='${process.env.BLE_ADAPTER}' is not valid (expected hci0, hci1, ...)`,
-        );
-      }
-    }
+  const adapterResult = parseBleAdapterEnv();
+  if (adapterResult === null) {
+    // Empty string clears adapter override (useful in Docker/Compose)
+    ble.adapter = undefined;
+  } else if (adapterResult !== undefined) {
+    ble.adapter = adapterResult;
   }
   if (process.env.NOBLE_DRIVER !== undefined) {
     const driver = process.env.NOBLE_DRIVER.toLowerCase();
@@ -301,7 +292,7 @@ export function loadEnvConfig(): AppConfig {
       handler: 'auto' as const,
       scale_mac: envConfig.scaleMac ?? null,
       noble_driver: (process.env.NOBLE_DRIVER as 'abandonware' | 'stoprocent') ?? null,
-      adapter: validateBleAdapterEnv() ?? null,
+      adapter: parseBleAdapterEnv() ?? null,
     },
     scale: {
       weight_unit: envConfig.weightUnit,
@@ -404,6 +395,6 @@ export function loadBleConfig(configPath?: string): BleLoadedConfig {
   return {
     scaleMac: process.env.SCALE_MAC || undefined,
     nobleDriver: process.env.NOBLE_DRIVER || undefined,
-    bleAdapter: validateBleAdapterEnv(),
+    bleAdapter: parseBleAdapterEnv() ?? undefined,
   };
 }

@@ -76,6 +76,13 @@ configuration:
   scan_cooldown:
     name: Scan cooldown (seconds)
     description: Seconds to wait between BLE scans in continuous mode (5 to 3600)
+  reset_bluetooth:
+    name: Reset Bluetooth adapter on startup
+    description: >-
+      Power-cycle the Bluetooth adapter when the add-on starts.
+      Helps with BlueZ stability after ungraceful shutdowns.
+      Disable this if other HA Bluetooth integrations lose
+      connectivity when the add-on restarts.
   debug:
     name: Debug logging
     description: Enable verbose BLE debug output in the add-on logs

@@ -71,6 +71,10 @@ See the [full list](https://blescalesync.dev/guide/supported-scales).
 
 ## Troubleshooting
 
+### Bluetooth adapter reset
+
+The add-on power-cycles the Bluetooth adapter on startup to ensure a clean state. This is enabled by default (**Reset Bluetooth adapter on startup**). If you have other HA Bluetooth integrations that lose connectivity when this add-on restarts, disable the option.
+
 ### No scale found
 
 - Make sure your scale is awake (step on it)

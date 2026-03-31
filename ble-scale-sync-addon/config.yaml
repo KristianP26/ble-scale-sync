@@ -43,6 +43,7 @@ options:
   garmin_email: ""
   garmin_password: ""
   scan_cooldown: 30
+  reset_bluetooth: true
   debug: false
   custom_config: false
 
@@ -68,5 +69,6 @@ schema:
   garmin_email: str?
   garmin_password: password?
   scan_cooldown: "int(5,3600)"
+  reset_bluetooth: bool
   debug: bool
   custom_config: bool
