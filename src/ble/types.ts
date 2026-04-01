@@ -30,6 +30,7 @@ export interface ScanOptions {
   abortSignal?: AbortSignal;
   bleHandler?: 'auto' | 'mqtt-proxy';
   mqttProxy?: MqttProxyConfig;
+  bleAdapter?: string;
 }
 
 export interface ScanResult {

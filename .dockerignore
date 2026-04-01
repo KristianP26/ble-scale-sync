@@ -15,6 +15,16 @@ tests
 # Documentation (not needed at runtime)
 *.md
 LICENSE
+docs
+
+# HA Add-on (separate build context)
+ble-scale-sync-addon
+repository.yaml
+
+# Auxiliary directories (not needed at runtime)
+worker
+drivers
+firmware
 
 # Docker files (avoid recursive COPY)
 Dockerfile

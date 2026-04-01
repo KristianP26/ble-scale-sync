@@ -32,6 +32,11 @@ export const BleSchema = z
       .nullable(),
     noble_driver: z.enum(['abandonware', 'stoprocent']).optional().nullable(),
     handler: z.enum(['auto', 'mqtt-proxy']).default('auto'),
+    adapter: z
+      .string()
+      .regex(/^hci\d+$/, 'Must be a Linux HCI adapter name (e.g., hci0, hci1)')
+      .optional()
+      .nullable(),
     mqtt_proxy: MqttProxySchema.optional(),
   })
   .refine((ble) => ble.handler !== 'mqtt-proxy' || ble.mqtt_proxy !== undefined, {

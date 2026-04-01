@@ -47,10 +47,15 @@ function getConnection(): { bluetooth: NodeBle.Bluetooth; destroy: () => void } 
   return persistentConn;
 }
 
-async function getAdapter(): Promise<Adapter> {
+async function getAdapter(bleAdapter?: string): Promise<Adapter> {
   const conn = getConnection();
   if (!persistentAdapter) {
-    persistentAdapter = await conn.bluetooth.defaultAdapter();
+    if (bleAdapter) {
+      bleLog.debug(`Using adapter: ${bleAdapter}`);
+      persistentAdapter = await conn.bluetooth.getAdapter(bleAdapter);
+    } else {
+      persistentAdapter = await conn.bluetooth.defaultAdapter();
+    }
   }
   return persistentAdapter;
 }
@@ -81,6 +86,13 @@ function isStaleConnectionError(err: unknown): boolean {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/** Extract the numeric index from an hci adapter name (e.g., 'hci1' -> 1). */
+function parseHciIndex(adapterName?: string): number {
+  if (!adapterName) return 0;
+  const match = adapterName.match(/^hci(\d+)$/);
+  return match ? Number(match[1]) : 0;
+}
 
 function isDbusConnectionError(err: unknown): boolean {
   const msg = errMsg(err);
@@ -115,7 +127,10 @@ async function stopDiscoveryAndQuiesce(btAdapter: Adapter): Promise<void> {
  * Try to start BlueZ discovery with escalating recovery strategies.
  * Returns the (possibly refreshed) adapter on success, or false if all attempts failed.
  */
-async function startDiscoverySafe(btAdapter: Adapter): Promise<Adapter | false> {
+async function startDiscoverySafe(
+  btAdapter: Adapter,
+  bleAdapter?: string,
+): Promise<Adapter | false> {
   // 1. Normal start
   try {
     await btAdapter.startDiscovery();
@@ -173,10 +188,10 @@ async function startDiscoverySafe(btAdapter: Adapter): Promise<Adapter | false> 
 
   // 4. Kernel-level adapter reset via btmgmt + fresh D-Bus connection
   bleLog.debug('Attempting kernel-level adapter reset via btmgmt...');
-  if (await resetAdapterBtmgmt()) {
+  if (await resetAdapterBtmgmt(parseHciIndex(bleAdapter))) {
     resetConnection();
     try {
-      const freshAdapter = await getAdapter();
+      const freshAdapter = await getAdapter(bleAdapter);
       await freshAdapter.startDiscovery();
       bleLog.debug('Discovery started after btmgmt reset');
       return freshAdapter;
@@ -190,7 +205,7 @@ async function startDiscoverySafe(btAdapter: Adapter): Promise<Adapter | false> 
   if (await resetAdapterRfkill()) {
     resetConnection();
     try {
-      const freshAdapter = await getAdapter();
+      const freshAdapter = await getAdapter(bleAdapter);
       await freshAdapter.startDiscovery();
       bleLog.debug('Discovery started after rfkill reset');
       return freshAdapter;
@@ -204,7 +219,7 @@ async function startDiscoverySafe(btAdapter: Adapter): Promise<Adapter | false> 
   if (await restartBluetoothd()) {
     resetConnection();
     try {
-      const freshAdapter = await getAdapter();
+      const freshAdapter = await getAdapter(bleAdapter);
       await freshAdapter.startDiscovery();
       bleLog.debug('Discovery started after bluetoothd restart');
       return freshAdapter;
@@ -239,6 +254,7 @@ interface ConnectRecoveryContext {
   mac: string;
   initialDevice: Device;
   maxRetries: number;
+  bleAdapter?: string;
 }
 
 /**
@@ -248,7 +264,7 @@ interface ConnectRecoveryContext {
  */
 async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<Device> {
   let { btAdapter } = ctx;
-  const { mac, maxRetries } = ctx;
+  const { mac, maxRetries, bleAdapter } = ctx;
   const formattedMac = formatMac(mac);
   let device = ctx.initialDevice;
 
@@ -287,7 +303,7 @@ async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<Device>
 
       // 4. Re-discover and acquire fresh device reference
       try {
-        const result = await startDiscoverySafe(btAdapter);
+        const result = await startDiscoverySafe(btAdapter, bleAdapter);
         if (result) btAdapter = result;
         device = await withTimeout(
           btAdapter.waitDevice(formattedMac),
@@ -438,7 +454,7 @@ async function buildCharMap(gatt: NodeBle.GattServer): Promise<Map<string, BleCh
  * becomes stale (e.g. bluetoothd restart), it is automatically reset.
  */
 export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
-  const { targetMac, adapters, profile, weightUnit, onLiveData, abortSignal } = opts;
+  const { targetMac, adapters, profile, weightUnit, onLiveData, abortSignal, bleAdapter } = opts;
 
   let device: Device | null = null;
   let btAdapter: Adapter;
@@ -446,14 +462,19 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
 
   try {
     try {
-      btAdapter = await getAdapter();
+      btAdapter = await getAdapter(bleAdapter);
     } catch (err) {
       if (isDbusConnectionError(err)) throw dbusError();
       // Stale connection (e.g. bluetoothd restarted): reset and retry once
       if (isStaleConnectionError(err)) {
         bleLog.debug('D-Bus connection stale, resetting...');
         resetConnection();
-        btAdapter = await getAdapter();
+        btAdapter = await getAdapter(bleAdapter);
+      } else if (bleAdapter) {
+        throw new Error(
+          `Bluetooth adapter '${bleAdapter}' not found. ` +
+            'Check that the adapter exists (hciconfig or btmgmt info).',
+        );
       } else {
         throw err;
       }
@@ -472,7 +493,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       await removeDevice(btAdapter, targetMac);
     }
 
-    const discoveryResult = await startDiscoverySafe(btAdapter);
+    const discoveryResult = await startDiscoverySafe(btAdapter, bleAdapter);
     if (discoveryResult) btAdapter = discoveryResult;
 
     let matchedAdapter: ScaleAdapter;
@@ -528,6 +549,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         mac: targetMac,
         initialDevice: device,
         maxRetries: MAX_CONNECT_RETRIES,
+        bleAdapter,
       });
       bleLog.info('Connected. Discovering services...');
 
@@ -566,6 +588,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         mac: result.mac,
         initialDevice: device,
         maxRetries: MAX_CONNECT_RETRIES,
+        bleAdapter,
       });
       bleLog.info('Connected. Discovering services...');
     }
@@ -636,6 +659,7 @@ export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
 export async function scanDevices(
   adapters: ScaleAdapter[],
   durationMs = 15_000,
+  bleAdapter?: string,
 ): Promise<ScanResult[]> {
   let bluetooth: NodeBle.Bluetooth;
   let destroy: () => void;
@@ -650,9 +674,17 @@ export async function scanDevices(
 
   try {
     try {
-      btAdapter = await bluetooth.defaultAdapter();
+      btAdapter = bleAdapter
+        ? await bluetooth.getAdapter(bleAdapter)
+        : await bluetooth.defaultAdapter();
     } catch (err) {
       if (isDbusConnectionError(err)) throw dbusError();
+      if (bleAdapter) {
+        throw new Error(
+          `Bluetooth adapter '${bleAdapter}' not found. ` +
+            'Check that the adapter exists (hciconfig or btmgmt info).',
+        );
+      }
       throw err;
     }
 
@@ -663,7 +695,7 @@ export async function scanDevices(
       );
     }
 
-    const discoveryResult = await startDiscoverySafe(btAdapter);
+    const discoveryResult = await startDiscoverySafe(btAdapter, bleAdapter);
     if (discoveryResult) btAdapter = discoveryResult;
 
     const seen = new Set<string>();

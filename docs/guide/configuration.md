@@ -50,12 +50,33 @@ If you prefer manual configuration, here's the full reference. See [`config.yaml
 ble:
   scale_mac: 'FF:03:00:13:A1:04'
   # noble_driver: abandonware
+  # adapter: hci1
 ```
 
 | Field | Required | Default | Description |
 |---|---|---|---|
 | `scale_mac` | Recommended | Auto-discovery | MAC address or CoreBluetooth UUID (macOS). Prevents connecting to a neighbor's scale. |
 | `noble_driver` | No | OS default | `abandonware` or `stoprocent` — override the default BLE driver |
+| `adapter` | No | System default | Linux only. Select a specific Bluetooth adapter (e.g., `hci0`, `hci1`). See below. |
+
+::: tip BLE adapter selection (Linux only)
+If your device has multiple Bluetooth adapters, you can choose which one BLE Scale Sync uses. By default, the first adapter (`hci0`) is used.
+
+List your adapters:
+```bash
+hciconfig
+# or
+btmgmt info
+```
+
+For example, a Raspberry Pi with a built-in adapter (`hci0`) and a USB dongle (`hci1`):
+```yaml
+ble:
+  adapter: hci1   # use the USB dongle for scale scanning
+```
+
+This lets you dedicate one adapter to BLE Scale Sync while keeping the other free for other tasks (e.g., Home Assistant Bluetooth proxy). This option is ignored on macOS and Windows, where the OS manages adapter selection.
+:::
 
 ### Scale
 
@@ -164,6 +185,7 @@ These environment variables always override `config.yaml` values, useful for Doc
 | `SCAN_COOLDOWN` | `runtime.scan_cooldown` |
 | `SCALE_MAC` | `ble.scale_mac` |
 | `NOBLE_DRIVER` | `ble.noble_driver` |
+| `BLE_ADAPTER` | `ble.adapter` |
 
 ::: details Legacy .env support
 If `config.yaml` doesn't exist, the app falls back to `.env` configuration. See `.env.example` in the repository. When both files exist, `config.yaml` takes priority.
