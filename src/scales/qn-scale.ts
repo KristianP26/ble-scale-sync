@@ -371,14 +371,13 @@ export class QnScaleAdapter implements ScaleAdapter {
   // ── State machine handlers (fire-and-forget from parseNotification) ─────
 
   /**
-   * Respond to 0x12 (scale info) with AE01 init + 0x13 config.
+   * Respond to 0x12 (scale info) with AE02 subscribe + AE01 init + 0x13 config.
    *
-   * AE01 init is always attempted before 0x13 config. On newer firmware (AE00
-   * service), it wakes up the scale before FFF2 commands are accepted. On older
-   * firmware, the write fails silently (AE01 not in the GATT characteristic map).
+   * The official Renpho app sequence is: AE02 subscribe -> AE01 init -> 0x13.
+   * On Linux, 0x12 can arrive before onConnected() subscribes AE02, so this
+   * method must ensure AE02 is subscribed before sending AE01 init.
    *
-   * This must NOT depend on this.hasAe00 because on Linux, 0x12 can arrive
-   * before onConnected() finishes subscribing to AE02 (BlueZ D-Bus race).
+   * AE01/AE02 writes fail silently on older firmware without AE00 service.
    */
   private async handleScaleInfo(): Promise<void> {
     if (this.configSent) return;
@@ -392,14 +391,26 @@ export class QnScaleAdapter implements ScaleAdapter {
 
     const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-    // AE01 init: wake up the scale's AE00 service before sending FFF2 commands.
-    // Always attempted; fails silently on firmware without AE00.
+    // Step 1: Subscribe AE02 if not already done (may not have happened yet
+    // on Linux where 0x12 arrives before onConnected finishes AE02 subscribe).
+    if (!this.hasAe00 && this.ctx) {
+      try {
+        await this.ctx.subscribe(CHR_AE02);
+        this.hasAe00 = true;
+        bleLog.debug('QN: subscribed to AE02 (from state machine)');
+      } catch {
+        // AE02 not available (older firmware)
+      }
+    }
+
+    // Step 2: AE01 init. Fails silently on firmware without AE00.
     await this.writeAe01([0xfe, 0xdc, 0xba, 0xc0, 0x06, 0x00, 0x02, 0x01, 0x01, 0xef]);
     await wait(200);
 
-    // 0x13 config: [opcode, length, protocolType, unitByte, 0x10, 0x00, 0x00, 0x00, checksum]
-    // byte[3] = unit flag: 0x01 = kg (per openScale QNHandler), 0x02 = lb/st
-    const cmd = [0x13, 0x09, this.seenProtocolType, 0x01, 0x10, 0x00, 0x00, 0x00, 0x00];
+    // Step 3: 0x13 config
+    // byte[3] = unit/config flags. The Renpho app uses 0x08, openScale uses
+    // 0x01 (kg) / 0x02 (lb). Using 0x08 to match the working Renpho app capture.
+    const cmd = [0x13, 0x09, this.seenProtocolType, 0x08, 0x10, 0x00, 0x00, 0x00, 0x00];
     cmd[8] = cmd.reduce((a, b) => a + b, 0) & 0xff;
     await this.writeCmd(cmd);
   }
