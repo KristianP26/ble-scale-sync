@@ -24,13 +24,16 @@ const hex = (data: number[]): string => data.map((b) => b.toString(16).padStart(
  *
  * Some newer firmware (e.g. Renpho ES-CS20M / Elis 1) also exposes an AE00
  * service (AE01 write, AE02 notify) that must be initialized before the scale
- * starts sending notifications on FFF1.
+ * starts sending measurement data on FFF1.
  *
- * The handshake is notification-driven: the scale sends 0x12 (scale info),
- * the client responds with 0x13 (config); the scale sends 0x14 (ready),
- * the client responds with 0x20 (time sync) + A2 (user profile); the scale
- * sends 0x21 (config request), the client responds with A00D frames + 0x22
- * (start measurement). Weight data (0x10 frames) flows after the handshake.
+ * The handshake is notification-driven (matching openScale and the official
+ * Renpho app): the scale sends 0x12 (scale info) when FFF1 CCCD is written,
+ * and each subsequent command is sent in response to a specific frame:
+ *
+ *   0x12 (scale info) -> AE01 init (if AE00) -> 0x13 config
+ *   0x14 (ready ACK)  -> 0x20 time sync + A2 user profile + "pass" auth
+ *   0x21 (config req)  -> A00D history responses + 0x22 start measurement
+ *   0x10 (weight)      -> parse weight + 0x1F acknowledge stable reading
  *
  * 0x10 frame (original format, 10 bytes):
  *   [3-4]   weight (BE uint16, / weightScaleFactor)
@@ -98,6 +101,9 @@ export class QnScaleAdapter implements ScaleAdapter {
   private timeSyncSent = false;
   private historyResponseSent = false;
 
+  /** Fallback timer handle for cancellation when state machine fires normally. */
+  private fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+
   /** Write to FFF2 (write char), fall back to FFE3 (Type 1). */
   private async writeCmd(data: number[]): Promise<void> {
     if (!this.ctx) return;
@@ -127,9 +133,14 @@ export class QnScaleAdapter implements ScaleAdapter {
   /**
    * Multi-step init called after BLE connection and service discovery.
    *
-   * Sends the initial handshake burst for backward compatibility with older
-   * firmware. Newer firmware also needs the notification-driven state machine
-   * in parseNotification() which responds to 0x12, 0x14, and 0x21 frames.
+   * For newer firmware with AE00 service: purely notification-driven. No burst
+   * commands are sent here because they interfere with the state machine,
+   * especially on Linux where BlueZ D-Bus races FFF1 CCCD subscription with
+   * onConnected() (the scale sends 0x12 before onConnected finishes).
+   *
+   * For older firmware without AE00: sends legacy unlock variants on FFF2.
+   * The state machine in parseNotification() will also respond to any 0x12
+   * frames if the scale supports the notification-driven protocol.
    */
   async onConnected(ctx: ConnectionContext): Promise<void> {
     // Reset state for new connection
@@ -140,10 +151,12 @@ export class QnScaleAdapter implements ScaleAdapter {
     this.configSent = false;
     this.timeSyncSent = false;
     this.historyResponseSent = false;
+    if (this.fallbackTimer) {
+      clearTimeout(this.fallbackTimer);
+      this.fallbackTimer = null;
+    }
 
-    const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
-    // Step 1: Subscribe to AE02 notifications if available (newer firmware)
+    // Detect newer firmware by subscribing to AE02 notifications
     try {
       await ctx.subscribe(CHR_AE02);
       this.hasAe00 = true;
@@ -152,88 +165,56 @@ export class QnScaleAdapter implements ScaleAdapter {
       bleLog.debug('QN: AE02 not available (older firmware)');
     }
 
-    // Step 2: Write AE01 init handshake (wakes up FFF1 notifications)
-    // Observed in official Renpho app packet capture:
-    //   FEDC BAC0 0600 02XX 01EF  (XX = session counter)
     if (this.hasAe00) {
-      await this.writeAe01([0xfe, 0xdc, 0xba, 0xc0, 0x06, 0x00, 0x02, 0x01, 0x01, 0xef]);
-      await wait(200);
-    }
-
-    // Step 3: Send all unlock variants (backward compat for older firmware)
-    // Newer firmware uses the state machine (0x12 -> 0x13 with echoed protocol type).
-    const unlocks = [
-      [0x13, 0x09, 0x00, 0x01, 0x01, 0x02],
-      [0x13, 0x09, 0x00, 0x01, 0x10, 0x00, 0x00, 0x00, 0x2d],
-      [0x13, 0x09, 0xff, 0x08, 0x10, 0x00, 0x00, 0x00, 0x33],
-    ];
-    for (const cmd of unlocks) {
-      try {
+      // Newer firmware (Renpho Elis 1 / ES-CS20M): do not send any commands.
+      // FFF1 CCCD write (done by the BLE handler in parallel) triggers the
+      // scale to send 0x12. The state machine in parseNotification() handles
+      // the full handshake: 0x12 -> AE01 init + 0x13, 0x14 -> 0x20 + A2,
+      // 0x21 -> A00D + 0x22.
+      //
+      // Fallback for Linux: if 0x12 is lost due to BlueZ D-Bus race
+      // (notification handler not active when CCCD write triggers 0x12),
+      // run the full handshake after a 2s delay.
+      this.fallbackTimer = setTimeout(() => void this.runFallbackHandshake(), 2000);
+    } else {
+      // Older firmware: send legacy unlock variants on FFF2.
+      // These work with Renpho, Sencor, and generic QN-Scale devices
+      // that don't require the notification-driven handshake.
+      const unlocks = [
+        [0x13, 0x09, 0x00, 0x01, 0x01, 0x02],
+        [0x13, 0x09, 0x00, 0x01, 0x10, 0x00, 0x00, 0x00, 0x2d],
+      ];
+      for (const cmd of unlocks) {
         await this.writeCmd(cmd);
-      } catch {
-        break;
       }
-    }
-    await wait(300);
-
-    // Step 4: Send user profile (0xA2)
-    const age = Math.min(0xff, Math.max(1, ctx.profile.age));
-    const profileCmd = [0xa2, 0x06, 0x01, 0x32, age, 0x00];
-    profileCmd[5] = profileCmd.reduce((a, b) => a + b, 0) & 0xff;
-    try {
-      await this.writeCmd(profileCmd);
-    } catch {
-      // Best-effort
-    }
-
-    // Step 5: Send "pass" on AE01 (authentication handshake)
-    if (this.hasAe00) {
-      await wait(200);
-      await this.writeAe01([0x02, 0x70, 0x61, 0x73, 0x73]);
-      await wait(300);
-    }
-
-    // Step 6: Send start measurement command (0x22)
-    const startCmd = [0x22, 0x06, 0xff, 0x00, 0x03, 0x00];
-    startCmd[5] = startCmd.reduce((a, b) => a + b, 0) & 0xff;
-    try {
-      await this.writeCmd(startCmd);
-    } catch {
-      // Best-effort
-    }
-
-    // Step 7: Fallback for Linux (node-ble / BlueZ D-Bus)
-    // On Linux, FFF1 CCCD subscription runs in parallel with onConnected().
-    // The scale sends 0x12 in response to the CCCD write, but the notification
-    // handler may not be registered yet, so we miss it. Without 0x12 the state
-    // machine never triggers and the scale disconnects after ~25s.
-    // After a 2s delay (by which FFF1 subscription is definitely active),
-    // run the full handshake if the state machine hasn't fired yet.
-    if (this.hasAe00) {
-      setTimeout(() => void this.runFallbackHandshake(), 2000);
     }
   }
 
-  /** Run the full state machine handshake if no 0x12 was received (Linux fallback). */
+  /**
+   * Fallback handshake for Linux node-ble where 0x12 may be lost.
+   * Sends AE01 init first, then the full handshake sequence.
+   */
   private async runFallbackHandshake(): Promise<void> {
     if (!this.ctx) return;
+    this.fallbackTimer = null;
     const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
     if (!this.configSent) {
       this.seenProtocolType = 0xff;
-      bleLog.debug('QN: no scale info received, fallback config with proto=0xFF');
+      bleLog.debug('QN: fallback: no 0x12 received, running handshake with proto=0xFF');
+      // handleScaleInfo sends AE01 init + 0x13 config
       await this.handleScaleInfo();
       await wait(500);
     }
 
     if (!this.timeSyncSent) {
-      bleLog.debug('QN: no ready frame received, fallback time sync + profile');
+      bleLog.debug('QN: fallback: sending time sync + profile');
       await this.handleReady();
       await wait(500);
     }
 
     if (!this.historyResponseSent) {
-      bleLog.debug('QN: no config request received, fallback history + start');
+      bleLog.debug('QN: fallback: sending history + start');
       await this.handleConfigRequest();
     }
   }
@@ -280,9 +261,9 @@ export class QnScaleAdapter implements ScaleAdapter {
    * Parse QN vendor notifications.
    *
    * Implements a notification-driven state machine for the handshake:
-   *   0x12 (scale info) -> send 0x13 config with echoed protocol type
-   *   0x14 (ready ACK)  -> send 0x20 time sync + A2 user profile
-   *   0x21 (config req)  -> send A00D history responses + 0x22 start
+   *   0x12 (scale info) -> AE01 init + 0x13 config with echoed protocol type
+   *   0x14 (ready ACK)  -> 0x20 time sync + A2 user profile + "pass" auth
+   *   0x21 (config req)  -> A00D history responses + 0x22 start
    *   0x10 (weight)      -> parse weight (original or ES-30M format)
    *
    * State machine writes are fire-and-forget (async, not awaited) so they
@@ -387,10 +368,33 @@ export class QnScaleAdapter implements ScaleAdapter {
 
   // ── State machine handlers (fire-and-forget from parseNotification) ─────
 
-  /** Respond to 0x12 (scale info) with 0x13 config using echoed protocol type. */
+  /**
+   * Respond to 0x12 (scale info) with AE01 init + 0x13 config.
+   *
+   * AE01 init must be sent BEFORE 0x13 config on newer firmware. The official
+   * Renpho app sends AE01 init after receiving 0x12. On Linux, this ordering
+   * is critical: if 0x13 arrives before AE01, the scale accepts the handshake
+   * formally but never starts sending weight data.
+   */
   private async handleScaleInfo(): Promise<void> {
     if (this.configSent) return;
     this.configSent = true;
+
+    // Cancel the fallback timer since the state machine is running normally
+    if (this.fallbackTimer) {
+      clearTimeout(this.fallbackTimer);
+      this.fallbackTimer = null;
+    }
+
+    const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+    // AE01 init: wake up the scale's AE00 service before sending FFF2 commands.
+    // Observed in the official Renpho app HCI snoop log.
+    if (this.hasAe00) {
+      await this.writeAe01([0xfe, 0xdc, 0xba, 0xc0, 0x06, 0x00, 0x02, 0x01, 0x01, 0xef]);
+      await wait(200);
+    }
+
     // 0x13 config: [opcode, length, protocolType, unitFlags, 0x10, 0x00, 0x00, 0x00, checksum]
     // byte[3]=0x08 observed in Renpho app packet capture
     const cmd = [0x13, 0x09, this.seenProtocolType, 0x08, 0x10, 0x00, 0x00, 0x00, 0x00];
