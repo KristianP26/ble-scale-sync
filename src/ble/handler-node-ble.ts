@@ -442,6 +442,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
 
   let device: Device | null = null;
   let btAdapter: Adapter;
+  let gattAttempted = false;
 
   try {
     try {
@@ -521,6 +522,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       // often fails with le-connection-abort-by-local while discovery is still active.
       await stopDiscoveryAndQuiesce(btAdapter);
 
+      gattAttempted = true;
       device = await connectWithRecovery({
         btAdapter,
         mac: targetMac,
@@ -558,6 +560,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       // often fails with le-connection-abort-by-local while discovery is still active.
       await stopDiscoveryAndQuiesce(btAdapter);
 
+      gattAttempted = true;
       device = await connectWithRecovery({
         btAdapter,
         mac: result.mac,
@@ -598,11 +601,21 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         /* already disconnected or never connected */
       }
     }
-    // Discovery is intentionally kept running between scan cycles.
-    // Stopping and restarting discovery on every cycle triggers a BlueZ bug
-    // where the Discovering property desyncs from the controller state,
-    // causing permanent "Operation already in progress" errors.
-    // Discovery is only stopped before connecting (via stopDiscoveryAndQuiesce).
+
+    if (gattAttempted) {
+      // After a GATT connection (successful or failed), reset the D-Bus
+      // connection entirely. BlueZ on Broadcom adapters (RPi) can enter a
+      // "zombie discovery" state after connect/disconnect where Discovering=true
+      // but the HCI controller is no longer scanning. Resetting the D-Bus
+      // connection and adapter proxy guarantees a clean state for the next
+      // scan cycle. The quiesce delay prevents orphaned discovery sessions.
+      await sleep(500);
+      resetConnection();
+      bleLog.debug('D-Bus connection reset after GATT operation');
+    }
+    // For idle cycles (no GATT connection), discovery is kept running.
+    // Stopping and restarting discovery on every idle cycle triggers a BlueZ
+    // bug where the Discovering property desyncs from the controller state.
   }
 }
 
