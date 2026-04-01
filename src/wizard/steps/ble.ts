@@ -84,6 +84,83 @@ export const bleStep: WizardStep = {
       ctx.config.ble.mqtt_proxy = undefined;
     }
 
+    // --- Adapter selection (Linux + auto handler + node-ble only) ---
+    const nobleForced = !!ctx.config.ble!.noble_driver || !!process.env.NOBLE_DRIVER;
+    if (handler === 'auto' && ctx.platform.os === 'linux' && !nobleForced) {
+      const existingAdapter = ctx.config.ble!.adapter;
+      const wantAdapter = await ctx.prompts.confirm(
+        'Do you want to select a specific Bluetooth adapter? (only needed with multiple adapters)',
+        { default: !!existingAdapter },
+      );
+
+      if (wantAdapter) {
+        let availableAdapters: string[] = [];
+        try {
+          const NodeBle = await import('node-ble');
+          const { bluetooth, destroy } = NodeBle.default.createBluetooth();
+          try {
+            availableAdapters = await bluetooth.adapters();
+          } finally {
+            destroy();
+          }
+        } catch {
+          // D-Bus not available — fall through to manual entry
+        }
+
+        if (availableAdapters.length > 1) {
+          const choices = availableAdapters.map((a) => ({ name: a, value: a }));
+          choices.push({ name: 'Default (system default)', value: '' });
+
+          const selected = await ctx.prompts.select('Select Bluetooth adapter:', choices);
+          if (selected) {
+            ctx.config.ble!.adapter = selected;
+            console.log(`\n  ${success(`BLE adapter set to: ${selected}`)}`);
+          } else {
+            ctx.config.ble!.adapter = undefined;
+          }
+        } else if (availableAdapters.length === 1) {
+          const onlyAdapter = availableAdapters[0];
+          if (existingAdapter && existingAdapter !== onlyAdapter) {
+            console.log(
+              `\n  ${warn(`Configured adapter "${existingAdapter}" was not found. Only "${onlyAdapter}" is available.`)}`,
+            );
+            const keep = await ctx.prompts.confirm(`Switch to ${onlyAdapter}?`, { default: true });
+            ctx.config.ble!.adapter = keep ? onlyAdapter : existingAdapter;
+            if (keep) {
+              console.log(`\n  ${success(`BLE adapter set to: ${onlyAdapter}`)}`);
+            }
+          } else if (existingAdapter) {
+            console.log(
+              `\n  ${info(`Only one adapter found (${onlyAdapter}). Keeping existing: ${existingAdapter}`)}`,
+            );
+          } else {
+            console.log(
+              `\n  ${info(`Only one adapter found (${onlyAdapter}). Using system default.`)}`,
+            );
+          }
+        } else {
+          const defaultValue = existingAdapter ?? '';
+          const adapterInput = await ctx.prompts.input(
+            'Enter adapter name (e.g., hci0, hci1) or leave empty for default:',
+            ...(defaultValue ? [{ default: defaultValue }] : []),
+          );
+          const normalized = adapterInput.trim().toLowerCase();
+          if (normalized && /^hci\d+$/.test(normalized)) {
+            ctx.config.ble!.adapter = normalized;
+            console.log(`\n  ${success(`BLE adapter set to: ${normalized}`)}`);
+          } else if (normalized) {
+            console.log(
+              `\n  ${warn(`Invalid adapter name "${adapterInput}". Using system default.`)}`,
+            );
+            ctx.config.ble!.adapter = undefined;
+          } else {
+            ctx.config.ble!.adapter = undefined;
+          }
+        }
+      }
+      // When user declines, preserve existing adapter (can be cleared via "Default" option above)
+    }
+
     // --- Scale discovery ---
     for (;;) {
       const choice = await ctx.prompts.select('How do you want to identify your scale?', [
@@ -135,6 +212,7 @@ export const bleStep: WizardStep = {
           15_000,
           ctx.config.ble!.handler,
           ctx.config.ble!.mqtt_proxy,
+          ctx.config.ble!.adapter ?? undefined,
         );
         const recognized = results.filter((r) => r.matchedAdapter);
 

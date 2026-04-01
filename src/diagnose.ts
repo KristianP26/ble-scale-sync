@@ -54,6 +54,9 @@ async function main(): Promise<void> {
   log.info('BLE Diagnostic Tool\n');
   log.info(`Platform:     ${process.platform} (${process.arch})`);
   log.info(`Noble driver: ${driverLabel}`);
+  if (bleConfig.bleAdapter) {
+    log.info(`BLE adapter:  ${bleConfig.bleAdapter} (note: diagnose uses Noble, not node-ble)`);
+  }
   if (scaleMac) {
     log.info(`Target MAC:   ${scaleMac}`);
   } else {

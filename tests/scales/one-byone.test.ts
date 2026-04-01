@@ -31,6 +31,12 @@ describe('OneByoneAdapter', () => {
       expect(adapter.matches(mockPeripheral('Health Scale'))).toBe(true);
     });
 
+    it('does not match Eufy T9148/T9149 (different protocol)', () => {
+      const adapter = makeAdapter();
+      expect(adapter.matches(mockPeripheral('eufy T9149'))).toBe(false);
+      expect(adapter.matches(mockPeripheral('eufy T9148'))).toBe(false);
+    });
+
     it('does not match unrelated name', () => {
       const adapter = makeAdapter();
       expect(adapter.matches(mockPeripheral('Random Scale'))).toBe(false);

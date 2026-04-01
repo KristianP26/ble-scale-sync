@@ -98,14 +98,18 @@ export class QnScaleAdapter implements ScaleAdapter {
       name.includes('sencor');
     if (nameMatch) return true;
 
-    // Fallback: match by QN vendor service UUID for unnamed devices
-    const uuids = (device.serviceUuids || []).map((u) => u.toLowerCase());
-    if (
-      uuids.some(
-        (u) => u === SVC_T1 || u === SVC_T2 || u === uuid16(0xffe0) || u === uuid16(0xfff0),
-      )
-    ) {
-      return true;
+    // Fallback: match by QN vendor service UUID, but only for unnamed devices.
+    // Named devices (e.g. "eufy T9149") should match their own specific adapter
+    // rather than being caught by the generic FFF0/FFE0 UUID check.
+    if (!name) {
+      const uuids = (device.serviceUuids || []).map((u) => u.toLowerCase());
+      if (
+        uuids.some(
+          (u) => u === SVC_T1 || u === SVC_T2 || u === uuid16(0xffe0) || u === uuid16(0xfff0),
+        )
+      ) {
+        return true;
+      }
     }
 
     return false;

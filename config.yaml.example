@@ -16,10 +16,14 @@ version: 1
 #   scale_mac: "FF:03:00:13:A1:04"   # Run "npm run scan" to find yours
 #   noble_driver: abandonware         # "abandonware" | "stoprocent"
 #   handler: auto                     # "auto" | "mqtt-proxy"
+#   adapter: hci0                     # Linux only: select BLE adapter (omit for default)
 #
 # scale_mac: omit for auto-discovery. On macOS, use the CoreBluetooth UUID.
 # noble_driver: default is node-ble (Linux), abandonware (Windows), stoprocent (macOS).
 # handler: "auto" uses local Bluetooth. "mqtt-proxy" uses an ESP32 BLE-to-MQTT bridge.
+# adapter: Linux only — select which Bluetooth adapter to use (e.g., hci1 for a USB dongle).
+#          Run "hciconfig" or "btmgmt info" to list available adapters.
+#          Ignored on macOS/Windows. Omit to use the first adapter (hci0).
 #
 # --- ESP32 MQTT Proxy (when handler: mqtt-proxy) ---
 #   mqtt_proxy:

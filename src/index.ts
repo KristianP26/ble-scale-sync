@@ -54,6 +54,7 @@ if (cliFlags.help) {
   console.log('  SCAN_COOLDOWN    5-3600     — override runtime.scan_cooldown');
   console.log('  SCALE_MAC        MAC/UUID   — override ble.scale_mac');
   console.log('  NOBLE_DRIVER     abandonware/stoprocent — override ble.noble_driver');
+  console.log('  BLE_ADAPTER      hci0/hci1/... — override ble.adapter (Linux only)');
   process.exit(0);
 }
 
@@ -73,6 +74,7 @@ const {
   continuousMode,
   scanCooldownSec,
   bleHandler,
+  bleAdapter,
   mqttProxy,
 } = resolveRuntimeConfig(appConfig);
 
@@ -243,6 +245,7 @@ async function runSingleUserCycle(exporters?: Exporter[]): Promise<boolean> {
     abortSignal: signal,
     bleHandler,
     mqttProxy,
+    bleAdapter,
     onLiveData(reading) {
       const impStr: string = reading.impedance > 0 ? `${reading.impedance} Ohm` : 'Measuring...';
       process.stdout.write(
@@ -354,6 +357,7 @@ async function runMultiUserCycle(): Promise<boolean> {
     abortSignal: signal,
     bleHandler,
     mqttProxy,
+    bleAdapter,
     onLiveData(reading) {
       const impStr: string = reading.impedance > 0 ? `${reading.impedance} Ohm` : 'Measuring...';
       process.stdout.write(
@@ -374,6 +378,14 @@ async function main(): Promise<void> {
   log.info(`\nBLE Scale Sync${dryRun ? ' (dry run)' : ''}${modeLabel}${userLabel}`);
   if (isMultiUser) {
     log.info(`Users: ${appConfig.users.map((u) => u.name).join(', ')}`);
+  }
+  if (
+    bleAdapter &&
+    process.platform === 'linux' &&
+    bleHandler !== 'mqtt-proxy' &&
+    !process.env.NOBLE_DRIVER
+  ) {
+    log.info(`BLE adapter: ${bleAdapter}`);
   }
   if (SCALE_MAC) {
     log.info(`Scanning for scale ${SCALE_MAC}...`);

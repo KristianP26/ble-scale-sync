@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.7.2] - 2026-04-01
+
+### Fixed
+- **QN Scale**: UUID fallback (FFF0/FFE0) no longer matches named devices from other brands. Prevents Eufy, 1byone, and similar scales that share the FFF0 service from being incorrectly identified as QN Scale and failing with "Operation is not supported" ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
+
+### Thanks
+- [@mart1058](https://github.com/mart1058) for reporting the Eufy P2 Pro connection failure ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
+
 ## [1.7.1] - 2026-03-30
 
 ### Fixed
