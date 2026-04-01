@@ -133,14 +133,12 @@ export class QnScaleAdapter implements ScaleAdapter {
   /**
    * Multi-step init called after BLE connection and service discovery.
    *
-   * For newer firmware with AE00 service: purely notification-driven. No burst
-   * commands are sent here because they interfere with the state machine,
-   * especially on Linux where BlueZ D-Bus races FFF1 CCCD subscription with
-   * onConnected() (the scale sends 0x12 before onConnected finishes).
+   * On Linux (node-ble / BlueZ D-Bus), FFF1 CCCD subscription runs in parallel
+   * with onConnected(). The scale may send 0x12 BEFORE this method finishes,
+   * so the state machine handlers (handleScaleInfo, handleReady, etc.) must
+   * not depend on any state set here (especially hasAe00).
    *
    * For older firmware without AE00: sends legacy unlock variants on FFF2.
-   * The state machine in parseNotification() will also respond to any 0x12
-   * frames if the scale supports the notification-driven protocol.
    */
   async onConnected(ctx: ConnectionContext): Promise<void> {
     // Reset state for new connection
@@ -156,7 +154,10 @@ export class QnScaleAdapter implements ScaleAdapter {
       this.fallbackTimer = null;
     }
 
-    // Detect newer firmware by subscribing to AE02 notifications
+    // Try subscribing to AE02 (newer firmware detection).
+    // NOTE: on Linux, 0x12 may arrive before this completes. The state machine
+    // handlers do NOT depend on hasAe00; they always attempt AE01 writes
+    // (which fail silently on older firmware without AE00).
     try {
       await ctx.subscribe(CHR_AE02);
       this.hasAe00 = true;
@@ -165,21 +166,10 @@ export class QnScaleAdapter implements ScaleAdapter {
       bleLog.debug('QN: AE02 not available (older firmware)');
     }
 
-    if (this.hasAe00) {
-      // Newer firmware (Renpho Elis 1 / ES-CS20M): do not send any commands.
-      // FFF1 CCCD write (done by the BLE handler in parallel) triggers the
-      // scale to send 0x12. The state machine in parseNotification() handles
-      // the full handshake: 0x12 -> AE01 init + 0x13, 0x14 -> 0x20 + A2,
-      // 0x21 -> A00D + 0x22.
-      //
-      // Fallback for Linux: if 0x12 is lost due to BlueZ D-Bus race
-      // (notification handler not active when CCCD write triggers 0x12),
-      // run the full handshake after a 2s delay.
-      this.fallbackTimer = setTimeout(() => void this.runFallbackHandshake(), 2000);
-    } else {
+    if (!this.hasAe00) {
       // Older firmware: send legacy unlock variants on FFF2.
       // These work with Renpho, Sencor, and generic QN-Scale devices
-      // that don't require the notification-driven handshake.
+      // that don't use the notification-driven handshake.
       const unlocks = [
         [0x13, 0x09, 0x00, 0x01, 0x01, 0x02],
         [0x13, 0x09, 0x00, 0x01, 0x10, 0x00, 0x00, 0x00, 0x2d],
@@ -187,6 +177,14 @@ export class QnScaleAdapter implements ScaleAdapter {
       for (const cmd of unlocks) {
         await this.writeCmd(cmd);
       }
+    }
+
+    // Fallback timer for both firmware paths. If the state machine fires
+    // normally (0x12 received), handleScaleInfo cancels this timer.
+    // If 0x12 is lost (Linux BlueZ race) or never sent (older firmware
+    // that only responds to unlocks), the fallback runs the full handshake.
+    if (!this.configSent) {
+      this.fallbackTimer = setTimeout(() => void this.runFallbackHandshake(), 2000);
     }
   }
 
@@ -375,10 +373,12 @@ export class QnScaleAdapter implements ScaleAdapter {
   /**
    * Respond to 0x12 (scale info) with AE01 init + 0x13 config.
    *
-   * AE01 init must be sent BEFORE 0x13 config on newer firmware. The official
-   * Renpho app sends AE01 init after receiving 0x12. On Linux, this ordering
-   * is critical: if 0x13 arrives before AE01, the scale accepts the handshake
-   * formally but never starts sending weight data.
+   * AE01 init is always attempted before 0x13 config. On newer firmware (AE00
+   * service), it wakes up the scale before FFF2 commands are accepted. On older
+   * firmware, the write fails silently (AE01 not in the GATT characteristic map).
+   *
+   * This must NOT depend on this.hasAe00 because on Linux, 0x12 can arrive
+   * before onConnected() finishes subscribing to AE02 (BlueZ D-Bus race).
    */
   private async handleScaleInfo(): Promise<void> {
     if (this.configSent) return;
@@ -393,15 +393,13 @@ export class QnScaleAdapter implements ScaleAdapter {
     const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
     // AE01 init: wake up the scale's AE00 service before sending FFF2 commands.
-    // Observed in the official Renpho app HCI snoop log.
-    if (this.hasAe00) {
-      await this.writeAe01([0xfe, 0xdc, 0xba, 0xc0, 0x06, 0x00, 0x02, 0x01, 0x01, 0xef]);
-      await wait(200);
-    }
+    // Always attempted; fails silently on firmware without AE00.
+    await this.writeAe01([0xfe, 0xdc, 0xba, 0xc0, 0x06, 0x00, 0x02, 0x01, 0x01, 0xef]);
+    await wait(200);
 
-    // 0x13 config: [opcode, length, protocolType, unitFlags, 0x10, 0x00, 0x00, 0x00, checksum]
-    // byte[3]=0x08 observed in Renpho app packet capture
-    const cmd = [0x13, 0x09, this.seenProtocolType, 0x08, 0x10, 0x00, 0x00, 0x00, 0x00];
+    // 0x13 config: [opcode, length, protocolType, unitByte, 0x10, 0x00, 0x00, 0x00, checksum]
+    // byte[3] = unit flag: 0x01 = kg (per openScale QNHandler), 0x02 = lb/st
+    const cmd = [0x13, 0x09, this.seenProtocolType, 0x01, 0x10, 0x00, 0x00, 0x00, 0x00];
     cmd[8] = cmd.reduce((a, b) => a + b, 0) & 0xff;
     await this.writeCmd(cmd);
   }
@@ -433,10 +431,8 @@ export class QnScaleAdapter implements ScaleAdapter {
       await this.writeCmd(profileCmd);
     }
 
-    // "pass" authentication on AE01 if AE00 service is available
-    if (this.hasAe00) {
-      await this.writeAe01([0x02, 0x70, 0x61, 0x73, 0x73]);
-    }
+    // "pass" authentication on AE01. Always attempted; fails silently without AE00.
+    await this.writeAe01([0x02, 0x70, 0x61, 0x73, 0x73]);
   }
 
   /** Respond to 0x21 (config request) with A00D history frames + 0x22 start measurement. */
