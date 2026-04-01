@@ -1,0 +1,94 @@
+configuration:
+  scale_mac:
+    name: Scale MAC address
+    description: >-
+      MAC address of your BLE scale (e.g., FF:03:00:13:A1:04).
+      Run the BLE scan from the add-on logs to find it.
+      Leave empty for auto-discovery.
+  ble_adapter:
+    name: Bluetooth adapter
+    description: >-
+      Linux HCI adapter name (e.g., hci0, hci1).
+      Only needed if you have multiple Bluetooth adapters.
+      Leave empty for the system default.
+  user_name:
+    name: User name
+    description: Display name for the user profile
+  user_height:
+    name: Height (cm)
+    description: Height in centimeters (e.g., 183)
+  user_birth_date:
+    name: Birth date
+    description: Date of birth in YYYY-MM-DD format (e.g., 1990-06-15)
+  user_gender:
+    name: Gender
+    description: Biological gender (used for body composition calculation)
+  user_is_athlete:
+    name: Athlete mode
+    description: >-
+      Enable if you exercise regularly (5+ hours/week).
+      Adjusts body composition formulas for athletic builds.
+  user_weight_min:
+    name: Weight range min (kg)
+    description: Minimum expected weight in kg (for user matching)
+  user_weight_max:
+    name: Weight range max (kg)
+    description: Maximum expected weight in kg (for user matching)
+  mqtt_enabled:
+    name: Enable MQTT
+    description: Export measurements to an MQTT broker with Home Assistant auto-discovery
+  mqtt_auto:
+    name: Auto-detect MQTT broker
+    description: >-
+      Automatically use the Mosquitto add-on broker.
+      Disable to enter broker details manually.
+  mqtt_broker_url:
+    name: MQTT broker URL
+    description: >-
+      MQTT broker URL (e.g., mqtt://192.168.1.10:1883).
+      Only used when auto-detect is disabled.
+  mqtt_username:
+    name: MQTT username
+    description: MQTT broker username (only when auto-detect is disabled)
+  mqtt_password:
+    name: MQTT password
+    description: MQTT broker password (only when auto-detect is disabled)
+  mqtt_topic:
+    name: MQTT topic
+    description: Base topic for publishing measurements
+  mqtt_ha_discovery:
+    name: HA auto-discovery
+    description: Publish Home Assistant MQTT discovery messages for automatic sensor creation
+  mqtt_ha_device_name:
+    name: HA device name
+    description: Device name shown in Home Assistant
+  garmin_enabled:
+    name: Enable Garmin Connect
+    description: >-
+      Upload measurements to Garmin Connect.
+      After enabling, run Garmin setup from the add-on terminal.
+  garmin_email:
+    name: Garmin email
+    description: Garmin Connect account email
+  garmin_password:
+    name: Garmin password
+    description: Garmin Connect account password
+  scan_cooldown:
+    name: Scan cooldown (seconds)
+    description: Seconds to wait between BLE scans in continuous mode (5 to 3600)
+  reset_bluetooth:
+    name: Reset Bluetooth adapter on startup
+    description: >-
+      Power-cycle the Bluetooth adapter when the add-on starts.
+      Helps with BlueZ stability after ungraceful shutdowns.
+      Disable this if other HA Bluetooth integrations lose
+      connectivity when the add-on restarts.
+  debug:
+    name: Debug logging
+    description: Enable verbose BLE debug output in the add-on logs
+  custom_config:
+    name: Use custom config.yaml
+    description: >-
+      Use a custom config.yaml file from /share/ble-scale-sync/config.yaml
+      instead of generating one from the options above.
+      For advanced users who need multi-user support or additional exporters.

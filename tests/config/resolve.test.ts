@@ -162,6 +162,26 @@ describe('resolveRuntimeConfig', () => {
       topic_prefix: 'ble-proxy',
     });
   });
+
+  it('extracts bleAdapter from ble config', () => {
+    const config = {
+      ...BASE_CONFIG,
+      ble: { ...BASE_CONFIG.ble, adapter: 'hci1' },
+    };
+    const result = resolveRuntimeConfig(config);
+    expect(result.bleAdapter).toBe('hci1');
+  });
+
+  it('returns undefined bleAdapter when not configured', () => {
+    const result = resolveRuntimeConfig(BASE_CONFIG);
+    expect(result.bleAdapter).toBeUndefined();
+  });
+
+  it('returns undefined bleAdapter when ble is undefined', () => {
+    const config = { ...BASE_CONFIG, ble: undefined };
+    const result = resolveRuntimeConfig(config);
+    expect(result.bleAdapter).toBeUndefined();
+  });
 });
 
 // --- resolveExportersForUser ---

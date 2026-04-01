@@ -51,6 +51,7 @@ export interface ResolvedRuntimeConfig {
   continuousMode: boolean;
   scanCooldownSec: number;
   bleHandler: 'auto' | 'mqtt-proxy';
+  bleAdapter?: string;
   mqttProxy?: MqttProxyConfig;
 }
 
@@ -69,6 +70,7 @@ export function resolveRuntimeConfig(config: AppConfig): ResolvedRuntimeConfig {
     continuousMode: config.runtime?.continuous_mode ?? false,
     scanCooldownSec: config.runtime?.scan_cooldown ?? 30,
     bleHandler: config.ble?.handler ?? 'auto',
+    bleAdapter: config.ble?.adapter ?? undefined,
     mqttProxy: config.ble?.mqtt_proxy ?? undefined,
   };
 }

@@ -21,6 +21,17 @@ If you can't have a Pi next to your scale, a cheap **ESP32 proxy** can sit nearb
 
 ## Quick Start
 
+### Home Assistant Add-on
+
+[![Add repository to HA](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FKristianP26%2Fble-scale-sync)
+
+1. Click the button above (or add `https://github.com/KristianP26/ble-scale-sync` as an add-on repository)
+2. Install **BLE Scale Sync** from the add-on store
+3. Configure your scale MAC, user profile, and MQTT settings
+4. Start the add-on
+
+MQTT auto-detects the Mosquitto add-on. Sensors appear in HA automatically.
+
 ### Docker (Linux)
 
 ```bash
@@ -61,6 +72,7 @@ Requires Node.js v20.19+ and a BLE adapter. See the **[full install guide](https
 - **[Interactive setup wizard](https://blescalesync.dev/guide/configuration)** — scale discovery, exporter config, connectivity tests
 - **[BLE diagnostic tool](https://blescalesync.dev/troubleshooting)** — `npm run diagnose` for detailed BLE troubleshooting
 - **[ESP32 BLE proxy](https://blescalesync.dev/guide/esp32-proxy)** — use a remote ESP32 as a BLE radio over MQTT, with simplified Docker deployment and optional display
+- **BLE adapter selection** — `ble.adapter: hci1` for multi-adapter setups (Linux)
 - **Broadcast mode** — supports non-connectable scales that only advertise weight via BLE advertisements
 - **Update check** — optional, anonymous version check after each measurement (opt-out via `update_check: false`)
 - **Cross-platform** — Linux (Docker + native), macOS, Windows
