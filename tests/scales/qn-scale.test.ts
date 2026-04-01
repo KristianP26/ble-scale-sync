@@ -79,10 +79,16 @@ describe('QnScaleAdapter', () => {
       expect(adapter.matches(p)).toBe(false);
     });
 
-    it('matches unknown name with QN UUID (UUID fallback)', () => {
+    it('does not match named device by UUID alone (prevents false positives)', () => {
       const adapter = makeAdapter();
-      const p = mockPeripheral('Random Scale', ['fff0']);
-      expect(adapter.matches(p)).toBe(true);
+      const p = mockPeripheral('eufy T9149', ['fff0']);
+      expect(adapter.matches(p)).toBe(false);
+    });
+
+    it('UUID fallback only applies to unnamed devices', () => {
+      const adapter = makeAdapter();
+      expect(adapter.matches(mockPeripheral('', ['fff0']))).toBe(true);
+      expect(adapter.matches(mockPeripheral('Random Scale', ['fff0']))).toBe(false);
     });
 
     it('name matching is case-insensitive', () => {

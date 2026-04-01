@@ -7,7 +7,14 @@ description: Version history for BLE Scale Sync.
 
 All notable changes to this project are documented here. Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## v1.7.1 <Badge type="tip" text="latest" /> {#v1-7-1}
+## v1.7.2 <Badge type="tip" text="latest" /> {#v1-7-2}
+
+_2026-04-01_
+
+### Fixed
+- **QN Scale**: UUID fallback (FFF0/FFE0) no longer matches named devices from other brands. Prevents Eufy, 1byone, and similar scales that share the FFF0 service from being incorrectly identified as QN Scale ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
+
+## v1.7.1 {#v1-7-1}
 
 _2026-03-30_
 
