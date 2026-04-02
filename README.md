@@ -45,7 +45,8 @@ docker run --rm -it --network host --cap-add NET_ADMIN --cap-add NET_RAW \
 # Run (continuous mode, auto-restart)
 docker run -d --restart unless-stopped --network host \
   --cap-add NET_ADMIN --cap-add NET_RAW \
-  --group-add 112 -v /var/run/dbus:/var/run/dbus:ro \
+  --group-add 112 --device /dev/rfkill \
+  -v /var/run/dbus:/var/run/dbus:ro \
   -v ./config.yaml:/app/config.yaml:ro \
   -v ./garmin-tokens:/app/garmin-tokens:ro \
   -e CONTINUOUS_MODE=true \

@@ -122,3 +122,21 @@ getent group bluetooth | cut -d: -f3
 ```
 
 Common values: `112` (Debian/Ubuntu), `108` (Arch).
+
+### BLE discovery stops working after hours
+
+BlueZ can get into a stuck state where discovery reports "Operation already in progress" but cannot be stopped or restarted. This is a [known BlueZ bug](https://github.com/bluez/bluez/issues/807) that affects long-running containers, especially on Raspberry Pi with the built-in Broadcom adapter.
+
+The app has 6 escalating recovery tiers that handle this automatically. To enable the most effective recovery, add `/dev/rfkill` access to your container:
+
+```yaml
+devices:
+  - /dev/rfkill:/dev/rfkill
+```
+
+On the host, you can also verify Bluetooth is healthy:
+
+```bash
+bluetoothctl show | grep Discovering
+sudo systemctl restart bluetooth   # manual recovery
+```

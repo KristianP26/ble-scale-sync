@@ -16,6 +16,10 @@ services:
     group_add:
       - '112'
 
+    # rfkill device access enables deeper BLE recovery when BlueZ gets stuck
+    devices:
+      - /dev/rfkill:/dev/rfkill
+
     volumes:
       # Your config file — rw so the app can update last_known_weight
       - ./config.yaml:/app/config.yaml
