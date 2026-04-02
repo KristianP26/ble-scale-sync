@@ -28,8 +28,8 @@ case "$CMD" in
     exec node dist/scan.js
     ;;
   diagnose)
-    reset_bt_adapter
     shift
+    reset_bt_adapter
     exec node dist/diagnose.js "$@"
     ;;
   validate)
@@ -48,7 +48,7 @@ case "$CMD" in
     fi
     ;;
   help|--help|-h)
-    echo "BLE Scale Sync — Docker Commands"
+    echo "BLE Scale Sync - Docker Commands"
     echo ""
     echo "Usage: docker run [options] ghcr.io/kristianp26/ble-scale-sync [command]"
     echo ""
@@ -56,7 +56,7 @@ case "$CMD" in
     echo "  start                         Run the main sync flow (default)"
     echo "  setup                         Interactive setup wizard"
     echo "  scan                          Discover nearby BLE devices"
-    echo "  diagnose [MAC]                BLE diagnostic tool (services, characteristics)"
+    echo "  diagnose [MAC]                BLE diagnostic tool (services, characteristics, flags)"
     echo "  validate                      Validate config.yaml"
     echo "  setup-garmin                  Garmin auth (env vars: GARMIN_EMAIL, GARMIN_PASSWORD)"
     echo "  setup-garmin --user <name>    Garmin auth for a specific user from config.yaml"

@@ -7,7 +7,14 @@ description: Version history for BLE Scale Sync.
 
 All notable changes to this project are documented here. Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## v1.7.2 <Badge type="tip" text="latest" /> {#v1-7-2}
+## v1.7.3 <Badge type="tip" text="latest" /> {#v1-7-3}
+
+_2026-04-02_
+
+### Fixed
+- **Docker**: `diagnose` command was missing from the entrypoint, causing "exec: diagnose: not found" when running `docker run ... diagnose <MAC>` ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
+
+## v1.7.2 {#v1-7-2}
 
 _2026-04-01_
 
