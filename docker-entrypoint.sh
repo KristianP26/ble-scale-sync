@@ -27,13 +27,13 @@ case "$CMD" in
     reset_bt_adapter
     exec node dist/scan.js
     ;;
-  validate)
-    exec node dist/config/validate-cli.js
-    ;;
   diagnose)
     shift
     reset_bt_adapter
     exec node dist/diagnose.js "$@"
+    ;;
+  validate)
+    exec node dist/config/validate-cli.js
     ;;
   setup-garmin)
     shift
