@@ -408,9 +408,9 @@ export class QnScaleAdapter implements ScaleAdapter {
     await wait(200);
 
     // Step 3: 0x13 config
-    // byte[3] = unit/config flags. The Renpho app uses 0x08, openScale uses
-    // 0x01 (kg) / 0x02 (lb). Using 0x08 to match the working Renpho app capture.
-    const cmd = [0x13, 0x09, this.seenProtocolType, 0x08, 0x10, 0x00, 0x00, 0x00, 0x00];
+    // byte[3] = unit flag: 0x01 (kg) or 0x02 (lb) per openScale QNHandler.
+    // The Renpho app uses 0x08 which also works but switches the scale display to lb.
+    const cmd = [0x13, 0x09, this.seenProtocolType, 0x01, 0x10, 0x00, 0x00, 0x00, 0x00];
     cmd[8] = cmd.reduce((a, b) => a + b, 0) & 0xff;
     await this.writeCmd(cmd);
   }
