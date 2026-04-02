@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.7.3] - 2026-04-02
+
+### Fixed
+- **Docker**: `diagnose` command was missing from the entrypoint, causing "exec: diagnose: not found" when running `docker run ... diagnose <MAC>` ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
+
+### Thanks
+- [@mart1058](https://github.com/mart1058) for reporting the missing Docker diagnose command ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
+
 ## [1.7.2] - 2026-04-01
 
 ### Fixed
