@@ -7,7 +7,17 @@ description: Version history for BLE Scale Sync.
 
 All notable changes to this project are documented here. Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## v1.7.3 <Badge type="tip" text="latest" /> {#v1-7-3}
+## v1.7.4 <Badge type="tip" text="latest" /> {#v1-7-4}
+
+_2026-04-02_
+
+### Fixed
+- **QN Scale**: rewrote adapter as a notification-driven state machine for newer firmware (Renpho Elis 1, ES-CS20M) that requires an AE00 service handshake before measurement data flows ([#75](https://github.com/KristianP26/ble-scale-sync/issues/75), [#84](https://github.com/KristianP26/ble-scale-sync/issues/84))
+- **QN Scale**: added ES-30M weight frame format detection (different byte layout for weight and impedance)
+- **QN Scale**: 0x13 config byte now sends 0x01 (kg) instead of 0x08, which was switching the scale display to lb
+- **QN Scale**: fallback timer for Linux (BlueZ D-Bus) where the initial 0x12 frame may be lost
+
+## v1.7.3 {#v1-7-3}
 
 _2026-04-02_
 
