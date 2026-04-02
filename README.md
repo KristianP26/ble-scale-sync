@@ -21,17 +21,6 @@ If you can't have a Pi next to your scale, a cheap **ESP32 proxy** can sit nearb
 
 ## Quick Start
 
-### Home Assistant Add-on
-
-[![Add repository to HA](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FKristianP26%2Fble-scale-sync)
-
-1. Click the button above (or add `https://github.com/KristianP26/ble-scale-sync` as an add-on repository)
-2. Install **BLE Scale Sync** from the add-on store
-3. Configure your scale MAC, user profile, and MQTT settings
-4. Start the add-on
-
-MQTT auto-detects the Mosquitto add-on. Sensors appear in HA automatically.
-
 ### Docker (Linux)
 
 ```bash
