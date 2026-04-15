@@ -11,9 +11,20 @@ head:
 
 BLE Scale Sync runs on any device with BLE support — Linux (including Raspberry Pi), macOS, and Windows. If your server has no Bluetooth adapter, you can use a cheap [ESP32 as a remote BLE radio](#esp32-proxy) over WiFi.
 
-::: tip Running on Home Assistant?
-There is a dedicated [Home Assistant Add-on](./home-assistant-addon) with UI-driven configuration, Mosquitto auto-detection, and Garmin token bootstrap. It is the easiest path on Home Assistant OS.
-:::
+## Home Assistant Add-on {#home-assistant-addon}
+
+The easiest path on Home Assistant OS or Supervised. Install in two clicks, configure through the UI, and every metric shows up automatically as an MQTT auto-discovery sensor.
+
+1. **Settings** > **Add-ons** > **Add-on Store** > three-dot menu > **Repositories**
+2. Add the repository URL:
+
+   ```
+   https://github.com/KristianP26/ble-scale-sync
+   ```
+
+3. Refresh the store, install **BLE Scale Sync**, fill in your user profile on the **Configuration** tab, then start it from the **Info** tab.
+
+See the [Home Assistant Add-on guide](./home-assistant-addon) for the full option reference, Garmin setup (including MFA), custom config mode, and troubleshooting.
 
 ## Docker (Linux only) {#docker}
 

@@ -46,16 +46,16 @@ features:
     details: Runs natively on Linux, macOS & Windows. Docker images available for Linux.
     link: /guide/getting-started
     linkText: Install guide
+  - icon: "\uD83C\uDFE0"
+    title: Home Assistant Add-on
+    details: Two-click install in HA OS / Supervised. UI-driven config, Mosquitto auto-detection for HA auto-discovery, and Garmin token bootstrap on first start.
+    link: /guide/home-assistant-addon
+    linkText: Add-on guide
   - icon: "\uD83D\uDCE1"
     title: ESP32 BLE Proxy
     details: Use a cheap ESP32 as a remote Bluetooth radio over MQTT. No BLE adapter needed on the server. Optional display board for live status.
     link: /guide/esp32-proxy
     linkText: Proxy setup guide
-  - icon: "\uD83E\uDDD9"
-    title: Setup Wizard
-    details: Interactive CLI wizard that discovers scales, configures exporters, tests connectivity, and generates your config.yaml.
-    link: /guide/configuration
-    linkText: Configuration guide
   - icon: "\uD83D\uDD12"
     title: Private & Self-Hosted
     details: Your data stays on your device. No vendor cloud, no account, no tracking. Fully open source.
@@ -65,7 +65,16 @@ features:
 
 ## Quick Start
 
-### Option 1: Docker (Linux)
+### Option 1: Home Assistant Add-on
+
+Running Home Assistant OS or Supervised? Install the add-on in two clicks and skip the CLI entirely.
+
+1. **Settings** > **Add-ons** > **Add-on Store** > three-dot menu > **Repositories**
+2. Add `https://github.com/KristianP26/ble-scale-sync` and install **BLE Scale Sync**
+
+The add-on handles config through the UI, auto-detects the Mosquitto broker for Home Assistant auto-discovery, and bootstraps Garmin tokens on first start. See the [Home Assistant Add-on guide](/guide/home-assistant-addon) for the full option reference, MFA workaround, and custom config mode.
+
+### Option 2: Docker (Linux)
 
 ```bash
 # Configure
@@ -87,7 +96,7 @@ docker run -d --restart unless-stopped --network host \
 
 Ideal for Raspberry Pi and headless servers. Your data never leaves your network.
 
-### Option 2: Native (Linux, macOS, Windows)
+### Option 3: Native (Linux, macOS, Windows)
 
 ```bash
 git clone https://github.com/KristianP26/ble-scale-sync.git

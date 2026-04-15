@@ -21,6 +21,15 @@ If you can't have a Pi next to your scale, a cheap **ESP32 proxy** can sit nearb
 
 ## Quick Start
 
+### Home Assistant Add-on
+
+If you run Home Assistant OS or Supervised, install the add-on in two clicks:
+
+1. **Settings** > **Add-ons** > **Add-on Store** > three-dot menu > **Repositories**
+2. Add `https://github.com/KristianP26/ble-scale-sync` and install **BLE Scale Sync**
+
+The add-on handles config through the UI, auto-detects the Mosquitto broker for Home Assistant auto-discovery, and bootstraps Garmin tokens on first start. See the [Home Assistant Add-on guide](https://blescalesync.dev/guide/home-assistant-addon) for the full option reference, MFA workaround, and custom config mode.
+
 ### Docker (Linux)
 
 ```bash
@@ -60,6 +69,7 @@ Requires Node.js v20.19+ and a BLE adapter. See the **[full install guide](https
 - **[Multi-user](https://blescalesync.dev/multi-user)** — automatic weight-based identification with per-user exporters
 - **[Interactive setup wizard](https://blescalesync.dev/guide/configuration)** — scale discovery, exporter config, connectivity tests
 - **[BLE diagnostic tool](https://blescalesync.dev/troubleshooting)** — `npm run diagnose` for detailed BLE troubleshooting
+- **[Home Assistant Add-on](https://blescalesync.dev/guide/home-assistant-addon)** — two-click install with MQTT auto-discovery, UI-driven config, Garmin token bootstrap, and MFA workaround
 - **[ESP32 BLE proxy](https://blescalesync.dev/guide/esp32-proxy)** — use a remote ESP32 as a BLE radio over MQTT, with simplified Docker deployment and optional display
 - **BLE adapter selection** — `ble.adapter: hci1` for multi-adapter setups (Linux)
 - **Broadcast mode** — supports non-connectable scales that only advertise weight via BLE advertisements
