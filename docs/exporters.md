@@ -91,6 +91,10 @@ Garmin may block requests from cloud/VPN IPs. If authentication fails, try from 
 
 Publishes body composition as JSON to an MQTT broker. **Home Assistant auto-discovery** is enabled by default — all 10 metrics appear as sensors grouped under a single device, with availability tracking (LWT) and display precision per metric.
 
+::: tip Home Assistant users
+If you run Home Assistant OS or Supervised, the [Home Assistant Add-on](./guide/home-assistant-addon) auto-detects the Mosquitto broker through the Supervisor API, so you do not need to wire MQTT manually.
+:::
+
 | Field | Required | Default | Description |
 |---|---|---|---|
 | `broker_url` | Yes | — | `mqtt://host:1883` or `mqtts://` for TLS |

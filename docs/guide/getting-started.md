@@ -11,6 +11,10 @@ head:
 
 BLE Scale Sync runs on any device with BLE support — Linux (including Raspberry Pi), macOS, and Windows. If your server has no Bluetooth adapter, you can use a cheap [ESP32 as a remote BLE radio](#esp32-proxy) over WiFi.
 
+::: tip Running on Home Assistant?
+There is a dedicated [Home Assistant Add-on](./home-assistant-addon) with UI-driven configuration, Mosquitto auto-detection, and Garmin token bootstrap. It is the easiest path on Home Assistant OS.
+:::
+
 ## Docker (Linux only) {#docker}
 
 ::: warning Linux only

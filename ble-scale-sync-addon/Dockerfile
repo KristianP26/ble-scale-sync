@@ -9,6 +9,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY run.sh /app/run.sh
-RUN chmod +x /app/run.sh
+COPY merge_last_weights.py /app/merge_last_weights.py
+RUN chmod +x /app/run.sh /app/merge_last_weights.py
 
 ENTRYPOINT ["tini", "--", "/app/run.sh"]

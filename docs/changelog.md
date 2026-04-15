@@ -7,6 +7,13 @@ description: Version history for BLE Scale Sync.
 
 All notable changes to this project are documented here. Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## Unreleased {#unreleased}
+
+### Added
+- **HA Add-on**: `weight_unit` and `height_unit` exposed as add-on options (kg/lbs, cm/in), no longer hardcoded
+- **HA Add-on**: `last_known_weight` persists across restarts. Runtime config lives at `/data/config.yaml`; a small Python helper merges preserved per-user weights into the freshly generated config on every startup
+- **Docs**: new [Home Assistant Add-on guide](/guide/home-assistant-addon) with install, configuration reference, MQTT auto-detection, Garmin setup, MFA workaround, custom config mode, and troubleshooting
+
 ## v1.7.5 <Badge type="tip" text="latest" /> {#v1-7-5}
 
 _2026-04-15_

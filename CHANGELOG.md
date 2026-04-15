@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- **HA Add-on**: `weight_unit` and `height_unit` are now exposed as add-on options (kg/lbs, cm/in). Previously hardcoded to metric regardless of user preference
+- **HA Add-on**: `last_known_weight` now persists across add-on restarts. The runtime config lives at `/data/config.yaml` and `merge_last_weights.py` copies preserved per-user weights from the previous run into the freshly generated config on every startup
+- **Docs**: new [Home Assistant Add-on guide](https://blescalesync.dev/guide/home-assistant-addon) covering install, configuration reference, MQTT auto-detection, Garmin setup including the MFA workaround, custom config mode, persistence, and troubleshooting. Linked from Getting Started and the MQTT exporter reference
+
 ## [1.7.5] - 2026-04-15
 
 ### Fixed
