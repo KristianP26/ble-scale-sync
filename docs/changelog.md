@@ -7,6 +7,18 @@ description: Version history for BLE Scale Sync.
 
 All notable changes to this project are documented here. Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## Unreleased {#unreleased}
+
+### Fixed
+- **BlueZ zombie discovery** on Raspberry Pi (Broadcom adapter) in continuous Docker mode. After every GATT connection, the app now resets the D-Bus client and runs a preemptive `btmgmt` power-cycle on the HCI controller, preventing the `Discovering=true` but `LE scan not running` state that was breaking scans after 2-3 measurements ([#80](https://github.com/KristianP26/ble-scale-sync/issues/80), [bluez/bluez#807](https://github.com/bluez/bluez/issues/807))
+
+### Changed
+- **Docker**: `docker-compose.example.yml` now maps `/dev/rfkill` so Tier 5 BLE recovery (rfkill block/unblock) is available to existing users
+- **Docs**: troubleshooting page gained a dedicated BlueZ zombie discovery section with the `NOBLE_DRIVER=stoprocent` escape hatch
+
+### Thanks
+- [@marcelorodrigo](https://github.com/marcelorodrigo) for extensive on-device testing and the detailed logs that isolated the controller-level zombie state ([#80](https://github.com/KristianP26/ble-scale-sync/issues/80))
+
 ## v1.7.2 <Badge type="tip" text="latest" /> {#v1-7-2}
 
 _2026-04-01_

@@ -627,14 +627,20 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
 
     if (gattAttempted) {
       // After a GATT connection (successful or failed), reset the D-Bus
-      // connection entirely. BlueZ on Broadcom adapters (RPi) can enter a
-      // "zombie discovery" state after connect/disconnect where Discovering=true
-      // but the HCI controller is no longer scanning. Resetting the D-Bus
-      // connection and adapter proxy guarantees a clean state for the next
-      // scan cycle. The quiesce delay prevents orphaned discovery sessions.
+      // connection AND power-cycle the HCI controller. BlueZ on Broadcom
+      // adapters (RPi) enters a "zombie discovery" state after a few
+      // connect/disconnect cycles: Discovering=true, fresh startDiscovery()
+      // succeeds, but the controller is no longer running LE scan. D-Bus
+      // reset alone is insufficient because bluetoothd's controller-state
+      // tracking survives across client reconnects. btmgmt power off/on
+      // clears the zombie at the kernel level. See bluez/bluez#807,
+      // bluez/bluer#47.
       await sleep(500);
       resetConnection();
       bleLog.debug('D-Bus connection reset after GATT operation');
+      if (await resetAdapterBtmgmt(parseHciIndex(bleAdapter))) {
+        bleLog.debug('Preemptive btmgmt reset after GATT');
+      }
     }
     // For idle cycles (no GATT connection), discovery is kept running.
     // Stopping and restarting discovery on every idle cycle triggers a BlueZ
