@@ -47,9 +47,24 @@ To upload measurements to Garmin Connect:
 1. Enable **Garmin Connect** in the configuration
 2. Enter your Garmin email and password
 3. Start the add-on
-4. If Garmin requires 2FA, check the add-on logs for the prompt
 
-Garmin auth tokens are stored persistently in the add-on data directory.
+On first start the add-on authenticates with Garmin and stores the OAuth tokens under `/data/garmin-tokens` inside the container. Subsequent runs reuse those tokens, so your password is only used once.
+
+### If your Garmin account uses MFA
+
+Home Assistant add-ons run without an interactive terminal, so the add-on cannot prompt for a 2FA code. If your account has MFA enabled:
+
+1. On a laptop or desktop, clone the repo and run:
+   ```bash
+   python3 garmin-scripts/setup_garmin.py
+   ```
+   Enter your email, password, and MFA code when prompted. This writes `oauth1_token.json` and `oauth2_token.json` to `~/.garmin_tokens/`.
+2. Copy those two files into `/share/ble-scale-sync/garmin-tokens/` on the Home Assistant host (use the Samba or File editor add-on).
+3. Restart the BLE Scale Sync add-on. On startup it detects the pre-generated tokens and imports them into `/data/garmin-tokens/`.
+
+If Garmin also blocks cloud or residential proxy IPs, the same workflow applies: authenticate from a trusted network, then import the tokens.
+
+If you disable Garmin in the add-on UI, cached tokens are left in place so you can turn it back on without re-authenticating.
 
 ## Advanced: Custom Config
 

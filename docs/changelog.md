@@ -7,7 +7,21 @@ description: Version history for BLE Scale Sync.
 
 All notable changes to this project are documented here. Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## v1.7.4 <Badge type="tip" text="latest" /> {#v1-7-4}
+## v1.7.5 <Badge type="tip" text="latest" /> {#v1-7-5}
+
+_2026-04-15_
+
+### Fixed
+- **HA Add-on**: Garmin Connect uploads now work out of the box. On first start the add-on runs `setup_garmin.py --from-config` to generate OAuth tokens from the email and password you entered in the UI ([#111](https://github.com/KristianP26/ble-scale-sync/issues/111))
+
+### Added
+- **HA Add-on**: MFA-friendly token import. Pre-generate tokens on another machine and drop them into `/share/ble-scale-sync/garmin-tokens/`; the add-on imports them on startup
+- **HA Add-on**: DOCS.md now explains the full Garmin setup flow including the MFA and IP-block workarounds
+
+### Thanks
+- [@Phipseyy](https://github.com/Phipseyy) for reporting the HA Add-on Garmin failure ([#111](https://github.com/KristianP26/ble-scale-sync/issues/111))
+
+## v1.7.4 {#v1-7-4}
 
 _2026-04-02_
 

@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.7.5] - 2026-04-15
+
+### Fixed
+- **HA Add-on**: Garmin Connect uploads now work out of the box. The add-on previously created an empty `/data/garmin-tokens/` directory and never ran the authentication step, so the first upload always failed with `No such file or directory: '/data/garmin-tokens/oauth1_token.json'`. On first start the add-on now runs `setup_garmin.py --from-config` to generate OAuth tokens from the email and password you entered in the UI ([#111](https://github.com/KristianP26/ble-scale-sync/issues/111))
+
+### Added
+- **HA Add-on**: MFA-friendly token import. If your Garmin account uses 2FA, drop pre-generated `oauth1_token.json` and `oauth2_token.json` files into `/share/ble-scale-sync/garmin-tokens/` and the add-on imports them on startup, skipping the interactive auth that has no terminal inside an add-on container
+- **HA Add-on**: DOCS.md now explains the full Garmin setup flow including the MFA workaround and the IP-block workaround
+
+### Thanks
+- [@Phipseyy](https://github.com/Phipseyy) for reporting the HA Add-on Garmin failure ([#111](https://github.com/KristianP26/ble-scale-sync/issues/111))
+
 ## [1.7.4] - 2026-04-02
 
 ### Fixed
