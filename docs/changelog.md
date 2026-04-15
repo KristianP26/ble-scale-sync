@@ -13,6 +13,7 @@ _2026-04-15_
 
 ### Fixed
 - **HA Add-on**: Garmin Connect uploads now work out of the box. On first start the add-on runs `setup_garmin.py --from-config` to generate OAuth tokens from the email and password you entered in the UI ([#111](https://github.com/KristianP26/ble-scale-sync/issues/111))
+- **Docker**: armv7 image builds failed because `cffi` had no pre-built wheel for armv7 + Python 3.11. Added `python3-dev`, `libffi-dev`, and `libssl-dev` to the image so cffi builds from source cleanly
 
 ### Added
 - **HA Add-on**: MFA-friendly token import. Pre-generate tokens on another machine and drop them into `/share/ble-scale-sync/garmin-tokens/`; the add-on imports them on startup

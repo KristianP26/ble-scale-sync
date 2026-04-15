@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - **HA Add-on**: Garmin Connect uploads now work out of the box. The add-on previously created an empty `/data/garmin-tokens/` directory and never ran the authentication step, so the first upload always failed with `No such file or directory: '/data/garmin-tokens/oauth1_token.json'`. On first start the add-on now runs `setup_garmin.py --from-config` to generate OAuth tokens from the email and password you entered in the UI ([#111](https://github.com/KristianP26/ble-scale-sync/issues/111))
+- **Docker**: armv7 image builds failed because `cffi` (transitive dep via `garminconnect`) had no pre-built wheel for armv7 + Python 3.11 and pip could not compile from source. Added `python3-dev`, `libffi-dev`, and `libssl-dev` to the image so cffi builds cleanly
 
 ### Added
 - **HA Add-on**: MFA-friendly token import. If your Garmin account uses 2FA, drop pre-generated `oauth1_token.json` and `oauth2_token.json` files into `/share/ble-scale-sync/garmin-tokens/` and the add-on imports them on startup, skipping the interactive auth that has no terminal inside an add-on container
