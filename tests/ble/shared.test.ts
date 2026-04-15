@@ -270,6 +270,38 @@ describe('waitForReading() — legacy mode', () => {
     expect(onLiveData).toHaveBeenCalledWith({ weight: 75, impedance: 500 });
   });
 
+  it('sends all unlockCommands when defined', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const adapter = createLegacyAdapter({
+      unlockCommand: [0x13, 0x09],
+      unlockCommands: [
+        [0x13, 0x09, 0x00, 0x01, 0x01, 0x02],
+        [0x13, 0x09, 0x00, 0x01, 0x10, 0x00, 0x00, 0x00, 0x2d],
+      ],
+      parseNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
+    });
+
+    const promise = waitForReading(charMap, device, adapter, PROFILE);
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    // Both unlock commands should have been sent
+    await vi.waitFor(() => expect(writeChar.writtenData.length).toBeGreaterThanOrEqual(2));
+    expect(writeChar.writtenData[0]).toEqual(Buffer.from([0x13, 0x09, 0x00, 0x01, 0x01, 0x02]));
+    expect(writeChar.writtenData[1]).toEqual(
+      Buffer.from([0x13, 0x09, 0x00, 0x01, 0x10, 0x00, 0x00, 0x00, 0x2d]),
+    );
+
+    notifyChar.triggerData(Buffer.from([0x01]));
+    await promise;
+  });
+
   it('rejects on unexpected disconnect', async () => {
     const notifyChar = createMockChar();
     const writeChar = createMockChar();

@@ -210,6 +210,46 @@ YAML
   log "Config generated successfully"
 fi
 
+# ── Garmin token bootstrap ──────────────────────────────────────────────────
+# garmin_upload.py only loads tokens; it does not authenticate from email and
+# password. On first start the token directory is empty, so we run
+# setup_garmin.py to produce oauth1_token.json and oauth2_token.json from the
+# credentials the user entered in the add-on UI. Skipped in custom config
+# mode, where advanced users handle their own Garmin auth.
+
+if [ "$CUSTOM_CONFIG" != "true" ] && [ "$GARMIN_ENABLED" = "true" ] \
+   && [ -n "$GARMIN_EMAIL" ] && [ -n "$GARMIN_PASSWORD" ]; then
+  TOKEN_DIR="/data/garmin-tokens"
+  SHARE_DIR="/share/ble-scale-sync/garmin-tokens"
+  mkdir -p "$TOKEN_DIR"
+
+  # Option 1: user pre-generated tokens on another machine (MFA workaround)
+  if [ ! -f "$TOKEN_DIR/oauth1_token.json" ] \
+     && [ -f "$SHARE_DIR/oauth1_token.json" ]; then
+    log "Importing Garmin tokens from $SHARE_DIR"
+    cp "$SHARE_DIR/oauth1_token.json" "$TOKEN_DIR/" 2>/dev/null || true
+    [ -f "$SHARE_DIR/oauth2_token.json" ] && \
+      cp "$SHARE_DIR/oauth2_token.json" "$TOKEN_DIR/" 2>/dev/null || true
+  fi
+
+  # Option 2: auto-authenticate if tokens still missing
+  if [ ! -f "$TOKEN_DIR/oauth1_token.json" ]; then
+    log "Garmin tokens missing, authenticating with provided credentials..."
+    if python3 /app/garmin-scripts/setup_garmin.py --from-config "$CONFIG"; then
+      log "Garmin authentication successful, tokens saved to $TOKEN_DIR"
+    else
+      log "WARNING: Garmin authentication failed."
+      log "If your account uses MFA or Garmin is blocking this IP, run"
+      log "  python3 garmin-scripts/setup_garmin.py --from-config config.yaml"
+      log "on another machine and copy oauth1_token.json and oauth2_token.json"
+      log "into /share/ble-scale-sync/garmin-tokens/ on this HA host."
+      log "Other exporters (MQTT, etc.) will continue to work."
+    fi
+  else
+    log "Garmin tokens present at $TOKEN_DIR"
+  fi
+fi
+
 # ── Reset Bluetooth adapter ────────────────────────────────────────────────
 
 if [ "$RESET_BLUETOOTH" != "true" ]; then

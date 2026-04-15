@@ -16,6 +16,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Thanks
 - [@marcelorodrigo](https://github.com/marcelorodrigo) for extensive on-device testing and the detailed logs that isolated the controller-level zombie state ([#80](https://github.com/KristianP26/ble-scale-sync/issues/80))
 
+## [1.7.5] - 2026-04-15
+
+### Fixed
+- **HA Add-on**: Garmin Connect uploads now work out of the box. The add-on previously created an empty `/data/garmin-tokens/` directory and never ran the authentication step, so the first upload always failed with `No such file or directory: '/data/garmin-tokens/oauth1_token.json'`. On first start the add-on now runs `setup_garmin.py --from-config` to generate OAuth tokens from the email and password you entered in the UI ([#111](https://github.com/KristianP26/ble-scale-sync/issues/111))
+- **Docker**: armv7 image builds failed because `cffi` (transitive dep via `garminconnect`) had no pre-built wheel for armv7 + Python 3.11 and pip could not compile from source. Added `python3-dev`, `libffi-dev`, and `libssl-dev` to the image so cffi builds cleanly
+
+### Added
+- **HA Add-on**: MFA-friendly token import. If your Garmin account uses 2FA, drop pre-generated `oauth1_token.json` and `oauth2_token.json` files into `/share/ble-scale-sync/garmin-tokens/` and the add-on imports them on startup, skipping the interactive auth that has no terminal inside an add-on container
+- **HA Add-on**: DOCS.md now explains the full Garmin setup flow including the MFA workaround and the IP-block workaround
+
+### Thanks
+- [@Phipseyy](https://github.com/Phipseyy) for reporting the HA Add-on Garmin failure ([#111](https://github.com/KristianP26/ble-scale-sync/issues/111))
+
+## [1.7.4] - 2026-04-02
+
+### Fixed
+- **QN Scale**: rewrote adapter as a notification-driven state machine for newer firmware (Renpho Elis 1, ES-CS20M) that requires an AE00 service handshake before measurement data flows ([#75](https://github.com/KristianP26/ble-scale-sync/issues/75), [#84](https://github.com/KristianP26/ble-scale-sync/issues/84))
+- **QN Scale**: added ES-30M weight frame format detection (different byte layout for weight and impedance)
+- **QN Scale**: 0x13 config byte now sends 0x01 (kg) instead of 0x08, which was switching the scale display to lb
+- **QN Scale**: 2-second fallback timer for Linux (BlueZ D-Bus) where the initial 0x12 frame may be lost due to a CCCD subscription race condition
+- **QN Scale**: skip impedance-less stable frames on ES-30M so the adapter waits for the full body composition reading
+
+### Thanks
+- [@DJBenson](https://github.com/DJBenson) for extensive macOS testing, packet capture analysis, and reverse-engineering the state machine flow ([#84](https://github.com/KristianP26/ble-scale-sync/issues/84))
+- [@ericandreani](https://github.com/ericandreani) for persistent Linux/Docker testing across multiple iterations ([#75](https://github.com/KristianP26/ble-scale-sync/issues/75))
+
+## [1.7.3] - 2026-04-02
+
+### Fixed
+- **Docker**: `diagnose` command was missing from the entrypoint, causing "exec: diagnose: not found" when running `docker run ... diagnose <MAC>` ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
+
+### Thanks
+- [@mart1058](https://github.com/mart1058) for reporting the missing Docker diagnose command ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
+
 ## [1.7.2] - 2026-04-01
 
 ### Fixed

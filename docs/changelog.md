@@ -19,7 +19,39 @@ All notable changes to this project are documented here. Format based on [Keep a
 ### Thanks
 - [@marcelorodrigo](https://github.com/marcelorodrigo) for extensive on-device testing and the detailed logs that isolated the controller-level zombie state ([#80](https://github.com/KristianP26/ble-scale-sync/issues/80))
 
-## v1.7.2 <Badge type="tip" text="latest" /> {#v1-7-2}
+## v1.7.5 <Badge type="tip" text="latest" /> {#v1-7-5}
+
+_2026-04-15_
+
+### Fixed
+- **HA Add-on**: Garmin Connect uploads now work out of the box. On first start the add-on runs `setup_garmin.py --from-config` to generate OAuth tokens from the email and password you entered in the UI ([#111](https://github.com/KristianP26/ble-scale-sync/issues/111))
+- **Docker**: armv7 image builds failed because `cffi` had no pre-built wheel for armv7 + Python 3.11. Added `python3-dev`, `libffi-dev`, and `libssl-dev` to the image so cffi builds from source cleanly
+
+### Added
+- **HA Add-on**: MFA-friendly token import. Pre-generate tokens on another machine and drop them into `/share/ble-scale-sync/garmin-tokens/`; the add-on imports them on startup
+- **HA Add-on**: DOCS.md now explains the full Garmin setup flow including the MFA and IP-block workarounds
+
+### Thanks
+- [@Phipseyy](https://github.com/Phipseyy) for reporting the HA Add-on Garmin failure ([#111](https://github.com/KristianP26/ble-scale-sync/issues/111))
+
+## v1.7.4 {#v1-7-4}
+
+_2026-04-02_
+
+### Fixed
+- **QN Scale**: rewrote adapter as a notification-driven state machine for newer firmware (Renpho Elis 1, ES-CS20M) that requires an AE00 service handshake before measurement data flows ([#75](https://github.com/KristianP26/ble-scale-sync/issues/75), [#84](https://github.com/KristianP26/ble-scale-sync/issues/84))
+- **QN Scale**: added ES-30M weight frame format detection (different byte layout for weight and impedance)
+- **QN Scale**: 0x13 config byte now sends 0x01 (kg) instead of 0x08, which was switching the scale display to lb
+- **QN Scale**: fallback timer for Linux (BlueZ D-Bus) where the initial 0x12 frame may be lost
+
+## v1.7.3 {#v1-7-3}
+
+_2026-04-02_
+
+### Fixed
+- **Docker**: `diagnose` command was missing from the entrypoint, causing "exec: diagnose: not found" when running `docker run ... diagnose <MAC>` ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
+
+## v1.7.2 {#v1-7-2}
 
 _2026-04-01_
 

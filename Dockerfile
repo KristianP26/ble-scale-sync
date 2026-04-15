@@ -26,7 +26,9 @@ LABEL org.opencontainers.image.title="BLE Scale Sync" \
       org.opencontainers.image.licenses="GPL-3.0"
 
 # System dependencies: BLE (BlueZ + D-Bus), Python (Garmin upload), tini (PID 1),
-# build-essential (node-gyp needs gcc/g++/make for native BLE modules)
+# build-essential (node-gyp needs gcc/g++/make for native BLE modules),
+# python3-dev + libffi-dev + libssl-dev (cffi/cryptography build from source
+# on architectures without pre-built wheels, e.g. linux/arm/v7)
 RUN apt-get update && apt-get install -y --no-install-recommends \
       bluez \
       libbluetooth-dev \
@@ -34,8 +36,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libdbus-1-dev \
       build-essential \
       python3 \
+      python3-dev \
       python3-pip \
       python3-venv \
+      libffi-dev \
+      libssl-dev \
       tini \
     && rm -rf /var/lib/apt/lists/*
 
