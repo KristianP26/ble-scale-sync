@@ -253,6 +253,6 @@ The original Raspberry Pi Zero W has an ARMv6 CPU. Key dependencies (`esbuild`, 
 ## What's Next?
 
 - [Configuration](./configuration) — config.yaml reference
-- [Supported Scales](./supported-scales) — all 23 brands
+- [Supported Scales](./supported-scales) — full adapter list
 - [Exporters](/exporters) — configure export targets
 - [ESP32 BLE Proxy](./esp32-proxy) — remote BLE via WiFi/MQTT

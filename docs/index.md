@@ -8,7 +8,7 @@ head:
 hero:
   name: BLE Scale Sync
   text: Automatic body composition sync
-  tagline: Cross-platform CLI for Linux, macOS & Windows. Read weight & impedance from 23 BLE smart scales and export to Garmin Connect, Strava, Home Assistant, InfluxDB, Webhooks, Ntfy & local files. No phone app needed.
+  tagline: Cross-platform CLI for Linux, macOS & Windows. Read weight & impedance from 20+ BLE smart scales and export to Garmin Connect, Strava, Home Assistant, InfluxDB, Webhooks, Ntfy & local files. No phone app needed.
   image:
     src: /logo.svg
     alt: BLE Scale Sync
@@ -22,8 +22,8 @@ hero:
 
 features:
   - icon: "\u2696\uFE0F"
-    title: 23 Scale Brands
-    details: Xiaomi, Renpho, Eufy, Yunmai, Beurer, Sanitas, Medisana, and more. Auto-detection out of the box.
+    title: 20+ Smart Scales
+    details: Xiaomi, Renpho (FITINDEX, Sencor, QN-Scale), Eufy, Yunmai, Beurer, Sanitas, Medisana, and more. Auto-detection out of the box.
     link: /guide/supported-scales
     linkText: See all scales
   - icon: "\uD83D\uDCE4"
