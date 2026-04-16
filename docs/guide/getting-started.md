@@ -1,6 +1,6 @@
 ---
 title: Getting Started
-description: Install and run BLE Scale Sync with Docker or Node.js.
+description: Install and run BLE Scale Sync with Docker, the Home Assistant add-on, or natively on Node.js.
 head:
   - - meta
     - name: keywords
@@ -11,25 +11,19 @@ head:
 
 BLE Scale Sync runs on any device with BLE support — Linux (including Raspberry Pi), macOS, and Windows. If your server has no Bluetooth adapter, you can use a cheap [ESP32 as a remote BLE radio](#esp32-proxy) over WiFi.
 
-## Home Assistant Add-on {#home-assistant-addon}
+Pick the install method that fits your setup:
 
-The easiest path on Home Assistant OS or Supervised. Install in two clicks, configure through the UI, and every metric shows up automatically as an MQTT auto-discovery sensor.
-
-1. **Settings** > **Add-ons** > **Add-on Store** > three-dot menu > **Repositories**
-2. Add the repository URL:
-
-   ```
-   https://github.com/KristianP26/ble-scale-sync
-   ```
-
-3. Refresh the store, install **BLE Scale Sync**, fill in your user profile on the **Configuration** tab, then start it from the **Info** tab.
-
-See the [Home Assistant Add-on guide](./home-assistant-addon) for the full option reference, Garmin setup (including MFA), custom config mode, and troubleshooting.
+| Method | Best for |
+|---|---|
+| [Docker](#docker) | Linux / Raspberry Pi / NAS — works alongside any Home Assistant install (Container, Core, OS) via MQTT |
+| [Home Assistant Add-on](#home-assistant-addon) | Home Assistant **OS** or **Supervised** only |
+| [Standalone (Node.js)](#standalone) | macOS / Windows, or Linux without Docker |
+| [ESP32 BLE Proxy](#esp32-proxy) | Server has no Bluetooth — pair with any method above |
 
 ## Docker (Linux only) {#docker}
 
 ::: warning Linux only
-Docker requires a Linux host (including Raspberry Pi). It uses BlueZ via D-Bus for BLE access, which is not available on macOS or Windows Docker. For those platforms, use the [native install](#native).
+Docker requires a Linux host (including Raspberry Pi). It uses BlueZ via D-Bus for BLE access, which is not available on macOS or Windows Docker. For those platforms, use the [standalone install](#standalone).
 :::
 
 ### 1. Configure
@@ -94,7 +88,28 @@ sudo chown -R $(id -u):$(id -g) ./garmin-tokens
 | `--group-add <GID>` | Bluetooth group GID — run `getent group bluetooth \| cut -d: -f3` (commonly `112`) |
 :::
 
-## Native (Linux, macOS, Windows) {#native}
+## Home Assistant Add-on {#home-assistant-addon}
+
+::: warning Home Assistant OS / Supervised only
+Add-ons require the Home Assistant Supervisor, which is only present on **HA OS** and **HA Supervised** installations. If you run **HA Container** (Docker) or **HA Core** (Python venv), the **Add-on Store does not exist** in your UI — use the [Docker](#docker) method above and the [MQTT exporter](/exporters/mqtt) instead. Sensors still appear in HA via MQTT auto-discovery exactly the same way.
+
+To check your install type: **Settings → About**.
+:::
+
+The easiest path on Home Assistant OS or Supervised. Install in two clicks, configure through the UI, and every metric shows up automatically as an MQTT auto-discovery sensor.
+
+1. **Settings** > **Add-ons** > **Add-on Store** > three-dot menu > **Repositories**
+2. Add the repository URL:
+
+   ```
+   https://github.com/KristianP26/ble-scale-sync
+   ```
+
+3. Refresh the store, install **BLE Scale Sync**, fill in your user profile on the **Configuration** tab, then start it from the **Info** tab.
+
+See the [Home Assistant Add-on guide](./home-assistant-addon) for the full option reference, Garmin setup (including MFA), custom config mode, and troubleshooting.
+
+## Standalone (Node.js) {#standalone}
 
 ### Prerequisites
 
