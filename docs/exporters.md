@@ -43,7 +43,7 @@ global_exporters:
 ::: tip Authentication
 The setup wizard handles Garmin authentication automatically. You only need to authenticate once — tokens are cached and reused. To re-authenticate manually:
 
-**Native:**
+**Standalone (Node.js):**
 
 ```bash
 npm run setup-garmin
@@ -241,7 +241,7 @@ The **Authorization Callback Domain** must be set to `localhost`. During the OAu
 ::: tip Authentication
 After adding the Strava exporter to your config, run the setup script to authorize:
 
-**Native:**
+**Standalone (Node.js):**
 
 ```bash
 npm run setup-strava

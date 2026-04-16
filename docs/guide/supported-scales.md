@@ -51,7 +51,7 @@ The [setup wizard](/guide/configuration#setup-wizard-recommended) includes inter
 docker run --rm --network host --cap-add NET_ADMIN --cap-add NET_RAW \
   ghcr.io/kristianp26/ble-scale-sync:latest scan
 
-# Native
+# Standalone (Node.js)
 npm run scan
 ```
 

@@ -214,7 +214,7 @@ This also simplifies Docker deployments: no `NET_ADMIN`, no `--group-add`, no D-
 ble:
   handler: mqtt-proxy
   mqtt_proxy:
-    broker: mqtt://your-broker:1883
+    broker_url: mqtt://your-broker:1883
 ```
 
 4. Run with the simplified Docker compose:

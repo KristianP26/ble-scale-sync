@@ -40,7 +40,7 @@ You don't need to edit `config.yaml` manually. The wizard handles everything, in
 docker run --rm -v ./config.yaml:/app/config.yaml:ro \
   ghcr.io/kristianp26/ble-scale-sync:latest validate
 
-# Native
+# Standalone (Node.js)
 npm run validate
 ```
 
@@ -131,7 +131,7 @@ global_exporters:
     password: '${GARMIN_PASSWORD}'
 ```
 
-Shared by all users unless a user defines their own `exporters` list. See [Exporters](/exporters) for all 5 targets and their configuration fields.
+Shared by all users unless a user defines their own `exporters` list. See [Exporters](/exporters) for all 7 targets and their configuration fields.
 
 ### Runtime
 
