@@ -65,16 +65,7 @@ features:
 
 ## Quick Start
 
-### Option 1: Home Assistant Add-on
-
-Running Home Assistant OS or Supervised? Install the add-on in two clicks and skip the CLI entirely.
-
-1. **Settings** > **Add-ons** > **Add-on Store** > three-dot menu > **Repositories**
-2. Add `https://github.com/KristianP26/ble-scale-sync` and install **BLE Scale Sync**
-
-The add-on handles config through the UI, auto-detects the Mosquitto broker for Home Assistant auto-discovery, and bootstraps Garmin tokens on first start. See the [Home Assistant Add-on guide](/guide/home-assistant-addon) for the full option reference, MFA workaround, and custom config mode.
-
-### Option 2: Docker (Linux)
+### Option 1: Docker (Linux)
 
 ```bash
 # Configure
@@ -94,9 +85,24 @@ docker run -d --restart unless-stopped --network host \
   ghcr.io/kristianp26/ble-scale-sync:latest
 ```
 
-Ideal for Raspberry Pi and headless servers. Your data never leaves your network.
+Ideal for Raspberry Pi, NAS, and headless servers. Works alongside any Home Assistant install (Container, Core, OS) via MQTT auto-discovery. Your data never leaves your network.
 
-### Option 3: Native (Linux, macOS, Windows)
+### Option 2: Home Assistant Add-on
+
+Running Home Assistant **OS** or **Supervised**? Install the add-on in two clicks and skip the CLI entirely.
+
+1. **Settings** > **Add-ons** > **Add-on Store** > three-dot menu > **Repositories**
+2. Add `https://github.com/KristianP26/ble-scale-sync` and install **BLE Scale Sync**
+
+The add-on handles config through the UI, auto-detects the Mosquitto broker for Home Assistant auto-discovery, and bootstraps Garmin tokens on first start. See the [Home Assistant Add-on guide](/guide/home-assistant-addon) for the full option reference, MFA workaround, and custom config mode.
+
+::: warning
+Add-ons are not available on **HA Container** or **HA Core** installs (no Supervisor). Use Option 1 instead.
+:::
+
+### Option 3: Standalone (Node.js — Linux, macOS, Windows)
+
+Runs natively on all major desktop and server operating systems. No containers, no Supervisor required.
 
 ```bash
 git clone https://github.com/KristianP26/ble-scale-sync.git
@@ -137,7 +143,7 @@ The ideal setup: a [~15€ single-board computer](https://www.raspberrypi.com/pr
 :::
 
 ::: tip Two ways to connect your scale
-**Local BLE** (Options 1 & 2): the server has a Bluetooth adapter and talks to the scale directly. Needs BlueZ/D-Bus on Linux, or native BLE on macOS/Windows.
+**Local BLE** (any of the options above): the server has a Bluetooth adapter and talks to the scale directly. Needs BlueZ/D-Bus on Linux, or native BLE on macOS/Windows.
 
 **Remote BLE via ESP32**: a cheap ~8€ ESP32 board sits near the scale and relays BLE data over WiFi/MQTT. The server needs no Bluetooth at all, which makes Docker deployment much simpler (no `NET_ADMIN`, no D-Bus mounts). See the [ESP32 BLE Proxy guide](/guide/esp32-proxy).
 :::

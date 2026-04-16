@@ -17,7 +17,7 @@ Pick the install method that fits your setup:
 |---|---|
 | [Docker](#docker) | Linux / Raspberry Pi / NAS — works alongside any Home Assistant install (Container, Core, OS) via MQTT |
 | [Home Assistant Add-on](#home-assistant-addon) | Home Assistant **OS** or **Supervised** only |
-| [Standalone (Node.js)](#standalone) | macOS / Windows, or Linux without Docker |
+| [Standalone (Node.js)](#standalone) | All operating systems — Linux, macOS, Windows. No containers required. |
 | [ESP32 BLE Proxy](#esp32-proxy) | Server has no Bluetooth — pair with any method above |
 
 ## Docker (Linux only) {#docker}
@@ -110,6 +110,8 @@ The easiest path on Home Assistant OS or Supervised. Install in two clicks, conf
 See the [Home Assistant Add-on guide](./home-assistant-addon) for the full option reference, Garmin setup (including MFA), custom config mode, and troubleshooting.
 
 ## Standalone (Node.js) {#standalone}
+
+Runs natively on **Linux, macOS, and Windows** — no containers, no Supervisor required. The right pick for non-Linux hosts, hosts where Docker is not an option, or when you want to run BLE Scale Sync directly with `npm start`.
 
 ### Prerequisites
 
