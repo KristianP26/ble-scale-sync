@@ -21,15 +21,6 @@ If you can't have a Pi next to your scale, a cheap **ESP32 proxy** can sit nearb
 
 ## Quick Start
 
-### Home Assistant Add-on
-
-If you run Home Assistant OS or Supervised, install the add-on in two clicks:
-
-1. **Settings** > **Add-ons** > **Add-on Store** > three-dot menu > **Repositories**
-2. Add `https://github.com/KristianP26/ble-scale-sync` and install **BLE Scale Sync**
-
-The add-on handles config through the UI, auto-detects the Mosquitto broker for Home Assistant auto-discovery, and bootstraps Garmin tokens on first start. See the [Home Assistant Add-on guide](https://blescalesync.dev/guide/home-assistant-addon) for the full option reference, MFA workaround, and custom config mode.
-
 ### Docker (Linux)
 
 ```bash
@@ -50,7 +41,22 @@ docker run -d --restart unless-stopped --network host \
   ghcr.io/kristianp26/ble-scale-sync:latest
 ```
 
-### Native (Linux, macOS, Windows)
+Ideal for Raspberry Pi, NAS, and headless servers. Works alongside any Home Assistant install (Container, Core, OS) via MQTT auto-discovery.
+
+### Home Assistant Add-on
+
+If you run Home Assistant **OS** or **Supervised**, install the add-on in two clicks:
+
+1. **Settings** > **Add-ons** > **Add-on Store** > three-dot menu > **Repositories**
+2. Add `https://github.com/KristianP26/ble-scale-sync` and install **BLE Scale Sync**
+
+The add-on handles config through the UI, auto-detects the Mosquitto broker for Home Assistant auto-discovery, and bootstraps Garmin tokens on first start. See the [Home Assistant Add-on guide](https://blescalesync.dev/guide/home-assistant-addon) for the full option reference, MFA workaround, and custom config mode.
+
+> **Note:** Add-ons are not available on **HA Container** or **HA Core** installs (no Supervisor). Use the Docker method above instead — sensors still appear in HA via MQTT auto-discovery.
+
+### Standalone (Node.js — Linux, macOS, Windows)
+
+Runs natively on all major desktop and server operating systems. No containers required.
 
 ```bash
 git clone https://github.com/KristianP26/ble-scale-sync.git
