@@ -91,7 +91,7 @@ sudo chown -R $(id -u):$(id -g) ./garmin-tokens
 ## Home Assistant Add-on {#home-assistant-addon}
 
 ::: warning Home Assistant OS / Supervised only
-Add-ons require the Home Assistant Supervisor, which is only present on **HA OS** and **HA Supervised** installations. If you run **HA Container** (Docker) or **HA Core** (Python venv), the **Add-on Store does not exist** in your UI — use the [Docker](#docker) method above and the [MQTT exporter](/exporters/mqtt) instead. Sensors still appear in HA via MQTT auto-discovery exactly the same way.
+Add-ons require the Home Assistant Supervisor, which is only present on **HA OS** and **HA Supervised** installations. If you run **HA Container** (Docker) or **HA Core** (Python venv), the **Add-on Store does not exist** in your UI — use the [Docker](#docker) method above and the [MQTT exporter](/exporters#mqtt) instead. Sensors still appear in HA via MQTT auto-discovery exactly the same way.
 
 To check your install type: **Settings → About**.
 :::
