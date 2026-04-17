@@ -7,7 +7,7 @@
 ![Node.js](https://img.shields.io/badge/node-%3E%3D20.19-brightgreen?logo=node.js&logoColor=white)
 ![Docker](https://img.shields.io/badge/docker-ghcr.io-blue?logo=docker&logoColor=white)
 
-A cross-platform CLI tool that reads body composition data from **23 BLE smart scales** and exports to **Garmin Connect**, **Strava**, **MQTT** (Home Assistant), **InfluxDB**, **Webhooks**, **Ntfy**, and **local files** (CSV/JSONL). No phone app needed. Your data stays on your device.
+A cross-platform CLI tool that reads body composition data from **20+ BLE smart scales** and exports to **Garmin Connect**, **Strava**, **MQTT** (Home Assistant), **InfluxDB**, **Webhooks**, **Ntfy**, and **local files** (CSV/JSONL). No phone app needed. Your data stays on your device.
 
 **[Documentation](https://blescalesync.dev)** · **[Getting Started](https://blescalesync.dev/guide/getting-started)** · **[Supported Scales](https://blescalesync.dev/guide/supported-scales)** · **[Exporters](https://blescalesync.dev/exporters)**
 
@@ -41,7 +41,31 @@ docker run -d --restart unless-stopped --network host \
   ghcr.io/kristianp26/ble-scale-sync:latest
 ```
 
-### Native (Linux, macOS, Windows)
+Ideal for Raspberry Pi, NAS, and headless servers. Works alongside any Home Assistant install (Container, Core, OS) via MQTT auto-discovery.
+
+### Home Assistant Add-on
+
+If you run Home Assistant **OS** or **Supervised**, one click is all it takes:
+
+[![Add BLE Scale Sync repository to your Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FKristianP26%2Fble-scale-sync)
+
+The badge opens your Home Assistant instance, confirms the repository, and shows BLE Scale Sync in the Add-on Store ready to install.
+
+<details>
+<summary>Prefer manual steps?</summary>
+
+1. **Settings** > **Add-ons** > **Add-on Store** > three-dot menu > **Repositories**
+2. Add `https://github.com/KristianP26/ble-scale-sync` and install **BLE Scale Sync**
+
+</details>
+
+The add-on handles config through the UI, auto-detects the Mosquitto broker for Home Assistant auto-discovery, and bootstraps Garmin tokens on first start. See the [Home Assistant Add-on guide](https://blescalesync.dev/guide/home-assistant-addon) for the full option reference, MFA workaround, and custom config mode.
+
+> **Note:** Add-ons are not available on **HA Container** or **HA Core** installs (no Supervisor). Use the Docker method above instead — sensors still appear in HA via MQTT auto-discovery.
+
+### Standalone (Node.js — Linux, macOS, Windows)
+
+Runs natively on all major desktop and server operating systems. No containers required.
 
 ```bash
 git clone https://github.com/KristianP26/ble-scale-sync.git
@@ -54,12 +78,13 @@ Requires Node.js v20.19+ and a BLE adapter. See the **[full install guide](https
 
 ## Features
 
-- **[23 scale brands](https://blescalesync.dev/guide/supported-scales)** — Xiaomi, Renpho (Elis 1), Eufy, Yunmai, Beurer, Sanitas, Medisana, and more
+- **[20+ scale brands](https://blescalesync.dev/guide/supported-scales)** — Xiaomi, Renpho (Elis 1, FITINDEX, Sencor, QN-Scale), Eufy, Yunmai, Beurer, Sanitas, Medisana, and more
 - **[7 export targets](https://blescalesync.dev/exporters)** — Garmin Connect, Strava, MQTT (Home Assistant), InfluxDB, Webhook, Ntfy, File (CSV/JSONL)
 - **[10 body metrics](https://blescalesync.dev/body-composition)** — BIA-based body composition from weight + impedance
 - **[Multi-user](https://blescalesync.dev/multi-user)** — automatic weight-based identification with per-user exporters
 - **[Interactive setup wizard](https://blescalesync.dev/guide/configuration)** — scale discovery, exporter config, connectivity tests
 - **[BLE diagnostic tool](https://blescalesync.dev/troubleshooting)** — `npm run diagnose` for detailed BLE troubleshooting
+- **[Home Assistant Add-on](https://blescalesync.dev/guide/home-assistant-addon)** — one-click install via My Home Assistant badge, MQTT auto-discovery, UI-driven config, Garmin token bootstrap, and MFA workaround
 - **[ESP32 BLE proxy](https://blescalesync.dev/guide/esp32-proxy)** — use a remote ESP32 as a BLE radio over MQTT, with simplified Docker deployment and optional display
 - **BLE adapter selection** — `ble.adapter: hci1` for multi-adapter setups (Linux)
 - **Broadcast mode** — supports non-connectable scales that only advertise weight via BLE advertisements

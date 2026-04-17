@@ -9,6 +9,10 @@ head:
 
 # Configuration
 
+::: tip Using the Home Assistant Add-on?
+The add-on is configured through the HA UI, not `config.yaml`. See the [Home Assistant Add-on guide](./home-assistant-addon) for the full option reference.
+:::
+
 ## Setup Wizard (recommended) {#setup-wizard-recommended}
 
 The fastest way to configure BLE Scale Sync is with the **interactive setup wizard**. It walks you through scale discovery, user profiles, exporter selection, and connectivity tests:
@@ -19,7 +23,7 @@ docker run --rm -it --network host --cap-add NET_ADMIN --cap-add NET_RAW \
   --group-add 112 -v /var/run/dbus:/var/run/dbus:ro \
   -v ./config.yaml:/app/config.yaml ghcr.io/kristianp26/ble-scale-sync:latest setup
 
-# Native (Linux, macOS, Windows)
+# Standalone (Node.js — Linux, macOS, Windows)
 npm run setup
 ```
 
@@ -36,7 +40,7 @@ You don't need to edit `config.yaml` manually. The wizard handles everything, in
 docker run --rm -v ./config.yaml:/app/config.yaml:ro \
   ghcr.io/kristianp26/ble-scale-sync:latest validate
 
-# Native
+# Standalone (Node.js)
 npm run validate
 ```
 
@@ -127,7 +131,7 @@ global_exporters:
     password: '${GARMIN_PASSWORD}'
 ```
 
-Shared by all users unless a user defines their own `exporters` list. See [Exporters](/exporters) for all 5 targets and their configuration fields.
+Shared by all users unless a user defines their own `exporters` list. See [Exporters](/exporters) for all 7 targets and their configuration fields.
 
 ### Runtime
 

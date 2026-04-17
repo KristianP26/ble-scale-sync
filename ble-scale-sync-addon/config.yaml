@@ -1,5 +1,5 @@
 name: BLE Scale Sync
-version: "1.7.5"
+version: "1.8.0"
 slug: ble-scale-sync
 description: Read BLE smart scales and export to Garmin Connect, MQTT (HA auto-discovery), InfluxDB, and more
 url: https://github.com/KristianP26/ble-scale-sync
@@ -24,6 +24,8 @@ map:
 options:
   scale_mac: ""
   ble_adapter: ""
+  weight_unit: "kg"
+  height_unit: "cm"
   user_name: "Default"
   user_height: 170
   user_birth_date: "1990-01-01"
@@ -50,6 +52,8 @@ options:
 schema:
   scale_mac: str?
   ble_adapter: str?
+  weight_unit: "list(kg|lbs)"
+  height_unit: "list(cm|in)"
   user_name: str
   user_height: "int(50,250)"
   user_birth_date: str

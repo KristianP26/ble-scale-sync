@@ -43,7 +43,7 @@ global_exporters:
 ::: tip Authentication
 The setup wizard handles Garmin authentication automatically. You only need to authenticate once — tokens are cached and reused. To re-authenticate manually:
 
-**Native:**
+**Standalone (Node.js):**
 
 ```bash
 npm run setup-garmin
@@ -90,6 +90,10 @@ Garmin may block requests from cloud/VPN IPs. If authentication fails, try from 
 ## MQTT {#mqtt}
 
 Publishes body composition as JSON to an MQTT broker. **Home Assistant auto-discovery** is enabled by default — all 10 metrics appear as sensors grouped under a single device, with availability tracking (LWT) and display precision per metric.
+
+::: tip Home Assistant users
+If you run Home Assistant OS or Supervised, the [Home Assistant Add-on](./guide/home-assistant-addon) auto-detects the Mosquitto broker through the Supervisor API, so you do not need to wire MQTT manually.
+:::
 
 | Field | Required | Default | Description |
 |---|---|---|---|
@@ -237,7 +241,7 @@ The **Authorization Callback Domain** must be set to `localhost`. During the OAu
 ::: tip Authentication
 After adding the Strava exporter to your config, run the setup script to authorize:
 
-**Native:**
+**Standalone (Node.js):**
 
 ```bash
 npm run setup-strava
