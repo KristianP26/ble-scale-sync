@@ -48,6 +48,7 @@ docker run -d --restart unless-stopped \
   --network host \
   --cap-add NET_ADMIN --cap-add NET_RAW \
   --group-add 112 \
+  --device /dev/rfkill \
   -v /var/run/dbus:/var/run/dbus:ro \
   -v ./config.yaml:/app/config.yaml:ro \
   -v ./garmin-tokens:/app/garmin-tokens:ro \
@@ -85,6 +86,7 @@ sudo chown -R $(id -u):$(id -g) ./garmin-tokens
 | `--network host` | BLE uses BlueZ via D-Bus, which requires host networking |
 | `-v /var/run/dbus:/var/run/dbus:ro` | Access to the system D-Bus socket |
 | `--cap-add NET_ADMIN --cap-add NET_RAW` | BLE operations require raw network access |
+| `--device /dev/rfkill` | Enables RF-level adapter recovery when BlueZ gets stuck (recommended) |
 | `--group-add <GID>` | Bluetooth group GID — run `getent group bluetooth \| cut -d: -f3` (commonly `112`) |
 :::
 
