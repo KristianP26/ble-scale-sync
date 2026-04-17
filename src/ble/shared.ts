@@ -45,6 +45,7 @@ function initializeAdapter(
   charMap: Map<string, BleChar>,
   adapter: ScaleAdapter,
   profile: UserProfile,
+  deviceAddress: string,
   isResolved: () => boolean,
   onNotification: (sourceUuid: string, data: Buffer) => void,
   unsubscribers: (() => void)[],
@@ -64,6 +65,7 @@ function initializeAdapter(
     if (adapter.onConnected) {
       const ctx: ConnectionContext = {
         profile,
+        deviceAddress,
         write: async (charUuid, data, withResponse = true) => {
           const char = resolveChar(charMap, charUuid);
           if (!char) throw new Error(`Characteristic ${charUuid} not found`);
@@ -199,6 +201,7 @@ export function waitForRawReading(
   profile: UserProfile,
   weightUnit?: WeightUnit,
   onLiveData?: (reading: ScaleReading) => void,
+  deviceAddress = '',
 ): Promise<RawReading> {
   return new Promise<RawReading>((resolve, reject) => {
     let resolved = false;
@@ -232,6 +235,7 @@ export function waitForRawReading(
       charMap,
       adapter,
       profile,
+      deviceAddress,
       () => resolved,
       handleNotification,
       unsubscribers,
@@ -268,8 +272,15 @@ export function waitForReading(
   profile: UserProfile,
   weightUnit?: WeightUnit,
   onLiveData?: (reading: ScaleReading) => void,
+  deviceAddress = '',
 ): Promise<BodyComposition> {
-  return waitForRawReading(charMap, bleDevice, adapter, profile, weightUnit, onLiveData).then(
-    ({ reading, adapter: matched }) => matched.computeMetrics(reading, profile),
-  );
+  return waitForRawReading(
+    charMap,
+    bleDevice,
+    adapter,
+    profile,
+    weightUnit,
+    onLiveData,
+    deviceAddress,
+  ).then(({ reading, adapter: matched }) => matched.computeMetrics(reading, profile));
 }

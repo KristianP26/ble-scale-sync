@@ -435,6 +435,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     if (discoveryResult) btAdapter = discoveryResult;
 
     let matchedAdapter: ScaleAdapter;
+    let deviceMac = targetMac ?? '';
 
     if (targetMac) {
       const mac = formatMac(targetMac);
@@ -515,6 +516,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       const result = await autoDiscover(btAdapter, adapters, abortSignal);
       device = result.device;
       matchedAdapter = result.adapter;
+      deviceMac = result.mac;
 
       // Stop discovery before connecting — BlueZ on low-power devices (e.g. Pi Zero)
       // often fails with le-connection-abort-by-local while discovery is still active.
@@ -545,6 +547,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       profile,
       weightUnit,
       onLiveData,
+      deviceMac.replace(/[:-]/g, '').toUpperCase(),
     );
 
     try {

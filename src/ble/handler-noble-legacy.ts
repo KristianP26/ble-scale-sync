@@ -467,6 +467,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         profile,
         weightUnit,
         onLiveData,
+        peripheralAddress(peripheral).replace(/[:-]/g, '').toUpperCase(),
       );
 
       return raw;

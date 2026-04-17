@@ -7,7 +7,7 @@
 ![Node.js](https://img.shields.io/badge/node-%3E%3D20.19-brightgreen?logo=node.js&logoColor=white)
 ![Docker](https://img.shields.io/badge/docker-ghcr.io-blue?logo=docker&logoColor=white)
 
-A cross-platform CLI tool that reads body composition data from **23 BLE smart scales** and exports to **Garmin Connect**, **Strava**, **MQTT** (Home Assistant), **InfluxDB**, **Webhooks**, **Ntfy**, and **local files** (CSV/JSONL). No phone app needed. Your data stays on your device.
+A cross-platform CLI tool that reads body composition data from **24 BLE smart scales** and exports to **Garmin Connect**, **Strava**, **MQTT** (Home Assistant), **InfluxDB**, **Webhooks**, **Ntfy**, and **local files** (CSV/JSONL). No phone app needed. Your data stays on your device.
 
 **[Documentation](https://blescalesync.dev)** · **[Getting Started](https://blescalesync.dev/guide/getting-started)** · **[Supported Scales](https://blescalesync.dev/guide/supported-scales)** · **[Exporters](https://blescalesync.dev/exporters)**
 
@@ -63,7 +63,7 @@ Requires Node.js v20.19+ and a BLE adapter. See the **[full install guide](https
 
 ## Features
 
-- **[23 scale brands](https://blescalesync.dev/guide/supported-scales)** — Xiaomi, Renpho (Elis 1), Eufy, Yunmai, Beurer, Sanitas, Medisana, and more
+- **[24 scale brands](https://blescalesync.dev/guide/supported-scales)** — Xiaomi, Renpho (Elis 1), Eufy (incl. P2 Pro T9149), Yunmai, Beurer, Sanitas, Medisana, and more
 - **[7 export targets](https://blescalesync.dev/exporters)** — Garmin Connect, Strava, MQTT (Home Assistant), InfluxDB, Webhook, Ntfy, File (CSV/JSONL)
 - **[10 body metrics](https://blescalesync.dev/body-composition)** — BIA-based body composition from weight + impedance
 - **[Multi-user](https://blescalesync.dev/multi-user)** — automatic weight-based identification with per-user exporters
