@@ -96,16 +96,22 @@ Add-ons require the Home Assistant Supervisor, which is only present on **HA OS*
 To check your install type: **Settings → About**.
 :::
 
-The easiest path on Home Assistant OS or Supervised. Install in two clicks, configure through the UI, and every metric shows up automatically as an MQTT auto-discovery sensor.
+The easiest path on Home Assistant OS or Supervised. One click adds the repository, then configure through the UI and every metric shows up automatically as an MQTT auto-discovery sensor.
 
-1. **Settings** > **Add-ons** > **Add-on Store** > three-dot menu > **Repositories**
+[![Add BLE Scale Sync repository to your Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FKristianP26%2Fble-scale-sync)
+
+The badge uses [My Home Assistant](https://www.home-assistant.io/integrations/my/) to open your instance, confirm the repository, and land on the Add-on Store with **BLE Scale Sync** visible. Click **Install**, fill in your user profile on the **Configuration** tab, then start the add-on from the **Info** tab.
+
+::: details Prefer manual steps?
+1. **Settings** > **Add-ons** > **Add-on Store** > three-dot menu > **Repositories**.
 2. Add the repository URL:
 
    ```
    https://github.com/KristianP26/ble-scale-sync
    ```
 
-3. Refresh the store, install **BLE Scale Sync**, fill in your user profile on the **Configuration** tab, then start it from the **Info** tab.
+3. Refresh the store, install **BLE Scale Sync**, fill in your user profile on the **Configuration** tab, then start the add-on from the **Info** tab.
+:::
 
 See the [Home Assistant Add-on guide](./home-assistant-addon) for the full option reference, Garmin setup (including MFA), custom config mode, and troubleshooting.
 
