@@ -6,6 +6,11 @@ import type {
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
 import { uuid16, buildPayload } from './body-comp-helpers.js';
+import { bleLog } from '../ble/types.js';
+
+/** Format bytes as uppercase hex string for debug logging. */
+const hex = (data: Buffer): string =>
+  [...data].map((b) => b.toString(16).padStart(2, '0')).join(' ').toUpperCase();
 
 // Beurer/Sanitas custom BLE service + characteristic
 const CHR_FFE1 = uuid16(0xffe1);
@@ -90,6 +95,9 @@ export class BeurerSanitasScaleAdapter implements ScaleAdapter {
    *   [14-15] bone (BE uint16, * 50 / 1000)
    */
   parseNotification(data: Buffer): ScaleReading | null {
+    bleLog.debug(
+      `BeurerSanitas frame (len=${data.length}, cmd=0x${(data[1] ?? 0).toString(16).padStart(2, '0')}): [${hex(data)}]`,
+    );
     if (data.length < 6) return null;
 
     const weight = (data.readUInt16BE(4) * 50) / 1000;
