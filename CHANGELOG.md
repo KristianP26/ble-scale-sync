@@ -4,13 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.8.0] - 2026-04-17
 
 ### Added
-- **HA Add-on**: one-click install via a [My Home Assistant](https://www.home-assistant.io/integrations/my/) badge. Clicking the badge opens your HA instance, confirms the repository, and lands on the Add-on Store with BLE Scale Sync ready to install. Manual steps remain documented as a fallback for users without My Home Assistant configured
-- **HA Add-on**: `weight_unit` and `height_unit` are now exposed as add-on options (kg/lbs, cm/in). Previously hardcoded to metric regardless of user preference
-- **HA Add-on**: `last_known_weight` now persists across add-on restarts. The runtime config lives at `/data/config.yaml` and `merge_last_weights.py` copies preserved per-user weights from the previous run into the freshly generated config on every startup
-- **Docs**: new [Home Assistant Add-on guide](https://blescalesync.dev/guide/home-assistant-addon) covering install, configuration reference, MQTT auto-detection, Garmin setup including the MFA workaround, custom config mode, persistence, and troubleshooting. Linked from Getting Started and the MQTT exporter reference
+- **HA Add-on**: one-click install via a [My Home Assistant](https://www.home-assistant.io/integrations/my/) badge in the README, landing page, getting-started guide, and HA Add-on guide. Manual steps remain as a fallback for users without My Home Assistant configured
+- **HA Add-on**: `weight_unit` and `height_unit` exposed as add-on options (kg/lbs, cm/in). The CLI and exporters display in the chosen unit while internal math stays in kg/cm
+- **HA Add-on**: `last_known_weight` persists across restarts. The runtime config lives at `/data/config.yaml` and a small Python helper (`merge_last_weights.py`) copies preserved per-user weights from the previous run into the freshly generated config on every startup, so multi-user identification by weight stays accurate after reboots and add-on updates
+- **Docs**: new [Home Assistant Add-on guide](https://blescalesync.dev/guide/home-assistant-addon) covering install, full configuration reference, MQTT auto-detection, Garmin setup (including the MFA and IP-block workarounds), custom config mode, persistence semantics, and troubleshooting. Promoted to a first-class quick-start in the README and landing page
+
+## [Unreleased]
 
 ## [1.7.5] - 2026-04-15
 
