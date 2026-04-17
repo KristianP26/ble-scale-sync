@@ -2,7 +2,11 @@
 set -e
 
 OPTIONS="/data/options.json"
-CONFIG="/app/config.yaml"
+# Config lives in /data (persistent) so last_known_weight survives add-on
+# restarts. The app is launched with --config to read from this path.
+CONFIG="/data/config.yaml"
+FRESH="/tmp/config-fresh.yaml"
+mkdir -p /data
 
 log() { echo "[ble-scale-sync] $*"; }
 
@@ -31,7 +35,7 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
     exit 1
   fi
   log "Using custom config from $CUSTOM_PATH"
-  if ! cp "$CUSTOM_PATH" "$CONFIG"; then
+  if ! cp "$CUSTOM_PATH" "$FRESH"; then
     log "ERROR: Failed to copy custom config from $CUSTOM_PATH"
     exit 1
   fi
@@ -40,6 +44,11 @@ else
   # ── Read all options ────────────────────────────────────────────────────
 
   SCALE_MAC=$(opt scale_mac)
+
+  WEIGHT_UNIT=$(opt weight_unit)
+  HEIGHT_UNIT=$(opt height_unit)
+  [ -z "$WEIGHT_UNIT" ] && WEIGHT_UNIT="kg"
+  [ -z "$HEIGHT_UNIT" ] && HEIGHT_UNIT="cm"
 
   USER_NAME=$(opt user_name)
   USER_HEIGHT=$(opt_int user_height 170)
@@ -105,7 +114,7 @@ else
 
   log "Generating config.yaml..."
 
-  cat > "$CONFIG" <<YAML
+  cat > "$FRESH" <<YAML
 version: 1
 
 YAML
@@ -120,16 +129,16 @@ YAML
 
   # BLE section (only if scale_mac or adapter is set)
   if [ -n "$SCALE_MAC" ] || [ -n "$BLE_ADAPTER" ]; then
-    echo "ble:" >> "$CONFIG"
-    [ -n "$SCALE_MAC" ] && echo "  scale_mac: \"$(yaml_escape "$SCALE_MAC")\"" >> "$CONFIG"
-    [ -n "$BLE_ADAPTER" ] && echo "  adapter: \"$(yaml_escape "$BLE_ADAPTER")\"" >> "$CONFIG"
-    echo "" >> "$CONFIG"
+    echo "ble:" >> "$FRESH"
+    [ -n "$SCALE_MAC" ] && echo "  scale_mac: \"$(yaml_escape "$SCALE_MAC")\"" >> "$FRESH"
+    [ -n "$BLE_ADAPTER" ] && echo "  adapter: \"$(yaml_escape "$BLE_ADAPTER")\"" >> "$FRESH"
+    echo "" >> "$FRESH"
   fi
 
-  cat >> "$CONFIG" <<YAML
+  cat >> "$FRESH" <<YAML
 scale:
-  weight_unit: kg
-  height_unit: cm
+  weight_unit: $WEIGHT_UNIT
+  height_unit: $HEIGHT_UNIT
 
 unknown_user: nearest
 
@@ -163,12 +172,12 @@ YAML
   fi
 
   if [ "$HAVE_EXPORTERS" = "true" ]; then
-    echo "global_exporters:" >> "$CONFIG"
+    echo "global_exporters:" >> "$FRESH"
 
     # MQTT exporter
     if [ "$MQTT_ENABLED" = "true" ] && [ -n "$MQTT_BROKER_URL" ]; then
       MQTT_TOPIC="${MQTT_TOPIC:-scale/body-composition}"
-      cat >> "$CONFIG" <<YAML
+      cat >> "$FRESH" <<YAML
   - type: mqtt
     broker_url: "$(yaml_escape "$MQTT_BROKER_URL")"
     topic: "$(yaml_escape "$MQTT_TOPIC")"
@@ -177,14 +186,14 @@ YAML
     ha_discovery: $MQTT_HA_DISCOVERY
     ha_device_name: "$(yaml_escape "$MQTT_HA_DEVICE_NAME")"
 YAML
-      [ -n "$MQTT_USERNAME" ] && echo "    username: \"$(yaml_escape "$MQTT_USERNAME")\"" >> "$CONFIG"
-      [ -n "$MQTT_PASSWORD" ] && echo "    password: \"$(yaml_escape "$MQTT_PASSWORD")\"" >> "$CONFIG"
+      [ -n "$MQTT_USERNAME" ] && echo "    username: \"$(yaml_escape "$MQTT_USERNAME")\"" >> "$FRESH"
+      [ -n "$MQTT_PASSWORD" ] && echo "    password: \"$(yaml_escape "$MQTT_PASSWORD")\"" >> "$FRESH"
     fi
 
     # Garmin exporter
     if [ "$GARMIN_ENABLED" = "true" ] && [ -n "$GARMIN_EMAIL" ] && [ -n "$GARMIN_PASSWORD" ]; then
       mkdir -p /data/garmin-tokens
-      cat >> "$CONFIG" <<YAML
+      cat >> "$FRESH" <<YAML
   - type: garmin
     email: "$(yaml_escape "$GARMIN_EMAIL")"
     password: "$(yaml_escape "$GARMIN_PASSWORD")"
@@ -192,12 +201,12 @@ YAML
 YAML
     fi
 
-    echo "" >> "$CONFIG"
+    echo "" >> "$FRESH"
   fi
 
   # ── Runtime ───────────────────────────────────────────────────────────
 
-  cat >> "$CONFIG" <<YAML
+  cat >> "$FRESH" <<YAML
 runtime:
   continuous_mode: true
   scan_cooldown: $SCAN_COOLDOWN
@@ -209,6 +218,18 @@ YAML
 
   log "Config generated successfully"
 fi
+
+# ── Merge last_known_weight from previous run ────────────────────────────────
+# merge_last_weights.py reads the freshly generated config and, if the
+# persistent config.yaml already exists (from a previous run), copies each
+# user's last_known_weight into the fresh config before overwriting.
+# Result is written to $CONFIG so the app reads a merged view.
+
+if ! python3 /app/merge_last_weights.py "$FRESH" "$CONFIG"; then
+  log "WARNING: merge_last_weights.py failed, using fresh config without preserved weights"
+  cp "$FRESH" "$CONFIG"
+fi
+rm -f "$FRESH"
 
 # ── Garmin token bootstrap ──────────────────────────────────────────────────
 # garmin_upload.py only loads tokens; it does not authenticate from email and
@@ -280,4 +301,4 @@ fi
 # ── Start ───────────────────────────────────────────────────────────────────
 
 log "Starting BLE Scale Sync..."
-exec node dist/index.js
+exec node dist/index.js --config "$CONFIG"
