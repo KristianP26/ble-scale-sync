@@ -45,10 +45,19 @@ Ideal for Raspberry Pi, NAS, and headless servers. Works alongside any Home Assi
 
 ### Home Assistant Add-on
 
-If you run Home Assistant **OS** or **Supervised**, install the add-on in two clicks:
+If you run Home Assistant **OS** or **Supervised**, one click is all it takes:
+
+[![Add BLE Scale Sync repository to your Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FKristianP26%2Fble-scale-sync)
+
+The badge opens your Home Assistant instance, confirms the repository, and shows BLE Scale Sync in the Add-on Store ready to install.
+
+<details>
+<summary>Prefer manual steps?</summary>
 
 1. **Settings** > **Add-ons** > **Add-on Store** > three-dot menu > **Repositories**
 2. Add `https://github.com/KristianP26/ble-scale-sync` and install **BLE Scale Sync**
+
+</details>
 
 The add-on handles config through the UI, auto-detects the Mosquitto broker for Home Assistant auto-discovery, and bootstraps Garmin tokens on first start. See the [Home Assistant Add-on guide](https://blescalesync.dev/guide/home-assistant-addon) for the full option reference, MFA workaround, and custom config mode.
 
@@ -75,7 +84,7 @@ Requires Node.js v20.19+ and a BLE adapter. See the **[full install guide](https
 - **[Multi-user](https://blescalesync.dev/multi-user)** — automatic weight-based identification with per-user exporters
 - **[Interactive setup wizard](https://blescalesync.dev/guide/configuration)** — scale discovery, exporter config, connectivity tests
 - **[BLE diagnostic tool](https://blescalesync.dev/troubleshooting)** — `npm run diagnose` for detailed BLE troubleshooting
-- **[Home Assistant Add-on](https://blescalesync.dev/guide/home-assistant-addon)** — two-click install with MQTT auto-discovery, UI-driven config, Garmin token bootstrap, and MFA workaround
+- **[Home Assistant Add-on](https://blescalesync.dev/guide/home-assistant-addon)** — one-click install via My Home Assistant badge, MQTT auto-discovery, UI-driven config, Garmin token bootstrap, and MFA workaround
 - **[ESP32 BLE proxy](https://blescalesync.dev/guide/esp32-proxy)** — use a remote ESP32 as a BLE radio over MQTT, with simplified Docker deployment and optional display
 - **BLE adapter selection** — `ble.adapter: hci1` for multi-adapter setups (Linux)
 - **Broadcast mode** — supports non-connectable scales that only advertise weight via BLE advertisements

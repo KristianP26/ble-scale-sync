@@ -10,6 +10,7 @@ All notable changes to this project are documented here. Format based on [Keep a
 ## Unreleased {#unreleased}
 
 ### Added
+- **HA Add-on**: one-click install via a [My Home Assistant](https://www.home-assistant.io/integrations/my/) badge. The badge opens your HA instance, confirms the repository, and lands on the Add-on Store with BLE Scale Sync ready to install. Manual steps stay as a fallback
 - **HA Add-on**: `weight_unit` and `height_unit` exposed as add-on options (kg/lbs, cm/in), no longer hardcoded
 - **HA Add-on**: `last_known_weight` persists across restarts. Runtime config lives at `/data/config.yaml`; a small Python helper merges preserved per-user weights into the freshly generated config on every startup
 - **Docs**: new [Home Assistant Add-on guide](/guide/home-assistant-addon) with install, configuration reference, MQTT auto-detection, Garmin setup, MFA workaround, custom config mode, and troubleshooting

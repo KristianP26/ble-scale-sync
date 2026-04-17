@@ -13,16 +13,21 @@ BLE Scale Sync ships as a native Home Assistant add-on for Home Assistant OS and
 
 ## Install
 
-1. In Home Assistant, go to **Settings** > **Add-ons** > **Add-on Store**.
-2. Click the three-dot menu > **Repositories** and add:
+[![Add BLE Scale Sync repository to your Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FKristianP26%2Fble-scale-sync)
+
+The badge above uses [My Home Assistant](https://www.home-assistant.io/integrations/my/) to open your instance, confirm the repository, and drop you on the Add-on Store with **BLE Scale Sync** visible. Click **Install**, then head to the **Configuration** tab and fill in your scale MAC and user profile. Start the add-on from the **Info** tab. The Supervisor pulls the arm64 / armv7 / amd64 image to match your host.
+
+::: details Prefer manual steps?
+1. **Settings** > **Add-ons** > **Add-on Store**.
+2. Three-dot menu > **Repositories** and add:
 
    ```
    https://github.com/KristianP26/ble-scale-sync
    ```
 
-3. Refresh the store. "BLE Scale Sync" appears under the new repository.
-4. Click **Install**. The Supervisor pulls the arm64 / armv7 / amd64 image (whichever matches your host).
-5. After install, open the **Configuration** tab and fill in your scale MAC and user profile. Then start the add-on from the **Info** tab.
+3. Refresh the store. **BLE Scale Sync** appears under the new repository.
+4. Click **Install**, then open the **Configuration** tab and fill in your scale MAC and user profile. Start the add-on from the **Info** tab.
+:::
 
 ::: tip
 The add-on requires `host_network`, `host_dbus`, and the `NET_ADMIN` / `NET_RAW` capabilities to access the host Bluetooth adapter through BlueZ. The Supervisor grants these automatically.

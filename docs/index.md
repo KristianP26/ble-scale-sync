@@ -89,10 +89,11 @@ Ideal for Raspberry Pi, NAS, and headless servers. Works alongside any Home Assi
 
 ### Option 2: Home Assistant Add-on
 
-Running Home Assistant **OS** or **Supervised**? Install the add-on in two clicks and skip the CLI entirely.
+Running Home Assistant **OS** or **Supervised**? One click and skip the CLI entirely.
 
-1. **Settings** > **Add-ons** > **Add-on Store** > three-dot menu > **Repositories**
-2. Add `https://github.com/KristianP26/ble-scale-sync` and install **BLE Scale Sync**
+[![Add BLE Scale Sync repository to your Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FKristianP26%2Fble-scale-sync)
+
+The badge opens your Home Assistant instance, confirms the repository, and lands you on the Add-on Store with **BLE Scale Sync** ready to install.
 
 The add-on handles config through the UI, auto-detects the Mosquitto broker for Home Assistant auto-discovery, and bootstraps Garmin tokens on first start. See the [Home Assistant Add-on guide](/guide/home-assistant-addon) for the full option reference, MFA workaround, and custom config mode.
 
