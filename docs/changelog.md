@@ -11,15 +11,22 @@ All notable changes to this project are documented here. Format based on [Keep a
 
 ### Added
 - **Eufy Smart Scale P2 (T9148) and P2 Pro (T9149)**: new dedicated adapter with the AES-128-CBC C0/C1/C2/C3 handshake these models require. Weight + impedance over GATT FFF2 after auth, plus passive weight reading from the 19-byte advertisement without connecting. The scale is no longer mis-matched as a QN scale (prior crash: `Operation is not supported`) ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
-- **HA Add-on**: `weight_unit` and `height_unit` exposed as add-on options (kg/lbs, cm/in), no longer hardcoded
-- **HA Add-on**: `last_known_weight` persists across restarts. Runtime config lives at `/data/config.yaml`; a small Python helper merges preserved per-user weights into the freshly generated config on every startup
-- **Docs**: new [Home Assistant Add-on guide](/guide/home-assistant-addon) with install, configuration reference, MQTT auto-detection, Garmin setup, MFA workaround, custom config mode, and troubleshooting
 
 ### Thanks
 - [@mart1058](https://github.com/mart1058) and [@dbrb2](https://github.com/dbrb2) for diagnose output, HCI snoop logs, and testing the Eufy P2 Pro protocol reverse-engineering ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
 - [bdr99/eufylife-ble-client](https://github.com/bdr99/eufylife-ble-client) for the reference Python implementation of the Eufy T9148/T9149 auth handshake and frame formats
 
-## v1.7.5 <Badge type="tip" text="latest" /> {#v1-7-5}
+## v1.8.0 <Badge type="tip" text="latest" /> {#v1-8-0}
+
+_2026-04-17_
+
+### Added
+- **HA Add-on**: one-click install via a [My Home Assistant](https://www.home-assistant.io/integrations/my/) badge. The badge opens your HA instance, confirms the repository, and lands on the Add-on Store with BLE Scale Sync ready to install. Manual steps stay as a fallback
+- **HA Add-on**: `weight_unit` and `height_unit` exposed as add-on options (kg/lbs, cm/in), no longer hardcoded
+- **HA Add-on**: `last_known_weight` persists across restarts. Runtime config lives at `/data/config.yaml`; a small Python helper merges preserved per-user weights into the freshly generated config on every startup
+- **Docs**: new [Home Assistant Add-on guide](/guide/home-assistant-addon) with install, configuration reference, MQTT auto-detection, Garmin setup, MFA workaround, custom config mode, and troubleshooting
+
+## v1.7.5 {#v1-7-5}
 
 _2026-04-15_
 

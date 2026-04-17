@@ -8,13 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - **Eufy Smart Scale P2 (T9148) and P2 Pro (T9149)**: new dedicated adapter with the AES-128-CBC C0/C1/C2/C3 handshake required by these models. Weight + impedance over GATT FFF2 after authentication, passive weight reading from the 19-byte advertisement without connecting. Prevents the prior false match as a QN scale that crashed with `Operation is not supported` on FFF1 ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
-- **HA Add-on**: `weight_unit` and `height_unit` are now exposed as add-on options (kg/lbs, cm/in). Previously hardcoded to metric regardless of user preference
-- **HA Add-on**: `last_known_weight` now persists across add-on restarts. The runtime config lives at `/data/config.yaml` and `merge_last_weights.py` copies preserved per-user weights from the previous run into the freshly generated config on every startup
-- **Docs**: new [Home Assistant Add-on guide](https://blescalesync.dev/guide/home-assistant-addon) covering install, configuration reference, MQTT auto-detection, Garmin setup including the MFA workaround, custom config mode, persistence, and troubleshooting. Linked from Getting Started and the MQTT exporter reference
 
 ### Thanks
 - [@mart1058](https://github.com/mart1058) and [@dbrb2](https://github.com/dbrb2) for diagnose output, HCI snoop logs, and testing the Eufy P2 Pro protocol reverse-engineering ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
 - [bdr99/eufylife-ble-client](https://github.com/bdr99/eufylife-ble-client) for the reference Python implementation of the Eufy T9148/T9149 auth handshake and frame formats
+
+## [1.8.0] - 2026-04-17
+
+### Added
+- **HA Add-on**: one-click install via a [My Home Assistant](https://www.home-assistant.io/integrations/my/) badge in the README, landing page, getting-started guide, and HA Add-on guide. Manual steps remain as a fallback for users without My Home Assistant configured
+- **HA Add-on**: `weight_unit` and `height_unit` exposed as add-on options (kg/lbs, cm/in). The CLI and exporters display in the chosen unit while internal math stays in kg/cm
+- **HA Add-on**: `last_known_weight` persists across restarts. The runtime config lives at `/data/config.yaml` and a small Python helper (`merge_last_weights.py`) copies preserved per-user weights from the previous run into the freshly generated config on every startup, so multi-user identification by weight stays accurate after reboots and add-on updates
+- **Docs**: new [Home Assistant Add-on guide](https://blescalesync.dev/guide/home-assistant-addon) covering install, full configuration reference, MQTT auto-detection, Garmin setup (including the MFA and IP-block workarounds), custom config mode, persistence semantics, and troubleshooting. Promoted to a first-class quick-start in the README and landing page
 
 ## [1.7.5] - 2026-04-15
 

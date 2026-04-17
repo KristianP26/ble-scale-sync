@@ -8,7 +8,7 @@ head:
 hero:
   name: BLE Scale Sync
   text: Automatic body composition sync
-  tagline: Cross-platform CLI for Linux, macOS & Windows. Read weight & impedance from 23 BLE smart scales and export to Garmin Connect, Strava, Home Assistant, InfluxDB, Webhooks, Ntfy & local files. No phone app needed.
+  tagline: Cross-platform CLI for Linux, macOS & Windows. Read weight & impedance from 20+ BLE smart scales and export to Garmin Connect, Strava, Home Assistant, InfluxDB, Webhooks, Ntfy & local files. No phone app needed.
   image:
     src: /logo.svg
     alt: BLE Scale Sync
@@ -22,8 +22,8 @@ hero:
 
 features:
   - icon: "\u2696\uFE0F"
-    title: 23 Scale Brands
-    details: Xiaomi, Renpho, Eufy, Yunmai, Beurer, Sanitas, Medisana, and more. Auto-detection out of the box.
+    title: 20+ Smart Scales
+    details: Xiaomi, Renpho (FITINDEX, Sencor, QN-Scale), Eufy, Yunmai, Beurer, Sanitas, Medisana, and more. Auto-detection out of the box.
     link: /guide/supported-scales
     linkText: See all scales
   - icon: "\uD83D\uDCE4"
@@ -65,16 +65,7 @@ features:
 
 ## Quick Start
 
-### Option 1: Home Assistant Add-on
-
-Running Home Assistant OS or Supervised? Install the add-on in two clicks and skip the CLI entirely.
-
-1. **Settings** > **Add-ons** > **Add-on Store** > three-dot menu > **Repositories**
-2. Add `https://github.com/KristianP26/ble-scale-sync` and install **BLE Scale Sync**
-
-The add-on handles config through the UI, auto-detects the Mosquitto broker for Home Assistant auto-discovery, and bootstraps Garmin tokens on first start. See the [Home Assistant Add-on guide](/guide/home-assistant-addon) for the full option reference, MFA workaround, and custom config mode.
-
-### Option 2: Docker (Linux)
+### Option 1: Docker (Linux)
 
 ```bash
 # Configure
@@ -94,9 +85,25 @@ docker run -d --restart unless-stopped --network host \
   ghcr.io/kristianp26/ble-scale-sync:latest
 ```
 
-Ideal for Raspberry Pi and headless servers. Your data never leaves your network.
+Ideal for Raspberry Pi, NAS, and headless servers. Works alongside any Home Assistant install (Container, Core, OS) via MQTT auto-discovery. Your data never leaves your network.
 
-### Option 3: Native (Linux, macOS, Windows)
+### Option 2: Home Assistant Add-on
+
+Running Home Assistant **OS** or **Supervised**? One click and skip the CLI entirely.
+
+[![Add BLE Scale Sync repository to your Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FKristianP26%2Fble-scale-sync)
+
+The badge opens your Home Assistant instance, confirms the repository, and lands you on the Add-on Store with **BLE Scale Sync** ready to install.
+
+The add-on handles config through the UI, auto-detects the Mosquitto broker for Home Assistant auto-discovery, and bootstraps Garmin tokens on first start. See the [Home Assistant Add-on guide](/guide/home-assistant-addon) for the full option reference, MFA workaround, and custom config mode.
+
+::: warning
+Add-ons are not available on **HA Container** or **HA Core** installs (no Supervisor). Use Option 1 instead.
+:::
+
+### Option 3: Standalone (Node.js — Linux, macOS, Windows)
+
+Runs natively on all major desktop and server operating systems. No containers, no Supervisor required.
 
 ```bash
 git clone https://github.com/KristianP26/ble-scale-sync.git
@@ -137,7 +144,7 @@ The ideal setup: a [~15€ single-board computer](https://www.raspberrypi.com/pr
 :::
 
 ::: tip Two ways to connect your scale
-**Local BLE** (Options 1 & 2): the server has a Bluetooth adapter and talks to the scale directly. Needs BlueZ/D-Bus on Linux, or native BLE on macOS/Windows.
+**Local BLE** (any of the options above): the server has a Bluetooth adapter and talks to the scale directly. Needs BlueZ/D-Bus on Linux, or native BLE on macOS/Windows.
 
 **Remote BLE via ESP32**: a cheap ~8€ ESP32 board sits near the scale and relays BLE data over WiFi/MQTT. The server needs no Bluetooth at all, which makes Docker deployment much simpler (no `NET_ADMIN`, no D-Bus mounts). See the [ESP32 BLE Proxy guide](/guide/esp32-proxy).
 :::
