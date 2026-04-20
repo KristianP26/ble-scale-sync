@@ -10,12 +10,6 @@ from garminconnect import Garmin
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
-FAKE_USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/121.0.0.0 Safari/537.36"
-)
-
 
 def log(msg):
     print(msg, file=sys.stderr)
@@ -34,6 +28,20 @@ def get_token_dir(token_dir=None):
     return str(new)
 
 
+def has_legacy_only_tokens(token_dir):
+    """True when directory contains pre-0.3 garth tokens but no new-format token.
+
+    Pre-0.3 garminconnect persisted oauth1_token.json + oauth2_token.json via garth.
+    garminconnect 0.3.x uses a different format (single garmin_tokens.json).
+    """
+    path = Path(token_dir)
+    if not path.is_dir():
+        return False
+    legacy = list(path.glob("oauth*_token.json"))
+    new_token = path / "garmin_tokens.json"
+    return bool(legacy) and not new_token.exists()
+
+
 def get_garmin_client(token_dir=None):
     token_dir = get_token_dir(token_dir)
     log(f"[Garmin] Loading tokens from {token_dir}")
@@ -44,9 +52,14 @@ def get_garmin_client(token_dir=None):
             "Run 'npm run setup-garmin' first."
         )
 
+    if has_legacy_only_tokens(token_dir):
+        raise RuntimeError(
+            "Token format changed in garminconnect 0.3.x. "
+            "Run 'npm run setup-garmin' to re-authenticate."
+        )
+
     garmin = Garmin()
-    garmin.garth.sess.headers.update({"User-Agent": FAKE_USER_AGENT})
-    garmin.login(tokenstore=token_dir)
+    garmin.login(token_dir)
     log("[Garmin] Authenticated.")
     return garmin
 

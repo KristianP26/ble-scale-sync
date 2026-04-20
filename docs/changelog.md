@@ -9,7 +9,18 @@ All notable changes to this project are documented here. Format based on [Keep a
 
 ## Unreleased {#unreleased}
 
-## v1.8.0 <Badge type="tip" text="latest" /> {#v1-8-0}
+## v1.8.1 <Badge type="tip" text="latest" /> {#v1-8-1}
+
+_2026-04-20_
+
+### Fixed
+- **Garmin**: upload failed with `'Garmin' object has no attribute 'garth'` after `garminconnect` 0.3.0 (released 2026-04-02) dropped the `garth` dependency. Migrated the Python bridge to the new native auth API: `Garmin.login(tokenstore)` auto-persists on successful login, and `client.dump(token_dir)` saves tokens after MFA. The custom User-Agent override is obsolete because `garminconnect` now uses `curl_cffi` TLS impersonation internally ([#114](https://github.com/KristianP26/ble-scale-sync/issues/114))
+- **Docker**: added `libcurl4-openssl-dev` so `curl_cffi` builds from source on armv7 (no prebuilt wheel on PyPI)
+
+### Breaking
+- Old tokens from `garminconnect` 0.2.x are incompatible with 0.3.x. Existing installs must re-authenticate: run `npm run setup-garmin`, or in the HA Add-on restart the add-on so it re-runs setup from your saved credentials. The setup script auto-cleans leftover `oauth*_token.json` files before writing the new format.
+
+## v1.8.0 {#v1-8-0}
 
 _2026-04-17_
 
