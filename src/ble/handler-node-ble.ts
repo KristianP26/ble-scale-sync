@@ -459,6 +459,8 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   let device: Device | null = null;
   let btAdapter: Adapter;
   let gattAttempted = false;
+  let gattSucceeded = false;
+  let deviceMac: string | null = targetMac ?? null;
 
   try {
     try {
@@ -577,6 +579,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       const result = await autoDiscover(btAdapter, adapters, abortSignal);
       device = result.device;
       matchedAdapter = result.adapter;
+      deviceMac = result.mac;
 
       // Stop discovery before connecting — BlueZ on low-power devices (e.g. Pi Zero)
       // often fails with le-connection-abort-by-local while discovery is still active.
@@ -608,6 +611,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       weightUnit,
       onLiveData,
     );
+    gattSucceeded = true;
 
     try {
       await device.disconnect();
@@ -626,6 +630,27 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     }
 
     if (gattAttempted) {
+      // Cleanup after a FAILED read (scale disconnected before completion,
+      // GATT discovery timed out, etc.). BlueZ keeps the device proxy plus
+      // any orphaned notification subscriptions cached, and the controller
+      // level Discovering flag can desync from our client state
+      // (bluez/bluez#807). Before the shared btmgmt power-cycle runs, mirror
+      // what bleak-retry-connector does on Linux: force StopDiscovery via
+      // D-Bus and RemoveDevice the scale, so the next scan cycle starts from
+      // a clean BlueZ state instead of inheriting the zombie subscription.
+      if (!gattSucceeded) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await (btAdapter! as any).helper.callMethod('StopDiscovery');
+          bleLog.debug('Force StopDiscovery after failed GATT');
+        } catch (e) {
+          bleLog.debug(`Force StopDiscovery failed: ${errMsg(e)}`);
+        }
+        if (deviceMac) {
+          await removeDevice(btAdapter!, deviceMac);
+        }
+      }
+
       // After a GATT connection (successful or failed), reset the D-Bus
       // connection AND power-cycle the HCI controller. BlueZ on Broadcom
       // adapters (RPi) enters a "zombie discovery" state after a few
