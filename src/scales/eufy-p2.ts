@@ -66,6 +66,14 @@ const MAX_WEIGHT_KG = 200;
 /** Company ID used in Eufy P2/P2 Pro advertisement manufacturer data. */
 const EUFY_COMPANY_ID = 0xff48;
 
+/**
+ * Delay between successive sub-contract writes during the C0 and C2 handshake.
+ * Matches the bdr99/eufylife-ble-client Python reference (1s `asyncio.sleep`),
+ * which is what the EufyLife app effectively uses. Shorter delays (200 ms)
+ * were observed to trigger disconnects on some T9149 units.
+ */
+const EUFY_WRITE_DELAY_MS = 1000;
+
 /** XOR checksum over every byte of a frame (matches Python util.compute_checksum). */
 function xor(bytes: Buffer): number {
   return xorChecksum(bytes, 0, bytes.length);
@@ -282,7 +290,7 @@ export class EufyP2Adapter implements ScaleAdapter {
     bleLog.debug('Eufy: sending C0 handshake');
     for (const frame of this.auth.buildC0()) {
       await ctx.write(CHR_WRITE, frame, true);
-      await new Promise<void>((r) => setTimeout(r, 200));
+      await new Promise<void>((r) => setTimeout(r, EUFY_WRITE_DELAY_MS));
     }
   }
 
@@ -352,7 +360,7 @@ export class EufyP2Adapter implements ScaleAdapter {
     if (!this.auth || !this.ctx) return;
     for (const frame of this.auth.buildC2()) {
       await this.ctx.write(CHR_WRITE, frame, true);
-      await new Promise<void>((r) => setTimeout(r, 200));
+      await new Promise<void>((r) => setTimeout(r, EUFY_WRITE_DELAY_MS));
     }
   }
 }
