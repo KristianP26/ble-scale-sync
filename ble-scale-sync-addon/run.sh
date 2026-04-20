@@ -234,9 +234,14 @@ rm -f "$FRESH"
 # ── Garmin token bootstrap ──────────────────────────────────────────────────
 # garmin_upload.py only loads tokens; it does not authenticate from email and
 # password. On first start the token directory is empty, so we run
-# setup_garmin.py to produce oauth1_token.json and oauth2_token.json from the
-# credentials the user entered in the add-on UI. Skipped in custom config
-# mode, where advanced users handle their own Garmin auth.
+# setup_garmin.py to produce garmin_tokens.json from the credentials the user
+# entered in the add-on UI. Skipped in custom config mode, where advanced
+# users handle their own Garmin auth.
+#
+# garminconnect 0.3.x (2026-04) replaced the garth-based oauth1/oauth2 token
+# files with a single garmin_tokens.json. Legacy oauth*_token.json files left
+# over from pre-0.3 are stripped by setup_garmin.py before writing the new
+# format.
 
 if [ "$CUSTOM_CONFIG" != "true" ] && [ "$GARMIN_ENABLED" = "true" ] \
    && [ -n "$GARMIN_EMAIL" ] && [ -n "$GARMIN_PASSWORD" ]; then
@@ -244,17 +249,23 @@ if [ "$CUSTOM_CONFIG" != "true" ] && [ "$GARMIN_ENABLED" = "true" ] \
   SHARE_DIR="/share/ble-scale-sync/garmin-tokens"
   mkdir -p "$TOKEN_DIR"
 
+  # If only legacy pre-0.3 tokens are present, treat the dir as empty so we
+  # re-authenticate (or re-import from /share) and write the new format.
+  if [ -f "$TOKEN_DIR/oauth1_token.json" ] \
+     && [ ! -f "$TOKEN_DIR/garmin_tokens.json" ]; then
+    log "Removing legacy garth tokens (incompatible with garminconnect 0.3.x)"
+    rm -f "$TOKEN_DIR"/oauth*_token.json
+  fi
+
   # Option 1: user pre-generated tokens on another machine (MFA workaround)
-  if [ ! -f "$TOKEN_DIR/oauth1_token.json" ] \
-     && [ -f "$SHARE_DIR/oauth1_token.json" ]; then
+  if [ ! -f "$TOKEN_DIR/garmin_tokens.json" ] \
+     && [ -f "$SHARE_DIR/garmin_tokens.json" ]; then
     log "Importing Garmin tokens from $SHARE_DIR"
-    cp "$SHARE_DIR/oauth1_token.json" "$TOKEN_DIR/" 2>/dev/null || true
-    [ -f "$SHARE_DIR/oauth2_token.json" ] && \
-      cp "$SHARE_DIR/oauth2_token.json" "$TOKEN_DIR/" 2>/dev/null || true
+    cp "$SHARE_DIR/garmin_tokens.json" "$TOKEN_DIR/" 2>/dev/null || true
   fi
 
   # Option 2: auto-authenticate if tokens still missing
-  if [ ! -f "$TOKEN_DIR/oauth1_token.json" ]; then
+  if [ ! -f "$TOKEN_DIR/garmin_tokens.json" ]; then
     log "Garmin tokens missing, authenticating with provided credentials..."
     if python3 /app/garmin-scripts/setup_garmin.py --from-config "$CONFIG"; then
       log "Garmin authentication successful, tokens saved to $TOKEN_DIR"
@@ -262,8 +273,8 @@ if [ "$CUSTOM_CONFIG" != "true" ] && [ "$GARMIN_ENABLED" = "true" ] \
       log "WARNING: Garmin authentication failed."
       log "If your account uses MFA or Garmin is blocking this IP, run"
       log "  python3 garmin-scripts/setup_garmin.py --from-config config.yaml"
-      log "on another machine and copy oauth1_token.json and oauth2_token.json"
-      log "into /share/ble-scale-sync/garmin-tokens/ on this HA host."
+      log "on another machine and copy garmin_tokens.json into"
+      log "/share/ble-scale-sync/garmin-tokens/ on this HA host."
       log "Other exporters (MQTT, etc.) will continue to work."
     fi
   else

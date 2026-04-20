@@ -129,9 +129,9 @@ To upload measurements to Garmin Connect:
 
 Home Assistant add-ons run without an interactive terminal, so the add-on cannot prompt for a 2FA code. If your account has MFA enabled:
 
-1. On a laptop or desktop, clone the repo and run `python3 garmin-scripts/setup_garmin.py`. Enter email, password, and MFA code when prompted. This writes `oauth1_token.json` and `oauth2_token.json` to `~/.garmin_tokens/`.
-2. Copy those two files to `/share/ble-scale-sync/garmin-tokens/` on the Home Assistant host. The Samba and File editor add-ons both expose `/share/` for easy uploads.
-3. Restart BLE Scale Sync. On startup the add-on detects the pre-generated tokens and imports them into `/data/garmin-tokens/`.
+1. On a laptop or desktop, clone the repo and run `python3 garmin-scripts/setup_garmin.py`. Enter email, password, and MFA code when prompted. This writes `garmin_tokens.json` to `~/.garmin_tokens/`.
+2. Copy that file to `/share/ble-scale-sync/garmin-tokens/` on the Home Assistant host. The Samba and File editor add-ons both expose `/share/` for easy uploads.
+3. Restart BLE Scale Sync. On startup the add-on detects the pre-generated token and imports it into `/data/garmin-tokens/`.
 
 The same workflow applies if Garmin is blocking your HA host's IP as a data-centre / VPN address: authenticate from a trusted network and import the tokens.
 
@@ -187,6 +187,10 @@ User-supplied files live under `/share/ble-scale-sync/`:
 ### Garmin "No such file or directory: oauth1_token.json"
 
 Fixed in v1.7.5. Make sure the add-on is on that version or newer. If it still fails, your account likely uses MFA — see [MFA workaround](#mfa-workaround).
+
+### Garmin "'Garmin' object has no attribute 'garth'"
+
+Fixed in v1.8.1. The `garminconnect` library released 0.3.0 on 2026-04-02 which removed the `garth` attribute. The add-on now uses the new native auth API and automatically strips incompatible legacy token files on startup, then re-authenticates from the credentials you entered. If you still see this error, upgrade to v1.8.1 or newer and restart the add-on. MFA users also need to regenerate the MFA token (single `garmin_tokens.json` file now, no more `oauth1/oauth2_token.json`).
 
 ### BlueZ discovery gets stuck after hours
 

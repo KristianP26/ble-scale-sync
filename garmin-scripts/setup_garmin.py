@@ -10,12 +10,6 @@ from garminconnect import Garmin
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
-FAKE_USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/121.0.0.0 Safari/537.36"
-)
-
 
 def get_token_dir(token_dir=None):
     if token_dir:
@@ -28,6 +22,29 @@ def get_token_dir(token_dir=None):
     if old.is_dir() and not new.is_dir():
         return str(old)
     return str(new)
+
+
+def cleanup_legacy_tokens(token_dir):
+    """Remove pre-0.3 garth token files (oauth1_token.json, oauth2_token.json).
+
+    garminconnect 0.3.x replaced garth with native auth and the old token
+    format is incompatible. Leaving legacy files around is harmless but
+    confusing, so wipe them on fresh auth.
+    """
+    path = Path(token_dir)
+    if not path.is_dir():
+        return
+    legacy = list(path.glob("oauth*_token.json"))
+    if legacy:
+        print(
+            "[Setup] Removing legacy token files from pre-0.3 garminconnect: "
+            f"{[f.name for f in legacy]}"
+        )
+        for f in legacy:
+            try:
+                f.unlink()
+            except OSError as e:
+                print(f"[Setup] Warning: failed to remove {f.name}: {e}")
 
 
 def resolve_env_ref(value):
@@ -54,11 +71,15 @@ def authenticate(email, password, token_dir):
     print(f"[Setup] Authenticating as {email}...")
 
     try:
+        os.makedirs(token_dir, exist_ok=True)
+        cleanup_legacy_tokens(token_dir)
+
         garmin = Garmin(email, password, return_on_mfa=True)
-        garmin.garth.sess.headers.update({"User-Agent": FAKE_USER_AGENT})
 
         print("[Setup] Logging in...")
-        result = garmin.login()
+        # In 0.3.x, login(tokenstore) auto-dumps tokens on successful
+        # credential login (swallows dump errors silently via contextlib).
+        result = garmin.login(token_dir)
 
         # Handle 2FA/MFA challenge
         if isinstance(result, tuple) and result[0] == "needs_mfa":
@@ -66,9 +87,12 @@ def authenticate(email, password, token_dir):
             mfa_code = input("[Setup] Enter the MFA code from your authenticator app: ").strip()
             garmin.resume_login(result[1], mfa_code)
             print("[Setup] MFA verification successful.")
-
-        os.makedirs(token_dir, exist_ok=True)
-        garmin.garth.dump(token_dir)
+            # resume_login() does NOT auto-save; dump explicitly.
+            garmin.client.dump(token_dir)
+        else:
+            # Belt-and-suspenders: login()'s auto-dump suppresses exceptions,
+            # so re-dump to surface any write errors here.
+            garmin.client.dump(token_dir)
 
         print(f"[Setup] Tokens saved to: {token_dir}")
         return True

@@ -13,6 +13,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - [@mart1058](https://github.com/mart1058) and [@dbrb2](https://github.com/dbrb2) for diagnose output, HCI snoop logs, and testing the Eufy P2 Pro protocol reverse-engineering ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
 - [bdr99/eufylife-ble-client](https://github.com/bdr99/eufylife-ble-client) for the reference Python implementation of the Eufy T9148/T9149 auth handshake and frame formats
 
+## [1.8.2] - 2026-04-20
+
+### Fixed
+- **Sanitas SBF70 / Beurer BF710 family**: weight parsed as a stuck `12.80 kg` regardless of the real reading on the scale. Root cause: the BF710 variant (start byte `0xE7`) sends a compact 5-byte `0x58` frame with weight at bytes `[3-4]` BE, not the 6+ byte BF700/BF800 layout the adapter assumed. The adapter rejected every live weight frame as too short and then mis-parsed the `0x59` finalize frame. Now branches on `isBf710Type` and applies a 3-reading stability window (0.3 kg tolerance) so the scale's initial metadata frame does not trigger early completion ([#112](https://github.com/KristianP26/ble-scale-sync/issues/112))
+
+### Thanks
+- [@flow778](https://github.com/flow778) for capturing raw BLE frames that made the fix possible ([#112](https://github.com/KristianP26/ble-scale-sync/issues/112))
+
+## [1.8.1] - 2026-04-20
+
+### Fixed
+- **Garmin**: upload failed with `'Garmin' object has no attribute 'garth'` after `garminconnect` released 0.3.0 on 2026-04-02, which dropped the `garth` dependency in favor of native authentication. The Python bridge accessed `garmin.garth.sess.headers` and `garmin.garth.dump()`, both removed in 0.3.x. Migrated to the new API: `Garmin.login(tokenstore)` auto-persists on successful credential login, and `client.dump(token_dir)` saves tokens after MFA. Custom User-Agent override is no longer needed because `garminconnect` now uses `curl_cffi` TLS impersonation and randomized browser fingerprints internally ([#114](https://github.com/KristianP26/ble-scale-sync/issues/114))
+- **Docker**: added `libcurl4-openssl-dev` so `curl_cffi` (new transitive dep via `garminconnect` 0.3.x) builds from source on armv7, where PyPI has no prebuilt wheel
+
+### Breaking
+- Tokens from `garminconnect` 0.2.x (old garth OAuth1/OAuth2 files) are incompatible with 0.3.x. Existing installs must re-authenticate: `npm run setup-garmin`, or in the HA Add-on just restart the add-on so it re-runs setup from the credentials you entered. The setup script auto-removes leftover `oauth*_token.json` files before writing the new token format.
+
+### Thanks
+- [@Phipseyy](https://github.com/Phipseyy) and [@mooredav87](https://github.com/mooredav87) for reporting the Garmin upload regression ([#114](https://github.com/KristianP26/ble-scale-sync/issues/114))
+
 ## [1.8.0] - 2026-04-17
 
 ### Added
