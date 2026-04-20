@@ -129,6 +129,77 @@ describe('BeurerSanitasScaleAdapter', () => {
     });
   });
 
+  describe('SBF70 / BF710 variant (issue #112)', () => {
+    function sbf70Adapter() {
+      const adapter = makeAdapter();
+      adapter.matches(mockPeripheral('SANITAS SBF70'));
+      return adapter;
+    }
+
+    it('parses 5-byte 0x58 frame with weight at bytes [3-4] BE', () => {
+      const adapter = sbf70Adapter();
+      // Real captured frame from issue #112: [E7 58 01 08 5E]
+      const frame = Buffer.from([0xe7, 0x58, 0x01, 0x08, 0x5e]);
+      const reading = adapter.parseNotification(frame);
+      expect(reading).not.toBeNull();
+      // 0x085E = 2142 * 50/1000 = 107.1 kg
+      expect(reading!.weight).toBeCloseTo(107.1, 2);
+      expect(reading!.impedance).toBe(0);
+    });
+
+    it('ignores frames that do not start with 0xE7', () => {
+      const adapter = sbf70Adapter();
+      const frame = Buffer.from([0xf7, 0x58, 0x01, 0x08, 0x5e]);
+      expect(adapter.parseNotification(frame)).toBeNull();
+    });
+
+    it('ignores 0x59 finalize frame for unregistered user (all composition zero)', () => {
+      const adapter = sbf70Adapter();
+      // Real captured frame from issue #112
+      const frame = Buffer.from([
+        0xe7, 0x59, 0x03, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x65,
+      ]);
+      expect(adapter.parseNotification(frame)).toBeNull();
+    });
+
+    it('requires 3 consecutive readings within 0.3 kg for completion', () => {
+      const adapter = sbf70Adapter();
+      // First bogus frame from issue #112 capture
+      const f0 = Buffer.from([0xe7, 0x58, 0x01, 0x01, 0x2b]); // 14.95 kg
+      const f1 = Buffer.from([0xe7, 0x58, 0x01, 0x08, 0x5e]); // 107.1 kg
+      const f2 = Buffer.from([0xe7, 0x58, 0x01, 0x08, 0x5f]); // 107.15 kg
+      const f3 = Buffer.from([0xe7, 0x58, 0x01, 0x08, 0x5e]); // 107.1 kg
+
+      const r0 = adapter.parseNotification(f0);
+      expect(r0).not.toBeNull();
+      expect(adapter.isComplete(r0!)).toBe(false); // only 1 reading buffered
+
+      const r1 = adapter.parseNotification(f1);
+      expect(adapter.isComplete(r1!)).toBe(false); // still drifting (14.95 vs 107.1)
+
+      const r2 = adapter.parseNotification(f2);
+      expect(adapter.isComplete(r2!)).toBe(false); // drift not yet cleared from buffer
+
+      const r3 = adapter.parseNotification(f3);
+      // Buffer now holds [107.1, 107.15, 107.1]: range 0.05 kg <= 0.3 kg
+      expect(adapter.isComplete(r3!)).toBe(true);
+      expect(r3!.weight).toBeCloseTo(107.1, 2);
+    });
+
+    it('rejects out-of-range weight in SBF70 frame', () => {
+      const adapter = sbf70Adapter();
+      // 0xFFFF * 50 / 1000 = 3276.75 kg -> too high
+      const frame = Buffer.from([0xe7, 0x58, 0x01, 0xff, 0xff]);
+      expect(adapter.parseNotification(frame)).toBeNull();
+    });
+
+    it('rejects zero weight in SBF70 frame', () => {
+      const adapter = sbf70Adapter();
+      const frame = Buffer.from([0xe7, 0x58, 0x00, 0x00, 0x00]);
+      expect(adapter.parseNotification(frame)).toBeNull();
+    });
+  });
+
   describe('computeMetrics()', () => {
     it('returns payload with cached body comp from full frame', () => {
       const adapter = makeAdapter();

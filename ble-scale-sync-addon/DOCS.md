@@ -58,13 +58,17 @@ Home Assistant add-ons run without an interactive terminal, so the add-on cannot
    ```bash
    python3 garmin-scripts/setup_garmin.py
    ```
-   Enter your email, password, and MFA code when prompted. This writes `oauth1_token.json` and `oauth2_token.json` to `~/.garmin_tokens/`.
-2. Copy those two files into `/share/ble-scale-sync/garmin-tokens/` on the Home Assistant host (use the Samba or File editor add-on).
-3. Restart the BLE Scale Sync add-on. On startup it detects the pre-generated tokens and imports them into `/data/garmin-tokens/`.
+   Enter your email, password, and MFA code when prompted. This writes `garmin_tokens.json` to `~/.garmin_tokens/`.
+2. Copy that file into `/share/ble-scale-sync/garmin-tokens/` on the Home Assistant host (use the Samba or File editor add-on).
+3. Restart the BLE Scale Sync add-on. On startup it detects the pre-generated token and imports it into `/data/garmin-tokens/`.
 
-If Garmin also blocks cloud or residential proxy IPs, the same workflow applies: authenticate from a trusted network, then import the tokens.
+If Garmin also blocks cloud or residential proxy IPs, the same workflow applies: authenticate from a trusted network, then import the token.
 
 If you disable Garmin in the add-on UI, cached tokens are left in place so you can turn it back on without re-authenticating.
+
+### Upgrading from add-on v1.7.x or v1.8.0
+
+Add-on v1.8.1 bumps `garminconnect` to 0.3.x, which uses a new native auth engine and a new token format. Tokens from earlier versions (`oauth1_token.json`, `oauth2_token.json`) are incompatible and are removed automatically on first start. The add-on re-runs `setup_garmin.py` with the email and password you entered in the UI, so for non-MFA accounts no action is needed beyond restarting the add-on. MFA users follow the workaround above with the new single-file token.
 
 ## Advanced: Custom Config
 
