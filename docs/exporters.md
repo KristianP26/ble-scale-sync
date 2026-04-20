@@ -87,6 +87,10 @@ docker run --rm -it \
 Garmin may block requests from cloud/VPN IPs. If authentication fails, try from a different network, then copy the token directory to your target machine.
 :::
 
+::: warning Upgrading from v1.8.0 or earlier
+v1.8.1 bumps `garminconnect` to 0.3.x, which replaced the old garth-based OAuth files (`oauth1_token.json`, `oauth2_token.json`) with a single `garmin_tokens.json`. Existing tokens are incompatible. Re-run `npm run setup-garmin`; the script auto-removes the legacy files before writing the new format.
+:::
+
 ## MQTT {#mqtt}
 
 Publishes body composition as JSON to an MQTT broker. **Home Assistant auto-discovery** is enabled by default — all 10 metrics appear as sensors grouped under a single device, with availability tracking (LWT) and display precision per metric.

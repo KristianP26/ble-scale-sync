@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.8.1] - 2026-04-20
+
+### Fixed
+- **Garmin**: upload failed with `'Garmin' object has no attribute 'garth'` after `garminconnect` released 0.3.0 on 2026-04-02, which dropped the `garth` dependency in favor of native authentication. The Python bridge accessed `garmin.garth.sess.headers` and `garmin.garth.dump()`, both removed in 0.3.x. Migrated to the new API: `Garmin.login(tokenstore)` auto-persists on successful credential login, and `client.dump(token_dir)` saves tokens after MFA. Custom User-Agent override is no longer needed because `garminconnect` now uses `curl_cffi` TLS impersonation and randomized browser fingerprints internally ([#114](https://github.com/KristianP26/ble-scale-sync/issues/114))
+- **Docker**: added `libcurl4-openssl-dev` so `curl_cffi` (new transitive dep via `garminconnect` 0.3.x) builds from source on armv7, where PyPI has no prebuilt wheel
+
+### Breaking
+- Tokens from `garminconnect` 0.2.x (old garth OAuth1/OAuth2 files) are incompatible with 0.3.x. Existing installs must re-authenticate: `npm run setup-garmin`, or in the HA Add-on just restart the add-on so it re-runs setup from the credentials you entered. The setup script auto-removes leftover `oauth*_token.json` files before writing the new token format.
+
+### Thanks
+- [@Phipseyy](https://github.com/Phipseyy) and [@mooredav87](https://github.com/mooredav87) for reporting the Garmin upload regression ([#114](https://github.com/KristianP26/ble-scale-sync/issues/114))
+
 ## [1.8.0] - 2026-04-17
 
 ### Added
