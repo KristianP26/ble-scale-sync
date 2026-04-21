@@ -35,6 +35,7 @@ async function main(): Promise<void> {
       bleConfig.bleHandler,
       mqttProxy,
       bleConfig.bleAdapter,
+      bleConfig.esphomeProxy,
     );
   } finally {
     if (embeddedBroker) {

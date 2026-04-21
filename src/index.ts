@@ -78,6 +78,7 @@ const {
   bleHandler,
   bleAdapter,
   mqttProxy: initialMqttProxy,
+  esphomeProxy,
 } = resolveRuntimeConfig(appConfig);
 
 let mqttProxy = initialMqttProxy;
@@ -250,6 +251,7 @@ async function runSingleUserCycle(exporters?: Exporter[]): Promise<boolean> {
     abortSignal: signal,
     bleHandler,
     mqttProxy,
+    esphomeProxy,
     bleAdapter,
     onLiveData(reading) {
       const impStr: string = reading.impedance > 0 ? `${reading.impedance} Ohm` : 'Measuring...';
@@ -362,6 +364,7 @@ async function runMultiUserCycle(): Promise<boolean> {
     abortSignal: signal,
     bleHandler,
     mqttProxy,
+    esphomeProxy,
     bleAdapter,
     onLiveData(reading) {
       const impStr: string = reading.impedance > 0 ? `${reading.impedance} Ohm` : 'Measuring...';
@@ -476,6 +479,45 @@ async function main(): Promise<void> {
         await abortableSleep(backoffMs, signal).catch(() => {});
       }
     }
+  } else if (bleHandler === 'esphome-proxy' && esphomeProxy) {
+    // Event-driven: persistent ESPHome Native API connection with BLE adv subscription
+    const { ReadingWatcher: EsphomeReadingWatcher } =
+      await import('./ble/handler-esphome-proxy.js');
+    const watcher = new EsphomeReadingWatcher(esphomeProxy, adapters, SCALE_MAC);
+
+    while (!signal.aborted) {
+      try {
+        touchHeartbeat();
+        await watcher.start();
+
+        if (needsReload) {
+          await reloadConfig();
+          needsReload = false;
+          watcher.updateConfig(adapters, SCALE_MAC);
+          if (appConfig.users.length === 1 && !dryRun) {
+            exporters = buildSingleUserExporters();
+          }
+        }
+
+        const raw = await watcher.nextReading(signal);
+
+        if (appConfig.users.length > 1) {
+          await processRawReading(raw);
+        } else {
+          await processSingleReading(raw, exporters);
+        }
+
+        backoffMs = 0;
+      } catch (err) {
+        if (signal.aborted) break;
+        backoffMs = backoffMs === 0 ? BACKOFF_INITIAL_MS : Math.min(backoffMs * 2, BACKOFF_MAX_MS);
+        log.info(
+          `Error processing ESPHome reading, retrying in ${backoffMs / 1000}s... (${errMsg(err)})`,
+        );
+        await abortableSleep(backoffMs, signal).catch(() => {});
+      }
+    }
+    await watcher.stop();
   } else {
     // Poll-based loop for auto/noble BLE handlers
     while (!signal.aborted) {

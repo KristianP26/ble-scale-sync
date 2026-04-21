@@ -39,6 +39,12 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     return impl(opts);
   }
 
+  if (opts.bleHandler === 'esphome-proxy') {
+    bleLog.debug('BLE handler: esphome-proxy');
+    const { scanAndReadRaw: impl } = await import('./handler-esphome-proxy.js');
+    return impl(opts);
+  }
+
   const driver = resolveNobleDriver();
   bleLog.debug(`BLE handler: ${resolveHandlerName(driver)}`);
 
@@ -85,6 +91,12 @@ export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
     return impl(opts);
   }
 
+  if (opts.bleHandler === 'esphome-proxy') {
+    bleLog.debug('BLE handler: esphome-proxy');
+    const { scanAndRead: impl } = await import('./handler-esphome-proxy.js');
+    return impl(opts);
+  }
+
   const driver = resolveNobleDriver();
   bleLog.debug(`BLE handler: ${resolveHandlerName(driver)}`);
 
@@ -118,9 +130,10 @@ export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
 export async function scanDevices(
   adapters: ScaleAdapter[],
   durationMs?: number,
-  bleHandler?: 'auto' | 'mqtt-proxy',
+  bleHandler?: 'auto' | 'mqtt-proxy' | 'esphome-proxy',
   mqttProxy?: import('../config/schema.js').MqttProxyConfig,
   bleAdapter?: string,
+  esphomeProxy?: import('../config/schema.js').EsphomeProxyConfig,
 ): Promise<ScanResult[]> {
   if (bleHandler === 'mqtt-proxy') {
     if (!mqttProxy) {
@@ -129,6 +142,15 @@ export async function scanDevices(
     bleLog.debug('BLE handler: mqtt-proxy (ESP32)');
     const { scanDevices: impl } = await import('./handler-mqtt-proxy.js');
     return impl(adapters, durationMs, mqttProxy);
+  }
+
+  if (bleHandler === 'esphome-proxy') {
+    if (!esphomeProxy) {
+      throw new Error('esphome_proxy config is required when ble.handler is esphome-proxy');
+    }
+    bleLog.debug('BLE handler: esphome-proxy');
+    const { scanDevices: impl } = await import('./handler-esphome-proxy.js');
+    return impl(adapters, durationMs, esphomeProxy);
   }
 
   const driver = resolveNobleDriver();
