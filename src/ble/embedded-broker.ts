@@ -105,7 +105,7 @@ export async function startEmbeddedBroker(
     };
   }
 
-  // Topic-prefix ACL — prevents a rogue LAN client from using the broker as a
+  // Topic-prefix ACL prevents a rogue LAN client from using the broker as a
   // general pub/sub bus. Internal broker-originated publishes (client === null)
   // are always allowed so $SYS stats and similar housekeeping still work.
   const topicPrefix = opts.topicPrefix;

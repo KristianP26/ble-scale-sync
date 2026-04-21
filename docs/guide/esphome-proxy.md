@@ -9,9 +9,9 @@ head:
 
 # ESPHome Bluetooth Proxy
 
-If you already run an [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy.html) mesh for Home Assistant, BLE Scale Sync can reuse it as its BLE radio. No dedicated ESP32 with custom firmware, no MQTT broker plumbing — the server connects to the ESPHome Native API on port 6053 and subscribes to BLE advertisements directly.
+If you already run an [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy.html) mesh for Home Assistant, BLE Scale Sync can reuse it as its BLE radio. No dedicated ESP32 with custom firmware, no MQTT broker plumbing: the server connects to the ESPHome Native API on port 6053 and subscribes to BLE advertisements directly.
 
-::: warning Experimental — Phase 1 (broadcast-only)
+::: warning Experimental, Phase 1 (broadcast-only)
 The ESPHome proxy transport currently supports **broadcast scales only**. GATT support (connect, subscribe, write) is tracked as phase 2 of [issue #116](https://github.com/KristianP26/ble-scale-sync/issues/116). Until then, scales that require a GATT connection (most Xiaomi Mi Body Composition, Eufy P2/P2 Pro, older Renpho, etc.) are skipped with a warning when they match. See the [supported scales](/guide/supported-scales) page for each scale's broadcast/GATT behavior.
 :::
 
@@ -33,7 +33,7 @@ The ESPHome proxy sees the scale's BLE advertisement, wraps it in a Native API `
 - Either the ESPHome API encryption key (recommended) or the legacy API password, matching the device's `api:` config
 
 ::: tip When to pick this vs the ESP32 MQTT proxy
-If you already have ESPHome proxies in your home, start here — zero new hardware. If you don't, the [ESP32 MQTT proxy](/guide/esp32-proxy) supports both broadcast and GATT scales today and has full display/beep feedback UI.
+If you already have ESPHome proxies in your home, start here: zero new hardware. If you don't, the [ESP32 MQTT proxy](/guide/esp32-proxy) supports both broadcast and GATT scales today and has full display/beep feedback UI.
 :::
 
 ## Configuring BLE Scale Sync
@@ -100,21 +100,22 @@ volumes:
 
 - Check the host and port are reachable: `nc -zv <host> 6053`
 - If you use `encryption_key`, make sure it matches the device's `api.encryption.key` exactly (base64, 44 characters ending in `=`)
-- If you use `password`, note that newer ESPHome builds remove plaintext auth — switch to `encryption_key`
+- If you use `password`, note that newer ESPHome builds remove plaintext auth, switch to `encryption_key`
 
 ### "Scale ... requires a GATT connection" / skipped measurements
 
 Phase 1 only handles broadcast scales. Until phase 2 adds GATT support over Native API, you have three options:
-1. Use a [dedicated ESP32 MQTT proxy](/guide/esp32-proxy) — it supports GATT today
+
+1. Use a [dedicated ESP32 MQTT proxy](/guide/esp32-proxy), it supports GATT today
 2. Run BLE Scale Sync on a machine with a local Bluetooth adapter
 3. Subscribe to [issue #116](https://github.com/KristianP26/ble-scale-sync/issues/116) for phase 2 progress
 
 ### ESPHome logs show "clientInfo: ble-scale-sync"
 
-That's expected — the `client_info` field is how ESPHome identifies who's connected. Change it per-instance in `esphome_proxy.client_info` if you run multiple BLE Scale Sync copies.
+That's expected. The `client_info` field is how ESPHome identifies who's connected. Change it per-instance in `esphome_proxy.client_info` if you run multiple BLE Scale Sync copies.
 
 ### "No recognized scales found" in `npm run scan` over ESPHome
 
 - Step on the scale (or press its button) while the scan runs so it begins advertising
-- Move closer to the ESPHome proxy — scale advertisements are low-power and ESPHome proxies have their own range limits
+- Move closer to the ESPHome proxy. Scale advertisements are low-power and ESPHome proxies have their own range limits
 - Confirm Home Assistant sees the scale's advertisements via the same proxy; if HA also misses them, the proxy itself is out of range

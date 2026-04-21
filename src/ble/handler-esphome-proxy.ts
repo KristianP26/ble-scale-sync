@@ -8,6 +8,7 @@ import { AsyncQueue } from './async-queue.js';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const CONNECT_TIMEOUT_MS = 30_000;
+const BROADCAST_WAIT_MS = 30_000;
 const SCAN_DEFAULT_MS = 15_000;
 const DEDUP_WINDOW_MS = 30_000;
 
@@ -196,7 +197,7 @@ function gattNotSupportedError(adapterName: string, address: string): Error {
  * and return the first broadcast reading that parses successfully.
  *
  * Phase 1 scope: broadcast-only. If a matched adapter requires GATT the
- * function throws a descriptive error (see {@link throwGattNotSupported}).
+ * function throws a descriptive error (see {@link gattNotSupportedError}).
  */
 export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   const config = opts.esphomeProxy;
@@ -255,7 +256,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
 
         client.on('ble', adListener);
       }),
-      CONNECT_TIMEOUT_MS,
+      BROADCAST_WAIT_MS,
       targetMac
         ? `Timed out waiting for broadcast from ${targetMac} via ESPHome proxy.`
         : `Timed out waiting for any recognized scale broadcast via ESPHome proxy.`,
@@ -314,7 +315,7 @@ export async function scanDevices(
   }
 }
 
-// ─── ReadingWatcher — continuous mode ────────────────────────────────────────
+// ─── ReadingWatcher (continuous mode) ────────────────────────────────────────
 
 /**
  * Persistent event-driven advertisement watcher for continuous mode, matching
@@ -370,7 +371,7 @@ export class ReadingWatcher {
       this.onAdHandler = (ad) => this.handleAd(ad);
       this.client.on('ble', this.onAdHandler);
 
-      bleLog.info('ESPHome ReadingWatcher started — listening for advertisements');
+      bleLog.info('ESPHome ReadingWatcher started, listening for advertisements');
     } catch (err) {
       this.started = false;
       await this.teardown();
@@ -421,7 +422,7 @@ export class ReadingWatcher {
       }
     }
 
-    // GATT-only adapter matched; Phase 1 cannot service it — log once and skip
+    // GATT-only adapter matched; Phase 1 cannot service it. Log once and skip.
     if (adapter.charNotifyUuid && !adapter.parseBroadcast) {
       if (!this.gattWarnedFor.has(address)) {
         // Cap the set so it cannot grow unbounded across days of continuous mode
@@ -458,9 +459,6 @@ export class ReadingWatcher {
     }
   }
 }
-
-// Re-exported for test-suite import sites that reached in through this handler.
-export { AsyncQueue };
 
 // ─── Helpers exported for tests ──────────────────────────────────────────────
 
