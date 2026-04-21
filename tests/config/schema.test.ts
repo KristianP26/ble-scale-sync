@@ -359,6 +359,54 @@ describe('BleSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('accepts handler esphome-proxy with esphome_proxy config', () => {
+    const result = BleSchema.safeParse({
+      handler: 'esphome-proxy',
+      esphome_proxy: {
+        host: 'ble-proxy.local',
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.esphome_proxy?.host).toBe('ble-proxy.local');
+      expect(result.data.esphome_proxy?.port).toBe(6053);
+      expect(result.data.esphome_proxy?.client_info).toBe('ble-scale-sync');
+    }
+  });
+
+  it('rejects handler esphome-proxy without esphome_proxy config', () => {
+    const result = BleSchema.safeParse({ handler: 'esphome-proxy' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('esphome_proxy config is required');
+    }
+  });
+
+  it('rejects esphome_proxy with empty host', () => {
+    const result = BleSchema.safeParse({
+      handler: 'esphome-proxy',
+      esphome_proxy: { host: '' },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts esphome_proxy with encryption_key and custom port', () => {
+    const result = BleSchema.safeParse({
+      handler: 'esphome-proxy',
+      esphome_proxy: {
+        host: '192.168.1.42',
+        port: 6053,
+        encryption_key: 'Lw1vKZ+BASE64KEYxxxxx==',
+        client_info: 'pi-zero',
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.esphome_proxy?.encryption_key).toBe('Lw1vKZ+BASE64KEYxxxxx==');
+      expect(result.data.esphome_proxy?.client_info).toBe('pi-zero');
+    }
+  });
+
   it('accepts handler auto without mqtt_proxy', () => {
     const result = BleSchema.safeParse({ handler: 'auto' });
     expect(result.success).toBe(true);

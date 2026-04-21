@@ -8,6 +8,14 @@ const CB_UUID_REGEX =
 
 // --- Sub-schemas ---
 
+export const EsphomeProxySchema = z.object({
+  host: z.string().min(1, 'ESPHome host is required'),
+  port: z.number().int().min(1).max(65535).default(6053),
+  encryption_key: z.string().optional().nullable(),
+  password: z.string().optional().nullable(),
+  client_info: z.string().default('ble-scale-sync'),
+});
+
 export const MqttProxySchema = z.object({
   broker_url: z
     .string()
@@ -35,17 +43,22 @@ export const BleSchema = z
       .optional()
       .nullable(),
     noble_driver: z.enum(['abandonware', 'stoprocent']).optional().nullable(),
-    handler: z.enum(['auto', 'mqtt-proxy']).default('auto'),
+    handler: z.enum(['auto', 'mqtt-proxy', 'esphome-proxy']).default('auto'),
     adapter: z
       .string()
       .regex(/^hci\d+$/, 'Must be a Linux HCI adapter name (e.g., hci0, hci1)')
       .optional()
       .nullable(),
     mqtt_proxy: MqttProxySchema.optional(),
+    esphome_proxy: EsphomeProxySchema.optional(),
   })
   .refine((ble) => ble.handler !== 'mqtt-proxy' || ble.mqtt_proxy !== undefined, {
     message: 'mqtt_proxy config is required when handler is "mqtt-proxy"',
     path: ['mqtt_proxy'],
+  })
+  .refine((ble) => ble.handler !== 'esphome-proxy' || ble.esphome_proxy !== undefined, {
+    message: 'esphome_proxy config is required when handler is "esphome-proxy"',
+    path: ['esphome_proxy'],
   });
 
 export const ScaleSchema = z.object({
@@ -114,6 +127,7 @@ export type WeightUnit = 'kg' | 'lbs';
 // --- Inferred types ---
 
 export type MqttProxyConfig = z.infer<typeof MqttProxySchema>;
+export type EsphomeProxyConfig = z.infer<typeof EsphomeProxySchema>;
 export type BleConfig = z.infer<typeof BleSchema>;
 export type ScaleConfig = z.infer<typeof ScaleSchema>;
 export type ExporterEntry = z.infer<typeof ExporterEntrySchema>;
