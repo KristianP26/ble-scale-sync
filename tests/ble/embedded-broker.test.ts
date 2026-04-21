@@ -142,11 +142,11 @@ describe('startEmbeddedBroker', () => {
       try {
         const received: string[] = [];
         subscriber.on('message', (t) => received.push(t));
-        // Subscribe inside prefix — allowed
+        // Subscribe inside prefix (allowed)
         await subscriber.subscribeAsync('ble-proxy/#');
-        // Publish inside prefix — should be delivered
+        // Publish inside prefix (should be delivered)
         await publisher.publishAsync('ble-proxy/esp32-ble-proxy/status', 'online');
-        // Publish outside prefix — should be dropped by broker ACL
+        // Publish outside prefix (should be dropped by broker ACL)
         await publisher.publishAsync('rogue/topic', 'pwnd');
         // Brief wait for delivery
         await new Promise((r) => setTimeout(r, 100));
@@ -174,7 +174,7 @@ describe('startEmbeddedBroker', () => {
         reconnectPeriod: 0,
       });
       try {
-        // Wildcard within prefix — allowed
+        // Wildcard within prefix (allowed)
         await expect(client.subscribeAsync('ble-proxy/+/status')).resolves.toBeDefined();
       } finally {
         await client.endAsync();

@@ -3,6 +3,7 @@ import { timingSafeEqual } from 'node:crypto';
 import type { AuthenticateError } from 'aedes';
 import { createLogger } from '../logger.js';
 import { errMsg } from '../utils/error.js';
+import { isLoopback } from './loopback.js';
 
 const log = createLogger('MQTTBroker');
 
@@ -75,7 +76,7 @@ export async function startEmbeddedBroker(
   const authEnabled = !!opts.username;
   const drainTimeout = opts.drainTimeoutMs ?? 10_000;
 
-  if (!authEnabled && isNonLoopback(bindHost)) {
+  if (!authEnabled && !isLoopback(bindHost)) {
     log.warn(
       `Embedded broker is binding ${bindHost} without authentication. Anyone on this ` +
         `network can publish to and subscribe from it. Set mqtt_proxy.username + ` +
@@ -112,16 +113,18 @@ export async function startEmbeddedBroker(
   // are always allowed so $SYS stats and similar housekeeping still work.
   const topicPrefix = opts.topicPrefix;
   if (topicPrefix) {
-    const allowedPrefix = topicPrefix.endsWith('/') ? topicPrefix : `${topicPrefix}/`;
-    const isAllowedTopic = (topic: string): boolean =>
-      topic === topicPrefix || topic.startsWith(allowedPrefix);
+    const isAllowed = (topicOrFilter: string, isFilter: boolean): boolean => {
+      // For subscribe filters, strip trailing wildcards to get the literal portion.
+      const literal = isFilter ? literalPrefix(topicOrFilter) : topicOrFilter;
+      return literal === topicPrefix || literal.startsWith(`${topicPrefix}/`);
+    };
 
     aedes.authorizePublish = (client, packet, callback) => {
       if (!client) return callback(null); // broker-originated
       if (packet.topic.startsWith('$SYS/')) {
         return callback(new Error('$SYS/ topics are reserved'));
       }
-      if (!isAllowedTopic(packet.topic)) {
+      if (!isAllowed(packet.topic, false)) {
         return callback(new Error(`publish rejected: topic outside "${topicPrefix}"`));
       }
       callback(null);
@@ -131,7 +134,7 @@ export async function startEmbeddedBroker(
       if (!client) return callback(null, sub);
       // Allow read-only $SYS subscriptions so tools like mqtt-explorer still work.
       if (sub.topic.startsWith('$SYS/')) return callback(null, sub);
-      if (!isAllowedTopic(sub.topic) && !topicMatchesPrefix(sub.topic, topicPrefix)) {
+      if (!isAllowed(sub.topic, true)) {
         return callback(new Error(`subscribe rejected: topic outside "${topicPrefix}"`), null);
       }
       callback(null, sub);
@@ -210,30 +213,14 @@ export async function startEmbeddedBroker(
   return { url, port: actualPort, close };
 }
 
-/** True when the bind host is not loopback / localhost. */
-function isNonLoopback(host: string): boolean {
-  const h = host.trim().toLowerCase();
-  // IPv4 loopback, localhost, compressed + expanded IPv6 loopback
-  return h !== '127.0.0.1' && h !== 'localhost' && h !== '::1' && h !== '0:0:0:0:0:0:0:1';
-}
-
 /**
- * MQTT topic filters support `+` (single level) and `#` (multi-level) wildcards.
- * We accept a subscribe filter if its literal prefix falls inside the configured
- * topic prefix; otherwise reject.
+ * Strip trailing wildcards from an MQTT subscribe filter to recover the literal
+ * prefix. `ble-proxy/#` -> `ble-proxy/`, `ble-proxy/+/status` -> `ble-proxy/`.
  */
-function topicMatchesPrefix(filter: string, prefix: string): boolean {
-  // A filter like `ble-proxy/#` or `ble-proxy/+/status` must start with the prefix
-  // (up to the first wildcard). Take the literal portion before any + or #.
-  const wildcardIdx = Math.min(
-    firstIndexOrInfinity(filter, '+'),
-    firstIndexOrInfinity(filter, '#'),
-  );
-  const literal = wildcardIdx === Infinity ? filter : filter.slice(0, wildcardIdx);
-  return literal === prefix || literal.startsWith(`${prefix}/`);
-}
-
-function firstIndexOrInfinity(s: string, ch: string): number {
-  const idx = s.indexOf(ch);
-  return idx === -1 ? Infinity : idx;
+function literalPrefix(filter: string): string {
+  const plus = filter.indexOf('+');
+  const hash = filter.indexOf('#');
+  const idx =
+    plus === -1 ? hash : hash === -1 ? plus : Math.min(plus, hash);
+  return idx === -1 ? filter : filter.slice(0, idx);
 }

@@ -30,7 +30,7 @@ async function promptMqttProxy(ctx: WizardContext): Promise<MqttProxyConfig> {
     {
       name: 'Use built-in embedded broker (Recommended, zero-config)',
       value: 'embedded' as const,
-      description: 'BLE Scale Sync runs its own broker — the ESP32 connects to this machine',
+      description: 'BLE Scale Sync runs its own broker so the ESP32 connects to this machine',
     },
     {
       name: 'Use an external broker (e.g. Mosquitto, Home Assistant)',
@@ -133,7 +133,7 @@ async function promptEsphomeProxy(ctx: WizardContext): Promise<EsphomeProxyConfi
     {
       name: 'Legacy password',
       value: 'password' as const,
-      description: 'Deprecated plaintext auth — prefer Noise if your ESPHome supports it',
+      description: 'Deprecated plaintext auth. Prefer Noise if your ESPHome supports it',
     },
   ]);
 
@@ -186,12 +186,12 @@ export const bleStep: WizardStep = {
     if (handler === 'mqtt-proxy') {
       ctx.config.ble.mqtt_proxy = await promptMqttProxy(ctx);
       ctx.config.ble.esphome_proxy = undefined;
-      console.log(`\n  ${info('MQTT proxy configured — scale discovery will use the ESP32.')}`);
+      console.log(`\n  ${info('MQTT proxy configured. Scale discovery will use the ESP32.')}`);
     } else if (handler === 'esphome-proxy') {
       ctx.config.ble.esphome_proxy = await promptEsphomeProxy(ctx);
       ctx.config.ble.mqtt_proxy = undefined;
       console.log(
-        `\n  ${info('ESPHome proxy configured — only broadcast scales are supported in phase 1.')}`,
+        `\n  ${info('ESPHome proxy configured. Only broadcast scales are supported in phase 1.')}`,
       );
     } else {
       ctx.config.ble.mqtt_proxy = undefined;

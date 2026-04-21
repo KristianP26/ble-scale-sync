@@ -213,7 +213,7 @@ describe('scanAndReadRaw', () => {
     });
 
     await mockClient.waitForListener('ble');
-    // Unknown manufacturer — ignored
+    // Unknown manufacturer, should be ignored
     mockClient.pushBle({
       address: 0xaabbccddeeff,
       name: 'SomeOtherDevice',
@@ -251,7 +251,7 @@ describe('scanAndReadRaw', () => {
     });
 
     await mockClient.waitForListener('ble');
-    // Wrong MAC but matches adapter — should be ignored
+    // Wrong MAC but matches adapter; should be ignored
     mockClient.pushBle({
       address: 0x1234567890ab,
       name: 'MyScale',
@@ -428,7 +428,7 @@ describe('scanDevices', () => {
     const promise = scanDevices([adapter], 50, config);
     await mockClient.waitForListener('ble');
 
-    // Same address twice — should only appear once
+    // Same address twice; should only appear once
     mockClient.pushBle({
       address: 0x112233445566,
       name: 'MyScale',

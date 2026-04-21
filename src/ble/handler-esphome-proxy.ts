@@ -13,6 +13,10 @@ const CONNECT_TIMEOUT_MS = 30_000;
 const BROADCAST_WAIT_MS = 60_000;
 const SCAN_DEFAULT_MS = 15_000;
 const DEDUP_WINDOW_MS = 30_000;
+// Cap for the "already warned about this GATT scale" tracker used in continuous
+// mode. Old entries are evicted LRU-style so dedup persists long-term instead of
+// flapping every 256 warnings.
+const GATT_WARN_LRU_MAX = 256;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -81,39 +85,46 @@ async function waitForConnected(
   hostPort: string = 'host:port',
 ): Promise<void> {
   if (client.connected) return;
-  await withTimeout(
-    new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const cleanup = () => {
-        client.removeListener('connected', onConnected as (...args: unknown[]) => void);
-        client.removeListener('error', onError as (...args: unknown[]) => void);
-      };
-      const onConnected = () => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve();
-      };
-      const onError = (err: unknown) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(err instanceof Error ? err : new Error(errMsg(err)));
-      };
-      client.on('connected', onConnected);
-      client.on('error', onError);
-      try {
-        client.connect();
-      } catch (err) {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(err instanceof Error ? err : new Error(errMsg(err)));
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | null = null;
+    const cleanup = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
       }
-    }),
-    CONNECT_TIMEOUT_MS,
-    `Timed out connecting to ESPHome proxy at ${hostPort}.`,
-  );
+      client.removeListener('connected', onConnected as (...args: unknown[]) => void);
+      client.removeListener('error', onError as (...args: unknown[]) => void);
+    };
+    const onConnected = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const onError = (err: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err instanceof Error ? err : new Error(errMsg(err)));
+    };
+    timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error(`Timed out connecting to ESPHome proxy at ${hostPort}.`));
+    }, CONNECT_TIMEOUT_MS);
+    client.on('connected', onConnected);
+    client.on('error', onError);
+    try {
+      client.connect();
+    } catch (err) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err instanceof Error ? err : new Error(errMsg(err)));
+    }
+  });
 }
 
 async function safeDisconnect(client: EsphomeClient): Promise<void> {
@@ -247,14 +258,24 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
             }
           }
 
-          // Broadcast-capable adapter but the frame isn't stable yet
-          if (adapter.parseBroadcast || !adapter.charNotifyUuid) {
+          // Adapter supports broadcast: keep waiting for a stable frame.
+          if (adapter.parseBroadcast) {
             bleLog.debug(
               `${adapter.name} matched at ${address} but broadcast frame is not stable yet`,
             );
             return;
           }
 
+          // Adapter advertises nothing broadcast-able and no GATT characteristic
+          // either: nothing we can do, keep waiting in case another device matches.
+          if (!adapter.charNotifyUuid) {
+            bleLog.debug(
+              `${adapter.name} matched at ${address} but has no broadcast or GATT path`,
+            );
+            return;
+          }
+
+          // GATT-only adapter: Phase 1 cannot service it in single-shot mode.
           reject(gattNotSupportedError(adapter.name, address));
         };
 
@@ -294,7 +315,18 @@ export async function scanDevices(
     await waitForConnected(client, hostPort);
     bleLog.info(`ESPHome proxy connected at ${hostPort}`);
 
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let timer: NodeJS.Timeout | null = null;
+      const cleanup = () => {
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+        client.removeListener('ble', onAd as (...args: unknown[]) => void);
+        client.removeListener('error', onError as (...args: unknown[]) => void);
+        client.removeListener('disconnected', onDisconnect as (...args: unknown[]) => void);
+      };
       const onAd = (ad: EsphomeBleAdvertisement): void => {
         const address = formatMacAddress(ad.address);
         if (results.has(address)) return;
@@ -306,9 +338,25 @@ export async function scanDevices(
           matchedAdapter: adapter?.name,
         });
       };
+      const onError = (err: unknown): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(err instanceof Error ? err : new Error(errMsg(err)));
+      };
+      const onDisconnect = (): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error('ESPHome proxy disconnected during scan'));
+      };
       client.on('ble', onAd);
-      setTimeout(() => {
-        client.removeListener('ble', onAd as (...args: unknown[]) => void);
+      client.on('error', onError);
+      client.on('disconnected', onDisconnect);
+      timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
         resolve();
       }, duration);
     });
@@ -339,7 +387,10 @@ export class ReadingWatcher {
     handler: (...args: unknown[]) => void;
   }> = [];
   private onAdHandler: ((ad: EsphomeBleAdvertisement) => void) | null = null;
-  private gattWarnedFor = new Set<string>();
+  // LRU map (insertion-ordered): tracks which GATT-only scales we've already
+  // warned about. Once the map hits GATT_WARN_LRU_MAX we evict the oldest entry
+  // so dedup survives long-running continuous mode without a periodic flush.
+  private gattWarnedFor = new Map<string, true>();
 
   constructor(config: EsphomeProxyConfig, adapters: ScaleAdapter[], targetMac?: string) {
     this.config = config;
@@ -428,17 +479,22 @@ export class ReadingWatcher {
 
     // GATT-only adapter matched; Phase 1 cannot service it. Log once and skip.
     if (adapter.charNotifyUuid && !adapter.parseBroadcast) {
-      if (!this.gattWarnedFor.has(address)) {
-        // Cap the set so it cannot grow unbounded across days of continuous mode
-        // when many different GATT-only scales drift in and out of range.
-        if (this.gattWarnedFor.size >= 256) this.gattWarnedFor.clear();
-        this.gattWarnedFor.add(address);
-        bleLog.warn(
-          `${adapter.name} at ${address} requires GATT, which the ESPHome proxy transport ` +
-            `does not yet support (Phase 1 is broadcast-only). Measurements from this scale ` +
-            `are skipped.`,
-        );
+      if (this.gattWarnedFor.has(address)) {
+        // Refresh recency so the entry survives LRU eviction.
+        this.gattWarnedFor.delete(address);
+        this.gattWarnedFor.set(address, true);
+        return;
       }
+      if (this.gattWarnedFor.size >= GATT_WARN_LRU_MAX) {
+        const oldest = this.gattWarnedFor.keys().next().value;
+        if (oldest !== undefined) this.gattWarnedFor.delete(oldest);
+      }
+      this.gattWarnedFor.set(address, true);
+      bleLog.warn(
+        `${adapter.name} at ${address} requires GATT, which the ESPHome proxy transport ` +
+          `does not yet support (Phase 1 is broadcast-only). Measurements from this scale ` +
+          `are skipped.`,
+      );
     }
   }
 

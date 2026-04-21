@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isLoopback } from '../ble/loopback.js';
 
 // --- Regex patterns ---
 
@@ -7,8 +8,6 @@ const CB_UUID_REGEX =
   /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/;
 
 // --- Sub-schemas ---
-
-const LOOPBACK_BINDS = new Set(['127.0.0.1', 'localhost', '::1', '0:0:0:0:0:0:0:1']);
 
 export const EsphomeProxySchema = z
   .object({
@@ -46,7 +45,7 @@ export const MqttProxySchema = z
   .refine(
     (c) => {
       if (c.broker_url) return true;
-      if (LOOPBACK_BINDS.has(c.embedded_broker_bind.trim().toLowerCase())) return true;
+      if (isLoopback(c.embedded_broker_bind)) return true;
       return !!c.username;
     },
     {
