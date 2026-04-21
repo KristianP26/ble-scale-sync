@@ -269,9 +269,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
           // Adapter advertises nothing broadcast-able and no GATT characteristic
           // either: nothing we can do, keep waiting in case another device matches.
           if (!adapter.charNotifyUuid) {
-            bleLog.debug(
-              `${adapter.name} matched at ${address} but has no broadcast or GATT path`,
-            );
+            bleLog.debug(`${adapter.name} matched at ${address} but has no broadcast or GATT path`);
             return;
           }
 

@@ -220,7 +220,6 @@ export async function startEmbeddedBroker(
 function literalPrefix(filter: string): string {
   const plus = filter.indexOf('+');
   const hash = filter.indexOf('#');
-  const idx =
-    plus === -1 ? hash : hash === -1 ? plus : Math.min(plus, hash);
+  const idx = plus === -1 ? hash : hash === -1 ? plus : Math.min(plus, hash);
   return idx === -1 ? filter : filter.slice(0, idx);
 }
