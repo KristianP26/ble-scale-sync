@@ -227,4 +227,64 @@ describe('EufyP2Adapter', () => {
     expect(payload.impedance).toBe(0);
     assertPayloadRanges(payload);
   });
+
+  it('rejects FFF2 weight frames when onConnected had no deviceAddress (no stale auth)', async () => {
+    const adapter = new EufyP2Adapter();
+
+    // First session: authenticate fully so adapter holds a live EufyAuthHandler.
+    const writes: Buffer[] = [];
+    const ctx = {
+      write: async (_uuid: string, data: Buffer | number[]) => {
+        writes.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
+      },
+      read: async () => Buffer.alloc(0),
+      subscribe: async () => {},
+      profile: defaultProfile(),
+      deviceAddress: TEST_MAC_FLAT,
+    };
+    await adapter.onConnected(ctx);
+    const c1 = makeC1Frames(TEST_MAC, 'DEVICEUUID12345');
+    for (const f of c1) adapter.parseCharNotification!('fff4', f);
+    adapter.parseCharNotification!('fff4', Buffer.from([0xc3, 0x01, 0x00, 0x01, 0x00, 0xc3]));
+    expect(adapter.parseCharNotification!('fff2', makeNotification(75, 500))).not.toBeNull();
+
+    // Second session without a MAC: adapter must NOT keep the old auth.
+    await adapter.onConnected({ ...ctx, deviceAddress: '' });
+    expect(adapter.parseCharNotification!('fff2', makeNotification(75, 500))).toBeNull();
+  });
+});
+
+// ─── SegmentReassembler integrity (via handleC1 which uses it) ─────────────
+
+describe('SegmentReassembler', () => {
+  it('rejects C1 segment with a tampered XOR checksum', () => {
+    const h = new EufyAuthHandler(TEST_MAC, 'abcdef123456789');
+    const c1Frames = makeC1Frames(TEST_MAC, 'DEVICEUUID12345');
+    // Corrupt the last byte (XOR) on the first segment
+    const bad = Buffer.from(c1Frames[0]);
+    bad[bad.length - 1] ^= 0xff;
+    expect(h.handleC1(bad)).toBe(false);
+    // A valid follow-up frame for segment 0 should still work
+    expect(h.handleC1(c1Frames[0])).toBe(c1Frames.length === 1);
+  });
+
+  it('rejects C1 reassembly when total length does not match advertised', () => {
+    const h = new EufyAuthHandler(TEST_MAC, 'abcdef123456789');
+    const c1Frames = makeC1Frames(TEST_MAC, 'DEVICEUUID12345');
+    if (c1Frames.length < 2) return; // only meaningful with multi-segment
+
+    // Mutate frame[3] (totalBytes) on first segment so reassembled length mismatches
+    const tampered = Buffer.from(c1Frames[0]);
+    tampered[3] = (tampered[3] + 1) & 0xff;
+    // Recompute XOR so the segment itself passes the checksum
+    let x = 0;
+    for (let i = 0; i < tampered.length - 1; i++) x ^= tampered[i];
+    tampered[tampered.length - 1] = x;
+
+    expect(h.handleC1(tampered)).toBe(false);
+    // Feed remaining untouched segments; the final one should drop on length mismatch
+    for (let i = 1; i < c1Frames.length; i++) {
+      expect(h.handleC1(c1Frames[i])).toBe(false);
+    }
+  });
 });

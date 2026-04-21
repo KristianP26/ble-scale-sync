@@ -108,22 +108,42 @@ class SegmentReassembler {
   private readonly prefix: number;
   private buffer: Buffer = Buffer.alloc(0);
   private expectedSegments = 0;
+  private expectedTotalBytes = 0;
   private nextSegment = 0;
 
   constructor(prefix: number) {
     this.prefix = prefix;
   }
 
+  private reset(): void {
+    this.buffer = Buffer.alloc(0);
+    this.expectedSegments = 0;
+    this.expectedTotalBytes = 0;
+    this.nextSegment = 0;
+  }
+
   /** Feed a single notification frame. Returns the full payload once last segment arrives. */
   feed(frame: Buffer): Buffer | null {
     if (frame.length < 5 || frame[0] !== this.prefix) return null;
+
+    // Validate trailing XOR checksum over header + payload.
+    const body = frame.subarray(0, frame.length - 1);
+    const expectedXor = frame[frame.length - 1];
+    if (xor(body) !== expectedXor) {
+      bleLog.debug(
+        `Eufy: dropping segment with bad XOR (got 0x${expectedXor.toString(16)}, expected 0x${xor(body).toString(16)})`,
+      );
+      return null;
+    }
+
     const numSegments = frame[1];
     const segIdx = frame[2];
+    const totalBytes = frame[3];
 
     if (segIdx === 0) {
-      this.buffer = Buffer.alloc(0);
+      this.reset();
       this.expectedSegments = numSegments;
-      this.nextSegment = 0;
+      this.expectedTotalBytes = totalBytes;
     }
 
     if (segIdx !== this.nextSegment) {
@@ -138,9 +158,14 @@ class SegmentReassembler {
 
     if (segIdx === numSegments - 1) {
       const out = this.buffer;
-      this.buffer = Buffer.alloc(0);
-      this.expectedSegments = 0;
-      this.nextSegment = 0;
+      const expected = this.expectedTotalBytes;
+      this.reset();
+      if (out.length !== expected) {
+        bleLog.debug(
+          `Eufy: reassembled payload length ${out.length} differs from advertised ${expected}; dropping frame`,
+        );
+        return null;
+      }
       return out;
     }
     return null;
@@ -280,7 +305,10 @@ export class EufyP2Adapter implements ScaleAdapter {
   }
 
   async onConnected(ctx: ConnectionContext): Promise<void> {
+    // Reset per-connection state first so a missing deviceAddress or a fresh
+    // scan cannot inherit a prior session's authenticated EufyAuthHandler.
     this.ctx = ctx;
+    this.auth = null;
     this.c3Seen.done = false;
     if (!ctx.deviceAddress) {
       bleLog.warn('Eufy: no device address available — auth will fail without MAC');
@@ -340,7 +368,11 @@ export class EufyP2Adapter implements ScaleAdapter {
     if (data[0] === 0xc1) {
       if (!this.auth.handleC1(data)) return;
       bleLog.debug(`Eufy: C1 complete, device uuid received, sending C2`);
-      void this.sendC2();
+      void this.sendC2().catch((error: unknown) => {
+        bleLog.warn(
+          `Eufy: failed to send C2 authentication frame (${error instanceof Error ? error.message : String(error)})`,
+        );
+      });
       return;
     }
 

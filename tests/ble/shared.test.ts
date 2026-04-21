@@ -145,7 +145,7 @@ describe('waitForReading() — legacy mode', () => {
       }),
     });
 
-    const promise = waitForReading(charMap, device, adapter, PROFILE);
+    const promise = waitForReading(charMap, device, adapter, PROFILE, '');
 
     // Wait for subscription to be set up
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
@@ -176,7 +176,7 @@ describe('waitForReading() — legacy mode', () => {
       }),
     });
 
-    const promise = waitForReading(charMap, device, adapter, PROFILE);
+    const promise = waitForReading(charMap, device, adapter, PROFILE, '');
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     // First two notifications return null — ignored
@@ -205,7 +205,7 @@ describe('waitForReading() — legacy mode', () => {
       // isComplete requires weight > 10 AND impedance > 200
     });
 
-    const promise = waitForReading(charMap, device, adapter, PROFILE);
+    const promise = waitForReading(charMap, device, adapter, PROFILE, '');
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     // Incomplete reading — weight too low
@@ -232,7 +232,7 @@ describe('waitForReading() — legacy mode', () => {
       parseNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
     });
 
-    const promise = waitForReading(charMap, device, adapter, PROFILE);
+    const promise = waitForReading(charMap, device, adapter, PROFILE, '');
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     // Unlock command should have been sent
@@ -262,7 +262,7 @@ describe('waitForReading() — legacy mode', () => {
       }),
     });
 
-    const promise = waitForReading(charMap, device, adapter, PROFILE, undefined, onLiveData);
+    const promise = waitForReading(charMap, device, adapter, PROFILE, '', undefined, onLiveData);
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from([0x01])); // incomplete
@@ -292,7 +292,7 @@ describe('waitForReading() — legacy mode', () => {
       parseNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
     });
 
-    const promise = waitForReading(charMap, device, adapter, PROFILE);
+    const promise = waitForReading(charMap, device, adapter, PROFILE, '');
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     // Both unlock commands should have been sent
@@ -317,7 +317,7 @@ describe('waitForReading() — legacy mode', () => {
 
     const adapter = createLegacyAdapter();
 
-    const promise = waitForReading(charMap, device, adapter, PROFILE);
+    const promise = waitForReading(charMap, device, adapter, PROFILE, '');
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     device.triggerDisconnect();
@@ -333,7 +333,7 @@ describe('waitForReading() — legacy mode', () => {
 
     const adapter = createLegacyAdapter();
 
-    await expect(waitForReading(charMap, device, adapter, PROFILE)).rejects.toThrow(
+    await expect(waitForReading(charMap, device, adapter, PROFILE, '')).rejects.toThrow(
       'Required characteristics not found',
     );
   });
@@ -346,7 +346,7 @@ describe('waitForReading() — legacy mode', () => {
 
     const adapter = createLegacyAdapter();
 
-    await expect(waitForReading(charMap, device, adapter, PROFILE)).rejects.toThrow(
+    await expect(waitForReading(charMap, device, adapter, PROFILE, '')).rejects.toThrow(
       'Required characteristics not found',
     );
   });
@@ -370,7 +370,7 @@ describe('waitForReading() — legacy mode', () => {
       parseNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
     });
 
-    const promise = waitForReading(charMap, device, adapter, PROFILE);
+    const promise = waitForReading(charMap, device, adapter, PROFILE, '');
     await vi.waitFor(() => expect(altNotifyChar.subscribeCalled).toBe(true));
 
     altNotifyChar.triggerData(Buffer.from([0x01]));
@@ -393,7 +393,7 @@ describe('waitForReading() — legacy mode', () => {
       }),
     });
 
-    const promise = waitForReading(charMap, device, adapter, PROFILE);
+    const promise = waitForReading(charMap, device, adapter, PROFILE, '');
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from([0x01]));
@@ -427,7 +427,7 @@ describe('waitForReading() — onConnected mode', () => {
       parseNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
     });
 
-    const promise = waitForReading(charMap, device, adapter, PROFILE);
+    const promise = waitForReading(charMap, device, adapter, PROFILE, '');
     await vi.waitFor(() => expect(onConnected).toHaveBeenCalled());
 
     // Trigger data through the subscription set up by characteristics bindings
@@ -459,7 +459,7 @@ describe('waitForReading() — onConnected mode', () => {
       parseNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
     });
 
-    const promise = waitForReading(charMap, device, adapter, PROFILE);
+    const promise = waitForReading(charMap, device, adapter, PROFILE, '');
     await vi.waitFor(() => expect(writeChar.writtenData.length).toBeGreaterThanOrEqual(1));
     expect(writeChar.writtenData[0]).toEqual(Buffer.from([0xab, 0xcd]));
 
@@ -490,7 +490,7 @@ describe('waitForReading() — onConnected mode', () => {
       parseNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
     });
 
-    const promise = waitForReading(charMap, device, adapter, PROFILE);
+    const promise = waitForReading(charMap, device, adapter, PROFILE, '');
     await vi.waitFor(() => expect(writeChar.writtenData.length).toBeGreaterThanOrEqual(1));
     expect(writeChar.writtenData[0]).toEqual(Buffer.from([0x01, 0x02, 0x03]));
 
@@ -525,7 +525,7 @@ describe('waitForReading() — multi-char mode (characteristics[])', () => {
       parseNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
     });
 
-    const promise = waitForReading(charMap, device, adapter, PROFILE);
+    const promise = waitForReading(charMap, device, adapter, PROFILE, '');
     await vi.waitFor(() => {
       expect(char1.subscribeCalled).toBe(true);
       expect(char2.subscribeCalled).toBe(true);
@@ -551,7 +551,7 @@ describe('waitForReading() — multi-char mode (characteristics[])', () => {
       parseCharNotification,
     });
 
-    const promise = waitForReading(charMap, device, adapter, PROFILE);
+    const promise = waitForReading(charMap, device, adapter, PROFILE, '');
     await vi.waitFor(() => expect(char1.subscribeCalled).toBe(true));
 
     char1.triggerData(Buffer.from([0x01]));
@@ -572,7 +572,7 @@ describe('waitForReading() — multi-char mode (characteristics[])', () => {
       onConnected: vi.fn(),
     });
 
-    await expect(waitForReading(charMap, device, adapter, PROFILE)).rejects.toThrow(
+    await expect(waitForReading(charMap, device, adapter, PROFILE, '')).rejects.toThrow(
       'No notify characteristics',
     );
   });
@@ -594,7 +594,7 @@ describe('waitForRawReading()', () => {
       parseNotification: vi.fn(() => ({ weight: 75.5, impedance: 500 })),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE);
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from([0x01]));
@@ -619,7 +619,7 @@ describe('waitForRawReading()', () => {
       parseNotification: vi.fn(() => ({ weight: 166.45, impedance: 500 })),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, 'lbs');
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '', 'lbs');
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from([0x01]));
@@ -640,7 +640,7 @@ describe('waitForRawReading()', () => {
 
     const adapter = createLegacyAdapter();
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE);
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     device.triggerDisconnect();
@@ -667,7 +667,7 @@ describe('waitForRawReading()', () => {
       }),
     });
 
-    const promise = waitForRawReading(charMap, device, adapter, PROFILE, undefined, onLiveData);
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '', undefined, onLiveData);
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from([0x01])); // incomplete
@@ -696,7 +696,7 @@ describe('waitForReading() — weight normalization', () => {
       parseNotification: vi.fn(() => ({ weight: 166.45, impedance: 500 })),
     });
 
-    const promise = waitForReading(charMap, device, adapter, PROFILE, 'lbs');
+    const promise = waitForReading(charMap, device, adapter, PROFILE, '', 'lbs');
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from([0x01]));
@@ -721,7 +721,7 @@ describe('waitForReading() — weight normalization', () => {
       parseNotification: vi.fn(() => ({ weight: 75.5, impedance: 500 })),
     });
 
-    const promise = waitForReading(charMap, device, adapter, PROFILE, 'lbs');
+    const promise = waitForReading(charMap, device, adapter, PROFILE, '', 'lbs');
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from([0x01]));
@@ -745,7 +745,7 @@ describe('waitForReading() — weight normalization', () => {
       parseNotification: vi.fn(() => ({ weight: 75.5, impedance: 500 })),
     });
 
-    const promise = waitForReading(charMap, device, adapter, PROFILE, 'kg');
+    const promise = waitForReading(charMap, device, adapter, PROFILE, '', 'kg');
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
 
     notifyChar.triggerData(Buffer.from([0x01]));

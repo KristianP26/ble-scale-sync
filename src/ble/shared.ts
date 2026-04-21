@@ -238,9 +238,9 @@ export function waitForRawReading(
   bleDevice: BleDevice,
   adapter: ScaleAdapter,
   profile: UserProfile,
+  deviceAddress: string,
   weightUnit?: WeightUnit,
   onLiveData?: (reading: ScaleReading) => void,
-  deviceAddress = '',
 ): Promise<RawReading> {
   return new Promise<RawReading>((resolve, reject) => {
     let resolved = false;
@@ -309,17 +309,17 @@ export function waitForReading(
   bleDevice: BleDevice,
   adapter: ScaleAdapter,
   profile: UserProfile,
+  deviceAddress: string,
   weightUnit?: WeightUnit,
   onLiveData?: (reading: ScaleReading) => void,
-  deviceAddress = '',
 ): Promise<BodyComposition> {
   return waitForRawReading(
     charMap,
     bleDevice,
     adapter,
     profile,
+    deviceAddress,
     weightUnit,
     onLiveData,
-    deviceAddress,
   ).then(({ reading, adapter: matched }) => matched.computeMetrics(reading, profile));
 }

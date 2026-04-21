@@ -572,9 +572,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       wrapDevice(device),
       matchedAdapter,
       profile,
+      deviceMac.replace(/[:-]/g, '').toUpperCase(),
       weightUnit,
       onLiveData,
-      deviceMac.replace(/[:-]/g, '').toUpperCase(),
     );
 
     try {
