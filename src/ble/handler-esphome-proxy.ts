@@ -424,6 +424,9 @@ export class ReadingWatcher {
     // GATT-only adapter matched; Phase 1 cannot service it — log once and skip
     if (adapter.charNotifyUuid && !adapter.parseBroadcast) {
       if (!this.gattWarnedFor.has(address)) {
+        // Cap the set so it cannot grow unbounded across days of continuous mode
+        // when many different GATT-only scales drift in and out of range.
+        if (this.gattWarnedFor.size >= 256) this.gattWarnedFor.clear();
         this.gattWarnedFor.add(address);
         bleLog.warn(
           `${adapter.name} at ${address} requires GATT, which the ESPHome proxy transport ` +

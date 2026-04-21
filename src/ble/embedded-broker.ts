@@ -96,9 +96,10 @@ export async function startEmbeddedBroker(
       if (userOk && passOk) {
         callback(null, true);
       } else {
-        const err = new Error('Bad username or password') as AuthenticateError;
-        // AuthErrorCode.BAD_USERNAME_OR_PASSWORD = 4 (const enum, inlined at build time)
-        (err as unknown as { returnCode: number }).returnCode = 4;
+        // AuthErrorCode.BAD_USERNAME_OR_PASSWORD = 4 (aedes const enum, not importable at runtime)
+        const err = Object.assign(new Error('Bad username or password'), {
+          returnCode: 4,
+        }) as AuthenticateError;
         callback(err, false);
       }
     };
