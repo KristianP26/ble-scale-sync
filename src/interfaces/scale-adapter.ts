@@ -57,6 +57,11 @@ export interface ConnectionContext {
   subscribe(charUuid: string): Promise<void>;
   /** User profile from .env configuration. */
   profile: UserProfile;
+  /**
+   * Device identifier used by adapters that derive keys from MAC (e.g. Eufy T9148/T9149).
+   * Uppercase, no separators. Empty string when unavailable (e.g. macOS CoreBluetooth UUID).
+   */
+  deviceAddress: string;
 }
 
 export interface ScaleAdapter {

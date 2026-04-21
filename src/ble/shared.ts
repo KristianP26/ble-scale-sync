@@ -27,6 +27,45 @@ function resolveChar(charMap: Map<string, BleChar>, uuid: string): BleChar | und
   return charMap.get(normalizeUuid(uuid));
 }
 
+/**
+ * Validate that a charMap contains every characteristic the adapter needs.
+ *
+ * Returns the list of missing UUIDs (empty when the map is complete). Handles
+ * both multi-char adapters (`characteristics` bindings) and legacy adapters
+ * (single notify + write with optional alt UUIDs).
+ *
+ * Callers use this after `buildCharMap` to detect the BlueZ `ServicesResolved`
+ * race ([bluez/bluez#1489](https://github.com/bluez/bluez/issues/1489)) where
+ * `ServicesResolved=true` fires before all GATT characteristics are exported
+ * over D-Bus, yielding a charMap that is missing entries the scale actually
+ * exposes. The typical workaround is to wait a few hundred ms and rebuild.
+ */
+export function findMissingCharacteristics(
+  charMap: Map<string, BleChar>,
+  adapter: ScaleAdapter,
+): string[] {
+  const missing: string[] = [];
+
+  if (adapter.characteristics) {
+    for (const binding of adapter.characteristics) {
+      if (!resolveChar(charMap, binding.uuid)) missing.push(binding.uuid);
+    }
+    return missing;
+  }
+
+  const hasNotify =
+    !!resolveChar(charMap, adapter.charNotifyUuid) ||
+    (!!adapter.altCharNotifyUuid && !!resolveChar(charMap, adapter.altCharNotifyUuid));
+  if (!hasNotify) missing.push(adapter.charNotifyUuid);
+
+  const hasWrite =
+    !!resolveChar(charMap, adapter.charWriteUuid) ||
+    (!!adapter.altCharWriteUuid && !!resolveChar(charMap, adapter.altCharWriteUuid));
+  if (!hasWrite) missing.push(adapter.charWriteUuid);
+
+  return missing;
+}
+
 /** Subscribe to a GATT characteristic and forward notifications to the handler.
  *  Returns the unsubscribe function from the BleChar. */
 async function subscribeToChar(
@@ -45,6 +84,7 @@ function initializeAdapter(
   charMap: Map<string, BleChar>,
   adapter: ScaleAdapter,
   profile: UserProfile,
+  deviceAddress: string,
   isResolved: () => boolean,
   onNotification: (sourceUuid: string, data: Buffer) => void,
   unsubscribers: (() => void)[],
@@ -64,6 +104,7 @@ function initializeAdapter(
     if (adapter.onConnected) {
       const ctx: ConnectionContext = {
         profile,
+        deviceAddress,
         write: async (charUuid, data, withResponse = true) => {
           const char = resolveChar(charMap, charUuid);
           if (!char) throw new Error(`Characteristic ${charUuid} not found`);
@@ -199,6 +240,7 @@ export function waitForRawReading(
   profile: UserProfile,
   weightUnit?: WeightUnit,
   onLiveData?: (reading: ScaleReading) => void,
+  deviceAddress = '',
 ): Promise<RawReading> {
   return new Promise<RawReading>((resolve, reject) => {
     let resolved = false;
@@ -232,6 +274,7 @@ export function waitForRawReading(
       charMap,
       adapter,
       profile,
+      deviceAddress,
       () => resolved,
       handleNotification,
       unsubscribers,
@@ -268,8 +311,15 @@ export function waitForReading(
   profile: UserProfile,
   weightUnit?: WeightUnit,
   onLiveData?: (reading: ScaleReading) => void,
+  deviceAddress = '',
 ): Promise<BodyComposition> {
-  return waitForRawReading(charMap, bleDevice, adapter, profile, weightUnit, onLiveData).then(
-    ({ reading, adapter: matched }) => matched.computeMetrics(reading, profile),
-  );
+  return waitForRawReading(
+    charMap,
+    bleDevice,
+    adapter,
+    profile,
+    weightUnit,
+    onLiveData,
+    deviceAddress,
+  ).then(({ reading, adapter: matched }) => matched.computeMetrics(reading, profile));
 }

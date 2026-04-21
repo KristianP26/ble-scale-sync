@@ -2,7 +2,7 @@ import NodeBle from 'node-ble';
 import type { ScaleAdapter, BleDeviceInfo, BodyComposition } from '../interfaces/scale-adapter.js';
 import type { ScanOptions, ScanResult } from './types.js';
 import type { BleChar, BleDevice, RawReading } from './shared.js';
-import { waitForRawReading } from './shared.js';
+import { waitForRawReading, findMissingCharacteristics } from './shared.js';
 import {
   bleLog,
   normalizeUuid,
@@ -17,6 +17,8 @@ import {
   DISCOVERY_POLL_MS,
   POST_DISCOVERY_QUIESCE_MS,
   GATT_DISCOVERY_TIMEOUT_MS,
+  CHAR_DISCOVERY_MAX_RETRIES,
+  CHAR_DISCOVERY_RETRY_DELAY_MS,
 } from './types.js';
 
 type Device = NodeBle.Device;
@@ -435,6 +437,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     if (discoveryResult) btAdapter = discoveryResult;
 
     let matchedAdapter: ScaleAdapter;
+    let deviceMac = targetMac ?? '';
 
     if (targetMac) {
       const mac = formatMac(targetMac);
@@ -515,6 +518,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       const result = await autoDiscover(btAdapter, adapters, abortSignal);
       device = result.device;
       matchedAdapter = result.adapter;
+      deviceMac = result.mac;
 
       // Stop discovery before connecting — BlueZ on low-power devices (e.g. Pi Zero)
       // often fails with le-connection-abort-by-local while discovery is still active.
@@ -531,13 +535,38 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       bleLog.info('Connected. Discovering services...');
     }
 
-    // Setup GATT characteristics and wait for a complete reading
+    // Setup GATT characteristics and wait for a complete reading.
+    // BlueZ has a known race ([bluez/bluez#1489]) where ServicesResolved=true
+    // fires before all characteristic interfaces are exported over D-Bus, so
+    // the first enumeration can be missing chars the scale actually exposes.
+    // Retry the enumeration a few times with a short backoff when we detect
+    // that the adapter's required chars are not yet present.
     const gatt = await device.gatt();
-    const charMap = await withTimeout(
+    let charMap = await withTimeout(
       buildCharMap(gatt),
       GATT_DISCOVERY_TIMEOUT_MS,
       'GATT service discovery timed out',
     );
+    for (let attempt = 1; attempt <= CHAR_DISCOVERY_MAX_RETRIES; attempt++) {
+      const missing = findMissingCharacteristics(charMap, matchedAdapter);
+      if (missing.length === 0) break;
+      if (attempt === CHAR_DISCOVERY_MAX_RETRIES) {
+        bleLog.warn(
+          `GATT enumeration incomplete after ${attempt} attempt(s). ` +
+            `Missing: [${missing.join(', ')}]. Discovered: [${[...charMap.keys()].join(', ')}]`,
+        );
+        break;
+      }
+      bleLog.debug(
+        `GATT enumeration missing [${missing.join(', ')}], retry ${attempt}/${CHAR_DISCOVERY_MAX_RETRIES - 1} in ${CHAR_DISCOVERY_RETRY_DELAY_MS}ms...`,
+      );
+      await new Promise<void>((r) => setTimeout(r, CHAR_DISCOVERY_RETRY_DELAY_MS));
+      charMap = await withTimeout(
+        buildCharMap(gatt),
+        GATT_DISCOVERY_TIMEOUT_MS,
+        'GATT service discovery timed out',
+      );
+    }
     const raw = await waitForRawReading(
       charMap,
       wrapDevice(device),
@@ -545,6 +574,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       profile,
       weightUnit,
       onLiveData,
+      deviceMac.replace(/[:-]/g, '').toUpperCase(),
     );
 
     try {

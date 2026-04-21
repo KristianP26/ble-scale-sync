@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { waitForReading, waitForRawReading } from '../../src/ble/shared.js';
+import {
+  waitForReading,
+  waitForRawReading,
+  findMissingCharacteristics,
+} from '../../src/ble/shared.js';
 import type { BleChar, BleDevice } from '../../src/ble/shared.js';
 import { normalizeUuid } from '../../src/ble/types.js';
 import type {
@@ -749,5 +753,71 @@ describe('waitForReading() — weight normalization', () => {
     await promise;
     const call = vi.mocked(adapter.computeMetrics).mock.calls[0];
     expect(call[0].weight).toBe(75.5); // unchanged
+  });
+});
+
+describe('findMissingCharacteristics()', () => {
+  const SERVICE_UUID = '0000fff000001000800000805f9b34fb';
+  const OTHER_UUID = '0000fff400001000800000805f9b34fb';
+
+  it('returns empty array when legacy adapter has both notify and write chars', () => {
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, createMockChar()],
+      [WRITE_UUID, createMockChar()],
+    ]);
+    const adapter = createLegacyAdapter();
+    expect(findMissingCharacteristics(charMap, adapter)).toEqual([]);
+  });
+
+  it('returns missing notify UUID when legacy notify char absent', () => {
+    const { charMap } = createCharMap([[WRITE_UUID, createMockChar()]]);
+    const adapter = createLegacyAdapter();
+    expect(findMissingCharacteristics(charMap, adapter)).toEqual([NOTIFY_UUID]);
+  });
+
+  it('returns missing write UUID when legacy write char absent', () => {
+    const { charMap } = createCharMap([[NOTIFY_UUID, createMockChar()]]);
+    const adapter = createLegacyAdapter();
+    expect(findMissingCharacteristics(charMap, adapter)).toEqual([WRITE_UUID]);
+  });
+
+  it('accepts altCharNotifyUuid when primary notify absent', () => {
+    const altNotify = '0000fff300001000800000805f9b34fb';
+    const { charMap } = createCharMap([
+      [altNotify, createMockChar()],
+      [WRITE_UUID, createMockChar()],
+    ]);
+    const adapter = createLegacyAdapter({ altCharNotifyUuid: altNotify });
+    expect(findMissingCharacteristics(charMap, adapter)).toEqual([]);
+  });
+
+  it('returns empty array when multi-char adapter has all bindings', () => {
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, createMockChar()],
+      [WRITE_UUID, createMockChar()],
+      [OTHER_UUID, createMockChar()],
+    ]);
+    const adapter = createLegacyAdapter({
+      characteristics: [
+        { service: SERVICE_UUID, uuid: NOTIFY_UUID, type: 'notify' },
+        { service: SERVICE_UUID, uuid: WRITE_UUID, type: 'write' },
+        { service: SERVICE_UUID, uuid: OTHER_UUID, type: 'notify' },
+      ],
+    });
+    expect(findMissingCharacteristics(charMap, adapter)).toEqual([]);
+  });
+
+  it('returns every missing UUID from a multi-char adapter', () => {
+    const { charMap } = createCharMap([[NOTIFY_UUID, createMockChar()]]);
+    const adapter = createLegacyAdapter({
+      characteristics: [
+        { service: SERVICE_UUID, uuid: NOTIFY_UUID, type: 'notify' },
+        { service: SERVICE_UUID, uuid: WRITE_UUID, type: 'write' },
+        { service: SERVICE_UUID, uuid: OTHER_UUID, type: 'notify' },
+      ],
+    });
+    expect(findMissingCharacteristics(charMap, adapter).sort()).toEqual(
+      [WRITE_UUID, OTHER_UUID].sort(),
+    );
   });
 });
