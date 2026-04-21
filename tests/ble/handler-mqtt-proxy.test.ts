@@ -148,6 +148,37 @@ function createGattAdapter(name = 'GattScale'): ScaleAdapter {
   };
 }
 
+/**
+ * Adapter that broadcasts a partial reading (weight only) and signals
+ * `preferGatt: true`, requiring GATT for the full reading (impedance).
+ * Mirrors the Eufy P2/P2 Pro contract.
+ */
+function createPreferGattAdapter(name = 'PreferGattScale'): ScaleAdapter {
+  let reading: ScaleReading | null = null;
+  return {
+    name,
+    charNotifyUuid: GATT_NOTIFY_UUID,
+    charWriteUuid: GATT_WRITE_UUID,
+    unlockCommand: [0xa5, 0x01],
+    unlockIntervalMs: 2000,
+    preferGatt: true,
+    matches: vi.fn((info: BleDeviceInfo) => info.manufacturerData?.id === 0xff48),
+    parseBroadcast: vi.fn((data: Buffer) => {
+      const weight = data.readUInt16LE(0) / 100;
+      return { weight, impedance: 0 };
+    }),
+    parseNotification: vi.fn((data: Buffer) => {
+      if (data.length >= 4) {
+        reading = { weight: data.readUInt16LE(0) / 100, impedance: data.readUInt16LE(2) };
+        return reading;
+      }
+      return null;
+    }),
+    isComplete: vi.fn(() => reading !== null && reading.impedance > 0),
+    computeMetrics: vi.fn(() => BODY_COMP),
+  };
+}
+
 // ─── Import the module under test ────────────────────────────────────────────
 
 // Must import AFTER vi.mock
@@ -361,6 +392,80 @@ describe('handler-mqtt-proxy', () => {
         mockClient.publishAsync as ReturnType<typeof vi.fn>
       ).mock.calls.filter((c: unknown[]) => c[0] === `${PREFIX}/disconnect`);
       expect(disconnectCalls).toHaveLength(1);
+    });
+
+    it('preferGatt: routes to GATT even when broadcast data is present', async () => {
+      const adapter = createPreferGattAdapter();
+
+      mockClient.subscribeAsync = vi.fn(async (topic: string) => {
+        if (topic === `${PREFIX}/status`) {
+          queueMicrotask(() => mockClient._simulateMessage(`${PREFIX}/status`, 'online'));
+        }
+        if (topic === `${PREFIX}/scan/results`) {
+          queueMicrotask(() =>
+            mockClient._simulateMessage(
+              `${PREFIX}/scan/results`,
+              JSON.stringify([
+                {
+                  address: 'CF:E9:07:24:50:5B',
+                  name: 'eufy T9149',
+                  rssi: -50,
+                  services: [],
+                  addr_type: 0,
+                  manufacturer_id: 0xff48,
+                  manufacturer_data: mfrHex(7550), // 75.50 kg broadcast reading
+                },
+              ]),
+            ),
+          );
+        }
+        return [];
+      });
+
+      const origPublish = mockClient.publishAsync;
+      mockClient.publishAsync = vi.fn(async (topic: string, payload?: string | Buffer) => {
+        if (topic === `${PREFIX}/connect`) {
+          queueMicrotask(() =>
+            mockClient._simulateMessage(
+              `${PREFIX}/connected`,
+              JSON.stringify({
+                chars: [
+                  { uuid: GATT_NOTIFY_UUID, properties: ['notify'] },
+                  { uuid: GATT_WRITE_UUID, properties: ['write'] },
+                ],
+              }),
+            ),
+          );
+        }
+        if (topic === `${PREFIX}/write/${GATT_WRITE_UUID}`) {
+          queueMicrotask(() => {
+            const buf = Buffer.alloc(4);
+            buf.writeUInt16LE(7550, 0); // 75.50 kg
+            buf.writeUInt16LE(500, 2); // impedance 500 (not zero — full reading)
+            mockClient._simulateMessage(`${PREFIX}/notify/${GATT_NOTIFY_UUID}`, buf);
+          });
+        }
+        return origPublish(topic, payload);
+      });
+
+      const result = await scanAndReadRaw({
+        adapters: [adapter],
+        profile: PROFILE,
+        mqttProxy: MQTT_PROXY_CONFIG,
+      });
+
+      // Full reading came through GATT — impedance is non-zero
+      expect(result.reading.weight).toBe(75.5);
+      expect(result.reading.impedance).toBe(500);
+
+      // parseBroadcast should NOT have been called — GATT path skips it
+      expect(adapter.parseBroadcast).not.toHaveBeenCalled();
+
+      // Connect command was published (GATT path taken)
+      const connectCalls = (mockClient.publishAsync as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c: unknown[]) => c[0] === `${PREFIX}/connect`,
+      );
+      expect(connectCalls).toHaveLength(1);
     });
 
     it('filters scan results by targetMac', async () => {
@@ -1159,6 +1264,60 @@ describe('handler-mqtt-proxy', () => {
       expect(raw.reading.weight).toBe(80.0);
       expect(raw.reading.impedance).toBe(450);
       expect(raw.adapter.name).toBe('GattScale');
+    });
+
+    it('ReadingWatcher skips broadcast parse and uses GATT when preferGatt=true', async () => {
+      const adapter = createPreferGattAdapter();
+      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter], undefined, PROFILE);
+      await watcher.start();
+
+      const origPublish = mockClient.publishAsync;
+      mockClient.publishAsync = vi.fn(async (topic: string, payload?: string | Buffer) => {
+        if (topic === `${PREFIX}/connect`) {
+          queueMicrotask(() =>
+            mockClient._simulateMessage(
+              `${PREFIX}/connected`,
+              JSON.stringify({
+                chars: [
+                  { uuid: GATT_NOTIFY_UUID, properties: ['notify'] },
+                  { uuid: GATT_WRITE_UUID, properties: ['write'] },
+                ],
+              }),
+            ),
+          );
+        }
+        if (topic === `${PREFIX}/write/${GATT_WRITE_UUID}`) {
+          queueMicrotask(() => {
+            const buf = Buffer.alloc(4);
+            buf.writeUInt16LE(7550, 0);
+            buf.writeUInt16LE(500, 2);
+            mockClient._simulateMessage(`${PREFIX}/notify/${GATT_NOTIFY_UUID}`, buf);
+          });
+        }
+        return origPublish(topic, payload);
+      });
+
+      // Scan results INCLUDE manufacturer data — broadcast path would match,
+      // but preferGatt should force GATT instead.
+      mockClient._simulateMessage(
+        `${PREFIX}/scan/results`,
+        JSON.stringify([
+          {
+            address: 'CF:E9:07:24:50:5B',
+            name: 'eufy T9149',
+            rssi: -50,
+            services: [],
+            addr_type: 0,
+            manufacturer_id: 0xff48,
+            manufacturer_data: mfrHex(7550),
+          },
+        ]),
+      );
+
+      const raw = await watcher.nextReading();
+      expect(raw.reading.weight).toBe(75.5);
+      expect(raw.reading.impedance).toBe(500);
+      expect(adapter.parseBroadcast).not.toHaveBeenCalled();
     });
 
     it('rejects with ESP32 error instead of timeout when connect fails', async () => {

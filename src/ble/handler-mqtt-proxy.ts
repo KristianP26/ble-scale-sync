@@ -455,8 +455,10 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
 
       bleLog.info(`Matched: ${adapter.name} (${entry.name || entry.address})`);
 
-      // Extract reading from broadcast advertisement data
-      if (adapter.parseBroadcast && entry.manufacturer_data) {
+      // Extract reading from broadcast advertisement data, unless the adapter
+      // flags broadcast as partial (weight-only) and requires GATT for the
+      // full reading (impedance for BIA) — e.g. Eufy P2/P2 Pro.
+      if (!adapter.preferGatt && adapter.parseBroadcast && entry.manufacturer_data) {
         const mfrBuf = Buffer.from(entry.manufacturer_data, 'hex');
         const reading = adapter.parseBroadcast(mfrBuf);
         if (reading) {
@@ -466,14 +468,14 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         }
       }
 
-      // Broadcast-capable or broadcast-only adapters — wait for next scan with data
-      if (adapter.parseBroadcast || !adapter.charNotifyUuid) {
+      // Broadcast-capable adapters (without preferGatt) — wait for next scan with data
+      if (!adapter.preferGatt && (adapter.parseBroadcast || !adapter.charNotifyUuid)) {
         bleLog.debug(`${adapter.name} supports broadcast, waiting for stable reading...`);
         continue;
       }
 
-      // GATT fallback — adapter matched but no broadcast support
-      bleLog.info(`No broadcast data for ${adapter.name}; connecting via GATT proxy...`);
+      // GATT path — adapter either has no broadcast support or prefers GATT for full reading
+      bleLog.info(`Connecting via GATT proxy to ${adapter.name}...`);
       const { charMap, device } = await mqttGattConnect(
         client,
         t,
@@ -613,7 +615,9 @@ export class ReadingWatcher {
           const adapter = this.adapters.find((a) => a.matches(info));
           if (!adapter) continue;
 
-          if (adapter.parseBroadcast && entry.manufacturer_data) {
+          // Broadcast parse path, unless the adapter prefers GATT for a full
+          // reading (broadcast yields weight only — e.g. Eufy P2/P2 Pro).
+          if (!adapter.preferGatt && adapter.parseBroadcast && entry.manufacturer_data) {
             const reading = adapter.parseBroadcast(Buffer.from(entry.manufacturer_data, 'hex'));
             if (reading) {
               // Dedup check
@@ -635,10 +639,10 @@ export class ReadingWatcher {
             }
           }
 
-          // Broadcast-capable or broadcast-only — skip, wait for stable advertisement
-          if (adapter.parseBroadcast || !adapter.charNotifyUuid) continue;
+          // Broadcast-capable adapters (without preferGatt) — wait for stable advertisement
+          if (!adapter.preferGatt && (adapter.parseBroadcast || !adapter.charNotifyUuid)) continue;
 
-          // GATT fallback — adapter matched but no broadcast support
+          // GATT path — adapter either has no broadcast support or prefers GATT for full reading
           this.handleGattReading(entry, adapter).catch((err) => {
             bleLog.warn(`GATT reading failed for ${entry.address}: ${errMsg(err)}`);
           });

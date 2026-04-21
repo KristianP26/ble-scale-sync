@@ -9,6 +9,9 @@ All notable changes to this project are documented here. Format based on [Keep a
 
 ## Unreleased {#unreleased}
 
+### Fixed
+- **Eufy P2/P2 Pro over ESP32 proxy**: body composition fields (body fat %, water %, muscle, bone) were not computed because the proxy handler took the passive broadcast path which yields weight only. The 19-byte advertisement does not contain impedance — only GATT FFF2 does, after the AES-128 handshake. Adapters can now set `preferGatt: true` to signal broadcast is partial; the mqtt-proxy handler routes them through GATT over MQTT instead ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
+
 ## v1.9.0 <Badge type="tip" text="latest" /> {#v1-9-0}
 
 _2026-04-21_

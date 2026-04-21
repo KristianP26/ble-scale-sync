@@ -107,6 +107,15 @@ export interface ScaleAdapter {
    */
   parseBroadcast?(manufacturerData: Buffer): ScaleReading | null;
 
+  /**
+   * Signals that `parseBroadcast` yields a partial reading (e.g. weight only)
+   * and a GATT connection is required to obtain the full body composition data
+   * (impedance for BIA). When true, the mqtt-proxy handler skips the broadcast
+   * parse path and connects via GATT proxy instead. Direct BLE handlers are
+   * unaffected (they always use GATT).
+   */
+  readonly preferGatt?: boolean;
+
   matches(device: BleDeviceInfo): boolean;
   parseNotification(data: Buffer): ScaleReading | null;
   isComplete(reading: ScaleReading): boolean;

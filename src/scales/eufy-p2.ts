@@ -277,6 +277,7 @@ export class EufyP2Adapter implements ScaleAdapter {
   readonly unlockCommand: number[] = [];
   readonly unlockIntervalMs = 0;
   readonly normalizesWeight = true;
+  readonly preferGatt = true;
 
   readonly characteristics: CharacteristicBinding[] = [
     { service: SVC_UUID, uuid: CHR_WRITE, type: 'write' },
