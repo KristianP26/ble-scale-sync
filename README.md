@@ -95,7 +95,7 @@ Requires Node.js v20.19+ and a BLE adapter. See the **[full install guide](https
 
 ## Credits
 
-- **Scale protocols** - ported from [openScale](https://github.com/oliexdev/openScale) by oliexdev and contributors
+- **Scale protocols** - many adapters ported from [openScale](https://github.com/oliexdev/openScale) (oliexdev and contributors); Eufy P2 / P2 Pro ported from [bdr99/eufylife-ble-client](https://github.com/bdr99/eufylife-ble-client); QN-Scale / FITINDEX and a few others reverse-engineered in this project
 - **Garmin upload** - powered by [garminconnect](https://github.com/cyberjunky/python-garminconnect) by cyberjunky
 - **BLE** - [node-ble](https://github.com/chrvadala/node-ble) (Linux), [@abandonware/noble](https://github.com/abandonware/noble) (Windows), [@stoprocent/noble](https://github.com/stoprocent/noble) (macOS)
 - **ESP32 proxy** - [mqtt_as](https://github.com/peterhinch/micropython-mqtt) by peterhinch, [aioble](https://github.com/micropython/micropython-lib/tree/master/micropython/bluetooth/aioble)

@@ -25,7 +25,7 @@ head:
 | **Push notifications** | Ntfy | No | No | App only |
 | **Local file export** | CSV and JSONL | SQLite | No | No |
 | **Multi-user** | Automatic weight matching | Manual selection | Per-user sync | Per-account |
-| **Supported scales** | 23 protocol adapters | 20+ brands | Via openScale | 1 (own brand) |
+| **Supported scales** | 24 protocol adapters | 20+ brands | Via openScale | 1 (own brand) |
 | **Body composition** | 10 metrics (BIA) | Varies | 4 metrics | Varies |
 | **Docker** | Multi-arch images | No | No | No |
 | **Open source** | GPL-3.0 | GPL-3.0 | GPL-3.0 | No |
@@ -50,7 +50,7 @@ head:
 - Users who want a local-first scale tracker on their phone
 
 ::: info
-BLE Scale Sync's scale protocols were ported from openScale. Both projects benefit from the same reverse-engineering work by the open-source community.
+Many of BLE Scale Sync's scale adapters were ported from openScale. Others (QN-Scale / FITINDEX, Eufy P2 / P2 Pro, and a few more) were reverse-engineered in this project or ported from dedicated upstream references (e.g. [bdr99/eufylife-ble-client](https://github.com/bdr99/eufylife-ble-client) for the Eufy P2/P2 Pro AES handshake). Both projects benefit from the broader reverse-engineering work by the open-source community.
 :::
 
 ## openScale-sync

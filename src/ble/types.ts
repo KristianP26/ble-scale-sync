@@ -16,6 +16,18 @@ export const DISCOVERY_POLL_MS = 2_000;
 /** Timeout for GATT service/characteristic enumeration after connecting. */
 export const GATT_DISCOVERY_TIMEOUT_MS = 30_000;
 
+/**
+ * Max attempts to enumerate GATT characteristics. BlueZ can signal
+ * `ServicesResolved=true` before all characteristic interfaces are exported
+ * over D-Bus ([bluez/bluez#1489](https://github.com/bluez/bluez/issues/1489)),
+ * so the first enumeration can return a partial map. Retrying with a short
+ * backoff lets BlueZ finish exporting before we validate the map.
+ */
+export const CHAR_DISCOVERY_MAX_RETRIES = 3;
+
+/** Backoff between characteristic-enumeration retries. */
+export const CHAR_DISCOVERY_RETRY_DELAY_MS = 500;
+
 /** Delay after stopping BlueZ discovery to let the radio quiesce before connecting. */
 export const POST_DISCOVERY_QUIESCE_MS = 500;
 

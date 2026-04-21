@@ -110,11 +110,19 @@ export const exportersStep: WizardStep = {
     });
 
     console.log('\nSelect export targets:\n');
-    const selected = await ctx.prompts.checkbox('Exporters:', choices);
+    let selected = await ctx.prompts.checkbox('Exporters:', choices);
 
-    if (selected.length === 0) {
-      console.log(dim('\n  No exporters selected.'));
-      return;
+    while (selected.length === 0) {
+      const proceedEmpty = await ctx.prompts.confirm(
+        'No exporters selected. Measurements will not be sent anywhere. Continue without exporters?',
+        { default: false },
+      );
+      if (proceedEmpty) {
+        console.log(dim('\n  No exporters selected — measurements will not be exported.'));
+        return;
+      }
+      console.log(dim('\n  Pick at least one export target (space to toggle, enter to confirm):'));
+      selected = await ctx.prompts.checkbox('Exporters:', choices);
     }
 
     const selectedSchemas = selected.map((n) => EXPORTER_SCHEMAS.find((s) => s.name === n)!);

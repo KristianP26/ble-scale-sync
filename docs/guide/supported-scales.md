@@ -1,6 +1,6 @@
 ---
 title: Supported Scales
-description: All 23 BLE smart scale brands supported by BLE Scale Sync.
+description: All 24 BLE smart scale brands supported by BLE Scale Sync.
 head:
   - - meta
     - name: keywords
@@ -9,7 +9,7 @@ head:
 
 # Supported Scales
 
-BLE Scale Sync ships **23 protocol adapters** out of the box, covering Xiaomi, Renpho (incl. FITINDEX, Sencor, QN-Scale), Eufy, Yunmai, Beurer, Sanitas, Medisana, and more — plus a generic Bluetooth SIG adapter that works with any spec-compliant BCS/WSS scale. Each adapter typically supports several models or rebrands sold under different names, so the real device coverage is much wider than the adapter count. All adapters provide weight + impedance for full [body composition](/body-composition) calculation.
+BLE Scale Sync ships **24 protocol adapters** out of the box, covering Xiaomi, Renpho (incl. FITINDEX, Sencor, QN-Scale), Eufy (incl. P2 Pro T9149), Yunmai, Beurer, Sanitas, Medisana, and more — plus a generic Bluetooth SIG adapter that works with any spec-compliant BCS/WSS scale. Each adapter typically supports several models or rebrands sold under different names, so the real device coverage is much wider than the adapter count. All adapters provide weight + impedance for full [body composition](/body-composition) calculation.
 
 ## Scale List
 
@@ -20,6 +20,7 @@ BLE Scale Sync ships **23 protocol adapters** out of the box, covering Xiaomi, R
 | **Renpho** ES-WBE28 | Standard GATT variant |
 | **Renpho** ES-26BB-B | |
 | **1byone** / **Eufy** C1 / P1 | |
+| **Eufy** Smart Scale P2 (T9148) / P2 Pro (T9149) | AES handshake over FFF1/FFF4, impedance via FFF2 |
 | **Yunmai** Signal / Mini / SE | Uses scale's own body comp values |
 | **Beurer** BF700 / BF710 / BF800 | |
 | **Sanitas** SBF70 / SBF75 | Same protocol as Beurer |

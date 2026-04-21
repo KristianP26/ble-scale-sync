@@ -9,17 +9,22 @@ All notable changes to this project are documented here. Format based on [Keep a
 
 ## Unreleased {#unreleased}
 
-### Fixed
-- **BlueZ zombie discovery** on Raspberry Pi (Broadcom adapter) in continuous Docker mode. After every GATT connection, the app now resets the D-Bus client and runs a preemptive `btmgmt` power-cycle on the HCI controller, preventing the `Discovering=true` but `LE scan not running` state that was breaking scans after 2-3 measurements ([#80](https://github.com/KristianP26/ble-scale-sync/issues/80), [bluez/bluez#807](https://github.com/bluez/bluez/issues/807))
+## v1.9.0 <Badge type="tip" text="latest" /> {#v1-9-0}
 
-### Changed
-- **Docker**: `docker-compose.example.yml` now maps `/dev/rfkill` so Tier 5 BLE recovery (rfkill block/unblock) is available to existing users
-- **Docs**: troubleshooting page gained a dedicated BlueZ zombie discovery section with the `NOBLE_DRIVER=stoprocent` escape hatch
+_2026-04-21_
+
+### Added
+- **Eufy Smart Scale P2 (T9148) and P2 Pro (T9149)**: new dedicated adapter with the AES-128-CBC C0/C1/C2/C3 handshake these models require. Weight + impedance over GATT FFF2 after auth, plus passive weight reading from the 19-byte advertisement without connecting. The scale is no longer mis-matched as a QN scale (prior crash: `Operation is not supported`) ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
+
+### Fixed
+- **Setup wizard**: picking no exporter in the export-targets checkbox silently produced a config without any `global_exporters` block, so the first run emitted `All exports failed` and exited. The wizard now asks an explicit `Continue without exporters?` confirmation when the checkbox is submitted empty and re-prompts if the user declines ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
+- **Orchestrator**: empty exporter lists no longer trigger a misleading `All exports failed` message. A clear warning is logged and the cycle returns success so single-shot mode does not exit with code 1 when the config has no exporters
 
 ### Thanks
-- [@marcelorodrigo](https://github.com/marcelorodrigo) for extensive on-device testing and the detailed logs that isolated the controller-level zombie state ([#80](https://github.com/KristianP26/ble-scale-sync/issues/80))
+- [@mart1058](https://github.com/mart1058) and [@dbrb2](https://github.com/dbrb2) for diagnose output, HCI snoop logs, and testing the Eufy P2 Pro protocol reverse-engineering ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
+- [bdr99/eufylife-ble-client](https://github.com/bdr99/eufylife-ble-client) for the reference Python implementation of the Eufy T9148/T9149 auth handshake and frame formats
 
-## v1.8.2 <Badge type="tip" text="latest" /> {#v1-8-2}
+## v1.8.2 {#v1-8-2}
 
 _2026-04-20_
 

@@ -486,6 +486,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
           device,
           adapter,
           opts.profile,
+          entry.address.replace(/[:-]/g, '').toUpperCase(),
           opts.weightUnit,
           opts.onLiveData,
         );
@@ -732,7 +733,13 @@ export class ReadingWatcher {
     );
     try {
       const raw = await withTimeout(
-        waitForRawReading(charMap, device, adapter, profile),
+        waitForRawReading(
+          charMap,
+          device,
+          adapter,
+          profile,
+          entry.address.replace(/[:-]/g, '').toUpperCase(),
+        ),
         60_000,
         `GATT reading timeout for ${entry.address}`,
       );
