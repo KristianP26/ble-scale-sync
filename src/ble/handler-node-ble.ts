@@ -462,7 +462,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   let btAdapter: Adapter;
   let gattAttempted = false;
   let gattSucceeded = false;
-  let deviceMac: string | null = targetMac ?? null;
+  let deviceMac: string = targetMac ?? '';
 
   try {
     try {
@@ -501,7 +501,6 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     if (discoveryResult) btAdapter = discoveryResult;
 
     let matchedAdapter: ScaleAdapter;
-    let deviceMac = targetMac ?? '';
 
     if (targetMac) {
       const mac = formatMac(targetMac);
