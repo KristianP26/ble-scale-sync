@@ -323,6 +323,42 @@ describe('BleSchema', () => {
     }
   });
 
+  it('accepts handler mqtt-proxy with mqtt_proxy config omitting broker_url (embedded mode)', () => {
+    const result = BleSchema.safeParse({
+      handler: 'mqtt-proxy',
+      mqtt_proxy: {},
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.mqtt_proxy?.broker_url).toBeUndefined();
+      expect(result.data.mqtt_proxy?.embedded_broker_port).toBe(1883);
+      expect(result.data.mqtt_proxy?.embedded_broker_bind).toBe('0.0.0.0');
+    }
+  });
+
+  it('accepts custom embedded_broker_port and embedded_broker_bind', () => {
+    const result = BleSchema.safeParse({
+      handler: 'mqtt-proxy',
+      mqtt_proxy: {
+        embedded_broker_port: 1884,
+        embedded_broker_bind: '127.0.0.1',
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.mqtt_proxy?.embedded_broker_port).toBe(1884);
+      expect(result.data.mqtt_proxy?.embedded_broker_bind).toBe('127.0.0.1');
+    }
+  });
+
+  it('rejects embedded_broker_port outside 1-65535', () => {
+    const result = BleSchema.safeParse({
+      handler: 'mqtt-proxy',
+      mqtt_proxy: { embedded_broker_port: 70000 },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('accepts handler auto without mqtt_proxy', () => {
     const result = BleSchema.safeParse({ handler: 'auto' });
     expect(result.success).toBe(true);

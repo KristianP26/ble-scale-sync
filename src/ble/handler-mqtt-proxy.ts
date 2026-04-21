@@ -117,18 +117,34 @@ function topics(prefix: string, deviceId: string) {
 
 type MqttClient = Awaited<ReturnType<typeof import('mqtt').connectAsync>>;
 
+/**
+ * Resolve the broker URL from config, throwing a helpful error if neither an
+ * external broker nor the embedded broker has provided one.
+ */
+function requireBrokerUrl(config: MqttProxyConfig): string {
+  if (!config.broker_url) {
+    throw new Error(
+      'mqtt_proxy.broker_url is not set and the embedded broker has not been started. ' +
+        'Either configure an external broker URL, or run through the mqtt-proxy bootstrap ' +
+        'which starts the embedded broker automatically.',
+    );
+  }
+  return config.broker_url;
+}
+
 async function createMqttClient(config: MqttProxyConfig): Promise<MqttClient> {
   const { connectAsync } = await import('mqtt');
+  const brokerUrl = requireBrokerUrl(config);
   const clientId = `ble-scale-sync-${config.device_id}`;
   const client = await withTimeout(
-    connectAsync(config.broker_url, {
+    connectAsync(brokerUrl, {
       clientId,
       username: config.username ?? undefined,
       password: config.password ?? undefined,
       clean: true,
     }),
     COMMAND_TIMEOUT_MS,
-    `MQTT broker unreachable at ${config.broker_url}. Check your mqtt_proxy.broker_url config.`,
+    `MQTT broker unreachable at ${brokerUrl}. Check your mqtt_proxy.broker_url config.`,
   );
   return client;
 }
@@ -181,8 +197,9 @@ async function getOrCreatePersistentClient(config: MqttProxyConfig): Promise<Mqt
     }
   }
   const { connectAsync } = await import('mqtt');
+  const brokerUrl = requireBrokerUrl(config);
   proxyState.persistentClient = await withTimeout(
-    connectAsync(config.broker_url, {
+    connectAsync(brokerUrl, {
       clientId: `ble-scale-sync-${config.device_id}`,
       username: config.username ?? undefined,
       password: config.password ?? undefined,
@@ -190,7 +207,7 @@ async function getOrCreatePersistentClient(config: MqttProxyConfig): Promise<Mqt
       reconnectPeriod: 5000,
     }),
     COMMAND_TIMEOUT_MS,
-    `MQTT broker unreachable at ${config.broker_url}. Check your mqtt_proxy.broker_url config.`,
+    `MQTT broker unreachable at ${brokerUrl}. Check your mqtt_proxy.broker_url config.`,
   );
   return proxyState.persistentClient;
 }

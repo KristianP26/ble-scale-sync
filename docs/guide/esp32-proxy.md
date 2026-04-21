@@ -60,8 +60,11 @@ ESP32-C3 and ESP32-C6 boards use a different BLE stack in MicroPython and have n
 
 - An ESP32 board (see above)
 - WiFi network accessible by both the ESP32 and BLE Scale Sync
-- An MQTT broker (e.g. [Mosquitto](https://mosquitto.org/))
 - USB cable for initial flashing
+
+::: tip MQTT broker is optional
+BLE Scale Sync now ships with an embedded MQTT broker. If you don't already run one (Mosquitto, Home Assistant, etc.), just leave `broker_url` empty and BLE Scale Sync will start its own broker on port 1883. See [Embedded broker](#embedded-broker) below.
+:::
 
 ### Host tools (install once)
 
@@ -161,6 +164,33 @@ ble:
     # username: myuser                # optional, if broker requires auth
     # password: '${MQTT_PASSWORD}'    # optional
 ```
+
+### Embedded broker
+
+If you don't want to install Mosquitto (or you're already running BLE Scale Sync on a machine that can just host the broker itself), omit `broker_url` and BLE Scale Sync will start an embedded broker automatically. The ESP32 `config.json` should then point `mqtt_broker` at this machine's LAN IP.
+
+```yaml
+ble:
+  handler: mqtt-proxy
+  mqtt_proxy:
+    # broker_url intentionally omitted — embedded broker will be started
+    device_id: esp32-ble-proxy
+    topic_prefix: ble-proxy
+    embedded_broker_port: 1883 # default, override to avoid conflicts
+    embedded_broker_bind: 0.0.0.0 # default — listen on all interfaces so the ESP32 can reach it
+    # username: myuser               # optional — if set, the embedded broker enforces it and the internal client uses it
+    # password: '${MQTT_PASSWORD}'   # optional
+```
+
+The internal BLE Scale Sync client always connects to the embedded broker over loopback (`mqtt://127.0.0.1:<port>`). The ESP32 connects over LAN — so make sure port `1883` (or whatever you pick) is reachable from the ESP32 and not blocked by a host firewall.
+
+::: tip When to pick which
+Use the **embedded broker** for the simplest ESP32 proxy setup when you don't already have Mosquitto or Home Assistant. Use an **external broker** when you already run one, or when you want multiple services (Home Assistant, Node-RED, other IoT devices) to share it.
+:::
+
+::: warning Port conflict
+If Mosquitto or another broker is already listening on port 1883, the embedded broker startup will fail with a clear message. Either stop the other broker, or set `embedded_broker_port` to a free port (e.g. `1884`) and update the ESP32 `config.json` to match.
+:::
 
 Then restart BLE Scale Sync. In continuous mode, the server maintains a persistent MQTT connection and reacts to scan results as they arrive.
 
