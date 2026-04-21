@@ -11,14 +11,18 @@ const CB_UUID_REGEX =
 export const MqttProxySchema = z.object({
   broker_url: z
     .string()
-    .min(1, 'MQTT broker URL is required')
+    .min(1, 'MQTT broker URL must not be empty')
     .refine((v) => /^mqtts?:\/\//.test(v), {
       message: 'Must start with mqtt:// or mqtts://',
-    }),
+    })
+    .optional()
+    .nullable(),
   device_id: z.string().default('esp32-ble-proxy'),
   username: z.string().optional().nullable(),
   password: z.string().optional().nullable(),
   topic_prefix: z.string().default('ble-proxy'),
+  embedded_broker_port: z.number().int().min(1).max(65535).default(1883),
+  embedded_broker_bind: z.string().default('0.0.0.0'),
 });
 
 export const BleSchema = z

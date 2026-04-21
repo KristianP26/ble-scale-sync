@@ -65,11 +65,12 @@ describe('validateBrokerUrl()', () => {
 // ─── promptMqttProxy() ─────────────────────────────────────────────────
 
 describe('promptMqttProxy()', () => {
-  it('collects broker details without auth', async () => {
+  it('collects external broker details without auth', async () => {
     const ctx = makeCtx([
-      'mqtt://10.1.1.15:1883', // broker_url
+      'external', // broker mode
       'my-esp32', // device_id
       'my-prefix', // topic_prefix
+      'mqtt://10.1.1.15:1883', // broker_url
       false, // hasAuth = no
     ]);
 
@@ -81,11 +82,12 @@ describe('promptMqttProxy()', () => {
     });
   });
 
-  it('collects broker details with auth', async () => {
+  it('collects external broker details with auth', async () => {
     const ctx = makeCtx([
-      'mqtts://broker.example.com:8883', // broker_url
+      'external', // broker mode
       'esp32-device', // device_id
       'ble-proxy', // topic_prefix
+      'mqtts://broker.example.com:8883', // broker_url
       true, // hasAuth = yes
       'myuser', // username
       'mypass', // password
@@ -98,6 +100,47 @@ describe('promptMqttProxy()', () => {
       topic_prefix: 'ble-proxy',
       username: 'myuser',
       password: 'mypass',
+    });
+  });
+
+  it('configures the embedded broker with the default port and no auth', async () => {
+    const ctx = makeCtx([
+      'embedded', // broker mode
+      'esp32-ble-proxy', // device_id
+      'ble-proxy', // topic_prefix
+      '1883', // embedded_broker_port
+      false, // wantAuth = no
+    ]);
+
+    const result = await promptMqttProxy(ctx);
+    expect(result).toEqual({
+      device_id: 'esp32-ble-proxy',
+      topic_prefix: 'ble-proxy',
+      embedded_broker_port: 1883,
+      embedded_broker_bind: '0.0.0.0',
+    });
+    expect(result.broker_url).toBeUndefined();
+  });
+
+  it('configures the embedded broker with a custom port and auth', async () => {
+    const ctx = makeCtx([
+      'embedded', // broker mode
+      'my-esp', // device_id
+      'ble-proxy', // topic_prefix
+      '1884', // embedded_broker_port
+      true, // wantAuth = yes
+      'admin', // username
+      'secret', // password
+    ]);
+
+    const result = await promptMqttProxy(ctx);
+    expect(result).toEqual({
+      device_id: 'my-esp',
+      topic_prefix: 'ble-proxy',
+      embedded_broker_port: 1884,
+      embedded_broker_bind: '0.0.0.0',
+      username: 'admin',
+      password: 'secret',
     });
   });
 });
@@ -118,12 +161,13 @@ describe('bleStep handler selection', () => {
     expect(ctx.config.ble?.mqtt_proxy).toBeUndefined();
   });
 
-  it('sets handler to mqtt-proxy with broker config', async () => {
+  it('sets handler to mqtt-proxy with external broker config', async () => {
     const ctx = makeCtx([
       'mqtt-proxy', // handler selection
-      'mqtt://10.1.1.15:1883', // broker_url
+      'external', // broker mode
       'esp32-ble-proxy', // device_id
       'ble-proxy', // topic_prefix
+      'mqtt://10.1.1.15:1883', // broker_url
       false, // no auth
       'skip', // scale discovery → skip
     ]);
@@ -138,12 +182,13 @@ describe('bleStep handler selection', () => {
     });
   });
 
-  it('sets handler to mqtt-proxy with auth credentials', async () => {
+  it('sets handler to mqtt-proxy with external broker and auth', async () => {
     const ctx = makeCtx([
       'mqtt-proxy', // handler selection
-      'mqtt://broker:1883', // broker_url
+      'external', // broker mode
       'my-esp', // device_id
       'prefix', // topic_prefix
+      'mqtt://broker:1883', // broker_url
       true, // has auth
       'admin', // username
       'secret', // password
@@ -157,6 +202,29 @@ describe('bleStep handler selection', () => {
     expect(ctx.config.ble?.mqtt_proxy?.username).toBe('admin');
     expect(ctx.config.ble?.mqtt_proxy?.password).toBe('secret');
     expect(ctx.config.ble?.scale_mac).toBe('AA:BB:CC:DD:EE:FF');
+  });
+
+  it('sets handler to mqtt-proxy with embedded broker (default port, no auth)', async () => {
+    const ctx = makeCtx([
+      'mqtt-proxy', // handler selection
+      'embedded', // broker mode
+      'esp32-ble-proxy', // device_id
+      'ble-proxy', // topic_prefix
+      '1883', // embedded_broker_port
+      false, // wantAuth = no
+      'skip', // scale discovery → skip
+    ]);
+
+    await bleStep.run(ctx);
+
+    expect(ctx.config.ble?.handler).toBe('mqtt-proxy');
+    expect(ctx.config.ble?.mqtt_proxy).toEqual({
+      device_id: 'esp32-ble-proxy',
+      topic_prefix: 'ble-proxy',
+      embedded_broker_port: 1883,
+      embedded_broker_bind: '0.0.0.0',
+    });
+    expect(ctx.config.ble?.mqtt_proxy?.broker_url).toBeUndefined();
   });
 
   it('initializes ble config if not present', async () => {
@@ -188,9 +256,10 @@ describe('bleStep adapter selection', () => {
   it('skips adapter prompt when handler is mqtt-proxy', async () => {
     const ctx = makeCtx([
       'mqtt-proxy', // handler
-      'mqtt://localhost:1883', // broker_url
+      'external', // broker mode
       'esp32-ble-proxy', // device_id
       'ble-proxy', // topic_prefix
+      'mqtt://localhost:1883', // broker_url
       false, // no auth
       'skip', // scale discovery
     ]);

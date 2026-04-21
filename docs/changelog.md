@@ -9,6 +9,10 @@ All notable changes to this project are documented here. Format based on [Keep a
 
 ## Unreleased {#unreleased}
 
+### Added
+- **Embedded MQTT broker for the ESP32 proxy**: zero-config setup, no Mosquitto required. When `ble.mqtt_proxy.broker_url` is omitted, BLE Scale Sync now starts an embedded [aedes](https://github.com/moscajs/aedes) broker on `0.0.0.0:1883` by default; the internal client connects over loopback, and the ESP32 firmware just points at the host machine's LAN IP. Port and bind interface are configurable via `embedded_broker_port` and `embedded_broker_bind`, and optional username/password are enforced when set. Existing `broker_url` setups are untouched ([#54](https://github.com/KristianP26/ble-scale-sync/issues/54))
+- **Setup wizard**: new "Use built-in embedded broker" option for the mqtt-proxy handler, so new installs skip the external broker prompt by default
+
 ## v1.9.0 <Badge type="tip" text="latest" /> {#v1-9-0}
 
 _2026-04-21_

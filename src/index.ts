@@ -10,6 +10,8 @@ import {
   publishDisplayResult,
   setDisplayUsers,
 } from './ble/handler-mqtt-proxy.js';
+import { bootstrapMqttProxy } from './ble/mqtt-proxy-bootstrap.js';
+import type { EmbeddedBrokerHandle } from './ble/embedded-broker.js';
 import { abortableSleep } from './ble/types.js';
 import { adapters } from './scales/index.js';
 import { createLogger } from './logger.js';
@@ -75,8 +77,11 @@ const {
   scanCooldownSec,
   bleHandler,
   bleAdapter,
-  mqttProxy,
+  mqttProxy: initialMqttProxy,
 } = resolveRuntimeConfig(appConfig);
+
+let mqttProxy = initialMqttProxy;
+let embeddedBroker: EmbeddedBrokerHandle | null = null;
 
 const KG_TO_LBS = 2.20462;
 
@@ -387,6 +392,12 @@ async function main(): Promise<void> {
   ) {
     log.info(`BLE adapter: ${bleAdapter}`);
   }
+
+  if (bleHandler === 'mqtt-proxy' && mqttProxy) {
+    const bootstrapped = await bootstrapMqttProxy(mqttProxy);
+    mqttProxy = bootstrapped.mqttProxy;
+    embeddedBroker = bootstrapped.embeddedBroker;
+  }
   if (SCALE_MAC) {
     log.info(`Scanning for scale ${SCALE_MAC}...`);
   } else {
@@ -506,11 +517,26 @@ async function main(): Promise<void> {
   log.info('Stopped.');
 }
 
-main().catch((err: Error) => {
-  if (signal.aborted) {
-    log.info('Stopped.');
-    return;
+async function shutdownEmbeddedBroker(): Promise<void> {
+  if (!embeddedBroker) return;
+  try {
+    await embeddedBroker.close();
+  } catch (err) {
+    log.warn(`Embedded broker shutdown error: ${errMsg(err)}`);
+  } finally {
+    embeddedBroker = null;
   }
-  log.error(err.message);
-  process.exit(1);
-});
+}
+
+main()
+  .catch((err: Error) => {
+    if (signal.aborted) {
+      log.info('Stopped.');
+      return;
+    }
+    log.error(err.message);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await shutdownEmbeddedBroker();
+  });

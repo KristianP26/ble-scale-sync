@@ -19,11 +19,25 @@ function validateBrokerUrl(v: string): string | true {
   return true;
 }
 
+function validatePort(v: string): string | true {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) return 'Must be an integer between 1 and 65535';
+  return true;
+}
+
 async function promptMqttProxy(ctx: WizardContext): Promise<MqttProxyConfig> {
-  const broker_url = await ctx.prompts.input('MQTT broker URL:', {
-    default: 'mqtt://localhost:1883',
-    validate: validateBrokerUrl,
-  });
+  const brokerMode = await ctx.prompts.select('MQTT broker:', [
+    {
+      name: 'Use built-in embedded broker (Recommended, zero-config)',
+      value: 'embedded' as const,
+      description: 'BLE Scale Sync runs its own broker — the ESP32 connects to this machine',
+    },
+    {
+      name: 'Use an external broker (e.g. Mosquitto, Home Assistant)',
+      value: 'external' as const,
+      description: 'Point at an existing MQTT broker on your network',
+    },
+  ]);
 
   const device_id = await ctx.prompts.input('ESP32 device ID:', {
     default: 'esp32-ble-proxy',
@@ -33,24 +47,54 @@ async function promptMqttProxy(ctx: WizardContext): Promise<MqttProxyConfig> {
     default: 'ble-proxy',
   });
 
-  const hasAuth = await ctx.prompts.confirm('Does the MQTT broker require authentication?', {
-    default: false,
-  });
-
+  let broker_url: string | undefined;
   let username: string | undefined;
   let password: string | undefined;
-  if (hasAuth) {
-    username = await ctx.prompts.input('MQTT username:');
-    password = await ctx.prompts.password('MQTT password:');
+  let embedded_broker_port: number | undefined;
+  let embedded_broker_bind: string | undefined;
+
+  if (brokerMode === 'external') {
+    broker_url = await ctx.prompts.input('MQTT broker URL:', {
+      default: 'mqtt://localhost:1883',
+      validate: validateBrokerUrl,
+    });
+
+    const hasAuth = await ctx.prompts.confirm('Does the MQTT broker require authentication?', {
+      default: false,
+    });
+
+    if (hasAuth) {
+      username = await ctx.prompts.input('MQTT username:');
+      password = await ctx.prompts.password('MQTT password:');
+    }
+  } else {
+    const portStr = await ctx.prompts.input('Embedded broker port:', {
+      default: '1883',
+      validate: validatePort,
+    });
+    embedded_broker_port = Number(portStr);
+
+    const wantAuth = await ctx.prompts.confirm(
+      'Require username/password for the embedded broker? (recommended on shared networks)',
+      { default: false },
+    );
+    if (wantAuth) {
+      username = await ctx.prompts.input('MQTT username:');
+      password = await ctx.prompts.password('MQTT password:');
+    }
+
+    embedded_broker_bind = '0.0.0.0';
   }
 
   return {
-    broker_url,
+    ...(broker_url ? { broker_url } : {}),
     device_id,
     topic_prefix,
     ...(username ? { username } : {}),
     ...(password ? { password } : {}),
-  };
+    ...(embedded_broker_port != null ? { embedded_broker_port } : {}),
+    ...(embedded_broker_bind ? { embedded_broker_bind } : {}),
+  } as MqttProxyConfig;
 }
 
 export const bleStep: WizardStep = {
@@ -206,14 +250,28 @@ export const bleStep: WizardStep = {
       try {
         const { scanDevices } = await import('../../ble/index.js');
         const { adapters } = await import('../../scales/index.js');
+        const { bootstrapMqttProxy } = await import('../../ble/mqtt-proxy-bootstrap.js');
 
-        const results = await scanDevices(
-          adapters,
-          15_000,
-          ctx.config.ble!.handler,
-          ctx.config.ble!.mqtt_proxy,
-          ctx.config.ble!.adapter ?? undefined,
-        );
+        let mqttProxy = ctx.config.ble!.mqtt_proxy;
+        let embeddedBroker: Awaited<ReturnType<typeof bootstrapMqttProxy>>['embeddedBroker'] = null;
+        if (ctx.config.ble!.handler === 'mqtt-proxy' && mqttProxy) {
+          const bootstrapped = await bootstrapMqttProxy(mqttProxy);
+          mqttProxy = bootstrapped.mqttProxy;
+          embeddedBroker = bootstrapped.embeddedBroker;
+        }
+
+        let results;
+        try {
+          results = await scanDevices(
+            adapters,
+            15_000,
+            ctx.config.ble!.handler,
+            mqttProxy,
+            ctx.config.ble!.adapter ?? undefined,
+          );
+        } finally {
+          if (embeddedBroker) await embeddedBroker.close();
+        }
         const recognized = results.filter((r) => r.matchedAdapter);
 
         if (recognized.length === 0) {
@@ -283,4 +341,4 @@ export const bleStep: WizardStep = {
 };
 
 // Exported for testing
-export { validateMac, validateBrokerUrl, promptMqttProxy };
+export { validateMac, validateBrokerUrl, validatePort, promptMqttProxy };
