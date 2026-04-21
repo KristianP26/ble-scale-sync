@@ -1,5 +1,5 @@
 import type { WizardStep, WizardContext } from '../types.js';
-import type { MqttProxyConfig } from '../../config/schema.js';
+import type { MqttProxyConfig, EsphomeProxyConfig } from '../../config/schema.js';
 import { success, warn, info } from '../ui.js';
 
 const MAC_REGEX = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/;
@@ -97,6 +97,54 @@ async function promptMqttProxy(ctx: WizardContext): Promise<MqttProxyConfig> {
   } as MqttProxyConfig;
 }
 
+function validateEsphomeHost(v: string): string | true {
+  if (!v.trim()) return 'Host is required (e.g. ble-proxy.local or 192.168.1.42)';
+  return true;
+}
+
+async function promptEsphomeProxy(ctx: WizardContext): Promise<EsphomeProxyConfig> {
+  const host = await ctx.prompts.input(
+    'ESPHome proxy host (IP or mDNS name, e.g. ble-proxy.local):',
+    { validate: validateEsphomeHost },
+  );
+
+  const portStr = await ctx.prompts.input('ESPHome API port:', {
+    default: '6053',
+    validate: validatePort,
+  });
+  const port = Number(portStr);
+
+  const authMode = await ctx.prompts.select('Authentication:', [
+    { name: 'None', value: 'none' as const },
+    {
+      name: 'Noise encryption key (Recommended)',
+      value: 'noise' as const,
+      description: '32-byte base64 pre-shared key from your ESPHome api config',
+    },
+    {
+      name: 'Legacy password',
+      value: 'password' as const,
+      description: 'Deprecated plaintext auth — prefer Noise if your ESPHome supports it',
+    },
+  ]);
+
+  let encryption_key: string | undefined;
+  let password: string | undefined;
+  if (authMode === 'noise') {
+    encryption_key = await ctx.prompts.password('ESPHome API encryption key (base64):');
+  } else if (authMode === 'password') {
+    password = await ctx.prompts.password('ESPHome API password:');
+  }
+
+  return {
+    host: host.trim(),
+    port,
+    client_info: 'ble-scale-sync',
+    ...(encryption_key ? { encryption_key } : {}),
+    ...(password ? { password } : {}),
+  } as EsphomeProxyConfig;
+}
+
 export const bleStep: WizardStep = {
   id: 'ble',
   title: 'BLE Scale Discovery',
@@ -115,7 +163,12 @@ export const bleStep: WizardStep = {
       {
         name: 'Via ESP32 MQTT proxy (Experimental)',
         value: 'mqtt-proxy' as const,
-        description: 'Remote BLE scanning via an ESP32 device',
+        description: 'Remote BLE scanning via a dedicated ESP32 running our firmware',
+      },
+      {
+        name: 'Via ESPHome Bluetooth proxy (Experimental, broadcast-only)',
+        value: 'esphome-proxy' as const,
+        description: 'Reuse an existing ESPHome BT proxy from Home Assistant',
       },
     ]);
 
@@ -123,9 +176,17 @@ export const bleStep: WizardStep = {
 
     if (handler === 'mqtt-proxy') {
       ctx.config.ble.mqtt_proxy = await promptMqttProxy(ctx);
+      ctx.config.ble.esphome_proxy = undefined;
       console.log(`\n  ${info('MQTT proxy configured — scale discovery will use the ESP32.')}`);
+    } else if (handler === 'esphome-proxy') {
+      ctx.config.ble.esphome_proxy = await promptEsphomeProxy(ctx);
+      ctx.config.ble.mqtt_proxy = undefined;
+      console.log(
+        `\n  ${info('ESPHome proxy configured — only broadcast scales are supported in phase 1.')}`,
+      );
     } else {
       ctx.config.ble.mqtt_proxy = undefined;
+      ctx.config.ble.esphome_proxy = undefined;
     }
 
     // --- Adapter selection (Linux + auto handler + node-ble only) ---
@@ -268,6 +329,7 @@ export const bleStep: WizardStep = {
             ctx.config.ble!.handler,
             mqttProxy,
             ctx.config.ble!.adapter ?? undefined,
+            ctx.config.ble!.esphome_proxy,
           );
         } finally {
           if (embeddedBroker) await embeddedBroker.close();
@@ -341,4 +403,11 @@ export const bleStep: WizardStep = {
 };
 
 // Exported for testing
-export { validateMac, validateBrokerUrl, validatePort, promptMqttProxy };
+export {
+  validateMac,
+  validateBrokerUrl,
+  validatePort,
+  validateEsphomeHost,
+  promptMqttProxy,
+  promptEsphomeProxy,
+};
