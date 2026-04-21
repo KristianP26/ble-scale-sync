@@ -206,4 +206,10 @@ describe('dispatchExports()', () => {
     expect(arg).toHaveProperty('impedance', 500);
     expect(arg).toHaveProperty('metabolicAge', 28);
   });
+
+  it('returns success true with empty details when no exporters are configured', async () => {
+    const result = await dispatchExports([], SAMPLE_PAYLOAD);
+    expect(result.success).toBe(true);
+    expect(result.details).toEqual([]);
+  });
 });

@@ -54,6 +54,12 @@ export async function dispatchExports(
   payload: BodyComposition,
   context?: ExportContext,
 ): Promise<DispatchResult> {
+  if (exporters.length === 0) {
+    log.warn('No exporters configured — measurement processed but not sent anywhere.');
+    log.warn('  Run `npm run setup` and pick at least one export target, or edit config.yaml.');
+    return { success: true, details: [] };
+  }
+
   log.info(`Exporting to: ${exporters.map((e) => e.name).join(', ')}...`);
 
   const results = await Promise.allSettled(
