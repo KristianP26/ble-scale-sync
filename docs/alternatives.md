@@ -25,7 +25,7 @@ head:
 | **Push notifications** | Ntfy | No | No | App only |
 | **Local file export** | CSV and JSONL | SQLite | No | No |
 | **Multi-user** | Automatic weight matching | Manual selection | Per-user sync | Per-account |
-| **Supported scales** | 23 protocol adapters | 20+ brands | Via openScale | 1 (own brand) |
+| **Supported scales** | 24 protocol adapters | 20+ brands | Via openScale | 1 (own brand) |
 | **Body composition** | 10 metrics (BIA) | Varies | 4 metrics | Varies |
 | **Docker** | Multi-arch images | No | No | No |
 | **Open source** | GPL-3.0 | GPL-3.0 | GPL-3.0 | No |

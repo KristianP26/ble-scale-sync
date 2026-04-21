@@ -40,9 +40,7 @@ function makeNotification(weightKg: number, impedance: number, isFinal = true): 
 
 /** Emulate scale side: respond to C0 with a C1 carrying an AES-encrypted device UUID. */
 function makeC1Frames(mac: string, deviceUuid: string): Buffer[] {
-  const key = createHash('md5')
-    .update(mac.replace(/[:-]/g, '').toUpperCase(), 'utf8')
-    .digest();
+  const key = createHash('md5').update(mac.replace(/[:-]/g, '').toUpperCase(), 'utf8').digest();
   const cipher = createCipheriv('aes-128-cbc', key, IV);
   const encrypted = Buffer.concat([cipher.update(deviceUuid, 'utf8'), cipher.final()]);
   const base64Ascii = Buffer.from(encrypted.toString('base64'), 'ascii');

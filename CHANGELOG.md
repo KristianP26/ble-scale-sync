@@ -6,8 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-04-21
+
 ### Added
 - **Eufy Smart Scale P2 (T9148) and P2 Pro (T9149)**: new dedicated adapter with the AES-128-CBC C0/C1/C2/C3 handshake required by these models. Weight + impedance over GATT FFF2 after authentication, passive weight reading from the 19-byte advertisement without connecting. Prevents the prior false match as a QN scale that crashed with `Operation is not supported` on FFF1 ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
+
+### Fixed
+- **Setup wizard**: picking no exporter in the export-targets checkbox silently produced a config without any `global_exporters` block, so the first run emitted `All exports failed` and exited with code 1. The wizard now asks an explicit `Continue without exporters?` confirmation when the checkbox is submitted empty and re-prompts if the user declines ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
+- **Orchestrator**: `dispatchExports([])` logged `All exports failed` because `allFailed` defaulted to `true` with zero iterations. Empty exporter lists now short-circuit with a clear warning (`No exporters configured — measurement processed but not sent anywhere`) and return `success`, so single-shot mode no longer exits with code 1 when the config has no exporters
 
 ### Thanks
 - [@mart1058](https://github.com/mart1058) and [@dbrb2](https://github.com/dbrb2) for diagnose output, HCI snoop logs, and testing the Eufy P2 Pro protocol reverse-engineering ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
