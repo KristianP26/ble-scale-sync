@@ -479,6 +479,7 @@ async function main(): Promise<void> {
         await abortableSleep(backoffMs, signal).catch(() => {});
       }
     }
+    await watcher.stop();
   } else if (bleHandler === 'esphome-proxy' && esphomeProxy) {
     // Event-driven: persistent ESPHome Native API connection with BLE adv subscription
     const { ReadingWatcher: EsphomeReadingWatcher } =

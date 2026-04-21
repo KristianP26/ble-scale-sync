@@ -15,6 +15,10 @@ export interface MqttProxyBootstrapResult {
  * is returned. Otherwise an embedded aedes broker is started on the configured
  * port and the returned config's `broker_url` points at the loopback listener.
  *
+ * Note on credentials: `username` and `password` are forwarded verbatim. A null
+ * password with a set username is treated as an empty string by the broker's
+ * authenticator (both sides must agree), so avoid this combination in configs.
+ *
  * The caller owns the embedded broker handle and must call `close()` during
  * shutdown.
  */

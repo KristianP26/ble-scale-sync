@@ -323,16 +323,35 @@ describe('BleSchema', () => {
     }
   });
 
-  it('accepts handler mqtt-proxy with mqtt_proxy config omitting broker_url (embedded mode)', () => {
+  it('accepts handler mqtt-proxy with mqtt_proxy config omitting broker_url when bind is loopback', () => {
     const result = BleSchema.safeParse({
       handler: 'mqtt-proxy',
-      mqtt_proxy: {},
+      mqtt_proxy: { embedded_broker_bind: '127.0.0.1' },
     });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.mqtt_proxy?.broker_url).toBeUndefined();
       expect(result.data.mqtt_proxy?.embedded_broker_port).toBe(1883);
-      expect(result.data.mqtt_proxy?.embedded_broker_bind).toBe('0.0.0.0');
+      expect(result.data.mqtt_proxy?.embedded_broker_bind).toBe('127.0.0.1');
+    }
+  });
+
+  it('accepts embedded broker on non-loopback bind when username is set', () => {
+    const result = BleSchema.safeParse({
+      handler: 'mqtt-proxy',
+      mqtt_proxy: { username: 'esp32', password: 'secret' },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects embedded broker on non-loopback bind without auth', () => {
+    const result = BleSchema.safeParse({
+      handler: 'mqtt-proxy',
+      mqtt_proxy: {},
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('non-loopback');
     }
   });
 
@@ -420,6 +439,21 @@ describe('BleSchema', () => {
     if (result.success) {
       expect(result.data.esphome_proxy?.encryption_key).toBe('Lw1vKZ+BASE64KEYxxxxx==');
       expect(result.data.esphome_proxy?.client_info).toBe('pi-zero');
+    }
+  });
+
+  it('rejects esphome_proxy with both encryption_key and password set', () => {
+    const result = BleSchema.safeParse({
+      handler: 'esphome-proxy',
+      esphome_proxy: {
+        host: 'ble-proxy.local',
+        encryption_key: 'Lw1vKZ+BASE64KEYxxxxx==',
+        password: 'legacy-plaintext',
+      },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('not both');
     }
   });
 

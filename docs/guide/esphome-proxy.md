@@ -104,7 +104,12 @@ volumes:
 
 ### "Scale ... requires a GATT connection" / skipped measurements
 
-Phase 1 only handles broadcast scales. Until phase 2 adds GATT support over Native API, you have three options:
+Phase 1 only handles broadcast scales. Behavior depends on the mode:
+
+- **Single-shot (`npm start`)** fails fast with a descriptive error when a GATT-only scale is matched, so misconfigured setups surface immediately.
+- **Continuous (`CONTINUOUS_MODE=true`)** logs a one-time warning per device and keeps running, so a GATT scale passing through range does not crash a multi-scale deployment.
+
+Until phase 2 adds GATT support over Native API, you have three options:
 
 1. Use a [dedicated ESP32 MQTT proxy](/guide/esp32-proxy), it supports GATT today
 2. Run BLE Scale Sync on a machine with a local Bluetooth adapter

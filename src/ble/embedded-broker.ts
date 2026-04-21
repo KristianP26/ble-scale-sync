@@ -6,6 +6,9 @@ import { errMsg } from '../utils/error.js';
 
 const log = createLogger('MQTTBroker');
 
+/** aedes AuthErrorCode.BAD_USERNAME_OR_PASSWORD (const enum, not importable at runtime). */
+const AUTH_BAD_USER_PASS = 4;
+
 export interface EmbeddedBrokerOptions {
   /** Port to listen on. Use 0 for an OS-assigned ephemeral port (tests). */
   port: number;
@@ -96,9 +99,8 @@ export async function startEmbeddedBroker(
       if (userOk && passOk) {
         callback(null, true);
       } else {
-        // AuthErrorCode.BAD_USERNAME_OR_PASSWORD = 4 (aedes const enum, not importable at runtime)
         const err = Object.assign(new Error('Bad username or password'), {
-          returnCode: 4,
+          returnCode: AUTH_BAD_USER_PASS,
         }) as AuthenticateError;
         callback(err, false);
       }
@@ -211,7 +213,8 @@ export async function startEmbeddedBroker(
 /** True when the bind host is not loopback / localhost. */
 function isNonLoopback(host: string): boolean {
   const h = host.trim().toLowerCase();
-  return h !== '127.0.0.1' && h !== 'localhost' && h !== '::1';
+  // IPv4 loopback, localhost, compressed + expanded IPv6 loopback
+  return h !== '127.0.0.1' && h !== 'localhost' && h !== '::1' && h !== '0:0:0:0:0:0:0:1';
 }
 
 /**

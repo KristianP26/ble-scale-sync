@@ -105,13 +105,13 @@ describe('promptMqttProxy()', () => {
     });
   });
 
-  it('configures the embedded broker with the default port and no auth', async () => {
+  it('configures the embedded broker on loopback when the user declines auth', async () => {
     const ctx = makeCtx([
       'embedded', // broker mode
       'esp32-ble-proxy', // device_id
       'ble-proxy', // topic_prefix
       '1883', // embedded_broker_port
-      false, // wantAuth = no
+      false, // wantAuth = no -> bind switches to 127.0.0.1
     ]);
 
     const result = await promptMqttProxy(ctx);
@@ -119,7 +119,7 @@ describe('promptMqttProxy()', () => {
       device_id: 'esp32-ble-proxy',
       topic_prefix: 'ble-proxy',
       embedded_broker_port: 1883,
-      embedded_broker_bind: '0.0.0.0',
+      embedded_broker_bind: '127.0.0.1',
     });
     expect(result.broker_url).toBeUndefined();
   });
@@ -300,14 +300,14 @@ describe('bleStep handler selection', () => {
     expect(ctx.config.ble?.scale_mac).toBe('AA:BB:CC:DD:EE:FF');
   });
 
-  it('sets handler to mqtt-proxy with embedded broker (default port, no auth)', async () => {
+  it('sets handler to mqtt-proxy with embedded broker bound to loopback when auth declined', async () => {
     const ctx = makeCtx([
       'mqtt-proxy', // handler selection
       'embedded', // broker mode
       'esp32-ble-proxy', // device_id
       'ble-proxy', // topic_prefix
       '1883', // embedded_broker_port
-      false, // wantAuth = no
+      false, // wantAuth = no -> bind switches to 127.0.0.1
       'skip', // scale discovery → skip
     ]);
 
@@ -318,7 +318,7 @@ describe('bleStep handler selection', () => {
       device_id: 'esp32-ble-proxy',
       topic_prefix: 'ble-proxy',
       embedded_broker_port: 1883,
-      embedded_broker_bind: '0.0.0.0',
+      embedded_broker_bind: '127.0.0.1',
     });
     expect(ctx.config.ble?.mqtt_proxy?.broker_url).toBeUndefined();
   });

@@ -14,6 +14,10 @@ All notable changes to this project are documented here. Format based on [Keep a
 - **ESPHome Bluetooth proxy transport (experimental, phase 1 / broadcast-only)**: third BLE handler option `ble.handler: esphome-proxy`. If you already run an [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy.html) mesh for Home Assistant, BLE Scale Sync can connect to it over Native API (port 6053, optional Noise encryption or legacy password) and reuse it as its BLE radio. No dedicated ESP32, no MQTT broker. Phase 1 handles broadcast scales only; GATT scales log a warning and are skipped until phase 2 lands ([#116](https://github.com/KristianP26/ble-scale-sync/issues/116))
 - **Setup wizard**: new "Use built-in embedded broker" option for the mqtt-proxy handler, so new installs skip the external broker prompt by default. Handler selection now also includes "Via ESPHome Bluetooth proxy" with prompts for host, port and authentication mode
 
+### Security
+- **Embedded MQTT broker**: configs that bind the embedded broker to a non-loopback interface (default `0.0.0.0`) now require `username` + `password` and are rejected at schema validation time. The wizard defaults to requiring auth and falls back to `127.0.0.1` when the user declines, so misconfiguration cannot silently expose a LAN-reachable broker without credentials.
+- **ESPHome proxy**: configs that set both `encryption_key` and `password` are rejected at schema validation time. Pick Noise (`encryption_key`, recommended) or legacy password, not both.
+
 ## v1.9.0 <Badge type="tip" text="latest" /> {#v1-9-0}
 
 _2026-04-21_

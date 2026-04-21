@@ -8,33 +8,55 @@ const CB_UUID_REGEX =
 
 // --- Sub-schemas ---
 
-export const EsphomeProxySchema = z.object({
-  host: z.string().min(1, 'ESPHome host is required'),
-  port: z.number().int().min(1).max(65535).default(6053),
-  encryption_key: z.string().optional().nullable(),
-  password: z.string().optional().nullable(),
-  client_info: z.string().default('ble-scale-sync'),
-});
+const LOOPBACK_BINDS = new Set(['127.0.0.1', 'localhost', '::1', '0:0:0:0:0:0:0:1']);
 
-export const MqttProxySchema = z.object({
-  broker_url: z
-    .string()
-    .min(1, 'MQTT broker URL must not be empty')
-    .refine((v) => /^mqtts?:\/\//.test(v), {
-      message: 'Must start with mqtt:// or mqtts://',
-    })
-    .optional()
-    .nullable(),
-  device_id: z.string().default('esp32-ble-proxy'),
-  username: z.string().optional().nullable(),
-  password: z.string().optional().nullable(),
-  topic_prefix: z.string().default('ble-proxy'),
-  embedded_broker_port: z.number().int().min(1).max(65535).default(1883),
-  embedded_broker_bind: z
-    .string()
-    .regex(/^\S+$/, 'Must be a non-empty hostname or IP with no whitespace')
-    .default('0.0.0.0'),
-});
+export const EsphomeProxySchema = z
+  .object({
+    host: z.string().min(1, 'ESPHome host is required'),
+    port: z.number().int().min(1).max(65535).default(6053),
+    encryption_key: z.string().optional().nullable(),
+    password: z.string().optional().nullable(),
+    client_info: z.string().default('ble-scale-sync'),
+  })
+  .refine((c) => !(c.encryption_key && c.password), {
+    message: 'Set either encryption_key (Noise) or password (legacy), not both',
+    path: ['encryption_key'],
+  });
+
+export const MqttProxySchema = z
+  .object({
+    broker_url: z
+      .string()
+      .min(1, 'MQTT broker URL must not be empty')
+      .refine((v) => /^mqtts?:\/\//.test(v), {
+        message: 'Must start with mqtt:// or mqtts://',
+      })
+      .optional()
+      .nullable(),
+    device_id: z.string().default('esp32-ble-proxy'),
+    username: z.string().optional().nullable(),
+    password: z.string().optional().nullable(),
+    topic_prefix: z.string().default('ble-proxy'),
+    embedded_broker_port: z.number().int().min(1).max(65535).default(1883),
+    embedded_broker_bind: z
+      .string()
+      .regex(/^\S+$/, 'Must be a non-empty hostname or IP with no whitespace')
+      .default('0.0.0.0'),
+  })
+  .refine(
+    (c) => {
+      if (c.broker_url) return true;
+      if (LOOPBACK_BINDS.has(c.embedded_broker_bind.trim().toLowerCase())) return true;
+      return !!c.username;
+    },
+    {
+      message:
+        'Embedded broker bound to a non-loopback interface must have username/password set. ' +
+        'Either add mqtt_proxy.username + mqtt_proxy.password, or change embedded_broker_bind ' +
+        'to 127.0.0.1.',
+      path: ['username'],
+    },
+  );
 
 export const BleSchema = z
   .object({

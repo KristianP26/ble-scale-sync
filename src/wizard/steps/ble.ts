@@ -74,16 +74,25 @@ async function promptMqttProxy(ctx: WizardContext): Promise<MqttProxyConfig> {
     });
     embedded_broker_port = Number(portStr);
 
+    embedded_broker_bind = '0.0.0.0';
+
+    // Default to true because the broker binds 0.0.0.0 (LAN-exposed) and the
+    // schema now rejects a non-loopback bind without auth. Declining here
+    // switches the bind to loopback so the user gets a working zero-config
+    // setup on single-host deployments.
     const wantAuth = await ctx.prompts.confirm(
-      'Require username/password for the embedded broker? (recommended on shared networks)',
-      { default: false },
+      'Require username/password for the embedded broker? (recommended, broker is LAN-exposed)',
+      { default: true },
     );
     if (wantAuth) {
       username = await ctx.prompts.input('MQTT username:');
       password = await ctx.prompts.password('MQTT password:');
+    } else {
+      embedded_broker_bind = '127.0.0.1';
+      console.log(
+        `\n  ${info('No auth selected, binding embedded broker to 127.0.0.1 (loopback only).')}`,
+      );
     }
-
-    embedded_broker_bind = '0.0.0.0';
   }
 
   return {

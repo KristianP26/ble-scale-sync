@@ -181,12 +181,16 @@ ble:
     device_id: esp32-ble-proxy
     topic_prefix: ble-proxy
     embedded_broker_port: 1883 # default, override to avoid conflicts
-    embedded_broker_bind: 0.0.0.0 # default, listen on all interfaces so the ESP32 can reach it
-    # username: myuser               # optional. If set, the embedded broker enforces it and the internal client uses it
-    # password: '${MQTT_PASSWORD}'   # optional
+    embedded_broker_bind: 0.0.0.0 # listen on all interfaces so the ESP32 can reach it
+    username: myuser # required when bind is non-loopback
+    password: '${MQTT_PASSWORD}' # required when bind is non-loopback
 ```
 
 The internal BLE Scale Sync client always connects to the embedded broker over loopback (`mqtt://127.0.0.1:<port>`). The ESP32 connects over LAN, so make sure port `1883` (or whatever you pick) is reachable from the ESP32 and not blocked by a host firewall.
+
+::: warning Authentication required on LAN
+When `embedded_broker_bind` is `0.0.0.0` (or any non-loopback interface) the schema requires `username` + `password`. An unauthenticated broker on your LAN is rejected at config validation time. For single-host deployments where the ESP32 is not used, set `embedded_broker_bind: 127.0.0.1` to skip auth safely.
+:::
 
 ::: tip When to pick which
 Use the **embedded broker** for the simplest ESP32 proxy setup when you don't already have Mosquitto or Home Assistant. Use an **external broker** when you already run one, or when you want multiple services (Home Assistant, Node-RED, other IoT devices) to share it.

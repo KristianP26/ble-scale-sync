@@ -8,7 +8,9 @@ import { AsyncQueue } from './async-queue.js';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const CONNECT_TIMEOUT_MS = 30_000;
-const BROADCAST_WAIT_MS = 30_000;
+// 60s matches the native BLE handlers and gives slow-advertising scales (e.g. Mi,
+// some Renpho) enough time to emit a broadcast frame after the user steps on.
+const BROADCAST_WAIT_MS = 60_000;
 const SCAN_DEFAULT_MS = 15_000;
 const DEDUP_WINDOW_MS = 30_000;
 
@@ -42,7 +44,6 @@ interface EsphomeClient {
   on(event: 'connected' | 'disconnected' | 'reconnect', listener: () => void): EsphomeClient;
   on(event: 'ble', listener: (msg: EsphomeBleAdvertisement) => void): EsphomeClient;
   on(event: 'error', listener: (err: unknown) => void): EsphomeClient;
-  off(event: string, listener: (...args: unknown[]) => void): EsphomeClient;
   removeListener(event: string, listener: (...args: unknown[]) => void): EsphomeClient;
   connected: boolean;
 }
@@ -58,6 +59,9 @@ async function createEsphomeClient(config: EsphomeProxyConfig): Promise<EsphomeC
     host: config.host,
     port: config.port,
     clientInfo: config.client_info,
+    // Library stores this flag and re-runs subscribeBluetoothAdvertisementService()
+    // on every `authorized` event, so BLE advertisements resume automatically
+    // after reconnect without any manual action here.
     initializeSubscribeBLEAdvertisements: true,
     // Keep heavy-weight init steps off; we only need BLE advertisements
     initializeDeviceInfo: false,
