@@ -21,12 +21,16 @@ import { ActiveEraAdapter } from './active-era.js';
 import { MgbAdapter } from './mgb.js';
 import { HoffenAdapter } from './hoffen.js';
 import { SenssunAdapter } from './senssun.js';
+import { EufyP2Adapter } from './eufy-p2.js';
 import { StandardGattScaleAdapter } from './standard-gatt.js';
 
 export const adapters: ScaleAdapter[] = [
   // Specific adapters first — they match by device name before the generic one.
   // Order matters: SenssunAdapter before QnScaleAdapter (QN matches 'senssun'),
-  // QnScaleAdapter before RenphoScaleAdapter (mutual exclusion by service UUID).
+  // QnScaleAdapter before RenphoScaleAdapter (mutual exclusion by service UUID),
+  // EufyP2Adapter before QnScaleAdapter (P2/P2 Pro advertise FFF0 and would be
+  // mis-detected as a QN scale; Eufy's company ID 0xFF48 + "eufy T914x" name is specific).
+  new EufyP2Adapter(),
   new SenssunAdapter(),
   new QnScaleAdapter(),
   new RenphoScaleAdapter(),

@@ -207,15 +207,47 @@ describe('exportersStep — confirm skip', () => {
     expect(ctx.config.global_exporters![0].type).toBe('webhook');
   });
 
-  it('returns early when no exporters selected', async () => {
+  it('returns early when user confirms proceeding with no exporters', async () => {
     const ctx = makeCtx([
       [], // unified checkbox: select nothing
+      true, // confirm: "Continue without exporters?" → Yes
     ]);
     ctx.config.users = [{ name: 'Test', slug: 'test' }];
 
     await exportersStep.run(ctx);
 
     expect(ctx.config.global_exporters).toBeUndefined();
+  });
+
+  it('re-prompts when user declines empty selection, accepts on second try', async () => {
+    const webhookSchema = EXPORTER_SCHEMAS.find((s) => s.name === 'webhook')!;
+
+    const answers: (string | number | boolean | string[])[] = [
+      [], // first checkbox: empty
+      false, // confirm: "Continue without exporters?" → No
+      ['webhook'], // second checkbox: webhook
+      true, // confirm: "Configure Webhook?" → Yes
+    ];
+    for (const field of webhookSchema.fields) {
+      if (field.type === 'string' || field.type === 'password') {
+        answers.push(field.default !== undefined ? String(field.default) : 'https://example.com');
+      } else if (field.type === 'number') {
+        answers.push(field.default !== undefined ? String(field.default) : '10000');
+      } else if (field.type === 'boolean') {
+        answers.push((field.default as boolean) ?? false);
+      } else if (field.type === 'select') {
+        answers.push(field.choices?.[0]?.value ?? 'POST');
+      }
+    }
+
+    const ctx = makeCtx(answers);
+    ctx.config.users = [{ name: 'Test', slug: 'test' }];
+
+    await exportersStep.run(ctx);
+
+    expect(ctx.config.global_exporters).toBeDefined();
+    expect(ctx.config.global_exporters!.length).toBe(1);
+    expect(ctx.config.global_exporters![0].type).toBe('webhook');
   });
 });
 
