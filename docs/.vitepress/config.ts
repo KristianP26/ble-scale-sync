@@ -70,6 +70,7 @@ export default defineConfig({
         items: [
           { text: 'Home Assistant Add-on', link: '/guide/home-assistant-addon' },
           { text: 'ESP32 BLE Proxy', link: '/guide/esp32-proxy' },
+          { text: 'ESPHome Bluetooth Proxy', link: '/guide/esphome-proxy' },
         ],
       },
       {

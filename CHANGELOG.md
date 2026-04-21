@@ -8,7 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - **Embedded MQTT broker for the ESP32 proxy**: zero-config setup, no Mosquitto required. When `ble.mqtt_proxy.broker_url` is omitted, BLE Scale Sync now starts an embedded [aedes](https://github.com/moscajs/aedes) broker on `0.0.0.0:1883` by default; the internal client connects over loopback, and the ESP32 firmware just points at the host machine's LAN IP. Port and bind interface are configurable via `embedded_broker_port` and `embedded_broker_bind`, optional username/password are enforced when set. Existing `broker_url` setups are untouched ([#54](https://github.com/KristianP26/ble-scale-sync/issues/54))
-- **Setup wizard**: new "Use built-in embedded broker" option for the mqtt-proxy handler, so new installs skip the external broker prompt by default
+- **ESPHome Bluetooth proxy transport (experimental, phase 1 / broadcast-only)**: third BLE handler option `ble.handler: esphome-proxy`. If you already run an [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy.html) mesh for Home Assistant, BLE Scale Sync can connect to it over Native API (port 6053, optional Noise encryption or legacy password) and reuse it as its BLE radio — no dedicated ESP32 with custom firmware, no MQTT broker. Phase 1 handles broadcast scales only; GATT scales log a warning and are skipped until phase 2 lands. New `docs/guide/esphome-proxy.md` covers setup, encryption key handling and limitations ([#116](https://github.com/KristianP26/ble-scale-sync/issues/116))
+- **Setup wizard**: new "Use built-in embedded broker" option for the mqtt-proxy handler, so new installs skip the external broker prompt by default. Handler selection now also includes "Via ESPHome Bluetooth proxy" with prompts for host, port and authentication mode
 
 ## [1.9.0] - 2026-04-21
 
