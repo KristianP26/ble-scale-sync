@@ -3,6 +3,7 @@ import type { EsphomeProxyConfig } from '../config/schema.js';
 import type { ScanOptions, ScanResult } from './types.js';
 import type { RawReading } from './shared.js';
 import { bleLog, errMsg, normalizeUuid, withTimeout } from './types.js';
+import { AsyncQueue } from './async-queue.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -70,24 +71,43 @@ async function createEsphomeClient(config: EsphomeProxyConfig): Promise<EsphomeC
   return new mod.Client(options);
 }
 
-async function waitForConnected(client: EsphomeClient): Promise<void> {
+async function waitForConnected(
+  client: EsphomeClient,
+  hostPort: string = 'host:port',
+): Promise<void> {
   if (client.connected) return;
   await withTimeout(
     new Promise<void>((resolve, reject) => {
-      const onConnected = () => {
+      let settled = false;
+      const cleanup = () => {
+        client.removeListener('connected', onConnected as (...args: unknown[]) => void);
         client.removeListener('error', onError as (...args: unknown[]) => void);
+      };
+      const onConnected = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
         resolve();
       };
       const onError = (err: unknown) => {
-        client.removeListener('connected', onConnected as (...args: unknown[]) => void);
+        if (settled) return;
+        settled = true;
+        cleanup();
         reject(err instanceof Error ? err : new Error(errMsg(err)));
       };
       client.on('connected', onConnected);
       client.on('error', onError);
-      client.connect();
+      try {
+        client.connect();
+      } catch (err) {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(err instanceof Error ? err : new Error(errMsg(err)));
+      }
     }),
     CONNECT_TIMEOUT_MS,
-    `Timed out connecting to ESPHome proxy at ${client.connected ? 'host' : 'host:port'}.`,
+    `Timed out connecting to ESPHome proxy at ${hostPort}.`,
   );
 }
 
@@ -101,9 +121,16 @@ async function safeDisconnect(client: EsphomeClient): Promise<void> {
 
 // ─── Advertisement normalization ─────────────────────────────────────────────
 
-/** Convert a uint64 MAC (as JS number) to the canonical XX:XX:XX:XX:XX:XX form. */
-function formatMacAddress(addr: number): string {
-  const hex = addr.toString(16).padStart(12, '0');
+/**
+ * Convert a uint64 MAC (as JS number) to the canonical XX:XX:XX:XX:XX:XX form.
+ * Defensive: returns a sentinel if the library ever hands us a non-numeric or
+ * negative value so the caller can skip the advertisement instead of crashing.
+ */
+function formatMacAddress(addr: unknown): string {
+  if (typeof addr !== 'number' || !Number.isFinite(addr) || addr < 0) {
+    return '00:00:00:00:00:00';
+  }
+  const hex = Math.trunc(addr).toString(16).padStart(12, '0');
   return (hex.match(/.{2}/g) ?? []).join(':').toUpperCase();
 }
 
@@ -178,16 +205,20 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   const { targetMac, adapters } = opts;
   const client = await createEsphomeClient(config);
   const targetLc = targetMac?.toLowerCase();
+  const hostPort = `${config.host}:${config.port}`;
+
+  // Hoisted so the outer `finally` can always remove it, even on timeout.
+  let adListener: ((ad: EsphomeBleAdvertisement) => void) | null = null;
 
   try {
-    await waitForConnected(client);
-    bleLog.info(`ESPHome proxy connected at ${config.host}:${config.port}`);
+    await waitForConnected(client, hostPort);
+    bleLog.info(`ESPHome proxy connected at ${hostPort}`);
 
     return await withTimeout(
       new Promise<RawReading>((resolve, reject) => {
         const seenAddrs = new Set<string>();
 
-        const onAd = (ad: EsphomeBleAdvertisement): void => {
+        adListener = (ad: EsphomeBleAdvertisement): void => {
           const address = formatMacAddress(ad.address);
           if (targetLc && address.toLowerCase() !== targetLc) return;
 
@@ -204,7 +235,6 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
           if (adapter.parseBroadcast && info.manufacturerData) {
             const reading = adapter.parseBroadcast(info.manufacturerData.data);
             if (reading) {
-              client.removeListener('ble', onAd as (...args: unknown[]) => void);
               bleLog.info(`Matched: ${adapter.name} (${address})`);
               bleLog.info(`Broadcast reading: ${reading.weight} kg`);
               resolve({ reading, adapter });
@@ -220,11 +250,10 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
             return;
           }
 
-          client.removeListener('ble', onAd as (...args: unknown[]) => void);
           reject(gattNotSupportedError(adapter.name, address));
         };
 
-        client.on('ble', onAd);
+        client.on('ble', adListener);
       }),
       CONNECT_TIMEOUT_MS,
       targetMac
@@ -232,6 +261,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         : `Timed out waiting for any recognized scale broadcast via ESPHome proxy.`,
     );
   } finally {
+    if (adListener) {
+      client.removeListener('ble', adListener as (...args: unknown[]) => void);
+    }
     await safeDisconnect(client);
   }
 }
@@ -251,10 +283,11 @@ export async function scanDevices(
   const client = await createEsphomeClient(config);
   const duration = durationMs ?? SCAN_DEFAULT_MS;
   const results = new Map<string, ScanResult>();
+  const hostPort = `${config.host}:${config.port}`;
 
   try {
-    await waitForConnected(client);
-    bleLog.info(`ESPHome proxy connected at ${config.host}:${config.port}`);
+    await waitForConnected(client, hostPort);
+    bleLog.info(`ESPHome proxy connected at ${hostPort}`);
 
     await new Promise<void>((resolve) => {
       const onAd = (ad: EsphomeBleAdvertisement): void => {
@@ -283,24 +316,23 @@ export async function scanDevices(
 
 // ─── ReadingWatcher — continuous mode ────────────────────────────────────────
 
-export { AsyncQueue } from './handler-mqtt-proxy.js';
-
 /**
  * Persistent event-driven advertisement watcher for continuous mode, matching
  * the shape of the mqtt-proxy `ReadingWatcher`. Phase 1 handles broadcast
  * scales only; GATT-only adapters are logged and skipped.
  */
 export class ReadingWatcher {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private queue: any; // AsyncQueue<RawReading>
+  private queue = new AsyncQueue<RawReading>();
   private started = false;
   private adapters: ScaleAdapter[];
   private targetMac?: string;
   private config: EsphomeProxyConfig;
   private dedup = new Map<string, number>();
   private client: EsphomeClient | null = null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private lifecycleHandlers: Array<{ event: string; handler: (...args: any[]) => void }> = [];
+  private lifecycleHandlers: Array<{
+    event: string;
+    handler: (...args: unknown[]) => void;
+  }> = [];
   private onAdHandler: ((ad: EsphomeBleAdvertisement) => void) | null = null;
   private gattWarnedFor = new Set<string>();
 
@@ -314,10 +346,8 @@ export class ReadingWatcher {
     if (this.started) return;
     this.started = true;
     try {
-      // AsyncQueue is reused from mqtt-proxy handler to keep a single impl.
-      const { AsyncQueue } = await import('./handler-mqtt-proxy.js');
-      this.queue = new AsyncQueue();
       this.client = await createEsphomeClient(this.config);
+      const hostPort = `${this.config.host}:${this.config.port}`;
 
       const onReconnect = (): void => bleLog.info('ESPHome proxy reconnecting...');
       const onDisconnect = (): void => bleLog.warn('ESPHome proxy disconnected');
@@ -329,13 +359,13 @@ export class ReadingWatcher {
       this.client.on('reconnect', onReconnect);
       this.client.on('error', onError);
       this.lifecycleHandlers = [
-        { event: 'connected', handler: onConnect },
-        { event: 'disconnected', handler: onDisconnect },
-        { event: 'reconnect', handler: onReconnect },
-        { event: 'error', handler: onError },
+        { event: 'connected', handler: onConnect as (...args: unknown[]) => void },
+        { event: 'disconnected', handler: onDisconnect as (...args: unknown[]) => void },
+        { event: 'reconnect', handler: onReconnect as (...args: unknown[]) => void },
+        { event: 'error', handler: onError as (...args: unknown[]) => void },
       ];
 
-      await waitForConnected(this.client);
+      await waitForConnected(this.client, hostPort);
 
       this.onAdHandler = (ad) => this.handleAd(ad);
       this.client.on('ble', this.onAdHandler);
@@ -425,6 +455,9 @@ export class ReadingWatcher {
     }
   }
 }
+
+// Re-exported for test-suite import sites that reached in through this handler.
+export { AsyncQueue };
 
 // ─── Helpers exported for tests ──────────────────────────────────────────────
 

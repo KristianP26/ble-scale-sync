@@ -12,6 +12,7 @@ import type {
   MqttProxyConfig,
   EsphomeProxyConfig,
 } from './schema.js';
+import type { BleHandlerName } from '../ble/types.js';
 import { KNOWN_EXPORTER_NAMES } from '../exporters/registry.js';
 import { loadConfig as loadEnvVarConfig } from '../validate-env.js';
 import { loadExporterConfig } from '../exporters/config.js';
@@ -363,7 +364,7 @@ export function loadAppConfig(configPath?: string): LoadedConfig {
 export interface BleLoadedConfig {
   scaleMac?: string;
   nobleDriver?: string;
-  bleHandler?: 'auto' | 'mqtt-proxy' | 'esphome-proxy';
+  bleHandler?: BleHandlerName;
   bleAdapter?: string;
   mqttProxy?: MqttProxyConfig;
   esphomeProxy?: EsphomeProxyConfig;

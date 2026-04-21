@@ -1,4 +1,5 @@
 import type { UserProfile } from '../interfaces/scale-adapter.js';
+import type { BleHandlerName } from '../ble/types.js';
 import type {
   AppConfig,
   UserConfig,
@@ -51,7 +52,7 @@ export interface ResolvedRuntimeConfig {
   dryRun: boolean;
   continuousMode: boolean;
   scanCooldownSec: number;
-  bleHandler: 'auto' | 'mqtt-proxy' | 'esphome-proxy';
+  bleHandler: BleHandlerName;
   bleAdapter?: string;
   mqttProxy?: MqttProxyConfig;
   esphomeProxy?: EsphomeProxyConfig;

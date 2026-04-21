@@ -1,5 +1,5 @@
 import type { ScaleAdapter, BodyComposition } from '../interfaces/scale-adapter.js';
-import type { ScanOptions, ScanResult } from './types.js';
+import type { ScanOptions, ScanResult, BleHandlerName } from './types.js';
 import type { RawReading } from './shared.js';
 import { bleLog } from './types.js';
 
@@ -130,7 +130,7 @@ export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
 export async function scanDevices(
   adapters: ScaleAdapter[],
   durationMs?: number,
-  bleHandler?: 'auto' | 'mqtt-proxy' | 'esphome-proxy',
+  bleHandler?: BleHandlerName,
   mqttProxy?: import('../config/schema.js').MqttProxyConfig,
   bleAdapter?: string,
   esphomeProxy?: import('../config/schema.js').EsphomeProxyConfig,

@@ -318,6 +318,100 @@ describe('scanAndReadRaw', () => {
   });
 });
 
+describe('waitForConnected via scanAndReadRaw', () => {
+  beforeEach(() => {
+    mockClient = new MockEsphomeClient();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('rejects when the client emits an error before connecting', async () => {
+    // Override the default connect to emit error instead of connected
+    mockClient.connect = vi.fn(() => {
+      setImmediate(() => {
+        mockClient.emit('error', new Error('ECONNREFUSED: proxy down'));
+      });
+    });
+
+    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy.js');
+    await expect(
+      scanAndReadRaw({
+        adapters: [makeBroadcastAdapter()],
+        profile,
+        esphomeProxy: config,
+        bleHandler: 'esphome-proxy',
+      }),
+    ).rejects.toThrow(/ECONNREFUSED/);
+  });
+});
+
+describe('ReadingWatcher', () => {
+  beforeEach(() => {
+    mockClient = new MockEsphomeClient();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('enqueues broadcast readings for consumption via nextReading()', async () => {
+    const adapter = makeBroadcastAdapter();
+    const { ReadingWatcher } = await import('../../src/ble/handler-esphome-proxy.js');
+    const watcher = new ReadingWatcher(config, [adapter]);
+
+    const startPromise = watcher.start();
+    await mockClient.waitForListener('ble');
+    await startPromise;
+
+    mockClient.pushBle({
+      address: 0x112233445566,
+      name: 'MyScale',
+      rssi: -55,
+      manufacturerDataList: [{ uuid: '0xee57', legacyDataList: [0x01, 0x02, 0x03], data: '' }],
+    });
+
+    const reading = await watcher.nextReading();
+    expect(reading.adapter.name).toBe('MockBroadcast');
+    expect(reading.reading.weight).toBe(75.5);
+    await watcher.stop();
+  });
+
+  it('deduplicates identical broadcast readings within the dedup window', async () => {
+    const adapter = makeBroadcastAdapter();
+    const { ReadingWatcher } = await import('../../src/ble/handler-esphome-proxy.js');
+    const watcher = new ReadingWatcher(config, [adapter]);
+
+    const startPromise = watcher.start();
+    await mockClient.waitForListener('ble');
+    await startPromise;
+
+    // Same address + weight twice in quick succession
+    for (let i = 0; i < 2; i++) {
+      mockClient.pushBle({
+        address: 0x112233445566,
+        name: 'MyScale',
+        rssi: -55,
+        manufacturerDataList: [{ uuid: '0xee57', legacyDataList: [0x01, 0x02, 0x03], data: '' }],
+      });
+    }
+
+    const first = await watcher.nextReading();
+    expect(first.reading.weight).toBe(75.5);
+    // Second push should have been deduplicated, so the queue has no more readings.
+    // Race it against a short timeout to confirm nothing arrives.
+    const ac = new AbortController();
+    const raceResult = await Promise.race([
+      watcher.nextReading(ac.signal).then(() => 'got-reading'),
+      new Promise((r) => setTimeout(() => r('no-reading'), 50)),
+    ]);
+    ac.abort();
+    expect(raceResult).toBe('no-reading');
+    await watcher.stop();
+  });
+});
+
 describe('scanDevices', () => {
   beforeEach(() => {
     mockClient = new MockEsphomeClient();
