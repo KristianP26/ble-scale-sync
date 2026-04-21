@@ -30,6 +30,7 @@ export async function bootstrapMqttProxy(
     bindHost: mqttProxy.embedded_broker_bind,
     username: mqttProxy.username,
     password: mqttProxy.password,
+    topicPrefix: mqttProxy.topic_prefix,
   });
 
   return {

@@ -30,7 +30,10 @@ export const MqttProxySchema = z.object({
   password: z.string().optional().nullable(),
   topic_prefix: z.string().default('ble-proxy'),
   embedded_broker_port: z.number().int().min(1).max(65535).default(1883),
-  embedded_broker_bind: z.string().default('0.0.0.0'),
+  embedded_broker_bind: z
+    .string()
+    .regex(/^\S+$/, 'Must be a non-empty hostname or IP with no whitespace')
+    .default('0.0.0.0'),
 });
 
 export const BleSchema = z

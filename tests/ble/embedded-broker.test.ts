@@ -121,4 +121,66 @@ describe('startEmbeddedBroker', () => {
     await broker.close();
     await expect(broker.close()).resolves.toBeUndefined();
   });
+
+  it('rejects publishes to topics outside the configured topic_prefix', async () => {
+    const broker = await startEmbeddedBroker({
+      port: 0,
+      bindHost: '127.0.0.1',
+      topicPrefix: 'ble-proxy',
+    });
+    try {
+      const publisher = await connectAsync(broker.url, {
+        clientId: 'acl-publisher',
+        clean: true,
+        reconnectPeriod: 0,
+      });
+      const subscriber = await connectAsync(broker.url, {
+        clientId: 'acl-subscriber',
+        clean: true,
+        reconnectPeriod: 0,
+      });
+      try {
+        const received: string[] = [];
+        subscriber.on('message', (t) => received.push(t));
+        // Subscribe inside prefix — allowed
+        await subscriber.subscribeAsync('ble-proxy/#');
+        // Publish inside prefix — should be delivered
+        await publisher.publishAsync('ble-proxy/esp32-ble-proxy/status', 'online');
+        // Publish outside prefix — should be dropped by broker ACL
+        await publisher.publishAsync('rogue/topic', 'pwnd');
+        // Brief wait for delivery
+        await new Promise((r) => setTimeout(r, 100));
+        expect(received).toContain('ble-proxy/esp32-ble-proxy/status');
+        expect(received).not.toContain('rogue/topic');
+      } finally {
+        await publisher.endAsync();
+        await subscriber.endAsync();
+      }
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('allows subscribe filters inside the prefix (including wildcards)', async () => {
+    const broker = await startEmbeddedBroker({
+      port: 0,
+      bindHost: '127.0.0.1',
+      topicPrefix: 'ble-proxy',
+    });
+    try {
+      const client = await connectAsync(broker.url, {
+        clientId: 'acl-wildcard',
+        clean: true,
+        reconnectPeriod: 0,
+      });
+      try {
+        // Wildcard within prefix — allowed
+        await expect(client.subscribeAsync('ble-proxy/+/status')).resolves.toBeDefined();
+      } finally {
+        await client.endAsync();
+      }
+    } finally {
+      await broker.close();
+    }
+  });
 });

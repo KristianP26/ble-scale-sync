@@ -1,4 +1,5 @@
-import { createServer, type Server } from 'node:net';
+import { createServer, type Server, type Socket } from 'node:net';
+import { timingSafeEqual } from 'node:crypto';
 import type { AuthenticateError } from 'aedes';
 import { createLogger } from '../logger.js';
 import { errMsg } from '../utils/error.js';
@@ -16,6 +17,19 @@ export interface EmbeddedBrokerOptions {
   password?: string | null;
   /** Broker id used by aedes (appears in $SYS topics). */
   brokerId?: string;
+  /**
+   * Topic prefix used by the mqtt-proxy handler. When set, the broker's
+   * authorizePublish/authorizeSubscribe hooks restrict MQTT clients to this
+   * prefix (plus $SYS read-only), so a misconfigured LAN device can't use the
+   * broker as a general-purpose pub/sub bus.
+   */
+  topicPrefix?: string;
+  /**
+   * How long to wait for in-flight client work to drain on `close()`.
+   * Defaults to 10s so shutdown is bounded even when MQTT keepalive clients
+   * (e.g. the ESP32 proxy) hold the connection open.
+   */
+  drainTimeoutMs?: number;
 }
 
 export interface EmbeddedBrokerHandle {
@@ -25,6 +39,21 @@ export interface EmbeddedBrokerHandle {
   port: number;
   /** Stop accepting new connections and close the broker. Idempotent. */
   close: () => Promise<void>;
+}
+
+/** Timing-safe string comparison. Handles length mismatch without leaking it. */
+function safeStringEqual(a: string, b: string): boolean {
+  // Pad shorter to the longer length so timingSafeEqual doesn't throw,
+  // then require equal lengths for success.
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  const len = Math.max(bufA.length, bufB.length, 1);
+  const padA = Buffer.alloc(len);
+  const padB = Buffer.alloc(len);
+  bufA.copy(padA);
+  bufB.copy(padB);
+  const equal = timingSafeEqual(padA, padB);
+  return equal && bufA.length === bufB.length;
 }
 
 /**
@@ -41,9 +70,20 @@ export async function startEmbeddedBroker(
 
   const bindHost = opts.bindHost ?? '0.0.0.0';
   const authEnabled = !!opts.username;
+  const drainTimeout = opts.drainTimeoutMs ?? 10_000;
+
+  if (!authEnabled && isNonLoopback(bindHost)) {
+    log.warn(
+      `Embedded broker is binding ${bindHost} without authentication. Anyone on this ` +
+        `network can publish to and subscribe from it. Set mqtt_proxy.username + ` +
+        `mqtt_proxy.password in config.yaml, or change embedded_broker_bind to 127.0.0.1 ` +
+        `if the ESP32 runs on this machine.`,
+    );
+  }
 
   const aedes = await Aedes.createBroker({
     id: opts.brokerId ?? 'ble-scale-sync-embedded',
+    drainTimeout,
   });
 
   if (authEnabled) {
@@ -51,7 +91,9 @@ export async function startEmbeddedBroker(
     const expectedPass = opts.password ?? '';
     aedes.authenticate = (_client, username, password, callback) => {
       const passStr = password ? password.toString() : '';
-      if (username === expectedUser && passStr === expectedPass) {
+      const userOk = username != null && safeStringEqual(username, expectedUser);
+      const passOk = safeStringEqual(passStr, expectedPass);
+      if (userOk && passOk) {
         callback(null, true);
       } else {
         const err = new Error('Bad username or password') as AuthenticateError;
@@ -59,6 +101,37 @@ export async function startEmbeddedBroker(
         (err as unknown as { returnCode: number }).returnCode = 4;
         callback(err, false);
       }
+    };
+  }
+
+  // Topic-prefix ACL — prevents a rogue LAN client from using the broker as a
+  // general pub/sub bus. Internal broker-originated publishes (client === null)
+  // are always allowed so $SYS stats and similar housekeeping still work.
+  const topicPrefix = opts.topicPrefix;
+  if (topicPrefix) {
+    const allowedPrefix = topicPrefix.endsWith('/') ? topicPrefix : `${topicPrefix}/`;
+    const isAllowedTopic = (topic: string): boolean =>
+      topic === topicPrefix || topic.startsWith(allowedPrefix);
+
+    aedes.authorizePublish = (client, packet, callback) => {
+      if (!client) return callback(null); // broker-originated
+      if (packet.topic.startsWith('$SYS/')) {
+        return callback(new Error('$SYS/ topics are reserved'));
+      }
+      if (!isAllowedTopic(packet.topic)) {
+        return callback(new Error(`publish rejected: topic outside "${topicPrefix}"`));
+      }
+      callback(null);
+    };
+
+    aedes.authorizeSubscribe = (client, sub, callback) => {
+      if (!client) return callback(null, sub);
+      // Allow read-only $SYS subscriptions so tools like mqtt-explorer still work.
+      if (sub.topic.startsWith('$SYS/')) return callback(null, sub);
+      if (!isAllowedTopic(sub.topic) && !topicMatchesPrefix(sub.topic, topicPrefix)) {
+        return callback(new Error(`subscribe rejected: topic outside "${topicPrefix}"`), null);
+      }
+      callback(null, sub);
     };
   }
 
@@ -72,7 +145,12 @@ export async function startEmbeddedBroker(
     log.debug(`Client error ${client.id}: ${errMsg(err)}`);
   });
 
-  const server: Server = createServer(aedes.handle);
+  const sockets = new Set<Socket>();
+  const server: Server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+    aedes.handle(socket);
+  });
 
   await new Promise<void>((resolve, reject) => {
     const onError = (err: NodeJS.ErrnoException) => {
@@ -104,7 +182,8 @@ export async function startEmbeddedBroker(
 
   log.info(
     `Embedded MQTT broker listening on ${bindHost}:${actualPort}` +
-      (authEnabled ? ' (authentication enabled)' : ''),
+      (authEnabled ? ' (authentication enabled)' : '') +
+      (topicPrefix ? ` [ACL: ${topicPrefix}/*]` : ''),
   );
 
   let closed = false;
@@ -114,10 +193,43 @@ export async function startEmbeddedBroker(
     await new Promise<void>((resolve) => {
       aedes.close(() => {
         server.close(() => resolve());
+        // Forcefully destroy any sockets still open (MQTT keepalive clients
+        // would otherwise block server.close for up to drainTimeout).
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+        sockets.clear();
       });
     });
     log.info('Embedded MQTT broker stopped');
   };
 
   return { url, port: actualPort, close };
+}
+
+/** True when the bind host is not loopback / localhost. */
+function isNonLoopback(host: string): boolean {
+  const h = host.trim().toLowerCase();
+  return h !== '127.0.0.1' && h !== 'localhost' && h !== '::1';
+}
+
+/**
+ * MQTT topic filters support `+` (single level) and `#` (multi-level) wildcards.
+ * We accept a subscribe filter if its literal prefix falls inside the configured
+ * topic prefix; otherwise reject.
+ */
+function topicMatchesPrefix(filter: string, prefix: string): boolean {
+  // A filter like `ble-proxy/#` or `ble-proxy/+/status` must start with the prefix
+  // (up to the first wildcard). Take the literal portion before any + or #.
+  const wildcardIdx = Math.min(
+    firstIndexOrInfinity(filter, '+'),
+    firstIndexOrInfinity(filter, '#'),
+  );
+  const literal = wildcardIdx === Infinity ? filter : filter.slice(0, wildcardIdx);
+  return literal === prefix || literal.startsWith(`${prefix}/`);
+}
+
+function firstIndexOrInfinity(s: string, ch: string): number {
+  const idx = s.indexOf(ch);
+  return idx === -1 ? Infinity : idx;
 }

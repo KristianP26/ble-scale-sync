@@ -359,6 +359,22 @@ describe('BleSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('rejects embedded_broker_bind with whitespace', () => {
+    const result = BleSchema.safeParse({
+      handler: 'mqtt-proxy',
+      mqtt_proxy: { embedded_broker_bind: '0.0.0.0 injection' },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects empty embedded_broker_bind', () => {
+    const result = BleSchema.safeParse({
+      handler: 'mqtt-proxy',
+      mqtt_proxy: { embedded_broker_bind: '' },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('accepts handler esphome-proxy with esphome_proxy config', () => {
     const result = BleSchema.safeParse({
       handler: 'esphome-proxy',
