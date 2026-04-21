@@ -383,30 +383,44 @@ async function mqttGattConnect(
   await client.subscribeAsync(t.disconnected);
   await client.subscribeAsync(t.error);
 
-  const response = await withTimeout(
-    new Promise<{ chars: Array<{ uuid: string; properties: string[] }> }>((resolve, reject) => {
-      const handler = (topic: string, payload: Buffer) => {
-        if (topic === t.connected) {
-          client.removeListener('message', handler);
-          try {
-            resolve(JSON.parse(payload.toString()));
-          } catch (err) {
-            reject(new Error(`Invalid connected payload from ESP32: ${err}`));
+  let handler: ((topic: string, payload: Buffer) => void) | null = null;
+  let response: { chars: Array<{ uuid: string; properties: string[] }> };
+  try {
+    response = await withTimeout(
+      new Promise<{ chars: Array<{ uuid: string; properties: string[] }> }>((resolve, reject) => {
+        handler = (topic: string, payload: Buffer) => {
+          if (topic === t.connected) {
+            try {
+              resolve(JSON.parse(payload.toString()));
+            } catch (err) {
+              reject(new Error(`Invalid connected payload from ESP32: ${err}`));
+            }
           }
-        }
-        if (topic === t.error) {
-          client.removeListener('message', handler);
-          reject(new Error(`ESP32 error: ${payload.toString()}`));
-        }
-      };
-      client.on('message', handler);
-      client
-        .publishAsync(t.connect, JSON.stringify({ address, addr_type: addrType }))
-        .catch(reject);
-    }),
-    COMMAND_TIMEOUT_MS,
-    `GATT connect timeout for ${address}`,
-  );
+          if (topic === t.error) {
+            const msg = payload.toString();
+            // Firmware can raise exceptions whose `str(e)` is empty (e.g.
+            // aioble's TimeoutError), which lands here as an empty payload.
+            // Surface something actionable instead of a dangling "ESP32 error: ".
+            reject(
+              new Error(
+                msg
+                  ? `ESP32 error: ${msg}`
+                  : `ESP32 GATT connect failed for ${address} (empty error, likely BLE connect timeout or link-layer failure)`,
+              ),
+            );
+          }
+        };
+        client.on('message', handler);
+        client
+          .publishAsync(t.connect, JSON.stringify({ address, addr_type: addrType }))
+          .catch(reject);
+      }),
+      COMMAND_TIMEOUT_MS,
+      `GATT connect timeout for ${address}`,
+    );
+  } finally {
+    if (handler) client.removeListener('message', handler);
+  }
 
   const charMap = new Map<string, BleChar>();
   for (const char of response.chars) {
@@ -729,17 +743,22 @@ export class ReadingWatcher {
     };
 
     bleLog.info(`Connecting via GATT proxy to ${adapter.name} (${entry.address})...`);
-    const { charMap, device } = await mqttGattConnect(
-      client,
-      t,
-      entry.address,
-      entry.addr_type ?? 0,
-    );
+    // Outer try/finally resets gattInProgress on *any* path, including a failed
+    // mqttGattConnect. Before, a connect failure left the flag stuck until the
+    // 90s auto-reset, so every subsequent scan result logged "already in progress".
+    let device: MqttBleDevice | null = null;
     try {
+      const connected = await mqttGattConnect(
+        client,
+        t,
+        entry.address,
+        entry.addr_type ?? 0,
+      );
+      device = connected.device;
       const raw = await withTimeout(
         waitForRawReading(
-          charMap,
-          device,
+          connected.charMap,
+          connected.device,
           adapter,
           profile,
           entry.address.replace(/[:-]/g, '').toUpperCase(),
@@ -751,8 +770,10 @@ export class ReadingWatcher {
       this.queue.push(raw);
     } finally {
       this.gattInProgress = false;
-      device.cleanup();
-      await mqttGattDisconnect(client, t).catch(() => {});
+      if (device) {
+        device.cleanup();
+        await mqttGattDisconnect(client, t).catch(() => {});
+      }
     }
   }
 

@@ -457,7 +457,12 @@ async def main():
                     if "/response" not in suffix:
                         await handle_read(suffix)
             except Exception as e:
-                await publish_error(str(e))
+                # str(e) is empty for some MicroPython exceptions (e.g.
+                # aioble's TimeoutError()), which leaves the host logging a
+                # blank "ESP32 error:". Prepend the exception type so we
+                # always ship something actionable.
+                msg = str(e)
+                await publish_error(f"{type(e).__name__}: {msg}" if msg else type(e).__name__)
 
         await asyncio.sleep_ms(50)
         gc_counter += 1

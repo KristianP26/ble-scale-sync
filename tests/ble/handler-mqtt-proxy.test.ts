@@ -1366,6 +1366,86 @@ describe('handler-mqtt-proxy', () => {
       ).rejects.toThrow('ESP32 error: Connection failed: device not found');
     });
 
+    it('ReadingWatcher resets gattInProgress after a GATT connect failure (regression)', async () => {
+      const adapter = createGattAdapter();
+      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter], undefined, PROFILE);
+      await watcher.start();
+
+      const connectCalls: string[] = [];
+      let attempt = 0;
+      const origPublish = mockClient.publishAsync;
+      mockClient.publishAsync = vi.fn(async (topic: string, payload?: string | Buffer) => {
+        if (topic === `${PREFIX}/connect`) {
+          connectCalls.push(topic);
+          attempt++;
+          if (attempt === 1) {
+            // First attempt: simulate ESP32 failing the GATT connect
+            queueMicrotask(() =>
+              mockClient._simulateMessage(`${PREFIX}/error`, 'TimeoutError'),
+            );
+          } else {
+            // Second attempt: succeed so the watcher actually pushes a reading
+            queueMicrotask(() =>
+              mockClient._simulateMessage(
+                `${PREFIX}/connected`,
+                JSON.stringify({
+                  chars: [
+                    { uuid: GATT_NOTIFY_UUID, properties: ['notify'] },
+                    { uuid: GATT_WRITE_UUID, properties: ['write'] },
+                  ],
+                }),
+              ),
+            );
+          }
+        }
+        if (topic === `${PREFIX}/write/${GATT_WRITE_UUID}`) {
+          queueMicrotask(() => {
+            const buf = Buffer.alloc(4);
+            buf.writeUInt16LE(8000, 0);
+            buf.writeUInt16LE(450, 2);
+            mockClient._simulateMessage(`${PREFIX}/notify/${GATT_NOTIFY_UUID}`, buf);
+          });
+        }
+        return origPublish(topic, payload);
+      });
+
+      // First scan result: triggers a GATT connect that will fail
+      mockClient._simulateMessage(
+        `${PREFIX}/scan/results`,
+        JSON.stringify([
+          {
+            address: 'AA:BB:CC:DD:EE:FF',
+            name: 'GattScale',
+            rssi: -50,
+            services: [],
+            addr_type: 0,
+          },
+        ]),
+      );
+
+      // Let the failure propagate and the flag reset
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Second scan result right after: must trigger a fresh GATT connect, not
+      // get stuck behind "GATT connection already in progress".
+      mockClient._simulateMessage(
+        `${PREFIX}/scan/results`,
+        JSON.stringify([
+          {
+            address: 'AA:BB:CC:DD:EE:FF',
+            name: 'GattScale',
+            rssi: -50,
+            services: [],
+            addr_type: 0,
+          },
+        ]),
+      );
+
+      const raw = await watcher.nextReading();
+      expect(raw.reading.weight).toBe(80.0);
+      expect(connectCalls).toHaveLength(2);
+    });
+
     it('broadcast scales still work unchanged (no regression)', async () => {
       const broadcastAdapter = createBroadcastAdapter();
       const gattAdapter = createGattAdapter();
