@@ -11,6 +11,10 @@ head:
 
 Use a cheap ESP32 board as a remote Bluetooth radio, communicating over MQTT. This lets you run BLE Scale Sync on machines without local Bluetooth: headless servers, Docker containers, or devices where the built-in radio has poor range.
 
+::: tip Already running ESPHome?
+If you already have an [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy.html) mesh for Home Assistant, the [ESPHome proxy transport](/guide/esphome-proxy) lets you reuse it without flashing a dedicated ESP32.
+:::
+
 The ESP32 scans autonomously for BLE advertisements and publishes results over MQTT. BLE Scale Sync matches scale adapters against the scan data, identifies users by weight, computes body composition, and dispatches to exporters. For scales that require a GATT connection, the server sends connect/write/read commands back to the ESP32 over MQTT. All scale-specific logic stays on the server.
 
 ## How It Works
