@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.10.1] - 2026-04-22
+
+### Fixed
+- **ESPHome proxy**: the `ReadingWatcher` silently dropped advertisements from dual-mode scale adapters (`parseBroadcast` defined **and** `charNotifyUuid` set) when the broadcast frame was not weight-bearing. Reported by [@deadhurricane](https://github.com/deadhurricane) on an Elis 1 / ES-30M, which matches by name as a QN-Scale but only beacons its MAC in manufacturer data and carries weight over GATT. The handler now warns once per MAC that the scale needs a GATT connection (Phase 2), pointing the user at the native BLE handler or the ESP32 MQTT proxy as workarounds instead of leaving them staring at a silent log ([#116](https://github.com/KristianP26/ble-scale-sync/issues/116), [#75](https://github.com/KristianP26/ble-scale-sync/issues/75))
+- **Logger**: `runtime.debug: true` in `config.yaml` did not switch the log level to DEBUG, only the `DEBUG=true` env var did. The app now honors the config value on startup, so HA Add-on users (who pass `debug` as an option, not an env var) and anyone driving the runtime from `config.yaml` get the verbose BLE logs they expect
+
 ## [1.10.0] - 2026-04-22
 
 ### Added

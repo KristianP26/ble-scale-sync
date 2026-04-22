@@ -110,6 +110,29 @@ function makeGattOnlyAdapter(): ScaleAdapter {
   } as unknown as ScaleAdapter;
 }
 
+/**
+ * Dual-mode adapter: parseBroadcast is defined but returns null for this frame
+ * (e.g. QN Elis 1 / ES-30M beacon). charNotifyUuid is set, so the handler
+ * should emit the Phase 2 GATT warning instead of silently dropping.
+ */
+function makeDualModeAdapter(): ScaleAdapter {
+  return {
+    name: 'MockDualMode',
+    matches: vi.fn((info: BleDeviceInfo) => info.localName === 'DualMode-scale'),
+    parseBroadcast: vi.fn((): ScaleReading | null => null) as ScaleAdapter['parseBroadcast'],
+    isComplete: (r: ScaleReading): boolean => r.weight > 0,
+    computeMetrics: (r: ScaleReading): BodyComposition => ({
+      weight: r.weight,
+      impedance: r.impedance,
+    }),
+    parseNotification: () => null,
+    charNotifyUuid: '0000fff1-0000-1000-8000-00805f9b34fb',
+    charWriteUuid: '0000fff2-0000-1000-8000-00805f9b34fb',
+    unlockCommand: [],
+    unlockIntervalMs: 0,
+  } as unknown as ScaleAdapter;
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe('_internals.formatMacAddress', () => {
@@ -375,6 +398,39 @@ describe('ReadingWatcher', () => {
     const reading = await watcher.nextReading();
     expect(reading.adapter.name).toBe('MockBroadcast');
     expect(reading.reading.weight).toBe(75.5);
+    await watcher.stop();
+  });
+
+  it('warns once per address when a dual-mode adapter matches but the broadcast frame is not weight-bearing (e.g. Elis 1 MAC beacon)', async () => {
+    const adapter = makeDualModeAdapter();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { ReadingWatcher } = await import('../../src/ble/handler-esphome-proxy.js');
+    const watcher = new ReadingWatcher(config, [adapter]);
+
+    const startPromise = watcher.start();
+    await mockClient.waitForListener('ble');
+    await startPromise;
+
+    // Push two ads from the same scale. Second should not re-warn (LRU-deduped).
+    const ad = {
+      address: 0xff04002255_0f,
+      name: 'DualMode-scale',
+      rssi: -60,
+      manufacturerDataList: [
+        { uuid: '0xffff', legacyDataList: [0x0c, 0xcb, 0x01, 0x00], data: '' },
+      ],
+    };
+    mockClient.pushBle(ad);
+    mockClient.pushBle(ad);
+
+    const gattWarn = warnSpy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((s) => /Phase 1 is broadcast-only/i.test(s));
+    expect(gattWarn.length).toBe(1);
+    expect(gattWarn[0]).toMatch(/MockDualMode/);
+    expect(gattWarn[0]).toMatch(/GATT/);
+
+    warnSpy.mockRestore();
     await watcher.stop();
   });
 

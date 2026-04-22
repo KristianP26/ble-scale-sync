@@ -14,7 +14,7 @@ import { bootstrapMqttProxy } from './ble/mqtt-proxy-bootstrap.js';
 import type { EmbeddedBrokerHandle } from './ble/embedded-broker.js';
 import { abortableSleep } from './ble/types.js';
 import { adapters } from './scales/index.js';
-import { createLogger } from './logger.js';
+import { createLogger, setLogLevel, LogLevel } from './logger.js';
 import { errMsg } from './utils/error.js';
 import { createExporterFromEntry } from './exporters/registry.js';
 import { runHealthchecks, dispatchExports } from './orchestrator.js';
@@ -68,6 +68,8 @@ const loaded = loadAppConfig(cliFlags.config as string | undefined);
 let appConfig = loaded.config;
 const configSource = loaded.source;
 const configPath = loaded.configPath;
+
+if (appConfig.runtime?.debug) setLogLevel(LogLevel.DEBUG);
 
 const {
   scaleMac: SCALE_MAC,
