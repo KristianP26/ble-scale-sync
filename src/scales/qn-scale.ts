@@ -11,7 +11,8 @@ import { uuid16 } from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
 
 /** Format bytes as hex string for debug logging. */
-const hex = (data: number[]): string => data.map((b) => b.toString(16).padStart(2, '0')).join(' ');
+const hex = (data: number[] | Buffer): string =>
+  [...data].map((b) => b.toString(16).padStart(2, '0')).join(' ');
 
 /**
  * Ported from openScale's QNHandler.kt
@@ -47,9 +48,15 @@ const hex = (data: number[]): string => data.map((b) => b.toString(16).padStart(
  *   [7-8]   resistance R1 (BE uint16)
  *   [9-10]  resistance R2 (BE uint16)
  *
- * 0x12 frame (scale info):
+ * 0x12 frame (scale info, classic 11-byte format):
  *   [2]     protocol type (echoed back in all config commands)
  *   [10]    weight scale flag (1 = /100, else /10)
+ *
+ * 0x12 frame (ES-26M long format, 18 bytes):
+ *   [1]     length (== packet length, i.e. 0x12 == 18)
+ *   [2-7]   MAC address (NOT protocol type!)
+ *   Protocol type should be set to 0x00 for this variant.
+ *   Weight scale factor is 10 (ES-30M format with heuristic /100 fallback).
  */
 
 // Type 2 UUIDs (most common variant)
@@ -70,6 +77,14 @@ const SVC_T2 = 'fff0';
 
 /** Seconds from Unix epoch to 2000-01-01 00:00:00 UTC. */
 const SCALE_EPOCH_OFFSET = 946684800;
+
+/**
+ * Grace period (ms) to wait for an impedance frame after the first stable
+ * R1=R2=0 frame on long-frame variants (e.g. ES-26M). If an impedance frame
+ * arrives within this window, it supersedes the weight-only reading. If not,
+ * the weight-only reading is accepted on the next stable frame.
+ */
+const IMPEDANCE_GRACE_MS = 1500;
 
 export class QnScaleAdapter implements ScaleAdapter {
   readonly name = 'QN Scale';
@@ -95,6 +110,22 @@ export class QnScaleAdapter implements ScaleAdapter {
 
   /** Whether the AE00 service is available (newer firmware). */
   private hasAe00 = false;
+
+  /**
+   * Whether the scale sent a long-frame (18-byte) 0x12 variant (e.g. ES-26M).
+   * These scales may never provide impedance, so stable frames with R1=R2=0
+   * must be accepted after a grace period. Classic ES-30M scales always send
+   * an impedance frame after the weight-only stable frame, so skipping
+   * R1=R2=0 is correct there.
+   */
+  private isLongFrameVariant = false;
+
+  /**
+   * Timestamp (Date.now()) of the first stable R1=R2=0 frame seen on a
+   * long-frame variant. After IMPEDANCE_GRACE_MS without an impedance frame,
+   * subsequent R1=R2=0 stable frames are accepted.
+   */
+  private firstStableNoImpedanceAt: number | null = null;
 
   /** Deduplication guards: prevent duplicate state machine responses. */
   private configSent = false;
@@ -146,6 +177,8 @@ export class QnScaleAdapter implements ScaleAdapter {
     this.seenProtocolType = 0x00;
     this.weightScaleFactor = 100;
     this.hasAe00 = false;
+    this.isLongFrameVariant = false;
+    this.firstStableNoImpedanceAt = null;
     this.configSent = false;
     this.timeSyncSent = false;
     this.historyResponseSent = false;
@@ -274,14 +307,30 @@ export class QnScaleAdapter implements ScaleAdapter {
   parseNotification(data: Buffer): ScaleReading | null {
     if (data.length < 3) return null;
 
+    bleLog.debug(`QN RAW (${data.length}B): [${hex(data)}]`);
+
     const opcode = data[0];
 
     // 0x12: scale info, update weight scale factor and capture protocol type
     if (opcode === 0x12 && data.length > 10) {
-      this.weightScaleFactor = data[10] === 1 ? 100 : 10;
-      this.seenProtocolType = data[2];
+      // Renpho ES-26M (and similar newer firmware) sends an 18-byte 0x12
+      // frame where byte[1] == packet length and bytes [2-7] contain the
+      // MAC address. The classic QN format has ~11 bytes with protocol
+      // type at [2] and weight scale flag at [10].
+      if (data.length >= 18 && data[1] === data.length) {
+        // Long frame (ES-26M): MAC at [2-7], use proto=0x00
+        this.isLongFrameVariant = true;
+        this.seenProtocolType = 0x00;
+        this.weightScaleFactor = 10;
+      } else {
+        // Classic short frame
+        this.seenProtocolType = data[2];
+        this.weightScaleFactor = data[10] === 1 ? 100 : 10;
+      }
       bleLog.debug(
-        `QN: scale info, factor=${this.weightScaleFactor}, proto=0x${this.seenProtocolType.toString(16).padStart(2, '0')}`,
+        `QN: scale info (${data.length}B), ` +
+          `factor=${this.weightScaleFactor}, ` +
+          `proto=0x${this.seenProtocolType.toString(16).padStart(2, '0')}`,
       );
       void this.handleScaleInfo();
       return null;
@@ -328,10 +377,26 @@ export class QnScaleAdapter implements ScaleAdapter {
       r1 = data.readUInt16BE(7);
       r2 = data.readUInt16BE(9);
 
-      // ES-30M scales send a weight-only stable frame (R1=R2=0) before the
-      // impedance-bearing one. Skip it so isComplete() doesn't accept an
-      // impedance=0 reading prematurely (which triggers broadcast-mode logic).
-      if (stable && r1 === 0 && r2 === 0) return null;
+      if (stable && r1 === 0 && r2 === 0) {
+        if (!this.isLongFrameVariant) {
+          // Classic ES-30M: always skip — impedance frame follows.
+          return null;
+        }
+        // Long-frame variant (ES-26M): accept after grace period.
+        // The first stable R1=R2=0 frame starts a timer. If no impedance
+        // frame arrives within IMPEDANCE_GRACE_MS, subsequent R1=R2=0
+        // frames are accepted. This prevents losing BIA data if the
+        // scale sends a transient R1=R2=0 before the impedance frame.
+        const now = Date.now();
+        if (this.firstStableNoImpedanceAt === null) {
+          this.firstStableNoImpedanceAt = now;
+          return null;
+        }
+        if (now - this.firstStableNoImpedanceAt < IMPEDANCE_GRACE_MS) {
+          return null;
+        }
+        // Grace period elapsed — accept this weight-only reading.
+      }
     } else {
       // Original: [3-4]=weight, [5]=stable(1), [6-7]=R1, [8-9]=R2
       stable = data[5] === 1;
@@ -357,6 +422,9 @@ export class QnScaleAdapter implements ScaleAdapter {
 
     // R1 (primary BIA resistance) and R2 (secondary)
     const impedance = r1 > 0 ? r1 : r2;
+
+    // Reset the impedance grace timer on successful reading
+    this.firstStableNoImpedanceAt = null;
 
     // Acknowledge stable reading (0x1F) so the scale knows we received it
     if (this.ctx) {
