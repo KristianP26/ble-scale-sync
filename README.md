@@ -89,7 +89,7 @@ Requires Node.js v20.19+ and a BLE adapter. See the **[full install guide](https
 - **[ESPHome Bluetooth proxy](https://blescalesync.dev/guide/esphome-proxy)** — reuse an existing ESPHome BT proxy mesh (Home Assistant) as a BLE radio via Native API (experimental, broadcast-only in phase 1)
 - **BLE adapter selection** — `ble.adapter: hci1` for multi-adapter setups (Linux)
 - **Broadcast mode** — supports non-connectable scales that only advertise weight via BLE advertisements
-- **Update check** — optional, anonymous version check after each measurement (opt-out via `update_check: false`)
+- **Update check** — optional, anonymous version check after each measurement (opt-out via `update_check: false`); see the [auto update guide](https://blescalesync.dev/guide/auto-update) for Watchtower, systemd timer, and HA add-on recipes
 - **Cross-platform** — Linux (Docker + native), macOS, Windows
 - **Private** — your data stays on your device, no vendor cloud
 
