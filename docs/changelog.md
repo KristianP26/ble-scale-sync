@@ -9,10 +9,30 @@ All notable changes to this project are documented here. Format based on [Keep a
 
 ## Unreleased {#unreleased}
 
-### Fixed
-- **Eufy P2/P2 Pro over ESP32 proxy**: body composition fields (body fat %, water %, muscle, bone) were not computed because the proxy handler took the passive broadcast path which yields weight only. The 19-byte advertisement does not contain impedance — only GATT FFF2 does, after the AES-128 handshake. Adapters can now set `preferGatt: true` to signal broadcast is partial; the mqtt-proxy handler routes them through GATT over MQTT instead ([#98](https://github.com/KristianP26/ble-scale-sync/issues/98))
+## v1.10.1 <Badge type="tip" text="latest" /> {#v1-10-1}
 
-## v1.9.0 <Badge type="tip" text="latest" /> {#v1-9-0}
+_2026-04-22_
+
+### Fixed
+- **ESPHome proxy**: the `ReadingWatcher` silently dropped advertisements from dual-mode scale adapters (`parseBroadcast` defined **and** `charNotifyUuid` set) when the broadcast frame was not weight-bearing. Reported on an Elis 1 / ES-30M, which matches by name as a QN-Scale but only beacons its MAC in manufacturer data and carries weight over GATT. The handler now warns once per MAC that the scale needs a GATT connection (Phase 2), pointing at the native BLE handler or the ESP32 MQTT proxy as workarounds ([#116](https://github.com/KristianP26/ble-scale-sync/issues/116), [#75](https://github.com/KristianP26/ble-scale-sync/issues/75))
+- **Logger**: `runtime.debug: true` in `config.yaml` did not switch the log level to DEBUG, only the `DEBUG=true` env var did. The app now honors the config value on startup, so HA Add-on users and anyone driving the runtime from `config.yaml` get the verbose BLE logs they expect
+
+## v1.10.0 {#v1-10-0}
+
+_2026-04-22_
+
+_Note: released the same day as v1.10.1 above._
+
+### Added
+- **Embedded MQTT broker for the ESP32 proxy**: zero-config setup, no Mosquitto required. When `ble.mqtt_proxy.broker_url` is omitted, BLE Scale Sync now starts an embedded [aedes](https://github.com/moscajs/aedes) broker on `0.0.0.0:1883` by default; the internal client connects over loopback, and the ESP32 firmware just points at the host machine's LAN IP. Port and bind interface are configurable via `embedded_broker_port` and `embedded_broker_bind`, and optional username/password are enforced when set. Existing `broker_url` setups are untouched ([#54](https://github.com/KristianP26/ble-scale-sync/issues/54))
+- **ESPHome Bluetooth proxy transport (experimental, phase 1 / broadcast-only)**: third BLE handler option `ble.handler: esphome-proxy`. If you already run an [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy.html) mesh for Home Assistant, BLE Scale Sync can connect to it over Native API (port 6053, optional Noise encryption or legacy password) and reuse it as its BLE radio. No dedicated ESP32, no MQTT broker. Phase 1 handles broadcast scales only; GATT scales log a warning and are skipped until phase 2 lands ([#116](https://github.com/KristianP26/ble-scale-sync/issues/116))
+- **Setup wizard**: new "Use built-in embedded broker" option for the mqtt-proxy handler, so new installs skip the external broker prompt by default. Handler selection now also includes "Via ESPHome Bluetooth proxy" with prompts for host, port and authentication mode
+
+### Security
+- **Embedded MQTT broker**: configs that bind the embedded broker to a non-loopback interface (default `0.0.0.0`) now require `username` + `password` and are rejected at schema validation time. The wizard defaults to requiring auth and falls back to `127.0.0.1` when the user declines, so misconfiguration cannot silently expose a LAN-reachable broker without credentials.
+- **ESPHome proxy**: configs that set both `encryption_key` and `password` are rejected at schema validation time. Pick Noise (`encryption_key`, recommended) or legacy password, not both.
+
+## v1.9.0 {#v1-9-0}
 
 _2026-04-21_
 

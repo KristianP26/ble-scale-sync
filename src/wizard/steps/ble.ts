@@ -1,5 +1,5 @@
 import type { WizardStep, WizardContext } from '../types.js';
-import type { MqttProxyConfig } from '../../config/schema.js';
+import type { MqttProxyConfig, EsphomeProxyConfig } from '../../config/schema.js';
 import { success, warn, info } from '../ui.js';
 
 const MAC_REGEX = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/;
@@ -19,11 +19,25 @@ function validateBrokerUrl(v: string): string | true {
   return true;
 }
 
+function validatePort(v: string): string | true {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) return 'Must be an integer between 1 and 65535';
+  return true;
+}
+
 async function promptMqttProxy(ctx: WizardContext): Promise<MqttProxyConfig> {
-  const broker_url = await ctx.prompts.input('MQTT broker URL:', {
-    default: 'mqtt://localhost:1883',
-    validate: validateBrokerUrl,
-  });
+  const brokerMode = await ctx.prompts.select('MQTT broker:', [
+    {
+      name: 'Use built-in embedded broker (Recommended, zero-config)',
+      value: 'embedded' as const,
+      description: 'BLE Scale Sync runs its own broker so the ESP32 connects to this machine',
+    },
+    {
+      name: 'Use an external broker (e.g. Mosquitto, Home Assistant)',
+      value: 'external' as const,
+      description: 'Point at an existing MQTT broker on your network',
+    },
+  ]);
 
   const device_id = await ctx.prompts.input('ESP32 device ID:', {
     default: 'esp32-ble-proxy',
@@ -33,24 +47,111 @@ async function promptMqttProxy(ctx: WizardContext): Promise<MqttProxyConfig> {
     default: 'ble-proxy',
   });
 
-  const hasAuth = await ctx.prompts.confirm('Does the MQTT broker require authentication?', {
-    default: false,
-  });
-
+  let broker_url: string | undefined;
   let username: string | undefined;
   let password: string | undefined;
-  if (hasAuth) {
-    username = await ctx.prompts.input('MQTT username:');
-    password = await ctx.prompts.password('MQTT password:');
+  let embedded_broker_port: number | undefined;
+  let embedded_broker_bind: string | undefined;
+
+  if (brokerMode === 'external') {
+    broker_url = await ctx.prompts.input('MQTT broker URL:', {
+      default: 'mqtt://localhost:1883',
+      validate: validateBrokerUrl,
+    });
+
+    const hasAuth = await ctx.prompts.confirm('Does the MQTT broker require authentication?', {
+      default: false,
+    });
+
+    if (hasAuth) {
+      username = await ctx.prompts.input('MQTT username:');
+      password = await ctx.prompts.password('MQTT password:');
+    }
+  } else {
+    const portStr = await ctx.prompts.input('Embedded broker port:', {
+      default: '1883',
+      validate: validatePort,
+    });
+    embedded_broker_port = Number(portStr);
+
+    embedded_broker_bind = '0.0.0.0';
+
+    // Default to true because the broker binds 0.0.0.0 (LAN-exposed) and the
+    // schema now rejects a non-loopback bind without auth. Declining here
+    // switches the bind to loopback so the user gets a working zero-config
+    // setup on single-host deployments.
+    const wantAuth = await ctx.prompts.confirm(
+      'Require username/password for the embedded broker? (recommended, broker is LAN-exposed)',
+      { default: true },
+    );
+    if (wantAuth) {
+      username = await ctx.prompts.input('MQTT username:');
+      password = await ctx.prompts.password('MQTT password:');
+    } else {
+      embedded_broker_bind = '127.0.0.1';
+      console.log(
+        `\n  ${info('No auth selected, binding embedded broker to 127.0.0.1 (loopback only).')}`,
+      );
+    }
   }
 
   return {
-    broker_url,
+    ...(broker_url ? { broker_url } : {}),
     device_id,
     topic_prefix,
     ...(username ? { username } : {}),
     ...(password ? { password } : {}),
-  };
+    ...(embedded_broker_port != null ? { embedded_broker_port } : {}),
+    ...(embedded_broker_bind ? { embedded_broker_bind } : {}),
+  } as MqttProxyConfig;
+}
+
+function validateEsphomeHost(v: string): string | true {
+  if (!v.trim()) return 'Host is required (e.g. ble-proxy.local or 192.168.1.42)';
+  return true;
+}
+
+async function promptEsphomeProxy(ctx: WizardContext): Promise<EsphomeProxyConfig> {
+  const host = await ctx.prompts.input(
+    'ESPHome proxy host (IP or mDNS name, e.g. ble-proxy.local):',
+    { validate: validateEsphomeHost },
+  );
+
+  const portStr = await ctx.prompts.input('ESPHome API port:', {
+    default: '6053',
+    validate: validatePort,
+  });
+  const port = Number(portStr);
+
+  const authMode = await ctx.prompts.select('Authentication:', [
+    { name: 'None', value: 'none' as const },
+    {
+      name: 'Noise encryption key (Recommended)',
+      value: 'noise' as const,
+      description: '32-byte base64 pre-shared key from your ESPHome api config',
+    },
+    {
+      name: 'Legacy password',
+      value: 'password' as const,
+      description: 'Deprecated plaintext auth. Prefer Noise if your ESPHome supports it',
+    },
+  ]);
+
+  let encryption_key: string | undefined;
+  let password: string | undefined;
+  if (authMode === 'noise') {
+    encryption_key = await ctx.prompts.password('ESPHome API encryption key (base64):');
+  } else if (authMode === 'password') {
+    password = await ctx.prompts.password('ESPHome API password:');
+  }
+
+  return {
+    host: host.trim(),
+    port,
+    client_info: 'ble-scale-sync',
+    ...(encryption_key ? { encryption_key } : {}),
+    ...(password ? { password } : {}),
+  } as EsphomeProxyConfig;
 }
 
 export const bleStep: WizardStep = {
@@ -71,7 +172,12 @@ export const bleStep: WizardStep = {
       {
         name: 'Via ESP32 MQTT proxy (Experimental)',
         value: 'mqtt-proxy' as const,
-        description: 'Remote BLE scanning via an ESP32 device',
+        description: 'Remote BLE scanning via a dedicated ESP32 running our firmware',
+      },
+      {
+        name: 'Via ESPHome Bluetooth proxy (Experimental, broadcast-only)',
+        value: 'esphome-proxy' as const,
+        description: 'Reuse an existing ESPHome BT proxy from Home Assistant',
       },
     ]);
 
@@ -79,9 +185,17 @@ export const bleStep: WizardStep = {
 
     if (handler === 'mqtt-proxy') {
       ctx.config.ble.mqtt_proxy = await promptMqttProxy(ctx);
-      console.log(`\n  ${info('MQTT proxy configured — scale discovery will use the ESP32.')}`);
+      ctx.config.ble.esphome_proxy = undefined;
+      console.log(`\n  ${info('MQTT proxy configured. Scale discovery will use the ESP32.')}`);
+    } else if (handler === 'esphome-proxy') {
+      ctx.config.ble.esphome_proxy = await promptEsphomeProxy(ctx);
+      ctx.config.ble.mqtt_proxy = undefined;
+      console.log(
+        `\n  ${info('ESPHome proxy configured. Only broadcast scales are supported in phase 1.')}`,
+      );
     } else {
       ctx.config.ble.mqtt_proxy = undefined;
+      ctx.config.ble.esphome_proxy = undefined;
     }
 
     // --- Adapter selection (Linux + auto handler + node-ble only) ---
@@ -206,14 +320,29 @@ export const bleStep: WizardStep = {
       try {
         const { scanDevices } = await import('../../ble/index.js');
         const { adapters } = await import('../../scales/index.js');
+        const { bootstrapMqttProxy } = await import('../../ble/mqtt-proxy-bootstrap.js');
 
-        const results = await scanDevices(
-          adapters,
-          15_000,
-          ctx.config.ble!.handler,
-          ctx.config.ble!.mqtt_proxy,
-          ctx.config.ble!.adapter ?? undefined,
-        );
+        let mqttProxy = ctx.config.ble!.mqtt_proxy;
+        let embeddedBroker: Awaited<ReturnType<typeof bootstrapMqttProxy>>['embeddedBroker'] = null;
+        if (ctx.config.ble!.handler === 'mqtt-proxy' && mqttProxy) {
+          const bootstrapped = await bootstrapMqttProxy(mqttProxy);
+          mqttProxy = bootstrapped.mqttProxy;
+          embeddedBroker = bootstrapped.embeddedBroker;
+        }
+
+        let results;
+        try {
+          results = await scanDevices(
+            adapters,
+            15_000,
+            ctx.config.ble!.handler,
+            mqttProxy,
+            ctx.config.ble!.adapter ?? undefined,
+            ctx.config.ble!.esphome_proxy,
+          );
+        } finally {
+          if (embeddedBroker) await embeddedBroker.close();
+        }
         const recognized = results.filter((r) => r.matchedAdapter);
 
         if (recognized.length === 0) {
@@ -283,4 +412,11 @@ export const bleStep: WizardStep = {
 };
 
 // Exported for testing
-export { validateMac, validateBrokerUrl, promptMqttProxy };
+export {
+  validateMac,
+  validateBrokerUrl,
+  validatePort,
+  validateEsphomeHost,
+  promptMqttProxy,
+  promptEsphomeProxy,
+};
