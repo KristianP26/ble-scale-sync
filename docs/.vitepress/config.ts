@@ -85,6 +85,7 @@ export default defineConfig({
       {
         text: 'Help',
         items: [
+          { text: 'FAQ', link: '/faq' },
           { text: 'Troubleshooting', link: '/troubleshooting' },
           { text: 'Alternatives', link: '/alternatives' },
           { text: 'Changelog', link: '/changelog' },

@@ -9,6 +9,8 @@ head:
 
 # Troubleshooting
 
+For general questions that are not about a specific error (supported scales, Garmin 2FA, privacy, multi-user, deployment choices), start with the [FAQ](/faq).
+
 ## BLE / Scale Issues
 
 ### Scale not found
