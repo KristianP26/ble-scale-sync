@@ -25,20 +25,34 @@ When **Auto-detect MQTT broker** is enabled, the add-on automatically discovers 
 
 If you use an external MQTT broker, disable auto-detect and enter the broker URL, username, and password manually.
 
+## Units
+
+**Weight unit** and **Height unit** let you choose metric (kg/cm) or imperial (lbs/in). The selection is applied to the scale readings, the user profile height, and the weight range used for user matching. Defaults are kg and cm.
+
+Changing units after the first reading does not reinterpret existing data. Switch units first, then record a measurement.
+
+## Persistent last known weight
+
+The add-on stores its runtime configuration at `/data/config.yaml` and preserves each user's `last_known_weight` across add-on restarts. This is important for multi-user matching: after the first reading the remembered weight is reused to pick the right user on subsequent scans, even after you restart Home Assistant or the add-on.
+
+If you change the user slug (by renaming the user), the remembered weight does not carry over because the slug is the lookup key.
+
 ## Home Assistant Sensors
 
 With MQTT and HA auto-discovery enabled, these sensors appear automatically:
 
-- Weight (kg)
+- Weight
 - Body fat (%)
 - Water (%)
-- Muscle mass (kg)
-- Bone mass (kg)
+- Muscle mass
+- Bone mass
 - BMI
 - BMR (kcal)
 - Visceral fat
 - Metabolic age
 - Impedance (diagnostic)
+
+Weight, muscle mass, and bone mass use the weight unit you selected (kg or lbs).
 
 ## Garmin Connect
 

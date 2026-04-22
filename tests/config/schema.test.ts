@@ -323,6 +323,140 @@ describe('BleSchema', () => {
     }
   });
 
+  it('accepts handler mqtt-proxy with mqtt_proxy config omitting broker_url when bind is loopback', () => {
+    const result = BleSchema.safeParse({
+      handler: 'mqtt-proxy',
+      mqtt_proxy: { embedded_broker_bind: '127.0.0.1' },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.mqtt_proxy?.broker_url).toBeUndefined();
+      expect(result.data.mqtt_proxy?.embedded_broker_port).toBe(1883);
+      expect(result.data.mqtt_proxy?.embedded_broker_bind).toBe('127.0.0.1');
+    }
+  });
+
+  it('accepts embedded broker on non-loopback bind when username is set', () => {
+    const result = BleSchema.safeParse({
+      handler: 'mqtt-proxy',
+      mqtt_proxy: { username: 'esp32', password: 'secret' },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects embedded broker on non-loopback bind without auth', () => {
+    const result = BleSchema.safeParse({
+      handler: 'mqtt-proxy',
+      mqtt_proxy: {},
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('non-loopback');
+    }
+  });
+
+  it('accepts custom embedded_broker_port and embedded_broker_bind', () => {
+    const result = BleSchema.safeParse({
+      handler: 'mqtt-proxy',
+      mqtt_proxy: {
+        embedded_broker_port: 1884,
+        embedded_broker_bind: '127.0.0.1',
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.mqtt_proxy?.embedded_broker_port).toBe(1884);
+      expect(result.data.mqtt_proxy?.embedded_broker_bind).toBe('127.0.0.1');
+    }
+  });
+
+  it('rejects embedded_broker_port outside 1-65535', () => {
+    const result = BleSchema.safeParse({
+      handler: 'mqtt-proxy',
+      mqtt_proxy: { embedded_broker_port: 70000 },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects embedded_broker_bind with whitespace', () => {
+    const result = BleSchema.safeParse({
+      handler: 'mqtt-proxy',
+      mqtt_proxy: { embedded_broker_bind: '0.0.0.0 injection' },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects empty embedded_broker_bind', () => {
+    const result = BleSchema.safeParse({
+      handler: 'mqtt-proxy',
+      mqtt_proxy: { embedded_broker_bind: '' },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts handler esphome-proxy with esphome_proxy config', () => {
+    const result = BleSchema.safeParse({
+      handler: 'esphome-proxy',
+      esphome_proxy: {
+        host: 'ble-proxy.local',
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.esphome_proxy?.host).toBe('ble-proxy.local');
+      expect(result.data.esphome_proxy?.port).toBe(6053);
+      expect(result.data.esphome_proxy?.client_info).toBe('ble-scale-sync');
+    }
+  });
+
+  it('rejects handler esphome-proxy without esphome_proxy config', () => {
+    const result = BleSchema.safeParse({ handler: 'esphome-proxy' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('esphome_proxy config is required');
+    }
+  });
+
+  it('rejects esphome_proxy with empty host', () => {
+    const result = BleSchema.safeParse({
+      handler: 'esphome-proxy',
+      esphome_proxy: { host: '' },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts esphome_proxy with encryption_key and custom port', () => {
+    const result = BleSchema.safeParse({
+      handler: 'esphome-proxy',
+      esphome_proxy: {
+        host: '192.168.1.42',
+        port: 6053,
+        encryption_key: 'Lw1vKZ+BASE64KEYxxxxx==',
+        client_info: 'pi-zero',
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.esphome_proxy?.encryption_key).toBe('Lw1vKZ+BASE64KEYxxxxx==');
+      expect(result.data.esphome_proxy?.client_info).toBe('pi-zero');
+    }
+  });
+
+  it('rejects esphome_proxy with both encryption_key and password set', () => {
+    const result = BleSchema.safeParse({
+      handler: 'esphome-proxy',
+      esphome_proxy: {
+        host: 'ble-proxy.local',
+        encryption_key: 'Lw1vKZ+BASE64KEYxxxxx==',
+        password: 'legacy-plaintext',
+      },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('not both');
+    }
+  });
+
   it('accepts handler auto without mqtt_proxy', () => {
     const result = BleSchema.safeParse({ handler: 'auto' });
     expect(result.success).toBe(true);

@@ -85,7 +85,8 @@ Requires Node.js v20.19+ and a BLE adapter. See the **[full install guide](https
 - **[Interactive setup wizard](https://blescalesync.dev/guide/configuration)** — scale discovery, exporter config, connectivity tests
 - **[BLE diagnostic tool](https://blescalesync.dev/troubleshooting)** — `npm run diagnose` for detailed BLE troubleshooting
 - **[Home Assistant Add-on](https://blescalesync.dev/guide/home-assistant-addon)** — one-click install via My Home Assistant badge, MQTT auto-discovery, UI-driven config, Garmin token bootstrap, and MFA workaround
-- **[ESP32 BLE proxy](https://blescalesync.dev/guide/esp32-proxy)** — use a remote ESP32 as a BLE radio over MQTT, with simplified Docker deployment and optional display
+- **[ESP32 BLE proxy](https://blescalesync.dev/guide/esp32-proxy)** — use a remote ESP32 as a BLE radio over MQTT, with a built-in embedded broker for zero-config setup, simplified Docker deployment, and optional display
+- **[ESPHome Bluetooth proxy](https://blescalesync.dev/guide/esphome-proxy)** — reuse an existing ESPHome BT proxy mesh (Home Assistant) as a BLE radio via Native API (experimental, broadcast-only in phase 1)
 - **BLE adapter selection** — `ble.adapter: hci1` for multi-adapter setups (Linux)
 - **Broadcast mode** — supports non-connectable scales that only advertise weight via BLE advertisements
 - **Update check** — optional, anonymous version check after each measurement (opt-out via `update_check: false`)

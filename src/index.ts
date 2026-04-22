@@ -10,6 +10,8 @@ import {
   publishDisplayResult,
   setDisplayUsers,
 } from './ble/handler-mqtt-proxy.js';
+import { bootstrapMqttProxy } from './ble/mqtt-proxy-bootstrap.js';
+import type { EmbeddedBrokerHandle } from './ble/embedded-broker.js';
 import { abortableSleep } from './ble/types.js';
 import { adapters } from './scales/index.js';
 import { createLogger } from './logger.js';
@@ -75,8 +77,12 @@ const {
   scanCooldownSec,
   bleHandler,
   bleAdapter,
-  mqttProxy,
+  mqttProxy: initialMqttProxy,
+  esphomeProxy,
 } = resolveRuntimeConfig(appConfig);
+
+let mqttProxy = initialMqttProxy;
+let embeddedBroker: EmbeddedBrokerHandle | null = null;
 
 const KG_TO_LBS = 2.20462;
 
@@ -245,6 +251,7 @@ async function runSingleUserCycle(exporters?: Exporter[]): Promise<boolean> {
     abortSignal: signal,
     bleHandler,
     mqttProxy,
+    esphomeProxy,
     bleAdapter,
     onLiveData(reading) {
       const impStr: string = reading.impedance > 0 ? `${reading.impedance} Ohm` : 'Measuring...';
@@ -357,6 +364,7 @@ async function runMultiUserCycle(): Promise<boolean> {
     abortSignal: signal,
     bleHandler,
     mqttProxy,
+    esphomeProxy,
     bleAdapter,
     onLiveData(reading) {
       const impStr: string = reading.impedance > 0 ? `${reading.impedance} Ohm` : 'Measuring...';
@@ -386,6 +394,12 @@ async function main(): Promise<void> {
     !process.env.NOBLE_DRIVER
   ) {
     log.info(`BLE adapter: ${bleAdapter}`);
+  }
+
+  if (bleHandler === 'mqtt-proxy' && mqttProxy) {
+    const bootstrapped = await bootstrapMqttProxy(mqttProxy);
+    mqttProxy = bootstrapped.mqttProxy;
+    embeddedBroker = bootstrapped.embeddedBroker;
   }
   if (SCALE_MAC) {
     log.info(`Scanning for scale ${SCALE_MAC}...`);
@@ -465,6 +479,46 @@ async function main(): Promise<void> {
         await abortableSleep(backoffMs, signal).catch(() => {});
       }
     }
+    await watcher.stop();
+  } else if (bleHandler === 'esphome-proxy' && esphomeProxy) {
+    // Event-driven: persistent ESPHome Native API connection with BLE adv subscription
+    const { ReadingWatcher: EsphomeReadingWatcher } =
+      await import('./ble/handler-esphome-proxy.js');
+    const watcher = new EsphomeReadingWatcher(esphomeProxy, adapters, SCALE_MAC);
+
+    while (!signal.aborted) {
+      try {
+        touchHeartbeat();
+        await watcher.start();
+
+        if (needsReload) {
+          await reloadConfig();
+          needsReload = false;
+          watcher.updateConfig(adapters, SCALE_MAC);
+          if (appConfig.users.length === 1 && !dryRun) {
+            exporters = buildSingleUserExporters();
+          }
+        }
+
+        const raw = await watcher.nextReading(signal);
+
+        if (appConfig.users.length > 1) {
+          await processRawReading(raw);
+        } else {
+          await processSingleReading(raw, exporters);
+        }
+
+        backoffMs = 0;
+      } catch (err) {
+        if (signal.aborted) break;
+        backoffMs = backoffMs === 0 ? BACKOFF_INITIAL_MS : Math.min(backoffMs * 2, BACKOFF_MAX_MS);
+        log.info(
+          `Error processing ESPHome reading, retrying in ${backoffMs / 1000}s... (${errMsg(err)})`,
+        );
+        await abortableSleep(backoffMs, signal).catch(() => {});
+      }
+    }
+    await watcher.stop();
   } else {
     // Poll-based loop for auto/noble BLE handlers
     while (!signal.aborted) {
@@ -506,11 +560,26 @@ async function main(): Promise<void> {
   log.info('Stopped.');
 }
 
-main().catch((err: Error) => {
-  if (signal.aborted) {
-    log.info('Stopped.');
-    return;
+async function shutdownEmbeddedBroker(): Promise<void> {
+  if (!embeddedBroker) return;
+  try {
+    await embeddedBroker.close();
+  } catch (err) {
+    log.warn(`Embedded broker shutdown error: ${errMsg(err)}`);
+  } finally {
+    embeddedBroker = null;
   }
-  log.error(err.message);
-  process.exit(1);
-});
+}
+
+main()
+  .catch((err: Error) => {
+    if (signal.aborted) {
+      log.info('Stopped.');
+      return;
+    }
+    log.error(err.message);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await shutdownEmbeddedBroker();
+  });
