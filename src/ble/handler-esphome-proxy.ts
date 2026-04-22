@@ -475,25 +475,33 @@ export class ReadingWatcher {
       }
     }
 
-    // GATT-only adapter matched; Phase 1 cannot service it. Log once and skip.
-    if (adapter.charNotifyUuid && !adapter.parseBroadcast) {
-      if (this.gattWarnedFor.has(address)) {
-        // Refresh recency so the entry survives LRU eviction.
-        this.gattWarnedFor.delete(address);
-        this.gattWarnedFor.set(address, true);
-        return;
-      }
-      if (this.gattWarnedFor.size >= GATT_WARN_LRU_MAX) {
-        const oldest = this.gattWarnedFor.keys().next().value;
-        if (oldest !== undefined) this.gattWarnedFor.delete(oldest);
-      }
-      this.gattWarnedFor.set(address, true);
-      bleLog.warn(
-        `${adapter.name} at ${address} requires GATT, which the ESPHome proxy transport ` +
-          `does not yet support (Phase 1 is broadcast-only). Measurements from this scale ` +
-          `are skipped.`,
-      );
+    // Adapter matched but no usable broadcast frame came out. If the adapter
+    // supports GATT, Phase 1 cannot read this scale (firmware is either pure
+    // GATT or the broadcast format is not weight-bearing, e.g. QN Elis 1 /
+    // ES-30M which broadcasts only a MAC beacon). Warn once per address so
+    // the user knows they are hitting the Phase 2 gap instead of a silent drop.
+    if (adapter.charNotifyUuid) {
+      this.warnGattNotSupported(adapter.name, address);
     }
+  }
+
+  private warnGattNotSupported(adapterName: string, address: string): void {
+    if (this.gattWarnedFor.has(address)) {
+      // Refresh recency so the entry survives LRU eviction.
+      this.gattWarnedFor.delete(address);
+      this.gattWarnedFor.set(address, true);
+      return;
+    }
+    if (this.gattWarnedFor.size >= GATT_WARN_LRU_MAX) {
+      const oldest = this.gattWarnedFor.keys().next().value;
+      if (oldest !== undefined) this.gattWarnedFor.delete(oldest);
+    }
+    this.gattWarnedFor.set(address, true);
+    bleLog.warn(
+      `${adapterName} at ${address} needs a GATT connection for weight data, which the ` +
+        `ESPHome proxy transport does not yet support (Phase 1 is broadcast-only). ` +
+        `Use the native BLE handler or the ESP32 MQTT proxy for this scale until Phase 2 lands.`,
+    );
   }
 
   private pruneDedup(now: number): void {
