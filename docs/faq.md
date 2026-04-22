@@ -1,6 +1,7 @@
 ---
 title: FAQ
 description: Frequently asked questions about BLE Scale Sync. Supported scales, privacy, body composition accuracy, Garmin 2FA, deployment options, and updates.
+outline: deep
 head:
   - - meta
     - name: keywords
@@ -15,9 +16,8 @@ head:
 
 Short answers to the questions that come up most often. For step-by-step setup, start with the [Getting Started](/guide/getting-started) guide. For scale-specific or connection issues, see [Troubleshooting](/troubleshooting).
 
-::: tip
-Press `/` on any docs page to search every section at once. Most answers below link to the longer reference page if you need more detail.
-:::
+> [!TIP]
+> Every question on this page is listed in the **On this page** sidebar on the right. Press `/` to search across all docs at once. Most answers link to the longer reference page if you need more detail.
 
 ## Getting started
 
@@ -39,11 +39,14 @@ There is **no retry queue**. If a reading fires while Garmin is unreachable, tha
 
 Any device with a BLE radio running Node.js 20.19+ or Docker. Recommended: [Raspberry Pi Zero 2W](/guide/getting-started#recommended-hardware) for about 15 euros, with built-in Bluetooth and roughly 0.4 W idle power draw. The original Pi Zero W (first-gen, ARMv6) is [not supported](/troubleshooting#install-fails-on-raspberry-pi-zero-w-first-gen).
 
+---
+
 ## Privacy and data
 
 ### Where does my data go?
 
-Only to the exporters you configure in `config.yaml`. Enable Garmin and readings go to Garmin Connect; enable only File and data stays on disk. There is no vendor cloud in the middle, no account, and no telemetry beyond the optional anonymous update check.
+> [!IMPORTANT]
+> Only to the exporters you configure in `config.yaml`. Enable Garmin and readings go to Garmin Connect; enable only File and data stays on disk. There is no vendor cloud in the middle, no account, and no telemetry beyond the optional anonymous update check.
 
 ### What does the update check send?
 
@@ -52,6 +55,8 @@ One `GET api.blescalesync.dev/version` request per 24 hours after a successful r
 ### Can I disable the update check?
 
 Yes. Set `update_check: false` in `config.yaml`, or run with `CI=true` in the environment. See the [Configuration reference](/guide/configuration#update-check).
+
+---
 
 ## Scales and BLE
 
@@ -85,6 +90,8 @@ Step on the scale during the scan so it starts advertising.
 
 On Linux, `sudo systemctl restart bluetooth` fixes roughly 80% of transient GATT issues. If failures persist, flip `ble.noble_driver` between `abandonware` and `stoprocent` in `config.yaml`. The full decision tree lives in [Troubleshooting](/troubleshooting).
 
+---
+
 ## Body composition
 
 ### Why are my body-fat numbers different from the manufacturer's app?
@@ -98,6 +105,8 @@ BIA is a population-level estimator. Any consumer scale, vendor app or this tool
 ### What does athlete mode change?
 
 It lowers the body fat estimate for users with high muscle mass. Trained athletes hold more water in lean tissue, and standard BIA formulas overestimate their fat percentage as a result. Toggle per user via `is_athlete: true`. Formula details at [Body Composition](/body-composition#athlete-mode).
+
+---
 
 ## Exporters
 
@@ -116,6 +125,8 @@ Not directly. A native exporter for these is on the roadmap. In the meantime, th
 ### How do I run custom logic on each reading?
 
 Use the [Webhook exporter](/exporters#webhook) to POST a JSON body with all computed metrics to any HTTP endpoint. From there you can forward to n8n, Make, Zapier, Node-RED, or a custom script. Home Assistant users can also build automations on top of the MQTT sensors.
+
+---
 
 ## Deployment
 
@@ -139,6 +150,8 @@ Docker Desktop on those platforms runs Linux inside a VM with no BLE bridge to t
 ### HA Add-on vs Docker?
 
 If you run Home Assistant OS or Supervised, the [add-on](/guide/home-assistant-addon) is the easiest path: UI config, MQTT auto-detection, and one-click updates. On Home Assistant Container, HA Core, or a non-HA host, use [Docker](/guide/getting-started#docker). Both routes feed HA via MQTT auto-discovery with identical sensor layout, so the choice is about ergonomics, not features.
+
+---
 
 ## Updates and maintenance
 
