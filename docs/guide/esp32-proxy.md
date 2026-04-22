@@ -11,6 +11,10 @@ head:
 
 Use a cheap ESP32 board as a remote Bluetooth radio, communicating over MQTT. This lets you run BLE Scale Sync on machines without local Bluetooth: headless servers, Docker containers, or devices where the built-in radio has poor range.
 
+::: tip Already running ESPHome?
+If you already have an [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy.html) mesh for Home Assistant, the [ESPHome proxy transport](/guide/esphome-proxy) lets you reuse it without flashing a dedicated ESP32.
+:::
+
 The ESP32 scans autonomously for BLE advertisements and publishes results over MQTT. BLE Scale Sync matches scale adapters against the scan data, identifies users by weight, computes body composition, and dispatches to exporters. For scales that require a GATT connection, the server sends connect/write/read commands back to the ESP32 over MQTT. All scale-specific logic stays on the server.
 
 ## How It Works
@@ -60,8 +64,11 @@ ESP32-C3 and ESP32-C6 boards use a different BLE stack in MicroPython and have n
 
 - An ESP32 board (see above)
 - WiFi network accessible by both the ESP32 and BLE Scale Sync
-- An MQTT broker (e.g. [Mosquitto](https://mosquitto.org/))
 - USB cable for initial flashing
+
+::: tip MQTT broker is optional
+BLE Scale Sync now ships with an embedded MQTT broker. If you don't already run one (Mosquitto, Home Assistant, etc.), just leave `broker_url` empty and BLE Scale Sync will start its own broker on port 1883. See [Embedded broker](#embedded-broker) below.
+:::
 
 ### Host tools (install once)
 
@@ -162,6 +169,37 @@ ble:
     # password: '${MQTT_PASSWORD}'    # optional
 ```
 
+### Embedded broker
+
+If you don't want to install Mosquitto (or you're already running BLE Scale Sync on a machine that can just host the broker itself), omit `broker_url` and BLE Scale Sync will start an embedded broker automatically. The ESP32 `config.json` should then point `mqtt_broker` at this machine's LAN IP.
+
+```yaml
+ble:
+  handler: mqtt-proxy
+  mqtt_proxy:
+    # broker_url intentionally omitted, embedded broker will be started
+    device_id: esp32-ble-proxy
+    topic_prefix: ble-proxy
+    embedded_broker_port: 1883 # default, override to avoid conflicts
+    embedded_broker_bind: 0.0.0.0 # listen on all interfaces so the ESP32 can reach it
+    username: myuser # required when bind is non-loopback
+    password: '${MQTT_PASSWORD}' # required when bind is non-loopback
+```
+
+The internal BLE Scale Sync client always connects to the embedded broker over loopback (`mqtt://127.0.0.1:<port>`). The ESP32 connects over LAN, so make sure port `1883` (or whatever you pick) is reachable from the ESP32 and not blocked by a host firewall.
+
+::: warning Authentication required on LAN
+When `embedded_broker_bind` is `0.0.0.0` (or any non-loopback interface) the schema requires `username` + `password`. An unauthenticated broker on your LAN is rejected at config validation time. For single-host deployments where the ESP32 is not used, set `embedded_broker_bind: 127.0.0.1` to skip auth safely.
+:::
+
+::: tip When to pick which
+Use the **embedded broker** for the simplest ESP32 proxy setup when you don't already have Mosquitto or Home Assistant. Use an **external broker** when you already run one, or when you want multiple services (Home Assistant, Node-RED, other IoT devices) to share it.
+:::
+
+::: warning Port conflict
+If Mosquitto or another broker is already listening on port 1883, the embedded broker startup will fail with a clear message. Either stop the other broker, or set `embedded_broker_port` to a free port (e.g. `1884`) and update the ESP32 `config.json` to match.
+:::
+
 Then restart BLE Scale Sync. In continuous mode, the server maintains a persistent MQTT connection and reacts to scan results as they arrive.
 
 ::: tip Environment variable
@@ -218,21 +256,21 @@ Compare this to the standard [Docker deployment](/guide/getting-started#docker) 
 
 ::: details Firmware directory layout
 
-| File                        | Purpose                                            |
-| --------------------------- | -------------------------------------------------- |
-| `config.json.example`       | WiFi + MQTT config template                        |
-| `flash.sh`                  | One-command flash script                           |
-| `boot.py`                   | Stub (WiFi managed by mqtt_as)                     |
-| `main.py`                   | MQTT dispatch + autonomous scan loop               |
-| `ble_bridge.py`             | BLE scanning via aioble                            |
-| `beep.py`                   | I2S buzzer driver (boards with `HAS_BEEP`)         |
-| `board.py`                  | Board auto-detection dispatch                      |
-| `board_atom_echo.py`        | Atom Echo config (no PSRAM, I2S beep)              |
-| `board_esp32_s3.py`         | Generic ESP32-S3 config                            |
-| `board_guition_4848.py`     | Guition 4848 config (LVGL display)                 |
-| `panel_init_guition_4848.py` | ST7701S panel init sequence data                   |
-| `ui.py`                     | LVGL display UI (boards with `HAS_DISPLAY`)        |
-| `requirements.txt`          | MicroPython library dependencies                   |
+| File                         | Purpose                                     |
+| ---------------------------- | ------------------------------------------- |
+| `config.json.example`        | WiFi + MQTT config template                 |
+| `flash.sh`                   | One-command flash script                    |
+| `boot.py`                    | Stub (WiFi managed by mqtt_as)              |
+| `main.py`                    | MQTT dispatch + autonomous scan loop        |
+| `ble_bridge.py`              | BLE scanning via aioble                     |
+| `beep.py`                    | I2S buzzer driver (boards with `HAS_BEEP`)  |
+| `board.py`                   | Board auto-detection dispatch               |
+| `board_atom_echo.py`         | Atom Echo config (no PSRAM, I2S beep)       |
+| `board_esp32_s3.py`          | Generic ESP32-S3 config                     |
+| `board_guition_4848.py`      | Guition 4848 config (LVGL display)          |
+| `panel_init_guition_4848.py` | ST7701S panel init sequence data            |
+| `ui.py`                      | LVGL display UI (boards with `HAS_DISPLAY`) |
+| `requirements.txt`           | MicroPython library dependencies            |
 
 :::
 

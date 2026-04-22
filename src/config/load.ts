@@ -5,7 +5,14 @@ import { parse as parseYaml } from 'yaml';
 import { config as dotenvConfig } from 'dotenv';
 import { createLogger } from '../logger.js';
 import { AppConfigSchema, formatConfigError } from './schema.js';
-import type { AppConfig, BleConfig, ExporterEntry, MqttProxyConfig } from './schema.js';
+import type {
+  AppConfig,
+  BleConfig,
+  ExporterEntry,
+  MqttProxyConfig,
+  EsphomeProxyConfig,
+} from './schema.js';
+import type { BleHandlerName } from '../ble/types.js';
 import { KNOWN_EXPORTER_NAMES } from '../exporters/registry.js';
 import { loadConfig as loadEnvVarConfig } from '../validate-env.js';
 import { loadExporterConfig } from '../exporters/config.js';
@@ -357,9 +364,10 @@ export function loadAppConfig(configPath?: string): LoadedConfig {
 export interface BleLoadedConfig {
   scaleMac?: string;
   nobleDriver?: string;
-  bleHandler?: 'auto' | 'mqtt-proxy';
+  bleHandler?: BleHandlerName;
   bleAdapter?: string;
   mqttProxy?: MqttProxyConfig;
+  esphomeProxy?: EsphomeProxyConfig;
 }
 
 /**
@@ -377,9 +385,10 @@ export function loadBleConfig(configPath?: string): BleLoadedConfig {
       return {
         scaleMac: ble?.scale_mac ?? undefined,
         nobleDriver: ble?.noble_driver ?? undefined,
-        bleHandler: (ble?.handler as 'auto' | 'mqtt-proxy') ?? undefined,
+        bleHandler: (ble?.handler as BleLoadedConfig['bleHandler']) ?? undefined,
         bleAdapter: ble?.adapter ?? undefined,
         mqttProxy: ble?.mqtt_proxy ?? undefined,
+        esphomeProxy: ble?.esphome_proxy ?? undefined,
       };
     } catch {
       // Fall through to env vars

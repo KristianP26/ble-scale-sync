@@ -1,4 +1,5 @@
 import type { UserProfile } from '../interfaces/scale-adapter.js';
+import type { BleHandlerName } from '../ble/types.js';
 import type {
   AppConfig,
   UserConfig,
@@ -6,6 +7,7 @@ import type {
   ExporterEntry,
   WeightUnit,
   MqttProxyConfig,
+  EsphomeProxyConfig,
 } from './schema.js';
 
 // --- User profile resolution ---
@@ -50,9 +52,10 @@ export interface ResolvedRuntimeConfig {
   dryRun: boolean;
   continuousMode: boolean;
   scanCooldownSec: number;
-  bleHandler: 'auto' | 'mqtt-proxy';
+  bleHandler: BleHandlerName;
   bleAdapter?: string;
   mqttProxy?: MqttProxyConfig;
+  esphomeProxy?: EsphomeProxyConfig;
 }
 
 /**
@@ -72,6 +75,7 @@ export function resolveRuntimeConfig(config: AppConfig): ResolvedRuntimeConfig {
     bleHandler: config.ble?.handler ?? 'auto',
     bleAdapter: config.ble?.adapter ?? undefined,
     mqttProxy: config.ble?.mqtt_proxy ?? undefined,
+    esphomeProxy: config.ble?.esphome_proxy ?? undefined,
   };
 }
 

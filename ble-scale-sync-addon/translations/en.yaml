@@ -11,12 +11,23 @@ configuration:
       Linux HCI adapter name (e.g., hci0, hci1).
       Only needed if you have multiple Bluetooth adapters.
       Leave empty for the system default.
+  weight_unit:
+    name: Weight unit
+    description: >-
+      Unit the scale reports and the app uses internally.
+      Choose kg for metric or lbs for imperial.
+  height_unit:
+    name: Height unit
+    description: >-
+      Unit used for the user height and weight range below.
+      Choose cm for metric or in (inches) for imperial.
   user_name:
     name: User name
     description: Display name for the user profile
   user_height:
-    name: Height (cm)
-    description: Height in centimeters (e.g., 183)
+    name: Height
+    description: >-
+      Height in the unit selected above (e.g., 183 for cm, 72 for in)
   user_birth_date:
     name: Birth date
     description: Date of birth in YYYY-MM-DD format (e.g., 1990-06-15)
@@ -29,11 +40,15 @@ configuration:
       Enable if you exercise regularly (5+ hours/week).
       Adjusts body composition formulas for athletic builds.
   user_weight_min:
-    name: Weight range min (kg)
-    description: Minimum expected weight in kg (for user matching)
+    name: Weight range min
+    description: >-
+      Minimum expected weight in the weight unit selected above
+      (used for multi-user matching)
   user_weight_max:
-    name: Weight range max (kg)
-    description: Maximum expected weight in kg (for user matching)
+    name: Weight range max
+    description: >-
+      Maximum expected weight in the weight unit selected above
+      (used for multi-user matching)
   mqtt_enabled:
     name: Enable MQTT
     description: Export measurements to an MQTT broker with Home Assistant auto-discovery

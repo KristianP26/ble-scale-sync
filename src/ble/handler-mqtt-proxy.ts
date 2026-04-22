@@ -9,59 +9,10 @@ import type { ScanOptions, ScanResult } from './types.js';
 import type { BleChar, BleDevice, RawReading } from './shared.js';
 import { waitForRawReading } from './shared.js';
 import { bleLog, normalizeUuid, withTimeout, errMsg } from './types.js';
+import { AsyncQueue } from './async-queue.js';
 
-// ─── AsyncQueue ──────────────────────────────────────────────────────────────
-
-/** Simple async queue: push items, shift blocks until one is available. */
-export class AsyncQueue<T> {
-  private buffer: T[] = [];
-  private waiting: Array<{ resolve: (item: T) => void; reject: (err: Error) => void }> = [];
-
-  /** Enqueue an item, or resolve a waiting consumer. */
-  push(item: T): void {
-    const waiter = this.waiting.shift();
-    if (waiter) {
-      waiter.resolve(item);
-    } else {
-      this.buffer.push(item);
-    }
-  }
-
-  /** Return next item, or block until one arrives. Supports AbortSignal. */
-  shift(signal?: AbortSignal): Promise<T> {
-    if (signal?.aborted) {
-      return Promise.reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
-    }
-    const buffered = this.buffer.shift();
-    if (buffered !== undefined) return Promise.resolve(buffered);
-
-    return new Promise<T>((resolve, reject) => {
-      let onAbort: (() => void) | undefined;
-      const entry = {
-        resolve: (item: T) => {
-          if (onAbort) signal!.removeEventListener('abort', onAbort);
-          resolve(item);
-        },
-        reject,
-      };
-      this.waiting.push(entry);
-
-      if (signal) {
-        onAbort = () => {
-          const idx = this.waiting.indexOf(entry);
-          if (idx >= 0) this.waiting.splice(idx, 1);
-          reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
-        };
-        signal.addEventListener('abort', onAbort, { once: true });
-      }
-    });
-  }
-
-  /** Number of buffered items not yet consumed. */
-  get pending(): number {
-    return this.buffer.length;
-  }
-}
+// Re-exported for backward compatibility with earlier imports.
+export { AsyncQueue } from './async-queue.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -117,18 +68,34 @@ function topics(prefix: string, deviceId: string) {
 
 type MqttClient = Awaited<ReturnType<typeof import('mqtt').connectAsync>>;
 
+/**
+ * Resolve the broker URL from config, throwing a helpful error if neither an
+ * external broker nor the embedded broker has provided one.
+ */
+function requireBrokerUrl(config: MqttProxyConfig): string {
+  if (!config.broker_url) {
+    throw new Error(
+      'mqtt_proxy.broker_url is not set and the embedded broker has not been started. ' +
+        'Either configure an external broker URL, or run through the mqtt-proxy bootstrap ' +
+        'which starts the embedded broker automatically.',
+    );
+  }
+  return config.broker_url;
+}
+
 async function createMqttClient(config: MqttProxyConfig): Promise<MqttClient> {
   const { connectAsync } = await import('mqtt');
+  const brokerUrl = requireBrokerUrl(config);
   const clientId = `ble-scale-sync-${config.device_id}`;
   const client = await withTimeout(
-    connectAsync(config.broker_url, {
+    connectAsync(brokerUrl, {
       clientId,
       username: config.username ?? undefined,
       password: config.password ?? undefined,
       clean: true,
     }),
     COMMAND_TIMEOUT_MS,
-    `MQTT broker unreachable at ${config.broker_url}. Check your mqtt_proxy.broker_url config.`,
+    `MQTT broker unreachable at ${brokerUrl}. Check your mqtt_proxy.broker_url config.`,
   );
   return client;
 }
@@ -181,8 +148,9 @@ async function getOrCreatePersistentClient(config: MqttProxyConfig): Promise<Mqt
     }
   }
   const { connectAsync } = await import('mqtt');
+  const brokerUrl = requireBrokerUrl(config);
   proxyState.persistentClient = await withTimeout(
-    connectAsync(config.broker_url, {
+    connectAsync(brokerUrl, {
       clientId: `ble-scale-sync-${config.device_id}`,
       username: config.username ?? undefined,
       password: config.password ?? undefined,
@@ -190,7 +158,7 @@ async function getOrCreatePersistentClient(config: MqttProxyConfig): Promise<Mqt
       reconnectPeriod: 5000,
     }),
     COMMAND_TIMEOUT_MS,
-    `MQTT broker unreachable at ${config.broker_url}. Check your mqtt_proxy.broker_url config.`,
+    `MQTT broker unreachable at ${brokerUrl}. Check your mqtt_proxy.broker_url config.`,
   );
   return proxyState.persistentClient;
 }

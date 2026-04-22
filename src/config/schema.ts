@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isLoopback } from '../ble/loopback.js';
 
 // --- Regex patterns ---
 
@@ -8,18 +9,53 @@ const CB_UUID_REGEX =
 
 // --- Sub-schemas ---
 
-export const MqttProxySchema = z.object({
-  broker_url: z
-    .string()
-    .min(1, 'MQTT broker URL is required')
-    .refine((v) => /^mqtts?:\/\//.test(v), {
-      message: 'Must start with mqtt:// or mqtts://',
-    }),
-  device_id: z.string().default('esp32-ble-proxy'),
-  username: z.string().optional().nullable(),
-  password: z.string().optional().nullable(),
-  topic_prefix: z.string().default('ble-proxy'),
-});
+export const EsphomeProxySchema = z
+  .object({
+    host: z.string().min(1, 'ESPHome host is required'),
+    port: z.number().int().min(1).max(65535).default(6053),
+    encryption_key: z.string().optional().nullable(),
+    password: z.string().optional().nullable(),
+    client_info: z.string().default('ble-scale-sync'),
+  })
+  .refine((c) => !(c.encryption_key && c.password), {
+    message: 'Set either encryption_key (Noise) or password (legacy), not both',
+    path: ['encryption_key'],
+  });
+
+export const MqttProxySchema = z
+  .object({
+    broker_url: z
+      .string()
+      .min(1, 'MQTT broker URL must not be empty')
+      .refine((v) => /^mqtts?:\/\//.test(v), {
+        message: 'Must start with mqtt:// or mqtts://',
+      })
+      .optional()
+      .nullable(),
+    device_id: z.string().default('esp32-ble-proxy'),
+    username: z.string().optional().nullable(),
+    password: z.string().optional().nullable(),
+    topic_prefix: z.string().default('ble-proxy'),
+    embedded_broker_port: z.number().int().min(1).max(65535).default(1883),
+    embedded_broker_bind: z
+      .string()
+      .regex(/^\S+$/, 'Must be a non-empty hostname or IP with no whitespace')
+      .default('0.0.0.0'),
+  })
+  .refine(
+    (c) => {
+      if (c.broker_url) return true;
+      if (isLoopback(c.embedded_broker_bind)) return true;
+      return !!c.username;
+    },
+    {
+      message:
+        'Embedded broker bound to a non-loopback interface must have username/password set. ' +
+        'Either add mqtt_proxy.username + mqtt_proxy.password, or change embedded_broker_bind ' +
+        'to 127.0.0.1.',
+      path: ['username'],
+    },
+  );
 
 export const BleSchema = z
   .object({
@@ -31,17 +67,22 @@ export const BleSchema = z
       .optional()
       .nullable(),
     noble_driver: z.enum(['abandonware', 'stoprocent']).optional().nullable(),
-    handler: z.enum(['auto', 'mqtt-proxy']).default('auto'),
+    handler: z.enum(['auto', 'mqtt-proxy', 'esphome-proxy']).default('auto'),
     adapter: z
       .string()
       .regex(/^hci\d+$/, 'Must be a Linux HCI adapter name (e.g., hci0, hci1)')
       .optional()
       .nullable(),
     mqtt_proxy: MqttProxySchema.optional(),
+    esphome_proxy: EsphomeProxySchema.optional(),
   })
   .refine((ble) => ble.handler !== 'mqtt-proxy' || ble.mqtt_proxy !== undefined, {
     message: 'mqtt_proxy config is required when handler is "mqtt-proxy"',
     path: ['mqtt_proxy'],
+  })
+  .refine((ble) => ble.handler !== 'esphome-proxy' || ble.esphome_proxy !== undefined, {
+    message: 'esphome_proxy config is required when handler is "esphome-proxy"',
+    path: ['esphome_proxy'],
   });
 
 export const ScaleSchema = z.object({
@@ -110,6 +151,7 @@ export type WeightUnit = 'kg' | 'lbs';
 // --- Inferred types ---
 
 export type MqttProxyConfig = z.infer<typeof MqttProxySchema>;
+export type EsphomeProxyConfig = z.infer<typeof EsphomeProxySchema>;
 export type BleConfig = z.infer<typeof BleSchema>;
 export type ScaleConfig = z.infer<typeof ScaleSchema>;
 export type ExporterEntry = z.infer<typeof ExporterEntrySchema>;
