@@ -1,4 +1,4 @@
-import type { ScaleAdapter, BleDeviceInfo, BodyComposition } from '../interfaces/scale-adapter.js';
+import type { ScaleAdapter, ScaleReading, BleDeviceInfo, BodyComposition } from '../interfaces/scale-adapter.js';
 import type { EsphomeProxyConfig } from '../config/schema.js';
 import type { ScanOptions, ScanResult } from './types.js';
 import type { RawReading } from './shared.js';
@@ -194,6 +194,11 @@ function toBleDeviceInfo(ad: EsphomeBleAdvertisement): BleDeviceInfo {
       info.manufacturerData = { id, data };
     }
   }
+  if (ad.serviceDataList && ad.serviceDataList.length > 0) {
+    info.serviceData = ad.serviceDataList
+      .map((sd) => ({ uuid: normalizeUuid(sd.uuid), data: extractBytes(sd) }))
+      .filter((sd) => sd.data.length > 0);
+  }
   return info;
 }
 
@@ -217,7 +222,7 @@ function logPhase1Capabilities(adapters: ScaleAdapter[]): void {
   const broadcast: string[] = [];
   const gattOnly: string[] = [];
   for (const a of adapters) {
-    if (typeof a.parseBroadcast === 'function') {
+    if (typeof a.parseBroadcast === 'function' || typeof a.parseServiceData === 'function') {
       broadcast.push(a.name);
     } else if (a.charNotifyUuid) {
       gattOnly.push(a.name);
@@ -282,18 +287,28 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
             return;
           }
 
+          let reading: ScaleReading | null = null;
+
           if (adapter.parseBroadcast && info.manufacturerData) {
-            const reading = adapter.parseBroadcast(info.manufacturerData.data);
-            if (reading) {
-              bleLog.info(`Matched: ${adapter.name} (${address})`);
-              bleLog.info(`Broadcast reading: ${reading.weight} kg`);
-              resolve({ reading, adapter });
-              return;
+            reading = adapter.parseBroadcast(info.manufacturerData.data);
+          }
+
+          if (!reading && adapter.parseServiceData && info.serviceData) {
+            for (const sd of info.serviceData) {
+              reading = adapter.parseServiceData(sd.uuid, sd.data);
+              if (reading) break;
             }
           }
 
+          if (reading) {
+            bleLog.info(`Matched: ${adapter.name} (${address})`);
+            bleLog.info(`Broadcast reading: ${reading.weight} kg`);
+            resolve({ reading, adapter });
+            return;
+          }
+
           // Adapter supports broadcast: keep waiting for a stable frame.
-          if (adapter.parseBroadcast) {
+          if (adapter.parseBroadcast || adapter.parseServiceData) {
             bleLog.debug(
               `${adapter.name} matched at ${address} but broadcast frame is not stable yet`,
             );
@@ -491,31 +506,39 @@ export class ReadingWatcher {
     const adapter = this.adapters.find((a) => a.matches(info));
     if (!adapter) return;
 
+    let reading: ScaleReading | null = null;
+
     if (adapter.parseBroadcast && info.manufacturerData) {
-      const reading = adapter.parseBroadcast(info.manufacturerData.data);
-      if (reading) {
-        const key = `${address}:${reading.weight.toFixed(1)}`;
-        const now = Date.now();
-        this.pruneDedup(now);
-        const lastSeen = this.dedup.get(key);
-        if (lastSeen && now - lastSeen < DEDUP_WINDOW_MS) {
-          bleLog.debug(`Dedup skip: ${key}`);
-          return;
-        }
-        this.dedup.set(key, now);
-        bleLog.info(`Matched: ${adapter.name} (${address})`);
-        bleLog.info(`Broadcast reading: ${reading.weight} kg`);
-        this.queue.push({ reading, adapter });
-        return;
+      reading = adapter.parseBroadcast(info.manufacturerData.data);
+    }
+
+    if (!reading && adapter.parseServiceData && info.serviceData) {
+      for (const sd of info.serviceData) {
+        reading = adapter.parseServiceData(sd.uuid, sd.data);
+        if (reading) break;
       }
     }
 
+    if (reading) {
+      const key = `${address}:${reading.weight.toFixed(1)}`;
+      const now = Date.now();
+      this.pruneDedup(now);
+      const lastSeen = this.dedup.get(key);
+      if (lastSeen && now - lastSeen < DEDUP_WINDOW_MS) {
+        bleLog.debug(`Dedup skip: ${key}`);
+        return;
+      }
+      this.dedup.set(key, now);
+      bleLog.info(`Matched: ${adapter.name} (${address})`);
+      bleLog.info(`Broadcast reading: ${reading.weight} kg`);
+      this.queue.push({ reading, adapter });
+      return;
+    }
+
     // Adapter matched but no usable broadcast frame came out. If the adapter
-    // supports GATT, Phase 1 cannot read this scale (firmware is either pure
-    // GATT or the broadcast format is not weight-bearing, e.g. QN Elis 1 /
-    // ES-30M which broadcasts only a MAC beacon). Warn once per address so
-    // the user knows they are hitting the Phase 2 gap instead of a silent drop.
-    if (adapter.charNotifyUuid) {
+    // supports GATT (and has no passive path), Phase 1 cannot read this scale.
+    // Warn once per address so the user knows they are hitting the Phase 2 gap.
+    if (adapter.charNotifyUuid && !adapter.parseServiceData && !adapter.parseBroadcast) {
       this.warnGattNotSupported(adapter.name, address);
     }
   }

@@ -157,6 +157,50 @@ describe('MiScale2Adapter', () => {
     });
   });
 
+  describe('parseServiceData()', () => {
+    it('parses stable frame from short Body Composition Service UUID', () => {
+      const adapter = makeAdapter();
+      const buf = makeFrame({ weightRaw: 16000, hasImpedance: true, impedanceRaw: 500 });
+      const reading = adapter.parseServiceData('181b', buf);
+
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBe(80);
+      expect(reading!.impedance).toBe(500);
+    });
+
+    it('parses stable frame from full 128-bit Body Composition Service UUID', () => {
+      const adapter = makeAdapter();
+      const buf = makeFrame({ weightRaw: 16000, hasImpedance: true, impedanceRaw: 500 });
+      const reading = adapter.parseServiceData('0000181b-0000-1000-8000-00805f9b34fb', buf);
+
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBe(80);
+      expect(reading!.impedance).toBe(500);
+    });
+
+    it('returns null for wrong service UUID', () => {
+      const adapter = makeAdapter();
+      const buf = makeFrame({ weightRaw: 16000, hasImpedance: true, impedanceRaw: 500 });
+      expect(adapter.parseServiceData('180f', buf)).toBeNull();
+    });
+
+    it('returns reading with impedance 0 for weight-only frame (isComplete should be false)', () => {
+      const adapter = makeAdapter();
+      const buf = makeFrame({ weightRaw: 16000, hasImpedance: false });
+      const reading = adapter.parseServiceData('181b', buf);
+
+      expect(reading).not.toBeNull();
+      expect(reading!.impedance).toBe(0);
+      expect(adapter.isComplete(reading!)).toBe(false);
+    });
+
+    it('returns null for unstable frame', () => {
+      const adapter = makeAdapter();
+      const buf = makeFrame({ weightRaw: 16000, stable: false });
+      expect(adapter.parseServiceData('181b', buf)).toBeNull();
+    });
+  });
+
   describe('computeMetrics()', () => {
     it('returns all BodyComposition fields with values in range', () => {
       const adapter = makeAdapter();

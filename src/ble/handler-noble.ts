@@ -322,22 +322,38 @@ function broadcastScan(
     const onDiscover = (peripheral: Peripheral): void => {
       if (peripheralAddress(peripheral) !== targetAddr) return;
 
+      let reading: ScaleReading | null = null;
+
       const mfgData = parseMfgData(peripheral.advertisement?.manufacturerData);
-      if (!mfgData || !adapter.parseBroadcast) return;
-
-      const reading = adapter.parseBroadcast(mfgData.data);
-
-      if (reading && onLiveData) {
-        onLiveData(reading);
+      if (mfgData && adapter.parseBroadcast) {
+        reading = adapter.parseBroadcast(mfgData.data);
       }
 
-      if (reading) {
-        cleanup();
-        bleLog.info(
-          `Broadcast reading: ${reading.weight.toFixed(2)} kg (no impedance in broadcast mode)`,
+      if (!reading && adapter.parseServiceData) {
+        const svcDataList: Array<{ uuid: string; data: Buffer }> =
+          (peripheral.advertisement as { serviceData?: Array<{ uuid: string; data: Buffer }> })
+            ?.serviceData ?? [];
+        for (const entry of svcDataList) {
+          reading = adapter.parseServiceData(entry.uuid, entry.data);
+          if (reading) break;
+        }
+      }
+
+      if (!reading) return;
+
+      if (onLiveData) onLiveData(reading);
+
+      if (!adapter.isComplete(reading)) {
+        bleLog.debug(
+          `${adapter.name} broadcast frame not yet complete ` +
+            `(weight=${reading.weight.toFixed(2)} kg, impedance=${reading.impedance})`,
         );
-        resolve({ reading, adapter });
+        return;
       }
+
+      cleanup();
+      bleLog.info(`Broadcast reading: ${reading.weight.toFixed(2)} kg`);
+      resolve({ reading, adapter });
     };
 
     noble.on('discover', onDiscover);
@@ -379,32 +395,37 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       abortSignal,
     );
 
-    // Broadcast-only device: read weight from advertisements instead of GATT
+    // Match adapter from advertisement (needed for target-MAC mode where
+    // discoveredAdapter is deferred until post-connect).
     const connectable = peripheral.connectable !== false;
-    if (!connectable) {
-      const mfgData = parseMfgData(peripheral.advertisement?.manufacturerData);
-      const name = peripheral.advertisement?.localName ?? '';
-      const svcUuids = (peripheral.advertisement?.serviceUuids ?? []).map(normalizeUuid);
+    const mfgData = parseMfgData(peripheral.advertisement?.manufacturerData);
+    const advName = peripheral.advertisement?.localName ?? '';
+    const advSvcUuids = (peripheral.advertisement?.serviceUuids ?? []).map(normalizeUuid);
+    let broadcastAdapter = discoveredAdapter;
+    if (!broadcastAdapter) {
+      const info: BleDeviceInfo = {
+        localName: advName,
+        serviceUuids: advSvcUuids,
+        manufacturerData: mfgData,
+      };
+      broadcastAdapter = adapters.find((a) => a.matches(info));
+    }
 
-      // Match adapter if not already matched during discovery
-      let adapter = discoveredAdapter;
-      if (!adapter) {
-        const info: BleDeviceInfo = {
-          localName: name,
-          serviceUuids: svcUuids,
-          manufacturerData: mfgData,
-        };
-        adapter = adapters.find((a) => a.matches(info));
+    // Use broadcast scanning when the device is non-connectable or the matched
+    // adapter prefers passive advertisement decoding over a GATT connection.
+    if (!connectable || broadcastAdapter?.preferPassive) {
+      if (broadcastAdapter && (broadcastAdapter.parseBroadcast || broadcastAdapter.parseServiceData)) {
+        if (!connectable) {
+          bleLog.info(`Device is broadcast-only (non-connectable). Using advertisement-based reading.`);
+        } else {
+          bleLog.info(`Adapter prefers passive mode. Using advertisement-based reading.`);
+        }
+        return await broadcastScan(broadcastAdapter, peripheral, { abortSignal, onLiveData });
       }
 
-      if (adapter?.parseBroadcast) {
-        bleLog.info(
-          `Device is broadcast-only (non-connectable). Using advertisement-based reading.`,
-        );
-        return await broadcastScan(adapter, peripheral, { abortSignal, onLiveData });
+      if (!connectable) {
+        bleLog.warn('Device is broadcast-only but no adapter supports advertisement parsing.');
       }
-
-      bleLog.warn('Device is broadcast-only but no adapter supports advertisement parsing.');
     }
 
     await connectWithRetries(peripheral, MAX_CONNECT_RETRIES);
