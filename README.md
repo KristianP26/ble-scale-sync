@@ -9,7 +9,7 @@
 
 A cross-platform CLI tool that reads body composition data from **20+ BLE smart scales** and exports to **Garmin Connect**, **Strava**, **MQTT** (Home Assistant), **InfluxDB**, **Webhooks**, **Ntfy**, and **local files** (CSV/JSONL). No phone app needed. Your data stays on your device.
 
-**[Documentation](https://blescalesync.dev)** · **[Getting Started](https://blescalesync.dev/guide/getting-started)** · **[Supported Scales](https://blescalesync.dev/guide/supported-scales)** · **[Exporters](https://blescalesync.dev/exporters)**
+**[Documentation](https://blescalesync.dev)** · **[Getting Started](https://blescalesync.dev/guide/getting-started)** · **[Supported Scales](https://blescalesync.dev/guide/supported-scales)** · **[Exporters](https://blescalesync.dev/exporters)** · **[FAQ](https://blescalesync.dev/faq)**
 
 ## Why This Exists
 
@@ -90,7 +90,7 @@ Requires Node.js v20.19+ and a BLE adapter. See the **[full install guide](https
 - **[ESPHome Bluetooth proxy](https://blescalesync.dev/guide/esphome-proxy)** — reuse an existing ESPHome BT proxy mesh (Home Assistant) as a BLE radio via Native API (experimental, broadcast-only in phase 1)
 - **BLE adapter selection** — `ble.adapter: hci1` for multi-adapter setups (Linux)
 - **Broadcast mode** — supports non-connectable scales that only advertise weight via BLE advertisements
-- **Update check** — optional, anonymous version check after each measurement (opt-out via `update_check: false`)
+- **Update check** — optional, anonymous version check after each measurement (opt-out via `update_check: false`); see the [auto update guide](https://blescalesync.dev/guide/auto-update) for Watchtower, systemd timer, and HA add-on recipes
 - **Cross-platform** — Linux (Docker + native), macOS, Windows
 - **Private** — your data stays on your device, no vendor cloud
 
@@ -103,9 +103,12 @@ Requires Node.js v20.19+ and a BLE adapter. See the **[full install guide](https
 
 ## Contributors
 
-<a href="https://github.com/KristianP26"><img src="https://avatars.githubusercontent.com/u/28766334?v=4" width="50" height="50" alt="KristianP26" style="border-radius:50%"></a>
-<a href="https://github.com/APIUM"><img src="https://avatars.githubusercontent.com/u/9067013?v=4" width="50" height="50" alt="APIUM" style="border-radius:50%"></a>
-<a href="https://github.com/marcelorodrigo"><img src="https://avatars.githubusercontent.com/u/443962?v=4" width="50" height="50" alt="marcelorodrigo" style="border-radius:50%"></a>
+<table><tr>
+<td align="center"><a href="https://github.com/KristianP26"><img src="https://avatars.githubusercontent.com/u/28766334?v=4" width="60" height="60" alt="KristianP26"><br><sub>KristianP26</sub></a></td>
+<td align="center"><a href="https://github.com/APIUM"><img src="https://avatars.githubusercontent.com/u/9067013?v=4" width="60" height="60" alt="APIUM"><br><sub>APIUM</sub></a></td>
+<td align="center"><a href="https://github.com/marcelorodrigo"><img src="https://avatars.githubusercontent.com/u/443962?v=4" width="60" height="60" alt="marcelorodrigo"><br><sub>marcelorodrigo</sub></a></td>
+<td align="center"><a href="https://github.com/fromport"><img src="https://avatars.githubusercontent.com/u/5751308?v=4" width="60" height="60" alt="fromport"><br><sub>fromport</sub></a></td>
+</tr></table>
 
 ## Contributing
 

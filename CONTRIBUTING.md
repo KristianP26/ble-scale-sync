@@ -83,124 +83,166 @@ Both ESLint and Prettier are enforced in CI.
 ble-scale-sync/
 ├── .github/
 │   └── workflows/
-│       ├── ci.yml                  # CI: lint, format, typecheck, tests (Node 20/22)
-│       └── docker.yml              # Docker: multi-arch build + GHCR push on release
+│       ├── ci.yml                   # CI: lint, format, typecheck, tests (Node 20/22/24), python-check
+│       ├── docker.yml               # Docker: multi-arch build + GHCR push on release
+│       ├── docker-cleanup.yml       # Prune old GHCR image tags
+│       ├── docs.yml                 # VitePress docs deploy to Cloudflare Pages
+│       └── worker.yml               # Deploy stats Cloudflare Worker
 ├── src/
-│   ├── index.ts                    # Entry point (single/multi-user flow, SIGHUP reload, heartbeat)
-│   ├── orchestrator.ts             # Exported orchestration logic (healthchecks, export dispatch)
+│   ├── index.ts                     # Entry point (single/multi-user flow, SIGHUP reload, heartbeat)
+│   ├── orchestrator.ts              # Export dispatch, healthchecks, partial/total failure handling
+│   ├── diagnose.ts                  # npm run diagnose (BLE troubleshooting tool)
+│   ├── scan.ts                      # BLE device scanner utility (npm run scan)
+│   ├── logger.ts                    # createLogger, setLogLevel (structured logging)
+│   ├── update-check.ts              # Optional anonymous version check + stats ping
+│   ├── validate-env.ts              # .env validation & typed config loader (legacy path)
 │   ├── config/
-│   │   ├── schema.ts               # Zod schemas (AppConfig, UserConfig, etc.) + WeightUnit
-│   │   ├── load.ts                 # Unified config loader (YAML + .env fallback)
-│   │   ├── resolve.ts              # Config → runtime types (UserProfile, exporters, etc.)
-│   │   ├── validate-cli.ts         # CLI entry point for npm run validate
-│   │   ├── slugify.ts              # Slug generation + uniqueness validation
-│   │   ├── user-matching.ts        # Weight-based multi-user matching (4-tier)
-│   │   └── write.ts                # Atomic YAML write + debounced weight updates
+│   │   ├── schema.ts                # Zod schemas (AppConfig, UserConfig) + WeightUnit
+│   │   ├── load.ts                  # Unified config loader (YAML + .env fallback)
+│   │   ├── resolve.ts               # Config → runtime types (UserProfile, exporters)
+│   │   ├── validate-cli.ts          # CLI entry for npm run validate
+│   │   ├── slugify.ts               # Slug generation + uniqueness validation
+│   │   ├── user-matching.ts         # Weight-based multi-user matching (4-tier)
+│   │   └── write.ts                 # Atomic YAML write + debounced weight updates
 │   ├── ble/
-│   │   ├── index.ts                # OS detection + dynamic import barrel (scanAndRead, scanAndReadRaw)
-│   │   ├── types.ts                # ScanOptions, ScanResult, constants, utilities
-│   │   ├── shared.ts               # BleChar/BleDevice abstractions, waitForRawReading(), waitForReading()
-│   │   ├── handler-node-ble.ts     # Linux: node-ble (BlueZ D-Bus)
-│   │   ├── handler-noble.ts        # macOS default: @stoprocent/noble
-│   │   └── handler-noble-legacy.ts # Windows default: @abandonware/noble
+│   │   ├── index.ts                 # OS detection + handler barrel (scanAndRead, scanAndReadRaw)
+│   │   ├── types.ts                 # ScanOptions, ScanResult, constants, utilities
+│   │   ├── shared.ts                # BleChar/BleDevice abstractions, waitForReading()
+│   │   ├── async-queue.ts           # Async notification queue for GATT handlers
+│   │   ├── loopback.ts              # In-process loopback handler (tests)
+│   │   ├── handler-node-ble.ts      # Linux native: node-ble (BlueZ D-Bus)
+│   │   ├── handler-noble.ts         # macOS native: @stoprocent/noble
+│   │   ├── handler-noble-legacy.ts  # Windows native: @abandonware/noble
+│   │   ├── handler-mqtt-proxy.ts    # ESP32 proxy over MQTT
+│   │   ├── handler-esphome-proxy.ts # ESPHome BT proxy over Native API (phase 1, broadcast)
+│   │   ├── embedded-broker.ts       # Embedded aedes MQTT broker for ESP32 proxy
+│   │   └── mqtt-proxy-bootstrap.ts  # First-run scan + adapter pin for ESP32 proxy
 │   ├── exporters/
-│   │   ├── index.ts                # Exporter factory — createExporters()
-│   │   ├── registry.ts             # Self-describing exporter registry (schemas + factories)
-│   │   ├── config.ts               # Exporter env validation + config parsing
-│   │   ├── garmin.ts               # Garmin Connect exporter (Python subprocess)
-│   │   ├── mqtt.ts                 # MQTT exporter + Home Assistant auto-discovery
-│   │   ├── webhook.ts              # Webhook exporter (generic HTTP)
-│   │   ├── influxdb.ts             # InfluxDB v2 exporter (line protocol)
-│   │   └── ntfy.ts                 # Ntfy push notification exporter
+│   │   ├── index.ts                 # Exporter factory — createExporters()
+│   │   ├── registry.ts              # Self-describing exporter registry (schemas + factories)
+│   │   ├── config.ts                # Exporter env validation + config parsing
+│   │   ├── garmin.ts                # Garmin Connect (Python subprocess)
+│   │   ├── strava.ts                # Strava OAuth2 (per-user only)
+│   │   ├── strava-setup.ts          # One-time Strava OAuth (npm run setup-strava)
+│   │   ├── mqtt.ts                  # MQTT + Home Assistant auto-discovery
+│   │   ├── webhook.ts               # Generic HTTP webhook
+│   │   ├── influxdb.ts              # InfluxDB v2 (line protocol)
+│   │   ├── ntfy.ts                  # Ntfy push notifications
+│   │   └── file.ts                  # Local file exporter (CSV / JSONL)
 │   ├── wizard/
-│   │   ├── index.ts                # Entry point for npm run setup
-│   │   ├── types.ts                # WizardStep, WizardContext, PromptProvider, BackNavigation
-│   │   ├── runner.ts               # Step sequencer (sequential + edit mode)
-│   │   ├── non-interactive.ts      # Non-interactive validation + slug enrichment
-│   │   ├── platform.ts             # OS/Docker/Python detection
-│   │   ├── prompt-provider.ts      # Real + mock prompt providers (DI)
-│   │   ├── ui.ts                   # Banner, icons, section boxes, chalk helpers
+│   │   ├── index.ts                 # Entry for npm run setup
+│   │   ├── types.ts                 # WizardStep, WizardContext, PromptProvider
+│   │   ├── runner.ts                # Step sequencer (sequential + edit mode)
+│   │   ├── non-interactive.ts       # Non-interactive validation + slug enrichment
+│   │   ├── platform.ts              # OS/Docker/Python detection
+│   │   ├── prompt-provider.ts       # Real + mock prompt providers (DI)
+│   │   ├── ui.ts                    # Banner, icons, section boxes, chalk helpers
 │   │   └── steps/
-│   │       ├── index.ts            # Step registry (WIZARD_STEPS)
-│   │       ├── welcome.ts          # Banner + edit mode detection
-│   │       ├── ble.ts              # BLE scale discovery / manual MAC entry
-│   │       ├── users.ts            # User profile setup (name, slug, height, etc.)
-│   │       ├── exporters.ts        # Unified exporter selection (schema-driven prompts)
-│   │       ├── garmin-auth.ts      # Garmin Connect authentication
-│   │       ├── runtime.ts          # Runtime settings (continuous, cooldown, etc.)
-│   │       ├── validate.ts         # Exporter connectivity tests
-│   │       └── summary.ts          # Config review + YAML save
+│   │       ├── index.ts             # Step registry (WIZARD_STEPS)
+│   │       ├── welcome.ts           # Banner + edit mode detection
+│   │       ├── ble.ts               # BLE scale discovery / manual MAC entry
+│   │       ├── users.ts             # User profile setup
+│   │       ├── exporters.ts         # Schema-driven exporter selection
+│   │       ├── garmin-auth.ts       # Garmin Connect authentication
+│   │       ├── runtime.ts           # Runtime settings (continuous, cooldown)
+│   │       ├── validate.ts          # Exporter connectivity tests
+│   │       └── summary.ts           # Config review + YAML save
 │   ├── utils/
-│   │   ├── retry.ts                # Shared retry utility (withRetry) used by all exporters
-│   │   └── error.ts                # Shared error utility (errMsg) for unknown→string conversion
-│   ├── validate-env.ts             # .env validation & typed config loader (legacy)
-│   ├── scan.ts                     # BLE device scanner utility
+│   │   ├── retry.ts                 # Shared retry utility (withRetry)
+│   │   └── error.ts                 # errMsg (unknown → string)
 │   ├── interfaces/
-│   │   ├── scale-adapter.ts        # ScaleAdapter interface & shared types
-│   │   ├── exporter.ts             # Exporter interface & ExportResult type
-│   │   └── exporter-schema.ts      # ExporterSchema interface for self-describing exporters
+│   │   ├── scale-adapter.ts         # ScaleAdapter interface & shared types
+│   │   ├── exporter.ts              # Exporter interface & ExportResult
+│   │   └── exporter-schema.ts       # ExporterSchema for self-describing exporters
 │   └── scales/
-│       ├── index.ts                # Adapter registry (all adapters)
-│       ├── body-comp-helpers.ts    # Shared body-comp utilities
-│       ├── qn-scale.ts             # QN-Scale / Renpho / Senssun / Sencor
-│       ├── renpho.ts               # Renpho ES-WBE28
-│       ├── renpho-es26bb.ts        # Renpho ES-26BB-B
-│       ├── mi-scale-2.ts           # Xiaomi Mi Scale 2
-│       ├── yunmai.ts               # Yunmai Signal / Mini / SE
-│       ├── beurer-sanitas.ts       # Beurer BF700/710/800, Sanitas SBF70/75
-│       ├── sanitas-sbf72.ts        # Sanitas SBF72/73, Beurer BF915
-│       ├── soehnle.ts              # Soehnle Shape / Style
-│       ├── medisana-bs44x.ts       # Medisana BS430/440/444
-│       ├── trisa.ts                # Trisa Body Analyze
-│       ├── es-cs20m.ts             # ES-CS20M
-│       ├── exingtech-y1.ts         # Exingtech Y1 (vscale)
-│       ├── excelvan-cf369.ts       # Excelvan CF369
-│       ├── hesley.ts               # Hesley (YunChen)
-│       ├── inlife.ts               # Inlife (fatscale)
-│       ├── digoo.ts                # Digoo DG-SO38H (Mengii)
-│       ├── senssun.ts              # Senssun Fat
-│       ├── one-byone.ts            # 1byone / Eufy C1 / Eufy P1
-│       ├── active-era.ts           # Active Era BF-06
-│       ├── mgb.ts                  # MGB (Swan / Icomon / YG)
-│       ├── hoffen.ts               # Hoffen BS-8107
-│       └── standard-gatt.ts        # Generic BCS/WSS catch-all
+│       ├── index.ts                 # Adapter registry (order matters — generic last)
+│       ├── body-comp-helpers.ts     # Shared body-comp utilities
+│       ├── qn-scale.ts              # QN / Renpho (incl. ES-26M, ES-30M) / Senssun / Sencor
+│       ├── renpho.ts                # Renpho ES-WBE28
+│       ├── renpho-es26bb.ts         # Renpho ES-26BB-B
+│       ├── mi-scale-2.ts            # Xiaomi Mi Scale 2
+│       ├── yunmai.ts                # Yunmai Signal / Mini / SE
+│       ├── eufy-p2.ts               # Eufy P2 / P2 Pro (T9148/T9149, AES-128 handshake)
+│       ├── beurer-sanitas.ts        # Beurer BF700/710/800, Sanitas SBF70/75
+│       ├── sanitas-sbf72.ts         # Sanitas SBF72/73, Beurer BF915
+│       ├── soehnle.ts               # Soehnle Shape / Style
+│       ├── medisana-bs44x.ts        # Medisana BS430/440/444
+│       ├── trisa.ts                 # Trisa Body Analyze
+│       ├── es-cs20m.ts              # ES-CS20M
+│       ├── exingtech-y1.ts          # Exingtech Y1 (vscale)
+│       ├── excelvan-cf369.ts        # Excelvan CF369
+│       ├── hesley.ts                # Hesley (YunChen)
+│       ├── inlife.ts                # Inlife (fatscale)
+│       ├── digoo.ts                 # Digoo DG-SO38H (Mengii)
+│       ├── senssun.ts               # Senssun Fat
+│       ├── one-byone.ts             # 1byone / Eufy C1 / Eufy P1
+│       ├── active-era.ts            # Active Era BF-06
+│       ├── mgb.ts                   # MGB (Swan / Icomon / YG)
+│       ├── hoffen.ts                # Hoffen BS-8107
+│       └── standard-gatt.ts         # Generic BCS/WSS catch-all
 ├── tests/
-│   ├── body-comp-helpers.test.ts   # Body-comp helper unit tests
-│   ├── validate-env.test.ts        # .env validation unit tests
-│   ├── orchestrator.test.ts        # Healthcheck + export dispatch tests
-│   ├── multi-user-flow.test.ts     # Multi-user integration tests
-│   ├── logger.test.ts              # Logger utility tests
+│   ├── body-comp-helpers.test.ts    # Body-comp math
+│   ├── validate-env.test.ts         # .env validation
+│   ├── orchestrator.test.ts         # Healthchecks + export dispatch
+│   ├── multi-user-flow.test.ts      # Multi-user integration
+│   ├── logger.test.ts               # Logger utility
+│   ├── update-check.test.ts         # Update check + stats ping
 │   ├── helpers/
-│   │   └── scale-test-utils.ts     # Shared test utilities (mock peripheral, etc.)
-│   ├── wizard/                     # Wizard tests (runner, users, exporters, non-interactive, platform)
-│   ├── config/                     # Config tests (schema, slugify, load, resolve, write, matching)
-│   ├── ble/                        # BLE tests (shared logic, utilities, abort signal)
-│   ├── utils/                      # Utility tests (retry, error)
-│   ├── scales/                     # One test file per adapter (23 files)
-│   └── exporters/                  # Exporter tests (config, garmin, mqtt, webhook, influxdb, ntfy, context)
+│   │   └── scale-test-utils.ts      # Mock peripheral + shared helpers
+│   ├── wizard/                      # Runner, users, exporters, non-interactive, platform
+│   ├── config/                      # Schema, slugify, load, resolve, write, matching
+│   ├── ble/                         # Shared logic, utilities, handlers, abort signal
+│   ├── utils/                       # Retry, error
+│   ├── scales/                      # One file per adapter (23 files)
+│   └── exporters/                   # config, garmin, mqtt (+multi-user), webhook, influxdb,
+│                                    # ntfy, strava, file, context, healthcheck, registry, index
+├── ble-scale-sync-addon/            # Home Assistant Supervisor Add-on
+│   ├── Dockerfile                   # Thin layer on GHCR image + jq/curl/run.sh
+│   ├── build.yaml                   # Multi-arch build config
+│   ├── config.yaml                  # Add-on manifest (options schema, HA services, perms)
+│   ├── run.sh                       # /data/options.json → config.yaml → app start
+│   ├── merge_last_weights.py        # Persist last_known_weight across restarts
+│   ├── DOCS.md                      # Add-on user docs (shown in HA UI)
+│   ├── CHANGELOG.md                 # Add-on version history
+│   ├── icon.png, logo.png
+│   └── translations/
+├── firmware/                        # ESP32 BLE proxy firmware (MicroPython)
+│   ├── main.py, boot.py, ble_bridge.py
+│   ├── board_*.py                   # Per-board pin/display setup (Atom Echo, S3, Guition)
+│   ├── ui.py, beep.py, panel_init_*.py
+│   ├── flash.sh                     # Board flashing helper
+│   ├── requirements.txt, config.json.example
+│   └── tools/
+├── worker/                          # Cloudflare Worker for stats.blescalesync.dev
+│   ├── src/, wrangler.toml, package.json, tsconfig.json
 ├── garmin-scripts/
-│   ├── garmin_upload.py            # Garmin uploader (JSON stdin → JSON stdout)
-│   └── setup_garmin.py             # One-time Garmin auth setup
-├── docs/
-│   ├── exporters.md                # Exporter configuration reference
-│   ├── multi-user.md               # Multi-user weight matching guide
-│   ├── body-composition.md         # Body composition metrics & formulas
-│   └── troubleshooting.md          # Common issues & solutions
-├── config.yaml.example             # Annotated config template (copy to config.yaml)
-├── CONTRIBUTING.md                 # This file
-├── CHANGELOG.md                    # Version history (Keep a Changelog format)
-├── .env.example                    # Legacy .env template (config.yaml preferred)
-├── .prettierrc                     # Prettier config
-├── eslint.config.js                # ESLint flat config
-├── tsconfig.json                   # TypeScript config (src)
-├── tsconfig.eslint.json            # TypeScript config (src + tests, for ESLint)
-├── Dockerfile                      # Multi-arch Docker image (node:20-slim + BlueZ + Python)
-├── docker-entrypoint.sh            # Docker entrypoint (start/setup/scan/validate/help)
-├── docker-compose.example.yml      # Example Compose file (host network + BLE)
-├── .dockerignore
-├── .gitignore
-├── package.json
-├── requirements.txt
+│   ├── garmin_upload.py             # Garmin uploader (JSON stdin → JSON stdout)
+│   └── setup_garmin.py              # One-time Garmin auth setup
+├── docs/                            # VitePress site → blescalesync.dev
+│   ├── index.md, exporters.md, multi-user.md, body-composition.md
+│   ├── troubleshooting.md, changelog.md, alternatives.md, faq.md
+│   ├── guide/
+│   │   ├── getting-started.md, configuration.md, supported-scales.md
+│   │   ├── home-assistant-addon.md, esp32-proxy.md, esphome-proxy.md
+│   │   └── auto-update.md
+│   └── public/, images/
+├── drivers/                         # Bundled vendor BLE drivers / helper binaries
+├── repository.yaml                  # HA add-on repository manifest (one-click install)
+├── config.yaml.example              # Annotated config template
+├── docker-compose.example.yml       # Example Compose (native BLE)
+├── docker-compose.mqtt-proxy.yml    # Example Compose (ESP32 MQTT proxy)
+├── Dockerfile                       # Multi-arch image (node:20-slim + BlueZ + Python)
+├── docker-entrypoint.sh             # Docker entrypoint (start/setup/scan/validate/help)
+├── CONTRIBUTING.md                  # This file
+├── CHANGELOG.md                     # Version history (Keep a Changelog format)
+├── CODE_OF_CONDUCT.md
+├── SECURITY.md
+├── PORTING.md                       # Notes for porting adapters from openScale
+├── .env.example                     # Legacy .env template (config.yaml preferred)
+├── .prettierrc, eslint.config.js
+├── tsconfig.json, tsconfig.eslint.json
+├── .nvmrc, .gitattributes, .dockerignore, .gitignore
+├── package.json, package-lock.json, requirements.txt
 ├── LICENSE
 └── README.md
 ```

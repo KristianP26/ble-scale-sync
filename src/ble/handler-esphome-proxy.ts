@@ -208,6 +208,39 @@ function gattNotSupportedError(adapterName: string, address: string): Error {
 }
 
 /**
+ * Emit a one-line summary of which configured adapters can actually produce
+ * readings over the Phase 1 (broadcast-only) ESPHome proxy transport, so
+ * users see the constraint on startup instead of waiting for a 60s timeout.
+ * Classifies each adapter by whether it defines parseBroadcast().
+ */
+function logPhase1Capabilities(adapters: ScaleAdapter[]): void {
+  const broadcast: string[] = [];
+  const gattOnly: string[] = [];
+  for (const a of adapters) {
+    if (typeof a.parseBroadcast === 'function') {
+      broadcast.push(a.name);
+    } else if (a.charNotifyUuid) {
+      gattOnly.push(a.name);
+    }
+  }
+  if (broadcast.length === 0 && gattOnly.length === 0) return;
+
+  const parts: string[] = ['ESPHome proxy transport is broadcast-only in Phase 1.'];
+  if (broadcast.length > 0) {
+    parts.push(`Broadcast-capable adapters: ${broadcast.join(', ')}.`);
+  }
+  if (gattOnly.length > 0) {
+    parts.push(
+      `GATT-only adapters will not produce readings on this transport: ${gattOnly.join(', ')}.`,
+    );
+    parts.push(
+      'If your scale matches a GATT-only adapter, switch ble.handler to "native" or "mqtt-proxy". Phase 2 tracking: #116.',
+    );
+  }
+  bleLog.warn(parts.join(' '));
+}
+
+/**
  * Subscribe to BLE advertisements via an ESPHome proxy, match against adapters,
  * and return the first broadcast reading that parses successfully.
  *
@@ -229,6 +262,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   try {
     await waitForConnected(client, hostPort);
     bleLog.info(`ESPHome proxy connected at ${hostPort}`);
+    logPhase1Capabilities(adapters);
 
     return await withTimeout(
       new Promise<RawReading>((resolve, reject) => {
@@ -420,6 +454,7 @@ export class ReadingWatcher {
       ];
 
       await waitForConnected(this.client, hostPort);
+      logPhase1Capabilities(this.adapters);
 
       this.onAdHandler = (ad) => this.handleAd(ad);
       this.client.on('ble', this.onAdHandler);
