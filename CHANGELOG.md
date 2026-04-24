@@ -6,8 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.10.2] - 2026-04-24
+
+### Fixed
+- **Renpho ES-26M**: the 18-byte `0x12` scale-info frame (where byte[1] is the packet length and bytes [2-7] carry the device MAC) was being misread as "byte[2] is the protocol type", yielding `proto=0xFF` and causing every subsequent handshake command to be rejected by the scale. No `0x10` weight frames were ever returned. The QN-Scale adapter now detects the long-frame format (`data.length >= 18 && data[1] === length`) and falls through to the ES-30M code path with `weightScaleFactor=10`, so the existing heuristic auto-corrects the weight divisor. The unconditional skip of `R1=R2=0` stable frames in ES-30M mode is also lifted: the ES-26M never reports impedance when the user is wearing socks, and those frames are the only stable reading available in that scenario. Contributed by [@fromport](https://github.com/fromport) ([#128](https://github.com/KristianP26/ble-scale-sync/pull/128))
+
 ### Changed
-- **ESPHome proxy**: the handler now logs a one-time Phase 1 capability summary on connect, listing which configured scale adapters are broadcast-capable (produce readings on this transport) and which are GATT-only (will time out until Phase 2 / [#116](https://github.com/KristianP26/ble-scale-sync/issues/116) ships). Users who were only seeing the generic `Timed out waiting for any recognized scale broadcast via ESPHome proxy` line now immediately see whether their scale brand is in the broadcast-capable set, instead of having to reproduce the failure twice to catch the per-MAC warn. Surfaces the Yunmai / Beurer / Mi Scale 2 / etc. mismatch reported in [#133](https://github.com/KristianP26/ble-scale-sync/issues/133)
+- **ESPHome proxy**: the handler now logs a one-time Phase 1 capability summary on connect, listing which configured scale adapters are broadcast-capable (produce readings on this transport) and which are GATT-only (will time out until Phase 2 / [#116](https://github.com/KristianP26/ble-scale-sync/issues/116) ships). Users who were only seeing the generic `Timed out waiting for any recognized scale broadcast via ESPHome proxy` line now immediately see whether their scale brand is in the broadcast-capable set, instead of having to reproduce the failure twice to catch the per-MAC warn. Surfaces the Yunmai / Beurer / Mi Scale 2 / etc. mismatch reported by [@geniusliang](https://github.com/geniusliang) in [#133](https://github.com/KristianP26/ble-scale-sync/issues/133)
+
+### Docs
+- **CONTRIBUTING.md**: project structure tree refreshed to match the current layout (HA add-on, ESPHome proxy handler, updated scale/test files)
+- **README**: contributors migrated to a GitHub-style table with inline avatars, [@fromport](https://github.com/fromport) added for the ES-26M contribution
+
+### Thanks
+- [@fromport](https://github.com/fromport) for diagnosing and fixing the ES-26M handshake end to end, including the heuristic weight-divisor path
+- [@geniusliang](https://github.com/geniusliang) for the detailed ESPHome proxy repro that led to the capability-summary UX improvement
 
 ## [1.10.1] - 2026-04-22
 
