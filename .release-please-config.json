@@ -10,6 +10,19 @@
       "bump-patch-for-minor-pre-major": false,
       "draft": false,
       "prerelease": false,
+      "changelog-sections": [
+        { "type": "feat", "section": "Added", "hidden": false },
+        { "type": "fix", "section": "Fixed", "hidden": false },
+        { "type": "perf", "section": "Changed", "hidden": false },
+        { "type": "revert", "section": "Fixed", "hidden": false },
+        { "type": "docs", "section": "Docs", "hidden": false },
+        { "type": "refactor", "section": "Changed", "hidden": true },
+        { "type": "chore", "section": "Miscellaneous", "hidden": true },
+        { "type": "ci", "section": "Miscellaneous", "hidden": true },
+        { "type": "test", "section": "Miscellaneous", "hidden": true },
+        { "type": "build", "section": "Miscellaneous", "hidden": true },
+        { "type": "style", "section": "Miscellaneous", "hidden": true }
+      ],
       "extra-files": [
         {
           "type": "yaml",

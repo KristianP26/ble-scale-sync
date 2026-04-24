@@ -287,7 +287,8 @@ To add a new export target:
   - Append `!` (for example `feat(ble)!:`) or include a `BREAKING CHANGE:` footer to bump the major version
   - Scopes commonly used in this repo: `ble`, `scales`, `exporters`, `wizard`, `config`, `docker`, `ci`, `docs`, plus individual adapter names
 
-  Non-conforming commit messages are silently ignored by release-please and will not appear in the generated changelog. When in doubt, look at `git log --oneline` for recent examples.
+  > [!IMPORTANT]
+  > Non-conforming commit messages are silently ignored by release-please and will not appear in the generated changelog. When in doubt, look at `git log --oneline` for recent examples.
 
 ## Releases
 
