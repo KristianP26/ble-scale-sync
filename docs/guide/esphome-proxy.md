@@ -106,6 +106,7 @@ volumes:
 
 Phase 1 only handles broadcast scales. Behavior depends on the mode:
 
+- **On connect**, the handler logs a one-time capability summary naming every configured adapter: which are broadcast-capable (produce readings on this transport) and which are GATT-only (will not). If your scale brand is in the GATT-only list, that's why nothing gets read, switch handler instead of waiting for a 60 s timeout.
 - **Single-shot (`npm start`)** fails fast with a descriptive error when a GATT-only scale is matched, so misconfigured setups surface immediately.
 - **Continuous (`CONTINUOUS_MODE=true`)** logs a one-time warning per device and keeps running, so a GATT scale passing through range does not crash a multi-scale deployment.
 

@@ -567,4 +567,150 @@ describe('QnScaleAdapter', () => {
       assertPayloadRanges(payload);
     });
   });
+  // ── Tests to append inside the describe('QnScaleAdapter', () => { block ──
+
+  describe('ES-26M long-frame variant', () => {
+    /** Build an 18-byte 0x12 frame matching the ES-26M format. */
+    function makeLongScaleInfo(): Buffer {
+      // Real captured frame: 12 12 ff 0f ac 14 00 04 ff 0f 07 0a 00 00 05 9f 30 e9
+      return Buffer.from([
+        0x12, 0x12, 0xff, 0x0f, 0xac, 0x14, 0x00, 0x04, 0xff, 0x0f, 0x07, 0x0a, 0x00, 0x00, 0x05,
+        0x9f, 0x30, 0xe9,
+      ]);
+    }
+
+    /** Build an ES-30M-format 0x10 weight frame. */
+    function makeWeightFrame(weightRaw: number, state: number, r1: number, r2: number): Buffer {
+      const buf = Buffer.alloc(14);
+      buf[0] = 0x10;
+      buf[1] = 0x0e;
+      buf[2] = 0xff;
+      buf[3] = 0x01;
+      buf[4] = state;
+      buf.writeUInt16BE(weightRaw, 5);
+      buf.writeUInt16BE(r1, 7);
+      buf.writeUInt16BE(r2, 9);
+      return buf;
+    }
+
+    it('18B 0x12 frame sets isLongFrameVariant, proto=0x00, factor=10', () => {
+      const adapter = makeAdapter();
+      const result = adapter.parseNotification(makeLongScaleInfo());
+      expect(result).toBeNull(); // info frames return null
+
+      // Verify factor=10 by parsing a weight frame: rawWeight=9790,
+      // 9790/10=979 >=250 → heuristic tries /100 → 97.90 kg
+      const weightBuf = makeWeightFrame(9790, 0x02, 501, 499);
+      const reading = adapter.parseNotification(weightBuf);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBeCloseTo(97.9);
+      expect(reading!.impedance).toBe(501);
+    });
+
+    it('classic 11B 0x12 frame still reads proto from data[2]', () => {
+      const adapter = makeAdapter();
+      const infoBuf = Buffer.alloc(11);
+      infoBuf[0] = 0x12;
+      infoBuf[2] = 0xab; // protocol type
+      infoBuf[10] = 1; // weightScaleFactor = 100
+
+      adapter.parseNotification(infoBuf);
+
+      // Verify classic behavior: factor=100, weight at [3-4]
+      const dataBuf = Buffer.alloc(10);
+      dataBuf[0] = 0x10;
+      dataBuf.writeUInt16BE(7500, 3); // 75.00 kg
+      dataBuf[5] = 1; // stable
+      dataBuf.writeUInt16BE(500, 6);
+      dataBuf.writeUInt16BE(490, 8);
+
+      const reading = adapter.parseNotification(dataBuf);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBe(75);
+    });
+
+    it('long-frame: barefoot reading with R1>0 returns impedance', () => {
+      const adapter = makeAdapter();
+      adapter.parseNotification(makeLongScaleInfo());
+
+      // Actual captured ES-26M barefoot frame:
+      // 10 0e ff 01 02 26 39 01 f5 01 f3 01 34 9e
+      const buf = Buffer.from([
+        0x10, 0x0e, 0xff, 0x01, 0x02, 0x26, 0x39, 0x01, 0xf5, 0x01, 0xf3, 0x01, 0x34, 0x9e,
+      ]);
+
+      const reading = adapter.parseNotification(buf);
+      expect(reading).not.toBeNull();
+      // 0x2639 = 9785, /10=978.5 >=250, heuristic /100 = 97.85
+      expect(reading!.weight).toBeCloseTo(97.85);
+      expect(reading!.impedance).toBe(501); // R1 = 0x01F5
+    });
+
+    it('long-frame: first stable R1=R2=0 is skipped (grace period)', () => {
+      const adapter = makeAdapter();
+      adapter.parseNotification(makeLongScaleInfo());
+
+      // First stable frame with no impedance — should be skipped
+      const buf = makeWeightFrame(9790, 0x02, 0, 0);
+      expect(adapter.parseNotification(buf)).toBeNull();
+    });
+
+    it('long-frame: R1=R2=0 accepted after grace period (socks path)', () => {
+      const adapter = makeAdapter();
+      adapter.parseNotification(makeLongScaleInfo());
+
+      const buf = makeWeightFrame(9790, 0x02, 0, 0);
+
+      // First stable R1=R2=0 — skipped, starts grace timer
+      expect(adapter.parseNotification(buf)).toBeNull();
+
+      // Simulate grace period elapsed by manipulating internal state.
+      // Access private field for testing — the grace period is 1500ms.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (adapter as any).firstStableNoImpedanceAt = Date.now() - 2000;
+
+      // Now it should be accepted
+      const reading = adapter.parseNotification(buf);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBeCloseTo(97.9);
+      expect(reading!.impedance).toBe(0);
+    });
+
+    it('long-frame: impedance frame within grace period supersedes', () => {
+      const adapter = makeAdapter();
+      adapter.parseNotification(makeLongScaleInfo());
+
+      // First stable R1=R2=0 — skipped
+      const noImpBuf = makeWeightFrame(9790, 0x02, 0, 0);
+      expect(adapter.parseNotification(noImpBuf)).toBeNull();
+
+      // Impedance frame arrives within grace period — accepted immediately
+      const impBuf = makeWeightFrame(9790, 0x02, 501, 499);
+      const reading = adapter.parseNotification(impBuf);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBeCloseTo(97.9);
+      expect(reading!.impedance).toBe(501);
+    });
+
+    it('classic ES-30M: stable R1=R2=0 is still skipped (regression guard)', () => {
+      const adapter = makeAdapter();
+      // Classic 11-byte 0x12 frame → isLongFrameVariant=false
+      const infoBuf = Buffer.alloc(11);
+      infoBuf[0] = 0x12;
+      infoBuf[2] = 0xff;
+      infoBuf[10] = 0; // factor=10
+      adapter.parseNotification(infoBuf);
+
+      // Stable frame with R1=R2=0
+      const buf = makeWeightFrame(600, 0x02, 0, 0);
+      expect(adapter.parseNotification(buf)).toBeNull();
+
+      // Next frame with impedance should be accepted
+      const impBuf = makeWeightFrame(600, 0x02, 509, 507);
+      const reading = adapter.parseNotification(impBuf);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBe(60);
+      expect(reading!.impedance).toBe(509);
+    });
+  });
 });

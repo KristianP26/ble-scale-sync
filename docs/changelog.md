@@ -9,7 +9,21 @@ All notable changes to this project are documented here. Format based on [Keep a
 
 ## Unreleased {#unreleased}
 
-## v1.10.1 <Badge type="tip" text="latest" /> {#v1-10-1}
+## v1.10.2 <Badge type="tip" text="latest" /> {#v1-10-2}
+
+_2026-04-24_
+
+### Fixed
+- **Renpho ES-26M**: the 18-byte `0x12` scale-info frame (where byte[1] is the packet length and bytes [2-7] carry the device MAC) was being misread as "byte[2] is the protocol type", yielding `proto=0xFF` and causing every subsequent handshake command to be rejected by the scale. No `0x10` weight frames were ever returned. The QN-Scale adapter now detects the long-frame format and falls through to the ES-30M code path with `weightScaleFactor=10`, so the existing heuristic auto-corrects the weight divisor. The unconditional skip of `R1=R2=0` stable frames in ES-30M mode is also lifted: the ES-26M never reports impedance when the user is wearing socks, and those frames are the only stable reading available in that scenario. Contributed by [@fromport](https://github.com/fromport) ([#128](https://github.com/KristianP26/ble-scale-sync/pull/128))
+
+### Changed
+- **ESPHome proxy**: the handler now logs a one-time Phase 1 capability summary on connect, listing which configured adapters are broadcast-capable (produce readings on this transport) and which are GATT-only (will time out until Phase 2 / [#116](https://github.com/KristianP26/ble-scale-sync/issues/116) ships). Users who were only seeing the generic `Timed out waiting for any recognized scale broadcast via ESPHome proxy` line now immediately see whether their scale brand is in the broadcast-capable set, instead of having to reproduce the failure twice to catch the per-MAC warn ([#133](https://github.com/KristianP26/ble-scale-sync/issues/133))
+
+### Docs
+- **CONTRIBUTING.md**: project structure tree refreshed to match the current layout
+- **README**: contributors migrated to a GitHub-style table with inline avatars, [@fromport](https://github.com/fromport) added
+
+## v1.10.1 {#v1-10-1}
 
 _2026-04-22_
 
