@@ -186,6 +186,93 @@ describe('_internals.extractBytes', () => {
   });
 });
 
+describe('Phase 1 capability summary', () => {
+  beforeEach(() => {
+    mockClient = new MockEsphomeClient();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('scanAndReadRaw warns about GATT-only adapters before the broadcast wait starts', async () => {
+    const broadcast = makeBroadcastAdapter();
+    const gattOnly = makeGattOnlyAdapter();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy.js');
+
+    const promise = scanAndReadRaw({
+      adapters: [broadcast, gattOnly],
+      profile,
+      esphomeProxy: config,
+      bleHandler: 'esphome-proxy',
+    });
+
+    await mockClient.waitForListener('ble');
+
+    const summary = warnSpy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((s) => /broadcast-only in Phase 1/.test(s));
+    expect(summary.length).toBe(1);
+    expect(summary[0]).toMatch(/Broadcast-capable adapters: MockBroadcast/);
+    expect(summary[0]).toMatch(/GATT-only adapters .*: MockGattOnly/);
+    expect(summary[0]).toMatch(/Phase 2 tracking: #116/);
+
+    // Unblock the pending promise with a matching advertisement
+    mockClient.pushBle({
+      address: 0x112233445566,
+      name: 'MyScale',
+      rssi: -60,
+      manufacturerDataList: [{ uuid: '0xee57', legacyDataList: [0x01, 0x02], data: '' }],
+    });
+    await promise;
+    warnSpy.mockRestore();
+  });
+
+  it('ReadingWatcher.start warns once with the Phase 1 capability summary', async () => {
+    const broadcast = makeBroadcastAdapter();
+    const gattOnly = makeGattOnlyAdapter();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { ReadingWatcher } = await import('../../src/ble/handler-esphome-proxy.js');
+    const watcher = new ReadingWatcher(config, [broadcast, gattOnly]);
+
+    const startPromise = watcher.start();
+    await mockClient.waitForListener('ble');
+    await startPromise;
+
+    const summary = warnSpy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((s) => /broadcast-only in Phase 1/.test(s));
+    expect(summary.length).toBe(1);
+    expect(summary[0]).toMatch(/MockBroadcast/);
+    expect(summary[0]).toMatch(/MockGattOnly/);
+
+    warnSpy.mockRestore();
+    await watcher.stop();
+  });
+
+  it('omits GATT section when every configured adapter is broadcast-capable', async () => {
+    const broadcast = makeBroadcastAdapter();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { ReadingWatcher } = await import('../../src/ble/handler-esphome-proxy.js');
+    const watcher = new ReadingWatcher(config, [broadcast]);
+
+    const startPromise = watcher.start();
+    await mockClient.waitForListener('ble');
+    await startPromise;
+
+    const summary = warnSpy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((s) => /broadcast-only in Phase 1/.test(s));
+    expect(summary.length).toBe(1);
+    expect(summary[0]).toMatch(/Broadcast-capable adapters: MockBroadcast/);
+    expect(summary[0]).not.toMatch(/GATT-only adapters/);
+
+    warnSpy.mockRestore();
+    await watcher.stop();
+  });
+});
+
 describe('scanAndReadRaw', () => {
   beforeEach(() => {
     mockClient = new MockEsphomeClient();
