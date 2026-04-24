@@ -1,0 +1,32 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      # Token strategy:
+      # - `RELEASE_PLEASE_TOKEN` (optional PAT with `repo` + `workflow` scopes)
+      #   lets the release PR trigger ci.yml and lets `release: published`
+      #   trigger docker.yml, because events raised by a user-owned token
+      #   chain into other workflows. Without it, GITHUB_TOKEN still creates
+      #   PRs and releases, but GitHub suppresses downstream workflow runs
+      #   (a documented limitation of the default token).
+      # - Falls back to GITHUB_TOKEN so the workflow keeps working out of
+      #   the box; maintainer can then re-run ci.yml / trigger docker.yml
+      #   manually until the PAT is configured.
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          config-file: .release-please-config.json
+          manifest-file: .release-please-manifest.json
