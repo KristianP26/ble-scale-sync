@@ -64,7 +64,23 @@ describe('MiScale2Adapter', () => {
       expect(adapter.matches(p)).toBe(true);
     });
 
-    it('does not match unrelated name', () => {
+    it('matches via serviceUuids BCS UUID when name is absent', () => {
+      const adapter = makeAdapter();
+      const p = mockPeripheral('', ['0000181b00001000800000805f9b34fb']);
+      expect(adapter.matches(p)).toBe(true);
+    });
+
+    it('matches via serviceData BCS UUID when name is absent (ESPHome proxy path)', () => {
+      const adapter = makeAdapter();
+      const p: import('../../src/interfaces/scale-adapter.js').BleDeviceInfo = {
+        localName: '',
+        serviceUuids: [],
+        serviceData: [{ uuid: '0000181b00001000800000805f9b34fb', data: Buffer.alloc(0) }],
+      };
+      expect(adapter.matches(p)).toBe(true);
+    });
+
+    it('does not match unrelated name with no BCS UUID', () => {
       const adapter = makeAdapter();
       const p = mockPeripheral('Yunmai ISM', []);
       expect(adapter.matches(p)).toBe(false);
@@ -146,14 +162,14 @@ describe('MiScale2Adapter', () => {
       expect(adapter.isComplete({ weight: 80, impedance: 500 })).toBe(true);
     });
 
+    it('returns false when weight > 10 but impedance is 0 (weight-only frame)', () => {
+      const adapter = makeAdapter();
+      expect(adapter.isComplete({ weight: 80, impedance: 0 })).toBe(false);
+    });
+
     it('returns false when weight <= 10', () => {
       const adapter = makeAdapter();
       expect(adapter.isComplete({ weight: 5, impedance: 500 })).toBe(false);
-    });
-
-    it('returns false when impedance is 0', () => {
-      const adapter = makeAdapter();
-      expect(adapter.isComplete({ weight: 80, impedance: 0 })).toBe(false);
     });
   });
 
@@ -178,13 +194,23 @@ describe('MiScale2Adapter', () => {
       expect(reading!.impedance).toBe(500);
     });
 
+    it('parses stable frame from normalized (no-dash) UUID as passed by esphome/mqtt handlers', () => {
+      const adapter = makeAdapter();
+      const buf = makeFrame({ weightRaw: 16000, hasImpedance: true, impedanceRaw: 500 });
+      const reading = adapter.parseServiceData('0000181b00001000800000805f9b34fb', buf);
+
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBe(80);
+      expect(reading!.impedance).toBe(500);
+    });
+
     it('returns null for wrong service UUID', () => {
       const adapter = makeAdapter();
       const buf = makeFrame({ weightRaw: 16000, hasImpedance: true, impedanceRaw: 500 });
       expect(adapter.parseServiceData('180f', buf)).toBeNull();
     });
 
-    it('returns reading with impedance 0 for weight-only frame (isComplete should be false)', () => {
+    it('returns reading with impedance 0 for weight-only frame (not yet complete)', () => {
       const adapter = makeAdapter();
       const buf = makeFrame({ weightRaw: 16000, hasImpedance: false });
       const reading = adapter.parseServiceData('181b', buf);

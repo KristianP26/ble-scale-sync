@@ -21,6 +21,7 @@ import {
   DISCOVERY_TIMEOUT_MS,
   DISCOVERY_POLL_MS,
   GATT_DISCOVERY_TIMEOUT_MS,
+  IMPEDANCE_GRACE_MS,
 } from './types.js';
 
 /** Convert Noble's raw manufacturer data buffer to {id, data} format. */
@@ -300,6 +301,9 @@ function broadcastScan(
   return new Promise((resolve, reject) => {
     const targetAddr = peripheralAddress(targetPeripheral);
 
+    let graceTimer: ReturnType<typeof setTimeout> | null = null;
+    let bestWeightOnly: RawReading | null = null;
+
     const timeout = setTimeout(() => {
       cleanup();
       reject(new Error(`No stable broadcast reading within ${DISCOVERY_TIMEOUT_MS / 1000}s`));
@@ -307,6 +311,7 @@ function broadcastScan(
 
     const cleanup = () => {
       clearTimeout(timeout);
+      if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
       noble.removeListener('discover', onDiscover);
       noble.stopScanningAsync().catch(() => {});
       abortSignal?.removeEventListener('abort', onAbort);
@@ -348,6 +353,18 @@ function broadcastScan(
           `${adapter.name} broadcast frame not yet complete ` +
             `(weight=${reading.weight.toFixed(2)} kg, impedance=${reading.impedance})`,
         );
+        bestWeightOnly = { reading, adapter };
+        if (!graceTimer) {
+          graceTimer = setTimeout(() => {
+            graceTimer = null;
+            cleanup();
+            bleLog.info(
+              `Broadcast reading (weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s): ` +
+                `${bestWeightOnly!.reading.weight.toFixed(2)} kg`,
+            );
+            resolve(bestWeightOnly!);
+          }, IMPEDANCE_GRACE_MS);
+        }
         return;
       }
 

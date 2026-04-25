@@ -12,9 +12,12 @@ const CHR_MI_HISTORY = '00002a2f0000351221180009af100700';
 
 const KNOWN_PREFIXES = ['mibcs', 'mibfs', 'mi scale', 'mi_scale'];
 
-/** Short and full 128-bit forms of the Body Composition Service UUID. */
-const SVC_BODY_COMP_SHORT = '181b';
-const SVC_BODY_COMP_FULL = '0000181b-0000-1000-8000-00805f9b34fb';
+/**
+ * Body Composition Service UUID in the normalized 32-char no-dash form.
+ * Handlers may pass UUIDs in short ('181b'), dashed, or already-normalized form —
+ * we strip dashes and expand short UUIDs before comparing.
+ */
+const SVC_BODY_COMP = '0000181b00001000800000805f9b34fb';
 
 /**
  * Adapter for the Xiaomi Mi Body Composition Scale 2.
@@ -45,7 +48,13 @@ export class MiScale2Adapter implements ScaleAdapter {
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toUpperCase();
-    return KNOWN_PREFIXES.some((p) => name.startsWith(p.toUpperCase()));
+    if (KNOWN_PREFIXES.some((p) => name.startsWith(p.toUpperCase()))) return true;
+    // ESPHome / MQTT proxy advertisements may omit the BLE local name. The scale
+    // always includes 0x181B as a service-data UUID (AD type 0x16), which lands in
+    // serviceData rather than serviceUuids — check both.
+    const hasBcs = (u: string) => u === SVC_BODY_COMP;
+    return (device.serviceUuids ?? []).some(hasBcs) ||
+           (device.serviceData ?? []).some((sd) => hasBcs(sd.uuid));
   }
 
   /**
@@ -99,8 +108,9 @@ export class MiScale2Adapter implements ScaleAdapter {
   }
 
   parseServiceData(uuid: string, data: Buffer): ScaleReading | null {
-    const norm = uuid.toLowerCase().replace(/[{}]/g, '');
-    if (norm !== SVC_BODY_COMP_SHORT && norm !== SVC_BODY_COMP_FULL) return null;
+    const stripped = uuid.toLowerCase().replace(/[-{}]/g, '');
+    const norm = stripped.length === 4 ? `0000${stripped}00001000800000805f9b34fb` : stripped;
+    if (norm !== SVC_BODY_COMP) return null;
     return this.parseFrame(data);
   }
 

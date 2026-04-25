@@ -85,9 +85,19 @@ Effects:
 - **Metabolic Age** — capped at actual age minus 5
 - **Deurenberg** — result multiplied by 0.85
 
-## Scale-Provided Values
+## Scale-Specific Algorithms
 
-Some scales (Xiaomi Mi Scale 2, Yunmai) compute their own body composition on-device. When available, those values are used directly for fat, water, muscle, and bone. The remaining metrics (BMI, BMR, metabolic age, visceral fat, physique rating) are always calculated by BLE Scale Sync.
+### Xiaomi Mi Scale 2 (MIBCS / MIBFS / XMTZC05HM)
+
+The Mi Scale 2 broadcasts **raw impedance** in its BLE advertisement (service data UUID 0x181B). BLE Scale Sync reads the impedance and computes body composition using the Mi Scale algorithm — the same formulas used by the official Mi Fit / Zepp Life app, originally reverse-engineered by the [openScale](https://github.com/oliexdev/openScale) project. Results match what the scale's own display shows.
+
+The adapter uses passive BLE advertisement decoding — no pairing or GATT connection is required. This works on all transports including the ESPHome proxy.
+
+If impedance is not present in a frame (e.g. the user stepped off before the BIA measurement completed), weight is still reported and body fat is estimated using the Deurenberg BMI fallback. All other body composition metrics require impedance.
+
+### Yunmai
+
+The Yunmai scale computes body composition on-device and transmits the pre-calculated fat, water, muscle, and bone values in its BLE notifications. BLE Scale Sync uses those values directly; the remaining metrics (BMI, BMR, metabolic age, visceral fat, physique rating) are calculated locally.
 
 ## References
 

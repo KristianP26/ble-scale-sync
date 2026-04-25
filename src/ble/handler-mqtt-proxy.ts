@@ -9,7 +9,7 @@ import type { MqttProxyConfig } from '../config/schema.js';
 import type { ScanOptions, ScanResult } from './types.js';
 import type { BleChar, BleDevice, RawReading } from './shared.js';
 import { waitForRawReading } from './shared.js';
-import { bleLog, normalizeUuid, withTimeout, errMsg } from './types.js';
+import { bleLog, normalizeUuid, withTimeout, errMsg, IMPEDANCE_GRACE_MS } from './types.js';
 import { AsyncQueue } from './async-queue.js';
 
 // Re-exported for backward compatibility with earlier imports.
@@ -425,6 +425,8 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       : scanResults;
 
     // Find a matching adapter
+    let weightOnlyFallback: RawReading | null = null;
+
     for (const entry of candidates) {
       const info = toBleDeviceInfo(entry);
       const adapter = adapters.find((a) => a.matches(info));
@@ -444,15 +446,19 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
             if (reading) break;
           }
         }
-        if (reading) {
+        if (reading && adapter.isComplete(reading)) {
           bleLog.info(`Broadcast reading: ${reading.weight} kg`);
           registerScaleMac(config, entry.address).catch(() => {});
           return { reading, adapter };
         }
+        // Save weight-only as a fallback in case no impedance-bearing frame is found.
+        if (reading && !weightOnlyFallback) {
+          weightOnlyFallback = { reading, adapter };
+        }
       }
 
       // Broadcast-capable or broadcast-only adapters — wait for next scan with data
-      if (adapter.parseBroadcast || adapter.parseServiceData || !adapter.charNotifyUuid) {
+      if (weightOnlyFallback || adapter.parseBroadcast || adapter.parseServiceData || !adapter.charNotifyUuid) {
         bleLog.debug(`${adapter.name} supports broadcast, waiting for stable reading...`);
         continue;
       }
@@ -481,6 +487,12 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         device.cleanup();
         await mqttGattDisconnect(client, t).catch(() => {});
       }
+    }
+
+    if (weightOnlyFallback) {
+      bleLog.info(`Broadcast reading (weight only, impedance not yet available): ${weightOnlyFallback.reading.weight} kg`);
+      registerScaleMac(config, candidates[0]?.address ?? '').catch(() => {});
+      return weightOnlyFallback;
     }
 
     throw new Error(
@@ -523,6 +535,8 @@ export class ReadingWatcher {
   private dedup = new Map<string, number>();
   private gattInProgress = false;
   private gattStartedAt = 0;
+  private graceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private graceReadings = new Map<string, RawReading>();
   private _client: MqttClient | null = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private _lifecycleHandlers: Array<{ event: string; handler: (...args: any[]) => void }> = [];
@@ -609,7 +623,11 @@ export class ReadingWatcher {
                 if (reading) break;
               }
             }
-            if (reading) {
+            if (reading && adapter.isComplete(reading)) {
+              // Cancel any pending grace timer — we got the full reading.
+              const gt = this.graceTimers.get(entry.address);
+              if (gt) { clearTimeout(gt); this.graceTimers.delete(entry.address); this.graceReadings.delete(entry.address); }
+
               // Dedup check
               const key = `${entry.address}:${reading.weight.toFixed(1)}`;
               const now = Date.now();
@@ -625,6 +643,27 @@ export class ReadingWatcher {
               bleLog.info(`Broadcast reading: ${reading.weight} kg`);
               registerScaleMac(this.config, entry.address).catch(() => {});
               this.queue.push({ reading, adapter });
+              continue;
+            }
+
+            // Partial frame — start grace timer for impedance to arrive.
+            if (reading) {
+              this.graceReadings.set(entry.address, { reading, adapter });
+              if (!this.graceTimers.has(entry.address)) {
+                const addr = entry.address;
+                this.graceTimers.set(addr, setTimeout(() => {
+                  this.graceTimers.delete(addr);
+                  const gr = this.graceReadings.get(addr);
+                  this.graceReadings.delete(addr);
+                  if (!gr) return;
+                  bleLog.info(
+                    `Matched: ${gr.adapter.name} (${addr}) — weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
+                  );
+                  bleLog.info(`Broadcast reading: ${gr.reading.weight} kg`);
+                  registerScaleMac(this.config, addr).catch(() => {});
+                  this.queue.push(gr);
+                }, IMPEDANCE_GRACE_MS));
+              }
               continue;
             }
           }
@@ -648,6 +687,10 @@ export class ReadingWatcher {
   /** Stop the watcher — remove listeners and unsubscribe from topics. */
   async stop(): Promise<void> {
     if (!this.started || !this._client) return;
+
+    for (const t of this.graceTimers.values()) clearTimeout(t);
+    this.graceTimers.clear();
+    this.graceReadings.clear();
 
     // Remove message handler
     if (this._messageHandler) {

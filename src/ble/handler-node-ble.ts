@@ -19,6 +19,7 @@ import {
   GATT_DISCOVERY_TIMEOUT_MS,
   CHAR_DISCOVERY_MAX_RETRIES,
   CHAR_DISCOVERY_RETRY_DELAY_MS,
+  IMPEDANCE_GRACE_MS,
 } from './types.js';
 
 type Device = NodeBle.Device;
@@ -448,6 +449,8 @@ async function broadcastScanNodeBle(
 
   return new Promise<RawReading>((resolve, reject) => {
     let done = false;
+    let graceTimer: ReturnType<typeof setTimeout> | null = null;
+    let bestWeightOnly: RawReading | null = null;
 
     const finish = (result: RawReading) => {
       if (done) return;
@@ -464,26 +467,23 @@ async function broadcastScanNodeBle(
     };
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let propsIface: any = null;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let onPropsChanged: ((...args: any[]) => void) | null = null;
+    let onPropsChanged: ((changedProps: Record<string, unknown>) => void) | null = null;
 
     const cleanup = () => {
+      if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
       abortSignal?.removeEventListener('abort', onAbort);
-      if (propsIface && onPropsChanged) {
-        try { propsIface.removeListener('PropertiesChanged', onPropsChanged); } catch {}
+      if (onPropsChanged) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (device as any).helper.removeListener('PropertiesChanged', onPropsChanged);
+        } catch {}
+        onPropsChanged = null;
       }
     };
 
     const onAbort = () =>
       fail(abortSignal!.reason ?? new DOMException('Aborted', 'AbortError'));
     abortSignal?.addEventListener('abort', onAbort, { once: true });
-
-    // If the scale broadcasts stable weight frames but never adds impedance
-    // (some firmware variants), resolve after this grace period.
-    const IMPEDANCE_GRACE_MS = 5000;
-    let bestWeightOnly: ScaleReading | null = null;
-    let stableAt: number | null = null;
 
     /** Try to parse ServiceData entries and resolve if a complete reading is found. */
     const tryServiceData = (sd: unknown): boolean => {
@@ -504,75 +504,47 @@ async function broadcastScanNodeBle(
         if (onLiveData) onLiveData(reading);
 
         if (adapter.isComplete(reading)) {
-          bleLog.info(`Broadcast reading: ${reading.weight.toFixed(2)} kg (with impedance)`);
+          bleLog.info(`Broadcast reading: ${reading.weight.toFixed(2)} kg`);
           finish({ reading, adapter });
           return true;
         }
 
-        // Stable weight-only frame: remember as fallback
-        if (reading.weight > 10) {
-          if (!stableAt) {
-            stableAt = Date.now();
-            bleLog.debug(
-              `${adapter.name}: stable weight=${reading.weight.toFixed(2)} kg, ` +
-                `waiting up to ${IMPEDANCE_GRACE_MS / 1000}s for impedance`,
-            );
-          }
-          bestWeightOnly = reading;
-        } else {
-          bleLog.debug(
-            `${adapter.name} frame: weight=${reading.weight.toFixed(2)} kg, ` +
-              `impedance=${reading.impedance} (waiting for complete reading)`,
-          );
-        }
-      }
-
-      // Resolve with weight-only once grace period has elapsed
-      if (stableAt && Date.now() - stableAt >= IMPEDANCE_GRACE_MS && bestWeightOnly) {
-        bleLog.info(
-          `Broadcast reading: ${bestWeightOnly.weight.toFixed(2)} kg (no impedance within ${IMPEDANCE_GRACE_MS / 1000}s)`,
+        bleLog.debug(
+          `${adapter.name} broadcast frame not yet complete ` +
+            `(weight=${reading.weight.toFixed(2)} kg, impedance=${reading.impedance})`,
         );
-        finish({ reading: bestWeightOnly, adapter });
-        return true;
+        bestWeightOnly = { reading, adapter };
+        if (!graceTimer) {
+          graceTimer = setTimeout(() => {
+            graceTimer = null;
+            bleLog.info(
+              `Broadcast reading (weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s): ` +
+                `${bestWeightOnly!.reading.weight.toFixed(2)} kg`,
+            );
+            finish(bestWeightOnly!);
+          }, IMPEDANCE_GRACE_MS);
+        }
       }
 
       return false;
     };
 
-    // Subscribe to PropertiesChanged for real-time ServiceData updates.
+    // Subscribe to PropertiesChanged via node-ble's BusHelper, which re-emits
+    // the signal directly (Device is constructed with usePropsEvents: true).
     // This fires on every advertisement when DuplicateData=true is set above.
-    (async () => {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const deviceHelper = (device as any).helper;
-        // node-ble's helper exposes the dbus-next bus and the object path
-        const bus = deviceHelper.bus ?? deviceHelper._bus;
-        const devicePath =
-          deviceHelper.object ??
-          deviceHelper._obj ??
-          // derive path from adapter path + MAC
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          `${(btAdapter as any).helper.object}/dev_${formatMac(mac).replace(/:/g, '_')}`;
-
-        if (!bus) {
-          bleLog.debug('D-Bus bus not accessible from helper; relying on poll fallback');
-          return;
-        }
-
-        const proxyObj = await bus.getProxyObject('org.bluez', devicePath);
-        propsIface = proxyObj.getInterface('org.freedesktop.DBus.Properties');
-
-        onPropsChanged = (ifaceName: string, changed: Record<string, unknown>) => {
-          if (done || ifaceName !== 'org.bluez.Device1') return;
-          if (changed.ServiceData) tryServiceData(changed.ServiceData);
-        };
-
-        propsIface.on('PropertiesChanged', onPropsChanged);
-        bleLog.debug('Subscribed to Device1 PropertiesChanged for ServiceData');
-      } catch (err: unknown) {
-        bleLog.debug(`PropertiesChanged subscription failed: ${errMsg(err)} (poll fallback active)`);
-      }
-    })();
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const deviceHelper = (device as any).helper;
+      onPropsChanged = (changedProps: Record<string, unknown>) => {
+        if (done) return;
+        if (changedProps.ServiceData) tryServiceData(changedProps.ServiceData);
+      };
+      deviceHelper.on('PropertiesChanged', onPropsChanged);
+      bleLog.debug('Subscribed to Device1 PropertiesChanged for ServiceData');
+    } catch (err: unknown) {
+      bleLog.debug(`PropertiesChanged subscription failed: ${errMsg(err)} (poll fallback active)`);
+      onPropsChanged = null;
+    }
 
     // Poll ServiceData every 500 ms as a fallback (and for first-read before
     // the PropertiesChanged subscription is established).
