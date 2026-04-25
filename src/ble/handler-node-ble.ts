@@ -466,7 +466,6 @@ async function broadcastScanNodeBle(
       reject(err);
     };
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let onPropsChanged: ((changedProps: Record<string, unknown>) => void) | null = null;
 
     const cleanup = () => {
