@@ -1,5 +1,5 @@
 import NodeBle from 'node-ble';
-import type { ScaleAdapter, BleDeviceInfo, BodyComposition } from '../interfaces/scale-adapter.js';
+import type { ScaleAdapter, ScaleReading, BleDeviceInfo, BodyComposition } from '../interfaces/scale-adapter.js';
 import type { ScanOptions, ScanResult } from './types.js';
 import type { BleChar, BleDevice, RawReading } from './shared.js';
 import { waitForRawReading, findMissingCharacteristics } from './shared.js';
@@ -383,6 +383,224 @@ async function buildCharMap(gatt: NodeBle.GattServer): Promise<Map<string, BleCh
   return charMap;
 }
 
+// ─── Broadcast / passive scan (service-data advertisement decoding) ───────────
+
+/** Extract a Buffer from a D-Bus value that may be a Variant wrapper, Buffer, Uint8Array, or number[]. */
+function extractDbusBytes(val: unknown): Buffer | null {
+  if (!val) return null;
+  // dbus-next wraps dict values in Variant objects — unwrap .value if present
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const inner = (val as any)?.value ?? val;
+  if (Buffer.isBuffer(inner)) return inner;
+  if (inner instanceof Uint8Array) return Buffer.from(inner);
+  if (Array.isArray(inner) && (inner as unknown[]).every((b) => typeof b === 'number'))
+    return Buffer.from(inner as number[]);
+  // dbus-next serialises Buffer values to JSON as {type:"Buffer",data:[...]}
+  // (standard Node.js Buffer.toJSON() format)
+  if (
+    typeof inner === 'object' &&
+    inner !== null &&
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (inner as any).type === 'Buffer' &&
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    Array.isArray((inner as any).data)
+  ) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return Buffer.from((inner as any).data as number[]);
+  }
+  return null;
+}
+
+/**
+ * Read weight + impedance from BLE service-data advertisements without connecting.
+ *
+ * Sets DuplicateData=true in the BlueZ discovery filter so every advertisement
+ * triggers a PropertiesChanged signal, then subscribes to that signal on the
+ * Device1 D-Bus object. Falls back to polling the ServiceData property every
+ * 500 ms if signal subscription fails.
+ */
+async function broadcastScanNodeBle(
+  adapter: ScaleAdapter,
+  btAdapter: Adapter,
+  device: Device,
+  mac: string,
+  opts: { abortSignal?: AbortSignal; onLiveData?: (r: ScaleReading) => void },
+): Promise<RawReading> {
+  const { abortSignal, onLiveData } = opts;
+
+  // Tell BlueZ to report duplicate advertisements so ServiceData is refreshed
+  // on every packet from the scale, not just on first discovery.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { Variant } = (await import('dbus-next')) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const adapterHelper = (btAdapter as any).helper;
+    await adapterHelper.callMethod('SetDiscoveryFilter', {
+      Transport: new Variant('s', 'le'),
+      DuplicateData: new Variant('b', true),
+    });
+    bleLog.debug('Discovery filter: DuplicateData=true');
+  } catch (err: unknown) {
+    bleLog.debug(`SetDiscoveryFilter: ${errMsg(err)} (non-fatal, will poll)`);
+  }
+
+  bleLog.info('Adapter prefers passive mode. Listening for broadcast weight data. Step on the scale.');
+
+  return new Promise<RawReading>((resolve, reject) => {
+    let done = false;
+
+    const finish = (result: RawReading) => {
+      if (done) return;
+      done = true;
+      cleanup();
+      resolve(result);
+    };
+
+    const fail = (err: Error) => {
+      if (done) return;
+      done = true;
+      cleanup();
+      reject(err);
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let propsIface: any = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let onPropsChanged: ((...args: any[]) => void) | null = null;
+
+    const cleanup = () => {
+      abortSignal?.removeEventListener('abort', onAbort);
+      if (propsIface && onPropsChanged) {
+        try { propsIface.removeListener('PropertiesChanged', onPropsChanged); } catch {}
+      }
+    };
+
+    const onAbort = () =>
+      fail(abortSignal!.reason ?? new DOMException('Aborted', 'AbortError'));
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
+
+    // If the scale broadcasts stable weight frames but never adds impedance
+    // (some firmware variants), resolve after this grace period.
+    const IMPEDANCE_GRACE_MS = 5000;
+    let bestWeightOnly: ScaleReading | null = null;
+    let stableAt: number | null = null;
+
+    /** Try to parse ServiceData entries and resolve if a complete reading is found. */
+    const tryServiceData = (sd: unknown): boolean => {
+      if (!sd || typeof sd !== 'object') return false;
+
+      const entries: Iterable<[unknown, unknown]> =
+        sd instanceof Map
+          ? (sd as Map<unknown, unknown>).entries()
+          : Object.entries(sd as Record<string, unknown>);
+
+      for (const [uuid, val] of entries) {
+        const buf = extractDbusBytes(val);
+        if (!buf) continue;
+
+        const reading = adapter.parseServiceData!(String(uuid), buf);
+        if (!reading) continue;
+
+        if (onLiveData) onLiveData(reading);
+
+        if (adapter.isComplete(reading)) {
+          bleLog.info(`Broadcast reading: ${reading.weight.toFixed(2)} kg (with impedance)`);
+          finish({ reading, adapter });
+          return true;
+        }
+
+        // Stable weight-only frame: remember as fallback
+        if (reading.weight > 10) {
+          if (!stableAt) {
+            stableAt = Date.now();
+            bleLog.debug(
+              `${adapter.name}: stable weight=${reading.weight.toFixed(2)} kg, ` +
+                `waiting up to ${IMPEDANCE_GRACE_MS / 1000}s for impedance`,
+            );
+          }
+          bestWeightOnly = reading;
+        } else {
+          bleLog.debug(
+            `${adapter.name} frame: weight=${reading.weight.toFixed(2)} kg, ` +
+              `impedance=${reading.impedance} (waiting for complete reading)`,
+          );
+        }
+      }
+
+      // Resolve with weight-only once grace period has elapsed
+      if (stableAt && Date.now() - stableAt >= IMPEDANCE_GRACE_MS && bestWeightOnly) {
+        bleLog.info(
+          `Broadcast reading: ${bestWeightOnly.weight.toFixed(2)} kg (no impedance within ${IMPEDANCE_GRACE_MS / 1000}s)`,
+        );
+        finish({ reading: bestWeightOnly, adapter });
+        return true;
+      }
+
+      return false;
+    };
+
+    // Subscribe to PropertiesChanged for real-time ServiceData updates.
+    // This fires on every advertisement when DuplicateData=true is set above.
+    (async () => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const deviceHelper = (device as any).helper;
+        // node-ble's helper exposes the dbus-next bus and the object path
+        const bus = deviceHelper.bus ?? deviceHelper._bus;
+        const devicePath =
+          deviceHelper.object ??
+          deviceHelper._obj ??
+          // derive path from adapter path + MAC
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          `${(btAdapter as any).helper.object}/dev_${formatMac(mac).replace(/:/g, '_')}`;
+
+        if (!bus) {
+          bleLog.debug('D-Bus bus not accessible from helper; relying on poll fallback');
+          return;
+        }
+
+        const proxyObj = await bus.getProxyObject('org.bluez', devicePath);
+        propsIface = proxyObj.getInterface('org.freedesktop.DBus.Properties');
+
+        onPropsChanged = (ifaceName: string, changed: Record<string, unknown>) => {
+          if (done || ifaceName !== 'org.bluez.Device1') return;
+          if (changed.ServiceData) tryServiceData(changed.ServiceData);
+        };
+
+        propsIface.on('PropertiesChanged', onPropsChanged);
+        bleLog.debug('Subscribed to Device1 PropertiesChanged for ServiceData');
+      } catch (err: unknown) {
+        bleLog.debug(`PropertiesChanged subscription failed: ${errMsg(err)} (poll fallback active)`);
+      }
+    })();
+
+    // Poll ServiceData every 500 ms as a fallback (and for first-read before
+    // the PropertiesChanged subscription is established).
+    const deadline = Date.now() + DISCOVERY_TIMEOUT_MS;
+    (async () => {
+      while (!done && Date.now() < deadline) {
+        if (abortSignal?.aborted) break;
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const sd: unknown = await (device as any).helper.prop('ServiceData');
+          tryServiceData(sd);
+        } catch (err: unknown) {
+          bleLog.debug(`ServiceData poll error: ${errMsg(err)}`);
+        }
+        await sleep(500);
+      }
+      if (!done) {
+        fail(
+          new Error(
+            `No stable broadcast reading within ${DISCOVERY_TIMEOUT_MS / 1000}s. ` +
+              `Step on the scale and make sure it is awake.`,
+          ),
+        );
+      }
+    })();
+  });
+}
+
 // ─── Exports ──────────────────────────────────────────────────────────────────
 
 /**
@@ -480,6 +698,20 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       const name = await device.getName().catch(() => '');
       bleLog.debug(`Found device: ${name} [${mac}]`);
 
+      // Pre-connection adapter match (by name only). Needed for preferPassive adapters
+      // so we can skip the GATT connect entirely and go straight to broadcast scanning.
+      const preInfo: BleDeviceInfo = { localName: name, serviceUuids: [] };
+      const preMatchedAdapter = adapters.find((a) => a.matches(preInfo));
+
+      if (preMatchedAdapter?.preferPassive && preMatchedAdapter.parseServiceData) {
+        matchedAdapter = preMatchedAdapter;
+        bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
+        return await broadcastScanNodeBle(matchedAdapter, btAdapter, device, mac, {
+          abortSignal,
+          onLiveData,
+        });
+      }
+
       // Stop discovery before connecting — BlueZ on low-power devices (e.g. Pi Zero)
       // often fails with le-connection-abort-by-local while discovery is still active.
       await stopDiscoveryAndQuiesce(btAdapter);
@@ -519,6 +751,15 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       device = result.device;
       matchedAdapter = result.adapter;
       deviceMac = result.mac;
+
+      // Passive-mode adapters: read from service-data advertisements without connecting.
+      if (matchedAdapter.preferPassive && matchedAdapter.parseServiceData) {
+        bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
+        return await broadcastScanNodeBle(matchedAdapter, btAdapter, device, result.mac, {
+          abortSignal,
+          onLiveData,
+        });
+      }
 
       // Stop discovery before connecting — BlueZ on low-power devices (e.g. Pi Zero)
       // often fails with le-connection-abort-by-local while discovery is still active.

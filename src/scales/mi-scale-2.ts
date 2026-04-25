@@ -12,6 +12,10 @@ const CHR_MI_HISTORY = '00002a2f0000351221180009af100700';
 
 const KNOWN_PREFIXES = ['mibcs', 'mibfs', 'mi scale', 'mi_scale'];
 
+/** Short and full 128-bit forms of the Body Composition Service UUID. */
+const SVC_BODY_COMP_SHORT = '181b';
+const SVC_BODY_COMP_FULL = '0000181b-0000-1000-8000-00805f9b34fb';
+
 /**
  * Adapter for the Xiaomi Mi Body Composition Scale 2.
  *
@@ -30,6 +34,14 @@ export class MiScale2Adapter implements ScaleAdapter {
   /** ENABLE_HISTORY_MAGIC — triggers the scale to start streaming data. */
   readonly unlockCommand = [0x01, 0x96, 0x8a, 0xbd, 0x62];
   readonly unlockIntervalMs = 3000;
+  /**
+   * Prefer passive advertisement decoding over GATT.
+   * MIBFS (XMTZC05HM) broadcasts the full frame in service data 0x181B, so
+   * no connection or unlock is required. Some firmware variants do not stream
+   * on the GATT characteristic even when connectable, making passive mode the
+   * only reliable path.
+   */
+  readonly preferPassive = true;
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toUpperCase();
@@ -51,7 +63,7 @@ export class MiScale2Adapter implements ScaleAdapter {
    *   [9-10]  impedance (uint16 LE)
    *   [11-12] weight raw (uint16 LE) — divide by 200 for kg, 100 for lbs/catty
    */
-  parseNotification(data: Buffer): ScaleReading | null {
+  private parseFrame(data: Buffer): ScaleReading | null {
     if (data.length !== 13) return null;
 
     const c0 = data[0];
@@ -80,6 +92,16 @@ export class MiScale2Adapter implements ScaleAdapter {
     }
 
     return { weight, impedance };
+  }
+
+  parseNotification(data: Buffer): ScaleReading | null {
+    return this.parseFrame(data);
+  }
+
+  parseServiceData(uuid: string, data: Buffer): ScaleReading | null {
+    const norm = uuid.toLowerCase().replace(/[{}]/g, '');
+    if (norm !== SVC_BODY_COMP_SHORT && norm !== SVC_BODY_COMP_FULL) return null;
+    return this.parseFrame(data);
   }
 
   isComplete(reading: ScaleReading): boolean {

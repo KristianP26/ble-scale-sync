@@ -1,5 +1,6 @@
 import type {
   ScaleAdapter,
+  ScaleReading,
   BleDeviceInfo,
   BodyComposition,
   UserProfile,
@@ -28,9 +29,11 @@ interface ScanResultEntry {
   addr_type?: number;
   manufacturer_id?: number | null;
   manufacturer_data?: string | null;
+  /** Array of {uuid, data} service-data entries (hex-encoded data). */
+  service_data?: Array<{ uuid: string; data: string }> | null;
 }
 
-/** Build BleDeviceInfo from a scan result entry, including manufacturer data. */
+/** Build BleDeviceInfo from a scan result entry, including manufacturer and service data. */
 function toBleDeviceInfo(entry: ScanResultEntry): BleDeviceInfo {
   const info: BleDeviceInfo = {
     localName: entry.name,
@@ -41,6 +44,12 @@ function toBleDeviceInfo(entry: ScanResultEntry): BleDeviceInfo {
       id: entry.manufacturer_id,
       data: Buffer.from(entry.manufacturer_data, 'hex'),
     };
+  }
+  if (entry.service_data && entry.service_data.length > 0) {
+    info.serviceData = entry.service_data.map((sd) => ({
+      uuid: normalizeUuid(sd.uuid),
+      data: Buffer.from(sd.data, 'hex'),
+    }));
   }
   return info;
 }
@@ -424,9 +433,17 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       bleLog.info(`Matched: ${adapter.name} (${entry.name || entry.address})`);
 
       // Extract reading from broadcast advertisement data
-      if (adapter.parseBroadcast && entry.manufacturer_data) {
-        const mfrBuf = Buffer.from(entry.manufacturer_data, 'hex');
-        const reading = adapter.parseBroadcast(mfrBuf);
+      {
+        let reading: ScaleReading | null = null;
+        if (adapter.parseBroadcast && entry.manufacturer_data) {
+          reading = adapter.parseBroadcast(Buffer.from(entry.manufacturer_data, 'hex'));
+        }
+        if (!reading && adapter.parseServiceData) {
+          for (const sd of info.serviceData ?? []) {
+            reading = adapter.parseServiceData(sd.uuid, sd.data);
+            if (reading) break;
+          }
+        }
         if (reading) {
           bleLog.info(`Broadcast reading: ${reading.weight} kg`);
           registerScaleMac(config, entry.address).catch(() => {});
@@ -435,7 +452,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       }
 
       // Broadcast-capable or broadcast-only adapters — wait for next scan with data
-      if (adapter.parseBroadcast || !adapter.charNotifyUuid) {
+      if (adapter.parseBroadcast || adapter.parseServiceData || !adapter.charNotifyUuid) {
         bleLog.debug(`${adapter.name} supports broadcast, waiting for stable reading...`);
         continue;
       }
@@ -581,8 +598,17 @@ export class ReadingWatcher {
           const adapter = this.adapters.find((a) => a.matches(info));
           if (!adapter) continue;
 
-          if (adapter.parseBroadcast && entry.manufacturer_data) {
-            const reading = adapter.parseBroadcast(Buffer.from(entry.manufacturer_data, 'hex'));
+          {
+            let reading: ScaleReading | null = null;
+            if (adapter.parseBroadcast && entry.manufacturer_data) {
+              reading = adapter.parseBroadcast(Buffer.from(entry.manufacturer_data, 'hex'));
+            }
+            if (!reading && adapter.parseServiceData) {
+              for (const sd of info.serviceData ?? []) {
+                reading = adapter.parseServiceData(sd.uuid, sd.data);
+                if (reading) break;
+              }
+            }
             if (reading) {
               // Dedup check
               const key = `${entry.address}:${reading.weight.toFixed(1)}`;
@@ -604,7 +630,7 @@ export class ReadingWatcher {
           }
 
           // Broadcast-capable or broadcast-only — skip, wait for stable advertisement
-          if (adapter.parseBroadcast || !adapter.charNotifyUuid) continue;
+          if (adapter.parseBroadcast || adapter.parseServiceData || !adapter.charNotifyUuid) continue;
 
           // GATT fallback — adapter matched but no broadcast support
           this.handleGattReading(entry, adapter).catch((err) => {

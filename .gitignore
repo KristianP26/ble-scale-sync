@@ -52,3 +52,5 @@ strava-tokens/
 # VitePress
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+
+.claude/

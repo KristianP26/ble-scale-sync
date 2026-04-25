@@ -15,7 +15,7 @@ BLE Scale Sync ships **24 protocol adapters** out of the box, covering Xiaomi, R
 
 | Brand / Model | Notes |
 |---|---|
-| **Xiaomi** Mi Scale 2 (MIBCS / MIBFS) | Uses scale's own body comp values |
+| **Xiaomi** Mi Scale 2 (MIBCS / MIBFS / XMTZC05HM) | Passive BLE advertisement decoding (service data 0x181B) — no pairing required. Works on all transports including ESPHome proxy. Uses scale's own body comp values |
 | **Renpho** ES-CS20M / Elis 1 / FITINDEX / Sencor (QN-Scale) | Most common generic BLE protocol |
 | **Renpho** ES-WBE28 | Standard GATT variant |
 | **Renpho** ES-26BB-B | |
