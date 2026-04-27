@@ -17,6 +17,7 @@ import {
   DISCOVERY_POLL_MS,
   POST_DISCOVERY_QUIESCE_MS,
   GATT_DISCOVERY_TIMEOUT_MS,
+  RAW_READING_TIMEOUT_MS,
   CHAR_DISCOVERY_MAX_RETRIES,
   CHAR_DISCOVERY_RETRY_DELAY_MS,
 } from './types.js';
@@ -541,7 +542,11 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     // the first enumeration can be missing chars the scale actually exposes.
     // Retry the enumeration a few times with a short backoff when we detect
     // that the adapter's required chars are not yet present.
-    const gatt = await device.gatt();
+    const gatt = await withTimeout(
+      device.gatt(),
+      GATT_DISCOVERY_TIMEOUT_MS,
+      'GATT server acquisition timed out',
+    );
     let charMap = await withTimeout(
       buildCharMap(gatt),
       GATT_DISCOVERY_TIMEOUT_MS,
@@ -567,14 +572,18 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         'GATT service discovery timed out',
       );
     }
-    const raw = await waitForRawReading(
-      charMap,
-      wrapDevice(device),
-      matchedAdapter,
-      profile,
-      deviceMac.replace(/[:-]/g, '').toUpperCase(),
-      weightUnit,
-      onLiveData,
+    const raw = await withTimeout(
+      waitForRawReading(
+        charMap,
+        wrapDevice(device),
+        matchedAdapter,
+        profile,
+        deviceMac.replace(/[:-]/g, '').toUpperCase(),
+        weightUnit,
+        onLiveData,
+      ),
+      RAW_READING_TIMEOUT_MS,
+      'Timed out waiting for a complete scale reading',
     );
 
     try {

@@ -16,6 +16,9 @@ export const DISCOVERY_POLL_MS = 2_000;
 /** Timeout for GATT service/characteristic enumeration after connecting. */
 export const GATT_DISCOVERY_TIMEOUT_MS = 30_000;
 
+/** Timeout for the full reading phase (subscribe → first complete reading). */
+export const RAW_READING_TIMEOUT_MS = 120_000;
+
 /**
  * Max attempts to enumerate GATT characteristics. BlueZ can signal
  * `ServicesResolved=true` before all characteristic interfaces are exported
