@@ -29,7 +29,7 @@ cd "$(dirname "$0")"
 MICROPYTHON_VERSION="1.27.0"
 
 # Release dates differ per chip family
-MICROPYTHON_DATE_ESP32="20260203"
+MICROPYTHON_DATE_ESP32="20251209"
 MICROPYTHON_DATE_S3="20251209"
 
 # Board-specific firmware settings (set by configure_board)
@@ -156,14 +156,22 @@ detect_port() {
 download_firmware() {
   if [[ -f "$FIRMWARE_FILE" ]]; then
     green "Firmware already downloaded: $FIRMWARE_FILE"
-    return
+  else
+    if [[ -z "$FIRMWARE_URL" ]]; then
+      die $'No pre-built firmware for '"${BOARD}"$'. Build from source:\n  cd ../drivers && ./build.sh '"${BOARD}"$'\nThen copy the .bin here:\n  cp ../drivers/build/firmware.bin '"$FIRMWARE_FILE"
+    fi
+    blue "Downloading MicroPython v${MICROPYTHON_VERSION} for ${BOARD}..."
+    curl -L -o "$FIRMWARE_FILE" "$FIRMWARE_URL"
+    green "Downloaded: $FIRMWARE_FILE"
   fi
-  if [[ -z "$FIRMWARE_URL" ]]; then
-    die $'No pre-built firmware for '"${BOARD}"$'. Build from source:\n  cd ../drivers && ./build.sh '"${BOARD}"$'\nThen copy the .bin here:\n  cp ../drivers/build/firmware.bin '"$FIRMWARE_FILE"
+
+  # Real MicroPython binaries are >1.5 MB; anything smaller is a 404 HTML
+  # page or other download error.  Flashing it would brick boot, so fail loud.
+  local size
+  size=$(stat -c%s "$FIRMWARE_FILE" 2>/dev/null || stat -f%z "$FIRMWARE_FILE")
+  if [[ "$size" -lt 102400 ]]; then
+    die $'Firmware file \''"$FIRMWARE_FILE"$'\' is only '"$size"$' bytes — not a real binary (probably a 404 HTML page).\nDelete it and check the URL is reachable:\n  rm '"$FIRMWARE_FILE"$'\n  curl -IL '"$FIRMWARE_URL"
   fi
-  blue "Downloading MicroPython v${MICROPYTHON_VERSION} for ${BOARD}..."
-  curl -L -o "$FIRMWARE_FILE" "$FIRMWARE_URL"
-  green "Downloaded: $FIRMWARE_FILE"
 }
 
 erase_and_flash() {
