@@ -22,6 +22,8 @@ if _override == "atom_echo" or (
     not _override and "ESP32S3" not in _machine and "ESP32-S3" not in _machine
 ):
     from board_atom_echo import *
+elif _override == "esp_wroom_32":
+    from board_esp_wroom_32 import *
 elif _override == "guition_4848":
     from board_guition_4848 import *
 else:

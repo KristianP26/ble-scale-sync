@@ -49,10 +49,11 @@ Any ESP32 board running MicroPython with BLE support works. Tested on:
 | Board                          | Price | Notes                                                                 |
 | ------------------------------ | ----- | --------------------------------------------------------------------- |
 | M5Stack Atom Echo (ESP32-PICO) | ~8€   | Tiny, no PSRAM, ~100 KB free RAM, I2S buzzer for beep feedback        |
+| Generic ESP-WROOM-32 dev board | ~5€   | Stock ESP32 module, no display, BLE/WiFi share radio (slower scans)   |
 | ESP32-S3-DevKitC               | ~12€  | Standard dev board, plenty of RAM                                     |
 | Guition ESP32-S3-4848S040      | ~25€  | 480x480 RGB display, shows scan status and export results via LVGL UI |
 
-The board is auto-detected from the chip family. Set `"board"` in `config.json` to override (e.g. `"guition_4848"` for the display board, `"atom_echo"` for the Atom Echo).
+The board is auto-detected from the chip family. Set `"board"` in `config.json` to override (e.g. `"esp_wroom_32"` for a generic WROOM-32 module, `"guition_4848"` for the display board, `"atom_echo"` for the Atom Echo). Auto-detect cannot distinguish a WROOM-32 from an Atom Echo, so WROOM-32 users must set the override (or pass `--board esp_wroom_32` to `flash.sh`).
 
 ![Guition 4848 display showing scan status and user results](../images/esp32-display.png)
 
@@ -266,6 +267,7 @@ Compare this to the standard [Docker deployment](/guide/getting-started#docker) 
 | `beep.py`                    | I2S buzzer driver (boards with `HAS_BEEP`)  |
 | `board.py`                   | Board auto-detection dispatch               |
 | `board_atom_echo.py`         | Atom Echo config (no PSRAM, I2S beep)       |
+| `board_esp_wroom_32.py`      | Generic ESP-WROOM-32 config (no display)    |
 | `board_esp32_s3.py`          | Generic ESP32-S3 config                     |
 | `board_guition_4848.py`      | Guition 4848 config (LVGL display)          |
 | `panel_init_guition_4848.py` | ST7701S panel init sequence data            |

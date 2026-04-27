@@ -8,6 +8,7 @@
 # Usage:
 #   ./flash.sh                          # full flash (auto-detect board)
 #   ./flash.sh --board atom_echo        # full flash for Atom Echo
+#   ./flash.sh --board esp_wroom_32     # full flash for generic ESP-WROOM-32
 #   ./flash.sh --board esp32_s3         # full flash for ESP32-S3
 #   ./flash.sh --board guition_4848     # full flash for Guition display
 #   ./flash.sh --app-only               # re-upload .py files (fast iteration)
@@ -67,6 +68,14 @@ configure_board() {
       BAUD=115200
       BOARD_MODULE="board_atom_echo.py"
       ;;
+    esp_wroom_32)
+      CHIP="esp32"
+      FIRMWARE_URL="https://micropython.org/resources/firmware/ESP32_GENERIC-${MICROPYTHON_DATE_ESP32}-v${MICROPYTHON_VERSION}.bin"
+      FIRMWARE_FILE="ESP32_GENERIC-v${MICROPYTHON_VERSION}.bin"
+      FLASH_OFFSET="0x1000"
+      BAUD=460800
+      BOARD_MODULE="board_esp_wroom_32.py"
+      ;;
     esp32_s3)
       CHIP="esp32s3"
       FIRMWARE_URL="https://micropython.org/resources/firmware/ESP32_GENERIC_S3-SPIRAM_OCT-${MICROPYTHON_DATE_S3}-v${MICROPYTHON_VERSION}.bin"
@@ -86,7 +95,7 @@ configure_board() {
       BOARD_MODULE="board_guition_4848.py"
       ;;
     *)
-      die "Unknown board: $board_name (valid: atom_echo, esp32_s3, guition_4848)"
+      die "Unknown board: $board_name (valid: atom_echo, esp_wroom_32, esp32_s3, guition_4848)"
       ;;
   esac
 }
@@ -102,7 +111,7 @@ detect_board() {
     green "Detected: ESP32-S3"
     configure_board "esp32_s3"
   elif echo "$chip_info" | grep -qi "ESP32"; then
-    green "Detected: ESP32 (assuming Atom Echo)"
+    green "Detected: ESP32 (assuming Atom Echo — pass --board esp_wroom_32 for a generic WROOM-32 module)"
     configure_board "atom_echo"
   else
     die "Could not identify chip type from esptool output"
