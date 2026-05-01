@@ -13,6 +13,7 @@ import {
 import { bootstrapMqttProxy } from './ble/mqtt-proxy-bootstrap.js';
 import type { EmbeddedBrokerHandle } from './ble/embedded-broker.js';
 import { abortableSleep } from './ble/types.js';
+import { ConsecutiveFailureWatchdog } from './ble/watchdog.js';
 import { adapters } from './scales/index.js';
 import { createLogger, setLogLevel, LogLevel } from './logger.js';
 import { errMsg } from './utils/error.js';
@@ -54,6 +55,9 @@ if (cliFlags.help) {
   console.log('  DRY_RUN          true/false — override runtime.dry_run');
   console.log('  DEBUG            true/false — override runtime.debug');
   console.log('  SCAN_COOLDOWN    5-3600     — override runtime.scan_cooldown');
+  console.log(
+    '  BLE_WATCHDOG_MAX_FAILURES 0-1000 — override runtime.watchdog_max_consecutive_failures (0 = disabled)',
+  );
   console.log('  SCALE_MAC        MAC/UUID   — override ble.scale_mac');
   console.log('  NOBLE_DRIVER     abandonware/stoprocent — override ble.noble_driver');
   console.log('  BLE_ADAPTER      hci0/hci1/... — override ble.adapter (Linux only)');
@@ -77,6 +81,7 @@ const {
   dryRun,
   continuousMode,
   scanCooldownSec,
+  watchdogMaxFailures,
   bleHandler,
   bleAdapter,
   mqttProxy: initialMqttProxy,
@@ -522,7 +527,27 @@ async function main(): Promise<void> {
     }
     await watcher.stop();
   } else {
-    // Poll-based loop for auto/noble BLE handlers
+    // Poll-based loop for auto/noble BLE handlers.
+    //
+    // The watchdog is BlueZ-specific: on Pi 3/4 Broadcom on-board chips the
+    // controller can enter a stuck state after a few GATT cycles where the
+    // in-handler recovery tiers (D-Bus stop, btmgmt, rfkill, systemctl) don't
+    // unwedge the firmware. After N consecutive failures (post first-success)
+    // we exit so Docker's `restart: unless-stopped` can rebuild the container,
+    // closing all D-Bus clients and re-running the entrypoint's BT reset.
+    const watchdog = new ConsecutiveFailureWatchdog(
+      watchdogMaxFailures,
+      ({ consecutiveFailures }) => {
+        log.warn(
+          `Watchdog triggered: ${consecutiveFailures} consecutive scan failures since last ` +
+            `success. Exiting so the container can restart cleanly. ` +
+            `If this persists on Raspberry Pi 3/4 with the on-board Bluetooth chip, ` +
+            `consider an ESP32/ESPHome BLE proxy — see https://blescalesync.dev/troubleshooting`,
+        );
+        process.exit(1);
+      },
+    );
+
     while (!signal.aborted) {
       try {
         touchHeartbeat();
@@ -543,6 +568,7 @@ async function main(): Promise<void> {
         }
 
         backoffMs = 0; // Reset backoff on success
+        watchdog.recordSuccess();
 
         if (signal.aborted) break;
         const cooldown = appConfig.runtime?.scan_cooldown ?? scanCooldownSec;
@@ -550,6 +576,11 @@ async function main(): Promise<void> {
         await abortableSleep(cooldown * 1000, signal);
       } catch (err) {
         if (signal.aborted) break;
+
+        // Watchdog records the failure and may exit the process if armed and
+        // tripped — order matters: trip before sleeping so we don't waste a
+        // backoff cycle on a controller we already know is wedged.
+        watchdog.recordFailure();
 
         // Exponential backoff: 5s → 10s → 20s → 40s → 60s (cap)
         backoffMs = backoffMs === 0 ? BACKOFF_INITIAL_MS : Math.min(backoffMs * 2, BACKOFF_MAX_MS);
