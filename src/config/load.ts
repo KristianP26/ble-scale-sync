@@ -102,6 +102,7 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
     scan_cooldown: config.runtime?.scan_cooldown ?? 30,
     dry_run: config.runtime?.dry_run ?? false,
     debug: config.runtime?.debug ?? false,
+    watchdog_max_consecutive_failures: config.runtime?.watchdog_max_consecutive_failures ?? 10,
   };
   const ble = { handler: 'auto' as const, ...config.ble };
 
@@ -121,6 +122,12 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
     const num = Number(process.env.SCAN_COOLDOWN);
     if (Number.isFinite(num) && num >= 5 && num <= 3600) {
       runtime.scan_cooldown = num;
+    }
+  }
+  if (process.env.BLE_WATCHDOG_MAX_FAILURES !== undefined) {
+    const num = Number(process.env.BLE_WATCHDOG_MAX_FAILURES);
+    if (Number.isInteger(num) && num >= 0 && num <= 1000) {
+      runtime.watchdog_max_consecutive_failures = num;
     }
   }
 
@@ -324,6 +331,7 @@ export function loadEnvConfig(): AppConfig {
       scan_cooldown: envConfig.scanCooldownSec,
       dry_run: envConfig.dryRun,
       debug: process.env.DEBUG === 'true',
+      watchdog_max_consecutive_failures: 10,
     },
     update_check: true,
   };

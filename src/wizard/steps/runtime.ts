@@ -37,7 +37,13 @@ export const runtimeStep: WizardStep = {
       default: false,
     });
 
-    ctx.config.runtime = { continuous_mode, scan_cooldown, dry_run, debug };
+    ctx.config.runtime = {
+      continuous_mode,
+      scan_cooldown,
+      dry_run,
+      debug,
+      watchdog_max_consecutive_failures: 10,
+    };
 
     console.log(
       dim(

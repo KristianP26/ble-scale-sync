@@ -90,6 +90,10 @@ Step on the scale during the scan so it starts advertising.
 
 On Linux, `sudo systemctl restart bluetooth` fixes roughly 80% of transient GATT issues. If failures persist, flip `ble.noble_driver` between `abandonware` and `stoprocent` in `config.yaml`. The full decision tree lives in [Troubleshooting](/troubleshooting).
 
+### My Raspberry Pi works for a few hours then stops finding the scale until I reboot. How do I fix this?
+
+This is the BlueZ "stuck discovery" state — a known kernel/firmware-level issue on Pi 3 / 4 / Zero 2W with the on-board Broadcom Bluetooth chip. BLE Scale Sync's recovery tiers (D-Bus stop, btmgmt power-cycle, rfkill, `systemctl restart bluetoothd`) clear it on most setups but sometimes don't on Pi Broadcom firmware. Home Assistant has the [same problem](https://github.com/home-assistant/operating-system/issues/4022) and recommends the same fix: an [ESP32](/guide/esp32-proxy) or [ESPHome](/guide/esphome-proxy) Bluetooth proxy that runs the BLE work outside the Pi. If you want to stick with the on-board chip, the built-in [watchdog](/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state) auto-restarts the container after 10 consecutive scan failures so Docker can recover automatically.
+
 ---
 
 ## Body composition
