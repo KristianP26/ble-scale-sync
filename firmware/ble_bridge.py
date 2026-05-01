@@ -232,7 +232,16 @@ class BleBridge:
         aioble_addr_type = aioble.ADDR_RANDOM if (addr_type & 1) else aioble.ADDR_PUBLIC
         device = aioble.Device(aioble_addr_type, addr_bytes)
 
-        self._conn = await device.connect(timeout_ms=15000)
+        # aioble forwards scan_duration_ms=None to gap_connect, which defaults
+        # to a 2 s scan window. Scales advertising in short bursts (Eufy P2
+        # Pro) routinely miss that window, leaving the outer 15 s timeout to
+        # raise TimeoutError. Match scan_duration_ms to timeout_ms so NimBLE
+        # keeps scanning across the full connect window.
+        try:
+            self._conn = await device.connect(timeout_ms=15000, scan_duration_ms=15000)
+        except Exception as e:
+            print(f"GATT connect failed for {address}: {type(e).__name__}: {e}")
+            raise
         self._chars = {}
         chars_info = []
 

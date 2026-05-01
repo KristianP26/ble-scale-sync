@@ -1,0 +1,35 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "node",
+      "package-name": "ble-scale-sync",
+      "changelog-path": "CHANGELOG.md",
+      "include-component-in-tag": false,
+      "bump-minor-pre-major": false,
+      "bump-patch-for-minor-pre-major": false,
+      "draft": false,
+      "prerelease": false,
+      "changelog-sections": [
+        { "type": "feat", "section": "Added", "hidden": false },
+        { "type": "fix", "section": "Fixed", "hidden": false },
+        { "type": "perf", "section": "Changed", "hidden": false },
+        { "type": "revert", "section": "Fixed", "hidden": false },
+        { "type": "docs", "section": "Docs", "hidden": false },
+        { "type": "refactor", "section": "Changed", "hidden": true },
+        { "type": "chore", "section": "Miscellaneous", "hidden": true },
+        { "type": "ci", "section": "Miscellaneous", "hidden": true },
+        { "type": "test", "section": "Miscellaneous", "hidden": true },
+        { "type": "build", "section": "Miscellaneous", "hidden": true },
+        { "type": "style", "section": "Miscellaneous", "hidden": true }
+      ],
+      "extra-files": [
+        {
+          "type": "yaml",
+          "path": "ble-scale-sync-addon/config.yaml",
+          "jsonpath": "$.version"
+        }
+      ]
+    }
+  }
+}

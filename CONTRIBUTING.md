@@ -278,8 +278,55 @@ To add a new export target:
 - All tests must pass: `npm test`
 - ESLint and Prettier must be clean: `npm run lint && npm run format:check`
 - TypeScript must compile: `npx tsc --noEmit`
-- Keep commits focused — one logical change per commit
-- Write descriptive commit messages
+- Keep commits focused, one logical change per commit
+- **Write commit messages in [Conventional Commits](https://www.conventionalcommits.org/) style.** The project uses release-please to generate the changelog and version bumps, so the prefix you pick decides both whether the release notes mention the change and how the version bumps:
+  - `feat:` or `feat(scope):` new user-visible capability, bumps the minor version
+  - `fix:` or `fix(scope):` bug fix, bumps the patch version
+  - `perf:` performance improvement, bumps the patch version
+  - `refactor:`, `docs:`, `chore:`, `ci:`, `test:`, `build:` no version bump, appears in an "Other" / "Miscellaneous" section of the release notes
+  - Append `!` (for example `feat(ble)!:`) or include a `BREAKING CHANGE:` footer to bump the major version
+  - Scopes commonly used in this repo: `ble`, `scales`, `exporters`, `wizard`, `config`, `docker`, `ci`, `docs`, plus individual adapter names
+
+  > [!IMPORTANT]
+  > Non-conforming commit messages are silently ignored by release-please and will not appear in the generated changelog. When in doubt, look at `git log --oneline` for recent examples.
+
+## Releases
+
+Releases are fully automated via [release-please](https://github.com/googleapis/release-please-action). You do **not** create tags, edit `CHANGELOG.md`, or bump the version in `package.json` by hand.
+
+### Flow
+
+1. Merge feature / fix PRs into `dev` with a Conventional Commit message.
+2. When `dev` is ready to ship, open a PR `dev` → `main` and merge it.
+3. The `release-please` workflow (`.github/workflows/release-please.yml`) runs on every push to `main` and opens (or updates) a release PR titled `chore(main): release vX.Y.Z`.
+4. That PR shows the proposed version bump plus the generated `CHANGELOG.md` diff. Review, optionally edit the PR body or the CHANGELOG entry in the PR to add prose (for example a `### Thanks` section, the one thing release-please does not generate by itself), then merge it with `--admin` like any other release PR.
+5. On merge, release-please tags the release (`vX.Y.Z`), creates a GitHub Release, and emits the `release: published` event that `docker.yml` listens for. The multi-arch image is published to GHCR automatically. VitePress rebuilds `docs/changelog.md` from `CHANGELOG.md` via an `@include` directive, so the public changelog updates too.
+
+### Files managed by release-please
+
+- `package.json` (version field)
+- `package-lock.json` (version field)
+- `ble-scale-sync-addon/config.yaml` (version field, via the generic YAML updater + JSONPath `$.version`)
+- `CHANGELOG.md` (generated from conventional commits since the previous tag)
+- `.release-please-manifest.json` (internal state, tracks the last released version)
+
+Do not edit these files in a feature PR. If you need to correct the version or changelog, do it in the release PR before merging.
+
+### Files still maintained by hand
+
+- `ble-scale-sync-addon/CHANGELOG.md` is the user-facing changelog shown inside the Home Assistant add-on UI. It benefits from a shorter, curated log, so release-please does not touch it. Update it in the release PR when user-facing add-on changes ship.
+- `docs/changelog.md` is a one-line VitePress include (`<!--@include: ../CHANGELOG.md-->`), so it updates automatically as soon as `CHANGELOG.md` does. Do not replace that include with hand-written content.
+
+### Optional: `RELEASE_PLEASE_TOKEN` secret
+
+By default the workflow authenticates with `GITHUB_TOKEN`. GitHub intentionally suppresses downstream workflow triggers for events raised by that token, which means the release PR does not trigger `ci.yml` and the resulting GitHub release does not trigger `docker.yml`.
+
+To get those to chain automatically, create a classic Personal Access Token with `repo` + `workflow` scopes and save it as a repository secret named `RELEASE_PLEASE_TOKEN`. The workflow already prefers it over `GITHUB_TOKEN`.
+
+Until the PAT is configured, the fallback is:
+
+- Re-run `ci.yml` on the release PR by clicking "Close pull request" then "Reopen pull request" (or pushing an empty commit to the release branch).
+- Trigger `docker.yml` manually from the Actions tab (`workflow_dispatch`, input the new tag).
 
 ## Reporting Issues
 

@@ -124,3 +124,60 @@ getent group bluetooth | cut -d: -f3
 ```
 
 Common values: `112` (Debian/Ubuntu), `108` (Arch).
+
+### BLE discovery stops working after hours (BlueZ stuck state)
+
+**Symptoms** (visible with `DEBUG=true`):
+
+- Repeated `startDiscovery failed: Discovery already in progress` and `D-Bus StopDiscovery failed: No discovery started`
+- Or `Discovery started` logs succeed, but the scale is never found even after stepping on it
+- Common on Raspberry Pi 3 / 4 / Zero 2W with the on-board Broadcom adapter under continuous-mode load
+
+**Cause.** A [known BlueZ bug](https://github.com/bluez/bluez/issues/807) (also tracked at [bluez/bluer#47](https://github.com/bluez/bluer/issues/47)): after repeated GATT connect/disconnect cycles, BlueZ's `Discovering` property desyncs from the HCI controller. The daemon reports active discovery, but the controller is no longer running LE scan.
+
+::: warning Hardware/firmware limitation, not just software
+On Pi 3/4 Broadcom on-board chips, this is a kernel/firmware-level issue that even much larger projects have given up on fixing in software — see [home-assistant/operating-system#4022](https://github.com/home-assistant/operating-system/issues/4022) and [home-assistant/core#142656](https://github.com/home-assistant/core/issues/142656), both closed as **Not Planned** with HA recommending a Bluetooth proxy as the workaround. The recovery tiers below clear the wedge on most setups but not all of them.
+:::
+
+**Recommended long-term fix: Bluetooth proxy.** The most reliable way to run BLE Scale Sync on a Pi long-term is to bypass the on-board Bluetooth entirely — run an external [ESP32 BLE proxy](/guide/esp32-proxy) (≈€8 board, communicates over MQTT) or reuse an existing [ESPHome BT proxy](/guide/esphome-proxy). Both eliminate the host BlueZ stack from the BLE path completely.
+
+**Automatic in-process recovery.** The app already:
+
+- Resets its D-Bus client after every GATT operation in continuous mode
+- Runs a preemptive `btmgmt power off/on` cycle after every GATT operation to clear zombie controller state before it accumulates
+- Escalates through 6 recovery tiers when `StartDiscovery` fails (D-Bus `StopDiscovery`, adapter power-cycle, btmgmt reset, rfkill block/unblock, `systemctl restart bluetooth`)
+
+**Auto-restart watchdog (continuous mode).** When in-process recovery is not enough — typically Pi 3/4 Broadcom firmware lock-up — a watchdog exits the process after `runtime.watchdog_max_consecutive_failures` consecutive scan failures (default `10`, ≈30 min). With Docker `restart: unless-stopped` the container restarts cleanly, the entrypoint resets the BT adapter, and the controller is typically unwedged. The watchdog only arms after the first successful weigh-in in the process lifetime, so it does not restart-loop the container if the scale is offline (vacation) or `scale_mac` is misconfigured.
+
+```yaml
+runtime:
+  watchdog_max_consecutive_failures: 10  # default; 0 = disabled
+```
+
+```bash
+# Or env override
+docker run ... -e BLE_WATCHDOG_MAX_FAILURES=10 ghcr.io/kristianp26/ble-scale-sync:latest
+```
+
+**Docker compose tip.** Make sure `/dev/rfkill` is mapped so Tier 5 recovery is available:
+
+```yaml
+devices:
+  - /dev/rfkill:/dev/rfkill
+```
+
+**Last-resort escape hatch: switch away from BlueZ.** If BlueZ keeps getting stuck despite the above, bypass it entirely by using the `@stoprocent/noble` driver (HCI socket directly, no D-Bus):
+
+```yaml
+ble:
+  noble_driver: stoprocent
+```
+
+Or set `NOBLE_DRIVER=stoprocent` as an environment variable. Trade-off: the app takes exclusive HCI access, so you cannot run `bluetoothctl`, Home Assistant's Bluetooth integration, or any other BLE consumer on the same adapter at the same time.
+
+On the host you can also verify BlueZ state manually:
+
+```bash
+bluetoothctl show | grep Discovering
+sudo systemctl restart bluetooth   # manual recovery
+```

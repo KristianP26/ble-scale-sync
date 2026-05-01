@@ -32,7 +32,7 @@ BLE Scale Sync ships **24 protocol adapters** out of the box, covering Xiaomi, R
 | **MGB** (Swan / Icomon / YG) | |
 | **Digoo** DG-SO38H (Mengii) | |
 | **Excelvan** CF369 | |
-| **Trisa** Body Analyze | |
+| **Trisa** Body Analyze / **ADE** BA 1600 (fitvigo) | ADE variant: weight only, body comp encoding TBD |
 | **Hoffen** BS-8107 | |
 | **Hesley** (YunChen) | |
 | **Inlife** (FatScale) | |
