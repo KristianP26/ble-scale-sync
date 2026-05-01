@@ -1,9 +1,12 @@
 name: BLE Scale Sync
-version: "1.10.2"
+version: 1.11.0
 slug: ble-scale-sync
-description: Read BLE smart scales and export to Garmin Connect, MQTT (HA auto-discovery), InfluxDB, and more
+description: >-
+  Read BLE smart scales and export to Garmin Connect, MQTT (HA auto-discovery),
+  InfluxDB, and more
 url: https://github.com/KristianP26/ble-scale-sync
-documentation: https://github.com/KristianP26/ble-scale-sync/blob/main/ble-scale-sync-addon/DOCS.md
+documentation: >-
+  https://github.com/KristianP26/ble-scale-sync/blob/main/ble-scale-sync-addon/DOCS.md
 support: https://github.com/KristianP26/ble-scale-sync/issues
 panel_icon: mdi:scale-bathroom
 arch:
@@ -20,47 +23,45 @@ privileged:
 hassio_api: true
 map:
   - share:rw
-
 options:
-  scale_mac: ""
-  ble_adapter: ""
-  weight_unit: "kg"
-  height_unit: "cm"
-  user_name: "Default"
+  scale_mac: ''
+  ble_adapter: ''
+  weight_unit: kg
+  height_unit: cm
+  user_name: Default
   user_height: 170
-  user_birth_date: "1990-01-01"
-  user_gender: "male"
+  user_birth_date: '1990-01-01'
+  user_gender: male
   user_is_athlete: false
   user_weight_min: 40
   user_weight_max: 150
   mqtt_enabled: true
   mqtt_auto: true
-  mqtt_broker_url: ""
-  mqtt_username: ""
-  mqtt_password: ""
-  mqtt_topic: "scale/body-composition"
+  mqtt_broker_url: ''
+  mqtt_username: ''
+  mqtt_password: ''
+  mqtt_topic: scale/body-composition
   mqtt_ha_discovery: true
-  mqtt_ha_device_name: "BLE Scale"
+  mqtt_ha_device_name: BLE Scale
   garmin_enabled: false
-  garmin_email: ""
-  garmin_password: ""
+  garmin_email: ''
+  garmin_password: ''
   scan_cooldown: 30
   reset_bluetooth: true
   debug: false
   custom_config: false
-
 schema:
   scale_mac: str?
   ble_adapter: str?
-  weight_unit: "list(kg|lbs)"
-  height_unit: "list(cm|in)"
+  weight_unit: list(kg|lbs)
+  height_unit: list(cm|in)
   user_name: str
-  user_height: "int(50,250)"
+  user_height: int(50,250)
   user_birth_date: str
-  user_gender: "list(male|female)"
+  user_gender: list(male|female)
   user_is_athlete: bool
-  user_weight_min: "int(10,300)"
-  user_weight_max: "int(10,500)"
+  user_weight_min: int(10,300)
+  user_weight_max: int(10,500)
   mqtt_enabled: bool
   mqtt_auto: bool
   mqtt_broker_url: str?
@@ -72,7 +73,7 @@ schema:
   garmin_enabled: bool
   garmin_email: str?
   garmin_password: password?
-  scan_cooldown: "int(5,3600)"
+  scan_cooldown: int(5,3600)
   reset_bluetooth: bool
   debug: bool
   custom_config: bool
