@@ -25,9 +25,8 @@
       ],
       "extra-files": [
         {
-          "type": "yaml",
-          "path": "ble-scale-sync-addon/config.yaml",
-          "jsonpath": "$.version"
+          "type": "generic",
+          "path": "ble-scale-sync-addon/config.yaml"
         }
       ]
     }
