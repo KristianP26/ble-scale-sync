@@ -4,7 +4,34 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.11.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.10.2...v1.11.0) (2026-05-01)
+
+
+### Added
+
+* **ble:** consecutive-failure watchdog for BlueZ stuck-state recovery ([#154](https://github.com/KristianP26/ble-scale-sync/pull/154)) ([dcc822d](https://github.com/KristianP26/ble-scale-sync/commit/dcc822d16bbebe7682490114febc92326b69a611))
+* **trisa:** support ADE BA 1600 (fitvigo) firmware variant — weight only ([#153](https://github.com/KristianP26/ble-scale-sync/pull/153)) ([515d1a7](https://github.com/KristianP26/ble-scale-sync/commit/515d1a72faab28abbadddc41ddca60337358b68b))
+
+
+### Fixed
+
+* **firmware:** match scan_duration_ms to GATT connect timeout ([#141](https://github.com/KristianP26/ble-scale-sync/issues/141)) ([54dcc3b](https://github.com/KristianP26/ble-scale-sync/commit/54dcc3bda965ac9482659017f3c08d68efea716d))
+* **node-ble:** add timeout to device.gatt() and waitForRawReading ([#142](https://github.com/KristianP26/ble-scale-sync/pull/142)) ([2e45366](https://github.com/KristianP26/ble-scale-sync/commit/2e45366623f873aaf1b415c3f1ccc4edef860613)), closes [#140](https://github.com/KristianP26/ble-scale-sync/issues/140)
+* prevent orphaned BlueZ discovery sessions in continuous mode ([#81](https://github.com/KristianP26/ble-scale-sync/pull/81)) ([e6ee513](https://github.com/KristianP26/ble-scale-sync/commit/e6ee51350ced0ef9a50d77380d201a21627fcc76))
+* **trisa:** fail fast when no measurement char and harden ADE parser boundary ([74a34a6](https://github.com/KristianP26/ble-scale-sync/commit/74a34a6e14d6b525114ed78372c43e07a0de6cd3))
+
+
+### Docs
+
+* **addon:** backfill CHANGELOG and refresh DOCS for v1.8.2 through v1.10.2 ([d918a1d](https://github.com/KristianP26/ble-scale-sync/commit/d918a1d677dad982dc123133352ae58539b93fb1))
+* document Pi 3/4 BlueZ stuck-state limitation + watchdog mitigation ([a039b4b](https://github.com/KristianP26/ble-scale-sync/commit/a039b4b155b5677001994a1f6a3bbfc723b2b876))
+* **esp32-proxy:** add Windows flashing guidance ([#152](https://github.com/KristianP26/ble-scale-sync/pull/152)) ([2796d7b](https://github.com/KristianP26/ble-scale-sync/commit/2796d7b0bcbced0bc1e5bca026fc275b6e02be21))
+* **trisa:** clarify optional-binding + variant-detection semantics ([ae87d84](https://github.com/KristianP26/ble-scale-sync/commit/ae87d8421a446dd3b56cec63ab3baad476d87a0a))
+
+
+### Thanks
+
+- [@fromport](https://github.com/fromport) for the `device.gatt()` / `waitForRawReading` GATT-acquisition timeout fix that prevents indefinite hangs on stalled BlueZ adapters ([#142](https://github.com/KristianP26/ble-scale-sync/pull/142))
 
 ## [1.10.2] - 2026-04-24
 
