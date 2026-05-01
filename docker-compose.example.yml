@@ -16,6 +16,12 @@ services:
     group_add:
       - '112'
 
+    # Required for Tier 5 BLE recovery (rfkill block/unblock) when BlueZ
+    # enters a stuck discovery state on Broadcom adapters (RPi). Harmless
+    # if /dev/rfkill is absent on the host.
+    devices:
+      - /dev/rfkill:/dev/rfkill
+
     volumes:
       # Your config file — rw so the app can update last_known_weight
       - ./config.yaml:/app/config.yaml

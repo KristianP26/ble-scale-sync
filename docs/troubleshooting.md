@@ -124,3 +124,43 @@ getent group bluetooth | cut -d: -f3
 ```
 
 Common values: `112` (Debian/Ubuntu), `108` (Arch).
+
+### BLE discovery stops working after hours (BlueZ zombie state)
+
+**Symptoms** (visible with `DEBUG=true`):
+
+- Repeated `startDiscovery failed: Discovery already in progress` and `D-Bus StopDiscovery failed: No discovery started`
+- Or `Discovery started` logs succeed, but the scale is never found even after stepping on it
+- Common on Raspberry Pi Zero 2W / 3 / 4 with the built-in Broadcom adapter
+
+**Cause.** A [known BlueZ bug](https://github.com/bluez/bluez/issues/807) (also tracked at [bluez/bluer#47](https://github.com/bluez/bluer/issues/47)): after repeated GATT connect/disconnect cycles, BlueZ's `Discovering` property desyncs from the HCI controller. The daemon reports active discovery, but the controller is no longer running LE scan.
+
+**Automatic recovery.** The app already:
+
+- Resets its D-Bus client after every GATT operation in continuous mode
+- Runs a preemptive `btmgmt power off/on` cycle after every GATT operation to clear zombie controller state before it accumulates
+- Escalates through 6 recovery tiers when `StartDiscovery` fails (D-Bus StopDiscovery, adapter power-cycle, btmgmt reset, rfkill, bluetoothd restart)
+
+**What you should do in Docker.** Make sure `/dev/rfkill` is mapped so Tier 5 recovery is available:
+
+```yaml
+devices:
+  - /dev/rfkill:/dev/rfkill
+```
+
+**Last-resort escape hatch: switch away from BlueZ.** If BlueZ keeps getting stuck despite the above, bypass it entirely by using the `@stoprocent/noble` driver (HCI socket directly, no D-Bus):
+
+```yaml
+# config.yaml
+ble:
+  noble_driver: stoprocent
+```
+
+Or set `NOBLE_DRIVER=stoprocent` as an environment variable. Trade-off: the app takes exclusive HCI access, so you cannot run `bluetoothctl`, Home Assistant's Bluetooth integration, or any other BLE consumer on the same adapter at the same time.
+
+On the host you can also verify BlueZ state manually:
+
+```bash
+bluetoothctl show | grep Discovering
+sudo systemctl restart bluetooth   # manual recovery
+```
