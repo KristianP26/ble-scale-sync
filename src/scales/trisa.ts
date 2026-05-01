@@ -95,6 +95,21 @@ export class TrisaAdapter implements ScaleAdapter {
 
   async onConnected(ctx: ConnectionContext): Promise<void> {
     this.writeFn = ctx.write;
+
+    // Both measurement chars are declared `optional` so that variant detection
+    // can pick whichever one the firmware exposes. If neither shows up, that
+    // is almost certainly a transient BlueZ ServicesResolved race
+    // (bluez/bluez#1489) — fail fast with a clear message instead of silently
+    // subscribing to no measurement char and stalling on read.
+    const hasMeasurement =
+      ctx.availableChars.has(CHR_MEASUREMENT_TRISA) || ctx.availableChars.has(CHR_MEASUREMENT_ADE);
+    if (!hasMeasurement) {
+      throw new Error(
+        'Trisa: no measurement characteristic discovered (expected 0x8A21 or 0x8A24). ' +
+          'Likely a transient BlueZ discovery race — try again.',
+      );
+    }
+
     this.variant = this.detectVariant(ctx.availableChars);
     bleLog.debug(`Trisa adapter: variant=${this.variant}`);
 
@@ -216,11 +231,10 @@ export class TrisaAdapter implements ScaleAdapter {
    * Weight = mantissa * 10^exponent.
    * Impedance from resistance2: r2 < 410 ? 3.0 : 0.3 * (r2 - 400).
    *
-   * NOTE for ADE: the layout past the weight bytes appears to differ slightly
-   * from Trisa (timestamp may be 8 bytes instead of 7), so the impedance
-   * derived from this parser may be incorrect on ADE. Body-comp values arrive
-   * on 0x8A22 in a separate, currently undecoded frame — so for ADE we
-   * effectively only report weight until more captures are available.
+   * NOTE: only the Trisa branch walks the optional-field table. For ADE the
+   * post-weight layout is unverified (timestamp may be 8 bytes instead of 7)
+   * and body comp arrives on a separate 0x8A22 push, so the parser
+   * short-circuits to weight-only after computing the weight.
    */
   private parseMeasurement(data: Buffer): ScaleReading | null {
     if (data.length < 5) return null;
@@ -243,13 +257,20 @@ export class TrisaAdapter implements ScaleAdapter {
 
     if (weight <= 0 || !Number.isFinite(weight)) return null;
 
+    // ADE BA 1600: only the weight bytes are verified (single capture frame in
+    // #138). The post-weight layout — timestamp width, resistance encoding —
+    // is not confirmed and body-comp values arrive on a separate 0x8A22 push
+    // anyway. Don't walk the offset table; return weight only until more
+    // captures are available.
+    if (this.variant === 'ade') return { weight, impedance: 0 };
+
     // Walk through optional fields to find resistance2.
     let offset = 5;
     if (hasTimestamp) offset += 7;
     if (hasResistance1) offset += 4;
 
     let impedance = 0;
-    if (this.variant === 'trisa' && hasResistance2 && offset + 4 <= data.length) {
+    if (hasResistance2 && offset + 4 <= data.length) {
       const r2Mantissa = data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16);
       const r2Exponent = data.readInt8(offset + 3);
       const r2 = r2Mantissa * Math.pow(10, r2Exponent);

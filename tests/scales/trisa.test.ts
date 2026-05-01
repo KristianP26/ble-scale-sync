@@ -139,6 +139,16 @@ describe('TrisaAdapter', () => {
       // Verify challenge-response still works
       expect(writeFn).toHaveBeenCalledOnce();
     });
+
+    it('throws when neither 0x8A21 nor 0x8A24 is discovered (BlueZ race guard)', async () => {
+      const adapter = makeAdapter();
+      // Upload + download present but no measurement char — what a BlueZ
+      // ServicesResolved race could produce.
+      const partial = new Set<string>([uuid16(0x8a82), uuid16(0x8a81)]);
+      const { ctx } = ctxWithChars(partial);
+
+      await expect(adapter.onConnected!(ctx)).rejects.toThrow(/measurement characteristic/i);
+    });
   });
 
   describe('parseNotification()', () => {
@@ -290,6 +300,25 @@ describe('TrisaAdapter', () => {
       const adapter = makeAdapter();
       const buf = Buffer.from('6d652ab21e01caf07af252f11cf0', 'hex');
       expect(adapter.parseCharNotification!(uuid16(0x8a22), buf)).toBeNull();
+    });
+
+    it('returns impedance=0 on ADE measurement even when r2 flag is set', async () => {
+      const adapter = makeAdapter();
+      // Force variant=ade so the parser must skip the resistance walk.
+      const { ctx } = ctxWithChars(ADE_CHARS);
+      await adapter.onConnected!(ctx);
+
+      // Frame would compute impedance=30 on Trisa (r2 = 500.0 → 0.3*(500-400)).
+      // ADE branch must short-circuit to impedance=0 regardless of r2 flag.
+      const flags = 0x04; // r2 only
+      const weightFloat = encodeFloat(8000, -2); // 80.0 kg
+      const r2Float = encodeFloat(5000, -1); // r2 = 500
+      const buf = Buffer.concat([Buffer.from([flags]), weightFloat, r2Float]);
+
+      const reading = adapter.parseCharNotification!(uuid16(0x8a24), buf);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBeCloseTo(80, 1);
+      expect(reading!.impedance).toBe(0);
     });
 
     it('returns null for upload channel notifications', () => {
