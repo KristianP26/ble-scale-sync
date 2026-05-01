@@ -8,6 +8,7 @@
 # Usage:
 #   ./flash.sh                          # full flash (auto-detect board)
 #   ./flash.sh --board atom_echo        # full flash for Atom Echo
+#   ./flash.sh --board esp_wroom_32     # full flash for generic ESP-WROOM-32
 #   ./flash.sh --board esp32_s3         # full flash for ESP32-S3
 #   ./flash.sh --board guition_4848     # full flash for Guition display
 #   ./flash.sh --app-only               # re-upload .py files (fast iteration)
@@ -28,7 +29,7 @@ cd "$(dirname "$0")"
 MICROPYTHON_VERSION="1.27.0"
 
 # Release dates differ per chip family
-MICROPYTHON_DATE_ESP32="20260203"
+MICROPYTHON_DATE_ESP32="20251209"
 MICROPYTHON_DATE_S3="20251209"
 
 # Board-specific firmware settings (set by configure_board)
@@ -67,6 +68,14 @@ configure_board() {
       BAUD=115200
       BOARD_MODULE="board_atom_echo.py"
       ;;
+    esp_wroom_32)
+      CHIP="esp32"
+      FIRMWARE_URL="https://micropython.org/resources/firmware/ESP32_GENERIC-${MICROPYTHON_DATE_ESP32}-v${MICROPYTHON_VERSION}.bin"
+      FIRMWARE_FILE="ESP32_GENERIC-v${MICROPYTHON_VERSION}.bin"
+      FLASH_OFFSET="0x1000"
+      BAUD=460800
+      BOARD_MODULE="board_esp_wroom_32.py"
+      ;;
     esp32_s3)
       CHIP="esp32s3"
       FIRMWARE_URL="https://micropython.org/resources/firmware/ESP32_GENERIC_S3-SPIRAM_OCT-${MICROPYTHON_DATE_S3}-v${MICROPYTHON_VERSION}.bin"
@@ -86,7 +95,7 @@ configure_board() {
       BOARD_MODULE="board_guition_4848.py"
       ;;
     *)
-      die "Unknown board: $board_name (valid: atom_echo, esp32_s3, guition_4848)"
+      die "Unknown board: $board_name (valid: atom_echo, esp_wroom_32, esp32_s3, guition_4848)"
       ;;
   esac
 }
@@ -102,7 +111,7 @@ detect_board() {
     green "Detected: ESP32-S3"
     configure_board "esp32_s3"
   elif echo "$chip_info" | grep -qi "ESP32"; then
-    green "Detected: ESP32 (assuming Atom Echo)"
+    green "Detected: ESP32 (assuming Atom Echo — pass --board esp_wroom_32 for a generic WROOM-32 module)"
     configure_board "atom_echo"
   else
     die "Could not identify chip type from esptool output"
@@ -147,14 +156,22 @@ detect_port() {
 download_firmware() {
   if [[ -f "$FIRMWARE_FILE" ]]; then
     green "Firmware already downloaded: $FIRMWARE_FILE"
-    return
+  else
+    if [[ -z "$FIRMWARE_URL" ]]; then
+      die $'No pre-built firmware for '"${BOARD}"$'. Build from source:\n  cd ../drivers && ./build.sh '"${BOARD}"$'\nThen copy the .bin here:\n  cp ../drivers/build/firmware.bin '"$FIRMWARE_FILE"
+    fi
+    blue "Downloading MicroPython v${MICROPYTHON_VERSION} for ${BOARD}..."
+    curl -L -o "$FIRMWARE_FILE" "$FIRMWARE_URL"
+    green "Downloaded: $FIRMWARE_FILE"
   fi
-  if [[ -z "$FIRMWARE_URL" ]]; then
-    die $'No pre-built firmware for '"${BOARD}"$'. Build from source:\n  cd ../drivers && ./build.sh '"${BOARD}"$'\nThen copy the .bin here:\n  cp ../drivers/build/firmware.bin '"$FIRMWARE_FILE"
+
+  # Real MicroPython binaries are >1.5 MB; anything smaller is a 404 HTML
+  # page or other download error.  Flashing it would brick boot, so fail loud.
+  local size
+  size=$(stat -c%s "$FIRMWARE_FILE" 2>/dev/null || stat -f%z "$FIRMWARE_FILE")
+  if [[ "$size" -lt 102400 ]]; then
+    die $'Firmware file \''"$FIRMWARE_FILE"$'\' is only '"$size"$' bytes — not a real binary (probably a 404 HTML page).\nDelete it and check the URL is reachable:\n  rm '"$FIRMWARE_FILE"$'\n  curl -IL '"$FIRMWARE_URL"
   fi
-  blue "Downloading MicroPython v${MICROPYTHON_VERSION} for ${BOARD}..."
-  curl -L -o "$FIRMWARE_FILE" "$FIRMWARE_URL"
-  green "Downloaded: $FIRMWARE_FILE"
 }
 
 erase_and_flash() {
@@ -180,7 +197,7 @@ install_libs() {
   mpremote connect "$port" mip install "github:peterhinch/micropython-mqtt@70b56a7a4aaf"
 
   blue "Installing async primitives (mqtt_as dependency)..."
-  mpremote connect "$port" mip install "github:peterhinch/micropython-async@68b5f01e999b/v3/primitives"
+  mpremote connect "$port" mip install "github:peterhinch/micropython-async/v3/primitives"
 
   green "Libraries installed"
 }
