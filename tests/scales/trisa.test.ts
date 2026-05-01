@@ -11,6 +11,38 @@ function makeAdapter() {
   return new TrisaAdapter();
 }
 
+function uuid16(code: number): string {
+  return `0000${code.toString(16).padStart(4, '0')}00001000800000805f9b34fb`;
+}
+
+const TRISA_CHARS = new Set<string>([uuid16(0x8a21), uuid16(0x8a82), uuid16(0x8a81)]);
+
+// 0x8A20 is exposed by ADE BA 1600 firmware but the adapter does not bind to
+// it — included here so the test ctx mirrors what the real scale advertises
+// post-discovery.
+const ADE_CHARS = new Set<string>([
+  uuid16(0x8a24),
+  uuid16(0x8a22),
+  uuid16(0x8a20),
+  uuid16(0x8a82),
+  uuid16(0x8a81),
+]);
+
+function ctxWithChars(
+  available: ReadonlySet<string>,
+  writeFn = vi.fn().mockResolvedValue(undefined),
+): { ctx: ConnectionContext; writeFn: ReturnType<typeof vi.fn> } {
+  const ctx: ConnectionContext = {
+    write: writeFn,
+    read: vi.fn(),
+    subscribe: vi.fn(),
+    profile: defaultProfile(),
+    deviceAddress: '',
+    availableChars: available,
+  };
+  return { ctx, writeFn };
+}
+
 /**
  * Encode weight as base-10 float: 24-bit LE mantissa + int8 exponent.
  * weight = mantissa * 10^exponent
@@ -54,16 +86,9 @@ describe('TrisaAdapter', () => {
   });
 
   describe('onConnected()', () => {
-    it('saves writeFn and sends time sync + broadcast', async () => {
+    it('saves writeFn and sends time sync + broadcast (Trisa variant)', async () => {
       const adapter = makeAdapter();
-      const writeFn = vi.fn().mockResolvedValue(undefined);
-
-      const ctx: ConnectionContext = {
-        write: writeFn,
-        read: vi.fn(),
-        subscribe: vi.fn(),
-        profile: defaultProfile(),
-      };
+      const { ctx, writeFn } = ctxWithChars(TRISA_CHARS);
 
       await adapter.onConnected!(ctx);
 
@@ -82,28 +107,32 @@ describe('TrisaAdapter', () => {
       const tsFromCmd = Buffer.from(data1.slice(1)).readUInt32LE(0);
       expect(Math.abs(tsFromCmd - expectedTs)).toBeLessThan(5);
 
-      // Call 2: broadcast ID
+      // Call 2: broadcast ID — Trisa uses 0x21
       const [charUuid2, data2, withResponse2] = writeFn.mock.calls[1];
       expect(charUuid2).toBe(adapter.charWriteUuid);
       expect(withResponse2).toBe(true);
       expect(data2).toEqual([0x21]);
     });
 
+    it('uses 0x22 broadcast opcode on ADE variant', async () => {
+      const adapter = makeAdapter();
+      const { ctx, writeFn } = ctxWithChars(ADE_CHARS);
+
+      await adapter.onConnected!(ctx);
+
+      expect(writeFn).toHaveBeenCalledTimes(2);
+      const [, data2] = writeFn.mock.calls[1];
+      expect(data2).toEqual([0x22]);
+    });
+
     it('writeFn is available for challenge-response after onConnected', async () => {
       const adapter = makeAdapter();
-      const writeFn = vi.fn().mockResolvedValue(undefined);
-
-      const ctx: ConnectionContext = {
-        write: writeFn,
-        read: vi.fn(),
-        subscribe: vi.fn(),
-        profile: defaultProfile(),
-      };
+      const { ctx, writeFn } = ctxWithChars(TRISA_CHARS);
 
       await adapter.onConnected!(ctx);
       writeFn.mockClear();
 
-      const uploadUuid = adapter.characteristics![1].uuid;
+      const uploadUuid = uuid16(0x8a82);
 
       // Password
       adapter.parseCharNotification!(uploadUuid, Buffer.from([0xa0, 0x11]));
@@ -112,6 +141,17 @@ describe('TrisaAdapter', () => {
 
       // Verify challenge-response still works
       expect(writeFn).toHaveBeenCalledOnce();
+    });
+
+    it('throws when neither 0x8A21 nor 0x8A24 is discovered (GATT race guard)', async () => {
+      const adapter = makeAdapter();
+      // Upload + download present but no measurement char — what a transient
+      // GATT discovery race (BlueZ ServicesResolved firing early or noble
+      // equivalent on Windows/macOS) could produce.
+      const partial = new Set<string>([uuid16(0x8a82), uuid16(0x8a81)]);
+      const { ctx } = ctxWithChars(partial);
+
+      await expect(adapter.onConnected!(ctx)).rejects.toThrow(/measurement characteristic/i);
     });
   });
 
@@ -174,28 +214,35 @@ describe('TrisaAdapter', () => {
   });
 
   describe('characteristics', () => {
-    it('declares three characteristics for multi-char protocol', () => {
+    it('declares Trisa + ADE chars with optional flags for variant detection', () => {
       const adapter = makeAdapter();
-      expect(adapter.characteristics).toHaveLength(3);
-      expect(adapter.characteristics!.map((c) => c.type)).toEqual(['notify', 'notify', 'write']);
+      expect(adapter.characteristics).toHaveLength(5);
+      const meas21 = adapter.characteristics!.find((c) => c.uuid === uuid16(0x8a21));
+      const meas24 = adapter.characteristics!.find((c) => c.uuid === uuid16(0x8a24));
+      const bodyComp22 = adapter.characteristics!.find((c) => c.uuid === uuid16(0x8a22));
+      const upload = adapter.characteristics!.find((c) => c.uuid === uuid16(0x8a82));
+      const download = adapter.characteristics!.find((c) => c.uuid === uuid16(0x8a81));
+
+      // Variant-specific chars must be optional
+      expect(meas21?.optional).toBe(true);
+      expect(meas24?.optional).toBe(true);
+      expect(bodyComp22?.optional).toBe(true);
+      // Shared chars are required
+      expect(upload?.optional).toBeFalsy();
+      expect(download?.optional).toBeFalsy();
+      expect(upload?.type).toBe('notify');
+      expect(download?.type).toBe('write');
     });
   });
 
   describe('challenge-response', () => {
-    it('stores password and responds to challenge with XOR', async () => {
+    it('stores password and responds to challenge with XOR (Trisa variant)', async () => {
       const adapter = makeAdapter();
-      const writeFn = vi.fn().mockResolvedValue(undefined);
-
-      const ctx: ConnectionContext = {
-        write: writeFn,
-        read: vi.fn(),
-        subscribe: vi.fn(),
-        profile: defaultProfile(),
-      };
+      const { ctx, writeFn } = ctxWithChars(TRISA_CHARS);
       await adapter.onConnected!(ctx);
       writeFn.mockClear(); // Clear the time sync + broadcast writes
 
-      const uploadUuid = adapter.characteristics![1].uuid; // 0x8A82
+      const uploadUuid = uuid16(0x8a82);
 
       // Step 1: Scale sends password on upload channel
       const password = Buffer.from([0xa0, 0x11, 0x22, 0x33]);
@@ -208,7 +255,7 @@ describe('TrisaAdapter', () => {
       // Verify response was written
       expect(writeFn).toHaveBeenCalledOnce();
       const [charUuid, data, withResponse] = writeFn.mock.calls[0];
-      expect(charUuid).toBe(adapter.characteristics![2].uuid); // 0x8A81
+      expect(charUuid).toBe(uuid16(0x8a81));
 
       // Response = [0xA1, XOR(challenge, password)]
       expect(data[0]).toBe(0xa1);
@@ -218,25 +265,70 @@ describe('TrisaAdapter', () => {
       expect(withResponse).toBe(true);
     });
 
-    it('dispatches measurement data via parseCharNotification', () => {
+    it('does not respond to challenge on ADE variant (response algo unknown)', async () => {
       const adapter = makeAdapter();
-      const measurementUuid = adapter.characteristics![0].uuid; // 0x8A21
+      const { ctx, writeFn } = ctxWithChars(ADE_CHARS);
+      await adapter.onConnected!(ctx);
+      writeFn.mockClear();
 
+      const uploadUuid = uuid16(0x8a82);
+      // ADE only sends challenge directly, no preceding password
+      adapter.parseCharNotification!(uploadUuid, Buffer.from([0xa1, 0x01, 0x00, 0xb2, 0x2a]));
+
+      expect(writeFn).not.toHaveBeenCalled();
+    });
+
+    it('dispatches Trisa measurement (0x8A21) via parseCharNotification', () => {
+      const adapter = makeAdapter();
       const flags = 0x00;
       const weightFloat = encodeFloat(8000, -2);
       const buf = Buffer.concat([Buffer.from([flags]), weightFloat]);
 
-      const reading = adapter.parseCharNotification!(measurementUuid, buf);
+      const reading = adapter.parseCharNotification!(uuid16(0x8a21), buf);
       expect(reading).not.toBeNull();
       expect(reading!.weight).toBeCloseTo(80, 1);
     });
 
+    it('dispatches ADE measurement (0x8A24) via parseCharNotification', () => {
+      const adapter = makeAdapter();
+      // Real frame from ADE BA 1600 capture (issue #138):
+      // 1f 68 1f 00 fe ... → flags=0x1f, mantissa=0x001f68=8040, exp=-2 → 80.40 kg
+      const buf = Buffer.from('1f681f00fe652ab21e000000006a1500ff011900', 'hex');
+
+      const reading = adapter.parseCharNotification!(uuid16(0x8a24), buf);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBeCloseTo(80.4, 1);
+    });
+
+    it('returns null and only logs for ADE body-comp char (0x8A22)', () => {
+      const adapter = makeAdapter();
+      const buf = Buffer.from('6d652ab21e01caf07af252f11cf0', 'hex');
+      expect(adapter.parseCharNotification!(uuid16(0x8a22), buf)).toBeNull();
+    });
+
+    it('returns impedance=0 on ADE measurement even when r2 flag is set', async () => {
+      const adapter = makeAdapter();
+      // Force variant=ade so the parser must skip the resistance walk.
+      const { ctx } = ctxWithChars(ADE_CHARS);
+      await adapter.onConnected!(ctx);
+
+      // Frame would compute impedance=30 on Trisa (r2 = 500.0 → 0.3*(500-400)).
+      // ADE branch must short-circuit to impedance=0 regardless of r2 flag.
+      const flags = 0x04; // r2 only
+      const weightFloat = encodeFloat(8000, -2); // 80.0 kg
+      const r2Float = encodeFloat(5000, -1); // r2 = 500
+      const buf = Buffer.concat([Buffer.from([flags]), weightFloat, r2Float]);
+
+      const reading = adapter.parseCharNotification!(uuid16(0x8a24), buf);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBeCloseTo(80, 1);
+      expect(reading!.impedance).toBe(0);
+    });
+
     it('returns null for upload channel notifications', () => {
       const adapter = makeAdapter();
-      const uploadUuid = adapter.characteristics![1].uuid;
-
       const data = Buffer.from([0xa0, 0x11, 0x22]);
-      expect(adapter.parseCharNotification!(uploadUuid, data)).toBeNull();
+      expect(adapter.parseCharNotification!(uuid16(0x8a82), data)).toBeNull();
     });
   });
 
