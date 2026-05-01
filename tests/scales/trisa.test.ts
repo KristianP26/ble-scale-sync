@@ -17,6 +17,9 @@ function uuid16(code: number): string {
 
 const TRISA_CHARS = new Set<string>([uuid16(0x8a21), uuid16(0x8a82), uuid16(0x8a81)]);
 
+// 0x8A20 is exposed by ADE BA 1600 firmware but the adapter does not bind to
+// it — included here so the test ctx mirrors what the real scale advertises
+// post-discovery.
 const ADE_CHARS = new Set<string>([
   uuid16(0x8a24),
   uuid16(0x8a22),
@@ -140,10 +143,11 @@ describe('TrisaAdapter', () => {
       expect(writeFn).toHaveBeenCalledOnce();
     });
 
-    it('throws when neither 0x8A21 nor 0x8A24 is discovered (BlueZ race guard)', async () => {
+    it('throws when neither 0x8A21 nor 0x8A24 is discovered (GATT race guard)', async () => {
       const adapter = makeAdapter();
-      // Upload + download present but no measurement char — what a BlueZ
-      // ServicesResolved race could produce.
+      // Upload + download present but no measurement char — what a transient
+      // GATT discovery race (BlueZ ServicesResolved firing early or noble
+      // equivalent on Windows/macOS) could produce.
       const partial = new Set<string>([uuid16(0x8a82), uuid16(0x8a81)]);
       const { ctx } = ctxWithChars(partial);
 

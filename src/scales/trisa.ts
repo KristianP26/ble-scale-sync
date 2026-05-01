@@ -98,15 +98,17 @@ export class TrisaAdapter implements ScaleAdapter {
 
     // Both measurement chars are declared `optional` so that variant detection
     // can pick whichever one the firmware exposes. If neither shows up, that
-    // is almost certainly a transient BlueZ ServicesResolved race
-    // (bluez/bluez#1489) — fail fast with a clear message instead of silently
-    // subscribing to no measurement char and stalling on read.
+    // is almost certainly a transient GATT discovery race (BlueZ
+    // ServicesResolved firing before all chars are exported — bluez/bluez#1489
+    // — or the noble equivalent on Windows/macOS). Fail fast with a clear
+    // message instead of silently subscribing to no measurement char and
+    // stalling on read.
     const hasMeasurement =
       ctx.availableChars.has(CHR_MEASUREMENT_TRISA) || ctx.availableChars.has(CHR_MEASUREMENT_ADE);
     if (!hasMeasurement) {
       throw new Error(
         'Trisa: no measurement characteristic discovered (expected 0x8A21 or 0x8A24). ' +
-          'Likely a transient BlueZ discovery race — try again.',
+          'Likely a transient GATT discovery race — try again.',
       );
     }
 
@@ -125,6 +127,13 @@ export class TrisaAdapter implements ScaleAdapter {
     await ctx.write(CHR_DOWNLOAD, [broadcastOp], true);
   }
 
+  /**
+   * Variant precedence: pick `ade` only when 0x8A21 is *absent* and 0x8A24 is
+   * present. Any other combination defaults to `trisa`, which preserves the
+   * original handshake. A hypothetical hybrid firmware exposing both chars
+   * would be driven as Trisa (the safer default — known protocol, known
+   * challenge response).
+   */
   private detectVariant(available: ReadonlySet<string>): Variant {
     const hasTrisa = available.has(CHR_MEASUREMENT_TRISA);
     const hasAde = available.has(CHR_MEASUREMENT_ADE);
