@@ -48,6 +48,7 @@ export function findMissingCharacteristics(
 
   if (adapter.characteristics) {
     for (const binding of adapter.characteristics) {
+      if (binding.optional) continue;
       if (!resolveChar(charMap, binding.uuid)) missing.push(binding.uuid);
     }
     return missing;
@@ -102,9 +103,11 @@ function initializeAdapter(
 
   const start = async (): Promise<void> => {
     if (adapter.onConnected) {
+      const availableChars = new Set<string>(charMap.keys());
       const ctx: ConnectionContext = {
         profile,
         deviceAddress,
+        availableChars,
         write: async (charUuid, data, withResponse = true) => {
           const char = resolveChar(charMap, charUuid);
           if (!char) throw new Error(`Characteristic ${charUuid} not found`);
@@ -175,11 +178,17 @@ async function subscribeAndInit(
       );
     }
 
+    let subscribed = 0;
     for (const binding of notifyBindings) {
+      if (binding.optional && !resolveChar(charMap, binding.uuid)) {
+        bleLog.debug(`Skipping optional notify binding ${binding.uuid} (not present on device)`);
+        continue;
+      }
       const unsub = await subscribeToChar(charMap, binding.uuid, onNotification);
       unsubscribers.push(unsub);
+      subscribed += 1;
     }
-    bleLog.info(`Subscribed to ${notifyBindings.length} notification(s). Step on the scale.`);
+    bleLog.info(`Subscribed to ${subscribed} notification(s). Step on the scale.`);
     await startInit();
   } else {
     // Legacy mode — single notify + write pair

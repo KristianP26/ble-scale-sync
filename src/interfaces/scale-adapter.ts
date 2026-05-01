@@ -42,6 +42,13 @@ export interface CharacteristicBinding {
   uuid: string;
   /** How this characteristic is used. */
   type: 'notify' | 'write' | 'read';
+  /**
+   * Mark the binding as optional. When true, the BLE handler will not fail if
+   * the characteristic is missing, and will skip subscribing/writing to it.
+   * Used by adapters that handle multiple firmware variants where some chars
+   * are present on one variant but not the other (e.g. Trisa + ADE BA 1600).
+   */
+  optional?: boolean;
 }
 
 /**
@@ -62,6 +69,13 @@ export interface ConnectionContext {
    * Uppercase, no separators. Empty string when unavailable (e.g. macOS CoreBluetooth UUID).
    */
   deviceAddress: string;
+  /**
+   * Set of characteristic UUIDs (normalized 32-char hex, lowercase) that were
+   * actually discovered on the connected device. Adapters with `optional`
+   * bindings can use this to detect firmware variants and switch behavior.
+   * Always populated when the adapter declares `characteristics`.
+   */
+  availableChars: ReadonlySet<string>;
 }
 
 export interface ScaleAdapter {
