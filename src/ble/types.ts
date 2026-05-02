@@ -34,6 +34,15 @@ export const CHAR_DISCOVERY_RETRY_DELAY_MS = 500;
 /** Delay after stopping BlueZ discovery to let the radio quiesce before connecting. */
 export const POST_DISCOVERY_QUIESCE_MS = 500;
 
+/**
+ * Grace window after a weight-only broadcast frame is received.
+ * The Mi Scale 2 broadcasts weight-only frames while BIA is in progress, then
+ * a final frame with impedance once the measurement completes (~10–20 s on device).
+ * If an impedance-bearing frame arrives within this window the complete reading is
+ * used; otherwise the weight-only reading is forwarded as a fallback.
+ */
+export const IMPEDANCE_GRACE_MS = 12_000;
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type BleHandlerName = 'auto' | 'mqtt-proxy' | 'esphome-proxy';

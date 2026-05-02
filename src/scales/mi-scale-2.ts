@@ -13,6 +13,13 @@ const CHR_MI_HISTORY = '00002a2f0000351221180009af100700';
 const KNOWN_PREFIXES = ['mibcs', 'mibfs', 'mi scale', 'mi_scale'];
 
 /**
+ * Body Composition Service UUID in the normalized 32-char no-dash form.
+ * Handlers may pass UUIDs in short ('181b'), dashed, or already-normalized form —
+ * we strip dashes and expand short UUIDs before comparing.
+ */
+const SVC_BODY_COMP = '0000181b00001000800000805f9b34fb';
+
+/**
  * Adapter for the Xiaomi Mi Body Composition Scale 2.
  *
  * Protocol based on openScale's MiScaleHandler — uses a vendor-specific
@@ -30,10 +37,24 @@ export class MiScale2Adapter implements ScaleAdapter {
   /** ENABLE_HISTORY_MAGIC — triggers the scale to start streaming data. */
   readonly unlockCommand = [0x01, 0x96, 0x8a, 0xbd, 0x62];
   readonly unlockIntervalMs = 3000;
+  /**
+   * Prefer passive advertisement decoding over GATT.
+   * MIBFS (XMTZC05HM) broadcasts the full frame in service data 0x181B, so
+   * no connection or unlock is required. Some firmware variants do not stream
+   * on the GATT characteristic even when connectable, making passive mode the
+   * only reliable path.
+   */
+  readonly preferPassive = true;
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toUpperCase();
-    return KNOWN_PREFIXES.some((p) => name.startsWith(p.toUpperCase()));
+    if (KNOWN_PREFIXES.some((p) => name.startsWith(p.toUpperCase()))) return true;
+    // ESPHome / MQTT proxy advertisements may omit the BLE local name. The scale
+    // always includes 0x181B as a service-data UUID (AD type 0x16), which lands in
+    // serviceData rather than serviceUuids — check both.
+    const hasBcs = (u: string) => u === SVC_BODY_COMP;
+    return (device.serviceUuids ?? []).some(hasBcs) ||
+           (device.serviceData ?? []).some((sd) => hasBcs(sd.uuid));
   }
 
   /**
@@ -51,7 +72,7 @@ export class MiScale2Adapter implements ScaleAdapter {
    *   [9-10]  impedance (uint16 LE)
    *   [11-12] weight raw (uint16 LE) — divide by 200 for kg, 100 for lbs/catty
    */
-  parseNotification(data: Buffer): ScaleReading | null {
+  private parseFrame(data: Buffer): ScaleReading | null {
     if (data.length !== 13) return null;
 
     const c0 = data[0];
@@ -80,6 +101,17 @@ export class MiScale2Adapter implements ScaleAdapter {
     }
 
     return { weight, impedance };
+  }
+
+  parseNotification(data: Buffer): ScaleReading | null {
+    return this.parseFrame(data);
+  }
+
+  parseServiceData(uuid: string, data: Buffer): ScaleReading | null {
+    const stripped = uuid.toLowerCase().replace(/[-{}]/g, '');
+    const norm = stripped.length === 4 ? `0000${stripped}00001000800000805f9b34fb` : stripped;
+    if (norm !== SVC_BODY_COMP) return null;
+    return this.parseFrame(data);
   }
 
   isComplete(reading: ScaleReading): boolean {

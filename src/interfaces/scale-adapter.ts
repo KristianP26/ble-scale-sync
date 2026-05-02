@@ -6,6 +6,8 @@ export interface BleDeviceInfo {
   serviceUuids: string[];
   /** Manufacturer-specific data from the BLE advertisement (if present). */
   manufacturerData?: { id: number; data: Buffer };
+  /** Service data entries from the BLE advertisement (if present). */
+  serviceData?: Array<{ uuid: string; data: Buffer }>;
 }
 
 export interface ScaleReading {
@@ -99,6 +101,12 @@ export interface ScaleAdapter {
   readonly unlockIntervalMs: number;
   /** True if parseNotification() already converts any non-kg reading to kg. */
   readonly normalizesWeight?: boolean;
+  /**
+   * True if this adapter prefers passive advertisement scanning over a GATT
+   * connection. When set, broadcastScan is used even for connectable devices.
+   * Adapters that set this must implement parseServiceData or parseBroadcast.
+   */
+  readonly preferPassive?: boolean;
 
   /**
    * All characteristics this adapter needs (notify, write, read).
@@ -127,6 +135,14 @@ export interface ScaleAdapter {
    * Used by broadcast-only scales that embed weight in advertisement data.
    */
   parseBroadcast?(manufacturerData: Buffer): ScaleReading | null;
+
+  /**
+   * Parse a weight reading from a single BLE advertisement service-data entry.
+   * Called for each service-data UUID/value pair on each advertisement.
+   * Return null to keep waiting (wrong UUID, unstable frame, etc.).
+   * Combine with preferPassive=true to skip the GATT path entirely.
+   */
+  parseServiceData?(uuid: string, data: Buffer): ScaleReading | null;
 
   matches(device: BleDeviceInfo): boolean;
   parseNotification(data: Buffer): ScaleReading | null;
