@@ -820,4 +820,32 @@ describe('findMissingCharacteristics()', () => {
       [WRITE_UUID, OTHER_UUID].sort(),
     );
   });
+
+  it('skips optional bindings that are not present (used by Trisa/ADE variant detection)', () => {
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, createMockChar()],
+      [WRITE_UUID, createMockChar()],
+    ]);
+    const adapter = createLegacyAdapter({
+      characteristics: [
+        { service: SERVICE_UUID, uuid: NOTIFY_UUID, type: 'notify' },
+        { service: SERVICE_UUID, uuid: WRITE_UUID, type: 'write' },
+        // Optional and missing — must NOT show up as missing.
+        { service: SERVICE_UUID, uuid: OTHER_UUID, type: 'notify', optional: true },
+      ],
+    });
+    expect(findMissingCharacteristics(charMap, adapter)).toEqual([]);
+  });
+
+  it('still flags non-optional missing chars when other bindings are optional', () => {
+    const { charMap } = createCharMap([[NOTIFY_UUID, createMockChar()]]);
+    const adapter = createLegacyAdapter({
+      characteristics: [
+        { service: SERVICE_UUID, uuid: NOTIFY_UUID, type: 'notify' },
+        { service: SERVICE_UUID, uuid: WRITE_UUID, type: 'write' }, // required, missing
+        { service: SERVICE_UUID, uuid: OTHER_UUID, type: 'notify', optional: true }, // optional, missing
+      ],
+    });
+    expect(findMissingCharacteristics(charMap, adapter)).toEqual([WRITE_UUID]);
+  });
 });

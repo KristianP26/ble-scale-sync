@@ -8,30 +8,60 @@ import type {
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
 import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
+import { bleLog } from '../ble/types.js';
 
-const CHR_MEASUREMENT = uuid16(0x8a21);
+// Original Trisa firmware exposes 0x8A21 (notify) for measurement.
+const CHR_MEASUREMENT_TRISA = uuid16(0x8a21);
+// ADE BA 1600 / fitvigo firmware does NOT expose 0x8A21 — measurement frames
+// arrive on 0x8A24 (indicate) instead. Frame layout (weight portion) is
+// compatible with the Trisa decoder; body composition encoding still TBD.
+const CHR_MEASUREMENT_ADE = uuid16(0x8a24);
+// On ADE the scale also pushes another payload on 0x8A22 (indicate) shortly
+// after the weight frame. Encoding is not yet decoded — we subscribe to it
+// purely so future captures with debug logging can collect the bytes.
+const CHR_BODYCOMP_ADE = uuid16(0x8a22);
+// 0x8A82 is the upload channel on both variants. Trisa sends password (0xA0)
+// + challenge (0xA1); ADE only sends challenge (0xA1) without a preceding
+// password frame.
 const CHR_UPLOAD = uuid16(0x8a82);
+// 0x8A81 is the host -> scale write channel on both variants.
 const CHR_DOWNLOAD = uuid16(0x8a81);
 
-/** openScale opcodes for the Trisa challenge-response protocol. */
+// openScale opcodes for the Trisa challenge-response protocol.
 const OP_PASSWORD = 0xa0;
 const OP_CHALLENGE = 0xa1;
+// Time-sync command — opcode 0x02 followed by 4-byte LE seconds-since-2010.
+// Identical on Trisa and ADE.
+const OP_TIME_SYNC = 0x02;
+// Final "pairing complete" / broadcast-id opcode. Trisa uses 0x21, ADE 0x22.
+const OP_BROADCAST_TRISA = 0x21;
+const OP_BROADCAST_ADE = 0x22;
+// Challenge response opcode. Trisa echoes 0xA1; ADE uses 0x20 (the response
+// payload encoding is also different — see handleUploadChannel).
+const OP_RESPONSE_TRISA = 0xa1;
+
+const EPOCH_2010 = 1262304000;
+
+type Variant = 'trisa' | 'ade';
 
 /**
- * Adapter for Trisa body-composition scales (names starting with "01257B" or "11257B").
+ * Adapter for the Trisa body-composition scale family.
  *
- * Protocol details (from openScale TrisaBodyAnalyzeHandler):
- *   - Service 0x7802
- *   - 0x8A21 (notify) — measurement data
- *   - 0x8A82 (notify) — upload channel: scale sends password + challenge
- *   - 0x8A81 (write)  — download channel: host sends challenge response
- *   - Scale sends password (opcode 0xA0) on 0x8A82, then challenge (0xA1).
- *     Host replies with XOR(challenge, password) on 0x8A81.
- *   - Measurement frames on 0x8A21 use base-10 float encoding.
+ * Two firmware variants are supported:
+ *   - Trisa (default): exposes 0x8A21 (notify) for measurement, full
+ *     password + challenge handshake on 0x8A82.
+ *   - ADE BA 1600 / fitvigo: 0x8A21 is missing; measurement arrives on 0x8A24
+ *     (indicate). Different challenge-response and different
+ *     "pairing complete" opcode (0x22 instead of 0x21). Body-composition
+ *     decoding is not yet implemented — only weight is reported.
+ *
+ * Variant detection happens in `onConnected()` via `ctx.availableChars`:
+ * if 0x8A21 is missing but 0x8A24 is present → ADE.
  */
 export class TrisaAdapter implements ScaleAdapter {
   readonly name = 'Trisa';
-  readonly charNotifyUuid = CHR_MEASUREMENT;
+  // Legacy single-char fallback (only used when `characteristics` is ignored).
+  readonly charNotifyUuid = CHR_MEASUREMENT_TRISA;
   readonly charWriteUuid = CHR_DOWNLOAD;
 
   readonly normalizesWeight = true;
@@ -39,12 +69,21 @@ export class TrisaAdapter implements ScaleAdapter {
   readonly unlockIntervalMs = 0;
 
   readonly characteristics: CharacteristicBinding[] = [
-    { uuid: CHR_MEASUREMENT, type: 'notify' },
+    // Trisa-only measurement char.
+    { uuid: CHR_MEASUREMENT_TRISA, type: 'notify', optional: true },
+    // ADE-only measurement char.
+    { uuid: CHR_MEASUREMENT_ADE, type: 'notify', optional: true },
+    // ADE-only body-composition push (encoding TBD — captured via debug log).
+    { uuid: CHR_BODYCOMP_ADE, type: 'notify', optional: true },
+    // Shared upload channel (password + challenge).
     { uuid: CHR_UPLOAD, type: 'notify' },
+    // Shared write channel.
     { uuid: CHR_DOWNLOAD, type: 'write' },
   ];
 
-  /** Stored password from opcode 0xA0, used to solve the challenge. */
+  /** Detected firmware variant. Set in onConnected(). */
+  private variant: Variant = 'trisa';
+  /** Stored password from opcode 0xA0 (Trisa). ADE does not send this. */
   private password: Buffer | null = null;
   /** Reference to write function, saved from onConnected context. */
   private writeFn: ConnectionContext['write'] | null = null;
@@ -57,31 +96,75 @@ export class TrisaAdapter implements ScaleAdapter {
   async onConnected(ctx: ConnectionContext): Promise<void> {
     this.writeFn = ctx.write;
 
-    // Time sync — seconds since 2010-01-01 00:00:00 UTC
-    const EPOCH_2010 = 1262304000;
+    // Both measurement chars are declared `optional` so that variant detection
+    // can pick whichever one the firmware exposes. If neither shows up, that
+    // is almost certainly a transient GATT discovery race (BlueZ
+    // ServicesResolved firing before all chars are exported — bluez/bluez#1489
+    // — or the noble equivalent on Windows/macOS). Fail fast with a clear
+    // message instead of silently subscribing to no measurement char and
+    // stalling on read.
+    const hasMeasurement =
+      ctx.availableChars.has(CHR_MEASUREMENT_TRISA) || ctx.availableChars.has(CHR_MEASUREMENT_ADE);
+    if (!hasMeasurement) {
+      throw new Error(
+        'Trisa: no measurement characteristic discovered (expected 0x8A21 or 0x8A24). ' +
+          'Likely a transient GATT discovery race — try again.',
+      );
+    }
+
+    this.variant = this.detectVariant(ctx.availableChars);
+    bleLog.debug(`Trisa adapter: variant=${this.variant}`);
+
+    // Time sync (same opcode on both variants).
     const now = Math.floor(Date.now() / 1000) - EPOCH_2010;
     const tsCmd = Buffer.alloc(5);
-    tsCmd[0] = 0x02;
+    tsCmd[0] = OP_TIME_SYNC;
     tsCmd.writeUInt32LE(now, 1);
     await ctx.write(CHR_DOWNLOAD, [...tsCmd], true);
 
-    // Broadcast ID — signals pairing complete
-    await ctx.write(CHR_DOWNLOAD, [0x21], true);
+    // Broadcast / pairing-complete opcode differs between variants.
+    const broadcastOp = this.variant === 'ade' ? OP_BROADCAST_ADE : OP_BROADCAST_TRISA;
+    await ctx.write(CHR_DOWNLOAD, [broadcastOp], true);
+  }
+
+  /**
+   * Variant precedence: pick `ade` only when 0x8A21 is *absent* and 0x8A24 is
+   * present. Any other combination defaults to `trisa`, which preserves the
+   * original handshake. A hypothetical hybrid firmware exposing both chars
+   * would be driven as Trisa (the safer default — known protocol, known
+   * challenge response).
+   */
+  private detectVariant(available: ReadonlySet<string>): Variant {
+    const hasTrisa = available.has(CHR_MEASUREMENT_TRISA);
+    const hasAde = available.has(CHR_MEASUREMENT_ADE);
+    if (!hasTrisa && hasAde) return 'ade';
+    return 'trisa';
   }
 
   /**
    * Dispatch notifications from different characteristics.
    *
-   * - 0x8A82: password (0xA0) and challenge (0xA1) frames
-   * - 0x8A21: measurement data
+   * Trisa:
+   *   - 0x8A82: password (0xA0) and challenge (0xA1) frames
+   *   - 0x8A21: measurement data
+   * ADE BA 1600:
+   *   - 0x8A82: challenge (0xA1) — no password frame; response algo unknown
+   *   - 0x8A24: measurement data (Trisa-compatible weight encoding)
+   *   - 0x8A22: body-composition push (encoding TBD)
    */
   parseCharNotification(charUuid: string, data: Buffer): ScaleReading | null {
     if (charUuid === CHR_UPLOAD) {
       this.handleUploadChannel(data);
       return null;
     }
-    if (charUuid === CHR_MEASUREMENT) {
+    if (charUuid === CHR_MEASUREMENT_TRISA || charUuid === CHR_MEASUREMENT_ADE) {
       return this.parseMeasurement(data);
+    }
+    if (charUuid === CHR_BODYCOMP_ADE) {
+      // Capture for future analysis — encoding not yet decoded so we can't
+      // turn this into impedance/fat/water/etc.
+      bleLog.debug(`ADE body-comp frame on 0x8A22 (TBD encoding): ${data.toString('hex')}`);
+      return null;
     }
     return null;
   }
@@ -104,17 +187,34 @@ export class TrisaAdapter implements ScaleAdapter {
 
   /**
    * Handle password and challenge frames from the upload channel (0x8A82).
+   *
+   * On Trisa: scale sends 0xA0 (password), then 0xA1 (challenge); host responds
+   * with [0xA1, XOR(challenge, password)].
+   *
+   * On ADE BA 1600: scale sends 0xA1 (challenge) directly without a password
+   * frame. The phone responds with 5 bytes starting with opcode 0x20 — the
+   * exact algorithm is not yet known. We don't write anything here on ADE,
+   * relying on the time-sync + broadcast handshake in onConnected() to
+   * progress the scale to the measurement state. If the scale stalls on ADE,
+   * a fresh capture with multiple weigh-ins will be needed to crack this.
    */
   private handleUploadChannel(data: Buffer): void {
     if (data.length < 2) return;
     const opcode = data[0];
+
+    if (this.variant === 'ade') {
+      // ADE challenge response algorithm is unknown. Logging the raw bytes
+      // helps when comparing against future captures.
+      bleLog.debug(`ADE upload frame (TBD response): ${data.toString('hex')}`);
+      return;
+    }
 
     if (opcode === OP_PASSWORD) {
       this.password = Buffer.from(data.subarray(1));
     } else if (opcode === OP_CHALLENGE && this.password && this.writeFn) {
       const challenge = data.subarray(1);
       const response = Buffer.alloc(challenge.length + 1);
-      response[0] = OP_CHALLENGE;
+      response[0] = OP_RESPONSE_TRISA;
       for (let i = 0; i < challenge.length; i++) {
         response[i + 1] = challenge[i] ^ (this.password[i % this.password.length] ?? 0);
       }
@@ -124,9 +224,9 @@ export class TrisaAdapter implements ScaleAdapter {
   }
 
   /**
-   * Parse a Trisa measurement frame from 0x8A21.
+   * Parse a Trisa measurement frame.
    *
-   * Layout:
+   * Layout (verified for Trisa 0x8A21 and ADE BA 1600 0x8A24, weight only):
    *   [0]      info flags
    *             bit 0: timestamp present (7 bytes at offset 5)
    *             bit 1: resistance1 present (4 bytes base-10 float)
@@ -137,8 +237,13 @@ export class TrisaAdapter implements ScaleAdapter {
    *   then:    optional resistance1 (4 bytes if bit1 set)
    *   then:    optional resistance2 (4 bytes if bit2 set)
    *
-   * Weight = mantissa * 10^exponent
-   * Impedance from resistance2: r2 < 410 ? 3.0 : 0.3 * (r2 - 400)
+   * Weight = mantissa * 10^exponent.
+   * Impedance from resistance2: r2 < 410 ? 3.0 : 0.3 * (r2 - 400).
+   *
+   * NOTE: only the Trisa branch walks the optional-field table. For ADE the
+   * post-weight layout is unverified (timestamp may be 8 bytes instead of 7)
+   * and body comp arrives on a separate 0x8A22 push, so the parser
+   * short-circuits to weight-only after computing the weight.
    */
   private parseMeasurement(data: Buffer): ScaleReading | null {
     if (data.length < 5) return null;
@@ -161,16 +266,17 @@ export class TrisaAdapter implements ScaleAdapter {
 
     if (weight <= 0 || !Number.isFinite(weight)) return null;
 
-    // Walk through optional fields to find resistance2
+    // ADE BA 1600: only the weight bytes are verified (single capture frame in
+    // #138). The post-weight layout — timestamp width, resistance encoding —
+    // is not confirmed and body-comp values arrive on a separate 0x8A22 push
+    // anyway. Don't walk the offset table; return weight only until more
+    // captures are available.
+    if (this.variant === 'ade') return { weight, impedance: 0 };
+
+    // Walk through optional fields to find resistance2.
     let offset = 5;
-
-    if (hasTimestamp) {
-      offset += 7;
-    }
-
-    if (hasResistance1) {
-      offset += 4;
-    }
+    if (hasTimestamp) offset += 7;
+    if (hasResistance1) offset += 4;
 
     let impedance = 0;
     if (hasResistance2 && offset + 4 <= data.length) {

@@ -120,6 +120,40 @@ Connect the ESP32 via USB and run the flash script:
 
 The script auto-detects the serial port. Override with `PORT=/dev/ttyACM0 ./flash.sh` if needed.
 
+::: warning Windows users
+`flash.sh` is a bash script and will not run in `cmd.exe` or PowerShell directly — running `flash.sh` from CMD just opens it in your default editor. Use one of:
+
+- **Git Bash** (simplest) — install [Git for Windows](https://git-scm.com/download/win), then in Git Bash:
+  ```bash
+  cd firmware
+  PORT=COM3 ./flash.sh
+  ```
+  Replace `COM3` with the port shown in Device Manager under _Ports (COM & LPT)_ when the ESP32 is plugged in.
+- **WSL** — works, but you must attach the USB serial device into WSL with [`usbipd`](https://learn.microsoft.com/en-us/windows/wsl/connect-usb) first.
+- **Manual flash from CMD/PowerShell** — `esptool` and `mpremote` are cross-platform Python tools, so you can run the equivalent commands by hand:
+  ```powershell
+  # 1. Erase + flash MicroPython (download the .bin from micropython.org for your board first)
+  esptool.py --chip esp32s3 --port COM3 erase_flash
+  esptool.py --chip esp32s3 --port COM3 --baud 460800 write_flash -z 0x0 ESP32_GENERIC_S3-SPIRAM_OCT-v1.27.0.bin
+
+  # 2. Install MicroPython libraries
+  mpremote connect COM3 mip install aioble
+  mpremote connect COM3 mip install "github:peterhinch/micropython-mqtt@70b56a7a4aaf"
+  mpremote connect COM3 mip install "github:peterhinch/micropython-async@68b5f01e999b/v3/primitives"
+
+  # 3. Upload application files (run from firmware/)
+  mpremote connect COM3 cp config.json :config.json
+  mpremote connect COM3 cp boot.py :boot.py
+  mpremote connect COM3 cp board.py :board.py
+  mpremote connect COM3 cp board_esp32_s3.py :board_esp32_s3.py
+  mpremote connect COM3 cp ble_bridge.py :ble_bridge.py
+  mpremote connect COM3 cp beep.py :beep.py
+  mpremote connect COM3 cp main.py :main.py
+  mpremote connect COM3 reset
+  ```
+  Adjust `--chip`, the firmware filename, and `board_*.py` for your board (see the `configure_board()` cases in `flash.sh`).
+:::
+
 ::: tip Atom Echo / ESP32-PICO
 Some boards need a slower baud rate. If flashing fails, edit `BAUD=115200` in `flash.sh`.
 :::

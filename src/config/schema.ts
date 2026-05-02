@@ -126,6 +126,12 @@ export const RuntimeSchema = z.object({
   scan_cooldown: z.number().int().min(5).max(3600).default(30),
   dry_run: z.boolean().default(false),
   debug: z.boolean().default(false),
+  /**
+   * Continuous-mode watchdog: exit the process after this many consecutive scan
+   * failures (after at least one successful scan). Docker `restart: unless-stopped`
+   * then performs a clean BlueZ recovery. Set to 0 to disable.
+   */
+  watchdog_max_consecutive_failures: z.number().int().min(0).max(1000).default(10),
 });
 
 export const DockerSchema = z.object({

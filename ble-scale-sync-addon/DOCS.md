@@ -86,7 +86,7 @@ Add-on v1.8.1 bumps `garminconnect` to 0.3.x, which uses a new native auth engin
 
 ## Advanced: Custom Config
 
-For advanced setups (multi-user, additional exporters like InfluxDB/Webhook/Ntfy/Strava/File), enable **Use custom config.yaml** and place your configuration at:
+For advanced setups (multi-user, additional exporters like InfluxDB/Webhook/Ntfy/Strava/File, or alternative BLE transports), enable **Use custom config.yaml** and place your configuration at:
 
 ```
 /share/ble-scale-sync/config.yaml
@@ -96,9 +96,18 @@ See [config.yaml.example](https://github.com/KristianP26/ble-scale-sync/blob/mai
 
 When custom config is enabled, all other options in the Configuration tab are ignored.
 
+### Alternative BLE transports (no host Bluetooth needed)
+
+If your Home Assistant host has no Bluetooth adapter, or its built-in radio gets stuck under continuous-mode load, custom config mode unlocks two BLE-free transport options shipped in 1.10.0:
+
+- **[ESP32 BLE Proxy](https://blescalesync.dev/guide/esp32-proxy)** (`ble.handler: mqtt-proxy`) — relay BLE over MQTT from a ~8€ ESP32 board placed near your scale. Includes an embedded MQTT broker so you do not need to install Mosquitto.
+- **[ESPHome Bluetooth proxy](https://blescalesync.dev/guide/esphome-proxy)** (`ble.handler: esphome-proxy`, experimental, broadcast-only) — reuse an existing ESPHome BT proxy mesh you already run for Home Assistant.
+
+Both transports work without `host_dbus` or any host Bluetooth at all.
+
 ## Supported Scales
 
-23 BLE smart scale brands are supported, including Xiaomi, Renpho, Eufy, Yunmai, Beurer, Sanitas, Medisana, and more.
+20+ BLE smart scale brands are supported, including Xiaomi (Mi Scale 2), Renpho (Elis 1, FITINDEX, Sencor, QN-Scale), Eufy (incl. P2 / P2 Pro), Yunmai, Beurer, Sanitas, Medisana, Trisa / ADE, and more.
 
 See the [full list](https://blescalesync.dev/guide/supported-scales).
 

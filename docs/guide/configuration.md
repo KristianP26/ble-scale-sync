@@ -141,6 +141,7 @@ runtime:
   scan_cooldown: 30
   dry_run: false
   debug: false
+  watchdog_max_consecutive_failures: 10
 ```
 
 | Field | Required | Default | Description |
@@ -149,6 +150,7 @@ runtime:
 | `scan_cooldown` | No | `30` | Seconds between scans (5–3600) |
 | `dry_run` | No | `false` | Read scale + compute body comp, skip exports |
 | `debug` | No | `false` | Verbose BLE logging |
+| `watchdog_max_consecutive_failures` | No | `10` | In continuous mode on Linux: exit after this many consecutive scan failures so Docker `restart: unless-stopped` can recover from a stuck BlueZ controller (0 = disabled). See [Troubleshooting](/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state). |
 
 ### Update Check
 
@@ -187,6 +189,7 @@ These environment variables always override `config.yaml` values, useful for Doc
 | `DRY_RUN` | `runtime.dry_run` |
 | `DEBUG` | `runtime.debug` |
 | `SCAN_COOLDOWN` | `runtime.scan_cooldown` |
+| `BLE_WATCHDOG_MAX_FAILURES` | `runtime.watchdog_max_consecutive_failures` |
 | `SCALE_MAC` | `ble.scale_mac` |
 | `NOBLE_DRIVER` | `ble.noble_driver` |
 | `BLE_ADAPTER` | `ble.adapter` |
