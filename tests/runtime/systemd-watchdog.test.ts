@@ -155,4 +155,27 @@ describe('systemd-watchdog', () => {
       expect(execFileMock).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('ENOENT short-circuit', () => {
+    it('stops spawning systemd-notify after ENOENT, even when heartbeat keeps ticking', () => {
+      setSystemdEnv('/run/systemd/notify', '60000000');
+      // Simulate "binary missing" by invoking the callback with ENOENT.
+      execFileMock.mockImplementation(
+        (_file: string, _args: string[], cb: (err: NodeJS.ErrnoException | null) => void) => {
+          const err = Object.assign(new Error('spawn systemd-notify ENOENT'), {
+            code: 'ENOENT',
+          }) as NodeJS.ErrnoException;
+          cb(err);
+        },
+      );
+
+      startHeartbeat();
+      // First tick fires the spawn, callback synchronously sets the "missing" flag
+      // and calls stopHeartbeat(). Subsequent ticks must NOT spawn again.
+      vi.advanceTimersByTime(30_001);
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(60_000);
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+    });
+  });
 });

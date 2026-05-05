@@ -34,10 +34,26 @@ const DEFAULT_HEARTBEAT_MS = 30_000;
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let readyNotified = false;
+// Cache "binary missing" so the heartbeat does not spawn 960+ failing
+// processes per 8 h on hosts that set NOTIFY_SOCKET but lack systemd-notify
+// (rare, but possible inside minimal container images).
+let notifyBinaryMissing = false;
 
 function notify(message: string): void {
+  if (notifyBinaryMissing) return;
   execFile('systemd-notify', [message], (err) => {
-    if (err) log.debug(`systemd-notify ${message} failed: ${err.message}`);
+    if (!err) return;
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') {
+      notifyBinaryMissing = true;
+      log.warn(
+        `systemd-notify binary not found; disabling watchdog heartbeats. ` +
+          `If this is a systemd host, install the systemd CLI tools.`,
+      );
+      stopHeartbeat();
+      return;
+    }
+    log.debug(`systemd-notify ${message} failed: ${err.message}`);
   });
 }
 
@@ -94,4 +110,5 @@ export function isActive(): boolean {
 export function _resetForTesting(): void {
   stopHeartbeat();
   readyNotified = false;
+  notifyBinaryMissing = false;
 }
