@@ -122,6 +122,39 @@ function createBroadcastAdapter(name = 'BroadcastScale'): ScaleAdapter {
   };
 }
 
+/** Passive-scan adapter analogous to Mi Scale 2 (preferPassive + parseServiceData). */
+function createPassiveAdapter(
+  mode: 'complete' | 'partial-then-complete' | 'always-partial',
+  name = 'PassiveScale',
+): ScaleAdapter {
+  let frameIdx = 0;
+  return {
+    name,
+    charNotifyUuid: '',
+    charWriteUuid: '',
+    unlockCommand: [],
+    unlockIntervalMs: 0,
+    preferPassive: true,
+    matches: vi.fn(
+      (info: BleDeviceInfo) => Array.isArray(info.serviceData) && info.serviceData.length > 0,
+    ),
+    parseServiceData: vi.fn((_uuid: string, _data: Buffer) => {
+      const i = frameIdx++;
+      switch (mode) {
+        case 'complete':
+          return { weight: 70.0, impedance: 500 };
+        case 'partial-then-complete':
+          return i === 0 ? { weight: 70.0, impedance: 0 } : { weight: 70.0, impedance: 500 };
+        case 'always-partial':
+          return { weight: 70.0, impedance: 0 };
+      }
+    }),
+    parseNotification: vi.fn(() => null),
+    isComplete: vi.fn((r: ScaleReading) => r.weight > 0 && r.impedance > 0),
+    computeMetrics: vi.fn(() => BODY_COMP),
+  } as unknown as ScaleAdapter;
+}
+
 /** GATT-only adapter: matches by name, no parseBroadcast, uses notifications. */
 const GATT_NOTIFY_UUID = '0000fff400001000800000805f9b34fb';
 const GATT_WRITE_UUID = '0000fff100001000800000805f9b34fb';
@@ -945,6 +978,88 @@ describe('handler-mqtt-proxy', () => {
 
       await watcher.start(); // should be a no-op
       expect(mockClient.subscribeAsync.mock.calls.length).toBe(callCount);
+    });
+
+    it('grace timer — complete-immediately: emits without arming the timer', async () => {
+      const adapter = createPassiveAdapter('complete');
+      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter]);
+      await watcher.start();
+
+      mockClient._simulateMessage(
+        `${PREFIX}/scan/results`,
+        JSON.stringify([
+          {
+            address: 'AA:BB:CC:DD:EE:FF',
+            name: '',
+            rssi: -50,
+            services: [],
+            service_data: [{ uuid: '0x181b', data: '0102030405' }],
+          },
+        ]),
+      );
+
+      const raw = await watcher.nextReading();
+      expect(raw.adapter.name).toBe('PassiveScale');
+      expect(raw.reading.impedance).toBe(500);
+      expect(adapter.parseServiceData).toHaveBeenCalledTimes(1);
+    });
+
+    it('grace timer — partial-then-complete: complete frame cancels the timer', async () => {
+      const adapter = createPassiveAdapter('partial-then-complete');
+      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter]);
+      await watcher.start();
+
+      const ad = JSON.stringify([
+        {
+          address: 'AA:BB:CC:DD:EE:FF',
+          name: '',
+          rssi: -50,
+          services: [],
+          service_data: [{ uuid: '0x181b', data: '0102030405' }],
+        },
+      ]);
+
+      // Partial frame arms the timer
+      mockClient._simulateMessage(`${PREFIX}/scan/results`, ad);
+      // Complete frame within grace cancels and resolves
+      mockClient._simulateMessage(`${PREFIX}/scan/results`, ad);
+
+      const raw = await watcher.nextReading();
+      expect(raw.reading.impedance).toBe(500);
+      expect(adapter.parseServiceData).toHaveBeenCalledTimes(2);
+    });
+
+    it('grace timer — partial-then-timeout: weight-only fallback after IMPEDANCE_GRACE_MS', async () => {
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+      });
+      try {
+        const adapter = createPassiveAdapter('always-partial');
+        const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter]);
+        await watcher.start();
+
+        mockClient._simulateMessage(
+          `${PREFIX}/scan/results`,
+          JSON.stringify([
+            {
+              address: 'AA:BB:CC:DD:EE:FF',
+              name: '',
+              rssi: -50,
+              services: [],
+              service_data: [{ uuid: '0x181b', data: '0102030405' }],
+            },
+          ]),
+        );
+
+        const { IMPEDANCE_GRACE_MS } = await import('../../src/ble/types.js');
+        await vi.advanceTimersByTimeAsync(IMPEDANCE_GRACE_MS + 100);
+
+        const raw = await watcher.nextReading();
+        expect(raw.reading.weight).toBe(70.0);
+        expect(raw.reading.impedance).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('filters by targetMac', async () => {

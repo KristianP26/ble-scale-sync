@@ -588,3 +588,6 @@ export async function scanDevices(
 
   return results;
 }
+
+/** Test-only export of the private broadcast-scan helper (#163). */
+export const _internals = { broadcastScan };

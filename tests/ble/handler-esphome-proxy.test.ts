@@ -93,6 +93,47 @@ function makeBroadcastAdapter(): ScaleAdapter {
   } as unknown as ScaleAdapter;
 }
 
+/**
+ * Passive-scan adapter (e.g. Mi Scale 2): preferPassive=true, parses
+ * service-data UUID 0x181B. Returns weight-only on the first frame and
+ * weight+impedance on subsequent frames — emulates the Xiaomi flow where the
+ * scale streams partial frames during BIA. The behaviour is configurable per
+ * test via `mode` so a single adapter can model the three branches.
+ */
+function makePassiveAdapter(
+  mode: 'complete' | 'partial-then-complete' | 'always-partial',
+): ScaleAdapter {
+  let frameIdx = 0;
+  return {
+    name: 'MockPassive',
+    preferPassive: true,
+    matches: vi.fn(
+      (info: BleDeviceInfo) => Array.isArray(info.serviceData) && info.serviceData.length > 0,
+    ) as ScaleAdapter['matches'],
+    parseServiceData: vi.fn((_uuid: string, _data: Buffer): ScaleReading | null => {
+      const i = frameIdx++;
+      switch (mode) {
+        case 'complete':
+          return { weight: 70.0, impedance: 500 };
+        case 'partial-then-complete':
+          return i === 0 ? { weight: 70.0, impedance: 0 } : { weight: 70.0, impedance: 500 };
+        case 'always-partial':
+          return { weight: 70.0, impedance: 0 };
+      }
+    }) as ScaleAdapter['parseServiceData'],
+    isComplete: (r: ScaleReading): boolean => r.weight > 0 && r.impedance > 0,
+    computeMetrics: (r: ScaleReading): BodyComposition => ({
+      weight: r.weight,
+      impedance: r.impedance,
+    }),
+    parseNotification: () => null,
+    charNotifyUuid: undefined as unknown as string,
+    charWriteUuid: undefined as unknown as string,
+    unlockCommand: [],
+    unlockIntervalMs: 0,
+  } as unknown as ScaleAdapter;
+}
+
 function makeGattOnlyAdapter(): ScaleAdapter {
   return {
     name: 'MockGattOnly',
@@ -425,6 +466,105 @@ describe('scanAndReadRaw', () => {
         bleHandler: 'esphome-proxy',
       }),
     ).rejects.toThrow(/esphome_proxy config is required/);
+  });
+});
+
+// 12 s impedance grace timer for passive-scan adapters (Mi Scale 2 etc.).
+// See #163 — these tests lock the three branches of the partial-frame path.
+describe('scanAndReadRaw — grace timer (passive scan)', () => {
+  beforeEach(() => {
+    mockClient = new MockEsphomeClient();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  function pushPassiveAd(): void {
+    mockClient.pushBle({
+      address: 0x112233445566,
+      name: '',
+      rssi: -55,
+      serviceUuidsList: [],
+      serviceDataList: [{ uuid: '0x181b', legacyDataList: [0x01, 0x02, 0x03, 0x04], data: '' }],
+      manufacturerDataList: [],
+      addressType: 0,
+    });
+  }
+
+  it('complete-immediately: emits as soon as the first frame is complete (no timer)', async () => {
+    const adapter = makePassiveAdapter('complete');
+    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy.js');
+
+    const promise = scanAndReadRaw({
+      adapters: [adapter],
+      profile,
+      esphomeProxy: config,
+      bleHandler: 'esphome-proxy',
+    });
+
+    await mockClient.waitForListener('ble');
+    pushPassiveAd();
+
+    const result = await promise;
+    expect(result.adapter.name).toBe('MockPassive');
+    expect(result.reading.weight).toBe(70.0);
+    expect(result.reading.impedance).toBe(500);
+    // Only one parseServiceData call; the timer never fired
+    expect(adapter.parseServiceData).toHaveBeenCalledTimes(1);
+  });
+
+  it('partial-then-complete: cancels the grace timer when a complete frame arrives', async () => {
+    const adapter = makePassiveAdapter('partial-then-complete');
+    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy.js');
+
+    const promise = scanAndReadRaw({
+      adapters: [adapter],
+      profile,
+      esphomeProxy: config,
+      bleHandler: 'esphome-proxy',
+    });
+
+    await mockClient.waitForListener('ble');
+    // First frame: weight-only — grace timer arms
+    pushPassiveAd();
+    // Second frame within grace window: weight+impedance — should win and cancel timer
+    pushPassiveAd();
+
+    const result = await promise;
+    expect(result.reading.impedance).toBe(500);
+    expect(adapter.parseServiceData).toHaveBeenCalledTimes(2);
+  });
+
+  it('partial-then-timeout: emits the weight-only fallback after IMPEDANCE_GRACE_MS', async () => {
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    });
+    const adapter = makePassiveAdapter('always-partial');
+    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy.js');
+    const { IMPEDANCE_GRACE_MS } = await import('../../src/ble/types.js');
+
+    const promise = scanAndReadRaw({
+      adapters: [adapter],
+      profile,
+      esphomeProxy: config,
+      bleHandler: 'esphome-proxy',
+    });
+
+    // Flush microtasks + setImmediate so MockEsphomeClient connects and the
+    // 'ble' listener is attached. setImmediate is not faked, so this just
+    // works without timer manipulation.
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    pushPassiveAd();
+    // Advance past grace window — timer fires, weight-only fallback resolves.
+    await vi.advanceTimersByTimeAsync(IMPEDANCE_GRACE_MS + 100);
+
+    const result = await promise;
+    expect(result.reading.weight).toBe(70.0);
+    expect(result.reading.impedance).toBe(0);
   });
 });
 
