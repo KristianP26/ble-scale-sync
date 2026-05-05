@@ -129,7 +129,13 @@ export class RenphoEs26bbAdapter implements ScaleAdapter {
       await ctx.write(CHR_CONTROL, OFFLINE_ACK, true);
       bleLog.debug('ES-26BB-B: offline ack sent');
     } catch (e) {
-      bleLog.debug(`ES-26BB-B: offline ack failed: ${e instanceof Error ? e.message : String(e)}`);
+      // Surfaced at warn (not debug) so users can spot stuck offline frames in
+      // their logs. If the ack write keeps failing, the scale will replay the
+      // same cached offline frame on every reconnect.
+      bleLog.warn(
+        `ES-26BB-B: offline ack write failed; the scale will keep replaying ` +
+          `the cached frame on next connect: ${e instanceof Error ? e.message : String(e)}`,
+      );
     }
   }
 }
