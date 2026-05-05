@@ -95,7 +95,7 @@ describe('TrisaAdapter', () => {
       // Should have 2 writes: time sync + broadcast
       expect(writeFn).toHaveBeenCalledTimes(2);
 
-      // Call 1: time sync — opcode 0x02 + 4-byte LE timestamp
+      // Call 1: time sync, opcode 0x02 + 4-byte LE timestamp
       const [charUuid1, data1, withResponse1] = writeFn.mock.calls[0];
       expect(charUuid1).toBe(adapter.charWriteUuid); // CHR_DOWNLOAD
       expect(withResponse1).toBe(true);
@@ -265,15 +265,48 @@ describe('TrisaAdapter', () => {
       expect(withResponse).toBe(true);
     });
 
-    it('does not respond to challenge on ADE variant (response algo unknown)', async () => {
+    it('echoes challenge bytes with opcode 0x20 on ADE variant', async () => {
+      // fitvigo's BE1615 protocol replies with [0x20, LE32(savedPassword XOR
+      // challengeInt)]. Because no 0xA0 password frame ever arrives on ADE,
+      // savedPassword stays at zero and the response is just an echo of the
+      // four challenge bytes with the opcode swapped from 0xA1 to 0x20.
       const adapter = makeAdapter();
       const { ctx, writeFn } = ctxWithChars(ADE_CHARS);
       await adapter.onConnected!(ctx);
       writeFn.mockClear();
 
       const uploadUuid = uuid16(0x8a82);
-      // ADE only sends challenge directly, no preceding password
-      adapter.parseCharNotification!(uploadUuid, Buffer.from([0xa1, 0x01, 0x00, 0xb2, 0x2a]));
+      // Reproduces the challenge captured in #138 (sttehh).
+      adapter.parseCharNotification!(uploadUuid, Buffer.from([0xa1, 0x01, 0x00, 0xb8, 0x99]));
+
+      expect(writeFn).toHaveBeenCalledOnce();
+      const [charUuid, data, withResponse] = writeFn.mock.calls[0];
+      expect(charUuid).toBe(uuid16(0x8a81));
+      expect(Array.from(data as Buffer)).toEqual([0x20, 0x01, 0x00, 0xb8, 0x99]);
+      expect(withResponse).toBe(true);
+    });
+
+    it('ignores ADE upload frames that are not 0xA1 challenges', async () => {
+      const adapter = makeAdapter();
+      const { ctx, writeFn } = ctxWithChars(ADE_CHARS);
+      await adapter.onConnected!(ctx);
+      writeFn.mockClear();
+
+      const uploadUuid = uuid16(0x8a82);
+      adapter.parseCharNotification!(uploadUuid, Buffer.from([0xa0, 0x11, 0x22, 0x33, 0x44]));
+
+      expect(writeFn).not.toHaveBeenCalled();
+    });
+
+    it('ignores truncated ADE challenge frames', async () => {
+      const adapter = makeAdapter();
+      const { ctx, writeFn } = ctxWithChars(ADE_CHARS);
+      await adapter.onConnected!(ctx);
+      writeFn.mockClear();
+
+      const uploadUuid = uuid16(0x8a82);
+      // Only opcode + 3 bytes; algorithm needs 4.
+      adapter.parseCharNotification!(uploadUuid, Buffer.from([0xa1, 0x01, 0x02, 0x03]));
 
       expect(writeFn).not.toHaveBeenCalled();
     });
