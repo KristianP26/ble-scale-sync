@@ -1,6 +1,6 @@
 name: BLE Scale Sync
 # x-release-please-start-version
-version: 1.11.0
+version: 1.10.2
 # x-release-please-end
 slug: ble-scale-sync
 description: >-
