@@ -67,6 +67,13 @@ async function loadHandler(key: HandlerKey): Promise<CommonHandler> {
       return import('./handler-noble.js');
     case 'node-ble':
       return import('./handler-node-ble.js');
+    default: {
+      // Defensive: unreachable with the strict union, but a future caller
+      // that bypasses resolveHandlerKey() (e.g. hand-typed cast) would land
+      // here. Throw a clear error instead of silently returning undefined.
+      const _exhaustive: never = key;
+      throw new Error(`Unknown BLE handler key: ${String(_exhaustive)}`);
+    }
   }
 }
 
@@ -87,12 +94,11 @@ export { ReadingWatcher } from './handler-mqtt-proxy.js';
 /**
  * Scan for a BLE scale, read weight + impedance, and compute body composition.
  *
- * OS detection selects the BLE handler at runtime:
- * - Linux: node-ble (BlueZ D-Bus)
- * - Windows: @abandonware/noble
- * - macOS: @stoprocent/noble
+ * Handler selection precedence (matches `resolveHandlerKey`):
+ * 1. Explicit `opts.bleHandler` (`mqtt-proxy` or `esphome-proxy` from config)
+ * 2. `NOBLE_DRIVER` env var (`abandonware` or `stoprocent`)
+ * 3. OS-platform default (Linux: node-ble, Windows: noble-legacy, macOS / other: noble)
  *
- * Override with NOBLE_DRIVER=abandonware|stoprocent on any platform.
  * Dynamic import() ensures the unused library is never loaded.
  */
 export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
