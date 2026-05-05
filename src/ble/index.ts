@@ -8,6 +8,21 @@ export type { RawReading } from './shared.js';
 
 type NobleDriver = 'abandonware' | 'stoprocent';
 
+/**
+ * Resolved BLE handler identifier. The transport switch in this file used to
+ * be triplicated across `scanAndReadRaw`, `scanAndRead`, and `scanDevices`;
+ * `resolveHandlerKey()` is now the single source of truth (#130).
+ */
+export type HandlerKey = 'mqtt-proxy' | 'esphome-proxy' | 'noble-legacy' | 'noble' | 'node-ble';
+
+const HANDLER_LABELS: Record<HandlerKey, string> = {
+  'mqtt-proxy': 'mqtt-proxy (ESP32)',
+  'esphome-proxy': 'esphome-proxy',
+  'noble-legacy': 'noble-legacy (@abandonware/noble)',
+  noble: 'noble (@stoprocent/noble)',
+  'node-ble': 'node-ble (BlueZ D-Bus)',
+};
+
 /** Resolve NOBLE_DRIVER env var to a specific noble driver, or null for OS default. */
 function resolveNobleDriver(): NobleDriver | null {
   const driver = process.env.NOBLE_DRIVER?.toLowerCase();
@@ -16,59 +31,55 @@ function resolveNobleDriver(): NobleDriver | null {
   return null;
 }
 
-/** Determine which BLE handler will be used and return its name for logging. */
-function resolveHandlerName(driver: NobleDriver | null): string {
-  if (driver === 'abandonware') return 'noble-legacy (@abandonware/noble)';
-  if (driver === 'stoprocent') return 'noble (@stoprocent/noble)';
-  if (process.platform === 'linux') return 'node-ble (BlueZ D-Bus)';
-  if (process.platform === 'win32') return 'noble-legacy (@abandonware/noble)';
-  return 'noble (@stoprocent/noble)';
+/**
+ * Decide which BLE handler module to load. Precedence:
+ *   1. Explicit `bleHandler` (mqtt-proxy or esphome-proxy from config)
+ *   2. `NOBLE_DRIVER` env var (abandonware or stoprocent)
+ *   3. OS platform default (Linux: node-ble, Windows: noble-legacy, else: noble)
+ */
+export function resolveHandlerKey(bleHandler?: BleHandlerName): HandlerKey {
+  if (bleHandler === 'mqtt-proxy') return 'mqtt-proxy';
+  if (bleHandler === 'esphome-proxy') return 'esphome-proxy';
+  const driver = resolveNobleDriver();
+  if (driver === 'abandonware') return 'noble-legacy';
+  if (driver === 'stoprocent') return 'noble';
+  if (process.platform === 'linux') return 'node-ble';
+  if (process.platform === 'win32') return 'noble-legacy';
+  return 'noble';
+}
+
+/** Common surface every handler module must expose for read-and-compute paths. */
+interface CommonHandler {
+  scanAndReadRaw: (opts: ScanOptions) => Promise<RawReading>;
+  scanAndRead: (opts: ScanOptions) => Promise<BodyComposition>;
+}
+
+async function loadHandler(key: HandlerKey): Promise<CommonHandler> {
+  bleLog.debug(`BLE handler: ${HANDLER_LABELS[key]}`);
+  switch (key) {
+    case 'mqtt-proxy':
+      return import('./handler-mqtt-proxy.js');
+    case 'esphome-proxy':
+      return import('./handler-esphome-proxy.js');
+    case 'noble-legacy':
+      return import('./handler-noble-legacy.js');
+    case 'noble':
+      return import('./handler-noble.js');
+    case 'node-ble':
+      return import('./handler-node-ble.js');
+  }
 }
 
 /**
  * Scan for a BLE scale and return the raw weight/impedance reading + matched adapter.
- * Does NOT compute body composition metrics — use scanAndRead() for the full flow,
+ * Does NOT compute body composition metrics. Use scanAndRead() for the full flow,
  * or call adapter.computeMetrics(reading, profile) on the result.
  *
  * Used by the multi-user flow to match a user by weight before computing metrics.
  */
 export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
-  if (opts.bleHandler === 'mqtt-proxy') {
-    bleLog.debug('BLE handler: mqtt-proxy (ESP32)');
-    const { scanAndReadRaw: impl } = await import('./handler-mqtt-proxy.js');
-    return impl(opts);
-  }
-
-  if (opts.bleHandler === 'esphome-proxy') {
-    bleLog.debug('BLE handler: esphome-proxy');
-    const { scanAndReadRaw: impl } = await import('./handler-esphome-proxy.js');
-    return impl(opts);
-  }
-
-  const driver = resolveNobleDriver();
-  bleLog.debug(`BLE handler: ${resolveHandlerName(driver)}`);
-
-  if (driver === 'abandonware') {
-    const { scanAndReadRaw: impl } = await import('./handler-noble-legacy.js');
-    return impl(opts);
-  }
-  if (driver === 'stoprocent') {
-    const { scanAndReadRaw: impl } = await import('./handler-noble.js');
-    return impl(opts);
-  }
-
-  // OS defaults (no NOBLE_DRIVER override)
-  if (process.platform === 'linux') {
-    const { scanAndReadRaw: impl } = await import('./handler-node-ble.js');
-    return impl(opts);
-  }
-  if (process.platform === 'win32') {
-    const { scanAndReadRaw: impl } = await import('./handler-noble-legacy.js');
-    return impl(opts);
-  }
-  // macOS and other platforms
-  const { scanAndReadRaw: impl } = await import('./handler-noble.js');
-  return impl(opts);
+  const handler = await loadHandler(resolveHandlerKey(opts.bleHandler));
+  return handler.scanAndReadRaw(opts);
 }
 
 export { ReadingWatcher } from './handler-mqtt-proxy.js';
@@ -77,55 +88,25 @@ export { ReadingWatcher } from './handler-mqtt-proxy.js';
  * Scan for a BLE scale, read weight + impedance, and compute body composition.
  *
  * OS detection selects the BLE handler at runtime:
- * - Linux → node-ble (BlueZ D-Bus)
- * - Windows → @abandonware/noble
- * - macOS → @stoprocent/noble
+ * - Linux: node-ble (BlueZ D-Bus)
+ * - Windows: @abandonware/noble
+ * - macOS: @stoprocent/noble
  *
  * Override with NOBLE_DRIVER=abandonware|stoprocent on any platform.
  * Dynamic import() ensures the unused library is never loaded.
  */
 export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
-  if (opts.bleHandler === 'mqtt-proxy') {
-    bleLog.debug('BLE handler: mqtt-proxy (ESP32)');
-    const { scanAndRead: impl } = await import('./handler-mqtt-proxy.js');
-    return impl(opts);
-  }
-
-  if (opts.bleHandler === 'esphome-proxy') {
-    bleLog.debug('BLE handler: esphome-proxy');
-    const { scanAndRead: impl } = await import('./handler-esphome-proxy.js');
-    return impl(opts);
-  }
-
-  const driver = resolveNobleDriver();
-  bleLog.debug(`BLE handler: ${resolveHandlerName(driver)}`);
-
-  if (driver === 'abandonware') {
-    const { scanAndRead: impl } = await import('./handler-noble-legacy.js');
-    return impl(opts);
-  }
-  if (driver === 'stoprocent') {
-    const { scanAndRead: impl } = await import('./handler-noble.js');
-    return impl(opts);
-  }
-
-  // OS defaults (no NOBLE_DRIVER override)
-  if (process.platform === 'linux') {
-    const { scanAndRead: impl } = await import('./handler-node-ble.js');
-    return impl(opts);
-  }
-  if (process.platform === 'win32') {
-    const { scanAndRead: impl } = await import('./handler-noble-legacy.js');
-    return impl(opts);
-  }
-  // macOS and other platforms
-  const { scanAndRead: impl } = await import('./handler-noble.js');
-  return impl(opts);
+  const handler = await loadHandler(resolveHandlerKey(opts.bleHandler));
+  return handler.scanAndRead(opts);
 }
 
 /**
  * Scan for nearby BLE devices and identify recognized scales.
  * Uses the OS-appropriate BLE handler (with NOBLE_DRIVER override support).
+ *
+ * Stays as a switch/case rather than going through `loadHandler` because each
+ * handler's `scanDevices` takes different config args (mqttProxy / esphomeProxy
+ * / bleAdapter), so the dispatch is shape-specific.
  */
 export async function scanDevices(
   adapters: ScaleAdapter[],
@@ -135,61 +116,45 @@ export async function scanDevices(
   bleAdapter?: string,
   esphomeProxy?: import('../config/schema.js').EsphomeProxyConfig,
 ): Promise<ScanResult[]> {
-  if (bleHandler === 'mqtt-proxy') {
-    if (!mqttProxy) {
-      throw new Error('mqtt_proxy config is required when ble.handler is mqtt-proxy');
-    }
-    bleLog.debug('BLE handler: mqtt-proxy (ESP32)');
-    const { scanDevices: impl } = await import('./handler-mqtt-proxy.js');
-    return impl(adapters, durationMs, mqttProxy);
-  }
+  const key = resolveHandlerKey(bleHandler);
+  bleLog.debug(`BLE handler: ${HANDLER_LABELS[key]}`);
 
-  if (bleHandler === 'esphome-proxy') {
-    if (!esphomeProxy) {
-      throw new Error('esphome_proxy config is required when ble.handler is esphome-proxy');
+  switch (key) {
+    case 'mqtt-proxy': {
+      if (!mqttProxy) {
+        throw new Error('mqtt_proxy config is required when ble.handler is mqtt-proxy');
+      }
+      const { scanDevices: impl } = await import('./handler-mqtt-proxy.js');
+      return impl(adapters, durationMs, mqttProxy);
     }
-    bleLog.debug('BLE handler: esphome-proxy');
-    const { scanDevices: impl } = await import('./handler-esphome-proxy.js');
-    return impl(adapters, durationMs, esphomeProxy);
-  }
-
-  const driver = resolveNobleDriver();
-  bleLog.debug(`BLE handler: ${resolveHandlerName(driver)}`);
-
-  if (driver === 'abandonware') {
-    if (bleAdapter) {
-      bleLog.warn(
-        `ble.adapter='${bleAdapter}' is only supported with node-ble (Linux default). Ignored when using Noble.`,
-      );
+    case 'esphome-proxy': {
+      if (!esphomeProxy) {
+        throw new Error('esphome_proxy config is required when ble.handler is esphome-proxy');
+      }
+      const { scanDevices: impl } = await import('./handler-esphome-proxy.js');
+      return impl(adapters, durationMs, esphomeProxy);
     }
-    const { scanDevices: impl } = await import('./handler-noble-legacy.js');
-    return impl(adapters, durationMs);
-  }
-  if (driver === 'stoprocent') {
-    if (bleAdapter) {
-      bleLog.warn(
-        `ble.adapter='${bleAdapter}' is only supported with node-ble (Linux default). Ignored when using Noble.`,
-      );
+    case 'noble-legacy': {
+      if (bleAdapter) {
+        bleLog.warn(
+          `ble.adapter='${bleAdapter}' is only supported with node-ble (Linux default). Ignored when using Noble.`,
+        );
+      }
+      const { scanDevices: impl } = await import('./handler-noble-legacy.js');
+      return impl(adapters, durationMs);
     }
-    const { scanDevices: impl } = await import('./handler-noble.js');
-    return impl(adapters, durationMs);
+    case 'noble': {
+      if (bleAdapter) {
+        bleLog.warn(
+          `ble.adapter='${bleAdapter}' is only supported with node-ble (Linux default). Ignored when using Noble.`,
+        );
+      }
+      const { scanDevices: impl } = await import('./handler-noble.js');
+      return impl(adapters, durationMs);
+    }
+    case 'node-ble': {
+      const { scanDevices: impl } = await import('./handler-node-ble.js');
+      return impl(adapters, durationMs, bleAdapter);
+    }
   }
-
-  // OS defaults (no NOBLE_DRIVER override)
-  if (process.platform === 'linux') {
-    const { scanDevices: impl } = await import('./handler-node-ble.js');
-    return impl(adapters, durationMs, bleAdapter);
-  }
-  if (bleAdapter) {
-    bleLog.warn(
-      `ble.adapter='${bleAdapter}' is only supported on Linux with node-ble. Ignored on ${process.platform}.`,
-    );
-  }
-  if (process.platform === 'win32') {
-    const { scanDevices: impl } = await import('./handler-noble-legacy.js');
-    return impl(adapters, durationMs);
-  }
-  // macOS and other platforms
-  const { scanDevices: impl } = await import('./handler-noble.js');
-  return impl(adapters, durationMs);
 }
