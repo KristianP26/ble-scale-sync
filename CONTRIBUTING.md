@@ -118,7 +118,7 @@ ble-scale-sync/
 │   │   ├── embedded-broker.ts       # Embedded aedes MQTT broker for ESP32 proxy
 │   │   └── mqtt-proxy-bootstrap.ts  # First-run scan + adapter pin for ESP32 proxy
 │   ├── exporters/
-│   │   ├── index.ts                 # Exporter factory — createExporters()
+│   │   ├── index.ts                 # Exporter factory: createExporters()
 │   │   ├── registry.ts              # Self-describing exporter registry (schemas + factories)
 │   │   ├── config.ts                # Exporter env validation + config parsing
 │   │   ├── garmin.ts                # Garmin Connect (Python subprocess)
@@ -155,7 +155,7 @@ ble-scale-sync/
 │   │   ├── exporter.ts              # Exporter interface & ExportResult
 │   │   └── exporter-schema.ts       # ExporterSchema for self-describing exporters
 │   └── scales/
-│       ├── index.ts                 # Adapter registry (order matters — generic last)
+│       ├── index.ts                 # Adapter registry (order matters: generic last)
 │       ├── body-comp-helpers.ts     # Shared body-comp utilities
 │       ├── qn-scale.ts              # QN / Renpho (incl. ES-26M, ES-30M) / Senssun / Sencor
 │       ├── renpho.ts                # Renpho ES-WBE28
