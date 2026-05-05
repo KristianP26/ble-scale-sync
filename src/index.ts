@@ -12,7 +12,7 @@ import {
 } from './ble/handler-mqtt-proxy.js';
 import { bootstrapMqttProxy } from './ble/mqtt-proxy-bootstrap.js';
 import type { EmbeddedBrokerHandle } from './ble/embedded-broker.js';
-import { abortableSleep } from './ble/types.js';
+import { abortableSleep, POST_DISCONNECT_GRACE_MS } from './ble/types.js';
 import { ConsecutiveFailureWatchdog } from './ble/watchdog.js';
 import { adapters } from './scales/index.js';
 import { createLogger, setLogLevel, LogLevel } from './logger.js';
@@ -571,9 +571,23 @@ async function main(): Promise<void> {
         watchdog.recordSuccess();
 
         if (signal.aborted) break;
+        // After a successful read, the scale typically keeps advertising for
+        // 15-25 s while the link layer winds down (display fades). Connecting
+        // during that tail-off triggers the dying-peer GATT stall (#143). Apply
+        // POST_DISCONNECT_GRACE_MS as a floor on top of the configured cooldown.
+        // Failed scans in the catch branch use plain backoff, no grace.
         const cooldown = appConfig.runtime?.scan_cooldown ?? scanCooldownSec;
-        log.info(`\nWaiting ${cooldown}s before next scan...`);
-        await abortableSleep(cooldown * 1000, signal);
+        const cooldownMs = cooldown * 1000;
+        const effectiveMs = Math.max(cooldownMs, POST_DISCONNECT_GRACE_MS);
+        if (effectiveMs > cooldownMs) {
+          log.info(
+            `\nWaiting ${effectiveMs / 1000}s before next scan ` +
+              `(cooldown ${cooldown}s, post-disconnect grace floor ${POST_DISCONNECT_GRACE_MS / 1000}s)...`,
+          );
+        } else {
+          log.info(`\nWaiting ${cooldown}s before next scan...`);
+        }
+        await abortableSleep(effectiveMs, signal);
       } catch (err) {
         if (signal.aborted) break;
 

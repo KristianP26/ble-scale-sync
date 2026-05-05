@@ -28,6 +28,8 @@ import {
   CHAR_DISCOVERY_MAX_RETRIES,
   CHAR_DISCOVERY_RETRY_DELAY_MS,
   IMPEDANCE_GRACE_MS,
+  RSSI_UNAVAILABLE,
+  RSSI_FRESHNESS_MS,
 } from './types.js';
 
 type Device = NodeBle.Device;
@@ -245,6 +247,82 @@ async function startDiscoverySafe(
   return false;
 }
 
+/**
+ * Tracks whether a BlueZ peer is still actively advertising.
+ *
+ * Two signals decide freshness:
+ *  - the current `RSSI` value from `org.bluez.Device1` (Readonly+Optional int16
+ *    per the BlueZ docs, verified via context7). Missing or the sentinel 127
+ *    ("unavailable" per mgmt-protocol Device Found) means the peer has gone
+ *    dark.
+ *  - the time since the last `RSSI` `PropertiesChanged` signal. BlueZ
+ *    refreshes this on every received advertisement, so absence of an update
+ *    within `RSSI_FRESHNESS_MS` means no new packets have arrived even though
+ *    the cached value may still be present.
+ *
+ * Either failing signal points at the dying-peer scenario @fromport
+ * reproduced for #143 / #140, where `device.connect()` would stall inside
+ * GATT discovery against a peer whose link layer is shutting down.
+ */
+interface PeerFreshnessTracker {
+  isFresh: () => Promise<boolean>;
+  stop: () => void;
+}
+
+export function startPeerFreshnessTracker(device: Device): PeerFreshnessTracker {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const helper = (device as any).helper;
+  // Initialise as just-discovered: waitDevice resolved on a fresh advertisement.
+  let lastRssiUpdateTs = Date.now();
+  const onPropsChanged = (props: Record<string, unknown>) => {
+    if ('RSSI' in props) lastRssiUpdateTs = Date.now();
+  };
+  let stopped = false;
+  try {
+    helper.on('PropertiesChanged', onPropsChanged);
+  } catch {
+    // Subscription unavailable: fall back to prop-only freshness check.
+  }
+  return {
+    isFresh: async () => {
+      try {
+        const rssi: unknown = await helper.prop('RSSI');
+        if (rssi === undefined || rssi === null) return false;
+        if (typeof rssi === 'number' && rssi === RSSI_UNAVAILABLE) return false;
+        if (Date.now() - lastRssiUpdateTs > RSSI_FRESHNESS_MS) return false;
+        return true;
+      } catch {
+        // Property absent (BlueZ dropped it) or D-Bus error: treat as stale.
+        return false;
+      }
+    },
+    stop: () => {
+      if (stopped) return;
+      stopped = true;
+      try {
+        helper.removeListener('PropertiesChanged', onPropsChanged);
+      } catch {
+        // Listener never attached or helper already torn down.
+      }
+    },
+  };
+}
+
+/**
+ * Convenience one-shot probe. Subscribes to PropertiesChanged for one freshness
+ * check and tears down. Equivalent to instantiating the tracker, calling
+ * `isFresh`, and stopping immediately. Useful in tests and for callers that
+ * only need a single check.
+ */
+export async function isPeerFresh(device: Device): Promise<boolean> {
+  const tracker = startPeerFreshnessTracker(device);
+  try {
+    return await tracker.isFresh();
+  } finally {
+    tracker.stop();
+  }
+}
+
 /** Remove a device from BlueZ D-Bus cache to force a fresh proxy on re-discovery. */
 async function removeDevice(btAdapter: Adapter, mac: string): Promise<void> {
   try {
@@ -276,71 +354,116 @@ async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<Device>
   const { mac, maxRetries, bleAdapter } = ctx;
   const formattedMac = formatMac(mac);
   let device = ctx.initialDevice;
+  // RSSI freshness re-discovery is a one-shot defense per call: if the peer
+  // already looks dark, we re-discover once. Repeating it on every retry just
+  // burns the budget on a peer that never came back; let the outer loop pick
+  // the next cooldown instead.
+  let rssiRediscoverUsed = false;
+  // Long-lived PropertiesChanged subscription on the current device proxy so
+  // every received advertisement updates the freshness clock. The tracker is
+  // rebound when the catch branch swaps the device reference.
+  let tracker = startPeerFreshnessTracker(device);
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const t0 = Date.now();
-      bleLog.debug(`Connect attempt ${attempt + 1}/${maxRetries + 1}...`);
-      await withTimeout(device.connect(), CONNECT_TIMEOUT_MS, 'Connection timed out');
-      bleLog.debug(`Connected (took ${Date.now() - t0}ms)`);
-      return device;
-    } catch (err: unknown) {
-      const msg = errMsg(err);
-      if (attempt >= maxRetries) {
-        throw new Error(`Connection failed after ${maxRetries + 1} attempts: ${msg}`);
-      }
-
-      const delay = 1000 + attempt * 500;
-      bleLog.warn(
-        `Connect error: ${msg}. Retrying (${attempt + 1}/${maxRetries}) in ${delay}ms...`,
-      );
-
-      // 1. Disconnect (best-effort)
+  try {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        bleLog.debug('Disconnecting before retry...');
-        await device.disconnect();
-        bleLog.debug('Disconnect OK');
-      } catch {
-        bleLog.debug('Disconnect failed (ignored)');
-      }
+        // Skip the dying-peer connect attempt: a missing or 127-sentinel RSSI
+        // OR no PropertiesChanged for RSSI within RSSI_FRESHNESS_MS means
+        // BlueZ has not heard a fresh advertisement, and connect will stall
+        // inside GATT discovery (#143). Force one re-discovery to either
+        // refresh the cached props or fail fast.
+        if (!(await tracker.isFresh())) {
+          if (rssiRediscoverUsed) {
+            throw new Error(`Peer ${formattedMac} not advertising (RSSI stale after re-discovery)`);
+          }
+          rssiRediscoverUsed = true;
+          bleLog.warn(`Peer ${formattedMac} RSSI stale, re-discovering before connect...`);
+          try {
+            tracker.stop();
+            const result = await startDiscoverySafe(btAdapter, bleAdapter);
+            if (result) btAdapter = result;
+            device = await withTimeout(
+              btAdapter.waitDevice(formattedMac),
+              DISCOVERY_TIMEOUT_MS,
+              `Device ${formattedMac} not found during RSSI re-discovery`,
+            );
+            tracker = startPeerFreshnessTracker(device);
+            await stopDiscoveryAndQuiesce(btAdapter);
+            if (!(await tracker.isFresh())) {
+              throw new Error(`Peer ${formattedMac} still not advertising after re-discovery`);
+            }
+          } catch (rssiErr: unknown) {
+            throw new Error(`Skipped connect to dying peer ${formattedMac}: ${errMsg(rssiErr)}`);
+          }
+        }
 
-      // 2. Purge stale D-Bus proxy
-      await removeDevice(btAdapter, mac);
+        const t0 = Date.now();
+        bleLog.debug(`Connect attempt ${attempt + 1}/${maxRetries + 1}...`);
+        await withTimeout(device.connect(), CONNECT_TIMEOUT_MS, 'Connection timed out');
+        bleLog.debug(`Connected (took ${Date.now() - t0}ms)`);
+        return device;
+      } catch (err: unknown) {
+        const msg = errMsg(err);
+        if (attempt >= maxRetries) {
+          throw new Error(`Connection failed after ${maxRetries + 1} attempts: ${msg}`);
+        }
 
-      // 3. Progressive delay
-      await sleep(delay);
-
-      // 4. Re-discover and acquire fresh device reference
-      try {
-        const result = await startDiscoverySafe(btAdapter, bleAdapter);
-        if (result) btAdapter = result;
-        device = await withTimeout(
-          btAdapter.waitDevice(formattedMac),
-          DISCOVERY_TIMEOUT_MS,
-          `Device ${formattedMac} not found during retry`,
+        const delay = 1000 + attempt * 500;
+        bleLog.warn(
+          `Connect error: ${msg}. Retrying (${attempt + 1}/${maxRetries}) in ${delay}ms...`,
         );
 
+        // 1. Disconnect (best-effort)
         try {
-          await btAdapter.stopDiscovery();
+          bleLog.debug('Disconnecting before retry...');
+          await device.disconnect();
+          bleLog.debug('Disconnect OK');
         } catch {
-          bleLog.debug('stopDiscovery failed during retry (ignored)');
+          bleLog.debug('Disconnect failed (ignored)');
         }
-        await sleep(POST_DISCOVERY_QUIESCE_MS);
-      } catch (retryErr: unknown) {
-        bleLog.debug(`Re-discovery during retry failed: ${errMsg(retryErr)}`);
-        // Fallback: try to get device directly without re-discovery
+
+        // 2. Purge stale D-Bus proxy
+        await removeDevice(btAdapter, mac);
+
+        // 3. Progressive delay
+        await sleep(delay);
+
+        // 4. Re-discover and acquire fresh device reference + rebind tracker
+        tracker.stop();
         try {
-          device = await btAdapter.getDevice(formattedMac);
-        } catch {
-          throw new Error(
-            `Connection failed and device re-acquisition failed: ${errMsg(retryErr)}`,
+          const result = await startDiscoverySafe(btAdapter, bleAdapter);
+          if (result) btAdapter = result;
+          device = await withTimeout(
+            btAdapter.waitDevice(formattedMac),
+            DISCOVERY_TIMEOUT_MS,
+            `Device ${formattedMac} not found during retry`,
           );
+
+          try {
+            await btAdapter.stopDiscovery();
+          } catch {
+            bleLog.debug('stopDiscovery failed during retry (ignored)');
+          }
+          await sleep(POST_DISCOVERY_QUIESCE_MS);
+        } catch (retryErr: unknown) {
+          bleLog.debug(`Re-discovery during retry failed: ${errMsg(retryErr)}`);
+          // Fallback: try to get device directly without re-discovery
+          try {
+            device = await btAdapter.getDevice(formattedMac);
+          } catch {
+            throw new Error(
+              `Connection failed and device re-acquisition failed: ${errMsg(retryErr)}`,
+            );
+          }
         }
+        tracker = startPeerFreshnessTracker(device);
       }
     }
-  }
 
-  throw new Error('Connection failed');
+    throw new Error('Connection failed');
+  } finally {
+    tracker.stop();
+  }
 }
 
 async function autoDiscover(

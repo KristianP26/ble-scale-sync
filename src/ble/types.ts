@@ -35,6 +35,29 @@ export const CHAR_DISCOVERY_RETRY_DELAY_MS = 500;
 export const POST_DISCOVERY_QUIESCE_MS = 500;
 
 /**
+ * Minimum cooldown floor after a successful read in continuous mode.
+ * BLE scales typically keep advertising for 15-25 s after the user steps off
+ * (display goes dark, link layer winds down). Connecting during that tail-off
+ * triggers BlueZ to accept the request against a peer that never completes
+ * GATT discovery, which on some controllers stalls the D-Bus call inside
+ * node-ble synchronously. A 25 s floor sidesteps the dying-peer window
+ * entirely. Failed scans still respect the configured cooldown only; this
+ * floor applies on success. See #143.
+ */
+export const POST_DISCONNECT_GRACE_MS = 25_000;
+
+/** Threshold below which a cached RSSI is considered stale (BlueZ uses 127 as "unavailable" sentinel). */
+export const RSSI_UNAVAILABLE = 127;
+
+/**
+ * Maximum age of the last RSSI PropertiesChanged signal before a peer is
+ * considered to have stopped advertising. Typical BLE scale advertising
+ * intervals are 100-500 ms, so 5 s gives roughly 10-50 missed packets of slack
+ * before we treat the device reference as stale. See #143.
+ */
+export const RSSI_FRESHNESS_MS = 5_000;
+
+/**
  * Grace window after a weight-only broadcast frame is received.
  * The Mi Scale 2 broadcasts weight-only frames while BIA is in progress, then
  * a final frame with impedance once the measurement completes (~10–20 s on device).
