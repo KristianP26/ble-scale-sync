@@ -53,8 +53,10 @@ export class MiScale2Adapter implements ScaleAdapter {
     // always includes 0x181B as a service-data UUID (AD type 0x16), which lands in
     // serviceData rather than serviceUuids — check both.
     const hasBcs = (u: string) => u === SVC_BODY_COMP;
-    return (device.serviceUuids ?? []).some(hasBcs) ||
-           (device.serviceData ?? []).some((sd) => hasBcs(sd.uuid));
+    return (
+      (device.serviceUuids ?? []).some(hasBcs) ||
+      (device.serviceData ?? []).some((sd) => hasBcs(sd.uuid))
+    );
   }
 
   /**
@@ -109,7 +111,12 @@ export class MiScale2Adapter implements ScaleAdapter {
 
   parseServiceData(uuid: string, data: Buffer): ScaleReading | null {
     const stripped = uuid.toLowerCase().replace(/[-{}]/g, '');
-    const norm = stripped.length === 4 ? `0000${stripped}00001000800000805f9b34fb` : stripped;
+    let norm = stripped;
+    if (stripped.length === 4) {
+      norm = `0000${stripped}00001000800000805f9b34fb`;
+    } else if (stripped.length === 8) {
+      norm = `${stripped}00001000800000805f9b34fb`;
+    }
     if (norm !== SVC_BODY_COMP) return null;
     return this.parseFrame(data);
   }

@@ -311,7 +311,10 @@ function broadcastScan(
 
     const cleanup = () => {
       clearTimeout(timeout);
-      if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
+      if (graceTimer) {
+        clearTimeout(graceTimer);
+        graceTimer = null;
+      }
       noble.removeListener('discover', onDiscover);
       noble.stopScanningAsync().catch(() => {});
       abortSignal?.removeEventListener('abort', onAbort);
@@ -348,7 +351,10 @@ function broadcastScan(
 
       if (onLiveData) onLiveData(reading);
 
-      if (!adapter.isComplete(reading)) {
+      // Passive-preferring adapters (Mi Scale 2) wait for an impedance-bearing
+      // frame; others have a final flag in the frame and emit immediately.
+      const requiresStable = adapter.preferPassive === true;
+      if (requiresStable && !adapter.isComplete(reading)) {
         bleLog.debug(
           `${adapter.name} broadcast frame not yet complete ` +
             `(weight=${reading.weight.toFixed(2)} kg, impedance=${reading.impedance})`,
@@ -431,9 +437,14 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     // Use broadcast scanning when the device is non-connectable or the matched
     // adapter prefers passive advertisement decoding over a GATT connection.
     if (!connectable || broadcastAdapter?.preferPassive) {
-      if (broadcastAdapter && (broadcastAdapter.parseBroadcast || broadcastAdapter.parseServiceData)) {
+      if (
+        broadcastAdapter &&
+        (broadcastAdapter.parseBroadcast || broadcastAdapter.parseServiceData)
+      ) {
         if (!connectable) {
-          bleLog.info(`Device is broadcast-only (non-connectable). Using advertisement-based reading.`);
+          bleLog.info(
+            `Device is broadcast-only (non-connectable). Using advertisement-based reading.`,
+          );
         } else {
           bleLog.info(`Adapter prefers passive mode. Using advertisement-based reading.`);
         }

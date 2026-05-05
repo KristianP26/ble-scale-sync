@@ -1,5 +1,10 @@
 import NodeBle from 'node-ble';
-import type { ScaleAdapter, ScaleReading, BleDeviceInfo, BodyComposition } from '../interfaces/scale-adapter.js';
+import type {
+  ScaleAdapter,
+  ScaleReading,
+  BleDeviceInfo,
+  BodyComposition,
+} from '../interfaces/scale-adapter.js';
 import type { ScanOptions, ScanResult } from './types.js';
 import type { BleChar, BleDevice, RawReading } from './shared.js';
 import { waitForRawReading, findMissingCharacteristics } from './shared.js';
@@ -508,7 +513,9 @@ async function broadcastScanNodeBle(
     bleLog.debug(`SetDiscoveryFilter: ${errMsg(err)} (non-fatal, will poll)`);
   }
 
-  bleLog.info('Adapter prefers passive mode. Listening for broadcast weight data. Step on the scale.');
+  bleLog.info(
+    'Adapter prefers passive mode. Listening for broadcast weight data. Step on the scale.',
+  );
 
   return new Promise<RawReading>((resolve, reject) => {
     let done = false;
@@ -532,7 +539,10 @@ async function broadcastScanNodeBle(
     let onPropsChanged: ((changedProps: Record<string, unknown>) => void) | null = null;
 
     const cleanup = () => {
-      if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
+      if (graceTimer) {
+        clearTimeout(graceTimer);
+        graceTimer = null;
+      }
       abortSignal?.removeEventListener('abort', onAbort);
       if (onPropsChanged) {
         try {
@@ -543,8 +553,7 @@ async function broadcastScanNodeBle(
       }
     };
 
-    const onAbort = () =>
-      fail(abortSignal!.reason ?? new DOMException('Aborted', 'AbortError'));
+    const onAbort = () => fail(abortSignal!.reason ?? new DOMException('Aborted', 'AbortError'));
     abortSignal?.addEventListener('abort', onAbort, { once: true });
 
     /** Try to parse ServiceData entries and resolve if a complete reading is found. */

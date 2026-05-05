@@ -1,4 +1,9 @@
-import type { ScaleAdapter, ScaleReading, BleDeviceInfo, BodyComposition } from '../interfaces/scale-adapter.js';
+import type {
+  ScaleAdapter,
+  ScaleReading,
+  BleDeviceInfo,
+  BodyComposition,
+} from '../interfaces/scale-adapter.js';
 import type { EsphomeProxyConfig } from '../config/schema.js';
 import type { ScanOptions, ScanResult } from './types.js';
 import type { RawReading } from './shared.js';
@@ -302,16 +307,26 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
             }
           }
 
-          if (reading && adapter.isComplete(reading)) {
-            if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
+          // Adapters that prefer passive scanning (e.g. Mi Scale 2) emit a
+          // weight-only frame first and a weight+impedance frame moments later.
+          // Gate on isComplete + grace-timer for those. Other broadcast adapters
+          // (Eufy, QN-scale) embed a "final" flag in the frame itself, so any
+          // non-null reading is already stable — emit immediately to avoid
+          // adding a 12s latency penalty on the existing path.
+          const requiresStable = adapter.preferPassive === true;
+          if (reading && (!requiresStable || adapter.isComplete(reading))) {
+            if (graceTimer) {
+              clearTimeout(graceTimer);
+              graceTimer = null;
+            }
             bleLog.info(`Matched: ${adapter.name} (${address})`);
             bleLog.info(`Broadcast reading: ${reading.weight} kg`);
             resolve({ reading, adapter });
             return;
           }
 
-          // Partial frame (e.g. weight without impedance): start grace timer.
-          if (reading) {
+          // Partial frame for a passive adapter — start grace timer.
+          if (reading && requiresStable) {
             bleLog.debug(
               `${adapter.name} matched at ${address} but broadcast frame is not stable yet`,
             );
@@ -543,10 +558,16 @@ export class ReadingWatcher {
       }
     }
 
-    if (reading && adapter.isComplete(reading)) {
+    // Same passive-vs-immediate split as scanAndReadRaw — see comment there.
+    const requiresStable = adapter.preferPassive === true;
+    if (reading && (!requiresStable || adapter.isComplete(reading))) {
       // Cancel any pending grace timer for this address — we got the full reading.
       const gt = this.graceTimers.get(address);
-      if (gt) { clearTimeout(gt); this.graceTimers.delete(address); this.graceReadings.delete(address); }
+      if (gt) {
+        clearTimeout(gt);
+        this.graceTimers.delete(address);
+        this.graceReadings.delete(address);
+      }
 
       const key = `${address}:${reading.weight.toFixed(1)}`;
       const now = Date.now();
@@ -563,22 +584,25 @@ export class ReadingWatcher {
       return;
     }
 
-    // Partial broadcast frame (weight without impedance): start a grace timer so
+    // Partial broadcast frame for a passive adapter — start grace timer so
     // we fall back to weight-only if the impedance frame never arrives.
-    if (reading) {
+    if (reading && requiresStable) {
       this.graceReadings.set(address, { reading, adapter });
       if (!this.graceTimers.has(address)) {
-        this.graceTimers.set(address, setTimeout(() => {
-          this.graceTimers.delete(address);
-          const gr = this.graceReadings.get(address);
-          this.graceReadings.delete(address);
-          if (!gr) return;
-          bleLog.info(
-            `Matched: ${gr.adapter.name} (${address}) — weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
-          );
-          bleLog.info(`Broadcast reading: ${gr.reading.weight} kg`);
-          this.queue.push(gr);
-        }, IMPEDANCE_GRACE_MS));
+        this.graceTimers.set(
+          address,
+          setTimeout(() => {
+            this.graceTimers.delete(address);
+            const gr = this.graceReadings.get(address);
+            this.graceReadings.delete(address);
+            if (!gr) return;
+            bleLog.info(
+              `Matched: ${gr.adapter.name} (${address}) — weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
+            );
+            bleLog.info(`Broadcast reading: ${gr.reading.weight} kg`);
+            this.queue.push(gr);
+          }, IMPEDANCE_GRACE_MS),
+        );
       }
       return;
     }
