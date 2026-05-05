@@ -18,15 +18,15 @@ BLE Scale Sync calculates 10 body composition metrics from your scale's weight a
 | Metric              | Unit     | Description                                              |
 | ------------------- | -------- | -------------------------------------------------------- |
 | **Weight**          | kg / lbs | Raw scale reading (configurable via `weight_unit`)       |
-| **BMI**             | —        | Body Mass Index                                          |
+| **BMI**             | (none)   | Body Mass Index                                          |
 | **Body Fat**        | %        | BIA-based (requires impedance) or Deurenberg fallback    |
 | **Water**           | %        | Total body water percentage                              |
 | **Bone Mass**       | kg / lbs | Estimated bone mineral content                           |
 | **Muscle Mass**     | kg / lbs | Skeletal muscle mass                                     |
-| **Visceral Fat**    | 1–59     | Internal organ fat rating                                |
+| **Visceral Fat**    | 1-59     | Internal organ fat rating                                |
 | **BMR**             | kcal     | Basal Metabolic Rate                                     |
 | **Metabolic Age**   | years    | Metabolic age relative to BMR                            |
-| **Physique Rating** | 1–9      | Body type classification based on fat % and muscle ratio |
+| **Physique Rating** | 1-9      | Body type classification based on fat % and muscle ratio |
 
 ## How It Works
 

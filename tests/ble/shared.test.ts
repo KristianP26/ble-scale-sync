@@ -830,7 +830,7 @@ describe('findMissingCharacteristics()', () => {
       characteristics: [
         { service: SERVICE_UUID, uuid: NOTIFY_UUID, type: 'notify' },
         { service: SERVICE_UUID, uuid: WRITE_UUID, type: 'write' },
-        // Optional and missing — must NOT show up as missing.
+        // Optional and missing: must NOT show up as missing.
         { service: SERVICE_UUID, uuid: OTHER_UUID, type: 'notify', optional: true },
       ],
     });

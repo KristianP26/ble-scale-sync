@@ -60,7 +60,7 @@ export const RSSI_FRESHNESS_MS = 5_000;
 /**
  * Grace window after a weight-only broadcast frame is received.
  * The Mi Scale 2 broadcasts weight-only frames while BIA is in progress, then
- * a final frame with impedance once the measurement completes (~10–20 s on device).
+ * a final frame with impedance once the measurement completes (~10-20 s on device).
  * If an impedance-bearing frame arrives within this window the complete reading is
  * used; otherwise the weight-only reading is forwarded as a fallback.
  */
