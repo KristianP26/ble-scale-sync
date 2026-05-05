@@ -36,6 +36,33 @@ type Device = NodeBle.Device;
 type Adapter = NodeBle.Adapter;
 type GattCharacteristic = NodeBle.GattCharacteristic;
 
+// ─── D-Bus surface typings ───────────────────────────────────────────────────
+// node-ble does not expose typings for the internal `helper` BusHelper field
+// or for dbus-next Variant wrappers, so we declare the minimum surface we use.
+// Replaces eight `eslint-disable @typescript-eslint/no-explicit-any` cast sites
+// (#162) with one typed access pattern.
+
+type Variant<T = unknown> = { signature?: string; value: T };
+
+type PropsChangedHandler = (props: Record<string, unknown>) => void;
+
+interface BluezHelper {
+  on(event: 'PropertiesChanged', handler: PropsChangedHandler): void;
+  removeListener(event: 'PropertiesChanged', handler: PropsChangedHandler): void;
+  prop(name: string): Promise<unknown>;
+  set(name: string, value: Variant): Promise<void>;
+  callMethod(method: string, ...args: unknown[]): Promise<unknown>;
+  object: string;
+}
+
+type WithHelper<T> = T & { helper: BluezHelper };
+
+interface DbusNextModule {
+  Variant: new <T>(signature: string, value: T) => Variant<T>;
+}
+
+const helperOf = <T>(obj: T): BluezHelper => (obj as WithHelper<T>).helper;
+
 // ─── Persistent D-Bus connection + adapter ──────────────────────────────────
 // Both the D-Bus connection and the BlueZ adapter proxy are reused across scan
 // cycles in continuous mode. This prevents orphaned BlueZ discovery sessions:
@@ -160,8 +187,7 @@ async function startDiscoverySafe(
   // 2. Force-stop via D-Bus (bypass node-ble's isDiscovering guard) + retry
   bleLog.debug('Attempting D-Bus StopDiscovery to reset stale state...');
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (btAdapter as any).helper.callMethod('StopDiscovery');
+    await helperOf(btAdapter).callMethod('StopDiscovery');
     bleLog.debug('D-Bus StopDiscovery succeeded');
   } catch (e) {
     bleLog.debug(`D-Bus StopDiscovery failed: ${errMsg(e)}`);
@@ -179,10 +205,8 @@ async function startDiscoverySafe(
   // 3. Power-cycle the adapter + retry
   bleLog.debug('Attempting adapter power cycle...');
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const helper = (btAdapter as any).helper;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { Variant } = (await import('dbus-next')) as any;
+    const helper = helperOf(btAdapter);
+    const { Variant } = (await import('dbus-next')) as unknown as DbusNextModule;
     await helper.set('Powered', new Variant('b', false));
     bleLog.debug('Adapter powered off');
     await sleep(1000);
@@ -270,11 +294,10 @@ interface PeerFreshnessTracker {
 }
 
 export function startPeerFreshnessTracker(device: Device): PeerFreshnessTracker {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const helper = (device as any).helper;
+  const helper = helperOf(device);
   // Initialise as just-discovered: waitDevice resolved on a fresh advertisement.
   let lastRssiUpdateTs = Date.now();
-  const onPropsChanged = (props: Record<string, unknown>) => {
+  const onPropsChanged: PropsChangedHandler = (props) => {
     if ('RSSI' in props) lastRssiUpdateTs = Date.now();
   };
   let stopped = false;
@@ -327,8 +350,7 @@ export async function isPeerFresh(device: Device): Promise<boolean> {
 async function removeDevice(btAdapter: Adapter, mac: string): Promise<void> {
   try {
     const devSerialized = `dev_${formatMac(mac).replace(/:/g, '_')}`;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const adapterHelper = (btAdapter as any).helper;
+    const adapterHelper = helperOf(btAdapter);
     await adapterHelper.callMethod('RemoveDevice', `${adapterHelper.object}/${devSerialized}`);
     bleLog.debug('Removed device from BlueZ cache');
   } catch {
@@ -580,25 +602,22 @@ async function buildCharMap(gatt: NodeBle.GattServer): Promise<Map<string, BleCh
 /** Extract a Buffer from a D-Bus value that may be a Variant wrapper, Buffer, Uint8Array, or number[]. */
 function extractDbusBytes(val: unknown): Buffer | null {
   if (!val) return null;
-  // dbus-next wraps dict values in Variant objects — unwrap .value if present
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const inner = (val as any)?.value ?? val;
+  // dbus-next wraps dict values in Variant objects — unwrap .value if present.
+  const inner: unknown =
+    typeof val === 'object' && val !== null && 'value' in val
+      ? (val as { value: unknown }).value
+      : val;
   if (Buffer.isBuffer(inner)) return inner;
   if (inner instanceof Uint8Array) return Buffer.from(inner);
-  if (Array.isArray(inner) && (inner as unknown[]).every((b) => typeof b === 'number'))
+  if (Array.isArray(inner) && inner.every((b) => typeof b === 'number'))
     return Buffer.from(inner as number[]);
   // dbus-next serialises Buffer values to JSON as {type:"Buffer",data:[...]}
   // (standard Node.js Buffer.toJSON() format)
-  if (
-    typeof inner === 'object' &&
-    inner !== null &&
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (inner as any).type === 'Buffer' &&
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    Array.isArray((inner as any).data)
-  ) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return Buffer.from((inner as any).data as number[]);
+  if (typeof inner === 'object' && inner !== null && 'type' in inner && 'data' in inner) {
+    const obj = inner as { type: unknown; data: unknown };
+    if (obj.type === 'Buffer' && Array.isArray(obj.data)) {
+      return Buffer.from(obj.data as number[]);
+    }
   }
   return null;
 }
@@ -623,10 +642,8 @@ async function broadcastScanNodeBle(
   // Tell BlueZ to report duplicate advertisements so ServiceData is refreshed
   // on every packet from the scale, not just on first discovery.
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { Variant } = (await import('dbus-next')) as any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const adapterHelper = (btAdapter as any).helper;
+    const { Variant } = (await import('dbus-next')) as unknown as DbusNextModule;
+    const adapterHelper = helperOf(btAdapter);
     await adapterHelper.callMethod('SetDiscoveryFilter', {
       Transport: new Variant('s', 'le'),
       DuplicateData: new Variant('b', true),
@@ -659,7 +676,7 @@ async function broadcastScanNodeBle(
       reject(err);
     };
 
-    let onPropsChanged: ((changedProps: Record<string, unknown>) => void) | null = null;
+    let onPropsChanged: PropsChangedHandler | null = null;
 
     const cleanup = () => {
       if (graceTimer) {
@@ -669,9 +686,10 @@ async function broadcastScanNodeBle(
       abortSignal?.removeEventListener('abort', onAbort);
       if (onPropsChanged) {
         try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (device as any).helper.removeListener('PropertiesChanged', onPropsChanged);
-        } catch {}
+          helperOf(device).removeListener('PropertiesChanged', onPropsChanged);
+        } catch {
+          // Helper torn down or listener already removed.
+        }
         onPropsChanged = null;
       }
     };
@@ -727,9 +745,8 @@ async function broadcastScanNodeBle(
     // the signal directly (Device is constructed with usePropsEvents: true).
     // This fires on every advertisement when DuplicateData=true is set above.
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const deviceHelper = (device as any).helper;
-      onPropsChanged = (changedProps: Record<string, unknown>) => {
+      const deviceHelper = helperOf(device);
+      onPropsChanged = (changedProps) => {
         if (done) return;
         if (changedProps.ServiceData) tryServiceData(changedProps.ServiceData);
       };
@@ -747,8 +764,7 @@ async function broadcastScanNodeBle(
       while (!done && Date.now() < deadline) {
         if (abortSignal?.aborted) break;
         try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const sd: unknown = await (device as any).helper.prop('ServiceData');
+          const sd: unknown = await helperOf(device).prop('ServiceData');
           tryServiceData(sd);
         } catch (err: unknown) {
           bleLog.debug(`ServiceData poll error: ${errMsg(err)}`);
@@ -1021,8 +1037,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       // a clean BlueZ state instead of inheriting the zombie subscription.
       if (!gattSucceeded) {
         try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          await (btAdapter! as any).helper.callMethod('StopDiscovery');
+          await helperOf(btAdapter!).callMethod('StopDiscovery');
           bleLog.debug('Force StopDiscovery after failed GATT');
         } catch (e) {
           bleLog.debug(`Force StopDiscovery failed: ${errMsg(e)}`);
