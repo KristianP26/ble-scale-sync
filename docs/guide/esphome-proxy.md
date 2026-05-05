@@ -122,7 +122,7 @@ That's expected. The `client_info` field is how ESPHome identifies who's connect
 
 ### Scale is only read on the second weigh-in
 
-Some scales (notably Xiaomi Mi Scale 2) broadcast their final measurement frame in a very brief window — the moment weight and impedance are both stable. The default ESPHome scan parameters listen only ~9% of the time (`window: 30ms / interval: 320ms`), which can miss this window on the first stand.
+Some scales (notably Xiaomi Mi Scale 2) broadcast their final measurement frame in a very brief window: the moment weight and impedance are both stable. The default ESPHome scan parameters listen only ~9% of the time (`window: 30ms / interval: 320ms`), which can miss this window on the first stand.
 
 Fix: increase the scan duty cycle in your ESPHome device YAML:
 
@@ -133,11 +133,11 @@ bluetooth_proxy:
 esp32_ble_tracker:
   scan_parameters:
     interval: 320ms
-    window: 300ms   # listen ~94% of the time
+    window: 300ms # listen ~94% of the time
     active: true
 ```
 
-Flash the updated firmware to the proxy and restart BLE Scale Sync. This affects all passive-broadcast scales on that proxy — higher duty cycle means more reliable first-try readings.
+Flash the updated firmware to the proxy and restart BLE Scale Sync. This affects all passive-broadcast scales on that proxy: higher duty cycle means more reliable first-try readings.
 
 ### "No recognized scales found" in `npm run scan` over ESPHome
 

@@ -94,7 +94,7 @@ describe('AdeA2Adapter (inert scaffolding)', () => {
   });
 
   it('exposes empty-string sentinels for every characteristic UUID', () => {
-    // Empty string is intentional — handler lookups fail-fast instead of
+    // Empty string is intentional: handler lookups fail-fast instead of
     // accidentally subscribing to a wrong but valid-looking UUID.
     const adapter = new AdeA2Adapter();
     expect(adapter.charNotifyUuid).toBe('');

@@ -980,7 +980,7 @@ describe('handler-mqtt-proxy', () => {
       expect(mockClient.subscribeAsync.mock.calls.length).toBe(callCount);
     });
 
-    it('grace timer — complete-immediately: emits without arming the timer', async () => {
+    it('grace timer, complete-immediately: emits without arming the timer', async () => {
       const adapter = createPassiveAdapter('complete');
       const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter]);
       await watcher.start();
@@ -1004,7 +1004,8 @@ describe('handler-mqtt-proxy', () => {
       expect(adapter.parseServiceData).toHaveBeenCalledTimes(1);
     });
 
-    it('grace timer — partial-then-complete: complete frame cancels the timer', async () => {
+    it('grace timer, partial-then-complete: complete frame cancels the timer', async () => {
+      const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
       const adapter = createPassiveAdapter('partial-then-complete');
       const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter]);
       await watcher.start();
@@ -1021,15 +1022,19 @@ describe('handler-mqtt-proxy', () => {
 
       // Partial frame arms the timer
       mockClient._simulateMessage(`${PREFIX}/scan/results`, ad);
+      const clearsAfterPartial = clearTimeoutSpy.mock.calls.length;
       // Complete frame within grace cancels and resolves
       mockClient._simulateMessage(`${PREFIX}/scan/results`, ad);
 
       const raw = await watcher.nextReading();
       expect(raw.reading.impedance).toBe(500);
       expect(adapter.parseServiceData).toHaveBeenCalledTimes(2);
+      // Headline check: clearTimeout fired between the partial and the resolve.
+      expect(clearTimeoutSpy.mock.calls.length).toBeGreaterThan(clearsAfterPartial);
+      clearTimeoutSpy.mockRestore();
     });
 
-    it('grace timer — partial-then-timeout: weight-only fallback after IMPEDANCE_GRACE_MS', async () => {
+    it('grace timer, partial-then-timeout: weight-only fallback after IMPEDANCE_GRACE_MS', async () => {
       vi.useFakeTimers({
         toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
       });

@@ -121,16 +121,17 @@ Connect the ESP32 via USB and run the flash script:
 The script auto-detects the serial port. Override with `PORT=/dev/ttyACM0 ./flash.sh` if needed.
 
 ::: warning Windows users
-`flash.sh` is a bash script and will not run in `cmd.exe` or PowerShell directly — running `flash.sh` from CMD just opens it in your default editor. Use one of:
+`flash.sh` is a bash script and will not run in `cmd.exe` or PowerShell directly. Running `flash.sh` from CMD just opens it in your default editor. Use one of:
 
-- **Git Bash** (simplest) — install [Git for Windows](https://git-scm.com/download/win), then in Git Bash:
+- **Git Bash** (simplest): install [Git for Windows](https://git-scm.com/download/win), then in Git Bash:
   ```bash
   cd firmware
   PORT=COM3 ./flash.sh
   ```
   Replace `COM3` with the port shown in Device Manager under _Ports (COM & LPT)_ when the ESP32 is plugged in.
-- **WSL** — works, but you must attach the USB serial device into WSL with [`usbipd`](https://learn.microsoft.com/en-us/windows/wsl/connect-usb) first.
-- **Manual flash from CMD/PowerShell** — `esptool` and `mpremote` are cross-platform Python tools, so you can run the equivalent commands by hand:
+- **WSL**: works, but you must attach the USB serial device into WSL with [`usbipd`](https://learn.microsoft.com/en-us/windows/wsl/connect-usb) first.
+- **Manual flash from CMD/PowerShell**: `esptool` and `mpremote` are cross-platform Python tools, so you can run the equivalent commands by hand:
+
   ```powershell
   # 1. Erase + flash MicroPython (download the .bin from micropython.org for your board first)
   esptool.py --chip esp32s3 --port COM3 erase_flash
@@ -151,8 +152,9 @@ The script auto-detects the serial port. Override with `PORT=/dev/ttyACM0 ./flas
   mpremote connect COM3 cp main.py :main.py
   mpremote connect COM3 reset
   ```
+
   Adjust `--chip`, the firmware filename, and `board_*.py` for your board (see the `configure_board()` cases in `flash.sh`).
-:::
+  :::
 
 ::: tip Atom Echo / ESP32-PICO
 Some boards need a slower baud rate. If flashing fails, edit `BAUD=115200` in `flash.sh`.

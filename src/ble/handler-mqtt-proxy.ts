@@ -203,7 +203,7 @@ async function waitForEsp32Online(client: MqttClient, t: ReturnType<typeof topic
       const msg = payload.toString();
       if (msg === 'online') resolve();
       else if (msg === 'offline') sawOffline = true;
-      // If 'offline', keep waiting — ESP32 may come back before timeout
+      // If 'offline', keep waiting. ESP32 may come back before timeout.
     }
   };
   client.on('message', onMessage);
@@ -259,7 +259,7 @@ async function mqttScan(
   };
   client.on('message', handler);
   await client.subscribeAsync(t.scanResults);
-  // ESP32 scans autonomously — just wait for the next result
+  // ESP32 scans autonomously, just wait for the next result
   try {
     return await withTimeout(
       promise,
@@ -325,7 +325,7 @@ class MqttBleChar implements BleChar {
   }
 }
 
-/** Implements BleDevice from shared.ts — watches for MQTT disconnect events. */
+/** Implements BleDevice from shared.ts. Watches for MQTT disconnect events. */
 class MqttBleDevice implements BleDevice {
   private disconnectCb?: () => void;
   private handler?: (topic: string, payload: Buffer) => void;
@@ -460,7 +460,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         }
       }
 
-      // Broadcast-capable or broadcast-only adapters — wait for next scan with data
+      // Broadcast-capable or broadcast-only adapters: wait for next scan with data
       if (
         weightOnlyFallback ||
         adapter.parseBroadcast ||
@@ -471,7 +471,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         continue;
       }
 
-      // GATT fallback — adapter matched but no broadcast support
+      // GATT fallback: adapter matched but no broadcast support
       bleLog.info(`No broadcast data for ${adapter.name}; connecting via GATT proxy...`);
       const { charMap, device } = await mqttGattConnect(
         client,
@@ -576,7 +576,7 @@ export class ReadingWatcher {
       client = await getOrCreatePersistentClient(this.config);
       this._client = client;
 
-      // Lifecycle logging — store references for cleanup
+      // Lifecycle logging: store references for cleanup
       const onReconnect = () => bleLog.info('MQTT reconnecting...');
       const onOffline = () => bleLog.warn('MQTT client offline');
       const onError = (err: Error) => bleLog.warn(`MQTT error: ${err.message}`);
@@ -597,13 +597,13 @@ export class ReadingWatcher {
       // Subscribe to status for logging only
       await client.subscribeAsync(t.status);
       this._subscribedTopics = [t.scanResults, t.status];
-      bleLog.info('ReadingWatcher started — listening for scan results');
+      bleLog.info('ReadingWatcher started, listening for scan results');
     } catch (err) {
       this.started = false;
       throw err;
     }
 
-    // Message handler — store reference for cleanup
+    // Message handler: store reference for cleanup
     this._messageHandler = (topic: string, payload: Buffer) => {
       if (topic === t.status) {
         bleLog.info(`ESP32 status: ${payload.toString()}`);
@@ -635,7 +635,7 @@ export class ReadingWatcher {
             }
             const requiresStable = adapter.preferPassive === true;
             if (reading && (!requiresStable || adapter.isComplete(reading))) {
-              // Cancel any pending grace timer — we got the full reading.
+              // Cancel any pending grace timer. We got the full reading.
               const gt = this.graceTimers.get(entry.address);
               if (gt) {
                 clearTimeout(gt);
@@ -661,7 +661,7 @@ export class ReadingWatcher {
               continue;
             }
 
-            // Partial frame for a passive adapter — start grace timer for impedance.
+            // Partial frame for a passive adapter: start grace timer for impedance.
             if (reading && requiresStable) {
               this.graceReadings.set(entry.address, { reading, adapter });
               if (!this.graceTimers.has(entry.address)) {
@@ -674,7 +674,7 @@ export class ReadingWatcher {
                     this.graceReadings.delete(addr);
                     if (!gr) return;
                     bleLog.info(
-                      `Matched: ${gr.adapter.name} (${addr}) — weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
+                      `Matched: ${gr.adapter.name} (${addr}), weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
                     );
                     bleLog.info(`Broadcast reading: ${gr.reading.weight} kg`);
                     registerScaleMac(this.config, addr).catch(() => {});
@@ -686,16 +686,16 @@ export class ReadingWatcher {
             }
           }
 
-          // Broadcast-capable or broadcast-only — skip, wait for stable advertisement
+          // Broadcast-capable or broadcast-only: skip, wait for stable advertisement
           if (adapter.parseBroadcast || adapter.parseServiceData || !adapter.charNotifyUuid)
             continue;
 
-          // GATT fallback — adapter matched but no broadcast support
+          // GATT fallback: adapter matched but no broadcast support
           this.handleGattReading(entry, adapter).catch((err) => {
             bleLog.warn(`GATT reading failed for ${entry.address}: ${errMsg(err)}`);
           });
         }
-        // No match this scan — keep listening
+        // No match this scan, keep listening
       } catch (err) {
         bleLog.warn(`Failed to parse scan results: ${err instanceof Error ? err.message : err}`);
       }
@@ -703,7 +703,7 @@ export class ReadingWatcher {
     client.on('message', this._messageHandler);
   }
 
-  /** Stop the watcher — remove listeners and unsubscribe from topics. */
+  /** Stop the watcher: remove listeners and unsubscribe from topics. */
   async stop(): Promise<void> {
     if (!this.started || !this._client) return;
 
@@ -728,7 +728,7 @@ export class ReadingWatcher {
       try {
         await this._client.unsubscribeAsync(topic);
       } catch {
-        /* ignore — client may already be disconnected */
+        /* ignore: client may already be disconnected */
       }
     }
     this._subscribedTopics = [];
@@ -755,7 +755,7 @@ export class ReadingWatcher {
   private async handleGattReading(entry: ScanResultEntry, adapter: ScaleAdapter): Promise<void> {
     if (this.gattInProgress) {
       if (Date.now() - this.gattStartedAt > ReadingWatcher.GATT_STALE_MS) {
-        bleLog.warn('gattInProgress stuck for >90s — auto-resetting');
+        bleLog.warn('gattInProgress stuck for >90s, auto-resetting');
         this.gattInProgress = false;
       } else {
         bleLog.debug(`GATT connection already in progress, skipping ${entry.address}`);

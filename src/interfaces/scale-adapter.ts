@@ -53,7 +53,7 @@ export interface CharacteristicBinding {
    *
    * NOTE: only `notify` bindings are auto-skipped. For optional `write`/`read`
    * bindings the adapter's `onConnected` MUST consult `ctx.availableChars`
-   * before issuing the write/read — otherwise the call throws at runtime when
+   * before issuing the write/read; otherwise the call throws at runtime when
    * the char is missing.
    */
   optional?: boolean;

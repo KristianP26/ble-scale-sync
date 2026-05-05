@@ -109,6 +109,9 @@ describe('handler-noble broadcastScan grace timer (#163)', () => {
   });
 
   it('partial-then-complete: cancels the grace timer when complete frame arrives', async () => {
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    });
     const adapter = makePassiveAdapter('partial-then-complete');
     const target = makePeripheral([
       { uuid: '0x181b', data: Buffer.from([0x01, 0x02, 0x03, 0x04]) },
@@ -116,12 +119,18 @@ describe('handler-noble broadcastScan grace timer (#163)', () => {
 
     const promise = _internals.broadcastScan(adapter, target as never, {});
     await new Promise((r) => setImmediate(r));
-    mockNoble.emit('discover', target); // partial — arms timer
-    mockNoble.emit('discover', target); // complete — wins
+    // broadcastScan registers a top-level discovery timeout, so the baseline
+    // pending-timer count is 1 before any advertisement arrives.
+    const baselineTimers = vi.getTimerCount();
+    mockNoble.emit('discover', target); // partial: arms grace timer
+    expect(vi.getTimerCount()).toBe(baselineTimers + 1);
+    mockNoble.emit('discover', target); // complete: must clear the grace timer
 
     const result = await promise;
     expect(result.reading.impedance).toBe(500);
     expect(adapter.parseServiceData).toHaveBeenCalledTimes(2);
+    // Headline check: cleanup ran on resolve, clearing both grace and top-level timeout.
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('partial-then-timeout: emits weight-only fallback after IMPEDANCE_GRACE_MS', async () => {

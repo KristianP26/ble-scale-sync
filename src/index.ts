@@ -52,16 +52,16 @@ if (cliFlags.help) {
   console.log('  -h, --help           Show this help message');
   console.log('');
   console.log('Environment overrides (always applied, even with config.yaml):');
-  console.log('  CONTINUOUS_MODE  true/false — override runtime.continuous_mode');
-  console.log('  DRY_RUN          true/false — override runtime.dry_run');
-  console.log('  DEBUG            true/false — override runtime.debug');
-  console.log('  SCAN_COOLDOWN    5-3600     — override runtime.scan_cooldown');
+  console.log('  CONTINUOUS_MODE  true/false  override runtime.continuous_mode');
+  console.log('  DRY_RUN          true/false  override runtime.dry_run');
+  console.log('  DEBUG            true/false  override runtime.debug');
+  console.log('  SCAN_COOLDOWN    5-3600      override runtime.scan_cooldown');
   console.log(
-    '  BLE_WATCHDOG_MAX_FAILURES 0-1000 — override runtime.watchdog_max_consecutive_failures (0 = disabled)',
+    '  BLE_WATCHDOG_MAX_FAILURES 0-1000  override runtime.watchdog_max_consecutive_failures (0 = disabled)',
   );
-  console.log('  SCALE_MAC        MAC/UUID   — override ble.scale_mac');
-  console.log('  NOBLE_DRIVER     abandonware/stoprocent — override ble.noble_driver');
-  console.log('  BLE_ADAPTER      hci0/hci1/... — override ble.adapter (Linux only)');
+  console.log('  SCALE_MAC        MAC/UUID    override ble.scale_mac');
+  console.log('  NOBLE_DRIVER     abandonware/stoprocent  override ble.noble_driver');
+  console.log('  BLE_ADAPTER      hci0/hci1/...  override ble.adapter (Linux only)');
   process.exit(0);
 }
 
@@ -124,7 +124,9 @@ function onSignal(): void {
   }
   forceExitOnNext = true;
   log.info('\nShutting down gracefully... (press again to force exit)');
-  stopHeartbeat();
+  // Keep the systemd watchdog heartbeat running through graceful shutdown so
+  // a slow exit (>= WatchdogSec/2) does not get SIGKILL'd by the supervisor.
+  // The heartbeat is stopped in the main() epilogue once cleanup completes.
   ac.abort();
 }
 
@@ -137,7 +139,7 @@ let needsReload = false;
 
 if (process.platform !== 'win32') {
   process.on('SIGHUP', () => {
-    log.info('Received SIGHUP — will reload config before next scan cycle');
+    log.info('Received SIGHUP, will reload config before next scan cycle');
     needsReload = true;
   });
 }
@@ -152,7 +154,7 @@ async function reloadConfig(): Promise<void> {
       exporterCache.clear();
       log.info('Config reloaded successfully');
     } catch (err) {
-      log.error(`Config reload failed — keeping current config: ${errMsg(err)}`);
+      log.error(`Config reload failed, keeping current config: ${errMsg(err)}`);
     }
   });
 }
@@ -220,7 +222,7 @@ async function processSingleReading(raw: RawReading, exporters?: Exporter[]): Pr
   checkAndLogUpdate(appConfig.update_check);
 
   if (!exporters) {
-    log.info('\nDry run — skipping export.');
+    log.info('\nDry run. Skipping export.');
     return true;
   }
 
@@ -289,7 +291,7 @@ async function processRawReading(raw: RawReading): Promise<boolean> {
     if (bleHandler === 'mqtt-proxy' && mqttProxy) {
       publishBeep(mqttProxy, 600, 150, 3).catch(() => {});
     }
-    return true; // Not a failure — strategy decided to skip
+    return true; // Not a failure: strategy decided to skip
   }
 
   const user = match.user;
@@ -301,7 +303,7 @@ async function processRawReading(raw: RawReading): Promise<boolean> {
     publishBeep(mqttProxy, 1200, 200, 2).catch(() => {});
   }
 
-  // Build exporters for this user (cached) — needed for display reading names
+  // Build exporters for this user (cached). Needed for display reading names.
   const exporters = getExportersForUser(user.slug);
 
   // Notify display: user matched, export in progress
@@ -333,7 +335,7 @@ async function processRawReading(raw: RawReading): Promise<boolean> {
   checkAndLogUpdate(appConfig.update_check);
 
   if (dryRun) {
-    log.info(`${prefix} Dry run — skipping export.`);
+    log.info(`${prefix} Dry run. Skipping export.`);
     return true;
   }
 
@@ -552,7 +554,7 @@ async function main(): Promise<void> {
           `Watchdog triggered: ${consecutiveFailures} consecutive scan failures since last ` +
             `success. Exiting so the container can restart cleanly. ` +
             `If this persists on Raspberry Pi 3/4 with the on-board Bluetooth chip, ` +
-            `consider an ESP32/ESPHome BLE proxy — see https://blescalesync.dev/troubleshooting`,
+            `consider an ESP32/ESPHome BLE proxy. See https://blescalesync.dev/troubleshooting`,
         );
         process.exit(1);
       },
@@ -602,7 +604,7 @@ async function main(): Promise<void> {
         if (signal.aborted) break;
 
         // Watchdog records the failure and may exit the process if armed and
-        // tripped — order matters: trip before sleeping so we don't waste a
+        // tripped. Order matters: trip before sleeping so we don't waste a
         // backoff cycle on a controller we already know is wedged.
         watchdog.recordFailure();
 
@@ -639,4 +641,5 @@ main()
   })
   .finally(async () => {
     await shutdownEmbeddedBroker();
+    stopHeartbeat();
   });

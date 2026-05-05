@@ -1,5 +1,5 @@
 /**
- * @experimental NOT YET FUNCTIONAL — see #159 for status.
+ * @experimental NOT YET FUNCTIONAL. See #159 for status.
  *
  * Reverse-engineered scaffolding for ADE A2-family scales:
  *   BA1400, BA1401, BE1511, BE1512, BA1501, BA1502
@@ -7,7 +7,7 @@
  * The {@link AdeA2Adapter} class is intentionally NOT registered in
  * `src/scales/index.ts` and an automated test guards that. Its `matches()`
  * always returns `false`, every characteristic UUID is the empty-string
- * sentinel `UUID_TBD`, and `onConnected()` is a no-op — so the class cannot
+ * sentinel `UUID_TBD`, and `onConnected()` is a no-op, so the class cannot
  * write anything to a real device, even if a future contributor manually
  * adds it to the registry without finishing the protocol decode.
  *
@@ -36,7 +36,7 @@
  * ## What's NOT known yet
  *
  * - **BLE local name prefix.** Trisa uses `01257B` / `11257B`. A2 family
- *   advertises differently — possibly a different vendor prefix, or fitvigo
+ *   advertises differently. Possibly a different vendor prefix, or fitvigo
  *   may rely on the service UUID alone.
  * - **Characteristic UUIDs inside service `0x7802`.** Native code resolves
  *   chars through a runtime config struct; an HCI capture is needed to pin
@@ -80,7 +80,7 @@ const UUID_TBD = '';
 
 // Pairing handshake opcodes (from VBaseA2PairingProtocol). The password
 // frame opcode 0xA0 is documented here for future implementers but is not
-// used by the helpers below — it identifies inbound frames on the upload
+// used by the helpers below; it identifies inbound frames on the upload
 // channel and is the responsibility of the (yet-to-be-written) char
 // notification handler.
 const OP_CHALLENGE = 0xa1;
@@ -89,7 +89,7 @@ const EPOCH_2010 = 1262304000;
 const TIME_SYNC_FRAME_LENGTH = 5;
 
 const NOT_IMPLEMENTED_MSG =
-  'AdeA2Adapter is scaffolding (#159) — characteristic UUIDs and BLE name ' +
+  'AdeA2Adapter is scaffolding (#159). Characteristic UUIDs and BLE name ' +
   'prefix are not yet known. Do not register before completing the decode.';
 
 /**
@@ -97,7 +97,7 @@ const NOT_IMPLEMENTED_MSG =
  * pairing session. Layout (5 bytes): `[OP_TIME_SYNC, <uint32 LE>]` where the
  * uint32 is the number of seconds elapsed since 2010-01-01 UTC.
  *
- * Identical to the Trisa adapter's time-sync write — the underlying native
+ * Identical to the Trisa adapter's time-sync write. The underlying native
  * implementation (`VScalesA2PairingProtocol::writeTimeOffset`) is shared
  * between A2 and A3 protocol families.
  */

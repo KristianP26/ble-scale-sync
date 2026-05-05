@@ -139,7 +139,7 @@ function isDbusConnectionError(err: unknown): boolean {
 
 function dbusError(): Error {
   return new Error(
-    'Cannot connect to D-Bus — Bluetooth is not accessible.\n' +
+    'Cannot connect to D-Bus. Bluetooth is not accessible.\n' +
       'If running in Docker, mount the D-Bus socket:\n' +
       '  -v /var/run/dbus:/var/run/dbus:ro\n' +
       'On the host, ensure bluetoothd is running:\n' +
@@ -602,7 +602,7 @@ async function buildCharMap(gatt: NodeBle.GattServer): Promise<Map<string, BleCh
 /** Extract a Buffer from a D-Bus value that may be a Variant wrapper, Buffer, Uint8Array, or number[]. */
 function extractDbusBytes(val: unknown): Buffer | null {
   if (!val) return null;
-  // dbus-next wraps dict values in Variant objects — unwrap .value if present.
+  // dbus-next wraps dict values in Variant objects, so unwrap .value if present.
   const inner: unknown =
     typeof val === 'object' && val !== null && 'value' in val
       ? (val as { value: unknown }).value
@@ -787,7 +787,7 @@ async function broadcastScanNodeBle(
 
 /**
  * Scan for a BLE scale, read weight + impedance, and compute body composition.
- * Uses node-ble (BlueZ D-Bus) — requires bluetoothd running on Linux.
+ * Uses node-ble (BlueZ D-Bus). Requires bluetoothd running on Linux.
  *
  * The D-Bus connection is kept alive across calls (singleton) to prevent
  * orphaned BlueZ discovery sessions in continuous mode. If the connection
@@ -895,7 +895,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         });
       }
 
-      // Stop discovery before connecting — BlueZ on low-power devices (e.g. Pi Zero)
+      // Stop discovery before connecting. BlueZ on low-power devices (e.g. Pi Zero)
       // often fails with le-connection-abort-by-local while discovery is still active.
       await stopDiscoveryAndQuiesce(btAdapter);
 
@@ -944,7 +944,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         });
       }
 
-      // Stop discovery before connecting — BlueZ on low-power devices (e.g. Pi Zero)
+      // Stop discovery before connecting. BlueZ on low-power devices (e.g. Pi Zero)
       // often fails with le-connection-abort-by-local while discovery is still active.
       await stopDiscoveryAndQuiesce(btAdapter);
 
@@ -1077,7 +1077,7 @@ export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
 
 /**
  * Scan for nearby BLE devices and identify recognized scales.
- * Uses node-ble (BlueZ D-Bus) — Linux only.
+ * Uses node-ble (BlueZ D-Bus). Linux only.
  *
  * Uses its own short-lived D-Bus connection (not the persistent singleton)
  * because scan operations are one-shot and should not interfere with
@@ -1168,3 +1168,6 @@ export async function scanDevices(
     destroy();
   }
 }
+
+/** Test-only exports of private helpers (#143 / #163). */
+export const _internals = { connectWithRecovery };

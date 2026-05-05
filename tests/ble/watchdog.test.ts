@@ -54,7 +54,7 @@ describe('ConsecutiveFailureWatchdog', () => {
   });
 
   it('keeps tripping on each failure once threshold is crossed (caller should exit)', () => {
-    // The watchdog itself does not stop tripping — exiting/handling is the
+    // The watchdog itself does not stop tripping; exiting/handling is the
     // caller's responsibility (in the real loop, onTrip calls process.exit).
     const onTrip = vi.fn();
     const w = new ConsecutiveFailureWatchdog(2, onTrip);

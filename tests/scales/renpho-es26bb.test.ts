@@ -185,7 +185,7 @@ describe('RenphoEs26bbAdapter', () => {
 
     it('does not write ack when no ctx (parser called without onConnected)', async () => {
       const adapter = makeAdapter();
-      // parseNotification before onConnected — must not throw, must return reading.
+      // parseNotification before onConnected: must not throw, must return reading.
       const reading = adapter.parseNotification(makeOfflineFrame(7500, 480));
       expect(reading).toEqual({ weight: 75, impedance: 480 });
     });

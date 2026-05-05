@@ -10,8 +10,8 @@ import { uuid16, buildPayload } from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
 
 // Renpho ES-26BB custom service / characteristic UUIDs
-const CHR_RESULTS = uuid16(0x2a10); // notify — measurement results
-const CHR_CONTROL = uuid16(0x2a11); // write  — commands
+const CHR_RESULTS = uuid16(0x2a10); // notify: measurement results
+const CHR_CONTROL = uuid16(0x2a11); // write:  commands
 
 const START_CMD = [0x55, 0xaa, 0x90, 0x00, 0x04, 0x01, 0x00, 0x00, 0x00, 0x94];
 

@@ -96,7 +96,7 @@ function makeBroadcastAdapter(): ScaleAdapter {
 /**
  * Passive-scan adapter (e.g. Mi Scale 2): preferPassive=true, parses
  * service-data UUID 0x181B. Returns weight-only on the first frame and
- * weight+impedance on subsequent frames — emulates the Xiaomi flow where the
+ * weight+impedance on subsequent frames. Emulates the Xiaomi flow where the
  * scale streams partial frames during BIA. The behaviour is configurable per
  * test via `mode` so a single adapter can model the three branches.
  */
@@ -470,8 +470,8 @@ describe('scanAndReadRaw', () => {
 });
 
 // 12 s impedance grace timer for passive-scan adapters (Mi Scale 2 etc.).
-// See #163 — these tests lock the three branches of the partial-frame path.
-describe('scanAndReadRaw — grace timer (passive scan)', () => {
+// See #163. These tests lock the three branches of the partial-frame path.
+describe('scanAndReadRaw, grace timer (passive scan)', () => {
   beforeEach(() => {
     mockClient = new MockEsphomeClient();
   });
@@ -516,6 +516,7 @@ describe('scanAndReadRaw — grace timer (passive scan)', () => {
   });
 
   it('partial-then-complete: cancels the grace timer when a complete frame arrives', async () => {
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
     const adapter = makePassiveAdapter('partial-then-complete');
     const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy.js');
 
@@ -527,14 +528,19 @@ describe('scanAndReadRaw — grace timer (passive scan)', () => {
     });
 
     await mockClient.waitForListener('ble');
-    // First frame: weight-only — grace timer arms
+    // First frame: weight-only, grace timer arms
     pushPassiveAd();
-    // Second frame within grace window: weight+impedance — should win and cancel timer
+    const clearsAfterPartial = clearTimeoutSpy.mock.calls.length;
+    // Second frame within grace window: weight+impedance, should win and clear the timer
     pushPassiveAd();
 
     const result = await promise;
     expect(result.reading.impedance).toBe(500);
     expect(adapter.parseServiceData).toHaveBeenCalledTimes(2);
+    // Headline check: clearTimeout fired between partial and resolve, proving
+    // the grace timer was cancelled rather than racing the complete frame.
+    expect(clearTimeoutSpy.mock.calls.length).toBeGreaterThan(clearsAfterPartial);
+    clearTimeoutSpy.mockRestore();
   });
 
   it('partial-then-timeout: emits the weight-only fallback after IMPEDANCE_GRACE_MS', async () => {
@@ -559,7 +565,7 @@ describe('scanAndReadRaw — grace timer (passive scan)', () => {
     await new Promise((r) => setImmediate(r));
 
     pushPassiveAd();
-    // Advance past grace window — timer fires, weight-only fallback resolves.
+    // Advance past grace window: timer fires, weight-only fallback resolves.
     await vi.advanceTimersByTimeAsync(IMPEDANCE_GRACE_MS + 100);
 
     const result = await promise;

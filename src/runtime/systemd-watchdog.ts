@@ -23,7 +23,7 @@ import { createLogger } from '../logger.js';
  * Implementation note: Node's `node:dgram` does not support AF_UNIX
  * SOCK_DGRAM, which is what the sd_notify protocol requires. We shell out to
  * `systemd-notify` instead (always available alongside systemd itself). The
- * spawn is async on purpose — if the event loop is frozen, neither the
+ * spawn is async on purpose: if the event loop is frozen, neither the
  * `setInterval` callback nor the spawn completion will fire, and systemd will
  * fault the unit, which is exactly the desired behaviour.
  */

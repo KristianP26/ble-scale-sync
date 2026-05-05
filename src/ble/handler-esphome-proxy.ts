@@ -320,7 +320,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
             // weight-only frame first and a weight+impedance frame moments later.
             // Gate on isComplete + grace-timer for those. Other broadcast adapters
             // (Eufy, QN-scale) embed a "final" flag in the frame itself, so any
-            // non-null reading is already stable — emit immediately to avoid
+            // non-null reading is already stable, so emit immediately to avoid
             // adding a 12s latency penalty on the existing path.
             const requiresStable = adapter.preferPassive === true;
             if (reading && (!requiresStable || adapter.isComplete(reading))) {
@@ -336,7 +336,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
               return;
             }
 
-            // Partial frame for a passive adapter — start grace timer keyed on
+            // Partial frame for a passive adapter: start grace timer keyed on
             // this address so a second scale's partial frame cannot overwrite.
             if (reading && requiresStable) {
               bleLog.debug(
@@ -352,7 +352,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
                     graceReadings.delete(address);
                     if (!gr) return;
                     bleLog.info(
-                      `Matched: ${gr.adapter.name} (${address}) — weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
+                      `Matched: ${gr.adapter.name} (${address}), weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
                     );
                     bleLog.info(`Broadcast reading: ${gr.reading.weight} kg`);
                     resolve(gr);
@@ -581,10 +581,10 @@ export class ReadingWatcher {
       }
     }
 
-    // Same passive-vs-immediate split as scanAndReadRaw — see comment there.
+    // Same passive-vs-immediate split as scanAndReadRaw. See comment there.
     const requiresStable = adapter.preferPassive === true;
     if (reading && (!requiresStable || adapter.isComplete(reading))) {
-      // Cancel any pending grace timer for this address — we got the full reading.
+      // Cancel any pending grace timer for this address. We got the full reading.
       const gt = this.graceTimers.get(address);
       if (gt) {
         clearTimeout(gt);
@@ -607,7 +607,7 @@ export class ReadingWatcher {
       return;
     }
 
-    // Partial broadcast frame for a passive adapter — start grace timer so
+    // Partial broadcast frame for a passive adapter: start grace timer so
     // we fall back to weight-only if the impedance frame never arrives.
     if (reading && requiresStable) {
       this.graceReadings.set(address, { reading, adapter });
@@ -620,7 +620,7 @@ export class ReadingWatcher {
             this.graceReadings.delete(address);
             if (!gr) return;
             bleLog.info(
-              `Matched: ${gr.adapter.name} (${address}) — weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
+              `Matched: ${gr.adapter.name} (${address}), weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
             );
             bleLog.info(`Broadcast reading: ${gr.reading.weight} kg`);
             this.queue.push(gr);
@@ -631,7 +631,7 @@ export class ReadingWatcher {
     }
 
     // Adapter matched but broadcast path yielded nothing usable (reading is null).
-    // If the adapter has a GATT path, Phase 1 cannot service it — warn once per
+    // If the adapter has a GATT path, Phase 1 cannot service it. Warn once per
     // address. This covers both GATT-only adapters and dual-mode adapters whose
     // broadcast frames are non-weight-bearing (e.g. Elis 1 MAC beacons).
     if (adapter.charNotifyUuid) {

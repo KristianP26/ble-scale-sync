@@ -136,10 +136,10 @@ Common values: `112` (Debian/Ubuntu), `108` (Arch).
 **Cause.** A [known BlueZ bug](https://github.com/bluez/bluez/issues/807) (also tracked at [bluez/bluer#47](https://github.com/bluez/bluer/issues/47)): after repeated GATT connect/disconnect cycles, BlueZ's `Discovering` property desyncs from the HCI controller. The daemon reports active discovery, but the controller is no longer running LE scan.
 
 ::: warning Hardware/firmware limitation, not just software
-On Pi 3/4 Broadcom on-board chips, this is a kernel/firmware-level issue that even much larger projects have given up on fixing in software — see [home-assistant/operating-system#4022](https://github.com/home-assistant/operating-system/issues/4022) and [home-assistant/core#142656](https://github.com/home-assistant/core/issues/142656), both closed as **Not Planned** with HA recommending a Bluetooth proxy as the workaround. The recovery tiers below clear the wedge on most setups but not all of them.
+On Pi 3/4 Broadcom on-board chips, this is a kernel/firmware-level issue that even much larger projects have given up on fixing in software. See [home-assistant/operating-system#4022](https://github.com/home-assistant/operating-system/issues/4022) and [home-assistant/core#142656](https://github.com/home-assistant/core/issues/142656), both closed as **Not Planned** with HA recommending a Bluetooth proxy as the workaround. The recovery tiers below clear the wedge on most setups but not all of them.
 :::
 
-**Recommended long-term fix: Bluetooth proxy.** The most reliable way to run BLE Scale Sync on a Pi long-term is to bypass the on-board Bluetooth entirely — run an external [ESP32 BLE proxy](/guide/esp32-proxy) (≈€8 board, communicates over MQTT) or reuse an existing [ESPHome BT proxy](/guide/esphome-proxy). Both eliminate the host BlueZ stack from the BLE path completely.
+**Recommended long-term fix: Bluetooth proxy.** The most reliable way to run BLE Scale Sync on a Pi long-term is to bypass the on-board Bluetooth entirely. Run an external [ESP32 BLE proxy](/guide/esp32-proxy) (≈€8 board, communicates over MQTT) or reuse an existing [ESPHome BT proxy](/guide/esphome-proxy). Both eliminate the host BlueZ stack from the BLE path completely.
 
 **Automatic in-process recovery.** The app already:
 
@@ -147,7 +147,7 @@ On Pi 3/4 Broadcom on-board chips, this is a kernel/firmware-level issue that ev
 - Runs a preemptive `btmgmt power off/on` cycle after every GATT operation to clear zombie controller state before it accumulates
 - Escalates through 6 recovery tiers when `StartDiscovery` fails (D-Bus `StopDiscovery`, adapter power-cycle, btmgmt reset, rfkill block/unblock, `systemctl restart bluetooth`)
 
-**Auto-restart watchdog (continuous mode).** When in-process recovery is not enough — typically Pi 3/4 Broadcom firmware lock-up — a watchdog exits the process after `runtime.watchdog_max_consecutive_failures` consecutive scan failures (default `10`, ≈30 min). With Docker `restart: unless-stopped` the container restarts cleanly, the entrypoint resets the BT adapter, and the controller is typically unwedged. The watchdog only arms after the first successful weigh-in in the process lifetime, so it does not restart-loop the container if the scale is offline (vacation) or `scale_mac` is misconfigured.
+**Auto-restart watchdog (continuous mode).** When in-process recovery is not enough (typically Pi 3/4 Broadcom firmware lock-up), a watchdog exits the process after `runtime.watchdog_max_consecutive_failures` consecutive scan failures (default `10`, ≈30 min). With Docker `restart: unless-stopped` the container restarts cleanly, the entrypoint resets the BT adapter, and the controller is typically unwedged. The watchdog only arms after the first successful weigh-in in the process lifetime, so it does not restart-loop the container if the scale is offline (vacation) or `scale_mac` is misconfigured.
 
 ```yaml
 runtime:
@@ -167,6 +167,10 @@ devices:
 ```
 
 **Systemd watchdog (Type=notify).** Defense in depth for the rare case where a synchronous D-Bus stall freezes the Node event loop entirely. When that happens the in-process watchdog cannot fire either, since `setTimeout` callbacks never run. Letting systemd do the liveness check from outside the process is the clean fix.
+
+::: warning Scope of this watchdog
+Only catches **whole-loop freezes**. If the event loop is alive but a specific BLE handler is wedged (e.g. an `await` that never resolves), the heartbeat keeps firing and systemd is satisfied. For BLE-specific recovery, rely on `runtime.watchdog_max_consecutive_failures` and the consecutive-failure watchdog above.
+:::
 
 Add the following to your `ble-scale.service` unit on the Pi (or any systemd host):
 

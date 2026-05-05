@@ -18,7 +18,7 @@ function uuid16(code: number): string {
 const TRISA_CHARS = new Set<string>([uuid16(0x8a21), uuid16(0x8a82), uuid16(0x8a81)]);
 
 // 0x8A20 is exposed by ADE BA 1600 firmware but the adapter does not bind to
-// it — included here so the test ctx mirrors what the real scale advertises
+// it. Included here so the test ctx mirrors what the real scale advertises
 // post-discovery.
 const ADE_CHARS = new Set<string>([
   uuid16(0x8a24),
@@ -107,7 +107,7 @@ describe('TrisaAdapter', () => {
       const tsFromCmd = Buffer.from(data1.slice(1)).readUInt32LE(0);
       expect(Math.abs(tsFromCmd - expectedTs)).toBeLessThan(5);
 
-      // Call 2: broadcast ID — Trisa uses 0x21
+      // Call 2: broadcast ID, Trisa uses 0x21
       const [charUuid2, data2, withResponse2] = writeFn.mock.calls[1];
       expect(charUuid2).toBe(adapter.charWriteUuid);
       expect(withResponse2).toBe(true);
@@ -145,7 +145,7 @@ describe('TrisaAdapter', () => {
 
     it('throws when neither 0x8A21 nor 0x8A24 is discovered (GATT race guard)', async () => {
       const adapter = makeAdapter();
-      // Upload + download present but no measurement char — what a transient
+      // Upload + download present but no measurement char: what a transient
       // GATT discovery race (BlueZ ServicesResolved firing early or noble
       // equivalent on Windows/macOS) could produce.
       const partial = new Set<string>([uuid16(0x8a82), uuid16(0x8a81)]);

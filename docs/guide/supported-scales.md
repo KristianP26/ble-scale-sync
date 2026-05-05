@@ -13,31 +13,31 @@ BLE Scale Sync ships **24 protocol adapters** out of the box, covering Xiaomi, R
 
 ## Scale List
 
-| Brand / Model | Notes |
-|---|---|
-| **Xiaomi** Mi Scale 2 (MIBCS / MIBFS / XMTZC05HM) | Passive BLE advertisement decoding (service data 0x181B) — no pairing required. Works on all transports including ESPHome proxy. Uses scale's own body comp values |
-| **Renpho** ES-CS20M / Elis 1 / FITINDEX / Sencor (QN-Scale) | Most common generic BLE protocol |
-| **Renpho** ES-WBE28 | Standard GATT variant |
-| **Renpho** ES-26BB-B | |
-| **1byone** / **Eufy** C1 / P1 | |
-| **Eufy** Smart Scale P2 (T9148) / P2 Pro (T9149) | AES handshake over FFF1/FFF4, impedance via FFF2 |
-| **Yunmai** Signal / Mini / SE | Uses scale's own body comp values |
-| **Beurer** BF700 / BF710 / BF800 | |
-| **Sanitas** SBF70 / SBF75 | Same protocol as Beurer |
-| **Sanitas** SBF72 / SBF73 / **Beurer** BF915 | Requires user slot 1 via manufacturer app |
-| **Soehnle** Shape200 / Shape100 / Shape50 / Style100 | Requires user slot 1 via manufacturer app |
-| **Medisana** BS430 / BS440 / BS444 | |
-| **Active Era** BS-06 | |
-| **Senssun** Fat | Model A only (0xFFF0) |
-| **MGB** (Swan / Icomon / YG) | |
-| **Digoo** DG-SO38H (Mengii) | |
-| **Excelvan** CF369 | |
-| **Trisa** Body Analyze / **ADE** BA 1600 (fitvigo) | ADE variant: weight only, body comp encoding TBD |
-| **Hoffen** BS-8107 | |
-| **Hesley** (YunChen) | |
-| **Inlife** (FatScale) | |
-| **Exingtech** Y1 (vscale) | |
-| Any **standard BT SIG** scale (BCS/WSS) | Catch-all for standard-compliant scales |
+| Brand / Model                                               | Notes                                                                                                                                                             |
+| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Xiaomi** Mi Scale 2 (MIBCS / MIBFS / XMTZC05HM)           | Passive BLE advertisement decoding (service data 0x181B); no pairing required. Works on all transports including ESPHome proxy. Uses scale's own body comp values |
+| **Renpho** ES-CS20M / Elis 1 / FITINDEX / Sencor (QN-Scale) | Most common generic BLE protocol                                                                                                                                  |
+| **Renpho** ES-WBE28                                         | Standard GATT variant                                                                                                                                             |
+| **Renpho** ES-26BB-B                                        |                                                                                                                                                                   |
+| **1byone** / **Eufy** C1 / P1                               |                                                                                                                                                                   |
+| **Eufy** Smart Scale P2 (T9148) / P2 Pro (T9149)            | AES handshake over FFF1/FFF4, impedance via FFF2                                                                                                                  |
+| **Yunmai** Signal / Mini / SE                               | Uses scale's own body comp values                                                                                                                                 |
+| **Beurer** BF700 / BF710 / BF800                            |                                                                                                                                                                   |
+| **Sanitas** SBF70 / SBF75                                   | Same protocol as Beurer                                                                                                                                           |
+| **Sanitas** SBF72 / SBF73 / **Beurer** BF915                | Requires user slot 1 via manufacturer app                                                                                                                         |
+| **Soehnle** Shape200 / Shape100 / Shape50 / Style100        | Requires user slot 1 via manufacturer app                                                                                                                         |
+| **Medisana** BS430 / BS440 / BS444                          |                                                                                                                                                                   |
+| **Active Era** BS-06                                        |                                                                                                                                                                   |
+| **Senssun** Fat                                             | Model A only (0xFFF0)                                                                                                                                             |
+| **MGB** (Swan / Icomon / YG)                                |                                                                                                                                                                   |
+| **Digoo** DG-SO38H (Mengii)                                 |                                                                                                                                                                   |
+| **Excelvan** CF369                                          |                                                                                                                                                                   |
+| **Trisa** Body Analyze / **ADE** BA 1600 (fitvigo)          | ADE variant: weight only, body comp encoding TBD                                                                                                                  |
+| **Hoffen** BS-8107                                          |                                                                                                                                                                   |
+| **Hesley** (YunChen)                                        |                                                                                                                                                                   |
+| **Inlife** (FatScale)                                       |                                                                                                                                                                   |
+| **Exingtech** Y1 (vscale)                                   |                                                                                                                                                                   |
+| Any **standard BT SIG** scale (BCS/WSS)                     | Catch-all for standard-compliant scales                                                                                                                           |
 
 ::: info Sorted by popularity
 Most widely available brands are listed first. The Standard BT SIG adapter at the bottom acts as a catch-all for any scale that follows the official Bluetooth Body Composition Service or Weight Scale Service specification.
@@ -62,11 +62,11 @@ We recommend setting `scale_mac` in `config.yaml` — it prevents the app from a
 
 ## Known Limitations
 
-| Scale | What to do |
-|---|---|
-| **Soehnle**, **Sanitas** SBF72/73, **Beurer** BF915 | Create user slot 1 in the manufacturer's phone app first |
-| **Standard GATT** | Select user 1 on the scale before measuring |
-| **Senssun** Model B | Not supported yet (only Model A with service 0xFFF0) |
+| Scale                                                 | What to do                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Soehnle**, **Sanitas** SBF72/73, **Beurer** BF915   | Create user slot 1 in the manufacturer's phone app first                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| **Standard GATT**                                     | Select user 1 on the scale before measuring                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **Senssun** Model B                                   | Not supported yet (only Model A with service 0xFFF0)                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | **Renpho ES-CS20M / Elis 1** (some hardware variants) | Some units use broadcast-only firmware that does not allow GATT connections. The same model name can ship with different internal hardware. If your ES-CS20M or Elis 1 is broadcast-only, ble-scale-sync reads weight directly from BLE advertisements. Body composition is estimated from BMI (Deurenberg formula) instead of impedance, since impedance is not available in broadcast mode. Run `npm run diagnose` to check whether your unit is connectable or broadcast-only. |
 
 ## Don't See Your Scale?
