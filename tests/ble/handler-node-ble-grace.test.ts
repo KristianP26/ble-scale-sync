@@ -158,6 +158,11 @@ describe('handler-node-ble broadcastScanNodeBle grace timer (#163 follow-up)', (
       {},
     );
 
+    // Two setImmediate flushes so the polling IIFE definitely reaches its
+    // first `await sleep(500)` and registers the timer in the fake timer
+    // queue. With a single flush the polling timer might not exist yet,
+    // making the captured baselineTimers race-prone.
+    await new Promise((r) => setImmediate(r));
     await new Promise((r) => setImmediate(r));
     // Polling loop also schedules timers (sleep(500)), so capture baseline first
     // and assert "increased by 1" after the partial frame to isolate the grace
