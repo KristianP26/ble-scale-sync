@@ -129,9 +129,7 @@ export class RenphoEs26bbAdapter implements ScaleAdapter {
       await ctx.write(CHR_CONTROL, OFFLINE_ACK, true);
       bleLog.debug('ES-26BB-B: offline ack sent');
     } catch (e) {
-      bleLog.debug(
-        `ES-26BB-B: offline ack failed: ${e instanceof Error ? e.message : String(e)}`,
-      );
+      bleLog.debug(`ES-26BB-B: offline ack failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 }

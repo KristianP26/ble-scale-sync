@@ -147,9 +147,7 @@ describe('RenphoEs26bbAdapter', () => {
       expect(write).toHaveBeenCalledTimes(1);
       const [charUuid, data, withResponse] = write.mock.calls[0];
       expect(charUuid).toBe(adapter.charWriteUuid);
-      expect(Array.from(data as number[])).toEqual([
-        0x55, 0xaa, 0x95, 0x00, 0x01, 0x01, 0x96,
-      ]);
+      expect(Array.from(data as number[])).toEqual([0x55, 0xaa, 0x95, 0x00, 0x01, 0x01, 0x96]);
       expect(withResponse).toBe(true);
     });
 
@@ -219,10 +217,7 @@ describe('RenphoEs26bbAdapter', () => {
     });
 
     it('returns zero weight in payload for zero weight input', () => {
-      const payload = makeAdapter().computeMetrics(
-        { weight: 0, impedance: 0 },
-        defaultProfile(),
-      );
+      const payload = makeAdapter().computeMetrics({ weight: 0, impedance: 0 }, defaultProfile());
       expect(payload.weight).toBe(0);
     });
   });
