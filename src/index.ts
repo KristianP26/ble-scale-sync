@@ -14,6 +14,7 @@ import { bootstrapMqttProxy } from './ble/mqtt-proxy-bootstrap.js';
 import type { EmbeddedBrokerHandle } from './ble/embedded-broker.js';
 import { abortableSleep, POST_DISCONNECT_GRACE_MS } from './ble/types.js';
 import { ConsecutiveFailureWatchdog } from './ble/watchdog.js';
+import { notifyReady, startHeartbeat, stopHeartbeat } from './runtime/systemd-watchdog.js';
 import { adapters } from './scales/index.js';
 import { createLogger, setLogLevel, LogLevel } from './logger.js';
 import { errMsg } from './utils/error.js';
@@ -118,10 +119,12 @@ let forceExitOnNext = false;
 function onSignal(): void {
   if (forceExitOnNext) {
     log.info('Force exit.');
+    stopHeartbeat();
     process.exit(1);
   }
   forceExitOnNext = true;
   log.info('\nShutting down gracefully... (press again to force exit)');
+  stopHeartbeat();
   ac.abort();
 }
 
@@ -436,6 +439,13 @@ async function main(): Promise<void> {
       })),
     );
   }
+
+  // systemd Type=notify integration (#144). No-op when NOTIFY_SOCKET is unset
+  // (Docker, npm start, non-systemd installs). When the unit declares
+  // WatchdogSec=, the heartbeat catches sync D-Bus stalls that freeze the
+  // event loop (#140) and lets systemd restart the service cleanly.
+  notifyReady();
+  startHeartbeat();
 
   if (!continuousMode) {
     touchHeartbeat();

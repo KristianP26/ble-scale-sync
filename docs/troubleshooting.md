@@ -60,14 +60,14 @@ BLE Scale Sync ships with three BLE handlers. If you're having connection issues
 
 ```yaml
 ble:
-  noble_driver: stoprocent   # or: abandonware
+  noble_driver: stoprocent # or: abandonware
 ```
 
-| Handler | Platforms | Notes |
-|---------|-----------|-------|
-| `node-ble` (default on Linux) | Linux only | Uses BlueZ D-Bus. Most reliable on Raspberry Pi. Service UUIDs not available during scan (only after connecting). |
-| `@abandonware/noble` (default on Windows) | Linux, Windows | Mature driver. Uses WinRT on Windows. |
-| `@stoprocent/noble` (default on macOS) | Linux, macOS, Windows | Newer driver. Exposes service UUIDs during scan. On Windows, requires the [WinUSB driver](https://zadig.akeo.ie/). |
+| Handler                                   | Platforms             | Notes                                                                                                              |
+| ----------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `node-ble` (default on Linux)             | Linux only            | Uses BlueZ D-Bus. Most reliable on Raspberry Pi. Service UUIDs not available during scan (only after connecting).  |
+| `@abandonware/noble` (default on Windows) | Linux, Windows        | Mature driver. Uses WinRT on Windows.                                                                              |
+| `@stoprocent/noble` (default on macOS)    | Linux, macOS, Windows | Newer driver. Exposes service UUIDs during scan. On Windows, requires the [WinUSB driver](https://zadig.akeo.ie/). |
 
 If your scale is not being recognized during scan but you know its MAC address, set `scale_mac` in `config.yaml` -- the adapter will match post-connect using GATT service UUIDs regardless of the handler.
 
@@ -151,7 +151,7 @@ On Pi 3/4 Broadcom on-board chips, this is a kernel/firmware-level issue that ev
 
 ```yaml
 runtime:
-  watchdog_max_consecutive_failures: 10  # default; 0 = disabled
+  watchdog_max_consecutive_failures: 10 # default; 0 = disabled
 ```
 
 ```bash
@@ -165,6 +165,21 @@ docker run ... -e BLE_WATCHDOG_MAX_FAILURES=10 ghcr.io/kristianp26/ble-scale-syn
 devices:
   - /dev/rfkill:/dev/rfkill
 ```
+
+**Systemd watchdog (Type=notify).** Defense in depth for the rare case where a synchronous D-Bus stall freezes the Node event loop entirely. When that happens the in-process watchdog cannot fire either, since `setTimeout` callbacks never run. Letting systemd do the liveness check from outside the process is the clean fix.
+
+Add the following to your `ble-scale.service` unit on the Pi (or any systemd host):
+
+```
+[Service]
+Type=notify
+WatchdogSec=60
+NotifyAccess=main
+Restart=on-failure
+RestartSec=5
+```
+
+The app sends `READY=1` once at startup and `WATCHDOG=1` every `WatchdogSec / 2` seconds. If the heartbeat misses for `WatchdogSec`, systemd kills and restarts the unit. The integration is a no-op when `$NOTIFY_SOCKET` is unset (Docker, `npm start`, non-systemd installs), so the same binary works everywhere.
 
 **Last-resort escape hatch: switch away from BlueZ.** If BlueZ keeps getting stuck despite the above, bypass it entirely by using the `@stoprocent/noble` driver (HCI socket directly, no D-Bus):
 
