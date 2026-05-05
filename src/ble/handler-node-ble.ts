@@ -1170,4 +1170,4 @@ export async function scanDevices(
 }
 
 /** Test-only exports of private helpers (#143 / #163). */
-export const _internals = { connectWithRecovery };
+export const _internals = { connectWithRecovery, broadcastScanNodeBle };
