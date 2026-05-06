@@ -72,15 +72,16 @@ features:
 docker run --rm -it --network host --cap-add NET_ADMIN --cap-add NET_RAW \
   --group-add 112 -v /var/run/dbus:/var/run/dbus:ro \
   -v ./config.yaml:/app/config.yaml \
-  -v garmin-tokens:/app/garmin-tokens \
+  -v ./garmin-tokens:/app/garmin-tokens \
   ghcr.io/kristianp26/ble-scale-sync:latest setup
 
 # Run (continuous mode, auto-restart)
 docker run -d --restart unless-stopped --network host \
   --cap-add NET_ADMIN --cap-add NET_RAW \
-  --group-add 112 -v /var/run/dbus:/var/run/dbus:ro \
+  --group-add 112 --device /dev/rfkill \
+  -v /var/run/dbus:/var/run/dbus:ro \
   -v ./config.yaml:/app/config.yaml:ro \
-  -v garmin-tokens:/app/garmin-tokens \
+  -v ./garmin-tokens:/app/garmin-tokens \
   -e CONTINUOUS_MODE=true \
   ghcr.io/kristianp26/ble-scale-sync:latest
 ```
@@ -101,7 +102,7 @@ The add-on handles config through the UI, auto-detects the Mosquitto broker for 
 Add-ons are not available on **HA Container** or **HA Core** installs (no Supervisor). Use Option 1 instead.
 :::
 
-### Option 3: Standalone (Node.js — Linux, macOS, Windows)
+### Option 3: Standalone (Node.js, Linux/macOS/Windows)
 
 Runs natively on all major desktop and server operating systems. No containers, no Supervisor required.
 
@@ -115,6 +116,7 @@ CONTINUOUS_MODE=true npm start   # always-on, listens for scale indefinitely
 Requires Node.js v20.19+ and a BLE adapter. For always-on deployments, create a systemd service:
 
 ::: details Example: /etc/systemd/system/ble-scale.service
+
 ```ini
 [Unit]
 Description=BLE Scale Sync
@@ -134,9 +136,11 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 ```
+
 ```bash
 sudo systemctl enable --now ble-scale.service
 ```
+
 :::
 
 ::: tip Raspberry Pi Zero 2W

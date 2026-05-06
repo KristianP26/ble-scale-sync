@@ -1,5 +1,5 @@
 # ============================================================
-# BLE Scale Sync — Example Configuration
+# BLE Scale Sync, Example Configuration
 # ============================================================
 # Copy this file to config.yaml and edit the values.
 # Run "npm run validate" to check your config.
@@ -11,17 +11,18 @@
 
 version: 1
 
-# --- BLE Settings (optional — uncomment to pin to a specific scale) ---
+# --- BLE Settings (optional, uncomment to pin to a specific scale) ---
 # ble:
 #   scale_mac: "FF:03:00:13:A1:04"   # Run "npm run scan" to find yours
 #   noble_driver: abandonware         # "abandonware" | "stoprocent"
-#   handler: auto                     # "auto" | "mqtt-proxy"
+#   handler: auto                     # "auto" | "mqtt-proxy" | "esphome-proxy"
 #   adapter: hci0                     # Linux only: select BLE adapter (omit for default)
 #
 # scale_mac: omit for auto-discovery. On macOS, use the CoreBluetooth UUID.
 # noble_driver: default is node-ble (Linux), abandonware (Windows), stoprocent (macOS).
 # handler: "auto" uses local Bluetooth. "mqtt-proxy" uses an ESP32 BLE-to-MQTT bridge.
-# adapter: Linux only — select which Bluetooth adapter to use (e.g., hci1 for a USB dongle).
+#          "esphome-proxy" uses an existing ESPHome BT proxy via Native API (port 6053).
+# adapter: Linux only, select which Bluetooth adapter to use (e.g., hci1 for a USB dongle).
 #          Run "hciconfig" or "btmgmt info" to list available adapters.
 #          Ignored on macOS/Windows. Omit to use the first adapter (hci0).
 #
@@ -36,7 +37,7 @@ version: 1
 # --- Scale Units ---
 
 scale:
-  weight_unit: kg   # kg | lbs (display only — calculations always use kg)
+  weight_unit: kg   # kg | lbs (display only, calculations always use kg)
   height_unit: cm   # cm | in  (for height input below)
 
 # --- Multi-User Matching ---
@@ -60,7 +61,7 @@ users:
     weight_range: { min: 50, max: 75 }   # always in kg
     last_known_weight: null               # auto-updated after each measurement
 
-    # Per-user exporters (optional — override global_exporters for this user):
+    # Per-user exporters (optional, override global_exporters for this user):
     # exporters:
     #   - type: garmin
     #     email: alice@example.com

@@ -9,16 +9,16 @@ head:
 
 # Getting Started
 
-BLE Scale Sync runs on any device with BLE support — Linux (including Raspberry Pi), macOS, and Windows. If your server has no Bluetooth adapter, you can use a cheap [ESP32 as a remote BLE radio](#esp32-proxy) over WiFi.
+BLE Scale Sync runs on any device with BLE support: Linux (including Raspberry Pi), macOS, and Windows. If your server has no Bluetooth adapter, you can use a cheap [ESP32 as a remote BLE radio](#esp32-proxy) over WiFi.
 
 Pick the install method that fits your setup:
 
-| Method | Best for |
-|---|---|
-| [Docker](#docker) | Linux / Raspberry Pi / NAS — works alongside any Home Assistant install (Container, Core, OS) via MQTT |
-| [Home Assistant Add-on](#home-assistant-addon) | Home Assistant **OS** or **Supervised** only |
-| [Standalone (Node.js)](#standalone) | All operating systems — Linux, macOS, Windows. No containers required. |
-| [ESP32 BLE Proxy](#esp32-proxy) | Server has no Bluetooth — pair with any method above |
+| Method                                         | Best for                                                                                              |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| [Docker](#docker)                              | Linux / Raspberry Pi / NAS. Works alongside any Home Assistant install (Container, Core, OS) via MQTT |
+| [Home Assistant Add-on](#home-assistant-addon) | Home Assistant **OS** or **Supervised** only                                                          |
+| [Standalone (Node.js)](#standalone)            | All operating systems (Linux, macOS, Windows). No containers required.                                |
+| [ESP32 BLE Proxy](#esp32-proxy)                | Server has no Bluetooth. Pair with any method above                                                   |
 
 ## Docker (Linux only) {#docker}
 
@@ -51,12 +51,12 @@ docker run -d --restart unless-stopped \
   --device /dev/rfkill \
   -v /var/run/dbus:/var/run/dbus:ro \
   -v ./config.yaml:/app/config.yaml:ro \
-  -v ./garmin-tokens:/app/garmin-tokens:ro \
+  -v ./garmin-tokens:/app/garmin-tokens \
   -e CONTINUOUS_MODE=true \
   ghcr.io/kristianp26/ble-scale-sync:latest
 ```
 
-Or use Docker Compose — copy `docker-compose.example.yml` to `docker-compose.yml`:
+Or use Docker Compose. Copy `docker-compose.example.yml` to `docker-compose.yml`:
 
 ```bash
 docker compose up -d
@@ -75,9 +75,11 @@ docker run --rm -v ./config.yaml:/app/config.yaml:ro \
 
 ::: tip Garmin tokens permission fix
 If Docker creates the `garmin-tokens/` directory automatically, it may be owned by root. The container runs as a non-root user and will fail to write tokens. Fix with:
+
 ```bash
 sudo chown -R $(id -u):$(id -g) ./garmin-tokens
 ```
+
 :::
 
 ::: details Why these Docker flags?
@@ -87,13 +89,13 @@ sudo chown -R $(id -u):$(id -g) ./garmin-tokens
 | `-v /var/run/dbus:/var/run/dbus:ro` | Access to the system D-Bus socket |
 | `--cap-add NET_ADMIN --cap-add NET_RAW` | BLE operations require raw network access |
 | `--device /dev/rfkill` | Enables RF-level adapter recovery when BlueZ gets stuck (recommended) |
-| `--group-add <GID>` | Bluetooth group GID — run `getent group bluetooth \| cut -d: -f3` (commonly `112`) |
+| `--group-add <GID>` | Bluetooth group GID. Run `getent group bluetooth \| cut -d: -f3` (commonly `112`) |
 :::
 
 ## Home Assistant Add-on {#home-assistant-addon}
 
 ::: warning Home Assistant OS / Supervised only
-Add-ons require the Home Assistant Supervisor, which is only present on **HA OS** and **HA Supervised** installations. If you run **HA Container** (Docker) or **HA Core** (Python venv), the **Add-on Store does not exist** in your UI — use the [Docker](#docker) method above and the [MQTT exporter](/exporters#mqtt) instead. Sensors still appear in HA via MQTT auto-discovery exactly the same way.
+Add-ons require the Home Assistant Supervisor, which is only present on **HA OS** and **HA Supervised** installations. If you run **HA Container** (Docker) or **HA Core** (Python venv), the **Add-on Store does not exist** in your UI; use the [Docker](#docker) method above and the [MQTT exporter](/exporters#mqtt) instead. Sensors still appear in HA via MQTT auto-discovery exactly the same way.
 
 To check your install type: **Settings → About**.
 :::
@@ -105,6 +107,7 @@ The easiest path on Home Assistant OS or Supervised. One click adds the reposito
 The badge uses [My Home Assistant](https://www.home-assistant.io/integrations/my/) to open your instance, confirm the repository, and land on the Add-on Store with **BLE Scale Sync** visible. Click **Install**, fill in your user profile on the **Configuration** tab, then start the add-on from the **Info** tab.
 
 ::: details Prefer manual steps?
+
 1. **Settings** > **Add-ons** > **Add-on Store** > three-dot menu > **Repositories**.
 2. Add the repository URL:
 
@@ -113,29 +116,31 @@ The badge uses [My Home Assistant](https://www.home-assistant.io/integrations/my
    ```
 
 3. Refresh the store, install **BLE Scale Sync**, fill in your user profile on the **Configuration** tab, then start the add-on from the **Info** tab.
-:::
+   :::
 
 See the [Home Assistant Add-on guide](./home-assistant-addon) for the full option reference, Garmin setup (including MFA), custom config mode, and troubleshooting.
 
 ## Standalone (Node.js) {#standalone}
 
-Runs natively on **Linux, macOS, and Windows** — no containers, no Supervisor required. The right pick for non-Linux hosts, hosts where Docker is not an option, or when you want to run BLE Scale Sync directly with `npm start`.
+Runs natively on **Linux, macOS, and Windows**: no containers, no Supervisor required. The right pick for non-Linux hosts, hosts where Docker is not an option, or when you want to run BLE Scale Sync directly with `npm start`.
 
 ### Prerequisites
 
-| Platform | Requirements |
-|---|---|
-| **All** | [Node.js](https://nodejs.org/) v20.19+, BLE adapter |
-| **Linux** | `sudo apt-get install bluetooth bluez libbluetooth-dev libudev-dev build-essential` |
-| **macOS** | `xcode-select --install` (Xcode CLI tools) |
+| Platform    | Requirements                                                                                           |
+| ----------- | ------------------------------------------------------------------------------------------------------ |
+| **All**     | [Node.js](https://nodejs.org/) v20.19+, BLE adapter                                                    |
+| **Linux**   | `sudo apt-get install bluetooth bluez libbluetooth-dev libudev-dev build-essential`                    |
+| **macOS**   | `xcode-select --install` (Xcode CLI tools)                                                             |
 | **Windows** | [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (C++ workload) |
 
 ::: details Garmin Connect requires Python 3.9+
+
 ```bash
 python3 -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
+
 :::
 
 On Linux, grant BLE capabilities to Node.js:
@@ -175,6 +180,7 @@ Press **Ctrl+C** for graceful shutdown in continuous mode.
 For always-on deployments (e.g. Raspberry Pi), create a systemd service:
 
 ::: details Example: /etc/systemd/system/ble-scale.service
+
 ```ini
 [Unit]
 Description=BLE Scale Sync
@@ -199,6 +205,7 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 ```
+
 :::
 
 ```bash
@@ -244,11 +251,11 @@ The ESP32 proxy supports both broadcast scales (weight from BLE advertisements) 
 
 ## Recommended Hardware
 
-| Component | Recommendation |
-|---|---|
-| **Single-board computer** | [Raspberry Pi Zero 2W](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/) — ~15€, built-in BLE, ~0.4W idle |
-| **Scale** | Any [supported BLE scale](./supported-scales) |
-| **OS** | Raspberry Pi OS Lite (headless) |
+| Component                 | Recommendation                                                                                                      |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| **Single-board computer** | [Raspberry Pi Zero 2W](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/): ~15€, built-in BLE, ~0.4W idle |
+| **Scale**                 | Any [supported BLE scale](./supported-scales)                                                                       |
+| **OS**                    | Raspberry Pi OS Lite (headless)                                                                                     |
 
 ::: tip
 The Raspberry Pi Zero 2W is the ideal deployment target. It's cheap, tiny, always on, and has built-in Bluetooth. Step on the scale and your data appears in Garmin Connect within seconds, no phone needed.
@@ -260,8 +267,8 @@ The original Raspberry Pi Zero W has an ARMv6 CPU. Key dependencies (`esbuild`, 
 
 ## What's Next?
 
-- [Configuration](./configuration) — config.yaml reference
-- [Supported Scales](./supported-scales) — full adapter list
+- [Configuration](./configuration): config.yaml reference
+- [Supported Scales](./supported-scales): full adapter list
 - [Exporters](/exporters): configure export targets
 - [ESP32 BLE Proxy](./esp32-proxy): remote BLE via WiFi/MQTT
 - [FAQ](/faq): common questions on privacy, 2FA, multi-user, and body composition accuracy

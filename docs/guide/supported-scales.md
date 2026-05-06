@@ -9,7 +9,7 @@ head:
 
 # Supported Scales
 
-BLE Scale Sync ships **24 protocol adapters** out of the box, covering Xiaomi, Renpho (incl. FITINDEX, Sencor, QN-Scale), Eufy (incl. P2 Pro T9149), Yunmai, Beurer, Sanitas, Medisana, and more — plus a generic Bluetooth SIG adapter that works with any spec-compliant BCS/WSS scale. Each adapter typically supports several models or rebrands sold under different names, so the real device coverage is much wider than the adapter count. All adapters provide weight + impedance for full [body composition](/body-composition) calculation.
+BLE Scale Sync ships **24 protocol adapters** out of the box, covering Xiaomi, Renpho (incl. FITINDEX, Sencor, QN-Scale), Eufy (incl. P2 Pro T9149), Yunmai, Beurer, Sanitas, Medisana, and more, plus a generic Bluetooth SIG adapter that works with any spec-compliant BCS/WSS scale. Each adapter typically supports several models or rebrands sold under different names, so the real device coverage is much wider than the adapter count. All adapters provide weight + impedance for full [body composition](/body-composition) calculation.
 
 ## Scale List
 
@@ -32,7 +32,7 @@ BLE Scale Sync ships **24 protocol adapters** out of the box, covering Xiaomi, R
 | **MGB** (Swan / Icomon / YG)                                |                                                                                                                                                                   |
 | **Digoo** DG-SO38H (Mengii)                                 |                                                                                                                                                                   |
 | **Excelvan** CF369                                          |                                                                                                                                                                   |
-| **Trisa** Body Analyze / **ADE** BA 1600 (fitvigo)          | ADE variant: weight only, body comp encoding TBD                                                                                                                  |
+| **Trisa** Body Analyze / **ADE** BA 1600 (fitvigo)          | ADE variant: weight reported by scale; body composition derived locally via Deurenberg fallback                                                                   |
 | **Hoffen** BS-8107                                          |                                                                                                                                                                   |
 | **Hesley** (YunChen)                                        |                                                                                                                                                                   |
 | **Inlife** (FatScale)                                       |                                                                                                                                                                   |
@@ -45,7 +45,7 @@ Most widely available brands are listed first. The Standard BT SIG adapter at th
 
 ## Finding Your Scale
 
-The [setup wizard](/guide/configuration#setup-wizard-recommended) includes interactive scale discovery — it scans for nearby BLE devices, identifies supported scales, and writes the config for you. To scan without the wizard:
+The [setup wizard](/guide/configuration#setup-wizard-recommended) includes interactive scale discovery. It scans for nearby BLE devices, identifies supported scales, and writes the config for you. To scan without the wizard:
 
 ```bash
 # Docker
@@ -57,7 +57,7 @@ npm run scan
 ```
 
 ::: tip Set your scale's MAC address
-We recommend setting `scale_mac` in `config.yaml` — it prevents the app from accidentally connecting to a neighbor's scale. The setup wizard does this automatically. If you skip it, the app falls back to auto-discovery by BLE advertisement name.
+We recommend setting `scale_mac` in `config.yaml`. It prevents the app from accidentally connecting to a neighbor's scale. The setup wizard does this automatically. If you skip it, the app falls back to auto-discovery by BLE advertisement name.
 :::
 
 ## Known Limitations
@@ -71,6 +71,6 @@ We recommend setting `scale_mac` in `config.yaml` — it prevents the app from a
 
 ## Don't See Your Scale?
 
-If your scale uses BLE but isn't listed, it might still work — the **Standard BT SIG** adapter catches any scale that follows the official Bluetooth specification. Run the [setup wizard](/guide/configuration#setup-wizard-recommended) or `npm run scan` to check.
+If your scale uses BLE but isn't listed, it might still work. The **Standard BT SIG** adapter catches any scale that follows the official Bluetooth specification. Run the [setup wizard](/guide/configuration#setup-wizard-recommended) or `npm run scan` to check.
 
 Want to add support for a new scale? See [Contributing](https://github.com/KristianP26/ble-scale-sync/blob/main/CONTRIBUTING.md#adding-a-new-scale-adapter).

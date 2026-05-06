@@ -11,28 +11,29 @@ head:
 
 ## Comparison
 
-| | BLE Scale Sync | openScale | openScale-sync | Manufacturer App |
-|---|---|---|---|---|
-| **Platform** | Linux, macOS, Windows, Docker | Android | Android | iOS / Android |
-| **Headless (always-on)** | Yes, Raspberry Pi or server | No | No | No |
-| **Phone required** | No | Yes | Yes | Yes |
-| **BLE connectivity** | Local adapter or [ESP32 proxy](/guide/esp32-proxy) over WiFi | Phone BLE | Phone BLE | Phone BLE |
-| **Garmin Connect** | Automatic upload | No | Via Health Connect | Some (indirect) |
-| **Strava** | Automatic weight sync | No | No | No |
-| **MQTT / Home Assistant** | Auto-discovery, LWT, 10 sensors | No | MQTT 3.1 / 5.0 | No |
-| **InfluxDB** | Built-in | No | No | No |
-| **Webhook** | Built-in | No | No | No |
-| **Push notifications** | Ntfy | No | No | App only |
-| **Local file export** | CSV and JSONL | SQLite | No | No |
-| **Multi-user** | Automatic weight matching | Manual selection | Per-user sync | Per-account |
-| **Supported scales** | 24 protocol adapters | 20+ brands | Via openScale | 1 (own brand) |
-| **Body composition** | 10 metrics (BIA) | Varies | 4 metrics | Varies |
-| **Docker** | Multi-arch images | No | No | No |
-| **Open source** | GPL-3.0 | GPL-3.0 | GPL-3.0 | No |
+|                           | BLE Scale Sync                                               | openScale        | openScale-sync     | Manufacturer App |
+| ------------------------- | ------------------------------------------------------------ | ---------------- | ------------------ | ---------------- |
+| **Platform**              | Linux, macOS, Windows, Docker                                | Android          | Android            | iOS / Android    |
+| **Headless (always-on)**  | Yes, Raspberry Pi or server                                  | No               | No                 | No               |
+| **Phone required**        | No                                                           | Yes              | Yes                | Yes              |
+| **BLE connectivity**      | Local adapter or [ESP32 proxy](/guide/esp32-proxy) over WiFi | Phone BLE        | Phone BLE          | Phone BLE        |
+| **Garmin Connect**        | Automatic upload                                             | No               | Via Health Connect | Some (indirect)  |
+| **Strava**                | Automatic weight sync                                        | No               | No                 | No               |
+| **MQTT / Home Assistant** | Auto-discovery, LWT, 10 sensors                              | No               | MQTT 3.1 / 5.0     | No               |
+| **InfluxDB**              | Built-in                                                     | No               | No                 | No               |
+| **Webhook**               | Built-in                                                     | No               | No                 | No               |
+| **Push notifications**    | Ntfy                                                         | No               | No                 | App only         |
+| **Local file export**     | CSV and JSONL                                                | SQLite           | No                 | No               |
+| **Multi-user**            | Automatic weight matching                                    | Manual selection | Per-user sync      | Per-account      |
+| **Supported scales**      | 24 protocol adapters                                         | 20+ brands       | Via openScale      | 1 (own brand)    |
+| **Body composition**      | 10 metrics (BIA)                                             | Varies           | 4 metrics          | Varies           |
+| **Docker**                | Multi-arch images                                            | No               | No                 | No               |
+| **Open source**           | GPL-3.0                                                      | GPL-3.0          | GPL-3.0            | No               |
 
 ## BLE Scale Sync
 
 **Best for:**
+
 - Automatic Garmin Connect and Strava sync without a phone
 - Home automation integration (MQTT, InfluxDB, webhooks)
 - Headless always-on deployment (Raspberry Pi)
@@ -46,6 +47,7 @@ head:
 [openScale](https://github.com/oliexdev/openScale) is an excellent open-source Android app for reading BLE scales with a polished UI.
 
 **Best for:**
+
 - Android users who prefer a phone app
 - Users who want a local-first scale tracker on their phone
 
@@ -58,10 +60,12 @@ Many of BLE Scale Sync's scale adapters were ported from openScale. Others (QN-S
 [openScale-sync](https://github.com/oliexdev/openScale-sync) is a companion Android app that syncs openScale measurements to external services (Health Connect, Wger, MQTT).
 
 **Best for:**
+
 - openScale users who want Garmin Connect sync via Health Connect
 - Android users who want MQTT export without a server
 
 **Limitations:**
+
 - Requires both openScale + openScale-sync installed on Android
 - No InfluxDB, webhook, or ntfy support
 - Syncs only 4 metrics (weight, body fat, muscle mass, water)
@@ -71,6 +75,7 @@ Many of BLE Scale Sync's scale adapters were ported from openScale. Others (QN-S
 Renpho, Yunmai, Xiaomi Mi Fit, and similar apps are the simplest option if you only use one brand.
 
 **Trade-offs:**
+
 - Locked to one brand's ecosystem
 - No direct Garmin Connect export (some support Health Connect on Android)
 - No MQTT, InfluxDB, or webhook integration

@@ -78,12 +78,12 @@ Setting `is_athlete: true` in a user's profile adjusts the formulas for people w
 
 Effects:
 
-- **Lean Body Mass** — different BIA coefficients (see table above)
-- **Water** — higher hydration factor (74% vs 73% of LBM)
-- **Muscle Mass** — higher factor (60% vs 54% of LBM)
-- **BMR** — +5% boost
-- **Metabolic Age** — capped at actual age minus 5
-- **Deurenberg** — result multiplied by 0.85
+- **Lean Body Mass**: different BIA coefficients (see table above)
+- **Water**: higher hydration factor (74% vs 73% of LBM)
+- **Muscle Mass**: higher factor (60% vs 54% of LBM)
+- **BMR**: +5% boost
+- **Metabolic Age**: capped at actual age minus 5
+- **Deurenberg**: result multiplied by 0.85
 
 ## Scale-Specific Algorithms
 
@@ -101,6 +101,6 @@ The Yunmai scale computes body composition on-device and transmits the pre-calcu
 
 ## References
 
-- **BIA** — Lukaski H.C. et al. (1986), _"Assessment of fat-free mass using bioelectrical impedance measurements of the human body"_, American Journal of Clinical Nutrition
-- **Mifflin-St Jeor** — Mifflin M.D., St Jeor S.T. et al. (1990), _"A new predictive equation for resting energy expenditure in healthy individuals"_, American Journal of Clinical Nutrition
-- **Deurenberg** — Deurenberg P., Weststrate J.A., Seidell J.C. (1991), _"Body mass index as a measure of body fatness: age- and sex-specific prediction formulas"_, British Journal of Nutrition
+- **BIA**: Lukaski H.C. et al. (1986), _"Assessment of fat-free mass using bioelectrical impedance measurements of the human body"_, American Journal of Clinical Nutrition
+- **Mifflin-St Jeor**: Mifflin M.D., St Jeor S.T. et al. (1990), _"A new predictive equation for resting energy expenditure in healthy individuals"_, American Journal of Clinical Nutrition
+- **Deurenberg**: Deurenberg P., Weststrate J.A., Seidell J.C. (1991), _"Body mass index as a measure of body fatness: age- and sex-specific prediction formulas"_, British Journal of Nutrition

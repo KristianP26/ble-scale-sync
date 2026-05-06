@@ -11,27 +11,27 @@ head:
 
 BLE Scale Sync exports body composition data to 7 targets. The [setup wizard](/guide/configuration#setup-wizard-recommended) walks you through exporter selection, configuration, and connectivity testing.
 
-Exporters are configured in `global_exporters` (shared by all users). For multi-user setups with separate accounts, see [Per-User Exporters](/multi-user#per-user-exporters). All enabled exporters run in parallel — the process reports an error only if **every** exporter fails.
+Exporters are configured in `global_exporters` (shared by all users). For multi-user setups with separate accounts, see [Per-User Exporters](/multi-user#per-user-exporters). All enabled exporters run in parallel; the process reports an error only if **every** exporter fails.
 
-| Target | Description |
-|---|---|
-| [**Garmin Connect**](#garmin) | Automatic body composition upload — no phone app needed |
-| [**MQTT**](#mqtt) | Home Assistant auto-discovery with 10 sensors, LWT |
-| [**InfluxDB**](#influxdb) | Time-series database (v2 write API) |
-| [**Webhook**](#webhook) | Any HTTP endpoint — n8n, Make, Zapier, custom APIs |
-| [**Ntfy**](#ntfy) | Push notifications to phone/desktop |
-| [**File (CSV/JSONL)**](#file) | Append readings to a local file |
-| [**Strava**](#strava) | Update weight in your Strava athlete profile |
+| Target                        | Description                                            |
+| ----------------------------- | ------------------------------------------------------ |
+| [**Garmin Connect**](#garmin) | Automatic body composition upload, no phone app needed |
+| [**MQTT**](#mqtt)             | Home Assistant auto-discovery with 10 sensors, LWT     |
+| [**InfluxDB**](#influxdb)     | Time-series database (v2 write API)                    |
+| [**Webhook**](#webhook)       | Any HTTP endpoint (n8n, Make, Zapier, custom APIs)     |
+| [**Ntfy**](#ntfy)             | Push notifications to phone/desktop                    |
+| [**File (CSV/JSONL)**](#file) | Append readings to a local file                        |
+| [**Strava**](#strava)         | Update weight in your Strava athlete profile           |
 
 ## Garmin Connect {#garmin}
 
-Automatic body composition upload to Garmin Connect — no phone app needed. Uses a Python subprocess with cached authentication tokens.
+Automatic body composition upload to Garmin Connect, no phone app needed. Uses a Python subprocess with cached authentication tokens.
 
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `email` | Yes | — | Garmin account email |
-| `password` | Yes | — | Garmin account password |
-| `token_dir` | No | `~/.garmin_tokens` | Directory for cached auth tokens |
+| Field       | Required | Default            | Description                      |
+| ----------- | -------- | ------------------ | -------------------------------- |
+| `email`     | Yes      | (none)             | Garmin account email             |
+| `password`  | Yes      | (none)             | Garmin account password          |
+| `token_dir` | No       | `~/.garmin_tokens` | Directory for cached auth tokens |
 
 ```yaml
 global_exporters:
@@ -41,7 +41,7 @@ global_exporters:
 ```
 
 ::: tip Authentication
-The setup wizard handles Garmin authentication automatically. You only need to authenticate once — tokens are cached and reused. To re-authenticate manually:
+The setup wizard handles Garmin authentication automatically. You only need to authenticate once; tokens are cached and reused. To re-authenticate manually:
 
 **Standalone (Node.js):**
 
@@ -54,7 +54,7 @@ npm run setup-garmin
 ```bash
 docker run --rm -it \
   -v ./config.yaml:/app/config.yaml \
-  -v garmin-tokens:/home/node/.garmin_tokens \
+  -v ./garmin-tokens:/app/garmin-tokens \
   -e GARMIN_EMAIL \
   -e GARMIN_PASSWORD \
   ghcr.io/kristianp26/ble-scale-sync:latest setup-garmin
@@ -65,7 +65,7 @@ docker run --rm -it \
 ```bash
 docker run --rm -it \
   -v ./config.yaml:/app/config.yaml \
-  -v garmin-tokens-alice:/home/node/.garmin_tokens_alice \
+  -v ./garmin-tokens-alice:/app/garmin-tokens-alice \
   -e GARMIN_EMAIL -e GARMIN_PASSWORD \
   ghcr.io/kristianp26/ble-scale-sync:latest setup-garmin --user Alice
 ```
@@ -75,8 +75,8 @@ docker run --rm -it \
 ```bash
 docker run --rm -it \
   -v ./config.yaml:/app/config.yaml \
-  -v garmin-tokens-alice:/home/node/.garmin_tokens_alice \
-  -v garmin-tokens-bob:/home/node/.garmin_tokens_bob \
+  -v ./garmin-tokens-alice:/app/garmin-tokens-alice \
+  -v ./garmin-tokens-bob:/app/garmin-tokens-bob \
   -e GARMIN_EMAIL -e GARMIN_PASSWORD \
   ghcr.io/kristianp26/ble-scale-sync:latest setup-garmin --all-users
 ```
@@ -93,23 +93,23 @@ v1.8.1 bumps `garminconnect` to 0.3.x, which replaced the old garth-based OAuth 
 
 ## MQTT {#mqtt}
 
-Publishes body composition as JSON to an MQTT broker. **Home Assistant auto-discovery** is enabled by default — all 10 metrics appear as sensors grouped under a single device, with availability tracking (LWT) and display precision per metric.
+Publishes body composition as JSON to an MQTT broker. **Home Assistant auto-discovery** is enabled by default; all 10 metrics appear as sensors grouped under a single device, with availability tracking (LWT) and display precision per metric.
 
 ::: tip Home Assistant users
 If you run Home Assistant OS or Supervised, the [Home Assistant Add-on](./guide/home-assistant-addon) auto-detects the Mosquitto broker through the Supervisor API, so you do not need to wire MQTT manually.
 :::
 
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `broker_url` | Yes | — | `mqtt://host:1883` or `mqtts://` for TLS |
-| `topic` | No | `scale/body-composition` | Publish topic |
-| `qos` | No | `1` | QoS level (0, 1, or 2) |
-| `retain` | No | `true` | Retain last message |
-| `username` | No | — | Broker auth username |
-| `password` | No | — | Broker auth password |
-| `client_id` | No | `ble-scale-sync` | MQTT client identifier |
-| `ha_discovery` | No | `true` | Home Assistant auto-discovery |
-| `ha_device_name` | No | `BLE Scale` | Device name in Home Assistant |
+| Field            | Required | Default                  | Description                              |
+| ---------------- | -------- | ------------------------ | ---------------------------------------- |
+| `broker_url`     | Yes      | (none)                   | `mqtt://host:1883` or `mqtts://` for TLS |
+| `topic`          | No       | `scale/body-composition` | Publish topic                            |
+| `qos`            | No       | `1`                      | QoS level (0, 1, or 2)                   |
+| `retain`         | No       | `true`                   | Retain last message                      |
+| `username`       | No       | (none)                   | Broker auth username                     |
+| `password`       | No       | (none)                   | Broker auth password                     |
+| `client_id`      | No       | `ble-scale-sync`         | MQTT client identifier                   |
+| `ha_discovery`   | No       | `true`                   | Home Assistant auto-discovery            |
+| `ha_device_name` | No       | `BLE Scale`              | Device name in Home Assistant            |
 
 ```yaml
 global_exporters:
@@ -123,12 +123,12 @@ global_exporters:
 
 Sends body composition as JSON to any HTTP endpoint. Works with n8n, Make, Zapier, or custom APIs.
 
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `url` | Yes | — | Target URL |
-| `method` | No | `POST` | HTTP method |
-| `headers` | No | — | Custom headers (YAML object) |
-| `timeout` | No | `10000` | Request timeout in ms |
+| Field     | Required | Default | Description                  |
+| --------- | -------- | ------- | ---------------------------- |
+| `url`     | Yes      | (none)  | Target URL                   |
+| `method`  | No       | `POST`  | HTTP method                  |
+| `headers` | No       | (none)  | Custom headers (YAML object) |
+| `timeout` | No       | `10000` | Request timeout in ms        |
 
 ```yaml
 global_exporters:
@@ -142,13 +142,13 @@ global_exporters:
 
 Writes metrics to InfluxDB v2 using line protocol. Float fields use 2 decimal places, integer fields use `i` suffix.
 
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `url` | Yes | — | InfluxDB server URL |
-| `token` | Yes | — | API token with write access |
-| `org` | Yes | — | Organization name |
-| `bucket` | Yes | — | Destination bucket |
-| `measurement` | No | `body_composition` | Measurement name |
+| Field         | Required | Default            | Description                 |
+| ------------- | -------- | ------------------ | --------------------------- |
+| `url`         | Yes      | (none)             | InfluxDB server URL         |
+| `token`       | Yes      | (none)             | API token with write access |
+| `org`         | Yes      | (none)             | Organization name           |
+| `bucket`      | Yes      | (none)             | Destination bucket          |
+| `measurement` | No       | `body_composition` | Measurement name            |
 
 ```yaml
 global_exporters:
@@ -163,15 +163,15 @@ global_exporters:
 
 Push notifications to phone/desktop via [ntfy](https://ntfy.sh). Works with ntfy.sh or self-hosted instances.
 
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `url` | No | `https://ntfy.sh` | Ntfy server URL |
-| `topic` | Yes | — | Topic name |
-| `title` | No | `Scale Measurement` | Notification title |
-| `priority` | No | `3` | Priority (1–5) |
-| `token` | No | — | Bearer token auth |
-| `username` | No | — | Basic auth username |
-| `password` | No | — | Basic auth password |
+| Field      | Required | Default             | Description         |
+| ---------- | -------- | ------------------- | ------------------- |
+| `url`      | No       | `https://ntfy.sh`   | Ntfy server URL     |
+| `topic`    | Yes      | (none)              | Topic name          |
+| `title`    | No       | `Scale Measurement` | Notification title  |
+| `priority` | No       | `3`                 | Priority (1 to 5)   |
+| `token`    | No       | (none)              | Bearer token auth   |
+| `username` | No       | (none)              | Basic auth username |
+| `password` | No       | (none)              | Basic auth password |
 
 ```yaml
 global_exporters:
@@ -184,10 +184,10 @@ global_exporters:
 
 Append each reading to a local CSV or JSONL file. Useful for simple logging without external services.
 
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `file_path` | Yes | | Path to the output file |
-| `format` | No | `csv` | `csv` or `jsonl` |
+| Field       | Required | Default | Description             |
+| ----------- | -------- | ------- | ----------------------- |
+| `file_path` | Yes      |         | Path to the output file |
+| `format`    | No       | `csv`   | `csv` or `jsonl`        |
 
 ```yaml
 global_exporters:
@@ -206,17 +206,18 @@ volumes:
   - scale-data:/app/data
 # config.yaml: file_path: './data/measurements.csv'
 ```
+
 :::
 
 ## Strava {#strava}
 
 Update your weight in the Strava athlete profile. Requires a Strava API application.
 
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `client_id` | Yes | | Strava API application client ID |
-| `client_secret` | Yes | | Strava API application client secret |
-| `token_dir` | No | `./strava-tokens` | Directory for cached OAuth tokens |
+| Field           | Required | Default           | Description                          |
+| --------------- | -------- | ----------------- | ------------------------------------ |
+| `client_id`     | Yes      |                   | Strava API application client ID     |
+| `client_secret` | Yes      |                   | Strava API application client secret |
+| `token_dir`     | No       | `./strava-tokens` | Directory for cached OAuth tokens    |
 
 ```yaml
 users:
@@ -274,18 +275,18 @@ global_exporters:
     password: '${GARMIN_PASSWORD}'
 ```
 
-See [Configuration — Environment Variables](/guide/configuration#environment-variables) for details.
+See [Configuration: Environment Variables](/guide/configuration#environment-variables) for details.
 
 ## Healthchecks
 
 At startup, exporters are tested for connectivity. Failures are logged as warnings but don't block the scan.
 
-| Exporter | Method |
-|---|---|
-| MQTT | Connect + disconnect |
-| Webhook | HEAD request |
-| InfluxDB | `/health` endpoint |
-| Ntfy | `/v1/health` endpoint |
-| Garmin | None (Python subprocess) |
-| File | Directory writable check |
-| Strava | None (avoid API rate limits) |
+| Exporter | Method                       |
+| -------- | ---------------------------- |
+| MQTT     | Connect + disconnect         |
+| Webhook  | HEAD request                 |
+| InfluxDB | `/health` endpoint           |
+| Ntfy     | `/v1/health` endpoint        |
+| Garmin   | None (Python subprocess)     |
+| File     | Directory writable check     |
+| Strava   | None (avoid API rate limits) |

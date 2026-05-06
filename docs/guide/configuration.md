@@ -23,11 +23,11 @@ docker run --rm -it --network host --cap-add NET_ADMIN --cap-add NET_RAW \
   --group-add 112 -v /var/run/dbus:/var/run/dbus:ro \
   -v ./config.yaml:/app/config.yaml ghcr.io/kristianp26/ble-scale-sync:latest setup
 
-# Standalone (Node.js — Linux, macOS, Windows)
+# Standalone (Node.js, Linux/macOS/Windows)
 npm run setup
 ```
 
-The wizard generates a complete `config.yaml`. If a config already exists, it offers **edit mode** — pick any section to reconfigure without starting over.
+The wizard generates a complete `config.yaml`. If a config already exists, it offers **edit mode**: pick any section to reconfigure without starting over.
 
 ::: tip
 You don't need to edit `config.yaml` manually. The wizard handles everything, including BLE scale auto-discovery, Garmin authentication, and exporter connectivity tests.
@@ -53,15 +53,19 @@ If you prefer manual configuration, here's the full reference. See [`config.yaml
 ```yaml
 ble:
   scale_mac: 'FF:03:00:13:A1:04'
+  # handler: auto
   # noble_driver: abandonware
   # adapter: hci1
 ```
 
-| Field          | Required    | Default        | Description                                                                           |
-| -------------- | ----------- | -------------- | ------------------------------------------------------------------------------------- |
-| `scale_mac`    | Recommended | Auto-discovery | MAC address or CoreBluetooth UUID (macOS). Prevents connecting to a neighbor's scale. |
-| `noble_driver` | No          | OS default     | `abandonware` or `stoprocent`. Overrides the default BLE driver.                      |
-| `adapter`      | No          | System default | Linux only. Select a specific Bluetooth adapter (e.g., `hci0`, `hci1`). See below.    |
+| Field           | Required                    | Default        | Description                                                                                                                                           |
+| --------------- | --------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scale_mac`     | Recommended                 | Auto-discovery | MAC address or CoreBluetooth UUID (macOS). Prevents connecting to a neighbor's scale.                                                                 |
+| `handler`       | No                          | `auto`         | Transport: `auto` (local radio), `mqtt-proxy` (ESP32 over MQTT), `esphome-proxy` (ESPHome Native API). See below.                                     |
+| `noble_driver`  | No                          | OS default     | `abandonware` or `stoprocent`. Overrides the default BLE driver. Only applies when `handler: auto`.                                                   |
+| `adapter`       | No                          | System default | Linux only. Select a specific Bluetooth adapter (e.g., `hci0`, `hci1`). See below.                                                                    |
+| `mqtt_proxy`    | If `handler: mqtt-proxy`    | (none)         | MQTT proxy connection (`broker_url`, `device_id`, `topic_prefix`, `username`, `password`, `embedded_broker_*`). See [ESP32 BLE Proxy](./esp32-proxy). |
+| `esphome_proxy` | If `handler: esphome-proxy` | (none)         | ESPHome Native API connection (`host`, `port`, `encryption_key` or `password`, `client_info`). See [ESPHome Bluetooth Proxy](./esphome-proxy).        |
 
 ::: tip BLE adapter selection (Linux only)
 If your device has multiple Bluetooth adapters, you can choose which one BLE Scale Sync uses. By default, the first adapter (`hci0`) is used.
@@ -144,6 +148,7 @@ runtime:
   dry_run: false
   debug: false
   watchdog_max_consecutive_failures: 10
+  watch_config: true
 ```
 
 | Field                               | Required | Default | Description                                                                                                                                                                                                                                                                                                            |
@@ -153,6 +158,7 @@ runtime:
 | `dry_run`                           | No       | `false` | Read scale + compute body comp, skip exports                                                                                                                                                                                                                                                                           |
 | `debug`                             | No       | `false` | Verbose BLE logging                                                                                                                                                                                                                                                                                                    |
 | `watchdog_max_consecutive_failures` | No       | `10`    | In continuous mode on Linux: exit after this many consecutive scan failures so Docker `restart: unless-stopped` can recover from a stuck BlueZ controller (0 = disabled). See [Troubleshooting](/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state).                                           |
+| `watch_config`                      | No       | `true`  | Auto-reload `config.yaml` on edit (continuous mode only). Set to `false` to disable and rely on `SIGHUP` only. See [Live Config Reload](/multi-user#live-config-reload).                                                                                                                                               |
 
 ### Update Check
 
@@ -172,7 +178,7 @@ Anonymous aggregated statistics are visible at [stats.blescalesync.dev](https://
 
 ### Secret references
 
-YAML values support `${ENV_VAR}` syntax for passwords and tokens. The variable must be defined in the environment or in a `.env` file — loading fails if a reference is undefined.
+YAML values support `${ENV_VAR}` syntax for passwords and tokens. The variable must be defined in the environment or in a `.env` file; loading fails if a reference is undefined.
 
 ```yaml
 global_exporters:

@@ -18,6 +18,7 @@ BLE Scale Sync ships as a native Home Assistant add-on for Home Assistant OS and
 The badge above uses [My Home Assistant](https://www.home-assistant.io/integrations/my/) to open your instance, confirm the repository, and drop you on the Add-on Store with **BLE Scale Sync** visible. Click **Install**, then head to the **Configuration** tab and fill in your scale MAC and user profile. Start the add-on from the **Info** tab. The Supervisor pulls the arm64 / armv7 / amd64 image to match your host.
 
 ::: details Prefer manual steps?
+
 1. **Settings** > **Add-ons** > **Add-on Store**.
 2. Three-dot menu > **Repositories** and add:
 
@@ -27,7 +28,7 @@ The badge above uses [My Home Assistant](https://www.home-assistant.io/integrati
 
 3. Refresh the store. **BLE Scale Sync** appears under the new repository.
 4. Click **Install**, then open the **Configuration** tab and fill in your scale MAC and user profile. Start the add-on from the **Info** tab.
-:::
+   :::
 
 ::: tip
 The add-on requires `host_network`, `host_dbus`, and the `NET_ADMIN` / `NET_RAW` capabilities to access the host Bluetooth adapter through BlueZ. The Supervisor grants these automatically.
@@ -52,59 +53,59 @@ All options live under the **Configuration** tab. The add-on regenerates `/data/
 
 ### Scale and BLE
 
-| Option | Default | Notes |
-|---|---|---|
-| `scale_mac` | empty | Leave empty for auto-discovery. Set to a specific MAC like `AA:BB:CC:DD:EE:FF` to skip scanning. Required for scales with non-unique advertised names. |
-| `ble_adapter` | empty (uses default) | Set to `hci0`, `hci1`, ... on hosts with multiple Bluetooth adapters. |
-| `reset_bluetooth` | `true` | Runs `btmgmt power off/on` at startup. Leave on unless you run other HA Bluetooth integrations that lose connectivity when the adapter is power-cycled. |
+| Option            | Default              | Notes                                                                                                                                                   |
+| ----------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scale_mac`       | empty                | Leave empty for auto-discovery. Set to a specific MAC like `AA:BB:CC:DD:EE:FF` to skip scanning. Required for scales with non-unique advertised names.  |
+| `ble_adapter`     | empty (uses default) | Set to `hci0`, `hci1`, ... on hosts with multiple Bluetooth adapters.                                                                                   |
+| `reset_bluetooth` | `true`               | Runs `btmgmt power off/on` at startup. Leave on unless you run other HA Bluetooth integrations that lose connectivity when the adapter is power-cycled. |
 
 ### Unit preferences
 
-| Option | Default | Allowed |
-|---|---|---|
-| `weight_unit` | `kg` | `kg`, `lbs` |
-| `height_unit` | `cm` | `cm`, `in` |
+| Option        | Default | Allowed     |
+| ------------- | ------- | ----------- |
+| `weight_unit` | `kg`    | `kg`, `lbs` |
+| `height_unit` | `cm`    | `cm`, `in`  |
 
 The CLI and exporters display weights and heights in your chosen unit; all internal math stays in kg / cm.
 
 ### User profile
 
-| Option | Default | Notes |
-|---|---|---|
-| `user_name` | `Default` | Display name used in logs and HA entity names. |
-| `user_height` | `170` | In the unit chosen above. |
-| `user_birth_date` | `1990-01-01` | `YYYY-MM-DD`. Used for age-based BMR and physique rating. |
-| `user_gender` | `male` | `male` or `female`. |
-| `user_is_athlete` | `false` | Shifts body fat formulas for athletic body types. |
+| Option                                | Default      | Notes                                                          |
+| ------------------------------------- | ------------ | -------------------------------------------------------------- |
+| `user_name`                           | `Default`    | Display name used in logs and HA entity names.                 |
+| `user_height`                         | `170`        | In the unit chosen above.                                      |
+| `user_birth_date`                     | `1990-01-01` | `YYYY-MM-DD`. Used for age-based BMR and physique rating.      |
+| `user_gender`                         | `male`       | `male` or `female`.                                            |
+| `user_is_athlete`                     | `false`      | Shifts body fat formulas for athletic body types.              |
 | `user_weight_min` / `user_weight_max` | `40` / `150` | Used by the multi-user matcher to filter implausible readings. |
 
 ### MQTT
 
-| Option | Default | Notes |
-|---|---|---|
-| `mqtt_enabled` | `true` | Enable the MQTT exporter. |
-| `mqtt_auto` | `true` | Auto-detect the Mosquitto add-on broker via the Supervisor API. Overrides manual URL / credentials when the Mosquitto add-on is installed. |
-| `mqtt_broker_url` | empty | Manual broker URL, e.g. `mqtt://192.168.1.50:1883` or `mqtts://...`. Only used when `mqtt_auto` is off or auto-detection fails. |
-| `mqtt_username` / `mqtt_password` | empty | Credentials for the manual broker. |
-| `mqtt_topic` | `scale/body-composition` | Base topic. Payload is published to this topic; HA discovery entities use `homeassistant/sensor/<topic>/...`. |
-| `mqtt_ha_discovery` | `true` | Publish auto-discovery entities under `homeassistant/`. Disable if you want raw MQTT only. |
-| `mqtt_ha_device_name` | `BLE Scale` | Device name grouping the entities in HA. |
+| Option                            | Default                  | Notes                                                                                                                                      |
+| --------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `mqtt_enabled`                    | `true`                   | Enable the MQTT exporter.                                                                                                                  |
+| `mqtt_auto`                       | `true`                   | Auto-detect the Mosquitto add-on broker via the Supervisor API. Overrides manual URL / credentials when the Mosquitto add-on is installed. |
+| `mqtt_broker_url`                 | empty                    | Manual broker URL, e.g. `mqtt://192.168.1.50:1883` or `mqtts://...`. Only used when `mqtt_auto` is off or auto-detection fails.            |
+| `mqtt_username` / `mqtt_password` | empty                    | Credentials for the manual broker.                                                                                                         |
+| `mqtt_topic`                      | `scale/body-composition` | Base topic. Payload is published to this topic; HA discovery entities use `homeassistant/sensor/<topic>/...`.                              |
+| `mqtt_ha_discovery`               | `true`                   | Publish auto-discovery entities under `homeassistant/`. Disable if you want raw MQTT only.                                                 |
+| `mqtt_ha_device_name`             | `BLE Scale`              | Device name grouping the entities in HA.                                                                                                   |
 
 ### Garmin Connect
 
-| Option | Default | Notes |
-|---|---|---|
-| `garmin_enabled` | `false` | Enable the Garmin Connect exporter. |
-| `garmin_email` / `garmin_password` | empty | Garmin credentials. On first start the add-on runs `setup_garmin.py` to authenticate and saves OAuth tokens to `/data/garmin-tokens/`. |
+| Option                             | Default | Notes                                                                                                                                  |
+| ---------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `garmin_enabled`                   | `false` | Enable the Garmin Connect exporter.                                                                                                    |
+| `garmin_email` / `garmin_password` | empty   | Garmin credentials. On first start the add-on runs `setup_garmin.py` to authenticate and saves OAuth tokens to `/data/garmin-tokens/`. |
 
 If your account uses MFA, see [MFA workaround](#mfa-workaround) below.
 
 ### Runtime
 
-| Option | Default | Notes |
-|---|---|---|
-| `scan_cooldown` | `30` | Seconds to wait between scan cycles in continuous mode. Range: 5-3600. |
-| `debug` | `false` | Enable verbose BLE logs. Useful when opening an issue. |
+| Option          | Default | Notes                                                                                                                          |
+| --------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `scan_cooldown` | `30`    | Seconds to wait between scan cycles in continuous mode. Range: 5-3600.                                                         |
+| `debug`         | `false` | Enable verbose BLE logs. Useful when opening an issue.                                                                         |
 | `custom_config` | `false` | Ignore UI options entirely and use `/share/ble-scale-sync/config.yaml` instead. See [Custom config mode](#custom-config-mode). |
 
 ## MQTT auto-detection
@@ -151,16 +152,16 @@ Custom config mode still benefits from `last_known_weight` persistence (see belo
 
 Everything that should survive add-on restarts lives under `/data/` inside the container, which the Supervisor maps to persistent storage:
 
-| Path | Purpose |
-|---|---|
-| `/data/config.yaml` | The merged runtime config. Regenerated from UI options on every start, with `last_known_weight` preserved per user. |
-| `/data/garmin-tokens/` | Garmin OAuth tokens produced by first authentication. |
+| Path                   | Purpose                                                                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `/data/config.yaml`    | The merged runtime config. Regenerated from UI options on every start, with `last_known_weight` preserved per user. |
+| `/data/garmin-tokens/` | Garmin OAuth tokens produced by first authentication.                                                               |
 
 User-supplied files live under `/share/ble-scale-sync/`:
 
-| Path | Purpose |
-|---|---|
-| `/share/ble-scale-sync/config.yaml` | Custom config (used when `custom_config: true`). |
+| Path                                   | Purpose                                                                    |
+| -------------------------------------- | -------------------------------------------------------------------------- |
+| `/share/ble-scale-sync/config.yaml`    | Custom config (used when `custom_config: true`).                           |
 | `/share/ble-scale-sync/garmin-tokens/` | Optional pre-generated Garmin tokens imported on startup (MFA workaround). |
 
 ## Troubleshooting
@@ -175,6 +176,7 @@ User-supplied files live under `/share/ble-scale-sync/`:
      --group-add 112 -v /var/run/dbus:/var/run/dbus:ro \
      ghcr.io/kristianp26/ble-scale-sync:latest scan
    ```
+
 3. If the scale is visible, paste its MAC into the **Scale MAC address** field.
 4. If multiple Bluetooth adapters are attached, set **BLE adapter** to the one facing the scale (`hci1`, etc.).
 
@@ -186,7 +188,7 @@ User-supplied files live under `/share/ble-scale-sync/`:
 
 ### Garmin "No such file or directory: oauth1_token.json"
 
-Fixed in v1.7.5. Make sure the add-on is on that version or newer. If it still fails, your account likely uses MFA — see [MFA workaround](#mfa-workaround).
+Fixed in v1.7.5. Make sure the add-on is on that version or newer. If it still fails, your account likely uses MFA. See [MFA workaround](#mfa-workaround).
 
 ### Garmin "'Garmin' object has no attribute 'garth'"
 
@@ -194,7 +196,7 @@ Fixed in v1.8.1. The `garminconnect` library released 0.3.0 on 2026-04-02 which 
 
 ### BlueZ discovery gets stuck after hours
 
-Known upstream BlueZ bug on Broadcom adapters (`bluez/bluez#807`). See the general [troubleshooting page](/troubleshooting#ble-discovery-stops-working-after-hours-bluez-zombie-state) for the full recovery behaviour the app implements. The add-on already has `/dev/rfkill` and `CAP_NET_ADMIN` available for the recovery tiers.
+Known upstream BlueZ bug on Broadcom adapters (`bluez/bluez#807`). See the general [troubleshooting page](/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state) for the full recovery behaviour the app implements. The add-on already has `/dev/rfkill` and `CAP_NET_ADMIN` available for the recovery tiers.
 
 ## Limitations and roadmap
 

@@ -15,7 +15,7 @@ For general questions that are not about a specific error (supported scales, Gar
 
 ### Scale not found
 
-- **Step on the scale** to wake it up — most scales go to sleep after a few seconds of inactivity.
+- **Step on the scale** to wake it up. Most scales go to sleep after a few seconds of inactivity.
 - Verify with `npm run scan` (or the Docker `scan` command) that your scale is visible.
 - If using `scale_mac`, double-check the address matches the scan output.
 - On Linux, make sure Bluetooth is running: `sudo systemctl status bluetooth`
@@ -50,26 +50,45 @@ You need to re-run this after every Node.js update.
 
 ### Windows BLE issues
 
-- The default driver (`@abandonware/noble`) works with the native Windows Bluetooth stack -- no special setup needed.
+- The default driver (`@abandonware/noble`) works with the native Windows Bluetooth stack, no special setup needed.
 - If using `NOBLE_DRIVER=stoprocent`, install the WinUSB driver via [Zadig](https://zadig.akeo.ie/).
 - Run your terminal as Administrator if you get permission errors.
 
-### Switching the BLE handler
+### Switching the BLE transport (`ble.handler`)
 
-BLE Scale Sync ships with three BLE handlers. If you're having connection issues, try a different one by adding this to your `config.yaml`:
+BLE Scale Sync supports three transport handlers. The default `auto` picks the right local-radio stack per OS. Switch to `mqtt-proxy` or `esphome-proxy` only if you're using a remote BLE radio.
+
+```yaml
+ble:
+  handler: auto # or: mqtt-proxy, esphome-proxy
+```
+
+| Handler         | Use when                                                                                |
+| --------------- | --------------------------------------------------------------------------------------- |
+| `auto`          | Default. Local Bluetooth radio on the host (Linux/macOS/Windows).                       |
+| `mqtt-proxy`    | Remote ESP32 with custom firmware over MQTT. See [ESP32 BLE Proxy](/guide/esp32-proxy). |
+| `esphome-proxy` | Existing ESPHome BT proxy over Native API. See [ESPHome Proxy](/guide/esphome-proxy).   |
+
+### Switching the noble driver (`ble.noble_driver`)
+
+For local-radio mode (`handler: auto`), three OS-specific BLE stacks are available. If connections fail repeatedly, try the alternative driver:
 
 ```yaml
 ble:
   noble_driver: stoprocent # or: abandonware
 ```
 
-| Handler                                   | Platforms             | Notes                                                                                                              |
+| Driver                                    | Platforms             | Notes                                                                                                              |
 | ----------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `node-ble` (default on Linux)             | Linux only            | Uses BlueZ D-Bus. Most reliable on Raspberry Pi. Service UUIDs not available during scan (only after connecting).  |
 | `@abandonware/noble` (default on Windows) | Linux, Windows        | Mature driver. Uses WinRT on Windows.                                                                              |
 | `@stoprocent/noble` (default on macOS)    | Linux, macOS, Windows | Newer driver. Exposes service UUIDs during scan. On Windows, requires the [WinUSB driver](https://zadig.akeo.ie/). |
 
-If your scale is not being recognized during scan but you know its MAC address, set `scale_mac` in `config.yaml` -- the adapter will match post-connect using GATT service UUIDs regardless of the handler.
+::: tip Note
+On Linux, `node-ble` is always used regardless of `noble_driver`. The flag only applies on macOS/Windows or when explicitly set.
+:::
+
+If your scale is not being recognized during scan but you know its MAC address, set `scale_mac` in `config.yaml`. The adapter will match post-connect using GATT service UUIDs regardless of the driver.
 
 ## Exporter Issues
 
@@ -77,7 +96,7 @@ If your scale is not being recognized during scan but you know its MAC address, 
 
 - Re-run the [setup wizard](/guide/configuration#setup-wizard-recommended) or `npm run setup-garmin` to refresh tokens.
 - Check that your Garmin credentials are correct.
-- Garmin may block requests from cloud/VPN IPs — try authenticating from a different network, then copy `~/.garmin_tokens/` to your target machine.
+- Garmin may block requests from cloud/VPN IPs. Try authenticating from a different network, then copy `~/.garmin_tokens/` to your target machine.
 
 ### MQTT connection hangs or fails
 
@@ -107,13 +126,13 @@ This shows BLE discovery details, advertised services, discovered characteristic
 
 The original Pi Zero W has an ARMv6 CPU, which is **not supported**. The `esbuild` binary (used by the TypeScript runner `tsx`) requires ARMv7 or later and will crash with `SIGILL` (illegal instruction) on ARMv6. This affects both native installs and Docker.
 
-**Solution:** Use a [Raspberry Pi Zero 2W](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/) (~$15, ARMv7/64-bit) or any Pi 3/4/5.
+**Solution:** Use a [Raspberry Pi Zero 2W](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/) (~15€, ARMv7/64-bit) or any Pi 3/4/5.
 
 ## Docker Issues
 
 ### Container can't find BLE adapter
 
-Make sure you're passing all required flags — see [Getting Started](/guide/getting-started#docker) for the full command. The most common mistake is forgetting `--network host` or the D-Bus volume mount.
+Make sure you're passing all required flags. See [Getting Started](/guide/getting-started#docker) for the full command. The most common mistake is forgetting `--network host` or the D-Bus volume mount.
 
 ### Wrong Bluetooth group GID
 

@@ -9,7 +9,7 @@ head:
 
 # Multi-User Support
 
-When multiple users are configured, the app automatically identifies who stepped on the scale based on the measured weight. The [setup wizard](/guide/configuration#setup-wizard-recommended) walks you through adding users and setting weight ranges — no manual YAML editing needed.
+When multiple users are configured, the app automatically identifies who stepped on the scale based on the measured weight. The [setup wizard](/guide/configuration#setup-wizard-recommended) walks you through adding users and setting weight ranges, no manual YAML editing needed.
 
 ## How It Works
 
@@ -35,24 +35,24 @@ users:
 
 The app uses a 4-tier priority system to identify users:
 
-| Priority | Condition | Behavior |
-|---|---|---|
-| 1 | Single user | Always matches (warns if weight is outside range) |
-| 2 | Exact range match | One user's range contains the weight |
-| 3 | Overlapping ranges | Multiple matches — tiebreak by `last_known_weight` proximity, then config order |
-| 4 | No range match | Closest `last_known_weight` |
+| Priority | Condition          | Behavior                                                                       |
+| -------- | ------------------ | ------------------------------------------------------------------------------ |
+| 1        | Single user        | Always matches (warns if weight is outside range)                              |
+| 2        | Exact range match  | One user's range contains the weight                                           |
+| 3        | Overlapping ranges | Multiple matches; tiebreak by `last_known_weight` proximity, then config order |
+| 4        | No range match     | Closest `last_known_weight`                                                    |
 
 If no match is found, the `unknown_user` strategy decides what happens:
 
-| Strategy | Behavior |
-|---|---|
+| Strategy            | Behavior                                          |
+| ------------------- | ------------------------------------------------- |
 | `nearest` (default) | Picks the closest range midpoint (with a warning) |
-| `log` | Logs a warning and skips |
-| `ignore` | Silently skips |
+| `log`               | Logs a warning and skips                          |
+| `ignore`            | Silently skips                                    |
 
 ## Drift Detection
 
-After matching, the app checks if the weight falls in the **outer 10%** of the user's range. If it does, a warning is logged — so you can adjust the range before mismatches start happening.
+After matching, the app checks if the weight falls in the **outer 10%** of the user's range. If it does, a warning is logged so you can adjust the range before mismatches start happening.
 
 For example, if Alice's range is 50–70 kg and she weighs 68.5 kg, the app warns that she's near the upper boundary.
 
@@ -62,7 +62,7 @@ After each measurement, the matched user's `last_known_weight` is automatically 
 
 ## Per-User Exporters
 
-By default, all users share `global_exporters`. If a user needs different export targets (e.g., separate Garmin accounts), define `exporters` on that user — it completely replaces `global_exporters` for them:
+By default, all users share `global_exporters`. If a user needs different export targets (e.g., separate Garmin accounts), define `exporters` on that user; it completely replaces `global_exporters` for them:
 
 ```yaml
 users:
@@ -87,13 +87,13 @@ global_exporters:
 
 ### Exporter behavior in multi-user mode
 
-| Exporter | What changes |
-|---|---|
-| **MQTT** | Publishes to `{topic}/{slug}`, per-user HA device + LWT |
-| **InfluxDB** | Adds `user={slug}` tag to line protocol |
-| **Webhook** | Adds `user_name` + `user_slug` fields to JSON |
-| **Ntfy** | Prepends `[{name}]` to notification |
-| **Garmin** | One account per user via per-user exporter config |
+| Exporter     | What changes                                            |
+| ------------ | ------------------------------------------------------- |
+| **MQTT**     | Publishes to `{topic}/{slug}`, per-user HA device + LWT |
+| **InfluxDB** | Adds `user={slug}` tag to line protocol                 |
+| **Webhook**  | Adds `user_name` + `user_slug` fields to JSON           |
+| **Ntfy**     | Prepends `[{name}]` to notification                     |
+| **Garmin**   | One account per user via per-user exporter config       |
 
 ## Live Config Reload
 
