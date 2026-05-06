@@ -113,7 +113,7 @@ ble-scale-sync/
 │   │   ├── handler-node-ble.ts      # Linux native: node-ble (BlueZ D-Bus)
 │   │   ├── handler-noble.ts         # macOS native: @stoprocent/noble
 │   │   ├── handler-noble-legacy.ts  # Windows native: @abandonware/noble
-│   │   ├── handler-mqtt-proxy.ts    # ESP32 proxy over MQTT
+│   │   ├── handler-mqtt-proxy/      # ESP32 proxy over MQTT (split: client, topics, gatt, scan, watcher, display)
 │   │   ├── handler-esphome-proxy.ts # ESPHome BT proxy over Native API (phase 1, broadcast)
 │   │   ├── embedded-broker.ts       # Embedded aedes MQTT broker for ESP32 proxy
 │   │   └── mqtt-proxy-bootstrap.ts  # First-run scan + adapter pin for ESP32 proxy

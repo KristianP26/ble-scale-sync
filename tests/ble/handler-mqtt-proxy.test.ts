@@ -197,7 +197,7 @@ const {
   AsyncQueue,
   ReadingWatcher,
   _resetProxyState,
-} = await import('../../src/ble/handler-mqtt-proxy.js');
+} = await import('../../src/ble/handler-mqtt-proxy/index.js');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

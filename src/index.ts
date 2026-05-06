@@ -9,7 +9,7 @@ import {
   publishDisplayReading,
   publishDisplayResult,
   setDisplayUsers,
-} from './ble/handler-mqtt-proxy.js';
+} from './ble/handler-mqtt-proxy/index.js';
 import { bootstrapMqttProxy } from './ble/mqtt-proxy-bootstrap.js';
 import type { EmbeddedBrokerHandle } from './ble/embedded-broker.js';
 import { abortableSleep, POST_DISCONNECT_GRACE_MS } from './ble/types.js';

@@ -58,7 +58,7 @@ async function loadHandler(key: HandlerKey): Promise<CommonHandler> {
   bleLog.debug(`BLE handler: ${HANDLER_LABELS[key]}`);
   switch (key) {
     case 'mqtt-proxy':
-      return import('./handler-mqtt-proxy.js');
+      return import('./handler-mqtt-proxy/index.js');
     case 'esphome-proxy':
       return import('./handler-esphome-proxy.js');
     case 'noble-legacy':
@@ -89,7 +89,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   return handler.scanAndReadRaw(opts);
 }
 
-export { ReadingWatcher } from './handler-mqtt-proxy.js';
+export { ReadingWatcher } from './handler-mqtt-proxy/index.js';
 
 /**
  * Scan for a BLE scale, read weight + impedance, and compute body composition.
@@ -130,7 +130,7 @@ export async function scanDevices(
       if (!mqttProxy) {
         throw new Error('mqtt_proxy config is required when ble.handler is mqtt-proxy');
       }
-      const { scanDevices: impl } = await import('./handler-mqtt-proxy.js');
+      const { scanDevices: impl } = await import('./handler-mqtt-proxy/index.js');
       return impl(adapters, durationMs, mqttProxy);
     }
     case 'esphome-proxy': {
