@@ -51,6 +51,7 @@ export async function createMqttClient(config: MqttProxyConfig): Promise<MqttCli
  */
 const proxyState = {
   persistentClient: null as MqttClient | null,
+  pendingConnect: null as Promise<MqttClient> | null,
   discoveredScaleMacs: new Set<string>(),
   displayUsers: [] as DisplayUser[],
 };
@@ -58,6 +59,7 @@ const proxyState = {
 /** Reset all module-level proxy state (for testing only). */
 export function _resetProxyState(): void {
   proxyState.persistentClient = null;
+  proxyState.pendingConnect = null;
   proxyState.discoveredScaleMacs.clear();
   proxyState.displayUsers = [];
 }
@@ -65,6 +67,7 @@ export function _resetProxyState(): void {
 /** @deprecated Use _resetProxyState() instead. */
 export function _resetPersistentClient(): void {
   proxyState.persistentClient = null;
+  proxyState.pendingConnect = null;
 }
 
 /** @deprecated Use _resetProxyState() instead. */
@@ -76,27 +79,40 @@ export function _resetDiscoveredMacs(): void {
 
 export async function getOrCreatePersistentClient(config: MqttProxyConfig): Promise<MqttClient> {
   if (proxyState.persistentClient?.connected) return proxyState.persistentClient;
+  // Coalesce concurrent first calls onto a single connectAsync. Without this,
+  // two simultaneous callers each pass the `connected` check, both spawn a new
+  // connection and one ends up orphaned (leaked socket + listeners).
+  if (proxyState.pendingConnect) return proxyState.pendingConnect;
   if (proxyState.persistentClient) {
     try {
       await proxyState.persistentClient.endAsync();
     } catch {
       /* ignore */
     }
+    proxyState.persistentClient = null;
   }
-  const { connectAsync } = await import('mqtt');
   const brokerUrl = requireBrokerUrl(config);
-  proxyState.persistentClient = await withTimeout(
-    connectAsync(brokerUrl, {
-      clientId: `ble-scale-sync-${config.device_id}`,
-      username: config.username ?? undefined,
-      password: config.password ?? undefined,
-      clean: false,
-      reconnectPeriod: 5000,
-    }),
-    COMMAND_TIMEOUT_MS,
-    `MQTT broker unreachable at ${brokerUrl}. Check your mqtt_proxy.broker_url config.`,
-  );
-  return proxyState.persistentClient;
+  proxyState.pendingConnect = (async () => {
+    try {
+      const { connectAsync } = await import('mqtt');
+      const client = await withTimeout(
+        connectAsync(brokerUrl, {
+          clientId: `ble-scale-sync-${config.device_id}`,
+          username: config.username ?? undefined,
+          password: config.password ?? undefined,
+          clean: false,
+          reconnectPeriod: 5000,
+        }),
+        COMMAND_TIMEOUT_MS,
+        `MQTT broker unreachable at ${brokerUrl}. Check your mqtt_proxy.broker_url config.`,
+      );
+      proxyState.persistentClient = client;
+      return client;
+    } finally {
+      proxyState.pendingConnect = null;
+    }
+  })();
+  return proxyState.pendingConnect;
 }
 
 /** Get the persistent client if connected, otherwise create an ephemeral one. */

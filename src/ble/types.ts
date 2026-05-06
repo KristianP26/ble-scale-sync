@@ -42,7 +42,12 @@ export const POST_DISCOVERY_QUIESCE_MS = 500;
  * GATT discovery, which on some controllers stalls the D-Bus call inside
  * node-ble synchronously. A 25 s floor sidesteps the dying-peer window
  * entirely. Failed scans still respect the configured cooldown only; this
- * floor applies on success. See #143.
+ * floor applies on success.
+ *
+ * BlueZ-specific: only the `node-ble` handler hits the dying-peer GATT stall.
+ * Proxy handlers (mqtt-proxy, esphome-proxy) and the noble-based stacks talk
+ * to a different transport and do not need this floor; the orchestrator gates
+ * application based on the resolved handler. See #143.
  */
 export const POST_DISCONNECT_GRACE_MS = 25_000;
 

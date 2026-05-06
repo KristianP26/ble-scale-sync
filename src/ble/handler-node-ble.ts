@@ -63,6 +63,13 @@ interface DbusNextModule {
 
 const helperOf = <T>(obj: T): BluezHelper => (obj as WithHelper<T>).helper;
 
+let _dbusNext: DbusNextModule | null = null;
+async function getDbusNext(): Promise<DbusNextModule> {
+  if (_dbusNext) return _dbusNext;
+  _dbusNext = (await import('dbus-next')) as unknown as DbusNextModule;
+  return _dbusNext;
+}
+
 // ─── Persistent D-Bus connection + adapter ──────────────────────────────────
 // Both the D-Bus connection and the BlueZ adapter proxy are reused across scan
 // cycles in continuous mode. This prevents orphaned BlueZ discovery sessions:
@@ -206,7 +213,7 @@ async function startDiscoverySafe(
   bleLog.debug('Attempting adapter power cycle...');
   try {
     const helper = helperOf(btAdapter);
-    const { Variant } = (await import('dbus-next')) as unknown as DbusNextModule;
+    const { Variant } = await getDbusNext();
     await helper.set('Powered', new Variant('b', false));
     bleLog.debug('Adapter powered off');
     await sleep(1000);
@@ -642,7 +649,7 @@ async function broadcastScanNodeBle(
   // Tell BlueZ to report duplicate advertisements so ServiceData is refreshed
   // on every packet from the scale, not just on first discovery.
   try {
-    const { Variant } = (await import('dbus-next')) as unknown as DbusNextModule;
+    const { Variant } = await getDbusNext();
     const adapterHelper = helperOf(btAdapter);
     await adapterHelper.callMethod('SetDiscoveryFilter', {
       Transport: new Variant('s', 'le'),

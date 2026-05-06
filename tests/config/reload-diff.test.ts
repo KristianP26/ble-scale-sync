@@ -139,4 +139,86 @@ describe('diffRestartRequired', () => {
       newValue: 'true',
     });
   });
+
+  it('redacts mqtt_proxy.password values in the warn payload', () => {
+    const a = baseConfig({
+      ble: {
+        handler: 'mqtt-proxy',
+        mqtt_proxy: {
+          broker_url: 'mqtt://a:1883',
+          device_id: 'esp',
+          username: 'u',
+          password: 'old-secret',
+          topic_prefix: 'ble',
+          embedded_broker_port: 1883,
+          embedded_broker_bind: '127.0.0.1',
+        },
+      },
+    });
+    const b = baseConfig({
+      ble: {
+        handler: 'mqtt-proxy',
+        mqtt_proxy: {
+          broker_url: 'mqtt://a:1883',
+          device_id: 'esp',
+          username: 'u',
+          password: 'new-secret',
+          topic_prefix: 'ble',
+          embedded_broker_port: 1883,
+          embedded_broker_bind: '127.0.0.1',
+        },
+      },
+    });
+    const diff = diffRestartRequired(a, b);
+    const entry = diff.find((f) => f.key === 'ble.mqtt_proxy.password');
+    expect(entry).toEqual({
+      key: 'ble.mqtt_proxy.password',
+      oldValue: '<redacted>',
+      newValue: '<redacted>',
+    });
+    // Ensure the actual secret never makes it into the warn payload.
+    const flat = JSON.stringify(diff);
+    expect(flat).not.toContain('old-secret');
+    expect(flat).not.toContain('new-secret');
+  });
+
+  it('redacts esphome_proxy.encryption_key and password', () => {
+    const a = baseConfig({
+      ble: {
+        handler: 'esphome-proxy',
+        esphome_proxy: {
+          host: '10.0.0.5',
+          port: 6053,
+          encryption_key: 'aaa',
+          password: '',
+        },
+      },
+    });
+    const b = baseConfig({
+      ble: {
+        handler: 'esphome-proxy',
+        esphome_proxy: {
+          host: '10.0.0.5',
+          port: 6053,
+          encryption_key: 'bbb',
+          password: 'pw',
+        },
+      },
+    });
+    const diff = diffRestartRequired(a, b);
+    expect(diff.find((f) => f.key === 'ble.esphome_proxy.encryption_key')).toEqual({
+      key: 'ble.esphome_proxy.encryption_key',
+      oldValue: '<redacted>',
+      newValue: '<redacted>',
+    });
+    expect(diff.find((f) => f.key === 'ble.esphome_proxy.password')).toEqual({
+      key: 'ble.esphome_proxy.password',
+      oldValue: '<unset>',
+      newValue: '<redacted>',
+    });
+    const flat = JSON.stringify(diff);
+    expect(flat).not.toContain('aaa');
+    expect(flat).not.toContain('bbb');
+    expect(flat).not.toContain('"pw"');
+  });
 });

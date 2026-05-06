@@ -12,6 +12,12 @@ import { type ScanResultEntry, toBleDeviceInfo } from './scan.js';
 
 const DEDUP_WINDOW_MS = 30_000;
 
+type LifecycleHandler =
+  | { event: 'reconnect'; handler: () => void }
+  | { event: 'offline'; handler: () => void }
+  | { event: 'connect'; handler: () => void }
+  | { event: 'error'; handler: (err: Error) => void };
+
 /**
  * Persistent event-driven scan watcher for continuous mode.
  * Subscribes once and keeps the message handler attached permanently,
@@ -30,8 +36,7 @@ export class ReadingWatcher {
   private graceTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private graceReadings = new Map<string, RawReading>();
   private _client: MqttClient | null = null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private _lifecycleHandlers: Array<{ event: string; handler: (...args: any[]) => void }> = [];
+  private _lifecycleHandlers: LifecycleHandler[] = [];
   private _messageHandler: ((topic: string, payload: Buffer) => void) | null = null;
   private _subscribedTopics: string[] = [];
 
@@ -199,9 +204,20 @@ export class ReadingWatcher {
       this._messageHandler = null;
     }
 
-    // Remove lifecycle handlers
-    for (const { event, handler } of this._lifecycleHandlers) {
-      this._client.removeListener(event as 'connect', handler);
+    // Remove lifecycle handlers. mqtt's EventEmitter overload list does not
+    // accept the discriminated union as a single call shape, so dispatch by
+    // event tag to keep types tight without `any`.
+    for (const entry of this._lifecycleHandlers) {
+      switch (entry.event) {
+        case 'reconnect':
+        case 'offline':
+        case 'connect':
+          this._client.removeListener(entry.event, entry.handler);
+          break;
+        case 'error':
+          this._client.removeListener('error', entry.handler);
+          break;
+      }
     }
     this._lifecycleHandlers = [];
 

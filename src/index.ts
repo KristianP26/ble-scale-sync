@@ -2,7 +2,7 @@
 
 import { parseArgs } from 'node:util';
 import { writeFileSync } from 'node:fs';
-import { scanAndReadRaw, ReadingWatcher } from './ble/index.js';
+import { scanAndReadRaw, ReadingWatcher, resolveHandlerKey } from './ble/index.js';
 import type { RawReading } from './ble/index.js';
 import {
   publishBeep,
@@ -641,13 +641,20 @@ async function main(): Promise<void> {
         if (signal.aborted) break;
         // After a successful read, the scale typically keeps advertising for
         // 15-25 s while the link layer winds down (display fades). Connecting
-        // during that tail-off triggers the dying-peer GATT stall (#143). Apply
-        // POST_DISCONNECT_GRACE_MS as a floor on top of the configured cooldown.
+        // during that tail-off triggers the dying-peer GATT stall on BlueZ
+        // (#143). Apply POST_DISCONNECT_GRACE_MS as a floor on top of the
+        // configured cooldown, but only when the resolved handler is node-ble:
+        // proxy handlers and noble-based stacks talk to a different transport
+        // and do not hit the stall, so the floor would only add UX latency.
         // Failed scans in the catch branch use plain backoff, no grace.
         const cooldown = appConfig.runtime?.scan_cooldown ?? scanCooldownSec;
         const cooldownMs = cooldown * 1000;
-        const effectiveMs = Math.max(cooldownMs, POST_DISCONNECT_GRACE_MS);
-        if (effectiveMs > cooldownMs) {
+        const handlerKey = resolveHandlerKey(bleHandler);
+        const applyGraceFloor = handlerKey === 'node-ble';
+        const effectiveMs = applyGraceFloor
+          ? Math.max(cooldownMs, POST_DISCONNECT_GRACE_MS)
+          : cooldownMs;
+        if (applyGraceFloor && effectiveMs > cooldownMs) {
           log.info(
             `\nWaiting ${effectiveMs / 1000}s before next scan ` +
               `(cooldown ${cooldown}s, post-disconnect grace floor ${POST_DISCONNECT_GRACE_MS / 1000}s)...`,

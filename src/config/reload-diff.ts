@@ -20,15 +20,26 @@ function fmt(v: unknown): string {
   return typeof v === 'object' ? JSON.stringify(v) : String(v);
 }
 
+const SENSITIVE_KEYS = new Set([
+  'ble.mqtt_proxy.password',
+  'ble.esphome_proxy.password',
+  'ble.esphome_proxy.encryption_key',
+]);
+
+function maskSensitive(key: string, val: unknown): string {
+  if (!SENSITIVE_KEYS.has(key)) return fmt(val);
+  if (val === undefined || val === null || val === '') return '<unset>';
+  return '<redacted>';
+}
+
 function diffField(
   out: RestartRequiredField[],
   key: string,
   oldVal: unknown,
   newVal: unknown,
 ): void {
-  const o = fmt(oldVal);
-  const n = fmt(newVal);
-  if (o !== n) out.push({ key, oldValue: o, newValue: n });
+  if (fmt(oldVal) === fmt(newVal)) return;
+  out.push({ key, oldValue: maskSensitive(key, oldVal), newValue: maskSensitive(key, newVal) });
 }
 
 /**
