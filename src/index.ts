@@ -29,6 +29,9 @@ import {
 } from './config/resolve.js';
 import { matchUserByWeight, detectWeightDrift } from './config/user-matching.js';
 import { updateLastKnownWeight, withWriteLock } from './config/write.js';
+import { startConfigWatcher, type ConfigWatcherHandle } from './config/watch.js';
+import { diffRestartRequired } from './config/reload-diff.js';
+import type { AppConfig } from './config/schema.js';
 import type { Exporter, ExportContext } from './interfaces/exporter.js';
 import type { BodyComposition } from './interfaces/scale-adapter.js';
 import type { WeightUnit } from './config/schema.js';
@@ -76,20 +79,18 @@ const configPath = loaded.configPath;
 
 if (appConfig.runtime?.debug) setLogLevel(LogLevel.DEBUG);
 
-const {
-  scaleMac: SCALE_MAC,
-  weightUnit,
-  dryRun,
-  continuousMode,
-  scanCooldownSec,
-  watchdogMaxFailures,
-  bleHandler,
-  bleAdapter,
-  mqttProxy: initialMqttProxy,
-  esphomeProxy,
-} = resolveRuntimeConfig(appConfig);
+// Hot-swappable: refreshed on every reloadConfig() so config.yaml edits to
+// scale_mac / weight_unit / dry_run / debug take effect on the next loop
+// iteration. Restart-required fields (handler, adapter, mqtt_proxy.*, etc.)
+// are diffed and warned by diffRestartRequired() instead.
+let resolved = resolveRuntimeConfig(appConfig);
+let SCALE_MAC = resolved.scaleMac;
+let weightUnit = resolved.weightUnit;
+let dryRun = resolved.dryRun;
+const { continuousMode, scanCooldownSec, watchdogMaxFailures, bleHandler, bleAdapter } = resolved;
 
-let mqttProxy = initialMqttProxy;
+let mqttProxy = resolved.mqttProxy;
+const esphomeProxy = resolved.esphomeProxy;
 let embeddedBroker: EmbeddedBrokerHandle | null = null;
 
 const KG_TO_LBS = 2.20462;
@@ -124,6 +125,10 @@ function onSignal(): void {
   }
   forceExitOnNext = true;
   log.info('\nShutting down gracefully... (press again to force exit)');
+  // Close the config watcher first so a late-fire fs event does not flip
+  // needsReload after the loop has already abort()ed.
+  configWatcher?.close();
+  configWatcher = null;
   // Keep the systemd watchdog heartbeat running through graceful shutdown so
   // a slow exit (>= WatchdogSec/2) does not get SIGKILL'd by the supervisor.
   // The heartbeat is stopped in the main() epilogue once cleanup completes.
@@ -146,12 +151,55 @@ if (process.platform !== 'win32') {
 
 const exporterCache = new Map<string, Exporter[]>();
 
+let configWatcher: ConfigWatcherHandle | null = null;
+
+function userDisplaySnapshot(config: AppConfig): string {
+  return JSON.stringify(
+    config.users.map((u) => ({ slug: u.slug, name: u.name, weight_range: u.weight_range })),
+  );
+}
+
+let lastDisplayUsersSnapshot = userDisplaySnapshot(appConfig);
+
 async function reloadConfig(): Promise<void> {
   if (configSource !== 'yaml' || !configPath) return;
   await withWriteLock(async () => {
     try {
-      appConfig = loadYamlConfig(configPath);
+      const oldConfig = appConfig;
+      const newConfig = loadYamlConfig(configPath);
+      appConfig = newConfig;
       exporterCache.clear();
+
+      // Refresh hot-swappable runtime fields. Restart-required fields are
+      // captured in initial `resolved` and stay frozen for this process.
+      resolved = resolveRuntimeConfig(appConfig);
+      SCALE_MAC = resolved.scaleMac;
+      weightUnit = resolved.weightUnit;
+      dryRun = resolved.dryRun;
+      setLogLevel(appConfig.runtime?.debug ? LogLevel.DEBUG : LogLevel.INFO);
+
+      // Re-publish display users for the ESP32 board if the user set changed.
+      const newSnapshot = userDisplaySnapshot(newConfig);
+      if (bleHandler === 'mqtt-proxy' && mqttProxy && newSnapshot !== lastDisplayUsersSnapshot) {
+        setDisplayUsers(
+          appConfig.users.map((u) => ({
+            slug: u.slug,
+            name: u.name,
+            weight_range: u.weight_range,
+          })),
+        );
+        lastDisplayUsersSnapshot = newSnapshot;
+      }
+
+      // Warn about edits that need a restart to take effect.
+      const restartFields = diffRestartRequired(oldConfig, newConfig);
+      for (const f of restartFields) {
+        log.warn(
+          `Config change detected in ${f.key} (${f.oldValue} -> ${f.newValue}). ` +
+            'Restart required for this field to take effect.',
+        );
+      }
+
       log.info('Config reloaded successfully');
     } catch (err) {
       log.error(`Config reload failed, keeping current config: ${errMsg(err)}`);
@@ -456,6 +504,15 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Auto-reload config.yaml on edit. Continuous-mode only (single runs exit
+  // before any reload could matter). Opt out via runtime.watch_config: false.
+  if (configSource === 'yaml' && configPath && resolved.watchConfig) {
+    configWatcher = startConfigWatcher(configPath, () => {
+      log.info('config.yaml change detected, will reload before next scan cycle');
+      needsReload = true;
+    });
+  }
+
   // Continuous mode loop with exponential backoff on failures
   const BACKOFF_INITIAL_MS = 5_000;
   const BACKOFF_MAX_MS = 60_000;
@@ -477,8 +534,8 @@ async function main(): Promise<void> {
           await reloadConfig();
           needsReload = false;
           watcher.updateConfig(adapters, SCALE_MAC);
-          if (appConfig.users.length === 1 && !dryRun) {
-            exporters = buildSingleUserExporters();
+          if (appConfig.users.length === 1) {
+            exporters = dryRun ? undefined : buildSingleUserExporters();
           }
         }
 
@@ -514,8 +571,8 @@ async function main(): Promise<void> {
           await reloadConfig();
           needsReload = false;
           watcher.updateConfig(adapters, SCALE_MAC);
-          if (appConfig.users.length === 1 && !dryRun) {
-            exporters = buildSingleUserExporters();
+          if (appConfig.users.length === 1) {
+            exporters = dryRun ? undefined : buildSingleUserExporters();
           }
         }
 
@@ -567,9 +624,8 @@ async function main(): Promise<void> {
         if (needsReload) {
           await reloadConfig();
           needsReload = false;
-          // Rebuild single-user exporters after reload
-          if (appConfig.users.length === 1 && !dryRun) {
-            exporters = buildSingleUserExporters();
+          if (appConfig.users.length === 1) {
+            exporters = dryRun ? undefined : buildSingleUserExporters();
           }
         }
 

@@ -43,6 +43,7 @@ export const runtimeStep: WizardStep = {
       dry_run,
       debug,
       watchdog_max_consecutive_failures: 10,
+      watch_config: true,
     };
 
     console.log(

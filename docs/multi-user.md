@@ -97,10 +97,29 @@ global_exporters:
 
 ## Live Config Reload
 
-On Linux/macOS, you can reload `config.yaml` without restarting by sending `SIGHUP`:
+In **continuous mode**, edits to `config.yaml` are detected automatically and applied before the next scan cycle. No restart, no manual signal. Works on Linux, macOS, and Windows. The config is re-validated before applying; if validation fails, the previous config is kept and an error is logged.
+
+Hot-swappable on edit:
+
+- Exporter list (per-user and `global_exporters`)
+- User profiles (`name`, `slug`, `height`, `birth_date`, `gender`, `is_athlete`, `weight_range`, `last_known_weight`)
+- `scale.weight_unit`, `scale.height_unit`
+- `unknown_user` strategy
+- `runtime.dry_run`, `runtime.debug`, `runtime.scan_cooldown`
+- `ble.scale_mac`
+- `update_check`
+
+Restart-required (the change is detected and logged with a warning, but only takes effect after restart): `ble.handler`, `ble.adapter`, `ble.noble_driver`, all `ble.mqtt_proxy.*` fields, all `ble.esphome_proxy.*` fields, `runtime.continuous_mode`, `runtime.watchdog_max_consecutive_failures`, switching between single-user (1 user) and multi-user (>1).
+
+To opt out (e.g. on a flaky network filesystem) and rely solely on the `SIGHUP` flow:
+
+```yaml
+runtime:
+  watch_config: false
+```
+
+`SIGHUP` still works as a manual fallback on Linux/macOS:
 
 ```bash
 kill -HUP $(pgrep -f "ble-scale-sync")
 ```
-
-The config is re-validated before applying. If validation fails, the previous config is kept.

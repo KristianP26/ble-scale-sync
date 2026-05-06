@@ -67,6 +67,30 @@ export function _resetWriteLock(): void {
   lockChain = Promise.resolve();
 }
 
+// --- Self-write suppress window (used by config watcher to ignore our own writes) ---
+
+let suppressedUntil = 0;
+
+/**
+ * Mark the next `ms` milliseconds as a self-write window. The config watcher
+ * checks this before firing a reload so writes from updateLastKnownWeight()
+ * do not trigger a reload loop. Default 2000 ms covers atomicWrite + a small
+ * safety margin against fs.watch event latency.
+ */
+export function setSuppressReloadWindow(ms = 2000): void {
+  suppressedUntil = Date.now() + ms;
+}
+
+/** True when a recent self-write should suppress a reload trigger. */
+export function isReloadSuppressed(): boolean {
+  return Date.now() < suppressedUntil;
+}
+
+/** Reset the suppress window (for tests). */
+export function _resetSuppressWindow(): void {
+  suppressedUntil = 0;
+}
+
 // --- Last known weight writer (sync, testable) ---
 
 /**
@@ -137,6 +161,9 @@ export function updateLastKnownWeight(
     pendingTimers.delete(userSlug);
     withWriteLock(async () => {
       try {
+        // Mark this as a self-write so the config watcher does not loop
+        // on our own last_known_weight bumps.
+        setSuppressReloadWindow();
         writeLastKnownWeight(configPath, userSlug, weight);
         log.info(`Updated last_known_weight for ${userSlug} to ${weight} kg`);
       } catch (err) {
