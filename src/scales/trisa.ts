@@ -39,6 +39,7 @@ const OP_BROADCAST_ADE = 0x22;
 // Challenge response opcode. Trisa echoes 0xA1; ADE uses 0x20 (the response
 // payload encoding is also different; see handleUploadChannel).
 const OP_RESPONSE_TRISA = 0xa1;
+const OP_RESPONSE_ADE = 0x20;
 
 const EPOCH_2010 = 1262304000;
 
@@ -161,9 +162,13 @@ export class TrisaAdapter implements ScaleAdapter {
       return this.parseMeasurement(data);
     }
     if (charUuid === CHR_BODYCOMP_ADE) {
-      // Capture for future analysis. Encoding not yet decoded so we can't
-      // turn this into impedance/fat/water/etc.
-      bleLog.debug(`ADE body-comp frame on 0x8A22 (TBD encoding): ${data.toString('hex')}`);
+      // fitvigo's BE1615 protocol stubs out addBodyAnalysis (empty native
+      // function), so even the official app does not decode this frame from
+      // BLE; it derives body composition on-phone from weight + user
+      // profile. We follow the same approach via Deurenberg in computeMetrics.
+      // Logging the raw bytes still helps if a later firmware variant
+      // surfaces an actual encoding here.
+      bleLog.debug(`ADE body-comp frame on 0x8A22 (ignored, see comment): ${data.toString('hex')}`);
       return null;
     }
     return null;
@@ -188,24 +193,31 @@ export class TrisaAdapter implements ScaleAdapter {
   /**
    * Handle password and challenge frames from the upload channel (0x8A82).
    *
-   * On Trisa: scale sends 0xA0 (password), then 0xA1 (challenge); host responds
-   * with [0xA1, XOR(challenge, password)].
+   * Trisa flow: scale sends 0xA0 (password), then 0xA1 (challenge); host
+   * responds with [0xA1, XOR(challenge, password)].
    *
-   * On ADE BA 1600: scale sends 0xA1 (challenge) directly without a password
-   * frame. The phone responds with 5 bytes starting with opcode 0x20; the
-   * exact algorithm is not yet known. We don't write anything here on ADE,
-   * relying on the time-sync + broadcast handshake in onConnected() to
-   * progress the scale to the measurement state. If the scale stalls on ADE,
-   * a fresh capture with multiple weigh-ins will be needed to crack this.
+   * ADE BA 1600 flow: scale sends 0xA1 (challenge) directly without a
+   * password frame. fitvigo's native protocol (`corelib::VBaseA2PairingProtocol`
+   * + `ProtocolUtils::sendVerificationCode`) computes the response as
+   * `[0x20, LE32(savedPassword XOR challengeInt)]`, where `challengeInt` is
+   * the four bytes after the opcode read as little-endian uint32. Because
+   * BE1615 never receives a 0xA0 frame, `savedPassword` stays at its default
+   * zero, so the response collapses to `[0x20]` followed by an echo of the
+   * same four bytes.
    */
   private handleUploadChannel(data: Buffer): void {
     if (data.length < 2) return;
     const opcode = data[0];
 
     if (this.variant === 'ade') {
-      // ADE challenge response algorithm is unknown. Logging the raw bytes
-      // helps when comparing against future captures.
-      bleLog.debug(`ADE upload frame (TBD response): ${data.toString('hex')}`);
+      if (opcode === OP_CHALLENGE && data.length >= 5 && this.writeFn) {
+        // Echo the four bytes that follow the opcode (XOR with savedPassword=0).
+        const response = Buffer.from([OP_RESPONSE_ADE, data[1], data[2], data[3], data[4]]);
+        void this.writeFn(CHR_DOWNLOAD, response, true);
+        bleLog.debug(`ADE challenge ack sent: ${response.toString('hex')}`);
+      } else {
+        bleLog.debug(`ADE upload frame (unhandled opcode): ${data.toString('hex')}`);
+      }
       return;
     }
 
@@ -218,7 +230,7 @@ export class TrisaAdapter implements ScaleAdapter {
       for (let i = 0; i < challenge.length; i++) {
         response[i + 1] = challenge[i] ^ (this.password[i % this.password.length] ?? 0);
       }
-      // Fire-and-forget write: no need to await in notification handler
+      // Fire-and-forget write; no need to await in notification handler
       void this.writeFn(CHR_DOWNLOAD, response, true);
     }
   }
