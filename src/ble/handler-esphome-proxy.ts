@@ -1,8 +1,13 @@
-import type { ScaleAdapter, BleDeviceInfo, BodyComposition } from '../interfaces/scale-adapter.js';
+import type {
+  ScaleAdapter,
+  ScaleReading,
+  BleDeviceInfo,
+  BodyComposition,
+} from '../interfaces/scale-adapter.js';
 import type { EsphomeProxyConfig } from '../config/schema.js';
 import type { ScanOptions, ScanResult } from './types.js';
 import type { RawReading } from './shared.js';
-import { bleLog, errMsg, normalizeUuid, withTimeout } from './types.js';
+import { bleLog, errMsg, normalizeUuid, withTimeout, IMPEDANCE_GRACE_MS } from './types.js';
 import { AsyncQueue } from './async-queue.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -194,6 +199,11 @@ function toBleDeviceInfo(ad: EsphomeBleAdvertisement): BleDeviceInfo {
       info.manufacturerData = { id, data };
     }
   }
+  if (ad.serviceDataList && ad.serviceDataList.length > 0) {
+    info.serviceData = ad.serviceDataList
+      .map((sd) => ({ uuid: normalizeUuid(sd.uuid), data: extractBytes(sd) }))
+      .filter((sd) => sd.data.length > 0);
+  }
   return info;
 }
 
@@ -217,7 +227,7 @@ function logPhase1Capabilities(adapters: ScaleAdapter[]): void {
   const broadcast: string[] = [];
   const gattOnly: string[] = [];
   for (const a of adapters) {
-    if (typeof a.parseBroadcast === 'function') {
+    if (typeof a.parseBroadcast === 'function' || typeof a.parseServiceData === 'function') {
       broadcast.push(a.name);
     } else if (a.charNotifyUuid) {
       gattOnly.push(a.name);
@@ -264,60 +274,125 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     bleLog.info(`ESPHome proxy connected at ${hostPort}`);
     logPhase1Capabilities(adapters);
 
-    return await withTimeout(
-      new Promise<RawReading>((resolve, reject) => {
-        const seenAddrs = new Set<string>();
+    // Per-address grace state so two scales advertising partial frames in the
+    // same scan window do not clobber each other's pending fallback (#161).
+    const graceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    const graceReadings = new Map<string, RawReading>();
+    const clearGrace = (): void => {
+      for (const t of graceTimers.values()) clearTimeout(t);
+      graceTimers.clear();
+      graceReadings.clear();
+    };
 
-        adListener = (ad: EsphomeBleAdvertisement): void => {
-          const address = formatMacAddress(ad.address);
-          if (targetLc && address.toLowerCase() !== targetLc) return;
+    try {
+      return await withTimeout(
+        new Promise<RawReading>((resolve, reject) => {
+          const seenAddrs = new Set<string>();
 
-          const info = toBleDeviceInfo(ad);
-          const adapter = adapters.find((a) => a.matches(info));
-          if (!adapter) {
-            if (!seenAddrs.has(address)) {
-              seenAddrs.add(address);
-              bleLog.debug(`Unmatched device: ${address} (${info.localName || 'no name'})`);
+          adListener = (ad: EsphomeBleAdvertisement): void => {
+            const address = formatMacAddress(ad.address);
+            if (targetLc && address.toLowerCase() !== targetLc) return;
+
+            const info = toBleDeviceInfo(ad);
+            const adapter = adapters.find((a) => a.matches(info));
+            if (!adapter) {
+              if (!seenAddrs.has(address)) {
+                seenAddrs.add(address);
+                bleLog.debug(`Unmatched device: ${address} (${info.localName || 'no name'})`);
+              }
+              return;
             }
-            return;
-          }
 
-          if (adapter.parseBroadcast && info.manufacturerData) {
-            const reading = adapter.parseBroadcast(info.manufacturerData.data);
-            if (reading) {
+            let reading: ScaleReading | null = null;
+
+            if (adapter.parseBroadcast && info.manufacturerData) {
+              reading = adapter.parseBroadcast(info.manufacturerData.data);
+            }
+
+            if (!reading && adapter.parseServiceData && info.serviceData) {
+              for (const sd of info.serviceData) {
+                reading = adapter.parseServiceData(sd.uuid, sd.data);
+                if (reading) break;
+              }
+            }
+
+            // Adapters that prefer passive scanning (e.g. Mi Scale 2) emit a
+            // weight-only frame first and a weight+impedance frame moments later.
+            // Gate on isComplete + grace-timer for those. Other broadcast adapters
+            // (Eufy, QN-scale) embed a "final" flag in the frame itself, so any
+            // non-null reading is already stable, so emit immediately to avoid
+            // adding a 12s latency penalty on the existing path.
+            const requiresStable = adapter.preferPassive === true;
+            if (reading && (!requiresStable || adapter.isComplete(reading))) {
+              const pending = graceTimers.get(address);
+              if (pending) {
+                clearTimeout(pending);
+                graceTimers.delete(address);
+                graceReadings.delete(address);
+              }
               bleLog.info(`Matched: ${adapter.name} (${address})`);
               bleLog.info(`Broadcast reading: ${reading.weight} kg`);
               resolve({ reading, adapter });
               return;
             }
-          }
 
-          // Adapter supports broadcast: keep waiting for a stable frame.
-          if (adapter.parseBroadcast) {
-            bleLog.debug(
-              `${adapter.name} matched at ${address} but broadcast frame is not stable yet`,
-            );
-            return;
-          }
+            // Partial frame for a passive adapter: start grace timer keyed on
+            // this address so a second scale's partial frame cannot overwrite.
+            if (reading && requiresStable) {
+              bleLog.debug(
+                `${adapter.name} matched at ${address} but broadcast frame is not stable yet`,
+              );
+              graceReadings.set(address, { reading, adapter });
+              if (!graceTimers.has(address)) {
+                graceTimers.set(
+                  address,
+                  setTimeout(() => {
+                    graceTimers.delete(address);
+                    const gr = graceReadings.get(address);
+                    graceReadings.delete(address);
+                    if (!gr) return;
+                    bleLog.info(
+                      `Matched: ${gr.adapter.name} (${address}), weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
+                    );
+                    bleLog.info(`Broadcast reading: ${gr.reading.weight} kg`);
+                    resolve(gr);
+                  }, IMPEDANCE_GRACE_MS),
+                );
+              }
+              return;
+            }
 
-          // Adapter advertises nothing broadcast-able and no GATT characteristic
-          // either: nothing we can do, keep waiting in case another device matches.
-          if (!adapter.charNotifyUuid) {
-            bleLog.debug(`${adapter.name} matched at ${address} but has no broadcast or GATT path`);
-            return;
-          }
+            // Adapter supports broadcast but no parseable frame yet: keep waiting.
+            if (adapter.parseBroadcast || adapter.parseServiceData) {
+              bleLog.debug(
+                `${adapter.name} matched at ${address} but broadcast frame is not stable yet`,
+              );
+              return;
+            }
 
-          // GATT-only adapter: Phase 1 cannot service it in single-shot mode.
-          reject(gattNotSupportedError(adapter.name, address));
-        };
+            // Adapter advertises nothing broadcast-able and no GATT characteristic
+            // either: nothing we can do, keep waiting in case another device matches.
+            if (!adapter.charNotifyUuid) {
+              bleLog.debug(
+                `${adapter.name} matched at ${address} but has no broadcast or GATT path`,
+              );
+              return;
+            }
 
-        client.on('ble', adListener);
-      }),
-      BROADCAST_WAIT_MS,
-      targetMac
-        ? `Timed out waiting for broadcast from ${targetMac} via ESPHome proxy.`
-        : `Timed out waiting for any recognized scale broadcast via ESPHome proxy.`,
-    );
+            // GATT-only adapter: Phase 1 cannot service it in single-shot mode.
+            reject(gattNotSupportedError(adapter.name, address));
+          };
+
+          client.on('ble', adListener);
+        }),
+        BROADCAST_WAIT_MS,
+        targetMac
+          ? `Timed out waiting for broadcast from ${targetMac} via ESPHome proxy.`
+          : `Timed out waiting for any recognized scale broadcast via ESPHome proxy.`,
+      );
+    } finally {
+      clearGrace();
+    }
   } finally {
     if (adListener) {
       client.removeListener('ble', adListener as (...args: unknown[]) => void);
@@ -423,6 +498,8 @@ export class ReadingWatcher {
   // warned about. Once the map hits GATT_WARN_LRU_MAX we evict the oldest entry
   // so dedup survives long-running continuous mode without a periodic flush.
   private gattWarnedFor = new Map<string, true>();
+  private graceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private graceReadings = new Map<string, RawReading>();
 
   constructor(config: EsphomeProxyConfig, adapters: ScaleAdapter[], targetMac?: string) {
     this.config = config;
@@ -491,30 +568,72 @@ export class ReadingWatcher {
     const adapter = this.adapters.find((a) => a.matches(info));
     if (!adapter) return;
 
+    let reading: ScaleReading | null = null;
+
     if (adapter.parseBroadcast && info.manufacturerData) {
-      const reading = adapter.parseBroadcast(info.manufacturerData.data);
-      if (reading) {
-        const key = `${address}:${reading.weight.toFixed(1)}`;
-        const now = Date.now();
-        this.pruneDedup(now);
-        const lastSeen = this.dedup.get(key);
-        if (lastSeen && now - lastSeen < DEDUP_WINDOW_MS) {
-          bleLog.debug(`Dedup skip: ${key}`);
-          return;
-        }
-        this.dedup.set(key, now);
-        bleLog.info(`Matched: ${adapter.name} (${address})`);
-        bleLog.info(`Broadcast reading: ${reading.weight} kg`);
-        this.queue.push({ reading, adapter });
-        return;
+      reading = adapter.parseBroadcast(info.manufacturerData.data);
+    }
+
+    if (!reading && adapter.parseServiceData && info.serviceData) {
+      for (const sd of info.serviceData) {
+        reading = adapter.parseServiceData(sd.uuid, sd.data);
+        if (reading) break;
       }
     }
 
-    // Adapter matched but no usable broadcast frame came out. If the adapter
-    // supports GATT, Phase 1 cannot read this scale (firmware is either pure
-    // GATT or the broadcast format is not weight-bearing, e.g. QN Elis 1 /
-    // ES-30M which broadcasts only a MAC beacon). Warn once per address so
-    // the user knows they are hitting the Phase 2 gap instead of a silent drop.
+    // Same passive-vs-immediate split as scanAndReadRaw. See comment there.
+    const requiresStable = adapter.preferPassive === true;
+    if (reading && (!requiresStable || adapter.isComplete(reading))) {
+      // Cancel any pending grace timer for this address. We got the full reading.
+      const gt = this.graceTimers.get(address);
+      if (gt) {
+        clearTimeout(gt);
+        this.graceTimers.delete(address);
+        this.graceReadings.delete(address);
+      }
+
+      const key = `${address}:${reading.weight.toFixed(1)}`;
+      const now = Date.now();
+      this.pruneDedup(now);
+      const lastSeen = this.dedup.get(key);
+      if (lastSeen && now - lastSeen < DEDUP_WINDOW_MS) {
+        bleLog.debug(`Dedup skip: ${key}`);
+        return;
+      }
+      this.dedup.set(key, now);
+      bleLog.info(`Matched: ${adapter.name} (${address})`);
+      bleLog.info(`Broadcast reading: ${reading.weight} kg`);
+      this.queue.push({ reading, adapter });
+      return;
+    }
+
+    // Partial broadcast frame for a passive adapter: start grace timer so
+    // we fall back to weight-only if the impedance frame never arrives.
+    if (reading && requiresStable) {
+      this.graceReadings.set(address, { reading, adapter });
+      if (!this.graceTimers.has(address)) {
+        this.graceTimers.set(
+          address,
+          setTimeout(() => {
+            this.graceTimers.delete(address);
+            const gr = this.graceReadings.get(address);
+            this.graceReadings.delete(address);
+            if (!gr) return;
+            bleLog.info(
+              `Matched: ${gr.adapter.name} (${address}), weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
+            );
+            bleLog.info(`Broadcast reading: ${gr.reading.weight} kg`);
+            this.queue.push(gr);
+          }, IMPEDANCE_GRACE_MS),
+        );
+      }
+      return;
+    }
+
+    // Adapter matched but broadcast path yielded nothing usable (reading is null).
+    // If the adapter has a GATT path, Phase 1 cannot service it. Warn once per
+    // address. This covers both GATT-only adapters and dual-mode adapters whose
+    // broadcast frames are non-weight-bearing (e.g. Elis 1 MAC beacons).
     if (adapter.charNotifyUuid) {
       this.warnGattNotSupported(adapter.name, address);
     }
@@ -546,6 +665,10 @@ export class ReadingWatcher {
   }
 
   private async teardown(): Promise<void> {
+    for (const t of this.graceTimers.values()) clearTimeout(t);
+    this.graceTimers.clear();
+    this.graceReadings.clear();
+
     if (this.client) {
       if (this.onAdHandler) {
         this.client.removeListener('ble', this.onAdHandler as (...args: unknown[]) => void);

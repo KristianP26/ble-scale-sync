@@ -62,9 +62,9 @@ The badge opens your Home Assistant instance, confirms the repository, and shows
 
 The add-on handles config through the UI, auto-detects the Mosquitto broker for Home Assistant auto-discovery, and bootstraps Garmin tokens on first start. See the [Home Assistant Add-on guide](https://blescalesync.dev/guide/home-assistant-addon) for the full option reference, MFA workaround, and custom config mode.
 
-> **Note:** Add-ons are not available on **HA Container** or **HA Core** installs (no Supervisor). Use the Docker method above instead — sensors still appear in HA via MQTT auto-discovery.
+> **Note:** Add-ons are not available on **HA Container** or **HA Core** installs (no Supervisor). Use the Docker method above instead. Sensors still appear in HA via MQTT auto-discovery.
 
-### Standalone (Node.js — Linux, macOS, Windows)
+### Standalone (Node.js, Linux/macOS/Windows)
 
 Runs natively on all major desktop and server operating systems. No containers required.
 
@@ -79,20 +79,21 @@ Requires Node.js v20.19+ and a BLE adapter. See the **[full install guide](https
 
 ## Features
 
-- **[20+ scale brands](https://blescalesync.dev/guide/supported-scales)** — Xiaomi, Renpho (Elis 1, FITINDEX, Sencor, QN-Scale), Eufy, Yunmai, Beurer, Sanitas, Medisana, and more
-- **[7 export targets](https://blescalesync.dev/exporters)** — Garmin Connect, Strava, MQTT (Home Assistant), InfluxDB, Webhook, Ntfy, File (CSV/JSONL)
-- **[10 body metrics](https://blescalesync.dev/body-composition)** — BIA-based body composition from weight + impedance
-- **[Multi-user](https://blescalesync.dev/multi-user)** — automatic weight-based identification with per-user exporters
-- **[Interactive setup wizard](https://blescalesync.dev/guide/configuration)** — scale discovery, exporter config, connectivity tests
-- **[BLE diagnostic tool](https://blescalesync.dev/troubleshooting)** — `npm run diagnose` for detailed BLE troubleshooting
-- **[Home Assistant Add-on](https://blescalesync.dev/guide/home-assistant-addon)** — one-click install via My Home Assistant badge, MQTT auto-discovery, UI-driven config, Garmin token bootstrap, and MFA workaround
-- **[ESP32 BLE proxy](https://blescalesync.dev/guide/esp32-proxy)** — use a remote ESP32 as a BLE radio over MQTT, with a built-in embedded broker for zero-config setup, simplified Docker deployment, and optional display
-- **[ESPHome Bluetooth proxy](https://blescalesync.dev/guide/esphome-proxy)** — reuse an existing ESPHome BT proxy mesh (Home Assistant) as a BLE radio via Native API (experimental, broadcast-only in phase 1)
-- **BLE adapter selection** — `ble.adapter: hci1` for multi-adapter setups (Linux)
-- **Broadcast mode** — supports non-connectable scales that only advertise weight via BLE advertisements
-- **Update check** — optional, anonymous version check after each measurement (opt-out via `update_check: false`); see the [auto update guide](https://blescalesync.dev/guide/auto-update) for Watchtower, systemd timer, and HA add-on recipes
-- **Cross-platform** — Linux (Docker + native), macOS, Windows
-- **Private** — your data stays on your device, no vendor cloud
+- **[24+ scale brands](https://blescalesync.dev/guide/supported-scales).** Xiaomi (Mi Scale 2 passive broadcast), Renpho (Elis 1, FITINDEX, Sencor, QN-Scale), Eufy, Yunmai, Beurer, Sanitas, Medisana, and more.
+- **[7 export targets](https://blescalesync.dev/exporters).** Garmin Connect, Strava, MQTT (Home Assistant), InfluxDB, Webhook, Ntfy, File (CSV/JSONL).
+- **[10 body metrics](https://blescalesync.dev/body-composition).** BIA-based body composition from weight + impedance.
+- **[Multi-user](https://blescalesync.dev/multi-user).** Automatic weight-based identification with per-user exporters.
+- **[Interactive setup wizard](https://blescalesync.dev/guide/configuration).** Scale discovery, exporter config, connectivity tests.
+- **[BLE diagnostic tool](https://blescalesync.dev/troubleshooting).** `npm run diagnose` for detailed BLE troubleshooting.
+- **[Home Assistant Add-on](https://blescalesync.dev/guide/home-assistant-addon).** One-click install via My Home Assistant badge, MQTT auto-discovery, UI-driven config, Garmin token bootstrap, and MFA workaround.
+- **[ESP32 BLE proxy](https://blescalesync.dev/guide/esp32-proxy).** Use a remote ESP32 as a BLE radio over MQTT, with a built-in embedded broker for zero-config setup, simplified Docker deployment, and optional display.
+- **[ESPHome Bluetooth proxy](https://blescalesync.dev/guide/esphome-proxy).** Reuse an existing ESPHome BT proxy mesh (Home Assistant) as a BLE radio via Native API (experimental, broadcast-only in phase 1).
+- **BLE adapter selection.** `ble.adapter: hci1` for multi-adapter setups (Linux).
+- **Broadcast mode.** Supports non-connectable scales that only advertise weight via BLE advertisements.
+- **Linux stability hardening.** Auto-recovery for the BlueZ "stuck discovery" state via a consecutive-failure watchdog, plus optional [systemd `Type=notify`](https://blescalesync.dev/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state) integration for whole-loop freezes.
+- **Update check.** Optional, anonymous version check after each measurement (opt-out via `update_check: false`); see the [auto update guide](https://blescalesync.dev/guide/auto-update) for Watchtower, systemd timer, and HA add-on recipes.
+- **Cross-platform.** Linux (Docker + native), macOS, Windows.
+- **Private.** Your data stays on your device, no vendor cloud.
 
 ## Credits
 

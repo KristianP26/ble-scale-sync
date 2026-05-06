@@ -7,7 +7,7 @@
  * already has multiple recovery tiers (D-Bus stop, btmgmt power-cycle, rfkill,
  * systemctl restart bluetooth), but on this hardware they sometimes fail to
  * unwedge the firmware. The deterministic recovery is to exit the process so
- * Docker `restart: unless-stopped` rebuilds the container — which closes all
+ * Docker `restart: unless-stopped` rebuilds the container, which closes all
  * D-Bus clients and runs the entrypoint's BT reset, which generally clears
  * the wedge.
  *

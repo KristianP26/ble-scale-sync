@@ -650,7 +650,7 @@ describe('QnScaleAdapter', () => {
       const adapter = makeAdapter();
       adapter.parseNotification(makeLongScaleInfo());
 
-      // First stable frame with no impedance — should be skipped
+      // First stable frame with no impedance: should be skipped
       const buf = makeWeightFrame(9790, 0x02, 0, 0);
       expect(adapter.parseNotification(buf)).toBeNull();
     });
@@ -661,11 +661,11 @@ describe('QnScaleAdapter', () => {
 
       const buf = makeWeightFrame(9790, 0x02, 0, 0);
 
-      // First stable R1=R2=0 — skipped, starts grace timer
+      // First stable R1=R2=0, skipped, starts grace timer
       expect(adapter.parseNotification(buf)).toBeNull();
 
       // Simulate grace period elapsed by manipulating internal state.
-      // Access private field for testing — the grace period is 1500ms.
+      // Access private field for testing. The grace period is 1500ms.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (adapter as any).firstStableNoImpedanceAt = Date.now() - 2000;
 
@@ -680,11 +680,11 @@ describe('QnScaleAdapter', () => {
       const adapter = makeAdapter();
       adapter.parseNotification(makeLongScaleInfo());
 
-      // First stable R1=R2=0 — skipped
+      // First stable R1=R2=0, skipped
       const noImpBuf = makeWeightFrame(9790, 0x02, 0, 0);
       expect(adapter.parseNotification(noImpBuf)).toBeNull();
 
-      // Impedance frame arrives within grace period — accepted immediately
+      // Impedance frame arrives within grace period: accepted immediately
       const impBuf = makeWeightFrame(9790, 0x02, 501, 499);
       const reading = adapter.parseNotification(impBuf);
       expect(reading).not.toBeNull();

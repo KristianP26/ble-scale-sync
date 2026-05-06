@@ -62,12 +62,12 @@ services:
     volumes:
       - ./config.yaml:/app/config.yaml
       - /var/run/dbus:/var/run/dbus:ro
-      - garmin-tokens:/home/node/.garmin_tokens
+      - ./garmin-tokens:/app/garmin-tokens
     environment:
       - CONTINUOUS_MODE=true
     restart: unless-stopped
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - 'com.centurylinklabs.watchtower.enable=true'
 
   watchtower:
     image: containrrr/watchtower
@@ -81,9 +81,6 @@ services:
       - WATCHTOWER_POLL_INTERVAL=86400
       - WATCHTOWER_INCLUDE_RESTARTING=true
       - TZ=Europe/Bratislava
-
-volumes:
-  garmin-tokens:
 ```
 
 What each environment variable does:
@@ -105,11 +102,11 @@ docker compose up -d
 If you want Watchtower to report new versions but keep the upgrade manual, switch the sidecar into monitor-only mode and point notifications at Ntfy (the same service the app can already use as an exporter):
 
 ```yaml
-    environment:
-      - WATCHTOWER_LABEL_ENABLE=true
-      - WATCHTOWER_MONITOR_ONLY=true
-      - WATCHTOWER_NOTIFICATIONS=shoutrrr
-      - WATCHTOWER_NOTIFICATION_URL=ntfy://ntfy.sh/my-topic
+environment:
+  - WATCHTOWER_LABEL_ENABLE=true
+  - WATCHTOWER_MONITOR_ONLY=true
+  - WATCHTOWER_NOTIFICATIONS=shoutrrr
+  - WATCHTOWER_NOTIFICATION_URL=ntfy://ntfy.sh/my-topic
 ```
 
 ### Cron-based alternative (no sidecar)

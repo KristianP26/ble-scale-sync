@@ -2,18 +2,19 @@
 
 import { parseArgs } from 'node:util';
 import { writeFileSync } from 'node:fs';
-import { scanAndReadRaw, ReadingWatcher } from './ble/index.js';
+import { scanAndReadRaw, ReadingWatcher, resolveHandlerKey } from './ble/index.js';
 import type { RawReading } from './ble/index.js';
 import {
   publishBeep,
   publishDisplayReading,
   publishDisplayResult,
   setDisplayUsers,
-} from './ble/handler-mqtt-proxy.js';
+} from './ble/handler-mqtt-proxy/index.js';
 import { bootstrapMqttProxy } from './ble/mqtt-proxy-bootstrap.js';
 import type { EmbeddedBrokerHandle } from './ble/embedded-broker.js';
-import { abortableSleep } from './ble/types.js';
+import { abortableSleep, POST_DISCONNECT_GRACE_MS } from './ble/types.js';
 import { ConsecutiveFailureWatchdog } from './ble/watchdog.js';
+import { notifyReady, startHeartbeat, stopHeartbeat } from './runtime/systemd-watchdog.js';
 import { adapters } from './scales/index.js';
 import { createLogger, setLogLevel, LogLevel } from './logger.js';
 import { errMsg } from './utils/error.js';
@@ -28,6 +29,9 @@ import {
 } from './config/resolve.js';
 import { matchUserByWeight, detectWeightDrift } from './config/user-matching.js';
 import { updateLastKnownWeight, withWriteLock } from './config/write.js';
+import { startConfigWatcher, type ConfigWatcherHandle } from './config/watch.js';
+import { diffRestartRequired } from './config/reload-diff.js';
+import type { AppConfig } from './config/schema.js';
 import type { Exporter, ExportContext } from './interfaces/exporter.js';
 import type { BodyComposition } from './interfaces/scale-adapter.js';
 import type { WeightUnit } from './config/schema.js';
@@ -51,16 +55,16 @@ if (cliFlags.help) {
   console.log('  -h, --help           Show this help message');
   console.log('');
   console.log('Environment overrides (always applied, even with config.yaml):');
-  console.log('  CONTINUOUS_MODE  true/false — override runtime.continuous_mode');
-  console.log('  DRY_RUN          true/false — override runtime.dry_run');
-  console.log('  DEBUG            true/false — override runtime.debug');
-  console.log('  SCAN_COOLDOWN    5-3600     — override runtime.scan_cooldown');
+  console.log('  CONTINUOUS_MODE  true/false  override runtime.continuous_mode');
+  console.log('  DRY_RUN          true/false  override runtime.dry_run');
+  console.log('  DEBUG            true/false  override runtime.debug');
+  console.log('  SCAN_COOLDOWN    5-3600      override runtime.scan_cooldown');
   console.log(
-    '  BLE_WATCHDOG_MAX_FAILURES 0-1000 — override runtime.watchdog_max_consecutive_failures (0 = disabled)',
+    '  BLE_WATCHDOG_MAX_FAILURES 0-1000  override runtime.watchdog_max_consecutive_failures (0 = disabled)',
   );
-  console.log('  SCALE_MAC        MAC/UUID   — override ble.scale_mac');
-  console.log('  NOBLE_DRIVER     abandonware/stoprocent — override ble.noble_driver');
-  console.log('  BLE_ADAPTER      hci0/hci1/... — override ble.adapter (Linux only)');
+  console.log('  SCALE_MAC        MAC/UUID    override ble.scale_mac');
+  console.log('  NOBLE_DRIVER     abandonware/stoprocent  override ble.noble_driver');
+  console.log('  BLE_ADAPTER      hci0/hci1/...  override ble.adapter (Linux only)');
   process.exit(0);
 }
 
@@ -75,20 +79,18 @@ const configPath = loaded.configPath;
 
 if (appConfig.runtime?.debug) setLogLevel(LogLevel.DEBUG);
 
-const {
-  scaleMac: SCALE_MAC,
-  weightUnit,
-  dryRun,
-  continuousMode,
-  scanCooldownSec,
-  watchdogMaxFailures,
-  bleHandler,
-  bleAdapter,
-  mqttProxy: initialMqttProxy,
-  esphomeProxy,
-} = resolveRuntimeConfig(appConfig);
+// Hot-swappable: refreshed on every reloadConfig() so config.yaml edits to
+// scale_mac / weight_unit / dry_run / debug take effect on the next loop
+// iteration. Restart-required fields (handler, adapter, mqtt_proxy.*, etc.)
+// are diffed and warned by diffRestartRequired() instead.
+let resolved = resolveRuntimeConfig(appConfig);
+let SCALE_MAC = resolved.scaleMac;
+let weightUnit = resolved.weightUnit;
+let dryRun = resolved.dryRun;
+const { continuousMode, scanCooldownSec, watchdogMaxFailures, bleHandler, bleAdapter } = resolved;
 
-let mqttProxy = initialMqttProxy;
+let mqttProxy = resolved.mqttProxy;
+const esphomeProxy = resolved.esphomeProxy;
 let embeddedBroker: EmbeddedBrokerHandle | null = null;
 
 const KG_TO_LBS = 2.20462;
@@ -118,10 +120,18 @@ let forceExitOnNext = false;
 function onSignal(): void {
   if (forceExitOnNext) {
     log.info('Force exit.');
+    stopHeartbeat();
     process.exit(1);
   }
   forceExitOnNext = true;
   log.info('\nShutting down gracefully... (press again to force exit)');
+  // Close the config watcher first so a late-fire fs event does not flip
+  // needsReload after the loop has already abort()ed.
+  configWatcher?.close();
+  configWatcher = null;
+  // Keep the systemd watchdog heartbeat running through graceful shutdown so
+  // a slow exit (>= WatchdogSec/2) does not get SIGKILL'd by the supervisor.
+  // The heartbeat is stopped in the main() epilogue once cleanup completes.
   ac.abort();
 }
 
@@ -134,22 +144,65 @@ let needsReload = false;
 
 if (process.platform !== 'win32') {
   process.on('SIGHUP', () => {
-    log.info('Received SIGHUP — will reload config before next scan cycle');
+    log.info('Received SIGHUP, will reload config before next scan cycle');
     needsReload = true;
   });
 }
 
 const exporterCache = new Map<string, Exporter[]>();
 
+let configWatcher: ConfigWatcherHandle | null = null;
+
+function userDisplaySnapshot(config: AppConfig): string {
+  return JSON.stringify(
+    config.users.map((u) => ({ slug: u.slug, name: u.name, weight_range: u.weight_range })),
+  );
+}
+
+let lastDisplayUsersSnapshot = userDisplaySnapshot(appConfig);
+
 async function reloadConfig(): Promise<void> {
   if (configSource !== 'yaml' || !configPath) return;
   await withWriteLock(async () => {
     try {
-      appConfig = loadYamlConfig(configPath);
+      const oldConfig = appConfig;
+      const newConfig = loadYamlConfig(configPath);
+      appConfig = newConfig;
       exporterCache.clear();
+
+      // Refresh hot-swappable runtime fields. Restart-required fields are
+      // captured in initial `resolved` and stay frozen for this process.
+      resolved = resolveRuntimeConfig(appConfig);
+      SCALE_MAC = resolved.scaleMac;
+      weightUnit = resolved.weightUnit;
+      dryRun = resolved.dryRun;
+      setLogLevel(appConfig.runtime?.debug ? LogLevel.DEBUG : LogLevel.INFO);
+
+      // Re-publish display users for the ESP32 board if the user set changed.
+      const newSnapshot = userDisplaySnapshot(newConfig);
+      if (bleHandler === 'mqtt-proxy' && mqttProxy && newSnapshot !== lastDisplayUsersSnapshot) {
+        setDisplayUsers(
+          appConfig.users.map((u) => ({
+            slug: u.slug,
+            name: u.name,
+            weight_range: u.weight_range,
+          })),
+        );
+        lastDisplayUsersSnapshot = newSnapshot;
+      }
+
+      // Warn about edits that need a restart to take effect.
+      const restartFields = diffRestartRequired(oldConfig, newConfig);
+      for (const f of restartFields) {
+        log.warn(
+          `Config change detected in ${f.key} (${f.oldValue} -> ${f.newValue}). ` +
+            'Restart required for this field to take effect.',
+        );
+      }
+
       log.info('Config reloaded successfully');
     } catch (err) {
-      log.error(`Config reload failed — keeping current config: ${errMsg(err)}`);
+      log.error(`Config reload failed, keeping current config: ${errMsg(err)}`);
     }
   });
 }
@@ -217,7 +270,7 @@ async function processSingleReading(raw: RawReading, exporters?: Exporter[]): Pr
   checkAndLogUpdate(appConfig.update_check);
 
   if (!exporters) {
-    log.info('\nDry run — skipping export.');
+    log.info('\nDry run. Skipping export.');
     return true;
   }
 
@@ -286,7 +339,7 @@ async function processRawReading(raw: RawReading): Promise<boolean> {
     if (bleHandler === 'mqtt-proxy' && mqttProxy) {
       publishBeep(mqttProxy, 600, 150, 3).catch(() => {});
     }
-    return true; // Not a failure — strategy decided to skip
+    return true; // Not a failure: strategy decided to skip
   }
 
   const user = match.user;
@@ -298,7 +351,7 @@ async function processRawReading(raw: RawReading): Promise<boolean> {
     publishBeep(mqttProxy, 1200, 200, 2).catch(() => {});
   }
 
-  // Build exporters for this user (cached) — needed for display reading names
+  // Build exporters for this user (cached). Needed for display reading names.
   const exporters = getExportersForUser(user.slug);
 
   // Notify display: user matched, export in progress
@@ -330,7 +383,7 @@ async function processRawReading(raw: RawReading): Promise<boolean> {
   checkAndLogUpdate(appConfig.update_check);
 
   if (dryRun) {
-    log.info(`${prefix} Dry run — skipping export.`);
+    log.info(`${prefix} Dry run. Skipping export.`);
     return true;
   }
 
@@ -437,11 +490,27 @@ async function main(): Promise<void> {
     );
   }
 
+  // systemd Type=notify integration (#144). No-op when NOTIFY_SOCKET is unset
+  // (Docker, npm start, non-systemd installs). When the unit declares
+  // WatchdogSec=, the heartbeat catches sync D-Bus stalls that freeze the
+  // event loop (#140) and lets systemd restart the service cleanly.
+  notifyReady();
+  startHeartbeat();
+
   if (!continuousMode) {
     touchHeartbeat();
     const success = isMultiUser ? await runMultiUserCycle() : await runSingleUserCycle(exporters);
     if (!success) process.exit(1);
     return;
+  }
+
+  // Auto-reload config.yaml on edit. Continuous-mode only (single runs exit
+  // before any reload could matter). Opt out via runtime.watch_config: false.
+  if (configSource === 'yaml' && configPath && resolved.watchConfig) {
+    configWatcher = startConfigWatcher(configPath, () => {
+      log.info('config.yaml change detected, will reload before next scan cycle');
+      needsReload = true;
+    });
   }
 
   // Continuous mode loop with exponential backoff on failures
@@ -465,8 +534,8 @@ async function main(): Promise<void> {
           await reloadConfig();
           needsReload = false;
           watcher.updateConfig(adapters, SCALE_MAC);
-          if (appConfig.users.length === 1 && !dryRun) {
-            exporters = buildSingleUserExporters();
+          if (appConfig.users.length === 1) {
+            exporters = dryRun ? undefined : buildSingleUserExporters();
           }
         }
 
@@ -502,8 +571,8 @@ async function main(): Promise<void> {
           await reloadConfig();
           needsReload = false;
           watcher.updateConfig(adapters, SCALE_MAC);
-          if (appConfig.users.length === 1 && !dryRun) {
-            exporters = buildSingleUserExporters();
+          if (appConfig.users.length === 1) {
+            exporters = dryRun ? undefined : buildSingleUserExporters();
           }
         }
 
@@ -542,7 +611,7 @@ async function main(): Promise<void> {
           `Watchdog triggered: ${consecutiveFailures} consecutive scan failures since last ` +
             `success. Exiting so the container can restart cleanly. ` +
             `If this persists on Raspberry Pi 3/4 with the on-board Bluetooth chip, ` +
-            `consider an ESP32/ESPHome BLE proxy — see https://blescalesync.dev/troubleshooting`,
+            `consider an ESP32/ESPHome BLE proxy. See https://blescalesync.dev/troubleshooting`,
         );
         process.exit(1);
       },
@@ -555,9 +624,8 @@ async function main(): Promise<void> {
         if (needsReload) {
           await reloadConfig();
           needsReload = false;
-          // Rebuild single-user exporters after reload
-          if (appConfig.users.length === 1 && !dryRun) {
-            exporters = buildSingleUserExporters();
+          if (appConfig.users.length === 1) {
+            exporters = dryRun ? undefined : buildSingleUserExporters();
           }
         }
 
@@ -571,14 +639,35 @@ async function main(): Promise<void> {
         watchdog.recordSuccess();
 
         if (signal.aborted) break;
+        // After a successful read, the scale typically keeps advertising for
+        // 15-25 s while the link layer winds down (display fades). Connecting
+        // during that tail-off triggers the dying-peer GATT stall on BlueZ
+        // (#143). Apply POST_DISCONNECT_GRACE_MS as a floor on top of the
+        // configured cooldown, but only when the resolved handler is node-ble:
+        // proxy handlers and noble-based stacks talk to a different transport
+        // and do not hit the stall, so the floor would only add UX latency.
+        // Failed scans in the catch branch use plain backoff, no grace.
         const cooldown = appConfig.runtime?.scan_cooldown ?? scanCooldownSec;
-        log.info(`\nWaiting ${cooldown}s before next scan...`);
-        await abortableSleep(cooldown * 1000, signal);
+        const cooldownMs = cooldown * 1000;
+        const handlerKey = resolveHandlerKey(bleHandler);
+        const applyGraceFloor = handlerKey === 'node-ble';
+        const effectiveMs = applyGraceFloor
+          ? Math.max(cooldownMs, POST_DISCONNECT_GRACE_MS)
+          : cooldownMs;
+        if (applyGraceFloor && effectiveMs > cooldownMs) {
+          log.info(
+            `\nWaiting ${effectiveMs / 1000}s before next scan ` +
+              `(cooldown ${cooldown}s, post-disconnect grace floor ${POST_DISCONNECT_GRACE_MS / 1000}s)...`,
+          );
+        } else {
+          log.info(`\nWaiting ${cooldown}s before next scan...`);
+        }
+        await abortableSleep(effectiveMs, signal);
       } catch (err) {
         if (signal.aborted) break;
 
         // Watchdog records the failure and may exit the process if armed and
-        // tripped — order matters: trip before sleeping so we don't waste a
+        // tripped. Order matters: trip before sleeping so we don't waste a
         // backoff cycle on a controller we already know is wedged.
         watchdog.recordFailure();
 
@@ -615,4 +704,5 @@ main()
   })
   .finally(async () => {
     await shutdownEmbeddedBroker();
+    stopHeartbeat();
   });

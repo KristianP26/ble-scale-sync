@@ -53,6 +53,7 @@ export interface ResolvedRuntimeConfig {
   continuousMode: boolean;
   scanCooldownSec: number;
   watchdogMaxFailures: number;
+  watchConfig: boolean;
   bleHandler: BleHandlerName;
   bleAdapter?: string;
   mqttProxy?: MqttProxyConfig;
@@ -74,6 +75,7 @@ export function resolveRuntimeConfig(config: AppConfig): ResolvedRuntimeConfig {
     continuousMode: config.runtime?.continuous_mode ?? false,
     scanCooldownSec: config.runtime?.scan_cooldown ?? 30,
     watchdogMaxFailures: config.runtime?.watchdog_max_consecutive_failures ?? 10,
+    watchConfig: config.runtime?.watch_config ?? true,
     bleHandler: config.ble?.handler ?? 'auto',
     bleAdapter: config.ble?.adapter ?? undefined,
     mqttProxy: config.ble?.mqtt_proxy ?? undefined,

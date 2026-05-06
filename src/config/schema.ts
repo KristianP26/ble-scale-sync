@@ -132,6 +132,12 @@ export const RuntimeSchema = z.object({
    * then performs a clean BlueZ recovery. Set to 0 to disable.
    */
   watchdog_max_consecutive_failures: z.number().int().min(0).max(1000).default(10),
+  /**
+   * Auto-reload config.yaml on edit (continuous mode only). When false, only
+   * SIGHUP triggers a reload. Useful on flaky filesystems or when restart-based
+   * deploys are preferred. Default true.
+   */
+  watch_config: z.boolean().default(true),
 });
 
 export const DockerSchema = z.object({

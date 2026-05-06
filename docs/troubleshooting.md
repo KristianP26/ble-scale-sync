@@ -15,7 +15,7 @@ For general questions that are not about a specific error (supported scales, Gar
 
 ### Scale not found
 
-- **Step on the scale** to wake it up — most scales go to sleep after a few seconds of inactivity.
+- **Step on the scale** to wake it up. Most scales go to sleep after a few seconds of inactivity.
 - Verify with `npm run scan` (or the Docker `scan` command) that your scale is visible.
 - If using `scale_mac`, double-check the address matches the scan output.
 - On Linux, make sure Bluetooth is running: `sudo systemctl status bluetooth`
@@ -50,26 +50,45 @@ You need to re-run this after every Node.js update.
 
 ### Windows BLE issues
 
-- The default driver (`@abandonware/noble`) works with the native Windows Bluetooth stack -- no special setup needed.
+- The default driver (`@abandonware/noble`) works with the native Windows Bluetooth stack, no special setup needed.
 - If using `NOBLE_DRIVER=stoprocent`, install the WinUSB driver via [Zadig](https://zadig.akeo.ie/).
 - Run your terminal as Administrator if you get permission errors.
 
-### Switching the BLE handler
+### Switching the BLE transport (`ble.handler`)
 
-BLE Scale Sync ships with three BLE handlers. If you're having connection issues, try a different one by adding this to your `config.yaml`:
+BLE Scale Sync supports three transport handlers. The default `auto` picks the right local-radio stack per OS. Switch to `mqtt-proxy` or `esphome-proxy` only if you're using a remote BLE radio.
 
 ```yaml
 ble:
-  noble_driver: stoprocent   # or: abandonware
+  handler: auto # or: mqtt-proxy, esphome-proxy
 ```
 
-| Handler | Platforms | Notes |
-|---------|-----------|-------|
-| `node-ble` (default on Linux) | Linux only | Uses BlueZ D-Bus. Most reliable on Raspberry Pi. Service UUIDs not available during scan (only after connecting). |
-| `@abandonware/noble` (default on Windows) | Linux, Windows | Mature driver. Uses WinRT on Windows. |
-| `@stoprocent/noble` (default on macOS) | Linux, macOS, Windows | Newer driver. Exposes service UUIDs during scan. On Windows, requires the [WinUSB driver](https://zadig.akeo.ie/). |
+| Handler         | Use when                                                                                |
+| --------------- | --------------------------------------------------------------------------------------- |
+| `auto`          | Default. Local Bluetooth radio on the host (Linux/macOS/Windows).                       |
+| `mqtt-proxy`    | Remote ESP32 with custom firmware over MQTT. See [ESP32 BLE Proxy](/guide/esp32-proxy). |
+| `esphome-proxy` | Existing ESPHome BT proxy over Native API. See [ESPHome Proxy](/guide/esphome-proxy).   |
 
-If your scale is not being recognized during scan but you know its MAC address, set `scale_mac` in `config.yaml` -- the adapter will match post-connect using GATT service UUIDs regardless of the handler.
+### Switching the noble driver (`ble.noble_driver`)
+
+For local-radio mode (`handler: auto`), three OS-specific BLE stacks are available. If connections fail repeatedly, try the alternative driver:
+
+```yaml
+ble:
+  noble_driver: stoprocent # or: abandonware
+```
+
+| Driver                                    | Platforms             | Notes                                                                                                              |
+| ----------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `node-ble` (default on Linux)             | Linux only            | Uses BlueZ D-Bus. Most reliable on Raspberry Pi. Service UUIDs not available during scan (only after connecting).  |
+| `@abandonware/noble` (default on Windows) | Linux, Windows        | Mature driver. Uses WinRT on Windows.                                                                              |
+| `@stoprocent/noble` (default on macOS)    | Linux, macOS, Windows | Newer driver. Exposes service UUIDs during scan. On Windows, requires the [WinUSB driver](https://zadig.akeo.ie/). |
+
+::: tip Note
+On Linux, `node-ble` is always used regardless of `noble_driver`. The flag only applies on macOS/Windows or when explicitly set.
+:::
+
+If your scale is not being recognized during scan but you know its MAC address, set `scale_mac` in `config.yaml`. The adapter will match post-connect using GATT service UUIDs regardless of the driver.
 
 ## Exporter Issues
 
@@ -77,7 +96,7 @@ If your scale is not being recognized during scan but you know its MAC address, 
 
 - Re-run the [setup wizard](/guide/configuration#setup-wizard-recommended) or `npm run setup-garmin` to refresh tokens.
 - Check that your Garmin credentials are correct.
-- Garmin may block requests from cloud/VPN IPs — try authenticating from a different network, then copy `~/.garmin_tokens/` to your target machine.
+- Garmin may block requests from cloud/VPN IPs. Try authenticating from a different network, then copy `~/.garmin_tokens/` to your target machine.
 
 ### MQTT connection hangs or fails
 
@@ -107,13 +126,13 @@ This shows BLE discovery details, advertised services, discovered characteristic
 
 The original Pi Zero W has an ARMv6 CPU, which is **not supported**. The `esbuild` binary (used by the TypeScript runner `tsx`) requires ARMv7 or later and will crash with `SIGILL` (illegal instruction) on ARMv6. This affects both native installs and Docker.
 
-**Solution:** Use a [Raspberry Pi Zero 2W](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/) (~$15, ARMv7/64-bit) or any Pi 3/4/5.
+**Solution:** Use a [Raspberry Pi Zero 2W](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/) (~15€, ARMv7/64-bit) or any Pi 3/4/5.
 
 ## Docker Issues
 
 ### Container can't find BLE adapter
 
-Make sure you're passing all required flags — see [Getting Started](/guide/getting-started#docker) for the full command. The most common mistake is forgetting `--network host` or the D-Bus volume mount.
+Make sure you're passing all required flags. See [Getting Started](/guide/getting-started#docker) for the full command. The most common mistake is forgetting `--network host` or the D-Bus volume mount.
 
 ### Wrong Bluetooth group GID
 
@@ -136,10 +155,10 @@ Common values: `112` (Debian/Ubuntu), `108` (Arch).
 **Cause.** A [known BlueZ bug](https://github.com/bluez/bluez/issues/807) (also tracked at [bluez/bluer#47](https://github.com/bluez/bluer/issues/47)): after repeated GATT connect/disconnect cycles, BlueZ's `Discovering` property desyncs from the HCI controller. The daemon reports active discovery, but the controller is no longer running LE scan.
 
 ::: warning Hardware/firmware limitation, not just software
-On Pi 3/4 Broadcom on-board chips, this is a kernel/firmware-level issue that even much larger projects have given up on fixing in software — see [home-assistant/operating-system#4022](https://github.com/home-assistant/operating-system/issues/4022) and [home-assistant/core#142656](https://github.com/home-assistant/core/issues/142656), both closed as **Not Planned** with HA recommending a Bluetooth proxy as the workaround. The recovery tiers below clear the wedge on most setups but not all of them.
+On Pi 3/4 Broadcom on-board chips, this is a kernel/firmware-level issue that even much larger projects have given up on fixing in software. See [home-assistant/operating-system#4022](https://github.com/home-assistant/operating-system/issues/4022) and [home-assistant/core#142656](https://github.com/home-assistant/core/issues/142656), both closed as **Not Planned** with HA recommending a Bluetooth proxy as the workaround. The recovery tiers below clear the wedge on most setups but not all of them.
 :::
 
-**Recommended long-term fix: Bluetooth proxy.** The most reliable way to run BLE Scale Sync on a Pi long-term is to bypass the on-board Bluetooth entirely — run an external [ESP32 BLE proxy](/guide/esp32-proxy) (≈€8 board, communicates over MQTT) or reuse an existing [ESPHome BT proxy](/guide/esphome-proxy). Both eliminate the host BlueZ stack from the BLE path completely.
+**Recommended long-term fix: Bluetooth proxy.** The most reliable way to run BLE Scale Sync on a Pi long-term is to bypass the on-board Bluetooth entirely. Run an external [ESP32 BLE proxy](/guide/esp32-proxy) (≈€8 board, communicates over MQTT) or reuse an existing [ESPHome BT proxy](/guide/esphome-proxy). Both eliminate the host BlueZ stack from the BLE path completely.
 
 **Automatic in-process recovery.** The app already:
 
@@ -147,11 +166,11 @@ On Pi 3/4 Broadcom on-board chips, this is a kernel/firmware-level issue that ev
 - Runs a preemptive `btmgmt power off/on` cycle after every GATT operation to clear zombie controller state before it accumulates
 - Escalates through 6 recovery tiers when `StartDiscovery` fails (D-Bus `StopDiscovery`, adapter power-cycle, btmgmt reset, rfkill block/unblock, `systemctl restart bluetooth`)
 
-**Auto-restart watchdog (continuous mode).** When in-process recovery is not enough — typically Pi 3/4 Broadcom firmware lock-up — a watchdog exits the process after `runtime.watchdog_max_consecutive_failures` consecutive scan failures (default `10`, ≈30 min). With Docker `restart: unless-stopped` the container restarts cleanly, the entrypoint resets the BT adapter, and the controller is typically unwedged. The watchdog only arms after the first successful weigh-in in the process lifetime, so it does not restart-loop the container if the scale is offline (vacation) or `scale_mac` is misconfigured.
+**Auto-restart watchdog (continuous mode).** When in-process recovery is not enough (typically Pi 3/4 Broadcom firmware lock-up), a watchdog exits the process after `runtime.watchdog_max_consecutive_failures` consecutive scan failures (default `10`, ≈30 min). With Docker `restart: unless-stopped` the container restarts cleanly, the entrypoint resets the BT adapter, and the controller is typically unwedged. The watchdog only arms after the first successful weigh-in in the process lifetime, so it does not restart-loop the container if the scale is offline (vacation) or `scale_mac` is misconfigured.
 
 ```yaml
 runtime:
-  watchdog_max_consecutive_failures: 10  # default; 0 = disabled
+  watchdog_max_consecutive_failures: 10 # default; 0 = disabled
 ```
 
 ```bash
@@ -165,6 +184,25 @@ docker run ... -e BLE_WATCHDOG_MAX_FAILURES=10 ghcr.io/kristianp26/ble-scale-syn
 devices:
   - /dev/rfkill:/dev/rfkill
 ```
+
+**Systemd watchdog (Type=notify).** Defense in depth for the rare case where a synchronous D-Bus stall freezes the Node event loop entirely. When that happens the in-process watchdog cannot fire either, since `setTimeout` callbacks never run. Letting systemd do the liveness check from outside the process is the clean fix.
+
+::: warning Scope of this watchdog
+Only catches **whole-loop freezes**. If the event loop is alive but a specific BLE handler is wedged (e.g. an `await` that never resolves), the heartbeat keeps firing and systemd is satisfied. For BLE-specific recovery, rely on `runtime.watchdog_max_consecutive_failures` and the consecutive-failure watchdog above.
+:::
+
+Add the following to your `ble-scale.service` unit on the Pi (or any systemd host):
+
+```
+[Service]
+Type=notify
+WatchdogSec=60
+NotifyAccess=main
+Restart=on-failure
+RestartSec=5
+```
+
+The app sends `READY=1` once at startup and `WATCHDOG=1` every `WatchdogSec / 2` seconds. If the heartbeat misses for `WatchdogSec`, systemd kills and restarts the unit. The integration is a no-op when `$NOTIFY_SOCKET` is unset (Docker, `npm start`, non-systemd installs), so the same binary works everywhere.
 
 **Last-resort escape hatch: switch away from BlueZ.** If BlueZ keeps getting stuck despite the above, bypass it entirely by using the `@stoprocent/noble` driver (HCI socket directly, no D-Bus):
 

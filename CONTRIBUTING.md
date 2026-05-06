@@ -113,12 +113,12 @@ ble-scale-sync/
 │   │   ├── handler-node-ble.ts      # Linux native: node-ble (BlueZ D-Bus)
 │   │   ├── handler-noble.ts         # macOS native: @stoprocent/noble
 │   │   ├── handler-noble-legacy.ts  # Windows native: @abandonware/noble
-│   │   ├── handler-mqtt-proxy.ts    # ESP32 proxy over MQTT
+│   │   ├── handler-mqtt-proxy/      # ESP32 proxy over MQTT (split: client, topics, gatt, scan, watcher, display)
 │   │   ├── handler-esphome-proxy.ts # ESPHome BT proxy over Native API (phase 1, broadcast)
 │   │   ├── embedded-broker.ts       # Embedded aedes MQTT broker for ESP32 proxy
 │   │   └── mqtt-proxy-bootstrap.ts  # First-run scan + adapter pin for ESP32 proxy
 │   ├── exporters/
-│   │   ├── index.ts                 # Exporter factory — createExporters()
+│   │   ├── index.ts                 # Exporter factory: createExporters()
 │   │   ├── registry.ts              # Self-describing exporter registry (schemas + factories)
 │   │   ├── config.ts                # Exporter env validation + config parsing
 │   │   ├── garmin.ts                # Garmin Connect (Python subprocess)
@@ -155,7 +155,7 @@ ble-scale-sync/
 │   │   ├── exporter.ts              # Exporter interface & ExportResult
 │   │   └── exporter-schema.ts       # ExporterSchema for self-describing exporters
 │   └── scales/
-│       ├── index.ts                 # Adapter registry (order matters — generic last)
+│       ├── index.ts                 # Adapter registry (order matters: generic last)
 │       ├── body-comp-helpers.ts     # Shared body-comp utilities
 │       ├── qn-scale.ts              # QN / Renpho (incl. ES-26M, ES-30M) / Senssun / Sencor
 │       ├── renpho.ts                # Renpho ES-WBE28
@@ -279,7 +279,8 @@ To add a new export target:
 - ESLint and Prettier must be clean: `npm run lint && npm run format:check`
 - TypeScript must compile: `npx tsc --noEmit`
 - Keep commits focused, one logical change per commit
-- **Write commit messages in [Conventional Commits](https://www.conventionalcommits.org/) style.** The project uses release-please to generate the changelog and version bumps, so the prefix you pick decides both whether the release notes mention the change and how the version bumps:
+- **PRs are squash-merged.** The repo allows squash only; merge-commit and rebase-merge are disabled. On merge, GitHub squashes the branch into a single commit on the target branch and uses the **PR title** as the commit subject. That makes the PR title the thing release-please parses, so it MUST be in Conventional Commits format (see below). The PR body becomes the commit body.
+- **Write commit messages, and your PR title, in [Conventional Commits](https://www.conventionalcommits.org/) style.** The project uses release-please to generate the changelog and version bumps, so the prefix you pick decides both whether the release notes mention the change and how the version bumps:
   - `feat:` or `feat(scope):` new user-visible capability, bumps the minor version
   - `fix:` or `fix(scope):` bug fix, bumps the patch version
   - `perf:` performance improvement, bumps the patch version

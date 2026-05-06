@@ -379,7 +379,7 @@ export class QnScaleAdapter implements ScaleAdapter {
 
       if (stable && r1 === 0 && r2 === 0) {
         if (!this.isLongFrameVariant) {
-          // Classic ES-30M: always skip — impedance frame follows.
+          // Classic ES-30M: always skip, impedance frame follows.
           return null;
         }
         // Long-frame variant (ES-26M): accept after grace period.
@@ -395,7 +395,7 @@ export class QnScaleAdapter implements ScaleAdapter {
         if (now - this.firstStableNoImpedanceAt < IMPEDANCE_GRACE_MS) {
           return null;
         }
-        // Grace period elapsed — accept this weight-only reading.
+        // Grace period elapsed: accept this weight-only reading.
       }
     } else {
       // Original: [3-4]=weight, [5]=stable(1), [6-7]=R1, [8-9]=R2

@@ -12,7 +12,7 @@ head:
 If you already run an [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy.html) mesh for Home Assistant, BLE Scale Sync can reuse it as its BLE radio. No dedicated ESP32 with custom firmware, no MQTT broker plumbing: the server connects to the ESPHome Native API on port 6053 and subscribes to BLE advertisements directly.
 
 ::: warning Experimental, Phase 1 (broadcast-only)
-The ESPHome proxy transport currently supports **broadcast scales only**. GATT support (connect, subscribe, write) is tracked as phase 2 of [issue #116](https://github.com/KristianP26/ble-scale-sync/issues/116). Until then, scales that require a GATT connection (most Xiaomi Mi Body Composition, Eufy P2/P2 Pro, older Renpho, etc.) are skipped with a warning when they match. See the [supported scales](/guide/supported-scales) page for each scale's broadcast/GATT behavior.
+The ESPHome proxy transport currently supports **broadcast scales only**. GATT support (connect, subscribe, write) is tracked as phase 2 of [issue #116](https://github.com/KristianP26/ble-scale-sync/issues/116). Until then, scales that require a GATT connection (Eufy P2/P2 Pro, older Renpho without broadcast, etc.) are skipped with a warning when they match. See the [supported scales](/guide/supported-scales) page for each scale's broadcast/GATT behavior.
 :::
 
 ## How it works
@@ -119,6 +119,25 @@ Until phase 2 adds GATT support over Native API, you have three options:
 ### ESPHome logs show "clientInfo: ble-scale-sync"
 
 That's expected. The `client_info` field is how ESPHome identifies who's connected. Change it per-instance in `esphome_proxy.client_info` if you run multiple BLE Scale Sync copies.
+
+### Scale is only read on the second weigh-in
+
+Some scales (notably Xiaomi Mi Scale 2) broadcast their final measurement frame in a very brief window: the moment weight and impedance are both stable. The default ESPHome scan parameters listen only ~9% of the time (`window: 30ms / interval: 320ms`), which can miss this window on the first stand.
+
+Fix: increase the scan duty cycle in your ESPHome device YAML:
+
+```yaml
+bluetooth_proxy:
+  active: true
+
+esp32_ble_tracker:
+  scan_parameters:
+    interval: 320ms
+    window: 300ms # listen ~94% of the time
+    active: true
+```
+
+Flash the updated firmware to the proxy and restart BLE Scale Sync. This affects all passive-broadcast scales on that proxy: higher duty cycle means more reliable first-try readings.
 
 ### "No recognized scales found" in `npm run scan` over ESPHome
 

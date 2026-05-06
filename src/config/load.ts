@@ -103,6 +103,7 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
     dry_run: config.runtime?.dry_run ?? false,
     debug: config.runtime?.debug ?? false,
     watchdog_max_consecutive_failures: config.runtime?.watchdog_max_consecutive_failures ?? 10,
+    watch_config: config.runtime?.watch_config ?? true,
   };
   const ble = { handler: 'auto' as const, ...config.ble };
 
@@ -332,6 +333,7 @@ export function loadEnvConfig(): AppConfig {
       dry_run: envConfig.dryRun,
       debug: process.env.DEBUG === 'true',
       watchdog_max_consecutive_failures: 10,
+      watch_config: true,
     },
     update_check: true,
   };
