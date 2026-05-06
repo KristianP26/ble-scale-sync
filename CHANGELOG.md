@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.12.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.11.0...v1.12.0) (2026-05-06)
+
+
+### Added
+
+* **config:** hot-reload config.yaml without restart ([#123](https://github.com/KristianP26/ble-scale-sync/issues/123)) ([d213d5c](https://github.com/KristianP26/ble-scale-sync/commit/d213d5ccd242312f5251c59128708ca503b0cb23))
+* **runtime:** systemd Type=notify watchdog integration ([#144](https://github.com/KristianP26/ble-scale-sync/issues/144)) ([68ee5bf](https://github.com/KristianP26/ble-scale-sync/commit/68ee5bf4b1aede87080c432512233f4e09b5a680))
+* **scales:** add Xiaomi Mi Scale 2 broadcast adapter ([#134](https://github.com/KristianP26/ble-scale-sync/issues/134)) ([6e5ffb4](https://github.com/KristianP26/ble-scale-sync/commit/6e5ffb4fa994546231d42b6493cd875e2f2e46fe))
+* **scales:** scaffold experimental ADE A2 adapter ([#159](https://github.com/KristianP26/ble-scale-sync/issues/159)) ([#160](https://github.com/KristianP26/ble-scale-sync/issues/160)) ([11aec6f](https://github.com/KristianP26/ble-scale-sync/commit/11aec6f79bc01c4c4a7dee9e68ffa2e0c72b2d51))
+* **trisa:** implement ADE BA 1600 challenge response ([#138](https://github.com/KristianP26/ble-scale-sync/issues/138)) ([#158](https://github.com/KristianP26/ble-scale-sync/issues/158)) ([91aa28e](https://github.com/KristianP26/ble-scale-sync/commit/91aa28eedef68e0c77da7ceb389fe411b151f48c))
+
+
+### Fixed
+
+* **ble:** guard against dying-peer connect stall ([#143](https://github.com/KristianP26/ble-scale-sync/issues/143)) ([abd3c22](https://github.com/KristianP26/ble-scale-sync/commit/abd3c227547c4a92f05f2d5be47087049339b7c3))
+* **ble:** per-address grace state in esphome-proxy scanAndReadRaw ([#161](https://github.com/KristianP26/ble-scale-sync/issues/161)) ([875cb28](https://github.com/KristianP26/ble-scale-sync/commit/875cb283c9df725e615f76e1c9919185ad773cc0))
+* **review:** address v1.12.0 review findings ([ed90fbf](https://github.com/KristianP26/ble-scale-sync/commit/ed90fbf4d7fc3bbc1bdd94bc241942ef10df7c10))
+* **runtime:** cache systemd-notify ENOENT to avoid spawn-storm on hosts without it ([#144](https://github.com/KristianP26/ble-scale-sync/issues/144)) ([8959287](https://github.com/KristianP26/ble-scale-sync/commit/895928768b78e84cd70c79a9bc7e26ff285a308d))
+* **scales:** ack offline frames on Renpho ES-26BB-B ([#157](https://github.com/KristianP26/ble-scale-sync/issues/157)) ([70f2066](https://github.com/KristianP26/ble-scale-sync/commit/70f20669e178d99a2aa6783ed1f65b3c8fed1997))
+* **scales:** warn instead of debug when ES-26BB-B offline ack write fails ([4e265e1](https://github.com/KristianP26/ble-scale-sync/commit/4e265e16bf20c5bedaff52c636f0fe71128982bf))
+
+
+### Docs
+
+* deep consistency sweep across guide and reference pages ([e979b0c](https://github.com/KristianP26/ble-scale-sync/commit/e979b0cf5b12d75f6d74e3152db9628a824297b8))
+* **readme:** bump scale count, note Linux stability features ([5a47c06](https://github.com/KristianP26/ble-scale-sync/commit/5a47c064911a36b46f909e3e8bd55b7ad1a1fdab))
+
 ## [1.11.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.10.2...v1.11.0) (2026-05-01)
 
 
