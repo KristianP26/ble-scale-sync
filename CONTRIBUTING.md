@@ -83,7 +83,7 @@ Both ESLint and Prettier are enforced in CI.
 ble-scale-sync/
 ├── .github/
 │   └── workflows/
-│       ├── ci.yml                   # CI: lint, format, typecheck, tests (Node 20/22/24), python-check
+│       ├── ci.yml                   # CI: lint, format, typecheck, tests (Node 22/24), python-check
 │       ├── docker.yml               # Docker: multi-arch build + GHCR push on release
 │       ├── docker-cleanup.yml       # Prune old GHCR image tags
 │       ├── docs.yml                 # VitePress docs deploy to Cloudflare Pages
@@ -231,7 +231,7 @@ ble-scale-sync/
 ├── config.yaml.example              # Annotated config template
 ├── docker-compose.example.yml       # Example Compose (native BLE)
 ├── docker-compose.mqtt-proxy.yml    # Example Compose (ESP32 MQTT proxy)
-├── Dockerfile                       # Multi-arch image (node:20-slim + BlueZ + Python)
+├── Dockerfile                       # Multi-arch image (node:22-slim + BlueZ + Python)
 ├── docker-entrypoint.sh             # Docker entrypoint (start/setup/scan/validate/help)
 ├── CONTRIBUTING.md                  # This file
 ├── CHANGELOG.md                     # Version history (Keep a Changelog format)

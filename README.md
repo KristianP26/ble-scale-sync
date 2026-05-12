@@ -4,7 +4,7 @@
 ![GitHub Release](https://img.shields.io/github/v/release/KristianP26/ble-scale-sync)
 ![License: GPL-3.0](https://img.shields.io/github/license/KristianP26/ble-scale-sync?v=2)
 ![TypeScript](https://img.shields.io/badge/typescript-%3E%3D5-blue?logo=typescript&logoColor=white)
-![Node.js](https://img.shields.io/badge/node-%3E%3D20.19-brightgreen?logo=node.js&logoColor=white)
+![Node.js](https://img.shields.io/badge/node-%3E%3D22-brightgreen?logo=node.js&logoColor=white)
 ![Docker](https://img.shields.io/badge/docker-ghcr.io-blue?logo=docker&logoColor=white)
 
 A cross-platform CLI tool that reads body composition data from **20+ BLE smart scales** and exports to **Garmin Connect**, **Strava**, **MQTT** (Home Assistant), **InfluxDB**, **Webhooks**, **Ntfy**, and **local files** (CSV/JSONL). No phone app needed. Your data stays on your device.
@@ -75,7 +75,7 @@ npm run setup                       # interactive wizard
 CONTINUOUS_MODE=true npm start      # always-on
 ```
 
-Requires Node.js v20.19+ and a BLE adapter. See the **[full install guide](https://blescalesync.dev/guide/getting-started)** for prerequisites and systemd service setup.
+Requires Node.js v22+ and a BLE adapter. See the **[full install guide](https://blescalesync.dev/guide/getting-started)** for prerequisites and systemd service setup.
 
 ## Features
 

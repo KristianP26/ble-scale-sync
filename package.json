@@ -34,7 +34,7 @@
   "author": "Kristián Partl",
   "license": "GPL-3.0",
   "engines": {
-    "node": ">=20.19.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "@2colors/esphome-native-api": "^1.3.6",
