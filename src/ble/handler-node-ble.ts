@@ -282,16 +282,20 @@ async function startDiscoverySafe(
  * Tracks whether a BlueZ peer is still actively advertising.
  *
  * Two signals decide freshness:
- *  - the current `RSSI` value from `org.bluez.Device1` (Readonly+Optional int16
- *    per the BlueZ docs, verified via context7). Missing or the sentinel 127
- *    ("unavailable" per mgmt-protocol Device Found) means the peer has gone
- *    dark.
+ *  - the explicit `127` sentinel on `org.bluez.Device1.RSSI` (mgmt-protocol
+ *    Device Found "unavailable") means the peer has gone dark.
  *  - the time since the last `RSSI` `PropertiesChanged` signal. BlueZ
  *    refreshes this on every received advertisement, so absence of an update
- *    within `RSSI_FRESHNESS_MS` means no new packets have arrived even though
- *    the cached value may still be present.
+ *    within `RSSI_FRESHNESS_MS` means no new packets have arrived.
  *
- * Either failing signal points at the dying-peer scenario @fromport
+ * `RSSI` is documented Readonly+Optional on `org.bluez.Device1` (BlueZ docs,
+ * verified via context7). BlueZ legitimately omits the prop after
+ * `StopDiscovery`, so absence is NOT a freshness signal (#167 regression).
+ * The `lastRssiUpdateTs = Date.now()` init at construction is load-bearing:
+ * trackers are only created after `waitDevice` resolved, which only fires on
+ * a fresh advertisement.
+ *
+ * The 127 sentinel and time window cover the dying-peer scenario @fromport
  * reproduced for #143 / #140, where `device.connect()` would stall inside
  * GATT discovery against a peer whose link layer is shutting down.
  */
@@ -311,20 +315,22 @@ export function startPeerFreshnessTracker(device: Device): PeerFreshnessTracker 
   try {
     helper.on('PropertiesChanged', onPropsChanged);
   } catch {
-    // Subscription unavailable: fall back to prop-only freshness check.
+    // Subscription unavailable: tracker reports fresh until the init
+    // timestamp ages past RSSI_FRESHNESS_MS, then stale.
   }
   return {
     isFresh: async () => {
+      let rssi: unknown;
       try {
-        const rssi: unknown = await helper.prop('RSSI');
-        if (rssi === undefined || rssi === null) return false;
-        if (typeof rssi === 'number' && rssi === RSSI_UNAVAILABLE) return false;
-        if (Date.now() - lastRssiUpdateTs > RSSI_FRESHNESS_MS) return false;
-        return true;
+        rssi = await helper.prop('RSSI');
       } catch {
-        // Property absent (BlueZ dropped it) or D-Bus error: treat as stale.
-        return false;
+        // RSSI is Optional on org.bluez.Device1 and BlueZ may not expose it
+        // after StopDiscovery or on some controllers (#167). PropertiesChanged
+        // remains the authoritative freshness signal via lastRssiUpdateTs.
+        rssi = undefined;
       }
+      if (typeof rssi === 'number' && rssi === RSSI_UNAVAILABLE) return false;
+      return Date.now() - lastRssiUpdateTs <= RSSI_FRESHNESS_MS;
     },
     stop: () => {
       if (stopped) return;
