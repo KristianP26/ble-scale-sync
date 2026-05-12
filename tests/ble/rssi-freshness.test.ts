@@ -41,14 +41,16 @@ describe('isPeerFresh()', () => {
     await expect(isPeerFresh(device)).resolves.toBe(true);
   });
 
-  it('returns false when RSSI is undefined (BlueZ dropped the property)', async () => {
+  it('returns true when RSSI is undefined and tracker is fresh (#167 regression guard)', async () => {
+    // BlueZ may drop the Optional RSSI prop after StopDiscovery. Absence is
+    // not a freshness signal; PropertiesChanged + fresh-init timestamp are.
     const { device } = makeDevice(() => undefined);
-    await expect(isPeerFresh(device)).resolves.toBe(false);
+    await expect(isPeerFresh(device)).resolves.toBe(true);
   });
 
-  it('returns false when RSSI is null', async () => {
+  it('returns true when RSSI is null and tracker is fresh', async () => {
     const { device } = makeDevice(() => null);
-    await expect(isPeerFresh(device)).resolves.toBe(false);
+    await expect(isPeerFresh(device)).resolves.toBe(true);
   });
 
   it('returns false when RSSI is the BlueZ sentinel 127 (unavailable)', async () => {
@@ -56,16 +58,16 @@ describe('isPeerFresh()', () => {
     await expect(isPeerFresh(device)).resolves.toBe(false);
   });
 
-  it('returns false when prop call throws (D-Bus error or property absent)', async () => {
+  it('returns true when prop call throws and tracker is fresh', async () => {
     const { device } = makeDevice(() => {
       throw new Error('Property not found');
     });
-    await expect(isPeerFresh(device)).resolves.toBe(false);
+    await expect(isPeerFresh(device)).resolves.toBe(true);
   });
 
-  it('returns false when prop rejects asynchronously', async () => {
+  it('returns true when prop rejects asynchronously and tracker is fresh', async () => {
     const { device } = makeDevice(() => Promise.reject(new Error('D-Bus error')));
-    await expect(isPeerFresh(device)).resolves.toBe(false);
+    await expect(isPeerFresh(device)).resolves.toBe(true);
   });
 
   it('subscribes to PropertiesChanged and tears down on stop', async () => {
@@ -134,6 +136,26 @@ describe('startPeerFreshnessTracker()', () => {
     });
     const tracker = startPeerFreshnessTracker(device);
     await expect(tracker.isFresh()).resolves.toBe(true);
+    tracker.stop();
+  });
+
+  it('returns false when RSSI is undefined and lastRssiUpdateTs is stale', async () => {
+    // Fresh init protects new trackers, but a long-lived tracker that never
+    // saw another advert in 5+ s must still report stale.
+    const { device } = makeDevice(() => undefined);
+    const tracker = startPeerFreshnessTracker(device);
+    vi.advanceTimersByTime(RSSI_FRESHNESS_MS + 1000);
+    await expect(tracker.isFresh()).resolves.toBe(false);
+    tracker.stop();
+  });
+
+  it('returns false when prop throws and lastRssiUpdateTs is stale', async () => {
+    const { device } = makeDevice(() => {
+      throw new Error('D-Bus error');
+    });
+    const tracker = startPeerFreshnessTracker(device);
+    vi.advanceTimersByTime(RSSI_FRESHNESS_MS + 1000);
+    await expect(tracker.isFresh()).resolves.toBe(false);
     tracker.stop();
   });
 });

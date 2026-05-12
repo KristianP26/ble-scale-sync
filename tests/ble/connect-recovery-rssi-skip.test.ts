@@ -152,4 +152,26 @@ describe('connectWithRecovery: RSSI freshness skip (#143 integration)', () => {
     expect(initialDevice.connect).toHaveBeenCalledTimes(1);
     expect(result).toBe(initialDevice);
   });
+
+  it('connects directly when RSSI prop is undefined but tracker is freshly created (#167 regression guard)', async () => {
+    // Reproduces the fromport ES-26M fixture: BlueZ drops the Optional RSSI
+    // prop after the upstream StopDiscovery, but the peer is alive. The
+    // freshness tracker is constructed after waitDevice resolved, so
+    // lastRssiUpdateTs is fresh; isFresh() must trust the time window over
+    // the absent prop. No re-discovery, connect goes through on first attempt.
+    const initialDevice = makeDevice(() => undefined);
+    const reDiscoveredDevice = makeDevice(() => -55);
+    const btAdapter = makeAdapter(reDiscoveredDevice);
+
+    const result = await _internals.connectWithRecovery({
+      btAdapter: btAdapter as never,
+      mac: 'FF:04:00:14:AC:0F',
+      initialDevice: initialDevice as never,
+      maxRetries: 0,
+    });
+
+    expect(btAdapter.waitDevice).not.toHaveBeenCalled();
+    expect(initialDevice.connect).toHaveBeenCalledTimes(1);
+    expect(result).toBe(initialDevice);
+  });
 });
