@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.12.1](https://github.com/KristianP26/ble-scale-sync/compare/v1.12.0...v1.12.1) (2026-05-12)
+
+
+### Fixed
+
+* **ble:** RSSI freshness no longer treats absent prop as stale ([#167](https://github.com/KristianP26/ble-scale-sync/issues/167)) ([8340caa](https://github.com/KristianP26/ble-scale-sync/commit/8340caa0ef3de7a5499dfca26190cc5864ab8e7e)), closes [#169](https://github.com/KristianP26/ble-scale-sync/issues/169)
+
 ## [1.12.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.11.0...v1.12.0) (2026-05-06)
 
 
