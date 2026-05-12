@@ -83,7 +83,7 @@ Both ESLint and Prettier are enforced in CI.
 ble-scale-sync/
 ├── .github/
 │   └── workflows/
-│       ├── ci.yml                   # CI: lint, format, typecheck, tests (Node 22/24/26), python-check
+│       ├── ci.yml                   # CI: lint, format, typecheck, tests (Node 22/24), python-check
 │       ├── docker.yml               # Docker: multi-arch build + GHCR push on release
 │       ├── docker-cleanup.yml       # Prune old GHCR image tags
 │       ├── docs.yml                 # VitePress docs deploy to Cloudflare Pages
