@@ -5,18 +5,11 @@ import type {
   WeightUnit,
 } from '../config/schema.js';
 import type { BleHandlerName } from '../ble/types.js';
+import type { ConfigSource } from '../config/load.js';
 import type { ResolvedRuntimeConfig } from '../config/resolve.js';
 import type { EmbeddedBrokerHandle } from '../ble/embedded-broker.js';
 import type { Exporter } from '../interfaces/exporter.js';
 
-/**
- * Mutable record that bundles the runtime state previously held as top-level
- * `let` bindings in `src/index.ts`. Loop and processor pull from this on every
- * iteration; reload mutates the hot-swap fields in place via `setConfig`.
- *
- * Frozen-for-lifetime fields (handler, adapter, signal) are read once at
- * startup and never reassigned.
- */
 export interface AppContext {
   // Hot-swappable on reload
   config: AppConfig;
@@ -26,7 +19,7 @@ export interface AppContext {
   mqttProxy: MqttProxyConfig | undefined;
 
   // Frozen for process lifetime
-  readonly configSource: 'env' | 'yaml' | 'none';
+  readonly configSource: ConfigSource;
   readonly configPath: string | undefined;
   readonly bleHandler: BleHandlerName;
   readonly bleAdapter: string | undefined;
@@ -44,7 +37,7 @@ export interface AppContext {
 export interface AppContextInit {
   config: AppConfig;
   resolved: ResolvedRuntimeConfig;
-  configSource: 'env' | 'yaml' | 'none';
+  configSource: ConfigSource;
   configPath: string | undefined;
   signal: AbortSignal;
 }

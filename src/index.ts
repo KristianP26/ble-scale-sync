@@ -175,10 +175,7 @@ async function main(): Promise<void> {
     );
   }
 
-  // systemd Type=notify integration (#144). No-op when NOTIFY_SOCKET is unset
-  // (Docker, npm start, non-systemd installs). When the unit declares
-  // WatchdogSec=, the heartbeat catches sync D-Bus stalls that freeze the
-  // event loop (#140) and lets systemd restart the service cleanly.
+  // systemd Type=notify integration (#144). No-op when NOTIFY_SOCKET is unset.
   notifyReady();
   startHeartbeat();
 

@@ -13,9 +13,6 @@ const log = createLogger('Sync');
 /**
  * Reload config.yaml in place, refresh hot-swap fields on the context, and
  * warn about restart-required edits. No-op for env-config installs.
- *
- * Caller is responsible for rebuilding any cached single-user exporters
- * (returned `usersChanged` lets the caller skip the rebuild when irrelevant).
  */
 export async function reloadAppConfig(
   ctx: AppContext,

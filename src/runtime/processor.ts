@@ -1,13 +1,14 @@
 import type { RawReading } from '../ble/shared.js';
 import type { Exporter, ExportContext } from '../interfaces/exporter.js';
 import type { BodyComposition } from '../interfaces/scale-adapter.js';
+import type { WeightUnit } from '../config/schema.js';
 import type { AppContext } from './context.js';
 import {
   publishBeep,
   publishDisplayReading,
   publishDisplayResult,
 } from '../ble/handler-mqtt-proxy/index.js';
-import { resolveForSingleUser, resolveUserProfile } from '../config/resolve.js';
+import { resolveUserProfile } from '../config/resolve.js';
 import { matchUserByWeight, detectWeightDrift } from '../config/user-matching.js';
 import { updateLastKnownWeight } from '../config/write.js';
 import { dispatchExports } from '../orchestrator.js';
@@ -17,7 +18,37 @@ import { fmtWeight } from './format.js';
 
 const log = createLogger('Sync');
 
-function logBodyComp(payload: BodyComposition, weightUnit: 'kg' | 'lbs', prefix = ''): void {
+function notifyReading(
+  ctx: AppContext,
+  slug: string,
+  name: string,
+  weight: number,
+  impedance: number | undefined,
+  exporterNames: string[],
+): void {
+  if (ctx.bleHandler !== 'mqtt-proxy' || !ctx.mqttProxy) return;
+  publishDisplayReading(ctx.mqttProxy, slug, name, weight, impedance, exporterNames).catch(
+    () => {},
+  );
+}
+
+function notifyResult(
+  ctx: AppContext,
+  slug: string,
+  name: string,
+  weight: number,
+  details: Array<{ name: string; ok: boolean }>,
+): void {
+  if (ctx.bleHandler !== 'mqtt-proxy' || !ctx.mqttProxy) return;
+  publishDisplayResult(ctx.mqttProxy, slug, name, weight, details).catch(() => {});
+}
+
+function notifyBeep(ctx: AppContext, freq: number, duration: number, repeat: number): void {
+  if (ctx.bleHandler !== 'mqtt-proxy' || !ctx.mqttProxy) return;
+  publishBeep(ctx.mqttProxy, freq, duration, repeat).catch(() => {});
+}
+
+function logBodyComp(payload: BodyComposition, weightUnit: WeightUnit, prefix = ''): void {
   const p = prefix ? `${prefix} ` : '';
   log.info(`${p}Body composition:`);
   const kgMetrics = new Set(['boneMass', 'muscleMass']);
@@ -60,8 +91,8 @@ async function processSingleUser(
   raw: RawReading,
   exporters: Exporter[] | undefined,
 ): Promise<boolean> {
-  const { profile } = resolveForSingleUser(ctx.config);
   const user = ctx.config.users[0];
+  const profile = resolveUserProfile(user, ctx.config.scale);
   const payload = raw.adapter.computeMetrics(raw.reading, profile);
 
   log.info(
@@ -69,7 +100,6 @@ async function processSingleUser(
   );
   logBodyComp(payload, ctx.weightUnit);
 
-  // Update check after successful reading (fire-and-forget, max once per 24h)
   checkAndLogUpdate(ctx.config.update_check);
 
   if (!exporters) {
@@ -77,16 +107,14 @@ async function processSingleUser(
     return true;
   }
 
-  if (ctx.bleHandler === 'mqtt-proxy' && ctx.mqttProxy) {
-    publishDisplayReading(
-      ctx.mqttProxy,
-      user.slug,
-      user.name,
-      payload.weight,
-      payload.impedance,
-      exporters.map((e) => e.name),
-    ).catch(() => {});
-  }
+  notifyReading(
+    ctx,
+    user.slug,
+    user.name,
+    payload.weight,
+    payload.impedance,
+    exporters.map((e) => e.name),
+  );
 
   const context: ExportContext = {
     userName: user.name,
@@ -96,11 +124,7 @@ async function processSingleUser(
 
   const { success, details } = await dispatchExports(exporters, payload, context);
 
-  if (ctx.bleHandler === 'mqtt-proxy' && ctx.mqttProxy) {
-    publishDisplayResult(ctx.mqttProxy, user.slug, user.name, payload.weight, details).catch(
-      () => {},
-    );
-  }
+  notifyResult(ctx, user.slug, user.name, payload.weight, details);
 
   return success;
 }
@@ -113,47 +137,34 @@ async function processMultiUser(
   const weight = raw.reading.weight;
   log.info(`\nRaw reading: ${fmtWeight(weight, ctx.weightUnit)} / ${raw.reading.impedance} Ohm`);
 
-  // Match user by weight
   const match = matchUserByWeight(ctx.config.users, weight, ctx.config.unknown_user);
 
   if (!match.user) {
     if (match.warning) log.warn(match.warning);
-    // Beep: unknown / out of range (3x low tone)
-    if (ctx.bleHandler === 'mqtt-proxy' && ctx.mqttProxy) {
-      publishBeep(ctx.mqttProxy, 600, 150, 3).catch(() => {});
-    }
-    return true; // Not a failure: strategy decided to skip
+    notifyBeep(ctx, 600, 150, 3);
+    return true;
   }
 
   const user = match.user;
   const prefix = `[${user.name}]`;
   log.info(`${prefix} Matched (tier: ${match.tier})`);
 
-  // Beep: user matched (2x high tone)
-  if (ctx.bleHandler === 'mqtt-proxy' && ctx.mqttProxy) {
-    publishBeep(ctx.mqttProxy, 1200, 200, 2).catch(() => {});
-  }
+  notifyBeep(ctx, 1200, 200, 2);
 
-  // Build exporters for this user (cached). Needed for display reading names.
   const exporters = getExportersForUser ? getExportersForUser(user.slug) : [];
 
-  // Notify display: user matched, export in progress
-  if (ctx.bleHandler === 'mqtt-proxy' && ctx.mqttProxy) {
-    publishDisplayReading(
-      ctx.mqttProxy,
-      user.slug,
-      user.name,
-      weight,
-      raw.reading.impedance,
-      exporters.map((e) => e.name),
-    ).catch(() => {});
-  }
+  notifyReading(
+    ctx,
+    user.slug,
+    user.name,
+    weight,
+    raw.reading.impedance,
+    exporters.map((e) => e.name),
+  );
 
-  // Drift detection
   const drift = detectWeightDrift(user, weight);
   if (drift) log.warn(`${prefix} ${drift}`);
 
-  // Compute metrics with matched user's profile
   const profile = resolveUserProfile(user, ctx.config.scale);
   const payload = raw.adapter.computeMetrics(raw.reading, profile);
 
@@ -162,7 +173,6 @@ async function processMultiUser(
   );
   logBodyComp(payload, ctx.weightUnit, prefix);
 
-  // Update check after successful reading (fire-and-forget, max once per 24h)
   checkAndLogUpdate(ctx.config.update_check);
 
   if (ctx.dryRun) {
@@ -170,7 +180,6 @@ async function processMultiUser(
     return true;
   }
 
-  // Build export context
   const context: ExportContext = {
     userName: user.name,
     userSlug: user.slug,
@@ -180,14 +189,8 @@ async function processMultiUser(
 
   const { success, details } = await dispatchExports(exporters, payload, context);
 
-  // Notify display: export results
-  if (ctx.bleHandler === 'mqtt-proxy' && ctx.mqttProxy) {
-    publishDisplayResult(ctx.mqttProxy, user.slug, user.name, payload.weight, details).catch(
-      () => {},
-    );
-  }
+  notifyResult(ctx, user.slug, user.name, payload.weight, details);
 
-  // Update last known weight in config.yaml (async, debounced)
   if (ctx.configSource === 'yaml' && ctx.configPath) {
     updateLastKnownWeight(ctx.configPath, user.slug, weight, user.last_known_weight);
   }

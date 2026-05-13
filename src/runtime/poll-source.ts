@@ -1,17 +1,14 @@
 import type { RawReading } from '../ble/shared.js';
 import type { ScaleAdapter } from '../interfaces/scale-adapter.js';
 import { scanAndReadRaw } from '../ble/index.js';
-import { resolveForSingleUser, resolveUserProfile } from '../config/resolve.js';
+import { resolveUserProfile } from '../config/resolve.js';
 import { fmtWeight } from './format.js';
 import type { AppContext } from './context.js';
 import type { ReadingSource } from './loop.js';
 
 /**
- * Wraps `scanAndReadRaw` as a `ReadingSource`. Each call performs one full
- * scan-and-read cycle (one-shot). No `start` / `stop` / `updateConfig` needed
- * because the underlying handler is stateless and reads context fresh on every
- * invocation, so hot-swap fields (scaleMac, weightUnit, mqttProxy, etc.) take
- * effect on the next cycle automatically.
+ * Wraps `scanAndReadRaw` as a `ReadingSource`. Stateless: hot-swap fields
+ * (scaleMac, weightUnit, mqttProxy, ...) take effect on the next cycle.
  */
 export class PollReadingSource implements ReadingSource {
   constructor(
@@ -20,10 +17,7 @@ export class PollReadingSource implements ReadingSource {
   ) {}
 
   async nextReading(signal: AbortSignal): Promise<RawReading> {
-    const profile =
-      this.ctx.config.users.length > 1
-        ? resolveUserProfile(this.ctx.config.users[0], this.ctx.config.scale)
-        : resolveForSingleUser(this.ctx.config).profile;
+    const profile = resolveUserProfile(this.ctx.config.users[0], this.ctx.config.scale);
 
     return scanAndReadRaw({
       targetMac: this.ctx.scaleMac,
