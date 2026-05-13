@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.13.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.12.1...v1.13.0) (2026-05-13)
+
+
+### Added
+
+* cache replay, ES-32MD, Node 22+, runtime refactor ([#173](https://github.com/KristianP26/ble-scale-sync/issues/173)) ([f743cff](https://github.com/KristianP26/ble-scale-sync/commit/f743cfff27ed6099f7c24681a81e21791e1c5b0d))
+
 ## [1.12.1](https://github.com/KristianP26/ble-scale-sync/compare/v1.12.0...v1.12.1) (2026-05-12)
 
 
