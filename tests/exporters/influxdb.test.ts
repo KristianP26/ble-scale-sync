@@ -140,4 +140,32 @@ describe('toLineProtocol()', () => {
     expect(timestamp).toBeGreaterThanOrEqual(before);
     expect(timestamp).toBeLessThanOrEqual(after);
   });
+
+  it('uses provided timestamp millis when passed', () => {
+    const ts = new Date('2025-07-01T07:15:00Z');
+    const line = toLineProtocol(samplePayload, 'test', undefined, ts);
+    const tsField = Number(line.split(' ').pop());
+    expect(tsField).toBe(ts.getTime());
+  });
+});
+
+describe('InfluxDbExporter back-date support', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetch.mockResolvedValue({ status: 204 });
+  });
+
+  it('declares supportsBackdate=true', () => {
+    const exporter = new InfluxDbExporter(defaultConfig);
+    expect(exporter.supportsBackdate).toBe(true);
+  });
+
+  it('passes context.timestamp through to the line protocol', async () => {
+    const exporter = new InfluxDbExporter(defaultConfig);
+    const ts = new Date('2025-07-01T07:15:00Z');
+    await exporter.export(samplePayload, { timestamp: ts });
+    const body = mockFetch.mock.calls[0][1].body as string;
+    const tsField = Number(body.split(' ').pop());
+    expect(tsField).toBe(ts.getTime());
+  });
 });

@@ -105,10 +105,13 @@ export class RenphoEs26bbAdapter implements ScaleAdapter {
 
     if (action === ACTION_OFFLINE) {
       void this.sendOfflineAck();
+      if (data.length < 15) return null;
       const weight = data.readUInt32BE(5) / 100;
       const impedance = data.readUInt16BE(9);
       if (weight <= 0 || !Number.isFinite(weight)) return null;
-      return { weight, impedance };
+      const secondsAgo = data.readUInt32BE(11);
+      const timestamp = new Date(Date.now() - secondsAgo * 1000);
+      return { weight, impedance, timestamp };
     }
 
     return null;

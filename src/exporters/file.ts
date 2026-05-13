@@ -62,6 +62,7 @@ export const fileSchema: ExporterSchema = {
 
 export class FileExporter implements Exporter {
   readonly name = 'file';
+  readonly supportsBackdate = true;
   private readonly config: FileConfig;
 
   constructor(config: FileConfig) {
@@ -82,7 +83,7 @@ export class FileExporter implements Exporter {
     try {
       const filePath = this.config.filePath;
       const format = this.config.format;
-      const timestamp = new Date().toISOString();
+      const timestamp = (context?.timestamp ?? new Date()).toISOString();
       const user = context?.userName ?? '';
 
       if (format === 'jsonl') {

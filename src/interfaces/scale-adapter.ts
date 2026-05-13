@@ -13,6 +13,14 @@ export interface BleDeviceInfo {
 export interface ScaleReading {
   weight: number;
   impedance: number;
+  /**
+   * When set, marks this reading as historical: the scale dumped it from its
+   * onboard cache rather than producing it live. Adapters populate it for
+   * offline frames whose protocol carries an age field (e.g. ES-26BB-B 0x15
+   * `secondsAgo`). Consumers route timestamped readings into the cache-replay
+   * pipeline; live readings leave it undefined.
+   */
+  timestamp?: Date;
 }
 
 export interface UserProfile {

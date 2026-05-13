@@ -23,7 +23,7 @@ jobs:
       # - Falls back to GITHUB_TOKEN so the workflow keeps working out of
       #   the box; maintainer can then re-run ci.yml / trigger docker.yml
       #   manually until the PAT is configured.
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         id: release
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}

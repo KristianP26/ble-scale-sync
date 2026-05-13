@@ -90,7 +90,7 @@ describe('RenphoEs26bbAdapter', () => {
 
     it('parses 0x15 offline frame', () => {
       const reading = makeAdapter().parseNotification(makeOfflineFrame(7500, 480, 3600));
-      expect(reading).toEqual({ weight: 75, impedance: 480 });
+      expect(reading).toMatchObject({ weight: 75, impedance: 480 });
     });
 
     it('drops frame with invalid checksum', () => {
@@ -119,6 +119,32 @@ describe('RenphoEs26bbAdapter', () => {
     });
   });
 
+  describe('parseNotification() historical timestamp', () => {
+    it('fills timestamp on 0x15 offline frame from secondsAgo', () => {
+      const reading = makeAdapter().parseNotification(makeOfflineFrame(7500, 480, 3600));
+      expect(reading).not.toBeNull();
+      expect(reading!.timestamp).toBeInstanceOf(Date);
+      const ageMs = Date.now() - reading!.timestamp!.getTime();
+      expect(ageMs).toBeGreaterThanOrEqual(3_600_000 - 2_000);
+      expect(ageMs).toBeLessThanOrEqual(3_600_000 + 2_000);
+    });
+
+    it('leaves timestamp undefined on 0x14 live final frame', () => {
+      const reading = makeAdapter().parseNotification(makeLiveFrame(8000, 500, 0x01));
+      expect(reading).not.toBeNull();
+      expect(reading!.timestamp).toBeUndefined();
+    });
+
+    it('returns null when 0x15 frame is too short to read secondsAgo', () => {
+      const buf = Buffer.alloc(14);
+      buf[2] = 0x15;
+      buf.writeUInt32BE(7500, 5);
+      buf.writeUInt16BE(480, 9);
+      withChecksum(buf);
+      expect(makeAdapter().parseNotification(buf)).toBeNull();
+    });
+  });
+
   describe('onConnected() + offline ack', () => {
     it('sends START_CMD on connect via control char', async () => {
       const adapter = makeAdapter();
@@ -140,7 +166,7 @@ describe('RenphoEs26bbAdapter', () => {
       write.mockClear();
 
       const reading = adapter.parseNotification(makeOfflineFrame(7500, 480, 60));
-      expect(reading).toEqual({ weight: 75, impedance: 480 });
+      expect(reading).toMatchObject({ weight: 75, impedance: 480 });
 
       // Ack is fire-and-forget; flush microtasks.
       await Promise.resolve();
@@ -177,7 +203,7 @@ describe('RenphoEs26bbAdapter', () => {
       write.mockClear();
 
       const reading = adapter.parseNotification(makeOfflineFrame(7500, 480));
-      expect(reading).toEqual({ weight: 75, impedance: 480 });
+      expect(reading).toMatchObject({ weight: 75, impedance: 480 });
       await Promise.resolve();
       await Promise.resolve();
       expect(write).toHaveBeenCalledTimes(1);
@@ -187,7 +213,7 @@ describe('RenphoEs26bbAdapter', () => {
       const adapter = makeAdapter();
       // parseNotification before onConnected: must not throw, must return reading.
       const reading = adapter.parseNotification(makeOfflineFrame(7500, 480));
-      expect(reading).toEqual({ weight: 75, impedance: 480 });
+      expect(reading).toMatchObject({ weight: 75, impedance: 480 });
     });
   });
 

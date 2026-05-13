@@ -14,6 +14,8 @@ export interface ExportResultDetail {
 export interface DispatchResult {
   success: boolean;
   details: ExportResultDetail[];
+  /** Count of exporters skipped because the reading was historical and they do not back-date. */
+  skipped?: number;
 }
 
 /**
@@ -54,23 +56,43 @@ export async function dispatchExports(
   payload: BodyComposition,
   context?: ExportContext,
 ): Promise<DispatchResult> {
-  if (exporters.length === 0) {
-    log.warn('No exporters configured — measurement processed but not sent anywhere.');
-    log.warn('  Run `npm run setup` and pick at least one export target, or edit config.yaml.');
-    return { success: true, details: [] };
+  const isHistorical = context?.timestamp !== undefined;
+  const eligible = isHistorical ? exporters.filter((e) => e.supportsBackdate === true) : exporters;
+  const skipped = isHistorical ? exporters.filter((e) => e.supportsBackdate !== true) : [];
+
+  if (skipped.length > 0) {
+    log.info(
+      `Historical reading (${context!.timestamp!.toISOString()}): ` +
+        `skipping non-back-date exporters [${skipped.map((e) => e.name).join(', ')}]`,
+    );
   }
 
-  log.info(`Exporting to: ${exporters.map((e) => e.name).join(', ')}...`);
+  const buildResult = (success: boolean, details: ExportResultDetail[]): DispatchResult => {
+    const result: DispatchResult = { success, details };
+    if (skipped.length > 0) result.skipped = skipped.length;
+    return result;
+  };
+
+  if (eligible.length === 0) {
+    if (isHistorical && skipped.length > 0) {
+      return buildResult(true, []);
+    }
+    log.warn('No exporters configured, measurement processed but not sent anywhere.');
+    log.warn('  Run `npm run setup` and pick at least one export target, or edit config.yaml.');
+    return buildResult(true, []);
+  }
+
+  log.info(`Exporting to: ${eligible.map((e) => e.name).join(', ')}...`);
 
   const results = await Promise.allSettled(
-    exporters.map((e) => (context ? e.export(payload, context) : e.export(payload))),
+    eligible.map((e) => (context ? e.export(payload, context) : e.export(payload))),
   );
 
   const details: ExportResultDetail[] = [];
   let allFailed = true;
   for (let i = 0; i < results.length; i++) {
     const result = results[i];
-    const name = exporters[i].name;
+    const name = eligible[i].name;
     if (result.status === 'fulfilled' && result.value.success) {
       allFailed = false;
       details.push({ name, ok: true });
@@ -86,9 +108,9 @@ export async function dispatchExports(
 
   if (allFailed) {
     log.error('All exports failed.');
-    return { success: false, details };
+    return buildResult(false, details);
   }
 
   log.info('Done.');
-  return { success: true, details };
+  return buildResult(true, details);
 }

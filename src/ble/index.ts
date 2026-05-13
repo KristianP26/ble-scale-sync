@@ -66,7 +66,7 @@ async function loadHandler(key: HandlerKey): Promise<CommonHandler> {
     case 'noble':
       return import('./handler-noble.js');
     case 'node-ble':
-      return import('./handler-node-ble.js');
+      return import('./handler-node-ble/index.js');
     default: {
       // Defensive: unreachable with the strict union, but a future caller
       // that bypasses resolveHandlerKey() (e.g. hand-typed cast) would land
@@ -159,7 +159,7 @@ export async function scanDevices(
       return impl(adapters, durationMs);
     }
     case 'node-ble': {
-      const { scanDevices: impl } = await import('./handler-node-ble.js');
+      const { scanDevices: impl } = await import('./handler-node-ble/index.js');
       return impl(adapters, durationMs, bleAdapter);
     }
   }
