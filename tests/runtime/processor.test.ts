@@ -338,3 +338,73 @@ describe('processReading: multi-user', () => {
     expect(publishBeep).not.toHaveBeenCalled();
   });
 });
+
+// ─── Historical replay tests ────────────────────────────────────────────────
+
+describe('processReading: historical replay', () => {
+  function rawWithHistory(...readings: ScaleReading[]): RawReading {
+    const reading = readings[readings.length - 1];
+    const history = readings.length > 1 ? readings.slice(0, -1) : undefined;
+    return { reading, adapter: fakeAdapter(), history };
+  }
+
+  it('single-user: dispatches each historical reading then the live one in order with timestamps', async () => {
+    const ctx = makeCtx([dad]);
+    const exporters = [fakeExporter('garmin')];
+    const raw = rawWithHistory(
+      { weight: 80, impedance: 480, timestamp: new Date('2025-07-01T07:00:00Z') },
+      { weight: 81, impedance: 490, timestamp: new Date('2025-07-02T07:00:00Z') },
+      { weight: 82, impedance: 500 },
+    );
+
+    await processReading(ctx, raw, { singleUserExporters: exporters });
+
+    expect(dispatchExports).toHaveBeenCalledTimes(3);
+    const calls = vi.mocked(dispatchExports).mock.calls;
+    expect((calls[0][2] as { timestamp?: Date }).timestamp?.toISOString()).toBe(
+      '2025-07-01T07:00:00.000Z',
+    );
+    expect((calls[1][2] as { timestamp?: Date }).timestamp?.toISOString()).toBe(
+      '2025-07-02T07:00:00.000Z',
+    );
+    expect((calls[2][2] as { timestamp?: Date }).timestamp).toBeUndefined();
+  });
+
+  it('returns success of the last dispatch (live)', async () => {
+    vi.mocked(dispatchExports)
+      .mockResolvedValueOnce({ success: false, details: [] })
+      .mockResolvedValueOnce({ success: true, details: [{ name: 'garmin', ok: true }] });
+    const ctx = makeCtx([dad]);
+    const raw = rawWithHistory(
+      { weight: 80, impedance: 480, timestamp: new Date('2025-07-01T07:00:00Z') },
+      { weight: 82, impedance: 500 },
+    );
+    const ok = await processReading(ctx, raw, { singleUserExporters: [fakeExporter('garmin')] });
+    expect(ok).toBe(true);
+  });
+
+  it('multi-user: writes last_known_weight once with the live raw weight', async () => {
+    const ctx = makeCtx([dad, mom], { configSource: 'yaml', configPath: '/tmp/config.yaml' });
+    const raw = rawWithHistory(
+      { weight: 80, impedance: 480, timestamp: new Date('2025-07-01T07:00:00Z') },
+      { weight: 82, impedance: 500 },
+    );
+    await processReading(ctx, raw, { getExportersForUser: () => [fakeExporter('garmin')] });
+    expect(updateLastKnownWeight).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(updateLastKnownWeight).mock.calls[0][2]).toBe(82);
+  });
+
+  it('multi-user dedup: historical reading within tolerance of last_known_weight is skipped', async () => {
+    // dad.last_known_weight = 82 in the fixture; the first historical (82.05) is
+    // within +/-0.1 tolerance and should be skipped. The second (82.4) and the
+    // live (82.5) both run.
+    const ctx = makeCtx([dad, mom], { configSource: 'yaml', configPath: '/tmp/config.yaml' });
+    const raw = rawWithHistory(
+      { weight: 82.05, impedance: 480, timestamp: new Date('2025-07-01T07:00:00Z') },
+      { weight: 82.4, impedance: 490, timestamp: new Date('2025-07-02T07:00:00Z') },
+      { weight: 82.5, impedance: 500 },
+    );
+    await processReading(ctx, raw, { getExportersForUser: () => [fakeExporter('garmin')] });
+    expect(dispatchExports).toHaveBeenCalledTimes(2);
+  });
+});

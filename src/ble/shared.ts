@@ -235,12 +235,29 @@ async function subscribeAndInit(
 export interface RawReading {
   reading: ScaleReading;
   adapter: ScaleAdapter;
+  /**
+   * Earlier readings collected during the same GATT session, oldest first.
+   * Populated by adapters whose protocol dumps cached offline frames (each
+   * frame carrying `ScaleReading.timestamp`) on reconnect. The primary
+   * `reading` is the latest live frame, or, if the scale disconnected after
+   * the cache dump without producing a live one, the newest historical
+   * frame, with the rest in `history`.
+   */
+  history?: ScaleReading[];
 }
 
 /**
  * Subscribe to GATT notifications and wait for a complete raw scale reading.
  * Returns the reading + adapter WITHOUT computing body composition metrics.
  * Used by the multi-user flow to match a user by weight before computing metrics.
+ *
+ * Historical readings (those whose `ScaleReading.timestamp` is set by the
+ * adapter from a cached-frame age field) are routed into `RawReading.history`
+ * instead of resolving the Promise. The Promise resolves on the first live
+ * frame that passes `isComplete()`. If the scale disconnects after dumping
+ * cache but without sending a live frame, the Promise resolves with the
+ * newest historical reading as `reading` and the rest in `history`. Reject
+ * only fires when no reading at all was collected before disconnect.
  */
 export function waitForRawReading(
   charMap: Map<string, BleChar>,
@@ -253,6 +270,10 @@ export function waitForRawReading(
 ): Promise<RawReading> {
   return new Promise<RawReading>((resolve, reject) => {
     let resolved = false;
+    const history: ScaleReading[] = [];
+
+    const finalizeHistoryShape = (): ScaleReading[] | undefined =>
+      history.length > 0 ? [...history] : undefined;
 
     const handleNotification = (sourceUuid: string, data: Buffer): void => {
       if (resolved) return;
@@ -268,13 +289,26 @@ export function waitForRawReading(
 
       if (onLiveData) onLiveData(reading);
 
+      if (reading.timestamp) {
+        // Historical (cached) frame: collect, do not resolve. Sanity check
+        // completeness so partial/garbage frames are not added to history.
+        if (adapter.isComplete(reading)) {
+          history.push(reading);
+          bleLog.debug(
+            `Historical reading buffered: ${reading.weight.toFixed(2)} kg / ` +
+              `${reading.impedance} Ohm @ ${reading.timestamp.toISOString()}`,
+          );
+        }
+        return;
+      }
+
       if (adapter.isComplete(reading)) {
         resolved = true;
         init.cleanup();
         // Clear any \r progress line before logging
         process.stdout.write('\r' + ' '.repeat(80) + '\r');
         bleLog.info(`Reading complete: ${reading.weight.toFixed(2)} kg / ${reading.impedance} Ohm`);
-        resolve({ reading, adapter });
+        resolve({ reading, adapter, history: finalizeHistoryShape() });
       }
     };
 
@@ -291,10 +325,21 @@ export function waitForRawReading(
 
     // Handle unexpected disconnect
     bleDevice.onDisconnect(() => {
-      if (!resolved) {
+      if (resolved) return;
+      if (history.length > 0) {
+        resolved = true;
         init.cleanup();
-        reject(new Error('Scale disconnected before reading completed'));
+        const latest = history.pop()!;
+        process.stdout.write('\r' + ' '.repeat(80) + '\r');
+        bleLog.info(
+          `Disconnected after cache replay (${history.length + 1} historical reading(s)); ` +
+            `no live frame.`,
+        );
+        resolve({ reading: latest, adapter, history: finalizeHistoryShape() });
+        return;
       }
+      init.cleanup();
+      reject(new Error('Scale disconnected before reading completed'));
     });
 
     // Subscribe to notifications and start adapter init.
@@ -312,6 +357,11 @@ export function waitForRawReading(
  * Subscribe to GATT notifications and wait for a complete scale reading.
  * Wrapper around waitForRawReading() that computes body composition metrics.
  * Shared by both the node-ble (Linux) and noble (Windows/macOS) handlers.
+ *
+ * NOTE: this wrapper flattens to a single BodyComposition. Any history
+ * collected during the GATT session is discarded. Callers that need
+ * historical replay must use waitForRawReading and feed the orchestrator the
+ * full RawReading.
  */
 export function waitForReading(
   charMap: Map<string, BleChar>,

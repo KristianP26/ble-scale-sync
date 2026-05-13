@@ -67,9 +67,16 @@ def get_garmin_client(token_dir=None):
 def upload(payload, token_dir=None):
     garmin = get_garmin_client(token_dir)
 
+    # ISO 8601 string when present; the orchestrator sets it for historical
+    # readings replayed from a scale's offline cache (#164). When absent the
+    # garminconnect library defaults to the current time.
+    ts = payload.get("timestamp")
+    if ts:
+        log(f"[Garmin] Back-dating measurement to {ts}")
+
     log("[Garmin] Uploading body composition...")
     garmin.add_body_composition(
-        timestamp=None,
+        timestamp=ts,
         weight=payload["weight"],
         percent_fat=payload["bodyFatPercent"],
         percent_hydration=payload["waterPercent"],
