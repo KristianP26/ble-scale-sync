@@ -7,7 +7,7 @@
 ![Node.js](https://img.shields.io/badge/node-%3E%3D22-brightgreen?logo=node.js&logoColor=white)
 ![Docker](https://img.shields.io/badge/docker-ghcr.io-blue?logo=docker&logoColor=white)
 
-A cross-platform CLI tool that reads body composition data from **20+ BLE smart scales** and exports to **Garmin Connect**, **Strava**, **MQTT** (Home Assistant), **InfluxDB**, **Webhooks**, **Ntfy**, and **local files** (CSV/JSONL). No phone app needed. Your data stays on your device.
+A cross-platform CLI tool that reads body composition data from **24+ BLE smart scales** and exports to **Garmin Connect**, **Strava**, **MQTT** (Home Assistant), **InfluxDB**, **Webhooks**, **Ntfy**, and **local files** (CSV/JSONL). No phone app needed. Your data stays on your device.
 
 **[Documentation](https://blescalesync.dev)** · **[Getting Started](https://blescalesync.dev/guide/getting-started)** · **[Supported Scales](https://blescalesync.dev/guide/supported-scales)** · **[Exporters](https://blescalesync.dev/exporters)** · **[FAQ](https://blescalesync.dev/faq)**
 
