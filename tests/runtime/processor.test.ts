@@ -61,6 +61,7 @@ const { dispatchExports } = await import('../../src/orchestrator.js');
 const { publishBeep, publishDisplayReading, publishDisplayResult } =
   await import('../../src/ble/handler-mqtt-proxy/index.js');
 const { updateLastKnownWeight } = await import('../../src/config/write.js');
+const { checkAndLogUpdate } = await import('../../src/update-check.js');
 
 // ─── Test fixtures ──────────────────────────────────────────────────────────
 
@@ -181,6 +182,7 @@ beforeEach(() => {
   vi.mocked(publishDisplayReading).mockClear();
   vi.mocked(publishDisplayResult).mockClear();
   vi.mocked(updateLastKnownWeight).mockClear();
+  vi.mocked(checkAndLogUpdate).mockClear();
   logSpy.mockClear();
 });
 
@@ -427,6 +429,25 @@ describe('processReading: historical replay', () => {
     );
     await processReading(ctx, raw, { getExportersForUser: () => [fakeExporter('garmin')] });
     expect(dispatchExports).toHaveBeenCalledTimes(2);
+  });
+
+  it('multi-user: checkAndLogUpdate fires even when the last reading is deduped', async () => {
+    // dad.last_known_weight = 82. The single (also last) historical reading
+    // 82.05 falls inside the +/-0.1 dedup window, so the for-loop continues
+    // on isLast. If checkAndLogUpdate lived inside the loop on isLast, this
+    // cycle would silently skip the update check.
+    const ctx = makeCtx([dad, mom], { configSource: 'yaml', configPath: '/tmp/config.yaml' });
+    const raw: RawReading = {
+      reading: {
+        weight: 82.05,
+        impedance: 480,
+        timestamp: new Date('2025-07-01T07:00:00Z'),
+      },
+      adapter: fakeAdapter(),
+    };
+    await processReading(ctx, raw, { getExportersForUser: () => [fakeExporter('garmin')] });
+    expect(checkAndLogUpdate).toHaveBeenCalledTimes(1);
+    expect(dispatchExports).not.toHaveBeenCalled();
   });
 
   it('single-user: dispatches each entry with timestamp when last is also historical (no live frame)', async () => {

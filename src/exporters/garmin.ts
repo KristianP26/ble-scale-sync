@@ -47,8 +47,15 @@ function expandTilde(path: string): string {
 /** @internal Exported for testing only. */
 export { expandTilde as _expandTilde };
 
+/**
+ * Wire payload handed to the Python uploader: live readings carry the metrics
+ * only, historical replay (#164) adds an ISO 8601 `timestamp` field that
+ * `garmin_upload.py` forwards as `add_body_composition(timestamp=...)`.
+ */
+type GarminUploadPayload = BodyComposition & { timestamp?: string };
+
 function uploadToGarmin(
-  payload: BodyComposition & { timestamp?: string },
+  payload: GarminUploadPayload,
   pythonCmd: string,
   tokenDir?: string,
 ): Promise<ExportResult> {
@@ -153,7 +160,7 @@ export class GarminExporter implements Exporter {
 
   async export(data: BodyComposition, context?: ExportContext): Promise<ExportResult> {
     const pythonCmd = await findPython();
-    const payload: BodyComposition & { timestamp?: string } = context?.timestamp
+    const payload: GarminUploadPayload = context?.timestamp
       ? { ...data, timestamp: context.timestamp.toISOString() }
       : data;
 

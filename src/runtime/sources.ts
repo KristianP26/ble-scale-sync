@@ -30,12 +30,24 @@ export async function buildReadingSource(
   scanCooldownSecFallback: number,
 ): Promise<ReadingSourceBundle> {
   if (ctx.bleHandler === 'mqtt-proxy' && ctx.mqttProxy) {
-    const defaultProfile = resolveUserProfile(ctx.config.users[0], ctx.config.scale);
-    const watcher = new ReadingWatcher(ctx.mqttProxy, adapters, ctx.scaleMac, defaultProfile);
+    const watcher = new ReadingWatcher(
+      ctx.mqttProxy,
+      adapters,
+      ctx.scaleMac,
+      resolveUserProfile(ctx.config.users[0], ctx.config.scale),
+    );
     return {
       source: watcher,
       failureLogPrefix: 'Error processing reading',
-      onSourceReload: () => watcher.updateConfig(adapters, ctx.scaleMac),
+      // Re-resolve profile from the (possibly hot-swapped) ctx.config so
+      // edits to users[0].height/age/gender land on the next GATT cycle
+      // without a process restart.
+      onSourceReload: () =>
+        watcher.updateConfig(
+          adapters,
+          ctx.scaleMac,
+          resolveUserProfile(ctx.config.users[0], ctx.config.scale),
+        ),
     };
   }
 

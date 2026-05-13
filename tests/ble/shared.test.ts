@@ -5,7 +5,7 @@ import {
   findMissingCharacteristics,
 } from '../../src/ble/shared.js';
 import type { BleChar, BleDevice } from '../../src/ble/shared.js';
-import { normalizeUuid } from '../../src/ble/types.js';
+import { normalizeUuid, bleLog } from '../../src/ble/types.js';
 import type {
   ScaleAdapter,
   ScaleReading,
@@ -799,7 +799,10 @@ describe('waitForRawReading() history collection', () => {
   });
 
   it('caps history at MAX_HISTORY_FRAMES and warns once when full', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Spy on bleLog.warn directly rather than console.warn: the assertion
+    // stays valid even if the logger's output format or sink (timestamps,
+    // structured output) changes.
+    const warnSpy = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
 
     const notifyChar = createMockChar();
     const writeChar = createMockChar();

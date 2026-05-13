@@ -128,6 +128,9 @@ async function processSingleUser(
   // scale clears its own cache via the per-adapter offline ack.
   let lastSuccess = true;
 
+  // Log dry-run notice once per cycle, not once per replayed frame.
+  if (!exporters) log.info('\nDry run. Skipping export.');
+
   for (let i = 0; i < all.length; i++) {
     const reading = all[i];
     const isLast = i === all.length - 1;
@@ -142,10 +145,7 @@ async function processSingleUser(
 
     if (isLast) checkAndLogUpdate(ctx.config.update_check);
 
-    if (!exporters) {
-      log.info('\nDry run. Skipping export.');
-      continue;
-    }
+    if (!exporters) continue;
 
     if (isLast) {
       // notifyReading uses raw scale values (pre-computeMetrics); the
@@ -207,6 +207,11 @@ async function processMultiUser(
   const prefix = `[${user.name}]`;
   log.info(`${prefix} Matched (tier: ${match.tier})`);
 
+  // Update check fires once per matched cycle, independent of replay dedup.
+  // Placing it inside the loop on `isLast` would skip the check whenever the
+  // newest reading happens to be deduped.
+  checkAndLogUpdate(ctx.config.update_check);
+
   notifyBeep(ctx, 1200, 200, 2);
 
   const exporters = getExportersForUser ? getExportersForUser(user.slug) : [];
@@ -245,8 +250,6 @@ async function processMultiUser(
       `${tag} Measurement: ${fmtWeight(payload.weight, ctx.weightUnit)} / ${payload.impedance} Ohm`,
     );
     logBodyComp(payload, ctx.weightUnit, tag);
-
-    if (isLast) checkAndLogUpdate(ctx.config.update_check);
 
     if (ctx.dryRun) {
       log.info(`${tag} Dry run. Skipping export.`);
