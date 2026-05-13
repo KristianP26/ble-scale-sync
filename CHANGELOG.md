@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.13.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.12.1...v1.13.0) (2026-05-13)
+
+
+### Added
+
+* drop Node 20 support, require Node 22+ ([25712d1](https://github.com/KristianP26/ble-scale-sync/commit/25712d1b84274fbab95f0adbef3c76bcf423f3d8))
+* replay cached offline frames with timestamps ([#164](https://github.com/KristianP26/ble-scale-sync/issues/164)) ([6bae585](https://github.com/KristianP26/ble-scale-sync/commit/6bae5858a8d63f373361ed1aef979915a23c1183))
+* **scale:** support Renpho ES-32MD via ES-CS20M adapter ([#172](https://github.com/KristianP26/ble-scale-sync/issues/172)) ([068c14f](https://github.com/KristianP26/ble-scale-sync/commit/068c14f4563a6529afb6b5bbc7bfaa716371642f))
+
+
+### Fixed
+
+* **deps:** regen package-lock.json with emnapi entries (CI fix) ([40b3d9d](https://github.com/KristianP26/ble-scale-sync/commit/40b3d9dd5e77aeafc45818363a52db3bb50ab15a))
+* **runtime:** use raw weight for single-user mqtt display ([b8d0b90](https://github.com/KristianP26/ble-scale-sync/commit/b8d0b909874f44385d2d2b595481d7a3f8e3f306))
+
 ## [1.12.1](https://github.com/KristianP26/ble-scale-sync/compare/v1.12.0...v1.12.1) (2026-05-12)
 
 
