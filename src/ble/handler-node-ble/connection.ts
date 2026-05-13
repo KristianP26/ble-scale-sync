@@ -1,14 +1,14 @@
 import NodeBle from 'node-ble';
 import { bleLog, errMsg } from '../types.js';
+import type { Adapter } from './dbus.js';
 
-type Adapter = NodeBle.Adapter;
-
-// Persistent D-Bus connection + adapter, reused across scan cycles in
-// continuous mode. Same client owns the discovery session across cycles;
-// same adapter proxy means stopDiscovery() always matches startDiscovery().
-// Minimizes the start/stop cycling that triggers the BlueZ Discovering desync
-// (bluez/bluez#807, bluez/bluer#47).
-
+/**
+ * Persistent D-Bus connection + adapter, reused across scan cycles in
+ * continuous mode. Same client owns the discovery session across cycles;
+ * same adapter proxy means stopDiscovery() always matches startDiscovery().
+ * Minimizes the start/stop cycling that triggers the BlueZ Discovering desync
+ * (bluez/bluez#807, bluez/bluer#47).
+ */
 let persistentConn: { bluetooth: NodeBle.Bluetooth; destroy: () => void } | null = null;
 let persistentAdapter: Adapter | null = null;
 

@@ -1,4 +1,3 @@
-import NodeBle from 'node-ble';
 import {
   bleLog,
   formatMac,
@@ -9,11 +8,9 @@ import {
   DISCOVERY_TIMEOUT_MS,
   POST_DISCOVERY_QUIESCE_MS,
 } from '../types.js';
+import type { Adapter, Device } from './dbus.js';
 import { startDiscoverySafe, removeDevice, stopDiscoveryAndQuiesce } from './discovery.js';
 import { startPeerFreshnessTracker } from './freshness.js';
-
-type Adapter = NodeBle.Adapter;
-type Device = NodeBle.Device;
 
 export interface ConnectRecoveryContext {
   btAdapter: Adapter;

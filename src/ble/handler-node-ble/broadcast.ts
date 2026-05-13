@@ -1,11 +1,13 @@
-import NodeBle from 'node-ble';
 import type { ScaleAdapter, ScaleReading } from '../../interfaces/scale-adapter.js';
 import type { RawReading } from '../shared.js';
 import { bleLog, sleep, errMsg, DISCOVERY_TIMEOUT_MS, IMPEDANCE_GRACE_MS } from '../types.js';
-import { helperOf, getDbusNext, type PropsChangedHandler } from './dbus.js';
-
-type Adapter = NodeBle.Adapter;
-type Device = NodeBle.Device;
+import {
+  helperOf,
+  getDbusNext,
+  type PropsChangedHandler,
+  type Adapter,
+  type Device,
+} from './dbus.js';
 
 /** Extract a Buffer from a D-Bus value that may be a Variant wrapper, Buffer, Uint8Array, or number[]. */
 export function extractDbusBytes(val: unknown): Buffer | null {

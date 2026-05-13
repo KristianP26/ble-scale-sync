@@ -1,4 +1,3 @@
-import NodeBle from 'node-ble';
 import type { ScaleAdapter, BleDeviceInfo } from '../../interfaces/scale-adapter.js';
 import {
   bleLog,
@@ -12,11 +11,8 @@ import {
   DISCOVERY_POLL_MS,
   POST_DISCOVERY_QUIESCE_MS,
 } from '../types.js';
-import { helperOf, getDbusNext } from './dbus.js';
+import { helperOf, getDbusNext, type Adapter, type Device } from './dbus.js';
 import { getAdapter, resetConnection, parseHciIndex } from './connection.js';
-
-type Adapter = NodeBle.Adapter;
-type Device = NodeBle.Device;
 
 /** Stop discovery and wait for the post-discovery quiesce period. */
 export async function stopDiscoveryAndQuiesce(btAdapter: Adapter): Promise<void> {

@@ -4,6 +4,11 @@
 // Replaces eight `eslint-disable @typescript-eslint/no-explicit-any` cast sites
 // (#162) with one typed access pattern.
 
+import type NodeBle from 'node-ble';
+
+export type Adapter = NodeBle.Adapter;
+export type Device = NodeBle.Device;
+
 export type Variant<T = unknown> = { signature?: string; value: T };
 
 export type PropsChangedHandler = (props: Record<string, unknown>) => void;

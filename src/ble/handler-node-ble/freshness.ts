@@ -1,8 +1,5 @@
-import NodeBle from 'node-ble';
 import { RSSI_UNAVAILABLE, RSSI_FRESHNESS_MS } from '../types.js';
-import { helperOf, type PropsChangedHandler } from './dbus.js';
-
-type Device = NodeBle.Device;
+import { helperOf, type PropsChangedHandler, type Device } from './dbus.js';
 
 /**
  * Tracks whether a BlueZ peer is still actively advertising.

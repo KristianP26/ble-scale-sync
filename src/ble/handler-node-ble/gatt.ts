@@ -1,8 +1,8 @@
-import NodeBle from 'node-ble';
+import type NodeBle from 'node-ble';
 import type { BleChar, BleDevice } from '../shared.js';
 import { bleLog, normalizeUuid, errMsg } from '../types.js';
+import type { Device } from './dbus.js';
 
-type Device = NodeBle.Device;
 type GattCharacteristic = NodeBle.GattCharacteristic;
 
 export function wrapChar(char: GattCharacteristic): BleChar {

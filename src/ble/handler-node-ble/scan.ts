@@ -24,7 +24,7 @@ import {
   CHAR_DISCOVERY_MAX_RETRIES,
   CHAR_DISCOVERY_RETRY_DELAY_MS,
 } from '../types.js';
-import { helperOf } from './dbus.js';
+import { helperOf, type Adapter, type Device } from './dbus.js';
 import {
   getAdapter,
   resetConnection,
@@ -42,9 +42,6 @@ import {
 import { connectWithRecovery } from './connect.js';
 import { wrapDevice, buildCharMap } from './gatt.js';
 import { broadcastScanNodeBle } from './broadcast.js';
-
-type Adapter = NodeBle.Adapter;
-type Device = NodeBle.Device;
 
 /**
  * Scan for a BLE scale, read weight + impedance, and compute body composition.
