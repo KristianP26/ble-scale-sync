@@ -30,7 +30,7 @@ vi.mock('node-ble', () => ({
   },
 }));
 
-const { _internals } = await import('../../src/ble/handler-node-ble.js');
+const { _internals } = await import('../../src/ble/handler-node-ble/index.js');
 const { IMPEDANCE_GRACE_MS } = await import('../../src/ble/types.js');
 
 // ─── Mocks ───────────────────────────────────────────────────────────────────

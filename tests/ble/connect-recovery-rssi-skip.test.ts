@@ -24,7 +24,7 @@ vi.mock('node-ble', () => ({
   },
 }));
 
-const { _internals } = await import('../../src/ble/handler-node-ble.js');
+const { _internals } = await import('../../src/ble/handler-node-ble/index.js');
 
 interface MockHelper extends EventEmitter {
   prop: ReturnType<typeof vi.fn>;
