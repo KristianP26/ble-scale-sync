@@ -797,6 +797,50 @@ describe('waitForRawReading() history collection', () => {
     expect(result.reading.weight).toBe(82);
     expect(result.history).toBeUndefined();
   });
+
+  it('caps history at MAX_HISTORY_FRAMES and warns once when full', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const t0 = Date.now() - 1_000_000;
+    const readings: ScaleReading[] = [
+      ...Array.from({ length: 501 }, (_, i) => ({
+        weight: 80 + i * 0.001,
+        impedance: 480,
+        timestamp: new Date(t0 + i * 1000),
+      })),
+      { weight: 82, impedance: 500 },
+    ];
+    const parse = vi.fn<(data: Buffer) => ScaleReading | null>();
+    readings.forEach((r) => parse.mockReturnValueOnce(r));
+
+    const adapter = createLegacyAdapter({ parseNotification: parse });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    for (let i = 0; i < readings.length; i++) {
+      notifyChar.triggerData(Buffer.from([i & 0xff]));
+    }
+
+    const result = await promise;
+    expect(result.reading.weight).toBe(82);
+    expect(result.history).toHaveLength(500);
+
+    const capWarnCalls = warnSpy.mock.calls.filter((args) =>
+      String(args[0] ?? '').includes('Cached frame buffer hit 500'),
+    );
+    expect(capWarnCalls).toHaveLength(1);
+
+    warnSpy.mockRestore();
+  });
 });
 
 // ─── Weight normalization tests ─────────────────────────────────────────────

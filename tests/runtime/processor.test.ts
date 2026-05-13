@@ -241,6 +241,27 @@ describe('processReading: single-user', () => {
       '  metabolicAge: 30',
     ]);
   });
+
+  it('publishes display reading with RAW scale weight on mqtt-proxy handler', async () => {
+    const ctx: AppContext = {
+      ...makeCtx([dad]),
+      mqttProxy: MQTT_PROXY,
+    };
+    (ctx as { bleHandler: AppContext['bleHandler'] }).bleHandler = 'mqtt-proxy';
+
+    // raw reading 82 kg + 500 Ohm, payload (FIXED_BODY_COMP) is 80 kg.
+    // Display must show the raw 82, notifyResult uses the computed 80.
+    await processReading(ctx, rawReading({ weight: 82, impedance: 500 }), {
+      singleUserExporters: [fakeExporter('webhook')],
+    });
+
+    expect(publishDisplayReading).toHaveBeenCalledWith(MQTT_PROXY, 'dad', 'Dad', 82, 500, [
+      'webhook',
+    ]);
+    expect(publishDisplayResult).toHaveBeenCalledWith(MQTT_PROXY, 'dad', 'Dad', 80, [
+      { name: 'webhook', ok: true },
+    ]);
+  });
 });
 
 describe('processReading: multi-user', () => {
@@ -406,5 +427,58 @@ describe('processReading: historical replay', () => {
     );
     await processReading(ctx, raw, { getExportersForUser: () => [fakeExporter('garmin')] });
     expect(dispatchExports).toHaveBeenCalledTimes(2);
+  });
+
+  it('single-user: dispatches each entry with timestamp when last is also historical (no live frame)', async () => {
+    const ctx = makeCtx([dad]);
+    const exporters = [fakeExporter('garmin')];
+    // Three historical readings, no live. shared.ts disconnect-with-history
+    // promotes the newest as `reading` (timestamp still set), rest in history.
+    const raw: RawReading = {
+      reading: {
+        weight: 82,
+        impedance: 500,
+        timestamp: new Date('2025-07-03T07:00:00Z'),
+      },
+      adapter: fakeAdapter(),
+      history: [
+        { weight: 80, impedance: 480, timestamp: new Date('2025-07-01T07:00:00Z') },
+        { weight: 81, impedance: 490, timestamp: new Date('2025-07-02T07:00:00Z') },
+      ],
+    };
+
+    await processReading(ctx, raw, { singleUserExporters: exporters });
+
+    expect(dispatchExports).toHaveBeenCalledTimes(3);
+    const calls = vi.mocked(dispatchExports).mock.calls;
+    expect((calls[0][2] as { timestamp?: Date }).timestamp?.toISOString()).toBe(
+      '2025-07-01T07:00:00.000Z',
+    );
+    expect((calls[1][2] as { timestamp?: Date }).timestamp?.toISOString()).toBe(
+      '2025-07-02T07:00:00.000Z',
+    );
+    expect((calls[2][2] as { timestamp?: Date }).timestamp?.toISOString()).toBe(
+      '2025-07-03T07:00:00.000Z',
+    );
+  });
+
+  it('single-user: does NOT dedup historical readings against last_known_weight', async () => {
+    // Build a local user with a fixed last_known_weight so the test does not
+    // depend on the shared `dad` fixture.
+    const lone: UserConfig = { ...dad, last_known_weight: 82 };
+    const ctx = makeCtx([lone]);
+    const exporters = [fakeExporter('garmin')];
+    // Both historical readings within +/-0.1 of last_known_weight. In
+    // multi-user mode the dedup branch would skip these; single-user mode
+    // has no dedup path, so all three must dispatch.
+    const raw = rawWithHistory(
+      { weight: 82.05, impedance: 480, timestamp: new Date('2025-07-01T07:00:00Z') },
+      { weight: 82.07, impedance: 490, timestamp: new Date('2025-07-02T07:00:00Z') },
+      { weight: 82.5, impedance: 500 },
+    );
+
+    await processReading(ctx, raw, { singleUserExporters: exporters });
+
+    expect(dispatchExports).toHaveBeenCalledTimes(3);
   });
 });

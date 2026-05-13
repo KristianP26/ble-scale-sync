@@ -41,6 +41,11 @@ function expandReadings(raw: RawReading): ScaleReading[] {
   return raw.history ? [...raw.history, raw.reading] : [raw.reading];
 }
 
+/** Returns `[historic <ISO>]` when the reading is from a cache replay, else ''. */
+function historicTag(timestamp: Date | undefined): string {
+  return timestamp ? `[historic ${timestamp.toISOString()}]` : '';
+}
+
 function notifyReading(
   ctx: AppContext,
   slug: string,
@@ -117,6 +122,10 @@ async function processSingleUser(
   const profile = resolveUserProfile(user, ctx.config.scale);
   const all = expandReadings(raw);
 
+  // Historical-replay dedup runs in multi-user mode only. Single-user mode
+  // does not write last_known_weight, so there is no anchor to dedup against;
+  // cache replay re-exports every cached frame on each restart until the
+  // scale clears its own cache via the per-adapter offline ack.
   let lastSuccess = true;
 
   for (let i = 0; i < all.length; i++) {
@@ -124,7 +133,7 @@ async function processSingleUser(
     const isLast = i === all.length - 1;
     const payload = raw.adapter.computeMetrics(reading, profile);
 
-    const tag = reading.timestamp ? `[historic ${reading.timestamp.toISOString()}]` : '';
+    const tag = historicTag(reading.timestamp);
     const tagPrefix = tag ? `${tag} ` : '';
     log.info(
       `\n${tagPrefix}Measurement received: ${fmtWeight(payload.weight, ctx.weightUnit)} / ${payload.impedance} Ohm`,
@@ -139,12 +148,15 @@ async function processSingleUser(
     }
 
     if (isLast) {
+      // notifyReading uses raw scale values (pre-computeMetrics); the
+      // display should mirror what the scale measured, not the computed
+      // body composition. notifyResult below uses the computed payload.
       notifyReading(
         ctx,
         user.slug,
         user.name,
-        payload.weight,
-        payload.impedance,
+        reading.weight,
+        reading.impedance,
         exporters.map((e) => e.name),
       );
     }
@@ -210,9 +222,8 @@ async function processMultiUser(
   for (let i = 0; i < all.length; i++) {
     const reading = all[i];
     const isLast = i === all.length - 1;
-    const tag = reading.timestamp
-      ? `${prefix} [historic ${reading.timestamp.toISOString()}]`
-      : prefix;
+    const ht = historicTag(reading.timestamp);
+    const tag = ht ? `${prefix} ${ht}` : prefix;
 
     // Replay dedup: skip historical readings whose weight matches the previously-known
     // weight within tolerance (likely a re-export of an already-synced measurement).
