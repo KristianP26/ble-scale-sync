@@ -53,6 +53,11 @@ export async function buildReadingSource(
   // Poll-based loop for auto/noble BLE handlers. Watchdog is BlueZ-specific
   // (#154). Post-disconnect grace (#143) applies only to node-ble: proxy and
   // noble stacks use a different transport and don't hit the dying-peer stall.
+  //
+  // On trip: set non-zero exit code, then ask the app to abort. main()'s
+  // finally runs (stops heartbeat, closes embedded broker), then the process
+  // exits naturally with code 1 so the container/systemd unit restarts. Avoid
+  // process.exit() here so cleanup is not skipped.
   const watchdog = new ConsecutiveFailureWatchdog(
     watchdogMaxFailures,
     ({ consecutiveFailures }) => {
@@ -62,7 +67,8 @@ export async function buildReadingSource(
           `If this persists on Raspberry Pi 3/4 with the on-board Bluetooth chip, ` +
           `consider an ESP32/ESPHome BLE proxy. See https://blescalesync.dev/troubleshooting`,
       );
-      process.exit(1);
+      process.exitCode = 1;
+      ctx.abortApp(new Error(`watchdog tripped after ${consecutiveFailures} failures`));
     },
   );
 

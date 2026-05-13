@@ -53,7 +53,10 @@ export async function runContinuousLoop(deps: RuntimeLoopDeps): Promise<void> {
       try {
         touchHeartbeat();
 
-        // Start hook is idempotent for watchers (no-op if already started).
+        // Start hook is idempotent in every concrete source: ReadingWatcher
+        // (mqtt-proxy, esphome-proxy) early-returns when `this.started === true`,
+        // and PollReadingSource has no `start` at all. Calling on every iteration
+        // costs one branch and lets the loop handle late-init sources uniformly.
         await source.start?.();
 
         if (isReloadRequested()) {

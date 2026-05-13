@@ -32,6 +32,14 @@ export interface AppContext {
 
   /** Replace hot-swap fields after reloading config.yaml. */
   setConfig(next: AppConfig, resolved: ResolvedRuntimeConfig): void;
+
+  /**
+   * Request graceful shutdown of the app from a subsystem (e.g. consecutive-
+   * failure watchdog). Triggers the same path as SIGTERM: aborts the loop,
+   * runs main()'s finally for heartbeat-stop and broker cleanup. Caller
+   * should also set process.exitCode if a non-zero exit is required.
+   */
+  abortApp(reason?: unknown): void;
 }
 
 export interface AppContextInit {
@@ -40,6 +48,7 @@ export interface AppContextInit {
   configSource: ConfigSource;
   configPath: string | undefined;
   signal: AbortSignal;
+  abortApp: (reason?: unknown) => void;
 }
 
 export function createAppContext(init: AppContextInit): AppContext {
@@ -59,6 +68,8 @@ export function createAppContext(init: AppContextInit): AppContext {
     exporterCache: new Map(),
 
     embeddedBroker: null,
+
+    abortApp: init.abortApp,
 
     setConfig(next, resolved) {
       this.config = next;

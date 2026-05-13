@@ -54,6 +54,9 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           }
           rssiRediscoverUsed = true;
           bleLog.warn(`Peer ${formattedMac} RSSI stale, re-discovering before connect...`);
+          // Inner try wraps only the D-Bus rediscovery itself so its failures
+          // map to "skipped connect to dying peer". The post-rediscovery
+          // freshness check throws its own clear message outside the wrap.
           try {
             tracker.stop();
             const result = await startDiscoverySafe(btAdapter, bleAdapter);
@@ -65,11 +68,11 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
             );
             tracker = startPeerFreshnessTracker(device);
             await stopDiscoveryAndQuiesce(btAdapter);
-            if (!(await tracker.isFresh())) {
-              throw new Error(`Peer ${formattedMac} still not advertising after re-discovery`);
-            }
           } catch (rssiErr: unknown) {
             throw new Error(`Skipped connect to dying peer ${formattedMac}: ${errMsg(rssiErr)}`);
+          }
+          if (!(await tracker.isFresh())) {
+            throw new Error(`Peer ${formattedMac} still not advertising after re-discovery`);
           }
         }
 

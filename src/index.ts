@@ -75,6 +75,7 @@ const ctx = createAppContext({
   configSource: loaded.source,
   configPath: loaded.configPath,
   signal: ac.signal,
+  abortApp: (reason) => ac.abort(reason),
 });
 
 let configWatcher: ConfigWatcherHandle | null = null;

@@ -13,6 +13,12 @@ const log = createLogger('Sync');
 /**
  * Reload config.yaml in place, refresh hot-swap fields on the context, and
  * warn about restart-required edits. No-op for env-config installs.
+ *
+ * The write lock is held only across the file read + ctx.setConfig mutation
+ * (the only steps that can race with a concurrent atomicWrite from
+ * updateLastKnownWeight). Side effects (setLogLevel, setDisplayUsers, restart
+ * diff warnings) run outside the lock so a slow MQTT publish or noisy log loop
+ * cannot stall pending atomic writes.
  */
 export async function reloadAppConfig(
   ctx: AppContext,
@@ -20,45 +26,52 @@ export async function reloadAppConfig(
 ): Promise<void> {
   const configPath = ctx.configPath;
   if (ctx.configSource !== 'yaml' || !configPath) return;
-  await withWriteLock(async () => {
-    try {
+
+  let configs: { oldConfig: AppConfig; newConfig: AppConfig };
+  try {
+    configs = await withWriteLock(async () => {
       const oldConfig = ctx.config;
       const newConfig = loadYamlConfig(configPath);
       const resolved = resolveRuntimeConfig(newConfig);
       ctx.setConfig(newConfig, resolved);
-      setLogLevel(newConfig.runtime?.debug ? LogLevel.DEBUG : LogLevel.INFO);
+      return { oldConfig, newConfig };
+    });
+  } catch (err) {
+    log.error(`Config reload failed, keeping current config: ${errMsg(err)}`);
+    return;
+  }
 
-      // Re-publish display users for the ESP32 board if the user set changed.
-      const newSnapshot = userDisplaySnapshot(newConfig);
-      if (
-        ctx.bleHandler === 'mqtt-proxy' &&
-        ctx.mqttProxy &&
-        newSnapshot !== userDisplaySnapshotRef.value
-      ) {
-        setDisplayUsers(
-          newConfig.users.map((u) => ({
-            slug: u.slug,
-            name: u.name,
-            weight_range: u.weight_range,
-          })),
-        );
-        userDisplaySnapshotRef.value = newSnapshot;
-      }
+  const { oldConfig, newConfig } = configs;
 
-      // Warn about edits that need a restart to take effect.
-      const restartFields = diffRestartRequired(oldConfig, newConfig);
-      for (const f of restartFields) {
-        log.warn(
-          `Config change detected in ${f.key} (${f.oldValue} -> ${f.newValue}). ` +
-            'Restart required for this field to take effect.',
-        );
-      }
+  setLogLevel(newConfig.runtime?.debug ? LogLevel.DEBUG : LogLevel.INFO);
 
-      log.info('Config reloaded successfully');
-    } catch (err) {
-      log.error(`Config reload failed, keeping current config: ${errMsg(err)}`);
-    }
-  });
+  // Re-publish display users for the ESP32 board if the user set changed.
+  const newSnapshot = userDisplaySnapshot(newConfig);
+  if (
+    ctx.bleHandler === 'mqtt-proxy' &&
+    ctx.mqttProxy &&
+    newSnapshot !== userDisplaySnapshotRef.value
+  ) {
+    setDisplayUsers(
+      newConfig.users.map((u) => ({
+        slug: u.slug,
+        name: u.name,
+        weight_range: u.weight_range,
+      })),
+    );
+    userDisplaySnapshotRef.value = newSnapshot;
+  }
+
+  // Warn about edits that need a restart to take effect.
+  const restartFields = diffRestartRequired(oldConfig, newConfig);
+  for (const f of restartFields) {
+    log.warn(
+      `Config change detected in ${f.key} (${f.oldValue} -> ${f.newValue}). ` +
+        'Restart required for this field to take effect.',
+    );
+  }
+
+  log.info('Config reloaded successfully');
 }
 
 export function userDisplaySnapshot(config: AppConfig): string {

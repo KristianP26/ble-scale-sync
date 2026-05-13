@@ -141,6 +141,13 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
 
       // Pre-connection adapter match (by name only). Needed for preferPassive adapters
       // so we can skip the GATT connect entirely and go straight to broadcast scanning.
+      // Limitation: serviceUuids is empty pre-connect (BlueZ does not expose advertised
+      // service UUIDs through D-Bus before connection), so adapters whose `matches()`
+      // returns true only on serviceUuids are NOT detected here and will fall through
+      // to the GATT path even when `preferPassive=true`. All current passive adapters
+      // (e.g. Mi Scale 2 `MIBFS`) match by name. To support a UUID-only passive
+      // adapter, add a `passiveServiceUuids: string[]` hint to ScaleAdapter and check
+      // it here against the advertised UUIDs from BlueZ ServiceData.
       const preInfo: BleDeviceInfo = { localName: name, serviceUuids: [] };
       const preMatchedAdapter = adapters.find((a) => a.matches(preInfo));
 
@@ -233,6 +240,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       GATT_DISCOVERY_TIMEOUT_MS,
       'GATT service discovery timed out',
     );
+    // Retry budget: MAX iterations total. Iterations 1..MAX-1 actually rebuild
+    // the char map; the MAX-th iteration only logs the give-up warn and breaks,
+    // so the user-facing retry counter is `attempt/(MAX-1)`.
     for (let attempt = 1; attempt <= CHAR_DISCOVERY_MAX_RETRIES; attempt++) {
       const missing = findMissingCharacteristics(charMap, matchedAdapter);
       if (missing.length === 0) break;

@@ -18,6 +18,22 @@ import { fmtWeight } from './format.js';
 
 const log = createLogger('Sync');
 
+// Fixed log order for body-composition metrics, independent of the order in
+// which the adapter populates the payload. Matches the BodyComposition shape
+// minus `weight` and `impedance` (logged separately above).
+const BODY_COMP_LOG_KEYS: ReadonlyArray<keyof BodyComposition> = [
+  'bmi',
+  'bodyFatPercent',
+  'waterPercent',
+  'boneMass',
+  'muscleMass',
+  'visceralFat',
+  'physiqueRating',
+  'bmr',
+  'metabolicAge',
+];
+const KG_METRICS = new Set<keyof BodyComposition>(['boneMass', 'muscleMass']);
+
 function notifyReading(
   ctx: AppContext,
   slug: string,
@@ -51,10 +67,9 @@ function notifyBeep(ctx: AppContext, freq: number, duration: number, repeat: num
 function logBodyComp(payload: BodyComposition, weightUnit: WeightUnit, prefix = ''): void {
   const p = prefix ? `${prefix} ` : '';
   log.info(`${p}Body composition:`);
-  const kgMetrics = new Set(['boneMass', 'muscleMass']);
-  const { weight: _w, impedance: _i, ...metrics } = payload;
-  for (const [k, v] of Object.entries(metrics)) {
-    const display = kgMetrics.has(k) ? fmtWeight(v, weightUnit) : String(v);
+  for (const k of BODY_COMP_LOG_KEYS) {
+    const v = payload[k];
+    const display = KG_METRICS.has(k) ? fmtWeight(v, weightUnit) : String(v);
     log.info(`${p}  ${k}: ${display}`);
   }
 }
