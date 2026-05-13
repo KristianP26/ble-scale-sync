@@ -14,12 +14,7 @@ export interface ExportResultDetail {
 export interface DispatchResult {
   success: boolean;
   details: ExportResultDetail[];
-  /**
-   * Count of exporters skipped because the reading was historical and they
-   * do not implement back-dating. Omitted when zero so existing mocks of
-   * shape `{ success, details }` keep compiling. Callers read with
-   * `result.skipped ?? 0`.
-   */
+  /** Count of exporters skipped because the reading was historical and they do not back-date. */
   skipped?: number;
 }
 
@@ -72,17 +67,19 @@ export async function dispatchExports(
     );
   }
 
+  const buildResult = (success: boolean, details: ExportResultDetail[]): DispatchResult => {
+    const result: DispatchResult = { success, details };
+    if (skipped.length > 0) result.skipped = skipped.length;
+    return result;
+  };
+
   if (eligible.length === 0) {
     if (isHistorical && skipped.length > 0) {
-      log.info(
-        `Historical reading at ${context!.timestamp!.toISOString()} skipped, ` +
-          `no configured exporter supports back-dating.`,
-      );
-      return { success: true, details: [], skipped: skipped.length };
+      return buildResult(true, []);
     }
     log.warn('No exporters configured, measurement processed but not sent anywhere.');
     log.warn('  Run `npm run setup` and pick at least one export target, or edit config.yaml.');
-    return { success: true, details: [] };
+    return buildResult(true, []);
   }
 
   log.info(`Exporting to: ${eligible.map((e) => e.name).join(', ')}...`);
@@ -111,13 +108,9 @@ export async function dispatchExports(
 
   if (allFailed) {
     log.error('All exports failed.');
-    return skipped.length > 0
-      ? { success: false, details, skipped: skipped.length }
-      : { success: false, details };
+    return buildResult(false, details);
   }
 
   log.info('Done.');
-  return skipped.length > 0
-    ? { success: true, details, skipped: skipped.length }
-    : { success: true, details };
+  return buildResult(true, details);
 }

@@ -245,8 +245,8 @@ async function processMultiUser(
     if (isLast) latestPayload = payload;
 
     if (isLast) {
-      // Preserve the original behaviour: notifyReading uses RAW reading
-      // values (before computeMetrics), notifyResult uses payload values.
+      // notifyReading uses raw values (pre-computeMetrics) so the display
+      // shows what the scale measured; notifyResult uses computed payload.
       notifyReading(
         ctx,
         user.slug,
@@ -273,9 +273,9 @@ async function processMultiUser(
     }
   }
 
-  // Use the RAW latest weight for last_known_weight, matching the original
-  // pre-Phase-3 behaviour. latestPayload is only set when a non-dry export
-  // happened on the last reading, so dry-run is already excluded.
+  // last_known_weight stores the raw scale value, not the computed payload.
+  // latestPayload is set only after a non-dry export on the last reading,
+  // so dry-run is already excluded here.
   if (latestPayload && ctx.configSource === 'yaml' && ctx.configPath) {
     updateLastKnownWeight(ctx.configPath, user.slug, latest.weight, previousLastKnown);
   }

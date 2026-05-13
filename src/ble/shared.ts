@@ -231,6 +231,14 @@ async function subscribeAndInit(
 
 // ─── Shared reading logic ─────────────────────────────────────────────────────
 
+/**
+ * Defensive cap on cached historical frames buffered per GATT session. A
+ * misbehaving scale or a stuck cache replay could otherwise grow the buffer
+ * without bound on a long-lived continuous-mode process. Renpho ES-26BB-B
+ * replays less than 50 frames in practice; 500 leaves comfortable headroom.
+ */
+const MAX_HISTORY_FRAMES = 500;
+
 /** Raw scale reading paired with the adapter that produced it. */
 export interface RawReading {
   reading: ScaleReading;
@@ -271,9 +279,7 @@ export function waitForRawReading(
   return new Promise<RawReading>((resolve, reject) => {
     let resolved = false;
     const history: ScaleReading[] = [];
-
-    const finalizeHistoryShape = (): ScaleReading[] | undefined =>
-      history.length > 0 ? [...history] : undefined;
+    let historyCapWarned = false;
 
     const handleNotification = (sourceUuid: string, data: Buffer): void => {
       if (resolved) return;
@@ -290,25 +296,35 @@ export function waitForRawReading(
       if (onLiveData) onLiveData(reading);
 
       if (reading.timestamp) {
-        // Historical (cached) frame: collect, do not resolve. Sanity check
-        // completeness so partial/garbage frames are not added to history.
-        if (adapter.isComplete(reading)) {
-          history.push(reading);
-          bleLog.debug(
-            `Historical reading buffered: ${reading.weight.toFixed(2)} kg / ` +
-              `${reading.impedance} Ohm @ ${reading.timestamp.toISOString()}`,
-          );
+        if (!adapter.isComplete(reading)) return;
+        if (history.length >= MAX_HISTORY_FRAMES) {
+          if (!historyCapWarned) {
+            bleLog.warn(
+              `Cached frame buffer hit ${MAX_HISTORY_FRAMES}, dropping further historical readings ` +
+                `from ${adapter.name}. Misbehaving scale or runaway cache replay?`,
+            );
+            historyCapWarned = true;
+          }
+          return;
         }
+        history.push(reading);
+        bleLog.debug(
+          `Historical reading buffered: ${reading.weight.toFixed(2)} kg / ` +
+            `${reading.impedance} Ohm @ ${reading.timestamp.toISOString()}`,
+        );
         return;
       }
 
       if (adapter.isComplete(reading)) {
         resolved = true;
         init.cleanup();
-        // Clear any \r progress line before logging
         process.stdout.write('\r' + ' '.repeat(80) + '\r');
         bleLog.info(`Reading complete: ${reading.weight.toFixed(2)} kg / ${reading.impedance} Ohm`);
-        resolve({ reading, adapter, history: finalizeHistoryShape() });
+        resolve({
+          reading,
+          adapter,
+          history: history.length > 0 ? history.slice() : undefined,
+        });
       }
     };
 
@@ -323,7 +339,6 @@ export function waitForRawReading(
       unsubscribers,
     );
 
-    // Handle unexpected disconnect
     bleDevice.onDisconnect(() => {
       if (resolved) return;
       if (history.length > 0) {
@@ -335,7 +350,11 @@ export function waitForRawReading(
           `Disconnected after cache replay (${history.length + 1} historical reading(s)); ` +
             `no live frame.`,
         );
-        resolve({ reading: latest, adapter, history: finalizeHistoryShape() });
+        resolve({
+          reading: latest,
+          adapter,
+          history: history.length > 0 ? history.slice() : undefined,
+        });
         return;
       }
       init.cleanup();

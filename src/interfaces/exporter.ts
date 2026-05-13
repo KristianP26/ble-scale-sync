@@ -11,23 +11,13 @@ export interface ExportContext {
   userSlug?: string;
   userConfig?: UserConfig;
   driftWarning?: string;
-  /**
-   * Original measurement time when the reading came from a scale's offline
-   * cache. Exporters that set `supportsBackdate=true` MUST honour this value
-   * (write the original time instead of `now()`). Exporters without
-   * back-dating support are filtered out by the orchestrator before
-   * `export()` is called when this is set, so they do not need to handle it.
-   */
+  /** Original measurement time for historical readings replayed from a scale's offline cache. */
   timestamp?: Date;
 }
 
 export interface Exporter {
   readonly name: string;
-  /**
-   * Set to true if this exporter writes the original measurement time when
-   * `context.timestamp` is provided. Default (undefined) means historical
-   * readings are skipped for this exporter.
-   */
+  /** True when this exporter honours `context.timestamp`. Historical readings skip exporters without it. */
   readonly supportsBackdate?: boolean;
   export(data: BodyComposition, context?: ExportContext): Promise<ExportResult>;
   healthcheck?(): Promise<ExportResult>;
