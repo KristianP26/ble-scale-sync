@@ -218,4 +218,85 @@ describe('GarminExporter', () => {
     const uploadCall = mockSpawn.mock.calls[1];
     expect(uploadCall[1]).not.toContain('--token-dir');
   });
+
+  // ─── Historical (#164) ────────────────────────────────────────────────────
+
+  /**
+   * Returns a getStdinBody() closure and a factory that, each time it is
+   * called, builds a fresh MockProc with stdin capture and schedules its
+   * close event via process.nextTick. We can't pre-create the proc and reuse
+   * it across spawn calls because the nextTick fires immediately and the
+   * 'close' listener gets attached only AFTER spawn returns.
+   */
+  function makeCapturingUploadFactory(
+    stdoutData: string,
+    exitCode: number,
+  ): {
+    factory: () => MockProc;
+    getStdinBody: () => string;
+  } {
+    const chunks: Buffer[] = [];
+    const factory = (): MockProc => {
+      const proc = new EventEmitter() as MockProc;
+      const stdinStream = new Writable({
+        write(chunk, _enc, cb) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          cb();
+        },
+      });
+      const stdoutStream = new PassThrough();
+      proc.stdin = stdinStream;
+      proc.stdout = stdoutStream;
+      proc.stderr = null;
+
+      process.nextTick(() => {
+        stdoutStream.write(stdoutData);
+        stdoutStream.end();
+        proc.emit('close', exitCode);
+      });
+      return proc;
+    };
+    return { factory, getStdinBody: () => Buffer.concat(chunks).toString() };
+  }
+
+  it('declares supportsBackdate=true', async () => {
+    const { GarminExporter } = await import('../../src/exporters/garmin.js');
+    const exporter = new GarminExporter();
+    expect(exporter.supportsBackdate).toBe(true);
+  });
+
+  it('serialises context.timestamp as ISO string into the Python stdin payload', async () => {
+    const captured = makeCapturingUploadFactory(JSON.stringify({ success: true }), 0);
+
+    mockSpawn.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === '--version') return createVersionCheckProc(0);
+      return captured.factory();
+    });
+
+    const { GarminExporter } = await import('../../src/exporters/garmin.js');
+    const exporter = new GarminExporter();
+    const result = await exporter.export(samplePayload, {
+      timestamp: new Date('2025-07-01T07:15:00Z'),
+    });
+
+    expect(result.success).toBe(true);
+    const stdinBody = captured.getStdinBody();
+    expect(stdinBody).toContain('"timestamp":"2025-07-01T07:15:00.000Z"');
+  });
+
+  it('omits timestamp when context.timestamp is undefined', async () => {
+    const captured = makeCapturingUploadFactory(JSON.stringify({ success: true }), 0);
+
+    mockSpawn.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === '--version') return createVersionCheckProc(0);
+      return captured.factory();
+    });
+
+    const { GarminExporter } = await import('../../src/exporters/garmin.js');
+    const exporter = new GarminExporter();
+    await exporter.export(samplePayload);
+
+    const stdinBody = captured.getStdinBody();
+    expect(stdinBody).not.toContain('"timestamp"');
+  });
 });

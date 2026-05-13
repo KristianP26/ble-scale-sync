@@ -13,6 +13,11 @@ const CHR_WRITE = uuid16(0x2a11);
 /**
  * Adapter for the ES-CS20M BLE body-composition scale (Yunmai lineage).
  *
+ * Also covers Renpho ES-32MD, which Renpho's own manual documents as the same
+ * hardware family as ES-CS20M (same protocol, same characteristics). Some
+ * ES-32MD units advertise with a `113360_` placeholder name instead of a model
+ * string, so the matcher accepts that prefix too.
+ *
  * Protocol details:
  *   - Service 0x1A10, notify 0x2A10, write 0x2A11
  *   - Start measurement command: [0x55, 0xAA, 0x90, ...]
@@ -41,7 +46,8 @@ export class EsCs20mAdapter implements ScaleAdapter {
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
-    if (name.includes('es-cs20m')) return true;
+    if (name.includes('es-cs20m') || name.includes('es-32md')) return true;
+    if (name.startsWith('113360_')) return true;
 
     // Fallback: match by vendor service UUID (0x1A10) for unnamed devices
     const uuids = (device.serviceUuids || []).map((u) => u.toLowerCase());

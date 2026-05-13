@@ -72,6 +72,7 @@ export function toLineProtocol(
   data: BodyComposition,
   measurement: string,
   userSlug?: string,
+  timestamp?: Date,
 ): string {
   const tags = userSlug ? `,user=${userSlug}` : '';
   const fields: string[] = [];
@@ -83,11 +84,13 @@ export function toLineProtocol(
     fields.push(`${key}=${Math.round(data[key] as number)}i`);
   }
 
-  return `${measurement}${tags} ${fields.join(',')} ${Date.now()}`;
+  const tsMs = (timestamp ?? new Date()).getTime();
+  return `${measurement}${tags} ${fields.join(',')} ${tsMs}`;
 }
 
 export class InfluxDbExporter implements Exporter {
   readonly name = 'influxdb';
+  readonly supportsBackdate = true;
   private readonly config: InfluxDbConfig;
 
   constructor(config: InfluxDbConfig) {
@@ -110,7 +113,7 @@ export class InfluxDbExporter implements Exporter {
 
   async export(data: BodyComposition, context?: ExportContext): Promise<ExportResult> {
     const { url, token, org, bucket, measurement } = this.config;
-    const lineProtocol = toLineProtocol(data, measurement, context?.userSlug);
+    const lineProtocol = toLineProtocol(data, measurement, context?.userSlug, context?.timestamp);
     const writeUrl = `${url.replace(/\/+$/, '')}/api/v2/write?org=${encodeURIComponent(org)}&bucket=${encodeURIComponent(bucket)}&precision=ms`;
 
     return withRetry(

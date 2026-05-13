@@ -113,7 +113,7 @@ npm run setup    # interactive wizard: scale discovery, user profile, exporters
 CONTINUOUS_MODE=true npm start   # always-on, listens for scale indefinitely
 ```
 
-Requires Node.js v20.19+ and a BLE adapter. For always-on deployments, create a systemd service:
+Requires Node.js v22+ and a BLE adapter. For always-on deployments, create a systemd service:
 
 ::: details Example: /etc/systemd/system/ble-scale.service
 

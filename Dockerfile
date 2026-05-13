@@ -1,6 +1,6 @@
 # ── Build stage: compile TypeScript ──────────────────────────────────
 ARG BUILDPLATFORM
-FROM --platform=$BUILDPLATFORM node:20-slim AS build
+FROM --platform=$BUILDPLATFORM node:22-slim AS build
 
 WORKDIR /app
 
@@ -11,7 +11,7 @@ COPY src/ ./src/
 RUN npm run build
 
 # ── Runtime stage ────────────────────────────────────────────────────
-FROM node:20-slim
+FROM node:22-slim
 
 # OCI labels
 ARG VERSION=dev
@@ -65,7 +65,7 @@ COPY garmin-scripts/ ./garmin-scripts/
 COPY docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh
 
-# Non-root user (UID 1000 from node:20-slim)
+# Non-root user (UID 1000 from node:22-slim)
 # chown /app so the node user can create .tmp files for atomic config writes
 RUN chown node:node /app
 USER node

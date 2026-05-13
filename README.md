@@ -4,10 +4,10 @@
 ![GitHub Release](https://img.shields.io/github/v/release/KristianP26/ble-scale-sync)
 ![License: GPL-3.0](https://img.shields.io/github/license/KristianP26/ble-scale-sync?v=2)
 ![TypeScript](https://img.shields.io/badge/typescript-%3E%3D5-blue?logo=typescript&logoColor=white)
-![Node.js](https://img.shields.io/badge/node-%3E%3D20.19-brightgreen?logo=node.js&logoColor=white)
+![Node.js](https://img.shields.io/badge/node-%3E%3D22-brightgreen?logo=node.js&logoColor=white)
 ![Docker](https://img.shields.io/badge/docker-ghcr.io-blue?logo=docker&logoColor=white)
 
-A cross-platform CLI tool that reads body composition data from **20+ BLE smart scales** and exports to **Garmin Connect**, **Strava**, **MQTT** (Home Assistant), **InfluxDB**, **Webhooks**, **Ntfy**, and **local files** (CSV/JSONL). No phone app needed. Your data stays on your device.
+A cross-platform CLI tool that reads body composition data from **24+ BLE smart scales** and exports to **Garmin Connect**, **Strava**, **MQTT** (Home Assistant), **InfluxDB**, **Webhooks**, **Ntfy**, and **local files** (CSV/JSONL). No phone app needed. Your data stays on your device.
 
 **[Documentation](https://blescalesync.dev)** · **[Getting Started](https://blescalesync.dev/guide/getting-started)** · **[Supported Scales](https://blescalesync.dev/guide/supported-scales)** · **[Exporters](https://blescalesync.dev/exporters)** · **[FAQ](https://blescalesync.dev/faq)**
 
@@ -75,7 +75,7 @@ npm run setup                       # interactive wizard
 CONTINUOUS_MODE=true npm start      # always-on
 ```
 
-Requires Node.js v20.19+ and a BLE adapter. See the **[full install guide](https://blescalesync.dev/guide/getting-started)** for prerequisites and systemd service setup.
+Requires Node.js v22+ and a BLE adapter. See the **[full install guide](https://blescalesync.dev/guide/getting-started)** for prerequisites and systemd service setup.
 
 ## Features
 
@@ -83,6 +83,7 @@ Requires Node.js v20.19+ and a BLE adapter. See the **[full install guide](https
 - **[7 export targets](https://blescalesync.dev/exporters).** Garmin Connect, Strava, MQTT (Home Assistant), InfluxDB, Webhook, Ntfy, File (CSV/JSONL).
 - **[10 body metrics](https://blescalesync.dev/body-composition).** BIA-based body composition from weight + impedance.
 - **[Multi-user](https://blescalesync.dev/multi-user).** Automatic weight-based identification with per-user exporters.
+- **Historical sync.** Replays a scale's onboard cache of offline measurements with their original timestamps to exporters that support back-dating (Garmin Connect, InfluxDB, File).
 - **[Interactive setup wizard](https://blescalesync.dev/guide/configuration).** Scale discovery, exporter config, connectivity tests.
 - **[BLE diagnostic tool](https://blescalesync.dev/troubleshooting).** `npm run diagnose` for detailed BLE troubleshooting.
 - **[Home Assistant Add-on](https://blescalesync.dev/guide/home-assistant-addon).** One-click install via My Home Assistant badge, MQTT auto-discovery, UI-driven config, Garmin token bootstrap, and MFA workaround.

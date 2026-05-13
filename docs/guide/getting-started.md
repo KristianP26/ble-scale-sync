@@ -128,7 +128,7 @@ Runs natively on **Linux, macOS, and Windows**: no containers, no Supervisor req
 
 | Platform    | Requirements                                                                                           |
 | ----------- | ------------------------------------------------------------------------------------------------------ |
-| **All**     | [Node.js](https://nodejs.org/) v20.19+, BLE adapter                                                    |
+| **All**     | [Node.js](https://nodejs.org/) v22+, BLE adapter                                                       |
 | **Linux**   | `sudo apt-get install bluetooth bluez libbluetooth-dev libudev-dev build-essential`                    |
 | **macOS**   | `xcode-select --install` (Xcode CLI tools)                                                             |
 | **Windows** | [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (C++ workload) |

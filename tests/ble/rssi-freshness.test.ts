@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { isPeerFresh, startPeerFreshnessTracker } from '../../src/ble/handler-node-ble.js';
+import { isPeerFresh, startPeerFreshnessTracker } from '../../src/ble/handler-node-ble/index.js';
 import { RSSI_FRESHNESS_MS } from '../../src/ble/types.js';
 import type NodeBle from 'node-ble';
 

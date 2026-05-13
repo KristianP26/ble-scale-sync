@@ -24,7 +24,7 @@ vi.mock('node-ble', () => ({
   },
 }));
 
-const { _internals } = await import('../../src/ble/handler-node-ble.js');
+const { _internals } = await import('../../src/ble/handler-node-ble/index.js');
 
 interface MockHelper extends EventEmitter {
   prop: ReturnType<typeof vi.fn>;
@@ -115,7 +115,7 @@ describe('connectWithRecovery: RSSI freshness skip (#143 integration)', () => {
     expect(result).toBe(reDiscoveredDevice);
   });
 
-  it('throws "dying peer" error after re-discovery also yields stale RSSI (one-shot defense)', async () => {
+  it('throws "still not advertising" error after re-discovery also yields stale RSSI (one-shot defense)', async () => {
     // Both initial and re-discovered devices return 127.
     const initialDevice = makeDevice(() => 127);
     const reDiscoveredDevice = makeDevice(() => 127);
@@ -128,7 +128,7 @@ describe('connectWithRecovery: RSSI freshness skip (#143 integration)', () => {
         initialDevice: initialDevice as never,
         maxRetries: 0,
       }),
-    ).rejects.toThrow(/Skipped connect to dying peer/);
+    ).rejects.toThrow(/still not advertising after re-discovery/);
 
     // connect() never called on either device.
     expect(initialDevice.connect).not.toHaveBeenCalled();

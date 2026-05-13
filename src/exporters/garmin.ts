@@ -47,8 +47,15 @@ function expandTilde(path: string): string {
 /** @internal Exported for testing only. */
 export { expandTilde as _expandTilde };
 
+/**
+ * Wire payload handed to the Python uploader: live readings carry the metrics
+ * only, historical replay (#164) adds an ISO 8601 `timestamp` field that
+ * `garmin_upload.py` forwards as `add_body_composition(timestamp=...)`.
+ */
+type GarminUploadPayload = BodyComposition & { timestamp?: string };
+
 function uploadToGarmin(
-  payload: BodyComposition,
+  payload: GarminUploadPayload,
   pythonCmd: string,
   tokenDir?: string,
 ): Promise<ExportResult> {
@@ -144,18 +151,22 @@ export const garminSchema: ExporterSchema = {
 
 export class GarminExporter implements Exporter {
   readonly name = 'garmin';
+  readonly supportsBackdate = true;
   private readonly entryConfig: GarminEntryConfig;
 
   constructor(config?: GarminEntryConfig) {
     this.entryConfig = config ?? {};
   }
 
-  async export(data: BodyComposition, _context?: ExportContext): Promise<ExportResult> {
+  async export(data: BodyComposition, context?: ExportContext): Promise<ExportResult> {
     const pythonCmd = await findPython();
+    const payload: GarminUploadPayload = context?.timestamp
+      ? { ...data, timestamp: context.timestamp.toISOString() }
+      : data;
 
     return withRetry(
       async () => {
-        const result = await uploadToGarmin(data, pythonCmd, this.entryConfig.token_dir);
+        const result = await uploadToGarmin(payload, pythonCmd, this.entryConfig.token_dir);
         if (result.success) log.info('Garmin upload succeeded.');
         return result;
       },

@@ -47,6 +47,23 @@ describe('EsCs20mAdapter', () => {
       const adapter = makeAdapter();
       expect(adapter.matches(mockPeripheral('', ['ffe0']))).toBe(false);
     });
+
+    it('matches Renpho ES-32MD (same HW family)', () => {
+      const adapter = makeAdapter();
+      expect(adapter.matches(mockPeripheral('es-32md'))).toBe(true);
+      expect(adapter.matches(mockPeripheral('ES-32MD'))).toBe(true);
+      expect(adapter.matches(mockPeripheral('My ES-32MD Scale'))).toBe(true);
+    });
+
+    it('matches "113360_" placeholder name (ES-32MD firmware)', () => {
+      const adapter = makeAdapter();
+      expect(adapter.matches(mockPeripheral('113360_ABCDEF'))).toBe(true);
+    });
+
+    it('does not match bare "113360" without underscore', () => {
+      const adapter = makeAdapter();
+      expect(adapter.matches(mockPeripheral('113360'))).toBe(false);
+    });
   });
 
   describe('parseNotification()', () => {

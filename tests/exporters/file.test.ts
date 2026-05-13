@@ -207,4 +207,39 @@ describe('FileExporter', () => {
       expect(result.error).toContain('ENOENT');
     });
   });
+
+  // ─── Back-date support ────────────────────────────────────────────────────
+
+  describe('back-date', () => {
+    // The 'error handling' describe above sets mockImplementation(() => throw)
+    // on appendFileSync. vi.clearAllMocks() resets call history but NOT
+    // implementations, so we have to re-mock appendFileSync as a no-op here.
+    beforeEach(() => {
+      vi.mocked(fs.appendFileSync).mockImplementation(() => undefined);
+    });
+
+    it('declares supportsBackdate=true', () => {
+      const exporter = new FileExporter(csvConfig);
+      expect(exporter.supportsBackdate).toBe(true);
+    });
+
+    it('writes context.timestamp as ISO string in CSV row', async () => {
+      const exporter = new FileExporter(csvConfig);
+      const ts = new Date('2025-07-01T07:15:00Z');
+      await exporter.export(samplePayload, { timestamp: ts });
+      const dataCall = vi.mocked(fs.appendFileSync).mock.calls[1];
+      const row = dataCall[1] as string;
+      expect(row).toContain('2025-07-01T07:15:00.000Z');
+    });
+
+    it('writes context.timestamp in JSONL entry', async () => {
+      const exporter = new FileExporter(jsonlConfig);
+      const ts = new Date('2025-07-01T07:15:00Z');
+      await exporter.export(samplePayload, { timestamp: ts });
+      const entry = JSON.parse(vi.mocked(fs.appendFileSync).mock.calls[0][1] as string) as {
+        timestamp: string;
+      };
+      expect(entry.timestamp).toBe('2025-07-01T07:15:00.000Z');
+    });
+  });
 });

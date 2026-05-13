@@ -5,7 +5,7 @@ import {
   findMissingCharacteristics,
 } from '../../src/ble/shared.js';
 import type { BleChar, BleDevice } from '../../src/ble/shared.js';
-import { normalizeUuid } from '../../src/ble/types.js';
+import { normalizeUuid, bleLog } from '../../src/ble/types.js';
 import type {
   ScaleAdapter,
   ScaleReading,
@@ -676,6 +676,173 @@ describe('waitForRawReading()', () => {
     const result = await promise;
     expect(result.reading).toEqual({ weight: 75, impedance: 500 });
     expect(onLiveData).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ─── waitForRawReading history collection ───────────────────────────────────
+
+describe('waitForRawReading() history collection', () => {
+  it('routes timestamped readings into history and resolves on the live one', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const t1 = new Date(Date.now() - 7200_000);
+    const t2 = new Date(Date.now() - 3600_000);
+    const adapter = createLegacyAdapter({
+      parseNotification: vi
+        .fn()
+        .mockReturnValueOnce({ weight: 80, impedance: 480, timestamp: t1 })
+        .mockReturnValueOnce({ weight: 81, impedance: 490, timestamp: t2 })
+        .mockReturnValueOnce({ weight: 82, impedance: 500 }),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    notifyChar.triggerData(Buffer.from([0x01]));
+    notifyChar.triggerData(Buffer.from([0x02]));
+    notifyChar.triggerData(Buffer.from([0x03]));
+
+    const result = await promise;
+    expect(result.reading.weight).toBe(82);
+    expect(result.reading.timestamp).toBeUndefined();
+    expect(result.history).toHaveLength(2);
+    expect(result.history![0].weight).toBe(80);
+    expect(result.history![0].timestamp).toBe(t1);
+    expect(result.history![1].weight).toBe(81);
+    expect(result.history![1].timestamp).toBe(t2);
+  });
+
+  it('resolves with last historical as reading on disconnect when no live arrived', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const t1 = new Date(Date.now() - 7200_000);
+    const t2 = new Date(Date.now() - 3600_000);
+    const adapter = createLegacyAdapter({
+      parseNotification: vi
+        .fn()
+        .mockReturnValueOnce({ weight: 70, impedance: 480, timestamp: t1 })
+        .mockReturnValueOnce({ weight: 71, impedance: 490, timestamp: t2 }),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    notifyChar.triggerData(Buffer.from([0x01]));
+    notifyChar.triggerData(Buffer.from([0x02]));
+    device.triggerDisconnect();
+
+    const result = await promise;
+    expect(result.reading.weight).toBe(71);
+    expect(result.reading.timestamp).toBe(t2);
+    expect(result.history).toHaveLength(1);
+    expect(result.history![0].weight).toBe(70);
+  });
+
+  it('rejects on disconnect when no readings at all arrived', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const adapter = createLegacyAdapter({
+      parseNotification: vi.fn(() => null),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    device.triggerDisconnect();
+
+    await expect(promise).rejects.toThrow('Scale disconnected before reading completed');
+  });
+
+  it('skips an incomplete timestamped reading (does not push to history)', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const adapter = createLegacyAdapter({
+      parseNotification: vi
+        .fn()
+        .mockReturnValueOnce({ weight: 70, impedance: 0, timestamp: new Date() })
+        .mockReturnValueOnce({ weight: 82, impedance: 500 }),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    notifyChar.triggerData(Buffer.from([0x01]));
+    notifyChar.triggerData(Buffer.from([0x02]));
+
+    const result = await promise;
+    expect(result.reading.weight).toBe(82);
+    expect(result.history).toBeUndefined();
+  });
+
+  it('caps history at MAX_HISTORY_FRAMES and warns once when full', async () => {
+    // Spy on bleLog.warn directly rather than console.warn: the assertion
+    // stays valid even if the logger's output format or sink (timestamps,
+    // structured output) changes.
+    const warnSpy = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const t0 = Date.now() - 1_000_000;
+    const readings: ScaleReading[] = [
+      ...Array.from({ length: 501 }, (_, i) => ({
+        weight: 80 + i * 0.001,
+        impedance: 480,
+        timestamp: new Date(t0 + i * 1000),
+      })),
+      { weight: 82, impedance: 500 },
+    ];
+    const parse = vi.fn<(data: Buffer) => ScaleReading | null>();
+    readings.forEach((r) => parse.mockReturnValueOnce(r));
+
+    const adapter = createLegacyAdapter({ parseNotification: parse });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    for (let i = 0; i < readings.length; i++) {
+      notifyChar.triggerData(Buffer.from([i & 0xff]));
+    }
+
+    const result = await promise;
+    expect(result.reading.weight).toBe(82);
+    expect(result.history).toHaveLength(500);
+
+    const capWarnCalls = warnSpy.mock.calls.filter((args) =>
+      String(args[0] ?? '').includes('Cached frame buffer hit 500'),
+    );
+    expect(capWarnCalls).toHaveLength(1);
+
+    warnSpy.mockRestore();
   });
 });
 

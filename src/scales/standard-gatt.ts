@@ -28,6 +28,8 @@ const EXCLUDED = [
   'mi scale',
   'es-26bb',
   'es-cs20m',
+  'es-32md',
+  '113360_',
   'mengii',
   'yunchen',
   'vscale',

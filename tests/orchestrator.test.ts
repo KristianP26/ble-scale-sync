@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { runHealthchecks, dispatchExports } from '../src/orchestrator.js';
-import type { Exporter, ExportResult } from '../src/interfaces/exporter.js';
+import type { Exporter, ExportContext, ExportResult } from '../src/interfaces/exporter.js';
 import type { BodyComposition } from '../src/interfaces/scale-adapter.js';
 
 const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -211,5 +211,73 @@ describe('dispatchExports()', () => {
     const result = await dispatchExports([], SAMPLE_PAYLOAD);
     expect(result.success).toBe(true);
     expect(result.details).toEqual([]);
+  });
+});
+
+// ─── dispatchExports: historical reading + supportsBackdate ─────────────────
+
+describe('dispatchExports() historical reading filter', () => {
+  const HIST_CTX: ExportContext = {
+    userName: 'Dad',
+    userSlug: 'dad',
+    timestamp: new Date('2025-07-01T07:15:00Z'),
+  };
+
+  it('skips exporters without supportsBackdate on historical reading', async () => {
+    const garmin: Exporter = {
+      name: 'garmin',
+      supportsBackdate: true,
+      export: vi.fn(async () => ({ success: true })),
+    };
+    const mqtt: Exporter = {
+      name: 'mqtt',
+      export: vi.fn(async () => ({ success: true })),
+    };
+
+    const result = await dispatchExports([garmin, mqtt], SAMPLE_PAYLOAD, HIST_CTX);
+
+    expect(garmin.export).toHaveBeenCalledOnce();
+    expect(mqtt.export).not.toHaveBeenCalled();
+    expect(result.success).toBe(true);
+    expect(result.details).toEqual([{ name: 'garmin', ok: true }]);
+    expect(result.skipped).toBe(1);
+  });
+
+  it('dispatches to all exporters on live reading regardless of supportsBackdate', async () => {
+    const garmin: Exporter = {
+      name: 'garmin',
+      supportsBackdate: true,
+      export: vi.fn(async () => ({ success: true })),
+    };
+    const mqtt: Exporter = {
+      name: 'mqtt',
+      export: vi.fn(async () => ({ success: true })),
+    };
+
+    const liveCtx: ExportContext = { userName: 'Dad', userSlug: 'dad' };
+    const result = await dispatchExports([garmin, mqtt], SAMPLE_PAYLOAD, liveCtx);
+
+    expect(garmin.export).toHaveBeenCalledOnce();
+    expect(mqtt.export).toHaveBeenCalledOnce();
+    expect(result.skipped).toBeUndefined();
+  });
+
+  it('returns success true with empty details when all exporters skip on historical', async () => {
+    const mqtt: Exporter = {
+      name: 'mqtt',
+      export: vi.fn(async () => ({ success: true })),
+    };
+    const ntfy: Exporter = {
+      name: 'ntfy',
+      export: vi.fn(async () => ({ success: true })),
+    };
+
+    const result = await dispatchExports([mqtt, ntfy], SAMPLE_PAYLOAD, HIST_CTX);
+
+    expect(mqtt.export).not.toHaveBeenCalled();
+    expect(ntfy.export).not.toHaveBeenCalled();
+    expect(result.success).toBe(true);
+    expect(result.details).toEqual([]);
+    expect(result.skipped).toBe(2);
   });
 });

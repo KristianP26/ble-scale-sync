@@ -11,10 +11,14 @@ export interface ExportContext {
   userSlug?: string;
   userConfig?: UserConfig;
   driftWarning?: string;
+  /** Original measurement time for historical readings replayed from a scale's offline cache. */
+  timestamp?: Date;
 }
 
 export interface Exporter {
   readonly name: string;
+  /** True when this exporter honours `context.timestamp`. Historical readings skip exporters without it. */
+  readonly supportsBackdate?: boolean;
   export(data: BodyComposition, context?: ExportContext): Promise<ExportResult>;
   healthcheck?(): Promise<ExportResult>;
 }
