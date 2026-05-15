@@ -2,7 +2,8 @@
 
 ## Adding a headless board (no display) — ~5 minutes
 
-1. Copy `firmware/board_esp32_s3.py` to `firmware/board_<name>.py`
+1. Copy `firmware/board_esp32_s3.py` (or `board_esp_wroom_32.py` for a stock
+   ESP32 with software-shared BLE/WiFi radio) to `firmware/board_<name>.py`
 2. Edit constants: BOARD_NAME, radio coexistence, scan timing, GC, beep
 3. Add dispatch entry in `firmware/board.py`
 4. Add flash config in `firmware/flash.sh` (chip, firmware URL, baud, offset)
