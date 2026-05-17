@@ -21,4 +21,14 @@ describe('esphomeUuidToString', () => {
       normalizeUuid('2a9d'),
     );
   });
+
+  it('hex-decodes a single numeric 16-bit UUID (not decimal stringify)', () => {
+    // 0x181d -> must be the Weight Scale service, not normalizeUuid("6157")
+    expect(esphomeUuidToString([0x181d])).toBe(normalizeUuid('181d'));
+  });
+
+  it('hex-decodes a single bigint 128-bit UUID', () => {
+    const full = 0x00002a9d00001000800000805f9b34fbn;
+    expect(esphomeUuidToString([full])).toBe(normalizeUuid('2a9d'));
+  });
 });
