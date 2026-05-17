@@ -85,6 +85,18 @@ describe('MiScale2Adapter', () => {
       const p = mockPeripheral('Yunmai ISM', []);
       expect(adapter.matches(p)).toBe(false);
     });
+
+    it('does not match a Beurer BF720/BF105 even with BCS 0x181B present (#168)', () => {
+      const adapter = makeAdapter();
+      const byCid = {
+        localName: '',
+        serviceUuids: ['0000181b00001000800000805f9b34fb'],
+        manufacturerData: { id: 0x0611, data: Buffer.alloc(0) },
+      };
+      expect(adapter.matches(byCid)).toBe(false);
+      const byName = mockPeripheral('BF720', ['0000181b00001000800000805f9b34fb']);
+      expect(adapter.matches(byName)).toBe(false);
+    });
   });
 
   describe('parseNotification()', () => {

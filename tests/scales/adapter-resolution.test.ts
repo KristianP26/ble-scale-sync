@@ -28,4 +28,17 @@ describe('adapter resolution (#177 0xFFF0 collision)', () => {
     const matched = adapters.find((a) => a.matches(info));
     expect(matched?.name).toBe('Inlife');
   });
+
+  // #168: BF720 exposes Body Composition 0x181B post-connect (shared with Mi
+  // Scale 2) and advertises Beurer company id 0x0611. It must resolve to the
+  // Beurer adapter, not "Xiaomi Mi Scale 2".
+  it('resolves a BF720 (Beurer cid 0x0611 + 0x181B) to the Beurer adapter', () => {
+    const info: BleDeviceInfo = {
+      localName: 'BF720',
+      serviceUuids: [uuid16(0x181d), uuid16(0x181b)],
+      manufacturerData: { id: 0x0611, data: Buffer.alloc(0) },
+    };
+    const matched = adapters.find((a) => a.matches(info));
+    expect(matched?.name).toBe('Beurer BF720/BF105');
+  });
 });

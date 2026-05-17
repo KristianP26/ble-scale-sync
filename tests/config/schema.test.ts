@@ -157,6 +157,22 @@ describe('UserSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('accepts an optional beurer_pin and coerces a string (env ref) (#168)', () => {
+    const numeric = UserSchema.safeParse({ ...VALID_USER, beurer_pin: 3752 });
+    expect(numeric.success).toBe(true);
+    const fromEnv = UserSchema.safeParse({ ...VALID_USER, beurer_pin: '3752' });
+    expect(fromEnv.success && fromEnv.data.beurer_pin).toBe(3752);
+  });
+
+  it('leaves beurer_pin undefined when absent (no coerce to 0) (#168)', () => {
+    const result = UserSchema.safeParse(VALID_USER);
+    expect(result.success && result.data.beurer_pin).toBeUndefined();
+  });
+
+  it('rejects an out-of-range beurer_pin (#168)', () => {
+    expect(UserSchema.safeParse({ ...VALID_USER, beurer_pin: 99999 }).success).toBe(false);
+  });
+
   it('rejects invalid slug (uppercase)', () => {
     const result = UserSchema.safeParse({ ...VALID_USER, slug: 'Dad' });
     expect(result.success).toBe(false);
