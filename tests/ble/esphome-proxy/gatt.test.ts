@@ -67,6 +67,18 @@ describe('openGattSession', () => {
     expect(conn.disconnectBluetoothDeviceService).toHaveBeenCalledWith(ADDR);
   });
 
+  it('writes the full payload in a single call (no MTU chunking)', async () => {
+    const conn = fakeConnection();
+    const session = await openGattSession({ connection: conn } as never, '00:00:00:00:00:01');
+    const char = session.charMap.get(normalizeUuid('2a9d'))!;
+    const payload = Buffer.alloc(25, 0xab); // > mtu(23) - 3 = 20
+    await char.write(payload, true);
+    expect(conn.writeBluetoothGATTCharacteristicService).toHaveBeenCalledTimes(1);
+    const call = conn.writeBluetoothGATTCharacteristicService.mock.calls[0];
+    expect(Buffer.from(call[2] as Uint8Array)).toEqual(payload);
+    await session.close();
+  });
+
   it('routes notify-data for the right handle to the subscriber', async () => {
     const conn = fakeConnection();
     const session = await openGattSession({ connection: conn } as never, '00:00:00:00:00:01');

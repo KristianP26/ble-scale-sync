@@ -38,8 +38,6 @@ export async function openGattSession(client: EsphomeClient, mac: string): Promi
   if (!connResp || connResp.connected !== true) {
     throw new Error(`ESPHome proxy could not connect to ${mac}`);
   }
-  const mtu = typeof connResp.mtu === 'number' && connResp.mtu > 3 ? connResp.mtu : undefined;
-
   const services = (await conn.listBluetoothGATTServicesService(
     addr,
   )) as EsphomeGattServicesResponse;
@@ -71,18 +69,9 @@ export async function openGattSession(client: EsphomeClient, mac: string): Promi
         },
         async write(data: Buffer, withResponse: boolean): Promise<void> {
           if (closed) return;
-          const chunk = mtu ? mtu - 3 : data.length;
-          if (data.length > chunk) {
-            for (let off = 0; off < data.length; off += chunk) {
-              await conn.writeBluetoothGATTCharacteristicService(
-                addr,
-                handle,
-                Uint8Array.from(data.subarray(off, off + chunk)),
-                withResponse,
-              );
-            }
-            return;
-          }
+          // One atomic characteristic write, matching the native node-ble
+          // handler. ESPHome's bluetooth_proxy handles ATT-level fragmentation;
+          // splitting here would send N distinct values, not a long write.
           await conn.writeBluetoothGATTCharacteristicService(
             addr,
             handle,
