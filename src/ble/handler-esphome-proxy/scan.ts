@@ -7,13 +7,6 @@ import type { EsphomeProxyConfig } from '../../config/schema.js';
 import type { ScanOptions, ScanResult } from '../types.js';
 import { type RawReading, waitForRawReading } from '../shared.js';
 import { bleLog, errMsg, withTimeout, IMPEDANCE_GRACE_MS } from '../types.js';
-import {
-  createEsphomeClient,
-  waitForConnected,
-  safeDisconnect,
-  type EsphomeBleAdvertisement,
-} from './client.js';
-import { toBleDeviceInfo, formatMacAddress } from './advert.js';
 import { EsphomeProxyPool } from './pool.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -236,63 +229,25 @@ export async function scanDevices(
   durationMs: number | undefined,
   config: EsphomeProxyConfig,
 ): Promise<ScanResult[]> {
-  const client = await createEsphomeClient(config);
   const duration = durationMs ?? SCAN_DEFAULT_MS;
+  const pool = new EsphomeProxyPool(config);
   const results = new Map<string, ScanResult>();
-  const hostPort = `${config.host}:${config.port}`;
 
   try {
-    await waitForConnected(client, hostPort);
-    bleLog.info(`ESPHome proxy connected at ${hostPort}`);
-
-    await new Promise<void>((resolve, reject) => {
-      let settled = false;
-      let timer: NodeJS.Timeout | null = null;
-      const cleanup = () => {
-        if (timer) {
-          clearTimeout(timer);
-          timer = null;
-        }
-        client.removeListener('ble', onAd as (...args: unknown[]) => void);
-        client.removeListener('error', onError as (...args: unknown[]) => void);
-        client.removeListener('disconnected', onDisconnect as (...args: unknown[]) => void);
-      };
-      const onAd = (ad: EsphomeBleAdvertisement): void => {
-        const address = formatMacAddress(ad.address);
-        if (results.has(address)) return;
-        const info = toBleDeviceInfo(ad);
-        const adapter = adapters.find((a) => a.matches(info));
-        results.set(address, {
-          address,
-          name: ad.name || '',
-          matchedAdapter: adapter?.name,
-        });
-      };
-      const onError = (err: unknown): void => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(err instanceof Error ? err : new Error(errMsg(err)));
-      };
-      const onDisconnect = (): void => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(new Error('ESPHome proxy disconnected during scan'));
-      };
-      client.on('ble', onAd);
-      client.on('error', onError);
-      client.on('disconnected', onDisconnect);
-      timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve();
-      }, duration);
+    await pool.start();
+    const unsub = pool.onAdvertisement((info, address) => {
+      if (results.has(address)) return;
+      const adapter = adapters.find((a) => a.matches(info));
+      results.set(address, {
+        address,
+        name: info.localName || '',
+        matchedAdapter: adapter?.name,
+      });
     });
-
+    await new Promise<void>((resolve) => setTimeout(resolve, duration));
+    unsub();
     return [...results.values()];
   } finally {
-    await safeDisconnect(client);
+    await pool.stop();
   }
 }

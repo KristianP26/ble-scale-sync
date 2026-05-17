@@ -20,10 +20,13 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
     private subs: Array<(info: BleDeviceInfo, mac: string) => void> = [];
     constructor(_cfg: unknown) {}
     async start(): Promise<void> {
-      // Deliver the advert once a subscriber is attached.
+      // Deliver the advert (twice, same MAC) once a subscriber is attached:
+      // exercises the GATT in-flight guard and scanDevices dedup.
       setImmediate(() => {
-        for (const cb of this.subs)
+        for (const cb of this.subs) {
           cb({ localName: 'GATT-scale', serviceUuids: [] }, 'AA:BB:CC:DD:EE:01');
+          cb({ localName: 'GATT-scale', serviceUuids: [] }, 'AA:BB:CC:DD:EE:01');
+        }
       });
     }
     async stop(): Promise<void> {}
@@ -68,7 +71,7 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
   return { EsphomeProxyPool: FakeEsphomeProxyPool };
 });
 
-import { scanAndReadRaw } from '../../../src/ble/handler-esphome-proxy/scan.js';
+import { scanAndReadRaw, scanDevices } from '../../../src/ble/handler-esphome-proxy/scan.js';
 
 const profile: UserProfile = { height: 175, age: 30, gender: 'male', isAthlete: false };
 
@@ -98,5 +101,19 @@ describe('scanAndReadRaw GATT single-shot (#116)', () => {
     expect(result.reading.weight).toBe(75);
     expect(result.adapter.name).toBe('GattMock');
     expect(closeSpy).toHaveBeenCalled();
+  });
+});
+
+describe('scanDevices via pool (#116)', () => {
+  it('dedups repeated advertisements and records the matched adapter', async () => {
+    const results = await scanDevices([gattAdapter()], 30, {
+      host: 'p1',
+      port: 6053,
+      client_info: 'x',
+      additional_proxies: [],
+    } as never);
+    expect(results).toHaveLength(1);
+    expect(results[0].address).toBe('AA:BB:CC:DD:EE:01');
+    expect(results[0].matchedAdapter).toBe('GattMock');
   });
 });
