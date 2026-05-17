@@ -110,6 +110,8 @@ Requires Node.js v22+ and a BLE adapter. See the **[full install guide](https://
 <td align="center"><a href="https://github.com/APIUM"><img src="https://avatars.githubusercontent.com/u/9067013?v=4" width="60" height="60" alt="APIUM"><br><sub>APIUM</sub></a></td>
 <td align="center"><a href="https://github.com/marcelorodrigo"><img src="https://avatars.githubusercontent.com/u/443962?v=4" width="60" height="60" alt="marcelorodrigo"><br><sub>marcelorodrigo</sub></a></td>
 <td align="center"><a href="https://github.com/fromport"><img src="https://avatars.githubusercontent.com/u/5751308?v=4" width="60" height="60" alt="fromport"><br><sub>fromport</sub></a></td>
+<td align="center"><a href="https://github.com/boildead"><img src="https://avatars.githubusercontent.com/u/17303016?v=4" width="60" height="60" alt="boildead"><br><sub>boildead</sub></a></td>
+<td align="center"><a href="https://github.com/alexw23"><img src="https://avatars.githubusercontent.com/u/1505496?v=4" width="60" height="60" alt="alexw23"><br><sub>alexw23</sub></a></td>
 </tr></table>
 
 ## Contributing
