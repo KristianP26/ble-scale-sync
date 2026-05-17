@@ -3,6 +3,7 @@ import { QnScaleAdapter } from './qn-scale.js';
 import { RenphoScaleAdapter } from './renpho.js';
 import { RenphoEs26bbAdapter } from './renpho-es26bb.js';
 import { MiScale2Adapter } from './mi-scale-2.js';
+import { BeurerBf720Adapter } from './beurer-bf720.js';
 import { YunmaiScaleAdapter } from './yunmai.js';
 import { BeurerSanitasScaleAdapter } from './beurer-sanitas.js';
 import { SanitasSbf72Adapter } from './sanitas-sbf72.js';
@@ -35,6 +36,10 @@ export const adapters: ScaleAdapter[] = [
   new QnScaleAdapter(),
   new RenphoScaleAdapter(),
   new RenphoEs26bbAdapter(),
+  // Beurer SIG scales (BF720/BF105) advertise/expose Body Composition 0x181B
+  // and would otherwise be grabbed by the Mi Scale 2 adapter, so match them
+  // first (by BF720/BF105 name or Beurer company id 0x0611).
+  new BeurerBf720Adapter(),
   new MiScale2Adapter(),
   new YunmaiScaleAdapter(),
   new BeurerSanitasScaleAdapter(),
