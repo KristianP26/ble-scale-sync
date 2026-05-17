@@ -10,10 +10,10 @@ import { uuid16, buildPayload, xorChecksum, type ScaleBodyComp } from './body-co
 
 // ─── OneByoneAdapter (Eufy C1/P1, Health Scale) ─────────────────────────────
 
-const ONEBYONE_NAMES = ['t9146', 't9147', 'health scale'];
+const ONEBYONE_NAMES = ['t9146', 't9147', 't9120', 'health scale'];
 
 /**
- * Adapter for Eufy C1/P1 and "Health Scale" branded 1byone devices.
+ * Adapter for Eufy C1/P1/A1 and "Health Scale" branded 1byone devices.
  *
  * Protocol: service 0xFFF0, notify 0xFFF4, write 0xFFF1.
  * Unlock via clock-sync frame: [0xF1, yearHi, yearLo, month, day, hour, min, sec].

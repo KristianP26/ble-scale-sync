@@ -15,7 +15,7 @@ describe('OneByoneAdapter', () => {
   }
 
   describe('matches()', () => {
-    it.each(['t9146', 't9147', 'health scale'])('matches "%s"', (name) => {
+    it.each(['t9146', 't9147', 't9120', 'health scale'])('matches "%s"', (name) => {
       const adapter = makeAdapter();
       expect(adapter.matches(mockPeripheral(name))).toBe(true);
     });

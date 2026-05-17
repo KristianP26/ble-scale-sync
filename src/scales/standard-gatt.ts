@@ -36,6 +36,7 @@ const EXCLUDED = [
   'electronic scale',
   '1byone scale',
   'health scale',
+  't9120',
   't9146',
   't9147',
   'ae bs-06',
