@@ -1,88 +1,73 @@
-import type { ScaleAdapter, ScaleReading } from '../../interfaces/scale-adapter.js';
+import type {
+  ScaleAdapter,
+  ScaleReading,
+  BleDeviceInfo,
+  UserProfile,
+  ScaleAuth,
+} from '../../interfaces/scale-adapter.js';
 import type { EsphomeProxyConfig } from '../../config/schema.js';
-import type { RawReading } from '../shared.js';
+import { type RawReading, waitForRawReading } from '../shared.js';
 import { bleLog, errMsg, IMPEDANCE_GRACE_MS } from '../types.js';
 import { AsyncQueue } from '../async-queue.js';
-import {
-  createEsphomeClient,
-  waitForConnected,
-  safeDisconnect,
-  type EsphomeClient,
-  type EsphomeBleAdvertisement,
-} from './client.js';
-import { toBleDeviceInfo, formatMacAddress } from './advert.js';
+import { EsphomeProxyPool } from './pool.js';
 import { logTransportCapabilities } from './scan.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const DEDUP_WINDOW_MS = 30_000;
-// Cap for the "already warned about this GATT scale" tracker used in continuous
-// mode. Old entries are evicted LRU-style so dedup persists long-term instead of
-// flapping every 256 warnings.
+// Cap for the "already warned about this scale's GATT failure" tracker. Old
+// entries are evicted LRU-style so dedup persists long-term in continuous mode.
 const GATT_WARN_LRU_MAX = 256;
 
 // ─── ReadingWatcher (continuous mode) ────────────────────────────────────────
 
 /**
- * Persistent event-driven advertisement watcher for continuous mode, matching
- * the shape of the mqtt-proxy `ReadingWatcher`. Phase 1 handles broadcast
- * scales only; GATT-only adapters are logged and skipped.
+ * Persistent event-driven watcher for continuous mode over an ESPHome proxy
+ * pool. Broadcast scales parse from advertisements; GATT scales are connected
+ * on demand through the proxy that last saw them and read via the shared
+ * waitForRawReading() seam, then disconnected immediately so no proxy slot is
+ * held between weigh-ins.
  */
 export class ReadingWatcher {
   private queue = new AsyncQueue<RawReading>();
   private started = false;
   private adapters: ScaleAdapter[];
   private targetMac?: string;
+  private profile?: UserProfile;
+  private scaleAuth?: ScaleAuth;
   private config: EsphomeProxyConfig;
   private dedup = new Map<string, number>();
-  private client: EsphomeClient | null = null;
-  private lifecycleHandlers: Array<{
-    event: string;
-    handler: (...args: unknown[]) => void;
-  }> = [];
-  private onAdHandler: ((ad: EsphomeBleAdvertisement) => void) | null = null;
-  // LRU map (insertion-ordered): tracks which GATT-only scales we've already
-  // warned about. Once the map hits GATT_WARN_LRU_MAX we evict the oldest entry
-  // so dedup survives long-running continuous mode without a periodic flush.
+  private pool: EsphomeProxyPool | null = null;
+  private unsub: (() => void) | null = null;
+  private gattInFlight = new Set<string>();
+  // LRU map (insertion-ordered): scales whose on-demand GATT connect failed,
+  // so we warn once instead of on every advertisement.
   private gattWarnedFor = new Map<string, true>();
   private graceTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private graceReadings = new Map<string, RawReading>();
 
-  constructor(config: EsphomeProxyConfig, adapters: ScaleAdapter[], targetMac?: string) {
+  constructor(
+    config: EsphomeProxyConfig,
+    adapters: ScaleAdapter[],
+    targetMac?: string,
+    profile?: UserProfile,
+    scaleAuth?: ScaleAuth,
+  ) {
     this.config = config;
     this.adapters = adapters;
     this.targetMac = targetMac?.toLowerCase();
+    this.profile = profile;
+    this.scaleAuth = scaleAuth;
   }
 
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
     try {
-      this.client = await createEsphomeClient(this.config);
-      const hostPort = `${this.config.host}:${this.config.port}`;
-
-      const onReconnect = (): void => bleLog.info('ESPHome proxy reconnecting...');
-      const onDisconnect = (): void => bleLog.warn('ESPHome proxy disconnected');
-      const onConnect = (): void => bleLog.info('ESPHome proxy connected');
-      const onError = (err: unknown): void => bleLog.warn(`ESPHome proxy error: ${errMsg(err)}`);
-
-      this.client.on('connected', onConnect);
-      this.client.on('disconnected', onDisconnect);
-      this.client.on('reconnect', onReconnect);
-      this.client.on('error', onError);
-      this.lifecycleHandlers = [
-        { event: 'connected', handler: onConnect as (...args: unknown[]) => void },
-        { event: 'disconnected', handler: onDisconnect as (...args: unknown[]) => void },
-        { event: 'reconnect', handler: onReconnect as (...args: unknown[]) => void },
-        { event: 'error', handler: onError as (...args: unknown[]) => void },
-      ];
-
-      await waitForConnected(this.client, hostPort);
+      this.pool = new EsphomeProxyPool(this.config);
+      await this.pool.start();
       logTransportCapabilities(this.adapters);
-
-      this.onAdHandler = (ad) => this.handleAd(ad);
-      this.client.on('ble', this.onAdHandler);
-
+      this.unsub = this.pool.onAdvertisement((info, mac) => this.handleAd(info, mac));
       bleLog.info('ESPHome ReadingWatcher started, listening for advertisements');
     } catch (err) {
       this.started = false;
@@ -102,16 +87,22 @@ export class ReadingWatcher {
     return this.queue.shift(signal);
   }
 
-  updateConfig(adapters: ScaleAdapter[], targetMac?: string): void {
+  updateConfig(
+    adapters: ScaleAdapter[],
+    targetMac?: string,
+    profile?: UserProfile,
+    scaleAuth?: ScaleAuth,
+  ): void {
     this.adapters = adapters;
     this.targetMac = targetMac?.toLowerCase();
+    if (profile) this.profile = profile;
+    if (scaleAuth) this.scaleAuth = scaleAuth;
   }
 
-  private handleAd(ad: EsphomeBleAdvertisement): void {
-    const address = formatMacAddress(ad.address);
-    if (this.targetMac && address.toLowerCase() !== this.targetMac) return;
+  private handleAd(info: BleDeviceInfo, address: string): void {
+    const addrLc = address.toLowerCase();
+    if (this.targetMac && addrLc !== this.targetMac) return;
 
-    const info = toBleDeviceInfo(ad);
     const adapter = this.adapters.find((a) => a.matches(info));
     if (!adapter) return;
 
@@ -131,31 +122,17 @@ export class ReadingWatcher {
     // Same passive-vs-immediate split as scanAndReadRaw. See comment there.
     const requiresStable = adapter.preferPassive === true;
     if (reading && (!requiresStable || adapter.isComplete(reading))) {
-      // Cancel any pending grace timer for this address. We got the full reading.
       const gt = this.graceTimers.get(address);
       if (gt) {
         clearTimeout(gt);
         this.graceTimers.delete(address);
         this.graceReadings.delete(address);
       }
-
-      const key = `${address}:${reading.weight.toFixed(1)}`;
-      const now = Date.now();
-      this.pruneDedup(now);
-      const lastSeen = this.dedup.get(key);
-      if (lastSeen && now - lastSeen < DEDUP_WINDOW_MS) {
-        bleLog.debug(`Dedup skip: ${key}`);
-        return;
-      }
-      this.dedup.set(key, now);
-      bleLog.info(`Matched: ${adapter.name} (${address})`);
-      bleLog.info(`Broadcast reading: ${reading.weight} kg`);
-      this.queue.push({ reading, adapter });
+      this.pushDeduped(address, { reading, adapter }, reading.weight);
       return;
     }
 
-    // Partial broadcast frame for a passive adapter: start grace timer so
-    // we fall back to weight-only if the impedance frame never arrives.
+    // Partial broadcast frame for a passive adapter: grace timer fallback.
     if (reading && requiresStable) {
       this.graceReadings.set(address, { reading, adapter });
       if (!this.graceTimers.has(address)) {
@@ -177,18 +154,60 @@ export class ReadingWatcher {
       return;
     }
 
-    // Adapter matched but broadcast path yielded nothing usable (reading is null).
-    // If the adapter has a GATT path, Phase 1 cannot service it. Warn once per
-    // address. This covers both GATT-only adapters and dual-mode adapters whose
-    // broadcast frames are non-weight-bearing (e.g. Elis 1 MAC beacons).
+    // Broadcast yielded nothing usable. If the adapter has a GATT path, connect
+    // on demand through the proxy pool.
     if (adapter.charNotifyUuid) {
-      this.warnGattNotSupported(adapter.name, address);
+      this.readViaGatt(adapter, address, addrLc);
     }
   }
 
-  private warnGattNotSupported(adapterName: string, address: string): void {
+  private pushDeduped(address: string, raw: RawReading, weight: number): void {
+    const key = `${address}:${weight.toFixed(1)}`;
+    const now = Date.now();
+    this.pruneDedup(now);
+    const lastSeen = this.dedup.get(key);
+    if (lastSeen && now - lastSeen < DEDUP_WINDOW_MS) {
+      bleLog.debug(`Dedup skip: ${key}`);
+      return;
+    }
+    this.dedup.set(key, now);
+    bleLog.info(`Matched: ${raw.adapter.name} (${address})`);
+    bleLog.info(`Reading: ${weight} kg`);
+    this.queue.push(raw);
+  }
+
+  private readViaGatt(adapter: ScaleAdapter, address: string, addrLc: string): void {
+    if (this.gattInFlight.has(addrLc)) return;
+    if (!this.pool) return;
+    const pool = this.pool;
+    this.gattInFlight.add(addrLc);
+    bleLog.info(`Matched: ${adapter.name} (${address}); opening GATT via ESPHome proxy`);
+    void (async () => {
+      let session: Awaited<ReturnType<typeof pool.connectGatt>> | null = null;
+      try {
+        session = await pool.connectGatt(address);
+        const raw = await waitForRawReading(
+          session.charMap,
+          session.device,
+          adapter,
+          this.profile ?? { height: 170, age: 30, gender: 'male', isAthlete: false },
+          address.replace(/[:-]/g, '').toUpperCase(),
+          undefined,
+          undefined,
+          this.scaleAuth,
+        );
+        this.pushDeduped(address, raw, raw.reading.weight);
+      } catch (e) {
+        this.warnGattFailure(adapter.name, address, errMsg(e));
+      } finally {
+        if (session) await session.close();
+        this.gattInFlight.delete(addrLc);
+      }
+    })();
+  }
+
+  private warnGattFailure(adapterName: string, address: string, reason: string): void {
     if (this.gattWarnedFor.has(address)) {
-      // Refresh recency so the entry survives LRU eviction.
       this.gattWarnedFor.delete(address);
       this.gattWarnedFor.set(address, true);
       return;
@@ -199,9 +218,8 @@ export class ReadingWatcher {
     }
     this.gattWarnedFor.set(address, true);
     bleLog.warn(
-      `${adapterName} at ${address} needs a GATT connection for weight data, which the ` +
-        `ESPHome proxy transport does not yet support (Phase 1 is broadcast-only). ` +
-        `Use the native BLE handler or the ESP32 MQTT proxy for this scale until Phase 2 lands.`,
+      `${adapterName} at ${address}: GATT read over the ESPHome proxy failed (${reason}). ` +
+        `Will retry on the next advertisement.`,
     );
   }
 
@@ -215,18 +233,13 @@ export class ReadingWatcher {
     for (const t of this.graceTimers.values()) clearTimeout(t);
     this.graceTimers.clear();
     this.graceReadings.clear();
-
-    if (this.client) {
-      if (this.onAdHandler) {
-        this.client.removeListener('ble', this.onAdHandler as (...args: unknown[]) => void);
-        this.onAdHandler = null;
-      }
-      for (const { event, handler } of this.lifecycleHandlers) {
-        this.client.removeListener(event, handler as (...args: unknown[]) => void);
-      }
-      this.lifecycleHandlers = [];
-      await safeDisconnect(this.client);
-      this.client = null;
+    if (this.unsub) {
+      this.unsub();
+      this.unsub = null;
+    }
+    if (this.pool) {
+      await this.pool.stop();
+      this.pool = null;
     }
   }
 }

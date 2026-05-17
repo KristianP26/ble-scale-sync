@@ -54,11 +54,27 @@ export async function buildReadingSource(
   if (ctx.bleHandler === 'esphome-proxy' && ctx.esphomeProxy) {
     const { ReadingWatcher: EsphomeReadingWatcher } =
       await import('../ble/handler-esphome-proxy/index.js');
-    const watcher = new EsphomeReadingWatcher(ctx.esphomeProxy, adapters, ctx.scaleMac);
+    const esphomeScaleAuth = () => ({
+      pin: ctx.config.users[0]?.beurer_pin,
+      userIndex: ctx.config.users[0]?.beurer_user_index,
+    });
+    const watcher = new EsphomeReadingWatcher(
+      ctx.esphomeProxy,
+      adapters,
+      ctx.scaleMac,
+      resolveUserProfile(ctx.config.users[0], ctx.config.scale),
+      esphomeScaleAuth(),
+    );
     return {
       source: watcher,
       failureLogPrefix: 'Error processing ESPHome reading',
-      onSourceReload: () => watcher.updateConfig(adapters, ctx.scaleMac),
+      onSourceReload: () =>
+        watcher.updateConfig(
+          adapters,
+          ctx.scaleMac,
+          resolveUserProfile(ctx.config.users[0], ctx.config.scale),
+          esphomeScaleAuth(),
+        ),
     };
   }
 

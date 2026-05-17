@@ -634,7 +634,7 @@ describe('ReadingWatcher', () => {
     await watcher.stop();
   });
 
-  it('warns once per address when a dual-mode adapter matches but the broadcast frame is not weight-bearing (e.g. Elis 1 MAC beacon)', async () => {
+  it('attempts on-demand GATT for a dual-mode adapter and warns once if the proxy GATT connect fails', async () => {
     const adapter = makeDualModeAdapter();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { ReadingWatcher } = await import('../../src/ble/handler-esphome-proxy/index.js');
@@ -644,7 +644,9 @@ describe('ReadingWatcher', () => {
     await mockClient.waitForListener('ble');
     await startPromise;
 
-    // Push two ads from the same scale. Second should not re-warn (LRU-deduped).
+    // The bare mock client has no GATT `connection`, so connectGatt fails.
+    // Two ads from the same scale: the second is suppressed (in-flight guard /
+    // LRU warn dedup), so exactly one GATT-failure warning is emitted.
     const ad = {
       address: 0xff04002255_0f,
       name: 'DualMode-scale',
@@ -655,13 +657,15 @@ describe('ReadingWatcher', () => {
     };
     mockClient.pushBle(ad);
     mockClient.pushBle(ad);
+    // Let the async GATT attempt settle.
+    await new Promise((r) => setTimeout(r, 20));
 
     const gattWarn = warnSpy.mock.calls
       .map((c) => String(c[0]))
-      .filter((s) => /Phase 1 is broadcast-only/i.test(s));
+      .filter((s) => /GATT read over the ESPHome proxy failed/i.test(s));
     expect(gattWarn.length).toBe(1);
     expect(gattWarn[0]).toMatch(/MockDualMode/);
-    expect(gattWarn[0]).toMatch(/GATT/);
+    expect(gattWarn[0]).not.toMatch(/Phase 1/);
 
     warnSpy.mockRestore();
     await watcher.stop();
