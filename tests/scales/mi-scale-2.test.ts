@@ -85,6 +85,31 @@ describe('MiScale2Adapter', () => {
       const p = mockPeripheral('Yunmai ISM', []);
       expect(adapter.matches(p)).toBe(false);
     });
+
+    it('does not match a Beurer BF720/BF105 even with BCS 0x181B present (#168)', () => {
+      const adapter = makeAdapter();
+      const byCid = {
+        localName: '',
+        serviceUuids: ['0000181b00001000800000805f9b34fb'],
+        manufacturerData: { id: 0x0611, data: Buffer.alloc(0) },
+      };
+      expect(adapter.matches(byCid)).toBe(false);
+      const byName = mockPeripheral('BF720', ['0000181b00001000800000805f9b34fb']);
+      expect(adapter.matches(byName)).toBe(false);
+    });
+
+    // #168 review: the BF720 adapter matches a name via `includes`, so the
+    // negative guard here must be equally strong (a mid-string "BF720"/"BF105"
+    // must still be excluded), not just a prefix match.
+    it('does not match when BF720/BF105 appears mid-name even with BCS present (#168)', () => {
+      const adapter = makeAdapter();
+      expect(
+        adapter.matches(mockPeripheral('My BF720 Scale', ['0000181b00001000800000805f9b34fb'])),
+      ).toBe(false);
+      expect(
+        adapter.matches(mockPeripheral('Beurer BF105', ['0000181b00001000800000805f9b34fb'])),
+      ).toBe(false);
+    });
   });
 
   describe('parseNotification()', () => {

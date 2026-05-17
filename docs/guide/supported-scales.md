@@ -1,6 +1,6 @@
 ---
 title: Supported Scales
-description: All 24 BLE smart scale brands supported by BLE Scale Sync.
+description: All 25 BLE smart scale brands supported by BLE Scale Sync.
 head:
   - - meta
     - name: keywords
@@ -9,7 +9,7 @@ head:
 
 # Supported Scales
 
-BLE Scale Sync ships **24 protocol adapters** out of the box, covering Xiaomi, Renpho (incl. FITINDEX, Sencor, QN-Scale), Eufy (incl. P2 Pro T9149), Yunmai, Beurer, Sanitas, Medisana, and more, plus a generic Bluetooth SIG adapter that works with any spec-compliant BCS/WSS scale. Each adapter typically supports several models or rebrands sold under different names, so the real device coverage is much wider than the adapter count. All adapters provide weight + impedance for full [body composition](/body-composition) calculation.
+BLE Scale Sync ships **25 protocol adapters** out of the box, covering Xiaomi, Renpho (incl. FITINDEX, Sencor, QN-Scale), Eufy (incl. P2 Pro T9149), Yunmai, Beurer, Sanitas, Medisana, and more, plus a generic Bluetooth SIG adapter that works with any spec-compliant BCS/WSS scale. Each adapter typically supports several models or rebrands sold under different names, so the real device coverage is much wider than the adapter count. All adapters provide weight + impedance for full [body composition](/body-composition) calculation.
 
 ## Scale List
 
@@ -25,6 +25,7 @@ BLE Scale Sync ships **24 protocol adapters** out of the box, covering Xiaomi, R
 | **Beurer** BF700 / BF710 / BF800                                      |                                                                                                                                                                   |
 | **Sanitas** SBF70 / SBF75                                             | Same protocol as Beurer                                                                                                                                           |
 | **Sanitas** SBF72 / SBF73 / **Beurer** BF915                          | Requires user slot 1 via manufacturer app                                                                                                                         |
+| **Beurer** BF720 / BF105                                              | SIG-standard, native body composition. Needs the consent PIN from the Beurer / openScale app (or the scale's control unit) in `users[].beurer_pin`                |
 | **Soehnle** Shape200 / Shape100 / Shape50 / Style100                  | Requires user slot 1 via manufacturer app                                                                                                                         |
 | **Medisana** BS430 / BS440 / BS444                                    |                                                                                                                                                                   |
 | **Active Era** BS-06                                                  |                                                                                                                                                                   |

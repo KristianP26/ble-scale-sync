@@ -1,4 +1,9 @@
-import type { ScaleAdapter, UserProfile, ScaleReading } from '../interfaces/scale-adapter.js';
+import type {
+  ScaleAdapter,
+  UserProfile,
+  ScaleReading,
+  ScaleAuth,
+} from '../interfaces/scale-adapter.js';
 import type { WeightUnit, MqttProxyConfig, EsphomeProxyConfig } from '../config/schema.js';
 import { createLogger } from '../logger.js';
 import { errMsg } from '../utils/error.js';
@@ -79,6 +84,7 @@ export interface ScanOptions {
   targetMac?: string;
   adapters: ScaleAdapter[];
   profile: UserProfile;
+  scaleAuth?: ScaleAuth;
   weightUnit?: WeightUnit;
   onLiveData?: (reading: ScaleReading) => void;
   abortSignal?: AbortSignal;

@@ -78,6 +78,19 @@ export interface CharacteristicBinding {
  * Provided to `onConnected()` so the adapter can perform multi-step handshakes,
  * subscribe to additional characteristics, and read/write data during init.
  */
+/**
+ * Optional device-authentication material resolved from the primary user's
+ * config (config.yaml `users[].beurer_pin` / `beurer_user_index`). Used by
+ * adapters whose scale gates measurements behind a consent code (Beurer SIG
+ * BF720 / BF105). Absent for every other adapter.
+ */
+export interface ScaleAuth {
+  /** Consent code (0-9999) the scale was paired with. */
+  pin?: number;
+  /** Scale user slot index the consent applies to (defaults to 1). */
+  userIndex?: number;
+}
+
 export interface ConnectionContext {
   /** Write data to a characteristic identified by UUID. */
   write(charUuid: string, data: Buffer | number[], withResponse?: boolean): Promise<void>;
@@ -87,6 +100,8 @@ export interface ConnectionContext {
   subscribe(charUuid: string): Promise<void>;
   /** User profile from .env configuration. */
   profile: UserProfile;
+  /** Optional consent material for scales that need a PIN (Beurer SIG). */
+  scaleAuth?: ScaleAuth;
   /**
    * Device identifier used by adapters that derive keys from MAC (e.g. Eufy T9148/T9149).
    * Uppercase, no separators. Empty string when unavailable (e.g. macOS CoreBluetooth UUID).

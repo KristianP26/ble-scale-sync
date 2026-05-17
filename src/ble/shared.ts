@@ -4,6 +4,7 @@ import type {
   ScaleReading,
   BodyComposition,
   ConnectionContext,
+  ScaleAuth,
 } from '../interfaces/scale-adapter.js';
 import type { WeightUnit } from '../config/schema.js';
 import { LBS_TO_KG, normalizeUuid, errMsg, bleLog } from './types.js';
@@ -89,6 +90,7 @@ function initializeAdapter(
   isResolved: () => boolean,
   onNotification: (sourceUuid: string, data: Buffer) => void,
   unsubscribers: (() => void)[],
+  scaleAuth?: ScaleAuth,
 ): { start: () => Promise<void>; cleanup: () => void } {
   let unlockInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -106,6 +108,7 @@ function initializeAdapter(
       const availableChars = new Set<string>(charMap.keys());
       const ctx: ConnectionContext = {
         profile,
+        scaleAuth,
         deviceAddress,
         availableChars,
         write: async (charUuid, data, withResponse = true) => {
@@ -275,6 +278,7 @@ export function waitForRawReading(
   deviceAddress: string,
   weightUnit?: WeightUnit,
   onLiveData?: (reading: ScaleReading) => void,
+  scaleAuth?: ScaleAuth,
 ): Promise<RawReading> {
   return new Promise<RawReading>((resolve, reject) => {
     let resolved = false;
@@ -337,6 +341,7 @@ export function waitForRawReading(
       () => resolved,
       handleNotification,
       unsubscribers,
+      scaleAuth,
     );
 
     bleDevice.onDisconnect(() => {
