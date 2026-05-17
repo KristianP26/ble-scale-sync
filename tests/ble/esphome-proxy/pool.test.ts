@@ -99,4 +99,34 @@ describe('EsphomeProxyPool', () => {
     expect(pool.pickProxyFor('00:00:00:00:00:01')).toBeNull();
     await pool.stop();
   });
+
+  it('evicts sightings older than the TTL instead of growing unbounded', async () => {
+    vi.useFakeTimers();
+    try {
+      const pool = new EsphomeProxyPool({
+        host: 'p1',
+        port: 6053,
+        client_info: 'x',
+        additional_proxies: [],
+      } as never);
+      await pool.start();
+
+      fakeClients.get('p1')!._emit('ble', adv(0x112233445566, -50));
+      expect(pool.pickProxyFor('11:22:33:44:55:66')).toBe('p1:6053');
+
+      // Advance past SIGHTING_TTL_MS (60s) then record a different MAC. The
+      // stale entry must be swept, not just filtered out on read.
+      vi.advanceTimersByTime(61_000);
+      fakeClients.get('p1')!._emit('ble', adv(0xaabbccddeeff, -55));
+
+      const internal = pool as unknown as { sightings: Map<string, unknown> };
+      expect(internal.sightings.has('11:22:33:44:55:66')).toBe(false);
+      expect(pool.pickProxyFor('11:22:33:44:55:66')).toBeNull();
+      expect(pool.pickProxyFor('aa:bb:cc:dd:ee:ff')).toBe('p1:6053');
+
+      await pool.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

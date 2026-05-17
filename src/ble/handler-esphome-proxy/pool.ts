@@ -165,16 +165,28 @@ export class EsphomeProxyPool {
     return fresh;
   }
 
+  /** Drop sightings past the TTL so the map cannot grow without bound. */
+  private evictStale(now: number): void {
+    for (const [mac, perProxy] of this.sightings) {
+      for (const [id, s] of perProxy) {
+        if (now - s.ts > SIGHTING_TTL_MS) perProxy.delete(id);
+      }
+      if (perProxy.size === 0) this.sightings.delete(mac);
+    }
+  }
+
   private onAd(proxyId: string, ad: EsphomeBleAdvertisement): void {
     const mac = formatMacAddress(ad.address);
     if (mac === '00:00:00:00:00:00') return;
+    const now = Date.now();
+    this.evictStale(now);
     const macLc = mac.toLowerCase();
     let perProxy = this.sightings.get(macLc);
     if (!perProxy) {
       perProxy = new Map();
       this.sightings.set(macLc, perProxy);
     }
-    perProxy.set(proxyId, { rssi: ad.rssi, ts: Date.now() });
+    perProxy.set(proxyId, { rssi: ad.rssi, ts: now });
 
     const info = toBleDeviceInfo(ad);
     for (const cb of this.subscribers) cb(info, mac);
