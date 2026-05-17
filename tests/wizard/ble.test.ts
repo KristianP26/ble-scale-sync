@@ -168,6 +168,7 @@ describe('promptEsphomeProxy()', () => {
       'ble-proxy.local', // host
       '6053', // port
       'none', // auth mode
+      false, // add another proxy? -> no
     ]);
 
     const result = await promptEsphomeProxy(ctx);
@@ -184,6 +185,7 @@ describe('promptEsphomeProxy()', () => {
       '6053', // port
       'noise', // auth mode
       'SUPER_SECRET_BASE64_KEY==', // encryption key
+      false, // add another proxy? -> no
     ]);
 
     const result = await promptEsphomeProxy(ctx);
@@ -201,6 +203,7 @@ describe('promptEsphomeProxy()', () => {
       '6053', // port
       'password', // auth mode
       'legacy-pass', // password
+      false, // add another proxy? -> no
     ]);
 
     const result = await promptEsphomeProxy(ctx);
@@ -213,9 +216,38 @@ describe('promptEsphomeProxy()', () => {
   });
 
   it('trims whitespace from host input', async () => {
-    const ctx = makeCtx(['  192.168.1.42  ', '6053', 'none']);
+    const ctx = makeCtx(['  192.168.1.42  ', '6053', 'none', false]);
     const result = await promptEsphomeProxy(ctx);
     expect(result.host).toBe('192.168.1.42');
+  });
+
+  it('collects additional proxies for a mesh setup (#116)', async () => {
+    const ctx = makeCtx([
+      'ble-proxy.local', // primary host
+      '6053', // primary port
+      'none', // primary auth
+      true, // add another?
+      'proxy2.local', // extra host
+      '6053', // extra port
+      'noise', // extra auth
+      'KEY2==', // extra encryption key
+      false, // add another? -> no
+    ]);
+
+    const result = await promptEsphomeProxy(ctx);
+    expect(result).toEqual({
+      host: 'ble-proxy.local',
+      port: 6053,
+      client_info: 'ble-scale-sync',
+      additional_proxies: [
+        {
+          host: 'proxy2.local',
+          port: 6053,
+          client_info: 'ble-scale-sync',
+          encryption_key: 'KEY2==',
+        },
+      ],
+    });
   });
 });
 
@@ -226,6 +258,7 @@ describe('bleStep + esphome-proxy handler', () => {
       'ble-proxy.local', // host
       '6053', // port
       'none', // auth
+      false, // add another proxy? -> no
       'skip', // scale discovery
     ]);
 

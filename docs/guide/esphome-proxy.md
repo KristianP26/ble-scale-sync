@@ -11,8 +11,8 @@ head:
 
 If you already run an [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy.html) mesh for Home Assistant, BLE Scale Sync can reuse it as its BLE radio. No dedicated ESP32 with custom firmware, no MQTT broker plumbing: the server connects to the ESPHome Native API on port 6053 and subscribes to BLE advertisements directly.
 
-::: warning Experimental, Phase 1 (broadcast-only)
-The ESPHome proxy transport currently supports **broadcast scales only**. GATT support (connect, subscribe, write) is tracked as phase 2 of [issue #116](https://github.com/KristianP26/ble-scale-sync/issues/116). Until then, scales that require a GATT connection (Eufy P2/P2 Pro, older Renpho without broadcast, etc.) are skipped with a warning when they match. See the [supported scales](/guide/supported-scales) page for each scale's broadcast/GATT behavior.
+::: tip Broadcast and GATT supported
+The ESPHome proxy transport handles both broadcast scales (parsed straight from advertisements) and GATT scales (connected on demand through the proxy, then read and disconnected). Multiple proxies can be configured for a mesh: a GATT connect is routed to the proxy that most recently saw the scale, with the others as fallbacks. Implemented in [issue #116](https://github.com/KristianP26/ble-scale-sync/issues/116).
 :::
 
 ## How it works
@@ -33,7 +33,7 @@ The ESPHome proxy sees the scale's BLE advertisement, wraps it in a Native API `
 - Either the ESPHome API encryption key (recommended) or the legacy API password, matching the device's `api:` config
 
 ::: tip When to pick this vs the ESP32 MQTT proxy
-If you already have ESPHome proxies in your home, start here: zero new hardware. If you don't, the [ESP32 MQTT proxy](/guide/esp32-proxy) supports both broadcast and GATT scales today and has full display/beep feedback UI.
+Both transports support broadcast and GATT scales. If you already have ESPHome proxies in your home, start here: zero new hardware. The [ESP32 MQTT proxy](/guide/esp32-proxy) additionally offers a display/beep feedback UI.
 :::
 
 ## Configuring BLE Scale Sync
@@ -102,19 +102,47 @@ volumes:
 - If you use `encryption_key`, make sure it matches the device's `api.encryption.key` exactly (base64, 44 characters ending in `=`)
 - If you use `password`, note that newer ESPHome builds remove plaintext auth, switch to `encryption_key`
 
-### "Scale ... requires a GATT connection" / skipped measurements
+### GATT scale not read over the proxy
 
-Phase 1 only handles broadcast scales. Behavior depends on the mode:
+Both broadcast and GATT scales work over the ESPHome proxy. On connect the
+handler logs a one-time capability summary naming each configured adapter and
+whether it is serviced by broadcast or by an on-demand GATT connection. A GATT
+scale is connected only when it advertises (it wakes when you step on it), read
+via the proxy, then disconnected so no proxy connection slot is held between
+weigh-ins.
 
-- **On connect**, the handler logs a one-time capability summary naming every configured adapter: which are broadcast-capable (produce readings on this transport) and which are GATT-only (will not). If your scale brand is in the GATT-only list, that's why nothing gets read, switch handler instead of waiting for a 60 s timeout.
-- **Single-shot (`npm start`)** fails fast with a descriptive error when a GATT-only scale is matched, so misconfigured setups surface immediately.
-- **Continuous (`CONTINUOUS_MODE=true`)** logs a one-time warning per device and keeps running, so a GATT scale passing through range does not crash a multi-scale deployment.
+If a GATT scale still does not produce readings:
 
-Until phase 2 adds GATT support over Native API, you have three options:
+- **Connection slots:** an ESP32 proxy has a limited number of active GATT
+  connections (configured in your `bluetooth_proxy` / `esp32_ble_tracker`
+  YAML). When all proxies are full the read is retried on the next
+  advertisement and a one-time warning is logged; free a slot or add another
+  proxy via `additional_proxies`.
+- **Out of range:** the connect is routed to the proxy that last saw the scale.
+  If no proxy is close enough, move a proxy nearer or add one to the mesh.
+- Single-shot (`npm start`) returns a descriptive error; continuous mode
+  (`CONTINUOUS_MODE=true`) keeps running and retries.
 
-1. Use a [dedicated ESP32 MQTT proxy](/guide/esp32-proxy), it supports GATT today
-2. Run BLE Scale Sync on a machine with a local Bluetooth adapter
-3. Subscribe to [issue #116](https://github.com/KristianP26/ble-scale-sync/issues/116) for phase 2 progress
+### Multiple ESPHome proxies (mesh)
+
+Add more proxies under `additional_proxies`; each keeps its own host, port and
+auth. Advertisements from every proxy are aggregated, and a GATT connect is
+routed to the proxy that saw the scale most recently (RSSI breaks ties), with
+the rest as fallbacks.
+
+```yaml
+ble:
+  handler: esphome-proxy
+  esphome_proxy:
+    host: proxy1.home
+    port: 6053
+    encryption_key: '<base64 Noise key>'
+    additional_proxies:
+      - host: proxy2.home
+        encryption_key: '<base64 Noise key>'
+      - host: proxy3.home
+        password: '<legacy password>'
+```
 
 ### ESPHome logs show "clientInfo: ble-scale-sync"
 

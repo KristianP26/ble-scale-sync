@@ -111,19 +111,20 @@ function validateEsphomeHost(v: string): string | true {
   return true;
 }
 
-async function promptEsphomeProxy(ctx: WizardContext): Promise<EsphomeProxyConfig> {
-  const host = await ctx.prompts.input(
-    'ESPHome proxy host (IP or mDNS name, e.g. ble-proxy.local):',
-    { validate: validateEsphomeHost },
-  );
+type EsphomeEndpoint = EsphomeProxyConfig['additional_proxies'][number];
 
-  const portStr = await ctx.prompts.input('ESPHome API port:', {
+async function promptEsphomeEndpoint(ctx: WizardContext, label: string): Promise<EsphomeEndpoint> {
+  const host = await ctx.prompts.input(`${label} host (IP or mDNS name, e.g. ble-proxy.local):`, {
+    validate: validateEsphomeHost,
+  });
+
+  const portStr = await ctx.prompts.input(`${label} API port:`, {
     default: '6053',
     validate: validatePort,
   });
   const port = Number(portStr);
 
-  const authMode = await ctx.prompts.select('Authentication:', [
+  const authMode = await ctx.prompts.select(`${label} authentication:`, [
     { name: 'None', value: 'none' as const },
     {
       name: 'Noise encryption key (Recommended)',
@@ -151,6 +152,24 @@ async function promptEsphomeProxy(ctx: WizardContext): Promise<EsphomeProxyConfi
     client_info: 'ble-scale-sync',
     ...(encryption_key ? { encryption_key } : {}),
     ...(password ? { password } : {}),
+  } as EsphomeEndpoint;
+}
+
+async function promptEsphomeProxy(ctx: WizardContext): Promise<EsphomeProxyConfig> {
+  const primary = await promptEsphomeEndpoint(ctx, 'ESPHome proxy');
+
+  const additional_proxies: EsphomeEndpoint[] = [];
+  while (
+    await ctx.prompts.confirm('Add another ESPHome proxy? (mesh setup, optional)', {
+      default: false,
+    })
+  ) {
+    additional_proxies.push(await promptEsphomeEndpoint(ctx, 'Additional ESPHome proxy'));
+  }
+
+  return {
+    ...primary,
+    ...(additional_proxies.length > 0 ? { additional_proxies } : {}),
   } as EsphomeProxyConfig;
 }
 

@@ -60,7 +60,7 @@ async function loadHandler(key: HandlerKey): Promise<CommonHandler> {
     case 'mqtt-proxy':
       return import('./handler-mqtt-proxy/index.js');
     case 'esphome-proxy':
-      return import('./handler-esphome-proxy.js');
+      return import('./handler-esphome-proxy/index.js');
     case 'noble-legacy':
       return import('./handler-noble-legacy.js');
     case 'noble':
@@ -137,7 +137,7 @@ export async function scanDevices(
       if (!esphomeProxy) {
         throw new Error('esphome_proxy config is required when ble.handler is esphome-proxy');
       }
-      const { scanDevices: impl } = await import('./handler-esphome-proxy.js');
+      const { scanDevices: impl } = await import('./handler-esphome-proxy/index.js');
       return impl(adapters, durationMs, esphomeProxy);
     }
     case 'noble-legacy': {
