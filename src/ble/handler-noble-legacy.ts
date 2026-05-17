@@ -407,7 +407,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     adapterWarningLogged = true;
   }
 
-  const { targetMac, adapters, profile, weightUnit, onLiveData, abortSignal } = opts;
+  const { targetMac, adapters, profile, scaleAuth, weightUnit, onLiveData, abortSignal } = opts;
 
   try {
     await waitForPoweredOn();
@@ -517,6 +517,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         peripheralAddress(peripheral).replace(/[:-]/g, '').toUpperCase(),
         weightUnit,
         onLiveData,
+        scaleAuth,
       );
 
       return raw;

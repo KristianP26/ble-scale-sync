@@ -119,6 +119,13 @@ export const UserSchema = z.object({
   weight_range: WeightRangeSchema,
   last_known_weight: z.number().nullable().default(null),
   exporters: z.array(ExporterEntrySchema).optional(),
+  // Beurer SIG-standard scales (BF720 / BF105) gate measurements behind a
+  // User Control Point consent code. Obtain it once by pairing the scale with
+  // the Beurer / openScale app (or read it off the scale's control unit), then
+  // put it here. z.coerce so a `${ENV}` reference (resolved to a string before
+  // schema parse) still validates.
+  beurer_pin: z.coerce.number().int().min(0).max(9999).optional(),
+  beurer_user_index: z.coerce.number().int().min(0).max(255).optional(),
 });
 
 export const RuntimeSchema = z.object({

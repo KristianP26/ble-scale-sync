@@ -208,6 +208,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
           entry.address.replace(/[:-]/g, '').toUpperCase(),
           opts.weightUnit,
           opts.onLiveData,
+          opts.scaleAuth,
         );
         registerScaleMac(config, entry.address).catch(() => {});
         return raw;

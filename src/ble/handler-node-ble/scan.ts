@@ -52,7 +52,16 @@ import { broadcastScanNodeBle } from './broadcast.js';
  * becomes stale (e.g. bluetoothd restart), it is automatically reset.
  */
 export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
-  const { targetMac, adapters, profile, weightUnit, onLiveData, abortSignal, bleAdapter } = opts;
+  const {
+    targetMac,
+    adapters,
+    profile,
+    scaleAuth,
+    weightUnit,
+    onLiveData,
+    abortSignal,
+    bleAdapter,
+  } = opts;
 
   let device: Device | null = null;
   let btAdapter: Adapter;
@@ -293,6 +302,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         deviceMac.replace(/[:-]/g, '').toUpperCase(),
         weightUnit,
         onLiveData,
+        scaleAuth,
       ),
       RAW_READING_TIMEOUT_MS,
       'Timed out waiting for a complete scale reading',

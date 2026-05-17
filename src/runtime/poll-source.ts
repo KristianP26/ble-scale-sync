@@ -17,12 +17,17 @@ export class PollReadingSource implements ReadingSource {
   ) {}
 
   async nextReading(signal: AbortSignal): Promise<RawReading> {
-    const profile = resolveUserProfile(this.ctx.config.users[0], this.ctx.config.scale);
+    const primaryUser = this.ctx.config.users[0];
+    const profile = resolveUserProfile(primaryUser, this.ctx.config.scale);
 
     return scanAndReadRaw({
       targetMac: this.ctx.scaleMac,
       adapters: this.adapters,
       profile,
+      scaleAuth: {
+        pin: primaryUser.beurer_pin,
+        userIndex: primaryUser.beurer_user_index,
+      },
       weightUnit: this.ctx.weightUnit,
       abortSignal: signal,
       bleHandler: this.ctx.bleHandler,
