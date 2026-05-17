@@ -1,6 +1,6 @@
 import type { BleDeviceInfo } from '../../interfaces/scale-adapter.js';
 import type { EsphomeProxyConfig } from '../../config/schema.js';
-import { bleLog } from '../types.js';
+import { bleLog, errMsg } from '../types.js';
 import {
   createEsphomeClient,
   waitForConnected,
@@ -9,6 +9,7 @@ import {
   type EsphomeBleAdvertisement,
 } from './client.js';
 import { toBleDeviceInfo, formatMacAddress } from './advert.js';
+import { openGattSession, type GattSession } from './gatt.js';
 
 /** A sighting kept fresh for this long counts toward proxy selection. */
 const SIGHTING_TTL_MS = 60_000;
@@ -44,7 +45,7 @@ function endpointsFromConfig(config: EsphomeProxyConfig): ProxyEndpoint[] {
     password: e.password,
     client_info: e.client_info,
   });
-  return [mk(config), ...config.additional_proxies.map(mk)];
+  return [mk(config), ...(config.additional_proxies ?? []).map(mk)];
 }
 
 /**
@@ -107,6 +108,28 @@ export class EsphomeProxyPool {
 
   getClient(proxyId: string): EsphomeClient | null {
     return this.clients.get(proxyId) ?? null;
+  }
+
+  /**
+   * Open a GATT session to `mac`, trying proxies best-first (the one that saw
+   * it most recently, then blind fallbacks). Throws only when every proxy
+   * failed.
+   */
+  async connectGatt(mac: string): Promise<GattSession> {
+    const order = this.proxyOrderFor(mac);
+    const errors: string[] = [];
+    for (const id of order) {
+      const client = this.clients.get(id);
+      if (!client) continue;
+      try {
+        return await openGattSession(client, mac);
+      } catch (e) {
+        errors.push(`${id}: ${errMsg(e)}`);
+      }
+    }
+    throw new Error(
+      `ESPHome GATT connect failed for ${mac} on all proxies: ${errors.join('; ') || 'no proxy available'}`,
+    );
   }
 
   /** Proxy that most recently saw `mac` (RSSI tiebreak) within the TTL, or null. */

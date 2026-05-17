@@ -11,7 +11,7 @@ import {
   type EsphomeBleAdvertisement,
 } from './client.js';
 import { toBleDeviceInfo, formatMacAddress } from './advert.js';
-import { logPhase1Capabilities } from './scan.js';
+import { logTransportCapabilities } from './scan.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -78,7 +78,7 @@ export class ReadingWatcher {
       ];
 
       await waitForConnected(this.client, hostPort);
-      logPhase1Capabilities(this.adapters);
+      logTransportCapabilities(this.adapters);
 
       this.onAdHandler = (ad) => this.handleAd(ad);
       this.client.on('ble', this.onAdHandler);

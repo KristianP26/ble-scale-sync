@@ -5,7 +5,7 @@ import type {
 } from '../../interfaces/scale-adapter.js';
 import type { EsphomeProxyConfig } from '../../config/schema.js';
 import type { ScanOptions, ScanResult } from '../types.js';
-import type { RawReading } from '../shared.js';
+import { type RawReading, waitForRawReading } from '../shared.js';
 import { bleLog, errMsg, withTimeout, IMPEDANCE_GRACE_MS } from '../types.js';
 import {
   createEsphomeClient,
@@ -14,6 +14,7 @@ import {
   type EsphomeBleAdvertisement,
 } from './client.js';
 import { toBleDeviceInfo, formatMacAddress } from './advert.js';
+import { EsphomeProxyPool } from './pool.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -22,72 +23,57 @@ import { toBleDeviceInfo, formatMacAddress } from './advert.js';
 const BROADCAST_WAIT_MS = 60_000;
 const SCAN_DEFAULT_MS = 15_000;
 
-// ─── Single-shot scan-and-read (broadcast only) ──────────────────────────────
-
-function gattNotSupportedError(adapterName: string, address: string): Error {
-  return new Error(
-    `Scale ${adapterName} (${address}) requires a GATT connection, which is not yet ` +
-      `supported by the ESPHome proxy transport (Phase 1 is broadcast-only). ` +
-      `Use the ESP32 MQTT proxy or native BLE for this scale until Phase 2 lands.`,
-  );
-}
+// ─── Scan-and-read (broadcast + GATT) ────────────────────────────────────────
 
 /**
- * Emit a one-line summary of which configured adapters can actually produce
- * readings over the Phase 1 (broadcast-only) ESPHome proxy transport, so
- * users see the constraint on startup instead of waiting for a 60s timeout.
- * Classifies each adapter by whether it defines parseBroadcast().
+ * Emit a one-line summary of how each configured adapter will be serviced over
+ * the ESPHome proxy transport: broadcast adapters parse advertisements
+ * directly, GATT adapters are connected on demand via the proxy (Phase 2,
+ * #116). Informational only; both paths are supported.
  */
-export function logPhase1Capabilities(adapters: ScaleAdapter[]): void {
+export function logTransportCapabilities(adapters: ScaleAdapter[]): void {
   const broadcast: string[] = [];
-  const gattOnly: string[] = [];
+  const gatt: string[] = [];
   for (const a of adapters) {
     if (typeof a.parseBroadcast === 'function' || typeof a.parseServiceData === 'function') {
       broadcast.push(a.name);
     } else if (a.charNotifyUuid) {
-      gattOnly.push(a.name);
+      gatt.push(a.name);
     }
   }
-  if (broadcast.length === 0 && gattOnly.length === 0) return;
+  if (broadcast.length === 0 && gatt.length === 0) return;
 
-  const parts: string[] = ['ESPHome proxy transport is broadcast-only in Phase 1.'];
+  const parts: string[] = ['ESPHome proxy transport ready (broadcast + GATT).'];
   if (broadcast.length > 0) {
-    parts.push(`Broadcast-capable adapters: ${broadcast.join(', ')}.`);
+    parts.push(`Broadcast adapters: ${broadcast.join(', ')}.`);
   }
-  if (gattOnly.length > 0) {
-    parts.push(
-      `GATT-only adapters will not produce readings on this transport: ${gattOnly.join(', ')}.`,
-    );
-    parts.push(
-      'If your scale matches a GATT-only adapter, switch ble.handler to "native" or "mqtt-proxy". Phase 2 tracking: #116.',
-    );
+  if (gatt.length > 0) {
+    parts.push(`GATT adapters (connected on demand): ${gatt.join(', ')}.`);
   }
-  bleLog.warn(parts.join(' '));
+  bleLog.info(parts.join(' '));
 }
 
 /**
- * Subscribe to BLE advertisements via an ESPHome proxy, match against adapters,
- * and return the first broadcast reading that parses successfully.
- *
- * Phase 1 scope: broadcast-only. If a matched adapter requires GATT the
- * function throws a descriptive error (see {@link gattNotSupportedError}).
+ * Subscribe to BLE advertisements across the ESPHome proxy pool, match against
+ * adapters, and return the first reading. Broadcast scales parse from the
+ * advertisement; GATT scales are connected on demand through the proxy that
+ * last saw them and read via the shared waitForRawReading() seam.
  */
 export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   const config = opts.esphomeProxy;
   if (!config) throw new Error('esphome_proxy config is required for esphome-proxy handler');
 
   const { targetMac, adapters } = opts;
-  const client = await createEsphomeClient(config);
   const targetLc = targetMac?.toLowerCase();
-  const hostPort = `${config.host}:${config.port}`;
+  const pool = new EsphomeProxyPool(config);
 
-  // Hoisted so the outer `finally` can always remove it, even on timeout.
-  let adListener: ((ad: EsphomeBleAdvertisement) => void) | null = null;
+  // Boxed so TS does not narrow it to `never` in the finally (it is only
+  // assigned inside the Promise executor callback).
+  const sub: { unsub: (() => void) | null } = { unsub: null };
 
   try {
-    await waitForConnected(client, hostPort);
-    bleLog.info(`ESPHome proxy connected at ${hostPort}`);
-    logPhase1Capabilities(adapters);
+    await pool.start();
+    logTransportCapabilities(adapters);
 
     // Per-address grace state so two scales advertising partial frames in the
     // same scan window do not clobber each other's pending fallback (#161).
@@ -103,12 +89,14 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       return await withTimeout(
         new Promise<RawReading>((resolve, reject) => {
           const seenAddrs = new Set<string>();
+          // GATT is connected on demand; guard so repeated advertisements for
+          // the same scale do not open parallel sessions.
+          const gattInFlight = new Set<string>();
 
-          adListener = (ad: EsphomeBleAdvertisement): void => {
-            const address = formatMacAddress(ad.address);
-            if (targetLc && address.toLowerCase() !== targetLc) return;
+          sub.unsub = pool.onAdvertisement((info, address) => {
+            const addrLc = address.toLowerCase();
+            if (targetLc && addrLc !== targetLc) return;
 
-            const info = toBleDeviceInfo(ad);
             const adapter = adapters.find((a) => a.matches(info));
             if (!adapter) {
               if (!seenAddrs.has(address)) {
@@ -185,8 +173,8 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
               return;
             }
 
-            // Adapter advertises nothing broadcast-able and no GATT characteristic
-            // either: nothing we can do, keep waiting in case another device matches.
+            // Adapter advertises nothing broadcast-able and no GATT
+            // characteristic either: nothing we can do, keep waiting.
             if (!adapter.charNotifyUuid) {
               bleLog.debug(
                 `${adapter.name} matched at ${address} but has no broadcast or GATT path`,
@@ -194,25 +182,45 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
               return;
             }
 
-            // GATT-only adapter: Phase 1 cannot service it in single-shot mode.
-            reject(gattNotSupportedError(adapter.name, address));
-          };
-
-          client.on('ble', adListener);
+            // GATT adapter: connect on demand through the proxy that saw it.
+            if (gattInFlight.has(addrLc)) return;
+            gattInFlight.add(addrLc);
+            bleLog.info(`Matched: ${adapter.name} (${address}); opening GATT via ESPHome proxy`);
+            void (async () => {
+              let session: Awaited<ReturnType<typeof pool.connectGatt>> | null = null;
+              try {
+                session = await pool.connectGatt(address);
+                const raw = await waitForRawReading(
+                  session.charMap,
+                  session.device,
+                  adapter,
+                  opts.profile,
+                  address.replace(/[:-]/g, '').toUpperCase(),
+                  opts.weightUnit,
+                  opts.onLiveData,
+                  opts.scaleAuth,
+                );
+                resolve(raw);
+              } catch (e) {
+                reject(e instanceof Error ? e : new Error(errMsg(e)));
+              } finally {
+                if (session) await session.close();
+                gattInFlight.delete(addrLc);
+              }
+            })();
+          });
         }),
         BROADCAST_WAIT_MS,
         targetMac
-          ? `Timed out waiting for broadcast from ${targetMac} via ESPHome proxy.`
-          : `Timed out waiting for any recognized scale broadcast via ESPHome proxy.`,
+          ? `Timed out waiting for ${targetMac} via ESPHome proxy.`
+          : `Timed out waiting for any recognized scale via ESPHome proxy.`,
       );
     } finally {
       clearGrace();
     }
   } finally {
-    if (adListener) {
-      client.removeListener('ble', adListener as (...args: unknown[]) => void);
-    }
-    await safeDisconnect(client);
+    if (sub.unsub) sub.unsub();
+    await pool.stop();
   }
 }
 
