@@ -42,7 +42,17 @@ export class InlifeScaleAdapter implements ScaleAdapter {
     const name = (device.localName || '').toLowerCase();
     if (KNOWN_NAMES.includes(name)) return true;
 
-    // Also match by advertised service UUID
+    const chars = device.characteristicUuids;
+    if (chars && chars.length > 0) {
+      // Post-discovery: 0xFFF0 is a generic vendor service shared with the
+      // 1byone/Eufy family, so require Inlife's own write characteristic
+      // 0xFFF2 rather than the bare service UUID. Prevents the #177 collision
+      // where a nameless T9146 (0xFFF1 + 0xFFF4, no 0xFFF2) fell to Inlife.
+      return chars.includes(CHR_WRITE);
+    }
+
+    // Pre-connect (no characteristics yet): keep the legacy advertised-service
+    // fallback so true Inlife scales still match before a GATT connection.
     const uuids = (device.serviceUuids || []).map((u) => u.toLowerCase());
     return uuids.some((u) => u === 'fff0' || u === SVC_UUID);
   }

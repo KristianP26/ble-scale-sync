@@ -9,11 +9,13 @@ export function mockPeripheral(
   name: string,
   uuids: string[] = [],
   manufacturerData?: Buffer,
+  charUuids?: string[],
 ): BleDeviceInfo {
   return {
     localName: name,
     serviceUuids: uuids,
     manufacturerData,
+    ...(charUuids ? { characteristicUuids: charUuids } : {}),
   };
 }
 
