@@ -53,7 +53,7 @@ export async function buildReadingSource(
 
   if (ctx.bleHandler === 'esphome-proxy' && ctx.esphomeProxy) {
     const { ReadingWatcher: EsphomeReadingWatcher } =
-      await import('../ble/handler-esphome-proxy.js');
+      await import('../ble/handler-esphome-proxy/index.js');
     const watcher = new EsphomeReadingWatcher(ctx.esphomeProxy, adapters, ctx.scaleMac);
     return {
       source: watcher,

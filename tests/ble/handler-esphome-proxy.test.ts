@@ -178,7 +178,7 @@ function makeDualModeAdapter(): ScaleAdapter {
 
 describe('_internals.formatMacAddress', () => {
   it('zero-pads and formats a uint64 MAC as XX:XX:XX:XX:XX:XX', async () => {
-    const mod = await import('../../src/ble/handler-esphome-proxy.js');
+    const mod = await import('../../src/ble/handler-esphome-proxy/index.js');
     expect(mod._internals.formatMacAddress(0x1234567890ab)).toBe('12:34:56:78:90:AB');
     expect(mod._internals.formatMacAddress(0x0000000000ff)).toBe('00:00:00:00:00:FF');
   });
@@ -186,24 +186,24 @@ describe('_internals.formatMacAddress', () => {
 
 describe('_internals.parseManufacturerId', () => {
   it('parses the "0xAABB" legacy format', async () => {
-    const mod = await import('../../src/ble/handler-esphome-proxy.js');
+    const mod = await import('../../src/ble/handler-esphome-proxy/index.js');
     expect(mod._internals.parseManufacturerId('0xee57')).toBe(0xee57);
   });
 
   it('parses the full-UUID format from ensureFullUuid', async () => {
-    const mod = await import('../../src/ble/handler-esphome-proxy.js');
+    const mod = await import('../../src/ble/handler-esphome-proxy/index.js');
     expect(mod._internals.parseManufacturerId('0000ee57-0000-1000-8000-00805f9b34fb')).toBe(0xee57);
   });
 
   it('returns null for empty input', async () => {
-    const mod = await import('../../src/ble/handler-esphome-proxy.js');
+    const mod = await import('../../src/ble/handler-esphome-proxy/index.js');
     expect(mod._internals.parseManufacturerId('')).toBeNull();
   });
 });
 
 describe('_internals.extractBytes', () => {
   it('prefers legacyDataList when present', async () => {
-    const mod = await import('../../src/ble/handler-esphome-proxy.js');
+    const mod = await import('../../src/ble/handler-esphome-proxy/index.js');
     const buf = mod._internals.extractBytes({
       uuid: '0xee57',
       legacyDataList: [0x01, 0x02, 0x03],
@@ -212,7 +212,7 @@ describe('_internals.extractBytes', () => {
   });
 
   it('falls back to base64 `data` when legacy list is empty', async () => {
-    const mod = await import('../../src/ble/handler-esphome-proxy.js');
+    const mod = await import('../../src/ble/handler-esphome-proxy/index.js');
     const buf = mod._internals.extractBytes({
       uuid: '0xee57',
       legacyDataList: [],
@@ -222,7 +222,7 @@ describe('_internals.extractBytes', () => {
   });
 
   it('returns empty Buffer when neither field carries bytes', async () => {
-    const mod = await import('../../src/ble/handler-esphome-proxy.js');
+    const mod = await import('../../src/ble/handler-esphome-proxy/index.js');
     expect(mod._internals.extractBytes({ uuid: '0xee57' })).toEqual(Buffer.alloc(0));
   });
 });
@@ -240,7 +240,7 @@ describe('Phase 1 capability summary', () => {
     const broadcast = makeBroadcastAdapter();
     const gattOnly = makeGattOnlyAdapter();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy.js');
+    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy/index.js');
 
     const promise = scanAndReadRaw({
       adapters: [broadcast, gattOnly],
@@ -274,7 +274,7 @@ describe('Phase 1 capability summary', () => {
     const broadcast = makeBroadcastAdapter();
     const gattOnly = makeGattOnlyAdapter();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const { ReadingWatcher } = await import('../../src/ble/handler-esphome-proxy.js');
+    const { ReadingWatcher } = await import('../../src/ble/handler-esphome-proxy/index.js');
     const watcher = new ReadingWatcher(config, [broadcast, gattOnly]);
 
     const startPromise = watcher.start();
@@ -295,7 +295,7 @@ describe('Phase 1 capability summary', () => {
   it('omits GATT section when every configured adapter is broadcast-capable', async () => {
     const broadcast = makeBroadcastAdapter();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const { ReadingWatcher } = await import('../../src/ble/handler-esphome-proxy.js');
+    const { ReadingWatcher } = await import('../../src/ble/handler-esphome-proxy/index.js');
     const watcher = new ReadingWatcher(config, [broadcast]);
 
     const startPromise = watcher.start();
@@ -325,7 +325,7 @@ describe('scanAndReadRaw', () => {
 
   it('resolves with a broadcast reading when a matching adapter parses it', async () => {
     const adapter = makeBroadcastAdapter();
-    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy.js');
+    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy/index.js');
 
     const promise = scanAndReadRaw({
       adapters: [adapter],
@@ -354,7 +354,7 @@ describe('scanAndReadRaw', () => {
 
   it('ignores non-matching advertisements and waits for a match', async () => {
     const adapter = makeBroadcastAdapter();
-    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy.js');
+    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy/index.js');
 
     const promise = scanAndReadRaw({
       adapters: [adapter],
@@ -391,7 +391,7 @@ describe('scanAndReadRaw', () => {
 
   it('filters by targetMac when provided', async () => {
     const adapter = makeBroadcastAdapter();
-    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy.js');
+    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy/index.js');
 
     const promise = scanAndReadRaw({
       adapters: [adapter],
@@ -433,7 +433,7 @@ describe('scanAndReadRaw', () => {
 
   it('rejects when the scale is a GATT-only adapter (Phase 1 limitation)', async () => {
     const adapter = makeGattOnlyAdapter();
-    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy.js');
+    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy/index.js');
 
     const promise = scanAndReadRaw({
       adapters: [adapter],
@@ -458,7 +458,7 @@ describe('scanAndReadRaw', () => {
   });
 
   it('throws when esphome_proxy config is missing', async () => {
-    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy.js');
+    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy/index.js');
     await expect(
       scanAndReadRaw({
         adapters: [makeBroadcastAdapter()],
@@ -495,7 +495,7 @@ describe('scanAndReadRaw, grace timer (passive scan)', () => {
 
   it('complete-immediately: emits as soon as the first frame is complete (no timer)', async () => {
     const adapter = makePassiveAdapter('complete');
-    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy.js');
+    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy/index.js');
 
     const promise = scanAndReadRaw({
       adapters: [adapter],
@@ -518,7 +518,7 @@ describe('scanAndReadRaw, grace timer (passive scan)', () => {
   it('partial-then-complete: cancels the grace timer when a complete frame arrives', async () => {
     const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
     const adapter = makePassiveAdapter('partial-then-complete');
-    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy.js');
+    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy/index.js');
 
     const promise = scanAndReadRaw({
       adapters: [adapter],
@@ -548,7 +548,7 @@ describe('scanAndReadRaw, grace timer (passive scan)', () => {
       toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
     });
     const adapter = makePassiveAdapter('always-partial');
-    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy.js');
+    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy/index.js');
     const { IMPEDANCE_GRACE_MS } = await import('../../src/ble/types.js');
 
     const promise = scanAndReadRaw({
@@ -591,7 +591,7 @@ describe('waitForConnected via scanAndReadRaw', () => {
       });
     });
 
-    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy.js');
+    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy/index.js');
     await expect(
       scanAndReadRaw({
         adapters: [makeBroadcastAdapter()],
@@ -614,7 +614,7 @@ describe('ReadingWatcher', () => {
 
   it('enqueues broadcast readings for consumption via nextReading()', async () => {
     const adapter = makeBroadcastAdapter();
-    const { ReadingWatcher } = await import('../../src/ble/handler-esphome-proxy.js');
+    const { ReadingWatcher } = await import('../../src/ble/handler-esphome-proxy/index.js');
     const watcher = new ReadingWatcher(config, [adapter]);
 
     const startPromise = watcher.start();
@@ -637,7 +637,7 @@ describe('ReadingWatcher', () => {
   it('warns once per address when a dual-mode adapter matches but the broadcast frame is not weight-bearing (e.g. Elis 1 MAC beacon)', async () => {
     const adapter = makeDualModeAdapter();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const { ReadingWatcher } = await import('../../src/ble/handler-esphome-proxy.js');
+    const { ReadingWatcher } = await import('../../src/ble/handler-esphome-proxy/index.js');
     const watcher = new ReadingWatcher(config, [adapter]);
 
     const startPromise = watcher.start();
@@ -669,7 +669,7 @@ describe('ReadingWatcher', () => {
 
   it('deduplicates identical broadcast readings within the dedup window', async () => {
     const adapter = makeBroadcastAdapter();
-    const { ReadingWatcher } = await import('../../src/ble/handler-esphome-proxy.js');
+    const { ReadingWatcher } = await import('../../src/ble/handler-esphome-proxy/index.js');
     const watcher = new ReadingWatcher(config, [adapter]);
 
     const startPromise = watcher.start();
@@ -712,7 +712,7 @@ describe('scanDevices', () => {
 
   it('collects unique devices seen during the scan window', async () => {
     const adapter = makeBroadcastAdapter();
-    const { scanDevices } = await import('../../src/ble/handler-esphome-proxy.js');
+    const { scanDevices } = await import('../../src/ble/handler-esphome-proxy/index.js');
 
     const promise = scanDevices([adapter], 50, config);
     await mockClient.waitForListener('ble');

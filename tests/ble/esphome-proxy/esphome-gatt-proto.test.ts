@@ -21,5 +21,4 @@ describe('esphomeUuidToString', () => {
       normalizeUuid('2a9d'),
     );
   });
-
 });
