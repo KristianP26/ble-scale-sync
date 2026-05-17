@@ -40,13 +40,33 @@ describe('BeurerBf720Adapter', () => {
       expect(makeAdapter().matches(mockPeripheral(name))).toBe(true);
     });
 
-    it('matches by Beurer company id 0x0611', () => {
+    // #168 review: a bare Beurer company id 0x0611 is too weak on its own.
+    // The adapter sits ahead of the name-based Beurer/Sanitas adapters, so an
+    // older BF710 / SBF7x advertising 0x0611 must NOT be hijacked here.
+    it('does not match a bare Beurer company id 0x0611 without a SIG service', () => {
       const info: BleDeviceInfo = {
         localName: '',
         serviceUuids: [],
         manufacturerData: { id: 0x0611, data: Buffer.alloc(0) },
       };
-      expect(makeAdapter().matches(info)).toBe(true);
+      expect(makeAdapter().matches(info)).toBe(false);
+    });
+
+    it('matches Beurer company id 0x0611 when a SIG WSS/BCS service is present', () => {
+      const viaServiceUuids: BleDeviceInfo = {
+        localName: '',
+        serviceUuids: [uuid16(0x181b)],
+        manufacturerData: { id: 0x0611, data: Buffer.alloc(0) },
+      };
+      expect(makeAdapter().matches(viaServiceUuids)).toBe(true);
+
+      const viaServiceData: BleDeviceInfo = {
+        localName: '',
+        serviceUuids: [],
+        manufacturerData: { id: 0x0611, data: Buffer.alloc(0) },
+        serviceData: [{ uuid: uuid16(0x181d), data: Buffer.alloc(0) }],
+      };
+      expect(makeAdapter().matches(viaServiceData)).toBe(true);
     });
 
     it('does not match unrelated name / other company id', () => {
@@ -103,6 +123,19 @@ describe('BeurerBf720Adapter', () => {
       expect(reading).not.toBeNull();
       expect(reading!.weight).toBeCloseTo(80, 2);
       expect(reading!.timestamp).toBeUndefined();
+    });
+
+    // #168 review: a malformed/truncated BCS frame whose flags claim optional
+    // fields that are not actually present must not throw a RangeError out of
+    // the notification handler.
+    it('does not throw on a truncated BCS frame that over-claims via flags', () => {
+      const a = makeAdapter();
+      // flags 0x0398 claim basal + muscle% + soft-lean + water mass + impedance,
+      // but only fat (offset 2) actually fits in the 4-byte buffer.
+      const truncated = Buffer.from([0x98, 0x03, 0xc2, 0x00]);
+      expect(() => a.parseCharNotification(CHR_BODYCOMP, truncated)).not.toThrow();
+      // No weight yet -> no complete reading emitted.
+      expect(a.parseCharNotification(CHR_BODYCOMP, truncated)).toBeNull();
     });
 
     it('ignores User Control Point responses without throwing', () => {

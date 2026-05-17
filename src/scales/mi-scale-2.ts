@@ -52,7 +52,7 @@ export class MiScale2Adapter implements ScaleAdapter {
     // 0x181B post-connect and would otherwise false-match here. Exclude them
     // by Beurer company id 0x0611 or BF720/BF105 name. (#168)
     if (device.manufacturerData?.id === 0x0611) return false;
-    if (name.startsWith('BF720') || name.startsWith('BF105')) return false;
+    if (name.includes('BF720') || name.includes('BF105')) return false;
     if (KNOWN_PREFIXES.some((p) => name.startsWith(p.toUpperCase()))) return true;
     // ESPHome / MQTT proxy advertisements may omit the BLE local name. The scale
     // always includes 0x181B as a service-data UUID (AD type 0x16), which lands in

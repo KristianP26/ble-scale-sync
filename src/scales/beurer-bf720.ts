@@ -19,6 +19,12 @@ const CHR_USER_CONTROL_POINT = uuid16(0x2a9f); // User Data Service 0x181C
 const CHR_DB_CHANGE_INCREMENT = uuid16(0x2a99); // User Data Service 0x181C
 const CHR_CURRENT_TIME = uuid16(0x2a2b); // Current Time Service 0x1805
 
+// SIG service UUIDs (normalized 128-bit lowercase form, same as the BLE layer
+// produces via normalizeUuid). Used to corroborate a bare Beurer company id so
+// the adapter does not shadow the older name-based Beurer/Sanitas adapters.
+const SVC_WEIGHT_SCALE = uuid16(0x181d);
+const SVC_BODY_COMPOSITION = uuid16(0x181b);
+
 // Beurer GmbH SIG-assigned company identifier (advertisement manufacturer data).
 const BEURER_COMPANY_ID = 0x0611;
 
@@ -84,7 +90,15 @@ export class BeurerBf720Adapter implements ScaleAdapter {
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
     if (name.includes('bf720') || name.includes('bf105')) return true;
-    return device.manufacturerData?.id === BEURER_COMPANY_ID;
+    if (device.manufacturerData?.id !== BEURER_COMPANY_ID) return false;
+    // A bare company id is too weak: this adapter is ordered ahead of the
+    // name-based Beurer/Sanitas adapters, so require a SIG WSS/BCS service
+    // (advertised or, on the connect path, discovered) before claiming it.
+    const isSig = (u: string) => u === SVC_WEIGHT_SCALE || u === SVC_BODY_COMPOSITION;
+    return (
+      (device.serviceUuids ?? []).some(isSig) ||
+      (device.serviceData ?? []).some((sd) => isSig(sd.uuid))
+    );
   }
 
   async onConnected(ctx: ConnectionContext): Promise<void> {
@@ -225,9 +239,18 @@ export class BeurerBf720Adapter implements ScaleAdapter {
     const isKg = (flags & 0x0001) === 0;
     const massMul = isKg ? 0.005 : 0.01;
 
+    // Bounds-checked little-endian uint16 reader. Real BF720 frames are
+    // well-formed, but a malformed/truncated notification can set flag bits
+    // for fields it did not actually include. Returning null (instead of
+    // throwing a RangeError out of the notification handler) lets parsing
+    // stop gracefully and keep whatever was decoded so far.
+    const u16 = (o: number): number | null => (o + 2 <= data.length ? data.readUInt16LE(o) : null);
+
     let off = 2;
     // Body Fat % is always present, immediately after the flags.
-    this.cachedComp.fat = data.readUInt16LE(off) * 0.1;
+    const fat = u16(off);
+    if (fat == null) return;
+    this.cachedComp.fat = fat * 0.1;
     off += 2;
 
     if (flags & 0x0002) {
@@ -239,22 +262,30 @@ export class BeurerBf720Adapter implements ScaleAdapter {
     if (flags & 0x0004) off += 1; // User ID
     if (flags & 0x0008) off += 2; // Basal Metabolism (kJ, unused)
     if (flags & 0x0010) {
-      this.cachedComp.muscle = data.readUInt16LE(off) * 0.1; // Muscle %
+      const muscle = u16(off); // Muscle %
+      if (muscle == null) return;
+      this.cachedComp.muscle = muscle * 0.1;
       off += 2;
     }
     if (flags & 0x0020) off += 2; // Muscle Mass (unused)
     if (flags & 0x0040) off += 2; // Fat Free Mass (unused)
     if (flags & 0x0080) {
-      this.cachedComp.softLean = data.readUInt16LE(off) * massMul; // Soft Lean Mass kg
+      const softLean = u16(off); // Soft Lean Mass kg
+      if (softLean == null) return;
+      this.cachedComp.softLean = softLean * massMul;
       off += 2;
     }
     if (flags & 0x0100) {
-      this.cachedComp.waterMass = data.readUInt16LE(off) * massMul; // Body Water Mass kg
+      const waterMass = u16(off); // Body Water Mass kg
+      if (waterMass == null) return;
+      this.cachedComp.waterMass = waterMass * massMul;
       off += 2;
     }
     if (flags & 0x0200) off += 2; // Impedance (unused; native comp)
     if (flags & 0x0400) {
-      const w = data.readUInt16LE(off) * massMul; // Weight
+      const raw = u16(off); // Weight
+      if (raw == null) return;
+      const w = raw * massMul;
       if (w > 0 && Number.isFinite(w)) this.cachedWeight = w;
       off += 2;
     }
