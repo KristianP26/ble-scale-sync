@@ -6,6 +6,7 @@ import {
   defaultProfile,
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
+import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 
 // ─── OneByoneAdapter ─────────────────────────────────────────────────────────
 
@@ -40,6 +41,20 @@ describe('OneByoneAdapter', () => {
     it('does not match unrelated name', () => {
       const adapter = makeAdapter();
       expect(adapter.matches(mockPeripheral('Random Scale'))).toBe(false);
+    });
+
+    it('matches post-discovery by 0xFFF4 characteristic when name absent (#177)', () => {
+      const adapter = makeAdapter();
+      const info = mockPeripheral('', [uuid16(0xfff0)], undefined, [
+        uuid16(0xfff1),
+        uuid16(0xfff4),
+      ]);
+      expect(adapter.matches(info)).toBe(true);
+    });
+
+    it('does not match nameless device with only 0xFFF0 service and no chars (#177)', () => {
+      const adapter = makeAdapter();
+      expect(adapter.matches(mockPeripheral('', [uuid16(0xfff0)]))).toBe(false);
     });
   });
 

@@ -31,7 +31,12 @@ export class OneByoneAdapter implements ScaleAdapter {
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
-    return ONEBYONE_NAMES.some((n) => name.includes(n));
+    if (ONEBYONE_NAMES.some((n) => name.includes(n))) return true;
+    // Post-discovery disambiguation of the shared 0xFFF0 vendor service: the
+    // 1byone/Eufy notify characteristic 0xFFF4 is unique to this family (Inlife
+    // never exposes it), so it identifies the device when the broadcast name is
+    // absent at connect time (e.g. BlueZ by-MAC). #177
+    return (device.characteristicUuids ?? []).includes(uuid16(0xfff4));
   }
 
   /**

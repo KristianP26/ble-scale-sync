@@ -174,24 +174,45 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       });
       bleLog.info('Connected. Discovering services...');
 
-      // Match adapter using device name + GATT service UUIDs (post-connect)
+      // Resolve the adapter post-discovery using characteristics as well as
+      // service UUIDs, so devices that share a generic vendor service (e.g.
+      // 0xFFF0: 1byone/Eufy vs Inlife) are disambiguated instead of falling to
+      // the first service-only match. BlueZ can export characteristics late
+      // ([bluez/bluez#1489]), so retry the enumeration within the existing
+      // discovery budget until an adapter is recognized. #177
       const gatt = await device.gatt();
       const serviceUuids = await gatt.services();
       bleLog.debug(`Services: [${serviceUuids.join(', ')}]`);
 
-      const info: BleDeviceInfo = {
-        localName: name,
-        serviceUuids: serviceUuids.map(normalizeUuid),
-      };
-      const found = adapters.find((a) => a.matches(info));
-      if (!found) {
+      let resolved: ScaleAdapter | undefined;
+      let matchCharMap = await withTimeout(
+        buildCharMap(gatt),
+        GATT_DISCOVERY_TIMEOUT_MS,
+        'GATT service discovery timed out',
+      );
+      for (let attempt = 1; attempt <= CHAR_DISCOVERY_MAX_RETRIES; attempt++) {
+        const info: BleDeviceInfo = {
+          localName: name,
+          serviceUuids: serviceUuids.map(normalizeUuid),
+          characteristicUuids: [...matchCharMap.keys()],
+        };
+        resolved = adapters.find((a) => a.matches(info));
+        if (resolved || attempt === CHAR_DISCOVERY_MAX_RETRIES) break;
+        await sleep(CHAR_DISCOVERY_RETRY_DELAY_MS);
+        matchCharMap = await withTimeout(
+          buildCharMap(gatt),
+          GATT_DISCOVERY_TIMEOUT_MS,
+          'GATT service discovery timed out',
+        );
+      }
+      if (!resolved) {
         throw new Error(
           `Device found (${name}) but no adapter recognized it. ` +
             `Services: [${serviceUuids.join(', ')}]. ` +
             `Adapters: ${adapters.map((a) => a.name).join(', ')}`,
         );
       }
-      matchedAdapter = found;
+      matchedAdapter = resolved;
       bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
     } else {
       // Auto-discovery: poll discovered devices, match by name, connect, verify

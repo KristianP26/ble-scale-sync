@@ -8,6 +8,13 @@ export interface BleDeviceInfo {
   manufacturerData?: { id: number; data: Buffer };
   /** Service data entries from the BLE advertisement (if present). */
   serviceData?: Array<{ uuid: string; data: Buffer }>;
+  /**
+   * GATT characteristic UUIDs (full 128-bit lowercase form), populated only
+   * post-discovery. Lets adapters that share a vendor service (e.g. 0xFFF0:
+   * 1byone vs Inlife) disambiguate by their own characteristics. Absent on
+   * pre-connect / broadcast match paths.
+   */
+  characteristicUuids?: string[];
 }
 
 export interface ScaleReading {

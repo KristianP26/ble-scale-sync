@@ -6,6 +6,7 @@ import {
   defaultProfile,
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
+import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 
 function makeAdapter() {
   return new InlifeScaleAdapter();
@@ -34,6 +35,25 @@ describe('InlifeScaleAdapter', () => {
     it('does not match unrelated name without service UUID', () => {
       const adapter = makeAdapter();
       expect(adapter.matches(mockPeripheral('Random Scale'))).toBe(false);
+    });
+
+    it('matches post-discovery by its own 0xFFF2 characteristic (#177)', () => {
+      const adapter = makeAdapter();
+      const info = mockPeripheral('', [uuid16(0xfff0)], undefined, [
+        uuid16(0xfff1),
+        uuid16(0xfff2),
+      ]);
+      expect(adapter.matches(info)).toBe(true);
+    });
+
+    it('does not match a 1byone/T9146 device once characteristics are known (#177)', () => {
+      const adapter = makeAdapter();
+      // T9146 exposes 0xFFF1 + 0xFFF4 but never Inlife's write char 0xFFF2.
+      const info = mockPeripheral('', [uuid16(0xfff0)], undefined, [
+        uuid16(0xfff1),
+        uuid16(0xfff4),
+      ]);
+      expect(adapter.matches(info)).toBe(false);
     });
   });
 
