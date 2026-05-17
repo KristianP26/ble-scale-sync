@@ -91,7 +91,11 @@ describe('ReadingWatcher GATT continuous (#116)', () => {
     await watcher.start();
 
     // Reach the mocked pool instance the watcher created.
-    const pool = (watcher as unknown as { pool: { emitAdvert: Function } }).pool;
+    const pool = (
+      watcher as unknown as {
+        pool: { emitAdvert: (info: BleDeviceInfo, mac: string) => void };
+      }
+    ).pool;
     const info: BleDeviceInfo = { localName: 'GATT-scale', serviceUuids: [] };
     pool.emitAdvert(info, 'AA:BB:CC:DD:EE:02');
     // A second advert for the same scale while the first GATT read is in flight.

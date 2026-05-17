@@ -11,6 +11,7 @@
 Spec: `docs/superpowers/specs/2026-05-17-esphome-proxy-phase2-gatt-design.md` (issue #116).
 
 **Pinned library facts (from installed v1.3.6 source, used throughout):**
+
 - `client.connection: Connection` (EventEmitter). GATT methods live on it.
 - `connectBluetoothDeviceService(addr:number, addressType?:number)` → resolves `BluetoothDeviceConnectionResponse` with `.address .connected .mtu .error`.
 - `disconnectBluetoothDeviceService(addr)` likewise.
@@ -47,6 +48,7 @@ Existing `src/ble/handler-esphome-proxy.ts` is deleted; `src/ble/index.ts` impor
 ## Task 0: Spike - pin uuidList format + GATT proto wrapper
 
 **Files:**
+
 - Create: `src/ble/handler-esphome-proxy/esphome-gatt-proto.ts`
 - Test: `tests/ble/esphome-proxy/esphome-gatt-proto.test.ts`
 
@@ -65,9 +67,7 @@ describe('esphomeUuidToString', () => {
     // 0x2A9D Weight Measurement -> 00002a9d-0000-1000-8000-00805f9b34fb
     const high = 0x00002a9d00001000n;
     const low = 0x800000805f9b34fbn;
-    expect(esphomeUuidToString([high.toString(), low.toString()])).toBe(
-      normalizeUuid('2a9d'),
-    );
+    expect(esphomeUuidToString([high.toString(), low.toString()])).toBe(normalizeUuid('2a9d'));
   });
 
   it('passes an already-stringified uuid through normalizeUuid', () => {
@@ -159,6 +159,7 @@ git commit -m "feat(ble): ESPHome GATT proto types + uuid converter (#116)"
 Pure refactor: move the current `handler-esphome-proxy.ts` into the directory, keep every export and test green. No logic changes.
 
 **Files:**
+
 - Create: `src/ble/handler-esphome-proxy/index.ts`, `client.ts`, `advert.ts`, `scan.ts`, `watcher.ts`
 - Delete: `src/ble/handler-esphome-proxy.ts`
 - Modify: `src/ble/index.ts` (two `import('./handler-esphome-proxy.js')` → `'./handler-esphome-proxy/index.js'`)
@@ -214,6 +215,7 @@ git commit -m "refactor(ble): split handler-esphome-proxy into module directory 
 ## Task 2: `additional_proxies` config schema + backward compat
 
 **Files:**
+
 - Modify: `src/config/schema.ts:12-23` (EsphomeProxySchema)
 - Test: `tests/ble/esphome-proxy/schema-additional-proxies.test.ts`
 
@@ -312,6 +314,7 @@ git commit -m "feat(config): optional esphome_proxy.additional_proxies list (#11
 ## Task 3: `EsphomeProxyPool` - clients, advert aggregation, auto-pick
 
 **Files:**
+
 - Create: `src/ble/handler-esphome-proxy/pool.ts`
 - Test: `tests/ble/esphome-proxy/pool.test.ts`
 
@@ -319,16 +322,19 @@ Contract:
 
 ```typescript
 export interface ProxyEndpoint {
-  id: string;            // host:port
-  host: string; port: number;
-  encryption_key?: string | null; password?: string | null; client_info: string;
+  id: string; // host:port
+  host: string;
+  port: number;
+  encryption_key?: string | null;
+  password?: string | null;
+  client_info: string;
 }
 export class EsphomeProxyPool {
   constructor(config: EsphomeProxyConfig);
-  start(): Promise<void>;            // connect all clients, subscribe ble
+  start(): Promise<void>; // connect all clients, subscribe ble
   stop(): Promise<void>;
   onAdvertisement(cb: (info: BleDeviceInfo, mac: string) => void): () => void;
-  pickProxyFor(macLc: string): string | null;   // proxyId or null
+  pickProxyFor(macLc: string): string | null; // proxyId or null
   getClient(proxyId: string): EsphomeClient | null;
   // ordered best-first proxy ids for a MAC (auto-pick + fallback)
   proxyOrderFor(macLc: string): string[];
@@ -348,13 +354,21 @@ vi.mock('../../../src/ble/handler-esphome-proxy/client.js', () => ({
     const listeners: Record<string, Function[]> = {};
     const c = {
       connected: true,
-      connect() { (listeners['connected'] ?? []).forEach((f) => f()); },
-      disconnect() {},
-      on(ev: string, fn: Function) { (listeners[ev] ??= []).push(fn); return c; },
-      removeListener(ev: string, fn: Function) {
-        listeners[ev] = (listeners[ev] ?? []).filter((f) => f !== fn); return c;
+      connect() {
+        (listeners['connected'] ?? []).forEach((f) => f());
       },
-      _emit(ev: string, arg?: any) { (listeners[ev] ?? []).forEach((f) => f(arg)); },
+      disconnect() {},
+      on(ev: string, fn: Function) {
+        (listeners[ev] ??= []).push(fn);
+        return c;
+      },
+      removeListener(ev: string, fn: Function) {
+        listeners[ev] = (listeners[ev] ?? []).filter((f) => f !== fn);
+        return c;
+      },
+      _emit(ev: string, arg?: any) {
+        (listeners[ev] ?? []).forEach((f) => f(arg));
+      },
     };
     fakeClients.set(cfg.host, c);
     return c;
@@ -364,7 +378,12 @@ vi.mock('../../../src/ble/handler-esphome-proxy/client.js', () => ({
 }));
 
 const adv = (addr: number, rssi: number) => ({
-  address: addr, name: 'QN-Scale', rssi, serviceUuidsList: [], serviceDataList: [], manufacturerDataList: [],
+  address: addr,
+  name: 'QN-Scale',
+  rssi,
+  serviceUuidsList: [],
+  serviceDataList: [],
+  manufacturerDataList: [],
 });
 
 describe('EsphomeProxyPool', () => {
@@ -372,7 +391,9 @@ describe('EsphomeProxyPool', () => {
 
   it('aggregates advertisements from every proxy', async () => {
     const pool = new EsphomeProxyPool({
-      host: 'p1', port: 6053, client_info: 'x',
+      host: 'p1',
+      port: 6053,
+      client_info: 'x',
       additional_proxies: [{ host: 'p2', port: 6053, client_info: 'x' }],
     } as any);
     await pool.start();
@@ -386,7 +407,9 @@ describe('EsphomeProxyPool', () => {
 
   it('pickProxyFor returns the proxy with the strongest recent RSSI', async () => {
     const pool = new EsphomeProxyPool({
-      host: 'p1', port: 6053, client_info: 'x',
+      host: 'p1',
+      port: 6053,
+      client_info: 'x',
       additional_proxies: [{ host: 'p2', port: 6053, client_info: 'x' }],
     } as any);
     await pool.start();
@@ -397,7 +420,12 @@ describe('EsphomeProxyPool', () => {
   });
 
   it('returns null when no proxy has seen the MAC', async () => {
-    const pool = new EsphomeProxyPool({ host: 'p1', port: 6053, client_info: 'x', additional_proxies: [] } as any);
+    const pool = new EsphomeProxyPool({
+      host: 'p1',
+      port: 6053,
+      client_info: 'x',
+      additional_proxies: [],
+    } as any);
     await pool.start();
     expect(pool.pickProxyFor('00:00:00:00:00:01')).toBeNull();
   });
@@ -430,6 +458,7 @@ git commit -m "feat(ble): EsphomeProxyPool with advertisement aggregation + RSSI
 ## Task 4: GATT bridge (`gatt.ts`)
 
 **Files:**
+
 - Create: `src/ble/handler-esphome-proxy/gatt.ts`
 - Test: `tests/ble/esphome-proxy/gatt.test.ts`
 
@@ -438,15 +467,12 @@ Contract:
 ```typescript
 import type { BleChar, BleDevice } from '../shared.js';
 export interface GattSession {
-  charMap: Map<string, BleChar>;   // normalized uuid -> BleChar
-  device: BleDevice;               // onDisconnect
-  close(): Promise<void>;          // disconnectBluetoothDeviceService + listener cleanup
+  charMap: Map<string, BleChar>; // normalized uuid -> BleChar
+  device: BleDevice; // onDisconnect
+  close(): Promise<void>; // disconnectBluetoothDeviceService + listener cleanup
 }
 /** Connect to `mac` through `client.connection`, discover services, build the charMap. */
-export function openGattSession(
-  client: EsphomeClient,
-  mac: string,
-): Promise<GattSession>;
+export function openGattSession(client: EsphomeClient, mac: string): Promise<GattSession>;
 ```
 
 - [ ] **Step 1: Write the failing test**
@@ -459,19 +485,33 @@ import { normalizeUuid } from '../../../src/ble/types.js';
 function fakeConnection() {
   const listeners: Record<string, Function[]> = {};
   return {
-    connected: true, authorized: true,
-    on(ev: string, fn: Function) { (listeners[ev] ??= []).push(fn); },
-    off(ev: string, fn: Function) { listeners[ev] = (listeners[ev] ?? []).filter((f) => f !== fn); },
-    removeListener(ev: string, fn: Function) { this.off(ev, fn); },
-    emit(ev: string, a: any) { (listeners[ev] ?? []).forEach((f) => f(a)); },
+    connected: true,
+    authorized: true,
+    on(ev: string, fn: Function) {
+      (listeners[ev] ??= []).push(fn);
+    },
+    off(ev: string, fn: Function) {
+      listeners[ev] = (listeners[ev] ?? []).filter((f) => f !== fn);
+    },
+    removeListener(ev: string, fn: Function) {
+      this.off(ev, fn);
+    },
+    emit(ev: string, a: any) {
+      (listeners[ev] ?? []).forEach((f) => f(a));
+    },
     connectBluetoothDeviceService: vi.fn(async () => ({ address: 1, connected: true, mtu: 23 })),
     disconnectBluetoothDeviceService: vi.fn(async () => ({ address: 1, connected: false })),
     listBluetoothGATTServicesService: vi.fn(async () => ({
       address: 1,
-      servicesList: [{
-        uuidList: ['0000181d-0000-1000-8000-00805f9b34fb'], handle: 1,
-        characteristicsList: [{ uuidList: ['00002a9d-0000-1000-8000-00805f9b34fb'], handle: 7, properties: 0x10 }],
-      }],
+      servicesList: [
+        {
+          uuidList: ['0000181d-0000-1000-8000-00805f9b34fb'],
+          handle: 1,
+          characteristicsList: [
+            { uuidList: ['00002a9d-0000-1000-8000-00805f9b34fb'], handle: 7, properties: 0x10 },
+          ],
+        },
+      ],
     })),
     readBluetoothGATTCharacteristicService: vi.fn(async () => ({ dataList: [1, 2, 3] })),
     writeBluetoothGATTCharacteristicService: vi.fn(async () => ({})),
@@ -491,7 +531,10 @@ describe('openGattSession', () => {
     expect(await char.read()).toEqual(Buffer.from([1, 2, 3]));
     await char.write(Buffer.from([9]), true);
     expect(conn.writeBluetoothGATTCharacteristicService).toHaveBeenCalledWith(
-      expect.any(Number), 7, expect.any(Uint8Array), true,
+      expect.any(Number),
+      7,
+      expect.any(Uint8Array),
+      true,
     );
   });
 
@@ -501,7 +544,11 @@ describe('openGattSession', () => {
     const char = session.charMap.get(normalizeUuid('2a9d'))!;
     const got: Buffer[] = [];
     const unsub = await char.subscribe((d) => got.push(d));
-    conn.emit('message.BluetoothGATTNotifyDataResponse', { address: expect.any(Number), handle: 7, dataList: [0xaa] });
+    conn.emit('message.BluetoothGATTNotifyDataResponse', {
+      address: expect.any(Number),
+      handle: 7,
+      dataList: [0xaa],
+    });
     expect(got[0]).toEqual(Buffer.from([0xaa]));
     unsub();
   });
@@ -527,6 +574,7 @@ Expected: FAIL, `openGattSession` not found.
 - [ ] **Step 3: Implement `gatt.ts`**
 
 Full logic: `addr = macToInt(mac)`. `await connection.connectBluetoothDeviceService(addr)`; if `!resp.connected` throw `Error('ESPHome proxy could not connect to <mac>')`. `const { servicesList } = await connection.listBluetoothGATTServicesService(addr)`. Build `charMap`: for each service, each characteristic → `normalizeUuid` key via `esphomeUuidToString(char.uuidList)`, value a `BleChar`:
+
 - `read()`: `Buffer.from((await connection.readBluetoothGATTCharacteristicService(addr, handle)).dataList)`
 - `write(buf, withResponse)`: `await connection.writeBluetoothGATTCharacteristicService(addr, handle, Uint8Array.from(buf), withResponse)`. If `buf.length > (mtu-3)` and `mtu` known, write in `mtu-3` chunks sequentially (covers spec risk #3).
 - `subscribe(onData)`: `await connection.notifyBluetoothGATTCharacteristicService(addr, handle)`; add a `message.BluetoothGATTNotifyDataResponse` listener filtering `m.address === addr && m.handle === handle`, call `onData(Buffer.from(m.dataList))`; return an unsubscribe that `connection.removeListener`s it. Maintain one shared notify listener per session keyed by handle to avoid duplicate handlers, or one-per-subscribe with its own removeListener (simpler; pick one-per-subscribe).
@@ -550,6 +598,7 @@ git commit -m "feat(ble): ESPHome GATT bridge (BleChar/BleDevice over proxy conn
 ## Task 5: pool `connectGatt` + single-shot GATT in `scan.ts`
 
 **Files:**
+
 - Modify: `src/ble/handler-esphome-proxy/pool.ts` (add `connectGatt`)
 - Modify: `src/ble/handler-esphome-proxy/scan.ts`
 - Test: `tests/ble/esphome-proxy/scan.test.ts`
@@ -594,10 +643,12 @@ git commit -m "feat(ble): single-shot GATT reads over ESPHome proxy (#116)"
 ## Task 6: continuous GATT in `watcher.ts`
 
 **Files:**
+
 - Modify: `src/ble/handler-esphome-proxy/watcher.ts`
 - Test: `tests/ble/esphome-proxy/watcher.test.ts`
 
 `ReadingWatcher` now owns an `EsphomeProxyPool` (started in `start()`, stopped in `stop()`), broadcast path fed by `pool.onAdvertisement` (behavior unchanged). New: when an advertisement matches a GATT adapter (the current `warnGattNotSupported` branch), instead schedule an on-demand GATT read:
+
 - per-MAC in-flight `Set<string>`; ignore if already connecting/reading that MAC.
 - `pool.connectGatt(mac)` → `waitForRawReading(...)` → on success `queue.push`, apply existing dedup; always `session.close()` in `finally`; remove from in-flight.
 - on connect failure: if it looks like slot exhaustion (error text match) or any failure, `warnGattNotSupported`-style once-per-MAC LRU warn; never throw out of the handler (continuous must survive).
@@ -630,6 +681,7 @@ git commit -m "feat(ble): continuous-mode GATT reads over ESPHome proxy (#116)"
 ## Task 7: scanDevices via pool + backward-compat e2e
 
 **Files:**
+
 - Modify: `src/ble/handler-esphome-proxy/scan.ts` (`scanDevices` uses pool)
 - Test: extend `tests/ble/esphome-proxy/scan.test.ts`
 
@@ -658,6 +710,7 @@ git commit -m "feat(ble): ESPHome device discovery across the proxy pool (#116)"
 ## Task 8: Setup wizard - additional proxies step
 
 **Files:**
+
 - Modify: the ESPHome step in the wizard (locate via `grep -rn "esphome" src/wizard src/setup 2>/dev/null` or `grep -rn "esphome_proxy\|ESPHome" src --include=*.ts -l`)
 - Test: the wizard step's existing test file (same directory), add a case
 
@@ -688,6 +741,7 @@ git commit -m "feat(wizard): collect additional ESPHome proxies for mesh setups 
 ## Task 9: Docs + README
 
 **Files:**
+
 - Modify: `docs/guide/esphome-proxy.md` (Phase 2 section: GATT now supported, multi-proxy `additional_proxies` YAML, what changed vs Phase 1)
 - Modify: `README.md` (the line that calls the ESPHome proxy broadcast-only / "Phase 1" - update to note GATT support; do not touch adapter/exporter counts)
 - Modify: `docs/faq.md` only if it states ESPHome proxy is broadcast-only

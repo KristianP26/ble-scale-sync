@@ -33,7 +33,7 @@ The ESPHome proxy sees the scale's BLE advertisement, wraps it in a Native API `
 - Either the ESPHome API encryption key (recommended) or the legacy API password, matching the device's `api:` config
 
 ::: tip When to pick this vs the ESP32 MQTT proxy
-If you already have ESPHome proxies in your home, start here: zero new hardware. If you don't, the [ESP32 MQTT proxy](/guide/esp32-proxy) supports both broadcast and GATT scales today and has full display/beep feedback UI.
+Both transports support broadcast and GATT scales. If you already have ESPHome proxies in your home, start here: zero new hardware. The [ESP32 MQTT proxy](/guide/esp32-proxy) additionally offers a display/beep feedback UI.
 :::
 
 ## Configuring BLE Scale Sync

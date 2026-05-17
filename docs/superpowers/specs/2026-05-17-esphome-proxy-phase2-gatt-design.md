@@ -163,14 +163,14 @@ additional proxies is added:
 ble:
   handler: esphome-proxy
   esphome_proxy:
-    host: proxy1.home          # primary (unchanged; Phase 1 configs keep working)
+    host: proxy1.home # primary (unchanged; Phase 1 configs keep working)
     port: 6053
-    encryption_key: "..."
-    additional_proxies:        # NEW, optional
+    encryption_key: '...'
+    additional_proxies: # NEW, optional
       - host: proxy2.home
-        encryption_key: "..."
+        encryption_key: '...'
       - host: proxy3.home
-        password: "..."
+        password: '...'
 ```
 
 - Zod: `additional_proxies: z.array(<per-proxy shape>).default([])`. The pool
@@ -184,13 +184,13 @@ ble:
 
 ## Error handling
 
-| Situation | Behavior |
-|---|---|
-| No proxy has seen the MAC | `pickProxyFor` null -> broadcast wait continues (single-shot `BROADCAST_WAIT_MS` timeout); continuous just waits for the next advert |
-| GATT connect fail (timeout / slot full) | auto-pick next proxy; all failed -> descriptive error (single-shot) / warn-once + continue (continuous) |
-| Notify-data / disconnect event name mismatch across lib versions | resolved during the implementation spike; bridge isolates event mapping to one place |
-| ESPHome client drops during a GATT session | `BleDevice.onDisconnect` fires -> `waitForRawReading` reject/flush; pool marks the proxy degraded, lib `reconnect:true` recovers |
-| Adapter needs exact MTU/timing (e.g. Eufy AES) | full parity attempt; chunk writes in `BleChar.write` if ESPHome MTU is small; real-hardware verification is a per-model follow-up |
+| Situation                                                        | Behavior                                                                                                                             |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| No proxy has seen the MAC                                        | `pickProxyFor` null -> broadcast wait continues (single-shot `BROADCAST_WAIT_MS` timeout); continuous just waits for the next advert |
+| GATT connect fail (timeout / slot full)                          | auto-pick next proxy; all failed -> descriptive error (single-shot) / warn-once + continue (continuous)                              |
+| Notify-data / disconnect event name mismatch across lib versions | resolved during the implementation spike; bridge isolates event mapping to one place                                                 |
+| ESPHome client drops during a GATT session                       | `BleDevice.onDisconnect` fires -> `waitForRawReading` reject/flush; pool marks the proxy degraded, lib `reconnect:true` recovers     |
+| Adapter needs exact MTU/timing (e.g. Eufy AES)                   | full parity attempt; chunk writes in `BleChar.write` if ESPHome MTU is small; real-hardware verification is a per-model follow-up    |
 
 Philosophy matches the current handler: continuous never crashes on a single
 scale; single-shot returns a clear error.
