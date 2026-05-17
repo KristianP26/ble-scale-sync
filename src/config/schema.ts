@@ -9,7 +9,7 @@ const CB_UUID_REGEX =
 
 // --- Sub-schemas ---
 
-export const EsphomeProxySchema = z
+const EsphomeEndpointSchema = z
   .object({
     host: z.string().min(1, 'ESPHome host is required'),
     port: z.number().int().min(1).max(65535).default(6053),
@@ -21,6 +21,25 @@ export const EsphomeProxySchema = z
     message: 'Set either encryption_key (Noise) or password (legacy), not both',
     path: ['encryption_key'],
   });
+
+export const EsphomeProxySchema = z
+  .object({
+    host: z.string().min(1, 'ESPHome host is required'),
+    port: z.number().int().min(1).max(65535).default(6053),
+    encryption_key: z.string().optional().nullable(),
+    password: z.string().optional().nullable(),
+    client_info: z.string().default('ble-scale-sync'),
+    // Additional ESPHome proxies for a mesh setup. Optional; an empty list
+    // (the default) preserves the original single-proxy behavior. GATT
+    // connects route to the proxy that last saw the scale (#116).
+    additional_proxies: z.array(EsphomeEndpointSchema).default([]),
+  })
+  .refine((c) => !(c.encryption_key && c.password), {
+    message: 'Set either encryption_key (Noise) or password (legacy), not both',
+    path: ['encryption_key'],
+  });
+
+export type EsphomeEndpointConfig = z.infer<typeof EsphomeEndpointSchema>;
 
 export const MqttProxySchema = z
   .object({
