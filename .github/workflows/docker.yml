@@ -3,6 +3,8 @@ name: Docker
 on:
   release:
     types: [published]
+  push:
+    branches: [dev]
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
@@ -49,6 +51,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=raw,value=latest,enable=${{ github.event_name == 'release' }}
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
             type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Build and push
