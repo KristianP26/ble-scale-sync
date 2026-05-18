@@ -10,11 +10,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 * **ble:** registry self-check to prevent adapter matches() collisions ([#182](https://github.com/KristianP26/ble-scale-sync/issues/182)) ([663f55a](https://github.com/KristianP26/ble-scale-sync/commit/663f55a8a9736967626312ca6d4f561a6db62295))
+* **ble:** ESPHome proxy Phase 2 - GATT + multi-proxy ([#116](https://github.com/KristianP26/ble-scale-sync/issues/116)) ([#187](https://github.com/KristianP26/ble-scale-sync/issues/187)) ([c850aa3](https://github.com/KristianP26/ble-scale-sync/commit/c850aa3b55b018143cb99e4659b53f04f1720ae2))
+* **scales:** Beurer BF720 / BF105 SIG-standard adapter ([#168](https://github.com/KristianP26/ble-scale-sync/issues/168)) ([#180](https://github.com/KristianP26/ble-scale-sync/issues/180)) ([3f52568](https://github.com/KristianP26/ble-scale-sync/commit/3f525688a099d5e5510edfb96e60cec9ab91fe3e))
+* **scales:** add Eufy T9120 (A1) support ([#178](https://github.com/KristianP26/ble-scale-sync/issues/178)) ([3f5ecd4](https://github.com/KristianP26/ble-scale-sync/commit/3f5ecd44e6f511b86e343f4dd392a9d031960ba1))
 
 
 ### Fixed
 
 * **scales:** defer Renpho ES-WBE28 from the QN adapter ([#191](https://github.com/KristianP26/ble-scale-sync/issues/191)) ([27a58d5](https://github.com/KristianP26/ble-scale-sync/commit/27a58d5dda2e10ff6aced5df296637efa890c851))
+* **ble:** characteristic-aware adapter matching for 0xFFF0 collision ([#177](https://github.com/KristianP26/ble-scale-sync/issues/177)) ([#179](https://github.com/KristianP26/ble-scale-sync/issues/179)) ([6cb7992](https://github.com/KristianP26/ble-scale-sync/commit/6cb799290687fd02c84dbcbfb7dd1fc5106eddcb))
+
+
+### Docs
+
+* add boildead and alexw23 to contributors ([bf15b87](https://github.com/KristianP26/ble-scale-sync/commit/bf15b8766da1670600dc71d246d04d7587001226))
 
 ## [1.13.1](https://github.com/KristianP26/ble-scale-sync/compare/v1.13.0...v1.13.1) (2026-05-18)
 
