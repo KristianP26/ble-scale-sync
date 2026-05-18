@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.13.1](https://github.com/KristianP26/ble-scale-sync/compare/v1.13.0...v1.13.1) (2026-05-18)
+
+
+### Fixed
+
+* **docker:** add missing setup-strava command to entrypoint ([#188](https://github.com/KristianP26/ble-scale-sync/issues/188)) ([#189](https://github.com/KristianP26/ble-scale-sync/issues/189)) ([af47e3a](https://github.com/KristianP26/ble-scale-sync/commit/af47e3aa1322fa34a440f8d43781793802a46080))
+
 ## [1.13.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.12.1...v1.13.0) (2026-05-13)
 
 
