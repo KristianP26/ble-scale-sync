@@ -47,6 +47,9 @@ case "$CMD" in
       exec python3 garmin-scripts/setup_garmin.py "$@"
     fi
     ;;
+  setup-strava)
+    exec node dist/exporters/strava-setup.js
+    ;;
   help|--help|-h)
     echo "BLE Scale Sync - Docker Commands"
     echo ""
@@ -61,6 +64,7 @@ case "$CMD" in
     echo "  setup-garmin                  Garmin auth (env vars: GARMIN_EMAIL, GARMIN_PASSWORD)"
     echo "  setup-garmin --user <name>    Garmin auth for a specific user from config.yaml"
     echo "  setup-garmin --all-users      Garmin auth for all users from config.yaml"
+    echo "  setup-strava                  Strava OAuth (interactive browser authorization)"
     echo "  help                          Show this help message"
     echo ""
     echo "Any other command is executed directly (e.g. 'sh' for a debug shell)."
