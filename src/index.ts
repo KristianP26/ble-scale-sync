@@ -5,6 +5,7 @@ import { writeFileSync } from 'node:fs';
 import { setDisplayUsers } from './ble/handler-mqtt-proxy/index.js';
 import { bootstrapMqttProxy } from './ble/mqtt-proxy-bootstrap.js';
 import { notifyReady, startHeartbeat, stopHeartbeat } from './runtime/systemd-watchdog.js';
+import { armHardExit } from './runtime/hard-exit.js';
 import { adapters } from './scales/index.js';
 import { assertRegistryIntegrity } from './scales/registry-check.js';
 import { createLogger, setLogLevel, LogLevel } from './logger.js';
@@ -51,6 +52,9 @@ if (cliFlags.help) {
   console.log(
     '  BLE_WATCHDOG_MAX_FAILURES 0-1000  override runtime.watchdog_max_consecutive_failures (0 = disabled)',
   );
+  console.log(
+    '  BLE_HARD_EXIT_GRACE_MS 1000-60000  force-exit floor for hung shutdown (default 5000)',
+  );
   console.log('  SCALE_MAC        MAC/UUID    override ble.scale_mac');
   console.log('  NOBLE_DRIVER     abandonware/stoprocent  override ble.noble_driver');
   console.log('  BLE_ADAPTER      hci0/hci1/...  override ble.adapter (Linux only)');
@@ -69,7 +73,26 @@ if (initialConfig.runtime?.debug) setLogLevel(LogLevel.DEBUG);
 
 // ─── Abort / signal handling ────────────────────────────────────────────────
 
+// Force-exit floor: if abort-driven cleanup cannot drain the event loop
+// within this window (e.g. a wedged D-Bus/BlueZ handle pins it open), the
+// process is force-exited so Docker `restart: unless-stopped` / systemd can
+// recover. Default 5s — below Docker's 10s SIGKILL grace and well below a
+// typical systemd WatchdogSec. Override via BLE_HARD_EXIT_GRACE_MS (ms).
+const HARD_EXIT_GRACE_MS = ((): number => {
+  const raw = process.env.BLE_HARD_EXIT_GRACE_MS;
+  if (raw === undefined) return 5_000;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 1_000 && n <= 60_000 ? n : 5_000;
+})();
+
 const ac = new AbortController();
+
+// Register the hard-exit safety net before anything can abort `ac`. Armed
+// once on the first abort (watchdog trip, SIGTERM, or any internal abort);
+// idempotent, unref'd, so a clean drain still exits naturally first (#194).
+ac.signal.addEventListener('abort', () => armHardExit({ timeoutMs: HARD_EXIT_GRACE_MS, log }), {
+  once: true,
+});
 const ctx = createAppContext({
   config: initialConfig,
   resolved: initialResolved,

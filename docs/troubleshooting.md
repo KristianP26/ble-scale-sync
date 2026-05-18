@@ -168,6 +168,14 @@ On Pi 3/4 Broadcom on-board chips, this is a kernel/firmware-level issue that ev
 
 **Auto-restart watchdog (continuous mode).** When in-process recovery is not enough (typically Pi 3/4 Broadcom firmware lock-up), a watchdog exits the process after `runtime.watchdog_max_consecutive_failures` consecutive scan failures (default `10`, ≈30 min). With Docker `restart: unless-stopped` the container restarts cleanly, the entrypoint resets the BT adapter, and the controller is typically unwedged. The watchdog only arms after the first successful weigh-in in the process lifetime, so it does not restart-loop the container if the scale is offline (vacation) or `scale_mac` is misconfigured.
 
+::: warning The watchdog recovers by **exiting the process** — set a restart policy
+The recovery is the process _exiting_ so the supervisor starts it again. You **must** run with `restart: unless-stopped` (Compose) or `--restart unless-stopped` (`docker run`). Without a restart policy the container just stops.
+
+A Docker/Compose `restart:` policy fires only on process **exit** — it does **not** act on the `HEALTHCHECK` going `unhealthy`. If you see the container stuck `Up (unhealthy)` but never restarting, plain Docker is working as designed: only Swarm, Kubernetes, or an [autoheal](https://github.com/willfarrell/docker-autoheal) sidecar restarts on health status. With a restart policy and the hard-exit floor below, the process always exits, so the policy always fires.
+:::
+
+To bound the rare case where a wedged D-Bus/BlueZ handle pins the event loop open and graceful shutdown cannot drain (the process logs `Stopped.` but never exits, so the restart policy never fires), the app force-exits 5s after any abort-driven shutdown. Override with `BLE_HARD_EXIT_GRACE_MS` (1000–60000 ms) if your cleanup legitimately needs longer.
+
 ```yaml
 runtime:
   watchdog_max_consecutive_failures: 10 # default; 0 = disabled
