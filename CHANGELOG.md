@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.14.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.13.1...v1.14.0) (2026-05-18)
+
+
+### Added
+
+* **ble:** registry self-check to prevent adapter matches() collisions ([#182](https://github.com/KristianP26/ble-scale-sync/issues/182)) ([663f55a](https://github.com/KristianP26/ble-scale-sync/commit/663f55a8a9736967626312ca6d4f561a6db62295))
+
+
+### Fixed
+
+* **scales:** defer Renpho ES-WBE28 from the QN adapter ([#191](https://github.com/KristianP26/ble-scale-sync/issues/191)) ([27a58d5](https://github.com/KristianP26/ble-scale-sync/commit/27a58d5dda2e10ff6aced5df296637efa890c851))
+
 ## [1.13.1](https://github.com/KristianP26/ble-scale-sync/compare/v1.13.0...v1.13.1) (2026-05-18)
 
 
