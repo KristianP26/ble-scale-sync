@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.14.1](https://github.com/KristianP26/ble-scale-sync/compare/v1.14.0...v1.14.1) (2026-05-19)
+
+
+### Fixed
+
+* **firmware:** correct mip ref position for async primitives install ([8974caa](https://github.com/KristianP26/ble-scale-sync/commit/8974caa1f9b55cabb792fb0532b29785518feabb)), closes [#198](https://github.com/KristianP26/ble-scale-sync/issues/198)
+* force-exit on hung shutdown so the watchdog actually restarts the container ([#194](https://github.com/KristianP26/ble-scale-sync/issues/194)) ([#196](https://github.com/KristianP26/ble-scale-sync/issues/196)) ([3b60393](https://github.com/KristianP26/ble-scale-sync/commit/3b6039397f53bc4d85f94a9889b7fedac4b24356))
+
 ## [1.14.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.13.1...v1.14.0) (2026-05-18)
 
 
