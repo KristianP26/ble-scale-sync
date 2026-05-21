@@ -62,7 +62,10 @@ mqtt_config["server"] = cfg["mqtt_broker"]
 mqtt_config["port"] = cfg["mqtt_port"]
 mqtt_config["client_id"] = DEVICE_ID
 mqtt_config["will"] = (topic("status"), "offline", True, 1)
-mqtt_config["keepalive"] = 30
+# 60s keepalive (broker tolerates ~90s without a ping): a GATT connect
+# attempt can starve WiFi for tens of seconds on the shared 2.4GHz radio,
+# so a tighter value drops the MQTT link mid-connect (#201).
+mqtt_config["keepalive"] = 60
 mqtt_config["clean"] = True
 mqtt_config["queue_len"] = 0  # callback mode
 
@@ -171,7 +174,17 @@ async def _streaming_scan_loop():
             await asyncio.sleep(1)
             continue
 
-        await asyncio.sleep_ms(board.PUBLISH_INTERVAL_MS)
+        # Wait out the publish interval, but flush early the instant a known
+        # scale MAC shows up in the scan buffer: a stepped-on scale stays
+        # connectable only briefly, so shaving the batching delay matters (#201).
+        waited = 0
+        while waited < board.PUBLISH_INTERVAL_MS:
+            await asyncio.sleep_ms(250)
+            waited += 250
+            if _scan_paused:
+                break
+            if _scale_macs and bridge.has_pending_scale_mac(_scale_macs):
+                break
 
         if _scan_paused:
             continue
