@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.15.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.14.1...v1.15.0) (2026-05-21)
+
+
+### Added
+
+* **exporter:** add Intervals.icu exporter ([#203](https://github.com/KristianP26/ble-scale-sync/issues/203)) ([60af3d0](https://github.com/KristianP26/ble-scale-sync/commit/60af3d0e98fdb90268dbe43d7316b6bc8e9ff3c1))
+* **exporter:** add Telegram exporter ([#207](https://github.com/KristianP26/ble-scale-sync/issues/207)) ([0b73e0f](https://github.com/KristianP26/ble-scale-sync/commit/0b73e0f76601603e578f824d5b92cccf2c451e29))
+* **firmware:** support generic ESP-WROOM-32 boards ([487e482](https://github.com/KristianP26/ble-scale-sync/commit/487e482084ac42be73f8f6f4bde9d356f2f6a1a1))
+
+
+### Fixed
+
+* **ble:** route dual-mode adapters to GATT when no broadcast data ([#201](https://github.com/KristianP26/ble-scale-sync/issues/201)) ([9de2dee](https://github.com/KristianP26/ble-scale-sync/commit/9de2deea0f8223f72a1c631ed31584a5600a6fba))
+* **exporters:** fail fast on non-retryable HTTP errors + validate required config ([6ebea77](https://github.com/KristianP26/ble-scale-sync/commit/6ebea77b81320eeb7bf20a106c96b1cb460c524a))
+* **firmware:** harden constrained ESP32 boards against scan-buffer OOM ([c99605e](https://github.com/KristianP26/ble-scale-sync/commit/c99605e22f667f06023fdd9ee3f57c4f0c8b9e36))
+* **firmware:** parse 128-bit / 32-bit service UUIDs and service data ([bf918ad](https://github.com/KristianP26/ble-scale-sync/commit/bf918ad75fbaeb35465544af74871a5f0bd286fb))
+* **firmware:** publish service-UUID-only devices in scan results ([c1f9723](https://github.com/KristianP26/ble-scale-sync/commit/c1f9723013972749846acb7ff76fa5ec169a164c)), closes [#201](https://github.com/KristianP26/ble-scale-sync/issues/201)
+
+
+### Docs
+
+* bump adapter and exporter counts to 25 and 8 ([0e21abe](https://github.com/KristianP26/ble-scale-sync/commit/0e21abe88f5073238d2e3bdc7da840a505270304))
+* **scales:** note Mi Scale 2 works on all BLE transports ([e126848](https://github.com/KristianP26/ble-scale-sync/commit/e126848ad11a976c6956dbff5ee67ce755553306))
+
 ## [1.14.1](https://github.com/KristianP26/ble-scale-sync/compare/v1.14.0...v1.14.1) (2026-05-19)
 
 
