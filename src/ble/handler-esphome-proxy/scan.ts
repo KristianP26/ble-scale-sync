@@ -5,7 +5,7 @@ import type {
 } from '../../interfaces/scale-adapter.js';
 import type { EsphomeProxyConfig } from '../../config/schema.js';
 import type { ScanOptions, ScanResult } from '../types.js';
-import { type RawReading, waitForRawReading } from '../shared.js';
+import { type RawReading, waitForRawReading, hasParseableBroadcastSource } from '../shared.js';
 import { bleLog, errMsg, withTimeout, IMPEDANCE_GRACE_MS } from '../types.js';
 import { EsphomeProxyPool } from './pool.js';
 
@@ -158,16 +158,17 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
               return;
             }
 
-            // Adapter supports broadcast but no parseable frame yet: keep waiting.
-            if (adapter.parseBroadcast || adapter.parseServiceData) {
+            // Device still carries broadcast data this adapter parses but no
+            // stable frame yet: keep waiting.
+            if (hasParseableBroadcastSource(adapter, info)) {
               bleLog.debug(
                 `${adapter.name} matched at ${address} but broadcast frame is not stable yet`,
               );
               return;
             }
 
-            // Adapter advertises nothing broadcast-able and no GATT
-            // characteristic either: nothing we can do, keep waiting.
+            // No broadcast source for this device and no GATT characteristic
+            // either: nothing we can do, keep waiting.
             if (!adapter.charNotifyUuid) {
               bleLog.debug(
                 `${adapter.name} matched at ${address} but has no broadcast or GATT path`,

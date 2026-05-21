@@ -181,6 +181,40 @@ function createGattAdapter(name = 'GattScale'): ScaleAdapter {
   };
 }
 
+/**
+ * Dual-mode adapter analogous to the real QN Scale: declares `parseBroadcast`
+ * (for the AABB broadcast variant) AND exposes a GATT notify/write path. A
+ * matched device that carries no broadcast data must fall through to GATT
+ * rather than being silently skipped (#201).
+ */
+function createDualModeAdapter(name = 'DualScale'): ScaleAdapter {
+  let gattReading: ScaleReading | null = null;
+  return {
+    name,
+    charNotifyUuid: GATT_NOTIFY_UUID,
+    charWriteUuid: GATT_WRITE_UUID,
+    unlockCommand: [0xa5, 0x01],
+    unlockIntervalMs: 2000,
+    matches: vi.fn(
+      (info: BleDeviceInfo) =>
+        info.localName === 'DualScale' || info.manufacturerData?.id === 0xffff,
+    ),
+    parseBroadcast: vi.fn((data: Buffer) => ({
+      weight: data.readUInt16LE(0) / 100,
+      impedance: 0,
+    })),
+    parseNotification: vi.fn((data: Buffer) => {
+      if (data.length >= 4) {
+        gattReading = { weight: data.readUInt16LE(0) / 100, impedance: data.readUInt16LE(2) };
+        return gattReading;
+      }
+      return null;
+    }),
+    isComplete: vi.fn((r: ScaleReading) => (r.impedance === 0 ? r.weight > 0 : r.impedance > 0)),
+    computeMetrics: vi.fn(() => BODY_COMP),
+  };
+}
+
 // ─── Import the module under test ────────────────────────────────────────────
 
 // Must import AFTER vi.mock
@@ -394,6 +428,107 @@ describe('handler-mqtt-proxy', () => {
         mockClient.publishAsync as ReturnType<typeof vi.fn>
       ).mock.calls.filter((c: unknown[]) => c[0] === `${PREFIX}/disconnect`);
       expect(disconnectCalls).toHaveLength(1);
+    });
+
+    it('dual-mode adapter with no broadcast data falls back to GATT (#201)', async () => {
+      // Regression: a QN-Scale-style adapter declares parseBroadcast but the
+      // matched device advertises only a name + service UUID (no manufacturer
+      // data). It must still reach the GATT path instead of being skipped.
+      const adapter = createDualModeAdapter();
+
+      mockClient.subscribeAsync = vi.fn(async (topic: string) => {
+        if (topic === `${PREFIX}/status`) {
+          queueMicrotask(() => mockClient._simulateMessage(`${PREFIX}/status`, 'online'));
+        }
+        if (topic === `${PREFIX}/scan/results`) {
+          queueMicrotask(() =>
+            mockClient._simulateMessage(
+              `${PREFIX}/scan/results`,
+              JSON.stringify([
+                {
+                  address: 'AA:BB:CC:DD:EE:FF',
+                  name: 'DualScale',
+                  rssi: -80,
+                  services: ['ffe0'],
+                  addr_type: 0,
+                },
+              ]),
+            ),
+          );
+        }
+        return [];
+      });
+
+      const origPublish = mockClient.publishAsync;
+      mockClient.publishAsync = vi.fn(async (topic: string, payload?: string | Buffer) => {
+        if (topic === `${PREFIX}/connect`) {
+          queueMicrotask(() =>
+            mockClient._simulateMessage(
+              `${PREFIX}/connected`,
+              JSON.stringify({
+                chars: [
+                  { uuid: GATT_NOTIFY_UUID, properties: ['notify'] },
+                  { uuid: GATT_WRITE_UUID, properties: ['write'] },
+                ],
+              }),
+            ),
+          );
+        }
+        if (topic === `${PREFIX}/write/${GATT_WRITE_UUID}`) {
+          queueMicrotask(() => {
+            const buf = Buffer.alloc(4);
+            buf.writeUInt16LE(7550, 0); // 75.50 kg
+            buf.writeUInt16LE(500, 2); // impedance 500
+            mockClient._simulateMessage(`${PREFIX}/notify/${GATT_NOTIFY_UUID}`, buf);
+          });
+        }
+        return origPublish(topic, payload);
+      });
+
+      const result = await scanAndReadRaw({
+        adapters: [adapter],
+        profile: PROFILE,
+        mqttProxy: MQTT_PROXY_CONFIG,
+      });
+
+      expect(result.reading.weight).toBe(75.5);
+      expect(result.reading.impedance).toBe(500);
+
+      const connectCalls = (mockClient.publishAsync as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c: unknown[]) => c[0] === `${PREFIX}/connect`,
+      );
+      expect(connectCalls).toHaveLength(1);
+    });
+
+    it('dual-mode adapter uses broadcast when manufacturer data is present', async () => {
+      // The same adapter, when the device DOES broadcast a parseable frame,
+      // must take the passive path and never open a GATT connection.
+      const adapter = createDualModeAdapter();
+
+      wireBroadcastFlow([
+        {
+          address: 'AA:BB:CC:DD:EE:FF',
+          name: '',
+          rssi: -50,
+          services: [],
+          manufacturer_id: 0xffff,
+          manufacturer_data: mfrHex(7550),
+        },
+      ]);
+
+      const result = await scanAndReadRaw({
+        adapters: [adapter],
+        profile: PROFILE,
+        mqttProxy: MQTT_PROXY_CONFIG,
+      });
+
+      expect(result.reading.weight).toBe(75.5);
+      expect(adapter.parseBroadcast).toHaveBeenCalled();
+
+      const connectCalls = (mockClient.publishAsync as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c: unknown[]) => c[0] === `${PREFIX}/connect`,
+      );
+      expect(connectCalls).toHaveLength(0);
     });
 
     it('filters scan results by targetMac', async () => {
@@ -1357,6 +1492,63 @@ describe('handler-mqtt-proxy', () => {
         (c: unknown[]) => c[0] === `${PREFIX}/connect`,
       );
       expect(connectCalls).toHaveLength(0);
+    });
+
+    it('ReadingWatcher GATT-connects a dual-mode scale with no broadcast data (#201)', async () => {
+      // Continuous-mode regression: the QN-Scale appears in a scan batch with a
+      // name but no manufacturer data. The watcher must open a GATT connection
+      // instead of silently skipping it because the adapter declares parseBroadcast.
+      const adapter = createDualModeAdapter();
+      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter], undefined, PROFILE);
+      await watcher.start();
+
+      const origPublish = mockClient.publishAsync;
+      mockClient.publishAsync = vi.fn(async (topic: string, payload?: string | Buffer) => {
+        if (topic === `${PREFIX}/connect`) {
+          queueMicrotask(() =>
+            mockClient._simulateMessage(
+              `${PREFIX}/connected`,
+              JSON.stringify({
+                chars: [
+                  { uuid: GATT_NOTIFY_UUID, properties: ['notify'] },
+                  { uuid: GATT_WRITE_UUID, properties: ['write'] },
+                ],
+              }),
+            ),
+          );
+        }
+        if (topic === `${PREFIX}/write/${GATT_WRITE_UUID}`) {
+          queueMicrotask(() => {
+            const buf = Buffer.alloc(4);
+            buf.writeUInt16LE(8000, 0); // 80.00 kg
+            buf.writeUInt16LE(450, 2); // impedance 450
+            mockClient._simulateMessage(`${PREFIX}/notify/${GATT_NOTIFY_UUID}`, buf);
+          });
+        }
+        return origPublish(topic, payload);
+      });
+
+      mockClient._simulateMessage(
+        `${PREFIX}/scan/results`,
+        JSON.stringify([
+          {
+            address: 'AA:BB:CC:DD:EE:FF',
+            name: 'DualScale',
+            rssi: -80,
+            services: ['ffe0'],
+            addr_type: 0,
+          },
+        ]),
+      );
+
+      const raw = await watcher.nextReading();
+      expect(raw.reading.weight).toBe(80.0);
+      expect(raw.reading.impedance).toBe(450);
+
+      const connectCalls = (mockClient.publishAsync as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c: unknown[]) => c[0] === `${PREFIX}/connect`,
+      );
+      expect(connectCalls).toHaveLength(1);
     });
   });
 });

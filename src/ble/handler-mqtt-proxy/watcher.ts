@@ -1,7 +1,7 @@
 import type { ScaleAdapter, ScaleReading, UserProfile } from '../../interfaces/scale-adapter.js';
 import type { MqttProxyConfig } from '../../config/schema.js';
 import type { RawReading } from '../shared.js';
-import { waitForRawReading } from '../shared.js';
+import { waitForRawReading, hasParseableBroadcastSource } from '../shared.js';
 import { bleLog, withTimeout, errMsg, IMPEDANCE_GRACE_MS } from '../types.js';
 import { AsyncQueue } from '../async-queue.js';
 import { topics } from './topics.js';
@@ -173,11 +173,15 @@ export class ReadingWatcher {
             }
           }
 
-          // Broadcast-capable or broadcast-only: skip, wait for stable advertisement
-          if (adapter.parseBroadcast || adapter.parseServiceData || !adapter.charNotifyUuid)
-            continue;
+          // Device still carries broadcast data this adapter parses — a usable
+          // reading just hasn't arrived yet. Keep waiting for a stable frame.
+          if (hasParseableBroadcastSource(adapter, info)) continue;
 
-          // GATT fallback: adapter matched but no broadcast support
+          // No broadcast source for this device. GATT-connect if the adapter
+          // has a GATT path (#201: dual-mode adapters like QN Scale must reach
+          // this even though they declare parseBroadcast).
+          if (!adapter.charNotifyUuid) continue;
+
           this.handleGattReading(entry, adapter).catch((err) => {
             bleLog.warn(`GATT reading failed for ${entry.address}: ${errMsg(err)}`);
           });

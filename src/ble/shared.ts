@@ -3,11 +3,42 @@ import type {
   UserProfile,
   ScaleReading,
   BodyComposition,
+  BleDeviceInfo,
   ConnectionContext,
   ScaleAuth,
 } from '../interfaces/scale-adapter.js';
 import type { WeightUnit } from '../config/schema.js';
 import { LBS_TO_KG, normalizeUuid, errMsg, bleLog } from './types.js';
+
+// ─── Broadcast-vs-GATT routing ────────────────────────────────────────────────
+
+/**
+ * True when the matched device still carries broadcast/service data this
+ * adapter can parse — a usable reading may yet arrive in a future
+ * advertisement, so the caller should keep waiting rather than opening a GATT
+ * connection.
+ *
+ * False when the device exposes no parseable broadcast source: a dual-mode
+ * adapter (e.g. QN Scale, which declares `parseBroadcast` for the AABB
+ * broadcast variant but also has a GATT path) must then fall through to its
+ * GATT path. This is the #201 fix — the scan-batch proxy paths previously let
+ * any adapter that merely *declared* `parseBroadcast`/`parseServiceData` skip
+ * GATT entirely, so GATT-only QN scales (which advertise just a name + service
+ * UUID, no manufacturer data) were matched and then silently dropped.
+ *
+ * Known limitation (Option B): any `manufacturerData` counts as a broadcast
+ * source even if `parseBroadcast` would reject it. A QN scale advertising
+ * non-AABB manufacturer data would therefore be gated to "wait" — this matches
+ * the pre-#201 behaviour, so it is no regression. GATT-only QN scales
+ * advertise no manufacturer data at all, so they are unaffected. The
+ * esphome-proxy *watcher* intentionally does not use this helper: its
+ * per-advertisement stream GATT-connects such devices instead (QN Elis 1).
+ */
+export function hasParseableBroadcastSource(adapter: ScaleAdapter, info: BleDeviceInfo): boolean {
+  if (adapter.parseBroadcast && info.manufacturerData) return true;
+  if (adapter.parseServiceData && info.serviceData && info.serviceData.length > 0) return true;
+  return false;
+}
 
 // ─── Thin abstractions over BLE library objects ───────────────────────────────
 

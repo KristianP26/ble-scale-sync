@@ -7,7 +7,7 @@ import type {
 import type { MqttProxyConfig } from '../../config/schema.js';
 import type { ScanOptions, ScanResult } from '../types.js';
 import type { RawReading } from '../shared.js';
-import { waitForRawReading } from '../shared.js';
+import { waitForRawReading, hasParseableBroadcastSource } from '../shared.js';
 import { bleLog, normalizeUuid, withTimeout } from '../types.js';
 import { COMMAND_TIMEOUT_MS, topics, type Topics } from './topics.js';
 import { type MqttClient, createMqttClient } from './client.js';
@@ -180,18 +180,23 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         }
       }
 
-      // Broadcast-capable or broadcast-only adapters: wait for next scan with data
-      if (
-        weightOnlyFallback ||
-        adapter.parseBroadcast ||
-        adapter.parseServiceData ||
-        !adapter.charNotifyUuid
-      ) {
+      // A passive adapter is holding a weight-only frame, or this device still
+      // carries broadcast data the adapter parses — keep scanning for a
+      // stable/complete reading rather than connecting.
+      if (weightOnlyFallback || hasParseableBroadcastSource(adapter, info)) {
         bleLog.debug(`${adapter.name} supports broadcast, waiting for stable reading...`);
         continue;
       }
 
-      // GATT fallback: adapter matched but no broadcast support
+      // No broadcast source for this device and no GATT path either — nothing
+      // we can do for this candidate.
+      if (!adapter.charNotifyUuid) {
+        bleLog.debug(`${adapter.name} matched but has no broadcast or GATT path`);
+        continue;
+      }
+
+      // GATT fallback: adapter matched, no broadcast support for this device
+      // (#201: dual-mode adapters like QN Scale must reach this).
       bleLog.info(`No broadcast data for ${adapter.name}; connecting via GATT proxy...`);
       const { charMap, device } = await mqttGattConnect(
         client,
