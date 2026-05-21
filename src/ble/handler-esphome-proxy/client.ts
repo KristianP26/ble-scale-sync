@@ -1,5 +1,5 @@
 import type { EsphomeProxyConfig } from '../../config/schema.js';
-import { errMsg } from '../types.js';
+import { bleLog, errMsg } from '../types.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -88,7 +88,20 @@ export async function createEsphomeClient(config: EsphomeProxyConfig): Promise<E
   if (config.encryption_key) options.encryptionKey = config.encryption_key;
   if (config.password) options.password = config.password;
 
-  return new mod.Client(options);
+  const client = new mod.Client(options);
+
+  // Keep a permanent 'error' listener for the client's whole lifetime.
+  // waitForConnected() attaches its own only for the connect handshake and
+  // removes it on success — afterwards the client would have no 'error'
+  // listener, so any error the library emits (e.g. an API message a newer
+  // ESPHome release added but this library version cannot parse, #210)
+  // becomes an uncaught exception that kills the process. Log it instead and
+  // let the library's `reconnect: true` handle recovery.
+  client.on('error', (err) => {
+    bleLog.warn(`ESPHome proxy ${config.host}:${config.port} error: ${errMsg(err)}`);
+  });
+
+  return client;
 }
 
 export async function waitForConnected(
