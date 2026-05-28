@@ -24,6 +24,12 @@ export async function publishConfig(
     if (users && users.length > 0) {
       payload.users = users;
     }
+    // Forward autoConnect opt-out to the ESP32 firmware (#201).
+    // Default is true — only send when explicitly disabled.
+    if (config.auto_connect === false) {
+      payload.autoConnect = false;
+      bleLog.debug('publishConfig: autoConnect disabled, sending opt-out to ESP32');
+    }
     await client.publishAsync(t.config, JSON.stringify(payload), { retain: true });
   } finally {
     await releaseClient(client, ephemeral);

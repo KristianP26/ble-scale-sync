@@ -1,5 +1,5 @@
 import type { BleChar, BleDevice } from '../shared.js';
-import { withTimeout } from '../types.js';
+import { withTimeout, bleLog } from '../types.js';
 import { COMMAND_TIMEOUT_MS, type Topics } from './topics.js';
 import type { MqttClient } from './client.js';
 
@@ -94,6 +94,14 @@ export async function mqttGattConnect(
     new Promise<{ chars: Array<{ uuid: string; properties: string[] }> }>((resolve, reject) => {
       const handler = (topic: string, payload: Buffer) => {
         if (topic === t.connected) {
+          try {
+            const data = JSON.parse(payload.toString());
+            // Ignore autonomous connects from ESP32 — those are handled by
+            // ReadingWatcher.handleAutonomousConnect, not mqttGattConnect (#201).
+            if (data.autonomous) return;
+          } catch {
+            // Not JSON — fall through to resolve (old firmware compat)
+          }
           client.removeListener('message', handler);
           try {
             resolve(JSON.parse(payload.toString()));
@@ -131,4 +139,27 @@ export async function mqttGattConnect(
 /** Send GATT disconnect command over MQTT. */
 export async function mqttGattDisconnect(client: MqttClient, t: Topics): Promise<void> {
   await client.publishAsync(t.disconnect, '');
+}
+
+/**
+ * Build charMap and MqttBleDevice from an autonomous connect payload.
+ *
+ * When the ESP32 auto-connects to a known scale (#201), it publishes the
+ * same `connected` payload with an extra `autonomous: true` flag. The host
+ * skips mqttGattConnect() and uses this helper to set up the GATT abstractions.
+ */
+export function buildCharMapFromPayload(
+  client: MqttClient,
+  t: Topics,
+  chars: Array<{ uuid: string; properties: string[] }>,
+): { charMap: Map<string, BleChar>; device: MqttBleDevice } {
+  const charMap = new Map<string, BleChar>();
+  for (const char of chars) {
+    charMap.set(char.uuid, new MqttBleChar(client, t.base, char.uuid));
+  }
+  const device = new MqttBleDevice(client, t.disconnected);
+  bleLog.debug(
+    `buildCharMapFromPayload: ${chars.length} chars (${chars.map((c) => c.uuid).join(', ')})`,
+  );
+  return { charMap, device };
 }
