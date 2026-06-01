@@ -1906,10 +1906,7 @@ describe('handler-mqtt-proxy', () => {
             buf.writeUInt16LE(7500, 0);
             buf.writeUInt16LE(500, 2);
             // Notify topic also uses original case from ESP32
-            mockClient._simulateMessage(
-              `${PREFIX}/notify/${GATT_NOTIFY_UUID.toUpperCase()}`,
-              buf,
-            );
+            mockClient._simulateMessage(`${PREFIX}/notify/${GATT_NOTIFY_UUID.toUpperCase()}`, buf);
           });
         }
         return origPublish(topic, payload);
