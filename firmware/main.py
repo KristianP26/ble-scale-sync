@@ -163,7 +163,7 @@ def _check_scale_beep(results):
 def _find_scale_in_raw(raw_results):
     """Find the first known scale MAC in the raw IRQ buffer.
 
-    Returns (addr_bytes, addr_type) or None. Non-destructive peek used by the
+    Returns (mac, addr_bytes, addr_type) or None. Non-destructive peek used by the
     autonomous connect logic to skip the MQTT round-trip (#201).
     """
     for addr_bytes, addr_type, _rssi, _raw in raw_results:

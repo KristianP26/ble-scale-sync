@@ -17,6 +17,31 @@ import { type ScanResultEntry, toBleDeviceInfo } from './scan.js';
 
 const DEDUP_WINDOW_MS = 30_000;
 
+/** Bluetooth Base UUID for expanding 16-bit UUIDs to 128-bit form. */
+const BT_BASE_UUID = '00000000-0000-1000-8000-00805f9b34fb';
+
+/**
+ * Normalize a BLE UUID to lowercase 128-bit form for reliable comparison.
+ * Handles 16-bit ("fff4"), 32-bit, and full 128-bit UUIDs with or without dashes.
+ */
+function normalizeUuid(uuid: string): string {
+  const lower = uuid.toLowerCase().replace(/-/g, '');
+  if (lower.length === 4) {
+    // 16-bit → expand into base UUID
+    return BT_BASE_UUID.replace('00000000', `0000${lower}`);
+  }
+  if (lower.length === 8) {
+    // 32-bit → expand into base UUID
+    return BT_BASE_UUID.replace('00000000', lower);
+  }
+  // Already 128-bit (32 hex chars) — insert dashes if missing
+  if (lower.length === 32) {
+    return `${lower.slice(0, 8)}-${lower.slice(8, 12)}-${lower.slice(12, 16)}-${lower.slice(16, 20)}-${lower.slice(20)}`;
+  }
+  // Already formatted 128-bit
+  return lower;
+}
+
 type LifecycleHandler =
   | { event: 'reconnect'; handler: () => void }
   | { event: 'offline'; handler: () => void }
@@ -90,6 +115,9 @@ export class ReadingWatcher {
       await client.subscribeAsync(t.status);
       // Subscribe to connected for autonomous ESP32 connects (#201)
       await client.subscribeAsync(t.connected);
+      // Subscribe to disconnected so MqttBleDevice instances (which only add a
+      // message listener, not a broker subscription) receive disconnect events
+      // during autonomous connects. Not handled by _messageHandler itself.
       await client.subscribeAsync(t.disconnected);
       this._subscribedTopics = [t.scanResults, t.status, t.connected, t.disconnected];
       bleLog.info('ReadingWatcher started, listening for scan results');
@@ -210,6 +238,19 @@ export class ReadingWatcher {
           // has a GATT path (#201: dual-mode adapters like QN Scale must reach
           // this even though they declare parseBroadcast).
           if (!adapter.charNotifyUuid) continue;
+
+          // When auto_connect is enabled (default), the ESP32 connects
+          // autonomously and publishes a `connected` payload handled by
+          // handleAutonomousConnect(). Skip the host-initiated GATT path
+          // to avoid a race where both sides try to connect simultaneously,
+          // causing timeouts (#201).
+          if (this.config.auto_connect !== false) {
+            bleLog.debug(
+              `Skipping host-initiated GATT for ${entry.address} — auto_connect enabled, ` +
+                `waiting for autonomous connect from ESP32`,
+            );
+            continue;
+          }
 
           this.handleGattReading(entry, adapter).catch((err) => {
             bleLog.warn(`GATT reading failed for ${entry.address}: ${errMsg(err)}`);
@@ -378,8 +419,10 @@ export class ReadingWatcher {
         if (a.matches(info)) return true;
         // Also match by charNotifyUuid: the ESP32 already connected, so the
         // adapter may match only by its GATT characteristic.
+        // Normalize both sides (case + 16-bit vs 128-bit) to avoid silent mismatches.
         if (a.charNotifyUuid) {
-          return data.chars.some((c) => c.uuid === a.charNotifyUuid);
+          const normalized = normalizeUuid(a.charNotifyUuid);
+          return data.chars.some((c) => normalizeUuid(c.uuid) === normalized);
         }
         return false;
       });

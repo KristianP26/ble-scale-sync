@@ -43,7 +43,7 @@ The ESP32 scans autonomously for BLE advertisements and publishes results over M
 5. The server sends a `disconnect` command when the reading is complete
 
 ::: tip Autonomous connect
-Since v1.16, the ESP32 connects to known scales autonomously the instant it detects them, eliminating the MQTT round-trip that previously caused some fast-sleeping scales to power off before the connection could be established. This behavior is on by default. To disable it and use the old host-initiated connect flow, set `auto_connect: false` under `mqtt_proxy` in your config.
+The ESP32 connects to known scales autonomously the instant it detects them, eliminating the MQTT round-trip that previously caused some fast-sleeping scales to power off before the connection could be established. This behavior is on by default. To disable it and use the old host-initiated connect flow, set `auto_connect: false` under `mqtt_proxy` in your config.
 :::
 
 ## Supported Boards

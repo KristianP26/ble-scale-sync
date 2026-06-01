@@ -1383,7 +1383,8 @@ describe('handler-mqtt-proxy', () => {
 
     it('ReadingWatcher handles GATT scale via handleGattReading', async () => {
       const adapter = createGattAdapter();
-      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter], undefined, PROFILE);
+      const config = { ...MQTT_PROXY_CONFIG, auto_connect: false };
+      const watcher = new ReadingWatcher(config, [adapter], undefined, PROFILE);
       await watcher.start();
 
       // The watcher's message handler calls handleGattReading which uses
@@ -1517,7 +1518,8 @@ describe('handler-mqtt-proxy', () => {
       // name but no manufacturer data. The watcher must open a GATT connection
       // instead of silently skipping it because the adapter declares parseBroadcast.
       const adapter = createDualModeAdapter();
-      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter], undefined, PROFILE);
+      const config = { ...MQTT_PROXY_CONFIG, auto_connect: false };
+      const watcher = new ReadingWatcher(config, [adapter], undefined, PROFILE);
       await watcher.start();
 
       const origPublish = mockClient.publishAsync;
@@ -1574,7 +1576,8 @@ describe('handler-mqtt-proxy', () => {
       // next scan batch can retry. Before the fix, the flag leaked `true` and
       // every later GATT attempt was skipped until the 90s stale-reset.
       const adapter = createDualModeAdapter();
-      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter], undefined, PROFILE);
+      const config = { ...MQTT_PROXY_CONFIG, auto_connect: false };
+      const watcher = new ReadingWatcher(config, [adapter], undefined, PROFILE);
       await watcher.start();
 
       let connectCount = 0;
@@ -1755,7 +1758,8 @@ describe('handler-mqtt-proxy', () => {
 
     it('ReadingWatcher skips autonomous connect when gattInProgress', async () => {
       const adapter = createGattAdapter();
-      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter], undefined, PROFILE);
+      const config = { ...MQTT_PROXY_CONFIG, auto_connect: false };
+      const watcher = new ReadingWatcher(config, [adapter], undefined, PROFILE);
       await watcher.start();
 
       // First: trigger a regular GATT connect that will hang (no response)
@@ -1799,6 +1803,133 @@ describe('handler-mqtt-proxy', () => {
         mockClient.publishAsync as ReturnType<typeof vi.fn>
       ).mock.calls.filter((c: unknown[]) => c[0] === `${PREFIX}/disconnect`);
       expect(disconnectCalls).toHaveLength(0);
+    });
+
+    it('combined scan/results then autonomous connected succeeds without race (#201)', async () => {
+      const adapter = createGattAdapter();
+      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter], undefined, PROFILE);
+      await watcher.start();
+
+      // Simulate the write response for the autonomous GATT session
+      const origPublish = mockClient.publishAsync;
+      mockClient.publishAsync = vi.fn(async (topic: string, payload?: string | Buffer) => {
+        if (topic === `${PREFIX}/write/${GATT_WRITE_UUID}`) {
+          queueMicrotask(() => {
+            const buf = Buffer.alloc(4);
+            buf.writeUInt16LE(8050, 0); // 80.50 kg
+            buf.writeUInt16LE(480, 2); // impedance 480
+            mockClient._simulateMessage(`${PREFIX}/notify/${GATT_NOTIFY_UUID}`, buf);
+          });
+        }
+        return origPublish(topic, payload);
+      });
+
+      // Step 1: ESP32 publishes scan/results with a GATT-only scale
+      // (this is the exact sequence that caused the race: scan/results first,
+      // then connected with autonomous: true)
+      mockClient._simulateMessage(
+        `${PREFIX}/scan/results`,
+        JSON.stringify([
+          { address: 'AA:BB:CC:DD:EE:FF', name: 'GattScale', rssi: -50, services: [] },
+        ]),
+      );
+
+      // Step 2: immediately after, ESP32 publishes autonomous connected
+      mockClient._simulateMessage(
+        `${PREFIX}/connected`,
+        JSON.stringify({
+          autonomous: true,
+          address: 'AA:BB:CC:DD:EE:FF',
+          chars: [
+            { uuid: GATT_NOTIFY_UUID, properties: ['notify'] },
+            { uuid: GATT_WRITE_UUID, properties: ['write'] },
+          ],
+        }),
+      );
+
+      const raw = await watcher.nextReading();
+      expect(raw.reading.weight).toBe(80.5);
+      expect(raw.reading.impedance).toBe(480);
+      expect(raw.adapter.name).toBe('GattScale');
+
+      // No host-initiated connect command should have been published
+      const connectCalls = (mockClient.publishAsync as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c: unknown[]) => c[0] === `${PREFIX}/connect`,
+      );
+      expect(connectCalls).toHaveLength(0);
+    });
+
+    it('scan/results falls back to host-initiated GATT when auto_connect is false', async () => {
+      const adapter = createGattAdapter();
+      const config = { ...MQTT_PROXY_CONFIG, auto_connect: false };
+      const watcher = new ReadingWatcher(config, [adapter], undefined, PROFILE);
+      await watcher.start();
+
+      // Intercept the connect command to verify it's published
+      const origPublish = mockClient.publishAsync;
+      let connectReceived = false;
+      mockClient.publishAsync = vi.fn(async (topic: string, payload?: string | Buffer) => {
+        if (topic === `${PREFIX}/connect`) {
+          connectReceived = true;
+        }
+        return origPublish(topic, payload);
+      });
+
+      // Simulate scan/results with a GATT-only scale
+      mockClient._simulateMessage(
+        `${PREFIX}/scan/results`,
+        JSON.stringify([
+          { address: 'AA:BB:CC:DD:EE:FF', name: 'GattScale', rssi: -50, services: [] },
+        ]),
+      );
+
+      await new Promise((r) => setTimeout(r, 50));
+      // With auto_connect disabled, the host should have initiated a connect
+      expect(connectReceived).toBe(true);
+    });
+
+    it('autonomous connect matches adapter when ESP32 reports UUID in different case', async () => {
+      const adapter = createGattAdapter();
+      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter], undefined, PROFILE);
+      await watcher.start();
+
+      // Override matches to NOT match by device info (autonomous has no name)
+      (adapter.matches as ReturnType<typeof vi.fn>).mockReturnValue(false);
+
+      const origPublish = mockClient.publishAsync;
+      mockClient.publishAsync = vi.fn(async (topic: string, payload?: string | Buffer) => {
+        // The ESP32 reports UUIDs in uppercase, so the MQTT write topic uses
+        // the original case. Match case-insensitively.
+        if (topic.toLowerCase() === `${PREFIX}/write/${GATT_WRITE_UUID}`) {
+          queueMicrotask(() => {
+            const buf = Buffer.alloc(4);
+            buf.writeUInt16LE(7500, 0);
+            buf.writeUInt16LE(500, 2);
+            // Notify topic also uses original case from ESP32
+            mockClient._simulateMessage(
+              `${PREFIX}/notify/${GATT_NOTIFY_UUID.toUpperCase()}`,
+              buf,
+            );
+          });
+        }
+        return origPublish(topic, payload);
+      });
+
+      // ESP32 reports UUID in uppercase — should still match via normalizeUuid
+      mockClient._simulateMessage(
+        `${PREFIX}/connected`,
+        JSON.stringify({
+          autonomous: true,
+          address: 'AA:BB:CC:DD:EE:FF',
+          chars: [
+            { uuid: GATT_NOTIFY_UUID.toUpperCase(), properties: ['notify'] },
+            { uuid: GATT_WRITE_UUID.toUpperCase(), properties: ['write'] },
+          ],
+        }),
+      );
+
+      const raw = await watcher.nextReading();
+      expect(raw.reading.weight).toBe(75.0);
     });
 
     it('host-initiated connect ignores autonomous connected payload', async () => {
