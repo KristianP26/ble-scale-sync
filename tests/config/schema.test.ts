@@ -275,6 +275,11 @@ describe('BleSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('accepts a bare 32-hex CoreBluetooth UUID (macOS, #212)', () => {
+    const result = BleSchema.safeParse({ scale_mac: '360c96baf290475b14ce7c28aa3b8e81' });
+    expect(result.success).toBe(true);
+  });
+
   it('rejects invalid MAC', () => {
     const result = BleSchema.safeParse({ scale_mac: 'not-a-mac' });
     expect(result.success).toBe(false);

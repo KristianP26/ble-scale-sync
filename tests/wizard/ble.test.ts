@@ -39,6 +39,10 @@ describe('validateMac()', () => {
     expect(validateMac('12345678-1234-1234-1234-123456789ABC')).toBe(true);
   });
 
+  it('accepts a bare 32-hex CoreBluetooth UUID (macOS, #212)', () => {
+    expect(validateMac('360c96baf290475b14ce7c28aa3b8e81')).toBe(true);
+  });
+
   it('rejects invalid format', () => {
     expect(validateMac('not-a-mac')).toContain('Must be');
   });

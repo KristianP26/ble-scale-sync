@@ -60,7 +60,7 @@ ble:
 
 | Field           | Required                    | Default        | Description                                                                                                                                           |
 | --------------- | --------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scale_mac`     | Recommended                 | Auto-discovery | MAC address or CoreBluetooth UUID (macOS). Prevents connecting to a neighbor's scale.                                                                 |
+| `scale_mac`     | Recommended                 | Auto-discovery | MAC address, or a CoreBluetooth UUID on macOS (bare 32-hex as the wizard writes it, or the dashed form). Prevents connecting to a neighbor's scale.   |
 | `handler`       | No                          | `auto`         | Transport: `auto` (local radio), `mqtt-proxy` (ESP32 over MQTT), `esphome-proxy` (ESPHome Native API). See below.                                     |
 | `noble_driver`  | No                          | OS default     | `abandonware` or `stoprocent`. Overrides the default BLE driver. Only applies when `handler: auto`.                                                   |
 | `adapter`       | No                          | System default | Linux only. Select a specific Bluetooth adapter (e.g., `hci0`, `hci1`). See below.                                                                    |

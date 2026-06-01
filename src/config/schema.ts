@@ -1,11 +1,6 @@
 import { z } from 'zod';
 import { isLoopback } from '../ble/loopback.js';
-
-// --- Regex patterns ---
-
-const MAC_REGEX = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/;
-const CB_UUID_REGEX =
-  /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/;
+import { isValidScaleId, SCALE_ID_HINT } from '../ble/scale-id.js';
 
 // --- Sub-schemas ---
 
@@ -80,8 +75,8 @@ export const BleSchema = z
   .object({
     scale_mac: z
       .string()
-      .refine((v) => MAC_REGEX.test(v) || CB_UUID_REGEX.test(v), {
-        message: 'Must be a MAC address (XX:XX:XX:XX:XX:XX) or CoreBluetooth UUID',
+      .refine((v) => isValidScaleId(v), {
+        message: `Must be ${SCALE_ID_HINT}`,
       })
       .optional()
       .nullable(),
