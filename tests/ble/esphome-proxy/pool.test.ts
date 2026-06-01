@@ -42,19 +42,35 @@ vi.mock('../../../src/ble/handler-esphome-proxy/client.js', () => ({
   safeDisconnect: vi.fn(async () => {}),
 }));
 
-import { EsphomeProxyPool } from '../../../src/ble/handler-esphome-proxy/pool.js';
+// Mock the GATT bridge so connectGatt() does not need real GATT discovery stubs;
+// we only assert how the pool calls it (which address type it forwards). Other
+// tests in this file never call connectGatt, so the mock does not affect them.
+vi.mock('../../../src/ble/handler-esphome-proxy/gatt.js', () => ({
+  openGattSession: vi.fn(async () => ({
+    charMap: new Map(),
+    device: { onDisconnect() {} },
+    close: async () => {},
+  })),
+}));
 
-const adv = (addr: number, rssi: number) => ({
+import { EsphomeProxyPool } from '../../../src/ble/handler-esphome-proxy/pool.js';
+import { openGattSession } from '../../../src/ble/handler-esphome-proxy/gatt.js';
+
+const adv = (addr: number, rssi: number, addressType?: number) => ({
   address: addr,
   name: 'QN-Scale',
   rssi,
   serviceUuidsList: [],
   serviceDataList: [],
   manufacturerDataList: [],
+  ...(addressType === undefined ? {} : { addressType }),
 });
 
 describe('EsphomeProxyPool', () => {
-  beforeEach(() => fakeClients.clear());
+  beforeEach(() => {
+    fakeClients.clear();
+    vi.mocked(openGattSession).mockClear();
+  });
 
   it('aggregates advertisements from every proxy', async () => {
     const pool = new EsphomeProxyPool({
@@ -88,6 +104,36 @@ describe('EsphomeProxyPool', () => {
     await pool.stop();
   });
 
+  it('captures the address type from advertisements (#215)', async () => {
+    const pool = new EsphomeProxyPool({
+      host: 'p1',
+      port: 6053,
+      client_info: 'x',
+      additional_proxies: [],
+    } as never);
+    await pool.start();
+    fakeClients.get('p1')!._emit('ble', adv(0xaabbccddeeff, -50, 1));
+    expect(pool.addressTypeFor('aa:bb:cc:dd:ee:ff')).toBe(1);
+    // Public = 0 is valid and falsy: must still be captured, not dropped.
+    fakeClients.get('p1')!._emit('ble', adv(0x112233445566, -50, 0));
+    expect(pool.addressTypeFor('11:22:33:44:55:66')).toBe(0);
+    await pool.stop();
+  });
+
+  it('connectGatt forwards the captured address type to openGattSession (#215)', async () => {
+    const pool = new EsphomeProxyPool({
+      host: 'p1',
+      port: 6053,
+      client_info: 'x',
+      additional_proxies: [],
+    } as never);
+    await pool.start();
+    fakeClients.get('p1')!._emit('ble', adv(0xaabbccddeeff, -50, 1));
+    await pool.connectGatt('AA:BB:CC:DD:EE:FF');
+    expect(openGattSession).toHaveBeenCalledWith(expect.anything(), 'AA:BB:CC:DD:EE:FF', 1);
+    await pool.stop();
+  });
+
   it('returns null when no proxy has seen the MAC', async () => {
     const pool = new EsphomeProxyPool({
       host: 'p1',
@@ -111,8 +157,9 @@ describe('EsphomeProxyPool', () => {
       } as never);
       await pool.start();
 
-      fakeClients.get('p1')!._emit('ble', adv(0x112233445566, -50));
+      fakeClients.get('p1')!._emit('ble', adv(0x112233445566, -50, 1));
       expect(pool.pickProxyFor('11:22:33:44:55:66')).toBe('p1:6053');
+      expect(pool.addressTypeFor('11:22:33:44:55:66')).toBe(1);
 
       // Advance past SIGHTING_TTL_MS (60s) then record a different MAC. The
       // stale entry must be swept, not just filtered out on read.
@@ -123,6 +170,8 @@ describe('EsphomeProxyPool', () => {
       expect(internal.sightings.has('11:22:33:44:55:66')).toBe(false);
       expect(pool.pickProxyFor('11:22:33:44:55:66')).toBeNull();
       expect(pool.pickProxyFor('aa:bb:cc:dd:ee:ff')).toBe('p1:6053');
+      // The address-type cache must be swept in lockstep with the sightings.
+      expect(pool.addressTypeFor('11:22:33:44:55:66')).toBeUndefined();
 
       await pool.stop();
     } finally {

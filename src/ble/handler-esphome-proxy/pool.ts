@@ -59,6 +59,10 @@ export class EsphomeProxyPool {
   private adHandlers = new Map<string, (ad: EsphomeBleAdvertisement) => void>();
   // macLc -> proxyId -> latest sighting
   private sightings = new Map<string, Map<string, Sighting>>();
+  // macLc -> BLE address type (public/random) last reported in an advertisement.
+  // ESPHome's V3 connect request requires this; a device's type is stable, so any
+  // proxy that saw it teaches the whole pool. Kept in lockstep with `sightings`.
+  private addressTypes = new Map<string, number>();
   private subscribers = new Set<AdvertCb>();
   private started = false;
 
@@ -97,6 +101,7 @@ export class EsphomeProxyPool {
     this.clients.clear();
     this.adHandlers.clear();
     this.sightings.clear();
+    this.addressTypes.clear();
     this.started = false;
   }
 
@@ -117,12 +122,13 @@ export class EsphomeProxyPool {
    */
   async connectGatt(mac: string): Promise<GattSession> {
     const order = this.proxyOrderFor(mac);
+    const addressType = this.addressTypes.get(mac.toLowerCase());
     const errors: string[] = [];
     for (const id of order) {
       const client = this.clients.get(id);
       if (!client) continue;
       try {
-        return await openGattSession(client, mac);
+        return await openGattSession(client, mac, addressType);
       } catch (e) {
         errors.push(`${id}: ${errMsg(e)}`);
       }
@@ -130,6 +136,11 @@ export class EsphomeProxyPool {
     throw new Error(
       `ESPHome GATT connect failed for ${mac} on all proxies: ${errors.join('; ') || 'no proxy available'}`,
     );
+  }
+
+  /** BLE address type last seen for `mac`, or undefined if no advert reported one. */
+  addressTypeFor(mac: string): number | undefined {
+    return this.addressTypes.get(mac.toLowerCase());
   }
 
   /** Proxy that most recently saw `mac` (RSSI tiebreak) within the TTL, or null. */
@@ -171,7 +182,11 @@ export class EsphomeProxyPool {
       for (const [id, s] of perProxy) {
         if (now - s.ts > SIGHTING_TTL_MS) perProxy.delete(id);
       }
-      if (perProxy.size === 0) this.sightings.delete(mac);
+      if (perProxy.size === 0) {
+        this.sightings.delete(mac);
+        // Keep the address-type cache from outliving the sightings it belongs to.
+        this.addressTypes.delete(mac);
+      }
     }
   }
 
@@ -187,6 +202,9 @@ export class EsphomeProxyPool {
       this.sightings.set(macLc, perProxy);
     }
     perProxy.set(proxyId, { rssi: ad.rssi, ts: now });
+    // Record the BLE address type (public = 0 is valid and falsy, so guard on
+    // the type, not truthiness) so connectGatt can satisfy ESPHome's V3 connect.
+    if (typeof ad.addressType === 'number') this.addressTypes.set(macLc, ad.addressType);
 
     const info = toBleDeviceInfo(ad);
     for (const cb of this.subscribers) cb(info, mac);

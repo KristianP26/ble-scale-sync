@@ -123,5 +123,30 @@ describe('openGattSession', () => {
     await expect(
       openGattSession({ connection: conn } as never, '00:00:00:00:00:01'),
     ).rejects.toThrow(/could not connect/i);
+    // Both address-type candidates are tried before giving up (#215).
+    expect(conn.connectBluetoothDeviceService).toHaveBeenCalledTimes(2);
+  });
+
+  it('passes the known address type to the connect request (#215)', async () => {
+    const conn = fakeConnection();
+    const session = await openGattSession({ connection: conn } as never, '00:00:00:00:00:01', 1);
+    expect(conn.connectBluetoothDeviceService).toHaveBeenCalledTimes(1);
+    expect(conn.connectBluetoothDeviceService).toHaveBeenCalledWith(ADDR, 1);
+    await session.close();
+  });
+
+  it('falls back to the other address type when the first fails (#215)', async () => {
+    const conn = fakeConnection();
+    conn.connectBluetoothDeviceService = vi
+      .fn()
+      .mockResolvedValueOnce({ address: ADDR, connected: false })
+      .mockResolvedValueOnce({ address: ADDR, connected: true, mtu: 23 });
+    // Unknown type -> candidates [0, 1]; first (public) fails, second (random) works.
+    const session = await openGattSession({ connection: conn } as never, '00:00:00:00:00:01');
+    expect(conn.connectBluetoothDeviceService).toHaveBeenCalledTimes(2);
+    expect(conn.connectBluetoothDeviceService).toHaveBeenNthCalledWith(1, ADDR, 0);
+    expect(conn.connectBluetoothDeviceService).toHaveBeenNthCalledWith(2, ADDR, 1);
+    expect(session.charMap.has(normalizeUuid('2a9d'))).toBe(true);
+    await session.close();
   });
 });
