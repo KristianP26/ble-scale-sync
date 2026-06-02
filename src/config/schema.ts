@@ -60,6 +60,14 @@ export const MqttProxySchema = z
       .string()
       .regex(/^\S+$/, 'Must be a non-empty hostname or IP with no whitespace')
       .default('0.0.0.0'),
+    auto_connect: z
+      .boolean()
+      .default(true)
+      .describe(
+        'When true (default), the ESP32 autonomously connects to known scale MACs ' +
+          'the instant they appear in a scan, eliminating the MQTT round-trip latency. ' +
+          'Set to false to use the legacy host-initiated connect flow.',
+      ),
   })
   .refine(
     (c) => {

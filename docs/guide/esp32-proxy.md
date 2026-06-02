@@ -36,11 +36,15 @@ The ESP32 scans autonomously for BLE advertisements and publishes results over M
 
 **GATT scales** (notification-based readings):
 
-1. A matched adapter has no broadcast data, so the server sends a `connect` command
-2. The ESP32 connects to the scale, discovers characteristics, and reports them
+1. The ESP32 detects a known scale MAC during scanning and auto-connects immediately
+2. The ESP32 discovers characteristics and notifies the server that it's already connected
 3. The server subscribes to notification topics and sends write commands (e.g. unlock)
 4. Scale readings arrive as notifications, forwarded to the server via MQTT
 5. The server sends a `disconnect` command when the reading is complete
+
+::: tip Autonomous connect
+The ESP32 connects to known scales autonomously the instant it detects them, eliminating the MQTT round-trip that previously caused some fast-sleeping scales to power off before the connection could be established. This behavior is on by default. To disable it and use the old host-initiated connect flow, set `auto_connect: false` under `mqtt_proxy` in your config.
+:::
 
 ## Supported Boards
 
