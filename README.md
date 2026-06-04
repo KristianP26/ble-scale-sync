@@ -96,6 +96,28 @@ Requires Node.js v22+ and a BLE adapter. See the **[full install guide](https://
 - **Cross-platform.** Linux (Docker + native), macOS, Windows.
 - **Private.** Your data stays on your device, no vendor cloud.
 
+## Capturing raw BLE frames (debugging)
+
+For reverse-engineering a scale protocol (e.g. decoding an undecoded impedance
+frame), the native BlueZ handler can dump every notify frame as hex and hold the
+GATT connection open past the weight-stable point so the scale finishes sending
+its trailing frames before disconnect.
+
+- `BLE_RAW_CAPTURE=true` enables it (off by default; no effect on normal runs).
+- `BLE_RAW_CAPTURE_HOLD_SEC=20` sets how long to hold the link after the weight
+  stabilizes (default 20s, keep it under 120).
+
+```bash
+# native
+BLE_RAW_CAPTURE=true DEBUG=true CONTINUOUS_MODE=true npm start
+# docker
+docker run ... -e BLE_RAW_CAPTURE=true -e DEBUG=true ghcr.io/kristianp26/ble-scale-sync:dev
+```
+
+Step on the scale and look for `[BLE] [RAW] <uuid> (<n>B): <hex>` lines. The run
+still exports a weight-only reading. Applies to every GATT reading path (native
+BlueZ and noble, plus the ESP32 and ESPHome proxies).
+
 ## Credits
 
 - **Scale protocols** - many adapters ported from [openScale](https://github.com/oliexdev/openScale) (oliexdev and contributors); Eufy P2 / P2 Pro ported from [bdr99/eufylife-ble-client](https://github.com/bdr99/eufylife-ble-client); QN-Scale / FITINDEX and a few others reverse-engineered in this project
