@@ -6,7 +6,7 @@ import { errMsg } from '../utils/error.js';
 const log = createLogger('Sync');
 
 const BACKOFF_INITIAL_MS = 5_000;
-const BACKOFF_MAX_MS = 60_000;
+const BACKOFF_MAX_MS = 5_000;
 
 export interface ReadingSource {
   start?(): Promise<void>;
@@ -29,7 +29,7 @@ export interface RuntimeLoopDeps {
 }
 
 /**
- * Exponential backoff on iteration error: 5s -> 10s -> 20s -> 40s -> 60s cap.
+ * Keep retry cadence short for scales with aggressive auto power-off.
  */
 export async function runContinuousLoop(deps: RuntimeLoopDeps): Promise<void> {
   const {

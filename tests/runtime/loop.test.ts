@@ -59,7 +59,7 @@ describe('runContinuousLoop', () => {
     vi.restoreAllMocks();
   });
 
-  it('backoff sequence on repeated failures: 5s -> 10s -> 20s -> 40s -> 60s cap', async () => {
+  it('keeps retry cadence at the 5s cap on repeated failures', async () => {
     const ac = new AbortController();
     const { source, nextReading } = makeSource();
     nextReading.mockRejectedValue(new Error('scale not found'));
@@ -83,25 +83,25 @@ describe('runContinuousLoop', () => {
     expect(nextReading).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(5_000);
 
-    // Iteration 2: fail, sleep 10s
+    // Iteration 2: fail, sleep 5s (capped)
     expect(nextReading).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(5_000);
 
-    // Iteration 3: fail, sleep 20s
+    // Iteration 3: fail, sleep 5s (still capped)
     expect(nextReading).toHaveBeenCalledTimes(3);
-    await vi.advanceTimersByTimeAsync(20_000);
+    await vi.advanceTimersByTimeAsync(5_000);
 
-    // Iteration 4: fail, sleep 40s
+    // Iteration 4: fail, sleep 5s (still capped)
     expect(nextReading).toHaveBeenCalledTimes(4);
-    await vi.advanceTimersByTimeAsync(40_000);
+    await vi.advanceTimersByTimeAsync(5_000);
 
-    // Iteration 5: fail, sleep 60s (capped)
+    // Iteration 5: fail, sleep 5s (still capped)
     expect(nextReading).toHaveBeenCalledTimes(5);
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(5_000);
 
-    // Iteration 6: fail, sleep 60s (still capped, not 120s)
+    // Iteration 6: fail, sleep 5s (still capped)
     expect(nextReading).toHaveBeenCalledTimes(6);
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(5_000);
 
     expect(nextReading).toHaveBeenCalledTimes(7);
 

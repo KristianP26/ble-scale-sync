@@ -26,6 +26,7 @@ export class OneByoneAdapter implements ScaleAdapter {
   readonly charNotifyUuid = uuid16(0xfff4);
   readonly charWriteUuid = uuid16(0xfff1);
   readonly normalizesWeight = true;
+  readonly preferPassive = true;
   readonly unlockCommand: number[] = [];
   readonly unlockIntervalMs = 0;
 
@@ -69,6 +70,7 @@ export class OneByoneAdapter implements ScaleAdapter {
     if (data.length < 5 || data[0] !== 0xcf) return null;
 
     const weight = data.readUInt16LE(3) / 100;
+    if (weight <= 0 || weight > 250) return null;
 
     let impedance = 0;
     if (data.length >= 10) {
@@ -80,6 +82,18 @@ export class OneByoneAdapter implements ScaleAdapter {
     }
 
     return { weight, impedance };
+  }
+
+  parseBroadcast(manufacturerData: Buffer): ScaleReading | null {
+    // T9120 advertisements observed via Noble include the MAC followed by a
+    // payload. During measurement, 1byone/Eufy variants may embed the same
+    // 0xCF measurement frame used by notifications. Ignore static wake frames.
+    for (let offset = 0; offset <= manufacturerData.length - 5; offset++) {
+      if (manufacturerData[offset] !== 0xcf) continue;
+      const reading = this.parseNotification(manufacturerData.subarray(offset));
+      if (reading) return reading;
+    }
+    return null;
   }
 
   isComplete(reading: ScaleReading): boolean {

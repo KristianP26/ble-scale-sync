@@ -160,7 +160,10 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       const preInfo: BleDeviceInfo = { localName: name, serviceUuids: [] };
       const preMatchedAdapter = adapters.find((a) => a.matches(preInfo));
 
-      if (preMatchedAdapter?.preferPassive && preMatchedAdapter.parseServiceData) {
+      if (
+        preMatchedAdapter?.preferPassive &&
+        (preMatchedAdapter.parseServiceData || preMatchedAdapter.parseBroadcast)
+      ) {
         matchedAdapter = preMatchedAdapter;
         bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
         return await broadcastScanNodeBle(matchedAdapter, btAdapter, device, mac, {
@@ -231,7 +234,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       deviceMac = result.mac;
 
       // Passive-mode adapters: read from service-data advertisements without connecting.
-      if (matchedAdapter.preferPassive && matchedAdapter.parseServiceData) {
+      if (matchedAdapter.preferPassive && (matchedAdapter.parseServiceData || matchedAdapter.parseBroadcast)) {
         bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
         return await broadcastScanNodeBle(matchedAdapter, btAdapter, device, result.mac, {
           abortSignal,

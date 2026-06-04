@@ -33,11 +33,11 @@ export function extractDbusBytes(val: unknown): Buffer | null {
 }
 
 /**
- * Read weight + impedance from BLE service-data advertisements without connecting.
+ * Read weight + impedance from BLE advertisements without connecting.
  *
  * Sets DuplicateData=true in the BlueZ discovery filter so every advertisement
  * triggers a PropertiesChanged signal, then subscribes to that signal on the
- * Device1 D-Bus object. Falls back to polling the ServiceData property every
+ * Device1 D-Bus object. Falls back to polling advertisement properties every
  * 500 ms if signal subscription fails.
  */
 export async function broadcastScanNodeBle(
@@ -49,7 +49,7 @@ export async function broadcastScanNodeBle(
 ): Promise<RawReading> {
   const { abortSignal, onLiveData } = opts;
 
-  // Tell BlueZ to report duplicate advertisements so ServiceData is refreshed
+  // Tell BlueZ to report duplicate advertisements so advertisement data is refreshed
   // on every packet from the scale, not just on first discovery.
   try {
     const { Variant } = await getDbusNext();
@@ -107,45 +107,69 @@ export async function broadcastScanNodeBle(
     const onAbort = () => fail(abortSignal!.reason ?? new DOMException('Aborted', 'AbortError'));
     abortSignal?.addEventListener('abort', onAbort, { once: true });
 
+    const handleReading = (reading: ScaleReading): boolean => {
+      if (onLiveData) onLiveData(reading);
+
+      if (adapter.isComplete(reading)) {
+        bleLog.info(`Broadcast reading: ${reading.weight.toFixed(2)} kg`);
+        finish({ reading, adapter });
+        return true;
+      }
+
+      bleLog.debug(
+        `${adapter.name} broadcast frame not yet complete ` +
+          `(weight=${reading.weight.toFixed(2)} kg, impedance=${reading.impedance})`,
+      );
+      bestWeightOnly = { reading, adapter };
+      if (!graceTimer) {
+        graceTimer = setTimeout(() => {
+          graceTimer = null;
+          bleLog.info(
+            `Broadcast reading (weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s): ` +
+              `${bestWeightOnly!.reading.weight.toFixed(2)} kg`,
+          );
+          finish(bestWeightOnly!);
+        }, IMPEDANCE_GRACE_MS);
+      }
+
+      return false;
+    };
+
     /** Try to parse ServiceData entries and resolve if a complete reading is found. */
     const tryServiceData = (sd: unknown): boolean => {
-      if (!sd || typeof sd !== 'object') return false;
+      if (!adapter.parseServiceData || !sd || typeof sd !== 'object') return false;
 
       const entries: Iterable<[unknown, unknown]> =
-        sd instanceof Map
-          ? (sd as Map<unknown, unknown>).entries()
-          : Object.entries(sd as Record<string, unknown>);
+        sd instanceof Map ? sd.entries() : Object.entries(sd as Record<string, unknown>);
 
       for (const [uuid, val] of entries) {
         const buf = extractDbusBytes(val);
         if (!buf) continue;
 
-        const reading = adapter.parseServiceData!(String(uuid), buf);
+        const reading = adapter.parseServiceData(String(uuid), buf);
         if (!reading) continue;
 
-        if (onLiveData) onLiveData(reading);
+        if (handleReading(reading)) return true;
+      }
 
-        if (adapter.isComplete(reading)) {
-          bleLog.info(`Broadcast reading: ${reading.weight.toFixed(2)} kg`);
-          finish({ reading, adapter });
-          return true;
-        }
+      return false;
+    };
 
-        bleLog.debug(
-          `${adapter.name} broadcast frame not yet complete ` +
-            `(weight=${reading.weight.toFixed(2)} kg, impedance=${reading.impedance})`,
-        );
-        bestWeightOnly = { reading, adapter };
-        if (!graceTimer) {
-          graceTimer = setTimeout(() => {
-            graceTimer = null;
-            bleLog.info(
-              `Broadcast reading (weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s): ` +
-                `${bestWeightOnly!.reading.weight.toFixed(2)} kg`,
-            );
-            finish(bestWeightOnly!);
-          }, IMPEDANCE_GRACE_MS);
-        }
+    /** Try to parse ManufacturerData entries and resolve if a complete reading is found. */
+    const tryManufacturerData = (md: unknown): boolean => {
+      if (!adapter.parseBroadcast || !md || typeof md !== 'object') return false;
+
+      const entries: Iterable<[unknown, unknown]> =
+        md instanceof Map ? md.entries() : Object.entries(md as Record<string, unknown>);
+
+      for (const [_companyId, val] of entries) {
+        const buf = extractDbusBytes(val);
+        if (!buf) continue;
+
+        const reading = adapter.parseBroadcast(buf);
+        if (!reading) continue;
+
+        if (handleReading(reading)) return true;
       }
 
       return false;
@@ -159,15 +183,16 @@ export async function broadcastScanNodeBle(
       onPropsChanged = (changedProps) => {
         if (done) return;
         if (changedProps.ServiceData) tryServiceData(changedProps.ServiceData);
+        if (changedProps.ManufacturerData) tryManufacturerData(changedProps.ManufacturerData);
       };
       deviceHelper.on('PropertiesChanged', onPropsChanged);
-      bleLog.debug('Subscribed to Device1 PropertiesChanged for ServiceData');
+      bleLog.debug('Subscribed to Device1 PropertiesChanged for advertisement data');
     } catch (err: unknown) {
       bleLog.debug(`PropertiesChanged subscription failed: ${errMsg(err)} (poll fallback active)`);
       onPropsChanged = null;
     }
 
-    // Poll ServiceData every 500 ms as a fallback (and for first-read before
+    // Poll advertisement data every 500 ms as a fallback (and for first-read before
     // the PropertiesChanged subscription is established).
     const deadline = Date.now() + DISCOVERY_TIMEOUT_MS;
     (async () => {
@@ -178,6 +203,12 @@ export async function broadcastScanNodeBle(
           tryServiceData(sd);
         } catch (err: unknown) {
           bleLog.debug(`ServiceData poll error: ${errMsg(err)}`);
+        }
+        try {
+          const md: unknown = await helperOf(device).prop('ManufacturerData');
+          tryManufacturerData(md);
+        } catch (err: unknown) {
+          bleLog.debug(`ManufacturerData poll error: ${errMsg(err)}`);
         }
         await sleep(500);
       }
