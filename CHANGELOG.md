@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.16.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.15.0...v1.16.0) (2026-06-04)
+
+
+### Added
+
+* **ble:** add adapter liveness probe for watchdog classification ([#213](https://github.com/KristianP26/ble-scale-sync/issues/213)) ([e50ce5b](https://github.com/KristianP26/ble-scale-sync/commit/e50ce5b0128ab488f06ec3895306cdc4e557bfbe))
+* **ble:** add poll-failure classification helpers ([#213](https://github.com/KristianP26/ble-scale-sync/issues/213)) ([484e16a](https://github.com/KristianP26/ble-scale-sync/commit/484e16ac32d58bd24dd78fe6d190afd97bd5dd04))
+* **mqtt-proxy:** ESP32 autonomous GATT connect for fast-sleeping scales ([#214](https://github.com/KristianP26/ble-scale-sync/issues/214)) ([c4a3b33](https://github.com/KristianP26/ble-scale-sync/commit/c4a3b33ce28a003e63dfbdf14ae10991d6df9ff1))
+
+
+### Fixed
+
+* **ble:** keep a permanent error listener on the ESPHome proxy client ([#210](https://github.com/KristianP26/ble-scale-sync/issues/210)) ([ca7eb7d](https://github.com/KristianP26/ble-scale-sync/commit/ca7eb7d2f048a6f90d65d75878340ba7b0544525))
+* **ble:** reset gattInProgress on failed GATT connect + clearer ESP32 errors ([#201](https://github.com/KristianP26/ble-scale-sync/issues/201)) ([dcd1ac6](https://github.com/KristianP26/ble-scale-sync/commit/dcd1ac6f7d1a456b1e83eecf57a3709bddb2dd5f))
+* **ble:** send BLE address type on ESPHome proxy GATT connect ([#215](https://github.com/KristianP26/ble-scale-sync/issues/215)) ([#223](https://github.com/KristianP26/ble-scale-sync/issues/223)) ([71e735b](https://github.com/KristianP26/ble-scale-sync/commit/71e735b6c3460f9aa2b3d2d9e724c06da94ddeae))
+* **ble:** tag idle vs wedge poll failures in scanAndReadRaw ([#213](https://github.com/KristianP26/ble-scale-sync/issues/213)) ([407753e](https://github.com/KristianP26/ble-scale-sync/commit/407753e261815f31e128a88b5f97da7352baabda))
+* **config:** accept bare 32-hex CoreBluetooth UUID for scale_mac ([#212](https://github.com/KristianP26/ble-scale-sync/issues/212)) ([#224](https://github.com/KristianP26/ble-scale-sync/issues/224)) ([47d5033](https://github.com/KristianP26/ble-scale-sync/commit/47d503329a828c5127c827df98e902dc26cee36c))
+* **firmware:** flush scan batch early on a known scale MAC ([#201](https://github.com/KristianP26/ble-scale-sync/issues/201)) ([c692b42](https://github.com/KristianP26/ble-scale-sync/commit/c692b426972edaf0fb895475262afa166cf72587))
+* **runtime:** watchdog ignores idle no-shows ([#213](https://github.com/KristianP26/ble-scale-sync/issues/213)) ([9e1588f](https://github.com/KristianP26/ble-scale-sync/commit/9e1588faf84ac352ec3f9e41029d8406007e060c))
+
+
+### Docs
+
+* note idle-aware watchdog behavior ([#213](https://github.com/KristianP26/ble-scale-sync/issues/213)) ([7de309e](https://github.com/KristianP26/ble-scale-sync/commit/7de309ed6a33fab0150a2101909bcaa65544af6f))
+
 ## [1.15.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.14.1...v1.15.0) (2026-05-21)
 
 
