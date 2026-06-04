@@ -131,6 +131,19 @@ def _merge_entry(seen, entry):
         seen[mac] = entry
 
 
+def _raw_has_mac(raw_results, macs):
+    """True if any raw scan tuple advertises an address in `macs`.
+
+    `macs` is a set of uppercase colon-separated MAC strings (the format
+    carried on the `config` topic). Non-destructive peek of the streaming IRQ
+    buffer — lets the publish loop flush early for a known scale (#201).
+    """
+    for addr_bytes, _addr_type, _rssi, _raw in raw_results:
+        if ":".join("%02X" % b for b in addr_bytes) in macs:
+            return True
+    return False
+
+
 class BleBridge:
     def __init__(self):
         self._conn = None
@@ -254,6 +267,12 @@ class BleBridge:
         _ble.irq(_irq)
         _ble.gap_scan(0, 100000, 30000, True)  # duration=0 → indefinite
         print("Streaming scan started")
+
+    def has_pending_scale_mac(self, macs):
+        """True when the streaming IRQ buffer holds an advertisement from a
+        known scale MAC, so the publish loop can flush early instead of
+        waiting out the full PUBLISH_INTERVAL_MS (#201)."""
+        return _raw_has_mac(self._raw_results, macs)
 
     def drain_results(self):
         """Drain accumulated raw scan results and return filtered device list.

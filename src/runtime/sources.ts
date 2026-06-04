@@ -2,6 +2,7 @@ import { ReadingWatcher, resolveHandlerKey } from '../ble/index.js';
 import type { ScaleAdapter } from '../interfaces/scale-adapter.js';
 import { resolveUserProfile } from '../config/resolve.js';
 import { ConsecutiveFailureWatchdog } from '../ble/watchdog.js';
+import { shouldCountAsWatchdogFailure } from '../ble/failure-kind.js';
 import { abortableSleep, POST_DISCONNECT_GRACE_MS } from '../ble/types.js';
 import { createLogger } from '../logger.js';
 import { PollReadingSource } from './poll-source.js';
@@ -105,8 +106,14 @@ export async function buildReadingSource(
   return {
     source: new PollReadingSource(ctx, adapters),
     failureLogPrefix: 'No scale found',
-    onFailure: () => {
-      watchdog.recordFailure();
+    onFailure: (err) => {
+      // Idle cycles (radio alive, scale simply not advertising) must not trip
+      // the watchdog (#213). Only GATT failures and dead-radio wedges count.
+      if (shouldCountAsWatchdogFailure(err)) {
+        watchdog.recordFailure();
+      } else {
+        log.debug('Idle cycle (radio alive, scale not on); not counting toward watchdog');
+      }
     },
     onSuccess: async () => {
       watchdog.recordSuccess();

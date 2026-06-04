@@ -168,6 +168,8 @@ On Pi 3/4 Broadcom on-board chips, this is a kernel/firmware-level issue that ev
 
 **Auto-restart watchdog (continuous mode).** When in-process recovery is not enough (typically Pi 3/4 Broadcom firmware lock-up), a watchdog exits the process after `runtime.watchdog_max_consecutive_failures` consecutive scan failures (default `10`, ≈30 min). With Docker `restart: unless-stopped` the container restarts cleanly, the entrypoint resets the BT adapter, and the controller is typically unwedged. The watchdog only arms after the first successful weigh-in in the process lifetime, so it does not restart-loop the container if the scale is offline (vacation) or `scale_mac` is misconfigured.
 
+The watchdog counts only cycles where the Bluetooth radio looks unhealthy: a connection or read failure, or a scan that saw no advertisement traffic at all (the zombie-discovery wedge). A normal idle cycle, where the radio still hears other nearby devices but your scale simply is not being stood on, does not count toward a restart. This is why a scale that only advertises while in use (such as Renpho) no longer triggers needless restarts overnight.
+
 ::: warning The watchdog recovers by **exiting the process** — set a restart policy
 The recovery is the process _exiting_ so the supervisor starts it again. You **must** run with `restart: unless-stopped` (Compose) or `--restart unless-stopped` (`docker run`). Without a restart policy the container just stops.
 

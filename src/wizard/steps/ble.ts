@@ -1,13 +1,11 @@
 import type { WizardStep, WizardContext } from '../types.js';
 import type { MqttProxyConfig, EsphomeProxyConfig } from '../../config/schema.js';
+import { isValidScaleId, SCALE_ID_HINT } from '../../ble/scale-id.js';
 import { success, warn, info } from '../ui.js';
 
-const MAC_REGEX = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/;
-const UUID_REGEX = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/;
-
 function validateMac(v: string): string | true {
-  if (!MAC_REGEX.test(v) && !UUID_REGEX.test(v)) {
-    return 'Must be a MAC address (XX:XX:XX:XX:XX:XX) or CoreBluetooth UUID';
+  if (!isValidScaleId(v)) {
+    return `Must be ${SCALE_ID_HINT}`;
   }
   return true;
 }

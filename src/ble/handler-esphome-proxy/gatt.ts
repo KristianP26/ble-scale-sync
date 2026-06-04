@@ -29,14 +29,38 @@ interface ConnectResponse extends EsphomeDeviceConnection {
  * waitForRawReading() seam expects. ESPHome speaks numeric handles and a uint64
  * address; the translation is contained here so adapters stay UUID-based and
  * unchanged.
+ *
+ * ESPHome's V3 connect request requires the BLE `address_type`; omitting it makes
+ * newer firmware reject the connect with "Missing address type" (#215). When the
+ * type is known (captured from the advertisement) we try it first; otherwise, and
+ * as a fallback when the first attempt fails, we try the other type (public = 0,
+ * random = 1).
  */
-export async function openGattSession(client: EsphomeClient, mac: string): Promise<GattSession> {
+export async function openGattSession(
+  client: EsphomeClient,
+  mac: string,
+  addressType?: number,
+): Promise<GattSession> {
   const conn: EsphomeConnection = client.connection;
   const addr = macToInt(mac);
 
-  const connResp = (await conn.connectBluetoothDeviceService(addr)) as ConnectResponse;
-  if (!connResp || connResp.connected !== true) {
-    throw new Error(`ESPHome proxy could not connect to ${mac}`);
+  const candidates = addressType === undefined ? [0, 1] : [addressType, addressType === 0 ? 1 : 0];
+  let connResp: ConnectResponse | undefined;
+  let lastErr = 'no connect attempt made';
+  for (const type of candidates) {
+    try {
+      const resp = (await conn.connectBluetoothDeviceService(addr, type)) as ConnectResponse;
+      if (resp && resp.connected === true) {
+        connResp = resp;
+        break;
+      }
+      lastErr = `connected=false (addr_type=${type})`;
+    } catch (e) {
+      lastErr = `${errMsg(e)} (addr_type=${type})`;
+    }
+  }
+  if (!connResp) {
+    throw new Error(`ESPHome proxy could not connect to ${mac}: ${lastErr}`);
   }
   const services = (await conn.listBluetoothGATTServicesService(
     addr,

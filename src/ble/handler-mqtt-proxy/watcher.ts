@@ -6,11 +6,41 @@ import { bleLog, withTimeout, errMsg, IMPEDANCE_GRACE_MS } from '../types.js';
 import { AsyncQueue } from '../async-queue.js';
 import { topics } from './topics.js';
 import { type MqttClient, getOrCreatePersistentClient } from './client.js';
-import { mqttGattConnect, mqttGattDisconnect } from './gatt.js';
+import {
+  mqttGattConnect,
+  mqttGattDisconnect,
+  buildCharMapFromPayload,
+  type MqttBleDevice,
+} from './gatt.js';
 import { registerScaleMac } from './display.js';
 import { type ScanResultEntry, toBleDeviceInfo } from './scan.js';
 
 const DEDUP_WINDOW_MS = 30_000;
+
+/** Bluetooth Base UUID for expanding 16-bit UUIDs to 128-bit form. */
+const BT_BASE_UUID = '00000000-0000-1000-8000-00805f9b34fb';
+
+/**
+ * Normalize a BLE UUID to lowercase 128-bit form for reliable comparison.
+ * Handles 16-bit ("fff4"), 32-bit, and full 128-bit UUIDs with or without dashes.
+ */
+function normalizeUuid(uuid: string): string {
+  const lower = uuid.toLowerCase().replace(/-/g, '');
+  if (lower.length === 4) {
+    // 16-bit → expand into base UUID
+    return BT_BASE_UUID.replace('00000000', `0000${lower}`);
+  }
+  if (lower.length === 8) {
+    // 32-bit → expand into base UUID
+    return BT_BASE_UUID.replace('00000000', lower);
+  }
+  // Already 128-bit (32 hex chars) — insert dashes if missing
+  if (lower.length === 32) {
+    return `${lower.slice(0, 8)}-${lower.slice(8, 12)}-${lower.slice(12, 16)}-${lower.slice(16, 20)}-${lower.slice(20)}`;
+  }
+  // Already formatted 128-bit
+  return lower;
+}
 
 type LifecycleHandler =
   | { event: 'reconnect'; handler: () => void }
@@ -83,7 +113,13 @@ export class ReadingWatcher {
       await client.subscribeAsync(t.scanResults, { qos: 1 });
       // Subscribe to status for logging only
       await client.subscribeAsync(t.status);
-      this._subscribedTopics = [t.scanResults, t.status];
+      // Subscribe to connected for autonomous ESP32 connects (#201)
+      await client.subscribeAsync(t.connected);
+      // Subscribe to disconnected so MqttBleDevice instances (which only add a
+      // message listener, not a broker subscription) receive disconnect events
+      // during autonomous connects. Not handled by _messageHandler itself.
+      await client.subscribeAsync(t.disconnected);
+      this._subscribedTopics = [t.scanResults, t.status, t.connected, t.disconnected];
       bleLog.info('ReadingWatcher started, listening for scan results');
     } catch (err) {
       this.started = false;
@@ -96,6 +132,27 @@ export class ReadingWatcher {
         bleLog.info(`ESP32 status: ${payload.toString()}`);
         return;
       }
+
+      // Handle autonomous GATT connect from ESP32 (#201).
+      // The ESP32 publishes the same `connected` payload with an extra
+      // `autonomous: true` flag when it auto-connects to a known scale MAC.
+      if (topic === t.connected) {
+        try {
+          const data = JSON.parse(payload.toString());
+          if (data.autonomous && data.address) {
+            bleLog.info(
+              `Received autonomous connect from ESP32 for ${data.address} (${data.chars?.length ?? 0} chars)`,
+            );
+            this.handleAutonomousConnect(data).catch((err) => {
+              bleLog.warn(`Autonomous GATT reading failed for ${data.address}: ${errMsg(err)}`);
+            });
+          }
+        } catch {
+          // Not JSON or missing fields — ignore (could be a host-initiated connect response)
+        }
+        return;
+      }
+
       if (topic !== t.scanResults) return;
 
       try {
@@ -181,6 +238,19 @@ export class ReadingWatcher {
           // has a GATT path (#201: dual-mode adapters like QN Scale must reach
           // this even though they declare parseBroadcast).
           if (!adapter.charNotifyUuid) continue;
+
+          // When auto_connect is enabled (default), the ESP32 connects
+          // autonomously and publishes a `connected` payload handled by
+          // handleAutonomousConnect(). Skip the host-initiated GATT path
+          // to avoid a race where both sides try to connect simultaneously,
+          // causing timeouts (#201).
+          if (this.config.auto_connect !== false) {
+            bleLog.debug(
+              `Skipping host-initiated GATT for ${entry.address} — auto_connect enabled, ` +
+                `waiting for autonomous connect from ESP32`,
+            );
+            continue;
+          }
 
           this.handleGattReading(entry, adapter).catch((err) => {
             bleLog.warn(`GATT reading failed for ${entry.address}: ${errMsg(err)}`);
@@ -268,31 +338,33 @@ export class ReadingWatcher {
     this.gattStartedAt = Date.now();
 
     const t = topics(this.config.topic_prefix, this.config.device_id);
-    const client = await getOrCreatePersistentClient(this.config);
-    if (!this.profile) {
-      bleLog.warn(
-        'No user profile configured for GATT reading. Body composition will be inaccurate. ' +
-          'Set a user profile in config.yaml to get correct results.',
-      );
-    }
-    const profile: UserProfile = this.profile ?? {
-      height: 170,
-      age: 30,
-      gender: 'male',
-      isAthlete: false,
-    };
-
-    bleLog.info(`Connecting via GATT proxy to ${adapter.name} (${entry.address})...`);
-    const { charMap, device } = await mqttGattConnect(
-      client,
-      t,
-      entry.address,
-      entry.addr_type ?? 0,
-    );
+    let client: MqttClient | undefined;
+    let device: MqttBleDevice | undefined;
+    // Guard the whole connect+read sequence: if mqttGattConnect (or the client
+    // lookup) throws, the finally must still clear gattInProgress — otherwise a
+    // single failed connect blocks every later GATT retry until the 90s
+    // stale-reset (#201).
     try {
+      client = await getOrCreatePersistentClient(this.config);
+      if (!this.profile) {
+        bleLog.warn(
+          'No user profile configured for GATT reading. Body composition will be inaccurate. ' +
+            'Set a user profile in config.yaml to get correct results.',
+        );
+      }
+      const profile: UserProfile = this.profile ?? {
+        height: 170,
+        age: 30,
+        gender: 'male',
+        isAthlete: false,
+      };
+
+      bleLog.info(`Connecting via GATT proxy to ${adapter.name} (${entry.address})...`);
+      const connected = await mqttGattConnect(client, t, entry.address, entry.addr_type ?? 0);
+      device = connected.device;
       const raw = await withTimeout(
         waitForRawReading(
-          charMap,
+          connected.charMap,
           device,
           adapter,
           profile,
@@ -305,8 +377,104 @@ export class ReadingWatcher {
       this.queue.push(raw);
     } finally {
       this.gattInProgress = false;
-      device.cleanup();
-      await mqttGattDisconnect(client, t).catch(() => {});
+      device?.cleanup();
+      if (client) await mqttGattDisconnect(client, t).catch(() => {});
+    }
+  }
+
+  /**
+   * Handle an autonomous GATT connect from the ESP32 (#201).
+   *
+   * The ESP32 already connected and discovered services. We just need to set up
+   * the MQTT char abstractions and run the adapter's reading protocol — no
+   * mqttGattConnect() needed, saving the entire MQTT round-trip.
+   */
+  private async handleAutonomousConnect(data: {
+    address: string;
+    chars: Array<{ uuid: string; properties: string[] }>;
+  }): Promise<void> {
+    if (this.gattInProgress) {
+      if (Date.now() - this.gattStartedAt > ReadingWatcher.GATT_STALE_MS) {
+        bleLog.warn('gattInProgress stuck for >90s, auto-resetting');
+        this.gattInProgress = false;
+      } else {
+        bleLog.debug(`GATT connection already in progress, skipping autonomous ${data.address}`);
+        return;
+      }
+    }
+    this.gattInProgress = true;
+    this.gattStartedAt = Date.now();
+
+    const t = topics(this.config.topic_prefix, this.config.device_id);
+    let client: MqttClient | undefined;
+    let device: MqttBleDevice | undefined;
+    try {
+      client = await getOrCreatePersistentClient(this.config);
+
+      // Match the address to an adapter
+      const info = toBleDeviceInfo({ address: data.address, name: '', rssi: 0, services: [] });
+      // For autonomous connect, we match by scanning the chars for known notify UUIDs
+      const adapter = this.adapters.find((a) => {
+        // Try matching by device info first
+        if (a.matches(info)) return true;
+        // Also match by charNotifyUuid: the ESP32 already connected, so the
+        // adapter may match only by its GATT characteristic.
+        // Normalize both sides (case + 16-bit vs 128-bit) to avoid silent mismatches.
+        if (a.charNotifyUuid) {
+          const normalized = normalizeUuid(a.charNotifyUuid);
+          return data.chars.some((c) => normalizeUuid(c.uuid) === normalized);
+        }
+        return false;
+      });
+
+      if (!adapter) {
+        bleLog.warn(
+          `Autonomous connect from ${data.address}: no adapter matched ` +
+            `(${data.chars.length} chars: ${data.chars.map((c) => c.uuid).join(', ')}), disconnecting`,
+        );
+        await mqttGattDisconnect(client, t).catch(() => {});
+        return;
+      }
+
+      if (!this.profile) {
+        bleLog.warn(
+          'No user profile configured for GATT reading. Body composition will be inaccurate.',
+        );
+      }
+      const profile: UserProfile = this.profile ?? {
+        height: 170,
+        age: 30,
+        gender: 'male',
+        isAthlete: false,
+      };
+
+      bleLog.info(`Autonomous GATT connect from ESP32: ${adapter.name} (${data.address})`);
+      const { charMap, device: dev } = buildCharMapFromPayload(client, t, data.chars);
+      device = dev;
+      bleLog.debug(
+        `Autonomous connect: charMap built with ${charMap.size} chars, waiting for reading...`,
+      );
+
+      const raw = await withTimeout(
+        waitForRawReading(
+          charMap,
+          device,
+          adapter,
+          profile,
+          data.address.replace(/[:-]/g, '').toUpperCase(),
+        ),
+        60_000,
+        `GATT reading timeout for ${data.address} (autonomous)`,
+      );
+      registerScaleMac(this.config, data.address).catch(() => {});
+      bleLog.info(
+        `Autonomous GATT reading complete: ${raw.reading.weight} kg from ${data.address}`,
+      );
+      this.queue.push(raw);
+    } finally {
+      this.gattInProgress = false;
+      device?.cleanup();
+      if (client) await mqttGattDisconnect(client, t).catch(() => {});
     }
   }
 

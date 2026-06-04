@@ -122,6 +122,11 @@ If a GATT scale still does not produce readings:
   If no proxy is close enough, move a proxy nearer or add one to the mesh.
 - Single-shot (`npm start`) returns a descriptive error; continuous mode
   (`CONTINUOUS_MODE=true`) keeps running and retries.
+- **ESPHome logs "Missing address type in connect request":** resolved. The
+  handler now sends the BLE address type (public or random, taken from the
+  scale's advertisement) with every GATT connect, and falls back to the other
+  type if the first attempt is refused. Update to the latest version if you
+  still see this on older builds.
 
 ### Multiple ESPHome proxies (mesh)
 

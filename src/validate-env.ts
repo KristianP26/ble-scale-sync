@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { config } from 'dotenv';
 import { createLogger } from './logger.js';
+import { isValidScaleId } from './ble/scale-id.js';
 import type { Gender, UserProfile } from './interfaces/scale-adapter.js';
 
 const log = createLogger('Config');
@@ -58,11 +59,6 @@ function parseBoolean(key: string, raw: string): boolean {
   fail(`${key} must be true/false/yes/no/1/0, got '${raw}'`);
 }
 
-const MAC_REGEX = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/;
-/** CoreBluetooth UUID format used on macOS (e.g. 12345678-1234-1234-1234-123456789ABC). */
-const CB_UUID_REGEX =
-  /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/;
-
 export function loadConfig(): Config {
   config({ path: join(ROOT, '.env') });
 
@@ -92,7 +88,7 @@ export function loadConfig(): Config {
   let scaleMac: string | undefined;
   const rawMac = process.env.SCALE_MAC;
   if (rawMac) {
-    if (!MAC_REGEX.test(rawMac) && !CB_UUID_REGEX.test(rawMac)) {
+    if (!isValidScaleId(rawMac)) {
       fail(
         `SCALE_MAC must be a MAC address (XX:XX:XX:XX:XX:XX) ` +
           `or CoreBluetooth UUID (macOS), got '${rawMac}'`,

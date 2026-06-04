@@ -59,6 +59,12 @@ describe('loadConfig()', () => {
     expect(cfg.scaleMac).toBe('AA:BB:CC:DD:EE:FF');
   });
 
+  it('accepts a bare 32-hex CoreBluetooth UUID SCALE_MAC (macOS, #212)', () => {
+    setEnv({ SCALE_MAC: '360c96baf290475b14ce7c28aa3b8e81' });
+    const cfg = loadConfig();
+    expect(cfg.scaleMac).toBe('360c96baf290475b14ce7c28aa3b8e81');
+  });
+
   it('accepts case-insensitive USER_GENDER', () => {
     setEnv({ USER_GENDER: 'Female' });
     const cfg = loadConfig();

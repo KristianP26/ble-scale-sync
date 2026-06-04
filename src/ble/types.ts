@@ -68,6 +68,13 @@ export const RSSI_UNAVAILABLE = 127;
 export const RSSI_FRESHNESS_MS = 5_000;
 
 /**
+ * Observation window for the watchdog liveness probe (#213). After a failed idle
+ * scan we watch advertisement activity for this long to tell a live-but-idle
+ * radio (saw other adverts) from a wedged controller (saw nothing).
+ */
+export const LIVENESS_PROBE_WINDOW_MS = 3_000;
+
+/**
  * Grace window after a weight-only broadcast frame is received.
  * The Mi Scale 2 broadcasts weight-only frames while BIA is in progress, then
  * a final frame with impedance once the measurement completes (~10-20 s on device).

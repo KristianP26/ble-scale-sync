@@ -48,6 +48,10 @@ _pending = []
 _scale_macs = set()
 _last_beep_time = 0
 
+# Autonomous GATT connect: ESP32 connects itself when a known scale MAC
+# appears in a scan, eliminating the MQTT round-trip latency (#201).
+_auto_connect = True  # opt-out via config topic {"autoConnect": false}
+
 
 def topic(suffix):
     return f"{BASE}/{suffix}"
@@ -62,20 +66,24 @@ mqtt_config["server"] = cfg["mqtt_broker"]
 mqtt_config["port"] = cfg["mqtt_port"]
 mqtt_config["client_id"] = DEVICE_ID
 mqtt_config["will"] = (topic("status"), "offline", True, 1)
-mqtt_config["keepalive"] = 30
+# 60s keepalive (broker tolerates ~90s without a ping): a GATT connect
+# attempt can starve WiFi for tens of seconds on the shared 2.4GHz radio,
+# so a tighter value drops the MQTT link mid-connect (#201).
+mqtt_config["keepalive"] = 60
 mqtt_config["clean"] = True
 mqtt_config["queue_len"] = 0  # callback mode
 
 
 def on_message(topic_bytes, msg, retained):
     """Sync callback — queue the command for async processing."""
-    global _scale_macs
+    global _scale_macs, _auto_connect
     t = topic_bytes.decode() if isinstance(topic_bytes, (bytes, bytearray)) else topic_bytes
     if t == topic("config"):
         try:
             data = json.loads(msg)
             _scale_macs = set(data.get("scales", []))
-            print(f"Config: {len(_scale_macs)} scale MAC(s)")
+            _auto_connect = data.get("autoConnect", True)
+            print(f"Config: {len(_scale_macs)} scale MAC(s), autoConnect={_auto_connect}")
             if board.HAS_DISPLAY:
                 ui.on_config_update(data.get("users", []))
                 ui.on_scale_macs_update(len(_scale_macs) > 0)
@@ -125,6 +133,13 @@ async def publish_error(message):
         await client.publish(topic("error"), message, qos=0)
     except Exception:
         pass
+
+
+def describe_exc(e):
+    """Readable exception text. MicroPython's str() is empty for many built-in
+    exceptions (e.g. asyncio.TimeoutError), so fall back to the type name —
+    otherwise the host only sees a blank "ESP32 error:" (#201)."""
+    return str(e) or type(e).__name__
     print(f"Error: {message}")
 
 
@@ -143,6 +158,77 @@ def _check_scale_beep(results):
                 if board.HAS_DISPLAY:
                     ui.on_scale_detected(r["address"])
                 break
+
+
+def _find_scale_in_raw(raw_results):
+    """Find the first known scale MAC in the raw IRQ buffer.
+
+    Returns (mac, addr_bytes, addr_type) or None. Non-destructive peek used by the
+    autonomous connect logic to skip the MQTT round-trip (#201).
+    """
+    for addr_bytes, addr_type, _rssi, _raw in raw_results:
+        mac = ":".join("%02X" % b for b in addr_bytes)
+        if mac in _scale_macs:
+            print(f"Auto-connect: found known scale {mac} in raw buffer (addr_type={addr_type})")
+            return mac, addr_bytes, addr_type
+    return None
+
+
+async def _auto_gatt_connect(mac, addr_type):
+    """Autonomously connect to a known scale and publish the connected event.
+
+    This eliminates the MQTT round-trip that previously caused the scale to
+    power off before the ESP32 could connect (#201). The host receives the
+    same 'connected' payload as with a host-initiated connect, so the adapter
+    protocol handshake is unchanged.
+    """
+    global _char_subscribed, _busy, _scan_paused
+    _scan_paused = True
+
+    if board.CONTINUOUS_SCAN:
+        bridge.stop_streaming()
+        print(f"Auto-connect: stopped streaming scan for {mac}")
+
+    _busy = True
+    try:
+        await bridge.disconnect()
+        print(f"Auto-connecting to {mac} (addr_type={addr_type})...")
+        result = await bridge.connect(mac, addr_type)
+        print(f"Auto-connect: BLE connected to {mac}, discovering chars...")
+
+        if not _char_subscribed:
+            await client.subscribe(topic("write/#"), 0)
+            await client.subscribe(topic("read/#"), 0)
+            _char_subscribed = True
+
+        for char_info in result["chars"]:
+            if "notify" in char_info["properties"]:
+                uuid_str = char_info["uuid"]
+
+                def make_publish_fn(u):
+                    async def publish_fn(_source_uuid, data):
+                        await client.publish(topic(f"notify/{u}"), data, qos=0)
+                    return publish_fn
+
+                await bridge.start_notify(uuid_str, make_publish_fn(uuid_str))
+                print(f"Auto-connect: notify enabled for {uuid_str}")
+
+        bridge.set_on_disconnect(lambda: _pending.append(("__ble_disconnected__", b"")))
+
+        # Mark the response as autonomous so the host can distinguish it
+        result["autonomous"] = True
+        result["address"] = mac
+        await client.publish(topic("connected"), json.dumps(result), qos=0)
+        print(f"Auto-connect to {mac} succeeded, {len(result['chars'])} chars published to host")
+    except Exception as e:
+        print(f"Auto-connect failed for {mac}: {describe_exc(e)}")
+        _scan_paused = False
+        if board.CONTINUOUS_SCAN:
+            bridge.start_streaming()
+            print(f"Auto-connect: resumed streaming scan after failure")
+        await publish_error(f"Auto-connect failed for {mac}: {describe_exc(e)}")
+    finally:
+        _busy = False
 
 
 async def _streaming_scan_loop():
@@ -164,7 +250,38 @@ async def _streaming_scan_loop():
             await asyncio.sleep(1)
             continue
 
-        await asyncio.sleep_ms(board.PUBLISH_INTERVAL_MS)
+        # Wait out the publish interval, but flush early the instant a known
+        # scale MAC shows up in the scan buffer: a stepped-on scale stays
+        # connectable only briefly, so shaving the batching delay matters (#201).
+        waited = 0
+        while waited < board.PUBLISH_INTERVAL_MS:
+            await asyncio.sleep_ms(250)
+            waited += 250
+            if _scan_paused:
+                break
+            if _scale_macs and bridge.has_pending_scale_mac(_scale_macs):
+                # Autonomous connect: ESP32 connects itself immediately,
+                # eliminating the MQTT round-trip (#201).
+                if _auto_connect:
+                    found = _find_scale_in_raw(bridge._raw_results)
+                    if found:
+                        mac, _addr_bytes, addr_type = found
+                        print(f"Auto-connect: scale {mac} detected after {waited}ms, connecting immediately")
+                        # Drain and publish scan results first so the host
+                        # sees what triggered the connect.
+                        try:
+                            results = bridge.drain_results()
+                            gc.collect()
+                            _check_scale_beep(results)
+                            board.on_scan_complete(results, bool(_scale_macs))
+                            await client.publish(topic("scan/results"), json.dumps(results), qos=0)
+                        except Exception:
+                            pass
+                        await _auto_gatt_connect(mac, addr_type)
+                        break
+                # If auto-connect is disabled, just break to flush results
+                # as before (host-initiated connect path).
+                break
 
         if _scan_paused:
             continue
@@ -182,7 +299,7 @@ async def _streaming_scan_loop():
                 ui.on_publish_tick()
         except Exception as e:
             try:
-                await publish_error(f"Scan publish failed: {e}")
+                await publish_error(f"Scan publish failed: {describe_exc(e)}")
             except Exception:
                 print(f"Scan error: {e}")
 
@@ -236,9 +353,17 @@ async def _batch_scan_loop():
             print("Results published")
             if board.HAS_DISPLAY:
                 ui.on_publish_tick()
+            # Autonomous connect for batch-mode boards: if a known scale MAC
+            # appeared in the scan results, connect immediately (#201).
+            if _auto_connect and _scale_macs:
+                for r in results:
+                    if r["address"] in _scale_macs:
+                        print(f"Auto-connect (batch): scale {r['address']} found in scan results")
+                        await _auto_gatt_connect(r["address"], r.get("addr_type", 0))
+                        break
         except Exception as e:
             try:
-                await publish_error(f"Scan failed: {e}")
+                await publish_error(f"Scan failed: {describe_exc(e)}")
             except Exception:
                 print(f"Scan error: {e}")
         finally:
@@ -457,7 +582,7 @@ async def main():
                     if "/response" not in suffix:
                         await handle_read(suffix)
             except Exception as e:
-                await publish_error(str(e))
+                await publish_error(describe_exc(e))
 
         await asyncio.sleep_ms(50)
         gc_counter += 1
@@ -468,4 +593,5 @@ async def main():
             ui.check_timeout()
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

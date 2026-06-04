@@ -286,5 +286,34 @@ class TestMergeEntry(unittest.TestCase):
         )
 
 
+class TestRawHasMac(unittest.TestCase):
+    """_raw_has_mac: non-destructive peek of the streaming IRQ buffer (#201)."""
+
+    @staticmethod
+    def _raw(addr_bytes):
+        # (addr_bytes, addr_type, rssi, adv_raw) — the streaming IRQ tuple shape.
+        return (addr_bytes, 0, -50, b"")
+
+    def test_empty_buffer(self):
+        self.assertFalse(ble_bridge._raw_has_mac([], {_MAC_STR}))
+
+    def test_no_known_mac_present(self):
+        raw = [self._raw(b"\x11\x22\x33\x44\x55\x66")]
+        self.assertFalse(ble_bridge._raw_has_mac(raw, {_MAC_STR}))
+
+    def test_known_mac_present(self):
+        raw = [self._raw(b"\x11\x22\x33\x44\x55\x66"), self._raw(_MAC)]
+        self.assertTrue(ble_bridge._raw_has_mac(raw, {_MAC_STR}))
+
+    def test_empty_mac_set(self):
+        self.assertFalse(ble_bridge._raw_has_mac([self._raw(_MAC)], set()))
+
+    def test_address_formatted_uppercase_colon(self):
+        # The buffer's address bytes must format to the same uppercase
+        # colon-separated MAC the config topic carries; a lowercase set entry
+        # must therefore not match.
+        self.assertFalse(ble_bridge._raw_has_mac([self._raw(_MAC)], {_MAC_STR.lower()}))
+
+
 if __name__ == "__main__":
     unittest.main()

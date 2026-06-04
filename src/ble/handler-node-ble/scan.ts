@@ -42,6 +42,8 @@ import {
 import { connectWithRecovery } from './connect.js';
 import { wrapDevice, buildCharMap } from './gatt.js';
 import { broadcastScanNodeBle } from './broadcast.js';
+import { tagBleFailure, bleFailureKind } from '../failure-kind.js';
+import { probeLiveness, makeLivenessAdapter } from './liveness.js';
 
 /**
  * Scan for a BLE scale, read weight + impedance, and compute body composition.
@@ -68,6 +70,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   let gattAttempted = false;
   let gattSucceeded = false;
   let deviceMac: string = targetMac ?? '';
+  // Latest resolved adapter handle, captured for the failure-classification
+  // liveness probe (#213). Stays undefined if getAdapter never succeeds.
+  let probeAdapter: Adapter | undefined;
 
   try {
     try {
@@ -89,6 +94,8 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       }
     }
 
+    probeAdapter = btAdapter;
+
     if (!(await btAdapter.isPowered())) {
       throw new Error(
         'Bluetooth adapter is not powered on. ' +
@@ -104,6 +111,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
 
     const discoveryResult = await startDiscoverySafe(btAdapter, bleAdapter);
     if (discoveryResult) btAdapter = discoveryResult;
+    probeAdapter = btAdapter;
 
     let matchedAdapter: ScaleAdapter;
 
@@ -315,6 +323,19 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       /* ignore */
     }
     return raw;
+  } catch (err) {
+    // Classify the failure for the #154 watchdog (#213). An idle no-show where
+    // the radio still sees other advertisers must not count; a GATT failure or a
+    // radio that sees nothing at all (zombie wedge) must. Skip on abort.
+    if (!abortSignal?.aborted && bleFailureKind(err) === undefined) {
+      if (gattAttempted || !probeAdapter) {
+        tagBleFailure(err, 'wedge-suspect');
+      } else {
+        const alive = await probeLiveness(makeLivenessAdapter(probeAdapter));
+        tagBleFailure(err, alive ? 'idle' : 'wedge-suspect');
+      }
+    }
+    throw err;
   } finally {
     // Best-effort disconnect if we got partway through a connection
     if (device) {

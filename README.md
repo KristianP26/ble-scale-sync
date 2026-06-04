@@ -84,14 +84,14 @@ Requires Node.js v22+ and a BLE adapter. See the **[full install guide](https://
 - **[10 body metrics](https://blescalesync.dev/body-composition).** BIA-based body composition from weight + impedance.
 - **[Multi-user](https://blescalesync.dev/multi-user).** Automatic weight-based identification with per-user exporters.
 - **Historical sync.** Replays a scale's onboard cache of offline measurements with their original timestamps to exporters that support back-dating (Garmin Connect, InfluxDB, File).
-- **[Interactive setup wizard](https://blescalesync.dev/guide/configuration).** Scale discovery, exporter config, connectivity tests.
+- **[Interactive setup wizard](https://blescalesync.dev/guide/configuration).** Scale discovery (MAC or macOS CoreBluetooth UUID), exporter config, connectivity tests.
 - **[BLE diagnostic tool](https://blescalesync.dev/troubleshooting).** `npm run diagnose` for detailed BLE troubleshooting.
 - **[Home Assistant Add-on](https://blescalesync.dev/guide/home-assistant-addon).** One-click install via My Home Assistant badge, MQTT auto-discovery, UI-driven config, Garmin token bootstrap, and MFA workaround.
 - **[ESP32 BLE proxy](https://blescalesync.dev/guide/esp32-proxy).** Use a remote ESP32 as a BLE radio over MQTT, with a built-in embedded broker for zero-config setup, simplified Docker deployment, and optional display.
-- **[ESPHome Bluetooth proxy](https://blescalesync.dev/guide/esphome-proxy).** Reuse an existing ESPHome BT proxy mesh (Home Assistant) as a BLE radio via Native API: broadcast and GATT scales, multi-proxy with RSSI auto-pick.
+- **[ESPHome Bluetooth proxy](https://blescalesync.dev/guide/esphome-proxy).** Reuse an existing ESPHome BT proxy mesh (Home Assistant) as a BLE radio via Native API: broadcast and GATT scales (public and random BLE addresses), multi-proxy with RSSI auto-pick.
 - **BLE adapter selection.** `ble.adapter: hci1` for multi-adapter setups (Linux).
 - **Broadcast mode.** Supports non-connectable scales that only advertise weight via BLE advertisements.
-- **Linux stability hardening.** Auto-recovery for the BlueZ "stuck discovery" state via a consecutive-failure watchdog, plus optional [systemd `Type=notify`](https://blescalesync.dev/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state) integration for whole-loop freezes.
+- **Linux stability hardening.** Auto-recovery for the BlueZ "stuck discovery" state via a consecutive-failure watchdog, plus optional [systemd `Type=notify`](https://blescalesync.dev/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state) integration for whole-loop freezes. The watchdog is idle-aware, so a scale that only advertises while in use does not trigger needless restarts when nobody is weighing.
 - **Update check.** Optional, anonymous version check after each measurement (opt-out via `update_check: false`); see the [auto update guide](https://blescalesync.dev/guide/auto-update) for Watchtower, systemd timer, and HA add-on recipes.
 - **Cross-platform.** Linux (Docker + native), macOS, Windows.
 - **Private.** Your data stays on your device, no vendor cloud.
