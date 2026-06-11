@@ -735,4 +735,86 @@ describe('QnScaleAdapter', () => {
       expect(reading!.impedance).toBe(509);
     });
   });
+  // Store-and-forward variants (e.g. Renpho Elis 1): the scale never streams
+  // live 0x10 frames; finished measurements arrive as 0x23 stored records
+  // right after the handshake. Frames below were captured from real hardware.
+  describe('parseNotification() 0x23 stored records', () => {
+    /** Build a 19-byte 0x23 stored-record frame. */
+    function makeStoredRecord(
+      count: number,
+      index: number,
+      ts: number,
+      rawWeight: number,
+      r1: number,
+      r2: number,
+    ): Buffer {
+      const buf = Buffer.alloc(19);
+      buf[0] = 0x23;
+      buf[1] = 0x13;
+      buf[2] = 0xff;
+      buf[3] = count;
+      buf[4] = index;
+      buf[5] = 0xf0;
+      buf.writeUInt32LE(ts, 6);
+      buf.writeUInt16BE(rawWeight, 10);
+      buf.writeUInt16BE(r1, 12);
+      buf.writeUInt16BE(r2, 14);
+      buf[18] = buf.subarray(0, 18).reduce((a, b) => a + b, 0) & 0xff;
+      return buf;
+    }
+
+    it('parses a stored record (real Elis 1 capture: 77.7 kg, R1=497)', () => {
+      const adapter = makeAdapter();
+      // 23 13 ff 01 01 f0 aa c9 bd 31 1e 5a 01 f1 01 ef 00 00 e2
+      const buf = makeStoredRecord(1, 1, 0x31bdc9aa, 0x1e5a, 497, 495);
+      const reading = adapter.parseNotification(buf);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBe(77.7);
+      expect(reading!.impedance).toBe(497);
+    });
+
+    it('applies the alternate-factor heuristic when scale info set factor=10', () => {
+      const adapter = makeAdapter();
+      // Long 18-byte 0x12 frame (ES-26M style) → factor=10
+      const infoBuf = Buffer.alloc(18);
+      infoBuf[0] = 0x12;
+      infoBuf[1] = 18;
+      adapter.parseNotification(infoBuf);
+
+      // Raw 7770 at /10 = 777 kg (unreasonable) → heuristic /100 = 77.7 kg
+      const reading = adapter.parseNotification(makeStoredRecord(1, 1, 1000, 7770, 497, 495));
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBe(77.7);
+    });
+
+    it('parses a multi-record session (count=2, distinct timestamps)', () => {
+      const adapter = makeAdapter();
+      const first = adapter.parseNotification(makeStoredRecord(2, 1, 1000, 7760, 503, 501));
+      const second = adapter.parseNotification(makeStoredRecord(2, 2, 1028, 7760, 503, 501));
+      expect(first).not.toBeNull();
+      expect(second).not.toBeNull();
+      expect(first!.weight).toBe(77.6);
+      expect(second!.weight).toBe(77.6);
+    });
+
+    it('returns null for the empty "no records" terminator frame', () => {
+      const adapter = makeAdapter();
+      // 23 13 ff 00 00 00 ... (count=0, index=0)
+      expect(adapter.parseNotification(makeStoredRecord(0, 0, 0x31bdc285, 0, 0, 0))).toBeNull();
+    });
+
+    it('deduplicates a replayed record by its scale-side timestamp', () => {
+      const adapter = makeAdapter();
+      const buf = makeStoredRecord(1, 1, 2000, 7770, 497, 495);
+      expect(adapter.parseNotification(buf)).not.toBeNull();
+      expect(adapter.parseNotification(buf)).toBeNull();
+    });
+
+    it('falls back to R2 when R1 is zero', () => {
+      const adapter = makeAdapter();
+      const reading = adapter.parseNotification(makeStoredRecord(1, 1, 3000, 7770, 0, 480));
+      expect(reading).not.toBeNull();
+      expect(reading!.impedance).toBe(480);
+    });
+  });
 });

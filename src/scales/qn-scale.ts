@@ -133,6 +133,13 @@ export class QnScaleAdapter implements ScaleAdapter {
    */
   private firstStableNoImpedanceAt: number | null = null;
 
+  /**
+   * Scale-side timestamps (seconds since 2000) of accepted 0x23
+   * stored-measurement records. Guards against the scale replaying the same
+   * record on reconnect. Deliberately NOT reset between connections.
+   */
+  private seenHistoryTimestamps = new Set<number>();
+
   /** Deduplication guards: prevent duplicate state machine responses. */
   private configSent = false;
   private timeSyncSent = false;
@@ -140,6 +147,39 @@ export class QnScaleAdapter implements ScaleAdapter {
 
   /** Fallback timer handle for cancellation when state machine fires normally. */
   private fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * Nudge timer for store-and-forward variants connected mid-measurement.
+   * When the scale reports an empty history (it hasn't finished/stored the
+   * in-progress measurement yet), periodically re-send the 0x22 start command
+   * so the scale delivers the fresh record once it completes — instead of the
+   * session timing out with no reading.
+   */
+  private measurementNudgeTimer: ReturnType<typeof setInterval> | null = null;
+  private measurementNudgeCount = 0;
+
+  private stopMeasurementNudge(): void {
+    if (this.measurementNudgeTimer) {
+      clearInterval(this.measurementNudgeTimer);
+      this.measurementNudgeTimer = null;
+    }
+  }
+
+  private startMeasurementNudge(): void {
+    if (this.measurementNudgeTimer || !this.ctx) return;
+    this.measurementNudgeCount = 0;
+    this.measurementNudgeTimer = setInterval(() => {
+      this.measurementNudgeCount += 1;
+      if (this.measurementNudgeCount > 12 || !this.ctx) {
+        this.stopMeasurementNudge();
+        return;
+      }
+      bleLog.debug(`QN: nudging scale for fresh record (0x22 re-send #${this.measurementNudgeCount})`);
+      const startCmd = [0x22, 0x06, this.seenProtocolType, 0x00, 0x03, 0x00];
+      startCmd[5] = startCmd.reduce((a, b) => a + b, 0) & 0xff;
+      void this.writeCmd(startCmd).catch(() => this.stopMeasurementNudge());
+    }, 5000);
+  }
 
   /** Write to FFF2 (write char), fall back to FFE3 (Type 1). */
   private async writeCmd(data: number[]): Promise<void> {
@@ -192,6 +232,7 @@ export class QnScaleAdapter implements ScaleAdapter {
       clearTimeout(this.fallbackTimer);
       this.fallbackTimer = null;
     }
+    this.stopMeasurementNudge();
 
     // Try subscribing to AE02 (newer firmware detection).
     // NOTE: on Linux, 0x12 may arrive before this completes. The state machine
@@ -374,9 +415,58 @@ export class QnScaleAdapter implements ScaleAdapter {
     }
 
     // 0xA1, 0xA3: acknowledgment frames (no action needed)
-    // 0x23: historical record (no action needed)
-    if (opcode === 0xa1 || opcode === 0xa3 || opcode === 0x23) {
+    if (opcode === 0xa1 || opcode === 0xa3) {
       return null;
+    }
+
+    // 0x23: stored measurement record. Some Renpho units (e.g. Elis 1
+    // store-and-forward firmware) never stream live 0x10 frames: the scale
+    // finishes measuring during the connection handshake and delivers the
+    // result only as a stored record right after 0x22 start. Observed 19B
+    // frame layout:
+    //   [3]     total record count (00 = empty "no more records" frame)
+    //   [4]     record index, 1-based (00 in the empty frame)
+    //   [6-9]   measurement timestamp (LE, seconds since 2000-01-01)
+    //   [10-11] weight (BE, factor-scaled)
+    //   [12-13] R1, [14-15] R2 (BIA resistances)
+    if (opcode === 0x23) {
+      if (data.length < 16 || data[3] < 1 || data[4] < 1) {
+        // Empty "no records" frame — likely connected mid-measurement, the
+        // record isn't stored yet. Nudge until the fresh record arrives.
+        this.startMeasurementNudge();
+        return null;
+      }
+
+      const recordTs = data.readUInt32LE(6);
+      if (recordTs !== 0 && this.seenHistoryTimestamps.has(recordTs)) {
+        bleLog.debug('QN: stored record replayed (same timestamp), skipping');
+        return null;
+      }
+
+      const rawWeight = data.readUInt16BE(10);
+      let weight = rawWeight / this.weightScaleFactor;
+
+      // Same heuristic as live 0x10 frames: stored records on factor=10
+      // scales have been observed encoded at /100.
+      if (weight <= 5 || weight >= 250) {
+        const altFactor = this.weightScaleFactor === 100 ? 10 : 100;
+        const altWeight = rawWeight / altFactor;
+        if (altWeight > 5 && altWeight < 250) {
+          weight = altWeight;
+        }
+      }
+      if (weight <= 5 || weight >= 250 || !Number.isFinite(weight)) return null;
+
+      const r1 = data.readUInt16BE(12);
+      const r2 = data.readUInt16BE(14);
+      const impedance = r1 > 0 ? r1 : r2;
+
+      this.seenHistoryTimestamps.add(recordTs);
+      this.stopMeasurementNudge();
+      bleLog.debug(
+        `QN: accepted stored record (ts=${recordTs}, weight=${weight}kg, R1=${r1}, R2=${r2})`,
+      );
+      return { weight, impedance };
     }
 
     // 0x10: live weight frame
