@@ -24,17 +24,21 @@ function fakeConnection() {
     },
     connectBluetoothDeviceService: vi.fn(async () => ({ address: ADDR, connected: true, mtu: 23 })),
     disconnectBluetoothDeviceService: vi.fn(async () => ({ address: ADDR, connected: false })),
+    // Shape as emitted by @2colors/esphome-native-api 1.3.6: mapMessageByType()
+    // pre-decodes the GATT uuid uint64 pair into a `uuid` string and DROPS
+    // `uuidList`. The bridge must read `uuid`, not the (now absent) `uuidList`.
     listBluetoothGATTServicesService: vi.fn(async () => ({
       address: ADDR,
       servicesList: [
         {
-          uuidList: ['0000181d-0000-1000-8000-00805f9b34fb'],
+          uuid: '0000181d-0000-1000-8000-00805f9b34fb',
           handle: 1,
           characteristicsList: [
             {
-              uuidList: ['00002a9d-0000-1000-8000-00805f9b34fb'],
+              uuid: '00002a9d-0000-1000-8000-00805f9b34fb',
               handle: 7,
               properties: 0x10,
+              descriptorsList: [],
             },
           ],
         },
@@ -65,6 +69,32 @@ describe('openGattSession', () => {
     );
     await session.close();
     expect(conn.disconnectBluetoothDeviceService).toHaveBeenCalledWith(ADDR);
+  });
+
+  it('skips a malformed characteristic (no uuid/uuidList) without crashing', async () => {
+    const conn = fakeConnection();
+    conn.listBluetoothGATTServicesService = vi.fn(async () => ({
+      address: ADDR,
+      servicesList: [
+        {
+          uuid: '0000181d-0000-1000-8000-00805f9b34fb',
+          handle: 1,
+          characteristicsList: [
+            { handle: 5, properties: 0x10, descriptorsList: [] }, // no uuid -> skip
+            {
+              uuid: '00002a9d-0000-1000-8000-00805f9b34fb',
+              handle: 7,
+              properties: 0x10,
+              descriptorsList: [],
+            },
+          ],
+        },
+      ],
+    }));
+    const session = await openGattSession({ connection: conn } as never, '00:00:00:00:00:01');
+    expect(session.charMap.has(normalizeUuid('2a9d'))).toBe(true);
+    expect(session.charMap.size).toBe(1);
+    await session.close();
   });
 
   it('writes the full payload in a single call (no MTU chunking)', async () => {

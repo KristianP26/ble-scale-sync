@@ -11,7 +11,11 @@ import { normalizeUuid } from '../types.js';
  * ESP ever hands the halves reversed, swap the two reads here (this is the
  * single point of change called out as risk #2 in the design spec).
  */
-export function esphomeUuidToString(uuidList: Array<string | number | bigint>): string {
+export function esphomeUuidToString(uuidList?: Array<string | number | bigint>): string {
+  // Defensive: @2colors/esphome-native-api pre-decodes GATT uuids into a `uuid`
+  // string and drops `uuidList`, so this fallback path may be handed nothing. A
+  // missing/empty list must never throw and kill the whole GATT session (#229).
+  if (!uuidList || uuidList.length === 0) return '';
   if (uuidList.length === 1) {
     const only = uuidList[0];
     if (typeof only === 'string') return normalizeUuid(only);
@@ -30,15 +34,24 @@ export function esphomeUuidToString(uuidList: Array<string | number | bigint>): 
   return normalizeUuid(full.toString(16).padStart(32, '0'));
 }
 
-/** Minimal structural types for the connection GATT messages we consume. */
+/**
+ * Minimal structural types for the connection GATT messages we consume.
+ *
+ * `@2colors/esphome-native-api` runs every message through `mapMessageByType()`,
+ * which for the GATT services response replaces the raw `uuidList` uint64 pair
+ * with a pre-decoded `uuid` string. We prefer `uuid` and keep `uuidList` as a
+ * fallback in case a different library version delivers the raw shape.
+ */
 export interface EsphomeGattCharacteristic {
-  uuidList: Array<string | number | bigint>;
+  uuid?: string;
+  uuidList?: Array<string | number | bigint>;
   handle: number;
   properties: number;
 }
 
 export interface EsphomeGattService {
-  uuidList: Array<string | number | bigint>;
+  uuid?: string;
+  uuidList?: Array<string | number | bigint>;
   handle: number;
   characteristicsList: EsphomeGattCharacteristic[];
 }

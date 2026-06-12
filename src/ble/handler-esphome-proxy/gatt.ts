@@ -1,5 +1,5 @@
 import type { BleChar, BleDevice } from '../shared.js';
-import { bleLog, errMsg } from '../types.js';
+import { bleLog, errMsg, normalizeUuid } from '../types.js';
 import type { EsphomeClient, EsphomeConnection } from './client.js';
 import { macToInt } from './advert.js';
 import {
@@ -81,7 +81,11 @@ export async function openGattSession(
   const charMap = new Map<string, BleChar>();
   for (const svc of services.servicesList ?? []) {
     for (const ch of svc.characteristicsList ?? []) {
-      const uuid = esphomeUuidToString(ch.uuidList);
+      // The library hands us a pre-decoded `uuid` string; `uuidList` is the
+      // raw-shape fallback. Skip entries we cannot identify rather than letting
+      // one malformed characteristic throw and abort the whole session (#229).
+      const uuid = ch.uuid ? normalizeUuid(ch.uuid) : esphomeUuidToString(ch.uuidList);
+      if (!uuid) continue;
       const handle = ch.handle;
 
       const char: BleChar = {

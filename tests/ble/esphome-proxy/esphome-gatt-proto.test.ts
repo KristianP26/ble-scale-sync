@@ -31,4 +31,9 @@ describe('esphomeUuidToString', () => {
     const full = 0x00002a9d00001000800000805f9b34fbn;
     expect(esphomeUuidToString([full])).toBe(normalizeUuid('2a9d'));
   });
+
+  it('returns empty string for a missing/empty uuidList (no throw)', () => {
+    expect(esphomeUuidToString(undefined)).toBe('');
+    expect(esphomeUuidToString([])).toBe('');
+  });
 });
