@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { QnScaleAdapter } from '../../src/scales/qn-scale.js';
-import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
+import type { BleDeviceInfo, ConnectionContext } from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -324,10 +324,107 @@ describe('QnScaleAdapter', () => {
       expect(adapter.parseNotification(buf)).toBeNull();
     });
 
-    it('returns null for 0x23 historical record frame', () => {
+    it('returns null for a too-short 0x23 frame (under 17 bytes)', () => {
       const adapter = makeAdapter();
       const buf = Buffer.from([0x23, 0x13, 0xff, 0x01, 0x01, 0xf0, 0x06, 0x4f, 0x43, 0x31]);
       expect(adapter.parseNotification(buf)).toBeNull();
+    });
+
+    // #213 / #75: V10 Renpho / ES-CS20M firmware delivers the weigh-in via the
+    // stored-data query path (0x22 -> 0x23), not reliably via live 0x10 frames.
+    // openScale QNHandler parses 0x23: weight=u16be[10,11]/100, r1=u16le[13,14],
+    // r2=u16le[15,16], timestamp=u32le[6,9] (2000-epoch seconds).
+    it('parses a fresh 0x23 stored measurement as a reading', () => {
+      const adapter = makeAdapter();
+      const nowScaleSeconds = Math.floor(Date.now() / 1000) - 946684800;
+      const buf = Buffer.alloc(19);
+      buf[0] = 0x23;
+      buf[1] = 0x13;
+      buf[2] = 0xff;
+      buf.writeUInt32LE(nowScaleSeconds >>> 0, 6);
+      buf.writeUInt16BE(8495, 10); // 84.95 kg
+      buf.writeUInt16LE(504, 13); // r1
+      buf.writeUInt16LE(246, 15); // r2
+      const reading = adapter.parseNotification(buf);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBeCloseTo(84.95);
+      expect(reading!.impedance).toBe(504);
+    });
+
+    it('rejects a stale 0x23 stored record (older than 90s before now)', () => {
+      const adapter = makeAdapter();
+      const staleScaleSeconds = Math.floor(Date.now() / 1000) - 946684800 - 200;
+      const buf = Buffer.alloc(19);
+      buf[0] = 0x23;
+      buf[1] = 0x13;
+      buf[2] = 0xff;
+      buf.writeUInt32LE(staleScaleSeconds >>> 0, 6);
+      buf.writeUInt16BE(8495, 10);
+      buf.writeUInt16LE(504, 13);
+      buf.writeUInt16LE(246, 15);
+      expect(adapter.parseNotification(buf)).toBeNull();
+    });
+
+    it('rejects an empty 0x23 stored record (weight 0)', () => {
+      const adapter = makeAdapter();
+      const nowScaleSeconds = Math.floor(Date.now() / 1000) - 946684800;
+      const buf = Buffer.alloc(19);
+      buf[0] = 0x23;
+      buf[1] = 0x13;
+      buf[2] = 0xff;
+      buf.writeUInt32LE(nowScaleSeconds >>> 0, 6);
+      buf.writeUInt16BE(0, 10); // 0 kg empty slot
+      expect(adapter.parseNotification(buf)).toBeNull();
+    });
+
+    it('re-queries 0x22 after a stale 0x23, bounded by the attempt limit', async () => {
+      vi.useFakeTimers();
+      try {
+        const adapter = makeAdapter();
+        const writes: number[][] = [];
+        const ctx = {
+          write: async (_uuid: string, data: Buffer | number[]) => {
+            writes.push([...data]);
+          },
+          read: async () => Buffer.alloc(0),
+          subscribe: async () => {},
+          profile: defaultProfile,
+          deviceAddress: '',
+          availableChars: new Set<string>(),
+        } as unknown as ConnectionContext;
+
+        await adapter.onConnected(ctx);
+        // Feed a 0x12 scale-info frame so handleScaleInfo cancels the fallback
+        // timer (which would otherwise send its own 0x22). Then flush its writes
+        // so we only count retry-driven queries.
+        const info = Buffer.alloc(11);
+        info[0] = 0x12;
+        info[2] = 0xff;
+        info[10] = 0;
+        adapter.parseNotification(info);
+        await vi.advanceTimersByTimeAsync(1000);
+        writes.length = 0;
+
+        const staleScaleSeconds = Math.floor(Date.now() / 1000) - 946684800 - 200;
+        const stale = Buffer.alloc(19);
+        stale[0] = 0x23;
+        stale[1] = 0x13;
+        stale[2] = 0xff;
+        stale.writeUInt32LE(staleScaleSeconds >>> 0, 6);
+        stale.writeUInt16BE(8495, 10);
+        stale.writeUInt16LE(504, 13);
+
+        for (let i = 0; i < 12; i++) {
+          adapter.parseNotification(stale);
+          await vi.advanceTimersByTimeAsync(3000);
+        }
+
+        const queries = writes.filter((w) => w[0] === 0x22);
+        expect(queries.length).toBeGreaterThan(0);
+        expect(queries.length).toBeLessThanOrEqual(6);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('0x12 frame captures protocol type', () => {

@@ -92,6 +92,23 @@ const SCALE_EPOCH_OFFSET = 946684800;
  */
 const IMPEDANCE_GRACE_MS = 1500;
 
+/**
+ * Max age (seconds) of a 0x23 stored record relative to session start before it
+ * is treated as stale history and ignored. Mirrors openScale QNHandler's
+ * MAX_STORED_RECORD_AGE_BEFORE_SESSION_SECONDS. Prevents importing an old
+ * weigh-in saved days before the current connection (#213 / #75).
+ */
+const MAX_STORED_RECORD_AGE_SEC = 90;
+
+/**
+ * Bounded re-query of the 0x22 stored-data command when a 0x23 record is stale
+ * or empty. V10 firmware may return an old slot first and only save the fresh
+ * weigh-in a moment later, so we re-ask a few times (openScale retries 10x/5s;
+ * we use a shorter window to fit the scale's brief connection). #213 / #75.
+ */
+const MAX_STORED_QUERY_ATTEMPTS = 6;
+const STORED_QUERY_RETRY_MS = 3000;
+
 export class QnScaleAdapter implements ScaleAdapter {
   readonly name = 'QN Scale';
   readonly charNotifyUuid = CHR_NOTIFY;
@@ -133,6 +150,13 @@ export class QnScaleAdapter implements ScaleAdapter {
    */
   private firstStableNoImpedanceAt: number | null = null;
 
+  /**
+   * Scale-epoch seconds (2000-epoch) captured when the connection opened, used
+   * as the freshness reference for 0x23 stored records. Falls back to the
+   * current time when a record arrives before onConnected ran.
+   */
+  private sessionStartedScaleSeconds: number | null = null;
+
   /** Deduplication guards: prevent duplicate state machine responses. */
   private configSent = false;
   private timeSyncSent = false;
@@ -140,6 +164,12 @@ export class QnScaleAdapter implements ScaleAdapter {
 
   /** Fallback timer handle for cancellation when state machine fires normally. */
   private fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Number of 0x22 stored-data re-queries sent this session. */
+  private storedQueryAttempts = 0;
+
+  /** Timer handle for the pending stored-data re-query. */
+  private storedRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Write to FFF2 (write char), fall back to FFE3 (Type 1). */
   private async writeCmd(data: number[]): Promise<void> {
@@ -185,12 +215,18 @@ export class QnScaleAdapter implements ScaleAdapter {
     this.hasAe00 = false;
     this.isLongFrameVariant = false;
     this.firstStableNoImpedanceAt = null;
+    this.sessionStartedScaleSeconds = Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
     this.configSent = false;
     this.timeSyncSent = false;
     this.historyResponseSent = false;
+    this.storedQueryAttempts = 0;
     if (this.fallbackTimer) {
       clearTimeout(this.fallbackTimer);
       this.fallbackTimer = null;
+    }
+    if (this.storedRetryTimer) {
+      clearTimeout(this.storedRetryTimer);
+      this.storedRetryTimer = null;
     }
 
     // Try subscribing to AE02 (newer firmware detection).
@@ -374,9 +410,42 @@ export class QnScaleAdapter implements ScaleAdapter {
     }
 
     // 0xA1, 0xA3: acknowledgment frames (no action needed)
-    // 0x23: historical record (no action needed)
-    if (opcode === 0xa1 || opcode === 0xa3 || opcode === 0x23) {
+    if (opcode === 0xa1 || opcode === 0xa3) {
       return null;
+    }
+
+    // 0x23: stored measurement record returned after the 0x22 history query.
+    // V10 Renpho / ES-CS20M firmware delivers the weigh-in here, not reliably
+    // via live 0x10 frames (#213 / #75). Layout from openScale QNHandler:
+    //   [6-9]   record timestamp, LE uint32 (2000-epoch seconds)
+    //   [10-11] weight, BE uint16, / 100 kg
+    //   [13-14] primary resistance R1, LE uint16
+    //   [15-16] secondary resistance R2, LE uint16
+    if (opcode === 0x23) {
+      if (data.length < 17) {
+        this.scheduleStoredDataRetry();
+        return null;
+      }
+      const weight = data.readUInt16BE(10) / 100;
+      if (weight <= 5 || weight >= 300) {
+        this.scheduleStoredDataRetry();
+        return null;
+      }
+      const recordSeconds = data.readUInt32LE(6);
+      const sessionSeconds =
+        this.sessionStartedScaleSeconds ?? Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
+      if (recordSeconds + MAX_STORED_RECORD_AGE_SEC < sessionSeconds) {
+        this.scheduleStoredDataRetry();
+        return null;
+      }
+      const r1 = data.readUInt16LE(13);
+      const r2 = data.readUInt16LE(15);
+      if (this.storedRetryTimer) {
+        clearTimeout(this.storedRetryTimer);
+        this.storedRetryTimer = null;
+      }
+      bleLog.debug(`QN: stored 0x23 reading ${weight}kg / ${r1 > 0 ? r1 : r2}Ω`);
+      return { weight, impedance: r1 > 0 ? r1 : r2 };
     }
 
     // 0x10: live weight frame
@@ -557,10 +626,34 @@ export class QnScaleAdapter implements ScaleAdapter {
 
     await wait(200);
 
-    // 0x22 start measurement with echoed protocol type
-    const startCmd = [0x22, 0x06, this.seenProtocolType, 0x00, 0x03, 0x00];
-    startCmd[5] = startCmd.reduce((a, b) => a + b, 0) & 0xff;
-    await this.writeCmd(startCmd);
+    // 0x22 start measurement / stored-data query with echoed protocol type
+    await this.writeCmd(this.buildStoredDataQuery());
+  }
+
+  /** Build the 0x22 stored-data query frame with a trailing checksum. */
+  private buildStoredDataQuery(): number[] {
+    const cmd = [0x22, 0x06, this.seenProtocolType, 0x00, 0x03, 0x00];
+    cmd[5] = cmd.reduce((a, b) => a + b, 0) & 0xff;
+    return cmd;
+  }
+
+  /**
+   * Re-send the 0x22 stored-data query after a stale, empty, or short 0x23,
+   * bounded by MAX_STORED_QUERY_ATTEMPTS. Gives V10 firmware a moment to save
+   * the fresh weigh-in before the scale disconnects (#213 / #75).
+   */
+  private scheduleStoredDataRetry(): void {
+    if (!this.ctx || this.storedQueryAttempts >= MAX_STORED_QUERY_ATTEMPTS) return;
+    if (this.storedRetryTimer) clearTimeout(this.storedRetryTimer);
+    this.storedRetryTimer = setTimeout(() => {
+      this.storedRetryTimer = null;
+      if (!this.ctx || this.storedQueryAttempts >= MAX_STORED_QUERY_ATTEMPTS) return;
+      this.storedQueryAttempts += 1;
+      bleLog.debug(
+        `QN: stored-data re-query ${this.storedQueryAttempts}/${MAX_STORED_QUERY_ATTEMPTS}`,
+      );
+      void this.writeCmd(this.buildStoredDataQuery());
+    }, STORED_QUERY_RETRY_MS);
   }
 
   /**
