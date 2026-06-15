@@ -403,4 +403,4 @@ Some scales (for example the QN-Scale) expose no broadcast data and must be GATT
 
 ### A random-address scale times out on connect
 
-Some scales advertise a random Bluetooth address (the first MAC byte is `C0` or higher, for example `FF:03:..`) rather than a fixed public one. The proxy now reads the advertised address type correctly and connects with it, and if a connect still times out it retries once with the opposite address type. If your scale used to log `GATT connect attempt ... failed ... TimeoutError` on every weigh-in, update the firmware and try again.
+Some scales advertise a random Bluetooth address (the first MAC byte is `C0` or higher, for example `FF:03:..`) rather than a fixed public one. The proxy reads the advertised address type and connects with it, and when the MAC is an unambiguous random address it connects with that type even if the controller reported the scan result as public. If a connect still times out it retries once with the opposite address type. If your scale used to log `GATT connect attempt ... failed ... TimeoutError` on every weigh-in, update the firmware and try again.
