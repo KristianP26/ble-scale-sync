@@ -37,14 +37,13 @@ const HANDSHAKE: string[] = [
   '0a0300b002000000000000000000000000000012',
 ];
 
-/**
- * PROVISIONAL weight divisor. The `01 2c` (=0x012C=300) field in the result
- * frame is constant across both the HCI capture and the reporter's earlier nRF
- * 77.4 kg session, so it is NOT the weight. The real weight offset + scale are
- * unconfirmed from a single capture without a known-weight weigh-in; this is a
- * best-effort guess and is expected to be corrected after a DEBUG retest (#228).
- */
-const WEIGHT_DIV = 10;
+// Weight is stored as a 3-byte big-endian gram count in the A3 result frame
+// (#248: 01 2d c2 = 77250 g = 77.25 kg). The earlier #228 guess treated the high
+// gram bytes (01 2c..) as a constant prefix because both prior captures were
+// ~77 kg; they are not constant, they are the weight.
+const WEIGHT_OFFSET = 5;
+const WEIGHT_BYTES = 3;
+const WEIGHT_DIV = 1000;
 
 /**
  * Adapter for the Robi S9 smart scale (Fitdays app, Lefu-style FFB0 protocol).
@@ -57,8 +56,9 @@ const WEIGHT_DIV = 10;
  * the link before any reading (#228).
  *
  * Decoded from the reporter's HCI snoop. The handshake (the fix for the
- * disconnect) is replayed verbatim; the weight scale is provisional and the
- * scrambled body composition is not decoded (BIA is used instead).
+ * disconnect) is replayed verbatim; the weight scale is confirmed against a
+ * known-weight capture (#248), but the impedance offset and the scrambled body
+ * composition are not decoded yet (BIA is used instead).
  */
 export class RobiS9Adapter implements ScaleAdapter {
   readonly name = 'Robi S9';
@@ -116,12 +116,16 @@ export class RobiS9Adapter implements ScaleAdapter {
 
     // Final result arrives as the A3 frame on FFB3. A2 (live) frames use a
     // different alignment and are treated as progress only. A3 layout:
-    //   [..][a3][00][01 2c const][weight u16 BE][01 f4 impedance u16 BE]
+    //   [seq][len][00][a3][flag][weight u24 BE grams][... trailer]
     if (data[3] === 0xa3) {
-      const w = data.readUInt16BE(7) / WEIGHT_DIV;
+      const w = data.readUIntBE(WEIGHT_OFFSET, WEIGHT_BYTES) / WEIGHT_DIV;
       if (w > 0 && Number.isFinite(w)) {
         this.cachedWeight = w;
-        this.cachedImpedance = data.readUInt16BE(9);
+        // Impedance offset is not yet decoded: the only captured A3 frame has
+        // all-zero bytes after the weight. Emit 0 (BIA fallback) rather than a
+        // guessed offset that could surface garbage; pin it from a future
+        // known-impedance DEBUG capture (#248).
+        this.cachedImpedance = 0;
         this.final = true;
       }
     }

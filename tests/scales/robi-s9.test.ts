@@ -69,13 +69,16 @@ describe('RobiS9Adapter', () => {
   });
 
   describe('parseCharNotification()', () => {
-    it('extracts a reading from the A3 final frame', () => {
+    it('extracts 77.25 kg from the real A3 final frame (#248)', () => {
       const adapter = makeAdapter();
-      const a3 = Buffer.from('030800a300012c007601f400000000000000001b', 'hex');
+      // Reporter @vanboxel HCI/DEBUG capture, v1.18.0. Weight is 3-byte BE grams
+      // at offset 5: 01 2d c2 = 77250 g = 77.25 kg.
+      const a3 = Buffer.from('030800a300012dc2000000000000000000000013', 'hex');
       const reading = adapter.parseCharNotification(uuid16(0xffb3), a3);
       expect(reading).not.toBeNull();
-      expect(reading!.weight).toBeGreaterThan(0);
-      expect(reading!.impedance).toBe(0x01f4); // 500
+      expect(reading!.weight).toBeCloseTo(77.25, 2);
+      // Impedance offset is not yet decoded; emitted as 0 -> BIA fallback.
+      expect(reading!.impedance).toBe(0);
       expect(adapter.isComplete(reading!)).toBe(true);
     });
 
