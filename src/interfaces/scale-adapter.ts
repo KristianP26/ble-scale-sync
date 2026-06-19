@@ -117,6 +117,17 @@ export interface ConnectionContext {
   availableChars: ReadonlySet<string>;
 }
 
+/**
+ * Per-device runtime configuration injected into adapters at startup (and on
+ * config reload) by the composition root. Distinct from the static registry:
+ * carries credentials that only exist in the user's config, e.g. the Xiaomi
+ * S800 MiBeacon bind key. Adapters that do not need it omit `configure`.
+ */
+export interface AdapterRuntimeConfig {
+  /** MiBeacon bind key (32 hex chars) for broadcast-encrypted scales (Xiaomi S800). */
+  bindKey?: string;
+}
+
 export interface ScaleAdapter {
   readonly name: string;
   readonly charNotifyUuid: string;
@@ -137,6 +148,13 @@ export interface ScaleAdapter {
    * Adapters that set this must implement parseServiceData or parseBroadcast.
    */
   readonly preferPassive?: boolean;
+
+  /**
+   * Receive per-device runtime config (e.g. a MiBeacon bind key) from the
+   * composition root at startup and on config reload. Optional: only adapters
+   * that decrypt a per-device secret implement it.
+   */
+  configure?(opts: AdapterRuntimeConfig): void;
 
   /**
    * True if this adapter's characteristics need a bonded/encrypted BLE link

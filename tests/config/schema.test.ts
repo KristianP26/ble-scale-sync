@@ -142,6 +142,19 @@ describe('AppConfigSchema', () => {
     const result = AppConfigSchema.safeParse({ ...VALID_CONFIG, unknown_user: 'skip' });
     expect(result.success).toBe(false);
   });
+
+  it('accepts a 32-hex ble.bind_key', () => {
+    const r = AppConfigSchema.safeParse({
+      ...VALID_CONFIG,
+      ble: { bind_key: '0123456789abcdef0123456789abcdef' },
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('rejects a malformed ble.bind_key', () => {
+    const r = AppConfigSchema.safeParse({ ...VALID_CONFIG, ble: { bind_key: 'not-hex' } });
+    expect(r.success).toBe(false);
+  });
 });
 
 // ─── UserSchema ────────────────────────────────────────────────────────────

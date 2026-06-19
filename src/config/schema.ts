@@ -88,6 +88,11 @@ export const BleSchema = z
       })
       .optional()
       .nullable(),
+    bind_key: z
+      .string()
+      .regex(/^[0-9a-fA-F]{32}$/, 'Must be a 32-character hex bind key (16 bytes)')
+      .optional()
+      .nullable(),
     noble_driver: z.enum(['abandonware', 'stoprocent']).optional().nullable(),
     handler: z.enum(['auto', 'mqtt-proxy', 'esphome-proxy']).default('auto'),
     adapter: z
