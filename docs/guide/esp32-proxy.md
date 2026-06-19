@@ -65,10 +65,10 @@ Broadcast-only scales (the reading is in the advertisement) work on every board 
 
 ### Scale type vs board support
 
-| Scale type                                                  | Example scales                              | No-PSRAM classic ESP32 (WROOM-32, Atom Echo, ESP-32D) | ESP32-S3 / PSRAM (S3-DevKitC, Guition) |
-| ----------------------------------------------------------- | ------------------------------------------- | ----------------------------------------------------- | -------------------------------------- |
-| Broadcast-only (reading is in the advertisement)            | Mi Scale 2, Xiaomi S800                     | Reliable                                              | Reliable                               |
-| GATT-connect (needs an active connection)                   | Yunmai, Inlife, Eufy T9120, QN / ES-CS20M   | Not supported, clean skip                            | Supported                              |
+| Scale type                                       | Example scales                            | No-PSRAM classic ESP32 (WROOM-32, Atom Echo, ESP-32D) | ESP32-S3 / PSRAM (S3-DevKitC, Guition) |
+| ------------------------------------------------ | ----------------------------------------- | ----------------------------------------------------- | -------------------------------------- |
+| Broadcast-only (reading is in the advertisement) | Mi Scale 2, Xiaomi S800                   | Reliable                                              | Reliable                               |
+| GATT-connect (needs an active connection)        | Yunmai, Inlife, Eufy T9120, QN / ES-CS20M | Not supported, clean skip                             | Supported                              |
 
 A no-PSRAM classic ESP32 is a reliable broadcast-only proxy. For GATT-connect scales use an ESP32-S3 / PSRAM board, because the BLE central connection plus GATT discovery needs kilobytes of ESP-IDF internal heap that WiFi-STA plus NimBLE plus the MicroPython GC heap leave near zero on a no-PSRAM board (the steady-state largest contiguous block is about 336 bytes with WiFi up).
 
