@@ -4,6 +4,43 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.19.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.18.0...v1.19.0) (2026-06-19)
+
+
+### Added
+
+* **config:** add ble.bind_key and adapter configure() hook ([#232](https://github.com/KristianP26/ble-scale-sync/issues/232)) ([b319e69](https://github.com/KristianP26/ble-scale-sync/commit/b319e69f7ea085472bfcb5ba6218b21b37aaede1))
+* **scales:** add declarative MatchDescriptor and matchesDescriptor helper ([#245](https://github.com/KristianP26/ble-scale-sync/issues/245)) ([7e63799](https://github.com/KristianP26/ble-scale-sync/commit/7e637998ba8c68002fad9f9bb331f9340263305e))
+* **scales:** add Xiaomi Mijia S800 broadcast adapter ([#232](https://github.com/KristianP26/ble-scale-sync/issues/232)) ([5ee2c2e](https://github.com/KristianP26/ble-scale-sync/commit/5ee2c2eb4edf600eba414e91585743b103db641c))
+* **scales:** central resolveAdapter with priority-based precedence and startup overlap detection ([#245](https://github.com/KristianP26/ble-scale-sync/issues/245)) ([dcc2bdd](https://github.com/KristianP26/ble-scale-sync/commit/dcc2bddafa31f5320729538b1d59a1ac08fad2ba))
+* **scales:** register Xiaomi S800 and inject bind key at startup ([#232](https://github.com/KristianP26/ble-scale-sync/issues/232)) ([d3fdb65](https://github.com/KristianP26/ble-scale-sync/commit/d3fdb655fdf9d89f96f3e2770d15b0aa9c7db685))
+
+
+### Fixed
+
+* **ble:** advertise lazy_notify capability to ESP32 proxy ([#231](https://github.com/KristianP26/ble-scale-sync/issues/231)) ([9004d31](https://github.com/KristianP26/ble-scale-sync/commit/9004d316b60b70c3cc7e76f673a4dbada609fa96))
+* **ble:** command host-ordered proxy notify enable after subscribe ([#231](https://github.com/KristianP26/ble-scale-sync/issues/231)) ([d33e3aa](https://github.com/KristianP26/ble-scale-sync/commit/d33e3aa60214dad1326c706bdb9cbde97c09fa61))
+* **ble:** correct Robi S9 weight scaling to 3-byte grams ([#248](https://github.com/KristianP26/ble-scale-sync/issues/248)) ([21b3afa](https://github.com/KristianP26/ble-scale-sync/commit/21b3afa5a707815ddceb3f8a750f65f2eea69ee9))
+* **firmware:** add per-board IDF-heap guard tunables defaulting to 0 ([#139](https://github.com/KristianP26/ble-scale-sync/issues/139)) ([59bd65f](https://github.com/KristianP26/ble-scale-sync/commit/59bd65f8a7b83851c1acecd75c8d91054409b992))
+* **firmware:** drain aioble services before characteristic discovery ([#231](https://github.com/KristianP26/ble-scale-sync/issues/231)) ([c584098](https://github.com/KristianP26/ble-scale-sync/commit/c58409824672a9ab163d523a9bcbe3d7e9a36498))
+* **firmware:** drive aioble GATT discovery with async for ([#231](https://github.com/KristianP26/ble-scale-sync/issues/231)) ([c943e11](https://github.com/KristianP26/ble-scale-sync/commit/c943e11b87213300619872656b5af91ea3579970))
+* **firmware:** enable proxy notify lazily on per-char subscribe command ([#231](https://github.com/KristianP26/ble-scale-sync/issues/231)) ([f4a4492](https://github.com/KristianP26/ble-scale-sync/commit/f4a4492606bd798d3813d698806d5c46f8cb073f))
+* **firmware:** parse lazy_notify capability flag from config ([#231](https://github.com/KristianP26/ble-scale-sync/issues/231)) ([b24292a](https://github.com/KristianP26/ble-scale-sync/commit/b24292a447bd851f92c7db9508047b3050a05841))
+* **firmware:** refuse GATT connect on near-empty IDF heap instead of crashing ([#139](https://github.com/KristianP26/ble-scale-sync/issues/139)) ([1beac82](https://github.com/KristianP26/ble-scale-sync/commit/1beac82c6fdf57279855a7f06972f83a05502ac2))
+* **firmware:** retry opposite BLE address type on any connect failure ([#231](https://github.com/KristianP26/ble-scale-sync/issues/231)) ([7a958ab](https://github.com/KristianP26/ble-scale-sync/commit/7a958ab0f4ca83364014617281bed1f21a259d64))
+* **firmware:** trust controller-reported BLE address type on autonomous connect ([#231](https://github.com/KristianP26/ble-scale-sync/issues/231)) ([4ae2662](https://github.com/KristianP26/ble-scale-sync/commit/4ae2662fd96e8b29d13226c1909a97222254f758))
+* **scales:** preserve exact/startsWith claim semantics in generic-adapter exclusion ([#245](https://github.com/KristianP26/ble-scale-sync/issues/245)) ([99a5a10](https://github.com/KristianP26/ble-scale-sync/commit/99a5a1085f13c91bba3661a8a88e2c0fe459103b))
+
+
+### Docs
+
+* align scale-type vs board support table cells for [#139](https://github.com/KristianP26/ble-scale-sync/issues/139) ([e301da7](https://github.com/KristianP26/ble-scale-sync/commit/e301da7839398fd8868e48bb23704aae0df96831))
+* document no-PSRAM broadcast-only vs PSRAM GATT support for [#139](https://github.com/KristianP26/ble-scale-sync/issues/139) ([fa63930](https://github.com/KristianP26/ble-scale-sync/commit/fa6393045e168020b7dc19932f96a7cc8da311bb))
+* document Xiaomi S800 support and ble.bind_key ([#232](https://github.com/KristianP26/ble-scale-sync/issues/232)) ([6ccccb0](https://github.com/KristianP26/ble-scale-sync/commit/6ccccb09e937db62ac09f58aebea9b38c98f3ae9))
+* **firmware:** correct gc-vs-IDF-heap comment around the connect guard ([#139](https://github.com/KristianP26/ble-scale-sync/issues/139)) ([e576e8e](https://github.com/KristianP26/ble-scale-sync/commit/e576e8e4d36baac608c1dd9419e099dfa4c79242))
+* fix stale counts, logo easter egg, and consolidate changelog menu ([cf85243](https://github.com/KristianP26/ble-scale-sync/commit/cf852434b591a49370f8d711008dcd7920946735))
+* unify historical changelog entries to release-please format ([6d29c7e](https://github.com/KristianP26/ble-scale-sync/commit/6d29c7e839827685cefd6072c1a172523a64d4a5))
+
 ## [1.18.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.17.0...v1.18.0) (2026-06-16)
 
 
