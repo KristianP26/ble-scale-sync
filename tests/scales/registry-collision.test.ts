@@ -34,6 +34,7 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
   // vendor service, so QN now defers and it resolves to RenphoScaleAdapter.
   'Renpho ES-WBE28': { localName: 'Renpho Body Scale', serviceUuids: ['181b', '181d'] },
   'Renpho ES-26BB': { localName: 'es-26bb-b', serviceUuids: [] },
+  'Renpho R-MSC04': { localName: 'R-MSC04', serviceUuids: [] },
   'Beurer BF720/BF105': { localName: 'BF720', serviceUuids: [] },
   'Xiaomi Mi Scale 2': { localName: 'MIBFS', serviceUuids: [] },
   'Xiaomi Mijia Scale S800': { localName: 'Mijia Scale S800 A1AB', serviceUuids: [] },
