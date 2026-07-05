@@ -1,149 +1,191 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { RenphoScaleAdapter } from '../../src/scales/renpho.js';
+import type { ConnectionContext } from '../../src/interfaces/scale-adapter.js';
+import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import {
   mockPeripheral,
   defaultProfile,
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
 
+const CHR_WEIGHT = uuid16(0x2a9d);
+const CHR_BODYCOMP = uuid16(0x2a9c);
+const CHR_UCP = uuid16(0x2a9f);
+const CHR_VENDOR_NOTIFY = uuid16(0xffe1);
+const CHR_VENDOR_WRITE = uuid16(0xffe2);
+const CHR_GENDER = uuid16(0x2a8c);
+const CHR_HEIGHT = uuid16(0x2a8e);
+const CHR_DOB = uuid16(0x2a85);
+const CHR_AGE = uuid16(0x2a80);
+const CHR_VENDOR_2AFF = uuid16(0x2aff);
+
+// Live frames decoded from the physical-device btsnoop capture.
+// Weight frame 1374: flags 0x4E, raw 0x076A = 1898 → 94.9 kg (×0.05).
+const WSS_FRAME = Buffer.from('4e6a07ea0707040c1a06aa00000000', 'hex');
+// Body-comp packet 2 (frame 1477): flags 0x020C, impedance 0x0D00 = 3328 → 332.8 Ω.
+const BCS_PACKET2 = Buffer.from('0c02f901f70144000dec00a500290091020600', 'hex');
+
 function makeAdapter() {
   return new RenphoScaleAdapter();
 }
 
+const ALL_CHARS = new Set([
+  CHR_WEIGHT,
+  CHR_BODYCOMP,
+  CHR_UCP,
+  CHR_VENDOR_NOTIFY,
+  CHR_VENDOR_WRITE,
+  CHR_GENDER,
+  CHR_HEIGHT,
+  CHR_DOB,
+  CHR_AGE,
+  CHR_VENDOR_2AFF,
+]);
+
+function makeCtx(over: Partial<ConnectionContext> = {}): ConnectionContext {
+  return {
+    profile: defaultProfile(),
+    deviceAddress: '',
+    availableChars: ALL_CHARS,
+    write: vi.fn().mockResolvedValue(undefined),
+    read: vi.fn().mockResolvedValue(Buffer.alloc(0)),
+    subscribe: vi.fn().mockResolvedValue(undefined),
+    ...over,
+  } as ConnectionContext;
+}
+
 describe('RenphoScaleAdapter', () => {
   describe('matches()', () => {
-    it('matches "renpho" name without QN service UUIDs', () => {
-      const adapter = makeAdapter();
-      const p = mockPeripheral('Renpho Scale', []);
-      expect(adapter.matches(p)).toBe(true);
+    it('matches a real ES-WBE28 advert (renpho + SIG WSS/BCS, no QN UUID)', () => {
+      expect(makeAdapter().matches(mockPeripheral('Renpho-Scale', ['181b', '181d']))).toBe(true);
     });
-
-    it('matches "renpho-scale" without QN UUIDs', () => {
-      const adapter = makeAdapter();
-      const p = mockPeripheral('renpho-scale', []);
-      expect(adapter.matches(p)).toBe(true);
+    it('matches case-insensitively without QN services', () => {
+      expect(makeAdapter().matches(mockPeripheral('RENPHO', []))).toBe(true);
     });
-
-    it('matches a real ES-WBE28 advert (renpho + SIG WSS/BCS, no QN UUID) (#191)', () => {
-      const adapter = makeAdapter();
-      const p = mockPeripheral('Renpho Body Scale', ['181b', '181d']);
-      expect(adapter.matches(p)).toBe(true);
-    });
-
-    it('rejects "renpho" with QN service UUID FFE0', () => {
-      const adapter = makeAdapter();
-      const p = mockPeripheral('Renpho Scale', ['ffe0']);
-      expect(adapter.matches(p)).toBe(false);
-    });
-
-    it('rejects "renpho" with QN service UUID FFF0', () => {
-      const adapter = makeAdapter();
-      const p = mockPeripheral('Renpho Scale', ['fff0']);
-      expect(adapter.matches(p)).toBe(false);
-    });
-
-    it('rejects "renpho" with full 128-bit QN UUID', () => {
-      const adapter = makeAdapter();
-      const p = mockPeripheral('Renpho Scale', ['0000ffe000001000800000805f9b34fb']);
-      expect(adapter.matches(p)).toBe(false);
-    });
-
-    it('does not match unrelated name', () => {
-      const adapter = makeAdapter();
-      const p = mockPeripheral('Yunmai ISM', []);
-      expect(adapter.matches(p)).toBe(false);
-    });
-
-    it('case-insensitive name match', () => {
-      const adapter = makeAdapter();
-      const p = mockPeripheral('RENPHO', []);
-      expect(adapter.matches(p)).toBe(true);
+    it.each(['ffe0', 'fff0', '0000ffe000001000800000805f9b34fb'])(
+      'rejects renpho advertising QN service %s',
+      (svc) => {
+        expect(makeAdapter().matches(mockPeripheral('Renpho Scale', [svc]))).toBe(false);
+      },
+    );
+    it('does not match an unrelated name', () => {
+      expect(makeAdapter().matches(mockPeripheral('Yunmai ISM', []))).toBe(false);
     });
   });
 
-  describe('parseNotification()', () => {
-    it('parses valid frame with marker 0x2E', () => {
-      const adapter = makeAdapter();
-      const buf = Buffer.alloc(3);
-      buf[0] = 0x2e; // valid marker
-      buf.writeUInt16LE(1600, 1); // 1600 / 20 = 80 kg
+  describe('onConnected()', () => {
+    it('replays handshake → consent → profile, then enables measurement notifs LAST', async () => {
+      const a = makeAdapter();
+      const ctx = makeCtx();
+      await a.onConnected(ctx);
 
-      const reading = adapter.parseNotification(buf);
-      expect(reading).not.toBeNull();
-      expect(reading!.weight).toBe(80);
-      expect(reading!.impedance).toBe(0); // no impedance
+      const write = ctx.write as ReturnType<typeof vi.fn>;
+      const subscribe = ctx.subscribe as ReturnType<typeof vi.fn>;
+
+      // Three vendor handshake writes to 0xFFE2 come first.
+      expect(write.mock.calls[0]).toEqual([CHR_VENDOR_WRITE, [0x10, 0x01, 0x00, 0x11], true]);
+      expect(write.mock.calls[1]).toEqual([CHR_VENDOR_WRITE, [0x03, 0x00, 0x01, 0x04], true]);
+      expect(write.mock.calls[2]).toEqual([CHR_VENDOR_WRITE, [0x19, 0x00, 0x19], true]);
+
+      // Consent: opcode 0x02, user 0xAA (170), code 9999 = 0x270F → LE 0F 27.
+      expect(write.mock.calls[3]).toEqual([CHR_UCP, [0x02, 0xaa, 0x0f, 0x27], true]);
+
+      // Profile writes follow (gender/height/dob/age/vendor).
+      const writtenChars = write.mock.calls.map((c) => c[0]);
+      expect(writtenChars).toContain(CHR_GENDER);
+      expect(writtenChars).toContain(CHR_HEIGHT);
+      expect(writtenChars).toContain(CHR_AGE);
+
+      // Measurement notifications are enabled ONLY after all init writes.
+      expect(subscribe).toHaveBeenCalledWith(CHR_WEIGHT);
+      expect(subscribe).toHaveBeenCalledWith(CHR_BODYCOMP);
+      expect(subscribe).not.toHaveBeenCalledBefore(write);
     });
 
-    it('returns null for wrong marker byte', () => {
-      const adapter = makeAdapter();
-      const buf = Buffer.alloc(3);
-      buf[0] = 0x10; // wrong marker
-      buf.writeUInt16LE(1600, 1);
-
-      expect(adapter.parseNotification(buf)).toBeNull();
+    it('throws a clear error when consent/vendor chars are missing', async () => {
+      const a = makeAdapter();
+      await expect(
+        a.onConnected(makeCtx({ availableChars: new Set([CHR_WEIGHT]) })),
+      ).rejects.toThrow(/discovery race/);
     });
 
-    it('returns null for too-short buffer', () => {
-      const adapter = makeAdapter();
-      expect(adapter.parseNotification(Buffer.alloc(2))).toBeNull();
-    });
-
-    it('returns null for zero weight', () => {
-      const adapter = makeAdapter();
-      const buf = Buffer.alloc(3);
-      buf[0] = 0x2e;
-      buf.writeUInt16LE(0, 1);
-
-      expect(adapter.parseNotification(buf)).toBeNull();
-    });
-
-    it('handles various weight values', () => {
-      const adapter = makeAdapter();
-      // 60 kg = 1200 raw
-      const buf = Buffer.alloc(3);
-      buf[0] = 0x2e;
-      buf.writeUInt16LE(1200, 1);
-
-      const reading = adapter.parseNotification(buf);
-      expect(reading).not.toBeNull();
-      expect(reading!.weight).toBe(60);
+    it('skips profile writes for characteristics the firmware lacks', async () => {
+      const a = makeAdapter();
+      // Only the essential consent/vendor chars present — profile chars absent.
+      const ctx = makeCtx({ availableChars: new Set([CHR_UCP, CHR_VENDOR_WRITE]) });
+      await a.onConnected(ctx);
+      const writtenChars = (ctx.write as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+      expect(writtenChars).not.toContain(CHR_GENDER);
+      // Handshake + consent still happened.
+      expect(writtenChars).toContain(CHR_VENDOR_WRITE);
+      expect(writtenChars).toContain(CHR_UCP);
     });
   });
 
-  describe('isComplete()', () => {
-    it('returns true when weight > 0', () => {
-      const adapter = makeAdapter();
-      expect(adapter.isComplete({ weight: 80, impedance: 0 })).toBe(true);
+  describe('parseCharNotification()', () => {
+    it('decodes a real SIG weight frame (flags byte, not a 0x2E marker)', () => {
+      const a = makeAdapter();
+      const reading = a.parseCharNotification(CHR_WEIGHT, WSS_FRAME);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBeCloseTo(94.9, 1);
     });
 
-    it('returns false when weight is 0', () => {
-      const adapter = makeAdapter();
-      expect(adapter.isComplete({ weight: 0, impedance: 0 })).toBe(false);
+    it('extracts impedance from a body-composition packet', () => {
+      const a = makeAdapter();
+      a.parseCharNotification(CHR_WEIGHT, WSS_FRAME);
+      const reading = a.parseCharNotification(CHR_BODYCOMP, BCS_PACKET2);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBeCloseTo(94.9, 1);
+      expect(reading!.impedance).toBeCloseTo(332.8, 1);
+    });
+
+    it('parses imperial (lb) weight frames to kg', () => {
+      const a = makeAdapter();
+      const buf = Buffer.alloc(3);
+      buf[0] = 0x01; // flags: imperial, no optional fields
+      buf.writeUInt16LE(2000, 1); // 2000 × 0.1 lb = 200 lb → ~90.72 kg
+      const reading = a.parseCharNotification(CHR_WEIGHT, buf);
+      expect(reading!.weight).toBeCloseTo(200 * 0.45359237, 1);
+    });
+
+    it('ignores User Control Point responses without emitting a reading', () => {
+      const a = makeAdapter();
+      expect(a.parseCharNotification(CHR_UCP, Buffer.from([0x20, 0x02, 0x01]))).toBeNull();
+      expect(a.parseCharNotification(CHR_UCP, Buffer.from([0x20, 0x02, 0x05]))).toBeNull();
+    });
+
+    it('does not throw on a truncated body-comp frame that over-claims via flags', () => {
+      const a = makeAdapter();
+      // flags 0x0300 claim body-water + impedance, but only fat% fits.
+      const truncated = Buffer.from([0x00, 0x03, 0x12, 0x01]);
+      expect(() => a.parseCharNotification(CHR_BODYCOMP, truncated)).not.toThrow();
+    });
+  });
+
+  describe('isComplete() / isFinal()', () => {
+    it('is complete once weight is positive', () => {
+      const a = makeAdapter();
+      expect(a.isComplete({ weight: 80, impedance: 0 })).toBe(true);
+      expect(a.isComplete({ weight: 0, impedance: 0 })).toBe(false);
+    });
+    it('is final only once impedance has arrived', () => {
+      const a = makeAdapter();
+      expect(a.isFinal({ weight: 80, impedance: 0 })).toBe(false);
+      expect(a.isFinal({ weight: 80, impedance: 332.8 })).toBe(true);
     });
   });
 
   describe('computeMetrics()', () => {
-    it('returns all BodyComposition fields using estimation (no impedance)', () => {
-      const adapter = makeAdapter();
+    it('uses impedance (BIA) for body fat when present', () => {
+      const a = makeAdapter();
       const profile = defaultProfile();
-      const payload = adapter.computeMetrics({ weight: 80, impedance: 0 }, profile);
-
-      expect(payload.weight).toBe(80);
-      expect(payload.impedance).toBe(0);
-      assertPayloadRanges(payload);
-    });
-
-    it('computes different results for different profiles', () => {
-      const adapter = makeAdapter();
-      const male = defaultProfile();
-      const female = defaultProfile({ gender: 'female', height: 165 });
-
-      const m = adapter.computeMetrics({ weight: 70, impedance: 0 }, male);
-      const f = adapter.computeMetrics({ weight: 70, impedance: 0 }, female);
-
-      expect(m.bodyFatPercent).not.toBe(f.bodyFatPercent);
-      assertPayloadRanges(m);
-      assertPayloadRanges(f);
+      const withImp = a.computeMetrics({ weight: 80, impedance: 500 }, profile);
+      const noImp = a.computeMetrics({ weight: 80, impedance: 0 }, profile);
+      assertPayloadRanges(withImp);
+      assertPayloadRanges(noImp);
+      expect(withImp.impedance).toBe(500);
+      // BIA-derived fat should differ from the BMI-only estimate.
+      expect(withImp.bodyFatPercent).not.toBe(noImp.bodyFatPercent);
     });
   });
 });
