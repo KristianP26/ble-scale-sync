@@ -21,6 +21,7 @@ import { DigooScaleAdapter } from './digoo.js';
 import { OneByoneAdapter, OneByoneNewAdapter } from './one-byone.js';
 import { ActiveEraAdapter } from './active-era.js';
 import { RobiS9Adapter } from './robi-s9.js';
+import { HutbitAdapter } from './hutbit.js';
 import { MgbAdapter } from './mgb.js';
 import { HoffenAdapter } from './hoffen.js';
 import { SenssunAdapter } from './senssun.js';
@@ -66,6 +67,9 @@ export const adapters: ScaleAdapter[] = [
   // Robi speaks a different protocol and is matched by name or its FFB3 result
   // characteristic, so it must win before the generic MGB FFB0 fallback (#228).
   new RobiS9Adapter(),
+  // Hutbit (Lefu/Fitdays FFB0 8-byte AC02 protocol): matches by its "Hutbit"
+  // name; sits before the generic MGB FFB0 fallback (#254).
+  new HutbitAdapter(),
   new MgbAdapter(),
   new HoffenAdapter(),
   // Generic standard GATT adapter last — matches by service UUID / brand names
