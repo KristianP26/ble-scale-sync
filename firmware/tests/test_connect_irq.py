@@ -9,6 +9,7 @@ times out.
 Run: python -m unittest discover -s firmware/tests
 """
 
+import asyncio
 import os
 import sys
 import types
@@ -97,6 +98,25 @@ class _FakeChar:
     def __init__(self, uuid, properties):
         self.uuid = uuid
         self.properties = properties
+
+
+class _SubscribableFakeChar:
+    """Models aioble's ClientCharacteristic subscribe/notified surface. Records
+    whether subscribe() was awaited and with which CCCD flags, and lets the
+    notify loop block until cancelled so tests can assert on the subscribe call
+    without the loop racing ahead (#231)."""
+
+    def __init__(self, uuid, properties):
+        self.uuid = uuid
+        self.properties = properties
+        self.subscribed = []  # list of (notify, indicate) tuples
+
+    async def subscribe(self, notify=True, indicate=False):
+        self.subscribed.append((notify, indicate))
+
+    async def notified(self, timeout_ms=None):
+        # Block forever; real firmware loops until cancelled/disconnected.
+        await asyncio.Event().wait()
 
 
 class _FakeService:
@@ -345,6 +365,54 @@ class TestConnectDiscoversCharsViaAsyncFor(unittest.IsolatedAsyncioTestCase):
                 "00002a9d00001000800000805f9b34fb",
             ],
         )
+
+
+class TestStartNotifySubscribesCccd(unittest.IsolatedAsyncioTestCase):
+    """start_notify() must write the CCCD via char.subscribe() before waiting
+    on char.notified(). Without this, the peripheral never sends notifications,
+    the loop times out with an empty error, and the QN handshake stalls (#231)."""
+
+    async def test_notify_characteristic_enables_cccd(self):
+        bridge = ble_bridge.BleBridge()
+        char = _SubscribableFakeChar(
+            "0000fff1-0000-1000-8000-00805f9b34fb", _bt.FLAG_NOTIFY
+        )
+        bridge._chars[char.uuid] = char
+        bridge._conn = _FakeConn()
+
+        async def publish_fn(_uuid, _data):
+            pass
+
+        await bridge.start_notify(char.uuid, publish_fn)
+        self.assertEqual(char.subscribed, [(True, False)])
+        # Clean up the background notify loop.
+        await bridge.disconnect()
+
+    async def test_indicate_characteristic_enables_cccd(self):
+        bridge = ble_bridge.BleBridge()
+        char = _SubscribableFakeChar(
+            "00002a9d-0000-1000-8000-00805f9b34fb", _bt.FLAG_INDICATE
+        )
+        bridge._chars[char.uuid] = char
+        bridge._conn = _FakeConn()
+
+        async def publish_fn(_uuid, _data):
+            pass
+
+        await bridge.start_notify(char.uuid, publish_fn)
+        self.assertEqual(char.subscribed, [(False, True)])
+        await bridge.disconnect()
+
+    async def test_missing_char_is_noop(self):
+        bridge = ble_bridge.BleBridge()
+        bridge._conn = _FakeConn()
+
+        async def publish_fn(_uuid, _data):
+            pass
+
+        # Should not raise or create a task.
+        await bridge.start_notify("0000dead-0000-1000-8000-00805f9b34fb", publish_fn)
+        self.assertEqual(bridge._notify_tasks, [])
 
 
 if __name__ == "__main__":

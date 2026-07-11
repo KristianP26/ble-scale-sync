@@ -572,10 +572,28 @@ class BleBridge:
         return {"chars": chars_info}
 
     async def start_notify(self, uuid_str, publish_fn):
-        """Start forwarding notifications from a characteristic via publish_fn."""
+        """Start forwarding notifications from a characteristic via publish_fn.
+
+        This also writes the CCCD (Client Characteristic Configuration
+        Descriptor) so the peripheral actually sends notifications. Without this
+        step aioble's char.notified() just waits forever on an empty queue and
+        times out with no data (#231)."""
         char = self._chars.get(uuid_str)
         if not char:
             return
+
+        # Enable notify/indicate on the peripheral. aioble's notified() only
+        # consumes events; it does not turn on the CCCD bit itself.
+        print(f"Subscribe: enabling CCCD for {uuid_str}")
+        try:
+            await char.subscribe(
+                notify=bool(char.properties & bluetooth.FLAG_NOTIFY),
+                indicate=bool(char.properties & bluetooth.FLAG_INDICATE),
+            )
+        except Exception as e:
+            print(f"Subscribe: CCCD enable failed for {uuid_str}: {type(e).__name__}: {e}")
+            raise
+        print(f"Subscribe: CCCD enabled for {uuid_str}")
 
         async def _notify_loop():
             try:
