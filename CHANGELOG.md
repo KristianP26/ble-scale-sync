@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.20.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.19.0...v1.20.0) (2026-07-13)
+
+
+### Added
+
+* **scales:** add Hutbit Smart Scale adapter ([#268](https://github.com/KristianP26/ble-scale-sync/issues/268)) ([f20f7a8](https://github.com/KristianP26/ble-scale-sync/commit/f20f7a87a6edcdde99edab671b679b840e78eba8))
+* **scales:** add Koogeek-S1 adapter ([#270](https://github.com/KristianP26/ble-scale-sync/issues/270)) ([50ae1d6](https://github.com/KristianP26/ble-scale-sync/commit/50ae1d6b5e0250a05c59dd88471ce0c5254da2d5))
+
+
+### Fixed
+
+* **addon:** run the Home Assistant add-on unconfined so it can reach BlueZ ([cac714b](https://github.com/KristianP26/ble-scale-sync/commit/cac714b6ea651b35b2d5f9e3b3af3922dd822cde)), closes [#271](https://github.com/KristianP26/ble-scale-sync/issues/271)
+* **ble:** keep the ESPHome proxy connection alive on unknown API messages ([#252](https://github.com/KristianP26/ble-scale-sync/issues/252)) ([e561b91](https://github.com/KristianP26/ble-scale-sync/commit/e561b91aecaebc656c6552130eb9a45a2afc8260))
+* **ble:** re-resolve adapter after GATT discovery on proxy paths ([#258](https://github.com/KristianP26/ble-scale-sync/issues/258), [#251](https://github.com/KristianP26/ble-scale-sync/issues/251), [#255](https://github.com/KristianP26/ble-scale-sync/issues/255)) ([9aca212](https://github.com/KristianP26/ble-scale-sync/commit/9aca21290f5df83ff5327c69affc881d5cd28e01))
+* **ble:** wrap dynamic-path device.gatt() in withTimeout ([#273](https://github.com/KristianP26/ble-scale-sync/issues/273)) ([0531e35](https://github.com/KristianP26/ble-scale-sync/commit/0531e35a9011f72d05253c99111cbbd50719d479))
+* **firmware:** enable BLE CCCD notifications in start_notify ([#274](https://github.com/KristianP26/ble-scale-sync/issues/274)) ([368353e](https://github.com/KristianP26/ble-scale-sync/commit/368353e846491e9527b041f891f7875de86b56be))
+* **renpho:** only require the UCP char, guard the vendor 0xFFE2 writes ([#267](https://github.com/KristianP26/ble-scale-sync/issues/267)) ([f4d7d5c](https://github.com/KristianP26/ble-scale-sync/commit/f4d7d5cb055163df009c81cdc39feb7ef20644f1))
+* **renpho:** perform SIG consent handshake so the ES-WBE28 streams readings ([#267](https://github.com/KristianP26/ble-scale-sync/issues/267)) ([65ed721](https://github.com/KristianP26/ble-scale-sync/commit/65ed7213f1108a867710a81072c794f743afb867))
+* **scales:** complete Yunmai weight-only reading instead of timing out ([a86ffe8](https://github.com/KristianP26/ble-scale-sync/commit/a86ffe873dd4854121e7de7c61a3ddf26b35c4e5))
+* **scales:** honour configured weight_unit in the QN display command ([#269](https://github.com/KristianP26/ble-scale-sync/issues/269)) ([d188970](https://github.com/KristianP26/ble-scale-sync/commit/d1889704be25b0505f0ef9bd335af736080a5cbf))
+* **scales:** identify Type-1 QN scales by char pair over the ESP32 proxy ([#272](https://github.com/KristianP26/ble-scale-sync/issues/272)) ([76737ed](https://github.com/KristianP26/ble-scale-sync/commit/76737edbdb4c63d7afeed81c629dd40125a1949b))
+* **scales:** route Beurer BF500 to the SIG consent adapter ([#83](https://github.com/KristianP26/ble-scale-sync/issues/83)) ([25bbc20](https://github.com/KristianP26/ble-scale-sync/commit/25bbc200271d1b505245e3cb214468ca5d0fb43c))
+* **scales:** write the Hutbit FFB1 handshake without response ([#268](https://github.com/KristianP26/ble-scale-sync/issues/268)) ([de12300](https://github.com/KristianP26/ble-scale-sync/commit/de123007abdc97ebd667fec26916344e471652ae))
+
 ## [1.19.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.18.0...v1.19.0) (2026-06-19)
 
 
