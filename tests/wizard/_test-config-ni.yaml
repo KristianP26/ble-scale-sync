@@ -1,0 +1,17 @@
+version: 1
+scale:
+  weight_unit: kg
+  height_unit: cm
+unknown_user: nearest
+users:
+  - name: Bob
+    slug: bob
+    height: 180
+    birth_date: 1990-06-15
+    gender: male
+    is_athlete: false
+    weight_range:
+      min: 70
+      max: 100
+    last_known_weight: null
+update_check: true
