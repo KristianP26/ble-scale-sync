@@ -367,10 +367,22 @@ export class QnScaleAdapter implements ScaleAdapterCore, GattWiring, BroadcastSo
       return true;
     }
 
-    // Fallback: match by QN vendor service UUID, but only for unnamed devices.
-    // Named devices (e.g. "eufy T9149") should match their own specific adapter
-    // rather than being caught by the generic FFF0/FFE0 UUID check.
-    if (!name && hasQnVendor) return true;
+    // QN Type-1 structural signature: notify 0xFFE1 + write 0xFFE3. The ESP32
+    // autonomous-connect path resolves an adapter from characteristics alone
+    // (no advertised name, no service UUIDs), so a Type-1 QN otherwise falls
+    // through to the proxy's notify-only fallback and is mis-picked as Yunmai
+    // on the shared 0xFFE4 char, then hangs on the missing 0xFFE9 (#272). 0xFFE3
+    // as a write char is unique to QN; 0xFFE1 alone is shared with Beurer, so
+    // require BOTH. Compare short and dashless-128-bit forms like hasAe00 above.
+    const hasQnType1Chars =
+      chars.some((u) => u === 'ffe1' || u === CHR_NOTIFY_T1) &&
+      chars.some((u) => u === 'ffe3' || u === CHR_WRITE_T1);
+
+    // Fallback: match by QN vendor service UUID or the Type-1 char pair, but
+    // only for unnamed devices. Named devices (e.g. "eufy T9149") should match
+    // their own specific adapter rather than being caught by these generic
+    // structural checks.
+    if (!name && (hasQnVendor || hasQnType1Chars)) return true;
 
     return false;
   }

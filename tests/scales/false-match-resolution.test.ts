@@ -88,4 +88,20 @@ describe('false-match resolution (#255 / #258 / #251)', () => {
     };
     expect(resolveAdapter(inlife, adapters)?.name).toBe('Inlife');
   });
+
+  it('#272: QN Type-1 (ffe1/ffe3, nameless ESP32 payload) resolves to QN Scale, not Yunmai', () => {
+    // Renpho ES-CM20 over the ESP32 autonomous connect: no advertised name, no
+    // service UUIDs, only the Type-1 char set. Yunmai's notify char 0xFFE4 is
+    // present, so the proxy's notify-only fallback used to mis-pick Yunmai and
+    // then hang on the missing write char 0xFFE9. The FFE1+FFE3 structural
+    // signature must resolve to QN before any fallback runs.
+    const info: BleDeviceInfo = {
+      localName: '',
+      serviceUuids: [],
+      characteristicUuids: [0xffe1, 0xffe2, 0xffe3, 0xffe4, 0xffe5].map(uuid16),
+    };
+    const resolved = resolveAdapter(info, adapters);
+    expect(resolved?.name).toBe('QN Scale');
+    expect(resolved?.name).not.toBe('Yunmai');
+  });
 });

@@ -119,6 +119,43 @@ describe('QnScaleAdapter', () => {
       expect(adapter.matches(p)).toBe(true);
     });
 
+    // #272: the ESP32 autonomous-connect path resolves from characteristics
+    // alone (no name, no service UUIDs). A Type-1 QN exposes notify 0xFFE1 +
+    // write 0xFFE3; without a structural match it is mis-picked as Yunmai on the
+    // shared 0xFFE4 char and hangs. The FFE1+FFE3 pair is QN-unique.
+    it('matches unnamed device by Type-1 char pair FFE1+FFE3 (ESP32 autonomous)', () => {
+      const adapter = makeAdapter();
+      const p = mockPeripheral('', [], undefined, ['ffe1', 'ffe2', 'ffe3', 'ffe4', 'ffe5']);
+      expect(adapter.matches(p)).toBe(true);
+    });
+
+    it('matches unnamed device by Type-1 char pair in 128-bit form', () => {
+      const adapter = makeAdapter();
+      const p = mockPeripheral('', [], undefined, [
+        '0000ffe100001000800000805f9b34fb',
+        '0000ffe300001000800000805f9b34fb',
+      ]);
+      expect(adapter.matches(p)).toBe(true);
+    });
+
+    it('does not match unnamed device with FFE1 notify char but no FFE3 write', () => {
+      const adapter = makeAdapter();
+      const p = mockPeripheral('', [], undefined, ['ffe1', 'ffe2']);
+      expect(adapter.matches(p)).toBe(false);
+    });
+
+    it('does not match unnamed device with only the Yunmai notify char FFE4', () => {
+      const adapter = makeAdapter();
+      const p = mockPeripheral('', [], undefined, ['ffe4', 'ffe5']);
+      expect(adapter.matches(p)).toBe(false);
+    });
+
+    it('does not claim a named non-QN device that happens to expose FFE1+FFE3', () => {
+      const adapter = makeAdapter();
+      const p = mockPeripheral('yunmai', [], undefined, ['ffe1', 'ffe3', 'ffe4']);
+      expect(adapter.matches(p)).toBe(false);
+    });
+
     it('matches AABB broadcast header with company ID 0xFFFF', () => {
       const adapter = makeAdapter();
       expect(adapter.matches(mockBroadcastDevice(makeBroadcast(70, true)))).toBe(true);
