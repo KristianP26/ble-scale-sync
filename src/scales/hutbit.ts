@@ -54,7 +54,7 @@ function frameChecksum(data: Buffer): number {
  *
  * Decoded from two known-weight HCI snoops (#254): `ac0203490000ca16`
  * = 0x0349 = 841 → 84.1 kg. The unit's bioimpedance is unreliable (it reported
- * 0.4–0.7 % body fat), so it is treated as weight-only and body composition is
+ * 0.4 to 0.7 % body fat), so it is treated as weight-only and body composition is
  * derived via the shared BIA/BMI pipeline, same as the Robi S9 / Renpho adapters.
  */
 export class HutbitAdapter implements ScaleAdapterCore, GattWiring {
@@ -88,7 +88,11 @@ export class HutbitAdapter implements ScaleAdapterCore, GattWiring {
   async onConnected(ctx: ConnectionContext): Promise<void> {
     this.final = false;
     for (const hex of HANDSHAKE) {
-      await ctx.write(CHR_FFB1, Buffer.from(hex, 'hex'), true);
+      // Write without response: FFB1 is the Lefu/Fitdays FFB0 handshake char and
+      // the family writes no-response. A char that advertises only
+      // WRITE_NO_RESPONSE rejects a with-response write, so this is the safe mode
+      // and matches the documented protocol above (#268 review).
+      await ctx.write(CHR_FFB1, Buffer.from(hex, 'hex'), false);
       await new Promise((r) => setTimeout(r, 150));
     }
     bleLog.debug('Hutbit: handshake sent');
