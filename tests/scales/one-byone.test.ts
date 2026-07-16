@@ -15,6 +15,16 @@ describe('OneByoneAdapter', () => {
     return new OneByoneAdapter();
   }
 
+  function makeCfFrame(weightKg: number, impedanceRaw = 500, impedanceStatus = 0): Buffer {
+    const buf = Buffer.alloc(10);
+    buf[0] = 0xcf;
+    buf[1] = impedanceRaw & 0xff;
+    buf[2] = (impedanceRaw >> 8) & 0xff;
+    buf.writeUInt16LE(Math.round(weightKg * 100), 3);
+    buf[9] = impedanceStatus;
+    return buf;
+  }
+
   describe('matches()', () => {
     it.each(['t9146', 't9147', 't9120', 'health scale'])('matches "%s"', (name) => {
       const adapter = makeAdapter();
@@ -113,13 +123,8 @@ describe('OneByoneAdapter', () => {
   describe('parseNotification()', () => {
     it('parses 0xCF frame with weight and impedance', () => {
       const adapter = makeAdapter();
-      const buf = Buffer.alloc(10);
-      buf[0] = 0xcf;
-      // impedance raw: (data[2]<<8) + data[1] = (0x01<<8) + 0xF4 = 500 → * 0.1 = 50.0
-      buf[1] = 0xf4;
-      buf[2] = 0x01;
-      buf.writeUInt16LE(8000, 3); // weight = 8000 / 100 = 80.0 kg
-      buf[9] = 0; // not invalid
+      // impedance raw: (data[2]<<8) + data[1] = 500 → * 0.1 = 50.0
+      const buf = makeCfFrame(80);
 
       const reading = adapter.parseNotification(buf);
       expect(reading).not.toBeNull();
@@ -129,12 +134,7 @@ describe('OneByoneAdapter', () => {
 
     it('impedance is 0 when byte[9] = 1', () => {
       const adapter = makeAdapter();
-      const buf = Buffer.alloc(10);
-      buf[0] = 0xcf;
-      buf[1] = 0xf4;
-      buf[2] = 0x01;
-      buf.writeUInt16LE(8000, 3);
-      buf[9] = 1; // impedance invalid
+      const buf = makeCfFrame(80, 500, 1); // impedance invalid
 
       const reading = adapter.parseNotification(buf);
       expect(reading).not.toBeNull();
@@ -143,12 +143,7 @@ describe('OneByoneAdapter', () => {
 
     it('impedance is 0 when raw value is 0', () => {
       const adapter = makeAdapter();
-      const buf = Buffer.alloc(10);
-      buf[0] = 0xcf;
-      buf[1] = 0x00;
-      buf[2] = 0x00;
-      buf.writeUInt16LE(8000, 3);
-      buf[9] = 0;
+      const buf = makeCfFrame(80, 0);
 
       const reading = adapter.parseNotification(buf);
       expect(reading).not.toBeNull();
@@ -169,9 +164,26 @@ describe('OneByoneAdapter', () => {
   });
 
   describe('isComplete()', () => {
-    it('returns true when weight > 0', () => {
+    it('returns true only after two consecutive readings have the same weight', () => {
       const adapter = makeAdapter();
-      expect(adapter.isComplete({ weight: 80, impedance: 0 })).toBe(true);
+      const first = adapter.parseNotification(makeCfFrame(80.2))!;
+      expect(adapter.isComplete(first)).toBe(false);
+
+      const changing = adapter.parseNotification(makeCfFrame(80))!;
+      expect(adapter.isComplete(changing)).toBe(false);
+
+      const stable = adapter.parseNotification(makeCfFrame(80))!;
+      expect(adapter.isComplete(stable)).toBe(true);
+    });
+
+    it('clears stability when the weight changes again', () => {
+      const adapter = makeAdapter();
+      adapter.parseNotification(makeCfFrame(80));
+      const stable = adapter.parseNotification(makeCfFrame(80))!;
+      expect(adapter.isComplete(stable)).toBe(true);
+
+      const changed = adapter.parseNotification(makeCfFrame(80.1))!;
+      expect(adapter.isComplete(changed)).toBe(false);
     });
 
     it('returns false when weight is 0', () => {

@@ -34,6 +34,9 @@ export class OneByoneAdapter implements ScaleAdapterCore, GattWiring {
   readonly charWriteUuid = uuid16(0xfff1);
   readonly normalizesWeight = true;
 
+  private previousRawWeight: number | null = null;
+  private stableRawWeight: number | null = null;
+
   matches(device: BleDeviceInfo): boolean {
     // Name match is unambiguous (T914x / Health Scale); keep it.
     const name = (device.localName || '').toLowerCase();
@@ -56,6 +59,8 @@ export class OneByoneAdapter implements ScaleAdapterCore, GattWiring {
    *   2. Clock sync: [0xF1, yearHi, yearLo, month, day, hour, min, sec]
    */
   async onConnected(ctx: ConnectionContext): Promise<void> {
+    this.resetStability();
+
     // Step 1: Mode/unit command
     const unitCmd = [0xfd, 0x37, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
     unitCmd.push(xorChecksum(unitCmd, 0, unitCmd.length));
@@ -79,7 +84,8 @@ export class OneByoneAdapter implements ScaleAdapterCore, GattWiring {
   parseNotification(data: Buffer): ScaleReading | null {
     if (data.length < 5 || data[0] !== 0xcf) return null;
 
-    const weight = data.readUInt16LE(3) / 100;
+    const rawWeight = data.readUInt16LE(3);
+    const weight = rawWeight / 100;
 
     let impedance = 0;
     if (data.length >= 10) {
@@ -90,16 +96,31 @@ export class OneByoneAdapter implements ScaleAdapterCore, GattWiring {
       }
     }
 
+    this.updateStability(rawWeight);
     return { weight, impedance };
   }
 
   isComplete(reading: ScaleReading): boolean {
-    return reading.weight > 0;
+    return reading.weight > 0 && Math.round(reading.weight * 100) === this.stableRawWeight;
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
     const comp: ScaleBodyComp = {};
     return buildPayload(reading.weight, reading.impedance, comp, profile);
+  }
+
+  private updateStability(rawWeight: number): void {
+    if (this.previousRawWeight === rawWeight) {
+      this.stableRawWeight = rawWeight;
+    } else if (this.stableRawWeight !== rawWeight) {
+      this.stableRawWeight = null;
+    }
+    this.previousRawWeight = rawWeight;
+  }
+
+  private resetStability(): void {
+    this.previousRawWeight = null;
+    this.stableRawWeight = null;
   }
 }
 

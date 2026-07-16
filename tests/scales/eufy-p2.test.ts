@@ -228,6 +228,41 @@ describe('EufyP2Adapter', () => {
     assertPayloadRanges(payload);
   });
 
+  it('waits for a final GATT weight to match the previous realtime weight before completing', () => {
+    const adapter = new EufyP2Adapter();
+
+    const first = adapter.parseNotification(makeNotification(80.1, 520, false))!;
+    expect(first.weight).toBe(80.1);
+    expect(adapter.isComplete(first)).toBe(false);
+
+    const changingFinal = adapter.parseNotification(makeNotification(80.0, 520, true))!;
+    expect(adapter.isComplete(changingFinal)).toBe(false);
+
+    const stableFinal = adapter.parseNotification(makeNotification(80.0, 520, true))!;
+    expect(adapter.isComplete(stableFinal)).toBe(true);
+  });
+
+  it('clears GATT stability when the weight changes again', () => {
+    const adapter = new EufyP2Adapter();
+
+    adapter.parseNotification(makeNotification(80, 520, false));
+    const stable = adapter.parseNotification(makeNotification(80, 520, true))!;
+    expect(adapter.isComplete(stable)).toBe(true);
+
+    const changed = adapter.parseNotification(makeNotification(80.2, 520, true))!;
+    expect(adapter.isComplete(changed)).toBe(false);
+  });
+
+  it('still stability-gates GATT readings when impedance is absent', () => {
+    const adapter = new EufyP2Adapter();
+
+    const first = adapter.parseNotification(makeNotification(80, 0, true))!;
+    expect(adapter.isComplete(first)).toBe(false);
+
+    const stable = adapter.parseNotification(makeNotification(80, 0, true))!;
+    expect(adapter.isComplete(stable)).toBe(true);
+  });
+
   it('rejects FFF2 weight frames when onConnected had no deviceAddress (no stale auth)', async () => {
     const adapter = new EufyP2Adapter();
 
