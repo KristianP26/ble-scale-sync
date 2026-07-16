@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { HistoryBuffer, HoldTimer } from '../../src/ble/notification-processor.js';
+import {
+  HistoryBuffer,
+  HoldTimer,
+  WeightStabilityTracker,
+} from '../../src/ble/notification-processor.js';
 import { bleLog } from '../../src/ble/types.js';
 import type { ScaleReading } from '../../src/interfaces/scale-adapter.js';
 
@@ -105,5 +109,30 @@ describe('HoldTimer', () => {
   it('heldReading is null before any hold', () => {
     const t = new HoldTimer(15000, vi.fn());
     expect(t.heldReading).toBeNull();
+  });
+});
+
+describe('WeightStabilityTracker', () => {
+  it('requires consecutive equal weights by default', () => {
+    const t = new WeightStabilityTracker({});
+    expect(t.observe({ weight: 80.1, impedance: 0 })).toBe(false);
+    expect(t.observe({ weight: 80, impedance: 0 })).toBe(false);
+    expect(t.observe({ weight: 80, impedance: 0 })).toBe(true);
+  });
+
+  it('uses toleranceKg when comparing consecutive readings', () => {
+    const t = new WeightStabilityTracker({ samples: 3, toleranceKg: 0.05 });
+    expect(t.observe({ weight: 80, impedance: 0 })).toBe(false);
+    expect(t.observe({ weight: 80.03, impedance: 0 })).toBe(false);
+    expect(t.observe({ weight: 80.01, impedance: 0 })).toBe(true);
+    expect(t.observe({ weight: 80.2, impedance: 0 })).toBe(false);
+  });
+
+  it('resets on non-finite readings', () => {
+    const t = new WeightStabilityTracker({});
+    expect(t.observe({ weight: 80, impedance: 0 })).toBe(false);
+    expect(t.observe({ weight: Number.NaN, impedance: 0 })).toBe(false);
+    expect(t.observe({ weight: 80, impedance: 0 })).toBe(false);
+    expect(t.observe({ weight: 80, impedance: 0 })).toBe(true);
   });
 });

@@ -8,6 +8,7 @@ import type {
   GattWiring,
   MultiCharNotify,
   BroadcastSource,
+  WeightStabilityGate,
   ScaleReading,
   UserProfile,
   BodyComposition,
@@ -77,6 +78,11 @@ const EUFY_COMPANY_ID = 0xff48;
  * were observed to trigger disconnects on some T9149 units.
  */
 const EUFY_WRITE_DELAY_MS = 1000;
+
+interface ParsedEufyWeightFrame {
+  reading: ScaleReading;
+  isFinal: boolean;
+}
 
 /** XOR checksum over every byte of a frame (matches Python util.compute_checksum). */
 function xor(bytes: Buffer): number {
@@ -247,17 +253,23 @@ export class EufyAuthHandler {
 }
 
 /** Parse a 16-byte weight notification frame from FFF2. Returns null if malformed. */
-export function parseWeightNotification(data: Buffer): ScaleReading | null {
+function parseWeightNotificationFrame(data: Buffer): ParsedEufyWeightFrame | null {
   if (data.length !== 16 || data[0] !== 0xcf || data[2] !== 0x00) return null;
 
-  const weight = ((data[7] << 8) | data[6]) / 100;
+  const rawWeight = (data[7] << 8) | data[6];
+  const weight = rawWeight / 100;
   if (!Number.isFinite(weight) || weight < MIN_WEIGHT_KG || weight > MAX_WEIGHT_KG) return null;
 
   const isFinal = data[12] === 0x00;
-  if (!isFinal) return null;
-
   const impedance = (data[10] << 16) | (data[9] << 8) | data[8];
-  return { weight, impedance };
+  return { reading: { weight, impedance }, isFinal };
+}
+
+/** Parse a final 16-byte weight notification from FFF2. Returns null if malformed/in-progress. */
+export function parseWeightNotification(data: Buffer): ScaleReading | null {
+  const frame = parseWeightNotificationFrame(data);
+  if (!frame?.isFinal) return null;
+  return frame.reading;
 }
 
 /** Parse 19-byte advertisement vendor payload. Returns null if not a final reading. */
@@ -275,7 +287,7 @@ export function parseEufyAdvertisement(vendor: Buffer): ScaleReading | null {
 }
 
 export class EufyP2Adapter
-  implements ScaleAdapterCore, GattWiring, MultiCharNotify, BroadcastSource
+  implements ScaleAdapterCore, GattWiring, MultiCharNotify, BroadcastSource, WeightStabilityGate
 {
   readonly name = 'Eufy Smart Scale P2/P2 Pro';
   readonly match: MatchDescriptor = {
@@ -287,6 +299,7 @@ export class EufyP2Adapter
   readonly charNotifyUuid = CHR_DATA;
   readonly charWriteUuid = CHR_WRITE;
   readonly normalizesWeight = true;
+  readonly weightStability = { samples: 2, toleranceKg: 0 };
 
   readonly characteristics: CharacteristicBinding[] = [
     { service: SVC_UUID, uuid: CHR_WRITE, type: 'write' },
@@ -297,6 +310,8 @@ export class EufyP2Adapter
   private auth: EufyAuthHandler | null = null;
   private ctx: ConnectionContext | null = null;
   private readonly c3Seen = { done: false };
+  private lastGattReading: ScaleReading | null = null;
+  private lastGattIsFinal = false;
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
@@ -320,6 +335,7 @@ export class EufyP2Adapter
     this.ctx = ctx;
     this.auth = null;
     this.c3Seen.done = false;
+    this.resetStability();
     if (!ctx.deviceAddress) {
       bleLog.warn('Eufy: no device address available — auth will fail without MAC');
       return;
@@ -344,14 +360,14 @@ export class EufyP2Adapter
         bleLog.debug('Eufy: FFF2 frame received before auth complete — ignoring');
         return null;
       }
-      return parseWeightNotification(data);
+      return this.parseGattWeight(data);
     }
     return null;
   }
 
   /** Fallback single-char path (not used when parseCharNotification is defined). */
   parseNotification(data: Buffer): ScaleReading | null {
-    return parseWeightNotification(data);
+    return this.parseGattWeight(data);
   }
 
   parseBroadcast(manufacturerData: Buffer): ScaleReading | null {
@@ -359,9 +375,11 @@ export class EufyP2Adapter
   }
 
   isComplete(reading: ScaleReading): boolean {
-    // Broadcast readings have impedance=0 (passive mode, no BIA).
-    // Authenticated GATT readings have non-zero impedance from the scale.
-    if (reading.impedance === 0) return reading.weight > 0;
+    // Broadcast readings have impedance=0 (passive mode, no BIA), but GATT
+    // frames can also lack impedance, so only skip stability for non-GATT reads.
+    const isGattReading = reading === this.lastGattReading;
+    if (!isGattReading && reading.impedance === 0) return reading.weight > 0;
+    if (isGattReading) return this.lastGattIsFinal && reading.weight > MIN_WEIGHT_KG;
     return reading.weight > MIN_WEIGHT_KG && reading.impedance > 200;
   }
 
@@ -404,5 +422,18 @@ export class EufyP2Adapter
       await this.ctx.write(CHR_WRITE, frame, true);
       await new Promise<void>((r) => setTimeout(r, EUFY_WRITE_DELAY_MS));
     }
+  }
+
+  private parseGattWeight(data: Buffer): ScaleReading | null {
+    const frame = parseWeightNotificationFrame(data);
+    if (!frame) return null;
+    this.lastGattReading = frame.reading;
+    this.lastGattIsFinal = frame.isFinal;
+    return frame.reading;
+  }
+
+  private resetStability(): void {
+    this.lastGattReading = null;
+    this.lastGattIsFinal = false;
   }
 }

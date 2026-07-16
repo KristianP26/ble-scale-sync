@@ -8,6 +8,7 @@ import type {
   MultiCharNotify,
   AckProtocol,
   HoldForComposition,
+  WeightStabilityGate,
   ScaleReading,
   BodyComposition,
   BleDeviceInfo,
@@ -105,5 +106,12 @@ describe('ScaleAdapter capability types', () => {
   it('BroadcastSource is an all-optional grouping', () => {
     const b: BroadcastSource = {};
     expect(b.parseBroadcast).toBeUndefined();
+  });
+
+  it('WeightStabilityGate is an all-optional grouping', () => {
+    const empty: WeightStabilityGate = {};
+    expect(empty.weightStability).toBeUndefined();
+    const gated: WeightStabilityGate = { weightStability: { samples: 2, toleranceKg: 0 } };
+    expect(gated.weightStability?.samples).toBe(2);
   });
 });

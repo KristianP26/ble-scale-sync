@@ -9,7 +9,7 @@ import type {
 } from '../interfaces/scale-adapter.js';
 import type { WeightUnit } from '../config/schema.js';
 import { LBS_TO_KG, normalizeUuid, errMsg, bleLog } from './types.js';
-import { HistoryBuffer, HoldTimer } from './notification-processor.js';
+import { HistoryBuffer, HoldTimer, WeightStabilityTracker } from './notification-processor.js';
 
 // ─── Broadcast-vs-GATT routing ────────────────────────────────────────────────
 
@@ -365,6 +365,9 @@ export function waitForRawReading(
     let resolved = false;
     const history = new HistoryBuffer(MAX_HISTORY_FRAMES, adapter.name);
     const ackWriteChar = resolveWriteChar(charMap, adapter);
+    const weightStability = adapter.weightStability
+      ? new WeightStabilityTracker(adapter.weightStability)
+      : null;
 
     const finishWith = (r: ScaleReading): void => {
       resolved = true;
@@ -416,7 +419,10 @@ export function waitForRawReading(
         return;
       }
 
+      const weightIsStable = weightStability ? weightStability.observe(reading) : true;
+
       if (adapter.isComplete(reading)) {
+        if (!weightIsStable) return;
         const final = adapter.isFinal ? adapter.isFinal(reading) : true;
         if (adapter.completionHoldMs && !final) {
           hold.hold(reading);

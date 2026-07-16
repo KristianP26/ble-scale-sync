@@ -4,6 +4,7 @@ import type {
   ScaleAdapterCore,
   GattWiring,
   Unlockable,
+  WeightStabilityGate,
   ScaleReading,
   UserProfile,
   BodyComposition,
@@ -22,7 +23,7 @@ import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
  *   Weight at bytes [3-4] little-endian uint16 / 100 (kg).
  *   Impedance: ((data[2]<<8)+data[1]) * 0.1, valid when byte[9] != 1 and != 0.
  */
-export class OneByoneAdapter implements ScaleAdapterCore, GattWiring {
+export class OneByoneAdapter implements ScaleAdapterCore, GattWiring, WeightStabilityGate {
   readonly name = '1byone (Eufy)';
   readonly match: MatchDescriptor = {
     priority: 70,
@@ -33,6 +34,7 @@ export class OneByoneAdapter implements ScaleAdapterCore, GattWiring {
   readonly charNotifyUuid = uuid16(0xfff4);
   readonly charWriteUuid = uuid16(0xfff1);
   readonly normalizesWeight = true;
+  readonly weightStability = { samples: 2, toleranceKg: 0 };
 
   matches(device: BleDeviceInfo): boolean {
     // Name match is unambiguous (T914x / Health Scale); keep it.

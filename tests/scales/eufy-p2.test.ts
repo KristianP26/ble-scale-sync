@@ -228,6 +228,29 @@ describe('EufyP2Adapter', () => {
     assertPayloadRanges(payload);
   });
 
+  it('uses the protocol final flag for GATT completion candidates', () => {
+    const adapter = new EufyP2Adapter();
+
+    const inProgress = adapter.parseNotification(makeNotification(80.1, 520, false))!;
+    expect(inProgress.weight).toBe(80.1);
+    expect(adapter.isComplete(inProgress)).toBe(false);
+
+    const final = adapter.parseNotification(makeNotification(80.0, 520, true))!;
+    expect(adapter.isComplete(final)).toBe(true);
+  });
+
+  it('does not require impedance once a GATT frame is final', () => {
+    const adapter = new EufyP2Adapter();
+
+    const final = adapter.parseNotification(makeNotification(80, 0, true))!;
+    expect(adapter.isComplete(final)).toBe(true);
+  });
+
+  it('opts into shared consecutive-weight stability gating', () => {
+    const adapter = new EufyP2Adapter();
+    expect(adapter.weightStability).toEqual({ samples: 2, toleranceKg: 0 });
+  });
+
   it('rejects FFF2 weight frames when onConnected had no deviceAddress (no stale auth)', async () => {
     const adapter = new EufyP2Adapter();
 

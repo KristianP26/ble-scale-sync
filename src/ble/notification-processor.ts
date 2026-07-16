@@ -1,4 +1,4 @@
-import type { ScaleReading } from '../interfaces/scale-adapter.js';
+import type { ScaleReading, WeightStabilityGate } from '../interfaces/scale-adapter.js';
 import { bleLog } from './types.js';
 
 /**
@@ -72,7 +72,7 @@ export class HoldTimer {
     this.held = reading;
     if (this.timer) return;
     bleLog.info(
-      `Weight stable; holding connection up to ` +
+      `Reading complete; holding connection up to ` +
         `${Math.round(this.holdMs / 1000)}s for body composition...`,
     );
     this.timer = setTimeout(() => {
@@ -91,5 +91,48 @@ export class HoldTimer {
       clearTimeout(this.timer);
       this.timer = null;
     }
+  }
+}
+
+/**
+ * Tracks an opt-in consecutive-weight stability rule across live readings.
+ * This is deliberately outside individual adapters so protocols can keep their
+ * own "complete" semantics while sharing the common "weight stopped moving"
+ * gate where it is useful.
+ */
+export class WeightStabilityTracker {
+  private readonly requiredSamples: number;
+  private readonly toleranceKg: number;
+  private previousWeight: number | null = null;
+  private consecutiveSamples = 0;
+
+  constructor(config: NonNullable<WeightStabilityGate['weightStability']>) {
+    this.requiredSamples = Math.max(1, Math.trunc(config.samples ?? 2));
+    this.toleranceKg = Math.max(0, config.toleranceKg ?? 0);
+  }
+
+  observe(reading: ScaleReading): boolean {
+    const weight = reading.weight;
+    if (!Number.isFinite(weight)) {
+      this.reset();
+      return false;
+    }
+
+    if (
+      this.previousWeight !== null &&
+      Math.abs(weight - this.previousWeight) <= this.toleranceKg
+    ) {
+      this.consecutiveSamples += 1;
+    } else {
+      this.consecutiveSamples = 1;
+    }
+
+    this.previousWeight = weight;
+    return this.consecutiveSamples >= this.requiredSamples;
+  }
+
+  reset(): void {
+    this.previousWeight = null;
+    this.consecutiveSamples = 0;
   }
 }

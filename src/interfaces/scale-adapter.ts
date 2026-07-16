@@ -329,6 +329,24 @@ export interface HoldForComposition {
 }
 
 /**
+ * Opt-in gate for adapters that stream live weight values before the protocol's
+ * own completion signal is trustworthy enough to finish immediately. The shared
+ * GATT reader observes every live reading and only allows completion after
+ * `samples` consecutive weights are within `toleranceKg` of each other.
+ *
+ * Keep this opt-in: several scales only emit one final frame, and a mandatory
+ * global stability rule would make those adapters wait for disconnect/timeout.
+ */
+export interface WeightStabilityGate {
+  readonly weightStability?: {
+    /** Consecutive matching readings required before completion. Defaults to 2. */
+    readonly samples?: number;
+    /** Maximum allowed kg delta between consecutive readings. Defaults to 0. */
+    readonly toleranceKg?: number;
+  };
+}
+
+/**
  * The registry element type. Core is required; every capability mixin is folded
  * in as a Partial so ANY adapter (and any strict-object-literal test mock) is
  * assignable, the production `ScaleAdapter[]` registry stays homogeneous, and
@@ -344,4 +362,5 @@ export type ScaleAdapter = ScaleAdapterCore &
   Partial<BroadcastSource> &
   Partial<MultiCharNotify> &
   Partial<AckProtocol> &
-  Partial<HoldForComposition>;
+  Partial<HoldForComposition> &
+  Partial<WeightStabilityGate>;

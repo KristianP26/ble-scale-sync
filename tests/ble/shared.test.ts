@@ -970,6 +970,69 @@ describe('waitForRawReading() — per-frame ACK + completion hold', () => {
     expect(result.reading).toEqual({ weight: 83.55, impedance: 437 });
   });
 
+  it('applies opt-in weight stability before resolving a complete reading', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const readings = [
+      { weight: 83.4, impedance: 0 },
+      { weight: 83.2, impedance: 0 },
+      { weight: 83.2, impedance: 0 },
+    ];
+    const adapter = createLegacyAdapter({
+      weightStability: { samples: 2, toleranceKg: 0 },
+      isComplete: vi.fn((r: ScaleReading) => r.weight > 0),
+      parseNotification: vi.fn(() => readings.shift() ?? { weight: 83.2, impedance: 0 }),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    notifyChar.triggerData(Buffer.from([0x01]));
+    notifyChar.triggerData(Buffer.from([0x02]));
+    const pending = await Promise.race([
+      promise.then(() => 'resolved'),
+      new Promise((r) => setTimeout(() => r('pending'), 50)),
+    ]);
+    expect(pending).toBe('pending');
+
+    notifyChar.triggerData(Buffer.from([0x03]));
+    const result = await promise;
+    expect(result.reading).toEqual({ weight: 83.2, impedance: 0 });
+  });
+
+  it('counts incomplete live readings toward opt-in weight stability', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    let final = false;
+    const adapter = createLegacyAdapter({
+      weightStability: { samples: 2, toleranceKg: 0 },
+      isComplete: vi.fn((r: ScaleReading) => final && r.weight > 0),
+      parseNotification: vi.fn(() => ({ weight: 83.2, impedance: 0 })),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    notifyChar.triggerData(Buffer.from([0x01]));
+    final = true;
+    notifyChar.triggerData(Buffer.from([0x02]));
+
+    const result = await promise;
+    expect(result.reading).toEqual({ weight: 83.2, impedance: 0 });
+  });
+
   it('resolves with the last weight-only reading when the hold window elapses', async () => {
     vi.useFakeTimers();
     try {
