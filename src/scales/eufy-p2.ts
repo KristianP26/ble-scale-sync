@@ -67,6 +67,18 @@ const AES_IV = Buffer.from('0000000000000000', 'ascii');
 const MIN_WEIGHT_KG = 2;
 const MAX_WEIGHT_KG = 200;
 
+/**
+ * Hold window (ms) for the weight-stability gate. The scale flags a frame as
+ * final (byte[12] == 0) while the weight can still be settling, so resolving on
+ * the first final frame occasionally exported a drifting value (#284). Instead
+ * we hold the link open after the first final frame and resolve as soon as two
+ * consecutive final frames report the same weight (isFinal). If the weight never
+ * settles to two equal frames within this window, shared.ts resolves the last
+ * held reading, so the gate can never lose a reading it would previously have
+ * returned.
+ */
+const WEIGHT_STABLE_HOLD_MS = 3000;
+
 /** Company ID used in Eufy P2/P2 Pro advertisement manufacturer data. */
 const EUFY_COMPANY_ID = 0xff48;
 
@@ -298,6 +310,11 @@ export class EufyP2Adapter
   private ctx: ConnectionContext | null = null;
   private readonly c3Seen = { done: false };
 
+  /** Raw weight (hundredths of kg) of the previous final GATT frame this session. */
+  private previousFinalRawWeight: number | null = null;
+  /** True once two consecutive final GATT frames reported the same weight. */
+  private weightStable = false;
+
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
     if (name.startsWith('eufy t9148') || name.startsWith('eufy t9149')) return true;
@@ -320,6 +337,8 @@ export class EufyP2Adapter
     this.ctx = ctx;
     this.auth = null;
     this.c3Seen.done = false;
+    this.previousFinalRawWeight = null;
+    this.weightStable = false;
     if (!ctx.deviceAddress) {
       bleLog.warn('Eufy: no device address available — auth will fail without MAC');
       return;
@@ -344,14 +363,28 @@ export class EufyP2Adapter
         bleLog.debug('Eufy: FFF2 frame received before auth complete — ignoring');
         return null;
       }
-      return parseWeightNotification(data);
+      return this.trackStability(parseWeightNotification(data));
     }
     return null;
   }
 
   /** Fallback single-char path (not used when parseCharNotification is defined). */
   parseNotification(data: Buffer): ScaleReading | null {
-    return parseWeightNotification(data);
+    return this.trackStability(parseWeightNotification(data));
+  }
+
+  /**
+   * Record whether this final frame's weight matches the previous one, so
+   * isFinal() can report the reading as settled. parseWeightNotification only
+   * returns non-null for final frames, so consecutive calls compare final
+   * frames to each other.
+   */
+  private trackStability(reading: ScaleReading | null): ScaleReading | null {
+    if (!reading) return reading;
+    const rawWeight = Math.round(reading.weight * 100);
+    this.weightStable = this.previousFinalRawWeight === rawWeight;
+    this.previousFinalRawWeight = rawWeight;
+    return reading;
   }
 
   parseBroadcast(manufacturerData: Buffer): ScaleReading | null {
@@ -363,6 +396,19 @@ export class EufyP2Adapter
     // Authenticated GATT readings have non-zero impedance from the scale.
     if (reading.impedance === 0) return reading.weight > 0;
     return reading.weight > MIN_WEIGHT_KG && reading.impedance > 200;
+  }
+
+  /**
+   * Hold the link open after the first final frame so the weight can settle,
+   * rather than exporting the first (possibly still-drifting) final value.
+   * Only the GATT path (shared.ts) consults this; the broadcast path resolves
+   * on isComplete() alone, so passive reads are unaffected.
+   */
+  readonly completionHoldMs = WEIGHT_STABLE_HOLD_MS;
+
+  /** Resolve immediately once the weight has stabilized across two final frames. */
+  isFinal(_reading: ScaleReading): boolean {
+    return this.weightStable;
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {

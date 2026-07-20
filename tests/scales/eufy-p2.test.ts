@@ -252,6 +252,51 @@ describe('EufyP2Adapter', () => {
     await adapter.onConnected({ ...ctx, deviceAddress: '' });
     expect(adapter.parseCharNotification!('fff2', makeNotification(75, 500))).toBeNull();
   });
+
+  describe('weight-stability gate (#284)', () => {
+    it('holds until two consecutive final frames report the same weight', () => {
+      const adapter = new EufyP2Adapter();
+
+      const f1 = adapter.parseNotification(makeNotification(80.1, 520))!;
+      expect(adapter.isComplete(f1)).toBe(true); // permissive: arms the hold
+      expect(adapter.isFinal!(f1)).toBe(false); // not settled yet
+
+      const f2 = adapter.parseNotification(makeNotification(80.0, 520))!;
+      expect(adapter.isFinal!(f2)).toBe(false); // weight still changing
+
+      const f3 = adapter.parseNotification(makeNotification(80.0, 520))!;
+      expect(adapter.isFinal!(f3)).toBe(true); // stable
+    });
+
+    it('keeps isComplete permissive so a lone final frame is still a resolvable fallback', () => {
+      const adapter = new EufyP2Adapter();
+      // A single final frame that never repeats: isComplete true (so shared.ts
+      // holds it and can resolve it on disconnect), isFinal false (not settled).
+      const only = adapter.parseNotification(makeNotification(80, 520))!;
+      expect(adapter.isComplete(only)).toBe(true);
+      expect(adapter.isFinal!(only)).toBe(false);
+      expect(adapter.completionHoldMs).toBeGreaterThan(0);
+    });
+
+    it('re-arms stability per connection', async () => {
+      const adapter = new EufyP2Adapter();
+      const ctx = {
+        write: async () => {},
+        read: async () => Buffer.alloc(0),
+        subscribe: async () => {},
+        profile: defaultProfile(),
+        deviceAddress: '',
+      };
+
+      adapter.parseNotification(makeNotification(80, 500));
+      const stable = adapter.parseNotification(makeNotification(80, 500))!;
+      expect(adapter.isFinal!(stable)).toBe(true);
+
+      await adapter.onConnected(ctx); // resets stability even without a MAC
+      const afterReset = adapter.parseNotification(makeNotification(80, 500))!;
+      expect(adapter.isFinal!(afterReset)).toBe(false); // previous weight cleared
+    });
+  });
 });
 
 // ─── SegmentReassembler integrity (via handleC1 which uses it) ─────────────

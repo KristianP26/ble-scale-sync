@@ -11,6 +11,16 @@ import type {
 import { uuid16, buildPayload, xorChecksum, type ScaleBodyComp } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
+/**
+ * Hold window (ms) for the weight-stability gate (#284). 1byone frames stream
+ * continuously with no "measurement locked" flag, so resolving on the first
+ * weight>0 frame could export a value while the person was still settling.
+ * Instead we hold the link open and resolve once two consecutive frames report
+ * the same weight (isFinal). If that never happens within the window, shared.ts
+ * resolves the last held reading, so no reading is ever lost.
+ */
+const WEIGHT_STABLE_HOLD_MS = 3000;
+
 // ─── OneByoneAdapter (Eufy C1/P1, Health Scale) ─────────────────────────────
 
 /**
@@ -34,6 +44,11 @@ export class OneByoneAdapter implements ScaleAdapterCore, GattWiring {
   readonly charWriteUuid = uuid16(0xfff1);
   readonly normalizesWeight = true;
 
+  /** Raw weight (hundredths of kg) of the previous frame this session. */
+  private previousRawWeight: number | null = null;
+  /** True once two consecutive frames reported the same weight. */
+  private weightStable = false;
+
   matches(device: BleDeviceInfo): boolean {
     // Name match is unambiguous (T914x / Health Scale); keep it.
     const name = (device.localName || '').toLowerCase();
@@ -56,6 +71,9 @@ export class OneByoneAdapter implements ScaleAdapterCore, GattWiring {
    *   2. Clock sync: [0xF1, yearHi, yearLo, month, day, hour, min, sec]
    */
   async onConnected(ctx: ConnectionContext): Promise<void> {
+    this.previousRawWeight = null;
+    this.weightStable = false;
+
     // Step 1: Mode/unit command
     const unitCmd = [0xfd, 0x37, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
     unitCmd.push(xorChecksum(unitCmd, 0, unitCmd.length));
@@ -79,7 +97,8 @@ export class OneByoneAdapter implements ScaleAdapterCore, GattWiring {
   parseNotification(data: Buffer): ScaleReading | null {
     if (data.length < 5 || data[0] !== 0xcf) return null;
 
-    const weight = data.readUInt16LE(3) / 100;
+    const rawWeight = data.readUInt16LE(3);
+    const weight = rawWeight / 100;
 
     let impedance = 0;
     if (data.length >= 10) {
@@ -90,11 +109,25 @@ export class OneByoneAdapter implements ScaleAdapterCore, GattWiring {
       }
     }
 
+    this.weightStable = this.previousRawWeight === rawWeight;
+    this.previousRawWeight = rawWeight;
+
     return { weight, impedance };
   }
 
   isComplete(reading: ScaleReading): boolean {
     return reading.weight > 0;
+  }
+
+  /**
+   * Hold the link open after the first weight so it can settle, rather than
+   * exporting the first frame while the person is still stepping on.
+   */
+  readonly completionHoldMs = WEIGHT_STABLE_HOLD_MS;
+
+  /** Resolve immediately once the weight has stabilized across two frames. */
+  isFinal(_reading: ScaleReading): boolean {
+    return this.weightStable;
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {

@@ -180,6 +180,48 @@ describe('OneByoneAdapter', () => {
     });
   });
 
+  describe('weight-stability gate (#284)', () => {
+    function cfFrame(weightKg: number): Buffer {
+      const buf = Buffer.alloc(10);
+      buf[0] = 0xcf;
+      buf.writeUInt16LE(Math.round(weightKg * 100), 3);
+      buf[9] = 1; // impedance invalid — isolate the weight-stability behaviour
+      return buf;
+    }
+
+    it('resolves only once two consecutive frames report the same weight', () => {
+      const adapter = makeAdapter();
+
+      const f1 = adapter.parseNotification(cfFrame(80.2))!;
+      expect(adapter.isComplete(f1)).toBe(true); // permissive: arms the hold
+      expect(adapter.isFinal!(f1)).toBe(false);
+
+      const f2 = adapter.parseNotification(cfFrame(80.0))!;
+      expect(adapter.isFinal!(f2)).toBe(false); // changed
+
+      const f3 = adapter.parseNotification(cfFrame(80.0))!;
+      expect(adapter.isFinal!(f3)).toBe(true); // stable
+      expect(adapter.completionHoldMs).toBeGreaterThan(0);
+    });
+
+    it('re-arms stability on reconnect', async () => {
+      const adapter = makeAdapter();
+      const ctx = {
+        write: async () => {},
+        read: async () => Buffer.alloc(0),
+        subscribe: async () => {},
+        profile: defaultProfile(),
+        deviceAddress: 'AA:BB:CC:DD:EE:FF',
+      };
+
+      adapter.parseNotification(cfFrame(80));
+      expect(adapter.isFinal!(adapter.parseNotification(cfFrame(80))!)).toBe(true);
+
+      await adapter.onConnected(ctx);
+      expect(adapter.isFinal!(adapter.parseNotification(cfFrame(80))!)).toBe(false);
+    });
+  });
+
   describe('computeMetrics()', () => {
     it('returns valid BodyComposition', () => {
       const adapter = makeAdapter();
