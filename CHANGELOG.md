@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.21.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.20.0...v1.21.0) (2026-07-20)
+
+
+### Added
+
+* **ble:** add weight-only Renpho R-MSC04 scale adapter ([#117](https://github.com/KristianP26/ble-scale-sync/issues/117), [#265](https://github.com/KristianP26/ble-scale-sync/issues/265)) ([f0dc658](https://github.com/KristianP26/ble-scale-sync/commit/f0dc658b2ced52550a98151caba94908b3e8ff07))
+
+
+### Fixed
+
+* **body-comp:** report muscle mass as fat-free mass minus bone ([#253](https://github.com/KristianP26/ble-scale-sync/issues/253)) ([7efa781](https://github.com/KristianP26/ble-scale-sync/commit/7efa7816fab080a0b629266dd1207d27842ee4bd))
+* **runtime:** tick the healthcheck heartbeat on a timer so idle is not unhealthy ([#277](https://github.com/KristianP26/ble-scale-sync/issues/277)) ([2fca68f](https://github.com/KristianP26/ble-scale-sync/commit/2fca68feb0fe921adc6bbfa0681b092798009469))
+* **scales:** claim OEM/rebranded Hutbit ("SWAN") via the 0x02AC manufacturer signature ([#279](https://github.com/KristianP26/ble-scale-sync/issues/279)) ([eb3b669](https://github.com/KristianP26/ble-scale-sync/commit/eb3b669759edb2ef110a306040fb238847131497))
+* **scales:** gate Eufy P2 and 1byone completion on a settled weight ([#284](https://github.com/KristianP26/ble-scale-sync/issues/284)) ([#285](https://github.com/KristianP26/ble-scale-sync/issues/285)) ([7edfe6c](https://github.com/KristianP26/ble-scale-sync/commit/7edfe6c5ef463ff4d45678cabcb335fe81d514f9))
+* **scales:** narrow the Hutbit OEM claim and pass mfg data on noble target-MAC ([#278](https://github.com/KristianP26/ble-scale-sync/issues/278)) ([9d17405](https://github.com/KristianP26/ble-scale-sync/commit/9d174056bc8c52c4fb92fa7527bcd1fe3b2898a1))
+* **scales:** route Beurer BF788 and BF950 to the SIG consent adapter ([#229](https://github.com/KristianP26/ble-scale-sync/issues/229), [#255](https://github.com/KristianP26/ble-scale-sync/issues/255)) ([5cd3f92](https://github.com/KristianP26/ble-scale-sync/commit/5cd3f929e496d25fb7e0e14b28faa14f79e8a974))
+* **scales:** stop the Beurer adapter hijacking its siblings, and honour lb frames ([c5362a2](https://github.com/KristianP26/ble-scale-sync/commit/c5362a2baefcafe8d5a659e947e3d0064e220c40))
+
+
+### Docs
+
+* document the shipped Renpho R-MSC04 adapter and its weight-only limitation ([#117](https://github.com/KristianP26/ble-scale-sync/issues/117)) ([8ece358](https://github.com/KristianP26/ble-scale-sync/commit/8ece358543352d1debfe06318ccd991bfe191f48))
+
 ## [1.20.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.19.0...v1.20.0) (2026-07-13)
 
 
