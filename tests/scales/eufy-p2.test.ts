@@ -135,9 +135,9 @@ describe('buildSubContract', () => {
 });
 
 describe('parseWeightNotification', () => {
-  it('parses final weight + impedance', () => {
+  it('parses final weight; impedance is weight-only (bytes 8..10 are not a usable resistance, #289)', () => {
     const buf = makeNotification(83.45, 543);
-    expect(parseWeightNotification(buf)).toEqual({ weight: 83.45, impedance: 543 });
+    expect(parseWeightNotification(buf)).toEqual({ weight: 83.45, impedance: 0 });
   });
 
   it('returns null for non-final frame', () => {

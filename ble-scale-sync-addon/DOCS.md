@@ -107,7 +107,7 @@ Both transports work without `host_dbus` or any host Bluetooth at all.
 
 ## Supported Scales
 
-20+ BLE smart scale brands are supported, including Xiaomi (Mi Scale 2), Renpho (Elis 1, FITINDEX, Sencor, QN-Scale), Eufy (incl. P2 / P2 Pro), Yunmai, Beurer, Sanitas, Medisana, Trisa / ADE, and more.
+25+ BLE smart scale brands are supported, including Xiaomi (Mi Scale 2), Renpho (Elis 1, FITINDEX, Sencor, QN-Scale), Eufy (incl. P2 / P2 Pro), Yunmai, Beurer, Sanitas, Medisana, Trisa / ADE, and more.
 
 See the [full list](https://blescalesync.dev/guide/supported-scales).
 

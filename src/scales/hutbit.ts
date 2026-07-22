@@ -107,6 +107,12 @@ export class HutbitAdapter implements ScaleAdapterCore, GattWiring {
   }
 
   parseNotification(data: Buffer): ScaleReading | null {
+    // Log every raw frame before any gate so a wrong shape/length is visible
+    // (the `Hutbit frame:` line below only fires after the checksum gate). This
+    // is what disambiguates "frames arrive but are rejected" from "frames never
+    // arrive" on the ESPHome proxy transport (#291); mirrors QN / ADE-A2.
+    bleLog.debug(`Hutbit RAW (${data.length}B): ${data.toString('hex')}`);
+
     // Fixed 8-byte AC02 weight frame: AC 02 [weight u16 BE] 00 00 [STATUS] [CKSUM]
     if (data.length !== FRAME_LEN) return null;
     if (data[0] !== FRAME_HEADER0 || data[1] !== FRAME_HEADER1) return null;

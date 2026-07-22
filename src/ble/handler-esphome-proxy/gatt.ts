@@ -112,8 +112,25 @@ export async function openGattSession(
           const listener = (raw: unknown): void => {
             if (closed) return;
             const m = raw as EsphomeNotifyData;
-            if (m.address === addr && m.handle === handle) {
-              onData(Buffer.from(m.dataList ?? []));
+            if (m.address !== addr) return;
+            if (m.handle === handle) {
+              const buf = Buffer.from(m.dataList ?? []);
+              bleLog.debug(
+                `ESPHome notify handle 0x${handle.toString(16)} (${buf.length}B): ${buf.toString('hex')}`,
+              );
+              onData(buf);
+            } else {
+              // A notify for this device on a handle this listener did not
+              // subscribe to. Expected on multi-notify adapters (one listener per
+              // characteristic, and every listener sees every event); but for a
+              // single-notify adapter it means the discovered characteristic handle
+              // and the notify-event handle disagree, so notifications are being
+              // silently dropped here (#291).
+              const evtHandle =
+                typeof m.handle === 'number' ? `0x${m.handle.toString(16)}` : String(m.handle);
+              bleLog.debug(
+                `ESPHome notify handle mismatch: event ${evtHandle} != subscribed 0x${handle.toString(16)} for this device`,
+              );
             }
           };
           return track(NOTIFY_EVENT, listener);
