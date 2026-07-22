@@ -97,6 +97,54 @@ async function ensureBonded(device: Device, pin: number | undefined): Promise<vo
 }
 
 /**
+ * Acquire the GATT server, tolerating consent-and-bond scales (e.g. Beurer
+ * BF950) that withhold GATT service resolution until the link is encrypted, so
+ * the very first `device.gatt()` never resolves and times out (#290). On that
+ * timeout, if the matched adapter requires bonding and the device is not yet
+ * bonded, pair first (ensureBonded registers the PIN agent) and retry the
+ * acquisition exactly once.
+ *
+ * The normal path is untouched: the retry only runs after a timeout, so scales
+ * that already resolve their services unbonded (e.g. Beurer BF720, whose
+ * gatt() succeeds and only its CCCDs need the later bond) behave exactly as
+ * before and never enter the retry. withTimeout races gatt() against a timer via
+ * Promise.race, which keeps a reaction attached to the gatt() promise, so a late
+ * rejection after the timeout is already handled and cannot surface as an
+ * unhandled rejection.
+ */
+export async function acquireGattServer(
+  device: Device,
+  adapter: ScaleAdapter | undefined,
+  pin: number | undefined,
+  // Injectable so the branch logic (bond gate, already-bonded rethrow,
+  // single retry) is unit-testable without a live D-Bus. Defaults to the real
+  // ensureBonded in production.
+  bond: (d: Device, p: number | undefined) => Promise<void> = ensureBonded,
+): Promise<NodeBle.GattServer> {
+  const acquire = (): Promise<NodeBle.GattServer> =>
+    withTimeout(device.gatt(), GATT_DISCOVERY_TIMEOUT_MS, 'GATT server acquisition timed out');
+  try {
+    return await acquire();
+  } catch (err) {
+    if (!adapter?.requiresBonding) throw err;
+    let alreadyBonded = false;
+    try {
+      alreadyBonded = (await device.isPaired()) as unknown as boolean;
+    } catch {
+      alreadyBonded = false;
+    }
+    // Already bonded but still timing out means the stall is not a missing bond;
+    // pairing again would not help, so surface the original timeout.
+    if (alreadyBonded) throw err;
+    bleLog.info(
+      'GATT discovery timed out on a scale that requires bonding; pairing first, then retrying discovery once (#290)...',
+    );
+    await bond(device, pin);
+    return await acquire();
+  }
+}
+
+/**
  * Scan for a BLE scale, read weight + impedance, and compute body composition.
  * Uses node-ble (BlueZ D-Bus). Requires bluetoothd running on Linux.
  *
@@ -253,11 +301,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       // D-Bus ServicesResolved property forever, freezing the event loop after
       // connect but before the scan cycle fails, so the consecutive-failure
       // watchdog never trips (#273).
-      const gatt = await withTimeout(
-        device.gatt(),
-        GATT_DISCOVERY_TIMEOUT_MS,
-        'GATT server acquisition timed out',
-      );
+      const gatt = await acquireGattServer(device, preMatchedAdapter, scaleAuth?.pin);
       const serviceUuids = await gatt.services();
       bleLog.debug(`Services: [${serviceUuids.join(', ')}]`);
 
@@ -328,11 +372,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     // the first enumeration can be missing chars the scale actually exposes.
     // Retry the enumeration a few times with a short backoff when we detect
     // that the adapter's required chars are not yet present.
-    const gatt = await withTimeout(
-      device.gatt(),
-      GATT_DISCOVERY_TIMEOUT_MS,
-      'GATT server acquisition timed out',
-    );
+    const gatt = await acquireGattServer(device, matchedAdapter, scaleAuth?.pin);
     let charMap = await withTimeout(
       buildCharMap(gatt),
       GATT_DISCOVERY_TIMEOUT_MS,
