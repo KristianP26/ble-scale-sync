@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.21.1](https://github.com/KristianP26/ble-scale-sync/compare/v1.21.0...v1.21.1) (2026-07-22)
+
+
+### Fixed
+
+* **ble:** bond and retry GATT discovery for consent scales on timeout ([a3a828e](https://github.com/KristianP26/ble-scale-sync/commit/a3a828e869baf9a5dc886871b31355a6a6e5ef69))
+* **scales:** treat Eufy P2/P2 Pro GATT reading as weight-only ([76ca675](https://github.com/KristianP26/ble-scale-sync/commit/76ca67532ede4abce150d7f312988c531aa587a4))
+
+
+### Docs
+
+* correct adapter and exporter counts, add Robi S9 row ([87b6bbd](https://github.com/KristianP26/ble-scale-sync/commit/87b6bbd1d1d1478523ca2bf7260406b7b1a72e59))
+
 ## [1.21.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.20.0...v1.21.0) (2026-07-20)
 
 
