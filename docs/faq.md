@@ -62,7 +62,7 @@ Yes. Set `update_check: false` in `config.yaml`, or run with `CI=true` in the en
 
 ### Is my scale supported?
 
-Check the [supported scales](/guide/supported-scales) page for the full list of 30 adapters. Coverage includes Xiaomi, Renpho (Elis 1, FITINDEX, Sencor, QN Scale), Eufy, Yunmai, Beurer (incl. BF720 / BF105 / BF500 / BF788 / BF950), Sanitas, Medisana, Soehnle, and many unbranded Asian scales that reuse the Renpho or QN protocol. Auto-detect matches most devices without any MAC pinning.
+Check the [supported scales](/guide/supported-scales) page for the full list of 29 adapters. Coverage includes Xiaomi, Renpho (Elis 1, FITINDEX, Sencor, QN Scale), Eufy, Yunmai, Beurer (incl. BF720 / BF105 / BF500 / BF788 / BF950), Sanitas, Medisana, Soehnle, and many unbranded Asian scales that reuse the Renpho or QN protocol. Auto-detect matches most devices without any MAC pinning.
 
 ### My scale is not listed. Can I add it?
 
