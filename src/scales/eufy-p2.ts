@@ -43,7 +43,7 @@ import type { MatchDescriptor } from './match-descriptor.js';
  *   [0]    0xCF signature
  *   [2]    0x00
  *   [6..7] weight LE  / 100 = kg
- *   [8..10] NOT a usable resistance — upstream keeps this decode disabled (#289)
+ *   [8..10] NOT a usable resistance; upstream keeps this decode disabled (#289)
  *   [12]   0x00 when final (stable) reading
  *
  * Advertisement frame (19 bytes of vendor data, company ID 0xFF48):
