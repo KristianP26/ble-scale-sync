@@ -43,7 +43,7 @@ import type { MatchDescriptor } from './match-descriptor.js';
  *   [0]    0xCF signature
  *   [2]    0x00
  *   [6..7] weight LE  / 100 = kg
- *   [8..10] impedance LE24
+ *   [8..10] NOT a usable resistance — upstream keeps this decode disabled (#289)
  *   [12]   0x00 when final (stable) reading
  *
  * Advertisement frame (19 bytes of vendor data, company ID 0xFF48):
@@ -268,8 +268,13 @@ export function parseWeightNotification(data: Buffer): ScaleReading | null {
   const isFinal = data[12] === 0x00;
   if (!isFinal) return null;
 
-  const impedance = (data[10] << 16) | (data[9] << 8) | data[8];
-  return { weight, impedance };
+  // Bytes 8..10 are NOT a usable resistance. The upstream reference
+  // (bdr99/eufylife-ble-client) keeps this decode commented out for T9148/T9149;
+  // real P2/P2 Pro hardware yields millions of Ohm here (#289), which
+  // computeBiaFat then clamps to a bogus fixed 60% body fat. Treat the GATT path
+  // as weight-only, exactly like the broadcast path (parseEufyAdvertisement), and
+  // let the shared BMI/Deurenberg fallback estimate body composition.
+  return { weight, impedance: 0 };
 }
 
 /** Parse 19-byte advertisement vendor payload. Returns null if not a final reading. */
@@ -392,8 +397,10 @@ export class EufyP2Adapter
   }
 
   isComplete(reading: ScaleReading): boolean {
-    // Broadcast readings have impedance=0 (passive mode, no BIA).
-    // Authenticated GATT readings have non-zero impedance from the scale.
+    // Both paths are weight-only: the broadcast advertisement carries no BIA, and
+    // the GATT frame's bytes 8..10 are not a usable resistance (#289), so
+    // parseWeightNotification also emits impedance 0. The impedance>0 branch is a
+    // defensive no-op kept for a future real-impedance decode.
     if (reading.impedance === 0) return reading.weight > 0;
     return reading.weight > MIN_WEIGHT_KG && reading.impedance > 200;
   }
