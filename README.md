@@ -112,6 +112,8 @@ Requires Node.js v22+ and a BLE adapter. See the **[full install guide](https://
 <td align="center"><a href="https://github.com/fromport"><img src="https://avatars.githubusercontent.com/u/5751308?v=4" width="60" height="60" alt="fromport"><br><sub>fromport</sub></a></td>
 <td align="center"><a href="https://github.com/boildead"><img src="https://avatars.githubusercontent.com/u/17303016?v=4" width="60" height="60" alt="boildead"><br><sub>boildead</sub></a></td>
 <td align="center"><a href="https://github.com/alexw23"><img src="https://avatars.githubusercontent.com/u/1505496?v=4" width="60" height="60" alt="alexw23"><br><sub>alexw23</sub></a></td>
+<td align="center"><a href="https://github.com/bondesen"><img src="https://avatars.githubusercontent.com/u/4944294?v=4" width="60" height="60" alt="bondesen"><br><sub>bondesen</sub></a></td>
+<td align="center"><a href="https://github.com/junaidk"><img src="https://avatars.githubusercontent.com/u/1422281?v=4" width="60" height="60" alt="junaidk"><br><sub>junaidk</sub></a></td>
 </tr></table>
 
 ## Contributing
