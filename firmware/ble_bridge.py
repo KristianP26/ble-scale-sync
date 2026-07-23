@@ -582,23 +582,45 @@ class BleBridge:
         if not char:
             return
 
+        can_notify = bool(char.properties & bluetooth.FLAG_NOTIFY)
+        can_indicate = bool(char.properties & bluetooth.FLAG_INDICATE)
+        if not can_notify and not can_indicate:
+            # Nothing to consume: no CCCD to write and notified()/indicated()
+            # would both raise ValueError("Unsupported"). Skip cleanly.
+            print(f"Subscribe: {uuid_str} supports neither notify nor indicate, skipping")
+            return
+
         # Enable notify/indicate on the peripheral. aioble's notified() only
         # consumes events; it does not turn on the CCCD bit itself.
         print(f"Subscribe: enabling CCCD for {uuid_str}")
         try:
-            await char.subscribe(
-                notify=bool(char.properties & bluetooth.FLAG_NOTIFY),
-                indicate=bool(char.properties & bluetooth.FLAG_INDICATE),
-            )
+            await char.subscribe(notify=can_notify, indicate=can_indicate)
         except Exception as e:
             print(f"Subscribe: CCCD enable failed for {uuid_str}: {type(e).__name__}: {e}")
             raise
         print(f"Subscribe: CCCD enabled for {uuid_str}")
 
+        # Read from the queue the characteristic actually feeds. aioble's
+        # notified() raises ValueError("Unsupported") on an indicate-only char
+        # (Robi S9 FFB3 result), which killed the read task and left the final
+        # A3 frame undelivered (#248). A char exposing BOTH flags is drained via
+        # notified() by convention; this assumes such a device streams via
+        # notify rather than indicate, which holds for every registry scale.
+        prefer_indicate = can_indicate and not can_notify
+
         async def _notify_loop():
             try:
                 while self._conn and self._conn.is_connected():
-                    data = await char.notified(timeout_ms=10000)
+                    try:
+                        if prefer_indicate:
+                            data = await char.indicated(timeout_ms=10000)
+                        else:
+                            data = await char.notified(timeout_ms=10000)
+                    except asyncio.TimeoutError:
+                        # No data in the 10s window but the link is still up
+                        # (the final result frame can lag the live stream).
+                        # Re-arm instead of killing the reader for good (#248).
+                        continue
                     if data:
                         await publish_fn(uuid_str, bytes(data))
             except asyncio.CancelledError:

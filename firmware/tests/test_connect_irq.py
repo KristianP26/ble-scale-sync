@@ -101,21 +101,55 @@ class _FakeChar:
 
 
 class _SubscribableFakeChar:
-    """Models aioble's ClientCharacteristic subscribe/notified surface. Records
-    whether subscribe() was awaited and with which CCCD flags, and lets the
-    notify loop block until cancelled so tests can assert on the subscribe call
-    without the loop racing ahead (#231)."""
+    """Models aioble's ClientCharacteristic subscribe/notified/indicated surface.
+    Records whether subscribe() was awaited and with which CCCD flags, counts
+    notified()/indicated() calls, and mirrors aioble's _check(): notified()
+    requires FLAG_NOTIFY and indicated() requires FLAG_INDICATE, else both raise
+    ValueError("Unsupported") (#248). With *_data set, the matching read returns
+    it once; otherwise it blocks until cancelled so subscribe-only tests can
+    assert without the loop racing ahead (#231)."""
 
-    def __init__(self, uuid, properties):
+    def __init__(
+        self, uuid, properties, indicate_data=None, notify_data=None,
+        timeouts_before_data=0,
+    ):
         self.uuid = uuid
         self.properties = properties
         self.subscribed = []  # list of (notify, indicate) tuples
+        self.notified_calls = 0
+        self.indicated_calls = 0
+        self._indicate_data = indicate_data
+        self._notify_data = notify_data
+        # Number of leading reads that raise asyncio.TimeoutError (10s idle)
+        # before data is delivered, mirroring aioble's DeviceTimeout (#248).
+        self._timeouts = timeouts_before_data
 
     async def subscribe(self, notify=True, indicate=False):
         self.subscribed.append((notify, indicate))
 
+    def _maybe_timeout(self):
+        if self._timeouts > 0:
+            self._timeouts -= 1
+            raise asyncio.TimeoutError
+
     async def notified(self, timeout_ms=None):
-        # Block forever; real firmware loops until cancelled/disconnected.
+        self.notified_calls += 1
+        if not (self.properties & _bt.FLAG_NOTIFY):
+            raise ValueError("Unsupported")
+        self._maybe_timeout()
+        if self._notify_data is not None:
+            data, self._notify_data = self._notify_data, None
+            return data
+        await asyncio.Event().wait()
+
+    async def indicated(self, timeout_ms=None):
+        self.indicated_calls += 1
+        if not (self.properties & _bt.FLAG_INDICATE):
+            raise ValueError("Unsupported")
+        self._maybe_timeout()
+        if self._indicate_data is not None:
+            data, self._indicate_data = self._indicate_data, None
+            return data
         await asyncio.Event().wait()
 
 
@@ -402,6 +436,105 @@ class TestStartNotifySubscribesCccd(unittest.IsolatedAsyncioTestCase):
         await bridge.start_notify(char.uuid, publish_fn)
         self.assertEqual(char.subscribed, [(False, True)])
         await bridge.disconnect()
+
+    async def test_indicate_only_char_read_via_indicated(self):
+        """An indicate-only char (Robi S9 FFB3 result) must be read with
+        indicated(); the old code called notified() which raises
+        Unsupported, killing the loop before the A3 frame arrived (#248)."""
+        bridge = ble_bridge.BleBridge()
+        char = _SubscribableFakeChar(
+            "0000ffb3-0000-1000-8000-00805f9b34fb",
+            _bt.FLAG_INDICATE,
+            indicate_data=b"\xaa\x02\x00\xa3\x30\x00\x00\x00",
+        )
+        bridge._chars[char.uuid] = char
+        bridge._conn = _FakeConn()
+
+        got = []
+        done = asyncio.Event()
+
+        async def publish_fn(uuid, data):
+            got.append((uuid, data))
+            done.set()
+
+        await bridge.start_notify(char.uuid, publish_fn)
+        await asyncio.wait_for(done.wait(), 1.0)
+        self.assertGreaterEqual(char.indicated_calls, 1)
+        self.assertEqual(char.notified_calls, 0)  # notify queue never touched
+        self.assertEqual(got, [(char.uuid, b"\xaa\x02\x00\xa3\x30\x00\x00\x00")])
+        await bridge.disconnect()
+
+    async def test_read_rearms_after_timeout(self):
+        """A 10s idle raises asyncio.TimeoutError; the loop must re-arm and keep
+        reading while connected, not die and drop a late final frame (#248)."""
+        bridge = ble_bridge.BleBridge()
+        char = _SubscribableFakeChar(
+            "0000ffb3-0000-1000-8000-00805f9b34fb",
+            _bt.FLAG_INDICATE,
+            indicate_data=b"\xaa\x02\x00\xa3\x30\x00\x00\x00",
+            timeouts_before_data=1,
+        )
+        bridge._chars[char.uuid] = char
+        bridge._conn = _FakeConn()
+
+        got = []
+        done = asyncio.Event()
+
+        async def publish_fn(uuid, data):
+            got.append((uuid, data))
+            done.set()
+
+        await bridge.start_notify(char.uuid, publish_fn)
+        await asyncio.wait_for(done.wait(), 1.0)
+        self.assertGreaterEqual(char.indicated_calls, 2)  # timed out once, then delivered
+        self.assertEqual(got, [(char.uuid, b"\xaa\x02\x00\xa3\x30\x00\x00\x00")])
+        await bridge.disconnect()
+
+    async def test_dual_notify_indicate_char_read_via_notified(self):
+        """A char exposing BOTH notify and indicate is drained via notified()
+        (streaming push, no per-frame ATT confirmation). Locks the design
+        choice so a refactor cannot silently flip it to indicated() (#248)."""
+        bridge = ble_bridge.BleBridge()
+        char = _SubscribableFakeChar(
+            "0000fff1-0000-1000-8000-00805f9b34fb",
+            _bt.FLAG_NOTIFY | _bt.FLAG_INDICATE,
+            notify_data=b"\x10\x20",
+        )
+        bridge._chars[char.uuid] = char
+        bridge._conn = _FakeConn()
+
+        got = []
+        done = asyncio.Event()
+
+        async def publish_fn(uuid, data):
+            got.append((uuid, data))
+            done.set()
+
+        await bridge.start_notify(char.uuid, publish_fn)
+        await asyncio.wait_for(done.wait(), 1.0)
+        self.assertGreaterEqual(char.notified_calls, 1)
+        self.assertEqual(char.indicated_calls, 0)
+        self.assertEqual(got, [(char.uuid, b"\x10\x20")])
+        await bridge.disconnect()
+
+    async def test_neither_flag_char_is_skipped(self):
+        """A char with neither notify nor indicate must not be subscribed and
+        must not spawn a read task that would raise Unsupported (#248 guard)."""
+        bridge = ble_bridge.BleBridge()
+        char = _SubscribableFakeChar(
+            "0000dead-0000-1000-8000-00805f9b34fb", _bt.FLAG_READ
+        )
+        bridge._chars[char.uuid] = char
+        bridge._conn = _FakeConn()
+
+        async def publish_fn(_uuid, _data):
+            pass
+
+        await bridge.start_notify(char.uuid, publish_fn)
+        self.assertEqual(char.subscribed, [])
+        self.assertEqual(bridge._notify_tasks, [])
+        # No disconnect() cleanup needed: the guard returns before any read task
+        # is spawned, so there is nothing to cancel.
 
     async def test_missing_char_is_noop(self):
         bridge = ble_bridge.BleBridge()
