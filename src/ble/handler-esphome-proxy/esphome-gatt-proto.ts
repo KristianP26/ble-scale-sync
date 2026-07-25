@@ -79,10 +79,7 @@ export interface EsphomeNotifyData {
  * `data` — never `dataList` (#291). Accept every shape the library could
  * produce: base64 string, Uint8Array/Buffer, or a legacy `dataList` array.
  */
-export function esphomeGattPayload(m: {
-  data?: string | Uint8Array;
-  dataList?: number[];
-}): Buffer {
+export function esphomeGattPayload(m: { data?: string | Uint8Array; dataList?: number[] }): Buffer {
   if (typeof m.data === 'string') return Buffer.from(m.data, 'base64');
   if (m.data instanceof Uint8Array) return Buffer.from(m.data);
   if (Array.isArray(m.dataList)) return Buffer.from(m.dataList);
