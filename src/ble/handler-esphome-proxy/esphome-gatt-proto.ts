@@ -64,7 +64,29 @@ export interface EsphomeGattServicesResponse {
 export interface EsphomeNotifyData {
   address: number;
   handle: number;
-  dataList: number[];
+  /** protobuf-JS `toObject()` renders the `bytes data = 3` field as a base64
+   * string named `data`; some historical library shapes used a `dataList`
+   * number array instead. Both are optional so either shape type-checks. */
+  data?: string | Uint8Array;
+  dataList?: number[];
+}
+
+/**
+ * Decode the payload of an ESPHome GATT read/notify response.
+ *
+ * @2colors/esphome-native-api emits `message.toObject()` for GATT responses
+ * unmapped, and protobuf-JS renders a `bytes` field as a base64 string named
+ * `data` — never `dataList` (#291). Accept every shape the library could
+ * produce: base64 string, Uint8Array/Buffer, or a legacy `dataList` array.
+ */
+export function esphomeGattPayload(m: {
+  data?: string | Uint8Array;
+  dataList?: number[];
+}): Buffer {
+  if (typeof m.data === 'string') return Buffer.from(m.data, 'base64');
+  if (m.data instanceof Uint8Array) return Buffer.from(m.data);
+  if (Array.isArray(m.dataList)) return Buffer.from(m.dataList);
+  return Buffer.alloc(0);
 }
 
 export interface EsphomeDeviceConnection {

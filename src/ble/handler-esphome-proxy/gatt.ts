@@ -3,6 +3,7 @@ import { bleLog, errMsg, normalizeUuid } from '../types.js';
 import type { EsphomeClient, EsphomeConnection } from './client.js';
 import { macToInt } from './advert.js';
 import {
+  esphomeGattPayload,
   esphomeUuidToString,
   type EsphomeGattServicesResponse,
   type EsphomeNotifyData,
@@ -91,9 +92,10 @@ export async function openGattSession(
       const char: BleChar = {
         async read(): Promise<Buffer> {
           const r = (await conn.readBluetoothGATTCharacteristicService(addr, handle)) as {
-            dataList: number[];
+            data?: string | Uint8Array;
+            dataList?: number[];
           };
-          return Buffer.from(r.dataList ?? []);
+          return esphomeGattPayload(r);
         },
         async write(data: Buffer, withResponse: boolean): Promise<void> {
           if (closed) return;
@@ -114,7 +116,7 @@ export async function openGattSession(
             const m = raw as EsphomeNotifyData;
             if (m.address !== addr) return;
             if (m.handle === handle) {
-              const buf = Buffer.from(m.dataList ?? []);
+              const buf = esphomeGattPayload(m);
               bleLog.debug(
                 `ESPHome notify handle 0x${handle.toString(16)} (${buf.length}B): ${buf.toString('hex')}`,
               );
