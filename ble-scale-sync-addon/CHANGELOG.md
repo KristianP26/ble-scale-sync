@@ -7,6 +7,28 @@
 The add-on version always matches the application version, so every entry below
 applies to this add-on.
 
+## [1.21.2](https://github.com/KristianP26/ble-scale-sync/compare/v1.21.1...v1.21.2) (2026-07-27)
+
+
+### Fixed
+
+* **addon:** generate the add-on changelog from the project changelog ([#294](https://github.com/KristianP26/ble-scale-sync/issues/294)) ([249197e](https://github.com/KristianP26/ble-scale-sync/commit/249197e9db7724adc79c1b94c9a70c4431cd6971))
+* **ble:** also treat a bluetoothd UnknownObject on a device path as a dropped peer ([#297](https://github.com/KristianP26/ble-scale-sync/issues/297)) ([943bc81](https://github.com/KristianP26/ble-scale-sync/commit/943bc8174267a8d86ad841689f13f63a844921aa))
+* **ble:** connect with discovery active when BlueZ drops the peer object ([#297](https://github.com/KristianP26/ble-scale-sync/issues/297)) ([86f3b87](https://github.com/KristianP26/ble-scale-sync/commit/86f3b8755f01878c9bc9fb156df2b8513bc4463a))
+* **ble:** correct defects found reviewing the issue sweep ([#296](https://github.com/KristianP26/ble-scale-sync/issues/296), [#252](https://github.com/KristianP26/ble-scale-sync/issues/252), [#229](https://github.com/KristianP26/ble-scale-sync/issues/229)) ([74ad3a6](https://github.com/KristianP26/ble-scale-sync/commit/74ad3a60887201a450e85a3a875c417ae511fb09))
+* **ble:** decode esphome GATT payloads from the base64 data field ([#291](https://github.com/KristianP26/ble-scale-sync/issues/291)) ([2c868dc](https://github.com/KristianP26/ble-scale-sync/commit/2c868dc93fee876af80b520bfc18513bad433a35))
+* **ble:** write the CCCD over the ESPHome proxy so scales actually notify ([#252](https://github.com/KristianP26/ble-scale-sync/issues/252)) ([32e5af1](https://github.com/KristianP26/ble-scale-sync/commit/32e5af19642e820bac06661090d3a8a7f578f2c7))
+* **ci:** fetch the release branch with a refspec so the add-on changelog sync can check it out ([#300](https://github.com/KristianP26/ble-scale-sync/issues/300)) ([5569e96](https://github.com/KristianP26/ble-scale-sync/commit/5569e9615536d9845205a98374f87f2e384a2e10))
+* **firmware:** end a GATT session the host never finishes so scanning resumes ([#296](https://github.com/KristianP26/ble-scale-sync/issues/296)) ([73ded71](https://github.com/KristianP26/ble-scale-sync/commit/73ded716e996cc89df3402df1b5adfa976f4a7c3))
+* **firmware:** read indicate-only chars via indicated() so Robi S9 FFB3 result reaches the adapter ([#248](https://github.com/KristianP26/ble-scale-sync/issues/248)) ([9036d00](https://github.com/KristianP26/ble-scale-sync/commit/9036d0027ca311dcc63a24a089b1bf5cd564832a))
+* **scales:** commit the Beurer user profile after consent so the scale finishes ([#229](https://github.com/KristianP26/ble-scale-sync/issues/229)) ([fae6326](https://github.com/KristianP26/ble-scale-sync/commit/fae63267933ea82279a8c6ff6ff928a124cd6945))
+
+
+### Docs
+
+* add bondesen and junaidk to contributors ([e26419a](https://github.com/KristianP26/ble-scale-sync/commit/e26419a13b7232f9b29c21bcf42b110f1c9bf145))
+* **esphome-proxy:** document the CCCD fix and the unbonded-link limit ([#252](https://github.com/KristianP26/ble-scale-sync/issues/252)) ([1bc623f](https://github.com/KristianP26/ble-scale-sync/commit/1bc623f4e35c5464b18c77683e042f2666e6138f))
+
 ## [1.21.1](https://github.com/KristianP26/ble-scale-sync/compare/v1.21.0...v1.21.1) (2026-07-22)
 
 
