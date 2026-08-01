@@ -39,7 +39,7 @@ jobs:
       # source with no install step.
       # Node 24: the generator is TypeScript run directly, which needs the
       # native type stripping that only recent Node has enabled by default.
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
 
