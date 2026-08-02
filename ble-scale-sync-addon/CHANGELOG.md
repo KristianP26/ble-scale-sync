@@ -7,6 +7,13 @@
 The add-on version always matches the application version, so every entry below
 applies to this add-on.
 
+## [1.22.1](https://github.com/KristianP26/ble-scale-sync/compare/v1.22.0...v1.22.1) (2026-08-02)
+
+
+### Fixed
+
+* **ble:** tear down the replacement client when an ESPHome rebuild fails ([#303](https://github.com/KristianP26/ble-scale-sync/issues/303)) ([be875dd](https://github.com/KristianP26/ble-scale-sync/commit/be875dd82f05db57e0fe83697f1bae8d42668914))
+
 ## [1.22.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.21.2...v1.22.0) (2026-08-02)
 
 
