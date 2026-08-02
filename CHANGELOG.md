@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.22.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.21.2...v1.22.0) (2026-08-02)
+
+
+### Added
+
+* **ble:** add an opt-in ESPHome advertisement liveness watchdog ([#303](https://github.com/KristianP26/ble-scale-sync/issues/303), [#281](https://github.com/KristianP26/ble-scale-sync/issues/281)) ([2d0a8bc](https://github.com/KristianP26/ble-scale-sync/commit/2d0a8bcc4dca08fe73b447ee63fd47c5f0a30389))
+
+
+### Fixed
+
+* **ble:** handle D-Bus transport errors and bound the poll cycle ([#290](https://github.com/KristianP26/ble-scale-sync/issues/290)) ([8915190](https://github.com/KristianP26/ble-scale-sync/commit/891519068333b98da6568bd286784ddb19c90ecf))
+* **ble:** log the ESPHome proxy client lifecycle and guarantee teardown ([#303](https://github.com/KristianP26/ble-scale-sync/issues/303), [#281](https://github.com/KristianP26/ble-scale-sync/issues/281)) ([8a4b5d5](https://github.com/KristianP26/ble-scale-sync/commit/8a4b5d569cd8221f7c9cccf595f66232886b7c6a))
+* **ble:** name the stale bond behind le-connection-abort-by-local ([#290](https://github.com/KristianP26/ble-scale-sync/issues/290), [#229](https://github.com/KristianP26/ble-scale-sync/issues/229)) ([04e7012](https://github.com/KristianP26/ble-scale-sync/commit/04e7012835504df240aa1199334c2010bdccf340))
+* **ble:** re-send a send-once unlock after notifications are enabled ([#283](https://github.com/KristianP26/ble-scale-sync/issues/283)) ([78d2cbb](https://github.com/KristianP26/ble-scale-sync/commit/78d2cbb092c230de888ed9fd6c462862b4615e61))
+* **ble:** register the BlueZ pairing agent for already-bonded scales ([#83](https://github.com/KristianP26/ble-scale-sync/issues/83)) ([fc2a568](https://github.com/KristianP26/ble-scale-sync/commit/fc2a568ba92c25f0994a20cda5c8904a6e78b786))
+* **ble:** stop retrying the BlueZ default-agent role once it is unavailable ([#83](https://github.com/KristianP26/ble-scale-sync/issues/83)) ([baa83ec](https://github.com/KristianP26/ble-scale-sync/commit/baa83ec772cc499a62072c0a7d72bd173061c890))
+* **ci:** check out the release branch without tracking so the add-on changelog sync runs ([#301](https://github.com/KristianP26/ble-scale-sync/issues/301)) ([eaa2002](https://github.com/KristianP26/ble-scale-sync/commit/eaa20025145bba80a0678e19c0e6a7f116bfe429))
+* **scales:** dispatch QN AE02 frames separately and subscribe to AE02 once ([#75](https://github.com/KristianP26/ble-scale-sync/issues/75), [#235](https://github.com/KristianP26/ble-scale-sync/issues/235)) ([c3c5fb0](https://github.com/KristianP26/ble-scale-sync/commit/c3c5fb01e63f5df66478a4c750de74a51303e2fe))
+* **scales:** log the QN frame that the weight parser discards ([#75](https://github.com/KristianP26/ble-scale-sync/issues/75), [#235](https://github.com/KristianP26/ble-scale-sync/issues/235)) ([6fcff59](https://github.com/KristianP26/ble-scale-sync/commit/6fcff593fb98b7995f2fad83c0b28f5c34976562))
+
+
+### Docs
+
+* resolve the Bluetooth group GID instead of hardcoding 112 ([#311](https://github.com/KristianP26/ble-scale-sync/issues/311)) ([734e5d7](https://github.com/KristianP26/ble-scale-sync/commit/734e5d7638823e695ef71a7ffa3cead3a49590a9))
+* **scales:** correct the Eufy P2 impedance claim and the R-MSC04 blocker ([#289](https://github.com/KristianP26/ble-scale-sync/issues/289), [#117](https://github.com/KristianP26/ble-scale-sync/issues/117)) ([179d9b0](https://github.com/KristianP26/ble-scale-sync/commit/179d9b04aa57a0ad1050d7c0b25687b754c88baa))
+
 ## [1.21.2](https://github.com/KristianP26/ble-scale-sync/compare/v1.21.1...v1.21.2) (2026-07-27)
 
 
