@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.22.1](https://github.com/KristianP26/ble-scale-sync/compare/v1.22.0...v1.22.1) (2026-08-02)
+
+
+### Fixed
+
+* **ble:** tear down the replacement client when an ESPHome rebuild fails ([#303](https://github.com/KristianP26/ble-scale-sync/issues/303)) ([be875dd](https://github.com/KristianP26/ble-scale-sync/commit/be875dd82f05db57e0fe83697f1bae8d42668914))
+
 ## [1.22.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.21.2...v1.22.0) (2026-08-02)
 
 
