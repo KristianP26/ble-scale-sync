@@ -29,6 +29,8 @@ import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
 const FIXTURES: Record<string, BleDeviceInfo> = {
   'Eufy Smart Scale P2/P2 Pro': { localName: 'eufy T9149', serviceUuids: [] },
   'Senssun Fat Scale': { localName: 'senssun fat', serviceUuids: [] },
+  // Lifesense OEM vendor service 0xA602; shares nothing with the 0xFFF0 family.
+  'A&D UC-450BLE': { localName: 'UC-450BLE-CV_AF4936', serviceUuids: ['a602'] },
   'QN Scale': { localName: 'QN-Scale', serviceUuids: ['fff0'] },
   // #191: a real ES-WBE28 advertises SIG WSS/BCS (0x181D/0x181B) and no QN
   // vendor service, so QN now defers and it resolves to RenphoScaleAdapter.

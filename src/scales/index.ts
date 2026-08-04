@@ -28,6 +28,7 @@ import { MgbAdapter } from './mgb.js';
 import { HoffenAdapter } from './hoffen.js';
 import { SenssunAdapter } from './senssun.js';
 import { EufyP2Adapter } from './eufy-p2.js';
+import { Uc450bleAdapter } from './uc-450ble.js';
 import { StandardGattScaleAdapter } from './standard-gatt.js';
 import { registerExclusionRegistry } from './derived-excludes.js';
 
@@ -39,6 +40,10 @@ export const adapters: ScaleAdapter[] = [
   // mis-detected as a QN scale; Eufy's company ID 0xFF48 + "eufy T914x" name is specific).
   new EufyP2Adapter(),
   new SenssunAdapter(),
+  // A&D UC-450BLE (Lifesense OEM): unique "UC-450…" name and vendor service
+  // 0xA602, so it collides with nothing — placed here only to keep the
+  // specific-before-generic reading order of this list.
+  new Uc450bleAdapter(),
   new QnScaleAdapter(),
   new RenphoScaleAdapter(),
   // Renpho R-MSC04 (#117/#265): 55AA-framed weight on service 0x1A10. Matched by
