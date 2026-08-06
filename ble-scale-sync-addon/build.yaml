@@ -1,5 +1,10 @@
 # Pin to release version tag at release time (e.g. :1.8.0)
+#
+# TEMPORARY: pointed at the fork's image so the add-on picks up the UC-450BLE
+# adapter, which only exists in this branch. Upstream's :latest is built from
+# upstream src/ and does not contain it. Revert to
+# ghcr.io/kristianp26/ble-scale-sync:latest before any upstream PR.
 build_from:
-  amd64: ghcr.io/kristianp26/ble-scale-sync:latest
-  aarch64: ghcr.io/kristianp26/ble-scale-sync:latest
-  armv7: ghcr.io/kristianp26/ble-scale-sync:latest
+  amd64: ghcr.io/logansgraphicd/ble-scale-sync:uc450-test
+  aarch64: ghcr.io/logansgraphicd/ble-scale-sync:uc450-test
+  armv7: ghcr.io/logansgraphicd/ble-scale-sync:uc450-test
