@@ -1,8 +1,10 @@
-name: BLE Scale Sync
+name: BLE Scale Sync (UC-450 test)
 # x-release-please-start-version
 version: 1.22.1-uc450-test
 # x-release-please-end
-slug: ble-scale-sync
+# Renamed from `ble-scale-sync` so this fork installs alongside the upstream
+# add-on instead of shadowing it in the store. Revert before any upstream PR.
+slug: ble-scale-sync-uc450
 description: >-
   Read BLE smart scales and export to Garmin Connect, MQTT (HA auto-discovery),
   InfluxDB, and more
