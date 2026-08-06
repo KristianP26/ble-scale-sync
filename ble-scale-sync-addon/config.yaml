@@ -1,15 +1,15 @@
 name: BLE Scale Sync
 # x-release-please-start-version
-version: 1.22.1
+version: 1.22.1-uc450-test
 # x-release-please-end
 slug: ble-scale-sync
 description: >-
   Read BLE smart scales and export to Garmin Connect, MQTT (HA auto-discovery),
   InfluxDB, and more
-url: https://github.com/KristianP26/ble-scale-sync
+url: https://github.com/logansgraphicd/ble-scale-sync
 documentation: >-
-  https://github.com/KristianP26/ble-scale-sync/blob/main/ble-scale-sync-addon/DOCS.md
-support: https://github.com/KristianP26/ble-scale-sync/issues
+  https://github.com/logansgraphicd/ble-scale-sync/blob/main/ble-scale-sync-addon/DOCS.md
+support: https://github.com/logansgraphicd/ble-scale-sync/issues
 panel_icon: mdi:scale-bathroom
 arch:
   - amd64
