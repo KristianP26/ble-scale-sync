@@ -1,0 +1,4 @@
+# Host tools used by flash.sh.
+# Install with: pip3 install -r requirements-flash.txt
+esptool==5.2.0
+mpremote==1.28.0
