@@ -72,7 +72,10 @@ describe('force_scale_adapter', () => {
     expect(hasParseableBroadcastSource(forced, unparseable)).toBe(false);
     // The un-forced adapter keeps the cheap shortcut.
     expect(
-      hasParseableBroadcastSource(adapters.find((a) => a.name === 'QN Scale')!, unparseable),
+      hasParseableBroadcastSource(
+        adapters.find((a) => a.name === 'QN Scale')!,
+        unparseable,
+      ),
     ).toBe(true);
   });
 
