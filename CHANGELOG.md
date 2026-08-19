@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.23.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.22.1...v1.23.0) (2026-08-19)
+
+
+### Added
+
+* **ble:** answer the QN AE00 authentication challenge ([#235](https://github.com/KristianP26/ble-scale-sync/issues/235), [#75](https://github.com/KristianP26/ble-scale-sync/issues/75)) ([93bc9d3](https://github.com/KristianP26/ble-scale-sync/commit/93bc9d3bb1ff9d24c6fcf5a52af4bb14f34cd8b2))
+* **ble:** honour ble.session_timeout_sec on the native read path ([#83](https://github.com/KristianP26/ble-scale-sync/issues/83)) ([840cbb1](https://github.com/KristianP26/ble-scale-sync/commit/840cbb16356a2350729b22713493ca3de37aec70))
+* **config:** add ble.force_scale_adapter to override protocol detection ([#318](https://github.com/KristianP26/ble-scale-sync/issues/318), [#319](https://github.com/KristianP26/ble-scale-sync/issues/319)) ([9c67525](https://github.com/KristianP26/ble-scale-sync/commit/9c67525d8899296e76005c5171b4be08fbe588fe))
+* **config:** add users[].beurer_provision and ble.session_timeout_sec ([#229](https://github.com/KristianP26/ble-scale-sync/issues/229), [#83](https://github.com/KristianP26/ble-scale-sync/issues/83)) ([1d70cbc](https://github.com/KristianP26/ble-scale-sync/commit/1d70cbc093f740f713ce18c2d75f4742dffed03d))
+* **docker:** report the image channel and commit at startup ([#318](https://github.com/KristianP26/ble-scale-sync/issues/318)) ([7759fde](https://github.com/KristianP26/ble-scale-sync/commit/7759fde6c0035b017ed6cef00fc592f601bb2212))
+* **scales:** decode Eufy P2 Pro impedance from bytes [4..5] ([#289](https://github.com/KristianP26/ble-scale-sync/issues/289)) ([416a038](https://github.com/KristianP26/ble-scale-sync/commit/416a038da69ed5e2510bcc128e8a1e0491e5d8f8))
+
+
+### Fixed
+
+* **ble:** resolve the right adapter on both mqtt-proxy GATT paths ([#317](https://github.com/KristianP26/ble-scale-sync/issues/317), [#319](https://github.com/KristianP26/ble-scale-sync/issues/319)) ([044d72b](https://github.com/KristianP26/ble-scale-sync/commit/044d72b596daefd18463da7539eeb3f5429db9fe))
+* **ble:** stop a BlueZ write rejection from killing the process ([#138](https://github.com/KristianP26/ble-scale-sync/issues/138)) ([f198fd3](https://github.com/KristianP26/ble-scale-sync/commit/f198fd35b0adf682604d66a01c183d3e0911585e))
+* **config:** warn instead of silently dropping unknown config keys ([#318](https://github.com/KristianP26/ble-scale-sync/issues/318)) ([1bb67a3](https://github.com/KristianP26/ble-scale-sync/commit/1bb67a36514ba80f3611aff9265be0bd27e7fcf0))
+* **firmware:** use esptool v5 command names and require esptool 5 or newer ([49ccecd](https://github.com/KristianP26/ble-scale-sync/commit/49ccecd178c8ab958f8d56738ae89e0c8b53b7b8))
+* **qn-scale:** echo the protocol type from the twenty byte scale info frame ([#235](https://github.com/KristianP26/ble-scale-sync/issues/235)) ([03fd3d7](https://github.com/KristianP26/ble-scale-sync/commit/03fd3d70cb1625782f102f31082f5b5f63df55e8))
+* **qn-scale:** send the measurement trigger the extended dialect waits for ([#235](https://github.com/KristianP26/ble-scale-sync/issues/235)) ([6083307](https://github.com/KristianP26/ble-scale-sync/commit/6083307f05f9417caf5164aa7c21ae5e58eb5ad8))
+* **runtime:** survive a stray promise rejection in continuous mode ([#138](https://github.com/KristianP26/ble-scale-sync/issues/138)) ([ba8dd63](https://github.com/KristianP26/ble-scale-sync/commit/ba8dd6377a50ed5acfe0974fcd176c38339b3ab3))
+* **scales:** accept the six-byte Lefu OEM advertisement ([#318](https://github.com/KristianP26/ble-scale-sync/issues/318)) ([cc20fe7](https://github.com/KristianP26/ble-scale-sync/commit/cc20fe72b42f2154b162dc25fe687e07e47ea881))
+* **scales:** correct defects found reviewing the issue sweep ([#229](https://github.com/KristianP26/ble-scale-sync/issues/229), [#235](https://github.com/KristianP26/ble-scale-sync/issues/235), [#318](https://github.com/KristianP26/ble-scale-sync/issues/318)) ([f102a46](https://github.com/KristianP26/ble-scale-sync/commit/f102a466678c9b5a8301cc53d09b0824c212fdb4))
+* **scales:** make an unprovisioned Beurer scale diagnosable ([#229](https://github.com/KristianP26/ble-scale-sync/issues/229)) ([92cb8aa](https://github.com/KristianP26/ble-scale-sync/commit/92cb8aa149b1b47a486daca4ab7133f1638bac8d))
+
+
+### Docs
+
+* **addon:** point Home Assistant OS testers at the dev add-on channel ([8399415](https://github.com/KristianP26/ble-scale-sync/commit/83994154b70fdf5444e7046fa9394b43cf49d883))
+* explain dev builds, unknown config keys and the Beurer battery wipe ([eeeeba0](https://github.com/KristianP26/ble-scale-sync/commit/eeeeba0daf960b282e2db1bbd0293c91941ca308))
+* **scales:** stop claiming the Hutbit family has no usable impedance sensor ([#322](https://github.com/KristianP26/ble-scale-sync/issues/322)) ([1873569](https://github.com/KristianP26/ble-scale-sync/commit/18735697e6062fb7874dc2df3723158c9eab3dfe))
+* scope session_timeout_sec honestly and stop publishing planning notes ([758b53d](https://github.com/KristianP26/ble-scale-sync/commit/758b53d104158048ccc4abeb5123102142e0867b))
+
 ## [1.22.1](https://github.com/KristianP26/ble-scale-sync/compare/v1.22.0...v1.22.1) (2026-08-02)
 
 
