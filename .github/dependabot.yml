@@ -18,13 +18,3 @@ updates:
       prefix: "ci:"
     labels:
       - ci
-
-  - package-ecosystem: pip
-    directory: /firmware
-    schedule:
-      interval: monthly
-    commit-message:
-      prefix: "deps:"
-    open-pull-requests-limit: 5
-    labels:
-      - dependencies

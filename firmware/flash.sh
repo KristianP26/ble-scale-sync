@@ -3,9 +3,8 @@
 # Flash MicroPython + BLE-MQTT bridge firmware to an ESP32 / ESP32-S3.
 #
 # Prerequisites (install once, from this directory):
-#   python3 -m venv venv
-#   source venv/bin/activate
-#   pip3 install -r requirements-flash.txt
+#   pip install -r requirements-flash.txt
+# esptool 5.x needs Python 3.10 or newer.
 #
 # Usage:
 #   ./flash.sh                          # full flash (auto-detect board)
@@ -53,7 +52,7 @@ blue()  { printf '\033[0;34m%s\033[0m\n' "$*"; }
 die() { red "Error: $*" >&2; exit 1; }
 
 check_tool() {
-  command -v "$1" >/dev/null 2>&1 || die "$1 not found. Activate firmware/venv and install with: pip3 install -r requirements-flash.txt"
+  command -v "$1" >/dev/null 2>&1 || die "$1 not found. Install with: pip install -r firmware/requirements-flash.txt"
 }
 
 # ─── Board configuration ─────────────────────────────────────────────────────
@@ -184,7 +183,7 @@ erase_and_flash() {
   esptool --chip "$CHIP" --port "$port" erase-flash
 
   blue "Flashing MicroPython v${MICROPYTHON_VERSION} (${CHIP})..."
-  esptool --chip "$CHIP" --port "$port" --baud "$BAUD" write-flash -z "$FLASH_OFFSET" "$FIRMWARE_FILE"
+  esptool --chip "$CHIP" --port "$port" --baud "$BAUD" write-flash "$FLASH_OFFSET" "$FIRMWARE_FILE"
   green "MicroPython flashed successfully"
 
   blue "Waiting for device to reboot..."

@@ -160,7 +160,7 @@ main() {
     green "  1. Flash:  cd ../firmware && ./flash.sh --board ${board_name}"
     green "  2. Or manually:"
     green "     esptool --chip esp32s3 --port /dev/ttyUSB0 --baud 460800 \\"
-    green "       write-flash -z 0x0 ${FIRMWARE_DIR}/firmware_${board_name}.bin"
+    green "       write-flash 0x0 ${FIRMWARE_DIR}/firmware_${board_name}.bin"
     green "═══════════════════════════════════════════════════"
 }
 
