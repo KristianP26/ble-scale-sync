@@ -52,7 +52,8 @@ blue()  { printf '\033[0;34m%s\033[0m\n' "$*"; }
 die() { red "Error: $*" >&2; exit 1; }
 
 check_tool() {
-  command -v "$1" >/dev/null 2>&1 || die "$1 not found. Install with: pip install -r firmware/requirements-flash.txt"
+  # The script cd's to its own directory above, so the path is relative to firmware/.
+  command -v "$1" >/dev/null 2>&1 || die "$1 not found. Install with: pip install -r requirements-flash.txt"
 }
 
 # ─── Board configuration ─────────────────────────────────────────────────────
