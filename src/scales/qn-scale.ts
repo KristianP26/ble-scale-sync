@@ -176,6 +176,42 @@ const EXTENDED_MEASUREMENT_TRIGGER = [0xa2, 0x06, 0x01, 0x1e, 0x23, 0xea];
 const TRIGGER_REPEATS = 2;
 const TRIGGER_GAP_MS = 150;
 
+/**
+ * Completed-weigh-in result frames on the extended dialect (#235).
+ *
+ * The 20-byte GE CS 10 G / "Fit Plus" does NOT stream 0x10 live frames after a
+ * full body-composition weigh-in. Once the impedance sweep finishes it sends a
+ * burst of result frames the adapter had been dropping at the ignore branch, so
+ * the handshake succeeded end to end yet nothing ever reached the exporters:
+ *
+ *   0xB4 .. 04 01 : consolidated result, 44 bytes. Authoritative final weight.
+ *       [7-10]  measurement timestamp, LE uint32 (scale 2000-epoch)
+ *       [11-12] final weight, LE uint16, /100 kg   (matches the scale display)
+ *       [13..]  multi-frequency / segmental impedance channels, LE uint16 each
+ *   0xB1 .. 03 01 : first multi-part record, 44 bytes. Fallback weight source.
+ *       [5-6]   in-progress weight, LE uint16, /100 kg
+ *       [7..]   impedance channels
+ *
+ * @hedoric hardware-verified both against the scale's own display: weight
+ * 75.20 kg, and BMI 20.2 in the 0xB1 03 03 tail, cross-checked as
+ * 75.20 / 1.93^2 = 20.19. Every frame carries the standard QN trailing sum
+ * checksum. The 0xB4 value is the scale's final averaged weight; the 0xB1 03 01
+ * sample reads a few hundred grams high, so 0xB4 is preferred and 0xB1 03 01 is
+ * only used when no 0xB4 arrives.
+ *
+ * Impedance is deliberately NOT forwarded to the BIA estimator yet. The channels
+ * are a proprietary multi-frequency segmental sweep in raw units (~2,300-3,050),
+ * not the single ~500 ohm whole-body value computeBiaFat expects (it divides
+ * height^2 / impedance), and feeding one in raw yields a ~57% fat nonsense.
+ * Until the channels are calibrated the reading is emitted weight-only, so body
+ * composition falls back to the same profile-based estimate broadcast-only
+ * scales already use. Weight and BMI are the parts this decode is sure of.
+ */
+const RESULT_OPCODE_B4 = 0xb4;
+const RESULT_OPCODE_B1 = 0xb1;
+const RESULT_MIN_WEIGHT_KG = 5;
+const RESULT_MAX_WEIGHT_KG = 300;
+
 export class QnScaleAdapter
   implements ScaleAdapterCore, GattWiring, BroadcastSource, MultiCharNotify
 {
@@ -253,6 +289,14 @@ export class QnScaleAdapter
    * it, unlike the 18-byte ES-26M frame which needs 0x00.
    */
   private isExtendedLongFrame = false;
+
+  /**
+   * Whether a completed-weigh-in result frame (0xB4/0xB1) has already produced a
+   * reading this session. The scale repeats the 0xB4 frame ~3x and then sends
+   * the 0xB1 records, all describing the one weigh-in, so the reading is emitted
+   * exactly once and the repeats are suppressed (#235).
+   */
+  private extendedResultEmitted = false;
 
   /**
    * Timestamp (Date.now()) of the first stable R1=R2=0 frame seen on a
@@ -365,6 +409,7 @@ export class QnScaleAdapter
     this.ae00ResponsesSent = 0;
     this.isLongFrameVariant = false;
     this.isExtendedLongFrame = false;
+    this.extendedResultEmitted = false;
     this.firstStableNoImpedanceAt = null;
     this.sessionStartedScaleSeconds = Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
     this.configSent = false;
@@ -752,6 +797,19 @@ export class QnScaleAdapter
       return { weight, impedance: r1 > 0 ? r1 : r2 };
     }
 
+    // Extended-dialect completed-weigh-in result frames (#235). Gated to the
+    // 20-byte dialect so no other QN variant is touched. On this firmware the
+    // scale never streams 0x10 after a full body-composition weigh-in; it sends
+    // these 0xB4/0xB1 frames instead, which were dropped at the ignore branch
+    // below, so nothing reached MQTT even though the whole handshake succeeded.
+    if (this.isExtendedLongFrame && (opcode === RESULT_OPCODE_B4 || opcode === RESULT_OPCODE_B1)) {
+      const reading = this.parseExtendedResultFrame(data);
+      // Return null (not fall through) for the non-weight parts of the burst —
+      // the repeated 0xB4s, the 0xB1 03 02/03 records — so they are consumed
+      // quietly instead of re-logged as ignored frames.
+      return reading;
+    }
+
     // 0x10: live weight frame.
     // Anything else lands here and used to be discarded in silence, which is why
     // #75 read as a decode bug: the AE00 challenge frames the scale sends on AE02
@@ -841,6 +899,50 @@ export class QnScaleAdapter
     }
 
     return { weight, impedance };
+  }
+
+  /**
+   * Decode an extended-dialect completed-weigh-in result frame (#235).
+   *
+   * Accepts the consolidated 0xB4 (weight at [11]) or, as a fallback, the first
+   * multi-part 0xB1 03 01 record (weight at [5]). Returns a weight-only reading
+   * (impedance 0 — see RESULT_OPCODE_* for why the raw channels are not used
+   * yet), or null when the frame is not a recognised result frame, fails its
+   * trailing sum checksum, carries an out-of-range weight, or a reading was
+   * already emitted this session.
+   */
+  private parseExtendedResultFrame(data: Buffer): ScaleReading | null {
+    if (this.extendedResultEmitted) return null;
+
+    // Standard QN trailing checksum: sum of every byte but the last, mod 256.
+    // Verified against every captured 0xB4/0xB1 frame; a cheap guard against a
+    // truncated or mis-framed notification being read as a weight.
+    let sum = 0;
+    for (let i = 0; i < data.length - 1; i++) sum = (sum + data[i]) & 0xff;
+    if (sum !== data[data.length - 1]) return null;
+
+    let rawWeight: number | null = null;
+    if (data[0] === RESULT_OPCODE_B4 && data.length >= 13 && data[2] === 0x04 && data[3] === 0x01) {
+      rawWeight = data.readUInt16LE(11);
+    } else if (
+      data[0] === RESULT_OPCODE_B1 &&
+      data.length >= 7 &&
+      data[2] === 0x03 &&
+      data[3] === 0x01
+    ) {
+      rawWeight = data.readUInt16LE(5);
+    }
+    if (rawWeight === null) return null;
+
+    const weight = rawWeight / 100;
+    if (weight <= RESULT_MIN_WEIGHT_KG || weight >= RESULT_MAX_WEIGHT_KG) return null;
+
+    this.extendedResultEmitted = true;
+    bleLog.debug(
+      `QN: extended result 0x${data[0].toString(16)} decoded ${weight}kg ` +
+        '(impedance sweep not yet calibrated, emitting weight-only) #235',
+    );
+    return { weight, impedance: 0 };
   }
 
   // ── State machine handlers (fire-and-forget from parseNotification) ─────

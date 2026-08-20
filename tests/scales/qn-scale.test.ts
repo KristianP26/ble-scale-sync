@@ -716,6 +716,67 @@ describe('QnScaleAdapter', () => {
     });
   });
 
+  describe('extended-dialect result frames (#235)', () => {
+    // Real 20-byte extended scale-info frame from @hedoric's GE CS 10 G capture.
+    // byte[1] == 0x14 (20) marks the long frame; length 20 sets the extended
+    // dialect, which is what gates the 0xB4/0xB1 decode.
+    const EXT_INFO = Buffer.from('1214ff4ec70e0007ff140f4200020503e06f2b37', 'hex');
+    // Real result frames from the same weigh-in the scale displayed as 75.20 kg.
+    const B4_RESULT = Buffer.from(
+      'b42c040101020178ac1832601dd20b7c0ab50b560a0c0ad608bd099f0828015a01530bfa092a0bc6099a0a45',
+      'hex',
+    );
+    const B1_0301 = Buffer.from(
+      'b12c030101651ddd0b6c0a720b140acb0a8209760a32090c01f200650b090a350bd009900a5b091b0ad30811',
+      'hex',
+    );
+
+    function extendedAdapter() {
+      const adapter = makeAdapter();
+      expect(adapter.parseNotification(EXT_INFO)).toBeNull(); // sets isExtendedLongFrame
+      return adapter;
+    }
+
+    it('decodes the 0xB4 result frame to the displayed weight', () => {
+      const adapter = extendedAdapter();
+      const reading = adapter.parseNotification(B4_RESULT);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBe(75.2);
+      // Impedance intentionally 0: raw sweep channels are not BIA-calibrated yet.
+      expect(reading!.impedance).toBe(0);
+    });
+
+    it('emits the result exactly once across the repeated burst', () => {
+      const adapter = extendedAdapter();
+      expect(adapter.parseNotification(B4_RESULT)).not.toBeNull();
+      // The scale repeats 0xB4 ~3x and then sends 0xB1 records for the same
+      // weigh-in; none of the repeats should produce a second reading.
+      expect(adapter.parseNotification(B4_RESULT)).toBeNull();
+      expect(adapter.parseNotification(B1_0301)).toBeNull();
+    });
+
+    it('falls back to 0xB1 03 01 when no 0xB4 arrives', () => {
+      const adapter = extendedAdapter();
+      const reading = adapter.parseNotification(B1_0301);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBe(75.25);
+    });
+
+    it('rejects a result frame with a corrupted checksum', () => {
+      const adapter = extendedAdapter();
+      const bad = Buffer.from(B4_RESULT);
+      bad[bad.length - 1] ^= 0xff; // break the trailing sum checksum
+      expect(adapter.parseNotification(bad)).toBeNull();
+    });
+
+    it('does not decode result frames on a non-extended dialect', () => {
+      const adapter = makeAdapter(); // no extended 0x12 seen → classic dialect
+      // Same bytes, but the gate is closed, so it falls through to the ignore
+      // branch and returns null rather than a spurious weight.
+      expect(adapter.parseNotification(B4_RESULT)).toBeNull();
+    });
+  });
+
   describe('parseBroadcast()', () => {
     it('parses stable reading', () => {
       const adapter = makeAdapter();
