@@ -23,8 +23,7 @@ applies to this add-on.
 * **beurer:** say when the consent was accepted but the vendor user table is empty ([3de33c3](https://github.com/KristianP26/ble-scale-sync/commit/3de33c39e417ff10d16a0c6ff241ff45e8b18198)), closes [#229](https://github.com/KristianP26/ble-scale-sync/issues/229)
 * **ble:** plumb the BlueZ advertisement into adapter matching on Linux ([4a212e4](https://github.com/KristianP26/ble-scale-sync/commit/4a212e4db700358d21cd54528c1a9b1e889af53a))
 * **hutbit:** do not pair an impedance with a weight from an earlier weigh-in ([ff8d0eb](https://github.com/KristianP26/ble-scale-sync/commit/ff8d0eb59a8be4ea6382bc85e885c378183ff3ed))
-* **qn:** echo the protocol byte on 19-byte scale info and flip it after a silent session ([7a97c15](https://github.com/KristianP26/ble-scale-sync/commit/7a97c1562ec97c870bc0aeeb02d294e2dc377c5a))
-* **qn:** make the protocol byte a setting instead of a guess ([9401627](https://github.com/KristianP26/ble-scale-sync/commit/94016271cc9e2cdfd3258c2724030a94988054dc))
+* **qn:** echo the protocol byte on 19-byte scale info, with `ble.qn_protocol_byte` to override it ([9401627](https://github.com/KristianP26/ble-scale-sync/commit/94016271cc9e2cdfd3258c2724030a94988054dc)), closes [#75](https://github.com/KristianP26/ble-scale-sync/issues/75) [#331](https://github.com/KristianP26/ble-scale-sync/issues/331)
 * **qn:** take the extended-dialect weight from the live 0xB1, not the stored 0xB4 ([0c0b03f](https://github.com/KristianP26/ble-scale-sync/commit/0c0b03f3ed07fa688d4210d328becafe975ac2de)), closes [#235](https://github.com/KristianP26/ble-scale-sync/issues/235)
 
 
