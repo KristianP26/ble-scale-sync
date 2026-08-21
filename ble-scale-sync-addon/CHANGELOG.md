@@ -7,6 +7,36 @@
 The add-on version always matches the application version, so every entry below
 applies to this add-on.
 
+## [1.24.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.23.0...v1.24.0) (2026-08-21)
+
+
+### Added
+
+* **ble:** log every advertisement on the proxy transports ([857ff2c](https://github.com/KristianP26/ble-scale-sync/commit/857ff2c7242b32212cae06e9e70d1895b09d3535)), closes [#322](https://github.com/KristianP26/ble-scale-sync/issues/322)
+* **hutbit:** decode the raw impedance frame and feed it to body composition ([479ac02](https://github.com/KristianP26/ble-scale-sync/commit/479ac027d43df157b81a4fa11db0bb5dc08ebcbe)), closes [#322](https://github.com/KristianP26/ble-scale-sync/issues/322)
+* **qn:** decode extended-dialect b4/b1 result frames ([#235](https://github.com/KristianP26/ble-scale-sync/issues/235)) ([129aa21](https://github.com/KristianP26/ble-scale-sync/commit/129aa211dbb83aae45842988ef4d89f878809bd3))
+
+
+### Fixed
+
+* **beurer:** report the change-increment outcome in the profile commit line ([34e92dc](https://github.com/KristianP26/ble-scale-sync/commit/34e92dc9581cfaf983a58b863787e44348deab26)), closes [#229](https://github.com/KristianP26/ble-scale-sync/issues/229)
+* **beurer:** say when the consent was accepted but the vendor user table is empty ([3de33c3](https://github.com/KristianP26/ble-scale-sync/commit/3de33c39e417ff10d16a0c6ff241ff45e8b18198)), closes [#229](https://github.com/KristianP26/ble-scale-sync/issues/229)
+* **ble:** plumb the BlueZ advertisement into adapter matching on Linux ([4a212e4](https://github.com/KristianP26/ble-scale-sync/commit/4a212e4db700358d21cd54528c1a9b1e889af53a))
+* **hutbit:** do not pair an impedance with a weight from an earlier weigh-in ([ff8d0eb](https://github.com/KristianP26/ble-scale-sync/commit/ff8d0eb59a8be4ea6382bc85e885c378183ff3ed))
+* **qn:** echo the protocol byte on 19-byte scale info and flip it after a silent session ([7a97c15](https://github.com/KristianP26/ble-scale-sync/commit/7a97c1562ec97c870bc0aeeb02d294e2dc377c5a))
+* **qn:** make the protocol byte a setting instead of a guess ([9401627](https://github.com/KristianP26/ble-scale-sync/commit/94016271cc9e2cdfd3258c2724030a94988054dc))
+* **qn:** take the extended-dialect weight from the live 0xB1, not the stored 0xB4 ([0c0b03f](https://github.com/KristianP26/ble-scale-sync/commit/0c0b03f3ed07fa688d4210d328becafe975ac2de)), closes [#235](https://github.com/KristianP26/ble-scale-sync/issues/235)
+
+
+### Changed
+
+* **ble:** only build the advertisement line when debug logging is on ([2095316](https://github.com/KristianP26/ble-scale-sync/commit/20953167c3ed6e428081ec3dae82abd72994ad0d))
+
+
+### Docs
+
+* **scales:** the Hutbit family now reports its raw impedance ([74c9a08](https://github.com/KristianP26/ble-scale-sync/commit/74c9a085f05abbcaf55ad3262baffdc2bc77b1e3)), closes [#322](https://github.com/KristianP26/ble-scale-sync/issues/322)
+
 ## [1.23.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.22.1...v1.23.0) (2026-08-19)
 
 
