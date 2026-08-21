@@ -469,21 +469,31 @@ export class ReadingWatcher implements Watcher {
         entry.address,
       );
       bleLog.debug(`GATT read driven by adapter: ${gattAdapter.name} (${entry.address})`);
-      const raw = await withTimeout(
-        waitForRawReading(
-          connected.charMap,
-          device,
-          gattAdapter,
-          profile,
-          entry.address.replace(/[:-]/g, '').toUpperCase(),
-        ),
-        60_000,
-        `GATT reading timeout for ${entry.address}`,
+      const pending = waitForRawReading(
+        connected.charMap,
+        device,
+        gattAdapter,
+        profile,
+        entry.address.replace(/[:-]/g, '').toUpperCase(),
       );
+      // The race abandons `pending` on timeout; the finally block then ends its
+      // session, whose rejection has no other consumer and must not become an
+      // unhandled rejection.
+      pending.catch(() => {});
+      const raw = await withTimeout(pending, 60_000, `GATT reading timeout for ${entry.address}`);
       registerScaleMac(this.config, entry.address).catch(() => {});
       this.queue.push(raw);
       this.deferCounts.delete(entry.address);
     } finally {
+      // End the reading session before dropping the disconnect relay: after a
+      // timeout the abandoned waitForRawReading still holds its notification
+      // listeners on the persistent MQTT client, and only its own disconnect
+      // path removes them. Without this, every timed-out session leaked one
+      // notify listener, and each leaked listener re-processed every later
+      // notification frame (duplicate handshake writes, eventually a write
+      // storm that killed live sessions). Harmless after a completed reading:
+      // the disconnect callback returns immediately once resolved.
+      device?.fireDisconnect();
       device?.cleanup();
       // A superseded session must not tear down the one that replaced it (#296).
       if (seq === this.gattSessionSeq) {
@@ -589,14 +599,17 @@ export class ReadingWatcher implements Watcher {
         `Autonomous connect: charMap built with ${charMap.size} chars, waiting for reading...`,
       );
 
+      const pending = waitForRawReading(
+        charMap,
+        device,
+        adapter,
+        profile,
+        data.address.replace(/[:-]/g, '').toUpperCase(),
+      );
+      // See the host-initiated path: the abandoned promise must stay consumed.
+      pending.catch(() => {});
       const raw = await withTimeout(
-        waitForRawReading(
-          charMap,
-          device,
-          adapter,
-          profile,
-          data.address.replace(/[:-]/g, '').toUpperCase(),
-        ),
+        pending,
         60_000,
         `GATT reading timeout for ${data.address} (autonomous)`,
       );
@@ -606,6 +619,9 @@ export class ReadingWatcher implements Watcher {
       );
       this.queue.push(raw);
     } finally {
+      // Same teardown as the host-initiated path: end the session so a timed-out
+      // reading releases its notification listeners.
+      device?.fireDisconnect();
       device?.cleanup();
       if (seq === this.gattSessionSeq) {
         this.gattInProgress = false;

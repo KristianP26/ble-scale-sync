@@ -2348,4 +2348,65 @@ describe('handler-mqtt-proxy', () => {
       expect(writeSubscribeCmds).toHaveLength(0);
     });
   });
+
+  describe('listener leaks on abnormal teardown', () => {
+    it('autonomous session timeout releases the notification listeners', async () => {
+      vi.useFakeTimers();
+      try {
+        const adapter = createGattAdapter();
+        const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter], undefined, PROFILE);
+        await watcher.start();
+        const baseline = (mockClient._listeners.get('message') ?? []).length;
+
+        // ESP32 reports an autonomous connect; the scale then never sends a frame.
+        mockClient._simulateMessage(
+          `${PREFIX}/connected`,
+          JSON.stringify({
+            autonomous: true,
+            address: 'AA:BB:CC:DD:EE:FF',
+            chars: [
+              { uuid: GATT_NOTIFY_UUID, properties: ['notify'] },
+              { uuid: GATT_WRITE_UUID, properties: ['write'] },
+            ],
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(10);
+        expect((mockClient._listeners.get('message') ?? []).length).toBeGreaterThan(baseline);
+
+        // The 60s reading timeout must tear the whole session down: a leaked
+        // notify listener on the persistent client re-processes every later
+        // notification and compounds with each timed-out session.
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect((mockClient._listeners.get('message') ?? []).length).toBe(baseline);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('MqttBleChar.subscribe removes its listener when setup fails', async () => {
+      const { MqttBleChar } = await import('../../src/ble/handler-mqtt-proxy/gatt.js');
+      mockClient.subscribeAsync = vi.fn(async () => {
+        throw new Error('broker down');
+      });
+      const char = new MqttBleChar(mockClient as never, PREFIX, 'somechar');
+      await expect(char.subscribe(() => {})).rejects.toThrow('broker down');
+      expect(mockClient._listeners.get('message') ?? []).toHaveLength(0);
+    });
+
+    it('mqttGattConnect timeout removes its response handler', async () => {
+      vi.useFakeTimers();
+      try {
+        const { mqttGattConnect } = await import('../../src/ble/handler-mqtt-proxy/gatt.js');
+        const { topics } = await import('../../src/ble/handler-mqtt-proxy/topics.js');
+        const t = topics('ble-proxy', 'esp32-test');
+        const pending = mqttGattConnect(mockClient as never, t, 'AA:BB:CC:DD:EE:FF', 0);
+        const rejection = expect(pending).rejects.toThrow('GATT connect timeout');
+        await vi.advanceTimersByTimeAsync(30_000);
+        await rejection;
+        expect(mockClient._listeners.get('message') ?? []).toHaveLength(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });
