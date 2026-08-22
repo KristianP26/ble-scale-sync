@@ -17,13 +17,21 @@ export class MqttBleChar implements BleChar {
       if (t === topic) onData(payload);
     };
     this.client.on('message', handler);
-    await this.client.subscribeAsync(topic);
-    // Ordering is the whole point of #231: the MQTT notify subscription and the
-    // message handler are in place BEFORE we tell the firmware to enable BLE
-    // notify, so the firmware-triggered kickoff frame (QN/Renpho 0x12) always has
-    // a listener. New firmware enables notify on this command; old firmware (eager)
-    // ignores it and behaves exactly as before.
-    await this.client.publishAsync(`${this.base}/subscribe/${this.uuid}`, '');
+    try {
+      await this.client.subscribeAsync(topic);
+      // Ordering is the whole point of #231: the MQTT notify subscription and the
+      // message handler are in place BEFORE we tell the firmware to enable BLE
+      // notify, so the firmware-triggered kickoff frame (QN/Renpho 0x12) always has
+      // a listener. New firmware enables notify on this command; old firmware (eager)
+      // ignores it and behaves exactly as before.
+      await this.client.publishAsync(`${this.base}/subscribe/${this.uuid}`, '');
+    } catch (err) {
+      // A failed setup returns no unsubscriber, so the listener must not outlive
+      // this call: the client is persistent and every leaked listener re-processes
+      // all later notifications.
+      this.client.removeListener('message', handler);
+      throw err;
+    }
     return () => {
       this.client.removeListener('message', handler);
     };
@@ -104,41 +112,52 @@ export async function mqttGattConnect(
   await client.subscribeAsync(t.disconnected);
   await client.subscribeAsync(t.error);
 
-  const response = await withTimeout(
-    new Promise<{ chars: Array<{ uuid: string; properties: string[] }> }>((resolve, reject) => {
-      const handler = (topic: string, payload: Buffer) => {
-        if (topic === t.connected) {
-          let data: Record<string, unknown>;
-          try {
-            data = JSON.parse(payload.toString());
-          } catch (err) {
-            client.removeListener('message', handler);
-            reject(new Error(`Invalid connected payload from ESP32: ${err}`));
-            return;
-          }
-          // Ignore autonomous connects from ESP32 — those are handled by
-          // ReadingWatcher.handleAutonomousConnect, not mqttGattConnect (#201).
-          if (data.autonomous) return;
-          client.removeListener('message', handler);
-          resolve(data as { chars: Array<{ uuid: string; properties: string[] }> });
-        }
-        if (topic === t.error) {
-          client.removeListener('message', handler);
-          // Older firmware (and MicroPython exceptions like asyncio.TimeoutError
-          // whose str() is empty) can publish a blank payload — surface a
-          // placeholder so the host log is not a dangling "ESP32 error:".
-          const detail = payload.toString() || '(no detail)';
-          reject(new Error(`ESP32 error: ${detail}`));
-        }
-      };
-      client.on('message', handler);
-      client
-        .publishAsync(t.connect, JSON.stringify({ address, addr_type: addrType }))
-        .catch(reject);
-    }),
-    COMMAND_TIMEOUT_MS,
-    `GATT connect timeout for ${address}`,
+  let resolveResponse!: (v: { chars: Array<{ uuid: string; properties: string[] }> }) => void;
+  let rejectResponse!: (err: Error) => void;
+  const responsePromise = new Promise<{ chars: Array<{ uuid: string; properties: string[] }> }>(
+    (resolve, reject) => {
+      resolveResponse = resolve;
+      rejectResponse = reject;
+    },
   );
+  const handler = (topic: string, payload: Buffer) => {
+    if (topic === t.connected) {
+      let data: Record<string, unknown>;
+      try {
+        data = JSON.parse(payload.toString());
+      } catch (err) {
+        rejectResponse(new Error(`Invalid connected payload from ESP32: ${err}`));
+        return;
+      }
+      // Ignore autonomous connects from ESP32 — those are handled by
+      // ReadingWatcher.handleAutonomousConnect, not mqttGattConnect (#201).
+      if (data.autonomous) return;
+      resolveResponse(data as { chars: Array<{ uuid: string; properties: string[] }> });
+    }
+    if (topic === t.error) {
+      // Older firmware (and MicroPython exceptions like asyncio.TimeoutError
+      // whose str() is empty) can publish a blank payload — surface a
+      // placeholder so the host log is not a dangling "ESP32 error:".
+      const detail = payload.toString() || '(no detail)';
+      rejectResponse(new Error(`ESP32 error: ${detail}`));
+    }
+  };
+  client.on('message', handler);
+  let response: { chars: Array<{ uuid: string; properties: string[] }> };
+  try {
+    client
+      .publishAsync(t.connect, JSON.stringify({ address, addr_type: addrType }))
+      .catch(rejectResponse);
+    response = await withTimeout(
+      responsePromise,
+      COMMAND_TIMEOUT_MS,
+      `GATT connect timeout for ${address}`,
+    );
+  } finally {
+    // The handler previously removed itself only when a response arrived, so a
+    // connect timeout left it on the persistent client forever.
+    client.removeListener('message', handler);
+  }
 
   const charMap = new Map<string, BleChar>();
   for (const char of response.chars) {
