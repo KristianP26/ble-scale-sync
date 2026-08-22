@@ -200,6 +200,26 @@ describe('SalterAdapter', () => {
       expect(a.parseNotification(REC_888_SLOT7)?.weight).toBeCloseTo(88.8, 4);
     });
 
+    it('drops records from before a battery change', () => {
+      // New batteries restart the clock near zero while stored records keep the
+      // old epoch's timestamps, so they read as far in the future. Reporting one
+      // would date a months-old weigh-in as today's — and the live path, unlike
+      // the history path, has no age check of its own to catch it.
+      const a = makeAdapter();
+      a.parseNotification(clockReply(0, 400)); // clock restarted: ~400s uptime
+      expect(a.parseNotification(REC_897_SLOT2)).toBeNull(); // ts is a 2026 unix time
+      expect(a.parseNotification(REC_888_SLOT7)).toBeNull();
+    });
+
+    it('still accepts a weigh-in taken moments after the clock was read', () => {
+      // A record stamped slightly ahead of this session's clock read is normal:
+      // someone stepped on the scale while the session was open.
+      const a = makeAdapter();
+      const justNow = Buffer.from(REC_897_SLOT2);
+      a.parseNotification(clockReply(tsOf(justNow), -5)); // clock read 5s before
+      expect(a.parseNotification(justNow)?.weight).toBeCloseTo(89.7, 4);
+    });
+
     it('rejects a record the clock says is impossibly old', () => {
       const a = makeAdapter();
       a.parseNotification(clockReply(tsOf(REC_897_SLOT2), 0));

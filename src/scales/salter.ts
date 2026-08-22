@@ -49,6 +49,16 @@ const CLOCK_REPLY_LEN = 5;
 const MAX_RECORD_AGE_SEC = 30 * 24 * 60 * 60;
 
 /**
+ * How far ahead of the scale's clock a record may legitimately be stamped.
+ *
+ * Covers a weigh-in taken mid-session, after this session's clock read: the poll
+ * restarts every few seconds and the link is held open for a few more, so a
+ * handful of seconds of "future" is normal. Anything beyond it is a record from
+ * before the clock was reset — see `isFromAnotherEpoch`.
+ */
+const FUTURE_TOLERANCE_SEC = 60;
+
+/**
  * Number of record slots the scale keeps. Measurements land in a rotating
  * buffer, NOT in one fixed place: a sweep of a live unit found records sitting
  * at indices 2, 6 and 7 with the rest empty, and the index a given weigh-in
@@ -300,6 +310,7 @@ export class SalterAdapter
     if (!(weight > 0) || !Number.isFinite(weight)) return null;
 
     if (this.reported.has(timestamp)) return null;
+    if (this.isFromAnotherEpoch(timestamp)) return null;
 
     // The first unreported record of the session is the live reading; the rest
     // are dated from the scale's own clock and ride along as history.
@@ -334,6 +345,24 @@ export class SalterAdapter
     const ageSec = this.clockSec + elapsedSec - timestamp;
     if (!Number.isFinite(ageSec) || ageSec < 0 || ageSec > MAX_RECORD_AGE_SEC) return null;
     return new Date(Date.now() - ageSec * 1000);
+  }
+
+  /**
+   * True for a record whose timestamp sits ahead of the scale's own clock.
+   *
+   * Changing the batteries restarts the clock near zero while the stored records
+   * keep the timestamps of the old epoch, so everything weighed before the change
+   * suddenly reads as far in the future. Those records are stale by definition
+   * and there is no way to date them — the clock that produced them is gone — so
+   * they are dropped rather than reported as though they were taken today.
+   *
+   * The tolerance covers the ordinary case of someone stepping on the scale
+   * mid-session, after this session's clock was read.
+   */
+  private isFromAnotherEpoch(timestamp: number): boolean {
+    if (!this.clockSec) return false; // no clock yet: nothing to compare against
+    const clockNow = this.clockSec + (Date.now() - this.clockAt) / 1000;
+    return timestamp > clockNow + FUTURE_TOLERANCE_SEC;
   }
 
   /** Record a timestamp as reported, keeping the set bounded. */
