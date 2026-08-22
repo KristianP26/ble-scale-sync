@@ -38,17 +38,6 @@ const CMD_FETCH = 0x09; // `09 <index> 00` → the 20-byte record in that slot
 const CLOCK_REPLY_LEN = 5;
 
 /**
- * Widest age a stored record may claim and still be believed.
- *
- * Guards against a scale whose clock was reset (fresh batteries restart it from
- * zero, so `02` answers with an uptime rather than a wall clock) producing an
- * absurd measurement date. A record that fails this is left unreported rather
- * than exported with a wrong time; the next session promotes it to the live
- * reading, which carries no timestamp at all.
- */
-const MAX_RECORD_AGE_SEC = 30 * 24 * 60 * 60;
-
-/**
  * How far ahead of the scale's clock a record may legitimately be stamped.
  *
  * Covers a weigh-in taken mid-session, after this session's clock read: the poll
@@ -124,12 +113,18 @@ function isRecord(data: Buffer): boolean {
  *   -> 09 01 00     <- ...                    each reply triggers the next
  *   -> 09 02 00     <- 02 00 <ts> <record>    slot 2, a real measurement
  *
- * MEASUREMENTS SIT IN A ROTATING EIGHT-SLOT BUFFER. The scale stores each
- * weigh-in and keeps it; a live sweep found records at indices 2, 6 and 7. There
- * is no reliable way to know which slot a given weigh-in is in, so every slot is
- * read on every cycle and records are de-duplicated by their own timestamp. This is also what lets a
- * weigh-in taken with nothing connected be collected later, which is the normal
- * way this scale is used: it is off and unreachable most of the time.
+ * MEASUREMENTS SIT IN A ROTATING EIGHT-SLOT BUFFER, AND ONLY THE NEWEST MATTERS.
+ * The scale stores each weigh-in and keeps it; a live sweep found records at
+ * indices 2, 6 and 7 with the rest empty, and which slot a weigh-in lands in is
+ * not predictable. So every slot is read and the newest timestamp wins.
+ *
+ * That buffer is not treated as history to be replayed. The scale only wakes
+ * because somebody stood on it, so the newest record IS this weigh-in; the older
+ * ones are past readings already dealt with, some of them months old. Reporting
+ * them would overwrite today's numbers with last month's. Records arrive in slot
+ * order, which is not chronological, so the newest-wins rule is also what makes
+ * the reading that resolves the session the right one rather than whichever slot
+ * happened to be read first.
  *
  * NOTHING IS EVER CLEARED. The protocol has a clear (`0a <index> 00`) and the
  * vendor app uses it, but this adapter does not, and that is deliberate. An
@@ -247,42 +242,27 @@ export class SalterAdapter
   readonly completionHoldMs = COMPLETION_HOLD_MS;
 
   /**
-   * Timestamps already handed to the handler, kept ACROSS sessions so a stored
-   * weigh-in is not re-reported on every sweep. Nothing clears records on the
-   * scale, so without this the same measurement returns forever.
+   * Timestamp of the newest record ever reported, kept ACROSS sessions.
    *
-   * A SET, not a high-water mark. A high-water mark suppresses anything older
-   * than the newest record seen, which quietly loses the first of two weigh-ins
-   * whenever two people share the scale: partner weighs after you, their record
-   * is newer, and yours is never reported. On a household scale that is the
-   * normal case, not an edge case.
+   * The scale is a sender of one current reading, not an archive: it wakes
+   * because someone stood on it, so the newest record in the buffer is that
+   * weigh-in. Anything older is a past reading that has already been dealt with,
+   * and re-reporting it would overwrite today's numbers with last month's.
    *
-   * Deliberately NOT reset by {@link onSessionEnd} — this is de-duplication
-   * state, not session state. It resets when the process restarts, which
-   * re-reports stored readings once; that is the safe direction to err, since
-   * the alternative is dropping a genuine weigh-in.
+   * Records arrive in slot order, which is not chronological, so this is also
+   * what makes the NEWEST record the one that resolves the session: only a
+   * record newer than everything before it is emitted, and the handler keeps the
+   * last reading it was given.
+   *
+   * Deliberately NOT reset by {@link onSessionEnd} — it is de-duplication state,
+   * not session state. It is cleared only when the scale's clock goes backwards;
+   * see {@link noteClock}.
    */
-  private readonly reported = new Set<number>();
-
-  /**
-   * Whether the session's LIVE reading has been emitted yet.
-   *
-   * The handler keeps only the last live reading it is given, so exactly one
-   * record per session may be emitted that way. Every further unreported record
-   * is emitted as a historical reading instead, which the handler buffers and
-   * hands back alongside the live one — and the pipeline matches and exports
-   * every entry, so a household where two people weighed before the sync ran
-   * gets both readings out of a single session rather than needing the scale to
-   * stay awake for two.
-   */
-  private liveEmitted = false;
+  private lastReportedTs = 0;
 
   /** Scale clock from the last `02` reply, and the local time it arrived. */
   private clockSec = 0;
   private clockAt = 0;
-
-  /** Bound on {@link reported}; far more than the scale's eight slots hold. */
-  private static readonly MAX_REPORTED = 64;
 
   matches(device: BleDeviceInfo): boolean {
     return matchesDescriptor(device, this.match);
@@ -296,8 +276,7 @@ export class SalterAdapter
 
     // The clock reply arrives on the same characteristic; capture it, then stop.
     if (data.length === CLOCK_REPLY_LEN && data[0] === CMD_CLOCK) {
-      this.clockSec = data.readUInt32LE(1);
-      this.clockAt = Date.now();
+      this.noteClock(data.readUInt32LE(1));
       return null;
     }
 
@@ -309,42 +288,37 @@ export class SalterAdapter
     const weight = data.readUInt16LE(WEIGHT_OFFSET) / WEIGHT_DIV;
     if (!(weight > 0) || !Number.isFinite(weight)) return null;
 
-    if (this.reported.has(timestamp)) return null;
     if (this.isFromAnotherEpoch(timestamp)) return null;
 
-    // The first unreported record of the session is the live reading; the rest
-    // are dated from the scale's own clock and ride along as history.
-    if (!this.liveEmitted) {
-      this.liveEmitted = true;
-      this.remember(timestamp);
-      bleLog.debug(`Salter: ${weight.toFixed(1)} kg from slot ${data[0]} (live)`);
-      return { weight, impedance: 0 };
-    }
+    // Newest wins. Older records are past weigh-ins the scale simply never
+    // forgets; only a record newer than anything reported before is a new
+    // measurement, and emitting them in ascending order leaves the newest as the
+    // reading the handler resolves with.
+    if (timestamp <= this.lastReportedTs) return null;
+    this.lastReportedTs = timestamp;
 
-    const takenAt = this.dateOf(timestamp);
-    if (!takenAt) return null; // clock unusable — leave it for the next session
-
-    this.remember(timestamp);
-    bleLog.debug(`Salter: ${weight.toFixed(1)} kg from slot ${data[0]} @ ${takenAt.toISOString()}`);
-    return { weight, impedance: 0, timestamp: takenAt };
+    bleLog.debug(`Salter: ${weight.toFixed(1)} kg from slot ${data[0]} (stamp ${timestamp})`);
+    return { weight, impedance: 0 };
   }
 
   /**
-   * Convert a record's timestamp into a real date.
+   * Record the scale's clock, and notice when it has gone backwards.
    *
-   * The scale's clock does NOT agree with the host's — one unit was found an
-   * hour out, because whatever last set it wrote local time into a field read as
-   * UTC. Comparing the record against the scale's own clock sidesteps that
-   * entirely: both come from the same wrong clock, so the offset cancels and
-   * what is left is the record's true age. Returns null when the clock has not
-   * been read yet or the resulting age is not credible.
+   * New batteries restart the clock near zero. Every subsequent weigh-in is then
+   * stamped with a small number, far below the newest timestamp already reported
+   * — so a plain high-water mark would suppress every future reading, forever
+   * and silently. A clock behind the mark means the epoch changed, and the mark
+   * belongs to a numbering that no longer exists.
    */
-  private dateOf(timestamp: number): Date | null {
-    if (!this.clockSec) return null;
-    const elapsedSec = (Date.now() - this.clockAt) / 1000;
-    const ageSec = this.clockSec + elapsedSec - timestamp;
-    if (!Number.isFinite(ageSec) || ageSec < 0 || ageSec > MAX_RECORD_AGE_SEC) return null;
-    return new Date(Date.now() - ageSec * 1000);
+  private noteClock(seconds: number): void {
+    this.clockSec = seconds;
+    this.clockAt = Date.now();
+    if (this.lastReportedTs && seconds + FUTURE_TOLERANCE_SEC < this.lastReportedTs) {
+      bleLog.info(
+        "Salter: the scale's clock went backwards (new batteries?); resetting de-duplication",
+      );
+      this.lastReportedTs = 0;
+    }
   }
 
   /**
@@ -365,23 +339,12 @@ export class SalterAdapter
     return timestamp > clockNow + FUTURE_TOLERANCE_SEC;
   }
 
-  /** Record a timestamp as reported, keeping the set bounded. */
-  private remember(timestamp: number): void {
-    this.reported.add(timestamp);
-    if (this.reported.size <= SalterAdapter.MAX_REPORTED) return;
-    // Drop the oldest half; timestamps are seconds, so numeric order is age.
-    const keep = [...this.reported].sort((a, b) => b - a).slice(0, SalterAdapter.MAX_REPORTED / 2);
-    this.reported.clear();
-    for (const ts of keep) this.reported.add(ts);
-  }
-
   /**
-   * Re-arm for the next session. Adapters are shared singletons, so without this
-   * the live-reading gate would stay closed for the rest of the process and
-   * every later weigh-in would arrive as history against a stale clock.
+   * Forget this session's clock reading. Adapters are shared singletons, so a
+   * stale clock would otherwise be used to judge the next session's records —
+   * including the backwards-clock check, which must see a fresh value.
    */
   onSessionEnd(): void {
-    this.liveEmitted = false;
     this.clockSec = 0;
     this.clockAt = 0;
   }

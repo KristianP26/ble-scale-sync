@@ -144,7 +144,7 @@ describe('SalterAdapter', () => {
     });
   });
 
-  describe('de-duplication and multi-user backlog', () => {
+  describe('newest-wins de-duplication', () => {
     it('reports a given stored measurement only once', () => {
       // Nothing is ever cleared, so the same record is re-read on every sweep
       // for as long as it sits in the buffer.
@@ -156,55 +156,52 @@ describe('SalterAdapter', () => {
       expect(a.parseNotification(REC_876_BIA)).toBeNull();
     });
 
-    it('emits one live reading, then history, so a backlog drains in one session', () => {
-      // The household case: two people weigh before the sync runs. Both records
-      // must reach the exporters from a single session, because the scale powers
-      // off long before a second cycle could connect.
+    it('leaves the NEWEST record standing across a sweep', () => {
+      // Slots are read in index order, which is not chronological: here the
+      // newest (slot 2) is read first and the older ones must not displace it.
+      // The handler resolves with the last reading it was given.
+      const a = makeAdapter();
+      const emitted = [REC_897_SLOT2, REC_74_SLOT6, REC_888_SLOT7]
+        .map((r) => a.parseNotification(r))
+        .filter((r) => r !== null);
+      expect(emitted).toHaveLength(1);
+      expect(emitted[0]!.weight).toBeCloseTo(89.7, 4);
+    });
+
+    it('emits an ascending sweep in order, ending on the newest', () => {
+      // When older slots are read first, each newer record supersedes the last,
+      // so the final emission is still the newest.
+      const a = makeAdapter();
+      const weights = [REC_857_APP, REC_876_BIA, REC_880_SLOT1, REC_897_SLOT2]
+        .map((r) => a.parseNotification(r))
+        .filter((r) => r !== null)
+        .map((r) => r!.weight);
+      expect(weights).toEqual([85.7, 87.6, 88.0, 89.7]);
+    });
+
+    it('ignores months-old readings the scale still holds', () => {
+      // The scale wakes because someone stood on it, so anything older than what
+      // has already been reported is a past weigh-in, not a new measurement.
+      const a = makeAdapter();
+      expect(a.parseNotification(REC_897_SLOT2)?.weight).toBeCloseTo(89.7, 4);
+      a.onSessionEnd();
+      expect(a.parseNotification(REC_857_APP)).toBeNull();
+      expect(a.parseNotification(REC_876_BIA)).toBeNull();
+    });
+
+    it('never emits a historical reading', () => {
+      // A `timestamp` routes a reading into the cache-replay buffer, which only
+      // drains on disconnect — and this adapter's poll holds the link open until
+      // the session times out, where a timeout rejects instead.
       const a = makeAdapter();
       a.parseNotification(clockReply(tsOf(REC_897_SLOT2), 30));
-
-      const live = a.parseNotification(REC_897_SLOT2);
-      expect(live).not.toBeNull();
-      expect(live!.timestamp).toBeUndefined(); // live: resolves the session
-
-      const older = a.parseNotification(REC_888_SLOT7);
-      expect(older).not.toBeNull();
-      expect(older!.timestamp).toBeInstanceOf(Date); // history: rides along
-      expect(older!.weight).toBeCloseTo(88.8, 4);
-    });
-
-    it('dates history from the scale clock, not the host clock', () => {
-      // The scale's clock was found an hour off the host's. Comparing a record
-      // against the scale's OWN clock cancels that offset.
-      const a = makeAdapter();
-      const ageSec = 600;
-      a.parseNotification(clockReply(tsOf(REC_897_SLOT2), 0));
-      a.parseNotification(REC_897_SLOT2); // consumes the live slot
-
-      const record = Buffer.from(REC_888_SLOT7);
-      record.writeUInt32LE(tsOf(REC_897_SLOT2) - ageSec, 2);
-      const reading = a.parseNotification(record);
-      const deltaMs = Date.now() - reading!.timestamp!.getTime();
-      expect(deltaMs / 1000).toBeGreaterThan(ageSec - 5);
-      expect(deltaMs / 1000).toBeLessThan(ageSec + 5);
-    });
-
-    it('leaves a record unreported when the clock is unusable', () => {
-      // No clock read yet: dating it would invent a measurement time, so it is
-      // left for the next session to emit as the live reading instead.
-      const a = makeAdapter();
-      expect(a.parseNotification(REC_897_SLOT2)).not.toBeNull(); // live
-      expect(a.parseNotification(REC_888_SLOT7)).toBeNull(); // no clock
-      a.onSessionEnd();
-      a.parseNotification(clockReply(tsOf(REC_888_SLOT7), 60));
-      expect(a.parseNotification(REC_888_SLOT7)?.weight).toBeCloseTo(88.8, 4);
+      expect(a.parseNotification(REC_897_SLOT2)!.timestamp).toBeUndefined();
     });
 
     it('drops records from before a battery change', () => {
       // New batteries restart the clock near zero while stored records keep the
       // old epoch's timestamps, so they read as far in the future. Reporting one
-      // would date a months-old weigh-in as today's — and the live path, unlike
-      // the history path, has no age check of its own to catch it.
+      // would date a months-old weigh-in as today's.
       const a = makeAdapter();
       a.parseNotification(clockReply(0, 400)); // clock restarted: ~400s uptime
       expect(a.parseNotification(REC_897_SLOT2)).toBeNull(); // ts is a 2026 unix time
@@ -215,55 +212,23 @@ describe('SalterAdapter', () => {
       // A record stamped slightly ahead of this session's clock read is normal:
       // someone stepped on the scale while the session was open.
       const a = makeAdapter();
-      const justNow = Buffer.from(REC_897_SLOT2);
-      a.parseNotification(clockReply(tsOf(justNow), -5)); // clock read 5s before
-      expect(a.parseNotification(justNow)?.weight).toBeCloseTo(89.7, 4);
+      a.parseNotification(clockReply(tsOf(REC_897_SLOT2), -5)); // read 5s earlier
+      expect(a.parseNotification(REC_897_SLOT2)?.weight).toBeCloseTo(89.7, 4);
     });
 
-    it('rejects a record the clock says is impossibly old', () => {
+    it('recovers after a battery change instead of going silent forever', () => {
+      // THE trap in a high-water mark: a reset clock stamps every future
+      // weigh-in below the mark, so without noticing the clock went backwards
+      // the adapter would suppress every reading from then on, silently.
       const a = makeAdapter();
-      a.parseNotification(clockReply(tsOf(REC_897_SLOT2), 0));
-      a.parseNotification(REC_897_SLOT2);
-      const ancient = Buffer.from(REC_888_SLOT7);
-      ancient.writeUInt32LE(1, 2); // clock reset; record claims 1970
-      expect(a.parseNotification(ancient)).toBeNull();
-    });
-
-    it('drains two weigh-ins across consecutive sessions, losing neither', () => {
-      // Without a clock only one reading leaves per session, so the second must
-      // still be waiting on the next one rather than being suppressed.
-      const a = makeAdapter();
-      const sweep = [REC_897_SLOT2, REC_888_SLOT7];
-
-      const first = sweep.map((r) => a.parseNotification(r)).filter((r) => r !== null);
-      expect(first).toHaveLength(1);
+      expect(a.parseNotification(REC_897_SLOT2)).not.toBeNull(); // mark: 6a8a14fa
       a.onSessionEnd();
 
-      const second = sweep.map((r) => a.parseNotification(r)).filter((r) => r !== null);
-      expect(second).toHaveLength(1);
-      a.onSessionEnd();
-
-      const third = sweep.map((r) => a.parseNotification(r)).filter((r) => r !== null);
-      expect(third).toHaveLength(0);
-
-      const weights = [first[0]!.weight, second[0]!.weight].sort();
-      expect(weights).toEqual([88.8, 89.7]);
-    });
-
-    it('does not suppress an older record just because a newer one was seen', () => {
-      // A high-water mark would drop the earlier of two weigh-ins permanently.
-      const a = makeAdapter();
-      expect(a.parseNotification(REC_897_SLOT2)?.weight).toBeCloseTo(89.7, 4); // newest
-      a.onSessionEnd();
-      expect(a.parseNotification(REC_857_APP)?.weight).toBeCloseTo(85.7, 4); // much older
-    });
-
-    it('re-arms after every session', () => {
-      const a = makeAdapter();
-      expect(a.parseNotification(REC_880_SLOT1)).not.toBeNull();
-      expect(a.parseNotification(REC_897_SLOT2)).toBeNull(); // no clock: deferred
-      a.onSessionEnd();
-      expect(a.parseNotification(REC_897_SLOT2)).not.toBeNull();
+      // New batteries: clock restarts, and a fresh weigh-in is stamped ~500s.
+      a.parseNotification(clockReply(0, 500));
+      const fresh = Buffer.from(REC_888_SLOT7);
+      fresh.writeUInt32LE(495, 2);
+      expect(a.parseNotification(fresh)?.weight).toBeCloseTo(88.8, 4);
     });
   });
 
