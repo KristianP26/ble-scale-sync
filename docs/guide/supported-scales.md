@@ -9,7 +9,7 @@ head:
 
 # Supported Scales
 
-BLE Scale Sync ships **31 protocol adapters** out of the box, covering Xiaomi, Renpho (incl. FITINDEX, Sencor, QN-Scale), Eufy (incl. P2 Pro T9149), Yunmai, Beurer, Sanitas, Medisana, and more, plus a generic Bluetooth SIG adapter that works with any spec-compliant BCS/WSS scale. Each adapter typically supports several models or rebrands sold under different names, so the real device coverage is much wider than the adapter count. Most adapters provide weight + impedance for full [body composition](/body-composition) calculation; a few are weight-only (noted in the table), and those estimate body composition from BMI instead.
+BLE Scale Sync ships **32 protocol adapters** out of the box, covering Xiaomi, Renpho (incl. FITINDEX, Sencor, QN-Scale), Eufy (incl. P2 Pro T9149), Yunmai, Beurer, Sanitas, Medisana, and more, plus a generic Bluetooth SIG adapter that works with any spec-compliant BCS/WSS scale. Each adapter typically supports several models or rebrands sold under different names, so the real device coverage is much wider than the adapter count. Most adapters provide weight + impedance for full [body composition](/body-composition) calculation; a few are weight-only (noted in the table), and those estimate body composition from BMI instead.
 
 ## Scale List
 

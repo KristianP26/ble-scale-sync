@@ -82,6 +82,10 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
   Hutbit: { localName: 'Hutbit Scale', serviceUuids: ['ffb0'] },
   'MGB (Swan/Icomon/YG)': { localName: 'icomon', serviceUuids: [] },
   'Hoffen BS-8107': { localName: 'hoffen bs-8107', serviceUuids: [] },
+  // Real advertisement from a SALTER-SA00656-BK: the advertised service UUID is
+  // the byte-swapped form (0xCCFF) of the 0xFFCC service the device exposes
+  // over GATT.
+  Salter: { localName: 'SALTER-SA00656-BK', serviceUuids: ['ccff'] },
   // Generic fallback: a non-excluded name + bare Weight Scale Service (0x181D).
   'Standard GATT (BCS/WSS)': { localName: 'GenericScale', serviceUuids: ['181d'] },
 };

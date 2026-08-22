@@ -30,6 +30,7 @@ import { MgbAdapter } from './mgb.js';
 import { HoffenAdapter } from './hoffen.js';
 import { SenssunAdapter } from './senssun.js';
 import { EufyP2Adapter } from './eufy-p2.js';
+import { SalterAdapter } from './salter.js';
 import { StandardGattScaleAdapter } from './standard-gatt.js';
 import { registerExclusionRegistry } from './derived-excludes.js';
 
@@ -91,6 +92,10 @@ export const adapters: ScaleAdapter[] = [
   new HutbitAdapter(),
   new MgbAdapter(),
   new HoffenAdapter(),
+  // Salter (0xFFCC "Healthcare ELectronic"): claims its own name prefix and the
+  // FFCC/CCFF service pair, which no other adapter uses, so its position here is
+  // presentational only — precedence comes from match.priority.
+  new SalterAdapter(),
   // Generic standard GATT adapter last — matches by service UUID / brand names
   new StandardGattScaleAdapter(),
 ];
