@@ -1401,6 +1401,52 @@ describe('AE02 dispatch (#75, #235)', () => {
       expect(writes.find((w) => w[0] === 0x13 && w[4] === 0x10)![2]).toBe(0xff);
     });
 
+    it('applies the override to the classic dialect', async () => {
+      // A classic-dialect scale whose firmware wants a different byte than its
+      // 0x12 reports had no working override before: the classic branch read
+      // data[2] unconditionally.
+      const adapter = makeAdapter();
+      adapter.configure({ qnProtocolByte: 0x15 });
+      const info = Buffer.alloc(11);
+      info[0] = 0x12;
+      info[2] = 0xab;
+      info[10] = 1;
+      const writes = await driveHandshake(adapter, info);
+      expect(writes.find((w) => w[0] === 0x13 && w[4] === 0x10)![2]).toBe(0x15);
+      expect(writes.find((w) => w[0] === 0x22)![2]).toBe(0x15);
+    });
+
+    it('opens with the override before 0x12 and keeps it through the no-0x12 fallback', async () => {
+      // Proxy transports can lose the 0x12 scale-info frame entirely. The
+      // session must then still open the unlock config with the forced byte and
+      // run the fallback handshake on it, not on the 0x00/0xff guesses.
+      const adapter = makeAdapter();
+      adapter.configure({ qnProtocolByte: 0x15 });
+      vi.useFakeTimers();
+      try {
+        const writes: number[][] = [];
+        const ctx = {
+          write: async (_uuid: string, data: Buffer | number[]) => {
+            writes.push([...data]);
+          },
+          read: async () => Buffer.alloc(0),
+          subscribe: async () => {},
+          profile: defaultProfile(),
+          deviceAddress: '',
+          availableChars: new Set<string>(),
+        } as unknown as ConnectionContext;
+        await adapter.onConnected(ctx);
+        await vi.advanceTimersByTimeAsync(4000);
+        const configs = writes.filter((w) => w[0] === 0x13 && w[4] === 0x10);
+        expect(configs.length).toBeGreaterThan(0);
+        for (const c of configs) expect(c[2]).toBe(0x15);
+        expect(writes.find((w) => w[0] === 0x20)![2]).toBe(0x15);
+        expect(writes.find((w) => w[0] === 0x22)![2]).toBe(0x15);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('classic 11B 0x12 frame is unaffected by the extended-dialect rule', async () => {
       const adapter = makeAdapter();
       const info = Buffer.alloc(11);

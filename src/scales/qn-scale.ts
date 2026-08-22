@@ -326,7 +326,11 @@ export class QnScaleAdapter
 
   /**
    * Protocol byte forced by `ble.qn_protocol_byte`, overriding what the frame
-   * length implies (#75, #331).
+   * length or the scale-info frame implies (#75, #331). Applied to every
+   * protocol-bearing write in the session, including the pre-0x12 unlock
+   * config, the classic dialect, and the no-0x12 fallback handshake: a scale
+   * whose 0x12 is lost in transit must still open with the byte its firmware
+   * accepts.
    *
    * There is no way to detect the wrong choice at runtime: a scale on the wrong
    * byte acknowledges 0x14, 0x21 and 0x23 exactly as it does on the right one
@@ -446,7 +450,7 @@ export class QnScaleAdapter
   async onConnected(ctx: ConnectionContext): Promise<void> {
     // Reset state for new connection
     this.ctx = ctx;
-    this.seenProtocolType = 0x00;
+    this.seenProtocolType = this.forcedProtocolType ?? 0x00;
     this.weightScaleFactor = 100;
     this.hasAe00 = false;
     this.ae02Subscribe = null;
@@ -485,7 +489,17 @@ export class QnScaleAdapter
       // The second unlock is the 0x10 config variant whose byte[3] is the unit
       // flag; honour the configured unit and recompute its checksum (#269). The
       // first unlock is a different 0x01 subcommand and is left as-is.
-      const config = [0x13, 0x09, 0x00, this.unitFlag(), 0x10, 0x00, 0x00, 0x00, 0x00];
+      const config = [
+        0x13,
+        0x09,
+        this.seenProtocolType,
+        this.unitFlag(),
+        0x10,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+      ];
       config[8] = config.reduce((a, b) => a + b, 0) & 0xff;
       const unlocks = [[0x13, 0x09, 0x00, 0x01, 0x01, 0x02], config];
       for (const cmd of unlocks) {
@@ -512,8 +526,11 @@ export class QnScaleAdapter
     const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
     if (!this.configSent) {
-      this.seenProtocolType = 0xff;
-      bleLog.debug('QN: fallback: no 0x12 received, running handshake with proto=0xFF');
+      this.seenProtocolType = this.forcedProtocolType ?? 0xff;
+      bleLog.debug(
+        `QN: fallback: no 0x12 received, running handshake with ` +
+          `proto=0x${this.seenProtocolType.toString(16).padStart(2, '0')}`,
+      );
       // handleScaleInfo sends AE01 init + 0x13 config
       await this.handleScaleInfo();
       await wait(500);
@@ -785,7 +802,7 @@ export class QnScaleAdapter
         // Classic short frame
         this.isLongFrameVariant = false;
         this.isExtendedLongFrame = false;
-        this.seenProtocolType = data[2];
+        this.seenProtocolType = this.forcedProtocolType ?? data[2];
         this.weightScaleFactor = data[10] === 1 ? 100 : 10;
       }
       const dialect = this.isExtendedLongFrame

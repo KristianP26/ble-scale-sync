@@ -135,8 +135,9 @@ export const BleSchema = z
      * wrong one is silent rather than an error: the scale acknowledges the whole
      * handshake and never streams a weight. The scale-info frame length picks a
      * default (0 for the 18-byte variant, the value the scale itself sent for
-     * anything longer); set this only when a scale runs the full handshake and
-     * then reports nothing.
+     * anything longer); set this when a scale runs the full handshake and then
+     * reports nothing, or when its scale-info frame is unreliable in transit
+     * (proxy transports) and sessions without it open on the wrong byte.
      */
     qn_protocol_byte: z.number().int().min(0).max(255).optional().nullable(),
     mqtt_proxy: MqttProxySchema.optional(),
