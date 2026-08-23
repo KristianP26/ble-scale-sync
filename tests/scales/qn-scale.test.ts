@@ -1333,6 +1333,46 @@ describe('AE02 dispatch (#75, #235)', () => {
         vi.useRealTimers();
       }
     });
+
+    it('still delivers the 0x1F ack on FFE3 when the session ends before the FFF2 fallback runs', async () => {
+      const adapter = makeAdapter();
+      const writes: Array<{ uuid: string; data: number[] }> = [];
+      const ctx = {
+        // An FFE3-only scale: the FFF2 attempt rejects, the fallback must land on FFE3.
+        write: async (uuid: string, data: Buffer | number[]) => {
+          if (uuid === '0000fff200001000800000805f9b34fb') {
+            throw new Error(`Characteristic ${uuid} not found`);
+          }
+          writes.push({ uuid, data: [...data] });
+        },
+        read: async () => Buffer.alloc(0),
+        subscribe: async () => {},
+        profile: defaultProfile(),
+        deviceAddress: '',
+        availableChars: new Set<string>(),
+      } as unknown as ConnectionContext;
+      await adapter.onConnected(ctx);
+      writes.length = 0;
+
+      const stable = Buffer.alloc(10);
+      stable[0] = 0x10;
+      stable[1] = 0x0a;
+      stable[2] = 0x01;
+      stable.writeUInt16BE(8000, 3);
+      stable[5] = 1;
+      stable.writeUInt16BE(550, 6);
+      stable.writeUInt16BE(530, 8);
+
+      // waitForReading's finishWith runs cleanup -> onSessionEnd synchronously
+      // after parseNotification returns, before the rejected FFF2 write is observed.
+      expect(adapter.parseNotification(stable)).not.toBeNull();
+      adapter.onSessionEnd!();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      const ack = writes.find((w) => w.data[0] === 0x1f);
+      expect(ack?.uuid).toBe('0000ffe300001000800000805f9b34fb');
+      expect(ack?.data).toEqual([0x1f, 0x05, 0x00, 0x10, 0x34]);
+    });
   });
 
   // ── GE CS 10 G "Fit Plus" extended long frame (#235) ────────────────────────
