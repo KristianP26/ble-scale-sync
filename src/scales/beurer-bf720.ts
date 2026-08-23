@@ -64,10 +64,12 @@ const PROFILE_FIELDS: ProfileField[] = [
       return year >= 1900 && year <= new Date().getFullYear();
     },
     fromProfile: (p) => {
+      // YYYY-MM-DD parses as UTC midnight, so read it back in UTC: the local
+      // getters shift the day west of Greenwich.
       const born = p.birthDate ? new Date(p.birthDate) : null;
       if (born && !Number.isNaN(born.getTime())) {
-        const y = born.getFullYear();
-        return [y & 0xff, (y >> 8) & 0xff, born.getMonth() + 1, born.getDate()];
+        const y = born.getUTCFullYear();
+        return [y & 0xff, (y >> 8) & 0xff, born.getUTCMonth() + 1, born.getUTCDate()];
       }
       // No birth date in the profile: anchor to 1 January of the derived year.
       const year = new Date().getFullYear() - Math.max(1, Math.round(p.age));
