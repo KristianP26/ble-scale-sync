@@ -1790,6 +1790,51 @@ describe('handler-mqtt-proxy', () => {
       expect(connectCalls).toHaveLength(0);
     });
 
+    it('autonomous session survives a weigh-in that starts near the old fixed deadline', async () => {
+      vi.useFakeTimers();
+      try {
+        const adapter = createGattAdapter();
+        const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter], undefined, PROFILE);
+        await watcher.start();
+
+        mockClient._simulateMessage(
+          `${PREFIX}/connected`,
+          JSON.stringify({
+            autonomous: true,
+            address: 'AA:BB:CC:DD:EE:FF',
+            chars: [
+              { uuid: GATT_NOTIFY_UUID, properties: ['notify'] },
+              { uuid: GATT_WRITE_UUID, properties: ['write'] },
+            ],
+          }),
+        );
+        const pending = watcher.nextReading();
+
+        // The scale is connected but idle for 55 s, then streams a frame the
+        // adapter rejects (an unstable weight), exactly what a QN scale does
+        // while the weight settles before its silent impedance phase.
+        await vi.advanceTimersByTimeAsync(55_000);
+        mockClient._simulateMessage(`${PREFIX}/notify/${GATT_NOTIFY_UUID}`, Buffer.from([0x10]));
+        expect(adapter.parseNotification).toHaveLastReturnedWith(null);
+
+        // 61 s after connect: the old fixed deadline has passed, the session is still up.
+        await vi.advanceTimersByTimeAsync(6_000);
+        const disconnects = (mockClient.publishAsync as ReturnType<typeof vi.fn>).mock.calls.filter(
+          (c: unknown[]) => c[0] === `${PREFIX}/disconnect`,
+        );
+        expect(disconnects).toHaveLength(0);
+
+        const buf = Buffer.alloc(4);
+        buf.writeUInt16LE(9030, 0);
+        buf.writeUInt16LE(500, 2);
+        mockClient._simulateMessage(`${PREFIX}/notify/${GATT_NOTIFY_UUID}`, buf);
+        const raw = await pending;
+        expect(raw.reading.weight).toBe(90.3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('ReadingWatcher ignores autonomous connect when no adapter matches', async () => {
       // Adapter only matches by name 'GattScale', but the autonomous connect
       // comes from a different device with no name info.
@@ -2373,7 +2418,7 @@ describe('handler-mqtt-proxy', () => {
         await vi.advanceTimersByTimeAsync(10);
         expect((mockClient._listeners.get('message') ?? []).length).toBeGreaterThan(baseline);
 
-        // The 60s reading timeout must tear the whole session down: a leaked
+        // 60 s of silence must tear the whole session down: a leaked
         // notify listener on the persistent client re-processes every later
         // notification and compounds with each timed-out session.
         await vi.advanceTimersByTimeAsync(60_000);

@@ -71,7 +71,7 @@ ble:
 | `noble_driver`        | No                          | OS default     | `abandonware` or `stoprocent`. Overrides the default BLE driver. Only applies when `handler: auto`.                                                                                                                                                |
 | `adapter`             | No                          | System default | Linux only. Select a specific Bluetooth adapter (e.g., `hci0`, `hci1`). See below.                                                                                                                                                                 |
 | `force_scale_adapter` | No                          | Auto-detect    | Name of the scale protocol adapter to use, bypassing auto-detection. Requires `scale_mac`. See below.                                                                                                                                              |
-| `session_timeout_sec` | No                          | `120`          | Seconds one GATT session may wait for a complete reading (5 to 600). Native BLE handlers only; ignored on `mqtt-proxy` and `esphome-proxy`. See below.                                                                                             |
+| `session_timeout_sec` | No                          | `120`          | Seconds of scale silence that end a GATT session (5 to 600); an inbound frame restarts the clock. Native BLE handlers only; ignored on `mqtt-proxy` and `esphome-proxy`. See below.                                                                |
 | `qn_protocol_byte`    | No                          | Auto           | QN-family scales only. Protocol byte the handshake echoes back to the scale (0 to 255). Set it when a QN scale runs the whole handshake and then reports nothing, or when its scale-info frame is lost in transit on a proxy transport. See below. |
 | `qn_report_byte`      | No                          | `254` (0xFE)   | QN-family scales only. Payload byte of the history-response frame (0 to 255). Try `252` (0xFC) when a QN scale completes the handshake and then reports nothing. See below.                                                                        |
 | `mqtt_proxy`          | If `handler: mqtt-proxy`    | (none)         | MQTT proxy connection (`broker_url`, `device_id`, `topic_prefix`, `username`, `password`, `auto_connect`, `embedded_broker_*`). See [ESP32 BLE Proxy](./esp32-proxy).                                                                              |
@@ -153,7 +153,7 @@ If `252` makes your scale produce a weight, please say so in an issue with the m
 ::: tip Shortening the session (`session_timeout_sec`)
 Some scales will not run a standalone weigh-in while a host holds the GATT session open. The Beurer BF500 is the clearest example: it displays `APP` and waits, so only a measurement taken **between** sessions is picked up.
 
-By default a session waits 120 seconds for a reading. On a scale like this, that is 120 seconds out of every cycle in which stepping on it achieves nothing. Shortening the session, and lengthening the gap after it, frees the scale for most of the cycle:
+By default a session ends after 120 seconds without a notification from the scale. On a scale like this, that is 120 seconds out of every cycle in which stepping on it achieves nothing. Shortening the session, and lengthening the gap after it, frees the scale for most of the cycle:
 
 ```yaml
 ble:

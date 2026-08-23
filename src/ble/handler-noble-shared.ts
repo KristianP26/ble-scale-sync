@@ -16,6 +16,7 @@ import {
   sleep,
   errMsg,
   withTimeout,
+  withIdleTimeout,
   resetAdapterBtmgmt,
   CONNECT_TIMEOUT_MS,
   MAX_CONNECT_RETRIES,
@@ -598,17 +599,19 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
         // Bounded like the node-ble path (handler-node-ble/scan.ts): without
         // this the reading phase relies entirely on the peripheral eventually
         // disconnecting, so a stalled GATT session wedges the process (#283).
-        const raw = await withTimeout(
-          waitForRawReading(
-            charMap,
-            wrapPeripheral(peripheral),
-            matchedAdapter,
-            profile,
-            peripheralAddress(peripheral).replace(/[:-]/g, '').toUpperCase(),
-            weightUnit,
-            onLiveData,
-            scaleAuth,
-          ),
+        const raw = await withIdleTimeout(
+          (onActivity) =>
+            waitForRawReading(
+              charMap,
+              wrapPeripheral(peripheral),
+              matchedAdapter,
+              profile,
+              peripheralAddress(peripheral).replace(/[:-]/g, '').toUpperCase(),
+              weightUnit,
+              onLiveData,
+              scaleAuth,
+              onActivity,
+            ),
           readingTimeoutMs ?? RAW_READING_TIMEOUT_MS,
           'Timed out waiting for a complete scale reading',
         );

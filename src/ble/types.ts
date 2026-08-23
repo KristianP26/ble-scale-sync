@@ -21,7 +21,13 @@ export const DISCOVERY_POLL_MS = 2_000;
 /** Timeout for GATT service/characteristic enumeration after connecting. */
 export const GATT_DISCOVERY_TIMEOUT_MS = 30_000;
 
-/** Timeout for the full reading phase (subscribe → first complete reading). */
+/**
+ * How long the reading phase waits without a notification from the scale. The
+ * timer restarts on every frame, so it counts silence rather than time since
+ * connect. The ESP32 proxy connects as soon as the scale advertises, often
+ * well before anyone steps on, and a window counted from connect ran out
+ * during a weigh-in.
+ */
 export const RAW_READING_TIMEOUT_MS = 120_000;
 
 /**
@@ -114,7 +120,7 @@ export interface ScanOptions {
   mqttProxy?: MqttProxyConfig;
   esphomeProxy?: EsphomeProxyConfig;
   bleAdapter?: string;
-  /** Override RAW_READING_TIMEOUT_MS for one session (ble.session_timeout_sec, #83). */
+  /** Override RAW_READING_TIMEOUT_MS (seconds of silence) for one session (ble.session_timeout_sec, #83). */
   readingTimeoutMs?: number;
 }
 
@@ -173,6 +179,32 @@ export async function withTimeout<T>(promise: Promise<T>, ms: number, message: s
     return await Promise.race([promise, timeout]);
   } finally {
     clearTimeout(timer!);
+  }
+}
+
+/**
+ * Like withTimeout, but the deadline restarts whenever `start`'s callback is
+ * invoked: the promise from `start` is rejected only after `ms` of inactivity.
+ */
+export async function withIdleTimeout<T>(
+  start: (onActivity: () => void) => Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let rejectTimeout!: (err: Error) => void;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    rejectTimeout = reject;
+  });
+  const onActivity = (): void => {
+    clearTimeout(timer);
+    timer = setTimeout(() => rejectTimeout(new Error(message)), ms);
+  };
+  onActivity();
+  try {
+    return await Promise.race([start(onActivity), timeout]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 

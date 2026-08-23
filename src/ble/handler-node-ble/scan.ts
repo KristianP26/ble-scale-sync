@@ -15,6 +15,7 @@ import {
   sleep,
   errMsg,
   withTimeout,
+  withIdleTimeout,
   resetAdapterBtmgmt,
   MAX_CONNECT_RETRIES,
   DISCOVERY_TIMEOUT_MS,
@@ -456,17 +457,20 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       await ensureBonded(device, scaleAuth?.pin);
     }
 
-    const raw = await withTimeout(
-      waitForRawReading(
-        charMap,
-        wrapDevice(device),
-        matchedAdapter,
-        profile,
-        deviceMac.replace(/[:-]/g, '').toUpperCase(),
-        weightUnit,
-        onLiveData,
-        scaleAuth,
-      ),
+    const bleDevice = wrapDevice(device);
+    const raw = await withIdleTimeout(
+      (onActivity) =>
+        waitForRawReading(
+          charMap,
+          bleDevice,
+          matchedAdapter,
+          profile,
+          deviceMac.replace(/[:-]/g, '').toUpperCase(),
+          weightUnit,
+          onLiveData,
+          scaleAuth,
+          onActivity,
+        ),
       readingTimeoutMs ?? RAW_READING_TIMEOUT_MS,
       'Timed out waiting for a complete scale reading',
     );

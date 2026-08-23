@@ -473,6 +473,7 @@ export function waitForRawReading(
   weightUnit?: WeightUnit,
   onLiveData?: (reading: ScaleReading) => void,
   scaleAuth?: ScaleAuth,
+  onActivity?: () => void,
 ): Promise<RawReading> {
   return new Promise<RawReading>((resolve, reject) => {
     let resolved = false;
@@ -496,6 +497,10 @@ export function waitForRawReading(
 
     const handleNotification = (sourceUuid: string, data: Buffer): void => {
       if (resolved) return;
+
+      // Counted before the adapter gate, because a frame the adapter rejects
+      // (an unstable QN 0x10) still shows the scale is mid weigh-in.
+      onActivity?.();
 
       // Every frame the scale sends, before any adapter gate can discard it.
       // Without this a silent cycle cannot be told apart from one where frames

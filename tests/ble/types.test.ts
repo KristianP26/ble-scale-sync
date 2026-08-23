@@ -1,9 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   formatMac,
   normalizeUuid,
   sleep,
   withTimeout,
+  withIdleTimeout,
   BT_BASE_UUID_SUFFIX,
 } from '../../src/ble/types.js';
 
@@ -77,5 +78,45 @@ describe('withTimeout()', () => {
   it('propagates the original error if promise rejects before timeout', async () => {
     const failing = Promise.reject(new Error('original error'));
     await expect(withTimeout(failing, 1000, 'timeout')).rejects.toThrow('original error');
+  });
+});
+
+describe('withIdleTimeout()', () => {
+  it('rejects after the idle period when nothing signals activity', async () => {
+    vi.useFakeTimers();
+    try {
+      const never = withIdleTimeout(() => new Promise<never>(() => {}), 1000, 'idle');
+      const outcome = expect(never).rejects.toThrow('idle');
+      await vi.advanceTimersByTimeAsync(1000);
+      await outcome;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('restarts the deadline on activity so a slow but live source completes', async () => {
+    vi.useFakeTimers();
+    try {
+      let signal!: () => void;
+      let finish!: (v: string) => void;
+      const result = withIdleTimeout(
+        (onActivity) => {
+          signal = onActivity;
+          return new Promise<string>((resolve) => {
+            finish = resolve;
+          });
+        },
+        1000,
+        'idle',
+      );
+      await vi.advanceTimersByTimeAsync(900);
+      signal();
+      // Past the original deadline, inside the restarted one.
+      await vi.advanceTimersByTimeAsync(900);
+      finish('reading');
+      await expect(result).resolves.toBe('reading');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
