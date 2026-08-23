@@ -1,4 +1,4 @@
-import { watch, type FSWatcher } from 'node:fs';
+import { watch, readFileSync, type FSWatcher } from 'node:fs';
 import { dirname, basename } from 'node:path';
 import { createLogger } from '../logger.js';
 import { errMsg } from '../utils/error.js';
@@ -19,6 +19,10 @@ export interface ConfigWatcherHandle {
  * inode, plus editor save patterns (vim `:w`, VS Code) that trigger 2+ events
  * within ~50 ms.
  *
+ * Events that leave the file's content unchanged are ignored: FSEvents on macOS
+ * replays directory history from just before the watch started, so the file's
+ * own creation would otherwise arrive as an edit.
+ *
  * Self-writes from updateLastKnownWeight() are suppressed via the suppress
  * window in write.ts, so this never re-fires for our own bumps. Errors from
  * fs.watch (e.g. parent directory unmounted) are logged and the watcher
@@ -29,6 +33,7 @@ export function startConfigWatcher(configPath: string, onChange: () => void): Co
   const base = basename(configPath);
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let closed = false;
+  let lastContent = readContent(configPath);
 
   const fire = () => {
     debounceTimer = null;
@@ -47,6 +52,9 @@ export function startConfigWatcher(configPath: string, onChange: () => void): Co
       // cannot tell whether the change is for our config file, so ignore.
       if (!filename) return;
       if (filename !== base) return;
+      const content = readContent(configPath);
+      if (content === lastContent) return;
+      lastContent = content;
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(fire, DEBOUNCE_MS);
     });
@@ -78,4 +86,13 @@ export function startConfigWatcher(configPath: string, onChange: () => void): Co
       }
     },
   };
+}
+
+/** Current file content, or null while it is absent (mid atomic rename, deleted). */
+function readContent(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
 }
