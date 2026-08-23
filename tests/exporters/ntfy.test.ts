@@ -80,9 +80,21 @@ describe('NtfyExporter', () => {
     expect(body).toContain('80.00 kg');
     expect(body).toContain('BMI 23.9');
     expect(body).toContain('Body Fat 18.5%');
-    expect(body).toContain('Muscle 62.4 kg');
+    expect(body).toContain('Muscle 62.40 kg');
+    expect(body).toContain('Bone 3.10 kg');
     expect(body).toContain('BMR 1750 kcal');
     expect(body).toContain('Physique 5');
+  });
+
+  it('formats weight-valued fields in the configured unit', async () => {
+    const exporter = new NtfyExporter(defaultConfig);
+    await exporter.export(samplePayload, { weightUnit: 'lbs' });
+
+    const body = mockFetch.mock.calls[0][1].body as string;
+    expect(body).toContain('⚖️ 176.37 lbs');
+    expect(body).toContain('Muscle 137.57 lbs');
+    expect(body).toContain('Bone 6.83 lbs');
+    expect(body).not.toContain('kg');
   });
 
   it('uses Bearer token auth when token is set', async () => {

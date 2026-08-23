@@ -184,6 +184,8 @@ global_exporters:
     priority: 4
 ```
 
+Weight, muscle and bone follow `scale.weight_unit`.
+
 ## Telegram {#telegram}
 
 Send a measurement notification to a Telegram chat via a bot. Create a bot with [@BotFather](https://t.me/BotFather) to get a bot token, then start a chat with your bot (or add it to a group/channel) so it can message you.
@@ -204,7 +206,7 @@ global_exporters:
     silent: false
 ```
 
-The message is sent as plain text. In multi-user setups the user's name is prepended as `[Name]`. Historical readings replayed from a scale's offline cache are skipped (a notification for an old measurement is not meaningful).
+The message is sent as plain text. Weight, muscle and bone follow `scale.weight_unit`. In multi-user setups the user's name is prepended as `[Name]`. Historical readings replayed from a scale's offline cache are skipped (a notification for an old measurement is not meaningful).
 
 ::: tip Finding your chat ID
 Message your bot once, then open `https://api.telegram.org/bot<token>/getUpdates` in a browser — the `chat.id` field holds your chat ID. For groups, add the bot to the group first.

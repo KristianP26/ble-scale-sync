@@ -3,6 +3,7 @@ import type { BodyComposition } from '../interfaces/scale-adapter.js';
 import type { Exporter, ExportContext, ExportResult } from '../interfaces/exporter.js';
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { NtfyConfig } from './config.js';
+import { formatNotification } from './notification-message.js';
 import { withRetry, httpError } from '../utils/retry.js';
 import { errMsg } from '../utils/error.js';
 
@@ -49,21 +50,6 @@ export const ntfySchema: ExporterSchema = {
   supportsPerUser: false,
 };
 
-function formatMessage(data: BodyComposition, userName?: string, driftWarning?: string): string {
-  const prefix = userName ? `[${userName}] ` : '';
-  const lines = [
-    `${prefix}⚖️ ${data.weight.toFixed(2)} kg | BMI ${data.bmi.toFixed(1)}`,
-    `🏋️ Body Fat ${data.bodyFatPercent.toFixed(1)}% | Muscle ${data.muscleMass.toFixed(1)} kg`,
-    `💧 Water ${data.waterPercent.toFixed(1)}% | 🦴 Bone ${data.boneMass.toFixed(1)} kg`,
-    `🫀 Visceral Fat ${data.visceralFat} | BMR ${data.bmr} kcal`,
-    `📅 Metabolic Age ${data.metabolicAge} yr | Physique ${data.physiqueRating}`,
-  ];
-  if (driftWarning) {
-    lines.push(`⚠️ ${driftWarning}`);
-  }
-  return lines.join('\n');
-}
-
 export class NtfyExporter implements Exporter {
   readonly name = 'ntfy';
   private readonly config: NtfyConfig;
@@ -103,7 +89,7 @@ export class NtfyExporter implements Exporter {
       headers['Authorization'] = `Basic ${btoa(username + ':' + password)}`;
     }
 
-    const body = formatMessage(data, context?.userName, context?.driftWarning);
+    const body = formatNotification(data, context);
 
     return withRetry(
       async () => {
