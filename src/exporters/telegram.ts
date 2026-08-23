@@ -44,6 +44,14 @@ export const telegramSchema: ExporterSchema = {
       required: false,
       default: false,
     },
+    {
+      key: 'report_exports',
+      label: 'Report export results',
+      type: 'boolean',
+      required: false,
+      default: false,
+      description: 'Wait for the other exporters and append their results to the message',
+    },
   ],
   supportsGlobal: true,
   supportsPerUser: false,
@@ -51,10 +59,12 @@ export const telegramSchema: ExporterSchema = {
 
 export class TelegramExporter implements Exporter {
   readonly name = 'telegram';
+  readonly reportsExports: boolean;
   private readonly config: TelegramConfig;
 
   constructor(config: TelegramConfig) {
     this.config = config;
+    this.reportsExports = config.reportExports;
   }
 
   async healthcheck(): Promise<ExportResult> {

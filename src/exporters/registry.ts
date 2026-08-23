@@ -112,6 +112,7 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
         token: config.token as string | undefined,
         username: config.username as string | undefined,
         password: config.password as string | undefined,
+        reportExports: (config.report_exports as boolean) ?? false,
       };
       return new NtfyExporter(ntfyConfig);
     },
@@ -145,6 +146,7 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
         chatId: requireField(config, 'telegram', 'chat_id'),
         title: (config.title as string) ?? 'Scale Measurement',
         silent: (config.silent as boolean) ?? false,
+        reportExports: (config.report_exports as boolean) ?? false,
       };
       return new TelegramExporter(telegramConfig);
     },

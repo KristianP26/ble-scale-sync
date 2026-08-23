@@ -22,6 +22,7 @@ const defaultConfig: NtfyConfig = {
   topic: 'my-scale',
   title: 'Scale Measurement',
   priority: 3,
+  reportExports: false,
 };
 
 const mockFetch = vi.fn();
@@ -84,6 +85,24 @@ describe('NtfyExporter', () => {
     expect(body).toContain('Bone 3.10 kg');
     expect(body).toContain('BMR 1750 kcal');
     expect(body).toContain('Physique 5');
+  });
+
+  it('exposes reportsExports from the config', () => {
+    expect(new NtfyExporter(defaultConfig).reportsExports).toBe(false);
+    expect(new NtfyExporter({ ...defaultConfig, reportExports: true }).reportsExports).toBe(true);
+  });
+
+  it('appends one line per export result', async () => {
+    const exporter = new NtfyExporter({ ...defaultConfig, reportExports: true });
+    await exporter.export(samplePayload, {
+      exportResults: [
+        { name: 'garmin', ok: true },
+        { name: 'influxdb', ok: false, error: 'HTTP 401' },
+      ],
+    });
+
+    const body = mockFetch.mock.calls[0][1].body as string;
+    expect(body.endsWith('\n✅ garmin\n❌ influxdb: HTTP 401')).toBe(true);
   });
 
   it('formats weight-valued fields in the configured unit', async () => {

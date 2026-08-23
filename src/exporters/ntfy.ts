@@ -45,6 +45,14 @@ export const ntfySchema: ExporterSchema = {
     { key: 'token', label: 'Bearer Token', type: 'password', required: false },
     { key: 'username', label: 'Username', type: 'string', required: false },
     { key: 'password', label: 'Password', type: 'password', required: false },
+    {
+      key: 'report_exports',
+      label: 'Report export results',
+      type: 'boolean',
+      required: false,
+      default: false,
+      description: 'Wait for the other exporters and append their results to the message',
+    },
   ],
   supportsGlobal: true,
   supportsPerUser: false,
@@ -52,10 +60,12 @@ export const ntfySchema: ExporterSchema = {
 
 export class NtfyExporter implements Exporter {
   readonly name = 'ntfy';
+  readonly reportsExports: boolean;
   private readonly config: NtfyConfig;
 
   constructor(config: NtfyConfig) {
     this.config = config;
+    this.reportsExports = config.reportExports;
   }
 
   async healthcheck(): Promise<ExportResult> {

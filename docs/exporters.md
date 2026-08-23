@@ -167,15 +167,16 @@ global_exporters:
 
 Push notifications to phone/desktop via [ntfy](https://ntfy.sh). Works with ntfy.sh or self-hosted instances.
 
-| Field      | Required | Default             | Description         |
-| ---------- | -------- | ------------------- | ------------------- |
-| `url`      | No       | `https://ntfy.sh`   | Ntfy server URL     |
-| `topic`    | Yes      | (none)              | Topic name          |
-| `title`    | No       | `Scale Measurement` | Notification title  |
-| `priority` | No       | `3`                 | Priority (1 to 5)   |
-| `token`    | No       | (none)              | Bearer token auth   |
-| `username` | No       | (none)              | Basic auth username |
-| `password` | No       | (none)              | Basic auth password |
+| Field            | Required | Default             | Description                         |
+| ---------------- | -------- | ------------------- | ----------------------------------- |
+| `url`            | No       | `https://ntfy.sh`   | Ntfy server URL                     |
+| `topic`          | Yes      | (none)              | Topic name                          |
+| `title`          | No       | `Scale Measurement` | Notification title                  |
+| `priority`       | No       | `3`                 | Priority (1 to 5)                   |
+| `token`          | No       | (none)              | Bearer token auth                   |
+| `username`       | No       | (none)              | Basic auth username                 |
+| `password`       | No       | (none)              | Basic auth password                 |
+| `report_exports` | No       | `false`             | Append the other exporters' results |
 
 ```yaml
 global_exporters:
@@ -186,16 +187,19 @@ global_exporters:
 
 Weight, muscle and bone follow `scale.weight_unit`.
 
+With `report_exports: true` the notification is sent after the other exporters finish and ends with one line per exporter, `✅ garmin` or `❌ garmin: <error>`, so a failed sync is visible on the phone. The notification then arrives once the slowest exporter (and its retries) is done.
+
 ## Telegram {#telegram}
 
 Send a measurement notification to a Telegram chat via a bot. Create a bot with [@BotFather](https://t.me/BotFather) to get a bot token, then start a chat with your bot (or add it to a group/channel) so it can message you.
 
-| Field       | Required | Default             | Description                                    |
-| ----------- | -------- | ------------------- | ---------------------------------------------- |
-| `bot_token` | Yes      | (none)              | Bot token from @BotFather                      |
-| `chat_id`   | Yes      | (none)              | Target chat ID (numeric) or `@channelusername` |
-| `title`     | No       | `Scale Measurement` | First line of the message                      |
-| `silent`    | No       | `false`             | Deliver without a notification sound           |
+| Field            | Required | Default             | Description                                    |
+| ---------------- | -------- | ------------------- | ---------------------------------------------- |
+| `bot_token`      | Yes      | (none)              | Bot token from @BotFather                      |
+| `chat_id`        | Yes      | (none)              | Target chat ID (numeric) or `@channelusername` |
+| `title`          | No       | `Scale Measurement` | First line of the message                      |
+| `silent`         | No       | `false`             | Deliver without a notification sound           |
+| `report_exports` | No       | `false`             | Append the other exporters' results            |
 
 ```yaml
 global_exporters:
@@ -206,7 +210,7 @@ global_exporters:
     silent: false
 ```
 
-The message is sent as plain text. Weight, muscle and bone follow `scale.weight_unit`. In multi-user setups the user's name is prepended as `[Name]`. Historical readings replayed from a scale's offline cache are skipped (a notification for an old measurement is not meaningful).
+The message is sent as plain text. Weight, muscle and bone follow `scale.weight_unit`. `report_exports` works as for [Ntfy](#ntfy). In multi-user setups the user's name is prepended as `[Name]`. Historical readings replayed from a scale's offline cache are skipped (a notification for an old measurement is not meaningful).
 
 ::: tip Finding your chat ID
 Message your bot once, then open `https://api.telegram.org/bot<token>/getUpdates` in a browser — the `chat.id` field holds your chat ID. For groups, add the bot to the group first.

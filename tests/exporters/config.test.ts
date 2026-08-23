@@ -302,6 +302,7 @@ describe('loadExporterConfig()', () => {
         token: undefined,
         username: undefined,
         password: undefined,
+        reportExports: false,
       });
     });
 
@@ -312,6 +313,7 @@ describe('loadExporterConfig()', () => {
       vi.stubEnv('NTFY_TITLE', 'Weight Update');
       vi.stubEnv('NTFY_PRIORITY', '5');
       vi.stubEnv('NTFY_TOKEN', 'tk_abc');
+      vi.stubEnv('NTFY_REPORT_EXPORTS', 'true');
       const cfg = loadExporterConfig();
       expect(cfg.ntfy).toEqual({
         url: 'https://my-ntfy.example.com',
@@ -321,7 +323,15 @@ describe('loadExporterConfig()', () => {
         token: 'tk_abc',
         username: undefined,
         password: undefined,
+        reportExports: true,
       });
+    });
+
+    it('rejects invalid NTFY_REPORT_EXPORTS', () => {
+      vi.stubEnv('EXPORTERS', 'ntfy');
+      vi.stubEnv('NTFY_TOPIC', 'my-scale');
+      vi.stubEnv('NTFY_REPORT_EXPORTS', 'maybe');
+      expect(() => loadExporterConfig()).toThrow(/NTFY_REPORT_EXPORTS must be true\/false/);
     });
 
     it('parses custom priority', () => {
@@ -383,6 +393,7 @@ describe('loadExporterConfig()', () => {
         chatId: '987654321',
         title: 'Scale Measurement',
         silent: false,
+        reportExports: false,
       });
     });
 
@@ -392,13 +403,23 @@ describe('loadExporterConfig()', () => {
       vi.stubEnv('TELEGRAM_CHAT_ID', '987654321');
       vi.stubEnv('TELEGRAM_TITLE', 'Weight Update');
       vi.stubEnv('TELEGRAM_SILENT', 'true');
+      vi.stubEnv('TELEGRAM_REPORT_EXPORTS', 'true');
       const cfg = loadExporterConfig();
       expect(cfg.telegram).toEqual({
         botToken: '123456:ABC',
         chatId: '987654321',
         title: 'Weight Update',
         silent: true,
+        reportExports: true,
       });
+    });
+
+    it('rejects invalid TELEGRAM_REPORT_EXPORTS', () => {
+      vi.stubEnv('EXPORTERS', 'telegram');
+      vi.stubEnv('TELEGRAM_BOT_TOKEN', '123456:ABC');
+      vi.stubEnv('TELEGRAM_CHAT_ID', '987654321');
+      vi.stubEnv('TELEGRAM_REPORT_EXPORTS', 'maybe');
+      expect(() => loadExporterConfig()).toThrow(/TELEGRAM_REPORT_EXPORTS must be true\/false/);
     });
 
     it('rejects invalid TELEGRAM_SILENT', () => {

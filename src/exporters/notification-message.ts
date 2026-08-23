@@ -16,5 +16,8 @@ export function formatNotification(data: BodyComposition, context?: ExportContex
   if (context?.driftWarning) {
     lines.push(`⚠️ ${context.driftWarning}`);
   }
+  for (const r of context?.exportResults ?? []) {
+    lines.push(r.ok ? `✅ ${r.name}` : `❌ ${r.name}: ${r.error}`);
+  }
   return lines.join('\n');
 }
