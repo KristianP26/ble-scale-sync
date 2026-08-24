@@ -25,6 +25,7 @@ import {
   GATT_DISCOVERY_TIMEOUT_MS,
   IMPEDANCE_GRACE_MS,
   RAW_READING_TIMEOUT_MS,
+  READING_SESSION_CAP_FACTOR,
 } from './types.js';
 
 /**
@@ -599,21 +600,25 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
         // Bounded like the node-ble path (handler-node-ble/scan.ts): without
         // this the reading phase relies entirely on the peripheral eventually
         // disconnecting, so a stalled GATT session wedges the process (#283).
-        const raw = await withIdleTimeout(
-          (onActivity) =>
-            waitForRawReading(
-              charMap,
-              wrapPeripheral(peripheral),
-              matchedAdapter,
-              profile,
-              peripheralAddress(peripheral).replace(/[:-]/g, '').toUpperCase(),
-              weightUnit,
-              onLiveData,
-              scaleAuth,
-              onActivity,
-            ),
-          readingTimeoutMs ?? RAW_READING_TIMEOUT_MS,
-          'Timed out waiting for a complete scale reading',
+        const raw = await withTimeout(
+          withIdleTimeout(
+            (onActivity) =>
+              waitForRawReading(
+                charMap,
+                wrapPeripheral(peripheral),
+                matchedAdapter,
+                profile,
+                peripheralAddress(peripheral).replace(/[:-]/g, '').toUpperCase(),
+                weightUnit,
+                onLiveData,
+                scaleAuth,
+                onActivity,
+              ),
+            readingTimeoutMs ?? RAW_READING_TIMEOUT_MS,
+            'Timed out waiting for a complete scale reading',
+          ),
+          (readingTimeoutMs ?? RAW_READING_TIMEOUT_MS) * READING_SESSION_CAP_FACTOR,
+          'GATT session cap exceeded',
         );
 
         return raw;

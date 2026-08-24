@@ -5,7 +5,7 @@ import { waitForRawReading } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
 import { evaluateAdvertisement, GraceTimers, DedupWindow, logAdvert } from '../advertisement.js';
 import type { Watcher, WatcherConfig } from '../reading-source.js';
-import { bleLog, withIdleTimeout, errMsg, IMPEDANCE_GRACE_MS } from '../types.js';
+import { bleLog, withIdleTimeout, withTimeout, errMsg, IMPEDANCE_GRACE_MS } from '../types.js';
 import { AsyncQueue } from '../async-queue.js';
 import { topics } from './topics.js';
 import {
@@ -27,6 +27,14 @@ import { type ScanResultEntry, toBleDeviceInfo } from './scan.js';
 const DEDUP_WINDOW_MS = 30_000;
 /** Milliseconds of scale silence that end a GATT reading session. */
 const GATT_READING_IDLE_MS = 60_000;
+/**
+ * Absolute cap on one GATT session regardless of activity. A scale that keeps
+ * streaming adapter-rejected frames restarts the idle timer forever, and while
+ * the session is up the ESP32 holds its single connection and pauses scanning.
+ * Kept at ReadingWatcher.GATT_STALE_MS so the stale reset's assumption that no
+ * session outlives it stays true.
+ */
+const GATT_SESSION_ABSOLUTE_MS = 90_000;
 
 /** Bluetooth Base UUID for expanding 16-bit UUIDs to 128-bit form. */
 const BT_BASE_UUID = '00000000-0000-1000-8000-00805f9b34fb';
@@ -471,21 +479,25 @@ export class ReadingWatcher implements Watcher {
         entry.address,
       );
       bleLog.debug(`GATT read driven by adapter: ${gattAdapter.name} (${entry.address})`);
-      const raw = await withIdleTimeout(
-        (onActivity) =>
-          waitForRawReading(
-            connected.charMap,
-            connected.device,
-            gattAdapter,
-            profile,
-            entry.address.replace(/[:-]/g, '').toUpperCase(),
-            undefined,
-            undefined,
-            undefined,
-            onActivity,
-          ),
-        GATT_READING_IDLE_MS,
-        `GATT reading timeout for ${entry.address}`,
+      const raw = await withTimeout(
+        withIdleTimeout(
+          (onActivity) =>
+            waitForRawReading(
+              connected.charMap,
+              connected.device,
+              gattAdapter,
+              profile,
+              entry.address.replace(/[:-]/g, '').toUpperCase(),
+              undefined,
+              undefined,
+              undefined,
+              onActivity,
+            ),
+          GATT_READING_IDLE_MS,
+          `GATT reading timeout for ${entry.address}`,
+        ),
+        GATT_SESSION_ABSOLUTE_MS,
+        `GATT session cap exceeded for ${entry.address}`,
       );
       registerScaleMac(this.config, entry.address).catch(() => {});
       this.queue.push(raw);
@@ -605,21 +617,25 @@ export class ReadingWatcher implements Watcher {
         `Autonomous connect: charMap built with ${charMap.size} chars, waiting for reading...`,
       );
 
-      const raw = await withIdleTimeout(
-        (onActivity) =>
-          waitForRawReading(
-            charMap,
-            dev,
-            adapter,
-            profile,
-            data.address.replace(/[:-]/g, '').toUpperCase(),
-            undefined,
-            undefined,
-            undefined,
-            onActivity,
-          ),
-        GATT_READING_IDLE_MS,
-        `GATT reading timeout for ${data.address} (autonomous)`,
+      const raw = await withTimeout(
+        withIdleTimeout(
+          (onActivity) =>
+            waitForRawReading(
+              charMap,
+              dev,
+              adapter,
+              profile,
+              data.address.replace(/[:-]/g, '').toUpperCase(),
+              undefined,
+              undefined,
+              undefined,
+              onActivity,
+            ),
+          GATT_READING_IDLE_MS,
+          `GATT reading timeout for ${data.address} (autonomous)`,
+        ),
+        GATT_SESSION_ABSOLUTE_MS,
+        `GATT session cap exceeded for ${data.address} (autonomous)`,
       );
       registerScaleMac(this.config, data.address).catch(() => {});
       bleLog.info(

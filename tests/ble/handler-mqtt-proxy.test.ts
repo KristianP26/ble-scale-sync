@@ -1835,6 +1835,45 @@ describe('handler-mqtt-proxy', () => {
       }
     });
 
+    it('ends a session that streams rejected frames at the absolute cap so the ESP32 is released', async () => {
+      vi.useFakeTimers();
+      try {
+        const adapter = createGattAdapter();
+        const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter], undefined, PROFILE);
+        await watcher.start();
+
+        mockClient._simulateMessage(
+          `${PREFIX}/connected`,
+          JSON.stringify({
+            autonomous: true,
+            address: 'AA:BB:CC:DD:EE:FF',
+            chars: [
+              { uuid: GATT_NOTIFY_UUID, properties: ['notify'] },
+              { uuid: GATT_WRITE_UUID, properties: ['write'] },
+            ],
+          }),
+        );
+        void watcher.nextReading();
+
+        // A frame the adapter rejects arrives every 30 s, so the 60 s idle
+        // timer never fires and only the absolute cap can end the session.
+        for (let elapsed = 0; elapsed < 90_000; elapsed += 30_000) {
+          await vi.advanceTimersByTimeAsync(30_000);
+          mockClient._simulateMessage(`${PREFIX}/notify/${GATT_NOTIFY_UUID}`, Buffer.from([0x10]));
+          expect(adapter.parseNotification).toHaveLastReturnedWith(null);
+        }
+
+        // Just past 90 s the cap has fired and the teardown released the proxy.
+        await vi.advanceTimersByTimeAsync(1_000);
+        const disconnects = (mockClient.publishAsync as ReturnType<typeof vi.fn>).mock.calls.filter(
+          (c: unknown[]) => c[0] === `${PREFIX}/disconnect`,
+        );
+        expect(disconnects).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('ReadingWatcher ignores autonomous connect when no adapter matches', async () => {
       // Adapter only matches by name 'GattScale', but the autonomous connect
       // comes from a different device with no name info.

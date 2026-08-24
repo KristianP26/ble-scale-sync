@@ -31,6 +31,16 @@ export const GATT_DISCOVERY_TIMEOUT_MS = 30_000;
 export const RAW_READING_TIMEOUT_MS = 120_000;
 
 /**
+ * Absolute cap on one native reading session, as a multiple of the configured
+ * silence window. The idle timer restarts on every frame, so a scale that
+ * streams adapter-rejected frames forever would otherwise hold the session
+ * open with no bound; the cap ends it while leaving room for a weigh-in that
+ * spans several restarts. A session_timeout_sec above 300 makes
+ * POLL_CYCLE_TIMEOUT_MS the effective ceiling instead.
+ */
+export const READING_SESSION_CAP_FACTOR = 3;
+
+/**
  * Max attempts to enumerate GATT characteristics. BlueZ can signal
  * `ServicesResolved=true` before all characteristic interfaces are exported
  * over D-Bus ([bluez/bluez#1489](https://github.com/bluez/bluez/issues/1489)),
@@ -48,11 +58,11 @@ export const POST_DISCOVERY_QUIESCE_MS = 500;
 /**
  * Hard ceiling on one native poll cycle.
  *
- * The reading phase is now bounded by scale silence rather than a fixed 120 s,
- * so it has no fixed upper term: a scale that keeps emitting frames the adapter
- * rejects can hold the phase open indefinitely, and this ceiling is what still
- * fires in that case (discovery 120 + six connect attempts 170 + GATT
- * acquisition 30 + characteristic retries, plus the unbounded reading phase).
+ * The reading phase is bounded by scale silence, capped in absolute terms at
+ * READING_SESSION_CAP_FACTOR x the silence window (360 s by default). The worst
+ * legitimate node-ble cycle is then roughly 815 s (discovery 120 + six connect
+ * attempts 170 + GATT acquisition 30 + characteristic retries + reading 360),
+ * so 900 s never fires on a healthy run with the default session_timeout_sec.
  *
  * It exists because dbus-next never rejects an in-flight `MessageBus.call()`
  * when the socket dies: the resolver is stored in `_methodReturnHandlers` and is
