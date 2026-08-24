@@ -46,7 +46,7 @@ export const telegramSchema: ExporterSchema = {
     },
     {
       key: 'report_exports',
-      label: 'Report export results',
+      label: 'Report export results (waits for the other exporters)',
       type: 'boolean',
       required: false,
       default: false,

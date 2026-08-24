@@ -105,6 +105,16 @@ describe('NtfyExporter', () => {
     expect(body.endsWith('\n✅ garmin\n❌ influxdb: HTTP 401')).toBe(true);
   });
 
+  it('truncates a forwarded export error to 120 characters', async () => {
+    const exporter = new NtfyExporter({ ...defaultConfig, reportExports: true });
+    await exporter.export(samplePayload, {
+      exportResults: [{ name: 'file', ok: false, error: 'x'.repeat(200) }],
+    });
+
+    const body = mockFetch.mock.calls[0][1].body as string;
+    expect(body.endsWith(`\n❌ file: ${'x'.repeat(120)}`)).toBe(true);
+  });
+
   it('formats weight-valued fields in the configured unit', async () => {
     const exporter = new NtfyExporter(defaultConfig);
     await exporter.export(samplePayload, { weightUnit: 'lbs' });

@@ -7,6 +7,7 @@ import {
   loadAppConfig,
   loadBleConfig,
 } from '../../src/config/load.js';
+import { createExporterFromEntry } from '../../src/exporters/registry.js';
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -392,6 +393,27 @@ global_exporters:
     expect(result.config.users).toHaveLength(1);
     expect(result.config.users[0].name).toBe('Default');
     expect(result.config.users[0].birth_date).toBe('1990-06-15');
+  });
+
+  // The env vars are parsed by loadExporterConfig() but only reach the exporter
+  // through the ExporterEntry that loadEnvConfig() builds, so cross that seam.
+  it('carries NTFY_REPORT_EXPORTS and TELEGRAM_REPORT_EXPORTS into the .env exporter entries', () => {
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => String(p).endsWith('.env'));
+    vi.stubEnv('USER_HEIGHT', '183');
+    vi.stubEnv('USER_BIRTH_DATE', '1990-06-15');
+    vi.stubEnv('USER_GENDER', 'male');
+    vi.stubEnv('USER_IS_ATHLETE', 'true');
+    vi.stubEnv('EXPORTERS', 'ntfy,telegram');
+    vi.stubEnv('NTFY_TOPIC', 'my-scale');
+    vi.stubEnv('NTFY_REPORT_EXPORTS', 'true');
+    vi.stubEnv('TELEGRAM_BOT_TOKEN', '123:abc');
+    vi.stubEnv('TELEGRAM_CHAT_ID', '42');
+    vi.stubEnv('TELEGRAM_REPORT_EXPORTS', 'true');
+
+    const { config } = loadAppConfig();
+    const byType = Object.fromEntries(config.global_exporters!.map((e) => [e.type, e]));
+    expect(createExporterFromEntry(byType.ntfy).reportsExports).toBe(true);
+    expect(createExporterFromEntry(byType.telegram).reportsExports).toBe(true);
   });
 
   it('exits when no config source exists', () => {

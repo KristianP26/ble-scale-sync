@@ -62,6 +62,7 @@ export function loadEnvConfig(): AppConfig {
         token: n.token,
         username: n.username,
         password: n.password,
+        report_exports: n.reportExports,
       });
     }
     if (name === 'telegram' && exporterConfig.telegram) {
@@ -71,6 +72,7 @@ export function loadEnvConfig(): AppConfig {
         chat_id: t.chatId,
         title: t.title,
         silent: t.silent,
+        report_exports: t.reportExports,
       });
     }
     if (name === 'intervals' && exporterConfig.intervals) {

@@ -47,7 +47,7 @@ export const ntfySchema: ExporterSchema = {
     { key: 'password', label: 'Password', type: 'password', required: false },
     {
       key: 'report_exports',
-      label: 'Report export results',
+      label: 'Report export results (waits for the other exporters)',
       type: 'boolean',
       required: false,
       default: false,

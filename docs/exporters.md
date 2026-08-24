@@ -187,7 +187,7 @@ global_exporters:
 
 Weight, muscle and bone follow `scale.weight_unit`.
 
-With `report_exports: true` the notification is sent after the other exporters finish and ends with one line per exporter, `✅ garmin` or `❌ garmin: <error>`, so a failed sync is visible on the phone. The notification then arrives once the slowest exporter (and its retries) is done.
+With `report_exports: true` the notification is sent after the other exporters finish and ends with one line per non-reporting exporter, `✅ garmin` or `❌ garmin: <error>`, so a failed sync is visible on the phone. Two notifiers with the flag set do not report on each other. The notification arrives once the slowest exporter (and its retries) is done; with Garmin that can be up to three minutes when its uploader times out and retries. Error text is forwarded as-is (truncated to 120 characters), so a public ntfy topic will carry it.
 
 ## Telegram {#telegram}
 
