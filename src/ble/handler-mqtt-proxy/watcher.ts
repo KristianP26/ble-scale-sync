@@ -25,7 +25,7 @@ import { registerScaleMac, publishConfig } from './display.js';
 import { type ScanResultEntry, toBleDeviceInfo } from './scan.js';
 
 const DEDUP_WINDOW_MS = 30_000;
-/** Seconds of scale silence that end a GATT reading session. */
+/** Milliseconds of scale silence that end a GATT reading session. */
 const GATT_READING_IDLE_MS = 60_000;
 
 /** Bluetooth Base UUID for expanding 16-bit UUIDs to 128-bit form. */

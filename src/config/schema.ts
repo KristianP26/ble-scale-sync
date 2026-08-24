@@ -121,11 +121,13 @@ export const BleSchema = z
      */
     force_scale_adapter: z.string().min(1).optional().nullable(),
     /**
-     * How long one GATT session may wait for a complete reading, in seconds
-     * (default 120). Some scales refuse to run a standalone weigh-in while a
-     * host holds the session open (the Beurer BF500 shows "APP", #83), so a
-     * shorter session frees the scale sooner. The cost is proportionally more
-     * Bluetooth adapter resets per hour, since every failed read triggers one.
+     * Seconds of scale silence that end one GATT session (default 120); every
+     * notification restarts the clock. Native BLE handlers only; the mqtt-proxy
+     * and esphome-proxy transports ignore it. Some scales refuse to run a
+     * standalone weigh-in while a host holds the session open (the Beurer BF500
+     * shows "APP", #83), so a shorter session frees the scale sooner. The cost
+     * is more Bluetooth adapter churn per hour, since a timed-out read resets
+     * the adapter on node-ble and disconnects on Noble.
      */
     session_timeout_sec: z.number().int().min(5).max(600).optional().nullable(),
     /**

@@ -5,6 +5,7 @@ import {
   findMissingCharacteristics,
   resolveWriteChar,
 } from '../../src/ble/shared.js';
+import { withIdleTimeout } from '../../src/ble/types.js';
 import type { BleChar, BleDevice } from '../../src/ble/shared.js';
 import { normalizeUuid, bleLog } from '../../src/ble/types.js';
 import { KoogeekS1Adapter } from '../../src/scales/koogeek-s1.js';
@@ -1600,5 +1601,88 @@ describe('waitForRawReading() — notification teardown', () => {
 
     await promise;
     await vi.waitFor(() => expect(unsub).toHaveBeenCalledTimes(1));
+  });
+});
+
+// ─── native call-site wiring: idle deadline over waitForRawReading ───────────
+// Both native handlers (noble, node-ble) wrap waitForRawReading in
+// withIdleTimeout(onActivity => waitForRawReading(..., onActivity), timeout).
+// These pin that composition: the onActivity ninth argument must reach
+// waitForRawReading so an adapter-rejected frame restarts the deadline, and a
+// silent session must still reject at the configured timeout (#83 wiring).
+describe('waitForRawReading() under the native idle deadline', () => {
+  const IDLE_MS = 1000;
+
+  function runWithIdle(adapter: ScaleAdapter, notifyChar: MockBleChar, device: BleDevice) {
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, createMockChar()],
+    ]);
+    return withIdleTimeout(
+      (onActivity) =>
+        waitForRawReading(
+          charMap,
+          device,
+          adapter,
+          PROFILE,
+          '',
+          undefined,
+          undefined,
+          undefined,
+          onActivity,
+        ),
+      IDLE_MS,
+      'Timed out waiting for a complete scale reading',
+    );
+  }
+
+  it('restarts the deadline on an adapter-rejected frame so a later complete frame resolves', async () => {
+    vi.useFakeTimers();
+    try {
+      const notifyChar = createMockChar();
+      const device = createMockDevice();
+      let seen = 0;
+      const adapter = createLegacyAdapter({
+        parseNotification: vi.fn((): ScaleReading | null => {
+          seen++;
+          // First frame parses to null (adapter-rejected), so this also covers
+          // onActivity firing before the parse gate, not only before isComplete.
+          return seen === 1 ? null : { weight: 75, impedance: 500 };
+        }),
+      });
+
+      const promise = runWithIdle(adapter, notifyChar, device);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(notifyChar.subscribeCalled).toBe(true);
+
+      // Just before the deadline, a rejected frame arrives and must re-arm it.
+      await vi.advanceTimersByTimeAsync(IDLE_MS - 100);
+      notifyChar.triggerData(Buffer.from([0x01]));
+
+      // Past the original deadline: only the restart keeps the session alive.
+      await vi.advanceTimersByTimeAsync(IDLE_MS - 100);
+      notifyChar.triggerData(Buffer.from([0x02]));
+
+      const result = await promise;
+      expect(result.reading).toEqual({ weight: 75, impedance: 500 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects at the timeout when the scale stays silent', async () => {
+    vi.useFakeTimers();
+    try {
+      const notifyChar = createMockChar();
+      const device = createMockDevice();
+      const promise = runWithIdle(createLegacyAdapter(), notifyChar, device);
+      const rejection = expect(promise).rejects.toThrow(
+        'Timed out waiting for a complete scale reading',
+      );
+      await vi.advanceTimersByTimeAsync(IDLE_MS);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

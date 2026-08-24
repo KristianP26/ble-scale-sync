@@ -24,9 +24,9 @@ export const GATT_DISCOVERY_TIMEOUT_MS = 30_000;
 /**
  * How long the reading phase waits without a notification from the scale. The
  * timer restarts on every frame, so it counts silence rather than time since
- * connect. The ESP32 proxy connects as soon as the scale advertises, often
- * well before anyone steps on, and a window counted from connect ran out
- * during a weigh-in.
+ * connect: a window counted from connect can expire before the user steps on,
+ * because connect is driven by the advertisement, not the weigh-in. Native
+ * handlers only; the mqtt-proxy uses its own GATT_READING_IDLE_MS.
  */
 export const RAW_READING_TIMEOUT_MS = 120_000;
 
@@ -48,9 +48,11 @@ export const POST_DISCOVERY_QUIESCE_MS = 500;
 /**
  * Hard ceiling on one native poll cycle.
  *
- * The worst legitimate node-ble cycle is roughly 575 s (discovery 120 + six
- * connect attempts 170 + GATT acquisition 30 + characteristic retries + reading
- * 120), so 900 s never fires on a healthy run.
+ * The reading phase is now bounded by scale silence rather than a fixed 120 s,
+ * so it has no fixed upper term: a scale that keeps emitting frames the adapter
+ * rejects can hold the phase open indefinitely, and this ceiling is what still
+ * fires in that case (discovery 120 + six connect attempts 170 + GATT
+ * acquisition 30 + characteristic retries, plus the unbounded reading phase).
  *
  * It exists because dbus-next never rejects an in-flight `MessageBus.call()`
  * when the socket dies: the resolver is stored in `_methodReturnHandlers` and is
@@ -184,7 +186,9 @@ export async function withTimeout<T>(promise: Promise<T>, ms: number, message: s
 
 /**
  * Like withTimeout, but the deadline restarts whenever `start`'s callback is
- * invoked: the promise from `start` is rejected only after `ms` of inactivity.
+ * invoked: the returned promise rejects after `ms` with no activity. Like
+ * withTimeout, the promise from `start` is abandoned rather than cancelled, so
+ * callers must still tear down whatever it holds.
  */
 export async function withIdleTimeout<T>(
   start: (onActivity: () => void) => Promise<T>,
