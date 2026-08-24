@@ -556,6 +556,76 @@ describe('QnScaleAdapter', () => {
       expect(config![8]).toBe(config!.slice(0, 8).reduce((a, b) => a + b, 0) & 0xff);
     });
 
+    it('carries the forced protocol byte into the older-firmware unlock config', async () => {
+      // Same no-AE00 path, with qn_protocol_byte set. The unlock byte[2] must be
+      // the forced value, and it must stay 0x00 when the override is unset.
+      const build = async (opts?: { qnProtocolByte: number }): Promise<number[]> => {
+        const adapter = makeAdapter();
+        if (opts) adapter.configure(opts);
+        const writes: number[][] = [];
+        const ctx = {
+          write: async (_uuid: string, data: Buffer | number[]) => {
+            writes.push([...data]);
+          },
+          read: async () => Buffer.alloc(0),
+          subscribe: async () => {
+            throw new Error('no AE02');
+          },
+          profile: defaultProfile,
+          deviceAddress: '',
+          availableChars: new Set<string>(),
+        } as unknown as ConnectionContext;
+        await adapter.onConnected(ctx);
+        return writes.find((w) => w[0] === 0x13 && w[4] === 0x10)!;
+      };
+      expect((await build({ qnProtocolByte: 0x15 }))[2]).toBe(0x15);
+      expect((await build())[2]).toBe(0x00);
+    });
+
+    it('keeps the unlock at 0x00 when a 0x12 arrives during the AE02 subscribe and no override is set', async () => {
+      vi.useFakeTimers();
+      const adapter = makeAdapter();
+      try {
+        const writes: number[][] = [];
+        let rejectSubscribe!: (e: Error) => void;
+        const ctx = {
+          write: async (_uuid: string, data: Buffer | number[]) => {
+            writes.push([...data]);
+          },
+          read: async () => Buffer.alloc(0),
+          subscribe: () =>
+            new Promise<void>((_resolve, reject) => {
+              rejectSubscribe = reject;
+            }),
+          profile: defaultProfile,
+          deviceAddress: '',
+          availableChars: new Set<string>(),
+        } as unknown as ConnectionContext;
+        const connected = adapter.onConnected(ctx);
+        await vi.advanceTimersByTimeAsync(0);
+
+        // The 0x12 lands while the AE02 subscribe is still in flight (the Linux
+        // node-ble ordering) and seeds seenProtocolType with the scale's byte.
+        const info = Buffer.alloc(11);
+        info[0] = 0x12;
+        info[2] = 0xab;
+        info[10] = 0;
+        adapter.parseNotification(info);
+
+        writes.length = 0;
+        rejectSubscribe(new Error('no AE02'));
+        await connected;
+
+        // The legacy unlock must not inherit 0xab from that timing.
+        const config = writes.find((w) => w[0] === 0x13 && w[4] === 0x10);
+        expect(config).toBeDefined();
+        expect(config![2]).toBe(0x00);
+      } finally {
+        adapter.onSessionEnd!();
+        vi.useRealTimers();
+      }
+    });
+
     it('0x12 frame captures protocol type', () => {
       const adapter = makeAdapter();
       const infoBuf = Buffer.alloc(11);
@@ -1436,11 +1506,18 @@ describe('AE02 dispatch (#75, #235)', () => {
           availableChars: new Set<string>(),
         } as unknown as ConnectionContext;
         await adapter.onConnected(ctx);
+
+        // A 0x14 ready frame arriving before the 2 s fallback drives handleReady
+        // off the onConnected seed, so the 0x20 it emits pins that seed rather
+        // than the fallback's own protocol assignment.
+        adapter.parseNotification(Buffer.from([0x14, 0x0b, 0x15, 0, 0, 0, 0, 0, 0, 0, 0x34]));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(writes.find((w) => w[0] === 0x20)![2]).toBe(0x15);
+
         await vi.advanceTimersByTimeAsync(4000);
         const configs = writes.filter((w) => w[0] === 0x13 && w[4] === 0x10);
         expect(configs.length).toBeGreaterThan(0);
         for (const c of configs) expect(c[2]).toBe(0x15);
-        expect(writes.find((w) => w[0] === 0x20)![2]).toBe(0x15);
         expect(writes.find((w) => w[0] === 0x22)![2]).toBe(0x15);
       } finally {
         vi.useRealTimers();

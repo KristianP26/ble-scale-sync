@@ -492,7 +492,11 @@ export class QnScaleAdapter
       const config = [
         0x13,
         0x09,
-        this.seenProtocolType,
+        // Stay deterministic when the override is unset: seenProtocolType can be
+        // seeded by a 0x12 that races the AE02 subscribe on native BLE, and this
+        // fixed frame must not depend on that timing. The override, when set, is
+        // applied before onConnected runs, so every targeted case is unchanged.
+        this.forcedProtocolType ?? 0x00,
         this.unitFlag(),
         0x10,
         0x00,
@@ -810,10 +814,18 @@ export class QnScaleAdapter
         : this.isLongFrameVariant
           ? 'es26m'
           : 'classic';
+      // The byte the frame actually carried, for triage. Not seenProtocolType:
+      // on the 18-byte variant that is forced to 0x00 for the handshake, but the
+      // log should still report the 0xff the scale sent.
+      const reported = data[2];
+      const forcedNote =
+        this.forcedProtocolType !== null && this.forcedProtocolType !== reported
+          ? ` (forced, scale reported 0x${reported.toString(16).padStart(2, '0')})`
+          : '';
       bleLog.debug(
         `QN: scale info (${data.length}B, dialect=${dialect}), ` +
           `factor=${this.weightScaleFactor}, ` +
-          `proto=0x${this.seenProtocolType.toString(16).padStart(2, '0')}`,
+          `proto=0x${this.seenProtocolType.toString(16).padStart(2, '0')}${forcedNote}`,
       );
       void this.handleScaleInfo();
       return null;
