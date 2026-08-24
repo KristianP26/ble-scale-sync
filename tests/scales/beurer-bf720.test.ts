@@ -918,6 +918,31 @@ describe('BeurerBf720Adapter', () => {
       expect(Buffer.from(dob![1] as number[]).toString('hex')).toBe('c607060f');
     });
 
+    // Local and UTC getters agree at or east of Greenwich, so CI (UTC) cannot
+    // see #344. Pin the zone or this branch is effectively untested.
+    it('provisions the calendar date of birth on a host west of Greenwich', async () => {
+      const savedTz = process.env.TZ;
+      process.env.TZ = 'America/Montreal';
+      try {
+        const a = makeAdapter();
+        const ctx = ctxWith(
+          { [DOB]: Buffer.from('00000000', 'hex') },
+          { provision: true, profile: defaultProfile({ birthDate: '1990-06-15' }) },
+        );
+        await a.onConnected(ctx);
+        const write = ctx.write as ReturnType<typeof vi.fn>;
+        write.mockClear();
+        a.parseCharNotification(UCP, Buffer.from('200201', 'hex'));
+        await settle();
+        const dob = write.mock.calls.find((c) => c[0] === DOB);
+        // 1990-06-15, not the 14th the local getters read back at UTC-4.
+        expect(Buffer.from(dob![1] as number[]).toString('hex')).toBe('c607060f');
+      } finally {
+        if (savedTz === undefined) delete process.env.TZ;
+        else process.env.TZ = savedTz;
+      }
+    });
+
     it('does not claim the scale is empty once the consent was accepted', () => {
       const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
       const a = makeAdapter();
