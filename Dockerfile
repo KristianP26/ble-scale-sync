@@ -1,6 +1,6 @@
 # ── Build stage: compile TypeScript ──────────────────────────────────
 ARG BUILDPLATFORM
-FROM --platform=$BUILDPLATFORM node:22-slim AS build
+FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS build
 
 WORKDIR /app
 
@@ -10,8 +10,18 @@ RUN npm ci --ignore-scripts
 COPY src/ ./src/
 RUN npm run build
 
+# ── Python stage: Python 3.12 for garminconnect 0.3.x ────────────────
+# Debian bookworm (node:22's base) ships Python 3.11; garminconnect 0.3.x
+# requires >=3.12. Switching the whole runtime base to node:22-trixie-slim
+# fixed that but broke linux/arm/v7: Docker's node image has no published
+# arm/v7 manifest for trixie tags (Raspberry Pi Zero 2W / other 32-bit ARM
+# boards). python:3.12-slim-bookworm is a self-contained Python 3.12 built
+# against bookworm's glibc *and* does publish arm/v7, so copy just the
+# interpreter across instead of changing the base OS.
+FROM python:3.12-slim-bookworm AS python
+
 # ── Runtime stage ────────────────────────────────────────────────────
-FROM node:22-slim
+FROM node:22-bookworm-slim
 
 # OCI labels
 ARG VERSION=local
@@ -31,33 +41,49 @@ LABEL org.opencontainers.image.title="BLE Scale Sync" \
 ENV APP_BUILD_CHANNEL=${VERSION}
 ENV APP_BUILD_REF=${VCS_REF}
 
-# System dependencies: BLE (BlueZ + D-Bus), Python (Garmin upload), tini (PID 1),
+# System dependencies: BLE (BlueZ + D-Bus), tini (PID 1),
 # build-essential (node-gyp needs gcc/g++/make for native BLE modules),
-# python3-dev + libffi-dev + libssl-dev + libcurl4-openssl-dev
+# libffi-dev + libssl-dev + libcurl4-openssl-dev
 # (cffi/cryptography/curl_cffi build from source on architectures without
 # pre-built wheels, e.g. linux/arm/v7. curl_cffi is a transitive dep of
-# garminconnect 0.3.x and has no armv7 wheel on PyPI.)
+# garminconnect 0.3.x and has no armv7 wheel on PyPI.), and
+# libsqlite3-0 + libreadline8 + libncursesw6: the copied Python's
+# lib-dynload brings sqlite3/readline/curses extension modules across, but
+# not the system libraries they dlopen — node:22-bookworm-slim doesn't ship
+# them, so any dependency that reaches for one (e.g. an sqlite3-backed
+# cache) would ImportError at runtime with no build-time signal.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       bluez \
       libbluetooth-dev \
       libusb-1.0-0-dev \
       libdbus-1-dev \
       build-essential \
-      python3 \
-      python3-dev \
-      python3-pip \
-      python3-venv \
       libffi-dev \
       libssl-dev \
       libcurl4-openssl-dev \
+      libsqlite3-0 \
+      libreadline8 \
+      libncursesw6 \
       tini \
     && rm -rf /var/lib/apt/lists/*
 
+# Python 3.12 (Garmin upload), copied from the python stage above — see the
+# comment there for why this isn't just `apt-get install python3`.
+COPY --from=python /usr/local/bin/python3.12 /usr/local/bin/python3.12
+COPY --from=python /usr/local/lib/python3.12 /usr/local/lib/python3.12
+COPY --from=python /usr/local/lib/libpython3.12.so* /usr/local/lib/
+COPY --from=python /usr/local/include/python3.12 /usr/local/include/python3.12
+RUN ln -s /usr/local/bin/python3.12 /usr/local/bin/python3 && \
+    ln -s /usr/local/bin/python3.12 /usr/local/bin/python && \
+    ldconfig
+
 WORKDIR /app
 
-# Python dependencies (Garmin upload)
+# Python dependencies (Garmin upload). python3 -m pip, not pip3: the
+# console-script shims weren't copied from the python stage, only the
+# interpreter and site-packages (which already has pip preinstalled).
 COPY requirements.txt ./
-RUN pip3 install --break-system-packages --no-cache-dir -r requirements.txt
+RUN python3 -m pip install --no-cache-dir -r requirements.txt
 
 # Node.js dependencies (production only)
 COPY package.json package-lock.json ./
