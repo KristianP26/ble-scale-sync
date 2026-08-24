@@ -8,7 +8,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { buildPayload } from './body-comp-helpers.js';
+import { buildPayload, normalizeServiceUuid } from './body-comp-helpers.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
 /** Mi vendor history/body-comp characteristic (custom base UUID). */
@@ -22,21 +22,12 @@ const KNOWN_PREFIXES = ['mibcs', 'mibfs', 'mi scale', 'mi_scale'];
  * so we strip dashes and expand short UUIDs before comparing.
  */
 const SVC_BODY_COMP = '0000181b00001000800000805f9b34fb';
-/** Weight Scale Service UUID used by the XMTZC04HM / MI_SCALE advertisement. */
-const SVC_WEIGHT_SCALE = '0000181d00001000800000805f9b34fb';
-/** Anhui Huami Information Technology Co., Ltd. Bluetooth company identifier. */
-const HUAMI_COMPANY_ID = 0x0157;
-const LEGACY_WSS_FRAME_LENGTH = 10;
 
 /**
  * Adapter for the Xiaomi Mi Body Composition Scale 2.
  *
  * Protocol based on openScale's MiScaleHandler. Uses a vendor-specific
  * history characteristic under the Body Composition Service (0x181B).
- *
- * The XMTZC04HM / MI_SCALE variant instead exposes a 10-byte, weight-only
- * advertisement on the Weight Scale Service (0x181D). It is identified by
- * the Huami company identifier so it cannot collide with generic WSS scales.
  *
  * The 13-byte "live frame" carries weight + optional impedance.
  * Body-composition math is ported from openScale's MiScaleLib
@@ -83,18 +74,6 @@ export class MiScale2Adapter implements ScaleAdapterCore, GattWiring, Unlockable
     if (chars && chars.length > 0) {
       return chars.map((u) => u.toLowerCase()).includes(CHR_MI_HISTORY);
     }
-
-    // XMTZC04HM advertises a 10-byte weight frame on 0x181D and often omits
-    // its local name through proxy transports. Do not claim bare 0x181D: it
-    // is the standard Weight Scale Service used by many unrelated scales.
-    const hasLegacyWssAdvert =
-      device.manufacturerData?.id === HUAMI_COMPANY_ID &&
-      (device.serviceData ?? []).some(
-        (sd) =>
-          normalizeServiceUuid(sd.uuid) === SVC_WEIGHT_SCALE &&
-          sd.data.length === LEGACY_WSS_FRAME_LENGTH,
-      );
-    if (hasLegacyWssAdvert) return true;
 
     // ESPHome / MQTT proxy advertisements may omit the BLE local name. The scale
     // always includes 0x181B as a service-data UUID (AD type 0x16), which lands in
@@ -158,32 +137,7 @@ export class MiScale2Adapter implements ScaleAdapterCore, GattWiring, Unlockable
 
   parseServiceData(uuid: string, data: Buffer): ScaleReading | null {
     const normalized = normalizeServiceUuid(uuid);
-    if (normalized === SVC_BODY_COMP) return this.parseFrame(data);
-    if (normalized !== SVC_WEIGHT_SCALE || data.length !== LEGACY_WSS_FRAME_LENGTH) return null;
-
-    // XMTZC04HM / MI_SCALE passive frame (service data 0x181D):
-    // [0] flags: bit 7 = no current measurement, bit 5 = stable, bits 1/2/4 = kg/lb/jin
-    // [1-2] weight raw (uint16 LE): kg and jin use /200, lb uses /100 then lb→kg
-    const flags = data[0];
-    const hasMeasurement = (flags & 0x80) === 0;
-    const stable = (flags & 0x20) !== 0;
-    if (!hasMeasurement || !stable) return null;
-
-    const rawWeight = data.readUInt16LE(1);
-    if (rawWeight === 0) return null;
-
-    let weight: number;
-    if ((flags & 0x02) !== 0) {
-      weight = rawWeight / 200;
-    } else if ((flags & 0x04) !== 0) {
-      weight = (rawWeight / 100) * 0.453592;
-    } else if ((flags & 0x10) !== 0) {
-      weight = (rawWeight / 100) * 0.5;
-    } else {
-      return null;
-    }
-
-    return { weight, impedance: 0 };
+    return normalized === SVC_BODY_COMP ? this.parseFrame(data) : null;
   }
 
   isComplete(reading: ScaleReading): boolean {
@@ -192,10 +146,6 @@ export class MiScale2Adapter implements ScaleAdapterCore, GattWiring, Unlockable
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
     const { weight, impedance } = reading;
-    // XMTZC04HM provides weight only. Do not feed a synthetic zero impedance
-    // into the Mi BIA equations; use the shared profile-based estimate instead.
-    if (impedance <= 0) return buildPayload(weight, 0, {}, profile);
-
     const mi = new MiScaleCalc(profile.gender === 'male' ? 1 : 0, profile.age, profile.height);
 
     const fat = mi.bodyFat(weight, impedance);
@@ -217,13 +167,6 @@ export class MiScale2Adapter implements ScaleAdapterCore, GattWiring, Unlockable
       profile,
     );
   }
-}
-
-function normalizeServiceUuid(uuid: string): string {
-  const stripped = uuid.toLowerCase().replace(/[-{}]/g, '');
-  if (stripped.length === 4) return `0000${stripped}00001000800000805f9b34fb`;
-  if (stripped.length === 8) return `${stripped}00001000800000805f9b34fb`;
-  return stripped;
 }
 
 // ─── MiScaleLib (ported from openScale / prototux MIBCS reverse-engineering) ─

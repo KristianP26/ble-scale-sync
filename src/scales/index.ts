@@ -4,6 +4,7 @@ import { RenphoScaleAdapter } from './renpho.js';
 import { RenphoEs26bbAdapter } from './renpho-es26bb.js';
 import { RenphoMsc04Adapter } from './renpho-msc04.js';
 import { MiScale2Adapter } from './mi-scale-2.js';
+import { XiaomiMiScaleLegacyAdapter } from './xiaomi-mi-scale-legacy.js';
 import { XiaomiS800Adapter } from './xiaomi-s800.js';
 import { BeurerBf720Adapter } from './beurer-bf720.js';
 import { YunmaiScaleAdapter } from './yunmai.js';
@@ -51,6 +52,9 @@ export const adapters: ScaleAdapter[] = [
   // and would otherwise be grabbed by the Mi Scale 2 adapter, so match them
   // first (by BF720/BF105 name or Beurer company id 0x0611).
   new BeurerBf720Adapter(),
+  // XMTZC04HM is a distinct, weight-only 0x181D broadcast protocol. It must
+  // resolve before MiScale2Adapter and StandardGattScaleAdapter.
+  new XiaomiMiScaleLegacyAdapter(),
   new MiScale2Adapter(),
   // Xiaomi Mijia S800 (ms116): broadcast-only, matches FE95 + product id 0x51E2
   // or its own name; no collision with any other adapter (#232).

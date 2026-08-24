@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { MiScale2Adapter } from '../../src/scales/mi-scale-2.js';
-import { buildPayload } from '../../src/scales/body-comp-helpers.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -79,28 +78,6 @@ describe('MiScale2Adapter', () => {
         serviceData: [{ uuid: '0000181b00001000800000805f9b34fb', data: Buffer.alloc(0) }],
       };
       expect(adapter.matches(p)).toBe(true);
-    });
-
-    it('matches the nameless Huami XMTZC04HM 0x181D advertisement', () => {
-      const adapter = makeAdapter();
-      const p: import('../../src/interfaces/scale-adapter.js').BleDeviceInfo = {
-        localName: '',
-        serviceUuids: ['181d'],
-        manufacturerData: { id: 0x0157, data: Buffer.from('70879eede5e7', 'hex') },
-        serviceData: [{ uuid: '181d', data: Buffer.from('226e46b2070114112f33', 'hex') }],
-      };
-      expect(adapter.matches(p)).toBe(true);
-    });
-
-    it('does not claim a generic 0x181D advertisement without the Huami signature', () => {
-      const adapter = makeAdapter();
-      const p: import('../../src/interfaces/scale-adapter.js').BleDeviceInfo = {
-        localName: '',
-        serviceUuids: ['181d'],
-        manufacturerData: { id: 0x1234, data: Buffer.alloc(0) },
-        serviceData: [{ uuid: '181d', data: Buffer.alloc(10) }],
-      };
-      expect(adapter.matches(p)).toBe(false);
     });
 
     it('does not match unrelated name with no BCS UUID', () => {
@@ -293,40 +270,9 @@ describe('MiScale2Adapter', () => {
       const buf = makeFrame({ weightRaw: 16000, stable: false });
       expect(adapter.parseServiceData('181b', buf)).toBeNull();
     });
-
-    it('parses a stable XMTZC04HM kg frame from Weight Scale Service data', () => {
-      const adapter = makeAdapter();
-      // Captured XMTZC04HM layout: stable kg, raw 0x466e = 18030 / 200 = 90.15 kg.
-      const reading = adapter.parseServiceData('181d', Buffer.from('226e46b2070114112f33', 'hex'));
-
-      expect(reading).toEqual({ weight: 90.15, impedance: 0 });
-    });
-
-    it('ignores an idle XMTZC04HM advertisement with no current measurement', () => {
-      const adapter = makeAdapter();
-      expect(
-        adapter.parseServiceData('181d', Buffer.from('a26e46b2070114112f33', 'hex')),
-      ).toBeNull();
-    });
-
-    it('ignores a non-stable XMTZC04HM advertisement', () => {
-      const adapter = makeAdapter();
-      expect(
-        adapter.parseServiceData('181d', Buffer.from('026e46b2070114112f33', 'hex')),
-      ).toBeNull();
-    });
   });
 
   describe('computeMetrics()', () => {
-    it('uses the profile-based estimate for a weight-only XMTZC04HM reading', () => {
-      const adapter = makeAdapter();
-      const profile = defaultProfile();
-
-      expect(adapter.computeMetrics({ weight: 90.15, impedance: 0 }, profile)).toEqual(
-        buildPayload(90.15, 0, {}, profile),
-      );
-    });
-
     it('returns all BodyComposition fields with values in range', () => {
       const adapter = makeAdapter();
       const profile = defaultProfile();

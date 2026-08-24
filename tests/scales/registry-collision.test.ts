@@ -35,6 +35,12 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
   'Renpho ES-WBE28': { localName: 'Renpho Body Scale', serviceUuids: ['181b', '181d'] },
   'Renpho ES-26BB': { localName: 'es-26bb-b', serviceUuids: [] },
   'Beurer BF720/BF105': { localName: 'BF720', serviceUuids: [] },
+  'Xiaomi Mi Smart Scale 2 (XMTZC04HM)': {
+    localName: '',
+    serviceUuids: ['181d'],
+    manufacturerData: { id: 0x0157, data: Buffer.from('70879eede5e7', 'hex') },
+    serviceData: [{ uuid: '181d', data: Buffer.from('238e4eea070818103913', 'hex') }],
+  },
   'Xiaomi Mi Scale 2': { localName: 'MIBFS', serviceUuids: [] },
   'Xiaomi Mijia Scale S800': { localName: 'Mijia Scale S800 A1AB', serviceUuids: [] },
   Yunmai: { localName: 'Yunmai', serviceUuids: [] },
