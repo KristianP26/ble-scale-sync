@@ -1393,6 +1393,23 @@ describe('AE02 dispatch (#75, #235)', () => {
     // A vendor-app capture of this dialect writes 0xFC five times across three
     // weigh-ins, never 0xFE, the scale echoes it back as `a1 07 04 fc 01 10 b9`,
     // and 59 live 0x10 frames follow (#235).
+    // The 19-byte es26m dialect gets the same byte, from the #75 capture. The
+    // reporter's own log names the dialect, so this is not inferred from a model.
+    it('sends the A00D history response with 0xFC on the es26m dialect', async () => {
+      const adapter = makeAdapter();
+      // 19-byte 0x12: long-frame variant, not the 20-byte extended one.
+      const info = Buffer.alloc(19);
+      info[0] = 0x12;
+      info[1] = 0x13;
+      info[2] = 0xff;
+      info[10] = 0;
+      const writes = await driveHandshake(adapter, info);
+      const msg1 = writes.find((w) => w[0] === 0xa0 && w[2] === 0x04);
+      expect(msg1).toBeDefined();
+      expect(msg1![3]).toBe(0xfc);
+      expect(msg1![12]).toBe(msg1!.slice(0, 12).reduce((a, b) => a + b, 0) & 0xff);
+    });
+
     it('sends the A00D history response with 0xFC on the extended dialect', async () => {
       const adapter = makeAdapter();
       const writes = await driveHandshake(adapter, makeExtendedScaleInfo());

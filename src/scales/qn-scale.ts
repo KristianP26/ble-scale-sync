@@ -142,21 +142,29 @@ const SCALE_EPOCH_OFFSET = 946684800;
 const REPORT_BYTE_DEFAULT = 0xfe;
 
 /**
- * Report byte for the 20-byte extended dialect (#235).
+ * Report byte for the LONG-FRAME dialects, es26m (19-byte) and extended
+ * (20-byte). See #235 and #75.
  *
- * Unlike the default above, this one is not an inference. A vendor-app HCI
- * capture of a scale on this dialect writes `a0 0d 04 fc ...` five times across
- * three weigh-ins and never sends 0xFE, the scale acknowledges each one by
- * echoing the byte back as `a1 07 04 fc 01 10 b9`, and 59 live 0x10 weight
- * frames follow. So on this firmware 0xFC is simply what the protocol uses.
+ * Unlike the default above, this one is not an inference. Two vendor-app
+ * captures, on two scales, on both long dialects, agree:
  *
- * Gated on the dialect for the reason this file already applies to the
- * measurement trigger a few lines below: the capture covers this firmware and
- * no other, every other QN variant in the registry reads today on 0xFE, and an
- * unexplained change is not something to hand them on spec. `ble.qn_report_byte`
- * overrides either value if a unit disagrees.
+ *   extended  a raw HCI capture writes `a0 0d 04 fc ...` five times across
+ *             three weigh-ins and never sends 0xFE. The scale acknowledges
+ *             each one by echoing the byte back as `a1 07 04 fc 01 10 b9`,
+ *             and 59 live 0x10 weight frames follow (#235).
+ *   es26m     an Android btsnoop of a successful Arboleaf weigh-in sends the
+ *             same frame. The reporter's own log line for that unit reads
+ *             `QN: scale info (19B, dialect=es26m)`, so the dialect is not
+ *             inferred from the model name (#75).
+ *
+ * So on the long dialects 0xFC is simply what the protocol uses.
+ *
+ * The 11-byte classic dialect keeps 0xFE. No capture covers it, and unlike the
+ * long variants it reads today, which is exactly the asymmetry that decides it:
+ * every scale reported silent after a completed handshake is on a long frame.
+ * `ble.qn_report_byte` overrides either value if a unit disagrees.
  */
-const REPORT_BYTE_EXTENDED = 0xfc;
+const REPORT_BYTE_LONG_FRAME = 0xfc;
 
 /**
  * Grace period (ms) to wait for an impedance frame after the first stable
@@ -1186,7 +1194,8 @@ export class QnScaleAdapter
 
     // A00D response 1 (from openScale QNHandler). byte[3] is the payload byte
     // `ble.qn_report_byte` overrides; see REPORT_BYTE_DEFAULT / _EXTENDED.
-    const dialectDefault = this.isExtendedLongFrame ? REPORT_BYTE_EXTENDED : REPORT_BYTE_DEFAULT;
+    const isLongFrame = this.isExtendedLongFrame || this.isLongFrameVariant;
+    const dialectDefault = isLongFrame ? REPORT_BYTE_LONG_FRAME : REPORT_BYTE_DEFAULT;
     const msg1 = [
       0xa0,
       0x0d,
