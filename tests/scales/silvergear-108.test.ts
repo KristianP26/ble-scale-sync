@@ -128,6 +128,52 @@ describe('Silvergear108Adapter (#297)', () => {
     });
   });
 
+  // The display unit lives in the TOP 3 BITS of the last payload byte, and the
+  // checksum in the low 5. Reading the whole byte as a checksum made the adapter
+  // reject every frame from a scale not set to kilograms (#297). All frames here
+  // are verbatim from the reporter's captures at each unit setting.
+  describe('display units', () => {
+    /** Same weigh-in as SETTLED_ST, with the scale showing 17 st 2 lb. */
+    const SETTLED_ST = '202d099c0dff';
+    /** A body frame captured with the scale showing 240.0 lb. */
+    const BODY_LB = 'a2aea0a20698';
+    /** A zero-load weight frame with the scale showing stones. */
+    const IDLE_ST = 'a02ca0a00df9';
+
+    it('decodes a weigh-in taken with the scale showing stones', () => {
+      // 17 st 2 lb is 108.862 kg, and the app reported 240.0 lb for the same
+      // weigh-in, which is the same number. The gram field does not change with
+      // the display unit, so nothing is converted.
+      const reading = adapter.parseBroadcast(mfg(SETTLED_ST));
+      expect(reading).toEqual({ weight: 108.86, impedance: 0 });
+      expect(adapter.isComplete(reading!)).toBe(true);
+    });
+
+    it('claims and parses frames at every observed unit setting', () => {
+      for (const hex of [SETTLED_108, SETTLED_ST, IDLE_ST, BODY_LB]) {
+        expect(adapter.matches(advert(hex))).toBe(true);
+      }
+    });
+
+    it('still rejects a frame whose low five checksum bits do not close', () => {
+      // Only the low 5 bits are the checksum, so the corruption has to be there
+      // for the frame to be refused; changing the unit bits must not refuse it.
+      const p = Buffer.from(SETTLED_ST, 'hex');
+      p[5] = (p[5] & 0xe0) | ((p[5] + 1) & 0x1f);
+      expect(adapter.parseBroadcast(mfg(p.toString('hex')))).toBeNull();
+    });
+
+    it('accepts a unit value it has never seen, rather than refusing the weigh-in', () => {
+      // The three observed values are kg, lb and st. An unknown one is logged by
+      // name and otherwise ignored: the weight is in grams either way, and
+      // refusing a reading over an unrecognised presentation flag would repeat
+      // the bug this describe block exists for.
+      const p = Buffer.from(SETTLED_ST, 'hex');
+      p[5] = (p[5] & 0x1f) | 0x60;
+      expect(adapter.parseBroadcast(mfg(p.toString('hex')))?.weight).toBeCloseTo(108.86, 3);
+    });
+  });
+
   describe('body composition', () => {
     it('estimates from BMI, since the advertisement carries no decoded impedance', () => {
       const profile = defaultProfile();

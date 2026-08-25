@@ -81,13 +81,38 @@ const WEIGHT_MIN_KG = 2;
 const WEIGHT_MAX_KG = 300;
 
 /**
- * Checksum: `p[5] = 0xA0 + ((p[0] + p[1] + p[2] + p[3] + p[4]) & 0x1F)`.
+ * The last payload byte is two fields, not one.
  *
- * Verified against every advertisement in both captures: 127 of 127 frames
- * close, none fail. Note it is computed over the OBFUSCATED bytes.
+ * Low 5 bits: a checksum over the other five OBFUSCATED bytes. Verified against
+ * every advertisement in four captures covering three display units, 200+
+ * frames, none failing.
+ *
+ * High 3 bits: the unit the scale is DISPLAYING. Reading the whole byte as a
+ * checksum against a fixed 0xA0 base is what the first version of this adapter
+ * did, and it rejected every frame from a scale not set to kilograms (#297).
+ *
+ * The weight itself does NOT change with the display unit. A capture taken with
+ * the scale reading `17 st 2 lb`, and another reading `240.0 lb`, both decode to
+ * 108.86 kg from the same 24-bit gram field, and 17 st 2 lb is 108.862 kg. So
+ * the unit is presentation only and nothing here converts.
  */
+const CHECKSUM_MASK = 0x1f;
+const UNIT_MASK = 0xe0;
+
+/** Observed values of the unit field. An unseen value is not a reason to reject. */
+const UNIT_NAMES: Record<number, string> = {
+  0xa0: 'kg',
+  0x80: 'lb',
+  0xe0: 'st',
+};
+
 function payloadChecksum(p: Buffer): number {
-  return (OBFUSCATION_KEY + ((p[0] + p[1] + p[2] + p[3] + p[4]) & 0x1f)) & 0xff;
+  return (p[0] + p[1] + p[2] + p[3] + p[4]) & CHECKSUM_MASK;
+}
+
+/** True when the frame's checksum closes, whatever unit the scale is showing. */
+function checksumOk(p: Buffer): boolean {
+  return (p[5] & CHECKSUM_MASK) === payloadChecksum(p);
 }
 
 /**
@@ -133,7 +158,7 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
     // and matters because this adapter outranks Robi, Hutbit and MGB, so a
     // same-OEM sibling appearing on 0xA0AC would otherwise be claimed here.
     if (p[4] !== FRAME_TYPE_WEIGHT && p[4] !== FRAME_TYPE_BODY) return false;
-    return p[5] === payloadChecksum(p);
+    return checksumOk(p);
   }
 
   parseNotification(): ScaleReading | null {
@@ -143,7 +168,7 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
   parseBroadcast(manufacturerData: Buffer): ScaleReading | null {
     if (manufacturerData.length !== MFG_LEN) return null;
     const p = manufacturerData.subarray(PAYLOAD_OFFSET);
-    if (p[5] !== payloadChecksum(p)) return null;
+    if (!checksumOk(p)) return null;
 
     if (p[4] === FRAME_TYPE_BODY) {
       // Not decoded, see FRAME_TYPE_BODY. Logged so the pairing with a vendor-app
@@ -177,6 +202,8 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
       return null;
     }
     if (weight < WEIGHT_MIN_KG || weight > WEIGHT_MAX_KG) return null;
+    const unit = UNIT_NAMES[p[5] & UNIT_MASK] ?? `0x${(p[5] & UNIT_MASK).toString(16)}`;
+    bleLog.debug(`Silvergear settled: ${weight.toFixed(3)} kg (scale is displaying ${unit})`);
     return { weight, impedance: 0 };
   }
 
