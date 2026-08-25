@@ -228,6 +228,21 @@ export const UserSchema = z.object({
    * against a single captured device.
    */
   beurer_provision: z.boolean().optional(),
+  /**
+   * Register a NEW user record on the scale instead of consenting to an
+   * existing one (#335).
+   *
+   * A SIG user record exists only after User Control Point "Register New User",
+   * and normally only the vendor app performs it. The profiles created in the
+   * scale's own menu are display-side records for its body-composition maths,
+   * not SIG users, so a scale set up that way refuses every consent code from
+   * any other client: there is no record it is entitled to.
+   *
+   * One-shot and opt-in, because it writes a record to the device and the slots
+   * are finite. Turn it on once, read the assigned index out of the log, put
+   * that in `beurer_user_index`, then turn it off.
+   */
+  beurer_register_new_user: z.boolean().optional(),
 });
 
 export const RuntimeSchema = z.object({

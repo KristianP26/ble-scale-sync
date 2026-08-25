@@ -155,6 +155,34 @@ If `252` makes your scale produce a weight, please say so in an issue with the m
 
 :::
 
+::: tip Beurer scales that reject every consent code (`beurer_register_new_user`)
+
+If a Beurer or Sanitas scale bonds, subscribes and then answers the consent with `USER_NOT_AUTHORIZED` no matter which code or slot you try, the problem is usually not the code.
+
+A user record in the Bluetooth SIG User Data Service exists only after a **Register New User** operation, and normally only the vendor app performs it. The profiles you create in the scale's own menu (SET, U:1 to U:8) are display-side records for its body-composition maths; they are not SIG users. So on a scale whose user was registered by the vendor app, another client has no record it is entitled to, and consent can never succeed for it.
+
+This creates one:
+
+```yaml
+users:
+  - name: Your Name
+    beurer_pin: 1234 # the code you want the new record to use
+    beurer_register_new_user: true
+```
+
+It is opt-in and meant to be used once, because it writes a record to the scale and the slots are finite. The log then tells you which index the scale assigned:
+
+```
+Beurer BF720: registered a new user at index 4. Set 'users[].beurer_user_index: 4'
+and turn 'beurer_register_new_user' back off, or the next run registers another one.
+```
+
+Put that index in `beurer_user_index`, set `beurer_register_new_user` back to `false`, and normal consent takes over from the next run.
+
+If the scale refuses the registration, its slots are probably all occupied. Free one from the scale's own menu and try again.
+
+:::
+
 ::: tip Shortening the session (`session_timeout_sec`)
 Some scales will not run a standalone weigh-in while a host holds the GATT session open. The Beurer BF500 is the clearest example: it displays `APP` and waits, so only a measurement taken **between** sessions is picked up.
 
@@ -225,20 +253,21 @@ users:
     weight_range: { min: 50, max: 75 }
 ```
 
-| Field               | Required | Default        | Description                                                              |
-| ------------------- | -------- | -------------- | ------------------------------------------------------------------------ |
-| `name`              | Yes      | (none)         | Display name                                                             |
-| `slug`              | No       | Auto-generated | Unique ID (lowercase, hyphens) for MQTT topics, InfluxDB tags            |
-| `height`            | Yes      | (none)         | Height in configured unit                                                |
-| `birth_date`        | Yes      | (none)         | ISO date (`YYYY-MM-DD`)                                                  |
-| `gender`            | Yes      | (none)         | `male` or `female`                                                       |
-| `is_athlete`        | No       | `false`        | Adjusts [body composition](/body-composition#athlete-mode) formulas      |
-| `weight_range`      | No       | (none)         | `{ min, max }` in kg. Required for [multi-user](/multi-user) deployments |
-| `last_known_weight` | No       | `null`         | Auto-updated after each measurement                                      |
-| `exporters`         | No       | (none)         | [Per-user exporter](/multi-user#per-user-exporters) overrides            |
-| `beurer_pin`        | Beurer   | (none)         | Consent code the Beurer BF7xx / BF9xx scale was paired with              |
-| `beurer_user_index` | No       | `1`            | Scale user slot the consent code belongs to                              |
-| `beurer_provision`  | No       | `false`        | Write this profile into a Beurer scale that has no stored user           |
+| Field                      | Required | Default        | Description                                                                             |
+| -------------------------- | -------- | -------------- | --------------------------------------------------------------------------------------- |
+| `name`                     | Yes      | (none)         | Display name                                                                            |
+| `slug`                     | No       | Auto-generated | Unique ID (lowercase, hyphens) for MQTT topics, InfluxDB tags                           |
+| `height`                   | Yes      | (none)         | Height in configured unit                                                               |
+| `birth_date`               | Yes      | (none)         | ISO date (`YYYY-MM-DD`)                                                                 |
+| `gender`                   | Yes      | (none)         | `male` or `female`                                                                      |
+| `is_athlete`               | No       | `false`        | Adjusts [body composition](/body-composition#athlete-mode) formulas                     |
+| `weight_range`             | No       | (none)         | `{ min, max }` in kg. Required for [multi-user](/multi-user) deployments                |
+| `last_known_weight`        | No       | `null`         | Auto-updated after each measurement                                                     |
+| `exporters`                | No       | (none)         | [Per-user exporter](/multi-user#per-user-exporters) overrides                           |
+| `beurer_pin`               | Beurer   | (none)         | Consent code the Beurer BF7xx / BF9xx scale was paired with                             |
+| `beurer_user_index`        | No       | `1`            | Scale user slot the consent code belongs to                                             |
+| `beurer_provision`         | No       | `false`        | Write this profile into a Beurer scale that has no stored user                          |
+| `beurer_register_new_user` | No       | `false`        | Create a new user record on the scale instead of consenting to one. One-shot; see below |
 
 ### Exporters
 

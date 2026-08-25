@@ -37,6 +37,7 @@ export class PollReadingSource implements ReadingSource {
         pin: primaryUser.beurer_pin,
         userIndex: primaryUser.beurer_user_index,
         provision: primaryUser.beurer_provision,
+        registerNewUser: primaryUser.beurer_register_new_user,
       },
       weightUnit: this.ctx.weightUnit,
       abortSignal: signal,

@@ -120,7 +120,22 @@ const SVC_BODY_COMPOSITION = uuid16(0x181b);
 // Beurer GmbH SIG-assigned company identifier (advertisement manufacturer data).
 const BEURER_COMPANY_ID = 0x0611;
 
-// User Control Point opcodes (subset; consent-only path).
+// User Control Point opcodes (subset).
+/**
+ * SIG User Data Service "Register New User": `01 <consent code u16 LE>`.
+ *
+ * A SIG user record exists ONLY after this operation. The profiles created in
+ * the scale's own SET menu are display-side records for its body-composition
+ * maths and are NOT SIG users, so on a scale whose user was registered by the
+ * vendor app, Consent can never succeed from another client whatever code is
+ * supplied: there is no record that client is entitled to. Established on a
+ * BF915 in #335, where all three slots answered USER_NOT_AUTHORIZED with every
+ * code tried, on a link that bonded and subscribed cleanly.
+ *
+ * The scale answers with the index it assigned, which is what the user then
+ * puts in `users[].beurer_user_index`.
+ */
+const UCP_REGISTER_NEW_USER = 0x01;
 const UCP_CONSENT = 0x02;
 const UCP_RESPONSE = 0x20;
 const UCP_RESULT_SUCCESS = 0x01;
@@ -211,6 +226,8 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
   private profileSyncDone = false;
   /** Scale user slot the consent applies to; used in the log lines. */
   private userIndex = 1;
+  /** users[].beurer_register_new_user: create a SIG user record (#335). */
+  private registerNewUser = false;
   /** users[].beurer_provision: write the profile into an empty scale (#229). */
   private provision = false;
   /** Vendor user-slot records seen on 0xFFF2 this session. */
@@ -338,6 +355,7 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     this.ctx = ctx;
     this.profileSyncDone = false;
     this.userIndex = userIndex;
+    this.registerNewUser = ctx.scaleAuth?.registerNewUser === true;
     this.provision = ctx.scaleAuth?.provision === true;
     this.userSlotsSeen = 0;
     this.userListAnswered = false;
@@ -359,6 +377,25 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
       } catch (err) {
         bleLog.debug(`Beurer BF720: vendor user-list query failed: ${String(err)}`);
       }
+    }
+
+    if (this.registerNewUser) {
+      // One-shot provisioning, opt-in and never automatic. It CREATES a record
+      // on the device and the slots are finite, so doing it on every rejected
+      // consent would fill the scale with orphans. The user turns it on once,
+      // reads the assigned index out of the log, puts that in
+      // `beurer_user_index`, and turns it off again.
+      await ctx.write(
+        CHR_USER_CONTROL_POINT,
+        [UCP_REGISTER_NEW_USER, pin & 0xff, (pin >> 8) & 0xff],
+        true,
+      );
+      this.consentSent = true;
+      bleLog.info(
+        `Beurer BF720: registering a new user with consent code ${pin}. ` +
+          'This creates a record on the scale.',
+      );
+      return;
     }
 
     await ctx.write(
@@ -591,6 +628,31 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     if (data.length < 3 || data[0] !== UCP_RESPONSE) return;
     // data[1] echoes the request opcode. Without this gate a response to some
     // other operation was read as a consent result.
+    if (data[1] === UCP_REGISTER_NEW_USER) {
+      this.consentAnswered = true;
+      const result = data[2];
+      if (result !== UCP_RESULT_SUCCESS) {
+        const why = UCP_RESULTS[result] ?? `0x${result.toString(16).padStart(2, '0')}`;
+        bleLog.warn(
+          `Beurer BF720: the scale refused to register a new user (${why}). ` +
+            'Its user slots may all be occupied; free one in the scale menu and retry.',
+        );
+        return;
+      }
+      // The assigned index follows the result byte. It is what makes this
+      // useful: without it the caller has no way to know which slot to consent
+      // to next, and searching costs a re-bond per attempt on some models.
+      const assigned = data.length > 3 ? data[3] : undefined;
+      this.userIndex = assigned ?? this.userIndex;
+      bleLog.info(
+        `Beurer BF720: registered a new user${assigned != null ? ` at index ${assigned}` : ''}. ` +
+          `Set 'users[].beurer_user_index: ${assigned ?? '<index>'}' and turn ` +
+          "'beurer_register_new_user' back off, or the next run registers another one.",
+      );
+      this.consentAccepted = true;
+      void this.syncUserProfile(this.session);
+      return;
+    }
     if (data[1] !== UCP_CONSENT) {
       bleLog.debug(
         `Beurer BF720: User Control Point response to opcode ` +

@@ -101,6 +101,16 @@ export interface ScaleAuth {
   userIndex?: number;
   /** Write the configured profile into a scale that has nothing stored (#229). */
   provision?: boolean;
+  /**
+   * Create a SIG user record on the scale (User Control Point 0x01) instead of
+   * consenting to an existing one (#335).
+   *
+   * A SIG user exists only after that operation, and only the vendor app
+   * normally performs it, so a scale whose user was registered by the app
+   * refuses every consent from another client. Opt-in and one-shot: it writes a
+   * record to the device and the slots are finite.
+   */
+  registerNewUser?: boolean;
 }
 
 export interface ConnectionContext {
