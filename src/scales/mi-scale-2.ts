@@ -8,7 +8,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { buildPayload } from './body-comp-helpers.js';
+import { buildPayload, normalizeServiceUuid } from './body-comp-helpers.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
 /** Mi vendor history/body-comp characteristic (custom base UUID). */
@@ -136,15 +136,8 @@ export class MiScale2Adapter implements ScaleAdapterCore, GattWiring, Unlockable
   }
 
   parseServiceData(uuid: string, data: Buffer): ScaleReading | null {
-    const stripped = uuid.toLowerCase().replace(/[-{}]/g, '');
-    let norm = stripped;
-    if (stripped.length === 4) {
-      norm = `0000${stripped}00001000800000805f9b34fb`;
-    } else if (stripped.length === 8) {
-      norm = `${stripped}00001000800000805f9b34fb`;
-    }
-    if (norm !== SVC_BODY_COMP) return null;
-    return this.parseFrame(data);
+    const normalized = normalizeServiceUuid(uuid);
+    return normalized === SVC_BODY_COMP ? this.parseFrame(data) : null;
   }
 
   isComplete(reading: ScaleReading): boolean {

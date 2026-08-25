@@ -4,6 +4,8 @@ import { RenphoScaleAdapter } from './renpho.js';
 import { RenphoEs26bbAdapter } from './renpho-es26bb.js';
 import { RenphoMsc04Adapter } from './renpho-msc04.js';
 import { MiScale2Adapter } from './mi-scale-2.js';
+import { XiaomiMiScaleLegacyAdapter } from './xiaomi-mi-scale-legacy.js';
+import { Silvergear108Adapter } from './silvergear-108.js';
 import { XiaomiS800Adapter } from './xiaomi-s800.js';
 import { BeurerBf720Adapter } from './beurer-bf720.js';
 import { YunmaiScaleAdapter } from './yunmai.js';
@@ -28,6 +30,7 @@ import { MgbAdapter } from './mgb.js';
 import { HoffenAdapter } from './hoffen.js';
 import { SenssunAdapter } from './senssun.js';
 import { EufyP2Adapter } from './eufy-p2.js';
+import { SalterAdapter } from './salter.js';
 import { StandardGattScaleAdapter } from './standard-gatt.js';
 import { registerExclusionRegistry } from './derived-excludes.js';
 
@@ -51,6 +54,13 @@ export const adapters: ScaleAdapter[] = [
   // and would otherwise be grabbed by the Mi Scale 2 adapter, so match them
   // first (by BF720/BF105 name or Beurer company id 0x0611).
   new BeurerBf720Adapter(),
+  // XMTZC04HM is a distinct, weight-only 0x181D broadcast protocol. It must
+  // resolve before MiScale2Adapter and StandardGattScaleAdapter.
+  new XiaomiMiScaleLegacyAdapter(),
+  // Silvergear 108: broadcast-only, non-connectable. Claims on the invented
+  // company id 0xA0AC plus the exact 12-byte payload and its checksum, so it
+  // cannot collide with anything else (#297).
+  new Silvergear108Adapter(),
   new MiScale2Adapter(),
   // Xiaomi Mijia S800 (ms116): broadcast-only, matches FE95 + product id 0x51E2
   // or its own name; no collision with any other adapter (#232).
@@ -82,6 +92,10 @@ export const adapters: ScaleAdapter[] = [
   new HutbitAdapter(),
   new MgbAdapter(),
   new HoffenAdapter(),
+  // Salter (0xFFCC "Healthcare ELectronic"): claims its own name prefix and the
+  // FFCC/CCFF service pair, which no other adapter uses, so its position here is
+  // presentational only — precedence comes from match.priority.
+  new SalterAdapter(),
   // Generic standard GATT adapter last — matches by service UUID / brand names
   new StandardGattScaleAdapter(),
 ];

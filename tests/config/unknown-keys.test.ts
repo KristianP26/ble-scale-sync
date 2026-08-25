@@ -37,6 +37,8 @@ describe('collectUnknownKeys', () => {
         scale_mac: '03:B3:EC:91:A2:12',
         adapter: 'hci0',
         force_scale_adapter: 'Hutbit',
+        qn_protocol_byte: 255,
+        qn_report_byte: 252,
       },
       scale: { weight_unit: 'kg', height_unit: 'cm' },
       unknown_user: 'nearest',

@@ -19,6 +19,8 @@ version: 1
 #   adapter: hci0                     # Linux only: select BLE adapter (omit for default)
 #   force_scale_adapter: "Hutbit"     # override protocol auto-detection (requires scale_mac)
 #   session_timeout_sec: 20           # seconds one GATT session waits for a reading (default 120)
+#   qn_protocol_byte: 0               # QN scales only: 0 to 255, see below
+#   qn_report_byte: 252               # QN scales only: 0 to 255, see below
 #
 # scale_mac: omit for auto-discovery. On macOS, use the CoreBluetooth UUID.
 # noble_driver: default is node-ble (Linux), abandonware (Windows), stoprocent (macOS).
@@ -35,6 +37,13 @@ version: 1
 #          run a standalone weigh-in while a host holds the session open (e.g. Beurer BF500,
 #          which displays "APP"). Shorter sessions mean more adapter resets and trip the
 #          runtime.watchdog_max_consecutive_failures limit sooner.
+# qn_protocol_byte: QN-family scales only (Renpho, Arboleaf, FITINDEX, GE and rebadges). The
+#          protocol byte the handshake echoes back to the scale. Set it only when a QN scale
+#          connects, completes the whole handshake in the debug log and then never reports a
+#          weight. Try 0, or 255, or the value the "QN: scale info" log line reports.
+# qn_report_byte: QN-family scales only, and only worth trying after qn_protocol_byte did not
+#          help. Payload byte of the history-response frame, default 254 (0xFE). Vendor-app
+#          captures of a GE CS 10 G and an Arboleaf QN-Scale both send 252 (0xFC) instead.
 #
 # --- ESP32 MQTT Proxy (when handler: mqtt-proxy) ---
 #   mqtt_proxy:

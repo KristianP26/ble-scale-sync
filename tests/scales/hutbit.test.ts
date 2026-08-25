@@ -79,11 +79,38 @@ describe('HutbitAdapter (#254)', () => {
       expect(resolveAdapter(sixByte, adapters)?.name).toBe('Hutbit');
     });
 
-    it('still requires D618 alongside a six-byte payload', () => {
+    it('claims a named six-byte payload advertising FFB0 without D618', () => {
       const noD618 = swanAdvert('SWAN');
       noD618.serviceUuids = [uuid16(0xffb0)];
       noD618.manufacturerData = { id: 0x02ac, data: Buffer.from('12a291ecb303', 'hex') };
-      expect(isHutbitOemAdvert(noD618)).toBe(false);
+      expect(isHutbitOemAdvert(noD618)).toBe(true);
+    });
+
+    // #322: a Juniper-branded unit running the same Lefu AC02 protocol
+    // advertises FFB0 alone. Its traffic is genuine AC02 (stable weight
+    // 103.0 kg, then 521 ohm on FD01, both checksum-valid), but D618 sent it to
+    // MGB, whose parser rejects every frame it sends, so every cycle ended in a
+    // GATT reading timeout. Byte-for-byte the advert the reporter logged.
+    it('claims the Juniper FFB0-only advert and keeps it away from MGB (#322)', () => {
+      const juniper: BleDeviceInfo = {
+        localName: 'SWAN',
+        serviceUuids: [uuid16(0xffb0)],
+        manufacturerData: { id: 0x02ac, data: Buffer.from('c3b4d5ecb60100', 'hex') },
+      };
+      expect(isHutbitOemAdvert(juniper)).toBe(true);
+      expect(makeAdapter().matches(juniper)).toBe(true);
+      expect(resolveAdapter(juniper, adapters)?.name).toBe('Hutbit');
+    });
+
+    // The same advert with the name stripped, as a proxy transport delivers it.
+    // This one must NOT flip: nameless FFB0 belongs to the Robi S9.
+    it('leaves the nameless form of that advert alone (#322, #248)', () => {
+      const nameless: BleDeviceInfo = {
+        localName: '',
+        serviceUuids: [uuid16(0xffb0)],
+        manufacturerData: { id: 0x02ac, data: Buffer.from('c3b4d5ecb60100', 'hex') },
+      };
+      expect(isHutbitOemAdvert(nameless)).toBe(false);
     });
 
     it('rejects 0x02AC data that does not fit the signature shape', () => {
@@ -119,14 +146,21 @@ describe('HutbitAdapter (#254)', () => {
       expect(resolveAdapter(robiLike, adapters)?.name).toBe('Robi S9');
     });
 
-    // The OEM claim requires BOTH advertised services, not just the 0x02AC
-    // shape. 0x02AC is SIG-assigned to RTB Elektronik and the Lefu firmware
-    // squats on it, so the shape alone is too weak to claim a device on.
-    it('requires d618 alongside ffb0: the 0x02AC shape alone does not claim a device', () => {
-      const noD618 = swanAdvert();
-      noD618.serviceUuids = [uuid16(0xffb0)];
-      expect(makeAdapter().matches(noD618)).toBe(false);
-      expect(isHutbitOemAdvert(noD618)).toBe(false);
+    // 0x02AC is SIG-assigned to RTB Elektronik and the Lefu firmware squats on
+    // it, so the shape alone is too weak to claim a NAMELESS device: that space
+    // is the Robi S9's. A named advert has already passed every name branch in
+    // the family (Robi bows out of swan/icomon/yg and claims robi before it
+    // consults this predicate), so there D618 is no longer required (#322).
+    it('drops the d618 requirement only for named adverts', () => {
+      const named = swanAdvert();
+      named.serviceUuids = [uuid16(0xffb0)];
+      expect(makeAdapter().matches(named)).toBe(true);
+      expect(isHutbitOemAdvert(named)).toBe(true);
+
+      const nameless = swanAdvert('');
+      nameless.serviceUuids = [uuid16(0xffb0)];
+      expect(makeAdapter().matches(nameless)).toBe(false);
+      expect(isHutbitOemAdvert(nameless)).toBe(false);
     });
 
     // Guards the symmetry between HutbitAdapter.matches() and the RobiS9

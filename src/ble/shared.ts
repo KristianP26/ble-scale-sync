@@ -11,6 +11,39 @@ import type { WeightUnit } from '../config/schema.js';
 import { LBS_TO_KG, normalizeUuid, errMsg, bleLog } from './types.js';
 import { HistoryBuffer, HoldTimer } from './notification-processor.js';
 
+// ─── Raw frame capture (protocol debugging) ───────────────────────────────────
+
+/** Default hold window after a complete reading while capturing trailing frames. */
+const RAW_CAPTURE_DEFAULT_HOLD_MS = 20_000;
+
+/** Format a buffer as a space-separated lowercase hex string (e.g. "e7 58 01"). */
+export function toHex(buf: Buffer | number[]): string {
+  return [...buf].map((b) => b.toString(16).padStart(2, '0')).join(' ');
+}
+
+/**
+ * Env-gated raw BLE frame capture for protocol reverse-engineering (#211).
+ *
+ * When enabled, `waitForRawReading()` logs every notify frame as hex (including
+ * frames the adapter parses to null, e.g. the Beurer/Sanitas 0x59 composition
+ * frame) and holds the GATT connection open past the weight-stable point so the
+ * scale actually transmits its trailing frames before we disconnect.
+ *
+ *   BLE_RAW_CAPTURE          truthy enables (off for unset/empty/0/false/no/off)
+ *   BLE_RAW_CAPTURE_HOLD_SEC optional hold window in seconds (default 20)
+ *
+ * Read from the environment on each call so tests can toggle it without a module
+ * reload. Off by default; has no effect on normal runs.
+ */
+export function getRawCaptureConfig(): { enabled: boolean; holdMs: number } {
+  const raw = (process.env.BLE_RAW_CAPTURE ?? '').trim().toLowerCase();
+  const enabled = raw !== '' && raw !== '0' && raw !== 'false' && raw !== 'no' && raw !== 'off';
+  const holdSec = Number(process.env.BLE_RAW_CAPTURE_HOLD_SEC);
+  const holdMs =
+    Number.isFinite(holdSec) && holdSec > 0 ? holdSec * 1000 : RAW_CAPTURE_DEFAULT_HOLD_MS;
+  return { enabled, holdMs };
+}
+
 // ─── Broadcast-vs-GATT routing ────────────────────────────────────────────────
 
 /**
@@ -177,6 +210,13 @@ function initializeAdapter(
   start: () => Promise<void>;
   cleanup: () => void;
   /**
+   * Register a notification unsubscriber for teardown at the end of the
+   * session. Use this rather than pushing onto the array directly: a subscribe
+   * can settle after the session has already been torn down, and this drops
+   * the listener straight away in that case.
+   */
+  register: (unsub: () => void) => void;
+  /**
    * Re-send a send-once unlock after notifications are confirmed enabled.
    * No-op for adapters with a repeating interval or no legacy unlock.
    */
@@ -185,8 +225,28 @@ function initializeAdapter(
   let unlockInterval: ReturnType<typeof setInterval> | null = null;
   let resendUnlock: (() => Promise<void>) | null = null;
 
+  let closed = false;
+  /**
+   * A subscribe that resolves after cleanup() has already drained the list has
+   * nobody left to unsubscribe it. On the proxy transports the underlying
+   * client outlives the session, so such a listener stays attached for the
+   * lifetime of the process and re-processes every later notification (#338).
+   */
+  const register = (unsub: () => void): void => {
+    if (closed) {
+      try {
+        unsub();
+      } catch (e: unknown) {
+        bleLog.debug(`Late unsubscribe failed: ${errMsg(e)}`);
+      }
+      return;
+    }
+    unsubscribers.push(unsub);
+  };
+
   let sessionEnded = false;
   const cleanup = (): void => {
+    closed = true;
     if (unlockInterval) {
       clearInterval(unlockInterval);
       unlockInterval = null;
@@ -228,7 +288,7 @@ function initializeAdapter(
         },
         subscribe: async (charUuid) => {
           const unsub = await subscribeToChar(charMap, charUuid, onNotification, adapter.name);
-          unsubscribers.push(unsub);
+          register(unsub);
         },
       };
       bleLog.debug('Calling adapter.onConnected()');
@@ -255,9 +315,7 @@ function initializeAdapter(
         for (const buf of commands) {
           try {
             await writeChar.write(buf, false);
-            bleLog.debug(
-              `Unlock write: [${[...buf].map((b) => b.toString(16).padStart(2, '0')).join(' ')}]`,
-            );
+            bleLog.debug(`Unlock write: [${toHex(buf)}]`);
           } catch (e: unknown) {
             if (!isResolved()) bleLog.error(`Unlock write error: ${errMsg(e)}`);
           }
@@ -290,7 +348,7 @@ function initializeAdapter(
     if (resendUnlock) await resendUnlock();
   };
 
-  return { start, cleanup, resendUnlockAfterSubscribe };
+  return { start, cleanup, register, resendUnlockAfterSubscribe };
 }
 
 /** Subscribe to notifications in multi-char or legacy mode, then start adapter init. */
@@ -300,7 +358,7 @@ async function subscribeAndInit(
   onNotification: (sourceUuid: string, data: Buffer) => void,
   startInit: () => Promise<void>,
   onNotifyEnabled: () => Promise<void>,
-  unsubscribers: (() => void)[],
+  register: (unsub: () => void) => void,
 ): Promise<void> {
   if (adapter.characteristics) {
     // Multi-char mode
@@ -322,7 +380,7 @@ async function subscribeAndInit(
       bleLog.debug(`Subscribing to ${binding.uuid} (${binding.type})...`);
       try {
         const unsub = await subscribeToChar(charMap, binding.uuid, onNotification, adapter.name);
-        unsubscribers.push(unsub);
+        register(unsub);
         subscribed += 1;
       } catch (err) {
         // A characteristic being present says nothing about it being
@@ -380,12 +438,16 @@ async function subscribeAndInit(
       ? adapter.charNotifyUuid!
       : adapter.altCharNotifyUuid!;
     // Legacy mode — subscribe + first unlock in parallel to prevent
-    // the scale from disconnecting before receiving the unlock command
-    const [unsub] = await Promise.all([
-      subscribeToChar(charMap, effectiveNotifyUuid, onNotification, adapter.name),
+    // the scale from disconnecting before receiving the unlock command.
+    // Register the unsubscriber from inside the subscribe chain rather than
+    // after the Promise.all: a rejecting startInit() makes Promise.all discard
+    // the still-pending subscribe, and the listener it goes on to install
+    // would then never be torn down (#338). register() handles the case where
+    // the session was already cleaned up by then.
+    await Promise.all([
+      subscribeToChar(charMap, effectiveNotifyUuid, onNotification, adapter.name).then(register),
       startInit(),
     ]);
-    unsubscribers.push(unsub);
     bleLog.info('Subscribed to notifications. Step on the scale.');
     // The unlock above was necessarily written before notifications were on:
     // noble queues the CCCD write from inside its descriptor discovery
@@ -442,6 +504,7 @@ export function waitForRawReading(
   weightUnit?: WeightUnit,
   onLiveData?: (reading: ScaleReading) => void,
   scaleAuth?: ScaleAuth,
+  onActivity?: () => void,
 ): Promise<RawReading> {
   return new Promise<RawReading>((resolve, reject) => {
     let resolved = false;
@@ -463,8 +526,28 @@ export function waitForRawReading(
       if (!resolved) finishWith(r);
     });
 
+    // Raw frame capture (#211): log every notify frame and hold the connection
+    // open past weight-stable so trailing frames (e.g. the Beurer/Sanitas 0x59
+    // composition frame) are recorded before disconnect. Off by default.
+    const capture = getRawCaptureConfig();
+    let captureHoldTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastCaptureReading: ScaleReading | null = null;
+    const clearCaptureHold = (): void => {
+      if (captureHoldTimer) {
+        clearTimeout(captureHoldTimer);
+        captureHoldTimer = null;
+      }
+    };
+
     const handleNotification = (sourceUuid: string, data: Buffer): void => {
+      if (capture.enabled) {
+        bleLog.info(`[RAW] ${sourceUuid} (${data.length}B): ${toHex(data)}`);
+      }
       if (resolved) return;
+
+      // Counted before the adapter gate, because a frame the adapter rejects
+      // (an unstable QN 0x10) still shows the scale is mid weigh-in.
+      onActivity?.();
 
       // Every frame the scale sends, before any adapter gate can discard it.
       // Without this a silent cycle cannot be told apart from one where frames
@@ -509,6 +592,29 @@ export function waitForRawReading(
       }
 
       if (adapter.isComplete(reading)) {
+        // Capture mode takes precedence over both the normal completion and the
+        // composition hold. The point of a capture run is the frames that come
+        // AFTER the weight settles, so resolving on the weight would end the
+        // session before the thing being captured arrives.
+        if (capture.enabled) {
+          lastCaptureReading = reading;
+          if (!captureHoldTimer) {
+            const holdSec = (capture.holdMs / 1000).toFixed(0);
+            bleLog.info(
+              `Capture mode: weight stable, holding the connection for ${holdSec}s to record ` +
+                `trailing frames (e.g. 0x59 composition). Stay on the scale.`,
+            );
+            captureHoldTimer = setTimeout(() => {
+              if (resolved) return;
+              const r = lastCaptureReading;
+              if (!r) return;
+              clearCaptureHold();
+              bleLog.info('Capture window elapsed; returning weight-only reading.');
+              finishWith(r);
+            }, capture.holdMs);
+          }
+          return;
+        }
         const final = adapter.isFinal ? adapter.isFinal(reading) : true;
         if (adapter.completionHoldMs && !final) {
           hold.hold(reading);
@@ -533,6 +639,7 @@ export function waitForRawReading(
     bleDevice.onDisconnect(() => {
       if (resolved) return;
       hold.clear();
+      clearCaptureHold();
       if (history.length > 0) {
         resolved = true;
         init.cleanup();
@@ -550,6 +657,18 @@ export function waitForRawReading(
         finishWith(held);
         return;
       }
+      const r = lastCaptureReading;
+      if (capture.enabled && r) {
+        // Common capture exit: the scale powered off after sending its trailing
+        // frames (logged above). Resolve with the weight-only reading instead of
+        // rejecting, so a capture session does not spam errors + btmgmt churn.
+        resolved = true;
+        init.cleanup();
+        process.stdout.write('\r' + ' '.repeat(80) + '\r');
+        bleLog.info('Capture mode: scale disconnected; recorded frames above. Returning reading.');
+        resolve({ reading: r, adapter, history: undefined });
+        return;
+      }
       init.cleanup();
       reject(new Error('Scale disconnected before reading completed'));
     });
@@ -562,9 +681,11 @@ export function waitForRawReading(
       handleNotification,
       init.start,
       init.resendUnlockAfterSubscribe,
-      unsubscribers,
+      init.register,
     ).catch((e) => {
       if (!resolved) {
+        hold.clear();
+        clearCaptureHold();
         init.cleanup();
         reject(e instanceof Error ? e : new Error(String(e)));
       }

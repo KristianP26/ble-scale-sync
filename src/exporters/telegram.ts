@@ -3,6 +3,7 @@ import type { BodyComposition } from '../interfaces/scale-adapter.js';
 import type { Exporter, ExportContext, ExportResult } from '../interfaces/exporter.js';
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { TelegramConfig } from './config.js';
+import { formatNotification } from './notification-message.js';
 import { withRetry, httpError } from '../utils/retry.js';
 import { errMsg } from '../utils/error.js';
 
@@ -43,38 +44,27 @@ export const telegramSchema: ExporterSchema = {
       required: false,
       default: false,
     },
+    {
+      key: 'report_exports',
+      label: 'Report export results (waits for the other exporters)',
+      type: 'boolean',
+      required: false,
+      default: false,
+      description: 'Wait for the other exporters and append their results to the message',
+    },
   ],
   supportsGlobal: true,
   supportsPerUser: false,
 };
 
-function formatMessage(
-  data: BodyComposition,
-  title: string,
-  userName?: string,
-  driftWarning?: string,
-): string {
-  const prefix = userName ? `[${userName}] ` : '';
-  const lines = [
-    title,
-    `${prefix}⚖️ ${data.weight.toFixed(2)} kg | BMI ${data.bmi.toFixed(1)}`,
-    `🏋️ Body Fat ${data.bodyFatPercent.toFixed(1)}% | Muscle ${data.muscleMass.toFixed(1)} kg`,
-    `💧 Water ${data.waterPercent.toFixed(1)}% | 🦴 Bone ${data.boneMass.toFixed(1)} kg`,
-    `🫀 Visceral Fat ${data.visceralFat} | BMR ${data.bmr} kcal`,
-    `📅 Metabolic Age ${data.metabolicAge} yr | Physique ${data.physiqueRating}`,
-  ];
-  if (driftWarning) {
-    lines.push(`⚠️ ${driftWarning}`);
-  }
-  return lines.join('\n');
-}
-
 export class TelegramExporter implements Exporter {
   readonly name = 'telegram';
+  readonly reportsExports: boolean;
   private readonly config: TelegramConfig;
 
   constructor(config: TelegramConfig) {
     this.config = config;
+    this.reportsExports = config.reportExports;
   }
 
   async healthcheck(): Promise<ExportResult> {
@@ -98,7 +88,7 @@ export class TelegramExporter implements Exporter {
   async export(data: BodyComposition, context?: ExportContext): Promise<ExportResult> {
     const { botToken, chatId, title, silent } = this.config;
     const url = `${API_BASE}/bot${botToken}/sendMessage`;
-    const text = formatMessage(data, title, context?.userName, context?.driftWarning);
+    const text = `${title}\n${formatNotification(data, context)}`;
 
     return withRetry(
       async () => {

@@ -224,3 +224,108 @@ describe('handler-node-ble broadcastScanNodeBle grace timer (#163 follow-up)', (
     expect(result.reading.impedance).toBe(0);
   });
 });
+
+// ─── Manufacturer-data broadcast path (#297) ─────────────────────────────────
+
+/**
+ * A broadcast adapter that reads manufacturer data instead of service data.
+ * Before #297 the node-ble passive path only ever looked at ServiceData, so an
+ * adapter shaped like this worked on Noble and read nothing on Linux.
+ */
+function makeMfgAdapter(): ScaleAdapter {
+  return {
+    name: 'MockBroadcast',
+    preferPassive: true,
+    matches: vi.fn((_info: BleDeviceInfo) => true),
+    parseBroadcast: vi.fn((data: Buffer): ScaleReading | null =>
+      data.length === 4 ? { weight: 91.22, impedance: 0 } : null,
+    ) as ScaleAdapter['parseBroadcast'],
+    isComplete: (r: ScaleReading): boolean => r.weight > 0,
+    computeMetrics: (_r: ScaleReading): BodyComposition => ({ weight: 91.22, impedance: 0 }),
+    parseNotification: () => null,
+    charNotifyUuid: undefined as unknown as string,
+    charWriteUuid: undefined as unknown as string,
+    unlockCommand: [],
+    unlockIntervalMs: 0,
+  } as unknown as ScaleAdapter;
+}
+
+/** BlueZ `Device1.ManufacturerData`: keyed by company id, Variant-wrapped bytes. */
+function manufacturerPayload(): Record<string, { value: Buffer }> {
+  return { '41132': { value: Buffer.from([0x01, 0x02, 0x03, 0x04]) } };
+}
+
+describe('handler-node-ble broadcastScanNodeBle manufacturer data (#297)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('resolves from a ManufacturerData PropertiesChanged signal', async () => {
+    const adapter = makeMfgAdapter();
+    const device = makeDevice();
+    const btAdapter = makeAdapter();
+
+    const promise = _internals.broadcastScanNodeBle(
+      adapter,
+      btAdapter as never,
+      device as never,
+      'AA:BB:CC:DD:EE:FF',
+      {},
+    );
+
+    await vi.waitUntil(() => device.helper.listenerCount('PropertiesChanged') > 0, {
+      timeout: 2000,
+      interval: 10,
+    });
+    device.helper.emit('PropertiesChanged', { ManufacturerData: manufacturerPayload() });
+
+    const result = await promise;
+    expect(result.reading.weight).toBe(91.22);
+    expect(adapter.parseBroadcast).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves from the ManufacturerData poll fallback when no signal arrives', async () => {
+    // The poll is the path that carries a device whose PropertiesChanged
+    // subscription failed, which is why it has to read both properties too.
+    const adapter = makeMfgAdapter();
+    const device = makeDevice();
+    const btAdapter = makeAdapter();
+    device.helper.prop = vi.fn(async (name: string) =>
+      name === 'ManufacturerData' ? manufacturerPayload() : undefined,
+    );
+
+    const result = await _internals.broadcastScanNodeBle(
+      adapter,
+      btAdapter as never,
+      device as never,
+      'AA:BB:CC:DD:EE:FF',
+      {},
+    );
+
+    expect(result.reading.weight).toBe(91.22);
+    expect(device.helper.prop).toHaveBeenCalledWith('ManufacturerData');
+  });
+
+  it('does not read ServiceData for an adapter that only parses manufacturer data', async () => {
+    const adapter = makeMfgAdapter();
+    const device = makeDevice();
+    const btAdapter = makeAdapter();
+    device.helper.prop = vi.fn(async (name: string) =>
+      name === 'ManufacturerData' ? manufacturerPayload() : undefined,
+    );
+
+    await _internals.broadcastScanNodeBle(
+      adapter,
+      btAdapter as never,
+      device as never,
+      'AA:BB:CC:DD:EE:FF',
+      {},
+    );
+
+    expect(device.helper.prop).not.toHaveBeenCalledWith('ServiceData');
+  });
+});

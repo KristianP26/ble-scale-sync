@@ -38,6 +38,8 @@ options:
   scale_mac: ''
   ble_adapter: ''
   force_scale_adapter: ''
+  qn_protocol_byte: ''
+  qn_report_byte: ''
   weight_unit: kg
   height_unit: cm
   user_name: Default
@@ -66,6 +68,8 @@ schema:
   scale_mac: str?
   ble_adapter: str?
   force_scale_adapter: str?
+  qn_protocol_byte: str?
+  qn_report_byte: str?
   weight_unit: list(kg|lbs)
   height_unit: list(cm|in)
   user_name: str

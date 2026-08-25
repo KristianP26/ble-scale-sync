@@ -42,6 +42,44 @@ export class ReadingWatcher implements Watcher {
   private pool: EsphomeProxyPool | null = null;
   private unsub: (() => void) | null = null;
   private gattInFlight = new Set<string>();
+
+  /**
+   * Last non-empty local name seen per address, so a later nameless frame from
+   * the same device still resolves against the name.
+   *
+   * The ESPHome proxy delivers the advertisement and its scan response as two
+   * separate events, and only the scan response carries the local name, so the
+   * same device arrives here twice: once nameless, once named. Every adapter in
+   * this codebase that has to tell sibling protocols apart uses the name to do
+   * it, and a device that lands on the nameless frame is matched as if it had
+   * no name at all. For the Lefu FFB0 family that is the difference between the
+   * Hutbit adapter and the MGB one, whose parser rejects every frame the Lefu
+   * units send (#322). The mqtt-proxy watcher already reuses its cached scan
+   * entry for the same reason.
+   *
+   * Bounded so a busy radio cannot grow it without limit; entries are cheap and
+   * a scale re-advertises constantly, so eviction costs at most one cycle.
+   */
+  private readonly lastAdvertName = new Map<string, string>();
+  private static readonly MAX_CACHED_NAMES = 64;
+
+  /** Remember a name, and merge the remembered one into a nameless frame. */
+  private withCachedName(info: BleDeviceInfo, addrLc: string): BleDeviceInfo {
+    if (info.localName) {
+      if (this.lastAdvertName.get(addrLc) !== info.localName) {
+        if (this.lastAdvertName.size >= ReadingWatcher.MAX_CACHED_NAMES) {
+          const oldest = this.lastAdvertName.keys().next().value;
+          if (oldest !== undefined) this.lastAdvertName.delete(oldest);
+        }
+        this.lastAdvertName.set(addrLc, info.localName);
+      }
+      return info;
+    }
+    const cached = this.lastAdvertName.get(addrLc);
+    if (!cached) return info;
+    bleLog.debug(`Nameless advertisement for ${addrLc}: using cached name "${cached}"`);
+    return { ...info, localName: cached };
+  }
   // LRU map (insertion-ordered): scales whose on-demand GATT connect failed,
   // so we warn once instead of on every advertisement.
   private gattWarnedFor = new Map<string, true>();
@@ -103,11 +141,12 @@ export class ReadingWatcher implements Watcher {
     if (config.scaleAuth) this.scaleAuth = config.scaleAuth;
   }
 
-  private handleAd(info: BleDeviceInfo, address: string): void {
+  private handleAd(rawInfo: BleDeviceInfo, address: string): void {
     const addrLc = address.toLowerCase();
     if (this.targetMac && addrLc !== this.targetMac) return;
 
-    logAdvert(address, info);
+    logAdvert(address, rawInfo);
+    const info = this.withCachedName(rawInfo, addrLc);
     const adapter = resolveAdapter(info, this.adapters);
     if (!adapter) return;
 

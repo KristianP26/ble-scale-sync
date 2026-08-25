@@ -299,6 +299,21 @@ describe('createExporterFromEntry()', () => {
     expect(exporter.name).toBe('ntfy');
   });
 
+  it('maps report_exports onto the notification exporters', () => {
+    expect(createExporterFromEntry({ type: 'ntfy', topic: 't' }).reportsExports).toBe(false);
+    expect(
+      createExporterFromEntry({ type: 'ntfy', topic: 't', report_exports: true }).reportsExports,
+    ).toBe(true);
+    expect(
+      createExporterFromEntry({
+        type: 'telegram',
+        bot_token: '1:a',
+        chat_id: '2',
+        report_exports: true,
+      }).reportsExports,
+    ).toBe(true);
+  });
+
   it('throws on unknown exporter type', () => {
     const entry: ExporterEntry = { type: 'unknown' };
     expect(() => createExporterFromEntry(entry)).toThrow("Unknown exporter type 'unknown'");

@@ -92,6 +92,83 @@ describe('createNobleHandler getState injection (#181)', () => {
     }
   });
 
+  it('falls back to a direct CCCD write when the driver subscribe fails (#283)', async () => {
+    // The WinRT binding fails a subscribe in two ways: silently (covered by the
+    // timeout test above) and with an error. Either way the session used to die.
+    // The fallback must enable notifications AND keep the data listener, which
+    // is attached before the subscribe precisely so no early frame is lost.
+    const fake = new FakeNoble();
+    const handler = createNobleHandler({
+      noble: fake as unknown as NobleApi,
+      getState: () => fake._state,
+    });
+
+    const listeners = new Map<string, Array<(d: Buffer) => void>>();
+    const written: Buffer[] = [];
+    const cccd = {
+      uuid: '00002902-0000-1000-8000-00805f9b34fb',
+      writeValueAsync: async (d: Buffer) => {
+        written.push(d);
+      },
+    };
+    const char = {
+      uuid: 'fff1',
+      on: (ev: string, fn: (d: Buffer) => void) => {
+        (listeners.get(ev) ?? listeners.set(ev, []).get(ev)!).push(fn);
+      },
+      removeListener: (ev: string, fn: (d: Buffer) => void) => {
+        const arr = listeners.get(ev) ?? [];
+        const i = arr.indexOf(fn);
+        if (i >= 0) arr.splice(i, 1);
+      },
+      subscribeAsync: () => Promise.reject(new Error('BLEManager::OnNotify: status: 3')),
+      discoverDescriptorsAsync: async () => [cccd],
+    };
+
+    const wrapped = handler._internals.wrapChar(char as never);
+    const received: Buffer[] = [];
+    const unsub = await wrapped.subscribe((d) => received.push(d));
+
+    expect(written).toHaveLength(1);
+    expect([...written[0]]).toEqual([0x01, 0x00]);
+    // The listener survived the fallback, so frames still arrive.
+    expect(listeners.get('data') ?? []).toHaveLength(1);
+    listeners.get('data')![0](Buffer.from([0x10]));
+    expect(received).toHaveLength(1);
+
+    unsub();
+    expect(listeners.get('data') ?? []).toHaveLength(0);
+  });
+
+  it('still reports the subscribe failure when there is no CCCD to fall back to (#283)', async () => {
+    // A characteristic without a CCCD, or a driver without descriptor support,
+    // must surface the ORIGINAL subscribe error: that is the informative half,
+    // and a descriptor error would send the reader down the wrong path.
+    const fake = new FakeNoble();
+    const handler = createNobleHandler({
+      noble: fake as unknown as NobleApi,
+      getState: () => fake._state,
+    });
+    const listeners = new Map<string, Array<(d: Buffer) => void>>();
+    const char = {
+      uuid: 'fff1',
+      on: (ev: string, fn: (d: Buffer) => void) => {
+        (listeners.get(ev) ?? listeners.set(ev, []).get(ev)!).push(fn);
+      },
+      removeListener: (ev: string, fn: (d: Buffer) => void) => {
+        const arr = listeners.get(ev) ?? [];
+        const i = arr.indexOf(fn);
+        if (i >= 0) arr.splice(i, 1);
+      },
+      subscribeAsync: () => Promise.reject(new Error('BLEManager::OnNotify: status: 3')),
+      discoverDescriptorsAsync: async () => [],
+    };
+
+    const wrapped = handler._internals.wrapChar(char as never);
+    await expect(wrapped.subscribe(() => {})).rejects.toThrow(/status: 3/);
+    expect(listeners.get('data') ?? []).toHaveLength(0);
+  });
+
   it('exposes the broadcastScan internal for both driver entrypoints', () => {
     const fake = new FakeNoble();
     const handler = createNobleHandler({

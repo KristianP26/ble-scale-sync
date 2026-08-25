@@ -89,11 +89,31 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
           });
           graceBox.grace = g;
 
-          sub.unsub = pool.onAdvertisement((info, address) => {
+          // The proxy delivers the advertisement and its scan response as two
+          // events and only the second carries the local name, so the same
+          // device arrives once nameless and once named. Adapters that tell
+          // sibling protocols apart by name would match the nameless frame as
+          // if the device had no name (#322), so the last name seen per address
+          // is remembered and merged back in. Same reasoning as the watcher.
+          const lastAdvertName = new Map<string, string>();
+          const MAX_CACHED_NAMES = 64;
+
+          sub.unsub = pool.onAdvertisement((rawInfo, address) => {
             const addrLc = address.toLowerCase();
             if (targetLc && addrLc !== targetLc) return;
 
-            logAdvert(address, info);
+            logAdvert(address, rawInfo);
+            let info = rawInfo;
+            if (info.localName) {
+              if (lastAdvertName.size >= MAX_CACHED_NAMES && !lastAdvertName.has(addrLc)) {
+                const oldest = lastAdvertName.keys().next().value;
+                if (oldest !== undefined) lastAdvertName.delete(oldest);
+              }
+              lastAdvertName.set(addrLc, info.localName);
+            } else {
+              const cached = lastAdvertName.get(addrLc);
+              if (cached) info = { ...info, localName: cached };
+            }
             const adapter = resolveAdapter(info, adapters);
             if (!adapter) {
               if (!seenAddrs.has(address)) {

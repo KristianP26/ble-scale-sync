@@ -64,6 +64,7 @@ export interface NtfyConfig {
   token?: string;
   username?: string;
   password?: string;
+  reportExports: boolean;
 }
 
 export interface FileConfig {
@@ -82,6 +83,7 @@ export interface TelegramConfig {
   chatId: string;
   title: string;
   silent: boolean;
+  reportExports: boolean;
 }
 
 export interface IntervalsConfig {
@@ -248,6 +250,11 @@ export function loadExporterConfig(): ExporterConfig {
       token: process.env.NTFY_TOKEN?.trim() || undefined,
       username: process.env.NTFY_USERNAME?.trim() || undefined,
       password: process.env.NTFY_PASSWORD?.trim() || undefined,
+      reportExports: parseBoolean(
+        'NTFY_REPORT_EXPORTS',
+        process.env.NTFY_REPORT_EXPORTS?.trim(),
+        false,
+      ),
     };
   }
 
@@ -302,6 +309,11 @@ export function loadExporterConfig(): ExporterConfig {
       chatId,
       title: process.env.TELEGRAM_TITLE?.trim() || 'Scale Measurement',
       silent: parseBoolean('TELEGRAM_SILENT', process.env.TELEGRAM_SILENT?.trim(), false),
+      reportExports: parseBoolean(
+        'TELEGRAM_REPORT_EXPORTS',
+        process.env.TELEGRAM_REPORT_EXPORTS?.trim(),
+        false,
+      ),
     };
   }
 

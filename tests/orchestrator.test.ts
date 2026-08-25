@@ -214,6 +214,86 @@ describe('dispatchExports()', () => {
   });
 });
 
+// ─── dispatchExports: reportsExports ────────────────────────────────────────
+
+describe('dispatchExports() reportsExports', () => {
+  const context: ExportContext = { userName: 'Dad', userSlug: 'dad' };
+
+  function reporter(
+    name: string,
+    exportResult: ExportResult | Error = { success: true },
+  ): Exporter {
+    return { ...mockExporter(name, exportResult), reportsExports: true };
+  }
+
+  it('runs reporting exporters after the others and hands them the outcomes', async () => {
+    const order: string[] = [];
+    const slow: Exporter = {
+      name: 'garmin',
+      export: vi.fn(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+        order.push('garmin');
+        return { success: true };
+      }),
+    };
+    const failing = mockExporter('influxdb', { success: false, error: 'HTTP 401' });
+    const ntfy = reporter('ntfy');
+    vi.mocked(ntfy.export).mockImplementation(async () => {
+      order.push('ntfy');
+      return { success: true };
+    });
+
+    const result = await dispatchExports([ntfy, slow, failing], SAMPLE_PAYLOAD, context);
+
+    expect(order).toEqual(['garmin', 'ntfy']);
+    expect(ntfy.export).toHaveBeenCalledWith(SAMPLE_PAYLOAD, {
+      ...context,
+      exportResults: [
+        { name: 'garmin', ok: true },
+        { name: 'influxdb', ok: false, error: 'HTTP 401' },
+      ],
+    });
+    expect(result.success).toBe(true);
+    expect(result.details).toEqual([
+      { name: 'garmin', ok: true },
+      { name: 'influxdb', ok: false, error: 'HTTP 401' },
+      { name: 'ntfy', ok: true },
+    ]);
+  });
+
+  it('still notifies when every other exporter failed', async () => {
+    const garmin = mockExporter('garmin', new Error('timeout'));
+    const ntfy = reporter('ntfy');
+    const result = await dispatchExports([garmin, ntfy], SAMPLE_PAYLOAD, context);
+
+    expect(ntfy.export).toHaveBeenCalledWith(SAMPLE_PAYLOAD, {
+      ...context,
+      exportResults: [{ name: 'garmin', ok: false, error: 'timeout' }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('returns success false when the others and the reporter all fail', async () => {
+    const garmin = mockExporter('garmin', { success: false, error: 'auth failed' });
+    const ntfy = reporter('ntfy', { success: false, error: 'HTTP 500' });
+    const result = await dispatchExports([garmin, ntfy], SAMPLE_PAYLOAD, context);
+    expect(result.success).toBe(false);
+  });
+
+  it('passes an empty outcome list when only reporting exporters are configured', async () => {
+    const ntfy = reporter('ntfy');
+    await dispatchExports([ntfy], SAMPLE_PAYLOAD, context);
+    expect(ntfy.export).toHaveBeenCalledWith(SAMPLE_PAYLOAD, { ...context, exportResults: [] });
+  });
+
+  it('does not expose the outcomes to exporters that do not report', async () => {
+    const garmin = mockExporter('garmin');
+    const ntfy = reporter('ntfy');
+    await dispatchExports([garmin, ntfy], SAMPLE_PAYLOAD, context);
+    expect(garmin.export).toHaveBeenCalledWith(SAMPLE_PAYLOAD, context);
+  });
+});
+
 // ─── dispatchExports: historical reading + supportsBackdate ─────────────────
 
 describe('dispatchExports() historical reading filter', () => {

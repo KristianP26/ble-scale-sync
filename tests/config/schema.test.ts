@@ -390,6 +390,18 @@ describe('BleSchema', () => {
     }
   });
 
+  it('accepts ble.qn_report_byte across the whole byte range', () => {
+    for (const byte of [0, 0xfc, 0xfe, 255]) {
+      expect(BleSchema.safeParse({ qn_report_byte: byte }).success).toBe(true);
+    }
+  });
+
+  it('rejects a ble.qn_report_byte that is not a byte', () => {
+    for (const byte of [-1, 256, 1.5]) {
+      expect(BleSchema.safeParse({ qn_report_byte: byte }).success).toBe(false);
+    }
+  });
+
   it('rejects ble.session_timeout_sec outside 5 to 600', () => {
     for (const secs of [4, 601]) {
       expect(BleSchema.safeParse({ session_timeout_sec: secs }).success).toBe(false);

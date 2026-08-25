@@ -64,10 +64,12 @@ const PROFILE_FIELDS: ProfileField[] = [
       return year >= 1900 && year <= new Date().getFullYear();
     },
     fromProfile: (p) => {
+      // YYYY-MM-DD parses as UTC midnight, so read it back in UTC: the local
+      // getters shift the day west of Greenwich.
       const born = p.birthDate ? new Date(p.birthDate) : null;
       if (born && !Number.isNaN(born.getTime())) {
-        const y = born.getFullYear();
-        return [y & 0xff, (y >> 8) & 0xff, born.getMonth() + 1, born.getDate()];
+        const y = born.getUTCFullYear();
+        return [y & 0xff, (y >> 8) & 0xff, born.getUTCMonth() + 1, born.getUTCDate()];
       }
       // No birth date in the profile: anchor to 1 January of the derived year.
       const year = new Date().getFullYear() - Math.max(1, Math.round(p.age));
@@ -118,7 +120,22 @@ const SVC_BODY_COMPOSITION = uuid16(0x181b);
 // Beurer GmbH SIG-assigned company identifier (advertisement manufacturer data).
 const BEURER_COMPANY_ID = 0x0611;
 
-// User Control Point opcodes (subset; consent-only path).
+// User Control Point opcodes (subset).
+/**
+ * SIG User Data Service "Register New User": `01 <consent code u16 LE>`.
+ *
+ * A SIG user record exists ONLY after this operation. The profiles created in
+ * the scale's own SET menu are display-side records for its body-composition
+ * maths and are NOT SIG users, so on a scale whose user was registered by the
+ * vendor app, Consent can never succeed from another client whatever code is
+ * supplied: there is no record that client is entitled to. Established on a
+ * BF915 in #335, where all three slots answered USER_NOT_AUTHORIZED with every
+ * code tried, on a link that bonded and subscribed cleanly.
+ *
+ * The scale answers with the index it assigned, which is what the user then
+ * puts in `users[].beurer_user_index`.
+ */
+const UCP_REGISTER_NEW_USER = 0x01;
 const UCP_CONSENT = 0x02;
 const UCP_RESPONSE = 0x20;
 const UCP_RESULT_SUCCESS = 0x01;
@@ -209,6 +226,8 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
   private profileSyncDone = false;
   /** Scale user slot the consent applies to; used in the log lines. */
   private userIndex = 1;
+  /** users[].beurer_register_new_user: create a SIG user record (#335). */
+  private registerNewUser = false;
   /** users[].beurer_provision: write the profile into an empty scale (#229). */
   private provision = false;
   /** Vendor user-slot records seen on 0xFFF2 this session. */
@@ -219,6 +238,16 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
   private emptyListReported = false;
   /** Whether the scale accepted the consent code this session. */
   private consentAccepted = false;
+  /**
+   * Whether the scale answered the consent write at all this session, with any
+   * result. Distinct from {@link consentAccepted}: a rejection is answered and
+   * already warns, whereas silence produces no diagnostic of its own and is the
+   * failure mode behind #83, #290 and #335. The session then ends as a bare
+   * "disconnected before reading completed", which says nothing about consent.
+   */
+  private consentAnswered = false;
+  /** Whether a consent write went out this session (gates the silence warning). */
+  private consentSent = false;
   /** Whether a reading was emitted this session (gates the session-end warning). */
   private readingEmitted = false;
   /**
@@ -326,11 +355,14 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     this.ctx = ctx;
     this.profileSyncDone = false;
     this.userIndex = userIndex;
+    this.registerNewUser = ctx.scaleAuth?.registerNewUser === true;
     this.provision = ctx.scaleAuth?.provision === true;
     this.userSlotsSeen = 0;
     this.userListAnswered = false;
     this.emptyListReported = false;
     this.consentAccepted = false;
+    this.consentAnswered = false;
+    this.consentSent = false;
     this.readingEmitted = false;
 
     await ctx.write(CHR_CURRENT_TIME, this.buildCurrentTime(), true);
@@ -347,11 +379,31 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
       }
     }
 
+    if (this.registerNewUser) {
+      // One-shot provisioning, opt-in and never automatic. It CREATES a record
+      // on the device and the slots are finite, so doing it on every rejected
+      // consent would fill the scale with orphans. The user turns it on once,
+      // reads the assigned index out of the log, puts that in
+      // `beurer_user_index`, and turns it off again.
+      await ctx.write(
+        CHR_USER_CONTROL_POINT,
+        [UCP_REGISTER_NEW_USER, pin & 0xff, (pin >> 8) & 0xff],
+        true,
+      );
+      this.consentSent = true;
+      bleLog.info(
+        `Beurer BF720: registering a new user with consent code ${pin}. ` +
+          'This creates a record on the scale.',
+      );
+      return;
+    }
+
     await ctx.write(
       CHR_USER_CONTROL_POINT,
       [UCP_CONSENT, userIndex & 0xff, pin & 0xff, (pin >> 8) & 0xff],
       true,
     );
+    this.consentSent = true;
     bleLog.debug(`Beurer BF720: consent sent for user index ${userIndex}`);
   }
 
@@ -576,6 +628,31 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     if (data.length < 3 || data[0] !== UCP_RESPONSE) return;
     // data[1] echoes the request opcode. Without this gate a response to some
     // other operation was read as a consent result.
+    if (data[1] === UCP_REGISTER_NEW_USER) {
+      this.consentAnswered = true;
+      const result = data[2];
+      if (result !== UCP_RESULT_SUCCESS) {
+        const why = UCP_RESULTS[result] ?? `0x${result.toString(16).padStart(2, '0')}`;
+        bleLog.warn(
+          `Beurer BF720: the scale refused to register a new user (${why}). ` +
+            'Its user slots may all be occupied; free one in the scale menu and retry.',
+        );
+        return;
+      }
+      // The assigned index follows the result byte. It is what makes this
+      // useful: without it the caller has no way to know which slot to consent
+      // to next, and searching costs a re-bond per attempt on some models.
+      const assigned = data.length > 3 ? data[3] : undefined;
+      this.userIndex = assigned ?? this.userIndex;
+      bleLog.info(
+        `Beurer BF720: registered a new user${assigned != null ? ` at index ${assigned}` : ''}. ` +
+          `Set 'users[].beurer_user_index: ${assigned ?? '<index>'}' and turn ` +
+          "'beurer_register_new_user' back off, or the next run registers another one.",
+      );
+      this.consentAccepted = true;
+      void this.syncUserProfile(this.session);
+      return;
+    }
     if (data[1] !== UCP_CONSENT) {
       bleLog.debug(
         `Beurer BF720: User Control Point response to opcode ` +
@@ -583,6 +660,7 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
       );
       return;
     }
+    this.consentAnswered = true;
     const result = data[2];
     const name = UCP_RESULTS[result] ?? `0x${result.toString(16).padStart(2, '0')}`;
     if (result === UCP_RESULT_SUCCESS) {
@@ -612,6 +690,26 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
    * local, so an in-flight commit still finishes.
    */
   onSessionEnd(): void {
+    // Consent written and never answered. The scale says nothing at all in this
+    // case, so without this line the session ends as a plain "disconnected
+    // before reading completed" and the consent is not even implicated, let
+    // alone the slot. A wrong slot is indistinguishable from a wrong code and
+    // from the scale being asleep, and all three have been reported as "the
+    // adapter receives nothing" (#83, #290, #335).
+    //
+    // The slot is worth naming because it is the half people do not think to
+    // check: a vendor-app trace of a BF950 addresses user index 2, while this
+    // adapter defaults to 1, and a profile that was ever recreated or shared
+    // with a second person is unlikely to sit first in the scale's own list.
+    if (this.consentSent && !this.consentAnswered) {
+      bleLog.warn(
+        `Beurer BF720: the scale never answered the consent for user index ` +
+          `${this.userIndex}. It rejects nothing and reports nothing in this state, so a ` +
+          `wrong slot looks exactly like a wrong code. If the code is right, try ` +
+          `users[].beurer_user_index 2 and then 3: the slot is the position your profile ` +
+          `occupies in the scale's own user list, which is not always the first.`,
+      );
+    }
     // Only when nothing was emitted at all. cachedComp is reset by every zeroed
     // composition stub, so testing it alone would fire on a successful session
     // that happened to end with a stub.

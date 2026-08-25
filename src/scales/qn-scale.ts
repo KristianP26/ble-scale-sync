@@ -114,6 +114,59 @@ const CHR_SIG_WEIGHT_MEASUREMENT = uuid16(0x2a9d);
 const SCALE_EPOCH_OFFSET = 946684800;
 
 /**
+ * Payload byte of the A00D history-response frame sent in reply to the scale's
+ * 0x21 config request: `a0 0d 04 <byte> 00 ...`.
+ *
+ * 0xFE comes from openScale's QNHandler, which annotates it only as "Payload"
+ * and took it from an ES-30M BLE capture. Two vendor-app captures on other
+ * firmware in this family send 0xFC in the same position instead:
+ *
+ *   #235  GE CS 10 G, 20-byte extended dialect
+ *   #75   Arboleaf QN-Scale FW V39, 19-byte es26m dialect
+ *
+ * Both were taken from sessions where the vendor app completed a weigh-in while
+ * this adapter saw the whole handshake acknowledged and then silence, and both
+ * reporters reached the same reading of it independently: that the byte selects
+ * between a live report stream and the stored-history path.
+ *
+ * That reading is NOT established, and the default therefore does not move.
+ * openScale dispatches live 0x10 weight frames while sending 0xFE, so the byte
+ * plainly does not gate the live stream on the firmware it was captured from,
+ * and the 0x23 stored-record path this adapter relies on for V10 Renpho and
+ * ES-CS20M firmware (#213) hangs off the same exchange. A wrong value here is
+ * silent in exactly the way a wrong `qn_protocol_byte` is: every command is
+ * acknowledged and no weight ever arrives. So `ble.qn_report_byte` exists to
+ * let the reporters test 0xFC on their own hardware, and the default changes
+ * only if that produces a reading.
+ */
+const REPORT_BYTE_DEFAULT = 0xfe;
+
+/**
+ * Report byte for the LONG-FRAME dialects, es26m (19-byte) and extended
+ * (20-byte). See #235 and #75.
+ *
+ * Unlike the default above, this one is not an inference. Two vendor-app
+ * captures, on two scales, on both long dialects, agree:
+ *
+ *   extended  a raw HCI capture writes `a0 0d 04 fc ...` five times across
+ *             three weigh-ins and never sends 0xFE. The scale acknowledges
+ *             each one by echoing the byte back as `a1 07 04 fc 01 10 b9`,
+ *             and 59 live 0x10 weight frames follow (#235).
+ *   es26m     an Android btsnoop of a successful Arboleaf weigh-in sends the
+ *             same frame. The reporter's own log line for that unit reads
+ *             `QN: scale info (19B, dialect=es26m)`, so the dialect is not
+ *             inferred from the model name (#75).
+ *
+ * So on the long dialects 0xFC is simply what the protocol uses.
+ *
+ * The 11-byte classic dialect keeps 0xFE. No capture covers it, and unlike the
+ * long variants it reads today, which is exactly the asymmetry that decides it:
+ * every scale reported silent after a completed handshake is on a long frame.
+ * `ble.qn_report_byte` overrides either value if a unit disagrees.
+ */
+const REPORT_BYTE_LONG_FRAME = 0xfc;
+
+/**
  * Grace period (ms) to wait for an impedance frame after the first stable
  * R1=R2=0 frame on long-frame variants (e.g. ES-26M). If an impedance frame
  * arrives within this window, it supersedes the weight-only reading. If not,
@@ -326,7 +379,11 @@ export class QnScaleAdapter
 
   /**
    * Protocol byte forced by `ble.qn_protocol_byte`, overriding what the frame
-   * length implies (#75, #331).
+   * length or the scale-info frame implies (#75, #331). Applied to every
+   * protocol-bearing write in the session, including the pre-0x12 unlock
+   * config, the classic dialect, and the no-0x12 fallback handshake: a scale
+   * whose 0x12 is lost in transit must still open with the byte its firmware
+   * accepts.
    *
    * There is no way to detect the wrong choice at runtime: a scale on the wrong
    * byte acknowledges 0x14, 0x21 and 0x23 exactly as it does on the right one
@@ -334,6 +391,12 @@ export class QnScaleAdapter
    * standing on it. So this is a setting, not a heuristic.
    */
   private forcedProtocolType: number | null = null;
+
+  /**
+   * Payload byte of the A00D history-response frame, forced by
+   * `ble.qn_report_byte` (#235, #75, #331). Null leaves REPORT_BYTE_DEFAULT.
+   */
+  private forcedReportByte: number | null = null;
 
   /**
    * Whether a completed-weigh-in result frame (0xB4/0xB1) has already produced a
@@ -375,6 +438,7 @@ export class QnScaleAdapter
   configure(opts: AdapterRuntimeConfig): void {
     if (opts.weightUnit) this.displayUnit = opts.weightUnit;
     this.forcedProtocolType = opts.qnProtocolByte ?? null;
+    this.forcedReportByte = opts.qnReportByte ?? null;
   }
 
   /** 0x13 config unit flag: 0x01 kg, 0x02 lb (openScale QNHandler). */
@@ -446,7 +510,7 @@ export class QnScaleAdapter
   async onConnected(ctx: ConnectionContext): Promise<void> {
     // Reset state for new connection
     this.ctx = ctx;
-    this.seenProtocolType = 0x00;
+    this.seenProtocolType = this.forcedProtocolType ?? 0x00;
     this.weightScaleFactor = 100;
     this.hasAe00 = false;
     this.ae02Subscribe = null;
@@ -485,7 +549,21 @@ export class QnScaleAdapter
       // The second unlock is the 0x10 config variant whose byte[3] is the unit
       // flag; honour the configured unit and recompute its checksum (#269). The
       // first unlock is a different 0x01 subcommand and is left as-is.
-      const config = [0x13, 0x09, 0x00, this.unitFlag(), 0x10, 0x00, 0x00, 0x00, 0x00];
+      const config = [
+        0x13,
+        0x09,
+        // Stay deterministic when the override is unset: seenProtocolType can be
+        // seeded by a 0x12 that races the AE02 subscribe on native BLE, and this
+        // fixed frame must not depend on that timing. The override, when set, is
+        // applied before onConnected runs, so every targeted case is unchanged.
+        this.forcedProtocolType ?? 0x00,
+        this.unitFlag(),
+        0x10,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+      ];
       config[8] = config.reduce((a, b) => a + b, 0) & 0xff;
       const unlocks = [[0x13, 0x09, 0x00, 0x01, 0x01, 0x02], config];
       for (const cmd of unlocks) {
@@ -512,8 +590,11 @@ export class QnScaleAdapter
     const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
     if (!this.configSent) {
-      this.seenProtocolType = 0xff;
-      bleLog.debug('QN: fallback: no 0x12 received, running handshake with proto=0xFF');
+      this.seenProtocolType = this.forcedProtocolType ?? 0xff;
+      bleLog.debug(
+        `QN: fallback: no 0x12 received, running handshake with ` +
+          `proto=0x${this.seenProtocolType.toString(16).padStart(2, '0')}`,
+      );
       // handleScaleInfo sends AE01 init + 0x13 config
       await this.handleScaleInfo();
       await wait(500);
@@ -785,7 +866,7 @@ export class QnScaleAdapter
         // Classic short frame
         this.isLongFrameVariant = false;
         this.isExtendedLongFrame = false;
-        this.seenProtocolType = data[2];
+        this.seenProtocolType = this.forcedProtocolType ?? data[2];
         this.weightScaleFactor = data[10] === 1 ? 100 : 10;
       }
       const dialect = this.isExtendedLongFrame
@@ -793,10 +874,18 @@ export class QnScaleAdapter
         : this.isLongFrameVariant
           ? 'es26m'
           : 'classic';
+      // The byte the frame actually carried, for triage. Not seenProtocolType:
+      // on the 18-byte variant that is forced to 0x00 for the handshake, but the
+      // log should still report the 0xff the scale sent.
+      const reported = data[2];
+      const forcedNote =
+        this.forcedProtocolType !== null && this.forcedProtocolType !== reported
+          ? ` (forced, scale reported 0x${reported.toString(16).padStart(2, '0')})`
+          : '';
       bleLog.debug(
         `QN: scale info (${data.length}B, dialect=${dialect}), ` +
           `factor=${this.weightScaleFactor}, ` +
-          `proto=0x${this.seenProtocolType.toString(16).padStart(2, '0')}`,
+          `proto=0x${this.seenProtocolType.toString(16).padStart(2, '0')}${forcedNote}`,
       );
       void this.handleScaleInfo();
       return null;
@@ -1103,9 +1192,32 @@ export class QnScaleAdapter
     this.historyResponseSent = true;
     const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-    // A00D response 1 (from openScale QNHandler)
-    const msg1 = [0xa0, 0x0d, 0x04, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+    // A00D response 1 (from openScale QNHandler). byte[3] is the payload byte
+    // `ble.qn_report_byte` overrides; see REPORT_BYTE_DEFAULT / _EXTENDED.
+    const isLongFrame = this.isExtendedLongFrame || this.isLongFrameVariant;
+    const dialectDefault = isLongFrame ? REPORT_BYTE_LONG_FRAME : REPORT_BYTE_DEFAULT;
+    const msg1 = [
+      0xa0,
+      0x0d,
+      0x04,
+      this.forcedReportByte ?? dialectDefault,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+    ];
     msg1[12] = msg1.reduce((a, b) => a + b, 0) & 0xff;
+    bleLog.debug(
+      `QN: history response byte 0x${msg1[3].toString(16).padStart(2, '0')}` +
+        (this.forcedReportByte !== null
+          ? ` (forced; dialect default 0x${dialectDefault.toString(16)})`
+          : ` (dialect default)`),
+    );
     await this.writeCmd(msg1);
 
     await wait(200);

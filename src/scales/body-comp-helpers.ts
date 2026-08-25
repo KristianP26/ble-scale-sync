@@ -159,6 +159,20 @@ export function uuid16(code: number): string {
   return `0000${code.toString(16).padStart(4, '0')}00001000800000805f9b34fb`;
 }
 
+/**
+ * Normalize a service UUID to the 32-char, no-dash form.
+ *
+ * Handlers pass UUIDs in short ('181b'), dashed, or already-normalized form,
+ * so short 16- and 32-bit UUIDs are expanded against the Bluetooth base UUID
+ * before they are compared.
+ */
+export function normalizeServiceUuid(uuid: string): string {
+  const stripped = uuid.toLowerCase().replace(/[-{}]/g, '');
+  if (stripped.length === 4) return uuid16(Number.parseInt(stripped, 16));
+  if (stripped.length === 8) return `${stripped}00001000800000805f9b34fb`;
+  return stripped;
+}
+
 export function r2(v: number): number {
   return Math.round(v * 100) / 100;
 }

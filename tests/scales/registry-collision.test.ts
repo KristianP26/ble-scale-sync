@@ -35,6 +35,19 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
   'Renpho ES-WBE28': { localName: 'Renpho Body Scale', serviceUuids: ['181b', '181d'] },
   'Renpho ES-26BB': { localName: 'es-26bb-b', serviceUuids: [] },
   'Beurer BF720/BF105': { localName: 'BF720', serviceUuids: [] },
+  'Xiaomi Mi Smart Scale 2 (XMTZC04HM)': {
+    localName: '',
+    serviceUuids: ['181d'],
+    manufacturerData: { id: 0x0157, data: Buffer.from('70879eede5e7', 'hex') },
+    serviceData: [{ uuid: '181d', data: Buffer.from('238e4eea070818103913', 'hex') }],
+  },
+  // Broadcast-only, non-connectable. Claims on the invented company id 0xA0AC
+  // plus the exact 12-byte payload and its checksum; the name "108" is ignored.
+  'Silvergear Smart Scale 108': {
+    localName: '108',
+    serviceUuids: ['ffb0'],
+    manufacturerData: { id: 0xa0ac, data: Buffer.from('4fe9916185a0202d07600da1', 'hex') },
+  },
   'Xiaomi Mi Scale 2': { localName: 'MIBFS', serviceUuids: [] },
   'Xiaomi Mijia Scale S800': { localName: 'Mijia Scale S800 A1AB', serviceUuids: [] },
   Yunmai: { localName: 'Yunmai', serviceUuids: [] },
@@ -69,6 +82,10 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
   Hutbit: { localName: 'Hutbit Scale', serviceUuids: ['ffb0'] },
   'MGB (Swan/Icomon/YG)': { localName: 'icomon', serviceUuids: [] },
   'Hoffen BS-8107': { localName: 'hoffen bs-8107', serviceUuids: [] },
+  // Real advertisement from a SALTER-SA00656-BK: the advertised service UUID is
+  // the byte-swapped form (0xCCFF) of the 0xFFCC service the device exposes
+  // over GATT.
+  Salter: { localName: 'SALTER-SA00656-BK', serviceUuids: ['ccff'] },
   // Generic fallback: a non-excluded name + bare Weight Scale Service (0x181D).
   'Standard GATT (BCS/WSS)': { localName: 'GenericScale', serviceUuids: ['181d'] },
 };

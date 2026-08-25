@@ -22,6 +22,7 @@ const defaultConfig: NtfyConfig = {
   topic: 'my-scale',
   title: 'Scale Measurement',
   priority: 3,
+  reportExports: false,
 };
 
 const mockFetch = vi.fn();
@@ -80,9 +81,49 @@ describe('NtfyExporter', () => {
     expect(body).toContain('80.00 kg');
     expect(body).toContain('BMI 23.9');
     expect(body).toContain('Body Fat 18.5%');
-    expect(body).toContain('Muscle 62.4 kg');
+    expect(body).toContain('Muscle 62.40 kg');
+    expect(body).toContain('Bone 3.10 kg');
     expect(body).toContain('BMR 1750 kcal');
     expect(body).toContain('Physique 5');
+  });
+
+  it('exposes reportsExports from the config', () => {
+    expect(new NtfyExporter(defaultConfig).reportsExports).toBe(false);
+    expect(new NtfyExporter({ ...defaultConfig, reportExports: true }).reportsExports).toBe(true);
+  });
+
+  it('appends one line per export result', async () => {
+    const exporter = new NtfyExporter({ ...defaultConfig, reportExports: true });
+    await exporter.export(samplePayload, {
+      exportResults: [
+        { name: 'garmin', ok: true },
+        { name: 'influxdb', ok: false, error: 'HTTP 401' },
+      ],
+    });
+
+    const body = mockFetch.mock.calls[0][1].body as string;
+    expect(body.endsWith('\n✅ garmin\n❌ influxdb: HTTP 401')).toBe(true);
+  });
+
+  it('truncates a forwarded export error to 120 characters', async () => {
+    const exporter = new NtfyExporter({ ...defaultConfig, reportExports: true });
+    await exporter.export(samplePayload, {
+      exportResults: [{ name: 'file', ok: false, error: 'x'.repeat(200) }],
+    });
+
+    const body = mockFetch.mock.calls[0][1].body as string;
+    expect(body.endsWith(`\n❌ file: ${'x'.repeat(120)}`)).toBe(true);
+  });
+
+  it('formats weight-valued fields in the configured unit', async () => {
+    const exporter = new NtfyExporter(defaultConfig);
+    await exporter.export(samplePayload, { weightUnit: 'lbs' });
+
+    const body = mockFetch.mock.calls[0][1].body as string;
+    expect(body).toContain('⚖️ 176.37 lbs');
+    expect(body).toContain('Muscle 137.57 lbs');
+    expect(body).toContain('Bone 6.83 lbs');
+    expect(body).not.toContain('kg');
   });
 
   it('uses Bearer token auth when token is set', async () => {

@@ -8,6 +8,7 @@ import {
   type Adapter,
   type Device,
 } from './dbus.js';
+import { isDeviceObjectGone } from './device-object.js';
 
 /** Extract a Buffer from a D-Bus value that may be a Variant wrapper, Buffer, Uint8Array, or number[]. */
 export function extractDbusBytes(val: unknown): Buffer | null {
@@ -33,12 +34,17 @@ export function extractDbusBytes(val: unknown): Buffer | null {
 }
 
 /**
- * Read weight + impedance from BLE service-data advertisements without connecting.
+ * Read weight + impedance from BLE advertisements without connecting.
  *
  * Sets DuplicateData=true in the BlueZ discovery filter so every advertisement
  * triggers a PropertiesChanged signal, then subscribes to that signal on the
- * Device1 D-Bus object. Falls back to polling the ServiceData property every
- * 500 ms if signal subscription fails.
+ * Device1 D-Bus object. Falls back to polling every 500 ms if the signal
+ * subscription fails.
+ *
+ * Both advertisement payloads are read: ServiceData through `parseServiceData`
+ * and ManufacturerData through `parseBroadcast`. Handling only the first was
+ * what made a manufacturer-data broadcast scale unreadable on Linux while
+ * working on Noble, since nothing here ever looked at ManufacturerData (#297).
  */
 export async function broadcastScanNodeBle(
   adapter: ScaleAdapter,
@@ -107,47 +113,81 @@ export async function broadcastScanNodeBle(
     const onAbort = () => fail(abortSignal!.reason ?? new DOMException('Aborted', 'AbortError'));
     abortSignal?.addEventListener('abort', onAbort, { once: true });
 
-    /** Try to parse ServiceData entries and resolve if a complete reading is found. */
-    const tryServiceData = (sd: unknown): boolean => {
-      if (!sd || typeof sd !== 'object') return false;
+    /** Iterate a BlueZ `{key: bytes}` advertisement dict. */
+    const dbusEntries = (val: unknown): [string, Buffer][] => {
+      if (!val || typeof val !== 'object') return [];
+      const raw: Iterable<[unknown, unknown]> =
+        val instanceof Map
+          ? (val as Map<unknown, unknown>).entries()
+          : Object.entries(val as Record<string, unknown>);
+      const out: [string, Buffer][] = [];
+      for (const [k, v] of raw) {
+        const buf = extractDbusBytes(v);
+        if (buf) out.push([String(k), buf]);
+      }
+      return out;
+    };
 
-      const entries: Iterable<[unknown, unknown]> =
-        sd instanceof Map
-          ? (sd as Map<unknown, unknown>).entries()
-          : Object.entries(sd as Record<string, unknown>);
+    /**
+     * Handle one parsed reading. Returns true when the scan is finished, so a
+     * caller iterating advertisement entries can stop.
+     */
+    const consume = (reading: ScaleReading): boolean => {
+      if (onLiveData) onLiveData(reading);
 
-      for (const [uuid, val] of entries) {
-        const buf = extractDbusBytes(val);
-        if (!buf) continue;
-
-        const reading = adapter.parseServiceData!(String(uuid), buf);
-        if (!reading) continue;
-
-        if (onLiveData) onLiveData(reading);
-
-        if (adapter.isComplete(reading)) {
-          bleLog.info(`Broadcast reading: ${reading.weight.toFixed(2)} kg`);
-          finish({ reading, adapter });
-          return true;
-        }
-
-        bleLog.debug(
-          `${adapter.name} broadcast frame not yet complete ` +
-            `(weight=${reading.weight.toFixed(2)} kg, impedance=${reading.impedance})`,
-        );
-        bestWeightOnly = { reading, adapter };
-        if (!graceTimer) {
-          graceTimer = setTimeout(() => {
-            graceTimer = null;
-            bleLog.info(
-              `Broadcast reading (weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s): ` +
-                `${bestWeightOnly!.reading.weight.toFixed(2)} kg`,
-            );
-            finish(bestWeightOnly!);
-          }, IMPEDANCE_GRACE_MS);
-        }
+      if (adapter.isComplete(reading)) {
+        bleLog.info(`Broadcast reading: ${reading.weight.toFixed(2)} kg`);
+        finish({ reading, adapter });
+        return true;
       }
 
+      bleLog.debug(
+        `${adapter.name} broadcast frame not yet complete ` +
+          `(weight=${reading.weight.toFixed(2)} kg, impedance=${reading.impedance})`,
+      );
+      bestWeightOnly = { reading, adapter };
+      if (!graceTimer) {
+        graceTimer = setTimeout(() => {
+          graceTimer = null;
+          bleLog.info(
+            `Broadcast reading (weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s): ` +
+              `${bestWeightOnly!.reading.weight.toFixed(2)} kg`,
+          );
+          finish(bestWeightOnly!);
+        }, IMPEDANCE_GRACE_MS);
+      }
+      return false;
+    };
+
+    /** Try to parse ServiceData entries and resolve if a complete reading is found. */
+    const tryServiceData = (sd: unknown): boolean => {
+      if (!adapter.parseServiceData) return false;
+      for (const [uuid, buf] of dbusEntries(sd)) {
+        const reading = adapter.parseServiceData(uuid, buf);
+        if (reading && consume(reading)) return true;
+      }
+      return false;
+    };
+
+    /**
+     * Try to parse ManufacturerData entries the same way.
+     *
+     * BlueZ keys this dict by company id and strips it from the value, which is
+     * exactly the shape `parseBroadcast` expects, so the value is passed
+     * through unchanged.
+     *
+     * Entries under a different company id are skipped when the adapter
+     * declares one, so a device advertising under two ids cannot have the
+     * wrong element parsed as a reading.
+     */
+    const wantedCompanyId = adapter.match?.manufacturerId;
+    const tryManufacturerData = (md: unknown): boolean => {
+      if (!adapter.parseBroadcast) return false;
+      for (const [key, buf] of dbusEntries(md)) {
+        if (wantedCompanyId !== undefined && Number(key) !== wantedCompanyId) continue;
+        const reading = adapter.parseBroadcast(buf);
+        if (reading && consume(reading)) return true;
+      }
       return false;
     };
 
@@ -158,10 +198,11 @@ export async function broadcastScanNodeBle(
       const deviceHelper = helperOf(device);
       onPropsChanged = (changedProps) => {
         if (done) return;
-        if (changedProps.ServiceData) tryServiceData(changedProps.ServiceData);
+        if (changedProps.ServiceData && tryServiceData(changedProps.ServiceData)) return;
+        if (changedProps.ManufacturerData) tryManufacturerData(changedProps.ManufacturerData);
       };
       deviceHelper.on('PropertiesChanged', onPropsChanged);
-      bleLog.debug('Subscribed to Device1 PropertiesChanged for ServiceData');
+      bleLog.debug('Subscribed to Device1 PropertiesChanged for advertisement data');
     } catch (err: unknown) {
       bleLog.debug(`PropertiesChanged subscription failed: ${errMsg(err)} (poll fallback active)`);
       onPropsChanged = null;
@@ -174,10 +215,31 @@ export async function broadcastScanNodeBle(
       while (!done && Date.now() < deadline) {
         if (abortSignal?.aborted) break;
         try {
-          const sd: unknown = await helperOf(device).prop('ServiceData');
-          tryServiceData(sd);
+          const helper = helperOf(device);
+          // Each property is read separately so one failing does not hide the
+          // other, but the rejection is NOT swallowed: BlueZ dropping the
+          // Device1 object is the failure this whole path exists for, and a
+          // silent poll would spin for the full discovery timeout and then
+          // report the generic "no reading" message instead of the real cause.
+          if (adapter.parseServiceData) {
+            const sd: unknown = await helper.prop('ServiceData');
+            if (tryServiceData(sd)) break;
+          }
+          if (adapter.parseBroadcast) {
+            const md: unknown = await helper.prop('ManufacturerData');
+            if (tryManufacturerData(md)) break;
+          }
         } catch (err: unknown) {
-          bleLog.debug(`ServiceData poll error: ${errMsg(err)}`);
+          if (isDeviceObjectGone(err)) {
+            fail(
+              new Error(
+                `BlueZ removed the device object for ${mac} during the broadcast scan, ` +
+                  `so it is only visible while scanning is active (#297): ${errMsg(err)}`,
+              ),
+            );
+            break;
+          }
+          bleLog.debug(`Advertisement poll error: ${errMsg(err)}`);
         }
         await sleep(500);
       }

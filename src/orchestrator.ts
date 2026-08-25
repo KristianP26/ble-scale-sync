@@ -1,15 +1,9 @@
 import { createLogger } from './logger.js';
 import { errMsg } from './utils/error.js';
-import type { Exporter, ExportContext } from './interfaces/exporter.js';
+import type { Exporter, ExportContext, ExportResultDetail } from './interfaces/exporter.js';
 import type { BodyComposition } from './interfaces/scale-adapter.js';
 
 const log = createLogger('Sync');
-
-export interface ExportResultDetail {
-  name: string;
-  ok: boolean;
-  error?: string;
-}
 
 export interface DispatchResult {
   success: boolean;
@@ -84,17 +78,43 @@ export async function dispatchExports(
 
   log.info(`Exporting to: ${eligible.map((e) => e.name).join(', ')}...`);
 
+  // Exporters that report on the others wait for the first wave and get its outcome.
+  const reporters = eligible.filter((e) => e.reportsExports === true);
+  const details = await runExports(
+    eligible.filter((e) => e.reportsExports !== true),
+    payload,
+    context,
+  );
+  if (reporters.length > 0) {
+    details.push(
+      ...(await runExports(reporters, payload, { ...context, exportResults: [...details] })),
+    );
+  }
+
+  const allFailed = details.every((d) => !d.ok);
+  if (allFailed) {
+    log.error('All exports failed.');
+    return buildResult(false, details);
+  }
+
+  log.info('Done.');
+  return buildResult(true, details);
+}
+
+async function runExports(
+  exporters: Exporter[],
+  payload: BodyComposition,
+  context?: ExportContext,
+): Promise<ExportResultDetail[]> {
   const results = await Promise.allSettled(
-    eligible.map((e) => (context ? e.export(payload, context) : e.export(payload))),
+    exporters.map((e) => (context ? e.export(payload, context) : e.export(payload))),
   );
 
   const details: ExportResultDetail[] = [];
-  let allFailed = true;
   for (let i = 0; i < results.length; i++) {
     const result = results[i];
-    const name = eligible[i].name;
+    const name = exporters[i].name;
     if (result.status === 'fulfilled' && result.value.success) {
-      allFailed = false;
       details.push({ name, ok: true });
     } else if (result.status === 'fulfilled') {
       log.error(`${name}: ${result.value.error}`);
@@ -105,12 +125,5 @@ export async function dispatchExports(
       details.push({ name, ok: false, error: msg });
     }
   }
-
-  if (allFailed) {
-    log.error('All exports failed.');
-    return buildResult(false, details);
-  }
-
-  log.info('Done.');
-  return buildResult(true, details);
+  return details;
 }

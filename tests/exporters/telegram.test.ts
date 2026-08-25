@@ -23,6 +23,7 @@ const defaultConfig: TelegramConfig = {
   chatId: '987654321',
   title: 'Scale Measurement',
   silent: false,
+  reportExports: false,
 };
 
 const mockFetch = vi.fn();
@@ -81,9 +82,41 @@ describe('TelegramExporter', () => {
     expect(text).toContain('80.00 kg');
     expect(text).toContain('BMI 23.9');
     expect(text).toContain('Body Fat 18.5%');
-    expect(text).toContain('Muscle 62.4 kg');
+    expect(text).toContain('Muscle 62.40 kg');
+    expect(text).toContain('Bone 3.10 kg');
     expect(text).toContain('BMR 1750 kcal');
     expect(text).toContain('Physique 5');
+  });
+
+  it('exposes reportsExports from the config', () => {
+    expect(new TelegramExporter(defaultConfig).reportsExports).toBe(false);
+    expect(new TelegramExporter({ ...defaultConfig, reportExports: true }).reportsExports).toBe(
+      true,
+    );
+  });
+
+  it('appends one line per export result', async () => {
+    const exporter = new TelegramExporter({ ...defaultConfig, reportExports: true });
+    await exporter.export(samplePayload, {
+      exportResults: [
+        { name: 'garmin', ok: true },
+        { name: 'influxdb', ok: false, error: 'HTTP 401' },
+      ],
+    });
+
+    const text = lastBody().text as string;
+    expect(text.endsWith('\n✅ garmin\n❌ influxdb: HTTP 401')).toBe(true);
+  });
+
+  it('formats weight-valued fields in the configured unit', async () => {
+    const exporter = new TelegramExporter(defaultConfig);
+    await exporter.export(samplePayload, { weightUnit: 'lbs' });
+
+    const text = lastBody().text as string;
+    expect(text).toContain('⚖️ 176.37 lbs');
+    expect(text).toContain('Muscle 137.57 lbs');
+    expect(text).toContain('Bone 6.83 lbs');
+    expect(text).not.toContain('kg');
   });
 
   it('prepends [Name] when context has userName', async () => {

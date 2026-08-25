@@ -121,11 +121,13 @@ export const BleSchema = z
      */
     force_scale_adapter: z.string().min(1).optional().nullable(),
     /**
-     * How long one GATT session may wait for a complete reading, in seconds
-     * (default 120). Some scales refuse to run a standalone weigh-in while a
-     * host holds the session open (the Beurer BF500 shows "APP", #83), so a
-     * shorter session frees the scale sooner. The cost is proportionally more
-     * Bluetooth adapter resets per hour, since every failed read triggers one.
+     * Seconds of scale silence that end one GATT session (default 120); every
+     * notification restarts the clock. Native BLE handlers only; the mqtt-proxy
+     * and esphome-proxy transports ignore it. Some scales refuse to run a
+     * standalone weigh-in while a host holds the session open (the Beurer BF500
+     * shows "APP", #83), so a shorter session frees the scale sooner. The cost
+     * is more Bluetooth adapter churn per hour, since a timed-out read resets
+     * the adapter on node-ble and disconnects on Noble.
      */
     session_timeout_sec: z.number().int().min(5).max(600).optional().nullable(),
     /**
@@ -135,10 +137,31 @@ export const BleSchema = z
      * wrong one is silent rather than an error: the scale acknowledges the whole
      * handshake and never streams a weight. The scale-info frame length picks a
      * default (0 for the 18-byte variant, the value the scale itself sent for
-     * anything longer); set this only when a scale runs the full handshake and
-     * then reports nothing.
+     * anything longer); set this when a scale runs the full handshake and then
+     * reports nothing, or when its scale-info frame is unreliable in transit
+     * (proxy transports) and sessions without it open on the wrong byte.
      */
     qn_protocol_byte: z.number().int().min(0).max(255).optional().nullable(),
+    /**
+     * Payload byte of the QN A00D history-response frame, default 0xFE (#235,
+     * #75, #331).
+     *
+     * The handshake answers the scale's 0x21 config request with
+     * `a0 0d 04 <byte> 00 ...`. The default comes from openScale's QNHandler,
+     * which took it from an ES-30M capture. Two vendor-app captures on other
+     * firmware in the same family send 0xFC there instead: a GE CS 10 G (20-byte
+     * dialect) and an Arboleaf QN-Scale V39 (19-byte es26m), both from sessions
+     * that produced a reading in the vendor app while ble-scale-sync saw the
+     * handshake acknowledged and then silence.
+     *
+     * What the byte selects is NOT decoded. openScale annotates it only as
+     * "Payload", and it demonstrably does not gate the live 0x10 stream, since
+     * openScale receives those frames while sending 0xFE. So this ships as a
+     * setting rather than a changed default: on a scale that reads today, 0xFE
+     * is the value with evidence behind it, and a wrong choice here is silent in
+     * exactly the way `qn_protocol_byte` is.
+     */
+    qn_report_byte: z.number().int().min(0).max(255).optional().nullable(),
     mqtt_proxy: MqttProxySchema.optional(),
     esphome_proxy: EsphomeProxySchema.optional(),
   })
@@ -205,6 +228,21 @@ export const UserSchema = z.object({
    * against a single captured device.
    */
   beurer_provision: z.boolean().optional(),
+  /**
+   * Register a NEW user record on the scale instead of consenting to an
+   * existing one (#335).
+   *
+   * A SIG user record exists only after User Control Point "Register New User",
+   * and normally only the vendor app performs it. The profiles created in the
+   * scale's own menu are display-side records for its body-composition maths,
+   * not SIG users, so a scale set up that way refuses every consent code from
+   * any other client: there is no record it is entitled to.
+   *
+   * One-shot and opt-in, because it writes a record to the device and the slots
+   * are finite. Turn it on once, read the assigned index out of the log, put
+   * that in `beurer_user_index`, then turn it off.
+   */
+  beurer_register_new_user: z.boolean().optional(),
 });
 
 export const RuntimeSchema = z.object({

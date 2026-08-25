@@ -192,6 +192,7 @@ describe('processReading: single-user', () => {
       userName: 'Dad',
       userSlug: 'dad',
       userConfig: dad,
+      weightUnit: 'kg',
     });
   });
 
@@ -264,7 +265,7 @@ describe('processReading: multi-user', () => {
   });
 
   it('dispatches per matched user with drift warning in ExportContext when applicable', async () => {
-    const ctx = makeCtx([dad, mom]);
+    const ctx = makeCtx([dad, mom], { weightUnit: 'lbs' });
     // 94 kg lands in upper 10% of dad's [75..95] range → triggers drift warn.
     const exporters = [fakeExporter()];
     const getter = vi.fn(() => exporters);
@@ -274,7 +275,7 @@ describe('processReading: multi-user', () => {
     expect(ok).toBe(true);
     expect(getter).toHaveBeenCalledWith('dad');
     const [, , context] = vi.mocked(dispatchExports).mock.calls[0];
-    expect(context).toMatchObject({ userName: 'Dad', userSlug: 'dad' });
+    expect(context).toMatchObject({ userName: 'Dad', userSlug: 'dad', weightUnit: 'lbs' });
     expect(context).toHaveProperty('driftWarning');
     expect(String((context as { driftWarning?: string }).driftWarning)).toMatch(/upper boundary/);
   });

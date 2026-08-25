@@ -33,13 +33,24 @@ const LEFU_COMPANY_ID = 0x02ac;
 const SVC_FFB0 = 'ffb0';
 
 /**
- * Second service in the same advertising data element as FFB0 on the observed
- * unit. Almost certainly a generic Lefu OEM service rather than a Hutbit
- * marker, so it narrows this claim against unrelated devices squatting on
- * RTB Elektronik's company id, and probably does NOT discriminate the Hutbit
- * from a Robi S9 or an MGB. It fails closed and costs nothing on the captured
- * advertisement, so it is required until someone with MGB or Robi hardware
- * reports whether those units carry it too (#278).
+ * Second service in the same advertising data element as FFB0 on the unit
+ * captured for #278. Almost certainly a generic Lefu OEM service rather than a
+ * Hutbit marker, so it narrows this claim against unrelated devices squatting
+ * on RTB Elektronik's company id, and it does NOT discriminate the Hutbit from
+ * a Robi S9 or an MGB.
+ *
+ * It is NOT universal within the family. A Juniper-branded unit running the
+ * same Lefu AC02 protocol advertises FFB0 alone (#322):
+ *
+ *   Advert: name="SWAN" uuids=[ffb0] manufacturerData={0x02ac: c3b4d5ecb60100}
+ *
+ * That unit's payload is its own MAC reversed plus the 0x00 status byte, and
+ * its traffic is genuine AC02 (stable `ac 02 04 06 00 00 ca d4` = 103.0 kg,
+ * then `ac 02 fd 01 02 09 cb d4` = 521 ohm, both checksum-valid). Requiring
+ * D618 sent it to the MGB adapter, whose parser rejects every frame it sends,
+ * so the session ended in a GATT reading timeout every cycle.
+ *
+ * It is still required for NAMELESS advertisements. See `isHutbitOemAdvert`.
  */
 const SVC_D618 = 'd618';
 
@@ -69,15 +80,50 @@ const SVC_D618 = 'd618';
  * proxy the local name arrives empty because it lives in the scan response.
  * The manufacturer data and service list ride in the advertisement proper, so
  * they survive every transport that populates `manufacturerData`.
+ *
+ * D618 is required only when the advertisement carries NO local name, and the
+ * asymmetry is deliberate. The nameless FFB0 space belongs to the Robi S9,
+ * which claims it on FFB0 plus its FFB3 result characteristic at a higher
+ * priority, and a Robi reaching a proxy transport arrives nameless by
+ * construction. Dropping D618 there would hand those units to this adapter,
+ * which subscribes FFB1/FFB2 only and rejects every 20-byte Robi frame on
+ * length (#248 runs on exactly that transport).
+ *
+ * What the named case takes, stated exactly, because the tempting summary
+ * ("a named device has already been claimed by its own adapter") is FALSE:
+ *
+ *   `RobiS9Adapter.matches()` claims only a name containing `robi` and bows
+ *   out of only `swan`, `icomon` and `yg`. Every OTHER name falls through to
+ *   this predicate. So a Robi sold under a rebadged name, and an MGB
+ *   Icomon/YG/Swan, are both claimed here at priority 35 if they carry the
+ *   0x02AC signature. Observed against the live registry:
+ *
+ *     named "Robi S9",  ffb0 + ffb3 chars, 0x02AC  ->  Robi S9   (unchanged)
+ *     named "S9",       ffb0 + ffb3 chars, 0x02AC  ->  Hutbit
+ *     named "icomon",   ffb0,              0x02AC  ->  Hutbit    (was MGB)
+ *
+ * No captured Robi or MGB advertisement in this repo carries 0x02AC
+ * manufacturer data, so this is a family-shaped risk rather than an observed
+ * one, and the failure mode is a refused read rather than a wrong weight,
+ * since each parser rejects the other's frames on length. But this is a Lefu
+ * OEM family where the branded name is known NOT to be universal (the Hutbit's
+ * own OEM stock advertises "SWAN"), so it is a real exposure and not a
+ * theoretical one. `ble.force_scale_adapter` with `ble.scale_mac` is the
+ * escape hatch if a unit turns up on the wrong side of it.
+ *
+ * The FFB3 result characteristic is NOT usable as a negative gate here: the
+ * Hutbit exposes an unused FFB3 too, so gating on it would hand a nameless
+ * Hutbit straight back to Robi, which is the exact regression this predicate
+ * exists to prevent (#278).
  */
 export function isHutbitOemAdvert(device: BleDeviceInfo): boolean {
   const m = device.manufacturerData;
   if (m?.id !== LEFU_COMPANY_ID) return false;
   if (m.data.length !== 6 && m.data.length !== 7) return false;
   if (m.data.length === 7 && m.data[6] !== 0x00 && m.data[6] !== 0x01) return false;
-  return (
-    uuidClaimHits([SVC_FFB0], device.serviceUuids) && uuidClaimHits([SVC_D618], device.serviceUuids)
-  );
+  if (!uuidClaimHits([SVC_FFB0], device.serviceUuids)) return false;
+  if (device.localName) return true;
+  return uuidClaimHits([SVC_D618], device.serviceUuids);
 }
 
 export { LEFU_COMPANY_ID };

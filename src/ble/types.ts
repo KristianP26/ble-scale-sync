@@ -21,8 +21,24 @@ export const DISCOVERY_POLL_MS = 2_000;
 /** Timeout for GATT service/characteristic enumeration after connecting. */
 export const GATT_DISCOVERY_TIMEOUT_MS = 30_000;
 
-/** Timeout for the full reading phase (subscribe → first complete reading). */
+/**
+ * How long the reading phase waits without a notification from the scale. The
+ * timer restarts on every frame, so it counts silence rather than time since
+ * connect: a window counted from connect can expire before the user steps on,
+ * because connect is driven by the advertisement, not the weigh-in. Native
+ * handlers only; the mqtt-proxy uses its own GATT_READING_IDLE_MS.
+ */
 export const RAW_READING_TIMEOUT_MS = 120_000;
+
+/**
+ * Absolute cap on one native reading session, as a multiple of the configured
+ * silence window. The idle timer restarts on every frame, so a scale that
+ * streams adapter-rejected frames forever would otherwise hold the session
+ * open with no bound; the cap ends it while leaving room for a weigh-in that
+ * spans several restarts. A session_timeout_sec above 300 makes
+ * POLL_CYCLE_TIMEOUT_MS the effective ceiling instead.
+ */
+export const READING_SESSION_CAP_FACTOR = 3;
 
 /**
  * Max attempts to enumerate GATT characteristics. BlueZ can signal
@@ -42,9 +58,11 @@ export const POST_DISCOVERY_QUIESCE_MS = 500;
 /**
  * Hard ceiling on one native poll cycle.
  *
- * The worst legitimate node-ble cycle is roughly 575 s (discovery 120 + six
- * connect attempts 170 + GATT acquisition 30 + characteristic retries + reading
- * 120), so 900 s never fires on a healthy run.
+ * The reading phase is bounded by scale silence, capped in absolute terms at
+ * READING_SESSION_CAP_FACTOR x the silence window (360 s by default). The worst
+ * legitimate node-ble cycle is then roughly 815 s (discovery 120 + six connect
+ * attempts 170 + GATT acquisition 30 + characteristic retries + reading 360),
+ * so 900 s never fires on a healthy run with the default session_timeout_sec.
  *
  * It exists because dbus-next never rejects an in-flight `MessageBus.call()`
  * when the socket dies: the resolver is stored in `_methodReturnHandlers` and is
@@ -114,7 +132,7 @@ export interface ScanOptions {
   mqttProxy?: MqttProxyConfig;
   esphomeProxy?: EsphomeProxyConfig;
   bleAdapter?: string;
-  /** Override RAW_READING_TIMEOUT_MS for one session (ble.session_timeout_sec, #83). */
+  /** Override RAW_READING_TIMEOUT_MS (seconds of silence) for one session (ble.session_timeout_sec, #83). */
   readingTimeoutMs?: number;
 }
 
@@ -173,6 +191,34 @@ export async function withTimeout<T>(promise: Promise<T>, ms: number, message: s
     return await Promise.race([promise, timeout]);
   } finally {
     clearTimeout(timer!);
+  }
+}
+
+/**
+ * Like withTimeout, but the deadline restarts whenever `start`'s callback is
+ * invoked: the returned promise rejects after `ms` with no activity. Like
+ * withTimeout, the promise from `start` is abandoned rather than cancelled, so
+ * callers must still tear down whatever it holds.
+ */
+export async function withIdleTimeout<T>(
+  start: (onActivity: () => void) => Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let rejectTimeout!: (err: Error) => void;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    rejectTimeout = reject;
+  });
+  const onActivity = (): void => {
+    clearTimeout(timer);
+    timer = setTimeout(() => rejectTimeout(new Error(message)), ms);
+  };
+  onActivity();
+  try {
+    return await Promise.race([start(onActivity), timeout]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 

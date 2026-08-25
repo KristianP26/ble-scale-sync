@@ -19,6 +19,20 @@ configuration:
       (e.g. Hutbit). Requires the scale MAC to be set, because a forced adapter
       claims every device it is shown. Please also report the misdetection so it
       can be fixed for everyone.
+  qn_protocol_byte:
+    name: QN protocol byte
+    description: >-
+      QN-family scales only (Renpho, Arboleaf, FITINDEX, GE and rebadges).
+      Leave empty unless your QN scale connects, completes the whole handshake
+      in the log and then never reports a weight. Then try 0, or 255, or the
+      value the "QN: scale info" log line shows as proto. Accepts 0 to 255.
+  qn_report_byte:
+    name: QN history response byte
+    description: >-
+      QN-family scales only, and only worth trying after the QN protocol byte
+      did not help. Try 252, which is what vendor-app captures of a GE CS 10 G
+      and an Arboleaf QN-Scale send where this add-on sends the default 254.
+      Accepts 0 to 255.
   weight_unit:
     name: Weight unit
     description: >-

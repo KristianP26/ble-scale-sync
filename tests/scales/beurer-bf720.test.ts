@@ -874,6 +874,113 @@ describe('BeurerBf720Adapter', () => {
       } as unknown as ConnectionContext;
     }
 
+    // #335: a SIG user record exists only after Register New User, and normally
+    // only the vendor app performs it, so a scale set up that way refuses every
+    // consent code from any other client.
+    it('registers a new user instead of consenting when asked to', async () => {
+      const a = makeAdapter();
+      const ctx = ctxWith({});
+      (ctx as unknown as { scaleAuth: Record<string, unknown> }).scaleAuth = {
+        pin: 3752,
+        userIndex: 1,
+        registerNewUser: true,
+      };
+      await a.onConnected(ctx);
+      await settle();
+      const write = ctx.write as ReturnType<typeof vi.fn>;
+      const ucp = write.mock.calls.filter((c) => c[0] === UCP).map((c) => c[1] as number[]);
+      // Register New User is `01 <code u16 LE>`; no consent goes out.
+      expect(ucp).toContainEqual([0x01, 3752 & 0xff, (3752 >> 8) & 0xff]);
+      expect(ucp.some((f) => f[0] === 0x02)).toBe(false);
+    });
+
+    it('reports the index the scale assigned, since that is what the user must configure', async () => {
+      const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+      try {
+        const a = makeAdapter();
+        const ctx = ctxWith({});
+        (ctx as unknown as { scaleAuth: Record<string, unknown> }).scaleAuth = {
+          pin: 3752,
+          registerNewUser: true,
+        };
+        await a.onConnected(ctx);
+        await settle();
+        // `20 01 01 04`: response to Register New User, success, index 4.
+        a.parseCharNotification(UCP, Buffer.from('20010104', 'hex'));
+        await settle();
+        const msg = info.mock.calls.flat().join(' ');
+        expect(msg).toContain('index 4');
+        expect(msg).toContain('beurer_user_index');
+      } finally {
+        info.mockRestore();
+      }
+    });
+
+    it('warns rather than silently continuing when registration is refused', async () => {
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      try {
+        const a = makeAdapter();
+        const ctx = ctxWith({});
+        (ctx as unknown as { scaleAuth: Record<string, unknown> }).scaleAuth = {
+          pin: 3752,
+          registerNewUser: true,
+        };
+        await a.onConnected(ctx);
+        await settle();
+        // Operation failed: on this family that means the slots are full.
+        a.parseCharNotification(UCP, Buffer.from('200104', 'hex'));
+        await settle();
+        a.onSessionEnd!();
+        const msg = warn.mock.calls.flat().join(' ');
+        expect(msg).toContain('refused to register');
+        // The registration was ANSWERED, so the silence warning must not fire
+        // as well and name a second, different cause for one failure.
+        expect(msg).not.toContain('never answered the consent');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    // Silence after the consent write is the failure mode behind #83, #290 and
+    // #335: the scale rejects nothing and reports nothing, so the session ends
+    // as a bare "disconnected before reading completed" and never implicates
+    // the consent, let alone the slot.
+    it('warns when the scale never answers the consent, naming the slot', async () => {
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      try {
+        const a = makeAdapter();
+        await a.onConnected(ctxWith({}));
+        await settle();
+        // No UCP indication at all, then the session ends.
+        a.onSessionEnd!();
+        const msg = warn.mock.calls.flat().join(' ');
+        expect(msg).toContain('never answered the consent');
+        expect(msg).toContain('user index 1');
+        expect(msg).toContain('beurer_user_index');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('does not warn about consent silence once the scale has answered', async () => {
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      try {
+        const a = makeAdapter();
+        await a.onConnected(ctxWith({}));
+        await settle();
+        // A rejection is still an answer: it has its own warning and must not
+        // also produce the silence one, or the log names two different causes.
+        a.parseCharNotification(UCP, Buffer.from('200205', 'hex'));
+        await settle();
+        a.onSessionEnd!();
+        const msg = warn.mock.calls.flat().join(' ');
+        expect(msg).not.toContain('never answered the consent');
+        expect(msg).toContain('USER_NOT_AUTHORIZED');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
     // Erased flash reads back as 0xff. An unbounded floor accepted 0xffff as a
     // birth year and as a 65535 cm height, so provisioning wrote it straight
     // back and the scale kept the garbage.
@@ -918,6 +1025,31 @@ describe('BeurerBf720Adapter', () => {
       expect(Buffer.from(dob![1] as number[]).toString('hex')).toBe('c607060f');
     });
 
+    // Local and UTC getters agree at or east of Greenwich, so CI (UTC) cannot
+    // see #344. Pin the zone or this branch is effectively untested.
+    it('provisions the calendar date of birth on a host west of Greenwich', async () => {
+      const savedTz = process.env.TZ;
+      process.env.TZ = 'America/Montreal';
+      try {
+        const a = makeAdapter();
+        const ctx = ctxWith(
+          { [DOB]: Buffer.from('00000000', 'hex') },
+          { provision: true, profile: defaultProfile({ birthDate: '1990-06-15' }) },
+        );
+        await a.onConnected(ctx);
+        const write = ctx.write as ReturnType<typeof vi.fn>;
+        write.mockClear();
+        a.parseCharNotification(UCP, Buffer.from('200201', 'hex'));
+        await settle();
+        const dob = write.mock.calls.find((c) => c[0] === DOB);
+        // 1990-06-15, not the 14th the local getters read back at UTC-4.
+        expect(Buffer.from(dob![1] as number[]).toString('hex')).toBe('c607060f');
+      } finally {
+        if (savedTz === undefined) delete process.env.TZ;
+        else process.env.TZ = savedTz;
+      }
+    });
+
     it('does not claim the scale is empty once the consent was accepted', () => {
       const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
       const a = makeAdapter();
@@ -928,12 +1060,16 @@ describe('BeurerBf720Adapter', () => {
     });
 
     it('ignores a User Control Point response to a different opcode', async () => {
+      // 0x03 is Delete User, which this adapter never sends. It used to be 0x01
+      // here, but that is Register New User and is handled now (#335), so the
+      // fixture had to move to an opcode that is genuinely unhandled or the test
+      // would assert the opposite of what it means.
       const a = makeAdapter();
       const ctx = ctxWith({});
       await a.onConnected(ctx);
       const read = ctx.read as ReturnType<typeof vi.fn>;
       read.mockClear();
-      a.parseCharNotification(UCP, Buffer.from('200101', 'hex'));
+      a.parseCharNotification(UCP, Buffer.from('200301', 'hex'));
       await settle();
       expect(read).not.toHaveBeenCalled();
     });

@@ -13,6 +13,7 @@ import {
   POST_DISCOVERY_QUIESCE_MS,
 } from '../types.js';
 import { helperOf, getDbusNext, type Adapter, type Device } from './dbus.js';
+import { logAdvertisementSnapshot } from './device-object.js';
 import { getAdapter, resetConnection, parseHciIndex } from './connection.js';
 
 /** Stop discovery and wait for the post-discovery quiesce period. */
@@ -207,9 +208,24 @@ export async function autoDiscover(
 
         bleLog.debug(`Discovered: ${name} [${addr}]`);
 
-        // Try matching with name only (serviceUuids not available pre-connect on D-Bus).
-        // Adapters that require serviceUuids will fail to match here and need SCALE_MAC.
-        const info: BleDeviceInfo = { localName: name, serviceUuids: [] };
+        // Match on the name plus whatever the advertisement exposes. BlueZ does
+        // not publish advertised service UUIDs before a connection, so an
+        // adapter that matches only on serviceUuids still needs `ble.scale_mac`,
+        // but ManufacturerData and ServiceData ARE exposed and are what
+        // identifies a broadcast-only scale whose name says nothing: the
+        // Silvergear 108 advertises itself as "108" (#297).
+        //
+        // The loop above skips a device with no name at all, so a genuinely
+        // nameless broadcast peer is still only reachable through `ble.scale_mac`.
+        const advert = await logAdvertisementSnapshot(dev).catch(() => undefined);
+        const info: BleDeviceInfo = {
+          localName: name,
+          serviceUuids: [],
+          ...(advert?.manufacturerData ? { manufacturerData: advert.manufacturerData } : {}),
+          ...(advert?.serviceData && advert.serviceData.length > 0
+            ? { serviceData: advert.serviceData }
+            : {}),
+        };
         const matched = resolveAdapter(info, adapters);
         if (matched) {
           bleLog.info(`Auto-discovered: ${matched.name} (${name} [${addr}])`);

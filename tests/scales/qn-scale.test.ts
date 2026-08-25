@@ -556,6 +556,76 @@ describe('QnScaleAdapter', () => {
       expect(config![8]).toBe(config!.slice(0, 8).reduce((a, b) => a + b, 0) & 0xff);
     });
 
+    it('carries the forced protocol byte into the older-firmware unlock config', async () => {
+      // Same no-AE00 path, with qn_protocol_byte set. The unlock byte[2] must be
+      // the forced value, and it must stay 0x00 when the override is unset.
+      const build = async (opts?: { qnProtocolByte: number }): Promise<number[]> => {
+        const adapter = makeAdapter();
+        if (opts) adapter.configure(opts);
+        const writes: number[][] = [];
+        const ctx = {
+          write: async (_uuid: string, data: Buffer | number[]) => {
+            writes.push([...data]);
+          },
+          read: async () => Buffer.alloc(0),
+          subscribe: async () => {
+            throw new Error('no AE02');
+          },
+          profile: defaultProfile,
+          deviceAddress: '',
+          availableChars: new Set<string>(),
+        } as unknown as ConnectionContext;
+        await adapter.onConnected(ctx);
+        return writes.find((w) => w[0] === 0x13 && w[4] === 0x10)!;
+      };
+      expect((await build({ qnProtocolByte: 0x15 }))[2]).toBe(0x15);
+      expect((await build())[2]).toBe(0x00);
+    });
+
+    it('keeps the unlock at 0x00 when a 0x12 arrives during the AE02 subscribe and no override is set', async () => {
+      vi.useFakeTimers();
+      const adapter = makeAdapter();
+      try {
+        const writes: number[][] = [];
+        let rejectSubscribe!: (e: Error) => void;
+        const ctx = {
+          write: async (_uuid: string, data: Buffer | number[]) => {
+            writes.push([...data]);
+          },
+          read: async () => Buffer.alloc(0),
+          subscribe: () =>
+            new Promise<void>((_resolve, reject) => {
+              rejectSubscribe = reject;
+            }),
+          profile: defaultProfile,
+          deviceAddress: '',
+          availableChars: new Set<string>(),
+        } as unknown as ConnectionContext;
+        const connected = adapter.onConnected(ctx);
+        await vi.advanceTimersByTimeAsync(0);
+
+        // The 0x12 lands while the AE02 subscribe is still in flight (the Linux
+        // node-ble ordering) and seeds seenProtocolType with the scale's byte.
+        const info = Buffer.alloc(11);
+        info[0] = 0x12;
+        info[2] = 0xab;
+        info[10] = 0;
+        adapter.parseNotification(info);
+
+        writes.length = 0;
+        rejectSubscribe(new Error('no AE02'));
+        await connected;
+
+        // The legacy unlock must not inherit 0xab from that timing.
+        const config = writes.find((w) => w[0] === 0x13 && w[4] === 0x10);
+        expect(config).toBeDefined();
+        expect(config![2]).toBe(0x00);
+      } finally {
+        adapter.onSessionEnd!();
+        vi.useRealTimers();
+      }
+    });
+
     it('0x12 frame captures protocol type', () => {
       const adapter = makeAdapter();
       const infoBuf = Buffer.alloc(11);
@@ -1317,6 +1387,74 @@ describe('AE02 dispatch (#75, #235)', () => {
       expect(config).toEqual([0x13, 0x09, 0xff, 0x01, 0x10, 0x00, 0x00, 0x00, 0x2c]);
     });
 
+    // The A00D history-response pair had no coverage at all before #235/#75
+    // put its payload byte in question, so these pin both the default and the
+    // override.
+    // A vendor-app capture of this dialect writes 0xFC five times across three
+    // weigh-ins, never 0xFE, the scale echoes it back as `a1 07 04 fc 01 10 b9`,
+    // and 59 live 0x10 frames follow (#235).
+    // The 19-byte es26m dialect gets the same byte, from the #75 capture. The
+    // reporter's own log names the dialect, so this is not inferred from a model.
+    it('sends the A00D history response with 0xFC on the es26m dialect', async () => {
+      const adapter = makeAdapter();
+      // 19-byte 0x12: long-frame variant, not the 20-byte extended one.
+      const info = Buffer.alloc(19);
+      info[0] = 0x12;
+      info[1] = 0x13;
+      info[2] = 0xff;
+      info[10] = 0;
+      const writes = await driveHandshake(adapter, info);
+      const msg1 = writes.find((w) => w[0] === 0xa0 && w[2] === 0x04);
+      expect(msg1).toBeDefined();
+      expect(msg1![3]).toBe(0xfc);
+      expect(msg1![12]).toBe(msg1!.slice(0, 12).reduce((a, b) => a + b, 0) & 0xff);
+    });
+
+    it('sends the A00D history response with 0xFC on the extended dialect', async () => {
+      const adapter = makeAdapter();
+      const writes = await driveHandshake(adapter, makeExtendedScaleInfo());
+      const msg1 = writes.find((w) => w[0] === 0xa0 && w[2] === 0x04);
+      expect(msg1).toBeDefined();
+      expect(msg1![3]).toBe(0xfc);
+      expect(msg1![12]).toBe(msg1!.slice(0, 12).reduce((a, b) => a + b, 0) & 0xff);
+    });
+
+    // Everything that is not the captured firmware keeps the value it reads on
+    // today. The capture covers one dialect and says nothing about the others.
+    it('leaves the classic dialect on 0xFE', async () => {
+      const adapter = makeAdapter();
+      const info = Buffer.alloc(11);
+      info[0] = 0x12;
+      info[2] = 0xab;
+      info[10] = 1;
+      const writes = await driveHandshake(adapter, info);
+      const msg1 = writes.find((w) => w[0] === 0xa0 && w[2] === 0x04);
+      expect(msg1![3]).toBe(0xfe);
+      expect(msg1![12]).toBe(msg1!.slice(0, 12).reduce((a, b) => a + b, 0) & 0xff);
+    });
+
+    it('applies ble.qn_report_byte to the A00D payload byte and recomputes the checksum', async () => {
+      // 0xFC is the value both vendor-app captures send in this position.
+      const adapter = makeAdapter();
+      adapter.configure({ qnReportByte: 0xfc });
+      const writes = await driveHandshake(adapter, makeExtendedScaleInfo());
+      const msg1 = writes.find((w) => w[0] === 0xa0 && w[2] === 0x04);
+      expect(msg1![3]).toBe(0xfc);
+      expect(msg1![12]).toBe(msg1!.slice(0, 12).reduce((a, b) => a + b, 0) & 0xff);
+    });
+
+    it('leaves the second A00D frame alone when the report byte is overridden', async () => {
+      // Only byte[3] of the 0x04 frame is in question. The 0x02 frame is a
+      // separate command and must not move with it.
+      const adapter = makeAdapter();
+      adapter.configure({ qnReportByte: 0xfc });
+      const writes = await driveHandshake(adapter, makeExtendedScaleInfo());
+      const msg2 = writes.find((w) => w[0] === 0xa0 && w[2] === 0x02);
+      expect(msg2).toEqual([
+        0xa0, 0x0d, 0x02, 0x01, 0x00, 0x08, 0x00, 0x21, 0x06, 0xb8, 0x04, 0x02, 0x9d,
+      ]);
+    });
+
     it('20B 0x12 frame makes the 0x22 START byte identical to the vendor app', async () => {
       const adapter = makeAdapter();
       const writes = await driveHandshake(adapter, makeExtendedScaleInfo());
@@ -1399,6 +1537,59 @@ describe('AE02 dispatch (#75, #235)', () => {
       adapter.configure({});
       const writes = await driveHandshake(adapter, makeArboleafScaleInfo());
       expect(writes.find((w) => w[0] === 0x13 && w[4] === 0x10)![2]).toBe(0xff);
+    });
+
+    it('applies the override to the classic dialect', async () => {
+      // A classic-dialect scale whose firmware wants a different byte than its
+      // 0x12 reports had no working override before: the classic branch read
+      // data[2] unconditionally.
+      const adapter = makeAdapter();
+      adapter.configure({ qnProtocolByte: 0x15 });
+      const info = Buffer.alloc(11);
+      info[0] = 0x12;
+      info[2] = 0xab;
+      info[10] = 1;
+      const writes = await driveHandshake(adapter, info);
+      expect(writes.find((w) => w[0] === 0x13 && w[4] === 0x10)![2]).toBe(0x15);
+      expect(writes.find((w) => w[0] === 0x22)![2]).toBe(0x15);
+    });
+
+    it('opens with the override before 0x12 and keeps it through the no-0x12 fallback', async () => {
+      // Proxy transports can lose the 0x12 scale-info frame entirely. The
+      // session must then still open the unlock config with the forced byte and
+      // run the fallback handshake on it, not on the 0x00/0xff guesses.
+      const adapter = makeAdapter();
+      adapter.configure({ qnProtocolByte: 0x15 });
+      vi.useFakeTimers();
+      try {
+        const writes: number[][] = [];
+        const ctx = {
+          write: async (_uuid: string, data: Buffer | number[]) => {
+            writes.push([...data]);
+          },
+          read: async () => Buffer.alloc(0),
+          subscribe: async () => {},
+          profile: defaultProfile(),
+          deviceAddress: '',
+          availableChars: new Set<string>(),
+        } as unknown as ConnectionContext;
+        await adapter.onConnected(ctx);
+
+        // A 0x14 ready frame arriving before the 2 s fallback drives handleReady
+        // off the onConnected seed, so the 0x20 it emits pins that seed rather
+        // than the fallback's own protocol assignment.
+        adapter.parseNotification(Buffer.from([0x14, 0x0b, 0x15, 0, 0, 0, 0, 0, 0, 0, 0x34]));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(writes.find((w) => w[0] === 0x20)![2]).toBe(0x15);
+
+        await vi.advanceTimersByTimeAsync(4000);
+        const configs = writes.filter((w) => w[0] === 0x13 && w[4] === 0x10);
+        expect(configs.length).toBeGreaterThan(0);
+        for (const c of configs) expect(c[2]).toBe(0x15);
+        expect(writes.find((w) => w[0] === 0x22)![2]).toBe(0x15);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('classic 11B 0x12 frame is unaffected by the extended-dialect rule', async () => {

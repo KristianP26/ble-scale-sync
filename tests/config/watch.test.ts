@@ -75,6 +75,19 @@ describe('startConfigWatcher', () => {
     }
   });
 
+  it('ignores events that leave the content unchanged', async () => {
+    const onChange = vi.fn();
+    const handle = startConfigWatcher(configPath, onChange);
+
+    try {
+      writeFileSync(configPath, 'version: 1\n');
+      await new Promise((r) => setTimeout(r, SETTLE_MS));
+      expect(onChange).not.toHaveBeenCalled();
+    } finally {
+      handle.close();
+    }
+  });
+
   it('survives atomic rename (tmp+rename pattern)', async () => {
     const onChange = vi.fn();
     const handle = startConfigWatcher(configPath, onChange);

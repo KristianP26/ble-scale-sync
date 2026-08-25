@@ -4,7 +4,10 @@ import {
   waitForRawReading,
   findMissingCharacteristics,
   resolveWriteChar,
+  getRawCaptureConfig,
+  toHex,
 } from '../../src/ble/shared.js';
+import { withIdleTimeout } from '../../src/ble/types.js';
 import type { BleChar, BleDevice } from '../../src/ble/shared.js';
 import { normalizeUuid, bleLog } from '../../src/ble/types.js';
 import { KoogeekS1Adapter } from '../../src/scales/koogeek-s1.js';
@@ -750,6 +753,127 @@ describe('waitForRawReading()', () => {
     const result = await promise;
     expect(result.reading).toEqual({ weight: 75, impedance: 500 });
     expect(onLiveData).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ─── waitForRawReading raw capture mode (#211) ──────────────────────────────
+
+describe('waitForRawReading() — raw capture mode', () => {
+  afterEach(() => {
+    delete process.env.BLE_RAW_CAPTURE;
+    delete process.env.BLE_RAW_CAPTURE_HOLD_SEC;
+  });
+
+  // Adapter: 0x58-prefixed frames parse to a complete reading; everything else
+  // (e.g. a 0x59 composition frame) parses to null, like the BF710 path.
+  const captureAdapter = (): ScaleAdapter =>
+    createLegacyAdapter({
+      parseNotification: vi.fn((data: Buffer) =>
+        data[0] === 0x58 ? { weight: 75, impedance: 0 } : null,
+      ),
+      isComplete: vi.fn((reading: ScaleReading) => reading.weight > 0),
+    });
+
+  it('logs every notify frame as hex, including frames that parse to null', async () => {
+    process.env.BLE_RAW_CAPTURE = '1';
+    const infoSpy = vi.spyOn(bleLog, 'info');
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+    const adapter = captureAdapter();
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    notifyChar.triggerData(Buffer.from([0x58, 0x01, 0x0a, 0x0b])); // complete -> starts hold
+    notifyChar.triggerData(Buffer.from([0x59, 0x12, 0x34])); // null-parsing 0x59 frame
+
+    const logged = infoSpy.mock.calls.map((c) => c[0]);
+    expect(logged.some((m) => m.includes('[RAW]') && m.includes('58 01 0a 0b'))).toBe(true);
+    expect(logged.some((m) => m.includes('[RAW]') && m.includes('59 12 34'))).toBe(true);
+
+    device.triggerDisconnect();
+    const result = await promise;
+    expect(result.reading).toEqual({ weight: 75, impedance: 0 });
+  });
+
+  it('does not resolve on isComplete; resolves with the last reading on disconnect', async () => {
+    process.env.BLE_RAW_CAPTURE = 'true';
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+    const adapter = captureAdapter();
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    notifyChar.triggerData(Buffer.from([0x58, 0x01])); // complete, but capture holds
+
+    // Promise must still be pending: race it against a settled sentinel.
+    const sentinel = Symbol('pending');
+    const raced = await Promise.race([promise, Promise.resolve(sentinel)]);
+    expect(raced).toBe(sentinel);
+
+    device.triggerDisconnect();
+    const result = await promise;
+    expect(result.reading).toEqual({ weight: 75, impedance: 0 });
+    expect(result.history).toBeUndefined();
+  });
+
+  it('resolves with the last reading when the hold window elapses (no disconnect)', async () => {
+    vi.useFakeTimers();
+    try {
+      process.env.BLE_RAW_CAPTURE = '1';
+      process.env.BLE_RAW_CAPTURE_HOLD_SEC = '5';
+      const notifyChar = createMockChar();
+      const writeChar = createMockChar();
+      const device = createMockDevice();
+      const { charMap } = createCharMap([
+        [NOTIFY_UUID, notifyChar],
+        [WRITE_UUID, writeChar],
+      ]);
+      const adapter = captureAdapter();
+
+      const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+      await vi.advanceTimersByTimeAsync(0); // flush async subscribe
+      expect(notifyChar.subscribeCalled).toBe(true);
+
+      notifyChar.triggerData(Buffer.from([0x58, 0x01])); // complete -> starts 5s hold
+      await vi.advanceTimersByTimeAsync(5000); // fire the hold timer
+
+      const result = await promise;
+      expect(result.reading).toEqual({ weight: 75, impedance: 0 });
+      expect(result.history).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('is off by default: a complete reading resolves immediately', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+    const adapter = captureAdapter();
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    notifyChar.triggerData(Buffer.from([0x58, 0x01]));
+
+    const result = await promise; // resolves without any disconnect
+    expect(result.reading).toEqual({ weight: 75, impedance: 0 });
   });
 });
 
@@ -1526,5 +1650,209 @@ describe('waitForRawReading() with the real KoogeekS1Adapter (#270)', () => {
     notifyChar.triggerData(stableFrame(800, 0));
     notifyChar.triggerData(stableFrame(783, 470));
     expect((await promise).reading).toEqual({ weight: 78.3, impedance: 470 });
+  });
+});
+
+// ─── Notification teardown on a failed init ─────────────────────────────────
+
+describe('waitForRawReading() — notification teardown', () => {
+  it('releases the notify subscription when adapter init rejects mid-subscribe', async () => {
+    // Legacy mode races the subscribe against the adapter handshake. When the
+    // handshake loses, Promise.all abandons the subscribe, which goes on to
+    // install its listener with nobody left to remove it. On the proxy
+    // transports the client outlives the session, so that listener then
+    // re-processes every later notification (#338).
+    const unsub = vi.fn();
+    let releaseSubscribe!: () => void;
+    const gate = new Promise<void>((r) => {
+      releaseSubscribe = r;
+    });
+
+    const notifyChar = createMockChar();
+    notifyChar.subscribe = vi.fn(async () => {
+      await gate;
+      notifyChar.subscribeCalled = true;
+      return unsub;
+    });
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const adapter = createLegacyAdapter({
+      onConnected: vi.fn(async (_ctx: ConnectionContext) => {
+        throw new Error('handshake failed');
+      }),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await expect(promise).rejects.toThrow('handshake failed');
+
+    // The session is already torn down while the subscribe is still in flight.
+    expect(unsub).not.toHaveBeenCalled();
+
+    releaseSubscribe();
+    await vi.waitFor(() => expect(unsub).toHaveBeenCalledTimes(1));
+  });
+
+  it('releases every notify subscription once the session ends normally', async () => {
+    const unsub = vi.fn();
+    const notifyChar = createMockChar();
+    notifyChar.subscribe = vi.fn(async (onData) => {
+      notifyChar.subscribeCalled = true;
+      notifyChar.triggerData = (data: Buffer) => onData(data);
+      return unsub;
+    });
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const adapter = createLegacyAdapter({
+      parseNotification: vi.fn((data: Buffer) =>
+        data[0] === 0x10 ? { weight: 75.5, impedance: 500 } : null,
+      ),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+    notifyChar.triggerData(Buffer.from([0x10]));
+
+    await promise;
+    await vi.waitFor(() => expect(unsub).toHaveBeenCalledTimes(1));
+  });
+});
+
+// ─── native call-site wiring: idle deadline over waitForRawReading ───────────
+// Both native handlers (noble, node-ble) wrap waitForRawReading in
+// withIdleTimeout(onActivity => waitForRawReading(..., onActivity), timeout).
+// These pin that composition: the onActivity ninth argument must reach
+// waitForRawReading so an adapter-rejected frame restarts the deadline, and a
+// silent session must still reject at the configured timeout (#83 wiring).
+describe('waitForRawReading() under the native idle deadline', () => {
+  const IDLE_MS = 1000;
+
+  function runWithIdle(adapter: ScaleAdapter, notifyChar: MockBleChar, device: BleDevice) {
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, createMockChar()],
+    ]);
+    return withIdleTimeout(
+      (onActivity) =>
+        waitForRawReading(
+          charMap,
+          device,
+          adapter,
+          PROFILE,
+          '',
+          undefined,
+          undefined,
+          undefined,
+          onActivity,
+        ),
+      IDLE_MS,
+      'Timed out waiting for a complete scale reading',
+    );
+  }
+
+  it('restarts the deadline on an adapter-rejected frame so a later complete frame resolves', async () => {
+    vi.useFakeTimers();
+    try {
+      const notifyChar = createMockChar();
+      const device = createMockDevice();
+      let seen = 0;
+      const adapter = createLegacyAdapter({
+        parseNotification: vi.fn((): ScaleReading | null => {
+          seen++;
+          // First frame parses to null (adapter-rejected), so this also covers
+          // onActivity firing before the parse gate, not only before isComplete.
+          return seen === 1 ? null : { weight: 75, impedance: 500 };
+        }),
+      });
+
+      const promise = runWithIdle(adapter, notifyChar, device);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(notifyChar.subscribeCalled).toBe(true);
+
+      // Just before the deadline, a rejected frame arrives and must re-arm it.
+      await vi.advanceTimersByTimeAsync(IDLE_MS - 100);
+      notifyChar.triggerData(Buffer.from([0x01]));
+
+      // Past the original deadline: only the restart keeps the session alive.
+      await vi.advanceTimersByTimeAsync(IDLE_MS - 100);
+      notifyChar.triggerData(Buffer.from([0x02]));
+
+      const result = await promise;
+      expect(result.reading).toEqual({ weight: 75, impedance: 500 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects at the timeout when the scale stays silent', async () => {
+    vi.useFakeTimers();
+    try {
+      const notifyChar = createMockChar();
+      const device = createMockDevice();
+      const promise = runWithIdle(createLegacyAdapter(), notifyChar, device);
+      const rejection = expect(promise).rejects.toThrow(
+        'Timed out waiting for a complete scale reading',
+      );
+      await vi.advanceTimersByTimeAsync(IDLE_MS);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ─── getRawCaptureConfig + toHex ─────────────────────────────────────────────
+
+describe('toHex()', () => {
+  it('formats a buffer as space-separated lowercase hex', () => {
+    expect(toHex(Buffer.from([0xe7, 0x58, 0x01, 0x0a]))).toBe('e7 58 01 0a');
+  });
+
+  it('formats a number array and zero-pads single digits', () => {
+    expect(toHex([0x00, 0x5, 0xff])).toBe('00 05 ff');
+  });
+});
+
+describe('getRawCaptureConfig()', () => {
+  afterEach(() => {
+    delete process.env.BLE_RAW_CAPTURE;
+    delete process.env.BLE_RAW_CAPTURE_HOLD_SEC;
+  });
+
+  it('is disabled by default with the 20s hold', () => {
+    expect(getRawCaptureConfig()).toEqual({ enabled: false, holdMs: 20_000 });
+  });
+
+  it.each(['1', 'true', 'yes', 'on', 'TRUE'])('enables on %s', (val) => {
+    process.env.BLE_RAW_CAPTURE = val;
+    expect(getRawCaptureConfig().enabled).toBe(true);
+  });
+
+  it.each(['', '0', 'false', 'no', 'off', 'OFF'])('stays disabled on %s', (val) => {
+    process.env.BLE_RAW_CAPTURE = val;
+    expect(getRawCaptureConfig().enabled).toBe(false);
+  });
+
+  it('overrides the hold window from BLE_RAW_CAPTURE_HOLD_SEC', () => {
+    process.env.BLE_RAW_CAPTURE = '1';
+    process.env.BLE_RAW_CAPTURE_HOLD_SEC = '8';
+    expect(getRawCaptureConfig().holdMs).toBe(8000);
+  });
+
+  it('ignores a non-positive or non-numeric hold override', () => {
+    process.env.BLE_RAW_CAPTURE = '1';
+    process.env.BLE_RAW_CAPTURE_HOLD_SEC = '-5';
+    expect(getRawCaptureConfig().holdMs).toBe(20_000);
+    process.env.BLE_RAW_CAPTURE_HOLD_SEC = 'abc';
+    expect(getRawCaptureConfig().holdMs).toBe(20_000);
   });
 });

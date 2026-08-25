@@ -60,20 +60,22 @@ ble:
   # force_scale_adapter: 'Hutbit'
   # session_timeout_sec: 20
   # qn_protocol_byte: 0
+  # qn_report_byte: 252
 ```
 
-| Field                 | Required                    | Default        | Description                                                                                                                                                                                          |
-| --------------------- | --------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scale_mac`           | Recommended                 | Auto-discovery | MAC address, or a CoreBluetooth UUID on macOS (bare 32-hex as the wizard writes it, or the dashed form). Prevents connecting to a neighbor's scale.                                                  |
-| `bind_key`            | Xiaomi S800 only            | (none)         | 32-char hex per-device MiBeacon key from the Mi cloud (extract with the community Xiaomi-cloud-tokens-extractor). Decrypts only the device's own FE95 broadcast. Keep it secret; it is a credential. |
-| `handler`             | No                          | `auto`         | Transport: `auto` (local radio), `mqtt-proxy` (ESP32 over MQTT), `esphome-proxy` (ESPHome Native API). See below.                                                                                    |
-| `noble_driver`        | No                          | OS default     | `abandonware` or `stoprocent`. Overrides the default BLE driver. Only applies when `handler: auto`.                                                                                                  |
-| `adapter`             | No                          | System default | Linux only. Select a specific Bluetooth adapter (e.g., `hci0`, `hci1`). See below.                                                                                                                   |
-| `force_scale_adapter` | No                          | Auto-detect    | Name of the scale protocol adapter to use, bypassing auto-detection. Requires `scale_mac`. See below.                                                                                                |
-| `session_timeout_sec` | No                          | `120`          | Seconds one GATT session may wait for a complete reading (5 to 600). Native BLE handlers only; ignored on `mqtt-proxy` and `esphome-proxy`. See below.                                               |
-| `qn_protocol_byte`    | No                          | Auto           | QN-family scales only. Protocol byte the handshake echoes back to the scale (0 to 255). Set it only when a QN scale runs the whole handshake and then reports nothing. See below.                    |
-| `mqtt_proxy`          | If `handler: mqtt-proxy`    | (none)         | MQTT proxy connection (`broker_url`, `device_id`, `topic_prefix`, `username`, `password`, `auto_connect`, `embedded_broker_*`). See [ESP32 BLE Proxy](./esp32-proxy).                                |
-| `esphome_proxy`       | If `handler: esphome-proxy` | (none)         | ESPHome Native API connection (`host`, `port`, `encryption_key` or `password`, `client_info`). See [ESPHome Bluetooth Proxy](./esphome-proxy).                                                       |
+| Field                 | Required                    | Default        | Description                                                                                                                                                                                                                                                                                |
+| --------------------- | --------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `scale_mac`           | Recommended                 | Auto-discovery | MAC address, or a CoreBluetooth UUID on macOS (bare 32-hex as the wizard writes it, or the dashed form). Prevents connecting to a neighbor's scale.                                                                                                                                        |
+| `bind_key`            | Xiaomi S800 only            | (none)         | 32-char hex per-device MiBeacon key from the Mi cloud (extract with the community Xiaomi-cloud-tokens-extractor). Decrypts only the device's own FE95 broadcast. Keep it secret; it is a credential.                                                                                       |
+| `handler`             | No                          | `auto`         | Transport: `auto` (local radio), `mqtt-proxy` (ESP32 over MQTT), `esphome-proxy` (ESPHome Native API). See below.                                                                                                                                                                          |
+| `noble_driver`        | No                          | OS default     | `abandonware` or `stoprocent`. Overrides the default BLE driver. Only applies when `handler: auto`.                                                                                                                                                                                        |
+| `adapter`             | No                          | System default | Linux only. Select a specific Bluetooth adapter (e.g., `hci0`, `hci1`). See below.                                                                                                                                                                                                         |
+| `force_scale_adapter` | No                          | Auto-detect    | Name of the scale protocol adapter to use, bypassing auto-detection. Requires `scale_mac`. See below.                                                                                                                                                                                      |
+| `session_timeout_sec` | No                          | `120`          | Seconds of scale silence that end a GATT session (5 to 600); an inbound frame restarts the clock. Native BLE handlers only; ignored on `mqtt-proxy` and `esphome-proxy`. See below.                                                                                                        |
+| `qn_protocol_byte`    | No                          | Auto           | QN-family scales only. Protocol byte the handshake echoes back to the scale (0 to 255). Set it when a QN scale runs the whole handshake and then reports nothing, or when its scale-info frame is lost in transit on a proxy transport. See below.                                         |
+| `qn_report_byte`      | No                          | Per dialect    | QN-family scales only. Payload byte of the history-response frame (0 to 255). Defaults to `252` (0xFC) on the long-frame dialects (es26m and extended) and `254` (0xFE) on the classic one. Try the other value if your scale completes the handshake and then reports nothing. See below. |
+| `mqtt_proxy`          | If `handler: mqtt-proxy`    | (none)         | MQTT proxy connection (`broker_url`, `device_id`, `topic_prefix`, `username`, `password`, `auto_connect`, `embedded_broker_*`). See [ESP32 BLE Proxy](./esp32-proxy).                                                                                                                      |
+| `esphome_proxy`       | If `handler: esphome-proxy` | (none)         | ESPHome Native API connection (`host`, `port`, `encryption_key` or `password`, `client_info`). See [ESPHome Bluetooth Proxy](./esphome-proxy).                                                                                                                                             |
 
 ::: warning Forcing a scale adapter
 `force_scale_adapter` is an escape hatch for when auto-detection routes your scale to the wrong protocol adapter, which happens with rebadged OEM hardware that shares a vendor service with another brand.
@@ -95,27 +97,96 @@ If you need this, please [open an issue](https://github.com/KristianP26/ble-scal
 
 The QN protocol family (Renpho, Arboleaf, FITINDEX, GE and several rebadges) echoes a protocol byte back to the scale in every configuration command, and the firmware revisions disagree about which value they accept. The wrong value is not an error: the scale acknowledges the entire handshake and then simply never streams a weight, which looks exactly like nobody standing on it.
 
-The scale-info frame length picks the default, and it is right for every unit reported so far. If your QN scale connects, completes the handshake in the debug log and then goes quiet, try the other value:
+The scale-info frame length picks the default, and it is right for every unit reported so far. Some firmware wants its own byte rather than 0 or 255: an ES-CS20M that reports 21 needs 21, and the full 0 to 255 range is accepted, so try the value your scale reports before assuming it is a binary choice.
 
 ```yaml
 ble:
-  qn_protocol_byte: 0 # or 255
+  qn_protocol_byte: 0 # or 255; if neither works, the byte your scale reports (an ES-CS20M reporting 21 needs 21)
 ```
 
-The debug log states which value is in use:
+The debug log states which value is in use. When the scale-info frame arrives:
 
 ```
 QN: scale info (19B, dialect=es26m), factor=10, proto=0xff
 ```
 
-If one of the two makes your scale work, please say so in an issue with the model and that line: the default is set from the models we have evidence for, and yours may change it.
+On a proxy transport that loses the scale-info frame, that line never prints; look for the fallback line instead, which shows the byte the handshake ran with:
+
+```
+QN: fallback: no 0x12 received, running handshake with proto=0x15
+```
+
+If a value makes your scale work, please say so in an issue with the model and that line: the default is set from the models we have evidence for, and yours may change it.
+
+:::
+
+::: tip QN scales that still report nothing (`qn_report_byte`)
+
+If `qn_protocol_byte` did not help, there is one more byte worth trying, and it is a separate one.
+
+When the scale asks for its configuration (`0x21`), the handshake answers with a history-response frame:
+
+```
+a0 0d 04 fe 00 00 00 00 00 00 00 00 <checksum>
+                ^^
+```
+
+That `fe` comes from openScale, which took it from a capture of an ES-30M and labels it only as a payload byte.
+
+On the **long-frame dialects**, es26m (19-byte) and extended (20-byte), the default is `fc`, and that one is not an inference. Two vendor-app captures on two different scales agree: one writes `a0 0d 04 fc ...` five times across three weigh-ins and never sends `fe`, with the scale echoing the byte back and 59 live weight frames following; the other is an Android capture of a successful weigh-in on a unit whose own log line reads `dialect=es26m`.
+
+The 11-byte **classic** dialect keeps `fe`. No capture covers it, and unlike the long variants it reads today, which is what decides it: every scale reported silent after a completed handshake has been on a long frame.
+
+What the byte actually selects is still not known. Reporters read it as choosing between a live weight stream and the stored-history path, which fits their symptoms, but openScale receives live weight frames while sending `fe`, so that reading cannot be the whole story. If your scale is on another dialect and goes quiet after the handshake, `fc` is the value to try:
+
+```yaml
+ble:
+  qn_report_byte: 252 # 0xFC, the value both vendor-app captures send
+```
+
+With debug logging on, every session says which byte it used and why:
+
+```
+QN: history response byte 0xfc (dialect default)
+QN: history response byte 0xfe (forced; dialect default 0xfc)
+```
+
+If `252` makes your scale produce a weight, please say so in an issue with the model, the dialect from the `QN: scale info` line and that log line. Two confirmations on different firmware would be enough to move the default.
+
+:::
+
+::: tip Beurer scales that reject every consent code (`beurer_register_new_user`)
+
+If a Beurer or Sanitas scale bonds, subscribes and then answers the consent with `USER_NOT_AUTHORIZED` no matter which code or slot you try, the problem is usually not the code.
+
+A user record in the Bluetooth SIG User Data Service exists only after a **Register New User** operation, and normally only the vendor app performs it. The profiles you create in the scale's own menu (SET, U:1 to U:8) are display-side records for its body-composition maths; they are not SIG users. So on a scale whose user was registered by the vendor app, another client has no record it is entitled to, and consent can never succeed for it.
+
+This creates one:
+
+```yaml
+users:
+  - name: Your Name
+    beurer_pin: 1234 # the code you want the new record to use
+    beurer_register_new_user: true
+```
+
+It is opt-in and meant to be used once, because it writes a record to the scale and the slots are finite. The log then tells you which index the scale assigned:
+
+```
+Beurer BF720: registered a new user at index 4. Set 'users[].beurer_user_index: 4'
+and turn 'beurer_register_new_user' back off, or the next run registers another one.
+```
+
+Put that index in `beurer_user_index`, set `beurer_register_new_user` back to `false`, and normal consent takes over from the next run.
+
+If the scale refuses the registration, its slots are probably all occupied. Free one from the scale's own menu and try again.
 
 :::
 
 ::: tip Shortening the session (`session_timeout_sec`)
 Some scales will not run a standalone weigh-in while a host holds the GATT session open. The Beurer BF500 is the clearest example: it displays `APP` and waits, so only a measurement taken **between** sessions is picked up.
 
-By default a session waits 120 seconds for a reading. On a scale like this, that is 120 seconds out of every cycle in which stepping on it achieves nothing. Shortening the session, and lengthening the gap after it, frees the scale for most of the cycle:
+By default a session ends after 120 seconds without a notification from the scale. On a scale like this, that is 120 seconds out of every cycle in which stepping on it achieves nothing. Shortening the session, and lengthening the gap after it, frees the scale for most of the cycle:
 
 ```yaml
 ble:
@@ -182,20 +253,21 @@ users:
     weight_range: { min: 50, max: 75 }
 ```
 
-| Field               | Required | Default        | Description                                                              |
-| ------------------- | -------- | -------------- | ------------------------------------------------------------------------ |
-| `name`              | Yes      | (none)         | Display name                                                             |
-| `slug`              | No       | Auto-generated | Unique ID (lowercase, hyphens) for MQTT topics, InfluxDB tags            |
-| `height`            | Yes      | (none)         | Height in configured unit                                                |
-| `birth_date`        | Yes      | (none)         | ISO date (`YYYY-MM-DD`)                                                  |
-| `gender`            | Yes      | (none)         | `male` or `female`                                                       |
-| `is_athlete`        | No       | `false`        | Adjusts [body composition](/body-composition#athlete-mode) formulas      |
-| `weight_range`      | No       | (none)         | `{ min, max }` in kg. Required for [multi-user](/multi-user) deployments |
-| `last_known_weight` | No       | `null`         | Auto-updated after each measurement                                      |
-| `exporters`         | No       | (none)         | [Per-user exporter](/multi-user#per-user-exporters) overrides            |
-| `beurer_pin`        | Beurer   | (none)         | Consent code the Beurer BF7xx / BF9xx scale was paired with              |
-| `beurer_user_index` | No       | `1`            | Scale user slot the consent code belongs to                             |
-| `beurer_provision`  | No       | `false`        | Write this profile into a Beurer scale that has no stored user           |
+| Field                      | Required | Default        | Description                                                                             |
+| -------------------------- | -------- | -------------- | --------------------------------------------------------------------------------------- |
+| `name`                     | Yes      | (none)         | Display name                                                                            |
+| `slug`                     | No       | Auto-generated | Unique ID (lowercase, hyphens) for MQTT topics, InfluxDB tags                           |
+| `height`                   | Yes      | (none)         | Height in configured unit                                                               |
+| `birth_date`               | Yes      | (none)         | ISO date (`YYYY-MM-DD`)                                                                 |
+| `gender`                   | Yes      | (none)         | `male` or `female`                                                                      |
+| `is_athlete`               | No       | `false`        | Adjusts [body composition](/body-composition#athlete-mode) formulas                     |
+| `weight_range`             | No       | (none)         | `{ min, max }` in kg. Required for [multi-user](/multi-user) deployments                |
+| `last_known_weight`        | No       | `null`         | Auto-updated after each measurement                                                     |
+| `exporters`                | No       | (none)         | [Per-user exporter](/multi-user#per-user-exporters) overrides                           |
+| `beurer_pin`               | Beurer   | (none)         | Consent code the Beurer BF7xx / BF9xx scale was paired with                             |
+| `beurer_user_index`        | No       | `1`            | Scale user slot the consent code belongs to                                             |
+| `beurer_provision`         | No       | `false`        | Write this profile into a Beurer scale that has no stored user                          |
+| `beurer_register_new_user` | No       | `false`        | Create a new user record on the scale instead of consenting to one. One-shot; see below |
 
 ### Exporters
 
