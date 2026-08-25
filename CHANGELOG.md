@@ -4,6 +4,46 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.25.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.24.0...v1.25.0) (2026-08-25)
+
+
+### Added
+
+* **beurer:** register a SIG user record when consent has nothing to consent to ([a517737](https://github.com/KristianP26/ble-scale-sync/commit/a5177379ca0d18b1ad94068017e44da89c3aeca5)), closes [#335](https://github.com/KristianP26/ble-scale-sync/issues/335)
+* **ble:** env-gated raw BLE frame capture for protocol debugging ([#211](https://github.com/KristianP26/ble-scale-sync/issues/211)) ([9102b59](https://github.com/KristianP26/ble-scale-sync/commit/9102b5999d527885e11eda7a60bdcc03b03adada))
+* **notifications:** report the other exporters' results with report_exports ([#350](https://github.com/KristianP26/ble-scale-sync/issues/350)) ([3a237f6](https://github.com/KristianP26/ble-scale-sync/commit/3a237f61306b4c97a4732b1169c78af79dff6943))
+* **qn:** add ble.qn_report_byte so the history-response byte can be tested ([74bd6cd](https://github.com/KristianP26/ble-scale-sync/commit/74bd6cdfde79bf8a83bcd9827aed5be0d6cf48ea))
+* **scales:** add Salter SA00656/SA00432 ([#341](https://github.com/KristianP26/ble-scale-sync/issues/341)) ([7586389](https://github.com/KristianP26/ble-scale-sync/commit/7586389b14917fdefb969757e18deeb077c00a1a))
+* **scales:** add the Silvergear Smart Scale 108 broadcast adapter ([53ed2d2](https://github.com/KristianP26/ble-scale-sync/commit/53ed2d239020edbf9881a394bab89921a93819dd)), closes [#297](https://github.com/KristianP26/ble-scale-sync/issues/297)
+* **scales:** add Xiaomi Mi Smart Scale 2 XMTZC04HM adapter ([#353](https://github.com/KristianP26/ble-scale-sync/issues/353)) ([e8bc91a](https://github.com/KristianP26/ble-scale-sync/commit/e8bc91a85f0fb3af5ec3633f064aa83d24e6a919))
+
+
+### Fixed
+
+* **addon:** normalise the QN byte options and stop ignoring them in silence ([a1b7b41](https://github.com/KristianP26/ble-scale-sync/commit/a1b7b411d0d4f2b56e2ffe2f0841a52afc0ed9cb))
+* **beurer:** provision the date of birth in UTC so the day does not shift west of Greenwich ([#348](https://github.com/KristianP26/ble-scale-sync/issues/348)) ([cb5af45](https://github.com/KristianP26/ble-scale-sync/commit/cb5af454803ca68f77737d9bbc81e789703db952))
+* **beurer:** say so when the scale never answers the consent ([aadfaf0](https://github.com/KristianP26/ble-scale-sync/commit/aadfaf0075521018c20b3cece160fd79bfcd7387))
+* **ble:** measure the reading deadline as scale silence, not time since connect ([#351](https://github.com/KristianP26/ble-scale-sync/issues/351)) ([c50fb7c](https://github.com/KristianP26/ble-scale-sync/commit/c50fb7c77e38374e19d9b71ec63321677fa99c3a))
+* **ble:** reach broadcast-only and nameless scales on every transport ([0c0d8bb](https://github.com/KristianP26/ble-scale-sync/commit/0c0d8bbc29453d5513b4b49e9c06fb49dc02c424))
+* **ble:** release the notify subscription when adapter init loses the startup race ([6b2138e](https://github.com/KristianP26/ble-scale-sync/commit/6b2138eabf66ccc64bc2f4fb06e7e856c32045f3)), closes [#338](https://github.com/KristianP26/ble-scale-sync/issues/338)
+* **ble:** write the CCCD directly when the driver's subscribe fails ([e47e779](https://github.com/KristianP26/ble-scale-sync/commit/e47e7790e64f49a01fa9233150b2b8edb7ab7283))
+* **config:** ignore watcher events that leave the config content unchanged ([#349](https://github.com/KristianP26/ble-scale-sync/issues/349)) ([c66b6e7](https://github.com/KristianP26/ble-scale-sync/commit/c66b6e77bdae7d34c96690a99957889cd3d3e215))
+* **docker:** install Python 3.12 for garminconnect 0.3.11 and keep the arm/v7 base ([#352](https://github.com/KristianP26/ble-scale-sync/issues/352)) ([6eeecb3](https://github.com/KristianP26/ble-scale-sync/commit/6eeecb3596c3d1f9836f34383fc6045fd39c5911))
+* **hutbit:** claim a named Lefu FFB0 advert that omits the D618 service ([4413599](https://github.com/KristianP26/ble-scale-sync/commit/441359984a85b828a488be90060d8b9b1d9c0332)), closes [#322](https://github.com/KristianP26/ble-scale-sync/issues/322)
+* **mqtt-proxy:** stop leaking message listeners from timed-out and failed GATT sessions ([#339](https://github.com/KristianP26/ble-scale-sync/issues/339)) ([cc2a050](https://github.com/KristianP26/ble-scale-sync/commit/cc2a0508515c70ac2bc1cdf1e3fd0eb697f2d670))
+* **notifications:** format weight, muscle and bone in the configured weight unit ([#347](https://github.com/KristianP26/ble-scale-sync/issues/347)) ([013810e](https://github.com/KristianP26/ble-scale-sync/commit/013810ef7dbe4c9d6774a0769a1efe726c27e782))
+* **qn:** apply the protocol byte override to the classic dialect and the pre-0x12 phases ([#337](https://github.com/KristianP26/ble-scale-sync/issues/337)) ([86352a7](https://github.com/KristianP26/ble-scale-sync/commit/86352a7558d3a50b27527c8e7e4b6697e5f16bcb))
+* **qn:** extend the 0xFC history-response byte to the es26m dialect ([be9bc13](https://github.com/KristianP26/ble-scale-sync/commit/be9bc139560bc662c80f528cdf12e8cd568e351e))
+* **qn:** send 0xFC in the history response on the extended dialect ([26553d2](https://github.com/KristianP26/ble-scale-sync/commit/26553d2e6ae1ddbcb234e2350475cb0007208ddc)), closes [#235](https://github.com/KristianP26/ble-scale-sync/issues/235)
+* **scan:** match on the advertisement in the node-ble discovery tool ([13e2a2e](https://github.com/KristianP26/ble-scale-sync/commit/13e2a2ed2069c943ad2d5382e8ca95fa49ccb5f1)), closes [#280](https://github.com/KristianP26/ble-scale-sync/issues/280)
+* **silvergear:** read only the low five bits of the last byte as a checksum ([7b30776](https://github.com/KristianP26/ble-scale-sync/commit/7b3077685bb4711fabdfcfe0e07c6f40c58e8ebc)), closes [#297](https://github.com/KristianP26/ble-scale-sync/issues/297)
+
+
+### Docs
+
+* correct the adapter file map, the MGB routing note and the ble example ([fc100ed](https://github.com/KristianP26/ble-scale-sync/commit/fc100ede35bee2c3d11c1ca1a76a95e80041afde))
+* **readme:** add the contributors whose code has been merged ([8fe22c8](https://github.com/KristianP26/ble-scale-sync/commit/8fe22c8e0b1443b78423e5a448ecc3dea9256f42))
+
 ## [1.24.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.23.0...v1.24.0) (2026-08-21)
 
 
