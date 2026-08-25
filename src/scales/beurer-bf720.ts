@@ -221,6 +221,16 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
   private emptyListReported = false;
   /** Whether the scale accepted the consent code this session. */
   private consentAccepted = false;
+  /**
+   * Whether the scale answered the consent write at all this session, with any
+   * result. Distinct from {@link consentAccepted}: a rejection is answered and
+   * already warns, whereas silence produces no diagnostic of its own and is the
+   * failure mode behind #83, #290 and #335. The session then ends as a bare
+   * "disconnected before reading completed", which says nothing about consent.
+   */
+  private consentAnswered = false;
+  /** Whether a consent write went out this session (gates the silence warning). */
+  private consentSent = false;
   /** Whether a reading was emitted this session (gates the session-end warning). */
   private readingEmitted = false;
   /**
@@ -333,6 +343,8 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     this.userListAnswered = false;
     this.emptyListReported = false;
     this.consentAccepted = false;
+    this.consentAnswered = false;
+    this.consentSent = false;
     this.readingEmitted = false;
 
     await ctx.write(CHR_CURRENT_TIME, this.buildCurrentTime(), true);
@@ -354,6 +366,7 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
       [UCP_CONSENT, userIndex & 0xff, pin & 0xff, (pin >> 8) & 0xff],
       true,
     );
+    this.consentSent = true;
     bleLog.debug(`Beurer BF720: consent sent for user index ${userIndex}`);
   }
 
@@ -585,6 +598,7 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
       );
       return;
     }
+    this.consentAnswered = true;
     const result = data[2];
     const name = UCP_RESULTS[result] ?? `0x${result.toString(16).padStart(2, '0')}`;
     if (result === UCP_RESULT_SUCCESS) {
@@ -614,6 +628,26 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
    * local, so an in-flight commit still finishes.
    */
   onSessionEnd(): void {
+    // Consent written and never answered. The scale says nothing at all in this
+    // case, so without this line the session ends as a plain "disconnected
+    // before reading completed" and the consent is not even implicated, let
+    // alone the slot. A wrong slot is indistinguishable from a wrong code and
+    // from the scale being asleep, and all three have been reported as "the
+    // adapter receives nothing" (#83, #290, #335).
+    //
+    // The slot is worth naming because it is the half people do not think to
+    // check: a vendor-app trace of a BF950 addresses user index 2, while this
+    // adapter defaults to 1, and a profile that was ever recreated or shared
+    // with a second person is unlikely to sit first in the scale's own list.
+    if (this.consentSent && !this.consentAnswered) {
+      bleLog.warn(
+        `Beurer BF720: the scale never answered the consent for user index ` +
+          `${this.userIndex}. It rejects nothing and reports nothing in this state, so a ` +
+          `wrong slot looks exactly like a wrong code. If the code is right, try ` +
+          `users[].beurer_user_index 2 and then 3: the slot is the position your profile ` +
+          `occupies in the scale's own user list, which is not always the first.`,
+      );
+    }
     // Only when nothing was emitted at all. cachedComp is reset by every zeroed
     // composition stub, so testing it alone would fire on a successful session
     // that happened to end with a stub.

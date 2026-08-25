@@ -874,6 +874,46 @@ describe('BeurerBf720Adapter', () => {
       } as unknown as ConnectionContext;
     }
 
+    // Silence after the consent write is the failure mode behind #83, #290 and
+    // #335: the scale rejects nothing and reports nothing, so the session ends
+    // as a bare "disconnected before reading completed" and never implicates
+    // the consent, let alone the slot.
+    it('warns when the scale never answers the consent, naming the slot', async () => {
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      try {
+        const a = makeAdapter();
+        await a.onConnected(ctxWith({}));
+        await settle();
+        // No UCP indication at all, then the session ends.
+        a.onSessionEnd!();
+        const msg = warn.mock.calls.flat().join(' ');
+        expect(msg).toContain('never answered the consent');
+        expect(msg).toContain('user index 1');
+        expect(msg).toContain('beurer_user_index');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('does not warn about consent silence once the scale has answered', async () => {
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      try {
+        const a = makeAdapter();
+        await a.onConnected(ctxWith({}));
+        await settle();
+        // A rejection is still an answer: it has its own warning and must not
+        // also produce the silence one, or the log names two different causes.
+        a.parseCharNotification(UCP, Buffer.from('200205', 'hex'));
+        await settle();
+        a.onSessionEnd!();
+        const msg = warn.mock.calls.flat().join(' ');
+        expect(msg).not.toContain('never answered the consent');
+        expect(msg).toContain('USER_NOT_AUTHORIZED');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
     // Erased flash reads back as 0xff. An unbounded floor accepted 0xffff as a
     // birth year and as a 65535 cm height, so provisioning wrote it straight
     // back and the scale kept the garbage.
