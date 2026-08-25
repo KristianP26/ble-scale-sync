@@ -53,6 +53,25 @@ function tsOf(record: Buffer): number {
   return record.readUInt32LE(2);
 }
 
+/** A copy of `record` restamped `secondsAgo` before `nowTs`. */
+function aged(record: Buffer, nowTs: number, secondsAgo: number): Buffer {
+  const b = Buffer.from(record);
+  b.writeUInt32LE(nowTs - secondsAgo, 2);
+  return b;
+}
+
+/**
+ * Feed the clock reply that every real sweep sends before any record, placing
+ * the scale's clock `ageSec` after `record`'s stamp.
+ *
+ * Records are judged for age against this clock, so a test that parses a record
+ * without one is testing a state the protocol never produces.
+ */
+function primed(adapter: SalterAdapter, record: Buffer, ageSec = 10): SalterAdapter {
+  adapter.parseNotification(clockReply(tsOf(record), ageSec));
+  return adapter;
+}
+
 /** Render a command byte array as hex, for the "no destructive write" check. */
 function a2h(bytes: number[]): string {
   return Buffer.from(bytes).toString('hex');
@@ -94,33 +113,37 @@ describe('SalterAdapter', () => {
 
   describe('parseNotification() — measurement records', () => {
     it('decodes the weight from a bare-foot record (87.6 kg)', () => {
-      parseOk(makeAdapter(), REC_876_BIA, { weight: 87.6, impedance: 0 });
+      parseOk(primed(makeAdapter(), REC_876_BIA), REC_876_BIA, { weight: 87.6, impedance: 0 });
     });
 
     it('decodes the same weight from a socks-on record with no composition', () => {
       // Same person, 104 s apart, no electrode contact: the six derived fields
       // are all zero while the weight is byte-identical. Weight must not depend
       // on whether the scale managed a bioimpedance sweep.
-      parseOk(makeAdapter(), REC_876_SOCKS, { weight: 87.6, impedance: 0 });
+      parseOk(primed(makeAdapter(), REC_876_SOCKS), REC_876_SOCKS, { weight: 87.6, impedance: 0 });
       expect(REC_876_SOCKS.subarray(8).every((b) => b === 0)).toBe(true);
     });
 
     it('decodes records from every slot, not just one fixed index', () => {
       // Real sweep of a live unit: measurements sat in slots 2, 6 and 7 with the
       // rest empty. An adapter that reads one hardcoded slot sees none of these.
-      expect(makeAdapter().parseNotification(REC_897_SLOT2)?.weight).toBeCloseTo(89.7, 4);
-      expect(makeAdapter().parseNotification(REC_74_SLOT6)?.weight).toBeCloseTo(7.4, 4);
-      expect(makeAdapter().parseNotification(REC_888_SLOT7)?.weight).toBeCloseTo(88.8, 4);
+      for (const [rec, kg] of [
+        [REC_897_SLOT2, 89.7],
+        [REC_74_SLOT6, 7.4],
+        [REC_888_SLOT7, 88.8],
+      ] as const) {
+        expect(primed(makeAdapter(), rec).parseNotification(rec)?.weight).toBeCloseTo(kg, 4);
+      }
     });
 
     it('decodes a record captured from the vendor app (85.7 kg)', () => {
-      parseOk(makeAdapter(), REC_857_APP, { weight: 85.7, impedance: 0 });
+      parseOk(primed(makeAdapter(), REC_857_APP), REC_857_APP, { weight: 85.7, impedance: 0 });
     });
 
     it('reports no impedance — the protocol carries none', () => {
       // The scale measures bioimpedance but exposes only values it derived from
       // it, never the raw ohms.
-      expect(makeAdapter().parseNotification(REC_876_BIA)!.impedance).toBe(0);
+      expect(primed(makeAdapter(), REC_876_BIA).parseNotification(REC_876_BIA)!.impedance).toBe(0);
     });
 
     it('rejects empty slots and the unset slot 0', () => {
@@ -148,11 +171,13 @@ describe('SalterAdapter', () => {
     it('reports a given stored measurement only once', () => {
       // Nothing is ever cleared, so the same record is re-read on every sweep
       // for as long as it sits in the buffer.
-      const a = makeAdapter();
+      const a = primed(makeAdapter(), REC_876_BIA);
       expect(a.parseNotification(REC_876_BIA)).not.toBeNull();
       a.onSessionEnd();
+      a.parseNotification(clockReply(tsOf(REC_876_BIA), 20));
       expect(a.parseNotification(REC_876_BIA)).toBeNull();
       a.onSessionEnd();
+      a.parseNotification(clockReply(tsOf(REC_876_BIA), 30));
       expect(a.parseNotification(REC_876_BIA)).toBeNull();
     });
 
@@ -160,7 +185,7 @@ describe('SalterAdapter', () => {
       // Slots are read in index order, which is not chronological: here the
       // newest (slot 2) is read first and the older ones must not displace it.
       // The handler resolves with the last reading it was given.
-      const a = makeAdapter();
+      const a = primed(makeAdapter(), REC_897_SLOT2);
       const emitted = [REC_897_SLOT2, REC_74_SLOT6, REC_888_SLOT7]
         .map((r) => a.parseNotification(r))
         .filter((r) => r !== null);
@@ -171,8 +196,18 @@ describe('SalterAdapter', () => {
     it('emits an ascending sweep in order, ending on the newest', () => {
       // When older slots are read first, each newer record supersedes the last,
       // so the final emission is still the newest.
+      // Restamped inside the acceptance window, because the captures span 68
+      // minutes and a record that old is history rather than this weigh-in.
+      // The ordering behaviour under test is unchanged by the restamping.
+      const now = tsOf(REC_897_SLOT2);
       const a = makeAdapter();
-      const weights = [REC_857_APP, REC_876_BIA, REC_880_SLOT1, REC_897_SLOT2]
+      a.parseNotification(clockReply(now, 5));
+      const weights = [
+        aged(REC_857_APP, now, 40),
+        aged(REC_876_BIA, now, 30),
+        aged(REC_880_SLOT1, now, 20),
+        aged(REC_897_SLOT2, now, 10),
+      ]
         .map((r) => a.parseNotification(r))
         .filter((r) => r !== null)
         .map((r) => r!.weight);
@@ -182,11 +217,51 @@ describe('SalterAdapter', () => {
     it('ignores months-old readings the scale still holds', () => {
       // The scale wakes because someone stood on it, so anything older than what
       // has already been reported is a past weigh-in, not a new measurement.
-      const a = makeAdapter();
+      const a = primed(makeAdapter(), REC_897_SLOT2);
       expect(a.parseNotification(REC_897_SLOT2)?.weight).toBeCloseTo(89.7, 4);
       a.onSessionEnd();
+      a.parseNotification(clockReply(tsOf(REC_897_SLOT2), 20));
       expect(a.parseNotification(REC_857_APP)).toBeNull();
       expect(a.parseNotification(REC_876_BIA)).toBeNull();
+    });
+
+    // THE failure this bound exists for. `lastReportedTs` is in-memory and starts
+    // at zero, so on the first session after any restart it suppresses nothing,
+    // and the newest record the scale still holds would be published as today's
+    // weight however old it is. This project shipped exactly that bug once on
+    // another protocol family, where a stored record six days old published
+    // 67.10 kg for a 75 kg user.
+    it('refuses a stale stored record on the first session of a fresh process', () => {
+      const a = makeAdapter();
+      // Nothing reported yet: the high-water mark is zero and cannot help.
+      a.parseNotification(clockReply(tsOf(REC_897_SLOT2), 3 * 24 * 3600));
+      expect(a.parseNotification(REC_897_SLOT2)).toBeNull();
+    });
+
+    it('accepts a record inside the window and refuses one just outside it', () => {
+      const now = tsOf(REC_897_SLOT2);
+      const inside = makeAdapter();
+      inside.parseNotification(clockReply(now, 0));
+      expect(inside.parseNotification(aged(REC_897_SLOT2, now, 299))?.weight).toBeCloseTo(89.7, 4);
+
+      const outside = makeAdapter();
+      outside.parseNotification(clockReply(now, 0));
+      expect(outside.parseNotification(aged(REC_897_SLOT2, now, 301))).toBeNull();
+    });
+
+    it('refuses any record until the clock has been read', () => {
+      // Age is the only thing separating this weigh-in from the buffer behind
+      // it, and without a clock there is nothing to measure age against. The
+      // sweep always reads the clock first, so this state is defensive.
+      //
+      // The record is stamped at the host's own wall clock on purpose. With no
+      // clock reply the adapter's zeroed clock reads as the unix epoch plus the
+      // process uptime, so a record stamped anywhere near now looks brand new
+      // and sails past the age bound. Only the no-clock gate rejects this one,
+      // which is what makes this test pin that gate rather than the bound.
+      const nowUnix = Math.floor(Date.now() / 1000);
+      const a = makeAdapter();
+      expect(a.parseNotification(aged(REC_897_SLOT2, nowUnix, 5))).toBeNull();
     });
 
     it('never emits a historical reading', () => {
@@ -220,7 +295,7 @@ describe('SalterAdapter', () => {
       // THE trap in a high-water mark: a reset clock stamps every future
       // weigh-in below the mark, so without noticing the clock went backwards
       // the adapter would suppress every reading from then on, silently.
-      const a = makeAdapter();
+      const a = primed(makeAdapter(), REC_897_SLOT2);
       expect(a.parseNotification(REC_897_SLOT2)).not.toBeNull(); // mark: 6a8a14fa
       a.onSessionEnd();
 
@@ -319,7 +394,7 @@ describe('SalterAdapter', () => {
     });
 
     it('produces a body-composition payload in valid ranges', () => {
-      const a = makeAdapter();
+      const a = primed(makeAdapter(), REC_876_BIA);
       const reading = parseOk(a, REC_876_BIA);
       const payload = expectValidMetrics(a, reading);
       expect(payload.weight).toBeCloseTo(87.6, 4);
@@ -328,7 +403,7 @@ describe('SalterAdapter', () => {
     it('estimates composition from the configured profile, not the scale', () => {
       // The scale's own derived values are computed from whatever profile was
       // last written into the device — on the decoded unit, a 100 cm height.
-      const a = makeAdapter();
+      const a = primed(makeAdapter(), REC_876_BIA);
       const reading = parseOk(a, REC_876_BIA);
       const short = a.computeMetrics(reading, defaultProfile({ height: 165 }));
       const tall = a.computeMetrics(reading, defaultProfile({ height: 195 }));

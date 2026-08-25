@@ -48,6 +48,26 @@ const CLOCK_REPLY_LEN = 5;
 const FUTURE_TOLERANCE_SEC = 60;
 
 /**
+ * How far BEHIND the scale's own clock a record may be and still count as this
+ * weigh-in.
+ *
+ * Without this bound the only staleness guard is `lastReportedTs`, an in-memory
+ * high-water mark that starts at zero on every process start. The first session
+ * after a restart would therefore accept the newest record the scale still
+ * holds, whatever its age, and publish it as today's weight. This project has
+ * already shipped that bug once on another protocol family, where a stored
+ * record six days old published 67.10 kg for a 75 kg user, and it reads as "the
+ * numbers are occasionally wrong" rather than as an obvious failure.
+ *
+ * Five minutes is deliberately generous rather than tight. The scale records a
+ * weigh-in the moment it settles and the host may only poll a little later: the
+ * sweep restarts every few seconds, but a continuous-mode run reconnects on its
+ * own cadence, and someone who steps off before the host connects should still
+ * get their reading. Anything older than this is buffer the scale never forgets.
+ */
+const MAX_RECORD_AGE_SEC = 300;
+
+/**
  * Number of record slots the scale keeps. Measurements land in a rotating
  * buffer, NOT in one fixed place: a sweep of a live unit found records sitting
  * at indices 2, 6 and 7 with the rest empty, and the index a given weigh-in
@@ -290,6 +310,25 @@ export class SalterAdapter
 
     if (this.isFromAnotherEpoch(timestamp)) return null;
 
+    // Every record this scale returns is a stored one, so age is the only thing
+    // separating the weigh-in that just happened from the buffer behind it.
+    // Without a clock there is nothing to measure age against, and a record of
+    // unknown age must not be published as today's weight. The sweep always
+    // reads the clock before any record, so this is defensive rather than a
+    // state the protocol produces.
+    if (!this.clockSec) {
+      bleLog.debug(`Salter: record from slot ${data[0]} ignored, no clock read yet`);
+      return null;
+    }
+    const ageSec = this.scaleNow() - timestamp;
+    if (ageSec > MAX_RECORD_AGE_SEC) {
+      bleLog.debug(
+        `Salter: ignoring stored record from slot ${data[0]}, ` +
+          `${Math.round(ageSec)}s old (limit ${MAX_RECORD_AGE_SEC}s)`,
+      );
+      return null;
+    }
+
     // Newest wins. Older records are past weigh-ins the scale simply never
     // forgets; only a record newer than anything reported before is a new
     // measurement, and emitting them in ascending order leaves the newest as the
@@ -297,8 +336,23 @@ export class SalterAdapter
     if (timestamp <= this.lastReportedTs) return null;
     this.lastReportedTs = timestamp;
 
-    bleLog.debug(`Salter: ${weight.toFixed(1)} kg from slot ${data[0]} (stamp ${timestamp})`);
+    bleLog.debug(
+      `Salter: ${weight.toFixed(1)} kg from slot ${data[0]} ` +
+        `(stamp ${timestamp}, ${Math.round(ageSec)}s old)`,
+    );
+    // Deliberately UNDATED, even though every record here is a stored one.
+    // Setting `ScaleReading.timestamp` routes a reading into the cache-replay
+    // buffer in `waitForRawReading`, which returns early and only drains on
+    // disconnect. This adapter holds the link open and polls until the session
+    // times out, and a timeout rejects, so a dated reading would be buffered and
+    // never delivered. The age bound above is what replaces the platform's own
+    // replay protections, which undated readings do not get.
     return { weight, impedance: 0 };
+  }
+
+  /** The scale's clock, advanced by the time since it was read. */
+  private scaleNow(): number {
+    return this.clockSec + (Date.now() - this.clockAt) / 1000;
   }
 
   /**
@@ -335,8 +389,7 @@ export class SalterAdapter
    */
   private isFromAnotherEpoch(timestamp: number): boolean {
     if (!this.clockSec) return false; // no clock yet: nothing to compare against
-    const clockNow = this.clockSec + (Date.now() - this.clockAt) / 1000;
-    return timestamp > clockNow + FUTURE_TOLERANCE_SEC;
+    return timestamp > this.scaleNow() + FUTURE_TOLERANCE_SEC;
   }
 
   /**
