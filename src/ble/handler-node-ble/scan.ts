@@ -629,13 +629,32 @@ export async function scanDevices(
 
         try {
           const dev = await btAdapter.getDevice(addr);
-          const name = await dev.getName().catch(() => '(unknown)');
-          const info: BleDeviceInfo = { localName: name, serviceUuids: [] };
+          // Match on what the read path matches on, not on the name alone.
+          // This tool is what users are pointed at to discover the adapter name
+          // for `ble.force_scale_adapter`, so an answer that differs from what a
+          // real run would choose gets acted on. The advertisement snapshot is
+          // the same one the connect path uses, and it carries the manufacturer
+          // data a dozen adapters fingerprint on (#280).
+          //
+          // The name is read as '' rather than a sentinel for the same reason as
+          // the Noble tool: a placeholder is truthy, and adapters that branch on
+          // whether an advertisement carries a name would read a nameless device
+          // as named.
+          const name = await dev.getName().catch(() => '');
+          const advert = await logAdvertisementSnapshot(dev).catch(() => undefined);
+          const info: BleDeviceInfo = {
+            localName: name,
+            serviceUuids: [],
+            ...(advert?.manufacturerData ? { manufacturerData: advert.manufacturerData } : {}),
+            ...(advert?.serviceData && advert.serviceData.length > 0
+              ? { serviceData: advert.serviceData }
+              : {}),
+          };
           const matched = resolveAdapter(info, adapters);
 
           results.push({
             address: addr,
-            name,
+            name: name || '(unknown)',
             matchedAdapter: matched?.name,
           });
         } catch {
