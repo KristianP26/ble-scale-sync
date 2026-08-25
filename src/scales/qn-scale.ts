@@ -142,6 +142,23 @@ const SCALE_EPOCH_OFFSET = 946684800;
 const REPORT_BYTE_DEFAULT = 0xfe;
 
 /**
+ * Report byte for the 20-byte extended dialect (#235).
+ *
+ * Unlike the default above, this one is not an inference. A vendor-app HCI
+ * capture of a scale on this dialect writes `a0 0d 04 fc ...` five times across
+ * three weigh-ins and never sends 0xFE, the scale acknowledges each one by
+ * echoing the byte back as `a1 07 04 fc 01 10 b9`, and 59 live 0x10 weight
+ * frames follow. So on this firmware 0xFC is simply what the protocol uses.
+ *
+ * Gated on the dialect for the reason this file already applies to the
+ * measurement trigger a few lines below: the capture covers this firmware and
+ * no other, every other QN variant in the registry reads today on 0xFE, and an
+ * unexplained change is not something to hand them on spec. `ble.qn_report_byte`
+ * overrides either value if a unit disagrees.
+ */
+const REPORT_BYTE_EXTENDED = 0xfc;
+
+/**
  * Grace period (ms) to wait for an impedance frame after the first stable
  * R1=R2=0 frame on long-frame variants (e.g. ES-26M). If an impedance frame
  * arrives within this window, it supersedes the weight-only reading. If not,
@@ -1168,12 +1185,13 @@ export class QnScaleAdapter
     const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
     // A00D response 1 (from openScale QNHandler). byte[3] is the payload byte
-    // `ble.qn_report_byte` overrides; see REPORT_BYTE_DEFAULT.
+    // `ble.qn_report_byte` overrides; see REPORT_BYTE_DEFAULT / _EXTENDED.
+    const dialectDefault = this.isExtendedLongFrame ? REPORT_BYTE_EXTENDED : REPORT_BYTE_DEFAULT;
     const msg1 = [
       0xa0,
       0x0d,
       0x04,
-      this.forcedReportByte ?? REPORT_BYTE_DEFAULT,
+      this.forcedReportByte ?? dialectDefault,
       0x00,
       0x00,
       0x00,
@@ -1185,13 +1203,12 @@ export class QnScaleAdapter
       0x00,
     ];
     msg1[12] = msg1.reduce((a, b) => a + b, 0) & 0xff;
-    if (this.forcedReportByte !== null) {
-      bleLog.debug(
-        `QN: history response byte forced to ` +
-          `0x${this.forcedReportByte.toString(16).padStart(2, '0')} ` +
-          `(default 0x${REPORT_BYTE_DEFAULT.toString(16)})`,
-      );
-    }
+    bleLog.debug(
+      `QN: history response byte 0x${msg1[3].toString(16).padStart(2, '0')}` +
+        (this.forcedReportByte !== null
+          ? ` (forced; dialect default 0x${dialectDefault.toString(16)})`
+          : ` (dialect default)`),
+    );
     await this.writeCmd(msg1);
 
     await wait(200);

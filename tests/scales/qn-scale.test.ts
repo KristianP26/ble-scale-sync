@@ -1390,11 +1390,28 @@ describe('AE02 dispatch (#75, #235)', () => {
     // The A00D history-response pair had no coverage at all before #235/#75
     // put its payload byte in question, so these pin both the default and the
     // override.
-    it('sends the A00D history response with the default payload byte 0xFE', async () => {
+    // A vendor-app capture of this dialect writes 0xFC five times across three
+    // weigh-ins, never 0xFE, the scale echoes it back as `a1 07 04 fc 01 10 b9`,
+    // and 59 live 0x10 frames follow (#235).
+    it('sends the A00D history response with 0xFC on the extended dialect', async () => {
       const adapter = makeAdapter();
       const writes = await driveHandshake(adapter, makeExtendedScaleInfo());
       const msg1 = writes.find((w) => w[0] === 0xa0 && w[2] === 0x04);
       expect(msg1).toBeDefined();
+      expect(msg1![3]).toBe(0xfc);
+      expect(msg1![12]).toBe(msg1!.slice(0, 12).reduce((a, b) => a + b, 0) & 0xff);
+    });
+
+    // Everything that is not the captured firmware keeps the value it reads on
+    // today. The capture covers one dialect and says nothing about the others.
+    it('leaves the classic dialect on 0xFE', async () => {
+      const adapter = makeAdapter();
+      const info = Buffer.alloc(11);
+      info[0] = 0x12;
+      info[2] = 0xab;
+      info[10] = 1;
+      const writes = await driveHandshake(adapter, info);
+      const msg1 = writes.find((w) => w[0] === 0xa0 && w[2] === 0x04);
       expect(msg1![3]).toBe(0xfe);
       expect(msg1![12]).toBe(msg1!.slice(0, 12).reduce((a, b) => a + b, 0) & 0xff);
     });
