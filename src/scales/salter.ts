@@ -26,16 +26,30 @@ const CHR_FFC1 = uuid16(0xffc1);
  * on FFC1.
  *
  * Not used here, but decoded and recorded so the next person does not have to:
- *   01 <unix u32 LE>   set the clock          02  read the clock
  *   03 <i> <5 bytes>   write a user profile   04 <i>  read one back
  *   08 <i>             record-status probe    0a <i> 00  clear a record
  */
+const CMD_SET_CLOCK = 0x01; // `01 <seconds u32 LE>` -> `01 00`; only when unset
 const CMD_PING = 0x0b; // keepalive; the vendor app sends it before every poll
 const CMD_CLOCK = 0x02; // `02` → `02 <seconds u32 LE>`, the scale's own clock
 const CMD_FETCH = 0x09; // `09 <index> 00` → the 20-byte record in that slot
 
 /** `02 <u32 LE>`: opcode plus the clock, five bytes. */
 const CLOCK_REPLY_LEN = 5;
+
+/** `01 00`: the scale's acknowledgement of a clock write. */
+const SET_CLOCK_ACK_LEN = 2;
+
+/**
+ * Below this the scale's clock is not a wall clock, so it has never been set.
+ *
+ * A scale whose batteries have just been changed counts up from zero, and in
+ * that state it stores no measurements at all (see the class comment). This
+ * separates the two cases cleanly: 2020-09-13 is long past, so any real Unix
+ * time the scale could hold is above it, while a bare uptime counter would need
+ * fifty years of running to reach it.
+ */
+const MIN_PLAUSIBLE_CLOCK_SEC = 1_600_000_000;
 
 /**
  * How far ahead of the scale's clock a record may legitimately be stamped.
@@ -68,10 +82,21 @@ const FUTURE_TOLERANCE_SEC = 60;
 const MAX_RECORD_AGE_SEC = 300;
 
 /**
- * Number of record slots the scale keeps. Measurements land in a rotating
- * buffer, NOT in one fixed place: a sweep of a live unit found records sitting
- * at indices 2, 6 and 7 with the rest empty, and the index a given weigh-in
- * occupies is not predictable from anything the client can see.
+ * Plausibility ceiling on the decoded weight, matching `koogeek-s1.ts`.
+ *
+ * The weight field is a bare u16, so on its own it accepts up to 6553.5 kg. Any
+ * 20-byte frame whose first byte is under 8 is treated as a record here, so a
+ * garbled frame, or a firmware variant answering some other opcode with a
+ * 20-byte reply, would otherwise decode to an absurd weight and be exported.
+ * No matching floor: the 7.4 kg fixture shows light loads are legitimate.
+ */
+const MAX_WEIGHT_KG = 300;
+
+/**
+ * Number of record indexes the scale exposes. Measurements are NOT kept in one
+ * fixed place: a sweep of a live unit found records at indices 2, 6 and 7 with
+ * the rest empty, and the index a given weigh-in occupies is not predictable
+ * from anything the client can see, so all of them are read.
  */
 const RECORD_SLOTS = 8;
 
@@ -116,6 +141,12 @@ function isRecord(data: Buffer): boolean {
   return data.length === RECORD_LEN && data[0] < RECORD_SLOTS;
 }
 
+/** `01 <unix seconds u32 LE>`: set the scale's clock to the host's time. */
+function setClockCommand(): number[] {
+  const now = Math.floor(Date.now() / 1000);
+  return [CMD_SET_CLOCK, now & 0xff, (now >>> 8) & 0xff, (now >>> 16) & 0xff, (now >>> 24) & 0xff];
+}
+
 /**
  * Adapter for Salter Bluetooth body-analyser scales (SALTER-SA00656-BK and the
  * SA00432 firmware family it reports in its Device Information Service; the
@@ -133,27 +164,62 @@ function isRecord(data: Buffer): boolean {
  *   -> 09 01 00     <- ...                    each reply triggers the next
  *   -> 09 02 00     <- 02 00 <ts> <record>    slot 2, a real measurement
  *
- * MEASUREMENTS SIT IN A ROTATING EIGHT-SLOT BUFFER, AND ONLY THE NEWEST MATTERS.
- * The scale stores each weigh-in and keeps it; a live sweep found records at
- * indices 2, 6 and 7 with the rest empty, and which slot a weigh-in lands in is
- * not predictable. So every slot is read and the newest timestamp wins.
+ * IT ALSO STORES NOTHING UNTIL ITS CLOCK IS SET, which is why the one write this
+ * adapter makes that CHANGES anything on the device is `01 <unix u32 LE>`, and
+ * only when it finds the clock unset. Everything else it sends is a read.
+ * Changing the batteries restarts that clock at zero, and in that state the unit
+ * commits no measurements whatsoever: fourteen slot sweeps either side of a real
+ * 88.5 kg weigh-in came back empty, every `08 <i>` counter reading 0, on a scale
+ * that was otherwise answering every command. Writing the clock fixed it
+ * outright, the next weigh-in committing immediately and reading back at age
+ * zero with its composition intact. Without that write the adapter reads empty
+ * slots forever on healthy hardware, which is indistinguishable from a scale
+ * that is not talking at all, and a battery change is enough to cause it.
  *
- * That buffer is not treated as history to be replayed. The scale only wakes
- * because somebody stood on it, so the newest record IS this weigh-in; the older
- * ones are past readings already dealt with, some of them months old. Reporting
- * them would overwrite today's numbers with last month's. Records arrive in slot
- * order, which is not chronological, so the newest-wins rule is also what makes
- * the reading that resolves the session the right one rather than whichever slot
- * happened to be read first.
+ * A clock that is already set is LEFT ALONE; see {@link MIN_PLAUSIBLE_CLOCK_SEC}.
+ * The vendor app writes local time into that UTC field and the scale drifts
+ * about 24 s an hour, so its clock disagrees with the host by an hour or more,
+ * and re-syncing would move the time base its own history is dated against.
+ * Nothing here needs the two clocks to agree: every record is judged against the
+ * scale's own clock, which cancels both the offset and the drift. QN (`0x20`)
+ * and MGB both re-sync on every session; this one is deliberately narrower.
+ *
+ * MEASUREMENTS ARE STORED, AND WHICH INDEX HOLDS WHAT IS NOT PREDICTABLE. The
+ * scale keeps every weigh-in and `08 <i>` counts what is waiting; a live sweep
+ * found records at indices 2, 6 and 7 with the rest empty. Reads are stable and
+ * non-destructive: index 1 returned byte-identical data on fourteen consecutive
+ * reads in one session. So every index is read and the newest record wins.
+ *
+ * The store is not treated as history to be replayed. The older entries are past
+ * readings already dealt with, some of them months old, and reporting them would
+ * overwrite today's numbers with last month's. Records arrive in index order,
+ * which is not chronological, so newest-wins is also what stops the reading that
+ * resolves the session being whichever index happened to be read first.
+ *
+ * NEWEST IN THE STORE IS NOT THE SAME AS TAKEN JUST NOW, and on this hardware
+ * the gap can be large. Index 1 behaved as a queue head holding the OLDEST
+ * un-collected record rather than the newest: a weigh-in taken with nothing
+ * connected pushed `08 01` from 4 to 8 while index 1 kept returning a record 334
+ * seconds old, and one session exported a record stamped 6720 seconds before the
+ * scale's own clock. That is the failure {@link MAX_RECORD_AGE_SEC} exists to
+ * stop, and it is why the age gate is not belt-and-braces here but load-bearing.
  *
  * NOTHING IS EVER CLEARED. The protocol has a clear (`0a <index> 00`) and the
  * vendor app uses it, but this adapter does not, and that is deliberate. An
- * earlier version fetched one fixed slot and cleared after each fetch; because
- * the clear consumes a record independently of which slot was read, it destroyed
- * three unread weigh-ins off a real user's scale before anyone noticed. Sweeping
- * and de-duplicating on the record's own timestamp achieves the same result with
- * no destructive write in the protocol at all — the scale's buffer rotates by
- * itself.
+ * earlier version fired the clear on a timer without reading first; because the
+ * clear consumes an entry whether or not anything read it, it destroyed unread
+ * weigh-ins off a real user's scale. A later run of twenty clears against a
+ * counter of twenty, with one real record present, left the store inconsistent
+ * for hours: the counter kept climbing while records stopped being retrievable,
+ * until a battery pull reset it.
+ *
+ * The cost of not clearing is that the store is never drained, so a backlog can
+ * keep an old record at the front indefinitely. Combined with the age gate that
+ * turns into reporting NOTHING rather than reporting something wrong, which is
+ * the right way round to fail. Whether one clear per connection, issued only
+ * after its record has been decoded, would drain safely is untested on a healthy
+ * scale: the observations above were made either side of a store this adapter's
+ * own probing had corrupted, so they justify caution rather than a design.
  *
  * THE SCALE IS OFF MOST OF THE TIME. It powers up when someone stands on it and
  * powers down after the reading and a short standby, taking its radio with it. A
@@ -195,8 +261,16 @@ export class SalterAdapter
     // advertised form and post-connect on the discovered one, and so a unit
     // whose local name is missing — as happens over the ESPHome proxy, where the
     // name lives in the scan response — is still recognised.
+    //
+    // FFC1 is deliberately NOT claimed as a `charUuids` match. A characteristic
+    // claim hits on its own, with no service or name qualifier, and at priority
+    // 125 that outranks every adapter from Hoffen (20) up to Exingtech Y1 (120):
+    // a device one of those matched pre-connect would be re-resolved to Salter
+    // by the post-discovery pass and then fail the whole read, because it does
+    // not speak the 0xFFCC protocol. The claim could not pay off anyway: a unit
+    // advertising neither the name nor 0xFFCC/0xCCFF never reaches discovery as
+    // a Salter, and one that does already matches on the service above.
     serviceUuids: ['ffcc', 'ccff'],
-    charUuids: [CHR_FFC1],
   };
 
   readonly charNotifyUuid = CHR_FFC1;
@@ -246,10 +320,29 @@ export class SalterAdapter
    *
    * The periodic clock read is what restarts the walk, so a dropped reply costs
    * one cycle rather than stalling the session.
+   *
+   * The clock reply is also where an unset clock is caught and set, because a
+   * scale in that state has nothing in its slots to walk. The write is answered
+   * with `01 00`, which is chained straight back into another clock read so the
+   * walk still starts inside the same cycle.
    */
   buildAck(data: Buffer): number[] | null {
     if (data.length === CLOCK_REPLY_LEN && data[0] === CMD_CLOCK) {
+      if (data.readUInt32LE(1) < MIN_PLAUSIBLE_CLOCK_SEC && !this.clockSyncSent) {
+        // Once per session. A write that does not take leaves the slots empty
+        // and the session yields nothing, which the next connection retries;
+        // retrying inside this one would only spin.
+        this.clockSyncSent = true;
+        bleLog.info(
+          "Salter: the scale's clock is unset (new batteries?); setting it, " +
+            'or it will not store the weigh-in',
+        );
+        return setClockCommand();
+      }
       return [CMD_FETCH, 0, 0x00];
+    }
+    if (data.length === SET_CLOCK_ACK_LEN && data[0] === CMD_SET_CLOCK) {
+      return [CMD_CLOCK]; // re-read it, and pick the walk up from there
     }
     if (isRecord(data)) {
       const next = data[0] + 1;
@@ -284,6 +377,9 @@ export class SalterAdapter
   private clockSec = 0;
   private clockAt = 0;
 
+  /** Whether this session has already written the clock; see {@link buildAck}. */
+  private clockSyncSent = false;
+
   matches(device: BleDeviceInfo): boolean {
     return matchesDescriptor(device, this.match);
   }
@@ -306,7 +402,7 @@ export class SalterAdapter
     if (timestamp === 0 || timestamp === TIMESTAMP_UNSET) return null; // empty slot
 
     const weight = data.readUInt16LE(WEIGHT_OFFSET) / WEIGHT_DIV;
-    if (!(weight > 0) || !Number.isFinite(weight)) return null;
+    if (!(weight > 0) || !Number.isFinite(weight) || weight > MAX_WEIGHT_KG) return null;
 
     if (this.isFromAnotherEpoch(timestamp)) return null;
 
@@ -393,13 +489,15 @@ export class SalterAdapter
   }
 
   /**
-   * Forget this session's clock reading. Adapters are shared singletons, so a
-   * stale clock would otherwise be used to judge the next session's records —
-   * including the backwards-clock check, which must see a fresh value.
+   * Forget this session's clock reading, and re-arm the clock write. Adapters are
+   * shared singletons, so a stale clock would otherwise be used to judge the next
+   * session's records — including the backwards-clock check, which must see a
+   * fresh value — and a clock write that failed would never be retried.
    */
   onSessionEnd(): void {
     this.clockSec = 0;
     this.clockAt = 0;
+    this.clockSyncSent = false;
   }
 
   isComplete(reading: ScaleReading): boolean {
