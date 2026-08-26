@@ -203,14 +203,16 @@ describe('SalterAdapter', () => {
       // The field is a bare u16, so unbounded it accepts 6553.5 kg. Any 20-byte
       // frame whose first byte is under 8 is treated as a record, so a garbled
       // frame or an unknown firmware reply must not decode to an absurd weight.
-      const a = makeAdapter();
+      // Both adapters are primed with a clock, or the no-clock gate rejects the
+      // record before MAX_WEIGHT_KG is ever consulted and the ceiling goes
+      // untested: raising it to 100000 leaves an unprimed version of this green.
       const absurd = Buffer.from(REC_876_BIA);
       absurd.writeUInt16LE(0xffff, 6); // 6553.5 kg
-      expect(a.parseNotification(absurd)).toBeNull();
+      expect(primed(makeAdapter(), absurd).parseNotification(absurd)).toBeNull();
 
       const overCeiling = Buffer.from(REC_876_BIA);
       overCeiling.writeUInt16LE(3001, 6); // 300.1 kg
-      expect(a.parseNotification(overCeiling)).toBeNull();
+      expect(primed(makeAdapter(), overCeiling).parseNotification(overCeiling)).toBeNull();
     });
 
     it('still accepts a legitimately light load', () => {
