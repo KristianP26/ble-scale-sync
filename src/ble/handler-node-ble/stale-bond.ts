@@ -1,5 +1,12 @@
 // Detection for a bond the scale has discarded while this host still holds it
-// (#290). Diagnostics only: nothing here deletes a bond.
+// (#290, #335). Diagnostics only: nothing here deletes a bond.
+//
+// #335 is the cleaner reproduction and the one the user-facing message points
+// at: a BF915 on a Pi 5 with fresh batteries, eight consecutive sessions, every
+// one connecting once and then locking the host out until `bluetoothctl remove`
+// was run by hand. #290 is where the mechanism was decoded, below, but that
+// issue is titled after a GATT acquisition timeout under Docker, so sending
+// people there to read about their pairing was a wrong turn.
 //
 // The BF950 HCI capture (bf950.btsnoop, 384 records) shows the mechanism
 // exactly. Six LE connections, every one status=0x00, and zero L2CAP traffic in
@@ -55,6 +62,6 @@ export function staleBondMessage(mac: string, attempts: number, lastError: strin
     'encryption before any GATT traffic. The scale has most likely forgotten its half of ' +
     'the pairing while this host still holds it. Clear it and pair again: run ' +
     `sudo bluetoothctl, then "remove ${mac}", put the scale into pairing mode, then ` +
-    `"pair ${mac}". See #290. Last error: ${lastError}`
+    `"pair ${mac}". See #335. Last error: ${lastError}`
   );
 }
