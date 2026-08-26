@@ -487,9 +487,19 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
           bleLog.debug(`Beurer BF720: change increment rejected: ${String(err)}`);
         }
       }
+      // "0 from config" reads like a failure to anyone who set
+      // beurer_provision expecting their values to land, so say why it is zero.
+      // Config is only ever written into a field the scale reports as unset;
+      // there is no overwrite, and a factory reset is the only way to change a
+      // record the scale already holds (#335).
+      const provisionedNote =
+        provisioned === 0 && this.provision
+          ? '0 from config (every field was already populated on the scale; ' +
+            'a factory reset is the only way to change them)'
+          : `${provisioned} from config`;
       bleLog.debug(
         `Beurer BF720: user profile committed (${written}/${values.size} characteristics ` +
-          `written, ${provisioned} from config, change increment ${increment}); ` +
+          `written, ${provisionedNote}, change increment ${increment}); ` +
           'scale can complete the measurement',
       );
     } catch (err) {
