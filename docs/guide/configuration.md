@@ -175,7 +175,9 @@ The debug log names the value each session runs with:
 QN: extended-dialect measurement trigger sent, weight anchor 76.40 kg (#235, #75)
 ```
 
-The anchor is taken from the **first** user in the list, because the scale is handed it before anyone steps on and there is nothing yet to match a person against. In a household where the second person is far from the first, set that person's `weight_range` so it overlaps, or run them as the first user, and please say so in [#75](https://github.com/KristianP26/ble-scale-sync/issues/75): picking the anchor from the live weight stream is possible and worth doing if this is hitting people.
+The anchor is taken from the **first** user in the list, because the scale is handed it before anyone steps on and there is nothing yet to match a person against.
+
+That only covers the moment before the weigh-in. Once the scale starts streaming, every live weight frame is acknowledged with that frame's own weight, exactly as the vendor app does, so the number the scale is told matches whoever is actually standing on it regardless of whose anchor went out first. The anchor is the opening value; the acknowledgements are exact.
 
 :::
 

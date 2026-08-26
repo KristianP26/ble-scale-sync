@@ -257,8 +257,19 @@ const TRIGGER_WEIGHT_FALLBACK_KG = 77.15;
  * a wrong anchor rather than a malformed frame.
  */
 export function buildMeasurementTrigger(weightKg: number): number[] {
-  const raw = Math.min(0xffff, Math.max(0, Math.round(weightKg * 100)));
-  const cmd = [0xa2, 0x06, 0x01, (raw >> 8) & 0xff, raw & 0xff, 0x00];
+  return buildA2Frame(Math.round(weightKg * 100));
+}
+
+/**
+ * Build an A2 frame around a raw u16 payload.
+ *
+ * Separate from `buildMeasurementTrigger` because the live acknowledgement
+ * echoes the scale's OWN raw weight bytes back verbatim, which is independent
+ * of `weightScaleFactor`; only the pre-stream anchor has to convert from kg.
+ */
+export function buildA2Frame(raw: number): number[] {
+  const v = Math.min(0xffff, Math.max(0, Math.round(raw)));
+  const cmd = [0xa2, 0x06, 0x01, (v >> 8) & 0xff, v & 0xff, 0x00];
   cmd[5] = cmd.slice(0, 5).reduce((a, b) => a + b, 0) & 0xff;
   return cmd;
 }
@@ -1039,6 +1050,24 @@ export class QnScaleAdapter
       rawWeight = data.readUInt16BE(3);
       r1 = data.readUInt16BE(6);
       r2 = data.readUInt16BE(8);
+    }
+
+    // Extended dialect: the vendor app answers EVERY live 0x10 frame with an A2
+    // carrying that frame's OWN weight bytes, not a fixed value. The GE CS 10 G
+    // capture shows the pairs plainly: a frame ending `11 1e be` is answered
+    // with `a2 06 01 1e be 85`, the next `11 1e c3` with `a2 06 01 1e c3 8a`.
+    //
+    // That is why the pre-stream anchor could only ever be approximate. This
+    // echo is exact for anyone, so it is the part that should make the dialect
+    // work for a whole household rather than for one person near 77 kg.
+    //
+    // Sent before the stability gate, because the app acknowledges the settling
+    // frames too, and those are the ones the scale is streaming while it decides
+    // whether to finish. Gated to the 20-byte dialect: it is the only firmware
+    // any capture covers, and every other QN scale in the registry reads today
+    // without it. Fire and forget, like the 0x1F stable ACK below.
+    if (this.isExtendedLongFrame && this.ctx) {
+      void this.writeCmd(buildA2Frame(rawWeight));
     }
 
     if (!stable) return null;

@@ -1651,6 +1651,74 @@ describe('AE02 dispatch (#75, #235)', () => {
       }
     });
 
+    // The vendor-app capture answers every live 0x10 with that frame's own
+    // weight bytes: `11 1e be` -> `a2 06 01 1e be 85`. Exact for anyone, where
+    // the pre-stream anchor can only ever be approximate.
+    it('echoes each live weight frame back as an A2 on the extended dialect', async () => {
+      const adapter = makeAdapter();
+      const writes: number[][] = [];
+      const ctx = {
+        write: async (_uuid: string, data: Buffer | number[]) => {
+          writes.push([...data]);
+        },
+        read: async () => Buffer.alloc(0),
+        subscribe: async () => {},
+        profile: defaultProfile(),
+        deviceAddress: '',
+        availableChars: new Set<string>(),
+      } as unknown as ConnectionContext;
+      await adapter.onConnected(ctx);
+      adapter.parseNotification(makeExtendedScaleInfo());
+      writes.length = 0;
+
+      // Settling frame, then the same weight settled. Both are acknowledged:
+      // the scale streams the unstable ones while it decides whether to finish.
+      const frame = (raw: number, stable: boolean): Buffer => {
+        const b = Buffer.alloc(14);
+        b[0] = 0x10;
+        b[1] = 0x0e;
+        b[2] = 0xff;
+        b.writeUInt16BE(raw, 3);
+        b[5] = stable ? 1 : 0;
+        return b;
+      };
+      adapter.parseNotification(frame(0x1ebe, false));
+      adapter.parseNotification(frame(0x1ec3, false));
+      await Promise.resolve();
+
+      const acks = writes.filter((w) => w[0] === 0xa2);
+      expect(acks).toEqual([
+        [0xa2, 0x06, 0x01, 0x1e, 0xbe, 0x85],
+        [0xa2, 0x06, 0x01, 0x1e, 0xc3, 0x8a],
+      ]);
+    });
+
+    it('does not echo live weight frames on the es26m dialect', async () => {
+      const adapter = makeAdapter();
+      const writes: number[][] = [];
+      const ctx = {
+        write: async (_uuid: string, data: Buffer | number[]) => {
+          writes.push([...data]);
+        },
+        read: async () => Buffer.alloc(0),
+        subscribe: async () => {},
+        profile: defaultProfile(),
+        deviceAddress: '',
+        availableChars: new Set<string>(),
+      } as unknown as ConnectionContext;
+      await adapter.onConnected(ctx);
+      adapter.parseNotification(makeEs26mScaleInfo());
+      writes.length = 0;
+      const b = Buffer.alloc(14);
+      b[0] = 0x10;
+      b[1] = 0x0e;
+      b[2] = 0xff;
+      b.writeUInt16BE(0x1ebe, 3);
+      adapter.parseNotification(b);
+      await Promise.resolve();
+      expect(writes.filter((w) => w[0] === 0xa2)).toHaveLength(0);
+    });
+
     it('rounds the anchor to the nearest 10 g and keeps the frame well formed', () => {
       expect(buildMeasurementTrigger(76.004)).toEqual([0xa2, 0x06, 0x01, 0x1d, 0xb0, 0x76]);
       expect(buildMeasurementTrigger(76.006)).toEqual([0xa2, 0x06, 0x01, 0x1d, 0xb1, 0x77]);
