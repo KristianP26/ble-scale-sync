@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
 import { createLogger } from './logger.js';
+import { readUpdateState, writeUpdateState, resetUpdateState } from './update-state.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { version: string };
@@ -8,7 +9,6 @@ const log = createLogger('Sync');
 
 const UPDATE_CHECK_URL = 'https://api.blescalesync.dev/version';
 const TIMEOUT_MS = 3_000;
-let lastCheckDate = '';
 
 export interface UpdateInfo {
   latest: string;
@@ -37,7 +37,8 @@ export function buildUserAgent(): string {
 /**
  * Check for updates (awaitable, up to TIMEOUT_MS).
  * Use `checkAndLogUpdate()` for fire-and-forget usage.
- * Respects update_check config, CI env var, and once-per-day cooldown.
+ * Respects update_check config, CI env var, and the once-per-day cooldown
+ * (persisted across restarts once `configureUpdateState()` has run).
  * Returns update info if a newer version is available, null otherwise.
  */
 export async function checkForUpdate(updateCheckEnabled = true): Promise<UpdateInfo | null> {
@@ -47,10 +48,12 @@ export async function checkForUpdate(updateCheckEnabled = true): Promise<UpdateI
   // Disabled in CI
   if (process.env.CI === 'true') return null;
 
-  // Once per calendar day (UTC)
+  // Once per calendar day (UTC), persisted across restarts. The day is
+  // consumed at ATTEMPT time, not on success: a host with no internet must
+  // not retry on every single measurement.
   const today = new Date().toISOString().slice(0, 10);
-  if (today === lastCheckDate) return null;
-  lastCheckDate = today;
+  if (readUpdateState()?.lastCheckDate === today) return null;
+  writeUpdateState({ lastCheckDate: today });
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -98,9 +101,13 @@ export function checkAndLogUpdate(updateCheckEnabled = true): void {
     });
 }
 
-/** Reset internal cooldown (for testing). */
+/**
+ * Reset the cooldown (for testing). Also disables state persistence, so a
+ * test that has not explicitly called `configureUpdateState()` can never read
+ * or write a real state file on the developer's disk.
+ */
 export function resetUpdateCheckTimer(): void {
-  lastCheckDate = '';
+  resetUpdateState();
 }
 
 /** Get current version from package.json. */
