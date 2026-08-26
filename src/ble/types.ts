@@ -134,6 +134,12 @@ export interface ScanOptions {
   bleAdapter?: string;
   /** Override RAW_READING_TIMEOUT_MS (seconds of silence) for one session (ble.session_timeout_sec, #83). */
   readingTimeoutMs?: number;
+  /**
+   * Clear a bond the scale has forgotten instead of only diagnosing it
+   * (`ble.auto_clear_stale_bond`, #335). node-ble only; the other transports
+   * have no bond to clear.
+   */
+  autoClearStaleBond?: boolean;
 }
 
 export interface ScanResult {

@@ -162,6 +162,23 @@ export const BleSchema = z
      * exactly the way `qn_protocol_byte` is.
      */
     qn_report_byte: z.number().int().min(0).max(255).optional().nullable(),
+    /**
+     * Delete a bond the scale has forgotten and pair again, instead of stopping
+     * at the diagnostic (#290, #335).
+     *
+     * When a peripheral discards its half of the pairing, BlueZ replays the
+     * dead key forever: every connect fails during encryption and the host
+     * never invalidates anything, so the scale is unreachable until someone
+     * runs `bluetoothctl remove` by hand. Turning this on lets a run of
+     * authentication-class failures against a device BlueZ still lists as
+     * bonded clear the bond once per connect and retry.
+     *
+     * Opt-in, because `le-connection-abort-by-local` also has benign producers
+     * (a connect issued while discovery is still active, or another D-Bus
+     * client holding a discovery session), and on these scales a bond dropped
+     * in error costs a physical re-pair at the device.
+     */
+    auto_clear_stale_bond: z.boolean().optional().nullable(),
     mqtt_proxy: MqttProxySchema.optional(),
     esphome_proxy: EsphomeProxySchema.optional(),
   })

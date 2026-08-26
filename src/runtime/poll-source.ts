@@ -48,6 +48,7 @@ export class PollReadingSource implements ReadingSource {
       readingTimeoutMs: this.ctx.config.ble?.session_timeout_sec
         ? this.ctx.config.ble.session_timeout_sec * 1000
         : undefined,
+      autoClearStaleBond: this.ctx.config.ble?.auto_clear_stale_bond === true,
       onLiveData: (reading) => {
         const impStr: string = reading.impedance > 0 ? `${reading.impedance} Ohm` : 'Measuring...';
         process.stdout.write(

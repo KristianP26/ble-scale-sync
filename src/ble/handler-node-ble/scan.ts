@@ -167,6 +167,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     abortSignal,
     bleAdapter,
     readingTimeoutMs,
+    autoClearStaleBond,
   } = opts;
 
   let device: Device | null = null;
@@ -327,6 +328,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         initialDevice: device,
         maxRetries: MAX_CONNECT_RETRIES,
         bleAdapter,
+        autoClearStaleBond,
       });
       bleLog.info('Connected. Discovering services...');
 
@@ -413,6 +415,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         initialDevice: device,
         maxRetries: MAX_CONNECT_RETRIES,
         bleAdapter,
+        autoClearStaleBond,
       });
       bleLog.info('Connected. Discovering services...');
     }
