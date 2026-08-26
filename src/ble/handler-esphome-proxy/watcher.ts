@@ -42,6 +42,8 @@ export class ReadingWatcher implements Watcher {
   private pool: EsphomeProxyPool | null = null;
   private unsub: (() => void) | null = null;
   private gattInFlight = new Set<string>();
+  /** Set at start and on every advertisement; the proxy liveness signal (#281). */
+  private lastAdvertAt: number | null = null;
 
   /**
    * Last non-empty local name seen per address, so a later nameless frame from
@@ -114,7 +116,14 @@ export class ReadingWatcher implements Watcher {
       this.pool = new EsphomeProxyPool(this.config);
       await this.pool.start();
       logTransportCapabilities(this.adapters);
-      this.unsub = this.pool.onAdvertisement((info, mac) => this.handleAd(info, mac));
+      // Stamped here rather than inside handleAd, which returns early on a
+      // targetMac mismatch: the transport is proven alive by traffic from ANY
+      // device, and the scale only advertises while somebody is on it (#281).
+      this.lastAdvertAt = Date.now();
+      this.unsub = this.pool.onAdvertisement((info, mac) => {
+        this.lastAdvertAt = Date.now();
+        this.handleAd(info, mac);
+      });
       bleLog.info('ESPHome ReadingWatcher started, listening for advertisements');
     } catch (err) {
       this.started = false;
@@ -127,11 +136,17 @@ export class ReadingWatcher implements Watcher {
     if (!this.started) return;
     await this.teardown();
     this.started = false;
+    this.lastAdvertAt = null;
     bleLog.info('ESPHome ReadingWatcher stopped');
   }
 
   nextReading(signal?: AbortSignal): Promise<RawReading> {
     return this.queue.shift(signal);
+  }
+
+  /** Epoch ms of the last advertisement from any device (#281). */
+  lastTransportActivityMs(): number | null {
+    return this.lastAdvertAt;
   }
 
   updateConfig(config: WatcherConfig): void {

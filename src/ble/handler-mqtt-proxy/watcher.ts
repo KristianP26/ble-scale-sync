@@ -112,6 +112,8 @@ export class ReadingWatcher implements Watcher {
   private _lifecycleHandlers: LifecycleHandler[] = [];
   private _messageHandler: ((topic: string, payload: Buffer) => void) | null = null;
   private _subscribedTopics: string[] = [];
+  /** Set at start and on every scan-results message; the liveness signal (#281). */
+  private lastAdvertAt: number | null = null;
   /** Per-MAC count of consecutive scan deferrals with no autonomous connect (#231). */
   private deferCounts = new Map<string, number>();
 
@@ -131,6 +133,9 @@ export class ReadingWatcher implements Watcher {
     if (this.started) return;
     // Mark immediately to guard against concurrent start() calls
     this.started = true;
+    // The liveness clock starts at connect, not at the epoch, so a proxy that
+    // has simply not spoken yet is not read as one that has stopped.
+    this.lastAdvertAt = Date.now();
 
     const t = topics(this.config.topic_prefix, this.config.device_id);
     let client: Awaited<ReturnType<typeof getOrCreatePersistentClient>>;
@@ -225,6 +230,10 @@ export class ReadingWatcher implements Watcher {
 
       try {
         const results: ScanResultEntry[] = JSON.parse(payload.toString());
+        // Stamped before the targetMac filter and only for a non-empty batch:
+        // the proxy is proven alive by hearing ANY device, and the scale itself
+        // only advertises while somebody is standing on it (#281).
+        if (results.length > 0) this.lastAdvertAt = Date.now();
         const candidates = this.targetMac
           ? results.filter((e) => e.address.toLowerCase() === this.targetMac!.toLowerCase())
           : results;
@@ -349,6 +358,7 @@ export class ReadingWatcher implements Watcher {
     this._subscribedTopics = [];
 
     this.started = false;
+    this.lastAdvertAt = null;
     this._client = null;
     bleLog.info('ReadingWatcher stopped');
   }
@@ -356,6 +366,11 @@ export class ReadingWatcher implements Watcher {
   /** Consume the next reading from the queue. Blocks until one arrives. */
   nextReading(signal?: AbortSignal): Promise<RawReading> {
     return this.queue.shift(signal);
+  }
+
+  /** Epoch ms of the last advertisement from any device (#281). */
+  lastTransportActivityMs(): number | null {
+    return this.lastAdvertAt;
   }
 
   /** Update matching config (e.g. after SIGHUP config reload). scaleAuth is
