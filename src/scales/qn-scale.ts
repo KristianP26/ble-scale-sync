@@ -438,6 +438,9 @@ export class QnScaleAdapter
    */
   private forcedWeightAck: boolean | null = null;
 
+  /** One anchor-fallback warning per session, reset in onConnected. */
+  private anchorFallbackWarned = false;
+
   /**
    * Whether a completed-weigh-in result frame (0xB4/0xB1) has already produced a
    * reading this session. The scale repeats the 0xB4 frame ~3x and then sends
@@ -586,6 +589,7 @@ export class QnScaleAdapter
     this.extendedResultEmitted = false;
     this.firstStableNoImpedanceAt = null;
     this.sessionStartedScaleSeconds = Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
+    this.anchorFallbackWarned = false;
     this.configSent = false;
     this.timeSyncSent = false;
     this.historyResponseSent = false;
@@ -1281,7 +1285,7 @@ export class QnScaleAdapter
     // default under the whole family. `ble.qn_weight_ack` swaps in the
     // configured anchor for the reporters who can actually test it.
     if (this.ctx) {
-      const anchorKg = this.ctx.profile.lastKnownWeight ?? TRIGGER_WEIGHT_FALLBACK_KG;
+      const anchorKg = this.forcedWeightAck ? this.resolveAnchorKg() : 0;
       const profileCmd = this.forcedWeightAck
         ? buildMeasurementTrigger(anchorKg)
         : (() => {
@@ -1355,7 +1359,7 @@ export class QnScaleAdapter
     // registry reads today without it, and an unexplained extra write is not
     // something to hand them on spec.
     if (!this.isExtendedLongFrame) return;
-    const anchorKg = this.ctx?.profile.lastKnownWeight ?? TRIGGER_WEIGHT_FALLBACK_KG;
+    const anchorKg = this.resolveAnchorKg();
     const trigger = buildMeasurementTrigger(anchorKg);
     for (let i = 0; i < TRIGGER_REPEATS; i++) {
       if (i > 0) await wait(TRIGGER_GAP_MS);
@@ -1385,6 +1389,36 @@ export class QnScaleAdapter
     }
     this.sessionStartedScaleSeconds = null;
     this.ctx = null;
+  }
+
+  /**
+   * The weight anchor to hand the scale, in kg, warning once when config has
+   * nothing usable.
+   *
+   * The fallback is the value from the capture this was decoded in, so it is
+   * right for one person and wrong for everyone else, which is the whole defect
+   * being fixed (#75). It is reached silently by a config that looks complete:
+   * the Home Assistant add-on defaults to a 40 to 150 kg weight range, whose
+   * span locates nobody and is rejected as a hint, so a reporter can turn
+   * `qn_weight_ack` on, change nothing else, and get the same 77.15 kg that was
+   * already failing. That is a false negative on the one experiment that
+   * matters, so say it out loud.
+   */
+  private resolveAnchorKg(): number {
+    const anchor = this.ctx?.profile.lastKnownWeight;
+    if (anchor !== undefined) return anchor;
+    if (!this.anchorFallbackWarned) {
+      this.anchorFallbackWarned = true;
+      bleLog.warn(
+        `QN: no usable weight anchor in config, falling back to ` +
+          `${TRIGGER_WEIGHT_FALLBACK_KG} kg, which is a value from a capture and not ` +
+          `yours. This scale can refuse to finish a weigh-in when that number is far ` +
+          `from the real weight. Set users[].last_known_weight, or narrow ` +
+          `users[].weight_range so its midpoint is close to you (a range wider than ` +
+          `100 kg is ignored because it locates nobody).`,
+      );
+    }
+    return TRIGGER_WEIGHT_FALLBACK_KG;
   }
 
   /**

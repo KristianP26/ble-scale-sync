@@ -1715,6 +1715,40 @@ describe('AE02 dispatch (#75, #235)', () => {
       expect(beforeStart[0][4]).toBe(30); // defaultProfile age
     });
 
+    // The add-on defaults to a 40 to 150 kg range, whose span locates nobody and
+    // is rejected as a hint, so a reporter can enable the setting, change
+    // nothing else, and silently get the same 77.15 kg that was already
+    // failing. That would be a false negative on the experiment (#331).
+    it('warns when it falls back to the capture weight instead of a configured one', async () => {
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      try {
+        const adapter = makeAdapter();
+        adapter.configure({ qnWeightAck: true });
+        await driveHandshake(adapter, makeEs26mScaleInfo(), defaultProfile());
+        const msg = warn.mock.calls.flat().join(' ');
+        expect(msg).toContain('no usable weight anchor');
+        expect(msg).toContain('weight_range');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('stays quiet about the anchor when config supplies one', async () => {
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      try {
+        const adapter = makeAdapter();
+        adapter.configure({ qnWeightAck: true });
+        await driveHandshake(
+          adapter,
+          makeEs26mScaleInfo(),
+          defaultProfile({ lastKnownWeight: 76 }),
+        );
+        expect(warn.mock.calls.flat().join(' ')).not.toContain('no usable weight anchor');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
     it('swaps the configured anchor into the ready-time A2 when forced on', async () => {
       const adapter = makeAdapter();
       adapter.configure({ qnWeightAck: true });
