@@ -27,6 +27,35 @@ function computeAge(birthDate: string): number {
 }
 
 /**
+ * Bounds a `weight_range` has to sit inside before its midpoint is treated as a
+ * hint about a person. The env-var config path has no range to ask for and
+ * writes a `0` to `999` sentinel, whose midpoint would be a 499 kg anchor.
+ */
+const ANCHOR_RANGE_MIN_KG = 20;
+const ANCHOR_RANGE_MAX_KG = 250;
+const ANCHOR_RANGE_MAX_SPAN_KG = 100;
+
+/**
+ * Best estimate of what a configured user weighs, in kg, or undefined when
+ * config says nothing useful.
+ *
+ * `last_known_weight` is the exact answer when it exists: the processor writes
+ * it back after every successful reading, so it tracks the person. It is null
+ * until the first reading lands, which is precisely the state a scale that gates
+ * on the anchor leaves people in (#75), so fall back to the midpoint of the
+ * weight range the wizard already requires from every user. A range that spans
+ * everything is not a hint about anyone, so it yields nothing rather than a
+ * number, and the adapter keeps its own fallback.
+ */
+function resolveWeightAnchor(user: UserConfig): number | undefined {
+  if (user.last_known_weight !== null) return user.last_known_weight;
+  const { min, max } = user.weight_range;
+  if (min < ANCHOR_RANGE_MIN_KG || max > ANCHOR_RANGE_MAX_KG) return undefined;
+  if (max - min > ANCHOR_RANGE_MAX_SPAN_KG) return undefined;
+  return (min + max) / 2;
+}
+
+/**
  * Resolve a UserConfig + ScaleConfig into a UserProfile for body composition calculation.
  */
 export function resolveUserProfile(user: UserConfig, scaleConfig: ScaleConfig): UserProfile {
@@ -41,6 +70,7 @@ export function resolveUserProfile(user: UserConfig, scaleConfig: ScaleConfig): 
     gender: user.gender,
     isAthlete: user.is_athlete,
     birthDate: user.birth_date,
+    lastKnownWeight: resolveWeightAnchor(user),
   };
 }
 

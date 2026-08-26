@@ -51,6 +51,26 @@ describe('resolveUserProfile', () => {
     expect(profile.age).toBe(expectedAge);
   });
 
+  // #75: the QN extended dialect sends this to the scale before the weigh-in
+  // and refuses to complete when it is far from the real weight, so every
+  // configured user needs one without adding a setting.
+  it('uses last_known_weight as the weight anchor when config has one', () => {
+    const profile = resolveUserProfile({ ...USER, last_known_weight: 82.4 }, SCALE_CM);
+    expect(profile.lastKnownWeight).toBe(82.4);
+  });
+
+  it('falls back to the midpoint of weight_range before the first reading', () => {
+    const profile = resolveUserProfile(USER, SCALE_CM);
+    expect(profile.lastKnownWeight).toBe(85);
+  });
+
+  // The env-var config path has no range to ask for and writes this sentinel,
+  // whose midpoint is 499.5 kg. Anything is better than handing a scale that.
+  it('yields no anchor for the env-var sentinel weight range', () => {
+    const profile = resolveUserProfile({ ...USER, weight_range: { min: 0, max: 999 } }, SCALE_CM);
+    expect(profile.lastKnownWeight).toBeUndefined();
+  });
+
   it('preserves height in cm when height_unit is cm', () => {
     const profile = resolveUserProfile(USER, SCALE_CM);
     expect(profile.height).toBe(183);

@@ -45,6 +45,16 @@ export interface UserProfile {
    * provisioning does not have to invent a 1 January anniversary (#229).
    */
   birthDate?: string;
+  /**
+   * Best estimate of what this person weighs, in kg, for protocols that send a
+   * weight anchor to the scale before the weigh-in (QN, #75/#235).
+   *
+   * Not used by body composition, which derives everything from the measured
+   * weight. Resolved from `users[].last_known_weight` when config has one and
+   * from the midpoint of `users[].weight_range` otherwise, so it is populated
+   * for every configured user without a new setting.
+   */
+  lastKnownWeight?: number;
 }
 
 export interface BodyComposition {
