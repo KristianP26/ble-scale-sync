@@ -119,7 +119,10 @@ describe('Exporter healthchecks', () => {
       const exporter = new InfluxDbExporter(config);
       const result = await exporter.healthcheck();
       expect(result.success).toBe(true);
+      // The token goes out even on v2, where /health is unauthenticated, so
+      // that v3 (which answers 401 without it) reports healthy too.
       expect(mockFetch).toHaveBeenCalledWith('http://localhost:8086/health', {
+        headers: { Authorization: 'Token my-token' },
         signal: expect.any(AbortSignal),
       });
     });

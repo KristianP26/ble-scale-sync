@@ -94,7 +94,7 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
       const influxConfig: InfluxDbConfig = {
         url: requireField(config, 'influxdb', 'url'),
         token: requireField(config, 'influxdb', 'token'),
-        org: requireField(config, 'influxdb', 'org'),
+        org: (config.org as string | undefined) || undefined,
         bucket: requireField(config, 'influxdb', 'bucket'),
         measurement: (config.measurement as string) ?? 'body_composition',
       };

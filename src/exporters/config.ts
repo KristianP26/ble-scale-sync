@@ -51,7 +51,9 @@ export interface WebhookConfig {
 export interface InfluxDbConfig {
   url: string;
   token: string;
-  org: string;
+  /** v2 only. InfluxDB v3 has no organizations and ignores the parameter. */
+  org?: string;
+  /** Bucket name on v2, database name on v3. */
   bucket: string;
   measurement: string;
 }

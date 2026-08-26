@@ -17,7 +17,7 @@ Exporters are configured in `global_exporters` (shared by all users). For multi-
 | ------------------------------- | ------------------------------------------------------ |
 | [**Garmin Connect**](#garmin)   | Automatic body composition upload, no phone app needed |
 | [**MQTT**](#mqtt)               | Home Assistant auto-discovery with 10 sensors, LWT     |
-| [**InfluxDB**](#influxdb)       | Time-series database (v2 write API)                    |
+| [**InfluxDB**](#influxdb)       | Time-series database (v2 and v3)                       |
 | [**Webhook**](#webhook)         | Any HTTP endpoint (n8n, Make, Zapier, custom APIs)     |
 | [**Ntfy**](#ntfy)               | Push notifications to phone/desktop                    |
 | [**Telegram**](#telegram)       | Send measurement notifications to a Telegram chat      |
@@ -144,15 +144,19 @@ global_exporters:
 
 ## InfluxDB {#influxdb}
 
-Writes metrics to InfluxDB v2 using line protocol. Float fields use 2 decimal places, integer fields use `i` suffix.
+Writes metrics using line protocol. Float fields use 2 decimal places, integer fields use `i` suffix.
 
-| Field         | Required | Default            | Description                 |
-| ------------- | -------- | ------------------ | --------------------------- |
-| `url`         | Yes      | (none)             | InfluxDB server URL         |
-| `token`       | Yes      | (none)             | API token with write access |
-| `org`         | Yes      | (none)             | Organization name           |
-| `bucket`      | Yes      | (none)             | Destination bucket          |
-| `measurement` | No       | `body_composition` | Measurement name            |
+Works with **InfluxDB v2 and v3**. v3 keeps a v2-compatible `/api/v2/write` endpoint that accepts the same line protocol, the same `Token` authorization scheme and the same 204 response, so one exporter covers both.
+
+| Field         | Required | Default            | Description                                   |
+| ------------- | -------- | ------------------ | --------------------------------------------- |
+| `url`         | Yes      | (none)             | InfluxDB server URL                           |
+| `token`       | Yes      | (none)             | API token with write access                   |
+| `org`         | v2 only  | (none)             | Organization name. Omit on v3, which has none |
+| `bucket`      | Yes      | (none)             | Bucket name on v2, database name on v3        |
+| `measurement` | No       | `body_composition` | Measurement name                              |
+
+**InfluxDB v2:**
 
 ```yaml
 global_exporters:
@@ -162,6 +166,18 @@ global_exporters:
     org: my-org
     bucket: my-bucket
 ```
+
+**InfluxDB v3** (Core, Enterprise, Cloud), where `org` is left out and `bucket` names the database:
+
+```yaml
+global_exporters:
+  - type: influxdb
+    url: 'http://localhost:8181'
+    token: '${INFLUXDB_TOKEN}'
+    bucket: my-database
+```
+
+Setting `org` on v3 is harmless, since the server ignores the parameter, but leaving it out keeps the config honest about what the target actually has.
 
 ## Ntfy {#ntfy}
 
@@ -379,16 +395,16 @@ See [Configuration: Environment Variables](/guide/configuration#environment-vari
 
 At startup, exporters are tested for connectivity. Failures are logged as warnings but don't block the scan.
 
-| Exporter      | Method                       |
-| ------------- | ---------------------------- |
-| MQTT          | Connect + disconnect         |
-| Webhook       | HEAD request                 |
-| InfluxDB      | `/health` endpoint           |
-| Ntfy          | `/v1/health` endpoint        |
-| Telegram      | `getChat` endpoint           |
-| Intervals.icu | `GET` wellness record        |
-| Runalyze      | `GET` bodyComposition metric |
-| Wger          | `GET` userprofile record     |
-| Garmin        | None (Python subprocess)     |
-| File          | Directory writable check     |
-| Strava        | None (avoid API rate limits) |
+| Exporter      | Method                         |
+| ------------- | ------------------------------ |
+| MQTT          | Connect + disconnect           |
+| Webhook       | HEAD request                   |
+| InfluxDB      | `/health` endpoint, with token |
+| Ntfy          | `/v1/health` endpoint          |
+| Telegram      | `getChat` endpoint             |
+| Intervals.icu | `GET` wellness record          |
+| Runalyze      | `GET` bodyComposition metric   |
+| Wger          | `GET` userprofile record       |
+| Garmin        | None (Python subprocess)       |
+| File          | Directory writable check       |
+| Strava        | None (avoid API rate limits)   |
