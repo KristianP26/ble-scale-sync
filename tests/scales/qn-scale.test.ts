@@ -1,8 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { jieliAuthResponseFrame } from '../../src/scales/jieli-auth.js';
-import { QnScaleAdapter } from '../../src/scales/qn-scale.js';
+import { QnScaleAdapter, buildMeasurementTrigger } from '../../src/scales/qn-scale.js';
 import { bleLog } from '../../src/ble/types.js';
-import type { BleDeviceInfo, ConnectionContext } from '../../src/interfaces/scale-adapter.js';
+import type {
+  BleDeviceInfo,
+  ConnectionContext,
+  UserProfile,
+} from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -1353,7 +1357,11 @@ describe('AE02 dispatch (#75, #235)', () => {
      * START, collecting every write. The 0x14 and 0x21 frames are the ones the
      * GE CS 10 G actually sends (#235).
      */
-    async function driveHandshake(adapter: QnScaleAdapter, info: Buffer): Promise<number[][]> {
+    async function driveHandshake(
+      adapter: QnScaleAdapter,
+      info: Buffer,
+      profile: UserProfile = defaultProfile(),
+    ): Promise<number[][]> {
       vi.useFakeTimers();
       try {
         const writes: number[][] = [];
@@ -1363,7 +1371,7 @@ describe('AE02 dispatch (#75, #235)', () => {
           },
           read: async () => Buffer.alloc(0),
           subscribe: async () => {},
-          profile: defaultProfile(),
+          profile,
           deviceAddress: '',
           availableChars: new Set<string>(),
         } as unknown as ConnectionContext;
@@ -1616,8 +1624,44 @@ describe('AE02 dispatch (#75, #235)', () => {
       const triggers = after.filter((w) => w[0] === 0xa2);
       expect(triggers).toHaveLength(2);
       for (const t of triggers) {
+        // No anchor in the profile: the capture's own 77.15 kg is the fallback.
         expect(t).toEqual([0xa2, 0x06, 0x01, 0x1e, 0x23, 0xea]);
         // Self-consistent QN frame: checksum is the low byte of the sum.
+        expect(t[5]).toBe(t.slice(0, 5).reduce((a, b) => a + b, 0) & 0xff);
+      }
+    });
+
+    // #75: payload [3..4] is kg*100 big-endian and the scale gates the weigh-in
+    // on it, so a household member who is not near the captured 77.15 kg gets a
+    // clean handshake and then silence. The anchor has to come from config.
+    it('encodes the profile weight anchor into the measurement trigger', async () => {
+      const adapter = makeAdapter();
+      const writes = await driveHandshake(
+        adapter,
+        makeExtendedScaleInfo(),
+        defaultProfile({ lastKnownWeight: 65 }),
+      );
+      const startIndex = writes.findIndex((w) => w[0] === 0x22);
+      const triggers = writes.slice(startIndex + 1).filter((w) => w[0] === 0xa2);
+      expect(triggers).toHaveLength(2);
+      for (const t of triggers) {
+        // 6500 = 0x1964
+        expect(t).toEqual([0xa2, 0x06, 0x01, 0x19, 0x64, 0x26]);
+        expect(t[5]).toBe(t.slice(0, 5).reduce((a, b) => a + b, 0) & 0xff);
+      }
+    });
+
+    it('rounds the anchor to the nearest 10 g and keeps the frame well formed', () => {
+      expect(buildMeasurementTrigger(76.004)).toEqual([0xa2, 0x06, 0x01, 0x1d, 0xb0, 0x76]);
+      expect(buildMeasurementTrigger(76.006)).toEqual([0xa2, 0x06, 0x01, 0x1d, 0xb1, 0x77]);
+    });
+
+    it('clamps an out-of-range anchor instead of emitting a malformed frame', () => {
+      const huge = buildMeasurementTrigger(10_000);
+      expect(huge).toEqual([0xa2, 0x06, 0x01, 0xff, 0xff, 0xa7]);
+      const negative = buildMeasurementTrigger(-5);
+      expect(negative).toEqual([0xa2, 0x06, 0x01, 0x00, 0x00, 0xa9]);
+      for (const t of [huge, negative]) {
         expect(t[5]).toBe(t.slice(0, 5).reduce((a, b) => a + b, 0) & 0xff);
       }
     });

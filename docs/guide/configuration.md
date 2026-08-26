@@ -155,6 +155,29 @@ If `252` makes your scale produce a weight, please say so in an issue with the m
 
 :::
 
+::: tip QN scales that only work for one person in the house (`last_known_weight`)
+
+The 20-byte extended dialect (GE CS 10 G, "Fit Plus" and rebadges) is sent a weight anchor immediately after the start command, and the scale gates the weigh-in on it: if the number is far from what the person on the platform actually weighs, the handshake completes normally and then nothing else arrives.
+
+Until 1.26.0 that anchor was a constant replayed from the capture it was decoded in, 77.15 kg, which is why these scales appeared to work for some households and not others. It now comes from your config: `users[].last_known_weight` when it is set, and the midpoint of `users[].weight_range` before the first reading lands. Both already exist, so there is nothing new to add.
+
+```yaml
+users:
+  - name: Alex
+    weight_range: { min: 70, max: 85 }
+    last_known_weight: 76.4 # updated automatically after every reading
+```
+
+The debug log names the value each session runs with:
+
+```
+QN: extended-dialect measurement trigger sent, weight anchor 76.40 kg (#235, #75)
+```
+
+The anchor is taken from the **first** user in the list, because the scale is handed it before anyone steps on and there is nothing yet to match a person against. In a household where the second person is far from the first, set that person's `weight_range` so it overlaps, or run them as the first user, and please say so in [#75](https://github.com/KristianP26/ble-scale-sync/issues/75): picking the anchor from the live weight stream is possible and worth doing if this is hitting people.
+
+:::
+
 ::: tip Beurer scales that reject every consent code (`beurer_register_new_user`)
 
 If a Beurer or Sanitas scale bonds, subscribes and then answers the consent with `USER_NOT_AUTHORIZED` no matter which code or slot you try, the problem is usually not the code.
@@ -262,7 +285,7 @@ users:
 | `gender`                   | Yes      | (none)         | `male` or `female`                                                                      |
 | `is_athlete`               | No       | `false`        | Adjusts [body composition](/body-composition#athlete-mode) formulas                     |
 | `weight_range`             | No       | (none)         | `{ min, max }` in kg. Required for [multi-user](/multi-user) deployments                |
-| `last_known_weight`        | No       | `null`         | Auto-updated after each measurement                                                     |
+| `last_known_weight`        | No       | `null`         | Auto-updated after each measurement. Also used as the weight anchor some scales expect  |
 | `exporters`                | No       | (none)         | [Per-user exporter](/multi-user#per-user-exporters) overrides                           |
 | `beurer_pin`               | Beurer   | (none)         | Consent code the Beurer BF7xx / BF9xx scale was paired with                             |
 | `beurer_user_index`        | No       | `1`            | Scale user slot the consent code belongs to                                             |

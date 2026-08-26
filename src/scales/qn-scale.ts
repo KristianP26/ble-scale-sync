@@ -231,13 +231,37 @@ const LEGACY_PROTO_TYPE = 0x00;
  * quiet: @hedoric's retest on the proto fix confirmed every other command is now
  * byte identical to the app's and this is the only remaining difference.
  *
- * It is a well formed QN frame (checksum 0xea = sum of the preceding bytes) but
- * a DIFFERENT one from the A2 user profile we already send at ready time, which
- * carries 0x32 and the user's age. Payload bytes 0x1e and 0x23 are constant
- * across every session in the capture and are replayed verbatim: what they mean
- * is not known, so they are not derived from anything.
+ * Payload bytes [3..4] are a big-endian u16 of kg*100: the capture's 0x1e23 is
+ * 7715, i.e. 77.15 kg, against a subject who weighed about 78. They are the
+ * weight the scale last knew for the selected user, and the scale gates the
+ * weigh-in on them. @hedoric's A/B on one scale in one session: 76 kg against
+ * this hardcoded 77.15 completes every time, 65 kg against it hands over a
+ * clean handshake and then silence every time, and the same 65 kg person
+ * through the vendor app -- which sends her real last-known weight -- completes.
+ * So replaying the constant only ever served people who happen to weigh about
+ * 77 kg. `buildMeasurementTrigger` derives it from the configured user instead.
+ *
+ * It is a well formed QN frame (checksum = sum of the preceding bytes) but a
+ * DIFFERENT one from the A2 user profile we already send at ready time, which
+ * carries 0x32 and the user's age. That frame is left as openScale has it: it
+ * shares this shape, and under the reading above its payload would decode as an
+ * implausible ~128 kg, but no capture shows the vendor app sending it and one
+ * blind edit per release is enough.
  */
-const EXTENDED_MEASUREMENT_TRIGGER = [0xa2, 0x06, 0x01, 0x1e, 0x23, 0xea];
+const TRIGGER_WEIGHT_FALLBACK_KG = 77.15;
+
+/**
+ * Build the extended-dialect measurement trigger for a weight anchor in kg.
+ *
+ * Clamped to the u16 the field can hold, so a nonsense config value degrades to
+ * a wrong anchor rather than a malformed frame.
+ */
+export function buildMeasurementTrigger(weightKg: number): number[] {
+  const raw = Math.min(0xffff, Math.max(0, Math.round(weightKg * 100)));
+  const cmd = [0xa2, 0x06, 0x01, (raw >> 8) & 0xff, raw & 0xff, 0x00];
+  cmd[5] = cmd.slice(0, 5).reduce((a, b) => a + b, 0) & 0xff;
+  return cmd;
+}
 
 /** How many times the vendor app repeats the trigger, and the gap it leaves. */
 const TRIGGER_REPEATS = 2;
@@ -1238,11 +1262,16 @@ export class QnScaleAdapter
     // registry reads today without it, and an unexplained extra write is not
     // something to hand them on spec.
     if (!this.isExtendedLongFrame) return;
+    const anchorKg = this.ctx?.profile.lastKnownWeight ?? TRIGGER_WEIGHT_FALLBACK_KG;
+    const trigger = buildMeasurementTrigger(anchorKg);
     for (let i = 0; i < TRIGGER_REPEATS; i++) {
       if (i > 0) await wait(TRIGGER_GAP_MS);
-      await this.writeCmd([...EXTENDED_MEASUREMENT_TRIGGER]);
+      await this.writeCmd([...trigger]);
     }
-    bleLog.debug('QN: extended-dialect measurement trigger sent (#235)');
+    bleLog.debug(
+      `QN: extended-dialect measurement trigger sent, weight anchor ` +
+        `${anchorKg.toFixed(2)} kg (#235, #75)`,
+    );
   }
 
   /**
