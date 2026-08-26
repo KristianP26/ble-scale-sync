@@ -427,6 +427,8 @@ update_check: true
 
 After each successful measurement, the app sends a single GET request to `api.blescalesync.dev/version`. Only the app version, OS, and architecture are sent via the User-Agent header. No personal data is collected. Automatically disabled when `CI=true`.
 
+The date of the last check is written to `.update-check-state.json` next to this config file, so the once-per-day limit survives a restart. On the Home Assistant add-on that is `/data`, on bare Node.js it is the directory holding `config.yaml` (or your `.env` when there is no `config.yaml`). On Docker it is `/app` inside the container, because `-v ./config.yaml:/app/config.yaml` mounts the file and not the directory: the cooldown then survives a container restart but not a re-create or an image update. Mount a directory instead (`-v ./bss:/app/conf` plus `--config /app/conf/config.yaml`) if you want it to persist across image updates. The file holds a single date and nothing else; if it is missing or unreadable the app simply checks again. Delete it any time.
+
 Anonymous aggregated statistics are visible at [stats.blescalesync.dev](https://stats.blescalesync.dev).
 
 ## Environment Variables
