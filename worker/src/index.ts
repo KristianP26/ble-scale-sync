@@ -318,7 +318,8 @@ function renderDashboard(stats24h: AggregatedStats, stats7d: AggregatedStats, st
         once per UTC day, so over a single day the two are the same number. Before the
         release that persists the update-check cooldown, the cooldown was kept in
         process memory, so a restart could send an extra check the same day and
-        figures from that period are inflated.
+        figures from that period are inflated. Installations still running an older
+        release keep inflating the count until they upgrade.
       </p>
       <p><a href="https://blescalesync.dev">blescalesync.dev</a></p>
       <p style="margin-top: 0.5rem">Released under the <a href="https://github.com/KristianP26/ble-scale-sync/blob/main/LICENSE">GPL-3.0 License</a>.</p>
