@@ -41,6 +41,7 @@ options:
   qn_protocol_byte: ''
   qn_report_byte: ''
   auto_clear_stale_bond: false
+  proxy_liveness_timeout_min: 30
   weight_unit: kg
   height_unit: cm
   user_name: Default
@@ -72,6 +73,7 @@ schema:
   qn_protocol_byte: str?
   qn_report_byte: str?
   auto_clear_stale_bond: bool?
+  proxy_liveness_timeout_min: int(0,1440)?
   weight_unit: list(kg|lbs)
   height_unit: list(cm|in)
   user_name: str

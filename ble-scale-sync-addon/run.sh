@@ -61,6 +61,7 @@ else
   QN_PROTOCOL_BYTE=$(opt qn_protocol_byte)
   QN_REPORT_BYTE=$(opt qn_report_byte)
   AUTO_CLEAR_STALE_BOND=$(opt_bool auto_clear_stale_bond)
+  PROXY_LIVENESS_MIN=$(opt_int proxy_liveness_timeout_min 30)
 
   WEIGHT_UNIT=$(opt weight_unit)
   HEIGHT_UNIT=$(opt height_unit)
@@ -195,7 +196,7 @@ YAML
   done
 
   # BLE section (only if scale_mac, adapter, a forced scale adapter or a QN byte is set)
-  if [ -n "$SCALE_MAC" ] || [ -n "$BLE_ADAPTER" ] || [ -n "$FORCE_SCALE_ADAPTER" ]     || [ -n "$QN_PROTOCOL_BYTE" ] || [ -n "$QN_REPORT_BYTE" ]     || [ "$AUTO_CLEAR_STALE_BOND" = "true" ]; then
+  if [ -n "$SCALE_MAC" ] || [ -n "$BLE_ADAPTER" ] || [ -n "$FORCE_SCALE_ADAPTER" ]     || [ -n "$QN_PROTOCOL_BYTE" ] || [ -n "$QN_REPORT_BYTE" ]     || [ "$AUTO_CLEAR_STALE_BOND" = "true" ] || [ "$PROXY_LIVENESS_MIN" != "30" ]; then
     echo "ble:" >> "$FRESH"
     [ -n "$SCALE_MAC" ] && echo "  scale_mac: \"$(yaml_escape "$SCALE_MAC")\"" >> "$FRESH"
     [ -n "$BLE_ADAPTER" ] && echo "  adapter: \"$(yaml_escape "$BLE_ADAPTER")\"" >> "$FRESH"
@@ -203,6 +204,7 @@ YAML
     [ -n "$QN_PROTOCOL_BYTE" ] && echo "  qn_protocol_byte: $QN_PROTOCOL_BYTE" >> "$FRESH"
     [ -n "$QN_REPORT_BYTE" ] && echo "  qn_report_byte: $QN_REPORT_BYTE" >> "$FRESH"
     [ "$AUTO_CLEAR_STALE_BOND" = "true" ] && echo "  auto_clear_stale_bond: true" >> "$FRESH"
+    [ "$PROXY_LIVENESS_MIN" != "30" ] && echo "  proxy_liveness_timeout_min: $PROXY_LIVENESS_MIN" >> "$FRESH"
     echo "" >> "$FRESH"
   fi
 
