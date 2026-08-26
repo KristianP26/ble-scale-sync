@@ -2,6 +2,7 @@ import type {
   BleDeviceInfo,
   BodyComposition,
   BroadcastSource,
+  LiveWeight,
   ScaleAdapterCore,
   ScaleReading,
   UserProfile,
@@ -165,6 +166,44 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
     return null;
   }
 
+  /**
+   * Decode a weight frame into its settled flag and kilograms, or null when the
+   * buffer is not one.
+   *
+   * Shared by `parseBroadcast` and `parseLiveBroadcast` so the two can never
+   * disagree about what a frame says: they differ only in which side of the
+   * settled flag they answer for (#356).
+   */
+  private decodeWeightFrame(manufacturerData: Buffer): { settled: boolean; weight: number } | null {
+    if (manufacturerData.length !== MFG_LEN) return null;
+    const p = manufacturerData.subarray(PAYLOAD_OFFSET);
+    if (!checksumOk(p)) return null;
+    if (p[4] !== FRAME_TYPE_WEIGHT) return null;
+
+    const flags = p[0] ^ OBFUSCATION_KEY;
+    const grams =
+      (((p[1] ^ OBFUSCATION_KEY) << 16) |
+        ((p[2] ^ OBFUSCATION_KEY) << 8) |
+        (p[3] ^ OBFUSCATION_KEY)) -
+      WEIGHT_BIAS;
+    return { settled: (flags & FLAG_SETTLED) !== 0, weight: grams / 1000 };
+  }
+
+  /**
+   * The settling stream, for a display that follows the scale (#356).
+   *
+   * Returns nothing for a settled frame, which `parseBroadcast` owns, so one
+   * advertisement is never reported through both channels. The same
+   * plausibility bound applies: a garbled frame must not put 6553 kg on
+   * somebody's screen just because it is only a display.
+   */
+  parseLiveBroadcast(manufacturerData: Buffer): LiveWeight | null {
+    const frame = this.decodeWeightFrame(manufacturerData);
+    if (!frame || frame.settled) return null;
+    if (frame.weight < WEIGHT_MIN_KG || frame.weight > WEIGHT_MAX_KG) return null;
+    return { weight: frame.weight };
+  }
+
   parseBroadcast(manufacturerData: Buffer): ScaleReading | null {
     if (manufacturerData.length !== MFG_LEN) return null;
     const p = manufacturerData.subarray(PAYLOAD_OFFSET);
@@ -195,8 +234,8 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
     // converging on a number and swings wildly while someone steps on
     // (the 108.5 kg capture runs 39.60, 55.48, 83.46, 107.03 ... before it
     // settles), so publishing any of it would publish a weight the scale never
-    // showed. There is no way to mark a reading provisional through this
-    // interface, so a settling frame is logged and dropped.
+    // showed. It is surfaced through `parseLiveBroadcast` instead, whose return
+    // type cannot reach an exporter.
     if ((flags & FLAG_SETTLED) === 0) {
       bleLog.debug(`Silvergear settling: ${weight.toFixed(3)} kg`);
       return null;
