@@ -167,6 +167,7 @@ interface CachedComp {
   muscle?: number; // %
   waterMass?: number; // kg
   softLean?: number; // kg
+  impedance?: number; // ohm
 }
 
 /**
@@ -871,7 +872,18 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
       this.cachedComp.waterMass = waterMass * massMul;
       off += 2;
     }
-    if (flags & 0x0200) off += 2; // Impedance (unused; native comp)
+    if (flags & 0x0200) {
+      // Impedance, 0.1 ohm per LSB. Skipped as "unused" since this adapter was
+      // written, on the reasoning that the scale supplies its own composition,
+      // so every reading from a BF720, BF788 or BF950 has carried a false zero
+      // (#354). It is not unused: the fields the scale does NOT supply are
+      // derived downstream, and a real impedance moves them off the BMI-only
+      // estimate onto the BIA equations.
+      const impedance = u16(off);
+      if (impedance == null) return;
+      this.cachedComp.impedance = impedance * 0.1;
+      off += 2;
+    }
     if (flags & 0x0400) {
       const raw = u16(off); // Weight
       if (raw == null) return;
@@ -889,7 +901,10 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
    */
   private buildReading(): ScaleReading | null {
     if (this.cachedWeight <= 0 || this.cachedComp.fat == null) return null;
-    const reading: ScaleReading = { weight: this.cachedWeight, impedance: 0 };
+    const reading: ScaleReading = {
+      weight: this.cachedWeight,
+      impedance: this.cachedComp.impedance ?? 0,
+    };
     const histTs = this.historicalTimestamp(this.cachedTimestamp);
     if (histTs) reading.timestamp = histTs;
     // Snapshot the composition onto this specific reading. computeMetrics() runs

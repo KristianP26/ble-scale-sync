@@ -136,6 +136,16 @@ describe('BeurerBf720Adapter', () => {
   });
 
   describe('parseCharNotification()', () => {
+    it('reports zero impedance when the frame does not carry the field', () => {
+      const a = makeAdapter();
+      // Same frame with bit 9 cleared and the trailing field removed.
+      const noImpedance = Buffer.from('9801c200df1a9701cc2fca21', 'hex');
+      a.parseCharNotification(CHR_WEIGHT, WSS_FRAME);
+      const reading = a.parseCharNotification(CHR_BODYCOMP, noImpedance);
+      expect(reading).not.toBeNull();
+      expect(reading!.impedance).toBe(0);
+    });
+
     it('pairs weight + body composition and decodes native values', () => {
       const a = makeAdapter();
       expect(a.parseCharNotification(CHR_WEIGHT, WSS_FRAME)).toBeNull();
@@ -149,6 +159,11 @@ describe('BeurerBf720Adapter', () => {
       expect(reading!.timestamp!.getFullYear()).toBe(2026);
       expect(reading!.timestamp!.getMonth()).toBe(4); // May (0-based)
       expect(reading!.timestamp!.getDate()).toBe(12);
+
+      // Bit 9 of the flags is set in this capture and the field was skipped as
+      // "unused", so every reading from this family carried a false zero (#354).
+      // 0x11a8 = 4520 at 0.1 ohm per LSB, a plausible whole-body value at 80 kg.
+      expect(reading!.impedance).toBeCloseTo(452.0, 1);
 
       const payload = a.computeMetrics(reading!, defaultProfile());
       assertPayloadRanges(payload);
