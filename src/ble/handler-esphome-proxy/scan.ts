@@ -149,6 +149,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
             // Device still carries broadcast data this adapter parses but no
             // stable frame yet: keep waiting.
             if (decision.kind === 'wait') {
+              // What the scale is showing while it converges. Not a reading, so
+              // it never resolves the scan (#356).
+              if (decision.live) opts.onLiveWeight?.(decision.live);
               bleLog.debug(
                 `${adapter.name} matched at ${address} but broadcast frame is not stable yet`,
               );

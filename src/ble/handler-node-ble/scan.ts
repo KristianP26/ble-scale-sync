@@ -164,6 +164,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     scaleAuth,
     weightUnit,
     onLiveData,
+    onLiveWeight,
     abortSignal,
     bleAdapter,
     readingTimeoutMs,
@@ -314,6 +315,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         return await broadcastScanNodeBle(matchedAdapter, btAdapter, device, mac, {
           abortSignal,
           onLiveData,
+          onLiveWeight,
         });
       }
 
@@ -401,6 +403,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         return await broadcastScanNodeBle(matchedAdapter, btAdapter, device, result.mac, {
           abortSignal,
           onLiveData,
+          onLiveWeight,
         });
       }
 

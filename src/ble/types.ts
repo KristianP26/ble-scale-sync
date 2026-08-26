@@ -3,6 +3,7 @@ import type {
   UserProfile,
   ScaleReading,
   ScaleAuth,
+  LiveWeight,
 } from '../interfaces/scale-adapter.js';
 import type { WeightUnit, MqttProxyConfig, EsphomeProxyConfig } from '../config/schema.js';
 import { createLogger } from '../logger.js';
@@ -127,6 +128,11 @@ export interface ScanOptions {
   scaleAuth?: ScaleAuth;
   weightUnit?: WeightUnit;
   onLiveData?: (reading: ScaleReading) => void;
+  /**
+   * Settling weights from a broadcast scale, for a display that follows it
+   * (#356). A `LiveWeight` is not a `ScaleReading` and cannot be exported.
+   */
+  onLiveWeight?: (live: LiveWeight) => void;
   abortSignal?: AbortSignal;
   bleHandler?: BleHandlerName;
   mqttProxy?: MqttProxyConfig;

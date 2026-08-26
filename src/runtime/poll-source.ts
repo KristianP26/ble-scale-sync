@@ -55,6 +55,15 @@ export class PollReadingSource implements ReadingSource {
           `\r  Weight: ${fmtWeight(reading.weight, this.ctx.weightUnit)} | Impedance: ${impStr}      `,
         );
       },
+      // Settling weights from a broadcast scale, so the console follows the
+      // scale's own display while somebody steps on (#356). Labelled as
+      // settling rather than shown bare: it is a number the scale has not
+      // committed to and it must not read like a result.
+      onLiveWeight: (live) => {
+        process.stdout.write(
+          `\r  Weight: ${fmtWeight(live.weight, this.ctx.weightUnit)} (settling...)      `,
+        );
+      },
     });
 
     return withTimeout(
