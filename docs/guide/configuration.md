@@ -75,6 +75,7 @@ ble:
 | `qn_protocol_byte`           | No                          | Auto           | QN-family scales only. Protocol byte the handshake echoes back to the scale (0 to 255). Set it when a QN scale runs the whole handshake and then reports nothing, or when its scale-info frame is lost in transit on a proxy transport. See below.                                         |
 | `qn_report_byte`             | No                          | Per dialect    | QN-family scales only. Payload byte of the history-response frame (0 to 255). Defaults to `252` (0xFC) on the long-frame dialects (es26m and extended) and `254` (0xFE) on the classic one. Try the other value if your scale completes the handshake and then reports nothing. See below. |
 | `auto_clear_stale_bond`      | No                          | `false`        | Delete a pairing key the scale has forgotten and pair again. Bonded scales only (Beurer BF7xx / BF9xx), node-ble transport only. See below.                                                                                                                                                |
+| `qn_live_weight_ack`         | No                          | Per dialect    | QN-family scales only. Answer every live weight frame with its own weight, as the vendor app does. On by default on the 20-byte extended dialect. Try `true` if your QN scale completes the handshake and then streams nothing. See below.                                                 |
 | `proxy_liveness_timeout_min` | No                          | `30`           | Minutes of total advertisement silence before a proxy transport is treated as wedged and the process exits for the supervisor to restart. `0` disables. Proxy transports only. See below.                                                                                                  |
 | `mqtt_proxy`                 | If `handler: mqtt-proxy`    | (none)         | MQTT proxy connection (`broker_url`, `device_id`, `topic_prefix`, `username`, `password`, `auto_connect`, `embedded_broker_*`). See [ESP32 BLE Proxy](./esp32-proxy).                                                                                                                      |
 | `esphome_proxy`              | If `handler: esphome-proxy` | (none)         | ESPHome Native API connection (`host`, `port`, `encryption_key` or `password`, `client_info`). See [ESPHome Bluetooth Proxy](./esphome-proxy).                                                                                                                                             |
@@ -154,6 +155,32 @@ QN: history response byte 0xfe (forced; dialect default 0xfc)
 ```
 
 If `252` makes your scale produce a weight, please say so in an issue with the model, the dialect from the `QN: scale info` line and that log line. Two confirmations on different firmware would be enough to move the default.
+
+:::
+
+::: tip QN scales that finish the handshake and then stream nothing (`qn_live_weight_ack`)
+
+There is a third silent-failure knob in this family, and it is the one with the clearest evidence behind it.
+
+A vendor-app capture of a GE CS 10 G answers **every** live weight frame the scale sends with an acknowledgement carrying that frame's own weight:
+
+```
+scale  ... 11 1e be ...   ->  app  a2 06 01 1e be 85
+scale  ... 11 1e c3 ...   ->  app  a2 06 01 1e c3 8a
+```
+
+On that firmware the scale will not finish a weigh-in without it, so the 20-byte extended dialect does this by default and needs no setting.
+
+No capture covers the other dialects, and every other QN scale in the registry reads today without the echo, so they do not send it. If yours completes the whole handshake, is accepted on `qn_protocol_byte` and `qn_report_byte`, and then goes quiet with no weight frames at all, this is the next thing to try:
+
+```yaml
+ble:
+  qn_live_weight_ack: true
+```
+
+`false` turns it off everywhere, including on the extended dialect, if it ever turns out to hurt a unit there.
+
+If `true` makes your scale report a weight, please say so in an issue with the model and the dialect from the `QN: scale info` log line. Two confirmations would move the default.
 
 :::
 
