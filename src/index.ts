@@ -19,6 +19,7 @@ const pkg = require('../package.json') as { version: string };
 import { loadAppConfig } from './config/load.js';
 import { resolveRuntimeConfig } from './config/resolve.js';
 import { startConfigWatcher, type ConfigWatcherHandle } from './config/watch.js';
+import { configureUpdateState } from './update-state.js';
 import type { Exporter } from './interfaces/exporter.js';
 import type { ScaleAdapter } from './interfaces/scale-adapter.js';
 import { createAppContext } from './runtime/context.js';
@@ -92,6 +93,11 @@ log.info(
 const loaded = loadAppConfig(cliFlags.config as string | undefined);
 const initialConfig = loaded.config;
 const initialResolved = resolveRuntimeConfig(initialConfig);
+
+// Persist the update-check cooldown next to the resolved config file, so a
+// restart-looping container or a development run does not re-send the daily
+// check. Without a config.yaml (.env-only) this lands at the repo root.
+configureUpdateState(loaded.configPath);
 
 if (initialConfig.runtime?.debug) setLogLevel(LogLevel.DEBUG);
 
