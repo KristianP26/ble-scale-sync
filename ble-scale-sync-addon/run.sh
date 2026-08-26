@@ -60,7 +60,20 @@ else
   FORCE_SCALE_ADAPTER=$(opt force_scale_adapter)
   QN_PROTOCOL_BYTE=$(opt qn_protocol_byte)
   QN_REPORT_BYTE=$(opt qn_report_byte)
+  # Free-text rather than a list, matching the sibling QN options, so normalise
+  # it here: only an exact true/false reaches config.yaml. Anything else is
+  # dropped with a warning rather than written through to fail Zod at startup,
+  # and an empty value keeps the per-dialect default.
   QN_LIVE_WEIGHT_ACK=$(opt qn_live_weight_ack)
+  case "$(echo "$QN_LIVE_WEIGHT_ACK" | tr '[:upper:]' '[:lower:]')" in
+    "") QN_LIVE_WEIGHT_ACK="" ;;
+    true | yes | on | 1) QN_LIVE_WEIGHT_ACK="true" ;;
+    false | no | off | 0) QN_LIVE_WEIGHT_ACK="false" ;;
+    *)
+      log "WARNING: ignoring qn_live_weight_ack='$QN_LIVE_WEIGHT_ACK' (expected true or false)."
+      QN_LIVE_WEIGHT_ACK=""
+      ;;
+  esac
   AUTO_CLEAR_STALE_BOND=$(opt_bool auto_clear_stale_bond)
   PROXY_LIVENESS_MIN=$(opt_int proxy_liveness_timeout_min 30)
 

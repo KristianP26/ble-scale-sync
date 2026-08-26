@@ -73,7 +73,7 @@ schema:
   force_scale_adapter: str?
   qn_protocol_byte: str?
   qn_report_byte: str?
-  qn_live_weight_ack: list(|true|false)?
+  qn_live_weight_ack: str?
   auto_clear_stale_bond: bool?
   proxy_liveness_timeout_min: int(0,1440)?
   weight_unit: list(kg|lbs)
