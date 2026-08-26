@@ -164,13 +164,18 @@ function renderDashboard(stats24h: AggregatedStats, stats7d: AggregatedStats, st
     const isDaily = s.days === 1;
     const avg = s.uniqueDays > 0 ? Math.round(s.totalChecks / s.uniqueDays) : 0;
     const value = isDaily ? s.totalChecks : avg;
-    const label = isDaily ? 'active installations (est.)' : 'avg daily installations (est.)';
+    const label = isDaily
+      ? 'installations (est.), 1 check = 1 install/day'
+      : 'avg installations per day (est.)';
+    const sub = isDaily
+      ? `${s.totalChecks} update check${s.totalChecks !== 1 ? 's' : ''}`
+      : `${s.uniqueDays} active day${s.uniqueDays !== 1 ? 's' : ''}, ${s.totalChecks} update checks total`;
     return `
     <div class="card">
       <h2>${s.period}</h2>
       <div class="big-number">${value}</div>
       <div class="label">${label}</div>
-      <div class="sub">${s.uniqueDays} active day${s.uniqueDays !== 1 ? 's' : ''}${!isDaily ? `, ${s.totalChecks} total checks` : ''}</div>
+      <div class="sub">${sub}</div>
     </div>`;
   };
 
@@ -185,15 +190,15 @@ function renderDashboard(stats24h: AggregatedStats, stats7d: AggregatedStats, st
         </div>
       </div>
       <table class="tab-content active" data-group="${title.toLowerCase()}" data-period="24h">
-        <thead><tr><th>${title}</th><th>Count</th><th>Share</th></tr></thead>
+        <thead><tr><th>${title}</th><th>Checks</th><th>Share</th></tr></thead>
         <tbody>${renderTable(data24, total24)}</tbody>
       </table>
       <table class="tab-content" data-group="${title.toLowerCase()}" data-period="7d">
-        <thead><tr><th>${title}</th><th>Count</th><th>Share</th></tr></thead>
+        <thead><tr><th>${title}</th><th>Checks</th><th>Share</th></tr></thead>
         <tbody>${renderTable(data7, total7)}</tbody>
       </table>
       <table class="tab-content" data-group="${title.toLowerCase()}" data-period="30d">
-        <thead><tr><th>${title}</th><th>Count</th><th>Share</th></tr></thead>
+        <thead><tr><th>${title}</th><th>Checks</th><th>Share</th></tr></thead>
         <tbody>${renderTable(data30, total30)}</tbody>
       </table>
     </div>`;
@@ -308,6 +313,13 @@ function renderDashboard(stats24h: AggregatedStats, stats7d: AggregatedStats, st
     </div>
     <footer>
       <p>Data from update check requests only. No personal data collected.</p>
+      <p style="margin-top: 0.5rem; max-width: 46rem; margin-left: auto; margin-right: auto">
+        Table counts are update checks, not installations. One installation checks at most
+        once per UTC day, so over a single day the two are the same number. Before the
+        release that persists the update-check cooldown, the cooldown was kept in
+        process memory, so a restart could send an extra check the same day and
+        figures from that period are inflated.
+      </p>
       <p><a href="https://blescalesync.dev">blescalesync.dev</a></p>
       <p style="margin-top: 0.5rem">Released under the <a href="https://github.com/KristianP26/ble-scale-sync/blob/main/LICENSE">GPL-3.0 License</a>.</p>
       <p>Copyright &copy; 2026 Kristi&aacute;n Partl</p>
