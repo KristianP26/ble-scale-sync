@@ -250,10 +250,16 @@ export const UserSchema = z.object({
    * existing one (#335).
    *
    * A SIG user record exists only after User Control Point "Register New User",
-   * and normally only the vendor app performs it. The profiles created in the
-   * scale's own menu are display-side records for its body-composition maths,
-   * not SIG users, so a scale set up that way refuses every consent code from
-   * any other client: there is no record it is entitled to.
+   * and normally only the vendor app performs it, so a scale set up that way
+   * refuses every consent code from any other client: there is no record it is
+   * entitled to.
+   *
+   * NOT the first move on a BF915, where the scale's own menu profiles ARE the
+   * SIG slots: a factory reset followed by creating U:1 in the menu, with no
+   * BLE operation at all, leaves Register New User returning index 2, and
+   * consent on index 1 returns the values typed into the menu. On that model
+   * the profile and its displayed four-digit consent code come from the menu
+   * and this only burns slots (#335).
    *
    * One-shot and opt-in, because it writes a record to the device and the slots
    * are finite. Turn it on once, read the assigned index out of the log, put

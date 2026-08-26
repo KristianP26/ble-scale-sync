@@ -204,9 +204,19 @@ Native BlueZ only. The proxy transports do not pair at all.
 
 If a Beurer or Sanitas scale bonds, subscribes and then answers the consent with `USER_NOT_AUTHORIZED` no matter which code or slot you try, the problem is usually not the code.
 
-A user record in the Bluetooth SIG User Data Service exists only after a **Register New User** operation, and normally only the vendor app performs it. The profiles you create in the scale's own menu (SET, U:1 to U:8) are display-side records for its body-composition maths; they are not SIG users. So on a scale whose user was registered by the vendor app, another client has no record it is entitled to, and consent can never succeed for it.
+A user record in the Bluetooth SIG User Data Service exists only after a **Register New User** operation, and normally only the vendor app performs it. On a scale whose user was registered by the vendor app, another client has no record it is entitled to, and consent can never succeed for it.
 
-This creates one:
+::: warning Try the scale's own menu first
+On a **BF915** the scale's menu profiles (SET, `U:1` to `U:8`) _are_ the SIG user slots, and creating one there is the whole job. @martingebert9428 measured it: factory reset, create `U:1` in the menu with no BLE operation of any kind, and Register New User then comes back with index **2**, because the menu profile has taken slot 1. Consent on index 1 is accepted and returns exactly the date of birth, gender and height entered in the menu.
+
+So on that model the right first move is: create the profile in the menu, read the four-digit number the scale displays when you select it (that is the consent code, no guessing), and set `beurer_user_index` to the profile's number. Registering from here only burns slots you cannot free individually.
+
+One more step that is invisible from the log: **assign one weigh-in to the new profile**. A profile with no reference weight makes the scale show `U -` after weighing and assign the measurement to nobody, and in that state it sends no notification at all, on any characteristic. It looks exactly like a wrong consent code.
+
+Register New User is still the right tool where the vendor app owns the code, which is where it came from.
+:::
+
+This creates a record:
 
 ```yaml
 users:
