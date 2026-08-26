@@ -434,6 +434,11 @@ export class QnScaleAdapter
   private forcedReportByte: number | null = null;
 
   /**
+   * `ble.qn_live_weight_ack`. Null leaves the dialect gate alone (#75).
+   */
+  private forcedLiveWeightAck: boolean | null = null;
+
+  /**
    * Whether a completed-weigh-in result frame (0xB4/0xB1) has already produced a
    * reading this session. The scale repeats the 0xB4 frame ~3x and then sends
    * the 0xB1 records, all describing the one weigh-in, so the reading is emitted
@@ -474,6 +479,7 @@ export class QnScaleAdapter
     if (opts.weightUnit) this.displayUnit = opts.weightUnit;
     this.forcedProtocolType = opts.qnProtocolByte ?? null;
     this.forcedReportByte = opts.qnReportByte ?? null;
+    this.forcedLiveWeightAck = opts.qnLiveWeightAck ?? null;
   }
 
   /** 0x13 config unit flag: 0x01 kg, 0x02 lb (openScale QNHandler). */
@@ -1103,7 +1109,7 @@ export class QnScaleAdapter
     // whether to finish. Gated to the 20-byte dialect: it is the only firmware
     // any capture covers, and every other QN scale in the registry reads today
     // without it. Fire and forget, like the 0x1F stable ACK below.
-    if (this.isExtendedLongFrame && this.ctx) {
+    if (this.liveWeightAckEnabled() && this.ctx) {
       void this.writeCmd(buildA2Frame(rawWeight));
     }
 
@@ -1358,6 +1364,19 @@ export class QnScaleAdapter
     }
     this.sessionStartedScaleSeconds = null;
     this.ctx = null;
+  }
+
+  /**
+   * Whether to answer each live 0x10 frame with its own weight.
+   *
+   * The dialect gate is the default because the 20-byte extended firmware is
+   * the only one a vendor-app capture covers, and every other QN scale in the
+   * registry reads today without the echo. `ble.qn_live_weight_ack` overrides
+   * it in both directions for a reporter chasing a scale that completes the
+   * handshake and then streams nothing (#75).
+   */
+  private liveWeightAckEnabled(): boolean {
+    return this.forcedLiveWeightAck ?? this.isExtendedLongFrame;
   }
 
   /** Build the 0x22 stored-data query frame with a trailing checksum. */

@@ -1694,6 +1694,56 @@ describe('AE02 dispatch (#75, #235)', () => {
       ]);
     });
 
+    // #75: an es26m Arboleaf completes the whole handshake and then streams
+    // nothing. The echo is the remaining difference from the vendor app, so it
+    // gets the same kind of opt-in knob as qn_protocol_byte and qn_report_byte
+    // rather than a blind default change on a dialect no capture covers.
+    it('echoes on any dialect when qn_live_weight_ack forces it on', async () => {
+      const adapter = makeAdapter();
+      adapter.configure({ qnLiveWeightAck: true });
+      const writes: number[][] = [];
+      const ctx = {
+        write: async (_uuid: string, data: Buffer | number[]) => {
+          writes.push([...data]);
+        },
+        read: async () => Buffer.alloc(0),
+        subscribe: async () => {},
+        profile: defaultProfile(),
+        deviceAddress: '',
+        availableChars: new Set<string>(),
+      } as unknown as ConnectionContext;
+      await adapter.onConnected(ctx);
+      adapter.parseNotification(makeEs26mScaleInfo());
+      writes.length = 0;
+      const b = Buffer.alloc(14);
+      b[0] = 0x10;
+      b[1] = 0x0e;
+      b[2] = 0xff;
+      b.writeUInt16BE(0x1ebe, 3);
+      adapter.parseNotification(b);
+      await Promise.resolve();
+      expect(writes.filter((w) => w[0] === 0xa2)).toEqual([[0xa2, 0x06, 0x01, 0x1e, 0xbe, 0x85]]);
+    });
+
+    it('suppresses the echo on the extended dialect when forced off', async () => {
+      const adapter = makeAdapter();
+      adapter.configure({ qnLiveWeightAck: false });
+      const writes = await driveHandshake(adapter, makeExtendedScaleInfo());
+      const startIndex = writes.findIndex((w) => w[0] === 0x22);
+      // The post-START trigger still goes out; only the per-frame echo is off,
+      // and no live frame was fed here.
+      expect(writes.slice(startIndex + 1).filter((w) => w[0] === 0xa2)).toHaveLength(2);
+      const b = Buffer.alloc(14);
+      b[0] = 0x10;
+      b[1] = 0x0e;
+      b[2] = 0xff;
+      b.writeUInt16BE(0x1ebe, 3);
+      const before = writes.length;
+      adapter.parseNotification(b);
+      await Promise.resolve();
+      expect(writes.length).toBe(before);
+    });
+
     it('does not echo live weight frames on the es26m dialect', async () => {
       const adapter = makeAdapter();
       const writes: number[][] = [];

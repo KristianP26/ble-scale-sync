@@ -203,6 +203,17 @@ export interface AdapterRuntimeConfig {
    * is a setting rather than a changed default (#235, #75, #331).
    */
   qnReportByte?: number;
+  /**
+   * Acknowledge every live QN weight frame with its own weight
+   * (`ble.qn_live_weight_ack`).
+   *
+   * The vendor app answers each 0x10 frame with `a2 06 01 <that frame's weight>`
+   * (#235). The adapter does this on the 20-byte extended dialect, which is the
+   * only one a capture covers. Unset keeps that gate; true enables it on every
+   * dialect, for a scale that completes the handshake and then goes quiet;
+   * false disables it everywhere.
+   */
+  qnLiveWeightAck?: boolean;
 }
 
 /**

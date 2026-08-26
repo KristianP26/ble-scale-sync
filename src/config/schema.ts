@@ -163,6 +163,19 @@ export const BleSchema = z
      */
     qn_report_byte: z.number().int().min(0).max(255).optional().nullable(),
     /**
+     * Acknowledge every live QN weight frame with its own weight (#75, #235).
+     *
+     * The vendor app answers each 0x10 frame with `a2 06 01 <that weight>`, and
+     * on the scale a capture covers, the 20-byte extended dialect, the scale
+     * will not finish a weigh-in without it. That dialect does it by default.
+     *
+     * Set true on another dialect whose scale completes the whole handshake and
+     * then streams nothing: it is the same class of silent failure as
+     * `qn_protocol_byte` and `qn_report_byte`, and the same kind of knob. Left
+     * unset it changes nothing.
+     */
+    qn_live_weight_ack: z.boolean().optional().nullable(),
+    /**
      * Delete a bond the scale has forgotten and pair again, instead of stopping
      * at the diagnostic (#290, #335).
      *
