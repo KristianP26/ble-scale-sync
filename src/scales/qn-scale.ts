@@ -434,9 +434,9 @@ export class QnScaleAdapter
   private forcedReportByte: number | null = null;
 
   /**
-   * `ble.qn_live_weight_ack`. Null leaves the dialect gate alone (#75).
+   * `ble.qn_weight_ack`. Null leaves the dialect gate alone (#75).
    */
-  private forcedLiveWeightAck: boolean | null = null;
+  private forcedWeightAck: boolean | null = null;
 
   /**
    * Whether a completed-weigh-in result frame (0xB4/0xB1) has already produced a
@@ -479,7 +479,7 @@ export class QnScaleAdapter
     if (opts.weightUnit) this.displayUnit = opts.weightUnit;
     this.forcedProtocolType = opts.qnProtocolByte ?? null;
     this.forcedReportByte = opts.qnReportByte ?? null;
-    this.forcedLiveWeightAck = opts.qnLiveWeightAck ?? null;
+    this.forcedWeightAck = opts.qnWeightAck ?? null;
   }
 
   /** 0x13 config unit flag: 0x01 kg, 0x02 lb (openScale QNHandler). */
@@ -1109,7 +1109,7 @@ export class QnScaleAdapter
     // whether to finish. Gated to the 20-byte dialect: it is the only firmware
     // any capture covers, and every other QN scale in the registry reads today
     // without it. Fire and forget, like the 0x1F stable ACK below.
-    if (this.liveWeightAckEnabled() && this.ctx) {
+    if (this.weightAckEnabled() && this.ctx) {
       void this.writeCmd(buildA2Frame(rawWeight));
     }
 
@@ -1270,11 +1270,32 @@ export class QnScaleAdapter
     timeCmd[7] = timeCmd.reduce((a, b) => a + b, 0) & 0xff;
     await this.writeCmd(timeCmd);
 
-    // A2 user profile
+    // A2, which openScale labels a user profile and fills with 0x32 plus the
+    // user's age. The GE CS 10 G capture shows the vendor app using this exact
+    // frame to carry a WEIGHT, so under that reading `0x32 <age>` decodes as a
+    // weight nobody has: @chriba2567's log writes `a2 06 01 32 3a 15`, which is
+    // 128.58 kg, and his scale then goes silent right after START (#331, #75).
+    //
+    // Not changed by default. openScale's bytes are what every QN scale in the
+    // registry reads with today, and two silent units are not enough to move a
+    // default under the whole family. `ble.qn_weight_ack` swaps in the
+    // configured anchor for the reporters who can actually test it.
     if (this.ctx) {
-      const age = Math.min(0xff, Math.max(1, this.ctx.profile.age));
-      const profileCmd = [0xa2, 0x06, 0x01, 0x32, age, 0x00];
-      profileCmd[5] = profileCmd.reduce((a, b) => a + b, 0) & 0xff;
+      const anchorKg = this.ctx.profile.lastKnownWeight ?? TRIGGER_WEIGHT_FALLBACK_KG;
+      const profileCmd = this.forcedWeightAck
+        ? buildMeasurementTrigger(anchorKg)
+        : (() => {
+            const age = Math.min(0xff, Math.max(1, this.ctx!.profile.age));
+            const cmd = [0xa2, 0x06, 0x01, 0x32, age, 0x00];
+            cmd[5] = cmd.reduce((a, b) => a + b, 0) & 0xff;
+            return cmd;
+          })();
+      if (this.forcedWeightAck) {
+        bleLog.debug(
+          `QN: ready-time A2 carries the configured weight anchor ` +
+            `${anchorKg.toFixed(2)} kg instead of openScale's placeholder (#75)`,
+        );
+      }
       await this.writeCmd(profileCmd);
     }
 
@@ -1371,12 +1392,12 @@ export class QnScaleAdapter
    *
    * The dialect gate is the default because the 20-byte extended firmware is
    * the only one a vendor-app capture covers, and every other QN scale in the
-   * registry reads today without the echo. `ble.qn_live_weight_ack` overrides
+   * registry reads today without the echo. `ble.qn_weight_ack` overrides
    * it in both directions for a reporter chasing a scale that completes the
    * handshake and then streams nothing (#75).
    */
-  private liveWeightAckEnabled(): boolean {
-    return this.forcedLiveWeightAck ?? this.isExtendedLongFrame;
+  private weightAckEnabled(): boolean {
+    return this.forcedWeightAck ?? this.isExtendedLongFrame;
   }
 
   /** Build the 0x22 stored-data query frame with a trailing checksum. */

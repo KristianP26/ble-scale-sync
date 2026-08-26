@@ -1698,9 +1698,41 @@ describe('AE02 dispatch (#75, #235)', () => {
     // nothing. The echo is the remaining difference from the vendor app, so it
     // gets the same kind of opt-in knob as qn_protocol_byte and qn_report_byte
     // rather than a blind default change on a dialect no capture covers.
-    it('echoes on any dialect when qn_live_weight_ack forces it on', async () => {
+    // #331/#75: with the flag off, the ready-time A2 keeps openScale's bytes,
+    // which decode as ~128 kg under the weight reading. That is deliberate:
+    // every QN scale in the registry reads with them today.
+    it('keeps openScale placeholder bytes in the ready-time A2 by default', async () => {
       const adapter = makeAdapter();
-      adapter.configure({ qnLiveWeightAck: true });
+      const writes = await driveHandshake(
+        adapter,
+        makeEs26mScaleInfo(),
+        defaultProfile({ lastKnownWeight: 76 }),
+      );
+      const startIndex = writes.findIndex((w) => w[0] === 0x22);
+      const beforeStart = writes.slice(0, startIndex).filter((w) => w[0] === 0xa2);
+      expect(beforeStart).toHaveLength(1);
+      expect(beforeStart[0][3]).toBe(0x32);
+      expect(beforeStart[0][4]).toBe(30); // defaultProfile age
+    });
+
+    it('swaps the configured anchor into the ready-time A2 when forced on', async () => {
+      const adapter = makeAdapter();
+      adapter.configure({ qnWeightAck: true });
+      const writes = await driveHandshake(
+        adapter,
+        makeEs26mScaleInfo(),
+        defaultProfile({ lastKnownWeight: 76 }),
+      );
+      const startIndex = writes.findIndex((w) => w[0] === 0x22);
+      const beforeStart = writes.slice(0, startIndex).filter((w) => w[0] === 0xa2);
+      expect(beforeStart).toHaveLength(1);
+      // 7600 = 0x1db0
+      expect(beforeStart[0]).toEqual([0xa2, 0x06, 0x01, 0x1d, 0xb0, 0x76]);
+    });
+
+    it('echoes on any dialect when qn_weight_ack forces it on', async () => {
+      const adapter = makeAdapter();
+      adapter.configure({ qnWeightAck: true });
       const writes: number[][] = [];
       const ctx = {
         write: async (_uuid: string, data: Buffer | number[]) => {
@@ -1727,7 +1759,7 @@ describe('AE02 dispatch (#75, #235)', () => {
 
     it('suppresses the echo on the extended dialect when forced off', async () => {
       const adapter = makeAdapter();
-      adapter.configure({ qnLiveWeightAck: false });
+      adapter.configure({ qnWeightAck: false });
       const writes = await driveHandshake(adapter, makeExtendedScaleInfo());
       const startIndex = writes.findIndex((w) => w[0] === 0x22);
       // The post-START trigger still goes out; only the per-frame echo is off,

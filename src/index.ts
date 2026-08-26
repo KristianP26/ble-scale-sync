@@ -287,9 +287,9 @@ async function main(): Promise<void> {
     const weightUnit = ctx.config.scale.weight_unit;
     const qnProtocolByte = ctx.config.ble?.qn_protocol_byte ?? undefined;
     const qnReportByte = ctx.config.ble?.qn_report_byte ?? undefined;
-    const qnLiveWeightAck = ctx.config.ble?.qn_live_weight_ack ?? undefined;
+    const qnWeightAck = ctx.config.ble?.qn_weight_ack ?? undefined;
     for (const a of adapters)
-      a.configure?.({ bindKey, weightUnit, qnProtocolByte, qnReportByte, qnLiveWeightAck });
+      a.configure?.({ bindKey, weightUnit, qnProtocolByte, qnReportByte, qnWeightAck });
   };
   applyAdapterConfig(ctx.config.ble?.bind_key ?? undefined);
 
