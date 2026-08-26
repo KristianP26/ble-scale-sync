@@ -72,6 +72,28 @@ function primed(adapter: SalterAdapter, record: Buffer, ageSec = 10): SalterAdap
   return adapter;
 }
 
+/** A `02 <u32 LE>` clock reply carrying `seconds` verbatim. */
+function clockOf(seconds: number): Buffer {
+  const b = Buffer.alloc(5);
+  b[0] = 0x02;
+  b.writeUInt32LE(seconds, 1);
+  return b;
+}
+
+/**
+ * A clock the scale could only be holding if it had been set: the timestamp on
+ * the newest fixture. Anything below 2020 means new batteries, and the adapter
+ * writes the clock instead of walking slots that a scale in that state has not
+ * filled.
+ */
+const CLOCK_SET = clockOf(tsOf(REC_897_SLOT2));
+
+/** A clock counting up from a battery change rather than from the epoch. */
+const CLOCK_UNSET = clockOf(28);
+
+/** The `01 00` the scale answers a clock write with. */
+const SET_CLOCK_ACK = Buffer.from('0100', 'hex');
+
 /** Render a command byte array as hex, for the "no destructive write" check. */
 function a2h(bytes: number[]): string {
   return Buffer.from(bytes).toString('hex');
@@ -99,8 +121,19 @@ describe('SalterAdapter', () => {
       });
     });
 
-    it('claims a device by its FFC1 command characteristic post-discovery', () => {
+    it('does NOT claim a device on the bare FFC1 characteristic alone', () => {
+      // A `charUuids` claim hits with no service or name qualifier, and at
+      // priority 125 it would outrank every adapter from Hoffen (20) to
+      // Exingtech Y1 (120). A device one of those matched pre-connect would be
+      // re-resolved here after discovery and then fail the whole read.
       const info: BleDeviceInfo = mockPeripheral('', [], undefined, [uuid16(0xffc1)]);
+      expect(makeAdapter().matches(info)).toBe(false);
+    });
+
+    it('still re-resolves post-discovery on the service, name absent', () => {
+      // Dropping the characteristic claim must not cost the post-discovery
+      // path: a unit that reaches GATT as a Salter got there on the service.
+      const info: BleDeviceInfo = mockPeripheral('', ['ffcc'], undefined, [uuid16(0xffc1)]);
       expect(makeAdapter().matches(info)).toBe(true);
     });
 
@@ -164,6 +197,27 @@ describe('SalterAdapter', () => {
       const zeroWeight = Buffer.from(REC_876_BIA);
       zeroWeight.writeUInt16LE(0, 6);
       expect(makeAdapter().parseNotification(zeroWeight)).toBeNull();
+    });
+
+    it('rejects an implausible weight rather than exporting it', () => {
+      // The field is a bare u16, so unbounded it accepts 6553.5 kg. Any 20-byte
+      // frame whose first byte is under 8 is treated as a record, so a garbled
+      // frame or an unknown firmware reply must not decode to an absurd weight.
+      // Both adapters are primed with a clock, or the no-clock gate rejects the
+      // record before MAX_WEIGHT_KG is ever consulted and the ceiling goes
+      // untested: raising it to 100000 leaves an unprimed version of this green.
+      const absurd = Buffer.from(REC_876_BIA);
+      absurd.writeUInt16LE(0xffff, 6); // 6553.5 kg
+      expect(primed(makeAdapter(), absurd).parseNotification(absurd)).toBeNull();
+
+      const overCeiling = Buffer.from(REC_876_BIA);
+      overCeiling.writeUInt16LE(3001, 6); // 300.1 kg
+      expect(primed(makeAdapter(), overCeiling).parseNotification(overCeiling)).toBeNull();
+    });
+
+    it('still accepts a legitimately light load', () => {
+      // No floor to match the ceiling: the 7.4 kg fixture is a real capture.
+      expect(parseOk(primed(makeAdapter(), REC_74_SLOT6), REC_74_SLOT6).weight).toBeCloseTo(7.4, 4);
     });
   });
 
@@ -319,7 +373,7 @@ describe('SalterAdapter', () => {
       // produced three answers on hardware, and the only fetch that survived was
       // the last one written. Each reply must trigger the next fetch instead.
       const a = makeAdapter();
-      expect(a.buildAck(clockReply(0, 0))).toEqual([0x09, 0, 0x00]);
+      expect(a.buildAck(CLOCK_SET)).toEqual([0x09, 0, 0x00]);
 
       const fromSlot = (i: number): number[] | null => {
         const rec = Buffer.from(REC_888_SLOT7);
@@ -335,6 +389,49 @@ describe('SalterAdapter', () => {
       const a = makeAdapter();
       expect(a.buildAck(PING_ECHO)).toBeNull();
       expect(a.buildAck(STATUS_ECHO)).toBeNull();
+    });
+
+    it('sets the clock when the scale has none, because it then stores nothing', () => {
+      // Measured on hardware: with the clock counting up from a battery change,
+      // fourteen sweeps either side of a real weigh-in found every slot empty
+      // and every `08 <i>` counter at zero. Setting the clock fixed it, the next
+      // weigh-in reading back at age zero.
+      const a = makeAdapter();
+      const before = Math.floor(Date.now() / 1000);
+      const ack = a.buildAck(CLOCK_UNSET);
+
+      expect(ack).not.toBeNull();
+      expect(ack![0]).toBe(0x01);
+      expect(ack).toHaveLength(5);
+      const written = Buffer.from(ack!).readUInt32LE(1);
+      expect(written).toBeGreaterThanOrEqual(before);
+      expect(written).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 1);
+    });
+
+    it('leaves a clock that is already set alone', () => {
+      // The vendor app writes local time into that UTC field and the scale
+      // drifts, so its clock disagrees with the host by an hour or more. Records
+      // are judged against the scale's own clock, so that costs nothing, and
+      // re-syncing would move the time base the app's history is dated against.
+      expect(makeAdapter().buildAck(CLOCK_SET)).toEqual([0x09, 0, 0x00]);
+    });
+
+    it('picks the slot walk back up as soon as the clock write is acked', () => {
+      const a = makeAdapter();
+      expect(a.buildAck(CLOCK_UNSET)![0]).toBe(0x01);
+      expect(a.buildAck(SET_CLOCK_ACK)).toEqual([0x02]);
+      expect(a.buildAck(CLOCK_SET)).toEqual([0x09, 0, 0x00]);
+    });
+
+    it('writes the clock once per session, then walks the slots regardless', () => {
+      // A write that does not take must not spin: the session simply yields
+      // nothing and the next connection tries again.
+      const a = makeAdapter();
+      expect(a.buildAck(CLOCK_UNSET)![0]).toBe(0x01);
+      expect(a.buildAck(CLOCK_UNSET)).toEqual([0x09, 0, 0x00]);
+
+      a.onSessionEnd();
+      expect(a.buildAck(CLOCK_UNSET)![0]).toBe(0x01); // re-armed for the next one
     });
 
     it('writes acks without a response — FFC1 is write-without-response only', () => {
@@ -353,7 +450,9 @@ describe('SalterAdapter', () => {
         const ack = a.buildAck(record);
         if (ack) writes.push(a2h(ack));
       }
-      writes.push(a2h(a.buildAck(clockReply(0, 0)) ?? []));
+      writes.push(a2h(a.buildAck(CLOCK_SET) ?? []));
+      writes.push(a2h(makeAdapter().buildAck(CLOCK_UNSET) ?? []));
+      writes.push(a2h(a.buildAck(SET_CLOCK_ACK) ?? []));
       expect(writes.some((w) => w.startsWith('0a'))).toBe(false);
     });
 
