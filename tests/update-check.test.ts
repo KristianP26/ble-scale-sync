@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, readFileSync, existsSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   isNewerVersion,
   buildUserAgent,
@@ -6,6 +9,7 @@ import {
   resetUpdateCheckTimer,
   getCurrentVersion,
 } from '../src/update-check.js';
+import { UPDATE_STATE_FILENAME, configureUpdateState } from '../src/update-state.js';
 
 // Suppress log output during tests
 vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -205,5 +209,111 @@ describe('checkForUpdate()', () => {
 describe('getCurrentVersion()', () => {
   it('returns a semver string', () => {
     expect(getCurrentVersion()).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+});
+
+// ─── persisted cooldown ─────────────────────────────────────────────────────
+
+describe('checkForUpdate() persisted cooldown', () => {
+  let tempDir: string;
+
+  const configPath = (): string => join(tempDir, 'config.yaml');
+  const statePath = (): string => join(tempDir, UPDATE_STATE_FILENAME);
+
+  const okFetch = (): ReturnType<typeof vi.fn> =>
+    vi.fn().mockResolvedValue({ ok: true, json: async () => ({ latest: '99.0.0' }) });
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'update-check-'));
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('writes today into the state file next to config.yaml', async () => {
+    const mockFetch = okFetch();
+    vi.stubGlobal('fetch', mockFetch);
+    configureUpdateState(configPath());
+
+    await checkForUpdate(true);
+
+    const today = new Date().toISOString().slice(0, 10);
+    expect(existsSync(statePath())).toBe(true);
+    expect(JSON.parse(readFileSync(statePath(), 'utf8'))).toEqual({ lastCheckDate: today });
+
+    vi.unstubAllGlobals();
+  });
+
+  it('survives a process restart: the second process does not check again', async () => {
+    const first = okFetch();
+    vi.stubGlobal('fetch', first);
+    configureUpdateState(configPath());
+    await checkForUpdate(true);
+    expect(first).toHaveBeenCalledOnce();
+
+    // Simulate a restart: fresh module state, same state file on disk.
+    resetUpdateCheckTimer();
+    const second = okFetch();
+    vi.stubGlobal('fetch', second);
+    configureUpdateState(configPath());
+
+    expect(await checkForUpdate(true)).toBeNull();
+    expect(second).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+  });
+
+  it('checks again once the persisted day is in the past', async () => {
+    writeFileSync(statePath(), '{"lastCheckDate":"2000-01-01"}\n', 'utf8');
+    const mockFetch = okFetch();
+    vi.stubGlobal('fetch', mockFetch);
+    configureUpdateState(configPath());
+
+    expect(await checkForUpdate(true)).not.toBeNull();
+    expect(mockFetch).toHaveBeenCalledOnce();
+
+    vi.unstubAllGlobals();
+  });
+
+  it('treats a corrupt state file as never checked', async () => {
+    writeFileSync(statePath(), 'not json', 'utf8');
+    const mockFetch = okFetch();
+    vi.stubGlobal('fetch', mockFetch);
+    configureUpdateState(configPath());
+
+    expect(await checkForUpdate(true)).not.toBeNull();
+    expect(mockFetch).toHaveBeenCalledOnce();
+
+    vi.unstubAllGlobals();
+  });
+
+  it('consumes the day even when the request fails', async () => {
+    const failing = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'));
+    vi.stubGlobal('fetch', failing);
+    configureUpdateState(configPath());
+
+    expect(await checkForUpdate(true)).toBeNull();
+    expect(failing).toHaveBeenCalledOnce();
+
+    const today = new Date().toISOString().slice(0, 10);
+    expect(JSON.parse(readFileSync(statePath(), 'utf8'))).toEqual({ lastCheckDate: today });
+
+    vi.unstubAllGlobals();
+  });
+
+  it('does not write a state file when update_check is disabled', async () => {
+    configureUpdateState(configPath());
+
+    expect(await checkForUpdate(false)).toBeNull();
+    expect(existsSync(statePath())).toBe(false);
+  });
+
+  it('does not write a state file when CI=true', async () => {
+    process.env.CI = 'true';
+    configureUpdateState(configPath());
+
+    expect(await checkForUpdate(true)).toBeNull();
+    expect(existsSync(statePath())).toBe(false);
   });
 });
