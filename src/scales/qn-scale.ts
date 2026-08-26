@@ -482,6 +482,29 @@ export class QnScaleAdapter
   }
 
   /** Write to FFF2 (write char), fall back to FFE3 (Type 1). */
+  /**
+   * Warn when the discovered characteristics are structurally 1byone, not QN.
+   *
+   * Gated on fff4 present AND every QN write characteristic absent, so a
+   * genuine QN scale that happens to expose fff4 alongside its own fff2 (or the
+   * Type-1 ffe3) is never accused.
+   */
+  private warnOnOneByoneShape(ctx: ConnectionContext): void {
+    const chars = ctx.availableChars;
+    if (chars.size === 0) return;
+    if (!chars.has(uuid16(0xfff4))) return;
+    if (chars.has(CHR_WRITE) || chars.has(CHR_WRITE_T1)) return;
+    bleLog.warn(
+      'QN: this device exposes fff4 and none of the QN write characteristics ' +
+        '(fff2, ffe3), which is the 1byone/Eufy layout rather than a QN scale. ' +
+        'The QN adapter most likely claimed it through the nameless fallback, so ' +
+        'the handshake below will fail. Work around it with ' +
+        "ble.force_scale_adapter: '1byone (Eufy)' plus ble.scale_mac, and please " +
+        'report this log on issue #320: a real device of this shape is exactly ' +
+        'the evidence needed to narrow the fallback safely.',
+    );
+  }
+
   private async writeCmd(data: number[]): Promise<void> {
     if (!this.ctx) return;
     try {
@@ -569,6 +592,20 @@ export class QnScaleAdapter
       clearTimeout(this.storedRetryTimer);
       this.storedRetryTimer = null;
     }
+
+    // #320: the nameless fallback claims any device on a QN vendor service,
+    // keyed on serviceUuids, so it can outrank the 1byone/Eufy adapter on a
+    // transport that delivers no local name. That adapter's whole signature is
+    // notify fff4 with NO fff2, and fff2 is this protocol's write
+    // characteristic, so a peer with that shape cannot be a QN scale: the
+    // handshake below has nothing to write to and the session ends in a pair of
+    // failed writes that name neither the cause nor the fix.
+    //
+    // Diagnosis only, deliberately. Narrowing the fallback itself needs a real
+    // capture of a NAMELESS fff4-without-fff2 device, and nobody has reported
+    // one; changing the registry's broadest matcher on a hypothesis is how
+    // working installs break. This line is how that capture gets reported.
+    this.warnOnOneByoneShape(ctx);
 
     // Try subscribing to AE02 (newer firmware detection).
     // NOTE: on Linux, 0x12 may arrive before this completes. The state machine

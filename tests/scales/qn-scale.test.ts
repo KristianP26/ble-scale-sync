@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { jieliAuthResponseFrame } from '../../src/scales/jieli-auth.js';
 import { QnScaleAdapter, buildMeasurementTrigger } from '../../src/scales/qn-scale.js';
 import { bleLog } from '../../src/ble/types.js';
+import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type {
   BleDeviceInfo,
   ConnectionContext,
@@ -1731,6 +1732,50 @@ describe('AE02 dispatch (#75, #235)', () => {
       expect(negative).toEqual([0xa2, 0x06, 0x01, 0x00, 0x00, 0xa9]);
       for (const t of [huge, negative]) {
         expect(t[5]).toBe(t.slice(0, 5).reduce((a, b) => a + b, 0) & 0xff);
+      }
+    });
+
+    // #320: the nameless fallback keys on serviceUuids, so it can claim a
+    // 1byone/Eufy device on a transport that delivers no local name. That shape
+    // has no QN write characteristic at all, so the handshake cannot work and
+    // the session used to end in two failed writes explaining nothing.
+    it('warns when the discovered characteristics are the 1byone layout', async () => {
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      try {
+        const adapter = makeAdapter();
+        await adapter.onConnected({
+          write: async () => {},
+          read: async () => Buffer.alloc(0),
+          subscribe: async () => {},
+          profile: defaultProfile(),
+          deviceAddress: '',
+          // fff1 + fff4, never fff2: the 1byone signature.
+          availableChars: new Set([uuid16(0xfff1), uuid16(0xfff4)]),
+        } as unknown as ConnectionContext);
+        const msg = warn.mock.calls.flat().join(' ');
+        expect(msg).toContain('1byone/Eufy layout');
+        expect(msg).toContain('#320');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('does not warn about the 1byone layout when a QN write characteristic exists', async () => {
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      try {
+        const adapter = makeAdapter();
+        await adapter.onConnected({
+          write: async () => {},
+          read: async () => Buffer.alloc(0),
+          subscribe: async () => {},
+          profile: defaultProfile(),
+          deviceAddress: '',
+          // A genuine QN scale that also exposes fff4 keeps its own fff2.
+          availableChars: new Set([uuid16(0xfff1), uuid16(0xfff2), uuid16(0xfff4)]),
+        } as unknown as ConnectionContext);
+        expect(warn.mock.calls.flat().join(' ')).not.toContain('1byone/Eufy layout');
+      } finally {
+        warn.mockRestore();
       }
     });
 
