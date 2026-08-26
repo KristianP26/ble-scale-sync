@@ -46,7 +46,7 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
   # hand is exactly the person who would toggle the UI option, see no change and
   # report a false negative. A wrong value for either is silent by nature, so a
   # setting that is silently ignored is worse here than almost anywhere else.
-  for _qn in qn_protocol_byte qn_report_byte qn_live_weight_ack auto_clear_stale_bond; do
+  for _qn in qn_protocol_byte qn_report_byte qn_weight_ack auto_clear_stale_bond; do
     if [ -n "$(opt "$_qn")" ]; then
       log "WARNING: custom_config is enabled, so the '$_qn' option is ignored."
       log "Set 'ble.$_qn' in $CUSTOM_PATH instead."
@@ -64,14 +64,14 @@ else
   # it here: only an exact true/false reaches config.yaml. Anything else is
   # dropped with a warning rather than written through to fail Zod at startup,
   # and an empty value keeps the per-dialect default.
-  QN_LIVE_WEIGHT_ACK=$(opt qn_live_weight_ack)
-  case "$(echo "$QN_LIVE_WEIGHT_ACK" | tr '[:upper:]' '[:lower:]')" in
-    "") QN_LIVE_WEIGHT_ACK="" ;;
-    true | yes | on | 1) QN_LIVE_WEIGHT_ACK="true" ;;
-    false | no | off | 0) QN_LIVE_WEIGHT_ACK="false" ;;
+  QN_WEIGHT_ACK=$(opt qn_weight_ack)
+  case "$(echo "$QN_WEIGHT_ACK" | tr '[:upper:]' '[:lower:]')" in
+    "") QN_WEIGHT_ACK="" ;;
+    true | yes | on | 1) QN_WEIGHT_ACK="true" ;;
+    false | no | off | 0) QN_WEIGHT_ACK="false" ;;
     *)
-      log "WARNING: ignoring qn_live_weight_ack='$QN_LIVE_WEIGHT_ACK' (expected true or false)."
-      QN_LIVE_WEIGHT_ACK=""
+      log "WARNING: ignoring qn_weight_ack='$QN_WEIGHT_ACK' (expected true or false)."
+      QN_WEIGHT_ACK=""
       ;;
   esac
   AUTO_CLEAR_STALE_BOND=$(opt_bool auto_clear_stale_bond)
@@ -210,14 +210,14 @@ YAML
   done
 
   # BLE section (only if scale_mac, adapter, a forced scale adapter or a QN byte is set)
-  if [ -n "$SCALE_MAC" ] || [ -n "$BLE_ADAPTER" ] || [ -n "$FORCE_SCALE_ADAPTER" ]     || [ -n "$QN_PROTOCOL_BYTE" ] || [ -n "$QN_REPORT_BYTE" ] || [ -n "$QN_LIVE_WEIGHT_ACK" ]     || [ "$AUTO_CLEAR_STALE_BOND" = "true" ] || [ "$PROXY_LIVENESS_MIN" != "30" ]; then
+  if [ -n "$SCALE_MAC" ] || [ -n "$BLE_ADAPTER" ] || [ -n "$FORCE_SCALE_ADAPTER" ]     || [ -n "$QN_PROTOCOL_BYTE" ] || [ -n "$QN_REPORT_BYTE" ] || [ -n "$QN_WEIGHT_ACK" ]     || [ "$AUTO_CLEAR_STALE_BOND" = "true" ] || [ "$PROXY_LIVENESS_MIN" != "30" ]; then
     echo "ble:" >> "$FRESH"
     [ -n "$SCALE_MAC" ] && echo "  scale_mac: \"$(yaml_escape "$SCALE_MAC")\"" >> "$FRESH"
     [ -n "$BLE_ADAPTER" ] && echo "  adapter: \"$(yaml_escape "$BLE_ADAPTER")\"" >> "$FRESH"
     [ -n "$FORCE_SCALE_ADAPTER" ] && echo "  force_scale_adapter: \"$(yaml_escape "$FORCE_SCALE_ADAPTER")\"" >> "$FRESH"
     [ -n "$QN_PROTOCOL_BYTE" ] && echo "  qn_protocol_byte: $QN_PROTOCOL_BYTE" >> "$FRESH"
     [ -n "$QN_REPORT_BYTE" ] && echo "  qn_report_byte: $QN_REPORT_BYTE" >> "$FRESH"
-    [ -n "$QN_LIVE_WEIGHT_ACK" ] && echo "  qn_live_weight_ack: $QN_LIVE_WEIGHT_ACK" >> "$FRESH"
+    [ -n "$QN_WEIGHT_ACK" ] && echo "  qn_weight_ack: $QN_WEIGHT_ACK" >> "$FRESH"
     [ "$AUTO_CLEAR_STALE_BOND" = "true" ] && echo "  auto_clear_stale_bond: true" >> "$FRESH"
     [ "$PROXY_LIVENESS_MIN" != "30" ] && echo "  proxy_liveness_timeout_min: $PROXY_LIVENESS_MIN" >> "$FRESH"
     echo "" >> "$FRESH"

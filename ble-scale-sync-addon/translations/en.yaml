@@ -33,14 +33,15 @@ configuration:
       did not help. Try 252, which is what vendor-app captures of a GE CS 10 G
       and an Arboleaf QN-Scale send where this add-on sends the default 254.
       Accepts 0 to 255.
-  qn_live_weight_ack:
-    name: QN live weight acknowledgement
+  qn_weight_ack:
+    name: QN weight acknowledgement
     description: >-
       QN-family scales only, and the last thing to try after the two QN bytes
-      above. The vendor app answers every weight frame the scale sends with
-      that same weight, and some firmware will not finish a weigh-in without
-      it. Leave empty unless your QN scale completes the whole handshake in
-      the log and then reports no weight at all; then set true.
+      above. The vendor app tells the scale a real weight before the weigh-in
+      and answers every weight frame with that same weight; some firmware will
+      not finish a measurement otherwise. Leave empty unless your QN scale
+      completes the whole handshake in the log and then reports no weight at
+      all; then set true.
   auto_clear_stale_bond:
     name: Re-pair a scale that forgot its pairing
     description: >-
