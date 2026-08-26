@@ -8,8 +8,18 @@ import { createLogger } from '../logger.js';
 import { PollReadingSource } from './poll-source.js';
 import type { ReadingSource } from './loop.js';
 import type { AppContext } from './context.js';
+import { raceWithLiveness, TransportWedgedError } from './proxy-liveness.js';
 
 const log = createLogger('Sync');
+
+/**
+ * Default advertisement-silence window for the proxy transports, in minutes.
+ *
+ * Long on purpose. A false positive restart-loops somebody whose proxy sits in
+ * a quiet place, which is worse than the wedge it detects, and a real wedge
+ * costs only the delay before recovery.
+ */
+const DEFAULT_PROXY_LIVENESS_MIN = 30;
 
 export interface ReadingSourceBundle {
   source: ReadingSource;
@@ -53,16 +63,37 @@ export async function buildReadingSource(
   });
 
   if (plan.kind === 'watcher') {
+    const { watcher } = plan;
+    // Proxy liveness (#281). The watcher branch has no watchdog of its own: a
+    // wedged transport parks nextReading() forever and looks exactly like a
+    // house where nobody has stepped on the scale. Advertisement silence is the
+    // one signal that tells the two apart.
+    const limitMs =
+      (ctx.config.ble?.proxy_liveness_timeout_min ?? DEFAULT_PROXY_LIVENESS_MIN) * 60_000;
     return {
-      source: plan.watcher,
+      source: {
+        start: () => watcher.start(),
+        stop: () => watcher.stop(),
+        nextReading: (signal) => raceWithLiveness(watcher, limitMs, signal),
+      },
       failureLogPrefix: plan.failureLogPrefix,
       onSourceReload: () =>
-        plan.watcher.updateConfig({
+        watcher.updateConfig({
           adapters,
           targetMac: ctx.scaleMac,
           profile: profile(),
           scaleAuth: scaleAuth(),
         }),
+      onFailure: (err) => {
+        if (!(err instanceof TransportWedgedError)) return;
+        log.warn(
+          `${err.message} Exiting so the container can restart cleanly and rebuild the ` +
+            `link. If your proxy is somewhere genuinely quiet and this fires while ` +
+            `everything is healthy, raise ble.proxy_liveness_timeout_min or set it to 0.`,
+        );
+        process.exitCode = 1;
+        ctx.abortApp(err);
+      },
     };
   }
 

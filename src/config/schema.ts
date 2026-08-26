@@ -179,6 +179,21 @@ export const BleSchema = z
      * in error costs a physical re-pair at the device.
      */
     auto_clear_stale_bond: z.boolean().optional().nullable(),
+    /**
+     * Minutes of total advertisement silence before a proxy transport is
+     * treated as wedged rather than idle (#281). 0 disables the check.
+     *
+     * `mqtt-proxy` and `esphome-proxy` have no in-app liveness recovery: a
+     * wedged link and a house where nobody has weighed in look identical,
+     * because the reading wait never resolves in either case. Advertisements
+     * are the signal that separates them, since they flow constantly from any
+     * nearby device while the link is alive.
+     *
+     * The window is deliberately long. Getting this wrong means restart-looping
+     * somebody whose proxy sits somewhere genuinely quiet, which is worse than
+     * the bug it fixes.
+     */
+    proxy_liveness_timeout_min: z.number().int().min(0).max(1440).optional().nullable(),
     mqtt_proxy: MqttProxySchema.optional(),
     esphome_proxy: EsphomeProxySchema.optional(),
   })
