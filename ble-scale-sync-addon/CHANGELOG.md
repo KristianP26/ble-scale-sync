@@ -7,6 +7,54 @@
 The add-on version always matches the application version, so every entry below
 applies to this add-on.
 
+## [1.26.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.25.0...v1.26.0) (2026-08-26)
+
+
+### Added
+
+* **ble:** add a provisional weight type that cannot reach an exporter ([3d8e7f1](https://github.com/KristianP26/ble-scale-sync/commit/3d8e7f18a2231eee3ef7c02ebfa405c77c5a8f6f)), closes [#356](https://github.com/KristianP26/ble-scale-sync/issues/356)
+* **ble:** expose transport liveness from the proxy watchers ([5753c66](https://github.com/KristianP26/ble-scale-sync/commit/5753c66db363966d337bf987cc53b93fdebf7d7e)), closes [#281](https://github.com/KristianP26/ble-scale-sync/issues/281)
+* **ble:** let removeDevice delete a bond when the caller asks ([c2ddca9](https://github.com/KristianP26/ble-scale-sync/commit/c2ddca9d125cde3b99d0f1ff224b460ae591aa3e)), closes [#335](https://github.com/KristianP26/ble-scale-sync/issues/335)
+* **ble:** opt-in recovery from a bond the scale has forgotten ([d8f8a92](https://github.com/KristianP26/ble-scale-sync/commit/d8f8a92034cc17edc985eab429ad59e53d88ed42)), closes [#335](https://github.com/KristianP26/ble-scale-sync/issues/335)
+* **ble:** show settling weights on the live status line ([817e952](https://github.com/KristianP26/ble-scale-sync/commit/817e952c5f3c258d74de4943d75a039fb944cb9d)), closes [#356](https://github.com/KristianP26/ble-scale-sync/issues/356)
+* **config:** resolve a per-user weight anchor into the user profile ([7ca681f](https://github.com/KristianP26/ble-scale-sync/commit/7ca681fc01f669b3a4c369d63e094c1468ff3871))
+* **qn:** let the pre-weigh-in A2 carry a real weight anchor ([a9aa0ae](https://github.com/KristianP26/ble-scale-sync/commit/a9aa0ae0119643a773a8f82bca374e6b4c005106))
+* **qn:** make the live weight acknowledgement configurable ([e25fc4e](https://github.com/KristianP26/ble-scale-sync/commit/e25fc4e858b240cfb53fea455bf4a9449aad5879))
+* **qn:** report a device whose layout is 1byone, not QN ([48d03be](https://github.com/KristianP26/ble-scale-sync/commit/48d03be3d2f9bd8f5f972a476e4ae37b0f7e8f49)), closes [#320](https://github.com/KristianP26/ble-scale-sync/issues/320)
+* **runtime:** restart a proxy transport that has gone silent ([a99bcdc](https://github.com/KristianP26/ble-scale-sync/commit/a99bcdc397a47b83900634e2f26de8db525ee98a)), closes [#281](https://github.com/KristianP26/ble-scale-sync/issues/281)
+* **silvergear:** report the settling stream as a live weight ([5d8ebd1](https://github.com/KristianP26/ble-scale-sync/commit/5d8ebd14c9e30e43f8e1fc49545a6ca2c6fa8f96)), closes [#356](https://github.com/KristianP26/ble-scale-sync/issues/356)
+* **update-check:** add a persisted cooldown state module ([d5aab9d](https://github.com/KristianP26/ble-scale-sync/commit/d5aab9d81d72674edd805e0e5378bae44a68c2af))
+
+
+### Fixed
+
+* **addon:** use a plain string for qn_live_weight_ack and normalise it ([4a995e2](https://github.com/KristianP26/ble-scale-sync/commit/4a995e221db0118431268324d85922ffc8022a61))
+* **beurer:** decode impedance instead of skipping it as unused ([b3239f8](https://github.com/KristianP26/ble-scale-sync/commit/b3239f87dc360bb7de771d3400763eac261cac1a)), closes [#354](https://github.com/KristianP26/ble-scale-sync/issues/354)
+* **beurer:** say why the provisioning commit reports 0 from config ([c3a469b](https://github.com/KristianP26/ble-scale-sync/commit/c3a469bbcdefca40163cfdc1f7b5a7dbf716b4ed)), closes [#335](https://github.com/KristianP26/ble-scale-sync/issues/335)
+* **beurer:** stop warning about consent silence on a successful session ([3eb96ca](https://github.com/KristianP26/ble-scale-sync/commit/3eb96ca09aaed11df5ed4953fbe2302765be8bd3))
+* **qn:** acknowledge each live weight frame with its own weight ([99486ab](https://github.com/KristianP26/ble-scale-sync/commit/99486aba018cd3dfe364ea65eaf3821f7eedd71f))
+* **qn:** say when the weight anchor falls back to the capture value ([98677e4](https://github.com/KristianP26/ble-scale-sync/commit/98677e4f663e22611abcafc7a7e258776872380d))
+* **qn:** send the configured weight anchor, not the captured 77.15 kg ([7bed196](https://github.com/KristianP26/ble-scale-sync/commit/7bed19631ffc5899be3fdacb22f9341b46a32215))
+* **salter:** set the scale clock when unset so weigh-ins are stored ([#355](https://github.com/KristianP26/ble-scale-sync/issues/355)) ([d30bec0](https://github.com/KristianP26/ble-scale-sync/commit/d30bec0c4c9e991cb323d9f7751eb317839c6063))
+* **update-check:** make the once-per-day cooldown survive restarts ([937916d](https://github.com/KristianP26/ble-scale-sync/commit/937916d7e0cf73e91393b088f201071c392c249b))
+* **worker:** label the stats dashboard units honestly ([22a3592](https://github.com/KristianP26/ble-scale-sync/commit/22a3592ea090e962d3bfd875acee8b1725ddaeca))
+* **worker:** say the inflated update-check count is still growing ([b6c1034](https://github.com/KristianP26/ble-scale-sync/commit/b6c10346872cfe310dcf44dc55fdf2645fa8d9c8))
+
+
+### Docs
+
+* **beurer:** correct the menu-profile claim and the battery-wipe scope ([e0d406d](https://github.com/KristianP26/ble-scale-sync/commit/e0d406dac6d8dafc0e930429170ed55f97595d66)), closes [#335](https://github.com/KristianP26/ble-scale-sync/issues/335)
+* **ble:** point the stale-bond message at the issue it describes ([70e35ba](https://github.com/KristianP26/ble-scale-sync/commit/70e35baf85e6dff3df05daa115d498cddfda92bd)), closes [#335](https://github.com/KristianP26/ble-scale-sync/issues/335)
+* correct adapter priority and exporter list claims ([0712e8d](https://github.com/KristianP26/ble-scale-sync/commit/0712e8d9b56e843ccb6b9312c55e34411dd6c6a3))
+* document qn_live_weight_ack and expose it in the add-on ([dd48faa](https://github.com/KristianP26/ble-scale-sync/commit/dd48faab0b0f006127c01190a6effec717e3b3a3)), closes [#75](https://github.com/KristianP26/ble-scale-sync/issues/75)
+* document the persisted update-check cooldown ([bf15cbb](https://github.com/KristianP26/ble-scale-sync/commit/bf15cbbcfc8e904fde9e054c8988acf3cc38449a))
+* document the proxy liveness timeout and expose it in the add-on ([eba1ea9](https://github.com/KristianP26/ble-scale-sync/commit/eba1ea96d001ec6ae43b595c646b515dc0909cb4)), closes [#281](https://github.com/KristianP26/ble-scale-sync/issues/281)
+* document the stale-bond recovery option and expose it in the add-on ([b44d0fa](https://github.com/KristianP26/ble-scale-sync/commit/b44d0fa83a253cef884d9ab75ae57522b5a2d6af)), closes [#335](https://github.com/KristianP26/ble-scale-sync/issues/335)
+* drop the unusable `--config` workaround for the cooldown state file ([ac47111](https://github.com/KristianP26/ble-scale-sync/commit/ac47111fe6848150756fe3b824c14d99c6d19ed0))
+* **readme:** add JamieSBenson to the contributors grid ([9660aa5](https://github.com/KristianP26/ble-scale-sync/commit/9660aa5ef1a5a109c316ae00ac19f390e22cfe11))
+* switch the star history chart to star-history.dera.page ([e0dfe2b](https://github.com/KristianP26/ble-scale-sync/commit/e0dfe2b75458ac50e0d9d2dbca5eede344fb22e7))
+* widen qn_weight_ack to cover the pre-weigh-in anchor ([5c5c119](https://github.com/KristianP26/ble-scale-sync/commit/5c5c119e89143f0a9d39192750a1a2750e65780a))
+
 ## [1.25.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.24.0...v1.25.0) (2026-08-25)
 
 
