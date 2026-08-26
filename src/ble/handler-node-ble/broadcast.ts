@@ -1,4 +1,4 @@
-import type { ScaleAdapter, ScaleReading } from '../../interfaces/scale-adapter.js';
+import type { ScaleAdapter, ScaleReading, LiveWeight } from '../../interfaces/scale-adapter.js';
 import type { RawReading } from '../shared.js';
 import { bleLog, sleep, errMsg, DISCOVERY_TIMEOUT_MS, IMPEDANCE_GRACE_MS } from '../types.js';
 import {
@@ -51,9 +51,13 @@ export async function broadcastScanNodeBle(
   btAdapter: Adapter,
   device: Device,
   mac: string,
-  opts: { abortSignal?: AbortSignal; onLiveData?: (r: ScaleReading) => void },
+  opts: {
+    abortSignal?: AbortSignal;
+    onLiveData?: (r: ScaleReading) => void;
+    onLiveWeight?: (live: LiveWeight) => void;
+  },
 ): Promise<RawReading> {
-  const { abortSignal, onLiveData } = opts;
+  const { abortSignal, onLiveData, onLiveWeight } = opts;
 
   // Tell BlueZ to report duplicate advertisements so ServiceData is refreshed
   // on every packet from the scale, not just on first discovery.
@@ -187,6 +191,13 @@ export async function broadcastScanNodeBle(
         if (wantedCompanyId !== undefined && Number(key) !== wantedCompanyId) continue;
         const reading = adapter.parseBroadcast(buf);
         if (reading && consume(reading)) return true;
+        // Only once parseBroadcast has declined the frame, so one advertisement
+        // is never reported through both channels (#356). A settling weight is
+        // not a reading and never ends the scan.
+        if (!reading && adapter.parseLiveBroadcast && onLiveWeight) {
+          const live = adapter.parseLiveBroadcast(buf);
+          if (live) onLiveWeight(live);
+        }
       }
       return false;
     };

@@ -160,7 +160,7 @@ ble-scale-sync/
 │   │   └── display-notifier.ts      # DisplayNotifier capability (transport-agnostic display/beep)
 │   └── scales/                      # One file per adapter; a selection follows,
 │                                    # see index.ts for the authoritative registry
-│       ├── index.ts                 # Adapter registry (order matters: generic last)
+│       ├── index.ts                 # Adapter registry (match.priority decides, generic is 0)
 │       ├── body-comp-helpers.ts     # Shared body-comp utilities
 │       ├── qn-scale.ts              # QN / Renpho (incl. ES-26M, ES-30M) / Senssun / Sencor
 │       ├── renpho.ts                # Renpho ES-WBE28
@@ -262,7 +262,7 @@ To support a new scale brand, create a class that implements `ScaleAdapter` in `
 1. Create `src/scales/your-brand.ts` implementing the interface from `src/interfaces/scale-adapter.ts`
 2. Define `matches()` to recognize the device by its BLE advertisement name
 3. Implement `parseNotification()` for the brand's data protocol
-4. Register the adapter in `src/scales/index.ts` — **position matters** (specific adapters must come before generic catch-all)
+4. Register the adapter in `src/scales/index.ts` and give it a `match.priority` — **priority decides, not array position** (the resolver sorts by `match.priority`, higher wins; the generic catch-all sits at `0`, so an adapter that omits `priority` also defaults to `0` and will not reliably beat it)
 5. If your adapter detects the weight unit from BLE data and converts to kg internally, set `normalizesWeight = true`
 6. Add tests in `tests/scales/` using mock utilities from `tests/helpers/scale-test-utils.ts`
 

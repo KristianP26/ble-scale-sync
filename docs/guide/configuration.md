@@ -63,19 +63,22 @@ ble:
   # qn_report_byte: 252
 ```
 
-| Field                 | Required                    | Default        | Description                                                                                                                                                                                                                                                                                |
-| --------------------- | --------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `scale_mac`           | Recommended                 | Auto-discovery | MAC address, or a CoreBluetooth UUID on macOS (bare 32-hex as the wizard writes it, or the dashed form). Prevents connecting to a neighbor's scale.                                                                                                                                        |
-| `bind_key`            | Xiaomi S800 only            | (none)         | 32-char hex per-device MiBeacon key from the Mi cloud (extract with the community Xiaomi-cloud-tokens-extractor). Decrypts only the device's own FE95 broadcast. Keep it secret; it is a credential.                                                                                       |
-| `handler`             | No                          | `auto`         | Transport: `auto` (local radio), `mqtt-proxy` (ESP32 over MQTT), `esphome-proxy` (ESPHome Native API). See below.                                                                                                                                                                          |
-| `noble_driver`        | No                          | OS default     | `abandonware` or `stoprocent`. Overrides the default BLE driver. Only applies when `handler: auto`.                                                                                                                                                                                        |
-| `adapter`             | No                          | System default | Linux only. Select a specific Bluetooth adapter (e.g., `hci0`, `hci1`). See below.                                                                                                                                                                                                         |
-| `force_scale_adapter` | No                          | Auto-detect    | Name of the scale protocol adapter to use, bypassing auto-detection. Requires `scale_mac`. See below.                                                                                                                                                                                      |
-| `session_timeout_sec` | No                          | `120`          | Seconds of scale silence that end a GATT session (5 to 600); an inbound frame restarts the clock. Native BLE handlers only; ignored on `mqtt-proxy` and `esphome-proxy`. See below.                                                                                                        |
-| `qn_protocol_byte`    | No                          | Auto           | QN-family scales only. Protocol byte the handshake echoes back to the scale (0 to 255). Set it when a QN scale runs the whole handshake and then reports nothing, or when its scale-info frame is lost in transit on a proxy transport. See below.                                         |
-| `qn_report_byte`      | No                          | Per dialect    | QN-family scales only. Payload byte of the history-response frame (0 to 255). Defaults to `252` (0xFC) on the long-frame dialects (es26m and extended) and `254` (0xFE) on the classic one. Try the other value if your scale completes the handshake and then reports nothing. See below. |
-| `mqtt_proxy`          | If `handler: mqtt-proxy`    | (none)         | MQTT proxy connection (`broker_url`, `device_id`, `topic_prefix`, `username`, `password`, `auto_connect`, `embedded_broker_*`). See [ESP32 BLE Proxy](./esp32-proxy).                                                                                                                      |
-| `esphome_proxy`       | If `handler: esphome-proxy` | (none)         | ESPHome Native API connection (`host`, `port`, `encryption_key` or `password`, `client_info`). See [ESPHome Bluetooth Proxy](./esphome-proxy).                                                                                                                                             |
+| Field                        | Required                    | Default        | Description                                                                                                                                                                                                                                                                                |
+| ---------------------------- | --------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `scale_mac`                  | Recommended                 | Auto-discovery | MAC address, or a CoreBluetooth UUID on macOS (bare 32-hex as the wizard writes it, or the dashed form). Prevents connecting to a neighbor's scale.                                                                                                                                        |
+| `bind_key`                   | Xiaomi S800 only            | (none)         | 32-char hex per-device MiBeacon key from the Mi cloud (extract with the community Xiaomi-cloud-tokens-extractor). Decrypts only the device's own FE95 broadcast. Keep it secret; it is a credential.                                                                                       |
+| `handler`                    | No                          | `auto`         | Transport: `auto` (local radio), `mqtt-proxy` (ESP32 over MQTT), `esphome-proxy` (ESPHome Native API). See below.                                                                                                                                                                          |
+| `noble_driver`               | No                          | OS default     | `abandonware` or `stoprocent`. Overrides the default BLE driver. Only applies when `handler: auto`.                                                                                                                                                                                        |
+| `adapter`                    | No                          | System default | Linux only. Select a specific Bluetooth adapter (e.g., `hci0`, `hci1`). See below.                                                                                                                                                                                                         |
+| `force_scale_adapter`        | No                          | Auto-detect    | Name of the scale protocol adapter to use, bypassing auto-detection. Requires `scale_mac`. See below.                                                                                                                                                                                      |
+| `session_timeout_sec`        | No                          | `120`          | Seconds of scale silence that end a GATT session (5 to 600); an inbound frame restarts the clock. Native BLE handlers only; ignored on `mqtt-proxy` and `esphome-proxy`. See below.                                                                                                        |
+| `qn_protocol_byte`           | No                          | Auto           | QN-family scales only. Protocol byte the handshake echoes back to the scale (0 to 255). Set it when a QN scale runs the whole handshake and then reports nothing, or when its scale-info frame is lost in transit on a proxy transport. See below.                                         |
+| `qn_report_byte`             | No                          | Per dialect    | QN-family scales only. Payload byte of the history-response frame (0 to 255). Defaults to `252` (0xFC) on the long-frame dialects (es26m and extended) and `254` (0xFE) on the classic one. Try the other value if your scale completes the handshake and then reports nothing. See below. |
+| `auto_clear_stale_bond`      | No                          | `false`        | Delete a pairing key the scale has forgotten and pair again. Bonded scales only (Beurer BF7xx / BF9xx), node-ble transport only. See below.                                                                                                                                                |
+| `qn_weight_ack`              | No                          | Per dialect    | QN-family scales only. Answer every live weight frame with its own weight, as the vendor app does. On by default on the 20-byte extended dialect. Try `true` if your QN scale completes the handshake and then streams nothing. See below.                                                 |
+| `proxy_liveness_timeout_min` | No                          | `30`           | Minutes of total advertisement silence before a proxy transport is treated as wedged and the process exits for the supervisor to restart. `0` disables. Proxy transports only. See below.                                                                                                  |
+| `mqtt_proxy`                 | If `handler: mqtt-proxy`    | (none)         | MQTT proxy connection (`broker_url`, `device_id`, `topic_prefix`, `username`, `password`, `auto_connect`, `embedded_broker_*`). See [ESP32 BLE Proxy](./esp32-proxy).                                                                                                                      |
+| `esphome_proxy`              | If `handler: esphome-proxy` | (none)         | ESPHome Native API connection (`host`, `port`, `encryption_key` or `password`, `client_info`). See [ESPHome Bluetooth Proxy](./esphome-proxy).                                                                                                                                             |
 
 ::: warning Forcing a scale adapter
 `force_scale_adapter` is an escape hatch for when auto-detection routes your scale to the wrong protocol adapter, which happens with rebadged OEM hardware that shares a vendor service with another brand.
@@ -155,13 +158,124 @@ If `252` makes your scale produce a weight, please say so in an issue with the m
 
 :::
 
+::: tip QN scales that finish the handshake and then stream nothing (`qn_weight_ack`)
+
+There is a third silent-failure knob in this family, and it is the one with the clearest evidence behind it.
+
+A vendor-app capture of a GE CS 10 G answers **every** live weight frame the scale sends with an acknowledgement carrying that frame's own weight:
+
+```
+scale  ... 11 1e be ...   ->  app  a2 06 01 1e be 85
+scale  ... 11 1e c3 ...   ->  app  a2 06 01 1e c3 8a
+```
+
+On that firmware the scale will not finish a weigh-in without it, so the 20-byte extended dialect does this by default and needs no setting.
+
+There is a second place the same frame appears, and it is the more interesting one for a scale that never streams anything at all. Before the weigh-in the handshake sends `a2 06 01 32 <age>`, which openScale labels a user profile. Under the reading above those payload bytes are a weight, and `0x32` plus an age decodes to something like **128.58 kg**, which is nobody. Two es26m reporters whose scales complete the whole handshake and then go silent have exactly that in their logs.
+
+That default is not changed, because openScale's bytes are what every QN scale in the registry reads with today and two silent units are not enough to move it under the whole family. Turning this on swaps in your configured weight anchor there too, so the scale is told a plausible number before it decides whether to measure.
+
+If your scale completes the whole handshake, is accepted on `qn_protocol_byte` and `qn_report_byte`, and then goes quiet, this is the next thing to try:
+
+```yaml
+ble:
+  qn_weight_ack: true
+```
+
+That does two things: the pre-weigh-in A2 carries your `last_known_weight` (or the midpoint of your `weight_range`) instead of the placeholder, and every live weight frame is acknowledged with its own weight. `false` turns both off everywhere, including on the extended dialect, if it ever turns out to hurt a unit there.
+
+With debug on, the swap is named:
+
+```
+QN: ready-time A2 carries the configured weight anchor 76.40 kg instead of openScale's placeholder (#75)
+```
+
+If `true` makes your scale report a weight, please say so in an issue with the model and the dialect from the `QN: scale info` log line. Two confirmations would move the default.
+
+:::
+
+::: tip QN scales that only work for one person in the house (`last_known_weight`)
+
+The 20-byte extended dialect (GE CS 10 G, "Fit Plus" and rebadges) is sent a weight anchor immediately after the start command, and the scale gates the weigh-in on it: if the number is far from what the person on the platform actually weighs, the handshake completes normally and then nothing else arrives.
+
+Until 1.26.0 that anchor was a constant replayed from the capture it was decoded in, 77.15 kg, which is why these scales appeared to work for some households and not others. It now comes from your config: `users[].last_known_weight` when it is set, and the midpoint of `users[].weight_range` before the first reading lands. Both already exist, so there is nothing new to add.
+
+```yaml
+users:
+  - name: Alex
+    weight_range: { min: 70, max: 85 }
+    last_known_weight: 76.4 # updated automatically after every reading
+```
+
+The debug log names the value each session runs with:
+
+```
+QN: extended-dialect measurement trigger sent, weight anchor 76.40 kg (#235, #75)
+```
+
+The anchor is taken from the **first** user in the list, because the scale is handed it before anyone steps on and there is nothing yet to match a person against.
+
+That only covers the moment before the weigh-in. Once the scale starts streaming, every live weight frame is acknowledged with that frame's own weight, exactly as the vendor app does, so the number the scale is told matches whoever is actually standing on it regardless of whose anchor went out first. The anchor is the opening value; the acknowledgements are exact.
+
+:::
+
+::: tip A proxy that is connected but no longer delivering (`proxy_liveness_timeout_min`)
+
+On `mqtt-proxy` and `esphome-proxy` the app waits for the proxy to push it a weigh-in. If that link wedges while still looking connected, the wait simply never ends, and from the app's side that is indistinguishable from a house where nobody has stepped on the scale. Both are silence.
+
+What separates them is everything else in range. Advertisements arrive constantly from phones, watches and thermometers while the link is alive, and stop completely when it is not. So a proxy that has delivered **nothing at all** for half an hour is wedged rather than idle, and the process exits for your supervisor to restart it:
+
+```yaml
+ble:
+  proxy_liveness_timeout_min: 30 # 0 disables the check
+```
+
+The window is deliberately long, and the check counts advertisements from **any** device, never from your scale alone: your scale only advertises while somebody is standing on it, so it proves nothing about the link.
+
+Raise it or set it to `0` if your proxy sits somewhere genuinely quiet with no other Bluetooth devices in range. A false positive there would restart the add-on every half hour while nothing was actually wrong, which is worse than the problem it solves. The log always says why it fired.
+
+Native handlers have their own watchdog and ignore this setting.
+
+:::
+
+::: tip Beurer scales that work once and never again (`auto_clear_stale_bond`)
+
+A bonded scale can drop its half of the pairing on its own: a battery change does it, and on some units simply ending a session does. The host does not find out. BlueZ keeps replaying the stored key, the peripheral answers "PIN or Key Missing", and every connect from then on fails during encryption before any GATT traffic:
+
+```
+Connect error: le-connection-abort-by-local
+```
+
+Deleting a bond is destructive, so the default is to diagnose it and stop, telling you to run `bluetoothctl remove <mac>` and pair again. If that is happening to you every session, this does it for you:
+
+```yaml
+ble:
+  auto_clear_stale_bond: true
+```
+
+The bond is cleared at most once per connect, and only after three consecutive authentication-class failures against a device BlueZ still lists as bonded. It stays opt-in because `le-connection-abort-by-local` also has innocent causes, notably a connect issued while another client (the Home Assistant Bluetooth integration on the same adapter, for instance) still holds a discovery session, and on these scales a bond dropped in error costs a trip to the device to confirm the passkey.
+
+Native BlueZ only. The proxy transports do not pair at all.
+
+:::
+
 ::: tip Beurer scales that reject every consent code (`beurer_register_new_user`)
 
 If a Beurer or Sanitas scale bonds, subscribes and then answers the consent with `USER_NOT_AUTHORIZED` no matter which code or slot you try, the problem is usually not the code.
 
-A user record in the Bluetooth SIG User Data Service exists only after a **Register New User** operation, and normally only the vendor app performs it. The profiles you create in the scale's own menu (SET, U:1 to U:8) are display-side records for its body-composition maths; they are not SIG users. So on a scale whose user was registered by the vendor app, another client has no record it is entitled to, and consent can never succeed for it.
+A user record in the Bluetooth SIG User Data Service exists only after a **Register New User** operation, and normally only the vendor app performs it. On a scale whose user was registered by the vendor app, another client has no record it is entitled to, and consent can never succeed for it.
 
-This creates one:
+::: warning Try the scale's own menu first
+On a **BF915** the scale's menu profiles (SET, `U:1` to `U:8`) _are_ the SIG user slots, and creating one there is the whole job. @martingebert9428 measured it: factory reset, create `U:1` in the menu with no BLE operation of any kind, and Register New User then comes back with index **2**, because the menu profile has taken slot 1. Consent on index 1 is accepted and returns exactly the date of birth, gender and height entered in the menu.
+
+So on that model the right first move is: create the profile in the menu, read the four-digit number the scale displays when you select it (that is the consent code, no guessing), and set `beurer_user_index` to the profile's number. Registering from here only burns slots you cannot free individually.
+
+One more step that is invisible from the log: **assign one weigh-in to the new profile**. A profile with no reference weight makes the scale show `U -` after weighing and assign the measurement to nobody, and in that state it sends no notification at all, on any characteristic. It looks exactly like a wrong consent code.
+
+Register New User is still the right tool where the vendor app owns the code, which is where it came from.
+:::
+
+This creates a record:
 
 ```yaml
 users:
@@ -262,7 +376,7 @@ users:
 | `gender`                   | Yes      | (none)         | `male` or `female`                                                                      |
 | `is_athlete`               | No       | `false`        | Adjusts [body composition](/body-composition#athlete-mode) formulas                     |
 | `weight_range`             | No       | (none)         | `{ min, max }` in kg. Required for [multi-user](/multi-user) deployments                |
-| `last_known_weight`        | No       | `null`         | Auto-updated after each measurement                                                     |
+| `last_known_weight`        | No       | `null`         | Auto-updated after each measurement. Also used as the weight anchor some scales expect  |
 | `exporters`                | No       | (none)         | [Per-user exporter](/multi-user#per-user-exporters) overrides                           |
 | `beurer_pin`               | Beurer   | (none)         | Consent code the Beurer BF7xx / BF9xx scale was paired with                             |
 | `beurer_user_index`        | No       | `1`            | Scale user slot the consent code belongs to                                             |
@@ -312,6 +426,8 @@ update_check: true
 | `update_check` | No       | `true`  | Check for newer versions after each measurement (max once per 24h) |
 
 After each successful measurement, the app sends a single GET request to `api.blescalesync.dev/version`. Only the app version, OS, and architecture are sent via the User-Agent header. No personal data is collected. Automatically disabled when `CI=true`.
+
+The date of the last check is written to `.update-check-state.json` next to this config file, so the once-per-day limit survives a restart. On the Home Assistant add-on that is `/data`, on bare Node.js it is the directory holding `config.yaml` (or your `.env` when there is no `config.yaml`). On Docker it is `/app` inside the container, because `-v ./config.yaml:/app/config.yaml` mounts the file and not the directory: the cooldown then survives a container restart but not a re-create or an image update. `--config` cannot be passed through `docker run` on the published image: the entrypoint's `start` command runs `node dist/index.js` with no arguments, and any extra argument replaces the command instead of being forwarded. If you need the cooldown to survive an image update, run on bare Node.js or the Home Assistant add-on, where the state file sits in a directory you control. The file holds a single date and nothing else; if it is missing or unreadable the app simply checks again. Delete it any time.
 
 Anonymous aggregated statistics are visible at [stats.blescalesync.dev](https://stats.blescalesync.dev).
 

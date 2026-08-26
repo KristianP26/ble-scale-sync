@@ -164,9 +164,11 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     scaleAuth,
     weightUnit,
     onLiveData,
+    onLiveWeight,
     abortSignal,
     bleAdapter,
     readingTimeoutMs,
+    autoClearStaleBond,
   } = opts;
 
   let device: Device | null = null;
@@ -313,6 +315,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         return await broadcastScanNodeBle(matchedAdapter, btAdapter, device, mac, {
           abortSignal,
           onLiveData,
+          onLiveWeight,
         });
       }
 
@@ -327,6 +330,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         initialDevice: device,
         maxRetries: MAX_CONNECT_RETRIES,
         bleAdapter,
+        autoClearStaleBond,
       });
       bleLog.info('Connected. Discovering services...');
 
@@ -399,6 +403,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         return await broadcastScanNodeBle(matchedAdapter, btAdapter, device, result.mac, {
           abortSignal,
           onLiveData,
+          onLiveWeight,
         });
       }
 
@@ -413,6 +418,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         initialDevice: device,
         maxRetries: MAX_CONNECT_RETRIES,
         bleAdapter,
+        autoClearStaleBond,
       });
       bleLog.info('Connected. Discovering services...');
     }

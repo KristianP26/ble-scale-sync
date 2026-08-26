@@ -49,6 +49,10 @@ strava-tokens/
 # Data files
 *.csv
 
+# Update check cooldown state (runtime artifact, written next to config.yaml)
+.update-check-state.json
+.update-check-state.json.tmp
+
 # VitePress
 docs/.vitepress/dist/
 docs/.vitepress/cache/

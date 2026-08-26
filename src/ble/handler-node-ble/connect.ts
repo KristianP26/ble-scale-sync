@@ -18,6 +18,22 @@ import {
 } from './stale-bond.js';
 import { isDeviceObjectGone } from './device-object.js';
 
+/**
+ * True when BlueZ still lists this peer as paired.
+ *
+ * node-ble types isPaired() loosely; BusHelper.prop unwraps the Variant to a
+ * real boolean at runtime, so cast through unknown. Any failure answers false:
+ * every caller uses this to gate a destructive or accusatory step, so an
+ * unknown bond state must not be read as "bonded".
+ */
+async function isBonded(device: Device | undefined): Promise<boolean> {
+  try {
+    return ((await device?.isPaired()) as unknown as boolean) === true;
+  } catch {
+    return false;
+  }
+}
+
 export interface ConnectRecoveryContext {
   btAdapter: Adapter;
   mac: string;
@@ -30,6 +46,11 @@ export interface ConnectRecoveryContext {
    * unset; the loop arms it by itself when it sees the object disappear.
    */
   keepDiscoveryDuringConnect?: boolean;
+  /**
+   * Delete a bond the peer has forgotten and pair again, rather than stopping at
+   * the diagnostic (`ble.auto_clear_stale_bond`, #335). Off by default.
+   */
+  autoClearStaleBond?: boolean;
 }
 
 /**
@@ -54,6 +75,10 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
   let sawObjectGone = false;
   // Consecutive authentication-class failures, reset by any other error (#290).
   let authClassFailures = 0;
+  // One bond deletion per connectWithRecovery call, and only with the opt-in.
+  // Repeating it would delete the bond the previous attempt just established,
+  // turning a scale that needs two goes at pairing into an endless re-pair.
+  let staleBondCleared = false;
   // Long-lived PropertiesChanged subscription on the current device proxy so
   // every received advertisement updates the freshness clock. The tracker is
   // rebound when the catch branch swaps the device reference.
@@ -138,13 +163,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           // discovery is still active, or another D-Bus client holding a
           // discovery session), so we never delete the bond on our own.
           if (authClassFailures >= STALE_BOND_EVIDENCE_ATTEMPTS) {
-            let bonded = false;
-            try {
-              bonded = ((await device?.isPaired()) as unknown as boolean) === true;
-            } catch {
-              bonded = false;
-            }
-            if (bonded) {
+            if (await isBonded(device)) {
               throw new Error(staleBondMessage(formattedMac, maxRetries + 1, msg));
             }
           }
@@ -165,8 +184,26 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           bleLog.debug('Disconnect failed (ignored)');
         }
 
-        // 2. Purge stale D-Bus proxy
-        await removeDevice(btAdapter, mac);
+        // 2. Purge stale D-Bus proxy. With the opt-in, a run of
+        // authentication-class failures against a peer BlueZ still lists as
+        // bonded also takes the pairing keys with it: the peripheral has
+        // forgotten its half, and the bonded guard in removeDevice would
+        // otherwise keep the dead key alive forever and lock the host out of
+        // the scale until someone runs `bluetoothctl remove` (#335).
+        const clearBond =
+          ctx.autoClearStaleBond === true &&
+          !staleBondCleared &&
+          authClassFailures >= STALE_BOND_EVIDENCE_ATTEMPTS &&
+          (await isBonded(device));
+        if (clearBond) {
+          staleBondCleared = true;
+          bleLog.warn(
+            `${formattedMac} rejected the stored pairing key on ${authClassFailures} ` +
+              'consecutive attempts, so the bond is being cleared and re-established ' +
+              '(ble.auto_clear_stale_bond). Put the scale into pairing mode if it asks.',
+          );
+        }
+        await removeDevice(btAdapter, mac, { includeBonded: clearBond });
 
         // 3. Progressive delay
         await sleep(delay);

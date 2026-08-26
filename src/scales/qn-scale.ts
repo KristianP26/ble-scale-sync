@@ -231,13 +231,48 @@ const LEGACY_PROTO_TYPE = 0x00;
  * quiet: @hedoric's retest on the proto fix confirmed every other command is now
  * byte identical to the app's and this is the only remaining difference.
  *
- * It is a well formed QN frame (checksum 0xea = sum of the preceding bytes) but
- * a DIFFERENT one from the A2 user profile we already send at ready time, which
- * carries 0x32 and the user's age. Payload bytes 0x1e and 0x23 are constant
- * across every session in the capture and are replayed verbatim: what they mean
- * is not known, so they are not derived from anything.
+ * Payload bytes [3..4] are a big-endian u16 of kg*100: the capture's 0x1e23 is
+ * 7715, i.e. 77.15 kg, against a subject who weighed about 78. They are the
+ * weight the scale last knew for the selected user, and the scale gates the
+ * weigh-in on them. @hedoric's A/B on one scale in one session: 76 kg against
+ * this hardcoded 77.15 completes every time, 65 kg against it hands over a
+ * clean handshake and then silence every time, and the same 65 kg person
+ * through the vendor app -- which sends her real last-known weight -- completes.
+ * So replaying the constant only ever served people who happen to weigh about
+ * 77 kg. `buildMeasurementTrigger` derives it from the configured user instead.
+ *
+ * It is a well formed QN frame (checksum = sum of the preceding bytes) but a
+ * DIFFERENT one from the A2 user profile we already send at ready time, which
+ * carries 0x32 and the user's age. That frame is left as openScale has it: it
+ * shares this shape, and under the reading above its payload would decode as an
+ * implausible ~128 kg, but no capture shows the vendor app sending it and one
+ * blind edit per release is enough.
  */
-const EXTENDED_MEASUREMENT_TRIGGER = [0xa2, 0x06, 0x01, 0x1e, 0x23, 0xea];
+const TRIGGER_WEIGHT_FALLBACK_KG = 77.15;
+
+/**
+ * Build the extended-dialect measurement trigger for a weight anchor in kg.
+ *
+ * Clamped to the u16 the field can hold, so a nonsense config value degrades to
+ * a wrong anchor rather than a malformed frame.
+ */
+export function buildMeasurementTrigger(weightKg: number): number[] {
+  return buildA2Frame(Math.round(weightKg * 100));
+}
+
+/**
+ * Build an A2 frame around a raw u16 payload.
+ *
+ * Separate from `buildMeasurementTrigger` because the live acknowledgement
+ * echoes the scale's OWN raw weight bytes back verbatim, which is independent
+ * of `weightScaleFactor`; only the pre-stream anchor has to convert from kg.
+ */
+export function buildA2Frame(raw: number): number[] {
+  const v = Math.min(0xffff, Math.max(0, Math.round(raw)));
+  const cmd = [0xa2, 0x06, 0x01, (v >> 8) & 0xff, v & 0xff, 0x00];
+  cmd[5] = cmd.slice(0, 5).reduce((a, b) => a + b, 0) & 0xff;
+  return cmd;
+}
 
 /** How many times the vendor app repeats the trigger, and the gap it leaves. */
 const TRIGGER_REPEATS = 2;
@@ -399,6 +434,14 @@ export class QnScaleAdapter
   private forcedReportByte: number | null = null;
 
   /**
+   * `ble.qn_weight_ack`. Null leaves the dialect gate alone (#75).
+   */
+  private forcedWeightAck: boolean | null = null;
+
+  /** One anchor-fallback warning per session, reset in onConnected. */
+  private anchorFallbackWarned = false;
+
+  /**
    * Whether a completed-weigh-in result frame (0xB4/0xB1) has already produced a
    * reading this session. The scale repeats the 0xB4 frame ~3x and then sends
    * the 0xB1 records, all describing the one weigh-in, so the reading is emitted
@@ -439,6 +482,7 @@ export class QnScaleAdapter
     if (opts.weightUnit) this.displayUnit = opts.weightUnit;
     this.forcedProtocolType = opts.qnProtocolByte ?? null;
     this.forcedReportByte = opts.qnReportByte ?? null;
+    this.forcedWeightAck = opts.qnWeightAck ?? null;
   }
 
   /** 0x13 config unit flag: 0x01 kg, 0x02 lb (openScale QNHandler). */
@@ -447,6 +491,29 @@ export class QnScaleAdapter
   }
 
   /** Write to FFF2 (write char), fall back to FFE3 (Type 1). */
+  /**
+   * Warn when the discovered characteristics are structurally 1byone, not QN.
+   *
+   * Gated on fff4 present AND every QN write characteristic absent, so a
+   * genuine QN scale that happens to expose fff4 alongside its own fff2 (or the
+   * Type-1 ffe3) is never accused.
+   */
+  private warnOnOneByoneShape(ctx: ConnectionContext): void {
+    const chars = ctx.availableChars;
+    if (chars.size === 0) return;
+    if (!chars.has(uuid16(0xfff4))) return;
+    if (chars.has(CHR_WRITE) || chars.has(CHR_WRITE_T1)) return;
+    bleLog.warn(
+      'QN: this device exposes fff4 and none of the QN write characteristics ' +
+        '(fff2, ffe3), which is the 1byone/Eufy layout rather than a QN scale. ' +
+        'The QN adapter most likely claimed it through the nameless fallback, so ' +
+        'the handshake below will fail. Work around it with ' +
+        "ble.force_scale_adapter: '1byone (Eufy)' plus ble.scale_mac, and please " +
+        'report this log on issue #320: a real device of this shape is exactly ' +
+        'the evidence needed to narrow the fallback safely.',
+    );
+  }
+
   private async writeCmd(data: number[]): Promise<void> {
     if (!this.ctx) return;
     try {
@@ -522,6 +589,7 @@ export class QnScaleAdapter
     this.extendedResultEmitted = false;
     this.firstStableNoImpedanceAt = null;
     this.sessionStartedScaleSeconds = Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
+    this.anchorFallbackWarned = false;
     this.configSent = false;
     this.timeSyncSent = false;
     this.historyResponseSent = false;
@@ -534,6 +602,20 @@ export class QnScaleAdapter
       clearTimeout(this.storedRetryTimer);
       this.storedRetryTimer = null;
     }
+
+    // #320: the nameless fallback claims any device on a QN vendor service,
+    // keyed on serviceUuids, so it can outrank the 1byone/Eufy adapter on a
+    // transport that delivers no local name. That adapter's whole signature is
+    // notify fff4 with NO fff2, and fff2 is this protocol's write
+    // characteristic, so a peer with that shape cannot be a QN scale: the
+    // handshake below has nothing to write to and the session ends in a pair of
+    // failed writes that name neither the cause nor the fix.
+    //
+    // Diagnosis only, deliberately. Narrowing the fallback itself needs a real
+    // capture of a NAMELESS fff4-without-fff2 device, and nobody has reported
+    // one; changing the registry's broadest matcher on a hypothesis is how
+    // working installs break. This line is how that capture gets reported.
+    this.warnOnOneByoneShape(ctx);
 
     // Try subscribing to AE02 (newer firmware detection).
     // NOTE: on Linux, 0x12 may arrive before this completes. The state machine
@@ -1017,6 +1099,24 @@ export class QnScaleAdapter
       r2 = data.readUInt16BE(8);
     }
 
+    // Extended dialect: the vendor app answers EVERY live 0x10 frame with an A2
+    // carrying that frame's OWN weight bytes, not a fixed value. The GE CS 10 G
+    // capture shows the pairs plainly: a frame ending `11 1e be` is answered
+    // with `a2 06 01 1e be 85`, the next `11 1e c3` with `a2 06 01 1e c3 8a`.
+    //
+    // That is why the pre-stream anchor could only ever be approximate. This
+    // echo is exact for anyone, so it is the part that should make the dialect
+    // work for a whole household rather than for one person near 77 kg.
+    //
+    // Sent before the stability gate, because the app acknowledges the settling
+    // frames too, and those are the ones the scale is streaming while it decides
+    // whether to finish. Gated to the 20-byte dialect: it is the only firmware
+    // any capture covers, and every other QN scale in the registry reads today
+    // without it. Fire and forget, like the 0x1F stable ACK below.
+    if (this.weightAckEnabled() && this.ctx) {
+      void this.writeCmd(buildA2Frame(rawWeight));
+    }
+
     if (!stable) return null;
 
     let weight = rawWeight / this.weightScaleFactor;
@@ -1174,11 +1274,32 @@ export class QnScaleAdapter
     timeCmd[7] = timeCmd.reduce((a, b) => a + b, 0) & 0xff;
     await this.writeCmd(timeCmd);
 
-    // A2 user profile
+    // A2, which openScale labels a user profile and fills with 0x32 plus the
+    // user's age. The GE CS 10 G capture shows the vendor app using this exact
+    // frame to carry a WEIGHT, so under that reading `0x32 <age>` decodes as a
+    // weight nobody has: @chriba2567's log writes `a2 06 01 32 3a 15`, which is
+    // 128.58 kg, and his scale then goes silent right after START (#331, #75).
+    //
+    // Not changed by default. openScale's bytes are what every QN scale in the
+    // registry reads with today, and two silent units are not enough to move a
+    // default under the whole family. `ble.qn_weight_ack` swaps in the
+    // configured anchor for the reporters who can actually test it.
     if (this.ctx) {
-      const age = Math.min(0xff, Math.max(1, this.ctx.profile.age));
-      const profileCmd = [0xa2, 0x06, 0x01, 0x32, age, 0x00];
-      profileCmd[5] = profileCmd.reduce((a, b) => a + b, 0) & 0xff;
+      const anchorKg = this.forcedWeightAck ? this.resolveAnchorKg() : 0;
+      const profileCmd = this.forcedWeightAck
+        ? buildMeasurementTrigger(anchorKg)
+        : (() => {
+            const age = Math.min(0xff, Math.max(1, this.ctx!.profile.age));
+            const cmd = [0xa2, 0x06, 0x01, 0x32, age, 0x00];
+            cmd[5] = cmd.reduce((a, b) => a + b, 0) & 0xff;
+            return cmd;
+          })();
+      if (this.forcedWeightAck) {
+        bleLog.debug(
+          `QN: ready-time A2 carries the configured weight anchor ` +
+            `${anchorKg.toFixed(2)} kg instead of openScale's placeholder (#75)`,
+        );
+      }
       await this.writeCmd(profileCmd);
     }
 
@@ -1238,11 +1359,16 @@ export class QnScaleAdapter
     // registry reads today without it, and an unexplained extra write is not
     // something to hand them on spec.
     if (!this.isExtendedLongFrame) return;
+    const anchorKg = this.resolveAnchorKg();
+    const trigger = buildMeasurementTrigger(anchorKg);
     for (let i = 0; i < TRIGGER_REPEATS; i++) {
       if (i > 0) await wait(TRIGGER_GAP_MS);
-      await this.writeCmd([...EXTENDED_MEASUREMENT_TRIGGER]);
+      await this.writeCmd([...trigger]);
     }
-    bleLog.debug('QN: extended-dialect measurement trigger sent (#235)');
+    bleLog.debug(
+      `QN: extended-dialect measurement trigger sent, weight anchor ` +
+        `${anchorKg.toFixed(2)} kg (#235, #75)`,
+    );
   }
 
   /**
@@ -1263,6 +1389,49 @@ export class QnScaleAdapter
     }
     this.sessionStartedScaleSeconds = null;
     this.ctx = null;
+  }
+
+  /**
+   * The weight anchor to hand the scale, in kg, warning once when config has
+   * nothing usable.
+   *
+   * The fallback is the value from the capture this was decoded in, so it is
+   * right for one person and wrong for everyone else, which is the whole defect
+   * being fixed (#75). It is reached silently by a config that looks complete:
+   * the Home Assistant add-on defaults to a 40 to 150 kg weight range, whose
+   * span locates nobody and is rejected as a hint, so a reporter can turn
+   * `qn_weight_ack` on, change nothing else, and get the same 77.15 kg that was
+   * already failing. That is a false negative on the one experiment that
+   * matters, so say it out loud.
+   */
+  private resolveAnchorKg(): number {
+    const anchor = this.ctx?.profile.lastKnownWeight;
+    if (anchor !== undefined) return anchor;
+    if (!this.anchorFallbackWarned) {
+      this.anchorFallbackWarned = true;
+      bleLog.warn(
+        `QN: no usable weight anchor in config, falling back to ` +
+          `${TRIGGER_WEIGHT_FALLBACK_KG} kg, which is a value from a capture and not ` +
+          `yours. This scale can refuse to finish a weigh-in when that number is far ` +
+          `from the real weight. Set users[].last_known_weight, or narrow ` +
+          `users[].weight_range so its midpoint is close to you (a range wider than ` +
+          `100 kg is ignored because it locates nobody).`,
+      );
+    }
+    return TRIGGER_WEIGHT_FALLBACK_KG;
+  }
+
+  /**
+   * Whether to answer each live 0x10 frame with its own weight.
+   *
+   * The dialect gate is the default because the 20-byte extended firmware is
+   * the only one a vendor-app capture covers, and every other QN scale in the
+   * registry reads today without the echo. `ble.qn_weight_ack` overrides
+   * it in both directions for a reporter chasing a scale that completes the
+   * handshake and then streams nothing (#75).
+   */
+  private weightAckEnabled(): boolean {
+    return this.forcedWeightAck ?? this.isExtendedLongFrame;
   }
 
   /** Build the 0x22 stored-data query frame with a trailing checksum. */

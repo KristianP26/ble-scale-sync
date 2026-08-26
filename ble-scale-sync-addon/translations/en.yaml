@@ -33,6 +33,33 @@ configuration:
       did not help. Try 252, which is what vendor-app captures of a GE CS 10 G
       and an Arboleaf QN-Scale send where this add-on sends the default 254.
       Accepts 0 to 255.
+  qn_weight_ack:
+    name: QN weight acknowledgement
+    description: >-
+      QN-family scales only, and the last thing to try after the two QN bytes
+      above. The vendor app tells the scale a real weight before the weigh-in
+      and answers every weight frame with that same weight; some firmware will
+      not finish a measurement otherwise. Leave empty unless your QN scale
+      completes the whole handshake in the log and then reports no weight at
+      all; then set true.
+  auto_clear_stale_bond:
+    name: Re-pair a scale that forgot its pairing
+    description: >-
+      Bonded scales only (Beurer BF7xx and BF9xx). Turn this on if the scale
+      works once and then every later connect fails, until you clear it by hand
+      with bluetoothctl. The scale has dropped its half of the pairing while
+      Home Assistant still holds the key; this lets the add-on delete that key
+      and pair again on its own. Leave it off otherwise.
+  proxy_liveness_timeout_min:
+    name: Proxy silence before restart (minutes)
+    description: >-
+      ESP32 and ESPHome proxy setups only. If the proxy stops delivering
+      Bluetooth advertisements entirely for this many minutes, the link is
+      treated as wedged and the add-on restarts to rebuild it. Advertisements
+      arrive constantly from any nearby phone or watch while the link is
+      healthy, so silence means the link, not an empty house. Raise it, or set
+      0 to disable, if your proxy sits somewhere with no other Bluetooth
+      devices in range.
   weight_unit:
     name: Weight unit
     description: >-

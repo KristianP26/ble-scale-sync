@@ -1,8 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { jieliAuthResponseFrame } from '../../src/scales/jieli-auth.js';
-import { QnScaleAdapter } from '../../src/scales/qn-scale.js';
+import { QnScaleAdapter, buildMeasurementTrigger } from '../../src/scales/qn-scale.js';
 import { bleLog } from '../../src/ble/types.js';
-import type { BleDeviceInfo, ConnectionContext } from '../../src/interfaces/scale-adapter.js';
+import { uuid16 } from '../../src/scales/body-comp-helpers.js';
+import type {
+  BleDeviceInfo,
+  ConnectionContext,
+  UserProfile,
+} from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -1353,7 +1358,11 @@ describe('AE02 dispatch (#75, #235)', () => {
      * START, collecting every write. The 0x14 and 0x21 frames are the ones the
      * GE CS 10 G actually sends (#235).
      */
-    async function driveHandshake(adapter: QnScaleAdapter, info: Buffer): Promise<number[][]> {
+    async function driveHandshake(
+      adapter: QnScaleAdapter,
+      info: Buffer,
+      profile: UserProfile = defaultProfile(),
+    ): Promise<number[][]> {
       vi.useFakeTimers();
       try {
         const writes: number[][] = [];
@@ -1363,7 +1372,7 @@ describe('AE02 dispatch (#75, #235)', () => {
           },
           read: async () => Buffer.alloc(0),
           subscribe: async () => {},
-          profile: defaultProfile(),
+          profile,
           deviceAddress: '',
           availableChars: new Set<string>(),
         } as unknown as ConnectionContext;
@@ -1616,9 +1625,273 @@ describe('AE02 dispatch (#75, #235)', () => {
       const triggers = after.filter((w) => w[0] === 0xa2);
       expect(triggers).toHaveLength(2);
       for (const t of triggers) {
+        // No anchor in the profile: the capture's own 77.15 kg is the fallback.
         expect(t).toEqual([0xa2, 0x06, 0x01, 0x1e, 0x23, 0xea]);
         // Self-consistent QN frame: checksum is the low byte of the sum.
         expect(t[5]).toBe(t.slice(0, 5).reduce((a, b) => a + b, 0) & 0xff);
+      }
+    });
+
+    // #75: payload [3..4] is kg*100 big-endian and the scale gates the weigh-in
+    // on it, so a household member who is not near the captured 77.15 kg gets a
+    // clean handshake and then silence. The anchor has to come from config.
+    it('encodes the profile weight anchor into the measurement trigger', async () => {
+      const adapter = makeAdapter();
+      const writes = await driveHandshake(
+        adapter,
+        makeExtendedScaleInfo(),
+        defaultProfile({ lastKnownWeight: 65 }),
+      );
+      const startIndex = writes.findIndex((w) => w[0] === 0x22);
+      const triggers = writes.slice(startIndex + 1).filter((w) => w[0] === 0xa2);
+      expect(triggers).toHaveLength(2);
+      for (const t of triggers) {
+        // 6500 = 0x1964
+        expect(t).toEqual([0xa2, 0x06, 0x01, 0x19, 0x64, 0x26]);
+        expect(t[5]).toBe(t.slice(0, 5).reduce((a, b) => a + b, 0) & 0xff);
+      }
+    });
+
+    // The vendor-app capture answers every live 0x10 with that frame's own
+    // weight bytes: `11 1e be` -> `a2 06 01 1e be 85`. Exact for anyone, where
+    // the pre-stream anchor can only ever be approximate.
+    it('echoes each live weight frame back as an A2 on the extended dialect', async () => {
+      const adapter = makeAdapter();
+      const writes: number[][] = [];
+      const ctx = {
+        write: async (_uuid: string, data: Buffer | number[]) => {
+          writes.push([...data]);
+        },
+        read: async () => Buffer.alloc(0),
+        subscribe: async () => {},
+        profile: defaultProfile(),
+        deviceAddress: '',
+        availableChars: new Set<string>(),
+      } as unknown as ConnectionContext;
+      await adapter.onConnected(ctx);
+      adapter.parseNotification(makeExtendedScaleInfo());
+      writes.length = 0;
+
+      // Settling frame, then the same weight settled. Both are acknowledged:
+      // the scale streams the unstable ones while it decides whether to finish.
+      const frame = (raw: number, stable: boolean): Buffer => {
+        const b = Buffer.alloc(14);
+        b[0] = 0x10;
+        b[1] = 0x0e;
+        b[2] = 0xff;
+        b.writeUInt16BE(raw, 3);
+        b[5] = stable ? 1 : 0;
+        return b;
+      };
+      adapter.parseNotification(frame(0x1ebe, false));
+      adapter.parseNotification(frame(0x1ec3, false));
+      await Promise.resolve();
+
+      const acks = writes.filter((w) => w[0] === 0xa2);
+      expect(acks).toEqual([
+        [0xa2, 0x06, 0x01, 0x1e, 0xbe, 0x85],
+        [0xa2, 0x06, 0x01, 0x1e, 0xc3, 0x8a],
+      ]);
+    });
+
+    // #75: an es26m Arboleaf completes the whole handshake and then streams
+    // nothing. The echo is the remaining difference from the vendor app, so it
+    // gets the same kind of opt-in knob as qn_protocol_byte and qn_report_byte
+    // rather than a blind default change on a dialect no capture covers.
+    // #331/#75: with the flag off, the ready-time A2 keeps openScale's bytes,
+    // which decode as ~128 kg under the weight reading. That is deliberate:
+    // every QN scale in the registry reads with them today.
+    it('keeps openScale placeholder bytes in the ready-time A2 by default', async () => {
+      const adapter = makeAdapter();
+      const writes = await driveHandshake(
+        adapter,
+        makeEs26mScaleInfo(),
+        defaultProfile({ lastKnownWeight: 76 }),
+      );
+      const startIndex = writes.findIndex((w) => w[0] === 0x22);
+      const beforeStart = writes.slice(0, startIndex).filter((w) => w[0] === 0xa2);
+      expect(beforeStart).toHaveLength(1);
+      expect(beforeStart[0][3]).toBe(0x32);
+      expect(beforeStart[0][4]).toBe(30); // defaultProfile age
+    });
+
+    // The add-on defaults to a 40 to 150 kg range, whose span locates nobody and
+    // is rejected as a hint, so a reporter can enable the setting, change
+    // nothing else, and silently get the same 77.15 kg that was already
+    // failing. That would be a false negative on the experiment (#331).
+    it('warns when it falls back to the capture weight instead of a configured one', async () => {
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      try {
+        const adapter = makeAdapter();
+        adapter.configure({ qnWeightAck: true });
+        await driveHandshake(adapter, makeEs26mScaleInfo(), defaultProfile());
+        const msg = warn.mock.calls.flat().join(' ');
+        expect(msg).toContain('no usable weight anchor');
+        expect(msg).toContain('weight_range');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('stays quiet about the anchor when config supplies one', async () => {
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      try {
+        const adapter = makeAdapter();
+        adapter.configure({ qnWeightAck: true });
+        await driveHandshake(
+          adapter,
+          makeEs26mScaleInfo(),
+          defaultProfile({ lastKnownWeight: 76 }),
+        );
+        expect(warn.mock.calls.flat().join(' ')).not.toContain('no usable weight anchor');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('swaps the configured anchor into the ready-time A2 when forced on', async () => {
+      const adapter = makeAdapter();
+      adapter.configure({ qnWeightAck: true });
+      const writes = await driveHandshake(
+        adapter,
+        makeEs26mScaleInfo(),
+        defaultProfile({ lastKnownWeight: 76 }),
+      );
+      const startIndex = writes.findIndex((w) => w[0] === 0x22);
+      const beforeStart = writes.slice(0, startIndex).filter((w) => w[0] === 0xa2);
+      expect(beforeStart).toHaveLength(1);
+      // 7600 = 0x1db0
+      expect(beforeStart[0]).toEqual([0xa2, 0x06, 0x01, 0x1d, 0xb0, 0x76]);
+    });
+
+    it('echoes on any dialect when qn_weight_ack forces it on', async () => {
+      const adapter = makeAdapter();
+      adapter.configure({ qnWeightAck: true });
+      const writes: number[][] = [];
+      const ctx = {
+        write: async (_uuid: string, data: Buffer | number[]) => {
+          writes.push([...data]);
+        },
+        read: async () => Buffer.alloc(0),
+        subscribe: async () => {},
+        profile: defaultProfile(),
+        deviceAddress: '',
+        availableChars: new Set<string>(),
+      } as unknown as ConnectionContext;
+      await adapter.onConnected(ctx);
+      adapter.parseNotification(makeEs26mScaleInfo());
+      writes.length = 0;
+      const b = Buffer.alloc(14);
+      b[0] = 0x10;
+      b[1] = 0x0e;
+      b[2] = 0xff;
+      b.writeUInt16BE(0x1ebe, 3);
+      adapter.parseNotification(b);
+      await Promise.resolve();
+      expect(writes.filter((w) => w[0] === 0xa2)).toEqual([[0xa2, 0x06, 0x01, 0x1e, 0xbe, 0x85]]);
+    });
+
+    it('suppresses the echo on the extended dialect when forced off', async () => {
+      const adapter = makeAdapter();
+      adapter.configure({ qnWeightAck: false });
+      const writes = await driveHandshake(adapter, makeExtendedScaleInfo());
+      const startIndex = writes.findIndex((w) => w[0] === 0x22);
+      // The post-START trigger still goes out; only the per-frame echo is off,
+      // and no live frame was fed here.
+      expect(writes.slice(startIndex + 1).filter((w) => w[0] === 0xa2)).toHaveLength(2);
+      const b = Buffer.alloc(14);
+      b[0] = 0x10;
+      b[1] = 0x0e;
+      b[2] = 0xff;
+      b.writeUInt16BE(0x1ebe, 3);
+      const before = writes.length;
+      adapter.parseNotification(b);
+      await Promise.resolve();
+      expect(writes.length).toBe(before);
+    });
+
+    it('does not echo live weight frames on the es26m dialect', async () => {
+      const adapter = makeAdapter();
+      const writes: number[][] = [];
+      const ctx = {
+        write: async (_uuid: string, data: Buffer | number[]) => {
+          writes.push([...data]);
+        },
+        read: async () => Buffer.alloc(0),
+        subscribe: async () => {},
+        profile: defaultProfile(),
+        deviceAddress: '',
+        availableChars: new Set<string>(),
+      } as unknown as ConnectionContext;
+      await adapter.onConnected(ctx);
+      adapter.parseNotification(makeEs26mScaleInfo());
+      writes.length = 0;
+      const b = Buffer.alloc(14);
+      b[0] = 0x10;
+      b[1] = 0x0e;
+      b[2] = 0xff;
+      b.writeUInt16BE(0x1ebe, 3);
+      adapter.parseNotification(b);
+      await Promise.resolve();
+      expect(writes.filter((w) => w[0] === 0xa2)).toHaveLength(0);
+    });
+
+    it('rounds the anchor to the nearest 10 g and keeps the frame well formed', () => {
+      expect(buildMeasurementTrigger(76.004)).toEqual([0xa2, 0x06, 0x01, 0x1d, 0xb0, 0x76]);
+      expect(buildMeasurementTrigger(76.006)).toEqual([0xa2, 0x06, 0x01, 0x1d, 0xb1, 0x77]);
+    });
+
+    it('clamps an out-of-range anchor instead of emitting a malformed frame', () => {
+      const huge = buildMeasurementTrigger(10_000);
+      expect(huge).toEqual([0xa2, 0x06, 0x01, 0xff, 0xff, 0xa7]);
+      const negative = buildMeasurementTrigger(-5);
+      expect(negative).toEqual([0xa2, 0x06, 0x01, 0x00, 0x00, 0xa9]);
+      for (const t of [huge, negative]) {
+        expect(t[5]).toBe(t.slice(0, 5).reduce((a, b) => a + b, 0) & 0xff);
+      }
+    });
+
+    // #320: the nameless fallback keys on serviceUuids, so it can claim a
+    // 1byone/Eufy device on a transport that delivers no local name. That shape
+    // has no QN write characteristic at all, so the handshake cannot work and
+    // the session used to end in two failed writes explaining nothing.
+    it('warns when the discovered characteristics are the 1byone layout', async () => {
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      try {
+        const adapter = makeAdapter();
+        await adapter.onConnected({
+          write: async () => {},
+          read: async () => Buffer.alloc(0),
+          subscribe: async () => {},
+          profile: defaultProfile(),
+          deviceAddress: '',
+          // fff1 + fff4, never fff2: the 1byone signature.
+          availableChars: new Set([uuid16(0xfff1), uuid16(0xfff4)]),
+        } as unknown as ConnectionContext);
+        const msg = warn.mock.calls.flat().join(' ');
+        expect(msg).toContain('1byone/Eufy layout');
+        expect(msg).toContain('#320');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('does not warn about the 1byone layout when a QN write characteristic exists', async () => {
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      try {
+        const adapter = makeAdapter();
+        await adapter.onConnected({
+          write: async () => {},
+          read: async () => Buffer.alloc(0),
+          subscribe: async () => {},
+          profile: defaultProfile(),
+          deviceAddress: '',
+          // A genuine QN scale that also exposes fff4 keeps its own fff2.
+          availableChars: new Set([uuid16(0xfff1), uuid16(0xfff2), uuid16(0xfff4)]),
+        } as unknown as ConnectionContext);
+        expect(warn.mock.calls.flat().join(' ')).not.toContain('1byone/Eufy layout');
+      } finally {
+        warn.mockRestore();
       }
     });
 

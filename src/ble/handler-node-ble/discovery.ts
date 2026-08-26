@@ -138,8 +138,18 @@ export async function startDiscoverySafe(
   return false;
 }
 
-/** Remove a device from BlueZ D-Bus cache to force a fresh proxy on re-discovery. */
-export async function removeDevice(btAdapter: Adapter, mac: string): Promise<void> {
+/**
+ * Remove a device from BlueZ D-Bus cache to force a fresh proxy on re-discovery.
+ *
+ * `includeBonded` also deletes the stored pairing keys, which is destructive and
+ * is only ever passed by the stale-bond recovery in connect.ts, behind
+ * `ble.auto_clear_stale_bond` (#335).
+ */
+export async function removeDevice(
+  btAdapter: Adapter,
+  mac: string,
+  opts: { includeBonded?: boolean } = {},
+): Promise<void> {
   const formatted = formatMac(mac);
 
   // Never remove a bonded device: BlueZ RemoveDevice deletes the stored pairing
@@ -167,9 +177,12 @@ export async function removeDevice(btAdapter: Adapter, mac: string): Promise<voi
     bleLog.debug('Device not in BlueZ cache; RemoveDevice is a no-op');
     paired = false;
   }
-  if (paired) {
+  if (paired && !opts.includeBonded) {
     bleLog.debug('Skipping RemoveDevice: device is bonded (preserving pairing keys)');
     return;
+  }
+  if (paired) {
+    bleLog.warn(`Removing the bond for ${formatted} along with the BlueZ device object.`);
   }
 
   try {

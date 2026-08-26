@@ -25,4 +25,16 @@ export interface Watcher {
   stop(): Promise<void>;
   nextReading(signal?: AbortSignal): Promise<RawReading>;
   updateConfig(config: WatcherConfig): void;
+  /**
+   * Epoch ms of the last advertisement the transport delivered, from ANY
+   * device, or null before the first one.
+   *
+   * A wedged proxy and an idle house are indistinguishable from `nextReading`,
+   * which never resolves in either case (#281). Advertisements are the one
+   * signal that separates them, because they flow constantly while the link is
+   * alive and stop entirely when it is not. Taken BEFORE any `targetMac`
+   * filtering on purpose: the scale itself only advertises while somebody is
+   * standing on it, so it proves nothing about the transport.
+   */
+  lastTransportActivityMs(): number | null;
 }

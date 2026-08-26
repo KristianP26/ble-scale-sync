@@ -177,6 +177,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       // connecting. (A saved fallback means GATT must NOT be opened, matching the
       // pre-#242 `weightOnlyFallback || hasParseableBroadcastSource` guard.)
       if (weightOnlyFallback || decision.kind === 'wait') {
+        // What the scale is showing while it converges. Not a reading, so it
+        // never ends the scan (#356).
+        if (decision.kind === 'wait' && decision.live) opts.onLiveWeight?.(decision.live);
         bleLog.debug(`${adapter.name} supports broadcast, waiting for stable reading...`);
         continue;
       }

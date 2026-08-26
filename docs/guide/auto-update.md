@@ -12,7 +12,7 @@ head:
 BLE Scale Sync ships with an anonymous update check that logs when a newer release is available, but it does not install the update for you. This page lists the recommended way to automate actual updates for each deployment target. Pick the section that matches your setup.
 
 ::: tip
-New releases are announced on the [releases page](https://github.com/KristianP26/ble-scale-sync/releases) and in the [changelog](/changelog). The update check runs at most once every 24 hours and can be disabled with `update_check: false` in `config.yaml`.
+New releases are announced on the [releases page](https://github.com/KristianP26/ble-scale-sync/releases) and in the [changelog](/changelog). The update check runs at most once per UTC day, including across restarts, and can be disabled with `update_check: false` in `config.yaml`.
 :::
 
 ## Home Assistant Add-on

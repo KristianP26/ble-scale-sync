@@ -162,6 +162,51 @@ export const BleSchema = z
      * exactly the way `qn_protocol_byte` is.
      */
     qn_report_byte: z.number().int().min(0).max(255).optional().nullable(),
+    /**
+     * Acknowledge every live QN weight frame with its own weight (#75, #235).
+     *
+     * The vendor app answers each 0x10 frame with `a2 06 01 <that weight>`, and
+     * on the scale a capture covers, the 20-byte extended dialect, the scale
+     * will not finish a weigh-in without it. That dialect does it by default.
+     *
+     * Set true on another dialect whose scale completes the whole handshake and
+     * then streams nothing: it is the same class of silent failure as
+     * `qn_protocol_byte` and `qn_report_byte`, and the same kind of knob. Left
+     * unset it changes nothing.
+     */
+    qn_weight_ack: z.boolean().optional().nullable(),
+    /**
+     * Delete a bond the scale has forgotten and pair again, instead of stopping
+     * at the diagnostic (#290, #335).
+     *
+     * When a peripheral discards its half of the pairing, BlueZ replays the
+     * dead key forever: every connect fails during encryption and the host
+     * never invalidates anything, so the scale is unreachable until someone
+     * runs `bluetoothctl remove` by hand. Turning this on lets a run of
+     * authentication-class failures against a device BlueZ still lists as
+     * bonded clear the bond once per connect and retry.
+     *
+     * Opt-in, because `le-connection-abort-by-local` also has benign producers
+     * (a connect issued while discovery is still active, or another D-Bus
+     * client holding a discovery session), and on these scales a bond dropped
+     * in error costs a physical re-pair at the device.
+     */
+    auto_clear_stale_bond: z.boolean().optional().nullable(),
+    /**
+     * Minutes of total advertisement silence before a proxy transport is
+     * treated as wedged rather than idle (#281). 0 disables the check.
+     *
+     * `mqtt-proxy` and `esphome-proxy` have no in-app liveness recovery: a
+     * wedged link and a house where nobody has weighed in look identical,
+     * because the reading wait never resolves in either case. Advertisements
+     * are the signal that separates them, since they flow constantly from any
+     * nearby device while the link is alive.
+     *
+     * The window is deliberately long. Getting this wrong means restart-looping
+     * somebody whose proxy sits somewhere genuinely quiet, which is worse than
+     * the bug it fixes.
+     */
+    proxy_liveness_timeout_min: z.number().int().min(0).max(1440).optional().nullable(),
     mqtt_proxy: MqttProxySchema.optional(),
     esphome_proxy: EsphomeProxySchema.optional(),
   })
@@ -233,10 +278,16 @@ export const UserSchema = z.object({
    * existing one (#335).
    *
    * A SIG user record exists only after User Control Point "Register New User",
-   * and normally only the vendor app performs it. The profiles created in the
-   * scale's own menu are display-side records for its body-composition maths,
-   * not SIG users, so a scale set up that way refuses every consent code from
-   * any other client: there is no record it is entitled to.
+   * and normally only the vendor app performs it, so a scale set up that way
+   * refuses every consent code from any other client: there is no record it is
+   * entitled to.
+   *
+   * NOT the first move on a BF915, where the scale's own menu profiles ARE the
+   * SIG slots: a factory reset followed by creating U:1 in the menu, with no
+   * BLE operation at all, leaves Register New User returning index 2, and
+   * consent on index 1 returns the values typed into the menu. On that model
+   * the profile and its displayed four-digit consent code come from the menu
+   * and this only burns slots (#335).
    *
    * One-shot and opt-in, because it writes a record to the device and the slots
    * are finite. Turn it on once, read the assigned index out of the log, put

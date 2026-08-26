@@ -136,6 +136,16 @@ describe('BeurerBf720Adapter', () => {
   });
 
   describe('parseCharNotification()', () => {
+    it('reports zero impedance when the frame does not carry the field', () => {
+      const a = makeAdapter();
+      // Same frame with bit 9 cleared and the trailing field removed.
+      const noImpedance = Buffer.from('9801c200df1a9701cc2fca21', 'hex');
+      a.parseCharNotification(CHR_WEIGHT, WSS_FRAME);
+      const reading = a.parseCharNotification(CHR_BODYCOMP, noImpedance);
+      expect(reading).not.toBeNull();
+      expect(reading!.impedance).toBe(0);
+    });
+
     it('pairs weight + body composition and decodes native values', () => {
       const a = makeAdapter();
       expect(a.parseCharNotification(CHR_WEIGHT, WSS_FRAME)).toBeNull();
@@ -149,6 +159,11 @@ describe('BeurerBf720Adapter', () => {
       expect(reading!.timestamp!.getFullYear()).toBe(2026);
       expect(reading!.timestamp!.getMonth()).toBe(4); // May (0-based)
       expect(reading!.timestamp!.getDate()).toBe(12);
+
+      // Bit 9 of the flags is set in this capture and the field was skipped as
+      // "unused", so every reading from this family carried a false zero (#354).
+      // 0x11a8 = 4520 at 0.1 ohm per LSB, a plausible whole-body value at 80 kg.
+      expect(reading!.impedance).toBeCloseTo(452.0, 1);
 
       const payload = a.computeMetrics(reading!, defaultProfile());
       assertPayloadRanges(payload);
@@ -957,6 +972,26 @@ describe('BeurerBf720Adapter', () => {
         expect(msg).toContain('never answered the consent');
         expect(msg).toContain('user index 1');
         expect(msg).toContain('beurer_user_index');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    // #335: a BF915 answers nothing at all on the User Control Point and then
+    // delivers the measurement on 2a9d anyway, so the unqualified warning fired
+    // on a fully successful session and sent people off to try other slots.
+    it('does not warn about consent silence when the session produced a reading', async () => {
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      try {
+        const a = makeAdapter();
+        await a.onConnected(ctxWith({}));
+        await settle();
+        // No UCP indication ever arrives; the measurement does.
+        a.parseCharNotification(WEIGHT, WSS_FRAME);
+        expect(a.parseCharNotification(BODYCOMP, BCS_FRAME)).not.toBeNull();
+        a.onSessionEnd!();
+        const msg = warn.mock.calls.flat().join(' ');
+        expect(msg).not.toContain('never answered the consent');
       } finally {
         warn.mockRestore();
       }

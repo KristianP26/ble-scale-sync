@@ -99,7 +99,11 @@ Beurer BF720: consent rejected (USER_NOT_AUTHORIZED)
 Beurer BF720: the scale reports no stored user profiles
 ```
 
-Removing the batteries from a Beurer BF7xx or BF9xx wipes every user slot **and** its consent code. No code the scale was previously paired with can be correct, because the slot it belonged to no longer exists. The physical sign is that the user-slot digit is gone from the display.
+Removing the batteries can wipe every user slot **and** its consent code. No code the scale was previously paired with is then correct, because the slot it belonged to no longer exists. The physical sign is that the user-slot digit is gone from the display.
+
+::: warning Not every model does this
+Reported for the BF7xx family. A **BF915** keeps its slots across a battery change: after one, `beurer_register_new_user` still came back with index 3, so slots 1 and 2 and the menu profile were all still there. On that model only a factory reset (`CLr`) clears them, so if your slots survived, the empty-scale recipe below is not your problem.
+:::
 
 On a scale in that state:
 
@@ -115,7 +119,43 @@ users:
 
 One caution: on Linux, `beurer_pin` is also the passkey offered to BlueZ during pairing. If the scale is already bonded, remove the bond (`bluetoothctl remove <MAC>`) before changing it.
 
-Provisioning only fills fields the scale reports as empty. A populated profile is written back byte for byte, exactly as before.
+Provisioning only fills fields the scale reports as empty. A populated profile is written back byte for byte, exactly as before, and the commit line then reports `0 from config`. There is no option to overwrite a record the scale already holds; a factory reset is the only way to change one.
+
+### Beurer: the six-digit passkey and the four-digit consent code are different numbers
+
+Both get called "the PIN", and mixing them up costs hours.
+
+|              | Digits | What it is                                             | Where it goes                                  |
+| ------------ | ------ | ------------------------------------------------------ | ---------------------------------------------- |
+| Passkey      | 6      | BLE Numeric Comparison during pairing. New every time. | Nowhere. Confirm it on the scale with **SET**. |
+| Consent code | 4      | SIG User Control Point, tied to one user slot.         | `users[].beurer_pin`                           |
+
+On a BF915 the consent code is the four-digit number the scale displays when you select that profile in its own menu. It does not have to be guessed or assigned.
+
+### Beurer BF 405 / BF 915: factory reset and deleting one user
+
+Both live on the **UNIT** button on the underside, and differ only in how long you hold it:
+
+- **4 seconds with a user selected** deletes that user (`dEL`).
+- **5 seconds from powered on** resets the scale (`CLr`).
+
+After a reset the scale asks for the date and time, which is a useful confirmation that it actually happened.
+
+### Beurer: every connect fails after the first session
+
+```
+Connect error: le-connection-abort-by-local
+```
+
+The scale has dropped its half of the pairing while the host still holds the key. BlueZ replays the dead key forever and never invalidates it, so nothing recovers on its own. Clear it and pair again:
+
+```bash
+sudo bluetoothctl
+remove AA:BB:CC:DD:EE:FF
+pair AA:BB:CC:DD:EE:FF
+```
+
+If it happens every session, `ble.auto_clear_stale_bond: true` does that for you. See [the configuration reference](/guide/configuration#config-yaml-reference).
 
 ## Exporter Issues
 

@@ -167,6 +167,7 @@ interface CachedComp {
   muscle?: number; // %
   waterMass?: number; // kg
   softLean?: number; // kg
+  impedance?: number; // ohm
 }
 
 /**
@@ -487,9 +488,19 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
           bleLog.debug(`Beurer BF720: change increment rejected: ${String(err)}`);
         }
       }
+      // "0 from config" reads like a failure to anyone who set
+      // beurer_provision expecting their values to land, so say why it is zero.
+      // Config is only ever written into a field the scale reports as unset;
+      // there is no overwrite, and a factory reset is the only way to change a
+      // record the scale already holds (#335).
+      const provisionedNote =
+        provisioned === 0 && this.provision
+          ? '0 from config (every field was already populated on the scale; ' +
+            'a factory reset is the only way to change them)'
+          : `${provisioned} from config`;
       bleLog.debug(
         `Beurer BF720: user profile committed (${written}/${values.size} characteristics ` +
-          `written, ${provisioned} from config, change increment ${increment}); ` +
+          `written, ${provisionedNote}, change increment ${increment}); ` +
           'scale can complete the measurement',
       );
     } catch (err) {
@@ -701,7 +712,12 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     // check: a vendor-app trace of a BF950 addresses user index 2, while this
     // adapter defaults to 1, and a profile that was ever recreated or shared
     // with a second person is unlikely to sit first in the scale's own list.
-    if (this.consentSent && !this.consentAnswered) {
+    //
+    // Gated on the reading, not on the consent alone: a BF915 answers nothing
+    // at all on 2a9f and then delivers the measurement on 2a9d regardless, so
+    // the unqualified warning fired on a fully successful session and sent
+    // people off to try other slots for no reason (#335).
+    if (this.consentSent && !this.consentAnswered && !this.readingEmitted) {
       bleLog.warn(
         `Beurer BF720: the scale never answered the consent for user index ` +
           `${this.userIndex}. It rejects nothing and reports nothing in this state, so a ` +
@@ -856,7 +872,18 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
       this.cachedComp.waterMass = waterMass * massMul;
       off += 2;
     }
-    if (flags & 0x0200) off += 2; // Impedance (unused; native comp)
+    if (flags & 0x0200) {
+      // Impedance, 0.1 ohm per LSB. Skipped as "unused" since this adapter was
+      // written, on the reasoning that the scale supplies its own composition,
+      // so every reading from a BF720, BF788 or BF950 has carried a false zero
+      // (#354). It is not unused: the fields the scale does NOT supply are
+      // derived downstream, and a real impedance moves them off the BMI-only
+      // estimate onto the BIA equations.
+      const impedance = u16(off);
+      if (impedance == null) return;
+      this.cachedComp.impedance = impedance * 0.1;
+      off += 2;
+    }
     if (flags & 0x0400) {
       const raw = u16(off); // Weight
       if (raw == null) return;
@@ -874,7 +901,10 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
    */
   private buildReading(): ScaleReading | null {
     if (this.cachedWeight <= 0 || this.cachedComp.fat == null) return null;
-    const reading: ScaleReading = { weight: this.cachedWeight, impedance: 0 };
+    const reading: ScaleReading = {
+      weight: this.cachedWeight,
+      impedance: this.cachedComp.impedance ?? 0,
+    };
     const histTs = this.historicalTimestamp(this.cachedTimestamp);
     if (histTs) reading.timestamp = histTs;
     // Snapshot the composition onto this specific reading. computeMetrics() runs

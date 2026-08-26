@@ -36,6 +36,8 @@ docker-compose*.yml
 .env.example
 config.yaml
 config.yaml.*
+.update-check-state.json
+.update-check-state.json.tmp
 
 # IDE & editor
 .idea

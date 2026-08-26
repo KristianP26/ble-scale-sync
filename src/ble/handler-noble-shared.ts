@@ -4,6 +4,7 @@ import type {
   ScaleReading,
   BleDeviceInfo,
   BodyComposition,
+  LiveWeight,
 } from '../interfaces/scale-adapter.js';
 import type { ScanOptions, ScanResult } from './types.js';
 import type { BleChar, BleDevice, RawReading } from './shared.js';
@@ -446,9 +447,10 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
     opts: {
       abortSignal?: AbortSignal;
       onLiveData?: (reading: ScaleReading) => void;
+      onLiveWeight?: (live: LiveWeight) => void;
     },
   ): Promise<RawReading> {
-    const { abortSignal, onLiveData } = opts;
+    const { abortSignal, onLiveData, onLiveWeight } = opts;
 
     if (abortSignal?.aborted) {
       return Promise.reject(abortSignal.reason ?? new DOMException('Aborted', 'AbortError'));
@@ -525,6 +527,12 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
           return;
         }
 
+        // A settling weight: what the scale is showing while it converges. Not
+        // a reading, so it never completes the scan (#356).
+        if (decision.kind === 'wait' && decision.live && onLiveWeight) {
+          onLiveWeight(decision.live);
+        }
+
         // wait / gatt / none: this is the broadcast-only path, so keep waiting
         // for the next advertisement from the target.
       };
@@ -556,7 +564,16 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
       adapterWarningLogged = true;
     }
 
-    const { targetMac, adapters, profile, scaleAuth, weightUnit, onLiveData, abortSignal } = opts;
+    const {
+      targetMac,
+      adapters,
+      profile,
+      scaleAuth,
+      weightUnit,
+      onLiveData,
+      onLiveWeight,
+      abortSignal,
+    } = opts;
     const { readingTimeoutMs } = opts;
 
     try {
@@ -598,7 +615,11 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
           } else {
             bleLog.info(`Adapter prefers passive mode. Using advertisement-based reading.`);
           }
-          return await broadcastScan(broadcastAdapter, peripheral, { abortSignal, onLiveData });
+          return await broadcastScan(broadcastAdapter, peripheral, {
+            abortSignal,
+            onLiveData,
+            onLiveWeight,
+          });
         }
 
         if (!connectable) {

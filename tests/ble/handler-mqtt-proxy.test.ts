@@ -1022,6 +1022,41 @@ describe('handler-mqtt-proxy', () => {
   });
 
   describe('ReadingWatcher', () => {
+    // #281: a wedged proxy and a house nobody has weighed in at both park
+    // nextReading() forever. Advertisements are the only thing that tells them
+    // apart, and they have to be counted BEFORE the targetMac filter, because
+    // the scale itself only advertises while somebody is standing on it.
+    it('counts an advertisement from an unrelated device as transport liveness', async () => {
+      const adapter = createBroadcastAdapter();
+      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter], '11:22:33:44:55:66');
+      await watcher.start();
+      const atStart = watcher.lastTransportActivityMs();
+      expect(atStart).not.toBeNull();
+
+      await new Promise((r) => setTimeout(r, 5));
+      mockClient._simulateMessage(
+        `${PREFIX}/scan/results`,
+        JSON.stringify([
+          { address: 'AA:BB:CC:DD:EE:FF', name: 'somebody-elses-watch', rssi: -70, services: [] },
+        ]),
+      );
+      expect(watcher.lastTransportActivityMs()!).toBeGreaterThan(atStart!);
+      await watcher.stop();
+      // Cleared on stop, so a restarted watcher is not judged on a stale clock.
+      expect(watcher.lastTransportActivityMs()).toBeNull();
+    });
+
+    it('does not count an empty scan batch as liveness', async () => {
+      const adapter = createBroadcastAdapter();
+      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter]);
+      await watcher.start();
+      const atStart = watcher.lastTransportActivityMs();
+      await new Promise((r) => setTimeout(r, 5));
+      mockClient._simulateMessage(`${PREFIX}/scan/results`, JSON.stringify([]));
+      expect(watcher.lastTransportActivityMs()).toBe(atStart);
+      await watcher.stop();
+    });
+
     it('start subscribes with QoS 1 and pushes matched readings to queue', async () => {
       const adapter = createBroadcastAdapter();
       const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter]);

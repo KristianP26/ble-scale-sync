@@ -48,10 +48,20 @@ export class PollReadingSource implements ReadingSource {
       readingTimeoutMs: this.ctx.config.ble?.session_timeout_sec
         ? this.ctx.config.ble.session_timeout_sec * 1000
         : undefined,
+      autoClearStaleBond: this.ctx.config.ble?.auto_clear_stale_bond === true,
       onLiveData: (reading) => {
         const impStr: string = reading.impedance > 0 ? `${reading.impedance} Ohm` : 'Measuring...';
         process.stdout.write(
           `\r  Weight: ${fmtWeight(reading.weight, this.ctx.weightUnit)} | Impedance: ${impStr}      `,
+        );
+      },
+      // Settling weights from a broadcast scale, so the console follows the
+      // scale's own display while somebody steps on (#356). Labelled as
+      // settling rather than shown bare: it is a number the scale has not
+      // committed to and it must not read like a result.
+      onLiveWeight: (live) => {
+        process.stdout.write(
+          `\r  Weight: ${fmtWeight(live.weight, this.ctx.weightUnit)} (settling...)      `,
         );
       },
     });

@@ -66,6 +66,21 @@ describe('removeDevice() bond guard (#168)', () => {
     expect(callMethod).not.toHaveBeenCalled();
   });
 
+  // #335: a peripheral that has forgotten its half of the pairing leaves BlueZ
+  // replaying a dead key forever, and this guard is what keeps it alive. The
+  // opt-in recovery has to be able to get past it.
+  it('removes a bonded device when includeBonded is set', async () => {
+    const { adapter, callMethod } = makeAdapter({ paired: true });
+    await removeDevice(adapter, MAC, { includeBonded: true });
+    expect(callMethod).toHaveBeenCalledWith('RemoveDevice', EXPECTED_PATH);
+  });
+
+  it('still fails safe on a transient paired-state query error with includeBonded', async () => {
+    const { adapter, callMethod } = makeAdapter({ isPairedThrows: true });
+    await removeDevice(adapter, MAC, { includeBonded: true });
+    expect(callMethod).not.toHaveBeenCalled();
+  });
+
   it('does not reject when RemoveDevice itself fails', async () => {
     const { adapter } = makeAdapter({ paired: false, removeThrows: true });
     await expect(removeDevice(adapter, MAC)).resolves.toBeUndefined();

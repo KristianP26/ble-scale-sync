@@ -142,6 +142,7 @@ BlueZ and noble, plus the ESP32 and ESPHome proxies).
 <td align="center"><a href="https://github.com/O-Palda"><img src="https://avatars.githubusercontent.com/u/68783617?v=4" width="60" height="60" alt="O-Palda"><br><sub>O-Palda</sub></a></td>
 <td align="center"><a href="https://github.com/Bretos"><img src="https://avatars.githubusercontent.com/u/4947212?v=4" width="60" height="60" alt="Bretos"><br><sub>Bretos</sub></a></td>
 <td align="center"><a href="https://github.com/albert-canfield"><img src="https://avatars.githubusercontent.com/u/153834574?v=4" width="60" height="60" alt="albert-canfield"><br><sub>albert-canfield</sub></a></td>
+<td align="center"><a href="https://github.com/JamieSBenson"><img src="https://avatars.githubusercontent.com/u/21150960?v=4" width="60" height="60" alt="JamieSBenson"><br><sub>JamieSBenson</sub></a></td>
 </tr></table>
 
 ## Contributing
@@ -154,10 +155,4 @@ GPL-3.0. See [LICENSE](LICENSE) for details.
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=KristianP26%2Fble-scale-sync&type=date&legend=bottom-right">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=KristianP26/ble-scale-sync&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=KristianP26/ble-scale-sync&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=KristianP26/ble-scale-sync&type=date&legend=top-left" />
- </picture>
-</a>
+[![Star History Chart](https://star-history.dera.page/svg?repos=KristianP26/ble-scale-sync&legend=bottom-right)](https://star-history.dera.page/#KristianP26/ble-scale-sync&legend=bottom-right)

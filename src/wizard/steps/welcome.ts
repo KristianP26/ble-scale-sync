@@ -3,6 +3,7 @@ import { parse as parseYaml } from 'yaml';
 import type { WizardStep, WizardContext } from '../types.js';
 import { banner, dim, warn } from '../ui.js';
 import { checkForUpdate } from '../../update-check.js';
+import { configureUpdateState } from '../../update-state.js';
 
 export const welcomeStep: WizardStep = {
   id: 'welcome',
@@ -23,6 +24,10 @@ export const welcomeStep: WizardStep = {
         // Ignore parse errors
       }
     }
+
+    // Share the app's persisted cooldown: running the wizard repeatedly must
+    // not send an extra check per run.
+    configureUpdateState(ctx.configPath);
 
     // Show update notice if a newer version is available
     const update = await checkForUpdate(updateCheckEnabled);

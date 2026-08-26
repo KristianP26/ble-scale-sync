@@ -125,8 +125,14 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
 
     const bundle = await buildReadingSource(ctx, ADAPTERS, 10, 30);
 
-    expect(bundle.source).toBe(plan.watcher);
+    // The watcher is wrapped rather than returned directly, so the proxy
+    // liveness check can sit around nextReading (#281). start/stop/nextReading
+    // still have to reach the watcher itself.
     expect(bundle.failureLogPrefix).toBe('Error processing ESPHome reading');
+    await bundle.source.start?.();
+    expect(plan.watcher.start).toHaveBeenCalled();
+    await bundle.source.stop?.();
+    expect(plan.watcher.stop).toHaveBeenCalled();
 
     bundle.onSourceReload?.();
     expect(plan.watcher.updateConfig).toHaveBeenCalledWith({
