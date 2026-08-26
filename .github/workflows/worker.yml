@@ -14,6 +14,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      # Installs the wrangler pinned in worker/package-lock.json so
+      # wrangler-action finds it locally. Without this the action falls back to
+      # a fresh `npm i wrangler@4`, which resolves to a wrangler whose optional
+      # peer @cloudflare/workers-types has moved to v5 and fails ERESOLVE
+      # against the v4 pinned here.
+      - name: Install worker dependencies
+        run: npm ci
+        working-directory: worker
+
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v4
         with:
