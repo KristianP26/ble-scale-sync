@@ -228,6 +228,7 @@ describe('checkForUpdate() persisted cooldown', () => {
   });
 
   afterEach(() => {
+    delete process.env.CI;
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -303,17 +304,27 @@ describe('checkForUpdate() persisted cooldown', () => {
   });
 
   it('does not write a state file when update_check is disabled', async () => {
+    const mockFetch = okFetch();
+    vi.stubGlobal('fetch', mockFetch);
     configureUpdateState(configPath());
 
     expect(await checkForUpdate(false)).toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
     expect(existsSync(statePath())).toBe(false);
+
+    vi.unstubAllGlobals();
   });
 
   it('does not write a state file when CI=true', async () => {
+    const mockFetch = okFetch();
+    vi.stubGlobal('fetch', mockFetch);
     process.env.CI = 'true';
     configureUpdateState(configPath());
 
     expect(await checkForUpdate(true)).toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
     expect(existsSync(statePath())).toBe(false);
+
+    vi.unstubAllGlobals();
   });
 });
