@@ -21,6 +21,25 @@ export interface BleDeviceInfo {
   characteristicUuids?: string[];
 }
 
+/**
+ * A weight the scale is DISPLAYING but has not committed to (#356).
+ *
+ * Broadcast scales stream their settling weights while somebody steps on. A
+ * Silvergear 108 capture that ends at 108.48 kg runs 39.60, 55.48, 83.46 and
+ * 107.03 on the way, so none of it is a measurement and publishing any of it
+ * would write a number the scale never showed.
+ *
+ * Deliberately NOT a `ScaleReading`, and deliberately missing the `impedance`
+ * that `ScaleReading` requires. Every exporter path takes a `ScaleReading` or a
+ * `RawReading`, so a value of this type cannot be handed to one: the type
+ * checker refuses it rather than a reviewer having to notice. That is the whole
+ * design. If this ever grows an `impedance`, the guarantee is gone.
+ */
+export interface LiveWeight {
+  /** Kilograms. Provisional: correct for a display, wrong for a record. */
+  weight: number;
+}
+
 export interface ScaleReading {
   weight: number;
   impedance: number;
@@ -322,6 +341,19 @@ export interface BroadcastSource {
    * defined, the handler can extract a reading during scan without connecting.
    */
   parseBroadcast?(manufacturerData: Buffer): ScaleReading | null;
+
+  /**
+   * Parse a settling weight from advertisement manufacturer data (#356).
+   *
+   * Called only for frames `parseBroadcast` returned null for, so an adapter
+   * MUST NOT return a value here for a frame it would have accepted there: one
+   * frame reported through both channels would show a display a number twice
+   * and, worse, blur the line this type exists to draw.
+   *
+   * The result reaches a live display and nothing else. It is not a reading, it
+   * never completes a session, and it can never be exported.
+   */
+  parseLiveBroadcast?(manufacturerData: Buffer): LiveWeight | null;
 
   /**
    * Parse a weight reading from a single BLE advertisement service-data entry.

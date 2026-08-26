@@ -1,4 +1,9 @@
-import type { ScaleAdapter, ScaleReading, BleDeviceInfo } from '../interfaces/scale-adapter.js';
+import type {
+  ScaleAdapter,
+  ScaleReading,
+  BleDeviceInfo,
+  LiveWeight,
+} from '../interfaces/scale-adapter.js';
 import { hasParseableBroadcastSource, type RawReading } from './shared.js';
 import { bleLog, normalizeUuid, BT_BASE_UUID_SUFFIX } from './types.js';
 import { isDebugEnabled } from '../logger.js';
@@ -17,8 +22,10 @@ export type AdvertisementDecision =
   /** A weight-only frame from a passive adapter — start/refresh a grace timer. */
   | { kind: 'partial'; reading: ScaleReading }
   /** No usable reading yet, but the device still carries a parseable broadcast
-   *  source — keep waiting for a future advertisement. */
-  | { kind: 'wait' }
+   *  source — keep waiting for a future advertisement. `live` carries what the
+   *  scale is DISPLAYING while you wait, when the adapter decodes it (#356). It
+   *  is not a reading and must never be treated as one. */
+  | { kind: 'wait'; live?: LiveWeight }
   /** No broadcast reading and the adapter has a GATT path — connect via GATT. */
   | { kind: 'gatt' }
   /** Matched, but the device exposes neither a parseable broadcast source nor a
@@ -79,7 +86,14 @@ export function evaluateAdvertisement(
     return { kind: 'partial', reading };
   }
   if (opts?.waitForBroadcast !== false && hasParseableBroadcastSource(adapter, info)) {
-    return { kind: 'wait' };
+    // Only ever consulted once parseAdvertisement has declined the frame, which
+    // is what keeps one advertisement from being reported through both channels
+    // (#356).
+    const live =
+      adapter.parseLiveBroadcast && info.manufacturerData
+        ? (adapter.parseLiveBroadcast(info.manufacturerData.data) ?? undefined)
+        : undefined;
+    return live ? { kind: 'wait', live } : { kind: 'wait' };
   }
   if (!adapter.charNotifyUuid) {
     return { kind: 'none' };
