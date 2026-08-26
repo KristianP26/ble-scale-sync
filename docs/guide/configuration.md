@@ -63,19 +63,20 @@ ble:
   # qn_report_byte: 252
 ```
 
-| Field                 | Required                    | Default        | Description                                                                                                                                                                                                                                                                                |
-| --------------------- | --------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `scale_mac`           | Recommended                 | Auto-discovery | MAC address, or a CoreBluetooth UUID on macOS (bare 32-hex as the wizard writes it, or the dashed form). Prevents connecting to a neighbor's scale.                                                                                                                                        |
-| `bind_key`            | Xiaomi S800 only            | (none)         | 32-char hex per-device MiBeacon key from the Mi cloud (extract with the community Xiaomi-cloud-tokens-extractor). Decrypts only the device's own FE95 broadcast. Keep it secret; it is a credential.                                                                                       |
-| `handler`             | No                          | `auto`         | Transport: `auto` (local radio), `mqtt-proxy` (ESP32 over MQTT), `esphome-proxy` (ESPHome Native API). See below.                                                                                                                                                                          |
-| `noble_driver`        | No                          | OS default     | `abandonware` or `stoprocent`. Overrides the default BLE driver. Only applies when `handler: auto`.                                                                                                                                                                                        |
-| `adapter`             | No                          | System default | Linux only. Select a specific Bluetooth adapter (e.g., `hci0`, `hci1`). See below.                                                                                                                                                                                                         |
-| `force_scale_adapter` | No                          | Auto-detect    | Name of the scale protocol adapter to use, bypassing auto-detection. Requires `scale_mac`. See below.                                                                                                                                                                                      |
-| `session_timeout_sec` | No                          | `120`          | Seconds of scale silence that end a GATT session (5 to 600); an inbound frame restarts the clock. Native BLE handlers only; ignored on `mqtt-proxy` and `esphome-proxy`. See below.                                                                                                        |
-| `qn_protocol_byte`    | No                          | Auto           | QN-family scales only. Protocol byte the handshake echoes back to the scale (0 to 255). Set it when a QN scale runs the whole handshake and then reports nothing, or when its scale-info frame is lost in transit on a proxy transport. See below.                                         |
-| `qn_report_byte`      | No                          | Per dialect    | QN-family scales only. Payload byte of the history-response frame (0 to 255). Defaults to `252` (0xFC) on the long-frame dialects (es26m and extended) and `254` (0xFE) on the classic one. Try the other value if your scale completes the handshake and then reports nothing. See below. |
-| `mqtt_proxy`          | If `handler: mqtt-proxy`    | (none)         | MQTT proxy connection (`broker_url`, `device_id`, `topic_prefix`, `username`, `password`, `auto_connect`, `embedded_broker_*`). See [ESP32 BLE Proxy](./esp32-proxy).                                                                                                                      |
-| `esphome_proxy`       | If `handler: esphome-proxy` | (none)         | ESPHome Native API connection (`host`, `port`, `encryption_key` or `password`, `client_info`). See [ESPHome Bluetooth Proxy](./esphome-proxy).                                                                                                                                             |
+| Field                   | Required                    | Default        | Description                                                                                                                                                                                                                                                                                |
+| ----------------------- | --------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `scale_mac`             | Recommended                 | Auto-discovery | MAC address, or a CoreBluetooth UUID on macOS (bare 32-hex as the wizard writes it, or the dashed form). Prevents connecting to a neighbor's scale.                                                                                                                                        |
+| `bind_key`              | Xiaomi S800 only            | (none)         | 32-char hex per-device MiBeacon key from the Mi cloud (extract with the community Xiaomi-cloud-tokens-extractor). Decrypts only the device's own FE95 broadcast. Keep it secret; it is a credential.                                                                                       |
+| `handler`               | No                          | `auto`         | Transport: `auto` (local radio), `mqtt-proxy` (ESP32 over MQTT), `esphome-proxy` (ESPHome Native API). See below.                                                                                                                                                                          |
+| `noble_driver`          | No                          | OS default     | `abandonware` or `stoprocent`. Overrides the default BLE driver. Only applies when `handler: auto`.                                                                                                                                                                                        |
+| `adapter`               | No                          | System default | Linux only. Select a specific Bluetooth adapter (e.g., `hci0`, `hci1`). See below.                                                                                                                                                                                                         |
+| `force_scale_adapter`   | No                          | Auto-detect    | Name of the scale protocol adapter to use, bypassing auto-detection. Requires `scale_mac`. See below.                                                                                                                                                                                      |
+| `session_timeout_sec`   | No                          | `120`          | Seconds of scale silence that end a GATT session (5 to 600); an inbound frame restarts the clock. Native BLE handlers only; ignored on `mqtt-proxy` and `esphome-proxy`. See below.                                                                                                        |
+| `qn_protocol_byte`      | No                          | Auto           | QN-family scales only. Protocol byte the handshake echoes back to the scale (0 to 255). Set it when a QN scale runs the whole handshake and then reports nothing, or when its scale-info frame is lost in transit on a proxy transport. See below.                                         |
+| `qn_report_byte`        | No                          | Per dialect    | QN-family scales only. Payload byte of the history-response frame (0 to 255). Defaults to `252` (0xFC) on the long-frame dialects (es26m and extended) and `254` (0xFE) on the classic one. Try the other value if your scale completes the handshake and then reports nothing. See below. |
+| `auto_clear_stale_bond` | No                          | `false`        | Delete a pairing key the scale has forgotten and pair again. Bonded scales only (Beurer BF7xx / BF9xx), node-ble transport only. See below.                                                                                                                                                |
+| `mqtt_proxy`            | If `handler: mqtt-proxy`    | (none)         | MQTT proxy connection (`broker_url`, `device_id`, `topic_prefix`, `username`, `password`, `auto_connect`, `embedded_broker_*`). See [ESP32 BLE Proxy](./esp32-proxy).                                                                                                                      |
+| `esphome_proxy`         | If `handler: esphome-proxy` | (none)         | ESPHome Native API connection (`host`, `port`, `encryption_key` or `password`, `client_info`). See [ESPHome Bluetooth Proxy](./esphome-proxy).                                                                                                                                             |
 
 ::: warning Forcing a scale adapter
 `force_scale_adapter` is an escape hatch for when auto-detection routes your scale to the wrong protocol adapter, which happens with rebadged OEM hardware that shares a vendor service with another brand.
@@ -175,6 +176,27 @@ QN: extended-dialect measurement trigger sent, weight anchor 76.40 kg (#235, #75
 ```
 
 The anchor is taken from the **first** user in the list, because the scale is handed it before anyone steps on and there is nothing yet to match a person against. In a household where the second person is far from the first, set that person's `weight_range` so it overlaps, or run them as the first user, and please say so in [#75](https://github.com/KristianP26/ble-scale-sync/issues/75): picking the anchor from the live weight stream is possible and worth doing if this is hitting people.
+
+:::
+
+::: tip Beurer scales that work once and never again (`auto_clear_stale_bond`)
+
+A bonded scale can drop its half of the pairing on its own: a battery change does it, and on some units simply ending a session does. The host does not find out. BlueZ keeps replaying the stored key, the peripheral answers "PIN or Key Missing", and every connect from then on fails during encryption before any GATT traffic:
+
+```
+Connect error: le-connection-abort-by-local
+```
+
+Deleting a bond is destructive, so the default is to diagnose it and stop, telling you to run `bluetoothctl remove <mac>` and pair again. If that is happening to you every session, this does it for you:
+
+```yaml
+ble:
+  auto_clear_stale_bond: true
+```
+
+The bond is cleared at most once per connect, and only after three consecutive authentication-class failures against a device BlueZ still lists as bonded. It stays opt-in because `le-connection-abort-by-local` also has innocent causes, notably a connect issued while another client (the Home Assistant Bluetooth integration on the same adapter, for instance) still holds a discovery session, and on these scales a bond dropped in error costs a trip to the device to confirm the passkey.
+
+Native BlueZ only. The proxy transports do not pair at all.
 
 :::
 

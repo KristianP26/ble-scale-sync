@@ -40,6 +40,7 @@ options:
   force_scale_adapter: ''
   qn_protocol_byte: ''
   qn_report_byte: ''
+  auto_clear_stale_bond: false
   weight_unit: kg
   height_unit: cm
   user_name: Default
@@ -70,6 +71,7 @@ schema:
   force_scale_adapter: str?
   qn_protocol_byte: str?
   qn_report_byte: str?
+  auto_clear_stale_bond: bool?
   weight_unit: list(kg|lbs)
   height_unit: list(cm|in)
   user_name: str
