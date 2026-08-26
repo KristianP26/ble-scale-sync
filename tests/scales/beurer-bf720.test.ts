@@ -962,6 +962,26 @@ describe('BeurerBf720Adapter', () => {
       }
     });
 
+    // #335: a BF915 answers nothing at all on the User Control Point and then
+    // delivers the measurement on 2a9d anyway, so the unqualified warning fired
+    // on a fully successful session and sent people off to try other slots.
+    it('does not warn about consent silence when the session produced a reading', async () => {
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      try {
+        const a = makeAdapter();
+        await a.onConnected(ctxWith({}));
+        await settle();
+        // No UCP indication ever arrives; the measurement does.
+        a.parseCharNotification(WEIGHT, WSS_FRAME);
+        expect(a.parseCharNotification(BODYCOMP, BCS_FRAME)).not.toBeNull();
+        a.onSessionEnd!();
+        const msg = warn.mock.calls.flat().join(' ');
+        expect(msg).not.toContain('never answered the consent');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
     it('does not warn about consent silence once the scale has answered', async () => {
       const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
       try {

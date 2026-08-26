@@ -701,7 +701,12 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     // check: a vendor-app trace of a BF950 addresses user index 2, while this
     // adapter defaults to 1, and a profile that was ever recreated or shared
     // with a second person is unlikely to sit first in the scale's own list.
-    if (this.consentSent && !this.consentAnswered) {
+    //
+    // Gated on the reading, not on the consent alone: a BF915 answers nothing
+    // at all on 2a9f and then delivers the measurement on 2a9d regardless, so
+    // the unqualified warning fired on a fully successful session and sent
+    // people off to try other slots for no reason (#335).
+    if (this.consentSent && !this.consentAnswered && !this.readingEmitted) {
       bleLog.warn(
         `Beurer BF720: the scale never answered the consent for user index ` +
           `${this.userIndex}. It rejects nothing and reports nothing in this state, so a ` +
