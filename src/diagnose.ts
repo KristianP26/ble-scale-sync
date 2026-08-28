@@ -59,7 +59,10 @@ async function waitForPoweredOn(noble: any): Promise<void> {
 
 async function main(): Promise<void> {
   const bleConfig = loadBleConfig();
-  const scaleMac = (process.argv[2] ?? bleConfig.scaleMac)?.toUpperCase();
+  // A leading dash is a flag, never a MAC: `diagnose --config x.yaml` used to
+  // scan forever for a device called "--CONFIG".
+  const positional = process.argv[2]?.startsWith('-') === false ? process.argv[2] : undefined;
+  const scaleMac = (positional ?? bleConfig.scaleMac)?.toUpperCase();
 
   if (bleConfig.nobleDriver) {
     process.env.NOBLE_DRIVER = bleConfig.nobleDriver;

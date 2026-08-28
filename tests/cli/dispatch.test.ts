@@ -35,6 +35,14 @@ describe('classifyArgs', () => {
     });
   });
 
+  it('answers version instead of starting a scan', () => {
+    // A leading dash otherwise falls through to the run path, so the universal
+    // `--version` used to build the registries and start scanning.
+    expect(classifyArgs(['--version'])).toEqual({ kind: 'version' });
+    expect(classifyArgs(['-v'])).toEqual({ kind: 'version' });
+    expect(classifyArgs(['version'])).toEqual({ kind: 'version' });
+  });
+
   it('rejects a typo instead of silently starting a run', () => {
     expect(classifyArgs(['scna'])).toEqual({ kind: 'unknown', word: 'scna' });
   });

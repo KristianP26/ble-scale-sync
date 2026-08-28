@@ -26,6 +26,7 @@ export type Subcommand = (typeof SUBCOMMANDS)[number];
 export type Dispatch =
   | { kind: 'run' }
   | { kind: 'help' }
+  | { kind: 'version' }
   | { kind: 'command'; command: Subcommand }
   | { kind: 'unknown'; word: string };
 
@@ -49,8 +50,12 @@ export function classifyArgs(args: readonly string[]): Dispatch {
   const first = args[0];
   if (first === undefined) return { kind: 'run' };
   if (first === '-h' || first === '--help') return { kind: 'help' };
+  // -v / --version before the generic flag rule: otherwise the universal
+  // version query silently starts a BLE scan.
+  if (first === '-v' || first === '--version') return { kind: 'version' };
   if (first.startsWith('-')) return { kind: 'run' };
   if (first === 'help') return { kind: 'help' };
+  if (first === 'version') return { kind: 'version' };
   if (isSubcommand(first)) return { kind: 'command', command: first };
   return { kind: 'unknown', word: first };
 }

@@ -38,7 +38,7 @@ function parseArgs(args: string[]): { configPath: string; nonInteractive: boolea
       help = true;
     } else if (arg === '--non-interactive') {
       nonInteractive = true;
-    } else if (arg === '--config' && i + 1 < args.length) {
+    } else if ((arg === '--config' || arg === '-c') && i + 1 < args.length) {
       configPath = resolve(args[++i]);
     }
   }

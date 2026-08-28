@@ -14,8 +14,13 @@
  * `ble-scale-sync validate` must not pay for any of it.
  */
 
+import { createRequire } from 'node:module';
 import { classifyArgs, type Subcommand } from './cli-dispatch.js';
 import { printRootHelp } from './cli-help.js';
+
+// Runtime require, not a JSON import: package.json sits outside rootDir, so an
+// import would move the emit to dist/src/ and break every relative path.
+const pkg = createRequire(import.meta.url)('../package.json') as { version: string };
 
 /**
  * Literal specifiers, not a lookup table: tsc resolves and typechecks each one,
@@ -57,6 +62,10 @@ async function main(): Promise<void> {
 
     case 'help':
       printRootHelp();
+      return;
+
+    case 'version':
+      console.log(pkg.version);
       return;
 
     case 'unknown':

@@ -19,11 +19,14 @@ const COMMANDS: readonly string[] = [
   '  diagnose [MAC]         BLE diagnostic dump (services, characteristics, flags)',
   '  validate               Validate config.yaml and exit',
   '  help                   Show this help message',
+  '  version                Print the version and exit',
 ];
 
 const OPTIONS: readonly string[] = [
-  '  -c, --config <path>  Path to config.yaml (default: ./config.yaml)',
+  '  -c, --config <path>  Path to config.yaml (default: ./config.yaml).',
+  '                       Accepted by the run path, by validate and by setup.',
   '  -h, --help           Show this help message',
+  '  -v, --version        Print the version and exit',
 ];
 
 const ENV_OVERRIDES: readonly string[] = [
