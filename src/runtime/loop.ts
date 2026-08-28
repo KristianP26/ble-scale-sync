@@ -2,6 +2,7 @@ import type { RawReading } from '../ble/shared.js';
 import { abortableSleep } from '../ble/types.js';
 import { createLogger } from '../logger.js';
 import { errMsg } from '../utils/error.js';
+import { MissingTransportModuleError } from '../ble/transport-availability.js';
 
 const log = createLogger('Sync');
 
@@ -74,6 +75,12 @@ export async function runContinuousLoop(deps: RuntimeLoopDeps): Promise<void> {
         await onSuccess?.();
       } catch (err) {
         if (signal.aborted) break;
+        // A missing npm package never fixes itself on the next cycle. Retrying
+        // it would bury the install instruction inside a "retrying in 60s" info
+        // line, once per cycle, making an unrecoverable install problem look
+        // exactly like a scale nobody stepped on. The caller's top-level catch
+        // logs the message as an error and exits non-zero.
+        if (err instanceof MissingTransportModuleError) throw err;
         onFailure?.(err);
         backoffMs = backoffMs === 0 ? BACKOFF_INITIAL_MS : Math.min(backoffMs * 2, BACKOFF_MAX_MS);
         log.info(`${failureLogPrefix}, retrying in ${backoffMs / 1000}s... (${errMsg(err)})`);
