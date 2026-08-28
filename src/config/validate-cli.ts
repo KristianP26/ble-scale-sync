@@ -1,5 +1,3 @@
-#!/usr/bin/env tsx
-
 import { parseArgs } from 'node:util';
 import { loadAppConfig } from './load.js';
 import { resolveExportersForUser } from './resolve.js';

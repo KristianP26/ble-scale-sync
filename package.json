@@ -3,9 +3,29 @@
   "version": "1.26.0",
   "description": "Universal BLE Smart Scale bridge. Captures body composition from Renpho, Xiaomi & 20+ others, syncs to Garmin Connect, Strava, MQTT (Home Assistant), InfluxDB, Webhooks, Ntfy & local files. Headless CLI for Raspberry Pi, Linux, macOS & Windows.",
   "type": "module",
-  "main": "src/index.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "ble-scale-sync": "dist/index.js"
+  },
+  "files": [
+    "dist/",
+    "garmin-scripts/*.py",
+    "requirements.txt",
+    "config.yaml.example",
+    ".env.example"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KristianP26/ble-scale-sync.git"
+  },
+  "bugs": {
+    "url": "https://github.com/KristianP26/ble-scale-sync/issues"
+  },
+  "homepage": "https://blescalesync.dev",
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "npm run build",
     "start": "tsx src/index.ts",
     "setup": "tsx src/wizard/index.ts",
     "setup-garmin": "tsx src/setup-garmin.ts",
@@ -47,7 +67,6 @@
     "dotenv": "^17.4.2",
     "encoding": "^0.1.13",
     "mqtt": "^5.15.2",
-    "tsx": "^4.23.12",
     "yaml": "^2.9.0",
     "zod": "^4.4.1"
   },
@@ -61,6 +80,7 @@
     "eslint": "^10.8.0",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.9.6",
+    "tsx": "^4.23.12",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.62.1",
     "vitepress": "^1.6.4",
