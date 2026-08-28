@@ -10,27 +10,23 @@ import type { RawReading } from './shared.js';
 import type { Watcher } from './reading-source.js';
 import { bleLog } from './types.js';
 import { ReadingWatcher } from './handler-mqtt-proxy/index.js';
+import { HANDLER_LABELS, rethrowAsTransportError } from './transport-availability.js';
+import type { HandlerKey } from './transport-availability.js';
 
 export type { ScanOptions, ScanResult } from './types.js';
 export type { RawReading } from './shared.js';
 export type { Watcher, WatcherConfig } from './reading-source.js';
 
-type NobleDriver = 'abandonware' | 'stoprocent';
-
 /**
  * Resolved BLE handler identifier. The transport switch in this file used to
  * be triplicated across `scanAndReadRaw`, `scanAndRead`, and `scanDevices`;
- * `resolveHandlerKey()` is now the single source of truth (#130).
+ * `resolveHandlerKey()` is now the single source of truth (#130). The type and
+ * the labels live in ./transport-availability.js, next to the package map that
+ * answers "is this transport's npm package even installed here" (#364).
  */
-export type HandlerKey = 'mqtt-proxy' | 'esphome-proxy' | 'noble-legacy' | 'noble' | 'node-ble';
+export type { HandlerKey } from './transport-availability.js';
 
-const HANDLER_LABELS: Record<HandlerKey, string> = {
-  'mqtt-proxy': 'mqtt-proxy (ESP32)',
-  'esphome-proxy': 'esphome-proxy',
-  'noble-legacy': 'noble-legacy (@abandonware/noble)',
-  noble: 'noble (@stoprocent/noble)',
-  'node-ble': 'node-ble (BlueZ D-Bus)',
-};
+type NobleDriver = 'abandonware' | 'stoprocent';
 
 /** Resolve NOBLE_DRIVER env var to a specific noble driver, or null for OS default. */
 function resolveNobleDriver(): NobleDriver | null {
@@ -63,8 +59,7 @@ interface CommonHandler {
   scanAndRead: (opts: ScanOptions) => Promise<BodyComposition>;
 }
 
-async function loadHandler(key: HandlerKey): Promise<CommonHandler> {
-  bleLog.debug(`BLE handler: ${HANDLER_LABELS[key]}`);
+function importHandler(key: HandlerKey): Promise<CommonHandler> {
   switch (key) {
     case 'mqtt-proxy':
       return import('./handler-mqtt-proxy/index.js');
@@ -83,6 +78,17 @@ async function loadHandler(key: HandlerKey): Promise<CommonHandler> {
       const _exhaustive: never = key;
       throw new Error(`Unknown BLE handler key: ${String(_exhaustive)}`);
     }
+  }
+}
+
+async function loadHandler(key: HandlerKey): Promise<CommonHandler> {
+  bleLog.debug(`BLE handler: ${HANDLER_LABELS[key]}`);
+  try {
+    // `return await`, not a bare `return`: a bare return hands the rejection
+    // to the caller without ever entering this catch.
+    return await importHandler(key);
+  } catch (err) {
+    rethrowAsTransportError(key, err);
   }
 }
 
@@ -174,19 +180,35 @@ export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
  *
  * Stays as a switch/case rather than going through `loadHandler` because each
  * handler's `scanDevices` takes different config args (mqttProxy / esphomeProxy
- * / bleAdapter), so the dispatch is shape-specific.
+ * / bleAdapter), so the dispatch is shape-specific. It still needs the same
+ * missing-package guard, or `scan` is the one command that reports a bare
+ * ERR_MODULE_NOT_FOUND when an optional BLE stack was skipped (#364).
  */
 export async function scanDevices(
   adapters: ScaleAdapter[],
   durationMs?: number,
   bleHandler?: BleHandlerName,
-  mqttProxy?: import('../config/schema.js').MqttProxyConfig,
+  mqttProxy?: MqttProxyConfig,
   bleAdapter?: string,
-  esphomeProxy?: import('../config/schema.js').EsphomeProxyConfig,
+  esphomeProxy?: EsphomeProxyConfig,
 ): Promise<ScanResult[]> {
   const key = resolveHandlerKey(bleHandler);
   bleLog.debug(`BLE handler: ${HANDLER_LABELS[key]}`);
+  try {
+    return await runScanDevices(key, adapters, durationMs, mqttProxy, bleAdapter, esphomeProxy);
+  } catch (err) {
+    rethrowAsTransportError(key, err);
+  }
+}
 
+async function runScanDevices(
+  key: HandlerKey,
+  adapters: ScaleAdapter[],
+  durationMs?: number,
+  mqttProxy?: MqttProxyConfig,
+  bleAdapter?: string,
+  esphomeProxy?: EsphomeProxyConfig,
+): Promise<ScanResult[]> {
   switch (key) {
     case 'mqtt-proxy': {
       if (!mqttProxy) {

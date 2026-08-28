@@ -2,8 +2,25 @@
 import { loadBleConfig } from './config/load.js';
 import { createLogger } from './logger.js';
 import { sleep, withTimeout, errMsg } from './ble/types.js';
+import { rethrowAsTransportError } from './ble/transport-availability.js';
+import type { HandlerKey } from './ble/transport-availability.js';
 
 const log = createLogger('Diagnose');
+
+/**
+ * diagnose is the tool people run precisely when BLE is broken, so a missing
+ * optional stack must name itself here too, not only in the handler switch.
+ */
+async function loadNoble(driver: string): Promise<any> {
+  const key: HandlerKey = driver === 'stoprocent' ? 'noble' : 'noble-legacy';
+  try {
+    return driver === 'stoprocent'
+      ? (await import('@stoprocent/noble')).default
+      : (await import('@abandonware/noble')).default;
+  } catch (err) {
+    rethrowAsTransportError(key, err);
+  }
+}
 
 function hex(buf: Buffer | undefined): string {
   if (!buf || buf.length === 0) return '(none)';
@@ -67,10 +84,7 @@ async function main(): Promise<void> {
   }
   log.info('');
 
-  const noble =
-    driver === 'stoprocent'
-      ? (await import('@stoprocent/noble')).default
-      : (await import('@abandonware/noble')).default;
+  const noble = await loadNoble(driver);
 
   await waitForPoweredOn(noble);
   log.info('Bluetooth adapter: ready\n');

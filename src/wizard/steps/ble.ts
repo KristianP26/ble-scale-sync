@@ -1,6 +1,7 @@
 import type { WizardStep, WizardContext } from '../types.js';
 import type { MqttProxyConfig, EsphomeProxyConfig } from '../../config/schema.js';
 import { isValidScaleId, SCALE_ID_HINT } from '../../ble/scale-id.js';
+import { missingPackagesFor } from '../../ble/transport-availability.js';
 import { success, warn, info } from '../ui.js';
 
 function validateMac(v: string): string | true {
@@ -243,7 +244,19 @@ export const bleStep: WizardStep = {
             destroy();
           }
         } catch {
-          // D-Bus not available — fall through to manual entry
+          // D-Bus not available, or node-ble itself was skipped by an optional
+          // install (#364). Both fall through to manual entry, but a missing
+          // package is worth naming: otherwise the picker just reports that it
+          // found no adapters.
+          const missing = missingPackagesFor('node-ble');
+          if (missing.length > 0) {
+            console.log(
+              `\n  ${warn(
+                `Adapter list unavailable: ${missing.join(', ')} is not installed ` +
+                  `(npm install ${missing.join(' ')}).`,
+              )}`,
+            );
+          }
         }
 
         if (availableAdapters.length > 1) {
