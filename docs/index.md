@@ -113,16 +113,11 @@ npx ble-scale-sync setup                 # interactive wizard, writes ./config.y
 CONTINUOUS_MODE=true npx ble-scale-sync  # always-on, listens for scale indefinitely
 ```
 
-`config.yaml` and `.env` are read from the directory you run the command in. Or work from a clone, which is what you want if you plan to contribute:
+`config.yaml` and `.env` are read from the directory you run the command in. Requires Node.js v22+ and a BLE adapter.
 
-```bash
-git clone https://github.com/KristianP26/ble-scale-sync.git
-cd ble-scale-sync && npm install
-npm run setup    # interactive wizard: scale discovery, user profile, exporters
-CONTINUOUS_MODE=true npm start   # always-on, listens for scale indefinitely
-```
+Prefer a permanent install, a git clone, or the full command list? See the [Standalone install guide](/guide/getting-started#standalone).
 
-Requires Node.js v22+ and a BLE adapter. For always-on deployments, create a systemd service:
+For always-on deployments, create a systemd service:
 
 ::: details Example: /etc/systemd/system/ble-scale.service
 
