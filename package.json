@@ -8,7 +8,7 @@
     "build": "tsc",
     "start": "tsx src/index.ts",
     "setup": "tsx src/wizard/index.ts",
-    "setup-garmin": "python3 garmin-scripts/setup_garmin.py",
+    "setup-garmin": "tsx src/setup-garmin.ts",
     "setup-strava": "tsx src/exporters/strava-setup.ts",
     "scan": "tsx src/scan.ts",
     "diagnose": "tsx src/diagnose.ts",

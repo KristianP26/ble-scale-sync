@@ -14,6 +14,7 @@
 export const SUBCOMMANDS = [
   'start',
   'setup',
+  'setup-garmin',
   'setup-strava',
   'scan',
   'diagnose',

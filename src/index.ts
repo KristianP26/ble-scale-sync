@@ -29,6 +29,9 @@ async function runSubcommand(command: Subcommand): Promise<void> {
     case 'setup':
       await import('./wizard/index.js');
       return;
+    case 'setup-garmin':
+      await import('./setup-garmin.js');
+      return;
     case 'setup-strava':
       await import('./exporters/strava-setup.js');
       return;

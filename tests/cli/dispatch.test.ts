@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { classifyArgs, SUBCOMMANDS } from '../../src/cli-dispatch.js';
 
 describe('classifyArgs', () => {
@@ -38,6 +39,13 @@ describe('classifyArgs', () => {
     expect(classifyArgs(['scna'])).toEqual({ kind: 'unknown', word: 'scna' });
   });
 
+  it('forwards the flags of a subcommand to that subcommand', () => {
+    expect(classifyArgs(['setup-garmin', '--all-users'])).toEqual({
+      kind: 'command',
+      command: 'setup-garmin',
+    });
+  });
+
   it('classifies every declared subcommand', () => {
     for (const name of SUBCOMMANDS) {
       expect(classifyArgs([name])).toEqual({ kind: 'command', command: name });
@@ -46,12 +54,14 @@ describe('classifyArgs', () => {
 });
 
 describe('SUBCOMMANDS', () => {
-  it('speaks the vocabulary docker-entrypoint.sh already exposes', () => {
-    // The two CLIs are documented side by side, so a word in one and not the
-    // other is a real defect. `help` is excluded: the dispatcher handles it
-    // outside the subcommand list. `setup-garmin` needs a TypeScript entry
-    // point of its own and joins in the next commit.
-    for (const word of ['start', 'setup', 'scan', 'diagnose', 'validate', 'setup-strava']) {
+  it('speaks the same vocabulary as docker-entrypoint.sh', () => {
+    // Read from the shell script rather than a copy of the list, so a command
+    // added to one CLI and forgotten in the other fails here. `help` is
+    // excluded: the dispatcher answers it outside the subcommand list.
+    const entrypoint = readFileSync('docker-entrypoint.sh', 'utf8');
+    const cases = [...entrypoint.matchAll(/^ {2}([a-z][a-z-]*)\)/gm)].map((m) => m[1]);
+    expect(cases).toContain('setup-garmin');
+    for (const word of cases) {
       expect(SUBCOMMANDS).toContain(word);
     }
   });

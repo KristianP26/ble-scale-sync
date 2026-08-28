@@ -13,6 +13,7 @@ const COMMANDS: readonly string[] = [
   '  (none)                 Run the sync flow (same as start)',
   '  start                  Run the sync flow',
   '  setup                  Interactive setup wizard',
+  '  setup-garmin [args]    Garmin Connect authentication (needs Python 3)',
   '  setup-strava           Strava OAuth token setup',
   '  scan                   Discover nearby BLE devices',
   '  diagnose [MAC]         BLE diagnostic dump (services, characteristics, flags)',
