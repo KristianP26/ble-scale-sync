@@ -1,5 +1,6 @@
 import { parseArgs } from 'node:util';
 import { createRequire } from 'node:module';
+import { printRunHelp } from './cli-help.js';
 import { setDisplayUsers, createMqttProxyDisplayNotifier } from './ble/handler-mqtt-proxy/index.js';
 import { bootstrapMqttProxy } from './ble/mqtt-proxy-bootstrap.js';
 import { notifyReady, startHeartbeat, stopHeartbeat } from './runtime/systemd-watchdog.js';
@@ -43,26 +44,9 @@ const { values: cliFlags } = parseArgs({
 });
 
 if (cliFlags.help) {
-  console.log('Usage: npm start [-- --config <path>] [-- --help]');
-  console.log('');
-  console.log('Options:');
-  console.log('  -c, --config <path>  Path to config.yaml (default: ./config.yaml)');
-  console.log('  -h, --help           Show this help message');
-  console.log('');
-  console.log('Environment overrides (always applied, even with config.yaml):');
-  console.log('  CONTINUOUS_MODE  true/false  override runtime.continuous_mode');
-  console.log('  DRY_RUN          true/false  override runtime.dry_run');
-  console.log('  DEBUG            true/false  override runtime.debug');
-  console.log('  SCAN_COOLDOWN    5-3600      override runtime.scan_cooldown');
-  console.log(
-    '  BLE_WATCHDOG_MAX_FAILURES 0-1000  override runtime.watchdog_max_consecutive_failures (0 = disabled)',
-  );
-  console.log(
-    '  BLE_HARD_EXIT_GRACE_MS 1000-60000  force-exit floor for hung shutdown (default 5000)',
-  );
-  console.log('  SCALE_MAC        MAC/UUID    override ble.scale_mac');
-  console.log('  NOBLE_DRIVER     abandonware/stoprocent  override ble.noble_driver');
-  console.log('  BLE_ADAPTER      hci0/hci1/...  override ble.adapter (Linux only)');
+  // Reached only when run.js is executed directly. The bin entry point
+  // (index.js) answers --help itself, before this module is ever imported.
+  printRunHelp();
   process.exit(0);
 }
 
