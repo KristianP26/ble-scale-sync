@@ -361,7 +361,7 @@ describe('BleSchema', () => {
     if (result.success) expect(result.data.force_scale_adapter).toBe('Hutbit');
   });
 
-  // The scale_mac pairing is enforced in src/index.ts, not here: schema
+  // The scale_mac pairing is enforced in src/run.ts, not here: schema
   // validation runs before env overrides, so rejecting it at parse time would
   // break the documented `docker run -e SCALE_MAC=...` setup.
   it('accepts force_scale_adapter without scale_mac at schema level', () => {
