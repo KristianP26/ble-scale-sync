@@ -1,6 +1,6 @@
 import { config as dotenvConfig } from 'dotenv';
 import type { AppConfig, ExporterEntry } from './schema.js';
-import { DEFAULT_ENV_PATH } from './paths.js';
+import { defaultEnvPath } from './paths.js';
 import { parseBleAdapterEnv } from './env-overrides.js';
 import { loadConfig as loadEnvVarConfig } from '../validate-env.js';
 import { loadExporterConfig } from '../exporters/config.js';
@@ -10,7 +10,7 @@ import { loadExporterConfig } from '../exporters/config.js';
  * into the unified AppConfig shape.
  */
 export function loadEnvConfig(): AppConfig {
-  dotenvConfig({ path: DEFAULT_ENV_PATH });
+  dotenvConfig({ path: defaultEnvPath() });
 
   const envConfig = loadEnvVarConfig();
   const exporterConfig = loadExporterConfig();

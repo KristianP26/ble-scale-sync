@@ -1,6 +1,6 @@
 import { createLogger } from '../logger.js';
 import type { AppConfig } from './schema.js';
-import { DEFAULT_CONFIG_PATH } from './paths.js';
+import { defaultConfigPath } from './paths.js';
 import { detectConfigSource } from './source-detect.js';
 import type { ConfigSource } from './source-detect.js';
 import { loadYamlConfig } from './yaml-load.js';
@@ -40,7 +40,7 @@ export function loadAppConfig(configPath?: string): LoadedConfig {
 
   switch (source) {
     case 'yaml': {
-      const yamlPath = configPath ?? DEFAULT_CONFIG_PATH;
+      const yamlPath = configPath ?? defaultConfigPath();
       log.info(`Loading config from ${configPath ?? 'config.yaml'}`);
       return { source: 'yaml', config: loadYamlConfig(configPath), configPath: yamlPath };
     }

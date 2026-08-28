@@ -3,7 +3,7 @@ import { parse as parseYaml } from 'yaml';
 import { config as dotenvConfig } from 'dotenv';
 import type { BleConfig, MqttProxyConfig, EsphomeProxyConfig } from './schema.js';
 import type { BleHandlerName } from '../ble/types.js';
-import { DEFAULT_CONFIG_PATH, DEFAULT_ENV_PATH } from './paths.js';
+import { defaultConfigPath, defaultEnvPath } from './paths.js';
 import { parseBleAdapterEnv } from './env-overrides.js';
 
 export interface BleLoadedConfig {
@@ -20,7 +20,7 @@ export interface BleLoadedConfig {
  * Lightweight — doesn't validate full config, doesn't require user profile.
  */
 export function loadBleConfig(configPath?: string): BleLoadedConfig {
-  const yamlPath = configPath ?? DEFAULT_CONFIG_PATH;
+  const yamlPath = configPath ?? defaultConfigPath();
 
   if (existsSync(yamlPath)) {
     try {
@@ -41,8 +41,9 @@ export function loadBleConfig(configPath?: string): BleLoadedConfig {
   }
 
   // Load .env if it exists
-  if (existsSync(DEFAULT_ENV_PATH)) {
-    dotenvConfig({ path: DEFAULT_ENV_PATH });
+  const envPath = defaultEnvPath();
+  if (existsSync(envPath)) {
+    dotenvConfig({ path: envPath });
   }
 
   return {

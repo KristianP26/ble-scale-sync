@@ -10,7 +10,7 @@ import {
   writeUpdateState,
   resetUpdateState,
 } from '../src/update-state.js';
-import { ROOT } from '../src/config/paths.js';
+import { defaultEnvPath } from '../src/config/paths.js';
 
 let tempDir: string;
 
@@ -40,8 +40,10 @@ describe('resolveUpdateStatePath()', () => {
     expect(resolveUpdateStatePath(tempConfig())).toBe(statePath());
   });
 
-  it('falls back to the repo root when there is no config.yaml (.env-only)', () => {
-    expect(resolveUpdateStatePath(undefined)).toBe(join(ROOT, UPDATE_STATE_FILENAME));
+  it('falls back to the directory the .env is read from (.env-only)', () => {
+    expect(resolveUpdateStatePath(undefined)).toBe(
+      join(dirname(defaultEnvPath()), UPDATE_STATE_FILENAME),
+    );
   });
 
   it('resolves a relative config path against the cwd', () => {

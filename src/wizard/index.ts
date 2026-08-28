@@ -1,6 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { config as dotenvConfig } from 'dotenv';
 import { detectPlatform } from './platform.js';
@@ -10,10 +9,7 @@ import { runNonInteractive } from './non-interactive.js';
 import { WIZARD_STEPS } from './steps/index.js';
 import type { WizardContext } from './types.js';
 import type { AppConfig } from '../config/schema.js';
-
-const __dirname: string = dirname(fileURLToPath(import.meta.url));
-const ROOT: string = join(__dirname, '..', '..');
-const DEFAULT_CONFIG_PATH = join(ROOT, 'config.yaml');
+import { defaultConfigPath, defaultEnvPath } from '../config/paths.js';
 
 function printUsage(): void {
   console.log(`
@@ -30,7 +26,7 @@ If config.yaml already exists, you can choose to edit it or start fresh.
 }
 
 function parseArgs(args: string[]): { configPath: string; nonInteractive: boolean; help: boolean } {
-  let configPath = DEFAULT_CONFIG_PATH;
+  let configPath = defaultConfigPath();
   let nonInteractive = false;
   let help = false;
 
@@ -57,7 +53,7 @@ async function main(): Promise<void> {
   }
 
   // Load .env for ${ENV_VAR} references
-  const envPath = join(ROOT, '.env');
+  const envPath = defaultEnvPath();
   if (existsSync(envPath)) {
     dotenvConfig({ path: envPath });
   }
