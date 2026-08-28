@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { defaultConfigPath, defaultEnvPath, pickExisting } from '../../src/config/paths.js';
+import { configDir, defaultConfigPath, defaultEnvPath } from '../../src/config/paths.js';
 
 const originalCwd = process.cwd();
 
@@ -20,24 +20,34 @@ function cwdWith(fileName: string): string {
   return dir;
 }
 
-describe('pickExisting', () => {
-  it('returns the first candidate that exists', () => {
+describe('configDir', () => {
+  it('picks the directory that holds config.yaml', () => {
     const found = join('/root', 'config.yaml');
-    expect(pickExisting('config.yaml', ['/cwd', '/root'], (p) => p === found)).toBe(found);
+    expect(configDir(['/cwd', '/root'], (p) => p === found)).toBe('/root');
   });
 
-  it('prefers the working directory when both exist', () => {
-    expect(pickExisting('config.yaml', ['/cwd', '/root'], () => true)).toBe(
-      join('/cwd', 'config.yaml'),
-    );
+  it('picks the directory that holds only a .env', () => {
+    const found = join('/root', '.env');
+    expect(configDir(['/cwd', '/root'], (p) => p === found)).toBe('/root');
   });
 
-  it('falls back to the working directory candidate when neither exists', () => {
+  it('prefers the working directory when both directories qualify', () => {
+    expect(configDir(['/cwd', '/root'], () => true)).toBe('/cwd');
+  });
+
+  it('falls back to the working directory when neither file exists', () => {
     // What `setup` writes and what "No configuration found" names, so it has to
     // be the directory the user is standing in.
-    expect(pickExisting('config.yaml', ['/cwd', '/root'], () => false)).toBe(
-      join('/cwd', 'config.yaml'),
-    );
+    expect(configDir(['/cwd', '/root'], () => false)).toBe('/cwd');
+  });
+
+  it('never mixes a config.yaml and a .env from two directories', () => {
+    // A stray .env in cwd used to feed its secrets into the package root's
+    // config.yaml: one deployment's config populated with another's tokens.
+    const cwdEnv = join('/cwd', '.env');
+    const rootConfig = join('/root', 'config.yaml');
+    const dir = configDir(['/cwd', '/root'], (p) => p === cwdEnv || p === rootConfig);
+    expect(dir).toBe('/cwd');
   });
 });
 
