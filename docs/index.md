@@ -129,7 +129,7 @@ WorkingDirectory=/home/pi/ble-scale-sync
 EnvironmentFile=/home/pi/ble-scale-sync/.env
 Environment="CONTINUOUS_MODE=true"
 Environment="PATH=/home/pi/ble-scale-sync/venv/bin:/usr/local/bin:/usr/bin:/bin"
-ExecStart=/usr/bin/npm start
+ExecStart=/usr/bin/node dist/index.js
 Restart=always
 RestartSec=5
 
@@ -138,8 +138,11 @@ WantedBy=multi-user.target
 ```
 
 ```bash
+npm run build                # compile to dist/ (the service runs plain node)
 sudo systemctl enable --now ble-scale.service
 ```
+
+The unit runs `node dist/index.js` rather than `npm start`, so the host needs no TypeScript runner at runtime. Run `npm run build` after every `git pull`.
 
 :::
 

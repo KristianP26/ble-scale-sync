@@ -126,12 +126,16 @@ Runs natively on **Linux, macOS, and Windows**: no containers, no Supervisor req
 
 ### Prerequisites
 
-| Platform    | Requirements                                                                                           |
-| ----------- | ------------------------------------------------------------------------------------------------------ |
-| **All**     | [Node.js](https://nodejs.org/) v22+, BLE adapter                                                       |
-| **Linux**   | `sudo apt-get install bluetooth bluez libbluetooth-dev libudev-dev build-essential`                    |
-| **macOS**   | `xcode-select --install` (Xcode CLI tools)                                                             |
-| **Windows** | [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (C++ workload) |
+| Platform    | Requirements                                                                                                                                                                                                                                                                          |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **All**     | [Node.js](https://nodejs.org/) v22+, BLE adapter                                                                                                                                                                                                                                      |
+| **Linux**   | `sudo apt-get install bluetooth bluez` (the default `node-ble` transport is pure JavaScript over BlueZ D-Bus)                                                                                                                                                                          |
+| **macOS**   | Nothing extra: the default `@stoprocent/noble` transport ships prebuilt binaries                                                                                                                                                                                                      |
+| **Windows** | Nothing extra to start. The default transport, `@abandonware/noble`, builds from source and needs [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (C++ workload); without them the install still completes and you switch to the prebuilt driver with `ble.noble_driver: stoprocent` |
+
+::: tip
+The three BLE stacks are optional dependencies. `npm install` completes even when one of them cannot be built, and the app names the missing package and the remaining transports if you select one that is not installed.
+:::
 
 ::: details Garmin Connect requires Python 3.9+
 
@@ -198,7 +202,7 @@ WorkingDirectory=/home/pi/ble-scale-sync
 EnvironmentFile=/home/pi/ble-scale-sync/.env
 Environment="CONTINUOUS_MODE=true"
 Environment="PATH=/home/pi/ble-scale-sync/venv/bin:/usr/local/bin:/usr/bin:/bin"
-ExecStart=/usr/bin/npm start
+ExecStart=/usr/bin/node dist/index.js
 Restart=always
 RestartSec=5
 
@@ -209,6 +213,7 @@ WantedBy=multi-user.target
 :::
 
 ```bash
+npm run build                # compile to dist/ (the service runs plain node)
 sudo systemctl enable --now ble-scale.service
 ```
 

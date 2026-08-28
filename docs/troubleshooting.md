@@ -81,12 +81,14 @@ ble:
 | Driver                                    | Platforms             | Notes                                                                                                              |
 | ----------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `node-ble` (default on Linux)             | Linux only            | Uses BlueZ D-Bus. Most reliable on Raspberry Pi. Service UUIDs not available during scan (only after connecting).  |
-| `@abandonware/noble` (default on Windows) | Linux, Windows        | Mature driver. Uses WinRT on Windows.                                                                              |
-| `@stoprocent/noble` (default on macOS)    | Linux, macOS, Windows | Newer driver. Exposes service UUIDs during scan. On Windows, requires the [WinUSB driver](https://zadig.akeo.ie/). |
+| `@abandonware/noble` (default on Windows) | Linux, Windows        | Mature driver. Uses WinRT on Windows. Builds from source, so it needs a C++ toolchain.                             |
+| `@stoprocent/noble` (default on macOS)    | Linux, macOS, Windows | Newer driver, ships prebuilt binaries. Exposes service UUIDs during scan. On Windows, requires the [WinUSB driver](https://zadig.akeo.ie/). |
 
 ::: tip Note
 On Linux, `node-ble` is always used regardless of `noble_driver`. The flag only applies on macOS/Windows or when explicitly set.
 :::
+
+The three stacks are optional dependencies, so a host that could not build one of them simply does not have it. If the transport you select is not installed, the app names the npm package, the install command and the transports that are still available. Install one directly with `npm install @stoprocent/noble` (or `@abandonware/noble`, or `node-ble`).
 
 If your scale is not being recognized during scan but you know its MAC address, set `scale_mac` in `config.yaml`. The adapter will match post-connect using GATT service UUIDs regardless of the driver.
 
