@@ -49,13 +49,15 @@ def get_garmin_client(token_dir=None):
     if not os.path.isdir(token_dir):
         raise RuntimeError(
             f"Token directory not found: {token_dir}. "
-            "Run 'npm run setup-garmin' first."
+            "Run 'ble-scale-sync setup-garmin' "
+            "(or 'npm run setup-garmin' from a checkout) first."
         )
 
     if has_legacy_only_tokens(token_dir):
         raise RuntimeError(
             "Token format changed in garminconnect 0.3.x. "
-            "Run 'npm run setup-garmin' to re-authenticate."
+            "Run 'ble-scale-sync setup-garmin' "
+            "(or 'npm run setup-garmin' from a checkout) to re-authenticate."
         )
 
     garmin = Garmin()

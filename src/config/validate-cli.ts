@@ -13,7 +13,8 @@ const { values } = parseArgs({
 });
 
 if (values.help) {
-  console.log('Usage: npm run validate [-- --config <path>]');
+  console.log('Usage: ble-scale-sync validate [--config <path>]');
+  console.log('       npm run validate [-- --config <path>]   (from a git checkout)');
   console.log('');
   console.log('Options:');
   console.log('  -c, --config <path>  Path to config.yaml (default: ./config.yaml)');

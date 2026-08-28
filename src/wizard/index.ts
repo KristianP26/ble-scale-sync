@@ -13,13 +13,15 @@ import { defaultConfigPath, defaultEnvPath } from '../config/paths.js';
 
 function printUsage(): void {
   console.log(`
-BLE Scale Sync — Setup Wizard
+BLE Scale Sync - Setup Wizard
 
 Usage:
-  npm run setup                         Interactive setup
-  npm run setup -- --config <path>      Use a custom config file path
-  npm run setup -- --non-interactive    Validate and enrich existing config.yaml
-  npm run setup -- --help               Show this help
+  ble-scale-sync setup                      Interactive setup
+  ble-scale-sync setup --config <path>      Use a custom config file path
+  ble-scale-sync setup --non-interactive    Validate and enrich existing config.yaml
+  ble-scale-sync setup --help               Show this help
+
+From a git checkout: npm run setup [-- --config <path>]
 
 If config.yaml already exists, you can choose to edit it or start fresh.
 `);

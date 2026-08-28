@@ -79,7 +79,8 @@ async function main(): Promise<void> {
   } else {
     log.info('Target MAC:   (none)');
     log.info('');
-    log.info('Tip: npm run diagnose -- MAC_ADDRESS');
+    log.info('Tip: ble-scale-sync diagnose MAC_ADDRESS');
+    log.info('  (from a git checkout: npm run diagnose -- MAC_ADDRESS)');
     log.info('  or set scale_mac in config.yaml');
   }
   log.info('');
