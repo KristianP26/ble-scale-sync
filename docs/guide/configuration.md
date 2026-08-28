@@ -23,7 +23,10 @@ docker run --rm -it --network host --cap-add NET_ADMIN --cap-add NET_RAW \
   --group-add "$(getent group bluetooth | cut -d: -f3)" -v /var/run/dbus:/var/run/dbus:ro \
   -v ./config.yaml:/app/config.yaml ghcr.io/kristianp26/ble-scale-sync:latest setup
 
-# Standalone (Node.js, Linux/macOS/Windows)
+# Standalone (npm install or npx)
+npx ble-scale-sync setup
+
+# Standalone (from a clone)
 npm run setup
 ```
 
@@ -40,9 +43,23 @@ You don't need to edit `config.yaml` manually. The wizard handles everything, in
 docker run --rm -v ./config.yaml:/app/config.yaml:ro \
   ghcr.io/kristianp26/ble-scale-sync:latest validate
 
-# Standalone (Node.js)
+# Standalone (npm install or npx)
+npx ble-scale-sync validate
+
+# Standalone (from a clone)
 npm run validate
 ```
+
+## Where config.yaml and .env are read from {#config-location}
+
+Outside Docker and the Home Assistant add-on, both files are looked up in **the working directory first**, and in the package install directory as a fallback. In a git checkout those are the same place, which is why the clone workflow never had to think about it.
+
+Two consequences worth knowing:
+
+- Under `npx ble-scale-sync`, the package lives in a cache directory that is deleted again, so the only useful location is the directory you run the command in. Run the command from where your `config.yaml` lives.
+- `config.yaml` and `.env` are always taken from the **same** directory, never one from each. A stray `.env` in your working directory is the `.env` that gets used, so do not keep unrelated ones next to each other.
+
+`--config <path>` overrides the config file location for the run path, for `validate` and for `setup`. In Docker the file is mounted to `/app/config.yaml` instead, and on the add-on it lives in `/data`.
 
 ## config.yaml Reference {#config-yaml-reference}
 

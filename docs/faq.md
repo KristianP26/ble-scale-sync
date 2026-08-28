@@ -82,7 +82,10 @@ docker run --rm --network host --cap-add NET_ADMIN --cap-add NET_RAW \
   --group-add "$(getent group bluetooth | cut -d: -f3)" -v /var/run/dbus:/var/run/dbus:ro \
   ghcr.io/kristianp26/ble-scale-sync:latest scan
 
-# Node.js
+# Node.js (npm install or npx)
+ble-scale-sync scan
+
+# Node.js (from a clone)
 npm run scan
 ```
 

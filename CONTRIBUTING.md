@@ -10,6 +10,8 @@ Thank you for your interest in contributing! This guide covers everything you ne
 
 ## Development Setup
 
+Contributors work from a clone. `npx ble-scale-sync` is the end-user path and is documented on the site.
+
 ```bash
 # Clone and install
 git clone https://github.com/KristianP26/ble-scale-sync.git
@@ -89,10 +91,16 @@ ble-scale-sync/
 │       ├── docs.yml                 # VitePress docs deploy to Cloudflare Pages
 │       └── worker.yml               # Deploy stats Cloudflare Worker
 ├── src/
-│   ├── index.ts                     # Entry point (single/multi-user flow, SIGHUP reload, heartbeat)
+│   ├── index.ts                     # The one bin: dispatches subcommands (ble-scale-sync <cmd>)
+│   ├── run.ts                       # The run path itself (single/multi-user flow, SIGHUP reload, heartbeat)
+│   ├── cli-dispatch.ts              # Pure argument classification (subcommand vs flag)
+│   ├── cli-help.ts                  # Help text shared by both entry points
+│   ├── cli-invocation.ts            # Was this started via npm script, npx, or the bin? Shapes the hints
+│   ├── setup-garmin.ts              # ble-scale-sync setup-garmin (runs the packaged Python helper)
+│   ├── garmin-cli.ts                # Argument translation + Python version check for setup-garmin
 │   ├── orchestrator.ts              # Export dispatch, healthchecks, partial/total failure handling
-│   ├── diagnose.ts                  # npm run diagnose (BLE troubleshooting tool)
-│   ├── scan.ts                      # BLE device scanner utility (npm run scan)
+│   ├── diagnose.ts                  # ble-scale-sync diagnose / npm run diagnose (BLE troubleshooting tool)
+│   ├── scan.ts                      # BLE device scanner utility (ble-scale-sync scan / npm run scan)
 │   ├── logger.ts                    # createLogger, setLogLevel (structured logging)
 │   ├── update-check.ts              # Optional anonymous version check + stats ping
 │   ├── validate-env.ts              # .env validation & typed config loader (legacy path)

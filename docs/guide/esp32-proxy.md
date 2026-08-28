@@ -267,7 +267,7 @@ You can also set `BLE_HANDLER=mqtt-proxy` as an environment variable instead of 
 :::
 
 ::: tip Setup wizard
-`npm run setup` includes interactive mqtt-proxy configuration steps that generate the YAML above for you.
+`ble-scale-sync setup` (`npm run setup` from a clone) includes interactive mqtt-proxy configuration steps that generate the YAML above for you.
 :::
 
 ::: tip Reusing your MQTT exporter broker

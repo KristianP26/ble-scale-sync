@@ -59,7 +59,10 @@ The [setup wizard](/guide/configuration#setup-wizard-recommended) includes inter
 docker run --rm --network host --cap-add NET_ADMIN --cap-add NET_RAW \
   ghcr.io/kristianp26/ble-scale-sync:latest scan
 
-# Standalone (Node.js)
+# Standalone (npm install or npx)
+ble-scale-sync scan
+
+# Standalone (from a clone)
 npm run scan
 ```
 
@@ -105,10 +108,10 @@ Weight only. The advertisement carries a second frame after each weigh-in whose 
 
 ### **Renpho ES-CS20M / Elis 1** (some hardware variants)
 
-Some units use broadcast-only firmware that does not allow GATT connections. The same model name can ship with different internal hardware. If your ES-CS20M or Elis 1 is broadcast-only, ble-scale-sync reads weight directly from BLE advertisements. Body composition is estimated from BMI (Deurenberg formula) instead of impedance, since impedance is not available in broadcast mode. Run `npm run diagnose` to check whether your unit is connectable or broadcast-only.
+Some units use broadcast-only firmware that does not allow GATT connections. The same model name can ship with different internal hardware. If your ES-CS20M or Elis 1 is broadcast-only, ble-scale-sync reads weight directly from BLE advertisements. Body composition is estimated from BMI (Deurenberg formula) instead of impedance, since impedance is not available in broadcast mode. Run `ble-scale-sync diagnose` (`npm run diagnose` from a clone) to check whether your unit is connectable or broadcast-only.
 
 ## Don't See Your Scale?
 
-If your scale uses BLE but isn't listed, it might still work. The **Standard BT SIG** adapter catches any scale that follows the official Bluetooth specification. Run the [setup wizard](/guide/configuration#setup-wizard-recommended) or `npm run scan` to check.
+If your scale uses BLE but isn't listed, it might still work. The **Standard BT SIG** adapter catches any scale that follows the official Bluetooth specification. Run the [setup wizard](/guide/configuration#setup-wizard-recommended) or `ble-scale-sync scan` to check.
 
 Want to add support for a new scale? See [Contributing](https://github.com/KristianP26/ble-scale-sync/blob/main/CONTRIBUTING.md#adding-a-new-scale-adapter).

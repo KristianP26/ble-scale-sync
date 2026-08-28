@@ -50,7 +50,7 @@ The setup wizard handles Garmin authentication automatically. You only need to a
 **Standalone (Node.js):**
 
 ```bash
-npm run setup-garmin
+ble-scale-sync setup-garmin   # from a clone: npm run setup-garmin
 ```
 
 **Docker (single user with env vars):**
@@ -92,7 +92,7 @@ Garmin may block requests from cloud/VPN IPs. If authentication fails, try from 
 :::
 
 ::: warning Upgrading from v1.8.0 or earlier
-v1.8.1 bumps `garminconnect` to 0.3.x, which replaced the old garth-based OAuth files (`oauth1_token.json`, `oauth2_token.json`) with a single `garmin_tokens.json`. Existing tokens are incompatible. Re-run `npm run setup-garmin`; the script auto-removes the legacy files before writing the new format.
+v1.8.1 bumps `garminconnect` to 0.3.x, which replaced the old garth-based OAuth files (`oauth1_token.json`, `oauth2_token.json`) with a single `garmin_tokens.json`. Existing tokens are incompatible. Re-run `ble-scale-sync setup-garmin` (`npm run setup-garmin` from a clone); the script auto-removes the legacy files before writing the new format.
 :::
 
 ## MQTT {#mqtt}
@@ -301,7 +301,7 @@ After adding the Strava exporter to your config, run the setup script to authori
 **Standalone (Node.js):**
 
 ```bash
-npm run setup-strava
+ble-scale-sync setup-strava   # from a clone: npm run setup-strava
 ```
 
 **Docker:**

@@ -16,7 +16,7 @@ For general questions that are not about a specific error (supported scales, Gar
 ### Scale not found
 
 - **Step on the scale** to wake it up. Most scales go to sleep after a few seconds of inactivity.
-- Verify with `npm run scan` (or the Docker `scan` command) that your scale is visible.
+- Verify with `ble-scale-sync scan` (`npm run scan` from a clone, or the Docker `scan` command) that your scale is visible.
 - If using `scale_mac`, double-check the address matches the scan output.
 - On Linux, make sure Bluetooth is running: `sudo systemctl status bluetooth`
 
@@ -188,6 +188,48 @@ $env:DEBUG="true"; npm start
 ```
 
 This shows BLE discovery details, advertised services, discovered characteristics, and UUID matching.
+
+## Install Issues (npm / npx) {#install-issues}
+
+### `ble-scale-sync: command not found`
+
+The package was installed into a project rather than globally, or the npm global bin directory is not on your PATH. Either run it through npx, which needs no PATH entry:
+
+```bash
+npx ble-scale-sync --version
+```
+
+or install it globally and check where npm puts the binaries:
+
+```bash
+npm install -g ble-scale-sync
+npm prefix -g       # Windows: the shims sit here; Linux/macOS: in its bin/ subdirectory
+```
+
+That directory has to be on your PATH. (`npm bin -g` printed it in older npm versions and was removed in npm 9.)
+
+### `No configuration found` even though config.yaml exists
+
+`config.yaml` is read from the directory you run the command in, not from the package. Run the command from the directory holding your config, or pass the path explicitly:
+
+```bash
+ble-scale-sync --config /path/to/config.yaml
+ble-scale-sync validate --config /path/to/config.yaml
+```
+
+Note that `.env` follows `config.yaml`: both are read from the same directory. See [Where config.yaml and .env are read from](/guide/configuration#config-location).
+
+### `BLE transport ... needs the npm package ...`
+
+The BLE stacks are optional dependencies, so the install completed without the one you selected (usually because `@abandonware/noble` compiles from source and the host has no C++ toolchain). The message names the package, the install command and the transports that still work on your host.
+
+Install the stack where the app itself lives, not into your working directory:
+
+```bash
+npm install -g @stoprocent/noble       # global ble-scale-sync install
+```
+
+Under `npx` the cache directory is thrown away between runs, so install the app itself instead: `npm install -g ble-scale-sync @stoprocent/noble`. The quickest way out on Windows is usually the prebuilt driver, `ble.noble_driver: stoprocent`, which needs no toolchain at all.
 
 ## Platform Issues
 

@@ -68,6 +68,17 @@ The add-on handles config through the UI, auto-detects the Mosquitto broker for 
 
 Runs natively on all major desktop and server operating systems. No containers required.
 
+Zero clone, if you already have Node.js v22+:
+
+```bash
+npx ble-scale-sync setup                 # interactive wizard, writes ./config.yaml
+CONTINUOUS_MODE=true npx ble-scale-sync  # always-on
+```
+
+`config.yaml` and `.env` are read from the directory you run the command in. Add `npm install -g ble-scale-sync` to keep the command on your PATH.
+
+Or from a clone, which is what you want if you plan to contribute:
+
 ```bash
 git clone https://github.com/KristianP26/ble-scale-sync.git
 cd ble-scale-sync && npm install
@@ -85,7 +96,7 @@ Requires Node.js v22+ and a BLE adapter. See the **[full install guide](https://
 - **[Multi-user](https://blescalesync.dev/multi-user).** Automatic weight-based identification with per-user exporters.
 - **Historical sync.** Replays a scale's onboard cache of offline measurements with their original timestamps to exporters that support back-dating (Garmin Connect, InfluxDB, File).
 - **[Interactive setup wizard](https://blescalesync.dev/guide/configuration).** Scale discovery (MAC or macOS CoreBluetooth UUID), exporter config, connectivity tests.
-- **[BLE diagnostic tool](https://blescalesync.dev/troubleshooting).** `npm run diagnose` for detailed BLE troubleshooting.
+- **[BLE diagnostic tool](https://blescalesync.dev/troubleshooting).** `ble-scale-sync diagnose` (or `npm run diagnose` from a clone) for detailed BLE troubleshooting.
 - **[Home Assistant Add-on](https://blescalesync.dev/guide/home-assistant-addon).** One-click install via My Home Assistant badge, MQTT auto-discovery, UI-driven config, Garmin token bootstrap, and MFA workaround.
 - **[ESP32 BLE proxy](https://blescalesync.dev/guide/esp32-proxy).** Use a remote ESP32 as a BLE radio over MQTT, with a built-in embedded broker for zero-config setup, simplified Docker deployment, and optional display. Set `ble.scale_mac` for GATT-only scales (for example QN-Scale) so the ESP32 can connect autonomously the instant it sees the scale. It connects to both public-address and random-address GATT scales even when the controller misreports the address type, and connects with minimal delay so a briefly-connectable scale is reached before it sleeps.
 - **[ESPHome Bluetooth proxy](https://blescalesync.dev/guide/esphome-proxy).** Reuse an existing ESPHome BT proxy mesh (Home Assistant) as a BLE radio via Native API: broadcast and GATT scales (public and random BLE addresses), multi-proxy with RSSI auto-pick.
