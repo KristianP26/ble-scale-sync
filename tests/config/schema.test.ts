@@ -730,8 +730,11 @@ describe('formatConfigError()', () => {
       const msg = formatConfigError(result.error);
       expect(msg).toContain('Configuration error in config.yaml:');
       expect(msg).toContain('height');
-      expect(msg).toContain('npm run validate');
-      expect(msg).toContain('npm run setup');
+      // The hint names whichever shape the reader can actually type, so assert
+      // the command words rather than one invocation style: the suite is green
+      // under `npm test` and under `npx vitest run`, which differ here.
+      expect(msg).toContain('validate');
+      expect(msg).toContain('setup');
     }
   });
 
@@ -774,8 +777,8 @@ describe('formatConfigError()', () => {
     expect(result.success).toBe(false);
     if (!result.success) {
       const msg = formatConfigError(result.error);
-      expect(msg).toContain("Run 'npm run validate'");
-      expect(msg).toContain("'npm run setup'");
+      expect(msg).toMatch(/Run '(npm run validate|ble-scale-sync validate)'/);
+      expect(msg).toMatch(/'(npm run setup|ble-scale-sync setup)'/);
     }
   });
 });

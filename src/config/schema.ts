@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { isLoopback } from '../ble/loopback.js';
 import { isValidScaleId, SCALE_ID_HINT } from '../ble/scale-id.js';
+import { cliCommand } from '../cli-invocation.js';
 
 // --- Sub-schemas ---
 
@@ -360,7 +361,9 @@ export function formatConfigError(error: z.ZodError): string {
     lines.push('');
   }
 
-  lines.push("Run 'npm run validate' to check your config, or 'npm run setup' to reconfigure.");
+  lines.push(
+    `Run '${cliCommand('validate')}' to check your config, or '${cliCommand('setup')}' to reconfigure.`,
+  );
 
   return lines.join('\n');
 }

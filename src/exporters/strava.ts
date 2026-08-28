@@ -6,6 +6,7 @@ import type { Exporter, ExportContext, ExportResult } from '../interfaces/export
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { StravaConfig } from './config.js';
 import { withRetry, httpError } from '../utils/retry.js';
+import { cliCommand } from '../cli-invocation.js';
 const log = createLogger('Strava');
 
 interface StravaTokens {
@@ -85,7 +86,7 @@ export class StravaExporter implements Exporter {
     const tokenPath = this.tokenFilePath();
     if (!fs.existsSync(tokenPath)) {
       throw new Error(
-        `Strava token file not found at ${tokenPath}. Run "npm run setup-strava" first.`,
+        `Strava token file not found at ${tokenPath}. Run "${cliCommand('setup-strava')}" first.`,
       );
     }
     const raw = fs.readFileSync(tokenPath, 'utf-8');
@@ -93,7 +94,7 @@ export class StravaExporter implements Exporter {
       return JSON.parse(raw) as StravaTokens;
     } catch {
       throw new Error(
-        `Malformed token file at ${tokenPath}. Delete it and run "npm run setup-strava" again.`,
+        `Malformed token file at ${tokenPath}. Delete it and run "${cliCommand('setup-strava')}" again.`,
       );
     }
   }
