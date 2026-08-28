@@ -47,12 +47,22 @@ describe('missingPackagesFor', () => {
 
 describe('availableTransports', () => {
   it('lists every other transport whose packages resolve', () => {
-    const others = availableTransports('noble-legacy', absent('@abandonware/noble'));
+    const others = availableTransports('noble-legacy', absent('@abandonware/noble'), 'linux');
     expect(others).toContain('noble');
     expect(others).toContain('node-ble');
     expect(others).toContain('mqtt-proxy');
     expect(others).toContain('esphome-proxy');
     expect(others).not.toContain('noble-legacy');
+  });
+
+  it('does not offer node-ble off Linux', () => {
+    // resolveHandlerKey returns node-ble only on linux, and BlueZ D-Bus does
+    // not exist elsewhere, so offering it sends a stuck user nowhere.
+    for (const platform of ['win32', 'darwin'] as const) {
+      const others = availableTransports('noble-legacy', absent('@abandonware/noble'), platform);
+      expect(others).not.toContain('node-ble');
+      expect(others).toContain('noble');
+    }
   });
 });
 
@@ -79,11 +89,29 @@ describe('buildMissingTransportMessage', () => {
     expect(msg).not.toMatch(/—| -- /);
   });
 
+  it('tells a Windows user to install where the app lives, not into cwd', () => {
+    // A plain `npm install` in the working directory creates a node_modules
+    // Node never consults for a global install, and nothing at all under npx.
+    const msg = buildMissingTransportMessage(
+      'noble-legacy',
+      ['@abandonware/noble'],
+      absent('@abandonware/noble'),
+      'win32',
+    );
+    expect(msg).not.toContain('node-ble (BlueZ D-Bus)');
+    expect(msg).toContain('@stoprocent/noble');
+  });
+
   it('still offers the proxy transports when no npm package resolves at all', () => {
     // The proxy transports are backed by regular dependencies, so they survive
     // a probe that resolves nothing. This is why the "no other transport"
     // fallback line cannot be reached with today's package map.
-    const msg = buildMissingTransportMessage('node-ble', ['node-ble', 'dbus-next'], () => false);
+    const msg = buildMissingTransportMessage(
+      'node-ble',
+      ['node-ble', 'dbus-next'],
+      () => false,
+      'linux',
+    );
     expect(msg).toContain('Transports still available on this host:');
     expect(msg).toContain('mqtt-proxy (ESP32)');
     expect(msg).toContain('esphome-proxy');
@@ -102,6 +130,16 @@ describe('rethrowAsTransportError', () => {
   it('rethrows any error that is not a resolution failure', () => {
     const err = new Error('boom');
     expect(() => rethrowAsTransportError('node-ble', err, () => false)).toThrow(err);
+  });
+
+  it('keeps the original error as the cause', () => {
+    const err = notFound("Cannot find package '@abandonware/noble' imported from ...");
+    try {
+      rethrowAsTransportError('noble-legacy', err, absent('@abandonware/noble'));
+      expect.unreachable('should have thrown');
+    } catch (caught) {
+      expect((caught as Error).cause).toBe(err);
+    }
   });
 
   it('replaces a genuinely missing package with a named, actionable error', () => {
