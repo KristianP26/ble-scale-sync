@@ -19,6 +19,11 @@ export function loadEnvConfig(): AppConfig {
   const globalExporters: ExporterEntry[] = exporterConfig.exporters.map((name) => {
     const entry: Record<string, unknown> = { type: name };
 
+    if (name === 'garmin' && exporterConfig.garmin) {
+      Object.assign(entry, {
+        weight_only: exporterConfig.garmin.weightOnly,
+      });
+    }
     if (name === 'mqtt' && exporterConfig.mqtt) {
       const m = exporterConfig.mqtt;
       Object.assign(entry, {

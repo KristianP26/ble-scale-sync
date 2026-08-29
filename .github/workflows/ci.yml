@@ -70,3 +70,6 @@ jobs:
 
       - name: Run firmware unit tests
         run: python -m unittest discover -s firmware/tests -v
+
+      - name: Run Garmin uploader unit tests
+        run: python -m unittest discover -s garmin-scripts/tests -v

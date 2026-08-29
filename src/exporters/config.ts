@@ -29,6 +29,11 @@ const KNOWN_EXPORTERS = new Set<ExporterName>([
   'wger',
 ]);
 
+export interface GarminConfig {
+  /** Upload the weight alone, leaving every derived metric unset in Garmin. */
+  weightOnly: boolean;
+}
+
 export interface MqttConfig {
   brokerUrl: string;
   topic: string;
@@ -106,6 +111,7 @@ export interface WgerConfig {
 
 export interface ExporterConfig {
   exporters: ExporterName[];
+  garmin?: GarminConfig;
   mqtt?: MqttConfig;
   webhook?: WebhookConfig;
   influxdb?: InfluxDbConfig;
@@ -176,6 +182,13 @@ export function loadExporterConfig(): ExporterConfig {
 
   if (exporters.length === 0) {
     fail('EXPORTERS must contain at least one exporter.');
+  }
+
+  let garmin: GarminConfig | undefined;
+  if (exporters.includes('garmin')) {
+    garmin = {
+      weightOnly: parseBoolean('GARMIN_WEIGHT_ONLY', process.env.GARMIN_WEIGHT_ONLY?.trim(), false),
+    };
   }
 
   let mqtt: MqttConfig | undefined;
@@ -364,6 +377,7 @@ export function loadExporterConfig(): ExporterConfig {
 
   return {
     exporters,
+    garmin,
     mqtt,
     webhook,
     influxdb,

@@ -118,6 +118,9 @@ global_exporters:
     email: "${GARMIN_EMAIL}"
     password: "${GARMIN_PASSWORD}"
     token_dir: ~/.garmin_tokens
+    # weight_only: true    # upload the weight alone; BMI, body fat, water, bone,
+    #                      # muscle, visceral fat, physique rating and metabolic
+    #                      # age are left unset in Garmin Connect
 
   # -- MQTT (Home Assistant auto-discovery) --
   # - type: mqtt
