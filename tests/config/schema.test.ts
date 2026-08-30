@@ -559,6 +559,41 @@ describe('BleSchema', () => {
     }
   });
 
+  it('accepts handler ha-bluetooth with ha_bluetooth config', () => {
+    const result = BleSchema.safeParse({
+      handler: 'ha-bluetooth',
+      ha_bluetooth: { url: 'http://homeassistant.local:8123', token: 'tok' },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.ha_bluetooth?.url).toBe('http://homeassistant.local:8123');
+      expect(result.data.ha_bluetooth?.source).toBeUndefined();
+    }
+  });
+
+  it('rejects handler ha-bluetooth without ha_bluetooth config', () => {
+    const result = BleSchema.safeParse({ handler: 'ha-bluetooth' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('ha_bluetooth config is required');
+    }
+  });
+
+  it('rejects ha_bluetooth with a non-http(s)/ws(s) url or an empty token', () => {
+    expect(
+      BleSchema.safeParse({
+        handler: 'ha-bluetooth',
+        ha_bluetooth: { url: 'ha.local', token: 't' },
+      }).success,
+    ).toBe(false);
+    expect(
+      BleSchema.safeParse({
+        handler: 'ha-bluetooth',
+        ha_bluetooth: { url: 'http://ha.local:8123', token: '' },
+      }).success,
+    ).toBe(false);
+  });
+
   it('accepts handler auto without mqtt_proxy', () => {
     const result = BleSchema.safeParse({ handler: 'auto' });
     expect(result.success).toBe(true);
