@@ -84,7 +84,7 @@ ble:
 | ---------------------------- | --------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `scale_mac`                  | Recommended                 | Auto-discovery | MAC address, or a CoreBluetooth UUID on macOS (bare 32-hex as the wizard writes it, or the dashed form). Prevents connecting to a neighbor's scale.                                                                                                                                        |
 | `bind_key`                   | Xiaomi S800 / S400          | (none)         | 32-char hex per-device MiBeacon key from the Mi cloud (extract with the community Xiaomi-cloud-tokens-extractor). Decrypts only the device's own FE95 broadcast. The S400 also needs `scale_mac`. Keep it secret; it is a credential.                                                      |
-| `handler`                    | No                          | `auto`         | Transport: `auto` (local radio), `mqtt-proxy` (ESP32 over MQTT), `esphome-proxy` (ESPHome Native API). See below.                                                                                                                                                                          |
+| `handler`                    | No                          | `auto`         | Transport: `auto` (local radio), `mqtt-proxy` (ESP32 over MQTT), `esphome-proxy` (ESPHome Native API), `ha-bluetooth` (Home Assistant websocket, broadcast only). See below.                                                                                                               |
 | `noble_driver`               | No                          | OS default     | `abandonware` or `stoprocent`. Overrides the default BLE driver. Only applies when `handler: auto`.                                                                                                                                                                                        |
 | `adapter`                    | No                          | System default | Linux only. Select a specific Bluetooth adapter (e.g., `hci0`, `hci1`). See below.                                                                                                                                                                                                         |
 | `force_scale_adapter`        | No                          | Auto-detect    | Name of the scale protocol adapter to use, bypassing auto-detection. Requires `scale_mac`. See below.                                                                                                                                                                                      |
@@ -97,6 +97,7 @@ ble:
 | `proxy_liveness_timeout_min` | No                          | `30`           | Minutes of total advertisement silence before a proxy transport is treated as wedged and the process exits for the supervisor to restart. `0` disables. Proxy transports only. See below.                                                                                                  |
 | `mqtt_proxy`                 | If `handler: mqtt-proxy`    | (none)         | MQTT proxy connection (`broker_url`, `device_id`, `topic_prefix`, `username`, `password`, `auto_connect`, `embedded_broker_*`). See [ESP32 BLE Proxy](./esp32-proxy).                                                                                                                      |
 | `esphome_proxy`              | If `handler: esphome-proxy` | (none)         | ESPHome Native API connection (`host`, `port`, `encryption_key` or `password`, `client_info`). See [ESPHome Bluetooth Proxy](./esphome-proxy).                                                                                                                                             |
+| `ha_bluetooth`               | If `handler: ha-bluetooth`  | (none)         | Home Assistant websocket connection (`url`, `token`, optional `source` scanner filter). Broadcast scales only. See [Home Assistant Bluetooth](/guide/ha-bluetooth).                                                                                                                        |
 
 ::: warning Forcing a scale adapter
 `force_scale_adapter` is an escape hatch for when auto-detection routes your scale to the wrong protocol adapter, which happens with rebadged OEM hardware that shares a vendor service with another brand.
@@ -250,7 +251,7 @@ That only covers the moment before the weigh-in. Once the scale starts streaming
 
 ::: tip A proxy that is connected but no longer delivering (`proxy_liveness_timeout_min`)
 
-On `mqtt-proxy` and `esphome-proxy` the app waits for the proxy to push it a weigh-in. If that link wedges while still looking connected, the wait simply never ends, and from the app's side that is indistinguishable from a house where nobody has stepped on the scale. Both are silence.
+On `mqtt-proxy`, `esphome-proxy` and `ha-bluetooth` the app waits for the proxy to push it a weigh-in. If that link wedges while still looking connected, the wait simply never ends, and from the app's side that is indistinguishable from a house where nobody has stepped on the scale. Both are silence.
 
 What separates them is everything else in range. Advertisements arrive constantly from phones, watches and thermometers while the link is alive, and stop completely when it is not. So a proxy that has delivered **nothing at all** for half an hour is wedged rather than idle, and the process exits for your supervisor to restart it:
 
@@ -344,7 +345,7 @@ Two costs, both real:
 - **More Bluetooth adapter resets.** Every read that ends in a timeout triggers one, and shorter sessions mean more timeouts per hour. On a Raspberry Pi that is noticeable.
 - **The failure watchdog trips sooner.** A session that times out counts as a failed cycle, so shorter sessions reach `watchdog_max_consecutive_failures` (default 10) in proportionally less time, and the process exits for the supervisor to restart. On a scale where waiting between weigh-ins is normal, raise that limit or set it to `0` to disable it, as above.
 
-This option applies to the native BLE handlers only. On `mqtt-proxy` and `esphome-proxy` the watcher waits for a weigh-in indefinitely by design, and the value is ignored.
+This option applies to the native BLE handlers only. On `mqtt-proxy`, `esphome-proxy` and `ha-bluetooth` the watcher waits for a weigh-in indefinitely by design, and the value is ignored.
 :::
 
 ::: tip BLE adapter selection (Linux only)
