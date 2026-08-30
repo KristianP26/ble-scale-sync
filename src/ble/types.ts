@@ -119,7 +119,7 @@ export const IMPEDANCE_GRACE_MS = 12_000;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type BleHandlerName = 'auto' | 'mqtt-proxy' | 'esphome-proxy';
+export type BleHandlerName = 'auto' | 'mqtt-proxy' | 'esphome-proxy' | 'ha-bluetooth';
 
 export interface ScanOptions {
   targetMac?: string;
