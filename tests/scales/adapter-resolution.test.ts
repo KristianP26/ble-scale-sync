@@ -101,3 +101,37 @@ describe('adapter resolution (#232 Xiaomi S800 FE95)', () => {
     expect(matched?.name).toBe('Xiaomi Mijia Scale S800');
   });
 });
+
+// The Xiaomi S400 shares the FE95 service with the S800 but carries its own
+// product ids; each must resolve to its own adapter from the service data
+// alone (nameless advert) and from the name alone (Noble discovery, which has
+// no service data).
+describe('adapter resolution (Xiaomi S400 vs S800 on FE95)', () => {
+  it('resolves a nameless S400 idle beacon to the S400 adapter', () => {
+    const info: BleDeviceInfo = {
+      localName: '',
+      serviceUuids: [],
+      serviceData: [{ uuid: 'fe95', data: Buffer.from('305ad53b00530870acea1c08', 'hex') }],
+    };
+    const matched = adapters.find((a) => a.matches(info));
+    expect(matched?.name).toBe('Xiaomi Body Composition Scale S400');
+  });
+
+  it('resolves the S400 by name without service data', () => {
+    const info: BleDeviceInfo = { localName: 'Xiaomi Scale S400 0853', serviceUuids: [] };
+    const matched = adapters.find((a) => a.matches(info));
+    expect(matched?.name).toBe('Xiaomi Body Composition Scale S400');
+  });
+
+  it('still resolves a nameless S800 frame to the S800 adapter', () => {
+    const info: BleDeviceInfo = {
+      localName: '',
+      serviceUuids: [],
+      serviceData: [
+        { uuid: 'fe95', data: Buffer.from([0x58, 0x59, 0xe2, 0x51, 0x5b, 0, 0, 0, 0, 0, 0]) },
+      ],
+    };
+    const matched = adapters.find((a) => a.matches(info));
+    expect(matched?.name).toBe('Xiaomi Mijia Scale S800');
+  });
+});
