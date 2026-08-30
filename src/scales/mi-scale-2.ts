@@ -145,28 +145,30 @@ export class MiScale2Adapter implements ScaleAdapterCore, GattWiring, Unlockable
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    const { weight, impedance } = reading;
-    const mi = new MiScaleCalc(profile.gender === 'male' ? 1 : 0, profile.age, profile.height);
-
-    const fat = mi.bodyFat(weight, impedance);
-    const water = mi.water(fat);
-    const bone = mi.boneMass(weight, impedance);
-    const muscle = mi.muscle(weight, impedance);
-    const visceralFat = mi.visceralFat(weight);
-
-    return buildPayload(
-      weight,
-      impedance,
-      {
-        fat,
-        water,
-        muscle,
-        bone,
-        visceralFat,
-      },
-      profile,
-    );
+    return computeMiScaleComposition(reading.weight, reading.impedance, profile);
   }
+}
+
+/**
+ * Body composition from weight and 50 kHz impedance with the Xiaomi formulas
+ * below. Shared by the Xiaomi scales that broadcast raw impedance: the Mi
+ * Scale 2, and the S400, whose own app lands within a couple of points of these
+ * equations while the generic BIA coefficients are off by five or more.
+ */
+export function computeMiScaleComposition(
+  weight: number,
+  impedance: number,
+  profile: UserProfile,
+): BodyComposition {
+  const mi = new MiScaleCalc(profile.gender === 'male' ? 1 : 0, profile.age, profile.height);
+
+  const fat = mi.bodyFat(weight, impedance);
+  const water = mi.water(fat);
+  const bone = mi.boneMass(weight, impedance);
+  const muscle = mi.muscle(weight, impedance);
+  const visceralFat = mi.visceralFat(weight);
+
+  return buildPayload(weight, impedance, { fat, water, muscle, bone, visceralFat }, profile);
 }
 
 // ─── MiScaleLib (ported from openScale / prototux MIBCS reverse-engineering) ─
