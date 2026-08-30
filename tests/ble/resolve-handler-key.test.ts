@@ -36,6 +36,12 @@ describe('resolveHandlerKey (#130)', () => {
       setNobleDriver('abandonware');
       expect(resolveHandlerKey('esphome-proxy')).toBe('esphome-proxy');
     });
+
+    it('returns ha-bluetooth regardless of platform / NOBLE_DRIVER', () => {
+      setPlatform('win32');
+      setNobleDriver('stoprocent');
+      expect(resolveHandlerKey('ha-bluetooth')).toBe('ha-bluetooth');
+    });
   });
 
   describe('NOBLE_DRIVER overrides platform default', () => {
