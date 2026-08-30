@@ -99,8 +99,8 @@ export function decryptMiBeaconV5(
   if (data.length < 12 || bindKey.length !== 16 || macFrameOrder.length !== 6) return null;
   const fc = data.readUInt16LE(0);
   if ((fc & FC_ENCRYPTED) === 0) return null;
-  const cipherStart = (fc & FC_MAC_INCLUDED) !== 0 ? 11 : 5;
-  if (data.length < cipherStart + 7) return null;
+  const cipherStart = miBeaconPayloadOffset(data);
+  if (cipherStart === null || data.length < cipherStart + 7) return null;
   const cipher = data.subarray(cipherStart, data.length - 7);
   const extCnt = data.subarray(data.length - 7, data.length - 4);
   const mic = data.subarray(data.length - 4);
