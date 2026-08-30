@@ -7,7 +7,8 @@ import type {
   ScaleReading,
   UserProfile,
 } from '../interfaces/scale-adapter.js';
-import { buildPayload, computeBiaFat } from './body-comp-helpers.js';
+import { buildPayload } from './body-comp-helpers.js';
+import { computeMiScaleComposition } from './mi-scale-2.js';
 import { bleLog } from '../ble/types.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 import {
@@ -102,10 +103,10 @@ export function decodeS400Measurement(value: Buffer): S400Measurement | null {
  * + 50 kHz impedance (+ heart rate), then 250 kHz impedance alone; with socks
  * only the weight frame follows, and an all-zero frame marks stepping off.
  *
- * The weight frame is the reading: its 50 kHz impedance is what the shared BIA
- * pipeline expects, so body composition is computed from real impedance. The
- * 250 kHz value and the heart rate have no field in `ScaleReading` and are
- * only logged.
+ * The weight frame is the reading: its 50 kHz impedance feeds the Xiaomi body
+ * composition formulas shared with the Mi Scale 2, so body composition is
+ * computed from real impedance. The 250 kHz value and the heart rate have no
+ * field in `ScaleReading` and are only logged.
  *
  * Measurement frames omit the MAC (FC 0x5948) although the CCM nonce needs it.
  * The unencrypted idle beacon (FC 0x5a30) does carry it, so it is cached from
@@ -252,8 +253,15 @@ export class XiaomiS400Adapter implements ScaleAdapterCore, BroadcastSource {
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    const fat =
-      reading.impedance > 0 ? computeBiaFat(reading.weight, reading.impedance, profile) : undefined;
-    return buildPayload(reading.weight, reading.impedance, { fat }, profile);
+    // The S400's app runs Yunmai's proprietary dual-frequency model, which no
+    // open implementation reproduces. Of the formula sets available here, the
+    // Xiaomi one used for the Mi Scale 2 lands closest on the same weigh-in
+    // (fat within ~2 points, bone within 0.3 kg, skeletal muscle within 2 kg);
+    // the generic BIA coefficients were off by more than 5 points of body fat.
+    if (reading.impedance > 0) {
+      return computeMiScaleComposition(reading.weight, reading.impedance, profile);
+    }
+    // Socks: weight only, body fat estimated from BMI like every other adapter.
+    return buildPayload(reading.weight, reading.impedance, {}, profile);
   }
 }

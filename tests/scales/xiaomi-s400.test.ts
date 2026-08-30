@@ -7,6 +7,7 @@ import {
   S400_PIDS,
 } from '../../src/scales/xiaomi-s400.js';
 import { macFrameOrderFromAddress } from '../../src/scales/mibeacon.js';
+import { computeMiScaleComposition } from '../../src/scales/mi-scale-2.js';
 import { bleLog } from '../../src/ble/types.js';
 import { expectValidMetrics } from '../helpers/scale-test-utils.js';
 
@@ -320,15 +321,28 @@ describe('XiaomiS400Adapter metrics', () => {
     expect(adapter.isComplete({ weight: 5, impedance: 500 })).toBe(false);
   });
 
-  it('computes body composition from real impedance', () => {
+  it('computes body composition from real impedance with the Xiaomi formulas', () => {
     const profile = { height: 178, age: 30, gender: 'male' as const, isAthlete: false };
-    const bia = adapter.computeMetrics({ weight: 69.9, impedance: 543.2 }, profile);
+    const comp = adapter.computeMetrics({ weight: 69.9, impedance: 543.2 }, profile);
     const bmiOnly = adapter.computeMetrics({ weight: 69.9, impedance: 0 }, profile);
-    expect(bia.weight).toBe(69.9);
-    expect(bia.impedance).toBe(543.2);
-    expect(bia.bodyFatPercent).toBeGreaterThan(0);
-    expect(bia.bodyFatPercent).not.toBe(bmiOnly.bodyFatPercent);
+    expect(comp).toEqual(computeMiScaleComposition(69.9, 543.2, profile));
+    expect(comp.weight).toBe(69.9);
+    expect(comp.impedance).toBe(543.2);
+    expect(comp.bodyFatPercent).not.toBe(bmiOnly.bodyFatPercent);
     expectValidMetrics(adapter, { weight: 69.9, impedance: 543.2 }, profile);
     expectValidMetrics(adapter, { weight: 74.7, impedance: 0 }, profile);
+  });
+
+  it('lands near the Mi Home app on a real S400 weigh-in', () => {
+    // Mi Home report for the same frames: BMI 25.2, body fat 22.7 %, bone 3.6 kg,
+    // skeletal muscle 35.5 kg, water 56.3 %, visceral 9. The app's dual-frequency
+    // model is proprietary; this pins how close the 50 kHz Xiaomi formulas get.
+    const profile = { height: 185, age: 25, gender: 'male' as const, isAthlete: false };
+    const comp = adapter.computeMetrics({ weight: 86.1, impedance: 512.5 }, profile);
+    expect(comp.bmi).toBeCloseTo(25.2, 1);
+    expect(Math.abs(comp.bodyFatPercent - 22.7)).toBeLessThan(2.5);
+    expect(Math.abs(comp.boneMass - 3.6)).toBeLessThan(0.5);
+    expect(Math.abs(comp.muscleMass - 35.5)).toBeLessThan(2.5);
+    expect(Math.abs(comp.waterPercent - 56.3)).toBeLessThan(5);
   });
 });
