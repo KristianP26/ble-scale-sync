@@ -4,7 +4,7 @@ import type {
   UserProfile,
   ScaleAuth,
 } from '../interfaces/scale-adapter.js';
-import type { MqttProxyConfig, EsphomeProxyConfig } from '../config/schema.js';
+import type { MqttProxyConfig, EsphomeProxyConfig, HaBluetoothConfig } from '../config/schema.js';
 import type { ScanOptions, ScanResult, BleHandlerName } from './types.js';
 import type { RawReading } from './shared.js';
 import type { Watcher } from './reading-source.js';
@@ -45,6 +45,7 @@ function resolveNobleDriver(): NobleDriver | null {
 export function resolveHandlerKey(bleHandler?: BleHandlerName): HandlerKey {
   if (bleHandler === 'mqtt-proxy') return 'mqtt-proxy';
   if (bleHandler === 'esphome-proxy') return 'esphome-proxy';
+  if (bleHandler === 'ha-bluetooth') return 'ha-bluetooth';
   const driver = resolveNobleDriver();
   if (driver === 'abandonware') return 'noble-legacy';
   if (driver === 'stoprocent') return 'noble';
@@ -65,6 +66,8 @@ function importHandler(key: HandlerKey): Promise<CommonHandler> {
       return import('./handler-mqtt-proxy/index.js');
     case 'esphome-proxy':
       return import('./handler-esphome-proxy/index.js');
+    case 'ha-bluetooth':
+      return import('./handler-ha-bluetooth/index.js');
     case 'noble-legacy':
       return import('./handler-noble-legacy.js');
     case 'noble':
@@ -111,6 +114,7 @@ export interface ReadingSourceOptions {
   bleHandler?: BleHandlerName;
   mqttProxy?: MqttProxyConfig;
   esphomeProxy?: EsphomeProxyConfig;
+  haBluetooth?: HaBluetoothConfig;
   adapters: ScaleAdapter[];
   targetMac?: string;
   profile: UserProfile;
@@ -156,6 +160,21 @@ export async function createReadingSource(opts: ReadingSourceOptions): Promise<R
     return { kind: 'watcher', watcher, failureLogPrefix: 'Error processing ESPHome reading' };
   }
 
+  if (key === 'ha-bluetooth' && opts.haBluetooth) {
+    const { ReadingWatcher: HaReadingWatcher } = await import('./handler-ha-bluetooth/index.js');
+    const watcher = new HaReadingWatcher(
+      opts.haBluetooth,
+      opts.adapters,
+      opts.targetMac,
+      opts.profile,
+    );
+    return {
+      kind: 'watcher',
+      watcher,
+      failureLogPrefix: 'Error processing Home Assistant Bluetooth reading',
+    };
+  }
+
   return { kind: 'poll', appliesGraceFloor: key === 'node-ble' };
 }
 
@@ -191,11 +210,20 @@ export async function scanDevices(
   mqttProxy?: MqttProxyConfig,
   bleAdapter?: string,
   esphomeProxy?: EsphomeProxyConfig,
+  haBluetooth?: HaBluetoothConfig,
 ): Promise<ScanResult[]> {
   const key = resolveHandlerKey(bleHandler);
   bleLog.debug(`BLE handler: ${HANDLER_LABELS[key]}`);
   try {
-    return await runScanDevices(key, adapters, durationMs, mqttProxy, bleAdapter, esphomeProxy);
+    return await runScanDevices(
+      key,
+      adapters,
+      durationMs,
+      mqttProxy,
+      bleAdapter,
+      esphomeProxy,
+      haBluetooth,
+    );
   } catch (err) {
     rethrowAsTransportError(key, err);
   }
@@ -208,6 +236,7 @@ async function runScanDevices(
   mqttProxy?: MqttProxyConfig,
   bleAdapter?: string,
   esphomeProxy?: EsphomeProxyConfig,
+  haBluetooth?: HaBluetoothConfig,
 ): Promise<ScanResult[]> {
   switch (key) {
     case 'mqtt-proxy': {
@@ -223,6 +252,13 @@ async function runScanDevices(
       }
       const { scanDevices: impl } = await import('./handler-esphome-proxy/index.js');
       return impl(adapters, durationMs, esphomeProxy);
+    }
+    case 'ha-bluetooth': {
+      if (!haBluetooth) {
+        throw new Error('ha_bluetooth config is required when ble.handler is ha-bluetooth');
+      }
+      const { scanDevices: impl } = await import('./handler-ha-bluetooth/index.js');
+      return impl(adapters, durationMs, haBluetooth);
     }
     case 'noble-legacy': {
       if (bleAdapter) {

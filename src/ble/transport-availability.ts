@@ -16,12 +16,14 @@
  * back to the transport switch that consumes it; ./index.js re-exports the
  * type unchanged.
  */
-export type HandlerKey = 'mqtt-proxy' | 'esphome-proxy' | 'noble-legacy' | 'noble' | 'node-ble';
+export type HandlerKey =
+  'mqtt-proxy' | 'esphome-proxy' | 'ha-bluetooth' | 'noble-legacy' | 'noble' | 'node-ble';
 
 /** Human label per transport. Also used in the BLE debug log line. */
 export const HANDLER_LABELS: Record<HandlerKey, string> = {
   'mqtt-proxy': 'mqtt-proxy (ESP32)',
   'esphome-proxy': 'esphome-proxy',
+  'ha-bluetooth': 'ha-bluetooth (Home Assistant websocket)',
   'noble-legacy': 'noble-legacy (@abandonware/noble)',
   noble: 'noble (@stoprocent/noble)',
   'node-ble': 'node-ble (BlueZ D-Bus)',
@@ -40,6 +42,7 @@ export const HANDLER_LABELS: Record<HandlerKey, string> = {
 const HANDLER_PACKAGES: Record<HandlerKey, readonly string[]> = {
   'mqtt-proxy': [],
   'esphome-proxy': [],
+  'ha-bluetooth': [],
   'noble-legacy': ['@abandonware/noble'],
   noble: ['@stoprocent/noble'],
   'node-ble': ['node-ble', 'dbus-next'],
@@ -60,6 +63,8 @@ const HANDLER_SELECTORS: Record<HandlerKey, string> = {
     'set ble.handler: mqtt-proxy and add an mqtt_proxy config block (https://blescalesync.dev/guide/esp32-proxy)',
   'esphome-proxy':
     'set ble.handler: esphome-proxy and add an esphome_proxy config block (https://blescalesync.dev/guide/esphome-proxy)',
+  'ha-bluetooth':
+    'set ble.handler: ha-bluetooth and add a ha_bluetooth config block (https://blescalesync.dev/guide/ha-bluetooth)',
   'noble-legacy': 'set NOBLE_DRIVER=abandonware or ble.noble_driver: abandonware',
   noble: 'set NOBLE_DRIVER=stoprocent or ble.noble_driver: stoprocent',
   'node-ble': 'unset NOBLE_DRIVER and remove ble.noble_driver (it is the Linux default)',
@@ -74,6 +79,7 @@ const HANDLER_SELECTORS: Record<HandlerKey, string> = {
 const HANDLER_PLATFORMS: Record<HandlerKey, readonly NodeJS.Platform[] | null> = {
   'mqtt-proxy': null,
   'esphome-proxy': null,
+  'ha-bluetooth': null,
   'noble-legacy': null,
   noble: null,
   'node-ble': ['linux'],
