@@ -7,6 +7,7 @@ import { MiScale2Adapter } from './mi-scale-2.js';
 import { XiaomiMiScaleLegacyAdapter } from './xiaomi-mi-scale-legacy.js';
 import { Silvergear108Adapter } from './silvergear-108.js';
 import { XiaomiS800Adapter } from './xiaomi-s800.js';
+import { XiaomiS400Adapter } from './xiaomi-s400.js';
 import { BeurerBf720Adapter } from './beurer-bf720.js';
 import { YunmaiScaleAdapter } from './yunmai.js';
 import { BeurerSanitasScaleAdapter } from './beurer-sanitas.js';
@@ -66,6 +67,9 @@ export const adapters: ScaleAdapter[] = [
   // Xiaomi Mijia S800 (ms116): broadcast-only, matches FE95 + product id 0x51E2
   // or its own name; no collision with any other adapter (#232).
   new XiaomiS800Adapter(),
+  // Xiaomi S400 (MJTZC01YM): same encrypted FE95 broadcast as the S800, told
+  // apart by product id; also matches its "Xiaomi Scale S400" name.
+  new XiaomiS400Adapter(),
   new YunmaiScaleAdapter(),
   new BeurerSanitasScaleAdapter(),
   new SanitasSbf72Adapter(),
