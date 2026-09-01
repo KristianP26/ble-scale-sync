@@ -91,6 +91,7 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
   '1byone Scale (new)': { localName: '1byone scale', serviceUuids: [] },
   'Active Era BS-06': { localName: 'AE BS-06', serviceUuids: [] },
   'Robi S9': { localName: 'Robi S9', serviceUuids: [] },
+  Speediance: { localName: 'SPEED_S_E60EJE', serviceUuids: ['ffb0'] },
   Hutbit: { localName: 'Hutbit Scale', serviceUuids: ['ffb0'] },
   'MGB (Swan/Icomon/YG)': { localName: 'icomon', serviceUuids: [] },
   'Hoffen BS-8107': { localName: 'hoffen bs-8107', serviceUuids: [] },

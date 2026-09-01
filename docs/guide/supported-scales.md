@@ -41,6 +41,7 @@ _Weight only_ means weight is reported normally but body composition is estimate
 | **MGB** (Swan / Icomon / YG)                                          | Yes              |                                                                                                        |
 | **Hutbit** 218008 / WL292                                             | Yes              | Also sold under stock `SWAN` branding                                                                  |
 | **Robi** S9                                                           | Weight only      |                                                                                                        |
+| **Speediance** Smart Scale FG2211WBF                                  | Yes              | Lefu/Icomon sibling of the Robi S9                  |
 | **Digoo** DG-SO38H (Mengii)                                           | Yes              |                                                                                                        |
 | **Excelvan** CF369                                                    | Yes              |                                                                                                        |
 | **Trisa** Body Analyze / **ADE** BA 1600 (fitvigo)                    | Yes              | The ADE BA 1600 variant is weight only                                                                 |

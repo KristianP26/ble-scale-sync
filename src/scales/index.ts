@@ -27,6 +27,7 @@ import { DigooScaleAdapter } from './digoo.js';
 import { OneByoneAdapter, OneByoneNewAdapter } from './one-byone.js';
 import { ActiveEraAdapter } from './active-era.js';
 import { RobiS9Adapter } from './robi-s9.js';
+import { SpeedianceAdapter } from './speediance.js';
 import { HutbitAdapter } from './hutbit.js';
 import { MgbAdapter } from './mgb.js';
 import { HoffenAdapter } from './hoffen.js';
@@ -96,6 +97,7 @@ export const adapters: ScaleAdapter[] = [
   // Robi S9 (Lefu/Fitdays FFB0-new) before MGB: both use service 0xFFB0, but the
   // Robi speaks a different protocol and is matched by name or its FFB3 result
   // characteristic, so it must win before the generic MGB FFB0 fallback (#228).
+  new SpeedianceAdapter(), // before Robi: SPEED_S_* is a Lefu sibling with a fuller handshake
   new RobiS9Adapter(),
   // Hutbit (Lefu/Fitdays FFB0 8-byte AC02 protocol): matches by its "Hutbit"
   // name; sits before the generic MGB FFB0 fallback (#254).
