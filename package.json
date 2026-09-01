@@ -52,7 +52,7 @@
     "node-ble": "^1.13.0",
     "tsx": "^4.23.12",
     "yaml": "^2.9.0",
-    "zod": "^4.4.1"
+    "zod": "^4.5.2"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
