@@ -42,6 +42,7 @@ describe('missingPackagesFor', () => {
   it('needs no npm package of its own for the proxy transports', () => {
     expect(missingPackagesFor('mqtt-proxy', () => false)).toEqual([]);
     expect(missingPackagesFor('esphome-proxy', () => false)).toEqual([]);
+    expect(missingPackagesFor('ha-bluetooth', () => false)).toEqual([]);
   });
 });
 
@@ -52,6 +53,7 @@ describe('availableTransports', () => {
     expect(others).toContain('node-ble');
     expect(others).toContain('mqtt-proxy');
     expect(others).toContain('esphome-proxy');
+    expect(others).toContain('ha-bluetooth');
     expect(others).not.toContain('noble-legacy');
   });
 

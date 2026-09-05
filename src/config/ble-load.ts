@@ -1,7 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
 import { config as dotenvConfig } from 'dotenv';
-import type { BleConfig, MqttProxyConfig, EsphomeProxyConfig } from './schema.js';
+import type {
+  BleConfig,
+  MqttProxyConfig,
+  EsphomeProxyConfig,
+  HaBluetoothConfig,
+} from './schema.js';
 import type { BleHandlerName } from '../ble/types.js';
 import { defaultConfigPath, defaultEnvPath } from './paths.js';
 import { parseBleAdapterEnv } from './env-overrides.js';
@@ -13,6 +18,7 @@ export interface BleLoadedConfig {
   bleAdapter?: string;
   mqttProxy?: MqttProxyConfig;
   esphomeProxy?: EsphomeProxyConfig;
+  haBluetooth?: HaBluetoothConfig;
 }
 
 /**
@@ -34,6 +40,7 @@ export function loadBleConfig(configPath?: string): BleLoadedConfig {
         bleAdapter: ble?.adapter ?? undefined,
         mqttProxy: ble?.mqtt_proxy ?? undefined,
         esphomeProxy: ble?.esphome_proxy ?? undefined,
+        haBluetooth: ble?.ha_bluetooth ?? undefined,
       };
     } catch {
       // Fall through to env vars

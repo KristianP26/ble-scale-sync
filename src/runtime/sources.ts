@@ -56,6 +56,7 @@ export async function buildReadingSource(
     bleHandler: ctx.bleHandler,
     mqttProxy: ctx.mqttProxy,
     esphomeProxy: ctx.esphomeProxy,
+    haBluetooth: ctx.haBluetooth,
     adapters,
     targetMac: ctx.scaleMac,
     profile: profile(),
