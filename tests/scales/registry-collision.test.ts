@@ -34,6 +34,12 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
   // vendor service, so QN now defers and it resolves to RenphoScaleAdapter.
   'Renpho ES-WBE28': { localName: 'Renpho Body Scale', serviceUuids: ['181b', '181d'] },
   'Renpho ES-26BB': { localName: 'es-26bb-b', serviceUuids: [] },
+  // #385: the advertised name is the only thing separating this from the Inlife
+  // and 1byone families on the shared FFF0 service.
+  'Etekcity ESF-551': {
+    localName: 'Etekcity Smart Fitness Scale',
+    serviceUuids: ['fff0'],
+  },
   'Beurer BF720/BF105': { localName: 'BF720', serviceUuids: [] },
   'Xiaomi Mi Smart Scale 2 (XMTZC04HM)': {
     localName: '',

@@ -9,7 +9,7 @@ head:
 
 # Supported Scales
 
-**32 protocol adapters**, plus a Standard BT SIG catch-all for any spec-compliant scale. Most adapters cover several rebrands, so real coverage is wider than the count.
+**33 protocol adapters**, plus a Standard BT SIG catch-all for any spec-compliant scale. Most adapters cover several rebrands, so real coverage is wider than the count.
 
 ## Scale List
 
@@ -44,6 +44,7 @@ _Weight only_ means weight is reported normally but body composition is estimate
 | **Excelvan** CF369                                                    | Yes              |                                                     |
 | **Trisa** Body Analyze / **ADE** BA 1600 (fitvigo)                    | Yes              | The ADE BA 1600 variant is weight only              |
 | **Hoffen** BS-8107                                                    | Yes              |                                                     |
+| **Etekcity** ESF-551 Smart Fitness Scale                              | Yes              | Matched by its advertised name                      |
 | **Hesley** (YunChen)                                                  | Yes              |                                                     |
 | **Inlife** (FatScale)                                                 | Yes              |                                                     |
 | **Koogeek** S1                                                        | Yes              | Connecting can be unreliable, see below             |

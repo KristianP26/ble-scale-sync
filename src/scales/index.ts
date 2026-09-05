@@ -21,6 +21,7 @@ import { ExcelvanCF369Adapter } from './excelvan-cf369.js';
 import { HesleyScaleAdapter } from './hesley.js';
 import { KoogeekS1Adapter } from './koogeek-s1.js';
 import { InlifeScaleAdapter } from './inlife.js';
+import { EtekcityEsf551Adapter } from './etekcity-esf551.js';
 import { DigooScaleAdapter } from './digoo.js';
 import { OneByoneAdapter, OneByoneNewAdapter } from './one-byone.js';
 import { ActiveEraAdapter } from './active-era.js';
@@ -78,6 +79,11 @@ export const adapters: ScaleAdapter[] = [
   // Koogeek-S1 outranks Inlife because a Koogeek advertises the bare 0xFFF0
   // service, which Inlife's pre-connect fallback would otherwise claim (#270).
   new KoogeekS1Adapter(),
+  // Etekcity outranks Inlife for the same reason Koogeek does: an ESF-551
+  // exposes FFF0 with an FFF2 write and no FFF4, which is exactly Inlife's
+  // post-discovery rule, and being claimed there ends the session on a read
+  // timeout with no reading (#385). It matches on its advertised name only.
+  new EtekcityEsf551Adapter(),
   new InlifeScaleAdapter(),
   new DigooScaleAdapter(),
   new OneByoneAdapter(),
