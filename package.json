@@ -55,7 +55,7 @@
     "zod": "^4.4.1"
   },
   "devDependencies": {
-    "@types/node": "^25.9.1",
+    "@types/node": "^26.4.0",
     "eslint": "^10.8.0",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.9.6",
