@@ -361,7 +361,7 @@ describe('BleSchema', () => {
     if (result.success) expect(result.data.force_scale_adapter).toBe('Hutbit');
   });
 
-  // The scale_mac pairing is enforced in src/run.ts, not here: schema
+  // The scale_mac pairing is enforced in src/index.ts, not here: schema
   // validation runs before env overrides, so rejecting it at parse time would
   // break the documented `docker run -e SCALE_MAC=...` setup.
   it('accepts force_scale_adapter without scale_mac at schema level', () => {
@@ -559,41 +559,6 @@ describe('BleSchema', () => {
     }
   });
 
-  it('accepts handler ha-bluetooth with ha_bluetooth config', () => {
-    const result = BleSchema.safeParse({
-      handler: 'ha-bluetooth',
-      ha_bluetooth: { url: 'http://homeassistant.local:8123', token: 'tok' },
-    });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.ha_bluetooth?.url).toBe('http://homeassistant.local:8123');
-      expect(result.data.ha_bluetooth?.source).toBeUndefined();
-    }
-  });
-
-  it('rejects handler ha-bluetooth without ha_bluetooth config', () => {
-    const result = BleSchema.safeParse({ handler: 'ha-bluetooth' });
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues[0].message).toContain('ha_bluetooth config is required');
-    }
-  });
-
-  it('rejects ha_bluetooth with a non-http(s)/ws(s) url or an empty token', () => {
-    expect(
-      BleSchema.safeParse({
-        handler: 'ha-bluetooth',
-        ha_bluetooth: { url: 'ha.local', token: 't' },
-      }).success,
-    ).toBe(false);
-    expect(
-      BleSchema.safeParse({
-        handler: 'ha-bluetooth',
-        ha_bluetooth: { url: 'http://ha.local:8123', token: '' },
-      }).success,
-    ).toBe(false);
-  });
-
   it('accepts handler auto without mqtt_proxy', () => {
     const result = BleSchema.safeParse({ handler: 'auto' });
     expect(result.success).toBe(true);
@@ -765,11 +730,8 @@ describe('formatConfigError()', () => {
       const msg = formatConfigError(result.error);
       expect(msg).toContain('Configuration error in config.yaml:');
       expect(msg).toContain('height');
-      // The hint names whichever shape the reader can actually type, so assert
-      // the command words rather than one invocation style: the suite is green
-      // under `npm test` and under `npx vitest run`, which differ here.
-      expect(msg).toContain('validate');
-      expect(msg).toContain('setup');
+      expect(msg).toContain('npm run validate');
+      expect(msg).toContain('npm run setup');
     }
   });
 
@@ -812,8 +774,8 @@ describe('formatConfigError()', () => {
     expect(result.success).toBe(false);
     if (!result.success) {
       const msg = formatConfigError(result.error);
-      expect(msg).toMatch(/Run '(npm run validate|ble-scale-sync validate)'/);
-      expect(msg).toMatch(/'(npm run setup|ble-scale-sync setup)'/);
+      expect(msg).toContain("Run 'npm run validate'");
+      expect(msg).toContain("'npm run setup'");
     }
   });
 });

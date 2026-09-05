@@ -29,15 +29,6 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      # The three BLE stacks are optionalDependencies (#364), so npm no longer
-      # fails the install when one cannot be built. Four test files reach
-      # node-ble / dbus-next through a real value import with no vi.mock, and
-      # three type-only imports make all of them a hard requirement for
-      # `tsc --noEmit`. Assert them here, or a skipped install surfaces as an
-      # opaque Vite resolve error much later in the run.
-      - name: Assert the optional BLE stacks installed
-        run: node -e "for (const p of ['@abandonware/noble','@stoprocent/noble','node-ble','dbus-next']) require.resolve(p + '/package.json');"
-
       - name: Lint
         run: npm run lint
 
@@ -70,6 +61,3 @@ jobs:
 
       - name: Run firmware unit tests
         run: python -m unittest discover -s firmware/tests -v
-
-      - name: Run Garmin uploader unit tests
-        run: python -m unittest discover -s garmin-scripts/tests -v

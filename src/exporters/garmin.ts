@@ -50,11 +50,9 @@ export { expandTilde as _expandTilde };
 /**
  * Wire payload handed to the Python uploader: live readings carry the metrics
  * only, historical replay (#164) adds an ISO 8601 `timestamp` field that
- * `garmin_upload.py` forwards as `add_body_composition(timestamp=...)`, and
- * `weight_only` tells the uploader to pass `None` for every derived metric so
- * Garmin records the weight alone.
+ * `garmin_upload.py` forwards as `add_body_composition(timestamp=...)`.
  */
-type GarminUploadPayload = BodyComposition & { timestamp?: string; weight_only?: boolean };
+type GarminUploadPayload = BodyComposition & { timestamp?: string };
 
 function uploadToGarmin(
   payload: GarminUploadPayload,
@@ -109,13 +107,6 @@ export interface GarminEntryConfig {
   email?: string;
   password?: string;
   token_dir?: string;
-  /**
-   * Upload the weight alone, leaving BMI, body fat, water, bone, muscle,
-   * visceral fat, physique rating and metabolic age unset in Garmin Connect.
-   * For scales whose derived metrics you do not trust, or profiles where only
-   * the weight trend matters.
-   */
-  weight_only?: boolean;
 }
 
 export const garminSchema: ExporterSchema = {
@@ -145,15 +136,6 @@ export const garminSchema: ExporterSchema = {
       default: './garmin-tokens',
       description: 'Directory for storing auth tokens',
     },
-    {
-      key: 'weight_only',
-      label: 'Upload weight only',
-      type: 'boolean',
-      required: false,
-      default: false,
-      description:
-        'Send only the weight; leave BMI, body fat, water, bone, muscle, visceral fat, physique rating and metabolic age unset',
-    },
   ],
   supportsGlobal: false,
   supportsPerUser: true,
@@ -178,9 +160,9 @@ export class GarminExporter implements Exporter {
 
   async export(data: BodyComposition, context?: ExportContext): Promise<ExportResult> {
     const pythonCmd = await findPython();
-    const payload: GarminUploadPayload = { ...data };
-    if (context?.timestamp) payload.timestamp = context.timestamp.toISOString();
-    if (this.entryConfig.weight_only) payload.weight_only = true;
+    const payload: GarminUploadPayload = context?.timestamp
+      ? { ...data, timestamp: context.timestamp.toISOString() }
+      : data;
 
     return withRetry(
       async () => {

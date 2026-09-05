@@ -82,12 +82,6 @@ export function applyEnvOverrides(config: AppConfig): AppConfig {
       } else {
         log.warn('BLE_HANDLER=mqtt-proxy ignored: ble.mqtt_proxy not configured');
       }
-    } else if (handler === 'ha-bluetooth') {
-      if (ble.ha_bluetooth) {
-        ble.handler = handler;
-      } else {
-        log.warn('BLE_HANDLER=ha-bluetooth ignored: ble.ha_bluetooth not configured');
-      }
     }
   }
 

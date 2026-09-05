@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { defaultConfigPath, defaultEnvPath } from './paths.js';
+import { DEFAULT_CONFIG_PATH, DEFAULT_ENV_PATH } from './paths.js';
 
 // --- Config source detection ---
 
@@ -10,10 +10,10 @@ export type ConfigSource = 'yaml' | 'env' | 'none';
  * Priority: config.yaml → .env → none.
  */
 export function detectConfigSource(configPath?: string): ConfigSource {
-  const yamlPath = configPath ?? defaultConfigPath();
+  const yamlPath = configPath ?? DEFAULT_CONFIG_PATH;
   if (existsSync(yamlPath)) return 'yaml';
 
-  if (existsSync(defaultEnvPath())) return 'env';
+  if (existsSync(DEFAULT_ENV_PATH)) return 'env';
 
   return 'none';
 }

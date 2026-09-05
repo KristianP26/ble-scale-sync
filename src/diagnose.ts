@@ -2,25 +2,8 @@
 import { loadBleConfig } from './config/load.js';
 import { createLogger } from './logger.js';
 import { sleep, withTimeout, errMsg } from './ble/types.js';
-import { rethrowAsTransportError } from './ble/transport-availability.js';
-import type { HandlerKey } from './ble/transport-availability.js';
 
 const log = createLogger('Diagnose');
-
-/**
- * diagnose is the tool people run precisely when BLE is broken, so a missing
- * optional stack must name itself here too, not only in the handler switch.
- */
-async function loadNoble(driver: string): Promise<any> {
-  const key: HandlerKey = driver === 'stoprocent' ? 'noble' : 'noble-legacy';
-  try {
-    return driver === 'stoprocent'
-      ? (await import('@stoprocent/noble')).default
-      : (await import('@abandonware/noble')).default;
-  } catch (err) {
-    rethrowAsTransportError(key, err);
-  }
-}
 
 function hex(buf: Buffer | undefined): string {
   if (!buf || buf.length === 0) return '(none)';
@@ -59,32 +42,7 @@ async function waitForPoweredOn(noble: any): Promise<void> {
 
 async function main(): Promise<void> {
   const bleConfig = loadBleConfig();
-  // A leading dash is a flag, never a MAC: `diagnose --config x.yaml` used to
-  // scan forever for a device called "--CONFIG".
-  const positional = process.argv[2]?.startsWith('-') === false ? process.argv[2] : undefined;
-  const scaleMac = (positional ?? bleConfig.scaleMac)?.toUpperCase();
-
-  // This tool drives a local radio through Noble directly, on purpose: it
-  // exists to answer "is Bluetooth on THIS host working", which a proxy
-  // transport cannot answer for it. On a proxy-only setup the Noble import is
-  // the first thing to fail, and it fails as a node-gyp "No native build was
-  // found" error that reads like a broken install rather than a tool being
-  // pointed at the wrong thing (#376). Say which it is.
-  const PROXY_HANDLERS = ['mqtt-proxy', 'esphome-proxy', 'ha-bluetooth'];
-  const forceNative = process.argv.includes('--native');
-  if (bleConfig.bleHandler && PROXY_HANDLERS.includes(bleConfig.bleHandler) && !forceNative) {
-    log.info('BLE Diagnostic Tool');
-    log.info('');
-    log.info(`Configured transport: ${bleConfig.bleHandler}`);
-    log.info('');
-    log.info('This tool tests the local Bluetooth radio through Noble, and your');
-    log.info('config routes BLE through a proxy instead, so there is nothing here');
-    log.info('for it to check. `start` and `scan` both use the configured');
-    log.info('transport and are the right tools for a proxy setup.');
-    log.info('');
-    log.info("To test this host's own radio anyway, pass --native.");
-    return;
-  }
+  const scaleMac = (process.argv[2] ?? bleConfig.scaleMac)?.toUpperCase();
 
   if (bleConfig.nobleDriver) {
     process.env.NOBLE_DRIVER = bleConfig.nobleDriver;
@@ -104,13 +62,15 @@ async function main(): Promise<void> {
   } else {
     log.info('Target MAC:   (none)');
     log.info('');
-    log.info('Tip: ble-scale-sync diagnose MAC_ADDRESS');
-    log.info('  (from a git checkout: npm run diagnose -- MAC_ADDRESS)');
+    log.info('Tip: npm run diagnose -- MAC_ADDRESS');
     log.info('  or set scale_mac in config.yaml');
   }
   log.info('');
 
-  const noble = await loadNoble(driver);
+  const noble =
+    driver === 'stoprocent'
+      ? (await import('@stoprocent/noble')).default
+      : (await import('@abandonware/noble')).default;
 
   await waitForPoweredOn(noble);
   log.info('Bluetooth adapter: ready\n');

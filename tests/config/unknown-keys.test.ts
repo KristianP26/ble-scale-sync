@@ -84,11 +84,6 @@ describe('collectUnknownKeys', () => {
     expect(collectUnknownKeys(cfg)).toEqual(['ble.esphome_proxy.encryption_ky']);
   });
 
-  it('reports an unknown key under ble.ha_bluetooth', () => {
-    const cfg = { ...BASE, ble: { ha_bluetooth: { url: 'http://h:8123', token: 't', tokn: 'x' } } };
-    expect(collectUnknownKeys(cfg)).toEqual(['ble.ha_bluetooth.tokn']);
-  });
-
   it('reports an unknown key inside additional_proxies by index', () => {
     const cfg = {
       ...BASE,
@@ -132,7 +127,6 @@ describe('collectUnknownKeys', () => {
         force_scale_adapter: 'Hutbit',
         mqtt_proxy: { broker_url: 'mqtt://h:1883' },
         esphome_proxy: { host: 'h' },
-        ha_bluetooth: { url: 'http://h:8123', token: 't', source: 'aa' },
       },
     };
     expect(collectUnknownKeys(cfg)).toEqual([]);

@@ -46,7 +46,7 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
   # hand is exactly the person who would toggle the UI option, see no change and
   # report a false negative. A wrong value for either is silent by nature, so a
   # setting that is silently ignored is worse here than almost anywhere else.
-  for _qn in qn_protocol_byte qn_report_byte qn_weight_ack qn_a4_prelude auto_clear_stale_bond; do
+  for _qn in qn_protocol_byte qn_report_byte qn_weight_ack auto_clear_stale_bond; do
     if [ -n "$(opt "$_qn")" ]; then
       log "WARNING: custom_config is enabled, so the '$_qn' option is ignored."
       log "Set 'ble.$_qn' in $CUSTOM_PATH instead."
@@ -72,17 +72,6 @@ else
     *)
       log "WARNING: ignoring qn_weight_ack='$QN_WEIGHT_ACK' (expected true or false)."
       QN_WEIGHT_ACK=""
-      ;;
-  esac
-  # Same free-text normalisation as qn_weight_ack above, for the same reason.
-  QN_A4_PRELUDE=$(opt qn_a4_prelude)
-  case "$(echo "$QN_A4_PRELUDE" | tr '[:upper:]' '[:lower:]')" in
-    "") QN_A4_PRELUDE="" ;;
-    true | yes | on | 1) QN_A4_PRELUDE="true" ;;
-    false | no | off | 0) QN_A4_PRELUDE="false" ;;
-    *)
-      log "WARNING: ignoring qn_a4_prelude='$QN_A4_PRELUDE' (expected true or false)."
-      QN_A4_PRELUDE=""
       ;;
   esac
   AUTO_CLEAR_STALE_BOND=$(opt_bool auto_clear_stale_bond)
@@ -113,12 +102,6 @@ else
   GARMIN_ENABLED=$(opt_bool garmin_enabled)
   GARMIN_EMAIL=$(opt garmin_email)
   GARMIN_PASSWORD=$(opt garmin_password)
-  GARMIN_WEIGHT_ONLY=$(opt_bool garmin_weight_only)
-  # opt_bool echoes the raw option, and this one is interpolated unquoted into
-  # the generated YAML. The add-on schema declares it bool?, but a hand-edited
-  # options.json is not bound by that, and a stray string would produce YAML
-  # that fails to parse. Anything that is not exactly "true" is false.
-  [ "$GARMIN_WEIGHT_ONLY" = "true" ] || GARMIN_WEIGHT_ONLY=false
 
   SCAN_COOLDOWN=$(opt_int scan_cooldown 30)
   DEBUG=$(opt_bool debug)
@@ -235,7 +218,6 @@ YAML
     [ -n "$QN_PROTOCOL_BYTE" ] && echo "  qn_protocol_byte: $QN_PROTOCOL_BYTE" >> "$FRESH"
     [ -n "$QN_REPORT_BYTE" ] && echo "  qn_report_byte: $QN_REPORT_BYTE" >> "$FRESH"
     [ -n "$QN_WEIGHT_ACK" ] && echo "  qn_weight_ack: $QN_WEIGHT_ACK" >> "$FRESH"
-    [ -n "$QN_A4_PRELUDE" ] && echo "  qn_a4_prelude: $QN_A4_PRELUDE" >> "$FRESH"
     [ "$AUTO_CLEAR_STALE_BOND" = "true" ] && echo "  auto_clear_stale_bond: true" >> "$FRESH"
     [ "$PROXY_LIVENESS_MIN" != "30" ] && echo "  proxy_liveness_timeout_min: $PROXY_LIVENESS_MIN" >> "$FRESH"
     echo "" >> "$FRESH"
@@ -304,7 +286,6 @@ YAML
     email: "$(yaml_escape "$GARMIN_EMAIL")"
     password: "$(yaml_escape "$GARMIN_PASSWORD")"
     token_dir: /data/garmin-tokens
-    weight_only: $GARMIN_WEIGHT_ONLY
 YAML
     fi
 

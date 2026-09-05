@@ -126,16 +126,12 @@ Runs natively on **Linux, macOS, and Windows**: no containers, no Supervisor req
 
 ### Prerequisites
 
-| Platform    | Requirements                                                                                                                                                                                                                                                                          |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **All**     | [Node.js](https://nodejs.org/) v22+, BLE adapter                                                                                                                                                                                                                                      |
-| **Linux**   | `sudo apt-get install bluetooth bluez` (the default `node-ble` transport is pure JavaScript over BlueZ D-Bus)                                                                                                                                                                          |
-| **macOS**   | Nothing extra: the default `@stoprocent/noble` transport ships prebuilt binaries                                                                                                                                                                                                      |
-| **Windows** | Nothing extra to start. The default transport, `@abandonware/noble`, builds from source and needs [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (C++ workload); without them the install still completes and you switch to the prebuilt driver with `ble.noble_driver: stoprocent` |
-
-::: tip
-The three BLE stacks are optional dependencies. `npm install` completes even when one of them cannot be built, and the app names the missing package and the remaining transports if you select one that is not installed.
-:::
+| Platform    | Requirements                                                                                           |
+| ----------- | ------------------------------------------------------------------------------------------------------ |
+| **All**     | [Node.js](https://nodejs.org/) v22+, BLE adapter                                                       |
+| **Linux**   | `sudo apt-get install bluetooth bluez libbluetooth-dev libudev-dev build-essential`                    |
+| **macOS**   | `xcode-select --install` (Xcode CLI tools)                                                             |
+| **Windows** | [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (C++ workload) |
 
 ::: details Garmin Connect requires Python 3.9+
 
@@ -153,29 +149,7 @@ On Linux, grant BLE capabilities to Node.js:
 sudo setcap cap_net_raw+eip $(eval readlink -f $(which node))
 ```
 
-### Install from npm (no clone) {#install-from-npm}
-
-The published package ships a single command, `ble-scale-sync`. Run it straight from npx, or install it once and keep it on your PATH:
-
-```bash
-npx ble-scale-sync setup        # interactive wizard, writes ./config.yaml
-npx ble-scale-sync              # single measurement
-```
-
-```bash
-npm install -g ble-scale-sync   # or install it permanently
-ble-scale-sync setup
-```
-
-`config.yaml` and `.env` are read from **the directory you run the command in**, so keep the two together and always run from that directory. Nothing is stored inside the package.
-
-::: warning
-Both files are read from the same directory, whichever one holds them. A `.env` left over in the directory you happen to be standing in is the `.env` the app will use.
-:::
-
-### Install from a clone
-
-The right pick for contributing, or for running a version that is not released yet:
+### Install
 
 ```bash
 git clone https://github.com/KristianP26/ble-scale-sync.git
@@ -183,30 +157,10 @@ cd ble-scale-sync
 npm install
 ```
 
-### Commands
-
-The same commands exist in both shapes. From a clone they are npm scripts, from an install they are subcommands:
-
-| From an install                | From a clone              | What it does                                     |
-| ------------------------------ | ------------------------- | ------------------------------------------------ |
-| `ble-scale-sync`               | `npm start`               | Run the sync flow                                 |
-| `ble-scale-sync setup`         | `npm run setup`           | Interactive setup wizard                          |
-| `ble-scale-sync setup-garmin`  | `npm run setup-garmin`    | Garmin Connect authentication (needs Python 3.9+) |
-| `ble-scale-sync setup-strava`  | `npm run setup-strava`    | Strava OAuth token setup                          |
-| `ble-scale-sync scan`          | `npm run scan`            | Discover nearby BLE devices                       |
-| `ble-scale-sync diagnose MAC`  | `npm run diagnose -- MAC` | BLE diagnostic dump                               |
-
-`diagnose` tests this host's own Bluetooth radio through Noble. If `ble.handler` is set to a proxy transport (`esphome-proxy`, `mqtt-proxy`, `ha-bluetooth`), it says so and stops, because there is no local radio in that setup for it to check. Use `scan` and `start`, which both go through the configured transport, or pass `--native` to test the local radio anyway.
-| `ble-scale-sync validate`      | `npm run validate`        | Validate `config.yaml` and exit                   |
-| `ble-scale-sync --help`        | `npm start -- --help`     | Command list and environment overrides            |
-| `ble-scale-sync --version`     | -                         | Print the version                                 |
-
-`--config <path>` is accepted by the run path, by `validate` and by `setup`. The Docker image takes the same words: `docker run ... ghcr.io/kristianp26/ble-scale-sync:latest scan`.
-
 ### Configure
 
 ```bash
-ble-scale-sync setup   # from a clone: npm run setup
+npm run setup
 ```
 
 The wizard creates `config.yaml` with your scale, user profile, and exporter settings. See [Configuration](./configuration) for manual setup.
@@ -214,35 +168,12 @@ The wizard creates `config.yaml` with your scale, user profile, and exporter set
 ### Run
 
 ```bash
-ble-scale-sync                       # Single measurement
-CONTINUOUS_MODE=true ble-scale-sync  # Always-on (Raspberry Pi)
-DRY_RUN=true ble-scale-sync          # Read scale, skip exports
+npm start                       # Single measurement
+CONTINUOUS_MODE=true npm start  # Always-on (Raspberry Pi)
+DRY_RUN=true npm start          # Read scale, skip exports
 ```
-
-From a clone the same three are `npm start`, `CONTINUOUS_MODE=true npm start` and `DRY_RUN=true npm start`.
 
 Press **Ctrl+C** for graceful shutdown in continuous mode.
-
-### Garmin Connect from an npm install {#garmin-from-npm}
-
-The Garmin exporter runs a Python script that ships inside the package, so its Python dependencies have to be installed once:
-
-```bash
-pip install -r "$(npm root -g)/ble-scale-sync/requirements.txt"
-ble-scale-sync setup-garmin
-```
-
-`ble-scale-sync setup-garmin --all-users` authenticates every Garmin user in `config.yaml`, and `--user <name>` does one of them.
-
-### Adding a BLE stack later {#adding-a-ble-stack}
-
-The three BLE stacks are optional dependencies, so an install completes even where one of them cannot be built. If you select a transport that is not installed, the app names the missing package and the transports you still have. Install it where the app itself lives:
-
-```bash
-npm install -g @stoprocent/noble    # for a global ble-scale-sync install
-```
-
-Under `npx` there is nowhere to install it, because the cache directory is thrown away between runs. Install the app itself instead: `npm install -g ble-scale-sync @stoprocent/noble`.
 
 ### Run as a service (Linux)
 
@@ -267,7 +198,7 @@ WorkingDirectory=/home/pi/ble-scale-sync
 EnvironmentFile=/home/pi/ble-scale-sync/.env
 Environment="CONTINUOUS_MODE=true"
 Environment="PATH=/home/pi/ble-scale-sync/venv/bin:/usr/local/bin:/usr/bin:/bin"
-ExecStart=/usr/bin/node dist/index.js
+ExecStart=/usr/bin/npm start
 Restart=always
 RestartSec=5
 
@@ -278,7 +209,6 @@ WantedBy=multi-user.target
 :::
 
 ```bash
-npm run build                # compile to dist/ (the service runs plain node)
 sudo systemctl enable --now ble-scale.service
 ```
 

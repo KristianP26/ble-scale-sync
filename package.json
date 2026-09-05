@@ -3,30 +3,12 @@
   "version": "1.26.0",
   "description": "Universal BLE Smart Scale bridge. Captures body composition from Renpho, Xiaomi & 20+ others, syncs to Garmin Connect, Strava, MQTT (Home Assistant), InfluxDB, Webhooks, Ntfy & local files. Headless CLI for Raspberry Pi, Linux, macOS & Windows.",
   "type": "module",
-  "bin": {
-    "ble-scale-sync": "dist/index.js"
-  },
-  "files": [
-    "dist/",
-    "garmin-scripts/*.py",
-    "requirements.txt",
-    "config.yaml.example",
-    ".env.example"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/KristianP26/ble-scale-sync.git"
-  },
-  "bugs": {
-    "url": "https://github.com/KristianP26/ble-scale-sync/issues"
-  },
-  "homepage": "https://blescalesync.dev",
+  "main": "src/index.ts",
   "scripts": {
     "build": "tsc",
-    "prepublishOnly": "npm run build",
     "start": "tsx src/index.ts",
     "setup": "tsx src/wizard/index.ts",
-    "setup-garmin": "tsx src/setup-garmin.ts",
+    "setup-garmin": "python3 garmin-scripts/setup_garmin.py",
     "setup-strava": "tsx src/exporters/strava-setup.ts",
     "scan": "tsx src/scan.ts",
     "diagnose": "tsx src/diagnose.ts",
@@ -58,27 +40,25 @@
   },
   "dependencies": {
     "@2colors/esphome-native-api": "^1.3.6",
+    "@abandonware/noble": "^1.9.2-26",
     "@inquirer/prompts": "^8.5.2",
+    "@stoprocent/noble": "^2.7.1",
     "aedes": "^1.1.1",
     "boxen": "^8.0.1",
     "chalk": "^6.0.0",
     "dotenv": "^17.4.2",
     "encoding": "^0.1.13",
     "mqtt": "^5.15.2",
+    "node-ble": "^1.13.0",
+    "tsx": "^4.23.12",
     "yaml": "^2.9.0",
     "zod": "^4.5.2"
-  },
-  "optionalDependencies": {
-    "@abandonware/noble": "^1.9.2-26",
-    "@stoprocent/noble": "^2.7.1",
-    "node-ble": "^1.13.0"
   },
   "devDependencies": {
     "@types/node": "^26.4.0",
     "eslint": "^10.8.0",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.9.6",
-    "tsx": "^4.23.12",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.68.0",
     "vitepress": "^1.6.4",

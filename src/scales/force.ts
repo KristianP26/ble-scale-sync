@@ -1,4 +1,4 @@
-import type { BleDeviceInfo, ScaleAdapter } from '../interfaces/scale-adapter.js';
+import type { ScaleAdapter } from '../interfaces/scale-adapter.js';
 
 /**
  * Manual adapter override (`ble.force_scale_adapter`).
@@ -58,24 +58,7 @@ export function applyForcedAdapter(
 function forceAdapter(adapter: ScaleAdapter): ScaleAdapter {
   return new Proxy(adapter, {
     get(target, prop, _receiver) {
-      if (prop === 'matches') {
-        // Run the real matcher first, for its SIDE EFFECTS, then claim the
-        // device regardless of what it said. Two adapters latch their protocol
-        // variant here off the advertised name (Beurer/Sanitas `isBf710Type`,
-        // Yunmai `isMini`), and replacing the method outright left them on the
-        // default variant: a forced SBF70 decoded every weigh-in as a constant
-        // 12.80 kg (#384). Throwing is contained, because failing to claim the
-        // device is not an option the override leaves open.
-        return (device: BleDeviceInfo): boolean => {
-          try {
-            target.matches(device);
-          } catch {
-            // A matcher that trips over an unexpected advertisement must not
-            // stop the override from claiming the device it was pointed at.
-          }
-          return true;
-        };
-      }
+      if (prop === 'matches') return () => true;
       // Marks this adapter as one that did NOT earn its device by matching it.
       // `hasParseableBroadcastSource` uses it to require a real parse before
       // gating a dual-mode adapter into "wait for a broadcast", which would

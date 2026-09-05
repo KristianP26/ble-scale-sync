@@ -29,33 +29,12 @@ const REC_74_SLOT6 = Buffer.from('06004c148a6a4a00000000000000000000000000', 'he
 const REC_888_SLOT7 = Buffer.from('070067148a6a78033501e50164012000ea063301', 'hex'); // ts 6a8a1467
 const REC_897_SLOT2 = Buffer.from('0200fa148a6a81033801e40162012100f4063601', 'hex'); // ts 6a8a14fa
 
-/**
- * One slot holding two weigh-ins, from a vendor-app trace that read both ends
- * of its queue: `09 01 00` was answered with the first, `09 01 01` with the
- * second, and byte 1 of each echoes the position asked for. Their stamps are
- * 562 s apart, which is what pins position 0 as the OLDER end.
- */
-const REC_886_POS0 = Buffer.from('0100d7048e6a76030401fe018c01220032070601', 'hex'); // ts 6a8e04d7
-const REC_892_POS1 = Buffer.from('010109078e6a7c030601fd018a01220039070801', 'hex'); // ts 6a8e0709
-
 /** Slots that hold nothing: all zeros, except slot 0 which uses 0xFFFFFFFF. */
 const SLOT_EMPTY = Buffer.from('0100000000000000000000000000000000000000', 'hex');
 const SLOT0_UNSET = Buffer.from('0000ffffffffffff000000000000000000000000', 'hex');
 
 const PING_ECHO = Buffer.from('0b00', 'hex');
 const STATUS_ECHO = Buffer.from('080101', 'hex');
-
-/** `08 <slot> <count>`: the scale's answer to a record-count probe. */
-function statusReply(slot: number, count: number): Buffer {
-  return Buffer.from([0x08, slot, count]);
-}
-
-/** A record reply attributed to `slot`, for driving the walk. */
-function recordFrom(slot: number): Buffer {
-  const rec = Buffer.from(REC_888_SLOT7);
-  rec[0] = slot;
-  return rec;
-}
 
 function makeAdapter(): SalterAdapter {
   return new SalterAdapter();
@@ -289,21 +268,6 @@ describe('SalterAdapter', () => {
       expect(weights).toEqual([85.7, 87.6, 88.0, 89.7]);
     });
 
-    it('reports the fresh end of a backlogged slot whichever end arrives first', () => {
-      // The two records one slot held in the vendor-app trace. With the clock
-      // 10 s past the newer stamp, the older is 572 s behind it, well outside
-      // MAX_RECORD_AGE_SEC. The walk fetches the newest position first and
-      // then position 0, but both ends are fetched precisely so the ordering
-      // need not be assumed, so the outcome must not depend on it.
-      const newestFirst = primed(makeAdapter(), REC_892_POS1);
-      expect(newestFirst.parseNotification(REC_892_POS1)?.weight).toBeCloseTo(89.2, 4);
-      expect(newestFirst.parseNotification(REC_886_POS0)).toBeNull();
-
-      const oldestFirst = primed(makeAdapter(), REC_892_POS1);
-      expect(oldestFirst.parseNotification(REC_886_POS0)).toBeNull();
-      expect(oldestFirst.parseNotification(REC_892_POS1)?.weight).toBeCloseTo(89.2, 4);
-    });
-
     it('ignores months-old readings the scale still holds', () => {
       // The scale wakes because someone stood on it, so anything older than what
       // has already been reported is a past weigh-in, not a new measurement.
@@ -404,66 +368,27 @@ describe('SalterAdapter', () => {
       expect(a.unlockCommands).toEqual([[0x0b, 0x00], [0x02]]);
     });
 
-    it('chains the slot walk one command per reply: count, then fetch', () => {
+    it('chains the slot walk one fetch per reply', () => {
       // The firmware has a single command buffer: nine writes fired back-to-back
       // produced three answers on hardware, and the only fetch that survived was
-      // the last one written. Each reply must trigger the next command instead.
+      // the last one written. Each reply must trigger the next fetch instead.
       const a = makeAdapter();
-      // The clock reply starts the walk by asking slot 0 for its record count.
-      expect(a.buildAck(CLOCK_SET)).toEqual([0x08, 0]);
-      // An empty slot advances straight to the next slot's count.
-      expect(a.buildAck(statusReply(0, 0))).toEqual([0x08, 1]);
-      // A slot with one record fetches it — position 0 is its only position.
-      expect(a.buildAck(STATUS_ECHO)).toEqual([0x09, 1, 0]);
-      // A record reply advances to the next slot's count.
-      expect(a.buildAck(recordFrom(1))).toEqual([0x08, 2]);
-      expect(a.buildAck(recordFrom(6))).toEqual([0x08, 7]);
-      expect(a.buildAck(recordFrom(7))).toBeNull(); // a record from the last slot ends the walk
-      expect(a.buildAck(statusReply(7, 0))).toBeNull(); // an empty last slot also ends it
+      expect(a.buildAck(CLOCK_SET)).toEqual([0x09, 0, 0x00]);
+
+      const fromSlot = (i: number): number[] | null => {
+        const rec = Buffer.from(REC_888_SLOT7);
+        rec[0] = i;
+        return a.buildAck(rec);
+      };
+      expect(fromSlot(0)).toEqual([0x09, 1, 0x00]);
+      expect(fromSlot(5)).toEqual([0x09, 6, 0x00]);
+      expect(fromSlot(7)).toBeNull(); // last slot ends the walk
     });
 
-    it('fetches both ends of a backlogged slot, newest first, then moves on', () => {
-      // 09 <slot> <n> is position-indexed, and in the trace position 0 was the
-      // older record. The walk does not rely on that: a count above one fetches
-      // the last position and then position 0, and only then the next slot's
-      // count, so the fresh weigh-in is read whichever end it sits at. Reading
-      // position 0 alone is what hid a weigh-in behind a two-day-old record.
-      const a = makeAdapter();
-      expect(a.buildAck(statusReply(1, 2))).toEqual([0x09, 1, 1]);
-      expect(a.buildAck(REC_892_POS1)).toEqual([0x09, 1, 0]);
-      expect(a.buildAck(REC_886_POS0)).toEqual([0x08, 2]);
-      // A deeper backlog still costs exactly two fetches: the last position and 0.
-      expect(a.buildAck(statusReply(3, 5))).toEqual([0x09, 3, 4]);
-      expect(a.buildAck(recordFrom(3))).toEqual([0x09, 3, 0]);
-      expect(a.buildAck(recordFrom(3))).toEqual([0x08, 4]);
-    });
-
-    it('does not spend a second fetch on a slot with one record', () => {
-      // With a count of one, position 0 is both ends of the queue.
-      const a = makeAdapter();
-      expect(a.buildAck(statusReply(2, 1))).toEqual([0x09, 2, 0]);
-      expect(a.buildAck(recordFrom(2))).toEqual([0x08, 3]);
-    });
-
-    it('drops an owed fetch when the walk restarts', () => {
-      // A fetch whose reply is lost is abandoned when the next tick's clock read
-      // restarts the walk. If that reply then turns up late, the clean walk must
-      // move on from it, not spend the fetch the old walk was owed. The same
-      // goes for a record that lands after a session has ended.
-      const a = makeAdapter();
-      expect(a.buildAck(statusReply(1, 3))).toEqual([0x09, 1, 2]);
-      expect(a.buildAck(CLOCK_SET)).toEqual([0x08, 0]);
-      expect(a.buildAck(recordFrom(1))).toEqual([0x08, 2]); // late reply, not [0x09, 1, 0]
-
-      expect(a.buildAck(statusReply(1, 3))).toEqual([0x09, 1, 2]);
-      a.onSessionEnd();
-      expect(a.buildAck(recordFrom(1))).toEqual([0x08, 2]);
-    });
-
-    it('ignores frames that drive neither the clock nor the slot walk', () => {
+    it('ignores frames that are neither a clock reply nor a record', () => {
       const a = makeAdapter();
       expect(a.buildAck(PING_ECHO)).toBeNull();
-      expect(a.buildAck(Buffer.from('dead', 'hex'))).toBeNull();
+      expect(a.buildAck(STATUS_ECHO)).toBeNull();
     });
 
     it('sets the clock when the scale has none, because it then stores nothing', () => {
@@ -488,14 +413,14 @@ describe('SalterAdapter', () => {
       // drifts, so its clock disagrees with the host by an hour or more. Records
       // are judged against the scale's own clock, so that costs nothing, and
       // re-syncing would move the time base the app's history is dated against.
-      expect(makeAdapter().buildAck(CLOCK_SET)).toEqual([0x08, 0]);
+      expect(makeAdapter().buildAck(CLOCK_SET)).toEqual([0x09, 0, 0x00]);
     });
 
     it('picks the slot walk back up as soon as the clock write is acked', () => {
       const a = makeAdapter();
       expect(a.buildAck(CLOCK_UNSET)![0]).toBe(0x01);
       expect(a.buildAck(SET_CLOCK_ACK)).toEqual([0x02]);
-      expect(a.buildAck(CLOCK_SET)).toEqual([0x08, 0]);
+      expect(a.buildAck(CLOCK_SET)).toEqual([0x09, 0, 0x00]);
     });
 
     it('writes the clock once per session, then walks the slots regardless', () => {
@@ -503,7 +428,7 @@ describe('SalterAdapter', () => {
       // nothing and the next connection tries again.
       const a = makeAdapter();
       expect(a.buildAck(CLOCK_UNSET)![0]).toBe(0x01);
-      expect(a.buildAck(CLOCK_UNSET)).toEqual([0x08, 0]);
+      expect(a.buildAck(CLOCK_UNSET)).toEqual([0x09, 0, 0x00]);
 
       a.onSessionEnd();
       expect(a.buildAck(CLOCK_UNSET)![0]).toBe(0x01); // re-armed for the next one
@@ -514,27 +439,20 @@ describe('SalterAdapter', () => {
     });
 
     it('never emits a clear — the protocol has one and it destroys data', () => {
-      // `0a <slot> <n>` consumes a record whether or not anything read it. An
+      // `0a <index> 00` consumes a record regardless of which slot was read. An
       // earlier version paired it with a fixed-slot fetch and discarded three
-      // unread weigh-ins off a real scale, and the vendor app's history is
-      // whatever it drains itself. Every reply the walk can see is fed here,
-      // including the both-ends path a backlog takes.
+      // unread weigh-ins off a real scale.
       const a = makeAdapter();
       const writes = [a2h(a.unlockCommand), ...a.unlockCommands.map(a2h)];
-      const push = (ack: number[] | null): void => {
-        if (ack) writes.push(a2h(ack));
-      };
-      push(a.buildAck(CLOCK_SET));
-      push(makeAdapter().buildAck(CLOCK_UNSET));
-      push(a.buildAck(SET_CLOCK_ACK));
+      const record = Buffer.from(REC_888_SLOT7);
       for (let i = 0; i < 8; i++) {
-        for (const count of [0, 1, 2, 9]) {
-          push(a.buildAck(statusReply(i, count)));
-          push(a.buildAck(recordFrom(i))); // the fetch's reply...
-          push(a.buildAck(recordFrom(i))); // ...and the owed one's, on a backlog
-        }
+        record[0] = i;
+        const ack = a.buildAck(record);
+        if (ack) writes.push(a2h(ack));
       }
-      expect(writes.length).toBeGreaterThan(40); // the walk really was driven
+      writes.push(a2h(a.buildAck(CLOCK_SET) ?? []));
+      writes.push(a2h(makeAdapter().buildAck(CLOCK_UNSET) ?? []));
+      writes.push(a2h(a.buildAck(SET_CLOCK_ACK) ?? []));
       expect(writes.some((w) => w.startsWith('0a'))).toBe(false);
     });
 

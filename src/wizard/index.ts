@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { dirname, join, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { config as dotenvConfig } from 'dotenv';
 import { detectPlatform } from './platform.js';
@@ -9,26 +10,27 @@ import { runNonInteractive } from './non-interactive.js';
 import { WIZARD_STEPS } from './steps/index.js';
 import type { WizardContext } from './types.js';
 import type { AppConfig } from '../config/schema.js';
-import { defaultConfigPath, defaultEnvPath } from '../config/paths.js';
+
+const __dirname: string = dirname(fileURLToPath(import.meta.url));
+const ROOT: string = join(__dirname, '..', '..');
+const DEFAULT_CONFIG_PATH = join(ROOT, 'config.yaml');
 
 function printUsage(): void {
   console.log(`
-BLE Scale Sync - Setup Wizard
+BLE Scale Sync — Setup Wizard
 
 Usage:
-  ble-scale-sync setup                      Interactive setup
-  ble-scale-sync setup --config <path>      Use a custom config file path
-  ble-scale-sync setup --non-interactive    Validate and enrich existing config.yaml
-  ble-scale-sync setup --help               Show this help
-
-From a git checkout: npm run setup [-- --config <path>]
+  npm run setup                         Interactive setup
+  npm run setup -- --config <path>      Use a custom config file path
+  npm run setup -- --non-interactive    Validate and enrich existing config.yaml
+  npm run setup -- --help               Show this help
 
 If config.yaml already exists, you can choose to edit it or start fresh.
 `);
 }
 
 function parseArgs(args: string[]): { configPath: string; nonInteractive: boolean; help: boolean } {
-  let configPath = defaultConfigPath();
+  let configPath = DEFAULT_CONFIG_PATH;
   let nonInteractive = false;
   let help = false;
 
@@ -38,7 +40,7 @@ function parseArgs(args: string[]): { configPath: string; nonInteractive: boolea
       help = true;
     } else if (arg === '--non-interactive') {
       nonInteractive = true;
-    } else if ((arg === '--config' || arg === '-c') && i + 1 < args.length) {
+    } else if (arg === '--config' && i + 1 < args.length) {
       configPath = resolve(args[++i]);
     }
   }
@@ -55,7 +57,7 @@ async function main(): Promise<void> {
   }
 
   // Load .env for ${ENV_VAR} references
-  const envPath = defaultEnvPath();
+  const envPath = join(ROOT, '.env');
   if (existsSync(envPath)) {
     dotenvConfig({ path: envPath });
   }
