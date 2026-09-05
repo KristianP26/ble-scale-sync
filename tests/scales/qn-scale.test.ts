@@ -1389,6 +1389,44 @@ describe('AE02 dispatch (#75, #235)', () => {
       }
     }
 
+    // #331: the Arboleaf vendor app sends two 0xA4 0x0F frames between START and
+    // the first live 0x10 frame, and the reporter's HCI capture shows the app
+    // going straight into a weight stream after them while this app goes silent.
+    describe('0xA4 prelude (ble.qn_a4_prelude, #331)', () => {
+      const A4_ONE = [
+        0xa4, 0x0f, 0x01, 0x21, 0x0a, 0x48, 0x08, 0xf1, 0x0a, 0x33, 0x08, 0xda, 0x08, 0x80, 0xc7,
+      ];
+      const A4_TWO = [
+        0xa4, 0x0f, 0x01, 0x22, 0x06, 0x78, 0x09, 0xf3, 0x07, 0xdb, 0x01, 0xc1, 0x01, 0xa5, 0x9a,
+      ];
+
+      it('sends nothing extra by default, so the rest of the QN family is untouched', async () => {
+        const adapter = makeAdapter();
+        const writes = await driveHandshake(adapter, makeExtendedScaleInfo());
+        expect(writes.some((w) => w[0] === 0xa4)).toBe(false);
+      });
+
+      it('sends both frames after START when the flag is on', async () => {
+        const adapter = makeAdapter();
+        adapter.configure({ qnA4Prelude: true });
+        const writes = await driveHandshake(adapter, makeExtendedScaleInfo());
+        const startIdx = writes.findIndex((w) => w[0] === 0x22);
+        const a4 = writes.filter((w) => w[0] === 0xa4);
+        expect(a4).toEqual([A4_ONE, A4_TWO]);
+        expect(writes.findIndex((w) => w[0] === 0xa4)).toBeGreaterThan(startIdx);
+      });
+
+      // Both frames are replayed verbatim, so the checksum is the only thing
+      // proving they were transcribed correctly from the capture.
+      it('carries the checksums from the capture, which are the byte sum', () => {
+        for (const frame of [A4_ONE, A4_TWO]) {
+          const body = frame.slice(0, -1);
+          const sum = body.reduce((a, b) => a + b, 0) & 0xff;
+          expect(frame[frame.length - 1]).toBe(sum);
+        }
+      });
+    });
+
     it('20B 0x12 frame echoes the protocol type into the 0x13 config', async () => {
       const adapter = makeAdapter();
       const writes = await driveHandshake(adapter, makeExtendedScaleInfo());

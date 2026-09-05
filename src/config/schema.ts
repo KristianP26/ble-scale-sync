@@ -176,6 +176,7 @@ export const BleSchema = z
      * unset it changes nothing.
      */
     qn_weight_ack: z.boolean().optional().nullable(),
+    qn_a4_prelude: z.boolean().optional().nullable(),
     /**
      * Delete a bond the scale has forgotten and pair again, instead of stopping
      * at the diagnostic (#290, #335).

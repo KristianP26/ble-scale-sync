@@ -214,6 +214,16 @@ export interface AdapterRuntimeConfig {
    * false disables it everywhere.
    */
   qnWeightAck?: boolean;
+  /**
+   * Send the two 0xA4 0x0F frames the Arboleaf vendor app sends between START
+   * and the first live 0x10 frame (`ble.qn_a4_prelude`, #331).
+   *
+   * Off by default and opt-in per install: the frames are replayed verbatim
+   * from one reporter's HCI capture of their own unit, their payload is not
+   * decoded, and every other QN scale in the registry reads today without
+   * them.
+   */
+  qnA4Prelude?: boolean;
 }
 
 /**

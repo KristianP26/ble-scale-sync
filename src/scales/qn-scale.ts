@@ -85,6 +85,38 @@ const CHR_WRITE = uuid16(0xfff2);
 const CHR_NOTIFY_T1 = uuid16(0xffe1);
 const CHR_WRITE_T1 = uuid16(0xffe3);
 
+/**
+ * The two frames the Arboleaf vendor app sends between START (0x22) and the
+ * first live 0x10 weight frame, replayed verbatim from the HCI capture in #331
+ * (Arboleaf CS10E, iOS PacketLogger, identifying data stripped by the
+ * reporter). The scale answers each with `a5 04 <sub-index> <checksum>` and
+ * only then starts streaming.
+ *
+ *   a4 0f 01 21 0a 48 08 f1 0a 33 08 da 08 80 c7
+ *   a4 0f 01 22 06 78 09 f3 07 db 01 c1 01 a5 9a
+ *
+ * Opcode 0xA4, length 0x0F, then 0x01, a sub-index (0x21 then 0x22), ten
+ * payload bytes, and the family's usual sum-of-preceding-bytes checksum, which
+ * both frames satisfy.
+ *
+ * THE PAYLOAD IS NOT DECODED. The five uint16 pairs in each frame look like
+ * per-user calibration or a previous measurement handed back, the same shape as
+ * the 0xA2 weight anchor, so replaying one person's bytes on another person's
+ * scale may or may not be right. That is exactly why this is opt-in
+ * (`ble.qn_a4_prelude`) and off by default: the reporter's own log shows the
+ * add-on going silent precisely where these two frames belong, so it is worth
+ * being able to try, but it is not something to hand the rest of the QN family
+ * on spec. If it works for more than one unit, the payload deserves decoding
+ * before this becomes a dialect default.
+ */
+const A4_PRELUDE: readonly (readonly number[])[] = [
+  [0xa4, 0x0f, 0x01, 0x21, 0x0a, 0x48, 0x08, 0xf1, 0x0a, 0x33, 0x08, 0xda, 0x08, 0x80, 0xc7],
+  [0xa4, 0x0f, 0x01, 0x22, 0x06, 0x78, 0x09, 0xf3, 0x07, 0xdb, 0x01, 0xc1, 0x01, 0xa5, 0x9a],
+];
+
+/** Gap between the two prelude frames, matching the capture's pacing. */
+const A4_PRELUDE_GAP_MS = 200;
+
 // AE00 service UUIDs (newer firmware, e.g. Renpho ES-CS20M)
 const CHR_AE01 = uuid16(0xae01);
 const CHR_AE02 = uuid16(0xae02);
@@ -471,6 +503,9 @@ export class QnScaleAdapter
   /** Fallback timer handle for cancellation when state machine fires normally. */
   private fallbackTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /** Send the undecoded 0xA4 prelude after START (`ble.qn_a4_prelude`, #331). */
+  private a4PreludeEnabled = false;
+
   /** Number of 0x22 stored-data re-queries sent this session. */
   private storedQueryAttempts = 0;
 
@@ -483,6 +518,7 @@ export class QnScaleAdapter
     this.forcedProtocolType = opts.qnProtocolByte ?? null;
     this.forcedReportByte = opts.qnReportByte ?? null;
     this.forcedWeightAck = opts.qnWeightAck ?? null;
+    this.a4PreludeEnabled = opts.qnA4Prelude === true;
   }
 
   /** 0x13 config unit flag: 0x01 kg, 0x02 lb (openScale QNHandler). */
@@ -1352,6 +1388,20 @@ export class QnScaleAdapter
 
     // 0x22 start measurement / stored-data query with echoed protocol type
     await this.writeCmd(this.buildStoredDataQuery());
+
+    // Opt-in only. See A4_PRELUDE for why these bytes are a replay rather than
+    // something built from this user's profile, and why that keeps it off by
+    // default.
+    if (this.a4PreludeEnabled) {
+      for (let i = 0; i < A4_PRELUDE.length; i++) {
+        if (i > 0) await wait(A4_PRELUDE_GAP_MS);
+        await this.writeCmd([...A4_PRELUDE[i]]);
+      }
+      bleLog.debug(
+        'QN: sent the two 0xA4 0x0F prelude frames after START ' +
+          '(ble.qn_a4_prelude, replayed from the #331 capture, payload undecoded)',
+      );
+    }
 
     // Extended dialect only: the scale needs an explicit trigger after START
     // before it will stream 0x10 frames (#235). Gated on the dialect because

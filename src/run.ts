@@ -276,8 +276,16 @@ async function main(): Promise<void> {
     const qnProtocolByte = ctx.config.ble?.qn_protocol_byte ?? undefined;
     const qnReportByte = ctx.config.ble?.qn_report_byte ?? undefined;
     const qnWeightAck = ctx.config.ble?.qn_weight_ack ?? undefined;
+    const qnA4Prelude = ctx.config.ble?.qn_a4_prelude ?? undefined;
     for (const a of adapters)
-      a.configure?.({ bindKey, weightUnit, qnProtocolByte, qnReportByte, qnWeightAck });
+      a.configure?.({
+        bindKey,
+        weightUnit,
+        qnProtocolByte,
+        qnReportByte,
+        qnWeightAck,
+        qnA4Prelude,
+      });
   };
   applyAdapterConfig(ctx.config.ble?.bind_key ?? undefined);
 
