@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.27.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.26.0...v1.27.0) (2026-09-05)
+
+
+### Added
+
+* **scales:** add the Speediance Smart Scale FG2211WBF adapter ([#383](https://github.com/KristianP26/ble-scale-sync/issues/383)) ([83d3cfb](https://github.com/KristianP26/ble-scale-sync/commit/83d3cfb4105370669972b0a160b732af2d64cb7e))
+
 ## [1.26.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.25.0...v1.26.0) (2026-08-26)
 
 
