@@ -176,6 +176,15 @@ describe('XiaomiS400Adapter.parseServiceData', () => {
     expect(a.parseServiceData('fe95', frame)).toEqual({ weight: 82.4, impedance: 512.3 });
   });
 
+  // The class comment calls ble.scale_mac the fallback; this pins the code to
+  // that, so a typo in the config cannot beat a MAC actually seen on air.
+  it('prefers the MAC seen on air over a wrong one in the config', () => {
+    const a = configured('AA:BB:CC:DD:EE:FF');
+    expect(a.parseServiceData('fe95', IDLE_BEACON)).toBeNull();
+    const frame = encryptFrame(measurementObject({ kg: 82.4, ohm: 512.3 }), DUMMY_KEY, MAC_FRAME);
+    expect(a.parseServiceData('fe95', frame)).toEqual({ weight: 82.4, impedance: 512.3 });
+  });
+
   it('returns null and warns once when the MAC is unknown', () => {
     const a = configured();
     const frame = encryptFrame(measurementObject({ kg: 82.4 }), DUMMY_KEY, MAC_FRAME);

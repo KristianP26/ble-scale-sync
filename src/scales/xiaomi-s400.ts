@@ -183,7 +183,12 @@ export class XiaomiS400Adapter implements ScaleAdapterCore, BroadcastSource {
         }
         return null;
       }
-      const mac = frameMac ?? this.configuredMac ?? this.cachedMac;
+      // Observed before configured: the class comment calls ble.scale_mac the
+      // fallback, and a MAC actually seen on air beats one typed into a config
+      // file. With the old order a typo in scale_mac made every frame fail to
+      // decrypt even when the right MAC was already cached from an idle beacon,
+      // and the warning then pointed at the bind key.
+      const mac = frameMac ?? this.cachedMac ?? this.configuredMac;
       if (!mac) {
         if (!this.warnedNoMac) {
           this.warnedNoMac = true;
