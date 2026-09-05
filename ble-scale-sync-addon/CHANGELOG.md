@@ -7,6 +7,13 @@
 The add-on version always matches the application version, so every entry below
 applies to this add-on.
 
+## [1.27.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.26.0...v1.27.0) (2026-09-05)
+
+
+### Added
+
+* **scales:** add the Speediance Smart Scale FG2211WBF adapter ([#383](https://github.com/KristianP26/ble-scale-sync/issues/383)) ([83d3cfb](https://github.com/KristianP26/ble-scale-sync/commit/83d3cfb4105370669972b0a160b732af2d64cb7e))
+
 ## [1.26.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.25.0...v1.26.0) (2026-08-26)
 
 
