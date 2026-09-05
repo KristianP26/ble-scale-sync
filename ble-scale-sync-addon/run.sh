@@ -113,6 +113,12 @@ else
   GARMIN_ENABLED=$(opt_bool garmin_enabled)
   GARMIN_EMAIL=$(opt garmin_email)
   GARMIN_PASSWORD=$(opt garmin_password)
+  GARMIN_WEIGHT_ONLY=$(opt_bool garmin_weight_only)
+  # opt_bool echoes the raw option, and this one is interpolated unquoted into
+  # the generated YAML. The add-on schema declares it bool?, but a hand-edited
+  # options.json is not bound by that, and a stray string would produce YAML
+  # that fails to parse. Anything that is not exactly "true" is false.
+  [ "$GARMIN_WEIGHT_ONLY" = "true" ] || GARMIN_WEIGHT_ONLY=false
 
   SCAN_COOLDOWN=$(opt_int scan_cooldown 30)
   DEBUG=$(opt_bool debug)
@@ -298,6 +304,7 @@ YAML
     email: "$(yaml_escape "$GARMIN_EMAIL")"
     password: "$(yaml_escape "$GARMIN_PASSWORD")"
     token_dir: /data/garmin-tokens
+    weight_only: $GARMIN_WEIGHT_ONLY
 YAML
     fi
 

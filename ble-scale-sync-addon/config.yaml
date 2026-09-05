@@ -64,6 +64,7 @@ options:
   garmin_enabled: false
   garmin_email: ''
   garmin_password: ''
+  garmin_weight_only: false
   scan_cooldown: 30
   reset_bluetooth: true
   debug: false
@@ -98,6 +99,7 @@ schema:
   garmin_enabled: bool
   garmin_email: str?
   garmin_password: password?
+  garmin_weight_only: bool?
   scan_cooldown: int(5,3600)
   reset_bluetooth: bool
   debug: bool
