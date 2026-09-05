@@ -10,6 +10,7 @@ import type {
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
 import { uuid16, buildPayload } from './body-comp-helpers.js';
+import { bleLog } from '../ble/types.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
 // Beurer/Sanitas custom BLE service + characteristic
@@ -161,6 +162,22 @@ export class BeurerSanitasScaleAdapter
    * (unregistered user) falls back to the weight-only stability window.
    */
   parseNotification(data: Buffer): ScaleReading | null {
+    // Latch the variant off the frame itself, not only off the advertised name.
+    // `matches()` is the only other place that sets it, and it does not always
+    // run: `ble.force_scale_adapter` replaces the matcher wholesale, and a unit
+    // advertising a name that is not in KNOWN_NAMES never reaches it either. A
+    // BF710/SBF70/SBF75 opens every frame with 0xE7, while a BF700/BF800 frame
+    // opens with a Unix timestamp, whose top byte does not reach 0xE7 until
+    // 2092. Without this an SBF70 fell through to the BF700 layout, where the
+    // 5-byte live frames are too short to parse and the 0x59 finalize frame
+    // decodes as a constant 12.80 kg (#384, same symptom as #112).
+    if (!this.isBf710Type && data.length >= 2 && data[0] === 0xe7) {
+      this.isBf710Type = true;
+      bleLog.debug(
+        'Beurer/Sanitas: 0xE7 frame seen, switching to the BF710/SBF70/SBF75 frame layout',
+      );
+    }
+
     if (this.isBf710Type) {
       return this.parseBf710Notification(data);
     }
