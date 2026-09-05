@@ -1,10 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { Silvergear108Adapter } from '../../src/scales/silvergear-108.js';
 import { adapters } from '../../src/scales/index.js';
 import { resolveAdapter } from '../../src/scales/resolve.js';
 import { buildPayload } from '../../src/scales/body-comp-helpers.js';
 import { defaultProfile } from '../helpers/scale-test-utils.js';
 import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
+import { bleLog } from '../../src/ble/types.js';
 
 /**
  * Every frame below is lifted verbatim from the two iOS PacketLogger captures
@@ -94,6 +95,29 @@ describe('Silvergear108Adapter (#297)', () => {
     // weight bias a measurement rather than a fit to one session.
     it('reads the idle frame shared by both captures as zero, and does not publish it', () => {
       expect(adapter.parseBroadcast(mfg(IDLE))).toBeNull();
+    });
+
+    // The node-ble broadcast path re-reads BlueZ's cached advertisement on a
+    // timer, so an unchanged frame reaches parseBroadcast many times (#372).
+    it('logs a settling weight once, not once per re-read of the same advertisement', () => {
+      const spy = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      spy.mockClear(); // spyOn returns the existing mock when already spied
+      const adapter = new Silvergear108Adapter();
+      const frame = mfg(SETTLING_108);
+      for (let i = 0; i < 5; i++) adapter.parseBroadcast(frame);
+      const settlingLines = spy.mock.calls.filter((c) => String(c[0]).includes('settling'));
+      expect(settlingLines).toHaveLength(1);
+    });
+
+    it('logs again once the settling weight actually changes', () => {
+      const spy = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      spy.mockClear(); // spyOn returns the existing mock when already spied
+      const adapter = new Silvergear108Adapter();
+      adapter.parseBroadcast(mfg(SETTLING_108));
+      adapter.parseBroadcast(mfg(SETTLING_108));
+      adapter.parseBroadcast(mfg(IDLE));
+      const settlingLines = spy.mock.calls.filter((c) => String(c[0]).includes('settling'));
+      expect(settlingLines).toHaveLength(2);
     });
 
     it('drops the settling stream even when it carries the final weight', () => {
