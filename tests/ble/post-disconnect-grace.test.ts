@@ -27,7 +27,7 @@ describe('RSSI_UNAVAILABLE', () => {
 });
 
 /**
- * The continuous-mode loop in src/index.ts gates application of the floor on
+ * The continuous-mode loop in src/run.ts gates application of the floor on
  * the resolved handler key (only `node-ble` hits the dying-peer GATT stall).
  * Mirror that same predicate here so the contract is pinned by tests.
  */

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { isLoopback } from '../ble/loopback.js';
 import { isValidScaleId, SCALE_ID_HINT } from '../ble/scale-id.js';
+import { cliCommand } from '../cli-invocation.js';
 
 // --- Sub-schemas ---
 
@@ -49,6 +50,28 @@ export const EsphomeProxySchema = z
   });
 
 export type EsphomeEndpointConfig = z.infer<typeof EsphomeEndpointSchema>;
+
+/**
+ * Home Assistant as the BLE radio: the app subscribes to HA's
+ * `bluetooth/subscribe_advertisements` websocket stream, which carries every
+ * advertisement any HA Bluetooth scanner hears (local adapter, ESPHome proxies,
+ * SMLIGHT SLZB, Shelly). Passive only; scales that need a GATT connection are
+ * not reachable this way.
+ */
+export const HaBluetoothSchema = z.object({
+  url: z
+    .string()
+    .min(1, 'Home Assistant URL is required')
+    .refine((v) => /^(https?|wss?):\/\//.test(v), {
+      message: 'Must start with http://, https://, ws:// or wss://',
+    }),
+  // Long-lived access token of an administrator user; the subscription is
+  // admin-only. Keep it in .env and reference it as ${HA_TOKEN}.
+  token: z.string().min(1, 'Home Assistant long-lived access token is required'),
+  // Optional: only accept advertisements heard by this HA scanner (its `source`
+  // id as shown in HA's Bluetooth advertisement monitor, e.g. the proxy's MAC).
+  source: z.string().optional().nullable(),
+});
 
 export const MqttProxySchema = z
   .object({
@@ -108,7 +131,7 @@ export const BleSchema = z
       .optional()
       .nullable(),
     noble_driver: z.enum(['abandonware', 'stoprocent']).optional().nullable(),
-    handler: z.enum(['auto', 'mqtt-proxy', 'esphome-proxy']).default('auto'),
+    handler: z.enum(['auto', 'mqtt-proxy', 'esphome-proxy', 'ha-bluetooth']).default('auto'),
     adapter: z
       .string()
       .regex(/^hci\d+$/, 'Must be a Linux HCI adapter name (e.g., hci0, hci1)')
@@ -175,6 +198,7 @@ export const BleSchema = z
      * unset it changes nothing.
      */
     qn_weight_ack: z.boolean().optional().nullable(),
+    qn_a4_prelude: z.boolean().optional().nullable(),
     /**
      * Delete a bond the scale has forgotten and pair again, instead of stopping
      * at the diagnostic (#290, #335).
@@ -209,6 +233,7 @@ export const BleSchema = z
     proxy_liveness_timeout_min: z.number().int().min(0).max(1440).optional().nullable(),
     mqtt_proxy: MqttProxySchema.optional(),
     esphome_proxy: EsphomeProxySchema.optional(),
+    ha_bluetooth: HaBluetoothSchema.optional(),
   })
   .refine((ble) => ble.handler !== 'mqtt-proxy' || ble.mqtt_proxy !== undefined, {
     message: 'mqtt_proxy config is required when handler is "mqtt-proxy"',
@@ -217,6 +242,10 @@ export const BleSchema = z
   .refine((ble) => ble.handler !== 'esphome-proxy' || ble.esphome_proxy !== undefined, {
     message: 'esphome_proxy config is required when handler is "esphome-proxy"',
     path: ['esphome_proxy'],
+  })
+  .refine((ble) => ble.handler !== 'ha-bluetooth' || ble.ha_bluetooth !== undefined, {
+    message: 'ha_bluetooth config is required when handler is "ha-bluetooth"',
+    path: ['ha_bluetooth'],
   });
 // NOTE: force_scale_adapter also requires a scale_mac, but that pairing is NOT
 // checked here. Schema validation runs before applyEnvOverrides (yaml-load.ts),
@@ -339,6 +368,7 @@ export type WeightUnit = 'kg' | 'lbs';
 
 export type MqttProxyConfig = z.infer<typeof MqttProxySchema>;
 export type EsphomeProxyConfig = z.infer<typeof EsphomeProxySchema>;
+export type HaBluetoothConfig = z.infer<typeof HaBluetoothSchema>;
 export type BleConfig = z.infer<typeof BleSchema>;
 export type ScaleConfig = z.infer<typeof ScaleSchema>;
 export type ExporterEntry = z.infer<typeof ExporterEntrySchema>;
@@ -360,7 +390,9 @@ export function formatConfigError(error: z.ZodError): string {
     lines.push('');
   }
 
-  lines.push("Run 'npm run validate' to check your config, or 'npm run setup' to reconfigure.");
+  lines.push(
+    `Run '${cliCommand('validate')}' to check your config, or '${cliCommand('setup')}' to reconfigure.`,
+  );
 
   return lines.join('\n');
 }

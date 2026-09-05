@@ -175,8 +175,15 @@ export interface ConnectionContext {
  * S800 MiBeacon bind key. Adapters that do not need it omit `configure`.
  */
 export interface AdapterRuntimeConfig {
-  /** MiBeacon bind key (32 hex chars) for broadcast-encrypted scales (Xiaomi S800). */
+  /** MiBeacon bind key (32 hex chars) for broadcast-encrypted scales (Xiaomi S800 / S400). */
   bindKey?: string;
+  /**
+   * Effective scale address (`ble.scale_mac` or `SCALE_MAC`). MiBeacon adapters
+   * use it as the AES-CCM nonce MAC when a frame omits its own (the S400
+   * measurement frame) and no MAC-carrying frame was seen yet. Ignored by
+   * adapters that do not decrypt broadcasts.
+   */
+  scaleMac?: string;
   /**
    * Configured display unit (`scale.weight_unit`). Adapters whose protocol tells
    * the scale which unit to show (e.g. the QN 0x13 config command) honour this so
@@ -214,6 +221,16 @@ export interface AdapterRuntimeConfig {
    * false disables it everywhere.
    */
   qnWeightAck?: boolean;
+  /**
+   * Send the two 0xA4 0x0F frames the Arboleaf vendor app sends between START
+   * and the first live 0x10 frame (`ble.qn_a4_prelude`, #331).
+   *
+   * Off by default and opt-in per install: the frames are replayed verbatim
+   * from one reporter's HCI capture of their own unit, their payload is not
+   * decoded, and every other QN scale in the registry reads today without
+   * them.
+   */
+  qnA4Prelude?: boolean;
 }
 
 /**

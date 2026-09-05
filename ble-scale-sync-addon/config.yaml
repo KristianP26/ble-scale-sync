@@ -41,6 +41,7 @@ options:
   qn_protocol_byte: ''
   qn_report_byte: ''
   qn_weight_ack: ''
+  qn_a4_prelude: ''
   auto_clear_stale_bond: false
   proxy_liveness_timeout_min: 30
   weight_unit: kg
@@ -63,6 +64,7 @@ options:
   garmin_enabled: false
   garmin_email: ''
   garmin_password: ''
+  garmin_weight_only: false
   scan_cooldown: 30
   reset_bluetooth: true
   debug: false
@@ -74,6 +76,7 @@ schema:
   qn_protocol_byte: str?
   qn_report_byte: str?
   qn_weight_ack: str?
+  qn_a4_prelude: str?
   auto_clear_stale_bond: bool?
   proxy_liveness_timeout_min: int(0,1440)?
   weight_unit: list(kg|lbs)
@@ -96,6 +99,7 @@ schema:
   garmin_enabled: bool
   garmin_email: str?
   garmin_password: password?
+  garmin_weight_only: bool?
   scan_cooldown: int(5,3600)
   reset_bluetooth: bool
   debug: bool

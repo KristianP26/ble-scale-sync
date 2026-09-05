@@ -416,6 +416,36 @@ global_exporters:
     expect(createExporterFromEntry(byType.telegram).reportsExports).toBe(true);
   });
 
+  it('carries GARMIN_WEIGHT_ONLY into the .env Garmin exporter entry', () => {
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => String(p).endsWith('.env'));
+    vi.stubEnv('USER_HEIGHT', '183');
+    vi.stubEnv('USER_BIRTH_DATE', '1990-06-15');
+    vi.stubEnv('USER_GENDER', 'male');
+    vi.stubEnv('USER_IS_ATHLETE', 'true');
+    vi.stubEnv('EXPORTERS', 'garmin');
+    vi.stubEnv('GARMIN_WEIGHT_ONLY', 'true');
+
+    const { config } = loadAppConfig();
+    const garmin = config.global_exporters!.find((e) => e.type === 'garmin');
+    expect(garmin).toMatchObject({ weight_only: true });
+    // The entry has to survive the factory too, not just the loader.
+    expect(() => createExporterFromEntry(garmin!)).not.toThrow();
+  });
+
+  it('defaults the .env Garmin entry to weight_only false', () => {
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => String(p).endsWith('.env'));
+    vi.stubEnv('USER_HEIGHT', '183');
+    vi.stubEnv('USER_BIRTH_DATE', '1990-06-15');
+    vi.stubEnv('USER_GENDER', 'male');
+    vi.stubEnv('USER_IS_ATHLETE', 'true');
+    vi.stubEnv('EXPORTERS', 'garmin');
+
+    const { config } = loadAppConfig();
+    expect(config.global_exporters!.find((e) => e.type === 'garmin')).toMatchObject({
+      weight_only: false,
+    });
+  });
+
   it('exits when no config source exists', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(false);
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);

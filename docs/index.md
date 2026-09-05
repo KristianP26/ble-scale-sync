@@ -106,14 +106,18 @@ Add-ons are not available on **HA Container** or **HA Core** installs (no Superv
 
 Runs natively on all major desktop and server operating systems. No containers, no Supervisor required.
 
+Zero clone, if you already have Node.js v22+:
+
 ```bash
-git clone https://github.com/KristianP26/ble-scale-sync.git
-cd ble-scale-sync && npm install
-npm run setup    # interactive wizard: scale discovery, user profile, exporters
-CONTINUOUS_MODE=true npm start   # always-on, listens for scale indefinitely
+npx ble-scale-sync setup                 # interactive wizard, writes ./config.yaml
+CONTINUOUS_MODE=true npx ble-scale-sync  # always-on, listens for scale indefinitely
 ```
 
-Requires Node.js v22+ and a BLE adapter. For always-on deployments, create a systemd service:
+`config.yaml` and `.env` are read from the directory you run the command in. Requires Node.js v22+ and a BLE adapter.
+
+Prefer a permanent install, a git clone, or the full command list? See the [Standalone install guide](/guide/getting-started#standalone).
+
+For always-on deployments, create a systemd service:
 
 ::: details Example: /etc/systemd/system/ble-scale.service
 
@@ -129,7 +133,7 @@ WorkingDirectory=/home/pi/ble-scale-sync
 EnvironmentFile=/home/pi/ble-scale-sync/.env
 Environment="CONTINUOUS_MODE=true"
 Environment="PATH=/home/pi/ble-scale-sync/venv/bin:/usr/local/bin:/usr/bin:/bin"
-ExecStart=/usr/bin/npm start
+ExecStart=/usr/bin/node dist/index.js
 Restart=always
 RestartSec=5
 
@@ -138,8 +142,11 @@ WantedBy=multi-user.target
 ```
 
 ```bash
+npm run build                # compile to dist/ (the service runs plain node)
 sudo systemctl enable --now ble-scale.service
 ```
+
+The unit runs `node dist/index.js` rather than `npm start`, so the host needs no TypeScript runner at runtime. Run `npm run build` after every `git pull`.
 
 :::
 

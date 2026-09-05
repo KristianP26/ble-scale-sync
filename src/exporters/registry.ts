@@ -32,6 +32,37 @@ interface ExporterRegistryEntry {
   factory: (config: Record<string, unknown>) => Exporter;
 }
 
+const TRUE_STRINGS = new Set(['true', 'yes', '1', 'on']);
+const FALSE_STRINGS = new Set(['false', 'no', '0', 'off', '']);
+
+/**
+ * Read an optional boolean field that must not be guessed at.
+ *
+ * `ExporterEntrySchema` is `.passthrough()`, so YAML hands the factory whatever
+ * the user typed, and `${ENV_VAR}` references resolve to STRINGS before the
+ * schema ever sees them (`resolveEnvReferences`). A bare `as boolean` cast plus
+ * a truthiness test therefore reads `weight_only: "false"` as true — the exact
+ * inverse of what was written, silently. Accept the boolean, accept the usual
+ * string spellings, and throw on anything else rather than pick a side.
+ */
+function optionalBool(
+  config: Record<string, unknown>,
+  type: string,
+  key: string,
+): boolean | undefined {
+  const value = config[key];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const lower = value.trim().toLowerCase();
+    if (TRUE_STRINGS.has(lower)) return true;
+    if (FALSE_STRINGS.has(lower)) return false;
+  }
+  throw new Error(
+    `Exporter "${type}" field "${key}" must be true or false, got '${String(value)}'. Check your config.yaml.`,
+  );
+}
+
 /**
  * Read a required config field, throwing a clear error when it is missing or
  * empty. Surfaces hand-written `config.yaml` mistakes instead of letting an
@@ -57,6 +88,7 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
         email: config.email as string | undefined,
         password: config.password as string | undefined,
         token_dir: config.token_dir as string | undefined,
+        weight_only: optionalBool(config, 'garmin', 'weight_only'),
       }),
   },
   {
@@ -94,7 +126,7 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
       const influxConfig: InfluxDbConfig = {
         url: requireField(config, 'influxdb', 'url'),
         token: requireField(config, 'influxdb', 'token'),
-        org: requireField(config, 'influxdb', 'org'),
+        org: (config.org as string | undefined) || undefined,
         bucket: requireField(config, 'influxdb', 'bucket'),
         measurement: (config.measurement as string) ?? 'body_composition',
       };

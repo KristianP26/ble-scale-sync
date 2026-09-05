@@ -221,4 +221,27 @@ describe('diffRestartRequired', () => {
     expect(flat).not.toContain('bbb');
     expect(flat).not.toContain('"pw"');
   });
+
+  it('redacts ha_bluetooth.token and reports url changes', () => {
+    const a = baseConfig({
+      ble: { handler: 'ha-bluetooth', ha_bluetooth: { url: 'http://ha:8123', token: 'aaa' } },
+    });
+    const b = baseConfig({
+      ble: { handler: 'ha-bluetooth', ha_bluetooth: { url: 'http://ha2:8123', token: 'bbb' } },
+    });
+    const diff = diffRestartRequired(a, b);
+    expect(diff.find((f) => f.key === 'ble.ha_bluetooth.url')).toEqual({
+      key: 'ble.ha_bluetooth.url',
+      oldValue: 'http://ha:8123',
+      newValue: 'http://ha2:8123',
+    });
+    expect(diff.find((f) => f.key === 'ble.ha_bluetooth.token')).toEqual({
+      key: 'ble.ha_bluetooth.token',
+      oldValue: '<redacted>',
+      newValue: '<redacted>',
+    });
+    const flat = JSON.stringify(diff);
+    expect(flat).not.toContain('aaa');
+    expect(flat).not.toContain('bbb');
+  });
 });

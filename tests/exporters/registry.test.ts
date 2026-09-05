@@ -103,14 +103,16 @@ describe('EXPORTER_SCHEMAS', () => {
     expect(urlField!.required).toBe(true);
   });
 
-  it('influxdb schema has 4 required fields', () => {
+  // `org` is deliberately not required: InfluxDB v3 has no organizations, and
+  // the v2-compatible write endpoint ignores the parameter.
+  it('influxdb schema has 3 required fields, org not among them', () => {
     const influxdb = EXPORTER_SCHEMAS.find((s) => s.name === 'influxdb');
     const requiredFields = influxdb!.fields.filter((f) => f.required);
-    expect(requiredFields).toHaveLength(4);
+    expect(requiredFields).toHaveLength(3);
     const keys = requiredFields.map((f) => f.key);
     expect(keys).toContain('url');
     expect(keys).toContain('token');
-    expect(keys).toContain('org');
+    expect(keys).not.toContain('org');
     expect(keys).toContain('bucket');
   });
 

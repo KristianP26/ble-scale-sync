@@ -12,6 +12,18 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      # Publishing to npm uses trusted publishing (OIDC), so there is no token
+      # to detect. The gate is a repository variable the maintainer sets once,
+      # AFTER the package exists on npm and its Trusted Publisher is configured:
+      # a trusted publisher can only be configured in an existing package's
+      # settings, so the very first publish is a manual one. Without this gate
+      # the first release would fail the job rather than skip it.
+      # It is computed here rather than in `jobs.<id>.if` to keep the same shape
+      # as the release outputs above.
+      npm_publish_enabled: ${{ vars.NPM_PUBLISH_ENABLED == 'true' }}
     steps:
       # Token strategy:
       # - `RELEASE_PLEASE_TOKEN` (optional PAT with `repo` + `workflow` scopes)
@@ -71,3 +83,53 @@ jobs:
           git add ble-scale-sync-addon/CHANGELOG.md
           git commit -m 'chore(addon): sync the add-on changelog from the project changelog'
           git push origin "HEAD:$BRANCH"
+
+  npm-publish:
+    needs: release-please
+    # Job outputs are strings: compare against "true", never rely on
+    # truthiness. Until the maintainer sets the NPM_PUBLISH_ENABLED repository
+    # variable the whole job shows as skipped instead of failing, which is what
+    # has to happen for every release before the package exists on npm.
+    if: >-
+      needs.release-please.outputs.release_created == 'true' &&
+      needs.release-please.outputs.npm_publish_enabled == 'true'
+    runs-on: ubuntu-latest
+    # A job-level permissions block REPLACES the workflow-level one, so the
+    # release-please job above keeps contents:write / pull-requests:write and
+    # only this job gets the OIDC token. id-token: write is what both trusted
+    # publishing and provenance need; there is no npm token anywhere.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      # Trusted publishing needs npm >= 11.5.1, and Node 22 still bundles
+      # npm 10.x. Pinned to the major so a future npm 12 cannot change the
+      # publish semantics of a release build without an edit here.
+      - name: Use an npm that can publish through OIDC
+        run: npm install -g npm@^11.5.1
+
+      # Full install (dev included): prepublishOnly runs `npm run build`, which
+      # needs typescript. --ignore-scripts keeps the native BLE stacks from
+      # compiling here; the tarball only carries the compiled dist/.
+      # Do NOT add --omit=optional: three type-only imports make the stacks a
+      # hard requirement for tsc.
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      # No NODE_AUTH_TOKEN: the registry authenticates this run through the
+      # trusted publisher configured for the package (repository plus this
+      # workflow filename, both case sensitive). --ignore-scripts is never
+      # passed here, or prepublishOnly would not run and the tarball would ship
+      # without dist/.
+      - name: Publish to npm
+        run: npm publish --provenance --access public

@@ -49,13 +49,15 @@ def get_garmin_client(token_dir=None):
     if not os.path.isdir(token_dir):
         raise RuntimeError(
             f"Token directory not found: {token_dir}. "
-            "Run 'npm run setup-garmin' first."
+            "Run 'ble-scale-sync setup-garmin' "
+            "(or 'npm run setup-garmin' from a checkout) first."
         )
 
     if has_legacy_only_tokens(token_dir):
         raise RuntimeError(
             "Token format changed in garminconnect 0.3.x. "
-            "Run 'npm run setup-garmin' to re-authenticate."
+            "Run 'ble-scale-sync setup-garmin' "
+            "(or 'npm run setup-garmin' from a checkout) to re-authenticate."
         )
 
     garmin = Garmin()
@@ -74,27 +76,42 @@ def upload(payload, token_dir=None):
     if ts:
         log(f"[Garmin] Back-dating measurement to {ts}")
 
-    log("[Garmin] Uploading body composition...")
+    # When the exporter is configured weight_only, every derived metric is sent
+    # as None. garminconnect encodes None as the FIT basetype's "invalid"
+    # marker, which is how the format says "no value here" - Garmin records the
+    # weight and leaves the rest blank rather than storing a zero.
+    weight_only = bool(payload.get("weight_only"))
+
+    def derived(key):
+        return None if weight_only else payload.get(key)
+
+    if weight_only:
+        log("[Garmin] Uploading weight only (derived metrics suppressed)...")
+    else:
+        log("[Garmin] Uploading body composition...")
+
     garmin.add_body_composition(
         timestamp=ts,
         weight=payload["weight"],
-        percent_fat=payload["bodyFatPercent"],
-        percent_hydration=payload["waterPercent"],
-        bone_mass=payload["boneMass"],
-        muscle_mass=payload["muscleMass"],
-        visceral_fat_rating=payload["visceralFat"],
-        physique_rating=payload["physiqueRating"],
-        metabolic_age=payload["metabolicAge"],
-        bmi=payload["bmi"],
+        percent_fat=derived("bodyFatPercent"),
+        percent_hydration=derived("waterPercent"),
+        bone_mass=derived("boneMass"),
+        muscle_mass=derived("muscleMass"),
+        visceral_fat_rating=derived("visceralFat"),
+        physique_rating=derived("physiqueRating"),
+        metabolic_age=derived("metabolicAge"),
+        bmi=derived("bmi"),
     )
 
     log("[Garmin] Upload successful!")
+    # Echoes what was actually uploaded, so a weight_only run does not report
+    # metrics Garmin never received.
     return {
         "weight": payload["weight"],
-        "bodyFatPercent": payload["bodyFatPercent"],
-        "muscleMass": payload["muscleMass"],
-        "visceralFat": payload["visceralFat"],
-        "physiqueRating": payload["physiqueRating"],
+        "bodyFatPercent": derived("bodyFatPercent"),
+        "muscleMass": derived("muscleMass"),
+        "visceralFat": derived("visceralFat"),
+        "physiqueRating": derived("physiqueRating"),
     }
 
 

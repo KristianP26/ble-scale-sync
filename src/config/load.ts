@@ -1,10 +1,11 @@
 import { createLogger } from '../logger.js';
 import type { AppConfig } from './schema.js';
-import { DEFAULT_CONFIG_PATH } from './paths.js';
+import { defaultConfigPath } from './paths.js';
 import { detectConfigSource } from './source-detect.js';
 import type { ConfigSource } from './source-detect.js';
 import { loadYamlConfig } from './yaml-load.js';
 import { loadEnvConfig } from './env-load.js';
+import { cliCommand } from '../cli-invocation.js';
 
 // Re-export the focused-module public API so existing callers and tests can
 // keep importing from './config/load.js'. This file is now a thin
@@ -40,9 +41,13 @@ export function loadAppConfig(configPath?: string): LoadedConfig {
 
   switch (source) {
     case 'yaml': {
-      const yamlPath = configPath ?? DEFAULT_CONFIG_PATH;
-      log.info(`Loading config from ${configPath ?? 'config.yaml'}`);
-      return { source: 'yaml', config: loadYamlConfig(configPath), configPath: yamlPath };
+      const yamlPath = configPath ?? defaultConfigPath();
+      // The resolved path, not the literal name: with no --config it can be the
+      // working directory's file or the package root's, and the log has to say
+      // which one was read. loadYamlConfig gets the same path rather than
+      // resolving the default a second time.
+      log.info(`Loading config from ${yamlPath}`);
+      return { source: 'yaml', config: loadYamlConfig(yamlPath), configPath: yamlPath };
     }
 
     case 'env':
@@ -53,8 +58,8 @@ export function loadAppConfig(configPath?: string): LoadedConfig {
       log.error('No configuration found.');
       log.error('');
       log.error('Create one of:');
-      log.error('  config.yaml  — recommended (run: npm run setup)');
-      log.error('  .env         — legacy single-user format (see .env.example)');
+      log.error(`  config.yaml  recommended, run: ${cliCommand('setup')}`);
+      log.error('  .env         legacy single-user format (see .env.example)');
       process.exit(1);
   }
 }

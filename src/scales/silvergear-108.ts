@@ -204,6 +204,9 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
     return { weight: frame.weight };
   }
 
+  /** Last settling weight logged, so a re-polled advertisement logs once. */
+  private lastSettlingKg: number | null = null;
+
   parseBroadcast(manufacturerData: Buffer): ScaleReading | null {
     if (manufacturerData.length !== MFG_LEN) return null;
     const p = manufacturerData.subarray(PAYLOAD_OFFSET);
@@ -237,9 +240,19 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
     // showed. It is surfaced through `parseLiveBroadcast` instead, whose return
     // type cannot reach an exporter.
     if ((flags & FLAG_SETTLED) === 0) {
-      bleLog.debug(`Silvergear settling: ${weight.toFixed(3)} kg`);
+      // Log the value, not the poll. The node-ble broadcast path re-reads
+      // BlueZ's cached ManufacturerData on a timer as a fallback for
+      // PropertiesChanged, so an unchanged advertisement is re-parsed several
+      // times a second. Printing each one produced pages of an identical line
+      // and made a frozen advertisement indistinguishable from a live settling
+      // stream, which is the whole question when a scale never settles (#372).
+      if (weight !== this.lastSettlingKg) {
+        this.lastSettlingKg = weight;
+        bleLog.debug(`Silvergear settling: ${weight.toFixed(3)} kg`);
+      }
       return null;
     }
+    this.lastSettlingKg = null;
     if (weight < WEIGHT_MIN_KG || weight > WEIGHT_MAX_KG) return null;
     const unit = UNIT_NAMES[p[5] & UNIT_MASK] ?? `0x${(p[5] & UNIT_MASK).toString(16)}`;
     bleLog.debug(`Silvergear settled: ${weight.toFixed(3)} kg (scale is displaying ${unit})`);
