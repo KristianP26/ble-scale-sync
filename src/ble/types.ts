@@ -5,12 +5,7 @@ import type {
   ScaleAuth,
   LiveWeight,
 } from '../interfaces/scale-adapter.js';
-import type {
-  WeightUnit,
-  MqttProxyConfig,
-  EsphomeProxyConfig,
-  HaBluetoothConfig,
-} from '../config/schema.js';
+import type { WeightUnit, MqttProxyConfig, EsphomeProxyConfig } from '../config/schema.js';
 import { createLogger } from '../logger.js';
 import { errMsg } from '../utils/error.js';
 export { errMsg };
@@ -124,7 +119,7 @@ export const IMPEDANCE_GRACE_MS = 12_000;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type BleHandlerName = 'auto' | 'mqtt-proxy' | 'esphome-proxy' | 'ha-bluetooth';
+export type BleHandlerName = 'auto' | 'mqtt-proxy' | 'esphome-proxy';
 
 export interface ScanOptions {
   targetMac?: string;
@@ -142,7 +137,6 @@ export interface ScanOptions {
   bleHandler?: BleHandlerName;
   mqttProxy?: MqttProxyConfig;
   esphomeProxy?: EsphomeProxyConfig;
-  haBluetooth?: HaBluetoothConfig;
   bleAdapter?: string;
   /** Override RAW_READING_TIMEOUT_MS (seconds of silence) for one session (ble.session_timeout_sec, #83). */
   readingTimeoutMs?: number;

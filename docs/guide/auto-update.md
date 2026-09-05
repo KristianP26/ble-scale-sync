@@ -179,15 +179,13 @@ echo "Updating from $LOCAL to $REMOTE..."
 # Fast-forward only: refuse divergent history to protect local edits
 git merge --ff-only origin/main
 
-# Reinstall when package.json or package-lock.json changed. A full install, not
-# --omit=dev: the build needs TypeScript, which is a devDependency.
+# Reinstall only if package.json or package-lock.json changed
 if git diff --name-only "$LOCAL" "$REMOTE" | grep -qE '^(package(-lock)?\.json)$'; then
-  npm ci
+  npm ci --omit=dev
 fi
 
-# Compile to dist/ (the service runs `node dist/index.js`). tsc fails the script
-# on a type error, so this doubles as the sanity gate before restart.
-npm run build
+# Cheap sanity gate before restart
+npx tsc --noEmit
 
 # Restart; systemd keeps the previous unit running if the new one fails to boot
 sudo systemctl restart ble-scale.service

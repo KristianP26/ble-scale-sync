@@ -17,7 +17,7 @@ Exporters are configured in `global_exporters` (shared by all users). For multi-
 | ------------------------------- | ------------------------------------------------------ |
 | [**Garmin Connect**](#garmin)   | Automatic body composition upload, no phone app needed |
 | [**MQTT**](#mqtt)               | Home Assistant auto-discovery with 10 sensors, LWT     |
-| [**InfluxDB**](#influxdb)       | Time-series database (v2 and v3)                       |
+| [**InfluxDB**](#influxdb)       | Time-series database (v2 write API)                    |
 | [**Webhook**](#webhook)         | Any HTTP endpoint (n8n, Make, Zapier, custom APIs)     |
 | [**Ntfy**](#ntfy)               | Push notifications to phone/desktop                    |
 | [**Telegram**](#telegram)       | Send measurement notifications to a Telegram chat      |
@@ -31,12 +31,11 @@ Exporters are configured in `global_exporters` (shared by all users). For multi-
 
 Automatic body composition upload to Garmin Connect, no phone app needed. Uses a Python subprocess with cached authentication tokens.
 
-| Field         | Required | Default            | Description                                                    |
-| ------------- | -------- | ------------------ | -------------------------------------------------------------- |
-| `email`       | Yes      | (none)             | Garmin account email                                           |
-| `password`    | Yes      | (none)             | Garmin account password                                        |
-| `token_dir`   | No       | `~/.garmin_tokens` | Directory for cached auth tokens                               |
-| `weight_only` | No       | `false`            | Upload the weight alone, leaving every derived metric unset     |
+| Field       | Required | Default            | Description                      |
+| ----------- | -------- | ------------------ | -------------------------------- |
+| `email`     | Yes      | (none)             | Garmin account email             |
+| `password`  | Yes      | (none)             | Garmin account password          |
+| `token_dir` | No       | `~/.garmin_tokens` | Directory for cached auth tokens |
 
 ```yaml
 global_exporters:
@@ -44,21 +43,6 @@ global_exporters:
     email: '${GARMIN_EMAIL}'
     password: '${GARMIN_PASSWORD}'
 ```
-
-::: tip Weight only
-Set `weight_only: true` to record just the weight and leave BMI, body fat, water, bone mass, muscle mass, visceral fat, physique rating and metabolic age unset in Garmin Connect. Useful when you trust the scale's weight but not its bioimpedance estimates. In continuous mode the config watcher picks it up on the next scan cycle, so no restart is needed (unless you have set `runtime.watch_config: false`). It does not affect any other exporter.
-
-Note that Garmin Connect derives its own BMI from the weight and the height in your Garmin profile, so a BMI figure may still appear on the entry — it just will not be the scale's.
-
-```yaml
-global_exporters:
-  - type: garmin
-    email: '${GARMIN_EMAIL}'
-    password: '${GARMIN_PASSWORD}'
-    weight_only: true
-```
-
-:::
 
 ::: tip Authentication
 The setup wizard handles Garmin authentication automatically. You only need to authenticate once; tokens are cached and reused. To re-authenticate manually:
@@ -66,7 +50,7 @@ The setup wizard handles Garmin authentication automatically. You only need to a
 **Standalone (Node.js):**
 
 ```bash
-ble-scale-sync setup-garmin   # from a clone: npm run setup-garmin
+npm run setup-garmin
 ```
 
 **Docker (single user with env vars):**
@@ -108,7 +92,7 @@ Garmin may block requests from cloud/VPN IPs. If authentication fails, try from 
 :::
 
 ::: warning Upgrading from v1.8.0 or earlier
-v1.8.1 bumps `garminconnect` to 0.3.x, which replaced the old garth-based OAuth files (`oauth1_token.json`, `oauth2_token.json`) with a single `garmin_tokens.json`. Existing tokens are incompatible. Re-run `ble-scale-sync setup-garmin` (`npm run setup-garmin` from a clone); the script auto-removes the legacy files before writing the new format.
+v1.8.1 bumps `garminconnect` to 0.3.x, which replaced the old garth-based OAuth files (`oauth1_token.json`, `oauth2_token.json`) with a single `garmin_tokens.json`. Existing tokens are incompatible. Re-run `npm run setup-garmin`; the script auto-removes the legacy files before writing the new format.
 :::
 
 ## MQTT {#mqtt}
@@ -160,19 +144,15 @@ global_exporters:
 
 ## InfluxDB {#influxdb}
 
-Writes metrics using line protocol. Float fields use 2 decimal places, integer fields use `i` suffix.
+Writes metrics to InfluxDB v2 using line protocol. Float fields use 2 decimal places, integer fields use `i` suffix.
 
-Works with **InfluxDB v2 and v3**. v3 keeps a v2-compatible `/api/v2/write` endpoint that accepts the same line protocol, the same `Token` authorization scheme and the same 204 response, so one exporter covers both.
-
-| Field         | Required | Default            | Description                                   |
-| ------------- | -------- | ------------------ | --------------------------------------------- |
-| `url`         | Yes      | (none)             | InfluxDB server URL                           |
-| `token`       | Yes      | (none)             | API token with write access                   |
-| `org`         | v2 only  | (none)             | Organization name. Omit on v3, which has none |
-| `bucket`      | Yes      | (none)             | Bucket name on v2, database name on v3        |
-| `measurement` | No       | `body_composition` | Measurement name                              |
-
-**InfluxDB v2:**
+| Field         | Required | Default            | Description                 |
+| ------------- | -------- | ------------------ | --------------------------- |
+| `url`         | Yes      | (none)             | InfluxDB server URL         |
+| `token`       | Yes      | (none)             | API token with write access |
+| `org`         | Yes      | (none)             | Organization name           |
+| `bucket`      | Yes      | (none)             | Destination bucket          |
+| `measurement` | No       | `body_composition` | Measurement name            |
 
 ```yaml
 global_exporters:
@@ -182,18 +162,6 @@ global_exporters:
     org: my-org
     bucket: my-bucket
 ```
-
-**InfluxDB v3** (Core, Enterprise, Cloud), where `org` is left out and `bucket` names the database:
-
-```yaml
-global_exporters:
-  - type: influxdb
-    url: 'http://localhost:8181'
-    token: '${INFLUXDB_TOKEN}'
-    bucket: my-database
-```
-
-Setting `org` on v3 is harmless, since the server ignores the parameter, but leaving it out keeps the config honest about what the target actually has.
 
 ## Ntfy {#ntfy}
 
@@ -317,7 +285,7 @@ After adding the Strava exporter to your config, run the setup script to authori
 **Standalone (Node.js):**
 
 ```bash
-ble-scale-sync setup-strava   # from a clone: npm run setup-strava
+npm run setup-strava
 ```
 
 **Docker:**
@@ -411,16 +379,16 @@ See [Configuration: Environment Variables](/guide/configuration#environment-vari
 
 At startup, exporters are tested for connectivity. Failures are logged as warnings but don't block the scan.
 
-| Exporter      | Method                         |
-| ------------- | ------------------------------ |
-| MQTT          | Connect + disconnect           |
-| Webhook       | HEAD request                   |
-| InfluxDB      | `/health` endpoint, with token |
-| Ntfy          | `/v1/health` endpoint          |
-| Telegram      | `getChat` endpoint             |
-| Intervals.icu | `GET` wellness record          |
-| Runalyze      | `GET` bodyComposition metric   |
-| Wger          | `GET` userprofile record       |
-| Garmin        | None (Python subprocess)       |
-| File          | Directory writable check       |
-| Strava        | None (avoid API rate limits)   |
+| Exporter      | Method                       |
+| ------------- | ---------------------------- |
+| MQTT          | Connect + disconnect         |
+| Webhook       | HEAD request                 |
+| InfluxDB      | `/health` endpoint           |
+| Ntfy          | `/v1/health` endpoint        |
+| Telegram      | `getChat` endpoint           |
+| Intervals.icu | `GET` wellness record        |
+| Runalyze      | `GET` bodyComposition metric |
+| Wger          | `GET` userprofile record     |
+| Garmin        | None (Python subprocess)     |
+| File          | Directory writable check     |
+| Strava        | None (avoid API rate limits) |

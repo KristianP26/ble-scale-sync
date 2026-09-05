@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { atomicWrite } from './config/write.js';
-import { defaultEnvPath } from './config/paths.js';
+import { ROOT } from './config/paths.js';
 import { createLogger } from './logger.js';
 import { errMsg } from './utils/error.js';
 
@@ -32,12 +32,11 @@ let loaded = false;
 
 /**
  * Absolute path of the state file for a resolved config path.
- * Without a config.yaml (.env-only deployments) it falls back to the directory
- * the .env itself is read from, which is the working directory when one lives
- * there and the package root otherwise.
+ * Without a config.yaml (.env-only deployments) it falls back to the repo
+ * root, which is the directory the .env itself is read from.
  */
 export function resolveUpdateStatePath(configPath?: string): string {
-  const dir = configPath ? dirname(resolve(configPath)) : dirname(defaultEnvPath());
+  const dir = configPath ? dirname(resolve(configPath)) : ROOT;
   return join(dir, UPDATE_STATE_FILENAME);
 }
 

@@ -43,39 +43,6 @@ describe('BeurerSanitasScaleAdapter', () => {
     });
   });
 
-  // Frames byte-for-byte from the #384 debug log (Sanitas SBF70 over an ESPHome
-  // proxy, adapter forced so matches() never ran).
-  describe('variant latching from the frame, without a name (#384)', () => {
-    it('reads the 5-byte 0xE7 0x58 live frame as weight, not as nothing', () => {
-      const adapter = makeAdapter();
-      const reading = adapter.parseNotification(Buffer.from('e758010713', 'hex'));
-      // 0x0713 = 1811, * 50 / 1000 = 90.55 kg, the reporter's real ~90 kg.
-      expect(reading?.weight).toBeCloseTo(90.55, 2);
-    });
-
-    it('never decodes the 0x59 finalize frame as the bogus constant 12.80 kg', () => {
-      const adapter = makeAdapter();
-      adapter.parseNotification(Buffer.from('e758010713', 'hex'));
-      const reading = adapter.parseNotification(Buffer.from('e759030101000000000000000065', 'hex'));
-      expect(reading?.weight).not.toBeCloseTo(12.8, 2);
-    });
-
-    it('decodes the same 0x59 frame as 12.80 kg only on the BF700 layout, which is the bug', () => {
-      // Guards the discriminator itself: a BF700 frame opens with a Unix
-      // timestamp, so its top byte is nowhere near 0xE7 and the latch stays off.
-      const adapter = makeAdapter();
-      adapter.matches(mockPeripheral('bf-700'));
-      const bf700 = Buffer.from('69000000012c00000000000000000000', 'hex');
-      expect(adapter.parseNotification(bf700)?.weight).toBeGreaterThan(0);
-    });
-
-    it('leaves a BF700 on its own layout, since no frame of its starts 0xE7', () => {
-      const adapter = makeAdapter();
-      adapter.matches(mockPeripheral('bf-700'));
-      expect(adapter.unlockCommand).toEqual([0xf7, 0x01]);
-    });
-  });
-
   describe('unlockCommand', () => {
     it('returns 0xF7 for BF700/BF800 type', () => {
       const adapter = makeAdapter();

@@ -23,10 +23,7 @@ docker run --rm -it --network host --cap-add NET_ADMIN --cap-add NET_RAW \
   --group-add "$(getent group bluetooth | cut -d: -f3)" -v /var/run/dbus:/var/run/dbus:ro \
   -v ./config.yaml:/app/config.yaml ghcr.io/kristianp26/ble-scale-sync:latest setup
 
-# Standalone (npm install or npx)
-npx ble-scale-sync setup
-
-# Standalone (from a clone)
+# Standalone (Node.js, Linux/macOS/Windows)
 npm run setup
 ```
 
@@ -43,23 +40,9 @@ You don't need to edit `config.yaml` manually. The wizard handles everything, in
 docker run --rm -v ./config.yaml:/app/config.yaml:ro \
   ghcr.io/kristianp26/ble-scale-sync:latest validate
 
-# Standalone (npm install or npx)
-npx ble-scale-sync validate
-
-# Standalone (from a clone)
+# Standalone (Node.js)
 npm run validate
 ```
-
-## Where config.yaml and .env are read from {#config-location}
-
-Outside Docker and the Home Assistant add-on, both files are looked up in **the working directory first**, and in the package install directory as a fallback. In a git checkout those are the same place, which is why the clone workflow never had to think about it.
-
-Two consequences worth knowing:
-
-- Under `npx ble-scale-sync`, the package lives in a cache directory that is deleted again, so the only useful location is the directory you run the command in. Run the command from where your `config.yaml` lives.
-- `config.yaml` and `.env` are always taken from the **same** directory, never one from each. A stray `.env` in your working directory is the `.env` that gets used, so do not keep unrelated ones next to each other.
-
-`--config <path>` overrides the config file location for the run path, for `validate` and for `setup`. In Docker the file is mounted to `/app/config.yaml` instead, and on the add-on it lives in `/data`.
 
 ## config.yaml Reference {#config-yaml-reference}
 
@@ -70,7 +53,7 @@ If you prefer manual configuration, here's the full reference. See [`config.yaml
 ```yaml
 ble:
   scale_mac: 'FF:03:00:13:A1:04'
-  # bind_key: '0123456789abcdef0123456789abcdef' # Xiaomi S800 / S400
+  # bind_key: '0123456789abcdef0123456789abcdef' # Xiaomi S800 only
   # handler: auto
   # noble_driver: abandonware
   # adapter: hci1
@@ -83,8 +66,8 @@ ble:
 | Field                        | Required                    | Default        | Description                                                                                                                                                                                                                                                                                |
 | ---------------------------- | --------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `scale_mac`                  | Recommended                 | Auto-discovery | MAC address, or a CoreBluetooth UUID on macOS (bare 32-hex as the wizard writes it, or the dashed form). Prevents connecting to a neighbor's scale.                                                                                                                                        |
-| `bind_key`                   | Xiaomi S800 / S400          | (none)         | 32-char hex per-device MiBeacon key from the Mi cloud (extract with the community Xiaomi-cloud-tokens-extractor). Decrypts only the device's own FE95 broadcast. The S400 also needs `scale_mac`. Keep it secret; it is a credential.                                                      |
-| `handler`                    | No                          | `auto`         | Transport: `auto` (local radio), `mqtt-proxy` (ESP32 over MQTT), `esphome-proxy` (ESPHome Native API), `ha-bluetooth` (Home Assistant websocket, broadcast only). See below.                                                                                                               |
+| `bind_key`                   | Xiaomi S800 only            | (none)         | 32-char hex per-device MiBeacon key from the Mi cloud (extract with the community Xiaomi-cloud-tokens-extractor). Decrypts only the device's own FE95 broadcast. Keep it secret; it is a credential.                                                                                       |
+| `handler`                    | No                          | `auto`         | Transport: `auto` (local radio), `mqtt-proxy` (ESP32 over MQTT), `esphome-proxy` (ESPHome Native API). See below.                                                                                                                                                                          |
 | `noble_driver`               | No                          | OS default     | `abandonware` or `stoprocent`. Overrides the default BLE driver. Only applies when `handler: auto`.                                                                                                                                                                                        |
 | `adapter`                    | No                          | System default | Linux only. Select a specific Bluetooth adapter (e.g., `hci0`, `hci1`). See below.                                                                                                                                                                                                         |
 | `force_scale_adapter`        | No                          | Auto-detect    | Name of the scale protocol adapter to use, bypassing auto-detection. Requires `scale_mac`. See below.                                                                                                                                                                                      |
@@ -93,11 +76,9 @@ ble:
 | `qn_report_byte`             | No                          | Per dialect    | QN-family scales only. Payload byte of the history-response frame (0 to 255). Defaults to `252` (0xFC) on the long-frame dialects (es26m and extended) and `254` (0xFE) on the classic one. Try the other value if your scale completes the handshake and then reports nothing. See below. |
 | `auto_clear_stale_bond`      | No                          | `false`        | Delete a pairing key the scale has forgotten and pair again. Bonded scales only (Beurer BF7xx / BF9xx), node-ble transport only. See below.                                                                                                                                                |
 | `qn_weight_ack`              | No                          | Per dialect    | QN-family scales only. Answer every live weight frame with its own weight, as the vendor app does. On by default on the 20-byte extended dialect. Try `true` if your QN scale completes the handshake and then streams nothing. See below.                                                 |
-| `qn_a4_prelude`              | No                          | `false`        | QN-family scales only. Send the two undecoded `0xA4` frames an Arboleaf vendor app sends between START and the first weight frame. Off by default. Try `true` only if `qn_weight_ack` did not help and your scale still goes silent right after START. See below.                          |
 | `proxy_liveness_timeout_min` | No                          | `30`           | Minutes of total advertisement silence before a proxy transport is treated as wedged and the process exits for the supervisor to restart. `0` disables. Proxy transports only. See below.                                                                                                  |
 | `mqtt_proxy`                 | If `handler: mqtt-proxy`    | (none)         | MQTT proxy connection (`broker_url`, `device_id`, `topic_prefix`, `username`, `password`, `auto_connect`, `embedded_broker_*`). See [ESP32 BLE Proxy](./esp32-proxy).                                                                                                                      |
 | `esphome_proxy`              | If `handler: esphome-proxy` | (none)         | ESPHome Native API connection (`host`, `port`, `encryption_key` or `password`, `client_info`). See [ESPHome Bluetooth Proxy](./esphome-proxy).                                                                                                                                             |
-| `ha_bluetooth`               | If `handler: ha-bluetooth`  | (none)         | Home Assistant websocket connection (`url`, `token`, optional `source` scanner filter). Broadcast scales only. See [Home Assistant Bluetooth](/guide/ha-bluetooth).                                                                                                                        |
 
 ::: warning Forcing a scale adapter
 `force_scale_adapter` is an escape hatch for when auto-detection routes your scale to the wrong protocol adapter, which happens with rebadged OEM hardware that shares a vendor service with another brand.
@@ -203,17 +184,6 @@ ble:
 
 That does two things: the pre-weigh-in A2 carries your `last_known_weight` (or the midpoint of your `weight_range`) instead of the placeholder, and every live weight frame is acknowledged with its own weight. `false` turns both off everywhere, including on the extended dialect, if it ever turns out to hurt a unit there.
 
-If that still leaves the scale silent right after START, there is one more thing to try:
-
-```yaml
-ble:
-  qn_a4_prelude: true
-```
-
-An HCI capture of an Arboleaf vendor app shows two `0xA4` frames sent between START and the first live weight frame, which this app does not send. The scale acknowledges each one and only then starts streaming. Turning this on replays those two frames.
-
-Be aware of what that means. The frames are replayed byte for byte from one reporter's capture of their own scale, and their payload is not decoded. It looks like per-user calibration or a previous measurement handed back, so it may be right for everyone or right for nobody but the person who captured it. That is why it is off by default and why it is the last thing to try rather than the first. If it works for your unit, please say so on [issue #331](https://github.com/KristianP26/ble-scale-sync/issues/331): more than one confirmation is what would turn this from a replay into a decoded frame.
-
 With debug on, the swap is named:
 
 ```
@@ -251,7 +221,7 @@ That only covers the moment before the weigh-in. Once the scale starts streaming
 
 ::: tip A proxy that is connected but no longer delivering (`proxy_liveness_timeout_min`)
 
-On `mqtt-proxy`, `esphome-proxy` and `ha-bluetooth` the app waits for the proxy to push it a weigh-in. If that link wedges while still looking connected, the wait simply never ends, and from the app's side that is indistinguishable from a house where nobody has stepped on the scale. Both are silence.
+On `mqtt-proxy` and `esphome-proxy` the app waits for the proxy to push it a weigh-in. If that link wedges while still looking connected, the wait simply never ends, and from the app's side that is indistinguishable from a house where nobody has stepped on the scale. Both are silence.
 
 What separates them is everything else in range. Advertisements arrive constantly from phones, watches and thermometers while the link is alive, and stop completely when it is not. So a proxy that has delivered **nothing at all** for half an hour is wedged rather than idle, and the process exits for your supervisor to restart it:
 
@@ -345,7 +315,7 @@ Two costs, both real:
 - **More Bluetooth adapter resets.** Every read that ends in a timeout triggers one, and shorter sessions mean more timeouts per hour. On a Raspberry Pi that is noticeable.
 - **The failure watchdog trips sooner.** A session that times out counts as a failed cycle, so shorter sessions reach `watchdog_max_consecutive_failures` (default 10) in proportionally less time, and the process exits for the supervisor to restart. On a scale where waiting between weigh-ins is normal, raise that limit or set it to `0` to disable it, as above.
 
-This option applies to the native BLE handlers only. On `mqtt-proxy`, `esphome-proxy` and `ha-bluetooth` the watcher waits for a weigh-in indefinitely by design, and the value is ignored.
+This option applies to the native BLE handlers only. On `mqtt-proxy` and `esphome-proxy` the watcher waits for a weigh-in indefinitely by design, and the value is ignored.
 :::
 
 ::: tip BLE adapter selection (Linux only)

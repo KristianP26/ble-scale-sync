@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { config } from 'dotenv';
 import { createLogger } from './logger.js';
 import { isValidScaleId } from './ble/scale-id.js';
@@ -5,8 +7,10 @@ import type { Gender, UserProfile } from './interfaces/scale-adapter.js';
 
 const log = createLogger('Config');
 
+const __dirname: string = dirname(fileURLToPath(import.meta.url));
+const ROOT: string = join(__dirname, '..');
+
 import type { WeightUnit } from './config/schema.js';
-import { defaultEnvPath } from './config/paths.js';
 export type { WeightUnit } from './config/schema.js';
 
 export interface Config {
@@ -56,7 +60,7 @@ function parseBoolean(key: string, raw: string): boolean {
 }
 
 export function loadConfig(): Config {
-  config({ path: defaultEnvPath() });
+  config({ path: join(ROOT, '.env') });
 
   const weightUnit = parseWeightUnit(process.env.WEIGHT_UNIT);
   const heightUnit = parseHeightUnit(process.env.HEIGHT_UNIT);

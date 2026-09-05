@@ -74,22 +74,6 @@ describe('env-overrides (focused unit tests for #184 split)', () => {
       expect(out.ble?.adapter).toBeUndefined();
     });
 
-    it('applies BLE_HANDLER=ha-bluetooth when ble.ha_bluetooth is configured', () => {
-      vi.stubEnv('BLE_HANDLER', 'ha-bluetooth');
-      const out = applyEnvOverrides(
-        baseConfig({
-          ble: { handler: 'auto', ha_bluetooth: { url: 'http://h:8123', token: 't' } },
-        } as Partial<AppConfig>),
-      );
-      expect(out.ble?.handler).toBe('ha-bluetooth');
-    });
-
-    it('ignores BLE_HANDLER=ha-bluetooth when ha_bluetooth is not configured', () => {
-      vi.stubEnv('BLE_HANDLER', 'ha-bluetooth');
-      const out = applyEnvOverrides(baseConfig());
-      expect(out.ble?.handler).toBe('auto');
-    });
-
     it('ignores BLE_HANDLER=mqtt-proxy when mqtt_proxy is not configured', () => {
       vi.stubEnv('BLE_HANDLER', 'mqtt-proxy');
       const out = applyEnvOverrides(baseConfig());

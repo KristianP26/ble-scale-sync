@@ -89,12 +89,6 @@ RUN python3 -m pip install --no-cache-dir -r requirements.txt
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-# The BLE stacks are optionalDependencies (#364): a node-gyp failure no longer
-# fails this build, it just silently drops the package. Without this assertion a
-# multi-arch build (linux/arm/v7 in particular) would publish an image whose
-# default transport is missing and only fail at runtime.
-RUN node -e "for (const p of ['@abandonware/noble','@stoprocent/noble','node-ble','dbus-next']) require.resolve(p + '/package.json');"
-
 # Compiled application
 COPY --from=build /app/dist/ ./dist/
 

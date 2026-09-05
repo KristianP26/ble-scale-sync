@@ -4,7 +4,6 @@ import { dirname, join } from 'node:path';
 import type { WizardStep, WizardContext } from '../types.js';
 import type { UserConfig, ExporterEntry } from '../../config/schema.js';
 import { success, error, warn, dim } from '../ui.js';
-import { cliCommand } from '../../cli-invocation.js';
 
 const __dirname: string = dirname(fileURLToPath(import.meta.url));
 const ROOT: string = join(__dirname, '..', '..', '..');
@@ -84,7 +83,7 @@ export const garminAuthStep: WizardStep = {
   async run(ctx: WizardContext): Promise<void> {
     if (!ctx.platform.hasPython || !ctx.platform.pythonCommand) {
       console.log(`\n  ${dim('Python is not available — skipping Garmin authentication.')}`);
-      console.log(dim(`  You can run it later with: ${cliCommand('setup-garmin')}\n`));
+      console.log(dim('  You can run it later with: npm run setup-garmin\n'));
       return;
     }
 
@@ -110,7 +109,7 @@ export const garminAuthStep: WizardStep = {
       );
 
       if (!runAuth) {
-        console.log(dim(`  Skipped ${userName}. Run later with: ${cliCommand('setup-garmin')}`));
+        console.log(dim(`  Skipped ${userName}. Run later with: npm run setup-garmin`));
         continue;
       }
 
@@ -138,9 +137,7 @@ export const garminAuthStep: WizardStep = {
         console.log(`\n  ${success(`Garmin authentication successful for ${userName}!`)}`);
       } else {
         console.log(
-          `\n  ${error(
-            `Garmin auth failed for ${userName}. You can retry later with: ${cliCommand('setup-garmin')}`,
-          )}`,
+          `\n  ${error(`Garmin auth failed for ${userName}. You can retry later with: npm run setup-garmin`)}`,
         );
       }
     }

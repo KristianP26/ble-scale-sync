@@ -10,34 +10,6 @@ describe('loadExporterConfig()', () => {
     vi.unstubAllEnvs();
   });
 
-  describe('GARMIN_WEIGHT_ONLY', () => {
-    it('defaults to false when unset', () => {
-      const cfg = loadExporterConfig();
-      expect(cfg.garmin).toEqual({ weightOnly: false });
-    });
-
-    it('parses true', () => {
-      vi.stubEnv('GARMIN_WEIGHT_ONLY', 'true');
-      expect(loadExporterConfig().garmin?.weightOnly).toBe(true);
-    });
-
-    it('parses false', () => {
-      vi.stubEnv('GARMIN_WEIGHT_ONLY', 'false');
-      expect(loadExporterConfig().garmin?.weightOnly).toBe(false);
-    });
-
-    it('throws on a non-boolean value', () => {
-      vi.stubEnv('GARMIN_WEIGHT_ONLY', 'maybe');
-      expect(() => loadExporterConfig()).toThrow(/GARMIN_WEIGHT_ONLY/);
-    });
-
-    it('is absent when the garmin exporter is not enabled', () => {
-      vi.stubEnv('EXPORTERS', 'file');
-      vi.stubEnv('FILE_PATH', '/tmp/readings.csv');
-      expect(loadExporterConfig().garmin).toBeUndefined();
-    });
-  });
-
   describe('EXPORTERS parsing', () => {
     it('defaults to garmin when EXPORTERS is not set', () => {
       const cfg = loadExporterConfig();

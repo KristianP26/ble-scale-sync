@@ -44,8 +44,7 @@ void _fieldCheck;
 export const influxdbSchema: ExporterSchema = {
   name: 'influxdb',
   displayName: 'InfluxDB',
-  description:
-    'Write body composition data to InfluxDB (v2, and v3 via its v2-compatible write API)',
+  description: 'Write body composition data to InfluxDB v2 time-series database',
   fields: [
     {
       key: 'url',
@@ -55,21 +54,8 @@ export const influxdbSchema: ExporterSchema = {
       description: 'e.g., http://localhost:8086',
     },
     { key: 'token', label: 'API Token', type: 'password', required: true },
-    {
-      key: 'org',
-      label: 'Organization',
-      type: 'string',
-      required: false,
-      description:
-        'Required on InfluxDB v2. Leave empty on InfluxDB v3, which has no organizations.',
-    },
-    {
-      key: 'bucket',
-      label: 'Bucket',
-      type: 'string',
-      required: true,
-      description: 'The bucket name on v2, or the database name on v3.',
-    },
+    { key: 'org', label: 'Organization', type: 'string', required: true },
+    { key: 'bucket', label: 'Bucket', type: 'string', required: true },
     {
       key: 'measurement',
       label: 'Measurement',
@@ -113,11 +99,7 @@ export class InfluxDbExporter implements Exporter {
 
   async healthcheck(): Promise<ExportResult> {
     try {
-      // The token is sent even though v2 leaves /health unauthenticated: v3
-      // rejects an unauthenticated /health with 401, which made the wizard
-      // report a working v3 target as broken. v2 ignores the extra header.
       const response = await fetch(`${this.config.url.replace(/\/+$/, '')}/health`, {
-        headers: { Authorization: `Token ${this.config.token}` },
         signal: AbortSignal.timeout(5000),
       });
       if (!response.ok) {
@@ -132,11 +114,7 @@ export class InfluxDbExporter implements Exporter {
   async export(data: BodyComposition, context?: ExportContext): Promise<ExportResult> {
     const { url, token, org, bucket, measurement } = this.config;
     const lineProtocol = toLineProtocol(data, measurement, context?.userSlug, context?.timestamp);
-    // v3 has no organizations and ignores the parameter, so it is only sent
-    // when configured. Built by hand rather than with URLSearchParams to keep
-    // percent-encoding for spaces instead of `+`.
-    const orgParam = org ? `org=${encodeURIComponent(org)}&` : '';
-    const writeUrl = `${url.replace(/\/+$/, '')}/api/v2/write?${orgParam}bucket=${encodeURIComponent(bucket)}&precision=ms`;
+    const writeUrl = `${url.replace(/\/+$/, '')}/api/v2/write?org=${encodeURIComponent(org)}&bucket=${encodeURIComponent(bucket)}&precision=ms`;
 
     return withRetry(
       async () => {

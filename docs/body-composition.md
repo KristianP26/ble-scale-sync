@@ -95,10 +95,6 @@ The adapter uses passive BLE advertisement decoding, so no pairing or GATT conne
 
 If impedance is not present in a frame (e.g. the user stepped off before the BIA measurement completed), weight is still reported and body fat is estimated using the Deurenberg BMI fallback. All other body composition metrics require impedance.
 
-### Xiaomi Body Composition Scale S400 (MJTZC01YM)
-
-The S400 broadcasts weight plus its 50 kHz impedance (and a 250 kHz impedance and heart rate that are logged only). Body composition uses the same Xiaomi formulas as the Mi Scale 2 above. The S400's own app runs Yunmai's proprietary dual-frequency model, which no open implementation reproduces; on the same weigh-in the Xiaomi formulas land within about two points of body fat, 0.3 kg of bone mass and 2 kg of skeletal muscle of the app, while the generic BIA coefficients were more than five points of body fat away. Water and visceral fat differ by a few points either way. Expect small, consistent offsets from the app, not agreement to the decimal.
-
 ### Yunmai
 
 The Yunmai scale computes body composition on-device and transmits the pre-calculated fat, water, muscle, and bone values in its BLE notifications. BLE Scale Sync uses those values directly; the remaining metrics (BMI, BMR, metabolic age, visceral fat, physique rating) are calculated locally.

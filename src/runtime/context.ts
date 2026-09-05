@@ -2,7 +2,6 @@ import type {
   AppConfig,
   MqttProxyConfig,
   EsphomeProxyConfig,
-  HaBluetoothConfig,
   WeightUnit,
 } from '../config/schema.js';
 import type { BleHandlerName } from '../ble/types.js';
@@ -26,7 +25,6 @@ export interface AppContext {
   readonly bleHandler: BleHandlerName;
   readonly bleAdapter: string | undefined;
   readonly esphomeProxy: EsphomeProxyConfig | undefined;
-  readonly haBluetooth: HaBluetoothConfig | undefined;
   readonly signal: AbortSignal;
   readonly exporterCache: Map<string, Exporter[]>;
 
@@ -79,7 +77,6 @@ export function createAppContext(init: AppContextInit): AppContext {
     bleHandler: init.resolved.bleHandler,
     bleAdapter: init.resolved.bleAdapter,
     esphomeProxy: init.resolved.esphomeProxy,
-    haBluetooth: init.resolved.haBluetooth,
     signal: init.signal,
     exporterCache: new Map(),
     lastExportedWeights: new Map(),

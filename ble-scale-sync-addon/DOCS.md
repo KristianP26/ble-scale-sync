@@ -64,12 +64,6 @@ To upload measurements to Garmin Connect:
 
 On first start the add-on authenticates with Garmin and stores the OAuth tokens under `/data/garmin-tokens` inside the container. Subsequent runs reuse those tokens, so your password is only used once.
 
-### Weight only
-
-Turn on **Upload weight only** (`garmin_weight_only`) to send just the weight to Garmin Connect and leave BMI, body fat, water, bone mass, muscle mass, visceral fat, physique rating and metabolic age unset. Every other exporter, including the MQTT sensors in Home Assistant, still receives the full body composition.
-
-Garmin Connect calculates its own BMI from the weight and the height in your Garmin profile, so a BMI value may still be shown on the entry — it is Garmin's, not the scale's.
-
 ### If your Garmin account uses MFA
 
 Home Assistant add-ons run without an interactive terminal, so the add-on cannot prompt for a 2FA code. If your account has MFA enabled:
