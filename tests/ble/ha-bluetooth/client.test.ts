@@ -7,6 +7,7 @@ import {
   type WsLike,
 } from '../../../src/ble/handler-ha-bluetooth/index.js';
 import type { HaAdvertisement } from '../../../src/ble/handler-ha-bluetooth/index.js';
+import { bleLog } from '../../../src/ble/types.js';
 
 /**
  * Scripted stand-in for the global WebSocket: records what the client sends and
@@ -223,6 +224,46 @@ describe('HaBluetoothClient', () => {
     });
     expect(cb).toHaveBeenCalledTimes(1);
     expect(cb.mock.calls[0][1]).toBe('AA:BB:CC:DD:EE:FF');
+  });
+
+  // A clock disagreement between the two hosts drops every advertisement while
+  // the subscription still looks healthy, so the symptom is silence with no
+  // error. The warning is the only thing that makes it diagnosable.
+  it('warns once when everything is dropped as stale and nothing is delivered', async () => {
+    const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    warn.mockClear();
+    const started = client.start();
+    const id = handshake(sockets[0]);
+    await started;
+    client.onAdvertisement(vi.fn());
+    for (let i = 0; i < 25; i++) {
+      sockets[0].serverSays({
+        id,
+        type: 'event',
+        event: { add: [advert({ time: (NOW - 600_000) / 1000 })] },
+      });
+    }
+    const skew = warn.mock.calls.filter((c) => String(c[0]).includes('clock'));
+    expect(skew).toHaveLength(1);
+    expect(String(skew[0][0])).toMatch(/600s in the past/);
+  });
+
+  it('does not warn about skew once anything has been delivered', async () => {
+    const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    warn.mockClear();
+    const started = client.start();
+    const id = handshake(sockets[0]);
+    await started;
+    client.onAdvertisement(vi.fn());
+    sockets[0].serverSays({ id, type: 'event', event: { add: [advert()] } });
+    for (let i = 0; i < 25; i++) {
+      sockets[0].serverSays({
+        id,
+        type: 'event',
+        event: { add: [advert({ time: (NOW - 600_000) / 1000 })] },
+      });
+    }
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes('clock'))).toHaveLength(0);
   });
 
   it('filters on the configured scanner source', async () => {

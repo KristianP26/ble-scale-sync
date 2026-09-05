@@ -20,6 +20,13 @@ const RECONNECT_MAX_MS = 60_000;
  */
 export const STALE_ADVERT_MS = 30_000;
 
+/**
+ * How many advertisements may be dropped as stale, with none delivered, before
+ * the clock-skew warning fires. Enough that a genuine cache replay on subscribe
+ * does not trip it, few enough to be quick.
+ */
+const STALE_SKEW_WARN_AFTER = 20;
+
 // WebSocket readyState values (WHATWG); Node's global WebSocket uses the same.
 const WS_OPEN = 1;
 
@@ -127,6 +134,8 @@ export class HaBluetoothClient {
   private reconnectDelay = RECONNECT_MIN_MS;
   private version: string | null = null;
   private staleDropped = 0;
+  /** Advertisements actually handed to subscribers, for the skew warning. */
+  private delivered = 0;
 
   constructor(
     private readonly config: HaBluetoothConfig,
@@ -289,13 +298,30 @@ export class HaBluetoothClient {
     if (this.config.source && ad.source?.toLowerCase() !== this.config.source.toLowerCase()) {
       return;
     }
-    if (typeof ad.time === 'number' && this.now() - ad.time * 1000 > STALE_ADVERT_MS) {
-      // Replayed from HA's cache on subscribe; see STALE_ADVERT_MS.
-      this.staleDropped++;
-      if (this.staleDropped <= 3) {
-        bleLog.debug(`Ignoring stale cached advertisement for ${ad.address} from Home Assistant`);
+    if (typeof ad.time === 'number') {
+      const ageMs = this.now() - ad.time * 1000;
+      if (ageMs > STALE_ADVERT_MS) {
+        // Replayed from HA's cache on subscribe; see STALE_ADVERT_MS.
+        this.staleDropped++;
+        if (this.staleDropped <= 3) {
+          bleLog.debug(`Ignoring stale cached advertisement for ${ad.address} from Home Assistant`);
+        }
+        // The gate compares Home Assistant's wall clock against ours. If the two
+        // hosts disagree by more than the window, EVERY advertisement is dropped
+        // and the subscription still reports itself as healthy, so the symptom
+        // is total silence with no error. A Pi with no RTC that came up before
+        // NTP settled is exactly that case. Say it once, with the measured
+        // offset, rather than leaving it to be guessed at.
+        if (this.staleDropped === STALE_SKEW_WARN_AFTER && this.delivered === 0) {
+          bleLog.warn(
+            `Dropped ${this.staleDropped} Home Assistant advertisements as stale and delivered ` +
+              `none. They are arriving about ${Math.round(ageMs / 1000)}s in the past, which for ` +
+              `live traffic means this host's clock and the Home Assistant host's clock disagree. ` +
+              `Check NTP on both.`,
+          );
+        }
+        return;
       }
-      return;
     }
     let info: BleDeviceInfo;
     try {
@@ -304,6 +330,7 @@ export class HaBluetoothClient {
       bleLog.debug(`Malformed advertisement from Home Assistant: ${errMsg(err)}`);
       return;
     }
+    this.delivered++;
     for (const cb of this.subscribers) {
       try {
         cb(info, ad.address.toUpperCase(), ad);
@@ -373,8 +400,18 @@ export class HaBluetoothClient {
       if (this.stopped) return;
       this.connectOnce().catch((err) => {
         if (this.stopped) return;
+        if (err instanceof HaBluetoothPermanentError) {
+          // Terminal: nothing reconnects after this, so a warn line buried in a
+          // running log is not enough. Someone who rotates their long-lived
+          // token months from now sees their scale stop working and needs to be
+          // told why, and that it will not recover on its own.
+          bleLog.error(
+            `Home Assistant transport has given up and will not reconnect: ${errMsg(err)}`,
+          );
+          return;
+        }
         bleLog.warn(`Home Assistant reconnect failed: ${errMsg(err)}`);
-        if (!(err instanceof HaBluetoothPermanentError)) this.scheduleReconnect();
+        this.scheduleReconnect();
       });
     }, delay);
     this.reconnectTimer.unref?.();
