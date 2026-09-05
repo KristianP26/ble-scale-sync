@@ -4,6 +4,50 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.27.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.26.0...v1.27.0) (2026-09-05)
+
+
+### Added
+
+* add Speediance Smart Scale (FG2211WBF) adapter ([e1284ad](https://github.com/KristianP26/ble-scale-sync/commit/e1284ad2b9d10dc4942f66c7e93b78d6f31b61f7))
+* **ble:** add the Home Assistant Bluetooth transport ([#375](https://github.com/KristianP26/ble-scale-sync/issues/375)) ([56489ca](https://github.com/KristianP26/ble-scale-sync/commit/56489ca27cb36fdd27da20b11ff916692277a293))
+* **ble:** name the missing npm package when a BLE transport is not installed ([1d1f448](https://github.com/KristianP26/ble-scale-sync/commit/1d1f448e4fb3826aa22ea66b53f57f20e82a1c6e)), closes [#364](https://github.com/KristianP26/ble-scale-sync/issues/364)
+* **cli:** dispatch subcommands from a single entry point ([a8e0f3e](https://github.com/KristianP26/ble-scale-sync/commit/a8e0f3ec940fd33beed2b463a1d6b52f58234074)), closes [#365](https://github.com/KristianP26/ble-scale-sync/issues/365)
+* **cli:** run the Garmin auth helper as a subcommand ([fc93208](https://github.com/KristianP26/ble-scale-sync/commit/fc93208efd8b2c41014eb9696cf8859a8c4b137d)), closes [#365](https://github.com/KristianP26/ble-scale-sync/issues/365)
+* **exporters:** let the Garmin exporter upload the weight alone ([#373](https://github.com/KristianP26/ble-scale-sync/issues/373)) ([d270901](https://github.com/KristianP26/ble-scale-sync/commit/d2709018d67af6c61a37eca64bee1d4380959af7))
+* **qn:** add ble.qn_a4_prelude, the two 0xA4 frames the Arboleaf app sends after START ([dbb39dd](https://github.com/KristianP26/ble-scale-sync/commit/dbb39dd70974ffe8668ba69afa76b8e0199ad940)), closes [#331](https://github.com/KristianP26/ble-scale-sync/issues/331)
+* **scales:** add the Etekcity ESF-551 Smart Fitness Scale ([80769d4](https://github.com/KristianP26/ble-scale-sync/commit/80769d44a07aa2a7f83f1af198d6db28a42f1e98)), closes [#385](https://github.com/KristianP26/ble-scale-sync/issues/385)
+* **scales:** add the Speediance Smart Scale FG2211WBF adapter ([#383](https://github.com/KristianP26/ble-scale-sync/issues/383)) ([83d3cfb](https://github.com/KristianP26/ble-scale-sync/commit/83d3cfb4105370669972b0a160b732af2d64cb7e))
+* **scales:** add the Xiaomi Body Composition Scale S400 adapter ([#374](https://github.com/KristianP26/ble-scale-sync/issues/374)) ([26b08e8](https://github.com/KristianP26/ble-scale-sync/commit/26b08e826f24bf10809510efadb3ebda5d0aeffc))
+
+
+### Fixed
+
+* **beurer:** latch the SBF70 frame layout so a forced adapter stops reading 12.80 kg ([f89561a](https://github.com/KristianP26/ble-scale-sync/commit/f89561ae0cbec96287614ec74a742a72c366ccaf)), closes [#384](https://github.com/KristianP26/ble-scale-sync/issues/384)
+* **ble:** make the missing-transport message actionable where the app runs ([db7edd2](https://github.com/KristianP26/ble-scale-sync/commit/db7edd2ffa3b3c0e36e3a7eb1caa7b2df00686e5)), closes [#364](https://github.com/KristianP26/ble-scale-sync/issues/364)
+* **cli:** answer --version, and stop promising flags a command ignores ([2b1cfd9](https://github.com/KristianP26/ble-scale-sync/commit/2b1cfd9db993ffa04e92b31ea6fdcf7326260886)), closes [#365](https://github.com/KristianP26/ble-scale-sync/issues/365)
+* **cli:** print the command the reader can actually type ([2f9c3d9](https://github.com/KristianP26/ble-scale-sync/commit/2f9c3d9b63f85a7d8ed70a951d4176c6f9d0eb1c)), closes [#365](https://github.com/KristianP26/ble-scale-sync/issues/365)
+* **cli:** translate the Garmin arguments the way docker-entrypoint does ([d16a36b](https://github.com/KristianP26/ble-scale-sync/commit/d16a36bd9e932bcd878ac9a7584e09f49c83c8cc)), closes [#365](https://github.com/KristianP26/ble-scale-sync/issues/365)
+* **config:** look for config.yaml and .env in the working directory first ([de98a29](https://github.com/KristianP26/ble-scale-sync/commit/de98a29392ab73830da89586c24356646f8b4a7a)), closes [#365](https://github.com/KristianP26/ble-scale-sync/issues/365)
+* **config:** read config.yaml and .env from one directory, not two ([6fddf9d](https://github.com/KristianP26/ble-scale-sync/commit/6fddf9dfcf4ec8a9bd0d3c592b0e6195414de33e)), closes [#365](https://github.com/KristianP26/ble-scale-sync/issues/365)
+* **diagnose:** say when the configured transport is a proxy, instead of failing to load Noble ([a4dd6aa](https://github.com/KristianP26/ble-scale-sync/commit/a4dd6aa8e668bb021fbd4df83b66212b265587d7)), closes [#376](https://github.com/KristianP26/ble-scale-sync/issues/376)
+* **influxdb:** authenticate the healthcheck so InfluxDB v3 passes ([4e4c846](https://github.com/KristianP26/ble-scale-sync/commit/4e4c8466b2d3e476b76ee1537652a833052d1915))
+* **qn:** hold the connection context across the FFE3 fallback so the 0x1F ack reaches the scale ([#371](https://github.com/KristianP26/ble-scale-sync/issues/371)) ([28d8397](https://github.com/KristianP26/ble-scale-sync/commit/28d8397466b70fc6279b3ca2d5cad0989e5b5ee7)), closes [#370](https://github.com/KristianP26/ble-scale-sync/issues/370)
+* **runtime:** fail fast when a BLE stack is missing, instead of retrying forever ([cdba062](https://github.com/KristianP26/ble-scale-sync/commit/cdba0625523cb34c06b675add421222dad5b6d99)), closes [#364](https://github.com/KristianP26/ble-scale-sync/issues/364)
+* **salter:** read both ends of a backlogged slot, not just the oldest ([#360](https://github.com/KristianP26/ble-scale-sync/issues/360)) ([8c66101](https://github.com/KristianP26/ble-scale-sync/commit/8c661017e3fc10bf597f7d48268e8c5c95e16047))
+* **silvergear:** log a settling weight once per value, not once per re-read ([c6926ef](https://github.com/KristianP26/ble-scale-sync/commit/c6926efbe0a8894f90eb2361803dfb1b747fefc8)), closes [#372](https://github.com/KristianP26/ble-scale-sync/issues/372)
+* **speediance:** run the BIA estimator, gate the impedance, and update the counts ([580b18a](https://github.com/KristianP26/ble-scale-sync/commit/580b18a7a2baadd9f53117c1dfd95737af29fd38))
+
+
+### Docs
+
+* **cli:** name the ble-scale-sync command in the remaining usage strings ([6a8466b](https://github.com/KristianP26/ble-scale-sync/commit/6a8466b38f7dff1568218cfef4e856d7e24628cb)), closes [#365](https://github.com/KristianP26/ble-scale-sync/issues/365)
+* correct the source deployment guides for tsx as a devDependency ([84529bf](https://github.com/KristianP26/ble-scale-sync/commit/84529bfc2580e354728c3e143195be3874ccfd57))
+* count 35 protocol adapters after the Xiaomi S400 landed ([dae289d](https://github.com/KristianP26/ble-scale-sync/commit/dae289d4f44075097675c603ebe6cb3568d30b6b))
+* document the npm install path, the subcommands and where config is read from ([420096b](https://github.com/KristianP26/ble-scale-sync/commit/420096bb054c9895facec3e0d782064fc1ef8cd2))
+* **index:** link the clone path instead of repeating it ([f09a68d](https://github.com/KristianP26/ble-scale-sync/commit/f09a68dcc9fd3740b3a688445bfa000d0611b5db)), closes [#365](https://github.com/KristianP26/ble-scale-sync/issues/365)
+* **supported-scales:** cut protocol detail and unpack the limitations ([20c8c06](https://github.com/KristianP26/ble-scale-sync/commit/20c8c0682f66ebd450c39aac2801134e274d92b6))
+
 ## [1.26.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.25.0...v1.26.0) (2026-08-26)
 
 
