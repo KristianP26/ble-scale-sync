@@ -64,6 +64,28 @@ async function main(): Promise<void> {
   const positional = process.argv[2]?.startsWith('-') === false ? process.argv[2] : undefined;
   const scaleMac = (positional ?? bleConfig.scaleMac)?.toUpperCase();
 
+  // This tool drives a local radio through Noble directly, on purpose: it
+  // exists to answer "is Bluetooth on THIS host working", which a proxy
+  // transport cannot answer for it. On a proxy-only setup the Noble import is
+  // the first thing to fail, and it fails as a node-gyp "No native build was
+  // found" error that reads like a broken install rather than a tool being
+  // pointed at the wrong thing (#376). Say which it is.
+  const PROXY_HANDLERS = ['mqtt-proxy', 'esphome-proxy', 'ha-bluetooth'];
+  const forceNative = process.argv.includes('--native');
+  if (bleConfig.bleHandler && PROXY_HANDLERS.includes(bleConfig.bleHandler) && !forceNative) {
+    log.info('BLE Diagnostic Tool');
+    log.info('');
+    log.info(`Configured transport: ${bleConfig.bleHandler}`);
+    log.info('');
+    log.info('This tool tests the local Bluetooth radio through Noble, and your');
+    log.info('config routes BLE through a proxy instead, so there is nothing here');
+    log.info('for it to check. `start` and `scan` both use the configured');
+    log.info('transport and are the right tools for a proxy setup.');
+    log.info('');
+    log.info("To test this host's own radio anyway, pass --native.");
+    return;
+  }
+
   if (bleConfig.nobleDriver) {
     process.env.NOBLE_DRIVER = bleConfig.nobleDriver;
   }

@@ -195,6 +195,8 @@ The same commands exist in both shapes. From a clone they are npm scripts, from 
 | `ble-scale-sync setup-strava`  | `npm run setup-strava`    | Strava OAuth token setup                          |
 | `ble-scale-sync scan`          | `npm run scan`            | Discover nearby BLE devices                       |
 | `ble-scale-sync diagnose MAC`  | `npm run diagnose -- MAC` | BLE diagnostic dump                               |
+
+`diagnose` tests this host's own Bluetooth radio through Noble. If `ble.handler` is set to a proxy transport (`esphome-proxy`, `mqtt-proxy`, `ha-bluetooth`), it says so and stops, because there is no local radio in that setup for it to check. Use `scan` and `start`, which both go through the configured transport, or pass `--native` to test the local radio anyway.
 | `ble-scale-sync validate`      | `npm run validate`        | Validate `config.yaml` and exit                   |
 | `ble-scale-sync --help`        | `npm start -- --help`     | Command list and environment overrides            |
 | `ble-scale-sync --version`     | -                         | Print the version                                 |
