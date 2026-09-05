@@ -60,8 +60,24 @@ describe('SpeedianceAdapter', () => {
       const reading = adapter.parseCharNotification(uuid16(0xffb3), a7);
       expect(reading).not.toBeNull();
       expect(reading!.weight).toBeCloseTo(76.35, 2);
-      expect(reading!.impedance).toBe(3022);
+      // 3022 is not a whole-body BIA figure, so it is dropped rather than fed
+      // to the estimator; see IMPEDANCE_MIN_OHM in the adapter (#383, #322).
+      expect(reading!.impedance).toBe(0);
       expect(adapter.isComplete(reading!)).toBe(true);
+    });
+
+    it('accepts an impedance inside the plausible whole-body range', () => {
+      const adapter = makeAdapter();
+      const frame = Buffer.from('4d2300a76a96d1ff25012a3e000a002e01970b2a', 'hex');
+      const reading = adapter.parseCharNotification(uuid16(0xffb3), frame);
+      expect(reading!.impedance).toBe(302); // 0x012e
+    });
+
+    it('computes body fat from the impedance rather than falling back to BMI', () => {
+      const adapter = makeAdapter();
+      const withZ = adapter.computeMetrics({ weight: 76.35, impedance: 302 }, defaultProfile());
+      const without = adapter.computeMetrics({ weight: 76.35, impedance: 0 }, defaultProfile());
+      expect(withZ.bodyFatPercent).not.toBe(without.bodyFatPercent);
     });
 
     it('ignores A2 live frames (weight still settling, no final result)', () => {

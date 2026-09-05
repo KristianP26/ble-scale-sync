@@ -9,7 +9,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload } from './body-comp-helpers.js';
+import { uuid16, buildPayload, computeBiaFat } from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
@@ -55,7 +55,24 @@ const HANDSHAKE: string[] = [
 const WEIGHT_OFFSET = 9;
 const WEIGHT_BYTES = 3;
 const WEIGHT_DIV = 1000;
-const IMPEDANCE_OFFSET = 15; // u16 LE; unverified against the app — validate body-fat before trusting
+const IMPEDANCE_OFFSET = 15; // u16 LE
+
+/**
+ * Plausible whole-body BIA range, ohms.
+ *
+ * The capture's value at IMPEDANCE_OFFSET is 3022, which is not a whole-body
+ * figure: the Hutbit adapter established this same 150 to 1200 range in #322
+ * after a unit started publishing nonsense. Two uint16 LE values sit next to
+ * each other in the A7 frame, 3022 and 2967, and both land inside the range
+ * once divided by ten, so the field is probably right and the scaling probably
+ * is not. That is a hypothesis, and this project does not ship impedance on a
+ * hypothesis, so out-of-range values are dropped and body composition falls
+ * back to the BMI estimate rather than being computed from a number that is
+ * plausibly off by a factor of ten. Settling the divisor needs one weigh-in
+ * with the vendor app's own body-fat figure to check against (#383).
+ */
+const IMPEDANCE_MIN_OHM = 150;
+const IMPEDANCE_MAX_OHM = 1200;
 
 export class SpeedianceAdapter implements ScaleAdapterCore, GattWiring, MultiCharNotify {
   readonly name = 'Speediance';
@@ -108,7 +125,17 @@ export class SpeedianceAdapter implements ScaleAdapterCore, GattWiring, MultiCha
       if (w > 0 && Number.isFinite(w)) {
         this.cachedWeight = w;
         const imp = data.readUInt16LE(IMPEDANCE_OFFSET);
-        this.cachedImpedance = imp > 0 && Number.isFinite(imp) ? imp : 0;
+        if (imp >= IMPEDANCE_MIN_OHM && imp <= IMPEDANCE_MAX_OHM) {
+          this.cachedImpedance = imp;
+        } else {
+          this.cachedImpedance = 0;
+          if (imp > 0) {
+            bleLog.debug(
+              `Speediance: impedance ${imp} is outside the ${IMPEDANCE_MIN_OHM} to ` +
+                `${IMPEDANCE_MAX_OHM} ohm range, ignoring it (#383)`,
+            );
+          }
+        }
         this.final = true;
       }
     }
@@ -128,9 +155,13 @@ export class SpeedianceAdapter implements ScaleAdapterCore, GattWiring, MultiCha
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    // Whole-body BIA from weight + impedance; when impedance is 0 (handshake
-    // did not arm it) buildPayload falls back to the Deurenberg weight-only
-    // estimate, so a bad reading degrades to weight-only rather than garbage.
-    return buildPayload(reading.weight, reading.impedance, {}, profile);
+    // buildPayload does NOT run the BIA estimator; that is the caller's job, and
+    // passing an empty comp here would silently produce the BMI estimate no
+    // matter what the scale measured (#386). With the impedance gated above, a
+    // value this adapter does not trust reaches here as 0 and the BMI fallback
+    // is then the deliberate outcome rather than an accident.
+    const fat =
+      reading.impedance > 0 ? computeBiaFat(reading.weight, reading.impedance, profile) : undefined;
+    return buildPayload(reading.weight, reading.impedance, { fat }, profile);
   }
 }
