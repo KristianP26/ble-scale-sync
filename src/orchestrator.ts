@@ -2,6 +2,7 @@ import { createLogger } from './logger.js';
 import { errMsg } from './utils/error.js';
 import type { Exporter, ExportContext, ExportResultDetail } from './interfaces/exporter.js';
 import type { BodyComposition } from './interfaces/scale-adapter.js';
+import { cliCommand } from './cli-invocation.js';
 
 const log = createLogger('Sync');
 
@@ -72,7 +73,9 @@ export async function dispatchExports(
       return buildResult(true, []);
     }
     log.warn('No exporters configured, measurement processed but not sent anywhere.');
-    log.warn('  Run `npm run setup` and pick at least one export target, or edit config.yaml.');
+    log.warn(
+      `  Run \`${cliCommand('setup')}\` and pick at least one export target, or edit config.yaml.`,
+    );
     return buildResult(true, []);
   }
 

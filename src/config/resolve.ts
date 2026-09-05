@@ -8,6 +8,7 @@ import type {
   WeightUnit,
   MqttProxyConfig,
   EsphomeProxyConfig,
+  HaBluetoothConfig,
 } from './schema.js';
 
 // --- User profile resolution ---
@@ -89,6 +90,7 @@ export interface ResolvedRuntimeConfig {
   bleAdapter?: string;
   mqttProxy?: MqttProxyConfig;
   esphomeProxy?: EsphomeProxyConfig;
+  haBluetooth?: HaBluetoothConfig;
 }
 
 /**
@@ -111,6 +113,7 @@ export function resolveRuntimeConfig(config: AppConfig): ResolvedRuntimeConfig {
     bleAdapter: config.ble?.adapter ?? undefined,
     mqttProxy: config.ble?.mqtt_proxy ?? undefined,
     esphomeProxy: config.ble?.esphome_proxy ?? undefined,
+    haBluetooth: config.ble?.ha_bluetooth ?? undefined,
   };
 }
 

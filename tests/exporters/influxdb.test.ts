@@ -169,3 +169,59 @@ describe('InfluxDbExporter back-date support', () => {
     expect(tsField).toBe(ts.getTime());
   });
 });
+
+describe('InfluxDbExporter InfluxDB v3 compatibility', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetch.mockResolvedValue({ status: 204 });
+  });
+
+  // Measured against a real influxdb:3-core container: an unauthenticated
+  // GET /health answers 401 there, so the wizard reported a working v3 target
+  // as broken even though the write itself returned 204.
+  it('sends the token on the healthcheck', async () => {
+    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+    const exporter = new InfluxDbExporter(defaultConfig);
+    const result = await exporter.healthcheck();
+
+    expect(result.success).toBe(true);
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toBe('http://localhost:8086/health');
+    expect(init.headers.Authorization).toBe('Token my-token');
+  });
+
+  it('reports the healthcheck status when the token is rejected', async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 401 });
+    const exporter = new InfluxDbExporter(defaultConfig);
+    const result = await exporter.healthcheck();
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('HTTP 401');
+  });
+
+  it('omits org from the write URL when it is not configured', async () => {
+    const { org: _org, ...withoutOrg } = defaultConfig;
+    const exporter = new InfluxDbExporter(withoutOrg as InfluxDbConfig);
+    await exporter.export(samplePayload);
+
+    const url = mockFetch.mock.calls[0][0] as string;
+    expect(url).not.toContain('org=');
+    expect(url).toBe('http://localhost:8086/api/v2/write?bucket=my-bucket&precision=ms');
+  });
+
+  it('omits org when it is configured as an empty string', async () => {
+    const exporter = new InfluxDbExporter({ ...defaultConfig, org: '' });
+    await exporter.export(samplePayload);
+
+    expect(mockFetch.mock.calls[0][0] as string).not.toContain('org=');
+  });
+
+  it('still sends org when configured, for v2', async () => {
+    const exporter = new InfluxDbExporter(defaultConfig);
+    await exporter.export(samplePayload);
+
+    expect(mockFetch.mock.calls[0][0] as string).toBe(
+      'http://localhost:8086/api/v2/write?org=my-org&bucket=my-bucket&precision=ms',
+    );
+  });
+});

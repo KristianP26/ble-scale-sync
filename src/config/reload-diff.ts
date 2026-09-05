@@ -24,6 +24,7 @@ const SENSITIVE_KEYS = new Set([
   'ble.mqtt_proxy.password',
   'ble.esphome_proxy.password',
   'ble.esphome_proxy.encryption_key',
+  'ble.ha_bluetooth.token',
 ]);
 
 function maskSensitive(key: string, val: unknown): string {
@@ -78,6 +79,12 @@ export function diffRestartRequired(
     newEsp?.encryption_key,
   );
   diffField(out, 'ble.esphome_proxy.password', oldEsp?.password, newEsp?.password);
+
+  const oldHa = oldConfig.ble?.ha_bluetooth;
+  const newHa = newConfig.ble?.ha_bluetooth;
+  diffField(out, 'ble.ha_bluetooth.url', oldHa?.url, newHa?.url);
+  diffField(out, 'ble.ha_bluetooth.token', oldHa?.token, newHa?.token);
+  diffField(out, 'ble.ha_bluetooth.source', oldHa?.source, newHa?.source);
 
   diffField(
     out,

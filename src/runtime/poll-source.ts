@@ -44,6 +44,7 @@ export class PollReadingSource implements ReadingSource {
       bleHandler: this.ctx.bleHandler,
       mqttProxy: this.ctx.mqttProxy,
       esphomeProxy: this.ctx.esphomeProxy,
+      haBluetooth: this.ctx.haBluetooth,
       bleAdapter: this.ctx.bleAdapter,
       readingTimeoutMs: this.ctx.config.ble?.session_timeout_sec
         ? this.ctx.config.ble.session_timeout_sec * 1000

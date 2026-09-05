@@ -1,6 +1,11 @@
 import type { WizardStep, WizardContext } from '../types.js';
-import type { MqttProxyConfig, EsphomeProxyConfig } from '../../config/schema.js';
+import type {
+  MqttProxyConfig,
+  EsphomeProxyConfig,
+  HaBluetoothConfig,
+} from '../../config/schema.js';
 import { isValidScaleId, SCALE_ID_HINT } from '../../ble/scale-id.js';
+import { missingPackagesFor } from '../../ble/transport-availability.js';
 import { success, warn, info } from '../ui.js';
 
 function validateMac(v: string): string | true {
@@ -171,6 +176,33 @@ async function promptEsphomeProxy(ctx: WizardContext): Promise<EsphomeProxyConfi
   } as EsphomeProxyConfig;
 }
 
+function validateHaUrl(v: string): string | true {
+  if (!/^(https?|wss?):\/\/\S+$/.test(v.trim())) {
+    return 'Enter the Home Assistant URL, e.g. http://homeassistant.local:8123';
+  }
+  return true;
+}
+
+async function promptHaBluetooth(ctx: WizardContext): Promise<HaBluetoothConfig> {
+  const url = await ctx.prompts.input(
+    'Home Assistant URL (e.g. http://homeassistant.local:8123):',
+    { validate: validateHaUrl },
+  );
+  const token = await ctx.prompts.input(
+    'Long-lived access token of an ADMIN user (Profile > Security), or ${HA_TOKEN} to read it from .env:',
+    { validate: (v: string) => (v.trim() ? true : 'Token is required') },
+  );
+  const source = await ctx.prompts.input(
+    'Only accept advertisements from this HA scanner (source id; leave empty for all):',
+    { default: '' },
+  );
+  return {
+    url: url.trim(),
+    token: token.trim(),
+    ...(source.trim() ? { source: source.trim() } : {}),
+  } as HaBluetoothConfig;
+}
+
 export const bleStep: WizardStep = {
   id: 'ble',
   title: 'BLE Scale Discovery',
@@ -196,6 +228,11 @@ export const bleStep: WizardStep = {
         value: 'esphome-proxy' as const,
         description: 'Reuse an existing ESPHome BT proxy from Home Assistant',
       },
+      {
+        name: 'Via Home Assistant Bluetooth (Experimental, broadcast-only)',
+        value: 'ha-bluetooth' as const,
+        description: "Subscribe to Home Assistant's advertisement stream (any HA Bluetooth proxy)",
+      },
     ]);
 
     ctx.config.ble.handler = handler;
@@ -203,16 +240,26 @@ export const bleStep: WizardStep = {
     if (handler === 'mqtt-proxy') {
       ctx.config.ble.mqtt_proxy = await promptMqttProxy(ctx);
       ctx.config.ble.esphome_proxy = undefined;
+      ctx.config.ble.ha_bluetooth = undefined;
       console.log(`\n  ${info('MQTT proxy configured. Scale discovery will use the ESP32.')}`);
     } else if (handler === 'esphome-proxy') {
       ctx.config.ble.esphome_proxy = await promptEsphomeProxy(ctx);
       ctx.config.ble.mqtt_proxy = undefined;
+      ctx.config.ble.ha_bluetooth = undefined;
       console.log(
         `\n  ${info('ESPHome proxy configured. Only broadcast scales are supported in phase 1.')}`,
+      );
+    } else if (handler === 'ha-bluetooth') {
+      ctx.config.ble.ha_bluetooth = await promptHaBluetooth(ctx);
+      ctx.config.ble.mqtt_proxy = undefined;
+      ctx.config.ble.esphome_proxy = undefined;
+      console.log(
+        `\n  ${info('Home Assistant Bluetooth configured. Broadcast scales only (no GATT).')}`,
       );
     } else {
       ctx.config.ble.mqtt_proxy = undefined;
       ctx.config.ble.esphome_proxy = undefined;
+      ctx.config.ble.ha_bluetooth = undefined;
     }
 
     // --- Adapter selection (Linux + auto handler + node-ble only) ---
@@ -243,7 +290,19 @@ export const bleStep: WizardStep = {
             destroy();
           }
         } catch {
-          // D-Bus not available — fall through to manual entry
+          // D-Bus not available, or node-ble itself was skipped by an optional
+          // install (#364). Both fall through to manual entry, but a missing
+          // package is worth naming: otherwise the picker just reports that it
+          // found no adapters.
+          const missing = missingPackagesFor('node-ble');
+          if (missing.length > 0) {
+            console.log(
+              `\n  ${warn(
+                `Adapter list unavailable: ${missing.join(', ')} is not installed ` +
+                  `(npm install ${missing.join(' ')}).`,
+              )}`,
+            );
+          }
         }
 
         if (availableAdapters.length > 1) {
@@ -364,6 +423,7 @@ export const bleStep: WizardStep = {
             mqttProxy,
             ctx.config.ble!.adapter ?? undefined,
             ctx.config.ble!.esphome_proxy,
+            ctx.config.ble!.ha_bluetooth,
           );
         } finally {
           if (embeddedBroker) await embeddedBroker.close();
@@ -442,6 +502,8 @@ export {
   validateBrokerUrl,
   validatePort,
   validateEsphomeHost,
+  validateHaUrl,
   promptMqttProxy,
   promptEsphomeProxy,
+  promptHaBluetooth,
 };

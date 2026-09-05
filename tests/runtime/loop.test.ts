@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { runContinuousLoop, type ReadingSource } from '../../src/runtime/loop.js';
 import type { RawReading } from '../../src/ble/shared.js';
+import { MissingTransportModuleError } from '../../src/ble/transport-availability.js';
 
 const STUB_RAW: RawReading = {
   reading: { weight: 70, impedance: 500 },
@@ -86,6 +87,36 @@ describe('runContinuousLoop', () => {
     ac.abort();
     parked.resolve(STUB_RAW);
     await loop;
+  });
+
+  it('fails fast when a BLE stack is not installed, instead of retrying forever', async () => {
+    // #364: a missing npm package never fixes itself on the next cycle. Left in
+    // the backoff path, the install instruction is emitted at info level glued
+    // to "retrying in 60s", once per cycle, and an unrecoverable install
+    // problem reads exactly like a scale nobody stepped on.
+    const ac = new AbortController();
+    const { source, nextReading } = makeSource();
+    const onFailure = vi.fn();
+    const missing = new MissingTransportModuleError(
+      'noble-legacy',
+      ['@abandonware/noble'],
+      'BLE transport noble-legacy needs the npm package @abandonware/noble',
+    );
+    nextReading.mockImplementation(() => Promise.reject(missing));
+
+    const loop = runContinuousLoop({
+      source,
+      processReading: async () => true,
+      signal: ac.signal,
+      touchHeartbeat: () => {},
+      isReloadRequested: () => false,
+      clearReloadRequest: () => {},
+      onFailure,
+    });
+
+    await expect(loop).rejects.toBe(missing);
+    expect(nextReading).toHaveBeenCalledTimes(1);
+    expect(onFailure).not.toHaveBeenCalled();
   });
 
   beforeEach(() => {

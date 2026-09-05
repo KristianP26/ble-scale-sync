@@ -278,6 +278,28 @@ describe('bleStep + esphome-proxy handler', () => {
   });
 });
 
+describe('bleStep + ha-bluetooth handler', () => {
+  it('sets handler to ha-bluetooth and clears the other proxy blocks', async () => {
+    const ctx = makeCtx([
+      'ha-bluetooth', // handler
+      'http://homeassistant.local:8123', // url
+      '${HA_TOKEN}', // token
+      '', // source filter -> none
+      'skip', // scale discovery
+    ]);
+
+    await bleStep.run(ctx);
+
+    expect(ctx.config.ble?.handler).toBe('ha-bluetooth');
+    expect(ctx.config.ble?.mqtt_proxy).toBeUndefined();
+    expect(ctx.config.ble?.esphome_proxy).toBeUndefined();
+    expect(ctx.config.ble?.ha_bluetooth).toEqual({
+      url: 'http://homeassistant.local:8123',
+      token: '${HA_TOKEN}',
+    });
+  });
+});
+
 // ─── bleStep handler selection ──────────────────────────────────────────
 
 describe('bleStep handler selection', () => {

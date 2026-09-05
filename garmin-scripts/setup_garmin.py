@@ -209,7 +209,10 @@ def run_from_config(config_path, target_user=None, cli_token_dir=None):
     if has_error:
         sys.exit(1)
 
-    print("\n[Setup] All done! You can now run 'npm start' to sync your scale.")
+    print(
+        "\n[Setup] All done! You can now run 'ble-scale-sync' "
+        "(or 'npm start' from a checkout) to sync your scale."
+    )
 
 
 def run_legacy(cli_token_dir=None):
@@ -228,7 +231,10 @@ def run_legacy(cli_token_dir=None):
     if not authenticate(email, password, token_dir):
         sys.exit(1)
 
-    print("[Setup] You can now run 'npm start' to sync your scale.")
+    print(
+        "[Setup] You can now run 'ble-scale-sync' "
+        "(or 'npm start' from a checkout) to sync your scale."
+    )
 
 
 def parse_args():

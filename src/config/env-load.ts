@@ -1,6 +1,6 @@
 import { config as dotenvConfig } from 'dotenv';
 import type { AppConfig, ExporterEntry } from './schema.js';
-import { DEFAULT_ENV_PATH } from './paths.js';
+import { defaultEnvPath } from './paths.js';
 import { parseBleAdapterEnv } from './env-overrides.js';
 import { loadConfig as loadEnvVarConfig } from '../validate-env.js';
 import { loadExporterConfig } from '../exporters/config.js';
@@ -10,7 +10,7 @@ import { loadExporterConfig } from '../exporters/config.js';
  * into the unified AppConfig shape.
  */
 export function loadEnvConfig(): AppConfig {
-  dotenvConfig({ path: DEFAULT_ENV_PATH });
+  dotenvConfig({ path: defaultEnvPath() });
 
   const envConfig = loadEnvVarConfig();
   const exporterConfig = loadExporterConfig();
@@ -19,6 +19,11 @@ export function loadEnvConfig(): AppConfig {
   const globalExporters: ExporterEntry[] = exporterConfig.exporters.map((name) => {
     const entry: Record<string, unknown> = { type: name };
 
+    if (name === 'garmin' && exporterConfig.garmin) {
+      Object.assign(entry, {
+        weight_only: exporterConfig.garmin.weightOnly,
+      });
+    }
     if (name === 'mqtt' && exporterConfig.mqtt) {
       const m = exporterConfig.mqtt;
       Object.assign(entry, {

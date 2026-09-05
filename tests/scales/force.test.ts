@@ -17,6 +17,22 @@ describe('force_scale_adapter', () => {
     expect(applyForcedAdapter(adapters, null)).toHaveLength(adapters.length);
   });
 
+  // The override used to replace matches() outright, which skipped the variant
+  // latching two adapters do inside it (#384).
+  it('still runs the real matcher, so a name-driven variant is latched', () => {
+    const forced = applyForcedAdapter(adapters, 'Yunmai')[0] as unknown as {
+      matches: (d: BleDeviceInfo) => boolean;
+      isMini?: boolean;
+    };
+    expect(forced.matches({ ...anyDevice, localName: 'YUNMAI-ISM-XXXX' })).toBe(true);
+    expect(forced.isMini).toBe(true);
+  });
+
+  it('claims the device even when the real matcher says no', () => {
+    const forced = applyForcedAdapter(adapters, 'Yunmai')[0];
+    expect(forced.matches(anyDevice)).toBe(true);
+  });
+
   it('narrows the registry to the named adapter, case-insensitively', () => {
     const forced = applyForcedAdapter(adapters, 'hutbit');
     expect(forced).toHaveLength(1);

@@ -4,33 +4,29 @@ import type {
   UserProfile,
   ScaleAuth,
 } from '../interfaces/scale-adapter.js';
-import type { MqttProxyConfig, EsphomeProxyConfig } from '../config/schema.js';
+import type { MqttProxyConfig, EsphomeProxyConfig, HaBluetoothConfig } from '../config/schema.js';
 import type { ScanOptions, ScanResult, BleHandlerName } from './types.js';
 import type { RawReading } from './shared.js';
 import type { Watcher } from './reading-source.js';
 import { bleLog } from './types.js';
 import { ReadingWatcher } from './handler-mqtt-proxy/index.js';
+import { HANDLER_LABELS, rethrowAsTransportError } from './transport-availability.js';
+import type { HandlerKey } from './transport-availability.js';
 
 export type { ScanOptions, ScanResult } from './types.js';
 export type { RawReading } from './shared.js';
 export type { Watcher, WatcherConfig } from './reading-source.js';
 
-type NobleDriver = 'abandonware' | 'stoprocent';
-
 /**
  * Resolved BLE handler identifier. The transport switch in this file used to
  * be triplicated across `scanAndReadRaw`, `scanAndRead`, and `scanDevices`;
- * `resolveHandlerKey()` is now the single source of truth (#130).
+ * `resolveHandlerKey()` is now the single source of truth (#130). The type and
+ * the labels live in ./transport-availability.js, next to the package map that
+ * answers "is this transport's npm package even installed here" (#364).
  */
-export type HandlerKey = 'mqtt-proxy' | 'esphome-proxy' | 'noble-legacy' | 'noble' | 'node-ble';
+export type { HandlerKey } from './transport-availability.js';
 
-const HANDLER_LABELS: Record<HandlerKey, string> = {
-  'mqtt-proxy': 'mqtt-proxy (ESP32)',
-  'esphome-proxy': 'esphome-proxy',
-  'noble-legacy': 'noble-legacy (@abandonware/noble)',
-  noble: 'noble (@stoprocent/noble)',
-  'node-ble': 'node-ble (BlueZ D-Bus)',
-};
+type NobleDriver = 'abandonware' | 'stoprocent';
 
 /** Resolve NOBLE_DRIVER env var to a specific noble driver, or null for OS default. */
 function resolveNobleDriver(): NobleDriver | null {
@@ -49,6 +45,7 @@ function resolveNobleDriver(): NobleDriver | null {
 export function resolveHandlerKey(bleHandler?: BleHandlerName): HandlerKey {
   if (bleHandler === 'mqtt-proxy') return 'mqtt-proxy';
   if (bleHandler === 'esphome-proxy') return 'esphome-proxy';
+  if (bleHandler === 'ha-bluetooth') return 'ha-bluetooth';
   const driver = resolveNobleDriver();
   if (driver === 'abandonware') return 'noble-legacy';
   if (driver === 'stoprocent') return 'noble';
@@ -63,13 +60,14 @@ interface CommonHandler {
   scanAndRead: (opts: ScanOptions) => Promise<BodyComposition>;
 }
 
-async function loadHandler(key: HandlerKey): Promise<CommonHandler> {
-  bleLog.debug(`BLE handler: ${HANDLER_LABELS[key]}`);
+function importHandler(key: HandlerKey): Promise<CommonHandler> {
   switch (key) {
     case 'mqtt-proxy':
       return import('./handler-mqtt-proxy/index.js');
     case 'esphome-proxy':
       return import('./handler-esphome-proxy/index.js');
+    case 'ha-bluetooth':
+      return import('./handler-ha-bluetooth/index.js');
     case 'noble-legacy':
       return import('./handler-noble-legacy.js');
     case 'noble':
@@ -83,6 +81,17 @@ async function loadHandler(key: HandlerKey): Promise<CommonHandler> {
       const _exhaustive: never = key;
       throw new Error(`Unknown BLE handler key: ${String(_exhaustive)}`);
     }
+  }
+}
+
+async function loadHandler(key: HandlerKey): Promise<CommonHandler> {
+  bleLog.debug(`BLE handler: ${HANDLER_LABELS[key]}`);
+  try {
+    // `return await`, not a bare `return`: a bare return hands the rejection
+    // to the caller without ever entering this catch.
+    return await importHandler(key);
+  } catch (err) {
+    rethrowAsTransportError(key, err);
   }
 }
 
@@ -105,6 +114,7 @@ export interface ReadingSourceOptions {
   bleHandler?: BleHandlerName;
   mqttProxy?: MqttProxyConfig;
   esphomeProxy?: EsphomeProxyConfig;
+  haBluetooth?: HaBluetoothConfig;
   adapters: ScaleAdapter[];
   targetMac?: string;
   profile: UserProfile;
@@ -150,6 +160,21 @@ export async function createReadingSource(opts: ReadingSourceOptions): Promise<R
     return { kind: 'watcher', watcher, failureLogPrefix: 'Error processing ESPHome reading' };
   }
 
+  if (key === 'ha-bluetooth' && opts.haBluetooth) {
+    const { ReadingWatcher: HaReadingWatcher } = await import('./handler-ha-bluetooth/index.js');
+    const watcher = new HaReadingWatcher(
+      opts.haBluetooth,
+      opts.adapters,
+      opts.targetMac,
+      opts.profile,
+    );
+    return {
+      kind: 'watcher',
+      watcher,
+      failureLogPrefix: 'Error processing Home Assistant Bluetooth reading',
+    };
+  }
+
   return { kind: 'poll', appliesGraceFloor: key === 'node-ble' };
 }
 
@@ -174,19 +199,45 @@ export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
  *
  * Stays as a switch/case rather than going through `loadHandler` because each
  * handler's `scanDevices` takes different config args (mqttProxy / esphomeProxy
- * / bleAdapter), so the dispatch is shape-specific.
+ * / bleAdapter), so the dispatch is shape-specific. It still needs the same
+ * missing-package guard, or `scan` is the one command that reports a bare
+ * ERR_MODULE_NOT_FOUND when an optional BLE stack was skipped (#364).
  */
 export async function scanDevices(
   adapters: ScaleAdapter[],
   durationMs?: number,
   bleHandler?: BleHandlerName,
-  mqttProxy?: import('../config/schema.js').MqttProxyConfig,
+  mqttProxy?: MqttProxyConfig,
   bleAdapter?: string,
-  esphomeProxy?: import('../config/schema.js').EsphomeProxyConfig,
+  esphomeProxy?: EsphomeProxyConfig,
+  haBluetooth?: HaBluetoothConfig,
 ): Promise<ScanResult[]> {
   const key = resolveHandlerKey(bleHandler);
   bleLog.debug(`BLE handler: ${HANDLER_LABELS[key]}`);
+  try {
+    return await runScanDevices(
+      key,
+      adapters,
+      durationMs,
+      mqttProxy,
+      bleAdapter,
+      esphomeProxy,
+      haBluetooth,
+    );
+  } catch (err) {
+    rethrowAsTransportError(key, err);
+  }
+}
 
+async function runScanDevices(
+  key: HandlerKey,
+  adapters: ScaleAdapter[],
+  durationMs?: number,
+  mqttProxy?: MqttProxyConfig,
+  bleAdapter?: string,
+  esphomeProxy?: EsphomeProxyConfig,
+  haBluetooth?: HaBluetoothConfig,
+): Promise<ScanResult[]> {
   switch (key) {
     case 'mqtt-proxy': {
       if (!mqttProxy) {
@@ -201,6 +252,13 @@ export async function scanDevices(
       }
       const { scanDevices: impl } = await import('./handler-esphome-proxy/index.js');
       return impl(adapters, durationMs, esphomeProxy);
+    }
+    case 'ha-bluetooth': {
+      if (!haBluetooth) {
+        throw new Error('ha_bluetooth config is required when ble.handler is ha-bluetooth');
+      }
+      const { scanDevices: impl } = await import('./handler-ha-bluetooth/index.js');
+      return impl(adapters, durationMs, haBluetooth);
     }
     case 'noble-legacy': {
       if (bleAdapter) {

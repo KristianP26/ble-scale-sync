@@ -34,6 +34,12 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
   // vendor service, so QN now defers and it resolves to RenphoScaleAdapter.
   'Renpho ES-WBE28': { localName: 'Renpho Body Scale', serviceUuids: ['181b', '181d'] },
   'Renpho ES-26BB': { localName: 'es-26bb-b', serviceUuids: [] },
+  // #385: the advertised name is the only thing separating this from the Inlife
+  // and 1byone families on the shared FFF0 service.
+  'Etekcity ESF-551': {
+    localName: 'Etekcity Smart Fitness Scale',
+    serviceUuids: ['fff0'],
+  },
   'Beurer BF720/BF105': { localName: 'BF720', serviceUuids: [] },
   'Xiaomi Mi Smart Scale 2 (XMTZC04HM)': {
     localName: '',
@@ -50,6 +56,12 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
   },
   'Xiaomi Mi Scale 2': { localName: 'MIBFS', serviceUuids: [] },
   'Xiaomi Mijia Scale S800': { localName: 'Mijia Scale S800 A1AB', serviceUuids: [] },
+  // Same FE95 service as the S800; the product id (0x3bd5 here) tells them apart.
+  'Xiaomi Body Composition Scale S400': {
+    localName: '',
+    serviceUuids: [],
+    serviceData: [{ uuid: 'fe95', data: Buffer.from('305ad53b00530870acea1c08', 'hex') }],
+  },
   Yunmai: { localName: 'Yunmai', serviceUuids: [] },
   'Beurer / Sanitas': { localName: 'Beurer BF700', serviceUuids: [] },
   'Sanitas SBF72/73': { localName: 'SBF72', serviceUuids: [] },
@@ -79,6 +91,7 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
   '1byone Scale (new)': { localName: '1byone scale', serviceUuids: [] },
   'Active Era BS-06': { localName: 'AE BS-06', serviceUuids: [] },
   'Robi S9': { localName: 'Robi S9', serviceUuids: [] },
+  Speediance: { localName: 'SPEED_S_E60EJE', serviceUuids: ['ffb0'] },
   Hutbit: { localName: 'Hutbit Scale', serviceUuids: ['ffb0'] },
   'MGB (Swan/Icomon/YG)': { localName: 'icomon', serviceUuids: [] },
   'Hoffen BS-8107': { localName: 'hoffen bs-8107', serviceUuids: [] },

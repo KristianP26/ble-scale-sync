@@ -1,5 +1,3 @@
-#!/usr/bin/env tsx
-
 import { parseArgs } from 'node:util';
 import { loadAppConfig } from './load.js';
 import { resolveExportersForUser } from './resolve.js';
@@ -13,7 +11,8 @@ const { values } = parseArgs({
 });
 
 if (values.help) {
-  console.log('Usage: npm run validate [-- --config <path>]');
+  console.log('Usage: ble-scale-sync validate [--config <path>]');
+  console.log('       npm run validate [-- --config <path>]   (from a git checkout)');
   console.log('');
   console.log('Options:');
   console.log('  -c, --config <path>  Path to config.yaml (default: ./config.yaml)');

@@ -1333,6 +1333,46 @@ describe('AE02 dispatch (#75, #235)', () => {
         vi.useRealTimers();
       }
     });
+
+    it('still delivers the 0x1F ack on FFE3 when the session ends before the FFF2 fallback runs', async () => {
+      const adapter = makeAdapter();
+      const writes: Array<{ uuid: string; data: number[] }> = [];
+      const ctx = {
+        // An FFE3-only scale: the FFF2 attempt rejects, the fallback must land on FFE3.
+        write: async (uuid: string, data: Buffer | number[]) => {
+          if (uuid === '0000fff200001000800000805f9b34fb') {
+            throw new Error(`Characteristic ${uuid} not found`);
+          }
+          writes.push({ uuid, data: [...data] });
+        },
+        read: async () => Buffer.alloc(0),
+        subscribe: async () => {},
+        profile: defaultProfile(),
+        deviceAddress: '',
+        availableChars: new Set<string>(),
+      } as unknown as ConnectionContext;
+      await adapter.onConnected(ctx);
+      writes.length = 0;
+
+      const stable = Buffer.alloc(10);
+      stable[0] = 0x10;
+      stable[1] = 0x0a;
+      stable[2] = 0x01;
+      stable.writeUInt16BE(8000, 3);
+      stable[5] = 1;
+      stable.writeUInt16BE(550, 6);
+      stable.writeUInt16BE(530, 8);
+
+      // waitForReading's finishWith runs cleanup -> onSessionEnd synchronously
+      // after parseNotification returns, before the rejected FFF2 write is observed.
+      expect(adapter.parseNotification(stable)).not.toBeNull();
+      adapter.onSessionEnd!();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      const ack = writes.find((w) => w.data[0] === 0x1f);
+      expect(ack?.uuid).toBe('0000ffe300001000800000805f9b34fb');
+      expect(ack?.data).toEqual([0x1f, 0x05, 0x00, 0x10, 0x34]);
+    });
   });
 
   // ── GE CS 10 G "Fit Plus" extended long frame (#235) ────────────────────────
@@ -1388,6 +1428,44 @@ describe('AE02 dispatch (#75, #235)', () => {
         vi.useRealTimers();
       }
     }
+
+    // #331: the Arboleaf vendor app sends two 0xA4 0x0F frames between START and
+    // the first live 0x10 frame, and the reporter's HCI capture shows the app
+    // going straight into a weight stream after them while this app goes silent.
+    describe('0xA4 prelude (ble.qn_a4_prelude, #331)', () => {
+      const A4_ONE = [
+        0xa4, 0x0f, 0x01, 0x21, 0x0a, 0x48, 0x08, 0xf1, 0x0a, 0x33, 0x08, 0xda, 0x08, 0x80, 0xc7,
+      ];
+      const A4_TWO = [
+        0xa4, 0x0f, 0x01, 0x22, 0x06, 0x78, 0x09, 0xf3, 0x07, 0xdb, 0x01, 0xc1, 0x01, 0xa5, 0x9a,
+      ];
+
+      it('sends nothing extra by default, so the rest of the QN family is untouched', async () => {
+        const adapter = makeAdapter();
+        const writes = await driveHandshake(adapter, makeExtendedScaleInfo());
+        expect(writes.some((w) => w[0] === 0xa4)).toBe(false);
+      });
+
+      it('sends both frames after START when the flag is on', async () => {
+        const adapter = makeAdapter();
+        adapter.configure({ qnA4Prelude: true });
+        const writes = await driveHandshake(adapter, makeExtendedScaleInfo());
+        const startIdx = writes.findIndex((w) => w[0] === 0x22);
+        const a4 = writes.filter((w) => w[0] === 0xa4);
+        expect(a4).toEqual([A4_ONE, A4_TWO]);
+        expect(writes.findIndex((w) => w[0] === 0xa4)).toBeGreaterThan(startIdx);
+      });
+
+      // Both frames are replayed verbatim, so the checksum is the only thing
+      // proving they were transcribed correctly from the capture.
+      it('carries the checksums from the capture, which are the byte sum', () => {
+        for (const frame of [A4_ONE, A4_TWO]) {
+          const body = frame.slice(0, -1);
+          const sum = body.reduce((a, b) => a + b, 0) & 0xff;
+          expect(frame[frame.length - 1]).toBe(sum);
+        }
+      });
+    });
 
     it('20B 0x12 frame echoes the protocol type into the 0x13 config', async () => {
       const adapter = makeAdapter();

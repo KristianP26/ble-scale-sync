@@ -7,6 +7,7 @@ import { MiScale2Adapter } from './mi-scale-2.js';
 import { XiaomiMiScaleLegacyAdapter } from './xiaomi-mi-scale-legacy.js';
 import { Silvergear108Adapter } from './silvergear-108.js';
 import { XiaomiS800Adapter } from './xiaomi-s800.js';
+import { XiaomiS400Adapter } from './xiaomi-s400.js';
 import { BeurerBf720Adapter } from './beurer-bf720.js';
 import { YunmaiScaleAdapter } from './yunmai.js';
 import { BeurerSanitasScaleAdapter } from './beurer-sanitas.js';
@@ -21,10 +22,12 @@ import { ExcelvanCF369Adapter } from './excelvan-cf369.js';
 import { HesleyScaleAdapter } from './hesley.js';
 import { KoogeekS1Adapter } from './koogeek-s1.js';
 import { InlifeScaleAdapter } from './inlife.js';
+import { EtekcityEsf551Adapter } from './etekcity-esf551.js';
 import { DigooScaleAdapter } from './digoo.js';
 import { OneByoneAdapter, OneByoneNewAdapter } from './one-byone.js';
 import { ActiveEraAdapter } from './active-era.js';
 import { RobiS9Adapter } from './robi-s9.js';
+import { SpeedianceAdapter } from './speediance.js';
 import { HutbitAdapter } from './hutbit.js';
 import { MgbAdapter } from './mgb.js';
 import { HoffenAdapter } from './hoffen.js';
@@ -65,6 +68,9 @@ export const adapters: ScaleAdapter[] = [
   // Xiaomi Mijia S800 (ms116): broadcast-only, matches FE95 + product id 0x51E2
   // or its own name; no collision with any other adapter (#232).
   new XiaomiS800Adapter(),
+  // Xiaomi S400 (MJTZC01YM): same encrypted FE95 broadcast as the S800, told
+  // apart by product id; also matches its "Xiaomi Scale S400" name.
+  new XiaomiS400Adapter(),
   new YunmaiScaleAdapter(),
   new BeurerSanitasScaleAdapter(),
   new SanitasSbf72Adapter(),
@@ -78,6 +84,11 @@ export const adapters: ScaleAdapter[] = [
   // Koogeek-S1 outranks Inlife because a Koogeek advertises the bare 0xFFF0
   // service, which Inlife's pre-connect fallback would otherwise claim (#270).
   new KoogeekS1Adapter(),
+  // Etekcity outranks Inlife for the same reason Koogeek does: an ESF-551
+  // exposes FFF0 with an FFF2 write and no FFF4, which is exactly Inlife's
+  // post-discovery rule, and being claimed there ends the session on a read
+  // timeout with no reading (#385). It matches on its advertised name only.
+  new EtekcityEsf551Adapter(),
   new InlifeScaleAdapter(),
   new DigooScaleAdapter(),
   new OneByoneAdapter(),
@@ -86,6 +97,7 @@ export const adapters: ScaleAdapter[] = [
   // Robi S9 (Lefu/Fitdays FFB0-new) before MGB: both use service 0xFFB0, but the
   // Robi speaks a different protocol and is matched by name or its FFB3 result
   // characteristic, so it must win before the generic MGB FFB0 fallback (#228).
+  new SpeedianceAdapter(), // before Robi: SPEED_S_* is a Lefu sibling with a fuller handshake
   new RobiS9Adapter(),
   // Hutbit (Lefu/Fitdays FFB0 8-byte AC02 protocol): matches by its "Hutbit"
   // name; sits before the generic MGB FFB0 fallback (#254).

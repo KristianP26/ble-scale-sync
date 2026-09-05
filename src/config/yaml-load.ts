@@ -4,7 +4,7 @@ import { config as dotenvConfig } from 'dotenv';
 import { createLogger } from '../logger.js';
 import { AppConfigSchema, formatConfigError } from './schema.js';
 import type { AppConfig } from './schema.js';
-import { DEFAULT_CONFIG_PATH, DEFAULT_ENV_PATH } from './paths.js';
+import { defaultConfigPath, defaultEnvPath } from './paths.js';
 import { resolveEnvReferences } from './env-refs.js';
 import { applyEnvOverrides, filterValidExporters } from './env-overrides.js';
 import { collectUnknownKeys } from './unknown-keys.js';
@@ -16,11 +16,12 @@ const log = createLogger('Config');
  */
 export function loadYamlConfig(configPath?: string): AppConfig {
   // Load .env so ${VAR} references in config.yaml can resolve secrets from .env
-  if (existsSync(DEFAULT_ENV_PATH)) {
-    dotenvConfig({ path: DEFAULT_ENV_PATH });
+  const envPath = defaultEnvPath();
+  if (existsSync(envPath)) {
+    dotenvConfig({ path: envPath });
   }
 
-  const yamlPath = configPath ?? DEFAULT_CONFIG_PATH;
+  const yamlPath = configPath ?? defaultConfigPath();
   const raw = readFileSync(yamlPath, 'utf8');
   const parsed: unknown = parseYaml(raw);
   const resolved = resolveEnvReferences(parsed);

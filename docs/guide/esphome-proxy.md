@@ -174,7 +174,7 @@ If a GATT scale still does not produce readings:
   proxy via `additional_proxies`.
 - **Out of range:** the connect is routed to the proxy that last saw the scale.
   If no proxy is close enough, move a proxy nearer or add one to the mesh.
-- Single-shot (`npm start`) returns a descriptive error; continuous mode
+- Single-shot (`ble-scale-sync`, or `npm start` from a clone) returns a descriptive error; continuous mode
   (`CONTINUOUS_MODE=true`) keeps running and retries.
 - **ESPHome logs "Missing address type in connect request":** resolved. The
   handler now sends the BLE address type (public or random, taken from the
@@ -240,7 +240,7 @@ esp32_ble_tracker:
 
 Flash the updated firmware to the proxy and restart BLE Scale Sync. This affects all passive-broadcast scales on that proxy: higher duty cycle means more reliable first-try readings.
 
-### "No recognized scales found" in `npm run scan` over ESPHome
+### "No recognized scales found" in `ble-scale-sync scan` over ESPHome
 
 - Step on the scale (or press its button) while the scan runs so it begins advertising
 - Move closer to the ESPHome proxy. Scale advertisements are low-power and ESPHome proxies have their own range limits
