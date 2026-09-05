@@ -12,12 +12,28 @@ head:
 Home Assistant can act as BLE Scale Sync's BLE radio. Every Bluetooth scanner Home Assistant knows about (its own adapter, ESPHome Bluetooth proxies, SMLIGHT SLZB coordinators, Shelly devices) feeds one advertisement stream, and BLE Scale Sync subscribes to that stream over the Home Assistant websocket API. No local Bluetooth adapter, no dedicated ESP32, no MQTT broker.
 
 ::: tip Broadcast scales only
-Home Assistant exposes advertisements over this API, not GATT connections. Scales whose reading is in the advertisement work (Xiaomi Mi Scale 2 and S400 / S800, Silvergear 108, broadcast-only Renpho ES-CS20M variants, ...). Scales that need a connection (QN Scale, Yunmai, Beurer, most Renpho, ...) are reported as unsupported over this transport at startup; use a local adapter or the [ESPHome proxy](/guide/esphome-proxy) for those.
+Home Assistant exposes advertisements over this API, not GATT connections. Only scales whose reading is in the advertisement work; see [which scales work](#which-scales-work) below. Scales that need a connection are named in a warning at startup; use a local adapter or the [ESPHome proxy](/guide/esphome-proxy) for those.
 :::
 
 ::: tip Coexists with Home Assistant
 Unlike pointing BLE Scale Sync at an ESPHome node directly, this transport does not take anything away from Home Assistant: Home Assistant keeps owning its proxies and simply forwards what they hear. It is the right choice when your only BLE receiver near the scale is something Home Assistant already uses, for example a SMLIGHT SLZB-06/MR coordinator with its BLE proxy enabled.
 :::
+
+## Which scales work
+
+The transport is passive, so an adapter can only be served if it reads the weigh-in from the advertisement itself. On the current adapter list that is these:
+
+| Adapter                                              | Over Home Assistant Bluetooth                                                                                                    |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| **Xiaomi** Mi Scale 2 (MIBCS / MIBFS / XMTZC05HM)    | Weight and impedance from the `0x181B` service data, full body composition                                                       |
+| **Xiaomi** Mi Smart Scale 2 (XMTZC04HM / MI SCALE2)  | Weight only (`0x181D` carries no impedance)                                                                                      |
+| **Xiaomi** Mijia Body Composition Scale S800 (ms116) | Weight only; needs `ble.bind_key`                                                                                                |
+| **Xiaomi** Body Composition Scale S400               | Weight, impedance and heart rate; needs `ble.bind_key` and `ble.scale_mac`                                                       |
+| **Silvergear** Smart Scale 108                       | Weight only                                                                                                                      |
+| **Eufy** Smart Scale P2 (T9148) / P2 Pro (T9149)     | Weight only, same as the local adapter                                                                                           |
+| **QN-Scale**, broadcast-only firmware                | Weight only. Only units that send the `AABB` broadcast (some Renpho ES-CS20M / Elis 1 variants); connectable QN scales need GATT |
+
+Every other adapter (Renpho, Yunmai, Beurer / Sanitas, Medisana, Soehnle, Trisa, Salter, Etekcity, the Standard GATT catch-all, ...) opens a connection to read the weight, which this transport cannot do. The limit is Home Assistant's API, not the proxy hardware: its Bluetooth websocket commands only subscribe to advertisements and scanner state, with no way for an outside client to connect to a device or receive notifications, even though Home Assistant's own integrations can do so through the same proxies. They are still matched, so the log says which one you have, but the reading never arrives. The startup line `Home Assistant Bluetooth transport ready (broadcast only)` lists the adapters in your build that work, and a warning names the ones that do not.
 
 ## How it works
 
