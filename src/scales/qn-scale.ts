@@ -551,12 +551,17 @@ export class QnScaleAdapter
   }
 
   private async writeCmd(data: number[]): Promise<void> {
-    if (!this.ctx) return;
+    // Hold the context for both attempts. The 0x1F ack is issued from
+    // parseNotification, whose caller ends the session (onSessionEnd nulls
+    // this.ctx) in the same tick, so on FFE3-only scales the fallback would
+    // otherwise dereference null and the ack would never reach the scale.
+    const ctx = this.ctx;
+    if (!ctx) return;
     try {
-      await this.ctx.write(CHR_WRITE, data, false);
+      await ctx.write(CHR_WRITE, data, false);
     } catch (primaryErr: unknown) {
       try {
-        await this.ctx.write(CHR_WRITE_T1, data, false);
+        await ctx.write(CHR_WRITE_T1, data, false);
       } catch (altErr: unknown) {
         // Both write characteristics rejected. Logging this matters: a silent
         // return here is why a failed handshake looks identical to a scale
