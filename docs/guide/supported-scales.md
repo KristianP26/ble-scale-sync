@@ -9,47 +9,48 @@ head:
 
 # Supported Scales
 
-**33 protocol adapters**, plus a Standard BT SIG catch-all for any spec-compliant scale. Most adapters cover several rebrands, so real coverage is wider than the count.
+**34 protocol adapters**, plus a Standard BT SIG catch-all for any spec-compliant scale. Most adapters cover several rebrands, so real coverage is wider than the count.
 
 ## Scale List
 
 _Weight only_ means weight is reported normally but body composition is estimated from BMI. [Known Limitations](#known-limitations) says why, per scale. Most popular brands first.
 
-| Brand / Models                                                        | Body composition | Notes                                               |
-| --------------------------------------------------------------------- | ---------------- | --------------------------------------------------- |
-| **Xiaomi** Mi Scale 2 (MIBCS / MIBFS / XMTZC05HM)                     | Yes              | No pairing needed; works on every transport         |
-| **Xiaomi** Mi Smart Scale 2 (XMTZC04HM / MI SCALE2)                   | Weight only      | No pairing needed                                   |
-| **Silvergear** Smart Scale 108                                        | Weight only      | Broadcast only; the display unit does not matter    |
-| **Xiaomi** Mijia Body Composition Scale S800 (ms116)                  | Weight only      | Needs a per-device `ble.bind_key` from the Mi cloud |
-| **Renpho** ES-CS20M / ES-32MD / Elis 1 / FITINDEX / Sencor (QN-Scale) | Yes              | The most common protocol; many rebrands             |
-| **Renpho** ES-WBE28                                                   | Yes              | Standard GATT variant                               |
-| **Renpho** ES-26BB-B                                                  | Yes              |                                                     |
-| **Renpho** R-MSC04 (MorphoScan Nova)                                  | Weight only      |                                                     |
-| **1byone** / **Eufy** C1 / P1                                         | Yes              |                                                     |
-| **Eufy** Smart Scale P2 (T9148) / P2 Pro (T9149)                      | Weight only      |                                                     |
-| **Yunmai** Signal / Mini / SE                                         | Yes              | The scale sends its own body composition            |
-| **Beurer** BF700 / BF710 / BF800                                      | Yes              | BF710: register it in the Beurer app first          |
-| **Salter** SA00656 / SA00432 (Salter Health)                          | Weight only      | Powers off after weighing; suits continuous mode    |
-| **Sanitas** SBF70 / SBF75                                             | Yes              |                                                     |
-| **Sanitas** SBF72 / SBF73 / **Beurer** BF915                          | Yes              | Needs user slot 1 in the vendor app                 |
-| **Beurer** BF720 / BF105 / BF500 / BF788 / BF950                      | Yes              | Needs `users[].beurer_pin` and a bonded link        |
-| **Soehnle** Shape200 / Shape100 / Shape50 / Style100                  | Yes              | Needs user slot 1 in the vendor app                 |
-| **Medisana** BS430 / BS440 / BS444                                    | Yes              |                                                     |
-| **Active Era** BS-06                                                  | Yes              |                                                     |
-| **Senssun** Fat                                                       | Yes              | Model A only                                        |
-| **MGB** (Swan / Icomon / YG)                                          | Yes              |                                                     |
-| **Hutbit** 218008 / WL292                                             | Yes              | Also sold under stock `SWAN` branding               |
-| **Robi** S9                                                           | Weight only      |                                                     |
-| **Digoo** DG-SO38H (Mengii)                                           | Yes              |                                                     |
-| **Excelvan** CF369                                                    | Yes              |                                                     |
-| **Trisa** Body Analyze / **ADE** BA 1600 (fitvigo)                    | Yes              | The ADE BA 1600 variant is weight only              |
-| **Hoffen** BS-8107                                                    | Yes              |                                                     |
-| **Etekcity** ESF-551 Smart Fitness Scale                              | Yes              | Matched by its advertised name                      |
-| **Hesley** (YunChen)                                                  | Yes              |                                                     |
-| **Inlife** (FatScale)                                                 | Yes              |                                                     |
-| **Koogeek** S1                                                        | Yes              | Connecting can be unreliable, see below             |
-| **Exingtech** Y1 (vscale)                                             | Yes              |                                                     |
-| Any **standard BT SIG** scale (BCS/WSS)                               | Yes              | Catch-all; select user 1 on the scale               |
+| Brand / Models                                                        | Body composition | Notes                                                                                                  |
+| --------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------ |
+| **Xiaomi** Mi Scale 2 (MIBCS / MIBFS / XMTZC05HM)                     | Yes              | No pairing needed; works on every transport                                                            |
+| **Xiaomi** Mi Smart Scale 2 (XMTZC04HM / MI SCALE2)                   | Weight only      | No pairing needed                                                                                      |
+| **Silvergear** Smart Scale 108                                        | Weight only      | Broadcast only; the display unit does not matter                                                       |
+| **Xiaomi** Mijia Body Composition Scale S800 (ms116)                  | Weight only      | Needs a per-device `ble.bind_key` from the Mi cloud                                                    |
+| **Xiaomi** Body Composition Scale S400 (MJTZC01YM)                    | Yes              | Needs a per-device `ble.bind_key` from the Mi cloud plus `ble.scale_mac`; weigh barefoot for impedance |
+| **Renpho** ES-CS20M / ES-32MD / Elis 1 / FITINDEX / Sencor (QN-Scale) | Yes              | The most common protocol; many rebrands                                                                |
+| **Renpho** ES-WBE28                                                   | Yes              | Standard GATT variant                                                                                  |
+| **Renpho** ES-26BB-B                                                  | Yes              |                                                                                                        |
+| **Renpho** R-MSC04 (MorphoScan Nova)                                  | Weight only      |                                                                                                        |
+| **1byone** / **Eufy** C1 / P1                                         | Yes              |                                                                                                        |
+| **Eufy** Smart Scale P2 (T9148) / P2 Pro (T9149)                      | Weight only      |                                                                                                        |
+| **Yunmai** Signal / Mini / SE                                         | Yes              | The scale sends its own body composition                                                               |
+| **Beurer** BF700 / BF710 / BF800                                      | Yes              | BF710: register it in the Beurer app first                                                             |
+| **Salter** SA00656 / SA00432 (Salter Health)                          | Weight only      | Powers off after weighing; suits continuous mode                                                       |
+| **Sanitas** SBF70 / SBF75                                             | Yes              |                                                                                                        |
+| **Sanitas** SBF72 / SBF73 / **Beurer** BF915                          | Yes              | Needs user slot 1 in the vendor app                                                                    |
+| **Beurer** BF720 / BF105 / BF500 / BF788 / BF950                      | Yes              | Needs `users[].beurer_pin` and a bonded link                                                           |
+| **Soehnle** Shape200 / Shape100 / Shape50 / Style100                  | Yes              | Needs user slot 1 in the vendor app                                                                    |
+| **Medisana** BS430 / BS440 / BS444                                    | Yes              |                                                                                                        |
+| **Active Era** BS-06                                                  | Yes              |                                                                                                        |
+| **Senssun** Fat                                                       | Yes              | Model A only                                                                                           |
+| **MGB** (Swan / Icomon / YG)                                          | Yes              |                                                                                                        |
+| **Hutbit** 218008 / WL292                                             | Yes              | Also sold under stock `SWAN` branding                                                                  |
+| **Robi** S9                                                           | Weight only      |                                                                                                        |
+| **Digoo** DG-SO38H (Mengii)                                           | Yes              |                                                                                                        |
+| **Excelvan** CF369                                                    | Yes              |                                                                                                        |
+| **Trisa** Body Analyze / **ADE** BA 1600 (fitvigo)                    | Yes              | The ADE BA 1600 variant is weight only                                                                 |
+| **Hoffen** BS-8107                                                    | Yes              |                                                                                                        |
+| **Etekcity** ESF-551 Smart Fitness Scale                              | Yes              | Matched by its advertised name                                                                         |
+| **Hesley** (YunChen)                                                  | Yes              |                                                                                                        |
+| **Inlife** (FatScale)                                                 | Yes              |                                                                                                        |
+| **Koogeek** S1                                                        | Yes              | Connecting can be unreliable, see below                                                                |
+| **Exingtech** Y1 (vscale)                                             | Yes              |                                                                                                        |
+| Any **standard BT SIG** scale (BCS/WSS)                               | Yes              | Catch-all; select user 1 on the scale                                                                  |
 
 ## Finding Your Scale
 
@@ -102,6 +103,10 @@ Weight only. The bytes previously read as impedance are not a body resistance, s
 ### **Xiaomi** Mi Smart Scale 2 (XMTZC04HM)
 
 Weight only. The 0x181D advertisement carries no impedance, so body composition is estimated from BMI (Deurenberg formula).
+
+### **Xiaomi** Body Composition Scale S400 (MJTZC01YM)
+
+The scale broadcasts its measurement as an encrypted MiBeacon frame, so it needs the per-device `ble.bind_key` from the Mi cloud (extract it with the community Xiaomi-cloud-tokens-extractor after pairing the scale in the Mi Home app) and `ble.scale_mac`: the measurement frames omit the MAC the decryption nonce needs, and the MAC is otherwise only learned from the idle beacon. Register a user profile in Mi Home (the scale tags each reading with a profile slot) and keep the Mi Home app closed while weighing, or the phone takes the session and nothing is broadcast. Weigh barefoot: with socks the scale sends weight only and body composition is estimated from BMI (Deurenberg formula). The scale measures impedance at 50 kHz and 250 kHz and a heart rate; the 50 kHz value feeds the Xiaomi body-composition formulas shared with the Mi Scale 2 (the app's own dual-frequency model is proprietary, so expect small offsets, see [Body Composition](/body-composition)), the other two are logged only. It is a "sleepy" device that advertises only while someone stands on it, so run `scan` while you are on the scale.
 
 ### **Silvergear** Smart Scale 108
 

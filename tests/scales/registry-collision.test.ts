@@ -56,6 +56,12 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
   },
   'Xiaomi Mi Scale 2': { localName: 'MIBFS', serviceUuids: [] },
   'Xiaomi Mijia Scale S800': { localName: 'Mijia Scale S800 A1AB', serviceUuids: [] },
+  // Same FE95 service as the S800; the product id (0x3bd5 here) tells them apart.
+  'Xiaomi Body Composition Scale S400': {
+    localName: '',
+    serviceUuids: [],
+    serviceData: [{ uuid: 'fe95', data: Buffer.from('305ad53b00530870acea1c08', 'hex') }],
+  },
   Yunmai: { localName: 'Yunmai', serviceUuids: [] },
   'Beurer / Sanitas': { localName: 'Beurer BF700', serviceUuids: [] },
   'Sanitas SBF72/73': { localName: 'SBF72', serviceUuids: [] },

@@ -14,6 +14,7 @@ version: 1
 # --- BLE Settings (optional, uncomment to pin to a specific scale) ---
 # ble:
 #   scale_mac: "FF:03:00:13:A1:04"   # Run "npm run scan" to find yours
+#   bind_key: "${XIAOMI_BIND_KEY}"     # Xiaomi S800 / S400: 32-hex MiBeacon key from the Mi cloud
 #   noble_driver: abandonware         # "abandonware" | "stoprocent"
 #   handler: auto                     # "auto" | "mqtt-proxy" | "esphome-proxy"
 #   adapter: hci0                     # Linux only: select BLE adapter (omit for default)

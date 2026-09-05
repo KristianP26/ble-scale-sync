@@ -70,7 +70,7 @@ If you prefer manual configuration, here's the full reference. See [`config.yaml
 ```yaml
 ble:
   scale_mac: 'FF:03:00:13:A1:04'
-  # bind_key: '0123456789abcdef0123456789abcdef' # Xiaomi S800 only
+  # bind_key: '0123456789abcdef0123456789abcdef' # Xiaomi S800 / S400
   # handler: auto
   # noble_driver: abandonware
   # adapter: hci1
@@ -83,7 +83,7 @@ ble:
 | Field                        | Required                    | Default        | Description                                                                                                                                                                                                                                                                                |
 | ---------------------------- | --------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `scale_mac`                  | Recommended                 | Auto-discovery | MAC address, or a CoreBluetooth UUID on macOS (bare 32-hex as the wizard writes it, or the dashed form). Prevents connecting to a neighbor's scale.                                                                                                                                        |
-| `bind_key`                   | Xiaomi S800 only            | (none)         | 32-char hex per-device MiBeacon key from the Mi cloud (extract with the community Xiaomi-cloud-tokens-extractor). Decrypts only the device's own FE95 broadcast. Keep it secret; it is a credential.                                                                                       |
+| `bind_key`                   | Xiaomi S800 / S400          | (none)         | 32-char hex per-device MiBeacon key from the Mi cloud (extract with the community Xiaomi-cloud-tokens-extractor). Decrypts only the device's own FE95 broadcast. The S400 also needs `scale_mac`. Keep it secret; it is a credential.                                                      |
 | `handler`                    | No                          | `auto`         | Transport: `auto` (local radio), `mqtt-proxy` (ESP32 over MQTT), `esphome-proxy` (ESPHome Native API). See below.                                                                                                                                                                          |
 | `noble_driver`               | No                          | OS default     | `abandonware` or `stoprocent`. Overrides the default BLE driver. Only applies when `handler: auto`.                                                                                                                                                                                        |
 | `adapter`                    | No                          | System default | Linux only. Select a specific Bluetooth adapter (e.g., `hci0`, `hci1`). See below.                                                                                                                                                                                                         |
