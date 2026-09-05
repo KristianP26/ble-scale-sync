@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-* add Speediance Smart Scale (FG2211WBF) adapter ([e1284ad](https://github.com/KristianP26/ble-scale-sync/commit/e1284ad2b9d10dc4942f66c7e93b78d6f31b61f7))
+* **scales:** add the Speediance Smart Scale FG2211WBF adapter ([#383](https://github.com/KristianP26/ble-scale-sync/issues/383)) ([e1284ad](https://github.com/KristianP26/ble-scale-sync/commit/e1284ad2b9d10dc4942f66c7e93b78d6f31b61f7))
 * **ble:** add the Home Assistant Bluetooth transport ([#375](https://github.com/KristianP26/ble-scale-sync/issues/375)) ([56489ca](https://github.com/KristianP26/ble-scale-sync/commit/56489ca27cb36fdd27da20b11ff916692277a293))
 * **ble:** name the missing npm package when a BLE transport is not installed ([1d1f448](https://github.com/KristianP26/ble-scale-sync/commit/1d1f448e4fb3826aa22ea66b53f57f20e82a1c6e)), closes [#364](https://github.com/KristianP26/ble-scale-sync/issues/364)
 * **cli:** dispatch subcommands from a single entry point ([a8e0f3e](https://github.com/KristianP26/ble-scale-sync/commit/a8e0f3ec940fd33beed2b463a1d6b52f58234074)), closes [#365](https://github.com/KristianP26/ble-scale-sync/issues/365)
@@ -17,7 +17,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 * **exporters:** let the Garmin exporter upload the weight alone ([#373](https://github.com/KristianP26/ble-scale-sync/issues/373)) ([d270901](https://github.com/KristianP26/ble-scale-sync/commit/d2709018d67af6c61a37eca64bee1d4380959af7))
 * **qn:** add ble.qn_a4_prelude, the two 0xA4 frames the Arboleaf app sends after START ([dbb39dd](https://github.com/KristianP26/ble-scale-sync/commit/dbb39dd70974ffe8668ba69afa76b8e0199ad940)), closes [#331](https://github.com/KristianP26/ble-scale-sync/issues/331)
 * **scales:** add the Etekcity ESF-551 Smart Fitness Scale ([80769d4](https://github.com/KristianP26/ble-scale-sync/commit/80769d44a07aa2a7f83f1af198d6db28a42f1e98)), closes [#385](https://github.com/KristianP26/ble-scale-sync/issues/385)
-* **scales:** add the Speediance Smart Scale FG2211WBF adapter ([#383](https://github.com/KristianP26/ble-scale-sync/issues/383)) ([83d3cfb](https://github.com/KristianP26/ble-scale-sync/commit/83d3cfb4105370669972b0a160b732af2d64cb7e))
 * **scales:** add the Xiaomi Body Composition Scale S400 adapter ([#374](https://github.com/KristianP26/ble-scale-sync/issues/374)) ([26b08e8](https://github.com/KristianP26/ble-scale-sync/commit/26b08e826f24bf10809510efadb3ebda5d0aeffc))
 
 
