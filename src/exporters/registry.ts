@@ -63,6 +63,10 @@ function optionalBool(
   );
 }
 
+// Every boolean an exporter reads goes through the helper above. The cast it
+// replaced was not specific to one field: `retain: "${MQTT_RETAIN}"` with
+// MQTT_RETAIN=false retained, and wger's sync_measurements had the same hole.
+
 /**
  * Read a required config field, throwing a clear error when it is missing or
  * empty. Surfaces hand-written `config.yaml` mistakes instead of letting an
@@ -98,11 +102,11 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
         brokerUrl: requireField(config, 'mqtt', 'broker_url'),
         topic: (config.topic as string) ?? 'scale/body-composition',
         qos: (config.qos as 0 | 1 | 2) ?? 1,
-        retain: (config.retain as boolean) ?? true,
+        retain: optionalBool(config, 'mqtt', 'retain') ?? true,
         username: config.username as string | undefined,
         password: config.password as string | undefined,
         clientId: (config.client_id as string) ?? 'ble-scale-sync',
-        haDiscovery: (config.ha_discovery as boolean) ?? true,
+        haDiscovery: optionalBool(config, 'mqtt', 'ha_discovery') ?? true,
         haDeviceName: (config.ha_device_name as string) ?? 'BLE Scale',
       };
       return new MqttExporter(mqttConfig);
@@ -144,7 +148,7 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
         token: config.token as string | undefined,
         username: config.username as string | undefined,
         password: config.password as string | undefined,
-        reportExports: (config.report_exports as boolean) ?? false,
+        reportExports: optionalBool(config, 'ntfy', 'report_exports') ?? false,
       };
       return new NtfyExporter(ntfyConfig);
     },
@@ -177,8 +181,8 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
         botToken: requireField(config, 'telegram', 'bot_token'),
         chatId: requireField(config, 'telegram', 'chat_id'),
         title: (config.title as string) ?? 'Scale Measurement',
-        silent: (config.silent as boolean) ?? false,
-        reportExports: (config.report_exports as boolean) ?? false,
+        silent: optionalBool(config, 'telegram', 'silent') ?? false,
+        reportExports: optionalBool(config, 'telegram', 'report_exports') ?? false,
       };
       return new TelegramExporter(telegramConfig);
     },
@@ -208,7 +212,7 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
       const wgerConfig: WgerConfig = {
         baseUrl: requireField(config, 'wger', 'base_url'),
         token: requireField(config, 'wger', 'token'),
-        syncMeasurements: (config.sync_measurements as boolean) ?? true,
+        syncMeasurements: optionalBool(config, 'wger', 'sync_measurements') ?? true,
       };
       return new WgerExporter(wgerConfig);
     },
