@@ -1,13 +1,7 @@
 import type { ScaleAdapter, ScaleReading, LiveWeight } from '../../interfaces/scale-adapter.js';
 import type { RawReading } from '../shared.js';
 import { bleLog, sleep, errMsg, DISCOVERY_TIMEOUT_MS, IMPEDANCE_GRACE_MS } from '../types.js';
-import {
-  helperOf,
-  getDbusNext,
-  type PropsChangedHandler,
-  type Adapter,
-  type Device,
-} from './dbus.js';
+import { helperOf, type PropsChangedHandler, type Adapter, type Device } from './dbus.js';
 import { isDeviceObjectGone } from './device-object.js';
 
 /** Extract a Buffer from a D-Bus value that may be a Variant wrapper, Buffer, Uint8Array, or number[]. */
@@ -59,19 +53,13 @@ export async function broadcastScanNodeBle(
 ): Promise<RawReading> {
   const { abortSignal, onLiveData, onLiveWeight } = opts;
 
-  // Tell BlueZ to report duplicate advertisements so ServiceData is refreshed
-  // on every packet from the scale, not just on first discovery.
-  try {
-    const { Variant } = await getDbusNext();
-    const adapterHelper = helperOf(btAdapter);
-    await adapterHelper.callMethod('SetDiscoveryFilter', {
-      Transport: new Variant('s', 'le'),
-      DuplicateData: new Variant('b', true),
-    });
-    bleLog.debug('Discovery filter: DuplicateData=true');
-  } catch (err: unknown) {
-    bleLog.debug(`SetDiscoveryFilter: ${errMsg(err)} (non-fatal, will poll)`);
-  }
+  // The duplicate filter is set in startDiscoverySafe, BEFORE StartDiscovery,
+  // because that is the only point at which BlueZ applies it to the scan it is
+  // about to run. It used to be set here instead, which is after the scan is
+  // already running and after the device has been found, so it never took and
+  // a broadcast scale looked frozen (#372). Left as a comment rather than a
+  // second call: repeating it here would look like belt and braces while
+  // actually doing nothing.
 
   bleLog.info(
     'Adapter prefers passive mode. Listening for broadcast weight data. Step on the scale.',
