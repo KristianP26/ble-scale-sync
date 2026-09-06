@@ -57,6 +57,12 @@ describe('toBleDeviceInfo (Home Assistant advertisement)', () => {
 
   it('tolerates missing optional collections', () => {
     const partial = { name: 'x', address: 'AA:BB:CC:DD:EE:FF' } as unknown as HaAdvertisement;
-    expect(toBleDeviceInfo(partial)).toEqual({ localName: 'x', serviceUuids: [] });
+    // The address is always carried now: adapters that match on an advertisement
+    // echoing its own MAC need it (#376).
+    expect(toBleDeviceInfo(partial)).toEqual({
+      localName: 'x',
+      address: 'AA:BB:CC:DD:EE:FF',
+      serviceUuids: [],
+    });
   });
 });

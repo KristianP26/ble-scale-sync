@@ -54,6 +54,7 @@ export function extractBytes(entry: EsphomeServiceData): Buffer {
 export function toBleDeviceInfo(ad: EsphomeBleAdvertisement): BleDeviceInfo {
   const info: BleDeviceInfo = {
     localName: ad.name || '',
+    address: formatMacAddress(ad.address),
     serviceUuids: (ad.serviceUuidsList ?? []).map(normalizeUuid),
   };
   const md = ad.manufacturerDataList?.[0];

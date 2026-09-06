@@ -27,6 +27,7 @@ import {
   IMPEDANCE_GRACE_MS,
   RAW_READING_TIMEOUT_MS,
   READING_SESSION_CAP_FACTOR,
+  formatMac,
 } from './types.js';
 
 /**
@@ -405,6 +406,7 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
           // Auto-discovery: try matching adapters by name + advertised service UUIDs
           const info: BleDeviceInfo = {
             localName: name,
+            address: peripheral.address ? formatMac(peripheral.address) : undefined,
             serviceUuids: svcUuids,
             manufacturerData: mfgData,
           };
@@ -502,6 +504,7 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
             ?.serviceData ?? [];
         const info: BleDeviceInfo = {
           localName: peripheral.advertisement?.localName ?? '',
+          address: peripheral.address ? formatMac(peripheral.address) : undefined,
           serviceUuids: [],
           manufacturerData: parseMfgData(peripheral.advertisement?.manufacturerData),
           serviceData: svcDataList,
@@ -595,6 +598,7 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
       if (!broadcastAdapter) {
         const info: BleDeviceInfo = {
           localName: advName,
+          address: peripheral.address ? formatMac(peripheral.address) : undefined,
           serviceUuids: advSvcUuids,
           manufacturerData: mfgData,
         };
@@ -691,6 +695,7 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
           // so an OEM-rebranded unit fell through to a wrong adapter.
           const info: BleDeviceInfo = {
             localName: name,
+            address: peripheral.address ? formatMac(peripheral.address) : undefined,
             serviceUuids,
             characteristicUuids,
             manufacturerData: parseMfgData(peripheral.advertisement?.manufacturerData),

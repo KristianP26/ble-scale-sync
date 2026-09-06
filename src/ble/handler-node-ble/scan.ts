@@ -298,6 +298,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       // through as before and is re-resolved after discovery.
       const preInfo: BleDeviceInfo = {
         localName: name,
+        address: deviceMac ? formatMac(deviceMac) : undefined,
         serviceUuids: [],
         ...(advert.manufacturerData ? { manufacturerData: advert.manufacturerData } : {}),
         ...(advert.serviceData && advert.serviceData.length > 0
@@ -358,6 +359,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       for (let attempt = 1; attempt <= CHAR_DISCOVERY_MAX_RETRIES; attempt++) {
         const info: BleDeviceInfo = {
           localName: name,
+          address: deviceMac ? formatMac(deviceMac) : undefined,
           serviceUuids: serviceUuids.map(normalizeUuid),
           characteristicUuids: [...matchCharMap.keys()],
           // Captured before StopDiscovery, because BlueZ drops the
@@ -650,6 +652,7 @@ export async function scanDevices(
           const advert = await logAdvertisementSnapshot(dev).catch(() => undefined);
           const info: BleDeviceInfo = {
             localName: name,
+            address: formatMac(addr),
             serviceUuids: [],
             ...(advert?.manufacturerData ? { manufacturerData: advert.manufacturerData } : {}),
             ...(advert?.serviceData && advert.serviceData.length > 0

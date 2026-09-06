@@ -288,6 +288,7 @@ export async function autoDiscover(
         const advert = await logAdvertisementSnapshot(dev).catch(() => undefined);
         const info: BleDeviceInfo = {
           localName: name,
+          address: formatMac(addr),
           serviceUuids: [],
           ...(advert?.manufacturerData ? { manufacturerData: advert.manufacturerData } : {}),
           ...(advert?.serviceData && advert.serviceData.length > 0

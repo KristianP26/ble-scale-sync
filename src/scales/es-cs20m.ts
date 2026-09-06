@@ -14,6 +14,63 @@ const CHR_NOTIFY = uuid16(0x2a10);
 const CHR_WRITE = uuid16(0x2a11);
 
 /**
+ * Company id on the anonymous advertisement of the ESCS20MB2 hardware revision.
+ *
+ * The same 0x1A10 number the family uses for its GATT service, which is a
+ * vendor habit rather than a coincidence, but the two live in different
+ * namespaces and neither implies the other.
+ */
+const QINGNIU_COMPANY_ID = 0x1a10;
+
+/** `00 04 00 31 | <6-byte MAC> | 01 09` on the unit captured for #376. */
+const ANON_PAYLOAD_LEN = 12;
+const ANON_MAC_OFFSET = 4;
+
+/** The six address bytes, uppercase and colon-free, or null. */
+function macBytes(address: string | undefined): string | null {
+  if (!address) return null;
+  const clean = address.replace(/[:-]/g, '').toUpperCase();
+  return /^[0-9A-F]{12}$/.test(clean) ? clean : null;
+}
+
+/**
+ * True when the advertisement carries the device's own address inside its
+ * manufacturer data.
+ *
+ * This is the whole reason the anonymous unit can be claimed safely. It sends
+ * no name and no service UUIDs (#376), so the only pre-connect signal is a
+ * company id, and claiming every nameless device that advertises one company id
+ * is precisely the shape that produced the wrong-adapter reports in #235, #318
+ * and #320. An address echo is self-validating instead: a device that is not
+ * this scale will not happen to contain the address it is transmitting from.
+ * `lefu-signature.ts` claims its family the same way.
+ *
+ * Both byte orders are accepted. The #376 capture has it forward
+ * (`cf ea 02 07 2c 87` from `CF:EA:02:07:2C:87`, which the reporter described
+ * as reversed), and other vendors in this space reverse it, so requiring one
+ * orientation would be a guess about firmware nobody has seen yet. Matching
+ * either costs nothing: a random payload hitting the exact advertising address
+ * in either direction is not a case worth designing around.
+ */
+function hasOwnMacEcho(device: BleDeviceInfo): boolean {
+  const md = device.manufacturerData;
+  if (!md || md.id !== QINGNIU_COMPANY_ID) return false;
+  if (md.data.length !== ANON_PAYLOAD_LEN) return false;
+  const own = macBytes(device.address);
+  if (!own) return false;
+  const embedded = md.data
+    .subarray(ANON_MAC_OFFSET, ANON_MAC_OFFSET + 6)
+    .toString('hex')
+    .toUpperCase();
+  const reversed = [...md.data.subarray(ANON_MAC_OFFSET, ANON_MAC_OFFSET + 6)]
+    .reverse()
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+    .toUpperCase();
+  return embedded === own || reversed === own;
+}
+
+/**
  * Adapter for the ES-CS20M BLE body-composition scale (Yunmai lineage).
  *
  * Also covers Renpho ES-32MD, which Renpho's own manual documents as the same
@@ -53,7 +110,10 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
   private lastWeight = 0;
 
   matches(device: BleDeviceInfo): boolean {
-    return matchesDescriptor(device, this.match);
+    // The ESCS20MB2 revision advertises anonymously: no name, no service UUIDs,
+    // only manufacturer data. It is claimed on the address echo in that payload
+    // rather than on the company id alone; see hasOwnMacEcho for why (#376).
+    return matchesDescriptor(device, this.match) || hasOwnMacEcho(device);
   }
 
   /**

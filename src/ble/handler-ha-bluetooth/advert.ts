@@ -34,6 +34,7 @@ export function toBleDeviceInfo(ad: HaAdvertisement): BleDeviceInfo {
   const name = ad.name && ad.name.toUpperCase() !== ad.address.toUpperCase() ? ad.name : '';
   const info: BleDeviceInfo = {
     localName: name,
+    address: ad.address.toUpperCase(),
     serviceUuids: (ad.service_uuids ?? []).map(normalizeUuid),
   };
 

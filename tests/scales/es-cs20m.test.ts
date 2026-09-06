@@ -5,12 +5,79 @@ import {
   defaultProfile,
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
+import { adapters } from '../../src/scales/index.js';
+import { resolveAdapter } from '../../src/scales/resolve.js';
+import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
 
 function makeAdapter() {
   return new EsCs20mAdapter();
 }
 
 describe('EsCs20mAdapter', () => {
+  // The ESCS20MB2 revision (HVIN ESCS20MB2, made 2026-02) advertises with no
+  // name and no service UUIDs, only manufacturer data under company 0x1A10,
+  // whose payload embeds the device's own address (#376).
+  describe('matches() on the anonymous ESCS20MB2 advertisement', () => {
+    const MAC = 'CF:EA:02:07:2C:87';
+    /** Byte-for-byte from the reporter's capture. */
+    const PAYLOAD = '00040031cfea02072c870109';
+
+    function anon(overrides: Partial<BleDeviceInfo> = {}): BleDeviceInfo {
+      return {
+        localName: '',
+        address: MAC,
+        serviceUuids: [],
+        manufacturerData: { id: 0x1a10, data: Buffer.from(PAYLOAD, 'hex') },
+        ...overrides,
+      };
+    }
+
+    it('claims a device whose payload carries its own address', () => {
+      expect(new EsCs20mAdapter().matches(anon())).toBe(true);
+    });
+
+    it('accepts the address in reverse byte order too', () => {
+      const reversed = Buffer.concat([
+        Buffer.from('00040031', 'hex'),
+        Buffer.from('872c0702eacf', 'hex'),
+        Buffer.from('0109', 'hex'),
+      ]);
+      expect(
+        new EsCs20mAdapter().matches(anon({ manufacturerData: { id: 0x1a10, data: reversed } })),
+      ).toBe(true);
+    });
+
+    // The point of the echo: company id alone would claim any nameless device
+    // that happens to use it, which is how #235, #318 and #320 happened.
+    it('does NOT claim a device carrying a different address', () => {
+      expect(new EsCs20mAdapter().matches(anon({ address: 'AA:BB:CC:DD:EE:FF' }))).toBe(false);
+    });
+
+    it('does NOT claim the same payload when the transport gave no address', () => {
+      expect(new EsCs20mAdapter().matches(anon({ address: undefined }))).toBe(false);
+    });
+
+    it('does NOT claim a different company id with an otherwise perfect payload', () => {
+      expect(
+        new EsCs20mAdapter().matches(
+          anon({ manufacturerData: { id: 0x02ac, data: Buffer.from(PAYLOAD, 'hex') } }),
+        ),
+      ).toBe(false);
+    });
+
+    it('does NOT claim a payload of the wrong length', () => {
+      expect(
+        new EsCs20mAdapter().matches(
+          anon({ manufacturerData: { id: 0x1a10, data: Buffer.from(PAYLOAD + '00', 'hex') } }),
+        ),
+      ).toBe(false);
+    });
+
+    it('resolves to this adapter through the live registry, not to another one', () => {
+      expect(resolveAdapter(anon(), adapters)?.name).toBe('ES-CS20M');
+    });
+  });
+
   describe('matches()', () => {
     it('matches "es-cs20m" substring', () => {
       const adapter = makeAdapter();

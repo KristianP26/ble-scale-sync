@@ -7,6 +7,19 @@ export type Gender = 'male' | 'female';
 /** Minimal BLE advertisement info needed for adapter matching. */
 export interface BleDeviceInfo {
   localName: string;
+  /**
+   * The device's own BLE address, uppercase colon-separated, when the transport
+   * knows it. Every transport supplies it; it is optional only so that the many
+   * hand-written test fixtures stay valid.
+   *
+   * It exists for advertisements that identify themselves by echoing their own
+   * MAC inside the payload. Matching on such an echo is self-validating in a way
+   * a bare company id is not: a device that is not this scale will not
+   * accidentally contain the address it is advertising from. The Lefu family
+   * fingerprint uses the same trick, and #376 needed it for an ES-CS20M
+   * revision that advertises anonymously, with no name and no service UUIDs.
+   */
+  address?: string;
   serviceUuids: string[];
   /** Manufacturer-specific data from the BLE advertisement (if present). */
   manufacturerData?: { id: number; data: Buffer };
