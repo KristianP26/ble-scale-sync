@@ -7,8 +7,12 @@ import {
   computePhysiqueRating,
   computeBiaFat,
   buildPayload,
+  biaFatIfPlausible,
+  IMPEDANCE_MIN_OHM,
+  IMPEDANCE_MAX_OHM,
 } from '../src/scales/body-comp-helpers.js';
 import type { UserProfile } from '../src/interfaces/scale-adapter.js';
+import { defaultProfile } from './helpers/scale-test-utils.js';
 
 describe('r2()', () => {
   it('rounds 1.005 to 1 (IEEE 754 — 1.005*100 = 100.49999…)', () => {
@@ -316,5 +320,45 @@ describe('buildPayload()', () => {
     const idealBmr = 10 * 80 + 6.25 * 183 - 5 * 25 + 5;
     const metabolicAge = 30 + Math.trunc((idealBmr - bmr) / 15);
     expect(p.metabolicAge).toBe(metabolicAge);
+  });
+});
+
+// #386: computeBiaFat bounds its output but not its input, and both directions
+// produce a confident wrong answer. This is the gate the adapters go through.
+describe('biaFatIfPlausible', () => {
+  const p = defaultProfile();
+
+  it('agrees with computeBiaFat inside the band', () => {
+    for (const z of [IMPEDANCE_MIN_OHM, 300, 500, 900, IMPEDANCE_MAX_OHM]) {
+      expect(biaFatIfPlausible(80, z, p)).toBe(computeBiaFat(80, z, p));
+    }
+  });
+
+  it('refuses anything outside the band', () => {
+    for (const z of [IMPEDANCE_MIN_OHM - 1, IMPEDANCE_MAX_OHM + 1, 30, 50, 2000, 65535]) {
+      expect(biaFatIfPlausible(80, z, p)).toBeUndefined();
+    }
+  });
+
+  it('refuses a missing measurement, which is the normal case, not an error', () => {
+    expect(biaFatIfPlausible(80, 0, p)).toBeUndefined();
+    expect(biaFatIfPlausible(80, -1, p)).toBeUndefined();
+    expect(biaFatIfPlausible(80, Number.NaN, p)).toBeUndefined();
+  });
+
+  it('feeds buildPayload the Deurenberg fallback when it refuses', () => {
+    // The whole point of returning undefined rather than 0: the reading lands
+    // on exactly the figure these adapters published before.
+    const refused = buildPayload(80, 50, { fat: biaFatIfPlausible(80, 50, p) }, p);
+    const bmiOnly = buildPayload(80, 50, {}, p);
+    expect(refused.bodyFatPercent).toBe(bmiOnly.bodyFatPercent);
+  });
+
+  it('catches the failure that actually happens: too LOW, not too high', () => {
+    // A tenfold-small impedance drives height^2 / Z up until lean mass exceeds
+    // body weight, and computeBiaFat's own cap then pins the 4 % floor. That is
+    // a plausible-looking 4 % body fat, not an obvious error.
+    expect(computeBiaFat(80, 50, p)).toBeCloseTo(4, 1);
+    expect(biaFatIfPlausible(80, 50, p)).toBeUndefined();
   });
 });
