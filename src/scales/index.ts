@@ -1,5 +1,5 @@
 import type { ScaleAdapter } from '../interfaces/scale-adapter.js';
-import { QnScaleAdapter } from './qn-scale.js';
+import { QnScaleAdapter } from './qn-scale/index.js';
 import { RenphoScaleAdapter } from './renpho.js';
 import { RenphoEs26bbAdapter } from './renpho-es26bb.js';
 import { RenphoMsc04Adapter } from './renpho-msc04.js';

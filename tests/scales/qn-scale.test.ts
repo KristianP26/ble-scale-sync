@@ -4,7 +4,7 @@ import {
   QnScaleAdapter,
   buildMeasurementTrigger,
   buildTimeSync,
-} from '../../src/scales/qn-scale.js';
+} from '../../src/scales/qn-scale/index.js';
 import { bleLog } from '../../src/ble/types.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type {

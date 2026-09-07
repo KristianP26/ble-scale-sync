@@ -1,4 +1,4 @@
-import { computeBiaFat, buildPayload } from './body-comp-helpers.js';
+import { computeBiaFat, buildPayload } from '../body-comp-helpers.js';
 import type {
   BleDeviceInfo,
   ConnectionContext,
@@ -10,16 +10,16 @@ import type {
   BodyComposition,
   AdapterRuntimeConfig,
   MultiCharNotify,
-} from '../interfaces/scale-adapter.js';
-import { uuid16 } from './body-comp-helpers.js';
-import { bleLog, errMsg, normalizeUuid } from '../ble/types.js';
-import type { MatchDescriptor } from './match-descriptor.js';
+} from '../../interfaces/scale-adapter.js';
+import { uuid16 } from '../body-comp-helpers.js';
+import { bleLog, errMsg, normalizeUuid } from '../../ble/types.js';
+import type { MatchDescriptor } from '../match-descriptor.js';
 import {
   jieliAuthResponseFrame,
   JIELI_CHALLENGE_FRAME_LEN,
   JIELI_CHALLENGE_HEADER,
-} from './jieli-auth.js';
-import type { WeightUnit } from '../config/schema.js';
+} from '../jieli-auth.js';
+import type { WeightUnit } from '../../config/schema.js';
 
 /** Format bytes as hex string for debug logging. */
 const hex = (data: number[] | Buffer): string =>

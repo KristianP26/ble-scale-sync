@@ -5,7 +5,7 @@ import {
   assertRegistryIntegrity,
 } from '../../src/scales/registry-check.js';
 import { StandardGattScaleAdapter } from '../../src/scales/standard-gatt.js';
-import { QnScaleAdapter } from '../../src/scales/qn-scale.js';
+import { QnScaleAdapter } from '../../src/scales/qn-scale/index.js';
 import type { ScaleAdapter } from '../../src/interfaces/scale-adapter.js';
 
 describe('registry-check structural guard (#182)', () => {
