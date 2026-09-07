@@ -7,6 +7,40 @@
 The add-on version always matches the application version, so every entry below
 applies to this add-on.
 
+## [1.28.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.27.0...v1.28.0) (2026-09-07)
+
+
+### Added
+
+* **ble:** carry the device address, and auto-detect the anonymous ES-CS20M ([e5b34c1](https://github.com/KristianP26/ble-scale-sync/commit/e5b34c18e80a7320d369e394e1621e91759c2b4e)), closes [#376](https://github.com/KristianP26/ble-scale-sync/issues/376)
+* **qn:** add ble.qn_time_sync_long for the vendor app's 9-byte 0x20 frame ([4c8432c](https://github.com/KristianP26/ble-scale-sync/commit/4c8432cc71a7578f6a89e5693e5f9e7dcb955b01)), closes [#331](https://github.com/KristianP26/ble-scale-sync/issues/331)
+* **scales:** add a shared impedance plausibility guard for BIA ([58127d7](https://github.com/KristianP26/ble-scale-sync/commit/58127d77d9b88ff57aade98c782ef03dfdc8b921)), closes [#386](https://github.com/KristianP26/ble-scale-sync/issues/386)
+* **tools:** derive the published adapter and exporter counts from the code ([770fd03](https://github.com/KristianP26/ble-scale-sync/commit/770fd03449b0c64a52f7c29d5d48bef1ba67cda3)), closes [#366](https://github.com/KristianP26/ble-scale-sync/issues/366)
+
+
+### Fixed
+
+* **addon:** emit the ble block when qn_a4_prelude is the only option set ([8da7b8d](https://github.com/KristianP26/ble-scale-sync/commit/8da7b8d05459ed241c6fa10318ed77224fee3dea)), closes [#331](https://github.com/KristianP26/ble-scale-sync/issues/331)
+* **addon:** make the custom_config warning loop a real line continuation ([25f151c](https://github.com/KristianP26/ble-scale-sync/commit/25f151cf87443fbf2f400c8bccbf0cb3a27268ff))
+* **beurer:** a zeroed composition field is not a measurement ([79b509b](https://github.com/KristianP26/ble-scale-sync/commit/79b509bbcb326822c1ddca5d9d02b2d6bfeae6ea)), closes [#386](https://github.com/KristianP26/ble-scale-sync/issues/386)
+* **ble:** cancel a pairing with the method BlueZ actually has ([4ce82af](https://github.com/KristianP26/ble-scale-sync/commit/4ce82af5043ee5c15e50425f00043dbbd2067718)), closes [#335](https://github.com/KristianP26/ble-scale-sync/issues/335)
+* **ble:** set the BlueZ duplicate filter before starting discovery, not after ([4b37f20](https://github.com/KristianP26/ble-scale-sync/commit/4b37f203836d264e6b586b8f103514f6f18c2743)), closes [#372](https://github.com/KristianP26/ble-scale-sync/issues/372)
+* **ble:** stop cleanly while a BLE pairing is still in flight ([4451122](https://github.com/KristianP26/ble-scale-sync/commit/4451122dd484e7da1af4b98c96f3a56af6869e98)), closes [#335](https://github.com/KristianP26/ble-scale-sync/issues/335)
+* **exporters:** read every boolean field the safe way, not just garmin.weight_only ([a5183cb](https://github.com/KristianP26/ble-scale-sync/commit/a5183cb7f34d73854e52ce249288cbf537efbc89))
+* **qn:** send the weight anchor before START, where the vendor app sends it ([f18aa93](https://github.com/KristianP26/ble-scale-sync/commit/f18aa93b7743d14c078ba05cc30aa44536cc1699)), closes [#331](https://github.com/KristianP26/ble-scale-sync/issues/331)
+* **qn:** send the weight anchor once, not at ready time and again before START ([66aae34](https://github.com/KristianP26/ble-scale-sync/commit/66aae34b56ed9bae48bf93838708a589c452f210))
+* **runtime:** force-exit with 0 when the stop was one you asked for ([8c7779a](https://github.com/KristianP26/ble-scale-sync/commit/8c7779a24179ecd553044ed0ed19cfbb81ea6b01)), closes [#335](https://github.com/KristianP26/ble-scale-sync/issues/335)
+* **scales:** use the impedance these four adapters already parse ([cc04ec4](https://github.com/KristianP26/ble-scale-sync/commit/cc04ec47745a259f81fcd84d61fac3198451d63b)), closes [#386](https://github.com/KristianP26/ble-scale-sync/issues/386)
+
+
+### Docs
+
+* **addon:** say that a custom config edit needs a restart ([6054a08](https://github.com/KristianP26/ble-scale-sync/commit/6054a089c94c290eef57f023cf708f89217a9d60))
+* **body-composition:** explain when an impedance is refused ([dbf9f98](https://github.com/KristianP26/ble-scale-sync/commit/dbf9f9890d447a043def4567a048ec2fb5ab3064)), closes [#386](https://github.com/KristianP26/ble-scale-sync/issues/386)
+* **qn:** reunite two docblocks with the code they document ([46bf2aa](https://github.com/KristianP26/ble-scale-sync/commit/46bf2aa366b9a228cb81906bc7bedc01c85777ab)), closes [#367](https://github.com/KristianP26/ble-scale-sync/issues/367)
+* **robi:** the S9 does not read an impedance, so it is not on the [#386](https://github.com/KristianP26/ble-scale-sync/issues/386) list ([411acef](https://github.com/KristianP26/ble-scale-sync/commit/411acefa2f17b32f676d965b8edf1f57c985183b))
+* **supported-scales:** two rows claimed body composition they do not produce ([adcf4a0](https://github.com/KristianP26/ble-scale-sync/commit/adcf4a093f886ee46c207275c87c6ec559766550)), closes [#386](https://github.com/KristianP26/ble-scale-sync/issues/386)
+
 ## [1.27.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.26.0...v1.27.0) (2026-09-05)
 
 
