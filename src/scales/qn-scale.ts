@@ -1391,6 +1391,27 @@ export class QnScaleAdapter
 
     await wait(200);
 
+    // Weight anchor, on the dialects where it goes BEFORE the start command.
+    //
+    // The 20-byte extended dialect sends it after START, repeated, which is
+    // hardware confirmed (#235) and is left exactly where it is below. Nothing
+    // pinned the position anywhere else until #331, whose Arboleaf capture puts
+    // a single anchor immediately before START on the es26m dialect:
+    //
+    //   APP->SCALE  a2 06 01 22 8d 58     0x228d = 8845 = 88.45 kg
+    //   APP->SCALE  22 06 ff 00 03 2a     START
+    //
+    // Reached only when `ble.qn_weight_ack` is set, so no install that does not
+    // ask for it sees a frame it did not see before.
+    if (this.weightAckEnabled() && !this.isExtendedLongFrame) {
+      const preAnchorKg = this.resolveAnchorKg();
+      await this.writeCmd([...buildMeasurementTrigger(preAnchorKg)]);
+      bleLog.debug(
+        `QN: weight anchor ${preAnchorKg.toFixed(2)} kg sent before START ` +
+          `(ble.qn_weight_ack, position from the #331 capture)`,
+      );
+    }
+
     // 0x22 start measurement / stored-data query with echoed protocol type
     await this.writeCmd(this.buildStoredDataQuery());
 
@@ -1413,6 +1434,10 @@ export class QnScaleAdapter
     // that is the only firmware the capture covers; every other QN scale in the
     // registry reads today without it, and an unexplained extra write is not
     // something to hand them on spec.
+    //
+    // Deliberately NOT gated on weightAckEnabled(): this is the measurement
+    // trigger, not the weight acknowledgement, and a GE CS 10 G owner who turns
+    // the echo off must not lose the frame that makes their scale stream at all.
     if (!this.isExtendedLongFrame) return;
     const anchorKg = this.resolveAnchorKg();
     const trigger = buildMeasurementTrigger(anchorKg);

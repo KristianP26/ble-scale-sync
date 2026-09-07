@@ -1837,9 +1837,69 @@ describe('AE02 dispatch (#75, #235)', () => {
       );
       const startIndex = writes.findIndex((w) => w[0] === 0x22);
       const beforeStart = writes.slice(0, startIndex).filter((w) => w[0] === 0xa2);
-      expect(beforeStart).toHaveLength(1);
+      // Two now: the ready-time A2, and the anchor the vendor app sends
+      // immediately before START on this dialect (#331).
+      expect(beforeStart).toHaveLength(2);
       // 7600 = 0x1db0
-      expect(beforeStart[0]).toEqual([0xa2, 0x06, 0x01, 0x1d, 0xb0, 0x76]);
+      for (const a of beforeStart) expect(a).toEqual([0xa2, 0x06, 0x01, 0x1d, 0xb0, 0x76]);
+    });
+
+    // #331: @chriba2567's HCI capture of the Arboleaf app on this dialect shows
+    //
+    //   APP->SCALE  a2 06 01 22 8d 58     0x228d = 8845 = 88.45 kg
+    //   APP->SCALE  22 06 ff 00 03 2a     START
+    //
+    // and his own debug log of this app shows the anchor going out at ready time
+    // and nothing at all in that position. The scale acknowledges the whole
+    // handshake either way and then streams nothing.
+    it('sends the anchor immediately before START on the 19-byte dialect when forced on', async () => {
+      const adapter = makeAdapter();
+      adapter.configure({ qnWeightAck: true });
+      const writes = await driveHandshake(
+        adapter,
+        makeArboleafScaleInfo(),
+        defaultProfile({ lastKnownWeight: 88.45 }),
+      );
+      const startIndex = writes.findIndex((w) => w[0] === 0x22);
+      expect(startIndex).toBeGreaterThanOrEqual(0);
+      const anchor = [0xa2, 0x06, 0x01, 0x22, 0x8d, 0x58];
+      // The write immediately preceding START is the anchor, byte for byte the
+      // frame in the capture.
+      expect(writes[startIndex - 1]).toEqual(anchor);
+      expect(anchor[5]).toBe(anchor.slice(0, 5).reduce((a, b) => a + b, 0) & 0xff);
+      // Nothing was added after START on this dialect: the post-START burst
+      // stays exclusive to the 20-byte extended firmware.
+      expect(writes.slice(startIndex + 1).filter((w) => w[0] === 0xa2)).toHaveLength(0);
+    });
+
+    it('sends no pre-START anchor on the 19-byte dialect by default', async () => {
+      const adapter = makeAdapter();
+      const writes = await driveHandshake(
+        adapter,
+        makeArboleafScaleInfo(),
+        defaultProfile({ lastKnownWeight: 88.45 }),
+      );
+      const startIndex = writes.findIndex((w) => w[0] === 0x22);
+      const beforeStart = writes.slice(0, startIndex).filter((w) => w[0] === 0xa2);
+      // Only openScale's ready-time profile frame, `a2 06 01 32 <age>`.
+      expect(beforeStart).toHaveLength(1);
+      expect(beforeStart[0][3]).toBe(0x32);
+      expect(writes.slice(startIndex + 1).filter((w) => w[0] === 0xa2)).toHaveLength(0);
+    });
+
+    it('leaves the extended dialect anchor after START, never before', async () => {
+      const adapter = makeAdapter();
+      adapter.configure({ qnWeightAck: true });
+      const writes = await driveHandshake(
+        adapter,
+        makeExtendedScaleInfo(),
+        defaultProfile({ lastKnownWeight: 76 }),
+      );
+      const startIndex = writes.findIndex((w) => w[0] === 0x22);
+      // Ready-time A2 only before START; the burst of two stays after it, where
+      // the #235 hardware confirmation put it.
+      expect(writes.slice(0, startIndex).filter((w) => w[0] === 0xa2)).toHaveLength(1);
+      expect(writes.slice(startIndex + 1).filter((w) => w[0] === 0xa2)).toHaveLength(2);
     });
 
     it('echoes on any dialect when qn_weight_ack forces it on', async () => {
