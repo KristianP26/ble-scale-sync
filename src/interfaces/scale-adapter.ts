@@ -304,8 +304,37 @@ export interface ScaleAdapterCore {
   onConnected?(context: ConnectionContext): Promise<void> | void;
 
   /**
+   * Called once at the start of a GATT session, before any characteristic is
+   * subscribed and therefore before the first frame can be parsed.
+   *
+   * This is where an adapter clears per-session state. Neither of the other two
+   * hooks can do that job (#394):
+   *
+   *   - `onSessionEnd` runs inside `finishWith`, which is BEFORE the resolved
+   *     reading reaches `computeMetrics`. Clearing a composition cache there
+   *     deletes fat/water/muscle/bone from the reading that just completed.
+   *   - `onConnected` pre-empts the legacy unlock, so an `Unlockable` adapter
+   *     that declares it never wakes its scale.
+   *
+   * Adapters are shared singletons. Without this an adapter cannot tell a fresh
+   * weigh-in from the previous one, and a stale cached weight or completeness
+   * flag lets the next session resolve on the last person's data.
+   *
+   * Must not throw and must not perform I/O: nothing is connected yet.
+   */
+  onSessionStart?(): void;
+
+  /**
    * Called once when a GATT session ends, however it ends: a completed reading,
    * a disconnect, a timeout or an init failure.
+   *
+   * NOT a place to clear state a later `computeMetrics` reads: this runs before
+   * the reading is handed to the caller. Use `onSessionStart` for that (#394).
+   *
+   * It is also weaker than it looks. A timeout abandons the read promise rather
+   * than cancelling it, so this fires only once a disconnect event follows, and
+   * the ESPHome proxy scan path can drop a session without reaching cleanup at
+   * all. Treat it as best effort for releasing references, not as a guarantee.
    *
    * Adapters are shared singletons, so anything captured from a
    * `ConnectionContext` (a write function, a queued frame, a negotiated

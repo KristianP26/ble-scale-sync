@@ -222,6 +222,15 @@ function initializeAdapter(
    */
   resendUnlockAfterSubscribe: () => Promise<void>;
 } {
+  // Before anything is subscribed, so no frame can be parsed against the
+  // previous session's state. It has to be here rather than in `start()`,
+  // because `subscribeAndInit` subscribes first and calls `start` after (#394).
+  try {
+    adapter.onSessionStart?.();
+  } catch (e: unknown) {
+    bleLog.debug(`Adapter onSessionStart failed: ${errMsg(e)}`);
+  }
+
   let unlockInterval: ReturnType<typeof setInterval> | null = null;
   let resendUnlock: (() => Promise<void>) | null = null;
 
