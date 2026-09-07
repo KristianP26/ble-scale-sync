@@ -190,9 +190,10 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
   /**
    * Clear the previous weigh-in (#394).
    *
-   * Adapters are shared singletons. Without this, these are cleared only inside the 0x11 START branch, and
-   * no GATT capture of the anonymous ESCS20MB2 revision exists to show that
-   * frame is always sent (#376). Without it a stale `stopped` completes the
+   * Adapters are shared singletons. These fields used to be cleared only inside
+   * the 0x11 START branch, and no GATT capture of the anonymous ESCS20MB2
+   * revision exists to show that frame is always sent (#376). Without a
+   * session-start reset a stale `stopped` completes the
    * next session on an unsettled weight, a stale `lastWeight` replays the
    * previous reading verbatim on an orphan STOP, and a stale `resistance`
    * drives one person's BIA from another person's impedance.

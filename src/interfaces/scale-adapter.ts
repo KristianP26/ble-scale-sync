@@ -331,6 +331,12 @@ export interface ScaleAdapterCore {
    * `beurer-bf720`, `beurer-sanitas`, `hoffen`, `mgb`, `medisana-bs44x` and
    * `senssun` all do - rather than read the live cache in `computeMetrics`.
    *
+   * It is a GATT-session hook only. The broadcast path never opens a session,
+   * so `parseBroadcast` / `parseServiceData` run without it ever firing. Adding
+   * a broadcast parser to an adapter that relies on this reset would silently
+   * bypass it; today every such adapter either has no broadcast parser or, like
+   * `eufy-p2`, has a stateless one.
+   *
    * Must not throw and must not perform I/O: nothing is connected yet.
    */
   onSessionStart?(): void;

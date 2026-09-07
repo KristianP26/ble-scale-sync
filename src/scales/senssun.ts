@@ -120,8 +120,9 @@ export class SenssunAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
   /**
    * Clear the previous weigh-in (#394).
    *
-   * Adapters are shared singletons. Without this, `framesMask` stays at FRAME_ALL for the life of the
-   * process once one session has seen all four frame types, which disarms
+   * Adapters are shared singletons. Without this `framesMask` stays at
+   * FRAME_ALL for the life of the process once one session has seen all four
+   * frame types, which disarms
    * the completeness gate permanently: the next session resolves on its
    * first frame, exporting a still-unsettled weight (the 0xAA stable flag is
    * deliberately ignored) with the previous person's composition.

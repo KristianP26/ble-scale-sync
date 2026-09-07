@@ -181,8 +181,13 @@ export class OneByoneNewAdapter implements ScaleAdapterCore, GattWiring, Unlocka
    * Adapters are shared singletons, and this class has no onConnected to reset
    * in (it is Unlockable, so declaring one would disable its unlock command).
    * Both caches survived, so the next session resolved on its first frame with
-   * the previous weight and impedance. The sibling OneByoneAdapter above does
-   * the same job in onConnected and is unaffected.
+   * the previous weight and impedance.
+   *
+   * The sibling OneByoneAdapter above still resets in onConnected, and is safe
+   * only because it is a LEGACY single-char adapter: shared.ts runs its
+   * subscribe and startInit under one Promise.all, so onConnected's synchronous
+   * prefix wins the race. That is not a general property - in multi-char mode
+   * every notify binding is enabled before startInit is awaited at all.
    */
   onSessionStart(): void {
     this.cachedWeight = 0;

@@ -74,8 +74,9 @@ export class ActiveEraAdapter implements ScaleAdapterCore, GattWiring, Unlockabl
   /**
    * Clear the previous weigh-in (#394).
    *
-   * Adapters are shared singletons. Without this, both caches survive, so the next session resolves on its
-   * first frame with the previous weight and impedance. The stale weight is
+   * Adapters are shared singletons, so without this both caches survive and
+   * the next session resolves on its first frame with the previous weight and
+   * impedance. The stale weight is
    * worse than a stale number on its own: the `imp >= 1500` correction
    * multiplies it in, so even a fresh impedance frame decodes wrongly.
    */

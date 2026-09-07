@@ -97,8 +97,9 @@ export class HoffenAdapter implements ScaleAdapterCore, GattWiring {
   /**
    * Clear the previous weigh-in (#394).
    *
-   * Adapters are shared singletons. Without this, the composition survives while the weight does not, and
-   * isComplete is a bare `weight > 0` with no hold window. One weigh-in
+   * Adapters are shared singletons. Without this the composition survives while
+   * the weight does not, and isComplete is a bare `weight > 0` with no hold
+   * window. One weigh-in
    * where the scale reports no BIA foot contact therefore exports the
    * PREVIOUS person's whole body composition against a fresh weight.
    */
