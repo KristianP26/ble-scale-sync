@@ -46,7 +46,8 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
   # hand is exactly the person who would toggle the UI option, see no change and
   # report a false negative. A wrong value for either is silent by nature, so a
   # setting that is silently ignored is worse here than almost anywhere else.
-  for _qn in qn_protocol_byte qn_report_byte qn_weight_ack qn_a4_prelude qn_time_sync_long \n    auto_clear_stale_bond; do
+  for _qn in qn_protocol_byte qn_report_byte qn_weight_ack qn_a4_prelude \
+    qn_time_sync_long auto_clear_stale_bond; do
     if [ -n "$(opt "$_qn")" ]; then
       log "WARNING: custom_config is enabled, so the '$_qn' option is ignored."
       log "Set 'ble.$_qn' in $CUSTOM_PATH instead."
