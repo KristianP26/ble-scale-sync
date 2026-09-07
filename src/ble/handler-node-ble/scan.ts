@@ -6,38 +6,21 @@ import type {
 } from '../../interfaces/scale-adapter.js';
 import type { ScanOptions, ScanResult } from '../types.js';
 import type { RawReading } from '../shared.js';
-import { waitForRawReading, findMissingCharacteristics } from '../shared.js';
+import { findMissingCharacteristics } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
 import {
   bleLog,
-  normalizeUuid,
   formatMac,
   sleep,
   errMsg,
   withTimeout,
-  withIdleTimeout,
-  resetAdapterBtmgmt,
   MAX_CONNECT_RETRIES,
-  DISCOVERY_TIMEOUT_MS,
   DISCOVERY_POLL_MS,
   POST_DISCOVERY_QUIESCE_MS,
   GATT_DISCOVERY_TIMEOUT_MS,
-  RAW_READING_TIMEOUT_MS,
-  READING_SESSION_CAP_FACTOR,
-  CHAR_DISCOVERY_MAX_RETRIES,
-  CHAR_DISCOVERY_RETRY_DELAY_MS,
 } from '../types.js';
 import { helperOf, getDbusNext, type Adapter, type Device } from './dbus.js';
-import {
-  getAdapter,
-  getBus,
-  attachBusErrorHandler,
-  resetConnection,
-  isStaleConnectionError,
-  isDbusConnectionError,
-  dbusError,
-  parseHciIndex,
-} from './connection.js';
+import { getBus, attachBusErrorHandler, isDbusConnectionError, dbusError } from './connection.js';
 import { registerPairingAgent, setPairingTarget } from './agent.js';
 import {
   startDiscoverySafe,
@@ -47,10 +30,18 @@ import {
 } from './discovery.js';
 import { connectWithRecovery } from './connect.js';
 import { logAdvertisementSnapshot } from './device-object.js';
-import { wrapDevice, buildCharMap } from './gatt.js';
+import { wrapDevice } from './gatt.js';
 import { broadcastScanNodeBle } from './broadcast.js';
-import { tagBleFailure, bleFailureKind } from '../failure-kind.js';
-import { probeLiveness, makeLivenessAdapter } from './liveness.js';
+import {
+  acquireBluezAdapter,
+  buildCharMapWithRetry,
+  resolveAfterConnect,
+  resolvePreConnectAdapter,
+  classifyBleFailure,
+  readWithTimeouts,
+  teardownSession,
+  waitForTargetDevice,
+} from './scan-stages.js';
 
 /** Max time to wait for a BLE pairing/bonding handshake before giving up. */
 const BONDING_TIMEOUT_MS = 15_000;
@@ -241,24 +232,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   setPairingTarget(() => ({ pin: scaleAuth?.pin, mac: targetMac }));
 
   try {
-    try {
-      btAdapter = await getAdapter(bleAdapter);
-    } catch (err) {
-      if (isDbusConnectionError(err)) throw dbusError();
-      // Stale connection (e.g. bluetoothd restarted): reset and retry once
-      if (isStaleConnectionError(err)) {
-        bleLog.debug('D-Bus connection stale, resetting...');
-        resetConnection();
-        btAdapter = await getAdapter(bleAdapter);
-      } else if (bleAdapter) {
-        throw new Error(
-          `Bluetooth adapter '${bleAdapter}' not found. ` +
-            'Check that the adapter exists (hciconfig or btmgmt info).',
-        );
-      } else {
-        throw err;
-      }
-    }
+    btAdapter = await acquireBluezAdapter(bleAdapter);
 
     probeAdapter = btAdapter;
 
@@ -285,81 +259,14 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       const mac = formatMac(targetMac);
       bleLog.info('Scanning for device...');
 
-      if (abortSignal?.aborted) {
-        throw abortSignal.reason ?? new DOMException('Aborted', 'AbortError');
-      }
+      device = await waitForTargetDevice(btAdapter, mac, abortSignal);
 
-      const waitPromise = withTimeout(
-        btAdapter.waitDevice(mac),
-        DISCOVERY_TIMEOUT_MS,
-        `Device ${mac} not found within ${DISCOVERY_TIMEOUT_MS / 1000}s`,
+      const { name, advert, preMatchedAdapter } = await resolvePreConnectAdapter(
+        device,
+        mac,
+        deviceMac,
+        adapters,
       );
-
-      if (abortSignal) {
-        // Wrap in a promise that cleans up the abort listener in all paths
-        // to prevent MaxListenersExceededWarning in continuous mode
-        const sig = abortSignal;
-        device = await new Promise<Device>((resolve, reject) => {
-          const onAbort = () => {
-            reject(sig.reason ?? new DOMException('Aborted', 'AbortError'));
-          };
-          sig.addEventListener('abort', onAbort, { once: true });
-          waitPromise.then(
-            (d) => {
-              sig.removeEventListener('abort', onAbort);
-              resolve(d);
-            },
-            (err) => {
-              sig.removeEventListener('abort', onAbort);
-              reject(err);
-            },
-          );
-        });
-      } else {
-        device = await waitPromise;
-      }
-
-      const name = await device.getName().catch(() => '');
-      bleLog.debug(`Found device: ${name} [${mac}]`);
-      // Only chance to capture the advertisement: BlueZ drops it (and for some
-      // peers the whole Device object) once discovery stops (#297).
-      const advert = await logAdvertisementSnapshot(device);
-
-      // Pre-connection adapter match. Needed for preferPassive adapters so we can
-      // skip the GATT connect entirely and go straight to broadcast scanning.
-      //
-      // The snapshot above already reads ManufacturerData and ServiceData off the
-      // Device1 object, so both are fed in here rather than thrown away. Matching
-      // on the name alone could not reach a passive adapter whose device
-      // advertises a generic name: the Silvergear 108 calls itself "108", which is
-      // far too weak to claim on, while its manufacturer data identifies it
-      // exactly (#297).
-      //
-      // Limitation that remains: serviceUuids is still empty pre-connect, because
-      // BlueZ does not expose advertised service UUIDs through D-Bus before
-      // connection, so an adapter matching only on serviceUuids still falls
-      // through to the GATT path.
-      //
-      // Scope: the result takes the passive branch below, and it is ALSO passed
-      // to acquireGattServer, which branches on `requiresBonding` to decide
-      // whether to bond before connecting and to retry on a discovery timeout
-      // (#290). Exactly one adapter in the registry sets that flag, so the whole
-      // reach of the widening on the connect path is that a MAC-pinned nameless
-      // Beurer advertising company id 0x0611 plus a SIG WSS/BCS service now
-      // reaches the bond-on-timeout retry, where the pre-match used to be
-      // undefined and the retry could never engage. That is the retry working as
-      // designed. Otherwise a device matching a connect-based adapter here falls
-      // through as before and is re-resolved after discovery.
-      const preInfo: BleDeviceInfo = {
-        localName: name,
-        address: deviceMac ? formatMac(deviceMac) : undefined,
-        serviceUuids: [],
-        ...(advert.manufacturerData ? { manufacturerData: advert.manufacturerData } : {}),
-        ...(advert.serviceData && advert.serviceData.length > 0
-          ? { serviceData: advert.serviceData }
-          : {}),
-      };
-      const preMatchedAdapter = resolveAdapter(preInfo, adapters);
 
       if (
         preMatchedAdapter?.preferPassive &&
@@ -407,46 +314,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         ensureBonded,
         abortSignal,
       );
-      const serviceUuids = await gatt.services();
-      bleLog.debug(`Services: [${serviceUuids.join(', ')}]`);
-
-      let resolved: ScaleAdapter | undefined;
-      let matchCharMap = await withTimeout(
-        buildCharMap(gatt),
-        GATT_DISCOVERY_TIMEOUT_MS,
-        'GATT service discovery timed out',
-      );
-      for (let attempt = 1; attempt <= CHAR_DISCOVERY_MAX_RETRIES; attempt++) {
-        const info: BleDeviceInfo = {
-          localName: name,
-          address: deviceMac ? formatMac(deviceMac) : undefined,
-          serviceUuids: serviceUuids.map(normalizeUuid),
-          characteristicUuids: [...matchCharMap.keys()],
-          // Captured before StopDiscovery, because BlueZ drops the
-          // advertisement with the discovery session. Without it a dozen
-          // adapters that key on a company id (the Lefu OEM fingerprint, the
-          // Xiaomi and Beurer company ids) could never match on Linux, and the
-          // device fell through to whichever adapter claimed the bare vendor
-          // service (#280, #318).
-          ...advert,
-        };
-        resolved = resolveAdapter(info, adapters);
-        if (resolved || attempt === CHAR_DISCOVERY_MAX_RETRIES) break;
-        await sleep(CHAR_DISCOVERY_RETRY_DELAY_MS);
-        matchCharMap = await withTimeout(
-          buildCharMap(gatt),
-          GATT_DISCOVERY_TIMEOUT_MS,
-          'GATT service discovery timed out',
-        );
-      }
-      if (!resolved) {
-        throw new Error(
-          `Device found (${name}) but no adapter recognized it. ` +
-            `Services: [${serviceUuids.join(', ')}]. ` +
-            `Adapters: ${adapters.map((a) => a.name).join(', ')}`,
-        );
-      }
-      matchedAdapter = resolved;
+      matchedAdapter = await resolveAfterConnect(gatt, adapters, name, deviceMac, advert);
       bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
     } else {
       // Auto-discovery: poll discovered devices, match by name, connect, verify
@@ -498,61 +366,22 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       ensureBonded,
       abortSignal,
     );
-    let charMap = await withTimeout(
-      buildCharMap(gatt),
-      GATT_DISCOVERY_TIMEOUT_MS,
-      'GATT service discovery timed out',
+    const charMap = await buildCharMapWithRetry(gatt, (map) =>
+      findMissingCharacteristics(map, matchedAdapter),
     );
-    // Retry budget: MAX iterations total. Iterations 1..MAX-1 actually rebuild
-    // the char map; the MAX-th iteration only logs the give-up warn and breaks,
-    // so the user-facing retry counter is `attempt/(MAX-1)`.
-    for (let attempt = 1; attempt <= CHAR_DISCOVERY_MAX_RETRIES; attempt++) {
-      const missing = findMissingCharacteristics(charMap, matchedAdapter);
-      if (missing.length === 0) break;
-      if (attempt === CHAR_DISCOVERY_MAX_RETRIES) {
-        bleLog.warn(
-          `GATT enumeration incomplete after ${attempt} attempt(s). ` +
-            `Missing: [${missing.join(', ')}]. Discovered: [${[...charMap.keys()].join(', ')}]`,
-        );
-        break;
-      }
-      bleLog.debug(
-        `GATT enumeration missing [${missing.join(', ')}], retry ${attempt}/${CHAR_DISCOVERY_MAX_RETRIES - 1} in ${CHAR_DISCOVERY_RETRY_DELAY_MS}ms...`,
-      );
-      await new Promise<void>((r) => setTimeout(r, CHAR_DISCOVERY_RETRY_DELAY_MS));
-      charMap = await withTimeout(
-        buildCharMap(gatt),
-        GATT_DISCOVERY_TIMEOUT_MS,
-        'GATT service discovery timed out',
-      );
-    }
     // Establish an encrypted link before enabling notifications for adapters
     // whose SIG services protect their CCCDs (#168). Best-effort: see ensureBonded.
     if (matchedAdapter.requiresBonding) {
       await ensureBonded(device, scaleAuth?.pin, abortSignal);
     }
 
-    const bleDevice = wrapDevice(device);
-    const raw = await withTimeout(
-      withIdleTimeout(
-        (onActivity) =>
-          waitForRawReading(
-            charMap,
-            bleDevice,
-            matchedAdapter,
-            profile,
-            deviceMac.replace(/[:-]/g, '').toUpperCase(),
-            weightUnit,
-            onLiveData,
-            scaleAuth,
-            onActivity,
-          ),
-        readingTimeoutMs ?? RAW_READING_TIMEOUT_MS,
-        'Timed out waiting for a complete scale reading',
-      ),
-      (readingTimeoutMs ?? RAW_READING_TIMEOUT_MS) * READING_SESSION_CAP_FACTOR,
-      'GATT session cap exceeded',
-    );
+    const raw = await readWithTimeouts(charMap, wrapDevice(device), matchedAdapter, deviceMac, {
+      profile,
+      weightUnit,
+      onLiveData,
+      scaleAuth,
+      readingTimeoutMs,
+    });
     gattSucceeded = true;
 
     try {
@@ -562,80 +391,18 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     }
     return raw;
   } catch (err) {
-    // Classify the failure for the #154 watchdog (#213). An idle no-show where
-    // the radio still sees other advertisers must not count; a GATT failure or a
-    // radio that sees nothing at all (zombie wedge) must. Skip on abort.
-    if (!abortSignal?.aborted && bleFailureKind(err) === undefined) {
-      if (gattAttempted || !probeAdapter) {
-        tagBleFailure(err, 'wedge-suspect');
-      } else {
-        const alive = await probeLiveness(makeLivenessAdapter(probeAdapter));
-        tagBleFailure(err, alive ? 'idle' : 'wedge-suspect');
-      }
-    }
+    await classifyBleFailure(err, { gattAttempted, probeAdapter, abortSignal });
     throw err;
   } finally {
-    // Best-effort disconnect if we got partway through a connection
-    if (device) {
-      try {
-        await device.disconnect();
-      } catch {
-        /* already disconnected or never connected */
-      }
-    }
-
-    if (gattAttempted) {
-      // Cleanup after a FAILED read (scale disconnected before completion,
-      // GATT discovery timed out, etc.). BlueZ keeps the device proxy plus
-      // any orphaned notification subscriptions cached, and the controller
-      // level Discovering flag can desync from our client state
-      // (bluez/bluez#807). Before the shared btmgmt power-cycle runs, mirror
-      // what bleak-retry-connector does on Linux: force StopDiscovery via
-      // D-Bus and RemoveDevice the scale, so the next scan cycle starts from
-      // a clean BlueZ state instead of inheriting the zombie subscription.
-      if (!gattSucceeded) {
-        try {
-          await helperOf(btAdapter!).callMethod('StopDiscovery');
-          bleLog.debug('Force StopDiscovery after failed GATT');
-        } catch (e) {
-          bleLog.debug(`Force StopDiscovery failed: ${errMsg(e)}`);
-        }
-        if (deviceMac) {
-          await removeDevice(btAdapter!, deviceMac);
-        }
-      }
-
-      // After a GATT connection (successful or failed), reset the D-Bus
-      // connection AND power-cycle the HCI controller. BlueZ on Broadcom
-      // adapters (RPi) enters a "zombie discovery" state after a few
-      // connect/disconnect cycles: Discovering=true, fresh startDiscovery()
-      // succeeds, but the controller is no longer running LE scan. D-Bus
-      // reset alone is insufficient because bluetoothd's controller-state
-      // tracking survives across client reconnects. btmgmt power off/on
-      // clears the zombie at the kernel level. See bluez/bluez#807,
-      // bluez/bluer#47.
-      //
-      // None of that is worth doing while the app is shutting down: there is no
-      // next scan cycle to protect, and the power-cycle alone spends about
-      // 2.5 s in sleeps plus two btmgmt child processes, inside a 5 s
-      // force-exit grace window (#335). The D-Bus reset is kept either way,
-      // because it destroys the socket that pins the event loop open, which is
-      // the opposite of a delay.
-      if (abortSignal?.aborted) {
-        resetConnection();
-        bleLog.debug('Shutting down: D-Bus connection reset, skipping the btmgmt power-cycle');
-      } else {
-        await sleep(500);
-        resetConnection();
-        bleLog.debug('D-Bus connection reset after GATT operation');
-        if (await resetAdapterBtmgmt(parseHciIndex(bleAdapter))) {
-          bleLog.debug('Preemptive btmgmt reset after GATT');
-        }
-      }
-    }
-    // For idle cycles (no GATT connection), discovery is kept running.
-    // Stopping and restarting discovery on every idle cycle triggers a BlueZ
-    // bug where the Discovering property desyncs from the controller state.
+    await teardownSession({
+      device,
+      btAdapter: btAdapter!,
+      deviceMac,
+      bleAdapter,
+      gattAttempted,
+      gattSucceeded,
+      abortSignal,
+    });
   }
 }
 

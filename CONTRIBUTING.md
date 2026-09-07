@@ -118,7 +118,7 @@ ble-scale-sync/
 │   │   ├── shared.ts                # BleChar/BleDevice abstractions, waitForReading()
 │   │   ├── async-queue.ts           # Async notification queue for GATT handlers
 │   │   ├── loopback.ts              # In-process loopback handler (tests)
-│   │   ├── handler-node-ble/        # Linux native: node-ble (BlueZ D-Bus) (split: dbus, connection, discovery, freshness, connect, gatt, broadcast, scan)
+│   │   ├── handler-node-ble/        # Linux native: node-ble (BlueZ D-Bus) (split: dbus, connection, discovery, freshness, connect, gatt, broadcast, scan, scan-stages)
 │   │   ├── handler-noble-shared/    # Shared Noble logic, driver injected (split: types, char, peripheral, gatt, state, connect, discovery, broadcast)
 │   │   ├── handler-noble.ts         # macOS native: @stoprocent/noble (thin entrypoint)
 │   │   ├── handler-noble-legacy.ts  # Windows native: @abandonware/noble (thin entrypoint)
