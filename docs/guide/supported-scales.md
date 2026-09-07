@@ -36,7 +36,7 @@ _Weight only_ means weight is reported normally but body composition is estimate
 | **Beurer** BF720 / BF105 / BF500 / BF788 / BF950                      | Yes              | Needs `users[].beurer_pin` and a bonded link                                                           |
 | **Soehnle** Shape200 / Shape100 / Shape50 / Style100                  | Yes              | Needs user slot 1 in the vendor app                                                                    |
 | **Medisana** BS430 / BS440 / BS444                                    | Yes              |                                                                                                        |
-| **Active Era** BS-06                                                  | Yes              |                                                                                                        |
+| **Active Era** BS-06                                                  | Weight only      | Reports a resistance, but its scaling has never been checked against a capture ([#386](https://github.com/KristianP26/ble-scale-sync/issues/386))       |
 | **Senssun** Fat                                                       | Yes              | Model A only                                                                                           |
 | **MGB** (Swan / Icomon / YG)                                          | Yes              |                                                                                                        |
 | **Hutbit** 218008 / WL292                                             | Yes              | Also sold under stock `SWAN` branding                                                                  |
@@ -44,7 +44,7 @@ _Weight only_ means weight is reported normally but body composition is estimate
 | **Speediance** Smart Scale FG2211WBF                                  | Yes              | Lefu/Icomon sibling of the Robi S9                  |
 | **Digoo** DG-SO38H (Mengii)                                           | Yes              |                                                                                                        |
 | **Excelvan** CF369                                                    | Yes              |                                                                                                        |
-| **Trisa** Body Analyze / **ADE** BA 1600 (fitvigo)                    | Yes              | The ADE BA 1600 variant is weight only                                                                 |
+| **Trisa** Body Analyze / **ADE** BA 1600 (fitvigo)                    | Weight only      | The resistance it reports is not on an ohm scale, so body fat is estimated ([#386](https://github.com/KristianP26/ble-scale-sync/issues/386))           |
 | **Hoffen** BS-8107                                                    | Yes              |                                                                                                        |
 | **Etekcity** ESF-551 Smart Fitness Scale                              | Yes              | Matched by its advertised name                                                                         |
 | **Hesley** (YunChen)                                                  | Yes              |                                                                                                        |
