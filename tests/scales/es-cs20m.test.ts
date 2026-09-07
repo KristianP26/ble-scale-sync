@@ -397,3 +397,73 @@ describe('EsCs20mAdapter', () => {
     });
   });
 });
+
+// #394: adapters are shared singletons. Before onSessionStart existed, a second
+// weigh-in could resolve on the FIRST frame using the previous person's data.
+//
+// Every one of these also asserts that computeMetrics still carries the scale's
+// own composition, because the first attempt at this fix cleared the caches in
+// onSessionEnd - which runs BEFORE computeMetrics - and would have deleted the
+// body composition from every reading while these tests stayed green.
+
+describe('EsCs20mAdapter session boundary (#394)', () => {
+  /** 0x14 weight frame, msgId at [2] behind the 55 AA header. */
+  function weightFrame(hundredths: number, stable: number, resistance = 0): Buffer {
+    const buf = Buffer.alloc(12);
+    buf[0] = 0x55;
+    buf[1] = 0xaa;
+    buf[2] = 0x14;
+    buf[5] = stable;
+    buf.writeUInt16BE(hundredths, 8);
+    buf.writeUInt16BE(resistance, 10);
+    return buf;
+  }
+
+  /** 0x11 control frame: [5] is 0x01 for START, 0x00 for STOP. */
+  function controlFrame(kind: number): Buffer {
+    const buf = Buffer.alloc(8);
+    buf[0] = 0x55;
+    buf[1] = 0xaa;
+    buf[2] = 0x11;
+    buf[5] = kind;
+    return buf;
+  }
+
+  it('starts a session clean even when the scale never sends 0x11 START', () => {
+    // The reset used to live only inside the 0x11 START branch, and no GATT
+    // capture of the anonymous ESCS20MB2 revision exists to show that frame is
+    // always sent (#376). A stale `stopped` completed the next session on an
+    // unsettled weight, and a stale `lastWeight` replayed the previous reading
+    // verbatim on an orphan STOP.
+    const adapter = makeAdapter();
+    adapter.parseNotification(weightFrame(8000, 1, 500));
+    adapter.parseNotification(controlFrame(0x00)); // STOP
+
+    adapter.onSessionStart();
+
+    // An orphan STOP with no weight frame before it used to return the whole
+    // previous reading.
+    expect(adapter.parseNotification(controlFrame(0x00))).toBeNull();
+  });
+
+  it('does not complete the next session on an unsettled weight', () => {
+    const adapter = makeAdapter();
+    adapter.parseNotification(weightFrame(8000, 1, 500));
+    adapter.parseNotification(controlFrame(0x00)); // STOP sets `stopped`
+
+    adapter.onSessionStart();
+
+    const unsettled = adapter.parseNotification(weightFrame(6500, 0))!;
+    expect(adapter.isComplete(unsettled)).toBe(false);
+  });
+
+  it('does not carry the previous impedance into the next weigh-in', () => {
+    const adapter = makeAdapter();
+    adapter.parseNotification(weightFrame(8000, 1, 500));
+
+    adapter.onSessionStart();
+
+    const next = adapter.parseNotification(weightFrame(6500, 1))!;
+    expect(next.impedance).toBe(0);
+  });
+});

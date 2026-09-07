@@ -187,6 +187,23 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
     return { weight, impedance: this.resistance };
   }
 
+  /**
+   * Clear the previous weigh-in (#394).
+   *
+   * Adapters are shared singletons. Without this, these are cleared only inside the 0x11 START branch, and
+   * no GATT capture of the anonymous ESCS20MB2 revision exists to show that
+   * frame is always sent (#376). Without it a stale `stopped` completes the
+   * next session on an unsettled weight, a stale `lastWeight` replays the
+   * previous reading verbatim on an orphan STOP, and a stale `resistance`
+   * drives one person's BIA from another person's impedance.
+   */
+  onSessionStart(): void {
+    this.stable = false;
+    this.stopped = false;
+    this.resistance = 0;
+    this.lastWeight = 0;
+  }
+
   isComplete(reading: ScaleReading): boolean {
     return reading.weight > 0 && (this.stable || this.stopped);
   }
