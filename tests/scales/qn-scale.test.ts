@@ -4,6 +4,7 @@ import {
   QnScaleAdapter,
   buildMeasurementTrigger,
   buildTimeSync,
+  buildConfig,
 } from '../../src/scales/qn-scale/index.js';
 import { bleLog } from '../../src/ble/types.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
@@ -1943,6 +1944,65 @@ describe('AE02 dispatch (#75, #235)', () => {
         const writes = await driveHandshake(adapter, makeArboleafScaleInfo());
         expect(writes.find((w) => w[0] === 0x13 && w[4] === 0x10)).toHaveLength(9);
         expect(writes.find((w) => w[0] === 0x22)).toEqual([0x22, 0x06, 0xff, 0x00, 0x03, 0x2a]);
+      });
+    });
+
+    // The last documented difference between our QN handshake and the vendor
+    // app's. Two independent captures show a 10-byte 0x13 where we send 9; the
+    // first seven bytes are identical, all three close under the family
+    // checksum, and the captures disagree on the trailing pair's value.
+    describe('0x13 config (ble.qn_config_long, #331)', () => {
+      it('reproduces our own 9-byte frame from the #235 capture byte for byte', () => {
+        expect(buildConfig(0xff, 0x01)).toEqual([
+          0x13, 0x09, 0xff, 0x01, 0x10, 0x00, 0x00, 0x00, 0x2c,
+        ]);
+      });
+
+      it('reproduces the vendor-app 10-byte frame byte for byte', () => {
+        expect(buildConfig(0xff, 0x01, true)).toEqual([
+          0x13, 0x0a, 0xff, 0x01, 0x10, 0x00, 0x00, 0x02, 0x00, 0x2f,
+        ]);
+      });
+
+      it('keeps the length byte and the checksum consistent for lb as well', () => {
+        const lb = buildConfig(0xff, 0x02, true);
+        expect(lb).toHaveLength(10);
+        expect(lb[1]).toBe(0x0a);
+        expect(lb[lb.length - 1]).toBe(lb.slice(0, -1).reduce((a, b) => a + b, 0) & 0xff);
+      });
+
+      it('sends the 9-byte form by default', async () => {
+        const adapter = makeAdapter();
+        const writes = await driveHandshake(adapter, makeArboleafScaleInfo());
+        const c = writes.find((w) => w[0] === 0x13 && w[4] === 0x10)!;
+        expect(c).toHaveLength(9);
+        expect(c[1]).toBe(0x09);
+      });
+
+      it('sends the 10-byte form when ble.qn_config_long is set', async () => {
+        const adapter = makeAdapter();
+        adapter.configure({ qnConfigLong: true });
+        const writes = await driveHandshake(adapter, makeArboleafScaleInfo());
+        const c = writes.find((w) => w[0] === 0x13 && w[4] === 0x10)!;
+        expect(c).toHaveLength(10);
+        expect(c[1]).toBe(0x0a);
+        expect(c.slice(7)).toEqual([0x02, 0x00, 0x2f]);
+      });
+
+      it('leaves every other frame alone when the long form is on', async () => {
+        const adapter = makeAdapter();
+        adapter.configure({ qnConfigLong: true });
+        const writes = await driveHandshake(adapter, makeArboleafScaleInfo());
+        expect(writes.find((w) => w[0] === 0x20)).toHaveLength(8);
+        expect(writes.find((w) => w[0] === 0x22)).toEqual([0x22, 0x06, 0xff, 0x00, 0x03, 0x2a]);
+      });
+
+      it('is independent of qn_time_sync_long', async () => {
+        const adapter = makeAdapter();
+        adapter.configure({ qnConfigLong: true, qnTimeSyncLong: true });
+        const writes = await driveHandshake(adapter, makeArboleafScaleInfo());
+        expect(writes.find((w) => w[0] === 0x13 && w[4] === 0x10)).toHaveLength(10);
+        expect(writes.find((w) => w[0] === 0x20)).toHaveLength(9);
       });
     });
 

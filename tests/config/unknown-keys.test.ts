@@ -42,6 +42,7 @@ describe('collectUnknownKeys', () => {
         qn_weight_ack: true,
         qn_a4_prelude: true,
         qn_time_sync_long: true,
+        qn_config_long: true,
         auto_clear_stale_bond: true,
         proxy_liveness_timeout_min: 45,
       },
