@@ -165,8 +165,15 @@ export class RobiS9Adapter implements ScaleAdapterCore, GattWiring, MultiCharNot
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    // Body composition via BIA from weight + impedance; the vendor's own
-    // body-comp frames are scrambled and not decoded.
+    // NOT BIA, despite what this comment used to say. `parseCharNotification`
+    // emits `impedance: 0` on purpose: the only captured A3 frame has all-zero
+    // bytes after the weight, so there is no impedance offset to read yet
+    // (#248). The vendor's own body-comp frames are scrambled and not decoded
+    // either, so body composition here is the Deurenberg BMI estimate and will
+    // stay that way until someone posts a capture with a known impedance.
+    //
+    // Listed in #386 as an adapter that reads an impedance and ignores it. It
+    // does not read one.
     return buildPayload(reading.weight, reading.impedance, {}, profile);
   }
 }
