@@ -55,6 +55,47 @@ describe('armHardExit', () => {
     process.exitCode = prev;
   });
 
+  // #335: a Home Assistant add-on stopped by hand, force-exited with 1, is
+  // reported to its owner as a failed add-on. A stop somebody asked for is not
+  // a failure; a watchdog trip still is.
+  it('uses the given fallback code for a stop the operator asked for', () => {
+    const log = createMockLogger();
+    const exit = vi.fn();
+    const prev = process.exitCode;
+    process.exitCode = undefined;
+
+    armHardExit({
+      timeoutMs: 5_000,
+      log,
+      fallbackCode: 0,
+      exit: exit as unknown as (c: number) => never,
+    });
+    vi.advanceTimersByTime(5_000);
+
+    expect(exit).toHaveBeenCalledWith(0);
+    process.exitCode = prev;
+  });
+
+  it('still prefers an explicitly set exit code over the fallback', () => {
+    // Both watchdog paths set process.exitCode = 1 before aborting, and the
+    // first abort wins the arm. A later signal must not turn that into a 0.
+    const log = createMockLogger();
+    const exit = vi.fn();
+    const prev = process.exitCode;
+    process.exitCode = 1;
+
+    armHardExit({
+      timeoutMs: 5_000,
+      log,
+      fallbackCode: 0,
+      exit: exit as unknown as (c: number) => never,
+    });
+    vi.advanceTimersByTime(5_000);
+
+    expect(exit).toHaveBeenCalledWith(1);
+    process.exitCode = prev;
+  });
+
   it('is idempotent: a second arm does not stack another timer', () => {
     const log = createMockLogger();
     const exit = vi.fn();
