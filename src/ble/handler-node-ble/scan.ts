@@ -65,7 +65,13 @@ const BONDING_TIMEOUT_MS = 15_000;
  * read continues unbonded so adapters that do not strictly need it are not
  * blocked; pairing may need a registered BlueZ agent on some setups.
  */
-async function ensureBonded(device: Device, pin: number | undefined): Promise<void> {
+export async function ensureBonded(
+  device: Device,
+  pin: number | undefined,
+  abortSignal?: AbortSignal,
+): Promise<void> {
+  if (abortSignal?.aborted) throw new Error('Shutting down before BLE pairing started');
+  let onAbort: (() => void) | undefined;
   try {
     const paired = (await device.isPaired()) as unknown as boolean;
     if (paired) {
@@ -82,6 +88,18 @@ async function ensureBonded(device: Device, pin: number | undefined): Promise<vo
       bleLog.debug(`Pairing agent registration skipped: ${errMsg(err)}`);
     }
     bleLog.info('Adapter requires bonding; attempting BLE pairing...');
+    // A pairing that waits on a button press is the one D-Bus call that will
+    // not come back on its own: BlueZ holds Pair() open until someone confirms
+    // on the scale, and during a shutdown nobody is there to. CancelPairing is
+    // what releases it. Reported in #335 by an owner whose scale forces a
+    // stop/start cycle for every weigh-in, so almost every stop lands here.
+    onAbort = () => {
+      bleLog.debug('Shutting down with a BLE pairing outstanding, cancelling it');
+      void device.cancelPair().catch(() => {
+        /* nothing left to do: the process is going away */
+      });
+    };
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
     await withTimeout(device.pair(), BONDING_TIMEOUT_MS, 'BLE pairing timed out');
     bleLog.info('BLE pairing succeeded');
     // Mark the device trusted so subsequent reconnects re-use the bond without
@@ -93,10 +111,16 @@ async function ensureBonded(device: Device, pin: number | undefined): Promise<vo
       bleLog.debug(`Could not set Trusted on device: ${errMsg(err)}`);
     }
   } catch (err) {
+    // Swallowing an abort here would be worse than useless: the caller would
+    // carry straight on into a two-minute wait for a reading nobody is going
+    // to produce, and cancelling the pairing would have bought nothing.
+    if (abortSignal?.aborted) throw err;
     bleLog.warn(
       `BLE pairing failed (continuing unbonded): ${errMsg(err)}. ` +
         'A BlueZ pairing agent may be required for scales that mandate an encrypted link.',
     );
+  } finally {
+    if (onAbort) abortSignal?.removeEventListener('abort', onAbort);
   }
 }
 
@@ -123,7 +147,8 @@ export async function acquireGattServer(
   // Injectable so the branch logic (bond gate, already-bonded rethrow,
   // single retry) is unit-testable without a live D-Bus. Defaults to the real
   // ensureBonded in production.
-  bond: (d: Device, p: number | undefined) => Promise<void> = ensureBonded,
+  bond: (d: Device, p: number | undefined, s?: AbortSignal) => Promise<void> = ensureBonded,
+  abortSignal?: AbortSignal,
 ): Promise<NodeBle.GattServer> {
   const acquire = (): Promise<NodeBle.GattServer> =>
     withTimeout(device.gatt(), GATT_DISCOVERY_TIMEOUT_MS, 'GATT server acquisition timed out');
@@ -143,7 +168,7 @@ export async function acquireGattServer(
     bleLog.info(
       'GATT discovery timed out on a scale that requires bonding; pairing first, then retrying discovery once (#290)...',
     );
-    await bond(device, pin);
+    await bond(device, pin, abortSignal);
     return await acquire();
   }
 }
@@ -346,7 +371,13 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       // D-Bus ServicesResolved property forever, freezing the event loop after
       // connect but before the scan cycle fails, so the consecutive-failure
       // watchdog never trips (#273).
-      const gatt = await acquireGattServer(device, preMatchedAdapter, scaleAuth?.pin);
+      const gatt = await acquireGattServer(
+        device,
+        preMatchedAdapter,
+        scaleAuth?.pin,
+        ensureBonded,
+        abortSignal,
+      );
       const serviceUuids = await gatt.services();
       bleLog.debug(`Services: [${serviceUuids.join(', ')}]`);
 
@@ -431,7 +462,13 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     // the first enumeration can be missing chars the scale actually exposes.
     // Retry the enumeration a few times with a short backoff when we detect
     // that the adapter's required chars are not yet present.
-    const gatt = await acquireGattServer(device, matchedAdapter, scaleAuth?.pin);
+    const gatt = await acquireGattServer(
+      device,
+      matchedAdapter,
+      scaleAuth?.pin,
+      ensureBonded,
+      abortSignal,
+    );
     let charMap = await withTimeout(
       buildCharMap(gatt),
       GATT_DISCOVERY_TIMEOUT_MS,
@@ -463,7 +500,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     // Establish an encrypted link before enabling notifications for adapters
     // whose SIG services protect their CCCDs (#168). Best-effort: see ensureBonded.
     if (matchedAdapter.requiresBonding) {
-      await ensureBonded(device, scaleAuth?.pin);
+      await ensureBonded(device, scaleAuth?.pin, abortSignal);
     }
 
     const bleDevice = wrapDevice(device);
@@ -548,11 +585,23 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       // tracking survives across client reconnects. btmgmt power off/on
       // clears the zombie at the kernel level. See bluez/bluez#807,
       // bluez/bluer#47.
-      await sleep(500);
-      resetConnection();
-      bleLog.debug('D-Bus connection reset after GATT operation');
-      if (await resetAdapterBtmgmt(parseHciIndex(bleAdapter))) {
-        bleLog.debug('Preemptive btmgmt reset after GATT');
+      //
+      // None of that is worth doing while the app is shutting down: there is no
+      // next scan cycle to protect, and the power-cycle alone spends about
+      // 2.5 s in sleeps plus two btmgmt child processes, inside a 5 s
+      // force-exit grace window (#335). The D-Bus reset is kept either way,
+      // because it destroys the socket that pins the event loop open, which is
+      // the opposite of a delay.
+      if (abortSignal?.aborted) {
+        resetConnection();
+        bleLog.debug('Shutting down: D-Bus connection reset, skipping the btmgmt power-cycle');
+      } else {
+        await sleep(500);
+        resetConnection();
+        bleLog.debug('D-Bus connection reset after GATT operation');
+        if (await resetAdapterBtmgmt(parseHciIndex(bleAdapter))) {
+          bleLog.debug('Preemptive btmgmt reset after GATT');
+        }
       }
     }
     // For idle cycles (no GATT connection), discovery is kept running.
