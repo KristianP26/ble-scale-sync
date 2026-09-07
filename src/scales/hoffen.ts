@@ -36,6 +36,17 @@ export class HoffenAdapter implements ScaleAdapterCore, GattWiring {
   private cachedMuscle = 0;
   private cachedBone = 0;
   private cachedVisceral = 0;
+  /**
+   * Composition as it stood when each reading was emitted. `computeMetrics()`
+   * runs LATER than the parse that produced the reading, and on the watcher
+   * transports (mqtt-proxy, esphome-proxy) the watcher does not pause while
+   * the loop processes a reading: `loop.ts` awaits `processReading()`, which
+   * includes network exports, and the watcher can open the NEXT GATT session -
+   * and therefore fire `onSessionStart()` - in the meantime. Reading the live
+   * cache in `computeMetrics` would then hand the completed reading a cache
+   * that was just cleared. Weak so the processor dropping a reading frees it.
+   */
+  private readonly compByReading = new WeakMap<ScaleReading, ScaleBodyComp>();
 
   matches(device: BleDeviceInfo): boolean {
     return matchesDescriptor(device, this.match);
@@ -68,7 +79,19 @@ export class HoffenAdapter implements ScaleAdapterCore, GattWiring {
       this.cachedVisceral = data.readUInt16LE(17) / 10;
     }
 
-    return { weight, impedance: 0 };
+    const reading: ScaleReading = { weight, impedance: 0 };
+    this.compByReading.set(reading, this.snapshot());
+    return reading;
+  }
+
+  private snapshot(): ScaleBodyComp {
+    return {
+      fat: this.cachedFat > 0 ? this.cachedFat : undefined,
+      water: this.cachedWater > 0 ? this.cachedWater : undefined,
+      muscle: this.cachedMuscle > 0 ? this.cachedMuscle : undefined,
+      bone: this.cachedBone > 0 ? this.cachedBone : undefined,
+      visceralFat: this.cachedVisceral > 0 ? this.cachedVisceral : undefined,
+    };
   }
 
   /**
@@ -92,13 +115,10 @@ export class HoffenAdapter implements ScaleAdapterCore, GattWiring {
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    const comp: ScaleBodyComp = {
-      fat: this.cachedFat > 0 ? this.cachedFat : undefined,
-      water: this.cachedWater > 0 ? this.cachedWater : undefined,
-      muscle: this.cachedMuscle > 0 ? this.cachedMuscle : undefined,
-      bone: this.cachedBone > 0 ? this.cachedBone : undefined,
-      visceralFat: this.cachedVisceral > 0 ? this.cachedVisceral : undefined,
-    };
+    // Per-reading snapshot taken in parseNotification(). The live cache is only
+    // a fallback for a reading this adapter did not build (direct callers,
+    // tests); see the compByReading field comment for why it cannot be trusted.
+    const comp = this.compByReading.get(reading) ?? this.snapshot();
     return buildPayload(reading.weight, reading.impedance, comp, profile);
   }
 }

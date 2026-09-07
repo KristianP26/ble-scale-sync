@@ -320,6 +320,17 @@ export interface ScaleAdapterCore {
    * weigh-in from the previous one, and a stale cached weight or completeness
    * flag lets the next session resolve on the last person's data.
    *
+   * It clears GATING state safely, but it is NOT a safe place to clear state a
+   * previous reading's `computeMetrics` still needs. Session N+1's
+   * `onSessionStart` is not ordered after session N's `computeMetrics`: on the
+   * watcher transports the watcher keeps running while `loop.ts` awaits
+   * `processReading()` (network exports included) and can open the next GATT
+   * session in the meantime. An adapter that carries composition out of band in
+   * its own fields must pin it onto the reading it belongs to - a
+   * `WeakMap<ScaleReading, ...>` snapshot taken at emit time, as
+   * `beurer-bf720`, `beurer-sanitas`, `hoffen`, `mgb`, `medisana-bs44x` and
+   * `senssun` all do - rather than read the live cache in `computeMetrics`.
+   *
    * Must not throw and must not perform I/O: nothing is connected yet.
    */
   onSessionStart?(): void;
