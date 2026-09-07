@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { jieliAuthResponseFrame } from '../../src/scales/jieli-auth.js';
-import { QnScaleAdapter, buildMeasurementTrigger } from '../../src/scales/qn-scale.js';
+import {
+  QnScaleAdapter,
+  buildMeasurementTrigger,
+  buildTimeSync,
+} from '../../src/scales/qn-scale.js';
 import { bleLog } from '../../src/ble/types.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type {
@@ -1885,6 +1889,58 @@ describe('AE02 dispatch (#75, #235)', () => {
       expect(beforeStart).toHaveLength(1);
       expect(beforeStart[0][3]).toBe(0x32);
       expect(writes.slice(startIndex + 1).filter((w) => w[0] === 0xa2)).toHaveLength(0);
+    });
+
+    // #331: the Arboleaf vendor app's 0x20 is 9 bytes where ours is 8. Both
+    // close under the family checksum, both carry the same little-endian
+    // 2000-epoch timestamp at [3..6], and the whole difference is one 0x08
+    // before the checksum. The meaning of that byte is not decoded.
+    describe('0x20 time sync (ble.qn_time_sync_long, #331)', () => {
+      it('reproduces our own 8-byte frame from the reporter log byte for byte', () => {
+        // 0x3222aaa1 = 841132705 s since 2000-01-01.
+        expect(buildTimeSync(0xff, 0x3222aaa1)).toEqual([
+          0x20, 0x08, 0xff, 0xa1, 0xaa, 0x22, 0x32, 0xc6,
+        ]);
+      });
+
+      it('reproduces the vendor-app 9-byte frame byte for byte', () => {
+        // 0x3222b3f3 = 841135091 s since 2000-01-01, 2386 s after the frame
+        // above and on the same capture day.
+        expect(buildTimeSync(0xff, 0x3222b3f3, true)).toEqual([
+          0x20, 0x09, 0xff, 0xf3, 0xb3, 0x22, 0x32, 0x08, 0x2a,
+        ]);
+      });
+
+      it('sends the 8-byte form by default', async () => {
+        const adapter = makeAdapter();
+        const writes = await driveHandshake(adapter, makeArboleafScaleInfo());
+        const t = writes.find((w) => w[0] === 0x20)!;
+        expect(t).toHaveLength(8);
+        expect(t[1]).toBe(0x08);
+        expect(t[7]).toBe(t.slice(0, 7).reduce((a, b) => a + b, 0) & 0xff);
+      });
+
+      it('sends the 9-byte form when ble.qn_time_sync_long is set', async () => {
+        const adapter = makeAdapter();
+        adapter.configure({ qnTimeSyncLong: true });
+        const writes = await driveHandshake(adapter, makeArboleafScaleInfo());
+        const t = writes.find((w) => w[0] === 0x20)!;
+        expect(t).toHaveLength(9);
+        expect(t[1]).toBe(0x09);
+        expect(t[7]).toBe(0x08);
+        expect(t[8]).toBe(t.slice(0, 8).reduce((a, b) => a + b, 0) & 0xff);
+        // The timestamp bytes are wall-clock dependent, but their position is
+        // not: the trailer must be appended after them, never inside them.
+        expect(t.slice(0, 3)).toEqual([0x20, 0x09, 0xff]);
+      });
+
+      it('leaves every other frame alone when the long form is on', async () => {
+        const adapter = makeAdapter();
+        adapter.configure({ qnTimeSyncLong: true });
+        const writes = await driveHandshake(adapter, makeArboleafScaleInfo());
+        expect(writes.find((w) => w[0] === 0x13 && w[4] === 0x10)).toHaveLength(9);
+        expect(writes.find((w) => w[0] === 0x22)).toEqual([0x22, 0x06, 0xff, 0x00, 0x03, 0x2a]);
+      });
     });
 
     it('leaves the extended dialect anchor after START, never before', async () => {

@@ -46,7 +46,7 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
   # hand is exactly the person who would toggle the UI option, see no change and
   # report a false negative. A wrong value for either is silent by nature, so a
   # setting that is silently ignored is worse here than almost anywhere else.
-  for _qn in qn_protocol_byte qn_report_byte qn_weight_ack qn_a4_prelude auto_clear_stale_bond; do
+  for _qn in qn_protocol_byte qn_report_byte qn_weight_ack qn_a4_prelude qn_time_sync_long \n    auto_clear_stale_bond; do
     if [ -n "$(opt "$_qn")" ]; then
       log "WARNING: custom_config is enabled, so the '$_qn' option is ignored."
       log "Set 'ble.$_qn' in $CUSTOM_PATH instead."
@@ -83,6 +83,17 @@ else
     *)
       log "WARNING: ignoring qn_a4_prelude='$QN_A4_PRELUDE' (expected true or false)."
       QN_A4_PRELUDE=""
+      ;;
+  esac
+  # Same free-text normalisation again, same reason.
+  QN_TIME_SYNC_LONG=$(opt qn_time_sync_long)
+  case "$(echo "$QN_TIME_SYNC_LONG" | tr '[:upper:]' '[:lower:]')" in
+    "") QN_TIME_SYNC_LONG="" ;;
+    true | yes | on | 1) QN_TIME_SYNC_LONG="true" ;;
+    false | no | off | 0) QN_TIME_SYNC_LONG="false" ;;
+    *)
+      log "WARNING: ignoring qn_time_sync_long='$QN_TIME_SYNC_LONG' (expected true or false)."
+      QN_TIME_SYNC_LONG=""
       ;;
   esac
   AUTO_CLEAR_STALE_BOND=$(opt_bool auto_clear_stale_bond)
@@ -232,7 +243,7 @@ YAML
   # got no ble: block at all and the setting vanished without a word.
   if [ -n "$SCALE_MAC" ] || [ -n "$BLE_ADAPTER" ] || [ -n "$FORCE_SCALE_ADAPTER" ] ||
     [ -n "$QN_PROTOCOL_BYTE" ] || [ -n "$QN_REPORT_BYTE" ] || [ -n "$QN_WEIGHT_ACK" ] ||
-    [ -n "$QN_A4_PRELUDE" ] ||
+    [ -n "$QN_A4_PRELUDE" ] || [ -n "$QN_TIME_SYNC_LONG" ] ||
     [ "$AUTO_CLEAR_STALE_BOND" = "true" ] || [ "$PROXY_LIVENESS_MIN" != "30" ]; then
     echo "ble:" >> "$FRESH"
     [ -n "$SCALE_MAC" ] && echo "  scale_mac: \"$(yaml_escape "$SCALE_MAC")\"" >> "$FRESH"
@@ -242,6 +253,7 @@ YAML
     [ -n "$QN_REPORT_BYTE" ] && echo "  qn_report_byte: $QN_REPORT_BYTE" >> "$FRESH"
     [ -n "$QN_WEIGHT_ACK" ] && echo "  qn_weight_ack: $QN_WEIGHT_ACK" >> "$FRESH"
     [ -n "$QN_A4_PRELUDE" ] && echo "  qn_a4_prelude: $QN_A4_PRELUDE" >> "$FRESH"
+    [ -n "$QN_TIME_SYNC_LONG" ] && echo "  qn_time_sync_long: $QN_TIME_SYNC_LONG" >> "$FRESH"
     [ "$AUTO_CLEAR_STALE_BOND" = "true" ] && echo "  auto_clear_stale_bond: true" >> "$FRESH"
     [ "$PROXY_LIVENESS_MIN" != "30" ] && echo "  proxy_liveness_timeout_min: $PROXY_LIVENESS_MIN" >> "$FRESH"
     echo "" >> "$FRESH"

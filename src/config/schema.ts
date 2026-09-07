@@ -198,7 +198,31 @@ export const BleSchema = z
      * unset it changes nothing.
      */
     qn_weight_ack: z.boolean().optional().nullable(),
+    /**
+     * Send the two 0xA4 0x0F frames an Arboleaf vendor app sends between START
+     * and the first live 0x10 weight frame (#331).
+     *
+     * Replayed byte for byte from one reporter's HCI capture of their own unit.
+     * The payload is NOT decoded: five uint16 pairs per frame, the same shape as
+     * the 0xA2 weight anchor, so it may be per-user calibration. Off by default
+     * for that reason, and worth trying only when the handshake is acknowledged
+     * end to end and the scale then streams nothing.
+     */
     qn_a4_prelude: z.boolean().optional().nullable(),
+    /**
+     * Send the 9-byte form of the QN 0x20 time-sync frame (#331).
+     *
+     * The Arboleaf vendor app sends `20 09 ff <secs LE> 08 <checksum>` where this
+     * app sends `20 08 ff <secs LE> <checksum>`. The timestamp field, its
+     * position and the family checksum rule are identical; the whole difference
+     * is one extra `0x08` before the checksum, and that byte is NOT decoded.
+     *
+     * Off by default and opt-in per install, for the same reason as
+     * `qn_a4_prelude`: a wrong value here is silent in exactly the way
+     * `qn_protocol_byte` is, and every QN scale in the registry reads today on
+     * the 8-byte form.
+     */
+    qn_time_sync_long: z.boolean().optional().nullable(),
     /**
      * Delete a bond the scale has forgotten and pair again, instead of stopping
      * at the diagnostic (#290, #335).

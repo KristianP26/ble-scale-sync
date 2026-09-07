@@ -94,6 +94,7 @@ ble:
 | `auto_clear_stale_bond`      | No                          | `false`        | Delete a pairing key the scale has forgotten and pair again. Bonded scales only (Beurer BF7xx / BF9xx), node-ble transport only. See below.                                                                                                                                                |
 | `qn_weight_ack`              | No                          | Per dialect    | QN-family scales only. Answer every live weight frame with its own weight, as the vendor app does. On by default on the 20-byte extended dialect. Try `true` if your QN scale completes the handshake and then streams nothing. See below.                                                 |
 | `qn_a4_prelude`              | No                          | `false`        | QN-family scales only. Send the two undecoded `0xA4` frames an Arboleaf vendor app sends between START and the first weight frame. Off by default. Try `true` only if `qn_weight_ack` did not help and your scale still goes silent right after START. See below.                          |
+| `qn_time_sync_long`          | No                          | `false`        | QN-family scales only. Send the 9-byte form of the `0x20` time-sync frame that an Arboleaf vendor app sends, instead of the 8-byte one. Off by default; the extra byte is undecoded. See below.                                                                                            |
 | `proxy_liveness_timeout_min` | No                          | `30`           | Minutes of total advertisement silence before a proxy transport is treated as wedged and the process exits for the supervisor to restart. `0` disables. Proxy transports only. See below.                                                                                                  |
 | `mqtt_proxy`                 | If `handler: mqtt-proxy`    | (none)         | MQTT proxy connection (`broker_url`, `device_id`, `topic_prefix`, `username`, `password`, `auto_connect`, `embedded_broker_*`). See [ESP32 BLE Proxy](./esp32-proxy).                                                                                                                      |
 | `esphome_proxy`              | If `handler: esphome-proxy` | (none)         | ESPHome Native API connection (`host`, `port`, `encryption_key` or `password`, `client_info`). See [ESPHome Bluetooth Proxy](./esphome-proxy).                                                                                                                                             |
@@ -215,6 +216,24 @@ ble:
 An HCI capture of an Arboleaf vendor app shows two `0xA4` frames sent between START and the first live weight frame, which this app does not send. The scale acknowledges each one and only then starts streaming. Turning this on replays those two frames.
 
 Be aware of what that means. The frames are replayed byte for byte from one reporter's capture of their own scale, and their payload is not decoded. It looks like per-user calibration or a previous measurement handed back, so it may be right for everyone or right for nobody but the person who captured it. That is why it is off by default and why it is the last thing to try rather than the first. If it works for your unit, please say so on [issue #331](https://github.com/KristianP26/ble-scale-sync/issues/331): more than one confirmation is what would turn this from a replay into a decoded frame.
+
+If the scale is still silent with that on, there is one more difference between this app and the vendor app on that capture, and it is the last one anybody has found:
+
+```yaml
+ble:
+  qn_time_sync_long: true
+```
+
+The clock-setting frame is 9 bytes on the app side and 8 bytes here:
+
+```
+vendor app       20 09 ff f3 b3 22 32 08 2a
+ble-scale-sync   20 08 ff a1 aa 22 32 c6
+```
+
+Both close under the same checksum rule, and both carry the same little-endian timestamp in the same position, 40 minutes apart on the capture day. The entire difference is one `0x08` before the checksum, and what it selects is not known. Turning this on sends the longer frame.
+
+Try it on its own, not together with `qn_a4_prelude` or `qn_weight_ack`. Changing two things at once makes the result unreadable, which is the whole reason these are separate switches.
 
 With debug on, the swap is named:
 

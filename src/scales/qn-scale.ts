@@ -74,7 +74,10 @@ const hex = (data: number[] | Buffer): string =>
  *   working on 0x00 (45e4d6e); on the 20-byte GE CS 10 G the vendor app echoes
  *   0xff, and its 0x22 start command is then byte identical to ours (#235).
  *   Note that only the 0x22 matches the app byte for byte: the app's 0x13 and
- *   0x20 are each one byte longer than ours, and that delta is still unexplained.
+ *   0x20 are each one byte longer than ours. The 0x20 delta is one trailing
+ *   0x08 before the checksum and is reproducible behind `ble.qn_time_sync_long`
+ *   (see TIME_SYNC_TRAILER); the 0x13 delta is still unexplained and no capture
+ *   shows its extra byte.
  */
 
 // Type 2 UUIDs (most common variant)
@@ -306,6 +309,52 @@ export function buildA2Frame(raw: number): number[] {
   return cmd;
 }
 
+/**
+ * The extra byte the vendor app's 0x20 time sync carries and ours does not.
+ *
+ * From the Arboleaf CS10E HCI capture in #331, next to the reporter's own log
+ * of this app in the same session:
+ *
+ *   vendor app       20 09 ff f3 b3 22 32 08 2a     9 bytes
+ *   ble-scale-sync   20 08 ff a1 aa 22 32 c6        8 bytes
+ *
+ * Both close under the family's sum-of-preceding-bytes checksum (0x2a and 0xc6),
+ * `[1]` is the total frame length in both, and `[3..6]` little-endian is seconds
+ * since 2000-01-01 in both, 2386 s apart on the capture day. So the timestamp
+ * field, its position and the checksum rule are identical and the entire
+ * difference is this one byte before the checksum.
+ *
+ * WHAT IT MEANS IS NOT DECODED. That is why `ble.qn_time_sync_long` is off by
+ * default: a wrong value here is silent in exactly the way `qn_protocol_byte`
+ * is, and every QN scale in the registry reads today on the 8-byte form.
+ *
+ * The app's 0x13 config frame is likewise one byte longer than ours, and that
+ * one is NOT changed here: no capture shows its extra byte, and moving two
+ * frames at once makes a reporter's result unreadable.
+ */
+const TIME_SYNC_TRAILER = 0x08;
+
+/**
+ * Build the 0x20 time-sync frame.
+ *
+ * Exported so a test can pin it against the captured frame byte for byte
+ * without having to control the handshake's wall clock.
+ */
+export function buildTimeSync(protocolType: number, seconds: number, long = false): number[] {
+  const s = seconds >>> 0;
+  const body = [
+    0x20,
+    long ? 0x09 : 0x08,
+    protocolType,
+    s & 0xff,
+    (s >> 8) & 0xff,
+    (s >> 16) & 0xff,
+    (s >>> 24) & 0xff,
+  ];
+  if (long) body.push(TIME_SYNC_TRAILER);
+  return [...body, body.reduce((a, b) => a + b, 0) & 0xff];
+}
+
 /** How many times the vendor app repeats the trigger, and the gap it leaves. */
 const TRIGGER_REPEATS = 2;
 const TRIGGER_GAP_MS = 150;
@@ -506,6 +555,9 @@ export class QnScaleAdapter
   /** Send the undecoded 0xA4 prelude after START (`ble.qn_a4_prelude`, #331). */
   private a4PreludeEnabled = false;
 
+  /** Send the 9-byte 0x20 time sync (`ble.qn_time_sync_long`, #331). */
+  private timeSyncLong = false;
+
   /** Number of 0x22 stored-data re-queries sent this session. */
   private storedQueryAttempts = 0;
 
@@ -519,6 +571,7 @@ export class QnScaleAdapter
     this.forcedReportByte = opts.qnReportByte ?? null;
     this.forcedWeightAck = opts.qnWeightAck ?? null;
     this.a4PreludeEnabled = opts.qnA4Prelude === true;
+    this.timeSyncLong = opts.qnTimeSyncLong === true;
   }
 
   /** 0x13 config unit flag: 0x01 kg, 0x02 lb (openScale QNHandler). */
@@ -1300,20 +1353,16 @@ export class QnScaleAdapter
   private async handleReady(): Promise<void> {
     if (this.timeSyncSent) return;
     this.timeSyncSent = true;
-    // 0x20 time sync: seconds since 2000-01-01, little-endian
+    // 0x20 time sync: seconds since 2000-01-01, little-endian. See
+    // TIME_SYNC_TRAILER for the 9-byte form and why it is opt-in.
     const secs = Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
-    const timeCmd = [
-      0x20,
-      0x08,
-      this.seenProtocolType,
-      secs & 0xff,
-      (secs >> 8) & 0xff,
-      (secs >> 16) & 0xff,
-      (secs >> 24) & 0xff,
-      0x00,
-    ];
-    timeCmd[7] = timeCmd.reduce((a, b) => a + b, 0) & 0xff;
-    await this.writeCmd(timeCmd);
+    await this.writeCmd(buildTimeSync(this.seenProtocolType, secs, this.timeSyncLong));
+    if (this.timeSyncLong) {
+      bleLog.debug(
+        'QN: 0x20 time sync sent in the 9-byte vendor-app form ' +
+          '(ble.qn_time_sync_long, trailing byte undecoded, #331)',
+      );
+    }
 
     // A2, which openScale labels a user profile and fills with 0x32 plus the
     // user's age. The GE CS 10 G capture shows the vendor app using this exact

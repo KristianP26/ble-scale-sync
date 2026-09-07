@@ -244,6 +244,15 @@ export interface AdapterRuntimeConfig {
    * them.
    */
   qnA4Prelude?: boolean;
+  /**
+   * Send the 9-byte form of the QN 0x20 time-sync frame
+   * (`ble.qn_time_sync_long`, #331).
+   *
+   * The vendor app's frame carries one extra `0x08` before the checksum and is
+   * otherwise identical to ours, timestamp included. The byte is undecoded, so
+   * this is off by default.
+   */
+  qnTimeSyncLong?: boolean;
 }
 
 /**
