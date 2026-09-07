@@ -59,6 +59,15 @@ configuration:
       one extra byte that this add-on does not send. Set true to send that
       longer frame. What the extra byte selects is not known, so this is a
       diagnostic to try, not a fix. Leave empty otherwise.
+  qn_config_long:
+    name: QN long config frame
+    description: >-
+      QN-family scales only, and the last remaining difference anyone has found
+      between this add-on's start-up conversation and the vendor app's. Two
+      captures show the app's settings frame carrying one byte more than this
+      add-on sends. Set true to send the longer frame. What the extra bytes
+      select is not known, so this is a diagnostic to try, not a fix. Leave
+      empty otherwise.
   auto_clear_stale_bond:
     name: Re-pair a scale that forgot its pairing
     description: >-
