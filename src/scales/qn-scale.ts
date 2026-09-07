@@ -579,7 +579,6 @@ export class QnScaleAdapter
     return this.displayUnit === 'lbs' ? 0x02 : 0x01;
   }
 
-  /** Write to FFF2 (write char), fall back to FFE3 (Type 1). */
   /**
    * Warn when the discovered characteristics are structurally 1byone, not QN.
    *
@@ -603,6 +602,7 @@ export class QnScaleAdapter
     );
   }
 
+  /** Write to FFF2 (write char), fall back to FFE3 (Type 1). */
   private async writeCmd(data: number[]): Promise<void> {
     // Hold the context for both attempts. The 0x1F ack is issued from
     // parseNotification, whose caller ends the session (onSessionEnd nulls
@@ -885,18 +885,6 @@ export class QnScaleAdapter
   }
 
   /**
-   * Parse QN vendor notifications.
-   *
-   * Implements a notification-driven state machine for the handshake:
-   *   0x12 (scale info) -> AE01 init + 0x13 config with echoed protocol type
-   *   0x14 (ready ACK)  -> 0x20 time sync + A2 user profile + "pass" auth
-   *   0x21 (config req)  -> A00D history responses + 0x22 start
-   *   0x10 (weight)      -> parse weight (original or ES-30M format)
-   *
-   * State machine writes are fire-and-forget (async, not awaited) so they
-   * don't block the synchronous parseNotification return.
-   */
-  /**
    * Subscribe to AE02 at most once per session. Concurrent callers share the
    * same in-flight promise. A rejection clears the memo so a later, sequential
    * caller can still retry, which preserves the second attempt from the state
@@ -1003,6 +991,18 @@ export class QnScaleAdapter
     void this.writeAe01([...frame]);
   }
 
+  /**
+   * Parse QN vendor notifications.
+   *
+   * Implements a notification-driven state machine for the handshake:
+   *   0x12 (scale info) -> AE01 init + 0x13 config with echoed protocol type
+   *   0x14 (ready ACK)  -> 0x20 time sync + A2 user profile + "pass" auth
+   *   0x21 (config req)  -> A00D history responses + 0x22 start
+   *   0x10 (weight)      -> parse weight (original or ES-30M format)
+   *
+   * State machine writes are fire-and-forget (async, not awaited) so they
+   * don't block the synchronous parseNotification return.
+   */
   parseNotification(data: Buffer): ScaleReading | null {
     if (data.length < 3) return null;
 
@@ -1410,7 +1410,8 @@ export class QnScaleAdapter
     const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
     // A00D response 1 (from openScale QNHandler). byte[3] is the payload byte
-    // `ble.qn_report_byte` overrides; see REPORT_BYTE_DEFAULT / _EXTENDED.
+    // `ble.qn_report_byte` overrides; see REPORT_BYTE_DEFAULT and
+    // REPORT_BYTE_LONG_FRAME.
     const isLongFrame = this.isExtendedLongFrame || this.isLongFrameVariant;
     const dialectDefault = isLongFrame ? REPORT_BYTE_LONG_FRAME : REPORT_BYTE_DEFAULT;
     const msg1 = [
