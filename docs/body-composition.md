@@ -48,6 +48,24 @@ The coefficients vary by gender and athlete status:
 | Female           | 0.490 | 0.150 | -0.130 | 11.5 |
 | Female (athlete) | 0.550 | 0.180 | -0.150 | 8.5  |
 
+### When an impedance is ignored
+
+An impedance only drives the calculation when it looks like a body. Anything
+below **150 ohm** or above **1200 ohm** is refused, and the reading falls back
+to the Deurenberg estimate below.
+
+The reason is that a wrong resistance is worse than none, and it fails
+convincingly rather than obviously. A value far too high pins the 60 % ceiling.
+A value far too low, which is what a missing or spurious factor of ten looks
+like, drives `height² / impedance` up until lean body mass exceeds body weight,
+and the result then pins the 4 % floor. Neither reads as an error; both silently
+move every derived metric.
+
+The raw impedance is still exported either way, so you can compare it against
+whatever your vendor app reports. If your scale publishes an impedance and your
+body fat still looks like a BMI estimate, that number is why, and it is worth
+opening an issue with it.
+
 ### Body fat fallback (Deurenberg)
 
 When impedance is not available (e.g. the scale only measures weight), only **weight**, **BMI**, and **body fat** (estimated) are calculated. The remaining metrics (water, bone, muscle, visceral fat, physique rating) require impedance and will not be available.
