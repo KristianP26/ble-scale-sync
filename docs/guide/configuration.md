@@ -202,9 +202,9 @@ ble:
   qn_weight_ack: true
 ```
 
-That does three things: the pre-weigh-in A2 carries your `last_known_weight` (or the midpoint of your `weight_range`) instead of the placeholder, that same anchor is sent again immediately before the start command on every dialect except the 20-byte extended one, and every live weight frame is acknowledged with its own weight. `false` turns all of that off everywhere, if it ever turns out to hurt a unit.
+That does two things: an A2 frame carries your `last_known_weight` (or the midpoint of your `weight_range`) instead of the placeholder, and every live weight frame is acknowledged with its own weight. `false` turns both off everywhere, if it ever turns out to hurt a unit.
 
-The position of that second anchor comes from an HCI capture of an Arboleaf vendor app on the 19-byte es26m dialect, which sends `a2 06 01 22 8d 58` (88.45 kg) and then the start command with nothing between them. The 20-byte extended dialect keeps sending its anchor after the start command instead, because that is where hardware confirmed it in [#235](https://github.com/KristianP26/ble-scale-sync/issues/235).
+Where that anchor goes depends on the dialect, and it goes to exactly one place either way. On the 20-byte extended dialect it is sent after the start command, because that is where hardware confirmed it in [#235](https://github.com/KristianP26/ble-scale-sync/issues/235). On every other dialect it is sent immediately before the start command, which is where an HCI capture of an Arboleaf vendor app puts it: that app sends `a2 06 01 22 8d 58` (88.45 kg) and then the start command with nothing between them.
 
 If that still leaves the scale silent right after START, there is one more thing to try:
 

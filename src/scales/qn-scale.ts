@@ -1375,8 +1375,14 @@ export class QnScaleAdapter
     // default under the whole family. `ble.qn_weight_ack` swaps in the
     // configured anchor for the reporters who can actually test it.
     if (this.ctx) {
-      const anchorKg = this.forcedWeightAck ? this.resolveAnchorKg() : 0;
-      const profileCmd = this.forcedWeightAck
+      // The anchor goes here ONLY on the 20-byte extended dialect. Everywhere
+      // else `handleConfigRequest` sends it immediately before START instead,
+      // which is where the #331 capture puts it, and sending it in both places
+      // would mean one switch moves two things and the reporter's experiment
+      // stops being readable.
+      const anchorAtReady = this.forcedWeightAck === true && this.isExtendedLongFrame;
+      const anchorKg = anchorAtReady ? this.resolveAnchorKg() : 0;
+      const profileCmd = anchorAtReady
         ? buildMeasurementTrigger(anchorKg)
         : (() => {
             const age = Math.min(0xff, Math.max(1, this.ctx!.profile.age));
@@ -1384,7 +1390,7 @@ export class QnScaleAdapter
             cmd[5] = cmd.reduce((a, b) => a + b, 0) & 0xff;
             return cmd;
           })();
-      if (this.forcedWeightAck) {
+      if (anchorAtReady) {
         bleLog.debug(
           `QN: ready-time A2 carries the configured weight anchor ` +
             `${anchorKg.toFixed(2)} kg instead of openScale's placeholder (#75)`,

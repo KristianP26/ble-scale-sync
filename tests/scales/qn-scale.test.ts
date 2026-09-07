@@ -1831,7 +1831,11 @@ describe('AE02 dispatch (#75, #235)', () => {
       }
     });
 
-    it('swaps the configured anchor into the ready-time A2 when forced on', async () => {
+    it('sends the configured anchor exactly once, and at the capture position', async () => {
+      // The anchor used to go into the ready-time A2 on this dialect. It now
+      // goes immediately before START instead, where @chriba2567's capture puts
+      // it, and the ready-time frame goes back to openScale's placeholder.
+      // Sending it in both places would make one switch move two things.
       const adapter = makeAdapter();
       adapter.configure({ qnWeightAck: true });
       const writes = await driveHandshake(
@@ -1841,11 +1845,12 @@ describe('AE02 dispatch (#75, #235)', () => {
       );
       const startIndex = writes.findIndex((w) => w[0] === 0x22);
       const beforeStart = writes.slice(0, startIndex).filter((w) => w[0] === 0xa2);
-      // Two now: the ready-time A2, and the anchor the vendor app sends
-      // immediately before START on this dialect (#331).
       expect(beforeStart).toHaveLength(2);
-      // 7600 = 0x1db0
-      for (const a of beforeStart) expect(a).toEqual([0xa2, 0x06, 0x01, 0x1d, 0xb0, 0x76]);
+      // openScale's `a2 06 01 32 <age>` at ready time, age 30 from the profile.
+      expect(beforeStart[0]).toEqual([0xa2, 0x06, 0x01, 0x32, 0x1e, 0xf9]);
+      // 7600 = 0x1db0, and it is the write immediately before START.
+      expect(beforeStart[1]).toEqual([0xa2, 0x06, 0x01, 0x1d, 0xb0, 0x76]);
+      expect(writes[startIndex - 1]).toEqual([0xa2, 0x06, 0x01, 0x1d, 0xb0, 0x76]);
     });
 
     // #331: @chriba2567's HCI capture of the Arboleaf app on this dialect shows
@@ -1916,8 +1921,7 @@ describe('AE02 dispatch (#75, #235)', () => {
         const writes = await driveHandshake(adapter, makeArboleafScaleInfo());
         const t = writes.find((w) => w[0] === 0x20)!;
         expect(t).toHaveLength(8);
-        expect(t[1]).toBe(0x08);
-        expect(t[7]).toBe(t.slice(0, 7).reduce((a, b) => a + b, 0) & 0xff);
+        expect(t.slice(0, 3)).toEqual([0x20, 0x08, 0xff]);
       });
 
       it('sends the 9-byte form when ble.qn_time_sync_long is set', async () => {
@@ -1926,12 +1930,11 @@ describe('AE02 dispatch (#75, #235)', () => {
         const writes = await driveHandshake(adapter, makeArboleafScaleInfo());
         const t = writes.find((w) => w[0] === 0x20)!;
         expect(t).toHaveLength(9);
-        expect(t[1]).toBe(0x09);
-        expect(t[7]).toBe(0x08);
-        expect(t[8]).toBe(t.slice(0, 8).reduce((a, b) => a + b, 0) & 0xff);
-        // The timestamp bytes are wall-clock dependent, but their position is
-        // not: the trailer must be appended after them, never inside them.
+        // The timestamp bytes are wall-clock dependent, but nothing else is:
+        // the trailer must be appended after them, never inside them. The two
+        // tests above pin the arithmetic against the captured frames.
         expect(t.slice(0, 3)).toEqual([0x20, 0x09, 0xff]);
+        expect(t[7]).toBe(0x08);
       });
 
       it('leaves every other frame alone when the long form is on', async () => {
