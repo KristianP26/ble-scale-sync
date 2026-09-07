@@ -253,6 +253,15 @@ export interface AdapterRuntimeConfig {
    * this is off by default.
    */
   qnTimeSyncLong?: boolean;
+
+  /**
+   * Send the 10-byte form of the QN 0x13 config frame, instead of the 9-byte
+   * one (`ble.qn_config_long`, #331).
+   *
+   * The last documented difference between this app's QN handshake and the
+   * vendor app's. Undecoded, opt-in, off by default.
+   */
+  qnConfigLong?: boolean;
 }
 
 /**

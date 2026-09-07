@@ -224,6 +224,26 @@ export const BleSchema = z
      */
     qn_time_sync_long: z.boolean().optional().nullable(),
     /**
+     * Send the 10-byte form of the QN 0x13 config frame (#331).
+     *
+     * Two independent captures show the vendor app sending ten bytes where this
+     * app sends nine:
+     *
+     *   app (#235 GE CS 10 G)   13 0a ff 01 10 00 00 02 00 2f
+     *   hedoric capture (#235)  13 0a ff 01 10 00 00 00 fa 27
+     *   ble-scale-sync          13 09 ff 01 10 00 00 00    2c
+     *
+     * Bytes [0..6] are identical and all three close under the family checksum,
+     * so the whole difference is the pair at [7..8]. Its meaning is NOT decoded
+     * and the two captures disagree on its value, so the app's own pair is
+     * replayed rather than derived.
+     *
+     * Off by default and opt-in per install, for the same reason as
+     * `qn_a4_prelude` and `qn_time_sync_long`: every QN scale in the registry
+     * reads today on the 9-byte form, and a wrong value here fails silently.
+     */
+    qn_config_long: z.boolean().optional().nullable(),
+    /**
      * Delete a bond the scale has forgotten and pair again, instead of stopping
      * at the diagnostic (#290, #335).
      *

@@ -300,6 +300,7 @@ async function main(): Promise<void> {
     const qnWeightAck = ctx.config.ble?.qn_weight_ack ?? undefined;
     const qnA4Prelude = ctx.config.ble?.qn_a4_prelude ?? undefined;
     const qnTimeSyncLong = ctx.config.ble?.qn_time_sync_long ?? undefined;
+    const qnConfigLong = ctx.config.ble?.qn_config_long ?? undefined;
     for (const a of adapters)
       a.configure?.({
         bindKey,
@@ -310,6 +311,7 @@ async function main(): Promise<void> {
         qnWeightAck,
         qnA4Prelude,
         qnTimeSyncLong,
+        qnConfigLong,
       });
   };
   applyAdapterConfig(ctx.config.ble?.bind_key ?? undefined);
