@@ -7,7 +7,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { buildPayload } from './body-comp-helpers.js';
+import { buildPayload, biaFatIfPlausible } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
 // Soehnle custom 128-bit service / characteristic UUIDs
@@ -75,6 +75,14 @@ export class SoehnleScaleAdapter implements ScaleAdapterCore, GattWiring, Unlock
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    return buildPayload(reading.weight, reading.impedance, {}, profile);
+    // buildPayload does NOT run the BIA estimator: without a fat percentage it
+    // falls back to the Deurenberg BMI estimate, so an adapter that parses an
+    // impedance and then passes an empty comp publishes the impedance and
+    // ignores it (#386). biaFatIfPlausible bounds the value first, because the
+    // scaling of this field has never been checked against a capture.
+    // Note this is the 50 kHz value; the 5 kHz one at [11..12] is decoded by
+    // nobody and deliberately not mixed in.
+    const fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
+    return buildPayload(reading.weight, reading.impedance, { fat }, profile);
   }
 }
