@@ -48,12 +48,12 @@ import {
   TRIGGER_REPEATS,
   TRIGGER_WEIGHT_FALLBACK_KG,
 } from './constants.js';
-import { buildA2Frame, buildMeasurementTrigger, buildTimeSync } from './frames.js';
+import { buildA2Frame, buildConfig, buildMeasurementTrigger, buildTimeSync } from './frames.js';
 import { qnMatches, warnOnOneByoneShape } from './matching.js';
 import { parseQnBroadcast } from './broadcast.js';
 
 // Re-exported so importers keep the paths they had before the split.
-export { buildA2Frame, buildMeasurementTrigger, buildTimeSync } from './frames.js';
+export { buildA2Frame, buildConfig, buildMeasurementTrigger, buildTimeSync } from './frames.js';
 
 /** Format bytes as hex string for debug logging. */
 const hex = (data: number[] | Buffer): string =>
@@ -199,6 +199,9 @@ export class QnScaleAdapter
   /** Send the undecoded 0xA4 prelude after START (`ble.qn_a4_prelude`, #331). */
   private a4PreludeEnabled = false;
 
+  /** Send the 10-byte 0x13 config frame (`ble.qn_config_long`, #331). */
+  private configLong = false;
+
   /** Send the 9-byte 0x20 time sync (`ble.qn_time_sync_long`, #331). */
   private timeSyncLong = false;
 
@@ -216,6 +219,7 @@ export class QnScaleAdapter
     this.forcedWeightAck = opts.qnWeightAck ?? null;
     this.a4PreludeEnabled = opts.qnA4Prelude === true;
     this.timeSyncLong = opts.qnTimeSyncLong === true;
+    this.configLong = opts.qnConfigLong === true;
   }
 
   /** 0x13 config unit flag: 0x01 kg, 0x02 lb (openScale QNHandler). */
@@ -870,13 +874,15 @@ export class QnScaleAdapter
     await this.writeAe01([0xfe, 0xdc, 0xba, 0xc0, 0x06, 0x00, 0x02, 0x01, 0x01, 0xef]);
     await wait(200);
 
-    // Step 3: 0x13 config
-    // byte[3] = unit flag: 0x01 (kg) or 0x02 (lb) per openScale QNHandler. Honour
-    // the configured unit so a read does not flip the scale's display (#269).
-    // The Renpho app uses 0x08 which also works but switches the scale display to lb.
-    const cmd = [0x13, 0x09, this.seenProtocolType, this.unitFlag(), 0x10, 0x00, 0x00, 0x00, 0x00];
-    cmd[8] = cmd.reduce((a, b) => a + b, 0) & 0xff;
-    await this.writeCmd(cmd);
+    // Step 3: 0x13 config. See buildConfig for the 9 vs 10 byte forms and why
+    // the longer one is opt-in.
+    await this.writeCmd(buildConfig(this.seenProtocolType, this.unitFlag(), this.configLong));
+    if (this.configLong) {
+      bleLog.debug(
+        'QN: 0x13 config sent in the 10-byte vendor-app form ' +
+          '(ble.qn_config_long, trailing pair undecoded, #331)',
+      );
+    }
   }
 
   /** Respond to 0x14 (ready) with 0x20 time sync + A2 user profile + AE01 auth. */
