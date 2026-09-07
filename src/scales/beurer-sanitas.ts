@@ -302,6 +302,31 @@ export class BeurerSanitasScaleAdapter
     return { weight, impedance };
   }
 
+  /**
+   * Clear the previous weigh-in's gating state (#394).
+   *
+   * `readingBuffer` fed the three-sample stability gate, so a second session
+   * inherited a full buffer and could satisfy it one frame in, on a weight that
+   * had not settled. `compParts` holds partial 0x59 chunks; a session that died
+   * mid-stream left them behind and the next reassembly could splice a
+   * composition out of two different weigh-ins.
+   *
+   * Two fields are deliberately NOT cleared here:
+   *
+   *   - `cachedComp` is read by computeMetrics, which runs after the session is
+   *     over. Clearing per-session state that a later computeMetrics reads is
+   *     the trap this whole change exists to avoid, and it is why onSessionEnd
+   *     was the wrong hook. It is already nulled at the top of every parse.
+   *   - `isBf710Type` drives the `unlockCommand` and `completionHoldMs` getters,
+   *     which are read at session start before any frame. Clearing the latch
+   *     would send [0xF7 0x01] and a 0 ms hold to a BF710 whose advertised name
+   *     is not in KNOWN_NAMES, which is the #384 case the latch exists for.
+   */
+  onSessionStart(): void {
+    this.readingBuffer.length = 0;
+    this.compParts.clear();
+  }
+
   isComplete(reading: ScaleReading): boolean {
     if (this.isBf710Type) {
       if (reading.impedance > 0) return true;
