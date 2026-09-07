@@ -421,3 +421,74 @@ describe('Beurer / Sanitas: a zeroed composition is not a measurement (#386)', (
     expect(payload.bodyFatPercent).toBeCloseTo(22.5, 2);
   });
 });
+
+// #394: the adapter is a shared singleton, so gating state from one weigh-in
+// used to survive into the next. This is the most intricate reset in the set:
+// `readingBuffer` drives the BF710 three-sample stability gate and `compParts`
+// drives the multipart 0x59 reassembly, and two further fields are deliberately
+// NOT cleared (see the onSessionStart doc comment).
+describe('BeurerSanitasScaleAdapter session boundary (#394)', () => {
+  /** BF710 live weight frame: E7 58 xx [weight u16 BE, *50/1000]. */
+  function bf710Weight(raw: number): Buffer {
+    const buf = Buffer.from('e7580000 00'.replace(/ /g, ''), 'hex');
+    buf.writeUInt16BE(raw, 3);
+    return buf;
+  }
+
+  it('re-arms the three-sample stability gate for each session', () => {
+    const adapter = makeAdapter();
+    // Three identical samples satisfy the gate.
+    adapter.parseNotification(bf710Weight(1811));
+    adapter.parseNotification(bf710Weight(1811));
+    const settled = adapter.parseNotification(bf710Weight(1811))!;
+    expect(adapter.isComplete(settled)).toBe(true);
+
+    adapter.onSessionStart();
+
+    // First frame of the next session, within the 0.3 kg tolerance of the
+    // previous person (the realistic case - two adults in the same household
+    // rarely differ by more than the gate notices on frame one). With the
+    // buffer carried over, [90.55, 90.55, 90.60] satisfied the gate on that
+    // single frame and the session completed on an unsettled weight.
+    const first = adapter.parseNotification(bf710Weight(1812))!;
+    expect(adapter.isComplete(first)).toBe(false);
+  });
+
+  it('does not splice a composition out of two different weigh-ins', () => {
+    const adapter = makeAdapter();
+    adapter.parseNotification(bf710Weight(1811));
+    // Part 2 of a 3-part 0x59 stream; the session dies before part 3 arrives.
+    // Payload bytes 0..9 of the merged 16-byte composition structure.
+    adapter.parseNotification(Buffer.from('e7590302' + '00000000064001f400e1', 'hex'));
+
+    adapter.onSessionStart();
+
+    // Next session sends part 3 only: payload bytes 10..15. With the orphan
+    // part 2 still held, the two concatenated reached the 16 bytes the decoder
+    // needs and it returned a reading spliced out of two different weigh-ins.
+    const spliced = adapter.parseNotification(Buffer.from('e7590303' + '022601900014', 'hex'));
+    expect(spliced).toBeNull();
+  });
+
+  it('keeps the completed reading composition when the NEXT session starts first', () => {
+    // computeMetrics runs after the parse that built the reading, and the very
+    // next parse nulls cachedComp. On the watcher transports that next parse
+    // can already belong to the next session, so the composition has to travel
+    // on the reading rather than in the live cache.
+    const adapter = makeAdapter();
+    const buf = Buffer.alloc(16);
+    buf.writeUInt16BE(1600, 4); // 80 kg
+    buf.writeUInt16BE(500, 6); // 500 ohm
+    buf.writeUInt16BE(225, 8); // fat 22.5 %
+    const reading = adapter.parseNotification(buf)!;
+
+    adapter.onSessionStart();
+    // The next session's first frame nulls cachedComp on its way through.
+    const next = Buffer.alloc(16);
+    next.writeUInt16BE(1300, 4);
+    adapter.parseNotification(next);
+
+    const payload = adapter.computeMetrics(reading, defaultProfile());
+    expect(payload.bodyFatPercent).toBeCloseTo(22.5, 2);
+  });
+});

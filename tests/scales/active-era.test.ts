@@ -110,11 +110,6 @@ describe('ActiveEraAdapter', () => {
 
 // #394: adapters are shared singletons. Before onSessionStart existed, a second
 // weigh-in could resolve on the FIRST frame using the previous person's data.
-//
-// Every one of these also asserts that computeMetrics still carries the scale's
-// own composition, because the first attempt at this fix cleared the caches in
-// onSessionEnd - which runs BEFORE computeMetrics - and would have deleted the
-// body composition from every reading while these tests stayed green.
 
 describe('ActiveEraAdapter session boundary (#394)', () => {
   it('does not resolve the next session on the previous weight and impedance', () => {

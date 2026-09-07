@@ -248,6 +248,23 @@ describe('SenssunAdapter session boundary (#394)', () => {
     return buf;
   }
 
+  it('keeps the completed reading composition when the NEXT session starts first', () => {
+    // The ordering this guards is real, not hypothetical: on the mqtt-proxy and
+    // esphome-proxy watchers the loop awaits processReading() - computeMetrics
+    // plus network exports - while the watcher is free to open the next GATT
+    // session. So onSessionStart() for session N+1 can land BEFORE
+    // computeMetrics() for session N. Without a per-reading snapshot this
+    // exports the Deurenberg BMI estimate instead of the scale's own figure.
+    const adapter = makeAdapter();
+    adapter.parseNotification(typedFrame(0xb0, 225)); // fat 22.5 %
+    const reading = adapter.parseNotification(weightFrame(800))!;
+
+    adapter.onSessionStart();
+
+    const payload = adapter.computeMetrics(reading, defaultProfile());
+    expect(payload.bodyFatPercent).toBeCloseTo(22.5, 1);
+  });
+
   it('re-arms the four-frame completeness gate for each session', () => {
     // framesMask was never cleared, so once one session had seen all four
     // frame types the gate stayed satisfied for the life of the process and

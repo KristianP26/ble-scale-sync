@@ -400,11 +400,6 @@ describe('EsCs20mAdapter', () => {
 
 // #394: adapters are shared singletons. Before onSessionStart existed, a second
 // weigh-in could resolve on the FIRST frame using the previous person's data.
-//
-// Every one of these also asserts that computeMetrics still carries the scale's
-// own composition, because the first attempt at this fix cleared the caches in
-// onSessionEnd - which runs BEFORE computeMetrics - and would have deleted the
-// body composition from every reading while these tests stayed green.
 
 describe('EsCs20mAdapter session boundary (#394)', () => {
   /** 0x14 weight frame, msgId at [2] behind the 55 AA header. */

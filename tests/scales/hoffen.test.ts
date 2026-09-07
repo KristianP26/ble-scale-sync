@@ -203,11 +203,23 @@ describe('HoffenAdapter session boundary (#394)', () => {
     return buf;
   }
 
-  it('still exports the scale composition for the reading that just completed', () => {
+  it('keeps the completed reading composition when the NEXT session starts first', () => {
+    // The ordering this guards is real, not hypothetical: on the mqtt-proxy and
+    // esphome-proxy watchers the loop awaits processReading() - computeMetrics
+    // plus network exports - while the watcher is free to open the next GATT
+    // session. So onSessionStart() for session N+1 can land BEFORE
+    // computeMetrics() for session N. Without a per-reading snapshot this
+    // exports the Deurenberg BMI estimate instead of the scale's own figure.
     const adapter = makeAdapter();
     const reading = adapter.parseNotification(biaFrame(800, 225))!;
+
+    adapter.onSessionStart();
+
     const payload = adapter.computeMetrics(reading, defaultProfile());
     expect(payload.bodyFatPercent).toBeCloseTo(22.5, 1);
+    expect(payload.waterPercent).toBeCloseTo(55, 1);
+    // 40.0 % of 80 kg, i.e. the scale's own figure and not an estimate.
+    expect(payload.muscleMass).toBeCloseTo(32, 1);
   });
 
   it('does not attach the previous person composition to a weight-only reading', () => {

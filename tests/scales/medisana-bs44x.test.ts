@@ -209,10 +209,19 @@ describe('MedisanaBs44xAdapter session boundary (#394)', () => {
     return buf;
   }
 
-  it('still exports the scale composition for the reading that just completed', () => {
+  it('keeps the completed reading composition when the NEXT session starts first', () => {
+    // The ordering this guards is real, not hypothetical: on the mqtt-proxy and
+    // esphome-proxy watchers the loop awaits processReading() - computeMetrics
+    // plus network exports - while the watcher is free to open the next GATT
+    // session. So onSessionStart() for session N+1 can land BEFORE
+    // computeMetrics() for session N. Without a per-reading snapshot this
+    // exports the Deurenberg BMI estimate instead of the scale's own figure.
     const adapter = makeAdapter();
     adapter.parseNotification(weightFrame(8000));
     const reading = adapter.parseNotification(featureFrame(225))!;
+
+    adapter.onSessionStart();
+
     const payload = adapter.computeMetrics(reading, defaultProfile());
     expect(payload.bodyFatPercent).toBeCloseTo(22.5, 1);
   });

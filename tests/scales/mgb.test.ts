@@ -263,10 +263,30 @@ describe('MgbAdapter session boundary (#394)', () => {
     return buf;
   }
 
-  it('still exports the scale composition for the reading that just completed', () => {
+  /** Frame2: header [0x01, 0x00], muscle/bone/water LE tenths at [2]/[6]/[8]. */
+  function frame2(muscleTenths: number, boneTenths: number, waterTenths: number): Buffer {
+    const buf = Buffer.alloc(10);
+    buf[0] = 0x01;
+    buf[1] = 0x00;
+    buf.writeUInt16LE(muscleTenths, 2);
+    buf.writeUInt16LE(boneTenths, 6);
+    buf.writeUInt16LE(waterTenths, 8);
+    return buf;
+  }
+
+  it('keeps the completed reading composition when the NEXT session starts first', () => {
+    // The ordering this guards is real, not hypothetical: on the mqtt-proxy and
+    // esphome-proxy watchers the loop awaits processReading() - computeMetrics
+    // plus network exports - while the watcher is free to open the next GATT
+    // session. So onSessionStart() for session N+1 can land BEFORE
+    // computeMetrics() for session N. Without a per-reading snapshot this
+    // exports the Deurenberg BMI estimate instead of the scale's own figure.
     const adapter = makeAdapter();
     const reading = adapter.parseNotification(frame1(800, 225))!;
     expect(adapter.isComplete(reading)).toBe(true);
+
+    adapter.onSessionStart();
+
     const payload = adapter.computeMetrics(reading, defaultProfile());
     expect(payload.bodyFatPercent).toBeCloseTo(22.5, 1);
     assertPayloadRanges(payload);
@@ -286,13 +306,33 @@ describe('MgbAdapter session boundary (#394)', () => {
   });
 
   it('does not carry the previous composition into a fresh weight', () => {
+    // Assert on the fields Frame1 does NOT refresh. Weight and fat come from
+    // Frame1 either way, so asserting on those two passes with or without the
+    // reset. Muscle, bone and water only ever come from Frame2, so a session
+    // where Frame2 never arrives is exactly where the previous person's numbers
+    // used to be exported against a fresh weight.
     const adapter = makeAdapter();
     adapter.parseNotification(frame1(800, 225));
+    adapter.parseNotification(frame2(400, 35, 550));
+
     adapter.onSessionStart();
 
     const next = adapter.parseNotification(frame1(650, 310))!;
     const payload = adapter.computeMetrics(next, defaultProfile());
     expect(payload.weight).toBe(65);
     expect(payload.bodyFatPercent).toBeCloseTo(31, 1);
+    // buildPayload always fills these in, so "absent" is not observable. What
+    // is observable: they must equal what a virgin adapter produces from the
+    // same lone Frame1 (the estimator), not what the previous Frame2 said.
+    const virgin = makeAdapter();
+    const baseline = virgin.computeMetrics(
+      virgin.parseNotification(frame1(650, 310))!,
+      defaultProfile(),
+    );
+    expect(payload.muscleMass).toBeCloseTo(baseline.muscleMass!, 5);
+    expect(payload.boneMass).toBeCloseTo(baseline.boneMass!, 5);
+    expect(payload.waterPercent).toBeCloseTo(baseline.waterPercent!, 5);
+    // 40.0 % of 65 kg is what the leak used to export.
+    expect(payload.muscleMass).not.toBeCloseTo(26, 1);
   });
 });
