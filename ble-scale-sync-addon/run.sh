@@ -226,8 +226,14 @@ YAML
     fi
   done
 
-  # BLE section (only if scale_mac, adapter, a forced scale adapter or a QN byte is set)
-  if [ -n "$SCALE_MAC" ] || [ -n "$BLE_ADAPTER" ] || [ -n "$FORCE_SCALE_ADAPTER" ]     || [ -n "$QN_PROTOCOL_BYTE" ] || [ -n "$QN_REPORT_BYTE" ] || [ -n "$QN_WEIGHT_ACK" ]     || [ "$AUTO_CLEAR_STALE_BOND" = "true" ] || [ "$PROXY_LIVENESS_MIN" != "30" ]; then
+  # BLE section, emitted only when at least one of its options is set.
+  # Every option written inside this block must also appear in the condition.
+  # qn_a4_prelude did not, so an install whose only BLE option was that one
+  # got no ble: block at all and the setting vanished without a word.
+  if [ -n "$SCALE_MAC" ] || [ -n "$BLE_ADAPTER" ] || [ -n "$FORCE_SCALE_ADAPTER" ] ||
+    [ -n "$QN_PROTOCOL_BYTE" ] || [ -n "$QN_REPORT_BYTE" ] || [ -n "$QN_WEIGHT_ACK" ] ||
+    [ -n "$QN_A4_PRELUDE" ] ||
+    [ "$AUTO_CLEAR_STALE_BOND" = "true" ] || [ "$PROXY_LIVENESS_MIN" != "30" ]; then
     echo "ble:" >> "$FRESH"
     [ -n "$SCALE_MAC" ] && echo "  scale_mac: \"$(yaml_escape "$SCALE_MAC")\"" >> "$FRESH"
     [ -n "$BLE_ADAPTER" ] && echo "  adapter: \"$(yaml_escape "$BLE_ADAPTER")\"" >> "$FRESH"
