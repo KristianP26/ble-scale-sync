@@ -560,6 +560,17 @@ export class EufyP2Adapter
     return parseEufyAdvertisement(manufacturerData);
   }
 
+  /**
+   * Drop the connection context when the session ends (#394, same class as
+   * #138).
+   *
+   * Everything else this adapter holds is already reset in onConnected; this
+   * was the one field that was not, and it is dereferenced for writes.
+   */
+  onSessionEnd(): void {
+    this.ctx = null;
+  }
+
   isComplete(reading: ScaleReading): boolean {
     // Impedance 0 is normal, not a failure: the broadcast advertisement carries
     // no BIA at all, and over GATT the scale reports 0 whenever it could not

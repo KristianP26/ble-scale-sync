@@ -117,6 +117,18 @@ export class RenphoEs26bbAdapter implements ScaleAdapterCore, GattWiring {
     return null;
   }
 
+  /**
+   * Drop the connection context when the session ends (#394, same class as
+   * #138).
+   *
+   * Not data-affecting: this adapter caches no weight or composition. But the
+   * context outlived the link it belonged to, so a notification delivered after
+   * teardown made `sendOfflineAck` write through a dead char map and warn.
+   */
+  onSessionEnd(): void {
+    this.ctx = null;
+  }
+
   isComplete(reading: ScaleReading): boolean {
     return reading.weight > 10 && reading.impedance > 0;
   }
