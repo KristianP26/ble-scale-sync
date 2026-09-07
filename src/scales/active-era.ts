@@ -71,6 +71,19 @@ export class ActiveEraAdapter implements ScaleAdapterCore, GattWiring, Unlockabl
     return { weight: this.cachedWeight, impedance: this.cachedImpedance };
   }
 
+  /**
+   * Clear the previous weigh-in (#394).
+   *
+   * Adapters are shared singletons. Without this, both caches survive, so the next session resolves on its
+   * first frame with the previous weight and impedance. The stale weight is
+   * worse than a stale number on its own: the `imp >= 1500` correction
+   * multiplies it in, so even a fresh impedance frame decodes wrongly.
+   */
+  onSessionStart(): void {
+    this.cachedWeight = 0;
+    this.cachedImpedance = 0;
+  }
+
   isComplete(reading: ScaleReading): boolean {
     return reading.weight > 0 && reading.impedance > 0;
   }

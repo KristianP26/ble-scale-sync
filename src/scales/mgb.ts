@@ -102,6 +102,24 @@ export class MgbAdapter implements ScaleAdapterCore, GattWiring {
     return { weight: this.cachedWeight, impedance: 0 };
   }
 
+  /**
+   * Clear the previous weigh-in (#394).
+   *
+   * Adapters are shared singletons. Without this, the guard `if (this.cachedWeight <= 0)` passes on the
+   * LAST session's weight, so any 10-byte frame resolves the next session
+   * with the previous person's weight and composition. It also leaks without
+   * any unusual precondition: Frame1 refreshes only weight and fat, so a
+   * session where Frame2 never arrives exports the previous muscle, bone and
+   * water against the new weight.
+   */
+  onSessionStart(): void {
+    this.cachedWeight = 0;
+    this.cachedFat = 0;
+    this.cachedMuscle = 0;
+    this.cachedBone = 0;
+    this.cachedWater = 0;
+  }
+
   isComplete(reading: ScaleReading): boolean {
     return reading.weight > 0 && this.cachedFat > 0;
   }

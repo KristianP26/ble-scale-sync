@@ -95,6 +95,24 @@ export class SenssunAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
     return { weight: this.cachedWeight, impedance: 0 };
   }
 
+  /**
+   * Clear the previous weigh-in (#394).
+   *
+   * Adapters are shared singletons. Without this, `framesMask` stays at FRAME_ALL for the life of the
+   * process once one session has seen all four frame types, which disarms
+   * the completeness gate permanently: the next session resolves on its
+   * first frame, exporting a still-unsettled weight (the 0xAA stable flag is
+   * deliberately ignored) with the previous person's composition.
+   */
+  onSessionStart(): void {
+    this.cachedWeight = 0;
+    this.cachedFat = 0;
+    this.cachedWater = 0;
+    this.cachedMuscle = 0;
+    this.cachedBone = 0;
+    this.framesMask = 0;
+  }
+
   isComplete(reading: ScaleReading): boolean {
     return reading.weight > 0 && (this.framesMask & FRAME_ALL) === FRAME_ALL;
   }

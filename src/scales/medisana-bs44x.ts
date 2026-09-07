@@ -98,6 +98,19 @@ export class MedisanaBs44xAdapter implements ScaleAdapterCore, GattWiring {
     return { weight: this.cachedWeight, impedance: 0 };
   }
 
+  /**
+   * Clear the previous weigh-in (#394).
+   *
+   * Adapters are shared singletons. Without this, the stale `cachedWeight` passes the guard and the stale
+   * `cachedComp.fat` satisfies isComplete, so the first frame of the next
+   * session resolves it: a feature frame exports the previous weight, a
+   * weight frame exports the previous composition.
+   */
+  onSessionStart(): void {
+    this.cachedWeight = 0;
+    this.cachedComp = {};
+  }
+
   isComplete(reading: ScaleReading): boolean {
     return reading.weight > 0 && this.cachedComp.fat != null && this.cachedComp.fat > 0;
   }

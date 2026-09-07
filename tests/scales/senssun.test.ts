@@ -223,3 +223,57 @@ describe('SenssunAdapter', () => {
     });
   });
 });
+
+// #394: adapters are shared singletons. Before onSessionStart existed, a second
+// weigh-in could resolve on the FIRST frame using the previous person's data.
+//
+// Every one of these also asserts that computeMetrics still carries the scale's
+// own composition, because the first attempt at this fix cleared the caches in
+// onSessionEnd - which runs BEFORE computeMetrics - and would have deleted the
+// body composition from every reading while these tests stayed green.
+
+describe('SenssunAdapter session boundary (#394)', () => {
+  function weightFrame(tenths: number): Buffer {
+    const buf = Buffer.alloc(6);
+    buf[0] = 0xa5;
+    buf.writeUInt16BE(tenths, 1);
+    buf[5] = 0xaa;
+    return buf;
+  }
+
+  function typedFrame(header: number, value: number): Buffer {
+    const buf = Buffer.alloc(6);
+    buf[0] = header;
+    buf.writeUInt16BE(value, 1);
+    return buf;
+  }
+
+  it('re-arms the four-frame completeness gate for each session', () => {
+    // framesMask was never cleared, so once one session had seen all four
+    // frame types the gate stayed satisfied for the life of the process and
+    // the next session completed on its FIRST frame, exporting a weight the
+    // scale had not settled on yet.
+    const adapter = makeAdapter();
+    adapter.parseNotification(weightFrame(800));
+    adapter.parseNotification(typedFrame(0xb0, 225));
+    adapter.parseNotification(typedFrame(0xc0, 400));
+    const complete = adapter.parseNotification(typedFrame(0xd0, 1600))!;
+    expect(adapter.isComplete(complete)).toBe(true);
+
+    adapter.onSessionStart();
+
+    const firstOfNextSession = adapter.parseNotification(weightFrame(650))!;
+    expect(adapter.isComplete(firstOfNextSession)).toBe(false);
+  });
+
+  it('clears the cached weight so a non-weight frame cannot resolve', () => {
+    const adapter = makeAdapter();
+    adapter.parseNotification(weightFrame(800));
+    adapter.onSessionStart();
+
+    const fatFrame = Buffer.alloc(6);
+    fatFrame[0] = 0xb0;
+    fatFrame.writeUInt16BE(225, 1);
+    expect(adapter.parseNotification(fatFrame)).toBeNull();
+  });
+});

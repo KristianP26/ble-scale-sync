@@ -184,3 +184,46 @@ describe('MedisanaBs44xAdapter', () => {
     });
   });
 });
+
+// #394: adapters are shared singletons. Before onSessionStart existed, a second
+// weigh-in could resolve on the FIRST frame using the previous person's data.
+//
+// Every one of these also asserts that computeMetrics still carries the scale's
+// own composition, because the first attempt at this fix cleared the caches in
+// onSessionEnd - which runs BEFORE computeMetrics - and would have deleted the
+// body composition from every reading while these tests stayed green.
+
+describe('MedisanaBs44xAdapter session boundary (#394)', () => {
+  function weightFrame(hundredths: number): Buffer {
+    const buf = Buffer.alloc(4);
+    buf.writeUInt16LE(hundredths, 1);
+    return buf;
+  }
+
+  function featureFrame(fatTenths: number): Buffer {
+    const buf = Buffer.alloc(16);
+    buf.writeUInt16LE(fatTenths, 8);
+    buf.writeUInt16LE(550, 10);
+    buf.writeUInt16LE(400, 12);
+    buf.writeUInt16LE(35, 14);
+    return buf;
+  }
+
+  it('still exports the scale composition for the reading that just completed', () => {
+    const adapter = makeAdapter();
+    adapter.parseNotification(weightFrame(8000));
+    const reading = adapter.parseNotification(featureFrame(225))!;
+    const payload = adapter.computeMetrics(reading, defaultProfile());
+    expect(payload.bodyFatPercent).toBeCloseTo(22.5, 1);
+  });
+
+  it('does not export the previous weight when a feature frame arrives first', () => {
+    const adapter = makeAdapter();
+    adapter.parseNotification(weightFrame(8000));
+    adapter.parseNotification(featureFrame(225));
+
+    adapter.onSessionStart();
+
+    expect(adapter.parseNotification(featureFrame(310))).toBeNull();
+  });
+});

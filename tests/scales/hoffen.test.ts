@@ -172,3 +172,58 @@ describe('HoffenAdapter', () => {
     });
   });
 });
+
+// #394: adapters are shared singletons. Before onSessionStart existed, a second
+// weigh-in could resolve on the FIRST frame using the previous person's data.
+//
+// Every one of these also asserts that computeMetrics still carries the scale's
+// own composition, because the first attempt at this fix cleared the caches in
+// onSessionEnd - which runs BEFORE computeMetrics - and would have deleted the
+// body composition from every reading while these tests stayed green.
+
+describe('HoffenAdapter session boundary (#394)', () => {
+  function biaFrame(weightTenths: number, fatTenths: number): Buffer {
+    const buf = Buffer.alloc(19);
+    buf[0] = 0xfa;
+    buf.writeUInt16LE(weightTenths, 3);
+    buf[5] = 0x00; // BIA contact
+    buf.writeUInt16LE(fatTenths, 6);
+    buf.writeUInt16LE(550, 8);
+    buf.writeUInt16LE(400, 10);
+    buf[14] = 35;
+    buf.writeUInt16LE(80, 17);
+    return buf;
+  }
+
+  function weightOnlyFrame(weightTenths: number): Buffer {
+    const buf = Buffer.alloc(8);
+    buf[0] = 0xfa;
+    buf.writeUInt16LE(weightTenths, 3);
+    buf[5] = 0x01; // no BIA contact
+    return buf;
+  }
+
+  it('still exports the scale composition for the reading that just completed', () => {
+    const adapter = makeAdapter();
+    const reading = adapter.parseNotification(biaFrame(800, 225))!;
+    const payload = adapter.computeMetrics(reading, defaultProfile());
+    expect(payload.bodyFatPercent).toBeCloseTo(22.5, 1);
+  });
+
+  it('does not attach the previous person composition to a weight-only reading', () => {
+    // The realistic case: one weigh-in with poor foot contact. isComplete is a
+    // bare weight > 0 with no hold window, so this frame ends the session and
+    // used to carry the previous person's fat, water, muscle and bone.
+    const adapter = makeAdapter();
+    adapter.parseNotification(biaFrame(800, 225));
+
+    adapter.onSessionStart();
+
+    const reading = adapter.parseNotification(weightOnlyFrame(650))!;
+    const payload = adapter.computeMetrics(reading, defaultProfile());
+    expect(payload.weight).toBe(65);
+    // 22.5 % was the previous person's. Without a fresh BIA frame this has to
+    // fall back to the BMI estimate rather than replay it.
+    expect(payload.bodyFatPercent).not.toBeCloseTo(22.5, 1);
+  });
+});

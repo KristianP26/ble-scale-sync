@@ -243,3 +243,56 @@ describe('MgbAdapter', () => {
     });
   });
 });
+
+// #394: adapters are shared singletons. Before onSessionStart existed, a second
+// weigh-in could resolve on the FIRST frame using the previous person's data.
+//
+// Every one of these also asserts that computeMetrics still carries the scale's
+// own composition, because the first attempt at this fix cleared the caches in
+// onSessionEnd - which runs BEFORE computeMetrics - and would have deleted the
+// body composition from every reading while these tests stayed green.
+
+describe('MgbAdapter session boundary (#394)', () => {
+  function frame1(weightTenths: number, fatTenths: number): Buffer {
+    const buf = Buffer.alloc(20);
+    buf[0] = 0xac;
+    buf[1] = 0x02;
+    buf[2] = 0xff;
+    buf.writeUInt16BE(weightTenths, 12);
+    buf.writeUInt16BE(fatTenths, 16);
+    return buf;
+  }
+
+  it('still exports the scale composition for the reading that just completed', () => {
+    const adapter = makeAdapter();
+    const reading = adapter.parseNotification(frame1(800, 225))!;
+    expect(adapter.isComplete(reading)).toBe(true);
+    const payload = adapter.computeMetrics(reading, defaultProfile());
+    expect(payload.bodyFatPercent).toBeCloseTo(22.5, 1);
+    assertPayloadRanges(payload);
+  });
+
+  it('does not resolve the next session on the previous weigh-in', () => {
+    const adapter = makeAdapter();
+    adapter.parseNotification(frame1(800, 225));
+
+    adapter.onSessionStart();
+
+    // A frame that updates nothing: right length, neither Frame1 nor Frame2.
+    // This used to fall through to the cached weight and complete immediately.
+    const stray = Buffer.alloc(20);
+    stray[0] = 0xff;
+    expect(adapter.parseNotification(stray)).toBeNull();
+  });
+
+  it('does not carry the previous composition into a fresh weight', () => {
+    const adapter = makeAdapter();
+    adapter.parseNotification(frame1(800, 225));
+    adapter.onSessionStart();
+
+    const next = adapter.parseNotification(frame1(650, 310))!;
+    const payload = adapter.computeMetrics(next, defaultProfile());
+    expect(payload.weight).toBe(65);
+    expect(payload.bodyFatPercent).toBeCloseTo(31, 1);
+  });
+});

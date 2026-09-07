@@ -175,6 +175,20 @@ export class OneByoneNewAdapter implements ScaleAdapterCore, GattWiring, Unlocka
   private cachedWeight = 0;
   private cachedImpedance = 0;
 
+  /**
+   * Clear the previous weigh-in (#394).
+   *
+   * Adapters are shared singletons, and this class has no onConnected to reset
+   * in (it is Unlockable, so declaring one would disable its unlock command).
+   * Both caches survived, so the next session resolved on its first frame with
+   * the previous weight and impedance. The sibling OneByoneAdapter above does
+   * the same job in onConnected and is unaffected.
+   */
+  onSessionStart(): void {
+    this.cachedWeight = 0;
+    this.cachedImpedance = 0;
+  }
+
   matches(device: BleDeviceInfo): boolean {
     return matchesDescriptor(device, this.match);
   }

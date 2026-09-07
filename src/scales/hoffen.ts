@@ -71,6 +71,22 @@ export class HoffenAdapter implements ScaleAdapterCore, GattWiring {
     return { weight, impedance: 0 };
   }
 
+  /**
+   * Clear the previous weigh-in (#394).
+   *
+   * Adapters are shared singletons. Without this, the composition survives while the weight does not, and
+   * isComplete is a bare `weight > 0` with no hold window. One weigh-in
+   * where the scale reports no BIA foot contact therefore exports the
+   * PREVIOUS person's whole body composition against a fresh weight.
+   */
+  onSessionStart(): void {
+    this.cachedFat = 0;
+    this.cachedWater = 0;
+    this.cachedMuscle = 0;
+    this.cachedBone = 0;
+    this.cachedVisceral = 0;
+  }
+
   isComplete(reading: ScaleReading): boolean {
     return reading.weight > 0;
   }
