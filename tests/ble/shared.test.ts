@@ -1856,3 +1856,87 @@ describe('getRawCaptureConfig()', () => {
     expect(getRawCaptureConfig().holdMs).toBe(20_000);
   });
 });
+
+// ─── Session hook placement (#394) ──────────────────────────────────────────
+
+// The whole point of onSessionStart is WHERE it runs. Every adapter-level test
+// calls the hook directly, so deleting the call in shared.ts left the suite
+// green while the fix did nothing.
+describe('onSessionStart placement', () => {
+  it('fires before the first subscribe, in both wiring modes', async () => {
+    for (const mode of ['legacy', 'multi-char'] as const) {
+      const seen: string[] = [];
+      const notifyChar = createMockChar();
+      const writeChar = createMockChar();
+      const baseSubscribe = notifyChar.subscribe;
+      notifyChar.subscribe = vi.fn(async (onData: (data: Buffer) => void) => {
+        seen.push('subscribe');
+        return baseSubscribe(onData);
+      });
+      const device = createMockDevice();
+      const { charMap } = createCharMap([
+        [NOTIFY_UUID, notifyChar],
+        [WRITE_UUID, writeChar],
+      ]);
+
+      const adapter = createLegacyAdapter({
+        ...(mode === 'multi-char'
+          ? {
+              characteristics: [
+                { uuid: NOTIFY_UUID, type: 'notify' as const },
+                { uuid: WRITE_UUID, type: 'write' as const },
+              ],
+              onConnected: vi.fn(() => {
+                seen.push('onConnected');
+              }),
+            }
+          : {}),
+        onSessionStart: vi.fn(() => {
+          seen.push('onSessionStart');
+        }),
+        parseNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
+        parseCharNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
+      });
+
+      const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+      await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+      if (mode === 'multi-char') {
+        await vi.waitFor(() => expect(adapter.onConnected).toHaveBeenCalled());
+      }
+      notifyChar.triggerData(Buffer.from([0x01]));
+      await promise;
+
+      expect(adapter.onSessionStart).toHaveBeenCalledTimes(1);
+      expect(seen[0], `${mode}: hook must run before anything is subscribed`).toBe(
+        'onSessionStart',
+      );
+      // In multi-char mode subscribe precedes onConnected, which is exactly why
+      // the reset cannot live in onConnected.
+      if (mode === 'multi-char') {
+        expect(seen.indexOf('subscribe')).toBeLessThan(seen.indexOf('onConnected'));
+      }
+    }
+  });
+
+  it('does not abort the session when the hook throws', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const adapter = createLegacyAdapter({
+      onSessionStart: vi.fn(() => {
+        throw new Error('adapter bug');
+      }),
+      parseNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+    notifyChar.triggerData(Buffer.from([0x01]));
+    await expect(promise).resolves.toMatchObject({ reading: { weight: 75 } });
+  });
+});

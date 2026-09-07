@@ -91,6 +91,9 @@ describe('RenphoMsc04Adapter', () => {
         read: vi.fn(),
         subscribe: vi.fn(),
       } as unknown as ConnectionContext;
+      // Handler order: onSessionStart before anything is subscribed, then
+      // onConnected once the init sequence runs (src/ble/shared.ts).
+      adapter.onSessionStart();
       await adapter.onConnected(ctx);
       expect(adapter.isComplete({ weight: 95.55, impedance: 0 })).toBe(false);
     });
