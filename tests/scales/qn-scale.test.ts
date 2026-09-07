@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { jieliAuthResponseFrame } from '../../src/scales/jieli-auth.js';
-import { QnScaleAdapter, buildMeasurementTrigger } from '../../src/scales/qn-scale.js';
+import {
+  QnScaleAdapter,
+  buildMeasurementTrigger,
+  buildTimeSync,
+} from '../../src/scales/qn-scale/index.js';
 import { bleLog } from '../../src/ble/types.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type {
@@ -1827,7 +1831,11 @@ describe('AE02 dispatch (#75, #235)', () => {
       }
     });
 
-    it('swaps the configured anchor into the ready-time A2 when forced on', async () => {
+    it('sends the configured anchor exactly once, and at the capture position', async () => {
+      // The anchor used to go into the ready-time A2 on this dialect. It now
+      // goes immediately before START instead, where @chriba2567's capture puts
+      // it, and the ready-time frame goes back to openScale's placeholder.
+      // Sending it in both places would make one switch move two things.
       const adapter = makeAdapter();
       adapter.configure({ qnWeightAck: true });
       const writes = await driveHandshake(
@@ -1837,9 +1845,120 @@ describe('AE02 dispatch (#75, #235)', () => {
       );
       const startIndex = writes.findIndex((w) => w[0] === 0x22);
       const beforeStart = writes.slice(0, startIndex).filter((w) => w[0] === 0xa2);
+      expect(beforeStart).toHaveLength(2);
+      // openScale's `a2 06 01 32 <age>` at ready time, age 30 from the profile.
+      expect(beforeStart[0]).toEqual([0xa2, 0x06, 0x01, 0x32, 0x1e, 0xf9]);
+      // 7600 = 0x1db0, and it is the write immediately before START.
+      expect(beforeStart[1]).toEqual([0xa2, 0x06, 0x01, 0x1d, 0xb0, 0x76]);
+      expect(writes[startIndex - 1]).toEqual([0xa2, 0x06, 0x01, 0x1d, 0xb0, 0x76]);
+    });
+
+    // #331: @chriba2567's HCI capture of the Arboleaf app on this dialect shows
+    //
+    //   APP->SCALE  a2 06 01 22 8d 58     0x228d = 8845 = 88.45 kg
+    //   APP->SCALE  22 06 ff 00 03 2a     START
+    //
+    // and his own debug log of this app shows the anchor going out at ready time
+    // and nothing at all in that position. The scale acknowledges the whole
+    // handshake either way and then streams nothing.
+    it('sends the anchor immediately before START on the 19-byte dialect when forced on', async () => {
+      const adapter = makeAdapter();
+      adapter.configure({ qnWeightAck: true });
+      const writes = await driveHandshake(
+        adapter,
+        makeArboleafScaleInfo(),
+        defaultProfile({ lastKnownWeight: 88.45 }),
+      );
+      const startIndex = writes.findIndex((w) => w[0] === 0x22);
+      expect(startIndex).toBeGreaterThanOrEqual(0);
+      const anchor = [0xa2, 0x06, 0x01, 0x22, 0x8d, 0x58];
+      // The write immediately preceding START is the anchor, byte for byte the
+      // frame in the capture.
+      expect(writes[startIndex - 1]).toEqual(anchor);
+      expect(anchor[5]).toBe(anchor.slice(0, 5).reduce((a, b) => a + b, 0) & 0xff);
+      // Nothing was added after START on this dialect: the post-START burst
+      // stays exclusive to the 20-byte extended firmware.
+      expect(writes.slice(startIndex + 1).filter((w) => w[0] === 0xa2)).toHaveLength(0);
+    });
+
+    it('sends no pre-START anchor on the 19-byte dialect by default', async () => {
+      const adapter = makeAdapter();
+      const writes = await driveHandshake(
+        adapter,
+        makeArboleafScaleInfo(),
+        defaultProfile({ lastKnownWeight: 88.45 }),
+      );
+      const startIndex = writes.findIndex((w) => w[0] === 0x22);
+      const beforeStart = writes.slice(0, startIndex).filter((w) => w[0] === 0xa2);
+      // Only openScale's ready-time profile frame, `a2 06 01 32 <age>`.
       expect(beforeStart).toHaveLength(1);
-      // 7600 = 0x1db0
-      expect(beforeStart[0]).toEqual([0xa2, 0x06, 0x01, 0x1d, 0xb0, 0x76]);
+      expect(beforeStart[0][3]).toBe(0x32);
+      expect(writes.slice(startIndex + 1).filter((w) => w[0] === 0xa2)).toHaveLength(0);
+    });
+
+    // #331: the Arboleaf vendor app's 0x20 is 9 bytes where ours is 8. Both
+    // close under the family checksum, both carry the same little-endian
+    // 2000-epoch timestamp at [3..6], and the whole difference is one 0x08
+    // before the checksum. The meaning of that byte is not decoded.
+    describe('0x20 time sync (ble.qn_time_sync_long, #331)', () => {
+      it('reproduces our own 8-byte frame from the reporter log byte for byte', () => {
+        // 0x3222aaa1 = 841132705 s since 2000-01-01.
+        expect(buildTimeSync(0xff, 0x3222aaa1)).toEqual([
+          0x20, 0x08, 0xff, 0xa1, 0xaa, 0x22, 0x32, 0xc6,
+        ]);
+      });
+
+      it('reproduces the vendor-app 9-byte frame byte for byte', () => {
+        // 0x3222b3f3 = 841135091 s since 2000-01-01, 2386 s after the frame
+        // above and on the same capture day.
+        expect(buildTimeSync(0xff, 0x3222b3f3, true)).toEqual([
+          0x20, 0x09, 0xff, 0xf3, 0xb3, 0x22, 0x32, 0x08, 0x2a,
+        ]);
+      });
+
+      it('sends the 8-byte form by default', async () => {
+        const adapter = makeAdapter();
+        const writes = await driveHandshake(adapter, makeArboleafScaleInfo());
+        const t = writes.find((w) => w[0] === 0x20)!;
+        expect(t).toHaveLength(8);
+        expect(t.slice(0, 3)).toEqual([0x20, 0x08, 0xff]);
+      });
+
+      it('sends the 9-byte form when ble.qn_time_sync_long is set', async () => {
+        const adapter = makeAdapter();
+        adapter.configure({ qnTimeSyncLong: true });
+        const writes = await driveHandshake(adapter, makeArboleafScaleInfo());
+        const t = writes.find((w) => w[0] === 0x20)!;
+        expect(t).toHaveLength(9);
+        // The timestamp bytes are wall-clock dependent, but nothing else is:
+        // the trailer must be appended after them, never inside them. The two
+        // tests above pin the arithmetic against the captured frames.
+        expect(t.slice(0, 3)).toEqual([0x20, 0x09, 0xff]);
+        expect(t[7]).toBe(0x08);
+      });
+
+      it('leaves every other frame alone when the long form is on', async () => {
+        const adapter = makeAdapter();
+        adapter.configure({ qnTimeSyncLong: true });
+        const writes = await driveHandshake(adapter, makeArboleafScaleInfo());
+        expect(writes.find((w) => w[0] === 0x13 && w[4] === 0x10)).toHaveLength(9);
+        expect(writes.find((w) => w[0] === 0x22)).toEqual([0x22, 0x06, 0xff, 0x00, 0x03, 0x2a]);
+      });
+    });
+
+    it('leaves the extended dialect anchor after START, never before', async () => {
+      const adapter = makeAdapter();
+      adapter.configure({ qnWeightAck: true });
+      const writes = await driveHandshake(
+        adapter,
+        makeExtendedScaleInfo(),
+        defaultProfile({ lastKnownWeight: 76 }),
+      );
+      const startIndex = writes.findIndex((w) => w[0] === 0x22);
+      // Ready-time A2 only before START; the burst of two stays after it, where
+      // the #235 hardware confirmation put it.
+      expect(writes.slice(0, startIndex).filter((w) => w[0] === 0xa2)).toHaveLength(1);
+      expect(writes.slice(startIndex + 1).filter((w) => w[0] === 0xa2)).toHaveLength(2);
     });
 
     it('echoes on any dialect when qn_weight_ack forces it on', async () => {

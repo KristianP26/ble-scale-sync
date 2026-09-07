@@ -352,3 +352,72 @@ describe('BeurerSanitasScaleAdapter', () => {
     });
   });
 });
+
+// #386: this adapter parses an impedance out of the scale's frames and used to
+// hand buildPayload an empty comp, so the exported body fat was the Deurenberg
+// BMI estimate and the impedance was published but ignored.
+//
+// At 80 kg / 183 cm / 30 / male the two answers are far apart, which is the
+// point: 19.37 % from BMI alone, 25.06 % from a 500 ohm BIA reading.
+describe('Beurer / Sanitas BIA from the parsed impedance (#386)', () => {
+  const BMI_ONLY_FAT = 19.37;
+  const BIA_FAT_AT_500 = 25.06;
+
+  it('computes body fat from a plausible impedance instead of from BMI', () => {
+    const payload = makeAdapter().computeMetrics({ weight: 80, impedance: 500 }, defaultProfile());
+    expect(payload.bodyFatPercent).toBeCloseTo(BIA_FAT_AT_500, 1);
+    expect(payload.impedance).toBe(500);
+  });
+
+  it('moves every derived field with it, not just the fat percentage', () => {
+    const payload = makeAdapter().computeMetrics({ weight: 80, impedance: 500 }, defaultProfile());
+    expect(payload.physiqueRating).toBe(2);
+    expect(payload.visceralFat).toBe(12);
+    expect(payload.waterPercent).toBeCloseTo(54.7, 2);
+  });
+
+  it('falls back to the BMI estimate when the impedance is not a body', () => {
+    for (const impedance of [1, 149, 1201, 65535]) {
+      const payload = makeAdapter().computeMetrics({ weight: 80, impedance }, defaultProfile());
+      expect(payload.bodyFatPercent).toBeCloseTo(BMI_ONLY_FAT, 1);
+    }
+  });
+
+  it('still falls back when no impedance was measured at all', () => {
+    const payload = makeAdapter().computeMetrics({ weight: 80, impedance: 0 }, defaultProfile());
+    expect(payload.bodyFatPercent).toBeCloseTo(BMI_ONLY_FAT, 1);
+  });
+});
+
+describe('Beurer / Sanitas: a zeroed composition is not a measurement (#386)', () => {
+  it('does not export 0 % body fat when the frame carries a real impedance', () => {
+    // buildPayload gates on `comp.fat ?? estimateBodyFat(...)`, which 0 passes.
+    // A frame with a resistance next to a zeroed fat used to export 0 % fat,
+    // 73 % water and a muscle mass equal to the whole body. The sibling SIG
+    // adapter has guarded this since #211; this one did not.
+    const adapter = makeAdapter();
+    const buf = Buffer.alloc(16);
+    buf.writeUInt16BE(1600, 4); // weight = 80 kg
+    buf.writeUInt16BE(500, 6); // impedance = 500 ohm, a real measurement
+    // fat, water, muscle and bone all left at 0.
+    const reading = adapter.parseNotification(buf);
+    expect(reading).not.toBeNull();
+
+    const payload = adapter.computeMetrics(reading!, defaultProfile());
+    // 500 ohm is in band, so the BIA figure is used rather than a zero.
+    expect(payload.bodyFatPercent).toBeCloseTo(25.06, 1);
+    expect(payload.muscleMass).toBeLessThan(80);
+    assertPayloadRanges(payload);
+  });
+
+  it('still prefers the composition the scale sent, when it sent one', () => {
+    const adapter = makeAdapter();
+    const buf = Buffer.alloc(16);
+    buf.writeUInt16BE(1600, 4);
+    buf.writeUInt16BE(500, 6);
+    buf.writeUInt16BE(225, 8); // fat = 22.5 %
+    const reading = adapter.parseNotification(buf);
+    const payload = adapter.computeMetrics(reading!, defaultProfile());
+    expect(payload.bodyFatPercent).toBeCloseTo(22.5, 2);
+  });
+});

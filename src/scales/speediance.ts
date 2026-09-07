@@ -9,7 +9,13 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, computeBiaFat } from './body-comp-helpers.js';
+import {
+  uuid16,
+  buildPayload,
+  computeBiaFat,
+  IMPEDANCE_MIN_OHM,
+  IMPEDANCE_MAX_OHM,
+} from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
@@ -71,8 +77,10 @@ const IMPEDANCE_OFFSET = 15; // u16 LE
  * plausibly off by a factor of ten. Settling the divisor needs one weigh-in
  * with the vendor app's own body-fat figure to check against (#383).
  */
-const IMPEDANCE_MIN_OHM = 150;
-const IMPEDANCE_MAX_OHM = 1200;
+/*
+ * The bounds themselves come from body-comp-helpers, imported above, so this
+ * adapter, Hutbit and the shared BIA guard cannot drift apart (ADR D011).
+ */
 
 export class SpeedianceAdapter implements ScaleAdapterCore, GattWiring, MultiCharNotify {
   readonly name = 'Speediance';

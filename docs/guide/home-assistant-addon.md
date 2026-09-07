@@ -63,9 +63,11 @@ All options live under the **Configuration** tab. The add-on regenerates `/data/
 | `qn_report_byte`             | empty                | QN-family scales only, worth trying after `qn_protocol_byte` did not help. Payload byte of the history-response frame, 0 to 255, default 254. Vendor-app captures of two scales in the family send 252 instead.                     |
 | `auto_clear_stale_bond`      | `false`              | Bonded scales only (Beurer BF7xx / BF9xx). Delete a pairing key the scale has forgotten and pair again, instead of failing every connect until `bluetoothctl remove` is run by hand.                                                |
 | `qn_weight_ack`              | unset                | QN-family scales only. Answer every live weight frame with its own weight, as the vendor app does. Try `true` if your QN scale completes the handshake and then reports nothing.                                                    |
+| `qn_a4_prelude`              | unset                | QN-family scales only, and the last thing to try. Sends the two undecoded `0xA4` frames an Arboleaf vendor app sends between START and the first weight frame. Set `true` only if `qn_weight_ack` did not help.                     |
+| `qn_time_sync_long`          | unset                | QN-family scales only, and the last thing anyone has found to try. Sends the 9-byte form of the clock-setting frame the same Arboleaf capture shows, instead of the 8-byte one. The extra byte is undecoded.                        |
 | `proxy_liveness_timeout_min` | `30`                 | Proxy transports only. Minutes of total advertisement silence before the link is treated as wedged and the add-on restarts. 0 disables. Raise it if your proxy sits somewhere with no other Bluetooth devices in range.             |
 
-All three of the last options are ignored when `custom_config` is enabled, since that mode skips config generation entirely; set them under `ble:` in your own file instead. The add-on logs a warning if you leave one set.
+The QN options and `auto_clear_stale_bond` are ignored when `custom_config` is enabled, since that mode skips config generation entirely; set them under `ble:` in your own file instead. The add-on logs a warning if you leave one set.
 
 ### Unit preferences
 
@@ -154,6 +156,10 @@ For multi-user setups or exporters the UI does not cover (InfluxDB, Webhook, Ntf
 ```
 
 The add-on copies that file verbatim into the runtime location on each start. See [config.yaml.example](https://github.com/KristianP26/ble-scale-sync/blob/main/config.yaml.example) for the full schema.
+
+::: warning Editing it needs a restart
+The copy happens once, at startup. The config watcher that picks up live edits watches the runtime copy, not the file under `/share/`, so editing `/share/ble-scale-sync/config.yaml` while the add-on is running changes nothing until you restart it.
+:::
 
 Custom config mode still benefits from `last_known_weight` persistence (see below) but the add-on does not auto-run Garmin authentication; you handle that yourself by pre-seeding `/share/ble-scale-sync/garmin-tokens/`.
 

@@ -8,6 +8,9 @@
  */
 
 import type { UserProfile, BodyComposition } from '../interfaces/scale-adapter.js';
+import { createLogger } from '../logger.js';
+
+const biaLog = createLogger('BIA');
 
 export interface ScaleBodyComp {
   fat?: number; // %
@@ -45,6 +48,53 @@ export function computeBiaFat(weight: number, impedance: number, p: UserProfile)
 
   const bodyFatKg = weight - lbm;
   return Math.max(3, Math.min((bodyFatKg / weight) * 100, 60));
+}
+
+/**
+ * Impedance band a whole-body foot-to-foot reading has to fall in before it is
+ * allowed to drive the BIA equation.
+ *
+ * Established by the Hutbit adapter in #322 after a unit started publishing
+ * nonsense, and re-used by Speediance. Adult foot-to-foot BIA on this class of
+ * scale sits between roughly 300 and 900 ohm; the wider bound here rejects a
+ * mis-framed notification without second-guessing an unusual body. Every
+ * capture-backed impedance in this project is comfortably inside it: 437 ohm on
+ * a Beurer (#211), 677 ohm on a Eufy P2, 529 ohm on a Silvergear.
+ */
+export const IMPEDANCE_MIN_OHM = 150;
+export const IMPEDANCE_MAX_OHM = 1200;
+
+/**
+ * BIA body fat, or `undefined` when the number is not a body.
+ *
+ * `undefined` is exactly what `buildPayload`'s `comp.fat ?? estimateBodyFat()`
+ * needs to fall back to the Deurenberg estimate, so a rejected impedance lands
+ * on the same figure the adapter published before rather than somewhere new.
+ *
+ * Rejecting matters more than it looks. `computeBiaFat` bounds its OUTPUT but
+ * not its input, and both directions produce a confident wrong answer rather
+ * than an obvious one: a value far too high pins the 60 % ceiling, and a value
+ * far too low drives `height^2 / Z` up until lean mass exceeds body weight, at
+ * which point the cap inside `computeBiaFat` pins the 4 % floor. That second
+ * one is the realistic failure here, because the fields at issue are vendor
+ * scalings nobody has verified against a capture: a `* 0.1` that should not be
+ * there, or a correction branch that divides by 6.
+ */
+export function biaFatIfPlausible(
+  weight: number,
+  impedance: number,
+  p: UserProfile,
+): number | undefined {
+  if (!(impedance > 0)) return undefined;
+  if (impedance < IMPEDANCE_MIN_OHM || impedance > IMPEDANCE_MAX_OHM) {
+    biaLog.debug(
+      `Impedance ${impedance} ohm is outside ${IMPEDANCE_MIN_OHM}-${IMPEDANCE_MAX_OHM}, ` +
+        `so body composition falls back to the BMI estimate rather than being computed ` +
+        `from it (#386).`,
+    );
+    return undefined;
+  }
+  return computeBiaFat(weight, impedance, p);
 }
 
 /** Build a full BodyComposition from scale-provided body-comp values + user profile. */

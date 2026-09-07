@@ -8,7 +8,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, xorChecksum, type ScaleBodyComp } from './body-comp-helpers.js';
+import { uuid16, buildPayload, xorChecksum, biaFatIfPlausible } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
 /**
@@ -131,8 +131,17 @@ export class OneByoneAdapter implements ScaleAdapterCore, GattWiring {
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    const comp: ScaleBodyComp = {};
-    return buildPayload(reading.weight, reading.impedance, comp, profile);
+    // buildPayload does NOT run the BIA estimator: without a fat percentage it
+    // falls back to the Deurenberg BMI estimate, so an adapter that parses an
+    // impedance and then passes an empty comp publishes the impedance and
+    // ignores it (#386). biaFatIfPlausible bounds the value first, because the
+    // scaling of this field has never been checked against a capture.
+    // It earns its keep here more than anywhere: this adapter multiplies the
+    // raw field by 0.1 on the strength of an openScale port, so if that factor
+    // is wrong a real 300-900 ohm body arrives as 30-90 and is refused, which
+    // leaves the reading exactly where it was before this change.
+    const fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
+    return buildPayload(reading.weight, reading.impedance, { fat }, profile);
   }
 }
 
@@ -197,7 +206,12 @@ export class OneByoneNewAdapter implements ScaleAdapterCore, GattWiring, Unlocka
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    const comp: ScaleBodyComp = {};
-    return buildPayload(reading.weight, reading.impedance, comp, profile);
+    // buildPayload does NOT run the BIA estimator: without a fat percentage it
+    // falls back to the Deurenberg BMI estimate, so an adapter that parses an
+    // impedance and then passes an empty comp publishes the impedance and
+    // ignores it (#386). biaFatIfPlausible bounds the value first, because the
+    // scaling of this field has never been checked against a capture.
+    const fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
+    return buildPayload(reading.weight, reading.impedance, { fat }, profile);
   }
 }

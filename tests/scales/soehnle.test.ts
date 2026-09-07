@@ -115,3 +115,44 @@ describe('SoehnleScaleAdapter', () => {
     });
   });
 });
+
+// #386: this adapter parses an impedance out of the scale's frames and used to
+// hand buildPayload an empty comp, so the exported body fat was the Deurenberg
+// BMI estimate and the impedance was published but ignored.
+//
+// At 80 kg / 183 cm / 30 / male the two answers are far apart, which is the
+// point: 19.37 % from BMI alone, 25.06 % from a 500 ohm BIA reading. Anyone
+// comparing against their vendor app sees the difference immediately.
+describe('Soehnle BIA from the parsed impedance (#386)', () => {
+  const BMI_ONLY_FAT = 19.37;
+  const BIA_FAT_AT_500 = 25.06;
+
+  it('computes body fat from a plausible impedance instead of from BMI', () => {
+    const payload = makeAdapter().computeMetrics({ weight: 80, impedance: 500 }, defaultProfile());
+    expect(payload.bodyFatPercent).toBeCloseTo(BIA_FAT_AT_500, 1);
+    expect(payload.impedance).toBe(500);
+  });
+
+  it('moves every derived field with it, not just the fat percentage', () => {
+    // Worth pinning: the physique rating crosses a threshold here, so a user
+    // watching that number sees it drop from 5 to 2 on the same body.
+    const payload = makeAdapter().computeMetrics({ weight: 80, impedance: 500 }, defaultProfile());
+    expect(payload.physiqueRating).toBe(2);
+    expect(payload.visceralFat).toBe(12);
+    expect(payload.waterPercent).toBeCloseTo(54.7, 2);
+  });
+
+  it('falls back to the BMI estimate when the impedance is not a body', () => {
+    // A bad resistance is worse than none. Out of band it is refused and the
+    // reading lands on exactly the number this adapter published before.
+    for (const impedance of [1, 149, 1201, 65535]) {
+      const payload = makeAdapter().computeMetrics({ weight: 80, impedance }, defaultProfile());
+      expect(payload.bodyFatPercent).toBeCloseTo(BMI_ONLY_FAT, 1);
+    }
+  });
+
+  it('still falls back when no impedance was measured at all', () => {
+    const payload = makeAdapter().computeMetrics({ weight: 80, impedance: 0 }, defaultProfile());
+    expect(payload.bodyFatPercent).toBeCloseTo(BMI_ONLY_FAT, 1);
+  });
+});

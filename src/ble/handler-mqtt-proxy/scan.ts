@@ -9,7 +9,7 @@ import type { RawReading } from '../shared.js';
 import { waitForRawReading } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
 import { evaluateAdvertisement, logAdvert } from '../advertisement.js';
-import { bleLog, normalizeUuid, withTimeout } from '../types.js';
+import { bleLog, normalizeUuid, withTimeout, formatMac } from '../types.js';
 import { COMMAND_TIMEOUT_MS, topics, type Topics } from './topics.js';
 import { type MqttClient, createMqttClient } from './client.js';
 import { mqttGattConnect, mqttGattDisconnect } from './gatt.js';
@@ -31,6 +31,7 @@ export interface ScanResultEntry {
 export function toBleDeviceInfo(entry: ScanResultEntry): BleDeviceInfo {
   const info: BleDeviceInfo = {
     localName: entry.name,
+    address: formatMac(entry.address),
     serviceUuids: entry.services.map(normalizeUuid),
   };
   if (entry.manufacturer_id != null && entry.manufacturer_data) {

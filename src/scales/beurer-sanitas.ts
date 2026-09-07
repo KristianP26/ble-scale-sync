@@ -9,7 +9,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload } from './body-comp-helpers.js';
+import { uuid16, buildPayload, biaFatIfPlausible } from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
@@ -33,11 +33,25 @@ const KNOWN_NAMES = [
   'aicdscale1',
 ];
 
+/**
+ * Composition the scale computed itself, when it sent one.
+ *
+ * Every field is optional because a zero is not a measurement. buildPayload
+ * gates on `comp.fat ?? estimateBodyFat(...)`, which `0` passes, so a frame
+ * carrying a real impedance next to a zeroed fat used to export 0 % body fat,
+ * 73 % water and a muscle mass equal to the whole body. The sibling SIG adapter
+ * has guarded against exactly that since #211; this one never did.
+ */
 interface CachedComp {
-  fat: number;
-  water: number;
-  muscle: number;
-  bone: number;
+  fat?: number;
+  water?: number;
+  muscle?: number;
+  bone?: number;
+}
+
+/** A scale-reported value, or undefined when the scale reported nothing. */
+function measured(v: number): number | undefined {
+  return v > 0 ? v : undefined;
 }
 
 /**
@@ -194,10 +208,10 @@ export class BeurerSanitasScaleAdapter
       impedance = data.readUInt16BE(6);
 
       this.cachedComp = {
-        fat: data.readUInt16BE(8) / 10,
-        water: data.readUInt16BE(10) / 10,
-        muscle: data.readUInt16BE(12) / 10,
-        bone: (data.readUInt16BE(14) * 50) / 1000,
+        fat: measured(data.readUInt16BE(8) / 10),
+        water: measured(data.readUInt16BE(10) / 10),
+        muscle: measured(data.readUInt16BE(12) / 10),
+        bone: measured((data.readUInt16BE(14) * 50) / 1000),
       };
     }
 
@@ -279,7 +293,12 @@ export class BeurerSanitasScaleAdapter
     }
     if (weight <= 0 || weight > 300 || !Number.isFinite(weight)) return null;
 
-    this.cachedComp = { fat, water, muscle, bone };
+    this.cachedComp = {
+      fat: measured(fat),
+      water: measured(water),
+      muscle: measured(muscle),
+      bone: measured(bone),
+    };
     return { weight, impedance };
   }
 
@@ -295,21 +314,23 @@ export class BeurerSanitasScaleAdapter
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    const comp = this.cachedComp;
-    if (comp) {
-      return buildPayload(
-        reading.weight,
-        reading.impedance,
-        {
-          fat: comp.fat,
-          water: comp.water,
-          muscle: comp.muscle,
-          bone: comp.bone,
-        },
-        profile,
-      );
-    }
-
-    return buildPayload(reading.weight, reading.impedance, {}, profile);
+    const comp = this.cachedComp ?? {};
+    // The scale's own figure wins when it sent one. Where it did not, the
+    // impedance this adapter already parsed is used rather than thrown away
+    // (#386). On the normal path the two arrive together, so this mostly
+    // matters for a frame that carried a resistance and a zeroed composition,
+    // and under BLE_RAW_CAPTURE, where a rejected trailing weight frame can
+    // clear the cache while the captured reading still holds an impedance.
+    return buildPayload(
+      reading.weight,
+      reading.impedance,
+      {
+        fat: comp.fat ?? biaFatIfPlausible(reading.weight, reading.impedance, profile),
+        water: comp.water,
+        muscle: comp.muscle,
+        bone: comp.bone,
+      },
+      profile,
+    );
   }
 }

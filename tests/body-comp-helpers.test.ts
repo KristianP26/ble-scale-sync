@@ -7,8 +7,12 @@ import {
   computePhysiqueRating,
   computeBiaFat,
   buildPayload,
+  biaFatIfPlausible,
+  IMPEDANCE_MIN_OHM,
+  IMPEDANCE_MAX_OHM,
 } from '../src/scales/body-comp-helpers.js';
 import type { UserProfile } from '../src/interfaces/scale-adapter.js';
+import { defaultProfile } from './helpers/scale-test-utils.js';
 
 describe('r2()', () => {
   it('rounds 1.005 to 1 (IEEE 754 — 1.005*100 = 100.49999…)', () => {
@@ -316,5 +320,62 @@ describe('buildPayload()', () => {
     const idealBmr = 10 * 80 + 6.25 * 183 - 5 * 25 + 5;
     const metabolicAge = 30 + Math.trunc((idealBmr - bmr) / 15);
     expect(p.metabolicAge).toBe(metabolicAge);
+  });
+});
+
+// #386: computeBiaFat bounds its output but not its input, and both directions
+// produce a confident wrong answer. This is the gate the adapters go through.
+describe('biaFatIfPlausible', () => {
+  const p = defaultProfile();
+
+  it('returns the BIA figure unchanged inside the band', () => {
+    // Concrete numbers rather than `=== computeBiaFat(...)`, which would only
+    // restate the function body. 80 kg, 183 cm, 30, male, non-athlete.
+    expect(biaFatIfPlausible(80, 500, p)).toBeCloseTo(25.06, 2);
+    expect(biaFatIfPlausible(80, 900, p)).toBeCloseTo(43.78, 2);
+    expect(biaFatIfPlausible(80, IMPEDANCE_MAX_OHM, p)).toBeCloseTo(49.63, 2);
+  });
+
+  it('bottoms out well inside the band, and not monotonically', () => {
+    // Worth pinning, because it bounds what the guard can do for you. For this
+    // body the lean-mass cap inside computeBiaFat engages below about 313 ohm
+    // and pins the result at exactly 4 %. Just above it the cap lets go, the
+    // raw formula returns about 1.4 %, and the 3 % clamp catches that instead.
+    // So the output is not monotonic in impedance down here, and everything
+    // from roughly 320 ohm down is a clamp rather than a measurement.
+    expect(biaFatIfPlausible(80, IMPEDANCE_MIN_OHM, p)).toBeCloseTo(4, 2);
+    expect(biaFatIfPlausible(80, 300, p)).toBeCloseTo(4, 2);
+    expect(biaFatIfPlausible(80, 320, p)).toBeCloseTo(3, 2);
+    // The band stops a value wrong by a factor of ten. It cannot rescue one
+    // that is wrong by a little: 320 ohm is inside the band and still useless.
+    expect(biaFatIfPlausible(80, 400, p)).toBeCloseTo(14.53, 2);
+  });
+
+  it('refuses anything outside the band', () => {
+    for (const z of [IMPEDANCE_MIN_OHM - 1, IMPEDANCE_MAX_OHM + 1, 30, 50, 2000, 65535]) {
+      expect(biaFatIfPlausible(80, z, p)).toBeUndefined();
+    }
+  });
+
+  it('refuses a missing measurement, which is the normal case, not an error', () => {
+    expect(biaFatIfPlausible(80, 0, p)).toBeUndefined();
+    expect(biaFatIfPlausible(80, -1, p)).toBeUndefined();
+    expect(biaFatIfPlausible(80, Number.NaN, p)).toBeUndefined();
+  });
+
+  it('feeds buildPayload the Deurenberg fallback when it refuses', () => {
+    // The whole point of returning undefined rather than 0: the reading lands
+    // on exactly the figure these adapters published before.
+    const refused = buildPayload(80, 50, { fat: biaFatIfPlausible(80, 50, p) }, p);
+    const bmiOnly = buildPayload(80, 50, {}, p);
+    expect(refused.bodyFatPercent).toBe(bmiOnly.bodyFatPercent);
+  });
+
+  it('catches the failure that actually happens: too LOW, not too high', () => {
+    // A tenfold-small impedance drives height^2 / Z up until lean mass exceeds
+    // body weight, and computeBiaFat's own cap then pins the 4 % floor. That is
+    // a plausible-looking 4 % body fat, not an obvious error.
+    expect(computeBiaFat(80, 50, p)).toBeCloseTo(4, 1);
+    expect(biaFatIfPlausible(80, 50, p)).toBeUndefined();
   });
 });

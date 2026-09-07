@@ -26,6 +26,16 @@ export interface ArmHardExitOptions {
   /** Grace window before force-exit, in milliseconds. */
   timeoutMs: number;
   log: Logger;
+  /**
+   * Exit code to use when `process.exitCode` was never set. Defaults to 1.
+   *
+   * A shutdown that could not drain is a failure when nobody asked for it, and
+   * ordinary housekeeping when somebody did. A supervisor sees the difference:
+   * a Home Assistant add-on stopped by hand and force-exited with 1 is reported
+   * to its owner as a failed add-on (#335). Pass 0 for a stop the operator
+   * asked for.
+   */
+  fallbackCode?: number;
   /** Injectable for tests. Defaults to `process.exit`. */
   exit?: (code: number) => never;
 }
@@ -34,23 +44,24 @@ export interface ArmHardExitOptions {
  * Arm the hard-exit timer. Idempotent: only the first call arms it, so
  * multiple abort paths (watchdog trip, then a SIGTERM) do not stack timers.
  */
-export function armHardExit({ timeoutMs, log, exit }: ArmHardExitOptions): void {
+export function armHardExit({ timeoutMs, log, fallbackCode = 1, exit }: ArmHardExitOptions): void {
   if (armed) return;
   armed = true;
 
   const doExit = exit ?? ((code: number) => process.exit(code));
 
   timer = setTimeout(() => {
-    // Preserve an explicitly-set exit code (the watchdog sets 1 before
-    // aborting). When unset — e.g. a plain SIGTERM whose graceful cleanup
-    // then hung — fall back to 1 deliberately: a shutdown that could not
-    // drain within the grace window is itself a failure worth a non-zero
-    // code, and a `docker stop`-ped container is not restarted regardless.
-    const code = typeof process.exitCode === 'number' ? process.exitCode : 1;
+    // Preserve an explicitly-set exit code: both watchdog paths set 1 before
+    // aborting, and that must win. `fallbackCode` decides only the case where
+    // nothing set one, which is the plain signal path.
+    const code = typeof process.exitCode === 'number' ? process.exitCode : fallbackCode;
     log.warn(
       `Shutdown did not complete within ${timeoutMs / 1000}s ` +
         `(event loop still pinned, likely a wedged D-Bus/BlueZ handle). ` +
-        `Force-exiting with code ${code} so the supervisor can restart cleanly.`,
+        `Force-exiting with code ${code}` +
+        (code === 0
+          ? ', which is a stop you asked for rather than a failure.'
+          : ' so the supervisor can restart cleanly.'),
     );
     doExit(code);
   }, timeoutMs);

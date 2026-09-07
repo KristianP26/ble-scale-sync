@@ -7,6 +7,19 @@ export type Gender = 'male' | 'female';
 /** Minimal BLE advertisement info needed for adapter matching. */
 export interface BleDeviceInfo {
   localName: string;
+  /**
+   * The device's own BLE address, uppercase colon-separated, when the transport
+   * knows it. Every transport supplies it; it is optional only so that the many
+   * hand-written test fixtures stay valid.
+   *
+   * It exists for advertisements that identify themselves by echoing their own
+   * MAC inside the payload. Matching on such an echo is self-validating in a way
+   * a bare company id is not: a device that is not this scale will not
+   * accidentally contain the address it is advertising from. The Lefu family
+   * fingerprint uses the same trick, and #376 needed it for an ES-CS20M
+   * revision that advertises anonymously, with no name and no service UUIDs.
+   */
+  address?: string;
   serviceUuids: string[];
   /** Manufacturer-specific data from the BLE advertisement (if present). */
   manufacturerData?: { id: number; data: Buffer };
@@ -231,6 +244,15 @@ export interface AdapterRuntimeConfig {
    * them.
    */
   qnA4Prelude?: boolean;
+  /**
+   * Send the 9-byte form of the QN 0x20 time-sync frame
+   * (`ble.qn_time_sync_long`, #331).
+   *
+   * The vendor app's frame carries one extra `0x08` before the checksum and is
+   * otherwise identical to ours, timestamp included. The byte is undecoded, so
+   * this is off by default.
+   */
+  qnTimeSyncLong?: boolean;
 }
 
 /**

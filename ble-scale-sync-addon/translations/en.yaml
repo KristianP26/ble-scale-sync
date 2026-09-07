@@ -42,6 +42,23 @@ configuration:
       not finish a measurement otherwise. Leave empty unless your QN scale
       completes the whole handshake in the log and then reports no weight at
       all; then set true.
+  qn_a4_prelude:
+    name: QN A4 prelude
+    description: >-
+      QN-family scales only, and the last thing to try after the two QN bytes
+      and the weight acknowledgement. An HCI capture of an Arboleaf vendor app
+      shows two undecoded 0xA4 frames sent between the start command and the
+      first weight frame, which this add-on does not send. Set true to replay
+      them. The payload is one reporter's own bytes, so it may help your unit
+      or do nothing. Leave empty otherwise.
+  qn_time_sync_long:
+    name: QN long time sync
+    description: >-
+      QN-family scales only, and only worth trying after everything else. The
+      same Arboleaf capture shows the vendor app's clock-setting frame carrying
+      one extra byte that this add-on does not send. Set true to send that
+      longer frame. What the extra byte selects is not known, so this is a
+      diagnostic to try, not a fix. Leave empty otherwise.
   auto_clear_stale_bond:
     name: Re-pair a scale that forgot its pairing
     description: >-

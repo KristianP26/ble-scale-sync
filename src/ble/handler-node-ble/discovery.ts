@@ -29,6 +29,39 @@ export async function stopDiscoveryAndQuiesce(btAdapter: Adapter): Promise<void>
 }
 
 /**
+ * Ask BlueZ to report every advertisement, not just the first one per device.
+ *
+ * MUST run BEFORE `StartDiscovery`. BlueZ applies the filter to the scan it
+ * starts, and its own documentation says so: "SetDiscoveryFilter can be called
+ * before StartDiscovery. It is useful when client will create first discovery
+ * session, to ensure that proper scan will be started right after call to
+ * StartDiscovery." `DuplicateData` is what makes it emit PropertiesChanged for
+ * ManufacturerData and ServiceData on every packet rather than only when the
+ * value first appears.
+ *
+ * Setting it afterwards, which is what the broadcast path used to do, leaves
+ * the running scan deduplicating. A broadcast scale then looks frozen: BlueZ
+ * keeps handing back the first advertisement it cached, the 500 ms poll re-reads
+ * that same value forever, and the app reports one settling weight that never
+ * changes while the vendor app shows the scale counting up (#372).
+ *
+ * Failure is non-fatal. A filter BlueZ rejects should not stop a scan that
+ * would otherwise work; the caller falls back to polling as before.
+ */
+async function requestDuplicateAdvertisements(btAdapter: Adapter): Promise<void> {
+  try {
+    const { Variant } = await getDbusNext();
+    await helperOf(btAdapter).callMethod('SetDiscoveryFilter', {
+      Transport: new Variant('s', 'le'),
+      DuplicateData: new Variant('b', true),
+    });
+    bleLog.debug('Discovery filter: Transport=le, DuplicateData=true');
+  } catch (err: unknown) {
+    bleLog.debug(`SetDiscoveryFilter: ${errMsg(err)} (non-fatal, scan continues deduplicated)`);
+  }
+}
+
+/**
  * Try to start BlueZ discovery with escalating recovery strategies.
  * Returns the (possibly refreshed) adapter on success, or false if all attempts failed.
  */
@@ -38,6 +71,7 @@ export async function startDiscoverySafe(
 ): Promise<Adapter | false> {
   // 1. Normal start
   try {
+    await requestDuplicateAdvertisements(btAdapter);
     await btAdapter.startDiscovery();
     bleLog.debug('Discovery started');
     return btAdapter;
@@ -45,10 +79,31 @@ export async function startDiscoverySafe(
     bleLog.debug(`startDiscovery failed: ${errMsg(e)}`);
   }
 
-  // Already running (same client's previous session still active)
+  // Already running (same client's previous session still active). Continuing
+  // is right, but the session it is continuing was started by an earlier cycle
+  // and BlueZ applied whatever filter was in force then. A restart-driven
+  // continuous run therefore inherits a deduplicating scan for the rest of the
+  // process lifetime, which is how #372 stayed frozen across cycles rather than
+  // only on the first one. Cycle the session once so the filter above takes.
+  //
+  // Safe here specifically because no device has been found yet: StopDiscovery
+  // makes BlueZ drop Device1 objects (#297), and the whole point of doing it at
+  // this moment is that there is nothing yet to lose.
   if (await btAdapter.isDiscovering()) {
-    bleLog.debug('Discovery already active, continuing');
-    return btAdapter;
+    bleLog.debug('Discovery already active; restarting it so the duplicate filter applies');
+    try {
+      await helperOf(btAdapter).callMethod('StopDiscovery');
+      await sleep(POST_DISCOVERY_QUIESCE_MS);
+      await requestDuplicateAdvertisements(btAdapter);
+      await btAdapter.startDiscovery();
+      bleLog.debug('Discovery restarted with the duplicate filter');
+      return btAdapter;
+    } catch (e) {
+      // Could not cycle it. A deduplicating scan still finds devices and still
+      // reads a connectable scale, so continuing beats failing the cycle.
+      bleLog.debug(`Could not restart discovery (${errMsg(e)}); continuing with the existing scan`);
+      return btAdapter;
+    }
   }
 
   // 2. Force-stop via D-Bus (bypass node-ble's isDiscovering guard) + retry
@@ -233,6 +288,7 @@ export async function autoDiscover(
         const advert = await logAdvertisementSnapshot(dev).catch(() => undefined);
         const info: BleDeviceInfo = {
           localName: name,
+          address: formatMac(addr),
           serviceUuids: [],
           ...(advert?.manufacturerData ? { manufacturerData: advert.manufacturerData } : {}),
           ...(advert?.serviceData && advert.serviceData.length > 0

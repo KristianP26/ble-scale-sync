@@ -31,6 +31,8 @@
     "scan": "tsx src/scan.ts",
     "diagnose": "tsx src/diagnose.ts",
     "validate": "tsx src/config/validate-cli.ts",
+    "check:counts": "tsx src/tools/check-counts.ts",
+    "check:counts:write": "tsx src/tools/check-counts.ts write",
     "sync:addon-changelog": "tsx src/tools/sync-addon-changelog.ts",
     "sync:addon-changelog:check": "tsx src/tools/sync-addon-changelog.ts check",
     "test": "vitest run",

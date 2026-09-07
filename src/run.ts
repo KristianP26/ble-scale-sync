@@ -99,12 +99,31 @@ const HARD_EXIT_GRACE_MS = ((): number => {
 
 const ac = new AbortController();
 
+// Was this abort asked for by an operator (SIGINT/SIGTERM), or did something
+// go wrong? Only the exit code of a shutdown that then hangs depends on it: a
+// stop the operator asked for is not a failure and must not be reported as one
+// by a supervisor (#335). Set before `ac.abort()`, which dispatches its
+// listeners synchronously.
+let deliberateStop = false;
+
 // Register the hard-exit safety net before anything can abort `ac`. Armed
 // once on the first abort (watchdog trip, SIGTERM, or any internal abort);
 // idempotent, unref'd, so a clean drain still exits naturally first (#194).
-ac.signal.addEventListener('abort', () => armHardExit({ timeoutMs: HARD_EXIT_GRACE_MS, log }), {
-  once: true,
-});
+//
+// The flag is read at ARM time, and the first abort wins. A watchdog trip
+// followed by a SIGTERM therefore arms with 1, which is right: both watchdog
+// paths set `process.exitCode = 1` first, and that wins over `fallbackCode`
+// regardless.
+ac.signal.addEventListener(
+  'abort',
+  () =>
+    armHardExit({
+      timeoutMs: HARD_EXIT_GRACE_MS,
+      log,
+      fallbackCode: deliberateStop ? 0 : 1,
+    }),
+  { once: true },
+);
 const ctx = createAppContext({
   config: initialConfig,
   resolved: initialResolved,
@@ -124,6 +143,7 @@ function onSignal(): void {
     process.exit(1);
   }
   forceExitOnNext = true;
+  deliberateStop = true;
   log.info('\nShutting down gracefully... (press again to force exit)');
   // Close the config watcher first so a late-fire fs event does not flip
   // needsReload after the loop has already abort()ed.
@@ -279,6 +299,7 @@ async function main(): Promise<void> {
     const qnReportByte = ctx.config.ble?.qn_report_byte ?? undefined;
     const qnWeightAck = ctx.config.ble?.qn_weight_ack ?? undefined;
     const qnA4Prelude = ctx.config.ble?.qn_a4_prelude ?? undefined;
+    const qnTimeSyncLong = ctx.config.ble?.qn_time_sync_long ?? undefined;
     for (const a of adapters)
       a.configure?.({
         bindKey,
@@ -288,6 +309,7 @@ async function main(): Promise<void> {
         qnReportByte,
         qnWeightAck,
         qnA4Prelude,
+        qnTimeSyncLong,
       });
   };
   applyAdapterConfig(ctx.config.ble?.bind_key ?? undefined);

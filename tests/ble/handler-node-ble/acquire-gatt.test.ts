@@ -45,6 +45,17 @@ describe('acquireGattServer (#290 bond-on-timeout retry)', () => {
     expect(bond).not.toHaveBeenCalled();
   });
 
+  // #335: the bond that runs from here is the consent-and-bond retry path, and
+  // it is the one that can sit waiting on a button press nobody will press.
+  // Without the signal it has no way to know the app is shutting down.
+  it('hands the abort signal to the bond it runs', async () => {
+    const device = fakeDevice({ gatt: ['fail', 'ok'] });
+    const bond = vi.fn(async () => {});
+    const ac = new AbortController();
+    await expect(acquireGattServer(device, bonding, 1234, bond, ac.signal)).resolves.toBe(SERVER);
+    expect(bond).toHaveBeenCalledWith(device, 1234, ac.signal);
+  });
+
   it('rethrows without bonding when the adapter does not require bonding', async () => {
     const device = fakeDevice({ gatt: ['fail'] });
     const bond = vi.fn(async () => {});
@@ -69,7 +80,7 @@ describe('acquireGattServer (#290 bond-on-timeout retry)', () => {
     const bond = vi.fn(async () => {});
     await expect(acquireGattServer(device, bonding, 1234, bond)).resolves.toBe(SERVER);
     expect(bond).toHaveBeenCalledTimes(1);
-    expect(bond).toHaveBeenCalledWith(device, 1234);
+    expect(bond).toHaveBeenCalledWith(device, 1234, undefined);
     expect(device.gatt).toHaveBeenCalledTimes(2);
   });
 
