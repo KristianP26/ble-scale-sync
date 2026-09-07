@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { createNobleHandler, type NobleApi } from '../../src/ble/handler-noble-shared.js';
+import { createNobleHandler, type NobleApi } from '../../src/ble/handler-noble-shared/index.js';
 
 // Suppress log output during tests
 vi.spyOn(console, 'log').mockImplementation(() => {});

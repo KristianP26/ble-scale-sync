@@ -1,5 +1,5 @@
 import noble from '@stoprocent/noble';
-import { createNobleHandler } from './handler-noble-shared.js';
+import { createNobleHandler } from './handler-noble-shared/index.js';
 
 /**
  * BLE handler backed by `@stoprocent/noble` (macOS default; Linux/Windows via

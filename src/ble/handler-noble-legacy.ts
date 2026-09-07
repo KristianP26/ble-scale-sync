@@ -1,5 +1,5 @@
 import noble from '@abandonware/noble';
-import { createNobleHandler, type NobleApi } from './handler-noble-shared.js';
+import { createNobleHandler, type NobleApi } from './handler-noble-shared/index.js';
 
 /**
  * BLE handler backed by `@abandonware/noble` (Windows default; mature driver).

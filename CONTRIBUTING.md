@@ -119,11 +119,12 @@ ble-scale-sync/
 │   │   ├── async-queue.ts           # Async notification queue for GATT handlers
 │   │   ├── loopback.ts              # In-process loopback handler (tests)
 │   │   ├── handler-node-ble/        # Linux native: node-ble (BlueZ D-Bus) (split: dbus, connection, discovery, freshness, connect, gatt, broadcast, scan)
-│   │   ├── handler-noble-shared.ts  # Shared Noble logic (driver injected via factory)
+│   │   ├── handler-noble-shared/    # Shared Noble logic, driver injected (split: types, char, peripheral, gatt, state, connect, discovery, broadcast)
 │   │   ├── handler-noble.ts         # macOS native: @stoprocent/noble (thin entrypoint)
 │   │   ├── handler-noble-legacy.ts  # Windows native: @abandonware/noble (thin entrypoint)
 │   │   ├── handler-mqtt-proxy/      # ESP32 proxy over MQTT (split: client, topics, gatt, scan, watcher, display)
-│   │   ├── handler-esphome-proxy.ts # ESPHome BT proxy over Native API (phase 1, broadcast)
+│   │   ├── handler-esphome-proxy/   # ESPHome BT proxy over Native API (split: client, scan, advert)
+│   │   ├── handler-ha-bluetooth/    # Home Assistant websocket transport, broadcast only
 │   │   ├── embedded-broker.ts       # Embedded aedes MQTT broker for ESP32 proxy
 │   │   └── mqtt-proxy-bootstrap.ts  # First-run scan + adapter pin for ESP32 proxy
 │   ├── exporters/
