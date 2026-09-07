@@ -157,6 +157,10 @@ For multi-user setups or exporters the UI does not cover (InfluxDB, Webhook, Ntf
 
 The add-on copies that file verbatim into the runtime location on each start. See [config.yaml.example](https://github.com/KristianP26/ble-scale-sync/blob/main/config.yaml.example) for the full schema.
 
+::: warning Editing it needs a restart
+The copy happens once, at startup. The config watcher that picks up live edits watches the runtime copy, not the file under `/share/`, so editing `/share/ble-scale-sync/config.yaml` while the add-on is running changes nothing until you restart it.
+:::
+
 Custom config mode still benefits from `last_known_weight` persistence (see below) but the add-on does not auto-run Garmin authentication; you handle that yourself by pre-seeding `/share/ble-scale-sync/garmin-tokens/`.
 
 ## Testing a development build
