@@ -120,7 +120,10 @@ export class EtekcityEsf551Adapter implements ScaleAdapterCore, GattWiring {
     return (device.localName || '').toLowerCase().includes('etekcity');
   }
 
-  onSessionEnd(): void {
+  // onSessionStart rather than onSessionEnd: the end hook is best effort (a
+  // timeout abandons the read promise rather than cancelling it), so a session
+  // that timed out would otherwise suppress the line for the whole process.
+  onSessionStart(): void {
     this.loggedUnit = false;
   }
 

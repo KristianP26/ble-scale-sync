@@ -112,10 +112,22 @@ export class SpeedianceAdapter implements ScaleAdapterCore, GattWiring, MultiCha
     return name.startsWith('speed_s') || name.includes('speediance');
   }
 
-  async onConnected(ctx: ConnectionContext): Promise<void> {
+  /**
+   * Clear the previous weigh-in before anything is subscribed (#394).
+   *
+   * This used to live in `onConnected`, which is too late for a multi-char
+   * adapter: `subscribeAndInit` enables EVERY notify binding and only then
+   * awaits `startInit()`, so frames can already be arriving - through several
+   * D-Bus round trips for the second and third binding - while the reset has
+   * not run. `onSessionStart` runs before the first subscribe.
+   */
+  onSessionStart(): void {
     this.cachedWeight = 0;
     this.cachedImpedance = 0;
     this.final = false;
+  }
+
+  async onConnected(ctx: ConnectionContext): Promise<void> {
     for (const hex of HANDSHAKE) {
       await ctx.write(CHR_FFB1, Buffer.from(hex, 'hex'), true);
       await new Promise((r) => setTimeout(r, 150));

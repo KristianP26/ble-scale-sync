@@ -327,6 +327,34 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     );
   }
 
+  /**
+   * Clear the previous weigh-in before anything is subscribed (#394).
+   *
+   * These all used to sit in `onConnected`, which is too late twice over. It is
+   * a multi-char adapter, so `subscribeAndInit` enables EVERY notify binding
+   * and only then awaits `startInit()` - the hazard this file already
+   * documents on `cachedComp` below. And `onConnected` throws on a missing
+   * consent PIN before it reaches the resets at all, so a PIN-less session
+   * left every flag exactly as the previous one had it.
+   *
+   * `session`, `ctx` and the three `scaleAuth`-derived fields stay in
+   * `onConnected`: they are not state to clear but values to capture, and the
+   * context they come from does not exist yet at this point.
+   */
+  onSessionStart(): void {
+    this.cachedWeight = 0;
+    this.cachedTimestamp = undefined;
+    this.cachedComp = {};
+    this.profileSyncDone = false;
+    this.userSlotsSeen = 0;
+    this.userListAnswered = false;
+    this.emptyListReported = false;
+    this.consentAccepted = false;
+    this.consentAnswered = false;
+    this.consentSent = false;
+    this.readingEmitted = false;
+  }
+
   async onConnected(ctx: ConnectionContext): Promise<void> {
     const required = [CHR_WEIGHT_MEASUREMENT, CHR_BODY_COMPOSITION, CHR_USER_CONTROL_POINT];
     const missing = required.filter((u) => !ctx.availableChars.has(u));
@@ -348,23 +376,11 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     }
     const userIndex = ctx.scaleAuth?.userIndex ?? 1;
 
-    // Reset per-connection state (adapter instance is shared across sessions).
-    this.cachedWeight = 0;
-    this.cachedTimestamp = undefined;
-    this.cachedComp = {};
     this.session += 1;
     this.ctx = ctx;
-    this.profileSyncDone = false;
     this.userIndex = userIndex;
     this.registerNewUser = ctx.scaleAuth?.registerNewUser === true;
     this.provision = ctx.scaleAuth?.provision === true;
-    this.userSlotsSeen = 0;
-    this.userListAnswered = false;
-    this.emptyListReported = false;
-    this.consentAccepted = false;
-    this.consentAnswered = false;
-    this.consentSent = false;
-    this.readingEmitted = false;
 
     await ctx.write(CHR_CURRENT_TIME, this.buildCurrentTime(), true);
 

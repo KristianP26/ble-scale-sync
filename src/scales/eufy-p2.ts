@@ -446,10 +446,16 @@ export class EufyP2Adapter
     return false;
   }
 
-  async onConnected(ctx: ConnectionContext): Promise<void> {
-    // Reset per-connection state first so a missing deviceAddress or a fresh
-    // scan cannot inherit a prior session's authenticated EufyAuthHandler.
-    this.ctx = ctx;
+  /**
+   * Clear the previous weigh-in before anything is subscribed (#394).
+   *
+   * This used to live in `onConnected`, which is too late for a multi-char
+   * adapter: `subscribeAndInit` enables EVERY notify binding and only then
+   * awaits `startInit()`. A stale `weightStable` plus a stale authenticated
+   * `auth` made `isFinal()` return true on the first FFF2 frame of the next
+   * session, resolving it on the previous person's weight.
+   */
+  onSessionStart(): void {
     this.auth = null;
     this.c3Seen.done = false;
     this.previousFinalRawWeight = null;
@@ -457,6 +463,10 @@ export class EufyP2Adapter
     this.frameIntegrityLogged = false;
     this.sessionImpedance = 0;
     this.sessionImpedanceRawWeight = 0;
+  }
+
+  async onConnected(ctx: ConnectionContext): Promise<void> {
+    this.ctx = ctx;
     if (!ctx.deviceAddress) {
       bleLog.warn('Eufy: no device address available — auth will fail without MAC');
       return;
@@ -564,8 +574,9 @@ export class EufyP2Adapter
    * Drop the connection context when the session ends (#394, same class as
    * #138).
    *
-   * Everything else this adapter holds is already reset in onConnected; this
-   * was the one field that was not, and it is dereferenced for writes.
+   * Everything else this adapter holds is reset in onSessionStart; this is the
+   * one field that must be released rather than reset, because it is
+   * dereferenced for writes after the link is gone.
    */
   onSessionEnd(): void {
     this.ctx = null;
@@ -627,9 +638,17 @@ export class EufyP2Adapter
   }
 
   private async sendC2(): Promise<void> {
-    if (!this.auth || !this.ctx) return;
-    for (const frame of this.auth.buildC2()) {
-      await this.ctx.write(CHR_WRITE, frame, true);
+    // Snapshot ctx into a local. onSessionEnd() nulls the field, and TypeScript
+    // does not invalidate a `this.ctx` narrowing across an await, so reading it
+    // per iteration compiled fine and threw a TypeError at runtime on a normal
+    // mid-handshake disconnect - surfaced as a misleading "failed to send C2
+    // authentication frame (Cannot read properties of null)". Mirrors
+    // renpho-es26bb.sendOfflineAck.
+    const auth = this.auth;
+    const ctx = this.ctx;
+    if (!auth || !ctx) return;
+    for (const frame of auth.buildC2()) {
+      await ctx.write(CHR_WRITE, frame, true);
       await new Promise<void>((r) => setTimeout(r, EUFY_WRITE_DELAY_MS));
     }
   }

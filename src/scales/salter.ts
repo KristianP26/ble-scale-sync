@@ -574,10 +574,16 @@ export class SalterAdapter
   /**
    * Forget this session's clock reading, and re-arm the clock write. Adapters are
    * shared singletons, so a stale clock would otherwise be used to judge the next
-   * session's records — including the backwards-clock check, which must see a
-   * fresh value — and a clock write that failed would never be retried.
+   * session's records - including the backwards-clock check, which must see a
+   * fresh value - and a clock write that failed would never be retried.
+   *
+   * onSessionStart rather than onSessionEnd (#394): the end hook is best effort.
+   * A timeout abandons the read promise rather than cancelling it, so it fires
+   * only if a disconnect event happens to follow, and the ESPHome proxy scan
+   * path can drop a session without reaching cleanup at all. A session that
+   * ended either of those ways would carry its clock into the next one.
    */
-  onSessionEnd(): void {
+  onSessionStart(): void {
     this.clockSec = 0;
     this.clockAt = 0;
     this.clockSyncSent = false;

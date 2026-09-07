@@ -181,8 +181,20 @@ export class HutbitAdapter implements ScaleAdapterCore, GattWiring, HoldForCompo
     return isHutbitOemAdvert(device);
   }
 
-  async onConnected(ctx: ConnectionContext): Promise<void> {
+  /**
+   * Clear the previous weigh-in before anything is subscribed (#394).
+   *
+   * This used to live in `onConnected`, which is too late for a multi-char
+   * adapter: `subscribeAndInit` enables EVERY notify binding and only then
+   * awaits `startInit()`, so frames can already be arriving - through several
+   * D-Bus round trips for the second and third binding - while the reset has
+   * not run. `onSessionStart` runs before the first subscribe.
+   */
+  onSessionStart(): void {
     this.resetSession();
+  }
+
+  async onConnected(ctx: ConnectionContext): Promise<void> {
     for (const hex of HANDSHAKE) {
       // Write without response: FFB1 is the Lefu/Fitdays FFB0 handshake char and
       // the family writes no-response. A char that advertises only
