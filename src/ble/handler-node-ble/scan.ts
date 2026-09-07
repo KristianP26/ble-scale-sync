@@ -90,17 +90,46 @@ export async function ensureBonded(
     bleLog.info('Adapter requires bonding; attempting BLE pairing...');
     // A pairing that waits on a button press is the one D-Bus call that will
     // not come back on its own: BlueZ holds Pair() open until someone confirms
-    // on the scale, and during a shutdown nobody is there to. CancelPairing is
-    // what releases it. Reported in #335 by an owner whose scale forces a
-    // stop/start cycle for every weigh-in, so almost every stop lands here.
-    onAbort = () => {
-      bleLog.debug('Shutting down with a BLE pairing outstanding, cancelling it');
-      void device.cancelPair().catch(() => {
-        /* nothing left to do: the process is going away */
+    // on the scale, and during a shutdown nobody is there to. Reported in #335
+    // by an owner whose scale forces a stop/start cycle for every weigh-in, so
+    // almost every stop lands here.
+    const pairing = withTimeout(device.pair(), BONDING_TIMEOUT_MS, 'BLE pairing timed out');
+    if (abortSignal) {
+      let rejectOnAbort!: (err: unknown) => void;
+      const abortedFirst = new Promise<never>((_resolve, reject) => {
+        rejectOnAbort = reject;
       });
-    };
-    abortSignal?.addEventListener('abort', onAbort, { once: true });
-    await withTimeout(device.pair(), BONDING_TIMEOUT_MS, 'BLE pairing timed out');
+      onAbort = () => {
+        bleLog.debug('Shutting down with a BLE pairing outstanding, cancelling it');
+        // NOT node-ble's device.cancelPair(). That calls `CancelPair`, and the
+        // org.bluez.Device1 interface has no such method: it defines
+        // `CancelPairing`. The call comes back as UnknownMethod, so going
+        // through node-ble here would look like a fix and cancel nothing.
+        // Verified against the BlueZ interface documentation, not from memory.
+        void helperOf(device)
+          .callMethod('CancelPairing')
+          .catch((err) => bleLog.debug(`CancelPairing failed: ${errMsg(err)}`));
+        rejectOnAbort(
+          abortSignal.reason ?? new Error('Shutting down with a BLE pairing outstanding'),
+        );
+      };
+      abortSignal.addEventListener('abort', onAbort, { once: true });
+      // The cancel is best-effort cleanup, not the mechanism. BlueZ may not
+      // answer a cancelled Pair() at all, and on the wedged-D-Bus case this
+      // exists for it certainly will not, so the abort has to settle this await
+      // by itself. Relying on the cancel alone would still wait out
+      // BONDING_TIMEOUT_MS, which is three times the force-exit grace window.
+      await Promise.race([pairing, abortedFirst]);
+    } else {
+      await pairing;
+    }
+    // Stand the listener down as soon as the pairing is through. Two awaits
+    // follow, and a stop arriving during them must not send CancelPairing
+    // against a bond that already completed.
+    if (onAbort && abortSignal) {
+      abortSignal.removeEventListener('abort', onAbort);
+      onAbort = undefined;
+    }
     bleLog.info('BLE pairing succeeded');
     // Mark the device trusted so subsequent reconnects re-use the bond without
     // re-invoking the agent. Best-effort: a failure does not affect this session.
