@@ -139,7 +139,7 @@ describe('Soehnle BIA from the parsed impedance (#386)', () => {
     const payload = makeAdapter().computeMetrics({ weight: 80, impedance: 500 }, defaultProfile());
     expect(payload.physiqueRating).toBe(2);
     expect(payload.visceralFat).toBe(12);
-    expect(payload.waterPercent).toBeCloseTo(54.71, 1);
+    expect(payload.waterPercent).toBeCloseTo(54.7, 2);
   });
 
   it('falls back to the BMI estimate when the impedance is not a body', () => {

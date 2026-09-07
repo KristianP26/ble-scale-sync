@@ -399,7 +399,7 @@ describe('1byone / Eufy BIA from the parsed impedance (#386)', () => {
     );
     expect(payload.physiqueRating).toBe(2);
     expect(payload.visceralFat).toBe(12);
-    expect(payload.waterPercent).toBeCloseTo(54.71, 1);
+    expect(payload.waterPercent).toBeCloseTo(54.7, 2);
   });
 
   it('falls back to the BMI estimate when the impedance is not a body', () => {
@@ -451,7 +451,7 @@ describe('1byone Scale (new protocol) BIA from the parsed impedance (#386)', () 
     );
     expect(payload.physiqueRating).toBe(2);
     expect(payload.visceralFat).toBe(12);
-    expect(payload.waterPercent).toBeCloseTo(54.71, 1);
+    expect(payload.waterPercent).toBeCloseTo(54.7, 2);
   });
 
   it('falls back to the BMI estimate when the impedance is not a body', () => {

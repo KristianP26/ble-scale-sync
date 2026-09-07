@@ -9,7 +9,13 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, computeBiaFat } from './body-comp-helpers.js';
+import {
+  uuid16,
+  buildPayload,
+  computeBiaFat,
+  IMPEDANCE_MIN_OHM,
+  IMPEDANCE_MAX_OHM,
+} from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
 import { isHutbitOemAdvert, LEFU_COMPANY_ID } from './lefu-signature.js';
 import type { MatchDescriptor } from './match-descriptor.js';
@@ -62,16 +68,20 @@ const IMPEDANCE_MEASURING = 0x00;
 const IMPEDANCE_NO_CONTACT = 0xff;
 const IMPEDANCE_STATUS = 0xcb;
 
-/**
- * Accepted whole-body impedance range. Adult foot-to-foot BIA on this class of
- * scale sits between roughly 300 and 900 ohm; the wider bound here rejects a
- * mis-framed notification without second-guessing an unusual body. A rejected
- * value is logged rather than dropped in silence, so the first unit that falls
- * outside the range is diagnosable from its log instead of reading as "this
- * scale sends no impedance".
+/*
+ * The accepted whole-body impedance range is IMPEDANCE_MIN_OHM to
+ * IMPEDANCE_MAX_OHM, imported above so this adapter and the shared BIA guard
+ * cannot drift apart. This range started here, in #322, after a unit began
+ * publishing nonsense.
+ *
+ * What this adapter does with an out-of-range value is NOT what the shared
+ * guard does, and that difference is deliberate: here the impedance is dropped
+ * at parse time and never published, so a reading looks the same as one from a
+ * scale that sends no impedance at all. The shared guard publishes the number
+ * and refuses it only as a BIA input. See ADR D011. A rejected value is logged
+ * either way, so the first unit that falls outside the range is diagnosable
+ * from its log.
  */
-const IMPEDANCE_MIN_OHM = 150;
-const IMPEDANCE_MAX_OHM = 1200;
 
 /**
  * How long the link is held open after the stable weight for the impedance

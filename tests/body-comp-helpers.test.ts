@@ -328,10 +328,27 @@ describe('buildPayload()', () => {
 describe('biaFatIfPlausible', () => {
   const p = defaultProfile();
 
-  it('agrees with computeBiaFat inside the band', () => {
-    for (const z of [IMPEDANCE_MIN_OHM, 300, 500, 900, IMPEDANCE_MAX_OHM]) {
-      expect(biaFatIfPlausible(80, z, p)).toBe(computeBiaFat(80, z, p));
-    }
+  it('returns the BIA figure unchanged inside the band', () => {
+    // Concrete numbers rather than `=== computeBiaFat(...)`, which would only
+    // restate the function body. 80 kg, 183 cm, 30, male, non-athlete.
+    expect(biaFatIfPlausible(80, 500, p)).toBeCloseTo(25.06, 2);
+    expect(biaFatIfPlausible(80, 900, p)).toBeCloseTo(43.78, 2);
+    expect(biaFatIfPlausible(80, IMPEDANCE_MAX_OHM, p)).toBeCloseTo(49.63, 2);
+  });
+
+  it('bottoms out well inside the band, and not monotonically', () => {
+    // Worth pinning, because it bounds what the guard can do for you. For this
+    // body the lean-mass cap inside computeBiaFat engages below about 313 ohm
+    // and pins the result at exactly 4 %. Just above it the cap lets go, the
+    // raw formula returns about 1.4 %, and the 3 % clamp catches that instead.
+    // So the output is not monotonic in impedance down here, and everything
+    // from roughly 320 ohm down is a clamp rather than a measurement.
+    expect(biaFatIfPlausible(80, IMPEDANCE_MIN_OHM, p)).toBeCloseTo(4, 2);
+    expect(biaFatIfPlausible(80, 300, p)).toBeCloseTo(4, 2);
+    expect(biaFatIfPlausible(80, 320, p)).toBeCloseTo(3, 2);
+    // The band stops a value wrong by a factor of ten. It cannot rescue one
+    // that is wrong by a little: 320 ohm is inside the band and still useless.
+    expect(biaFatIfPlausible(80, 400, p)).toBeCloseTo(14.53, 2);
   });
 
   it('refuses anything outside the band', () => {
