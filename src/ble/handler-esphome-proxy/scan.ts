@@ -3,7 +3,7 @@ import type { EsphomeProxyConfig } from '../../config/schema.js';
 import type { ScanOptions, ScanResult } from '../types.js';
 import { type RawReading, waitForRawReading } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
-import { evaluateAdvertisement, GraceTimers, logAdvert } from '../advertisement.js';
+import { evaluateAdvertisement, GraceTimers, logAdvert, safeName } from '../advertisement.js';
 import { bleLog, errMsg, withTimeout, withIdleTimeout, IMPEDANCE_GRACE_MS } from '../types.js';
 import { EsphomeProxyPool } from './pool.js';
 
@@ -122,7 +122,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
             if (!adapter) {
               if (!seenAddrs.has(address)) {
                 seenAddrs.add(address);
-                bleLog.debug(`Unmatched device: ${address} (${info.localName || 'no name'})`);
+                bleLog.debug(
+                  `Unmatched device: ${address} (${safeName(info.localName) || 'no name'})`,
+                );
               }
               return;
             }
@@ -246,7 +248,7 @@ export async function scanDevices(
       const adapter = resolveAdapter(info, adapters);
       results.set(address, {
         address,
-        name: info.localName || '',
+        name: safeName(info.localName),
         matchedAdapter: adapter?.name,
       });
     });

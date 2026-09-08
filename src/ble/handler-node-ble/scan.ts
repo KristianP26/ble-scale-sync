@@ -43,6 +43,7 @@ import {
   teardownSession,
   waitForTargetDevice,
 } from './scan-stages.js';
+import { safeName } from '../advertisement.js';
 
 /** Max time to wait for a BLE pairing/bonding handshake before giving up. */
 const BONDING_TIMEOUT_MS = 15_000;
@@ -512,7 +513,7 @@ export async function scanDevices(
 
           results.push({
             address: addr,
-            name: name || '(unknown)',
+            name: safeName(name) || '(unknown)',
             matchedAdapter: matched?.name,
           });
         } catch {

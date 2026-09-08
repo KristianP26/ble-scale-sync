@@ -7,7 +7,13 @@ import type {
 import type { EsphomeProxyConfig } from '../../config/schema.js';
 import { type RawReading, waitForRawReading } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
-import { evaluateAdvertisement, GraceTimers, DedupWindow, logAdvert } from '../advertisement.js';
+import {
+  evaluateAdvertisement,
+  GraceTimers,
+  DedupWindow,
+  logAdvert,
+  safeName,
+} from '../advertisement.js';
 import type { Watcher, WatcherConfig } from '../reading-source.js';
 import { bleLog, errMsg, IMPEDANCE_GRACE_MS, withTimeout, withIdleTimeout } from '../types.js';
 import { AsyncQueue } from '../async-queue.js';
@@ -87,7 +93,7 @@ export class ReadingWatcher implements Watcher {
     }
     const cached = this.lastAdvertName.get(addrLc);
     if (!cached) return info;
-    bleLog.debug(`Nameless advertisement for ${addrLc}: using cached name "${cached}"`);
+    bleLog.debug(`Nameless advertisement for ${addrLc}: using cached name "${safeName(cached)}"`);
     return { ...info, localName: cached };
   }
   // LRU map (insertion-ordered): scales whose on-demand GATT connect failed,
