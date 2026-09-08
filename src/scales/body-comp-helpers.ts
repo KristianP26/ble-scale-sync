@@ -7,7 +7,7 @@
  * calculated from the user profile rather than measured by the scale.
  */
 
-import type { UserProfile, BodyComposition } from '../interfaces/scale-adapter.js';
+import type { UserProfile, BodyComposition, ScaleReading } from '../interfaces/scale-adapter.js';
 import { createLogger } from '../logger.js';
 
 const biaLog = createLogger('BIA');
@@ -232,4 +232,44 @@ export function xorChecksum(buf: Buffer | number[], start: number, end: number):
   let xor = 0;
   for (let i = start; i < end; i++) xor ^= buf[i] & 0xff;
   return xor & 0xff;
+}
+
+/**
+ * Composition pinned to the reading it was measured with (#394).
+ *
+ * Adapters are shared singletons and `computeMetrics()` runs LATER than the
+ * parse that produced the reading. On the watcher transports (mqtt-proxy,
+ * esphome-proxy) the watcher does not pause while the loop processes a
+ * reading: `loop.ts` awaits `processReading()`, network exports included, and
+ * the watcher can open the NEXT session - and therefore fire
+ * `onSessionStart()` - in the meantime. An adapter that reads its live cache
+ * in `computeMetrics()` then hands the completed reading a cache belonging to
+ * somebody else, or one that was just cleared.
+ *
+ * So: `pin()` at emit time, `of()` in `computeMetrics()`. The map is weak, so
+ * a reading the processor drops frees its entry.
+ *
+ * This exists to stop the rule from being re-derived per adapter. It was
+ * hand-rolled six times before, each copy carrying its own version of the
+ * paragraph above, and the copies had already drifted in type.
+ */
+export class ReadingComposition<T> {
+  private readonly byReading = new WeakMap<ScaleReading, T>();
+
+  /** Record the composition as it stood when `reading` was emitted. */
+  pin(reading: ScaleReading, value: T): void {
+    this.byReading.set(reading, value);
+  }
+
+  /**
+   * The composition pinned to `reading`, or `live` when nothing was pinned.
+   *
+   * The fallback covers a reading built by hand (broadcast paths, tests) - see
+   * the class comment for why the live cache cannot be trusted otherwise. A
+   * pinned value is returned even when it is null or undefined, so an adapter
+   * whose "no composition" state is itself a value stays correct.
+   */
+  of(reading: ScaleReading, live: T): T {
+    return this.byReading.has(reading) ? (this.byReading.get(reading) as T) : live;
+  }
 }
