@@ -3,7 +3,13 @@ import type { MqttProxyConfig } from '../../config/schema.js';
 import type { RawReading } from '../shared.js';
 import { waitForRawReading } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
-import { evaluateAdvertisement, GraceTimers, DedupWindow, logAdvert } from '../advertisement.js';
+import {
+  evaluateAdvertisement,
+  GraceTimers,
+  DedupWindow,
+  logAdvert,
+  safeName,
+} from '../advertisement.js';
 import type { Watcher, WatcherConfig } from '../reading-source.js';
 import { bleLog, withIdleTimeout, withTimeout, errMsg, IMPEDANCE_GRACE_MS } from '../types.js';
 import { AsyncQueue } from '../async-queue.js';
@@ -584,7 +590,9 @@ export class ReadingWatcher implements Watcher {
       info.characteristicUuids = data.chars.map((c) => c.uuid.toLowerCase());
       logAdvert(data.address, info);
       if (cached?.name) {
-        bleLog.debug(`Autonomous connect: using cached advertisement name "${cached.name}"`);
+        bleLog.debug(
+          `Autonomous connect: using cached advertisement name "${safeName(cached.name)}"`,
+        );
       }
       let adapter = resolveAdapter(info, this.adapters);
       if (!adapter) {

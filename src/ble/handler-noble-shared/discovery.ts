@@ -11,6 +11,7 @@ import {
 } from '../types.js';
 import { matchesTarget, parseMfgData, peripheralAddress } from './peripheral.js';
 import type { NobleApi } from './types.js';
+import { safeName } from '../advertisement.js';
 
 /**
  * Discover peripherals via noble's event-driven scanning.
@@ -63,7 +64,7 @@ export function discoverPeripheral(
 
       if (!seen.has(addr)) {
         seen.add(addr);
-        bleLog.debug(`Discovered: ${name || '(no name)'} [${addr}]`);
+        bleLog.debug(`Discovered: ${safeName(name) || '(no name)'} [${addr}]`);
       }
 
       const mfgData = parseMfgData(peripheral.advertisement?.manufacturerData);
@@ -71,7 +72,7 @@ export function discoverPeripheral(
       if (targetMac) {
         // Target mode: match by MAC or CoreBluetooth UUID
         if (!matchesTarget(peripheral, targetMac)) return;
-        bleLog.debug(`Target device matched: ${name} [${addr}]`);
+        bleLog.debug(`Target device matched: ${safeName(name)} [${addr}]`);
 
         cleanup();
 
@@ -88,7 +89,7 @@ export function discoverPeripheral(
         const matched = resolveAdapter(info, adapters);
         if (!matched) return;
 
-        bleLog.info(`Auto-discovered: ${matched.name} (${name} [${addr}])`);
+        bleLog.info(`Auto-discovered: ${matched.name} (${safeName(name)} [${addr}])`);
 
         cleanup();
 

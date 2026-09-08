@@ -236,6 +236,27 @@ function blob(data: Buffer): string {
 }
 
 /**
+ * Render a device-supplied name safe to put in a log line.
+ *
+ * The local name comes straight off the air, unfiltered, from anyone with a
+ * radio in range - or from anyone who can publish to a proxy topic. It is
+ * logged for EVERY advertisement seen during a scan, matched or not, so no
+ * pairing or trust step gates it. A crafted name carrying CR/LF forges
+ * convincing log lines in journald or docker logs, which is exactly what
+ * reporters are asked to paste into public issues, and ANSI/OSC escapes rewrite
+ * the terminal of whoever cats the file.
+ *
+ * Control characters are hex-escaped rather than stripped so a name that really
+ * does contain one stays distinguishable from a name that does not.
+ */
+export function safeName(name: string | undefined): string {
+  if (!name) return '';
+  return name.replace(/[\x00-\x1f\x7f]/g, (c) => {
+    return `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`;
+  });
+}
+
+/**
  * One-line summary of everything an adapter's `matches()` is allowed to see.
  *
  * Adapter mis-routing was the root cause of #317, #318 and #319, and every one
@@ -252,7 +273,7 @@ export function formatAdvert(address: string, info: BleDeviceInfo): string {
   // to mean anything.
   const parts = [
     `[${address.toUpperCase()}]`,
-    `name=${info.localName ? `"${info.localName}"` : '(none)'}`,
+    `name=${info.localName ? `"${safeName(info.localName)}"` : '(none)'}`,
   ];
   parts.push(`uuids=${uuidList(info.serviceUuids)}`);
   if (info.manufacturerData) {

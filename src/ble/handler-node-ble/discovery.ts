@@ -20,6 +20,7 @@ import {
   parseHciIndex,
   currentConnectionGeneration,
 } from './connection.js';
+import { safeName } from '../advertisement.js';
 
 /**
  * Which adapters have a scan running that WE started with the duplicate filter
@@ -398,7 +399,7 @@ export async function autoDiscover(
         const name = await dev.getName().catch(() => '');
         if (!name) continue;
 
-        bleLog.debug(`Discovered: ${name} [${addr}]`);
+        bleLog.debug(`Discovered: ${safeName(name)} [${addr}]`);
 
         // Match on the name plus whatever the advertisement exposes. BlueZ does
         // not publish advertised service UUIDs before a connection, so an
@@ -421,7 +422,7 @@ export async function autoDiscover(
         };
         const matched = resolveAdapter(info, adapters);
         if (matched) {
-          bleLog.info(`Auto-discovered: ${matched.name} (${name} [${addr}])`);
+          bleLog.info(`Auto-discovered: ${matched.name} (${safeName(name)} [${addr}])`);
           matchedDevice = true;
           return { device: dev, adapter: matched, mac: addr };
         }

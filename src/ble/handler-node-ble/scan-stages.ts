@@ -49,6 +49,7 @@ import type { ScaleAuth, ScaleReading, UserProfile } from '../../interfaces/scal
 import { RAW_READING_TIMEOUT_MS, READING_SESSION_CAP_FACTOR, withIdleTimeout } from '../types.js';
 import { tagBleFailure, bleFailureKind } from '../failure-kind.js';
 import { probeLiveness, makeLivenessAdapter } from './liveness.js';
+import { safeName } from '../advertisement.js';
 
 /**
  * Acquire the BlueZ adapter, resetting a stale D-Bus connection once.
@@ -197,7 +198,7 @@ export async function resolvePreConnectAdapter(
   preMatchedAdapter: ScaleAdapter | undefined;
 }> {
   const name = await device.getName().catch(() => '');
-  bleLog.debug(`Found device: ${name} [${mac}]`);
+  bleLog.debug(`Found device: ${safeName(name)} [${mac}]`);
   // Only chance to capture the advertisement: BlueZ drops it (and for some
   // peers the whole Device object) once discovery stops (#297).
   const advert = await logAdvertisementSnapshot(device);

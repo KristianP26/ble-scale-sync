@@ -3,7 +3,7 @@ import type { HaBluetoothConfig } from '../../config/schema.js';
 import type { ScanOptions, ScanResult } from '../types.js';
 import type { RawReading } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
-import { evaluateAdvertisement, GraceTimers, logAdvert } from '../advertisement.js';
+import { evaluateAdvertisement, GraceTimers, logAdvert, safeName } from '../advertisement.js';
 import { bleLog, withTimeout, IMPEDANCE_GRACE_MS } from '../types.js';
 import { HaBluetoothClient } from './client.js';
 
@@ -94,7 +94,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
             if (!adapter) {
               if (!seenAddrs.has(address)) {
                 seenAddrs.add(address);
-                bleLog.debug(`Unmatched device: ${address} (${info.localName || 'no name'})`);
+                bleLog.debug(
+                  `Unmatched device: ${address} (${safeName(info.localName) || 'no name'})`,
+                );
               }
               return;
             }
