@@ -1,4 +1,11 @@
-import { readFileSync, writeFileSync, renameSync, unlinkSync, existsSync } from 'node:fs';
+import {
+  readFileSync,
+  writeFileSync,
+  renameSync,
+  unlinkSync,
+  existsSync,
+  chmodSync,
+} from 'node:fs';
 import { parseDocument } from 'yaml';
 import { createLogger } from '../logger.js';
 import { errMsg } from '../utils/error.js';
@@ -8,6 +15,20 @@ const log = createLogger('ConfigWrite');
 // --- Atomic file write ---
 
 /**
+ * Mode for files this module writes.
+ *
+ * config.yaml holds the Garmin password and every exporter token in plaintext,
+ * so the wizard chmods it to 0600 after saving. The rename below replaces the
+ * file, and with it the mode: without an explicit mode the tmp file is created
+ * 0666 & ~umask, i.e. usually 0644, and that mode is what survives. The wizard
+ * only chmods once, at save time, but updateLastKnownWeight() calls this on
+ * every non-dry weigh-in - so the first export after setup silently made the
+ * credentials world-readable, permanently. The tmp file needs it too: it holds
+ * the same content, briefly, under a predictable name.
+ */
+const SECRET_FILE_MODE = 0o600;
+
+/**
  * Write content to a file atomically via tmp+rename.
  * Falls back to direct overwrite when the target is a Docker bind mount
  * (which cannot be unlinked/renamed over — EBUSY).
@@ -15,7 +36,7 @@ const log = createLogger('ConfigWrite');
 export function atomicWrite(filePath: string, content: string): void {
   const tmpPath = filePath + '.tmp';
   try {
-    writeFileSync(tmpPath, content, 'utf8');
+    writeFileSync(tmpPath, content, { encoding: 'utf8', mode: SECRET_FILE_MODE });
     try {
       if (existsSync(filePath)) unlinkSync(filePath);
       renameSync(tmpPath, filePath);
@@ -24,6 +45,14 @@ export function atomicWrite(filePath: string, content: string): void {
       if (code === 'EBUSY' || code === 'EPERM' || code === 'EXDEV') {
         // Docker bind mount, Windows EPERM, cross-device rename: overwrite directly
         writeFileSync(filePath, content, 'utf8');
+        // writeFileSync applies `mode` only when it CREATES the file, and this
+        // branch exists precisely because the target already exists. The rename
+        // path above needs no chmod: it carries the tmp file's mode with it.
+        try {
+          chmodSync(filePath, SECRET_FILE_MODE);
+        } catch {
+          // Best effort: some filesystems (and Windows) do not honour it.
+        }
         try {
           unlinkSync(tmpPath);
         } catch {

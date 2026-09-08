@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, openSync, closeSync, constants } from 'node:fs';
 
 /**
  * Liveness heartbeat file consumed by the Docker HEALTHCHECK (#277).
@@ -31,12 +31,40 @@ const DEFAULT_INTERVAL_MS = 30_000;
 
 let timer: ReturnType<typeof setInterval> | null = null;
 
+/**
+ * Open flags for the heartbeat file.
+ *
+ * O_NOFOLLOW is the point. The path is fixed and world-predictable, it lives in
+ * a world-writable directory, and it is rewritten every 30 s with every error
+ * swallowed. A local user on a shared host could pre-create it as a symlink to
+ * any file this process can write - config.yaml, a crontab, an authorized_keys
+ * - and each tick would follow the link and truncate the target, silently. With
+ * O_NOFOLLOW the open fails with ELOOP instead and the tick is simply skipped.
+ *
+ * The path cannot move: the Docker HEALTHCHECK reads it by name.
+ *
+ * O_NOFOLLOW is POSIX-only; on Windows the constant is undefined, so it falls
+ * back to 0 and the flags stay valid.
+ */
+const HEARTBEAT_FLAGS =
+  constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0);
+
 /** Write the heartbeat file. Never throws (e.g. /tmp is not writable on Windows). */
 export function touchHeartbeat(): void {
+  let fd: number | undefined;
   try {
-    writeFileSync(HEARTBEAT_PATH, new Date().toISOString());
+    fd = openSync(HEARTBEAT_PATH, HEARTBEAT_FLAGS, 0o644);
+    writeFileSync(fd, new Date().toISOString());
   } catch {
     // ignore
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // ignore
+      }
+    }
   }
 }
 
