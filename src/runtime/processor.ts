@@ -196,9 +196,9 @@ async function processReadingFrames(
  * Stop a reading nobody's `weight_range` vouches for, when asked to.
  *
  * `weight_range` was only ever a MATCHING input. A weight outside every range
- * still resolves to somebody -- through the single-user tier, which always
- * matches, or the `last_known_weight` proximity tier -- and then exports like
- * any other reading. A reporter stood on the scale holding a suitcase, got
+ * still resolves to somebody, through the single-user tier that always matches
+ * or through the `last_known_weight` proximity tier, and then exports like any
+ * other reading. A reporter stood on the scale holding a suitcase, got
  * 178 kg at 0 ohm, and it reached Garmin and a retained MQTT topic. The lasting
  * damage was `last_known_weight` being rewritten to 178, which then tie-broke
  * the NEXT genuine weigh-in to the wrong user and dropped it (#395).

@@ -433,7 +433,7 @@ out_of_range: warn # warn | skip
 | -------------- | -------- | ------- | ------------------------------------------------------------------------------------- |
 | `out_of_range` | No       | `warn`  | What to do with a reading no user's `weight_range` covers. `skip` stops before export |
 
-`weight_range` is a matching input, not a guard. A reading outside every configured range still resolves to somebody -- with one user because that user always matches, with several because the app falls back to whoever's `last_known_weight` is closest -- and is then exported like any other reading.
+`weight_range` is a matching input, not a guard. A reading outside every configured range still resolves to somebody: with one user because that user always matches, and with several because the app falls back to whoever's `last_known_weight` is closest. It is then exported like any other reading.
 
 That matters when the scale reports something implausible. Standing on it holding a heavy bag can produce a reading tens of kilos out, and because it is exported, `last_known_weight` is rewritten from it. The next genuine weigh-in is then matched against a wrong remembered weight, so in a two-person household it can be attributed to the other person and lost.
 
