@@ -28,6 +28,7 @@ import { connectWithRetries } from './connect.js';
 import { discoverPeripheral } from './discovery.js';
 import { broadcastScan } from './broadcast.js';
 import type { NobleHandlerDeps } from './types.js';
+import { safeName } from '../advertisement.js';
 
 export type { NobleApi, NobleHandlerDeps } from './types.js';
 
@@ -192,7 +193,7 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
           const found = resolveAdapter(info, adapters);
           if (!found) {
             throw new Error(
-              `Device found (${name}) but no adapter recognized it. ` +
+              `Device found (${safeName(name)}) but no adapter recognized it. ` +
                 `Services: [${serviceUuids.join(', ')}]. ` +
                 `Adapters: ${adapters.map((a) => a.name).join(', ')}`,
             );
@@ -279,7 +280,7 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
 
       results.push({
         address: addr,
-        name: localName || '(unknown)',
+        name: safeName(localName) || '(unknown)',
         matchedAdapter: matched?.name,
       });
     };

@@ -175,7 +175,7 @@ export async function scanDevices(
       // Keep the entry fresh: a later frame may carry the name or match.
       results.set(address, {
         address,
-        name: info.localName || prev?.name || '',
+        name: safeName(info.localName) || prev?.name || '',
         matchedAdapter: adapter?.name ?? prev?.matchedAdapter,
       });
     });

@@ -246,13 +246,25 @@ function blob(data: Buffer): string {
  * reporters are asked to paste into public issues, and ANSI/OSC escapes rewrite
  * the terminal of whoever cats the file.
  *
- * Control characters are hex-escaped rather than stripped so a name that really
- * does contain one stays distinguishable from a name that does not.
+ * Escaped rather than stripped, so a name that really does contain a control
+ * character stays distinguishable from one that does not. That only holds if
+ * the escape character is escaped too - otherwise a name containing the four
+ * literal characters `\x0a` renders identically to one containing a real LF -
+ * so backslash is in the class.
+ *
+ * The class covers more than C0. U+0080..U+009F are the C1 controls, and
+ * xterm-family terminals honour U+009B and U+009D as CSI and OSC introducers
+ * even in UTF-8 mode; a BLE name is UTF-8 decoded by every stack, so those
+ * arrive intact. U+2028 and U+2029 are line breaks to anything that splits on
+ * Unicode newlines rather than on LF.
  */
 export function safeName(name: string | undefined): string {
   if (!name) return '';
-  return name.replace(/[\x00-\x1f\x7f]/g, (c) => {
-    return `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`;
+  return name.replace(/[\\\x00-\x1f\x7f-\x9f\u2028\u2029]/g, (c) => {
+    const code = c.charCodeAt(0);
+    return code > 0xff
+      ? `\\u${code.toString(16).padStart(4, '0')}`
+      : `\\x${code.toString(16).padStart(2, '0')}`;
   });
 }
 

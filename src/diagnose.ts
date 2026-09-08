@@ -3,6 +3,7 @@ import { loadBleConfig } from './config/load.js';
 import { createLogger } from './logger.js';
 import { sleep, withTimeout, errMsg } from './ble/types.js';
 import { rethrowAsTransportError } from './ble/transport-availability.js';
+import { safeName } from './ble/advertisement.js';
 import type { HandlerKey } from './ble/transport-availability.js';
 
 const log = createLogger('Diagnose');
@@ -146,7 +147,7 @@ async function main(): Promise<void> {
     const marker = isTarget ? ' <<<' : '';
 
     log.info(
-      `  ${rawAddr}  ${name || '(no name)'}  RSSI=${rssi}  ` +
+      `  ${rawAddr}  ${safeName(name) || '(no name)'}  RSSI=${rssi}  ` +
         `${connectable ? 'connectable' : 'broadcast-only'}  type=${addrType}${marker}`,
     );
     if (svcUuids.length > 0) {

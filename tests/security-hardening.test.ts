@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, statSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -48,6 +48,41 @@ describe('atomicWrite file mode', () => {
     atomicWrite(file, 'version: 1\n');
     expect(statSync(file).mode & 0o777).toBe(0o600);
   });
+
+  // The Docker file-mount setup documented in the README cannot be renamed over
+  // (EBUSY), so it takes the in-place branch. writeFileSync applies `mode` only
+  // when it CREATES the file, and that branch exists precisely because the file
+  // already exists - so without the explicit chmod the mode is whatever the
+  // existing file had.
+  it.skipIf(process.platform === 'win32')(
+    'chmods to 0600 on the in-place fallback path',
+    async () => {
+      const fs = await import('node:fs');
+      const dir = tempDir();
+      const file = join(dir, 'config.yaml');
+      writeFileSync(file, 'version: 1\n', { mode: 0o644 });
+
+      const spy = vi.spyOn(fs, 'renameSync').mockImplementation(() => {
+        const err = new Error('EBUSY: resource busy or locked') as NodeJS.ErrnoException;
+        err.code = 'EBUSY';
+        throw err;
+      });
+      try {
+        atomicWrite(file, 'version: 1\nusers: []\n');
+      } finally {
+        spy.mockRestore();
+      }
+
+      // Without this the test is worthless: if the spy does not reach the
+      // binding atomicWrite closed over, the rename SUCCEEDS, the mode comes
+      // from the 0600 tmp file, and the assertion below passes while the
+      // fallback branch never runs. Fail loudly instead.
+      expect(spy).toHaveBeenCalled();
+
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+      expect(readFileSync(file, 'utf8')).toContain('users: []');
+    },
+  );
 });
 
 describe('safeName', () => {
@@ -73,6 +108,36 @@ describe('safeName', () => {
   it('escapes NUL and DEL', () => {
     const out = safeName(`a${String.fromCharCode(0)}b${String.fromCharCode(0x7f)}c`);
     expect(out).toBe('a\\x00b\\x7fc');
+  });
+
+  // C1 controls: xterm-family terminals honour U+009B as CSI and U+009D as OSC
+  // even in UTF-8 mode, and a BLE name is UTF-8 decoded by every stack, so the
+  // two-byte encoding arrives intact. A C0-only class lets these straight
+  // through.
+  it('escapes the C1 controls, including the 8-bit CSI and OSC introducers', () => {
+    const out = safeName(`Scale${String.fromCharCode(0x9b)}2J${String.fromCharCode(0x9d)}0;x`);
+    expect(out).not.toContain(String.fromCharCode(0x9b));
+    expect(out).not.toContain(String.fromCharCode(0x9d));
+    expect(out).toContain('\\x9b');
+    expect(out).toContain('\\x9d');
+  });
+
+  // Anything that splits on Unicode newlines rather than on LF treats these as
+  // line breaks, so they can still break a pasted log line apart.
+  it('escapes the Unicode line and paragraph separators', () => {
+    const out = safeName(`a${String.fromCharCode(0x2028)}b${String.fromCharCode(0x2029)}c`);
+    expect(out).toBe('a\\u2028b\\u2029c');
+  });
+
+  // Without escaping the escape character, a name containing the four literal
+  // characters \x0a renders identically to one containing a real LF - so the
+  // "stays distinguishable" property the function claims would not hold.
+  it('escapes the backslash so an escaped name is unambiguous', () => {
+    // Escaped through the same \xNN form as everything else in the class, so a
+    // real LF and a literal "\x0a" can never render alike.
+    expect(safeName('a\nb')).toBe('a\\x0ab');
+    expect(safeName('a\\x0ab')).toBe('a\\x5cx0ab');
+    expect(safeName('a\\x0ab')).not.toBe(safeName('a\nb'));
   });
 
   it('leaves an ordinary name untouched, multibyte included', () => {

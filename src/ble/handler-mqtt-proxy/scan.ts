@@ -268,7 +268,7 @@ export async function scanDevices(
       const matched = resolveAdapter(info, adapters);
       return {
         address: entry.address,
-        name: entry.name,
+        name: safeName(entry.name),
         matchedAdapter: matched?.name,
       };
     });

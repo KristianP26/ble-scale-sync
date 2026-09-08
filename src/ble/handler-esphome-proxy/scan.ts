@@ -234,7 +234,7 @@ export async function scanDevices(
       const adapter = resolveAdapter(info, adapters);
       results.set(address, {
         address,
-        name: info.localName || '',
+        name: safeName(info.localName),
         matchedAdapter: adapter?.name,
       });
     });

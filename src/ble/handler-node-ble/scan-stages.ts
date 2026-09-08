@@ -290,7 +290,7 @@ export async function resolveAfterConnect(
   }
   if (!resolved) {
     throw new Error(
-      `Device found (${name}) but no adapter recognized it. ` +
+      `Device found (${safeName(name)}) but no adapter recognized it. ` +
         `Services: [${serviceUuids.join(', ')}]. ` +
         `Adapters: ${adapters.map((a) => a.name).join(', ')}`,
     );

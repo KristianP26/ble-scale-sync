@@ -36,10 +36,16 @@ let timer: ReturnType<typeof setInterval> | null = null;
  *
  * O_NOFOLLOW is the point. The path is fixed and world-predictable, it lives in
  * a world-writable directory, and it is rewritten every 30 s with every error
- * swallowed. A local user on a shared host could pre-create it as a symlink to
- * any file this process can write - config.yaml, a crontab, an authorized_keys
- * - and each tick would follow the link and truncate the target, silently. With
- * O_NOFOLLOW the open fails with ELOOP instead and the tick is simply skipped.
+ * swallowed - so if a local user could plant a symlink here, each tick would
+ * follow it and truncate the target in silence.
+ *
+ * Defence in depth rather than a live hole: on the supported deployments the
+ * kernel already refuses that. Debian and Raspberry Pi OS ship
+ * `fs.protected_symlinks=1`, which will not follow a symlink in a sticky
+ * directory owned by another uid, and `fs.protected_regular=1`, which refuses
+ * O_CREAT on another user's file there; Docker and the HA add-on get a private
+ * /tmp. What is left is a multi-user host with that hardening switched off. The
+ * flag costs nothing, so it is not worth relying on someone else's sysctl.
  *
  * The path cannot move: the Docker HEALTHCHECK reads it by name.
  *
