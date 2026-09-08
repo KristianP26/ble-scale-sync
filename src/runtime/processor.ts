@@ -106,8 +106,11 @@ function frameTag(prefix: string, timestamp: Date | undefined): string {
  * `checkAndLogUpdate` for the cycle.
  *
  * Returns the success of the last (live) dispatch and the payload of that
- * dispatch (`null` if every frame was deduped or skipped via dry-run), which the
- * caller uses to gate the dedup-anchor / last_known_weight write.
+ * dispatch, which the caller uses to gate the dedup-anchor / last_known_weight
+ * write. The payload is `null` when every frame was deduped, when dry-run
+ * skipped the export, AND when the export ran but every exporter failed - the
+ * anchor means "the weight we actually exported", so a total failure must not
+ * move it.
  */
 async function processReadingFrames(
   ctx: AppContext,
@@ -158,8 +161,6 @@ async function processReadingFrames(
       continue;
     }
 
-    if (isLast) latestPayload = payload;
-
     if (isLast) {
       // notifyReading uses raw scale values (pre-computeMetrics) so the display
       // mirrors what the scale measured; notifyResult uses the computed payload.
@@ -186,6 +187,14 @@ async function processReadingFrames(
     if (isLast) {
       ctx.display?.result(user.slug, user.name, payload.weight, details);
       lastSuccess = success;
+      // Both things this gates - the runtime replay anchor and the persisted
+      // last_known_weight - mean "the weight we ACTUALLY exported". Setting it
+      // before the dispatch made a total export failure poison the next
+      // attempt: the scale reconnects, replays the same frame now carrying a
+      // timestamp, and the dedup above drops it as already synced. The weigh-in
+      // is then lost with nothing to retry from. dispatchExports returns false
+      // only when EVERY exporter failed, so a partial success still anchors.
+      if (success) latestPayload = payload;
     }
   }
 
@@ -344,8 +353,8 @@ async function processMultiUser(
   );
 
   // last_known_weight stores the raw scale value, not the computed payload.
-  // latestPayload is set only after a non-dry export on the last reading,
-  // so dry-run is already excluded here.
+  // latestPayload is set only after a SUCCEEDING non-dry export on the last
+  // reading, so both dry-run and a total export failure are excluded here.
   if (latestPayload && ctx.configSource === 'yaml' && ctx.configPath) {
     updateLastKnownWeight(ctx.configPath, user.slug, latest.weight, previousLastKnown);
   }

@@ -4,7 +4,7 @@ import type { ScanOptions, ScanResult } from '../types.js';
 import { type RawReading, waitForRawReading } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
 import { evaluateAdvertisement, GraceTimers, logAdvert } from '../advertisement.js';
-import { bleLog, errMsg, withTimeout, IMPEDANCE_GRACE_MS } from '../types.js';
+import { bleLog, errMsg, withTimeout, withIdleTimeout, IMPEDANCE_GRACE_MS } from '../types.js';
 import { EsphomeProxyPool } from './pool.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -12,6 +12,10 @@ import { EsphomeProxyPool } from './pool.js';
 // 60s matches the native BLE handlers and gives slow-advertising scales (e.g. Mi,
 // some Renpho) enough time to emit a broadcast frame after the user steps on.
 const BROADCAST_WAIT_MS = 60_000;
+// Idle bound for an on-demand GATT read. The outer BROADCAST_WAIT_MS race only
+// abandons the wait; without this the abandoned read still hangs forever when
+// the proxy vanishes and never reports a disconnect.
+const GATT_READING_IDLE_MS = 60_000;
 const SCAN_DEFAULT_MS = 15_000;
 
 // ─── Scan-and-read (broadcast + GATT) ────────────────────────────────────────
@@ -175,20 +179,30 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
               let session: Awaited<ReturnType<typeof pool.connectGatt>> | null = null;
               try {
                 session = await pool.connectGatt(address);
-                const raw = await waitForRawReading(
-                  session.charMap,
-                  session.device,
-                  adapter,
-                  opts.profile,
-                  address.replace(/[:-]/g, '').toUpperCase(),
-                  opts.weightUnit,
-                  opts.onLiveData,
-                  opts.scaleAuth,
+                const raw = await withIdleTimeout(
+                  (onActivity) =>
+                    waitForRawReading(
+                      session!.charMap,
+                      session!.device,
+                      adapter,
+                      opts.profile,
+                      address.replace(/[:-]/g, '').toUpperCase(),
+                      opts.weightUnit,
+                      opts.onLiveData,
+                      opts.scaleAuth,
+                      onActivity,
+                    ),
+                  GATT_READING_IDLE_MS,
+                  `GATT reading timeout for ${address}`,
                 );
                 resolve(raw);
               } catch (e) {
                 reject(e instanceof Error ? e : new Error(errMsg(e)));
               } finally {
+                // Before close(), so the wait is finished with the session
+                // before the session goes away. See fireDisconnect's own doc
+                // for why the order is not load-bearing either way.
+                session?.device.fireDisconnect();
                 if (session) await session.close();
                 gattInFlight.delete(addrLc);
               }

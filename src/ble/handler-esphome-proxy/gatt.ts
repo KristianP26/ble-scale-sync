@@ -16,10 +16,35 @@ const NOTIFY_EVENT = 'message.BluetoothGATTNotifyDataResponse';
 const CONNECTION_EVENT = 'message.BluetoothDeviceConnectionResponse';
 const GATT_ERROR_EVENT = 'message.BluetoothGATTErrorResponse';
 
+export interface EsphomeBleDevice extends BleDevice {
+  /**
+   * Abandon this session locally, as if the proxy had reported a disconnect.
+   *
+   * waitForRawReading() only settles on a reading, a subscribe failure, or this
+   * disconnect callback, and the callback is driven purely by the proxy's
+   * connection frames. When the ESP32 drops off Wi-Fi mid-session no such frame
+   * ever arrives, so a caller that gives up on a timeout leaves the abandoned
+   * wait holding its notify unsubscribers and its unlock interval forever, and
+   * never runs the adapter's onSessionEnd. Firing this lets it tear itself
+   * down. Harmless after a completed reading: the callback returns immediately
+   * once resolved.
+   *
+   * Call it before close(), though the order is not load-bearing and two
+   * earlier versions of this comment claimed reasons that were not real. It
+   * does not depend on the CONNECTION_EVENT listener close() removes (the
+   * callback is invoked directly), and the cleanup it triggers - clearInterval,
+   * listener removal, and onSessionEnd, which the contract forbids from doing
+   * I/O - issues no GATT call, so `closed` cannot cut it short either. Kept
+   * first simply so the wait is finished with the session before the session
+   * goes away.
+   */
+  fireDisconnect(): void;
+}
+
 export interface GattSession {
   /** Normalized-UUID -> BleChar, the shape waitForRawReading() consumes. */
   charMap: Map<string, BleChar>;
-  device: BleDevice;
+  device: EsphomeBleDevice;
   close(): Promise<void>;
 }
 
@@ -248,17 +273,27 @@ export async function openGattSession(
     }
   }
 
-  const device: BleDevice = {
+  let disconnectCb: (() => void) | undefined;
+  let disconnectFired = false;
+  const fireDisconnect = (): void => {
+    // Latch only once there is something to latch. Setting the flag with no
+    // callback registered would silently swallow the REAL disconnect frame for
+    // a caller that registers afterwards. Not reachable through today's two
+    // callers, but it is the kind of thing the next one would inherit.
+    if (disconnectFired || !disconnectCb) return;
+    disconnectFired = true;
+    disconnectCb();
+  };
+
+  const device: EsphomeBleDevice = {
     onDisconnect(cb: () => void): void {
-      let fired = false;
+      disconnectCb = cb;
       track(CONNECTION_EVENT, (raw: unknown) => {
         const m = raw as EsphomeDeviceConnection;
-        if (!fired && m.address === addr && m.connected === false) {
-          fired = true;
-          cb();
-        }
+        if (m.address === addr && m.connected === false) fireDisconnect();
       });
     },
+    fireDisconnect,
   };
 
   const close = async (): Promise<void> => {
