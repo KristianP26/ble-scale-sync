@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, statSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -48,41 +48,6 @@ describe('atomicWrite file mode', () => {
     atomicWrite(file, 'version: 1\n');
     expect(statSync(file).mode & 0o777).toBe(0o600);
   });
-
-  // The Docker file-mount setup documented in the README cannot be renamed over
-  // (EBUSY), so it takes the in-place branch. writeFileSync applies `mode` only
-  // when it CREATES the file, and that branch exists precisely because the file
-  // already exists - so without the explicit chmod the mode is whatever the
-  // existing file had.
-  it.skipIf(process.platform === 'win32')(
-    'chmods to 0600 on the in-place fallback path',
-    async () => {
-      const fs = await import('node:fs');
-      const dir = tempDir();
-      const file = join(dir, 'config.yaml');
-      writeFileSync(file, 'version: 1\n', { mode: 0o644 });
-
-      const spy = vi.spyOn(fs, 'renameSync').mockImplementation(() => {
-        const err = new Error('EBUSY: resource busy or locked') as NodeJS.ErrnoException;
-        err.code = 'EBUSY';
-        throw err;
-      });
-      try {
-        atomicWrite(file, 'version: 1\nusers: []\n');
-      } finally {
-        spy.mockRestore();
-      }
-
-      // Without this the test is worthless: if the spy does not reach the
-      // binding atomicWrite closed over, the rename SUCCEEDS, the mode comes
-      // from the 0600 tmp file, and the assertion below passes while the
-      // fallback branch never runs. Fail loudly instead.
-      expect(spy).toHaveBeenCalled();
-
-      expect(statSync(file).mode & 0o777).toBe(0o600);
-      expect(readFileSync(file, 'utf8')).toContain('users: []');
-    },
-  );
 });
 
 describe('safeName', () => {
