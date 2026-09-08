@@ -96,7 +96,10 @@ describe('liveness probe proxy release (#396, #397)', () => {
     expect(released).toEqual(['AA:BB:CC:DD:EE:02']);
   });
 
-  it('releases nothing when the device object itself cannot be fetched', async () => {
+  // Guards the undefined check, not the release: a bare
+  // `finally { releaseDeviceProxy(dev) }` would throw here on a proxy that was
+  // never created.
+  it('does not try to release a proxy that was never created', async () => {
     const la = makeLivenessAdapter({
       devices: async () => [],
       getDevice: async () => {
@@ -145,7 +148,9 @@ describe('autoDiscover proxy release (#396, #397)', () => {
 });
 
 describe('removeDevice proxy release (#396, #397)', () => {
-  it('releases the isPaired probe on the not-in-cache path', async () => {
+  // Same guard as above on the other call site: the probe does not exist, so
+  // there is nothing to hand back and nothing may be attempted.
+  it('does not try to release a probe the cache lookup never produced', async () => {
     const btAdapter = {
       getDevice: async () => {
         throw new Error('Device not found');

@@ -823,9 +823,12 @@ describe('formatConfigError()', () => {
 });
 
 describe('out_of_range (#395)', () => {
-  it('accepts skip', () => {
+  it('accepts skip and keeps it', () => {
+    // The `success` assertion alone would pass with the key deleted from the
+    // schema entirely, because Zod strips what it does not know about.
     const result = AppConfigSchema.safeParse({ ...VALID_CONFIG, out_of_range: 'skip' });
     expect(result.success).toBe(true);
+    if (result.success) expect(result.data.out_of_range).toBe('skip');
   });
 
   it('rejects a value that is neither warn nor skip', () => {

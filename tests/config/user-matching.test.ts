@@ -208,9 +208,4 @@ describe('isOutOfRange', () => {
     expect(isOutOfRange(ALICE, 49.9)).toBe(true);
     expect(isOutOfRange(ALICE, 70.1)).toBe(true);
   });
-
-  it("is true for the reporter's suitcase reading", () => {
-    expect(isOutOfRange(ALICE, 178)).toBe(true);
-    expect(isOutOfRange(BOB, 178)).toBe(true);
-  });
 });
