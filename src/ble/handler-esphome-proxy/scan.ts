@@ -199,8 +199,10 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
               } catch (e) {
                 reject(e instanceof Error ? e : new Error(errMsg(e)));
               } finally {
-                // Before close(), which splices out the very listener the
-                // abandoned wait's disconnect path needs to clean itself up.
+                // Before close(), so the abandoned wait's cleanup (notify
+                // unsubscribers, unlock interval, onSessionEnd) runs while the
+                // session can still talk: close() sets `closed`, after which
+                // every queued GATT call is rejected.
                 session?.device.fireDisconnect();
                 if (session) await session.close();
                 gattInFlight.delete(addrLc);

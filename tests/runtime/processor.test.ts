@@ -331,6 +331,9 @@ describe('processReading: multi-user', () => {
     expect(ctx.lastExportedWeights.has('dad')).toBe(false);
   });
 
+  // Not a regression test: this one passes with or without the fix. It is here
+  // as a guard so a later change cannot quietly stop anchoring altogether,
+  // which the two tests above would not catch (they only assert the negative).
   it('sets the single-user replay anchor when the export succeeds', async () => {
     const ctx = makeCtx([dad]);
     await processReading(ctx, rawReading({ weight: 82, impedance: 500 }), {

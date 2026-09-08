@@ -265,9 +265,12 @@ export class ReadingWatcher implements Watcher {
       } catch (e) {
         this.warnGattFailure(gattAdapter.name, address, errMsg(e));
       } finally {
-        // Order matters: let the abandoned wait tear itself down while its
-        // listeners are still registered, because close() splices out every
-        // listener including the connection one the disconnect path needs.
+        // Order matters, though not for the reason it first appears:
+        // fireDisconnect() invokes the stored callback directly, so it does not
+        // depend on the CONNECTION_EVENT listener close() removes. It goes
+        // first so the abandoned wait's cleanup - notify unsubscribers, the
+        // unlock interval, onSessionEnd - runs before close() sets `closed` and
+        // starts rejecting every queued GATT call.
         session?.device.fireDisconnect();
         if (session) await session.close();
         this.gattInFlight.delete(addrLc);

@@ -73,6 +73,11 @@ describe('SpeedianceAdapter', () => {
       // the notify callback, which has no try/catch above it: a dead process,
       // not a dropped frame. The weight is complete at this length, so it is
       // still taken and the missing impedance is reported as absent.
+      //
+      // Synthetic on purpose, and the exception to the byte-for-byte fixture
+      // rule: no capture shows a short A7 frame, so this is the length guard
+      // being exercised rather than an observed device behaviour. The real
+      // 20-byte capture is covered by the test above.
       const short = Buffer.from('4d2300a76a96d1ff25012a3e0013', 'hex');
       expect(short.length).toBe(14);
       expect(() => adapter.parseCharNotification(uuid16(0xffb3), short)).not.toThrow();

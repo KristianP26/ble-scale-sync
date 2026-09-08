@@ -106,8 +106,11 @@ function frameTag(prefix: string, timestamp: Date | undefined): string {
  * `checkAndLogUpdate` for the cycle.
  *
  * Returns the success of the last (live) dispatch and the payload of that
- * dispatch (`null` if every frame was deduped or skipped via dry-run), which the
- * caller uses to gate the dedup-anchor / last_known_weight write.
+ * dispatch, which the caller uses to gate the dedup-anchor / last_known_weight
+ * write. The payload is `null` when every frame was deduped, when dry-run
+ * skipped the export, AND when the export ran but every exporter failed - the
+ * anchor means "the weight we actually exported", so a total failure must not
+ * move it.
  */
 async function processReadingFrames(
   ctx: AppContext,

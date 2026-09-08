@@ -25,9 +25,14 @@ export interface EsphomeBleDevice extends BleDevice {
    * connection frames. When the ESP32 drops off Wi-Fi mid-session no such frame
    * ever arrives, so a caller that gives up on a timeout leaves the abandoned
    * wait holding its notify unsubscribers and its unlock interval forever, and
-   * never runs the adapter's onSessionEnd. Firing the disconnect path before
-   * close() lets it tear itself down. Harmless after a completed reading: the
-   * callback returns immediately once resolved.
+   * never runs the adapter's onSessionEnd. Firing this lets it tear itself
+   * down. Harmless after a completed reading: the callback returns immediately
+   * once resolved.
+   *
+   * Call it before close(): not because close() removes anything this needs
+   * (the callback is invoked directly, not through the CONNECTION_EVENT
+   * listener), but so the cleanup runs before close() sets `closed` and the
+   * session starts rejecting every queued GATT call.
    */
   fireDisconnect(): void;
 }
@@ -267,9 +272,13 @@ export async function openGattSession(
   let disconnectCb: (() => void) | undefined;
   let disconnectFired = false;
   const fireDisconnect = (): void => {
-    if (disconnectFired) return;
+    // Latch only once there is something to latch. Setting the flag with no
+    // callback registered would silently swallow the REAL disconnect frame for
+    // a caller that registers afterwards. Not reachable through today's two
+    // callers, but it is the kind of thing the next one would inherit.
+    if (disconnectFired || !disconnectCb) return;
     disconnectFired = true;
-    disconnectCb?.();
+    disconnectCb();
   };
 
   const device: EsphomeBleDevice = {
