@@ -65,6 +65,27 @@ Two consequences worth knowing:
 
 If you prefer manual configuration, here's the full reference. See [`config.yaml.example`](https://github.com/KristianP26/ble-scale-sync/blob/main/config.yaml.example) for an annotated template.
 
+### File version
+
+```yaml
+version: 1
+```
+
+| Field     | Required | Default | Description                                                        |
+| --------- | -------- | ------- | ------------------------------------------------------------------ |
+| `version` | Yes      | (none)  | Config schema version. Must be `1`; loading fails without this key |
+
+The wizard writes it for you. A hand-written file that omits it fails validation, and the error opens with this key:
+
+```
+Configuration error in config.yaml:
+
+  version
+    Invalid input: expected 1
+```
+
+Every problem is reported in one pass, so a file missing several required fields lists them all at once.
+
 ### BLE
 
 ```yaml
@@ -454,21 +475,21 @@ users:
     weight_range: { min: 50, max: 75 }
 ```
 
-| Field                      | Required | Default        | Description                                                                             |
-| -------------------------- | -------- | -------------- | --------------------------------------------------------------------------------------- |
-| `name`                     | Yes      | (none)         | Display name                                                                            |
-| `slug`                     | No       | Auto-generated | Unique ID (lowercase, hyphens) for MQTT topics, InfluxDB tags                           |
-| `height`                   | Yes      | (none)         | Height in configured unit                                                               |
-| `birth_date`               | Yes      | (none)         | ISO date (`YYYY-MM-DD`)                                                                 |
-| `gender`                   | Yes      | (none)         | `male` or `female`                                                                      |
-| `is_athlete`               | No       | `false`        | Adjusts [body composition](/body-composition#athlete-mode) formulas                     |
-| `weight_range`             | No       | (none)         | `{ min, max }` in kg. Required for [multi-user](/multi-user) deployments                |
-| `last_known_weight`        | No       | `null`         | Auto-updated after each measurement. Also used as the weight anchor some scales expect  |
-| `exporters`                | No       | (none)         | [Per-user exporter](/multi-user#per-user-exporters) overrides                           |
-| `beurer_pin`               | Beurer   | (none)         | Consent code the Beurer BF7xx / BF9xx scale was paired with                             |
-| `beurer_user_index`        | No       | `1`            | Scale user slot the consent code belongs to                                             |
-| `beurer_provision`         | No       | `false`        | Write this profile into a Beurer scale that has no stored user                          |
-| `beurer_register_new_user` | No       | `false`        | Create a new user record on the scale instead of consenting to one. One-shot; see below |
+| Field                      | Required | Default | Description                                                                                                                                                                                                 |
+| -------------------------- | -------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                     | Yes      | (none)  | Display name                                                                                                                                                                                                |
+| `slug`                     | Yes      | (none)  | Unique ID (lowercase, hyphens) for MQTT topics, InfluxDB tags. The wizard fills it in from the name, and `setup --non-interactive` does the same for a file that has one missing; otherwise set it yourself |
+| `height`                   | Yes      | (none)  | Height in configured unit                                                                                                                                                                                   |
+| `birth_date`               | Yes      | (none)  | ISO date (`YYYY-MM-DD`)                                                                                                                                                                                     |
+| `gender`                   | Yes      | (none)  | `male` or `female`                                                                                                                                                                                          |
+| `is_athlete`               | Yes      | (none)  | `true` or `false`. Adjusts [body composition](/body-composition#athlete-mode) formulas                                                                                                                      |
+| `weight_range`             | Yes      | (none)  | `{ min, max }` in kg. Also the matching input for [multi-user](/multi-user) setups                                                                                                                          |
+| `last_known_weight`        | No       | `null`  | Auto-updated after each measurement. Also used as the weight anchor some scales expect                                                                                                                      |
+| `exporters`                | No       | (none)  | [Per-user exporter](/multi-user#per-user-exporters) overrides                                                                                                                                               |
+| `beurer_pin`               | Beurer   | (none)  | Consent code the Beurer BF7xx / BF9xx scale was paired with                                                                                                                                                 |
+| `beurer_user_index`        | No       | `1`     | Scale user slot the consent code belongs to                                                                                                                                                                 |
+| `beurer_provision`         | No       | `false` | Write this profile into a Beurer scale that has no stored user                                                                                                                                              |
+| `beurer_register_new_user` | No       | `false` | Create a new user record on the scale instead of consenting to one. One-shot; see below                                                                                                                     |
 
 ### Exporters
 
