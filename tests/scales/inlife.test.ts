@@ -249,17 +249,20 @@ describe('InlifeScaleAdapter session boundary (#394)', () => {
 
   it('keeps the completed reading composition when the NEXT session starts first', () => {
     const a = makeAdapter();
-    const reading = a.parseNotification(legacyFrame(80))!;
+    const reading = a.parseNotification(legacyFrame(200))!;
     a.onSessionStart();
     const payload = a.computeMetrics(reading, defaultProfile());
-    expect(payload.visceralFat).toBeCloseTo(8, 1);
+    expect(payload.visceralFat).toBeCloseTo(20, 1);
   });
 
   it('does not hand a hand-built reading the previous session composition', () => {
     const a = makeAdapter();
-    a.parseNotification(legacyFrame(80));
+    // 200 -> visceral 20. The estimator lands near 9 for the default profile,
+    // so a pinned value of 8 would have passed by a single unit and would have
+    // FAILED on correct code had defaultProfile()'s age been 25.
+    a.parseNotification(legacyFrame(200));
     a.onSessionStart();
     const payload = a.computeMetrics({ weight: 80, impedance: 0 }, defaultProfile());
-    expect(payload.visceralFat).not.toBeCloseTo(8, 1);
+    expect(payload.visceralFat).not.toBeCloseTo(20, 1);
   });
 });

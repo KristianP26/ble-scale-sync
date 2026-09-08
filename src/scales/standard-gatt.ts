@@ -178,9 +178,14 @@ export class StandardGattScaleAdapter implements ScaleAdapterCore, GattWiring, U
   }
 
   /**
-   * Clear the previous weigh-in before anything is subscribed (#394). Shared
-   * singleton: without this, a session that produces a weight but no body
-   * composition frame publishes the PREVIOUS person's composition.
+   * Clear the previous weigh-in before anything is subscribed (#394).
+   *
+   * The pin above is what fixes the real leak. This reset covers the OTHER
+   * path: a reading built outside parseNotification (a direct caller, a test)
+   * has nothing pinned, so computeMetrics falls back to the live cache - and
+   * that must not still hold the previous person's numbers. It is also what
+   * the ScaleAdapter contract requires of every adapter, so a sibling added
+   * later inherits a correct example rather than this one's peculiarity.
    */
   onSessionStart(): void {
     this.cachedGatt = null;

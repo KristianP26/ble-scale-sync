@@ -256,7 +256,16 @@ export function xorChecksum(buf: Buffer | number[], start: number, end: number):
 export class ReadingComposition<T> {
   private readonly byReading = new WeakMap<ScaleReading, T>();
 
-  /** Record the composition as it stood when `reading` was emitted. */
+  /**
+   * Record the composition as it stood when `reading` was emitted.
+   *
+   * Stores the REFERENCE. The value must not be mutated afterwards, or the
+   * snapshot follows the live state and the pin buys nothing. Adapters that
+   * rebuild their cache object per frame can pass it directly; ones that mutate
+   * a long-lived object in place (beurer-bf720 fills fields across several
+   * 0x2A9C notifications, and beurer-sanitas and medisana-bs44x do the same)
+   * must pass a copy, which is why their hand-rolled predecessors all spread.
+   */
   pin(reading: ScaleReading, value: T): void {
     this.byReading.set(reading, value);
   }

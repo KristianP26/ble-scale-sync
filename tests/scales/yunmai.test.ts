@@ -245,6 +245,28 @@ describe('YunmaiScaleAdapter session boundary (#394)', () => {
     expect(payload.bodyFatPercent).toBeCloseTo(22, 1);
   });
 
+  // ReadingComposition.of() checks has(), not `?? live`. That distinction is the
+  // helper's one real subtlety and nothing else exercises it: Yunmai is the only
+  // current user whose "no composition" state is ITSELF a value (null), so with
+  // a nullish fallback a legitimately-null pin would silently fall through to
+  // the live field. Mutating of() to `?? live` leaves the whole suite green
+  // except this test.
+  it('a pinned null is honoured, not treated as absent', () => {
+    const a = miniAdapter();
+    // Session N: protocol < 0x1E, so no embedded fat is read and null is pinned.
+    const readingN = a.parseNotification(
+      makeFrame({ protocolVer: 0x1d, impedanceRaw: 0, weightRaw: 8000 }),
+    )!;
+    // Session N+1 starts and parses a frame that DOES carry embedded fat,
+    // before N's computeMetrics runs - the watcher-transport ordering.
+    a.onSessionStart();
+    a.parseNotification(makeFrame({ fatRaw: 2200, impedanceRaw: 0 }));
+
+    const payload = a.computeMetrics(readingN, defaultProfile());
+    // N must get the estimator, not the next person's 22 %.
+    expect(payload.bodyFatPercent).not.toBeCloseTo(22, 1);
+  });
+
   it('does not hand a hand-built reading the previous session embedded fat', () => {
     const a = miniAdapter();
     a.parseNotification(makeFrame({ fatRaw: 2200 }));
