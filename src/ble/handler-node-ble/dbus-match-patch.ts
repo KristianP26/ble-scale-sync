@@ -56,6 +56,33 @@ interface MatchRuleBus {
  * so a future dbus-next bump silently gets its own (fixed) implementation back
  * rather than ours layered on top.
  */
+type MatchRuleAdd = (this: MatchRuleBus, match: string) => unknown;
+
+/**
+ * Add one rule twice through the shipped implementation and report the refcount
+ * it left behind: 2 when refcounting works, 1 when it does not, `undefined` when
+ * the probe could not run at all (internals shaped differently than expected).
+ *
+ * Runs against a throwaway object, never a live bus: `call` resolves without
+ * sending anything, so nothing reaches D-Bus.
+ */
+function probeDoubleAdd(addMatch: MatchRuleAdd): number | undefined {
+  try {
+    const probe: MatchRuleBus = {
+      _matchRules: {},
+      _connection: { stream: { writable: true } },
+      call: () => Promise.resolve(),
+    };
+    const rule = "type='signal',interface='dev.blescalesync.PatchProbe'";
+    void addMatch.call(probe, rule);
+    void addMatch.call(probe, rule);
+    const count = probe._matchRules[rule];
+    return typeof count === 'number' ? count : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function applyDbusMatchRefcountPatch(): void {
   if (patchAttempted) return;
   patchAttempted = true;
@@ -70,11 +97,25 @@ export function applyDbusMatchRefcountPatch(): void {
     }
     if (proto[PATCHED] === true) return;
 
-    // Only patch the broken shape. `hasOwnProperty.call(match, ...)` with the
-    // rule string first is the defect's signature; anything else is either
-    // already fixed upstream or a rewrite we should not second-guess.
-    if (!/hasOwnProperty\.call\(\s*match\s*,/.test(String(proto._addMatch))) {
+    // Decide by BEHAVIOUR, not by reading the source. A regex over the shipped
+    // text is fooled by a minified or transpiled copy whose parameter has been
+    // renamed: that copy is still broken, and reporting it as "already correct"
+    // would hand somebody chasing LimitsExceeded a false all-clear.
+    //
+    // The probe is the defect itself: add the same rule twice on a throwaway
+    // object whose prototype is theirs. Correct refcounting leaves the count at
+    // 2; the reversed hasOwnProperty leaves it at 1, having sent AddMatch twice.
+    const refcountAfterTwoAdds = probeDoubleAdd(proto._addMatch as MatchRuleAdd);
+    if (refcountAfterTwoAdds === 2) {
       bleLog.debug('D-Bus match-rule patch skipped: this dbus-next already refcounts correctly.');
+      return;
+    }
+    if (refcountAfterTwoAdds === undefined) {
+      bleLog.warn(
+        'D-Bus match-rule patch skipped: could not determine whether dbus-next refcounts ' +
+          'match rules. If this process dies on org.freedesktop.DBus.Error.LimitsExceeded, ' +
+          'that is why (#396).',
+      );
       return;
     }
 

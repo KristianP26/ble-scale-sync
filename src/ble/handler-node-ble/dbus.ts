@@ -5,6 +5,7 @@
 // (#162) with one typed access pattern.
 
 import type NodeBle from 'node-ble';
+import { bleLog, errMsg } from '../types.js';
 
 export type Adapter = NodeBle.Adapter;
 export type Device = NodeBle.Device;
@@ -57,12 +58,14 @@ export const helperOf = <T>(obj: T): BluezHelper => (obj as WithHelper<T>).helpe
  * Only ever call this on a proxy nothing else holds. Never on the device a
  * session is using.
  */
-export function releaseDeviceProxy(device: unknown): void {
+export function releaseDeviceProxy(device: Device): void {
   try {
     helperOf(device).removeListeners();
-  } catch {
-    // Nothing prepared yet (no property was read) or the helper is already
-    // torn down. Either way there is nothing to release.
+  } catch (err) {
+    // Nothing prepared yet (no property was read) or the helper is already torn
+    // down, which are both normal. Logged rather than silently dropped so a
+    // release that fails for a real reason is not indistinguishable from those.
+    bleLog.debug(`Could not release a BlueZ device proxy: ${errMsg(err)}`);
   }
 }
 

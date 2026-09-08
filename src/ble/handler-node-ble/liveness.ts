@@ -1,4 +1,4 @@
-import { helperOf, releaseDeviceProxy, type Adapter } from './dbus.js';
+import { helperOf, releaseDeviceProxy, type Adapter, type Device } from './dbus.js';
 import { LIVENESS_PROBE_WINDOW_MS, sleep as defaultSleep } from '../types.js';
 
 /**
@@ -26,7 +26,7 @@ export function makeLivenessAdapter(btAdapter: Adapter): LivenessAdapter {
   return {
     listAddresses: () => btAdapter.devices(),
     rssiOf: async (addr) => {
-      let dev: unknown;
+      let dev: Device | undefined;
       try {
         dev = await btAdapter.getDevice(addr);
         const rssi = await helperOf(dev).prop('RSSI');
@@ -34,7 +34,7 @@ export function makeLivenessAdapter(btAdapter: Adapter): LivenessAdapter {
       } catch {
         return undefined;
       } finally {
-        if (dev !== undefined) releaseDeviceProxy(dev);
+        if (dev) releaseDeviceProxy(dev);
       }
     },
   };

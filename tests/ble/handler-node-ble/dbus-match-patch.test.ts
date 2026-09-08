@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 
 /**
  * Guards the runtime repair of dbus-next's match-rule refcounting (#396).
@@ -28,6 +29,7 @@ try {
 }
 
 const RULE = "type='signal',interface='com.example.Proof'";
+const PATCH_MARKER = Symbol.for('ble-scale-sync.dbus-match-refcount-patched');
 
 interface FakeBus {
   _matchRules: Record<string, number>;
@@ -61,16 +63,39 @@ describe.skipIf(!MessageBus)('dbus-next match-rule refcount patch (#396)', () =>
   afterAll(() => {
     MessageBus!.prototype._addMatch = original._addMatch;
     MessageBus!.prototype._removeMatch = original._removeMatch;
+    // The prototype is reached through Node's CJS require cache, which is shared
+    // by every test file in this worker. Leaving the marker behind would make
+    // the next file's view of "has this been patched" depend on running order.
+    delete MessageBus!.prototype[PATCH_MARKER];
   });
 
-  it('the shipped dbus-next really is broken (control, run before patching)', async () => {
-    const bus = fakeBus();
-    await bus._addMatch(RULE);
-    await bus._addMatch(RULE);
-    await bus._removeMatch(RULE);
-    await bus._removeMatch(RULE);
+  // Asserted against the SHIPPED SOURCE rather than the live prototype: the
+  // prototype is shared across this worker, so a control that reads it would
+  // pass or fail depending on whether some earlier file had already applied the
+  // patch for real.
+  it('the shipped dbus-next really is broken (control)', () => {
+    const src = readFileSync(nodeRequire.resolve('dbus-next/lib/bus.js'), 'utf-8');
+    const bodyOf = (name: string): string => {
+      const start = src.indexOf(`${name} (match)`);
+      return start === -1 ? '' : src.slice(start, start + 400);
+    };
+    const add = bodyOf('_addMatch');
+    const remove = bodyOf('_removeMatch');
+    // The rule string is the receiver and the bookkeeping object is the property
+    // name, which is always false.
+    expect(add).toMatch(/hasOwnProperty\.call\(\s*match\s*,\s*this\._matchRules\s*\)/);
+    expect(remove).toMatch(/hasOwnProperty\.call\(\s*match\s*,\s*this\._matchRules\s*\)/);
+  });
 
-    // Two AddMatch for one rule, and RemoveMatch never sent at all.
+  it('and the shipped implementation really does re-add and never remove', async () => {
+    const unpatchedAdd = original._addMatch as (this: unknown, m: string) => Promise<unknown>;
+    const unpatchedRemove = original._removeMatch as (this: unknown, m: string) => Promise<unknown>;
+    const bus = fakeBus();
+    await unpatchedAdd.call(bus, RULE);
+    await unpatchedAdd.call(bus, RULE);
+    await unpatchedRemove.call(bus, RULE);
+    await unpatchedRemove.call(bus, RULE);
+
     expect(bus.sent).toEqual(['AddMatch', 'AddMatch']);
     expect(bus._matchRules[RULE]).toBe(1);
   });
@@ -128,21 +153,24 @@ describe.skipIf(!MessageBus)('dbus-next match-rule refcount patch (#396)', () =>
   });
 
   it('marks the prototype, which is what makes a re-apply a no-op', () => {
-    expect(MessageBus!.prototype[Symbol.for('ble-scale-sync.dbus-match-refcount-patched')]).toBe(
-      true,
-    );
+    expect(MessageBus!.prototype[PATCH_MARKER]).toBe(true);
   });
 
   it('declines to patch a dbus-next that already refcounts correctly', async () => {
     const { applyDbusMatchRefcountPatch, _internals } =
       await import('../../../src/ble/handler-node-ble/dbus-match-patch.js');
-    // Simulate a future upstream fix: correct source, and no patch marker.
-    const upstreamFixed = function (this: unknown, match: string): Promise<unknown> {
-      void Object.prototype.hasOwnProperty.call({}, match);
+    // Simulate a future upstream fix: refcounts correctly, no patch marker.
+    // The detection is behavioural, so a fixed implementation is recognised even
+    // if its parameter is renamed by a minifier.
+    const upstreamFixed = function (
+      this: { _matchRules: Record<string, number> },
+      match: string,
+    ): Promise<unknown> {
+      this._matchRules[match] = (this._matchRules[match] ?? 0) + 1;
       return Promise.resolve();
     };
     MessageBus!.prototype._addMatch = upstreamFixed;
-    MessageBus!.prototype[Symbol.for('ble-scale-sync.dbus-match-refcount-patched')] = false;
+    MessageBus!.prototype[PATCH_MARKER] = false;
 
     _internals.resetForTest();
     applyDbusMatchRefcountPatch();
