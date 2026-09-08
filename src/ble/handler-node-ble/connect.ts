@@ -8,8 +8,13 @@ import {
   DISCOVERY_TIMEOUT_MS,
   POST_DISCOVERY_QUIESCE_MS,
 } from '../types.js';
-import type { Adapter, Device } from './dbus.js';
-import { startDiscoverySafe, removeDevice, stopDiscoveryAndQuiesce } from './discovery.js';
+import { releaseDeviceProxy, type Adapter, type Device } from './dbus.js';
+import {
+  startDiscoverySafe,
+  removeDevice,
+  stopDiscoveryAndQuiesce,
+  notifyDiscoveryStopped,
+} from './discovery.js';
 import { startPeerFreshnessTracker } from './freshness.js';
 import {
   isAuthClassConnectFailure,
@@ -58,6 +63,20 @@ export interface ConnectRecoveryContext {
  * On each failed attempt: disconnect -> RemoveDevice -> re-discover -> quiesce -> retry.
  * Returns the (possibly refreshed) Device reference.
  */
+/**
+ * Hand back a Device proxy that has just been replaced by a fresh one for the
+ * same peer.
+ *
+ * `waitDevice`/`getDevice` build a brand new proxy every time, and each one
+ * holds a listener on the bus-wide signal emitter plus a D-Bus match rule until
+ * it is released. A retry loop that swaps the reference without releasing is
+ * exactly the per-path listener growth reported in #397. Guarded on identity
+ * because the fallback path can legitimately hand back the same object.
+ */
+function releaseSuperseded(previous: Device, current: Device): void {
+  if (previous !== current) releaseDeviceProxy(previous);
+}
+
 export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<Device> {
   let { btAdapter } = ctx;
   const { mac, maxRetries, bleAdapter } = ctx;
@@ -105,11 +124,18 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
             tracker.stop();
             const result = await startDiscoverySafe(btAdapter, bleAdapter);
             if (result) btAdapter = result;
+            const supersededByRediscovery = device;
             device = await withTimeout(
               btAdapter.waitDevice(formattedMac),
               DISCOVERY_TIMEOUT_MS,
               `Device ${formattedMac} not found during RSSI re-discovery`,
             );
+            // Every swap here is a fresh proxy for the same path. Stopping the
+            // tracker unhooks OUR listener but not the one node-ble's BusHelper
+            // registered when the old proxy first read a property, so without
+            // this the retry loop is itself a source of the listener growth in
+            // #397.
+            releaseSuperseded(supersededByRediscovery, device);
             tracker = startPeerFreshnessTracker(device);
             if (keepDiscovery) {
               await sleep(POST_DISCOVERY_QUIESCE_MS);
@@ -210,6 +236,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
 
         // 4. Re-discover and acquire fresh device reference + rebind tracker
         tracker.stop();
+        const supersededByRetry = device;
         try {
           const result = await startDiscoverySafe(btAdapter, bleAdapter);
           if (result) btAdapter = result;
@@ -227,6 +254,9 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
             } catch {
               bleLog.debug('stopDiscovery failed during retry (ignored)');
             }
+            // Our filtered scan is no longer running, so the claim on it has to
+            // go with it or the next start would decline to re-apply the filter.
+            notifyDiscoveryStopped(btAdapter);
           }
           await sleep(POST_DISCOVERY_QUIESCE_MS);
         } catch (retryErr: unknown) {
@@ -240,6 +270,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
             );
           }
         }
+        releaseSuperseded(supersededByRetry, device);
         tracker = startPeerFreshnessTracker(device);
       }
     }
