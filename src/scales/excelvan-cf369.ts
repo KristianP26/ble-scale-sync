@@ -7,7 +7,13 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, xorChecksum, type ScaleBodyComp } from './body-comp-helpers.js';
+import {
+  uuid16,
+  buildPayload,
+  xorChecksum,
+  ReadingComposition,
+  type ScaleBodyComp,
+} from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
 const CHR_NOTIFY = uuid16(0xfff4);
@@ -34,6 +40,13 @@ export class ExcelvanCF369Adapter implements ScaleAdapterCore, GattWiring {
 
   /** Cached body-composition values from the most recent parsed frame. */
   private cachedComp: ScaleBodyComp = {};
+  /**
+   * Composition pinned to the reading it was measured with (#394): this adapter
+   * is a shared singleton and `computeMetrics()` runs later than the parse, so
+   * on the watcher transports the live cache can already belong to the next
+   * weigh-in. See ReadingComposition.
+   */
+  private readonly comp = new ReadingComposition<ScaleBodyComp>();
 
   /**
    * Send user-config command with real profile data:
@@ -95,14 +108,30 @@ export class ExcelvanCF369Adapter implements ScaleAdapterCore, GattWiring {
       water: data[6] !== 0xff ? water : undefined,
     };
 
-    return { weight, impedance: 0 };
+    const reading: ScaleReading = { weight, impedance: 0 };
+    this.comp.pin(reading, this.cachedComp);
+    return reading;
   }
 
   isComplete(reading: ScaleReading): boolean {
     return reading.weight > 0 && this.cachedComp.fat != null && this.cachedComp.fat > 0;
   }
 
+  /**
+   * Clear the previous weigh-in before anything is subscribed (#394). Shared
+   * singleton: without this, a session that produces a weight but no
+   * composition frame publishes the PREVIOUS person's composition.
+   */
+  onSessionStart(): void {
+    this.cachedComp = {};
+  }
+
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    return buildPayload(reading.weight, reading.impedance, this.cachedComp, profile);
+    return buildPayload(
+      reading.weight,
+      reading.impedance,
+      this.comp.of(reading, this.cachedComp),
+      profile,
+    );
   }
 }

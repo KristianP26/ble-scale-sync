@@ -7,7 +7,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { buildPayload } from './body-comp-helpers.js';
+import { buildPayload, ReadingComposition } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
 // Sanitas SBF72/73 / Beurer BF915 custom service + characteristic UUIDs (full 128-bit)
@@ -49,6 +49,13 @@ export class SanitasSbf72Adapter implements ScaleAdapterCore, GattWiring, Unlock
   readonly unlockIntervalMs = 5000;
 
   private cachedGatt: CachedGattData | null = null;
+  /**
+   * Composition pinned to the reading it was measured with (#394): this adapter
+   * is a shared singleton and `computeMetrics()` runs later than the parse, so
+   * on the watcher transports the live cache can already belong to the next
+   * weigh-in. See ReadingComposition.
+   */
+  private readonly comp = new ReadingComposition<CachedGattData | null>();
 
   matches(device: BleDeviceInfo): boolean {
     return matchesDescriptor(device, this.match);
@@ -125,15 +132,26 @@ export class SanitasSbf72Adapter implements ScaleAdapterCore, GattWiring, Unlock
     if (heightPresent && offset + 2 <= data.length) offset += 2;
 
     this.cachedGatt = { bodyFatPercent: bodyFatPct, musclePct, waterMassKg };
-    return { weight, impedance };
+    const reading: ScaleReading = { weight, impedance };
+    this.comp.pin(reading, this.cachedGatt);
+    return reading;
   }
 
   isComplete(reading: ScaleReading): boolean {
     return reading.weight > 0;
   }
 
+  /**
+   * Clear the previous weigh-in before anything is subscribed (#394). Shared
+   * singleton: without this, a session that produces a weight but no body
+   * composition frame publishes the PREVIOUS person's composition.
+   */
+  onSessionStart(): void {
+    this.cachedGatt = null;
+  }
+
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    const gatt = this.cachedGatt;
+    const gatt = this.comp.of(reading, this.cachedGatt);
     const waterPercent =
       gatt?.waterMassKg && reading.weight > 0
         ? (gatt.waterMassKg / reading.weight) * 100

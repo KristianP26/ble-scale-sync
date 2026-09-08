@@ -8,7 +8,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { buildPayload, estimateBodyFat, uuid16 } from './body-comp-helpers.js';
+import { buildPayload, estimateBodyFat, uuid16, ReadingComposition } from './body-comp-helpers.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
 // Yunmai GATT service / characteristic UUIDs
@@ -52,6 +52,13 @@ export class YunmaiScaleAdapter
 
   /** Cached fat percentage from protocol >= 0x1E embedded in the frame. */
   private embeddedFatPercent: number | null = null;
+  /**
+   * The embedded fat percentage as it stood when each reading was emitted
+   * (#394): this adapter is a shared singleton and `computeMetrics()` runs
+   * later than the parse, so on the watcher transports the live field can
+   * already belong to the next weigh-in. See ReadingComposition.
+   */
+  private readonly comp = new ReadingComposition<number | null>();
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
@@ -99,7 +106,9 @@ export class YunmaiScaleAdapter
       }
     }
 
-    return { weight, impedance };
+    const reading: ScaleReading = { weight, impedance };
+    this.comp.pin(reading, this.embeddedFatPercent);
+    return reading;
   }
 
   isComplete(reading: ScaleReading): boolean {
@@ -127,6 +136,15 @@ export class YunmaiScaleAdapter
     return reading.impedance > 0;
   }
 
+  /**
+   * Clear the previous weigh-in before anything is subscribed (#394). Shared
+   * singleton: `isMini` is deliberately NOT reset here, it is a device property
+   * latched from the advertised name in matches(), not per-session state.
+   */
+  onSessionStart(): void {
+    this.embeddedFatPercent = null;
+  }
+
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
     const { weight, impedance } = reading;
     const sex = profile.gender === 'male' ? 1 : 0;
@@ -135,9 +153,11 @@ export class YunmaiScaleAdapter
     const heightM = profile.height / 100;
     const bmi = weight / (heightM * heightM);
 
+    const embeddedFat = this.comp.of(reading, this.embeddedFatPercent);
+
     let fat: number;
-    if (this.embeddedFatPercent != null && this.embeddedFatPercent > 0) {
-      fat = this.embeddedFatPercent;
+    if (embeddedFat != null && embeddedFat > 0) {
+      fat = embeddedFat;
     } else if (impedance > 0) {
       fat = ym.fat(profile.age, weight, impedance);
     } else {
