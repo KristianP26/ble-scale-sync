@@ -20,6 +20,7 @@ import {
   GATT_DISCOVERY_TIMEOUT_MS,
 } from '../types.js';
 import { helperOf, getDbusNext, type Adapter, type Device } from './dbus.js';
+import { applyDbusMatchRefcountPatch } from './dbus-match-patch.js';
 import { getBus, attachBusErrorHandler, isDbusConnectionError, dbusError } from './connection.js';
 import { registerPairingAgent, setPairingTarget } from './agent.js';
 import {
@@ -428,6 +429,9 @@ export async function scanDevices(
   let bluetooth: NodeBle.Bluetooth;
   let destroy: () => void;
   try {
+    // This path builds its own bus instead of going through getConnection(),
+    // so it needs the match-rule patch applied here as well (#396).
+    applyDbusMatchRefcountPatch();
     ({ bluetooth, destroy } = NodeBle.createBluetooth());
   } catch (err) {
     if (isDbusConnectionError(err)) throw dbusError();

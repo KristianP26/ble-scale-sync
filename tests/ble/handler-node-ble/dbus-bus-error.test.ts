@@ -123,4 +123,34 @@ describe('isStaleConnectionError', () => {
   it('keeps Device not found off the stale path so the bond guard is unaffected', () => {
     expect(isStaleConnectionError(new Error('Device not found'))).toBe(false);
   });
+
+  // The match-rule ceiling is per connection and only a new connection clears
+  // it, so it has to route into reset-and-retry rather than kill the process
+  // (#396). The catch is that dbus-next keeps the error NAME in `.type` and puts
+  // only the human sentence in `.message`, so matching the message text alone
+  // for "LimitsExceeded" would never fire.
+  it('treats the D-Bus match-rule ceiling as stale, from the error type', () => {
+    const err = Object.assign(
+      new Error(
+        'Connection ":1.1164" is not allowed to add more match rules ' +
+          '(increase limits in configuration file if required; max_match_rules_per_connection=2048)',
+      ),
+      { type: 'org.freedesktop.DBus.Error.LimitsExceeded' },
+    );
+    expect(err.message).not.toContain('LimitsExceeded');
+    expect(isStaleConnectionError(err)).toBe(true);
+  });
+
+  it('treats the match-rule ceiling as stale from the message alone too', () => {
+    expect(
+      isStaleConnectionError(new Error('Connection is not allowed to add more match rules')),
+    ).toBe(true);
+  });
+
+  it('does not treat an unrelated error carrying a type field as stale', () => {
+    const err = Object.assign(new Error('Operation is not supported'), {
+      type: 'org.bluez.Error.NotSupported',
+    });
+    expect(isStaleConnectionError(err)).toBe(false);
+  });
 });
