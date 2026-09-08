@@ -50,6 +50,8 @@ If no match is found, the `unknown_user` strategy decides what happens:
 | `log`               | Logs a warning and skips                          |
 | `ignore`            | Silently skips                                    |
 
+Note what tiers 1 and 4 mean in practice: a reading outside every configured range is not rejected, it is assigned anyway. `unknown_user` is never consulted, because tier 4 already produced a match. If you want such a reading dropped instead, set `out_of_range: skip`; see [Out-of-range readings](/guide/configuration#out-of-range-readings).
+
 ## Drift Detection
 
 After matching, the app checks if the weight falls in the **outer 10%** of the user's range. If it does, a warning is logged so you can adjust the range before mismatches start happening.
@@ -105,6 +107,7 @@ Hot-swappable on edit:
 - User profiles (`name`, `slug`, `height`, `birth_date`, `gender`, `is_athlete`, `weight_range`, `last_known_weight`)
 - `scale.weight_unit`, `scale.height_unit`
 - `unknown_user` strategy
+- `out_of_range` strategy
 - `runtime.dry_run`, `runtime.debug`, `runtime.scan_cooldown`
 - `ble.scale_mac`
 - `update_check`

@@ -423,6 +423,22 @@ scale:
 | `weight_unit` | No       | `kg`    | `kg` or `lbs`. Display only; calculations always use kg. |
 | `height_unit` | No       | `cm`    | `cm` or `in`. Used for height input in user profiles.    |
 
+### Out-of-range readings
+
+```yaml
+out_of_range: warn # warn | skip
+```
+
+| Field          | Required | Default | Description                                                                           |
+| -------------- | -------- | ------- | ------------------------------------------------------------------------------------- |
+| `out_of_range` | No       | `warn`  | What to do with a reading no user's `weight_range` covers. `skip` stops before export |
+
+`weight_range` is a matching input, not a guard. A reading outside every configured range still resolves to somebody -- with one user because that user always matches, with several because the app falls back to whoever's `last_known_weight` is closest -- and is then exported like any other reading.
+
+That matters when the scale reports something implausible. Standing on it holding a heavy bag can produce a reading tens of kilos out, and because it is exported, `last_known_weight` is rewritten from it. The next genuine weigh-in is then matched against a wrong remembered weight, so in a two-person household it can be attributed to the other person and lost.
+
+Setting `skip` stops such a reading before the exporters and before the `last_known_weight` write. It is logged either way. The default stays `warn` so no existing setup silently starts discarding measurements, but `skip` is the better setting for a multi-user household. This is hot-reloadable, like `unknown_user`.
+
 ### Users
 
 At least one user is required. For multi-user setups, see [Multi-User Support](/multi-user).

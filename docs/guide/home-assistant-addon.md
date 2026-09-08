@@ -81,14 +81,15 @@ The CLI and exporters display weights and heights in your chosen unit; all inter
 
 ### User profile
 
-| Option                                | Default      | Notes                                                          |
-| ------------------------------------- | ------------ | -------------------------------------------------------------- |
-| `user_name`                           | `Default`    | Display name used in logs and HA entity names.                 |
-| `user_height`                         | `170`        | In the unit chosen above.                                      |
-| `user_birth_date`                     | `1990-01-01` | `YYYY-MM-DD`. Used for age-based BMR and physique rating.      |
-| `user_gender`                         | `male`       | `male` or `female`.                                            |
-| `user_is_athlete`                     | `false`      | Shifts body fat formulas for athletic body types.              |
-| `user_weight_min` / `user_weight_max` | `40` / `150` | Used by the multi-user matcher to filter implausible readings. |
+| Option                                | Default      | Notes                                                                                                                                                                                      |
+| ------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `user_name`                           | `Default`    | Display name used in logs and HA entity names.                                                                                                                                             |
+| `user_height`                         | `170`        | In the unit chosen above.                                                                                                                                                                  |
+| `user_birth_date`                     | `1990-01-01` | `YYYY-MM-DD`. Used for age-based BMR and physique rating.                                                                                                                                  |
+| `user_gender`                         | `male`       | `male` or `female`.                                                                                                                                                                        |
+| `user_is_athlete`                     | `false`      | Shifts body fat formulas for athletic body types.                                                                                                                                          |
+| `user_weight_min` / `user_weight_max` | `40` / `150` | The plausible weight range for this person, in kg. On its own it only warns; set `out_of_range` below to `skip` to have readings outside it discarded.                                     |
+| `out_of_range`                        | `warn`       | What to do with a reading outside that range. `warn` logs it and exports anyway (the behaviour before 1.29). `skip` logs it and stops: no export, and the remembered weight is left alone. |
 
 ### MQTT
 
