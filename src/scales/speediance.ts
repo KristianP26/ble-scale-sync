@@ -144,7 +144,14 @@ export class SpeedianceAdapter implements ScaleAdapterCore, GattWiring, MultiCha
       const w = data.readUIntBE(WEIGHT_OFFSET, WEIGHT_BYTES) / WEIGHT_DIV;
       if (w > 0 && Number.isFinite(w)) {
         this.cachedWeight = w;
-        const imp = data.readUInt16LE(IMPEDANCE_OFFSET);
+        // The impedance field ends 5 bytes past the length the guard above
+        // enforces, so a short a7 frame would make readUInt16LE throw
+        // ERR_OUT_OF_RANGE out of a notification callback that has no
+        // try/catch above it (handleNotification) - a dead process, not a
+        // dropped frame. The weight is still good at this length, so take it
+        // and treat the missing impedance the same way an implausible one is
+        // treated below.
+        const imp = data.length >= IMPEDANCE_OFFSET + 2 ? data.readUInt16LE(IMPEDANCE_OFFSET) : 0;
         if (imp >= IMPEDANCE_MIN_OHM && imp <= IMPEDANCE_MAX_OHM) {
           this.cachedImpedance = imp;
         } else {
