@@ -22,23 +22,35 @@ import {
 } from './connection.js';
 
 /**
- * Generation of the D-Bus connection whose CURRENTLY RUNNING scan we started
- * ourselves with the duplicate filter in place, or null when no such scan is
- * running. Not a plain boolean: a connection reset replaces the BlueZ client, so
- * whatever the old one had asked for no longer applies (#372, #397).
+ * Which adapters have a scan running that WE started with the duplicate filter
+ * in place, and on which D-Bus connection.
+ *
+ * Keyed by the adapter rather than held as one module-level flag, because more
+ * than one adapter object can be live at a time: `scanDevices()` builds a
+ * throwaway bus with its own adapter alongside the persistent one, and a single
+ * flag would let one stamp the other's state. The stored value is the
+ * connection generation, because a reset replaces the BlueZ client and whatever
+ * the old one asked for no longer applies (#372, #397).
  */
-let filteredScanGeneration: number | null = null;
+const filteredScans = new WeakMap<Adapter, number>();
 
-/** True when the running scan is ours and already carries the duplicate filter. */
-function runningScanIsFiltered(): boolean {
-  return (
-    filteredScanGeneration !== null && filteredScanGeneration === currentConnectionGeneration()
-  );
+/** True when this adapter's running scan is ours and already carries the filter. */
+function runningScanIsFiltered(btAdapter: Adapter): boolean {
+  const generation = filteredScans.get(btAdapter);
+  return generation !== undefined && generation === currentConnectionGeneration();
 }
 
-/** Exposed for tests; production code only ever reaches this through the module state. */
-export function _resetDiscoveryFilterLatch(): void {
-  filteredScanGeneration = null;
+/**
+ * Forget the filtered-scan claim for an adapter whose discovery has been
+ * stopped somewhere other than `stopDiscoveryAndQuiesce`.
+ *
+ * The invariant this protects is "a claim exists only while our filtered scan
+ * is actually running". A stale claim is the one state that would silently keep
+ * a deduplicating scan alive, because the restart branch would decline to cycle
+ * it (#372, #397).
+ */
+export function notifyDiscoveryStopped(btAdapter: Adapter): void {
+  filteredScans.delete(btAdapter);
 }
 
 /** Stop discovery and wait for the post-discovery quiesce period. */
@@ -50,7 +62,7 @@ export async function stopDiscoveryAndQuiesce(btAdapter: Adapter): Promise<void>
   } catch {
     bleLog.debug('stopDiscovery failed (may already be stopped)');
   }
-  filteredScanGeneration = null;
+  notifyDiscoveryStopped(btAdapter);
   await sleep(POST_DISCOVERY_QUIESCE_MS);
 }
 
@@ -105,9 +117,7 @@ async function requestDuplicateAdvertisements(btAdapter: Adapter): Promise<boole
  * scan keeps deduplicating, the 500 ms broadcast poll keeps re-reading one
  * cached advertisement, and the symptom #372 was meant to fix survives the fix.
  *
- * So the two calls are made here in the order that actually works. The
- * `isDiscovering` guard is kept byte-for-byte from node-ble because callers key
- * on the exact `Discovery already in progress` message.
+ * So the two calls are made here in the order that actually works.
  *
  * Returns whether the filter itself was accepted, which is what decides if the
  * running scan may be treated as already filtered.
@@ -119,13 +129,19 @@ async function applyFilterAndStart(btAdapter: Adapter): Promise<boolean> {
 }
 
 /**
- * `applyFilterAndStart` behind node-ble's own already-running guard, which is
- * kept byte-for-byte because callers key on the exact
- * `Discovery already in progress` message to reach the restart branch.
+ * `applyFilterAndStart` behind node-ble's own already-running guard, kept so a
+ * scan that is already up is detected locally rather than by asking BlueZ and
+ * reading its refusal.
  *
  * The recovery paths below deliberately use the UNGUARDED form: each has just
- * stopped discovery (or reset the adapter), and re-reading `Discovering` there
+ * stopped discovery or reset the adapter, and re-reading `Discovering` there
  * would only reintroduce a race on a property BlueZ updates asynchronously.
+ * The behaviour that changes with it is narrow and deliberate: BlueZ refuses a
+ * second StartDiscovery per sender, not per adapter, so where a DIFFERENT
+ * client holds a session the recovery step now succeeds instead of escalating
+ * to the power cycle. That is the correct outcome (a scan really is running and
+ * it is now ours as well); the zombie case those steps exist for is caught
+ * earlier, by the isDiscovering branch above.
  */
 async function startFilteredDiscovery(btAdapter: Adapter): Promise<boolean> {
   if (await btAdapter.isDiscovering()) {
@@ -150,7 +166,7 @@ export async function startDiscoverySafe(
   try {
     const filtered = await startFilteredDiscovery(btAdapter);
     bleLog.debug('Discovery started');
-    if (filtered) filteredScanGeneration = generation;
+    if (filtered) filteredScans.set(btAdapter, generation);
     return btAdapter;
   } catch (e) {
     bleLog.debug(`startDiscovery failed: ${errMsg(e)}`);
@@ -174,7 +190,7 @@ export async function startDiscoverySafe(
     // while we were between cycles, and the quiesce that follows is a window
     // with the radio not scanning at all. A reporter with a scale that
     // advertises in short bursts saw exactly that, nine cycles in a row (#397).
-    if (runningScanIsFiltered()) {
+    if (runningScanIsFiltered(btAdapter)) {
       bleLog.debug('Discovery already active and already filtered; continuing with it');
       return btAdapter;
     }
@@ -184,7 +200,7 @@ export async function startDiscoverySafe(
       await sleep(POST_DISCOVERY_QUIESCE_MS);
       const refiltered = await applyFilterAndStart(btAdapter);
       bleLog.debug('Discovery restarted with the duplicate filter');
-      if (refiltered) filteredScanGeneration = generation;
+      if (refiltered) filteredScans.set(btAdapter, generation);
       return btAdapter;
     } catch (e) {
       // Could not cycle it. A deduplicating scan still finds devices and still
@@ -205,7 +221,7 @@ export async function startDiscoverySafe(
   await sleep(1000);
 
   try {
-    if (await applyFilterAndStart(btAdapter)) filteredScanGeneration = generation;
+    if (await applyFilterAndStart(btAdapter)) filteredScans.set(btAdapter, generation);
     bleLog.debug('Discovery started after D-Bus reset');
     return btAdapter;
   } catch (e) {
@@ -224,7 +240,7 @@ export async function startDiscoverySafe(
     bleLog.debug('Adapter powered on');
     await sleep(1000);
 
-    if (await applyFilterAndStart(btAdapter)) filteredScanGeneration = generation;
+    if (await applyFilterAndStart(btAdapter)) filteredScans.set(btAdapter, generation);
     bleLog.debug('Discovery started after power cycle');
     return btAdapter;
   } catch (e) {
@@ -239,7 +255,7 @@ export async function startDiscoverySafe(
       const freshAdapter = await getAdapter(bleAdapter);
       // A reset replaced the connection, so read the generation again.
       if (await applyFilterAndStart(freshAdapter)) {
-        filteredScanGeneration = currentConnectionGeneration();
+        filteredScans.set(freshAdapter, currentConnectionGeneration());
       }
       bleLog.debug('Discovery started after btmgmt reset');
       return freshAdapter;
@@ -256,7 +272,7 @@ export async function startDiscoverySafe(
       const freshAdapter = await getAdapter(bleAdapter);
       // A reset replaced the connection, so read the generation again.
       if (await applyFilterAndStart(freshAdapter)) {
-        filteredScanGeneration = currentConnectionGeneration();
+        filteredScans.set(freshAdapter, currentConnectionGeneration());
       }
       bleLog.debug('Discovery started after rfkill reset');
       return freshAdapter;
@@ -273,7 +289,7 @@ export async function startDiscoverySafe(
       const freshAdapter = await getAdapter(bleAdapter);
       // A reset replaced the connection, so read the generation again.
       if (await applyFilterAndStart(freshAdapter)) {
-        filteredScanGeneration = currentConnectionGeneration();
+        filteredScans.set(freshAdapter, currentConnectionGeneration());
       }
       bleLog.debug('Discovery started after bluetoothd restart');
       return freshAdapter;

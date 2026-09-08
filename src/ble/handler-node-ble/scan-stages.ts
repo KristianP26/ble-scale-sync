@@ -40,7 +40,7 @@ import {
   dbusError,
   parseHciIndex,
 } from './connection.js';
-import { removeDevice } from './discovery.js';
+import { removeDevice, notifyDiscoveryStopped } from './discovery.js';
 import { logAdvertisementSnapshot, type AdvertisementSnapshot } from './device-object.js';
 import { buildCharMap } from './gatt.js';
 import { waitForRawReading, type BleDevice, type RawReading } from '../shared.js';
@@ -91,11 +91,15 @@ const SCAN_VISIBILITY_LOG_MS = 30_000;
  * "the scale never advertised" apart from "the scan is dead" or "we are waiting
  * on the wrong address", and a reporter's log showing nothing but repeated
  * `Scanning for device...` was unanswerable for exactly that reason (#397).
- * Debug only, and the enumeration itself is skipped unless debug is on.
+ * Debug only. The check is per tick rather than once at the start, so toggling
+ * `runtime.debug` through a live config reload takes effect on the wait already
+ * in flight, and so the enumeration itself never runs for anyone who has debug
+ * off. The timer is unref'd: a shutdown arriving mid-wait should not be held up
+ * by a diagnostic.
  */
 function startScanVisibilityLog(btAdapter: Adapter, mac: string): () => void {
-  if (!isDebugEnabled()) return () => {};
   const timer = setInterval(() => {
+    if (!isDebugEnabled()) return;
     void (async () => {
       try {
         const addrs: string[] = await btAdapter.devices();
@@ -109,6 +113,7 @@ function startScanVisibilityLog(btAdapter: Adapter, mac: string): () => void {
       }
     })();
   }, SCAN_VISIBILITY_LOG_MS);
+  timer.unref?.();
   return () => clearInterval(timer);
 }
 
@@ -371,6 +376,9 @@ export async function teardownSession(opts: {
       } catch (e) {
         bleLog.debug(`Force StopDiscovery failed: ${errMsg(e)}`);
       }
+      // The resetConnection() below would invalidate the claim anyway, but the
+      // invariant should hold by construction, not by what happens to follow.
+      if (btAdapter) notifyDiscoveryStopped(btAdapter);
       if (deviceMac) {
         await removeDevice(btAdapter!, deviceMac);
       }

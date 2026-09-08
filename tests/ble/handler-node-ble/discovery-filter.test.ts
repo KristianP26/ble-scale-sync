@@ -50,7 +50,7 @@ vi.mock('../../../src/ble/handler-node-ble/device-object.js', () => ({
   logAdvertisementSnapshot: vi.fn(),
 }));
 
-const { startDiscoverySafe, _resetDiscoveryFilterLatch } =
+const { startDiscoverySafe, notifyDiscoveryStopped } =
   await import('../../../src/ble/handler-node-ble/discovery.js');
 
 /**
@@ -75,8 +75,6 @@ describe('startDiscoverySafe discovery filter (#372, #397)', () => {
     // mockClear alone would leave a previous test's implementation in place.
     callMethod.mockReset();
     callMethod.mockImplementation(recordCall);
-    // Module state: which running scan already carries the filter.
-    _resetDiscoveryFilterLatch();
   });
 
   it('sets the duplicate filter before starting discovery, not after', async () => {
@@ -174,5 +172,45 @@ describe('node-ble startDiscovery clobbers the filter (#397)', () => {
     expect(body).toContain('StartDiscovery');
     expect(body).not.toContain('DuplicateData');
     expect(body.indexOf('SetDiscoveryFilter')).toBeLessThan(body.indexOf("'StartDiscovery'"));
+  });
+});
+
+/**
+ * The claim "our filtered scan is running" must be dropped by anything that
+ * stops discovery, or the next start declines to re-apply the filter and the
+ * scan silently goes back to deduplicating.
+ */
+describe('filtered-scan claim lifecycle (#397)', () => {
+  it('cycles again after the scan was stopped elsewhere', async () => {
+    let discovering = false;
+    callMethod.mockImplementation(async (name: string) => {
+      calls.push(`filter:${name}`);
+      if (name === 'StartDiscovery') discovering = true;
+      if (name === 'StopDiscovery') discovering = false;
+    });
+    const adapter = makeAdapter({ isDiscovering: vi.fn(async () => discovering) });
+
+    await startDiscoverySafe(adapter);
+    // Somebody else stopped it, and told us. Discovery is off, so the next
+    // start takes the normal path and re-applies the filter.
+    discovering = false;
+    notifyDiscoveryStopped(adapter);
+    calls.length = 0;
+    await startDiscoverySafe(adapter);
+
+    expect(calls).toEqual(['filter:SetDiscoveryFilter', 'filter:StartDiscovery']);
+  });
+
+  it('keeps two adapters apart', async () => {
+    const a = makeAdapter();
+    const b = makeAdapter({ isDiscovering: vi.fn(async () => true) });
+
+    await startDiscoverySafe(a);
+    calls.length = 0;
+    // b has a scan running that WE never filtered, so it must still be cycled
+    // even though a is claimed.
+    await startDiscoverySafe(b);
+
+    expect(calls).toContain('filter:StopDiscovery');
   });
 });
