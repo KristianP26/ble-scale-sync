@@ -155,6 +155,8 @@ BlueZ and noble, plus the ESP32 and ESPHome proxies).
 <td align="center"><a href="https://github.com/Bretos"><img src="https://avatars.githubusercontent.com/u/4947212?v=4" width="60" height="60" alt="Bretos"><br><sub>Bretos</sub></a></td>
 <td align="center"><a href="https://github.com/albert-canfield"><img src="https://avatars.githubusercontent.com/u/153834574?v=4" width="60" height="60" alt="albert-canfield"><br><sub>albert-canfield</sub></a></td>
 <td align="center"><a href="https://github.com/JamieSBenson"><img src="https://avatars.githubusercontent.com/u/21150960?v=4" width="60" height="60" alt="JamieSBenson"><br><sub>JamieSBenson</sub></a></td>
+<td align="center"><a href="https://github.com/gvarph"><img src="https://avatars.githubusercontent.com/u/17300137?v=4" width="60" height="60" alt="gvarph"><br><sub>gvarph</sub></a></td>
+<td align="center"><a href="https://github.com/chrisauer"><img src="https://avatars.githubusercontent.com/u/884764?v=4" width="60" height="60" alt="chrisauer"><br><sub>chrisauer</sub></a></td>
 </tr></table>
 
 ## Contributing
