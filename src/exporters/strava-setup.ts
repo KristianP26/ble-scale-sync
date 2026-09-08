@@ -95,7 +95,13 @@ async function main(): Promise<void> {
     });
 
     if (!response.ok) {
-      const body = await response.text();
+      // Bound the upstream body. This is the one path that has just transmitted
+      // client_secret, and the log is routinely pasted into public issues.
+      // Strava does not echo the secret back today, so this is hardening rather
+      // than a fix - but an unbounded verbatim dump of a response body is not
+      // something to rely on a third party's discretion for. Same cap and same
+      // reasoning as notification-message.ts.
+      const body = [...(await response.text())].slice(0, 200).join('');
       log.error(`Token exchange failed: HTTP ${response.status}`);
       log.error(body);
       process.exit(1);
