@@ -48,7 +48,7 @@ vi.mock('../../../src/ble/handler-esphome-proxy/client.js', () => ({
 vi.mock('../../../src/ble/handler-esphome-proxy/gatt.js', () => ({
   openGattSession: vi.fn(async () => ({
     charMap: new Map(),
-    device: { onDisconnect() {} },
+    device: { onDisconnect() {}, fireDisconnect() {} },
     close: async () => {},
   })),
 }));

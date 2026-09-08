@@ -16,10 +16,26 @@ const NOTIFY_EVENT = 'message.BluetoothGATTNotifyDataResponse';
 const CONNECTION_EVENT = 'message.BluetoothDeviceConnectionResponse';
 const GATT_ERROR_EVENT = 'message.BluetoothGATTErrorResponse';
 
+export interface EsphomeBleDevice extends BleDevice {
+  /**
+   * Abandon this session locally, as if the proxy had reported a disconnect.
+   *
+   * waitForRawReading() only settles on a reading, a subscribe failure, or this
+   * disconnect callback, and the callback is driven purely by the proxy's
+   * connection frames. When the ESP32 drops off Wi-Fi mid-session no such frame
+   * ever arrives, so a caller that gives up on a timeout leaves the abandoned
+   * wait holding its notify unsubscribers and its unlock interval forever, and
+   * never runs the adapter's onSessionEnd. Firing the disconnect path before
+   * close() lets it tear itself down. Harmless after a completed reading: the
+   * callback returns immediately once resolved.
+   */
+  fireDisconnect(): void;
+}
+
 export interface GattSession {
   /** Normalized-UUID -> BleChar, the shape waitForRawReading() consumes. */
   charMap: Map<string, BleChar>;
-  device: BleDevice;
+  device: EsphomeBleDevice;
   close(): Promise<void>;
 }
 
@@ -248,17 +264,23 @@ export async function openGattSession(
     }
   }
 
-  const device: BleDevice = {
+  let disconnectCb: (() => void) | undefined;
+  let disconnectFired = false;
+  const fireDisconnect = (): void => {
+    if (disconnectFired) return;
+    disconnectFired = true;
+    disconnectCb?.();
+  };
+
+  const device: EsphomeBleDevice = {
     onDisconnect(cb: () => void): void {
-      let fired = false;
+      disconnectCb = cb;
       track(CONNECTION_EVENT, (raw: unknown) => {
         const m = raw as EsphomeDeviceConnection;
-        if (!fired && m.address === addr && m.connected === false) {
-          fired = true;
-          cb();
-        }
+        if (m.address === addr && m.connected === false) fireDisconnect();
       });
     },
+    fireDisconnect,
   };
 
   const close = async (): Promise<void> => {

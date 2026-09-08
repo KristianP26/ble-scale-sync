@@ -12,6 +12,10 @@ const WRITE = normalizeUuid('2a9c');
 
 const closeSpy = vi.fn(async () => {});
 const connectGattSpy = vi.fn();
+const fireDisconnectSpy = vi.fn();
+// When set, connectGatt hands back a session that never notifies and whose
+// device never reports a disconnect - an ESP32 that dropped off Wi-Fi mid-read.
+let hangSession = false;
 
 vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
   class FakeEsphomeProxyPool {
@@ -30,6 +34,25 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
     }
     async connectGatt(mac: string) {
       connectGattSpy(mac);
+      if (hangSession) {
+        const silent: BleChar = {
+          async read() {
+            return Buffer.alloc(0);
+          },
+          async write() {},
+          async subscribe() {
+            return () => {};
+          },
+        };
+        return {
+          charMap: new Map<string, BleChar>([
+            [NOTIFY, silent],
+            [WRITE, silent],
+          ]),
+          device: { onDisconnect: (_cb: () => void) => {}, fireDisconnect: fireDisconnectSpy },
+          close: closeSpy,
+        };
+      }
       let notifyCb: ((d: Buffer) => void) | null = null;
       const notifyChar: BleChar = {
         async read() {
@@ -56,7 +79,7 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
           [NOTIFY, notifyChar],
           [WRITE, noop],
         ]),
-        device: { onDisconnect: (_cb: () => void) => {} },
+        device: { onDisconnect: (_cb: () => void) => {}, fireDisconnect: () => {} },
         close: closeSpy,
       };
     }
@@ -108,5 +131,50 @@ describe('ReadingWatcher GATT continuous (#116)', () => {
     expect(closeSpy).toHaveBeenCalled();
 
     await watcher.stop();
+  });
+
+  it('bounds a hung GATT read instead of disabling that scale for the process', async () => {
+    // waitForRawReading only settles on a reading, a subscribe failure, or the
+    // proxy's disconnect frame. An ESP32 that vanishes sends no such frame, so
+    // an unbounded read never returns: the finally never runs, gattInFlight is
+    // never cleared (that scale is never read again) and the session is never
+    // closed (the advertisement watchdog stays disarmed for that endpoint).
+    closeSpy.mockClear();
+    connectGattSpy.mockClear();
+    fireDisconnectSpy.mockClear();
+    vi.useFakeTimers();
+    try {
+      hangSession = true;
+      const watcher = new ReadingWatcher(config, [gattAdapter()]);
+      await watcher.start();
+      const pool = (
+        watcher as unknown as {
+          pool: { emitAdvert: (info: BleDeviceInfo, mac: string) => void };
+        }
+      ).pool;
+      const info: BleDeviceInfo = { localName: 'GATT-scale', serviceUuids: [] };
+      pool.emitAdvert(info, 'AA:BB:CC:DD:EE:03');
+
+      // Past the absolute session cap. Without the bound nothing below happens.
+      await vi.advanceTimersByTimeAsync(95_000);
+
+      // Fired BEFORE close(), which splices out the listener the abandoned
+      // wait's own teardown path depends on.
+      expect(fireDisconnectSpy).toHaveBeenCalled();
+      expect(closeSpy).toHaveBeenCalled();
+
+      // The in-flight guard was released, so the scale is readable again.
+      hangSession = false;
+      pool.emitAdvert(info, 'AA:BB:CC:DD:EE:03');
+      await vi.advanceTimersByTimeAsync(0);
+      const reading = await watcher.nextReading();
+      expect(reading.reading.weight).toBe(82);
+      expect(connectGattSpy).toHaveBeenCalledTimes(2);
+
+      await watcher.stop();
+    } finally {
+      hangSession = false;
+      vi.useRealTimers();
+    }
   });
 });

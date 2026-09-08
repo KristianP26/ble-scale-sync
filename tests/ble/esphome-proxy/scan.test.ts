@@ -63,7 +63,7 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
       ]);
       return {
         charMap,
-        device: { onDisconnect: (_cb: () => void) => {} },
+        device: { onDisconnect: (_cb: () => void) => {}, fireDisconnect: () => {} },
         close: closeSpy,
       };
     }
