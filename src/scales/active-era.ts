@@ -9,6 +9,7 @@ import type {
 } from '../interfaces/scale-adapter.js';
 import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
+import { bleLog } from '../ble/types.js';
 
 /**
  * Adapter for Active Era BS-06 body-fat scales.
@@ -56,12 +57,33 @@ export class ActiveEraAdapter implements ScaleAdapterCore, GattWiring, Unlockabl
       this.cachedWeight = (raw24 & 0x3ffff) / 1000;
     } else if (frameType === 0xd6) {
       // Impedance frame: BE uint16 at [4-5]
-      let imp = (data[4] << 8) | data[5];
+      const raw = (data[4] << 8) | data[5];
+      let imp = raw;
 
       // Impedance correction for high values
       if (imp >= 1500) {
         imp = (imp - 1000 + this.cachedWeight * 10 * -0.4) / 0.6 / 10;
       }
+
+      // The RAW value is the one number that settles whether this correction is
+      // right, and until now nothing ever showed it: `imp` was reassigned in
+      // place, so the only value that reached a log was the corrected one. That
+      // made the question in #386 unanswerable by the one person who could
+      // answer it, an owner running with debug on.
+      //
+      // Why it matters: run the plausible 150-1200 ohm band backwards through
+      // `(raw - 1000 - 4w) / 6 / 10` at 80 kg and it maps to raw 2220-8520,
+      // most of the usable u16 range, so the band cannot discriminate. Drop the
+      // `/10` and the threshold and the divisor line up exactly, 1500 landing on
+      // 300 ohm. That is internal consistency, not a decode, so BIA stays off
+      // here until a real reading says which reading of the formula is right.
+      bleLog.debug(
+        `Active Era 0xD6: raw=${raw}` +
+          (raw >= 1500
+            ? ` -> corrected ${imp.toFixed(1)} ohm`
+            : ' (below the 1500 correction gate)') +
+          `, cached weight ${this.cachedWeight} kg (#386)`,
+      );
 
       this.cachedImpedance = imp;
     }

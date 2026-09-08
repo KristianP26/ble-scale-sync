@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { ActiveEraAdapter } from '../../src/scales/active-era.js';
 import {
   mockPeripheral,
@@ -142,5 +142,54 @@ describe('ActiveEraAdapter session boundary (#394)', () => {
     // impedance the correction had computed FROM that stale weight. With the
     // cache cleared there is simply no weight yet, so there is no reading.
     expect(a.parseNotification(impedanceFrame(1600))).toBeNull();
+  });
+});
+
+/**
+ * The raw `[4..5]` value is the single number that decides whether this
+ * adapter's correction should carry its `/10` (#386). Until it was logged it was
+ * unobtainable: `imp` was reassigned in place, so a reporter running with debug
+ * on could only ever see the corrected figure, and the question could not be
+ * answered by the only person able to answer it.
+ */
+describe('ActiveEraAdapter: raw impedance is observable (#386)', () => {
+  let debugSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    const { bleLog } = await import('../../src/ble/types.js');
+    debugSpy = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const logged = (): string => debugSpy.mock.calls.map((c) => String(c[0])).join(' | ');
+
+  it('logs the raw value alongside the corrected one when the gate fires', () => {
+    const adapter = new ActiveEraAdapter();
+    adapter.parseNotification(weightFrame());
+    adapter.parseNotification(impedanceFrame(1600));
+
+    // Both numbers, so the reporter's paste answers the question by itself.
+    expect(logged()).toContain('raw=1600');
+    expect(logged()).toMatch(/corrected\s+46\.7 ohm/);
+  });
+
+  it('logs the raw value below the gate too, and says the gate did not fire', () => {
+    const adapter = new ActiveEraAdapter();
+    adapter.parseNotification(weightFrame());
+    adapter.parseNotification(impedanceFrame(500));
+
+    expect(logged()).toContain('raw=500');
+    expect(logged()).toContain('below the 1500 correction gate');
+  });
+
+  it('reports the cached weight, which the correction multiplies in', () => {
+    const adapter = new ActiveEraAdapter();
+    adapter.parseNotification(weightFrame(80000));
+    adapter.parseNotification(impedanceFrame(1600));
+
+    expect(logged()).toContain('cached weight 80 kg');
   });
 });
