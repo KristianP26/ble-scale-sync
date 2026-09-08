@@ -169,4 +169,10 @@ GPL-3.0. See [LICENSE](LICENSE) for details.
 
 ## Star History
 
-[![Star History Chart](https://star-history.dera.page/svg?repos=KristianP26/ble-scale-sync&legend=bottom-right)](https://star-history.dera.page/#KristianP26/ble-scale-sync&legend=bottom-right)
+<a href="https://www.star-history.com/?repos=kristianp26%2Fble-scale-sync&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=kristianp26/ble-scale-sync&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=kristianp26/ble-scale-sync&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=kristianp26/ble-scale-sync&type=date&legend=top-left" />
+ </picture>
+</a>
