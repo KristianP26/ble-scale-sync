@@ -31,6 +31,8 @@ users:
     last_known_weight: 85.5
 ```
 
+Only the matching-relevant fields are shown. Every user also needs `slug`, `height`, `birth_date`, `gender` and `is_athlete`, and the file needs `version: 1` -> see the [full reference](/guide/configuration#config-yaml-reference).
+
 ## Weight Matching
 
 The app uses a 4-tier priority system to identify users:
