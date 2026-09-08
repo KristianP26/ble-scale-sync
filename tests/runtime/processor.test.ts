@@ -103,11 +103,15 @@ const mom: UserConfig = {
   last_known_weight: 60,
 };
 
-function makeAppConfig(users: UserConfig[]): AppConfig {
+function makeAppConfig(
+  users: UserConfig[],
+  outOfRange: AppConfig['out_of_range'] = 'warn',
+): AppConfig {
   return {
     version: 1,
     scale: { weight_unit: 'kg', height_unit: 'cm' },
     unknown_user: 'nearest',
+    out_of_range: outOfRange,
     users,
     update_check: false,
   };
@@ -121,11 +125,12 @@ interface CtxOverrides {
   configSource?: AppContext['configSource'];
   configPath?: string;
   display?: DisplayNotifier;
+  outOfRange?: AppConfig['out_of_range'];
 }
 
 function makeCtx(users: UserConfig[], overrides: CtxOverrides = {}): AppContext {
   return {
-    config: makeAppConfig(users),
+    config: makeAppConfig(users, overrides.outOfRange),
     scaleMac: undefined,
     weightUnit: overrides.weightUnit ?? 'kg',
     dryRun: overrides.dryRun ?? false,
@@ -510,6 +515,102 @@ describe('processReading: historical replay', () => {
     // export is not spuriously deduped.
     await processReading(ctx, rawReading({ weight: 82.5, impedance: 500 }));
     expect(ctx.lastExportedWeights.has('dad')).toBe(false);
+    expect(dispatchExports).not.toHaveBeenCalled();
+  });
+});
+
+// ─── out_of_range (#395) ────────────────────────────────────────────────────
+
+/**
+ * weight_range was only ever a MATCHING input. A weight outside every range
+ * still resolved to somebody and exported: through tier 1 with one user, or
+ * through the last_known_weight proximity tier with several. The reporter's
+ * 178 kg suitcase reading reached Garmin and a retained MQTT topic, and then
+ * overwrote last_known_weight, which cost the NEXT genuine weigh-in as well.
+ */
+describe('processReading: out_of_range', () => {
+  it('multi-user: skip stops the tier-4 fallthrough before the exporters', async () => {
+    const ctx = makeCtx([dad, mom], {
+      outOfRange: 'skip',
+      configSource: 'yaml',
+      configPath: '/tmp/config.yaml',
+    });
+    const ok = await processReading(ctx, rawReading({ weight: 178, impedance: 0 }), {
+      getExportersForUser: () => [fakeExporter()],
+    });
+
+    expect(ok).toBe(true);
+    expect(dispatchExports).not.toHaveBeenCalled();
+    expect(updateLastKnownWeight).not.toHaveBeenCalled();
+  });
+
+  it('multi-user: warn is the default and still exports, as before', async () => {
+    const ctx = makeCtx([dad, mom], {
+      configSource: 'yaml',
+      configPath: '/tmp/config.yaml',
+    });
+    await processReading(ctx, rawReading({ weight: 178, impedance: 0 }), {
+      getExportersForUser: () => [fakeExporter()],
+    });
+
+    expect(dispatchExports).toHaveBeenCalledTimes(1);
+    expect(updateLastKnownWeight).toHaveBeenCalledTimes(1);
+  });
+
+  it('multi-user: skip does not fire on a reading inside a range', async () => {
+    const ctx = makeCtx([dad, mom], {
+      outOfRange: 'skip',
+      configSource: 'yaml',
+      configPath: '/tmp/config.yaml',
+    });
+    await processReading(ctx, rawReading({ weight: 82.4, impedance: 500 }), {
+      getExportersForUser: () => [fakeExporter()],
+    });
+
+    expect(dispatchExports).toHaveBeenCalledTimes(1);
+    expect(updateLastKnownWeight).toHaveBeenCalledTimes(1);
+  });
+
+  // Tier 1 always matches, so a single-user install is the case where the
+  // range never guarded anything at all.
+  it('single-user: skip stops the always-matching tier-1 export', async () => {
+    const ctx = makeCtx([dad], { outOfRange: 'skip' });
+    const ok = await processReading(ctx, rawReading({ weight: 178, impedance: 0 }), {
+      singleUserExporters: [fakeExporter()],
+    });
+
+    expect(ok).toBe(true);
+    expect(dispatchExports).not.toHaveBeenCalled();
+    expect(ctx.lastExportedWeights.has('dad')).toBe(false);
+  });
+
+  it('single-user: warn still exports an out-of-range reading', async () => {
+    const ctx = makeCtx([dad]);
+    await processReading(ctx, rawReading({ weight: 178, impedance: 0 }), {
+      singleUserExporters: [fakeExporter()],
+    });
+
+    expect(dispatchExports).toHaveBeenCalledTimes(1);
+    expect(ctx.lastExportedWeights.get('dad')).toBe(178);
+  });
+
+  it('a skipped reading does not even reach the update check', async () => {
+    const ctx = makeCtx([dad], { outOfRange: 'skip' });
+    await processReading(ctx, rawReading({ weight: 178, impedance: 0 }), {
+      singleUserExporters: [fakeExporter()],
+    });
+    expect(checkAndLogUpdate).not.toHaveBeenCalled();
+  });
+
+  it('gates on the live weight, so a whole replay is skipped with it', async () => {
+    const ctx = makeCtx([dad], { outOfRange: 'skip' });
+    const raw: RawReading = {
+      reading: { weight: 178, impedance: 0 },
+      adapter: fakeAdapter(),
+      history: [{ weight: 82.5, impedance: 480, timestamp: new Date('2025-07-01T07:00:00Z') }],
+    };
+    await processReading(ctx, raw, { singleUserExporters: [fakeExporter()] });
+
     expect(dispatchExports).not.toHaveBeenCalled();
   });
 });

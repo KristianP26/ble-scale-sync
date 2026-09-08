@@ -4,7 +4,7 @@ import type { BodyComposition, ScaleReading } from '../interfaces/scale-adapter.
 import type { WeightUnit, UserConfig } from '../config/schema.js';
 import type { AppContext } from './context.js';
 import { resolveUserProfile } from '../config/resolve.js';
-import { matchUserByWeight, detectWeightDrift } from '../config/user-matching.js';
+import { matchUserByWeight, detectWeightDrift, isOutOfRange } from '../config/user-matching.js';
 import { updateLastKnownWeight } from '../config/write.js';
 import { dispatchExports } from '../orchestrator.js';
 import { createLogger } from '../logger.js';
@@ -192,6 +192,44 @@ async function processReadingFrames(
   return { lastSuccess, latestPayload };
 }
 
+/**
+ * Stop a reading nobody's `weight_range` vouches for, when asked to.
+ *
+ * `weight_range` was only ever a MATCHING input. A weight outside every range
+ * still resolves to somebody -- through the single-user tier, which always
+ * matches, or the `last_known_weight` proximity tier -- and then exports like
+ * any other reading. A reporter stood on the scale holding a suitcase, got
+ * 178 kg at 0 ohm, and it reached Garmin and a retained MQTT topic. The lasting
+ * damage was `last_known_weight` being rewritten to 178, which then tie-broke
+ * the NEXT genuine weigh-in to the wrong user and dropped it (#395).
+ *
+ * Gated on the same weight the matcher used, and it skips the whole reading
+ * rather than individual frames: the historical frames belong to the same
+ * weigh-in, and exporting part of one is worse than exporting none of it.
+ *
+ * Returns true when the caller should stop. Callers then return `true`, not
+ * because anything treats that as success, but because in single-run mode
+ * `run.ts` exits 1 on false and a deliberate skip is not a failure. In
+ * continuous mode the return value is discarded entirely.
+ */
+function skipOutOfRange(
+  ctx: AppContext,
+  user: UserConfig,
+  weight: number,
+  prefix: string,
+): boolean {
+  if (ctx.config.out_of_range !== 'skip') return false;
+  if (!isOutOfRange(user, weight)) return false;
+  const p = prefix ? `${prefix} ` : '';
+  log.warn(
+    `${p}Skipping ${fmtWeight(weight, ctx.weightUnit)}: outside ` +
+      `${user.name}'s range [${user.weight_range.min}-${user.weight_range.max}] kg ` +
+      '(out_of_range: skip). Not exported, and last_known_weight is left alone.',
+  );
+  ctx.display?.beep(600, 150, 3);
+  return true;
+}
+
 async function processSingleUser(
   ctx: AppContext,
   raw: RawReading,
@@ -199,6 +237,10 @@ async function processSingleUser(
 ): Promise<boolean> {
   const user = ctx.config.users[0];
   const all = expandReadings(raw);
+
+  // Before the update check and before any export: a skipped reading should
+  // leave no trace beyond the log line.
+  if (skipOutOfRange(ctx, user, all[all.length - 1].weight, '')) return true;
 
   checkAndLogUpdate(ctx.config.update_check);
 
@@ -253,6 +295,13 @@ async function processMultiUser(
 
   const user = match.user;
   const prefix = `[${user.name}]`;
+
+  // Before the "Matched" line, the beep, the exporters and the
+  // last_known_weight write: a match is not an endorsement of the weight, and
+  // tier 4 in particular matches by proximity to a remembered weight rather
+  // than by any range containing this one (#395).
+  if (skipOutOfRange(ctx, user, matchWeight, prefix)) return true;
+
   log.info(`${prefix} Matched (tier: ${match.tier})`);
 
   // Update check fires once per matched cycle, independent of replay dedup.
