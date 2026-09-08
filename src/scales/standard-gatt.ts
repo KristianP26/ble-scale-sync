@@ -1,4 +1,4 @@
-import { computeBiaFat, buildPayload, uuid16 } from './body-comp-helpers.js';
+import { computeBiaFat, buildPayload, uuid16, ReadingComposition } from './body-comp-helpers.js';
 import type {
   BleDeviceInfo,
   ScaleAdapterCore,
@@ -62,6 +62,13 @@ export class StandardGattScaleAdapter implements ScaleAdapterCore, GattWiring, U
   readonly unlockIntervalMs = 5000;
 
   private cachedGatt: CachedGattData | null = null;
+  /**
+   * Composition pinned to the reading it was measured with (#394): this adapter
+   * is a shared singleton and `computeMetrics()` runs later than the parse, so
+   * on the watcher transports the live cache can already belong to the next
+   * weigh-in. See ReadingComposition.
+   */
+  private readonly comp = new ReadingComposition<CachedGattData | null>();
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
@@ -161,11 +168,27 @@ export class StandardGattScaleAdapter implements ScaleAdapterCore, GattWiring, U
     if (heightPresent && offset + 2 <= data.length) offset += 2;
 
     this.cachedGatt = { bodyFatPercent: bodyFatPct, musclePct, waterMassKg };
-    return { weight, impedance };
+    const reading: ScaleReading = { weight, impedance };
+    this.comp.pin(reading, this.cachedGatt);
+    return reading;
   }
 
   isComplete(reading: ScaleReading): boolean {
     return reading.weight > 0;
+  }
+
+  /**
+   * Clear the previous weigh-in before anything is subscribed (#394).
+   *
+   * The pin above is what fixes the real leak. This reset covers the OTHER
+   * path: a reading built outside parseNotification (a direct caller, a test)
+   * has nothing pinned, so computeMetrics falls back to the live cache - and
+   * that must not still hold the previous person's numbers. It is also what
+   * the ScaleAdapter contract requires of every adapter, so a sibling added
+   * later inherits a correct example rather than this one's peculiarity.
+   */
+  onSessionStart(): void {
+    this.cachedGatt = null;
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
@@ -176,7 +199,7 @@ export class StandardGattScaleAdapter implements ScaleAdapterCore, GattWiring, U
     }
 
     // Fallback: derive metrics from GATT body-fat + profile estimations
-    const gatt = this.cachedGatt;
+    const gatt = this.comp.of(reading, this.cachedGatt);
     const waterPercent =
       gatt?.waterMassKg && reading.weight > 0
         ? (gatt.waterMassKg / reading.weight) * 100

@@ -215,3 +215,65 @@ describe('YunmaiScaleAdapter', () => {
     });
   });
 });
+
+// #394: adapters are shared singletons and computeMetrics() runs LATER than the
+// parse that produced the reading. On the mqtt-proxy and esphome-proxy watchers
+// the loop awaits processReading() - network exports included - while the
+// watcher is free to open the NEXT session, so onSessionStart() for session N+1
+// can land BEFORE computeMetrics() for session N. Reading the live cache there
+// hands the completed reading somebody else's composition.
+//
+// Each test below interleaves the two in exactly that order. Asserting only on
+// the payload of an uninterrupted session would pass with or without the fix.
+
+describe('YunmaiScaleAdapter session boundary (#394)', () => {
+  function miniAdapter() {
+    const a = makeAdapter();
+    // isMini gates the embedded fat read; latched from the advertised name.
+    a.matches({ localName: 'YUNMAI-ISM', serviceUuids: [] });
+    return a;
+  }
+
+  it('keeps the completed reading embedded fat when the NEXT session starts first', () => {
+    const a = miniAdapter();
+    // impedanceRaw 0 so the embedded fat is the ONLY source of 22 %. With the
+    // frame default impedance the BIA branch lands near 22 % on its own and the
+    // test would pass whether or not the value was pinned.
+    const reading = a.parseNotification(makeFrame({ fatRaw: 2200, impedanceRaw: 0 }))!;
+    a.onSessionStart();
+    const payload = a.computeMetrics(reading, defaultProfile());
+    expect(payload.bodyFatPercent).toBeCloseTo(22, 1);
+  });
+
+  // ReadingComposition.of() checks has(), not `?? live`. That distinction is the
+  // helper's one real subtlety and nothing else exercises it: Yunmai is the only
+  // current user whose "no composition" state is ITSELF a value (null), so with
+  // a nullish fallback a legitimately-null pin would silently fall through to
+  // the live field. Mutating of() to `?? live` leaves the whole suite green
+  // except this test.
+  it('a pinned null is honoured, not treated as absent', () => {
+    const a = miniAdapter();
+    // Session N: protocol < 0x1E, so no embedded fat is read and null is pinned.
+    const readingN = a.parseNotification(
+      makeFrame({ protocolVer: 0x1d, impedanceRaw: 0, weightRaw: 8000 }),
+    )!;
+    // Session N+1 starts and parses a frame that DOES carry embedded fat,
+    // before N's computeMetrics runs - the watcher-transport ordering.
+    a.onSessionStart();
+    a.parseNotification(makeFrame({ fatRaw: 2200, impedanceRaw: 0 }));
+
+    const payload = a.computeMetrics(readingN, defaultProfile());
+    // N must get the estimator, not the next person's 22 %.
+    expect(payload.bodyFatPercent).not.toBeCloseTo(22, 1);
+  });
+
+  it('does not hand a hand-built reading the previous session embedded fat', () => {
+    const a = miniAdapter();
+    a.parseNotification(makeFrame({ fatRaw: 2200 }));
+    a.onSessionStart();
+    // Impedance 0 and no pinned value: must fall through to the estimator, not
+    // to the 22 % the previous weigh-in left behind.
+    const payload = a.computeMetrics({ weight: 80, impedance: 0 }, defaultProfile());
+    expect(payload.bodyFatPercent).not.toBeCloseTo(22, 1);
+  });
+});

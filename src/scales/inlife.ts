@@ -7,7 +7,13 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, xorChecksum, type ScaleBodyComp } from './body-comp-helpers.js';
+import {
+  uuid16,
+  buildPayload,
+  xorChecksum,
+  ReadingComposition,
+  type ScaleBodyComp,
+} from './body-comp-helpers.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
 const SVC_UUID = uuid16(0xfff0);
@@ -44,6 +50,13 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
 
   /** Cached body-composition values from parsed frame. */
   private cachedComp: ScaleBodyComp = {};
+  /**
+   * Composition pinned to the reading it was measured with (#394): this adapter
+   * is a shared singleton and `computeMetrics()` runs later than the parse, so
+   * on the watcher transports the live cache can already belong to the next
+   * weigh-in. See ReadingComposition.
+   */
+  private readonly comp = new ReadingComposition<ScaleBodyComp>();
   /** Cached impedance from impedance-mode frames. */
   private cachedImpedance = 0;
 
@@ -124,14 +137,36 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
       this.cachedImpedance = 0;
     }
 
-    return { weight, impedance: this.cachedImpedance };
+    const reading: ScaleReading = { weight, impedance: this.cachedImpedance };
+    this.comp.pin(reading, this.cachedComp);
+    return reading;
   }
 
   isComplete(reading: ScaleReading): boolean {
     return reading.weight > 0;
   }
 
+  /**
+   * Clear the previous weigh-in before anything is subscribed (#394).
+   *
+   * The pin above is what fixes the real leak. This reset covers the OTHER
+   * path: a reading built outside parseNotification (a direct caller, a test)
+   * has nothing pinned, so computeMetrics falls back to the live cache - and
+   * that must not still hold the previous person's numbers. It is also what
+   * the ScaleAdapter contract requires of every adapter, so a sibling added
+   * later inherits a correct example rather than this one's peculiarity.
+   */
+  onSessionStart(): void {
+    this.cachedComp = {};
+    this.cachedImpedance = 0;
+  }
+
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    return buildPayload(reading.weight, reading.impedance, this.cachedComp, profile);
+    return buildPayload(
+      reading.weight,
+      reading.impedance,
+      this.comp.of(reading, this.cachedComp),
+      profile,
+    );
   }
 }
