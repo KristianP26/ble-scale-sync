@@ -308,6 +308,37 @@ describe('processReading: multi-user', () => {
     expect(updateLastKnownWeight).toHaveBeenCalledWith('/tmp/config.yaml', 'dad', 82, 82);
   });
 
+  it('does not write last_known_weight when every exporter failed', async () => {
+    // The anchor means "the weight we ACTUALLY exported". Writing it after a
+    // total failure poisoned the retry: the scale reconnects, replays the same
+    // frame now carrying a timestamp, and the replay dedup drops it as already
+    // synced. The weigh-in is lost with nothing left to retry from.
+    vi.mocked(dispatchExports).mockResolvedValueOnce({ success: false, details: [] });
+    const ctx = makeCtx([dad, mom], { configSource: 'yaml', configPath: '/tmp/config.yaml' });
+    const ok = await processReading(ctx, rawReading({ weight: 82, impedance: 500 }), {
+      getExportersForUser: () => [fakeExporter()],
+    });
+    expect(ok).toBe(false);
+    expect(updateLastKnownWeight).not.toHaveBeenCalled();
+  });
+
+  it('does not set the single-user replay anchor when every exporter failed', async () => {
+    vi.mocked(dispatchExports).mockResolvedValueOnce({ success: false, details: [] });
+    const ctx = makeCtx([dad]);
+    await processReading(ctx, rawReading({ weight: 82, impedance: 500 }), {
+      singleUserExporters: [fakeExporter()],
+    });
+    expect(ctx.lastExportedWeights.has('dad')).toBe(false);
+  });
+
+  it('sets the single-user replay anchor when the export succeeds', async () => {
+    const ctx = makeCtx([dad]);
+    await processReading(ctx, rawReading({ weight: 82, impedance: 500 }), {
+      singleUserExporters: [fakeExporter()],
+    });
+    expect(ctx.lastExportedWeights.get('dad')).toBe(82);
+  });
+
   it('does not write last_known_weight when configSource is env', async () => {
     const ctx = makeCtx([dad, mom], { configSource: 'env' });
     await processReading(ctx, rawReading({ weight: 82, impedance: 500 }), {
