@@ -18,7 +18,7 @@ import type { DisplayNotifier } from '../../src/interfaces/display-notifier.js';
 
 // Capture (and suppress) log output. console.log is the sink for logger.info().
 const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-vi.spyOn(console, 'warn').mockImplementation(() => {});
+const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 vi.spyOn(console, 'error').mockImplementation(() => {});
 vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
 
@@ -172,6 +172,7 @@ beforeEach(() => {
   vi.mocked(updateLastKnownWeight).mockClear();
   vi.mocked(checkAndLogUpdate).mockClear();
   logSpy.mockClear();
+  warnSpy.mockClear();
 });
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -544,6 +545,8 @@ describe('processReading: out_of_range', () => {
     expect(updateLastKnownWeight).not.toHaveBeenCalled();
   });
 
+  const warnings = (): string => warnSpy.mock.calls.map((c) => c.map(String).join(' ')).join(' | ');
+
   it('multi-user: warn is the default and still exports, as before', async () => {
     const ctx = makeCtx([dad, mom], {
       configSource: 'yaml',
@@ -555,6 +558,9 @@ describe('processReading: out_of_range', () => {
 
     expect(dispatchExports).toHaveBeenCalledTimes(1);
     expect(updateLastKnownWeight).toHaveBeenCalledTimes(1);
+    // warn is not silence: the reading has to be called out even though it goes.
+    expect(warnings()).toMatch(/outside/i);
+    expect(warnings()).toMatch(/out_of_range: warn/);
   });
 
   it('multi-user: skip does not fire on a reading inside a range', async () => {
@@ -569,6 +575,7 @@ describe('processReading: out_of_range', () => {
 
     expect(dispatchExports).toHaveBeenCalledTimes(1);
     expect(updateLastKnownWeight).toHaveBeenCalledTimes(1);
+    expect(warnings()).not.toMatch(/out_of_range/);
   });
 
   // Tier 1 always matches, so a single-user install is the case where the
@@ -584,7 +591,11 @@ describe('processReading: out_of_range', () => {
     expect(ctx.lastExportedWeights.has('dad')).toBe(false);
   });
 
-  it('single-user: warn still exports an out-of-range reading', async () => {
+  // The single-user path never calls the matcher, so nothing else in it would
+  // ever mention the range. Without an explicit warning here, `warn` mode is
+  // silent on the one install shape where the range guarded nothing at all,
+  // while three documentation pages promise it is logged.
+  it('single-user: warn exports the reading AND says so', async () => {
     const ctx = makeCtx([dad]);
     await processReading(ctx, rawReading({ weight: 178, impedance: 0 }), {
       singleUserExporters: [fakeExporter()],
@@ -592,6 +603,8 @@ describe('processReading: out_of_range', () => {
 
     expect(dispatchExports).toHaveBeenCalledTimes(1);
     expect(ctx.lastExportedWeights.get('dad')).toBe(178);
+    expect(warnings()).toMatch(/outside Dad's range \[75-95\]/);
+    expect(warnings()).toMatch(/out_of_range: warn/);
   });
 
   it('a skipped reading does not even reach the update check', async () => {
@@ -600,6 +613,20 @@ describe('processReading: out_of_range', () => {
       singleUserExporters: [fakeExporter()],
     });
     expect(checkAndLogUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does not skip a live reading in range because a replayed frame is not', async () => {
+    const ctx = makeCtx([dad], { outOfRange: 'skip' });
+    const raw: RawReading = {
+      reading: { weight: 82.5, impedance: 500 },
+      adapter: fakeAdapter(),
+      history: [{ weight: 178, impedance: 0, timestamp: new Date('2025-07-01T07:00:00Z') }],
+    };
+    await processReading(ctx, raw, { singleUserExporters: [fakeExporter()] });
+
+    // Both frames go: the guard reads the live weight, which is the same weight
+    // the matcher used, not whatever the scale had stored from an earlier day.
+    expect(dispatchExports).toHaveBeenCalledTimes(2);
   });
 
   it('gates on the live weight, so a whole replay is skipped with it', async () => {

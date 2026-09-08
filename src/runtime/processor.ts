@@ -203,9 +203,16 @@ async function processReadingFrames(
  * damage was `last_known_weight` being rewritten to 178, which then tie-broke
  * the NEXT genuine weigh-in to the wrong user and dropped it (#395).
  *
- * Gated on the same weight the matcher used, and it skips the whole reading
- * rather than individual frames: the historical frames belong to the same
- * weigh-in, and exporting part of one is worse than exporting none of it.
+ * Gated on the LATEST reading, the same weight the matcher used, and it stops
+ * the whole reading rather than filtering frames. `raw.history` is a replay of
+ * records the scale stored earlier, so a mixed batch is possible in principle;
+ * dropping the batch on the live weight keeps the decision aligned with the one
+ * the matcher already made about who this reading belongs to.
+ *
+ * `warn` still logs. Multi-user gets a warning from the matcher on its way here,
+ * but the single-user path never calls the matcher at all, so without this an
+ * out-of-range reading would go out with no output whatsoever, which is not what
+ * `warn` says on the tin.
  *
  * Returns true when the caller should stop. Callers then return `true`, not
  * because anything treats that as success, but because in single-run mode
@@ -218,12 +225,18 @@ function skipOutOfRange(
   weight: number,
   prefix: string,
 ): boolean {
-  if (ctx.config.out_of_range !== 'skip') return false;
   if (!isOutOfRange(user, weight)) return false;
   const p = prefix ? `${prefix} ` : '';
+  const range = `${user.name}'s range [${user.weight_range.min}-${user.weight_range.max}] kg`;
+  if (ctx.config.out_of_range !== 'skip') {
+    log.warn(
+      `${p}${fmtWeight(weight, ctx.weightUnit)} is outside ${range}. ` +
+        'Exporting it anyway (out_of_range: warn). Set out_of_range: skip to drop it instead.',
+    );
+    return false;
+  }
   log.warn(
-    `${p}Skipping ${fmtWeight(weight, ctx.weightUnit)}: outside ` +
-      `${user.name}'s range [${user.weight_range.min}-${user.weight_range.max}] kg ` +
+    `${p}Skipping ${fmtWeight(weight, ctx.weightUnit)}: outside ${range} ` +
       '(out_of_range: skip). Not exported, and last_known_weight is left alone.',
   );
   ctx.display?.beep(600, 150, 3);
@@ -238,8 +251,8 @@ async function processSingleUser(
   const user = ctx.config.users[0];
   const all = expandReadings(raw);
 
-  // Before the update check and before any export: a skipped reading should
-  // leave no trace beyond the log line.
+  // Before the update check and before any export, so a skipped reading leaves
+  // nothing behind but the log line and the error beep.
   if (skipOutOfRange(ctx, user, all[all.length - 1].weight, '')) return true;
 
   checkAndLogUpdate(ctx.config.update_check);
@@ -297,9 +310,9 @@ async function processMultiUser(
   const prefix = `[${user.name}]`;
 
   // Before the "Matched" line, the beep, the exporters and the
-  // last_known_weight write: a match is not an endorsement of the weight, and
-  // tier 4 in particular matches by proximity to a remembered weight rather
-  // than by any range containing this one (#395).
+  // last_known_weight write. A match is not an endorsement of the weight: tier 4
+  // in particular matches by proximity to a remembered weight, not by any range
+  // containing this one (#395).
   if (skipOutOfRange(ctx, user, matchWeight, prefix)) return true;
 
   log.info(`${prefix} Matched (tier: ${match.tier})`);
