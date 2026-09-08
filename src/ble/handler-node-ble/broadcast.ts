@@ -222,10 +222,18 @@ export async function broadcastScanNodeBle(
           // report the generic "no reading" message instead of the real cause.
           if (adapter.parseServiceData) {
             const sd: unknown = await helper.prop('ServiceData');
+            // Re-check after every await. This loop is detached: the outer
+            // promise can settle while we are parked here, and the caller's
+            // teardown then hands the device proxy back. A further read would
+            // rebuild it (BusHelper._prepare runs again once removeListeners
+            // has cleared _ready), re-registering the listener and the match
+            // rule that were just released (#396, #397).
+            if (done) break;
             if (tryServiceData(sd)) break;
           }
           if (adapter.parseBroadcast) {
             const md: unknown = await helper.prop('ManufacturerData');
+            if (done) break;
             if (tryManufacturerData(md)) break;
           }
         } catch (err: unknown) {
@@ -241,6 +249,7 @@ export async function broadcastScanNodeBle(
           bleLog.debug(`Advertisement poll error: ${errMsg(err)}`);
         }
         await sleep(500);
+        if (done) break;
       }
       if (!done) {
         fail(
