@@ -149,7 +149,10 @@ describe('connectWithRecovery: vanishing org.bluez.Device1 (#297)', () => {
     });
 
     expect(result).toBe(reDiscovered);
-    expect(btAdapter.startDiscovery).toHaveBeenCalled();
+    // StartDiscovery goes through the helper, not node-ble's startDiscovery:
+    // that method sets a Transport-only filter of its own and would undo the
+    // DuplicateData filter (#397).
+    expect(btAdapter.helper.callMethod).toHaveBeenCalledWith('StartDiscovery');
     expect(reDiscovered.connect).toHaveBeenCalledTimes(1);
   });
 

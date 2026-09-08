@@ -12,9 +12,34 @@ import {
   DISCOVERY_POLL_MS,
   POST_DISCOVERY_QUIESCE_MS,
 } from '../types.js';
-import { helperOf, getDbusNext, type Adapter, type Device } from './dbus.js';
+import { helperOf, getDbusNext, releaseDeviceProxy, type Adapter, type Device } from './dbus.js';
 import { logAdvertisementSnapshot } from './device-object.js';
-import { getAdapter, resetConnection, parseHciIndex } from './connection.js';
+import {
+  getAdapter,
+  resetConnection,
+  parseHciIndex,
+  currentConnectionGeneration,
+} from './connection.js';
+
+/**
+ * Generation of the D-Bus connection whose CURRENTLY RUNNING scan we started
+ * ourselves with the duplicate filter in place, or null when no such scan is
+ * running. Not a plain boolean: a connection reset replaces the BlueZ client, so
+ * whatever the old one had asked for no longer applies (#372, #397).
+ */
+let filteredScanGeneration: number | null = null;
+
+/** True when the running scan is ours and already carries the duplicate filter. */
+function runningScanIsFiltered(): boolean {
+  return (
+    filteredScanGeneration !== null && filteredScanGeneration === currentConnectionGeneration()
+  );
+}
+
+/** Exposed for tests; production code only ever reaches this through the module state. */
+export function _resetDiscoveryFilterLatch(): void {
+  filteredScanGeneration = null;
+}
 
 /** Stop discovery and wait for the post-discovery quiesce period. */
 export async function stopDiscoveryAndQuiesce(btAdapter: Adapter): Promise<void> {
@@ -25,6 +50,7 @@ export async function stopDiscoveryAndQuiesce(btAdapter: Adapter): Promise<void>
   } catch {
     bleLog.debug('stopDiscovery failed (may already be stopped)');
   }
+  filteredScanGeneration = null;
   await sleep(POST_DISCOVERY_QUIESCE_MS);
 }
 
@@ -48,7 +74,7 @@ export async function stopDiscoveryAndQuiesce(btAdapter: Adapter): Promise<void>
  * Failure is non-fatal. A filter BlueZ rejects should not stop a scan that
  * would otherwise work; the caller falls back to polling as before.
  */
-async function requestDuplicateAdvertisements(btAdapter: Adapter): Promise<void> {
+async function requestDuplicateAdvertisements(btAdapter: Adapter): Promise<boolean> {
   try {
     const { Variant } = await getDbusNext();
     await helperOf(btAdapter).callMethod('SetDiscoveryFilter', {
@@ -56,9 +82,56 @@ async function requestDuplicateAdvertisements(btAdapter: Adapter): Promise<void>
       DuplicateData: new Variant('b', true),
     });
     bleLog.debug('Discovery filter: Transport=le, DuplicateData=true');
+    return true;
   } catch (err: unknown) {
     bleLog.debug(`SetDiscoveryFilter: ${errMsg(err)} (non-fatal, scan continues deduplicated)`);
+    return false;
   }
+}
+
+/**
+ * Set our filter and start the scan, WITHOUT going through node-ble.
+ *
+ * node-ble's own `Adapter.startDiscovery()` is
+ *
+ *     await this.helper.callMethod('SetDiscoveryFilter', { Transport: 'le' })
+ *     await this.helper.callMethod('StartDiscovery')
+ *
+ * and BlueZ's SetDiscoveryFilter REPLACES the caller's whole filter dict rather
+ * than merging into it, so every key we had just set reverts to its default and
+ * `DuplicateData` goes back to false. Calling it and then calling node-ble's
+ * startDiscovery, which is what shipped for #372, therefore does nothing at all:
+ * the filter that reaches BlueZ is always node-ble's Transport-only one. The
+ * scan keeps deduplicating, the 500 ms broadcast poll keeps re-reading one
+ * cached advertisement, and the symptom #372 was meant to fix survives the fix.
+ *
+ * So the two calls are made here in the order that actually works. The
+ * `isDiscovering` guard is kept byte-for-byte from node-ble because callers key
+ * on the exact `Discovery already in progress` message.
+ *
+ * Returns whether the filter itself was accepted, which is what decides if the
+ * running scan may be treated as already filtered.
+ */
+async function applyFilterAndStart(btAdapter: Adapter): Promise<boolean> {
+  const filtered = await requestDuplicateAdvertisements(btAdapter);
+  await helperOf(btAdapter).callMethod('StartDiscovery');
+  return filtered;
+}
+
+/**
+ * `applyFilterAndStart` behind node-ble's own already-running guard, which is
+ * kept byte-for-byte because callers key on the exact
+ * `Discovery already in progress` message to reach the restart branch.
+ *
+ * The recovery paths below deliberately use the UNGUARDED form: each has just
+ * stopped discovery (or reset the adapter), and re-reading `Discovering` there
+ * would only reintroduce a race on a property BlueZ updates asynchronously.
+ */
+async function startFilteredDiscovery(btAdapter: Adapter): Promise<boolean> {
+  if (await btAdapter.isDiscovering()) {
+    throw new Error('Discovery already in progress');
+  }
+  return applyFilterAndStart(btAdapter);
 }
 
 /**
@@ -69,11 +142,15 @@ export async function startDiscoverySafe(
   btAdapter: Adapter,
   bleAdapter?: string,
 ): Promise<Adapter | false> {
+  // Read once: every latch write below records the connection this scan
+  // belongs to, and a reset mid-function would otherwise stamp the wrong one.
+  const generation = currentConnectionGeneration();
+
   // 1. Normal start
   try {
-    await requestDuplicateAdvertisements(btAdapter);
-    await btAdapter.startDiscovery();
+    const filtered = await startFilteredDiscovery(btAdapter);
     bleLog.debug('Discovery started');
+    if (filtered) filteredScanGeneration = generation;
     return btAdapter;
   } catch (e) {
     bleLog.debug(`startDiscovery failed: ${errMsg(e)}`);
@@ -90,13 +167,24 @@ export async function startDiscoverySafe(
   // makes BlueZ drop Device1 objects (#297), and the whole point of doing it at
   // this moment is that there is nothing yet to lose.
   if (await btAdapter.isDiscovering()) {
+    // Only ONCE per connection. The running scan being ours and already
+    // filtered is the normal state of every cycle after the first, and cycling
+    // it again each time would be actively harmful: StopDiscovery makes BlueZ
+    // drop its Device1 objects (#297), throwing away everything it learned
+    // while we were between cycles, and the quiesce that follows is a window
+    // with the radio not scanning at all. A reporter with a scale that
+    // advertises in short bursts saw exactly that, nine cycles in a row (#397).
+    if (runningScanIsFiltered()) {
+      bleLog.debug('Discovery already active and already filtered; continuing with it');
+      return btAdapter;
+    }
     bleLog.debug('Discovery already active; restarting it so the duplicate filter applies');
     try {
       await helperOf(btAdapter).callMethod('StopDiscovery');
       await sleep(POST_DISCOVERY_QUIESCE_MS);
-      await requestDuplicateAdvertisements(btAdapter);
-      await btAdapter.startDiscovery();
+      const refiltered = await applyFilterAndStart(btAdapter);
       bleLog.debug('Discovery restarted with the duplicate filter');
+      if (refiltered) filteredScanGeneration = generation;
       return btAdapter;
     } catch (e) {
       // Could not cycle it. A deduplicating scan still finds devices and still
@@ -117,7 +205,7 @@ export async function startDiscoverySafe(
   await sleep(1000);
 
   try {
-    await btAdapter.startDiscovery();
+    if (await applyFilterAndStart(btAdapter)) filteredScanGeneration = generation;
     bleLog.debug('Discovery started after D-Bus reset');
     return btAdapter;
   } catch (e) {
@@ -136,7 +224,7 @@ export async function startDiscoverySafe(
     bleLog.debug('Adapter powered on');
     await sleep(1000);
 
-    await btAdapter.startDiscovery();
+    if (await applyFilterAndStart(btAdapter)) filteredScanGeneration = generation;
     bleLog.debug('Discovery started after power cycle');
     return btAdapter;
   } catch (e) {
@@ -149,7 +237,10 @@ export async function startDiscoverySafe(
     resetConnection();
     try {
       const freshAdapter = await getAdapter(bleAdapter);
-      await freshAdapter.startDiscovery();
+      // A reset replaced the connection, so read the generation again.
+      if (await applyFilterAndStart(freshAdapter)) {
+        filteredScanGeneration = currentConnectionGeneration();
+      }
       bleLog.debug('Discovery started after btmgmt reset');
       return freshAdapter;
     } catch (e) {
@@ -163,7 +254,10 @@ export async function startDiscoverySafe(
     resetConnection();
     try {
       const freshAdapter = await getAdapter(bleAdapter);
-      await freshAdapter.startDiscovery();
+      // A reset replaced the connection, so read the generation again.
+      if (await applyFilterAndStart(freshAdapter)) {
+        filteredScanGeneration = currentConnectionGeneration();
+      }
       bleLog.debug('Discovery started after rfkill reset');
       return freshAdapter;
     } catch (e) {
@@ -177,7 +271,10 @@ export async function startDiscoverySafe(
     resetConnection();
     try {
       const freshAdapter = await getAdapter(bleAdapter);
-      await freshAdapter.startDiscovery();
+      // A reset replaced the connection, so read the generation again.
+      if (await applyFilterAndStart(freshAdapter)) {
+        filteredScanGeneration = currentConnectionGeneration();
+      }
       bleLog.debug('Discovery started after bluetoothd restart');
       return freshAdapter;
     } catch (e) {
@@ -213,11 +310,12 @@ export async function removeDevice(
   // devices need the fresh-proxy reset (#80/#81); bonded scales keep their bond
   // so the next connect re-encrypts with the stored LTK instead of pairing.
   let paired: boolean;
+  let probe: Device | undefined;
   try {
-    const device = await btAdapter.getDevice(formatted);
+    probe = await btAdapter.getDevice(formatted);
     // node-ble types isPaired() loosely; BusHelper.prop unwraps the Variant to a
     // real boolean at runtime, so cast through unknown like ensureBonded does.
-    paired = ((await device.isPaired()) as unknown as boolean) === true;
+    paired = ((await probe.isPaired()) as unknown as boolean) === true;
   } catch (err) {
     // 'Device not found' => not in the BlueZ cache, so there is no bond to
     // preserve and removal is a harmless no-op; proceed. Any OTHER error is a
@@ -231,6 +329,10 @@ export async function removeDevice(
     // object, which is the signature of #297.
     bleLog.debug('Device not in BlueZ cache; RemoveDevice is a no-op');
     paired = false;
+  } finally {
+    // The proxy exists only to read isPaired(); the removal below goes through
+    // the adapter. Holding it would leak a match rule per cycle (#396, #397).
+    if (probe) releaseDeviceProxy(probe);
   }
   if (paired && !opts.includeBonded) {
     bleLog.debug('Skipping RemoveDevice: device is bonded (preserving pairing keys)');
@@ -269,8 +371,14 @@ export async function autoDiscover(
       if (checked.has(addr)) continue;
       checked.add(addr);
 
+      // Every device BlueZ knows gets a throwaway proxy here, and each one costs
+      // a D-Bus match rule plus a listener on the bus-wide signal emitter until
+      // it is released. Only the matched device survives the loop, so every
+      // other proxy is handed back before the next iteration (#396, #397).
+      let dev: Device | undefined;
+      let matchedDevice = false;
       try {
-        const dev = await btAdapter.getDevice(addr);
+        dev = await btAdapter.getDevice(addr);
         const name = await dev.getName().catch(() => '');
         if (!name) continue;
 
@@ -298,10 +406,13 @@ export async function autoDiscover(
         const matched = resolveAdapter(info, adapters);
         if (matched) {
           bleLog.info(`Auto-discovered: ${matched.name} (${name} [${addr}])`);
+          matchedDevice = true;
           return { device: dev, adapter: matched, mac: addr };
         }
       } catch {
         /* device may have gone away */
+      } finally {
+        if (dev && !matchedDevice) releaseDeviceProxy(dev);
       }
     }
 
