@@ -115,6 +115,17 @@ else
   HEIGHT_UNIT=$(opt height_unit)
   [ -z "$WEIGHT_UNIT" ] && WEIGHT_UNIT="kg"
   [ -z "$HEIGHT_UNIT" ] && HEIGHT_UNIT="cm"
+  OUT_OF_RANGE=$(opt out_of_range)
+  # Anything but the two known values would fail schema validation and take the
+  # whole add-on down, so an unrecognised value falls back to the default.
+  case "$OUT_OF_RANGE" in
+    warn | skip) ;;
+    "") OUT_OF_RANGE="warn" ;;
+    *)
+      log "WARNING: ignoring out_of_range='$OUT_OF_RANGE' (expected warn or skip)."
+      OUT_OF_RANGE="warn"
+      ;;
+  esac
 
   USER_NAME=$(opt user_name)
   USER_HEIGHT=$(opt_int user_height 170)
@@ -278,6 +289,7 @@ scale:
   height_unit: $HEIGHT_UNIT
 
 unknown_user: nearest
+out_of_range: $OUT_OF_RANGE
 
 users:
   - name: "$(yaml_escape "$USER_NAME")"

@@ -48,6 +48,7 @@ describe('collectUnknownKeys', () => {
       },
       scale: { weight_unit: 'kg', height_unit: 'cm' },
       unknown_user: 'nearest',
+      out_of_range: 'skip',
       users: [{ ...USER, exporters: [{ type: 'mqtt', broker_url: 'mqtt://h:1883' }] }],
       global_exporters: [{ type: 'mqtt', broker_url: 'mqtt://h:1883', qos: 0, retain: true }],
       runtime: { continuous_mode: true, scan_cooldown: 30, dry_run: false, debug: false },

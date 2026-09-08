@@ -55,6 +55,7 @@ options:
   user_is_athlete: false
   user_weight_min: 40
   user_weight_max: 150
+  out_of_range: warn
   mqtt_enabled: true
   mqtt_auto: true
   mqtt_broker_url: ''
@@ -92,6 +93,7 @@ schema:
   user_is_athlete: bool
   user_weight_min: int(10,300)
   user_weight_max: int(10,500)
+  out_of_range: list(warn|skip)
   mqtt_enabled: bool
   mqtt_auto: bool
   mqtt_broker_url: str?
