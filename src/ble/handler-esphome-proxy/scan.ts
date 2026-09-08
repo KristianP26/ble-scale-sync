@@ -199,10 +199,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
               } catch (e) {
                 reject(e instanceof Error ? e : new Error(errMsg(e)));
               } finally {
-                // Before close(), so the abandoned wait's cleanup (notify
-                // unsubscribers, unlock interval, onSessionEnd) runs while the
-                // session can still talk: close() sets `closed`, after which
-                // every queued GATT call is rejected.
+                // Before close(), so the wait is finished with the session
+                // before the session goes away. See fireDisconnect's own doc
+                // for why the order is not load-bearing either way.
                 session?.device.fireDisconnect();
                 if (session) await session.close();
                 gattInFlight.delete(addrLc);

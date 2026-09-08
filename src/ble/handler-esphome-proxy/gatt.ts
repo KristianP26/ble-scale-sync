@@ -29,10 +29,14 @@ export interface EsphomeBleDevice extends BleDevice {
    * down. Harmless after a completed reading: the callback returns immediately
    * once resolved.
    *
-   * Call it before close(): not because close() removes anything this needs
-   * (the callback is invoked directly, not through the CONNECTION_EVENT
-   * listener), but so the cleanup runs before close() sets `closed` and the
-   * session starts rejecting every queued GATT call.
+   * Call it before close(), though the order is not load-bearing and two
+   * earlier versions of this comment claimed reasons that were not real. It
+   * does not depend on the CONNECTION_EVENT listener close() removes (the
+   * callback is invoked directly), and the cleanup it triggers - clearInterval,
+   * listener removal, and onSessionEnd, which the contract forbids from doing
+   * I/O - issues no GATT call, so `closed` cannot cut it short either. Kept
+   * first simply so the wait is finished with the session before the session
+   * goes away.
    */
   fireDisconnect(): void;
 }

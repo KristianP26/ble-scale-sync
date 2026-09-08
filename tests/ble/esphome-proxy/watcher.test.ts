@@ -158,8 +158,9 @@ describe('ReadingWatcher GATT continuous (#116)', () => {
       // Past the absolute session cap. Without the bound nothing below happens.
       await vi.advanceTimersByTimeAsync(95_000);
 
-      // Fired BEFORE close(), which splices out the listener the abandoned
-      // wait's own teardown path depends on.
+      // Both run: the abandoned wait is told to tear itself down, and the
+      // session is closed. fireDisconnect goes first, though the order is not
+      // load-bearing - see its doc comment in gatt.ts.
       expect(fireDisconnectSpy).toHaveBeenCalled();
       expect(closeSpy).toHaveBeenCalled();
 
