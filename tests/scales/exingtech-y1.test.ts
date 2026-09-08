@@ -163,3 +163,41 @@ describe('ExingtechY1Adapter', () => {
     });
   });
 });
+
+// #394: adapters are shared singletons and computeMetrics() runs LATER than the
+// parse that produced the reading. On the mqtt-proxy and esphome-proxy watchers
+// the loop awaits processReading() - network exports included - while the
+// watcher is free to open the NEXT session, so onSessionStart() for session N+1
+// can land BEFORE computeMetrics() for session N. Reading the live cache there
+// hands the completed reading somebody else's composition.
+//
+// Each test below interleaves the two in exactly that order. Asserting only on
+// the payload of an uninterrupted session would pass with or without the fix.
+
+describe('ExingtechY1Adapter session boundary (#394)', () => {
+  function compFrame(fatTenths: number): Buffer {
+    const buf = Buffer.alloc(15);
+    buf.writeUInt16BE(800, 4);
+    buf.writeUInt16BE(fatTenths, 6);
+    buf.writeUInt16BE(550, 8);
+    buf.writeUInt16BE(35, 10);
+    buf.writeUInt16BE(400, 12);
+    return buf;
+  }
+
+  it('keeps the completed reading composition when the NEXT session starts first', () => {
+    const a = makeAdapter();
+    const reading = a.parseNotification(compFrame(225))!;
+    a.onSessionStart();
+    const payload = a.computeMetrics(reading, defaultProfile());
+    expect(payload.bodyFatPercent).toBeCloseTo(22.5, 1);
+  });
+
+  it('does not hand a hand-built reading the previous session composition', () => {
+    const a = makeAdapter();
+    a.parseNotification(compFrame(225));
+    a.onSessionStart();
+    const payload = a.computeMetrics({ weight: 80, impedance: 0 }, defaultProfile());
+    expect(payload.bodyFatPercent).not.toBeCloseTo(22.5, 1);
+  });
+});

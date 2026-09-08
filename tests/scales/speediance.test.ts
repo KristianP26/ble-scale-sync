@@ -66,6 +66,27 @@ describe('SpeedianceAdapter', () => {
       expect(adapter.isComplete(reading!)).toBe(true);
     });
 
+    it('survives an A7 frame too short to hold the impedance field', () => {
+      const adapter = makeAdapter();
+      // The frame walk only guarantees 12 bytes, but the impedance field ends
+      // at byte 17. Reading it unguarded threw ERR_OUT_OF_RANGE straight out of
+      // the notify callback, which has no try/catch above it: a dead process,
+      // not a dropped frame. The weight is complete at this length, so it is
+      // still taken and the missing impedance is reported as absent.
+      //
+      // Synthetic on purpose, and the exception to the byte-for-byte fixture
+      // rule: no capture shows a short A7 frame, so this is the length guard
+      // being exercised rather than an observed device behaviour. The real
+      // 20-byte capture is covered by the test above.
+      const short = Buffer.from('4d2300a76a96d1ff25012a3e0013', 'hex');
+      expect(short.length).toBe(14);
+      expect(() => adapter.parseCharNotification(uuid16(0xffb3), short)).not.toThrow();
+      const reading = adapter.parseCharNotification(uuid16(0xffb3), short);
+      expect(reading).not.toBeNull();
+      expect(reading!.weight).toBeCloseTo(76.35, 2);
+      expect(reading!.impedance).toBe(0);
+    });
+
     it('accepts an impedance inside the plausible whole-body range', () => {
       const adapter = makeAdapter();
       const frame = Buffer.from('4d2300a76a96d1ff25012a3e000a002e01970b2a', 'hex');

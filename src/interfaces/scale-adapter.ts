@@ -335,10 +335,15 @@ export interface ScaleAdapterCore {
    * watcher transports the watcher keeps running while `loop.ts` awaits
    * `processReading()` (network exports included) and can open the next GATT
    * session in the meantime. An adapter that carries composition out of band in
-   * its own fields must pin it onto the reading it belongs to - a
-   * `WeakMap<ScaleReading, ...>` snapshot taken at emit time, as
-   * `beurer-bf720`, `beurer-sanitas`, `hoffen`, `mgb`, `medisana-bs44x` and
-   * `senssun` all do - rather than read the live cache in `computeMetrics`.
+   * its own fields must pin it onto the reading it belongs to, taking the
+   * snapshot at emit time, rather than read the live cache in `computeMetrics`.
+   * Use `ReadingComposition` from `body-comp-helpers.ts` for that: it owns the
+   * `WeakMap` and the reasoning, and `of()` deliberately checks `has()` rather
+   * than falling back on a nullish value, so an adapter whose "no composition"
+   * state is itself null stays correct. Hand-rolling it is how six copies of
+   * the same paragraph drifted apart in type; `beurer-bf720`,
+   * `beurer-sanitas`, `hoffen`, `mgb`, `medisana-bs44x` and `senssun` are those
+   * copies and are still to be converted.
    *
    * It is a GATT-session hook only. The broadcast path never opens a session,
    * so `parseBroadcast` / `parseServiceData` run without it ever firing. Adding
