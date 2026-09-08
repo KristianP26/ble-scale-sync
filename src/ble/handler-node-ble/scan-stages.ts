@@ -30,7 +30,8 @@ import {
   resetAdapterBtmgmt,
 } from '../types.js';
 import NodeBle from 'node-ble';
-import { helperOf, type Adapter, type Device } from './dbus.js';
+import { isDebugEnabled } from '../../logger.js';
+import { helperOf, releaseDeviceProxy, type Adapter, type Device } from './dbus.js';
 import {
   getAdapter,
   resetConnection,
@@ -79,6 +80,38 @@ export async function acquireBluezAdapter(bleAdapter: string | undefined): Promi
   }
 }
 
+/** How often the MAC-targeted wait reports what BlueZ can currently see. */
+const SCAN_VISIBILITY_LOG_MS = 30_000;
+
+/**
+ * While waiting for one configured MAC, periodically log what BlueZ can see.
+ *
+ * `waitDevice` is silent by design: it polls for one address and says nothing
+ * about the rest of the room. So a `not found within 120s` log cannot tell
+ * "the scale never advertised" apart from "the scan is dead" or "we are waiting
+ * on the wrong address", and a reporter's log showing nothing but repeated
+ * `Scanning for device...` was unanswerable for exactly that reason (#397).
+ * Debug only, and the enumeration itself is skipped unless debug is on.
+ */
+function startScanVisibilityLog(btAdapter: Adapter, mac: string): () => void {
+  if (!isDebugEnabled()) return () => {};
+  const timer = setInterval(() => {
+    void (async () => {
+      try {
+        const addrs: string[] = await btAdapter.devices();
+        const seen = addrs.some((a) => formatMac(a) === mac);
+        bleLog.debug(
+          `Still waiting for ${mac}; BlueZ currently lists ${addrs.length} device(s)` +
+            `${seen ? ' (including the target)' : ''}: ${addrs.join(', ') || 'none'}`,
+        );
+      } catch (err) {
+        bleLog.debug(`Could not enumerate BlueZ devices while waiting: ${errMsg(err)}`);
+      }
+    })();
+  }, SCAN_VISIBILITY_LOG_MS);
+  return () => clearInterval(timer);
+}
+
 /**
  * Wait for the target device to show up in discovery.
  *
@@ -96,6 +129,19 @@ export async function waitForTargetDevice(
     throw abortSignal.reason ?? new DOMException('Aborted', 'AbortError');
   }
 
+  const stopVisibilityLog = startScanVisibilityLog(btAdapter, mac);
+  try {
+    return await awaitTargetDevice(btAdapter, mac, abortSignal);
+  } finally {
+    stopVisibilityLog();
+  }
+}
+
+async function awaitTargetDevice(
+  btAdapter: Adapter,
+  mac: string,
+  abortSignal?: AbortSignal,
+): Promise<Device> {
   const waitPromise = withTimeout(
     btAdapter.waitDevice(mac),
     DISCOVERY_TIMEOUT_MS,
@@ -301,6 +347,12 @@ export async function teardownSession(opts: {
     } catch {
       /* already disconnected or never connected */
     }
+    // Hand the Device proxy back. On a GATT cycle the resetConnection() below
+    // would drop it anyway, but an idle or broadcast cycle never resets, so
+    // without this the same device path collects one more listener and one more
+    // D-Bus match rule per cycle for the life of the process (#396, #397). The
+    // session is over here, so nothing else can be holding it.
+    releaseDeviceProxy(device);
   }
 
   if (gattAttempted) {
