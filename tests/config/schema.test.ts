@@ -88,6 +88,10 @@ describe('AppConfigSchema', () => {
       expect(result.data.scale.weight_unit).toBe('kg');
       expect(result.data.scale.height_unit).toBe('cm');
       expect(result.data.unknown_user).toBe('nearest');
+      // Absent out_of_range means today's behaviour: warn and export anyway.
+      // Changing this default would silently start discarding readings on
+      // every existing install (#395).
+      expect(result.data.out_of_range).toBe('warn');
       expect(result.data.users[0].last_known_weight).toBeNull();
     }
   });
@@ -815,5 +819,17 @@ describe('formatConfigError()', () => {
       expect(msg).toMatch(/Run '(npm run validate|ble-scale-sync validate)'/);
       expect(msg).toMatch(/'(npm run setup|ble-scale-sync setup)'/);
     }
+  });
+});
+
+describe('out_of_range (#395)', () => {
+  it('accepts skip', () => {
+    const result = AppConfigSchema.safeParse({ ...VALID_CONFIG, out_of_range: 'skip' });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a value that is neither warn nor skip', () => {
+    const result = AppConfigSchema.safeParse({ ...VALID_CONFIG, out_of_range: 'export' });
+    expect(result.success).toBe(false);
   });
 });

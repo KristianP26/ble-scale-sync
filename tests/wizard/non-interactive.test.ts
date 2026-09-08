@@ -140,6 +140,10 @@ describe('runNonInteractive()', () => {
       version: 1,
       scale: { weight_unit: 'kg', height_unit: 'cm' },
       unknown_user: 'nearest',
+      // "defaults complete" means every defaulted key is already spelled out.
+      // Leaving one absent is a different test: the wizard would fill it in and
+      // the file would legitimately change.
+      out_of_range: 'warn',
       users: [
         {
           name: 'Bob',

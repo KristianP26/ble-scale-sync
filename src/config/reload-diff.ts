@@ -48,7 +48,7 @@ function diffField(
  *
  * Notably hot-swappable (NOT in this list): scale_mac, weight_unit, height_unit,
  * runtime.dry_run, runtime.debug, runtime.scan_cooldown, exporters,
- * unknown_user, user profile fields, last_known_weight, update_check.
+ * unknown_user, out_of_range, user profile fields, last_known_weight, update_check.
  */
 export function diffRestartRequired(
   oldConfig: AppConfig,

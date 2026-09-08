@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { matchUserByWeight, detectWeightDrift } from '../../src/config/user-matching.js';
+import {
+  matchUserByWeight,
+  detectWeightDrift,
+  isOutOfRange,
+} from '../../src/config/user-matching.js';
 import type { UserConfig } from '../../src/config/schema.js';
 
 // --- Test data ---
@@ -184,5 +188,29 @@ describe('detectWeightDrift', () => {
     expect(detectWeightDrift(ALICE, 52)).toBeNull();
     // max-threshold = 68 is in safe zone
     expect(detectWeightDrift(ALICE, 68)).toBeNull();
+  });
+});
+
+// --- isOutOfRange ---
+
+/**
+ * Pins the exported predicate the processor's out_of_range guard shares with
+ * the matcher (#395). Both ends inclusive, so the boundary itself is IN range
+ * and a reading exactly on a user's limit is never discarded.
+ */
+describe('isOutOfRange', () => {
+  it('treats both ends of the range as inside it', () => {
+    expect(isOutOfRange(ALICE, 50)).toBe(false);
+    expect(isOutOfRange(ALICE, 70)).toBe(false);
+  });
+
+  it('is true just outside either end', () => {
+    expect(isOutOfRange(ALICE, 49.9)).toBe(true);
+    expect(isOutOfRange(ALICE, 70.1)).toBe(true);
+  });
+
+  it("is true for the reporter's suitcase reading", () => {
+    expect(isOutOfRange(ALICE, 178)).toBe(true);
+    expect(isOutOfRange(BOB, 178)).toBe(true);
   });
 });

@@ -397,6 +397,25 @@ export const AppConfigSchema = z.object({
   ble: BleSchema.optional(),
   scale: ScaleSchema.default({ weight_unit: 'kg', height_unit: 'cm' }),
   unknown_user: z.enum(['nearest', 'log', 'ignore']).default('nearest'),
+  /**
+   * What to do with a reading that no configured user's `weight_range` covers.
+   *
+   * `warn` (default) is the behaviour every install has had: log it and export
+   * it anyway. `skip` stops before the exporters and before the
+   * `last_known_weight` write.
+   *
+   * The distinction matters because `weight_range` was only ever a MATCHING
+   * input, never a guard. A reading nobody's range covers still resolves to
+   * somebody, through the single-user tier or the `last_known_weight` proximity
+   * tier, and then exports normally. A reporter stood on the scale holding a
+   * suitcase, got 178 kg at 0 ohm, and it went to Garmin and to a retained MQTT
+   * topic. Worse, `last_known_weight` was rewritten to 178, so the NEXT genuine
+   * weigh-in tie-broke to the other user and was dropped (#395).
+   *
+   * The default stays `warn` so no existing install silently starts discarding
+   * readings, but `skip` is the safer setting for a multi-user household.
+   */
+  out_of_range: z.enum(['warn', 'skip']).default('warn'),
   users: z.array(UserSchema).min(1, 'At least one user is required'),
   global_exporters: z.array(ExporterEntrySchema).optional(),
   runtime: RuntimeSchema.optional(),
@@ -421,6 +440,7 @@ export type RuntimeConfig = z.infer<typeof RuntimeSchema>;
 export type DockerConfig = z.infer<typeof DockerSchema>;
 export type AppConfig = z.infer<typeof AppConfigSchema>;
 export type UnknownUserStrategy = AppConfig['unknown_user'];
+export type OutOfRangeStrategy = AppConfig['out_of_range'];
 
 // --- Error formatting ---
 

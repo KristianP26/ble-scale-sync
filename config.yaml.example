@@ -74,6 +74,12 @@ scale:
 #   "ignore"  = silently skip the measurement
 unknown_user: nearest
 
+# What to do with a reading no user's weight_range covers.
+#   "warn" (default) = log it and export it anyway (behaviour before v1.29)
+#   "skip"           = log it and stop: no export, and last_known_weight is
+#                      left alone so the next weigh-in still matches correctly
+out_of_range: warn
+
 # --- Users ---
 # At least one user is required. For multi-user setups,
 # define weight_range so the app can identify who stepped on the scale.
