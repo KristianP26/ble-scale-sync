@@ -437,7 +437,7 @@ out_of_range: warn # warn | skip
 
 That matters when the scale reports something implausible. Standing on it holding a heavy bag can produce a reading tens of kilos out, and because it is exported, `last_known_weight` is rewritten from it. The next genuine weigh-in is then matched against a wrong remembered weight, so in a two-person household it can be attributed to the other person and lost.
 
-Setting `skip` stops such a reading before the exporters and before the `last_known_weight` write. It is logged either way. The default stays `warn` so no existing setup silently starts discarding measurements, but `skip` is the better setting for a multi-user household. This is hot-reloadable, like `unknown_user`.
+Setting `skip` stops such a reading before the exporters and before the `last_known_weight` write. It is logged either way. The default stays `warn` so no existing setup silently starts discarding measurements after an update, but `skip` is the better setting for a multi-user household. This is hot-reloadable, like `unknown_user`.
 
 ### Users
 
