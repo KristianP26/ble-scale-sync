@@ -158,6 +158,10 @@ else
   SCAN_COOLDOWN=$(opt_int scan_cooldown 30)
   # jq's // falls back only on null/false, so an explicit 0 survives.
   IDLE_RESCAN_DELAY=$(opt_int idle_rescan_delay 5)
+  RETRY_FAILED_EXPORTS=$(opt_bool retry_failed_exports)
+  # Same guard as garmin_weight_only: opt_bool echoes the raw option and this is
+  # interpolated unquoted, so anything that is not exactly "false" is true.
+  [ "$RETRY_FAILED_EXPORTS" = "false" ] || RETRY_FAILED_EXPORTS=true
   DEBUG=$(opt_bool debug)
 
   # ── MQTT auto-detection from HA Mosquitto add-on ──────────────────────
@@ -365,6 +369,7 @@ runtime:
   continuous_mode: true
   scan_cooldown: $SCAN_COOLDOWN
   idle_rescan_delay: $IDLE_RESCAN_DELAY
+  retry_failed_exports: $RETRY_FAILED_EXPORTS
   dry_run: false
   debug: $DEBUG
 

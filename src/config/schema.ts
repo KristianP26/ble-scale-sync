@@ -400,6 +400,19 @@ export const RuntimeSchema = z.object({
    * backoff, which is the right thing for those.
    */
   idle_rescan_delay: z.number().int().min(0).max(3600).default(5),
+  /**
+   * Keep a reading whose export failed and retry it on a later cycle (#412).
+   *
+   * On by default. The failure it covers is silent and total: a cloud target
+   * that is down for an hour loses the weigh-in with no artefact anywhere, and
+   * a reporter lost four that way in a week. Bounded at 72 hours, 5 attempts
+   * and 50 entries, and only for exporters that can record a past reading.
+   *
+   * Turning it off restores the previous behaviour exactly, including writing
+   * nothing to disk. See ADR D014: this persists body composition and a user
+   * name by default, which is why it is a decision and not just a flag.
+   */
+  retry_failed_exports: z.boolean().default(true),
 });
 
 export const DockerSchema = z.object({

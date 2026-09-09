@@ -876,3 +876,27 @@ describe('runtime.idle_rescan_delay (#398)', () => {
     ).toBe(false);
   });
 });
+
+describe('runtime.retry_failed_exports (#412)', () => {
+  it('defaults to on', () => {
+    const result = AppConfigSchema.safeParse({ ...VALID_CONFIG, runtime: {} });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.runtime?.retry_failed_exports).toBe(true);
+  });
+
+  it('keeps an explicit false, which is what turns the disk writes off', () => {
+    const result = AppConfigSchema.safeParse({
+      ...VALID_CONFIG,
+      runtime: { retry_failed_exports: false },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.runtime?.retry_failed_exports).toBe(false);
+  });
+
+  it('rejects a non-boolean', () => {
+    expect(
+      AppConfigSchema.safeParse({ ...VALID_CONFIG, runtime: { retry_failed_exports: 'yes' } })
+        .success,
+    ).toBe(false);
+  });
+});

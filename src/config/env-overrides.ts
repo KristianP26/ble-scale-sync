@@ -28,6 +28,7 @@ export function applyEnvOverrides(config: AppConfig): AppConfig {
     watchdog_max_consecutive_failures: config.runtime?.watchdog_max_consecutive_failures ?? 10,
     watch_config: config.runtime?.watch_config ?? true,
     idle_rescan_delay: config.runtime?.idle_rescan_delay ?? 5,
+    retry_failed_exports: config.runtime?.retry_failed_exports ?? true,
   };
   const ble = { handler: 'auto' as const, ...config.ble };
 

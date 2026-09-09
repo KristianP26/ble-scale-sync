@@ -71,6 +71,7 @@ options:
   garmin_upload_timeout_sec: 180
   scan_cooldown: 30
   idle_rescan_delay: 5
+  retry_failed_exports: true
   reset_bluetooth: true
   debug: false
   custom_config: false
@@ -111,6 +112,7 @@ schema:
   garmin_upload_timeout_sec: int(10,900)?
   scan_cooldown: int(5,3600)
   idle_rescan_delay: int(0,3600)?
+  retry_failed_exports: bool?
   reset_bluetooth: bool
   debug: bool
   custom_config: bool
