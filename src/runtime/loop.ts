@@ -27,6 +27,16 @@ export interface RuntimeLoopDeps {
   onSuccess?: () => Promise<void> | void;
   onFailure?: (err: unknown) => void;
   /**
+   * Run at the start of every iteration, before the source is asked for a
+   * reading. Used to drain the failed-export queue (#412): the network is as
+   * likely to be back here as anywhere, and nothing else is competing for it.
+   *
+   * Not a timer. On the watcher transports an iteration begins when somebody
+   * steps on the scale, so a queue in a house that stops using the scale waits
+   * until it is used again.
+   */
+  onCycleStart?: () => Promise<void>;
+  /**
    * Delay to wait after this error instead of the exponential backoff, or
    * undefined to back off as usual. The loop asks; the policy belongs to
    * whoever built the source, because only it can tell an idle scan from a
@@ -56,6 +66,7 @@ export async function runContinuousLoop(deps: RuntimeLoopDeps): Promise<void> {
     onSourceReload,
     onSuccess,
     onFailure,
+    onCycleStart,
     failureDelayMs,
     failureLogPrefix = 'Error processing reading',
   } = deps;
@@ -66,6 +77,10 @@ export async function runContinuousLoop(deps: RuntimeLoopDeps): Promise<void> {
     while (!signal.aborted) {
       try {
         touchHeartbeat();
+        // Before the source is asked for anything: a queued export must not
+        // wait for the next weigh-in to even be attempted on the poll
+        // transports, where an iteration is a scan cycle.
+        if (onCycleStart) await onCycleStart();
 
         // Start hook is idempotent in every concrete source: ReadingWatcher
         // (mqtt-proxy, esphome-proxy) early-returns when `this.started === true`,

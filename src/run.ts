@@ -19,6 +19,7 @@ import { loadAppConfig } from './config/load.js';
 import { resolveRuntimeConfig } from './config/resolve.js';
 import { startConfigWatcher, type ConfigWatcherHandle } from './config/watch.js';
 import { configureUpdateState } from './update-state.js';
+import { flushQueue } from './runtime/export-queue.js';
 import type { Exporter } from './interfaces/exporter.js';
 import type { ScaleAdapter } from './interfaces/scale-adapter.js';
 import { createAppContext } from './runtime/context.js';
@@ -30,6 +31,7 @@ import { buildReadingSource } from './runtime/sources.js';
 import {
   buildSingleUserExporters,
   getExportersForUser,
+  collectConfiguredExporters,
   buildAllUniqueExporters,
 } from './runtime/exporters.js';
 
@@ -348,7 +350,20 @@ async function main(): Promise<void> {
       getExportersForUser: (slug) => getExportersForUser(ctx, slug),
     });
 
+  // At the START of a single run, not after its dispatch: a total export
+  // failure exits non-zero below, before any post-dispatch code could run, and
+  // that is exactly the run that just queued something (#412).
+  const flushQueuedExports = async (): Promise<void> => {
+    if (!ctx.exportQueuePath) return;
+    try {
+      await flushQueue(ctx.exportQueuePath, collectConfiguredExporters(ctx));
+    } catch (err) {
+      log.debug(`Retrying queued exports failed: ${errMsg(err)}`);
+    }
+  };
+
   if (!initialResolved.continuousMode) {
+    await flushQueuedExports();
     const source = new PollReadingSource(ctx, adapters);
     const raw = await source.nextReading(ctx.signal);
     const success = await runProcessReading(raw);
@@ -397,6 +412,7 @@ async function main(): Promise<void> {
     onSourceReload: bundle.onSourceReload,
     onSuccess: bundle.onSuccess,
     onFailure: bundle.onFailure,
+    onCycleStart: flushQueuedExports,
     failureDelayMs: bundle.failureDelayMs,
     failureLogPrefix: bundle.failureLogPrefix,
   });

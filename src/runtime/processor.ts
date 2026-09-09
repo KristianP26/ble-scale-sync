@@ -1,5 +1,5 @@
 import type { RawReading } from '../ble/shared.js';
-import type { Exporter, ExportContext } from '../interfaces/exporter.js';
+import type { Exporter, ExportContext, ExportResultDetail } from '../interfaces/exporter.js';
 import type { BodyComposition, ScaleReading } from '../interfaces/scale-adapter.js';
 import type { WeightUnit, UserConfig } from '../config/schema.js';
 import type { AppContext } from './context.js';
@@ -10,6 +10,7 @@ import { dispatchExports } from '../orchestrator.js';
 import { createLogger } from '../logger.js';
 import { checkAndLogUpdate } from '../update-check.js';
 import { fmtWeight } from './format.js';
+import { enqueue } from './export-queue.js';
 
 const log = createLogger('Sync');
 
@@ -66,6 +67,56 @@ export interface ProcessReadingOpts {
  * Returns true if export succeeded (or was skipped via dry-run / unknown-user
  * strategy), false on dispatch failure.
  */
+/**
+ * Persist a failed export so a later cycle can deliver it (#412).
+ *
+ * Only exporters that accept a backdated reading are queued. The others cannot
+ * express "this happened on Tuesday" at all, so a late delivery would put a
+ * stale number in front of the user as if it were current: a retained MQTT
+ * topic contradicting the live one, or a push notification about a weigh-in
+ * from yesterday. For those the reading is genuinely gone, and the log says so
+ * rather than leaving the user to infer it.
+ */
+function queueFailedExports(
+  ctx: AppContext,
+  exporters: Exporter[],
+  payload: BodyComposition,
+  context: ExportContext,
+  details: ExportResultDetail[],
+): void {
+  const failed = details.filter((d) => !d.ok);
+  if (failed.length === 0) return;
+
+  const byName = new Map(exporters.map((e) => [e.name, e]));
+  const unrecoverable: string[] = [];
+
+  for (const detail of failed) {
+    const exporter = byName.get(detail.name);
+    if (!exporter?.supportsBackdate) {
+      unrecoverable.push(detail.name);
+      continue;
+    }
+    if (!ctx.retryFailedExports || !ctx.exportQueuePath) continue;
+    enqueue(ctx.exportQueuePath, {
+      exporter: detail.name,
+      payload,
+      ...(context.timestamp ? { timestamp: context.timestamp.toISOString() } : {}),
+      ...(context.userName ? { userName: context.userName } : {}),
+      ...(context.userSlug ? { userSlug: context.userSlug } : {}),
+      queuedAt: new Date().toISOString(),
+      attempts: 0,
+      ...(detail.error ? { lastError: detail.error } : {}),
+    });
+  }
+
+  if (unrecoverable.length > 0) {
+    log.warn(
+      `${unrecoverable.join(', ')} cannot record a past reading, so this measurement ` +
+        `is not recoverable for ${unrecoverable.length > 1 ? 'those targets' : 'that target'}.`,
+    );
+  }
+}
+
 export async function processReading(
   ctx: AppContext,
   raw: RawReading,
@@ -183,6 +234,7 @@ async function processReadingFrames(
     };
 
     const { success, details } = await dispatchExports(exporters!, payload, context);
+    queueFailedExports(ctx, exporters!, payload, context, details);
 
     if (isLast) {
       ctx.display?.result(user.slug, user.name, payload.weight, details);

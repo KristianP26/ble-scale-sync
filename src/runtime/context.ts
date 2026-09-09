@@ -7,6 +7,7 @@ import type {
 } from '../config/schema.js';
 import type { BleHandlerName } from '../ble/types.js';
 import type { ConfigSource } from '../config/load.js';
+import { resolveExportQueuePath } from './export-queue.js';
 import type { ResolvedRuntimeConfig } from '../config/resolve.js';
 import type { EmbeddedBrokerHandle } from '../ble/embedded-broker.js';
 import type { Exporter } from '../interfaces/exporter.js';
@@ -23,6 +24,10 @@ export interface AppContext {
   // Frozen for process lifetime
   readonly configSource: ConfigSource;
   readonly configPath: string | undefined;
+  /** Absolute path of the failed-export queue, or undefined when retrying is off (#412). */
+  readonly exportQueuePath: string | undefined;
+  /** Whether a failed export is persisted for a later cycle (#412). */
+  readonly retryFailedExports: boolean;
   readonly bleHandler: BleHandlerName;
   readonly bleAdapter: string | undefined;
   readonly esphomeProxy: EsphomeProxyConfig | undefined;
@@ -76,6 +81,13 @@ export function createAppContext(init: AppContextInit): AppContext {
 
     configSource: init.configSource,
     configPath: init.configPath,
+    // Off when the user turned it off, and also when there is nowhere durable
+    // to write: a queue in a directory that vanishes is worse than none, since
+    // it drops the reading AND leaves the user believing it was kept (#412).
+    retryFailedExports: init.resolved.retryFailedExports,
+    exportQueuePath: init.resolved.retryFailedExports
+      ? resolveExportQueuePath(init.configPath)
+      : undefined,
     bleHandler: init.resolved.bleHandler,
     bleAdapter: init.resolved.bleAdapter,
     esphomeProxy: init.resolved.esphomeProxy,

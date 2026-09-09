@@ -292,6 +292,43 @@ describe('runContinuousLoop', () => {
     await loop;
   });
 
+  // #412: a queued export must not wait for the next weigh-in to even be
+  // attempted, so the hook runs before the source is asked for anything.
+  it('runs onCycleStart before nextReading, every iteration', async () => {
+    const ac = new AbortController();
+    const { source, nextReading } = makeSource();
+    const calls: string[] = [];
+    nextReading.mockImplementation(async () => {
+      calls.push('nextReading');
+      return STUB_RAW;
+    });
+
+    const loop = runContinuousLoop({
+      source,
+      processReading: async () => true,
+      signal: ac.signal,
+      touchHeartbeat: vi.fn(),
+      isReloadRequested: vi.fn(() => false),
+      clearReloadRequest: vi.fn(),
+      onCycleStart: async () => {
+        calls.push('onCycleStart');
+      },
+      onSuccess: async () => {
+        if (calls.length >= 4) ac.abort();
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await loop;
+
+    expect(calls.slice(0, 4)).toEqual([
+      'onCycleStart',
+      'nextReading',
+      'onCycleStart',
+      'nextReading',
+    ]);
+  });
+
   it('SIGHUP reload runs onReload -> clearReloadRequest -> onSourceReload before nextReading', async () => {
     const ac = new AbortController();
     const { source, nextReading } = makeSource();

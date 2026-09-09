@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import type {
   AppConfig,
   UserConfig,
@@ -126,6 +129,7 @@ interface CtxOverrides {
   configPath?: string;
   display?: DisplayNotifier;
   outOfRange?: AppConfig['out_of_range'];
+  exportQueuePath?: string;
 }
 
 function makeCtx(users: UserConfig[], overrides: CtxOverrides = {}): AppContext {
@@ -145,6 +149,8 @@ function makeCtx(users: UserConfig[], overrides: CtxOverrides = {}): AppContext 
     lastExportedWeights: new Map(),
     embeddedBroker: null,
     display: overrides.display,
+    retryFailedExports: overrides.exportQueuePath !== undefined,
+    exportQueuePath: overrides.exportQueuePath,
     abortApp: vi.fn(),
     setConfig: vi.fn(),
   } as AppContext;
@@ -673,5 +679,98 @@ describe('processReading: out_of_range', () => {
     await processReading(ctx, raw, { singleUserExporters: [fakeExporter()] });
 
     expect(dispatchExports).not.toHaveBeenCalled();
+  });
+});
+
+describe('failed exports are queued for a later cycle (#412)', () => {
+  let dir: string;
+  let queuePath: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'processor-queue-'));
+    queuePath = path.join(dir, 'queue.jsonl');
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  function exporterNamed(name: string, supportsBackdate: boolean): Exporter {
+    return { name, supportsBackdate, export: vi.fn() } as unknown as Exporter;
+  }
+
+  it('queues a backdate-capable exporter, with the user it was measured for', async () => {
+    vi.mocked(dispatchExports).mockResolvedValueOnce({
+      success: false,
+      details: [{ name: 'garmin', ok: false, error: 'target down' }],
+    });
+    const ctx = makeCtx([dad], { exportQueuePath: queuePath });
+
+    await processReading(ctx, rawReading(), {
+      singleUserExporters: [exporterNamed('garmin', true)],
+    });
+
+    const lines = fs.readFileSync(queuePath, 'utf-8').trim().split(String.fromCharCode(10));
+    expect(lines).toHaveLength(1);
+    const queued = JSON.parse(lines[0]) as {
+      exporter: string;
+      userSlug?: string;
+      lastError?: string;
+      payload: { weight: number };
+    };
+    expect(queued.exporter).toBe('garmin');
+    expect(queued.userSlug).toBe(dad.slug);
+    expect(queued.lastError).toBe('target down');
+    expect(queued.payload.weight).toBe(80);
+  });
+
+  it('does not queue an exporter that cannot record a past reading', async () => {
+    vi.mocked(dispatchExports).mockResolvedValueOnce({
+      success: false,
+      details: [{ name: 'mqtt', ok: false, error: 'broker down' }],
+    });
+    const ctx = makeCtx([dad], { exportQueuePath: queuePath });
+
+    await processReading(ctx, rawReading(), {
+      singleUserExporters: [exporterNamed('mqtt', false)],
+    });
+
+    // A late MQTT publish would contradict the live retained value, so the
+    // reading is genuinely gone and the log has to say so.
+    expect(fs.existsSync(queuePath)).toBe(false);
+    const logged = [...logSpy.mock.calls, ...warnSpy.mock.calls].flat().join(' ');
+    expect(logged).toContain('not recoverable');
+  });
+
+  it('queues only the failures, not the exporters that succeeded', async () => {
+    vi.mocked(dispatchExports).mockResolvedValueOnce({
+      success: true,
+      details: [
+        { name: 'file', ok: true },
+        { name: 'garmin', ok: false, error: 'target down' },
+      ],
+    });
+    const ctx = makeCtx([dad], { exportQueuePath: queuePath });
+
+    await processReading(ctx, rawReading(), {
+      singleUserExporters: [exporterNamed('file', true), exporterNamed('garmin', true)],
+    });
+
+    const lines = fs.readFileSync(queuePath, 'utf-8').trim().split(String.fromCharCode(10));
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]).exporter).toBe('garmin');
+  });
+
+  it('writes nothing at all when retrying is turned off', async () => {
+    vi.mocked(dispatchExports).mockResolvedValueOnce({
+      success: false,
+      details: [{ name: 'garmin', ok: false, error: 'target down' }],
+    });
+    const ctx = makeCtx([dad]); // no queue path: the feature is off
+
+    await processReading(ctx, rawReading(), {
+      singleUserExporters: [exporterNamed('garmin', true)],
+    });
+    expect(fs.existsSync(queuePath)).toBe(false);
   });
 });
