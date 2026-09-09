@@ -15,6 +15,7 @@ import {
   type ScaleBodyComp,
 } from './body-comp-helpers.js';
 import type { MatchDescriptor } from './match-descriptor.js';
+import { bleLog } from '../ble/types.js';
 
 const SVC_UUID = uuid16(0xfff0);
 const CHR_NOTIFY = uuid16(0xfff1);
@@ -120,10 +121,30 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
     if (weight <= 0 || !Number.isFinite(weight)) return null;
 
     const modeFlag = data[11];
+    // Logged for every frame, not only the impedance ones: without it, a
+    // reporter's log that carries no impedance line is indistinguishable from
+    // one where impedance mode was never reached.
+    bleLog.debug(`Inlife frame: mode=0x${modeFlag.toString(16)}, weight ${weight} kg`);
 
     if (modeFlag === 0x80 || modeFlag === 0x81) {
-      // Impedance mode — impedance as uint32 BE at bytes [4-7]
+      // Impedance mode: read as a u32 BE over [4..7]. That width is NOT
+      // verified. The same bytes carry two fields in the legacy branch below
+      // (a 24-bit LBM at [4..6] and the high byte of visceral at [7]), so a
+      // narrower field at the same offset is just as plausible, and switching
+      // BIA on without knowing which would be a guess (#405).
+      //
+      // Every candidate is logged with the whole frame, so one owner's debug
+      // log answers it without a rebuild. A body fat from the vendor app for
+      // the SAME weigh-in is still needed: a divisor (Eufy P2 reads its
+      // impedance /10) can put more than one candidate inside a plausible ohm
+      // band, which is how the Eufy P2 field was originally misread.
       this.cachedImpedance = data.readUInt32BE(4);
+      bleLog.debug(
+        `Inlife 0x${modeFlag.toString(16)} frame: u32[4..7]=${this.cachedImpedance}, ` +
+          `u24[4..6]=${(data[4] << 16) | (data[5] << 8) | data[6]}, ` +
+          `u16[4..5]=${data.readUInt16BE(4)}, u16[6..7]=${data.readUInt16BE(6)}, ` +
+          `weight ${weight} kg, frame ${data.toString('hex')} (#405)`,
+      );
       this.cachedComp = {};
     } else {
       // Legacy mode — body comp values embedded

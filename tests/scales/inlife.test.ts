@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { bleLog } from '../../src/ble/types.js';
 import { InlifeScaleAdapter } from '../../src/scales/inlife.js';
 import type { ConnectionContext } from '../../src/interfaces/scale-adapter.js';
 import {
@@ -264,5 +265,70 @@ describe('InlifeScaleAdapter session boundary (#394)', () => {
     a.onSessionStart();
     const payload = a.computeMetrics({ weight: 80, impedance: 0 }, defaultProfile());
     expect(payload.visceralFat).not.toBeCloseTo(20, 1);
+  });
+});
+
+describe('InlifeScaleAdapter diagnostics (#405)', () => {
+  /** An impedance-mode frame with a known value in every candidate window. */
+  function impedanceFrame(raw: number): Buffer {
+    const buf = Buffer.alloc(14);
+    buf[0] = 0x02;
+    buf[1] = 0x10;
+    buf.writeUInt16BE(784, 2); // 78.4 kg
+    buf.writeUInt32BE(raw, 4);
+    buf[11] = 0x80;
+    return buf;
+  }
+
+  it('logs every candidate reading of the unverified field, with the whole frame', () => {
+    const lines: string[] = [];
+    const spy = vi.spyOn(bleLog, 'debug').mockImplementation((m: string) => {
+      lines.push(m);
+    });
+    try {
+      const adapter = new InlifeScaleAdapter();
+      const frame = impedanceFrame(500);
+      adapter.parseNotification(frame);
+
+      const line = lines.find((l) => l.includes('u32[4..7]'));
+      expect(line, 'the candidate line must be logged').toBeDefined();
+      // All four widths, so a later proposal needs no rebuild to be checked...
+      expect(line).toContain('u32[4..7]=500');
+      expect(line).toContain('u24[4..6]=1');
+      expect(line).toContain('u16[4..5]=0');
+      expect(line).toContain('u16[6..7]=500');
+      // ...and the raw frame, so a split nobody has thought of yet is still
+      // recoverable from an old reporter log.
+      expect(line).toContain(frame.toString('hex'));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('logs the mode byte for a legacy frame too, so silence is distinguishable', () => {
+    const lines: string[] = [];
+    const spy = vi.spyOn(bleLog, 'debug').mockImplementation((m: string) => {
+      lines.push(m);
+    });
+    try {
+      const buf = Buffer.alloc(14);
+      buf[0] = 0x02;
+      buf.writeUInt16BE(784, 2);
+      buf[11] = 0x00; // legacy mode
+      new InlifeScaleAdapter().parseNotification(buf);
+
+      expect(lines.some((l) => l.includes('mode=0x0'))).toBe(true);
+      // The candidate line must NOT fire here: those bytes are LBM and
+      // visceral in this mode.
+      expect(lines.some((l) => l.includes('u32[4..7]'))).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('changes nothing about what is exported', () => {
+    const adapter = new InlifeScaleAdapter();
+    const reading = adapter.parseNotification(impedanceFrame(500))!;
+    expect(reading).toEqual({ weight: 78.4, impedance: 500 });
   });
 });
