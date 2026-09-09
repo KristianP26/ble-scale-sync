@@ -48,8 +48,6 @@ function diffField(
  *
  * Notably hot-swappable (NOT in this list): scale_mac, weight_unit, height_unit,
  * runtime.dry_run, runtime.debug, runtime.scan_cooldown, runtime.idle_rescan_delay,
- * runtime.retry_failed_exports (read at startup; a change needs a restart to
- * take effect, but it changes nothing already queued),
  * ble.session_timeout_sec, ble.auto_clear_stale_bond, ble.bind_key, every ble.qn_*,
  * ble.proxy_liveness_timeout_min, exporters,
  * unknown_user, out_of_range, user profile fields, last_known_weight, update_check.
@@ -134,6 +132,15 @@ export function diffRestartRequired(
     'runtime.continuous_mode',
     oldConfig.runtime?.continuous_mode,
     newConfig.runtime?.continuous_mode,
+  );
+  // The queue path is resolved once in createAppContext, so flipping this key
+  // does nothing until a restart. Without this row the user would get neither
+  // the effect nor the warning, which is the gap ble.force_scale_adapter had.
+  diffField(
+    out,
+    'runtime.retry_failed_exports',
+    oldConfig.runtime?.retry_failed_exports,
+    newConfig.runtime?.retry_failed_exports,
   );
   diffField(
     out,

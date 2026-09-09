@@ -355,6 +355,10 @@ async function main(): Promise<void> {
   // that is exactly the run that just queued something (#412).
   const flushQueuedExports = async (): Promise<void> => {
     if (!ctx.exportQueuePath) return;
+    // A dry run promises to skip exports, and a queued upload firing under it
+    // is exactly what that promise is about. Nothing is delivered and nothing
+    // is dropped: the queue is left for a real run.
+    if (ctx.dryRun) return;
     try {
       await flushQueue(ctx.exportQueuePath, collectConfiguredExporters(ctx));
     } catch (err) {

@@ -172,3 +172,72 @@ describe('export retry queue (#412)', () => {
     expect(path.basename(resolved)).toBe('.export-retry-queue.jsonl');
   });
 });
+
+describe('export retry queue: the cases that could lose a reading (#412)', () => {
+  let dir: string;
+  let file: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'export-queue-edge-'));
+    file = path.join(dir, 'queue.jsonl');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('does not discard entries it never attempted when the file is oversized', async () => {
+    // A file with more than the write-path cap: hand-edited, or written by a
+    // version with a bigger bound. Capping on READ would delete readings that
+    // were never even tried.
+    const many = Array.from({ length: 60 }, (_, i) =>
+      entry({ exporter: 'garmin', lastError: `e${i}` }),
+    );
+    saveQueue(file, many);
+    expect(loadQueue(file, NOW)).toHaveLength(60);
+
+    const garmin = fakeExporter('garmin', async () => ({ success: true }));
+    const result = await flushQueue(file, [garmin], NOW);
+    expect(result.delivered).toBe(60);
+  });
+
+  it('takes an entry off disk before attempting it, so a crash cannot duplicate it', async () => {
+    saveQueue(file, [entry({ lastError: 'first' }), entry({ lastError: 'second' })]);
+    const seenDuringFirstExport: string[] = [];
+
+    let call = 0;
+    const garmin = fakeExporter('garmin', async () => {
+      call += 1;
+      if (call === 1) {
+        // What is on disk while the first entry is in flight: the second only.
+        for (const line of fs.readFileSync(file, 'utf-8').trim().split(String.fromCharCode(10))) {
+          seenDuringFirstExport.push((JSON.parse(line) as { lastError?: string }).lastError ?? '');
+        }
+      }
+      return { success: true };
+    });
+
+    await flushQueue(file, [garmin], NOW);
+
+    expect(seenDuringFirstExport).toEqual(['second']);
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('keeps a failure and still delivers the entry after it', async () => {
+    // The reverse order of the other multi-entry test: `keep` accumulates, so
+    // a failure first must not swallow the success behind it.
+    saveQueue(file, [entry({ exporter: 'wger' }), entry({ exporter: 'garmin' })]);
+    const wger = fakeExporter('wger', async () => ({ success: false, error: 'down' }));
+    const garmin = fakeExporter('garmin', async () => ({ success: true }));
+
+    const result = await flushQueue(file, [wger, garmin], NOW);
+
+    expect(result).toMatchObject({ delivered: 1, failed: 1 });
+    const left = loadQueue(file, NOW);
+    expect(left).toHaveLength(1);
+    expect(left[0].exporter).toBe('wger');
+  });
+});

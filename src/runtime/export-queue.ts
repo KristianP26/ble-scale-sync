@@ -81,7 +81,11 @@ export function loadQueue(path: string, now: number = Date.now()): QueuedExport[
       log.debug('Skipping an unreadable line in the retry queue');
     }
   }
-  return entries.slice(-MAX_ENTRIES);
+  // Deliberately NOT capped here. The count bound belongs to the write path:
+  // capping on read would mean a flush over an oversized file (hand-edited, or
+  // written by a version with a larger bound) permanently deleting readings it
+  // never even attempted.
+  return entries;
 }
 
 /**
@@ -90,18 +94,20 @@ export function loadQueue(path: string, now: number = Date.now()): QueuedExport[
  * Deleting matters: this holds body composition and a user name, so an empty
  * file left behind is health data lingering after the last entry was delivered.
  */
-export function saveQueue(path: string, entries: QueuedExport[]): void {
+export function saveQueue(path: string, entries: QueuedExport[]): boolean {
   try {
     if (entries.length === 0) {
       if (existsSync(path)) unlinkSync(path);
-      return;
+      return true;
     }
     // atomicWrite rewrites the whole file (tmp + rename) and applies 0600, the
     // same mode config.yaml gets. The line format is for legibility, not for
     // append-durability: there is no append path here.
     atomicWrite(path, entries.map((e) => JSON.stringify(e)).join('\n') + '\n');
+    return true;
   } catch (err) {
     log.warn(`Could not write the retry queue: ${errMsg(err)}`);
+    return false;
   }
 }
 
@@ -125,6 +131,12 @@ export function enqueue(path: string, entry: QueuedExport, now: number = Date.no
  * that key on a timestamp or a date, but `file` appends a row unconditionally
  * and runalyze carries no request id, so at-least-once would leave a duplicate
  * in the user's own data. A lost reading is the better failure of the two.
+ *
+ * No in-flight guard: the only callers are the continuous loop, which awaits
+ * this before asking the source for a reading, and the single-run path, which
+ * calls it once before anything else. Serialisation comes from that sequencing
+ * rather than from this function, so a future caller that fires it concurrently
+ * needs its own.
  */
 export async function flushQueue(
   path: string,
@@ -150,7 +162,15 @@ export async function flushQueue(
     const entry = pending[i];
     // Remove before attempting: everything not yet tried stays on disk, so a
     // crash costs at most the one in flight.
-    saveQueue(path, [...keep, ...pending.slice(i + 1)]);
+    //
+    // If that write fails the file still holds this entry, so attempting it now
+    // would deliver a reading the next flush delivers again. A full disk is not
+    // a reason to duplicate somebody's weigh-in: stop, and let the next cycle
+    // try the whole queue.
+    if (!saveQueue(path, [...keep, ...pending.slice(i + 1)])) {
+      log.warn('Stopping the retry pass: the queue could not be written, so nothing is attempted.');
+      return { delivered, failed, dropped };
+    }
 
     const exporter = byName.get(entry.exporter);
     if (!exporter) {

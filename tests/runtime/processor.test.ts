@@ -761,12 +761,14 @@ describe('failed exports are queued for a later cycle (#412)', () => {
     expect(JSON.parse(lines[0]).exporter).toBe('garmin');
   });
 
-  it('writes nothing at all when retrying is turned off', async () => {
+  it('writes nothing when retrying is turned off, even with a path available', async () => {
     vi.mocked(dispatchExports).mockResolvedValueOnce({
       success: false,
       details: [{ name: 'garmin', ok: false, error: 'target down' }],
     });
-    const ctx = makeCtx([dad]); // no queue path: the feature is off
+    // A path AND the flag off: without both, this test could pass because the
+    // path was missing rather than because the flag was respected.
+    const ctx = { ...makeCtx([dad], { exportQueuePath: queuePath }), retryFailedExports: false };
 
     await processReading(ctx, rawReading(), {
       singleUserExporters: [exporterNamed('garmin', true)],
