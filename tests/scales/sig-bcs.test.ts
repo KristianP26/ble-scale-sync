@@ -103,3 +103,36 @@ describe('StandardGattScaleAdapter sentinel handling (#405)', () => {
     expect(payload.bodyFatPercent).toBeLessThan(100);
   });
 });
+
+/**
+ * beurer-bf720.ts keeps its own copy of this parser, because it is entangled
+ * with the user-slot and consent state machine. Two implementations of one
+ * characteristic is how #405 happened, so pin that they agree on the frames
+ * from the #229 BF788 capture.
+ */
+describe('the BF720 copy agrees with the shared decoder', () => {
+  // flags 0x0398: BMR, muscle %, soft lean mass, body water mass, impedance.
+  const REAL_COMP = Buffer.from('9803f300962389014042fa2f550f', 'hex');
+  // Every composition field zeroed, which is 35 of the 36 frames in that capture.
+  const ZEROED_COMP = Buffer.from('9803000096230000000000000000', 'hex');
+
+  it('decodes the real frame to the numbers the BF720 test asserts', () => {
+    const decoded = parseSigBodyComposition(REAL_COMP)!;
+    expect(decoded.bodyFatPercent).toBeCloseTo(24.3, 1);
+    expect(decoded.musclePct).toBeCloseTo(39.3, 1);
+    expect(decoded.softLeanKg).toBeCloseTo(84.8, 1);
+    expect(decoded.waterMassKg).toBeCloseTo(61.41, 1);
+    expect(decoded.impedanceOhm).toBeCloseTo(392.5, 1);
+  });
+
+  it('reads the zeroed stub as carrying no measurement at all', () => {
+    const decoded = parseSigBodyComposition(ZEROED_COMP)!;
+    expect(decoded.bodyFatPercent).toBeUndefined();
+    expect(decoded.musclePct).toBeUndefined();
+    expect(decoded.softLeanKg).toBe(0);
+    expect(decoded.waterMassKg).toBe(0);
+    // No weight bit in these flags, which is why this frame never completed a
+    // reading on the two adapters that did not guard it.
+    expect(decoded.weightKg).toBeUndefined();
+  });
+});

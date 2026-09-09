@@ -871,7 +871,12 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     if (flags & 0x0010) {
       const muscle = u16(off); // Muscle %
       if (muscle == null) return;
-      this.cachedComp.muscle = muscle * 0.1;
+      // Same rule the fat field above already applies: 0 and 0xFFFF are "no
+      // measurement", not a measurement of zero. buildPayload guards muscle on
+      // `!= null`, so a zero here exports 0 kg of muscle and a physique rating
+      // computed from it. Only the fat was guarded, which shielded the observed
+      // stubs (they zero both) but not a frame that zeroes only this one (#405).
+      if (muscle !== 0 && muscle !== 0xffff) this.cachedComp.muscle = muscle * 0.1;
       off += 2;
     }
     if (flags & 0x0020) off += 2; // Muscle Mass (unused)
