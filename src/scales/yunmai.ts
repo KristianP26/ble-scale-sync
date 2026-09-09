@@ -29,7 +29,10 @@ const MINI_CACHE_MAX = 32;
 function normalizeAddress(address: string | undefined): string | undefined {
   if (!address) return undefined;
   const flat = address.replace(/[:-]/g, '').toLowerCase();
-  return flat.length > 0 ? flat : undefined;
+  // Hex only. noble reports the literal string 'unknown' as an address on some
+  // macOS peripherals, which formatMac turns into 'UN:KN:OW': every such device
+  // would otherwise share one cache key.
+  return /^[0-9a-f]{6,}$/.test(flat) ? flat : undefined;
 }
 
 /**
@@ -95,20 +98,6 @@ export class YunmaiScaleAdapter
       this.miniByAddress.set(address, mini);
     }
 
-    // Assigned, not latched, and this is a known-imperfect compromise (#406).
-    //
-    // The adapter is a shared singleton and matches() runs for every candidate
-    // a scan produces, so the flag tracks the last Yunmai-named device rather
-    // than the one about to be read. Both alternatives are worse than this:
-    // latching it true means a standard unit inherits the Mini's 4 s hold and
-    // has [15..16] read as impedance, and there is no capture saying what a
-    // standard unit puts there.
-    //
-    // The real fix is per-device state resolved when the session opens, and it
-    // is blocked on the adapter contract: onConnected() is where the device
-    // address arrives, and shared.ts treats an adapter with onConnected as
-    // NOT using unlockCommand, which is what starts a Yunmai measurement.
-    // Recorded with that reasoning rather than half-done.
     // Still assigned, for the paths where nothing better is available: a
     // transport that gives matchers no address (noble on macOS supplies a
     // CoreBluetooth UUID that no advertisement can match), and the mqtt
@@ -193,9 +182,13 @@ export class YunmaiScaleAdapter
   }
 
   /**
-   * Clear the previous weigh-in before anything is subscribed (#394). Shared
-   * singleton: `isMini` is deliberately NOT reset here, it is a device property
-   * latched from the advertised name in matches(), not per-session state.
+   * Clear the previous weigh-in and resolve which variant this device is
+   * (#394, #406).
+   *
+   * `isMini` is a device property, not per-session state, so it is not reset
+   * here: it is looked up for the address this session is opening against.
+   * An address we never recorded leaves whatever `matches()` decided, because
+   * unknown is not the same as "standard".
    */
   onSessionStart(deviceAddress?: string): void {
     this.embeddedFatPercent = null;

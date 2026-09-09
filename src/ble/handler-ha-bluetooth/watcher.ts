@@ -51,7 +51,7 @@ export class ReadingWatcher implements Watcher {
     bleLog.info(
       `Matched: ${gr.adapter.name} (${address}), weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
     );
-    bleLog.info(`Broadcast reading: ${gr.reading.weight} kg`);
+    bleLog.info(`Reading: ${gr.reading.weight} kg`);
     this.queue.push(gr);
   });
 

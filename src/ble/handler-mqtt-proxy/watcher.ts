@@ -93,7 +93,7 @@ export class ReadingWatcher implements Watcher {
     bleLog.info(
       `Matched: ${gr.adapter.name} (${address}), weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
     );
-    bleLog.info(`Broadcast reading: ${gr.reading.weight} kg`);
+    bleLog.info(`Reading: ${gr.reading.weight} kg`);
     registerScaleMac(this.config, address).catch(() => {});
     this.queue.push(gr);
   });
@@ -258,7 +258,9 @@ export class ReadingWatcher implements Watcher {
 
             // registerScaleMac is gated on the emit actually happening: on a
             // duplicate advertisement it would otherwise publish to the ESP32
-            // on every repeat.
+            // on every repeat. It now runs just after the queue push rather
+            // than just before it; both are fire-and-forget, and the ESP32 does
+            // not care which order two independent publishes leave in.
             const emitted = emitDeduped(
               this.dedup,
               this.queue,

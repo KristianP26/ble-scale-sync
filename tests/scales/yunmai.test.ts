@@ -302,8 +302,12 @@ describe('Yunmai variant per device (#406)', () => {
 
   it('does not read [15..16] as an impedance for the standard unit', () => {
     const adapter = makeAdapter();
-    adapter.matches(device('YUNMAI-ISM', MINI));
+    // Mini matched LAST, so the singleton's own flag says Mini. This is the
+    // direction that matters: without the per-address lookup the standard unit
+    // would inherit the 4 s hold and have those two bytes read as an impedance
+    // no capture covers.
     adapter.matches(device('Yunmai Standard', STANDARD));
+    adapter.matches(device('YUNMAI-ISM', MINI));
 
     adapter.onSessionStart?.(STANDARD.replace(/:/g, ''));
     const reading = adapter.parseNotification(makeFrame({ weightRaw: 8000, impedanceRaw: 500 }));
@@ -318,6 +322,20 @@ describe('Yunmai variant per device (#406)', () => {
     // What noble on macOS supplies: a CoreBluetooth UUID, which matches no
     // advertisement. Unknown must not be read as "standard".
     adapter.onSessionStart?.('1B2C3D4E5F60718293A4B5C6D7E8F900');
+    expect(
+      adapter.parseNotification(makeFrame({ weightRaw: 8000, impedanceRaw: 500 }))!.impedance,
+    ).toBe(500);
+  });
+
+  it('ignores a non-hex address rather than sharing one cache key for it', () => {
+    const adapter = makeAdapter();
+    adapter.matches(device('YUNMAI-ISM', MINI));
+    // noble reports the literal string 'unknown' for some macOS peripherals,
+    // which formatMac turns into 'UN:KN:OW'. Every such device would otherwise
+    // share one entry.
+    adapter.matches({ ...mockPeripheral('Yunmai Standard', []), address: 'UN:KN:OW' });
+
+    adapter.onSessionStart?.(MINI.replace(/:/g, ''));
     expect(
       adapter.parseNotification(makeFrame({ weightRaw: 8000, impedanceRaw: 500 }))!.impedance,
     ).toBe(500);

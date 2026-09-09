@@ -1904,7 +1904,7 @@ describe('onSessionStart placement', () => {
         parseCharNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
       });
 
-      const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+      const promise = waitForRawReading(charMap, device, adapter, PROFILE, 'AABBCCDDEEFF');
       await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
       if (mode === 'multi-char') {
         await vi.waitFor(() => expect(adapter.onConnected).toHaveBeenCalled());
@@ -1913,6 +1913,11 @@ describe('onSessionStart placement', () => {
       await promise;
 
       expect(adapter.onSessionStart).toHaveBeenCalledTimes(1);
+      // With the address (#406): an adapter that keeps per-device state resolves
+      // it here. Dropping the argument in shared.ts leaves every adapter-level
+      // test green while the feature does nothing, which is the same trap the
+      // comment above this describe block records for the call itself.
+      expect(adapter.onSessionStart).toHaveBeenCalledWith('AABBCCDDEEFF');
       expect(seen[0], `${mode}: hook must run before anything is subscribed`).toBe(
         'onSessionStart',
       );
