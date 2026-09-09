@@ -38,6 +38,29 @@ export function httpError(status: number, prefix?: string): Error {
 }
 
 /**
+ * Run one HTTP probe and turn it into an ExportResult.
+ *
+ * Six exporters held a byte-identical copy of this, differing only in the
+ * `fetch(...)` expression, and two of the exporters most likely to hold stale
+ * credentials had none at all (#406).
+ *
+ * The 5 s bound is the caller's: pass `AbortSignal.timeout(...)` in the fetch
+ * itself, as the copies did, so an exporter that needs a different one is not
+ * fighting the helper.
+ */
+export async function httpHealthcheck(probe: () => Promise<Response>): Promise<ExportResult> {
+  try {
+    const response = await probe();
+    if (!response.ok) {
+      return { success: false, error: `HTTP ${response.status}` };
+    }
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: errMsg(err) };
+  }
+}
+
+/**
  * Execute an async function with retries, returning an ExportResult.
  *
  * The `fn` should throw on failure. If it returns an ExportResult with

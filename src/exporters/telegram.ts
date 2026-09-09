@@ -4,8 +4,7 @@ import type { Exporter, ExportContext, ExportResult } from '../interfaces/export
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { TelegramConfig } from './config.js';
 import { formatNotification } from './notification-message.js';
-import { withRetry, httpError } from '../utils/retry.js';
-import { errMsg } from '../utils/error.js';
+import { withRetry, httpError, httpHealthcheck } from '../utils/retry.js';
 
 const log = createLogger('Telegram');
 
@@ -68,21 +67,11 @@ export class TelegramExporter implements Exporter {
   }
 
   async healthcheck(): Promise<ExportResult> {
-    try {
-      // getChat validates both the bot token and that the bot can reach the chat.
-      const url = `${API_BASE}/bot${this.config.botToken}/getChat?chat_id=${encodeURIComponent(
-        this.config.chatId,
-      )}`;
-      const response = await fetch(url, {
-        signal: AbortSignal.timeout(5000),
-      });
-      if (!response.ok) {
-        return { success: false, error: `HTTP ${response.status}` };
-      }
-      return { success: true };
-    } catch (err) {
-      return { success: false, error: errMsg(err) };
-    }
+    // getChat validates both the bot token and that the bot can reach the chat.
+    const url = `${API_BASE}/bot${this.config.botToken}/getChat?chat_id=${encodeURIComponent(
+      this.config.chatId,
+    )}`;
+    return httpHealthcheck(() => fetch(url, { signal: AbortSignal.timeout(5000) }));
   }
 
   async export(data: BodyComposition, context?: ExportContext): Promise<ExportResult> {

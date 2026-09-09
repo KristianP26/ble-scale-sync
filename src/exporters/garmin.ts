@@ -210,6 +210,16 @@ export const garminSchema: ExporterSchema = {
   ],
 };
 
+/**
+ * No healthcheck, deliberately.
+ *
+ * Every other exporter probes an HTTP endpoint. This one talks to Garmin
+ * through a Python subprocess, so a check would mean spawning python, loading
+ * the token file and performing a real login round-trip - seconds, on the
+ * startup path and in the wizard, for a result that is only as fresh as the
+ * next upload anyway. Adding a --healthcheck mode to garmin_upload.py is the
+ * way to do it properly, and it is not this change (#406).
+ */
 export class GarminExporter implements Exporter {
   readonly name = 'garmin';
   readonly supportsBackdate = true;

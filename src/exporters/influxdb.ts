@@ -3,8 +3,7 @@ import type { BodyComposition } from '../interfaces/scale-adapter.js';
 import type { Exporter, ExportContext, ExportResult } from '../interfaces/exporter.js';
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { InfluxDbConfig } from './config.js';
-import { withRetry, httpError } from '../utils/retry.js';
-import { errMsg } from '../utils/error.js';
+import { withRetry, httpError, httpHealthcheck } from '../utils/retry.js';
 
 const log = createLogger('InfluxDB');
 
@@ -112,21 +111,15 @@ export class InfluxDbExporter implements Exporter {
   }
 
   async healthcheck(): Promise<ExportResult> {
-    try {
-      // The token is sent even though v2 leaves /health unauthenticated: v3
-      // rejects an unauthenticated /health with 401, which made the wizard
-      // report a working v3 target as broken. v2 ignores the extra header.
-      const response = await fetch(`${this.config.url.replace(/\/+$/, '')}/health`, {
+    // The token is sent even though v2 leaves /health unauthenticated: v3
+    // rejects an unauthenticated /health with 401, which made the wizard
+    // report a working v3 target as broken. v2 ignores the extra header.
+    return httpHealthcheck(() =>
+      fetch(`${this.config.url.replace(/\/+$/, '')}/health`, {
         headers: { Authorization: `Token ${this.config.token}` },
         signal: AbortSignal.timeout(5000),
-      });
-      if (!response.ok) {
-        return { success: false, error: `HTTP ${response.status}` };
-      }
-      return { success: true };
-    } catch (err) {
-      return { success: false, error: errMsg(err) };
-    }
+      }),
+    );
   }
 
   async export(data: BodyComposition, context?: ExportContext): Promise<ExportResult> {

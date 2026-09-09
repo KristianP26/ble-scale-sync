@@ -3,8 +3,7 @@ import type { BodyComposition } from '../interfaces/scale-adapter.js';
 import type { Exporter, ExportContext, ExportResult } from '../interfaces/exporter.js';
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { WebhookConfig } from './config.js';
-import { withRetry, httpError } from '../utils/retry.js';
-import { errMsg } from '../utils/error.js';
+import { withRetry, httpError, httpHealthcheck } from '../utils/retry.js';
 
 const log = createLogger('Webhook');
 
@@ -53,18 +52,9 @@ export class WebhookExporter implements Exporter {
   }
 
   async healthcheck(): Promise<ExportResult> {
-    try {
-      const response = await fetch(this.config.url, {
-        method: 'HEAD',
-        signal: AbortSignal.timeout(5000),
-      });
-      if (!response.ok) {
-        return { success: false, error: `HTTP ${response.status}` };
-      }
-      return { success: true };
-    } catch (err) {
-      return { success: false, error: errMsg(err) };
-    }
+    return httpHealthcheck(() =>
+      fetch(this.config.url, { method: 'HEAD', signal: AbortSignal.timeout(5000) }),
+    );
   }
 
   async export(data: BodyComposition, context?: ExportContext): Promise<ExportResult> {

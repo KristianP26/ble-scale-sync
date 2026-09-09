@@ -4,7 +4,7 @@ import type { Exporter, ExportContext, ExportResult } from '../interfaces/export
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { WgerConfig } from './config.js';
 import { toLocalDate } from './intervals.js';
-import { withRetry, httpError } from '../utils/retry.js';
+import { withRetry, httpError, httpHealthcheck } from '../utils/retry.js';
 import { errMsg } from '../utils/error.js';
 
 const log = createLogger('Wger');
@@ -189,17 +189,11 @@ export class WgerExporter implements Exporter {
   }
 
   async healthcheck(): Promise<ExportResult> {
-    try {
-      const response = await fetch(`${this.apiBase}/userprofile/`, {
+    return httpHealthcheck(() =>
+      fetch(`${this.apiBase}/userprofile/`, {
         headers: this.headers(),
         signal: AbortSignal.timeout(5000),
-      });
-      if (!response.ok) {
-        return { success: false, error: `HTTP ${response.status}` };
-      }
-      return { success: true };
-    } catch (err) {
-      return { success: false, error: errMsg(err) };
-    }
+      }),
+    );
   }
 }

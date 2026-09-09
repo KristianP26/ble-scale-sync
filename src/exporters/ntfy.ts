@@ -4,8 +4,7 @@ import type { Exporter, ExportContext, ExportResult } from '../interfaces/export
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { NtfyConfig } from './config.js';
 import { formatNotification } from './notification-message.js';
-import { withRetry, httpError } from '../utils/retry.js';
-import { errMsg } from '../utils/error.js';
+import { withRetry, httpError, httpHealthcheck } from '../utils/retry.js';
 
 const log = createLogger('Ntfy');
 
@@ -69,18 +68,8 @@ export class NtfyExporter implements Exporter {
   }
 
   async healthcheck(): Promise<ExportResult> {
-    try {
-      const healthUrl = `${this.config.url.replace(/\/+$/, '')}/v1/health`;
-      const response = await fetch(healthUrl, {
-        signal: AbortSignal.timeout(5000),
-      });
-      if (!response.ok) {
-        return { success: false, error: `HTTP ${response.status}` };
-      }
-      return { success: true };
-    } catch (err) {
-      return { success: false, error: errMsg(err) };
-    }
+    const healthUrl = `${this.config.url.replace(/\/+$/, '')}/v1/health`;
+    return httpHealthcheck(() => fetch(healthUrl, { signal: AbortSignal.timeout(5000) }));
   }
 
   async export(data: BodyComposition, context?: ExportContext): Promise<ExportResult> {
