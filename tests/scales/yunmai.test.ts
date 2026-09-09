@@ -277,3 +277,18 @@ describe('YunmaiScaleAdapter session boundary (#394)', () => {
     expect(payload.bodyFatPercent).not.toBeCloseTo(22, 1);
   });
 });
+
+describe('Yunmai variant latch (#406)', () => {
+  it('keeps the Mini flag once set, whatever matches() is shown afterwards', () => {
+    const adapter = makeAdapter();
+    // The Mini is recognised from its own advertisement...
+    expect(adapter.matches(mockPeripheral('YUNMAI-ISM', []))).toBe(true);
+    // ...and matches() then runs for every other candidate the scan produced.
+    // A second Yunmai without ISM in its name used to clear the flag, and the
+    // Mini's impedance was silently never read again.
+    expect(adapter.matches(mockPeripheral('Yunmai Standard', []))).toBe(true);
+
+    const reading = adapter.parseNotification(makeFrame({ weightRaw: 8000, impedanceRaw: 500 }));
+    expect(reading!.impedance).toBe(500);
+  });
+});

@@ -63,7 +63,11 @@ export class YunmaiScaleAdapter
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
     if (!name.includes('yunmai')) return false;
-    this.isMini = name.includes('ism') || name.includes('isse');
+    // Latch, never clear. matches() runs for every candidate and this adapter
+    // is a shared singleton, so assigning the result here meant one nameless or
+    // differently-named advertisement in between downgraded a Mini/SE to the
+    // standard variant, and its impedance was then never read (#406).
+    if (name.includes('ism') || name.includes('isse')) this.isMini = true;
     return true;
   }
 
@@ -95,6 +99,11 @@ export class YunmaiScaleAdapter
     let impedance = 0;
     this.embeddedFatPercent = null;
 
+    // A frame-shape latch was tried here and removed: reading [15..16] whenever
+    // the frame is long enough would mean deciding, without a capture, that a
+    // standard variant never sends a 17+ byte final frame. Nobody has one. What
+    // it would take is a DEBUG log from a standard Yunmai showing its final
+    // frame length, and the value at [15..16] if it has one.
     if (this.isMini && data.length >= 17) {
       impedance = data.readUInt16BE(15);
 
