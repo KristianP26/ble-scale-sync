@@ -733,6 +733,11 @@ export function waitForRawReading(
       init.register,
     ).catch((e) => {
       if (!resolved) {
+        // Latch, like the other settle paths. Without it a fireDisconnect()
+        // from the caller's abandonment cleanup walks the whole disconnect
+        // cascade again and can log "Reading complete" for a session whose
+        // init failed, if a frame happened to arrive before the failure.
+        resolved = true;
         hold.clear();
         clearCaptureHold();
         init.cleanup();

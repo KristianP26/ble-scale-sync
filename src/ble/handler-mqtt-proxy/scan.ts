@@ -6,7 +6,7 @@ import type {
 import type { MqttProxyConfig } from '../../config/schema.js';
 import type { ScanOptions, ScanResult } from '../types.js';
 import type { RawReading } from '../shared.js';
-import { waitForRawReading } from '../shared.js';
+import { waitForRawReading, withAbandonmentCleanup } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
 import { evaluateAdvertisement, logAdvert, safeName } from '../advertisement.js';
 import { bleLog, normalizeUuid, withTimeout, formatMac } from '../types.js';
@@ -213,19 +213,24 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         entry.addr_type ?? 0,
       );
       try {
-        const raw = await waitForRawReading(
-          charMap,
-          device,
-          adapter,
-          opts.profile,
-          entry.address.replace(/[:-]/g, '').toUpperCase(),
-          opts.weightUnit,
-          opts.onLiveData,
-          opts.scaleAuth,
+        const raw = await withAbandonmentCleanup(device, () =>
+          waitForRawReading(
+            charMap,
+            device,
+            adapter,
+            opts.profile,
+            entry.address.replace(/[:-]/g, '').toUpperCase(),
+            opts.weightUnit,
+            opts.onLiveData,
+            opts.scaleAuth,
+          ),
         );
         registerScaleMac(config, entry.address).catch(() => {});
         return raw;
       } finally {
+        // fireDisconnect() (inside the wrapper) before cleanup(), so the
+        // session's unsubscribers still have a live message listener to run
+        // through. The two watcher paths already do it in this order.
         device.cleanup();
         await mqttGattDisconnect(client, t).catch(() => {});
       }

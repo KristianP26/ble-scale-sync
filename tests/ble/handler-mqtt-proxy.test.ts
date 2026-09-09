@@ -2536,6 +2536,25 @@ describe('handler-mqtt-proxy', () => {
       expect(unsubscribed).not.toContain(`${PREFIX}/connected`);
     });
 
+    it('MqttBleDevice.fireDisconnect runs the session callback exactly once (#404)', async () => {
+      const { MqttBleDevice } = await import('../../src/ble/handler-mqtt-proxy/gatt.js');
+      const { topics } = await import('../../src/ble/handler-mqtt-proxy/topics.js');
+      const t = topics('ble-proxy', 'esp32-test');
+
+      const device = new MqttBleDevice(mockClient as never, t.disconnected);
+      const cb = vi.fn();
+      device.onDisconnect(cb);
+
+      // The abandonment path fires it, and the ESP32's own disconnect frame can
+      // land afterwards. Re-entering a settled session is what the latch stops.
+      device.fireDisconnect();
+      device.fireDisconnect();
+      mockClient._simulateMessage(t.disconnected, '');
+
+      expect(cb).toHaveBeenCalledTimes(1);
+      device.cleanup();
+    });
+
     it('MqttBleChar.subscribe removes its listener when setup fails', async () => {
       const { MqttBleChar } = await import('../../src/ble/handler-mqtt-proxy/gatt.js');
       mockClient.subscribeAsync = vi.fn(async () => {

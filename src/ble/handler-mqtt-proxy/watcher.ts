@@ -350,7 +350,18 @@ export class ReadingWatcher implements Watcher {
    * matters and it cannot hang.
    */
   private async teardownPartialStart(): Promise<void> {
+    // Clear the flag first: it exists to guard against a concurrent start, and
+    // leaving it set across four broker round-trips widens that window for no
+    // benefit, since nothing below depends on it.
+    this.started = false;
     this.removeLifecycleHandlers();
+    // Belt and braces: today the message handler is only assigned after the
+    // try/catch, so a failed start cannot have set it. Moving that assignment
+    // inside the try would otherwise reintroduce the leak silently.
+    if (this._messageHandler) {
+      this._client?.removeListener('message', this._messageHandler);
+      this._messageHandler = null;
+    }
     for (const topic of this._subscribedTopics) {
       try {
         await this._client?.unsubscribeAsync(topic);
@@ -360,7 +371,6 @@ export class ReadingWatcher implements Watcher {
     }
     this._subscribedTopics = [];
     this.grace.clear();
-    this.started = false;
     // Nothing has arrived, so the liveness clock must not claim otherwise.
     this.lastAdvertAt = null;
     this._client = null;

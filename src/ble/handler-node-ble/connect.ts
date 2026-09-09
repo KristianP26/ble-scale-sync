@@ -73,6 +73,38 @@ export interface ConnectRecoveryContext {
  * exactly the per-path listener growth reported in #397. Guarded on identity
  * because the fallback path can legitimately hand back the same object.
  */
+/**
+ * `btAdapter.waitDevice()` bounded by a timeout, releasing the proxy nobody
+ * asked for any more.
+ *
+ * `withTimeout` abandons the promise it raced rather than cancelling it, so a
+ * waitDevice that resolves one millisecond past the deadline hands back a
+ * Device proxy this function has already stopped waiting for. That proxy still
+ * registers its match rule and bus listener the first time a property is read,
+ * and nothing else can ever reach it (#404, same mechanism as #396/#397).
+ */
+async function waitDeviceBounded(
+  btAdapter: Adapter,
+  formattedMac: string,
+  timeoutMessage: string,
+): Promise<Device> {
+  let abandoned = false;
+  const pending = btAdapter.waitDevice(formattedMac);
+  pending
+    .then((late) => {
+      if (abandoned) releaseDeviceProxy(late);
+    })
+    .catch(() => {
+      /* the timeout below is what the caller sees */
+    });
+  try {
+    return await withTimeout(pending, DISCOVERY_TIMEOUT_MS, timeoutMessage);
+  } catch (err) {
+    abandoned = true;
+    throw err;
+  }
+}
+
 function releaseSuperseded(previous: Device, current: Device): void {
   if (previous !== current) releaseDeviceProxy(previous);
 }
@@ -128,9 +160,9 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
             const result = await startDiscoverySafe(btAdapter, bleAdapter);
             if (result) btAdapter = result;
             const supersededByRediscovery = device;
-            device = await withTimeout(
-              btAdapter.waitDevice(formattedMac),
-              DISCOVERY_TIMEOUT_MS,
+            device = await waitDeviceBounded(
+              btAdapter,
+              formattedMac,
               `Device ${formattedMac} not found during RSSI re-discovery`,
             );
             // Every swap here is a fresh proxy for the same path. Stopping the
@@ -244,9 +276,9 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
         try {
           const result = await startDiscoverySafe(btAdapter, bleAdapter);
           if (result) btAdapter = result;
-          device = await withTimeout(
-            btAdapter.waitDevice(formattedMac),
-            DISCOVERY_TIMEOUT_MS,
+          device = await waitDeviceBounded(
+            btAdapter,
+            formattedMac,
             `Device ${formattedMac} not found during retry`,
           );
 
