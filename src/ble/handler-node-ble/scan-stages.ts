@@ -43,7 +43,12 @@ import {
 import { removeDevice, notifyDiscoveryStopped } from './discovery.js';
 import { logAdvertisementSnapshot, type AdvertisementSnapshot } from './device-object.js';
 import { buildCharMap } from './gatt.js';
-import { waitForRawReading, type BleDevice, type RawReading } from '../shared.js';
+import {
+  waitForRawReading,
+  withAbandonmentCleanup,
+  type BleDevice,
+  type RawReading,
+} from '../shared.js';
 import type { WeightUnit } from '../../config/schema.js';
 import type { ScaleAuth, ScaleReading, UserProfile } from '../../interfaces/scale-adapter.js';
 import { RAW_READING_TIMEOUT_MS, READING_SESSION_CAP_FACTOR, withIdleTimeout } from '../types.js';
@@ -439,25 +444,27 @@ export async function readWithTimeouts(
   },
 ): Promise<RawReading> {
   const idleMs = opts.readingTimeoutMs ?? RAW_READING_TIMEOUT_MS;
-  return await withTimeout(
-    withIdleTimeout(
-      (onActivity) =>
-        waitForRawReading(
-          charMap,
-          bleDevice,
-          matchedAdapter,
-          opts.profile,
-          deviceMac.replace(/[:-]/g, '').toUpperCase(),
-          opts.weightUnit,
-          opts.onLiveData,
-          opts.scaleAuth,
-          onActivity,
-        ),
-      idleMs,
-      'Timed out waiting for a complete scale reading',
+  return await withAbandonmentCleanup(bleDevice, () =>
+    withTimeout(
+      withIdleTimeout(
+        (onActivity) =>
+          waitForRawReading(
+            charMap,
+            bleDevice,
+            matchedAdapter,
+            opts.profile,
+            deviceMac.replace(/[:-]/g, '').toUpperCase(),
+            opts.weightUnit,
+            opts.onLiveData,
+            opts.scaleAuth,
+            onActivity,
+          ),
+        idleMs,
+        'Timed out waiting for a complete scale reading',
+      ),
+      idleMs * READING_SESSION_CAP_FACTOR,
+      'GATT session cap exceeded',
     ),
-    idleMs * READING_SESSION_CAP_FACTOR,
-    'GATT session cap exceeded',
   );
 }
 

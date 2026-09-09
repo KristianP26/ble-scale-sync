@@ -101,6 +101,20 @@ export interface BleChar {
 
 export interface BleDevice {
   onDisconnect(callback: () => void): void;
+  /**
+   * Abandon this session locally, as if the peer had reported a disconnect.
+   *
+   * `waitForRawReading()` only settles on a reading, a subscribe failure or a
+   * disconnect, so a caller whose own timeout gives up abandons the promise and
+   * nothing it holds is released: the legacy unlock `setInterval` keeps writing
+   * through a dead link for the life of the process, the notify unsubscribers
+   * are never run, and `adapter.onSessionEnd()` is never called (#404).
+   *
+   * Calling this drives the existing disconnect path, so there is exactly one
+   * cleanup route rather than one per transport. Idempotent: a real disconnect
+   * arriving afterwards does nothing.
+   */
+  fireDisconnect(): void;
 }
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
@@ -360,6 +374,27 @@ function initializeAdapter(
   return { start, cleanup, register, resendUnlockAfterSubscribe };
 }
 
+/**
+ * Run a bounded reading session and make sure an abandoned one cleans up.
+ *
+ * `withTimeout` / `withIdleTimeout` abandon the promise they raced rather than
+ * cancelling it, so when they win, `waitForRawReading()` is left running with
+ * its unlock interval, its notify subscriptions and the adapter's session state
+ * all live. Firing the disconnect drives the one cleanup path that already
+ * exists instead of giving every transport its own (#404).
+ */
+export async function withAbandonmentCleanup<T>(
+  bleDevice: BleDevice,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    bleDevice.fireDisconnect();
+    throw err;
+  }
+}
+
 /** Subscribe to notifications in multi-char or legacy mode, then start adapter init. */
 async function subscribeAndInit(
   charMap: Map<string, BleChar>,
@@ -523,6 +558,7 @@ export function waitForRawReading(
     const finishWith = (r: ScaleReading): void => {
       resolved = true;
       hold.clear();
+      clearCaptureHold();
       init.cleanup();
       process.stdout.write('\r' + ' '.repeat(80) + '\r');
       bleLog.info(`Reading complete: ${r.weight.toFixed(2)} kg / ${r.impedance} Ohm`);
@@ -678,6 +714,10 @@ export function waitForRawReading(
         resolve({ reading: r, adapter, history: undefined });
         return;
       }
+      // Latch before cleaning up. Without this a notification arriving after an
+      // abandoned session is still parsed, and the capture/hold timers above
+      // would treat the session as live.
+      resolved = true;
       init.cleanup();
       reject(new Error('Scale disconnected before reading completed'));
     });

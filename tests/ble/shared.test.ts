@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   waitForReading,
   waitForRawReading,
+  withAbandonmentCleanup,
   findMissingCharacteristics,
   resolveWriteChar,
   getRawCaptureConfig,
@@ -86,13 +87,18 @@ function createMockChar(): MockBleChar {
 
 function createMockDevice(): BleDevice & { triggerDisconnect: () => void } {
   let disconnectCallback: (() => void) | null = null;
+  let fired = false;
+  const fireDisconnect = (): void => {
+    if (fired || !disconnectCallback) return;
+    fired = true;
+    disconnectCallback();
+  };
   return {
     onDisconnect: (callback) => {
       disconnectCallback = callback;
     },
-    triggerDisconnect: () => {
-      if (disconnectCallback) disconnectCallback();
-    },
+    fireDisconnect,
+    triggerDisconnect: fireDisconnect,
   };
 }
 
@@ -1938,5 +1944,101 @@ describe('onSessionStart placement', () => {
     await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
     notifyChar.triggerData(Buffer.from([0x01]));
     await expect(promise).resolves.toMatchObject({ reading: { weight: 75 } });
+  });
+});
+
+describe('withAbandonmentCleanup() (#404)', () => {
+  // waitForRawReading only settles on a reading, a subscribe failure or a
+  // disconnect. Its callers bound it with withTimeout/withIdleTimeout, which
+  // ABANDON the promise rather than cancelling it, so before this the unlock
+  // interval kept writing through a dead link for the life of the process and
+  // the adapter was never told its session had ended.
+  it('cleans up a session its caller gave up on', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const onSessionEnd = vi.fn();
+    const adapter = createLegacyAdapter({ unlockIntervalMs: 2000, onSessionEnd });
+
+    let unsubscribed = false;
+    notifyChar.subscribe = vi.fn(async (onData) => {
+      notifyChar.subscribeCalled = true;
+      void onData;
+      return () => {
+        unsubscribed = true;
+      };
+    }) as MockBleChar['subscribe'];
+
+    const attempt = withAbandonmentCleanup(device, () =>
+      withIdleTimeout(
+        () => waitForRawReading(charMap, device, adapter, PROFILE, ''),
+        50,
+        'Timed out waiting for a complete scale reading',
+      ),
+    );
+
+    await expect(attempt).rejects.toThrow('Timed out waiting');
+
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
+    expect(unsubscribed).toBe(true);
+
+    // The unlock interval is gone: nothing is written after the give-up, even
+    // well past the 2 s interval.
+    const writesAtGiveUp = writeChar.writtenData.length;
+    await new Promise((r) => setTimeout(r, 120));
+    expect(writeChar.writtenData.length).toBe(writesAtGiveUp);
+  });
+
+  it('is idempotent, so a real disconnect afterwards changes nothing', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const onSessionEnd = vi.fn();
+    const adapter = createLegacyAdapter({ onSessionEnd });
+
+    const attempt = withAbandonmentCleanup(device, () =>
+      withIdleTimeout(
+        () => waitForRawReading(charMap, device, adapter, PROFILE, ''),
+        50,
+        'gave up',
+      ),
+    );
+    await expect(attempt).rejects.toThrow('gave up');
+
+    device.triggerDisconnect();
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes a successful read through untouched', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const adapter = createLegacyAdapter({
+      parseNotification: vi.fn(() => ({ weight: 75.5, impedance: 500 })),
+    });
+
+    const promise = withAbandonmentCleanup(device, () =>
+      waitForRawReading(charMap, device, adapter, PROFILE, ''),
+    );
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+    notifyChar.triggerData(Buffer.from([0x01]));
+
+    const result = await promise;
+    expect(result.reading).toEqual({ weight: 75.5, impedance: 500 });
   });
 });
