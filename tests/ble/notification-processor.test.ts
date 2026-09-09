@@ -70,6 +70,30 @@ describe('HoldTimer', () => {
     }
   });
 
+  // #406: the session constructs this before onSessionStart runs, so an adapter
+  // that decides its variant there would otherwise arm with the PREVIOUS
+  // session's duration. A standard unit followed by a Mini armed at 0 ms, which
+  // resolved weight-only on the next tick and dropped the impedance.
+  it('reads a getter duration when it arms, not when it is constructed', () => {
+    vi.useFakeTimers();
+    try {
+      const onElapsed = vi.fn();
+      let holdMs = 0;
+      const t = new HoldTimer(() => holdMs, onElapsed);
+
+      // What onSessionStart does: the adapter now knows it is a Mini.
+      holdMs = 4000;
+      t.hold(reading(83));
+
+      vi.advanceTimersByTime(3999);
+      expect(onElapsed).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(onElapsed).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a second hold updates the held reading without re-arming the timer', () => {
     vi.useFakeTimers();
     try {

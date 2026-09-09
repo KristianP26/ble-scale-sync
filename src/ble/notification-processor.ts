@@ -63,23 +63,33 @@ export class HoldTimer {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private held: ScaleReading | null = null;
 
+  /**
+   * `holdMs` may be a getter, resolved when the timer arms rather than when it
+   * is constructed. The session builds this before `onSessionStart` runs, so an
+   * adapter that decides its variant there (yunmai's Mini/SE) would otherwise
+   * arm with the value from the PREVIOUS session: a standard unit followed by a
+   * Mini gave `setTimeout(..., 0)`, which resolved weight-only on the next tick
+   * and dropped the impedance, while logging "holding connection up to 0s"
+   * (#406).
+   */
   constructor(
-    private readonly holdMs: number,
+    private readonly holdMs: number | (() => number),
     private readonly onElapsed: (reading: ScaleReading) => void,
   ) {}
 
   hold(reading: ScaleReading): void {
     this.held = reading;
     if (this.timer) return;
+    const holdMs = typeof this.holdMs === 'function' ? this.holdMs() : this.holdMs;
     bleLog.info(
       `Weight stable; holding connection up to ` +
-        `${Math.round(this.holdMs / 1000)}s for body composition...`,
+        `${Math.round(holdMs / 1000)}s for body composition...`,
     );
     this.timer = setTimeout(() => {
       this.timer = null;
       const r = this.held;
       if (r) this.onElapsed(r);
-    }, this.holdMs);
+    }, holdMs);
   }
 
   get heldReading(): ScaleReading | null {
