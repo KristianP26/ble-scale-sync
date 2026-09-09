@@ -36,7 +36,13 @@ export interface MatchDescriptor {
   custom?: boolean;
 }
 
-/** Lowercase and strip dashes from a UUID for comparison. */
+/**
+ * Lowercase and strip dashes from a UUID for comparison.
+ *
+ * Note for anyone writing a claim: tokens here are 4-char (16-bit) or full
+ * 32-char. A 32-bit, 8-char token would NOT work, because this pair does not
+ * expand it the way `normalizeUuid` in the BLE layer does (#406).
+ */
 function norm(u: string): string {
   return u.toLowerCase().replace(/-/g, '');
 }

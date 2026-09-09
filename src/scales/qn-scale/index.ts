@@ -293,16 +293,6 @@ export class QnScaleAdapter
   }
 
   /**
-   * Multi-step init called after BLE connection and service discovery.
-   *
-   * On Linux (node-ble / BlueZ D-Bus), FFF1 CCCD subscription runs in parallel
-   * with onConnected(). The scale may send 0x12 BEFORE this method finishes,
-   * so the state machine handlers (handleScaleInfo, handleReady, etc.) must
-   * not depend on any state set here (especially hasAe00).
-   *
-   * For older firmware without AE00: sends legacy unlock variants on FFF2.
-   */
-  /**
    * Clear every per-session field BEFORE anything is subscribed (#394, #406).
    *
    * This used to live in onConnected(), which is too late on this adapter: QN
@@ -342,6 +332,16 @@ export class QnScaleAdapter
     }
   }
 
+  /**
+   * Multi-step init called after BLE connection and service discovery.
+   *
+   * On Linux (node-ble / BlueZ D-Bus), FFF1 CCCD subscription runs in parallel
+   * with onConnected(). The scale may send 0x12 BEFORE this method finishes,
+   * so the state machine handlers (handleScaleInfo, handleReady, etc.) must
+   * not depend on any state set here (especially hasAe00).
+   *
+   * For older firmware without AE00: sends legacy unlock variants on FFF2.
+   */
   async onConnected(ctx: ConnectionContext): Promise<void> {
     this.ctx = ctx;
     // The session clock is re-stamped here as well as in onSessionStart, for a

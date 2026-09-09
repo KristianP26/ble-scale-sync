@@ -99,6 +99,14 @@ async function main(): Promise<void> {
   // The shared one, not a copy: the copy that lived here was missing the
   // btmgmt reset retry, so `npm run diagnose` failed with "adapter not
   // poweredOn" on exactly the adapter state a normal run recovers from (#406).
+  //
+  // Two consequences worth knowing while reading the output: the wait is
+  // announced here because the shared function only logs at debug level, and a
+  // stuck adapter is power-cycled with btmgmt, which briefly disturbs other BLE
+  // clients on this host. Both match what a normal run does.
+  if (((noble.state ?? noble._state) as string) !== 'poweredOn') {
+    log.info('Waiting for the Bluetooth adapter (resetting it if it stays down)...');
+  }
   await waitForPoweredOn(
     noble as NobleApi,
     () => (noble.state ?? noble._state ?? 'unknown') as string,
@@ -164,10 +172,13 @@ async function main(): Promise<void> {
         parsed.data[0] === 0xaa &&
         parsed.data[1] === 0xbb
       ) {
-        // The magic matches, so it is a QN advertisement that simply has not
-        // settled yet. Saying so is more useful than silence, since the whole
-        // point of the tool is to show what the scale is doing.
-        log.info('    QN broadcast: measuring (no stable weight in this advertisement)');
+        // The magic matches but the decoder refused the payload. Deliberately
+        // not called "measuring": that is only one of the reasons, the others
+        // being a payload shorter than 19 bytes or a zero weight, and this tool
+        // exists to show what is there rather than to guess.
+        log.info(
+          `    QN broadcast: AABB payload (${parsed.data.length}B) with no stable weight in it`,
+        );
       }
     }
     for (const sd of svcData) {

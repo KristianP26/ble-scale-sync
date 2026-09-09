@@ -44,21 +44,6 @@ export interface DbusNextModule {
 export const helperOf = <T>(obj: T): BluezHelper => (obj as WithHelper<T>).helper;
 
 /**
- * Release a node-ble Device proxy we created only to read a property off.
- *
- * `Adapter.getDevice()` returns a BRAND NEW Device, and its BusHelper is built
- * with `usePropsEvents: true`, so the first property read registers a
- * PropertiesChanged listener on the bus-wide signal emitter and adds a D-Bus
- * match rule. Scanning a busy room re-created one of these per nearby device
- * per cycle and never gave it back, which is the
- * `MaxListenersExceededWarning ... 11 listeners added` a reporter saw once per
- * device path (#397) and one half of the match-rule growth that ends in
- * `LimitsExceeded` (#396).
- *
- * Only ever call this on a proxy nothing else holds. Never on the device a
- * session is using.
- */
-/**
  * Whether BlueZ still lists this device as bonded.
  *
  * node-ble types `isPaired()` loosely; BusHelper.prop unwraps the Variant to a
@@ -79,6 +64,21 @@ export async function isBonded(device: Device | undefined): Promise<boolean> {
   }
 }
 
+/**
+ * Release a node-ble Device proxy we created only to read a property off.
+ *
+ * `Adapter.getDevice()` returns a BRAND NEW Device, and its BusHelper is built
+ * with `usePropsEvents: true`, so the first property read registers a
+ * PropertiesChanged listener on the bus-wide signal emitter and adds a D-Bus
+ * match rule. Scanning a busy room re-created one of these per nearby device
+ * per cycle and never gave it back, which is the
+ * `MaxListenersExceededWarning ... 11 listeners added` a reporter saw once per
+ * device path (#397) and one half of the match-rule growth that ends in
+ * `LimitsExceeded` (#396).
+ *
+ * Only ever call this on a proxy nothing else holds. Never on the device a
+ * session is using.
+ */
 export function releaseDeviceProxy(device: Device): void {
   try {
     helperOf(device).removeListeners();

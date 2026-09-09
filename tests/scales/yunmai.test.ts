@@ -278,17 +278,31 @@ describe('YunmaiScaleAdapter session boundary (#394)', () => {
   });
 });
 
-describe('Yunmai variant latch (#406)', () => {
-  it('keeps the Mini flag once set, whatever matches() is shown afterwards', () => {
+describe('Yunmai variant flag, and what it cannot do yet (#406)', () => {
+  it('tracks the last Yunmai-named device, which is not always the one being read', () => {
     const adapter = makeAdapter();
-    // The Mini is recognised from its own advertisement...
     expect(adapter.matches(mockPeripheral('YUNMAI-ISM', []))).toBe(true);
-    // ...and matches() then runs for every other candidate the scan produced.
-    // A second Yunmai without ISM in its name used to clear the flag, and the
-    // Mini's impedance was silently never read again.
-    expect(adapter.matches(mockPeripheral('Yunmai Standard', []))).toBe(true);
+    expect(
+      adapter.parseNotification(makeFrame({ weightRaw: 8000, impedanceRaw: 500 }))!.impedance,
+    ).toBe(500);
 
-    const reading = adapter.parseNotification(makeFrame({ weightRaw: 8000, impedanceRaw: 500 }));
-    expect(reading!.impedance).toBe(500);
+    // A second Yunmai in range, without the marker, moves the flag. This is
+    // the known limitation: fixing it needs per-device state resolved when the
+    // session opens, and the adapter contract does not currently give this
+    // adapter the device address without giving up unlockCommand.
+    expect(adapter.matches(mockPeripheral('Yunmai Standard', []))).toBe(true);
+    expect(
+      adapter.parseNotification(makeFrame({ weightRaw: 8000, impedanceRaw: 500 }))!.impedance,
+    ).toBe(0);
+  });
+
+  it('does not latch the Mini behaviour onto a standard unit', () => {
+    // The opposite failure, which a sticky flag would introduce: a standard
+    // unit inheriting the 4 s completion hold and having [15..16] read as an
+    // impedance nobody has captured.
+    const adapter = makeAdapter();
+    adapter.matches(mockPeripheral('YUNMAI-ISM', []));
+    adapter.matches(mockPeripheral('Yunmai Standard', []));
+    expect(adapter.completionHoldMs).toBeUndefined();
   });
 });

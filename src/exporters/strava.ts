@@ -65,6 +65,12 @@ export class StravaExporter implements Exporter {
    * validation step and the startup check both simply skipped it (#406).
    * A GET is used rather than the PUT the export does, so a check never
    * changes the athlete's weight.
+   *
+   * It is not free of side effects, though: an expired access token is
+   * refreshed first, and Strava rotates the refresh token on every exchange, so
+   * the token file is rewritten. That is deliberate - a check that reported
+   * "fine" on a token it could not actually use would be worthless - but it
+   * means the startup healthcheck can write to disk.
    */
   async healthcheck(): Promise<ExportResult> {
     try {

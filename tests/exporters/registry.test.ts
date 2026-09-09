@@ -300,13 +300,9 @@ describe('the exporter name lists agree', () => {
     expect([..._knownExporterNamesForTest].sort()).toEqual([...KNOWN_EXPORTER_NAMES].sort());
   });
 
-  it('every registry schema name is assignable to ExporterName', () => {
-    // A schema whose name is not in the union would not compile, so this
-    // asserts the runtime side of the same thing: no registry entry is missing
-    // from the union's runtime twin.
-    for (const name of KNOWN_EXPORTER_NAMES) {
-      expect(typeof name).toBe('string');
-    }
+  it('has one registry entry per known name, with no duplicates', () => {
+    // A duplicated schema name would make the derived set smaller than the
+    // registry, and the equality test above would still pass.
     expect(KNOWN_EXPORTER_NAMES.size).toBe(EXPORTER_REGISTRY.length);
   });
 });

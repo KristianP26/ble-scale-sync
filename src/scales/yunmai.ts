@@ -63,11 +63,21 @@ export class YunmaiScaleAdapter
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
     if (!name.includes('yunmai')) return false;
-    // Latch, never clear. matches() runs for every candidate and this adapter
-    // is a shared singleton, so assigning the result here meant one nameless or
-    // differently-named advertisement in between downgraded a Mini/SE to the
-    // standard variant, and its impedance was then never read (#406).
-    if (name.includes('ism') || name.includes('isse')) this.isMini = true;
+    // Assigned, not latched, and this is a known-imperfect compromise (#406).
+    //
+    // The adapter is a shared singleton and matches() runs for every candidate
+    // a scan produces, so the flag tracks the last Yunmai-named device rather
+    // than the one about to be read. Both alternatives are worse than this:
+    // latching it true means a standard unit inherits the Mini's 4 s hold and
+    // has [15..16] read as impedance, and there is no capture saying what a
+    // standard unit puts there.
+    //
+    // The real fix is per-device state resolved when the session opens, and it
+    // is blocked on the adapter contract: onConnected() is where the device
+    // address arrives, and shared.ts treats an adapter with onConnected as
+    // NOT using unlockCommand, which is what starts a Yunmai measurement.
+    // Recorded with that reasoning rather than half-done.
+    this.isMini = name.includes('ism') || name.includes('isse');
     return true;
   }
 

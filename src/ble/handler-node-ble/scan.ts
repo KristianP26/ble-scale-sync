@@ -73,10 +73,12 @@ export async function ensureBonded(
   if (abortSignal?.aborted) throw new Error('Shutting down before BLE pairing started');
   let onAbort: (() => void) | undefined;
   try {
-    // Via the shared helper: this copy had no try/catch at all, so a transient
-    // D-Bus error propagated out of the bonding path instead of being treated
-    // as "bond state unknown" (#406).
-    if (await isBonded(device)) {
+    // NOT the shared isBonded() helper, and this is the third semantic in the
+    // file: answering false here would send an unknown bond state into
+    // device.pair(), which lights the passkey prompt on the scale and burns the
+    // 15 s bonding timeout. A transient D-Bus read failure must abort instead,
+    // so the read is deliberately unguarded (#406).
+    if (((await device.isPaired()) as unknown as boolean) === true) {
       bleLog.debug('Device already bonded');
       return;
     }
