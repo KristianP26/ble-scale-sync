@@ -64,6 +64,18 @@ To upload measurements to Garmin Connect:
 
 On first start the add-on authenticates with Garmin and stores the OAuth tokens under `/data/garmin-tokens` inside the container. Subsequent runs reuse those tokens, so your password is only used once.
 
+### Retrying a failed upload
+
+**Retry a failed export later** (`retry_failed_exports`, on by default) keeps a
+reading whose upload failed and tries again on a later cycle, for up to 72
+hours. Only targets that can record a past measurement are retried: Garmin,
+InfluxDB, file, Intervals, Runalyze and wger. MQTT and the notification targets
+cannot express a past reading, so a failure there is final and the log says so.
+
+The queue lives in `/data`, so it survives add-on restarts and updates. It
+holds body composition and the user name, is written with 0600 permissions and
+is deleted as soon as it empties. Turn the option off to write nothing at all.
+
 ### Upload timeout
 
 **Garmin upload timeout** (`garmin_upload_timeout_sec`, default 180) caps one

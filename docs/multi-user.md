@@ -114,7 +114,7 @@ Hot-swappable on edit:
 - `ble.scale_mac`
 - `update_check`
 
-Restart-required (the change is detected and logged with a warning, but only takes effect after restart): `ble.handler`, `ble.adapter`, `ble.noble_driver`, `ble.force_scale_adapter`, every `ble.mqtt_proxy.*` field including `embedded_broker_port` and `embedded_broker_bind`, every `ble.esphome_proxy.*` field including `client_info`, `additional_proxies` and `advertisement_timeout`, `ble.ha_bluetooth.url`, `ble.ha_bluetooth.token`, `ble.ha_bluetooth.source`, `runtime.continuous_mode`, `runtime.watchdog_max_consecutive_failures`, switching between single-user (1 user) and multi-user (>1).
+Restart-required (the change is detected and logged with a warning, but only takes effect after restart): `runtime.retry_failed_exports` (read once at startup), `ble.handler`, `ble.adapter`, `ble.noble_driver`, `ble.force_scale_adapter`, every `ble.mqtt_proxy.*` field including `embedded_broker_port` and `embedded_broker_bind`, every `ble.esphome_proxy.*` field including `client_info`, `additional_proxies` and `advertisement_timeout`, `ble.ha_bluetooth.url`, `ble.ha_bluetooth.token`, `ble.ha_bluetooth.source`, `runtime.continuous_mode`, `runtime.watchdog_max_consecutive_failures`, switching between single-user (1 user) and multi-user (>1).
 
 Everything not in that list is hot-swapped, including the keys people most often tune while a scale is misbehaving: `ble.session_timeout_sec`, `ble.auto_clear_stale_bond`, `ble.bind_key`, every `ble.qn_*` option and `ble.proxy_liveness_timeout_min`. On the proxy transports the liveness timeout is re-read when the next advertisement wait begins, so a change to it lands on the next cycle rather than the same instant.
 

@@ -120,6 +120,7 @@ If your account uses MFA, see [MFA workaround](#mfa-workaround) below.
 | --------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `scan_cooldown` | `30`    | Seconds to wait after a successful reading before scanning again. Range: 5-3600.                                                         |
 | `idle_rescan_delay`                | `5`     | Seconds to wait before scanning again after a cycle that found no scale while the adapter was healthy. Range: 0-3600. Real failures keep their own backoff. |
+| `retry_failed_exports`             | `true`  | Keep a reading whose upload failed and retry it later, up to 72 hours. Only targets that can record a past measurement are retried; MQTT and notifications cannot. The queue lives in `/data`, which survives add-on restarts and updates. |
 | `debug`         | `false` | Enable verbose BLE logs. Useful when opening an issue.                                                                         |
 | `custom_config` | `false` | Ignore UI options entirely and use `/share/ble-scale-sync/config.yaml` instead. See [Custom config mode](#custom-config-mode). |
 
