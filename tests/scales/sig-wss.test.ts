@@ -42,6 +42,28 @@ describe('parseSigWeightMeasurement (0x2A9D)', () => {
     expect(out.timestamp).toBeUndefined();
   });
 
+  it('does not read a timestamp out of a long frame whose flag is clear', () => {
+    // The 3-byte case above cannot catch a decoder that ignores the flag: there
+    // are no bytes to misread, so the bounds check hides the bug. This frame is
+    // long enough that bytes 3-9 WOULD decode as a date if the flag were not
+    // honoured.
+    const longNoTs = Buffer.from('0c783eea07050c123536', 'hex');
+    const out = parseSigWeightMeasurement(longNoTs);
+    expect(out.weightKg).toBeCloseTo(79.96, 2);
+    expect(out.timestamp).toBeUndefined();
+  });
+
+  it('passes 0xFFFF through as a weight rather than suppressing it', () => {
+    // Pins today's behaviour rather than endorsing it. `sig-bcs.ts` treats
+    // 0xFFFF as the SIG "measurement unsuccessful" sentinel in every field;
+    // this decoder does not, so 0xFFFF decodes as 327.675 kg. No capture shows
+    // a scale sending it on 0x2A9D, so it is not suppressed on a guess - but a
+    // second caller must make that decision knowingly, and this test is what
+    // makes it visible when they do.
+    const sentinel = Buffer.from('00ffff', 'hex');
+    expect(parseSigWeightMeasurement(sentinel).weightKg).toBeCloseTo(327.675, 3);
+  });
+
   it('still yields the weight when the flagged timestamp is truncated away', () => {
     // The flag claims a Date Time that the frame does not carry. Dropping the
     // whole frame would cost a usable weight, so only the timestamp is lost.
@@ -74,8 +96,12 @@ describe('parseSigDateTime', () => {
 describe('cross-check: the adapter and the shared decoder agree', () => {
   /**
    * Runs the real BF720 adapter over the same bytes rather than comparing the
-   * decoder against transcribed literals, so an extraction that drifted from
-   * the adapter would fail here.
+   * decoder against transcribed literals.
+   *
+   * What this pins is that the adapter still routes 0x2A9D through the shared
+   * decoder and caches the result. It canNOT detect a wrong constant inside the
+   * decoder: both sides of the assertion call the same function, so they move
+   * together. The direct tests above are what guard the values.
    */
   it('BeurerBf720Adapter reports the weight the shared decoder returns', () => {
     const a = new BeurerBf720Adapter();
