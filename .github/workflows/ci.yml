@@ -24,7 +24,14 @@ jobs:
           cache: npm
 
       - name: Install BLE system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libbluetooth-dev libusb-1.0-0-dev
+        run: |
+          # The runner image carries third-party apt repositories (Chrome,
+          # Microsoft) this job never installs from. A broken index on one of
+          # them fails the whole update, so drop them before refreshing.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*.{list,sources}
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod*.{list,sources}
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y libbluetooth-dev libusb-1.0-0-dev
 
       - name: Install npm dependencies
         run: npm ci
