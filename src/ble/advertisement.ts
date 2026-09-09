@@ -258,6 +258,41 @@ function blob(data: Buffer): string {
  * arrive intact. U+2028 and U+2029 are line breaks to anything that splits on
  * Unicode newlines rather than on LF.
  */
+/**
+ * The emit step every watcher shares: dedup, announce, queue.
+ *
+ * Two watchers held a byte-identical private `pushDeduped` and the third
+ * inlined the same four steps and had drifted, logging `Broadcast reading:`
+ * where the others logged `Reading:` and omitting the dedup-skip line (#406).
+ *
+ * Returns whether the reading was queued, which the caller needs: the
+ * mqtt-proxy watcher registers the scale's MAC with the ESP32 only when a
+ * reading is actually emitted, and doing that on every duplicate advertisement
+ * would publish to the proxy on every repeat.
+ *
+ * Deliberately a free function over the two collaborators rather than a class
+ * owning them: the queue and the dedup window are per-watcher fields with
+ * per-watcher lifetimes (a queued reading survives stop/start today), and the
+ * grace-timer callbacks are NOT identical - the mqtt one registers the MAC.
+ * Sharing only what is genuinely shared keeps those differences visible.
+ */
+export function emitDeduped(
+  dedup: DedupWindow,
+  queue: { push: (raw: RawReading) => void },
+  address: string,
+  raw: RawReading,
+  weight: number,
+): boolean {
+  if (!dedup.shouldEmit(address, weight)) {
+    bleLog.debug(`Dedup skip: ${address}:${weight.toFixed(1)}`);
+    return false;
+  }
+  bleLog.info(`Matched: ${raw.adapter.name} (${address})`);
+  bleLog.info(`Reading: ${weight} kg`);
+  queue.push(raw);
+  return true;
+}
+
 export function safeName(name: string | undefined): string {
   if (!name) return '';
   return name.replace(/[\\\x00-\x1f\x7f-\x9f\u2028\u2029]/g, (c) => {

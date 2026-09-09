@@ -9,6 +9,7 @@ import {
   DedupWindow,
   logAdvert,
   safeName,
+  emitDeduped,
 } from '../advertisement.js';
 import type { Watcher, WatcherConfig } from '../reading-source.js';
 import {
@@ -255,16 +256,18 @@ export class ReadingWatcher implements Watcher {
             // Got the full reading; cancel any pending grace timer for this addr.
             this.grace.cancel(entry.address);
 
-            if (!this.dedup.shouldEmit(entry.address, decision.reading.weight)) {
-              bleLog.debug(`Dedup skip: ${entry.address}:${decision.reading.weight.toFixed(1)}`);
-              continue; // Don't block other candidates in this scan batch
-            }
-
-            bleLog.info(`Matched: ${adapter.name} (${entry.address})`);
-            bleLog.info(`Broadcast reading: ${decision.reading.weight} kg`);
-            registerScaleMac(this.config, entry.address).catch(() => {});
-            this.queue.push({ reading: decision.reading, adapter });
-            continue;
+            // registerScaleMac is gated on the emit actually happening: on a
+            // duplicate advertisement it would otherwise publish to the ESP32
+            // on every repeat.
+            const emitted = emitDeduped(
+              this.dedup,
+              this.queue,
+              entry.address,
+              { reading: decision.reading, adapter },
+              decision.reading.weight,
+            );
+            if (emitted) registerScaleMac(this.config, entry.address).catch(() => {});
+            continue; // Either way, do not block other candidates in this batch
           }
 
           // Partial frame for a passive adapter: hold for an impedance frame.

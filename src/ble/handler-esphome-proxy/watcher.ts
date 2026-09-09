@@ -13,6 +13,7 @@ import {
   DedupWindow,
   logAdvert,
   safeName,
+  emitDeduped,
 } from '../advertisement.js';
 import type { Watcher, WatcherConfig } from '../reading-source.js';
 import { bleLog, errMsg, IMPEDANCE_GRACE_MS, withTimeout, withIdleTimeout } from '../types.js';
@@ -203,14 +204,8 @@ export class ReadingWatcher implements Watcher {
     }
   }
 
-  private pushDeduped(address: string, raw: RawReading, weight: number): void {
-    if (!this.dedup.shouldEmit(address, weight)) {
-      bleLog.debug(`Dedup skip: ${address}:${weight.toFixed(1)}`);
-      return;
-    }
-    bleLog.info(`Matched: ${raw.adapter.name} (${address})`);
-    bleLog.info(`Reading: ${weight} kg`);
-    this.queue.push(raw);
+  private pushDeduped(address: string, raw: RawReading, weight: number): boolean {
+    return emitDeduped(this.dedup, this.queue, address, raw, weight);
   }
 
   private readViaGatt(
