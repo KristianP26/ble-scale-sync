@@ -454,11 +454,13 @@ unknown_user: nearest # nearest | log | ignore
 | -------------- | -------- | --------- | ------------------------------------------------------------------------------ |
 | `unknown_user` | No       | `nearest` | What to do with a reading that matches no user's `weight_range`                 |
 
-- `nearest` attributes it to the user whose remembered weight is closest and exports normally.
+- `nearest` attributes it to the user whose configured `weight_range` has the closest **midpoint** and exports normally.
 - `log` records it and exports nothing.
 - `ignore` drops it silently.
 
-With more than one user this setting is rarely reached: the matcher falls back to the closest `last_known_weight` first, and that always returns somebody. It is `out_of_range` above that decides whether such a reading is exported at all. Both are hot-reloadable. Full detail, including how matching works: [Multi-User Support](/multi-user).
+In practice this setting is rarely reached. With one user, that user always matches, so it never applies at all. With several, the matcher first falls back to whoever's `last_known_weight` is closest to the reading, and that always returns somebody, so `nearest` and its two alternatives only come into play when no user has a remembered weight yet.
+
+Whether such a reading is exported at all is decided by `out_of_range` below, not here. Both are hot-reloadable. Full detail, including how matching works: [Multi-User Support](/multi-user).
 
 ### Out-of-range readings
 
@@ -589,10 +591,13 @@ These environment variables always override `config.yaml` values, useful for Doc
 | `DRY_RUN`                   | `runtime.dry_run`                           |
 | `DEBUG`                     | `runtime.debug`                             |
 | `SCAN_COOLDOWN`             | `runtime.scan_cooldown`                     |
+| `BLE_HANDLER`               | `ble.handler` (see the note below)          |
 | `BLE_WATCHDOG_MAX_FAILURES` | `runtime.watchdog_max_consecutive_failures` |
 | `SCALE_MAC`                 | `ble.scale_mac`                             |
 | `NOBLE_DRIVER`              | `ble.noble_driver`                          |
 | `BLE_ADAPTER`               | `ble.adapter`                               |
+
+`BLE_HANDLER` accepts `auto`, `mqtt-proxy`, `esphome-proxy` and `ha-bluetooth`. A proxy handler is applied only when that proxy is configured in `config.yaml`; otherwise the app says so and keeps the configured handler. Any other value is reported and ignored.
 
 ::: details Legacy .env support
 If `config.yaml` doesn't exist, the app falls back to `.env` configuration. See `.env.example` in the repository. When both files exist, `config.yaml` takes priority.

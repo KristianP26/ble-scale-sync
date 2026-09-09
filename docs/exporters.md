@@ -426,12 +426,14 @@ See [Configuration: Environment Variables](/guide/configuration#environment-vari
 ::: warning A boolean field must spell a boolean
 An `${ENV_VAR}` reference is resolved to a **string** before the exporter reads it, so a true/false field only accepts a value that reads as one: `true`, `yes`, `1`, `on`, or `false`, `no`, `0`, `off`, or empty. Anything else stops that exporter from being built, with an error naming the field, rather than being guessed at in one direction or the other.
 
-This applies to `weight_only` (garmin), `retain` and `ha_discovery` (mqtt), `silent` (ntfy), `report_exports` (ntfy, telegram) and `sync_measurements` (wger). So `MQTT_RETAIN=maybe` is an error, not a default.
+This applies to `weight_only` (garmin), `retain` and `ha_discovery` (mqtt), `silent` (telegram), `report_exports` (ntfy and telegram) and `sync_measurements` (wger). So `MQTT_RETAIN=maybe` is an error, not a default.
 :::
 
 ## Historical readings
 
-Some scales keep measurements taken while nothing was listening and replay them on the next connection: QN Scale, Mi Scale 2, Beurer BF720, Salter, Soehnle and 1byone all do. Those readings carry the time the scale recorded, and that changes where they go.
+Some scales keep measurements taken while nothing was listening and replay them on the next connection. Two adapters currently pass that recorded time on: **Beurer BF720** (and the BF105, BF500, BF788 and BF950 it serves) and **Renpho ES-26BB**. A reading carrying a time is treated differently from a live one.
+
+Several other scales replay a cache without a usable time. Salter is the explicit case: its stored records are delivered as ordinary readings on purpose, because a dated reading it could not date correctly would be buffered rather than exported.
 
 A reading with a timestamp is sent **only to exporters that can record it at that time**:
 

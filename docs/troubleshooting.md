@@ -176,7 +176,7 @@ If it happens every session, `ble.auto_clear_stale_bond: true` does that for you
 
 In continuous mode the wait between scans depends on how the previous cycle ended:
 
-- **A reading arrived:** `runtime.scan_cooldown` (default 30 s), and at least 25 s on the native BLE handler regardless, so the app does not reconnect while the scale is still advertising.
+- **A reading arrived:** `runtime.scan_cooldown` (default 30 s), and at least 25 s on Linux/BlueZ regardless, so the app does not reconnect while the scale is still advertising.
 - **No scale found, radio healthy:** `runtime.idle_rescan_delay` (default 5 s). Linux/BlueZ only; the other transports cannot tell this case from a failure and use the backoff below.
 - **The cycle failed** (a GATT error, a wedged controller, an export that threw): 5 s, then 10, 20, 40 and 60 s for as long as failures continue, resetting on the next success.
 
@@ -218,7 +218,7 @@ docker run ... -e BLE_RAW_CAPTURE=true -e DEBUG=true ghcr.io/kristianp26/ble-sca
 Every notification is then logged as hex with the characteristic it arrived on, whether the adapter understood it or not:
 
 ```
-[BLE] [RAW] 0000fff100001000800000805f9b34fb (13B): 1f0500 02e612 ...
+[BLE] [RAW] 0000fff100001000800000805f9b34fb (13B): 1f 05 00 02 e6 12 ...
 ```
 
 It also holds the connection open for 20 seconds past the settled weight, because several scales send their body-composition frames after the number stops moving and the app would otherwise disconnect first. Change that window with `BLE_RAW_CAPTURE_HOLD_SEC`:
