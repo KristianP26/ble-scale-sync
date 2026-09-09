@@ -13,7 +13,12 @@ import type {
   RunalyzeConfig,
   WgerConfig,
 } from './config.js';
-import { garminSchema, GarminExporter } from './garmin.js';
+import {
+  garminSchema,
+  GarminExporter,
+  GARMIN_UPLOAD_TIMEOUT_MIN_SEC,
+  GARMIN_UPLOAD_TIMEOUT_MAX_SEC,
+} from './garmin.js';
 import { mqttSchema, MqttExporter } from './mqtt.js';
 import { webhookSchema, WebhookExporter } from './webhook.js';
 import { influxdbSchema, InfluxDbExporter } from './influxdb.js';
@@ -63,6 +68,38 @@ function optionalBool(
   );
 }
 
+/**
+ * Read an optional numeric field, with the same reasoning as `optionalBool`.
+ *
+ * YAML hands the factory whatever the user typed and `${ENV_VAR}` references
+ * resolve to STRINGS before the schema sees them, so `as number` produces a
+ * string that looks like a number until something downstream refuses it. For
+ * Garmin's timeout that something is `spawn`, which throws on a non-integer
+ * `timeout` and takes the export with it. Bounds are checked here too, since
+ * a 1-second cap and a 10-hour one are both accepted by the type.
+ */
+function optionalNumber(
+  config: Record<string, unknown>,
+  type: string,
+  key: string,
+  bounds: { min: number; max: number },
+): number | undefined {
+  const value = config[key];
+  if (value === undefined || value === null || value === '') return undefined;
+  const num = typeof value === 'number' ? value : Number(String(value).trim());
+  if (!Number.isFinite(num)) {
+    throw new Error(
+      `Exporter "${type}" field "${key}" must be a number, got '${String(value)}'. Check your config.yaml.`,
+    );
+  }
+  if (num < bounds.min || num > bounds.max) {
+    throw new Error(
+      `Exporter "${type}" field "${key}" must be between ${bounds.min} and ${bounds.max}, got ${num}. Check your config.yaml.`,
+    );
+  }
+  return num;
+}
+
 // Every boolean an exporter reads goes through the helper above. The cast it
 // replaced was not specific to one field: `retain: "${MQTT_RETAIN}"` with
 // MQTT_RETAIN=false retained, and wger's sync_measurements had the same hole.
@@ -93,6 +130,10 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
         password: config.password as string | undefined,
         token_dir: config.token_dir as string | undefined,
         weight_only: optionalBool(config, 'garmin', 'weight_only'),
+        upload_timeout_sec: optionalNumber(config, 'garmin', 'upload_timeout_sec', {
+          min: GARMIN_UPLOAD_TIMEOUT_MIN_SEC,
+          max: GARMIN_UPLOAD_TIMEOUT_MAX_SEC,
+        }),
       }),
   },
   {
@@ -119,7 +160,9 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
         url: requireField(config, 'webhook', 'url'),
         method: (config.method as string) ?? 'POST',
         headers: (config.headers as Record<string, string>) ?? {},
-        timeout: (config.timeout as number) ?? 10_000,
+        // Same trap as the booleans: `timeout: "${WEBHOOK_TIMEOUT}"` reached
+        // AbortSignal.timeout() as a string.
+        timeout: optionalNumber(config, 'webhook', 'timeout', { min: 100, max: 600_000 }) ?? 10_000,
       };
       return new WebhookExporter(webhookConfig);
     },
