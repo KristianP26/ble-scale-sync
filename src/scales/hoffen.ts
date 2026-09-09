@@ -9,6 +9,8 @@ import type {
 } from '../interfaces/scale-adapter.js';
 import { uuid16, buildPayload, xorChecksum, type ScaleBodyComp } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
+import { bleLog } from '../ble/types.js';
+import { toHex } from '../ble/shared.js';
 
 /**
  * Adapter for the Hoffen BS-8107 body-fat scale.
@@ -30,6 +32,9 @@ export class HoffenAdapter implements ScaleAdapterCore, GattWiring {
   readonly charNotifyUuid = uuid16(0xffb2);
   readonly charWriteUuid = uuid16(0xffb2);
   readonly normalizesWeight = true;
+
+  /** The last frame we wrote, so its echo is not decoded as a measurement. */
+  private lastCommand: Buffer | null = null;
 
   private cachedFat = 0;
   private cachedWater = 0;
@@ -62,11 +67,29 @@ export class HoffenAdapter implements ScaleAdapterCore, GattWiring {
     const age = Math.min(0xff, Math.max(0, profile.age));
     const cmd = [0xfa, 0x85, 0x03, gender, age, height];
     cmd.push(xorChecksum(cmd, 0, cmd.length));
+    this.lastCommand = Buffer.from(cmd);
     await ctx.write(this.charWriteUuid, cmd, false);
   }
 
   parseNotification(data: Buffer): ScaleReading | null {
     if (data.length < 5 || data[0] !== 0xfa) return null;
+
+    // Byte [1] is a response code, and 0xFA plainly has several: onConnected
+    // writes [0xFA, 0x85, 0x03, ...] itself. Every frame here is decoded as a
+    // measurement regardless, and isComplete is a bare `weight > 0` with no
+    // hold window, so the first reply that happens to decode ends the session
+    // with whatever those two bytes contained (#405).
+    //
+    // Gating on a GUESSED measurement code would be the same mistake pointed
+    // the other way, because no capture of this scale exists. What is certain
+    // is that our OWN command is not a measurement, so an echo of it is
+    // rejected; and the code is logged so the first owner to run with
+    // debug: true answers the question for good.
+    if (this.lastCommand && data.equals(this.lastCommand)) {
+      bleLog.debug(`Hoffen: ignoring an echo of the command we just wrote [${toHex(data)}]`);
+      return null;
+    }
+    bleLog.debug(`Hoffen 0xFA frame: response code 0x${data[1].toString(16)} [${toHex(data)}]`);
 
     const weight = data.readUInt16LE(3) / 10;
 
@@ -104,6 +127,7 @@ export class HoffenAdapter implements ScaleAdapterCore, GattWiring {
    * PREVIOUS person's whole body composition against a fresh weight.
    */
   onSessionStart(): void {
+    this.lastCommand = null;
     this.cachedFat = 0;
     this.cachedWater = 0;
     this.cachedMuscle = 0;

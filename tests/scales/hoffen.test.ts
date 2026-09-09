@@ -239,3 +239,60 @@ describe('HoffenAdapter session boundary (#394)', () => {
     expect(payload.bodyFatPercent).not.toBeCloseTo(22.5, 1);
   });
 });
+
+describe('HoffenAdapter 0xFA frame handling (#405)', () => {
+  const PROFILE = { height: 180, age: 35, gender: 'male' as const, isAthlete: false };
+
+  it('does not decode an echo of the command it just wrote as a weight', async () => {
+    const adapter = new HoffenAdapter();
+    adapter.onSessionStart?.();
+
+    let written: Buffer | undefined;
+    await adapter.onConnected!({
+      profile: PROFILE,
+      deviceAddress: '',
+      availableChars: new Set<string>(),
+      write: async (_uuid, data) => {
+        written = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      },
+      read: async () => Buffer.alloc(0),
+      subscribe: async () => undefined,
+    } as never);
+
+    expect(written).toBeDefined();
+    // Bytes [3..4] of the command are age and height, which decode as a
+    // plausible weight and used to end the session on the first echo.
+    expect(adapter.parseNotification(written!)).toBeNull();
+  });
+
+  it('still decodes a genuine measurement frame', () => {
+    const adapter = new HoffenAdapter();
+    adapter.onSessionStart?.();
+    const frame = Buffer.alloc(8);
+    frame[0] = 0xfa;
+    frame[1] = 0x00;
+    frame.writeUInt16LE(750, 3); // 75.0 kg
+    expect(adapter.parseNotification(frame)?.weight).toBeCloseTo(75, 3);
+  });
+
+  it('clears the echo guard between sessions', async () => {
+    const adapter = new HoffenAdapter();
+    adapter.onSessionStart?.();
+    let written: Buffer | undefined;
+    await adapter.onConnected!({
+      profile: PROFILE,
+      deviceAddress: '',
+      availableChars: new Set<string>(),
+      write: async (_uuid, data) => {
+        written = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      },
+      read: async () => Buffer.alloc(0),
+      subscribe: async () => undefined,
+    } as never);
+
+    adapter.onSessionStart?.();
+    // A new session has written nothing yet, so nothing is being compared
+    // against a stale command from the previous one.
+    expect(adapter.parseNotification(written!)).not.toBeNull();
+  });
+});
