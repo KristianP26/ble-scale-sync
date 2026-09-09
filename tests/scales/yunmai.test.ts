@@ -278,31 +278,57 @@ describe('YunmaiScaleAdapter session boundary (#394)', () => {
   });
 });
 
-describe('Yunmai variant flag, and what it cannot do yet (#406)', () => {
-  it('tracks the last Yunmai-named device, which is not always the one being read', () => {
+describe('Yunmai variant per device (#406)', () => {
+  const MINI = 'AA:BB:CC:00:00:01';
+  const STANDARD = 'AA:BB:CC:00:00:02';
+
+  /** mockPeripheral() has no address parameter, so spread one in. */
+  function device(name: string, address: string) {
+    return { ...mockPeripheral(name, []), address };
+  }
+
+  it('reads the impedance of the Mini even after a standard unit was matched', () => {
     const adapter = makeAdapter();
-    expect(adapter.matches(mockPeripheral('YUNMAI-ISM', []))).toBe(true);
+    adapter.matches(device('YUNMAI-ISM', MINI));
+    // A second Yunmai in range moves the singleton's flag...
+    adapter.matches(device('Yunmai Standard', STANDARD));
+
+    // ...but the session opens against the Mini, which is what decides.
+    adapter.onSessionStart?.(MINI.replace(/:/g, ''));
+    const reading = adapter.parseNotification(makeFrame({ weightRaw: 8000, impedanceRaw: 500 }));
+    expect(reading!.impedance).toBe(500);
+    expect(adapter.completionHoldMs).toBe(4000);
+  });
+
+  it('does not read [15..16] as an impedance for the standard unit', () => {
+    const adapter = makeAdapter();
+    adapter.matches(device('YUNMAI-ISM', MINI));
+    adapter.matches(device('Yunmai Standard', STANDARD));
+
+    adapter.onSessionStart?.(STANDARD.replace(/:/g, ''));
+    const reading = adapter.parseNotification(makeFrame({ weightRaw: 8000, impedanceRaw: 500 }));
+    expect(reading!.impedance).toBe(0);
+    expect(adapter.completionHoldMs).toBeUndefined();
+  });
+
+  it('leaves an unknown address on whatever matches() decided', () => {
+    const adapter = makeAdapter();
+    adapter.matches(device('YUNMAI-ISM', MINI));
+
+    // What noble on macOS supplies: a CoreBluetooth UUID, which matches no
+    // advertisement. Unknown must not be read as "standard".
+    adapter.onSessionStart?.('1B2C3D4E5F60718293A4B5C6D7E8F900');
     expect(
       adapter.parseNotification(makeFrame({ weightRaw: 8000, impedanceRaw: 500 }))!.impedance,
     ).toBe(500);
-
-    // A second Yunmai in range, without the marker, moves the flag. This is
-    // the known limitation: fixing it needs per-device state resolved when the
-    // session opens, and the adapter contract does not currently give this
-    // adapter the device address without giving up unlockCommand.
-    expect(adapter.matches(mockPeripheral('Yunmai Standard', []))).toBe(true);
-    expect(
-      adapter.parseNotification(makeFrame({ weightRaw: 8000, impedanceRaw: 500 }))!.impedance,
-    ).toBe(0);
   });
 
-  it('does not latch the Mini behaviour onto a standard unit', () => {
-    // The opposite failure, which a sticky flag would introduce: a standard
-    // unit inheriting the 4 s completion hold and having [15..16] read as an
-    // impedance nobody has captured.
+  it('works when the session hook is given no address at all', () => {
     const adapter = makeAdapter();
     adapter.matches(mockPeripheral('YUNMAI-ISM', []));
-    adapter.matches(mockPeripheral('Yunmai Standard', []));
-    expect(adapter.completionHoldMs).toBeUndefined();
+    adapter.onSessionStart?.();
+    expect(
+      adapter.parseNotification(makeFrame({ weightRaw: 8000, impedanceRaw: 500 }))!.impedance,
+    ).toBe(500);
   });
 });

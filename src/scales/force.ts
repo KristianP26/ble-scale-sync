@@ -60,12 +60,13 @@ function forceAdapter(adapter: ScaleAdapter): ScaleAdapter {
     get(target, prop, _receiver) {
       if (prop === 'matches') {
         // Run the real matcher first, for its SIDE EFFECTS, then claim the
-        // device regardless of what it said. Two adapters latch their protocol
+        // device regardless of what it said. Two adapters record their protocol
         // variant here off the advertised name (Beurer/Sanitas `isBf710Type`,
-        // Yunmai `isMini`), and replacing the method outright left them on the
-        // default variant: a forced SBF70 decoded every weigh-in as a constant
-        // 12.80 kg (#384). Throwing is contained, because failing to claim the
-        // device is not an option the override leaves open.
+        // Yunmai `isMini` plus its per-address record), and replacing the
+        // method outright left them on the default variant: a forced SBF70
+        // decoded every weigh-in as a constant 12.80 kg (#384). Throwing is
+        // contained, because failing to claim the device is not an option the
+        // override leaves open.
         return (device: BleDeviceInfo): boolean => {
           try {
             target.matches(device);

@@ -18,6 +18,20 @@ const CHR_CMD = uuid16(0xffe9); // write  — commands
 // Response-type markers in data[3]
 const RESP_MEASURED = 0x02;
 
+/** Bound on the per-device variant cache; more than this in range is not real. */
+const MINI_CACHE_MAX = 32;
+
+/**
+ * Lowercase hex, separators stripped. `BleDeviceInfo.address` is uppercase with
+ * colons and `ConnectionContext.deviceAddress` is uppercase without, so both
+ * have to be flattened before they can be compared.
+ */
+function normalizeAddress(address: string | undefined): string | undefined {
+  if (!address) return undefined;
+  const flat = address.replace(/[:-]/g, '').toLowerCase();
+  return flat.length > 0 ? flat : undefined;
+}
+
 /**
  * Adapter for Yunmai scales (Signal, Mini, SE).
  *
@@ -49,6 +63,13 @@ export class YunmaiScaleAdapter
 
   /** True for Mini (ISM) and SE (ISSE) variants that report resistance. */
   private isMini = false;
+  /**
+   * Variant per device address. This adapter is a shared singleton and
+   * `matches()` runs for every candidate a scan produces, so a single flag
+   * tracks the last Yunmai-named advertisement rather than the unit about to be
+   * read (#406).
+   */
+  private readonly miniByAddress = new Map<string, boolean>();
 
   /** Cached fat percentage from protocol >= 0x1E embedded in the frame. */
   private embeddedFatPercent: number | null = null;
@@ -63,6 +84,17 @@ export class YunmaiScaleAdapter
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
     if (!name.includes('yunmai')) return false;
+
+    const mini = name.includes('ism') || name.includes('isse');
+    const address = normalizeAddress(device.address);
+    if (address) {
+      if (this.miniByAddress.size >= MINI_CACHE_MAX && !this.miniByAddress.has(address)) {
+        const oldest = this.miniByAddress.keys().next().value;
+        if (oldest !== undefined) this.miniByAddress.delete(oldest);
+      }
+      this.miniByAddress.set(address, mini);
+    }
+
     // Assigned, not latched, and this is a known-imperfect compromise (#406).
     //
     // The adapter is a shared singleton and matches() runs for every candidate
@@ -77,7 +109,12 @@ export class YunmaiScaleAdapter
     // address arrives, and shared.ts treats an adapter with onConnected as
     // NOT using unlockCommand, which is what starts a Yunmai measurement.
     // Recorded with that reasoning rather than half-done.
-    this.isMini = name.includes('ism') || name.includes('isse');
+    // Still assigned, for the paths where nothing better is available: a
+    // transport that gives matchers no address (noble on macOS supplies a
+    // CoreBluetooth UUID that no advertisement can match), and the mqtt
+    // autonomous connect, which can select this adapter from a synthetic
+    // nameless device. onSessionStart corrects it when the address IS known.
+    this.isMini = mini;
     return true;
   }
 
@@ -160,8 +197,16 @@ export class YunmaiScaleAdapter
    * singleton: `isMini` is deliberately NOT reset here, it is a device property
    * latched from the advertised name in matches(), not per-session state.
    */
-  onSessionStart(): void {
+  onSessionStart(deviceAddress?: string): void {
     this.embeddedFatPercent = null;
+
+    // Resolve the variant for THIS device, whatever matches() was shown for
+    // other devices in between. An address we have never recorded leaves the
+    // matches() assignment alone rather than resetting it: unknown is not the
+    // same as "standard".
+    const address = normalizeAddress(deviceAddress);
+    const known = address ? this.miniByAddress.get(address) : undefined;
+    if (known !== undefined) this.isMini = known;
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
