@@ -541,6 +541,15 @@ runtime:
 | `watchdog_max_consecutive_failures` | No       | `10`    | In continuous mode on Linux: exit after this many consecutive scan failures so Docker `restart: unless-stopped` can recover from a stuck BlueZ controller (0 = disabled). See [Troubleshooting](/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state).                                           |
 | `watch_config`                      | No       | `true`  | Auto-reload `config.yaml` on edit (continuous mode only). Set to `false` to disable and rely on `SIGHUP` only. See [Live Config Reload](/multi-user#live-config-reload).                                                                                                                                               |
 
+### Docker (accepted, unused)
+
+```yaml
+docker:
+  mode: pull # pull | build
+```
+
+Accepted by the schema so an older `config.yaml` still validates, and read by nothing. It described how the setup wizard should obtain the image, which the wizard no longer decides from the config file. Leave it or delete it; neither changes what the app does.
+
 ### Update Check
 
 ```yaml
