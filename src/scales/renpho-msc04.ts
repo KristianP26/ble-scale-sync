@@ -78,10 +78,20 @@ export class RenphoMsc04Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     return matchesDescriptor(device, this.match);
   }
 
-  async onConnected(ctx: ConnectionContext): Promise<void> {
-    // Reset per-connection state (adapter instance is a shared singleton).
+  /**
+   * Clear the previous weigh-in before anything is subscribed (#394).
+   *
+   * This used to live in `onConnected`, which is too late for a multi-char
+   * adapter: `subscribeAndInit` enables EVERY notify binding and only then
+   * awaits `startInit()`, so frames can already be arriving - through several
+   * D-Bus round trips for the second and third binding - while the reset has
+   * not run. `onSessionStart` runs before the first subscribe.
+   */
+  onSessionStart(): void {
     this.finalReceived = false;
+  }
 
+  async onConnected(ctx: ConnectionContext): Promise<void> {
     if (!ctx.availableChars.has(CHR_WRITE)) {
       throw new Error(
         `Renpho R-MSC04: write characteristic (${CHR_WRITE}) not discovered. ` +

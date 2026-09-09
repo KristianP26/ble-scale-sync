@@ -26,11 +26,33 @@ export interface RuntimeLoopDeps {
   onSourceReload?: () => void;
   onSuccess?: () => Promise<void> | void;
   onFailure?: (err: unknown) => void;
+  /**
+   * Run at the start of every iteration, before the source is asked for a
+   * reading. Used to drain the failed-export queue (#412): the network is as
+   * likely to be back here as anywhere, and nothing else is competing for it.
+   *
+   * Not a timer. On the watcher transports an iteration begins when somebody
+   * steps on the scale, so a queue in a house that stops using the scale waits
+   * until it is used again.
+   */
+  onCycleStart?: () => Promise<void>;
+  /**
+   * Delay to wait after this error instead of the exponential backoff, or
+   * undefined to back off as usual. The loop asks; the policy belongs to
+   * whoever built the source, because only it can tell an idle scan from a
+   * broken one (#398).
+   *
+   * It sees every iteration error, including a failure thrown by
+   * `processReading` rather than by the source, so an implementation must
+   * recognise the errors it means rather than assuming what it is handed.
+   */
+  failureDelayMs?: (err: unknown) => number | undefined;
   failureLogPrefix?: string;
 }
 
 /**
- * Exponential backoff on iteration error: 5s -> 10s -> 20s -> 40s -> 60s cap.
+ * Exponential backoff on iteration error: 5s -> 10s -> 20s -> 40s -> 60s cap,
+ * unless `failureDelayMs` claims the error and names a shorter wait (#398).
  */
 export async function runContinuousLoop(deps: RuntimeLoopDeps): Promise<void> {
   const {
@@ -44,6 +66,8 @@ export async function runContinuousLoop(deps: RuntimeLoopDeps): Promise<void> {
     onSourceReload,
     onSuccess,
     onFailure,
+    onCycleStart,
+    failureDelayMs,
     failureLogPrefix = 'Error processing reading',
   } = deps;
 
@@ -53,6 +77,10 @@ export async function runContinuousLoop(deps: RuntimeLoopDeps): Promise<void> {
     while (!signal.aborted) {
       try {
         touchHeartbeat();
+        // Before the source is asked for anything: a queued export must not
+        // wait for the next weigh-in to even be attempted on the poll
+        // transports, where an iteration is a scan cycle.
+        if (onCycleStart) await onCycleStart();
 
         // Start hook is idempotent in every concrete source: ReadingWatcher
         // (mqtt-proxy, esphome-proxy) early-returns when `this.started === true`,
@@ -82,6 +110,17 @@ export async function runContinuousLoop(deps: RuntimeLoopDeps): Promise<void> {
         // logs the message as an error and exits non-zero.
         if (err instanceof MissingTransportModuleError) throw err;
         onFailure?.(err);
+        const shortDelayMs = failureDelayMs?.(err);
+        if (shortDelayMs !== undefined) {
+          // An idle cycle neither advances nor resets a real failure streak:
+          // nobody standing on the scale says nothing about the radio, in
+          // either direction.
+          log.info(
+            `${failureLogPrefix}, rescanning in ${shortDelayMs / 1000}s... (${errMsg(err)})`,
+          );
+          await abortableSleep(shortDelayMs, signal).catch(() => {});
+          continue;
+        }
         backoffMs = backoffMs === 0 ? BACKOFF_INITIAL_MS : Math.min(backoffMs * 2, BACKOFF_MAX_MS);
         log.info(`${failureLogPrefix}, retrying in ${backoffMs / 1000}s... (${errMsg(err)})`);
         await abortableSleep(backoffMs, signal).catch(() => {});

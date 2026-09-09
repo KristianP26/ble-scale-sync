@@ -7,9 +7,16 @@ import type {
 import type { EsphomeProxyConfig } from '../../config/schema.js';
 import { type RawReading, waitForRawReading } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
-import { evaluateAdvertisement, GraceTimers, DedupWindow, logAdvert } from '../advertisement.js';
+import {
+  evaluateAdvertisement,
+  GraceTimers,
+  DedupWindow,
+  logAdvert,
+  safeName,
+  emitDeduped,
+} from '../advertisement.js';
 import type { Watcher, WatcherConfig } from '../reading-source.js';
-import { bleLog, errMsg, IMPEDANCE_GRACE_MS } from '../types.js';
+import { bleLog, errMsg, IMPEDANCE_GRACE_MS, withTimeout, withIdleTimeout } from '../types.js';
 import { AsyncQueue } from '../async-queue.js';
 import { EsphomeProxyPool } from './pool.js';
 import { logTransportCapabilities } from './scan.js';
@@ -17,6 +24,14 @@ import { logTransportCapabilities } from './scan.js';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const DEDUP_WINDOW_MS = 30_000;
+// Bounds for an on-demand GATT read, matching the mqtt-proxy watcher. Without
+// them a proxy that vanishes mid-session (Wi-Fi drop, reboot) never sends the
+// connection frame waitForRawReading waits on, so the read hangs forever: the
+// gattInFlight entry is never cleared (that scale is never read again) and
+// noteGattEnd never runs (the advertisement watchdog stays disarmed for that
+// endpoint, and keeps re-stamping its liveness on every sweep).
+const GATT_READING_IDLE_MS = 60_000;
+const GATT_SESSION_ABSOLUTE_MS = 90_000;
 // Cap for the "already warned about this scale's GATT failure" tracker. Old
 // entries are evicted LRU-style so dedup persists long-term in continuous mode.
 const GATT_WARN_LRU_MAX = 256;
@@ -79,7 +94,7 @@ export class ReadingWatcher implements Watcher {
     }
     const cached = this.lastAdvertName.get(addrLc);
     if (!cached) return info;
-    bleLog.debug(`Nameless advertisement for ${addrLc}: using cached name "${cached}"`);
+    bleLog.debug(`Nameless advertisement for ${addrLc}: using cached name "${safeName(cached)}"`);
     return { ...info, localName: cached };
   }
   // LRU map (insertion-ordered): scales whose on-demand GATT connect failed,
@@ -91,7 +106,7 @@ export class ReadingWatcher implements Watcher {
     bleLog.info(
       `Matched: ${gr.adapter.name} (${address}), weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
     );
-    bleLog.info(`Broadcast reading: ${gr.reading.weight} kg`);
+    bleLog.info(`Reading: ${gr.reading.weight} kg`);
     this.queue.push(gr);
   });
 
@@ -189,14 +204,8 @@ export class ReadingWatcher implements Watcher {
     }
   }
 
-  private pushDeduped(address: string, raw: RawReading, weight: number): void {
-    if (!this.dedup.shouldEmit(address, weight)) {
-      bleLog.debug(`Dedup skip: ${address}:${weight.toFixed(1)}`);
-      return;
-    }
-    bleLog.info(`Matched: ${raw.adapter.name} (${address})`);
-    bleLog.info(`Reading: ${weight} kg`);
-    this.queue.push(raw);
+  private pushDeduped(address: string, raw: RawReading, weight: number): boolean {
+    return emitDeduped(this.dedup, this.queue, address, raw, weight);
   }
 
   private readViaGatt(
@@ -233,20 +242,34 @@ export class ReadingWatcher implements Watcher {
             `Re-resolved adapter after GATT discovery: ${adapter.name} -> ${gattAdapter.name} (${address})`,
           );
         }
-        const raw = await waitForRawReading(
-          session.charMap,
-          session.device,
-          gattAdapter,
-          this.profile ?? { height: 170, age: 30, gender: 'male', isAthlete: false },
-          address.replace(/[:-]/g, '').toUpperCase(),
-          undefined,
-          undefined,
-          this.scaleAuth,
+        const raw = await withTimeout(
+          withIdleTimeout(
+            (onActivity) =>
+              waitForRawReading(
+                session!.charMap,
+                session!.device,
+                gattAdapter,
+                this.profile ?? { height: 170, age: 30, gender: 'male', isAthlete: false },
+                address.replace(/[:-]/g, '').toUpperCase(),
+                undefined,
+                undefined,
+                this.scaleAuth,
+                onActivity,
+              ),
+            GATT_READING_IDLE_MS,
+            `GATT reading timeout for ${address}`,
+          ),
+          GATT_SESSION_ABSOLUTE_MS,
+          `GATT session cap exceeded for ${address}`,
         );
         this.pushDeduped(address, raw, raw.reading.weight);
       } catch (e) {
         this.warnGattFailure(gattAdapter.name, address, errMsg(e));
       } finally {
+        // Before close(), so the wait is finished with the session before
+        // the session goes away. See fireDisconnect's own doc for why the order
+        // is not load-bearing either way.
+        session?.device.fireDisconnect();
         if (session) await session.close();
         this.gattInFlight.delete(addrLc);
       }

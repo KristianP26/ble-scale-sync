@@ -72,6 +72,7 @@ export class MqttBleChar implements BleChar {
 /** Implements BleDevice from shared.ts. Watches for MQTT disconnect events. */
 export class MqttBleDevice implements BleDevice {
   private disconnectCb?: () => void;
+  private disconnectFired = false;
   private handler?: (topic: string, payload: Buffer) => void;
 
   constructor(
@@ -79,7 +80,7 @@ export class MqttBleDevice implements BleDevice {
     private disconnectedTopic: string,
   ) {
     this.handler = (topic) => {
-      if (topic === this.disconnectedTopic) this.disconnectCb?.();
+      if (topic === this.disconnectedTopic) this.fireDisconnect();
     };
     client.on('message', this.handler);
   }
@@ -90,10 +91,16 @@ export class MqttBleDevice implements BleDevice {
 
   /**
    * Abandon this session locally, as if the ESP32 had reported a disconnect.
-   * Used when a newer autonomous connect supersedes an in-flight one (#296).
+   * Used when a newer autonomous connect supersedes an in-flight one (#296),
+   * and by every caller that gives up on a reading (#404).
+   *
+   * Latched, like the ESPHome one: the supersede path and a real disconnect
+   * frame can both arrive, and the second must not re-enter a settled session.
    */
   fireDisconnect(): void {
-    this.disconnectCb?.();
+    if (this.disconnectFired || !this.disconnectCb) return;
+    this.disconnectFired = true;
+    this.disconnectCb();
   }
 
   cleanup(): void {

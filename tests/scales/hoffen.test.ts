@@ -172,3 +172,127 @@ describe('HoffenAdapter', () => {
     });
   });
 });
+
+// #394: adapters are shared singletons. Before onSessionStart existed, a second
+// weigh-in could resolve on the FIRST frame using the previous person's data.
+//
+// Every one of these also asserts that computeMetrics still carries the scale's
+// own composition, because the first attempt at this fix cleared the caches in
+// onSessionEnd - which runs BEFORE computeMetrics - and would have deleted the
+// body composition from every reading while these tests stayed green.
+
+describe('HoffenAdapter session boundary (#394)', () => {
+  function biaFrame(weightTenths: number, fatTenths: number): Buffer {
+    const buf = Buffer.alloc(19);
+    buf[0] = 0xfa;
+    buf.writeUInt16LE(weightTenths, 3);
+    buf[5] = 0x00; // BIA contact
+    buf.writeUInt16LE(fatTenths, 6);
+    buf.writeUInt16LE(550, 8);
+    buf.writeUInt16LE(400, 10);
+    buf[14] = 35;
+    buf.writeUInt16LE(80, 17);
+    return buf;
+  }
+
+  function weightOnlyFrame(weightTenths: number): Buffer {
+    const buf = Buffer.alloc(8);
+    buf[0] = 0xfa;
+    buf.writeUInt16LE(weightTenths, 3);
+    buf[5] = 0x01; // no BIA contact
+    return buf;
+  }
+
+  it('keeps the completed reading composition when the NEXT session starts first', () => {
+    // The ordering this guards is real, not hypothetical: on the mqtt-proxy and
+    // esphome-proxy watchers the loop awaits processReading() - computeMetrics
+    // plus network exports - while the watcher is free to open the next GATT
+    // session. So onSessionStart() for session N+1 can land BEFORE
+    // computeMetrics() for session N. Without a per-reading snapshot this
+    // exports the Deurenberg BMI estimate instead of the scale's own figure.
+    const adapter = makeAdapter();
+    const reading = adapter.parseNotification(biaFrame(800, 225))!;
+
+    adapter.onSessionStart();
+
+    const payload = adapter.computeMetrics(reading, defaultProfile());
+    expect(payload.bodyFatPercent).toBeCloseTo(22.5, 1);
+    expect(payload.waterPercent).toBeCloseTo(55, 1);
+    // 40.0 % of 80 kg, i.e. the scale's own figure and not an estimate.
+    expect(payload.muscleMass).toBeCloseTo(32, 1);
+  });
+
+  it('does not attach the previous person composition to a weight-only reading', () => {
+    // The realistic case: one weigh-in with poor foot contact. isComplete is a
+    // bare weight > 0 with no hold window, so this frame ends the session and
+    // used to carry the previous person's fat, water, muscle and bone.
+    const adapter = makeAdapter();
+    adapter.parseNotification(biaFrame(800, 225));
+
+    adapter.onSessionStart();
+
+    const reading = adapter.parseNotification(weightOnlyFrame(650))!;
+    const payload = adapter.computeMetrics(reading, defaultProfile());
+    expect(payload.weight).toBe(65);
+    // 22.5 % was the previous person's. Without a fresh BIA frame this has to
+    // fall back to the BMI estimate rather than replay it.
+    expect(payload.bodyFatPercent).not.toBeCloseTo(22.5, 1);
+  });
+});
+
+describe('HoffenAdapter 0xFA frame handling (#405)', () => {
+  const PROFILE = { height: 180, age: 35, gender: 'male' as const, isAthlete: false };
+
+  it('does not decode an echo of the command it just wrote as a weight', async () => {
+    const adapter = new HoffenAdapter();
+    adapter.onSessionStart?.();
+
+    let written: Buffer | undefined;
+    await adapter.onConnected!({
+      profile: PROFILE,
+      deviceAddress: '',
+      availableChars: new Set<string>(),
+      write: async (_uuid, data) => {
+        written = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      },
+      read: async () => Buffer.alloc(0),
+      subscribe: async () => undefined,
+    } as never);
+
+    expect(written).toBeDefined();
+    // Bytes [3..4] of the command are age and height, which decode as a
+    // plausible weight and used to end the session on the first echo.
+    expect(adapter.parseNotification(written!)).toBeNull();
+  });
+
+  it('still decodes a genuine measurement frame', () => {
+    const adapter = new HoffenAdapter();
+    adapter.onSessionStart?.();
+    const frame = Buffer.alloc(8);
+    frame[0] = 0xfa;
+    frame[1] = 0x00;
+    frame.writeUInt16LE(750, 3); // 75.0 kg
+    expect(adapter.parseNotification(frame)?.weight).toBeCloseTo(75, 3);
+  });
+
+  it('clears the echo guard between sessions', async () => {
+    const adapter = new HoffenAdapter();
+    adapter.onSessionStart?.();
+    let written: Buffer | undefined;
+    await adapter.onConnected!({
+      profile: PROFILE,
+      deviceAddress: '',
+      availableChars: new Set<string>(),
+      write: async (_uuid, data) => {
+        written = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      },
+      read: async () => Buffer.alloc(0),
+      subscribe: async () => undefined,
+    } as never);
+
+    adapter.onSessionStart?.();
+    // A new session has written nothing yet, so nothing is being compared
+    // against a stale command from the previous one.
+    expect(adapter.parseNotification(written!)).not.toBeNull();
+  });
+});

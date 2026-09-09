@@ -376,6 +376,10 @@ describe('TrisaAdapter', () => {
       adapter.parseCharNotification!(uploadUuid, Buffer.from([0xa1, 0xde, 0xad, 0xbe, 0xef]));
       adapter.onSessionEnd!();
 
+      // The next session's start hook is what drops it. onSessionEnd only
+      // releases the connection handles; it is best effort and a timed-out
+      // session may never reach it at all (#394).
+      adapter.onSessionStart!();
       const { ctx, writeFn } = ctxWithChars(ADE_CHARS);
       await adapter.onConnected!(ctx);
       const acks = writeFn.mock.calls.filter(

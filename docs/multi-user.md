@@ -31,6 +31,8 @@ users:
     last_known_weight: 85.5
 ```
 
+Only the matching-relevant fields are shown. Every user also needs `slug`, `height`, `birth_date`, `gender` and `is_athlete`, and the file needs `version: 1` -> see the [full reference](/guide/configuration#config-yaml-reference).
+
 ## Weight Matching
 
 The app uses a 4-tier priority system to identify users:
@@ -49,6 +51,8 @@ If no match is found, the `unknown_user` strategy decides what happens:
 | `nearest` (default) | Picks the closest range midpoint (with a warning) |
 | `log`               | Logs a warning and skips                          |
 | `ignore`            | Silently skips                                    |
+
+Note what tiers 1 and 4 mean in practice: a reading outside every configured range is not rejected, it is assigned anyway. `unknown_user` is never consulted, because tier 4 already produced a match. If you want such a reading dropped instead, set `out_of_range: skip`; see [Out-of-range readings](/guide/configuration#out-of-range-readings).
 
 ## Drift Detection
 
@@ -105,11 +109,14 @@ Hot-swappable on edit:
 - User profiles (`name`, `slug`, `height`, `birth_date`, `gender`, `is_athlete`, `weight_range`, `last_known_weight`)
 - `scale.weight_unit`, `scale.height_unit`
 - `unknown_user` strategy
-- `runtime.dry_run`, `runtime.debug`, `runtime.scan_cooldown`
+- `out_of_range` strategy
+- `runtime.dry_run`, `runtime.debug`, `runtime.scan_cooldown`, `runtime.idle_rescan_delay`
 - `ble.scale_mac`
 - `update_check`
 
-Restart-required (the change is detected and logged with a warning, but only takes effect after restart): `ble.handler`, `ble.adapter`, `ble.noble_driver`, all `ble.mqtt_proxy.*` fields, all `ble.esphome_proxy.*` fields, `runtime.continuous_mode`, `runtime.watchdog_max_consecutive_failures`, switching between single-user (1 user) and multi-user (>1).
+Restart-required (the change is detected and logged with a warning, but only takes effect after restart): `runtime.retry_failed_exports` (read once at startup), `ble.handler`, `ble.adapter`, `ble.noble_driver`, `ble.force_scale_adapter`, every `ble.mqtt_proxy.*` field including `embedded_broker_port` and `embedded_broker_bind`, every `ble.esphome_proxy.*` field including `client_info`, `additional_proxies` and `advertisement_timeout`, `ble.ha_bluetooth.url`, `ble.ha_bluetooth.token`, `ble.ha_bluetooth.source`, `runtime.continuous_mode`, `runtime.watchdog_max_consecutive_failures`, switching between single-user (1 user) and multi-user (>1).
+
+Everything not in that list is hot-swapped, including the keys people most often tune while a scale is misbehaving: `ble.session_timeout_sec`, `ble.auto_clear_stale_bond`, `ble.bind_key`, every `ble.qn_*` option and `ble.proxy_liveness_timeout_min`. On the proxy transports the liveness timeout is re-read when the next advertisement wait begins, so a change to it lands on the next cycle rather than the same instant.
 
 To opt out (e.g. on a flaky network filesystem) and rely solely on the `SIGHUP` flow:
 

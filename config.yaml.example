@@ -74,6 +74,13 @@ scale:
 #   "ignore"  = silently skip the measurement
 unknown_user: nearest
 
+# What to do with a reading no user's weight_range covers.
+#   "warn" (default) = log it and export it anyway (the behaviour before
+#                      this option existed)
+#   "skip"           = log it and stop: no export, and last_known_weight is
+#                      left alone so the next weigh-in still matches correctly
+out_of_range: warn
+
 # --- Users ---
 # At least one user is required. For multi-user setups,
 # define weight_range so the app can identify who stepped on the scale.
@@ -191,6 +198,8 @@ global_exporters:
 runtime:
   continuous_mode: false    # true = keep scanning in a loop (ideal for Raspberry Pi)
   scan_cooldown: 30         # seconds between scans in continuous mode (5–3600)
+  idle_rescan_delay: 5      # seconds before rescanning when no scale was found (0-3600)
+  retry_failed_exports: true # keep a reading whose export failed and retry it later
   dry_run: false            # true = read scale + compute body comp, skip all exports
   debug: false              # true = verbose BLE logging
 

@@ -7,8 +7,9 @@
  * calculated from the user profile rather than measured by the scale.
  */
 
-import type { UserProfile, BodyComposition } from '../interfaces/scale-adapter.js';
+import type { UserProfile, BodyComposition, ScaleReading } from '../interfaces/scale-adapter.js';
 import { createLogger } from '../logger.js';
+import { normalizeUuid } from '../ble/types.js';
 
 const biaLog = createLogger('BIA');
 
@@ -65,6 +66,15 @@ export const IMPEDANCE_MIN_OHM = 150;
 export const IMPEDANCE_MAX_OHM = 1200;
 
 /**
+ * Upper bound on a body fat percentage this project will publish as measured.
+ * Well above any real reading, and well below what a corrupted 16-bit field
+ * produces. It rejects rather than clamps: a value this far out is not a
+ * measurement to be trimmed, it is a frame that should fall back to the
+ * estimate (#405).
+ */
+const MAX_PLAUSIBLE_FAT_PCT = 75;
+
+/**
  * BIA body fat, or `undefined` when the number is not a body.
  *
  * `undefined` is exactly what `buildPayload`'s `comp.fat ?? estimateBodyFat()`
@@ -107,7 +117,22 @@ export function buildPayload(
   const heightM = p.height / 100;
   const bmi = weight / (heightM * heightM);
 
-  const bodyFatPercent = comp.fat ?? estimateBodyFat(bmi, p);
+  // A scale-provided fat is used as given, but only if it is a body fat
+  // percentage at all. Nothing downstream bounds it: lean mass is
+  // weight * (1 - fat/100), so 6553.5 % (the 0xFFFF sentinel, or any other
+  // corrupted 16-bit field) makes lean mass negative and exports a negative
+  // bone mass, water percentage and muscle mass. The sentinel is rejected at
+  // the decoders now, but this is the sink they all drain into, and a decoder
+  // added later should not be able to reintroduce it (#405).
+  const reported = comp.fat;
+  const usable = reported !== undefined && reported > 0 && reported <= MAX_PLAUSIBLE_FAT_PCT;
+  if (reported !== undefined && !usable) {
+    biaLog.debug(
+      `Scale-reported body fat ${reported} % is outside 0-${MAX_PLAUSIBLE_FAT_PCT} %, ` +
+        `so the BMI estimate is used instead.`,
+    );
+  }
+  const bodyFatPercent = usable ? reported : estimateBodyFat(bmi, p);
   const lbm = weight * (1 - bodyFatPercent / 100);
 
   const waterPercent = comp.water ?? ((lbm * (p.isAthlete ? 0.74 : 0.73)) / weight) * 100;
@@ -217,10 +242,7 @@ export function uuid16(code: number): string {
  * before they are compared.
  */
 export function normalizeServiceUuid(uuid: string): string {
-  const stripped = uuid.toLowerCase().replace(/[-{}]/g, '');
-  if (stripped.length === 4) return uuid16(Number.parseInt(stripped, 16));
-  if (stripped.length === 8) return `${stripped}00001000800000805f9b34fb`;
-  return stripped;
+  return normalizeUuid(uuid);
 }
 
 export function r2(v: number): number {
@@ -232,4 +254,53 @@ export function xorChecksum(buf: Buffer | number[], start: number, end: number):
   let xor = 0;
   for (let i = start; i < end; i++) xor ^= buf[i] & 0xff;
   return xor & 0xff;
+}
+
+/**
+ * Composition pinned to the reading it was measured with (#394).
+ *
+ * Adapters are shared singletons and `computeMetrics()` runs LATER than the
+ * parse that produced the reading. On the watcher transports (mqtt-proxy,
+ * esphome-proxy) the watcher does not pause while the loop processes a
+ * reading: `loop.ts` awaits `processReading()`, network exports included, and
+ * the watcher can open the NEXT session - and therefore fire
+ * `onSessionStart()` - in the meantime. An adapter that reads its live cache
+ * in `computeMetrics()` then hands the completed reading a cache belonging to
+ * somebody else, or one that was just cleared.
+ *
+ * So: `pin()` at emit time, `of()` in `computeMetrics()`. The map is weak, so
+ * a reading the processor drops frees its entry.
+ *
+ * This exists to stop the rule from being re-derived per adapter. It was
+ * hand-rolled six times before, each copy carrying its own version of the
+ * paragraph above, and the copies had already drifted in type.
+ */
+export class ReadingComposition<T> {
+  private readonly byReading = new WeakMap<ScaleReading, T>();
+
+  /**
+   * Record the composition as it stood when `reading` was emitted.
+   *
+   * Stores the REFERENCE. The value must not be mutated afterwards, or the
+   * snapshot follows the live state and the pin buys nothing. Adapters that
+   * rebuild their cache object per frame can pass it directly; ones that mutate
+   * a long-lived object in place (beurer-bf720 fills fields across several
+   * 0x2A9C notifications, and beurer-sanitas and medisana-bs44x do the same)
+   * must pass a copy, which is why their hand-rolled predecessors all spread.
+   */
+  pin(reading: ScaleReading, value: T): void {
+    this.byReading.set(reading, value);
+  }
+
+  /**
+   * The composition pinned to `reading`, or `live` when nothing was pinned.
+   *
+   * The fallback covers a reading built by hand (broadcast paths, tests) - see
+   * the class comment for why the live cache cannot be trusted otherwise. A
+   * pinned value is returned even when it is null or undefined, so an adapter
+   * whose "no composition" state is itself a value stays correct.
+   */
+  of(reading: ScaleReading, live: T): T {
+    return this.byReading.has(reading) ? (this.byReading.get(reading) as T) : live;
+  }
 }

@@ -1,4 +1,5 @@
 import { createDecipheriv } from 'node:crypto';
+import { normalizeUuid } from '../ble/types.js';
 
 /**
  * Shared MiBeacon (Xiaomi 0xFE95 service data) helpers used by the broadcast
@@ -32,10 +33,7 @@ const HEADER_MIN = 5;
 
 /** Normalize a service-data UUID (short, dashed, or 128-bit) to 32-char hex. */
 export function normUuid(uuid: string): string {
-  const s = uuid.toLowerCase().replace(/[-{}]/g, '');
-  if (s.length === 4) return `0000${s}00001000800000805f9b34fb`;
-  if (s.length === 8) return `${s}00001000800000805f9b34fb`;
-  return s;
+  return normalizeUuid(uuid);
 }
 
 /** Product id (device type) from a FE95 frame, or null when the frame is too short. */

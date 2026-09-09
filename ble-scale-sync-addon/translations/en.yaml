@@ -59,6 +59,15 @@ configuration:
       one extra byte that this add-on does not send. Set true to send that
       longer frame. What the extra byte selects is not known, so this is a
       diagnostic to try, not a fix. Leave empty otherwise.
+  qn_config_long:
+    name: QN long config frame
+    description: >-
+      QN-family scales only, and the last remaining difference anyone has found
+      between this add-on's start-up conversation and the vendor app's. Two
+      captures show the app's settings frame carrying one byte more than this
+      add-on sends. Set true to send the longer frame. What the extra bytes
+      select is not known, so this is a diagnostic to try, not a fix. Leave
+      empty otherwise.
   auto_clear_stale_bond:
     name: Re-pair a scale that forgot its pairing
     description: >-
@@ -115,6 +124,12 @@ configuration:
     description: >-
       Maximum expected weight in the weight unit selected above
       (used for multi-user matching)
+  out_of_range:
+    name: Readings outside the weight range
+    description: >-
+      warn keeps today's behaviour: log the reading and export it anyway.
+      skip stops before the exporters and before the remembered weight is
+      updated, so a suitcase on the scale cannot overwrite it.
   mqtt_enabled:
     name: Enable MQTT
     description: Export measurements to an MQTT broker with Home Assistant auto-discovery
@@ -154,9 +169,35 @@ configuration:
   garmin_password:
     name: Garmin password
     description: Garmin Connect account password
+  garmin_upload_timeout_sec:
+    name: Garmin upload timeout (seconds)
+    description: >-
+      Seconds one upload attempt may take before it is killed (10 to 900).
+      Three attempts are made. Raise it if uploads fail with "timed out" while
+      the same measurement uploads fine later.
+  garmin_weight_only:
+    name: Upload weight only
+    description: >-
+      Send only the weight to Garmin Connect and leave BMI, body fat, water,
+      bone, muscle, visceral fat, physique rating and metabolic age unset.
+      Other exporters still receive the full body composition.
   scan_cooldown:
     name: Scan cooldown (seconds)
     description: Seconds to wait between BLE scans in continuous mode (5 to 3600)
+  retry_failed_exports:
+    name: Retry a failed export later
+    description: >-
+      Keep a reading whose upload failed and try again on a later cycle, for up
+      to three days. Only targets that can record a past measurement (Garmin,
+      InfluxDB, file, Intervals, Runalyze, wger) can be retried; MQTT and
+      notifications cannot express a past reading and are not queued. Turn off
+      to write nothing to disk.
+  idle_rescan_delay:
+    name: Rescan delay when no scale was found (seconds)
+    description: >-
+      Seconds to wait before scanning again after a cycle that found no scale
+      while the Bluetooth adapter was healthy (0 to 3600). Real failures keep
+      their own backoff. Lower it if your scale advertises only briefly.
   reset_bluetooth:
     name: Reset Bluetooth adapter on startup
     description: >-

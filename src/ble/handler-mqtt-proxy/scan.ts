@@ -6,9 +6,9 @@ import type {
 import type { MqttProxyConfig } from '../../config/schema.js';
 import type { ScanOptions, ScanResult } from '../types.js';
 import type { RawReading } from '../shared.js';
-import { waitForRawReading } from '../shared.js';
+import { waitForRawReading, withAbandonmentCleanup } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
-import { evaluateAdvertisement, logAdvert } from '../advertisement.js';
+import { evaluateAdvertisement, logAdvert, safeName } from '../advertisement.js';
 import { bleLog, normalizeUuid, withTimeout, formatMac } from '../types.js';
 import { COMMAND_TIMEOUT_MS, topics, type Topics } from './topics.js';
 import { type MqttClient, createMqttClient } from './client.js';
@@ -64,31 +64,42 @@ export async function waitForEsp32Online(client: MqttClient, t: Topics): Promise
     }
   };
   client.on('message', onMessage);
-  await client.subscribeAsync(t.status);
+  try {
+    await client.subscribeAsync(t.status);
+  } catch (err) {
+    // The listener goes on before the subscribe, so a rejected subscribe used
+    // to leave it attached for the rest of this client's life (#404).
+    client.removeListener('message', onMessage);
+    throw err;
+  }
 
   // If we get the retained offline within 2s, fail fast rather than waiting 30s.
   // The main loop's backoff handles retries. But if online arrives within that
   // window we still succeed. Full timeout only applies when no status received.
   const OFFLINE_GRACE_MS = 2_000;
 
+  let graceTimer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await withTimeout(
       Promise.race([
         promise,
         // After grace period, if we saw offline, reject early
-        new Promise<never>((_res, rej) =>
-          setTimeout(() => {
+        new Promise<never>((_res, rej) => {
+          graceTimer = setTimeout(() => {
             if (sawOffline)
               rej(
                 new Error('ESP32 proxy is offline. Check the device and its WiFi/MQTT connection.'),
               );
-          }, OFFLINE_GRACE_MS),
-        ),
+          }, OFFLINE_GRACE_MS);
+        }),
       ]),
       COMMAND_TIMEOUT_MS,
       'ESP32 proxy did not respond. Check that it is powered on and connected to MQTT.',
     );
   } finally {
+    // The race settles on the first branch; without this the timer still holds
+    // a ref'd handle for the rest of its 2 s (#404).
+    if (graceTimer) clearTimeout(graceTimer);
     client.removeListener('message', onMessage);
   }
 }
@@ -155,7 +166,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       const adapter = resolveAdapter(info, adapters);
       if (!adapter) continue;
 
-      bleLog.info(`Matched: ${adapter.name} (${entry.name || entry.address})`);
+      bleLog.info(`Matched: ${adapter.name} (${safeName(entry.name) || entry.address})`);
 
       // Classify the advertisement with the shared decision (#242).
       const decision = evaluateAdvertisement(adapter, info);
@@ -202,19 +213,24 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         entry.addr_type ?? 0,
       );
       try {
-        const raw = await waitForRawReading(
-          charMap,
-          device,
-          adapter,
-          opts.profile,
-          entry.address.replace(/[:-]/g, '').toUpperCase(),
-          opts.weightUnit,
-          opts.onLiveData,
-          opts.scaleAuth,
+        const raw = await withAbandonmentCleanup(device, () =>
+          waitForRawReading(
+            charMap,
+            device,
+            adapter,
+            opts.profile,
+            entry.address.replace(/[:-]/g, '').toUpperCase(),
+            opts.weightUnit,
+            opts.onLiveData,
+            opts.scaleAuth,
+          ),
         );
         registerScaleMac(config, entry.address).catch(() => {});
         return raw;
       } finally {
+        // fireDisconnect() (inside the wrapper) before cleanup(), so the
+        // session's unsubscribers still have a live message listener to run
+        // through. The two watcher paths already do it in this order.
         device.cleanup();
         await mqttGattDisconnect(client, t).catch(() => {});
       }
@@ -268,7 +284,7 @@ export async function scanDevices(
       const matched = resolveAdapter(info, adapters);
       return {
         address: entry.address,
-        name: entry.name,
+        name: safeName(entry.name),
         matchedAdapter: matched?.name,
       };
     });

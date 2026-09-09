@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   waitForReading,
   waitForRawReading,
+  withAbandonmentCleanup,
   findMissingCharacteristics,
   resolveWriteChar,
   getRawCaptureConfig,
@@ -86,13 +87,18 @@ function createMockChar(): MockBleChar {
 
 function createMockDevice(): BleDevice & { triggerDisconnect: () => void } {
   let disconnectCallback: (() => void) | null = null;
+  let fired = false;
+  const fireDisconnect = (): void => {
+    if (fired || !disconnectCallback) return;
+    fired = true;
+    disconnectCallback();
+  };
   return {
     onDisconnect: (callback) => {
       disconnectCallback = callback;
     },
-    triggerDisconnect: () => {
-      if (disconnectCallback) disconnectCallback();
-    },
+    fireDisconnect,
+    triggerDisconnect: fireDisconnect,
   };
 }
 
@@ -1854,5 +1860,276 @@ describe('getRawCaptureConfig()', () => {
     expect(getRawCaptureConfig().holdMs).toBe(20_000);
     process.env.BLE_RAW_CAPTURE_HOLD_SEC = 'abc';
     expect(getRawCaptureConfig().holdMs).toBe(20_000);
+  });
+});
+
+// ─── Completion hold, end to end (#413) ─────────────────────────────────────
+
+// The adapter-level tests assert what isComplete and isFinal answer. This one
+// asserts what the SESSION does with those answers, which is the behaviour the
+// hold exists for and the part no adapter test can reach.
+describe('completionHoldMs through waitForRawReading', () => {
+  it('holds a complete-but-not-final reading, then settles once on expiry', async () => {
+    vi.useFakeTimers();
+    try {
+      const notifyChar = createMockChar();
+      const writeChar = createMockChar();
+      const device = createMockDevice();
+      const { charMap } = createCharMap([
+        [NOTIFY_UUID, notifyChar],
+        [WRITE_UUID, writeChar],
+      ]);
+
+      let final = false;
+      const adapter = createLegacyAdapter({
+        unlockCommand: undefined,
+        completionHoldMs: 4000,
+        parseNotification: vi.fn(() => ({ weight: 78.4, impedance: final ? 500 : 0 })),
+        isComplete: () => true,
+        isFinal: () => final,
+      });
+
+      const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+      await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+      // A complete but not-final frame must NOT settle the session.
+      notifyChar.triggerData(Buffer.from([0x01]));
+      let settled = false;
+      void promise.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(3999);
+      expect(settled, 'the session must still be waiting for a richer frame').toBe(false);
+
+      // On expiry the held reading is delivered rather than lost.
+      await vi.advanceTimersByTimeAsync(1);
+      const raw = await promise;
+      expect(raw.reading.weight).toBe(78.4);
+      expect(raw.reading.impedance).toBe(0);
+
+      // A frame arriving after the window must not settle it a second time.
+      final = true;
+      notifyChar.triggerData(Buffer.from([0x02]));
+      await vi.advanceTimersByTimeAsync(10);
+      expect(adapter.parseNotification).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles at once on a final frame, without arming the hold', async () => {
+    vi.useFakeTimers();
+    try {
+      const notifyChar = createMockChar();
+      const writeChar = createMockChar();
+      const device = createMockDevice();
+      const { charMap } = createCharMap([
+        [NOTIFY_UUID, notifyChar],
+        [WRITE_UUID, writeChar],
+      ]);
+
+      const adapter = createLegacyAdapter({
+        unlockCommand: undefined,
+        completionHoldMs: 4000,
+        parseNotification: vi.fn(() => ({ weight: 78.4, impedance: 500 })),
+        isComplete: () => true,
+        isFinal: () => true,
+      });
+
+      const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+      await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+      notifyChar.triggerData(Buffer.from([0x01]));
+
+      // No timer advance: a final frame must not wait out the window.
+      const raw = await promise;
+      expect(raw.reading.impedance).toBe(500);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ─── Session hook placement (#394) ──────────────────────────────────────────
+
+// The whole point of onSessionStart is WHERE it runs. Every adapter-level test
+// calls the hook directly, so deleting the call in shared.ts left the suite
+// green while the fix did nothing.
+describe('onSessionStart placement', () => {
+  it('fires before the first subscribe, in both wiring modes', async () => {
+    for (const mode of ['legacy', 'multi-char'] as const) {
+      const seen: string[] = [];
+      const notifyChar = createMockChar();
+      const writeChar = createMockChar();
+      const baseSubscribe = notifyChar.subscribe;
+      notifyChar.subscribe = vi.fn(async (onData: (data: Buffer) => void) => {
+        seen.push('subscribe');
+        return baseSubscribe(onData);
+      });
+      const device = createMockDevice();
+      const { charMap } = createCharMap([
+        [NOTIFY_UUID, notifyChar],
+        [WRITE_UUID, writeChar],
+      ]);
+
+      const adapter = createLegacyAdapter({
+        ...(mode === 'multi-char'
+          ? {
+              characteristics: [
+                { uuid: NOTIFY_UUID, type: 'notify' as const },
+                { uuid: WRITE_UUID, type: 'write' as const },
+              ],
+              onConnected: vi.fn(() => {
+                seen.push('onConnected');
+              }),
+            }
+          : {}),
+        onSessionStart: vi.fn(() => {
+          seen.push('onSessionStart');
+        }),
+        parseNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
+        parseCharNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
+      });
+
+      const promise = waitForRawReading(charMap, device, adapter, PROFILE, 'AABBCCDDEEFF');
+      await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+      if (mode === 'multi-char') {
+        await vi.waitFor(() => expect(adapter.onConnected).toHaveBeenCalled());
+      }
+      notifyChar.triggerData(Buffer.from([0x01]));
+      await promise;
+
+      expect(adapter.onSessionStart).toHaveBeenCalledTimes(1);
+      // With the address (#406): an adapter that keeps per-device state resolves
+      // it here. Dropping the argument in shared.ts leaves every adapter-level
+      // test green while the feature does nothing, which is the same trap the
+      // comment above this describe block records for the call itself.
+      expect(adapter.onSessionStart).toHaveBeenCalledWith('AABBCCDDEEFF');
+      expect(seen[0], `${mode}: hook must run before anything is subscribed`).toBe(
+        'onSessionStart',
+      );
+      // In multi-char mode subscribe precedes onConnected, which is exactly why
+      // the reset cannot live in onConnected.
+      if (mode === 'multi-char') {
+        expect(seen.indexOf('subscribe')).toBeLessThan(seen.indexOf('onConnected'));
+      }
+    }
+  });
+
+  it('does not abort the session when the hook throws', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const adapter = createLegacyAdapter({
+      onSessionStart: vi.fn(() => {
+        throw new Error('adapter bug');
+      }),
+      parseNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+    notifyChar.triggerData(Buffer.from([0x01]));
+    await expect(promise).resolves.toMatchObject({ reading: { weight: 75 } });
+  });
+});
+
+describe('withAbandonmentCleanup() (#404)', () => {
+  // waitForRawReading only settles on a reading, a subscribe failure or a
+  // disconnect. Its callers bound it with withTimeout/withIdleTimeout, which
+  // ABANDON the promise rather than cancelling it, so before this the unlock
+  // interval kept writing through a dead link for the life of the process and
+  // the adapter was never told its session had ended.
+  it('cleans up a session its caller gave up on', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const onSessionEnd = vi.fn();
+    const adapter = createLegacyAdapter({ unlockIntervalMs: 2000, onSessionEnd });
+
+    let unsubscribed = false;
+    notifyChar.subscribe = vi.fn(async (onData) => {
+      notifyChar.subscribeCalled = true;
+      void onData;
+      return () => {
+        unsubscribed = true;
+      };
+    }) as MockBleChar['subscribe'];
+
+    const attempt = withAbandonmentCleanup(device, () =>
+      withIdleTimeout(
+        () => waitForRawReading(charMap, device, adapter, PROFILE, ''),
+        50,
+        'Timed out waiting for a complete scale reading',
+      ),
+    );
+
+    await expect(attempt).rejects.toThrow('Timed out waiting');
+
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
+    expect(unsubscribed).toBe(true);
+
+    // The unlock interval is gone: nothing is written after the give-up, even
+    // well past the 2 s interval.
+    const writesAtGiveUp = writeChar.writtenData.length;
+    await new Promise((r) => setTimeout(r, 120));
+    expect(writeChar.writtenData.length).toBe(writesAtGiveUp);
+  });
+
+  it('is idempotent, so a real disconnect afterwards changes nothing', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const onSessionEnd = vi.fn();
+    const adapter = createLegacyAdapter({ onSessionEnd });
+
+    const attempt = withAbandonmentCleanup(device, () =>
+      withIdleTimeout(
+        () => waitForRawReading(charMap, device, adapter, PROFILE, ''),
+        50,
+        'gave up',
+      ),
+    );
+    await expect(attempt).rejects.toThrow('gave up');
+
+    device.triggerDisconnect();
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes a successful read through untouched', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const adapter = createLegacyAdapter({
+      parseNotification: vi.fn(() => ({ weight: 75.5, impedance: 500 })),
+    });
+
+    const promise = withAbandonmentCleanup(device, () =>
+      waitForRawReading(charMap, device, adapter, PROFILE, ''),
+    );
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+    notifyChar.triggerData(Buffer.from([0x01]));
+
+    const result = await promise;
+    expect(result.reading).toEqual({ weight: 75.5, impedance: 500 });
   });
 });

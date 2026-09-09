@@ -21,12 +21,16 @@ const log = createLogger('Sync');
  */
 const DEFAULT_PROXY_LIVENESS_MIN = 30;
 
+/** Fallback for `runtime.idle_rescan_delay` when the whole runtime block is absent. */
+const DEFAULT_IDLE_RESCAN_DELAY_SEC = 5;
+
 export interface ReadingSourceBundle {
   source: ReadingSource;
   failureLogPrefix: string;
   onSourceReload?: () => void;
   onSuccess?: () => Promise<void> | void;
   onFailure?: (err: unknown) => void;
+  failureDelayMs?: (err: unknown) => number | undefined;
 }
 
 /**
@@ -69,13 +73,17 @@ export async function buildReadingSource(
     // wedged transport parks nextReading() forever and looks exactly like a
     // house where nobody has stepped on the scale. Advertisement silence is the
     // one signal that tells the two apart.
-    const limitMs =
+    // Read per call, not captured once: buildReadingSource runs before the loop
+    // starts, so a captured value made this option neither hot-swappable nor
+    // restart-warned, which is neither half of the documented reload contract
+    // (#407).
+    const limitMs = (): number =>
       (ctx.config.ble?.proxy_liveness_timeout_min ?? DEFAULT_PROXY_LIVENESS_MIN) * 60_000;
     return {
       source: {
         start: () => watcher.start(),
         stop: () => watcher.stop(),
-        nextReading: (signal) => raceWithLiveness(watcher, limitMs, signal),
+        nextReading: (signal) => raceWithLiveness(watcher, limitMs(), signal),
       },
       failureLogPrefix: plan.failureLogPrefix,
       onSourceReload: () =>
@@ -124,6 +132,22 @@ export async function buildReadingSource(
   return {
     source: new PollReadingSource(ctx, adapters),
     failureLogPrefix: 'No scale found',
+    // An idle cycle waits a few seconds instead of the 5 s -> 60 s failure
+    // backoff (#398). Only the node-ble handler tags its failures, so on the
+    // other native handlers nothing is tagged, nothing is claimed here, and the
+    // backoff applies exactly as it did before.
+    //
+    // Even a zero delay cannot busy-loop: classifyBleFailure tags 'idle' only
+    // when GATT was never attempted and the liveness probe found the radio
+    // alive, which means the full discovery timeout has already elapsed.
+    // Revisit this if that timeout ever becomes configurable.
+    //
+    // Read from config on every call so an edit lands on the next cycle, the
+    // same way scan_cooldown is read in onSuccess below.
+    failureDelayMs: (err) =>
+      shouldCountAsWatchdogFailure(err)
+        ? undefined
+        : (ctx.config.runtime?.idle_rescan_delay ?? DEFAULT_IDLE_RESCAN_DELAY_SEC) * 1000,
     onFailure: (err) => {
       // Idle cycles (radio alive, scale simply not advertising) must not trip
       // the watchdog (#213). Only GATT failures and dead-radio wedges count.

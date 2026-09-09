@@ -137,7 +137,7 @@ export class HutbitAdapter implements ScaleAdapterCore, GattWiring, HoldForCompo
   readonly match: MatchDescriptor = {
     priority: 35,
     custom: true,
-    names: { includes: ['hutbit'] },
+    names: { includes: ['hutbit', 'fittrack'] },
     serviceUuids: ['ffb0'],
     manufacturerId: LEFU_COMPANY_ID,
   };
@@ -171,7 +171,29 @@ export class HutbitAdapter implements ScaleAdapterCore, GattWiring, HoldForCompo
     // generic name instead (observed: "SWAN", #278), and over the ESPHome proxy
     // the local name arrives empty entirely because it lives in the scan
     // response, so the name alone is not enough.
-    if ((device.localName || '').toLowerCase().includes('hutbit')) return true;
+    const name = (device.localName || '').toLowerCase();
+    if (name.includes('hutbit')) return true;
+
+    // FitTrack Dara 2.0 (eLink/Icomon platform, Fitdays-family firmware) speaks
+    // this exact protocol: openScale's own handler documents the same 8-byte
+    // `AC 02 <b2> <b3> <b4> <b5> <chan> <cksum>` frames, the same additive
+    // checksum, the same 0xCC handshake / 0xCE live / 0xCA stable / 0xCB
+    // composition channels, and the same `FE 06 <unit>` unit command this
+    // adapter's handshake already sends.
+    //
+    // Claimed by NAME only. A unit carrying the Lefu 0x02AC signature is
+    // already claimed by `isHutbitOemAdvert` below; what this adds is the unit
+    // that advertises under its brand without it. Today such a device falls to
+    // the generic MGB FFB0 fallback, whose parser requires `length >= 10` and
+    // header `ac 02|03 ff`, so it rejects every 8-byte frame this family sends
+    // and the user gets no reading at all.
+    //
+    // The evidence is openScale's decode, not a capture of our own, so the
+    // claim is deliberately narrow and the failure mode stays safe: if the
+    // framing turns out to differ, this file's checksum and status gates
+    // reject the frames and the outcome is the same no-reading as today,
+    // never a fabricated weight.
+    if (name.includes('fittrack')) return true;
 
     // OEM/rebranded units: claim on the advertisement fingerprint instead. This
     // deliberately does NOT claim the broader nameless FFB0 space; without the
@@ -181,8 +203,20 @@ export class HutbitAdapter implements ScaleAdapterCore, GattWiring, HoldForCompo
     return isHutbitOemAdvert(device);
   }
 
-  async onConnected(ctx: ConnectionContext): Promise<void> {
+  /**
+   * Clear the previous weigh-in before anything is subscribed (#394).
+   *
+   * This used to live in `onConnected`, which is too late for a multi-char
+   * adapter: `subscribeAndInit` enables EVERY notify binding and only then
+   * awaits `startInit()`, so frames can already be arriving - through several
+   * D-Bus round trips for the second and third binding - while the reset has
+   * not run. `onSessionStart` runs before the first subscribe.
+   */
+  onSessionStart(): void {
     this.resetSession();
+  }
+
+  async onConnected(ctx: ConnectionContext): Promise<void> {
     for (const hex of HANDSHAKE) {
       // Write without response: FFB1 is the Lefu/Fitdays FFB0 handshake char and
       // the family writes no-response. A char that advertises only

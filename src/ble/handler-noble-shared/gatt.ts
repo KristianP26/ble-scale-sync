@@ -4,10 +4,20 @@ import { bleLog, normalizeUuid } from '../types.js';
 import { wrapChar } from './char.js';
 
 export function wrapPeripheral(peripheral: Peripheral): BleDevice {
+  let disconnectCb: (() => void) | undefined;
+  let fired = false;
+  const fireDisconnect = (): void => {
+    if (fired || !disconnectCb) return;
+    fired = true;
+    disconnectCb();
+  };
+
   return {
     onDisconnect: (callback) => {
-      peripheral.once('disconnect', () => callback());
+      disconnectCb = callback;
+      peripheral.once('disconnect', fireDisconnect);
     },
+    fireDisconnect,
   };
 }
 

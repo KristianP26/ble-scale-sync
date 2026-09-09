@@ -47,8 +47,10 @@ function diffField(
  * Compare old vs new config and return restart-required field changes.
  *
  * Notably hot-swappable (NOT in this list): scale_mac, weight_unit, height_unit,
- * runtime.dry_run, runtime.debug, runtime.scan_cooldown, exporters,
- * unknown_user, user profile fields, last_known_weight, update_check.
+ * runtime.dry_run, runtime.debug, runtime.scan_cooldown, runtime.idle_rescan_delay,
+ * ble.session_timeout_sec, ble.auto_clear_stale_bond, ble.bind_key, every ble.qn_*,
+ * ble.proxy_liveness_timeout_min, exporters,
+ * unknown_user, out_of_range, user profile fields, last_known_weight, update_check.
  */
 export function diffRestartRequired(
   oldConfig: AppConfig,
@@ -59,6 +61,16 @@ export function diffRestartRequired(
   diffField(out, 'ble.handler', oldConfig.ble?.handler, newConfig.ble?.handler);
   diffField(out, 'ble.adapter', oldConfig.ble?.adapter, newConfig.ble?.adapter);
   diffField(out, 'ble.noble_driver', oldConfig.ble?.noble_driver, newConfig.ble?.noble_driver);
+  // The adapter list is built once, before the loop starts (run.ts), so a
+  // hot-edited value changes nothing until a restart. Without this row the user
+  // gets neither the effect nor the warning, which is neither half of the
+  // documented reload contract (#407).
+  diffField(
+    out,
+    'ble.force_scale_adapter',
+    oldConfig.ble?.force_scale_adapter,
+    newConfig.ble?.force_scale_adapter,
+  );
 
   const oldMqtt = oldConfig.ble?.mqtt_proxy;
   const newMqtt = newConfig.ble?.mqtt_proxy;
@@ -67,6 +79,20 @@ export function diffRestartRequired(
   diffField(out, 'ble.mqtt_proxy.topic_prefix', oldMqtt?.topic_prefix, newMqtt?.topic_prefix);
   diffField(out, 'ble.mqtt_proxy.username', oldMqtt?.username, newMqtt?.username);
   diffField(out, 'ble.mqtt_proxy.password', oldMqtt?.password, newMqtt?.password);
+  // The embedded broker is bootstrapped once at startup, so these two are as
+  // restart-required as the connection fields above (#407).
+  diffField(
+    out,
+    'ble.mqtt_proxy.embedded_broker_port',
+    oldMqtt?.embedded_broker_port,
+    newMqtt?.embedded_broker_port,
+  );
+  diffField(
+    out,
+    'ble.mqtt_proxy.embedded_broker_bind',
+    oldMqtt?.embedded_broker_bind,
+    newMqtt?.embedded_broker_bind,
+  );
 
   const oldEsp = oldConfig.ble?.esphome_proxy;
   const newEsp = newConfig.ble?.esphome_proxy;
@@ -79,6 +105,21 @@ export function diffRestartRequired(
     newEsp?.encryption_key,
   );
   diffField(out, 'ble.esphome_proxy.password', oldEsp?.password, newEsp?.password);
+  // The proxy pool is built when the watcher starts and is not rebuilt on
+  // reload, so these three change nothing until a restart either.
+  diffField(out, 'ble.esphome_proxy.client_info', oldEsp?.client_info, newEsp?.client_info);
+  diffField(
+    out,
+    'ble.esphome_proxy.additional_proxies',
+    oldEsp?.additional_proxies,
+    newEsp?.additional_proxies,
+  );
+  diffField(
+    out,
+    'ble.esphome_proxy.advertisement_timeout',
+    oldEsp?.advertisement_timeout,
+    newEsp?.advertisement_timeout,
+  );
 
   const oldHa = oldConfig.ble?.ha_bluetooth;
   const newHa = newConfig.ble?.ha_bluetooth;
@@ -91,6 +132,15 @@ export function diffRestartRequired(
     'runtime.continuous_mode',
     oldConfig.runtime?.continuous_mode,
     newConfig.runtime?.continuous_mode,
+  );
+  // The queue path is resolved once in createAppContext, so flipping this key
+  // does nothing until a restart. Without this row the user would get neither
+  // the effect nor the warning, which is the gap ble.force_scale_adapter had.
+  diffField(
+    out,
+    'runtime.retry_failed_exports',
+    oldConfig.runtime?.retry_failed_exports,
+    newConfig.runtime?.retry_failed_exports,
   );
   diffField(
     out,

@@ -3,8 +3,7 @@ import type { BodyComposition } from '../interfaces/scale-adapter.js';
 import type { Exporter, ExportContext, ExportResult } from '../interfaces/exporter.js';
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { IntervalsConfig } from './config.js';
-import { withRetry, httpError } from '../utils/retry.js';
-import { errMsg } from '../utils/error.js';
+import { withRetry, httpError, httpHealthcheck } from '../utils/retry.js';
 
 const log = createLogger('Intervals');
 
@@ -63,19 +62,13 @@ export class IntervalsExporter implements Exporter {
   }
 
   async healthcheck(): Promise<ExportResult> {
-    try {
-      // GET today's wellness record — validates the API key and athlete ID.
-      const response = await fetch(this.wellnessUrl(toLocalDate(new Date())), {
+    // GET today's wellness record: validates the API key and the athlete id.
+    return httpHealthcheck(() =>
+      fetch(this.wellnessUrl(toLocalDate(new Date())), {
         headers: { Authorization: this.authHeader() },
         signal: AbortSignal.timeout(5000),
-      });
-      if (!response.ok) {
-        return { success: false, error: `HTTP ${response.status}` };
-      }
-      return { success: true };
-    } catch (err) {
-      return { success: false, error: errMsg(err) };
-    }
+      }),
+    );
   }
 
   async export(data: BodyComposition, context?: ExportContext): Promise<ExportResult> {

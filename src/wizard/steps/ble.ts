@@ -275,6 +275,12 @@ export const bleStep: WizardStep = {
         let availableAdapters: string[] = [];
         try {
           const NodeBle = await import('node-ble');
+          // Third and last place that builds its own bus. Short-lived, but the
+          // patch is applied here too so no bus in this codebase can ever run on
+          // dbus-next's broken match-rule refcounting (#396).
+          const { applyDbusMatchRefcountPatch } =
+            await import('../../ble/handler-node-ble/dbus-match-patch.js');
+          applyDbusMatchRefcountPatch();
           const { bluetooth, destroy } = NodeBle.default.createBluetooth();
           // An async D-Bus socket error is emitted on the MessageBus, not thrown
           // from the await, so the surrounding try/catch would not see it and the

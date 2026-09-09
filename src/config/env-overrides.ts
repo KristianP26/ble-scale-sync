@@ -27,6 +27,8 @@ export function applyEnvOverrides(config: AppConfig): AppConfig {
     debug: config.runtime?.debug ?? false,
     watchdog_max_consecutive_failures: config.runtime?.watchdog_max_consecutive_failures ?? 10,
     watch_config: config.runtime?.watch_config ?? true,
+    idle_rescan_delay: config.runtime?.idle_rescan_delay ?? 5,
+    retry_failed_exports: config.runtime?.retry_failed_exports ?? true,
   };
   const ble = { handler: 'auto' as const, ...config.ble };
 
@@ -88,6 +90,24 @@ export function applyEnvOverrides(config: AppConfig): AppConfig {
       } else {
         log.warn('BLE_HANDLER=ha-bluetooth ignored: ble.ha_bluetooth not configured');
       }
+    } else if (handler === 'esphome-proxy') {
+      // Was missing entirely: the value is in the schema's own enum, so it
+      // validates in config.yaml but fell through every branch here and was
+      // dropped in silence (#407).
+      if (ble.esphome_proxy) {
+        ble.handler = handler;
+      } else {
+        log.warn('BLE_HANDLER=esphome-proxy ignored: ble.esphome_proxy not configured');
+      }
+    } else if (handler !== '') {
+      // Anything else used to be ignored without a word, which reads exactly
+      // like a handler switch that worked. An EMPTY value is exempt: setting a
+      // variable to nothing is how a compose file neutralises it, and warning
+      // about that on every start would be noise.
+      log.warn(
+        `BLE_HANDLER='${process.env.BLE_HANDLER}' is not a known handler ` +
+          `(auto, mqtt-proxy, esphome-proxy, ha-bluetooth); ignoring it.`,
+      );
     }
   }
 

@@ -19,7 +19,15 @@ import {
   POST_DISCOVERY_QUIESCE_MS,
   GATT_DISCOVERY_TIMEOUT_MS,
 } from '../types.js';
-import { helperOf, getDbusNext, type Adapter, type Device } from './dbus.js';
+import {
+  helperOf,
+  getDbusNext,
+  isBonded,
+  releaseDeviceProxy,
+  type Adapter,
+  type Device,
+} from './dbus.js';
+import { applyDbusMatchRefcountPatch } from './dbus-match-patch.js';
 import { getBus, attachBusErrorHandler, isDbusConnectionError, dbusError } from './connection.js';
 import { registerPairingAgent, setPairingTarget } from './agent.js';
 import {
@@ -42,6 +50,7 @@ import {
   teardownSession,
   waitForTargetDevice,
 } from './scan-stages.js';
+import { safeName } from '../advertisement.js';
 
 /** Max time to wait for a BLE pairing/bonding handshake before giving up. */
 const BONDING_TIMEOUT_MS = 15_000;
@@ -64,8 +73,12 @@ export async function ensureBonded(
   if (abortSignal?.aborted) throw new Error('Shutting down before BLE pairing started');
   let onAbort: (() => void) | undefined;
   try {
-    const paired = (await device.isPaired()) as unknown as boolean;
-    if (paired) {
+    // NOT the shared isBonded() helper, and this is the third semantic in the
+    // file: answering false here would send an unknown bond state into
+    // device.pair(), which lights the passkey prompt on the scale and burns the
+    // 15 s bonding timeout. A transient D-Bus read failure must abort instead,
+    // so the read is deliberately unguarded (#406).
+    if (((await device.isPaired()) as unknown as boolean) === true) {
       bleLog.debug('Device already bonded');
       return;
     }
@@ -176,12 +189,7 @@ export async function acquireGattServer(
     return await acquire();
   } catch (err) {
     if (!adapter?.requiresBonding) throw err;
-    let alreadyBonded = false;
-    try {
-      alreadyBonded = (await device.isPaired()) as unknown as boolean;
-    } catch {
-      alreadyBonded = false;
-    }
+    const alreadyBonded = await isBonded(device);
     // Already bonded but still timing out means the stall is not a missing bond;
     // pairing again would not help, so surface the original timeout.
     if (alreadyBonded) throw err;
@@ -428,6 +436,9 @@ export async function scanDevices(
   let bluetooth: NodeBle.Bluetooth;
   let destroy: () => void;
   try {
+    // This path builds its own bus instead of going through getConnection(),
+    // so it needs the match-rule patch applied here as well (#396).
+    applyDbusMatchRefcountPatch();
     ({ bluetooth, destroy } = NodeBle.createBluetooth());
   } catch (err) {
     if (isDbusConnectionError(err)) throw dbusError();
@@ -480,8 +491,9 @@ export async function scanDevices(
         if (seen.has(addr)) continue;
         seen.add(addr);
 
+        let dev: Device | undefined;
         try {
-          const dev = await btAdapter.getDevice(addr);
+          dev = await btAdapter.getDevice(addr);
           // Match on what the read path matches on, not on the name alone.
           // This tool is what users are pointed at to discover the adapter name
           // for `ble.force_scale_adapter`, so an answer that differs from what a
@@ -508,11 +520,19 @@ export async function scanDevices(
 
           results.push({
             address: addr,
-            name: name || '(unknown)',
+            name: safeName(name) || '(unknown)',
             matchedAdapter: matched?.name,
           });
         } catch {
           /* device may have gone away */
+        } finally {
+          // Reading a property is what registers the listener and the D-Bus
+          // match rule, and this loop reads two per device. autoDiscover and
+          // removeDevice already hand theirs back; this one did not, so a scan
+          // in a crowded room walked toward the per-connection match-rule cap
+          // (#404). Bounded by `seen` and by the throwaway bus below, but it is
+          // the same mechanism as #396.
+          if (dev) releaseDeviceProxy(dev);
         }
       }
 

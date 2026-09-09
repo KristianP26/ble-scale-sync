@@ -1,4 +1,4 @@
-import { helperOf, type Adapter } from './dbus.js';
+import { helperOf, releaseDeviceProxy, type Adapter, type Device } from './dbus.js';
 import { LIVENESS_PROBE_WINDOW_MS, sleep as defaultSleep } from '../types.js';
 
 /**
@@ -12,17 +12,29 @@ export interface LivenessAdapter {
   rssiOf(addr: string): Promise<number | undefined>;
 }
 
-/** Wrap a real node-ble Adapter as a LivenessAdapter. */
+/**
+ * Wrap a real node-ble Adapter as a LivenessAdapter.
+ *
+ * The probe reads one property off every device BlueZ knows, twice per probe,
+ * once per cycle, in a room that may hold dozens of advertisers. Each read
+ * needs a throwaway Device proxy, and each proxy costs a D-Bus match rule plus
+ * a listener on the shared signal emitter until it is released, so the release
+ * is not tidiness here: without it a long-running continuous install leaks both
+ * until the bus daemon refuses more match rules (#396, #397).
+ */
 export function makeLivenessAdapter(btAdapter: Adapter): LivenessAdapter {
   return {
     listAddresses: () => btAdapter.devices(),
     rssiOf: async (addr) => {
+      let dev: Device | undefined;
       try {
-        const dev = await btAdapter.getDevice(addr);
+        dev = await btAdapter.getDevice(addr);
         const rssi = await helperOf(dev).prop('RSSI');
         return typeof rssi === 'number' ? rssi : undefined;
       } catch {
         return undefined;
+      } finally {
+        if (dev) releaseDeviceProxy(dev);
       }
     },
   };

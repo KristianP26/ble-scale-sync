@@ -7,7 +7,12 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
+import {
+  uuid16,
+  buildPayload,
+  type ScaleBodyComp,
+  ReadingComposition,
+} from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
 /** Bitmask flags for tracking which frame types have been received. */
@@ -52,6 +57,12 @@ export class SenssunAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
   private cachedMuscle = 0;
   private cachedBone = 0;
   private framesMask = 0;
+  /**
+   * Composition pinned to the reading it was measured with (#394). See
+   * ReadingComposition for why computeMetrics cannot read the live cache on
+   * the watcher transports.
+   */
+  private readonly compByReading = new ReadingComposition<ScaleBodyComp>();
 
   matches(device: BleDeviceInfo): boolean {
     return matchesDescriptor(device, this.match);
@@ -92,7 +103,37 @@ export class SenssunAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
 
     if (this.cachedWeight <= 0) return null;
 
-    return { weight: this.cachedWeight, impedance: 0 };
+    const reading: ScaleReading = { weight: this.cachedWeight, impedance: 0 };
+    this.compByReading.pin(reading, this.snapshot());
+    return reading;
+  }
+
+  private snapshot(): ScaleBodyComp {
+    return {
+      fat: this.cachedFat > 0 ? this.cachedFat : undefined,
+      water: this.cachedWater > 0 ? this.cachedWater : undefined,
+      muscle: this.cachedMuscle > 0 ? this.cachedMuscle : undefined,
+      bone: this.cachedBone > 0 ? this.cachedBone : undefined,
+    };
+  }
+
+  /**
+   * Clear the previous weigh-in (#394).
+   *
+   * Adapters are shared singletons. Without this `framesMask` stays at
+   * FRAME_ALL for the life of the process once one session has seen all four
+   * frame types, which disarms
+   * the completeness gate permanently: the next session resolves on its
+   * first frame, exporting a still-unsettled weight (the 0xAA stable flag is
+   * deliberately ignored) with the previous person's composition.
+   */
+  onSessionStart(): void {
+    this.cachedWeight = 0;
+    this.cachedFat = 0;
+    this.cachedWater = 0;
+    this.cachedMuscle = 0;
+    this.cachedBone = 0;
+    this.framesMask = 0;
   }
 
   isComplete(reading: ScaleReading): boolean {
@@ -100,12 +141,10 @@ export class SenssunAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    const comp: ScaleBodyComp = {
-      fat: this.cachedFat > 0 ? this.cachedFat : undefined,
-      water: this.cachedWater > 0 ? this.cachedWater : undefined,
-      muscle: this.cachedMuscle > 0 ? this.cachedMuscle : undefined,
-      bone: this.cachedBone > 0 ? this.cachedBone : undefined,
-    };
+    // Per-reading snapshot taken in parseNotification(). The live cache is only
+    // a fallback for a reading this adapter did not build (direct callers,
+    // tests); see the compByReading field comment for why it cannot be trusted.
+    const comp = this.compByReading.of(reading, this.snapshot());
     return buildPayload(reading.weight, reading.impedance, comp, profile);
   }
 }

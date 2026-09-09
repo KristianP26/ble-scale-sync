@@ -10,7 +10,12 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, computeBiaFat, type ScaleBodyComp } from './body-comp-helpers.js';
+import {
+  uuid16,
+  buildPayload,
+  biaFatIfPlausible,
+  type ScaleBodyComp,
+} from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
@@ -136,11 +141,21 @@ export class RenphoScaleAdapter
     return !hasQn;
   }
 
-  async onConnected(ctx: ConnectionContext): Promise<void> {
-    // Reset per-connection state (adapter instance is shared across sessions).
+  /**
+   * Clear the previous weigh-in before anything is subscribed (#394).
+   *
+   * This used to live in `onConnected`, which is too late for a multi-char
+   * adapter: `subscribeAndInit` enables EVERY notify binding and only then
+   * awaits `startInit()`, so frames can already be arriving - through several
+   * D-Bus round trips for the second and third binding - while the reset has
+   * not run. `onSessionStart` runs before the first subscribe.
+   */
+  onSessionStart(): void {
     this.cachedWeight = 0;
     this.cachedImpedance = 0;
+  }
 
+  async onConnected(ctx: ConnectionContext): Promise<void> {
     // Consent on the SIG User Control Point is what unlocks the stream, so it is
     // the only hard requirement. The vendor 0xFFE2 service is not advertised (the
     // matcher rejects devices that advertise 0xFFE0), so a firmware variant may
@@ -307,11 +322,11 @@ export class RenphoScaleAdapter
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
     const comp: ScaleBodyComp = {};
-    // Recompute body fat from raw impedance (BIA) when available; otherwise
-    // buildPayload falls back to BMI estimation.
-    if (reading.impedance > 0) {
-      comp.fat = computeBiaFat(reading.weight, reading.impedance, profile);
-    }
+    // Recompute body fat from raw impedance (BIA) when the impedance is inside
+    // the plausible whole-body band; otherwise buildPayload falls back to BMI
+    // estimation, which is better than a pinned floor or ceiling published as a
+    // measurement (#405).
+    comp.fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
     return buildPayload(reading.weight, reading.impedance, comp, profile);
   }
 }

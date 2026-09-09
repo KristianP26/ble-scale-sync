@@ -3,6 +3,7 @@ import type { MessageBus } from 'dbus-next';
 import { bleLog, errMsg } from '../types.js';
 import type { Adapter } from './dbus.js';
 import { forgetPairingAgent, ensurePairingAgent } from './agent.js';
+import { applyDbusMatchRefcountPatch } from './dbus-match-patch.js';
 
 /**
  * Persistent D-Bus connection + adapter, reused across scan cycles in
@@ -16,6 +17,21 @@ let persistentAdapter: Adapter | null = null;
 
 /** Latched when the D-Bus transport errors. Cleared by resetConnection(). */
 let busFailed = false;
+
+/**
+ * Bumped every time the D-Bus connection is torn down.
+ *
+ * Anything that caches per-connection state reads this instead of being called
+ * back by resetConnection(). A callback would mean connection.ts importing the
+ * modules that already import it, and the one caller today (discovery.ts, which
+ * remembers whether the RUNNING scan was started with the duplicate filter) is
+ * not worth an import cycle for.
+ */
+let connectionGeneration = 0;
+
+export function currentConnectionGeneration(): number {
+  return connectionGeneration;
+}
 
 /**
  * Attach a permanent `error` listener to a node-ble session's MessageBus.
@@ -44,6 +60,12 @@ export function attachBusErrorHandler(
 
 export function getConnection(): { bluetooth: NodeBle.Bluetooth; destroy: () => void } {
   if (!persistentConn) {
+    // Before the first bus exists: dbus-next never sends RemoveMatch, so every
+    // proxy this process creates leaks a match rule until the daemon refuses
+    // more and the process dies (#396). Patching the prototype after the fact
+    // would work too (the methods are looked up dynamically), but doing it here
+    // means no bus is ever built on the unpatched implementation.
+    applyDbusMatchRefcountPatch();
     persistentConn = NodeBle.createBluetooth();
     attachBusErrorHandler(persistentConn.bluetooth, (err) => {
       busFailed = true;
@@ -94,6 +116,7 @@ export async function getAdapter(bleAdapter?: string): Promise<Adapter> {
 export function resetConnection(): void {
   busFailed = false;
   persistentAdapter = null;
+  connectionGeneration++;
   if (persistentConn) {
     // Destroying the connection makes BlueZ drop our pairing agent (owner gone),
     // so just forget the local registration; the next connection re-registers.
@@ -106,6 +129,19 @@ export function resetConnection(): void {
     persistentConn = null;
     bleLog.debug('D-Bus connection reset');
   }
+}
+
+/**
+ * D-Bus error name (`org.freedesktop.DBus.Error.*`) when the error carries one.
+ *
+ * dbus-next's DBusError puts the name in `.type` and only the human sentence in
+ * `.message`, so `errMsg()` alone can never see it: a LimitsExceeded failure
+ * reads as `Connection ":1.7" is not allowed to add more match rules ...` with
+ * the word LimitsExceeded nowhere in it.
+ */
+function dbusErrorType(err: unknown): string {
+  const t = (err as { type?: unknown } | null | undefined)?.type;
+  return typeof t === 'string' ? t : '';
 }
 
 /** Returns true if the error indicates a stale or broken D-Bus connection. */
@@ -121,7 +157,15 @@ export function isStaleConnectionError(err: unknown): boolean {
     // reset-and-retry rather than surfacing as an opaque scan failure (#290).
     msg.includes('stream is closed') ||
     msg.includes('closed stream') ||
-    msg.includes('EPIPE')
+    msg.includes('EPIPE') ||
+    // Connection-scoped resource exhaustion: the daemon caps match rules (and
+    // pending replies) per connection, and the cap is only ever cleared by
+    // dropping the connection. Without this the ceiling is fatal and only a
+    // process restart recovers, which is what a reporter saw roughly nine times
+    // a day (#396). Defence in depth on top of the refcount patch, which stops
+    // us from being the one filling the table.
+    dbusErrorType(err).endsWith('.LimitsExceeded') ||
+    msg.includes('not allowed to add more match rules')
   );
 }
 

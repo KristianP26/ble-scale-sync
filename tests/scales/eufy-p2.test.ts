@@ -266,6 +266,8 @@ describe('EufyP2Adapter', () => {
     expect(adapter.parseCharNotification!('fff2', makeNotification(75, 500))).not.toBeNull();
 
     // Second session without a MAC: adapter must NOT keep the old auth.
+    // onSessionStart runs first in the real handler and is what drops `auth`.
+    adapter.onSessionStart();
     await adapter.onConnected({ ...ctx, deviceAddress: '' });
     expect(adapter.parseCharNotification!('fff2', makeNotification(75, 500))).toBeNull();
   });
@@ -309,7 +311,8 @@ describe('EufyP2Adapter', () => {
       const stable = adapter.parseNotification(makeNotification(80, 500))!;
       expect(adapter.isFinal!(stable)).toBe(true);
 
-      await adapter.onConnected(ctx); // resets stability even without a MAC
+      adapter.onSessionStart(); // resets stability even without a MAC
+      await adapter.onConnected(ctx);
       const afterReset = adapter.parseNotification(makeNotification(80, 500))!;
       expect(adapter.isFinal!(afterReset)).toBe(false); // previous weight cleared
     });
@@ -471,6 +474,7 @@ describe('#289 real P2 Pro frames', () => {
     expect(adapter.parseNotification(BIA_FRAMES.person1)?.impedance).toBe(470);
 
     // A fresh connection must not inherit it: adapters are shared singletons.
+    adapter.onSessionStart!();
     await adapter.onConnected!({
       profile: { height: 180, age: 30, gender: 'male', isAthlete: false },
       deviceAddress: '',

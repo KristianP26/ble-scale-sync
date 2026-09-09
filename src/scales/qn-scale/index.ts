@@ -1,4 +1,4 @@
-import { computeBiaFat, buildPayload } from '../body-comp-helpers.js';
+import { biaFatIfPlausible, buildPayload } from '../body-comp-helpers.js';
 import type {
   BleDeviceInfo,
   ConnectionContext,
@@ -48,12 +48,12 @@ import {
   TRIGGER_REPEATS,
   TRIGGER_WEIGHT_FALLBACK_KG,
 } from './constants.js';
-import { buildA2Frame, buildMeasurementTrigger, buildTimeSync } from './frames.js';
+import { buildA2Frame, buildConfig, buildMeasurementTrigger, buildTimeSync } from './frames.js';
 import { qnMatches, warnOnOneByoneShape } from './matching.js';
 import { parseQnBroadcast } from './broadcast.js';
 
 // Re-exported so importers keep the paths they had before the split.
-export { buildA2Frame, buildMeasurementTrigger, buildTimeSync } from './frames.js';
+export { buildA2Frame, buildConfig, buildMeasurementTrigger, buildTimeSync } from './frames.js';
 
 /** Format bytes as hex string for debug logging. */
 const hex = (data: number[] | Buffer): string =>
@@ -66,7 +66,16 @@ export class QnScaleAdapter
   readonly match: MatchDescriptor = {
     priority: 250,
     custom: true,
-    names: { includes: ['qn-scale', 'renpho', 'senssun', 'sencor'] },
+    // 'seb-scale' and the exact 'fit plus' come from openScale's QN handler,
+    // which annotates the latter as a BTSnoop-confirmed GE CS 10 G (#409, and
+    // we have GE CS10G history in #235). 'fit plus' is EXACT on purpose: as a
+    // substring it would claim any fitness-branded device whose name contains
+    // it. Without these two, such a unit was reachable only through the
+    // ae00/ffe0/fff0 service claim.
+    names: {
+      includes: ['qn-scale', 'renpho', 'senssun', 'sencor', 'seb-scale'],
+      exact: ['fit plus'],
+    },
     serviceUuids: ['ae00', 'ffe0', 'fff0'],
     charUuids: ['ae01', 'ae02'],
     manufacturerId: 0xffff,
@@ -199,6 +208,9 @@ export class QnScaleAdapter
   /** Send the undecoded 0xA4 prelude after START (`ble.qn_a4_prelude`, #331). */
   private a4PreludeEnabled = false;
 
+  /** Send the 10-byte 0x13 config frame (`ble.qn_config_long`, #331). */
+  private configLong = false;
+
   /** Send the 9-byte 0x20 time sync (`ble.qn_time_sync_long`, #331). */
   private timeSyncLong = false;
 
@@ -216,6 +228,7 @@ export class QnScaleAdapter
     this.forcedWeightAck = opts.qnWeightAck ?? null;
     this.a4PreludeEnabled = opts.qnA4Prelude === true;
     this.timeSyncLong = opts.qnTimeSyncLong === true;
+    this.configLong = opts.qnConfigLong === true;
   }
 
   /** 0x13 config unit flag: 0x01 kg, 0x02 lb (openScale QNHandler). */
@@ -280,18 +293,18 @@ export class QnScaleAdapter
   }
 
   /**
-   * Multi-step init called after BLE connection and service discovery.
+   * Clear every per-session field BEFORE anything is subscribed (#394, #406).
    *
-   * On Linux (node-ble / BlueZ D-Bus), FFF1 CCCD subscription runs in parallel
-   * with onConnected(). The scale may send 0x12 BEFORE this method finishes,
-   * so the state machine handlers (handleScaleInfo, handleReady, etc.) must
-   * not depend on any state set here (especially hasAe00).
+   * This used to live in onConnected(), which is too late on this adapter: QN
+   * is a MultiCharNotify adapter, and subscribeAndInit enables every notify
+   * binding before it awaits init, so a frame can be parsed against the
+   * PREVIOUS session's seenProtocolType, weightScaleFactor or configSent. That
+   * is the exact ordering the onSessionStart contract exists for.
    *
-   * For older firmware without AE00: sends legacy unlock variants on FFF2.
+   * `this.ctx` stays in onConnected: it is the one thing that does not exist
+   * until then.
    */
-  async onConnected(ctx: ConnectionContext): Promise<void> {
-    // Reset state for new connection
-    this.ctx = ctx;
+  onSessionStart(): void {
     this.seenProtocolType = this.forcedProtocolType ?? 0x00;
     this.weightScaleFactor = 100;
     this.hasAe00 = false;
@@ -316,6 +329,26 @@ export class QnScaleAdapter
     if (this.storedRetryTimer) {
       clearTimeout(this.storedRetryTimer);
       this.storedRetryTimer = null;
+    }
+  }
+
+  /**
+   * Multi-step init called after BLE connection and service discovery.
+   *
+   * On Linux (node-ble / BlueZ D-Bus), FFF1 CCCD subscription runs in parallel
+   * with onConnected(). The scale may send 0x12 BEFORE this method finishes,
+   * so the state machine handlers (handleScaleInfo, handleReady, etc.) must
+   * not depend on any state set here (especially hasAe00).
+   *
+   * For older firmware without AE00: sends legacy unlock variants on FFF2.
+   */
+  async onConnected(ctx: ConnectionContext): Promise<void> {
+    this.ctx = ctx;
+    // The session clock is re-stamped here as well as in onSessionStart, for a
+    // caller that drives onConnected directly (a test, or a transport that
+    // predates the hook).
+    if (this.sessionStartedScaleSeconds === null) {
+      this.sessionStartedScaleSeconds = Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
     }
 
     // #320: the nameless fallback claims any device on a QN vendor service,
@@ -870,13 +903,15 @@ export class QnScaleAdapter
     await this.writeAe01([0xfe, 0xdc, 0xba, 0xc0, 0x06, 0x00, 0x02, 0x01, 0x01, 0xef]);
     await wait(200);
 
-    // Step 3: 0x13 config
-    // byte[3] = unit flag: 0x01 (kg) or 0x02 (lb) per openScale QNHandler. Honour
-    // the configured unit so a read does not flip the scale's display (#269).
-    // The Renpho app uses 0x08 which also works but switches the scale display to lb.
-    const cmd = [0x13, 0x09, this.seenProtocolType, this.unitFlag(), 0x10, 0x00, 0x00, 0x00, 0x00];
-    cmd[8] = cmd.reduce((a, b) => a + b, 0) & 0xff;
-    await this.writeCmd(cmd);
+    // Step 3: 0x13 config. See buildConfig for the 9 vs 10 byte forms and why
+    // the longer one is opt-in.
+    await this.writeCmd(buildConfig(this.seenProtocolType, this.unitFlag(), this.configLong));
+    if (this.configLong) {
+      bleLog.debug(
+        'QN: 0x13 config sent in the 10-byte vendor-app form ' +
+          '(ble.qn_config_long, trailing pair undecoded, #331)',
+      );
+    }
   }
 
   /** Respond to 0x14 (ready) with 0x20 time sync + A2 user profile + AE01 auth. */
@@ -1138,9 +1173,16 @@ export class QnScaleAdapter
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    // In broadcast mode impedance is 0: skip BIA, let buildPayload use Deurenberg fallback
-    const fat =
-      reading.impedance > 0 ? computeBiaFat(reading.weight, reading.impedance, profile) : undefined;
+    // In broadcast mode impedance is 0, and biaFatIfPlausible returns undefined
+    // for it, so buildPayload uses the Deurenberg fallback.
+    //
+    // isComplete gates GATT readings on impedance > 200 with no ceiling. The
+    // gate is deliberately left alone (ADR D011 decides the guard belongs at
+    // computation, not at parsing, and raising a completion floor would change
+    // WHEN a session ends), so an r1 far above the whole-body range still
+    // completes a reading - it just no longer produces a pinned 60 % as if it
+    // had been measured (#405).
+    const fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
     return buildPayload(reading.weight, reading.impedance, { fat }, profile);
   }
 }

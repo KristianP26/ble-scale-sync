@@ -2,7 +2,13 @@ import type { ScaleAdapter, BleDeviceInfo, UserProfile } from '../../interfaces/
 import type { HaBluetoothConfig } from '../../config/schema.js';
 import type { RawReading } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
-import { evaluateAdvertisement, GraceTimers, DedupWindow, logAdvert } from '../advertisement.js';
+import {
+  evaluateAdvertisement,
+  GraceTimers,
+  DedupWindow,
+  logAdvert,
+  emitDeduped,
+} from '../advertisement.js';
 import type { Watcher, WatcherConfig } from '../reading-source.js';
 import { bleLog, IMPEDANCE_GRACE_MS } from '../types.js';
 import { AsyncQueue } from '../async-queue.js';
@@ -45,7 +51,7 @@ export class ReadingWatcher implements Watcher {
     bleLog.info(
       `Matched: ${gr.adapter.name} (${address}), weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
     );
-    bleLog.info(`Broadcast reading: ${gr.reading.weight} kg`);
+    bleLog.info(`Reading: ${gr.reading.weight} kg`);
     this.queue.push(gr);
   });
 
@@ -132,14 +138,8 @@ export class ReadingWatcher implements Watcher {
     if (decision.kind === 'gatt') this.warnGatt(adapter, address);
   }
 
-  private pushDeduped(address: string, raw: RawReading, weight: number): void {
-    if (!this.dedup.shouldEmit(address, weight)) {
-      bleLog.debug(`Dedup skip: ${address}:${weight.toFixed(1)}`);
-      return;
-    }
-    bleLog.info(`Matched: ${raw.adapter.name} (${address})`);
-    bleLog.info(`Reading: ${weight} kg`);
-    this.queue.push(raw);
+  private pushDeduped(address: string, raw: RawReading, weight: number): boolean {
+    return emitDeduped(this.dedup, this.queue, address, raw, weight);
   }
 
   private warnGatt(adapter: ScaleAdapter, address: string): void {

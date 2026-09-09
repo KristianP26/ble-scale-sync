@@ -8,7 +8,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { buildPayload, estimateBodyFat, uuid16 } from './body-comp-helpers.js';
+import { buildPayload, estimateBodyFat, uuid16, ReadingComposition } from './body-comp-helpers.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
 // Yunmai GATT service / characteristic UUIDs
@@ -17,6 +17,23 @@ const CHR_CMD = uuid16(0xffe9); // write  — commands
 
 // Response-type markers in data[3]
 const RESP_MEASURED = 0x02;
+
+/** Bound on the per-device variant cache; more than this in range is not real. */
+const MINI_CACHE_MAX = 32;
+
+/**
+ * Lowercase hex, separators stripped. `BleDeviceInfo.address` is uppercase with
+ * colons and `ConnectionContext.deviceAddress` is uppercase without, so both
+ * have to be flattened before they can be compared.
+ */
+function normalizeAddress(address: string | undefined): string | undefined {
+  if (!address) return undefined;
+  const flat = address.replace(/[:-]/g, '').toLowerCase();
+  // Hex only. noble reports the literal string 'unknown' as an address on some
+  // macOS peripherals, which formatMac turns into 'UN:KN:OW': every such device
+  // would otherwise share one cache key.
+  return /^[0-9a-f]{6,}$/.test(flat) ? flat : undefined;
+}
 
 /**
  * Adapter for Yunmai scales (Signal, Mini, SE).
@@ -49,14 +66,44 @@ export class YunmaiScaleAdapter
 
   /** True for Mini (ISM) and SE (ISSE) variants that report resistance. */
   private isMini = false;
+  /**
+   * Variant per device address. This adapter is a shared singleton and
+   * `matches()` runs for every candidate a scan produces, so a single flag
+   * tracks the last Yunmai-named advertisement rather than the unit about to be
+   * read (#406).
+   */
+  private readonly miniByAddress = new Map<string, boolean>();
 
   /** Cached fat percentage from protocol >= 0x1E embedded in the frame. */
   private embeddedFatPercent: number | null = null;
+  /**
+   * The embedded fat percentage as it stood when each reading was emitted
+   * (#394): this adapter is a shared singleton and `computeMetrics()` runs
+   * later than the parse, so on the watcher transports the live field can
+   * already belong to the next weigh-in. See ReadingComposition.
+   */
+  private readonly comp = new ReadingComposition<number | null>();
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
     if (!name.includes('yunmai')) return false;
-    this.isMini = name.includes('ism') || name.includes('isse');
+
+    const mini = name.includes('ism') || name.includes('isse');
+    const address = normalizeAddress(device.address);
+    if (address) {
+      if (this.miniByAddress.size >= MINI_CACHE_MAX && !this.miniByAddress.has(address)) {
+        const oldest = this.miniByAddress.keys().next().value;
+        if (oldest !== undefined) this.miniByAddress.delete(oldest);
+      }
+      this.miniByAddress.set(address, mini);
+    }
+
+    // Still assigned, for the paths where nothing better is available: a
+    // transport that gives matchers no address (noble on macOS supplies a
+    // CoreBluetooth UUID that no advertisement can match), and the mqtt
+    // autonomous connect, which can select this adapter from a synthetic
+    // nameless device. onSessionStart corrects it when the address IS known.
+    this.isMini = mini;
     return true;
   }
 
@@ -88,6 +135,11 @@ export class YunmaiScaleAdapter
     let impedance = 0;
     this.embeddedFatPercent = null;
 
+    // A frame-shape latch was tried here and removed: reading [15..16] whenever
+    // the frame is long enough would mean deciding, without a capture, that a
+    // standard variant never sends a 17+ byte final frame. Nobody has one. What
+    // it would take is a DEBUG log from a standard Yunmai showing its final
+    // frame length, and the value at [15..16] if it has one.
     if (this.isMini && data.length >= 17) {
       impedance = data.readUInt16BE(15);
 
@@ -99,7 +151,9 @@ export class YunmaiScaleAdapter
       }
     }
 
-    return { weight, impedance };
+    const reading: ScaleReading = { weight, impedance };
+    this.comp.pin(reading, this.embeddedFatPercent);
+    return reading;
   }
 
   isComplete(reading: ScaleReading): boolean {
@@ -127,6 +181,27 @@ export class YunmaiScaleAdapter
     return reading.impedance > 0;
   }
 
+  /**
+   * Clear the previous weigh-in and resolve which variant this device is
+   * (#394, #406).
+   *
+   * `isMini` is a device property, not per-session state, so it is not reset
+   * here: it is looked up for the address this session is opening against.
+   * An address we never recorded leaves whatever `matches()` decided, because
+   * unknown is not the same as "standard".
+   */
+  onSessionStart(deviceAddress?: string): void {
+    this.embeddedFatPercent = null;
+
+    // Resolve the variant for THIS device, whatever matches() was shown for
+    // other devices in between. An address we have never recorded leaves the
+    // matches() assignment alone rather than resetting it: unknown is not the
+    // same as "standard".
+    const address = normalizeAddress(deviceAddress);
+    const known = address ? this.miniByAddress.get(address) : undefined;
+    if (known !== undefined) this.isMini = known;
+  }
+
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
     const { weight, impedance } = reading;
     const sex = profile.gender === 'male' ? 1 : 0;
@@ -135,9 +210,11 @@ export class YunmaiScaleAdapter
     const heightM = profile.height / 100;
     const bmi = weight / (heightM * heightM);
 
+    const embeddedFat = this.comp.of(reading, this.embeddedFatPercent);
+
     let fat: number;
-    if (this.embeddedFatPercent != null && this.embeddedFatPercent > 0) {
-      fat = this.embeddedFatPercent;
+    if (embeddedFat != null && embeddedFat > 0) {
+      fat = embeddedFat;
     } else if (impedance > 0) {
       fat = ym.fat(profile.age, weight, impedance);
     } else {

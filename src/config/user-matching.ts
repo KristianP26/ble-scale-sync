@@ -17,6 +17,17 @@ function inRange(weight: number, user: UserConfig): boolean {
   return weight >= user.weight_range.min && weight <= user.weight_range.max;
 }
 
+/**
+ * True when a weight falls outside a user's configured range.
+ *
+ * Exported so the processor's `out_of_range` guard and the matcher share ONE
+ * definition of the boundary. Both ends are inclusive, matching `inRange`
+ * above: a weight exactly on `min` or `max` is in range (#395).
+ */
+export function isOutOfRange(user: UserConfig, weight: number): boolean {
+  return !inRange(weight, user);
+}
+
 function rangeMidpoint(user: UserConfig): number {
   return (user.weight_range.min + user.weight_range.max) / 2;
 }

@@ -30,7 +30,8 @@ import {
   resetAdapterBtmgmt,
 } from '../types.js';
 import NodeBle from 'node-ble';
-import { helperOf, type Adapter, type Device } from './dbus.js';
+import { isDebugEnabled } from '../../logger.js';
+import { helperOf, releaseDeviceProxy, type Adapter, type Device } from './dbus.js';
 import {
   getAdapter,
   resetConnection,
@@ -39,15 +40,21 @@ import {
   dbusError,
   parseHciIndex,
 } from './connection.js';
-import { removeDevice } from './discovery.js';
+import { removeDevice, notifyDiscoveryStopped } from './discovery.js';
 import { logAdvertisementSnapshot, type AdvertisementSnapshot } from './device-object.js';
 import { buildCharMap } from './gatt.js';
-import { waitForRawReading, type BleDevice, type RawReading } from '../shared.js';
+import {
+  waitForRawReading,
+  withAbandonmentCleanup,
+  type BleDevice,
+  type RawReading,
+} from '../shared.js';
 import type { WeightUnit } from '../../config/schema.js';
 import type { ScaleAuth, ScaleReading, UserProfile } from '../../interfaces/scale-adapter.js';
 import { RAW_READING_TIMEOUT_MS, READING_SESSION_CAP_FACTOR, withIdleTimeout } from '../types.js';
 import { tagBleFailure, bleFailureKind } from '../failure-kind.js';
 import { probeLiveness, makeLivenessAdapter } from './liveness.js';
+import { safeName } from '../advertisement.js';
 
 /**
  * Acquire the BlueZ adapter, resetting a stale D-Bus connection once.
@@ -79,6 +86,43 @@ export async function acquireBluezAdapter(bleAdapter: string | undefined): Promi
   }
 }
 
+/** How often the MAC-targeted wait reports what BlueZ can currently see. */
+const SCAN_VISIBILITY_LOG_MS = 30_000;
+
+/**
+ * While waiting for one configured MAC, periodically log what BlueZ can see.
+ *
+ * `waitDevice` is silent by design: it polls for one address and says nothing
+ * about the rest of the room. So a `not found within 120s` log cannot tell
+ * "the scale never advertised" apart from "the scan is dead" or "we are waiting
+ * on the wrong address", and a reporter's log showing nothing but repeated
+ * `Scanning for device...` was unanswerable for exactly that reason (#397).
+ * Debug only. The check is per tick rather than once at the start, so toggling
+ * `runtime.debug` through a live config reload takes effect on the wait already
+ * in flight, and so the enumeration itself never runs for anyone who has debug
+ * off. The timer is unref'd: a shutdown arriving mid-wait should not be held up
+ * by a diagnostic.
+ */
+function startScanVisibilityLog(btAdapter: Adapter, mac: string): () => void {
+  const timer = setInterval(() => {
+    if (!isDebugEnabled()) return;
+    void (async () => {
+      try {
+        const addrs: string[] = await btAdapter.devices();
+        const seen = addrs.some((a) => formatMac(a) === mac);
+        bleLog.debug(
+          `Still waiting for ${mac}; BlueZ currently lists ${addrs.length} device(s)` +
+            `${seen ? ' (including the target)' : ''}: ${addrs.join(', ') || 'none'}`,
+        );
+      } catch (err) {
+        bleLog.debug(`Could not enumerate BlueZ devices while waiting: ${errMsg(err)}`);
+      }
+    })();
+  }, SCAN_VISIBILITY_LOG_MS);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
 /**
  * Wait for the target device to show up in discovery.
  *
@@ -96,6 +140,19 @@ export async function waitForTargetDevice(
     throw abortSignal.reason ?? new DOMException('Aborted', 'AbortError');
   }
 
+  const stopVisibilityLog = startScanVisibilityLog(btAdapter, mac);
+  try {
+    return await awaitTargetDevice(btAdapter, mac, abortSignal);
+  } finally {
+    stopVisibilityLog();
+  }
+}
+
+async function awaitTargetDevice(
+  btAdapter: Adapter,
+  mac: string,
+  abortSignal?: AbortSignal,
+): Promise<Device> {
   const waitPromise = withTimeout(
     btAdapter.waitDevice(mac),
     DISCOVERY_TIMEOUT_MS,
@@ -146,7 +203,7 @@ export async function resolvePreConnectAdapter(
   preMatchedAdapter: ScaleAdapter | undefined;
 }> {
   const name = await device.getName().catch(() => '');
-  bleLog.debug(`Found device: ${name} [${mac}]`);
+  bleLog.debug(`Found device: ${safeName(name)} [${mac}]`);
   // Only chance to capture the advertisement: BlueZ drops it (and for some
   // peers the whole Device object) once discovery stops (#297).
   const advert = await logAdvertisementSnapshot(device);
@@ -238,7 +295,7 @@ export async function resolveAfterConnect(
   }
   if (!resolved) {
     throw new Error(
-      `Device found (${name}) but no adapter recognized it. ` +
+      `Device found (${safeName(name)}) but no adapter recognized it. ` +
         `Services: [${serviceUuids.join(', ')}]. ` +
         `Adapters: ${adapters.map((a) => a.name).join(', ')}`,
     );
@@ -301,6 +358,12 @@ export async function teardownSession(opts: {
     } catch {
       /* already disconnected or never connected */
     }
+    // Hand the Device proxy back. On a GATT cycle the resetConnection() below
+    // would drop it anyway, but an idle or broadcast cycle never resets, so
+    // without this the same device path collects one more listener and one more
+    // D-Bus match rule per cycle for the life of the process (#396, #397). The
+    // session is over here, so nothing else can be holding it.
+    releaseDeviceProxy(device);
   }
 
   if (gattAttempted) {
@@ -319,6 +382,9 @@ export async function teardownSession(opts: {
       } catch (e) {
         bleLog.debug(`Force StopDiscovery failed: ${errMsg(e)}`);
       }
+      // The resetConnection() below would invalidate the claim anyway, but the
+      // invariant should hold by construction, not by what happens to follow.
+      if (btAdapter) notifyDiscoveryStopped(btAdapter);
       if (deviceMac) {
         await removeDevice(btAdapter!, deviceMac);
       }
@@ -378,25 +444,27 @@ export async function readWithTimeouts(
   },
 ): Promise<RawReading> {
   const idleMs = opts.readingTimeoutMs ?? RAW_READING_TIMEOUT_MS;
-  return await withTimeout(
-    withIdleTimeout(
-      (onActivity) =>
-        waitForRawReading(
-          charMap,
-          bleDevice,
-          matchedAdapter,
-          opts.profile,
-          deviceMac.replace(/[:-]/g, '').toUpperCase(),
-          opts.weightUnit,
-          opts.onLiveData,
-          opts.scaleAuth,
-          onActivity,
-        ),
-      idleMs,
-      'Timed out waiting for a complete scale reading',
+  return await withAbandonmentCleanup(bleDevice, () =>
+    withTimeout(
+      withIdleTimeout(
+        (onActivity) =>
+          waitForRawReading(
+            charMap,
+            bleDevice,
+            matchedAdapter,
+            opts.profile,
+            deviceMac.replace(/[:-]/g, '').toUpperCase(),
+            opts.weightUnit,
+            opts.onLiveData,
+            opts.scaleAuth,
+            onActivity,
+          ),
+        idleMs,
+        'Timed out waiting for a complete scale reading',
+      ),
+      idleMs * READING_SESSION_CAP_FACTOR,
+      'GATT session cap exceeded',
     ),
-    idleMs * READING_SESSION_CAP_FACTOR,
-    'GATT session cap exceeded',
   );
 }
 

@@ -248,10 +248,10 @@ describe('SalterAdapter', () => {
       // for as long as it sits in the buffer.
       const a = primed(makeAdapter(), REC_876_BIA);
       expect(a.parseNotification(REC_876_BIA)).not.toBeNull();
-      a.onSessionEnd();
+      a.onSessionStart();
       a.parseNotification(clockReply(tsOf(REC_876_BIA), 20));
       expect(a.parseNotification(REC_876_BIA)).toBeNull();
-      a.onSessionEnd();
+      a.onSessionStart();
       a.parseNotification(clockReply(tsOf(REC_876_BIA), 30));
       expect(a.parseNotification(REC_876_BIA)).toBeNull();
     });
@@ -309,7 +309,7 @@ describe('SalterAdapter', () => {
       // has already been reported is a past weigh-in, not a new measurement.
       const a = primed(makeAdapter(), REC_897_SLOT2);
       expect(a.parseNotification(REC_897_SLOT2)?.weight).toBeCloseTo(89.7, 4);
-      a.onSessionEnd();
+      a.onSessionStart();
       a.parseNotification(clockReply(tsOf(REC_897_SLOT2), 20));
       expect(a.parseNotification(REC_857_APP)).toBeNull();
       expect(a.parseNotification(REC_876_BIA)).toBeNull();
@@ -387,7 +387,7 @@ describe('SalterAdapter', () => {
       // the adapter would suppress every reading from then on, silently.
       const a = primed(makeAdapter(), REC_897_SLOT2);
       expect(a.parseNotification(REC_897_SLOT2)).not.toBeNull(); // mark: 6a8a14fa
-      a.onSessionEnd();
+      a.onSessionStart();
 
       // New batteries: clock restarts, and a fresh weigh-in is stamped ~500s.
       a.parseNotification(clockReply(0, 500));
@@ -456,7 +456,7 @@ describe('SalterAdapter', () => {
       expect(a.buildAck(recordFrom(1))).toEqual([0x08, 2]); // late reply, not [0x09, 1, 0]
 
       expect(a.buildAck(statusReply(1, 3))).toEqual([0x09, 1, 2]);
-      a.onSessionEnd();
+      a.onSessionStart();
       expect(a.buildAck(recordFrom(1))).toEqual([0x08, 2]);
     });
 
@@ -505,7 +505,7 @@ describe('SalterAdapter', () => {
       expect(a.buildAck(CLOCK_UNSET)![0]).toBe(0x01);
       expect(a.buildAck(CLOCK_UNSET)).toEqual([0x08, 0]);
 
-      a.onSessionEnd();
+      a.onSessionStart();
       expect(a.buildAck(CLOCK_UNSET)![0]).toBe(0x01); // re-armed for the next one
     });
 

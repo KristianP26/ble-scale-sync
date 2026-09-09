@@ -7,7 +7,12 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
+import {
+  uuid16,
+  buildPayload,
+  type ScaleBodyComp,
+  ReadingComposition,
+} from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
 const CHR_NOTIFY = uuid16(0x8a21);
@@ -28,7 +33,11 @@ export class MedisanaBs44xAdapter implements ScaleAdapterCore, GattWiring {
   readonly name = 'Medisana BS44x';
   readonly match: MatchDescriptor = {
     priority: 150,
-    names: { exact: ['013197', '013198', '0202b6'], startsWith: ['0203b'] },
+    // startsWith, not exact: openScale matches all four families by prefix, and
+    // these numeric names are firmware-generated, so a unit that appends a
+    // suffix was missed by name and depended entirely on the 78b2 service
+    // claim (#409).
+    names: { startsWith: ['013197', '013198', '0202b6', '0203b'] },
     serviceUuids: ['78b2'],
   };
   readonly charNotifyUuid = CHR_NOTIFY;
@@ -41,6 +50,12 @@ export class MedisanaBs44xAdapter implements ScaleAdapterCore, GattWiring {
 
   /** Cached body-composition values from feature frames. */
   private cachedComp: ScaleBodyComp = {};
+  /**
+   * Composition pinned to the reading it was measured with (#394). See
+   * ReadingComposition for why computeMetrics cannot read the live cache on
+   * the watcher transports.
+   */
+  private readonly compByReading = new ReadingComposition<ScaleBodyComp>();
 
   /** Time sync with real Unix timestamp. */
   async onConnected(ctx: ConnectionContext): Promise<void> {
@@ -95,7 +110,23 @@ export class MedisanaBs44xAdapter implements ScaleAdapterCore, GattWiring {
 
     if (this.cachedWeight <= 0) return null;
 
-    return { weight: this.cachedWeight, impedance: 0 };
+    const reading: ScaleReading = { weight: this.cachedWeight, impedance: 0 };
+    this.compByReading.pin(reading, { ...this.cachedComp });
+    return reading;
+  }
+
+  /**
+   * Clear the previous weigh-in (#394).
+   *
+   * Adapters are shared singletons. Without this the stale `cachedWeight` passes
+   * the guard and the stale `cachedComp.fat` satisfies isComplete, so the first
+   * frame of the next
+   * session resolves it: a feature frame exports the previous weight, a
+   * weight frame exports the previous composition.
+   */
+  onSessionStart(): void {
+    this.cachedWeight = 0;
+    this.cachedComp = {};
   }
 
   isComplete(reading: ScaleReading): boolean {
@@ -103,6 +134,10 @@ export class MedisanaBs44xAdapter implements ScaleAdapterCore, GattWiring {
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    return buildPayload(reading.weight, reading.impedance, this.cachedComp, profile);
+    // Per-reading snapshot taken in parseNotification(). The live cache is only
+    // a fallback for a reading this adapter did not build (direct callers,
+    // tests); see the compByReading field comment for why it cannot be trusted.
+    const comp = this.compByReading.of(reading, this.cachedComp);
+    return buildPayload(reading.weight, reading.impedance, comp, profile);
   }
 }

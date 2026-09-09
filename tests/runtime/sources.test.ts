@@ -34,6 +34,7 @@ const h = vi.hoisted(() => {
     FakeWatchdog,
     watchdogInstances,
     createReadingSource: vi.fn(),
+    raceWithLiveness: vi.fn(() => new Promise(() => {})),
     resolveUserProfile: vi.fn(() => ({ __profile: 'sentinel' })),
     abortableSleep: vi.fn(async () => undefined),
   };
@@ -42,6 +43,10 @@ const h = vi.hoisted(() => {
 vi.mock('../../src/ble/index.js', () => ({ createReadingSource: h.createReadingSource }));
 vi.mock('../../src/runtime/poll-source.js', () => ({ PollReadingSource: h.FakePollSource }));
 vi.mock('../../src/ble/watchdog.js', () => ({ ConsecutiveFailureWatchdog: h.FakeWatchdog }));
+vi.mock('../../src/runtime/proxy-liveness.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/runtime/proxy-liveness.js')>();
+  return { ...actual, raceWithLiveness: h.raceWithLiveness };
+});
 vi.mock('../../src/config/resolve.js', () => ({ resolveUserProfile: h.resolveUserProfile }));
 vi.mock('../../src/ble/types.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/ble/types.js')>();
@@ -52,6 +57,7 @@ const { buildReadingSource } = await import('../../src/runtime/sources.js');
 const { POST_DISCONNECT_GRACE_MS } = await import('../../src/ble/types.js');
 import type { AppContext } from '../../src/runtime/context.js';
 import type { ScaleAdapter } from '../../src/interfaces/scale-adapter.js';
+import { tagBleFailure } from '../../src/ble/failure-kind.js';
 
 const ADAPTERS = [{ name: 'A' }] as unknown as ScaleAdapter[];
 
@@ -183,6 +189,89 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
     await bundle.onSuccess?.();
     expect(POST_DISCONNECT_GRACE_MS).toBe(25_000);
     expect(h.abortableSleep).toHaveBeenCalledWith(POST_DISCONNECT_GRACE_MS, ctx.signal);
+  });
+
+  // #398. The classification already existed for the watchdog (#213); the
+  // backoff just never saw it.
+  it('poll plan: an idle failure gets the idle delay, a wedge-suspect gets the backoff', async () => {
+    h.createReadingSource.mockResolvedValue({ kind: 'poll', appliesGraceFloor: false });
+    const ctx = makeCtx({
+      bleHandler: 'auto',
+      config: {
+        users: [{}],
+        scale: {},
+        runtime: { scan_cooldown: 5, idle_rescan_delay: 3 },
+      } as never,
+    });
+    const bundle = await buildReadingSource(ctx, ADAPTERS, 7, 30);
+
+    const idle = tagBleFailure(new Error('Device not found'), 'idle');
+    expect(bundle.failureDelayMs?.(idle)).toBe(3_000);
+
+    // Untagged and wedge-suspect errors are not claimed, so the loop backs off.
+    expect(bundle.failureDelayMs?.(tagBleFailure(new Error('gatt'), 'wedge-suspect'))).toBe(
+      undefined,
+    );
+    expect(bundle.failureDelayMs?.(new Error('export failed'))).toBe(undefined);
+  });
+
+  it('poll plan: the idle delay is re-read from config on every call', async () => {
+    h.createReadingSource.mockResolvedValue({ kind: 'poll', appliesGraceFloor: false });
+    const runtime: { scan_cooldown: number; idle_rescan_delay?: number } = {
+      scan_cooldown: 5,
+      idle_rescan_delay: 2,
+    };
+    const ctx = makeCtx({
+      bleHandler: 'auto',
+      config: { users: [{}], scale: {}, runtime } as never,
+    });
+    const bundle = await buildReadingSource(ctx, ADAPTERS, 7, 30);
+    const idle = tagBleFailure(new Error('Device not found'), 'idle');
+
+    expect(bundle.failureDelayMs?.(idle)).toBe(2_000);
+    // 0 is a real setting, not "unset": it must survive the ?? fallback.
+    runtime.idle_rescan_delay = 0;
+    expect(bundle.failureDelayMs?.(idle)).toBe(0);
+    runtime.idle_rescan_delay = 30;
+    expect(bundle.failureDelayMs?.(idle)).toBe(30_000);
+    // Whole key gone (an older config.yaml) falls back to the schema default.
+    delete runtime.idle_rescan_delay;
+    expect(bundle.failureDelayMs?.(idle)).toBe(5_000);
+  });
+
+  it('watcher plan: leaves failureDelayMs unset, so a wedged proxy still backs off', async () => {
+    h.createReadingSource.mockResolvedValue(watcherPlan('Error processing ESPHome reading'));
+    const ctx = makeCtx({ bleHandler: 'esphome-proxy', esphomeProxy: { host: 'h' } as never });
+    const bundle = await buildReadingSource(ctx, ADAPTERS, 10, 30);
+    expect(bundle.failureDelayMs).toBeUndefined();
+  });
+
+  // #407: buildReadingSource runs once, before the loop, so a captured limit
+  // made this option neither hot-swappable nor restart-warned. The reload
+  // contract promises one of the two.
+  it('watcher plan: the liveness limit is re-read from config on every call', async () => {
+    const plan = watcherPlan('Error processing ESPHome reading');
+    plan.watcher.nextReading.mockImplementation(() => new Promise(() => {}) as Promise<never>);
+    h.createReadingSource.mockResolvedValue(plan);
+
+    const ble: { esphome_proxy: unknown; proxy_liveness_timeout_min?: number } = {
+      esphome_proxy: { host: 'h' },
+      proxy_liveness_timeout_min: 30,
+    };
+    const ctx = makeCtx({
+      bleHandler: 'esphome-proxy',
+      esphomeProxy: ble.esphome_proxy as never,
+      config: { users: [{}], scale: {}, runtime: {}, ble } as never,
+    });
+    const bundle = await buildReadingSource(ctx, ADAPTERS, 10, 30);
+
+    const signal = new AbortController().signal;
+    void bundle.source.nextReading(signal).catch(() => {});
+    expect(h.raceWithLiveness).toHaveBeenLastCalledWith(plan.watcher, 30 * 60_000, signal);
+
+    ble.proxy_liveness_timeout_min = 5;
+    void bundle.source.nextReading(signal).catch(() => {});
+    expect(h.raceWithLiveness).toHaveBeenLastCalledWith(plan.watcher, 5 * 60_000, signal);
   });
 
   it('watchdog trip: sets exit code 1 and aborts the app', async () => {

@@ -21,7 +21,12 @@ export function createExporters(config: ExporterConfig): Exporter[] {
   for (const name of config.exporters) {
     switch (name) {
       case 'garmin':
-        exporters.push(new GarminExporter({ weight_only: config.garmin?.weightOnly }));
+        exporters.push(
+          new GarminExporter({
+            weight_only: config.garmin?.weightOnly,
+            upload_timeout_sec: config.garmin?.uploadTimeoutSec,
+          }),
+        );
         break;
       case 'mqtt':
         exporters.push(new MqttExporter(config.mqtt!));

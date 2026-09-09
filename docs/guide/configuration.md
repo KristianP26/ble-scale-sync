@@ -65,6 +65,27 @@ Two consequences worth knowing:
 
 If you prefer manual configuration, here's the full reference. See [`config.yaml.example`](https://github.com/KristianP26/ble-scale-sync/blob/main/config.yaml.example) for an annotated template.
 
+### File version
+
+```yaml
+version: 1
+```
+
+| Field     | Required | Default | Description                                                        |
+| --------- | -------- | ------- | ------------------------------------------------------------------ |
+| `version` | Yes      | (none)  | Config schema version. Must be `1`; loading fails without this key |
+
+The wizard writes it for you. A hand-written file that omits it fails validation, and the error opens with this key:
+
+```
+Configuration error in config.yaml:
+
+  version
+    Invalid input: expected 1
+```
+
+Every problem is reported in one pass, so a file missing several required fields lists them all at once.
+
 ### BLE
 
 ```yaml
@@ -88,13 +109,14 @@ ble:
 | `noble_driver`               | No                          | OS default     | `abandonware` or `stoprocent`. Overrides the default BLE driver. Only applies when `handler: auto`.                                                                                                                                                                                        |
 | `adapter`                    | No                          | System default | Linux only. Select a specific Bluetooth adapter (e.g., `hci0`, `hci1`). See below.                                                                                                                                                                                                         |
 | `force_scale_adapter`        | No                          | Auto-detect    | Name of the scale protocol adapter to use, bypassing auto-detection. Requires `scale_mac`. See below.                                                                                                                                                                                      |
-| `session_timeout_sec`        | No                          | `120`          | Seconds of scale silence that end a GATT session (5 to 600); an inbound frame restarts the clock. Native BLE handlers only; ignored on `mqtt-proxy` and `esphome-proxy`. See below.                                                                                                        |
+| `session_timeout_sec`        | No                          | `120`          | Seconds of scale silence that end a GATT session (5 to 600); an inbound frame restarts the clock. A session also ends after three times this value even if frames keep arriving, so a chatty scale cannot hold the radio forever, and a whole scan cycle is capped at 15 minutes regardless. Native BLE handlers only; ignored on `mqtt-proxy` and `esphome-proxy`. See below.                                                                                                        |
 | `qn_protocol_byte`           | No                          | Auto           | QN-family scales only. Protocol byte the handshake echoes back to the scale (0 to 255). Set it when a QN scale runs the whole handshake and then reports nothing, or when its scale-info frame is lost in transit on a proxy transport. See below.                                         |
 | `qn_report_byte`             | No                          | Per dialect    | QN-family scales only. Payload byte of the history-response frame (0 to 255). Defaults to `252` (0xFC) on the long-frame dialects (es26m and extended) and `254` (0xFE) on the classic one. Try the other value if your scale completes the handshake and then reports nothing. See below. |
 | `auto_clear_stale_bond`      | No                          | `false`        | Delete a pairing key the scale has forgotten and pair again. Bonded scales only (Beurer BF7xx / BF9xx), node-ble transport only. See below.                                                                                                                                                |
 | `qn_weight_ack`              | No                          | Per dialect    | QN-family scales only. Answer every live weight frame with its own weight, as the vendor app does. On by default on the 20-byte extended dialect. Try `true` if your QN scale completes the handshake and then streams nothing. See below.                                                 |
 | `qn_a4_prelude`              | No                          | `false`        | QN-family scales only. Send the two undecoded `0xA4` frames an Arboleaf vendor app sends between START and the first weight frame. Off by default. Try `true` only if `qn_weight_ack` did not help and your scale still goes silent right after START. See below.                          |
 | `qn_time_sync_long`          | No                          | `false`        | QN-family scales only. Send the 9-byte form of the `0x20` time-sync frame that an Arboleaf vendor app sends, instead of the 8-byte one. Off by default; the extra byte is undecoded. See below.                                                                                            |
+| `qn_config_long`             | No                          | `false`        | QN-family scales only. Send the 10-byte form of the `0x13` config frame the vendor app sends, instead of the 9-byte one. Off by default; the extra bytes are undecoded. See below.                                                                                                         |
 | `proxy_liveness_timeout_min` | No                          | `30`           | Minutes of total advertisement silence before a proxy transport is treated as wedged and the process exits for the supervisor to restart. `0` disables. Proxy transports only. See below.                                                                                                  |
 | `mqtt_proxy`                 | If `handler: mqtt-proxy`    | (none)         | MQTT proxy connection (`broker_url`, `device_id`, `topic_prefix`, `username`, `password`, `auto_connect`, `embedded_broker_*`). See [ESP32 BLE Proxy](./esp32-proxy).                                                                                                                      |
 | `esphome_proxy`              | If `handler: esphome-proxy` | (none)         | ESPHome Native API connection (`host`, `port`, `encryption_key` or `password`, `client_info`). See [ESPHome Bluetooth Proxy](./esphome-proxy).                                                                                                                                             |
@@ -234,6 +256,25 @@ ble-scale-sync   20 08 ff a1 aa 22 32 c6
 Both close under the same checksum rule, and both carry the same little-endian timestamp in the same position, 40 minutes apart on the capture day. The entire difference is one `0x08` before the checksum, and what it selects is not known. Turning this on sends the longer frame.
 
 Try it on its own, not together with `qn_a4_prelude` or `qn_weight_ack`. Changing two things at once makes the result unreadable, which is the whole reason these are separate switches.
+
+And if that is also silent, there is one last difference, the only one left between this app's start-up conversation and the vendor app's:
+
+```yaml
+ble:
+  qn_config_long: true
+```
+
+The settings frame sent right after the scale announces itself is 10 bytes on the app side and 9 bytes here. Two independent captures of two different scales agree on the length:
+
+```
+vendor app       13 0a ff 01 10 00 00 02 00 2f
+second capture   13 0a ff 01 10 00 00 00 fa 27
+ble-scale-sync   13 09 ff 01 10 00 00 00    2c
+```
+
+All three close under the same checksum rule and the first seven bytes are identical, so the whole difference is the pair before the checksum. The two captures disagree on its value, which rules out a constant, so what gets sent here is the vendor app's own pair. What it selects is not known.
+
+Once each option has been tried on its own and none of them worked, trying them together is the reasonable next step: the capture shows the vendor app sending all of them in the same session, so it is possible the scale wants the whole sequence rather than any single frame.
 
 With debug on, the swap is named:
 
@@ -403,6 +444,40 @@ scale:
 | `weight_unit` | No       | `kg`    | `kg` or `lbs`. Display only; calculations always use kg. |
 | `height_unit` | No       | `cm`    | `cm` or `in`. Used for height input in user profiles.    |
 
+### Unknown user
+
+```yaml
+unknown_user: nearest # nearest | log | ignore
+```
+
+| Field          | Required | Default   | Description                                                                    |
+| -------------- | -------- | --------- | ------------------------------------------------------------------------------ |
+| `unknown_user` | No       | `nearest` | What to do with a reading that matches no user's `weight_range`                 |
+
+- `nearest` attributes it to the user whose configured `weight_range` has the closest **midpoint** and exports normally.
+- `log` records it and exports nothing.
+- `ignore` drops it silently.
+
+In practice this setting is rarely reached. With one user, that user always matches, so it never applies at all. With several, the matcher first falls back to whoever's `last_known_weight` is closest to the reading, and that always returns somebody, so `nearest` and its two alternatives only come into play when no user has a remembered weight yet.
+
+Whether such a reading is exported at all is decided by `out_of_range` below, not here. Both are hot-reloadable. Full detail, including how matching works: [Multi-User Support](/multi-user).
+
+### Out-of-range readings
+
+```yaml
+out_of_range: warn # warn | skip
+```
+
+| Field          | Required | Default | Description                                                                           |
+| -------------- | -------- | ------- | ------------------------------------------------------------------------------------- |
+| `out_of_range` | No       | `warn`  | What to do with a reading no user's `weight_range` covers. `skip` stops before export |
+
+`weight_range` is a matching input, not a guard. A reading outside every configured range still resolves to somebody: with one user because that user always matches, and with several because the app falls back to whoever's `last_known_weight` is closest. It is then exported like any other reading.
+
+That matters when the scale reports something implausible. Standing on it holding a heavy bag can produce a reading tens of kilos out, and because it is exported, `last_known_weight` is rewritten from it. The next genuine weigh-in is then matched against a wrong remembered weight, so in a two-person household it can be attributed to the other person and lost.
+
+Setting `skip` stops such a reading before the exporters and before the `last_known_weight` write. It is logged either way. The default stays `warn` so no existing setup silently starts discarding measurements after an update, but `skip` is the better setting for a multi-user household. This is hot-reloadable, like `unknown_user`.
+
 ### Users
 
 At least one user is required. For multi-user setups, see [Multi-User Support](/multi-user).
@@ -418,21 +493,21 @@ users:
     weight_range: { min: 50, max: 75 }
 ```
 
-| Field                      | Required | Default        | Description                                                                             |
-| -------------------------- | -------- | -------------- | --------------------------------------------------------------------------------------- |
-| `name`                     | Yes      | (none)         | Display name                                                                            |
-| `slug`                     | No       | Auto-generated | Unique ID (lowercase, hyphens) for MQTT topics, InfluxDB tags                           |
-| `height`                   | Yes      | (none)         | Height in configured unit                                                               |
-| `birth_date`               | Yes      | (none)         | ISO date (`YYYY-MM-DD`)                                                                 |
-| `gender`                   | Yes      | (none)         | `male` or `female`                                                                      |
-| `is_athlete`               | No       | `false`        | Adjusts [body composition](/body-composition#athlete-mode) formulas                     |
-| `weight_range`             | No       | (none)         | `{ min, max }` in kg. Required for [multi-user](/multi-user) deployments                |
-| `last_known_weight`        | No       | `null`         | Auto-updated after each measurement. Also used as the weight anchor some scales expect  |
-| `exporters`                | No       | (none)         | [Per-user exporter](/multi-user#per-user-exporters) overrides                           |
-| `beurer_pin`               | Beurer   | (none)         | Consent code the Beurer BF7xx / BF9xx scale was paired with                             |
-| `beurer_user_index`        | No       | `1`            | Scale user slot the consent code belongs to                                             |
-| `beurer_provision`         | No       | `false`        | Write this profile into a Beurer scale that has no stored user                          |
-| `beurer_register_new_user` | No       | `false`        | Create a new user record on the scale instead of consenting to one. One-shot; see below |
+| Field                      | Required | Default | Description                                                                                                                                                                                                 |
+| -------------------------- | -------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                     | Yes      | (none)  | Display name                                                                                                                                                                                                |
+| `slug`                     | Yes      | (none)  | Unique ID (lowercase, hyphens) for MQTT topics, InfluxDB tags. The wizard fills it in from the name, and `setup --non-interactive` does the same for a file that has one missing; otherwise set it yourself |
+| `height`                   | Yes      | (none)  | Height in configured unit                                                                                                                                                                                   |
+| `birth_date`               | Yes      | (none)  | ISO date (`YYYY-MM-DD`)                                                                                                                                                                                     |
+| `gender`                   | Yes      | (none)  | `male` or `female`                                                                                                                                                                                          |
+| `is_athlete`               | Yes      | (none)  | `true` or `false`. Adjusts [body composition](/body-composition#athlete-mode) formulas                                                                                                                      |
+| `weight_range`             | Yes      | (none)  | `{ min, max }` in kg. Also the matching input for [multi-user](/multi-user) setups                                                                                                                          |
+| `last_known_weight`        | No       | `null`  | Auto-updated after each measurement. Also used as the weight anchor some scales expect                                                                                                                      |
+| `exporters`                | No       | (none)  | [Per-user exporter](/multi-user#per-user-exporters) overrides                                                                                                                                               |
+| `beurer_pin`               | Beurer   | (none)  | Consent code the Beurer BF7xx / BF9xx scale was paired with                                                                                                                                                 |
+| `beurer_user_index`        | No       | `1`     | Scale user slot the consent code belongs to                                                                                                                                                                 |
+| `beurer_provision`         | No       | `false` | Write this profile into a Beurer scale that has no stored user                                                                                                                                              |
+| `beurer_register_new_user` | No       | `false` | Create a new user record on the scale instead of consenting to one. One-shot; see below                                                                                                                     |
 
 ### Exporters
 
@@ -451,6 +526,8 @@ Shared by all users unless a user defines their own `exporters` list. See [Expor
 runtime:
   continuous_mode: false
   scan_cooldown: 30
+  idle_rescan_delay: 5
+  retry_failed_exports: true
   dry_run: false
   debug: false
   watchdog_max_consecutive_failures: 10
@@ -460,11 +537,22 @@ runtime:
 | Field                               | Required | Default | Description                                                                                                                                                                                                                                                                                                            |
 | ----------------------------------- | -------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `continuous_mode`                   | No       | `false` | Keep scanning in a loop (for always-on deployments)                                                                                                                                                                                                                                                                    |
-| `scan_cooldown`                     | No       | `30`    | Seconds between scans (5-3600). On the native BLE handler in continuous mode, after a successful read the app sleeps at least 25 s regardless of this setting so it does not reconnect while the scale is still advertising (post-disconnect grace, [#143](https://github.com/KristianP26/ble-scale-sync/issues/143)). |
+| `scan_cooldown`                     | No       | `30`    | Seconds to wait after a SUCCESSFUL reading before scanning again (5-3600). It does not govern the wait after a cycle that found no scale - that is `idle_rescan_delay`. On the native BLE handler in continuous mode, after a successful read the app sleeps at least 25 s regardless of this setting so it does not reconnect while the scale is still advertising (post-disconnect grace, [#143](https://github.com/KristianP26/ble-scale-sync/issues/143)). |
+| `idle_rescan_delay`                 | No       | `5`     | Seconds to wait before scanning again after a cycle that found no scale while the Bluetooth adapter was healthy (0-3600). Real failures (GATT errors, a wedged controller) keep their own 5 s -> 60 s backoff. Lower it if your scale advertises only for a few seconds after you step on it. Linux/BlueZ (`node-ble`) only: the other transports cannot tell an idle scan from a failed one, so the setting has no effect there ([#398](https://github.com/KristianP26/ble-scale-sync/issues/398)). |
+| `retry_failed_exports`              | No       | `true`  | Keep a reading whose export failed and retry it on a later cycle, for up to 72 hours, 5 attempts and 50 readings. Only exporters that can record a past measurement are queued (`file`, `garmin`, `influxdb`, `intervals`, `runalyze`, `wger`); the others cannot express a past reading, so a failure there is not recoverable and is logged as such. The queue lives next to `config.yaml` as `.export-retry-queue.jsonl`, is written 0600 because it holds body composition and a user name, and is deleted when it empties. Set to `false` to write nothing to disk. |
 | `dry_run`                           | No       | `false` | Read scale + compute body comp, skip exports                                                                                                                                                                                                                                                                           |
 | `debug`                             | No       | `false` | Verbose BLE logging                                                                                                                                                                                                                                                                                                    |
 | `watchdog_max_consecutive_failures` | No       | `10`    | In continuous mode on Linux: exit after this many consecutive scan failures so Docker `restart: unless-stopped` can recover from a stuck BlueZ controller (0 = disabled). See [Troubleshooting](/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state).                                           |
 | `watch_config`                      | No       | `true`  | Auto-reload `config.yaml` on edit (continuous mode only). Set to `false` to disable and rely on `SIGHUP` only. See [Live Config Reload](/multi-user#live-config-reload).                                                                                                                                               |
+
+### Docker (accepted, unused)
+
+```yaml
+docker:
+  mode: pull # pull | build
+```
+
+Accepted by the schema so an older `config.yaml` still validates, and read by nothing. It described how the setup wizard should obtain the image, which the wizard no longer decides from the config file. Leave it or delete it; neither changes what the app does.
 
 ### Update Check
 
@@ -505,10 +593,13 @@ These environment variables always override `config.yaml` values, useful for Doc
 | `DRY_RUN`                   | `runtime.dry_run`                           |
 | `DEBUG`                     | `runtime.debug`                             |
 | `SCAN_COOLDOWN`             | `runtime.scan_cooldown`                     |
+| `BLE_HANDLER`               | `ble.handler` (see the note below)          |
 | `BLE_WATCHDOG_MAX_FAILURES` | `runtime.watchdog_max_consecutive_failures` |
 | `SCALE_MAC`                 | `ble.scale_mac`                             |
 | `NOBLE_DRIVER`              | `ble.noble_driver`                          |
 | `BLE_ADAPTER`               | `ble.adapter`                               |
+
+`BLE_HANDLER` accepts `auto`, `mqtt-proxy`, `esphome-proxy` and `ha-bluetooth`. A proxy handler is applied only when that proxy is configured in `config.yaml`; otherwise the app says so and keeps the configured handler. Any other value is reported and ignored.
 
 ::: details Legacy .env support
 If `config.yaml` doesn't exist, the app falls back to `.env` configuration. See `.env.example` in the repository. When both files exist, `config.yaml` takes priority.

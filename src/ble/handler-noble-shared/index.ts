@@ -6,7 +6,7 @@ import type {
 } from '../../interfaces/scale-adapter.js';
 import type { ScanOptions, ScanResult } from '../types.js';
 import type { RawReading } from '../shared.js';
-import { waitForRawReading } from '../shared.js';
+import { waitForRawReading, withAbandonmentCleanup } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
 import {
   bleLog,
@@ -28,6 +28,7 @@ import { connectWithRetries } from './connect.js';
 import { discoverPeripheral } from './discovery.js';
 import { broadcastScan } from './broadcast.js';
 import type { NobleHandlerDeps } from './types.js';
+import { safeName } from '../advertisement.js';
 
 export type { NobleApi, NobleHandlerDeps } from './types.js';
 
@@ -192,7 +193,7 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
           const found = resolveAdapter(info, adapters);
           if (!found) {
             throw new Error(
-              `Device found (${name}) but no adapter recognized it. ` +
+              `Device found (${safeName(name)}) but no adapter recognized it. ` +
                 `Services: [${serviceUuids.join(', ')}]. ` +
                 `Adapters: ${adapters.map((a) => a.name).join(', ')}`,
             );
@@ -203,28 +204,33 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
         bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
 
         const charMap = wrapCharacteristics(services);
+        // Held in a variable so the abandonment cleanup below can reach the
+        // same wrapper the session registered its disconnect callback on.
+        const bleDevice = wrapPeripheral(peripheral);
         // Bounded like the node-ble path (handler-node-ble/scan.ts): without
         // this the reading phase relies entirely on the peripheral eventually
         // disconnecting, so a stalled GATT session wedges the process (#283).
-        const raw = await withTimeout(
-          withIdleTimeout(
-            (onActivity) =>
-              waitForRawReading(
-                charMap,
-                wrapPeripheral(peripheral),
-                matchedAdapter,
-                profile,
-                peripheralAddress(peripheral).replace(/[:-]/g, '').toUpperCase(),
-                weightUnit,
-                onLiveData,
-                scaleAuth,
-                onActivity,
-              ),
-            readingTimeoutMs ?? RAW_READING_TIMEOUT_MS,
-            'Timed out waiting for a complete scale reading',
+        const raw = await withAbandonmentCleanup(bleDevice, () =>
+          withTimeout(
+            withIdleTimeout(
+              (onActivity) =>
+                waitForRawReading(
+                  charMap,
+                  bleDevice,
+                  matchedAdapter,
+                  profile,
+                  peripheralAddress(peripheral).replace(/[:-]/g, '').toUpperCase(),
+                  weightUnit,
+                  onLiveData,
+                  scaleAuth,
+                  onActivity,
+                ),
+              readingTimeoutMs ?? RAW_READING_TIMEOUT_MS,
+              'Timed out waiting for a complete scale reading',
+            ),
+            (readingTimeoutMs ?? RAW_READING_TIMEOUT_MS) * READING_SESSION_CAP_FACTOR,
+            'GATT session cap exceeded',
           ),
-          (readingTimeoutMs ?? RAW_READING_TIMEOUT_MS) * READING_SESSION_CAP_FACTOR,
-          'GATT session cap exceeded',
         );
 
         return raw;
@@ -279,7 +285,7 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
 
       results.push({
         address: addr,
-        name: localName || '(unknown)',
+        name: safeName(localName) || '(unknown)',
         matchedAdapter: matched?.name,
       });
     };

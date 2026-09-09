@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import type {
   AppConfig,
   UserConfig,
@@ -18,7 +21,7 @@ import type { DisplayNotifier } from '../../src/interfaces/display-notifier.js';
 
 // Capture (and suppress) log output. console.log is the sink for logger.info().
 const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-vi.spyOn(console, 'warn').mockImplementation(() => {});
+const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 vi.spyOn(console, 'error').mockImplementation(() => {});
 vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
 
@@ -103,11 +106,15 @@ const mom: UserConfig = {
   last_known_weight: 60,
 };
 
-function makeAppConfig(users: UserConfig[]): AppConfig {
+function makeAppConfig(
+  users: UserConfig[],
+  outOfRange: AppConfig['out_of_range'] = 'warn',
+): AppConfig {
   return {
     version: 1,
     scale: { weight_unit: 'kg', height_unit: 'cm' },
     unknown_user: 'nearest',
+    out_of_range: outOfRange,
     users,
     update_check: false,
   };
@@ -121,11 +128,13 @@ interface CtxOverrides {
   configSource?: AppContext['configSource'];
   configPath?: string;
   display?: DisplayNotifier;
+  outOfRange?: AppConfig['out_of_range'];
+  exportQueuePath?: string;
 }
 
 function makeCtx(users: UserConfig[], overrides: CtxOverrides = {}): AppContext {
   return {
-    config: makeAppConfig(users),
+    config: makeAppConfig(users, overrides.outOfRange),
     scaleMac: undefined,
     weightUnit: overrides.weightUnit ?? 'kg',
     dryRun: overrides.dryRun ?? false,
@@ -140,6 +149,8 @@ function makeCtx(users: UserConfig[], overrides: CtxOverrides = {}): AppContext 
     lastExportedWeights: new Map(),
     embeddedBroker: null,
     display: overrides.display,
+    retryFailedExports: overrides.exportQueuePath !== undefined,
+    exportQueuePath: overrides.exportQueuePath,
     abortApp: vi.fn(),
     setConfig: vi.fn(),
   } as AppContext;
@@ -167,6 +178,7 @@ beforeEach(() => {
   vi.mocked(updateLastKnownWeight).mockClear();
   vi.mocked(checkAndLogUpdate).mockClear();
   logSpy.mockClear();
+  warnSpy.mockClear();
 });
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -300,6 +312,40 @@ describe('processReading: multi-user', () => {
       getExportersForUser: () => [fakeExporter()],
     });
     expect(updateLastKnownWeight).toHaveBeenCalledWith('/tmp/config.yaml', 'dad', 82, 82);
+  });
+
+  it('does not write last_known_weight when every exporter failed', async () => {
+    // The anchor means "the weight we ACTUALLY exported". Writing it after a
+    // total failure poisoned the retry: the scale reconnects, replays the same
+    // frame now carrying a timestamp, and the replay dedup drops it as already
+    // synced. The weigh-in is lost with nothing left to retry from.
+    vi.mocked(dispatchExports).mockResolvedValueOnce({ success: false, details: [] });
+    const ctx = makeCtx([dad, mom], { configSource: 'yaml', configPath: '/tmp/config.yaml' });
+    const ok = await processReading(ctx, rawReading({ weight: 82, impedance: 500 }), {
+      getExportersForUser: () => [fakeExporter()],
+    });
+    expect(ok).toBe(false);
+    expect(updateLastKnownWeight).not.toHaveBeenCalled();
+  });
+
+  it('does not set the single-user replay anchor when every exporter failed', async () => {
+    vi.mocked(dispatchExports).mockResolvedValueOnce({ success: false, details: [] });
+    const ctx = makeCtx([dad]);
+    await processReading(ctx, rawReading({ weight: 82, impedance: 500 }), {
+      singleUserExporters: [fakeExporter()],
+    });
+    expect(ctx.lastExportedWeights.has('dad')).toBe(false);
+  });
+
+  // Not a regression test: this one passes with or without the fix. It is here
+  // as a guard so a later change cannot quietly stop anchoring altogether,
+  // which the two tests above would not catch (they only assert the negative).
+  it('sets the single-user replay anchor when the export succeeds', async () => {
+    const ctx = makeCtx([dad]);
+    await processReading(ctx, rawReading({ weight: 82, impedance: 500 }), {
+      singleUserExporters: [fakeExporter()],
+    });
+    expect(ctx.lastExportedWeights.get('dad')).toBe(82);
   });
 
   it('does not write last_known_weight when configSource is env', async () => {
@@ -511,5 +557,222 @@ describe('processReading: historical replay', () => {
     await processReading(ctx, rawReading({ weight: 82.5, impedance: 500 }));
     expect(ctx.lastExportedWeights.has('dad')).toBe(false);
     expect(dispatchExports).not.toHaveBeenCalled();
+  });
+});
+
+// ─── out_of_range (#395) ────────────────────────────────────────────────────
+
+/**
+ * weight_range was only ever a MATCHING input. A weight outside every range
+ * still resolved to somebody and exported: through tier 1 with one user, or
+ * through the last_known_weight proximity tier with several. The reporter's
+ * 178 kg suitcase reading reached Garmin and a retained MQTT topic, and then
+ * overwrote last_known_weight, which cost the NEXT genuine weigh-in as well.
+ */
+describe('processReading: out_of_range', () => {
+  it('multi-user: skip stops the tier-4 fallthrough before the exporters', async () => {
+    const ctx = makeCtx([dad, mom], {
+      outOfRange: 'skip',
+      configSource: 'yaml',
+      configPath: '/tmp/config.yaml',
+    });
+    const ok = await processReading(ctx, rawReading({ weight: 178, impedance: 0 }), {
+      getExportersForUser: () => [fakeExporter()],
+    });
+
+    expect(ok).toBe(true);
+    expect(dispatchExports).not.toHaveBeenCalled();
+    expect(updateLastKnownWeight).not.toHaveBeenCalled();
+  });
+
+  const warnings = (): string => warnSpy.mock.calls.map((c) => c.map(String).join(' ')).join(' | ');
+
+  it('multi-user: warn is the default and still exports, as before', async () => {
+    const ctx = makeCtx([dad, mom], {
+      configSource: 'yaml',
+      configPath: '/tmp/config.yaml',
+    });
+    await processReading(ctx, rawReading({ weight: 178, impedance: 0 }), {
+      getExportersForUser: () => [fakeExporter()],
+    });
+
+    expect(dispatchExports).toHaveBeenCalledTimes(1);
+    expect(updateLastKnownWeight).toHaveBeenCalledTimes(1);
+    // warn is not silence: the reading has to be called out even though it goes.
+    expect(warnings()).toMatch(/outside/i);
+    expect(warnings()).toMatch(/out_of_range: warn/);
+  });
+
+  it('multi-user: skip does not fire on a reading inside a range', async () => {
+    const ctx = makeCtx([dad, mom], {
+      outOfRange: 'skip',
+      configSource: 'yaml',
+      configPath: '/tmp/config.yaml',
+    });
+    await processReading(ctx, rawReading({ weight: 82.4, impedance: 500 }), {
+      getExportersForUser: () => [fakeExporter()],
+    });
+
+    expect(dispatchExports).toHaveBeenCalledTimes(1);
+    expect(updateLastKnownWeight).toHaveBeenCalledTimes(1);
+    expect(warnings()).not.toMatch(/out_of_range/);
+  });
+
+  // Tier 1 always matches, so a single-user install is the case where the
+  // range never guarded anything at all.
+  it('single-user: skip stops the always-matching tier-1 export', async () => {
+    const ctx = makeCtx([dad], { outOfRange: 'skip' });
+    const ok = await processReading(ctx, rawReading({ weight: 178, impedance: 0 }), {
+      singleUserExporters: [fakeExporter()],
+    });
+
+    expect(ok).toBe(true);
+    expect(dispatchExports).not.toHaveBeenCalled();
+    expect(ctx.lastExportedWeights.has('dad')).toBe(false);
+  });
+
+  // The single-user path never calls the matcher, so nothing else in it would
+  // ever mention the range. Without an explicit warning here, `warn` mode is
+  // silent on the one install shape where the range guarded nothing at all,
+  // while three documentation pages promise it is logged.
+  it('single-user: warn exports the reading AND says so', async () => {
+    const ctx = makeCtx([dad]);
+    await processReading(ctx, rawReading({ weight: 178, impedance: 0 }), {
+      singleUserExporters: [fakeExporter()],
+    });
+
+    expect(dispatchExports).toHaveBeenCalledTimes(1);
+    expect(ctx.lastExportedWeights.get('dad')).toBe(178);
+    expect(warnings()).toMatch(/outside Dad's range \[75-95\]/);
+    expect(warnings()).toMatch(/out_of_range: warn/);
+  });
+
+  it('a skipped reading does not even reach the update check', async () => {
+    const ctx = makeCtx([dad], { outOfRange: 'skip' });
+    await processReading(ctx, rawReading({ weight: 178, impedance: 0 }), {
+      singleUserExporters: [fakeExporter()],
+    });
+    expect(checkAndLogUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does not skip a live reading in range because a replayed frame is not', async () => {
+    const ctx = makeCtx([dad], { outOfRange: 'skip' });
+    const raw: RawReading = {
+      reading: { weight: 82.5, impedance: 500 },
+      adapter: fakeAdapter(),
+      history: [{ weight: 178, impedance: 0, timestamp: new Date('2025-07-01T07:00:00Z') }],
+    };
+    await processReading(ctx, raw, { singleUserExporters: [fakeExporter()] });
+
+    // Both frames go: the guard reads the live weight, which is the same weight
+    // the matcher used, not whatever the scale had stored from an earlier day.
+    expect(dispatchExports).toHaveBeenCalledTimes(2);
+  });
+
+  it('gates on the live weight, so a whole replay is skipped with it', async () => {
+    const ctx = makeCtx([dad], { outOfRange: 'skip' });
+    const raw: RawReading = {
+      reading: { weight: 178, impedance: 0 },
+      adapter: fakeAdapter(),
+      history: [{ weight: 82.5, impedance: 480, timestamp: new Date('2025-07-01T07:00:00Z') }],
+    };
+    await processReading(ctx, raw, { singleUserExporters: [fakeExporter()] });
+
+    expect(dispatchExports).not.toHaveBeenCalled();
+  });
+});
+
+describe('failed exports are queued for a later cycle (#412)', () => {
+  let dir: string;
+  let queuePath: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'processor-queue-'));
+    queuePath = path.join(dir, 'queue.jsonl');
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  function exporterNamed(name: string, supportsBackdate: boolean): Exporter {
+    return { name, supportsBackdate, export: vi.fn() } as unknown as Exporter;
+  }
+
+  it('queues a backdate-capable exporter, with the user it was measured for', async () => {
+    vi.mocked(dispatchExports).mockResolvedValueOnce({
+      success: false,
+      details: [{ name: 'garmin', ok: false, error: 'target down' }],
+    });
+    const ctx = makeCtx([dad], { exportQueuePath: queuePath });
+
+    await processReading(ctx, rawReading(), {
+      singleUserExporters: [exporterNamed('garmin', true)],
+    });
+
+    const lines = fs.readFileSync(queuePath, 'utf-8').trim().split(String.fromCharCode(10));
+    expect(lines).toHaveLength(1);
+    const queued = JSON.parse(lines[0]) as {
+      exporter: string;
+      userSlug?: string;
+      lastError?: string;
+      payload: { weight: number };
+    };
+    expect(queued.exporter).toBe('garmin');
+    expect(queued.userSlug).toBe(dad.slug);
+    expect(queued.lastError).toBe('target down');
+    expect(queued.payload.weight).toBe(80);
+  });
+
+  it('does not queue an exporter that cannot record a past reading', async () => {
+    vi.mocked(dispatchExports).mockResolvedValueOnce({
+      success: false,
+      details: [{ name: 'mqtt', ok: false, error: 'broker down' }],
+    });
+    const ctx = makeCtx([dad], { exportQueuePath: queuePath });
+
+    await processReading(ctx, rawReading(), {
+      singleUserExporters: [exporterNamed('mqtt', false)],
+    });
+
+    // A late MQTT publish would contradict the live retained value, so the
+    // reading is genuinely gone and the log has to say so.
+    expect(fs.existsSync(queuePath)).toBe(false);
+    const logged = [...logSpy.mock.calls, ...warnSpy.mock.calls].flat().join(' ');
+    expect(logged).toContain('not recoverable');
+  });
+
+  it('queues only the failures, not the exporters that succeeded', async () => {
+    vi.mocked(dispatchExports).mockResolvedValueOnce({
+      success: true,
+      details: [
+        { name: 'file', ok: true },
+        { name: 'garmin', ok: false, error: 'target down' },
+      ],
+    });
+    const ctx = makeCtx([dad], { exportQueuePath: queuePath });
+
+    await processReading(ctx, rawReading(), {
+      singleUserExporters: [exporterNamed('file', true), exporterNamed('garmin', true)],
+    });
+
+    const lines = fs.readFileSync(queuePath, 'utf-8').trim().split(String.fromCharCode(10));
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]).exporter).toBe('garmin');
+  });
+
+  it('writes nothing when retrying is turned off, even with a path available', async () => {
+    vi.mocked(dispatchExports).mockResolvedValueOnce({
+      success: false,
+      details: [{ name: 'garmin', ok: false, error: 'target down' }],
+    });
+    // A path AND the flag off: without both, this test could pass because the
+    // path was missing rather than because the flag was respected.
+    const ctx = { ...makeCtx([dad], { exportQueuePath: queuePath }), retryFailedExports: false };
+
+    await processReading(ctx, rawReading(), {
+      singleUserExporters: [exporterNamed('garmin', true)],
+    });
+    expect(fs.existsSync(queuePath)).toBe(false);
   });
 });

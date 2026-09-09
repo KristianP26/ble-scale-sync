@@ -101,6 +101,20 @@ export interface BleChar {
 
 export interface BleDevice {
   onDisconnect(callback: () => void): void;
+  /**
+   * Abandon this session locally, as if the peer had reported a disconnect.
+   *
+   * `waitForRawReading()` only settles on a reading, a subscribe failure or a
+   * disconnect, so a caller whose own timeout gives up abandons the promise and
+   * nothing it holds is released: the legacy unlock `setInterval` keeps writing
+   * through a dead link for the life of the process, the notify unsubscribers
+   * are never run, and `adapter.onSessionEnd()` is never called (#404).
+   *
+   * Calling this drives the existing disconnect path, so there is exactly one
+   * cleanup route rather than one per transport. Idempotent: a real disconnect
+   * arriving afterwards does nothing.
+   */
+  fireDisconnect(): void;
 }
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
@@ -222,6 +236,15 @@ function initializeAdapter(
    */
   resendUnlockAfterSubscribe: () => Promise<void>;
 } {
+  // Before anything is subscribed, so no frame can be parsed against the
+  // previous session's state. It has to be here rather than in `start()`,
+  // because `subscribeAndInit` subscribes first and calls `start` after (#394).
+  try {
+    adapter.onSessionStart?.(deviceAddress);
+  } catch (e: unknown) {
+    bleLog.debug(`Adapter onSessionStart failed: ${errMsg(e)}`);
+  }
+
   let unlockInterval: ReturnType<typeof setInterval> | null = null;
   let resendUnlock: (() => Promise<void>) | null = null;
 
@@ -349,6 +372,27 @@ function initializeAdapter(
   };
 
   return { start, cleanup, register, resendUnlockAfterSubscribe };
+}
+
+/**
+ * Run a bounded reading session and make sure an abandoned one cleans up.
+ *
+ * `withTimeout` / `withIdleTimeout` abandon the promise they raced rather than
+ * cancelling it, so when they win, `waitForRawReading()` is left running with
+ * its unlock interval, its notify subscriptions and the adapter's session state
+ * all live. Firing the disconnect drives the one cleanup path that already
+ * exists instead of giving every transport its own (#404).
+ */
+export async function withAbandonmentCleanup<T>(
+  bleDevice: BleDevice,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    bleDevice.fireDisconnect();
+    throw err;
+  }
 }
 
 /** Subscribe to notifications in multi-char or legacy mode, then start adapter init. */
@@ -514,6 +558,7 @@ export function waitForRawReading(
     const finishWith = (r: ScaleReading): void => {
       resolved = true;
       hold.clear();
+      clearCaptureHold();
       init.cleanup();
       process.stdout.write('\r' + ' '.repeat(80) + '\r');
       bleLog.info(`Reading complete: ${r.weight.toFixed(2)} kg / ${r.impedance} Ohm`);
@@ -522,9 +567,12 @@ export function waitForRawReading(
 
     // Armed only for adapters with completionHoldMs; the hold() call below is
     // gated on it, so a 0 ms timer is never started for other adapters.
-    const hold = new HoldTimer(adapter.completionHoldMs ?? 0, (r) => {
-      if (!resolved) finishWith(r);
-    });
+    const hold = new HoldTimer(
+      () => adapter.completionHoldMs ?? 0,
+      (r) => {
+        if (!resolved) finishWith(r);
+      },
+    );
 
     // Raw frame capture (#211): log every notify frame and hold the connection
     // open past weight-stable so trailing frames (e.g. the Beurer/Sanitas 0x59
@@ -669,6 +717,10 @@ export function waitForRawReading(
         resolve({ reading: r, adapter, history: undefined });
         return;
       }
+      // Latch before cleaning up. Without this a notification arriving after an
+      // abandoned session is still parsed, and the capture/hold timers above
+      // would treat the session as live.
+      resolved = true;
       init.cleanup();
       reject(new Error('Scale disconnected before reading completed'));
     });
@@ -684,6 +736,11 @@ export function waitForRawReading(
       init.register,
     ).catch((e) => {
       if (!resolved) {
+        // Latch, like the other settle paths. Without it a fireDisconnect()
+        // from the caller's abandonment cleanup walks the whole disconnect
+        // cascade again and can log "Reading complete" for a session whose
+        // init failed, if a frame happened to arrive before the failure.
+        resolved = true;
         hold.clear();
         clearCaptureHold();
         init.cleanup();

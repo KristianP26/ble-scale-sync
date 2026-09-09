@@ -120,3 +120,20 @@ describe('withIdleTimeout()', () => {
     }
   });
 });
+
+describe('normalizeUuid, the only one (#406)', () => {
+  it('expands 16-bit, 32-bit and braced forms to the same 32-char value', () => {
+    const canonical = '0000fff400001000800000805f9b34fb';
+    expect(normalizeUuid('fff4')).toBe(canonical);
+    expect(normalizeUuid('FFF4')).toBe(canonical);
+    expect(normalizeUuid('0000fff4-0000-1000-8000-00805f9b34fb')).toBe(canonical);
+    expect(normalizeUuid('{0000FFF4-0000-1000-8000-00805F9B34FB}')).toBe(canonical);
+    // 32-bit: this case used to be handled by three of the five copies and not
+    // by the canonical one, which is why the copies existed.
+    expect(normalizeUuid('0000fff4')).toBe(canonical);
+  });
+
+  it('returns the undashed form, which is what every comparison in the project uses', () => {
+    expect(normalizeUuid('181b')).not.toContain('-');
+  });
+});

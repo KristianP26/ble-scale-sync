@@ -224,6 +224,26 @@ export const BleSchema = z
      */
     qn_time_sync_long: z.boolean().optional().nullable(),
     /**
+     * Send the 10-byte form of the QN 0x13 config frame (#331).
+     *
+     * Two independent captures show the vendor app sending ten bytes where this
+     * app sends nine:
+     *
+     *   app (#235 GE CS 10 G)   13 0a ff 01 10 00 00 02 00 2f
+     *   hedoric capture (#235)  13 0a ff 01 10 00 00 00 fa 27
+     *   ble-scale-sync          13 09 ff 01 10 00 00 00    2c
+     *
+     * Bytes [0..6] are identical and all three close under the family checksum,
+     * so the whole difference is the pair at [7..8]. Its meaning is NOT decoded
+     * and the two captures disagree on its value, so the app's own pair is
+     * replayed rather than derived.
+     *
+     * Off by default and opt-in per install, for the same reason as
+     * `qn_a4_prelude` and `qn_time_sync_long`: every QN scale in the registry
+     * reads today on the 9-byte form, and a wrong value here fails silently.
+     */
+    qn_config_long: z.boolean().optional().nullable(),
+    /**
      * Delete a bond the scale has forgotten and pair again, instead of stopping
      * at the diagnostic (#290, #335).
      *
@@ -366,6 +386,33 @@ export const RuntimeSchema = z.object({
    * deploys are preferred. Default true.
    */
   watch_config: z.boolean().default(true),
+  /**
+   * Seconds to wait after a continuous-mode cycle that found no scale, when the
+   * radio itself is healthy (`bleFailureKind === 'idle'`).
+   *
+   * Idle cycles used to go through the same exponential failure backoff as a
+   * dead radio, so a house where nobody had stepped on the scale reached the
+   * 60 s cap within five cycles and then spent a minute per cycle not
+   * listening. A scale that only advertises while somebody is standing on it
+   * can weigh in entirely inside that window (#398).
+   *
+   * Real failures - GATT errors, a wedged controller - keep the 5 s -> 60 s
+   * backoff, which is the right thing for those.
+   */
+  idle_rescan_delay: z.number().int().min(0).max(3600).default(5),
+  /**
+   * Keep a reading whose export failed and retry it on a later cycle (#412).
+   *
+   * On by default. The failure it covers is silent and total: a cloud target
+   * that is down for an hour loses the weigh-in with no artefact anywhere, and
+   * a reporter lost four that way in a week. Bounded at 72 hours, 5 attempts
+   * and 50 entries, and only for exporters that can record a past reading.
+   *
+   * Turning it off restores the previous behaviour exactly, including writing
+   * nothing to disk. See ADR D014: this persists body composition and a user
+   * name by default, which is why it is a decision and not just a flag.
+   */
+  retry_failed_exports: z.boolean().default(true),
 });
 
 export const DockerSchema = z.object({
@@ -377,6 +424,25 @@ export const AppConfigSchema = z.object({
   ble: BleSchema.optional(),
   scale: ScaleSchema.default({ weight_unit: 'kg', height_unit: 'cm' }),
   unknown_user: z.enum(['nearest', 'log', 'ignore']).default('nearest'),
+  /**
+   * What to do with a reading that no configured user's `weight_range` covers.
+   *
+   * `warn` (default) is the behaviour every install has had: log it and export
+   * it anyway. `skip` stops before the exporters and before the
+   * `last_known_weight` write.
+   *
+   * The distinction matters because `weight_range` was only ever a MATCHING
+   * input, never a guard. A reading nobody's range covers still resolves to
+   * somebody, through the single-user tier or the `last_known_weight` proximity
+   * tier, and then exports normally. A reporter stood on the scale holding a
+   * suitcase, got 178 kg at 0 ohm, and it went to Garmin and to a retained MQTT
+   * topic. Worse, `last_known_weight` was rewritten to 178, so the NEXT genuine
+   * weigh-in tie-broke to the other user and was dropped (#395).
+   *
+   * The default stays `warn` so no existing install silently starts discarding
+   * readings, but `skip` is the safer setting for a multi-user household.
+   */
+  out_of_range: z.enum(['warn', 'skip']).default('warn'),
   users: z.array(UserSchema).min(1, 'At least one user is required'),
   global_exporters: z.array(ExporterEntrySchema).optional(),
   runtime: RuntimeSchema.optional(),
@@ -401,6 +467,7 @@ export type RuntimeConfig = z.infer<typeof RuntimeSchema>;
 export type DockerConfig = z.infer<typeof DockerSchema>;
 export type AppConfig = z.infer<typeof AppConfigSchema>;
 export type UnknownUserStrategy = AppConfig['unknown_user'];
+export type OutOfRangeStrategy = AppConfig['out_of_range'];
 
 // --- Error formatting ---
 

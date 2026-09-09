@@ -1,15 +1,16 @@
 import type { RawReading } from '../ble/shared.js';
-import type { Exporter, ExportContext } from '../interfaces/exporter.js';
+import type { Exporter, ExportContext, ExportResultDetail } from '../interfaces/exporter.js';
 import type { BodyComposition, ScaleReading } from '../interfaces/scale-adapter.js';
 import type { WeightUnit, UserConfig } from '../config/schema.js';
 import type { AppContext } from './context.js';
 import { resolveUserProfile } from '../config/resolve.js';
-import { matchUserByWeight, detectWeightDrift } from '../config/user-matching.js';
+import { matchUserByWeight, detectWeightDrift, isOutOfRange } from '../config/user-matching.js';
 import { updateLastKnownWeight } from '../config/write.js';
 import { dispatchExports } from '../orchestrator.js';
 import { createLogger } from '../logger.js';
 import { checkAndLogUpdate } from '../update-check.js';
 import { fmtWeight } from './format.js';
+import { enqueue } from './export-queue.js';
 
 const log = createLogger('Sync');
 
@@ -66,6 +67,56 @@ export interface ProcessReadingOpts {
  * Returns true if export succeeded (or was skipped via dry-run / unknown-user
  * strategy), false on dispatch failure.
  */
+/**
+ * Persist a failed export so a later cycle can deliver it (#412).
+ *
+ * Only exporters that accept a backdated reading are queued. The others cannot
+ * express "this happened on Tuesday" at all, so a late delivery would put a
+ * stale number in front of the user as if it were current: a retained MQTT
+ * topic contradicting the live one, or a push notification about a weigh-in
+ * from yesterday. For those the reading is genuinely gone, and the log says so
+ * rather than leaving the user to infer it.
+ */
+function queueFailedExports(
+  ctx: AppContext,
+  exporters: Exporter[],
+  payload: BodyComposition,
+  context: ExportContext,
+  details: ExportResultDetail[],
+): void {
+  const failed = details.filter((d) => !d.ok);
+  if (failed.length === 0) return;
+
+  const byName = new Map(exporters.map((e) => [e.name, e]));
+  const unrecoverable: string[] = [];
+
+  for (const detail of failed) {
+    const exporter = byName.get(detail.name);
+    if (!exporter?.supportsBackdate) {
+      unrecoverable.push(detail.name);
+      continue;
+    }
+    if (!ctx.retryFailedExports || !ctx.exportQueuePath) continue;
+    enqueue(ctx.exportQueuePath, {
+      exporter: detail.name,
+      payload,
+      ...(context.timestamp ? { timestamp: context.timestamp.toISOString() } : {}),
+      ...(context.userName ? { userName: context.userName } : {}),
+      ...(context.userSlug ? { userSlug: context.userSlug } : {}),
+      queuedAt: new Date().toISOString(),
+      attempts: 0,
+      ...(detail.error ? { lastError: detail.error } : {}),
+    });
+  }
+
+  if (unrecoverable.length > 0) {
+    log.warn(
+      `${unrecoverable.join(', ')} cannot record a past reading, so this measurement ` +
+        `is not recoverable for ${unrecoverable.length > 1 ? 'those targets' : 'that target'}.`,
+    );
+  }
+}
+
 export async function processReading(
   ctx: AppContext,
   raw: RawReading,
@@ -106,8 +157,11 @@ function frameTag(prefix: string, timestamp: Date | undefined): string {
  * `checkAndLogUpdate` for the cycle.
  *
  * Returns the success of the last (live) dispatch and the payload of that
- * dispatch (`null` if every frame was deduped or skipped via dry-run), which the
- * caller uses to gate the dedup-anchor / last_known_weight write.
+ * dispatch, which the caller uses to gate the dedup-anchor / last_known_weight
+ * write. The payload is `null` when every frame was deduped, when dry-run
+ * skipped the export, AND when the export ran but every exporter failed - the
+ * anchor means "the weight we actually exported", so a total failure must not
+ * move it.
  */
 async function processReadingFrames(
   ctx: AppContext,
@@ -158,8 +212,6 @@ async function processReadingFrames(
       continue;
     }
 
-    if (isLast) latestPayload = payload;
-
     if (isLast) {
       // notifyReading uses raw scale values (pre-computeMetrics) so the display
       // mirrors what the scale measured; notifyResult uses the computed payload.
@@ -182,14 +234,74 @@ async function processReadingFrames(
     };
 
     const { success, details } = await dispatchExports(exporters!, payload, context);
+    queueFailedExports(ctx, exporters!, payload, context, details);
 
     if (isLast) {
       ctx.display?.result(user.slug, user.name, payload.weight, details);
       lastSuccess = success;
+      // Both things this gates - the runtime replay anchor and the persisted
+      // last_known_weight - mean "the weight we ACTUALLY exported". Setting it
+      // before the dispatch made a total export failure poison the next
+      // attempt: the scale reconnects, replays the same frame now carrying a
+      // timestamp, and the dedup above drops it as already synced. The weigh-in
+      // is then lost with nothing to retry from. dispatchExports returns false
+      // only when EVERY exporter failed, so a partial success still anchors.
+      if (success) latestPayload = payload;
     }
   }
 
   return { lastSuccess, latestPayload };
+}
+
+/**
+ * Stop a reading nobody's `weight_range` vouches for, when asked to.
+ *
+ * `weight_range` was only ever a MATCHING input. A weight outside every range
+ * still resolves to somebody, through the single-user tier that always matches
+ * or through the `last_known_weight` proximity tier, and then exports like any
+ * other reading. A reporter stood on the scale holding a suitcase, got
+ * 178 kg at 0 ohm, and it reached Garmin and a retained MQTT topic. The lasting
+ * damage was `last_known_weight` being rewritten to 178, which then tie-broke
+ * the NEXT genuine weigh-in to the wrong user and dropped it (#395).
+ *
+ * Gated on the LATEST reading, the same weight the matcher used, and it stops
+ * the whole reading rather than filtering frames. `raw.history` is a replay of
+ * records the scale stored earlier, so a mixed batch is possible in principle;
+ * dropping the batch on the live weight keeps the decision aligned with the one
+ * the matcher already made about who this reading belongs to.
+ *
+ * `warn` still logs. Multi-user gets a warning from the matcher on its way here,
+ * but the single-user path never calls the matcher at all, so without this an
+ * out-of-range reading would go out with no output whatsoever, which is not what
+ * `warn` says on the tin.
+ *
+ * Returns true when the caller should stop. Callers then return `true`, not
+ * because anything treats that as success, but because in single-run mode
+ * `run.ts` exits 1 on false and a deliberate skip is not a failure. In
+ * continuous mode the return value is discarded entirely.
+ */
+function skipOutOfRange(
+  ctx: AppContext,
+  user: UserConfig,
+  weight: number,
+  prefix: string,
+): boolean {
+  if (!isOutOfRange(user, weight)) return false;
+  const p = prefix ? `${prefix} ` : '';
+  const range = `${user.name}'s range [${user.weight_range.min}-${user.weight_range.max}] kg`;
+  if (ctx.config.out_of_range !== 'skip') {
+    log.warn(
+      `${p}${fmtWeight(weight, ctx.weightUnit)} is outside ${range}. ` +
+        'Exporting it anyway (out_of_range: warn). Set out_of_range: skip to drop it instead.',
+    );
+    return false;
+  }
+  log.warn(
+    `${p}Skipping ${fmtWeight(weight, ctx.weightUnit)}: outside ${range} ` +
+      '(out_of_range: skip). Not exported, and last_known_weight is left alone.',
+  );
+  ctx.display?.beep(600, 150, 3);
+  return true;
 }
 
 async function processSingleUser(
@@ -199,6 +311,10 @@ async function processSingleUser(
 ): Promise<boolean> {
   const user = ctx.config.users[0];
   const all = expandReadings(raw);
+
+  // Before the update check and before any export, so a skipped reading leaves
+  // nothing behind but the log line and the error beep.
+  if (skipOutOfRange(ctx, user, all[all.length - 1].weight, '')) return true;
 
   checkAndLogUpdate(ctx.config.update_check);
 
@@ -253,6 +369,13 @@ async function processMultiUser(
 
   const user = match.user;
   const prefix = `[${user.name}]`;
+
+  // Before the "Matched" line, the beep, the exporters and the
+  // last_known_weight write. A match is not an endorsement of the weight: tier 4
+  // in particular matches by proximity to a remembered weight, not by any range
+  // containing this one (#395).
+  if (skipOutOfRange(ctx, user, matchWeight, prefix)) return true;
+
   log.info(`${prefix} Matched (tier: ${match.tier})`);
 
   // Update check fires once per matched cycle, independent of replay dedup.
@@ -282,8 +405,8 @@ async function processMultiUser(
   );
 
   // last_known_weight stores the raw scale value, not the computed payload.
-  // latestPayload is set only after a non-dry export on the last reading,
-  // so dry-run is already excluded here.
+  // latestPayload is set only after a SUCCEEDING non-dry export on the last
+  // reading, so both dry-run and a total export failure are excluded here.
   if (latestPayload && ctx.configSource === 'yaml' && ctx.configPath) {
     updateLastKnownWeight(ctx.configPath, user.slug, latest.weight, previousLastKnown);
   }

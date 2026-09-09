@@ -9,8 +9,14 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
-import { bleLog } from '../ble/types.js';
+import {
+  uuid16,
+  buildPayload,
+  type ScaleBodyComp,
+  ReadingComposition,
+} from './body-comp-helpers.js';
+import { bleLog, LBS_TO_KG } from '../ble/types.js';
+import { parseSigDateTime, parseSigWeightMeasurement } from './sig-wss.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
 // ─── Beurer SIG-standard adapter (BF720, BF105) ─────────────────────────────
@@ -159,9 +165,6 @@ const UCP_RESULTS: Record<number, string> = {
  */
 const HISTORY_MAX_AGE_MS = 5 * 60_000;
 
-/** SIG mass fields are in lb when the frame's unit flag is set. */
-const LBS_TO_KG = 0.453592;
-
 interface CachedComp {
   fat?: number; // %
   muscle?: number; // %
@@ -258,10 +261,11 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
    */
   private readonly warnedFields = new Set<string>();
   /**
-   * Composition as it stood when each reading was emitted. Weak so buffered
-   * history readings do not pin memory once the processor drops them.
+   * Composition pinned to the reading it was measured with (#394). See
+   * ReadingComposition for why computeMetrics cannot read the live cache on
+   * the watcher transports.
    */
-  private readonly compByReading = new WeakMap<ScaleReading, CachedComp>();
+  private readonly compByReading = new ReadingComposition<CachedComp>();
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
@@ -327,6 +331,34 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     );
   }
 
+  /**
+   * Clear the previous weigh-in before anything is subscribed (#394).
+   *
+   * These all used to sit in `onConnected`, which is too late twice over. It is
+   * a multi-char adapter, so `subscribeAndInit` enables EVERY notify binding
+   * and only then awaits `startInit()` - the hazard this file already
+   * documents on `cachedComp` below. And `onConnected` throws on a missing
+   * consent PIN before it reaches the resets at all, so a PIN-less session
+   * left every flag exactly as the previous one had it.
+   *
+   * `session`, `ctx` and the three `scaleAuth`-derived fields stay in
+   * `onConnected`: they are not state to clear but values to capture, and the
+   * context they come from does not exist yet at this point.
+   */
+  onSessionStart(): void {
+    this.cachedWeight = 0;
+    this.cachedTimestamp = undefined;
+    this.cachedComp = {};
+    this.profileSyncDone = false;
+    this.userSlotsSeen = 0;
+    this.userListAnswered = false;
+    this.emptyListReported = false;
+    this.consentAccepted = false;
+    this.consentAnswered = false;
+    this.consentSent = false;
+    this.readingEmitted = false;
+  }
+
   async onConnected(ctx: ConnectionContext): Promise<void> {
     const required = [CHR_WEIGHT_MEASUREMENT, CHR_BODY_COMPOSITION, CHR_USER_CONTROL_POINT];
     const missing = required.filter((u) => !ctx.availableChars.has(u));
@@ -348,23 +380,11 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     }
     const userIndex = ctx.scaleAuth?.userIndex ?? 1;
 
-    // Reset per-connection state (adapter instance is shared across sessions).
-    this.cachedWeight = 0;
-    this.cachedTimestamp = undefined;
-    this.cachedComp = {};
     this.session += 1;
     this.ctx = ctx;
-    this.profileSyncDone = false;
     this.userIndex = userIndex;
     this.registerNewUser = ctx.scaleAuth?.registerNewUser === true;
     this.provision = ctx.scaleAuth?.provision === true;
-    this.userSlotsSeen = 0;
-    this.userListAnswered = false;
-    this.emptyListReported = false;
-    this.consentAccepted = false;
-    this.consentAnswered = false;
-    this.consentSent = false;
-    this.readingEmitted = false;
 
     await ctx.write(CHR_CURRENT_TIME, this.buildCurrentTime(), true);
 
@@ -747,22 +767,6 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     this.cachedComp = {};
   }
 
-  /** Decode a 7-byte SIG timestamp; return undefined on a zero/invalid date. */
-  private parseTimestamp(data: Buffer, offset: number): Date | undefined {
-    if (offset + 7 > data.length) return undefined;
-    const year = data.readUInt16LE(offset);
-    if (year === 0) return undefined;
-    const d = new Date(
-      year,
-      data[offset + 2] - 1,
-      data[offset + 3],
-      data[offset + 4],
-      data[offset + 5],
-      data[offset + 6],
-    );
-    return Number.isNaN(d.getTime()) ? undefined : d;
-  }
-
   /**
    * Only timestamps older than the freshness window mark a reading as
    * historical. A live weigh-in is stamped "now" and must resolve immediately
@@ -773,25 +777,20 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     return Date.now() - ts.getTime() > HISTORY_MAX_AGE_MS ? ts : undefined;
   }
 
-  /** Weight Measurement 0x2A9D. */
+  /**
+   * Weight Measurement 0x2A9D, decoded by the shared SIG decoder.
+   *
+   * The kg/lb rule lives in the decoder because `normalizesWeight = true` makes
+   * it a correctness requirement rather than a preference. What stays here is
+   * the caching rule: a zero or non-finite weight must not overwrite a weight
+   * this session already has, because the scale sends zeroed frames of its own.
+   */
   private parseWeightMeasurement(data: Buffer): void {
-    if (data.length < 3) return;
-    const flags = data[0];
-    const isKg = (flags & 0x01) === 0;
-    const hasTimestamp = (flags & 0x02) !== 0;
-
-    // `normalizesWeight = true` promises the shared layer that whatever comes
-    // out of here is already kg, so it skips its own conversion. An lb frame
-    // (flags bit 0) must therefore be converted here or pounds are exported as
-    // kilograms, a 2.2x error. The sibling standard-gatt adapter, which parses
-    // these identical SIG frames, has always done this.
-    const weight = data.readUInt16LE(1) * (isKg ? 0.005 : 0.01 * LBS_TO_KG);
-    if (weight > 0 && Number.isFinite(weight)) this.cachedWeight = weight;
-
-    if (hasTimestamp) {
-      const ts = this.parseTimestamp(data, 3);
-      if (ts) this.cachedTimestamp = ts;
+    const { weightKg, timestamp } = parseSigWeightMeasurement(data);
+    if (weightKg !== undefined && weightKg > 0 && Number.isFinite(weightKg)) {
+      this.cachedWeight = weightKg;
     }
+    if (timestamp) this.cachedTimestamp = timestamp;
   }
 
   /** Body Composition Measurement 0x2A9C. */
@@ -846,7 +845,7 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
 
     if (flags & 0x0002) {
       // Timestamp.
-      const ts = this.parseTimestamp(data, off);
+      const ts = parseSigDateTime(data, off);
       if (ts) this.cachedTimestamp = ts;
       off += 7;
     }
@@ -855,7 +854,12 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     if (flags & 0x0010) {
       const muscle = u16(off); // Muscle %
       if (muscle == null) return;
-      this.cachedComp.muscle = muscle * 0.1;
+      // Same rule the fat field above already applies: 0 and 0xFFFF are "no
+      // measurement", not a measurement of zero. buildPayload guards muscle on
+      // `!= null`, so a zero here exports 0 kg of muscle and a physique rating
+      // computed from it. Only the fat was guarded, which shielded the observed
+      // stubs (they zero both) but not a frame that zeroes only this one (#405).
+      if (muscle !== 0 && muscle !== 0xffff) this.cachedComp.muscle = muscle * 0.1;
       off += 2;
     }
     if (flags & 0x0020) off += 2; // Muscle Mass (unused)
@@ -863,13 +867,19 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     if (flags & 0x0080) {
       const softLean = u16(off); // Soft Lean Mass kg
       if (softLean == null) return;
-      this.cachedComp.softLean = softLean * massMul;
+      // Same rule again, and here it is the field with the worst failure mode:
+      // bone is derived as leanBodyMass - softLean, so a zeroed soft lean mass
+      // reports the entire lean mass as bone. That is the 117.92 kg of "bone"
+      // this file's own comment above records from the #229 capture (#405).
+      if (softLean !== 0 && softLean !== 0xffff) this.cachedComp.softLean = softLean * massMul;
       off += 2;
     }
     if (flags & 0x0100) {
       const waterMass = u16(off); // Body Water Mass kg
       if (waterMass == null) return;
-      this.cachedComp.waterMass = waterMass * massMul;
+      // buildPayload takes `comp.water ?? <estimate>`, so a zero here wins over
+      // the estimate and exports 0 % body water.
+      if (waterMass !== 0 && waterMass !== 0xffff) this.cachedComp.waterMass = waterMass * massMul;
       off += 2;
     }
     if (flags & 0x0200) {
@@ -912,7 +922,7 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     // resolved), so reading the live cachedComp there would hand every history
     // entry whatever happened to be cached at the END of the session. With a
     // snapshot each reading keeps the composition it was actually built from.
-    this.compByReading.set(reading, { ...this.cachedComp });
+    this.compByReading.pin(reading, { ...this.cachedComp });
     this.readingEmitted = true;
     return reading;
   }
@@ -926,7 +936,7 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     // Per-reading snapshot taken in buildReading(). Falling back to the live
     // cache keeps direct callers (and tests) working for a reading this adapter
     // did not build.
-    const c = this.compByReading.get(reading) ?? this.cachedComp;
+    const c = this.compByReading.of(reading, this.cachedComp);
     const comp: ScaleBodyComp = {};
 
     if (c.fat != null) comp.fat = c.fat;

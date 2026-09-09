@@ -54,11 +54,62 @@ export function buildA2Frame(raw: number): number[] {
  * default: a wrong value here is silent in exactly the way `qn_protocol_byte`
  * is, and every QN scale in the registry reads today on the 8-byte form.
  *
- * The app's 0x13 config frame is likewise one byte longer than ours, and that
- * one is NOT changed here: no capture shows its extra byte, and moving two
- * frames at once makes a reporter's result unreadable.
+ * The app's 0x13 config frame is likewise one byte longer than ours. That one
+ * lives in `buildConfig` below, behind its own switch for the same reason: two
+ * frames moving at once makes a reporter's result unreadable.
  */
 const TIME_SYNC_TRAILER = 0x08;
+
+/**
+ * 0x13 config frame trailer, the two bytes the vendor app has where this app
+ * has one.
+ *
+ * Two independent captures of the 10-byte form, against our 9-byte one:
+ *
+ *   app (#235 GE CS 10 G)   13 0a ff 01 10 00 00 02 00 2f
+ *   hedoric capture (#235)  13 0a ff 01 10 00 00 00 fa 27
+ *   ble-scale-sync          13 09 ff 01 10 00 00 00    2c
+ *
+ * All three close under the family's sum-of-preceding-bytes checksum (0x2f,
+ * 0x27, 0x2c), which is what makes the transcription trustworthy rather than a
+ * miscount. `[1]` is the total frame length in all three, and bytes `[0..6]`
+ * are identical, so the entire difference is the pair at `[7..8]`.
+ *
+ * WHAT THOSE TWO BYTES MEAN IS NOT DECODED, and the captures disagree on their
+ * value (`02 00` vs `00 fa`), which rules out a constant. The app's own pair is
+ * replayed here because it is the only one paired with a session that went on
+ * to stream weight. Opt-in and off by default for the same reason as
+ * `qn_a4_prelude`: every QN scale in the registry reads today on the 9-byte
+ * form, and a wrong value here fails silently.
+ */
+const CONFIG_TRAILER = [0x02, 0x00] as const;
+
+/** The single byte at `[7]` the 9-byte form has where the 10-byte form has two. */
+const CONFIG_TAIL_SHORT = [0x00] as const;
+
+/**
+ * Build the 0x13 config frame.
+ *
+ * `unitFlag` is 0x01 kg / 0x02 lb per openScale QNHandler; honouring the
+ * configured unit is what keeps a read from flipping the scale's display
+ * (#269).
+ *
+ * Exported so a test can pin both forms against the captured frames byte for
+ * byte, the way `buildTimeSync` is.
+ */
+export function buildConfig(protocolType: number, unitFlag: number, long = false): number[] {
+  const body = [
+    0x13,
+    long ? 0x0a : 0x09,
+    protocolType,
+    unitFlag,
+    0x10,
+    0x00,
+    0x00,
+    ...(long ? CONFIG_TRAILER : CONFIG_TAIL_SHORT),
+  ];
+  return [...body, body.reduce((a, b) => a + b, 0) & 0xff];
+}
 
 /**
  * Build the 0x20 time-sync frame.

@@ -13,7 +13,26 @@ const log = createLogger('Garmin');
 const __dirname: string = dirname(fileURLToPath(import.meta.url));
 const ROOT: string = join(__dirname, '..', '..');
 
-const SUBPROCESS_TIMEOUT_MS = 60_000;
+/**
+ * Default cap on one `garmin_upload.py` run.
+ *
+ * Was 60 s, which is the wrong side of the line for a background job with
+ * nowhere to put the data: Garmin Connect's login and upload path is regularly
+ * slower than a minute, and all three attempts then die and the reading is
+ * gone. A reporter lost four weigh-ins over five days that way and has been
+ * running 300 s locally since (#399).
+ *
+ * `withRetry` has no delay between attempts, so the worst case is exactly
+ * three times this value. That is also why the default is not the reporter's
+ * 300 s: 15 minutes of a failing Garmin would hold up the next scan cycle in
+ * continuous mode, and delay the ntfy/Telegram summary that reports the
+ * weigh-in. Raise it with `upload_timeout_sec` if your Garmin is habitually
+ * slow.
+ */
+const DEFAULT_UPLOAD_TIMEOUT_MS = 180_000;
+
+export const GARMIN_UPLOAD_TIMEOUT_MIN_SEC = 10;
+export const GARMIN_UPLOAD_TIMEOUT_MAX_SEC = 900;
 
 let cachedPython: string | undefined;
 
@@ -59,7 +78,8 @@ type GarminUploadPayload = BodyComposition & { timestamp?: string; weight_only?:
 function uploadToGarmin(
   payload: GarminUploadPayload,
   pythonCmd: string,
-  tokenDir?: string,
+  tokenDir: string | undefined,
+  timeoutMs: number,
 ): Promise<ExportResult> {
   return new Promise<ExportResult>((resolve, reject) => {
     const scriptPath: string = join(ROOT, 'garmin-scripts', 'garmin_upload.py');
@@ -72,7 +92,7 @@ function uploadToGarmin(
     const py = spawn(pythonCmd, args, {
       stdio: ['pipe', 'pipe', 'inherit'],
       cwd: ROOT,
-      timeout: SUBPROCESS_TIMEOUT_MS,
+      timeout: timeoutMs,
     });
 
     const chunks: Buffer[] = [];
@@ -83,7 +103,7 @@ function uploadToGarmin(
 
     py.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
       if (signal === 'SIGTERM') {
-        reject(new Error(`Python uploader timed out after ${SUBPROCESS_TIMEOUT_MS / 1000}s`));
+        reject(new Error(`Python uploader timed out after ${timeoutMs / 1000}s`));
         return;
       }
       const raw: string = Buffer.concat(chunks).toString().trim();
@@ -116,6 +136,11 @@ export interface GarminEntryConfig {
    * the weight trend matters.
    */
   weight_only?: boolean;
+  /**
+   * Seconds one upload attempt may take before the Python process is killed
+   * (10-900). Three attempts are made, with no wait between them.
+   */
+  upload_timeout_sec?: number;
 }
 
 export const garminSchema: ExporterSchema = {
@@ -146,6 +171,24 @@ export const garminSchema: ExporterSchema = {
       description: 'Directory for storing auth tokens',
     },
     {
+      key: 'upload_timeout_sec',
+      label: 'Upload timeout (seconds)',
+      type: 'number',
+      required: false,
+      default: DEFAULT_UPLOAD_TIMEOUT_MS / 1000,
+      description:
+        'Seconds one upload attempt may take before it is killed (10-900). Three attempts are made. Raise it if Garmin Connect is often slow for you; press enter to keep the default',
+      // The wizard only checks that a number is a number, so without this it
+      // would happily write a value the registry rejects at startup.
+      validate: (value: string) => {
+        const num = Number(value);
+        if (!Number.isInteger(num)) return 'Enter a whole number of seconds';
+        return num >= GARMIN_UPLOAD_TIMEOUT_MIN_SEC && num <= GARMIN_UPLOAD_TIMEOUT_MAX_SEC
+          ? null
+          : `Enter a value between ${GARMIN_UPLOAD_TIMEOUT_MIN_SEC} and ${GARMIN_UPLOAD_TIMEOUT_MAX_SEC}`;
+      },
+    },
+    {
       key: 'weight_only',
       label: 'Upload weight only',
       type: 'boolean',
@@ -167,6 +210,16 @@ export const garminSchema: ExporterSchema = {
   ],
 };
 
+/**
+ * No healthcheck, deliberately.
+ *
+ * Every other exporter probes an HTTP endpoint. This one talks to Garmin
+ * through a Python subprocess, so a check would mean spawning python, loading
+ * the token file and performing a real login round-trip - seconds, on the
+ * startup path and in the wizard, for a result that is only as fresh as the
+ * next upload anyway. Adding a --healthcheck mode to garmin_upload.py is the
+ * way to do it properly, and it is not this change (#406).
+ */
 export class GarminExporter implements Exporter {
   readonly name = 'garmin';
   readonly supportsBackdate = true;
@@ -182,9 +235,17 @@ export class GarminExporter implements Exporter {
     if (context?.timestamp) payload.timestamp = context.timestamp.toISOString();
     if (this.entryConfig.weight_only) payload.weight_only = true;
 
+    const configured = this.entryConfig.upload_timeout_sec;
+    const timeoutMs = configured !== undefined ? configured * 1000 : DEFAULT_UPLOAD_TIMEOUT_MS;
+
     return withRetry(
       async () => {
-        const result = await uploadToGarmin(payload, pythonCmd, this.entryConfig.token_dir);
+        const result = await uploadToGarmin(
+          payload,
+          pythonCmd,
+          this.entryConfig.token_dir,
+          timeoutMs,
+        );
         if (result.success) log.info('Garmin upload succeeded.');
         return result;
       },

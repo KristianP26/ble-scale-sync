@@ -63,7 +63,14 @@ export function qnMatches(device: BleDeviceInfo): boolean {
     name.includes('qn-scale') ||
     name.includes('renpho') ||
     name.includes('senssun') ||
-    name.includes('sencor');
+    name.includes('sencor') ||
+    // From openScale's QN handler (#409). 'seb-scale' is a substring like the
+    // others; 'fit plus' is EXACT, because as a substring it would claim any
+    // fitness-branded device carrying those two words. The comment above about
+    // AE00 already names the GE CS 10 G "Fit Plus": that unit is caught by its
+    // service when AE00 is visible, and by this when it is not.
+    name.includes('seb-scale') ||
+    name === 'fit plus';
   if (nameMatch) {
     // #191: a device named only via 'renpho' (not the QN-specific names)
     // that advertises a SIG Weight Scale / Body Composition service but NO

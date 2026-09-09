@@ -3,9 +3,23 @@ import type { MqttProxyConfig } from '../../config/schema.js';
 import type { RawReading } from '../shared.js';
 import { waitForRawReading } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
-import { evaluateAdvertisement, GraceTimers, DedupWindow, logAdvert } from '../advertisement.js';
+import {
+  evaluateAdvertisement,
+  GraceTimers,
+  DedupWindow,
+  logAdvert,
+  safeName,
+  emitDeduped,
+} from '../advertisement.js';
 import type { Watcher, WatcherConfig } from '../reading-source.js';
-import { bleLog, withIdleTimeout, withTimeout, errMsg, IMPEDANCE_GRACE_MS } from '../types.js';
+import {
+  bleLog,
+  withIdleTimeout,
+  withTimeout,
+  errMsg,
+  normalizeUuid,
+  IMPEDANCE_GRACE_MS,
+} from '../types.js';
 import { AsyncQueue } from '../async-queue.js';
 import { topics } from './topics.js';
 import {
@@ -35,31 +49,6 @@ const GATT_READING_IDLE_MS = 60_000;
  * session outlives it stays true.
  */
 const GATT_SESSION_ABSOLUTE_MS = 90_000;
-
-/** Bluetooth Base UUID for expanding 16-bit UUIDs to 128-bit form. */
-const BT_BASE_UUID = '00000000-0000-1000-8000-00805f9b34fb';
-
-/**
- * Normalize a BLE UUID to lowercase 128-bit form for reliable comparison.
- * Handles 16-bit ("fff4"), 32-bit, and full 128-bit UUIDs with or without dashes.
- */
-function normalizeUuid(uuid: string): string {
-  const lower = uuid.toLowerCase().replace(/-/g, '');
-  if (lower.length === 4) {
-    // 16-bit → expand into base UUID
-    return BT_BASE_UUID.replace('00000000', `0000${lower}`);
-  }
-  if (lower.length === 8) {
-    // 32-bit → expand into base UUID
-    return BT_BASE_UUID.replace('00000000', lower);
-  }
-  // Already 128-bit (32 hex chars) — insert dashes if missing
-  if (lower.length === 32) {
-    return `${lower.slice(0, 8)}-${lower.slice(8, 12)}-${lower.slice(12, 16)}-${lower.slice(16, 20)}-${lower.slice(20)}`;
-  }
-  // Already formatted 128-bit
-  return lower;
-}
 
 type LifecycleHandler =
   | { event: 'reconnect'; handler: () => void }
@@ -104,7 +93,7 @@ export class ReadingWatcher implements Watcher {
     bleLog.info(
       `Matched: ${gr.adapter.name} (${address}), weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
     );
-    bleLog.info(`Broadcast reading: ${gr.reading.weight} kg`);
+    bleLog.info(`Reading: ${gr.reading.weight} kg`);
     registerScaleMac(this.config, address).catch(() => {});
     this.queue.push(gr);
   });
@@ -133,6 +122,10 @@ export class ReadingWatcher implements Watcher {
     if (this.started) return;
     // Mark immediately to guard against concurrent start() calls
     this.started = true;
+    // A previous start that failed halfway is undone below, but reset here too:
+    // a stale entry would otherwise be removed twice by the next stop().
+    this._lifecycleHandlers = [];
+    this._subscribedTopics = [];
     // The liveness clock starts at connect, not at the epoch, so a proxy that
     // has simply not spoken yet is not read as one that has stopped.
     this.lastAdvertAt = Date.now();
@@ -159,17 +152,23 @@ export class ReadingWatcher implements Watcher {
         { event: 'connect', handler: onConnect },
       ];
 
-      // Subscribe to scan results with QoS 1
+      // Recorded one at a time, as each subscribe resolves. Assigning the whole
+      // list after the last one meant a broker that rejected the third left the
+      // first two subscribed with nothing tracking them.
+      // Scan results carry the readings, so QoS 1.
       await client.subscribeAsync(t.scanResults, { qos: 1 });
-      // Subscribe to status for logging only
+      this._subscribedTopics.push(t.scanResults);
+      // Status is for logging only.
       await client.subscribeAsync(t.status);
-      // Subscribe to connected for autonomous ESP32 connects (#201)
+      this._subscribedTopics.push(t.status);
+      // Connected drives autonomous ESP32 connects (#201).
       await client.subscribeAsync(t.connected);
-      // Subscribe to disconnected so MqttBleDevice instances (which only add a
-      // message listener, not a broker subscription) receive disconnect events
-      // during autonomous connects. Not handled by _messageHandler itself.
+      this._subscribedTopics.push(t.connected);
+      // Disconnected so MqttBleDevice instances (which only add a message
+      // listener, not a broker subscription) receive disconnect events during
+      // autonomous connects. Not handled by _messageHandler itself.
       await client.subscribeAsync(t.disconnected);
-      this._subscribedTopics = [t.scanResults, t.status, t.connected, t.disconnected];
+      this._subscribedTopics.push(t.disconnected);
       bleLog.info('ReadingWatcher started, listening for scan results');
 
       // Seed the ESP32 known-scale set with the statically configured target MAC
@@ -185,7 +184,13 @@ export class ReadingWatcher implements Watcher {
         );
       }
     } catch (err) {
-      this.started = false;
+      // The client is persistent and shared, and start() runs on EVERY loop
+      // iteration, so a broker that connects and then rejects a subscribe used
+      // to add four more lifecycle listeners per cycle - unbounded, and
+      // unrecoverable, because the next start() reassigned the list they were
+      // recorded in. The siblings on the other two transports already tear down
+      // here (#404).
+      await this.teardownPartialStart();
       throw err;
     }
 
@@ -251,16 +256,20 @@ export class ReadingWatcher implements Watcher {
             // Got the full reading; cancel any pending grace timer for this addr.
             this.grace.cancel(entry.address);
 
-            if (!this.dedup.shouldEmit(entry.address, decision.reading.weight)) {
-              bleLog.debug(`Dedup skip: ${entry.address}:${decision.reading.weight.toFixed(1)}`);
-              continue; // Don't block other candidates in this scan batch
-            }
-
-            bleLog.info(`Matched: ${adapter.name} (${entry.address})`);
-            bleLog.info(`Broadcast reading: ${decision.reading.weight} kg`);
-            registerScaleMac(this.config, entry.address).catch(() => {});
-            this.queue.push({ reading: decision.reading, adapter });
-            continue;
+            // registerScaleMac is gated on the emit actually happening: on a
+            // duplicate advertisement it would otherwise publish to the ESP32
+            // on every repeat. It now runs just after the queue push rather
+            // than just before it; both are fire-and-forget, and the ESP32 does
+            // not care which order two independent publishes leave in.
+            const emitted = emitDeduped(
+              this.dedup,
+              this.queue,
+              entry.address,
+              { reading: decision.reading, adapter },
+              decision.reading.weight,
+            );
+            if (emitted) registerScaleMac(this.config, entry.address).catch(() => {});
+            continue; // Either way, do not block other candidates in this batch
           }
 
           // Partial frame for a passive adapter: hold for an impedance frame.
@@ -318,6 +327,63 @@ export class ReadingWatcher implements Watcher {
     client.on('message', this._messageHandler);
   }
 
+  /**
+   * Undo a start() that threw partway through.
+   *
+   * Deliberately not stop(): that one early-returns unless `started` is still
+   * true, logs "ReadingWatcher stopped" at a watcher that never started, and
+   * awaits an unsubscribe per topic against a broker that is by hypothesis
+   * misbehaving. Listeners come off first here because that is the leak that
+   * matters and it cannot hang.
+   */
+  private async teardownPartialStart(): Promise<void> {
+    // Clear the flag first: it exists to guard against a concurrent start, and
+    // leaving it set across four broker round-trips widens that window for no
+    // benefit, since nothing below depends on it.
+    this.started = false;
+    this.removeLifecycleHandlers();
+    // Belt and braces: today the message handler is only assigned after the
+    // try/catch, so a failed start cannot have set it. Moving that assignment
+    // inside the try would otherwise reintroduce the leak silently.
+    if (this._messageHandler) {
+      this._client?.removeListener('message', this._messageHandler);
+      this._messageHandler = null;
+    }
+    for (const topic of this._subscribedTopics) {
+      try {
+        await this._client?.unsubscribeAsync(topic);
+      } catch {
+        /* ignore: the broker is why we are here */
+      }
+    }
+    this._subscribedTopics = [];
+    this.grace.clear();
+    // Nothing has arrived, so the liveness clock must not claim otherwise.
+    this.lastAdvertAt = null;
+    this._client = null;
+  }
+
+  /**
+   * mqtt's EventEmitter overload list does not accept the discriminated union
+   * as a single call shape, so dispatch by event tag to keep types tight
+   * without `any`.
+   */
+  private removeLifecycleHandlers(): void {
+    for (const entry of this._lifecycleHandlers) {
+      switch (entry.event) {
+        case 'reconnect':
+        case 'offline':
+        case 'connect':
+          this._client?.removeListener(entry.event, entry.handler);
+          break;
+        case 'error':
+          this._client?.removeListener('error', entry.handler);
+          break;
+      }
+    }
+    this._lifecycleHandlers = [];
+  }
+
   /** Stop the watcher: remove listeners and unsubscribe from topics. */
   async stop(): Promise<void> {
     if (!this.started || !this._client) return;
@@ -330,22 +396,7 @@ export class ReadingWatcher implements Watcher {
       this._messageHandler = null;
     }
 
-    // Remove lifecycle handlers. mqtt's EventEmitter overload list does not
-    // accept the discriminated union as a single call shape, so dispatch by
-    // event tag to keep types tight without `any`.
-    for (const entry of this._lifecycleHandlers) {
-      switch (entry.event) {
-        case 'reconnect':
-        case 'offline':
-        case 'connect':
-          this._client.removeListener(entry.event, entry.handler);
-          break;
-        case 'error':
-          this._client.removeListener('error', entry.handler);
-          break;
-      }
-    }
-    this._lifecycleHandlers = [];
+    this.removeLifecycleHandlers();
 
     // Unsubscribe from topics
     for (const topic of this._subscribedTopics) {
@@ -584,7 +635,9 @@ export class ReadingWatcher implements Watcher {
       info.characteristicUuids = data.chars.map((c) => c.uuid.toLowerCase());
       logAdvert(data.address, info);
       if (cached?.name) {
-        bleLog.debug(`Autonomous connect: using cached advertisement name "${cached.name}"`);
+        bleLog.debug(
+          `Autonomous connect: using cached advertisement name "${safeName(cached.name)}"`,
+        );
       }
       let adapter = resolveAdapter(info, this.adapters);
       if (!adapter) {

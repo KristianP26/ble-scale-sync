@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { ActiveEraAdapter } from '../../src/scales/active-era.js';
 import {
   mockPeripheral,
@@ -105,5 +105,91 @@ describe('ActiveEraAdapter', () => {
       const payload = adapter.computeMetrics({ weight: 0, impedance: 0 }, defaultProfile());
       expect(payload.weight).toBe(0);
     });
+  });
+});
+
+// #394: adapters are shared singletons. Before onSessionStart existed, a second
+// weigh-in could resolve on the FIRST frame using the previous person's data.
+
+describe('ActiveEraAdapter session boundary (#394)', () => {
+  it('does not resolve the next session on the previous weight and impedance', () => {
+    const a = new ActiveEraAdapter();
+    a.parseNotification(weightFrame(80000));
+    const first = a.parseNotification(impedanceFrame(500))!;
+    expect(a.isComplete(first)).toBe(true);
+
+    a.onSessionStart();
+
+    // A 0xAC frame whose type byte is neither 0xD5 nor 0xD6 updates nothing.
+    // It used to fall through and return the whole previous weigh-in.
+    const stray = Buffer.alloc(20);
+    stray[0] = 0xac;
+    stray[18] = 0x00;
+    expect(a.parseNotification(stray)).toBeNull();
+  });
+
+  it('does not corrupt the impedance correction with a stale weight', () => {
+    // The >= 1500 branch multiplies cachedWeight in, so a stale weight makes
+    // even a fresh impedance frame decode wrongly.
+    const a = new ActiveEraAdapter();
+    a.parseNotification(weightFrame(120000)); // 120 kg
+    a.parseNotification(impedanceFrame(500));
+
+    a.onSessionStart();
+
+    // An impedance frame arriving BEFORE any weight frame of the new session
+    // used to return a whole reading: the previous person's weight, with an
+    // impedance the correction had computed FROM that stale weight. With the
+    // cache cleared there is simply no weight yet, so there is no reading.
+    expect(a.parseNotification(impedanceFrame(1600))).toBeNull();
+  });
+});
+
+/**
+ * The raw `[4..5]` value is the single number that decides whether this
+ * adapter's correction should carry its `/10` (#386). Until it was logged it was
+ * unobtainable: `imp` was reassigned in place, so a reporter running with debug
+ * on could only ever see the corrected figure, and the question could not be
+ * answered by the only person able to answer it.
+ */
+describe('ActiveEraAdapter: raw impedance is observable (#386)', () => {
+  let debugSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    const { bleLog } = await import('../../src/ble/types.js');
+    debugSpy = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const logged = (): string => debugSpy.mock.calls.map((c) => String(c[0])).join(' | ');
+
+  it('logs the raw value alongside the corrected one when the gate fires', () => {
+    const adapter = new ActiveEraAdapter();
+    adapter.parseNotification(weightFrame());
+    adapter.parseNotification(impedanceFrame(1600));
+
+    // Both numbers, so the reporter's paste answers the question by itself.
+    expect(logged()).toContain('raw=1600');
+    expect(logged()).toMatch(/corrected\s+46\.7 ohm/);
+  });
+
+  it('logs the raw value below the gate too, and says the gate did not fire', () => {
+    const adapter = new ActiveEraAdapter();
+    adapter.parseNotification(weightFrame());
+    adapter.parseNotification(impedanceFrame(500));
+
+    expect(logged()).toContain('raw=500');
+    expect(logged()).toContain('below the 1500 correction gate');
+  });
+
+  it('reports the cached weight, which the correction multiplies in', () => {
+    const adapter = new ActiveEraAdapter();
+    adapter.parseNotification(weightFrame(80000));
+    adapter.parseNotification(impedanceFrame(1600));
+
+    expect(logged()).toContain('cached weight 80 kg');
   });
 });

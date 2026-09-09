@@ -172,6 +172,21 @@ If it happens every session, `ble.auto_clear_stale_bond: true` does that for you
 - Make sure you're using the right protocol: `mqtt://` for plain, `mqtts://` for TLS. Using `mqtt://` on a TLS port (8883) will hang.
 - Check your broker URL, username, and password.
 
+## Why the next scan is not immediate
+
+In continuous mode the wait between scans depends on how the previous cycle ended:
+
+- **A reading arrived:** `runtime.scan_cooldown` (default 30 s), and at least 25 s on Linux/BlueZ regardless, so the app does not reconnect while the scale is still advertising.
+- **No scale found, radio healthy:** `runtime.idle_rescan_delay` (default 5 s). Linux/BlueZ only; the other transports cannot tell this case from a failure and use the backoff below.
+- **The cycle failed** (a GATT error, a wedged controller, an export that threw): 5 s, then 10, 20, 40 and 60 s for as long as failures continue, resetting on the next success.
+
+So a gap of a minute between scans means failures, not a setting being ignored. The log line says which case it was:
+
+```
+No scale found, rescanning in 5s... (Device not found)
+No scale found, retrying in 20s... (le-connection-abort-by-local)
+```
+
 ## Debug Mode
 
 Set `debug: true` in `config.yaml` or use the environment variable to see detailed BLE logs:
@@ -188,6 +203,33 @@ $env:DEBUG="true"; npm start
 ```
 
 This shows BLE discovery details, advertised services, discovered characteristics, and UUID matching.
+
+### Capturing every frame, for a scale that is not decoded correctly
+
+`debug: true` logs what the app decided. When a scale is misread, or a new one needs a protocol, what is needed is what the scale actually sent, including the frames the adapter rejected:
+
+```bash
+BLE_RAW_CAPTURE=true DEBUG=true npm start
+
+# Docker
+docker run ... -e BLE_RAW_CAPTURE=true -e DEBUG=true ghcr.io/kristianp26/ble-scale-sync:latest
+```
+
+Every notification is then logged as hex with the characteristic it arrived on, whether the adapter understood it or not:
+
+```
+[BLE] [RAW] 0000fff100001000800000805f9b34fb (13B): 1f 05 00 02 e6 12 ...
+```
+
+It also holds the connection open for 20 seconds past the settled weight, because several scales send their body-composition frames after the number stops moving and the app would otherwise disconnect first. Change that window with `BLE_RAW_CAPTURE_HOLD_SEC`:
+
+```bash
+BLE_RAW_CAPTURE=true BLE_RAW_CAPTURE_HOLD_SEC=40 DEBUG=true npm start
+```
+
+Step on the scale once, wait for it to disconnect on its own, and attach the whole log to the issue. Say what the scale displayed and what the vendor app recorded for the same weigh-in: a capture with known values is what makes a field decodable, and one without them usually is not.
+
+Both are off by default and neither changes what is exported.
 
 ## Install Issues (npm / npx) {#install-issues}
 
@@ -304,7 +346,7 @@ On Pi 3/4 Broadcom on-board chips, this is a kernel/firmware-level issue that ev
 
 The watchdog counts only cycles where the Bluetooth radio looks unhealthy: a connection or read failure, or a scan that saw no advertisement traffic at all (the zombie-discovery wedge). A normal idle cycle, where the radio still hears other nearby devices but your scale simply is not being stood on, does not count toward a restart. This is why a scale that only advertises while in use (such as Renpho) no longer triggers needless restarts overnight.
 
-::: warning The watchdog recovers by **exiting the process** — set a restart policy
+::: warning The watchdog recovers by **exiting the process** - set a restart policy
 The recovery is the process _exiting_ so the supervisor starts it again. You **must** run with `restart: unless-stopped` (Compose) or `--restart unless-stopped` (`docker run`). Without a restart policy the container just stops.
 
 A Docker/Compose `restart:` policy fires only on process **exit**. It does **not** act on the `HEALTHCHECK` going `unhealthy`. If you see the container stuck `Up (unhealthy)` but never restarting, plain Docker is working as designed: only Swarm, Kubernetes, an [autoheal](https://github.com/willfarrell/docker-autoheal) sidecar, or the **Home Assistant Supervisor** (via the add-on watchdog toggle, which is on by default) restarts on health status. With a restart policy and the hard-exit floor below, the process always exits, so the policy always fires.

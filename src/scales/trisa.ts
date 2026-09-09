@@ -116,8 +116,9 @@ export class TrisaAdapter implements ScaleAdapterCore, GattWiring, MultiCharNoti
   async onConnected(ctx: ConnectionContext): Promise<void> {
     // NOTE: pendingChallenge is deliberately NOT cleared here. The frame it
     // holds arrived moments ago, before this method ran, and replaying it is the
-    // whole point (#138). Stale state from an earlier session is cleared in
-    // onSessionEnd() instead, which is where a session actually ends.
+    // whole point (#138). The PREVIOUS session's leftovers are cleared in
+    // onSessionStart(), which runs before anything is subscribed and so cannot
+    // discard a frame belonging to this session.
     this.writeFn = ctx.write;
     this.connected = true;
 
@@ -171,11 +172,33 @@ export class TrisaAdapter implements ScaleAdapterCore, GattWiring, MultiCharNoti
    * for the next cycle; without it the #138 fix would work exactly once per
    * process, which in continuous mode means once ever.
    */
+  /**
+   * Clear the previous session's negotiated state (#394).
+   *
+   * This is the reliable half of the pair. onSessionEnd is best effort: a
+   * timeout abandons the read promise rather than cancelling it, so it fires
+   * only if a disconnect event follows, and the ESPHome proxy scan path can
+   * drop a session without reaching cleanup. A session that ended either of
+   * those ways used to carry its password and any unreplayed challenge into
+   * the next one.
+   *
+   * Safe to clear pendingChallenge here, unlike in onConnected: nothing is
+   * subscribed yet, so no frame of THIS session can have arrived.
+   */
+  onSessionStart(): void {
+    this.pendingChallenge = null;
+    this.password = null;
+  }
+
+  /**
+   * Release the connection references. These two are not session state to be
+   * re-derived but a live handle to a link that is gone, and writing through a
+   * stale one throws (#138), so they are dropped as soon as the session ends
+   * rather than waiting for the next one to start.
+   */
   onSessionEnd(): void {
     this.connected = false;
     this.writeFn = null;
-    this.pendingChallenge = null;
-    this.password = null;
   }
 
   /**

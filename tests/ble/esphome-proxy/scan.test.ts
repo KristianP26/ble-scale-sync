@@ -14,6 +14,10 @@ const WRITE = normalizeUuid('2a9c');
 // A fake pool: emits one matching advert for a GATT scale, and connectGatt
 // returns a session whose notify char delivers one complete weight frame.
 const closeSpy = vi.fn(async () => {});
+const fireDisconnectSpy = vi.fn();
+// When set, connectGatt hands back a session that never notifies and whose
+// device never reports a disconnect - an ESP32 that dropped off Wi-Fi mid-read.
+let hangSession = false;
 
 vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
   class FakeEsphomeProxyPool {
@@ -35,6 +39,25 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
       return () => {};
     }
     async connectGatt(_mac: string) {
+      if (hangSession) {
+        const silent: BleChar = {
+          async read() {
+            return Buffer.alloc(0);
+          },
+          async write() {},
+          async subscribe() {
+            return () => {};
+          },
+        };
+        return {
+          charMap: new Map<string, BleChar>([
+            [NOTIFY, silent],
+            [WRITE, silent],
+          ]),
+          device: { onDisconnect: (_cb: () => void) => {}, fireDisconnect: fireDisconnectSpy },
+          close: closeSpy,
+        };
+      }
       let notifyCb: ((d: Buffer) => void) | null = null;
       const notifyChar: BleChar = {
         async read() {
@@ -63,7 +86,7 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
       ]);
       return {
         charMap,
-        device: { onDisconnect: (_cb: () => void) => {} },
+        device: { onDisconnect: (_cb: () => void) => {}, fireDisconnect: () => {} },
         close: closeSpy,
       };
     }
@@ -101,6 +124,41 @@ describe('scanAndReadRaw GATT single-shot (#116)', () => {
     expect(result.reading.weight).toBe(75);
     expect(result.adapter.name).toBe('GattMock');
     expect(closeSpy).toHaveBeenCalled();
+  });
+
+  // The one-shot path had the same unbounded read as the watcher: on this
+  // transport waitForRawReading only settles on a reading, a subscribe failure,
+  // or the proxy's disconnect frame, and a proxy that vanished sends none. The
+  // outer BROADCAST_WAIT_MS race only ABANDONS the promise, so without the
+  // inner bound plus fireDisconnect the wait keeps its notify unsubscribers and
+  // its unlock interval for the life of the process.
+  it('tells an abandoned GATT read to tear itself down after the scan gives up', async () => {
+    closeSpy.mockClear();
+    fireDisconnectSpy.mockClear();
+    vi.useFakeTimers();
+    try {
+      hangSession = true;
+      const scan = scanAndReadRaw({
+        adapters: [gattAdapter()],
+        profile,
+        esphomeProxy: {
+          host: 'p1',
+          port: 6053,
+          client_info: 'x',
+          additional_proxies: [],
+        } as never,
+      }).catch((e: unknown) => e);
+
+      // Past both the 60 s scan window and the 60 s GATT idle bound.
+      await vi.advanceTimersByTimeAsync(130_000);
+
+      await scan;
+      expect(fireDisconnectSpy).toHaveBeenCalled();
+      expect(closeSpy).toHaveBeenCalled();
+    } finally {
+      hangSession = false;
+      vi.useRealTimers();
+    }
   });
 });
 

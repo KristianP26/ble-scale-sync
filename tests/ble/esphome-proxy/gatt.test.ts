@@ -356,6 +356,56 @@ describe('openGattSession', () => {
     await session.close();
   });
 
+  // fireDisconnect() is what lets a caller that gave up on a timeout tell the
+  // abandoned waitForRawReading to tear itself down. Without it the wait keeps
+  // its notify unsubscribers and its unlock interval forever and never calls
+  // the adapter's onSessionEnd, because on this transport the disconnect
+  // callback is driven purely by the proxy's connection frames - and a proxy
+  // that dropped off Wi-Fi sends none.
+  it('fireDisconnect() invokes the disconnect callback without a peer frame', async () => {
+    const conn = fakeConnection();
+    const session = await openGattSession({ connection: conn } as never, '00:00:00:00:00:01');
+    const onDis = vi.fn();
+    session.device.onDisconnect(onDis);
+
+    session.device.fireDisconnect();
+    expect(onDis).toHaveBeenCalledTimes(1);
+
+    // A real frame arriving afterwards must not double-fire it.
+    conn.emit('message.BluetoothDeviceConnectionResponse', { address: ADDR, connected: false });
+    expect(onDis).toHaveBeenCalledTimes(1);
+    await session.close();
+  });
+
+  it('fireDisconnect() is idempotent and survives the reverse order', async () => {
+    const conn = fakeConnection();
+    const session = await openGattSession({ connection: conn } as never, '00:00:00:00:00:01');
+    const onDis = vi.fn();
+    session.device.onDisconnect(onDis);
+
+    conn.emit('message.BluetoothDeviceConnectionResponse', { address: ADDR, connected: false });
+    session.device.fireDisconnect();
+    session.device.fireDisconnect();
+    expect(onDis).toHaveBeenCalledTimes(1);
+    await session.close();
+  });
+
+  // The latch must not close over an empty slot: a fireDisconnect() before any
+  // onDisconnect() would otherwise swallow the REAL disconnect frame for the
+  // callback registered afterwards.
+  it('fireDisconnect() before onDisconnect() does not swallow the real frame', async () => {
+    const conn = fakeConnection();
+    const session = await openGattSession({ connection: conn } as never, '00:00:00:00:00:01');
+
+    session.device.fireDisconnect();
+
+    const onDis = vi.fn();
+    session.device.onDisconnect(onDis);
+    conn.emit('message.BluetoothDeviceConnectionResponse', { address: ADDR, connected: false });
+    expect(onDis).toHaveBeenCalledTimes(1);
+    await session.close();
+  });
+
   it('throws when the peer fails to connect', async () => {
     const conn = fakeConnection();
     conn.connectBluetoothDeviceService = vi.fn(async () => ({ address: ADDR, connected: false }));

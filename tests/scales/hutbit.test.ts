@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { HutbitAdapter } from '../../src/scales/hutbit.js';
 import { isHutbitOemAdvert } from '../../src/scales/lefu-signature.js';
+import { isGenericExcludedName } from '../../src/scales/derived-excludes.js';
 import { adapters } from '../../src/scales/index.js';
 import { resolveAdapter } from '../../src/scales/resolve.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
@@ -29,6 +30,34 @@ describe('HutbitAdapter (#254)', () => {
     it('resolves "Hutbit Scale" to the Hutbit adapter, not MGB/Robi', () => {
       const matched = adapters.find((a) => a.matches(mockPeripheral('Hutbit Scale', ['ffb0'])));
       expect(matched?.name).toBe('Hutbit');
+    });
+
+    it('claims a FitTrack by name and keeps it away from the MGB fallback', () => {
+      // FitTrack Dara 2.0 advertises its brand and carries no Lefu 0x02AC
+      // signature, so before the name gate it fell to the generic MGB FFB0
+      // fallback, whose parser rejects every 8-byte frame of this family.
+      const info = mockPeripheral('FitTrack', [uuid16(0xffb0)], undefined, [
+        uuid16(0xffb1),
+        uuid16(0xffb2),
+      ]);
+      expect(makeAdapter().matches(info)).toBe(true);
+      expect(resolveAdapter(info, adapters)?.name).toBe('Hutbit');
+    });
+
+    it('keeps FitTrack out of the generic BCS/WSS catch-all', () => {
+      // The name has to be in the MATCH DESCRIPTOR too, not just matches():
+      // derived-excludes.ts builds the priority-0 catch-all's exclusion list
+      // from the registry's descriptors, so without it a FitTrack that also
+      // advertises 0x181B or 0x181D would be claimed there instead.
+      expect(isGenericExcludedName('fittrack')).toBe(true);
+    });
+
+    it('still leaves a nameless FFB0 device to Robi/MGB', () => {
+      const info = mockPeripheral('', [uuid16(0xffb0)], undefined, [
+        uuid16(0xffb1),
+        uuid16(0xffb2),
+      ]);
+      expect(makeAdapter().matches(info)).toBe(false);
     });
 
     it('does not claim a nameless FFB0 device (left to Robi/MGB)', () => {

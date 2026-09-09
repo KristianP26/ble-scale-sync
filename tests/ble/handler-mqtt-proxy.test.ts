@@ -2502,6 +2502,59 @@ describe('handler-mqtt-proxy', () => {
       }
     });
 
+    it('a start() that fails mid-subscribe leaves no listeners behind (#404)', async () => {
+      const adapter = createGattAdapter();
+
+      const lifecycleCount = () =>
+        (['reconnect', 'offline', 'error', 'connect'] as const).reduce(
+          (n, event) => n + (mockClient._listeners.get(event) ?? []).length,
+          0,
+        );
+      const before = lifecycleCount();
+
+      // A broker that connects and then refuses one subscribe: an ACL denial
+      // looks exactly like this, and start() runs once per loop iteration.
+      mockClient.subscribeAsync = vi.fn(async (topic: string) => {
+        if (topic === `${PREFIX}/connected`) throw new Error('not authorized');
+        return [];
+      });
+
+      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter], undefined, PROFILE);
+      await expect(watcher.start()).rejects.toThrow('not authorized');
+      await expect(watcher.start()).rejects.toThrow('not authorized');
+      await expect(watcher.start()).rejects.toThrow('not authorized');
+
+      // Four handlers per failed start used to stay on the persistent client,
+      // unrecoverable because the next start() reassigned the list holding them.
+      expect(lifecycleCount()).toBe(before);
+      expect((mockClient._listeners.get('message') ?? []).length).toBe(0);
+
+      // The two subscribes that DID take are unsubscribed, once per attempt.
+      const unsubscribed = mockClient.unsubscribeAsync.mock.calls.map((c: unknown[]) => c[0]);
+      expect(unsubscribed).toContain(`${PREFIX}/scan/results`);
+      expect(unsubscribed).toContain(`${PREFIX}/status`);
+      expect(unsubscribed).not.toContain(`${PREFIX}/connected`);
+    });
+
+    it('MqttBleDevice.fireDisconnect runs the session callback exactly once (#404)', async () => {
+      const { MqttBleDevice } = await import('../../src/ble/handler-mqtt-proxy/gatt.js');
+      const { topics } = await import('../../src/ble/handler-mqtt-proxy/topics.js');
+      const t = topics('ble-proxy', 'esp32-test');
+
+      const device = new MqttBleDevice(mockClient as never, t.disconnected);
+      const cb = vi.fn();
+      device.onDisconnect(cb);
+
+      // The abandonment path fires it, and the ESP32's own disconnect frame can
+      // land afterwards. Re-entering a settled session is what the latch stops.
+      device.fireDisconnect();
+      device.fireDisconnect();
+      mockClient._simulateMessage(t.disconnected, '');
+
+      expect(cb).toHaveBeenCalledTimes(1);
+      device.cleanup();
+    });
+
     it('MqttBleChar.subscribe removes its listener when setup fails', async () => {
       const { MqttBleChar } = await import('../../src/ble/handler-mqtt-proxy/gatt.js');
       mockClient.subscribeAsync = vi.fn(async () => {

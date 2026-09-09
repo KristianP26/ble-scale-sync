@@ -236,6 +236,74 @@ function blob(data: Buffer): string {
 }
 
 /**
+ * Render a device-supplied name safe to put in a log line.
+ *
+ * The local name comes straight off the air, unfiltered, from anyone with a
+ * radio in range - or from anyone who can publish to a proxy topic. It is
+ * logged for EVERY advertisement seen during a scan, matched or not, so no
+ * pairing or trust step gates it. A crafted name carrying CR/LF forges
+ * convincing log lines in journald or docker logs, which is exactly what
+ * reporters are asked to paste into public issues, and ANSI/OSC escapes rewrite
+ * the terminal of whoever cats the file.
+ *
+ * Escaped rather than stripped, so a name that really does contain a control
+ * character stays distinguishable from one that does not. That only holds if
+ * the escape character is escaped too - otherwise a name containing the four
+ * literal characters `\x0a` renders identically to one containing a real LF -
+ * so backslash is in the class.
+ *
+ * The class covers more than C0. U+0080..U+009F are the C1 controls, and
+ * xterm-family terminals honour U+009B and U+009D as CSI and OSC introducers
+ * even in UTF-8 mode; a BLE name is UTF-8 decoded by every stack, so those
+ * arrive intact. U+2028 and U+2029 are line breaks to anything that splits on
+ * Unicode newlines rather than on LF.
+ */
+/**
+ * The emit step every watcher shares: dedup, announce, queue.
+ *
+ * Two watchers held a byte-identical private `pushDeduped` and the third
+ * inlined the same four steps and had drifted, logging `Broadcast reading:`
+ * where the others logged `Reading:` and omitting the dedup-skip line (#406).
+ *
+ * Returns whether the reading was queued, which the caller needs: the
+ * mqtt-proxy watcher registers the scale's MAC with the ESP32 only when a
+ * reading is actually emitted, and doing that on every duplicate advertisement
+ * would publish to the proxy on every repeat.
+ *
+ * Deliberately a free function over the two collaborators rather than a class
+ * owning them: the queue and the dedup window are per-watcher fields with
+ * per-watcher lifetimes (a queued reading survives stop/start today), and the
+ * grace-timer callbacks are NOT identical - the mqtt one registers the MAC.
+ * Sharing only what is genuinely shared keeps those differences visible.
+ */
+export function emitDeduped(
+  dedup: DedupWindow,
+  queue: { push: (raw: RawReading) => void },
+  address: string,
+  raw: RawReading,
+  weight: number,
+): boolean {
+  if (!dedup.shouldEmit(address, weight)) {
+    bleLog.debug(`Dedup skip: ${address}:${weight.toFixed(1)}`);
+    return false;
+  }
+  bleLog.info(`Matched: ${raw.adapter.name} (${address})`);
+  bleLog.info(`Reading: ${weight} kg`);
+  queue.push(raw);
+  return true;
+}
+
+export function safeName(name: string | undefined): string {
+  if (!name) return '';
+  return name.replace(/[\\\x00-\x1f\x7f-\x9f\u2028\u2029]/g, (c) => {
+    const code = c.charCodeAt(0);
+    return code > 0xff
+      ? `\\u${code.toString(16).padStart(4, '0')}`
+      : `\\x${code.toString(16).padStart(2, '0')}`;
+  });
+}
+
+/**
  * One-line summary of everything an adapter's `matches()` is allowed to see.
  *
  * Adapter mis-routing was the root cause of #317, #318 and #319, and every one
@@ -252,7 +320,7 @@ export function formatAdvert(address: string, info: BleDeviceInfo): string {
   // to mean anything.
   const parts = [
     `[${address.toUpperCase()}]`,
-    `name=${info.localName ? `"${info.localName}"` : '(none)'}`,
+    `name=${info.localName ? `"${safeName(info.localName)}"` : '(none)'}`,
   ];
   parts.push(`uuids=${uuidList(info.serviceUuids)}`);
   if (info.manufacturerData) {

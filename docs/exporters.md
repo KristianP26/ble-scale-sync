@@ -37,6 +37,7 @@ Automatic body composition upload to Garmin Connect, no phone app needed. Uses a
 | `password`    | Yes      | (none)             | Garmin account password                                        |
 | `token_dir`   | No       | `~/.garmin_tokens` | Directory for cached auth tokens                               |
 | `weight_only` | No       | `false`            | Upload the weight alone, leaving every derived metric unset     |
+| `upload_timeout_sec` | No       | `180`              | Seconds one upload attempt may take before it is killed (10-900). Three attempts are made, with no wait between them |
 
 ```yaml
 global_exporters:
@@ -45,10 +46,25 @@ global_exporters:
     password: '${GARMIN_PASSWORD}'
 ```
 
+::: tip Slow Garmin days
+Each upload attempt is killed after `upload_timeout_sec` seconds and retried up to three times. The default of 180 s covers a Garmin Connect that is merely slow; if you see `Python uploader timed out` three times for a measurement that uploads fine by hand afterwards, raise it (the maximum is 900).
+
+The cost of a higher value is only paid when Garmin is actually failing: three attempts run back to back with no wait between them, so a dead Garmin takes three times the timeout to give up, and in continuous mode the next scan cycle and the ntfy/Telegram summary wait that long too.
+
+```yaml
+global_exporters:
+  - type: garmin
+    email: '${GARMIN_EMAIL}'
+    password: '${GARMIN_PASSWORD}'
+    upload_timeout_sec: 300
+```
+
+:::
+
 ::: tip Weight only
 Set `weight_only: true` to record just the weight and leave BMI, body fat, water, bone mass, muscle mass, visceral fat, physique rating and metabolic age unset in Garmin Connect. Useful when you trust the scale's weight but not its bioimpedance estimates. In continuous mode the config watcher picks it up on the next scan cycle, so no restart is needed (unless you have set `runtime.watch_config: false`). It does not affect any other exporter.
 
-Note that Garmin Connect derives its own BMI from the weight and the height in your Garmin profile, so a BMI figure may still appear on the entry — it just will not be the scale's.
+Note that Garmin Connect derives its own BMI from the weight and the height in your Garmin profile, so a BMI figure may still appear on the entry - it just will not be the scale's.
 
 ```yaml
 global_exporters:
@@ -245,7 +261,7 @@ global_exporters:
 The message is sent as plain text. Weight, muscle and bone follow `scale.weight_unit`. `report_exports` works as for [Ntfy](#ntfy). In multi-user setups the user's name is prepended as `[Name]`. Historical readings replayed from a scale's offline cache are skipped (a notification for an old measurement is not meaningful).
 
 ::: tip Finding your chat ID
-Message your bot once, then open `https://api.telegram.org/bot<token>/getUpdates` in a browser — the `chat.id` field holds your chat ID. For groups, add the bot to the group first.
+Message your bot once, then open `https://api.telegram.org/bot<token>/getUpdates` in a browser - the `chat.id` field holds your chat ID. For groups, add the bot to the group first.
 :::
 
 ## File (CSV/JSONL) {#file}
@@ -334,7 +350,7 @@ The script prints a browser URL for Strava authorization. After authorizing, cop
 
 ## Intervals.icu {#intervals}
 
-Push weight and body fat to your [Intervals.icu](https://intervals.icu) wellness data. Intervals.icu is a free training-analytics platform — a natural fit alongside the Garmin and Strava exporters.
+Push weight and body fat to your [Intervals.icu](https://intervals.icu) wellness data. Intervals.icu is a free training-analytics platform - a natural fit alongside the Garmin and Strava exporters.
 
 | Field        | Required | Default | Description                                     |
 | ------------ | -------- | ------- | ----------------------------------------------- |
@@ -350,7 +366,7 @@ users:
         api_key: '${INTERVALS_API_KEY}'
 ```
 
-Authentication uses HTTP Basic with the API key — no OAuth flow. Find both values on the Intervals.icu **Settings → Developer** page. The reading updates the wellness record for its day (`weight` + `bodyFat`); historical readings replayed from a scale's offline cache land on their original date.
+Authentication uses HTTP Basic with the API key - no OAuth flow. Find both values on the Intervals.icu **Settings → Developer** page. The reading updates the wellness record for its day (`weight` + `bodyFat`); historical readings replayed from a scale's offline cache land on their original date.
 
 ## Runalyze {#runalyze}
 
@@ -406,6 +422,44 @@ global_exporters:
 ```
 
 See [Configuration: Environment Variables](/guide/configuration#environment-variables) for details.
+
+::: warning A boolean field must spell a boolean
+An `${ENV_VAR}` reference is resolved to a **string** before the exporter reads it, so a true/false field only accepts a value that reads as one: `true`, `yes`, `1`, `on`, or `false`, `no`, `0`, `off`, or empty. Anything else stops that exporter from being built, with an error naming the field, rather than being guessed at in one direction or the other.
+
+This applies to `weight_only` (garmin), `retain` and `ha_discovery` (mqtt), `silent` (telegram), `report_exports` (ntfy and telegram) and `sync_measurements` (wger). So `MQTT_RETAIN=maybe` is an error, not a default.
+:::
+
+## Historical readings
+
+Some scales keep measurements taken while nothing was listening and replay them on the next connection. Two adapters currently pass that recorded time on: **Beurer BF720** (and the BF105, BF500, BF788 and BF950 it serves) and **Renpho ES-26BB**. A reading carrying a time is treated differently from a live one.
+
+Several other scales replay a cache without a usable time. Salter is the explicit case: its stored records are delivered as ordinary readings on purpose, because a dated reading it could not date correctly would be buffered rather than exported.
+
+A reading with a timestamp is sent **only to exporters that can record it at that time**:
+
+| Exporter | Accepts a backdated reading |
+| --- | --- |
+| `file` | Yes |
+| `garmin` | Yes |
+| `influxdb` | Yes |
+| `intervals` | Yes |
+| `runalyze` | Yes |
+| `wger` | Yes |
+| `mqtt` | No |
+| `webhook` | No |
+| `ntfy` | No |
+| `strava` | No |
+| `telegram` | No |
+
+The five that say No have no way to express "this happened on Tuesday": an MQTT sensor state and a push notification are both about now, so replaying a three-day-old weigh-in through them would put a stale number in front of you as if it had just been measured.
+
+So a scale that replays its cache fills in your Garmin and InfluxDB history while Home Assistant shows only the live weigh-ins. The log says so each time it happens:
+
+```
+Historical reading (2026-09-07T06:12:44.000Z): skipping non-back-date exporters [mqtt, ntfy]
+```
+
+Every reading taken while the app is running is a live reading and goes to every configured exporter.
 
 ## Healthchecks
 

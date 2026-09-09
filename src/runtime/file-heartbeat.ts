@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, openSync, closeSync, constants } from 'node:fs';
 
 /**
  * Liveness heartbeat file consumed by the Docker HEALTHCHECK (#277).
@@ -31,12 +31,46 @@ const DEFAULT_INTERVAL_MS = 30_000;
 
 let timer: ReturnType<typeof setInterval> | null = null;
 
+/**
+ * Open flags for the heartbeat file.
+ *
+ * O_NOFOLLOW is the point. The path is fixed and world-predictable, it lives in
+ * a world-writable directory, and it is rewritten every 30 s with every error
+ * swallowed - so if a local user could plant a symlink here, each tick would
+ * follow it and truncate the target in silence.
+ *
+ * Defence in depth rather than a live hole: on the supported deployments the
+ * kernel already refuses that. Debian and Raspberry Pi OS ship
+ * `fs.protected_symlinks=1`, which will not follow a symlink in a sticky
+ * directory owned by another uid, and `fs.protected_regular=1`, which refuses
+ * O_CREAT on another user's file there; Docker and the HA add-on get a private
+ * /tmp. What is left is a multi-user host with that hardening switched off. The
+ * flag costs nothing, so it is not worth relying on someone else's sysctl.
+ *
+ * The path cannot move: the Docker HEALTHCHECK reads it by name.
+ *
+ * O_NOFOLLOW is POSIX-only; on Windows the constant is undefined, so it falls
+ * back to 0 and the flags stay valid.
+ */
+const HEARTBEAT_FLAGS =
+  constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0);
+
 /** Write the heartbeat file. Never throws (e.g. /tmp is not writable on Windows). */
 export function touchHeartbeat(): void {
+  let fd: number | undefined;
   try {
-    writeFileSync(HEARTBEAT_PATH, new Date().toISOString());
+    fd = openSync(HEARTBEAT_PATH, HEARTBEAT_FLAGS, 0o644);
+    writeFileSync(fd, new Date().toISOString());
   } catch {
     // ignore
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // ignore
+      }
+    }
   }
 }
 

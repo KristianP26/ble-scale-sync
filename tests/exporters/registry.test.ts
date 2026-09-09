@@ -290,6 +290,23 @@ describe('KNOWN_EXPORTER_NAMES', () => {
   });
 });
 
+// #406: three hand-maintained lists of the same eleven names. Adding a twelfth
+// exporter per the documented steps but forgetting config.ts passes lint,
+// typecheck and the whole suite, and then rejects EXPORTERS=x at runtime with
+// "Unknown exporter". This is the cheapest guard against that.
+describe('the exporter name lists agree', () => {
+  it('KNOWN_EXPORTERS in config.ts matches the registry', async () => {
+    const { _knownExporterNamesForTest } = await import('../../src/exporters/config.js');
+    expect([..._knownExporterNamesForTest].sort()).toEqual([...KNOWN_EXPORTER_NAMES].sort());
+  });
+
+  it('has one registry entry per known name, with no duplicates', () => {
+    // A duplicated schema name would make the derived set smaller than the
+    // registry, and the equality test above would still pass.
+    expect(KNOWN_EXPORTER_NAMES.size).toBe(EXPORTER_REGISTRY.length);
+  });
+});
+
 // ─── createExporterFromEntry() ─────────────────────────────────────────────
 
 describe('createExporterFromEntry()', () => {

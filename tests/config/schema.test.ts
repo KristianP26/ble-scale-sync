@@ -88,6 +88,10 @@ describe('AppConfigSchema', () => {
       expect(result.data.scale.weight_unit).toBe('kg');
       expect(result.data.scale.height_unit).toBe('cm');
       expect(result.data.unknown_user).toBe('nearest');
+      // Absent out_of_range means today's behaviour: warn and export anyway.
+      // Changing this default would silently start discarding readings on
+      // every existing install (#395).
+      expect(result.data.out_of_range).toBe('warn');
       expect(result.data.users[0].last_known_weight).toBeNull();
     }
   });
@@ -815,5 +819,84 @@ describe('formatConfigError()', () => {
       expect(msg).toMatch(/Run '(npm run validate|ble-scale-sync validate)'/);
       expect(msg).toMatch(/'(npm run setup|ble-scale-sync setup)'/);
     }
+  });
+});
+
+describe('out_of_range (#395)', () => {
+  it('accepts skip and keeps it', () => {
+    // The `success` assertion alone would pass with the key deleted from the
+    // schema entirely, because Zod strips what it does not know about.
+    const result = AppConfigSchema.safeParse({ ...VALID_CONFIG, out_of_range: 'skip' });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.out_of_range).toBe('skip');
+  });
+
+  it('rejects a value that is neither warn nor skip', () => {
+    const result = AppConfigSchema.safeParse({ ...VALID_CONFIG, out_of_range: 'export' });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('runtime.idle_rescan_delay (#398)', () => {
+  it('defaults to 5 seconds when runtime is present without it', () => {
+    const result = AppConfigSchema.safeParse({
+      ...VALID_CONFIG,
+      runtime: { continuous_mode: true },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.runtime?.idle_rescan_delay).toBe(5);
+  });
+
+  it('keeps a configured value', () => {
+    // Asserting only `success` would pass with the key removed from the schema,
+    // since Zod strips what it does not know about.
+    const result = AppConfigSchema.safeParse({
+      ...VALID_CONFIG,
+      runtime: { continuous_mode: true, idle_rescan_delay: 2 },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.runtime?.idle_rescan_delay).toBe(2);
+  });
+
+  it('accepts 0, which means rescan immediately', () => {
+    const result = AppConfigSchema.safeParse({
+      ...VALID_CONFIG,
+      runtime: { idle_rescan_delay: 0 },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.runtime?.idle_rescan_delay).toBe(0);
+  });
+
+  it('rejects a negative delay and a non-integer', () => {
+    expect(
+      AppConfigSchema.safeParse({ ...VALID_CONFIG, runtime: { idle_rescan_delay: -1 } }).success,
+    ).toBe(false);
+    expect(
+      AppConfigSchema.safeParse({ ...VALID_CONFIG, runtime: { idle_rescan_delay: 1.5 } }).success,
+    ).toBe(false);
+  });
+});
+
+describe('runtime.retry_failed_exports (#412)', () => {
+  it('defaults to on', () => {
+    const result = AppConfigSchema.safeParse({ ...VALID_CONFIG, runtime: {} });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.runtime?.retry_failed_exports).toBe(true);
+  });
+
+  it('keeps an explicit false, which is what turns the disk writes off', () => {
+    const result = AppConfigSchema.safeParse({
+      ...VALID_CONFIG,
+      runtime: { retry_failed_exports: false },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.runtime?.retry_failed_exports).toBe(false);
+  });
+
+  it('rejects a non-boolean', () => {
+    expect(
+      AppConfigSchema.safeParse({ ...VALID_CONFIG, runtime: { retry_failed_exports: 'yes' } })
+        .success,
+    ).toBe(false);
   });
 });
