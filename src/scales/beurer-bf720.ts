@@ -15,7 +15,8 @@ import {
   type ScaleBodyComp,
   ReadingComposition,
 } from './body-comp-helpers.js';
-import { bleLog } from '../ble/types.js';
+import { bleLog, LBS_TO_KG } from '../ble/types.js';
+import { parseSigDateTime, parseSigWeightMeasurement } from './sig-wss.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
 // ─── Beurer SIG-standard adapter (BF720, BF105) ─────────────────────────────
@@ -163,9 +164,6 @@ const UCP_RESULTS: Record<number, string> = {
  * days ago).
  */
 const HISTORY_MAX_AGE_MS = 5 * 60_000;
-
-/** SIG mass fields are in lb when the frame's unit flag is set. */
-const LBS_TO_KG = 0.453592;
 
 interface CachedComp {
   fat?: number; // %
@@ -769,22 +767,6 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     this.cachedComp = {};
   }
 
-  /** Decode a 7-byte SIG timestamp; return undefined on a zero/invalid date. */
-  private parseTimestamp(data: Buffer, offset: number): Date | undefined {
-    if (offset + 7 > data.length) return undefined;
-    const year = data.readUInt16LE(offset);
-    if (year === 0) return undefined;
-    const d = new Date(
-      year,
-      data[offset + 2] - 1,
-      data[offset + 3],
-      data[offset + 4],
-      data[offset + 5],
-      data[offset + 6],
-    );
-    return Number.isNaN(d.getTime()) ? undefined : d;
-  }
-
   /**
    * Only timestamps older than the freshness window mark a reading as
    * historical. A live weigh-in is stamped "now" and must resolve immediately
@@ -795,25 +777,20 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     return Date.now() - ts.getTime() > HISTORY_MAX_AGE_MS ? ts : undefined;
   }
 
-  /** Weight Measurement 0x2A9D. */
+  /**
+   * Weight Measurement 0x2A9D, decoded by the shared SIG decoder.
+   *
+   * The kg/lb rule lives in the decoder because `normalizesWeight = true` makes
+   * it a correctness requirement rather than a preference. What stays here is
+   * the caching rule: a zero or non-finite weight must not overwrite a weight
+   * this session already has, because the scale sends zeroed frames of its own.
+   */
   private parseWeightMeasurement(data: Buffer): void {
-    if (data.length < 3) return;
-    const flags = data[0];
-    const isKg = (flags & 0x01) === 0;
-    const hasTimestamp = (flags & 0x02) !== 0;
-
-    // `normalizesWeight = true` promises the shared layer that whatever comes
-    // out of here is already kg, so it skips its own conversion. An lb frame
-    // (flags bit 0) must therefore be converted here or pounds are exported as
-    // kilograms, a 2.2x error. The sibling standard-gatt adapter, which parses
-    // these identical SIG frames, has always done this.
-    const weight = data.readUInt16LE(1) * (isKg ? 0.005 : 0.01 * LBS_TO_KG);
-    if (weight > 0 && Number.isFinite(weight)) this.cachedWeight = weight;
-
-    if (hasTimestamp) {
-      const ts = this.parseTimestamp(data, 3);
-      if (ts) this.cachedTimestamp = ts;
+    const { weightKg, timestamp } = parseSigWeightMeasurement(data);
+    if (weightKg !== undefined && weightKg > 0 && Number.isFinite(weightKg)) {
+      this.cachedWeight = weightKg;
     }
+    if (timestamp) this.cachedTimestamp = timestamp;
   }
 
   /** Body Composition Measurement 0x2A9C. */
@@ -868,7 +845,7 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
 
     if (flags & 0x0002) {
       // Timestamp.
-      const ts = this.parseTimestamp(data, off);
+      const ts = parseSigDateTime(data, off);
       if (ts) this.cachedTimestamp = ts;
       off += 7;
     }
