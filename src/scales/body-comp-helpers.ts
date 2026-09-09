@@ -9,6 +9,7 @@
 
 import type { UserProfile, BodyComposition, ScaleReading } from '../interfaces/scale-adapter.js';
 import { createLogger } from '../logger.js';
+import { normalizeUuid } from '../ble/types.js';
 
 const biaLog = createLogger('BIA');
 
@@ -241,10 +242,7 @@ export function uuid16(code: number): string {
  * before they are compared.
  */
 export function normalizeServiceUuid(uuid: string): string {
-  const stripped = uuid.toLowerCase().replace(/[-{}]/g, '');
-  if (stripped.length === 4) return uuid16(Number.parseInt(stripped, 16));
-  if (stripped.length === 8) return `${stripped}00001000800000805f9b34fb`;
-  return stripped;
+  return normalizeUuid(uuid);
 }
 
 export function r2(v: number): number {

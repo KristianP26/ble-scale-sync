@@ -164,11 +164,22 @@ export interface ScanResult {
 
 export const bleLog = createLogger('BLE');
 
-/** Normalize a UUID to lowercase 32-char (no dashes) form for comparison. */
+/**
+ * Normalize a UUID to lowercase 32-char (no dashes) form for comparison.
+ *
+ * Accepts the shapes the transports actually hand us: 16-bit ('181b'), 32-bit,
+ * full 128-bit with or without dashes, and the braced form some stacks print.
+ * This is the only normalizer in the project; there used to be five, one of
+ * which returned the DASHED form under the same name and would silently never
+ * match anything compared against this one (#406).
+ */
 export function normalizeUuid(uuid: string): string {
-  const stripped = uuid.replace(/-/g, '').toLowerCase();
+  const stripped = uuid.replace(/[-{}]/g, '').toLowerCase();
   if (stripped.length === 4) {
     return `0000${stripped}${BT_BASE_UUID_SUFFIX}`;
+  }
+  if (stripped.length === 8) {
+    return `${stripped}${BT_BASE_UUID_SUFFIX}`;
   }
   return stripped;
 }

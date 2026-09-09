@@ -11,7 +11,14 @@ import {
   safeName,
 } from '../advertisement.js';
 import type { Watcher, WatcherConfig } from '../reading-source.js';
-import { bleLog, withIdleTimeout, withTimeout, errMsg, IMPEDANCE_GRACE_MS } from '../types.js';
+import {
+  bleLog,
+  withIdleTimeout,
+  withTimeout,
+  errMsg,
+  normalizeUuid,
+  IMPEDANCE_GRACE_MS,
+} from '../types.js';
 import { AsyncQueue } from '../async-queue.js';
 import { topics } from './topics.js';
 import {
@@ -41,31 +48,6 @@ const GATT_READING_IDLE_MS = 60_000;
  * session outlives it stays true.
  */
 const GATT_SESSION_ABSOLUTE_MS = 90_000;
-
-/** Bluetooth Base UUID for expanding 16-bit UUIDs to 128-bit form. */
-const BT_BASE_UUID = '00000000-0000-1000-8000-00805f9b34fb';
-
-/**
- * Normalize a BLE UUID to lowercase 128-bit form for reliable comparison.
- * Handles 16-bit ("fff4"), 32-bit, and full 128-bit UUIDs with or without dashes.
- */
-function normalizeUuid(uuid: string): string {
-  const lower = uuid.toLowerCase().replace(/-/g, '');
-  if (lower.length === 4) {
-    // 16-bit → expand into base UUID
-    return BT_BASE_UUID.replace('00000000', `0000${lower}`);
-  }
-  if (lower.length === 8) {
-    // 32-bit → expand into base UUID
-    return BT_BASE_UUID.replace('00000000', lower);
-  }
-  // Already 128-bit (32 hex chars) — insert dashes if missing
-  if (lower.length === 32) {
-    return `${lower.slice(0, 8)}-${lower.slice(8, 12)}-${lower.slice(12, 16)}-${lower.slice(16, 20)}-${lower.slice(20)}`;
-  }
-  // Already formatted 128-bit
-  return lower;
-}
 
 type LifecycleHandler =
   | { event: 'reconnect'; handler: () => void }
