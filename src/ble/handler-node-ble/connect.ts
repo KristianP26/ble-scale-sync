@@ -102,6 +102,9 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
   // every received advertisement updates the freshness clock. The tracker is
   // rebound when the catch branch swaps the device reference.
   let tracker = startPeerFreshnessTracker(device);
+  // Set immediately before each return, so the finally can tell "handing this
+  // proxy to the caller" from "leaving by exception".
+  let succeeded = false;
 
   try {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -161,6 +164,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           bleLog.debug('Connected with discovery active; stopping discovery for the GATT phase');
           await stopDiscoveryAndQuiesce(btAdapter);
         }
+        succeeded = true;
         return device;
       } catch (err: unknown) {
         const msg = errMsg(err);
@@ -278,5 +282,14 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
     throw new Error('Connection failed');
   } finally {
     tracker.stop();
+    // Every throw path leaves the proxy this function last acquired unreleased,
+    // and the caller cannot compensate: `device = await connectWithRecovery()`
+    // never runs when it throws, so teardownSession releases the proxy it
+    // passed IN, not the one the retry loop ended up holding. That proxy has
+    // certainly registered its match rule and bus listener, because the
+    // freshness tracker reads RSSI off it (#404, same mechanism as #396/#397).
+    //
+    // Only proxies acquired in here: ctx.initialDevice belongs to the caller.
+    if (!succeeded && device !== ctx.initialDevice) releaseDeviceProxy(device);
   }
 }

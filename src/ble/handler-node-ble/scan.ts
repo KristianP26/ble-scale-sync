@@ -19,7 +19,7 @@ import {
   POST_DISCOVERY_QUIESCE_MS,
   GATT_DISCOVERY_TIMEOUT_MS,
 } from '../types.js';
-import { helperOf, getDbusNext, type Adapter, type Device } from './dbus.js';
+import { helperOf, getDbusNext, releaseDeviceProxy, type Adapter, type Device } from './dbus.js';
 import { applyDbusMatchRefcountPatch } from './dbus-match-patch.js';
 import { getBus, attachBusErrorHandler, isDbusConnectionError, dbusError } from './connection.js';
 import { registerPairingAgent, setPairingTarget } from './agent.js';
@@ -485,8 +485,9 @@ export async function scanDevices(
         if (seen.has(addr)) continue;
         seen.add(addr);
 
+        let dev: Device | undefined;
         try {
-          const dev = await btAdapter.getDevice(addr);
+          dev = await btAdapter.getDevice(addr);
           // Match on what the read path matches on, not on the name alone.
           // This tool is what users are pointed at to discover the adapter name
           // for `ble.force_scale_adapter`, so an answer that differs from what a
@@ -518,6 +519,14 @@ export async function scanDevices(
           });
         } catch {
           /* device may have gone away */
+        } finally {
+          // Reading a property is what registers the listener and the D-Bus
+          // match rule, and this loop reads two per device. autoDiscover and
+          // removeDevice already hand theirs back; this one did not, so a scan
+          // in a crowded room walked toward the per-connection match-rule cap
+          // (#404). Bounded by `seen` and by the throwaway bus below, but it is
+          // the same mechanism as #396.
+          if (dev) releaseDeviceProxy(dev);
         }
       }
 
