@@ -9,10 +9,18 @@ import { LBS_TO_KG } from '../ble/types.js';
  * `timestampOffset` rather than a Date, so the Date Time decoder lives here,
  * with the first characteristic in the project that actually decodes it.
  *
- * `renpho.ts` also subscribes 0x2A9D and is deliberately NOT folded in: it uses
- * 0.05 kg per unit, ten times the SIG resolution, which is a vendor deviation
- * rather than this layout. Same reason `sig-bcs.ts` keeps Renpho out of the
- * 0x2A9C decoder.
+ * Two other files walk a frame shaped like this one and are deliberately NOT
+ * folded in:
+ *
+ * - `renpho.ts` subscribes 0x2A9D but uses 0.05 kg per unit, ten times the SIG
+ *   resolution, confirmed against a physical scale. (`sig-bcs.ts` also keeps
+ *   Renpho out of the 0x2A9C decoder, but for a different reason: it holds the
+ *   first impedance across a split indication and ignores the fat.)
+ * - `xiaomi-mi-scale-legacy.ts` decodes the same field layout at the same SIG
+ *   resolutions, but from broadcast service data rather than a notification,
+ *   and it reassigns flag bits the spec uses otherwise - bit 4 catty/jin and
+ *   bit 5 stable, where the spec has User ID and BMI/height. Its agreement on
+ *   the weight is a useful cross-check on this decoder, not a caller for it.
  *
  * Layout, per the SIG specification:
  *   Byte  0    : Flags (uint8) - bit 0 imperial, bit 1 timestamp present
