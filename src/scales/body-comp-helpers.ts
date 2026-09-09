@@ -65,6 +65,15 @@ export const IMPEDANCE_MIN_OHM = 150;
 export const IMPEDANCE_MAX_OHM = 1200;
 
 /**
+ * Upper bound on a body fat percentage this project will publish as measured.
+ * Well above any real reading, and well below what a corrupted 16-bit field
+ * produces. It rejects rather than clamps: a value this far out is not a
+ * measurement to be trimmed, it is a frame that should fall back to the
+ * estimate (#405).
+ */
+const MAX_PLAUSIBLE_FAT_PCT = 75;
+
+/**
  * BIA body fat, or `undefined` when the number is not a body.
  *
  * `undefined` is exactly what `buildPayload`'s `comp.fat ?? estimateBodyFat()`
@@ -107,7 +116,22 @@ export function buildPayload(
   const heightM = p.height / 100;
   const bmi = weight / (heightM * heightM);
 
-  const bodyFatPercent = comp.fat ?? estimateBodyFat(bmi, p);
+  // A scale-provided fat is used as given, but only if it is a body fat
+  // percentage at all. Nothing downstream bounds it: lean mass is
+  // weight * (1 - fat/100), so 6553.5 % (the 0xFFFF sentinel, or any other
+  // corrupted 16-bit field) makes lean mass negative and exports a negative
+  // bone mass, water percentage and muscle mass. The sentinel is rejected at
+  // the decoders now, but this is the sink they all drain into, and a decoder
+  // added later should not be able to reintroduce it (#405).
+  const reported = comp.fat;
+  const usable = reported !== undefined && reported > 0 && reported <= MAX_PLAUSIBLE_FAT_PCT;
+  if (reported !== undefined && !usable) {
+    biaLog.debug(
+      `Scale-reported body fat ${reported} % is outside 0-${MAX_PLAUSIBLE_FAT_PCT} %, ` +
+        `so the BMI estimate is used instead.`,
+    );
+  }
+  const bodyFatPercent = usable ? reported : estimateBodyFat(bmi, p);
   const lbm = weight * (1 - bodyFatPercent / 100);
 
   const waterPercent = comp.water ?? ((lbm * (p.isAthlete ? 0.74 : 0.73)) / weight) * 100;

@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { parseSigBodyComposition, toScaleReading } from '../../src/scales/sig-bcs.js';
 import { StandardGattScaleAdapter } from '../../src/scales/standard-gatt.js';
 import type { UserProfile } from '../../src/interfaces/scale-adapter.js';
+import { BeurerBf720Adapter } from '../../src/scales/beurer-bf720.js';
+import { uuid16, buildPayload } from '../../src/scales/body-comp-helpers.js';
 
 const PROFILE: UserProfile = {
   height: 180,
@@ -107,32 +109,120 @@ describe('StandardGattScaleAdapter sentinel handling (#405)', () => {
 /**
  * beurer-bf720.ts keeps its own copy of this parser, because it is entangled
  * with the user-slot and consent state machine. Two implementations of one
- * characteristic is how #405 happened, so pin that they agree on the frames
- * from the #229 BF788 capture.
+ * characteristic is how #405 happened, so run the #229 capture frames through
+ * BOTH and assert they agree.
  */
 describe('the BF720 copy agrees with the shared decoder', () => {
   // flags 0x0398: BMR, muscle %, soft lean mass, body water mass, impedance.
   const REAL_COMP = Buffer.from('9803f300962389014042fa2f550f', 'hex');
   // Every composition field zeroed, which is 35 of the 36 frames in that capture.
   const ZEROED_COMP = Buffer.from('9803000096230000000000000000', 'hex');
+  // The 0x2A9D weight frame the BF720 pairs a composition frame with.
+  const WSS_FRAME = (() => {
+    const buf = Buffer.alloc(3);
+    buf[0] = 0x00;
+    buf.writeUInt16LE(16000, 1); // 80.00 kg
+    return buf;
+  })();
+  const CHR_WEIGHT = uuid16(0x2a9d);
+  const CHR_BODYCOMP = uuid16(0x2a9c);
 
-  it('decodes the real frame to the numbers the BF720 test asserts', () => {
-    const decoded = parseSigBodyComposition(REAL_COMP)!;
-    expect(decoded.bodyFatPercent).toBeCloseTo(24.3, 1);
-    expect(decoded.musclePct).toBeCloseTo(39.3, 1);
-    expect(decoded.softLeanKg).toBeCloseTo(84.8, 1);
-    expect(decoded.waterMassKg).toBeCloseTo(61.41, 1);
-    expect(decoded.impedanceOhm).toBeCloseTo(392.5, 1);
+  /** What the BF720 adapter made of a frame, in the decoder's own vocabulary. */
+  function throughBf720(frame: Buffer): {
+    bodyFatPercent?: number;
+    musclePct?: number;
+    softLeanKg?: number;
+    waterMassKg?: number;
+    impedanceOhm?: number;
+  } {
+    const adapter = new BeurerBf720Adapter();
+    adapter.onSessionStart?.();
+    adapter.parseCharNotification!(CHR_WEIGHT, WSS_FRAME);
+    const reading = adapter.parseCharNotification!(CHR_BODYCOMP, frame);
+    const cached = (
+      adapter as unknown as {
+        cachedComp: {
+          fat?: number;
+          muscle?: number;
+          softLean?: number;
+          waterMass?: number;
+        };
+      }
+    ).cachedComp;
+    return {
+      bodyFatPercent: cached.fat,
+      musclePct: cached.muscle,
+      softLeanKg: cached.softLean,
+      waterMassKg: cached.waterMass,
+      impedanceOhm: reading?.impedance || undefined,
+    };
+  }
+
+  it('agrees on the real frame', () => {
+    const shared = parseSigBodyComposition(REAL_COMP)!;
+    const bf720 = throughBf720(REAL_COMP);
+
+    expect(shared.bodyFatPercent).toBeCloseTo(24.3, 1);
+    expect(shared.musclePct).toBeCloseTo(39.3, 1);
+    expect(shared.softLeanKg).toBeCloseTo(84.8, 1);
+    expect(shared.waterMassKg).toBeCloseTo(61.41, 1);
+    expect(shared.impedanceOhm).toBeCloseTo(392.5, 1);
+
+    expect(bf720.bodyFatPercent).toBeCloseTo(shared.bodyFatPercent!, 3);
+    expect(bf720.musclePct).toBeCloseTo(shared.musclePct!, 3);
+    expect(bf720.softLeanKg).toBeCloseTo(shared.softLeanKg!, 3);
+    expect(bf720.waterMassKg).toBeCloseTo(shared.waterMassKg!, 3);
+    expect(bf720.impedanceOhm).toBeCloseTo(shared.impedanceOhm!, 3);
   });
 
-  it('reads the zeroed stub as carrying no measurement at all', () => {
-    const decoded = parseSigBodyComposition(ZEROED_COMP)!;
-    expect(decoded.bodyFatPercent).toBeUndefined();
-    expect(decoded.musclePct).toBeUndefined();
-    expect(decoded.softLeanKg).toBe(0);
-    expect(decoded.waterMassKg).toBe(0);
+  it('agrees that the zeroed stub carries no measurement at all', () => {
+    const shared = parseSigBodyComposition(ZEROED_COMP)!;
+    const bf720 = throughBf720(ZEROED_COMP);
+
+    for (const decoded of [shared, bf720]) {
+      expect(decoded.bodyFatPercent).toBeUndefined();
+      expect(decoded.musclePct).toBeUndefined();
+      // A zeroed soft lean mass makes bone = leanBodyMass - 0, which is the
+      // 117.92 kg of "bone" this capture produced before it was guarded.
+      expect(decoded.softLeanKg).toBeUndefined();
+      expect(decoded.waterMassKg).toBeUndefined();
+    }
     // No weight bit in these flags, which is why this frame never completed a
     // reading on the two adapters that did not guard it.
-    expect(decoded.weightKg).toBeUndefined();
+    expect(shared.weightKg).toBeUndefined();
+  });
+
+  it('does not report the whole lean mass as bone for a zeroed stub', () => {
+    const adapter = new BeurerBf720Adapter();
+    adapter.onSessionStart?.();
+    adapter.parseCharNotification!(CHR_WEIGHT, WSS_FRAME);
+    // A frame with a REAL fat and a zeroed soft lean mass: the early return on
+    // a zeroed fat does not cover it.
+    const partial = Buffer.from(REAL_COMP);
+    partial.writeUInt16LE(0, 8); // soft lean mass -> 0
+    partial.writeUInt16LE(0, 10); // body water mass -> 0
+    const reading = adapter.parseCharNotification!(CHR_BODYCOMP, partial)!;
+    const payload = adapter.computeMetrics(reading, PROFILE);
+
+    expect(payload.boneMass).toBeLessThan(10);
+    expect(payload.waterPercent).toBeGreaterThan(20);
+  });
+});
+
+describe('buildPayload bounds a scale-reported body fat (#405)', () => {
+  it('falls back to the estimate rather than exporting a negative bone mass', () => {
+    const absurd = buildPayload(80, 0, { fat: 6553.5 }, PROFILE);
+    const estimated = buildPayload(80, 0, {}, PROFILE);
+
+    expect(absurd.bodyFatPercent).toBeCloseTo(estimated.bodyFatPercent, 6);
+    expect(absurd.boneMass).toBeGreaterThan(0);
+    expect(absurd.waterPercent).toBeGreaterThan(0);
+    expect(absurd.muscleMass).toBeGreaterThan(0);
+  });
+
+  it('leaves a plausible reported fat exactly as reported', () => {
+    expect(buildPayload(80, 0, { fat: 22.5 }, PROFILE).bodyFatPercent).toBeCloseTo(22.5, 6);
+    // The band is generous on purpose: it rejects corruption, not obesity.
+    expect(buildPayload(80, 0, { fat: 70 }, PROFILE).bodyFatPercent).toBeCloseTo(70, 6);
   });
 });

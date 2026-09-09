@@ -884,13 +884,19 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     if (flags & 0x0080) {
       const softLean = u16(off); // Soft Lean Mass kg
       if (softLean == null) return;
-      this.cachedComp.softLean = softLean * massMul;
+      // Same rule again, and here it is the field with the worst failure mode:
+      // bone is derived as leanBodyMass - softLean, so a zeroed soft lean mass
+      // reports the entire lean mass as bone. That is the 117.92 kg of "bone"
+      // this file's own comment above records from the #229 capture (#405).
+      if (softLean !== 0 && softLean !== 0xffff) this.cachedComp.softLean = softLean * massMul;
       off += 2;
     }
     if (flags & 0x0100) {
       const waterMass = u16(off); // Body Water Mass kg
       if (waterMass == null) return;
-      this.cachedComp.waterMass = waterMass * massMul;
+      // buildPayload takes `comp.water ?? <estimate>`, so a zero here wins over
+      // the estimate and exports 0 % body water.
+      if (waterMass !== 0 && waterMass !== 0xffff) this.cachedComp.waterMass = waterMass * massMul;
       off += 2;
     }
     if (flags & 0x0200) {

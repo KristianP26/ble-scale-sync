@@ -10,7 +10,6 @@ import type {
 import { uuid16, buildPayload, xorChecksum, type ScaleBodyComp } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 import { bleLog } from '../ble/types.js';
-import { toHex } from '../ble/shared.js';
 
 /**
  * Adapter for the Hoffen BS-8107 body-fat scale.
@@ -86,10 +85,14 @@ export class HoffenAdapter implements ScaleAdapterCore, GattWiring {
     // rejected; and the code is logged so the first owner to run with
     // debug: true answers the question for good.
     if (this.lastCommand && data.equals(this.lastCommand)) {
-      bleLog.debug(`Hoffen: ignoring an echo of the command we just wrote [${toHex(data)}]`);
+      bleLog.debug(
+        `Hoffen: ignoring an echo of the command we just wrote [${data.toString('hex')}]`,
+      );
       return null;
     }
-    bleLog.debug(`Hoffen 0xFA frame: response code 0x${data[1].toString(16)} [${toHex(data)}]`);
+    bleLog.debug(
+      `Hoffen 0xFA frame: response code 0x${data[1].toString(16)} [${data.toString('hex')}]`,
+    );
 
     const weight = data.readUInt16LE(3) / 10;
 

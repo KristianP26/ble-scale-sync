@@ -41,6 +41,7 @@ const SIG_UNAVAILABLE = 0xffff;
 
 /**
  * A scale-reported percentage, or undefined when the scale reported nothing.
+ * The mass fields below apply the same rule inline.
  *
  * Zero is not a measurement (the #386 rule, and `beurer-sanitas.ts` has said so
  * in its own `measured()` since): 35 of the 36 body-composition frames in the
@@ -113,13 +114,16 @@ export function parseSigBodyComposition(data: Buffer): SigBodyComposition | null
   if (flags & FLAG_SOFT_LEAN_MASS && offset + 2 <= data.length) {
     const raw = data.readUInt16LE(offset);
     offset += 2;
-    if (raw !== SIG_UNAVAILABLE) result.softLeanKg = toKg(raw * massMultiplier);
+    // Same rule as the percentages: a zero here is a stub, not a person with no
+    // soft lean mass, and a caller deriving bone as lean - softLean would
+    // report the whole lean mass as bone.
+    if (raw !== 0 && raw !== SIG_UNAVAILABLE) result.softLeanKg = toKg(raw * massMultiplier);
   }
 
   if (flags & FLAG_WATER_MASS && offset + 2 <= data.length) {
     const raw = data.readUInt16LE(offset);
     offset += 2;
-    if (raw !== SIG_UNAVAILABLE) result.waterMassKg = toKg(raw * massMultiplier);
+    if (raw !== 0 && raw !== SIG_UNAVAILABLE) result.waterMassKg = toKg(raw * massMultiplier);
   }
 
   if (flags & FLAG_IMPEDANCE && offset + 2 <= data.length) {
