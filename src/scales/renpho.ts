@@ -10,7 +10,12 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, computeBiaFat, type ScaleBodyComp } from './body-comp-helpers.js';
+import {
+  uuid16,
+  buildPayload,
+  biaFatIfPlausible,
+  type ScaleBodyComp,
+} from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
@@ -317,11 +322,11 @@ export class RenphoScaleAdapter
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
     const comp: ScaleBodyComp = {};
-    // Recompute body fat from raw impedance (BIA) when available; otherwise
-    // buildPayload falls back to BMI estimation.
-    if (reading.impedance > 0) {
-      comp.fat = computeBiaFat(reading.weight, reading.impedance, profile);
-    }
+    // Recompute body fat from raw impedance (BIA) when the impedance is inside
+    // the plausible whole-body band; otherwise buildPayload falls back to BMI
+    // estimation, which is better than a pinned floor or ceiling published as a
+    // measurement (#405).
+    comp.fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
     return buildPayload(reading.weight, reading.impedance, comp, profile);
   }
 }

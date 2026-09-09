@@ -7,7 +7,7 @@ import type {
   ScaleReading,
   UserProfile,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, computeBiaFat } from './body-comp-helpers.js';
+import { uuid16, buildPayload, biaFatIfPlausible } from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
@@ -161,9 +161,11 @@ export class EtekcityEsf551Adapter implements ScaleAdapterCore, GattWiring {
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
     // The raw impedance goes through the shared BIA estimator, the same way
     // Hutbit and Koogeek do it. Passing it to buildPayload without computing a
-    // fat percentage first would silently fall back to the BMI estimate (#386).
-    const fat =
-      reading.impedance > 0 ? computeBiaFat(reading.weight, reading.impedance, profile) : undefined;
+    // fat percentage first would silently fall back to the BMI estimate (#386),
+    // and computing it without the plausibility band would publish a pinned
+    // floor or ceiling as if it were measured (#405). The capture this adapter
+    // was decoded from reads 531 ohm, comfortably inside the band.
+    const fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
     return buildPayload(reading.weight, reading.impedance, { fat }, profile);
   }
 }

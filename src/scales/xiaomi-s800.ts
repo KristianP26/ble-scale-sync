@@ -7,7 +7,7 @@ import type {
   ScaleReading,
   UserProfile,
 } from '../interfaces/scale-adapter.js';
-import { buildPayload, computeBiaFat } from './body-comp-helpers.js';
+import { buildPayload, biaFatIfPlausible } from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 import { SVC_FE95, decryptMiBeaconV5, macFrameOrderFromFrame, normUuid } from './mibeacon.js';
@@ -129,8 +129,11 @@ export class XiaomiS800Adapter implements ScaleAdapterCore, BroadcastSource {
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    const fat =
-      reading.impedance > 0 ? computeBiaFat(reading.weight, reading.impedance, profile) : undefined;
+    // Unreachable today: parseS800Object always publishes impedance 0, so this
+    // is the broadcast-only path and the BIA branch never runs. Routed through
+    // the plausibility guard anyway, so whoever adds the GATT path inherits the
+    // right example rather than the trap the other five had (#405).
+    const fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
     return buildPayload(reading.weight, reading.impedance, { fat }, profile);
   }
 }

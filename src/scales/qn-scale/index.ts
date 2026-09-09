@@ -1,4 +1,4 @@
-import { computeBiaFat, buildPayload } from '../body-comp-helpers.js';
+import { biaFatIfPlausible, buildPayload } from '../body-comp-helpers.js';
 import type {
   BleDeviceInfo,
   ConnectionContext,
@@ -1144,9 +1144,16 @@ export class QnScaleAdapter
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    // In broadcast mode impedance is 0: skip BIA, let buildPayload use Deurenberg fallback
-    const fat =
-      reading.impedance > 0 ? computeBiaFat(reading.weight, reading.impedance, profile) : undefined;
+    // In broadcast mode impedance is 0, and biaFatIfPlausible returns undefined
+    // for it, so buildPayload uses the Deurenberg fallback.
+    //
+    // isComplete gates GATT readings on impedance > 200 with no ceiling. The
+    // gate is deliberately left alone (ADR D011 decides the guard belongs at
+    // computation, not at parsing, and raising a completion floor would change
+    // WHEN a session ends), so an r1 far above the whole-body range still
+    // completes a reading - it just no longer produces a pinned 60 % as if it
+    // had been measured (#405).
+    const fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
     return buildPayload(reading.weight, reading.impedance, { fat }, profile);
   }
 }

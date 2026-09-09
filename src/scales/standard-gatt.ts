@@ -1,4 +1,9 @@
-import { computeBiaFat, buildPayload, uuid16, ReadingComposition } from './body-comp-helpers.js';
+import {
+  biaFatIfPlausible,
+  buildPayload,
+  uuid16,
+  ReadingComposition,
+} from './body-comp-helpers.js';
 import { parseSigBodyComposition, toScaleReading } from './sig-bcs.js';
 import type {
   BleDeviceInfo,
@@ -125,10 +130,14 @@ export class StandardGattScaleAdapter implements ScaleAdapterCore, GattWiring, U
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    // When impedance is available, use the full BIA-based calculation
-    if (reading.impedance > 0) {
-      const fat = computeBiaFat(reading.weight, reading.impedance, profile);
-      return buildPayload(reading.weight, reading.impedance, { fat }, profile);
+    // A plausible impedance gets the full BIA calculation. An implausible one
+    // does NOT fall through to Deurenberg here, unlike the impedance-only
+    // adapters: this scale reports its own body composition, which is a better
+    // source than an estimate from BMI, so a rejected impedance lands on the
+    // branch below rather than throwing that away too (#405).
+    const biaFat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
+    if (biaFat !== undefined) {
+      return buildPayload(reading.weight, reading.impedance, { fat: biaFat }, profile);
     }
 
     // Fallback: derive metrics from GATT body-fat + profile estimations
