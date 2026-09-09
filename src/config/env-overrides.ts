@@ -98,9 +98,11 @@ export function applyEnvOverrides(config: AppConfig): AppConfig {
       } else {
         log.warn('BLE_HANDLER=esphome-proxy ignored: ble.esphome_proxy not configured');
       }
-    } else {
+    } else if (handler !== '') {
       // Anything else used to be ignored without a word, which reads exactly
-      // like a handler switch that worked.
+      // like a handler switch that worked. An EMPTY value is exempt: setting a
+      // variable to nothing is how a compose file neutralises it, and warning
+      // about that on every start would be noise.
       log.warn(
         `BLE_HANDLER='${process.env.BLE_HANDLER}' is not a known handler ` +
           `(auto, mqtt-proxy, esphome-proxy, ha-bluetooth); ignoring it.`,

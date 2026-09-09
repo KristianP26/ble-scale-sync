@@ -63,6 +63,37 @@ describe('diffRestartRequired', () => {
     });
   });
 
+  // #407: these five are built once at startup (the embedded broker) or when
+  // the watcher starts (the ESPHome pool), so they need the warning as much as
+  // the connection fields next to them.
+  it('flags the embedded broker and ESPHome pool fields', () => {
+    const a = baseConfig({
+      ble: {
+        handler: 'mqtt-proxy',
+        mqtt_proxy: { broker_url: 'mqtt://h:1883', embedded_broker_port: 1883 },
+      },
+    });
+    const b = baseConfig({
+      ble: {
+        handler: 'mqtt-proxy',
+        mqtt_proxy: { broker_url: 'mqtt://h:1883', embedded_broker_port: 1884 },
+      },
+    });
+    expect(diffRestartRequired(a, b).map((f) => f.key)).toContain(
+      'ble.mqtt_proxy.embedded_broker_port',
+    );
+
+    const c = baseConfig({
+      ble: { handler: 'esphome-proxy', esphome_proxy: { host: 'p', advertisement_timeout: 0 } },
+    });
+    const d = baseConfig({
+      ble: { handler: 'esphome-proxy', esphome_proxy: { host: 'p', advertisement_timeout: 30 } },
+    });
+    expect(diffRestartRequired(c, d).map((f) => f.key)).toContain(
+      'ble.esphome_proxy.advertisement_timeout',
+    );
+  });
+
   it('does not flag a hot-reloadable ble key', () => {
     const a = baseConfig({ ble: { handler: 'auto', session_timeout_sec: 60 } });
     const b = baseConfig({ ble: { handler: 'auto', session_timeout_sec: 120 } });

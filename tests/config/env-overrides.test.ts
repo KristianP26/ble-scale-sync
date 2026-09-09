@@ -115,6 +115,15 @@ describe('env-overrides (focused unit tests for #184 split)', () => {
       expect(out.ble?.handler).toBe('auto');
     });
 
+    it('says nothing about an empty BLE_HANDLER, which is how a variable is neutralised', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.stubEnv('BLE_HANDLER', '');
+      const out = applyEnvOverrides(baseConfig());
+      expect(out.ble?.handler).toBe('auto');
+      expect(warn.mock.calls.flat().join(' ')).not.toMatch(/BLE_HANDLER/);
+      warn.mockRestore();
+    });
+
     it('warns about an unrecognised BLE_HANDLER instead of ignoring it silently', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       vi.stubEnv('BLE_HANDLER', 'esphome');

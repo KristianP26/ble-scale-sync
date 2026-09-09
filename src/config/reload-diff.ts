@@ -79,6 +79,20 @@ export function diffRestartRequired(
   diffField(out, 'ble.mqtt_proxy.topic_prefix', oldMqtt?.topic_prefix, newMqtt?.topic_prefix);
   diffField(out, 'ble.mqtt_proxy.username', oldMqtt?.username, newMqtt?.username);
   diffField(out, 'ble.mqtt_proxy.password', oldMqtt?.password, newMqtt?.password);
+  // The embedded broker is bootstrapped once at startup, so these two are as
+  // restart-required as the connection fields above (#407).
+  diffField(
+    out,
+    'ble.mqtt_proxy.embedded_broker_port',
+    oldMqtt?.embedded_broker_port,
+    newMqtt?.embedded_broker_port,
+  );
+  diffField(
+    out,
+    'ble.mqtt_proxy.embedded_broker_bind',
+    oldMqtt?.embedded_broker_bind,
+    newMqtt?.embedded_broker_bind,
+  );
 
   const oldEsp = oldConfig.ble?.esphome_proxy;
   const newEsp = newConfig.ble?.esphome_proxy;
@@ -91,6 +105,21 @@ export function diffRestartRequired(
     newEsp?.encryption_key,
   );
   diffField(out, 'ble.esphome_proxy.password', oldEsp?.password, newEsp?.password);
+  // The proxy pool is built when the watcher starts and is not rebuilt on
+  // reload, so these three change nothing until a restart either.
+  diffField(out, 'ble.esphome_proxy.client_info', oldEsp?.client_info, newEsp?.client_info);
+  diffField(
+    out,
+    'ble.esphome_proxy.additional_proxies',
+    oldEsp?.additional_proxies,
+    newEsp?.additional_proxies,
+  );
+  diffField(
+    out,
+    'ble.esphome_proxy.advertisement_timeout',
+    oldEsp?.advertisement_timeout,
+    newEsp?.advertisement_timeout,
+  );
 
   const oldHa = oldConfig.ble?.ha_bluetooth;
   const newHa = newConfig.ble?.ha_bluetooth;
