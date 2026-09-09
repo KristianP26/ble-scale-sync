@@ -31,6 +31,7 @@ describe('boolean exporter fields resolved from strings', () => {
     ['telegram', 'silent', 'silent'],
     ['telegram', 'report_exports', 'reportExports'],
     ['wger', 'sync_measurements', 'syncMeasurements'],
+    ['google-health', 'write_body_fat', 'writeBodyFat'],
   ];
 
   const base: Record<string, Record<string, unknown>> = {
@@ -38,6 +39,11 @@ describe('boolean exporter fields resolved from strings', () => {
     ntfy: { topic: 'scale' },
     telegram: { bot_token: 't', chat_id: '1' },
     wger: { base_url: 'https://wger.example', token: 'tok' },
+    'google-health': {
+      client_id: 'test-client-id',
+      client_secret: 'test-client-secret',
+      refresh_token: 'test-refresh-token',
+    },
   };
 
   it.each(CASES)('reads %s.%s = "false" as false, not as true', (type, key, field) => {
@@ -73,8 +79,8 @@ describe('boolean exporter fields resolved from strings', () => {
 // ─── EXPORTER_REGISTRY ─────────────────────────────────────────────────────
 
 describe('EXPORTER_REGISTRY', () => {
-  it('contains 11 exporter entries', () => {
-    expect(EXPORTER_REGISTRY).toHaveLength(11);
+  it('contains 12 exporter entries', () => {
+    expect(EXPORTER_REGISTRY).toHaveLength(12);
   });
 
   it('has entries for all known exporters', () => {
@@ -90,6 +96,7 @@ describe('EXPORTER_REGISTRY', () => {
     expect(names).toContain('intervals');
     expect(names).toContain('runalyze');
     expect(names).toContain('wger');
+    expect(names).toContain('google-health');
   });
 
   it('each entry has a schema and factory', () => {
@@ -107,8 +114,8 @@ describe('EXPORTER_REGISTRY', () => {
 // ─── EXPORTER_SCHEMAS ──────────────────────────────────────────────────────
 
 describe('EXPORTER_SCHEMAS', () => {
-  it('derives 11 schemas from registry', () => {
-    expect(EXPORTER_SCHEMAS).toHaveLength(11);
+  it('derives 12 schemas from registry', () => {
+    expect(EXPORTER_SCHEMAS).toHaveLength(12);
   });
 
   it('each schema has required fields', () => {
@@ -270,9 +277,9 @@ describe('EXPORTER_SCHEMAS', () => {
 // ─── KNOWN_EXPORTER_NAMES ──────────────────────────────────────────────────
 
 describe('KNOWN_EXPORTER_NAMES', () => {
-  it('is a Set with 11 entries', () => {
+  it('is a Set with 12 entries', () => {
     expect(KNOWN_EXPORTER_NAMES).toBeInstanceOf(Set);
-    expect(KNOWN_EXPORTER_NAMES.size).toBe(11);
+    expect(KNOWN_EXPORTER_NAMES.size).toBe(12);
   });
 
   it('contains all exporter names', () => {
@@ -287,6 +294,7 @@ describe('KNOWN_EXPORTER_NAMES', () => {
     expect(KNOWN_EXPORTER_NAMES.has('intervals')).toBe(true);
     expect(KNOWN_EXPORTER_NAMES.has('runalyze')).toBe(true);
     expect(KNOWN_EXPORTER_NAMES.has('wger')).toBe(true);
+    expect(KNOWN_EXPORTER_NAMES.has('google-health')).toBe(true);
   });
 });
 

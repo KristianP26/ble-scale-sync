@@ -1,6 +1,6 @@
 ---
 title: Exporters
-description: Configure Garmin Connect, Strava, Intervals.icu, Runalyze, Wger, MQTT, Webhook, InfluxDB, Ntfy, Telegram, and File export targets.
+description: Configure Garmin Connect, Google Health, Strava, Intervals.icu, Runalyze, Wger, MQTT, Webhook, InfluxDB, Ntfy, Telegram, and File export targets.
 head:
   - - meta
     - name: keywords
@@ -9,7 +9,7 @@ head:
 
 # Exporters
 
-BLE Scale Sync exports body composition data to 11 targets. The [setup wizard](/guide/configuration#setup-wizard-recommended) walks you through exporter selection, configuration, and connectivity testing.
+BLE Scale Sync exports body composition data to 12 targets. The [setup wizard](/guide/configuration#setup-wizard-recommended) walks you through exporter selection, configuration, and connectivity testing.
 
 Exporters are configured in `global_exporters` (shared by all users). For multi-user setups with separate accounts, see [Per-User Exporters](/multi-user#per-user-exporters). All enabled exporters run in parallel; the process reports an error only if **every** exporter fails.
 
@@ -22,6 +22,7 @@ Exporters are configured in `global_exporters` (shared by all users). For multi-
 | [**Ntfy**](#ntfy)               | Push notifications to phone/desktop                    |
 | [**Telegram**](#telegram)       | Send measurement notifications to a Telegram chat      |
 | [**File (CSV/JSONL)**](#file)   | Append readings to a local file                        |
+| [**Google Health**](#google-health) | Push weight and derived body fat to Google Health  |
 | [**Strava**](#strava)           | Update weight in your Strava athlete profile           |
 | [**Intervals.icu**](#intervals) | Push weight + body fat to Intervals.icu wellness       |
 | [**Runalyze**](#runalyze)       | Push weight + body composition to Runalyze metrics     |
@@ -292,6 +293,92 @@ volumes:
 ```
 
 :::
+## Google Health {#google-health}
+
+Push weight measurements to the Google Health API and optionally upload derived body-fat percentage.
+
+Google Health uses OAuth 2.0. BLE Scale Sync does not currently include an interactive setup helper for obtaining the initial refresh token, so a one-time manual OAuth setup is required.
+
+Google Health is a per-user exporter because its OAuth credentials authorize access to one person's health account.
+
+::: warning Per-user configuration only
+Configure `google-health` under a user's `exporters:` list, not under `global_exporters`. A Google Health OAuth refresh token authorizes one person's health account.
+:::
+
+| Field                 | Required | Default | Description                           |
+| --------------------- | -------- | ------- | ------------------------------------- |
+| `client_id`           | Yes      | (none)  | Google OAuth 2.0 client ID            |
+| `client_secret`       | Yes      | (none)  | Google OAuth 2.0 client secret        |
+| `refresh_token`       | Yes      | (none)  | Long-lived Google OAuth refresh token |
+| `write_body_fat`      | No       | `true`  | Upload derived body-fat percentage    |
+| `device_manufacturer` | No       | (none)  | Optional scale manufacturer metadata  |
+| `device_display_name` | No       | (none)  | Optional human-readable scale name    |
+
+```yaml
+users:
+  - name: Alice
+    exporters:
+      - type: google-health
+        client_id: '${GOOGLE_HEALTH_CLIENT_ID}'
+        client_secret: '${GOOGLE_HEALTH_CLIENT_SECRET}'
+        refresh_token: '${GOOGLE_HEALTH_REFRESH_TOKEN}'
+        write_body_fat: true
+```
+
+Optional device metadata can also be supplied:
+
+```yaml
+        device_manufacturer: 'Your scale manufacturer'
+        device_display_name: 'Bathroom Scale'
+```
+
+### Google Cloud setup
+
+1. Open the Google Cloud Console and create or select a project.
+
+2. Enable the **Google Health API** for the project.
+
+3. Configure the project's OAuth consent screen.
+
+4. Create an OAuth 2.0 client.
+
+   A Web application client can be used for the manual authorization flow.
+
+5. Authorize the client with offline access and the following scope:
+
+   ```text
+   https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.writeonly
+   ```
+
+6. Obtain a refresh token.
+
+   One convenient method is the Google OAuth 2.0 Playground:
+
+   - Open the OAuth 2.0 Playground.
+   - Open its configuration/settings.
+   - Enable **Use your own OAuth credentials**.
+   - Enter the OAuth client ID and client secret created above.
+   - Authorize the Google Health write scope.
+   - Exchange the authorization code for tokens.
+   - Copy the resulting refresh token into your BLE Scale Sync configuration.
+
+7. Restart BLE Scale Sync and check the logs for a successful Google Health export.
+
+BLE Scale Sync exchanges the refresh token for short-lived access tokens automatically and caches those access tokens in memory. OAuth credentials and access tokens are not logged.
+
+### Weight and body-fat records
+
+Weight measurements are uploaded as actively measured scale data.
+
+If `write_body_fat` is enabled and BLE Scale Sync has a valid `bodyFatPercent` value, body fat is uploaded as a derived Google Health data point.
+
+If body-fat data is unavailable or invalid, the weight measurement is still uploaded.
+
+### Credential security
+
+Treat the OAuth client secret and refresh token as credentials. Prefer `${ENV_VAR}` references rather than storing credentials directly in tracked configuration.
+
+Never commit a real `config.yaml` containing Google OAuth credentials. Use placeholder credentials only in documentation, examples, and tests.
 
 ## Strava {#strava}
 
@@ -441,6 +528,7 @@ A reading with a timestamp is sent **only to exporters that can record it at tha
 | --- | --- |
 | `file` | Yes |
 | `garmin` | Yes |
+| `google-health` | Yes |
 | `influxdb` | Yes |
 | `intervals` | Yes |
 | `runalyze` | Yes |
@@ -472,6 +560,7 @@ At startup, exporters are tested for connectivity. Failures are logged as warnin
 | InfluxDB      | `/health` endpoint, with token |
 | Ntfy          | `/v1/health` endpoint          |
 | Telegram      | `getChat` endpoint             |
+| Google Health | OAuth access-token refresh     |
 | Intervals.icu | `GET` wellness record          |
 | Runalyze      | `GET` bodyComposition metric   |
 | Wger          | `GET` userprofile record       |

@@ -13,7 +13,8 @@ export type ExporterName =
   | 'telegram'
   | 'intervals'
   | 'runalyze'
-  | 'wger';
+  | 'wger'
+  | 'google-health';
 
 /**
  * Runtime twin of `ExporterName`, for validating `EXPORTERS=...`.
@@ -35,6 +36,7 @@ const KNOWN_EXPORTERS = new Set<ExporterName>([
   'intervals',
   'runalyze',
   'wger',
+  'google-health',
 ]);
 
 /** @internal Exported for the registry-agreement test only. */
@@ -122,6 +124,21 @@ export interface WgerConfig {
   syncMeasurements: boolean;
 }
 
+export interface GoogleHealthConfig {
+  clientId: string;
+  clientSecret: string;
+  refreshToken: string;
+
+  /** Upload bodyFatPercent as a DERIVED Google Health data point. */
+  writeBodyFat: boolean;
+
+  /** Optional metadata identifying the physical scale. */
+  deviceManufacturer?: string;
+
+  /** Optional human-readable scale name. */
+  deviceDisplayName?: string;
+}
+
 export interface ExporterConfig {
   exporters: ExporterName[];
   garmin?: GarminConfig;
@@ -135,6 +152,7 @@ export interface ExporterConfig {
   intervals?: IntervalsConfig;
   runalyze?: RunalyzeConfig;
   wger?: WgerConfig;
+  googleHealth?: GoogleHealthConfig;
 }
 
 function fail(msg: string): never {
@@ -381,10 +399,12 @@ export function loadExporterConfig(): ExporterConfig {
     if (!baseUrl) {
       fail('WGER_BASE_URL is required when wger exporter is enabled.');
     }
+
     const token = process.env.WGER_TOKEN?.trim();
     if (!token) {
       fail('WGER_TOKEN is required when wger exporter is enabled.');
     }
+
     wger = {
       baseUrl,
       token,
@@ -393,6 +413,37 @@ export function loadExporterConfig(): ExporterConfig {
         process.env.WGER_SYNC_MEASUREMENTS?.trim(),
         true,
       ),
+    };
+  }
+
+  let googleHealth: GoogleHealthConfig | undefined;
+  if (exporters.includes('google-health')) {
+    const clientId = process.env.GOOGLE_HEALTH_CLIENT_ID?.trim();
+    if (!clientId) {
+      fail('GOOGLE_HEALTH_CLIENT_ID is required when google-health exporter is enabled.');
+    }
+
+    const clientSecret = process.env.GOOGLE_HEALTH_CLIENT_SECRET?.trim();
+    if (!clientSecret) {
+      fail('GOOGLE_HEALTH_CLIENT_SECRET is required when google-health exporter is enabled.');
+    }
+
+    const refreshToken = process.env.GOOGLE_HEALTH_REFRESH_TOKEN?.trim();
+    if (!refreshToken) {
+      fail('GOOGLE_HEALTH_REFRESH_TOKEN is required when google-health exporter is enabled.');
+    }
+
+    googleHealth = {
+      clientId,
+      clientSecret,
+      refreshToken,
+      writeBodyFat: parseBoolean(
+        'GOOGLE_HEALTH_WRITE_BODY_FAT',
+        process.env.GOOGLE_HEALTH_WRITE_BODY_FAT?.trim(),
+        true,
+      ),
+      deviceManufacturer: process.env.GOOGLE_HEALTH_DEVICE_MANUFACTURER?.trim() || undefined,
+      deviceDisplayName: process.env.GOOGLE_HEALTH_DEVICE_DISPLAY_NAME?.trim() || undefined,
     };
   }
 
@@ -409,5 +460,6 @@ export function loadExporterConfig(): ExporterConfig {
     intervals,
     runalyze,
     wger,
+    googleHealth,
   };
 }

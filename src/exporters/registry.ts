@@ -12,6 +12,7 @@ import type {
   IntervalsConfig,
   RunalyzeConfig,
   WgerConfig,
+  GoogleHealthConfig,
 } from './config.js';
 import {
   garminSchema,
@@ -29,6 +30,7 @@ import { telegramSchema, TelegramExporter } from './telegram.js';
 import { intervalsSchema, IntervalsExporter } from './intervals.js';
 import { runalyzeSchema, RunalyzeExporter } from './runalyze.js';
 import { wgerSchema, WgerExporter } from './wger.js';
+import { googleHealthSchema, GoogleHealthExporter } from './google-health.js';
 
 // --- Registry entry type ---
 
@@ -269,6 +271,21 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
         syncMeasurements: optionalBool(config, 'wger', 'sync_measurements') ?? true,
       };
       return new WgerExporter(wgerConfig);
+    },
+  },
+  {
+    schema: googleHealthSchema,
+    factory: (config) => {
+      const googleHealthConfig: GoogleHealthConfig = {
+        clientId: requireField(config, 'google-health', 'client_id'),
+        clientSecret: requireField(config, 'google-health', 'client_secret'),
+        refreshToken: requireField(config, 'google-health', 'refresh_token'),
+        writeBodyFat: optionalBool(config, 'google-health', 'write_body_fat') ?? true,
+        deviceManufacturer: config.device_manufacturer as string | undefined,
+        deviceDisplayName: config.device_display_name as string | undefined,
+      };
+
+      return new GoogleHealthExporter(googleHealthConfig);
     },
   },
 ];
