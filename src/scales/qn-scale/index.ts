@@ -293,9 +293,19 @@ export class QnScaleAdapter
    *
    * For older firmware without AE00: sends legacy unlock variants on FFF2.
    */
-  async onConnected(ctx: ConnectionContext): Promise<void> {
-    // Reset state for new connection
-    this.ctx = ctx;
+  /**
+   * Clear every per-session field BEFORE anything is subscribed (#394, #406).
+   *
+   * This used to live in onConnected(), which is too late on this adapter: QN
+   * is a MultiCharNotify adapter, and subscribeAndInit enables every notify
+   * binding before it awaits init, so a frame can be parsed against the
+   * PREVIOUS session's seenProtocolType, weightScaleFactor or configSent. That
+   * is the exact ordering the onSessionStart contract exists for.
+   *
+   * `this.ctx` stays in onConnected: it is the one thing that does not exist
+   * until then.
+   */
+  onSessionStart(): void {
     this.seenProtocolType = this.forcedProtocolType ?? 0x00;
     this.weightScaleFactor = 100;
     this.hasAe00 = false;
@@ -320,6 +330,16 @@ export class QnScaleAdapter
     if (this.storedRetryTimer) {
       clearTimeout(this.storedRetryTimer);
       this.storedRetryTimer = null;
+    }
+  }
+
+  async onConnected(ctx: ConnectionContext): Promise<void> {
+    this.ctx = ctx;
+    // The session clock is re-stamped here as well as in onSessionStart, for a
+    // caller that drives onConnected directly (a test, or a transport that
+    // predates the hook).
+    if (this.sessionStartedScaleSeconds === null) {
+      this.sessionStartedScaleSeconds = Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
     }
 
     // #320: the nameless fallback claims any device on a QN vendor service,

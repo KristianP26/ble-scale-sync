@@ -1421,6 +1421,11 @@ describe('AE02 dispatch (#75, #235)', () => {
           deviceAddress: '',
           availableChars: new Set<string>(),
         } as unknown as ConnectionContext;
+        // The session hook, then the connect hook: that is the order every
+        // transport uses, and since #406 the per-session reset lives in the
+        // first of the two rather than in onConnected, which runs after the
+        // notify bindings are already live.
+        adapter.onSessionStart?.();
         await adapter.onConnected(ctx);
         adapter.parseNotification(info);
         adapter.parseNotification(
@@ -1665,6 +1670,7 @@ describe('AE02 dispatch (#75, #235)', () => {
           deviceAddress: '',
           availableChars: new Set<string>(),
         } as unknown as ConnectionContext;
+        adapter.onSessionStart?.();
         await adapter.onConnected(ctx);
 
         // A 0x14 ready frame arriving before the 2 s fallback drives handleReady
@@ -2203,5 +2209,39 @@ describe('AE02 dispatch (#75, #235)', () => {
       expect(reading!.weight).toBeCloseTo(97.9);
       expect(reading!.impedance).toBe(0);
     });
+  });
+});
+
+describe('QN per-session reset ordering (#406)', () => {
+  it('clears the previous session before any frame can be parsed', () => {
+    const adapter = new QnScaleAdapter();
+    // Session 1 learns a long-frame dialect and a protocol byte from its own
+    // scale-info frame.
+    adapter.onSessionStart?.();
+    // A 19-byte 0x12 scale-info frame from an Arboleaf capture: it is what
+    // switches the adapter onto the long-frame dialect.
+    adapter.parseNotification(
+      Buffer.from([
+        0x12, 0x13, 0xff, 0x54, 0x0b, 0x04, 0x00, 0x07, 0xff, 0x15, 0x0f, 0x27, 0x00, 0x02, 0x05,
+        0x03, 0xe0, 0x6f, 0x31,
+      ]),
+    );
+    const first = adapter as unknown as {
+      seenProtocolType: number;
+      isLongFrameVariant: boolean;
+      configSent: boolean;
+      weightScaleFactor: number;
+    };
+    expect(first.isLongFrameVariant).toBe(true);
+
+    adapter.onSessionEnd?.();
+    // Session 2 starts. onConnected has NOT run yet, which is the real
+    // ordering: subscribeAndInit enables every notify binding before it awaits
+    // init, so a frame can arrive in this window.
+    adapter.onSessionStart?.();
+
+    expect(first.isLongFrameVariant).toBe(false);
+    expect(first.configSent).toBe(false);
+    expect(first.weightScaleFactor).toBe(100);
   });
 });
