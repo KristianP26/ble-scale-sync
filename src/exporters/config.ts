@@ -15,6 +15,14 @@ export type ExporterName =
   | 'runalyze'
   | 'wger';
 
+/**
+ * Runtime twin of `ExporterName`, for validating `EXPORTERS=...`.
+ *
+ * Hand-maintained, like the union above, and `tests/exporters/registry.test.ts`
+ * asserts it equals the set derived from the registry. Without that assertion a
+ * twelfth exporter added per the documented steps but missed here passes lint,
+ * typecheck and the whole suite, then rejects its own name at startup (#406).
+ */
 const KNOWN_EXPORTERS = new Set<ExporterName>([
   'garmin',
   'mqtt',
@@ -28,6 +36,9 @@ const KNOWN_EXPORTERS = new Set<ExporterName>([
   'runalyze',
   'wger',
 ]);
+
+/** @internal Exported for the registry-agreement test only. */
+export const _knownExporterNamesForTest: ReadonlySet<ExporterName> = KNOWN_EXPORTERS;
 
 export interface GarminConfig {
   /** Upload the weight alone, leaving every derived metric unset in Garmin. */

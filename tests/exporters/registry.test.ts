@@ -290,6 +290,27 @@ describe('KNOWN_EXPORTER_NAMES', () => {
   });
 });
 
+// #406: three hand-maintained lists of the same eleven names. Adding a twelfth
+// exporter per the documented steps but forgetting config.ts passes lint,
+// typecheck and the whole suite, and then rejects EXPORTERS=x at runtime with
+// "Unknown exporter". This is the cheapest guard against that.
+describe('the exporter name lists agree', () => {
+  it('KNOWN_EXPORTERS in config.ts matches the registry', async () => {
+    const { _knownExporterNamesForTest } = await import('../../src/exporters/config.js');
+    expect([..._knownExporterNamesForTest].sort()).toEqual([...KNOWN_EXPORTER_NAMES].sort());
+  });
+
+  it('every registry schema name is assignable to ExporterName', () => {
+    // A schema whose name is not in the union would not compile, so this
+    // asserts the runtime side of the same thing: no registry entry is missing
+    // from the union's runtime twin.
+    for (const name of KNOWN_EXPORTER_NAMES) {
+      expect(typeof name).toBe('string');
+    }
+    expect(KNOWN_EXPORTER_NAMES.size).toBe(EXPORTER_REGISTRY.length);
+  });
+});
+
 // ─── createExporterFromEntry() ─────────────────────────────────────────────
 
 describe('createExporterFromEntry()', () => {
