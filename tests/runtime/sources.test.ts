@@ -52,6 +52,7 @@ const { buildReadingSource } = await import('../../src/runtime/sources.js');
 const { POST_DISCONNECT_GRACE_MS } = await import('../../src/ble/types.js');
 import type { AppContext } from '../../src/runtime/context.js';
 import type { ScaleAdapter } from '../../src/interfaces/scale-adapter.js';
+import { tagBleFailure } from '../../src/ble/failure-kind.js';
 
 const ADAPTERS = [{ name: 'A' }] as unknown as ScaleAdapter[];
 
@@ -183,6 +184,58 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
     await bundle.onSuccess?.();
     expect(POST_DISCONNECT_GRACE_MS).toBe(25_000);
     expect(h.abortableSleep).toHaveBeenCalledWith(POST_DISCONNECT_GRACE_MS, ctx.signal);
+  });
+
+  // #398. The classification already existed for the watchdog (#213); the
+  // backoff just never saw it.
+  it('poll plan: an idle failure gets the idle delay, a wedge-suspect gets the backoff', async () => {
+    h.createReadingSource.mockResolvedValue({ kind: 'poll', appliesGraceFloor: false });
+    const ctx = makeCtx({
+      bleHandler: 'auto',
+      config: {
+        users: [{}],
+        scale: {},
+        runtime: { scan_cooldown: 5, idle_rescan_delay: 3 },
+      } as never,
+    });
+    const bundle = await buildReadingSource(ctx, ADAPTERS, 7, 30);
+
+    const idle = tagBleFailure(new Error('Device not found'), 'idle');
+    expect(bundle.failureDelayMs?.(idle)).toBe(3_000);
+
+    // Untagged and wedge-suspect errors are not claimed, so the loop backs off.
+    expect(bundle.failureDelayMs?.(tagBleFailure(new Error('gatt'), 'wedge-suspect'))).toBe(
+      undefined,
+    );
+    expect(bundle.failureDelayMs?.(new Error('export failed'))).toBe(undefined);
+  });
+
+  it('poll plan: the idle delay is re-read from config on every call', async () => {
+    h.createReadingSource.mockResolvedValue({ kind: 'poll', appliesGraceFloor: false });
+    const runtime: { scan_cooldown: number; idle_rescan_delay?: number } = {
+      scan_cooldown: 5,
+      idle_rescan_delay: 2,
+    };
+    const ctx = makeCtx({
+      bleHandler: 'auto',
+      config: { users: [{}], scale: {}, runtime } as never,
+    });
+    const bundle = await buildReadingSource(ctx, ADAPTERS, 7, 30);
+    const idle = tagBleFailure(new Error('Device not found'), 'idle');
+
+    expect(bundle.failureDelayMs?.(idle)).toBe(2_000);
+    runtime.idle_rescan_delay = 30;
+    expect(bundle.failureDelayMs?.(idle)).toBe(30_000);
+    // Whole key gone (an older config.yaml) falls back to the schema default.
+    delete runtime.idle_rescan_delay;
+    expect(bundle.failureDelayMs?.(idle)).toBe(5_000);
+  });
+
+  it('watcher plan: leaves failureDelayMs unset, so a wedged proxy still backs off', async () => {
+    h.createReadingSource.mockResolvedValue(watcherPlan('Error processing ESPHome reading'));
+    const ctx = makeCtx({ bleHandler: 'esphome-proxy', esphomeProxy: { host: 'h' } as never });
+    const bundle = await buildReadingSource(ctx, ADAPTERS, 10, 30);
+    expect(bundle.failureDelayMs).toBeUndefined();
   });
 
   it('watchdog trip: sets exit code 1 and aborts the app', async () => {

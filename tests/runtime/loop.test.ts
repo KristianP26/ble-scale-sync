@@ -182,6 +182,116 @@ describe('runContinuousLoop', () => {
     await loop;
   });
 
+  // #398: an idle cycle (radio alive, nobody on the scale) used to climb the
+  // same 5 s -> 60 s ladder as a dead controller, so a quiet house spent a
+  // minute per cycle not listening and a scale that only advertises while
+  // somebody stands on it could weigh in entirely inside that window.
+  it('waits the delay failureDelayMs names, without climbing the backoff ladder', async () => {
+    const ac = new AbortController();
+    const { source, nextReading } = makeSource();
+    nextReading.mockRejectedValue(new Error('idle'));
+
+    const loop = runContinuousLoop({
+      source,
+      processReading: async () => true,
+      signal: ac.signal,
+      touchHeartbeat: vi.fn(),
+      isReloadRequested: vi.fn(() => false),
+      clearReloadRequest: vi.fn(),
+      failureDelayMs: () => 5_000,
+      failureLogPrefix: 'No scale found',
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(nextReading).toHaveBeenCalledTimes(1);
+
+    // Four more cycles at the same 5 s. Under the backoff this would have been
+    // 10 s, 20 s, 40 s and 60 s, so a 5 s tick would have advanced nothing.
+    for (let cycle = 2; cycle <= 5; cycle += 1) {
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(nextReading).toHaveBeenCalledTimes(cycle);
+    }
+
+    ac.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    await loop;
+  });
+
+  it('an idle cycle neither advances nor resets a real failure streak', async () => {
+    const ac = new AbortController();
+    const { source, nextReading } = makeSource();
+
+    const idle = new Error('idle');
+    const broken = new Error('GATT connect failed');
+    nextReading
+      .mockRejectedValueOnce(broken) // backoff 5s
+      .mockRejectedValueOnce(broken) // backoff 10s
+      .mockRejectedValueOnce(idle) // claimed: 2s, streak untouched
+      .mockRejectedValueOnce(broken) // backoff 20s, not 5s and not 40s
+      .mockRejectedValue(broken);
+
+    const loop = runContinuousLoop({
+      source,
+      processReading: async () => true,
+      signal: ac.signal,
+      touchHeartbeat: vi.fn(),
+      isReloadRequested: vi.fn(() => false),
+      clearReloadRequest: vi.fn(),
+      failureDelayMs: (err) => (err === idle ? 2_000 : undefined),
+      failureLogPrefix: 'No scale found',
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(nextReading).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(nextReading).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(nextReading).toHaveBeenCalledTimes(3);
+
+    // The idle cycle waits its own 2 s and nothing else.
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(nextReading).toHaveBeenCalledTimes(4);
+
+    // Back on the ladder where it left off: 20 s. A reset would have fired at
+    // 5 s, and counting the idle cycle would have made this 40 s.
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(nextReading).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(nextReading).toHaveBeenCalledTimes(5);
+
+    ac.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    await loop;
+  });
+
+  it('backs off as before when failureDelayMs returns undefined', async () => {
+    const ac = new AbortController();
+    const { source, nextReading } = makeSource();
+    nextReading.mockRejectedValue(new Error('GATT connect failed'));
+
+    const loop = runContinuousLoop({
+      source,
+      processReading: async () => true,
+      signal: ac.signal,
+      touchHeartbeat: vi.fn(),
+      isReloadRequested: vi.fn(() => false),
+      clearReloadRequest: vi.fn(),
+      failureDelayMs: () => undefined,
+      failureLogPrefix: 'No scale found',
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(nextReading).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(nextReading).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(nextReading).toHaveBeenCalledTimes(2);
+
+    ac.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    await loop;
+  });
+
   it('SIGHUP reload runs onReload -> clearReloadRequest -> onSourceReload before nextReading', async () => {
     const ac = new AbortController();
     const { source, nextReading } = makeSource();

@@ -26,11 +26,23 @@ export interface RuntimeLoopDeps {
   onSourceReload?: () => void;
   onSuccess?: () => Promise<void> | void;
   onFailure?: (err: unknown) => void;
+  /**
+   * Delay to wait after this error instead of the exponential backoff, or
+   * undefined to back off as usual. The loop asks; the policy belongs to
+   * whoever built the source, because only it can tell an idle scan from a
+   * broken one (#398).
+   *
+   * It sees every iteration error, including a failure thrown by
+   * `processReading` rather than by the source, so an implementation must
+   * recognise the errors it means rather than assuming what it is handed.
+   */
+  failureDelayMs?: (err: unknown) => number | undefined;
   failureLogPrefix?: string;
 }
 
 /**
- * Exponential backoff on iteration error: 5s -> 10s -> 20s -> 40s -> 60s cap.
+ * Exponential backoff on iteration error: 5s -> 10s -> 20s -> 40s -> 60s cap,
+ * unless `failureDelayMs` claims the error and names a shorter wait (#398).
  */
 export async function runContinuousLoop(deps: RuntimeLoopDeps): Promise<void> {
   const {
@@ -44,6 +56,7 @@ export async function runContinuousLoop(deps: RuntimeLoopDeps): Promise<void> {
     onSourceReload,
     onSuccess,
     onFailure,
+    failureDelayMs,
     failureLogPrefix = 'Error processing reading',
   } = deps;
 
@@ -82,6 +95,17 @@ export async function runContinuousLoop(deps: RuntimeLoopDeps): Promise<void> {
         // logs the message as an error and exits non-zero.
         if (err instanceof MissingTransportModuleError) throw err;
         onFailure?.(err);
+        const shortDelayMs = failureDelayMs?.(err);
+        if (shortDelayMs !== undefined) {
+          // An idle cycle neither advances nor resets a real failure streak:
+          // nobody standing on the scale says nothing about the radio, in
+          // either direction.
+          log.info(
+            `${failureLogPrefix}, rescanning in ${shortDelayMs / 1000}s... (${errMsg(err)})`,
+          );
+          await abortableSleep(shortDelayMs, signal).catch(() => {});
+          continue;
+        }
         backoffMs = backoffMs === 0 ? BACKOFF_INITIAL_MS : Math.min(backoffMs * 2, BACKOFF_MAX_MS);
         log.info(`${failureLogPrefix}, retrying in ${backoffMs / 1000}s... (${errMsg(err)})`);
         await abortableSleep(backoffMs, signal).catch(() => {});

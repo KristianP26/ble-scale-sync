@@ -397,6 +397,7 @@ async function main(): Promise<void> {
     onSourceReload: bundle.onSourceReload,
     onSuccess: bundle.onSuccess,
     onFailure: bundle.onFailure,
+    failureDelayMs: bundle.failureDelayMs,
     failureLogPrefix: bundle.failureLogPrefix,
   });
 
