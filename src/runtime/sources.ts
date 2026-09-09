@@ -73,13 +73,17 @@ export async function buildReadingSource(
     // wedged transport parks nextReading() forever and looks exactly like a
     // house where nobody has stepped on the scale. Advertisement silence is the
     // one signal that tells the two apart.
-    const limitMs =
+    // Read per call, not captured once: buildReadingSource runs before the loop
+    // starts, so a captured value made this option neither hot-swappable nor
+    // restart-warned, which is neither half of the documented reload contract
+    // (#407).
+    const limitMs = (): number =>
       (ctx.config.ble?.proxy_liveness_timeout_min ?? DEFAULT_PROXY_LIVENESS_MIN) * 60_000;
     return {
       source: {
         start: () => watcher.start(),
         stop: () => watcher.stop(),
-        nextReading: (signal) => raceWithLiveness(watcher, limitMs, signal),
+        nextReading: (signal) => raceWithLiveness(watcher, limitMs(), signal),
       },
       failureLogPrefix: plan.failureLogPrefix,
       onSourceReload: () =>

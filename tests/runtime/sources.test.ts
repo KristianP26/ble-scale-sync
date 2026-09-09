@@ -34,6 +34,7 @@ const h = vi.hoisted(() => {
     FakeWatchdog,
     watchdogInstances,
     createReadingSource: vi.fn(),
+    raceWithLiveness: vi.fn(() => new Promise(() => {})),
     resolveUserProfile: vi.fn(() => ({ __profile: 'sentinel' })),
     abortableSleep: vi.fn(async () => undefined),
   };
@@ -42,6 +43,10 @@ const h = vi.hoisted(() => {
 vi.mock('../../src/ble/index.js', () => ({ createReadingSource: h.createReadingSource }));
 vi.mock('../../src/runtime/poll-source.js', () => ({ PollReadingSource: h.FakePollSource }));
 vi.mock('../../src/ble/watchdog.js', () => ({ ConsecutiveFailureWatchdog: h.FakeWatchdog }));
+vi.mock('../../src/runtime/proxy-liveness.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/runtime/proxy-liveness.js')>();
+  return { ...actual, raceWithLiveness: h.raceWithLiveness };
+});
 vi.mock('../../src/config/resolve.js', () => ({ resolveUserProfile: h.resolveUserProfile }));
 vi.mock('../../src/ble/types.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/ble/types.js')>();
@@ -239,6 +244,34 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
     const ctx = makeCtx({ bleHandler: 'esphome-proxy', esphomeProxy: { host: 'h' } as never });
     const bundle = await buildReadingSource(ctx, ADAPTERS, 10, 30);
     expect(bundle.failureDelayMs).toBeUndefined();
+  });
+
+  // #407: buildReadingSource runs once, before the loop, so a captured limit
+  // made this option neither hot-swappable nor restart-warned. The reload
+  // contract promises one of the two.
+  it('watcher plan: the liveness limit is re-read from config on every call', async () => {
+    const plan = watcherPlan('Error processing ESPHome reading');
+    plan.watcher.nextReading.mockImplementation(() => new Promise(() => {}) as Promise<never>);
+    h.createReadingSource.mockResolvedValue(plan);
+
+    const ble: { esphome_proxy: unknown; proxy_liveness_timeout_min?: number } = {
+      esphome_proxy: { host: 'h' },
+      proxy_liveness_timeout_min: 30,
+    };
+    const ctx = makeCtx({
+      bleHandler: 'esphome-proxy',
+      esphomeProxy: ble.esphome_proxy as never,
+      config: { users: [{}], scale: {}, runtime: {}, ble } as never,
+    });
+    const bundle = await buildReadingSource(ctx, ADAPTERS, 10, 30);
+
+    const signal = new AbortController().signal;
+    void bundle.source.nextReading(signal).catch(() => {});
+    expect(h.raceWithLiveness).toHaveBeenLastCalledWith(plan.watcher, 30 * 60_000, signal);
+
+    ble.proxy_liveness_timeout_min = 5;
+    void bundle.source.nextReading(signal).catch(() => {});
+    expect(h.raceWithLiveness).toHaveBeenLastCalledWith(plan.watcher, 5 * 60_000, signal);
   });
 
   it('watchdog trip: sets exit code 1 and aborts the app', async () => {

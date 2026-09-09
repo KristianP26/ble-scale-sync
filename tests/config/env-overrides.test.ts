@@ -95,6 +95,34 @@ describe('env-overrides (focused unit tests for #184 split)', () => {
       const out = applyEnvOverrides(baseConfig());
       expect(out.ble?.handler).toBe('auto');
     });
+
+    // #407: esphome-proxy is in the schema's own handler enum, so it validates
+    // in config.yaml, but this function had no branch for it and dropped it in
+    // silence - which looks exactly like a handler switch that worked.
+    it('applies BLE_HANDLER=esphome-proxy when ble.esphome_proxy is configured', () => {
+      vi.stubEnv('BLE_HANDLER', 'esphome-proxy');
+      const out = applyEnvOverrides(
+        baseConfig({
+          ble: { handler: 'auto', esphome_proxy: { host: 'proxy.local' } },
+        } as Partial<AppConfig>),
+      );
+      expect(out.ble?.handler).toBe('esphome-proxy');
+    });
+
+    it('ignores BLE_HANDLER=esphome-proxy when esphome_proxy is not configured', () => {
+      vi.stubEnv('BLE_HANDLER', 'esphome-proxy');
+      const out = applyEnvOverrides(baseConfig());
+      expect(out.ble?.handler).toBe('auto');
+    });
+
+    it('warns about an unrecognised BLE_HANDLER instead of ignoring it silently', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.stubEnv('BLE_HANDLER', 'esphome');
+      const out = applyEnvOverrides(baseConfig());
+      expect(out.ble?.handler).toBe('auto');
+      expect(warn.mock.calls.flat().join(' ')).toMatch(/esphome/);
+      warn.mockRestore();
+    });
   });
 
   describe('filterValidExporters', () => {

@@ -89,6 +89,22 @@ export function applyEnvOverrides(config: AppConfig): AppConfig {
       } else {
         log.warn('BLE_HANDLER=ha-bluetooth ignored: ble.ha_bluetooth not configured');
       }
+    } else if (handler === 'esphome-proxy') {
+      // Was missing entirely: the value is in the schema's own enum, so it
+      // validates in config.yaml but fell through every branch here and was
+      // dropped in silence (#407).
+      if (ble.esphome_proxy) {
+        ble.handler = handler;
+      } else {
+        log.warn('BLE_HANDLER=esphome-proxy ignored: ble.esphome_proxy not configured');
+      }
+    } else {
+      // Anything else used to be ignored without a word, which reads exactly
+      // like a handler switch that worked.
+      log.warn(
+        `BLE_HANDLER='${process.env.BLE_HANDLER}' is not a known handler ` +
+          `(auto, mqtt-proxy, esphome-proxy, ha-bluetooth); ignoring it.`,
+      );
     }
   }
 
