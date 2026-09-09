@@ -47,7 +47,8 @@ function diffField(
  * Compare old vs new config and return restart-required field changes.
  *
  * Notably hot-swappable (NOT in this list): scale_mac, weight_unit, height_unit,
- * runtime.dry_run, runtime.debug, runtime.scan_cooldown, exporters,
+ * runtime.dry_run, runtime.debug, runtime.scan_cooldown, runtime.idle_rescan_delay,
+ * exporters,
  * unknown_user, out_of_range, user profile fields, last_known_weight, update_check.
  */
 export function diffRestartRequired(

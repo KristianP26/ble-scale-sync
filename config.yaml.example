@@ -198,6 +198,7 @@ global_exporters:
 runtime:
   continuous_mode: false    # true = keep scanning in a loop (ideal for Raspberry Pi)
   scan_cooldown: 30         # seconds between scans in continuous mode (5–3600)
+  idle_rescan_delay: 5      # seconds before rescanning when no scale was found (0-3600)
   dry_run: false            # true = read scale + compute body comp, skip all exports
   debug: false              # true = verbose BLE logging
 

@@ -44,6 +44,9 @@ export const runtimeStep: WizardStep = {
       debug,
       watchdog_max_consecutive_failures: 10,
       watch_config: true,
+      // Not prompted: it only matters in continuous mode, the default is right
+      // for every install, and one more question here buys nothing (#398).
+      idle_rescan_delay: 5,
     };
 
     console.log(

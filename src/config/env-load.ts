@@ -143,6 +143,7 @@ export function loadEnvConfig(): AppConfig {
       debug: process.env.DEBUG === 'true',
       watchdog_max_consecutive_failures: 10,
       watch_config: true,
+      idle_rescan_delay: 5,
     },
     update_check: true,
   };

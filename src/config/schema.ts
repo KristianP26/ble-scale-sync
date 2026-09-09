@@ -386,6 +386,20 @@ export const RuntimeSchema = z.object({
    * deploys are preferred. Default true.
    */
   watch_config: z.boolean().default(true),
+  /**
+   * Seconds to wait after a continuous-mode cycle that found no scale, when the
+   * radio itself is healthy (`bleFailureKind === 'idle'`).
+   *
+   * Idle cycles used to go through the same exponential failure backoff as a
+   * dead radio, so a house where nobody had stepped on the scale reached the
+   * 60 s cap within five cycles and then spent a minute per cycle not
+   * listening. A scale that only advertises while somebody is standing on it
+   * can weigh in entirely inside that window (#398).
+   *
+   * Real failures - GATT errors, a wedged controller - keep the 5 s -> 60 s
+   * backoff, which is the right thing for those.
+   */
+  idle_rescan_delay: z.number().int().min(0).max(3600).default(5),
 });
 
 export const DockerSchema = z.object({

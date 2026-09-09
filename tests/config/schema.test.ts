@@ -836,3 +836,43 @@ describe('out_of_range (#395)', () => {
     expect(result.success).toBe(false);
   });
 });
+
+describe('runtime.idle_rescan_delay (#398)', () => {
+  it('defaults to 5 seconds when runtime is present without it', () => {
+    const result = AppConfigSchema.safeParse({
+      ...VALID_CONFIG,
+      runtime: { continuous_mode: true },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.runtime?.idle_rescan_delay).toBe(5);
+  });
+
+  it('keeps a configured value', () => {
+    // Asserting only `success` would pass with the key removed from the schema,
+    // since Zod strips what it does not know about.
+    const result = AppConfigSchema.safeParse({
+      ...VALID_CONFIG,
+      runtime: { continuous_mode: true, idle_rescan_delay: 2 },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.runtime?.idle_rescan_delay).toBe(2);
+  });
+
+  it('accepts 0, which means rescan immediately', () => {
+    const result = AppConfigSchema.safeParse({
+      ...VALID_CONFIG,
+      runtime: { idle_rescan_delay: 0 },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.runtime?.idle_rescan_delay).toBe(0);
+  });
+
+  it('rejects a negative delay and a non-integer', () => {
+    expect(
+      AppConfigSchema.safeParse({ ...VALID_CONFIG, runtime: { idle_rescan_delay: -1 } }).success,
+    ).toBe(false);
+    expect(
+      AppConfigSchema.safeParse({ ...VALID_CONFIG, runtime: { idle_rescan_delay: 1.5 } }).success,
+    ).toBe(false);
+  });
+});
