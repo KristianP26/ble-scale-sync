@@ -518,6 +518,8 @@ describe('GarminExporter upload timeout (#399)', () => {
     });
 
     expect(() => createExporterFromEntry(entry('soon'))).toThrow(/must be a number/);
+    // spawn() throws on a fractional timeout, from inside the promise executor.
+    expect(() => createExporterFromEntry(entry(10.5))).toThrow(/whole number/);
     expect(() => createExporterFromEntry(entry(5))).toThrow(/between 10 and 900/);
     expect(() => createExporterFromEntry(entry(3600))).toThrow(/between 10 and 900/);
   });

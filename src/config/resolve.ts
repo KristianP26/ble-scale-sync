@@ -84,7 +84,6 @@ export interface ResolvedRuntimeConfig {
   dryRun: boolean;
   continuousMode: boolean;
   scanCooldownSec: number;
-  idleRescanDelaySec: number;
   watchdogMaxFailures: number;
   watchConfig: boolean;
   bleHandler: BleHandlerName;
@@ -108,7 +107,6 @@ export function resolveRuntimeConfig(config: AppConfig): ResolvedRuntimeConfig {
     dryRun: config.runtime?.dry_run ?? false,
     continuousMode: config.runtime?.continuous_mode ?? false,
     scanCooldownSec: config.runtime?.scan_cooldown ?? 30,
-    idleRescanDelaySec: config.runtime?.idle_rescan_delay ?? 5,
     watchdogMaxFailures: config.runtime?.watchdog_max_consecutive_failures ?? 10,
     watchConfig: config.runtime?.watch_config ?? true,
     bleHandler: config.ble?.handler ?? 'auto',

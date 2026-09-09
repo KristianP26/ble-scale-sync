@@ -82,7 +82,7 @@ function optionalNumber(
   config: Record<string, unknown>,
   type: string,
   key: string,
-  bounds: { min: number; max: number },
+  opts: { min?: number; max?: number; integer?: boolean } = {},
 ): number | undefined {
   const value = config[key];
   if (value === undefined || value === null || value === '') return undefined;
@@ -92,9 +92,14 @@ function optionalNumber(
       `Exporter "${type}" field "${key}" must be a number, got '${String(value)}'. Check your config.yaml.`,
     );
   }
-  if (num < bounds.min || num > bounds.max) {
+  if (opts.integer && !Number.isInteger(num)) {
     throw new Error(
-      `Exporter "${type}" field "${key}" must be between ${bounds.min} and ${bounds.max}, got ${num}. Check your config.yaml.`,
+      `Exporter "${type}" field "${key}" must be a whole number, got ${num}. Check your config.yaml.`,
+    );
+  }
+  if ((opts.min !== undefined && num < opts.min) || (opts.max !== undefined && num > opts.max)) {
+    throw new Error(
+      `Exporter "${type}" field "${key}" must be between ${opts.min} and ${opts.max}, got ${num}. Check your config.yaml.`,
     );
   }
   return num;
@@ -133,6 +138,10 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
         upload_timeout_sec: optionalNumber(config, 'garmin', 'upload_timeout_sec', {
           min: GARMIN_UPLOAD_TIMEOUT_MIN_SEC,
           max: GARMIN_UPLOAD_TIMEOUT_MAX_SEC,
+          // spawn() throws ERR_OUT_OF_RANGE on a fractional timeout, from
+          // inside the promise executor, so 10.0005 would fail three attempts
+          // with an error about milliseconds nobody typed.
+          integer: true,
         }),
       }),
   },
@@ -161,8 +170,10 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
         method: (config.method as string) ?? 'POST',
         headers: (config.headers as Record<string, string>) ?? {},
         // Same trap as the booleans: `timeout: "${WEBHOOK_TIMEOUT}"` reached
-        // AbortSignal.timeout() as a string.
-        timeout: optionalNumber(config, 'webhook', 'timeout', { min: 100, max: 600_000 }) ?? 10_000,
+        // AbortSignal.timeout() as a string. Deliberately unbounded: this field
+        // has accepted any number since it existed, and narrowing it here would
+        // turn somebody's working `timeout: 50` into a crash at startup.
+        timeout: optionalNumber(config, 'webhook', 'timeout') ?? 10_000,
       };
       return new WebhookExporter(webhookConfig);
     },

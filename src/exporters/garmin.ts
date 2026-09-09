@@ -178,6 +178,15 @@ export const garminSchema: ExporterSchema = {
       default: DEFAULT_UPLOAD_TIMEOUT_MS / 1000,
       description:
         'Seconds one upload attempt may take before it is killed (10-900). Three attempts are made. Raise it if Garmin Connect is often slow for you; press enter to keep the default',
+      // The wizard only checks that a number is a number, so without this it
+      // would happily write a value the registry rejects at startup.
+      validate: (value: string) => {
+        const num = Number(value);
+        if (!Number.isInteger(num)) return 'Enter a whole number of seconds';
+        return num >= GARMIN_UPLOAD_TIMEOUT_MIN_SEC && num <= GARMIN_UPLOAD_TIMEOUT_MAX_SEC
+          ? null
+          : `Enter a value between ${GARMIN_UPLOAD_TIMEOUT_MIN_SEC} and ${GARMIN_UPLOAD_TIMEOUT_MAX_SEC}`;
+      },
     },
     {
       key: 'weight_only',
@@ -216,9 +225,8 @@ export class GarminExporter implements Exporter {
     if (context?.timestamp) payload.timestamp = context.timestamp.toISOString();
     if (this.entryConfig.weight_only) payload.weight_only = true;
 
-    const timeoutMs = this.entryConfig.upload_timeout_sec
-      ? this.entryConfig.upload_timeout_sec * 1000
-      : DEFAULT_UPLOAD_TIMEOUT_MS;
+    const configured = this.entryConfig.upload_timeout_sec;
+    const timeoutMs = configured !== undefined ? configured * 1000 : DEFAULT_UPLOAD_TIMEOUT_MS;
 
     return withRetry(
       async () => {

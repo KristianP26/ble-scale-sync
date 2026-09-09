@@ -110,6 +110,7 @@ The CLI and exporters display weights and heights in your chosen unit; all inter
 | `garmin_enabled`                   | `false` | Enable the Garmin Connect exporter.                                                                                                    |
 | `garmin_email` / `garmin_password` | empty   | Garmin credentials. On first start the add-on runs `setup_garmin.py` to authenticate and saves OAuth tokens to `/data/garmin-tokens/`. |
 | `garmin_weight_only`               | `false` | Upload the weight alone; BMI, body fat, water, bone, muscle, visceral fat, physique rating and metabolic age are left unset in Garmin. |
+| `garmin_upload_timeout_sec`        | `180`   | Seconds one Garmin upload attempt may take before it is killed (10-900). Three attempts are made. Raise it if uploads time out for a measurement that uploads fine later. |
 
 If your account uses MFA, see [MFA workaround](#mfa-workaround) below.
 
@@ -118,7 +119,7 @@ If your account uses MFA, see [MFA workaround](#mfa-workaround) below.
 | Option          | Default | Notes                                                                                                                          |
 | --------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `scan_cooldown` | `30`    | Seconds to wait after a successful reading before scanning again. Range: 5-3600.                                                         |
-| `idle_rescan_delay` | `5` | Seconds to wait before scanning again after a cycle that found no scale while the adapter was healthy. Range: 0-3600. Real failures keep their own backoff. |
+| `idle_rescan_delay`                | `5`     | Seconds to wait before scanning again after a cycle that found no scale while the adapter was healthy. Range: 0-3600. Real failures keep their own backoff. |
 | `debug`         | `false` | Enable verbose BLE logs. Useful when opening an issue.                                                                         |
 | `custom_config` | `false` | Ignore UI options entirely and use `/share/ble-scale-sync/config.yaml` instead. See [Custom config mode](#custom-config-mode). |
 

@@ -37,7 +37,7 @@ Automatic body composition upload to Garmin Connect, no phone app needed. Uses a
 | `password`    | Yes      | (none)             | Garmin account password                                        |
 | `token_dir`   | No       | `~/.garmin_tokens` | Directory for cached auth tokens                               |
 | `weight_only` | No       | `false`            | Upload the weight alone, leaving every derived metric unset     |
-| `upload_timeout_sec` | No | `180` | Seconds one upload attempt may take before it is killed (10-900). Three attempts are made, with no wait between them |
+| `upload_timeout_sec` | No       | `180`              | Seconds one upload attempt may take before it is killed (10-900). Three attempts are made, with no wait between them |
 
 ```yaml
 global_exporters:

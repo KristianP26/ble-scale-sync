@@ -32,6 +32,8 @@ const KNOWN_EXPORTERS = new Set<ExporterName>([
 export interface GarminConfig {
   /** Upload the weight alone, leaving every derived metric unset in Garmin. */
   weightOnly: boolean;
+  /** Seconds one upload attempt may take before it is killed (10-900). */
+  uploadTimeoutSec?: number;
 }
 
 export interface MqttConfig {
@@ -158,6 +160,13 @@ function parsePriority(raw: string | undefined): number {
   fail(`NTFY_PRIORITY must be 1-5, got '${raw}'`);
 }
 
+function parseUploadTimeout(raw: string | undefined): number | undefined {
+  if (!raw) return undefined;
+  const num = Number(raw);
+  if (Number.isInteger(num) && num >= 10 && num <= 900) return num;
+  fail(`GARMIN_UPLOAD_TIMEOUT_SEC must be a whole number of seconds, 10-900, got '${raw}'`);
+}
+
 function parseBoolean(key: string, raw: string | undefined, defaultValue: boolean): boolean {
   if (!raw) return defaultValue;
   const lower = raw.toLowerCase();
@@ -188,6 +197,7 @@ export function loadExporterConfig(): ExporterConfig {
   if (exporters.includes('garmin')) {
     garmin = {
       weightOnly: parseBoolean('GARMIN_WEIGHT_ONLY', process.env.GARMIN_WEIGHT_ONLY?.trim(), false),
+      uploadTimeoutSec: parseUploadTimeout(process.env.GARMIN_UPLOAD_TIMEOUT_SEC?.trim()),
     };
   }
 

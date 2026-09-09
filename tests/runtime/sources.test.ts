@@ -224,6 +224,9 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
     const idle = tagBleFailure(new Error('Device not found'), 'idle');
 
     expect(bundle.failureDelayMs?.(idle)).toBe(2_000);
+    // 0 is a real setting, not "unset": it must survive the ?? fallback.
+    runtime.idle_rescan_delay = 0;
+    expect(bundle.failureDelayMs?.(idle)).toBe(0);
     runtime.idle_rescan_delay = 30;
     expect(bundle.failureDelayMs?.(idle)).toBe(30_000);
     // Whole key gone (an older config.yaml) falls back to the schema default.
