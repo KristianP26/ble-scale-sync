@@ -287,16 +287,19 @@ describe('InlifeScaleAdapter diagnostics (#405)', () => {
     });
     try {
       const adapter = new InlifeScaleAdapter();
-      const frame = impedanceFrame(500);
+      // Four distinct non-zero bytes: with 500 (00 00 01 f4) three of them are
+      // zero, so a transposed or shifted read would still print the expected
+      // numbers and the assertions would not notice.
+      const frame = impedanceFrame(0x0a0b0c0d);
       adapter.parseNotification(frame);
 
       const line = lines.find((l) => l.includes('u32[4..7]'));
       expect(line, 'the candidate line must be logged').toBeDefined();
       // All four widths, so a later proposal needs no rebuild to be checked...
-      expect(line).toContain('u32[4..7]=500');
-      expect(line).toContain('u24[4..6]=1');
-      expect(line).toContain('u16[4..5]=0');
-      expect(line).toContain('u16[6..7]=500');
+      expect(line).toContain('u32[4..7]=168496141');
+      expect(line).toContain('u24[4..6]=658188');
+      expect(line).toContain('u16[4..5]=2571');
+      expect(line).toContain('u16[6..7]=3085');
       // ...and the raw frame, so a split nobody has thought of yet is still
       // recoverable from an old reporter log.
       expect(line).toContain(frame.toString('hex'));
@@ -321,6 +324,26 @@ describe('InlifeScaleAdapter diagnostics (#405)', () => {
       // The candidate line must NOT fire here: those bytes are LBM and
       // visceral in this mode.
       expect(lines.some((l) => l.includes('u32[4..7]'))).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('says why a frame was rejected, so silence is never ambiguous', () => {
+    const lines: string[] = [];
+    const spy = vi.spyOn(bleLog, 'debug').mockImplementation((m: string) => {
+      lines.push(m);
+    });
+    try {
+      // Too short for this parser: the reporter must be able to tell this apart
+      // from "the adapter never saw a frame at all".
+      const short = Buffer.from([0x02, 0x10, 0x03, 0x10]);
+      expect(new InlifeScaleAdapter().parseNotification(short)).toBeNull();
+
+      const line = lines.find((l) => l.includes('rejected'));
+      expect(line).toBeDefined();
+      expect(line).toContain('len=4');
+      expect(line).toContain(short.toString('hex'));
     } finally {
       spy.mockRestore();
     }

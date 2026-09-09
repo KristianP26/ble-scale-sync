@@ -115,16 +115,26 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
    *   [12-13]  (remaining bytes)
    */
   parseNotification(data: Buffer): ScaleReading | null {
-    if (data.length < 14 || data[0] !== 0x02) return null;
+    // Logged BEFORE the gates, not after. A rejected frame is the case a
+    // reporter most needs to see: without this, a unit whose frames this
+    // adapter refuses produces exactly the same silence as one that was never
+    // matched at all, and the whole point of these lines is that silence has to
+    // mean something (#405).
+    if (data.length < 14 || data[0] !== 0x02) {
+      bleLog.debug(
+        `Inlife frame rejected (len=${data.length}, [0]=0x${(data[0] ?? 0).toString(16)}): ` +
+          `${data.toString('hex')}`,
+      );
+      return null;
+    }
 
     const weight = data.readUInt16BE(2) / 10;
-    if (weight <= 0 || !Number.isFinite(weight)) return null;
-
     const modeFlag = data[11];
-    // Logged for every frame, not only the impedance ones: without it, a
-    // reporter's log that carries no impedance line is indistinguishable from
-    // one where impedance mode was never reached.
+    // Every frame, not only the impedance ones, so a log with no candidate line
+    // is distinguishable from one where impedance mode was never reached.
     bleLog.debug(`Inlife frame: mode=0x${modeFlag.toString(16)}, weight ${weight} kg`);
+
+    if (weight <= 0 || !Number.isFinite(weight)) return null;
 
     if (modeFlag === 0x80 || modeFlag === 0x81) {
       // Impedance mode: read as a u32 BE over [4..7]. That width is NOT
