@@ -64,31 +64,42 @@ export async function waitForEsp32Online(client: MqttClient, t: Topics): Promise
     }
   };
   client.on('message', onMessage);
-  await client.subscribeAsync(t.status);
+  try {
+    await client.subscribeAsync(t.status);
+  } catch (err) {
+    // The listener goes on before the subscribe, so a rejected subscribe used
+    // to leave it attached for the rest of this client's life (#404).
+    client.removeListener('message', onMessage);
+    throw err;
+  }
 
   // If we get the retained offline within 2s, fail fast rather than waiting 30s.
   // The main loop's backoff handles retries. But if online arrives within that
   // window we still succeed. Full timeout only applies when no status received.
   const OFFLINE_GRACE_MS = 2_000;
 
+  let graceTimer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await withTimeout(
       Promise.race([
         promise,
         // After grace period, if we saw offline, reject early
-        new Promise<never>((_res, rej) =>
-          setTimeout(() => {
+        new Promise<never>((_res, rej) => {
+          graceTimer = setTimeout(() => {
             if (sawOffline)
               rej(
                 new Error('ESP32 proxy is offline. Check the device and its WiFi/MQTT connection.'),
               );
-          }, OFFLINE_GRACE_MS),
-        ),
+          }, OFFLINE_GRACE_MS);
+        }),
       ]),
       COMMAND_TIMEOUT_MS,
       'ESP32 proxy did not respond. Check that it is powered on and connected to MQTT.',
     );
   } finally {
+    // The race settles on the first branch; without this the timer still holds
+    // a ref'd handle for the rest of its 2 s (#404).
+    if (graceTimer) clearTimeout(graceTimer);
     client.removeListener('message', onMessage);
   }
 }

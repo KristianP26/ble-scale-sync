@@ -139,6 +139,10 @@ export class ReadingWatcher implements Watcher {
     if (this.started) return;
     // Mark immediately to guard against concurrent start() calls
     this.started = true;
+    // A previous start that failed halfway is undone below, but reset here too:
+    // a stale entry would otherwise be removed twice by the next stop().
+    this._lifecycleHandlers = [];
+    this._subscribedTopics = [];
     // The liveness clock starts at connect, not at the epoch, so a proxy that
     // has simply not spoken yet is not read as one that has stopped.
     this.lastAdvertAt = Date.now();
@@ -165,17 +169,23 @@ export class ReadingWatcher implements Watcher {
         { event: 'connect', handler: onConnect },
       ];
 
-      // Subscribe to scan results with QoS 1
+      // Recorded one at a time, as each subscribe resolves. Assigning the whole
+      // list after the last one meant a broker that rejected the third left the
+      // first two subscribed with nothing tracking them.
+      // Scan results carry the readings, so QoS 1.
       await client.subscribeAsync(t.scanResults, { qos: 1 });
-      // Subscribe to status for logging only
+      this._subscribedTopics.push(t.scanResults);
+      // Status is for logging only.
       await client.subscribeAsync(t.status);
-      // Subscribe to connected for autonomous ESP32 connects (#201)
+      this._subscribedTopics.push(t.status);
+      // Connected drives autonomous ESP32 connects (#201).
       await client.subscribeAsync(t.connected);
-      // Subscribe to disconnected so MqttBleDevice instances (which only add a
-      // message listener, not a broker subscription) receive disconnect events
-      // during autonomous connects. Not handled by _messageHandler itself.
+      this._subscribedTopics.push(t.connected);
+      // Disconnected so MqttBleDevice instances (which only add a message
+      // listener, not a broker subscription) receive disconnect events during
+      // autonomous connects. Not handled by _messageHandler itself.
       await client.subscribeAsync(t.disconnected);
-      this._subscribedTopics = [t.scanResults, t.status, t.connected, t.disconnected];
+      this._subscribedTopics.push(t.disconnected);
       bleLog.info('ReadingWatcher started, listening for scan results');
 
       // Seed the ESP32 known-scale set with the statically configured target MAC
@@ -191,7 +201,13 @@ export class ReadingWatcher implements Watcher {
         );
       }
     } catch (err) {
-      this.started = false;
+      // The client is persistent and shared, and start() runs on EVERY loop
+      // iteration, so a broker that connects and then rejects a subscribe used
+      // to add four more lifecycle listeners per cycle - unbounded, and
+      // unrecoverable, because the next start() reassigned the list they were
+      // recorded in. The siblings on the other two transports already tear down
+      // here (#404).
+      await this.teardownPartialStart();
       throw err;
     }
 
@@ -324,6 +340,53 @@ export class ReadingWatcher implements Watcher {
     client.on('message', this._messageHandler);
   }
 
+  /**
+   * Undo a start() that threw partway through.
+   *
+   * Deliberately not stop(): that one early-returns unless `started` is still
+   * true, logs "ReadingWatcher stopped" at a watcher that never started, and
+   * awaits an unsubscribe per topic against a broker that is by hypothesis
+   * misbehaving. Listeners come off first here because that is the leak that
+   * matters and it cannot hang.
+   */
+  private async teardownPartialStart(): Promise<void> {
+    this.removeLifecycleHandlers();
+    for (const topic of this._subscribedTopics) {
+      try {
+        await this._client?.unsubscribeAsync(topic);
+      } catch {
+        /* ignore: the broker is why we are here */
+      }
+    }
+    this._subscribedTopics = [];
+    this.grace.clear();
+    this.started = false;
+    // Nothing has arrived, so the liveness clock must not claim otherwise.
+    this.lastAdvertAt = null;
+    this._client = null;
+  }
+
+  /**
+   * mqtt's EventEmitter overload list does not accept the discriminated union
+   * as a single call shape, so dispatch by event tag to keep types tight
+   * without `any`.
+   */
+  private removeLifecycleHandlers(): void {
+    for (const entry of this._lifecycleHandlers) {
+      switch (entry.event) {
+        case 'reconnect':
+        case 'offline':
+        case 'connect':
+          this._client?.removeListener(entry.event, entry.handler);
+          break;
+        case 'error':
+          this._client?.removeListener('error', entry.handler);
+          break;
+      }
+    }
+    this._lifecycleHandlers = [];
+  }
+
   /** Stop the watcher: remove listeners and unsubscribe from topics. */
   async stop(): Promise<void> {
     if (!this.started || !this._client) return;
@@ -336,22 +399,7 @@ export class ReadingWatcher implements Watcher {
       this._messageHandler = null;
     }
 
-    // Remove lifecycle handlers. mqtt's EventEmitter overload list does not
-    // accept the discriminated union as a single call shape, so dispatch by
-    // event tag to keep types tight without `any`.
-    for (const entry of this._lifecycleHandlers) {
-      switch (entry.event) {
-        case 'reconnect':
-        case 'offline':
-        case 'connect':
-          this._client.removeListener(entry.event, entry.handler);
-          break;
-        case 'error':
-          this._client.removeListener('error', entry.handler);
-          break;
-      }
-    }
-    this._lifecycleHandlers = [];
+    this.removeLifecycleHandlers();
 
     // Unsubscribe from topics
     for (const topic of this._subscribedTopics) {
