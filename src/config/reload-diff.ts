@@ -48,7 +48,8 @@ function diffField(
  *
  * Notably hot-swappable (NOT in this list): scale_mac, weight_unit, height_unit,
  * runtime.dry_run, runtime.debug, runtime.scan_cooldown, runtime.idle_rescan_delay,
- * exporters,
+ * ble.session_timeout_sec, ble.auto_clear_stale_bond, ble.bind_key, every ble.qn_*,
+ * ble.proxy_liveness_timeout_min, exporters,
  * unknown_user, out_of_range, user profile fields, last_known_weight, update_check.
  */
 export function diffRestartRequired(
@@ -60,6 +61,16 @@ export function diffRestartRequired(
   diffField(out, 'ble.handler', oldConfig.ble?.handler, newConfig.ble?.handler);
   diffField(out, 'ble.adapter', oldConfig.ble?.adapter, newConfig.ble?.adapter);
   diffField(out, 'ble.noble_driver', oldConfig.ble?.noble_driver, newConfig.ble?.noble_driver);
+  // The adapter list is built once, before the loop starts (run.ts), so a
+  // hot-edited value changes nothing until a restart. Without this row the user
+  // gets neither the effect nor the warning, which is neither half of the
+  // documented reload contract (#407).
+  diffField(
+    out,
+    'ble.force_scale_adapter',
+    oldConfig.ble?.force_scale_adapter,
+    newConfig.ble?.force_scale_adapter,
+  );
 
   const oldMqtt = oldConfig.ble?.mqtt_proxy;
   const newMqtt = newConfig.ble?.mqtt_proxy;

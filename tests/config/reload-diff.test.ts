@@ -49,6 +49,26 @@ describe('diffRestartRequired', () => {
     });
   });
 
+  // #407: the adapter list is built once before the loop, so this key takes
+  // effect only after a restart. Without a row here the user gets neither the
+  // effect nor the warning.
+  it('flags ble.force_scale_adapter change', () => {
+    const a = baseConfig({ ble: { handler: 'auto', force_scale_adapter: 'Hutbit' } });
+    const b = baseConfig({ ble: { handler: 'auto', force_scale_adapter: 'QN Scale' } });
+    const diff = diffRestartRequired(a, b);
+    expect(diff.find((f) => f.key === 'ble.force_scale_adapter')).toEqual({
+      key: 'ble.force_scale_adapter',
+      oldValue: 'Hutbit',
+      newValue: 'QN Scale',
+    });
+  });
+
+  it('does not flag a hot-reloadable ble key', () => {
+    const a = baseConfig({ ble: { handler: 'auto', session_timeout_sec: 60 } });
+    const b = baseConfig({ ble: { handler: 'auto', session_timeout_sec: 120 } });
+    expect(diffRestartRequired(a, b)).toEqual([]);
+  });
+
   it('flags mqtt_proxy.broker_url change', () => {
     const a = baseConfig({
       ble: {
