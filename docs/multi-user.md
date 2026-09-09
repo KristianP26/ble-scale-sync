@@ -110,7 +110,7 @@ Hot-swappable on edit:
 - `scale.weight_unit`, `scale.height_unit`
 - `unknown_user` strategy
 - `out_of_range` strategy
-- `runtime.dry_run`, `runtime.debug`, `runtime.scan_cooldown`
+- `runtime.dry_run`, `runtime.debug`, `runtime.scan_cooldown`, `runtime.idle_rescan_delay`
 - `ble.scale_mac`
 - `update_check`
 
