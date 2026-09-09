@@ -36,6 +36,12 @@ const KNOWN_NAMES = ['000fatscale01', '000fatscale02', '042fatscale01'];
  *   - Else legacy mode: LBM at [4-6] 24-bit BE / 1000,
  *     visceral at [7-8] BE / 10, BMR at [9-10] BE / 10
  */
+/**
+ * Wait this long for an impedance-mode frame before settling for the weight.
+ * See completionHoldMs below for why it is 4 s and what would tune it.
+ */
+const COMPOSITION_HOLD_MS = 4000;
+
 export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
   readonly name = 'Inlife';
   readonly match: MatchDescriptor = {
@@ -60,6 +66,13 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
   private readonly comp = new ReadingComposition<ScaleBodyComp>();
   /** Cached impedance from impedance-mode frames. */
   private cachedImpedance = 0;
+  /**
+   * Which branch the last parsed frame took; see isFinal (#413). Cleared at
+   * session start for the contract's sake rather than because it is reachable:
+   * both branches assign it, and isFinal is only ever called with a reading
+   * that was just parsed.
+   */
+  private lastFrameWasImpedanceMode = false;
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
@@ -148,6 +161,7 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
       // the SAME weigh-in is still needed: a divisor (Eufy P2 reads its
       // impedance /10) can put more than one candidate inside a plausible ohm
       // band, which is how the Eufy P2 field was originally misread.
+      this.lastFrameWasImpedanceMode = true;
       this.cachedImpedance = data.readUInt32BE(4);
       bleLog.debug(
         `Inlife 0x${modeFlag.toString(16)} frame: u32[4..7]=${this.cachedImpedance}, ` +
@@ -158,6 +172,7 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
       this.cachedComp = {};
     } else {
       // Legacy mode — body comp values embedded
+      this.lastFrameWasImpedanceMode = false;
       const _lbm = ((data[4] << 16) | (data[5] << 8) | data[6]) / 1000;
       const visceral = data.readUInt16BE(7) / 10;
       const _bmr = data.readUInt16BE(9) / 10;
@@ -171,6 +186,37 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
     const reading: ScaleReading = { weight, impedance: this.cachedImpedance };
     this.comp.pin(reading, this.cachedComp);
     return reading;
+  }
+
+  /**
+   * Prefer an impedance-mode frame, but never wait forever for one (#413).
+   *
+   * Without this the session resolved on the FIRST frame carrying a weight, so
+   * an impedance frame arriving after a legacy one was never parsed at all:
+   * `waitForRawReading` returns early for every notification once resolved.
+   *
+   * The cost is bounded and cannot lose a reading. A unit that only ever sends
+   * legacy frames exports exactly what it exports today, this much later, and
+   * a repeated legacy frame refreshes the held reading without re-arming the
+   * timer, so one session pays the window once.
+   *
+   * 4 s follows yunmai, whose impedance also arrives in a later frame, rather
+   * than koogeek's 2 s, where it comes in the same burst as the stable weight.
+   * It is a first estimate: the first reporter log that shows the real gap
+   * between the two frames should tune it.
+   */
+  readonly completionHoldMs = COMPOSITION_HOLD_MS;
+
+  /**
+   * Gated on the MODE FLAG, not on the decoded impedance.
+   *
+   * The impedance field itself is the open question in #405, so a value of 0
+   * there would mean "the width is wrong" as readily as "no measurement", and
+   * gating on it would make this hold depend on a decode nobody has verified.
+   * `data[11]` is the byte the parser already branches on.
+   */
+  isFinal(): boolean {
+    return this.lastFrameWasImpedanceMode;
   }
 
   isComplete(reading: ScaleReading): boolean {
@@ -190,6 +236,7 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
   onSessionStart(): void {
     this.cachedComp = {};
     this.cachedImpedance = 0;
+    this.lastFrameWasImpedanceMode = false;
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {

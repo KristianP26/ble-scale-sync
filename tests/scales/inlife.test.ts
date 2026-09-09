@@ -355,3 +355,50 @@ describe('InlifeScaleAdapter diagnostics (#405)', () => {
     expect(reading).toEqual({ weight: 78.4, impedance: 500 });
   });
 });
+
+describe('InlifeScaleAdapter impedance hold (#413)', () => {
+  function frame(mode: number, impedanceRaw = 0): Buffer {
+    const buf = Buffer.alloc(14);
+    buf[0] = 0x02;
+    buf[1] = 0x10;
+    buf.writeUInt16BE(784, 2); // 78.4 kg
+    if (mode === 0x80) buf.writeUInt32BE(impedanceRaw, 4);
+    buf[11] = mode;
+    return buf;
+  }
+
+  it('is not final on a legacy frame, so the session holds instead of resolving', () => {
+    const adapter = new InlifeScaleAdapter();
+    adapter.onSessionStart?.();
+    const reading = adapter.parseNotification(frame(0x00))!;
+
+    expect(adapter.isComplete(reading)).toBe(true);
+    expect(adapter.isFinal!(reading)).toBe(false);
+    expect(adapter.completionHoldMs).toBe(4000);
+  });
+
+  it('is final on an impedance frame, so that one resolves at once', () => {
+    const adapter = new InlifeScaleAdapter();
+    adapter.onSessionStart?.();
+    const reading = adapter.parseNotification(frame(0x80, 500))!;
+    expect(adapter.isFinal!(reading)).toBe(true);
+  });
+
+  it('gates on the mode flag, not on the value of the unverified field', () => {
+    // The width of [4..7] is the open question in #405, so a zero there must
+    // not be read as "no measurement": this frame IS the impedance frame.
+    const adapter = new InlifeScaleAdapter();
+    adapter.onSessionStart?.();
+    const reading = adapter.parseNotification(frame(0x80, 0))!;
+    expect(reading.impedance).toBe(0);
+    expect(adapter.isFinal!(reading)).toBe(true);
+  });
+
+  it('goes back to not-final when a legacy frame follows an impedance one', () => {
+    const adapter = new InlifeScaleAdapter();
+    adapter.onSessionStart?.();
+    adapter.parseNotification(frame(0x80, 500));
+    const legacy = adapter.parseNotification(frame(0x00))!;
+    expect(adapter.isFinal!(legacy)).toBe(false);
+  });
+});
