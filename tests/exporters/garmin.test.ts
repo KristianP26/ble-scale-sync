@@ -437,3 +437,88 @@ describe('GarminExporter', () => {
     ).toThrow(/must be true or false/);
   });
 });
+
+describe('GarminExporter upload timeout (#399)', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const mod = await import('../../src/exporters/garmin.js');
+    mod._resetPythonCache();
+  });
+
+  /** A process that never answers, so only the spawn options matter. */
+  function createSilentProc(): MockProc {
+    const proc = new EventEmitter() as MockProc;
+    proc.stdin = new Writable({
+      write(_chunk, _enc, cb) {
+        cb();
+      },
+    });
+    proc.stdout = new PassThrough();
+    proc.stderr = null;
+    return proc;
+  }
+
+  it('defaults to 180s, not the old hard-coded 60s', async () => {
+    mockSpawn.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === '--version') return createVersionCheckProc(0);
+      return createSilentProc();
+    });
+
+    const { GarminExporter } = await import('../../src/exporters/garmin.js');
+    void new GarminExporter().export(samplePayload);
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockSpawn.mock.calls[1][2]).toMatchObject({ timeout: 180_000 });
+  });
+
+  it('passes a configured timeout to spawn and names it in the timeout error', async () => {
+    mockSpawn.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === '--version') return createVersionCheckProc(0);
+      const proc = createSilentProc();
+      // SIGTERM close is what Node's own spawn timeout produces.
+      process.nextTick(() => proc.emit('close', null, 'SIGTERM'));
+      return proc;
+    });
+
+    const { GarminExporter } = await import('../../src/exporters/garmin.js');
+    const exporter = new GarminExporter({ upload_timeout_sec: 300 });
+    const result = await exporter.export(samplePayload);
+
+    expect(mockSpawn.mock.calls[1][2]).toMatchObject({ timeout: 300_000 });
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/timed out after 300s/);
+  });
+
+  it('accepts the value as a string, which is what a ${ENV_VAR} reference resolves to', async () => {
+    const { createExporterFromEntry } = await import('../../src/exporters/registry.js');
+    mockSpawn.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === '--version') return createVersionCheckProc(0);
+      return createSilentProc();
+    });
+
+    const exporter = createExporterFromEntry({
+      type: 'garmin',
+      email: 'a@b.c',
+      password: 'x',
+      upload_timeout_sec: '240',
+    });
+    void exporter.export(samplePayload);
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockSpawn.mock.calls[1][2]).toMatchObject({ timeout: 240_000 });
+  });
+
+  it('rejects a non-numeric or out-of-range timeout instead of handing spawn nonsense', async () => {
+    const { createExporterFromEntry } = await import('../../src/exporters/registry.js');
+    const entry = (v: unknown) => ({
+      type: 'garmin' as const,
+      email: 'a@b.c',
+      password: 'x',
+      upload_timeout_sec: v,
+    });
+
+    expect(() => createExporterFromEntry(entry('soon'))).toThrow(/must be a number/);
+    expect(() => createExporterFromEntry(entry(5))).toThrow(/between 10 and 900/);
+    expect(() => createExporterFromEntry(entry(3600))).toThrow(/between 10 and 900/);
+  });
+});
