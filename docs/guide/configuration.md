@@ -109,7 +109,7 @@ ble:
 | `noble_driver`               | No                          | OS default     | `abandonware` or `stoprocent`. Overrides the default BLE driver. Only applies when `handler: auto`.                                                                                                                                                                                        |
 | `adapter`                    | No                          | System default | Linux only. Select a specific Bluetooth adapter (e.g., `hci0`, `hci1`). See below.                                                                                                                                                                                                         |
 | `force_scale_adapter`        | No                          | Auto-detect    | Name of the scale protocol adapter to use, bypassing auto-detection. Requires `scale_mac`. See below.                                                                                                                                                                                      |
-| `session_timeout_sec`        | No                          | `120`          | Seconds of scale silence that end a GATT session (5 to 600); an inbound frame restarts the clock. Native BLE handlers only; ignored on `mqtt-proxy` and `esphome-proxy`. See below.                                                                                                        |
+| `session_timeout_sec`        | No                          | `120`          | Seconds of scale silence that end a GATT session (5 to 600); an inbound frame restarts the clock. A session also ends after three times this value even if frames keep arriving, so a chatty scale cannot hold the radio forever, and a whole scan cycle is capped at 15 minutes regardless. Native BLE handlers only; ignored on `mqtt-proxy` and `esphome-proxy`. See below.                                                                                                        |
 | `qn_protocol_byte`           | No                          | Auto           | QN-family scales only. Protocol byte the handshake echoes back to the scale (0 to 255). Set it when a QN scale runs the whole handshake and then reports nothing, or when its scale-info frame is lost in transit on a proxy transport. See below.                                         |
 | `qn_report_byte`             | No                          | Per dialect    | QN-family scales only. Payload byte of the history-response frame (0 to 255). Defaults to `252` (0xFC) on the long-frame dialects (es26m and extended) and `254` (0xFE) on the classic one. Try the other value if your scale completes the handshake and then reports nothing. See below. |
 | `auto_clear_stale_bond`      | No                          | `false`        | Delete a pairing key the scale has forgotten and pair again. Bonded scales only (Beurer BF7xx / BF9xx), node-ble transport only. See below.                                                                                                                                                |
@@ -443,6 +443,22 @@ scale:
 | ------------- | -------- | ------- | -------------------------------------------------------- |
 | `weight_unit` | No       | `kg`    | `kg` or `lbs`. Display only; calculations always use kg. |
 | `height_unit` | No       | `cm`    | `cm` or `in`. Used for height input in user profiles.    |
+
+### Unknown user
+
+```yaml
+unknown_user: nearest # nearest | log | ignore
+```
+
+| Field          | Required | Default   | Description                                                                    |
+| -------------- | -------- | --------- | ------------------------------------------------------------------------------ |
+| `unknown_user` | No       | `nearest` | What to do with a reading that matches no user's `weight_range`                 |
+
+- `nearest` attributes it to the user whose remembered weight is closest and exports normally.
+- `log` records it and exports nothing.
+- `ignore` drops it silently.
+
+With more than one user this setting is rarely reached: the matcher falls back to the closest `last_known_weight` first, and that always returns somebody. It is `out_of_range` above that decides whether such a reading is exported at all. Both are hot-reloadable. Full detail, including how matching works: [Multi-User Support](/multi-user).
 
 ### Out-of-range readings
 

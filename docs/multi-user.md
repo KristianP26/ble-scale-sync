@@ -114,7 +114,9 @@ Hot-swappable on edit:
 - `ble.scale_mac`
 - `update_check`
 
-Restart-required (the change is detected and logged with a warning, but only takes effect after restart): `ble.handler`, `ble.adapter`, `ble.noble_driver`, all `ble.mqtt_proxy.*` fields, all `ble.esphome_proxy.*` fields, `runtime.continuous_mode`, `runtime.watchdog_max_consecutive_failures`, switching between single-user (1 user) and multi-user (>1).
+Restart-required (the change is detected and logged with a warning, but only takes effect after restart): `ble.handler`, `ble.adapter`, `ble.noble_driver`, `ble.force_scale_adapter`, all `ble.mqtt_proxy.*` fields, all `ble.esphome_proxy.*` fields, `ble.ha_bluetooth.url`, `ble.ha_bluetooth.token`, `ble.ha_bluetooth.source`, `runtime.continuous_mode`, `runtime.watchdog_max_consecutive_failures`, switching between single-user (1 user) and multi-user (>1).
+
+Everything not in that list is hot-swapped, including the keys people most often tune while a scale is misbehaving: `ble.session_timeout_sec`, `ble.auto_clear_stale_bond`, `ble.bind_key`, every `ble.qn_*` option and `ble.proxy_liveness_timeout_min`.
 
 To opt out (e.g. on a flaky network filesystem) and rely solely on the `SIGHUP` flow:
 

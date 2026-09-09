@@ -35,6 +35,8 @@ BLE read and body composition calculation are fully offline. Local exporters (Fi
 
 There is **no retry queue**. If a reading fires while Garmin is unreachable, that specific export fails and the reading is lost for that target. Other exporters in the same fan-out run independently, so a File or local MQTT export still succeeds.
 
+Each export is attempted **three times** before it is given up on, with no wait between the attempts. A 5xx, a 408 or a 429 from the server is retried; any other 4xx is not, because a rejected token or a malformed request fails the same way every time. So a momentary blip is usually absorbed, and a wrong credential fails fast and says so. Persisting a failed payload for a later cycle is tracked in [#412](https://github.com/KristianP26/ble-scale-sync/issues/412).
+
 ### What hardware do I need?
 
 Any device with a BLE radio running Node.js 22+ or Docker. Recommended: [Raspberry Pi Zero 2W](/guide/getting-started#recommended-hardware) for about 15 euros, with built-in Bluetooth and roughly 0.4 W idle power draw. The original Pi Zero W (first-gen, ARMv6) is [not supported](/troubleshooting#install-fails-on-raspberry-pi-zero-w-first-gen).
