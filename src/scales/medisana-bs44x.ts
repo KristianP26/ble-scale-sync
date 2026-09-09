@@ -7,7 +7,12 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
+import {
+  uuid16,
+  buildPayload,
+  type ScaleBodyComp,
+  ReadingComposition,
+} from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
 const CHR_NOTIFY = uuid16(0x8a21);
@@ -42,16 +47,11 @@ export class MedisanaBs44xAdapter implements ScaleAdapterCore, GattWiring {
   /** Cached body-composition values from feature frames. */
   private cachedComp: ScaleBodyComp = {};
   /**
-   * Composition as it stood when each reading was emitted. `computeMetrics()`
-   * runs LATER than the parse that produced the reading, and on the watcher
-   * transports (mqtt-proxy, esphome-proxy) the watcher does not pause while the
-   * loop processes a reading: `loop.ts` awaits `processReading()`, which
-   * includes network exports, and the watcher can open the NEXT GATT session -
-   * and therefore fire `onSessionStart()` - in the meantime. Reading the live
-   * cache in `computeMetrics` would then hand the completed reading a cache
-   * that was just cleared. Weak so the processor dropping a reading frees it.
+   * Composition pinned to the reading it was measured with (#394). See
+   * ReadingComposition for why computeMetrics cannot read the live cache on
+   * the watcher transports.
    */
-  private readonly compByReading = new WeakMap<ScaleReading, ScaleBodyComp>();
+  private readonly compByReading = new ReadingComposition<ScaleBodyComp>();
 
   /** Time sync with real Unix timestamp. */
   async onConnected(ctx: ConnectionContext): Promise<void> {
@@ -107,7 +107,7 @@ export class MedisanaBs44xAdapter implements ScaleAdapterCore, GattWiring {
     if (this.cachedWeight <= 0) return null;
 
     const reading: ScaleReading = { weight: this.cachedWeight, impedance: 0 };
-    this.compByReading.set(reading, { ...this.cachedComp });
+    this.compByReading.pin(reading, { ...this.cachedComp });
     return reading;
   }
 
@@ -133,7 +133,7 @@ export class MedisanaBs44xAdapter implements ScaleAdapterCore, GattWiring {
     // Per-reading snapshot taken in parseNotification(). The live cache is only
     // a fallback for a reading this adapter did not build (direct callers,
     // tests); see the compByReading field comment for why it cannot be trusted.
-    const comp = this.compByReading.get(reading) ?? this.cachedComp;
+    const comp = this.compByReading.of(reading, this.cachedComp);
     return buildPayload(reading.weight, reading.impedance, comp, profile);
   }
 }

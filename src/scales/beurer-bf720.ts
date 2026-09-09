@@ -9,7 +9,12 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
+import {
+  uuid16,
+  buildPayload,
+  type ScaleBodyComp,
+  ReadingComposition,
+} from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
@@ -258,10 +263,11 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
    */
   private readonly warnedFields = new Set<string>();
   /**
-   * Composition as it stood when each reading was emitted. Weak so buffered
-   * history readings do not pin memory once the processor drops them.
+   * Composition pinned to the reading it was measured with (#394). See
+   * ReadingComposition for why computeMetrics cannot read the live cache on
+   * the watcher transports.
    */
-  private readonly compByReading = new WeakMap<ScaleReading, CachedComp>();
+  private readonly compByReading = new ReadingComposition<CachedComp>();
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
@@ -939,7 +945,7 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     // resolved), so reading the live cachedComp there would hand every history
     // entry whatever happened to be cached at the END of the session. With a
     // snapshot each reading keeps the composition it was actually built from.
-    this.compByReading.set(reading, { ...this.cachedComp });
+    this.compByReading.pin(reading, { ...this.cachedComp });
     this.readingEmitted = true;
     return reading;
   }
@@ -953,7 +959,7 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     // Per-reading snapshot taken in buildReading(). Falling back to the live
     // cache keeps direct callers (and tests) working for a reading this adapter
     // did not build.
-    const c = this.compByReading.get(reading) ?? this.cachedComp;
+    const c = this.compByReading.of(reading, this.cachedComp);
     const comp: ScaleBodyComp = {};
 
     if (c.fat != null) comp.fat = c.fat;

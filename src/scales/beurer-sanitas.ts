@@ -9,7 +9,12 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, biaFatIfPlausible } from './body-comp-helpers.js';
+import {
+  uuid16,
+  buildPayload,
+  biaFatIfPlausible,
+  ReadingComposition,
+} from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
@@ -117,7 +122,7 @@ export class BeurerSanitasScaleAdapter
   }
   private cachedComp: CachedComp | null = null;
   /** Composition as it stood when each reading was emitted; see `emit()`. */
-  private readonly compByReading = new WeakMap<ScaleReading, CachedComp | null>();
+  private readonly compByReading = new ReadingComposition<CachedComp | null>();
 
   /** Accumulated 0x59 composition parts (part number -> payload after byte 4). */
   private compParts = new Map<number, Buffer>();
@@ -317,7 +322,7 @@ export class BeurerSanitasScaleAdapter
    */
   private emit(weight: number, impedance: number): ScaleReading {
     const reading: ScaleReading = { weight, impedance };
-    this.compByReading.set(reading, this.cachedComp ? { ...this.cachedComp } : null);
+    this.compByReading.pin(reading, this.cachedComp ? { ...this.cachedComp } : null);
     return reading;
   }
 
@@ -367,9 +372,7 @@ export class BeurerSanitasScaleAdapter
     // null snapshot ("this reading carried no composition") is a real answer
     // and must not fall through to the live cache. The fallback is only for a
     // reading this adapter did not build (direct callers, tests).
-    const snapshot = this.compByReading.has(reading)
-      ? this.compByReading.get(reading)
-      : this.cachedComp;
+    const snapshot = this.compByReading.of(reading, this.cachedComp);
     const comp = snapshot ?? {};
     // The scale's own figure wins when it sent one. Where it did not, the
     // impedance this adapter already parsed is used rather than thrown away

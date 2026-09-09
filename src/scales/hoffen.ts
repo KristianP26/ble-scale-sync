@@ -7,7 +7,13 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, xorChecksum, type ScaleBodyComp } from './body-comp-helpers.js';
+import {
+  uuid16,
+  buildPayload,
+  xorChecksum,
+  type ScaleBodyComp,
+  ReadingComposition,
+} from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 import { bleLog } from '../ble/types.js';
 
@@ -41,16 +47,11 @@ export class HoffenAdapter implements ScaleAdapterCore, GattWiring {
   private cachedBone = 0;
   private cachedVisceral = 0;
   /**
-   * Composition as it stood when each reading was emitted. `computeMetrics()`
-   * runs LATER than the parse that produced the reading, and on the watcher
-   * transports (mqtt-proxy, esphome-proxy) the watcher does not pause while
-   * the loop processes a reading: `loop.ts` awaits `processReading()`, which
-   * includes network exports, and the watcher can open the NEXT GATT session -
-   * and therefore fire `onSessionStart()` - in the meantime. Reading the live
-   * cache in `computeMetrics` would then hand the completed reading a cache
-   * that was just cleared. Weak so the processor dropping a reading frees it.
+   * Composition pinned to the reading it was measured with (#394). See
+   * ReadingComposition for why computeMetrics cannot read the live cache on
+   * the watcher transports.
    */
-  private readonly compByReading = new WeakMap<ScaleReading, ScaleBodyComp>();
+  private readonly compByReading = new ReadingComposition<ScaleBodyComp>();
 
   matches(device: BleDeviceInfo): boolean {
     return matchesDescriptor(device, this.match);
@@ -106,7 +107,7 @@ export class HoffenAdapter implements ScaleAdapterCore, GattWiring {
     }
 
     const reading: ScaleReading = { weight, impedance: 0 };
-    this.compByReading.set(reading, this.snapshot());
+    this.compByReading.pin(reading, this.snapshot());
     return reading;
   }
 
@@ -146,7 +147,7 @@ export class HoffenAdapter implements ScaleAdapterCore, GattWiring {
     // Per-reading snapshot taken in parseNotification(). The live cache is only
     // a fallback for a reading this adapter did not build (direct callers,
     // tests); see the compByReading field comment for why it cannot be trusted.
-    const comp = this.compByReading.get(reading) ?? this.snapshot();
+    const comp = this.compByReading.of(reading, this.snapshot());
     return buildPayload(reading.weight, reading.impedance, comp, profile);
   }
 }
