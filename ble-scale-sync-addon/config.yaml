@@ -69,6 +69,7 @@ options:
   garmin_password: ''
   garmin_weight_only: false
   scan_cooldown: 30
+  idle_rescan_delay: 5
   reset_bluetooth: true
   debug: false
   custom_config: false
@@ -107,6 +108,7 @@ schema:
   garmin_password: password?
   garmin_weight_only: bool?
   scan_cooldown: int(5,3600)
+  idle_rescan_delay: int(0,3600)?
   reset_bluetooth: bool
   debug: bool
   custom_config: bool

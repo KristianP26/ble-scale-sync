@@ -51,7 +51,13 @@ describe('collectUnknownKeys', () => {
       out_of_range: 'skip',
       users: [{ ...USER, exporters: [{ type: 'mqtt', broker_url: 'mqtt://h:1883' }] }],
       global_exporters: [{ type: 'mqtt', broker_url: 'mqtt://h:1883', qos: 0, retain: true }],
-      runtime: { continuous_mode: true, scan_cooldown: 30, dry_run: false, debug: false },
+      runtime: {
+        continuous_mode: true,
+        scan_cooldown: 30,
+        idle_rescan_delay: 5,
+        dry_run: false,
+        debug: false,
+      },
       update_check: true,
     };
     expect(collectUnknownKeys(generated)).toEqual([]);
