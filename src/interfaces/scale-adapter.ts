@@ -351,9 +351,18 @@ export interface ScaleAdapterCore {
    * bypass it; today every such adapter either has no broadcast parser or, like
    * `eufy-p2`, has a stateless one.
    *
-   * Must not throw and must not perform I/O: nothing is connected yet.
+   * Must not throw and must not perform I/O: nothing is connected yet. Reading
+   * a value the adapter already recorded is fine, which is what the address is
+   * for: an adapter that keeps per-device state (yunmai's Mini/SE variant) can
+   * resolve it here, for the device this session is about to read, rather than
+   * carrying whatever `matches()` last saw.
+   *
+   * `deviceAddress` is uppercase with no separators, and it is NOT always a
+   * MAC: on macOS the noble transport supplies the CoreBluetooth UUID instead,
+   * which will simply not match anything recorded from an advertisement. Treat
+   * an unrecognised address as "unknown", never as a reason to reset.
    */
-  onSessionStart?(): void;
+  onSessionStart?(deviceAddress?: string): void;
 
   /**
    * Called once when a GATT session ends, however it ends: a completed reading,

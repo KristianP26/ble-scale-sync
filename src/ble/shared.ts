@@ -240,7 +240,7 @@ function initializeAdapter(
   // previous session's state. It has to be here rather than in `start()`,
   // because `subscribeAndInit` subscribes first and calls `start` after (#394).
   try {
-    adapter.onSessionStart?.();
+    adapter.onSessionStart?.(deviceAddress);
   } catch (e: unknown) {
     bleLog.debug(`Adapter onSessionStart failed: ${errMsg(e)}`);
   }
@@ -567,9 +567,12 @@ export function waitForRawReading(
 
     // Armed only for adapters with completionHoldMs; the hold() call below is
     // gated on it, so a 0 ms timer is never started for other adapters.
-    const hold = new HoldTimer(adapter.completionHoldMs ?? 0, (r) => {
-      if (!resolved) finishWith(r);
-    });
+    const hold = new HoldTimer(
+      () => adapter.completionHoldMs ?? 0,
+      (r) => {
+        if (!resolved) finishWith(r);
+      },
+    );
 
     // Raw frame capture (#211): log every notify frame and hold the connection
     // open past weight-stable so trailing frames (e.g. the Beurer/Sanitas 0x59
