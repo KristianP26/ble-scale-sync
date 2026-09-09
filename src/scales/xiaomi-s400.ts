@@ -119,7 +119,11 @@ export class XiaomiS400Adapter implements ScaleAdapterCore, BroadcastSource {
     // Shares the FE95 service with the S800; the product id in the service
     // data keeps the two apart, which the descriptor cannot express.
     custom: true,
-    names: { includes: ['scale s400'] },
+    // openScale also matches the raw model name and the bare 'XMTZC' prefix.
+    // Only the exact model name is taken here: XMTZC04HM is the Mi Scale 2
+    // legacy variant, which has its own adapter, so a bare prefix would hijack
+    // it (#409).
+    names: { includes: ['scale s400'], exact: ['xmtzc14hm'] },
     serviceUuids: ['fe95'],
   };
   // Broadcast-only: no GATT characteristics. preferPassive forces the broadcast
@@ -149,6 +153,10 @@ export class XiaomiS400Adapter implements ScaleAdapterCore, BroadcastSource {
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
     if (name.includes('scale s400')) return true;
+    // The raw model string some units advertise instead of the marketing name
+    // (#409). Exact, not a prefix: XMTZC04HM is the Mi Scale 2 legacy variant
+    // with its own adapter.
+    if (name === 'xmtzc14hm') return true;
     for (const sd of device.serviceData ?? []) {
       if (normUuid(sd.uuid) === SVC_FE95 && this.isS400Frame(sd.data)) return true;
     }

@@ -31,7 +31,21 @@ const SVC_WEIGHT_SHORT = '181d';
  *  BeurerBf720Adapter, so they are deliberately absent: matches() bails on
  *  isGenericExcludedName() before this list is consulted, which made listing
  *  them both dead and self-contradictory (#229, #255). */
-const KNOWN_NAMES = ['beurer', 'silvercrest', 'bf600', 'bf850', 'medisana'];
+// bf1000, sbf76 and sbf77 come from openScale's standard Beurer/Sanitas
+// handler (#409). They are SIG-profile models with no adapter of their own, so
+// without a name they were reachable only through the generic 0x181B/0x181D
+// service claim. sbf70 and sbf75 are deliberately absent: those are the custom
+// FFE1 protocol and belong to beurer-sanitas.ts.
+const KNOWN_NAMES = [
+  'beurer',
+  'silvercrest',
+  'bf600',
+  'bf850',
+  'bf1000',
+  'sbf76',
+  'sbf77',
+  'medisana',
+];
 
 interface CachedGattData {
   /** Undefined when the scale reported no measurement, not 0 (#405). */

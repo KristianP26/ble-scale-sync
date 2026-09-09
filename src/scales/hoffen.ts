@@ -32,8 +32,17 @@ import { bleLog } from '../ble/types.js';
  *     visceral fat at [17-18] LE /10.
  */
 export class HoffenAdapter implements ScaleAdapterCore, GattWiring {
+  // Not renamed to mention the ProfiCare: this string is what a user puts in
+  // ble.force_scale_adapter, so changing it would break existing configs.
   readonly name = 'Hoffen BS-8107';
-  readonly match: MatchDescriptor = { priority: 20, names: { exact: ['hoffen bs-8107'] } };
+  readonly match: MatchDescriptor = {
+    priority: 20,
+    // openScale maps two names onto this one driver: the Hoffen and the
+    // ProfiCare PC-PW 3008 BT, which is the same hardware rebadged. Ours
+    // claimed only the first, so a ProfiCare owner had an unsupported scale on
+    // a protocol we already ship (#409).
+    names: { exact: ['hoffen bs-8107', 'pc-pw 3008 bt'] },
+  };
   readonly charNotifyUuid = uuid16(0xffb2);
   readonly charWriteUuid = uuid16(0xffb2);
   readonly normalizesWeight = true;

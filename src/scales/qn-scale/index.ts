@@ -66,7 +66,16 @@ export class QnScaleAdapter
   readonly match: MatchDescriptor = {
     priority: 250,
     custom: true,
-    names: { includes: ['qn-scale', 'renpho', 'senssun', 'sencor'] },
+    // 'seb-scale' and the exact 'fit plus' come from openScale's QN handler,
+    // which annotates the latter as a BTSnoop-confirmed GE CS 10 G (#409, and
+    // we have GE CS10G history in #235). 'fit plus' is EXACT on purpose: as a
+    // substring it would claim any fitness-branded device whose name contains
+    // it. Without these two, such a unit was reachable only through the
+    // ae00/ffe0/fff0 service claim.
+    names: {
+      includes: ['qn-scale', 'renpho', 'senssun', 'sencor', 'seb-scale'],
+      exact: ['fit plus'],
+    },
     serviceUuids: ['ae00', 'ffe0', 'fff0'],
     charUuids: ['ae01', 'ae02'],
     manufacturerId: 0xffff,

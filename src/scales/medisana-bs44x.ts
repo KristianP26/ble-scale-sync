@@ -33,7 +33,11 @@ export class MedisanaBs44xAdapter implements ScaleAdapterCore, GattWiring {
   readonly name = 'Medisana BS44x';
   readonly match: MatchDescriptor = {
     priority: 150,
-    names: { exact: ['013197', '013198', '0202b6'], startsWith: ['0203b'] },
+    // startsWith, not exact: openScale matches all four families by prefix, and
+    // these numeric names are firmware-generated, so a unit that appends a
+    // suffix was missed by name and depended entirely on the 78b2 service
+    // claim (#409).
+    names: { startsWith: ['013197', '013198', '0202b6', '0203b'] },
     serviceUuids: ['78b2'],
   };
   readonly charNotifyUuid = CHR_NOTIFY;
