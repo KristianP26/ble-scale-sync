@@ -4,6 +4,10 @@ import { createLogger } from './logger.js';
 import { sleep, withTimeout, errMsg } from './ble/types.js';
 import { rethrowAsTransportError } from './ble/transport-availability.js';
 import { safeName } from './ble/advertisement.js';
+import { waitForPoweredOn } from './ble/handler-noble-shared/state.js';
+import type { NobleApi } from './ble/handler-noble-shared/types.js';
+import { parseMfgData } from './ble/handler-noble-shared/peripheral.js';
+import { parseQnBroadcast } from './scales/qn-scale/broadcast.js';
 import type { HandlerKey } from './ble/transport-availability.js';
 
 const log = createLogger('Diagnose');
@@ -35,27 +39,6 @@ function normalizeAddr(addr: string): string {
 function resolveDriver(configured?: string): string {
   if (configured === 'abandonware' || configured === 'stoprocent') return configured;
   return process.platform === 'darwin' ? 'stoprocent' : 'abandonware';
-}
-
-async function waitForPoweredOn(noble: any): Promise<void> {
-  const getState = (): string => noble.state ?? noble._state ?? 'unknown';
-  if (getState() === 'poweredOn') return;
-
-  log.info('Waiting for Bluetooth adapter...');
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error(`Bluetooth adapter state: '${getState()}' (not poweredOn)`)),
-      10_000,
-    );
-    const onState = (state: string): void => {
-      if (state === 'poweredOn') {
-        clearTimeout(timeout);
-        noble.removeListener('stateChange', onState);
-        resolve();
-      }
-    };
-    noble.on('stateChange', onState);
-  });
 }
 
 async function main(): Promise<void> {
@@ -113,7 +96,13 @@ async function main(): Promise<void> {
 
   const noble = await loadNoble(driver);
 
-  await waitForPoweredOn(noble);
+  // The shared one, not a copy: the copy that lived here was missing the
+  // btmgmt reset retry, so `npm run diagnose` failed with "adapter not
+  // poweredOn" on exactly the adapter state a normal run recovers from (#406).
+  await waitForPoweredOn(
+    noble as NobleApi,
+    () => (noble.state ?? noble._state ?? 'unknown') as string,
+  );
   log.info('Bluetooth adapter: ready\n');
 
   // ─── Phase 1: Scan ────────────────────────────────────────────────────────
@@ -156,14 +145,29 @@ async function main(): Promise<void> {
     if (mfgData && mfgData.length > 0) {
       log.info(`    Manufacturer data: ${hex(mfgData)}`);
 
-      // Parse QN broadcast weight from AABB manufacturer data
-      if (mfgData.length >= 26 && mfgData[2] === 0xaa && mfgData[3] === 0xbb) {
-        const rawWeight = mfgData.readUInt16LE(17);
-        const weight = rawWeight / 100;
-        const stable = mfgData[15] === 0x25;
-        log.info(
-          `    QN broadcast: ${weight.toFixed(2)} kg ${stable ? '(stable)' : '(measuring)'}`,
-        );
+      // QN broadcast weight, through the SAME decoder the read path uses.
+      //
+      // This block used to re-implement it and got it wrong: the production
+      // path is handed manufacturer data with the 2-byte company id already
+      // stripped, so its offsets are relative to that. This copy read the RAW
+      // buffer, correctly shifted the AABB magic to [2..3] and then read the
+      // status byte and the weight at the UNSHIFTED offsets, so the two
+      // disagreed by two bytes on every field but the header. This is the tool
+      // people are told to run when something is wrong (#406).
+      const parsed = parseMfgData(mfgData);
+      const qn = parsed ? parseQnBroadcast(parsed.data) : null;
+      if (qn) {
+        log.info(`    QN broadcast: ${qn.weight.toFixed(2)} kg (stable)`);
+      } else if (
+        parsed &&
+        parsed.data.length >= 2 &&
+        parsed.data[0] === 0xaa &&
+        parsed.data[1] === 0xbb
+      ) {
+        // The magic matches, so it is a QN advertisement that simply has not
+        // settled yet. Saying so is more useful than silence, since the whole
+        // point of the tool is to show what the scale is doing.
+        log.info('    QN broadcast: measuring (no stable weight in this advertisement)');
       }
     }
     for (const sd of svcData) {
