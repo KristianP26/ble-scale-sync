@@ -67,10 +67,15 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
   /** Cached impedance from impedance-mode frames. */
   private cachedImpedance = 0;
   /**
-   * Which branch the last parsed frame took; see isFinal (#413). Cleared at
-   * session start for the contract's sake rather than because it is reachable:
-   * both branches assign it, and isFinal is only ever called with a reading
-   * that was just parsed.
+   * Which branch the last parsed frame took; see isFinal (#413).
+   *
+   * Only valid for the frame that was JUST parsed. Today that is the only way
+   * it is read (shared.ts asks immediately after the parse, and neither the
+   * hold expiry nor the disconnect path re-consults it), but a caller that held
+   * a reading and asked later would get an answer about a different frame.
+   *
+   * Cleared at session start for the contract's sake rather than because it is
+   * reachable: both branches assign it on every frame.
    */
   private lastFrameWasImpedanceMode = false;
 
@@ -200,10 +205,17 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
    * a repeated legacy frame refreshes the held reading without re-arming the
    * timer, so one session pays the window once.
    *
-   * 4 s follows yunmai, whose impedance also arrives in a later frame, rather
-   * than koogeek's 2 s, where it comes in the same burst as the stable weight.
-   * It is a first estimate: the first reporter log that shows the real gap
-   * between the two frames should tune it.
+   * 4 s is yunmai's value rather than koogeek's 2 s, because koogeek's is sized
+   * for an impedance that arrives in the same burst as the stable weight and
+   * this one is not in the same frame at all. It is an estimate either way: the
+   * first reporter log showing the real gap between the two frames should tune
+   * it.
+   *
+   * What makes a held reading safe to deliver later: the impedance is read into
+   * the reading itself at parse time, and the composition is pinned per reading
+   * (see the ReadingComposition field), so a frame that arrives during the hold
+   * cannot rewrite either one. Moving impedance out of the reading would break
+   * that quietly.
    */
   readonly completionHoldMs = COMPOSITION_HOLD_MS;
 

@@ -1863,6 +1863,92 @@ describe('getRawCaptureConfig()', () => {
   });
 });
 
+// ─── Completion hold, end to end (#413) ─────────────────────────────────────
+
+// The adapter-level tests assert what isComplete and isFinal answer. This one
+// asserts what the SESSION does with those answers, which is the behaviour the
+// hold exists for and the part no adapter test can reach.
+describe('completionHoldMs through waitForRawReading', () => {
+  it('holds a complete-but-not-final reading, then settles once on expiry', async () => {
+    vi.useFakeTimers();
+    try {
+      const notifyChar = createMockChar();
+      const writeChar = createMockChar();
+      const device = createMockDevice();
+      const { charMap } = createCharMap([
+        [NOTIFY_UUID, notifyChar],
+        [WRITE_UUID, writeChar],
+      ]);
+
+      let final = false;
+      const adapter = createLegacyAdapter({
+        unlockCommand: undefined,
+        completionHoldMs: 4000,
+        parseNotification: vi.fn(() => ({ weight: 78.4, impedance: final ? 500 : 0 })),
+        isComplete: () => true,
+        isFinal: () => final,
+      });
+
+      const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+      await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+      // A complete but not-final frame must NOT settle the session.
+      notifyChar.triggerData(Buffer.from([0x01]));
+      let settled = false;
+      void promise.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(3999);
+      expect(settled, 'the session must still be waiting for a richer frame').toBe(false);
+
+      // On expiry the held reading is delivered rather than lost.
+      await vi.advanceTimersByTimeAsync(1);
+      const raw = await promise;
+      expect(raw.reading.weight).toBe(78.4);
+      expect(raw.reading.impedance).toBe(0);
+
+      // A frame arriving after the window must not settle it a second time.
+      final = true;
+      notifyChar.triggerData(Buffer.from([0x02]));
+      await vi.advanceTimersByTimeAsync(10);
+      expect(adapter.parseNotification).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles at once on a final frame, without arming the hold', async () => {
+    vi.useFakeTimers();
+    try {
+      const notifyChar = createMockChar();
+      const writeChar = createMockChar();
+      const device = createMockDevice();
+      const { charMap } = createCharMap([
+        [NOTIFY_UUID, notifyChar],
+        [WRITE_UUID, writeChar],
+      ]);
+
+      const adapter = createLegacyAdapter({
+        unlockCommand: undefined,
+        completionHoldMs: 4000,
+        parseNotification: vi.fn(() => ({ weight: 78.4, impedance: 500 })),
+        isComplete: () => true,
+        isFinal: () => true,
+      });
+
+      const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+      await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+      notifyChar.triggerData(Buffer.from([0x01]));
+
+      // No timer advance: a final frame must not wait out the window.
+      const raw = await promise;
+      expect(raw.reading.impedance).toBe(500);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 // ─── Session hook placement (#394) ──────────────────────────────────────────
 
 // The whole point of onSessionStart is WHERE it runs. Every adapter-level test
