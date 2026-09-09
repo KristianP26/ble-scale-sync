@@ -19,7 +19,14 @@ import {
   POST_DISCOVERY_QUIESCE_MS,
   GATT_DISCOVERY_TIMEOUT_MS,
 } from '../types.js';
-import { helperOf, getDbusNext, releaseDeviceProxy, type Adapter, type Device } from './dbus.js';
+import {
+  helperOf,
+  getDbusNext,
+  isBonded,
+  releaseDeviceProxy,
+  type Adapter,
+  type Device,
+} from './dbus.js';
 import { applyDbusMatchRefcountPatch } from './dbus-match-patch.js';
 import { getBus, attachBusErrorHandler, isDbusConnectionError, dbusError } from './connection.js';
 import { registerPairingAgent, setPairingTarget } from './agent.js';
@@ -66,8 +73,10 @@ export async function ensureBonded(
   if (abortSignal?.aborted) throw new Error('Shutting down before BLE pairing started');
   let onAbort: (() => void) | undefined;
   try {
-    const paired = (await device.isPaired()) as unknown as boolean;
-    if (paired) {
+    // Via the shared helper: this copy had no try/catch at all, so a transient
+    // D-Bus error propagated out of the bonding path instead of being treated
+    // as "bond state unknown" (#406).
+    if (await isBonded(device)) {
       bleLog.debug('Device already bonded');
       return;
     }
@@ -178,12 +187,7 @@ export async function acquireGattServer(
     return await acquire();
   } catch (err) {
     if (!adapter?.requiresBonding) throw err;
-    let alreadyBonded = false;
-    try {
-      alreadyBonded = (await device.isPaired()) as unknown as boolean;
-    } catch {
-      alreadyBonded = false;
-    }
+    const alreadyBonded = await isBonded(device);
     // Already bonded but still timing out means the stall is not a missing bond;
     // pairing again would not help, so surface the original timeout.
     if (alreadyBonded) throw err;

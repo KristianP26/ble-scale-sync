@@ -8,7 +8,7 @@ import {
   DISCOVERY_TIMEOUT_MS,
   POST_DISCOVERY_QUIESCE_MS,
 } from '../types.js';
-import { releaseDeviceProxy, type Adapter, type Device } from './dbus.js';
+import { isBonded, releaseDeviceProxy, type Adapter, type Device } from './dbus.js';
 import {
   startDiscoverySafe,
   removeDevice,
@@ -22,22 +22,6 @@ import {
   STALE_BOND_EVIDENCE_ATTEMPTS,
 } from './stale-bond.js';
 import { isDeviceObjectGone } from './device-object.js';
-
-/**
- * True when BlueZ still lists this peer as paired.
- *
- * node-ble types isPaired() loosely; BusHelper.prop unwraps the Variant to a
- * real boolean at runtime, so cast through unknown. Any failure answers false:
- * every caller uses this to gate a destructive or accusatory step, so an
- * unknown bond state must not be read as "bonded".
- */
-async function isBonded(device: Device | undefined): Promise<boolean> {
-  try {
-    return ((await device?.isPaired()) as unknown as boolean) === true;
-  } catch {
-    return false;
-  }
-}
 
 export interface ConnectRecoveryContext {
   btAdapter: Adapter;

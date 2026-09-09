@@ -330,8 +330,14 @@ export async function removeDevice(
   let probe: Device | undefined;
   try {
     probe = await btAdapter.getDevice(formatted);
+    // Deliberately NOT the shared isBonded() helper in dbus.ts: that one answers
+    // false for any failure, which is right where the answer gates a diagnostic
+    // or a retry. Here it gates a DESTRUCTIVE RemoveDevice, so an unknown bond
+    // state must abort rather than read as "not bonded" and delete a real bond.
+    // The two semantics are the reason this copy stays a copy (#406).
+    //
     // node-ble types isPaired() loosely; BusHelper.prop unwraps the Variant to a
-    // real boolean at runtime, so cast through unknown like ensureBonded does.
+    // real boolean at runtime, so the cast goes through unknown.
     paired = ((await probe.isPaired()) as unknown as boolean) === true;
   } catch (err) {
     // 'Device not found' => not in the BlueZ cache, so there is no bond to

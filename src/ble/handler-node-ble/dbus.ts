@@ -58,6 +58,27 @@ export const helperOf = <T>(obj: T): BluezHelper => (obj as WithHelper<T>).helpe
  * Only ever call this on a proxy nothing else holds. Never on the device a
  * session is using.
  */
+/**
+ * Whether BlueZ still lists this device as bonded.
+ *
+ * node-ble types `isPaired()` loosely; BusHelper.prop unwraps the Variant to a
+ * real boolean at runtime, so the cast goes through unknown. Any failure
+ * answers false: every caller uses this to gate a destructive or accusatory
+ * step, so an unknown bond state must not read as "bonded".
+ *
+ * This lived as four separate copies with three different failure semantics -
+ * one of which let a transient D-Bus error propagate out of the bonding path -
+ * and one of those copies carried a comment saying it was written by copying
+ * another (#406).
+ */
+export async function isBonded(device: Device | undefined): Promise<boolean> {
+  try {
+    return ((await device?.isPaired()) as unknown as boolean) === true;
+  } catch {
+    return false;
+  }
+}
+
 export function releaseDeviceProxy(device: Device): void {
   try {
     helperOf(device).removeListeners();
