@@ -28,25 +28,54 @@ const FLAG_TIMESTAMP = 0x02;
 /** Byte length of the SIG Date Time structure. */
 const DATE_TIME_LEN = 7;
 
+/** SIG Date Time field bounds. 0 means "unknown" for year, month and day. */
+const YEAR_MIN = 1582;
+const YEAR_MAX = 9999;
+
 /**
  * Decode a 7-byte SIG Date Time at `offset`.
  *
- * Returns undefined for a truncated field, for the "unknown" year 0, and for
- * any combination that does not form a real date, so a caller can treat the
- * absence of a timestamp and an unusable one identically.
+ * Every field is range-checked against the specification rather than handed to
+ * `Date`, because `Date` does not reject the out-of-range values, it ROLLS
+ * them, and each roll produces a plausible-looking timestamp that is wrong:
+ *
+ * - month 0 ("unknown" in the spec) becomes December of the previous year;
+ * - day 0 becomes the last day of the previous month;
+ * - a two-digit year, which is how a scale with a byte-sized year field
+ *   reports 2026, becomes 1926, because `Date` maps 0-99 onto 1900+n.
+ *
+ * The last one is not cosmetic. `beurer-bf720.ts` treats any timestamp older
+ * than a few minutes as a stored history record rather than a live weigh-in,
+ * so a rolled-back date silently converts the reading somebody is standing on
+ * into an old one.
+ *
+ * A field the spec cannot express is therefore no timestamp at all, which the
+ * callers already handle: it is the same outcome as the flag being clear.
  */
 export function parseSigDateTime(data: Buffer, offset: number): Date | undefined {
   if (offset + DATE_TIME_LEN > data.length) return undefined;
+
   const year = data.readUInt16LE(offset);
-  if (year === 0) return undefined;
-  const d = new Date(
-    year,
-    data[offset + 2] - 1,
-    data[offset + 3],
-    data[offset + 4],
-    data[offset + 5],
-    data[offset + 6],
-  );
+  const month = data[offset + 2];
+  const day = data[offset + 3];
+  const hours = data[offset + 4];
+  const minutes = data[offset + 5];
+  const seconds = data[offset + 6];
+
+  // Years the spec does not allow but Date accepts unchanged, so the round-trip
+  // below cannot see them.
+  if (year < YEAR_MIN || year > YEAR_MAX) return undefined;
+  if (hours > 23 || minutes > 59 || seconds > 59) return undefined;
+
+  const d = new Date(year, month - 1, day, hours, minutes, seconds);
+  // This is what rejects the rolling values, and it is deliberately the only
+  // check on month and day: an explicit `month < 1 || month > 12` cannot fail
+  // here, because anything the spec forbids also fails the round trip. Month 0
+  // comes back as December, day 0 as the previous month's last day, 31 April as
+  // 1 May, and a two-digit year as 19xx - each one differs from what went in.
+  if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day) {
+    return undefined;
+  }
   return Number.isNaN(d.getTime()) ? undefined : d;
 }
 

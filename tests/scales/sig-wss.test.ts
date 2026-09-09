@@ -84,6 +84,44 @@ describe('parseSigDateTime', () => {
     expect(parseSigDateTime(zeroYear, 0)).toBeUndefined();
   });
 
+  it('rejects the two-digit year a byte-sized year field would report', () => {
+    // Date maps 0-99 onto 1900+n, so year 26 becomes 1926 - a live weigh-in
+    // that beurer-bf720 would then file as a stored history record.
+    const twoDigitYear = Buffer.from('1a00050c123536', 'hex');
+    expect(parseSigDateTime(twoDigitYear, 0)).toBeUndefined();
+  });
+
+  it('rejects a year Date accepts but the spec does not allow', () => {
+    // These survive the round trip unchanged, so only the explicit bounds
+    // reject them: 1000 predates the Gregorian calendar the field is defined
+    // against, and 10000 is past its upper bound.
+    expect(parseSigDateTime(Buffer.from('e803050c123536', 'hex'), 0)).toBeUndefined();
+    expect(parseSigDateTime(Buffer.from('1027050c123536', 'hex'), 0)).toBeUndefined();
+  });
+
+  it('rejects the "unknown" month and day rather than rolling them back', () => {
+    // Month 0 would roll to December of the previous year, day 0 to the last
+    // day of the previous month. Both look like valid dates afterwards.
+    expect(parseSigDateTime(Buffer.from('ea07000c123536', 'hex'), 0)).toBeUndefined();
+    expect(parseSigDateTime(Buffer.from('ea070500123536', 'hex'), 0)).toBeUndefined();
+  });
+
+  it('rejects a day the month does not have', () => {
+    // 31 April rolls to 1 May, which passes every range check on its own.
+    expect(parseSigDateTime(Buffer.from('ea07041f123536', 'hex'), 0)).toBeUndefined();
+  });
+
+  it('rejects out-of-range time fields', () => {
+    expect(parseSigDateTime(Buffer.from('ea07050c183536', 'hex'), 0)).toBeUndefined(); // 24 h
+    expect(parseSigDateTime(Buffer.from('ea07050c123c36', 'hex'), 0)).toBeUndefined(); // 60 min
+    expect(parseSigDateTime(Buffer.from('ea07050c12353c', 'hex'), 0)).toBeUndefined(); // 60 s
+  });
+
+  it('still accepts a valid date at the edges of the allowed year range', () => {
+    const earliest = Buffer.from('2e060101000000', 'hex'); // 1582-01-01 00:00:00
+    expect(parseSigDateTime(earliest, 0)).toEqual(new Date(1582, 0, 1, 0, 0, 0));
+  });
+
   it('rejects a field that runs past the end of the frame', () => {
     // Without the bounds check this is not a wrong date, it is a thrown
     // ERR_OUT_OF_RANGE from readUInt16LE, which would take down the whole
