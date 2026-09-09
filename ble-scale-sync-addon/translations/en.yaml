@@ -169,6 +169,12 @@ configuration:
   garmin_password:
     name: Garmin password
     description: Garmin Connect account password
+  garmin_upload_timeout_sec:
+    name: Garmin upload timeout (seconds)
+    description: >-
+      Seconds one upload attempt may take before it is killed (10 to 900).
+      Three attempts are made. Raise it if uploads fail with "timed out" while
+      the same measurement uploads fine later.
   garmin_weight_only:
     name: Upload weight only
     description: >-

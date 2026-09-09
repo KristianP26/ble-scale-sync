@@ -153,6 +153,7 @@ else
   # options.json is not bound by that, and a stray string would produce YAML
   # that fails to parse. Anything that is not exactly "true" is false.
   [ "$GARMIN_WEIGHT_ONLY" = "true" ] || GARMIN_WEIGHT_ONLY=false
+  GARMIN_UPLOAD_TIMEOUT=$(opt_int garmin_upload_timeout_sec 180)
 
   SCAN_COOLDOWN=$(opt_int scan_cooldown 30)
   # jq's // falls back only on null/false, so an explicit 0 survives.
@@ -350,6 +351,7 @@ YAML
     password: "$(yaml_escape "$GARMIN_PASSWORD")"
     token_dir: /data/garmin-tokens
     weight_only: $GARMIN_WEIGHT_ONLY
+    upload_timeout_sec: $GARMIN_UPLOAD_TIMEOUT
 YAML
     fi
 

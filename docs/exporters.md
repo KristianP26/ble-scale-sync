@@ -37,6 +37,7 @@ Automatic body composition upload to Garmin Connect, no phone app needed. Uses a
 | `password`    | Yes      | (none)             | Garmin account password                                        |
 | `token_dir`   | No       | `~/.garmin_tokens` | Directory for cached auth tokens                               |
 | `weight_only` | No       | `false`            | Upload the weight alone, leaving every derived metric unset     |
+| `upload_timeout_sec` | No | `180` | Seconds one upload attempt may take before it is killed (10-900). Three attempts are made, with no wait between them |
 
 ```yaml
 global_exporters:
@@ -44,6 +45,21 @@ global_exporters:
     email: '${GARMIN_EMAIL}'
     password: '${GARMIN_PASSWORD}'
 ```
+
+::: tip Slow Garmin days
+Each upload attempt is killed after `upload_timeout_sec` seconds and retried up to three times. The default of 180 s covers a Garmin Connect that is merely slow; if you see `Python uploader timed out` three times for a measurement that uploads fine by hand afterwards, raise it (the maximum is 900).
+
+The cost of a higher value is only paid when Garmin is actually failing: three attempts run back to back with no wait between them, so a dead Garmin takes three times the timeout to give up, and in continuous mode the next scan cycle and the ntfy/Telegram summary wait that long too.
+
+```yaml
+global_exporters:
+  - type: garmin
+    email: '${GARMIN_EMAIL}'
+    password: '${GARMIN_PASSWORD}'
+    upload_timeout_sec: 300
+```
+
+:::
 
 ::: tip Weight only
 Set `weight_only: true` to record just the weight and leave BMI, body fat, water, bone mass, muscle mass, visceral fat, physique rating and metabolic age unset in Garmin Connect. Useful when you trust the scale's weight but not its bioimpedance estimates. In continuous mode the config watcher picks it up on the next scan cycle, so no restart is needed (unless you have set `runtime.watch_config: false`). It does not affect any other exporter.

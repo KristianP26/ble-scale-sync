@@ -64,6 +64,14 @@ To upload measurements to Garmin Connect:
 
 On first start the add-on authenticates with Garmin and stores the OAuth tokens under `/data/garmin-tokens` inside the container. Subsequent runs reuse those tokens, so your password is only used once.
 
+### Upload timeout
+
+**Garmin upload timeout** (`garmin_upload_timeout_sec`, default 180) caps one
+upload attempt; three are made. Raise it, up to 900, if uploads fail with
+"timed out" for a measurement that uploads fine later. A dead Garmin then takes
+three times as long to give up, and in continuous mode the next scan cycle
+waits with it.
+
 ### Weight only
 
 Turn on **Upload weight only** (`garmin_weight_only`) to send just the weight to Garmin Connect and leave BMI, body fat, water, bone mass, muscle mass, visceral fat, physique rating and metabolic age unset. Every other exporter, including the MQTT sensors in Home Assistant, still receives the full body composition.
@@ -136,6 +144,7 @@ The add-on power-cycles the Bluetooth adapter on startup to ensure a clean state
 - Make sure your scale is awake (step on it)
 - Check that the Bluetooth adapter is working: enable debug logging and look for "Discovery started" in the logs
 - If you have multiple Bluetooth adapters, try setting a specific adapter (e.g., `hci1`)
+- If your scale advertises only for a few seconds after you step on it, lower **Rescan delay when no scale was found** (`idle_rescan_delay`); the add-on rescans that many seconds after an idle cycle
 
 ### MQTT not connecting
 
@@ -147,6 +156,7 @@ The add-on power-cycles the Bluetooth adapter on startup to ensure a clean state
 
 - Check that your email and password are correct
 - Garmin may require re-authentication after a while; check the logs for auth errors
+- Three "Python uploader timed out" lines for one measurement mean Garmin was slow rather than wrong; raise **Garmin upload timeout**
 
 ## Links
 

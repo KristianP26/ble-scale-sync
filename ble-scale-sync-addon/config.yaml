@@ -68,6 +68,7 @@ options:
   garmin_email: ''
   garmin_password: ''
   garmin_weight_only: false
+  garmin_upload_timeout_sec: 180
   scan_cooldown: 30
   idle_rescan_delay: 5
   reset_bluetooth: true
@@ -107,6 +108,7 @@ schema:
   garmin_email: str?
   garmin_password: password?
   garmin_weight_only: bool?
+  garmin_upload_timeout_sec: int(10,900)?
   scan_cooldown: int(5,3600)
   idle_rescan_delay: int(0,3600)?
   reset_bluetooth: bool
