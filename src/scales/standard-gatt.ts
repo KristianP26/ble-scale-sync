@@ -1,4 +1,5 @@
 import { computeBiaFat, buildPayload, uuid16, ReadingComposition } from './body-comp-helpers.js';
+import { parseSigBodyComposition, toScaleReading } from './sig-bcs.js';
 import type {
   BleDeviceInfo,
   ScaleAdapterCore,
@@ -28,7 +29,8 @@ const SVC_WEIGHT_SHORT = '181d';
 const KNOWN_NAMES = ['beurer', 'silvercrest', 'bf600', 'bf850', 'medisana'];
 
 interface CachedGattData {
-  bodyFatPercent: number;
+  /** Undefined when the scale reported no measurement, not 0 (#405). */
+  bodyFatPercent?: number;
   musclePct?: number;
   waterMassKg?: number;
 }
@@ -91,84 +93,15 @@ export class StandardGattScaleAdapter implements ScaleAdapterCore, GattWiring, U
    *   Then optional fields governed by flag bits.
    */
   parseNotification(data: Buffer): ScaleReading | null {
-    if (data.length < 4) return null;
+    const decoded = parseSigBodyComposition(data);
+    if (!decoded) return null;
 
-    let offset = 0;
-    const flags = data.readUInt16LE(offset);
-    offset += 2;
-
-    const isKg = (flags & 0x0001) === 0;
-    const tsPresent = (flags & 0x0002) !== 0;
-    const userPresent = (flags & 0x0004) !== 0;
-    const bmrPresent = (flags & 0x0008) !== 0;
-    const musclePctPresent = (flags & 0x0010) !== 0;
-    const muscleMassPresent = (flags & 0x0020) !== 0;
-    const fatFreeMassPresent = (flags & 0x0040) !== 0;
-    const softLeanPresent = (flags & 0x0080) !== 0;
-    const waterMassPresent = (flags & 0x0100) !== 0;
-    const impedancePresent = (flags & 0x0200) !== 0;
-    const weightPresent = (flags & 0x0400) !== 0;
-    const heightPresent = (flags & 0x0800) !== 0;
-
-    const massMultiplier = isKg ? 0.005 : 0.01;
-
-    // Body Fat Percentage — mandatory field
-    if (offset + 2 > data.length) return null;
-    const bodyFatPct = data.readUInt16LE(offset) * 0.1;
-    offset += 2;
-
-    // Timestamp (7 bytes)
-    if (tsPresent) offset += 7;
-
-    // User Index
-    if (userPresent) offset += 1;
-
-    // Basal Metabolism (kJ)
-    if (bmrPresent) offset += 2;
-
-    // Muscle Percentage
-    let musclePct: number | undefined;
-    if (musclePctPresent && offset + 2 <= data.length) {
-      musclePct = data.readUInt16LE(offset) * 0.1;
-      offset += 2;
-    }
-
-    // Muscle Mass
-    if (muscleMassPresent && offset + 2 <= data.length) offset += 2;
-
-    // Fat Free Mass
-    if (fatFreeMassPresent && offset + 2 <= data.length) offset += 2;
-
-    // Soft Lean Mass
-    if (softLeanPresent && offset + 2 <= data.length) offset += 2;
-
-    // Body Water Mass
-    let waterMassKg: number | undefined;
-    if (waterMassPresent && offset + 2 <= data.length) {
-      const raw = data.readUInt16LE(offset) * massMultiplier;
-      offset += 2;
-      waterMassKg = isKg ? raw : raw * 0.453592;
-    }
-
-    // Impedance (resolution 0.1 Ohm)
-    let impedance = 0;
-    if (impedancePresent && offset + 2 <= data.length) {
-      impedance = data.readUInt16LE(offset) * 0.1;
-      offset += 2;
-    }
-
-    // Weight
-    let weight = 0;
-    if (weightPresent && offset + 2 <= data.length) {
-      const rawW = data.readUInt16LE(offset) * massMultiplier;
-      offset += 2;
-      weight = isKg ? rawW : rawW * 0.453592;
-    }
-
-    if (heightPresent && offset + 2 <= data.length) offset += 2;
-
-    this.cachedGatt = { bodyFatPercent: bodyFatPct, musclePct, waterMassKg };
-    const reading: ScaleReading = { weight, impedance };
+    this.cachedGatt = {
+      bodyFatPercent: decoded.bodyFatPercent,
+      musclePct: decoded.musclePct,
+      waterMassKg: decoded.waterMassKg,
+    };
+    const reading = toScaleReading(decoded);
     this.comp.pin(reading, this.cachedGatt);
     return reading;
   }
@@ -209,7 +142,7 @@ export class StandardGattScaleAdapter implements ScaleAdapterCore, GattWiring, U
       reading.weight,
       reading.impedance,
       {
-        fat: gatt?.bodyFatPercent && gatt.bodyFatPercent > 0 ? gatt.bodyFatPercent : undefined,
+        fat: gatt?.bodyFatPercent,
         water: waterPercent,
         muscle: gatt?.musclePct,
       },
