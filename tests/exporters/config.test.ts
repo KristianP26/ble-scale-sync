@@ -91,6 +91,38 @@ describe('loadExporterConfig()', () => {
     });
   });
 
+  describe('Dreeve config', () => {
+    it('requires DREEVE_BASE_URL when dreeve is enabled', () => {
+      vi.stubEnv('EXPORTERS', 'dreeve');
+      expect(() => loadExporterConfig()).toThrow(/DREEVE_BASE_URL is required/);
+    });
+
+    it('requires DREEVE_TOKEN when dreeve is enabled', () => {
+      vi.stubEnv('EXPORTERS', 'dreeve');
+      vi.stubEnv('DREEVE_BASE_URL', 'https://fit.example.com');
+      expect(() => loadExporterConfig()).toThrow(/DREEVE_TOKEN is required/);
+    });
+
+    it('requires DREEVE_UNIT_SYSTEM when dreeve is enabled', () => {
+      vi.stubEnv('EXPORTERS', 'dreeve');
+      vi.stubEnv('DREEVE_BASE_URL', 'https://fit.example.com');
+      vi.stubEnv('DREEVE_TOKEN', 'drv_abc123');
+      expect(() => loadExporterConfig()).toThrow(/DREEVE_UNIT_SYSTEM must be metric or imperial/);
+    });
+
+    it('reads Dreeve configuration with an explicit unit system', () => {
+      vi.stubEnv('EXPORTERS', 'dreeve');
+      vi.stubEnv('DREEVE_BASE_URL', 'https://fit.example.com');
+      vi.stubEnv('DREEVE_TOKEN', 'drv_abc123');
+      vi.stubEnv('DREEVE_UNIT_SYSTEM', 'IMPERIAL');
+      expect(loadExporterConfig().dreeve).toEqual({
+        baseUrl: 'https://fit.example.com',
+        token: 'drv_abc123',
+        unitSystem: 'imperial',
+      });
+    });
+  });
+
   describe('MQTT config', () => {
     it('requires MQTT_BROKER_URL when mqtt is enabled', () => {
       vi.stubEnv('EXPORTERS', 'mqtt');

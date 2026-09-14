@@ -14,6 +14,7 @@ import { FileExporter } from '../../src/exporters/file.js';
 import { StravaExporter } from '../../src/exporters/strava.js';
 import { TelegramExporter } from '../../src/exporters/telegram.js';
 import { IntervalsExporter } from '../../src/exporters/intervals.js';
+import { DreeveExporter } from '../../src/exporters/dreeve.js';
 import type { ExporterEntry } from '../../src/config/schema.js';
 
 // ─── boolean fields from ${ENV_VAR} ────────────────────────────────────────
@@ -73,8 +74,8 @@ describe('boolean exporter fields resolved from strings', () => {
 // ─── EXPORTER_REGISTRY ─────────────────────────────────────────────────────
 
 describe('EXPORTER_REGISTRY', () => {
-  it('contains 11 exporter entries', () => {
-    expect(EXPORTER_REGISTRY).toHaveLength(11);
+  it('contains 12 exporter entries', () => {
+    expect(EXPORTER_REGISTRY).toHaveLength(12);
   });
 
   it('has entries for all known exporters', () => {
@@ -90,6 +91,7 @@ describe('EXPORTER_REGISTRY', () => {
     expect(names).toContain('intervals');
     expect(names).toContain('runalyze');
     expect(names).toContain('wger');
+    expect(names).toContain('dreeve');
   });
 
   it('each entry has a schema and factory', () => {
@@ -107,8 +109,8 @@ describe('EXPORTER_REGISTRY', () => {
 // ─── EXPORTER_SCHEMAS ──────────────────────────────────────────────────────
 
 describe('EXPORTER_SCHEMAS', () => {
-  it('derives 11 schemas from registry', () => {
-    expect(EXPORTER_SCHEMAS).toHaveLength(11);
+  it('derives 12 schemas from registry', () => {
+    expect(EXPORTER_SCHEMAS).toHaveLength(12);
   });
 
   it('each schema has required fields', () => {
@@ -265,14 +267,30 @@ describe('EXPORTER_SCHEMAS', () => {
     const requiredFields = wger!.fields.filter((f) => f.required);
     expect(requiredFields.map((f) => f.key).sort()).toEqual(['base_url', 'token']);
   });
+
+  it('dreeve schema supports global and per-user configuration', () => {
+    const dreeve = EXPORTER_SCHEMAS.find((s) => s.name === 'dreeve');
+    expect(dreeve).toBeDefined();
+    expect(dreeve!.supportsGlobal).toBe(true);
+    expect(dreeve!.supportsPerUser).toBe(true);
+  });
+
+  it('dreeve schema requires base_url, token and unit_system', () => {
+    const dreeve = EXPORTER_SCHEMAS.find((s) => s.name === 'dreeve');
+    const required = dreeve!.fields
+      .filter((f) => f.required)
+      .map((f) => f.key)
+      .sort();
+    expect(required).toEqual(['base_url', 'token', 'unit_system']);
+  });
 });
 
 // ─── KNOWN_EXPORTER_NAMES ──────────────────────────────────────────────────
 
 describe('KNOWN_EXPORTER_NAMES', () => {
-  it('is a Set with 11 entries', () => {
+  it('is a Set with 12 entries', () => {
     expect(KNOWN_EXPORTER_NAMES).toBeInstanceOf(Set);
-    expect(KNOWN_EXPORTER_NAMES.size).toBe(11);
+    expect(KNOWN_EXPORTER_NAMES.size).toBe(12);
   });
 
   it('contains all exporter names', () => {
@@ -287,6 +305,7 @@ describe('KNOWN_EXPORTER_NAMES', () => {
     expect(KNOWN_EXPORTER_NAMES.has('intervals')).toBe(true);
     expect(KNOWN_EXPORTER_NAMES.has('runalyze')).toBe(true);
     expect(KNOWN_EXPORTER_NAMES.has('wger')).toBe(true);
+    expect(KNOWN_EXPORTER_NAMES.has('dreeve')).toBe(true);
   });
 });
 
@@ -516,5 +535,27 @@ describe('createExporterFromEntry()', () => {
     const exporter = createExporterFromEntry(entry);
     expect(exporter).toBeInstanceOf(IntervalsExporter);
     expect(exporter.name).toBe('intervals');
+  });
+
+  it('creates DreeveExporter from entry', () => {
+    const exporter = createExporterFromEntry({
+      type: 'dreeve',
+      base_url: 'https://fit.example.com',
+      token: 'drv_abc123',
+      unit_system: 'metric',
+    });
+    expect(exporter).toBeInstanceOf(DreeveExporter);
+    expect(exporter.name).toBe('dreeve');
+  });
+
+  it('rejects a Dreeve entry with an invalid unit_system', () => {
+    expect(() =>
+      createExporterFromEntry({
+        type: 'dreeve',
+        base_url: 'https://fit.example.com',
+        token: 'drv_abc123',
+        unit_system: 'pounds',
+      }),
+    ).toThrow('unit_system');
   });
 });
