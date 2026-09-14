@@ -15,6 +15,7 @@ import type {
   RunalyzeConfig,
   WgerConfig,
   HealthLogConfig,
+  DreeveConfig,
 } from './config.js';
 import {
   garminSchema,
@@ -33,6 +34,7 @@ import { intervalsSchema, IntervalsExporter } from './intervals.js';
 import { runalyzeSchema, RunalyzeExporter } from './runalyze.js';
 import { wgerSchema, WgerExporter } from './wger.js';
 import { healthlogSchema, HealthLogExporter } from './healthlog.js';
+import { dreeveSchema, DreeveExporter } from './dreeve.js';
 
 // --- Registry entry type ---
 
@@ -342,6 +344,23 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
         syncMeasurements: optionalBool(config, 'healthlog', 'sync_measurements') ?? true,
       };
       return new HealthLogExporter(healthlogConfig);
+    },
+  },
+  {
+    schema: dreeveSchema,
+    factory: (config) => {
+      const unitSystem = requireField(config, 'dreeve', 'unit_system');
+      if (unitSystem !== 'metric' && unitSystem !== 'imperial') {
+        throw new Error(
+          `Exporter "dreeve" field "unit_system" must be metric or imperial, got '${unitSystem}'. Check your config.yaml.`,
+        );
+      }
+      const dreeveConfig: DreeveConfig = {
+        baseUrl: requireField(config, 'dreeve', 'base_url'),
+        token: requireField(config, 'dreeve', 'token'),
+        unitSystem,
+      };
+      return new DreeveExporter(dreeveConfig);
     },
   },
 ];

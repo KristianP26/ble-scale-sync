@@ -15,7 +15,8 @@ export type ExporterName =
   | 'intervals'
   | 'runalyze'
   | 'wger'
-  | 'healthlog';
+  | 'healthlog'
+  | 'dreeve';
 
 /**
  * Runtime twin of `ExporterName`, for validating `EXPORTERS=...`.
@@ -38,6 +39,7 @@ const KNOWN_EXPORTERS = new Set<ExporterName>([
   'runalyze',
   'wger',
   'healthlog',
+  'dreeve',
 ]);
 
 /** @internal Exported for the registry-agreement test only. */
@@ -132,6 +134,12 @@ export interface HealthLogConfig {
   syncMeasurements: boolean;
 }
 
+export interface DreeveConfig {
+  baseUrl: string;
+  token: string;
+  unitSystem: 'metric' | 'imperial';
+}
+
 export interface ExporterConfig {
   exporters: ExporterName[];
   garmin?: GarminConfig;
@@ -146,6 +154,7 @@ export interface ExporterConfig {
   runalyze?: RunalyzeConfig;
   wger?: WgerConfig;
   healthlog?: HealthLogConfig;
+  dreeve?: DreeveConfig;
 }
 
 function fail(msg: string): never {
@@ -432,6 +441,23 @@ export function loadExporterConfig(): ExporterConfig {
     };
   }
 
+  let dreeve: DreeveConfig | undefined;
+  if (exporters.includes('dreeve')) {
+    const baseUrl = process.env.DREEVE_BASE_URL?.trim();
+    if (!baseUrl) {
+      fail('DREEVE_BASE_URL is required when dreeve exporter is enabled.');
+    }
+    const token = process.env.DREEVE_TOKEN?.trim();
+    if (!token) {
+      fail('DREEVE_TOKEN is required when dreeve exporter is enabled.');
+    }
+    const unitSystem = process.env.DREEVE_UNIT_SYSTEM?.trim().toLowerCase();
+    if (unitSystem !== 'metric' && unitSystem !== 'imperial') {
+      fail('DREEVE_UNIT_SYSTEM must be metric or imperial when dreeve exporter is enabled.');
+    }
+    dreeve = { baseUrl, token, unitSystem };
+  }
+
   return {
     exporters,
     garmin,
@@ -446,5 +472,6 @@ export function loadExporterConfig(): ExporterConfig {
     runalyze,
     wger,
     healthlog,
+    dreeve,
   };
 }
