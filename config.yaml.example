@@ -193,6 +193,12 @@ global_exporters:
   #   token: "${WGER_TOKEN}"               # API key from <base_url>/en/user/api-key
   #   sync_measurements: true              # also push body fat/water/muscle/bone
 
+  # -- Dreeve (self-hosted activity tracker) --
+  # - type: dreeve
+  #   base_url: https://fit.example.com
+  #   token: "${DREEVE_TOKEN}"             # bearer token from Dreeve API settings
+  #   unit_system: metric                   # metric | imperial; must match Dreeve Appearance settings
+
 # --- Runtime Settings ---
 
 runtime:

@@ -1,15 +1,15 @@
 ---
 title: Exporters
-description: Configure Garmin Connect, Strava, Intervals.icu, Runalyze, Wger, MQTT, Webhook, InfluxDB, Ntfy, Telegram, and File export targets.
+description: Configure Garmin Connect, Dreeve, Strava, Intervals.icu, Runalyze, Wger, MQTT, Webhook, InfluxDB, Ntfy, Telegram, and File export targets.
 head:
   - - meta
     - name: keywords
-      content: garmin connect scale sync, strava weight sync, intervals.icu wellness weight, runalyze body composition, wger weight sync, mqtt home assistant scale, influxdb body weight, smart scale webhook, ntfy notifications, telegram scale notifications, scale data export csv, garmin body composition upload
+      content: garmin connect scale sync, dreeve weight sync, strava weight sync, intervals.icu wellness weight, runalyze body composition, wger weight sync, mqtt home assistant scale, influxdb body weight, smart scale webhook, ntfy notifications, telegram scale notifications, scale data export csv, garmin body composition upload
 ---
 
 # Exporters
 
-BLE Scale Sync exports body composition data to 11 targets. The [setup wizard](/guide/configuration#setup-wizard-recommended) walks you through exporter selection, configuration, and connectivity testing.
+BLE Scale Sync exports body composition data to 12 targets. The [setup wizard](/guide/configuration#setup-wizard-recommended) walks you through exporter selection, configuration, and connectivity testing.
 
 Exporters are configured in `global_exporters` (shared by all users). For multi-user setups with separate accounts, see [Per-User Exporters](/multi-user#per-user-exporters). All enabled exporters run in parallel; the process reports an error only if **every** exporter fails.
 
@@ -26,6 +26,7 @@ Exporters are configured in `global_exporters` (shared by all users). For multi-
 | [**Intervals.icu**](#intervals) | Push weight + body fat to Intervals.icu wellness       |
 | [**Runalyze**](#runalyze)       | Push weight + body composition to Runalyze metrics     |
 | [**Wger**](#wger)               | Push weight + body composition to a Wger instance      |
+| [**Dreeve**](#dreeve)           | Push weight to a self-hosted Dreeve instance           |
 
 ## Garmin Connect {#garmin}
 
@@ -409,6 +410,26 @@ users:
 ```
 
 Authentication uses a permanent API key (sent as `Authorization: Token <key>`), no OAuth flow. Generate it on the Wger account settings **API** page. Weight is written to a weight entry on the reading's calendar day, so historical readings replayed from a scale's offline cache land on their original date. With `sync_measurements` enabled, body fat and water (percent) and muscle and bone (kg) are written as Wger custom measurements; the matching categories are created automatically on first use and reused afterwards. Measurement failures are logged but do not block the weight sync.
+
+## Dreeve {#dreeve}
+
+Push weight to a self-hosted [Dreeve](https://github.com/dreeveapp/dreeve) instance. Dreeve stores one measurement per calendar date, so a later reading for the same date replaces the earlier one. Body-composition values are not exported because Dreeve currently accepts weight only.
+
+| Field         | Required | Default | Description |
+| ------------- | -------- | ------- | ----------- |
+| `base_url`    | Yes      | (none)  | Dreeve instance URL, e.g. `https://fit.example.com` |
+| `token`       | Yes      | (none)  | Bearer token from Dreeve API settings (`drv_...`) |
+| `unit_system` | Yes      | (none)  | Dreeve Appearance unit system: `metric` or `imperial` |
+
+```yaml
+global_exporters:
+  - type: dreeve
+    base_url: https://fit.example.com
+    token: '${DREEVE_TOKEN}'
+    unit_system: metric
+```
+
+BLE Scale Sync readings are always calculated in kilograms. Dreeve interprets API values according to its Appearance unit system, so `unit_system` must match the Dreeve setting exactly. Select `metric` to send kilograms, or `imperial` to convert kilograms to pounds before the request. Historical readings replayed from a scale's offline cache are written to their original calendar date.
 
 ## Secrets
 

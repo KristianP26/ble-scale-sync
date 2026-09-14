@@ -9,6 +9,7 @@ import { TelegramExporter } from '../../src/exporters/telegram.js';
 import { IntervalsExporter } from '../../src/exporters/intervals.js';
 import { RunalyzeExporter } from '../../src/exporters/runalyze.js';
 import { WgerExporter } from '../../src/exporters/wger.js';
+import { DreeveExporter } from '../../src/exporters/dreeve.js';
 import type { ExporterConfig } from '../../src/exporters/config.js';
 
 describe('createExporters()', () => {
@@ -157,6 +158,21 @@ describe('createExporters()', () => {
     expect(exporters).toHaveLength(1);
     expect(exporters[0]).toBeInstanceOf(WgerExporter);
     expect(exporters[0].name).toBe('wger');
+  });
+
+  it('creates DreeveExporter for dreeve', () => {
+    const config: ExporterConfig = {
+      exporters: ['dreeve'],
+      dreeve: {
+        baseUrl: 'https://fit.example.com',
+        token: 'drv_abc123',
+        unitSystem: 'metric',
+      },
+    };
+    const exporters = createExporters(config);
+    expect(exporters).toHaveLength(1);
+    expect(exporters[0]).toBeInstanceOf(DreeveExporter);
+    expect(exporters[0].name).toBe('dreeve');
   });
 
   it('returns empty array for empty exporters list', () => {
