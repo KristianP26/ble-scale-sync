@@ -351,7 +351,10 @@ describe('XiaomiS400Adapter metrics', () => {
     expect(comp.bmi).toBeCloseTo(25.2, 1);
     expect(Math.abs(comp.bodyFatPercent - 22.7)).toBeLessThan(2.5);
     expect(Math.abs(comp.boneMass - 3.6)).toBeLessThan(0.5);
-    expect(Math.abs(comp.muscleMass - 35.5)).toBeLessThan(2.5);
+    // The app's 35.5 kg is skeletal muscle, a different quantity from the
+    // muscleMass field and with no counterpart in the payload. Its own figures
+    // imply the muscle mass: 86.1 * (1 - 0.227) - 3.6 = 62.95 kg.
+    expect(Math.abs(comp.muscleMass - 62.95)).toBeLessThan(2.5);
     expect(Math.abs(comp.waterPercent - 56.3)).toBeLessThan(5);
   });
 });

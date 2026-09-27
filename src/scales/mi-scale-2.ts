@@ -165,10 +165,9 @@ export function computeMiScaleComposition(
   const fat = mi.bodyFat(weight, impedance);
   const water = mi.water(fat);
   const bone = mi.boneMass(weight, impedance);
-  const muscle = mi.muscle(weight, impedance);
   const visceralFat = mi.visceralFat(weight);
 
-  return buildPayload(weight, impedance, { fat, water, muscle, bone, visceralFat }, profile);
+  return buildPayload(weight, impedance, { fat, water, bone, visceralFat }, profile);
 }
 
 // ─── MiScaleLib (ported from openScale / prototux MIBCS reverse-engineering) ─
@@ -232,28 +231,6 @@ class MiScaleCalc {
     else if (this.sex === 1 && bone > 5.2) bone = 8;
 
     return bone;
-  }
-
-  /**
-   * Skeletal-muscle percentage via Janssen et al. BIA equation.
-   * Falls back to LBM ratio if impedance is non-positive.
-   */
-  muscle(weight: number, impedance: number): number {
-    if (weight <= 0) return 0;
-
-    let smmKg: number;
-    if (impedance > 0) {
-      const h2r = (this.height * this.height) / impedance;
-      smmKg = 0.401 * h2r + 3.825 * this.sex - 0.071 * this.age + 5.102;
-    } else {
-      const bf = this.bodyFat(weight, impedance);
-      const lbm = weight - (bf / 100) * weight - this.boneMass(weight, impedance);
-      const ratio = this.sex === 1 ? 0.52 : 0.46;
-      smmKg = lbm * ratio;
-    }
-
-    const pct = (smmKg / weight) * 100;
-    return Math.max(10, Math.min(pct, 60));
   }
 
   visceralFat(weight: number): number {
