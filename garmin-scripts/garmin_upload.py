@@ -101,6 +101,7 @@ def upload(payload, token_dir=None):
         physique_rating=derived("physiqueRating"),
         metabolic_age=derived("metabolicAge"),
         bmi=derived("bmi"),
+        basal_met=derived("bmr"),
     )
 
     log("[Garmin] Upload successful!")
