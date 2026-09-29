@@ -173,7 +173,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
 
       if (decision.kind === 'complete') {
         bleLog.info(`Broadcast reading: ${decision.reading.weight} kg`);
-        registerScaleMac(config, entry.address).catch(() => {});
+        registerScaleMac(config, entry.address, adapter).catch(() => {});
         return { reading: decision.reading, adapter };
       }
 
@@ -225,7 +225,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
             opts.scaleAuth,
           ),
         );
-        registerScaleMac(config, entry.address).catch(() => {});
+        registerScaleMac(config, entry.address, adapter).catch(() => {});
         return raw;
       } finally {
         // fireDisconnect() (inside the wrapper) before cleanup(), so the
@@ -240,7 +240,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       bleLog.info(
         `Broadcast reading (weight only, impedance not yet available): ${weightOnlyFallback.reading.weight} kg`,
       );
-      registerScaleMac(config, weightOnlyFallback.address).catch(() => {});
+      registerScaleMac(config, weightOnlyFallback.address, weightOnlyFallback.adapter).catch(
+        () => {},
+      );
       return { reading: weightOnlyFallback.reading, adapter: weightOnlyFallback.adapter };
     }
 

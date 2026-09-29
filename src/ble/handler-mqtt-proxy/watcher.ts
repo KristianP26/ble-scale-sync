@@ -29,6 +29,9 @@ import {
   addDiscoveredMac,
   getDiscoveredMacs,
   getDisplayUsers,
+  addPassiveMac,
+  getPassiveMacs,
+  isPassiveMac,
 } from './client.js';
 import {
   mqttGattConnect,
@@ -95,7 +98,7 @@ export class ReadingWatcher implements Watcher {
       `Matched: ${gr.adapter.name} (${address}), weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
     );
     bleLog.info(`Reading: ${gr.reading.weight} kg`);
-    registerScaleMac(this.config, address).catch(() => {});
+    registerScaleMac(this.config, address, gr.adapter).catch(() => {});
     this.queue.push(gr);
   });
   private _client: MqttClient | null = null;
@@ -182,7 +185,19 @@ export class ReadingWatcher implements Watcher {
       // can never come).
       if (this.targetMac) {
         addDiscoveredMac(this.targetMac);
-        await publishConfig(this.config, getDiscoveredMacs(), getDisplayUsers()).catch((err) =>
+        // Nothing is known about the device yet, so it is only marked as read
+        // from advertisements when every adapter that could claim it is one:
+        // in practice a forced Mi Scale 2. Only ever adds, because the flag a
+        // reading taught earlier in this process outranks this guess (#422).
+        if (this.adapters.length > 0 && this.adapters.every(readsFromAdvertisement)) {
+          addPassiveMac(this.targetMac);
+        }
+        await publishConfig(
+          this.config,
+          getDiscoveredMacs(),
+          getDisplayUsers(),
+          getPassiveMacs(),
+        ).catch((err) =>
           bleLog.warn(`Failed to seed ESP32 scale config for ${this.targetMac}: ${errMsg(err)}`),
         );
       }
@@ -271,7 +286,7 @@ export class ReadingWatcher implements Watcher {
               { reading: decision.reading, adapter },
               decision.reading.weight,
             );
-            if (emitted) registerScaleMac(this.config, entry.address).catch(() => {});
+            if (emitted) registerScaleMac(this.config, entry.address, adapter).catch(() => {});
             continue; // Either way, do not block other candidates in this batch
           }
 
@@ -289,6 +304,17 @@ export class ReadingWatcher implements Watcher {
           // has a GATT path (#201: dual-mode adapters like QN Scale must reach
           // this even though they declare parseBroadcast).
           if (decision.kind === 'none') continue; // no charNotifyUuid
+
+          // Already seen over GATT and refused as an advertisement-read scale.
+          // Every later advert without service data would otherwise connect it
+          // again, only to be dropped after discovery (#422). Both conditions:
+          // a reload that forces a GATT adapter onto the MAC must still connect.
+          if (readsFromAdvertisement(adapter) && isPassiveMac(entry.address)) {
+            bleLog.debug(
+              `Skipping GATT for ${entry.address}: ${adapter.name} is read from its advertisements`,
+            );
+            continue;
+          }
 
           // When auto_connect is enabled (default), the ESP32 connects
           // autonomously and publishes a `connected` payload handled by
@@ -572,6 +598,8 @@ export class ReadingWatcher implements Watcher {
       // refusing at advertisement time would cut those scales off (#422).
       if (readsFromAdvertisement(gattAdapter)) {
         this.logRefusedGatt('Host-initiated', gattAdapter, entry.address);
+        // Awaited for the same ordering as the autonomous path below.
+        await registerScaleMac(this.config, entry.address, gattAdapter).catch(() => {});
         return;
       }
       bleLog.debug(`GATT read driven by adapter: ${gattAdapter.name} (${entry.address})`);
@@ -595,7 +623,7 @@ export class ReadingWatcher implements Watcher {
         GATT_SESSION_ABSOLUTE_MS,
         `GATT session cap exceeded for ${entry.address}`,
       );
-      registerScaleMac(this.config, entry.address).catch(() => {});
+      registerScaleMac(this.config, entry.address, gattAdapter).catch(() => {});
       this.queue.push(raw);
       this.deferCounts.delete(entry.address);
     } finally {
@@ -701,6 +729,10 @@ export class ReadingWatcher implements Watcher {
       // sends the one disconnect that releases the proxy.
       if (readsFromAdvertisement(adapter)) {
         this.logRefusedGatt('Autonomous', adapter, data.address);
+        // Awaited, so the config telling the ESP32 to stop connecting reaches
+        // the broker before the disconnect in the finally. Fire-and-forget lost
+        // that race: publishConfig first awaits its client lookup (#422).
+        await registerScaleMac(this.config, data.address, adapter).catch(() => {});
         return;
       }
 
@@ -744,7 +776,7 @@ export class ReadingWatcher implements Watcher {
         GATT_SESSION_ABSOLUTE_MS,
         `GATT session cap exceeded for ${data.address} (autonomous)`,
       );
-      registerScaleMac(this.config, data.address).catch(() => {});
+      registerScaleMac(this.config, data.address, adapter).catch(() => {});
       bleLog.info(
         `Autonomous GATT reading complete: ${raw.reading.weight} kg from ${data.address}`,
       );

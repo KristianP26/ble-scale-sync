@@ -8,6 +8,7 @@ import type {
 } from '../../src/interfaces/scale-adapter.js';
 import type { MqttProxyConfig } from '../../src/config/schema.js';
 import { adapters as realAdapters } from '../../src/scales/index.js';
+import { applyForcedAdapter } from '../../src/scales/force.js';
 import { bleLog } from '../../src/ble/types.js';
 
 // Suppress log output during tests
@@ -821,6 +822,125 @@ describe('handler-mqtt-proxy', () => {
     });
   });
 
+  // #422: the ESP32 connects to every MAC in `scales`. It has to learn which of
+  // them are read from advertisements, and firmware that predates `passive`
+  // has to be told to stop connecting at all when nothing needs a connection.
+  describe('advertisement-only scales in the ESP32 config (#422)', () => {
+    const configPayloads = (): Array<Record<string, unknown>> =>
+      (mockClient.publishAsync as ReturnType<typeof vi.fn>).mock.calls
+        .filter((c: unknown[]) => c[0] === `${PREFIX}/config`)
+        .map((c: unknown[]) => JSON.parse(c[1] as string) as Record<string, unknown>);
+    const lastConfig = () => configPayloads().at(-1)!;
+
+    it('all passive: lists them and opts out of autoConnect', async () => {
+      await publishConfig(MQTT_PROXY_CONFIG, ['AA:AA:AA:AA:AA:AA'], undefined, [
+        'AA:AA:AA:AA:AA:AA',
+      ]);
+      expect(lastConfig()).toMatchObject({
+        scales: ['AA:AA:AA:AA:AA:AA'],
+        passive: ['AA:AA:AA:AA:AA:AA'],
+        autoConnect: false,
+      });
+    });
+
+    it('mixed: lists the passive subset and keeps autoConnect for the GATT scale', async () => {
+      await publishConfig(
+        MQTT_PROXY_CONFIG,
+        ['AA:AA:AA:AA:AA:AA', 'BB:BB:BB:BB:BB:BB'],
+        [],
+        ['AA:AA:AA:AA:AA:AA'],
+      );
+      const p = lastConfig();
+      expect(p.passive).toEqual(['AA:AA:AA:AA:AA:AA']);
+      expect(p).not.toHaveProperty('autoConnect');
+    });
+
+    it('none passive: sends neither key', async () => {
+      await publishConfig(MQTT_PROXY_CONFIG, ['BB:BB:BB:BB:BB:BB'], undefined, []);
+      const p = lastConfig();
+      expect(p).not.toHaveProperty('passive');
+      expect(p).not.toHaveProperty('autoConnect');
+    });
+
+    it('drops a passive MAC that is not in scales, so it cannot imply all-passive', async () => {
+      await publishConfig(MQTT_PROXY_CONFIG, ['BB:BB:BB:BB:BB:BB'], undefined, [
+        'AA:AA:AA:AA:AA:AA',
+      ]);
+      const p = lastConfig();
+      expect(p).not.toHaveProperty('passive');
+      expect(p).not.toHaveProperty('autoConnect');
+    });
+
+    it('empty scales never counts as all passive', async () => {
+      await publishConfig(MQTT_PROXY_CONFIG, [], undefined, []);
+      expect(lastConfig()).not.toHaveProperty('autoConnect');
+    });
+
+    it('auto_connect false still opts out with a mixed set', async () => {
+      await publishConfig(
+        { ...MQTT_PROXY_CONFIG, auto_connect: false },
+        ['AA:AA:AA:AA:AA:AA', 'BB:BB:BB:BB:BB:BB'],
+        undefined,
+        ['AA:AA:AA:AA:AA:AA'],
+      );
+      expect(lastConfig()).toMatchObject({ autoConnect: false, passive: ['AA:AA:AA:AA:AA:AA'] });
+    });
+
+    it('registerScaleMac with a passive adapter marks a new MAC passive', async () => {
+      await registerScaleMac(
+        MQTT_PROXY_CONFIG,
+        'aa:aa:aa:aa:aa:aa',
+        createPassiveAdapter('complete'),
+      );
+      expect(lastConfig()).toMatchObject({
+        scales: ['AA:AA:AA:AA:AA:AA'],
+        passive: ['AA:AA:AA:AA:AA:AA'],
+        autoConnect: false,
+      });
+    });
+
+    it('registerScaleMac re-publishes a known MAC that turns out to be passive', async () => {
+      await registerScaleMac(MQTT_PROXY_CONFIG, 'AA:AA:AA:AA:AA:AA');
+      expect(configPayloads()).toHaveLength(1);
+      await registerScaleMac(
+        MQTT_PROXY_CONFIG,
+        'AA:AA:AA:AA:AA:AA',
+        createPassiveAdapter('complete'),
+      );
+      expect(configPayloads()).toHaveLength(2);
+      expect(lastConfig()).toMatchObject({ passive: ['AA:AA:AA:AA:AA:AA'], autoConnect: false });
+    });
+
+    it('registerScaleMac does not re-publish when nothing changed', async () => {
+      await registerScaleMac(
+        MQTT_PROXY_CONFIG,
+        'AA:AA:AA:AA:AA:AA',
+        createPassiveAdapter('complete'),
+      );
+      await registerScaleMac(
+        MQTT_PROXY_CONFIG,
+        'AA:AA:AA:AA:AA:AA',
+        createPassiveAdapter('complete'),
+      );
+      // Without an adapter the flag is left alone, so this is not a change either.
+      await registerScaleMac(MQTT_PROXY_CONFIG, 'AA:AA:AA:AA:AA:AA');
+      expect(configPayloads()).toHaveLength(1);
+    });
+
+    it('registerScaleMac clears the flag when a GATT adapter reads the MAC', async () => {
+      await registerScaleMac(
+        MQTT_PROXY_CONFIG,
+        'AA:AA:AA:AA:AA:AA',
+        createPassiveAdapter('complete'),
+      );
+      await registerScaleMac(MQTT_PROXY_CONFIG, 'AA:AA:AA:AA:AA:AA', createGattAdapter());
+      expect(configPayloads()).toHaveLength(2);
+      const p = lastConfig();
+      expect(p).not.toHaveProperty('passive');
+      expect(p).not.toHaveProperty('autoConnect');
+    });
+  });
+
   describe('publishBeep', () => {
     it('publishes beep with freq, duration, and repeat', async () => {
       await publishBeep(MQTT_PROXY_CONFIG, 1200, 200, 2);
@@ -1351,6 +1471,55 @@ describe('handler-mqtt-proxy', () => {
       const payload = JSON.parse(configCalls[0][1] as string);
       // MAC is uppercased to match the ESP32 raw-buffer comparison format.
       expect(payload.scales).toContain('FF:03:00:53:D6:4D');
+      // A GATT scale stays eligible for the autonomous connect it was seeded for.
+      expect(payload).not.toHaveProperty('passive');
+      expect(payload).not.toHaveProperty('autoConnect');
+    });
+
+    it('seeds a forced Mi Scale 2 as advertisement-only from the start (#422)', async () => {
+      const forced = applyForcedAdapter(realAdapters, 'Xiaomi Mi Scale 2');
+      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, forced, 'b4:56:5d:81:b8:bf', PROFILE);
+      await watcher.start();
+
+      const configCalls = (mockClient.publishAsync as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c: unknown[]) => c[0] === `${PREFIX}/config`,
+      );
+      expect(configCalls).toHaveLength(1);
+      expect(JSON.parse(configCalls[0][1] as string)).toMatchObject({
+        scales: ['B4:56:5D:81:B8:BF'],
+        passive: ['B4:56:5D:81:B8:BF'],
+        autoConnect: false,
+      });
+      await watcher.stop();
+    });
+
+    it('a broadcast reading from a passive adapter registers its MAC as passive (#422)', async () => {
+      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [createPassiveAdapter('complete')]);
+      await watcher.start();
+      mockClient._simulateMessage(
+        `${PREFIX}/scan/results`,
+        JSON.stringify([
+          {
+            address: 'AA:BB:CC:DD:EE:FF',
+            name: '',
+            rssi: -50,
+            services: [],
+            service_data: [{ uuid: '0x181b', data: '0102030405' }],
+          },
+        ]),
+      );
+      await watcher.nextReading();
+      await new Promise((r) => setTimeout(r, 10));
+
+      const configCalls = (mockClient.publishAsync as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c: unknown[]) => c[0] === `${PREFIX}/config`,
+      );
+      expect(JSON.parse(configCalls.at(-1)![1] as string)).toMatchObject({
+        scales: ['AA:BB:CC:DD:EE:FF'],
+        passive: ['AA:BB:CC:DD:EE:FF'],
+        autoConnect: false,
+      });
+      await watcher.stop();
     });
 
     it('does not seed config when no scale_mac is configured', async () => {
@@ -2106,6 +2275,72 @@ describe('handler-mqtt-proxy', () => {
           ),
         ).toBe(true);
         infoSpy.mockRestore();
+        mockClient.publishAsync = origPublish;
+        await watcher.stop();
+      });
+
+      it('tells the ESP32 to stop connecting, before it sends the disconnect', async () => {
+        // The reporter's setup: scale_mac seeded as an ordinary scale at start,
+        // so the first weigh-in is the one that teaches the proxy.
+        const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [...realAdapters], MI_MAC, PROFILE);
+        await watcher.start();
+        (mockClient.publishAsync as ReturnType<typeof vi.fn>).mockClear();
+
+        mockClient._simulateMessage(
+          `${PREFIX}/connected`,
+          JSON.stringify({ autonomous: true, address: MI_MAC, chars: MI_CHARS }),
+        );
+        await new Promise((r) => setTimeout(r, 50));
+
+        const published = topicsPublished();
+
+        const configIdx = published.indexOf(`${PREFIX}/config`);
+        expect(configIdx).toBeGreaterThanOrEqual(0);
+        expect(configIdx).toBeLessThan(published.indexOf(`${PREFIX}/disconnect`));
+        const call = (mockClient.publishAsync as ReturnType<typeof vi.fn>).mock.calls[configIdx];
+        expect(JSON.parse(call[1] as string)).toMatchObject({
+          scales: [MI_MAC],
+          passive: [MI_MAC],
+          autoConnect: false,
+        });
+        await watcher.stop();
+      });
+
+      it('does not reconnect a scale it already refused over GATT', async () => {
+        const watcher = new ReadingWatcher(
+          { ...MQTT_PROXY_CONFIG, auto_connect: false },
+          [...realAdapters],
+          undefined,
+          PROFILE,
+        );
+        await watcher.start();
+        const origPublish = mockClient.publishAsync;
+        mockClient.publishAsync = vi.fn(async (topic: string, payload?: string | Buffer) => {
+          if (topic === `${PREFIX}/connect`) {
+            queueMicrotask(() =>
+              mockClient._simulateMessage(
+                `${PREFIX}/connected`,
+                JSON.stringify({ address: MI_MAC, chars: MI_CHARS }),
+              ),
+            );
+          }
+          return origPublish(topic, payload);
+        });
+        const advert = JSON.stringify([
+          {
+            address: MI_MAC,
+            name: '',
+            rssi: -60,
+            services: ['0000181b00001000800000805f9b34fb'],
+          },
+        ]);
+
+        mockClient._simulateMessage(`${PREFIX}/scan/results`, advert);
+        await new Promise((r) => setTimeout(r, 80));
+        mockClient._simulateMessage(`${PREFIX}/scan/results`, advert);
+        await new Promise((r) => setTimeout(r, 80));
+
+        expect(topicsPublished().filter((t) => t === `${PREFIX}/connect`)).toHaveLength(1);
         mockClient.publishAsync = origPublish;
         await watcher.stop();
       });

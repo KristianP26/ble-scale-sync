@@ -53,6 +53,11 @@ const proxyState = {
   persistentClient: null as MqttClient | null,
   pendingConnect: null as Promise<MqttClient> | null,
   discoveredScaleMacs: new Set<string>(),
+  /**
+   * Subset of discoveredScaleMacs read from advertisements, never over GATT
+   * (#422). Sent to the ESP32 so it stops autonomously connecting to them.
+   */
+  passiveScaleMacs: new Set<string>(),
   displayUsers: [] as DisplayUser[],
 };
 
@@ -61,6 +66,7 @@ export function _resetProxyState(): void {
   proxyState.persistentClient = null;
   proxyState.pendingConnect = null;
   proxyState.discoveredScaleMacs.clear();
+  proxyState.passiveScaleMacs.clear();
   proxyState.displayUsers = [];
 }
 
@@ -73,6 +79,7 @@ export function _resetPersistentClient(): void {
 /** @deprecated Use _resetProxyState() instead. */
 export function _resetDiscoveredMacs(): void {
   proxyState.discoveredScaleMacs.clear();
+  proxyState.passiveScaleMacs.clear();
 }
 
 // ─── Persistent MQTT client (for continuous mode) ────────────────────────────
@@ -159,4 +166,20 @@ export function getDiscoveredMacs(): string[] {
 
 export function discoveredMacsCount(): number {
   return proxyState.discoveredScaleMacs.size;
+}
+
+export function isPassiveMac(mac: string): boolean {
+  return proxyState.passiveScaleMacs.has(mac.toUpperCase());
+}
+
+export function addPassiveMac(mac: string): void {
+  proxyState.passiveScaleMacs.add(mac.toUpperCase());
+}
+
+export function removePassiveMac(mac: string): void {
+  proxyState.passiveScaleMacs.delete(mac.toUpperCase());
+}
+
+export function getPassiveMacs(): string[] {
+  return [...proxyState.passiveScaleMacs];
 }
