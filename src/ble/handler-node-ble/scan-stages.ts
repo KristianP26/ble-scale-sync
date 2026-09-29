@@ -348,9 +348,15 @@ export async function teardownSession(opts: {
   gattAttempted: boolean;
   gattSucceeded: boolean;
   abortSignal?: AbortSignal;
+  /**
+   * `ble.preemptive_adapter_reset` (#417). Undefined means true: this function
+   * owns the default, callers pass the option through unchanged.
+   */
+  preemptiveAdapterReset?: boolean;
 }): Promise<void> {
   const { device, btAdapter, deviceMac, bleAdapter, gattAttempted, gattSucceeded, abortSignal } =
     opts;
+  const preemptiveAdapterReset = opts.preemptiveAdapterReset !== false;
   // Best-effort disconnect if we got partway through a connection
   if (device) {
     try {
@@ -406,6 +412,12 @@ export async function teardownSession(opts: {
     // force-exit grace window (#335). The D-Bus reset is kept either way,
     // because it destroys the socket that pins the event loop open, which is
     // the opposite of a delay.
+    //
+    // `ble.preemptive_adapter_reset: false` skips the power-cycle and nothing
+    // else. It is the only host-side event between a bonded session that
+    // works and a next connect whose stored key is rejected (#417), so it has
+    // to be possible to rule it in or out. The D-Bus reset stays, and the
+    // reactive recovery tiers in startDiscoverySafe still cover a wedge.
     if (abortSignal?.aborted) {
       resetConnection();
       bleLog.debug('Shutting down: D-Bus connection reset, skipping the btmgmt power-cycle');
@@ -413,7 +425,11 @@ export async function teardownSession(opts: {
       await sleep(500);
       resetConnection();
       bleLog.debug('D-Bus connection reset after GATT operation');
-      if (await resetAdapterBtmgmt(parseHciIndex(bleAdapter))) {
+      if (!preemptiveAdapterReset) {
+        bleLog.debug(
+          'Skipping the preemptive btmgmt power-cycle after GATT (ble.preemptive_adapter_reset: false)',
+        );
+      } else if (await resetAdapterBtmgmt(parseHciIndex(bleAdapter))) {
         bleLog.debug('Preemptive btmgmt reset after GATT');
       }
     }

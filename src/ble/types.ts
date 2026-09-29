@@ -152,6 +152,12 @@ export interface ScanOptions {
    * have no bond to clear.
    */
   autoClearStaleBond?: boolean;
+  /**
+   * Run the preemptive btmgmt power-cycle after a GATT session
+   * (`ble.preemptive_adapter_reset`, #80, #417). Undefined means true; only an
+   * explicit false skips it. node-ble only.
+   */
+  preemptiveAdapterReset?: boolean;
 }
 
 export interface ScanResult {

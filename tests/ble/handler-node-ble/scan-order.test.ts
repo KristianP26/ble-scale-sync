@@ -81,6 +81,12 @@ vi.mock('../../../src/ble/handler-node-ble/connection.js', () => ({
   parseHciIndex: () => 0,
 }));
 
+// Recorded rather than real: on a Linux runner the real one would spawn btmgmt.
+vi.mock('../../../src/ble/types.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/ble/types.js')>();
+  return { ...actual, resetAdapterBtmgmt: record('resetAdapterBtmgmt', async () => true) };
+});
+
 vi.mock('../../../src/ble/handler-node-ble/discovery.js', () => ({
   startDiscoverySafe: record('startDiscoverySafe', async () => undefined),
   removeDevice: record('removeDevice', async () => {}),
@@ -146,11 +152,12 @@ describe('scanAndReadRaw call order (#368)', () => {
     vi.useRealTimers();
   });
 
-  async function run(): Promise<string[]> {
+  async function run(extra: { preemptiveAdapterReset?: boolean } = {}): Promise<string[]> {
     const promise = scanAndReadRaw({
       targetMac: 'AA:BB:CC:DD:EE:FF',
       adapters: [makeAdapter()],
       profile: defaultProfile(),
+      ...extra,
     });
     await vi.runAllTimersAsync();
     await promise;
@@ -234,6 +241,20 @@ describe('scanAndReadRaw call order (#368)', () => {
     const seen = await run();
     expect(seen).toContain('resetConnection');
     expect(seen.indexOf('waitForRawReading')).toBeLessThan(seen.indexOf('resetConnection'));
+  });
+
+  it('power-cycles the adapter after the D-Bus reset by default', async () => {
+    // The #80 zombie-discovery workaround: the D-Bus client goes first, then
+    // the controller is power-cycled underneath it.
+    const seen = await run();
+    expect(seen.filter((c) => c === 'resetAdapterBtmgmt')).toHaveLength(1);
+    expect(seen.indexOf('resetConnection')).toBeLessThan(seen.indexOf('resetAdapterBtmgmt'));
+  });
+
+  it('passes ble.preemptive_adapter_reset through to the teardown (#417)', async () => {
+    const seen = await run({ preemptiveAdapterReset: false });
+    expect(seen).toContain('resetConnection');
+    expect(seen).not.toContain('resetAdapterBtmgmt');
   });
 
   it('disconnects on the success path and again in the finally', async () => {

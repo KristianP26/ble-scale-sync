@@ -261,6 +261,21 @@ export const BleSchema = z
      */
     auto_clear_stale_bond: z.boolean().optional().nullable(),
     /**
+     * Power-cycle the HCI controller with `btmgmt` after every GATT session
+     * (#80). Default true; `false` skips that one step and nothing else.
+     *
+     * The cycle exists for the Broadcom "zombie discovery" state, where BlueZ
+     * reports Discovering=true while the controller has stopped scanning. It
+     * is also the only host-side event between a bonded session that works and
+     * a next connect whose stored key is rejected (#417), so this lets that be
+     * tested without a code change. The D-Bus reset, the failed-GATT cleanup
+     * and the reactive recovery tiers all still run.
+     *
+     * node-ble only: noble resets the adapter only reactively, and the proxy
+     * transports never touch the host adapter.
+     */
+    preemptive_adapter_reset: z.boolean().optional().nullable(),
+    /**
      * Minutes of total advertisement silence before a proxy transport is
      * treated as wedged rather than idle (#281). 0 disables the check.
      *

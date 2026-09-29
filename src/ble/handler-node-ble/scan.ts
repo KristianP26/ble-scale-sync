@@ -237,6 +237,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     bleAdapter,
     readingTimeoutMs,
     autoClearStaleBond,
+    preemptiveAdapterReset,
   } = opts;
 
   let device: Device | null = null;
@@ -425,6 +426,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       gattAttempted,
       gattSucceeded,
       abortSignal,
+      preemptiveAdapterReset,
     });
   }
 }

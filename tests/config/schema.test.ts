@@ -413,6 +413,27 @@ describe('BleSchema', () => {
     }
   });
 
+  it('accepts ble.preemptive_adapter_reset as true, false, null or omitted (#417)', () => {
+    for (const value of [true, false, null]) {
+      expect(BleSchema.safeParse({ preemptive_adapter_reset: value }).success).toBe(true);
+    }
+    const omitted = BleSchema.safeParse({});
+    expect(omitted.success).toBe(true);
+    if (omitted.success) expect(omitted.data.preemptive_adapter_reset).toBeUndefined();
+  });
+
+  it('keeps an explicit ble.preemptive_adapter_reset: false, which is the only value that acts', () => {
+    const result = BleSchema.safeParse({ preemptive_adapter_reset: false });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.preemptive_adapter_reset).toBe(false);
+  });
+
+  it('rejects a ble.preemptive_adapter_reset that is not a boolean', () => {
+    for (const value of ['false', 0, 1]) {
+      expect(BleSchema.safeParse({ preemptive_adapter_reset: value }).success).toBe(false);
+    }
+  });
+
   // Documents why src/config/unknown-keys.ts exists: a key this build does not
   // know is dropped without a word, which is how #318 read as "the option does
   // nothing" rather than "your build is older than that option".
