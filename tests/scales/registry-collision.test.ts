@@ -54,6 +54,17 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
     serviceUuids: ['ffb0'],
     manufacturerData: { id: 0xa0ac, data: Buffer.from('4fe9916185a0202d07600da1', 'hex') },
   },
+  // Broadcast-only, non-connectable. The real #423 advertisement: company id
+  // 0x0100, the 17-byte frame, and the device's own MAC echoed at [3..8].
+  'Senssun IF_B7': {
+    localName: 'IF_B7',
+    address: '64:FB:01:2D:92:50',
+    serviceUuids: [],
+    manufacturerData: {
+      id: 0x0100,
+      data: Buffer.from('02031164fb012d925001221a00000190ce', 'hex'),
+    },
+  },
   'Xiaomi Mi Scale 2': { localName: 'MIBFS', serviceUuids: [] },
   'Xiaomi Mijia Scale S800': { localName: 'Mijia Scale S800 A1AB', serviceUuids: [] },
   // Same FE95 service as the S800; the product id (0x3bd5 here) tells them apart.
