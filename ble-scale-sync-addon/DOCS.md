@@ -86,7 +86,7 @@ waits with it.
 
 ### Weight only
 
-Turn on **Upload weight only** (`garmin_weight_only`) to send just the weight to Garmin Connect and leave BMI, body fat, water, bone mass, muscle mass, visceral fat, physique rating and metabolic age unset. Every other exporter, including the MQTT sensors in Home Assistant, still receives the full body composition.
+Turn on **Upload weight only** (`garmin_weight_only`) to send just the weight to Garmin Connect and leave BMI, body fat, water, bone mass, muscle mass, visceral fat, physique rating, metabolic age and BMR unset. Every other exporter, including the MQTT sensors in Home Assistant, still receives the full body composition.
 
 Garmin Connect calculates its own BMI from the weight and the height in your Garmin profile, so a BMI value may still be shown on the entry — it is Garmin's, not the scale's.
 

@@ -62,7 +62,7 @@ global_exporters:
 :::
 
 ::: tip Weight only
-Set `weight_only: true` to record just the weight and leave BMI, body fat, water, bone mass, muscle mass, visceral fat, physique rating and metabolic age unset in Garmin Connect. Useful when you trust the scale's weight but not its bioimpedance estimates. In continuous mode the config watcher picks it up on the next scan cycle, so no restart is needed (unless you have set `runtime.watch_config: false`). It does not affect any other exporter.
+Set `weight_only: true` to record just the weight and leave BMI, body fat, water, bone mass, muscle mass, visceral fat, physique rating, metabolic age and BMR unset in Garmin Connect. Useful when you trust the scale's weight but not its bioimpedance estimates. In continuous mode the config watcher picks it up on the next scan cycle, so no restart is needed (unless you have set `runtime.watch_config: false`). It does not affect any other exporter.
 
 Note that Garmin Connect derives its own BMI from the weight and the height in your Garmin profile, so a BMI figure may still appear on the entry - it just will not be the scale's.
 

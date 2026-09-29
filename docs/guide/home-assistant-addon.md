@@ -109,7 +109,7 @@ The CLI and exporters display weights and heights in your chosen unit; all inter
 | ---------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `garmin_enabled`                   | `false` | Enable the Garmin Connect exporter.                                                                                                    |
 | `garmin_email` / `garmin_password` | empty   | Garmin credentials. On first start the add-on runs `setup_garmin.py` to authenticate and saves OAuth tokens to `/data/garmin-tokens/`. |
-| `garmin_weight_only`               | `false` | Upload the weight alone; BMI, body fat, water, bone, muscle, visceral fat, physique rating and metabolic age are left unset in Garmin. |
+| `garmin_weight_only`               | `false` | Upload the weight alone; BMI, body fat, water, bone, muscle, visceral fat, physique rating, metabolic age and BMR are left unset in Garmin. |
 | `garmin_upload_timeout_sec`        | `180`   | Seconds one Garmin upload attempt may take before it is killed (10-900). Three attempts are made. Raise it if uploads time out for a measurement that uploads fine later. |
 
 If your account uses MFA, see [MFA workaround](#mfa-workaround) below.

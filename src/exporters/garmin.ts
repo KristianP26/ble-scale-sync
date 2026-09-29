@@ -131,7 +131,7 @@ export interface GarminEntryConfig {
   token_dir?: string;
   /**
    * Upload the weight alone, leaving BMI, body fat, water, bone, muscle,
-   * visceral fat, physique rating and metabolic age unset in Garmin Connect.
+   * visceral fat, physique rating, metabolic age and BMR unset in Garmin Connect.
    * For scales whose derived metrics you do not trust, or profiles where only
    * the weight trend matters.
    */
@@ -195,7 +195,7 @@ export const garminSchema: ExporterSchema = {
       required: false,
       default: false,
       description:
-        'Send only the weight; leave BMI, body fat, water, bone, muscle, visceral fat, physique rating and metabolic age unset',
+        'Send only the weight; leave BMI, body fat, water, bone, muscle, visceral fat, physique rating, metabolic age and BMR unset',
     },
   ],
   supportsGlobal: false,

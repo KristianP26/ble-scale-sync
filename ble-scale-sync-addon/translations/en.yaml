@@ -179,7 +179,7 @@ configuration:
     name: Upload weight only
     description: >-
       Send only the weight to Garmin Connect and leave BMI, body fat, water,
-      bone, muscle, visceral fat, physique rating and metabolic age unset.
+      bone, muscle, visceral fat, physique rating, metabolic age and BMR unset.
       Other exporters still receive the full body composition.
   scan_cooldown:
     name: Scan cooldown (seconds)
