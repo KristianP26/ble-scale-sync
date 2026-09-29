@@ -203,9 +203,12 @@ interface UnitState {
  * `0x06` frame about two seconds later, and a reading that resolved on the
  * weight alone ended the scan before that frame arrived, so it was never seen
  * (#357). The settled weight is therefore handed out as a partial reading, which
- * every broadcast transport holds for `IMPEDANCE_GRACE_MS`, and the reading
- * completes on the `0x06` that follows THAT weigh-in. If none does, the
- * transport forwards the weight on its own when the hold runs out.
+ * the streaming broadcast paths hold for up to `IMPEDANCE_GRACE_MS`, and the
+ * reading completes on the `0x06` that follows THAT weigh-in. If none does, the
+ * transport forwards the weight on its own when the hold runs out, or at its
+ * scan deadline if that comes first. The mqtt-proxy single-shot scan reads one
+ * scan snapshot and cannot hold, so there the settled weight is sent at once,
+ * without waiting for the `0x06`.
  *
  * The state behind that is per unit, keyed by the MAC the scale puts in its own
  * payload. It cannot hang off a session: this adapter is a shared registry

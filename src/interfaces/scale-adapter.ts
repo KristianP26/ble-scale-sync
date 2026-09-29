@@ -537,9 +537,14 @@ export interface AckProtocol {
  * GATT only. It is read by `waitForRawReading` and nowhere on the broadcast
  * path, which some adapters rely on (`eufy-p2` declares it for its GATT session
  * and also parses broadcasts). The broadcast equivalent is `preferPassive` with
- * an `isComplete` that returns false for the early reading: every broadcast
- * transport holds such a partial reading for `IMPEDANCE_GRACE_MS` and resolves
- * early on a later complete one (Mi Scale 2, Silvergear 108).
+ * an `isComplete` that returns false for the early reading. The streaming
+ * broadcast paths (every continuous-mode watcher, and the single-shot scans of
+ * noble, node-ble, ESPHome proxy and Home Assistant Bluetooth) hold such a
+ * partial reading for up to `IMPEDANCE_GRACE_MS`, resolve early on a later
+ * complete one, and return the held reading if their scan deadline comes first
+ * (Mi Scale 2, Silvergear 108). The mqtt-proxy single-shot scan is the
+ * exception: it reads one scan snapshot, cannot wait for a later frame, and
+ * returns the partial reading at once when nothing complete is in it.
  */
 export interface HoldForComposition {
   /**

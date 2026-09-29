@@ -114,7 +114,7 @@ The scale broadcasts its measurement as an encrypted MiBeacon frame, so it needs
 
 Weight only. The advertisement carries a second frame after each weigh-in whose field looks like a whole-body impedance (529 ohm for a 108.5 kg adult, 0 for an object), but one sample is not a decode, so body composition is estimated from BMI (Deurenberg formula). The frame is logged in debug mode; a body-fat figure from the vendor app for the same weigh-in would settle it ([#297](https://github.com/KristianP26/ble-scale-sync/issues/297)).
 
-The reading waits for that frame before it is sent, so it arrives about two seconds after the display settles rather than at once. If the frame does not come, the weight is sent on its own after 12 seconds ([#357](https://github.com/KristianP26/ble-scale-sync/issues/357)).
+The reading waits for that frame before it is sent, so it arrives about two seconds after the display settles rather than at once. If the frame does not come, the weight is sent on its own at most 12 seconds later, and a weigh-in still waiting when a scan times out is sent then rather than lost. If someone steps off before the frame arrives, their weight is sent at once, so a second weigh-in right after cannot replace it ([#357](https://github.com/KristianP26/ble-scale-sync/issues/357)).
 
 ### **Grifema** GA2001 / **Senssun** IF_B7
 
