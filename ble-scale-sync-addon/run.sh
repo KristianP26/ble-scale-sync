@@ -53,6 +53,13 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
       log "Set 'ble.$_qn' in $CUSTOM_PATH instead."
     fi
   done
+  # preemptive_adapter_reset defaults to true, and the loop above cannot see a
+  # false (jq's // treats false as missing), so it gets its own check. Only
+  # false is worth a warning: true is what every install has.
+  if [ "$(jq -r '.preemptive_adapter_reset == false' "$OPTIONS")" = "true" ]; then
+    log "WARNING: custom_config is enabled, so the 'preemptive_adapter_reset' option is ignored."
+    log "Set 'ble.preemptive_adapter_reset' in $CUSTOM_PATH instead."
+  fi
 else
 
   # ── Read all options ────────────────────────────────────────────────────
@@ -109,6 +116,10 @@ else
       ;;
   esac
   AUTO_CLEAR_STALE_BOND=$(opt_bool auto_clear_stale_bond)
+  # Defaults to true, so neither opt nor opt_bool works here: jq's // treats
+  # false as missing, which would turn an explicit false into the default and
+  # an absent key into false. Only an explicit false switches it off (#417).
+  PREEMPTIVE_ADAPTER_RESET=$(jq -r 'if .preemptive_adapter_reset == false then "false" else "true" end' "$OPTIONS")
   PROXY_LIVENESS_MIN=$(opt_int proxy_liveness_timeout_min 30)
   DISPLAY_UNIT=$(opt display_unit)
 
@@ -276,7 +287,8 @@ YAML
   if [ -n "$SCALE_MAC" ] || [ -n "$BLE_ADAPTER" ] || [ -n "$FORCE_SCALE_ADAPTER" ] ||
     [ -n "$QN_PROTOCOL_BYTE" ] || [ -n "$QN_REPORT_BYTE" ] || [ -n "$QN_WEIGHT_ACK" ] ||
     [ -n "$QN_A4_PRELUDE" ] || [ -n "$QN_TIME_SYNC_LONG" ] || [ -n "$QN_CONFIG_LONG" ] ||
-    [ "$AUTO_CLEAR_STALE_BOND" = "true" ] || [ "$PROXY_LIVENESS_MIN" != "30" ]; then
+    [ "$AUTO_CLEAR_STALE_BOND" = "true" ] || [ "$PREEMPTIVE_ADAPTER_RESET" = "false" ] ||
+    [ "$PROXY_LIVENESS_MIN" != "30" ]; then
     echo "ble:" >> "$FRESH"
     [ -n "$SCALE_MAC" ] && echo "  scale_mac: \"$(yaml_escape "$SCALE_MAC")\"" >> "$FRESH"
     [ -n "$BLE_ADAPTER" ] && echo "  adapter: \"$(yaml_escape "$BLE_ADAPTER")\"" >> "$FRESH"
@@ -288,6 +300,7 @@ YAML
     [ -n "$QN_TIME_SYNC_LONG" ] && echo "  qn_time_sync_long: $QN_TIME_SYNC_LONG" >> "$FRESH"
     [ -n "$QN_CONFIG_LONG" ] && echo "  qn_config_long: $QN_CONFIG_LONG" >> "$FRESH"
     [ "$AUTO_CLEAR_STALE_BOND" = "true" ] && echo "  auto_clear_stale_bond: true" >> "$FRESH"
+    [ "$PREEMPTIVE_ADAPTER_RESET" = "false" ] && echo "  preemptive_adapter_reset: false" >> "$FRESH"
     [ "$PROXY_LIVENESS_MIN" != "30" ] && echo "  proxy_liveness_timeout_min: $PROXY_LIVENESS_MIN" >> "$FRESH"
     echo "" >> "$FRESH"
   fi

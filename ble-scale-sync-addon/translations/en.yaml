@@ -76,6 +76,16 @@ configuration:
       with bluetoothctl. The scale has dropped its half of the pairing while
       Home Assistant still holds the key; this lets the add-on delete that key
       and pair again on its own. Leave it off otherwise.
+  preemptive_adapter_reset:
+    name: Power-cycle the adapter after every weigh-in
+    description: >-
+      Built-in Bluetooth only. After every connection to the scale the add-on
+      switches the Bluetooth adapter off and on again, which clears a stuck
+      scanning state some Raspberry Pi adapters fall into. Leave it on unless
+      you are testing whether that power-cycle is what makes a paired scale
+      reject the next connection. Turning it off also stops the brief adapter
+      drop that other Home Assistant Bluetooth integrations see after each
+      weigh-in.
   proxy_liveness_timeout_min:
     name: Proxy silence before restart (minutes)
     description: >-
