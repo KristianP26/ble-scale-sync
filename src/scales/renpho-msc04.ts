@@ -55,10 +55,12 @@ const COMPOSITION_HOLD_MS = 30_000;
 const RECORD_WEIGHT_TOLERANCE_KG = 0.5;
 
 /**
- * The scale computes body fat and BMI from the profile stored on it by the
- * vendor app, which may be another household member's. The BMI it reports
- * gives that profile's height away; a larger gap than this to the user's
- * configured height means the scale's figures are not about this user.
+ * The scale's body fat and BMI are presumably computed from the profile last
+ * written to the scale: in the #117 capture the Renpho app writes a b2 profile
+ * (height 187.0 cm) on every connection, and we write none. That profile may
+ * be another household member's. The BMI the scale reports gives the height it
+ * used away; a larger gap than this to the user's configured height means the
+ * scale's figures are not about this user.
  */
 const PROFILE_HEIGHT_TOLERANCE_CM = 3;
 
@@ -443,9 +445,10 @@ export class RenphoMsc04Adapter
     const scaleHeight = 100 * Math.sqrt(rec.weight / rec.bmi);
     if (Math.abs(scaleHeight - profile.height) > PROFILE_HEIGHT_TOLERANCE_CM) {
       bleLog.info(
-        `Renpho R-MSC04: the scale computed body composition for a ${scaleHeight.toFixed(0)} cm ` +
-          `profile, not the configured ${profile.height} cm, so its figures are not used. ` +
-          `The scale takes its profile from the Renpho app, which may be another user's.`,
+        `Renpho R-MSC04: the scale's BMI implies a ${scaleHeight.toFixed(0)} cm profile, ` +
+          `not the configured ${profile.height} cm, so its figures are not used. ` +
+          `It is likely the profile last written to the scale by the Renpho app, ` +
+          `which may be another user's.`,
       );
       return {};
     }
