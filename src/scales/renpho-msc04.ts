@@ -1,4 +1,5 @@
 import type {
+  AckProtocol,
   BleDeviceInfo,
   CharacteristicBinding,
   ConnectionContext,
@@ -223,7 +224,7 @@ function decodeRecord(f: Buffer): CompositionRecord {
  * named R-MSC04 wins here on priority (235 > 130).
  */
 export class RenphoMsc04Adapter
-  implements ScaleAdapterCore, GattWiring, MultiCharNotify, HoldForComposition
+  implements ScaleAdapterCore, GattWiring, MultiCharNotify, HoldForComposition, AckProtocol
 {
   readonly name = 'Renpho R-MSC04';
   readonly match: MatchDescriptor = {
@@ -236,6 +237,12 @@ export class RenphoMsc04Adapter
   readonly charWriteUuid = CHR_WRITE;
   readonly normalizesWeight = true;
   readonly completionHoldMs = COMPOSITION_HOLD_MS;
+  /**
+   * The Renpho app writes its status acks as Write Requests, and the scale
+   * answers each with a Write Response (#117 capture). That is the only mode
+   * seen working for them, so the handler writes them with response.
+   */
+  readonly ackWithResponse = true;
 
   // 0x2A12 is physically an indicate characteristic. The shared subscribe loop
   // only auto-subscribes 'notify' bindings, and node-ble/noble enable
@@ -389,6 +396,24 @@ export class RenphoMsc04Adapter
         `visceral ${rec.visceralFat})`,
     );
     return reading;
+  }
+
+  /**
+   * Acknowledge each 0x20 status frame the way the Renpho app does:
+   *   55 AA B0 00 02 <status seq> 01 <checksum>
+   * In the #117 capture the app answers every status with this (seq 00, 02
+   * and 03 on the measuring connection) and acknowledges nothing else the
+   * scale sends during a live weigh-in, the 0x25 record included. Whether the
+   * scale needs it before it sends the record is not known: a working
+   * ESPHome client on #117 does not send it.
+   */
+  buildAck(data: Buffer): number[] | null {
+    if (!isBareFrame(data)) return null;
+    const frame = validateFrame(data);
+    if (!frame || frame.cmd !== CMD_STATUS || frame.len !== 5) return null;
+    const ack = [HDR0, HDR1, 0xb0, 0x00, 0x02, data[5], 0x01];
+    ack.push(ack.reduce((sum, b) => sum + b, 0) & 0xff);
+    return ack;
   }
 
   isComplete(reading: ScaleReading): boolean {

@@ -371,6 +371,35 @@ describe('RenphoMsc04Adapter', () => {
       expect(adapter.computeMetrics(r, tall).bodyFatPercent).toBe(23.7);
     });
 
+    describe('buildAck() status acknowledgements', () => {
+      // Each pair is a status the scale sent and the app's reply, both from the
+      // #117 capture (second connection).
+      const PAIRS: Array<[string, string]> = [
+        ['55aa200005000101005076', '55aab000020001b2'],
+        ['55aa200005020901005080', '55aab000020201b4'],
+        ['55aa200005031101005089', '55aab000020301b5'],
+      ];
+
+      it.each(PAIRS)('acks status %s with the app bytes %s, written with response', (s, a) => {
+        const adapter = makeAdapter();
+        expect(Buffer.from(adapter.buildAck(Buffer.from(s, 'hex'))!).toString('hex')).toBe(a);
+        expect(adapter.ackWithResponse).toBe(true);
+      });
+
+      it('acks nothing else: weight frames, record and history fragments, a bad status', () => {
+        const adapter = makeAdapter();
+        const others = [
+          LIVE,
+          FINAL,
+          ...RECORD,
+          ...HIST,
+          // Derived: capture status with its checksum 76 -> 77.
+          Buffer.from('55aa200005000101005077', 'hex'),
+        ];
+        for (const f of others) expect(adapter.buildAck(f)).toBeNull();
+      });
+    });
+
     it('keeps the record pinned to its reading when the next session starts', () => {
       const adapter = settled();
       const r = feed(adapter, RECORD)!;

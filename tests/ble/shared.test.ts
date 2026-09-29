@@ -2045,6 +2045,16 @@ describe('R-MSC04 composition hold through waitForRawReading (#434)', () => {
       expect(raw.reading).toEqual({ weight: 95.55, impedance: 0 });
       expect(s.adapter.isFinal(raw.reading)).toBe(true);
       expect(s.adapter.computeMetrics(raw.reading, PROFILE_187).bodyFatPercent).toBe(23.7);
+
+      // After the start command, exactly the app's three status acks, in order.
+      expect(s.write.writtenData.map((b) => Buffer.from(b).toString('hex'))).toEqual([
+        '55aa9000040100000094',
+        '55aab000020001b2',
+        '55aab000020201b4',
+        '55aab000020301b5',
+      ]);
+      const ackCalls = vi.mocked(s.write.write).mock.calls.slice(1);
+      expect(ackCalls.every(([, withResponse]) => withResponse === true)).toBe(true);
     } finally {
       vi.useRealTimers();
     }
