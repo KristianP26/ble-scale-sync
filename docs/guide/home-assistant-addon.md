@@ -140,7 +140,7 @@ To upload measurements to Garmin Connect:
 
 1. Enable **Garmin Connect** and enter your email and password in the Configuration tab.
 2. Start the add-on.
-3. On first start the add-on runs `python3 garmin-scripts/setup_garmin.py --from-config /data/config.yaml`. If authentication succeeds, OAuth tokens are saved under `/data/garmin-tokens/` and subsequent runs reuse them without re-entering the password.
+3. On first start the add-on runs `python3 garmin-scripts/setup_garmin.py --from-config --config-path /data/config.yaml`. If authentication succeeds, OAuth tokens are saved under `/data/garmin-tokens/` and subsequent runs reuse them without re-entering the password.
 
 ### MFA workaround
 
