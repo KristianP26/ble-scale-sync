@@ -159,6 +159,8 @@ pair AA:BB:CC:DD:EE:FF
 
 If it happens every session, `ble.auto_clear_stale_bond: true` does that for you. See [the configuration reference](/guide/configuration#config-yaml-reference).
 
+If the key is rejected on the very next connect after a session that worked, every time, try `ble.preemptive_adapter_reset: false` and see whether the bond then holds. The adapter power-cycle after each session is the only thing the host does in between, and whether it is the cause is still open ([#417](https://github.com/KristianP26/ble-scale-sync/issues/417)). Report the result there either way.
+
 ## Exporter Issues
 
 ### Garmin upload fails
@@ -339,7 +341,7 @@ On Pi 3/4 Broadcom on-board chips, this is a kernel/firmware-level issue that ev
 **Automatic in-process recovery.** The app already:
 
 - Resets its D-Bus client after every GATT operation in continuous mode
-- Runs a preemptive `btmgmt power off/on` cycle after every GATT operation to clear zombie controller state before it accumulates
+- Runs a preemptive `btmgmt power off/on` cycle after every GATT operation to clear zombie controller state before it accumulates (`ble.preemptive_adapter_reset: false` turns only this step off, see [the configuration reference](/guide/configuration#config-yaml-reference))
 - Escalates through 6 recovery tiers when `StartDiscovery` fails (D-Bus `StopDiscovery`, adapter power-cycle, btmgmt reset, rfkill block/unblock, `systemctl restart bluetooth`)
 
 **Auto-restart watchdog (continuous mode).** When in-process recovery is not enough (typically Pi 3/4 Broadcom firmware lock-up), a watchdog exits the process after `runtime.watchdog_max_consecutive_failures` consecutive scan failures (default `10`, ≈30 min). With Docker `restart: unless-stopped` the container restarts cleanly, the entrypoint resets the BT adapter, and the controller is typically unwedged. The watchdog only arms after the first successful weigh-in in the process lifetime, so it does not restart-loop the container if the scale is offline (vacation) or `scale_mac` is misconfigured.

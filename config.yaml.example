@@ -20,6 +20,7 @@ version: 1
 #   adapter: hci0                     # Linux only: select BLE adapter (omit for default)
 #   force_scale_adapter: "Hutbit"     # override protocol auto-detection (requires scale_mac)
 #   session_timeout_sec: 20           # seconds one GATT session waits for a reading (default 120)
+#   preemptive_adapter_reset: false   # Linux node-ble: skip the btmgmt power-cycle after each session (default true)
 #   qn_protocol_byte: 0               # QN scales only: 0 to 255, see below
 #   qn_report_byte: 252               # QN scales only: 0 to 255, see below
 #

@@ -113,6 +113,7 @@ ble:
 | `qn_protocol_byte`           | No                          | Auto           | QN-family scales only. Protocol byte the handshake echoes back to the scale (0 to 255). Set it when a QN scale runs the whole handshake and then reports nothing, or when its scale-info frame is lost in transit on a proxy transport. See below.                                                                                                                             |
 | `qn_report_byte`             | No                          | Per dialect    | QN-family scales only. Payload byte of the history-response frame (0 to 255). Defaults to `252` (0xFC) on the long-frame dialects (es26m and extended) and `254` (0xFE) on the classic one. Try the other value if your scale completes the handshake and then reports nothing. See below.                                                                                     |
 | `auto_clear_stale_bond`      | No                          | `false`        | Delete a pairing key the scale has forgotten and pair again. Bonded scales only (Beurer BF7xx / BF9xx), node-ble transport only. See below.                                                                                                                                                                                                                                    |
+| `preemptive_adapter_reset`   | No                          | `true`         | Power-cycle the Bluetooth adapter with `btmgmt` after every GATT session, to clear a stuck-discovery state some Raspberry Pi adapters fall into. Set `false` only to test whether that cycle is what makes a bonded scale reject its next connect. node-ble transport only. See below.                                                                                         |
 | `qn_weight_ack`              | No                          | Per dialect    | QN-family scales only. Answer every live weight frame with its own weight, as the vendor app does. On by default on the 20-byte extended dialect. Try `true` if your QN scale completes the handshake and then streams nothing. See below.                                                                                                                                     |
 | `qn_a4_prelude`              | No                          | `false`        | QN-family scales only. Send the two undecoded `0xA4` frames an Arboleaf vendor app sends between START and the first weight frame. Off by default. Try `true` only if `qn_weight_ack` did not help and your scale still goes silent right after START. See below.                                                                                                              |
 | `qn_time_sync_long`          | No                          | `false`        | QN-family scales only. Send the 9-byte form of the `0x20` time-sync frame that an Arboleaf vendor app sends, instead of the 8-byte one. Off by default; the extra byte is undecoded. See below.                                                                                                                                                                                |
@@ -348,6 +349,23 @@ ble:
 The bond is cleared at most once per connect, and only after three consecutive authentication-class failures against a device BlueZ still lists as bonded. It stays opt-in because `le-connection-abort-by-local` also has innocent causes, notably a connect issued while another client (the Home Assistant Bluetooth integration on the same adapter, for instance) still holds a discovery session, and on these scales a bond dropped in error costs a trip to the device to confirm the passkey.
 
 Native BlueZ only. The proxy transports do not pair at all.
+
+:::
+
+::: tip The power-cycle after every weigh-in (`preemptive_adapter_reset`)
+
+After every GATT session the native Linux transport resets its D-Bus connection and then power-cycles the adapter with `btmgmt power off` / `power on`. On-board Raspberry Pi Broadcom adapters drift into a state where BlueZ reports discovery as running while the controller has stopped scanning, and the cycle clears it before it builds up. The debug log shows it as `Preemptive btmgmt reset after GATT`.
+
+It is also the only thing the host does between a bonded session that works and a next connect whose stored key is rejected, which is what the Beurer section above describes. To find out whether the cycle is the cause on your setup, switch it off:
+
+```yaml
+ble:
+  preemptive_adapter_reset: false
+```
+
+Only this one step is skipped. The D-Bus reset, the cleanup after a failed session and the recovery that runs when discovery will not start all stay as they are, and the change applies from the next scan cycle without a restart. If your adapter then starts missing the scale after a few weigh-ins, turn it back on.
+
+Native BlueZ (node-ble) only. noble resets the adapter only when discovery fails, and the proxy transports never touch the host adapter.
 
 :::
 
