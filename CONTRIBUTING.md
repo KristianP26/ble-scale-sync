@@ -196,6 +196,7 @@ ble-scale-sync/
 │       ├── hutbit.ts                # Hutbit / Lefu FFB0 "AC02" family
 │       ├── robi-s9.ts               # Robi S9
 │       ├── silvergear-108.ts        # Silvergear 108 (broadcast only)
+│       ├── senssun-if-b7.ts         # Senssun IF_B7 / Grifema GA2001 (broadcast only)
 │       └── standard-gatt.ts         # Generic BCS/WSS catch-all
 ├── tests/
 │   ├── body-comp-helpers.test.ts    # Body-comp math
