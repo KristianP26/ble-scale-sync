@@ -72,5 +72,32 @@ class FormatErrorChainTest(unittest.TestCase):
         self.assertEqual(rendered.count("caused by:"), 1)
 
 
+    def test_redacts_query_values_in_every_link(self):
+        try:
+            try:
+                raise ConnectionError(
+                    "401 for url: https://sso.garmin.com/sso/embed?ticket=ST-12345-abc&x=1"
+                )
+            except ConnectionError as inner:
+                raise RuntimeError("login failed at /x?service=secret") from inner
+        except RuntimeError as outer:
+            rendered = format_error_chain(outer)
+
+        self.assertNotIn("ST-12345-abc", rendered)
+        self.assertNotIn("secret", rendered)
+        self.assertIn("?ticket=<redacted>&x=<redacted>", rendered)
+
+    def test_hides_a_context_the_raiser_suppressed(self):
+        try:
+            try:
+                raise KeyError("internal detail")
+            except KeyError:
+                raise RuntimeError("clean message") from None
+        except RuntimeError as outer:
+            rendered = format_error_chain(outer)
+
+        self.assertEqual(rendered, "clean message")
+
+
 if __name__ == "__main__":
     unittest.main()
