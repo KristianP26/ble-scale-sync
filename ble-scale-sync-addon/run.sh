@@ -420,23 +420,28 @@ if [ "$CUSTOM_CONFIG" != "true" ] && [ "$GARMIN_ENABLED" = "true" ] \
   # Option 1: user pre-generated tokens on another machine (MFA workaround).
   #
   # Import when /data has no token, and also when the /share copy is newer.
-  # Gating on absence alone made the documented recovery -- drop a freshly
-  # generated token into /share and restart -- silently do nothing whenever a
+  # Gating on absence alone made the documented recovery (drop a freshly
+  # generated token into /share and restart) silently do nothing whenever a
   # rejected token was already sitting in /data, which is exactly when someone
   # goes looking for that recovery. The stale token then kept failing every
   # upload with "Failed to retrieve social profile" and the only way out was a
   # shell inside the container or reinstalling the add-on.
   #
-  # Newer-wins is the right signal: a token placed there to replace a rejected
-  # one is always newer than the one it replaces. cp does not preserve mtime,
-  # so the imported copy is newer than its source from then on and a restart
-  # does not re-import. -nt is in POSIX test as implemented by dash (the base
-  # image's /bin/sh) and busybox ash, not a bashism.
+  # Newer-wins is the usual signal: a token placed there to replace a rejected
+  # one is normally newer than the one it replaces. Not always (a copy that
+  # keeps its original mtime, or garminconnect re-dumping the cached token
+  # after a refresh), which is what the hint further down is for. cp does not
+  # preserve mtime, so the imported copy is newer than its source from then on
+  # and a restart does not re-import. dash (the base image's /bin/sh) and
+  # busybox ash both support -nt.
+  SHARE_TOKEN_IMPORTED=false
   if [ -f "$SHARE_DIR/garmin_tokens.json" ] \
      && { [ ! -f "$TOKEN_DIR/garmin_tokens.json" ] \
           || [ "$SHARE_DIR/garmin_tokens.json" -nt "$TOKEN_DIR/garmin_tokens.json" ]; }; then
     log "Importing Garmin tokens from $SHARE_DIR"
-    cp "$SHARE_DIR/garmin_tokens.json" "$TOKEN_DIR/" 2>/dev/null || true
+    if cp "$SHARE_DIR/garmin_tokens.json" "$TOKEN_DIR/" 2>/dev/null; then
+      SHARE_TOKEN_IMPORTED=true
+    fi
   fi
 
   # Option 2: auto-authenticate if tokens still missing
@@ -455,8 +460,12 @@ if [ "$CUSTOM_CONFIG" != "true" ] && [ "$GARMIN_ENABLED" = "true" ] \
   else
     log "Garmin tokens present at $TOKEN_DIR"
     # Says why a token sitting in /share was passed over. Without this the
-    # skip is invisible, and the add-on looks like it ignored the file.
-    if [ -f "$SHARE_DIR/garmin_tokens.json" ]; then
+    # skip is invisible, and the add-on looks like it ignored the file. Only
+    # when it really was passed over: not on the start that just imported it,
+    # and not when /share holds the same token that is already in use.
+    if [ "$SHARE_TOKEN_IMPORTED" != "true" ] \
+       && [ -f "$SHARE_DIR/garmin_tokens.json" ] \
+       && ! cmp -s "$SHARE_DIR/garmin_tokens.json" "$TOKEN_DIR/garmin_tokens.json"; then
       log "A token in $SHARE_DIR was not imported: it is older than the one in $TOKEN_DIR."
       log "To import it anyway, give it a newer timestamp (re-save it in the File"
       log "editor add-on, or 'touch $SHARE_DIR/garmin_tokens.json'), then restart."
