@@ -7,6 +7,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from garminconnect import Garmin
 
+from garmin_errors import format_error_chain
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
@@ -143,8 +145,13 @@ def main():
         print(json.dumps({"success": True, "data": data}))
         sys.exit(0)
     except Exception as e:
-        log(f"[Garmin] Error: {e}")
-        print(json.dumps({"success": False, "error": str(e)}))
+        # The chained cause carries the status code that explains the failure.
+        # garminconnect reports a rejected token as "Failed to retrieve social
+        # profile" with the 401 only on __cause__, so str(e) alone leaves the
+        # orchestrator logging the same opaque line on every retry.
+        detail = format_error_chain(e)
+        log(f"[Garmin] Error: {detail}")
+        print(json.dumps({"success": False, "error": detail}))
         sys.exit(1)
 
 

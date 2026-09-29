@@ -11,6 +11,8 @@ add_body_composition as None -- cannot be made from the Vitest suite.
 Run: python -m unittest discover -s garmin-scripts/tests
 """
 
+import io
+import json
 import os
 import sys
 import unittest
@@ -104,6 +106,39 @@ class WeightOnlyUploadTest(unittest.TestCase):
     def test_false_behaves_like_absent(self):
         kwargs, _ = run_upload({**FULL_PAYLOAD, "weight_only": False})
         self.assertEqual(kwargs["bmi"], 23.9)
+
+
+class FailureReportingTest(unittest.TestCase):
+    """The orchestrator only ever sees what main() puts on stdout.
+
+    A rejected token reaches it as "Failed to retrieve social profile" with the
+    401 on __cause__, so dropping the chain left every retry logging the same
+    line with nothing to act on.
+    """
+
+    def run_main(self, exc):
+        cause = ConnectionError("API Error 401")
+        exc.__cause__ = cause
+        stdout = io.StringIO()
+        # main() parses sys.argv; leaving the test runner's own flags there
+        # makes argparse exit before the code under test runs.
+        with mock.patch.object(sys, "argv", ["garmin_upload.py"]):
+            with mock.patch.object(garmin_upload, "upload", side_effect=exc):
+                with mock.patch.object(sys, "stdin", io.StringIO("{}")):
+                    with mock.patch.object(sys, "stdout", stdout):
+                        with self.assertRaises(SystemExit) as raised:
+                            garmin_upload.main()
+        return json.loads(stdout.getvalue()), raised.exception.code
+
+    def test_reports_the_chained_cause_to_the_orchestrator(self):
+        result, _ = self.run_main(RuntimeError("Failed to retrieve social profile"))
+        self.assertFalse(result["success"])
+        self.assertIn("Failed to retrieve social profile", result["error"])
+        self.assertIn("API Error 401", result["error"])
+
+    def test_still_exits_nonzero(self):
+        _, code = self.run_main(RuntimeError("Failed to retrieve social profile"))
+        self.assertEqual(code, 1)
 
 
 if __name__ == "__main__":
