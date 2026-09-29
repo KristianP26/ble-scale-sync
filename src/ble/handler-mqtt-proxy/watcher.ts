@@ -10,6 +10,7 @@ import {
   logAdvert,
   safeName,
   emitDeduped,
+  readsFromAdvertisement,
 } from '../advertisement.js';
 import type { Watcher, WatcherConfig } from '../reading-source.js';
 import {
@@ -105,6 +106,8 @@ export class ReadingWatcher implements Watcher {
   private lastAdvertAt: number | null = null;
   /** Per-MAC count of consecutive scan deferrals with no autonomous connect (#231). */
   private deferCounts = new Map<string, number>();
+  /** Addresses already told at info level that their GATT session was refused (#422). */
+  private readonly refusedGattLogged = new Set<string>();
 
   constructor(
     config: MqttProxyConfig,
@@ -485,6 +488,25 @@ export class ReadingWatcher implements Watcher {
     return resolved;
   }
 
+  /**
+   * Log that a GATT session to an advertisement-read scale is being dropped.
+   * Info once per address so a reporter sees why nothing happens over GATT,
+   * debug afterwards: the old firmware reconnects on every weigh-in until it
+   * learns the scale is passive, and one line per attempt is noise.
+   */
+  private logRefusedGatt(kind: string, adapter: ScaleAdapter, address: string): void {
+    const line =
+      `${kind} connect to ${adapter.name} (${address}) ignored: this scale is read from its ` +
+      'advertisements, not over GATT. Disconnecting.';
+    const key = address.toUpperCase();
+    if (this.refusedGattLogged.has(key)) {
+      bleLog.debug(line);
+      return;
+    }
+    this.refusedGattLogged.add(key);
+    bleLog.info(line);
+  }
+
   private async handleGattReading(entry: ScanResultEntry, adapter: ScaleAdapter): Promise<void> {
     if (this.gattInProgress) {
       if (Date.now() - this.gattStartedAt > ReadingWatcher.GATT_STALE_MS) {
@@ -544,6 +566,14 @@ export class ReadingWatcher implements Watcher {
         adapter,
         entry.address,
       );
+      // Checked only now, against the char-aware adapter. Before discovery Mi
+      // Scale 2 claims anything advertising the generic 0x181B service, and a
+      // standard BCS scale reaches its own adapter only through this connect;
+      // refusing at advertisement time would cut those scales off (#422).
+      if (readsFromAdvertisement(gattAdapter)) {
+        this.logRefusedGatt('Host-initiated', gattAdapter, entry.address);
+        return;
+      }
       bleLog.debug(`GATT read driven by adapter: ${gattAdapter.name} (${entry.address})`);
       const raw = await withTimeout(
         withIdleTimeout(
@@ -662,6 +692,15 @@ export class ReadingWatcher implements Watcher {
             `(${data.chars.length} chars: ${data.chars.map((c) => c.uuid).join(', ')}), disconnecting`,
         );
         await mqttGattDisconnect(client, t).catch(() => {});
+        return;
+      }
+
+      // The ESP32 connects to every MAC it was told about, advertisement-read
+      // scales included, and a Mi Scale 2 driven over GATT answers the unlock
+      // with a status echo until the session cap (#422). The finally below
+      // sends the one disconnect that releases the proxy.
+      if (readsFromAdvertisement(adapter)) {
+        this.logRefusedGatt('Autonomous', adapter, data.address);
         return;
       }
 

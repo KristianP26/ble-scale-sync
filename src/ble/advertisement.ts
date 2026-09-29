@@ -101,6 +101,23 @@ export function evaluateAdvertisement(
   return { kind: 'gatt' };
 }
 
+/**
+ * True when this adapter reads its weigh-in from advertisements and must never
+ * be driven over a GATT session, even when it also declares GATT wiring.
+ *
+ * The same test noble and node-ble have always applied before deciding between
+ * the passive scan and a connect. A Mi Scale 2 carries a GATT path too, and on
+ * the reporter's unit that path answers the unlock write with a status echo
+ * forever and never a weight frame, so a session opened to it runs to the cap
+ * (#422).
+ */
+export function readsFromAdvertisement(adapter: ScaleAdapter): boolean {
+  return (
+    adapter.preferPassive === true &&
+    (typeof adapter.parseServiceData === 'function' || typeof adapter.parseBroadcast === 'function')
+  );
+}
+
 // ─── Grace timers (per-address, weight-only fallback) ──────────────────────────
 
 /**

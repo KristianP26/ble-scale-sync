@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { evaluateAdvertisement, GraceTimers, DedupWindow } from '../../src/ble/advertisement.js';
+import {
+  evaluateAdvertisement,
+  GraceTimers,
+  DedupWindow,
+  readsFromAdvertisement,
+} from '../../src/ble/advertisement.js';
+import { MiScale2Adapter } from '../../src/scales/mi-scale-2.js';
+import { QnScaleAdapter } from '../../src/scales/qn-scale/index.js';
+import { applyForcedAdapter } from '../../src/scales/force.js';
 import type { RawReading } from '../../src/ble/shared.js';
 import type {
   ScaleAdapter,
@@ -147,6 +155,30 @@ describe('evaluateAdvertisement', () => {
 const sharedAdapter = baseAdapter({});
 const raw = (weight: number): RawReading =>
   ({ reading: { weight, impedance: 0 }, adapter: sharedAdapter }) as RawReading;
+
+describe('readsFromAdvertisement (#422)', () => {
+  it('is true for the real Mi Scale 2, which also carries GATT wiring', () => {
+    const mi = new MiScale2Adapter();
+    expect(mi.charNotifyUuid).toBeTruthy();
+    expect(readsFromAdvertisement(mi)).toBe(true);
+  });
+
+  it('is true for a forced Mi Scale 2 (ble.force_scale_adapter)', () => {
+    const [forced] = applyForcedAdapter([new MiScale2Adapter()], 'Xiaomi Mi Scale 2');
+    expect(readsFromAdvertisement(forced)).toBe(true);
+  });
+
+  it('is false for the dual-mode QN adapter, which parses broadcasts but prefers GATT', () => {
+    const qn = new QnScaleAdapter();
+    expect(typeof qn.parseBroadcast).toBe('function');
+    expect(readsFromAdvertisement(qn)).toBe(false);
+  });
+
+  it('is false for preferPassive without any advertisement parser', () => {
+    const odd = baseAdapter({ preferPassive: true } as Partial<ScaleAdapter>);
+    expect(readsFromAdvertisement(odd)).toBe(false);
+  });
+});
 
 describe('GraceTimers', () => {
   beforeEach(() => vi.useFakeTimers());
