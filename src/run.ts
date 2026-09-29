@@ -16,7 +16,7 @@ import { runHealthchecks } from './orchestrator.js';
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { version: string };
 import { loadAppConfig } from './config/load.js';
-import { resolveRuntimeConfig } from './config/resolve.js';
+import { resolveDisplayUnit, resolveRuntimeConfig } from './config/resolve.js';
 import { startConfigWatcher, type ConfigWatcherHandle } from './config/watch.js';
 import { configureUpdateState } from './update-state.js';
 import { flushQueue } from './runtime/export-queue.js';
@@ -296,9 +296,7 @@ async function main(): Promise<void> {
   // Re-applied on config reload below so a hot-edited key or unit takes effect.
   const applyAdapterConfig = (bindKey: string | undefined): void => {
     const scaleMac = ctx.scaleMac ?? undefined;
-    const weightUnit = ctx.config.scale.weight_unit;
-    const displayUnit =
-      ctx.config.scale.display_unit === 'weight_unit' ? weightUnit : ctx.config.scale.display_unit;
+    const displayUnit = resolveDisplayUnit(ctx.config.scale);
     const qnProtocolByte = ctx.config.ble?.qn_protocol_byte ?? undefined;
     const qnReportByte = ctx.config.ble?.qn_report_byte ?? undefined;
     const qnWeightAck = ctx.config.ble?.qn_weight_ack ?? undefined;
@@ -309,7 +307,6 @@ async function main(): Promise<void> {
       a.configure?.({
         bindKey,
         scaleMac,
-        weightUnit,
         displayUnit,
         qnProtocolByte,
         qnReportByte,

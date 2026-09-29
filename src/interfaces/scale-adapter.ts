@@ -1,5 +1,5 @@
 import type { MatchDescriptor } from '../scales/match-descriptor.js';
-import type { ScaleDisplayUnit, WeightUnit } from '../config/schema.js';
+import type { ScaleDisplayUnit } from '../config/schema.js';
 export type { MatchDescriptor };
 
 export type Gender = 'male' | 'female';
@@ -198,13 +198,12 @@ export interface AdapterRuntimeConfig {
    */
   scaleMac?: string;
   /**
-   * Configured display unit (`scale.weight_unit`). Adapters whose protocol tells
-   * the scale which unit to show (e.g. the QN 0x13 config command) honour this so
-   * a read does not flip the scale's display (#269). Optional and ignored by
-   * adapters that do not write a unit.
+   * Unit to ask the scale's own display to show (`scale.display_unit`, with its
+   * `weight_unit` default already resolved by resolveDisplayUnit). Independent of
+   * the unit readings are exported in. Adapters whose protocol tells the scale
+   * which unit to show (today only the QN 0x13 config command) honour it so a
+   * read does not flip the display (#269, #429). Ignored by every other adapter.
    */
-  weightUnit?: WeightUnit;
-  /** Physical display unit requested independently from exported measurement units. */
   displayUnit?: ScaleDisplayUnit;
   /**
    * Protocol byte the QN handshake echoes back (`ble.qn_protocol_byte`).

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  resolveDisplayUnit,
   resolveUserProfile,
   resolveRuntimeConfig,
   resolveExportersForUser,
@@ -41,6 +42,23 @@ const BASE_CONFIG: AppConfig = {
 };
 
 // --- resolveUserProfile ---
+
+describe('resolveDisplayUnit (#429)', () => {
+  const scale = (over: Partial<ScaleConfig>): ScaleConfig =>
+    ({ weight_unit: 'kg', height_unit: 'cm', display_unit: 'weight_unit', ...over }) as ScaleConfig;
+
+  // #269: before display_unit existed, a QN scale followed weight_unit. The
+  // default has to keep an lb user's scale on lb.
+  it('follows weight_unit by default', () => {
+    expect(resolveDisplayUnit(scale({ weight_unit: 'lbs' }))).toBe('lbs');
+    expect(resolveDisplayUnit(scale({ weight_unit: 'kg' }))).toBe('kg');
+  });
+
+  it('uses an explicit display_unit regardless of weight_unit', () => {
+    expect(resolveDisplayUnit(scale({ weight_unit: 'kg', display_unit: 'st' }))).toBe('st');
+    expect(resolveDisplayUnit(scale({ weight_unit: 'lbs', display_unit: 'kg' }))).toBe('kg');
+  });
+});
 
 describe('resolveUserProfile', () => {
   it('computes age from birth_date', () => {
