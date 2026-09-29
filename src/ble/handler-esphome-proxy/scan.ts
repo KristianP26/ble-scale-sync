@@ -3,8 +3,14 @@ import type { EsphomeProxyConfig } from '../../config/schema.js';
 import type { ScanOptions, ScanResult } from '../types.js';
 import { type RawReading, waitForRawReading } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
-import { evaluateAdvertisement, GraceTimers, logAdvert, safeName } from '../advertisement.js';
-import { bleLog, errMsg, withTimeout, withIdleTimeout, IMPEDANCE_GRACE_MS } from '../types.js';
+import {
+  armScanDeadline,
+  evaluateAdvertisement,
+  GraceTimers,
+  logAdvert,
+  safeName,
+} from '../advertisement.js';
+import { bleLog, errMsg, withIdleTimeout, IMPEDANCE_GRACE_MS } from '../types.js';
 import { EsphomeProxyPool } from './pool.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -76,162 +82,171 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     // which TS would otherwise narrow to `never` in the finally.
     const graceBox: { grace: GraceTimers | null } = { grace: null };
 
-    const timeoutMessage = targetMac
-      ? `Timed out waiting for ${targetMac} via ESPHome proxy.`
-      : `Timed out waiting for any recognized scale via ESPHome proxy.`;
+    // Torn down in the finally, whichever way the scan settles.
+    const teardown: { disarm: (() => void) | null; unabort: (() => void) | null } = {
+      disarm: null,
+      unabort: null,
+    };
 
     try {
-      return await withTimeout(
-        new Promise<RawReading>((resolve, reject) => {
-          const seenAddrs = new Set<string>();
-          // GATT is connected on demand; guard so repeated advertisements for
-          // the same scale do not open parallel sessions.
-          const gattInFlight = new Set<string>();
+      return await new Promise<RawReading>((resolve, reject) => {
+        const seenAddrs = new Set<string>();
+        // GATT is connected on demand; guard so repeated advertisements for
+        // the same scale do not open parallel sessions.
+        const gattInFlight = new Set<string>();
 
-          const g = new GraceTimers(IMPEDANCE_GRACE_MS, (address, gr) => {
-            bleLog.info(
-              `Matched: ${gr.adapter.name} (${address}), weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
+        const g = new GraceTimers(IMPEDANCE_GRACE_MS, (address, gr) => {
+          bleLog.info(
+            `Matched: ${gr.adapter.name} (${address}), weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
+          );
+          bleLog.info(`Broadcast reading: ${gr.reading.weight} kg`);
+          resolve(gr);
+        });
+        graceBox.grace = g;
+
+        // A shutdown rejects at once, held reading or not, so nothing is
+        // exported on the way out.
+        const { abortSignal } = opts;
+        if (abortSignal) {
+          const onAbort = () =>
+            reject(abortSignal.reason ?? new DOMException('Aborted', 'AbortError'));
+          if (abortSignal.aborted) return onAbort();
+          abortSignal.addEventListener('abort', onAbort, { once: true });
+          teardown.unabort = () => abortSignal.removeEventListener('abort', onAbort);
+        }
+
+        // The scan's own deadline, as a dedicated timer rather than a
+        // rejection recognised afterwards by its message. A held weight-only
+        // reading is given the rest of its grace (see armScanDeadline).
+        teardown.disarm = armScanDeadline(BROADCAST_WAIT_MS, g, () =>
+          reject(
+            new Error(
+              targetMac
+                ? `Timed out waiting for ${targetMac} via ESPHome proxy.`
+                : `Timed out waiting for any recognized scale via ESPHome proxy.`,
+            ),
+          ),
+        );
+
+        // The proxy delivers the advertisement and its scan response as two
+        // events and only the second carries the local name, so the same
+        // device arrives once nameless and once named. Adapters that tell
+        // sibling protocols apart by name would match the nameless frame as
+        // if the device had no name (#322), so the last name seen per address
+        // is remembered and merged back in. Same reasoning as the watcher.
+        const lastAdvertName = new Map<string, string>();
+        const MAX_CACHED_NAMES = 64;
+
+        sub.unsub = pool.onAdvertisement((rawInfo, address) => {
+          const addrLc = address.toLowerCase();
+          if (targetLc && addrLc !== targetLc) return;
+
+          logAdvert(address, rawInfo);
+          let info = rawInfo;
+          if (info.localName) {
+            if (lastAdvertName.size >= MAX_CACHED_NAMES && !lastAdvertName.has(addrLc)) {
+              const oldest = lastAdvertName.keys().next().value;
+              if (oldest !== undefined) lastAdvertName.delete(oldest);
+            }
+            lastAdvertName.set(addrLc, info.localName);
+          } else {
+            const cached = lastAdvertName.get(addrLc);
+            if (cached) info = { ...info, localName: cached };
+          }
+          const adapter = resolveAdapter(info, adapters);
+          if (!adapter) {
+            if (!seenAddrs.has(address)) {
+              seenAddrs.add(address);
+              bleLog.debug(
+                `Unmatched device: ${address} (${safeName(info.localName) || 'no name'})`,
+              );
+            }
+            return;
+          }
+
+          const decision = evaluateAdvertisement(adapter, info);
+
+          // Passive adapters (e.g. Mi Scale 2) emit a weight-only frame first
+          // and a weight+impedance frame moments later, so they are held on a
+          // grace timer; other broadcast adapters resolve immediately.
+          if (decision.kind === 'complete') {
+            g.cancel(address);
+            bleLog.info(`Matched: ${adapter.name} (${address})`);
+            bleLog.info(`Broadcast reading: ${decision.reading.weight} kg`);
+            resolve({ reading: decision.reading, adapter });
+            return;
+          }
+
+          // Partial frame for a passive adapter: hold keyed on this address so
+          // a second scale's partial frame cannot overwrite.
+          if (decision.kind === 'partial') {
+            bleLog.debug(
+              `${adapter.name} matched at ${address} but broadcast frame is not stable yet`,
             );
-            bleLog.info(`Broadcast reading: ${gr.reading.weight} kg`);
-            resolve(gr);
-          });
-          graceBox.grace = g;
+            g.hold(address, { reading: decision.reading, adapter });
+            return;
+          }
 
-          // The proxy delivers the advertisement and its scan response as two
-          // events and only the second carries the local name, so the same
-          // device arrives once nameless and once named. Adapters that tell
-          // sibling protocols apart by name would match the nameless frame as
-          // if the device had no name (#322), so the last name seen per address
-          // is remembered and merged back in. Same reasoning as the watcher.
-          const lastAdvertName = new Map<string, string>();
-          const MAX_CACHED_NAMES = 64;
+          // Device still carries broadcast data this adapter parses but no
+          // stable frame yet: keep waiting.
+          if (decision.kind === 'wait') {
+            // What the scale is showing while it converges. Not a reading, so
+            // it never resolves the scan (#356).
+            if (decision.live) opts.onLiveWeight?.(decision.live);
+            bleLog.debug(
+              `${adapter.name} matched at ${address} but broadcast frame is not stable yet`,
+            );
+            return;
+          }
 
-          sub.unsub = pool.onAdvertisement((rawInfo, address) => {
-            const addrLc = address.toLowerCase();
-            if (targetLc && addrLc !== targetLc) return;
+          // No broadcast source for this device and no GATT characteristic
+          // either: nothing we can do, keep waiting.
+          if (decision.kind === 'none') {
+            bleLog.debug(`${adapter.name} matched at ${address} but has no broadcast or GATT path`);
+            return;
+          }
 
-            logAdvert(address, rawInfo);
-            let info = rawInfo;
-            if (info.localName) {
-              if (lastAdvertName.size >= MAX_CACHED_NAMES && !lastAdvertName.has(addrLc)) {
-                const oldest = lastAdvertName.keys().next().value;
-                if (oldest !== undefined) lastAdvertName.delete(oldest);
-              }
-              lastAdvertName.set(addrLc, info.localName);
-            } else {
-              const cached = lastAdvertName.get(addrLc);
-              if (cached) info = { ...info, localName: cached };
-            }
-            const adapter = resolveAdapter(info, adapters);
-            if (!adapter) {
-              if (!seenAddrs.has(address)) {
-                seenAddrs.add(address);
-                bleLog.debug(
-                  `Unmatched device: ${address} (${safeName(info.localName) || 'no name'})`,
-                );
-              }
-              return;
-            }
-
-            const decision = evaluateAdvertisement(adapter, info);
-
-            // Passive adapters (e.g. Mi Scale 2) emit a weight-only frame first
-            // and a weight+impedance frame moments later, so they are held on a
-            // grace timer; other broadcast adapters resolve immediately.
-            if (decision.kind === 'complete') {
-              g.cancel(address);
-              bleLog.info(`Matched: ${adapter.name} (${address})`);
-              bleLog.info(`Broadcast reading: ${decision.reading.weight} kg`);
-              resolve({ reading: decision.reading, adapter });
-              return;
-            }
-
-            // Partial frame for a passive adapter: hold keyed on this address so
-            // a second scale's partial frame cannot overwrite.
-            if (decision.kind === 'partial') {
-              bleLog.debug(
-                `${adapter.name} matched at ${address} but broadcast frame is not stable yet`,
+          // decision.kind === 'gatt': connect on demand through the proxy that saw it.
+          if (gattInFlight.has(addrLc)) return;
+          gattInFlight.add(addrLc);
+          bleLog.info(`Matched: ${adapter.name} (${address}); opening GATT via ESPHome proxy`);
+          void (async () => {
+            let session: Awaited<ReturnType<typeof pool.connectGatt>> | null = null;
+            try {
+              session = await pool.connectGatt(address);
+              const raw = await withIdleTimeout(
+                (onActivity) =>
+                  waitForRawReading(
+                    session!.charMap,
+                    session!.device,
+                    adapter,
+                    opts.profile,
+                    address.replace(/[:-]/g, '').toUpperCase(),
+                    opts.weightUnit,
+                    opts.onLiveData,
+                    opts.scaleAuth,
+                    onActivity,
+                  ),
+                GATT_READING_IDLE_MS,
+                `GATT reading timeout for ${address}`,
               );
-              g.hold(address, { reading: decision.reading, adapter });
-              return;
+              resolve(raw);
+            } catch (e) {
+              reject(e instanceof Error ? e : new Error(errMsg(e)));
+            } finally {
+              // Before close(), so the wait is finished with the session
+              // before the session goes away. See fireDisconnect's own doc
+              // for why the order is not load-bearing either way.
+              session?.device.fireDisconnect();
+              if (session) await session.close();
+              gattInFlight.delete(addrLc);
             }
-
-            // Device still carries broadcast data this adapter parses but no
-            // stable frame yet: keep waiting.
-            if (decision.kind === 'wait') {
-              // What the scale is showing while it converges. Not a reading, so
-              // it never resolves the scan (#356).
-              if (decision.live) opts.onLiveWeight?.(decision.live);
-              bleLog.debug(
-                `${adapter.name} matched at ${address} but broadcast frame is not stable yet`,
-              );
-              return;
-            }
-
-            // No broadcast source for this device and no GATT characteristic
-            // either: nothing we can do, keep waiting.
-            if (decision.kind === 'none') {
-              bleLog.debug(
-                `${adapter.name} matched at ${address} but has no broadcast or GATT path`,
-              );
-              return;
-            }
-
-            // decision.kind === 'gatt': connect on demand through the proxy that saw it.
-            if (gattInFlight.has(addrLc)) return;
-            gattInFlight.add(addrLc);
-            bleLog.info(`Matched: ${adapter.name} (${address}); opening GATT via ESPHome proxy`);
-            void (async () => {
-              let session: Awaited<ReturnType<typeof pool.connectGatt>> | null = null;
-              try {
-                session = await pool.connectGatt(address);
-                const raw = await withIdleTimeout(
-                  (onActivity) =>
-                    waitForRawReading(
-                      session!.charMap,
-                      session!.device,
-                      adapter,
-                      opts.profile,
-                      address.replace(/[:-]/g, '').toUpperCase(),
-                      opts.weightUnit,
-                      opts.onLiveData,
-                      opts.scaleAuth,
-                      onActivity,
-                    ),
-                  GATT_READING_IDLE_MS,
-                  `GATT reading timeout for ${address}`,
-                );
-                resolve(raw);
-              } catch (e) {
-                reject(e instanceof Error ? e : new Error(errMsg(e)));
-              } finally {
-                // Before close(), so the wait is finished with the session
-                // before the session goes away. See fireDisconnect's own doc
-                // for why the order is not load-bearing either way.
-                session?.device.fireDisconnect();
-                if (session) await session.close();
-                gattInFlight.delete(addrLc);
-              }
-            })();
-          });
-        }),
-        BROADCAST_WAIT_MS,
-        timeoutMessage,
-      );
-    } catch (err) {
-      // A weight-only reading still inside its grace when the deadline fires is
-      // a weigh-in the scale finished, so it is returned rather than dropped
-      // with the timeout (#357). Only on the deadline: any other failure stands.
-      const held =
-        err instanceof Error && err.message === timeoutMessage ? graceBox.grace?.takeHeld() : null;
-      if (!held) throw err;
-      bleLog.info(
-        `Matched: ${held.reading.adapter.name} (${held.address}), weight only, ` +
-          `scan deadline reached while waiting for impedance`,
-      );
-      bleLog.info(`Broadcast reading: ${held.reading.reading.weight} kg`);
-      return held.reading;
+          })();
+        });
+      });
     } finally {
+      teardown.disarm?.();
+      teardown.unabort?.();
       graceBox.grace?.clear();
     }
   } finally {

@@ -205,8 +205,9 @@ interface UnitState {
  * (#357). The settled weight is therefore handed out as a partial reading, which
  * the streaming broadcast paths hold for up to `IMPEDANCE_GRACE_MS`, and the
  * reading completes on the `0x06` that follows THAT weigh-in. If none does, the
- * transport forwards the weight on its own when the hold runs out, or at its
- * scan deadline if that comes first. The mqtt-proxy single-shot scan reads one
+ * transport forwards the weight on its own when the hold runs out, even when its
+ * scan deadline comes first: a single-shot scan keeps listening past the
+ * deadline while it holds a reading. The mqtt-proxy single-shot scan reads one
  * scan snapshot and cannot hold, so there the settled weight is sent at once,
  * without waiting for the `0x06`.
  *

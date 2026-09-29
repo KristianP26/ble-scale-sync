@@ -541,8 +541,8 @@ export interface AckProtocol {
  * broadcast paths (every continuous-mode watcher, and the single-shot scans of
  * noble, node-ble, ESPHome proxy and Home Assistant Bluetooth) hold such a
  * partial reading for up to `IMPEDANCE_GRACE_MS`, resolve early on a later
- * complete one, and return the held reading if their scan deadline comes first
- * (Mi Scale 2, Silvergear 108). The mqtt-proxy single-shot scan is the
+ * complete one, and keep listening past their scan deadline until one of those
+ * two happens (Mi Scale 2, Silvergear 108). The mqtt-proxy single-shot scan is the
  * exception: it reads one scan snapshot, cannot wait for a later frame, and
  * returns the partial reading at once when nothing complete is in it.
  */

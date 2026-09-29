@@ -172,22 +172,9 @@ export class GraceTimers {
     this.readings.delete(address);
   }
 
-  /**
-   * Take the reading held longest, cancelling its timer, or null when nothing is
-   * held.
-   *
-   * For a single-shot scan whose own deadline fires while a weight-only reading
-   * is still waiting out its grace. Dropping it there would lose a weigh-in the
-   * scale really finished, and an adapter that has already handed that reading
-   * out (Silvergear 108, #357) does not hand it out again, so the next scan
-   * would not see it either.
-   */
-  takeHeld(): { address: string; reading: RawReading } | null {
-    for (const [address, reading] of this.readings) {
-      this.cancel(address);
-      return { address, reading };
-    }
-    return null;
+  /** True while any weight-only reading is waiting out its grace. */
+  isHolding(): boolean {
+    return this.readings.size > 0;
   }
 
   /** Clear all pending timers and stored readings (teardown). */
@@ -196,6 +183,40 @@ export class GraceTimers {
     this.timers.clear();
     this.readings.clear();
   }
+}
+
+/**
+ * Arm the deadline of a single-shot broadcast scan. Returns a function that
+ * disarms it.
+ *
+ * With nothing held when it fires, `expire` runs and the caller rejects the
+ * scan as it always has. With a weight-only reading held it does nothing and
+ * the scan keeps listening: either a complete frame arrives and resolves it
+ * with the impedance, or the held reading's own grace timer resolves it weight
+ * only (#357). That wait is bounded by `IMPEDANCE_GRACE_MS` from when the
+ * reading was first held, because `GraceTimers.hold` arms its timer once and
+ * does not re-arm it.
+ *
+ * Resolving the held reading AT the deadline instead cost a Mi Scale 2 its
+ * impedance: a stable weight-only frame shortly before the deadline used to
+ * mean a rejection, a quick rescan and then the complete frame, and resolving
+ * it there exported the weight alone. Waiting out the grace keeps both.
+ *
+ * Only the deadline is softened. An abort, or any other failure the caller
+ * rejects with, does not pass through here and stands as before.
+ */
+export function armScanDeadline(ms: number, grace: GraceTimers, expire: () => void): () => void {
+  const timer = setTimeout(() => {
+    if (grace.isHolding()) {
+      bleLog.info(
+        'Scan deadline reached while a weight-only reading waits for impedance; ' +
+          'waiting out its grace before reporting it',
+      );
+      return;
+    }
+    expire();
+  }, ms);
+  return () => clearTimeout(timer);
 }
 
 // ─── Dedup window (per address+weight) ─────────────────────────────────────────

@@ -191,25 +191,64 @@ describe('ha-bluetooth scanAndReadRaw', () => {
     expect(client().stopped).toBe(true);
   });
 
-  // #357: a weigh-in that settles shortly before the scan deadline is still
-  // inside its grace when the deadline fires. It is returned, not dropped.
-  it('resolves with a held weight-only frame when the scan deadline fires during its grace', async () => {
-    const p = scanAndReadRaw({
-      adapters: [makePassiveAdapter()],
-      profile: PROFILE,
-      haBluetooth: CONFIG,
+  // #357: a weigh-in held when the 60 s scan deadline fires is neither dropped
+  // nor resolved at the deadline. The scan keeps listening until a complete
+  // frame arrives or the reading's own grace runs out, so a Mi Scale 2 whose
+  // impedance frame lands just after the deadline keeps it.
+  describe('deadline during a hold (#357)', () => {
+    // Held 5 s before the deadline, then advanced to 1 s past it: 6 s of the
+    // 12 s grace remain.
+    async function startHeldScan(abortSignal?: AbortSignal) {
+      const p = scanAndReadRaw({
+        adapters: [makePassiveAdapter()],
+        profile: PROFILE,
+        haBluetooth: CONFIG,
+        abortSignal,
+      });
+      const state: { settled: boolean; ok?: boolean; r?: Awaited<typeof p>; e?: unknown } = {
+        settled: false,
+      };
+      const outcome = p.then(
+        (r) => Object.assign(state, { settled: true, ok: true, r }),
+        (e: unknown) => Object.assign(state, { settled: true, ok: false, e }),
+      );
+      await vi.advanceTimersByTimeAsync(55_000);
+      client().emit(passive(70, 0), MAC);
+      await vi.advanceTimersByTimeAsync(6_000);
+      return { state, outcome };
+    }
+
+    it('a complete frame after the deadline resolves with its impedance', async () => {
+      const { state, outcome } = await startHeldScan();
+      expect(state.settled).toBe(false);
+      client().emit(passive(70, 120), MAC);
+      await outcome;
+      expect(state.r?.reading).toEqual({ weight: 70, impedance: 120 });
+      expect(client().stopped).toBe(true);
     });
-    const outcome = p.then(
-      (r) => ({ ok: true as const, r }),
-      (e: Error) => ({ ok: false as const, e }),
-    );
-    await vi.advanceTimersByTimeAsync(55_000);
-    client().emit(passive(70, 0), MAC);
-    await vi.advanceTimersByTimeAsync(5_100);
-    const result = await outcome;
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.r.reading).toEqual({ weight: 70, impedance: 0 });
-    expect(client().stopped).toBe(true);
+
+    it('with no complete frame, resolves weight only when the grace runs out, not at the deadline', async () => {
+      const { state, outcome } = await startHeldScan();
+      await vi.advanceTimersByTimeAsync(5_900);
+      expect(state.settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(200);
+      await outcome;
+      expect(state.ok).toBe(true);
+      expect(state.r?.reading).toEqual({ weight: 70, impedance: 0 });
+      expect(client().stopped).toBe(true);
+    });
+
+    it('an abort while holding past the deadline rejects and resolves nothing', async () => {
+      const ac = new AbortController();
+      const { state, outcome } = await startHeldScan(ac.signal);
+      ac.abort(new Error('shutdown'));
+      await outcome;
+      expect(state.ok).toBe(false);
+      expect((state.e as Error).message).toBe('shutdown');
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(state.ok).toBe(false);
+      expect(client().stopped).toBe(true);
+    });
   });
 
   it('propagates a client start failure', async () => {

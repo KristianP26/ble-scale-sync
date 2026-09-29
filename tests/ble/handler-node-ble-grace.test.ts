@@ -224,34 +224,71 @@ describe('handler-node-ble broadcastScanNodeBle grace timer (#163 follow-up)', (
     expect(result.reading.impedance).toBe(0);
   });
 
-  // #357: a weigh-in that settles shortly before the poll deadline is still
-  // inside its grace when the deadline fires. It is returned, not dropped.
-  it('deadline during a hold: resolves with the held weight-only reading', async () => {
-    vi.useFakeTimers({
-      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+  // #357: a weigh-in held when the poll deadline passes is neither dropped nor
+  // resolved at the deadline. The scan keeps listening until a complete frame
+  // arrives or the reading's own grace runs out, so a Mi Scale 2 whose
+  // impedance frame lands just after the deadline keeps it.
+  describe('deadline during a hold (#357)', () => {
+    // Held 5 s before the deadline, then advanced to 1 s past it: 6 s of the
+    // 12 s grace remain.
+    async function startHeldScan(
+      mode: 'partial-then-complete' | 'always-partial',
+      abortSignal?: AbortSignal,
+    ) {
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+      });
+      const { DISCOVERY_TIMEOUT_MS } = await import('../../src/ble/types.js');
+      const device = makeDevice();
+      const p = _internals.broadcastScanNodeBle(
+        makePassiveAdapter(mode),
+        makeAdapter() as never,
+        device as never,
+        'AA:BB:CC:DD:EE:FF',
+        { abortSignal },
+      );
+      const state: { settled: boolean; ok?: boolean; r?: Awaited<typeof p>; e?: unknown } = {
+        settled: false,
+      };
+      const outcome = p.then(
+        (r) => Object.assign(state, { settled: true, ok: true, r }),
+        (e: unknown) => Object.assign(state, { settled: true, ok: false, e }),
+      );
+      await new Promise((r) => setImmediate(r));
+      await vi.advanceTimersByTimeAsync(DISCOVERY_TIMEOUT_MS - 5_000);
+      device.helper.emit('PropertiesChanged', { ServiceData: serviceDataPayload() }); // held
+      await vi.advanceTimersByTimeAsync(6_000);
+      return { state, outcome, device };
+    }
+
+    it('a complete frame after the deadline resolves with its impedance', async () => {
+      const { state, outcome, device } = await startHeldScan('partial-then-complete');
+      expect(state.settled).toBe(false);
+      device.helper.emit('PropertiesChanged', { ServiceData: serviceDataPayload() });
+      await outcome;
+      expect(state.r?.reading).toEqual({ weight: 70.0, impedance: 500 });
     });
-    const { DISCOVERY_TIMEOUT_MS } = await import('../../src/ble/types.js');
-    const device = makeDevice();
-    const promise = _internals.broadcastScanNodeBle(
-      makePassiveAdapter('always-partial'),
-      makeAdapter() as never,
-      device as never,
-      'AA:BB:CC:DD:EE:FF',
-      {},
-    );
-    const outcome = promise.then(
-      (r) => ({ ok: true as const, r }),
-      (e: Error) => ({ ok: false as const, e }),
-    );
 
-    await new Promise((r) => setImmediate(r));
-    await vi.advanceTimersByTimeAsync(DISCOVERY_TIMEOUT_MS - 5_000);
-    device.helper.emit('PropertiesChanged', { ServiceData: serviceDataPayload() });
-    await vi.advanceTimersByTimeAsync(5_600);
+    it('with no complete frame, resolves weight only when the grace runs out, not at the deadline', async () => {
+      const { state, outcome } = await startHeldScan('always-partial');
+      await vi.advanceTimersByTimeAsync(IMPEDANCE_GRACE_MS - 6_000 - 100);
+      expect(state.settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(200);
+      await outcome;
+      expect(state.ok).toBe(true);
+      expect(state.r?.reading).toEqual({ weight: 70.0, impedance: 0 });
+    });
 
-    const result = await outcome;
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.r.reading).toEqual({ weight: 70.0, impedance: 0 });
+    it('an abort while holding past the deadline rejects and resolves nothing', async () => {
+      const ac = new AbortController();
+      const { state, outcome } = await startHeldScan('always-partial', ac.signal);
+      ac.abort(new Error('shutdown'));
+      await outcome;
+      expect(state.ok).toBe(false);
+      expect((state.e as Error).message).toBe('shutdown');
+      await vi.advanceTimersByTimeAsync(IMPEDANCE_GRACE_MS);
+      expect(state.ok).toBe(false);
+    });
   });
 
   it('deadline with nothing held: rejects as before', async () => {

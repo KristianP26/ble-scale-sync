@@ -211,7 +211,20 @@ export async function broadcastScanNodeBle(
     // the PropertiesChanged subscription is established).
     const deadline = Date.now() + DISCOVERY_TIMEOUT_MS;
     (async () => {
-      while (!done && Date.now() < deadline) {
+      // Past the deadline the loop keeps going only while a weight-only reading
+      // is waiting out its grace, so a complete frame can still resolve it with
+      // the impedance. The grace timer ends that wait itself, at most
+      // IMPEDANCE_GRACE_MS after the reading was first held (#357, see
+      // armScanDeadline for the same rule on the other transports).
+      let deadlineLogged = false;
+      while (!done && (Date.now() < deadline || graceTimer !== null)) {
+        if (!deadlineLogged && Date.now() >= deadline) {
+          deadlineLogged = true;
+          bleLog.info(
+            'Scan deadline reached while a weight-only reading waits for impedance; ' +
+              'waiting out its grace before reporting it',
+          );
+        }
         if (abortSignal?.aborted) break;
         try {
           const helper = helperOf(device);
@@ -250,17 +263,6 @@ export async function broadcastScanNodeBle(
         }
         await sleep(500);
         if (done) break;
-      }
-      // A weight-only reading still inside its grace is a weigh-in the scale
-      // finished: return it rather than drop it with the timeout (#357). Not on
-      // an abort, which onAbort has already turned into a rejection.
-      if (!done && bestWeightOnly && !abortSignal?.aborted) {
-        const held: RawReading = bestWeightOnly;
-        bleLog.info(
-          `Broadcast reading (weight only, scan deadline reached while waiting for impedance): ` +
-            `${held.reading.weight.toFixed(2)} kg`,
-        );
-        finish(held);
       }
       if (!done) {
         fail(
