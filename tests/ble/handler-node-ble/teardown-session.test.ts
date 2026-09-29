@@ -42,7 +42,8 @@ vi.mock('../../../src/ble/handler-node-ble/discovery.js', async (importOriginal)
   return { ...actual, removeDevice: h.removeDevice, notifyDiscoveryStopped: () => {} };
 });
 
-const { teardownSession } = await import('../../../src/ble/handler-node-ble/scan-stages.js');
+const { teardownSession, _resetPreemptiveSkipNotice } =
+  await import('../../../src/ble/handler-node-ble/scan-stages.js');
 const { bleLog } = await import('../../../src/ble/types.js');
 
 /** A BlueZ adapter stub whose only reachable surface is helper.callMethod. */
@@ -100,6 +101,16 @@ describe('teardownSession preemptive power-cycle (#417)', () => {
     expect(debug).toHaveBeenCalledWith(
       expect.stringContaining('ble.preemptive_adapter_reset: false'),
     );
+  });
+
+  it('says once at info that the power-cycle is off, so it shows without DEBUG', async () => {
+    _resetPreemptiveSkipNotice();
+    const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    await teardownSession(gattCycle({ preemptiveAdapterReset: false }));
+    await teardownSession(gattCycle({ preemptiveAdapterReset: false }));
+    const lines = info.mock.calls.filter(([m]) => String(m).includes('preemptive_adapter_reset'));
+    expect(lines).toHaveLength(1);
+    info.mockRestore();
   });
 
   it('keeps the failed-GATT cleanup when the option is false', async () => {

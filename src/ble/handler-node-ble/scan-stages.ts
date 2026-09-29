@@ -340,6 +340,14 @@ export async function buildCharMapWithRetry(
 }
 
 /** Post-session cleanup. Everything here is best effort; nothing may throw out. */
+/** Whether the one-time info line for a disabled power-cycle was printed (#417). */
+let preemptiveSkipAnnounced = false;
+
+/** Test hook: forget that the info line was printed. */
+export function _resetPreemptiveSkipNotice(): void {
+  preemptiveSkipAnnounced = false;
+}
+
 export async function teardownSession(opts: {
   device: Device | null;
   btAdapter: Adapter | undefined;
@@ -426,6 +434,15 @@ export async function teardownSession(opts: {
       resetConnection();
       bleLog.debug('D-Bus connection reset after GATT operation');
       if (!preemptiveAdapterReset) {
+        // Once at info, so a reporter testing #417 can see the option took
+        // effect without DEBUG; every cycle after that at debug.
+        if (!preemptiveSkipAnnounced) {
+          preemptiveSkipAnnounced = true;
+          bleLog.info(
+            'ble.preemptive_adapter_reset is false: the Bluetooth adapter is no longer ' +
+              'power-cycled after each GATT session.',
+          );
+        }
         bleLog.debug(
           'Skipping the preemptive btmgmt power-cycle after GATT (ble.preemptive_adapter_reset: false)',
         );
