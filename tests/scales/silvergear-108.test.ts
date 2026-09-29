@@ -27,6 +27,14 @@ const IDLE = 'a02ca0a00db9';
 const SETTLED_108 = '202d07600da1';
 /** The same weight one frame earlier, still settling (bit 7 clear). */
 const SETTLING_108 = 'a02d07600da1';
+/**
+ * Settling frames from the same session's step-on stream, verbatim. None of the
+ * captures records a step-off, so these stand in for the load changing: 39.60 kg
+ * (far from the settled weight) and 107.03 kg, the farthest the stream strays
+ * below 108.48 kg while the reporter stands on it (1.45 kg).
+ */
+const SETTLING_39_6 = 'a02c3a100da3';
+const SETTLING_107 = 'a02d02b60db2';
 /** Settled 5.610 kg. The scale displayed 5.6. */
 const SETTLED_5_6 = '202cb54a0db8';
 /** Post-weigh-in body frame from the 108.5 kg session (type 0x06). */
@@ -308,10 +316,31 @@ describe('Silvergear108Adapter (#297)', () => {
       expect(at(BODY_FRAME_WINDOW_MS + 1, SETTLED_108).reading).toBeNull();
     });
 
-    it('does not pair across a settling frame, which ends the weigh-in', () => {
+    it('does not pair across a step-off, which ends the weigh-in', () => {
       at(0, SETTLED_108);
-      at(500, SETTLING_108);
+      at(500, SETTLING_39_6);
       expect(at(1000, BODY_108).reading).toBeNull();
+    });
+
+    // The settled bit dropping for a frame, or the same person shifting and the
+    // scale re-settling, is not a step-off. Ending the weigh-in there reported it
+    // at once and then again once it re-settled: two exports of one weigh-in.
+    it('does not end the weigh-in on a settling frame close to its weight', () => {
+      at(0, SETTLED_108);
+      expect(at(300, SETTLING_108)).toEqual({ reading: null, complete: false });
+      expect(at(600, SETTLING_107)).toEqual({ reading: null, complete: false });
+      expect(at(900, SETTLED_108).complete).toBe(false);
+      expect(at(1500, BODY_108)).toEqual({
+        reading: { weight: 108.48, impedance: 0 },
+        complete: true,
+      });
+    });
+
+    it('ends it on the idle frame, and on a settling frame more than 5 kg away', () => {
+      at(0, SETTLED_108);
+      expect(at(500, IDLE).complete).toBe(true);
+      at(1000, SETTLED_108);
+      expect(at(1500, SETTLING_39_6).complete).toBe(true);
     });
 
     it('closes a weigh-in once: neither its 0x06 nor its weight completes again', () => {
@@ -352,20 +381,20 @@ describe('Silvergear108Adapter (#297)', () => {
     });
 
     // Two people, or one stepping off and back on. The first steps off before
-    // any 0x06, so the settling frame that follows ends their weigh-in while the
+    // any 0x06, so the step-off that follows ends their weigh-in while the
     // transport is still holding it. The transport keeps one held reading per
     // address, so a second weigh-in in that hold would overwrite the first and
-    // it would be lost. The first is completed from the settling frame instead,
+    // it would be lost. The first is completed from the step-off instead,
     // weight only, which makes the transport export it at once and drop its
     // grace timer; the second then gets a hold, and a pairing window, of its own.
     it('exports a weigh-in that ends before its 0x06, and gives the next its own hold', () => {
       at(0, SETTLED_108);
-      expect(at(3000, SETTLING_108)).toEqual({
+      expect(at(3000, SETTLING_39_6)).toEqual({
         reading: { weight: 108.48, impedance: 0 },
         complete: true,
       });
-      // Re-reads of the settling stream, and a late 0x06, add nothing to it.
-      expect(at(3500, SETTLING_108).reading).toBeNull();
+      // The idle frame that follows, and a late 0x06, add nothing to it.
+      expect(at(3500, IDLE).reading).toBeNull();
       expect(at(6000, '202d099c0dff')).toEqual({
         reading: { weight: 108.86, impedance: 0 },
         complete: false,
@@ -379,7 +408,7 @@ describe('Silvergear108Adapter (#297)', () => {
 
     it('does not pair a late 0x06 with a weigh-in its step-off already reported', () => {
       at(0, SETTLED_108);
-      expect(at(3000, SETTLING_108).complete).toBe(true);
+      expect(at(3000, SETTLING_39_6).complete).toBe(true);
       expect(at(3500, BODY_108).reading).toBeNull();
       expect(at(4000, IDLE).reading).toBeNull();
     });
@@ -390,7 +419,7 @@ describe('Silvergear108Adapter (#297)', () => {
     // after the timer had already exported the hold, two exports of one hold.
     it('leaves a weigh-in that ends past the window to the transport, and keeps its hold', () => {
       at(0, SETTLED_108);
-      expect(at(BODY_FRAME_WINDOW_MS + 1, SETTLING_108).reading).toBeNull();
+      expect(at(BODY_FRAME_WINDOW_MS + 1, IDLE).reading).toBeNull();
       expect(at(BODY_FRAME_WINDOW_MS + 500, '202d099c0dff').reading).toEqual({
         weight: 108.86,
         impedance: 0,
@@ -402,11 +431,11 @@ describe('Silvergear108Adapter (#297)', () => {
     // event loop and possibly late, so a new hold waits a second past it.
     it('starts a fresh hold only a second after the last one can have run out', () => {
       at(0, SETTLED_108);
-      at(BODY_FRAME_WINDOW_MS + 1, SETTLING_108);
+      at(BODY_FRAME_WINDOW_MS + 1, IDLE);
       at(IMPEDANCE_GRACE_MS + 999, SETTLED_108);
       expect(at(IMPEDANCE_GRACE_MS + 1500, BODY_108).reading).toBeNull();
 
-      at(IMPEDANCE_GRACE_MS + 2000, SETTLING_108);
+      at(IMPEDANCE_GRACE_MS + 2000, SETTLING_39_6);
       at(IMPEDANCE_GRACE_MS + 2500, IDLE);
       at(IMPEDANCE_GRACE_MS + 3000, SETTLED_108);
       expect(at(IMPEDANCE_GRACE_MS + 3500, BODY_108).complete).toBe(true);
@@ -414,7 +443,7 @@ describe('Silvergear108Adapter (#297)', () => {
 
     it('opens the new hold exactly a second after the grace, not a millisecond sooner', () => {
       at(0, SETTLED_108);
-      at(BODY_FRAME_WINDOW_MS + 1, SETTLING_108);
+      at(BODY_FRAME_WINDOW_MS + 1, IDLE);
       at(IMPEDANCE_GRACE_MS + 1000, SETTLED_108);
       expect(at(IMPEDANCE_GRACE_MS + 1500, BODY_108).complete).toBe(true);
     });

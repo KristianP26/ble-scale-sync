@@ -431,7 +431,7 @@ describe('ha-bluetooth ReadingWatcher with the Silvergear 108', () => {
 
     client().emit(SETTLED, MAC);
     await vi.advanceTimersByTimeAsync(3_000);
-    client().emit(sg('a02d07600da1'), MAC); // settling: the first person stepped off
+    client().emit(sg('a02ca0a00db9'), MAC); // idle at 0 kg: the first person stepped off
     expect((await w.nextReading()).reading).toEqual({ weight: 108.48, impedance: 0 });
 
     await vi.advanceTimersByTimeAsync(3_000);

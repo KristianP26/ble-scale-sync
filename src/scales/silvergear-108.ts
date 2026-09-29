@@ -137,8 +137,8 @@ export const BODY_FRAME_WINDOW_MS = 8_000;
 /**
  * How long a weigh-in is remembered at all, counted from its first settled frame.
  *
- * Normally a new weigh-in is recognised by the settling stream in front of it,
- * which clears the last one. If that stream was missed (discovery finishing
+ * Normally a new weigh-in is recognised by the step-off in front of it, which
+ * clears the last one (see STEP_OFF_DELTA_KG). If that step-off was missed (discovery finishing
  * after the scale settled) and the new weigh-in happens to land on exactly the
  * same grams as a remembered, already paired one, it would be taken for a
  * repeat and dropped. Forgetting a weigh-in after a minute bounds that. The
@@ -146,6 +146,24 @@ export const BODY_FRAME_WINDOW_MS = 8_000;
  * stream takes over, so a settled frame this late is a new weigh-in.
  */
 const WEIGH_IN_MEMORY_MS = 60_000;
+
+/**
+ * How far a settling frame must move from the weigh-in's settled weight before
+ * it counts as the person stepping off.
+ *
+ * A settling frame is not proof of a step-off. The settled bit could flicker,
+ * or the person could shift their weight and the scale re-settle, and ending
+ * the weigh-in on that exports it a second time. None of the four #297 captures
+ * shows the bit dropping between the first settled frame and the `0x06` stream,
+ * but none shows a step-off either, so the rule is built from what they do
+ * show: while someone is standing on the scale and it converges, the settling
+ * stream strays at most 2.38 kg from the weight it then settles on (106.48 kg
+ * against 108.86 kg in the 17 st 2 lb capture; 107.03 and 109.83 kg against
+ * 108.48 kg in the 108.5 kg one). Twice that, rounded up, is 5 kg. A step-off
+ * runs down towards the idle 0 kg frame and crosses it at once, and a frame
+ * below WEIGHT_MIN_KG counts as a step-off whatever the weight was.
+ */
+const STEP_OFF_DELTA_KG = 5;
 
 /**
  * How long after a hold began a new weigh-in may start another one.
@@ -178,7 +196,7 @@ interface UnitState {
    * This is what the pairing window is measured from, not `settledAt`, because
    * it is what the transport's grace timer is measured from: that timer is armed
    * by the first weight-only reading and is NOT re-armed by later ones until it
-   * has fired. A settling stream in between (someone stepping off and back on)
+   * has fired. A step-off in between (someone stepping off and back on)
    * past the pairing window ends the weigh-in but not the timer, so measuring
    * from the second weigh-in would let its `0x06` complete after the timer had
    * already exported it. Inside the window the step-off completes the first
@@ -334,11 +352,13 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
     // showed. It is surfaced through `parseLiveBroadcast` instead, whose return
     // type cannot reach an exporter.
     if ((flags & FLAG_SETTLED) === 0) {
-      // Whatever weigh-in this unit had is over: the scale is converging on a
-      // new number, or idle at zero. Cleared whether or not it was paired, so a
-      // new weigh-in that lands on the same grams is not mistaken for a repeat.
+      // A step-off ends whatever weigh-in this unit had: the scale is idle at
+      // zero, or converging on a clearly different number. Cleared whether or
+      // not it was paired, so a new weigh-in that lands on the same grams is not
+      // mistaken for a repeat. A settling frame close to the settled weight is
+      // the same person still standing there and ends nothing.
       const state = this.units.get(mac);
-      const ended = state ? this.endWeighIn(state) : null;
+      const ended = state && this.isStepOff(state, weight) ? this.endWeighIn(state) : null;
       // Log the value, not the poll. The node-ble broadcast path re-reads
       // BlueZ's cached ManufacturerData on a timer as a fallback for
       // PropertiesChanged, so an unchanged advertisement is re-parsed several
@@ -437,8 +457,15 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
     return null;
   }
 
+  /** A settling frame that means the person stepped off; see STEP_OFF_DELTA_KG. */
+  private isStepOff(state: UnitState, weight: number): boolean {
+    if (!state.weighIn) return false;
+    if (weight < WEIGHT_MIN_KG) return true;
+    return Math.abs(weight - state.weighIn.grams / 1000) > STEP_OFF_DELTA_KG;
+  }
+
   /**
-   * End this unit's weigh-in on a settling or idle frame. Returns a completed
+   * End this unit's weigh-in on a step-off. Returns a completed
    * weight-only reading when the weigh-in ended unpaired while its hold was
    * still inside the pairing window, and null otherwise.
    *
