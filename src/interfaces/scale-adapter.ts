@@ -350,7 +350,9 @@ export interface ScaleAdapterCore {
    * so `parseBroadcast` / `parseServiceData` run without it ever firing. Adding
    * a broadcast parser to an adapter that relies on this reset would silently
    * bypass it; today every such adapter either has no broadcast parser or, like
-   * `eufy-p2`, has a stateless one.
+   * `eufy-p2`, has a stateless one. `silvergear-108` is broadcast only and keeps
+   * gating state across advertisements, so it keys that state by the MAC in its
+   * own payload instead of relying on this hook.
    *
    * Must not throw and must not perform I/O: nothing is connected yet. Reading
    * a value the adapter already recorded is fine, which is what the address is
@@ -531,6 +533,13 @@ export interface AckProtocol {
  * `completionHoldMs`, still feeding frames, so a richer reading (e.g.
  * bioimpedance composition arriving a few seconds after the weight settles) can
  * land. On timeout the last complete reading resolves.
+ *
+ * GATT only. It is read by `waitForRawReading` and nowhere on the broadcast
+ * path, which some adapters rely on (`eufy-p2` declares it for its GATT session
+ * and also parses broadcasts). The broadcast equivalent is `preferPassive` with
+ * an `isComplete` that returns false for the early reading: every broadcast
+ * transport holds such a partial reading for `IMPEDANCE_GRACE_MS` and resolves
+ * early on a later complete one (Mi Scale 2, Silvergear 108).
  */
 export interface HoldForComposition {
   /**

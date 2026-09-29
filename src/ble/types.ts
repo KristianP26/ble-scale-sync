@@ -119,6 +119,11 @@ export const LIVENESS_PROBE_WINDOW_MS = 3_000;
  * a final frame with impedance once the measurement completes (~10-20 s on device).
  * If an impedance-bearing frame arrives within this window the complete reading is
  * used; otherwise the weight-only reading is forwarded as a fallback.
+ *
+ * The Silvergear 108 uses the same hold for its post-weigh-in frame, and its
+ * `BODY_FRAME_WINDOW_MS` must stay below this value: the proxy watchers queue
+ * the fallback without recording it for dedup, so a frame paired after the
+ * fallback would export the weigh-in twice (#357). A test pins the ordering.
  */
 export const IMPEDANCE_GRACE_MS = 12_000;
 
