@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Silvergear108Adapter } from '../../src/scales/silvergear-108.js';
 import { adapters } from '../../src/scales/index.js';
 import { resolveAdapter } from '../../src/scales/resolve.js';
@@ -43,7 +43,13 @@ function advert(payloadHex = SETTLED_108, uuids: string[] = ['ffb0']): BleDevice
 }
 
 describe('Silvergear108Adapter (#297)', () => {
-  const adapter = new Silvergear108Adapter();
+  // A fresh adapter per case. The registry hands out one shared instance, and an
+  // adapter that remembers a weigh-in would otherwise carry it from one case into
+  // the next, so a case could pass or fail on the order it runs in.
+  let adapter: Silvergear108Adapter;
+  beforeEach(() => {
+    adapter = new Silvergear108Adapter();
+  });
 
   describe('matches() and registry resolution', () => {
     it('claims the captured advertisement', () => {
