@@ -119,6 +119,62 @@ describe('withIdleTimeout()', () => {
       vi.useRealTimers();
     }
   });
+
+  it('keeps a requested minimum idle window even when later activity arrives (#434)', async () => {
+    vi.useFakeTimers();
+    try {
+      let signal!: (minIdleMs?: number) => void;
+      let finish!: (v: string) => void;
+      let failure: unknown = null;
+      const result = withIdleTimeout(
+        (onActivity) => {
+          signal = onActivity;
+          return new Promise<string>((resolve) => {
+            finish = resolve;
+          });
+        },
+        1000,
+        'idle',
+      );
+      result.catch((e: unknown) => {
+        failure = e;
+      });
+      signal(5000);
+      // A plain frame later must not pull the deadline back to 1 s from now.
+      await vi.advanceTimersByTimeAsync(500);
+      signal();
+      await vi.advanceTimersByTimeAsync(4400);
+      expect(failure).toBeNull();
+      finish('reading');
+      await expect(result).resolves.toBe('reading');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('falls back to the plain idle window once the requested minimum has passed', async () => {
+    vi.useFakeTimers();
+    try {
+      let signal!: (minIdleMs?: number) => void;
+      const result = withIdleTimeout(
+        (onActivity) => {
+          signal = onActivity;
+          return new Promise<never>(() => {});
+        },
+        1000,
+        'idle',
+      );
+      const outcome = expect(result).rejects.toThrow('idle');
+      signal(2000);
+      await vi.advanceTimersByTimeAsync(1500);
+      signal();
+      // The floor ends at 2000; from 1500 the plain 1000 ms window applies.
+      await vi.advanceTimersByTimeAsync(1000);
+      await outcome;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('normalizeUuid, the only one (#406)', () => {

@@ -511,6 +511,13 @@ async function subscribeAndInit(
  */
 const MAX_HISTORY_FRAMES = 500;
 
+/**
+ * Margin by which a composition hold keeps the caller's idle timeout away, so
+ * the hold's own timer, which resolves with the settled weight, always fires
+ * first.
+ */
+const HOLD_IDLE_SLACK_MS = 2_000;
+
 /** Raw scale reading paired with the adapter that produced it. */
 export interface RawReading {
   reading: ScaleReading;
@@ -548,7 +555,7 @@ export function waitForRawReading(
   weightUnit?: WeightUnit,
   onLiveData?: (reading: ScaleReading) => void,
   scaleAuth?: ScaleAuth,
-  onActivity?: () => void,
+  onActivity?: (minIdleMs?: number) => void,
 ): Promise<RawReading> {
   return new Promise<RawReading>((resolve, reject) => {
     let resolved = false;
@@ -572,6 +579,10 @@ export function waitForRawReading(
       (r) => {
         if (!resolved) finishWith(r);
       },
+      // The scale may say nothing for the whole window. Without this a
+      // session_timeout_sec shorter than the hold ends the session first, and
+      // the caller's timeout discards the settled weight along with it (#434).
+      (holdMs) => onActivity?.(holdMs + HOLD_IDLE_SLACK_MS),
     );
 
     // Raw frame capture (#211): log every notify frame and hold the connection

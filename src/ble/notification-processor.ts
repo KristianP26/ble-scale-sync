@@ -75,6 +75,8 @@ export class HoldTimer {
   constructor(
     private readonly holdMs: number | (() => number),
     private readonly onElapsed: (reading: ScaleReading) => void,
+    /** Called once when the window arms, with its length (see withIdleTimeout). */
+    private readonly onArm?: (holdMs: number) => void,
   ) {}
 
   hold(reading: ScaleReading): void {
@@ -85,6 +87,7 @@ export class HoldTimer {
       `Weight stable; holding connection up to ` +
         `${Math.round(holdMs / 1000)}s for body composition...`,
     );
+    this.onArm?.(holdMs);
     this.timer = setTimeout(() => {
       this.timer = null;
       const r = this.held;

@@ -232,9 +232,17 @@ export { withTimeout } from '../utils/timeout.js';
  * invoked: the returned promise rejects after `ms` with no activity. Like
  * withTimeout, the promise from `start` is abandoned rather than cancelled, so
  * callers must still tear down whatever it holds.
+ *
+ * `onActivity(minIdleMs)` additionally promises that the session is waiting on
+ * purpose for at least that long, and later activity does not shorten it. A
+ * composition hold uses this: after the weight settles a scale can stay silent
+ * for longer than a short `session_timeout_sec`, and the idle timeout winning
+ * that race drops the settled weight together with the composition it was
+ * waiting for. The hold is bounded by its own timer, so this cannot keep a
+ * session open indefinitely.
  */
 export async function withIdleTimeout<T>(
-  start: (onActivity: () => void) => Promise<T>,
+  start: (onActivity: (minIdleMs?: number) => void) => Promise<T>,
   ms: number,
   message: string,
 ): Promise<T> {
@@ -243,9 +251,12 @@ export async function withIdleTimeout<T>(
   const timeout = new Promise<never>((_resolve, reject) => {
     rejectTimeout = reject;
   });
-  const onActivity = (): void => {
+  let floorAt = 0;
+  const onActivity = (minIdleMs?: number): void => {
+    const now = Date.now();
+    if (minIdleMs !== undefined && minIdleMs > 0) floorAt = Math.max(floorAt, now + minIdleMs);
     clearTimeout(timer);
-    timer = setTimeout(() => rejectTimeout(new Error(message)), ms);
+    timer = setTimeout(() => rejectTimeout(new Error(message)), Math.max(ms, floorAt - now));
   };
   onActivity();
   try {

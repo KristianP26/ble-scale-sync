@@ -1814,6 +1814,42 @@ describe('waitForRawReading() under the native idle deadline', () => {
       vi.useRealTimers();
     }
   });
+
+  // A composition hold longer than the idle deadline, on a scale that says
+  // nothing more after the weight settles. Before #434 the idle timeout won
+  // this race and the settled weight was discarded with the session.
+  it('lets a composition hold outlast the idle deadline and settle on the held weight', async () => {
+    vi.useFakeTimers();
+    try {
+      const notifyChar = createMockChar();
+      const device = createMockDevice();
+      const adapter = createLegacyAdapter({
+        unlockCommand: undefined,
+        completionHoldMs: IDLE_MS * 5,
+        parseNotification: vi.fn(() => ({ weight: 81.55, impedance: 0 })),
+        isComplete: () => true,
+        isFinal: () => false,
+      });
+
+      const promise = runWithIdle(adapter, notifyChar, device);
+      let failure: unknown = null;
+      promise.catch((e: unknown) => {
+        failure = e;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      notifyChar.triggerData(Buffer.from([0x01]));
+
+      // Several idle windows of silence, still inside the hold.
+      await vi.advanceTimersByTimeAsync(IDLE_MS * 4);
+      expect(failure).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(IDLE_MS);
+      const result = await promise;
+      expect(result.reading).toEqual({ weight: 81.55, impedance: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ─── getRawCaptureConfig + toHex ─────────────────────────────────────────────
