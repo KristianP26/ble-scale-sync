@@ -12,7 +12,8 @@ import { withIdleTimeout } from '../../src/ble/types.js';
 import type { BleChar, BleDevice } from '../../src/ble/shared.js';
 import { normalizeUuid, bleLog } from '../../src/ble/types.js';
 import { KoogeekS1Adapter } from '../../src/scales/koogeek-s1.js';
-import { uuid16, xorChecksum } from '../../src/scales/body-comp-helpers.js';
+import { RenphoMsc04Adapter } from '../../src/scales/renpho-msc04.js';
+import { uuid16, xorChecksum, buildPayload } from '../../src/scales/body-comp-helpers.js';
 import type {
   ScaleAdapter,
   ScaleReading,
@@ -1979,6 +1980,114 @@ describe('completionHoldMs through waitForRawReading', () => {
       // No timer advance: a final frame must not wait out the window.
       const raw = await promise;
       expect(raw.reading.impedance).toBe(500);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ─── R-MSC04 composition hold, end to end (#434) ────────────────────────────
+
+// The real adapter through the real session, with the frame spacing of the
+// captures. The adapter tests pin what isComplete/isFinal answer; these pin
+// that the session stays open past the 0x24 weight and settles on the record.
+describe('R-MSC04 composition hold through waitForRawReading (#434)', () => {
+  const hex = (h: string): Buffer => Buffer.from(h, 'hex');
+  const PROFILE_187: UserProfile = { height: 187, age: 30, gender: 'male', isAthlete: false };
+
+  async function startSession() {
+    const write = createMockChar();
+    const notify = createMockChar();
+    const indicate = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [uuid16(0x2a11), write],
+      [uuid16(0x2a10), notify],
+      [uuid16(0x2a12), indicate],
+    ]);
+    const adapter = new RenphoMsc04Adapter();
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, 'AABBCCDDEEFF');
+    let settled = false;
+    void promise.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await vi.waitFor(() => expect(indicate.subscribeCalled).toBe(true));
+    await vi.advanceTimersByTimeAsync(0);
+    return { write, notify, indicate, device, adapter, promise, isSettled: () => settled };
+  }
+
+  it('holds past the 0x24 weight and settles on the record, with the capture spacing', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession();
+      // #117 capture, second connection (20:28:09.513 .. 20:28:30.363).
+      s.indicate.triggerData(hex('55aa200005000101005076'));
+      s.notify.triggerData(hex('55aa2100050100002558a3'));
+      await vi.advanceTimersByTimeAsync(270);
+      s.notify.triggerData(hex('55aa2100050100002558a3'));
+      await vi.advanceTimersByTimeAsync(270);
+      s.indicate.triggerData(hex('55aa240006011100002553b3')); // 14.253, 95.55 kg
+
+      await vi.advanceTimersByTimeAsync(6165);
+      s.indicate.triggerData(hex('55aa200005020901005080')); // 20.418, weight locked
+      await vi.advanceTimersByTimeAsync(9630);
+      s.indicate.triggerData(hex('55aa200005031101005089')); // 30.048, complete
+      await vi.advanceTimersByTimeAsync(135);
+      s.indicate.triggerData(hex('ad040255aa2500240411000025530a00de0c200b'));
+      await vi.advanceTimersByTimeAsync(91);
+      s.indicate.triggerData(hex('ae0401ef08e4092a00ae0ac10a9007e108250100'));
+      await vi.advanceTimersByTimeAsync(89);
+      expect(s.isSettled(), 'the 0x24 weight alone must not end the session').toBe(false);
+
+      s.indicate.triggerData(hex('af0400ed011101b70008ea'));
+      const raw = await s.promise;
+      expect(raw.reading).toEqual({ weight: 95.55, impedance: 0 });
+      expect(s.adapter.isFinal(raw.reading)).toBe(true);
+      expect(s.adapter.computeMetrics(raw.reading, PROFILE_187).bodyFatPercent).toBe(23.7);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles weight-only on the 0x24 weight when no record arrives within 30 s', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession();
+      // #434, vossitch's DEBUG log.
+      s.indicate.triggerData(hex('55aa20000500010100466c'));
+      s.notify.triggerData(hex('55aa21000501000022b0f8')); // 88.80
+      await vi.advanceTimersByTimeAsync(270);
+      s.notify.triggerData(hex('55aa2100050100001fe025')); // 81.60
+      await vi.advanceTimersByTimeAsync(135);
+      s.indicate.triggerData(hex('55aa240006011100001fdb35')); // settled 81.55
+      // A live frame after the settled weight must not replace the held one.
+      await vi.advanceTimersByTimeAsync(270);
+      s.notify.triggerData(hex('55aa21000501000022b0f8'));
+
+      await vi.advanceTimersByTimeAsync(30_000 - 271);
+      expect(s.isSettled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual({ weight: 81.55, impedance: 0 });
+      expect(s.adapter.computeMetrics(raw.reading, PROFILE)).toEqual(
+        buildPayload(81.55, 0, {}, PROFILE),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles on the held weight at once when the scale disconnects during the hold', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession();
+      s.indicate.triggerData(hex('55aa240006011100001fdb35'));
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(s.isSettled()).toBe(false);
+      s.device.triggerDisconnect();
+      const raw = await s.promise;
+      expect(raw.reading).toEqual({ weight: 81.55, impedance: 0 });
     } finally {
       vi.useRealTimers();
     }
