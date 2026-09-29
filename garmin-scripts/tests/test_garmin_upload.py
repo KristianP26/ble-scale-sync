@@ -141,5 +141,30 @@ class FailureReportingTest(unittest.TestCase):
         self.assertEqual(code, 1)
 
 
+class MissingTokenTest(unittest.TestCase):
+    """#435: no token file used to surface as "Username and password are required"."""
+
+    def test_names_the_missing_token_file_before_trying_to_log_in(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as empty_dir:
+            with mock.patch.object(garmin_upload, "Garmin") as garmin_cls:
+                with self.assertRaises(RuntimeError) as ctx:
+                    garmin_upload.get_garmin_client(empty_dir)
+
+        self.assertIn("garmin_tokens.json is missing", str(ctx.exception))
+        garmin_cls.assert_not_called()
+
+    def test_logs_in_when_the_token_file_is_there(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as token_dir:
+            open(os.path.join(token_dir, "garmin_tokens.json"), "w").close()
+            with mock.patch.object(garmin_upload, "Garmin") as garmin_cls:
+                garmin_upload.get_garmin_client(token_dir)
+
+        garmin_cls.return_value.login.assert_called_once_with(token_dir)
+
+
 if __name__ == "__main__":
     unittest.main()

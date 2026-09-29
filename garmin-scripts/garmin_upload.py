@@ -62,6 +62,18 @@ def get_garmin_client(token_dir=None):
             "(or 'npm run setup-garmin' from a checkout) to re-authenticate."
         )
 
+    # Without a token file, garminconnect falls through to a credential login
+    # with none set and fails with "Username and password are required", which
+    # sends people checking credentials that were never the problem (#435).
+    if not (Path(token_dir) / "garmin_tokens.json").is_file():
+        raise RuntimeError(
+            f"No Garmin token in {token_dir} (garmin_tokens.json is missing), "
+            "so Garmin authentication has not succeeded yet. "
+            "Run 'ble-scale-sync setup-garmin' "
+            "(or 'npm run setup-garmin' from a checkout); in the Home Assistant "
+            "add-on, check the Garmin lines in the add-on's startup log."
+        )
+
     garmin = Garmin()
     garmin.login(token_dir)
     log("[Garmin] Authenticated.")
