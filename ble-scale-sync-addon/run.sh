@@ -450,12 +450,12 @@ if [ "$CUSTOM_CONFIG" != "true" ] && [ "$GARMIN_ENABLED" = "true" ] \
   # Option 2: auto-authenticate if tokens still missing
   if [ ! -f "$TOKEN_DIR/garmin_tokens.json" ]; then
     log "Garmin tokens missing, authenticating with provided credentials..."
-    if python3 /app/garmin-scripts/setup_garmin.py --from-config "$CONFIG"; then
+    if python3 /app/garmin-scripts/setup_garmin.py --from-config --config-path "$CONFIG"; then
       log "Garmin authentication successful, tokens saved to $TOKEN_DIR"
     else
       log "WARNING: Garmin authentication failed."
       log "If your account uses MFA or Garmin is blocking this IP, run"
-      log "  python3 garmin-scripts/setup_garmin.py --from-config config.yaml"
+      log "  python3 garmin-scripts/setup_garmin.py --from-config --config-path config.yaml"
       log "on another machine and copy garmin_tokens.json into"
       log "/share/ble-scale-sync/garmin-tokens/ on this HA host."
       log "Other exporters (MQTT, etc.) will continue to work."
