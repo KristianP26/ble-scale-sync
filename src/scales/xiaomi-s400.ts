@@ -269,7 +269,7 @@ export class XiaomiS400Adapter implements ScaleAdapterCore, BroadcastSource {
     // The S400's app runs Yunmai's proprietary dual-frequency model, which no
     // open implementation reproduces. Of the formula sets available here, the
     // Xiaomi one used for the Mi Scale 2 lands closest on the same weigh-in
-    // (fat within ~2 points, bone within 0.3 kg, skeletal muscle within 2 kg);
+    // (fat within ~2 points, bone within 0.3 kg, muscle mass within ~1.2 kg);
     // the generic BIA coefficients were off by more than 5 points of body fat.
     if (reading.impedance > 0) {
       return computeMiScaleComposition(reading.weight, reading.impedance, profile);
