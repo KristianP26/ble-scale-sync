@@ -323,7 +323,9 @@ describe('buildPayload()', () => {
   });
 
   // #433: the age-25 reference used the male constant for everyone, so an
-  // otherwise identical woman came out 11 years older.
+  // otherwise identical woman came out 11 years older. With matching constants
+  // weight and height cancel (metabolic age is age + trunc((age - 25) / 3) for
+  // a non-athlete), so the body values here are incidental; the sex is the point.
   it('gives the same metabolic age to both sexes for an identical body', () => {
     const female = { ...profile, gender: 'female' as const, age: 26, height: 172 };
     const male = { ...female, gender: 'male' as const };
