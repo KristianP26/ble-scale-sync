@@ -438,12 +438,17 @@ if [ "$CUSTOM_CONFIG" != "true" ] && [ "$GARMIN_ENABLED" = "true" ] \
   # and a restart does not re-import. dash (the base image's /bin/sh) and
   # busybox ash both support -nt.
   SHARE_TOKEN_IMPORTED=false
+  # Hash of the /share file last imported. garminconnect re-dumps the token in
+  # /data after every refresh, so after an import the two files differ for good;
+  # the hint below must not read that as a skipped import.
+  SHARE_MARKER="$TOKEN_DIR/.share_token_imported.sha256"
   if [ -f "$SHARE_DIR/garmin_tokens.json" ] \
      && { [ ! -f "$TOKEN_DIR/garmin_tokens.json" ] \
           || [ "$SHARE_DIR/garmin_tokens.json" -nt "$TOKEN_DIR/garmin_tokens.json" ]; }; then
     log "Importing Garmin tokens from $SHARE_DIR"
     if cp "$SHARE_DIR/garmin_tokens.json" "$TOKEN_DIR/" 2>/dev/null; then
       SHARE_TOKEN_IMPORTED=true
+      sha256sum < "$SHARE_DIR/garmin_tokens.json" | cut -d' ' -f1 > "$SHARE_MARKER" 2>/dev/null || true
     fi
   fi
 
@@ -465,11 +470,15 @@ if [ "$CUSTOM_CONFIG" != "true" ] && [ "$GARMIN_ENABLED" = "true" ] \
     # Says why a token sitting in /share was passed over. Without this the
     # skip is invisible, and the add-on looks like it ignored the file. Only
     # when it really was passed over: not on the start that just imported it,
-    # and not when /share holds the same token that is already in use.
+    # not when /share holds the token already in use, and not when it is the
+    # file imported earlier (the /data copy has since been refreshed; copying
+    # the old one back would undo that).
     if [ "$SHARE_TOKEN_IMPORTED" != "true" ] \
        && [ -f "$SHARE_DIR/garmin_tokens.json" ] \
-       && ! cmp -s "$SHARE_DIR/garmin_tokens.json" "$TOKEN_DIR/garmin_tokens.json"; then
-      log "A token in $SHARE_DIR was not imported: it is older than the one in $TOKEN_DIR."
+       && ! cmp -s "$SHARE_DIR/garmin_tokens.json" "$TOKEN_DIR/garmin_tokens.json" \
+       && [ "$(sha256sum < "$SHARE_DIR/garmin_tokens.json" | cut -d' ' -f1)" \
+            != "$(cat "$SHARE_MARKER" 2>/dev/null)" ]; then
+      log "A token in $SHARE_DIR was not imported: it is not newer than the one in $TOKEN_DIR."
       log "To import it anyway, give it a newer timestamp (re-save it in the File"
       log "editor add-on, or 'touch $SHARE_DIR/garmin_tokens.json'), then restart."
     fi
