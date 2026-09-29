@@ -34,7 +34,9 @@ The ESP32 scans autonomously for BLE advertisements and publishes results over M
 4. Body composition is computed and dispatched to exporters
 5. Feedback (beep, display updates) is sent back to the ESP32 via MQTT
 
-A scale that is read from its advertisements is never connected, even when it also offers a GATT service. The Xiaomi Mi Scale 2 is the common case: it puts weight and impedance in the advertisement, and a connection only stops it advertising the reading. The server tells the ESP32 which known scales are like this, so it beeps for them but does not connect.
+A scale that is read from its advertisements is never read over a connection, even when it also offers a GATT service. The Xiaomi Mi Scale 2 is the common case: it puts weight and impedance in the advertisement, and a connection only stops it advertising the reading. The server tells the ESP32 which known scales are like this, so it beeps for them but does not connect.
+
+The server learns which scales these are while it runs and does not keep that across restarts. With `ble.scale_mac` set, each start republishes the scale list, usually without the flag, so after every restart the first weigh-in can still see one connect. The server drops that connection as soon as the scale's characteristics identify it, then tells the ESP32 again; the reading still comes from the advertisement.
 
 **GATT scales** (notification-based readings):
 
@@ -378,7 +380,7 @@ All topics are prefixed with `{topic_prefix}/{device_id}/` (default: `ble-proxy/
 
 ### Unlock write every 3 s, then "GATT session cap exceeded" after 90 s
 
-The log shows `Autonomous GATT connect from ESP32: Xiaomi Mi Scale 2`, an `Unlock write` every 3 seconds, and the session ending at exactly 90 s. The Mi Scale 2 is read from its advertisements, not over a connection, and earlier releases let the ESP32 connect to it anyway. With the fix, the server drops such a connection straight away and logs `Autonomous connect to Xiaomi Mi Scale 2 (...) ignored: this scale is read from its advertisements, not over GATT`, then tells the ESP32 to stop connecting to that scale. Update BLE Scale Sync; if the same proxy also serves a GATT scale, flash the current firmware too.
+The log shows `Autonomous GATT connect from ESP32: Xiaomi Mi Scale 2`, an `Unlock write` every 3 seconds, and the session ending at exactly 90 s. The Mi Scale 2 is read from its advertisements, not over a connection, and earlier releases let the ESP32 connect to it anyway. With the fix, the server drops such a connection straight away and logs `Autonomous connect to Xiaomi Mi Scale 2 (...) ignored: this scale is read from its advertisements, not over GATT`, then tells the ESP32 to stop connecting to that scale. After a restart of BLE Scale Sync this can happen once more on the first weigh-in (see [How it works](#how-it-works)). Update BLE Scale Sync; if the same proxy also serves a GATT scale, flash the current firmware too.
 
 If you cannot update yet, remove `ble.scale_mac` and set `auto_connect: false` under `mqtt_proxy`, so the ESP32 is never told to connect to the scale.
 
