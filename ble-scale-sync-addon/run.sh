@@ -417,9 +417,24 @@ if [ "$CUSTOM_CONFIG" != "true" ] && [ "$GARMIN_ENABLED" = "true" ] \
     rm -f "$TOKEN_DIR"/oauth*_token.json
   fi
 
-  # Option 1: user pre-generated tokens on another machine (MFA workaround)
-  if [ ! -f "$TOKEN_DIR/garmin_tokens.json" ] \
-     && [ -f "$SHARE_DIR/garmin_tokens.json" ]; then
+  # Option 1: user pre-generated tokens on another machine (MFA workaround).
+  #
+  # Import when /data has no token, and also when the /share copy is newer.
+  # Gating on absence alone made the documented recovery -- drop a freshly
+  # generated token into /share and restart -- silently do nothing whenever a
+  # rejected token was already sitting in /data, which is exactly when someone
+  # goes looking for that recovery. The stale token then kept failing every
+  # upload with "Failed to retrieve social profile" and the only way out was a
+  # shell inside the container or reinstalling the add-on.
+  #
+  # Newer-wins is the right signal: a token placed there to replace a rejected
+  # one is always newer than the one it replaces. cp does not preserve mtime,
+  # so the imported copy is newer than its source from then on and a restart
+  # does not re-import. -nt is in POSIX test as implemented by dash (the base
+  # image's /bin/sh) and busybox ash, not a bashism.
+  if [ -f "$SHARE_DIR/garmin_tokens.json" ] \
+     && { [ ! -f "$TOKEN_DIR/garmin_tokens.json" ] \
+          || [ "$SHARE_DIR/garmin_tokens.json" -nt "$TOKEN_DIR/garmin_tokens.json" ]; }; then
     log "Importing Garmin tokens from $SHARE_DIR"
     cp "$SHARE_DIR/garmin_tokens.json" "$TOKEN_DIR/" 2>/dev/null || true
   fi
@@ -439,6 +454,13 @@ if [ "$CUSTOM_CONFIG" != "true" ] && [ "$GARMIN_ENABLED" = "true" ] \
     fi
   else
     log "Garmin tokens present at $TOKEN_DIR"
+    # Says why a token sitting in /share was passed over. Without this the
+    # skip is invisible, and the add-on looks like it ignored the file.
+    if [ -f "$SHARE_DIR/garmin_tokens.json" ]; then
+      log "A token in $SHARE_DIR was not imported: it is older than the one in $TOKEN_DIR."
+      log "To import it anyway, give it a newer timestamp (re-save it in the File"
+      log "editor add-on, or 'touch $SHARE_DIR/garmin_tokens.json'), then restart."
+    fi
   fi
 fi
 
