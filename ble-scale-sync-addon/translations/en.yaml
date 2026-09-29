@@ -100,8 +100,8 @@ configuration:
     name: Physical scale display unit
     description: >-
       Unit requested on the physical scale, independently of the unit published
-      to Home Assistant. Choose weight_unit to follow the setting above. The st
-      option currently affects QN-family scales that support stones.
+      to Home Assistant. Choose weight_unit to follow the setting above. Only
+      QN-family scales are told which unit to show; other scales ignore it.
   user_name:
     name: User name
     description: Display name for the user profile
