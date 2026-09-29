@@ -159,7 +159,7 @@ pair AA:BB:CC:DD:EE:FF
 
 If it happens every session, `ble.auto_clear_stale_bond: true` does that for you. See [the configuration reference](/guide/configuration#config-yaml-reference).
 
-If the key is rejected on the very next connect after a session that worked, every time, try `ble.preemptive_adapter_reset: false` and see whether the bond then holds. The adapter power-cycle after each session is the only thing the host does in between, and whether it is the cause is still open ([#417](https://github.com/KristianP26/ble-scale-sync/issues/417)). Report the result there either way.
+If the key is rejected on the very next connect after a session that worked, every time (or the connect succeeds but then stalls at `Discovering services...` with `GATT server acquisition timed out`), try `ble.preemptive_adapter_reset: false` and see whether the bond then holds. The adapter power-cycle after each session is the only thing the host does in between, and whether it is the cause is still open ([#417](https://github.com/KristianP26/ble-scale-sync/issues/417)). Report the result there either way.
 
 ## Exporter Issues
 

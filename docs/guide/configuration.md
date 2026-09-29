@@ -365,7 +365,7 @@ ble:
 
 Only this one step is skipped. The D-Bus reset, the cleanup after a failed session and the recovery that runs when discovery will not start all stay as they are, and the change applies from the next scan cycle without a restart. If your adapter then starts missing the scale after a few weigh-ins, turn it back on.
 
-Native BlueZ (node-ble) only. noble resets the adapter only when discovery fails, and the proxy transports never touch the host adapter.
+Native BlueZ (node-ble) only. noble power-cycles the adapter only when it is not powered on at start-up, and the proxy transports never touch the host adapter.
 
 :::
 

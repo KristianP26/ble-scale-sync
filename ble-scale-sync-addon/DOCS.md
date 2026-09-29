@@ -151,7 +151,7 @@ The Supervisor's default AppArmor profile does not allow the D-Bus calls this ad
 
 The add-on power-cycles the Bluetooth adapter on startup to ensure a clean state. This is enabled by default (**Reset Bluetooth adapter on startup**). If you have other HA Bluetooth integrations that lose connectivity when this add-on restarts, disable the option.
 
-Separately from that startup reset, the add-on also power-cycles the adapter after every connection to the scale, to clear a stuck scanning state some Raspberry Pi adapters fall into. **Power-cycle the adapter after every weigh-in** (`preemptive_adapter_reset`) turns that off. Leave it on unless you are testing whether the power-cycle is what makes a paired scale reject the next connection.
+Separately from that startup reset, the add-on also power-cycles the adapter after every connection to the scale (built-in Bluetooth only, not with an ESPHome or ESP32 proxy), to clear a stuck scanning state some Raspberry Pi adapters fall into. **Power-cycle the adapter after every weigh-in** (`preemptive_adapter_reset`) turns that off. Leave it on unless you are testing whether the power-cycle is what makes a paired scale reject the next connection.
 
 ### No scale found
 
