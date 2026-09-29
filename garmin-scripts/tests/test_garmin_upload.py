@@ -47,6 +47,7 @@ DERIVED_ARGS = (
     "physique_rating",
     "metabolic_age",
     "bmi",
+    "basal_met",
 )
 
 
@@ -72,6 +73,7 @@ class DefaultUploadTest(unittest.TestCase):
         self.assertEqual(kwargs["bmi"], 23.9)
         self.assertEqual(kwargs["percent_fat"], 18.5)
         self.assertEqual(kwargs["metabolic_age"], 30)
+        self.assertEqual(kwargs["basal_met"], 1750)
 
 
 class WeightOnlyUploadTest(unittest.TestCase):
