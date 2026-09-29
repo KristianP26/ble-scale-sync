@@ -41,7 +41,8 @@ export const RAW_READING_TIMEOUT_MS = 120_000;
  * silence window. The idle timer restarts on every frame, so a scale that
  * streams adapter-rejected frames forever would otherwise hold the session
  * open with no bound; the cap ends it while leaving room for a weigh-in that
- * spans several restarts. A session_timeout_sec above 300 makes
+ * spans several restarts. A composition hold can move it out once, by at most
+ * the hold plus 2 s (withIdleTimeout). A session_timeout_sec above 300 makes
  * POLL_CYCLE_TIMEOUT_MS the effective ceiling instead.
  */
 export const READING_SESSION_CAP_FACTOR = 3;
@@ -65,9 +66,10 @@ export const POST_DISCOVERY_QUIESCE_MS = 500;
  * Hard ceiling on one native poll cycle.
  *
  * The reading phase is bounded by scale silence, capped in absolute terms at
- * READING_SESSION_CAP_FACTOR x the silence window (360 s by default). The worst
- * legitimate node-ble cycle is then roughly 815 s (discovery 120 + six connect
- * attempts 170 + GATT acquisition 30 + characteristic retries + reading 360),
+ * READING_SESSION_CAP_FACTOR x the silence window (360 s by default), plus at
+ * most one composition hold. The worst legitimate node-ble cycle is then roughly
+ * 847 s (discovery 120 + six connect attempts 170 + GATT acquisition 30 +
+ * characteristic retries + reading 360 + a 32 s R-MSC04 hold),
  * so 900 s never fires on a healthy run with the default session_timeout_sec.
  *
  * It exists because dbus-next never rejects an in-flight `MessageBus.call()`
