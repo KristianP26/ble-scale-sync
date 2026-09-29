@@ -114,6 +114,8 @@ The scale broadcasts its measurement as an encrypted MiBeacon frame, so it needs
 
 Weight only. The advertisement carries a second frame after each weigh-in whose field looks like a whole-body impedance (529 ohm for a 108.5 kg adult, 0 for an object), but one sample is not a decode, so body composition is estimated from BMI (Deurenberg formula). The frame is logged in debug mode; a body-fat figure from the vendor app for the same weigh-in would settle it ([#297](https://github.com/KristianP26/ble-scale-sync/issues/297)).
 
+The reading waits for that frame before it is sent, so it arrives about two seconds after the display settles rather than at once. If the frame does not come, the weight is sent on its own after 12 seconds ([#357](https://github.com/KristianP26/ble-scale-sync/issues/357)).
+
 ### **Grifema** GA2001 / **Senssun** IF_B7
 
 Weight only, and only while the scale displays kilograms. The scale advertises as `IF_B7` and broadcasts its weigh-in without accepting a connection. Its final frame carries a field that looks like impedance, but no weigh-in has yet been paired with a body-fat figure from the vendor app, so body composition is estimated from BMI (Deurenberg formula) and the field is logged in debug mode. No weigh-in in pounds has been captured either, so a scale set to lb is ignored with a warning in the log. A debug log of a full weigh-in, together with the vendor app's weight and body-fat reading for it, would settle both ([#423](https://github.com/KristianP26/ble-scale-sync/issues/423)).
