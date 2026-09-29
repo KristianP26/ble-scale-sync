@@ -18,7 +18,7 @@ import {
   JIELI_CHALLENGE_FRAME_LEN,
   JIELI_CHALLENGE_HEADER,
 } from '../jieli-auth.js';
-import type { WeightUnit } from '../../config/schema.js';
+import type { ScaleDisplayUnit } from '../../config/schema.js';
 import {
   A4_PRELUDE,
   A4_PRELUDE_GAP_MS,
@@ -101,9 +101,9 @@ export class QnScaleAdapter
   /**
    * Configured display unit. The 0x13 config command tells the scale which unit
    * to show, so hardcoding kg flipped a user's lbs display on every read (#269).
-   * Injected via configure() from scale.weight_unit; defaults to kg.
+   * Injected via configure() from scale.display_unit; defaults to kg.
    */
-  private displayUnit: WeightUnit = 'kg';
+  private displayUnit: ScaleDisplayUnit = 'kg';
 
   /** Whether the AE00 service is available (newer firmware). */
   private hasAe00 = false;
@@ -222,7 +222,7 @@ export class QnScaleAdapter
 
   /** Receive the configured display unit from the composition root (#269). */
   configure(opts: AdapterRuntimeConfig): void {
-    if (opts.weightUnit) this.displayUnit = opts.weightUnit;
+    if (opts.displayUnit) this.displayUnit = opts.displayUnit;
     this.forcedProtocolType = opts.qnProtocolByte ?? null;
     this.forcedReportByte = opts.qnReportByte ?? null;
     this.forcedWeightAck = opts.qnWeightAck ?? null;
@@ -231,8 +231,9 @@ export class QnScaleAdapter
     this.configLong = opts.qnConfigLong === true;
   }
 
-  /** 0x13 config unit flag: 0x01 kg, 0x02 lb (openScale QNHandler). */
+  /** 0x13 config unit bit: 0x01 kg, 0x02 lb, 0x08 stone (QN protocol). */
   private unitFlag(): number {
+    if (this.displayUnit === 'st') return 0x08;
     return this.displayUnit === 'lbs' ? 0x02 : 0x01;
   }
 

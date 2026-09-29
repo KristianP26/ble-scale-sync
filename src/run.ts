@@ -297,6 +297,8 @@ async function main(): Promise<void> {
   const applyAdapterConfig = (bindKey: string | undefined): void => {
     const scaleMac = ctx.scaleMac ?? undefined;
     const weightUnit = ctx.config.scale.weight_unit;
+    const displayUnit =
+      ctx.config.scale.display_unit === 'weight_unit' ? weightUnit : ctx.config.scale.display_unit;
     const qnProtocolByte = ctx.config.ble?.qn_protocol_byte ?? undefined;
     const qnReportByte = ctx.config.ble?.qn_report_byte ?? undefined;
     const qnWeightAck = ctx.config.ble?.qn_weight_ack ?? undefined;
@@ -308,6 +310,7 @@ async function main(): Promise<void> {
         bindKey,
         scaleMac,
         weightUnit,
+        displayUnit,
         qnProtocolByte,
         qnReportByte,
         qnWeightAck,

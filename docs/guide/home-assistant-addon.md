@@ -66,9 +66,10 @@ All options live under the **Configuration** tab. The add-on regenerates `/data/
 | `qn_a4_prelude`              | unset                | QN-family scales only, and the last thing to try. Sends the two undecoded `0xA4` frames an Arboleaf vendor app sends between START and the first weight frame. Set `true` only if `qn_weight_ack` did not help.                     |
 | `qn_time_sync_long`          | unset                | QN-family scales only. Sends the 9-byte form of the clock-setting frame the same Arboleaf capture shows, instead of the 8-byte one. The extra byte is undecoded.                                                                    |
 | `qn_config_long`             | unset                | QN-family scales only, and the last difference anyone has found between our start-up conversation and the vendor app's. Sends the 10-byte form of the settings frame instead of the 9-byte one. The extra bytes are undecoded.      |
+| `display_unit`               | `weight_unit`        | Unit requested on the physical display independently of exported values. `st` currently affects QN-family scales that support stones.                                                   |
 | `proxy_liveness_timeout_min` | `30`                 | Proxy transports only. Minutes of total advertisement silence before the link is treated as wedged and the add-on restarts. 0 disables. Raise it if your proxy sits somewhere with no other Bluetooth devices in range.             |
 
-The QN options and `auto_clear_stale_bond` are ignored when `custom_config` is enabled, since that mode skips config generation entirely; set them under `ble:` in your own file instead. The add-on logs a warning if you leave one set.
+The QN options and `auto_clear_stale_bond` are ignored when `custom_config` is enabled, since that mode skips config generation entirely; set them in the corresponding `ble:` or `scale:` section of your own file instead. The add-on logs a warning if you leave one set.
 
 ### Unit preferences
 
@@ -76,8 +77,9 @@ The QN options and `auto_clear_stale_bond` are ignored when `custom_config` is e
 | ------------- | ------- | ----------- |
 | `weight_unit` | `kg`    | `kg`, `lbs` |
 | `height_unit` | `cm`    | `cm`, `in`  |
+| `display_unit` | `weight_unit` | `weight_unit`, `kg`, `lbs`, `st` |
 
-The CLI and exporters display weights and heights in your chosen unit; all internal math stays in kg / cm.
+The CLI and exporters display weights and heights in your chosen unit; all internal math stays in kg / cm. `display_unit` controls the physical scale separately, where the protocol supports it. For example, `weight_unit: kg` with `display_unit: st` keeps Home Assistant values in kg while asking a compatible QN scale to display stones and pounds.
 
 ### User profile
 

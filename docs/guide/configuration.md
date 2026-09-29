@@ -437,12 +437,23 @@ This lets you dedicate one adapter to BLE Scale Sync while keeping the other fre
 scale:
   weight_unit: kg
   height_unit: cm
+  display_unit: weight_unit
 ```
 
 | Field         | Required | Default | Description                                              |
 | ------------- | -------- | ------- | -------------------------------------------------------- |
 | `weight_unit` | No       | `kg`    | `kg` or `lbs`. Display only; calculations always use kg. |
 | `height_unit` | No       | `cm`    | `cm` or `in`. Used for height input in user profiles.    |
+| `display_unit` | No | `weight_unit` | Physical scale display unit: `weight_unit`, `kg`, `lbs`, or `st`. `st` currently affects QN-family scales that support stones. This is independent of exported values and calculations. |
+
+For example, this keeps Home Assistant values and matching ranges in kilograms while the physical QN scale shows stones and pounds:
+
+```yaml
+scale:
+  weight_unit: kg
+  height_unit: cm
+  display_unit: st
+```
 
 ### Unknown user
 

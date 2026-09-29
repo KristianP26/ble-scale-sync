@@ -494,7 +494,7 @@ describe('QnScaleAdapter', () => {
 
     // #269: the 0x13 config command tells the scale which unit to display.
     // Hardcoding kg flipped a user's lbs scale on every read. byte[3] is the unit
-    // flag (0x01 kg, 0x02 lb) and must follow the configured weight_unit.
+    // bit (0x01 kg, 0x02 lb, 0x08 stone) follows the configured display_unit.
     async function captureConfigWrite(adapter: QnScaleAdapter): Promise<number[][]> {
       vi.useFakeTimers();
       try {
@@ -532,9 +532,9 @@ describe('QnScaleAdapter', () => {
       expect(config![8]).toBe(config!.slice(0, 8).reduce((a, b) => a + b, 0) & 0xff);
     });
 
-    it('sends the lb unit flag (0x02) when weight_unit is lbs (#269)', async () => {
+    it('sends the lb unit flag (0x02) when display_unit is lbs (#269)', async () => {
       const adapter = makeAdapter();
-      adapter.configure({ weightUnit: 'lbs' });
+      adapter.configure({ displayUnit: 'lbs' });
       const writes = await captureConfigWrite(adapter);
       const config = writes.find((w) => w[0] === 0x13 && w[4] === 0x10);
       expect(config).toBeDefined();
@@ -542,10 +542,20 @@ describe('QnScaleAdapter', () => {
       expect(config![8]).toBe(config!.slice(0, 8).reduce((a, b) => a + b, 0) & 0xff);
     });
 
+    it('sends the stone unit flag (0x08) while retaining the required 0x13 command', async () => {
+      const adapter = makeAdapter();
+      adapter.configure({ displayUnit: 'st' });
+      const writes = await captureConfigWrite(adapter);
+      const config = writes.find((w) => w[0] === 0x13 && w[4] === 0x10);
+      expect(config).toBeDefined();
+      expect(config![3]).toBe(0x08);
+      expect(config![8]).toBe(config!.slice(0, 8).reduce((a, b) => a + b, 0) & 0xff);
+    });
+
     it('honours the unit flag on the older-firmware unlock path too (#269)', async () => {
       // No AE00 (subscribe rejects) so onConnected sends the legacy unlocks.
       const adapter = makeAdapter();
-      adapter.configure({ weightUnit: 'lbs' });
+      adapter.configure({ displayUnit: 'lbs' });
       const writes: number[][] = [];
       const ctx = {
         write: async (_uuid: string, data: Buffer | number[]) => {
@@ -564,6 +574,30 @@ describe('QnScaleAdapter', () => {
       expect(config).toBeDefined();
       expect(config![3]).toBe(0x02);
       expect(config![8]).toBe(config!.slice(0, 8).reduce((a, b) => a + b, 0) & 0xff);
+    });
+
+    it('sends the stone unit flag on the older-firmware unlock path', async () => {
+      const adapter = makeAdapter();
+      adapter.configure({ displayUnit: 'st' });
+      const writes: number[][] = [];
+      const ctx = {
+        write: async (_uuid: string, data: Buffer | number[]) => {
+          writes.push([...data]);
+        },
+        read: async () => Buffer.alloc(0),
+        subscribe: async () => {
+          throw new Error('no AE02');
+        },
+        profile: defaultProfile,
+        deviceAddress: '',
+        availableChars: new Set<string>(),
+      } as unknown as ConnectionContext;
+      await adapter.onConnected(ctx);
+      const config = writes.find((w) => w[0] === 0x13 && w[4] === 0x10);
+      expect(config).toBeDefined();
+      expect(config![3]).toBe(0x08);
+      expect(config![8]).toBe(config!.slice(0, 8).reduce((a, b) => a + b, 0) & 0xff);
+      expect(writes.some((w) => w[0] === 0x13 && w[4] !== 0x10)).toBe(true);
     });
 
     it('carries the forced protocol byte into the older-firmware unlock config', async () => {

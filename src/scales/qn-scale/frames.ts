@@ -90,9 +90,10 @@ const CONFIG_TAIL_SHORT = [0x00] as const;
 /**
  * Build the 0x13 config frame.
  *
- * `unitFlag` is 0x01 kg / 0x02 lb per openScale QNHandler; honouring the
- * configured unit is what keeps a read from flipping the scale's display
- * (#269).
+ * `unitFlag` is a bit value: 0x01 kg / 0x02 lb / 0x08 stone. The first two
+ * are captured by openScale's QNHandler; the stone value is captured by the
+ * ESF-24 reverse-engineered driver. Honouring the independent display unit is
+ * what keeps a read from flipping the scale's display (#269).
  *
  * Exported so a test can pin both forms against the captured frames byte for
  * byte, the way `buildTimeSync` is.

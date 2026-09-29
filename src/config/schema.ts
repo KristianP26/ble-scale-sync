@@ -300,6 +300,8 @@ export const BleSchema = z
 export const ScaleSchema = z.object({
   weight_unit: z.enum(['kg', 'lbs']).default('kg'),
   height_unit: z.enum(['cm', 'in']).default('cm'),
+  /** Unit requested on the physical scale; independent from exported values. */
+  display_unit: z.enum(['weight_unit', 'kg', 'lbs', 'st']).default('weight_unit'),
 });
 
 export const ExporterEntrySchema = z
@@ -450,7 +452,11 @@ export const DockerSchema = z.object({
 export const AppConfigSchema = z.object({
   version: z.literal(1),
   ble: BleSchema.optional(),
-  scale: ScaleSchema.default({ weight_unit: 'kg', height_unit: 'cm' }),
+  scale: ScaleSchema.default({
+    weight_unit: 'kg',
+    height_unit: 'cm',
+    display_unit: 'weight_unit',
+  }),
   unknown_user: z.enum(['nearest', 'log', 'ignore']).default('nearest'),
   /**
    * What to do with a reading that no configured user's `weight_range` covers.
@@ -507,6 +513,7 @@ export const AppConfigSchema = z.object({
 // --- Standalone types ---
 
 export type WeightUnit = 'kg' | 'lbs';
+export type ScaleDisplayUnit = WeightUnit | 'st';
 
 // --- Inferred types ---
 

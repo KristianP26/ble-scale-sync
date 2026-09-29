@@ -110,11 +110,13 @@ else
   esac
   AUTO_CLEAR_STALE_BOND=$(opt_bool auto_clear_stale_bond)
   PROXY_LIVENESS_MIN=$(opt_int proxy_liveness_timeout_min 30)
+  DISPLAY_UNIT=$(opt display_unit)
 
   WEIGHT_UNIT=$(opt weight_unit)
   HEIGHT_UNIT=$(opt height_unit)
   [ -z "$WEIGHT_UNIT" ] && WEIGHT_UNIT="kg"
   [ -z "$HEIGHT_UNIT" ] && HEIGHT_UNIT="cm"
+  [ -z "$DISPLAY_UNIT" ] && DISPLAY_UNIT="weight_unit"
   OUT_OF_RANGE=$(opt out_of_range)
   # Anything but the two known values would fail schema validation and take the
   # whole add-on down, so an unrecognised value falls back to the default.
@@ -294,6 +296,7 @@ YAML
 scale:
   weight_unit: $WEIGHT_UNIT
   height_unit: $HEIGHT_UNIT
+  display_unit: $DISPLAY_UNIT
 
 unknown_user: nearest
 out_of_range: $OUT_OF_RANGE

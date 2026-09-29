@@ -48,6 +48,7 @@ options:
   proxy_liveness_timeout_min: 30
   weight_unit: kg
   height_unit: cm
+  display_unit: weight_unit
   user_name: Default
   user_height: 170
   user_birth_date: '1990-01-01'
@@ -89,6 +90,7 @@ schema:
   proxy_liveness_timeout_min: int(0,1440)?
   weight_unit: list(kg|lbs)
   height_unit: list(cm|in)
+  display_unit: list(weight_unit|kg|lbs|st)
   user_name: str
   user_height: int(50,250)
   user_birth_date: str

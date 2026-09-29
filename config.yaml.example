@@ -66,6 +66,7 @@ version: 1
 scale:
   weight_unit: kg   # kg | lbs (display only, calculations always use kg)
   height_unit: cm   # cm | in  (for height input below)
+  display_unit: weight_unit # weight_unit | kg | lbs | st (physical scale display)
 
 # --- Multi-User Matching ---
 # Strategy when weight falls outside all configured ranges:

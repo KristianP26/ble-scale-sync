@@ -87,6 +87,7 @@ describe('AppConfigSchema', () => {
     if (result.success) {
       expect(result.data.scale.weight_unit).toBe('kg');
       expect(result.data.scale.height_unit).toBe('cm');
+      expect(result.data.scale.display_unit).toBe('weight_unit');
       expect(result.data.unknown_user).toBe('nearest');
       // Absent out_of_range means today's behaviour: warn and export anyway.
       // Changing this default would silently start discarding readings on
@@ -661,16 +662,26 @@ describe('ScaleSchema', () => {
     if (result.success) {
       expect(result.data.weight_unit).toBe('kg');
       expect(result.data.height_unit).toBe('cm');
+      expect(result.data.display_unit).toBe('weight_unit');
     }
   });
 
-  it('accepts lbs and in', () => {
-    const result = ScaleSchema.safeParse({ weight_unit: 'lbs', height_unit: 'in' });
+  it('accepts an independent stone display unit', () => {
+    const result = ScaleSchema.safeParse({
+      weight_unit: 'kg',
+      height_unit: 'in',
+      display_unit: 'st',
+    });
     expect(result.success).toBe(true);
   });
 
   it('rejects invalid weight_unit', () => {
     const result = ScaleSchema.safeParse({ weight_unit: 'stones' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects invalid display_unit', () => {
+    const result = ScaleSchema.safeParse({ display_unit: 'stones' });
     expect(result.success).toBe(false);
   });
 });

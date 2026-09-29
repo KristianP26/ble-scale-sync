@@ -96,6 +96,12 @@ configuration:
     description: >-
       Unit used for the user height and weight range below.
       Choose cm for metric or in (inches) for imperial.
+  display_unit:
+    name: Physical scale display unit
+    description: >-
+      Unit requested on the physical scale, independently of the unit published
+      to Home Assistant. Choose weight_unit to follow the setting above. The st
+      option currently affects QN-family scales that support stones.
   user_name:
     name: User name
     description: Display name for the user profile

@@ -1,5 +1,5 @@
 import type { MatchDescriptor } from '../scales/match-descriptor.js';
-import type { WeightUnit } from '../config/schema.js';
+import type { ScaleDisplayUnit, WeightUnit } from '../config/schema.js';
 export type { MatchDescriptor };
 
 export type Gender = 'male' | 'female';
@@ -204,6 +204,8 @@ export interface AdapterRuntimeConfig {
    * adapters that do not write a unit.
    */
   weightUnit?: WeightUnit;
+  /** Physical display unit requested independently from exported measurement units. */
+  displayUnit?: ScaleDisplayUnit;
   /**
    * Protocol byte the QN handshake echoes back (`ble.qn_protocol_byte`).
    *
