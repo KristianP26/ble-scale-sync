@@ -171,11 +171,15 @@ export function buildPayload(
     weight,
   );
 
+  const sexConstant = p.gender === 'male' ? 5 : -161;
   const baseBmr = 10 * weight + 6.25 * p.height - 5 * p.age;
-  let bmr = baseBmr + (p.gender === 'male' ? 5 : -161);
+  let bmr = baseBmr + sexConstant;
   if (p.isAthlete) bmr *= 1.05;
 
-  const idealBmr = 10 * weight + 6.25 * p.height - 5 * 25 + 5;
+  // The reference is the same Mifflin-St Jeor BMR at age 25, so it has to use
+  // the same sex constant. It used to hardcode the male +5, which read the
+  // 166 kcal gap as ~11 extra years for every female user (#433).
+  const idealBmr = 10 * weight + 6.25 * p.height - 5 * 25 + sexConstant;
   let metabolicAge = p.age + Math.trunc((idealBmr - bmr) / 15);
   if (metabolicAge < 12) metabolicAge = 12;
   if (p.isAthlete && metabolicAge > p.age) metabolicAge = p.age - 5;
