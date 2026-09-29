@@ -147,6 +147,18 @@ export const BODY_FRAME_WINDOW_MS = 8_000;
  */
 const WEIGH_IN_MEMORY_MS = 60_000;
 
+/**
+ * How long after a hold began a new weigh-in may start another one.
+ *
+ * The transport's grace timer for the old hold fires `IMPEDANCE_GRACE_MS` after
+ * it was armed, but it runs on the event loop's timers, not this adapter's
+ * clock, and fires late under load. Starting the new hold at exactly that mark
+ * could open a pairing window while the old timer is still pending, and that
+ * timer would then export the new weigh-in's weight while its `0x06` completed
+ * it a second time. A second of margin keeps the new hold strictly after it.
+ */
+const HOLD_RESTART_MS = IMPEDANCE_GRACE_MS + 1_000;
+
 /** Units tracked at once, oldest out. A household has one; this is a leak bound. */
 const MAX_UNITS = 8;
 
@@ -222,8 +234,13 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
   /** Last unpaired `0x06` logged, so a repeated advertisement logs once. */
   private lastUnpairedBodyHex: string | null = null;
 
-  /** @param now clock, injectable so the pairing window can be tested. */
-  constructor(private readonly now: () => number = () => Date.now()) {}
+  /**
+   * @param now clock, injectable so the pairing window can be tested. Monotonic
+   *   by default: a Raspberry Pi has no RTC, so the wall clock can step by
+   *   minutes when NTP first syncs, and a step backwards or forwards inside a
+   *   hold would stretch or cut the pairing window.
+   */
+  constructor(private readonly now: () => number = () => performance.now()) {}
 
   matches(device: BleDeviceInfo): boolean {
     const m = device.manufacturerData;
@@ -359,8 +376,8 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
     state.weighIn = { grams, settledAt: t, closed: false };
     this.lastUnpairedBodyHex = null;
     // A new hold starts only once the transport's grace timer for the last one
-    // can have fired; see UnitState.heldAt.
-    if (state.heldAt === null || t - state.heldAt >= IMPEDANCE_GRACE_MS) state.heldAt = t;
+    // has certainly fired; see UnitState.heldAt and HOLD_RESTART_MS.
+    if (state.heldAt === null || t - state.heldAt >= HOLD_RESTART_MS) state.heldAt = t;
     const waiting =
       t - state.heldAt <= BODY_FRAME_WINDOW_MS
         ? 'holding for its post-weigh-in frame'

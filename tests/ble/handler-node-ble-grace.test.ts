@@ -392,8 +392,9 @@ describe('handler-node-ble broadcastScanNodeBle with the Silvergear 108 (#357)',
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // 'performance' because the adapter times its hold on performance.now().
     vi.useFakeTimers({
-      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'],
     });
   });
 

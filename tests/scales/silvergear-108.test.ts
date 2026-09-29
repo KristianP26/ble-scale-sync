@@ -398,11 +398,40 @@ describe('Silvergear108Adapter (#297)', () => {
       expect(at(BODY_FRAME_WINDOW_MS + 1000, 'a2ada0a206f7').reading).toBeNull();
     });
 
-    it('starts a fresh hold once the last one can have run out', () => {
+    // The transport's grace timer fires IMPEDANCE_GRACE_MS into the hold, on the
+    // event loop and possibly late, so a new hold waits a second past it.
+    it('starts a fresh hold only a second after the last one can have run out', () => {
       at(0, SETTLED_108);
       at(BODY_FRAME_WINDOW_MS + 1, SETTLING_108);
-      at(IMPEDANCE_GRACE_MS, SETTLED_108);
-      expect(at(IMPEDANCE_GRACE_MS + 1000, BODY_108).complete).toBe(true);
+      at(IMPEDANCE_GRACE_MS + 999, SETTLED_108);
+      expect(at(IMPEDANCE_GRACE_MS + 1500, BODY_108).reading).toBeNull();
+
+      at(IMPEDANCE_GRACE_MS + 2000, SETTLING_108);
+      at(IMPEDANCE_GRACE_MS + 2500, IDLE);
+      at(IMPEDANCE_GRACE_MS + 3000, SETTLED_108);
+      expect(at(IMPEDANCE_GRACE_MS + 3500, BODY_108).complete).toBe(true);
+    });
+
+    it('opens the new hold exactly a second after the grace, not a millisecond sooner', () => {
+      at(0, SETTLED_108);
+      at(BODY_FRAME_WINDOW_MS + 1, SETTLING_108);
+      at(IMPEDANCE_GRACE_MS + 1000, SETTLED_108);
+      expect(at(IMPEDANCE_GRACE_MS + 1500, BODY_108).complete).toBe(true);
+    });
+
+    // Default clock: performance.now(), which NTP cannot step. A wall clock that
+    // jumps back inside a hold must not reopen the pairing window.
+    it('times the hold on the monotonic clock, not the wall clock', () => {
+      vi.useFakeTimers({ toFake: ['Date', 'performance'] });
+      try {
+        const mono = new Silvergear108Adapter();
+        mono.parseBroadcast(mfg(SETTLED_108));
+        vi.advanceTimersByTime(BODY_FRAME_WINDOW_MS + 1);
+        vi.setSystemTime(Date.now() - 60_000);
+        expect(mono.parseBroadcast(mfg(BODY_108))).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     // The proxy watchers export the held weight when the grace runs out, without
