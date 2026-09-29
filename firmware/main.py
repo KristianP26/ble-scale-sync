@@ -66,6 +66,12 @@ _last_beep_time = 0
 # appears in a scan, eliminating the MQTT round-trip latency (#201).
 _auto_connect = True  # opt-out via config topic {"autoConnect": false}
 
+# Known scale MACs the host reads from their advertisements (#422). They stay in
+# _scale_macs for beep and early flush, but are never auto-connected: a
+# connected scale stops advertising, and the host would only drop the session.
+# Absent key (old host) means empty, so nothing changes.
+_passive_macs = set()
+
 # Lazy host-ordered notify enable (#231): when the host advertises
 # lazy_notify=True on the config topic, BLE notify is enabled only on a per-char
 # subscribe/<uuid> command (after the host has subscribed to notify/<uuid>), so
@@ -98,6 +104,7 @@ mqtt_config["queue_len"] = 0  # callback mode
 def on_message(topic_bytes, msg, retained):
     """Sync callback — queue the command for async processing."""
     global _scale_macs, _auto_connect, _lazy_notify, _last_host_activity, _host_engaged
+    global _passive_macs
     t = topic_bytes.decode() if isinstance(topic_bytes, (bytes, bytearray)) else topic_bytes
     if t == topic("config"):
         try:
@@ -105,7 +112,13 @@ def on_message(topic_bytes, msg, retained):
             _scale_macs = set(data.get("scales", []))
             _auto_connect = data.get("autoConnect", True)
             _lazy_notify = data.get("lazy_notify", False)
-            print(f"Config: {len(_scale_macs)} scale MAC(s), autoConnect={_auto_connect}, lazyNotify={_lazy_notify}")
+            passive = data.get("passive", [])
+            # A list only: set() of a stray string would split it into characters.
+            _passive_macs = set(passive) if isinstance(passive, list) else set()
+            print(
+                f"Config: {len(_scale_macs)} scale MAC(s), {len(_passive_macs)} passive, "
+                f"autoConnect={_auto_connect}, lazyNotify={_lazy_notify}"
+            )
             if board.HAS_DISPLAY:
                 ui.on_config_update(data.get("users", []))
                 ui.on_scale_macs_update(len(_scale_macs) > 0)
@@ -203,6 +216,11 @@ def _check_scale_beep(results):
                 break
 
 
+def _auto_connect_allowed(mac):
+    """True if the ESP32 may autonomously connect to this MAC (#201, #422)."""
+    return _auto_connect and mac in _scale_macs and mac not in _passive_macs
+
+
 def _find_scale_in_raw(raw_results):
     """Find the first known scale MAC in the raw IRQ buffer.
 
@@ -219,7 +237,9 @@ def _find_scale_in_raw(raw_results):
     """
     for addr_bytes, addr_type, _rssi, _raw in raw_results:
         mac = ":".join("%02X" % b for b in addr_bytes)
-        if mac in _scale_macs:
+        # A passive scale is skipped, not returned: a GATT scale later in the
+        # same buffer must still get its connect (#422).
+        if mac in _scale_macs and mac not in _passive_macs:
             print(f"Auto-connect: found known scale {mac} in raw buffer (addr_type={addr_type})")
             return mac, addr_bytes, addr_type
     return None
@@ -489,7 +509,7 @@ async def _batch_scan_loop():
             # appeared in the scan results, connect immediately (#201).
             if _auto_connect and _scale_macs:
                 for r in results:
-                    if r["address"] in _scale_macs:
+                    if _auto_connect_allowed(r["address"]):
                         print(f"Auto-connect (batch): scale {r['address']} found in scan results")
                         await _auto_gatt_connect(r["address"], r.get("addr_type", 0))
                         break

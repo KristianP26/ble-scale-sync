@@ -435,5 +435,73 @@ class TestWaitNotBusy(unittest.IsolatedAsyncioTestCase):
             await task
 
 
+class TestPassiveScales(unittest.TestCase):
+    """Advertisement-read scales from config.passive are never auto-connected (#422)."""
+
+    def setUp(self):
+        self._orig = (
+            set(main._scale_macs),
+            set(main._passive_macs),
+            main._auto_connect,
+            main._lazy_notify,
+        )
+
+    def tearDown(self):
+        main._scale_macs, main._passive_macs, main._auto_connect, main._lazy_notify = self._orig
+
+    def _config(self, data):
+        main.on_message(main.topic("config"), json.dumps(data).encode(), False)
+
+    def test_on_message_parses_passive(self):
+        self._config({"scales": [_MAC_STR, _OTHER_MAC_STR], "passive": [_MAC_STR]})
+        self.assertEqual(main._passive_macs, {_MAC_STR})
+
+    def test_on_message_defaults_passive_empty_when_absent(self):
+        # Old host: no key, so a previously learned set must not survive.
+        main._passive_macs = {_MAC_STR}
+        self._config({"scales": [_MAC_STR]})
+        self.assertEqual(main._passive_macs, set())
+
+    def test_on_message_ignores_a_non_list_passive(self):
+        self._config({"scales": [_MAC_STR], "passive": _MAC_STR})
+        self.assertEqual(main._passive_macs, set())
+
+    def test_find_scale_skips_passive_and_returns_the_gatt_scale(self):
+        self._config({"scales": [_MAC_STR, _OTHER_MAC_STR], "passive": [_MAC_STR]})
+        raw = [_raw_entry(_MAC_BYTES), _raw_entry(_OTHER_MAC_BYTES, addr_type=0)]
+        result = main._find_scale_in_raw(raw)
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0], _OTHER_MAC_STR)
+
+    def test_find_scale_returns_none_when_only_passive_present(self):
+        self._config({"scales": [_MAC_STR], "passive": [_MAC_STR]})
+        self.assertIsNone(main._find_scale_in_raw([_raw_entry(_MAC_BYTES)]))
+
+    def test_auto_connect_allowed(self):
+        self._config({"scales": [_MAC_STR, _OTHER_MAC_STR], "passive": [_MAC_STR]})
+        self.assertFalse(main._auto_connect_allowed(_MAC_STR))
+        self.assertTrue(main._auto_connect_allowed(_OTHER_MAC_STR))
+        self.assertFalse(main._auto_connect_allowed(_PUBLIC_MAC_STR))
+        self._config(
+            {"scales": [_MAC_STR, _OTHER_MAC_STR], "passive": [_MAC_STR], "autoConnect": False}
+        )
+        self.assertFalse(main._auto_connect_allowed(_OTHER_MAC_STR))
+
+    def test_passive_scale_still_beeps(self):
+        # _check_scale_beep keys on _scale_macs only, so a passive scale keeps
+        # its instant beep.
+        self._config({"scales": [_MAC_STR], "passive": [_MAC_STR]})
+        orig_time, orig_beep = main.time, main._last_beep_time
+        # MicroPython's tick helpers, stubbed on a stand-in so the real time
+        # module is left untouched.
+        main.time = types.SimpleNamespace(ticks_ms=lambda: 10**9, ticks_diff=lambda a, b: a - b)
+        main._last_beep_time = 0
+        try:
+            main._check_scale_beep([{"address": _MAC_STR}])
+            self.assertEqual(main._last_beep_time, 10**9)
+        finally:
+            main.time, main._last_beep_time = orig_time, orig_beep
+
+
 if __name__ == "__main__":
     unittest.main()
