@@ -223,6 +223,54 @@ describe('handler-node-ble broadcastScanNodeBle grace timer (#163 follow-up)', (
     expect(result.reading.weight).toBe(70.0);
     expect(result.reading.impedance).toBe(0);
   });
+
+  // #357: a weigh-in that settles shortly before the poll deadline is still
+  // inside its grace when the deadline fires. It is returned, not dropped.
+  it('deadline during a hold: resolves with the held weight-only reading', async () => {
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    });
+    const { DISCOVERY_TIMEOUT_MS } = await import('../../src/ble/types.js');
+    const device = makeDevice();
+    const promise = _internals.broadcastScanNodeBle(
+      makePassiveAdapter('always-partial'),
+      makeAdapter() as never,
+      device as never,
+      'AA:BB:CC:DD:EE:FF',
+      {},
+    );
+    const outcome = promise.then(
+      (r) => ({ ok: true as const, r }),
+      (e: Error) => ({ ok: false as const, e }),
+    );
+
+    await new Promise((r) => setImmediate(r));
+    await vi.advanceTimersByTimeAsync(DISCOVERY_TIMEOUT_MS - 5_000);
+    device.helper.emit('PropertiesChanged', { ServiceData: serviceDataPayload() });
+    await vi.advanceTimersByTimeAsync(5_600);
+
+    const result = await outcome;
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.r.reading).toEqual({ weight: 70.0, impedance: 0 });
+  });
+
+  it('deadline with nothing held: rejects as before', async () => {
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    });
+    const { DISCOVERY_TIMEOUT_MS } = await import('../../src/ble/types.js');
+    const promise = _internals.broadcastScanNodeBle(
+      makePassiveAdapter('always-partial'),
+      makeAdapter() as never,
+      makeDevice() as never,
+      'AA:BB:CC:DD:EE:FF',
+      {},
+    );
+    const assertion = expect(promise).rejects.toThrow(/No stable broadcast reading within/);
+    await new Promise((r) => setImmediate(r));
+    await vi.advanceTimersByTimeAsync(DISCOVERY_TIMEOUT_MS + 1_000);
+    await assertion;
+  });
 });
 
 // ─── Manufacturer-data broadcast path (#297) ─────────────────────────────────

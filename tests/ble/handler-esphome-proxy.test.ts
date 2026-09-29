@@ -572,6 +572,53 @@ describe('scanAndReadRaw, grace timer (passive scan)', () => {
     expect(result.reading.weight).toBe(70.0);
     expect(result.reading.impedance).toBe(0);
   });
+
+  // #357: a weigh-in that settles shortly before the scan deadline is still
+  // inside its grace when the deadline fires. It is returned, not dropped.
+  it('deadline during a hold: resolves with the held weight-only reading', async () => {
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    });
+    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy/index.js');
+    const promise = scanAndReadRaw({
+      adapters: [makePassiveAdapter('always-partial')],
+      profile,
+      esphomeProxy: config,
+      bleHandler: 'esphome-proxy',
+    });
+    const outcome = promise.then(
+      (r) => ({ ok: true as const, r }),
+      (e: Error) => ({ ok: false as const, e }),
+    );
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    await vi.advanceTimersByTimeAsync(55_000);
+    pushPassiveAd();
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    const result = await outcome;
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.r.reading).toEqual({ weight: 70.0, impedance: 0 });
+  });
+
+  it('deadline with nothing held: rejects as before', async () => {
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    });
+    const { scanAndReadRaw } = await import('../../src/ble/handler-esphome-proxy/index.js');
+    const promise = scanAndReadRaw({
+      adapters: [makePassiveAdapter('always-partial')],
+      profile,
+      esphomeProxy: config,
+      bleHandler: 'esphome-proxy',
+    });
+    const assertion = expect(promise).rejects.toThrow(/Timed out waiting for any recognized scale/);
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    await vi.advanceTimersByTimeAsync(60_100);
+    await assertion;
+  });
 });
 
 describe('waitForConnected via scanAndReadRaw', () => {

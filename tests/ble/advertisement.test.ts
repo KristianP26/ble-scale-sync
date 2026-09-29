@@ -207,6 +207,21 @@ describe('GraceTimers', () => {
     expect(onElapsed).toHaveBeenCalledWith('AA', raw(71));
   });
 
+  it('takeHeld returns the first held reading and cancels its timer (#357)', () => {
+    const onElapsed = vi.fn();
+    const g = new GraceTimers(1000, onElapsed);
+    expect(g.takeHeld()).toBeNull();
+    g.hold('AA', raw(70));
+    g.hold('BB', raw(80));
+    g.hold('AA', raw(71));
+    expect(g.takeHeld()).toEqual({ address: 'AA', reading: raw(71) });
+    vi.advanceTimersByTime(1000);
+    // Only BB's timer is left to fire.
+    expect(onElapsed).toHaveBeenCalledTimes(1);
+    expect(onElapsed).toHaveBeenCalledWith('BB', raw(80));
+    expect(g.takeHeld()).toBeNull();
+  });
+
   it('cancel stops a pending timer and drops the stored reading', () => {
     const onElapsed = vi.fn();
     const g = new GraceTimers(1000, onElapsed);

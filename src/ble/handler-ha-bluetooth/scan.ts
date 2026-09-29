@@ -70,6 +70,10 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     // same window do not clobber each other's pending fallback (#161).
     const graceBox: { grace: GraceTimers | null } = { grace: null };
 
+    const timeoutMessage = targetMac
+      ? `Timed out waiting for ${targetMac} via Home Assistant Bluetooth.`
+      : `Timed out waiting for any recognized scale via Home Assistant Bluetooth.`;
+
     try {
       return await withTimeout(
         new Promise<RawReading>((resolve) => {
@@ -138,10 +142,21 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
           });
         }),
         BROADCAST_WAIT_MS,
-        targetMac
-          ? `Timed out waiting for ${targetMac} via Home Assistant Bluetooth.`
-          : `Timed out waiting for any recognized scale via Home Assistant Bluetooth.`,
+        timeoutMessage,
       );
+    } catch (err) {
+      // A weight-only reading still inside its grace when the deadline fires is
+      // a weigh-in the scale finished, so it is returned rather than dropped
+      // with the timeout (#357). Only on the deadline: any other failure stands.
+      const held =
+        err instanceof Error && err.message === timeoutMessage ? graceBox.grace?.takeHeld() : null;
+      if (!held) throw err;
+      bleLog.info(
+        `Matched: ${held.reading.adapter.name} (${held.address}), weight only, ` +
+          `scan deadline reached while waiting for impedance`,
+      );
+      bleLog.info(`Broadcast reading: ${held.reading.reading.weight} kg`);
+      return held.reading;
     } finally {
       graceBox.grace?.clear();
     }

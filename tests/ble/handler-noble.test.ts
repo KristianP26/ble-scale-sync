@@ -27,7 +27,7 @@ vi.mock('@stoprocent/noble', () => ({
 }));
 
 const { _internals } = await import('../../src/ble/handler-noble.js');
-const { IMPEDANCE_GRACE_MS } = await import('../../src/ble/types.js');
+const { IMPEDANCE_GRACE_MS, DISCOVERY_TIMEOUT_MS } = await import('../../src/ble/types.js');
 
 // ─── Test helpers ────────────────────────────────────────────────────────────
 
@@ -151,5 +151,52 @@ describe('handler-noble broadcastScan grace timer (#163)', () => {
     const result = await promise;
     expect(result.reading.weight).toBe(70.0);
     expect(result.reading.impedance).toBe(0);
+  });
+
+  // #357: a weigh-in that settles shortly before the scan deadline is still
+  // inside its grace when the deadline fires. It is returned, not dropped.
+  it('deadline during a hold: resolves with the held weight-only reading', async () => {
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    });
+    const target = makePeripheral([
+      { uuid: '0x181b', data: Buffer.from([0x01, 0x02, 0x03, 0x04]) },
+    ]);
+    const promise = _internals.broadcastScan(
+      makePassiveAdapter('always-partial'),
+      target as never,
+      {},
+    );
+    const outcome = promise.then(
+      (r) => ({ ok: true as const, r }),
+      (e: Error) => ({ ok: false as const, e }),
+    );
+    await new Promise((r) => setImmediate(r));
+    await vi.advanceTimersByTimeAsync(DISCOVERY_TIMEOUT_MS - 5_000);
+    mockNoble.emit('discover', target);
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    const result = await outcome;
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.r.reading).toEqual({ weight: 70.0, impedance: 0 });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('deadline with nothing held: rejects as before', async () => {
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    });
+    const target = makePeripheral([
+      { uuid: '0x181b', data: Buffer.from([0x01, 0x02, 0x03, 0x04]) },
+    ]);
+    const promise = _internals.broadcastScan(
+      makePassiveAdapter('always-partial'),
+      target as never,
+      {},
+    );
+    const assertion = expect(promise).rejects.toThrow(/No stable broadcast reading within/);
+    await new Promise((r) => setImmediate(r));
+    await vi.advanceTimersByTimeAsync(DISCOVERY_TIMEOUT_MS + 100);
+    await assertion;
   });
 });

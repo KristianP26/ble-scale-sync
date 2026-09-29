@@ -251,6 +251,17 @@ export async function broadcastScanNodeBle(
         await sleep(500);
         if (done) break;
       }
+      // A weight-only reading still inside its grace is a weigh-in the scale
+      // finished: return it rather than drop it with the timeout (#357). Not on
+      // an abort, which onAbort has already turned into a rejection.
+      if (!done && bestWeightOnly && !abortSignal?.aborted) {
+        const held: RawReading = bestWeightOnly;
+        bleLog.info(
+          `Broadcast reading (weight only, scan deadline reached while waiting for impedance): ` +
+            `${held.reading.weight.toFixed(2)} kg`,
+        );
+        finish(held);
+      }
       if (!done) {
         fail(
           new Error(

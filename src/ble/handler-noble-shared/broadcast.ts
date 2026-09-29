@@ -51,7 +51,18 @@ export function broadcastScan(
     });
 
     const timeout = setTimeout(() => {
+      // A weight-only reading still inside its grace is a weigh-in the scale
+      // finished: return it rather than drop it with the timeout (#357).
+      const held = grace.takeHeld();
       cleanup();
+      if (held) {
+        bleLog.info(
+          `Broadcast reading (weight only, scan deadline reached while waiting for impedance): ` +
+            `${held.reading.reading.weight.toFixed(2)} kg`,
+        );
+        resolve(held.reading);
+        return;
+      }
       reject(new Error(`No stable broadcast reading within ${DISCOVERY_TIMEOUT_MS / 1000}s`));
     }, DISCOVERY_TIMEOUT_MS);
 

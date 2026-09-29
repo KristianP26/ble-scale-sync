@@ -191,6 +191,27 @@ describe('ha-bluetooth scanAndReadRaw', () => {
     expect(client().stopped).toBe(true);
   });
 
+  // #357: a weigh-in that settles shortly before the scan deadline is still
+  // inside its grace when the deadline fires. It is returned, not dropped.
+  it('resolves with a held weight-only frame when the scan deadline fires during its grace', async () => {
+    const p = scanAndReadRaw({
+      adapters: [makePassiveAdapter()],
+      profile: PROFILE,
+      haBluetooth: CONFIG,
+    });
+    const outcome = p.then(
+      (r) => ({ ok: true as const, r }),
+      (e: Error) => ({ ok: false as const, e }),
+    );
+    await vi.advanceTimersByTimeAsync(55_000);
+    client().emit(passive(70, 0), MAC);
+    await vi.advanceTimersByTimeAsync(5_100);
+    const result = await outcome;
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.r.reading).toEqual({ weight: 70, impedance: 0 });
+    expect(client().stopped).toBe(true);
+  });
+
   it('propagates a client start failure', async () => {
     FakeHaBluetoothClient.failStart = new Error('auth_invalid');
     await expect(

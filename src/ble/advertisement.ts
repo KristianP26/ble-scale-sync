@@ -172,6 +172,24 @@ export class GraceTimers {
     this.readings.delete(address);
   }
 
+  /**
+   * Take the reading held longest, cancelling its timer, or null when nothing is
+   * held.
+   *
+   * For a single-shot scan whose own deadline fires while a weight-only reading
+   * is still waiting out its grace. Dropping it there would lose a weigh-in the
+   * scale really finished, and an adapter that has already handed that reading
+   * out (Silvergear 108, #357) does not hand it out again, so the next scan
+   * would not see it either.
+   */
+  takeHeld(): { address: string; reading: RawReading } | null {
+    for (const [address, reading] of this.readings) {
+      this.cancel(address);
+      return { address, reading };
+    }
+    return null;
+  }
+
   /** Clear all pending timers and stored readings (teardown). */
   clear(): void {
     for (const t of this.timers.values()) clearTimeout(t);
