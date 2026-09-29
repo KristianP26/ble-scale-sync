@@ -46,7 +46,7 @@ function diffField(
 /**
  * Compare old vs new config and return restart-required field changes.
  *
- * Notably hot-swappable (NOT in this list): scale_mac, weight_unit, height_unit,
+ * Notably hot-swappable (NOT in this list): scale_mac, weight_unit, height_unit, display_unit,
  * runtime.dry_run, runtime.debug, runtime.scan_cooldown, runtime.idle_rescan_delay,
  * ble.session_timeout_sec, ble.auto_clear_stale_bond, ble.bind_key, every ble.qn_*,
  * ble.proxy_liveness_timeout_min, exporters,

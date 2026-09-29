@@ -46,7 +46,7 @@ describe('collectUnknownKeys', () => {
         auto_clear_stale_bond: true,
         proxy_liveness_timeout_min: 45,
       },
-      scale: { weight_unit: 'kg', height_unit: 'cm' },
+      scale: { weight_unit: 'kg', height_unit: 'cm', display_unit: 'weight_unit' },
       unknown_user: 'nearest',
       out_of_range: 'skip',
       users: [{ ...USER, exporters: [{ type: 'mqtt', broker_url: 'mqtt://h:1883' }] }],
