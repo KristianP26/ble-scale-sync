@@ -8,7 +8,12 @@ import type { ScanOptions, ScanResult } from '../types.js';
 import type { RawReading } from '../shared.js';
 import { waitForRawReading, withAbandonmentCleanup } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
-import { evaluateAdvertisement, logAdvert, safeName } from '../advertisement.js';
+import {
+  evaluateAdvertisement,
+  logAdvert,
+  readsFromAdvertisement,
+  safeName,
+} from '../advertisement.js';
 import { bleLog, normalizeUuid, withTimeout, formatMac } from '../types.js';
 import { COMMAND_TIMEOUT_MS, topics, type Topics } from './topics.js';
 import { type MqttClient, createMqttClient } from './client.js';
@@ -213,11 +218,34 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         entry.addr_type ?? 0,
       );
       try {
+        // Re-resolve char-aware now that discovery is complete, as the watcher
+        // does (#319): before discovery Mi Scale 2 claims anything advertising
+        // the generic 0x181B service, and a standard BCS scale reaches its own
+        // adapter only here.
+        const discovered = { ...info, characteristicUuids: [...charMap.keys()] };
+        const resolved = resolveAdapter(discovered, adapters) ?? adapter;
+        if (resolved.name !== adapter.name) {
+          bleLog.info(
+            `Re-resolved adapter after GATT discovery: ${adapter.name} -> ${resolved.name} (${entry.address})`,
+          );
+        }
+        // A scale read from its advertisements is never driven over GATT; its
+        // GATT path can answer the unlock forever without a weight (#422).
+        if (readsFromAdvertisement(resolved)) {
+          bleLog.info(
+            `Connect to ${resolved.name} (${entry.address}) ignored: this scale is read from ` +
+              'its advertisements, not over GATT. Disconnecting.',
+          );
+          // Awaited, so the config marking it passive reaches the broker
+          // before the disconnect in the finally.
+          await registerScaleMac(config, entry.address, resolved).catch(() => {});
+          continue;
+        }
         const raw = await withAbandonmentCleanup(device, () =>
           waitForRawReading(
             charMap,
             device,
-            adapter,
+            resolved,
             opts.profile,
             entry.address.replace(/[:-]/g, '').toUpperCase(),
             opts.weightUnit,
@@ -225,7 +253,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
             opts.scaleAuth,
           ),
         );
-        registerScaleMac(config, entry.address, adapter).catch(() => {});
+        registerScaleMac(config, entry.address, resolved).catch(() => {});
         return raw;
       } finally {
         // fireDisconnect() (inside the wrapper) before cleanup(), so the

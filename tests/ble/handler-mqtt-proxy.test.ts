@@ -2279,6 +2279,65 @@ describe('handler-mqtt-proxy', () => {
         await watcher.stop();
       });
 
+      it('drops a single-shot session once discovery shows a Mi Scale 2', async () => {
+        const infoSpy = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+        mockClient.subscribeAsync = vi.fn(async (topic: string) => {
+          if (topic === `${PREFIX}/status`) {
+            queueMicrotask(() => mockClient._simulateMessage(`${PREFIX}/status`, 'online'));
+          }
+          if (topic === `${PREFIX}/scan/results`) {
+            // Nameless, 0x181B only, no service data: it reaches the GATT decision.
+            queueMicrotask(() =>
+              mockClient._simulateMessage(
+                `${PREFIX}/scan/results`,
+                JSON.stringify([
+                  {
+                    address: MI_MAC,
+                    name: '',
+                    rssi: -60,
+                    services: ['0000181b00001000800000805f9b34fb'],
+                  },
+                ]),
+              ),
+            );
+          }
+          return [];
+        });
+        const origPublish = mockClient.publishAsync;
+        mockClient.publishAsync = vi.fn(async (topic: string, payload?: string | Buffer) => {
+          if (topic === `${PREFIX}/connect`) {
+            queueMicrotask(() =>
+              mockClient._simulateMessage(
+                `${PREFIX}/connected`,
+                JSON.stringify({ address: MI_MAC, chars: MI_CHARS }),
+              ),
+            );
+          }
+          return origPublish(topic, payload);
+        });
+
+        await expect(
+          scanAndReadRaw({
+            adapters: [...realAdapters],
+            profile: PROFILE,
+            mqttProxy: MQTT_PROXY_CONFIG,
+          }),
+        ).rejects.toThrow('No recognized scale found');
+
+        const published = topicsPublished();
+        expect(published.filter((t) => t === `${PREFIX}/connect`)).toHaveLength(1);
+        expect(published.filter((t) => t.startsWith(`${PREFIX}/write/`))).toEqual([]);
+        expect(published.filter((t) => t.startsWith(`${PREFIX}/subscribe/`))).toEqual([]);
+        expect(published.filter((t) => t === `${PREFIX}/disconnect`)).toHaveLength(1);
+        expect(
+          infoSpy.mock.calls.some((c) =>
+            String(c[0]).includes(`Connect to Xiaomi Mi Scale 2 (${MI_MAC}) ignored`),
+          ),
+        ).toBe(true);
+        infoSpy.mockRestore();
+        mockClient.publishAsync = origPublish;
+      });
+
       it('tells the ESP32 to stop connecting, before it sends the disconnect', async () => {
         // The reporter's setup: scale_mac seeded as an ordinary scale at start,
         // so the first weigh-in is the one that teaches the proxy.
