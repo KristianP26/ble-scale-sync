@@ -167,8 +167,11 @@ interface UnitState {
    * it is what the transport's grace timer is measured from: that timer is armed
    * by the first weight-only reading and is NOT re-armed by later ones until it
    * has fired. A settling stream in between (someone stepping off and back on)
-   * ends the weigh-in but not the timer, so measuring from the second weigh-in
-   * would let its `0x06` complete after the timer had already exported it.
+   * past the pairing window ends the weigh-in but not the timer, so measuring
+   * from the second weigh-in would let its `0x06` complete after the timer had
+   * already exported it. Inside the window the step-off completes the first
+   * weigh-in instead (see `endWeighIn`), which does end the timer, and clears
+   * this.
    */
   heldAt: number | null;
 }
@@ -314,7 +317,7 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
       // new number, or idle at zero. Cleared whether or not it was paired, so a
       // new weigh-in that lands on the same grams is not mistaken for a repeat.
       const state = this.units.get(mac);
-      if (state) state.weighIn = null;
+      const ended = state ? this.endWeighIn(state) : null;
       // Log the value, not the poll. The node-ble broadcast path re-reads
       // BlueZ's cached ManufacturerData on a timer as a fallback for
       // PropertiesChanged, so an unchanged advertisement is re-parsed several
@@ -325,7 +328,7 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
         this.lastSettlingKg = weight;
         bleLog.debug(`Silvergear settling: ${weight.toFixed(3)} kg`);
       }
-      return null;
+      return ended;
     }
     this.lastSettlingKg = null;
     if (weight < WEIGHT_MIN_KG || weight > WEIGHT_MAX_KG) return null;
@@ -411,6 +414,37 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
       bleLog.debug(`Silvergear body frame (undecoded, ${why}): ${hex} field=${field}`);
     }
     return null;
+  }
+
+  /**
+   * End this unit's weigh-in on a settling or idle frame. Returns a completed
+   * weight-only reading when the weigh-in ended unpaired while its hold was
+   * still inside the pairing window, and null otherwise.
+   *
+   * That case is someone stepping off before the `0x06` arrives. The transport
+   * is still holding their weight, and a second weigh-in in the same hold would
+   * overwrite it there (GraceTimers keeps one reading per address), so the first
+   * person's weigh-in would be lost. Completing it here makes the transport
+   * export it at once and cancel its grace timer, and the next weigh-in starts a
+   * hold of its own. Inside the window the grace timer cannot have fired yet
+   * (BODY_FRAME_WINDOW_MS < IMPEDANCE_GRACE_MS), so this is never a second
+   * export of the same weigh-in; past it the timer owns the weigh-in, as for a
+   * late `0x06`.
+   */
+  private endWeighIn(state: UnitState): ScaleReading | null {
+    const current = state.weighIn;
+    state.weighIn = null;
+    if (!current || current.closed || state.heldAt === null) return null;
+    if (this.now() - state.heldAt > BODY_FRAME_WINDOW_MS) return null;
+    current.closed = true;
+    state.heldAt = null;
+    bleLog.debug(
+      `Silvergear weigh-in ended before its post-weigh-in frame: ` +
+        `${(current.grams / 1000).toFixed(3)} kg, reporting it without one`,
+    );
+    const reading: ScaleReading = { weight: current.grams / 1000, impedance: 0 };
+    this.completeReadings.add(reading);
+    return reading;
   }
 
   private unitState(mac: string): UnitState {

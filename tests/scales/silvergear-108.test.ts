@@ -351,20 +351,56 @@ describe('Silvergear108Adapter (#297)', () => {
       expect(at(1000, BODY_108).complete).toBe(true);
     });
 
-    // Someone steps off and back on inside one hold. The transport armed its
-    // grace timer on the first weight and does not re-arm it for the second, so
-    // measuring the window from the second would let its 0x06 complete after the
-    // timer had already exported it: two exports of one weigh-in.
-    it('measures the window from the first weight of the hold, across a step-off', () => {
+    // Two people, or one stepping off and back on. The first steps off before
+    // any 0x06, so the settling frame that follows ends their weigh-in while the
+    // transport is still holding it. The transport keeps one held reading per
+    // address, so a second weigh-in in that hold would overwrite the first and
+    // it would be lost. The first is completed from the settling frame instead,
+    // weight only, which makes the transport export it at once and drop its
+    // grace timer; the second then gets a hold, and a pairing window, of its own.
+    it('exports a weigh-in that ends before its 0x06, and gives the next its own hold', () => {
       at(0, SETTLED_108);
-      at(3000, SETTLING_108);
-      expect(at(6000, '202d099c0dff').reading).toEqual({ weight: 108.86, impedance: 0 });
-      expect(at(BODY_FRAME_WINDOW_MS + 1, 'a2ada0a206f7').reading).toBeNull();
+      expect(at(3000, SETTLING_108)).toEqual({
+        reading: { weight: 108.48, impedance: 0 },
+        complete: true,
+      });
+      // Re-reads of the settling stream, and a late 0x06, add nothing to it.
+      expect(at(3500, SETTLING_108).reading).toBeNull();
+      expect(at(6000, '202d099c0dff')).toEqual({
+        reading: { weight: 108.86, impedance: 0 },
+        complete: false,
+      });
+      // Measured from the second weigh-in's own hold, which began at 6 s.
+      expect(at(6000 + BODY_FRAME_WINDOW_MS, 'a2ada0a206f7')).toEqual({
+        reading: { weight: 108.86, impedance: 0 },
+        complete: true,
+      });
+    });
+
+    it('does not pair a late 0x06 with a weigh-in its step-off already reported', () => {
+      at(0, SETTLED_108);
+      expect(at(3000, SETTLING_108).complete).toBe(true);
+      expect(at(3500, BODY_108).reading).toBeNull();
+      expect(at(4000, IDLE).reading).toBeNull();
+    });
+
+    // Past the window the transport's grace timer owns the weigh-in, as for a
+    // late 0x06, so the step-off completes nothing and the hold carries on:
+    // measuring a new window from the next weigh-in would let its 0x06 complete
+    // after the timer had already exported the hold, two exports of one hold.
+    it('leaves a weigh-in that ends past the window to the transport, and keeps its hold', () => {
+      at(0, SETTLED_108);
+      expect(at(BODY_FRAME_WINDOW_MS + 1, SETTLING_108).reading).toBeNull();
+      expect(at(BODY_FRAME_WINDOW_MS + 500, '202d099c0dff').reading).toEqual({
+        weight: 108.86,
+        impedance: 0,
+      });
+      expect(at(BODY_FRAME_WINDOW_MS + 1000, 'a2ada0a206f7').reading).toBeNull();
     });
 
     it('starts a fresh hold once the last one can have run out', () => {
       at(0, SETTLED_108);
-      at(5000, SETTLING_108);
+      at(BODY_FRAME_WINDOW_MS + 1, SETTLING_108);
       at(IMPEDANCE_GRACE_MS, SETTLED_108);
       expect(at(IMPEDANCE_GRACE_MS + 1000, BODY_108).complete).toBe(true);
     });

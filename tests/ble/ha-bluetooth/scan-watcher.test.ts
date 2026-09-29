@@ -383,4 +383,25 @@ describe('ha-bluetooth ReadingWatcher with the Silvergear 108', () => {
     expect(await nothingQueuedWithin(w, 31_000)).toBe(true);
     await w.stop();
   });
+
+  // One person steps off before their 0x06 and a second steps on inside the
+  // same hold. Holding both on one address kept only the second (#357).
+  it('queues both weigh-ins when the first ends before its post-weigh-in frame', async () => {
+    const w = new ReadingWatcher(CONFIG, [new Silvergear108Adapter()], undefined, PROFILE);
+    await w.start();
+
+    client().emit(SETTLED, MAC);
+    await vi.advanceTimersByTimeAsync(3_000);
+    client().emit(sg('a02d07600da1'), MAC); // settling: the first person stepped off
+    expect((await w.nextReading()).reading).toEqual({ weight: 108.48, impedance: 0 });
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    client().emit(sg('202d099c0dff'), MAC); // second person settles at 108.86 kg
+    await vi.advanceTimersByTimeAsync(1_500);
+    client().emit(sg('a2ada0a206f7'), MAC);
+    expect((await w.nextReading()).reading).toEqual({ weight: 108.86, impedance: 0 });
+
+    expect(await nothingQueuedWithin(w, 31_000)).toBe(true);
+    await w.stop();
+  });
 });
