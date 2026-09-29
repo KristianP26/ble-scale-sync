@@ -461,7 +461,9 @@ export async function teardownSession(opts: {
  *
  * Two timeouts, not one: the inner deadline restarts on every frame the scale
  * sends, so a scale that keeps talking never trips it, and the outer one bounds
- * the whole session anyway.
+ * the whole session anyway. A composition hold still in progress moves the cap
+ * out to the end of the hold, so the held weight resolves instead of being cut
+ * (#434).
  */
 export async function readWithTimeouts(
   charMap: Map<string, BleChar>,
@@ -478,25 +480,22 @@ export async function readWithTimeouts(
 ): Promise<RawReading> {
   const idleMs = opts.readingTimeoutMs ?? RAW_READING_TIMEOUT_MS;
   return await withAbandonmentCleanup(bleDevice, () =>
-    withTimeout(
-      withIdleTimeout(
-        (onActivity) =>
-          waitForRawReading(
-            charMap,
-            bleDevice,
-            matchedAdapter,
-            opts.profile,
-            deviceMac.replace(/[:-]/g, '').toUpperCase(),
-            opts.weightUnit,
-            opts.onLiveData,
-            opts.scaleAuth,
-            onActivity,
-          ),
-        idleMs,
-        'Timed out waiting for a complete scale reading',
-      ),
-      idleMs * READING_SESSION_CAP_FACTOR,
-      'GATT session cap exceeded',
+    withIdleTimeout(
+      (onActivity) =>
+        waitForRawReading(
+          charMap,
+          bleDevice,
+          matchedAdapter,
+          opts.profile,
+          deviceMac.replace(/[:-]/g, '').toUpperCase(),
+          opts.weightUnit,
+          opts.onLiveData,
+          opts.scaleAuth,
+          onActivity,
+        ),
+      idleMs,
+      'Timed out waiting for a complete scale reading',
+      { ms: idleMs * READING_SESSION_CAP_FACTOR, message: 'GATT session cap exceeded' },
     ),
   );
 }

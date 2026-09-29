@@ -175,6 +175,62 @@ describe('withIdleTimeout()', () => {
       vi.useRealTimers();
     }
   });
+
+  it('ends at the cap however much activity arrives (#434)', async () => {
+    vi.useFakeTimers();
+    try {
+      let signal!: (minIdleMs?: number) => void;
+      const result = withIdleTimeout(
+        (onActivity) => {
+          signal = onActivity;
+          return new Promise<never>(() => {});
+        },
+        1000,
+        'idle',
+        { ms: 3000, message: 'cap' },
+      );
+      const outcome = expect(result).rejects.toThrow('cap');
+      for (let i = 0; i < 6; i++) {
+        await vi.advanceTimersByTimeAsync(500);
+        signal();
+      }
+      await outcome;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('moves the cap out to the end of a requested minimum window (#434)', async () => {
+    vi.useFakeTimers();
+    try {
+      let signal!: (minIdleMs?: number) => void;
+      let finish!: (v: string) => void;
+      let failure: unknown = null;
+      const result = withIdleTimeout(
+        (onActivity) => {
+          signal = onActivity;
+          return new Promise<string>((resolve) => {
+            finish = resolve;
+          });
+        },
+        1000,
+        'idle',
+        { ms: 3000, message: 'cap' },
+      );
+      result.catch((e: unknown) => {
+        failure = e;
+      });
+      await vi.advanceTimersByTimeAsync(900);
+      signal(5000);
+      // The floor ends at 5900, past the 3000 cap.
+      await vi.advanceTimersByTimeAsync(4900);
+      expect(failure).toBeNull();
+      finish('held');
+      await expect(result).resolves.toBe('held');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('normalizeUuid, the only one (#406)', () => {

@@ -512,9 +512,10 @@ async function subscribeAndInit(
 const MAX_HISTORY_FRAMES = 500;
 
 /**
- * Margin by which a composition hold keeps the caller's idle timeout away, so
- * the hold's own timer, which resolves with the settled weight, always fires
- * first.
+ * Margin by which a composition hold keeps the caller's idle timeout and, on
+ * the native handlers, its absolute session cap away, so the hold's own timer,
+ * which resolves with the settled weight, fires first. The proxy handlers'
+ * fixed caps are not moved by it.
  */
 const HOLD_IDLE_SLACK_MS = 2_000;
 

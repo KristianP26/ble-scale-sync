@@ -240,21 +240,42 @@ export { withTimeout } from '../utils/timeout.js';
  * that race drops the settled weight together with the composition it was
  * waiting for. The hold is bounded by its own timer, so this cannot keep a
  * session open indefinitely.
+ *
+ * `cap` is an absolute deadline for the whole session, counted from the call,
+ * that activity does not restart. A requested minimum window moves it out too
+ * when the window would end later: with the cap at 3 x a 5 s
+ * `session_timeout_sec`, a 30 s hold armed a few seconds in was otherwise still
+ * cut at 15 s, and the held weight dropped with it (#434). Only that minimum
+ * window moves the cap, and the hold that requests it arms once per session,
+ * so the cap stays bounded.
  */
 export async function withIdleTimeout<T>(
   start: (onActivity: (minIdleMs?: number) => void) => Promise<T>,
   ms: number,
   message: string,
+  cap?: { ms: number; message: string },
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let capTimer: ReturnType<typeof setTimeout> | undefined;
   let rejectTimeout!: (err: Error) => void;
   const timeout = new Promise<never>((_resolve, reject) => {
     rejectTimeout = reject;
   });
+  let capAt = 0;
+  const armCap = (at: number): void => {
+    if (!cap) return;
+    capAt = at;
+    clearTimeout(capTimer);
+    capTimer = setTimeout(() => rejectTimeout(new Error(cap.message)), at - Date.now());
+  };
+  if (cap) armCap(Date.now() + cap.ms);
   let floorAt = 0;
   const onActivity = (minIdleMs?: number): void => {
     const now = Date.now();
-    if (minIdleMs !== undefined && minIdleMs > 0) floorAt = Math.max(floorAt, now + minIdleMs);
+    if (minIdleMs !== undefined && minIdleMs > 0) {
+      floorAt = Math.max(floorAt, now + minIdleMs);
+      if (cap && floorAt > capAt) armCap(floorAt);
+    }
     clearTimeout(timer);
     timer = setTimeout(() => rejectTimeout(new Error(message)), Math.max(ms, floorAt - now));
   };
@@ -263,6 +284,7 @@ export async function withIdleTimeout<T>(
     return await Promise.race([start(onActivity), timeout]);
   } finally {
     clearTimeout(timer);
+    clearTimeout(capTimer);
   }
 }
 

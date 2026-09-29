@@ -18,9 +18,12 @@ vi.mock('../../../src/ble/handler-node-ble/gatt.js', async (importOriginal) => {
   return { ...actual, buildCharMap: h.buildCharMap };
 });
 
-const { classifyBleFailure, buildCharMapWithRetry } =
+const { classifyBleFailure, buildCharMapWithRetry, readWithTimeouts } =
   await import('../../../src/ble/handler-node-ble/scan-stages.js');
 const { bleFailureKind } = await import('../../../src/ble/failure-kind.js');
+const { normalizeUuid } = await import('../../../src/ble/types.js');
+import type { BleChar, BleDevice } from '../../../src/ble/shared.js';
+import type { ScaleAdapter } from '../../../src/interfaces/scale-adapter.js';
 
 /**
  * #406: this module is the primary Linux/RPi GATT path and the home of #143,
@@ -115,4 +118,119 @@ describe('buildCharMapWithRetry', () => {
     expect(result).toBe(partial);
     expect(h.buildCharMap.mock.calls.length).toBeGreaterThan(1);
   }, 20_000);
+});
+
+/**
+ * #434: the absolute session cap is session_timeout_sec x 3, so 15 s at the
+ * lowest allowed 5 s. A 30 s composition hold (the R-MSC04's) armed after the
+ * weight settles must still resolve with the held weight instead of being cut
+ * by the cap, and without a hold the cap must behave exactly as before.
+ */
+describe('readWithTimeouts: composition hold against the session cap', () => {
+  const NOTIFY = normalizeUuid('fff1');
+  const HOLD_MS = 30_000;
+
+  function makeSession() {
+    let onData: ((d: Buffer) => void) | null = null;
+    const notifyChar: BleChar = {
+      subscribe: vi.fn(async (cb: (d: Buffer) => void) => {
+        onData = cb;
+        return () => {
+          onData = null;
+        };
+      }),
+      write: vi.fn(async () => {}),
+      read: vi.fn(async () => Buffer.alloc(0)),
+    };
+    let disconnect: (() => void) | null = null;
+    const device: BleDevice = {
+      onDisconnect: (cb) => {
+        disconnect = cb;
+      },
+      fireDisconnect: () => {
+        const cb = disconnect;
+        disconnect = null;
+        cb?.();
+      },
+    };
+    const charMap = new Map<string, BleChar>([[NOTIFY, notifyChar]]);
+    return { charMap, device, send: (b: number) => onData?.(Buffer.from([b])) };
+  }
+
+  function makeAdapter(overrides: Partial<ScaleAdapter>): ScaleAdapter {
+    return {
+      name: 'HoldScale',
+      charNotifyUuid: NOTIFY,
+      charWriteUuid: NOTIFY,
+      normalizesWeight: true,
+      matches: () => true,
+      parseNotification: () => ({ weight: 81.55, impedance: 0 }),
+      isComplete: () => true,
+      computeMetrics: vi.fn(),
+      ...overrides,
+    } as ScaleAdapter;
+  }
+
+  const PROFILE = { height: 180, age: 30, gender: 'male' as const, isAthlete: false };
+
+  for (const sessionTimeoutSec of [5, 10]) {
+    const idleMs = sessionTimeoutSec * 1000;
+
+    it(`resolves the held weight when the hold outlasts the cap (session_timeout_sec ${sessionTimeoutSec})`, async () => {
+      vi.useFakeTimers();
+      try {
+        const s = makeSession();
+        const adapter = makeAdapter({ completionHoldMs: HOLD_MS, isFinal: () => false });
+        const promise = readWithTimeouts(s.charMap, s.device, adapter, 'AA:BB:CC:DD:EE:FF', {
+          profile: PROFILE,
+          readingTimeoutMs: idleMs,
+        });
+        let failure: unknown = null;
+        promise.catch((e: unknown) => {
+          failure = e;
+        });
+        await vi.advanceTimersByTimeAsync(1000);
+        s.send(0x01);
+
+        // Past the cap (3 x idle), still inside the hold, which ends at 31 s.
+        await vi.advanceTimersByTimeAsync(idleMs * 3);
+        expect(failure).toBeNull();
+
+        await vi.advanceTimersByTimeAsync(31_000 - 1000 - idleMs * 3);
+        const result = await promise;
+        expect(result.reading).toEqual({ weight: 81.55, impedance: 0 });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it(`still ends a session without a hold at the cap (session_timeout_sec ${sessionTimeoutSec})`, async () => {
+      vi.useFakeTimers();
+      try {
+        const s = makeSession();
+        // Every frame is rejected, so only the cap can end a scale that keeps
+        // talking.
+        const adapter = makeAdapter({ parseNotification: () => null });
+        const promise = readWithTimeouts(s.charMap, s.device, adapter, 'AA:BB:CC:DD:EE:FF', {
+          profile: PROFILE,
+          readingTimeoutMs: idleMs,
+        });
+        let failure: Error | null = null;
+        promise.catch((e: Error) => {
+          failure = e;
+        });
+        const step = idleMs / 2;
+        for (let t = step; t < idleMs * 3; t += step) {
+          await vi.advanceTimersByTimeAsync(step);
+          s.send(0x01);
+        }
+        expect(failure).toBeNull();
+        await vi.advanceTimersByTimeAsync(step);
+        expect(failure).not.toBeNull();
+        expect(failure!.message).toBe('GATT session cap exceeded');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  }
 });
