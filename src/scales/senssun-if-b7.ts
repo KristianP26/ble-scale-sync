@@ -56,8 +56,8 @@ const WEIGHT_OFFSET = 10;
  * finished frame, which ble_monitor publishes as impedance in ohm. 180 ohm is
  * at the very bottom of a plausible whole-body range for a 67 kg adult, and no
  * body-fat figure from the vendor app exists for that weigh-in, so the scale
- * is unknown. Publishing an impedance nobody has checked is how Eufy P2 and
- * Silvergear 108 went wrong before; it is logged in debug mode instead, so a
+ * is unknown. Publishing an impedance nobody has checked is how Eufy P2 went
+ * wrong before; it is logged in debug mode instead, so a
  * user's own log can be paired with the app's body-fat reading later.
  */
 const RAW_FIELD_OFFSET = 12;
@@ -148,6 +148,8 @@ export class SenssunIfB7Adapter implements ScaleAdapterCore, BroadcastSource {
    */
   private lastSettlingKg: number | null = null;
   private lastFinishedHex: string | null = null;
+  /** Last frame logged with an unknown status state, same reason. */
+  private lastUnknownHex: string | null = null;
   private readonly unitsWarned = new Set<number>();
 
   /**
@@ -228,6 +230,18 @@ export class SenssunIfB7Adapter implements ScaleAdapterCore, BroadcastSource {
       if (f.state === STATE_WEIGHING && f.weight !== this.lastSettlingKg) {
         this.lastSettlingKg = f.weight;
         bleLog.debug(`Senssun IF_B7 weighing: ${f.weight.toFixed(2)} kg`);
+      } else if (f.state !== STATE_WEIGHING) {
+        // A state nobody has captured yet. Say so once per frame: if this unit
+        // ends a weigh-in on something other than 0xA_, this line is the only
+        // thing in a DEBUG log that explains the timeout.
+        const hex = manufacturerData.toString('hex');
+        if (hex !== this.lastUnknownHex) {
+          this.lastUnknownHex = hex;
+          bleLog.debug(
+            `Senssun IF_B7: status 0x${manufacturerData[STATUS_OFFSET].toString(16)} is not a ` +
+              `known state, frame ignored: ${hex}`,
+          );
+        }
       }
       return null;
     }

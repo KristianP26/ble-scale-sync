@@ -120,7 +120,8 @@ describe('SenssunIfB7Adapter (#423)', () => {
 
     it('falls back to the exact name when the transport has no address (noble on macOS)', () => {
       expect(adapter.matches(advert(LIVE_87_30, null))).toBe(true);
-      expect(adapter.matches(advert(LIVE_87_30, '<unknown>'))).toBe(true);
+      // What noble hands over on macOS: formatMac('<unknown>').
+      expect(adapter.matches(advert(LIVE_87_30, '<U:NK:NO:WN'))).toBe(true);
       expect(adapter.matches(advert(LIVE_87_30, null, ''))).toBe(false);
       expect(adapter.matches(advert(LIVE_87_30, null, 'IF_B7X'))).toBe(false);
     });
@@ -190,6 +191,22 @@ describe('SenssunIfB7Adapter (#423)', () => {
       expect(adapter.parseLiveBroadcast(lbLive)).toBeNull();
       expect(warn).toHaveBeenCalledTimes(1);
       expect(String(warn.mock.calls[0][0])).toContain('lb');
+    });
+
+    it('logs an unseen state once, so a timeout on such a unit is explainable', () => {
+      const adapter = new SenssunIfB7Adapter();
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      const unknown = derived(FINISHED_67_25, 14, 0xe1);
+      adapter.parseBroadcast(unknown);
+      adapter.parseBroadcast(unknown);
+      const lines = debug.mock.calls.filter(([m]) => String(m).includes('not a known state'));
+      expect(lines).toHaveLength(1);
+      debug.mockRestore();
+    });
+
+    it('refuses a live weight above the plausible range (derived: [10] 0x22 -> 0x7a)', () => {
+      const adapter = new SenssunIfB7Adapter();
+      expect(adapter.parseLiveBroadcast(derived(LIVE_87_30, 10, 0x7a))).toBeNull();
     });
 
     it('treats an unseen state as neither finished nor live (derived: [14] 0xA1 -> 0xE1)', () => {
