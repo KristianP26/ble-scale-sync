@@ -34,6 +34,8 @@ The ESP32 scans autonomously for BLE advertisements and publishes results over M
 4. Body composition is computed and dispatched to exporters
 5. Feedback (beep, display updates) is sent back to the ESP32 via MQTT
 
+A scale that is read from its advertisements is never connected, even when it also offers a GATT service. The Xiaomi Mi Scale 2 is the common case: it puts weight and impedance in the advertisement, and a connection only stops it advertising the reading. The server tells the ESP32 which known scales are like this, so it beeps for them but does not connect.
+
 **GATT scales** (notification-based readings):
 
 1. The ESP32 detects a known scale MAC during scanning and auto-connects immediately
@@ -44,6 +46,8 @@ The ESP32 scans autonomously for BLE advertisements and publishes results over M
 
 ::: tip Autonomous connect
 The ESP32 connects to known scales autonomously the instant it detects them, eliminating the MQTT round-trip that previously caused some fast-sleeping scales to power off before the connection could be established. This behavior is on by default. To disable it and use the old host-initiated connect flow, set `auto_connect: false` under `mqtt_proxy` in your config.
+
+Scales read from their advertisements are excluded from the autonomous connect. When every scale the server knows about is one of them, the server turns the autonomous connect off on the ESP32 by itself; when broadcast and GATT scales share one proxy, only firmware that understands the `passive` list (see [MQTT Topics](#mqtt-topics)) can skip the broadcast ones individually.
 
 Run the server in continuous mode with this handler. The ESP32 decides when to connect, and only the continuous-mode watcher stays subscribed to the `connected` topic; a single run listens only during its own scan window, so an autonomous connect that lands outside it is lost. Set `runtime.continuous_mode: true` (or `CONTINUOUS_MODE=true`). The server warns at startup if the mqtt-proxy handler is used without it.
 :::
@@ -352,25 +356,31 @@ See [`docs/images/scan-modes.drawio`](https://github.com/KristianP26/ble-scale-s
 
 All topics are prefixed with `{topic_prefix}/{device_id}/` (default: `ble-proxy/esp32-ble-proxy/`).
 
-| Topic                  | Direction       | Payload                                                                     |
-| ---------------------- | --------------- | --------------------------------------------------------------------------- |
-| `status`               | ESP32 -> Server | `"online"` / `"offline"` (retained, LWT)                                    |
-| `error`                | ESP32 -> Server | Error message string                                                        |
-| `scan/results`         | ESP32 -> Server | JSON array of discovered devices                                            |
-| `config`               | Server -> ESP32 | JSON with `scales` (MAC array) and `users` (array), retained                |
-| `beep`                 | Server -> ESP32 | Empty string or JSON with `freq`, `duration`, `repeat`                      |
-| `display/reading`      | Server -> ESP32 | JSON with user slug, name, weight, impedance, and exporter list             |
-| `display/result`       | Server -> ESP32 | JSON with user slug, name, weight, and per-exporter success/failure results |
-| `connect`              | Server -> ESP32 | JSON with `address` and `addr_type`                                         |
-| `connected`            | ESP32 -> Server | JSON with discovered `chars` (uuid + properties per characteristic)         |
-| `disconnect`           | Server -> ESP32 | Any payload (triggers disconnect)                                           |
-| `disconnected`         | ESP32 -> Server | Empty payload                                                               |
-| `notify/{uuid}`        | ESP32 -> Server | Raw binary (characteristic notification)                                    |
-| `write/{uuid}`         | Server -> ESP32 | Raw binary (characteristic write)                                           |
-| `read/{uuid}`          | Server -> ESP32 | Empty payload (triggers read)                                               |
-| `read/{uuid}/response` | ESP32 -> Server | Raw binary (read result)                                                    |
+| Topic                  | Direction       | Payload                                                                                                                                                                          |
+| ---------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status`               | ESP32 -> Server | `"online"` / `"offline"` (retained, LWT)                                                                                                                                         |
+| `error`                | ESP32 -> Server | Error message string                                                                                                                                                             |
+| `scan/results`         | ESP32 -> Server | JSON array of discovered devices                                                                                                                                                 |
+| `config`               | Server -> ESP32 | JSON with `scales` (MAC array), `users` (array), `passive` (MACs read from advertisements, never connected), `autoConnect` (`false` to disable the autonomous connect), retained |
+| `beep`                 | Server -> ESP32 | Empty string or JSON with `freq`, `duration`, `repeat`                                                                                                                           |
+| `display/reading`      | Server -> ESP32 | JSON with user slug, name, weight, impedance, and exporter list                                                                                                                  |
+| `display/result`       | Server -> ESP32 | JSON with user slug, name, weight, and per-exporter success/failure results                                                                                                      |
+| `connect`              | Server -> ESP32 | JSON with `address` and `addr_type`                                                                                                                                              |
+| `connected`            | ESP32 -> Server | JSON with discovered `chars` (uuid + properties per characteristic)                                                                                                              |
+| `disconnect`           | Server -> ESP32 | Any payload (triggers disconnect)                                                                                                                                                |
+| `disconnected`         | ESP32 -> Server | Empty payload                                                                                                                                                                    |
+| `notify/{uuid}`        | ESP32 -> Server | Raw binary (characteristic notification)                                                                                                                                         |
+| `write/{uuid}`         | Server -> ESP32 | Raw binary (characteristic write)                                                                                                                                                |
+| `read/{uuid}`          | Server -> ESP32 | Empty payload (triggers read)                                                                                                                                                    |
+| `read/{uuid}/response` | ESP32 -> Server | Raw binary (read result)                                                                                                                                                         |
 
 ## Troubleshooting
+
+### Unlock write every 3 s, then "GATT session cap exceeded" after 90 s
+
+The log shows `Autonomous GATT connect from ESP32: Xiaomi Mi Scale 2`, an `Unlock write` every 3 seconds, and the session ending at exactly 90 s. The Mi Scale 2 is read from its advertisements, not over a connection, and earlier releases let the ESP32 connect to it anyway. With the fix, the server drops such a connection straight away and logs `Autonomous connect to Xiaomi Mi Scale 2 (...) ignored: this scale is read from its advertisements, not over GATT`, then tells the ESP32 to stop connecting to that scale. Update BLE Scale Sync; if the same proxy also serves a GATT scale, flash the current firmware too.
+
+If you cannot update yet, remove `ble.scale_mac` and set `auto_connect: false` under `mqtt_proxy`, so the ESP32 is never told to connect to the scale.
 
 ### ESP32 shows "online" but scans find nothing
 
