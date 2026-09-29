@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Silvergear108Adapter } from '../../src/scales/silvergear-108.js';
+import { Silvergear108Adapter, BODY_FRAME_WINDOW_MS } from '../../src/scales/silvergear-108.js';
 import { adapters } from '../../src/scales/index.js';
 import { resolveAdapter } from '../../src/scales/resolve.js';
 import { buildPayload } from '../../src/scales/body-comp-helpers.js';
 import { defaultProfile } from '../helpers/scale-test-utils.js';
 import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
-import { bleLog } from '../../src/ble/types.js';
+import { bleLog, IMPEDANCE_GRACE_MS } from '../../src/ble/types.js';
 
 /**
  * Every frame below is lifted verbatim from the two iOS PacketLogger captures
@@ -85,16 +85,18 @@ describe('Silvergear108Adapter (#297)', () => {
   });
 
   describe('parseBroadcast()', () => {
+    // Decoded, but not complete on its own: the reading waits for the weigh-in's
+    // post-weigh-in frame (#357), see the describe block below.
     it('decodes the settled 108.5 kg frame', () => {
       const reading = adapter.parseBroadcast(mfg(SETTLED_108));
       expect(reading).toEqual({ weight: 108.48, impedance: 0 });
-      expect(adapter.isComplete(reading!)).toBe(true);
+      expect(adapter.isComplete(reading!)).toBe(false);
     });
 
     it('decodes the settled 5.6 kg frame from the second capture', () => {
       const reading = adapter.parseBroadcast(mfg(SETTLED_5_6));
       expect(reading).toEqual({ weight: 5.61, impedance: 0 });
-      expect(adapter.isComplete(reading!)).toBe(true);
+      expect(adapter.isComplete(reading!)).toBe(false);
     });
 
     // The two captures share this frame byte for byte, which is what makes the
@@ -176,7 +178,7 @@ describe('Silvergear108Adapter (#297)', () => {
       // the display unit, so nothing is converted.
       const reading = adapter.parseBroadcast(mfg(SETTLED_ST));
       expect(reading).toEqual({ weight: 108.86, impedance: 0 });
-      expect(adapter.isComplete(reading!)).toBe(true);
+      expect(adapter.isComplete(reading!)).toBe(false);
     });
 
     it('claims and parses frames at every observed unit setting', () => {
@@ -201,6 +203,213 @@ describe('Silvergear108Adapter (#297)', () => {
       const p = Buffer.from(SETTLED_ST, 'hex');
       p[5] = (p[5] & 0x1f) | 0x60;
       expect(adapter.parseBroadcast(mfg(p.toString('hex')))?.weight).toBeCloseTo(108.86, 3);
+    });
+  });
+
+  // The settled weight used to complete the reading on its own, which ended every
+  // broadcast scan before the scale's post-weigh-in 0x06 frame arrived (#357).
+  // Frames and their spacing below are from the #297 captures; each timestamp is
+  // milliseconds after the first frame listed for that capture.
+  describe('holding a weigh-in for its own post-weigh-in frame (#357)', () => {
+    let clock: number;
+    let held: Silvergear108Adapter;
+    beforeEach(() => {
+      clock = 0;
+      held = new Silvergear108Adapter(() => clock);
+    });
+
+    /** Feed one frame at a time, returning the reading and whether it completes. */
+    function at(ms: number, payloadHex: string, mac = MAC_REVERSED) {
+      clock = ms;
+      const reading = held.parseBroadcast(Buffer.from(mac + payloadHex, 'hex'));
+      return { reading, complete: reading !== null && held.isComplete(reading) };
+    }
+
+    /** Replay a capture and return every frame that completed a reading. */
+    function replay(frames: Array<[number, string]>) {
+      return frames.map(([ms, hex]) => ({ ms, hex, ...at(ms, hex) })).filter((f) => f.complete);
+    }
+
+    // 108.5 kg capture: one settled frame, then 0x06 885 ms later.
+    it('completes once, on the 0x06, in the 108.5 kg capture', () => {
+      const done = replay([
+        [0, SETTLING_108],
+        [2112, SETTLED_108],
+        [2997, BODY_108],
+        [9021, BODY_108],
+      ]);
+      expect(done).toHaveLength(1);
+      expect(done[0]).toMatchObject({ ms: 2997, reading: { weight: 108.48, impedance: 0 } });
+    });
+
+    // 5.6 kg capture, timestamps from the first 'a02cb54a0db8'. The settled frame
+    // repeats for 1.3 s and the 0x06 stream runs for 16 s after it.
+    it('completes once, on the 0x06, in the 5.6 kg capture', () => {
+      const done = replay([
+        [0, 'a02cb54a0db8'],
+        [1187, SETTLED_5_6],
+        [2465, SETTLED_5_6],
+        [2726, BODY_5_6],
+        [18932, BODY_5_6],
+      ]);
+      expect(done).toHaveLength(1);
+      expect(done[0]).toMatchObject({ ms: 2726, reading: { weight: 5.61, impedance: 0 } });
+    });
+
+    // 17 st 2 lb capture, timestamps from the LAST 'a02d099c0dff' before settling.
+    it('completes once, on the 0x06, in the 17 st 2 lb capture', () => {
+      const done = replay([
+        [0, 'a02d099c0dff'],
+        [622, '202d099c0dff'],
+        [2168, '202d099c0dff'],
+        [2319, 'a2ada0a206f7'],
+        [8745, 'a2ada0a206f7'],
+      ]);
+      expect(done).toHaveLength(1);
+      expect(done[0]).toMatchObject({ ms: 2319, reading: { weight: 108.86, impedance: 0 } });
+    });
+
+    it('hands the settled weight out as partial, repeat included, until the 0x06', () => {
+      const first = at(0, SETTLED_108);
+      const repeat = at(1000, SETTLED_108);
+      expect(first).toEqual({ reading: { weight: 108.48, impedance: 0 }, complete: false });
+      expect(repeat).toEqual({ reading: { weight: 108.48, impedance: 0 }, complete: false });
+    });
+
+    // The scale keeps sending 0x06 for seconds after a weigh-in, so a new session
+    // can open on the previous weigh-in's frame. It must not pair with anything.
+    it('does not complete on a 0x06 that no settled weight came before', () => {
+      expect(at(0, BODY_108)).toEqual({ reading: null, complete: false });
+      expect(at(500, SETTLED_108).complete).toBe(false);
+      expect(at(1500, BODY_108).complete).toBe(true);
+    });
+
+    it('pairs a 0x06 exactly at the window edge, and not one millisecond later', () => {
+      at(0, SETTLED_108);
+      expect(at(BODY_FRAME_WINDOW_MS, BODY_108).complete).toBe(true);
+
+      const late = new Silvergear108Adapter(() => clock);
+      clock = 0;
+      late.parseBroadcast(mfg(SETTLED_108));
+      clock = BODY_FRAME_WINDOW_MS + 1;
+      expect(late.parseBroadcast(mfg(BODY_108))).toBeNull();
+    });
+
+    it('counts the window from the first settled frame, not from a repeat', () => {
+      at(0, SETTLED_108);
+      at(5000, SETTLED_108);
+      expect(at(BODY_FRAME_WINDOW_MS + 1, BODY_108).reading).toBeNull();
+    });
+
+    // Past the window the transport's own fallback owns the weigh-in. Handing the
+    // weight out again would re-arm that fallback after it had fired.
+    it('stops handing out the settled weight once the window has passed', () => {
+      at(0, SETTLED_108);
+      expect(at(BODY_FRAME_WINDOW_MS + 1, SETTLED_108).reading).toBeNull();
+    });
+
+    it('does not pair across a settling frame, which ends the weigh-in', () => {
+      at(0, SETTLED_108);
+      at(500, SETTLING_108);
+      expect(at(1000, BODY_108).reading).toBeNull();
+    });
+
+    it('closes a weigh-in once: neither its 0x06 nor its weight completes again', () => {
+      at(0, SETTLED_108);
+      expect(at(900, BODY_108).complete).toBe(true);
+      expect(at(1200, BODY_108).reading).toBeNull();
+      expect(at(1300, SETTLED_108).reading).toBeNull();
+    });
+
+    it('reports the next weigh-in even when it lands on the same grams', () => {
+      at(0, SETTLED_108);
+      at(900, BODY_108);
+      at(20_000, IDLE);
+      at(21_000, SETTLING_108);
+      expect(at(22_000, SETTLED_108)).toEqual({
+        reading: { weight: 108.48, impedance: 0 },
+        complete: false,
+      });
+      expect(at(23_000, BODY_108).complete).toBe(true);
+    });
+
+    // Discovery can finish after the scale settles, so the settling stream that
+    // would end the last weigh-in is not always seen. A remembered weigh-in is
+    // forgotten after a minute, or a same-grams weigh-in would be dropped for good.
+    it('forgets a paired weigh-in after a minute', () => {
+      at(0, SETTLED_108);
+      at(900, BODY_108);
+      expect(at(30_000, SETTLED_108).reading).toBeNull();
+      expect(at(60_001, SETTLED_108).reading).toEqual({ weight: 108.48, impedance: 0 });
+      expect(at(61_000, BODY_108).complete).toBe(true);
+    });
+
+    it('does not pair a 0x06 from another unit', () => {
+      const OTHER_MAC = '112233445566';
+      at(0, SETTLED_108);
+      expect(at(900, BODY_108, OTHER_MAC).reading).toBeNull();
+      expect(at(1000, BODY_108).complete).toBe(true);
+    });
+
+    // Someone steps off and back on inside one hold. The transport armed its
+    // grace timer on the first weight and does not re-arm it for the second, so
+    // measuring the window from the second would let its 0x06 complete after the
+    // timer had already exported it: two exports of one weigh-in.
+    it('measures the window from the first weight of the hold, across a step-off', () => {
+      at(0, SETTLED_108);
+      at(3000, SETTLING_108);
+      expect(at(6000, '202d099c0dff').reading).toEqual({ weight: 108.86, impedance: 0 });
+      expect(at(BODY_FRAME_WINDOW_MS + 1, 'a2ada0a206f7').reading).toBeNull();
+    });
+
+    it('starts a fresh hold once the last one can have run out', () => {
+      at(0, SETTLED_108);
+      at(5000, SETTLING_108);
+      at(IMPEDANCE_GRACE_MS, SETTLED_108);
+      expect(at(IMPEDANCE_GRACE_MS + 1000, BODY_108).complete).toBe(true);
+    });
+
+    // The proxy watchers export the held weight when the grace runs out, without
+    // recording it in their dedup window. A 0x06 paired after that would export
+    // the same weigh-in a second time.
+    it('keeps the pairing window inside the transport grace window', () => {
+      expect(BODY_FRAME_WINDOW_MS).toBeLessThan(IMPEDANCE_GRACE_MS);
+    });
+
+    it('never publishes the 0x06 field as impedance', () => {
+      at(0, SETTLED_108);
+      expect(at(900, BODY_108).reading?.impedance).toBe(0);
+    });
+
+    it('logs the settled weight, and the 0x06 against the weigh-in it closed', () => {
+      const spy = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      spy.mockClear();
+      at(0, SETTLED_108);
+      at(885, BODY_108);
+      // The scale repeats the frame for seconds; the repeats belong to the same,
+      // already closed weigh-in and say nothing new.
+      at(1500, BODY_108);
+      const lines = spy.mock.calls.map((c) => String(c[0]));
+      expect(lines.filter((l) => l.includes('body frame'))).toHaveLength(1);
+      expect(lines).toContain(
+        'Silvergear settled: 108.480 kg (scale is displaying kg), ' +
+          'holding for its post-weigh-in frame',
+      );
+      expect(lines).toContain(
+        `Silvergear body frame (undecoded): ${MAC_REVERSED}${BODY_108} field=529, ` +
+          '0.9 s after settling at 108.480 kg',
+      );
+    });
+
+    it('logs an unpaired 0x06 once, however often it is re-read', () => {
+      const spy = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      spy.mockClear();
+      for (let i = 0; i < 5; i++) at(i * 100, BODY_108);
+      const lines = spy.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('body'));
+      expect(lines).toEqual([
+        `Silvergear body frame (undecoded, no settled weight from this weigh-in): ` +
+          `${MAC_REVERSED}${BODY_108} field=529`,
+      ]);
     });
   });
 
