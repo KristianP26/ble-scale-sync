@@ -2322,7 +2322,7 @@ describe('handler-mqtt-proxy', () => {
             profile: PROFILE,
             mqttProxy: MQTT_PROXY_CONFIG,
           }),
-        ).rejects.toThrow('No recognized scale found');
+        ).rejects.toThrow('is read from its advertisements');
 
         const published = topicsPublished();
         expect(published.filter((t) => t === `${PREFIX}/connect`)).toHaveLength(1);

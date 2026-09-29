@@ -164,6 +164,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
 
     // Find a matching adapter
     let weightOnlyFallback: (RawReading & { address: string }) | null = null;
+    // A scale refused over GATT because it is read from its advertisements
+    // (#422): the final error must say so, not that nothing was found.
+    let refused: { address: string; name: string } | null = null;
 
     for (const entry of candidates) {
       const info = toBleDeviceInfo(entry);
@@ -239,6 +242,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
           // Awaited, so the config marking it passive reaches the broker
           // before the disconnect in the finally.
           await registerScaleMac(config, entry.address, resolved).catch(() => {});
+          refused = { address: entry.address, name: resolved.name };
           continue;
         }
         const raw = await withAbandonmentCleanup(device, () =>
@@ -272,6 +276,13 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         () => {},
       );
       return { reading: weightOnlyFallback.reading, adapter: weightOnlyFallback.adapter };
+    }
+
+    if (refused) {
+      throw new Error(
+        `${refused.name} (${refused.address}) is read from its advertisements, and this scan ` +
+          'snapshot held no broadcast reading from it. Step on the scale and try again.',
+      );
     }
 
     throw new Error(
