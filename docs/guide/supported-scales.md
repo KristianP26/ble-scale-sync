@@ -96,7 +96,7 @@ The measurement protocol is implemented and verified, but this hardware's GATT c
 
 ### **Renpho** R-MSC04 (MorphoScan Nova)
 
-Weight is read and verified. Body composition is estimated from BMI (Deurenberg formula) rather than measured impedance. The vendor handshake is documented but not yet implemented, and the scale also closes the link after its history sync, so a reconnect is needed before the live measurement arrives. Tracked in [#117](https://github.com/KristianP26/ble-scale-sync/issues/117).
+Weight is read and verified. The scale measures body composition after the weight settles and sends it about 15 seconds later, so the connection stays open for up to 30 seconds after the weight settles: stay on the scale until its display shows the results. When the scale's record arrives, its body fat and visceral fat are used, but only if the profile it computed them for (the one the Renpho app stored on the scale) has a height within 3 cm of yours; otherwise, or when no record arrives in time, body composition is estimated from BMI (Deurenberg formula). The ten segment impedances the scale reports are logged in debug mode only, and no whole-body impedance is derived from them. This is not yet confirmed on hardware ([#434](https://github.com/KristianP26/ble-scale-sync/issues/434)).
 
 ### **Eufy** Smart Scale P2 / P2 Pro
 
