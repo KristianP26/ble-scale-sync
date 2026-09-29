@@ -115,10 +115,9 @@ def on_message(topic_bytes, msg, retained):
             passive = data.get("passive", [])
             # A list only: set() of a stray string would split it into characters.
             _passive_macs = set(passive) if isinstance(passive, list) else set()
-            print(
-                f"Config: {len(_scale_macs)} scale MAC(s), {len(_passive_macs)} passive, "
-                f"autoConnect={_auto_connect}, lazyNotify={_lazy_notify}"
-            )
+            # One f-string rather than two adjacent ones: the simplest form for
+            # MicroPython's parser, like every other print in this file.
+            print(f"Config: {len(_scale_macs)} scale MAC(s), {len(_passive_macs)} passive, autoConnect={_auto_connect}, lazyNotify={_lazy_notify}")
             if board.HAS_DISPLAY:
                 ui.on_config_update(data.get("users", []))
                 ui.on_scale_macs_update(len(_scale_macs) > 0)
