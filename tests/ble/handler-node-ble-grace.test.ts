@@ -329,3 +329,71 @@ describe('handler-node-ble broadcastScanNodeBle manufacturer data (#297)', () =>
     expect(device.helper.prop).not.toHaveBeenCalledWith('ServiceData');
   });
 });
+
+// ─── Silvergear 108 through the real adapter (#357) ─────────────────────────
+
+describe('handler-node-ble broadcastScanNodeBle with the Silvergear 108 (#357)', () => {
+  // Frames verbatim from the #297 108.5 kg capture, where the 0x06 followed the
+  // settled frame by 885 ms. BlueZ keys ManufacturerData by company id in
+  // decimal: 0xA0AC is 41132.
+  const frame = (payloadHex: string): Record<string, { value: Buffer }> => ({
+    '41132': { value: Buffer.from('4fe9916185a0' + payloadHex, 'hex') },
+  });
+  const SETTLED = frame('202d07600da1');
+  const BODY = frame('a2b1a0a206bb');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function start() {
+    const { Silvergear108Adapter } = await import('../../src/scales/silvergear-108.js');
+    const device = makeDevice();
+    let settled = false;
+    const promise = _internals
+      .broadcastScanNodeBle(
+        new Silvergear108Adapter() as unknown as ScaleAdapter,
+        makeAdapter() as never,
+        device as never,
+        'A0:85:61:91:E9:4F',
+        {},
+      )
+      .finally(() => {
+        settled = true;
+      });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    return { device, promise, isSettled: () => settled };
+  }
+
+  it('does not resolve on the settled weight, and resolves on the 0x06 that follows', async () => {
+    const { device, promise, isSettled } = await start();
+
+    device.helper.emit('PropertiesChanged', { ManufacturerData: SETTLED });
+    await vi.advanceTimersByTimeAsync(885);
+    expect(isSettled()).toBe(false);
+
+    device.helper.emit('PropertiesChanged', { ManufacturerData: BODY });
+    const result = await promise;
+    expect(result.reading).toEqual({ weight: 108.48, impedance: 0 });
+  });
+
+  it('resolves on the weight alone once the grace runs out without a 0x06', async () => {
+    const { device, promise, isSettled } = await start();
+
+    device.helper.emit('PropertiesChanged', { ManufacturerData: SETTLED });
+    await vi.advanceTimersByTimeAsync(IMPEDANCE_GRACE_MS - 100);
+    expect(isSettled()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(200);
+    const result = await promise;
+    expect(result.reading).toEqual({ weight: 108.48, impedance: 0 });
+  });
+});

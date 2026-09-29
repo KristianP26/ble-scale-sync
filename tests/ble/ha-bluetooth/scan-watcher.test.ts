@@ -38,6 +38,7 @@ vi.mock('../../../src/ble/handler-ha-bluetooth/client.js', () => ({
 
 const { scanAndReadRaw, scanDevices, ReadingWatcher } =
   await import('../../../src/ble/handler-ha-bluetooth/index.js');
+const { Silvergear108Adapter } = await import('../../../src/scales/silvergear-108.js');
 
 // ─── Adapter doubles ──────────────────────────────────────────────────────────
 
@@ -296,6 +297,69 @@ describe('ha-bluetooth ReadingWatcher', () => {
     FakeHaBluetoothClient.failStart = null;
     await w.start();
     expect(FakeHaBluetoothClient.instances).toHaveLength(2);
+    await w.stop();
+  });
+});
+
+// ─── Silvergear 108 through the real adapter (#357) ─────────────────────────
+
+describe('ha-bluetooth ReadingWatcher with the Silvergear 108', () => {
+  // Frames verbatim from the #297 108.5 kg capture; the 0x06 came 885 ms after
+  // the settled frame. MAC A0:85:61:91:E9:4F reversed into the first six bytes.
+  const sg = (payloadHex: string): BleDeviceInfo => ({
+    localName: '108',
+    serviceUuids: ['ffb0'],
+    manufacturerData: { id: 0xa0ac, data: Buffer.from('4fe9916185a0' + payloadHex, 'hex') },
+  });
+  const SETTLED = sg('202d07600da1');
+  const BODY = sg('a2b1a0a206bb');
+
+  /** True when no reading reaches the queue while `ms` of fake time passes. */
+  async function nothingQueuedWithin(w: InstanceType<typeof ReadingWatcher>, ms: number) {
+    const ac = new AbortController();
+    let got = false;
+    const pending = w.nextReading(ac.signal).then(
+      () => {
+        got = true;
+      },
+      () => {},
+    );
+    await vi.advanceTimersByTimeAsync(ms);
+    ac.abort();
+    await pending;
+    return !got;
+  }
+
+  it('holds the settled weight and queues it once, on the post-weigh-in frame', async () => {
+    const w = new ReadingWatcher(CONFIG, [new Silvergear108Adapter()], undefined, PROFILE);
+    await w.start();
+
+    client().emit(SETTLED, MAC);
+    expect(await nothingQueuedWithin(w, 885)).toBe(true);
+    client().emit(BODY, MAC);
+    expect((await w.nextReading()).reading).toEqual({ weight: 108.48, impedance: 0 });
+
+    // The scale keeps repeating both frames for a while; none of it is a reading.
+    client().emit(SETTLED, MAC);
+    client().emit(BODY, MAC);
+    expect(await nothingQueuedWithin(w, 31_000)).toBe(true);
+    await w.stop();
+  });
+
+  it('queues the weight alone after the grace, and nothing when a late 0x06 follows', async () => {
+    const w = new ReadingWatcher(CONFIG, [new Silvergear108Adapter()], undefined, PROFILE);
+    await w.start();
+
+    client().emit(SETTLED, MAC);
+    expect(await nothingQueuedWithin(w, 11_900)).toBe(true);
+    await vi.advanceTimersByTimeAsync(200);
+    expect((await w.nextReading()).reading).toEqual({ weight: 108.48, impedance: 0 });
+
+    // The grace fallback is queued without passing the dedup window, so a 0x06
+    // that still paired here would export the same weigh-in a second time.
+    client().emit(BODY, MAC);
+    client().emit(SETTLED, MAC);
+    expect(await nothingQueuedWithin(w, 31_000)).toBe(true);
     await w.stop();
   });
 });
