@@ -72,7 +72,7 @@
   },
   "optionalDependencies": {
     "@abandonware/noble": "^1.9.2-26",
-    "@stoprocent/noble": "^2.7.1",
+    "@stoprocent/noble": "^2.8.0",
     "node-ble": "^1.13.0"
   },
   "devDependencies": {
