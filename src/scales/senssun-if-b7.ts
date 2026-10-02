@@ -27,10 +27,14 @@ const ADVERTISED_NAME = 'if_b7';
  *
  *   [0..2]    02 03 11, constant on every frame seen
  *   [3..8]    the device's own MAC, forward
- *   [9]       unknown (01 on one unit, 02 on another)
- *   [10..11]  weight, uint16 big-endian, kg * 100
- *   [12..13]  uint16 big-endian, 0 while weighing; NOT published, see RAW_FIELD
+ *   [9]       unknown (01 on the #423 unit in both display units, 02 on the
+ *             ble_monitor unit)
+ *   [10..11]  weight, uint16 big-endian, kg * 100 in both display units
+ *   [12..13]  uint16 big-endian, 0 while weighing and for the first ~1.3-1.5 s
+ *             of the finished state on the #423 unit; NOT published, see
+ *             RAW_FIELD_OFFSET
  *   [14]      status: high nibble is the state, low nibble the display unit
+ *             (1 = kg, 2 = lb)
  *   [15]      rolling counter, +1..3 from one advert to the next, wraps; it makes
  *             every advert unique, so it is left out of the logging keys below
  *   [16]      checksum: sum of [9..15], low 8 bits
@@ -39,13 +43,18 @@ const ADVERTISED_NAME = 'if_b7';
  *   - #423, unit 64:FB:01:2D:92:50 (sold as Grifema GA2001), two frames taken
  *     while weighing: 87.30 kg and 84.20 kg, status 0x01. The reporter's log is
  *     node-ble on BlueZ.
+ *   - #423, the same unit, 122 frames from the reporter's own ESPHome export,
+ *     two weigh-ins: one with the display in kg, finishing on 88.10 kg (status
+ *     0xA1), which is the 88.1 kg the vendor app showed; one with the display in
+ *     lb (status 0x02 while weighing, 0xA2 finished) and [10..11] = 8760.
  *   - custom-components/ble_monitor test_senssun_parser.py, a raw HCI advertising
  *     report from a second unit, 18:7A:93:C1:B3:33, reading 67.25 kg with status
  *     0xA1. The report's event type is ADV_NONCONN_IND: the scale is not
  *     connectable and everything it says, it broadcasts.
  *
- * The checksum closes on all three frames. ble_monitor does not check it, nor
- * the header or the MAC, so it is this adapter's own finding.
+ * The checksum closes on every one of these frames (125 of 125). ble_monitor
+ * does not check it, nor the header or the MAC, so it is this adapter's own
+ * finding.
  */
 const PAYLOAD_LEN = 17;
 const HEADER = [0x02, 0x03, 0x11] as const;
@@ -53,13 +62,22 @@ const MAC_OFFSET = 3;
 const INFO_OFFSET = 9;
 const WEIGHT_OFFSET = 10;
 /**
- * [12..13]. It is 0 on both frames taken while weighing and 180 on the one
- * finished frame, which ble_monitor publishes as impedance in ohm. 180 ohm is
- * at the very bottom of a plausible whole-body range for a 67 kg adult, and no
- * body-fat figure from the vendor app exists for that weigh-in, so the scale
- * is unknown. Publishing an impedance nobody has checked is how Eufy P2 went
- * wrong before; it is logged in debug mode instead, so a
+ * [12..13]. It is 0 on every frame taken while weighing. On the ble_monitor
+ * unit it is 180 on the one finished frame, which ble_monitor publishes as
+ * impedance in ohm; 180 ohm is at the very bottom of a plausible whole-body
+ * range for a 67 kg adult. On the #423 unit it stays 0 for the first 5 (kg) or
+ * 6 (lb) adverts of the finished state, then reads 137 in the kg weigh-in and
+ * 202 in the lb weigh-in 18 minutes later, probably the same person: a ratio of
+ * 1.47 that no plain scale factor explains, and 137 is below the 150 ohm floor
+ * of a plausible range. The vendor app showed 28.5 % body fat for the 137
+ * weigh-in, but whether the app derives that from this field at all is not
+ * known, so the scale is unknown. Publishing an impedance nobody has checked is
+ * how Eufy P2 went wrong before; it is logged in debug mode instead, so a
  * user's own log can be paired with the app's body-fat reading later.
+ *
+ * The reading closes on the first finished frame, where this unit still sends
+ * 0, so [12..13]=0 in a poll transport's (node-ble, noble) debug log does not
+ * mean the scale sends no value.
  */
 const RAW_FIELD_OFFSET = 12;
 const STATUS_OFFSET = 14;
@@ -70,16 +88,21 @@ const CHECKSUM_OFFSET = 16;
 const STATUS_STATE_MASK = 0xf0;
 /** 0x0_: still weighing. The only state seen before the final frame. */
 const STATE_WEIGHING = 0x00;
-/** 0xA_: measurement finished (ble_monitor capture, and the #423 reporter). */
+/** 0xA_: measurement finished (ble_monitor capture, and the #423 capture). */
 const STATE_FINISHED = 0xa0;
 /** Low nibble of the status byte: the unit the scale is displaying. */
 const STATUS_UNIT_MASK = 0x0f;
 /**
- * 1 = kg, seen on all three frames. The #423 reporter says 2 = lb, but no lb
- * frame has been captured, so whether [10..11] still carries kg in that mode is
- * unknown. Every other unit is refused rather than guessed.
+ * 1 = kg and 2 = lb, and in both [10..11] carries kg * 100. kg is captured on
+ * both units, and 88.10 kg matched the vendor app. lb is captured once (#423):
+ * 87.60 as kg, 18 minutes after an 88.10 kg weigh-in, where lb * 100 would be
+ * 39.73 kg and lb * 10 would be 397 kg, neither possible if the same person
+ * stood on it (likely, not confirmed). What the display showed in lb was not
+ * reported. Every other unit is refused rather than guessed.
  */
 const UNIT_KG = 0x01;
+const UNIT_LB = 0x02;
+const DECODED_UNITS: ReadonlySet<number> = new Set([UNIT_KG, UNIT_LB]);
 
 const WEIGHT_MIN_KG = 2;
 const WEIGHT_MAX_KG = 300;
@@ -192,14 +215,15 @@ export class SenssunIfB7Adapter implements ScaleAdapterCore, BroadcastSource {
   }
 
   /**
-   * A frame whose weight can be trusted as kilograms, or null. A frame in any
-   * other display unit is refused on both channels, with one warning per unit
-   * value per process, since what [10..11] holds in that mode is unknown.
+   * A frame whose weight can be trusted as kilograms, or null. That holds for
+   * the kg and the lb display; a frame in any other display unit is refused on
+   * both channels, with one warning per unit value per process, since what
+   * [10..11] holds in that mode is unknown.
    */
-  private kgFrame(d: Buffer): Frame | null {
+  private weightFrame(d: Buffer): Frame | null {
     if (!isFrame(d)) return null;
     const f = decode(d);
-    if (f.unit !== UNIT_KG) {
+    if (!DECODED_UNITS.has(f.unit)) {
       this.warnUnit(f.unit);
       return null;
     }
@@ -209,10 +233,10 @@ export class SenssunIfB7Adapter implements ScaleAdapterCore, BroadcastSource {
   private warnUnit(unit: number): void {
     if (this.unitsWarned.has(unit)) return;
     this.unitsWarned.add(unit);
-    const shown = unit === 0x02 ? 'lb' : `unknown unit 0x${unit.toString(16)}`;
     bleLog.warn(
-      `Senssun IF_B7 is displaying ${shown}. Only kg is decoded, so its readings are ` +
-        `ignored. Switch the scale to kg, or report a weigh-in in this unit on #423.`,
+      `Senssun IF_B7 is displaying unknown unit 0x${unit.toString(16)}. Only kg and lb ` +
+        `are decoded, so its readings are ignored. Switch the scale to kg or lb, or ` +
+        `report a weigh-in in this unit on #423.`,
     );
   }
 
@@ -223,14 +247,14 @@ export class SenssunIfB7Adapter implements ScaleAdapterCore, BroadcastSource {
    * weight in [10..11].
    */
   parseLiveBroadcast(manufacturerData: Buffer): LiveWeight | null {
-    const f = this.kgFrame(manufacturerData);
+    const f = this.weightFrame(manufacturerData);
     if (!f || f.state !== STATE_WEIGHING) return null;
     if (f.weight < WEIGHT_MIN_KG || f.weight > WEIGHT_MAX_KG) return null;
     return { weight: f.weight };
   }
 
   parseBroadcast(manufacturerData: Buffer): ScaleReading | null {
-    const f = this.kgFrame(manufacturerData);
+    const f = this.weightFrame(manufacturerData);
     if (!f) return null;
 
     if (f.state !== STATE_FINISHED) {

@@ -36,6 +36,17 @@ const KG_FINISHED_SECOND = '02031164fb012d925001226a0000a1d200';
 /** Frame at 16:37:25.208Z: still finished, 88.10 kg, now [12..13] = 137. */
 const KG_FINISHED_137 = '02031164fb012d925001226a0089a1d78e';
 
+/*
+ * The same export, a weigh-in 18 minutes later with the scale displaying lb. The
+ * reporter gave no display value for it.
+ */
+/** Frame at 16:55:30.448Z: the last weighing frame (status 0x02), [10..11] = 8760. */
+const LB_WEIGHING_87_60 = '02031164fb012d92500122380000027edb';
+/** Frame at 16:55:30.856Z: the first finished frame (status 0xA2), [12..13] = 0. */
+const LB_FINISHED_FIRST = '02031164fb012d92500122380000a27f7c';
+/** Frame at 16:55:32.392Z: still finished, now [12..13] = 202. */
+const LB_FINISHED_202 = '02031164fb012d925001223800caa2864d';
+
 /**
  * custom-components/ble_monitor test_senssun_parser.py, the payload of the raw
  * HCI advertising report `043E2B...14FF0001<this>C5`: a second unit, finished
@@ -93,6 +104,10 @@ describe('SenssunIfB7Adapter (#423)', () => {
     it('claims the #423 advertisement and wins the registry', () => {
       expect(adapter.matches(advert(LIVE_87_30))).toBe(true);
       expect(resolveAdapter(advert(LIVE_87_30), adapters)?.name).toBe('Senssun IF_B7');
+    });
+
+    it('claims a frame taken with the display in lb', () => {
+      expect(adapter.matches(advert(LB_FINISHED_202))).toBe(true);
     });
 
     it('claims the ble_monitor unit on its own address', () => {
@@ -162,6 +177,40 @@ describe('SenssunIfB7Adapter (#423)', () => {
       expect(adapter.parseLiveBroadcast(buf(FINISHED_67_25))).toBeNull();
     });
 
+    it('reads the #423 kg weigh-in: live while weighing, 88.10 kg once finished', () => {
+      const adapter = new SenssunIfB7Adapter();
+      expect(adapter.parseBroadcast(buf(KG_WEIGHING_88_10))).toBeNull();
+      expect(adapter.parseLiveBroadcast(buf(KG_WEIGHING_88_10))).toEqual({ weight: 88.1 });
+      expect(adapter.parseBroadcast(buf(KG_FINISHED_FIRST))).toEqual({
+        weight: 88.1,
+        impedance: 0,
+      });
+    });
+
+    it('does not publish [12..13] of the #423 unit either (137 on this frame)', () => {
+      const adapter = new SenssunIfB7Adapter();
+      expect(adapter.parseBroadcast(buf(KG_FINISHED_137))).toEqual({
+        weight: 88.1,
+        impedance: 0,
+      });
+    });
+
+    it('reads [10..11] as kg with the display in lb, on both channels, without a warning', () => {
+      const adapter = new SenssunIfB7Adapter();
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      expect(adapter.parseBroadcast(buf(LB_WEIGHING_87_60))).toBeNull();
+      expect(adapter.parseLiveBroadcast(buf(LB_WEIGHING_87_60))).toEqual({ weight: 87.6 });
+      expect(adapter.parseBroadcast(buf(LB_FINISHED_FIRST))).toEqual({
+        weight: 87.6,
+        impedance: 0,
+      });
+      expect(adapter.parseBroadcast(buf(LB_FINISHED_202))).toEqual({
+        weight: 87.6,
+        impedance: 0,
+      });
+      expect(warn).not.toHaveBeenCalled();
+    });
+
     it('logs [12..13] of the finished frame at debug level instead of publishing it', () => {
       const adapter = new SenssunIfB7Adapter();
       const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
@@ -221,16 +270,17 @@ describe('SenssunIfB7Adapter (#423)', () => {
       expect(adapter.parseLiveBroadcast(broken)).toBeNull();
     });
 
-    it('refuses an lb frame on both channels and warns once (derived: [14] 0xA1 -> 0xA2)', () => {
+    it('refuses an unknown display unit on both channels and warns once (derived: [14] 0xA2 -> 0xA3)', () => {
       const adapter = new SenssunIfB7Adapter();
       const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
-      const lbFinished = derived(FINISHED_67_25, 14, 0xa2);
-      const lbLive = derived(LIVE_87_30, 14, 0x02);
-      expect(adapter.parseBroadcast(lbFinished)).toBeNull();
-      expect(adapter.parseBroadcast(lbFinished)).toBeNull();
-      expect(adapter.parseLiveBroadcast(lbLive)).toBeNull();
+      const unknownUnit = derived(LB_FINISHED_FIRST, 14, 0xa3);
+      expect(adapter.parseBroadcast(unknownUnit)).toBeNull();
+      expect(adapter.parseBroadcast(unknownUnit)).toBeNull();
+      expect(adapter.parseLiveBroadcast(unknownUnit)).toBeNull();
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(String(warn.mock.calls[0][0])).toContain('lb');
+      const message = String(warn.mock.calls[0][0]);
+      expect(message).toContain('0x3');
+      expect(message).toContain('Only kg and lb are decoded');
     });
 
     it('logs an unseen state once, so a timeout on such a unit is explainable', () => {
@@ -272,6 +322,12 @@ describe('SenssunIfB7Adapter (#423)', () => {
       const adapter = new SenssunIfB7Adapter();
       const decision = evaluateAdvertisement(adapter, advert(FINISHED_67_25, MAC_BLE_MONITOR));
       expect(decision).toEqual({ kind: 'complete', reading: { weight: 67.25, impedance: 0 } });
+    });
+
+    it('completes on the #423 finished frame with the display in lb', () => {
+      const adapter = new SenssunIfB7Adapter();
+      const decision = evaluateAdvertisement(adapter, advert(LB_FINISHED_FIRST));
+      expect(decision).toEqual({ kind: 'complete', reading: { weight: 87.6, impedance: 0 } });
     });
 
     it('waits on a weighing frame and carries its live weight', () => {
