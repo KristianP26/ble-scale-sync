@@ -78,10 +78,10 @@ ble:
   noble_driver: stoprocent # or: abandonware
 ```
 
-| Driver                                    | Platforms             | Notes                                                                                                              |
-| ----------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `node-ble` (default on Linux)             | Linux only            | Uses BlueZ D-Bus. Most reliable on Raspberry Pi. Service UUIDs not available during scan (only after connecting).  |
-| `@abandonware/noble` (default on Windows) | Linux, Windows        | Mature driver. Uses WinRT on Windows. Builds from source, so it needs a C++ toolchain.                             |
+| Driver                                    | Platforms             | Notes                                                                                                                                       |
+| ----------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `node-ble` (default on Linux)             | Linux only            | Uses BlueZ D-Bus. Most reliable on Raspberry Pi. Service UUIDs not available during scan (only after connecting).                           |
+| `@abandonware/noble` (default on Windows) | Linux, Windows        | Mature driver. Uses WinRT on Windows. Builds from source, so it needs a C++ toolchain.                                                      |
 | `@stoprocent/noble` (default on macOS)    | Linux, macOS, Windows | Newer driver, ships prebuilt binaries. Exposes service UUIDs during scan. On Windows, requires the [WinUSB driver](https://zadig.akeo.ie/). |
 
 ::: tip Note
@@ -127,12 +127,23 @@ Provisioning only fills fields the scale reports as empty. A populated profile i
 
 Both get called "the PIN", and mixing them up costs hours.
 
-|              | Digits | What it is                                             | Where it goes                                  |
-| ------------ | ------ | ------------------------------------------------------ | ---------------------------------------------- |
-| Passkey      | 6      | BLE Numeric Comparison during pairing. New every time. | Nowhere. Confirm it on the scale with **SET**. |
-| Consent code | 4      | SIG User Control Point, tied to one user slot.         | `users[].beurer_pin`                           |
+|                                 | Digits | What it is                                                                                         | Where it goes                                  |
+| ------------------------------- | ------ | -------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| Passkey to confirm (e.g. BF915) | 6      | BLE Numeric Comparison during pairing. New every time.                                             | Nowhere. Confirm it on the scale with **SET**. |
+| Passkey to type (e.g. BF700)    | 6      | BLE Passkey Entry during pairing: the scale shows it, the computer has to type it. New every time. | Nowhere. Pair once by hand, see below.         |
+| Consent code                    | 4      | SIG User Control Point, tied to one user slot.                                                     | `users[].beurer_pin`                           |
 
 On a BF915 the consent code is the four-digit number the scale displays when you select that profile in its own menu. It does not have to be guessed or assigned.
+
+A scale that shows a passkey for you to type cannot be paired by putting that code in `config.yaml`, because it changes on every attempt. On Linux the log then says the scale `asked for a passkey and no users[].beurer_pin is set`. Pair it once by hand, with the scale awake and BLE Scale Sync stopped:
+
+```bash
+bluetoothctl
+scan on      # wait until the scale's MAC shows up
+pair <MAC>   # type the six-digit code the scale shows when asked
+```
+
+Then start BLE Scale Sync again.
 
 ### Beurer BF 405 / BF 915: factory reset and deleting one user
 
