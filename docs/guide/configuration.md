@@ -216,7 +216,7 @@ That reading is not confirmed on hardware, but the 20-byte extended dialect does
 
 There is a second place the same frame appears, and it is the more interesting one for a scale that never streams anything at all. Before the weigh-in the handshake sends `a2 06 01 32 <age>`, which openScale labels a user profile. Under the reading above those payload bytes are a weight, and `0x32` plus an age decodes to something like **128.58 kg**, which is nobody. Two es26m reporters whose scales complete the whole handshake and then go silent have exactly that in their logs.
 
-That default is not changed, because openScale's bytes are what every QN scale in the registry reads with today and two silent units are not enough to move it under the whole family. Turning this on swaps in your configured weight anchor there too, so the scale is told a plausible number before it decides whether to measure.
+That default is not changed, because openScale's bytes are what every QN scale in the registry reads with today and two silent units are not enough to move it under the whole family. On the 20-byte extended dialect, turning this on swaps in your configured weight anchor there too. On every other dialect that frame stays as it is, and the anchor goes after the start command instead (see below).
 
 If your scale completes the whole handshake, is accepted on `qn_protocol_byte` and `qn_report_byte`, and then goes quiet, this is the next thing to try:
 
@@ -240,7 +240,7 @@ An HCI capture of an Arboleaf vendor app shows two `0xA4` frames sent between ST
 
 Be aware of what that means. The frames are replayed byte for byte from one reporter's capture of their own scale, and their payload is not decoded. It looks like per-user calibration or a previous measurement handed back, so it may be right for everyone or right for nobody but the person who captured it. That is why it is off by default and why it is the last thing to try rather than the first. If it works for your unit, please say so on [issue #331](https://github.com/KristianP26/ble-scale-sync/issues/331): more than one confirmation is what would turn this from a replay into a decoded frame.
 
-If the scale is still silent with that on, there is one more difference between this app and the vendor app on that capture, and it is the last one anybody has found:
+If the scale is still silent, there is one more difference between this app and the vendor app on that capture:
 
 ```yaml
 ble:
@@ -256,7 +256,7 @@ ble-scale-sync   20 08 ff a1 aa 22 32 c6
 
 Both close under the same checksum rule, and both carry the same little-endian timestamp in the same position, 40 minutes apart on the capture day. The entire difference is one `0x08` before the checksum, and what it selects is not known. Turning this on sends the longer frame.
 
-Try it on its own, not together with `qn_a4_prelude` or `qn_weight_ack`. Changing two things at once makes the result unreadable, which is the whole reason these are separate switches.
+Every Arboleaf capture so far sends this longer frame, including both that show the anchor going out twice after the start command. So if you have `qn_weight_ack` on, keep it on and add this rather than swapping one for the other: in those captures the vendor app sends both. Leave `qn_a4_prelude` off for that run, so that whatever changes can only come from these two.
 
 And if that is also silent, there is one last difference, the only one left between this app's start-up conversation and the vendor app's:
 
@@ -275,12 +275,18 @@ ble-scale-sync   13 09 ff 01 10 00 00 00    2c
 
 All three close under the same checksum rule and the first seven bytes are identical, so the whole difference is the pair before the checksum. The two captures disagree on its value, which rules out a constant, so what gets sent here is the vendor app's own pair. What it selects is not known.
 
-Once each option has been tried on its own and none of them worked, trying them together is the reasonable next step: the capture shows the vendor app sending all of them in the same session, so it is possible the scale wants the whole sequence rather than any single frame.
+Once each of these has been tried and none of them worked, trying them all together is the reasonable next step: the capture shows the vendor app sending all of them in the same session, so it is possible the scale wants the whole sequence rather than any single frame.
 
-With debug on, the swap is named:
+With debug on, the anchor is named. On the 20-byte extended dialect:
 
 ```
 QN: ready-time A2 carries the configured weight anchor 76.40 kg instead of openScale's placeholder (#75)
+```
+
+On every other dialect:
+
+```
+QN: weight anchor 76.40 kg sent twice after START (ble.qn_weight_ack, sequence from the #331/#75 Android captures)
 ```
 
 If `true` makes your scale report a weight, please say so in an issue with the model and the dialect from the `QN: scale info` log line. Two confirmations would move the default.
