@@ -20,7 +20,7 @@ _Weight only_ means weight is reported normally but body composition is estimate
 | **Xiaomi** Mi Scale 2 (MIBCS / MIBFS / XMTZC05HM)                     | Yes              | No pairing needed; works on every transport                                                            |
 | **Xiaomi** Mi Smart Scale 2 (XMTZC04HM / MI SCALE2)                   | Weight only      | No pairing needed                                                                                      |
 | **Silvergear** Smart Scale 108                                        | Weight only      | Broadcast only; the display unit does not matter                                                       |
-| **Grifema** GA2001 / **Senssun** IF_B7                                | Weight only      | Broadcast only; set the scale to kg                                                                    |
+| **Grifema** GA2001 / **Senssun** IF_B7                                | Weight only      | Broadcast only; kg or lb display                                                                       |
 | **Xiaomi** Mijia Body Composition Scale S800 (ms116)                  | Weight only      | Needs a per-device `ble.bind_key` from the Mi cloud                                                    |
 | **Xiaomi** Body Composition Scale S400 (MJTZC01YM)                    | Yes              | Needs a per-device `ble.bind_key` from the Mi cloud plus `ble.scale_mac`; weigh barefoot for impedance |
 | **Renpho** ES-CS20M / ES-32MD / Elis 1 / FITINDEX / Sencor (QN-Scale) | Yes              | The most common protocol; many rebrands                                                                |
@@ -118,7 +118,7 @@ The reading waits for that frame before it is sent, so it arrives about two seco
 
 ### **Grifema** GA2001 / **Senssun** IF_B7
 
-Weight only, and only while the scale displays kilograms. The scale advertises as `IF_B7` and broadcasts its weigh-in without accepting a connection. Its final frame carries a field that looks like impedance, but no weigh-in has yet been paired with a body-fat figure from the vendor app, so body composition is estimated from BMI (Deurenberg formula) and the field is logged in debug mode. No weigh-in in pounds has been captured either, so a scale set to lb is ignored with a warning in the log. A debug log of a full weigh-in, together with the vendor app's weight and body-fat reading for it, would settle both ([#423](https://github.com/KristianP26/ble-scale-sync/issues/423)).
+Weight only. The scale advertises as `IF_B7` and broadcasts its weigh-in without accepting a connection. It sends the weight in kilograms whether its display is set to kg or lb (lb is checked against a single weigh-in so far); any other display unit is ignored with a warning in the log. Its final frame carries a field that looks like impedance, but one weigh-in with a body-fat figure from the vendor app is not enough to decode it, so body composition is estimated from BMI (Deurenberg formula) and the field is logged in debug mode. More weigh-ins paired with the app's body-fat reading would settle it ([#423](https://github.com/KristianP26/ble-scale-sync/issues/423)).
 
 ### **Renpho ES-CS20M / Elis 1** (some hardware variants)
 

@@ -30,7 +30,7 @@ The transport is passive, so an adapter can only be served if it reads the weigh
 | **Xiaomi** Mijia Body Composition Scale S800 (ms116) | Weight only; needs `ble.bind_key`                                                                                                |
 | **Xiaomi** Body Composition Scale S400               | Weight, impedance and heart rate; needs `ble.bind_key` and `ble.scale_mac`                                                       |
 | **Silvergear** Smart Scale 108                       | Weight only                                                                                                                      |
-| **Grifema** GA2001 / **Senssun** IF_B7               | Weight only, with the scale set to kg                                                                                            |
+| **Grifema** GA2001 / **Senssun** IF_B7               | Weight only                                                                                                                      |
 | **Eufy** Smart Scale P2 (T9148) / P2 Pro (T9149)     | Weight only, same as the local adapter                                                                                           |
 | **QN-Scale**, broadcast-only firmware                | Weight only. Only units that send the `AABB` broadcast (some Renpho ES-CS20M / Elis 1 variants); connectable QN scales need GATT |
 
