@@ -205,9 +205,9 @@ configuration:
     description: >-
       Keep a reading whose upload failed and try again on a later cycle, for up
       to three days. Only targets that can record a past measurement (Garmin,
-      InfluxDB, file, Intervals, Runalyze, wger) can be retried; MQTT and
-      notifications cannot express a past reading and are not queued. Turn off
-      to write nothing to disk.
+      InfluxDB, file, Intervals, Runalyze, wger, HealthLog) can be retried;
+      MQTT and notifications cannot express a past reading and are not queued.
+      Turn off to write nothing to disk.
   idle_rescan_delay:
     name: Rescan delay when no scale was found (seconds)
     description: >-
