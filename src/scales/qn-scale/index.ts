@@ -34,6 +34,7 @@ import {
   MAX_AE00_RESPONSES,
   MAX_STORED_QUERY_ATTEMPTS,
   MAX_STORED_RECORD_AGE_SEC,
+  POST_START_ANCHOR_DELAY_MS,
   PROTO_ECHO_MIN_INFO_FRAME_LEN,
   REPORT_BYTE_DEFAULT,
   REPORT_BYTE_LONG_FRAME,
@@ -966,10 +967,10 @@ export class QnScaleAdapter
     // configured anchor for the reporters who can actually test it.
     if (this.ctx) {
       // The anchor goes here ONLY on the 20-byte extended dialect. Everywhere
-      // else `handleConfigRequest` sends it immediately before START instead,
-      // which is where the #331 capture puts it, and sending it in both places
-      // would mean one switch moves two things and the reporter's experiment
-      // stops being readable.
+      // else `handleConfigRequest` sends it twice right after START instead,
+      // which is where both Android captures of the Arboleaf app put it (#331,
+      // #75), and sending it in both places would mean one switch moves two
+      // things and the reporter's experiment stops being readable.
       const anchorAtReady = this.forcedWeightAck === true && this.isExtendedLongFrame;
       const anchorKg = anchorAtReady ? this.resolveAnchorKg() : 0;
       const profileCmd = anchorAtReady
@@ -1037,29 +1038,51 @@ export class QnScaleAdapter
 
     await wait(200);
 
-    // Weight anchor, on the dialects where it goes BEFORE the start command.
-    //
-    // The 20-byte extended dialect sends it after START, repeated, which is
-    // hardware confirmed (#235) and is left exactly where it is below. Nothing
-    // pinned the position anywhere else until #331, whose Arboleaf capture puts
-    // a single anchor immediately before START on the es26m dialect:
-    //
-    //   APP->SCALE  a2 06 01 22 8d 58     0x228d = 8845 = 88.45 kg
-    //   APP->SCALE  22 06 ff 00 03 2a     START
-    //
-    // Reached only when `ble.qn_weight_ack` is set, so no install that does not
-    // ask for it sees a frame it did not see before.
-    if (this.weightAckEnabled() && !this.isExtendedLongFrame) {
-      const preAnchorKg = this.resolveAnchorKg();
-      await this.writeCmd([...buildMeasurementTrigger(preAnchorKg)]);
-      bleLog.debug(
-        `QN: weight anchor ${preAnchorKg.toFixed(2)} kg sent before START ` +
-          `(ble.qn_weight_ack, position from the #331 capture)`,
-      );
-    }
-
     // 0x22 start measurement / stored-data query with echoed protocol type
     await this.writeCmd(this.buildStoredDataQuery());
+
+    // Weight anchor, twice, right after START. Every dialect except the 20-byte
+    // extended one, which has its own hardware-confirmed burst further down,
+    // and only when `ble.qn_weight_ack` is explicitly true, so no install that
+    // does not ask for it sees a frame it did not see before.
+    //
+    // Two Android btsnoops of the Arboleaf app completing a weigh-in on the
+    // 19-byte es26m dialect, the same unit a month apart, agree (#331, #75):
+    //
+    //   APP    22 06 ff 00 03 2a    START
+    //   APP    a2 06 01 1c ed b2    75 ms later, 0x1ced = 7405 = 74.05 kg
+    //   SCALE  a3 04 01 a8          the scale's ack to that A2
+    //   APP    a2 06 01 1c ed b2    the same frame again, 71 ms after the first
+    //   SCALE  10 14 ...            the first live frame, 22 ms later
+    //
+    // Neither sends an A2 before START. The one transcript that has it there is
+    // an iOS one without timestamps whose order is in doubt (it labels the a3 a
+    // start ack, but every A2 gets an a3), and replaying that order, as this
+    // adapter did from v1.28.0, never produced a weight on either reporter's
+    // unit.
+    //
+    // POST_START_ANCHOR_DELAY_MS is the capture's 75 ms. The gap between the
+    // copies is TRIGGER_GAP_MS rather than the capture's 71 ms, see there. Sent
+    // twice unconditionally rather than on the a3, which a proxy transport may
+    // deliver late or not at all.
+    //
+    // The burst spans two timers, so it is bound to the session that started
+    // it: writeCmd reads this.ctx at write time, and a session that ends and
+    // reconnects inside the window must not be handed this one's anchor.
+    if (this.forcedWeightAck === true && !this.isExtendedLongFrame) {
+      const owner = this.ctx;
+      const anchorKg = this.resolveAnchorKg();
+      const anchor = buildMeasurementTrigger(anchorKg);
+      for (let i = 0; i < TRIGGER_REPEATS; i++) {
+        await wait(i === 0 ? POST_START_ANCHOR_DELAY_MS : TRIGGER_GAP_MS);
+        if (!owner || this.ctx !== owner) return;
+        await this.writeCmd([...anchor]);
+      }
+      bleLog.debug(
+        `QN: weight anchor ${anchorKg.toFixed(2)} kg sent twice after START ` +
+          `(ble.qn_weight_ack, sequence from the #331/#75 Android captures)`,
+      );
+    }
 
     // Opt-in only. See A4_PRELUDE for why these bytes are a replay rather than
     // something built from this user's profile, and why that keeps it off by

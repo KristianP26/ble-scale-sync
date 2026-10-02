@@ -228,11 +228,16 @@ export interface AdapterRuntimeConfig {
    * Acknowledge every live QN weight frame with its own weight
    * (`ble.qn_weight_ack`).
    *
-   * The vendor app answers each 0x10 frame with `a2 06 01 <that frame's weight>`
-   * (#235). The adapter does this on the 20-byte extended dialect, which is the
-   * only one a capture covers. Unset keeps that gate; true enables it on every
-   * dialect, for a scale that completes the handshake and then goes quiet;
-   * false disables it everywhere.
+   * One reading of a vendor-app capture has the app answering each 0x10 frame
+   * with `a2 06 01 <that frame's weight>` (#235). The adapter does this on the
+   * 20-byte extended dialect, which is the only one that capture covers, and
+   * never for the 20-byte live frame whose layout is not decoded yet. Unset
+   * keeps that gate; true enables it on every dialect, for a scale that
+   * completes the handshake and then goes quiet; false disables it everywhere.
+   *
+   * True also sends the configured weight anchor: on the extended dialect in
+   * the ready-time A2, on every other dialect as two A2 frames right after
+   * START, as two Android captures of the Arboleaf app show (#331, #75).
    */
   qnWeightAck?: boolean;
   /**

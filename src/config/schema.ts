@@ -197,6 +197,11 @@ export const BleSchema = z
      * then streams nothing: it is the same class of silent failure as
      * `qn_protocol_byte` and `qn_report_byte`, and the same kind of knob. Left
      * unset it changes nothing.
+     *
+     * True also hands the scale the configured weight anchor: on the 20-byte
+     * extended dialect in the ready-time A2, everywhere else as two A2 frames
+     * right after START, the sequence two Android captures of the Arboleaf app
+     * show (#331, #75).
      */
     qn_weight_ack: z.boolean().optional().nullable(),
     /**
