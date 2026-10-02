@@ -37,11 +37,11 @@ configuration:
     name: QN weight acknowledgement
     description: >-
       QN-family scales only, and the last thing to try after the two QN bytes
-      above. The vendor app tells the scale a real weight before the weigh-in
-      and answers every weight frame with that same weight; some firmware will
-      not finish a measurement otherwise. Leave empty unless your QN scale
-      completes the whole handshake in the log and then reports no weight at
-      all; then set true.
+      above. Sends your weight anchor (last known weight, or the middle of
+      your weight range) twice right after the start command, as the
+      Arboleaf vendor app does, and acknowledges live weight frames with their
+      own weight. Leave empty unless your QN scale completes the whole
+      handshake in the log and then reports no weight at all; then set true.
   qn_a4_prelude:
     name: QN A4 prelude
     description: >-
