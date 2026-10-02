@@ -435,16 +435,18 @@ Authentication uses HealthLog's **Measurement ingest token**, sent as `Authoriza
 
 Each value is a separate `POST /api/measurements` carrying the reading's exact time, so historical readings replayed from a scale's offline cache land on their original date and time. HealthLog takes the unit from the measurement type, so every value is sent already in that unit:
 
-| HealthLog type     | Sent as                                                                   |
-| ------------------ | ------------------------------------------------------------------------- |
-| `WEIGHT`           | kg                                                                        |
-| `BODY_FAT`         | percent                                                                   |
-| `TOTAL_BODY_WATER` | kg, computed as weight x body water percent (HealthLog stores it as mass) |
-| `MUSCLE_MASS`      | kg                                                                        |
-| `BONE_MASS`        | kg                                                                        |
-| `VISCERAL_FAT`     | rating; a value above 30, the most HealthLog accepts, is not sent         |
+| HealthLog type     | Sent as                                                                   | HealthLog accepts |
+| ------------------ | ------------------------------------------------------------------------- | ----------------- |
+| `WEIGHT`           | kg                                                                        | 1-500             |
+| `BODY_FAT`         | percent                                                                   | 1-80              |
+| `TOTAL_BODY_WATER` | kg, computed as weight x body water percent (HealthLog stores it as mass) | 5-100             |
+| `MUSCLE_MASS`      | kg                                                                        | 5-200             |
+| `BONE_MASS`        | kg                                                                        | 0.5-8             |
+| `VISCERAL_FAT`     | rating                                                                    | 0-30              |
 
-Everything after the weight is sent only with `sync_measurements` enabled, and a metric the scale could not measure is left out. A failed body composition value is logged but does not fail the export; a failed weight does. HealthLog answers a reading it already holds (same type and time) with `409`, which counts as already recorded rather than as a failure, so a retried export does not report an error or store the weigh-in twice.
+Everything after the weight is sent only with `sync_measurements` enabled. Those are the same values every other exporter receives, so on a scale without impedance they are the BMI-based estimates described in [Body Composition](/body-composition). A body composition value outside the range HealthLog accepts is not sent, since HealthLog would refuse it. In practice that is a visceral fat rating above 30: ours runs up to 59. A failed body composition value is logged but does not fail the export; a failed weight does.
+
+HealthLog refuses a second reading with the same type and time with `409`. The exporter counts that as already recorded rather than as a failure, so when a retry repeats a value that did reach HealthLog (the response was lost on the way back), the export does not report an error.
 
 The startup healthcheck calls HealthLog's public `/api/version` endpoint, which needs no token. It confirms the instance is reachable, not that the token is valid: a wrong or expired token shows up on the first export.
 
