@@ -81,15 +81,17 @@ function hasOwnMacEcho(device: BleDeviceInfo): boolean {
  * Protocol details:
  *   - Service 0x1A10, notify 0x2A10, write 0x2A11
  *   - Start measurement command: [0x55, 0xAA, 0x90, ...]
- *   - Message ID 0x11 (start/stop frame): byte[5]=0x01 start, byte[5]=0x00 stop
- *   - Message ID 0x14 (weight frame): weight at [8-9], optional resistance at [10-11]
+ *   - Message ID 0x11 (power/status frame): byte[5]=0x01 on (also sent right
+ *     after subscribe, before anyone steps on), byte[5]=0x00 off
+ *   - Message ID 0x14 (weight frame): status at [5], weight at [8-9], optional
+ *     resistance at [10-11]
  *   - Message ID 0x15 (extended frame): resistance at bytes [9-10]
  *   - Weight at [8-9] big-endian uint16 / 100 (kg)
- *   - Complete when stable flag is set (some firmware) or STOP frame received (others)
+ *   - Complete on a 0x14 final (status low nibble 1) or on the 0x11 power-off
  *
- * Per openScale PR #1300, some firmware variants do not use a per-frame stability
- * flag in 0x14 frames. Instead, stability is signaled by a 0x11 STOP frame.
- * This adapter supports both paths.
+ * Per openScale PR #1300, some firmware variants do not flag a final 0x14
+ * frame; the reading then completes on the 0x11 power-off frame. This adapter
+ * supports both paths.
  */
 export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, Unlockable {
   readonly name = 'ES-CS20M';
@@ -121,11 +123,13 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
    *
    * Three message types are handled:
    *
-   * ID 0x11 - start/stop frame:
-   *   [5]      0x01 = start, 0x00 = stop (measurement complete)
+   * ID 0x11 - power/status frame:
+   *   [5]      0x01 = on (also sent right after subscribe), 0x00 = off
+   *            (measurement complete)
    *
    * ID 0x14 - weight frame:
-   *   [5]      stability flag (some firmware only, others always 0)
+   *   [5]      status: low nibble 0 = settling, 1 = final, anything else
+   *            unclassified; bit 4 (0x10) = zero-current mode
    *   [8-9]    weight, big-endian uint16 / 100 (kg)
    *   [10-11]  resistance, big-endian uint16 (optional)
    *
@@ -141,17 +145,17 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
         ? data[2]
         : data[0];
 
-    // 0x11 - start/stop control frame
+    // 0x11 - power/status frame
     if (msgId === 0x11) {
       if (data.length < 6) return null;
       if (data[5] === 0x01) {
-        // START: reset state for new measurement
+        // Power on (also sent right after subscribe): reset state for a new weigh-in
         this.stable = false;
         this.stopped = false;
         this.resistance = 0;
         this.lastWeight = 0;
       } else if (data[5] === 0x00) {
-        // STOP: measurement complete, return last accumulated reading
+        // Power off: measurement complete, return the last accumulated reading
         this.stopped = true;
         if (this.lastWeight > 0) {
           return { weight: this.lastWeight, impedance: this.resistance };
@@ -171,7 +175,15 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
     if (msgId !== 0x14) return null;
     if (data.length < 10) return null;
 
-    this.stable = data[5] !== 0;
+    // Low nibble is the phase (0 settling, 1 final, other values unclassified);
+    // bit 4 is the zero-current mode the Renpho app stores on the scale, so
+    // 0x10 is an ordinary settling frame and 0x11 an ordinary final. The unit
+    // from #376 has been stuck in zero-current mode since 2026-09-06 and sends
+    // every settling frame as 0x10, the first one at 10.60 kg on the way up
+    // (renpho-escs20m#10). Taking any non-zero status as stable completed the
+    // reading on that first frame. Status layout per renpho-escs20m
+    // x55aa/protocol.py, confirmed by its R-A016 app capture.
+    this.stable = (data[5] & 0x0f) === 0x01;
     const weight = data.readUInt16BE(8) / 100;
 
     // Range validation (0.5-300 kg) filters garbage during initial connection

@@ -70,7 +70,19 @@ export async function ensureBonded(
   pin: number | undefined,
   abortSignal?: AbortSignal,
 ): Promise<void> {
-  if (abortSignal?.aborted) throw new Error('Shutting down before BLE pairing started');
+  /**
+   * The abort was checked ONCE, on entry, and the listener that reacts to it is
+   * only attached after device.pair() has already been called. Between those
+   * two points sit an isPaired() round trip and an agent registration, both
+   * D-Bus calls that can take a while on a busy adapter. A stop arriving in
+   * that window was seen by nothing: pairing started anyway, lit the passkey
+   * prompt on a scale nobody was standing at, and the shutdown then waited out
+   * the 15 s bonding timeout - three times the force-exit grace window (#335).
+   */
+  const throwIfAborted = (when: string): void => {
+    if (abortSignal?.aborted) throw new Error(`Shutting down ${when}`);
+  };
+  throwIfAborted('before BLE pairing started');
   let onAbort: (() => void) | undefined;
   try {
     // NOT the shared isBonded() helper, and this is the third semantic in the
@@ -82,6 +94,7 @@ export async function ensureBonded(
       bleLog.debug('Device already bonded');
       return;
     }
+    throwIfAborted('before registering the BLE pairing agent');
     // Register our own BlueZ pairing agent first so pairing can actually complete:
     // it supplies the configured PIN as the passkey for Passkey Entry, or auto-accepts
     // Just Works / numeric comparison. Without an agent BlueZ returns "Authentication
@@ -91,6 +104,8 @@ export async function ensureBonded(
     } catch (err) {
       bleLog.debug(`Pairing agent registration skipped: ${errMsg(err)}`);
     }
+    // Last check before the one call that will not come back on its own.
+    throwIfAborted('before BLE pairing started');
     bleLog.info('Adapter requires bonding; attempting BLE pairing...');
     // A pairing that waits on a button press is the one D-Bus call that will
     // not come back on its own: BlueZ holds Pair() open until someone confirms
@@ -222,6 +237,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     bleAdapter,
     readingTimeoutMs,
     autoClearStaleBond,
+    preemptiveAdapterReset,
   } = opts;
 
   let device: Device | null = null;
@@ -410,6 +426,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       gattAttempted,
       gattSucceeded,
       abortSignal,
+      preemptiveAdapterReset,
     });
   }
 }

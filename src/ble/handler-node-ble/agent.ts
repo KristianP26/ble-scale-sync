@@ -18,6 +18,15 @@ import * as dbusNext from 'dbus-next';
 import { bleLog, errMsg } from '../types.js';
 import type { MessageBus } from 'dbus-next';
 
+/**
+ * `AA:BB:CC:DD:EE:FF` from a BlueZ device path (/org/bluez/hciN/dev_AA_BB_...),
+ * or the path itself when it does not look like one.
+ */
+function macOf(device: string): string {
+  const m = /dev_([0-9A-Fa-f]{2}(?:_[0-9A-Fa-f]{2}){5})$/.exec(device);
+  return m ? m[1].replace(/_/g, ':').toUpperCase() : device;
+}
+
 /** D-Bus object path our agent is exported at. */
 export const AGENT_PATH = '/org/blescalesync/agent';
 
@@ -86,16 +95,34 @@ export class BlueZPairingAgent extends dbusNext.interface.Interface {
     throw new dbusNext.DBusError('org.bluez.Error.Rejected', 'Not the configured scale');
   }
 
-  private requirePin(method: string, device: string): number {
+  /**
+   * Answer a Passkey Entry / PIN request with the configured beurer_pin.
+   *
+   * beurer_pin is the four-digit consent code of the scale's user slot. That it
+   * is ever the BLE passkey is unproven. A scale that runs Passkey Entry the
+   * standard way shows a fresh six-digit code on every attempt (Beurer BF700,
+   * #430), which no config value can match, so the messages point at a manual
+   * pairing instead of at the config. The PIN itself is never logged.
+   */
+  private requirePin(method: 'RequestPasskey' | 'RequestPinCode', device: string): number {
     if (!this.isTarget(device)) this.decline(method, device);
+    const mac = macOf(device);
     const pin = this.targetProvider().pin;
     if (pin == null) {
+      const what = method === 'RequestPasskey' ? 'passkey' : 'PIN code';
       bleLog.warn(
-        `BlueZ pairing agent: ${method} requested but no beurer_pin is configured; ` +
-          'rejecting pairing. Set `users[].beurer_pin` to the code the scale was paired with.',
+        `BlueZ pairing agent: ${mac} asked for a ${what} and no users[].beurer_pin is set, ` +
+          'so pairing was rejected. If the scale shows a code on its display, it is new on ' +
+          'every attempt and cannot go in the config: pair once by hand (bluetoothctl, ' +
+          `"pair ${mac}", type the code), then restart this app.`,
       );
       throw new dbusNext.DBusError('org.bluez.Error.Rejected', 'No beurer_pin configured');
     }
+    bleLog.info(
+      `BlueZ pairing agent: answering ${method} for ${mac} with users[].beurer_pin ` +
+        '(value not logged). If the scale shows a different code, pairing will fail; ' +
+        'pair by hand with bluetoothctl instead.',
+    );
     return pin;
   }
 

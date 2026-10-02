@@ -104,7 +104,7 @@ async function main(): Promise<void> {
   } else {
     // Set defaults for fresh config
     ctx.config.version = 1;
-    ctx.config.scale = { weight_unit: 'kg', height_unit: 'cm' };
+    ctx.config.scale = { weight_unit: 'kg', height_unit: 'cm', display_unit: 'weight_unit' };
     ctx.config.unknown_user = 'nearest';
 
     // Run remaining steps (skip welcome since we already ran it)

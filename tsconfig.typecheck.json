@@ -1,0 +1,17 @@
+{
+  // Type-contract tests only (`*.test-d.ts`), not the whole test tree.
+  //
+  // `tsc --noEmit` covers `src` alone, so a type assertion living under
+  // `tests/` was never checked by CI at all - a @ts-expect-error there could
+  // go stale in silence, which is precisely the kind of check-that-does-not-
+  // check these files exist to prevent. Pointing this at all of `tests/` is
+  // not an option today: it surfaces 132 pre-existing errors in ordinary test
+  // files (loose vi.fn() generics, deliberately partial fixtures). Recorded in
+  // .claude/docs/BACKLOG.md.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true
+  },
+  "include": ["src", "tests/**/*.test-d.ts"]
+}

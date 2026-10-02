@@ -137,3 +137,71 @@ describe('ensureBonded under shutdown (#335)', () => {
     expect(callMethod).not.toHaveBeenCalledWith('CancelPairing');
   });
 });
+
+describe('ensureBonded sees a stop that lands during its preparation', () => {
+  /**
+   * The abort was checked once, on entry, and the listener that reacts to it
+   * was attached only after pair() had already been called. Between those two
+   * points sit an isPaired() round trip and an agent registration - both D-Bus
+   * calls. A stop arriving in that window was seen by nothing: pairing started
+   * anyway, lit the passkey prompt on a scale nobody was standing at, and the
+   * shutdown waited out the 15 s bonding timeout.
+   */
+  function deviceWithSlowIsPaired(release: { fn?: () => void }) {
+    const pair = vi.fn(() => new Promise<void>(() => {}));
+    return {
+      isPaired: () =>
+        new Promise<boolean>((resolve) => {
+          release.fn = () => resolve(false);
+        }),
+      pair,
+      helper: { callMethod: vi.fn(async () => {}) },
+    } as unknown as Device & { pair: ReturnType<typeof vi.fn> };
+  }
+
+  it('does not start pairing when the stop arrives during isPaired()', async () => {
+    const release: { fn?: () => void } = {};
+    const device = deviceWithSlowIsPaired(release);
+    const ac = new AbortController();
+
+    const bonding = ensureBonded(device, 1234, ac.signal);
+    await settle();
+    ac.abort();
+    release.fn!();
+
+    await expect(bonding).rejects.toThrow(/Shutting down/);
+    expect(device.pair).not.toHaveBeenCalled();
+  });
+
+  it('does not start pairing when the stop arrives during agent registration', async () => {
+    // Same window, one await later. registerPairingAgent is mocked to resolve
+    // immediately at module scope, so the abort is placed between the two
+    // checks by aborting from a microtask the agent registration yields to.
+    const pair = vi.fn(() => new Promise<void>(() => {}));
+    const ac = new AbortController();
+    const device = {
+      isPaired: async () => {
+        queueMicrotask(() => ac.abort());
+        return false;
+      },
+      pair,
+      helper: { callMethod: vi.fn(async () => {}) },
+    } as unknown as Device;
+
+    await expect(ensureBonded(device, 1234, ac.signal)).rejects.toThrow(/Shutting down/);
+    expect(pair).not.toHaveBeenCalled();
+  });
+
+  it('still pairs when no stop happened', async () => {
+    // Guards against a fix that simply refuses to pair.
+    const pair = vi.fn(async () => {});
+    const device = {
+      isPaired: async () => false,
+      pair,
+      helper: { callMethod: vi.fn(async () => {}), set: async () => {} },
+    } as unknown as Device;
+
+    await ensureBonded(device, 1234, new AbortController().signal);
+    expect(pair).toHaveBeenCalledTimes(1);
+  });
+});

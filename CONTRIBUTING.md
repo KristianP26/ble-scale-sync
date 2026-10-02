@@ -51,7 +51,7 @@ Unit tests use [Vitest](https://vitest.dev/) and cover:
 - **Config writing** — atomic file write, write lock serialization, YAML comment preservation, debounced weight updates
 - **User matching** — 4-tier weight matching, all strategies (nearest/log/ignore), overlapping ranges, drift detection
 - **Environment validation** — `validate-env.ts` (all validation rules and edge cases)
-- **Scale adapters** — `parseNotification()`, `matches()`, `isComplete()`, `computeMetrics()`, and `onConnected()` for all 35 adapters
+- **Scale adapters** — `parseNotification()`, `matches()`, `isComplete()`, `computeMetrics()`, and `onConnected()` for all 36 adapters
 - **Exporters** — config parsing, MQTT publish/HA discovery, MQTT multi-user topic routing + per-user HA discovery, Garmin subprocess, Webhook/InfluxDB/Ntfy delivery, ExportContext, ntfy drift warning
 - **Multi-user flow** — matching → profile resolution → exporter resolution → ExportContext construction, strategy fallback, tiebreak with last_known_weight
 - **Orchestrator** — healthcheck runner, export dispatch, parallel execution, partial/total failure handling
@@ -196,6 +196,7 @@ ble-scale-sync/
 │       ├── hutbit.ts                # Hutbit / Lefu FFB0 "AC02" family
 │       ├── robi-s9.ts               # Robi S9
 │       ├── silvergear-108.ts        # Silvergear 108 (broadcast only)
+│       ├── senssun-if-b7.ts         # Senssun IF_B7 / Grifema GA2001 (broadcast only)
 │       └── standard-gatt.ts         # Generic BCS/WSS catch-all
 ├── tests/
 │   ├── body-comp-helpers.test.ts    # Body-comp math

@@ -21,6 +21,15 @@ const { saveQueue, flushQueue } = await import('../../src/runtime/export-queue.j
 import type { Exporter } from '../../src/interfaces/exporter.js';
 import type { BodyComposition } from '../../src/interfaces/scale-adapter.js';
 
+/**
+ * Name lookup over a fixed list, for the cases below that only exercise queue
+ * mechanics. Real callers resolve through the entry's OWN user first - see the
+ * wrong-account test, which is what that distinction is for.
+ */
+function lookupIn(...exporters: Exporter[]) {
+  return (e: QueuedExport) => exporters.find((x) => x.name === e.exporter);
+}
+
 const NOW = Date.parse('2026-09-09T12:00:00.000Z');
 
 /**
@@ -65,7 +74,7 @@ describe('export queue when the file cannot be written', () => {
     } as unknown as Exporter;
 
     h.shouldThrow = true;
-    const result = await flushQueue(file, [garmin], NOW);
+    const result = await flushQueue(file, lookupIn(garmin), NOW);
 
     expect(garmin.export).not.toHaveBeenCalled();
     expect(result).toEqual({ delivered: 0, failed: 0, dropped: 0 });

@@ -53,6 +53,13 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
       log "Set 'ble.$_qn' in $CUSTOM_PATH instead."
     fi
   done
+  # preemptive_adapter_reset defaults to true, and the loop above cannot see a
+  # false (jq's // treats false as missing), so it gets its own check. Only
+  # false is worth a warning: true is what every install has.
+  if [ "$(jq -r '.preemptive_adapter_reset == false' "$OPTIONS")" = "true" ]; then
+    log "WARNING: custom_config is enabled, so the 'preemptive_adapter_reset' option is ignored."
+    log "Set 'ble.preemptive_adapter_reset' in $CUSTOM_PATH instead."
+  fi
 else
 
   # ── Read all options ────────────────────────────────────────────────────
@@ -109,12 +116,18 @@ else
       ;;
   esac
   AUTO_CLEAR_STALE_BOND=$(opt_bool auto_clear_stale_bond)
+  # Defaults to true, so neither opt nor opt_bool works here: jq's // treats
+  # false as missing, which would turn an explicit false into the default and
+  # an absent key into false. Only an explicit false switches it off (#417).
+  PREEMPTIVE_ADAPTER_RESET=$(jq -r 'if .preemptive_adapter_reset == false then "false" else "true" end' "$OPTIONS")
   PROXY_LIVENESS_MIN=$(opt_int proxy_liveness_timeout_min 30)
+  DISPLAY_UNIT=$(opt display_unit)
 
   WEIGHT_UNIT=$(opt weight_unit)
   HEIGHT_UNIT=$(opt height_unit)
   [ -z "$WEIGHT_UNIT" ] && WEIGHT_UNIT="kg"
   [ -z "$HEIGHT_UNIT" ] && HEIGHT_UNIT="cm"
+  [ -z "$DISPLAY_UNIT" ] && DISPLAY_UNIT="weight_unit"
   OUT_OF_RANGE=$(opt out_of_range)
   # Anything but the two known values would fail schema validation and take the
   # whole add-on down, so an unrecognised value falls back to the default.
@@ -274,7 +287,8 @@ YAML
   if [ -n "$SCALE_MAC" ] || [ -n "$BLE_ADAPTER" ] || [ -n "$FORCE_SCALE_ADAPTER" ] ||
     [ -n "$QN_PROTOCOL_BYTE" ] || [ -n "$QN_REPORT_BYTE" ] || [ -n "$QN_WEIGHT_ACK" ] ||
     [ -n "$QN_A4_PRELUDE" ] || [ -n "$QN_TIME_SYNC_LONG" ] || [ -n "$QN_CONFIG_LONG" ] ||
-    [ "$AUTO_CLEAR_STALE_BOND" = "true" ] || [ "$PROXY_LIVENESS_MIN" != "30" ]; then
+    [ "$AUTO_CLEAR_STALE_BOND" = "true" ] || [ "$PREEMPTIVE_ADAPTER_RESET" = "false" ] ||
+    [ "$PROXY_LIVENESS_MIN" != "30" ]; then
     echo "ble:" >> "$FRESH"
     [ -n "$SCALE_MAC" ] && echo "  scale_mac: \"$(yaml_escape "$SCALE_MAC")\"" >> "$FRESH"
     [ -n "$BLE_ADAPTER" ] && echo "  adapter: \"$(yaml_escape "$BLE_ADAPTER")\"" >> "$FRESH"
@@ -286,6 +300,7 @@ YAML
     [ -n "$QN_TIME_SYNC_LONG" ] && echo "  qn_time_sync_long: $QN_TIME_SYNC_LONG" >> "$FRESH"
     [ -n "$QN_CONFIG_LONG" ] && echo "  qn_config_long: $QN_CONFIG_LONG" >> "$FRESH"
     [ "$AUTO_CLEAR_STALE_BOND" = "true" ] && echo "  auto_clear_stale_bond: true" >> "$FRESH"
+    [ "$PREEMPTIVE_ADAPTER_RESET" = "false" ] && echo "  preemptive_adapter_reset: false" >> "$FRESH"
     [ "$PROXY_LIVENESS_MIN" != "30" ] && echo "  proxy_liveness_timeout_min: $PROXY_LIVENESS_MIN" >> "$FRESH"
     echo "" >> "$FRESH"
   fi
@@ -294,6 +309,7 @@ YAML
 scale:
   weight_unit: $WEIGHT_UNIT
   height_unit: $HEIGHT_UNIT
+  display_unit: $DISPLAY_UNIT
 
 unknown_user: nearest
 out_of_range: $OUT_OF_RANGE
@@ -417,28 +433,68 @@ if [ "$CUSTOM_CONFIG" != "true" ] && [ "$GARMIN_ENABLED" = "true" ] \
     rm -f "$TOKEN_DIR"/oauth*_token.json
   fi
 
-  # Option 1: user pre-generated tokens on another machine (MFA workaround)
-  if [ ! -f "$TOKEN_DIR/garmin_tokens.json" ] \
-     && [ -f "$SHARE_DIR/garmin_tokens.json" ]; then
+  # Option 1: user pre-generated tokens on another machine (MFA workaround).
+  #
+  # Import when /data has no token, and also when the /share copy is newer.
+  # Gating on absence alone made the documented recovery (drop a freshly
+  # generated token into /share and restart) silently do nothing whenever a
+  # rejected token was already sitting in /data, which is exactly when someone
+  # goes looking for that recovery. The stale token then kept failing every
+  # upload with "Failed to retrieve social profile" and the only way out was a
+  # shell inside the container or reinstalling the add-on.
+  #
+  # Newer-wins is the usual signal: a token placed there to replace a rejected
+  # one is normally newer than the one it replaces. Not always (a copy that
+  # keeps its original mtime, or garminconnect re-dumping the cached token
+  # after a refresh), which is what the hint further down is for. cp does not
+  # preserve mtime, so the imported copy is newer than its source from then on
+  # and a restart does not re-import. dash (the base image's /bin/sh) and
+  # busybox ash both support -nt.
+  SHARE_TOKEN_IMPORTED=false
+  # Hash of the /share file last imported. garminconnect re-dumps the token in
+  # /data after every refresh, so after an import the two files differ for good;
+  # the hint below must not read that as a skipped import.
+  SHARE_MARKER="$TOKEN_DIR/.share_token_imported.sha256"
+  if [ -f "$SHARE_DIR/garmin_tokens.json" ] \
+     && { [ ! -f "$TOKEN_DIR/garmin_tokens.json" ] \
+          || [ "$SHARE_DIR/garmin_tokens.json" -nt "$TOKEN_DIR/garmin_tokens.json" ]; }; then
     log "Importing Garmin tokens from $SHARE_DIR"
-    cp "$SHARE_DIR/garmin_tokens.json" "$TOKEN_DIR/" 2>/dev/null || true
+    if cp "$SHARE_DIR/garmin_tokens.json" "$TOKEN_DIR/" 2>/dev/null; then
+      SHARE_TOKEN_IMPORTED=true
+      sha256sum < "$SHARE_DIR/garmin_tokens.json" | cut -d' ' -f1 > "$SHARE_MARKER" 2>/dev/null || true
+    fi
   fi
 
   # Option 2: auto-authenticate if tokens still missing
   if [ ! -f "$TOKEN_DIR/garmin_tokens.json" ]; then
     log "Garmin tokens missing, authenticating with provided credentials..."
-    if python3 /app/garmin-scripts/setup_garmin.py --from-config "$CONFIG"; then
+    if python3 /app/garmin-scripts/setup_garmin.py --from-config --config-path "$CONFIG"; then
       log "Garmin authentication successful, tokens saved to $TOKEN_DIR"
     else
       log "WARNING: Garmin authentication failed."
       log "If your account uses MFA or Garmin is blocking this IP, run"
-      log "  python3 garmin-scripts/setup_garmin.py --from-config config.yaml"
+      log "  python3 garmin-scripts/setup_garmin.py --from-config --config-path config.yaml"
       log "on another machine and copy garmin_tokens.json into"
       log "/share/ble-scale-sync/garmin-tokens/ on this HA host."
       log "Other exporters (MQTT, etc.) will continue to work."
     fi
   else
     log "Garmin tokens present at $TOKEN_DIR"
+    # Says why a token sitting in /share was passed over. Without this the
+    # skip is invisible, and the add-on looks like it ignored the file. Only
+    # when it really was passed over: not on the start that just imported it,
+    # not when /share holds the token already in use, and not when it is the
+    # file imported earlier (the /data copy has since been refreshed; copying
+    # the old one back would undo that).
+    if [ "$SHARE_TOKEN_IMPORTED" != "true" ] \
+       && [ -f "$SHARE_DIR/garmin_tokens.json" ] \
+       && ! cmp -s "$SHARE_DIR/garmin_tokens.json" "$TOKEN_DIR/garmin_tokens.json" \
+       && [ "$(sha256sum < "$SHARE_DIR/garmin_tokens.json" | cut -d' ' -f1)" \
+            != "$(cat "$SHARE_MARKER" 2>/dev/null)" ]; then
+      log "A token in $SHARE_DIR was not imported: it is not newer than the one in $TOKEN_DIR."
+      log "To import it anyway, give it a newer timestamp (re-save it in the File"
+      log "editor add-on, or 'touch $SHARE_DIR/garmin_tokens.json'), then restart."
+    fi
   fi
 fi
 

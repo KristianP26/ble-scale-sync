@@ -4,12 +4,24 @@ import type {
   AppConfig,
   UserConfig,
   ScaleConfig,
+  ScaleDisplayUnit,
   ExporterEntry,
   WeightUnit,
   MqttProxyConfig,
   EsphomeProxyConfig,
   HaBluetoothConfig,
 } from './schema.js';
+
+// --- Scale display unit ---
+
+/**
+ * The unit to ask the scale's own display to show. `display_unit: weight_unit`
+ * (the default) follows `weight_unit`, which is what kept a QN scale set to lb
+ * on lb before display_unit existed (#269, #429).
+ */
+export function resolveDisplayUnit(scale: ScaleConfig): ScaleDisplayUnit {
+  return scale.display_unit === 'weight_unit' ? scale.weight_unit : scale.display_unit;
+}
 
 // --- User profile resolution ---
 

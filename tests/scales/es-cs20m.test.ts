@@ -462,3 +462,101 @@ describe('EsCs20mAdapter session boundary (#394)', () => {
     expect(next.impedance).toBe(0);
   });
 });
+
+// 0x14 status byte [5]: low nibble is the phase (0 settling, 1 final), bit 4 is
+// the zero-current mode the Renpho app stores on the scale. Every frame below is
+// byte-for-byte from a capture, with checksums intact.
+describe('EsCs20mAdapter 0x14 status nibble (#376)', () => {
+  const frame = (h: string): Buffer => Buffer.from(h, 'hex');
+
+  // Baseline session (no writes) of the #376 unit (CF:EA:02:07:2C:87), stuck in
+  // zero-current mode, from x55aa_recover_20260910_095524.log attached to
+  // https://github.com/ronnnnnnnnnnnnn/renpho-escs20m/issues/10 (Venomeus).
+  // Every settling frame carries status 0x10; the first is 10.60 kg on the way up.
+  // The frames run in log order up to the power-off status frame, where the
+  // session completes (the log has one more 101.20 kg frame after it).
+  const ZERO_CURRENT_SESSION = [
+    '55aa11000a0101010000440000000061', // status: power on, right after subscribe
+    '55aa1400071000000424000052', // 10.60 kg
+    '55aa1400071000000424000052', // 10.60 kg
+    '55aa1400071000001da10000e8', // 75.85 kg
+    '55aa14000710000026b1000001', // 99.05 kg
+    '55aa14000710000027ba00000b', // 101.70 kg
+    '55aa1400071000002738000089', // 100.40 kg
+    '55aa1400071000002724000075', // 100.20 kg
+    '55aa140007100000272e00007f', // 100.30 kg
+    '55aa1400071000002738000089', // 100.40 kg
+    '55aa14000710000027880000d9', // 101.20 kg
+    '55aa1400071000002742000093', // 100.50 kg
+    '55aa140007100000274c00009d', // 100.60 kg
+    '55aa14000710000027a60000f7', // 101.50 kg
+    '55aa14000710000027b0000001', // 101.60 kg
+    '55aa14000710000027a60000f7', // 101.50 kg
+    '55aa140007100000279c0000ed', // 101.40 kg
+    ...Array<string>(16).fill('55aa14000710000027880000d9'), // 101.20 kg, held
+    '55aa11000a0001010000440000000060', // status: power off
+  ];
+
+  it('does not complete on the first zero-current settling frame (status 0x10)', () => {
+    const adapter = makeAdapter();
+    expect(adapter.parseNotification(frame(ZERO_CURRENT_SESSION[0]))).toBeNull();
+
+    const first = adapter.parseNotification(frame(ZERO_CURRENT_SESSION[1]))!;
+    expect(first.weight).toBe(10.6);
+    expect(adapter.isComplete(first)).toBe(false);
+  });
+
+  it('completes that session only on the power-off frame, with the held 101.20 kg', () => {
+    const adapter = makeAdapter();
+    const completedAt: number[] = [];
+    let last: unknown = null;
+    ZERO_CURRENT_SESSION.forEach((h, i) => {
+      const reading = adapter.parseNotification(frame(h));
+      if (reading && adapter.isComplete(reading)) {
+        completedAt.push(i);
+        last = reading;
+      }
+    });
+    expect(completedAt).toEqual([ZERO_CURRENT_SESSION.length - 1]);
+    expect(last).toEqual({ weight: 101.2, impedance: 0 });
+  });
+
+  // R-A016 frames from tests/test_x55aa_protocol.py in
+  // https://github.com/ronnnnnnnnnnnnn/renpho-escs20m (91.45 kg). The 0x10 and
+  // 0x11 frames are from the official-app capture (the app had set zero-current
+  // mode); the 0x01 final is from a probe run on the same unit after a 0x90
+  // mode-1 write.
+  it('R-A016: a zero-current settling frame (0x10) is not final', () => {
+    const adapter = makeAdapter();
+    const reading = adapter.parseNotification(frame('55aa14000710000023b9000006'))!;
+    expect(reading.weight).toBe(91.45);
+    expect(adapter.isComplete(reading)).toBe(false);
+  });
+
+  it('R-A016: a zero-current final (0x11) completes', () => {
+    const adapter = makeAdapter();
+    const reading = adapter.parseNotification(frame('55aa14000711000023b9000007'))!;
+    expect(adapter.isComplete(reading)).toBe(true);
+  });
+
+  it('R-A016: a normal-mode final (0x01) completes with its resistance', () => {
+    const adapter = makeAdapter();
+    const reading = adapter.parseNotification(frame('55aa14000701000023b903110b'))!;
+    expect(reading).toEqual({ weight: 91.45, impedance: 785 });
+    expect(adapter.isComplete(reading)).toBe(true);
+  });
+
+  // The #376 report itself (v1.24.0, ESPHome), before the unit got stuck:
+  // settling frames with status 0x00, completed on the power-off frame.
+  // https://github.com/KristianP26/ble-scale-sync/issues/376
+  it('#376 v1.24.0 session: status 0x00 frames complete on power-off at 103.50 kg', () => {
+    const adapter = makeAdapter();
+    expect(adapter.parseNotification(frame('55aa11000a0101010000550000000072'))).toBeNull();
+    const settling = adapter.parseNotification(frame('55aa140007000000286e0000b0'))!;
+    expect(settling.weight).toBe(103.5);
+    expect(adapter.isComplete(settling)).toBe(false);
+    const done = adapter.parseNotification(frame('55aa11000a0001010000550000000071'))!;
+    expect(done).toEqual({ weight: 103.5, impedance: 0 });
+    expect(adapter.isComplete(done)).toBe(true);
+  });
+});

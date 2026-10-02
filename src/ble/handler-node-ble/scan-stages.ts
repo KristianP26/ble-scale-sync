@@ -340,6 +340,14 @@ export async function buildCharMapWithRetry(
 }
 
 /** Post-session cleanup. Everything here is best effort; nothing may throw out. */
+/** Whether the one-time info line for a disabled power-cycle was printed (#417). */
+let preemptiveSkipAnnounced = false;
+
+/** Test hook: forget that the info line was printed. */
+export function _resetPreemptiveSkipNotice(): void {
+  preemptiveSkipAnnounced = false;
+}
+
 export async function teardownSession(opts: {
   device: Device | null;
   btAdapter: Adapter | undefined;
@@ -348,9 +356,15 @@ export async function teardownSession(opts: {
   gattAttempted: boolean;
   gattSucceeded: boolean;
   abortSignal?: AbortSignal;
+  /**
+   * `ble.preemptive_adapter_reset` (#417). Undefined means true: this function
+   * owns the default, callers pass the option through unchanged.
+   */
+  preemptiveAdapterReset?: boolean;
 }): Promise<void> {
   const { device, btAdapter, deviceMac, bleAdapter, gattAttempted, gattSucceeded, abortSignal } =
     opts;
+  const preemptiveAdapterReset = opts.preemptiveAdapterReset !== false;
   // Best-effort disconnect if we got partway through a connection
   if (device) {
     try {
@@ -406,6 +420,12 @@ export async function teardownSession(opts: {
     // force-exit grace window (#335). The D-Bus reset is kept either way,
     // because it destroys the socket that pins the event loop open, which is
     // the opposite of a delay.
+    //
+    // `ble.preemptive_adapter_reset: false` skips the power-cycle and nothing
+    // else. It is the only host-side event between a bonded session that
+    // works and a next connect whose stored key is rejected (#417), so it has
+    // to be possible to rule it in or out. The D-Bus reset stays, and the
+    // reactive recovery tiers in startDiscoverySafe still cover a wedge.
     if (abortSignal?.aborted) {
       resetConnection();
       bleLog.debug('Shutting down: D-Bus connection reset, skipping the btmgmt power-cycle');
@@ -413,7 +433,20 @@ export async function teardownSession(opts: {
       await sleep(500);
       resetConnection();
       bleLog.debug('D-Bus connection reset after GATT operation');
-      if (await resetAdapterBtmgmt(parseHciIndex(bleAdapter))) {
+      if (!preemptiveAdapterReset) {
+        // Once at info, so a reporter testing #417 can see the option took
+        // effect without DEBUG; every cycle after that at debug.
+        if (!preemptiveSkipAnnounced) {
+          preemptiveSkipAnnounced = true;
+          bleLog.info(
+            'ble.preemptive_adapter_reset is false: the Bluetooth adapter is no longer ' +
+              'power-cycled after each GATT session.',
+          );
+        }
+        bleLog.debug(
+          'Skipping the preemptive btmgmt power-cycle after GATT (ble.preemptive_adapter_reset: false)',
+        );
+      } else if (await resetAdapterBtmgmt(parseHciIndex(bleAdapter))) {
         bleLog.debug('Preemptive btmgmt reset after GATT');
       }
     }
@@ -428,7 +461,9 @@ export async function teardownSession(opts: {
  *
  * Two timeouts, not one: the inner deadline restarts on every frame the scale
  * sends, so a scale that keeps talking never trips it, and the outer one bounds
- * the whole session anyway.
+ * the whole session anyway. A composition hold still in progress moves the cap
+ * out to the end of the hold, so the held weight resolves instead of being cut
+ * (#434).
  */
 export async function readWithTimeouts(
   charMap: Map<string, BleChar>,
@@ -445,25 +480,22 @@ export async function readWithTimeouts(
 ): Promise<RawReading> {
   const idleMs = opts.readingTimeoutMs ?? RAW_READING_TIMEOUT_MS;
   return await withAbandonmentCleanup(bleDevice, () =>
-    withTimeout(
-      withIdleTimeout(
-        (onActivity) =>
-          waitForRawReading(
-            charMap,
-            bleDevice,
-            matchedAdapter,
-            opts.profile,
-            deviceMac.replace(/[:-]/g, '').toUpperCase(),
-            opts.weightUnit,
-            opts.onLiveData,
-            opts.scaleAuth,
-            onActivity,
-          ),
-        idleMs,
-        'Timed out waiting for a complete scale reading',
-      ),
-      idleMs * READING_SESSION_CAP_FACTOR,
-      'GATT session cap exceeded',
+    withIdleTimeout(
+      (onActivity) =>
+        waitForRawReading(
+          charMap,
+          bleDevice,
+          matchedAdapter,
+          opts.profile,
+          deviceMac.replace(/[:-]/g, '').toUpperCase(),
+          opts.weightUnit,
+          opts.onLiveData,
+          opts.scaleAuth,
+          onActivity,
+        ),
+      idleMs,
+      'Timed out waiting for a complete scale reading',
+      { ms: idleMs * READING_SESSION_CAP_FACTOR, message: 'GATT session cap exceeded' },
     ),
   );
 }

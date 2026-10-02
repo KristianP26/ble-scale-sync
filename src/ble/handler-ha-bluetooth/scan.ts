@@ -3,8 +3,14 @@ import type { HaBluetoothConfig } from '../../config/schema.js';
 import type { ScanOptions, ScanResult } from '../types.js';
 import type { RawReading } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
-import { evaluateAdvertisement, GraceTimers, logAdvert, safeName } from '../advertisement.js';
-import { bleLog, withTimeout, IMPEDANCE_GRACE_MS } from '../types.js';
+import {
+  armScanDeadline,
+  evaluateAdvertisement,
+  GraceTimers,
+  logAdvert,
+  safeName,
+} from '../advertisement.js';
+import { bleLog, IMPEDANCE_GRACE_MS } from '../types.js';
 import { HaBluetoothClient } from './client.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -70,79 +76,105 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     // same window do not clobber each other's pending fallback (#161).
     const graceBox: { grace: GraceTimers | null } = { grace: null };
 
+    // Torn down in the finally, whichever way the scan settles.
+    const teardown: { disarm: (() => void) | null; unabort: (() => void) | null } = {
+      disarm: null,
+      unabort: null,
+    };
+
     try {
-      return await withTimeout(
-        new Promise<RawReading>((resolve) => {
-          const seenAddrs = new Set<string>();
-          const warnedGatt = new Set<string>();
+      return await new Promise<RawReading>((resolve, reject) => {
+        const seenAddrs = new Set<string>();
+        const warnedGatt = new Set<string>();
 
-          const g = new GraceTimers(IMPEDANCE_GRACE_MS, (address, gr) => {
-            bleLog.info(
-              `Matched: ${gr.adapter.name} (${address}), weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
+        const g = new GraceTimers(IMPEDANCE_GRACE_MS, (address, gr) => {
+          bleLog.info(
+            `Matched: ${gr.adapter.name} (${address}), weight only, no impedance within ${IMPEDANCE_GRACE_MS / 1000}s`,
+          );
+          bleLog.info(`Broadcast reading: ${gr.reading.weight} kg`);
+          resolve(gr);
+        });
+        graceBox.grace = g;
+
+        // A shutdown rejects at once, held reading or not, so nothing is
+        // exported on the way out.
+        const { abortSignal } = opts;
+        if (abortSignal) {
+          const onAbort = () =>
+            reject(abortSignal.reason ?? new DOMException('Aborted', 'AbortError'));
+          if (abortSignal.aborted) return onAbort();
+          abortSignal.addEventListener('abort', onAbort, { once: true });
+          teardown.unabort = () => abortSignal.removeEventListener('abort', onAbort);
+        }
+
+        // The scan's own deadline, as a dedicated timer rather than a
+        // rejection recognised afterwards by its message. A held weight-only
+        // reading is given the rest of its grace (see armScanDeadline).
+        teardown.disarm = armScanDeadline(BROADCAST_WAIT_MS, g, () =>
+          reject(
+            new Error(
+              targetMac
+                ? `Timed out waiting for ${targetMac} via Home Assistant Bluetooth.`
+                : `Timed out waiting for any recognized scale via Home Assistant Bluetooth.`,
+            ),
+          ),
+        );
+
+        sub.unsub = client.onAdvertisement((info, address) => {
+          const addrLc = address.toLowerCase();
+          if (targetLc && addrLc !== targetLc) return;
+
+          logAdvert(address, info);
+          const adapter = resolveAdapter(info, adapters);
+          if (!adapter) {
+            if (!seenAddrs.has(address)) {
+              seenAddrs.add(address);
+              bleLog.debug(
+                `Unmatched device: ${address} (${safeName(info.localName) || 'no name'})`,
+              );
+            }
+            return;
+          }
+
+          const decision = evaluateAdvertisement(adapter, info);
+
+          if (decision.kind === 'complete') {
+            g.cancel(address);
+            bleLog.info(`Matched: ${adapter.name} (${address})`);
+            bleLog.info(`Broadcast reading: ${decision.reading.weight} kg`);
+            resolve({ reading: decision.reading, adapter });
+            return;
+          }
+          if (decision.kind === 'partial') {
+            bleLog.debug(
+              `${adapter.name} matched at ${address} but broadcast frame is not stable yet`,
             );
-            bleLog.info(`Broadcast reading: ${gr.reading.weight} kg`);
-            resolve(gr);
-          });
-          graceBox.grace = g;
-
-          sub.unsub = client.onAdvertisement((info, address) => {
-            const addrLc = address.toLowerCase();
-            if (targetLc && addrLc !== targetLc) return;
-
-            logAdvert(address, info);
-            const adapter = resolveAdapter(info, adapters);
-            if (!adapter) {
-              if (!seenAddrs.has(address)) {
-                seenAddrs.add(address);
-                bleLog.debug(
-                  `Unmatched device: ${address} (${safeName(info.localName) || 'no name'})`,
-                );
-              }
-              return;
-            }
-
-            const decision = evaluateAdvertisement(adapter, info);
-
-            if (decision.kind === 'complete') {
-              g.cancel(address);
-              bleLog.info(`Matched: ${adapter.name} (${address})`);
-              bleLog.info(`Broadcast reading: ${decision.reading.weight} kg`);
-              resolve({ reading: decision.reading, adapter });
-              return;
-            }
-            if (decision.kind === 'partial') {
-              bleLog.debug(
-                `${adapter.name} matched at ${address} but broadcast frame is not stable yet`,
+            g.hold(address, { reading: decision.reading, adapter });
+            return;
+          }
+          if (decision.kind === 'wait') {
+            if (decision.live) opts.onLiveWeight?.(decision.live);
+            bleLog.debug(
+              `${adapter.name} matched at ${address} but broadcast frame is not stable yet`,
+            );
+            return;
+          }
+          if (decision.kind === 'gatt') {
+            if (!warnedGatt.has(address)) {
+              warnedGatt.add(address);
+              bleLog.warn(
+                `${adapter.name} at ${address} needs a GATT connection, which Home Assistant's ` +
+                  'advertisement stream cannot provide; use a local adapter or an ESPHome proxy',
               );
-              g.hold(address, { reading: decision.reading, adapter });
-              return;
             }
-            if (decision.kind === 'wait') {
-              if (decision.live) opts.onLiveWeight?.(decision.live);
-              bleLog.debug(
-                `${adapter.name} matched at ${address} but broadcast frame is not stable yet`,
-              );
-              return;
-            }
-            if (decision.kind === 'gatt') {
-              if (!warnedGatt.has(address)) {
-                warnedGatt.add(address);
-                bleLog.warn(
-                  `${adapter.name} at ${address} needs a GATT connection, which Home Assistant's ` +
-                    'advertisement stream cannot provide; use a local adapter or an ESPHome proxy',
-                );
-              }
-              return;
-            }
-            bleLog.debug(`${adapter.name} matched at ${address} but has no broadcast path`);
-          });
-        }),
-        BROADCAST_WAIT_MS,
-        targetMac
-          ? `Timed out waiting for ${targetMac} via Home Assistant Bluetooth.`
-          : `Timed out waiting for any recognized scale via Home Assistant Bluetooth.`,
-      );
+            return;
+          }
+          bleLog.debug(`${adapter.name} matched at ${address} but has no broadcast path`);
+        });
+      });
     } finally {
+      teardown.disarm?.();
+      teardown.unabort?.();
       graceBox.grace?.clear();
     }
   } finally {

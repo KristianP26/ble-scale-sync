@@ -117,15 +117,23 @@ async function runExports(
   for (let i = 0; i < results.length; i++) {
     const result = results[i];
     const name = exporters[i].name;
-    if (result.status === 'fulfilled' && result.value.success) {
-      details.push({ name, ok: true });
-    } else if (result.status === 'fulfilled') {
-      log.error(`${name}: ${result.value.error}`);
-      details.push({ name, ok: false, error: result.value.error });
-    } else {
+    // Rejection first, then the outcome. The previous shape tested
+    // `status === 'fulfilled' && value.success` and handled the failure in an
+    // `else if`, where TypeScript still could not tell WHICH half of that
+    // conjunction had failed - so `value.error` was `string | undefined` and a
+    // detail could be pushed as failed with no reason at all.
+    if (result.status === 'rejected') {
       const msg = errMsg(result.reason);
       log.error(`${name}: ${msg}`);
       details.push({ name, ok: false, error: msg });
+      continue;
+    }
+    const value = result.value;
+    if (value.success) {
+      details.push({ name, ok: true });
+    } else {
+      log.error(`${name}: ${value.error}`);
+      details.push({ name, ok: false, error: value.error });
     }
   }
   return details;

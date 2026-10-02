@@ -73,7 +73,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Check Python syntax
-        run: python -m py_compile garmin-scripts/garmin_upload.py && python -m py_compile garmin-scripts/setup_garmin.py
+        run: python -m py_compile garmin-scripts/garmin_upload.py garmin-scripts/setup_garmin.py garmin-scripts/garmin_errors.py
 
       - name: Run firmware unit tests
         run: python -m unittest discover -s firmware/tests -v

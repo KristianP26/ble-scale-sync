@@ -775,4 +775,69 @@ describe('failed exports are queued for a later cycle (#412)', () => {
     });
     expect(fs.existsSync(queuePath)).toBe(false);
   });
+
+  it('stamps a queued LIVE reading with its measurement time, not the retry time', async () => {
+    // A live weigh-in has no `reading.timestamp` - that field marks a historical
+    // replay - so the ExportContext carries none either, and the entry used to
+    // be written without one. On retry the exporter then got no timestamp at
+    // all and `file` fell back to `new Date()`, recording a reading taken at
+    // 07:00 as having happened whenever the retry succeeded.
+    vi.mocked(dispatchExports).mockResolvedValueOnce({
+      success: false,
+      details: [{ name: 'garmin', ok: false, error: 'target down' }],
+    });
+    const ctx = makeCtx([dad], { exportQueuePath: queuePath });
+
+    const before = Date.now();
+    await processReading(ctx, rawReading(), {
+      singleUserExporters: [exporterNamed('garmin', true)],
+    });
+    const after = Date.now();
+
+    const queued = JSON.parse(
+      fs.readFileSync(queuePath, 'utf-8').trim().split(String.fromCharCode(10))[0],
+    ) as { timestamp?: string };
+
+    expect(queued.timestamp).toBeTypeOf('string');
+    const stamped = Date.parse(queued.timestamp!);
+    expect(Number.isNaN(stamped)).toBe(false);
+    expect(stamped).toBeGreaterThanOrEqual(before);
+    expect(stamped).toBeLessThanOrEqual(after);
+  });
+
+  it('keeps a historical frame own timestamp rather than the observation time', async () => {
+    const measured = new Date('2026-09-01T07:00:00.000Z');
+    vi.mocked(dispatchExports).mockResolvedValueOnce({
+      success: false,
+      details: [{ name: 'garmin', ok: false, error: 'target down' }],
+    });
+    const ctx = makeCtx([dad], { exportQueuePath: queuePath });
+    await processReading(ctx, rawReading({ weight: 80, impedance: 500, timestamp: measured }), {
+      singleUserExporters: [exporterNamed('garmin', true)],
+    });
+
+    const queued = JSON.parse(
+      fs.readFileSync(queuePath, 'utf-8').trim().split(String.fromCharCode(10))[0],
+    ) as { timestamp?: string };
+    expect(queued.timestamp).toBe(measured.toISOString());
+  });
+
+  it('still hands the LIVE dispatch a context with no timestamp', async () => {
+    // The queue fix must not leak into the live path: dispatchExports reads a
+    // present timestamp as "this is a backdated reading" and skips every
+    // exporter that cannot record one, so stamping the live context here would
+    // silently stop live MQTT.
+    vi.mocked(dispatchExports).mockResolvedValueOnce({
+      success: false,
+      details: [{ name: 'garmin', ok: false, error: 'target down' }],
+    });
+    const ctx = makeCtx([dad], { exportQueuePath: queuePath });
+
+    await processReading(ctx, rawReading(), {
+      singleUserExporters: [exporterNamed('garmin', true)],
+    });
+
+    const [, , context] = vi.mocked(dispatchExports).mock.calls[0];
+    expect(context.timestamp).toBeUndefined();
+  });
 });

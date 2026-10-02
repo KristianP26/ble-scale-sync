@@ -38,6 +38,7 @@ vi.mock('../../../src/ble/handler-ha-bluetooth/client.js', () => ({
 
 const { scanAndReadRaw, scanDevices, ReadingWatcher } =
   await import('../../../src/ble/handler-ha-bluetooth/index.js');
+const { Silvergear108Adapter } = await import('../../../src/scales/silvergear-108.js');
 
 // ─── Adapter doubles ──────────────────────────────────────────────────────────
 
@@ -190,6 +191,66 @@ describe('ha-bluetooth scanAndReadRaw', () => {
     expect(client().stopped).toBe(true);
   });
 
+  // #357: a weigh-in held when the 60 s scan deadline fires is neither dropped
+  // nor resolved at the deadline. The scan keeps listening until a complete
+  // frame arrives or the reading's own grace runs out, so a Mi Scale 2 whose
+  // impedance frame lands just after the deadline keeps it.
+  describe('deadline during a hold (#357)', () => {
+    // Held 5 s before the deadline, then advanced to 1 s past it: 6 s of the
+    // 12 s grace remain.
+    async function startHeldScan(abortSignal?: AbortSignal) {
+      const p = scanAndReadRaw({
+        adapters: [makePassiveAdapter()],
+        profile: PROFILE,
+        haBluetooth: CONFIG,
+        abortSignal,
+      });
+      const state: { settled: boolean; ok?: boolean; r?: Awaited<typeof p>; e?: unknown } = {
+        settled: false,
+      };
+      const outcome = p.then(
+        (r) => Object.assign(state, { settled: true, ok: true, r }),
+        (e: unknown) => Object.assign(state, { settled: true, ok: false, e }),
+      );
+      await vi.advanceTimersByTimeAsync(55_000);
+      client().emit(passive(70, 0), MAC);
+      await vi.advanceTimersByTimeAsync(6_000);
+      return { state, outcome };
+    }
+
+    it('a complete frame after the deadline resolves with its impedance', async () => {
+      const { state, outcome } = await startHeldScan();
+      expect(state.settled).toBe(false);
+      client().emit(passive(70, 120), MAC);
+      await outcome;
+      expect(state.r?.reading).toEqual({ weight: 70, impedance: 120 });
+      expect(client().stopped).toBe(true);
+    });
+
+    it('with no complete frame, resolves weight only when the grace runs out, not at the deadline', async () => {
+      const { state, outcome } = await startHeldScan();
+      await vi.advanceTimersByTimeAsync(5_900);
+      expect(state.settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(200);
+      await outcome;
+      expect(state.ok).toBe(true);
+      expect(state.r?.reading).toEqual({ weight: 70, impedance: 0 });
+      expect(client().stopped).toBe(true);
+    });
+
+    it('an abort while holding past the deadline rejects and resolves nothing', async () => {
+      const ac = new AbortController();
+      const { state, outcome } = await startHeldScan(ac.signal);
+      ac.abort(new Error('shutdown'));
+      await outcome;
+      expect(state.ok).toBe(false);
+      expect((state.e as Error).message).toBe('shutdown');
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(state.ok).toBe(false);
+      expect(client().stopped).toBe(true);
+    });
+  });
+
   it('propagates a client start failure', async () => {
     FakeHaBluetoothClient.failStart = new Error('auth_invalid');
     await expect(
@@ -296,6 +357,90 @@ describe('ha-bluetooth ReadingWatcher', () => {
     FakeHaBluetoothClient.failStart = null;
     await w.start();
     expect(FakeHaBluetoothClient.instances).toHaveLength(2);
+    await w.stop();
+  });
+});
+
+// ─── Silvergear 108 through the real adapter (#357) ─────────────────────────
+
+describe('ha-bluetooth ReadingWatcher with the Silvergear 108', () => {
+  // Frames verbatim from the #297 108.5 kg capture; the 0x06 came 885 ms after
+  // the settled frame. MAC A0:85:61:91:E9:4F reversed into the first six bytes.
+  const sg = (payloadHex: string): BleDeviceInfo => ({
+    localName: '108',
+    serviceUuids: ['ffb0'],
+    manufacturerData: { id: 0xa0ac, data: Buffer.from('4fe9916185a0' + payloadHex, 'hex') },
+  });
+  const SETTLED = sg('202d07600da1');
+  const BODY = sg('a2b1a0a206bb');
+
+  /** True when no reading reaches the queue while `ms` of fake time passes. */
+  async function nothingQueuedWithin(w: InstanceType<typeof ReadingWatcher>, ms: number) {
+    const ac = new AbortController();
+    let got = false;
+    const pending = w.nextReading(ac.signal).then(
+      () => {
+        got = true;
+      },
+      () => {},
+    );
+    await vi.advanceTimersByTimeAsync(ms);
+    ac.abort();
+    await pending;
+    return !got;
+  }
+
+  it('holds the settled weight and queues it once, on the post-weigh-in frame', async () => {
+    const w = new ReadingWatcher(CONFIG, [new Silvergear108Adapter()], undefined, PROFILE);
+    await w.start();
+
+    client().emit(SETTLED, MAC);
+    expect(await nothingQueuedWithin(w, 885)).toBe(true);
+    client().emit(BODY, MAC);
+    expect((await w.nextReading()).reading).toEqual({ weight: 108.48, impedance: 0 });
+
+    // The scale keeps repeating both frames for a while; none of it is a reading.
+    client().emit(SETTLED, MAC);
+    client().emit(BODY, MAC);
+    expect(await nothingQueuedWithin(w, 31_000)).toBe(true);
+    await w.stop();
+  });
+
+  it('queues the weight alone after the grace, and nothing when a late 0x06 follows', async () => {
+    const w = new ReadingWatcher(CONFIG, [new Silvergear108Adapter()], undefined, PROFILE);
+    await w.start();
+
+    client().emit(SETTLED, MAC);
+    expect(await nothingQueuedWithin(w, 11_900)).toBe(true);
+    await vi.advanceTimersByTimeAsync(200);
+    expect((await w.nextReading()).reading).toEqual({ weight: 108.48, impedance: 0 });
+
+    // The grace fallback is queued without passing the dedup window, so a 0x06
+    // that still paired here would export the same weigh-in a second time.
+    client().emit(BODY, MAC);
+    client().emit(SETTLED, MAC);
+    expect(await nothingQueuedWithin(w, 31_000)).toBe(true);
+    await w.stop();
+  });
+
+  // One person steps off before their 0x06 and a second steps on inside the
+  // same hold. Holding both on one address kept only the second (#357).
+  it('queues both weigh-ins when the first ends before its post-weigh-in frame', async () => {
+    const w = new ReadingWatcher(CONFIG, [new Silvergear108Adapter()], undefined, PROFILE);
+    await w.start();
+
+    client().emit(SETTLED, MAC);
+    await vi.advanceTimersByTimeAsync(3_000);
+    client().emit(sg('a02ca0a00db9'), MAC); // idle at 0 kg: the first person stepped off
+    expect((await w.nextReading()).reading).toEqual({ weight: 108.48, impedance: 0 });
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    client().emit(sg('202d099c0dff'), MAC); // second person settles at 108.86 kg
+    await vi.advanceTimersByTimeAsync(1_500);
+    client().emit(sg('a2ada0a206f7'), MAC);
+    expect((await w.nextReading()).reading).toEqual({ weight: 108.86, impedance: 0 });
+
+    expect(await nothingQueuedWithin(w, 31_000)).toBe(true);
     await w.stop();
   });
 });

@@ -15,6 +15,15 @@ import type { Exporter } from '../../src/interfaces/exporter.js';
 import type { BodyComposition } from '../../src/interfaces/scale-adapter.js';
 
 const PAYLOAD = { weight: 80, bodyFatPercent: 20 } as unknown as BodyComposition;
+/**
+ * Name lookup over a fixed list, for the cases below that only exercise queue
+ * mechanics. Real callers resolve through the entry's OWN user first - see the
+ * wrong-account test, which is what that distinction is for.
+ */
+function lookupIn(...exporters: Exporter[]) {
+  return (e: QueuedExport) => exporters.find((x) => x.name === e.exporter);
+}
+
 const NOW = Date.parse('2026-09-09T12:00:00.000Z');
 
 function entry(over: Partial<QueuedExport> = {}): QueuedExport {
@@ -107,7 +116,7 @@ describe('export retry queue (#412)', () => {
     saveQueue(file, [entry({ timestamp: '2026-09-08T06:00:00.000Z', userSlug: 'k' })]);
     const garmin = fakeExporter('garmin', async () => ({ success: true }));
 
-    const result = await flushQueue(file, [garmin], NOW);
+    const result = await flushQueue(file, lookupIn(garmin), NOW);
 
     expect(result.delivered).toBe(1);
     expect(fs.existsSync(file)).toBe(false);
@@ -122,7 +131,7 @@ describe('export retry queue (#412)', () => {
     saveQueue(file, [entry()]);
     const garmin = fakeExporter('garmin', async () => ({ success: false, error: 'still down' }));
 
-    const result = await flushQueue(file, [garmin], NOW);
+    const result = await flushQueue(file, lookupIn(garmin), NOW);
 
     expect(result.failed).toBe(1);
     const loaded = loadQueue(file, NOW);
@@ -134,7 +143,7 @@ describe('export retry queue (#412)', () => {
     saveQueue(file, [entry({ attempts: 4 })]);
     const garmin = fakeExporter('garmin', async () => ({ success: false, error: 'nope' }));
 
-    const result = await flushQueue(file, [garmin], NOW);
+    const result = await flushQueue(file, lookupIn(garmin), NOW);
 
     expect(result.dropped).toBe(1);
     expect(fs.existsSync(file)).toBe(false);
@@ -144,7 +153,7 @@ describe('export retry queue (#412)', () => {
     saveQueue(file, [entry({ exporter: 'wger' })]);
     const result = await flushQueue(
       file,
-      [fakeExporter('garmin', async () => ({ success: true }))],
+      lookupIn(fakeExporter('garmin', async () => ({ success: true }))),
       NOW,
     );
     expect(result.dropped).toBe(1);
@@ -156,7 +165,7 @@ describe('export retry queue (#412)', () => {
     const garmin = fakeExporter('garmin', async () => ({ success: true }));
     const wger = fakeExporter('wger', async () => ({ success: false, error: 'down' }));
 
-    await flushQueue(file, [garmin, wger], NOW);
+    await flushQueue(file, lookupIn(garmin, wger), NOW);
 
     expect(garmin.export).toHaveBeenCalledTimes(1);
     const loaded = loadQueue(file, NOW);
@@ -200,7 +209,7 @@ describe('export retry queue: the cases that could lose a reading (#412)', () =>
     expect(loadQueue(file, NOW)).toHaveLength(60);
 
     const garmin = fakeExporter('garmin', async () => ({ success: true }));
-    const result = await flushQueue(file, [garmin], NOW);
+    const result = await flushQueue(file, lookupIn(garmin), NOW);
     expect(result.delivered).toBe(60);
   });
 
@@ -220,7 +229,7 @@ describe('export retry queue: the cases that could lose a reading (#412)', () =>
       return { success: true };
     });
 
-    await flushQueue(file, [garmin], NOW);
+    await flushQueue(file, lookupIn(garmin), NOW);
 
     expect(seenDuringFirstExport).toEqual(['second']);
     expect(fs.existsSync(file)).toBe(false);
@@ -233,11 +242,55 @@ describe('export retry queue: the cases that could lose a reading (#412)', () =>
     const wger = fakeExporter('wger', async () => ({ success: false, error: 'down' }));
     const garmin = fakeExporter('garmin', async () => ({ success: true }));
 
-    const result = await flushQueue(file, [wger, garmin], NOW);
+    const result = await flushQueue(file, lookupIn(wger, garmin), NOW);
 
     expect(result).toMatchObject({ delivered: 1, failed: 1 });
     const left = loadQueue(file, NOW);
     expect(left).toHaveLength(1);
     expect(left[0].exporter).toBe('wger');
+  });
+
+  it('delivers a queued reading through the exporter of ITS OWN user', async () => {
+    // Two users, each with their own Garmin account. Both instances answer to
+    // the name 'garmin' - `name` is the exporter TYPE, a class constant - so a
+    // name-keyed union across users silently picked whichever came first and
+    // uploaded one user's weigh-in into the other's account.
+    const seen: string[] = [];
+    const annaGarmin = fakeExporter('garmin', async () => {
+      seen.push('anna-account');
+      return { success: true };
+    });
+    const petrGarmin = fakeExporter('garmin', async () => {
+      seen.push('petr-account');
+      return { success: true };
+    });
+    const perUser: Record<string, Exporter[]> = { anna: [annaGarmin], petr: [petrGarmin] };
+
+    saveQueue(file, [entry({ userSlug: 'petr', userName: 'Petr' })]);
+
+    const result = await flushQueue(
+      file,
+      (e) => (e.userSlug ? (perUser[e.userSlug] ?? []) : []).find((x) => x.name === e.exporter),
+      NOW,
+    );
+
+    expect(seen).toEqual(['petr-account']);
+    expect(annaGarmin.export).not.toHaveBeenCalled();
+    expect(result.delivered).toBe(1);
+  });
+
+  it('drops an entry whose user is gone rather than falling back to another', async () => {
+    const annaGarmin = fakeExporter('garmin', async () => ({ success: true }));
+    const perUser: Record<string, Exporter[]> = { anna: [annaGarmin] };
+    saveQueue(file, [entry({ userSlug: 'deleted-user' })]);
+
+    const result = await flushQueue(
+      file,
+      (e) => (e.userSlug ? (perUser[e.userSlug] ?? []) : []).find((x) => x.name === e.exporter),
+      NOW,
+    );
+
+    expect(annaGarmin.export).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ delivered: 0, dropped: 1 });
   });
 });

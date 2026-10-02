@@ -87,6 +87,7 @@ describe('AppConfigSchema', () => {
     if (result.success) {
       expect(result.data.scale.weight_unit).toBe('kg');
       expect(result.data.scale.height_unit).toBe('cm');
+      expect(result.data.scale.display_unit).toBe('weight_unit');
       expect(result.data.unknown_user).toBe('nearest');
       // Absent out_of_range means today's behaviour: warn and export anyway.
       // Changing this default would silently start discarding readings on
@@ -412,6 +413,27 @@ describe('BleSchema', () => {
     }
   });
 
+  it('accepts ble.preemptive_adapter_reset as true, false, null or omitted (#417)', () => {
+    for (const value of [true, false, null]) {
+      expect(BleSchema.safeParse({ preemptive_adapter_reset: value }).success).toBe(true);
+    }
+    const omitted = BleSchema.safeParse({});
+    expect(omitted.success).toBe(true);
+    if (omitted.success) expect(omitted.data.preemptive_adapter_reset).toBeUndefined();
+  });
+
+  it('keeps an explicit ble.preemptive_adapter_reset: false, which is the only value that acts', () => {
+    const result = BleSchema.safeParse({ preemptive_adapter_reset: false });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.preemptive_adapter_reset).toBe(false);
+  });
+
+  it('rejects a ble.preemptive_adapter_reset that is not a boolean', () => {
+    for (const value of ['false', 0, 1]) {
+      expect(BleSchema.safeParse({ preemptive_adapter_reset: value }).success).toBe(false);
+    }
+  });
+
   // Documents why src/config/unknown-keys.ts exists: a key this build does not
   // know is dropped without a word, which is how #318 read as "the option does
   // nothing" rather than "your build is older than that option".
@@ -661,16 +683,26 @@ describe('ScaleSchema', () => {
     if (result.success) {
       expect(result.data.weight_unit).toBe('kg');
       expect(result.data.height_unit).toBe('cm');
+      expect(result.data.display_unit).toBe('weight_unit');
     }
   });
 
-  it('accepts lbs and in', () => {
-    const result = ScaleSchema.safeParse({ weight_unit: 'lbs', height_unit: 'in' });
+  it('accepts an independent stone display unit', () => {
+    const result = ScaleSchema.safeParse({
+      weight_unit: 'kg',
+      height_unit: 'in',
+      display_unit: 'st',
+    });
     expect(result.success).toBe(true);
   });
 
   it('rejects invalid weight_unit', () => {
     const result = ScaleSchema.safeParse({ weight_unit: 'stones' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects invalid display_unit', () => {
+    const result = ScaleSchema.safeParse({ display_unit: 'stones' });
     expect(result.success).toBe(false);
   });
 });
@@ -898,5 +930,62 @@ describe('runtime.retry_failed_exports (#412)', () => {
       AppConfigSchema.safeParse({ ...VALID_CONFIG, runtime: { retry_failed_exports: 'yes' } })
         .success,
     ).toBe(false);
+  });
+});
+
+describe('user slug uniqueness', () => {
+  // The slug is an identity, not a label: getExportersForUser caches by it and
+  // resolves the user with users.find, so a duplicate silently handed the
+  // second user the first one's exporters - and the first one's Garmin
+  // account. Nothing downstream can detect that, so it has to fail here.
+  it('rejects two users sharing a slug', () => {
+    const result = AppConfigSchema.safeParse({
+      ...VALID_CONFIG,
+      users: [VALID_USER, { ...VALID_USER, name: 'Mum' }],
+    });
+    expect(result.success).toBe(false);
+    expect(JSON.stringify(result.error?.issues)).toContain('Duplicate user slug');
+  });
+
+  it('names the offending slug and points at the second user', () => {
+    const result = AppConfigSchema.safeParse({
+      ...VALID_CONFIG,
+      users: [VALID_USER, { ...VALID_USER, slug: 'mum', name: 'Mum' }, { ...VALID_USER }],
+    });
+    expect(result.success).toBe(false);
+    const issue = result.error?.issues.find((i) => i.message.includes('Duplicate user slug'));
+    expect(issue?.message).toContain("'dad'");
+    expect(issue?.path).toEqual(['users', 2, 'slug']);
+  });
+
+  it('still accepts distinct slugs', () => {
+    const result = AppConfigSchema.safeParse({
+      ...VALID_CONFIG,
+      users: [VALID_USER, { ...VALID_USER, slug: 'mum', name: 'Mum' }],
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
+describe('birth_date is a real date, not just a shape', () => {
+  // The regex only fixed the format, so these went straight into the age
+  // arithmetic behind every body-composition estimate.
+  it.each(['2024-02-31', '9999-99-99', '2023-13-01', '2023-00-10'])('rejects %s', (value) => {
+    expect(UserSchema.safeParse({ ...VALID_USER, birth_date: value }).success).toBe(false);
+  });
+
+  it('rejects a birth date in the future', () => {
+    const nextYear = new Date(Date.now() + 400 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    expect(UserSchema.safeParse({ ...VALID_USER, birth_date: nextYear }).success).toBe(false);
+  });
+
+  it('accepts a real leap day', () => {
+    expect(UserSchema.safeParse({ ...VALID_USER, birth_date: '2024-02-29' }).success).toBe(true);
+  });
+
+  it('rejects a leap day in a non-leap year', () => {
+    // Discriminates against a `new Date(...)` NaN check alone: JS normalises
+    // this to 2023-03-01 instead of failing.
+    expect(UserSchema.safeParse({ ...VALID_USER, birth_date: '2023-02-29' }).success).toBe(false);
   });
 });

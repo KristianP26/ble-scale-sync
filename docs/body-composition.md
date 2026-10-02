@@ -22,7 +22,7 @@ BLE Scale Sync calculates 10 body composition metrics from your scale's weight a
 | **Body Fat**        | %        | BIA-based (requires impedance) or Deurenberg fallback    |
 | **Water**           | %        | Total body water percentage                              |
 | **Bone Mass**       | kg / lbs | Estimated bone mineral content                           |
-| **Muscle Mass**     | kg / lbs | Skeletal muscle mass                                     |
+| **Muscle Mass**     | kg / lbs | Fat-free mass minus bone, or the scale's own muscle %    |
 | **Visceral Fat**    | 1-59     | Internal organ fat rating                                |
 | **BMR**             | kcal     | Basal Metabolic Rate                                     |
 | **Metabolic Age**   | years    | Metabolic age relative to BMR                            |
@@ -85,7 +85,7 @@ Where `sex` = 1 for male, 0 for female. For athletes, the result is multiplied b
 | **BMI**           | `weight / height_m²`                                                         |
 | **Water**         | `LBM * 0.73 / weight * 100` (athlete: 0.74)                                  |
 | **Bone Mass**     | `LBM * 0.042`                                                                |
-| **Muscle Mass**   | `LBM * 0.54` (athlete: 0.60)                                                 |
+| **Muscle Mass**   | `LBM - Bone Mass`                                                            |
 | **Visceral Fat**  | `Body Fat % * 0.55 - 4 + age * 0.08`                                         |
 | **BMR**           | Mifflin-St Jeor: `10*W + 6.25*H - 5*A + s` where `s` = +5 male / -161 female |
 | **Metabolic Age** | `age + (idealBMR - BMR) / 15`                                                |
@@ -98,7 +98,7 @@ Effects:
 
 - **Lean Body Mass**: different BIA coefficients (see table above)
 - **Water**: higher hydration factor (74% vs 73% of LBM)
-- **Muscle Mass**: higher factor (60% vs 54% of LBM)
+- **Physique Rating**: its skeletal muscle input is 60% of LBM instead of 54%
 - **BMR**: +5% boost
 - **Metabolic Age**: capped at actual age minus 5
 - **Deurenberg**: result multiplied by 0.85
@@ -115,7 +115,7 @@ If impedance is not present in a frame (e.g. the user stepped off before the BIA
 
 ### Xiaomi Body Composition Scale S400 (MJTZC01YM)
 
-The S400 broadcasts weight plus its 50 kHz impedance (and a 250 kHz impedance and heart rate that are logged only). Body composition uses the same Xiaomi formulas as the Mi Scale 2 above. The S400's own app runs Yunmai's proprietary dual-frequency model, which no open implementation reproduces; on the same weigh-in the Xiaomi formulas land within about two points of body fat, 0.3 kg of bone mass and 2 kg of skeletal muscle of the app, while the generic BIA coefficients were more than five points of body fat away. Water and visceral fat differ by a few points either way. Expect small, consistent offsets from the app, not agreement to the decimal.
+The S400 broadcasts weight plus its 50 kHz impedance (and a 250 kHz impedance and heart rate that are logged only). Body composition uses the same Xiaomi formulas as the Mi Scale 2 above. The S400's own app runs Yunmai's proprietary dual-frequency model, which no open implementation reproduces; on the same weigh-in the Xiaomi formulas land within about two points of body fat, 0.3 kg of bone mass and about 1.2 kg of the muscle mass the app's own fat and bone figures imply, while the generic BIA coefficients were more than five points of body fat away. Water and visceral fat differ by a few points either way. Expect small, consistent offsets from the app, not agreement to the decimal.
 
 ### Yunmai
 

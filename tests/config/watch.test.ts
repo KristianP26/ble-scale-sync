@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { startConfigWatcher } from '../../src/config/watch.js';
 import {
   setSuppressReloadWindow,
+  noteSelfWrite,
   isReloadSuppressed,
   _resetSuppressWindow,
 } from '../../src/config/write.js';
@@ -110,14 +111,57 @@ describe('startConfigWatcher', () => {
     }
   });
 
-  it('does not fire while the self-write suppress window is active', async () => {
+  it('does not fire for the bytes this process just wrote itself', async () => {
     const onChange = vi.fn();
     const handle = startConfigWatcher(configPath, onChange);
 
     try {
-      setSuppressReloadWindow(2000);
-      writeFileSync(configPath, 'version: 1\nselfwrite: true\n');
+      // The real path: writeLastKnownWeight registers the exact content before
+      // atomicWrite puts it on disk. Previously this test opened a time window
+      // and then wrote UNRELATED content, which pinned the very behaviour that
+      // was wrong - inside the window, everything was dropped.
+      const selfWritten = 'version: 1\nselfwrite: true\n';
+      noteSelfWrite(selfWritten, 2000);
+      writeFileSync(configPath, selfWritten);
       await new Promise((r) => setTimeout(r, SETTLE_MS));
+      expect(onChange).not.toHaveBeenCalled();
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('still reloads an edit that lands inside the suppress window', async () => {
+    // The window says "one of our own writes landed recently", not "nothing
+    // else can have changed". An operator edit in the same two seconds as a
+    // last_known_weight bump was dropped - and dropped permanently, because
+    // lastContent had already been advanced, so no later event looked like a
+    // change. The edit only took effect after a restart or a SIGHUP.
+    const onChange = vi.fn();
+    const handle = startConfigWatcher(configPath, onChange);
+
+    try {
+      noteSelfWrite('version: 1\nlast_known_weight: 82\n', 2000);
+      writeFileSync(configPath, 'version: 1\nrun:\n  dry_run: true\n');
+      await new Promise((r) => setTimeout(r, SETTLE_MS));
+      expect(onChange).toHaveBeenCalledTimes(1);
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('does not reload once more after its own write, when nothing else changed', async () => {
+    // Guards the other direction: the reload loop this suppression exists to
+    // prevent must stay prevented.
+    const onChange = vi.fn();
+    const handle = startConfigWatcher(configPath, onChange);
+
+    try {
+      // The real 2000 ms window: it has to outlast the 500 ms debounce, or the
+      // skip could not apply at all and this would pass for the wrong reason.
+      const selfWritten = 'version: 1\nlast_known_weight: 83\n';
+      noteSelfWrite(selfWritten, 2000);
+      writeFileSync(configPath, selfWritten);
+      await new Promise((r) => setTimeout(r, SETTLE_MS + 2000));
       expect(onChange).not.toHaveBeenCalled();
     } finally {
       handle.close();

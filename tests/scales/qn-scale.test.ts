@@ -494,7 +494,7 @@ describe('QnScaleAdapter', () => {
 
     // #269: the 0x13 config command tells the scale which unit to display.
     // Hardcoding kg flipped a user's lbs scale on every read. byte[3] is the unit
-    // flag (0x01 kg, 0x02 lb) and must follow the configured weight_unit.
+    // bit (0x01 kg, 0x02 lb, 0x08 stone) follows the configured display_unit.
     async function captureConfigWrite(adapter: QnScaleAdapter): Promise<number[][]> {
       vi.useFakeTimers();
       try {
@@ -532,9 +532,9 @@ describe('QnScaleAdapter', () => {
       expect(config![8]).toBe(config!.slice(0, 8).reduce((a, b) => a + b, 0) & 0xff);
     });
 
-    it('sends the lb unit flag (0x02) when weight_unit is lbs (#269)', async () => {
+    it('sends the lb unit flag (0x02) when display_unit is lbs (#269)', async () => {
       const adapter = makeAdapter();
-      adapter.configure({ weightUnit: 'lbs' });
+      adapter.configure({ displayUnit: 'lbs' });
       const writes = await captureConfigWrite(adapter);
       const config = writes.find((w) => w[0] === 0x13 && w[4] === 0x10);
       expect(config).toBeDefined();
@@ -542,10 +542,20 @@ describe('QnScaleAdapter', () => {
       expect(config![8]).toBe(config!.slice(0, 8).reduce((a, b) => a + b, 0) & 0xff);
     });
 
+    it('sends the stone unit flag (0x08) while retaining the required 0x13 command', async () => {
+      const adapter = makeAdapter();
+      adapter.configure({ displayUnit: 'st' });
+      const writes = await captureConfigWrite(adapter);
+      const config = writes.find((w) => w[0] === 0x13 && w[4] === 0x10);
+      expect(config).toBeDefined();
+      expect(config![3]).toBe(0x08);
+      expect(config![8]).toBe(config!.slice(0, 8).reduce((a, b) => a + b, 0) & 0xff);
+    });
+
     it('honours the unit flag on the older-firmware unlock path too (#269)', async () => {
       // No AE00 (subscribe rejects) so onConnected sends the legacy unlocks.
       const adapter = makeAdapter();
-      adapter.configure({ weightUnit: 'lbs' });
+      adapter.configure({ displayUnit: 'lbs' });
       const writes: number[][] = [];
       const ctx = {
         write: async (_uuid: string, data: Buffer | number[]) => {
@@ -564,6 +574,30 @@ describe('QnScaleAdapter', () => {
       expect(config).toBeDefined();
       expect(config![3]).toBe(0x02);
       expect(config![8]).toBe(config!.slice(0, 8).reduce((a, b) => a + b, 0) & 0xff);
+    });
+
+    it('sends the stone unit flag on the older-firmware unlock path', async () => {
+      const adapter = makeAdapter();
+      adapter.configure({ displayUnit: 'st' });
+      const writes: number[][] = [];
+      const ctx = {
+        write: async (_uuid: string, data: Buffer | number[]) => {
+          writes.push([...data]);
+        },
+        read: async () => Buffer.alloc(0),
+        subscribe: async () => {
+          throw new Error('no AE02');
+        },
+        profile: defaultProfile,
+        deviceAddress: '',
+        availableChars: new Set<string>(),
+      } as unknown as ConnectionContext;
+      await adapter.onConnected(ctx);
+      const config = writes.find((w) => w[0] === 0x13 && w[4] === 0x10);
+      expect(config).toBeDefined();
+      expect(config![3]).toBe(0x08);
+      expect(config![8]).toBe(config!.slice(0, 8).reduce((a, b) => a + b, 0) & 0xff);
+      expect(writes.some((w) => w[0] === 0x13 && w[4] !== 0x10)).toBe(true);
     });
 
     it('carries the forced protocol byte into the older-firmware unlock config', async () => {
@@ -1398,15 +1432,32 @@ describe('AE02 dispatch (#75, #235)', () => {
       ]);
     }
 
+    /** A write with the (fake) wall-clock time it was issued at. */
+    interface TimedWrite {
+      at: number;
+      data: number[];
+    }
+
+    interface HandshakeOptions {
+      /** The 0x14 ready frame to feed. Defaults to the GE CS 10 G one (#235). */
+      ready?: Buffer;
+      /** The 0x21 config request to feed. Defaults to the GE CS 10 G one. */
+      configReq?: Buffer;
+      /** Filled with every write and its Date.now(), for timing assertions. */
+      timed?: TimedWrite[];
+    }
+
     /**
      * Drive the handshake from a 0x12 scale-info frame all the way to the 0x22
-     * START, collecting every write. The 0x14 and 0x21 frames are the ones the
-     * GE CS 10 G actually sends (#235).
+     * START, collecting every write. The 0x14 and 0x21 frames default to the
+     * ones the GE CS 10 G actually sends (#235); pass a unit's own frames from
+     * its capture through `opts`.
      */
     async function driveHandshake(
       adapter: QnScaleAdapter,
       info: Buffer,
       profile: UserProfile = defaultProfile(),
+      opts: HandshakeOptions = {},
     ): Promise<number[][]> {
       vi.useFakeTimers();
       try {
@@ -1414,6 +1465,7 @@ describe('AE02 dispatch (#75, #235)', () => {
         const ctx = {
           write: async (_uuid: string, data: Buffer | number[]) => {
             writes.push([...data]);
+            opts.timed?.push({ at: Date.now(), data: [...data] });
           },
           read: async () => Buffer.alloc(0),
           subscribe: async () => {},
@@ -1429,9 +1481,12 @@ describe('AE02 dispatch (#75, #235)', () => {
         await adapter.onConnected(ctx);
         adapter.parseNotification(info);
         adapter.parseNotification(
-          Buffer.from([0x14, 0x0c, 0xff, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0xfd, 0x1f]),
+          opts.ready ??
+            Buffer.from([0x14, 0x0c, 0xff, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0xfd, 0x1f]),
         );
-        adapter.parseNotification(Buffer.from([0x21, 0x07, 0xff, 0x01, 0x61, 0x2c, 0xb5]));
+        adapter.parseNotification(
+          opts.configReq ?? Buffer.from([0x21, 0x07, 0xff, 0x01, 0x61, 0x2c, 0xb5]),
+        );
         await vi.advanceTimersByTimeAsync(2000);
         return writes;
       } finally {
@@ -1464,6 +1519,45 @@ describe('AE02 dispatch (#75, #235)', () => {
         const a4 = writes.filter((w) => w[0] === 0xa4);
         expect(a4).toEqual([A4_ONE, A4_TWO]);
         expect(writes.findIndex((w) => w[0] === 0xa4)).toBeGreaterThan(startIdx);
+      });
+
+      // Both Android captures of the Arboleaf app send the A4 frames only after
+      // the two anchor A2s (#75, #331), so with both switches on that is the order.
+      it('sends the A4 frames after the anchor pair on the 19-byte dialect', async () => {
+        const adapter = makeAdapter();
+        adapter.configure({ qnWeightAck: true, qnA4Prelude: true });
+        const writes = await driveHandshake(
+          adapter,
+          ARBOLEAF_2A_INFO,
+          defaultProfile({ lastKnownWeight: 74.05 }),
+          arboleaf2a,
+        );
+        const startIdx = writes.findIndex((w) => w[0] === 0x22);
+        const anchor = [0xa2, 0x06, 0x01, 0x1c, 0xed, 0xb2];
+        expect(writes.slice(startIdx + 1)).toEqual([anchor, anchor, A4_ONE, A4_TWO]);
+      });
+
+      it('sends the A4 frames straight after START when the anchor is not on', async () => {
+        const adapter = makeAdapter();
+        adapter.configure({ qnA4Prelude: true });
+        const writes = await driveHandshake(
+          adapter,
+          ARBOLEAF_2A_INFO,
+          defaultProfile({ lastKnownWeight: 74.05 }),
+          arboleaf2a,
+        );
+        const startIdx = writes.findIndex((w) => w[0] === 0x22);
+        expect(writes.slice(startIdx + 1)).toEqual([A4_ONE, A4_TWO]);
+      });
+
+      it('keeps the extended order, A4 frames before the trigger burst', async () => {
+        const adapter = makeAdapter();
+        adapter.configure({ qnA4Prelude: true });
+        const writes = await driveHandshake(adapter, makeExtendedScaleInfo());
+        const startIdx = writes.findIndex((w) => w[0] === 0x22);
+        // No anchor in the profile: the capture's own 77.15 kg.
+        const trigger = [0xa2, 0x06, 0x01, 0x1e, 0x23, 0xea];
+        expect(writes.slice(startIdx + 1)).toEqual([A4_ONE, A4_TWO, trigger, trigger]);
       });
 
       // Both frames are replayed verbatim, so the checksum is the only thing
@@ -1587,6 +1681,32 @@ describe('AE02 dispatch (#75, #235)', () => {
         0x03, 0xe0, 0x6f, 0x31,
       ]);
     }
+
+    // The same Arboleaf unit, from @roberfernandez's Android btsnoop of a
+    // complete vendor-app weigh-in posted in #331 on 2026-09-29. Byte for byte
+    // from the capture; [13] changes between sessions of this one unit.
+    const ARBOLEAF_2A_INFO = Buffer.from([
+      0x12, 0x13, 0xff, 0x54, 0x0b, 0x04, 0x00, 0x07, 0xff, 0x15, 0x0f, 0x27, 0x00, 0x0c, 0x05,
+      0x03, 0xe0, 0x6f, 0x3b,
+    ]);
+    const ARBOLEAF_2A_READY = Buffer.from([
+      0x14, 0x0b, 0xff, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x20,
+    ]);
+    const ARBOLEAF_2A_CONFIG_REQ = Buffer.from([0x21, 0x05, 0xff, 0x01, 0x26]);
+    /** First live 0x10 of that capture: 0x1dc4 at [5..6] = 76.20 kg. */
+    const ARBOLEAF_2A_LIVE = Buffer.from([
+      0x10, 0x14, 0x01, 0x00, 0x11, 0x1d, 0xc4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x17,
+    ]);
+    /** A live 0x10 from the GE CS 10 G vendor-app capture (#235): 78.70 kg. */
+    const GE_LIVE = Buffer.from([
+      0x10, 0x14, 0x01, 0x00, 0x11, 0x1e, 0xbe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x12,
+    ]);
+    const arboleaf2a: HandshakeOptions = {
+      ready: ARBOLEAF_2A_READY,
+      configReq: ARBOLEAF_2A_CONFIG_REQ,
+    };
 
     it('19B 0x12 frame echoes the protocol type (Arboleaf, #75/#331)', async () => {
       // Two reporters get the whole handshake acknowledged on 0x00 and then
@@ -1741,9 +1861,11 @@ describe('AE02 dispatch (#75, #235)', () => {
       }
     });
 
-    // The vendor-app capture answers every live 0x10 with that frame's own
-    // weight bytes: `11 1e be` -> `a2 06 01 1e be 85`. Exact for anyone, where
-    // the pre-stream anchor can only ever be approximate.
+    // One reading of the vendor-app capture answers every live 0x10 with that
+    // frame's own weight bytes: `11 1e be` -> `a2 06 01 1e be 85`. The frames
+    // here are SYNTHETIC 14-byte ones with the weight at [3..4]; the real GE live
+    // frame is 20 bytes with the weight at [5..6], is not echoed at all, and is
+    // covered by the 20-byte tests below (#331).
     it('echoes each live weight frame back as an A2 on the extended dialect', async () => {
       const adapter = makeAdapter();
       const writes: number[][] = [];
@@ -1838,54 +1960,143 @@ describe('AE02 dispatch (#75, #235)', () => {
       }
     });
 
-    it('sends the configured anchor exactly once, and at the capture position', async () => {
-      // The anchor used to go into the ready-time A2 on this dialect. It now
-      // goes immediately before START instead, where @chriba2567's capture puts
-      // it, and the ready-time frame goes back to openScale's placeholder.
-      // Sending it in both places would make one switch move two things.
+    // #331, #75: two Android btsnoops of the Arboleaf app completing a weigh-in
+    // on one unit, a month apart, both send the anchor twice AFTER START and
+    // never before it. The 2026-09-29 one, with its timestamps:
+    //
+    //   APP    22 06 ff 00 03 2a    START
+    //   APP    a2 06 01 1c ed b2    +75.0 ms, 0x1ced = 74.05 kg
+    //   SCALE  a3 04 01 a8          +62.2 ms, the ack to that A2
+    //   APP    a2 06 01 1c ed b2    +9.0 ms, identical
+    //   SCALE  10 14 01 00 11 ...   +22.2 ms, the first live frame
+    //
+    // The position these tests used to pin, one A2 immediately before START,
+    // came from a single iOS transcript without timestamps whose order is in
+    // doubt. Replaying it from v1.28.0 never produced a weight on either
+    // reporter's unit.
+    const ANCHOR_2A = [0xa2, 0x06, 0x01, 0x1c, 0xed, 0xb2];
+    const START_FF = [0x22, 0x06, 0xff, 0x00, 0x03, 0x2a];
+
+    it('sends the anchor twice after START on the 19-byte dialect, as the Arboleaf app does', async () => {
       const adapter = makeAdapter();
       adapter.configure({ qnWeightAck: true });
+      const timed: TimedWrite[] = [];
       const writes = await driveHandshake(
         adapter,
-        makeEs26mScaleInfo(),
-        defaultProfile({ lastKnownWeight: 76 }),
+        ARBOLEAF_2A_INFO,
+        defaultProfile({ lastKnownWeight: 74.05 }),
+        { ...arboleaf2a, timed },
       );
       const startIndex = writes.findIndex((w) => w[0] === 0x22);
+      expect(writes[startIndex]).toEqual(START_FF);
+      // Exactly the two captured frames follow START, with nothing between.
+      expect(writes.slice(startIndex + 1)).toEqual([ANCHOR_2A, ANCHOR_2A]);
+      // The capture's 75 ms before the first copy, and at least the trigger gap
+      // between the copies, so the second reaches the scale after its ack.
+      expect(timed[startIndex + 1].at - timed[startIndex].at).toBeGreaterThanOrEqual(75);
+      expect(timed[startIndex + 2].at - timed[startIndex + 1].at).toBeGreaterThanOrEqual(150);
+      // Before START only openScale's ready-time placeholder, age 30 from the
+      // profile, and nothing at all between the second A00D frame and START.
       const beforeStart = writes.slice(0, startIndex).filter((w) => w[0] === 0xa2);
-      expect(beforeStart).toHaveLength(2);
-      // openScale's `a2 06 01 32 <age>` at ready time, age 30 from the profile.
-      expect(beforeStart[0]).toEqual([0xa2, 0x06, 0x01, 0x32, 0x1e, 0xf9]);
-      // 7600 = 0x1db0, and it is the write immediately before START.
-      expect(beforeStart[1]).toEqual([0xa2, 0x06, 0x01, 0x1d, 0xb0, 0x76]);
-      expect(writes[startIndex - 1]).toEqual([0xa2, 0x06, 0x01, 0x1d, 0xb0, 0x76]);
+      expect(beforeStart).toEqual([[0xa2, 0x06, 0x01, 0x32, 0x1e, 0xf9]]);
+      const a00d2 = writes.findIndex((w) => w[0] === 0xa0 && w[2] === 0x02);
+      expect(a00d2).toBeGreaterThanOrEqual(0);
+      expect(writes.slice(a00d2, startIndex).filter((w) => w[0] === 0xa2)).toEqual([]);
+      expect(writes[startIndex - 1][0]).not.toBe(0xa2);
     });
 
-    // #331: @chriba2567's HCI capture of the Arboleaf app on this dialect shows
-    //
-    //   APP->SCALE  a2 06 01 22 8d 58     0x228d = 8845 = 88.45 kg
-    //   APP->SCALE  22 06 ff 00 03 2a     START
-    //
-    // and his own debug log of this app shows the anchor going out at ready time
-    // and nothing at all in that position. The scale acknowledges the whole
-    // handshake either way and then streams nothing.
-    it('sends the anchor immediately before START on the 19-byte dialect when forced on', async () => {
+    it.each([
+      ['18-byte es26m', () => makeEs26mScaleInfo()],
+      [
+        '11-byte classic',
+        () => {
+          const info = Buffer.alloc(11);
+          info[0] = 0x12;
+          info[2] = 0xab;
+          info[10] = 1;
+          return info;
+        },
+      ],
+    ])('sends the anchor pair after START on the %s dialect too', async (_name, info) => {
       const adapter = makeAdapter();
       adapter.configure({ qnWeightAck: true });
+      const writes = await driveHandshake(adapter, info(), defaultProfile({ lastKnownWeight: 76 }));
+      const startIndex = writes.findIndex((w) => w[0] === 0x22);
+      // 7600 = 0x1db0.
+      const anchor = [0xa2, 0x06, 0x01, 0x1d, 0xb0, 0x76];
+      expect(writes.slice(startIndex + 1)).toEqual([anchor, anchor]);
+      const beforeStart = writes.slice(0, startIndex).filter((w) => w[0] === 0xa2);
+      expect(beforeStart).toHaveLength(1);
+      expect(beforeStart[0][3]).toBe(0x32);
+    });
+
+    it('sends no anchor after START on the 19-byte dialect when forced off', async () => {
+      const adapter = makeAdapter();
+      adapter.configure({ qnWeightAck: false });
       const writes = await driveHandshake(
         adapter,
-        makeArboleafScaleInfo(),
-        defaultProfile({ lastKnownWeight: 88.45 }),
+        ARBOLEAF_2A_INFO,
+        defaultProfile({ lastKnownWeight: 74.05 }),
+        arboleaf2a,
       );
       const startIndex = writes.findIndex((w) => w[0] === 0x22);
-      expect(startIndex).toBeGreaterThanOrEqual(0);
-      const anchor = [0xa2, 0x06, 0x01, 0x22, 0x8d, 0x58];
-      // The write immediately preceding START is the anchor, byte for byte the
-      // frame in the capture.
-      expect(writes[startIndex - 1]).toEqual(anchor);
-      expect(anchor[5]).toBe(anchor.slice(0, 5).reduce((a, b) => a + b, 0) & 0xff);
-      // Nothing was added after START on this dialect: the post-START burst
-      // stays exclusive to the 20-byte extended firmware.
       expect(writes.slice(startIndex + 1).filter((w) => w[0] === 0xa2)).toHaveLength(0);
+      expect(writes.slice(0, startIndex).filter((w) => w[0] === 0xa2)).toHaveLength(1);
+    });
+
+    // The extended burst is the hardware-confirmed one (#235) and must not pick
+    // up the 75 ms the es26m pair waits before its first copy.
+    it('starts the extended burst straight after START, without the es26m delay', async () => {
+      const adapter = makeAdapter();
+      const timed: TimedWrite[] = [];
+      const writes = await driveHandshake(adapter, makeExtendedScaleInfo(), defaultProfile(), {
+        timed,
+      });
+      const startIndex = writes.findIndex((w) => w[0] === 0x22);
+      const trigger = [0xa2, 0x06, 0x01, 0x1e, 0x23, 0xea];
+      expect(writes.slice(startIndex + 1)).toEqual([trigger, trigger]);
+      expect(timed[startIndex + 1].at).toBe(timed[startIndex].at);
+    });
+
+    // The pair spans two timers and writeCmd reads this.ctx when it writes, so
+    // a session that ends inside the window and reconnects must not be handed
+    // the previous session's anchor.
+    it('does not hand a reconnected session the previous session anchor', async () => {
+      const adapter = makeAdapter();
+      adapter.configure({ qnWeightAck: true });
+      const makeCtx = (sink: number[][], profile: UserProfile): ConnectionContext =>
+        ({
+          write: async (_uuid: string, data: Buffer | number[]) => {
+            sink.push([...data]);
+          },
+          read: async () => Buffer.alloc(0),
+          subscribe: async () => {},
+          profile,
+          deviceAddress: '',
+          availableChars: new Set<string>(),
+        }) as unknown as ConnectionContext;
+      vi.useFakeTimers();
+      try {
+        const first: number[][] = [];
+        const second: number[][] = [];
+        adapter.onSessionStart?.();
+        await adapter.onConnected(makeCtx(first, defaultProfile({ lastKnownWeight: 74.05 })));
+        adapter.parseNotification(ARBOLEAF_2A_INFO);
+        adapter.parseNotification(ARBOLEAF_2A_READY);
+        adapter.parseNotification(ARBOLEAF_2A_CONFIG_REQ);
+        // Up to and including START, then end the session inside the 75 ms.
+        await vi.advanceTimersByTimeAsync(400);
+        expect(first.some((w) => w[0] === 0x22)).toBe(true);
+        adapter.onSessionEnd!();
+        adapter.onSessionStart?.();
+        await adapter.onConnected(makeCtx(second, defaultProfile({ lastKnownWeight: 60 })));
+        // Well past the pair, well short of the new session's 2 s fallback.
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(second.filter((w) => w[0] === 0xa2)).toEqual([]);
+        expect(first.filter((w) => w[0] === 0xa2 && w[3] === 0x1c)).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('sends no pre-START anchor on the 19-byte dialect by default', async () => {
@@ -1920,6 +2131,14 @@ describe('AE02 dispatch (#75, #235)', () => {
         // above and on the same capture day.
         expect(buildTimeSync(0xff, 0x3222b3f3, true)).toEqual([
           0x20, 0x09, 0xff, 0xf3, 0xb3, 0x22, 0x32, 0x08, 0x2a,
+        ]);
+      });
+
+      it('reproduces a second, independent vendor-app 9-byte frame', () => {
+        // #331 Android btsnoop, 2026-09-29: 0x324ebca0 = 2026-09-29 18:14:56
+        // on the scale clock.
+        expect(buildTimeSync(0xff, 0x324ebca0, true)).toEqual([
+          0x20, 0x09, 0xff, 0xa0, 0xbc, 0x4e, 0x32, 0x08, 0x0c,
         ]);
       });
 
@@ -1958,6 +2177,8 @@ describe('AE02 dispatch (#75, #235)', () => {
     // first seven bytes are identical, all three close under the family
     // checksum, and the captures disagree on the trailing pair's value.
     describe('0x13 config (ble.qn_config_long, #331)', () => {
+      // This 9-byte frame is also exactly what the Arboleaf app sends in both
+      // Android captures of one unit (#331, #75).
       it('reproduces our own 9-byte frame from the #235 capture byte for byte', () => {
         expect(buildConfig(0xff, 0x01)).toEqual([
           0x13, 0x09, 0xff, 0x01, 0x10, 0x00, 0x00, 0x00, 0x2c,
@@ -2097,6 +2318,93 @@ describe('AE02 dispatch (#75, #235)', () => {
       adapter.parseNotification(b);
       await Promise.resolve();
       expect(writes.filter((w) => w[0] === 0xa2)).toHaveLength(0);
+    });
+
+    // #331: the live frame both Arboleaf captures show is 20 bytes with the
+    // weight at [5..6]. The parser reads [3..4] there, 0x0011, so with the echo
+    // on every live frame used to be answered with `a2 06 01 00 11 ba`: 0.17 kg.
+    it('does not answer a real 20-byte live frame with an A2 (es26m, forced on)', async () => {
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      try {
+        const adapter = makeAdapter();
+        adapter.configure({ qnWeightAck: true });
+        const writes = await driveHandshake(
+          adapter,
+          ARBOLEAF_2A_INFO,
+          defaultProfile({ lastKnownWeight: 74.05 }),
+          arboleaf2a,
+        );
+        const before = writes.length;
+        expect(adapter.parseNotification(ARBOLEAF_2A_LIVE)).toBeNull();
+        await Promise.resolve();
+        expect(writes.slice(before).filter((w) => w[0] === 0xa2)).toEqual([]);
+        // The one diagnostic line carries the weight from where the captures put it.
+        const lines = debug.mock.calls.map((c) => String(c[0]));
+        const line = lines.find((l) => l.startsWith('QN: 20-byte live frame'));
+        expect(line).toContain('76.2 kg at [5..6]');
+        // Once per session, not once per frame.
+        adapter.parseNotification(ARBOLEAF_2A_LIVE);
+        const again = debug.mock.calls
+          .map((c) => String(c[0]))
+          .filter((l) => l.startsWith('QN: 20-byte live frame'));
+        expect(again).toHaveLength(1);
+      } finally {
+        debug.mockRestore();
+      }
+    });
+
+    // Same layout on the GE CS 10 G, where the echo is on by default. Latent
+    // there: none of the reporter's logs ever delivered a 0x10 to this adapter,
+    // but should one arrive it must not be answered with 0.17 kg either.
+    it('does not answer a real 20-byte live frame with an A2 on the extended default', async () => {
+      const adapter = makeAdapter();
+      const writes = await driveHandshake(adapter, makeExtendedScaleInfo());
+      const before = writes.length;
+      expect(adapter.parseNotification(GE_LIVE)).toBeNull();
+      await Promise.resolve();
+      expect(writes.slice(before).filter((w) => w[0] === 0xa2)).toEqual([]);
+    });
+
+    // The original layout reads [5] as its stability byte, which in this shape
+    // is the weight's high byte, so a frame between 2.56 and 5.11 kg read as a
+    // stable 1.7 kg, was acknowledged with 0x1F, and at exactly 2.56 kg ([6]
+    // zero, so no impedance either) completed the session. The live stream does
+    // ramp through low weights: the #235 GE capture shows `11 14 78`, `11 11 e4`,
+    // `11 0f 78` in a row (52.40, 45.80, 39.60 kg; posted truncated). No capture
+    // has a frame inside that band, so these are the captured Arboleaf frame
+    // with only its weight field and checksum changed. They test that the frame
+    // is NOT read, not how it is read.
+    it.each([
+      ['2.56 kg, no impedance bytes', 0x0100],
+      ['5.00 kg', 0x01f4],
+    ])('does not turn a 20-byte live frame at %s into a reading', async (_name, raw) => {
+      const frame = Buffer.from(ARBOLEAF_2A_LIVE);
+      frame.writeUInt16BE(raw, 5);
+      frame[19] = [...frame.subarray(0, 19)].reduce((a, b) => a + b, 0) & 0xff;
+      const adapter = makeAdapter();
+      adapter.configure({ qnWeightAck: true });
+      const writes = await driveHandshake(
+        adapter,
+        ARBOLEAF_2A_INFO,
+        defaultProfile({ lastKnownWeight: 74.05 }),
+        arboleaf2a,
+      );
+      const before = writes.length;
+      expect(adapter.parseNotification(frame)).toBeNull();
+      await Promise.resolve();
+      // No 0x1F stable ack and no A2: nothing is written for this frame at all.
+      expect(writes.slice(before)).toEqual([]);
+    });
+
+    // Every anchor frame a capture shows, rebuilt from its weight. 74.05 and
+    // 71.85 sit on the Math.round boundary (7404.999... and 7184.999...).
+    it('rebuilds the captured anchor frames byte for byte', () => {
+      // #331 Android btsnoop, 2026-09-29.
+      expect(buildMeasurementTrigger(74.05)).toEqual([0xa2, 0x06, 0x01, 0x1c, 0xed, 0xb2]);
+      // #75 Android btsnoop of the same unit, a month earlier.
+      expect(buildMeasurementTrigger(71.85)).toEqual([0xa2, 0x06, 0x01, 0x1c, 0x11, 0xd6]);
+      // #331 iOS transcript.
+      expect(buildMeasurementTrigger(88.45)).toEqual([0xa2, 0x06, 0x01, 0x22, 0x8d, 0x58]);
     });
 
     it('rounds the anchor to the nearest 10 g and keeps the frame well formed', () => {

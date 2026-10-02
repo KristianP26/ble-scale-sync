@@ -188,14 +188,20 @@ export const BleSchema = z
     /**
      * Acknowledge every live QN weight frame with its own weight (#75, #235).
      *
-     * The vendor app answers each 0x10 frame with `a2 06 01 <that weight>`, and
-     * on the scale a capture covers, the 20-byte extended dialect, the scale
-     * will not finish a weigh-in without it. That dialect does it by default.
+     * One reading of a vendor-app capture has the app answering each 0x10 frame
+     * with `a2 06 01 <that weight>`. The 20-byte extended dialect, the one that
+     * capture covers, does it by default. It is not hardware confirmed, and the
+     * 20-byte live frame, whose layout is not decoded yet, is never echoed.
      *
      * Set true on another dialect whose scale completes the whole handshake and
      * then streams nothing: it is the same class of silent failure as
      * `qn_protocol_byte` and `qn_report_byte`, and the same kind of knob. Left
      * unset it changes nothing.
+     *
+     * True also hands the scale the configured weight anchor: on the 20-byte
+     * extended dialect in the ready-time A2, everywhere else as two A2 frames
+     * right after START, the sequence two Android captures of the Arboleaf app
+     * show (#331, #75).
      */
     qn_weight_ack: z.boolean().optional().nullable(),
     /**
@@ -261,6 +267,21 @@ export const BleSchema = z
      */
     auto_clear_stale_bond: z.boolean().optional().nullable(),
     /**
+     * Power-cycle the HCI controller with `btmgmt` after every GATT session
+     * (#80). Default true; `false` skips that one step and nothing else.
+     *
+     * The cycle exists for the Broadcom "zombie discovery" state, where BlueZ
+     * reports Discovering=true while the controller has stopped scanning. It
+     * is also the only host-side event between a bonded session that works and
+     * a next connect whose stored key is rejected (#417), so this lets that be
+     * tested without a code change. The D-Bus reset, the failed-GATT cleanup
+     * and the reactive recovery tiers all still run.
+     *
+     * node-ble only: noble resets the adapter only reactively, and the proxy
+     * transports never touch the host adapter.
+     */
+    preemptive_adapter_reset: z.boolean().optional().nullable(),
+    /**
      * Minutes of total advertisement silence before a proxy transport is
      * treated as wedged rather than idle (#281). 0 disables the check.
      *
@@ -300,6 +321,8 @@ export const BleSchema = z
 export const ScaleSchema = z.object({
   weight_unit: z.enum(['kg', 'lbs']).default('kg'),
   height_unit: z.enum(['cm', 'in']).default('cm'),
+  /** Unit requested on the physical scale; independent from exported values. */
+  display_unit: z.enum(['weight_unit', 'kg', 'lbs', 'st']).default('weight_unit'),
 });
 
 export const ExporterEntrySchema = z
@@ -317,6 +340,31 @@ const WeightRangeSchema = z
     message: 'max must be greater than min',
   });
 
+/**
+ * True for a date string that names a day that actually exists, and is not in
+ * the future.
+ *
+ * The regex above only fixes the SHAPE, so `2024-02-31` and `9999-99-99` both
+ * passed validation and went straight into the age arithmetic that drives every
+ * body-composition estimate. `new Date('2024-02-31')` is not a safety net
+ * either: it normalises to 2024-03-02 rather than failing, which is why the
+ * components are compared back against the parsed date instead of merely
+ * checking for NaN.
+ */
+function isRealCalendarDate(value: string): boolean {
+  const [y, m, d] = value.split('-').map(Number);
+  const parsed = new Date(Date.UTC(y, m - 1, d));
+  if (Number.isNaN(parsed.getTime())) return false;
+  if (
+    parsed.getUTCFullYear() !== y ||
+    parsed.getUTCMonth() !== m - 1 ||
+    parsed.getUTCDate() !== d
+  ) {
+    return false;
+  }
+  return parsed.getTime() <= Date.now();
+}
+
 export const UserSchema = z.object({
   name: z.string().min(1, 'User name is required'),
   slug: z
@@ -325,7 +373,10 @@ export const UserSchema = z.object({
   height: z.number().positive('Must be a positive number (e.g., 183)'),
   birth_date: z
     .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be a date in YYYY-MM-DD format (e.g., "1990-06-15")'),
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be a date in YYYY-MM-DD format (e.g., "1990-06-15")')
+    .refine(isRealCalendarDate, {
+      message: 'Must be a real calendar date, not in the future (e.g., "1990-06-15")',
+    }),
   gender: z.enum(['male', 'female']),
   is_athlete: z.boolean(),
   weight_range: WeightRangeSchema,
@@ -422,7 +473,11 @@ export const DockerSchema = z.object({
 export const AppConfigSchema = z.object({
   version: z.literal(1),
   ble: BleSchema.optional(),
-  scale: ScaleSchema.default({ weight_unit: 'kg', height_unit: 'cm' }),
+  scale: ScaleSchema.default({
+    weight_unit: 'kg',
+    height_unit: 'cm',
+    display_unit: 'weight_unit',
+  }),
   unknown_user: z.enum(['nearest', 'log', 'ignore']).default('nearest'),
   /**
    * What to do with a reading that no configured user's `weight_range` covers.
@@ -443,7 +498,33 @@ export const AppConfigSchema = z.object({
    * readings, but `skip` is the safer setting for a multi-user household.
    */
   out_of_range: z.enum(['warn', 'skip']).default('warn'),
-  users: z.array(UserSchema).min(1, 'At least one user is required'),
+  users: z
+    .array(UserSchema)
+    .min(1, 'At least one user is required')
+    /**
+     * The slug is an identity, not a label. Nothing enforced that it was
+     * unique, and everything downstream assumes it is: `getExportersForUser`
+     * caches by slug and resolves the user with `users.find`, so a second user
+     * with the same slug silently inherited the first one's exporters - and
+     * with them the first one's Garmin account. The exporter cache made it
+     * stick for the life of the process.
+     */
+    .superRefine((users, ctx) => {
+      const seen = new Set<string>();
+      users.forEach((user, i) => {
+        if (seen.has(user.slug)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [i, 'slug'],
+            message:
+              `Duplicate user slug '${user.slug}': each user needs its own slug. ` +
+              'Exporters, the retry queue and last_known_weight are all keyed by it.',
+          });
+          return;
+        }
+        seen.add(user.slug);
+      });
+    }),
   global_exporters: z.array(ExporterEntrySchema).optional(),
   runtime: RuntimeSchema.optional(),
   docker: DockerSchema.optional(),
@@ -453,6 +534,7 @@ export const AppConfigSchema = z.object({
 // --- Standalone types ---
 
 export type WeightUnit = 'kg' | 'lbs';
+export type ScaleDisplayUnit = WeightUnit | 'st';
 
 // --- Inferred types ---
 

@@ -41,7 +41,8 @@ export const RAW_READING_TIMEOUT_MS = 120_000;
  * silence window. The idle timer restarts on every frame, so a scale that
  * streams adapter-rejected frames forever would otherwise hold the session
  * open with no bound; the cap ends it while leaving room for a weigh-in that
- * spans several restarts. A session_timeout_sec above 300 makes
+ * spans several restarts. A composition hold can move it out once, by at most
+ * the hold plus 2 s (withIdleTimeout). A session_timeout_sec above 300 makes
  * POLL_CYCLE_TIMEOUT_MS the effective ceiling instead.
  */
 export const READING_SESSION_CAP_FACTOR = 3;
@@ -65,9 +66,10 @@ export const POST_DISCOVERY_QUIESCE_MS = 500;
  * Hard ceiling on one native poll cycle.
  *
  * The reading phase is bounded by scale silence, capped in absolute terms at
- * READING_SESSION_CAP_FACTOR x the silence window (360 s by default). The worst
- * legitimate node-ble cycle is then roughly 815 s (discovery 120 + six connect
- * attempts 170 + GATT acquisition 30 + characteristic retries + reading 360),
+ * READING_SESSION_CAP_FACTOR x the silence window (360 s by default), plus at
+ * most one composition hold. The worst legitimate node-ble cycle is then roughly
+ * 847 s (discovery 120 + six connect attempts 170 + GATT acquisition 30 +
+ * characteristic retries + reading 360 + a 32 s R-MSC04 hold),
  * so 900 s never fires on a healthy run with the default session_timeout_sec.
  *
  * It exists because dbus-next never rejects an in-flight `MessageBus.call()`
@@ -119,6 +121,11 @@ export const LIVENESS_PROBE_WINDOW_MS = 3_000;
  * a final frame with impedance once the measurement completes (~10-20 s on device).
  * If an impedance-bearing frame arrives within this window the complete reading is
  * used; otherwise the weight-only reading is forwarded as a fallback.
+ *
+ * The Silvergear 108 uses the same hold for its post-weigh-in frame, and its
+ * `BODY_FRAME_WINDOW_MS` must stay below this value: the proxy watchers queue
+ * the fallback without recording it for dedup, so a frame paired after the
+ * fallback would export the weigh-in twice (#357). A test pins the ordering.
  */
 export const IMPEDANCE_GRACE_MS = 12_000;
 
@@ -152,6 +159,12 @@ export interface ScanOptions {
    * have no bond to clear.
    */
   autoClearStaleBond?: boolean;
+  /**
+   * Run the preemptive btmgmt power-cycle after a GATT session
+   * (`ble.preemptive_adapter_reset`, #80, #417). Undefined means true; only an
+   * explicit false skips it. node-ble only.
+   */
+  preemptiveAdapterReset?: boolean;
 }
 
 export interface ScanResult {
@@ -211,43 +224,69 @@ export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> 
   });
 }
 
-export async function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout>;
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new Error(message)), ms);
-  });
-  try {
-    return await Promise.race([promise, timeout]);
-  } finally {
-    clearTimeout(timer!);
-  }
-}
+// Canonical home is src/utils/timeout.ts: the MQTT exporter needs it too, and
+// an exporter importing from the BLE layer would be the wrong way round.
+// Re-exported here so the BLE call sites keep their existing import.
+export { withTimeout } from '../utils/timeout.js';
 
 /**
  * Like withTimeout, but the deadline restarts whenever `start`'s callback is
  * invoked: the returned promise rejects after `ms` with no activity. Like
  * withTimeout, the promise from `start` is abandoned rather than cancelled, so
  * callers must still tear down whatever it holds.
+ *
+ * `onActivity(minIdleMs)` additionally promises that the session is waiting on
+ * purpose for at least that long, and later activity does not shorten it. A
+ * composition hold uses this: after the weight settles a scale can stay silent
+ * for longer than a short `session_timeout_sec`, and the idle timeout winning
+ * that race drops the settled weight together with the composition it was
+ * waiting for. The hold is bounded by its own timer, so this cannot keep a
+ * session open indefinitely.
+ *
+ * `cap` is an absolute deadline for the whole session, counted from the call,
+ * that activity does not restart. A requested minimum window moves it out too
+ * when the window would end later: with the cap at 3 x a 5 s
+ * `session_timeout_sec`, a 30 s hold armed a few seconds in was otherwise still
+ * cut at 15 s, and the held weight dropped with it (#434). Only that minimum
+ * window moves the cap, and the hold that requests it arms once per session,
+ * so the cap stays bounded.
  */
 export async function withIdleTimeout<T>(
-  start: (onActivity: () => void) => Promise<T>,
+  start: (onActivity: (minIdleMs?: number) => void) => Promise<T>,
   ms: number,
   message: string,
+  cap?: { ms: number; message: string },
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let capTimer: ReturnType<typeof setTimeout> | undefined;
   let rejectTimeout!: (err: Error) => void;
   const timeout = new Promise<never>((_resolve, reject) => {
     rejectTimeout = reject;
   });
-  const onActivity = (): void => {
+  let capAt = 0;
+  const armCap = (at: number): void => {
+    if (!cap) return;
+    capAt = at;
+    clearTimeout(capTimer);
+    capTimer = setTimeout(() => rejectTimeout(new Error(cap.message)), at - Date.now());
+  };
+  if (cap) armCap(Date.now() + cap.ms);
+  let floorAt = 0;
+  const onActivity = (minIdleMs?: number): void => {
+    const now = Date.now();
+    if (minIdleMs !== undefined && minIdleMs > 0) {
+      floorAt = Math.max(floorAt, now + minIdleMs);
+      if (cap && floorAt > capAt) armCap(floorAt);
+    }
     clearTimeout(timer);
-    timer = setTimeout(() => rejectTimeout(new Error(message)), ms);
+    timer = setTimeout(() => rejectTimeout(new Error(message)), Math.max(ms, floorAt - now));
   };
   onActivity();
   try {
     return await Promise.race([start(onActivity), timeout]);
   } finally {
     clearTimeout(timer);
+    clearTimeout(capTimer);
   }
 }
 

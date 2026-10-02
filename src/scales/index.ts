@@ -6,6 +6,7 @@ import { RenphoMsc04Adapter } from './renpho-msc04.js';
 import { MiScale2Adapter } from './mi-scale-2.js';
 import { XiaomiMiScaleLegacyAdapter } from './xiaomi-mi-scale-legacy.js';
 import { Silvergear108Adapter } from './silvergear-108.js';
+import { SenssunIfB7Adapter } from './senssun-if-b7.js';
 import { XiaomiS800Adapter } from './xiaomi-s800.js';
 import { XiaomiS400Adapter } from './xiaomi-s400.js';
 import { BeurerBf720Adapter } from './beurer-bf720.js';
@@ -64,6 +65,10 @@ export const adapters: ScaleAdapter[] = [
   // company id 0xA0AC plus the exact 12-byte payload and its checksum, so it
   // cannot collide with anything else (#297).
   new Silvergear108Adapter(),
+  // Senssun IF_B7 / Grifema GA2001: broadcast-only, non-connectable. Claims on
+  // company id 0x0100 plus the 17-byte frame, its checksum and the device's own
+  // MAC echoed inside it, so it cannot collide with anything else (#423).
+  new SenssunIfB7Adapter(),
   new MiScale2Adapter(),
   // Xiaomi Mijia S800 (ms116): broadcast-only, matches FE95 + product id 0x51E2
   // or its own name; no collision with any other adapter (#232).

@@ -1,5 +1,5 @@
 import type { MatchDescriptor } from '../scales/match-descriptor.js';
-import type { WeightUnit } from '../config/schema.js';
+import type { ScaleDisplayUnit } from '../config/schema.js';
 export type { MatchDescriptor };
 
 export type Gender = 'male' | 'female';
@@ -198,12 +198,13 @@ export interface AdapterRuntimeConfig {
    */
   scaleMac?: string;
   /**
-   * Configured display unit (`scale.weight_unit`). Adapters whose protocol tells
-   * the scale which unit to show (e.g. the QN 0x13 config command) honour this so
-   * a read does not flip the scale's display (#269). Optional and ignored by
-   * adapters that do not write a unit.
+   * Unit to ask the scale's own display to show (`scale.display_unit`, with its
+   * `weight_unit` default already resolved by resolveDisplayUnit). Independent of
+   * the unit readings are exported in. Adapters whose protocol tells the scale
+   * which unit to show (today only the QN 0x13 config command) honour it so a
+   * read does not flip the display (#269, #429). Ignored by every other adapter.
    */
-  weightUnit?: WeightUnit;
+  displayUnit?: ScaleDisplayUnit;
   /**
    * Protocol byte the QN handshake echoes back (`ble.qn_protocol_byte`).
    *
@@ -227,11 +228,16 @@ export interface AdapterRuntimeConfig {
    * Acknowledge every live QN weight frame with its own weight
    * (`ble.qn_weight_ack`).
    *
-   * The vendor app answers each 0x10 frame with `a2 06 01 <that frame's weight>`
-   * (#235). The adapter does this on the 20-byte extended dialect, which is the
-   * only one a capture covers. Unset keeps that gate; true enables it on every
-   * dialect, for a scale that completes the handshake and then goes quiet;
-   * false disables it everywhere.
+   * One reading of a vendor-app capture has the app answering each 0x10 frame
+   * with `a2 06 01 <that frame's weight>` (#235). The adapter does this on the
+   * 20-byte extended dialect, which is the only one that capture covers, and
+   * never for the 20-byte live frame whose layout is not decoded yet. Unset
+   * keeps that gate; true enables it on every dialect, for a scale that
+   * completes the handshake and then goes quiet; false disables it everywhere.
+   *
+   * True also sends the configured weight anchor: on the extended dialect in
+   * the ready-time A2, on every other dialect as two A2 frames right after
+   * START, as two Android captures of the Arboleaf app show (#331, #75).
    */
   qnWeightAck?: boolean;
   /**
@@ -349,7 +355,9 @@ export interface ScaleAdapterCore {
    * so `parseBroadcast` / `parseServiceData` run without it ever firing. Adding
    * a broadcast parser to an adapter that relies on this reset would silently
    * bypass it; today every such adapter either has no broadcast parser or, like
-   * `eufy-p2`, has a stateless one.
+   * `eufy-p2`, has a stateless one. `silvergear-108` is broadcast only and keeps
+   * gating state across advertisements, so it keys that state by the MAC in its
+   * own payload instead of relying on this hook.
    *
    * Must not throw and must not perform I/O: nothing is connected yet. Reading
    * a value the adapter already recorded is fine, which is what the address is
@@ -530,6 +538,18 @@ export interface AckProtocol {
  * `completionHoldMs`, still feeding frames, so a richer reading (e.g.
  * bioimpedance composition arriving a few seconds after the weight settles) can
  * land. On timeout the last complete reading resolves.
+ *
+ * GATT only. It is read by `waitForRawReading` and nowhere on the broadcast
+ * path, which some adapters rely on (`eufy-p2` declares it for its GATT session
+ * and also parses broadcasts). The broadcast equivalent is `preferPassive` with
+ * an `isComplete` that returns false for the early reading. The streaming
+ * broadcast paths (every continuous-mode watcher, and the single-shot scans of
+ * noble, node-ble, ESPHome proxy and Home Assistant Bluetooth) hold such a
+ * partial reading for up to `IMPEDANCE_GRACE_MS`, resolve early on a later
+ * complete one, and keep listening past their scan deadline until one of those
+ * two happens (Mi Scale 2, Silvergear 108). The mqtt-proxy single-shot scan is the
+ * exception: it reads one scan snapshot, cannot wait for a later frame, and
+ * returns the partial reading at once when nothing complete is in it.
  */
 export interface HoldForComposition {
   /**
@@ -561,10 +581,48 @@ export interface HoldForComposition {
  * `implements ScaleAdapterCore, GattWiring, Unlockable` for author-facing
  * clarity and compile-time checking of that specific bundle.
  */
+/**
+ * Unlockable, or nothing of it.
+ *
+ * `Partial<Unlockable>` made every member independently optional, so an adapter
+ * could declare `unlockIntervalMs` with no command to send - a timer that fires
+ * forever and writes nothing. The two members are only meaningful together, and
+ * that is the whole constraint: this is not a general rewrite of the capability
+ * system, just the pairing the interface already documents.
+ */
+type MaybeUnlockable =
+  | {
+      readonly unlockCommand?: undefined;
+      readonly unlockCommands?: undefined;
+      readonly unlockIntervalMs?: undefined;
+    }
+  | Unlockable;
+
+/**
+ * BroadcastSource, with the one rule its own doc comment states.
+ *
+ * "Adapters that set this must implement parseServiceData or parseBroadcast"
+ * was a sentence, not a type: `preferPassive: true` with neither parser
+ * compiled, and it means an adapter that refuses to connect over GATT and
+ * cannot read an advertisement either - a scale that can never produce a
+ * reading. Everything else in the capability stays deliberately optional, as
+ * BroadcastSource documents.
+ */
+type MaybeBroadcastSource =
+  | (Partial<BroadcastSource> & { readonly preferPassive?: false | undefined })
+  | (Partial<BroadcastSource> & {
+      readonly preferPassive: true;
+      parseBroadcast(manufacturerData: Buffer): ScaleReading | null;
+    })
+  | (Partial<BroadcastSource> & {
+      readonly preferPassive: true;
+      parseServiceData(uuid: string, data: Buffer): ScaleReading | null;
+    });
+
 export type ScaleAdapter = ScaleAdapterCore &
   Partial<GattWiring> &
-  Partial<Unlockable> &
-  Partial<BroadcastSource> &
+  MaybeUnlockable &
+  MaybeBroadcastSource &
   Partial<MultiCharNotify> &
   Partial<AckProtocol> &
   Partial<HoldForComposition>;

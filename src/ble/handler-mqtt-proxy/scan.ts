@@ -8,7 +8,12 @@ import type { ScanOptions, ScanResult } from '../types.js';
 import type { RawReading } from '../shared.js';
 import { waitForRawReading, withAbandonmentCleanup } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
-import { evaluateAdvertisement, logAdvert, safeName } from '../advertisement.js';
+import {
+  evaluateAdvertisement,
+  logAdvert,
+  readsFromAdvertisement,
+  safeName,
+} from '../advertisement.js';
 import { bleLog, normalizeUuid, withTimeout, formatMac } from '../types.js';
 import { COMMAND_TIMEOUT_MS, topics, type Topics } from './topics.js';
 import { type MqttClient, createMqttClient } from './client.js';
@@ -159,6 +164,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
 
     // Find a matching adapter
     let weightOnlyFallback: (RawReading & { address: string }) | null = null;
+    // A scale refused over GATT because it is read from its advertisements
+    // (#422): the final error must say so, not that nothing was found.
+    let refused: { address: string; name: string } | null = null;
 
     for (const entry of candidates) {
       const info = toBleDeviceInfo(entry);
@@ -173,7 +181,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
 
       if (decision.kind === 'complete') {
         bleLog.info(`Broadcast reading: ${decision.reading.weight} kg`);
-        registerScaleMac(config, entry.address).catch(() => {});
+        registerScaleMac(config, entry.address, adapter).catch(() => {});
         return { reading: decision.reading, adapter };
       }
 
@@ -213,11 +221,35 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         entry.addr_type ?? 0,
       );
       try {
+        // Re-resolve char-aware now that discovery is complete, as the watcher
+        // does (#319): before discovery Mi Scale 2 claims anything advertising
+        // the generic 0x181B service, and a standard BCS scale reaches its own
+        // adapter only here.
+        const discovered = { ...info, characteristicUuids: [...charMap.keys()] };
+        const resolved = resolveAdapter(discovered, adapters) ?? adapter;
+        if (resolved.name !== adapter.name) {
+          bleLog.info(
+            `Re-resolved adapter after GATT discovery: ${adapter.name} -> ${resolved.name} (${entry.address})`,
+          );
+        }
+        // A scale read from its advertisements is never driven over GATT; its
+        // GATT path can answer the unlock forever without a weight (#422).
+        if (readsFromAdvertisement(resolved)) {
+          bleLog.info(
+            `Connect to ${resolved.name} (${entry.address}) ignored: this scale is read from ` +
+              'its advertisements, not over GATT. Disconnecting.',
+          );
+          // Awaited, so the config marking it passive reaches the broker
+          // before the disconnect in the finally.
+          await registerScaleMac(config, entry.address, resolved).catch(() => {});
+          refused = { address: entry.address, name: resolved.name };
+          continue;
+        }
         const raw = await withAbandonmentCleanup(device, () =>
           waitForRawReading(
             charMap,
             device,
-            adapter,
+            resolved,
             opts.profile,
             entry.address.replace(/[:-]/g, '').toUpperCase(),
             opts.weightUnit,
@@ -225,7 +257,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
             opts.scaleAuth,
           ),
         );
-        registerScaleMac(config, entry.address).catch(() => {});
+        registerScaleMac(config, entry.address, resolved).catch(() => {});
         return raw;
       } finally {
         // fireDisconnect() (inside the wrapper) before cleanup(), so the
@@ -240,8 +272,17 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       bleLog.info(
         `Broadcast reading (weight only, impedance not yet available): ${weightOnlyFallback.reading.weight} kg`,
       );
-      registerScaleMac(config, weightOnlyFallback.address).catch(() => {});
+      registerScaleMac(config, weightOnlyFallback.address, weightOnlyFallback.adapter).catch(
+        () => {},
+      );
       return { reading: weightOnlyFallback.reading, adapter: weightOnlyFallback.adapter };
+    }
+
+    if (refused) {
+      throw new Error(
+        `${refused.name} (${refused.address}) is read from its advertisements, and this scan ` +
+          'snapshot held no broadcast reading from it. Step on the scale and try again.',
+      );
     }
 
     throw new Error(

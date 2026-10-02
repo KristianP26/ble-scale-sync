@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { Silvergear108Adapter } from '../../src/scales/silvergear-108.js';
 import { evaluateAdvertisement } from '../../src/ble/advertisement.js';
 import type {
@@ -17,9 +17,13 @@ const SETTLED = mfg('202d07600da1');
 /** The same weight one frame earlier, still settling (bit 7 clear). */
 const SETTLING = mfg('a02d07600da1');
 
-const adapter = new Silvergear108Adapter();
-
 describe('provisional settling weights (#356)', () => {
+  // A fresh adapter per case, so no case inherits a weigh-in another one left.
+  let adapter: Silvergear108Adapter;
+  beforeEach(() => {
+    adapter = new Silvergear108Adapter();
+  });
+
   it('reports a settling frame as a live weight and NOT as a reading', () => {
     expect(adapter.parseBroadcast(SETTLING)).toBeNull();
     expect(adapter.parseLiveBroadcast(SETTLING)?.weight).toBeCloseTo(108.48, 2);

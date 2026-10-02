@@ -2,7 +2,7 @@ import { watch, readFileSync, type FSWatcher } from 'node:fs';
 import { dirname, basename } from 'node:path';
 import { createLogger } from '../logger.js';
 import { errMsg } from '../utils/error.js';
-import { isReloadSuppressed } from './write.js';
+import { isSelfWrite } from './write.js';
 
 const log = createLogger('ConfigWatch');
 
@@ -38,8 +38,13 @@ export function startConfigWatcher(configPath: string, onChange: () => void): Co
   const fire = () => {
     debounceTimer = null;
     if (closed) return;
-    if (isReloadSuppressed()) {
-      log.debug('Skipping reload trigger: self-write suppress window active');
+    if (isSelfWrite(lastContent)) {
+      // Only OUR OWN bytes are skipped. Dropping everything that arrived inside
+      // the time window discarded real edits: `lastContent` had already been
+      // advanced when the event came in, so no later event looked like a change
+      // and an edit made in the same two seconds as a last_known_weight bump
+      // never took effect until a restart or a SIGHUP.
+      log.debug('Skipping reload trigger: this is our own last_known_weight write');
       return;
     }
     onChange();

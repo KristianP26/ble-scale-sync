@@ -1,4 +1,5 @@
 import { createLogger } from '../logger.js';
+import { parseHeaderString } from './headers.js';
 
 const log = createLogger('ExporterConfig');
 
@@ -13,7 +14,8 @@ export type ExporterName =
   | 'telegram'
   | 'intervals'
   | 'runalyze'
-  | 'wger';
+  | 'wger'
+  | 'healthlog';
 
 /**
  * Runtime twin of `ExporterName`, for validating `EXPORTERS=...`.
@@ -35,6 +37,7 @@ const KNOWN_EXPORTERS = new Set<ExporterName>([
   'intervals',
   'runalyze',
   'wger',
+  'healthlog',
 ]);
 
 /** @internal Exported for the registry-agreement test only. */
@@ -122,6 +125,13 @@ export interface WgerConfig {
   syncMeasurements: boolean;
 }
 
+export interface HealthLogConfig {
+  baseUrl: string;
+  token: string;
+  /** Also push body-composition metrics, not just weight. */
+  syncMeasurements: boolean;
+}
+
 export interface ExporterConfig {
   exporters: ExporterName[];
   garmin?: GarminConfig;
@@ -135,6 +145,7 @@ export interface ExporterConfig {
   intervals?: IntervalsConfig;
   runalyze?: RunalyzeConfig;
   wger?: WgerConfig;
+  healthlog?: HealthLogConfig;
 }
 
 function fail(msg: string): never {
@@ -149,17 +160,12 @@ function parseQos(raw: string | undefined): 0 | 1 | 2 {
 }
 
 function parseHeaders(raw: string | undefined): Record<string, string> {
-  if (!raw) return {};
-  const headers: Record<string, string> = {};
-  for (const pair of raw.split(',')) {
-    const idx = pair.indexOf(':');
-    if (idx < 1) {
-      log.warn(`Ignoring invalid header (missing ':'): '${pair.trim()}'`);
-      continue;
-    }
-    const key = pair.slice(0, idx).trim();
-    const value = pair.slice(idx + 1).trim();
-    if (key) headers[key] = value;
+  // Shared with the config.yaml path in registry.ts. This parser was correct
+  // and the yaml path was not, so the rule lives in one place now rather than
+  // being reimplemented a third time.
+  const { headers, invalid } = parseHeaderString(raw ?? '');
+  for (const pair of invalid) {
+    log.warn(`Ignoring invalid header (missing ':'): '${pair}'`);
   }
   return headers;
 }
@@ -396,6 +402,27 @@ export function loadExporterConfig(): ExporterConfig {
     };
   }
 
+  let healthlog: HealthLogConfig | undefined;
+  if (exporters.includes('healthlog')) {
+    const baseUrl = process.env.HEALTHLOG_BASE_URL?.trim();
+    if (!baseUrl) {
+      fail('HEALTHLOG_BASE_URL is required when healthlog exporter is enabled.');
+    }
+    const token = process.env.HEALTHLOG_TOKEN?.trim();
+    if (!token) {
+      fail('HEALTHLOG_TOKEN is required when healthlog exporter is enabled.');
+    }
+    healthlog = {
+      baseUrl,
+      token,
+      syncMeasurements: parseBoolean(
+        'HEALTHLOG_SYNC_MEASUREMENTS',
+        process.env.HEALTHLOG_SYNC_MEASUREMENTS?.trim(),
+        true,
+      ),
+    };
+  }
+
   return {
     exporters,
     garmin,
@@ -409,5 +436,6 @@ export function loadExporterConfig(): ExporterConfig {
     intervals,
     runalyze,
     wger,
+    healthlog,
   };
 }

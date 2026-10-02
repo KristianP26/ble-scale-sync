@@ -223,6 +223,91 @@ describe('handler-node-ble broadcastScanNodeBle grace timer (#163 follow-up)', (
     expect(result.reading.weight).toBe(70.0);
     expect(result.reading.impedance).toBe(0);
   });
+
+  // #357: a weigh-in held when the poll deadline passes is neither dropped nor
+  // resolved at the deadline. The scan keeps listening until a complete frame
+  // arrives or the reading's own grace runs out, so a Mi Scale 2 whose
+  // impedance frame lands just after the deadline keeps it.
+  describe('deadline during a hold (#357)', () => {
+    // Held 5 s before the deadline, then advanced to 1 s past it: 6 s of the
+    // 12 s grace remain.
+    async function startHeldScan(
+      mode: 'partial-then-complete' | 'always-partial',
+      abortSignal?: AbortSignal,
+    ) {
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+      });
+      const { DISCOVERY_TIMEOUT_MS } = await import('../../src/ble/types.js');
+      const device = makeDevice();
+      const p = _internals.broadcastScanNodeBle(
+        makePassiveAdapter(mode),
+        makeAdapter() as never,
+        device as never,
+        'AA:BB:CC:DD:EE:FF',
+        { abortSignal },
+      );
+      const state: { settled: boolean; ok?: boolean; r?: Awaited<typeof p>; e?: unknown } = {
+        settled: false,
+      };
+      const outcome = p.then(
+        (r) => Object.assign(state, { settled: true, ok: true, r }),
+        (e: unknown) => Object.assign(state, { settled: true, ok: false, e }),
+      );
+      await new Promise((r) => setImmediate(r));
+      await vi.advanceTimersByTimeAsync(DISCOVERY_TIMEOUT_MS - 5_000);
+      device.helper.emit('PropertiesChanged', { ServiceData: serviceDataPayload() }); // held
+      await vi.advanceTimersByTimeAsync(6_000);
+      return { state, outcome, device };
+    }
+
+    it('a complete frame after the deadline resolves with its impedance', async () => {
+      const { state, outcome, device } = await startHeldScan('partial-then-complete');
+      expect(state.settled).toBe(false);
+      device.helper.emit('PropertiesChanged', { ServiceData: serviceDataPayload() });
+      await outcome;
+      expect(state.r?.reading).toEqual({ weight: 70.0, impedance: 500 });
+    });
+
+    it('with no complete frame, resolves weight only when the grace runs out, not at the deadline', async () => {
+      const { state, outcome } = await startHeldScan('always-partial');
+      await vi.advanceTimersByTimeAsync(IMPEDANCE_GRACE_MS - 6_000 - 100);
+      expect(state.settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(200);
+      await outcome;
+      expect(state.ok).toBe(true);
+      expect(state.r?.reading).toEqual({ weight: 70.0, impedance: 0 });
+    });
+
+    it('an abort while holding past the deadline rejects and resolves nothing', async () => {
+      const ac = new AbortController();
+      const { state, outcome } = await startHeldScan('always-partial', ac.signal);
+      ac.abort(new Error('shutdown'));
+      await outcome;
+      expect(state.ok).toBe(false);
+      expect((state.e as Error).message).toBe('shutdown');
+      await vi.advanceTimersByTimeAsync(IMPEDANCE_GRACE_MS);
+      expect(state.ok).toBe(false);
+    });
+  });
+
+  it('deadline with nothing held: rejects as before', async () => {
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    });
+    const { DISCOVERY_TIMEOUT_MS } = await import('../../src/ble/types.js');
+    const promise = _internals.broadcastScanNodeBle(
+      makePassiveAdapter('always-partial'),
+      makeAdapter() as never,
+      makeDevice() as never,
+      'AA:BB:CC:DD:EE:FF',
+      {},
+    );
+    const assertion = expect(promise).rejects.toThrow(/No stable broadcast reading within/);
+    await new Promise((r) => setImmediate(r));
+    await vi.advanceTimersByTimeAsync(DISCOVERY_TIMEOUT_MS + 1_000);
+    await assertion;
+  });
 });
 
 // ─── Manufacturer-data broadcast path (#297) ─────────────────────────────────
@@ -327,5 +412,74 @@ describe('handler-node-ble broadcastScanNodeBle manufacturer data (#297)', () =>
     );
 
     expect(device.helper.prop).not.toHaveBeenCalledWith('ServiceData');
+  });
+});
+
+// ─── Silvergear 108 through the real adapter (#357) ─────────────────────────
+
+describe('handler-node-ble broadcastScanNodeBle with the Silvergear 108 (#357)', () => {
+  // Frames verbatim from the #297 108.5 kg capture, where the 0x06 followed the
+  // settled frame by 885 ms. BlueZ keys ManufacturerData by company id in
+  // decimal: 0xA0AC is 41132.
+  const frame = (payloadHex: string): Record<string, { value: Buffer }> => ({
+    '41132': { value: Buffer.from('4fe9916185a0' + payloadHex, 'hex') },
+  });
+  const SETTLED = frame('202d07600da1');
+  const BODY = frame('a2b1a0a206bb');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // 'performance' because the adapter times its hold on performance.now().
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'],
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function start() {
+    const { Silvergear108Adapter } = await import('../../src/scales/silvergear-108.js');
+    const device = makeDevice();
+    let settled = false;
+    const promise = _internals
+      .broadcastScanNodeBle(
+        new Silvergear108Adapter() as unknown as ScaleAdapter,
+        makeAdapter() as never,
+        device as never,
+        'A0:85:61:91:E9:4F',
+        {},
+      )
+      .finally(() => {
+        settled = true;
+      });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    return { device, promise, isSettled: () => settled };
+  }
+
+  it('does not resolve on the settled weight, and resolves on the 0x06 that follows', async () => {
+    const { device, promise, isSettled } = await start();
+
+    device.helper.emit('PropertiesChanged', { ManufacturerData: SETTLED });
+    await vi.advanceTimersByTimeAsync(885);
+    expect(isSettled()).toBe(false);
+
+    device.helper.emit('PropertiesChanged', { ManufacturerData: BODY });
+    const result = await promise;
+    expect(result.reading).toEqual({ weight: 108.48, impedance: 0 });
+  });
+
+  it('resolves on the weight alone once the grace runs out without a 0x06', async () => {
+    const { device, promise, isSettled } = await start();
+
+    device.helper.emit('PropertiesChanged', { ManufacturerData: SETTLED });
+    await vi.advanceTimersByTimeAsync(IMPEDANCE_GRACE_MS - 100);
+    expect(isSettled()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(200);
+    const result = await promise;
+    expect(result.reading).toEqual({ weight: 108.48, impedance: 0 });
   });
 });

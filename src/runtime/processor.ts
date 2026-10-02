@@ -83,6 +83,7 @@ function queueFailedExports(
   payload: BodyComposition,
   context: ExportContext,
   details: ExportResultDetail[],
+  measuredAt: Date,
 ): void {
   const failed = details.filter((d) => !d.ok);
   if (failed.length === 0) return;
@@ -100,7 +101,15 @@ function queueFailedExports(
     enqueue(ctx.exportQueuePath, {
       exporter: detail.name,
       payload,
-      ...(context.timestamp ? { timestamp: context.timestamp.toISOString() } : {}),
+      // NOT `context.timestamp`: that is set only for a historical replay, so a
+      // live weigh-in was queued with no measurement time and the retry handed
+      // the exporter nothing. `file` then stamped the row with the retry time.
+      // `measuredAt` is the replay's own timestamp when there is one and the
+      // observation time otherwise, so every entry carries a real measurement
+      // time. The LIVE ExportContext still gets no timestamp - dispatchExports
+      // reads its presence as "this is a backdated reading" and would skip
+      // every exporter that cannot record one.
+      timestamp: measuredAt.toISOString(),
       ...(context.userName ? { userName: context.userName } : {}),
       ...(context.userSlug ? { userSlug: context.userSlug } : {}),
       queuedAt: new Date().toISOString(),
@@ -233,8 +242,12 @@ async function processReadingFrames(
       ...(reading.timestamp ? { timestamp: reading.timestamp } : {}),
     };
 
+    // Captured BEFORE the dispatch: a run of exporters that each sit on a
+    // timeout can take minutes, and the queue must record when the scale
+    // measured this, not when the last target gave up.
+    const measuredAt = reading.timestamp ?? new Date();
     const { success, details } = await dispatchExports(exporters!, payload, context);
-    queueFailedExports(ctx, exporters!, payload, context, details);
+    queueFailedExports(ctx, exporters!, payload, context, details, measuredAt);
 
     if (isLast) {
       ctx.display?.result(user.slug, user.name, payload.weight, details);

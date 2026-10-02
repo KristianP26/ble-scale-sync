@@ -32,6 +32,33 @@ export function collectConfiguredExporters(ctx: AppContext): Exporter[] {
   return [...byName.values()];
 }
 
+/**
+ * The exporter one queued entry must be redelivered through.
+ *
+ * Resolves via the entry's OWN `userSlug` first. `Exporter.name` is the
+ * exporter TYPE ('garmin'), a class constant, so two users who each configure
+ * a Garmin account produce two instances sharing one name; picking by name
+ * across the deduped union therefore delivered user B's queued weigh-in
+ * through user A's instance - with A's `token_dir`, i.e. into A's account.
+ * Within one user `resolveExportersForUser` dedupes by type, so the name is
+ * unambiguous once the slug has chosen the list.
+ *
+ * A user who no longer exists resolves to nothing and the caller drops the
+ * entry, which is the point: falling back to the union is how the wrong
+ * account got written in the first place. Only an entry with NO slug - queued
+ * before the field existed - falls back, and the union is what it was queued
+ * against anyway.
+ */
+export function resolveQueuedExporter(
+  ctx: AppContext,
+  entry: { exporter: string; userSlug?: string },
+): Exporter | undefined {
+  const candidates = entry.userSlug
+    ? getExportersForUser(ctx, entry.userSlug)
+    : collectConfiguredExporters(ctx);
+  return candidates.find((e) => e.name === entry.exporter);
+}
+
 export function getExportersForUser(ctx: AppContext, slug: string): Exporter[] {
   let exporters = ctx.exporterCache.get(slug);
   if (!exporters) {

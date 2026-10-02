@@ -8,7 +8,7 @@ import type {
   UserProfile,
 } from '../interfaces/scale-adapter.js';
 import { buildPayload } from './body-comp-helpers.js';
-import { bleLog } from '../ble/types.js';
+import { bleLog, IMPEDANCE_GRACE_MS } from '../ble/types.js';
 import { uuidClaimHits, type MatchDescriptor } from './match-descriptor.js';
 
 // ─── Silvergear Smart Scale 108 (broadcast-only, obfuscated 0xA0AC advert) ───
@@ -116,6 +116,96 @@ function checksumOk(p: Buffer): boolean {
   return (p[5] & CHECKSUM_MASK) === payloadChecksum(p);
 }
 
+// ─── Holding a weigh-in for its own post-weigh-in frame (#357) ───
+
+/**
+ * How long a settled weigh-in waits for its `0x06` frame before that frame is no
+ * longer accepted as belonging to it.
+ *
+ * In three captures with a weigh-in in them (#297) the first `0x06` followed the
+ * first settled frame after 0.885, 1.539 and 1.697 s, so 8 s is several times
+ * what the scale needs.
+ *
+ * It MUST stay below `IMPEDANCE_GRACE_MS`. The transports hold the weight-only
+ * reading for that long and then hand it on by themselves, and the proxy
+ * watchers do that without recording it in their dedup window. A `0x06` paired
+ * after that point would complete a second reading of a weigh-in that has
+ * already been exported. A test pins the ordering.
+ */
+export const BODY_FRAME_WINDOW_MS = 8_000;
+
+/**
+ * How long a weigh-in is remembered at all, counted from its first settled frame.
+ *
+ * Normally a new weigh-in is recognised by the step-off in front of it, which
+ * clears the last one (see STEP_OFF_DELTA_KG). If that step-off was missed (discovery finishing
+ * after the scale settled) and the new weigh-in happens to land on exactly the
+ * same grams as a remembered, already paired one, it would be taken for a
+ * repeat and dropped. Forgetting a weigh-in after a minute bounds that. The
+ * captures show settled frames for at most about 1.5 s before the `0x06`
+ * stream takes over, so a settled frame this late is a new weigh-in.
+ */
+const WEIGH_IN_MEMORY_MS = 60_000;
+
+/**
+ * How far a settling frame must move from the weigh-in's settled weight before
+ * it counts as the person stepping off.
+ *
+ * A settling frame is not proof of a step-off. The settled bit could flicker,
+ * or the person could shift their weight and the scale re-settle, and ending
+ * the weigh-in on that exports it a second time. None of the four #297 captures
+ * shows the bit dropping between the first settled frame and the `0x06` stream,
+ * but none shows a step-off either, so the rule is built from what they do
+ * show: while someone is standing on the scale and it converges, the settling
+ * stream strays at most 2.38 kg from the weight it then settles on (106.48 kg
+ * against 108.86 kg in the 17 st 2 lb capture; 107.03 and 109.83 kg against
+ * 108.48 kg in the 108.5 kg one). Twice that, rounded up, is 5 kg. A step-off
+ * runs down towards the idle 0 kg frame and crosses it at once, and a frame
+ * below WEIGHT_MIN_KG counts as a step-off whatever the weight was.
+ */
+const STEP_OFF_DELTA_KG = 5;
+
+/**
+ * How long after a hold began a new weigh-in may start another one.
+ *
+ * The transport's grace timer for the old hold fires `IMPEDANCE_GRACE_MS` after
+ * it was armed, but it runs on the event loop's timers, not this adapter's
+ * clock, and fires late under load. Starting the new hold at exactly that mark
+ * could open a pairing window while the old timer is still pending, and that
+ * timer would then export the new weigh-in's weight while its `0x06` completed
+ * it a second time. A second of margin keeps the new hold strictly after it.
+ */
+const HOLD_RESTART_MS = IMPEDANCE_GRACE_MS + 1_000;
+
+/** Units tracked at once, oldest out. A household has one; this is a leak bound. */
+const MAX_UNITS = 8;
+
+interface WeighIn {
+  grams: number;
+  /** First settled frame of this weigh-in; repeats of it do not move it. */
+  settledAt: number;
+  /** Its `0x06` has been paired, so nothing from this weigh-in completes again. */
+  closed: boolean;
+}
+
+interface UnitState {
+  weighIn: WeighIn | null;
+  /**
+   * When the reading the transport is currently holding was first handed out.
+   *
+   * This is what the pairing window is measured from, not `settledAt`, because
+   * it is what the transport's grace timer is measured from: that timer is armed
+   * by the first weight-only reading and is NOT re-armed by later ones until it
+   * has fired. A step-off in between (someone stepping off and back on)
+   * past the pairing window ends the weigh-in but not the timer, so measuring
+   * from the second weigh-in would let its `0x06` complete after the timer had
+   * already exported it. Inside the window the step-off completes the first
+   * weigh-in instead (see `endWeighIn`), which does end the timer, and clears
+   * this.
+   */
+  heldAt: number | null;
+}
+
 /**
  * Adapter for the Silvergear Smart Scale 108 (#297).
  *
@@ -126,6 +216,22 @@ function checksumOk(p: Buffer): boolean {
  *
  * Weight only. The advertisement carries no impedance that has been decoded, so
  * body composition is estimated from BMI.
+ *
+ * A settled weight is not complete on its own. The scale follows it with a
+ * `0x06` frame about two seconds later, and a reading that resolved on the
+ * weight alone ended the scan before that frame arrived, so it was never seen
+ * (#357). The settled weight is therefore handed out as a partial reading, which
+ * the streaming broadcast paths hold for up to `IMPEDANCE_GRACE_MS`, and the
+ * reading completes on the `0x06` that follows THAT weigh-in. If none does, the
+ * transport forwards the weight on its own when the hold runs out, even when its
+ * scan deadline comes first: a single-shot scan keeps listening past the
+ * deadline while it holds a reading. The mqtt-proxy single-shot scan reads one
+ * scan snapshot and cannot hold, so there the settled weight is sent at once,
+ * without waiting for the `0x06`.
+ *
+ * The state behind that is per unit, keyed by the MAC the scale puts in its own
+ * payload. It cannot hang off a session: this adapter is a shared registry
+ * singleton, and `onSessionStart` is a GATT hook the broadcast path never calls.
  */
 export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
   readonly name = 'Silvergear Smart Scale 108';
@@ -142,6 +248,21 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
   };
   readonly normalizesWeight = true;
   readonly preferPassive = true;
+
+  /** Per-unit weigh-in state, keyed by the MAC in the payload's first six bytes. */
+  private readonly units = new Map<string, UnitState>();
+  /** Readings built from a paired `0x06`: the only ones `isComplete` accepts. */
+  private readonly completeReadings = new WeakSet<ScaleReading>();
+  /** Last unpaired `0x06` logged, so a repeated advertisement logs once. */
+  private lastUnpairedBodyHex: string | null = null;
+
+  /**
+   * @param now clock, injectable so the pairing window can be tested. Monotonic
+   *   by default: a Raspberry Pi has no RTC, so the wall clock can step by
+   *   minutes when NTP first syncs, and a step backwards or forwards inside a
+   *   hold would stretch or cut the pairing window.
+   */
+  constructor(private readonly now: () => number = () => performance.now()) {}
 
   matches(device: BleDeviceInfo): boolean {
     const m = device.manufacturerData;
@@ -211,18 +332,9 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
     if (manufacturerData.length !== MFG_LEN) return null;
     const p = manufacturerData.subarray(PAYLOAD_OFFSET);
     if (!checksumOk(p)) return null;
+    const mac = manufacturerData.subarray(0, PAYLOAD_OFFSET).toString('hex');
 
-    if (p[4] === FRAME_TYPE_BODY) {
-      // Not decoded, see FRAME_TYPE_BODY. Logged so the pairing with a vendor-app
-      // body-fat figure can be made from a user's own log rather than a capture.
-      const d0 = p[0] ^ OBFUSCATION_KEY;
-      const d1 = p[1] ^ OBFUSCATION_KEY;
-      bleLog.debug(
-        `Silvergear body frame (undecoded): ${manufacturerData.toString('hex')} ` +
-          `field=${(d0 << 8) | d1}`,
-      );
-      return null;
-    }
+    if (p[4] === FRAME_TYPE_BODY) return this.onBodyFrame(mac, manufacturerData);
     if (p[4] !== FRAME_TYPE_WEIGHT) return null;
 
     const flags = p[0] ^ OBFUSCATION_KEY;
@@ -240,6 +352,13 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
     // showed. It is surfaced through `parseLiveBroadcast` instead, whose return
     // type cannot reach an exporter.
     if ((flags & FLAG_SETTLED) === 0) {
+      // A step-off ends whatever weigh-in this unit had: the scale is idle at
+      // zero, or converging on a clearly different number. Cleared whether or
+      // not it was paired, so a new weigh-in that lands on the same grams is not
+      // mistaken for a repeat. A settling frame close to the settled weight is
+      // the same person still standing there and ends nothing.
+      const state = this.units.get(mac);
+      const ended = state && this.isStepOff(state, weight) ? this.endWeighIn(state) : null;
       // Log the value, not the poll. The node-ble broadcast path re-reads
       // BlueZ's cached ManufacturerData on a timer as a fallback for
       // PropertiesChanged, so an unchanged advertisement is re-parsed several
@@ -250,22 +369,156 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
         this.lastSettlingKg = weight;
         bleLog.debug(`Silvergear settling: ${weight.toFixed(3)} kg`);
       }
-      return null;
+      return ended;
     }
     this.lastSettlingKg = null;
     if (weight < WEIGHT_MIN_KG || weight > WEIGHT_MAX_KG) return null;
     const unit = UNIT_NAMES[p[5] & UNIT_MASK] ?? `0x${(p[5] & UNIT_MASK).toString(16)}`;
-    bleLog.debug(`Silvergear settled: ${weight.toFixed(3)} kg (scale is displaying ${unit})`);
-    return { weight, impedance: 0 };
+    return this.onSettled(mac, grams, unit);
   }
 
   /**
-   * Every reading that reaches here is already a settled frame, since
-   * `parseBroadcast` drops the settling stream. The bound is re-stated rather
-   * than assumed so a future caller cannot complete on a zero weight.
+   * A settled weight frame: start a weigh-in, or repeat the one in progress.
+   *
+   * Returns a weight-only reading, which the transport holds, or null when this
+   * weigh-in has nothing more to say: it was already paired, or its hold has run
+   * past the pairing window and the transport now owns the fallback. Returning
+   * a reading then would re-arm that fallback once it had fired.
+   */
+  private onSettled(mac: string, grams: number, unit: string): ScaleReading | null {
+    const t = this.now();
+    const state = this.unitState(mac);
+    let current = state.weighIn;
+    if (current && t - current.settledAt > WEIGH_IN_MEMORY_MS) current = state.weighIn = null;
+
+    if (current && current.grams === grams) {
+      if (current.closed) return null;
+      if (state.heldAt === null || t - state.heldAt > BODY_FRAME_WINDOW_MS) return null;
+      return { weight: grams / 1000, impedance: 0 };
+    }
+
+    state.weighIn = { grams, settledAt: t, closed: false };
+    this.lastUnpairedBodyHex = null;
+    // A new hold starts only once the transport's grace timer for the last one
+    // has certainly fired; see UnitState.heldAt and HOLD_RESTART_MS.
+    if (state.heldAt === null || t - state.heldAt >= HOLD_RESTART_MS) state.heldAt = t;
+    const waiting =
+      t - state.heldAt <= BODY_FRAME_WINDOW_MS
+        ? 'holding for its post-weigh-in frame'
+        : 'too late in the current hold to wait for its post-weigh-in frame';
+    bleLog.debug(
+      `Silvergear settled: ${(grams / 1000).toFixed(3)} kg (scale is displaying ${unit}), ${waiting}`,
+    );
+    return { weight: grams / 1000, impedance: 0 };
+  }
+
+  /**
+   * The post-weigh-in `0x06` frame. Completes the reading of the weigh-in it
+   * follows, and only that one.
+   *
+   * The scale keeps sending it for several seconds after a weigh-in, so the
+   * first advertisement a new session sees can be the LAST weigh-in's `0x06`.
+   * Pairing that with a new weight is exactly the contamination that made the
+   * field unusable as evidence (#372), so a frame with no open weigh-in of its
+   * own completes nothing. The field is logged, never published: see
+   * FRAME_TYPE_BODY.
+   */
+  private onBodyFrame(mac: string, manufacturerData: Buffer): ScaleReading | null {
+    const t = this.now();
+    const p = manufacturerData.subarray(PAYLOAD_OFFSET);
+    const field = ((p[0] ^ OBFUSCATION_KEY) << 8) | (p[1] ^ OBFUSCATION_KEY);
+    const hex = manufacturerData.toString('hex');
+    const state = this.units.get(mac);
+    const current = state?.weighIn;
+
+    // Already paired: a repeat of the frame that closed it.
+    if (current?.closed) return null;
+
+    if (current && state?.heldAt != null && t - state.heldAt <= BODY_FRAME_WINDOW_MS) {
+      current.closed = true;
+      state.heldAt = null;
+      bleLog.debug(
+        `Silvergear body frame (undecoded): ${hex} field=${field}, ` +
+          `${((t - current.settledAt) / 1000).toFixed(1)} s after settling at ` +
+          `${(current.grams / 1000).toFixed(3)} kg`,
+      );
+      const reading: ScaleReading = { weight: current.grams / 1000, impedance: 0 };
+      this.completeReadings.add(reading);
+      return reading;
+    }
+
+    if (hex !== this.lastUnpairedBodyHex) {
+      this.lastUnpairedBodyHex = hex;
+      const why = current
+        ? `too late for the ${(current.grams / 1000).toFixed(3)} kg weigh-in`
+        : 'no settled weight from this weigh-in';
+      bleLog.debug(`Silvergear body frame (undecoded, ${why}): ${hex} field=${field}`);
+    }
+    return null;
+  }
+
+  /** A settling frame that means the person stepped off; see STEP_OFF_DELTA_KG. */
+  private isStepOff(state: UnitState, weight: number): boolean {
+    if (!state.weighIn) return false;
+    if (weight < WEIGHT_MIN_KG) return true;
+    return Math.abs(weight - state.weighIn.grams / 1000) > STEP_OFF_DELTA_KG;
+  }
+
+  /**
+   * End this unit's weigh-in on a step-off. Returns a completed
+   * weight-only reading when the weigh-in ended unpaired while its hold was
+   * still inside the pairing window, and null otherwise.
+   *
+   * That case is someone stepping off before the `0x06` arrives. The transport
+   * is still holding their weight, and a second weigh-in in the same hold would
+   * overwrite it there (GraceTimers keeps one reading per address), so the first
+   * person's weigh-in would be lost. Completing it here makes the transport
+   * export it at once and cancel its grace timer, and the next weigh-in starts a
+   * hold of its own. Inside the window the grace timer cannot have fired yet
+   * (BODY_FRAME_WINDOW_MS < IMPEDANCE_GRACE_MS), so this is never a second
+   * export of the same weigh-in; past it the timer owns the weigh-in, as for a
+   * late `0x06`.
+   */
+  private endWeighIn(state: UnitState): ScaleReading | null {
+    const current = state.weighIn;
+    state.weighIn = null;
+    if (!current || current.closed || state.heldAt === null) return null;
+    if (this.now() - state.heldAt > BODY_FRAME_WINDOW_MS) return null;
+    current.closed = true;
+    state.heldAt = null;
+    bleLog.debug(
+      `Silvergear weigh-in ended before its post-weigh-in frame: ` +
+        `${(current.grams / 1000).toFixed(3)} kg, reporting it without one`,
+    );
+    const reading: ScaleReading = { weight: current.grams / 1000, impedance: 0 };
+    this.completeReadings.add(reading);
+    return reading;
+  }
+
+  private unitState(mac: string): UnitState {
+    let state = this.units.get(mac);
+    if (state) return state;
+    if (this.units.size >= MAX_UNITS) {
+      const oldest = this.units.keys().next().value;
+      if (oldest !== undefined) this.units.delete(oldest);
+    }
+    state = { weighIn: null, heldAt: null };
+    this.units.set(mac, state);
+    return state;
+  }
+
+  /**
+   * Complete only on a reading built from a paired `0x06` frame. A settled
+   * weight alone is partial, so the transport holds it for that frame (#357).
+   * The bound is re-stated rather than assumed so a future caller cannot
+   * complete on a zero weight.
    */
   isComplete(reading: ScaleReading): boolean {
-    return reading.weight >= WEIGHT_MIN_KG && reading.weight <= WEIGHT_MAX_KG;
+    return (
+      this.completeReadings.has(reading) &&
+      reading.weight >= WEIGHT_MIN_KG &&
+      reading.weight <= WEIGHT_MAX_KG
+    );
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {

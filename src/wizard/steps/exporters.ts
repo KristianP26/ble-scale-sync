@@ -53,17 +53,26 @@ async function promptField(
           return true;
         },
       });
-      return value ? Number(value) : (field.default as number | undefined);
+      return value ? Number(value) : field.default;
     }
 
     case 'boolean': {
       return prompts.confirm(`${field.label}?`, {
-        default: (field.default as boolean) ?? false,
+        default: field.default ?? false,
       });
     }
 
     case 'select': {
-      if (!field.choices || field.choices.length === 0) return field.default;
+      if (field.choices.length === 0) {
+        // Unreachable through the type: `choices` is a non-empty tuple. Kept
+        // because this used to return `field.default` - i.e. `undefined` for a
+        // REQUIRED field - so a select with nothing to select silently produced
+        // no value at all and `required` enforced nothing. If it ever happens
+        // again it must be loud.
+        throw new Error(
+          `Exporter field "${field.key}" is a select with no choices; it cannot be answered.`,
+        );
+      }
       const choices: PromptChoice<string | number>[] = field.choices.map((c) => ({
         name: c.label,
         value: c.value,

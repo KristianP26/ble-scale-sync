@@ -53,42 +53,45 @@ All options live under the **Configuration** tab. The add-on regenerates `/data/
 
 ### Scale and BLE
 
-| Option                       | Default              | Notes                                                                                                                                                                                                                               |
-| ---------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scale_mac`                  | empty                | Leave empty for auto-discovery. Set to a specific MAC like `AA:BB:CC:DD:EE:FF` to skip scanning. Required for scales with non-unique advertised names.                                                                              |
-| `ble_adapter`                | empty (uses default) | Set to `hci0`, `hci1`, ... on hosts with multiple Bluetooth adapters.                                                                                                                                                               |
-| `reset_bluetooth`            | `true`               | Runs `btmgmt power off/on` at startup. Leave on unless you run other HA Bluetooth integrations that lose connectivity when the adapter is power-cycled.                                                                             |
-| `force_scale_adapter`        | empty                | Overrides protocol auto-detection with the adapter name exactly as printed in the `Adapters:` line in the log. Requires `scale_mac`, because a forced adapter claims every device it is shown. Please also report the misdetection. |
-| `qn_protocol_byte`           | empty                | QN-family scales only. The protocol byte the handshake echoes back, 0 to 255. Set it only when a QN scale completes the whole handshake in the log and then never reports a weight.                                                 |
-| `qn_report_byte`             | empty                | QN-family scales only, worth trying after `qn_protocol_byte` did not help. Payload byte of the history-response frame, 0 to 255. The default depends on the dialect: `252` on the long-frame ones (es26m and extended) and `254` on the classic one. Try the other value if your scale completes the handshake and then reports nothing.  |
-| `auto_clear_stale_bond`      | `false`              | Bonded scales only (Beurer BF7xx / BF9xx). Delete a pairing key the scale has forgotten and pair again, instead of failing every connect until `bluetoothctl remove` is run by hand.                                                |
-| `qn_weight_ack`              | unset                | QN-family scales only. Answer every live weight frame with its own weight, as the vendor app does. Try `true` if your QN scale completes the handshake and then reports nothing.                                                    |
-| `qn_a4_prelude`              | unset                | QN-family scales only, and the last thing to try. Sends the two undecoded `0xA4` frames an Arboleaf vendor app sends between START and the first weight frame. Set `true` only if `qn_weight_ack` did not help.                     |
-| `qn_time_sync_long`          | unset                | QN-family scales only. Sends the 9-byte form of the clock-setting frame the same Arboleaf capture shows, instead of the 8-byte one. The extra byte is undecoded.                                                                    |
-| `qn_config_long`             | unset                | QN-family scales only, and the last difference anyone has found between our start-up conversation and the vendor app's. Sends the 10-byte form of the settings frame instead of the 9-byte one. The extra bytes are undecoded.      |
-| `proxy_liveness_timeout_min` | `30`                 | Proxy transports only. Minutes of total advertisement silence before the link is treated as wedged and the add-on restarts. 0 disables. Raise it if your proxy sits somewhere with no other Bluetooth devices in range.             |
+| Option                       | Default              | Notes                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scale_mac`                  | empty                | Leave empty for auto-discovery. Set to a specific MAC like `AA:BB:CC:DD:EE:FF` to skip scanning. Required for scales with non-unique advertised names.                                                                                                                                                                                   |
+| `ble_adapter`                | empty (uses default) | Set to `hci0`, `hci1`, ... on hosts with multiple Bluetooth adapters.                                                                                                                                                                                                                                                                    |
+| `reset_bluetooth`            | `true`               | Runs `btmgmt power off/on` at startup. Leave on unless you run other HA Bluetooth integrations that lose connectivity when the adapter is power-cycled.                                                                                                                                                                                  |
+| `force_scale_adapter`        | empty                | Overrides protocol auto-detection with the adapter name exactly as printed in the `Adapters:` line in the log. Requires `scale_mac`, because a forced adapter claims every device it is shown. Please also report the misdetection.                                                                                                      |
+| `qn_protocol_byte`           | empty                | QN-family scales only. The protocol byte the handshake echoes back, 0 to 255. Set it only when a QN scale completes the whole handshake in the log and then never reports a weight.                                                                                                                                                      |
+| `qn_report_byte`             | empty                | QN-family scales only, worth trying after `qn_protocol_byte` did not help. Payload byte of the history-response frame, 0 to 255. The default depends on the dialect: `252` on the long-frame ones (es26m and extended) and `254` on the classic one. Try the other value if your scale completes the handshake and then reports nothing. |
+| `auto_clear_stale_bond`      | `false`              | Bonded scales only (Beurer BF7xx / BF9xx). Delete a pairing key the scale has forgotten and pair again, instead of failing every connect until `bluetoothctl remove` is run by hand.                                                                                                                                                     |
+| `preemptive_adapter_reset`   | `true`               | Built-in Bluetooth only. Power-cycles the adapter after every connection to the scale, to clear a stuck scanning state. Leave on unless testing whether the cycle makes a paired scale reject its next connect.                                                                                                                          |
+| `qn_weight_ack`              | unset                | QN-family scales only. Sends your weight anchor right after the start command and acknowledges live weight frames, as the vendor apps do. Try `true` if your QN scale completes the handshake and then reports nothing.                                                                                                                  |
+| `qn_a4_prelude`              | unset                | QN-family scales only, and the last thing to try. Sends the two undecoded `0xA4` frames an Arboleaf vendor app sends between START and the first weight frame. Set `true` only if `qn_weight_ack` did not help.                                                                                                                          |
+| `qn_time_sync_long`          | unset                | QN-family scales only. Sends the 9-byte form of the clock-setting frame the same Arboleaf capture shows, instead of the 8-byte one. The extra byte is undecoded.                                                                                                                                                                         |
+| `qn_config_long`             | unset                | QN-family scales only, and the last difference anyone has found between our start-up conversation and the vendor app's. Sends the 10-byte form of the settings frame instead of the 9-byte one. The extra bytes are undecoded.                                                                                                           |
+| `display_unit`               | `weight_unit`        | Unit requested on the physical display independently of exported values. Only QN-family scales are told which unit to show.                                                                                                                                                                                                              |
+| `proxy_liveness_timeout_min` | `30`                 | Proxy transports only. Minutes of total advertisement silence before the link is treated as wedged and the add-on restarts. 0 disables. Raise it if your proxy sits somewhere with no other Bluetooth devices in range.                                                                                                                  |
 
-The QN options and `auto_clear_stale_bond` are ignored when `custom_config` is enabled, since that mode skips config generation entirely; set them under `ble:` in your own file instead. The add-on logs a warning if you leave one set.
+The QN options, `auto_clear_stale_bond`, `preemptive_adapter_reset` and `display_unit` are ignored when `custom_config` is enabled, since that mode skips config generation entirely; set them in the corresponding `ble:` or `scale:` section of your own file instead. The add-on logs a warning if you leave one of the `ble:` options set.
 
 ### Unit preferences
 
-| Option        | Default | Allowed     |
-| ------------- | ------- | ----------- |
-| `weight_unit` | `kg`    | `kg`, `lbs` |
-| `height_unit` | `cm`    | `cm`, `in`  |
+| Option         | Default       | Allowed                          |
+| -------------- | ------------- | -------------------------------- |
+| `weight_unit`  | `kg`          | `kg`, `lbs`                      |
+| `height_unit`  | `cm`          | `cm`, `in`                       |
+| `display_unit` | `weight_unit` | `weight_unit`, `kg`, `lbs`, `st` |
 
-The CLI and exporters display weights and heights in your chosen unit; all internal math stays in kg / cm.
+The CLI and exporters display weights and heights in your chosen unit; all internal math stays in kg / cm. `display_unit` controls the physical scale separately; today only QN-family scales support it. For example, `weight_unit: kg` with `display_unit: st` keeps Home Assistant values in kg while asking a compatible QN scale to display stones and pounds.
 
 ### User profile
 
-| Option                                | Default      | Notes                                                                                                                                                                                      |
-| ------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `user_name`                           | `Default`    | Display name used in logs and HA entity names.                                                                                                                                             |
-| `user_height`                         | `170`        | In the unit chosen above.                                                                                                                                                                  |
-| `user_birth_date`                     | `1990-01-01` | `YYYY-MM-DD`. Used for age-based BMR and physique rating.                                                                                                                                  |
-| `user_gender`                         | `male`       | `male` or `female`.                                                                                                                                                                        |
-| `user_is_athlete`                     | `false`      | Shifts body fat formulas for athletic body types.                                                                                                                                          |
-| `user_weight_min` / `user_weight_max` | `40` / `150` | The plausible weight range for this person, in kg. On its own it only warns; set `out_of_range` below to `skip` to have readings outside it discarded.                                     |
+| Option                                | Default      | Notes                                                                                                                                                                                                     |
+| ------------------------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user_name`                           | `Default`    | Display name used in logs and HA entity names.                                                                                                                                                            |
+| `user_height`                         | `170`        | In the unit chosen above.                                                                                                                                                                                 |
+| `user_birth_date`                     | `1990-01-01` | `YYYY-MM-DD`. Used for age-based BMR and physique rating.                                                                                                                                                 |
+| `user_gender`                         | `male`       | `male` or `female`.                                                                                                                                                                                       |
+| `user_is_athlete`                     | `false`      | Shifts body fat formulas for athletic body types.                                                                                                                                                         |
+| `user_weight_min` / `user_weight_max` | `40` / `150` | The plausible weight range for this person, in kg. On its own it only warns; set `out_of_range` below to `skip` to have readings outside it discarded.                                                    |
 | `out_of_range`                        | `warn`       | What to do with a reading outside that range. `warn` logs it and exports anyway (the behaviour before this option existed). `skip` logs it and stops: no export, and the remembered weight is left alone. |
 
 ### MQTT
@@ -105,24 +108,24 @@ The CLI and exporters display weights and heights in your chosen unit; all inter
 
 ### Garmin Connect
 
-| Option                             | Default | Notes                                                                                                                                  |
-| ---------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `garmin_enabled`                   | `false` | Enable the Garmin Connect exporter.                                                                                                    |
-| `garmin_email` / `garmin_password` | empty   | Garmin credentials. On first start the add-on runs `setup_garmin.py` to authenticate and saves OAuth tokens to `/data/garmin-tokens/`. |
-| `garmin_weight_only`               | `false` | Upload the weight alone; BMI, body fat, water, bone, muscle, visceral fat, physique rating and metabolic age are left unset in Garmin. |
+| Option                             | Default | Notes                                                                                                                                                                     |
+| ---------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `garmin_enabled`                   | `false` | Enable the Garmin Connect exporter.                                                                                                                                       |
+| `garmin_email` / `garmin_password` | empty   | Garmin credentials. On first start the add-on runs `setup_garmin.py` to authenticate and saves OAuth tokens to `/data/garmin-tokens/`.                                    |
+| `garmin_weight_only`               | `false` | Upload the weight alone; BMI, body fat, water, bone, muscle, visceral fat, physique rating, metabolic age and BMR are left unset in Garmin.                               |
 | `garmin_upload_timeout_sec`        | `180`   | Seconds one Garmin upload attempt may take before it is killed (10-900). Three attempts are made. Raise it if uploads time out for a measurement that uploads fine later. |
 
 If your account uses MFA, see [MFA workaround](#mfa-workaround) below.
 
 ### Runtime
 
-| Option          | Default | Notes                                                                                                                          |
-| --------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `scan_cooldown` | `30`    | Seconds to wait after a successful reading before scanning again. Range: 5-3600.                                                         |
-| `idle_rescan_delay`                | `5`     | Seconds to wait before scanning again after a cycle that found no scale while the adapter was healthy. Range: 0-3600. Real failures keep their own backoff. |
-| `retry_failed_exports`             | `true`  | Keep a reading whose upload failed and retry it later, up to 72 hours. Only targets that can record a past measurement are retried; MQTT and notifications cannot. The queue lives in `/data`, which survives add-on restarts and updates. |
-| `debug`         | `false` | Enable verbose BLE logs. Useful when opening an issue.                                                                         |
-| `custom_config` | `false` | Ignore UI options entirely and use `/share/ble-scale-sync/config.yaml` instead. See [Custom config mode](#custom-config-mode). |
+| Option                 | Default | Notes                                                                                                                                                                                                                                      |
+| ---------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `scan_cooldown`        | `30`    | Seconds to wait after a successful reading before scanning again. Range: 5-3600.                                                                                                                                                           |
+| `idle_rescan_delay`    | `5`     | Seconds to wait before scanning again after a cycle that found no scale while the adapter was healthy. Range: 0-3600. Real failures keep their own backoff.                                                                                |
+| `retry_failed_exports` | `true`  | Keep a reading whose upload failed and retry it later, up to 72 hours. Only targets that can record a past measurement are retried; MQTT and notifications cannot. The queue lives in `/data`, which survives add-on restarts and updates. |
+| `debug`                | `false` | Enable verbose BLE logs. Useful when opening an issue.                                                                                                                                                                                     |
+| `custom_config`        | `false` | Ignore UI options entirely and use `/share/ble-scale-sync/config.yaml` instead. See [Custom config mode](#custom-config-mode).                                                                                                             |
 
 ## MQTT auto-detection
 
@@ -140,7 +143,7 @@ To upload measurements to Garmin Connect:
 
 1. Enable **Garmin Connect** and enter your email and password in the Configuration tab.
 2. Start the add-on.
-3. On first start the add-on runs `python3 garmin-scripts/setup_garmin.py --from-config /data/config.yaml`. If authentication succeeds, OAuth tokens are saved under `/data/garmin-tokens/` and subsequent runs reuse them without re-entering the password.
+3. On first start the add-on runs `python3 garmin-scripts/setup_garmin.py --from-config --config-path /data/config.yaml`. If authentication succeeds, OAuth tokens are saved under `/data/garmin-tokens/` and subsequent runs reuse them without re-entering the password.
 
 ### MFA workaround
 

@@ -101,26 +101,27 @@ ble:
   # qn_report_byte: 252
 ```
 
-| Field                        | Required                    | Default        | Description                                                                                                                                                                                                                                                                                |
-| ---------------------------- | --------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `scale_mac`                  | Recommended                 | Auto-discovery | MAC address, or a CoreBluetooth UUID on macOS (bare 32-hex as the wizard writes it, or the dashed form). Prevents connecting to a neighbor's scale.                                                                                                                                        |
-| `bind_key`                   | Xiaomi S800 / S400          | (none)         | 32-char hex per-device MiBeacon key from the Mi cloud (extract with the community Xiaomi-cloud-tokens-extractor). Decrypts only the device's own FE95 broadcast. The S400 also needs `scale_mac`. Keep it secret; it is a credential.                                                      |
-| `handler`                    | No                          | `auto`         | Transport: `auto` (local radio), `mqtt-proxy` (ESP32 over MQTT), `esphome-proxy` (ESPHome Native API), `ha-bluetooth` (Home Assistant websocket, broadcast only). See below.                                                                                                               |
-| `noble_driver`               | No                          | OS default     | `abandonware` or `stoprocent`. Overrides the default BLE driver. Only applies when `handler: auto`.                                                                                                                                                                                        |
-| `adapter`                    | No                          | System default | Linux only. Select a specific Bluetooth adapter (e.g., `hci0`, `hci1`). See below.                                                                                                                                                                                                         |
-| `force_scale_adapter`        | No                          | Auto-detect    | Name of the scale protocol adapter to use, bypassing auto-detection. Requires `scale_mac`. See below.                                                                                                                                                                                      |
-| `session_timeout_sec`        | No                          | `120`          | Seconds of scale silence that end a GATT session (5 to 600); an inbound frame restarts the clock. A session also ends after three times this value even if frames keep arriving, so a chatty scale cannot hold the radio forever, and a whole scan cycle is capped at 15 minutes regardless. Native BLE handlers only; ignored on `mqtt-proxy` and `esphome-proxy`. See below.                                                                                                        |
-| `qn_protocol_byte`           | No                          | Auto           | QN-family scales only. Protocol byte the handshake echoes back to the scale (0 to 255). Set it when a QN scale runs the whole handshake and then reports nothing, or when its scale-info frame is lost in transit on a proxy transport. See below.                                         |
-| `qn_report_byte`             | No                          | Per dialect    | QN-family scales only. Payload byte of the history-response frame (0 to 255). Defaults to `252` (0xFC) on the long-frame dialects (es26m and extended) and `254` (0xFE) on the classic one. Try the other value if your scale completes the handshake and then reports nothing. See below. |
-| `auto_clear_stale_bond`      | No                          | `false`        | Delete a pairing key the scale has forgotten and pair again. Bonded scales only (Beurer BF7xx / BF9xx), node-ble transport only. See below.                                                                                                                                                |
-| `qn_weight_ack`              | No                          | Per dialect    | QN-family scales only. Answer every live weight frame with its own weight, as the vendor app does. On by default on the 20-byte extended dialect. Try `true` if your QN scale completes the handshake and then streams nothing. See below.                                                 |
-| `qn_a4_prelude`              | No                          | `false`        | QN-family scales only. Send the two undecoded `0xA4` frames an Arboleaf vendor app sends between START and the first weight frame. Off by default. Try `true` only if `qn_weight_ack` did not help and your scale still goes silent right after START. See below.                          |
-| `qn_time_sync_long`          | No                          | `false`        | QN-family scales only. Send the 9-byte form of the `0x20` time-sync frame that an Arboleaf vendor app sends, instead of the 8-byte one. Off by default; the extra byte is undecoded. See below.                                                                                            |
-| `qn_config_long`             | No                          | `false`        | QN-family scales only. Send the 10-byte form of the `0x13` config frame the vendor app sends, instead of the 9-byte one. Off by default; the extra bytes are undecoded. See below.                                                                                                         |
-| `proxy_liveness_timeout_min` | No                          | `30`           | Minutes of total advertisement silence before a proxy transport is treated as wedged and the process exits for the supervisor to restart. `0` disables. Proxy transports only. See below.                                                                                                  |
-| `mqtt_proxy`                 | If `handler: mqtt-proxy`    | (none)         | MQTT proxy connection (`broker_url`, `device_id`, `topic_prefix`, `username`, `password`, `auto_connect`, `embedded_broker_*`). See [ESP32 BLE Proxy](./esp32-proxy).                                                                                                                      |
-| `esphome_proxy`              | If `handler: esphome-proxy` | (none)         | ESPHome Native API connection (`host`, `port`, `encryption_key` or `password`, `client_info`). See [ESPHome Bluetooth Proxy](./esphome-proxy).                                                                                                                                             |
-| `ha_bluetooth`               | If `handler: ha-bluetooth`  | (none)         | Home Assistant websocket connection (`url`, `token`, optional `source` scanner filter). Broadcast scales only. See [Home Assistant Bluetooth](/guide/ha-bluetooth).                                                                                                                        |
+| Field                        | Required                    | Default        | Description                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------------- | --------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `scale_mac`                  | Recommended                 | Auto-discovery | MAC address, or a CoreBluetooth UUID on macOS (bare 32-hex as the wizard writes it, or the dashed form). Prevents connecting to a neighbor's scale.                                                                                                                                                                                                                            |
+| `bind_key`                   | Xiaomi S800 / S400          | (none)         | 32-char hex per-device MiBeacon key from the Mi cloud (extract with the community Xiaomi-cloud-tokens-extractor). Decrypts only the device's own FE95 broadcast. The S400 also needs `scale_mac`. Keep it secret; it is a credential.                                                                                                                                          |
+| `handler`                    | No                          | `auto`         | Transport: `auto` (local radio), `mqtt-proxy` (ESP32 over MQTT), `esphome-proxy` (ESPHome Native API), `ha-bluetooth` (Home Assistant websocket, broadcast only). See below.                                                                                                                                                                                                   |
+| `noble_driver`               | No                          | OS default     | `abandonware` or `stoprocent`. Overrides the default BLE driver. Only applies when `handler: auto`.                                                                                                                                                                                                                                                                            |
+| `adapter`                    | No                          | System default | Linux only. Select a specific Bluetooth adapter (e.g., `hci0`, `hci1`). See below.                                                                                                                                                                                                                                                                                             |
+| `force_scale_adapter`        | No                          | Auto-detect    | Name of the scale protocol adapter to use, bypassing auto-detection. Requires `scale_mac`. See below.                                                                                                                                                                                                                                                                          |
+| `session_timeout_sec`        | No                          | `120`          | Seconds of scale silence that end a GATT session (5 to 600); an inbound frame restarts the clock. A session also ends after three times this value even if frames keep arriving, so a chatty scale cannot hold the radio forever, and a whole scan cycle is capped at 15 minutes regardless. Native BLE handlers only; ignored on `mqtt-proxy` and `esphome-proxy`. See below. |
+| `qn_protocol_byte`           | No                          | Auto           | QN-family scales only. Protocol byte the handshake echoes back to the scale (0 to 255). Set it when a QN scale runs the whole handshake and then reports nothing, or when its scale-info frame is lost in transit on a proxy transport. See below.                                                                                                                             |
+| `qn_report_byte`             | No                          | Per dialect    | QN-family scales only. Payload byte of the history-response frame (0 to 255). Defaults to `252` (0xFC) on the long-frame dialects (es26m and extended) and `254` (0xFE) on the classic one. Try the other value if your scale completes the handshake and then reports nothing. See below.                                                                                     |
+| `auto_clear_stale_bond`      | No                          | `false`        | Delete a pairing key the scale has forgotten and pair again. Bonded scales only (Beurer BF7xx / BF9xx), node-ble transport only. See below.                                                                                                                                                                                                                                    |
+| `preemptive_adapter_reset`   | No                          | `true`         | Power-cycle the Bluetooth adapter with `btmgmt` after every GATT session, to clear a stuck-discovery state some Raspberry Pi adapters fall into. Set `false` only to test whether that cycle is what makes a bonded scale reject its next connect. node-ble transport only. See below.                                                                                         |
+| `qn_weight_ack`              | No                          | Per dialect    | QN-family scales only. Send the scale your weight anchor and acknowledge live weight frames, as the vendor apps do. The acknowledgement is on by default on the 20-byte extended dialect. Try `true` if your QN scale completes the handshake and then streams nothing. See below.                                                                                             |
+| `qn_a4_prelude`              | No                          | `false`        | QN-family scales only. Send the two undecoded `0xA4` frames an Arboleaf vendor app sends between START and the first weight frame. Off by default. Try `true` only if `qn_weight_ack` did not help and your scale still goes silent right after START. See below.                                                                                                              |
+| `qn_time_sync_long`          | No                          | `false`        | QN-family scales only. Send the 9-byte form of the `0x20` time-sync frame that an Arboleaf vendor app sends, instead of the 8-byte one. Off by default; the extra byte is undecoded. See below.                                                                                                                                                                                |
+| `qn_config_long`             | No                          | `false`        | QN-family scales only. Send the 10-byte form of the `0x13` config frame the vendor app sends, instead of the 9-byte one. Off by default; the extra bytes are undecoded. See below.                                                                                                                                                                                             |
+| `proxy_liveness_timeout_min` | No                          | `30`           | Minutes of total advertisement silence before a proxy transport is treated as wedged and the process exits for the supervisor to restart. `0` disables. Proxy transports only. See below.                                                                                                                                                                                      |
+| `mqtt_proxy`                 | If `handler: mqtt-proxy`    | (none)         | MQTT proxy connection (`broker_url`, `device_id`, `topic_prefix`, `username`, `password`, `auto_connect`, `embedded_broker_*`). See [ESP32 BLE Proxy](./esp32-proxy).                                                                                                                                                                                                          |
+| `esphome_proxy`              | If `handler: esphome-proxy` | (none)         | ESPHome Native API connection (`host`, `port`, `encryption_key` or `password`, `client_info`). See [ESPHome Bluetooth Proxy](./esphome-proxy).                                                                                                                                                                                                                                 |
+| `ha_bluetooth`               | If `handler: ha-bluetooth`  | (none)         | Home Assistant websocket connection (`url`, `token`, optional `source` scanner filter). Broadcast scales only. See [Home Assistant Bluetooth](/guide/ha-bluetooth).                                                                                                                                                                                                            |
 
 ::: warning Forcing a scale adapter
 `force_scale_adapter` is an escape hatch for when auto-detection routes your scale to the wrong protocol adapter, which happens with rebadged OEM hardware that shares a vendor service with another brand.
@@ -202,20 +203,20 @@ If `252` makes your scale produce a weight, please say so in an issue with the m
 
 ::: tip QN scales that finish the handshake and then stream nothing (`qn_weight_ack`)
 
-There is a third silent-failure knob in this family, and it is the one with the clearest evidence behind it.
+There is a third silent-failure knob in this family.
 
-A vendor-app capture of a GE CS 10 G answers **every** live weight frame the scale sends with an acknowledgement carrying that frame's own weight:
+One reading of a vendor-app capture of a GE CS 10 G has the app answering live weight frames with an acknowledgement carrying that frame's own weight:
 
 ```
 scale  ... 11 1e be ...   ->  app  a2 06 01 1e be 85
 scale  ... 11 1e c3 ...   ->  app  a2 06 01 1e c3 8a
 ```
 
-On that firmware the scale will not finish a weigh-in without it, so the 20-byte extended dialect does this by default and needs no setting.
+That reading is not confirmed on hardware, but the 20-byte extended dialect does it by default. The 20-byte live weight frame of the long dialects is not decoded yet and is never answered this way.
 
 There is a second place the same frame appears, and it is the more interesting one for a scale that never streams anything at all. Before the weigh-in the handshake sends `a2 06 01 32 <age>`, which openScale labels a user profile. Under the reading above those payload bytes are a weight, and `0x32` plus an age decodes to something like **128.58 kg**, which is nobody. Two es26m reporters whose scales complete the whole handshake and then go silent have exactly that in their logs.
 
-That default is not changed, because openScale's bytes are what every QN scale in the registry reads with today and two silent units are not enough to move it under the whole family. Turning this on swaps in your configured weight anchor there too, so the scale is told a plausible number before it decides whether to measure.
+That default is not changed, because openScale's bytes are what every QN scale in the registry reads with today and two silent units are not enough to move it under the whole family. On the 20-byte extended dialect, turning this on swaps in your configured weight anchor there too. On every other dialect that frame stays as it is, and the anchor goes after the start command instead (see below).
 
 If your scale completes the whole handshake, is accepted on `qn_protocol_byte` and `qn_report_byte`, and then goes quiet, this is the next thing to try:
 
@@ -224,9 +225,9 @@ ble:
   qn_weight_ack: true
 ```
 
-That does two things: an A2 frame carries your `last_known_weight` (or the midpoint of your `weight_range`) instead of the placeholder, and every live weight frame is acknowledged with its own weight. `false` turns both off everywhere, if it ever turns out to hurt a unit.
+That does two things: your `last_known_weight` (or the midpoint of your `weight_range`) is sent to the scale as a weight anchor, and live weight frames are acknowledged with their own weight. `false` turns the acknowledgement off on every dialect, if it ever turns out to hurt a unit.
 
-Where that anchor goes depends on the dialect, and it goes to exactly one place either way. On the 20-byte extended dialect it is sent after the start command, because that is where hardware confirmed it in [#235](https://github.com/KristianP26/ble-scale-sync/issues/235). On every other dialect it is sent immediately before the start command, which is where an HCI capture of an Arboleaf vendor app puts it: that app sends `a2 06 01 22 8d 58` (88.45 kg) and then the start command with nothing between them.
+Where that anchor goes depends on the dialect. On the 20-byte extended dialect it replaces the placeholder before the weigh-in, and the trigger that dialect always sends after the start command carries it too, which is what hardware confirmed in [#235](https://github.com/KristianP26/ble-scale-sync/issues/235). On every other dialect it is sent twice right after the start command, 75 ms after it and again 150 ms later, and nowhere before it. That is what two HCI captures of an Arboleaf vendor app completing a weigh-in show: the app sends `a2 06 01 1c ed b2` (74.05 kg) twice after the start command and nothing like it before.
 
 If that still leaves the scale silent right after START, there is one more thing to try:
 
@@ -235,11 +236,11 @@ ble:
   qn_a4_prelude: true
 ```
 
-An HCI capture of an Arboleaf vendor app shows two `0xA4` frames sent between START and the first live weight frame, which this app does not send. The scale acknowledges each one and only then starts streaming. Turning this on replays those two frames.
+An HCI capture of an Arboleaf vendor app shows two `0xA4` frames sent between START and the first live weight frame, which this app does not send. In that capture the scale acknowledges each one and then starts streaming. Turning this on replays those two frames. With `qn_weight_ack` on, they go out after the two anchor frames, which is the order the other Arboleaf captures show.
 
 Be aware of what that means. The frames are replayed byte for byte from one reporter's capture of their own scale, and their payload is not decoded. It looks like per-user calibration or a previous measurement handed back, so it may be right for everyone or right for nobody but the person who captured it. That is why it is off by default and why it is the last thing to try rather than the first. If it works for your unit, please say so on [issue #331](https://github.com/KristianP26/ble-scale-sync/issues/331): more than one confirmation is what would turn this from a replay into a decoded frame.
 
-If the scale is still silent with that on, there is one more difference between this app and the vendor app on that capture, and it is the last one anybody has found:
+If the scale is still silent, there is one more difference between this app and the vendor app on that capture:
 
 ```yaml
 ble:
@@ -255,7 +256,7 @@ ble-scale-sync   20 08 ff a1 aa 22 32 c6
 
 Both close under the same checksum rule, and both carry the same little-endian timestamp in the same position, 40 minutes apart on the capture day. The entire difference is one `0x08` before the checksum, and what it selects is not known. Turning this on sends the longer frame.
 
-Try it on its own, not together with `qn_a4_prelude` or `qn_weight_ack`. Changing two things at once makes the result unreadable, which is the whole reason these are separate switches.
+Every Arboleaf capture so far sends this longer frame, including both that show the anchor going out twice after the start command. So if you have `qn_weight_ack` on, keep it on and add this rather than swapping one for the other: in those captures the vendor app sends both. Leave `qn_a4_prelude` off for that run, so that whatever changes can only come from these two.
 
 And if that is also silent, there is one last difference, the only one left between this app's start-up conversation and the vendor app's:
 
@@ -274,12 +275,18 @@ ble-scale-sync   13 09 ff 01 10 00 00 00    2c
 
 All three close under the same checksum rule and the first seven bytes are identical, so the whole difference is the pair before the checksum. The two captures disagree on its value, which rules out a constant, so what gets sent here is the vendor app's own pair. What it selects is not known.
 
-Once each option has been tried on its own and none of them worked, trying them together is the reasonable next step: the capture shows the vendor app sending all of them in the same session, so it is possible the scale wants the whole sequence rather than any single frame.
+Once each of these has been tried and none of them worked, trying them all together is the reasonable next step: the capture shows the vendor app sending all of them in the same session, so it is possible the scale wants the whole sequence rather than any single frame.
 
-With debug on, the swap is named:
+With debug on, the anchor is named. On the 20-byte extended dialect:
 
 ```
 QN: ready-time A2 carries the configured weight anchor 76.40 kg instead of openScale's placeholder (#75)
+```
+
+On every other dialect:
+
+```
+QN: weight anchor 76.40 kg sent twice after START (ble.qn_weight_ack, sequence from the #331/#75 Android captures)
 ```
 
 If `true` makes your scale report a weight, please say so in an issue with the model and the dialect from the `QN: scale info` log line. Two confirmations would move the default.
@@ -348,6 +355,23 @@ ble:
 The bond is cleared at most once per connect, and only after three consecutive authentication-class failures against a device BlueZ still lists as bonded. It stays opt-in because `le-connection-abort-by-local` also has innocent causes, notably a connect issued while another client (the Home Assistant Bluetooth integration on the same adapter, for instance) still holds a discovery session, and on these scales a bond dropped in error costs a trip to the device to confirm the passkey.
 
 Native BlueZ only. The proxy transports do not pair at all.
+
+:::
+
+::: tip The power-cycle after every weigh-in (`preemptive_adapter_reset`)
+
+After every GATT session the native Linux transport resets its D-Bus connection and then power-cycles the adapter with `btmgmt power off` / `power on`. On-board Raspberry Pi Broadcom adapters drift into a state where BlueZ reports discovery as running while the controller has stopped scanning, and the cycle clears it before it builds up. The debug log shows it as `Preemptive btmgmt reset after GATT`.
+
+It is also the only thing the host does between a bonded session that works and a next connect whose stored key is rejected, which is what the Beurer section above describes. To find out whether the cycle is the cause on your setup, switch it off:
+
+```yaml
+ble:
+  preemptive_adapter_reset: false
+```
+
+Only this one step is skipped. The D-Bus reset, the cleanup after a failed session and the recovery that runs when discovery will not start all stay as they are, and the change applies from the next scan cycle without a restart. If your adapter then starts missing the scale after a few weigh-ins, turn it back on.
+
+Native BlueZ (node-ble) only. noble power-cycles the adapter only when it is not powered on at start-up, and the proxy transports never touch the host adapter.
 
 :::
 
@@ -437,12 +461,23 @@ This lets you dedicate one adapter to BLE Scale Sync while keeping the other fre
 scale:
   weight_unit: kg
   height_unit: cm
+  display_unit: weight_unit
 ```
 
-| Field         | Required | Default | Description                                              |
-| ------------- | -------- | ------- | -------------------------------------------------------- |
-| `weight_unit` | No       | `kg`    | `kg` or `lbs`. Display only; calculations always use kg. |
-| `height_unit` | No       | `cm`    | `cm` or `in`. Used for height input in user profiles.    |
+| Field          | Required | Default       | Description                                                                                                                                                                                                                                                         |
+| -------------- | -------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `weight_unit`  | No       | `kg`          | `kg` or `lbs`. Display only; calculations always use kg.                                                                                                                                                                                                            |
+| `height_unit`  | No       | `cm`          | `cm` or `in`. Used for height input in user profiles.                                                                                                                                                                                                               |
+| `display_unit` | No       | `weight_unit` | Physical scale display unit: `weight_unit`, `kg`, `lbs`, or `st`. Only scales read by the QN-Scale adapter are told which unit to show (the log says `Matched adapter: QN Scale`); other scales ignore it. This is independent of exported values and calculations. |
+
+For example, this keeps Home Assistant values and matching ranges in kilograms while the physical QN scale shows stones and pounds:
+
+```yaml
+scale:
+  weight_unit: kg
+  height_unit: cm
+  display_unit: st
+```
 
 ### Unknown user
 
@@ -450,9 +485,9 @@ scale:
 unknown_user: nearest # nearest | log | ignore
 ```
 
-| Field          | Required | Default   | Description                                                                    |
-| -------------- | -------- | --------- | ------------------------------------------------------------------------------ |
-| `unknown_user` | No       | `nearest` | What to do with a reading that matches no user's `weight_range`                 |
+| Field          | Required | Default   | Description                                                     |
+| -------------- | -------- | --------- | --------------------------------------------------------------- |
+| `unknown_user` | No       | `nearest` | What to do with a reading that matches no user's `weight_range` |
 
 - `nearest` attributes it to the user whose configured `weight_range` has the closest **midpoint** and exports normally.
 - `log` records it and exports nothing.
@@ -518,7 +553,7 @@ global_exporters:
     password: '${GARMIN_PASSWORD}'
 ```
 
-Shared by all users unless a user defines their own `exporters` list. See [Exporters](/exporters) for all 11 targets and their configuration fields.
+Shared by all users unless a user defines their own `exporters` list. See [Exporters](/exporters) for all 12 targets and their configuration fields.
 
 ### Runtime
 
@@ -534,16 +569,16 @@ runtime:
   watch_config: true
 ```
 
-| Field                               | Required | Default | Description                                                                                                                                                                                                                                                                                                            |
-| ----------------------------------- | -------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `continuous_mode`                   | No       | `false` | Keep scanning in a loop (for always-on deployments)                                                                                                                                                                                                                                                                    |
-| `scan_cooldown`                     | No       | `30`    | Seconds to wait after a SUCCESSFUL reading before scanning again (5-3600). It does not govern the wait after a cycle that found no scale - that is `idle_rescan_delay`. On the native BLE handler in continuous mode, after a successful read the app sleeps at least 25 s regardless of this setting so it does not reconnect while the scale is still advertising (post-disconnect grace, [#143](https://github.com/KristianP26/ble-scale-sync/issues/143)). |
-| `idle_rescan_delay`                 | No       | `5`     | Seconds to wait before scanning again after a cycle that found no scale while the Bluetooth adapter was healthy (0-3600). Real failures (GATT errors, a wedged controller) keep their own 5 s -> 60 s backoff. Lower it if your scale advertises only for a few seconds after you step on it. Linux/BlueZ (`node-ble`) only: the other transports cannot tell an idle scan from a failed one, so the setting has no effect there ([#398](https://github.com/KristianP26/ble-scale-sync/issues/398)). |
-| `retry_failed_exports`              | No       | `true`  | Keep a reading whose export failed and retry it on a later cycle, for up to 72 hours, 5 attempts and 50 readings. Only exporters that can record a past measurement are queued (`file`, `garmin`, `influxdb`, `intervals`, `runalyze`, `wger`); the others cannot express a past reading, so a failure there is not recoverable and is logged as such. The queue lives next to `config.yaml` as `.export-retry-queue.jsonl`, is written 0600 because it holds body composition and a user name, and is deleted when it empties. Set to `false` to write nothing to disk. |
-| `dry_run`                           | No       | `false` | Read scale + compute body comp, skip exports                                                                                                                                                                                                                                                                           |
-| `debug`                             | No       | `false` | Verbose BLE logging                                                                                                                                                                                                                                                                                                    |
-| `watchdog_max_consecutive_failures` | No       | `10`    | In continuous mode on Linux: exit after this many consecutive scan failures so Docker `restart: unless-stopped` can recover from a stuck BlueZ controller (0 = disabled). See [Troubleshooting](/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state).                                           |
-| `watch_config`                      | No       | `true`  | Auto-reload `config.yaml` on edit (continuous mode only). Set to `false` to disable and rely on `SIGHUP` only. See [Live Config Reload](/multi-user#live-config-reload).                                                                                                                                               |
+| Field                               | Required | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------------------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `continuous_mode`                   | No       | `false` | Keep scanning in a loop (for always-on deployments)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `scan_cooldown`                     | No       | `30`    | Seconds to wait after a SUCCESSFUL reading before scanning again (5-3600). It does not govern the wait after a cycle that found no scale - that is `idle_rescan_delay`. On the native BLE handler in continuous mode, after a successful read the app sleeps at least 25 s regardless of this setting so it does not reconnect while the scale is still advertising (post-disconnect grace, [#143](https://github.com/KristianP26/ble-scale-sync/issues/143)).                                                                                                                        |
+| `idle_rescan_delay`                 | No       | `5`     | Seconds to wait before scanning again after a cycle that found no scale while the Bluetooth adapter was healthy (0-3600). Real failures (GATT errors, a wedged controller) keep their own 5 s -> 60 s backoff. Lower it if your scale advertises only for a few seconds after you step on it. Linux/BlueZ (`node-ble`) only: the other transports cannot tell an idle scan from a failed one, so the setting has no effect there ([#398](https://github.com/KristianP26/ble-scale-sync/issues/398)).                                                                                  |
+| `retry_failed_exports`              | No       | `true`  | Keep a reading whose export failed and retry it on a later cycle, for up to 72 hours, 5 attempts and 50 readings. Only exporters that can record a past measurement are queued (`file`, `garmin`, `influxdb`, `intervals`, `runalyze`, `wger`, `healthlog`); the others cannot express a past reading, so a failure there is not recoverable and is logged as such. The queue lives next to `config.yaml` as `.export-retry-queue.jsonl`, is written 0600 because it holds body composition and a user name, and is deleted when it empties. Set to `false` to write nothing to disk. |
+| `dry_run`                           | No       | `false` | Read scale + compute body comp, skip exports                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `debug`                             | No       | `false` | Verbose BLE logging                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `watchdog_max_consecutive_failures` | No       | `10`    | In continuous mode on Linux: exit after this many consecutive scan failures so Docker `restart: unless-stopped` can recover from a stuck BlueZ controller (0 = disabled). See [Troubleshooting](/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state).                                                                                                                                                                                                                                                                                                          |
+| `watch_config`                      | No       | `true`  | Auto-reload `config.yaml` on edit (continuous mode only). Set to `false` to disable and rely on `SIGHUP` only. See [Live Config Reload](/multi-user#live-config-reload).                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 ### Docker (accepted, unused)
 
@@ -587,17 +622,23 @@ global_exporters:
 
 These environment variables always override `config.yaml` values, useful for Docker `-e` flags:
 
-| Variable                    | Overrides                                   |
-| --------------------------- | ------------------------------------------- |
-| `CONTINUOUS_MODE`           | `runtime.continuous_mode`                   |
-| `DRY_RUN`                   | `runtime.dry_run`                           |
-| `DEBUG`                     | `runtime.debug`                             |
-| `SCAN_COOLDOWN`             | `runtime.scan_cooldown`                     |
-| `BLE_HANDLER`               | `ble.handler` (see the note below)          |
-| `BLE_WATCHDOG_MAX_FAILURES` | `runtime.watchdog_max_consecutive_failures` |
-| `SCALE_MAC`                 | `ble.scale_mac`                             |
-| `NOBLE_DRIVER`              | `ble.noble_driver`                          |
-| `BLE_ADAPTER`               | `ble.adapter`                               |
+| Variable                    | Overrides                                            |
+| --------------------------- | ---------------------------------------------------- |
+| `CONTINUOUS_MODE`           | `runtime.continuous_mode`                            |
+| `DRY_RUN`                   | `runtime.dry_run`                                    |
+| `DEBUG`                     | `runtime.debug`                                      |
+| `SCAN_COOLDOWN`             | `runtime.scan_cooldown`                              |
+| `BLE_HANDLER`               | `ble.handler` (see the note below)                   |
+| `BLE_WATCHDOG_MAX_FAILURES` | `runtime.watchdog_max_consecutive_failures`          |
+| `SCALE_MAC`                 | `ble.scale_mac`                                      |
+| `NOBLE_DRIVER`              | `ble.noble_driver`                                   |
+| `BLE_ADAPTER`               | `ble.adapter`                                        |
+| `BLE_RETRY_BASE_DELAY_MS`   | Delay before the first export retry (default `1000`) |
+
+A value that is not valid for its variable is reported and ignored, and the
+value from `config.yaml` is kept. Booleans accept `true`/`false`, `yes`/`no`,
+`on`/`off` and `1`/`0`; a typo such as `DRY_RUN=treu` no longer reads as
+`false`. `SCALE_MAC` is checked against the same format `config.yaml` requires.
 
 `BLE_HANDLER` accepts `auto`, `mqtt-proxy`, `esphome-proxy` and `ha-bluetooth`. A proxy handler is applied only when that proxy is configured in `config.yaml`; otherwise the app says so and keeps the configured handler. Any other value is reported and ignored.
 

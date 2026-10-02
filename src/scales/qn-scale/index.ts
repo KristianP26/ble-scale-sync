@@ -18,7 +18,7 @@ import {
   JIELI_CHALLENGE_FRAME_LEN,
   JIELI_CHALLENGE_HEADER,
 } from '../jieli-auth.js';
-import type { WeightUnit } from '../../config/schema.js';
+import type { ScaleDisplayUnit } from '../../config/schema.js';
 import {
   A4_PRELUDE,
   A4_PRELUDE_GAP_MS,
@@ -34,6 +34,7 @@ import {
   MAX_AE00_RESPONSES,
   MAX_STORED_QUERY_ATTEMPTS,
   MAX_STORED_RECORD_AGE_SEC,
+  POST_START_ANCHOR_DELAY_MS,
   PROTO_ECHO_MIN_INFO_FRAME_LEN,
   REPORT_BYTE_DEFAULT,
   REPORT_BYTE_LONG_FRAME,
@@ -101,9 +102,9 @@ export class QnScaleAdapter
   /**
    * Configured display unit. The 0x13 config command tells the scale which unit
    * to show, so hardcoding kg flipped a user's lbs display on every read (#269).
-   * Injected via configure() from scale.weight_unit; defaults to kg.
+   * Injected via configure() from scale.display_unit; defaults to kg.
    */
-  private displayUnit: WeightUnit = 'kg';
+  private displayUnit: ScaleDisplayUnit = 'kg';
 
   /** Whether the AE00 service is available (newer firmware). */
   private hasAe00 = false;
@@ -175,6 +176,9 @@ export class QnScaleAdapter
   /** One anchor-fallback warning per session, reset in onConnected. */
   private anchorFallbackWarned = false;
 
+  /** One "20-byte live frame not decoded" line per session (#331). */
+  private twentyByteFrameLogged = false;
+
   /**
    * Whether a completed-weigh-in result frame (0xB4/0xB1) has already produced a
    * reading this session. The scale repeats the 0xB4 frame ~3x and then sends
@@ -222,7 +226,7 @@ export class QnScaleAdapter
 
   /** Receive the configured display unit from the composition root (#269). */
   configure(opts: AdapterRuntimeConfig): void {
-    if (opts.weightUnit) this.displayUnit = opts.weightUnit;
+    if (opts.displayUnit) this.displayUnit = opts.displayUnit;
     this.forcedProtocolType = opts.qnProtocolByte ?? null;
     this.forcedReportByte = opts.qnReportByte ?? null;
     this.forcedWeightAck = opts.qnWeightAck ?? null;
@@ -231,8 +235,9 @@ export class QnScaleAdapter
     this.configLong = opts.qnConfigLong === true;
   }
 
-  /** 0x13 config unit flag: 0x01 kg, 0x02 lb (openScale QNHandler). */
+  /** 0x13 config unit bit: 0x01 kg, 0x02 lb, 0x08 stone (QN protocol). */
   private unitFlag(): number {
+    if (this.displayUnit === 'st') return 0x08;
     return this.displayUnit === 'lbs' ? 0x02 : 0x01;
   }
 
@@ -318,6 +323,7 @@ export class QnScaleAdapter
     this.firstStableNoImpedanceAt = null;
     this.sessionStartedScaleSeconds = Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
     this.anchorFallbackWarned = false;
+    this.twentyByteFrameLogged = false;
     this.configSent = false;
     this.timeSyncSent = false;
     this.historyResponseSent = false;
@@ -756,21 +762,53 @@ export class QnScaleAdapter
       r2 = data.readUInt16BE(8);
     }
 
-    // Extended dialect: the vendor app answers EVERY live 0x10 frame with an A2
-    // carrying that frame's OWN weight bytes, not a fixed value. The GE CS 10 G
-    // capture shows the pairs plainly: a frame ending `11 1e be` is answered
-    // with `a2 06 01 1e be 85`, the next `11 1e c3` with `a2 06 01 1e c3 8a`.
+    // The live 0x10 frame every capture of the long dialects actually shows is
+    // 20 bytes, with the weight as a big-endian u16 /100 at [5..6]:
     //
-    // That is why the pre-stream anchor could only ever be approximate. This
-    // echo is exact for anyone, so it is the part that should make the dialect
-    // work for a whole household rather than for one person near 77 kg.
+    //   10 14 01 00 11 1d c4 00 .. 00 17   Arboleaf, 76.20 kg (#331)
+    //   10 14 01 00 11 22 79 00 .. 00 d1   Arboleaf, 88.25 kg (#331)
+    //   10 14 01 00 11 1e be 00 .. 00 12   GE CS 10 G, 78.70 kg (#235)
     //
-    // Sent before the stability gate, because the app acknowledges the settling
-    // frames too, and those are the ones the scale is streaming while it decides
-    // whether to finish. Gated to the 20-byte dialect: it is the only firmware
-    // any capture covers, and every other QN scale in the registry reads today
-    // without it. Fire and forget, like the 0x1F stable ACK below.
-    if (this.weightAckEnabled() && this.ctx) {
+    // Neither branch above reads it. [4] is 0x11, so it falls into the original
+    // layout, which takes the weight from [3..4] and gets 0x0011. What [4] and
+    // the stability flag mean in this layout is not decoded yet, so the frame is
+    // logged once per session with the weight where the captures put it.
+    const twentyByteLive = data.length === 20 && data[1] === 0x14;
+    if (twentyByteLive && !this.twentyByteFrameLogged) {
+      this.twentyByteFrameLogged = true;
+      bleLog.debug(
+        `QN: 20-byte live frame, weight ${data.readUInt16BE(5) / 100} kg at [5..6], ` +
+          'not echoed and not yet decoded (#331)',
+      );
+    }
+
+    // Nothing the original layout reads is right for this shape. Its weight is
+    // 0x0011, and its stability byte [5] is the real weight's high byte, so a
+    // frame between 2.56 and 5.11 kg, which a step-off ramps through, read as a
+    // stable 1.7 kg (0.17 at factor 100) and was acknowledged with 0x1F. At
+    // exactly 2.56 kg ([6] zero, so no impedance either) it passed isComplete
+    // and ended the session, to be exported as the weigh-in. Stop here until
+    // the layout is decoded. A 20-byte frame that takes the ES-30M branch reads
+    // its weight from [5..6] and is left as it was.
+    if (twentyByteLive && !isEs30m) return null;
+
+    // Per-frame weight echo (`ble.qn_weight_ack`, on by default on the 20-byte
+    // extended dialect). One reading of the GE CS 10 G capture has the vendor
+    // app answering live 0x10 frames with an A2 carrying that frame's own
+    // weight bytes (`... 1e be` -> `a2 06 01 1e be 85`); a later reading of the
+    // same capture disagrees, so this is unconfirmed. No hardware run has shown
+    // a scale needing it either: the completed GE weigh-ins predate the echo and
+    // never delivered a 0x10 to this adapter at all, their weight came from
+    // 0xB1 (#235).
+    //
+    // Never sent for the 20-byte layout above. Read through the original layout
+    // its rawWeight is 0x0011, so the echo handed the scale `a2 06 01 00 11 ba`,
+    // i.e. 0.17 kg, on every live frame; that path returns above now. Whether
+    // the app echoes this shape at all is not known, so a 20-byte frame on the
+    // ES-30M branch is not echoed either. The 14-byte ES-30M and 10-byte classic
+    // frames keep it: their offsets are right. Sent before the stability gate,
+    // fire and forget, like the 0x1F stable ACK below.
+    if (this.weightAckEnabled() && this.ctx && !twentyByteLive) {
       void this.writeCmd(buildA2Frame(rawWeight));
     }
 
@@ -941,10 +979,10 @@ export class QnScaleAdapter
     // configured anchor for the reporters who can actually test it.
     if (this.ctx) {
       // The anchor goes here ONLY on the 20-byte extended dialect. Everywhere
-      // else `handleConfigRequest` sends it immediately before START instead,
-      // which is where the #331 capture puts it, and sending it in both places
-      // would mean one switch moves two things and the reporter's experiment
-      // stops being readable.
+      // else `handleConfigRequest` sends it twice right after START instead,
+      // which is where both Android captures of the Arboleaf app put it (#331,
+      // #75), and sending it in both places would mean one switch moves two
+      // things and the reporter's experiment stops being readable.
       const anchorAtReady = this.forcedWeightAck === true && this.isExtendedLongFrame;
       const anchorKg = anchorAtReady ? this.resolveAnchorKg() : 0;
       const profileCmd = anchorAtReady
@@ -1012,29 +1050,51 @@ export class QnScaleAdapter
 
     await wait(200);
 
-    // Weight anchor, on the dialects where it goes BEFORE the start command.
-    //
-    // The 20-byte extended dialect sends it after START, repeated, which is
-    // hardware confirmed (#235) and is left exactly where it is below. Nothing
-    // pinned the position anywhere else until #331, whose Arboleaf capture puts
-    // a single anchor immediately before START on the es26m dialect:
-    //
-    //   APP->SCALE  a2 06 01 22 8d 58     0x228d = 8845 = 88.45 kg
-    //   APP->SCALE  22 06 ff 00 03 2a     START
-    //
-    // Reached only when `ble.qn_weight_ack` is set, so no install that does not
-    // ask for it sees a frame it did not see before.
-    if (this.weightAckEnabled() && !this.isExtendedLongFrame) {
-      const preAnchorKg = this.resolveAnchorKg();
-      await this.writeCmd([...buildMeasurementTrigger(preAnchorKg)]);
-      bleLog.debug(
-        `QN: weight anchor ${preAnchorKg.toFixed(2)} kg sent before START ` +
-          `(ble.qn_weight_ack, position from the #331 capture)`,
-      );
-    }
-
     // 0x22 start measurement / stored-data query with echoed protocol type
     await this.writeCmd(this.buildStoredDataQuery());
+
+    // Weight anchor, twice, right after START. Every dialect except the 20-byte
+    // extended one, which has its own hardware-confirmed burst further down,
+    // and only when `ble.qn_weight_ack` is explicitly true, so no install that
+    // does not ask for it sees a frame it did not see before.
+    //
+    // Two Android btsnoops of the Arboleaf app completing a weigh-in on the
+    // 19-byte es26m dialect, the same unit a month apart, agree (#331, #75):
+    //
+    //   APP    22 06 ff 00 03 2a    START
+    //   APP    a2 06 01 1c ed b2    75 ms later, 0x1ced = 7405 = 74.05 kg
+    //   SCALE  a3 04 01 a8          the scale's ack to that A2
+    //   APP    a2 06 01 1c ed b2    the same frame again, 71 ms after the first
+    //   SCALE  10 14 ...            the first live frame, 22 ms later
+    //
+    // Neither sends an A2 before START. The one transcript that has it there is
+    // an iOS one without timestamps whose order is in doubt (it labels the a3 a
+    // start ack, but every A2 gets an a3), and replaying that order, as this
+    // adapter did from v1.28.0, never produced a weight on either reporter's
+    // unit.
+    //
+    // POST_START_ANCHOR_DELAY_MS is the capture's 75 ms. The gap between the
+    // copies is TRIGGER_GAP_MS rather than the capture's 71 ms, see there. Sent
+    // twice unconditionally rather than on the a3, which a proxy transport may
+    // deliver late or not at all.
+    //
+    // The burst spans two timers, so it is bound to the session that started
+    // it: writeCmd reads this.ctx at write time, and a session that ends and
+    // reconnects inside the window must not be handed this one's anchor.
+    if (this.forcedWeightAck === true && !this.isExtendedLongFrame) {
+      const owner = this.ctx;
+      const anchorKg = this.resolveAnchorKg();
+      const anchor = buildMeasurementTrigger(anchorKg);
+      for (let i = 0; i < TRIGGER_REPEATS; i++) {
+        await wait(i === 0 ? POST_START_ANCHOR_DELAY_MS : TRIGGER_GAP_MS);
+        if (!owner || this.ctx !== owner) return;
+        await this.writeCmd([...anchor]);
+      }
+      bleLog.debug(
+        `QN: weight anchor ${anchorKg.toFixed(2)} kg sent twice after START ` +
+          `(ble.qn_weight_ack, sequence from the #331/#75 Android captures)`,
+      );
+    }
 
     // Opt-in only. See A4_PRELUDE for why these bytes are a replay rather than
     // something built from this user's profile, and why that keeps it off by

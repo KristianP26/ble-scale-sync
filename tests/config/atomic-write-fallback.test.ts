@@ -24,7 +24,8 @@ vi.mock('node:fs', async (importOriginal) => {
   };
 });
 
-const { mkdtempSync, writeFileSync, statSync, rmSync, readFileSync } = await import('node:fs');
+const { mkdtempSync, writeFileSync, statSync, rmSync, readFileSync, chmodSync } =
+  await import('node:fs');
 const { tmpdir } = await import('node:os');
 const { join } = await import('node:path');
 const { atomicWrite } = await import('../../src/config/write.js');
@@ -83,5 +84,56 @@ describe('atomicWrite in-place fallback', () => {
     expect(() => atomicWrite(file, 'version: 2\n')).toThrow(/ENOSPC/);
     // And the tmp file is cleaned up rather than left behind.
     expect(() => statSync(file + '.tmp')).toThrow();
+  });
+});
+
+describe('atomicWrite keeps what it cannot replace', () => {
+  it('leaves the original in place when the rename fails unrecoverably', () => {
+    // The pre-fix order was unlink(target) then rename(tmp, target). A rename
+    // that failed with anything outside the fallback list therefore destroyed
+    // the file it was replacing, and the outer cleanup removed the tmp copy
+    // too - both gone. Since v1.29.0 the export retry queue goes through here
+    // as well, so this is not only a config-file risk.
+    const dir = tempDir();
+    const file = join(dir, 'config.yaml');
+    writeFileSync(file, 'version: 1\n');
+
+    const err = new Error('EIO: i/o error') as NodeJS.ErrnoException;
+    err.code = 'EIO';
+    renameThrows = err;
+
+    expect(() => atomicWrite(file, 'version: 2\n')).toThrow(/EIO/);
+
+    expect(readFileSync(file, 'utf8')).toBe('version: 1\n');
+    expect(() => statSync(file + '.tmp')).toThrow();
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'does not inherit the mode of a stale tmp file left by an earlier write',
+    () => {
+      // writeFileSync applies `mode` only when it CREATES the file. A leftover
+      // .tmp at 0644 therefore kept its mode, and the rename carried that onto
+      // a config holding the Garmin password.
+      const dir = tempDir();
+      const file = join(dir, 'config.yaml');
+      writeFileSync(file, 'version: 1\n', { mode: 0o600 });
+      writeFileSync(file + '.tmp', 'stale\n', { mode: 0o644 });
+      chmodSync(file + '.tmp', 0o644);
+
+      atomicWrite(file, 'version: 2\n');
+
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+      expect(readFileSync(file, 'utf8')).toBe('version: 2\n');
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')('creates a fresh tmp file at 0600', () => {
+    const dir = tempDir();
+    const file = join(dir, 'config.yaml');
+    writeFileSync(file, 'version: 1\n', { mode: 0o600 });
+
+    atomicWrite(file, 'version: 2\n');
+
+    expect(statSync(file).mode & 0o777).toBe(0o600);
   });
 });

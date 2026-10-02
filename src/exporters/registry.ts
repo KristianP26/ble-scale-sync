@@ -1,3 +1,5 @@
+import { createLogger } from '../logger.js';
+import { normaliseHeaders } from './headers.js';
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { Exporter } from '../interfaces/exporter.js';
 import type { ExporterEntry } from '../config/schema.js';
@@ -12,6 +14,7 @@ import type {
   IntervalsConfig,
   RunalyzeConfig,
   WgerConfig,
+  HealthLogConfig,
 } from './config.js';
 import {
   garminSchema,
@@ -29,6 +32,7 @@ import { telegramSchema, TelegramExporter } from './telegram.js';
 import { intervalsSchema, IntervalsExporter } from './intervals.js';
 import { runalyzeSchema, RunalyzeExporter } from './runalyze.js';
 import { wgerSchema, WgerExporter } from './wger.js';
+import { healthlogSchema, HealthLogExporter } from './healthlog.js';
 
 // --- Registry entry type ---
 
@@ -124,6 +128,57 @@ function requireField(config: Record<string, unknown>, type: string, key: string
   return String(value);
 }
 
+/**
+ * Read a field that may only hold one of a fixed set of values.
+ *
+ * These were `as` casts, which convert and check nothing: `qos: "2"` stayed the
+ * string "2" all the way into the MQTT client, and `format: 'JSONL'` silently
+ * selected CSV because it matched neither branch downstream. The value is
+ * compared as text so a YAML number (`qos: 2`) and an env string ("2") both
+ * land on the same allowed entry.
+ */
+function optionalEnum<T extends string | number>(
+  config: Record<string, unknown>,
+  type: string,
+  key: string,
+  allowed: readonly T[],
+): T | undefined {
+  const value = config[key];
+  if (value === undefined || value === null || value === '') return undefined;
+  const text = String(value).trim();
+  const match = allowed.find((a) => String(a) === text);
+  if (match === undefined) {
+    throw new Error(
+      `Exporter "${type}" field "${key}" must be one of ${allowed.join(', ')}, ` +
+        `got '${String(value)}'. Check your config.yaml.`,
+    );
+  }
+  return match;
+}
+
+/**
+ * Read configured HTTP headers as a header map.
+ *
+ * The cast this replaces produced `{ 0: 'A', 1: 'u', ... }` from the very
+ * string format the exporter's own field description asks for. A pair with no
+ * ':' is skipped with a warning rather than failing the whole export: the other
+ * headers are still usable, and a hard failure here would take down a working
+ * webhook over one stray comma.
+ */
+function optionalHeaders(
+  config: Record<string, unknown>,
+  type: string,
+  key: string,
+): Record<string, string> {
+  const { headers, invalid } = normaliseHeaders(config[key]);
+  for (const pair of invalid) {
+    log.warn(`Exporter "${type}" field "${key}": ignoring '${pair}' (expected "Name: value").`);
+  }
+  return headers;
+}
+
+const log = createLogger('Exporters');
+
 // --- Registry ---
 
 export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
@@ -151,7 +206,7 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
       const mqttConfig: MqttConfig = {
         brokerUrl: requireField(config, 'mqtt', 'broker_url'),
         topic: (config.topic as string) ?? 'scale/body-composition',
-        qos: (config.qos as 0 | 1 | 2) ?? 1,
+        qos: optionalEnum(config, 'mqtt', 'qos', [0, 1, 2] as const) ?? 1,
         retain: optionalBool(config, 'mqtt', 'retain') ?? true,
         username: config.username as string | undefined,
         password: config.password as string | undefined,
@@ -167,13 +222,15 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
     factory: (config) => {
       const webhookConfig: WebhookConfig = {
         url: requireField(config, 'webhook', 'url'),
-        method: (config.method as string) ?? 'POST',
-        headers: (config.headers as Record<string, string>) ?? {},
+        method: optionalEnum(config, 'webhook', 'method', ['POST', 'PUT'] as const) ?? 'POST',
+        headers: optionalHeaders(config, 'webhook', 'headers'),
         // Same trap as the booleans: `timeout: "${WEBHOOK_TIMEOUT}"` reached
-        // AbortSignal.timeout() as a string. Deliberately unbounded: this field
-        // has accepted any number since it existed, and narrowing it here would
-        // turn somebody's working `timeout: 50` into a crash at startup.
-        timeout: optionalNumber(config, 'webhook', 'timeout') ?? 10_000,
+        // AbortSignal.timeout() as a string. The bound is only what that
+        // function itself accepts - a whole number of milliseconds, at least 1
+        // - so a working `timeout: 50` still works, while -1 and 1.5 fail here
+        // with a config error naming the field instead of ERR_OUT_OF_RANGE
+        // from inside the first export.
+        timeout: optionalNumber(config, 'webhook', 'timeout', { integer: true, min: 1 }) ?? 10_000,
       };
       return new WebhookExporter(webhookConfig);
     },
@@ -198,7 +255,8 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
         url: (config.url as string) ?? 'https://ntfy.sh',
         topic: requireField(config, 'ntfy', 'topic'),
         title: (config.title as string) ?? 'Scale Measurement',
-        priority: (config.priority as number) ?? 3,
+        priority:
+          optionalNumber(config, 'ntfy', 'priority', { integer: true, min: 1, max: 5 }) ?? 3,
         token: config.token as string | undefined,
         username: config.username as string | undefined,
         password: config.password as string | undefined,
@@ -212,7 +270,7 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
     factory: (config) => {
       const fileConfig: FileConfig = {
         filePath: requireField(config, 'file', 'file_path'),
-        format: (config.format as 'csv' | 'jsonl') ?? 'csv',
+        format: optionalEnum(config, 'file', 'format', ['csv', 'jsonl'] as const) ?? 'csv',
       };
       return new FileExporter(fileConfig);
     },
@@ -269,6 +327,17 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
         syncMeasurements: optionalBool(config, 'wger', 'sync_measurements') ?? true,
       };
       return new WgerExporter(wgerConfig);
+    },
+  },
+  {
+    schema: healthlogSchema,
+    factory: (config) => {
+      const healthlogConfig: HealthLogConfig = {
+        baseUrl: requireField(config, 'healthlog', 'base_url'),
+        token: requireField(config, 'healthlog', 'token'),
+        syncMeasurements: optionalBool(config, 'healthlog', 'sync_measurements') ?? true,
+      };
+      return new HealthLogExporter(healthlogConfig);
     },
   },
 ];

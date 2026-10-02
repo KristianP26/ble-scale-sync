@@ -191,6 +191,12 @@ describe('diffRestartRequired', () => {
     });
   });
 
+  it('does NOT flag ble.preemptive_adapter_reset, which the poll source re-reads per cycle', () => {
+    const a = baseConfig({ ble: { handler: 'auto', preemptive_adapter_reset: true } });
+    const b = baseConfig({ ble: { handler: 'auto', preemptive_adapter_reset: false } });
+    expect(diffRestartRequired(a, b)).toEqual([]);
+  });
+
   it('redacts mqtt_proxy.password values in the warn payload', () => {
     const a = baseConfig({
       ble: {

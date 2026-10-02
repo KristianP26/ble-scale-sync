@@ -1,6 +1,7 @@
 import { createLogger } from '../logger.js';
 import type { AppConfig, ExporterEntry } from './schema.js';
 import { KNOWN_EXPORTER_NAMES } from '../exporters/registry.js';
+import { isValidScaleId, SCALE_ID_HINT } from '../ble/scale-id.js';
 
 const log = createLogger('Config');
 
@@ -19,6 +20,38 @@ export function parseBleAdapterEnv(): string | null | undefined {
   return undefined;
 }
 
+const TRUE_WORDS = new Set(['true', 'yes', 'on', '1']);
+const FALSE_WORDS = new Set(['false', 'no', 'off', '0']);
+
+/**
+ * Read a boolean override, keeping the configured value when the input is not
+ * a boolean at all.
+ *
+ * The old form was `['true','yes','1'].includes(raw.toLowerCase())`, which has
+ * no notion of an invalid value: everything that is not a recognised TRUE word
+ * is FALSE. `DRY_RUN=treu` therefore did not fail, and did not leave
+ * `dry_run: true` from config.yaml alone either - it turned dry-run OFF and
+ * exported for real, which is precisely the promise that flag exists to make.
+ *
+ * Unknown input warns and keeps the configured value, matching what every
+ * other override in this file already does (SCAN_COOLDOWN, NOBLE_DRIVER,
+ * BLE_HANDLER): a bad env var must never be more powerful than a good one. An
+ * empty value is how a compose file neutralises a variable, so it is exempt.
+ */
+function boolEnv(name: string, current: boolean): boolean {
+  const raw = process.env[name];
+  if (raw === undefined) return current;
+  const word = raw.trim().toLowerCase();
+  if (word === '') return current;
+  if (TRUE_WORDS.has(word)) return true;
+  if (FALSE_WORDS.has(word)) return false;
+  log.warn(
+    `${name}='${raw}' is not a boolean (true/false, yes/no, on/off, 1/0); ` +
+      `keeping ${name.toLowerCase()}=${current} from the configuration.`,
+  );
+  return current;
+}
+
 export function applyEnvOverrides(config: AppConfig): AppConfig {
   const runtime = {
     continuous_mode: config.runtime?.continuous_mode ?? false,
@@ -33,21 +66,21 @@ export function applyEnvOverrides(config: AppConfig): AppConfig {
   const ble = { handler: 'auto' as const, ...config.ble };
 
   // Runtime overrides
-  if (process.env.CONTINUOUS_MODE !== undefined) {
-    runtime.continuous_mode = ['true', 'yes', '1'].includes(
-      process.env.CONTINUOUS_MODE.toLowerCase(),
-    );
-  }
-  if (process.env.DRY_RUN !== undefined) {
-    runtime.dry_run = ['true', 'yes', '1'].includes(process.env.DRY_RUN.toLowerCase());
-  }
-  if (process.env.DEBUG !== undefined) {
-    runtime.debug = ['true', 'yes', '1'].includes(process.env.DEBUG.toLowerCase());
-  }
+  runtime.continuous_mode = boolEnv('CONTINUOUS_MODE', runtime.continuous_mode);
+  runtime.dry_run = boolEnv('DRY_RUN', runtime.dry_run);
+  runtime.debug = boolEnv('DEBUG', runtime.debug);
   if (process.env.SCAN_COOLDOWN !== undefined) {
     const num = Number(process.env.SCAN_COOLDOWN);
-    if (Number.isFinite(num) && num >= 5 && num <= 3600) {
+    // Integer, to match the schema. The schema has always required one; this
+    // path accepted any finite number in range, so 12.5 reached the runtime
+    // through the env var and not through config.yaml.
+    if (Number.isInteger(num) && num >= 5 && num <= 3600) {
       runtime.scan_cooldown = num;
+    } else {
+      log.warn(
+        `SCAN_COOLDOWN='${process.env.SCAN_COOLDOWN}' is not a whole number of ` +
+          `seconds between 5 and 3600; keeping scan_cooldown=${runtime.scan_cooldown}.`,
+      );
     }
   }
   if (process.env.BLE_WATCHDOG_MAX_FAILURES !== undefined) {
@@ -59,7 +92,20 @@ export function applyEnvOverrides(config: AppConfig): AppConfig {
 
   // BLE overrides
   if (process.env.SCALE_MAC !== undefined) {
-    ble.scale_mac = process.env.SCALE_MAC;
+    // The schema refines this with isValidScaleId; the env path assigned it
+    // raw, so a typo that config.yaml would have rejected at startup instead
+    // became a scale id that can never match and a scan that never finds
+    // anything.
+    const raw = process.env.SCALE_MAC.trim();
+    if (raw === '') {
+      ble.scale_mac = undefined;
+    } else if (isValidScaleId(raw)) {
+      ble.scale_mac = raw;
+    } else {
+      log.warn(
+        `SCALE_MAC='${process.env.SCALE_MAC}' is not valid (${SCALE_ID_HINT}); ignoring it.`,
+      );
+    }
   }
   const adapterResult = parseBleAdapterEnv();
   if (adapterResult === null) {

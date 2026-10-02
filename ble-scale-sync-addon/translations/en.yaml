@@ -37,11 +37,11 @@ configuration:
     name: QN weight acknowledgement
     description: >-
       QN-family scales only, and the last thing to try after the two QN bytes
-      above. The vendor app tells the scale a real weight before the weigh-in
-      and answers every weight frame with that same weight; some firmware will
-      not finish a measurement otherwise. Leave empty unless your QN scale
-      completes the whole handshake in the log and then reports no weight at
-      all; then set true.
+      above. Sends your weight anchor (last known weight, or the middle of
+      your weight range) twice right after the start command, as the
+      Arboleaf vendor app does, and acknowledges live weight frames with their
+      own weight. Leave empty unless your QN scale completes the whole
+      handshake in the log and then reports no weight at all; then set true.
   qn_a4_prelude:
     name: QN A4 prelude
     description: >-
@@ -76,6 +76,16 @@ configuration:
       with bluetoothctl. The scale has dropped its half of the pairing while
       Home Assistant still holds the key; this lets the add-on delete that key
       and pair again on its own. Leave it off otherwise.
+  preemptive_adapter_reset:
+    name: Power-cycle the adapter after every weigh-in
+    description: >-
+      Built-in Bluetooth only. After every connection to the scale the add-on
+      switches the Bluetooth adapter off and on again, which clears a stuck
+      scanning state some Raspberry Pi adapters fall into. Leave it on unless
+      you are testing whether that power-cycle is what makes a paired scale
+      reject the next connection. Turning it off also stops the brief adapter
+      drop that other Home Assistant Bluetooth integrations see after each
+      weigh-in.
   proxy_liveness_timeout_min:
     name: Proxy silence before restart (minutes)
     description: >-
@@ -96,6 +106,12 @@ configuration:
     description: >-
       Unit used for the user height and weight range below.
       Choose cm for metric or in (inches) for imperial.
+  display_unit:
+    name: Physical scale display unit
+    description: >-
+      Unit requested on the physical scale, independently of the unit published
+      to Home Assistant. Choose weight_unit to follow the setting above. Only
+      QN-family scales are told which unit to show; other scales ignore it.
   user_name:
     name: User name
     description: Display name for the user profile
@@ -179,7 +195,7 @@ configuration:
     name: Upload weight only
     description: >-
       Send only the weight to Garmin Connect and leave BMI, body fat, water,
-      bone, muscle, visceral fat, physique rating and metabolic age unset.
+      bone, muscle, visceral fat, physique rating, metabolic age and BMR unset.
       Other exporters still receive the full body composition.
   scan_cooldown:
     name: Scan cooldown (seconds)
@@ -189,9 +205,9 @@ configuration:
     description: >-
       Keep a reading whose upload failed and try again on a later cycle, for up
       to three days. Only targets that can record a past measurement (Garmin,
-      InfluxDB, file, Intervals, Runalyze, wger) can be retried; MQTT and
-      notifications cannot express a past reading and are not queued. Turn off
-      to write nothing to disk.
+      InfluxDB, file, Intervals, Runalyze, wger, HealthLog) can be retried;
+      MQTT and notifications cannot express a past reading and are not queued.
+      Turn off to write nothing to disk.
   idle_rescan_delay:
     name: Rescan delay when no scale was found (seconds)
     description: >-

@@ -7,6 +7,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from garminconnect import Garmin
 
+from garmin_errors import format_error_chain
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
@@ -47,6 +49,31 @@ def cleanup_legacy_tokens(token_dir):
                 print(f"[Setup] Warning: failed to remove {f.name}: {e}")
 
 
+def login_fresh(garmin):
+    """Log in with credentials, ignoring any cached token.
+
+    ``Garmin.login(tokenstore)`` loads an existing token file first and, when
+    that load succeeds, skips the credential login entirely. A stale token
+    therefore reaches the profile fetch, gets a 401, and surfaces as
+    "Failed to retrieve social profile" -- with the email and password never
+    sent and the MFA prompt never reached. That is fatal here, because minting
+    a fresh token is this script's whole job.
+
+    garminconnect 0.3.16 recovers from a rejected cache by discarding it and
+    re-running the login, but only when ``return_on_mfa`` is False, and we
+    need ``return_on_mfa=True`` to prompt for the 2FA code. So bypass the
+    cache here instead: call ``login()`` with no tokenstore, and hide
+    ``GARMINTOKENS``, which ``login()`` would otherwise pick up as a fallback
+    tokenstore and load anyway. The caller dumps the new token explicitly.
+    """
+    saved = os.environ.pop("GARMINTOKENS", None)
+    try:
+        return garmin.login()
+    finally:
+        if saved is not None:
+            os.environ["GARMINTOKENS"] = saved
+
+
 def resolve_env_ref(value):
     """Resolve ${ENV_VAR} references in config values (matching TS behavior)."""
     if not isinstance(value, str):
@@ -77,9 +104,9 @@ def authenticate(email, password, token_dir):
         garmin = Garmin(email, password, return_on_mfa=True)
 
         print("[Setup] Logging in...")
-        # In 0.3.x, login(tokenstore) auto-dumps tokens on successful
-        # credential login (swallows dump errors silently via contextlib).
-        result = garmin.login(token_dir)
+        # Deliberately not login(token_dir): that would reuse a cached token
+        # and skip authentication. See login_fresh().
+        result = login_fresh(garmin)
 
         # Handle 2FA/MFA challenge
         if isinstance(result, tuple) and result[0] == "needs_mfa":
@@ -87,18 +114,17 @@ def authenticate(email, password, token_dir):
             mfa_code = input("[Setup] Enter the MFA code from your authenticator app: ").strip()
             garmin.resume_login(result[1], mfa_code)
             print("[Setup] MFA verification successful.")
-            # resume_login() does NOT auto-save; dump explicitly.
-            garmin.client.dump(token_dir)
-        else:
-            # Belt-and-suspenders: login()'s auto-dump suppresses exceptions,
-            # so re-dump to surface any write errors here.
-            garmin.client.dump(token_dir)
+
+        # login_fresh() passes no tokenstore, so nothing is auto-dumped on
+        # either path; both branches rely on this explicit dump, which also
+        # surfaces write errors that login()'s auto-dump would have swallowed.
+        garmin.client.dump(token_dir)
 
         print(f"[Setup] Tokens saved to: {token_dir}")
         return True
 
     except Exception as e:
-        print(f"\n[Setup] Authentication failed: {e}")
+        print(f"\n[Setup] Authentication failed: {format_error_chain(e)}")
         print(
             "\nIf Garmin is blocking your IP, try running this setup script "
             "from a different machine or network, then copy the token "

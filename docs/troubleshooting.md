@@ -78,10 +78,10 @@ ble:
   noble_driver: stoprocent # or: abandonware
 ```
 
-| Driver                                    | Platforms             | Notes                                                                                                              |
-| ----------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `node-ble` (default on Linux)             | Linux only            | Uses BlueZ D-Bus. Most reliable on Raspberry Pi. Service UUIDs not available during scan (only after connecting).  |
-| `@abandonware/noble` (default on Windows) | Linux, Windows        | Mature driver. Uses WinRT on Windows. Builds from source, so it needs a C++ toolchain.                             |
+| Driver                                    | Platforms             | Notes                                                                                                                                       |
+| ----------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `node-ble` (default on Linux)             | Linux only            | Uses BlueZ D-Bus. Most reliable on Raspberry Pi. Service UUIDs not available during scan (only after connecting).                           |
+| `@abandonware/noble` (default on Windows) | Linux, Windows        | Mature driver. Uses WinRT on Windows. Builds from source, so it needs a C++ toolchain.                                                      |
 | `@stoprocent/noble` (default on macOS)    | Linux, macOS, Windows | Newer driver, ships prebuilt binaries. Exposes service UUIDs during scan. On Windows, requires the [WinUSB driver](https://zadig.akeo.ie/). |
 
 ::: tip Note
@@ -127,12 +127,23 @@ Provisioning only fills fields the scale reports as empty. A populated profile i
 
 Both get called "the PIN", and mixing them up costs hours.
 
-|              | Digits | What it is                                             | Where it goes                                  |
-| ------------ | ------ | ------------------------------------------------------ | ---------------------------------------------- |
-| Passkey      | 6      | BLE Numeric Comparison during pairing. New every time. | Nowhere. Confirm it on the scale with **SET**. |
-| Consent code | 4      | SIG User Control Point, tied to one user slot.         | `users[].beurer_pin`                           |
+|                                 | Digits | What it is                                                                                         | Where it goes                                  |
+| ------------------------------- | ------ | -------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| Passkey to confirm (e.g. BF915) | 6      | BLE Numeric Comparison during pairing. New every time.                                             | Nowhere. Confirm it on the scale with **SET**. |
+| Passkey to type (e.g. BF700)    | 6      | BLE Passkey Entry during pairing: the scale shows it, the computer has to type it. New every time. | Nowhere. Pair once by hand, see below.         |
+| Consent code                    | 4      | SIG User Control Point, tied to one user slot.                                                     | `users[].beurer_pin`                           |
 
 On a BF915 the consent code is the four-digit number the scale displays when you select that profile in its own menu. It does not have to be guessed or assigned.
+
+A scale that shows a passkey for you to type cannot be paired by putting that code in `config.yaml`, because it changes on every attempt. On Linux the log then says the scale `asked for a passkey and no users[].beurer_pin is set`. Pair it once by hand, with the scale awake and BLE Scale Sync stopped:
+
+```bash
+bluetoothctl
+scan on      # wait until the scale's MAC shows up
+pair <MAC>   # type the six-digit code the scale shows when asked
+```
+
+Then start BLE Scale Sync again.
 
 ### Beurer BF 405 / BF 915: factory reset and deleting one user
 
@@ -158,6 +169,8 @@ pair AA:BB:CC:DD:EE:FF
 ```
 
 If it happens every session, `ble.auto_clear_stale_bond: true` does that for you. See [the configuration reference](/guide/configuration#config-yaml-reference).
+
+If the key is rejected on the very next connect after a session that worked, every time (or the connect succeeds but then stalls at `Discovering services...` with `GATT server acquisition timed out`), try `ble.preemptive_adapter_reset: false` and see whether the bond then holds. The adapter power-cycle after each session is the only thing the host does in between, and whether it is the cause is still open ([#417](https://github.com/KristianP26/ble-scale-sync/issues/417)). Report the result there either way.
 
 ## Exporter Issues
 
@@ -339,7 +352,7 @@ On Pi 3/4 Broadcom on-board chips, this is a kernel/firmware-level issue that ev
 **Automatic in-process recovery.** The app already:
 
 - Resets its D-Bus client after every GATT operation in continuous mode
-- Runs a preemptive `btmgmt power off/on` cycle after every GATT operation to clear zombie controller state before it accumulates
+- Runs a preemptive `btmgmt power off/on` cycle after every GATT operation to clear zombie controller state before it accumulates (`ble.preemptive_adapter_reset: false` turns only this step off, see [the configuration reference](/guide/configuration#config-yaml-reference))
 - Escalates through 6 recovery tiers when `StartDiscovery` fails (D-Bus `StopDiscovery`, adapter power-cycle, btmgmt reset, rfkill block/unblock, `systemctl restart bluetooth`)
 
 **Auto-restart watchdog (continuous mode).** When in-process recovery is not enough (typically Pi 3/4 Broadcom firmware lock-up), a watchdog exits the process after `runtime.watchdog_max_consecutive_failures` consecutive scan failures (default `10`, ≈30 min). With Docker `restart: unless-stopped` the container restarts cleanly, the entrypoint resets the BT adapter, and the controller is typically unwedged. The watchdog only arms after the first successful weigh-in in the process lifetime, so it does not restart-loop the container if the scale is offline (vacation) or `scale_mac` is misconfigured.

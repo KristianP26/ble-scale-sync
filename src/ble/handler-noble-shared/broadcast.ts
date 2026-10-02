@@ -6,7 +6,7 @@ import type {
   ScaleReading,
 } from '../../interfaces/scale-adapter.js';
 import type { RawReading } from '../shared.js';
-import { evaluateAdvertisement, GraceTimers } from '../advertisement.js';
+import { armScanDeadline, evaluateAdvertisement, GraceTimers } from '../advertisement.js';
 import { bleLog, errMsg, formatMac, DISCOVERY_TIMEOUT_MS, IMPEDANCE_GRACE_MS } from '../types.js';
 import { parseMfgData, peripheralAddress } from './peripheral.js';
 import type { NobleApi } from './types.js';
@@ -50,13 +50,15 @@ export function broadcastScan(
       resolve(held);
     });
 
-    const timeout = setTimeout(() => {
+    // A weight-only reading still held at the deadline is given the rest of its
+    // grace rather than dropped (see armScanDeadline, #357).
+    const disarmDeadline = armScanDeadline(DISCOVERY_TIMEOUT_MS, grace, () => {
       cleanup();
       reject(new Error(`No stable broadcast reading within ${DISCOVERY_TIMEOUT_MS / 1000}s`));
-    }, DISCOVERY_TIMEOUT_MS);
+    });
 
     const cleanup = () => {
-      clearTimeout(timeout);
+      disarmDeadline();
       grace.clear();
       noble.removeListener('discover', onDiscover);
       noble.stopScanningAsync().catch(() => {});

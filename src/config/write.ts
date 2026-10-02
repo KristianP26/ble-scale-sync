@@ -32,18 +32,39 @@ const SECRET_FILE_MODE = 0o600;
  * Write content to a file atomically via tmp+rename.
  * Falls back to direct overwrite when the target is a Docker bind mount
  * (which cannot be unlinked/renamed over — EBUSY).
+ *
+ * The rename REPLACES the target; the original is never unlinked first. It used
+ * to be, and a rename that then failed with anything outside the fallback list
+ * (ENOSPC, EIO) left no target at all - and the outer cleanup removed the tmp
+ * copy too, so both were gone. Since v1.29.0 this also carries the export retry
+ * queue, so that was not only a config-file risk. libuv renames with
+ * MOVEFILE_REPLACE_EXISTING on Windows, so replacing in place is not
+ * POSIX-only; EEXIST is handled below for any filesystem that refuses anyway.
  */
 export function atomicWrite(filePath: string, content: string): void {
   const tmpPath = filePath + '.tmp';
   try {
-    writeFileSync(tmpPath, content, { encoding: 'utf8', mode: SECRET_FILE_MODE });
+    // A stale tmp from an earlier interrupted write must not be reused:
+    // writeFileSync applies `mode` only when it CREATES the file, so a leftover
+    // 0644 tmp would keep those permissions and the rename would carry them
+    // onto a file holding the Garmin password. Remove it, then create
+    // exclusively - if something recreates it in between, 'wx' fails loudly
+    // rather than silently widening the mode.
     try {
-      if (existsSync(filePath)) unlinkSync(filePath);
+      if (existsSync(tmpPath)) unlinkSync(tmpPath);
+    } catch {
+      // Best effort; the 'wx' below is what actually guarantees the mode.
+    }
+    writeFileSync(tmpPath, content, { encoding: 'utf8', mode: SECRET_FILE_MODE, flag: 'wx' });
+    try {
       renameSync(tmpPath, filePath);
     } catch (renameErr: unknown) {
       const code = renameErr instanceof Error ? (renameErr as NodeJS.ErrnoException).code : '';
-      if (code === 'EBUSY' || code === 'EPERM' || code === 'EXDEV') {
-        // Docker bind mount, Windows EPERM, cross-device rename: overwrite directly
+      if (code === 'EBUSY' || code === 'EPERM' || code === 'EXDEV' || code === 'EEXIST') {
+        // Docker bind mount, Windows EPERM, cross-device rename, or a
+        // filesystem that will not rename over an existing file: overwrite
+        // directly. Not atomic, and deliberately so - the alternative is
+        // refusing to write at all on the documented single-file mount.
         writeFileSync(filePath, content, 'utf8');
         // writeFileSync applies `mode` only when it CREATES the file, and this
         // branch exists precisely because the target already exists. The rename
@@ -99,6 +120,7 @@ export function _resetWriteLock(): void {
 // --- Self-write suppress window (used by config watcher to ignore our own writes) ---
 
 let suppressedUntil = 0;
+let selfWrittenContent: string | null = null;
 
 /**
  * Mark the next `ms` milliseconds as a self-write window. The config watcher
@@ -110,14 +132,39 @@ export function setSuppressReloadWindow(ms = 2000): void {
   suppressedUntil = Date.now() + ms;
 }
 
+/**
+ * Record the exact bytes a self-write is about to put on disk.
+ *
+ * A time window alone cannot tell our own write from anybody else's. The
+ * watcher used to drop every change inside it, and because it had already
+ * advanced its `lastContent` when the event arrived, a real edit landing in
+ * that window was gone for good: no later event looked like a change, so the
+ * operator's edit never took effect until a restart or a SIGHUP. Comparing the
+ * content instead distinguishes them exactly, with no reload loop and nothing
+ * discarded.
+ */
+export function noteSelfWrite(content: string, ms = 2000): void {
+  suppressedUntil = Date.now() + ms;
+  selfWrittenContent = content;
+}
+
 /** True when a recent self-write should suppress a reload trigger. */
 export function isReloadSuppressed(): boolean {
   return Date.now() < suppressedUntil;
 }
 
+/**
+ * True when `content` is exactly what this process just wrote, and recently
+ * enough for that to still be the explanation.
+ */
+export function isSelfWrite(content: string | null): boolean {
+  return isReloadSuppressed() && content !== null && content === selfWrittenContent;
+}
+
 /** Reset the suppress window (for tests). */
 export function _resetSuppressWindow(): void {
   suppressedUntil = 0;
+  selfWrittenContent = null;
 }
 
 // --- Last known weight writer (sync, testable) ---
@@ -155,7 +202,11 @@ export function writeLastKnownWeight(configPath: string, userSlug: string, weigh
     return;
   }
 
-  atomicWrite(configPath, doc.toString());
+  const next = doc.toString();
+  // Register the bytes before they land: the watcher compares against these to
+  // tell our own bump from an edit somebody made in the same two seconds.
+  noteSelfWrite(next);
+  atomicWrite(configPath, next);
 }
 
 // --- Debounced async updater ---

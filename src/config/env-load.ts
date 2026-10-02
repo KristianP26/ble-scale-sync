@@ -100,6 +100,14 @@ export function loadEnvConfig(): AppConfig {
         sync_measurements: w.syncMeasurements,
       });
     }
+    if (name === 'healthlog' && exporterConfig.healthlog) {
+      const h = exporterConfig.healthlog;
+      Object.assign(entry, {
+        base_url: h.baseUrl,
+        token: h.token,
+        sync_measurements: h.syncMeasurements,
+      });
+    }
 
     return entry as ExporterEntry;
   });
@@ -118,6 +126,7 @@ export function loadEnvConfig(): AppConfig {
     scale: {
       weight_unit: envConfig.weightUnit,
       height_unit: 'cm', // env-var config already converts to cm
+      display_unit: 'weight_unit',
     },
     unknown_user: 'nearest',
     // Env-var config has one synthetic user with a 0-999 kg range, so the guard

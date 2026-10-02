@@ -100,6 +100,15 @@ export const CHR_WRITE_T1 = uuid16(0xffe3);
  * being able to try, but it is not something to hand the rest of the QN family
  * on spec. If it works for more than one unit, the payload deserves decoding
  * before this becomes a dialect default.
+ *
+ * Two Android captures of another reporter's Arboleaf (#75, #331) back that
+ * caution. The app sends the same two frames there with DIFFERENT payload
+ * bytes (`a4 0f 01 21 0a 5b 09 53 0a e9 09 d5 0c a1 14`), so the payload is per
+ * user or per session, not a constant. Both send them only after the two
+ * weight-anchor A2 frames, and in the later capture the first live 0x10
+ * arrives before them, so on that unit they are not what opens the stream.
+ * With `ble.qn_weight_ack` set on any dialect but the 20-byte extended one
+ * they therefore go out after that A2 pair; the extended order is unchanged.
  */
 export const A4_PRELUDE: readonly (readonly number[])[] = [
   [0xa4, 0x0f, 0x01, 0x21, 0x0a, 0x48, 0x08, 0xf1, 0x0a, 0x33, 0x08, 0xda, 0x08, 0x80, 0xc7],
@@ -116,8 +125,10 @@ export const CHR_AE02 = uuid16(0xae02);
 // Service UUIDs for matching
 export const SVC_T1 = 'ffe0';
 export const SVC_T2 = 'fff0';
-// AE00 vendor service (newer QN firmware, e.g. Renpho ES-CS20M). Unique to QN
-// scales — never shared with the fff0 Inlife/1byone/Eufy cluster (#235).
+// AE00 vendor service (JieLi chip; newer QN firmware, e.g. Renpho Elis 1). Not
+// shared with the fff0 Inlife/1byone/Eufy cluster (#235), but not unique to QN
+// either: a 0x1A10 / 55AA-family scale carries it too (#436), which
+// qnMatches() handles before it trusts AE00.
 export const SVC_AE00 = 'ae00';
 
 // SIG Body Composition / Weight Scale services. A 'renpho'-named device that
@@ -274,9 +285,32 @@ export const LEGACY_PROTO_TYPE = 0x00;
  */
 export const TRIGGER_WEIGHT_FALLBACK_KG = 77.15;
 
-/** How many times the vendor app repeats the trigger, and the gap it leaves. */
+/**
+ * How many times the vendor app repeats the trigger, and the gap left between
+ * the copies.
+ *
+ * The count is from captures on both long dialects (#235 GE CS 10 G, #331 and
+ * #75 Arboleaf). The 150 ms gap is NOT: the #235 work recorded no timing, and
+ * the Arboleaf capture's own gap is 71 ms. It is kept for the es26m anchor as
+ * well, because in that capture the second copy reaches the scale only after
+ * the scale has acked the first (`a3 04 01 a8`, 62 ms after it), and a 71 ms
+ * gap at the host can arrive shorter than that through a proxy transport.
+ * 150 ms holds the captured order, A2 -> a3 -> A2, with margin.
+ */
 export const TRIGGER_REPEATS = 2;
 export const TRIGGER_GAP_MS = 150;
+
+/**
+ * Delay from the 0x22 START to the first of the two weight-anchor A2 frames on
+ * every dialect except the 20-byte extended one (`ble.qn_weight_ack`, #331).
+ *
+ * From an Android btsnoop of the Arboleaf app completing a weigh-in on the
+ * 19-byte es26m dialect (#331, 2026-09-29): START, then the first A2 75.0 ms
+ * later. It is a host-side time, so through a proxy it is a minimum rather
+ * than an exact value. The extended dialect does not use it: its burst starts
+ * straight after START, which is what was confirmed on that hardware.
+ */
+export const POST_START_ANCHOR_DELAY_MS = 75;
 
 /**
  * Completed-weigh-in result frames on the extended dialect (#235).

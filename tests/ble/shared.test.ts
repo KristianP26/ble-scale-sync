@@ -12,7 +12,10 @@ import { withIdleTimeout } from '../../src/ble/types.js';
 import type { BleChar, BleDevice } from '../../src/ble/shared.js';
 import { normalizeUuid, bleLog } from '../../src/ble/types.js';
 import { KoogeekS1Adapter } from '../../src/scales/koogeek-s1.js';
-import { uuid16, xorChecksum } from '../../src/scales/body-comp-helpers.js';
+import { RenphoMsc04Adapter } from '../../src/scales/renpho-msc04.js';
+import { BeurerSanitasScaleAdapter } from '../../src/scales/beurer-sanitas.js';
+import { mockPeripheral } from '../helpers/scale-test-utils.js';
+import { uuid16, xorChecksum, buildPayload } from '../../src/scales/body-comp-helpers.js';
 import type {
   ScaleAdapter,
   ScaleReading,
@@ -1814,6 +1817,42 @@ describe('waitForRawReading() under the native idle deadline', () => {
       vi.useRealTimers();
     }
   });
+
+  // A composition hold longer than the idle deadline, on a scale that says
+  // nothing more after the weight settles. Before #434 the idle timeout won
+  // this race and the settled weight was discarded with the session.
+  it('lets a composition hold outlast the idle deadline and settle on the held weight', async () => {
+    vi.useFakeTimers();
+    try {
+      const notifyChar = createMockChar();
+      const device = createMockDevice();
+      const adapter = createLegacyAdapter({
+        unlockCommand: undefined,
+        completionHoldMs: IDLE_MS * 5,
+        parseNotification: vi.fn(() => ({ weight: 81.55, impedance: 0 })),
+        isComplete: () => true,
+        isFinal: () => false,
+      });
+
+      const promise = runWithIdle(adapter, notifyChar, device);
+      let failure: unknown = null;
+      promise.catch((e: unknown) => {
+        failure = e;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      notifyChar.triggerData(Buffer.from([0x01]));
+
+      // Several idle windows of silence, still inside the hold.
+      await vi.advanceTimersByTimeAsync(IDLE_MS * 4);
+      expect(failure).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(IDLE_MS);
+      const result = await promise;
+      expect(result.reading).toEqual({ weight: 81.55, impedance: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ─── getRawCaptureConfig + toHex ─────────────────────────────────────────────
@@ -1943,6 +1982,124 @@ describe('completionHoldMs through waitForRawReading', () => {
       // No timer advance: a final frame must not wait out the window.
       const raw = await promise;
       expect(raw.reading.impedance).toBe(500);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ─── R-MSC04 composition hold, end to end (#434) ────────────────────────────
+
+// The real adapter through the real session, with the frame spacing of the
+// captures. The adapter tests pin what isComplete/isFinal answer; these pin
+// that the session stays open past the 0x24 weight and settles on the record.
+describe('R-MSC04 composition hold through waitForRawReading (#434)', () => {
+  const hex = (h: string): Buffer => Buffer.from(h, 'hex');
+  const PROFILE_187: UserProfile = { height: 187, age: 30, gender: 'male', isAthlete: false };
+
+  async function startSession() {
+    const write = createMockChar();
+    const notify = createMockChar();
+    const indicate = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [uuid16(0x2a11), write],
+      [uuid16(0x2a10), notify],
+      [uuid16(0x2a12), indicate],
+    ]);
+    const adapter = new RenphoMsc04Adapter();
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, 'AABBCCDDEEFF');
+    let settled = false;
+    void promise.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await vi.waitFor(() => expect(indicate.subscribeCalled).toBe(true));
+    await vi.advanceTimersByTimeAsync(0);
+    return { write, notify, indicate, device, adapter, promise, isSettled: () => settled };
+  }
+
+  it('holds past the 0x24 weight and settles on the record, with the capture spacing', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession();
+      // #117 capture, second connection (20:28:09.513 .. 20:28:30.363).
+      s.indicate.triggerData(hex('55aa200005000101005076'));
+      s.notify.triggerData(hex('55aa2100050100002558a3'));
+      await vi.advanceTimersByTimeAsync(270);
+      s.notify.triggerData(hex('55aa2100050100002558a3'));
+      await vi.advanceTimersByTimeAsync(270);
+      s.indicate.triggerData(hex('55aa240006011100002553b3')); // 14.253, 95.55 kg
+
+      await vi.advanceTimersByTimeAsync(6165);
+      s.indicate.triggerData(hex('55aa200005020901005080')); // 20.418, weight locked
+      await vi.advanceTimersByTimeAsync(9630);
+      s.indicate.triggerData(hex('55aa200005031101005089')); // 30.048, complete
+      await vi.advanceTimersByTimeAsync(135);
+      s.indicate.triggerData(hex('ad040255aa2500240411000025530a00de0c200b'));
+      await vi.advanceTimersByTimeAsync(91);
+      s.indicate.triggerData(hex('ae0401ef08e4092a00ae0ac10a9007e108250100'));
+      await vi.advanceTimersByTimeAsync(89);
+      expect(s.isSettled(), 'the 0x24 weight alone must not end the session').toBe(false);
+
+      s.indicate.triggerData(hex('af0400ed011101b70008ea'));
+      const raw = await s.promise;
+      expect(raw.reading).toEqual({ weight: 95.55, impedance: 0 });
+      expect(s.adapter.isFinal(raw.reading)).toBe(true);
+      expect(s.adapter.computeMetrics(raw.reading, PROFILE_187).bodyFatPercent).toBe(23.7);
+
+      // After the start command, exactly the app's three status acks, in order.
+      expect(s.write.writtenData.map((b) => Buffer.from(b).toString('hex'))).toEqual([
+        '55aa9000040100000094',
+        '55aab000020001b2',
+        '55aab000020201b4',
+        '55aab000020301b5',
+      ]);
+      const ackCalls = vi.mocked(s.write.write).mock.calls.slice(1);
+      expect(ackCalls.every(([, withResponse]) => withResponse === true)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles weight-only on the 0x24 weight when no record arrives within 30 s', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession();
+      // #434, vossitch's DEBUG log.
+      s.indicate.triggerData(hex('55aa20000500010100466c'));
+      s.notify.triggerData(hex('55aa21000501000022b0f8')); // 88.80
+      await vi.advanceTimersByTimeAsync(270);
+      s.notify.triggerData(hex('55aa2100050100001fe025')); // 81.60
+      await vi.advanceTimersByTimeAsync(135);
+      s.indicate.triggerData(hex('55aa240006011100001fdb35')); // settled 81.55
+      // A live frame after the settled weight must not replace the held one.
+      await vi.advanceTimersByTimeAsync(270);
+      s.notify.triggerData(hex('55aa21000501000022b0f8'));
+
+      await vi.advanceTimersByTimeAsync(30_000 - 271);
+      expect(s.isSettled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual({ weight: 81.55, impedance: 0 });
+      expect(s.adapter.computeMetrics(raw.reading, PROFILE)).toEqual(
+        buildPayload(81.55, 0, {}, PROFILE),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles on the held weight at once when the scale disconnects during the hold', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession();
+      s.indicate.triggerData(hex('55aa240006011100001fdb35'));
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(s.isSettled()).toBe(false);
+      s.device.triggerDisconnect();
+      const raw = await s.promise;
+      expect(raw.reading).toEqual({ weight: 81.55, impedance: 0 });
     } finally {
       vi.useRealTimers();
     }
@@ -2131,5 +2288,353 @@ describe('withAbandonmentCleanup() (#404)', () => {
 
     const result = await promise;
     expect(result.reading).toEqual({ weight: 75.5, impedance: 500 });
+  });
+});
+
+// ─── Write lane (#211) ──────────────────────────────────────────────────────
+
+interface WriteRecord {
+  hex: string;
+  withResponse: boolean;
+}
+
+interface BluezLikeChar extends BleChar {
+  triggerData(data: Buffer): void;
+  /** Answer the oldest write that is still waiting for its response. */
+  release(): void;
+  subscribeCalled: boolean;
+  accepted: WriteRecord[];
+  rejections: WriteRecord[];
+}
+
+/**
+ * A characteristic that refuses writes the way BlueZ does. While a write WITH
+ * a response is open on it, every other write to it is refused with
+ * "In Progress", a write-without-response included, because
+ * characteristic_write_value() checks chrc->write_op before it even parses the
+ * write type (src/gatt-client.c:1045-1046, master ae69dcd). The open write
+ * stays open until the test calls release(). A write without a response on an
+ * idle characteristic settles at once.
+ *
+ * With `refuseWhileBusy: false` it models a stack that queues writes itself
+ * (WinRT, CoreBluetooth): nothing is refused, writes with a response still
+ * wait for release(). The invariant tests use that mode, so they pass on code
+ * without the lane and only catch a lane that loses or reorders a write.
+ *
+ * It is notifiable as well, so one instance can be Beurer's FFE1.
+ */
+function createBluezLikeChar(opts: { refuseWhileBusy?: boolean } = {}): BluezLikeChar {
+  const refuse = opts.refuseWhileBusy ?? true;
+  let onData: ((data: Buffer) => void) | null = null;
+  const open: (() => void)[] = [];
+  const char: BluezLikeChar = {
+    subscribeCalled: false,
+    accepted: [],
+    rejections: [],
+    subscribe: vi.fn(async (cb: (data: Buffer) => void) => {
+      char.subscribeCalled = true;
+      onData = cb;
+      return () => {
+        onData = null;
+      };
+    }),
+    write: vi.fn((data: Buffer, withResponse: boolean) => {
+      const rec = { hex: data.toString('hex'), withResponse };
+      if (refuse && open.length > 0) {
+        char.rejections.push(rec);
+        return Promise.reject(new Error('In Progress'));
+      }
+      char.accepted.push(rec);
+      if (!withResponse) return Promise.resolve();
+      return new Promise<void>((resolve) => open.push(resolve));
+    }),
+    read: vi.fn(async () => Buffer.alloc(0)),
+    triggerData: (data: Buffer) => {
+      if (onData) onData(data);
+    },
+    release: () => {
+      open.shift()?.();
+    },
+  };
+  return char;
+}
+
+describe('waitForRawReading() write lane (#211)', () => {
+  const FFE1 = '0000ffe100001000800000805f9b34fb';
+  const OTHER_UUID = '0000fff300001000800000805f9b34fb';
+
+  /** Real frames from the SBF75 debug log in #211 (2026-09-30). */
+  const SBF75_58_0732 = Buffer.from('e758010732', 'hex');
+  const SBF75_58_0739 = Buffer.from('e758010739', 'hex');
+  const SBF75_58_072E = Buffer.from('e75801072e', 'hex');
+  const SBF75_58_0733 = Buffer.from('e758010733', 'hex');
+  const SBF75_58_OFF_0733 = Buffer.from('e758000733', 'hex');
+  /** Real 0x59 parts from the official-app HCI snoop in #211. */
+  const PART1 = Buffer.from('e7590301010000000000000065', 'hex');
+  const PART2 = Buffer.from('e75903026a21f4c6068701b500df02', 'hex');
+  const PART3 = Buffer.from('e759030309018d00e907170aa20108', 'hex');
+
+  const acks = (char: BluezLikeChar): string[] =>
+    char.accepted.map((a) => a.hex).filter((h) => h.startsWith('e7f1'));
+
+  /** A fresh Beurer/Sanitas adapter on its single FFE1 notify+write characteristic. */
+  function beurerSession(ffe1: BluezLikeChar) {
+    const adapter = new BeurerSanitasScaleAdapter();
+    adapter.matches(mockPeripheral('SBF75'));
+    const device = createMockDevice();
+    const charMap = new Map<string, BleChar>([[normalizeUuid(FFE1), ffe1]]);
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    promise.catch(() => {});
+    return { promise, device };
+  }
+
+  /** Release open writes one at a time, letting the lane start the next each time. */
+  async function drain(char: BluezLikeChar): Promise<void> {
+    for (let i = 0; i < 20; i++) {
+      char.release();
+      for (let j = 0; j < 5; j++) await Promise.resolve();
+    }
+  }
+
+  it('R1: queues an ACK behind the one still open instead of having it refused', async () => {
+    const ffe1 = createBluezLikeChar();
+    const { device } = beurerSession(ffe1);
+    await vi.waitFor(() => expect(ffe1.subscribeCalled).toBe(true));
+
+    ffe1.triggerData(SBF75_58_0732); // ACK e7 f1 58 01 07 opens write_op
+    ffe1.triggerData(SBF75_58_0739); // 7 ms later in the log, and refused there
+    await Promise.resolve();
+    expect(ffe1.rejections).toEqual([]);
+
+    ffe1.release();
+    await vi.waitFor(() => expect(acks(ffe1)).toEqual(['e7f1580107', 'e7f1580107']));
+    expect(ffe1.rejections).toEqual([]);
+    device.triggerDisconnect();
+  });
+
+  it('R2: queues the unlock tick behind an open ACK instead of having it refused', async () => {
+    vi.useFakeTimers();
+    try {
+      const ffe1 = createBluezLikeChar();
+      const errorSpy = vi.spyOn(bleLog, 'error');
+      const { device } = beurerSession(ffe1);
+      // The unlock interval is armed at t=0. Step to t=1 before the frame, so
+      // the lane's 5000 ms release timer (armed by the ACK) lands at 5001,
+      // after the unlock tick at 5000 rather than in the same millisecond.
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ffe1.subscribeCalled).toBe(true);
+      expect(ffe1.accepted.map((a) => a.hex)).toEqual(['e701']);
+
+      ffe1.triggerData(SBF75_58_0732); // ACK opens write_op
+      await vi.advanceTimersByTimeAsync(4999); // t=5000: unlock tick, lane not yet released
+      expect(ffe1.rejections).toEqual([]);
+      expect(errorSpy).not.toHaveBeenCalled();
+
+      ffe1.release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ffe1.accepted.map((a) => a.hex)).toEqual(['e701', 'e7f1580107', 'e701']);
+      expect(ffe1.rejections).toEqual([]);
+      device.triggerDisconnect();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('R3: joins identical waiting ACKs and keeps a different one', async () => {
+    const ffe1 = createBluezLikeChar();
+    const { device } = beurerSession(ffe1);
+    await vi.waitFor(() => expect(ffe1.subscribeCalled).toBe(true));
+
+    ffe1.triggerData(SBF75_58_0732); // ACK e7 f1 58 01 07, running
+    ffe1.triggerData(SBF75_58_0739); // ACK e7 f1 58 01 07, waits
+    ffe1.triggerData(SBF75_58_072E); // ACK e7 f1 58 01 07, joins the waiting one
+    ffe1.triggerData(SBF75_58_OFF_0733); // ACK e7 f1 58 00 07, different, waits
+    await drain(ffe1);
+
+    expect(acks(ffe1)).toEqual(['e7f1580107', 'e7f1580107', 'e7f1580007']);
+    expect(ffe1.rejections).toEqual([]);
+    device.triggerDisconnect();
+  });
+
+  it("R4: serializes an adapter's own concurrent writes to one characteristic", async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createBluezLikeChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([[NOTIFY_UUID, notifyChar]]);
+    charMap.set(normalizeUuid(WRITE_UUID), writeChar);
+
+    let connected = false;
+    const adapter = createLegacyAdapter({
+      onConnected: async (ctx: ConnectionContext) => {
+        await Promise.all([
+          ctx.write(WRITE_UUID, [0x01], true),
+          ctx.write(WRITE_UUID, [0x02], true),
+        ]);
+        connected = true;
+      },
+      parseNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    promise.catch(() => {});
+    await vi.waitFor(() => expect(writeChar.accepted).toHaveLength(1));
+    expect(writeChar.rejections).toEqual([]);
+
+    writeChar.release();
+    await vi.waitFor(() => expect(writeChar.accepted.map((a) => a.hex)).toEqual(['01', '02']));
+    writeChar.release();
+    await vi.waitFor(() => expect(connected).toBe(true));
+    expect(writeChar.rejections).toEqual([]);
+
+    notifyChar.triggerData(Buffer.from([0x99]));
+    await promise;
+  });
+
+  it('S1: a write open on one characteristic does not hold up another', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createBluezLikeChar();
+    const otherChar = createBluezLikeChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([[NOTIFY_UUID, notifyChar]]);
+    charMap.set(normalizeUuid(WRITE_UUID), writeChar);
+    charMap.set(normalizeUuid(OTHER_UUID), otherChar);
+
+    const adapter = createLegacyAdapter({
+      onConnected: async (ctx: ConnectionContext) => {
+        void ctx.write(WRITE_UUID, [0x01], true).catch(() => {});
+        void ctx.write(OTHER_UUID, [0x02], true).catch(() => {});
+      },
+      parseNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(writeChar.accepted).toHaveLength(1));
+    // Started while the write on WRITE_UUID is still open.
+    expect(otherChar.accepted.map((a) => a.hex)).toEqual(['02']);
+
+    notifyChar.triggerData(Buffer.from([0x99]));
+    await promise;
+  });
+
+  it('S2: every 0x59 part gets its own ACK, in order, with 0x58 frames in between', async () => {
+    const ffe1 = createBluezLikeChar({ refuseWhileBusy: false });
+    const { promise } = beurerSession(ffe1);
+    await vi.waitFor(() => expect(ffe1.subscribeCalled).toBe(true));
+
+    ffe1.triggerData(SBF75_58_0733); // its ACK stays open
+    ffe1.triggerData(PART1);
+    ffe1.triggerData(SBF75_58_OFF_0733);
+    ffe1.triggerData(PART2);
+    ffe1.triggerData(PART3); // completes the reading
+    await drain(ffe1);
+
+    expect(acks(ffe1)).toEqual([
+      'e7f1580107',
+      'e7f1590301',
+      'e7f1580007',
+      'e7f1590302',
+      'e7f1590303',
+    ]);
+    expect((await promise).reading.impedance).toBeGreaterThan(0);
+  });
+
+  it('S3: an adapter write fired after the reading completed still goes out (#370)', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createBluezLikeChar({ refuseWhileBusy: false });
+    const device = createMockDevice();
+    const { charMap } = createCharMap([[NOTIFY_UUID, notifyChar]]);
+    charMap.set(normalizeUuid(WRITE_UUID), writeChar);
+
+    let ctxRef: ConnectionContext | null = null;
+    const adapter = createLegacyAdapter({
+      onConnected: async (ctx: ConnectionContext) => {
+        ctxRef = ctx;
+        void ctx.write(WRITE_UUID, [0x01], true); // stays open
+      },
+      parseNotification: vi.fn(() => {
+        void ctxRef!.write(WRITE_UUID, [0x02], true);
+        return { weight: 75, impedance: 500 };
+      }),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(writeChar.accepted).toHaveLength(1));
+    notifyChar.triggerData(Buffer.from([0x99]));
+    await promise; // session over, lanes closed
+
+    await drain(writeChar);
+    expect(writeChar.accepted.map((a) => a.hex)).toEqual(['01', '02']);
+  });
+
+  it('S4: the ACK of the frame that completed the reading still goes out', async () => {
+    const ffe1 = createBluezLikeChar({ refuseWhileBusy: false });
+    const { promise } = beurerSession(ffe1);
+    await vi.waitFor(() => expect(ffe1.subscribeCalled).toBe(true));
+
+    ffe1.triggerData(PART1); // its ACK stays open
+    ffe1.triggerData(PART2);
+    ffe1.triggerData(PART3); // finishWith() closes the lanes in this same tick
+    await promise;
+
+    await drain(ffe1);
+    expect(acks(ffe1)).toEqual(['e7f1590301', 'e7f1590302', 'e7f1590303']);
+  });
+
+  it('R5: drops an unlock still queued when the session ends, and does not log it', async () => {
+    vi.useFakeTimers();
+    try {
+      const notifyChar = createMockChar();
+      const writeChar = createBluezLikeChar();
+      const device = createMockDevice();
+      const { charMap } = createCharMap([[NOTIFY_UUID, notifyChar]]);
+      charMap.set(normalizeUuid(WRITE_UUID), writeChar);
+      const errorSpy = vi.spyOn(bleLog, 'error');
+
+      const adapter = createLegacyAdapter({
+        unlockCommand: [0x13, 0x09],
+        unlockIntervalMs: 1000,
+        buildAck: (data: Buffer) => (data[0] === 0x01 ? [0xaa] : null),
+        parseNotification: vi.fn((data: Buffer) =>
+          data[0] === 0x02 ? { weight: 75, impedance: 500 } : null,
+        ),
+      });
+
+      const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(writeChar.accepted.map((a) => a.hex)).toEqual(['1309']);
+
+      notifyChar.triggerData(Buffer.from([0x01])); // ACK aa opens write_op
+      await vi.advanceTimersByTimeAsync(999); // t=1000: unlock tick, queued behind it
+      notifyChar.triggerData(Buffer.from([0x02])); // completes the reading
+      await promise;
+
+      writeChar.release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(writeChar.accepted.map((a) => a.hex)).toEqual(['1309', 'aa']);
+      expect(writeChar.rejections).toEqual([]);
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('logs how long each ACK took, and which ones were coalesced', async () => {
+    const ffe1 = createBluezLikeChar();
+    const debugSpy = vi.spyOn(bleLog, 'debug');
+    const { device } = beurerSession(ffe1);
+    await vi.waitFor(() => expect(ffe1.subscribeCalled).toBe(true));
+
+    ffe1.triggerData(SBF75_58_0732); // running
+    ffe1.triggerData(SBF75_58_0739); // waits
+    ffe1.triggerData(SBF75_58_072E); // joins it
+    await drain(ffe1);
+
+    const lines = debugSpy.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('ACK'));
+    expect(lines).toHaveLength(3);
+    expect(
+      lines.filter((l) => /^ACK \[e7 f1 58 01 07\] written in \d+ ms \(waited \d+ ms\)$/.test(l)),
+    ).toHaveLength(2);
+    expect(lines).toContain('ACK [e7 f1 58 01 07] coalesced with an identical one still waiting');
+    device.triggerDisconnect();
   });
 });

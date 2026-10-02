@@ -7,6 +7,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from garminconnect import Garmin
 
+from garmin_errors import format_error_chain
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
@@ -60,6 +62,18 @@ def get_garmin_client(token_dir=None):
             "(or 'npm run setup-garmin' from a checkout) to re-authenticate."
         )
 
+    # Without a token file, garminconnect falls through to a credential login
+    # with none set and fails with "Username and password are required", which
+    # sends people checking credentials that were never the problem (#435).
+    if not (Path(token_dir) / "garmin_tokens.json").is_file():
+        raise RuntimeError(
+            f"No Garmin token in {token_dir} (garmin_tokens.json is missing), "
+            "so Garmin authentication has not succeeded yet. "
+            "Run 'ble-scale-sync setup-garmin' "
+            "(or 'npm run setup-garmin' from a checkout); in the Home Assistant "
+            "add-on, check the Garmin lines in the add-on's startup log."
+        )
+
     garmin = Garmin()
     garmin.login(token_dir)
     log("[Garmin] Authenticated.")
@@ -101,6 +115,7 @@ def upload(payload, token_dir=None):
         physique_rating=derived("physiqueRating"),
         metabolic_age=derived("metabolicAge"),
         bmi=derived("bmi"),
+        basal_met=derived("bmr"),
     )
 
     log("[Garmin] Upload successful!")
@@ -142,8 +157,13 @@ def main():
         print(json.dumps({"success": True, "data": data}))
         sys.exit(0)
     except Exception as e:
-        log(f"[Garmin] Error: {e}")
-        print(json.dumps({"success": False, "error": str(e)}))
+        # The chained cause carries the status code that explains the failure.
+        # garminconnect reports a rejected token as "Failed to retrieve social
+        # profile" with the 401 only on __cause__, so str(e) alone leaves the
+        # orchestrator logging the same opaque line on every retry.
+        detail = format_error_chain(e)
+        log(f"[Garmin] Error: {detail}")
+        print(json.dumps({"success": False, "error": detail}))
         sys.exit(1)
 
 

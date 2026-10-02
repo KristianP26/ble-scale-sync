@@ -101,6 +101,23 @@ export function evaluateAdvertisement(
   return { kind: 'gatt' };
 }
 
+/**
+ * True when this adapter reads its weigh-in from advertisements and must never
+ * be driven over a GATT session, even when it also declares GATT wiring.
+ *
+ * The same test noble and node-ble have always applied before deciding between
+ * the passive scan and a connect. A Mi Scale 2 carries a GATT path too, and on
+ * the reporter's unit that path answers the unlock write with a status echo
+ * forever and never a weight frame, so a session opened to it runs to the cap
+ * (#422).
+ */
+export function readsFromAdvertisement(adapter: ScaleAdapter): boolean {
+  return (
+    adapter.preferPassive === true &&
+    (typeof adapter.parseServiceData === 'function' || typeof adapter.parseBroadcast === 'function')
+  );
+}
+
 // ─── Grace timers (per-address, weight-only fallback) ──────────────────────────
 
 /**
@@ -155,12 +172,51 @@ export class GraceTimers {
     this.readings.delete(address);
   }
 
+  /** True while any weight-only reading is waiting out its grace. */
+  isHolding(): boolean {
+    return this.readings.size > 0;
+  }
+
   /** Clear all pending timers and stored readings (teardown). */
   clear(): void {
     for (const t of this.timers.values()) clearTimeout(t);
     this.timers.clear();
     this.readings.clear();
   }
+}
+
+/**
+ * Arm the deadline of a single-shot broadcast scan. Returns a function that
+ * disarms it.
+ *
+ * With nothing held when it fires, `expire` runs and the caller rejects the
+ * scan as it always has. With a weight-only reading held it does nothing and
+ * the scan keeps listening: either a complete frame arrives and resolves it
+ * with the impedance, or the held reading's own grace timer resolves it weight
+ * only (#357). That wait is bounded by `IMPEDANCE_GRACE_MS` from when the
+ * reading was first held, because `GraceTimers.hold` arms its timer once and
+ * does not re-arm it.
+ *
+ * Resolving the held reading AT the deadline instead cost a Mi Scale 2 its
+ * impedance: a stable weight-only frame shortly before the deadline used to
+ * mean a rejection, a quick rescan and then the complete frame, and resolving
+ * it there exported the weight alone. Waiting out the grace keeps both.
+ *
+ * Only the deadline is softened. An abort, or any other failure the caller
+ * rejects with, does not pass through here and stands as before.
+ */
+export function armScanDeadline(ms: number, grace: GraceTimers, expire: () => void): () => void {
+  const timer = setTimeout(() => {
+    if (grace.isHolding()) {
+      bleLog.info(
+        'Scan deadline reached while a weight-only reading waits for impedance; ' +
+          'waiting out its grace before reporting it',
+      );
+      return;
+    }
+    expire();
+  }, ms);
+  return () => clearTimeout(timer);
 }
 
 // ─── Dedup window (per address+weight) ─────────────────────────────────────────

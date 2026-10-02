@@ -321,6 +321,19 @@ describe('buildPayload()', () => {
     const metabolicAge = 30 + Math.trunc((idealBmr - bmr) / 15);
     expect(p.metabolicAge).toBe(metabolicAge);
   });
+
+  // #433: the age-25 reference used the male constant for everyone, so an
+  // otherwise identical woman came out 11 years older. With matching constants
+  // weight and height cancel (metabolic age is age + trunc((age - 25) / 3) for
+  // a non-athlete), so the body values here are incidental; the sex is the point.
+  it('gives the same metabolic age to both sexes for an identical body', () => {
+    const female = { ...profile, gender: 'female' as const, age: 26, height: 172 };
+    const male = { ...female, gender: 'male' as const };
+    const f = buildPayload(61.5, 500, {}, female);
+    const m = buildPayload(61.5, 500, {}, male);
+    expect(f.metabolicAge).toBe(26);
+    expect(f.metabolicAge).toBe(m.metabolicAge);
+  });
 });
 
 // #386: computeBiaFat bounds its output but not its input, and both directions

@@ -9,6 +9,15 @@ export interface RetryOptions {
   log: Logger;
   /** Label for log messages (e.g. 'upload', 'MQTT publish'). */
   label: string;
+  /**
+   * Delay before the FIRST retry, doubled for each one after it (default
+   * 1000 ms). Set 0 in tests that would otherwise wait for it.
+   */
+  baseDelayMs?: number;
+  /** Ceiling for the backoff (default 8000 ms). */
+  maxDelayMs?: number;
+  /** Injectable sleep, so tests do not have to wait out real time. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /**
@@ -61,6 +70,22 @@ export async function httpHealthcheck(probe: () => Promise<Response>): Promise<E
 }
 
 /**
+ * Base backoff delay, overridable with BLE_RETRY_BASE_DELAY_MS.
+ *
+ * The env var is read per call rather than once at import, so a test (or an
+ * operator) can change it without reloading the module. 0 disables the wait
+ * entirely, which is what the test suite uses: three attempts against a mocked
+ * fetch have nothing to wait for, and paying the real backoff in every
+ * failure-path test would add a minute to the run for no signal.
+ */
+function defaultBaseDelayMs(): number {
+  const raw = process.env.BLE_RETRY_BASE_DELAY_MS;
+  if (raw === undefined) return 1_000;
+  const num = Number(raw);
+  return Number.isFinite(num) && num >= 0 ? num : 1_000;
+}
+
+/**
  * Execute an async function with retries, returning an ExportResult.
  *
  * The `fn` should throw on failure. If it returns an ExportResult with
@@ -71,10 +96,23 @@ export async function withRetry(
   opts: RetryOptions,
 ): Promise<ExportResult> {
   const maxRetries = opts.maxRetries ?? 2;
+  const baseDelayMs = opts.baseDelayMs ?? defaultBaseDelayMs();
+  const maxDelayMs = opts.maxDelayMs ?? 8_000;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   let lastError: string | undefined;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
+      // There was no delay at all, so all three attempts went out in the same
+      // millisecond. Against the transient failures this loop exists for -
+      // `isRetryableStatus` counts 429 and 5xx among them - that is not a
+      // retry, it is the same request three times: the service gets no chance
+      // to recover and the whole budget is spent before it could have.
+      const delay = Math.min(baseDelayMs * 2 ** (attempt - 1), maxDelayMs);
+      if (delay > 0) {
+        opts.log.debug(`Waiting ${delay} ms before retrying ${opts.label}...`);
+        await sleep(delay);
+      }
       opts.log.info(`Retrying ${opts.label} (${attempt}/${maxRetries})...`);
     }
 

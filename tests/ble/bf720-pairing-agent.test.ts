@@ -46,6 +46,49 @@ describe('BlueZPairingAgent callbacks', () => {
     expect(() => agent.RequestPinCode('/d')).toThrow(/beurer_pin/);
   });
 
+  describe('log lines (#430)', () => {
+    const DEV = '/org/bluez/hci0/dev_D8_0B_CB_5B_B6_58';
+
+    it('RequestPasskey without a PIN points at a manual pairing, not at beurer_pin', () => {
+      const agent = new BlueZPairingAgent();
+      agent.setPinProvider(() => undefined);
+      expect(() => agent.RequestPasskey(DEV)).toThrow();
+
+      const msg = String(vi.mocked(bleLog.warn).mock.calls.at(-1)?.[0]);
+      expect(msg).toContain('bluetoothctl');
+      expect(msg).toContain('new on every attempt');
+      expect(msg).toContain('pair D8:0B:CB:5B:B6:58');
+      expect(msg).not.toContain('the code the scale was paired with');
+    });
+
+    it('RequestPinCode without a PIN names the PIN code and the manual pairing', () => {
+      const agent = new BlueZPairingAgent();
+      agent.setPinProvider(() => undefined);
+      expect(() => agent.RequestPinCode(DEV)).toThrow();
+
+      const msg = String(vi.mocked(bleLog.warn).mock.calls.at(-1)?.[0]);
+      expect(msg).toContain('PIN code');
+      expect(msg).toContain('bluetoothctl');
+    });
+
+    it('says at info that it answered with beurer_pin, without logging the PIN', () => {
+      const agent = new BlueZPairingAgent();
+      agent.setPinProvider(() => 3752);
+      expect(agent.RequestPasskey(DEV)).toBe(3752);
+
+      const lines = vi.mocked(bleLog.info).mock.calls.map((c) => String(c[0]));
+      const line = lines.find((l) => l.includes('beurer_pin'));
+      expect(line).toBeDefined();
+      expect(line).toContain('RequestPasskey');
+      const everything = [
+        ...lines,
+        ...vi.mocked(bleLog.debug).mock.calls.map((c) => String(c[0])),
+        ...vi.mocked(bleLog.warn).mock.calls.map((c) => String(c[0])),
+      ];
+      expect(everything.some((l) => l.includes('3752'))).toBe(false);
+    });
+  });
+
   it('accepts the confirmation/authorization models without throwing', () => {
     const agent = new BlueZPairingAgent();
     expect(() => agent.RequestConfirmation('/d', 123456)).not.toThrow();

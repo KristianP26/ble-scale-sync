@@ -20,6 +20,7 @@ version: 1
 #   adapter: hci0                     # Linux only: select BLE adapter (omit for default)
 #   force_scale_adapter: "Hutbit"     # override protocol auto-detection (requires scale_mac)
 #   session_timeout_sec: 20           # seconds one GATT session waits for a reading (default 120)
+#   preemptive_adapter_reset: false   # Linux node-ble: skip the btmgmt power-cycle after each session (default true)
 #   qn_protocol_byte: 0               # QN scales only: 0 to 255, see below
 #   qn_report_byte: 252               # QN scales only: 0 to 255, see below
 #
@@ -66,6 +67,7 @@ version: 1
 scale:
   weight_unit: kg   # kg | lbs (display only, calculations always use kg)
   height_unit: cm   # cm | in  (for height input below)
+  display_unit: weight_unit # weight_unit | kg | lbs | st (physical display, QN-family scales only)
 
 # --- Multi-User Matching ---
 # Strategy when weight falls outside all configured ranges:
@@ -192,6 +194,12 @@ global_exporters:
   #   base_url: https://wger.de            # your instance URL
   #   token: "${WGER_TOKEN}"               # API key from <base_url>/en/user/api-key
   #   sync_measurements: true              # also push body fat/water/muscle/bone
+
+  # -- HealthLog (self-hosted health tracker) --
+  # - type: healthlog
+  #   base_url: https://healthlog.example  # your instance URL
+  #   token: "${HEALTHLOG_TOKEN}"          # Measurement ingest token (Settings -> API & Tokens)
+  #   sync_measurements: true              # also push body fat/water/muscle/bone/visceral
 
 # --- Runtime Settings ---
 

@@ -31,7 +31,16 @@ const MAX_ENTRIES = 50;
 export interface QueuedExport {
   exporter: string;
   payload: BodyComposition;
-  /** ISO 8601. The time the reading was MEASURED, which is what makes it redeliverable. */
+  /**
+   * ISO 8601. The time the reading was MEASURED, which is what makes it
+   * redeliverable.
+   *
+   * Written for EVERY entry since the audit fix. It used to be copied from the
+   * ExportContext, which only carries a timestamp for a historical replay - a
+   * live weigh-in queued without one, and the retry then had no measurement
+   * time at all. `file` falls back to `new Date()`, so a reading taken at 07:00
+   * and redelivered at 09:00 was recorded as 09:00.
+   */
   timestamp?: string;
   userName?: string;
   userSlug?: string;
@@ -123,6 +132,21 @@ export function enqueue(path: string, entry: QueuedExport, now: number = Date.no
 }
 
 /**
+ * Resolve the exporter instance one queued entry must be delivered through.
+ *
+ * Deliberately NOT a flat `Exporter[]` keyed by name. `Exporter.name` is the
+ * exporter TYPE ('garmin'), a class constant, so two users who each configure
+ * their own Garmin account produce two instances that share one name. A
+ * name-keyed map across all users kept whichever came first, so a queued
+ * reading for user B was delivered through user A's instance - with A's
+ * `token_dir`, i.e. into somebody else's Garmin account.
+ *
+ * `resolveExportersForUser` dedupes by type WITHIN a user, so once the entry's
+ * `userSlug` picks the list, the name is unambiguous again.
+ */
+export type QueuedExporterLookup = (entry: QueuedExport) => Exporter | undefined;
+
+/**
  * Try every queued entry once, oldest first.
  *
  * At-most-once on purpose: an entry is removed from the file BEFORE it is
@@ -140,7 +164,7 @@ export function enqueue(path: string, entry: QueuedExport, now: number = Date.no
  */
 export async function flushQueue(
   path: string,
-  exporters: Exporter[],
+  lookup: QueuedExporterLookup,
   now: number = Date.now(),
 ): Promise<{ delivered: number; failed: number; dropped: number }> {
   const pending = loadQueue(path, now);
@@ -152,7 +176,6 @@ export async function flushQueue(
   }
 
   log.info(`Retrying ${pending.length} queued export(s)...`);
-  const byName = new Map(exporters.map((e) => [e.name, e]));
   const keep: QueuedExport[] = [];
   let delivered = 0;
   let failed = 0;
@@ -172,10 +195,16 @@ export async function flushQueue(
       return { delivered, failed, dropped };
     }
 
-    const exporter = byName.get(entry.exporter);
+    const exporter = lookup(entry);
     if (!exporter) {
-      // The exporter was removed from the config while this was waiting.
-      log.warn(`Dropping a queued ${entry.exporter} export: that exporter is no longer configured`);
+      // The exporter - or the user it was queued for - was removed from the
+      // config while this was waiting. Dropping is the only safe answer: the
+      // alternative is delivering somebody's weigh-in through a target that was
+      // never configured to receive it.
+      log.warn(
+        `Dropping a queued ${entry.exporter} export${entry.userSlug ? ` for '${entry.userSlug}'` : ''}: ` +
+          'that exporter is no longer configured for that user',
+      );
       dropped += 1;
       continue;
     }

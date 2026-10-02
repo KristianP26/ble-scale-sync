@@ -150,3 +150,60 @@ describe('env-overrides (focused unit tests for #184 split)', () => {
     });
   });
 });
+
+describe('a malformed env override must not be stronger than a good one', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('keeps dry_run=true when DRY_RUN is a typo', () => {
+    // The old parser asked "is this one of true/yes/1?", so every value that
+    // was not a recognised TRUE word - including a typo - meant FALSE. A
+    // mistyped DRY_RUN did not fail and did not leave the configured value
+    // alone: it turned dry-run OFF and exported for real.
+    vi.stubEnv('DRY_RUN', 'treu');
+    const out = applyEnvOverrides(baseConfig({ runtime: { dry_run: true } } as Partial<AppConfig>));
+    expect(out.runtime?.dry_run).toBe(true);
+  });
+
+  it('still honours an explicit false', () => {
+    // Guards against "fixing" this by ignoring every falsy word too.
+    vi.stubEnv('DRY_RUN', 'false');
+    const out = applyEnvOverrides(baseConfig({ runtime: { dry_run: true } } as Partial<AppConfig>));
+    expect(out.runtime?.dry_run).toBe(false);
+  });
+
+  it.each(['true', 'YES', 'on', '1'])('accepts %s as true', (word) => {
+    vi.stubEnv('CONTINUOUS_MODE', word);
+    expect(applyEnvOverrides(baseConfig()).runtime?.continuous_mode).toBe(true);
+  });
+
+  it.each(['false', 'NO', 'off', '0'])('accepts %s as false', (word) => {
+    vi.stubEnv('CONTINUOUS_MODE', word);
+    const out = applyEnvOverrides(
+      baseConfig({ runtime: { continuous_mode: true } } as Partial<AppConfig>),
+    );
+    expect(out.runtime?.continuous_mode).toBe(false);
+  });
+
+  it('ignores an invalid SCALE_MAC instead of assigning it raw', () => {
+    // config.yaml refines this with isValidScaleId; the env path assigned it
+    // verbatim, so a typo became a scale id that can never match and a scan
+    // that silently never finds anything.
+    vi.stubEnv('SCALE_MAC', 'not-a-scale-id');
+    const out = applyEnvOverrides(
+      baseConfig({ ble: { scale_mac: 'aa:bb:cc:dd:ee:ff' } } as Partial<AppConfig>),
+    );
+    expect(out.ble?.scale_mac).toBe('aa:bb:cc:dd:ee:ff');
+  });
+
+  it('still applies a valid SCALE_MAC', () => {
+    vi.stubEnv('SCALE_MAC', 'AA:BB:CC:DD:EE:FF');
+    expect(applyEnvOverrides(baseConfig()).ble?.scale_mac).toBe('AA:BB:CC:DD:EE:FF');
+  });
+
+  it('rejects a fractional SCAN_COOLDOWN the schema would have refused', () => {
+    vi.stubEnv('SCAN_COOLDOWN', '12.5');
+    expect(applyEnvOverrides(baseConfig()).runtime?.scan_cooldown).toBe(30);
+  });
+});
