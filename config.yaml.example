@@ -198,8 +198,8 @@ global_exporters:
   # -- HealthLog (self-hosted health tracker) --
   # - type: healthlog
   #   base_url: https://healthlog.example  # your instance URL
-  #   token: "${HEALTHLOG_TOKEN}"          # Personal API key from healthlog
-  #   sync_measurements: true              # also push body fat/water/muscle/bone
+  #   token: "${HEALTHLOG_TOKEN}"          # Measurement ingest token (Settings -> API & Tokens)
+  #   sync_measurements: true              # also push body fat/water/muscle/bone/visceral
 
 # --- Runtime Settings ---
 
