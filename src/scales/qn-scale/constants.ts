@@ -125,8 +125,10 @@ export const CHR_AE02 = uuid16(0xae02);
 // Service UUIDs for matching
 export const SVC_T1 = 'ffe0';
 export const SVC_T2 = 'fff0';
-// AE00 vendor service (newer QN firmware, e.g. Renpho ES-CS20M). Unique to QN
-// scales — never shared with the fff0 Inlife/1byone/Eufy cluster (#235).
+// AE00 vendor service (JieLi chip; newer QN firmware, e.g. Renpho Elis 1). Not
+// shared with the fff0 Inlife/1byone/Eufy cluster (#235), but not unique to QN
+// either: a 0x1A10 / 55AA-family scale carries it too (#436), which
+// qnMatches() handles before it trusts AE00.
 export const SVC_AE00 = 'ae00';
 
 // SIG Body Composition / Weight Scale services. A 'renpho'-named device that

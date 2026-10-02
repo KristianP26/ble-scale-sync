@@ -135,3 +135,79 @@ describe('false-match resolution (#255 / #258 / #251)', () => {
     expect(resolved?.name).not.toBe('Yunmai');
   });
 });
+
+/**
+ * #436: a Renpho ES-CS20M on the 0x1A10 / 55AA protocol that also carries the
+ * JieLi AE00 service (ae01/ae02). QN used to claim it on AE00 alone after GATT
+ * discovery, then failed on its own missing fff1/fff2 (or ffe1/ffe3) pair.
+ */
+describe('55AA scale with AE00 is not claimed by QN (#436)', () => {
+  // The four characteristics in the reporter's v1.29.0 ESPHome log, in the
+  // dashless 128-bit form the watcher hands to resolveAdapter after discovery:
+  //   ESPHome GATT char 00002a10... handle=0x12 props=0x10 cccd=0x13
+  //   ESPHome GATT char 00002a11... handle=0x15 props=0x8  cccd=none
+  //   ESPHome GATT char 0000ae01... handle=0x82 props=0x4  cccd=none
+  //   ESPHome GATT char 0000ae02... handle=0x84 props=0x10 cccd=0x85
+  // https://github.com/KristianP26/ble-scale-sync/issues/436
+  const ISSUE_436_CHARS = [
+    '00002a1000001000800000805f9b34fb',
+    '00002a1100001000800000805f9b34fb',
+    '0000ae0100001000800000805f9b34fb',
+    '0000ae0200001000800000805f9b34fb',
+  ];
+
+  it('a nameless unit with 2a10/2a11 + ae01/ae02 does not resolve to QN Scale', () => {
+    const info: BleDeviceInfo = {
+      localName: '',
+      serviceUuids: [],
+      characteristicUuids: ISSUE_436_CHARS,
+    };
+    expect(resolveAdapter(info, adapters)?.name).not.toBe('QN Scale');
+  });
+
+  it('the same unit advertising 0x1A10 resolves to ES-CS20M', () => {
+    const info: BleDeviceInfo = {
+      localName: '',
+      serviceUuids: ['1a10'],
+      characteristicUuids: ISSUE_436_CHARS,
+    };
+    expect(resolveAdapter(info, adapters)?.name).toBe('ES-CS20M');
+  });
+
+  // The three below are structural shapes, not captures: they document that the
+  // guard only fires when QN's own notify/write pair is missing, mirroring the
+  // fff1 ?? ffe1 / fff2 ?? ffe3 resolution in subscribeAndInit. No unit with
+  // both pairs has been reported.
+  it('#258 Elis 1 char list plus 2a10/2a11 still resolves to QN Scale', () => {
+    // #258 log: 2a26 2a29 2a23 2a25 2a19 2a00 ae01 ae02 fff1 fff2.
+    const info: BleDeviceInfo = {
+      localName: '',
+      serviceUuids: [],
+      characteristicUuids: [
+        0x2a26, 0x2a29, 0x2a23, 0x2a25, 0x2a19, 0x2a00, 0xae01, 0xae02, 0xfff1, 0xfff2, 0x2a10,
+        0x2a11,
+      ].map(uuid16),
+    };
+    expect(resolveAdapter(info, adapters)?.name).toBe('QN Scale');
+  });
+
+  it('a Type-1 pair (ffe1/ffe3) beside 2a10/2a11 + AE00 still resolves to QN Scale', () => {
+    const info: BleDeviceInfo = {
+      localName: '',
+      serviceUuids: [],
+      characteristicUuids: [0xae01, 0xae02, 0xffe1, 0xffe3, 0x2a10, 0x2a11].map(uuid16),
+    };
+    expect(resolveAdapter(info, adapters)?.name).toBe('QN Scale');
+  });
+
+  it('a crossed pair (fff1 notify, ffe3 write) still resolves to QN Scale', () => {
+    // QN's legacy resolution takes fff1 ?? ffe1 and fff2 ?? ffe3 independently,
+    // so it runs on this mix; the guard must not decline it.
+    const info: BleDeviceInfo = {
+      localName: '',
+      serviceUuids: [],
+      characteristicUuids: [0xae01, 0xae02, 0xfff1, 0xffe3, 0x2a10, 0x2a11].map(uuid16),
+    };
+    expect(resolveAdapter(info, adapters)?.name).toBe('QN Scale');
+  });
+});

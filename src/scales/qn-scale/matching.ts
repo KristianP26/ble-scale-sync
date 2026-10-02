@@ -24,6 +24,13 @@ import {
   SVC_T2,
 } from './constants.js';
 
+/** True when `chars` (lowercased) holds the 16-bit `code` in short or 128-bit form. */
+function hasChar(chars: readonly string[], code: number): boolean {
+  const short = code.toString(16).padStart(4, '0');
+  const full = uuid16(code);
+  return chars.some((u) => u === short || u === full);
+}
+
 /**
  * Name match is sufficient (brand names are unambiguous).
  * UUID fallback covers unnamed devices advertising QN vendor services.
@@ -43,13 +50,29 @@ export function qnMatches(device: BleDeviceInfo): boolean {
 
   const name = (device.localName || '').toLowerCase();
   const uuids = (device.serviceUuids || []).map((u) => u.toLowerCase());
-
-  // AE00 is a QN-only service (Renpho ES-CS20M / newer firmware), never shared
-  // with the fff0 Inlife/1byone/Eufy cluster. It positively identifies a QN
-  // scale even when the device also carries a non-QN name and advertises fff0
-  // (e.g. GE CS 10 G "Fit Plus", #235), so check it before name/fallback logic.
-  // Compare both short 16-bit and full 128-bit forms, mirroring hasQnVendor.
   const chars = (device.characteristicUuids || []).map((u) => u.toLowerCase());
+
+  // #436: a 0x1A10 / 55AA-family scale (Renpho ES-CS20M, JieLi revision) can
+  // carry the JieLi AE00 service too. QN cannot run there: its handshake needs a
+  // notify char (fff1 or ffe1) AND a write char (fff2 or ffe3), exactly the pair
+  // subscribeAndInit resolves, and without them the session ends on "Required
+  // characteristics not found". Declining only when the other protocol's pair is
+  // present and QN's is not means the outcome changes solely where QN would have
+  // failed anyway; an AE00 QN unit (#235 GE CS 10 G, #258/#75 Elis 1, all with
+  // fff1+fff2) is untouched. Before GATT discovery `chars` is empty, so no
+  // pre-connect decision changes.
+  const has55aaPair = hasChar(chars, 0x2a10) && hasChar(chars, 0x2a11);
+  const qnCanRun =
+    (hasChar(chars, 0xfff1) || hasChar(chars, 0xffe1)) &&
+    (hasChar(chars, 0xfff2) || hasChar(chars, 0xffe3));
+  if (has55aaPair && !qnCanRun) return false;
+
+  // AE00 is a JieLi service. On a QN scale it identifies the family even when
+  // the device also carries a non-QN name and advertises fff0 (e.g. GE CS 10 G
+  // "Fit Plus", #235), so check it before name/fallback logic. It is NOT
+  // exclusive to QN: the 55AA-family scale in #436 has it too, which the check
+  // above handles. Compare both short 16-bit and full 128-bit forms, mirroring
+  // hasQnVendor.
   const hasAe00 =
     uuids.some((u) => u === SVC_AE00 || u === uuid16(0xae00)) ||
     chars.some((u) => u === 'ae01' || u === 'ae02' || u === CHR_AE01 || u === CHR_AE02);
