@@ -8,6 +8,9 @@ import { errMsg } from '../utils/error.js';
 
 const log = createLogger('HealthLog');
 
+/** Two decimals, the precision every value is sent with. */
+const round2 = (n: number): number => Number(n.toFixed(2));
+
 export const healthlogSchema: ExporterSchema = {
   name: 'healthlog',
   displayName: 'HealthLog',
@@ -50,20 +53,28 @@ export const healthlogSchema: ExporterSchema = {
  * stored as a mass, not as the percentage we compute), VISCERAL_FAT is a
  * rating.
  *
- * `max` is HealthLog's own accepted upper bound where ours is wider. Our
- * visceral fat rating runs 1-59, HealthLog accepts 0-30 and would answer a
- * higher value with a 422, so such a value is skipped here instead.
+ * `min` / `max` are HealthLog's own accepted range for the type (its
+ * VALUE_RANGES table). A value outside it is answered with a 422 that no retry
+ * can change, so such a value is skipped here instead. In practice that is the
+ * visceral fat rating: ours runs 1-59, HealthLog accepts 0-30. The other
+ * bounds only catch implausible values, such as more than 100 kg of water.
  */
 const MEASUREMENT_TYPES: ReadonlyArray<{
   type: string;
   value: (d: BodyComposition) => number;
-  max?: number;
+  min: number;
+  max: number;
 }> = [
-  { type: 'BODY_FAT', value: (d) => d.bodyFatPercent },
-  { type: 'TOTAL_BODY_WATER', value: (d) => (d.weight * d.waterPercent) / 100 },
-  { type: 'MUSCLE_MASS', value: (d) => d.muscleMass },
-  { type: 'BONE_MASS', value: (d) => d.boneMass },
-  { type: 'VISCERAL_FAT', value: (d) => d.visceralFat, max: 30 },
+  { type: 'BODY_FAT', value: (d) => d.bodyFatPercent, min: 1, max: 80 },
+  {
+    type: 'TOTAL_BODY_WATER',
+    value: (d) => (d.weight * d.waterPercent) / 100,
+    min: 5,
+    max: 100,
+  },
+  { type: 'MUSCLE_MASS', value: (d) => d.muscleMass, min: 5, max: 200 },
+  { type: 'BONE_MASS', value: (d) => d.boneMass, min: 0.5, max: 8 },
+  { type: 'VISCERAL_FAT', value: (d) => d.visceralFat, min: 0, max: 30 },
 ];
 
 export class HealthLogExporter implements Exporter {
@@ -101,11 +112,14 @@ export class HealthLogExporter implements Exporter {
 
   private async pushMeasurements(data: BodyComposition, timestamp: string): Promise<void> {
     for (const metric of MEASUREMENT_TYPES) {
-      const value = metric.value(data);
-      if (!Number.isFinite(value) || value <= 0) continue;
-      if (metric.max !== undefined && value > metric.max) {
+      const raw = metric.value(data);
+      if (!Number.isFinite(raw) || raw <= 0) continue;
+      // Checked as sent: 30.004 goes out as 30, which HealthLog accepts.
+      const value = round2(raw);
+      if (value < metric.min || value > metric.max) {
         log.debug(
-          `HealthLog ${metric.type} ${value} is above the ${metric.max} HealthLog accepts, skipped.`,
+          `HealthLog ${metric.type} ${value} is outside the ${metric.min}-${metric.max} ` +
+            'HealthLog accepts, skipped.',
         );
         continue;
       }
@@ -135,7 +149,7 @@ export class HealthLogExporter implements Exporter {
           },
           body: JSON.stringify({
             type,
-            value: Number(value.toFixed(2)),
+            value: round2(value),
             measuredAt: timestamp,
           }),
           signal: AbortSignal.timeout(10_000),

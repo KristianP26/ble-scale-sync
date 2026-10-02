@@ -131,6 +131,35 @@ describe('HealthLogExporter', () => {
     expect(postedBodies().find((b) => b.type === 'VISCERAL_FAT')?.value).toBe(30);
   });
 
+  // HealthLog's VALUE_RANGES answers anything outside these with a 422.
+  // Water is sent as kg (weight 80 * percent / 100), so the percent is chosen
+  // to land on the bound.
+  const BOUNDS: Array<[string, Partial<BodyComposition>, Partial<BodyComposition>, number]> = [
+    ['BODY_FAT', { bodyFatPercent: 80.01 }, { bodyFatPercent: 80 }, 80],
+    ['BODY_FAT', { bodyFatPercent: 0.99 }, { bodyFatPercent: 1 }, 1],
+    ['TOTAL_BODY_WATER', { waterPercent: 125.02 }, { waterPercent: 125 }, 100],
+    ['TOTAL_BODY_WATER', { waterPercent: 6.24 }, { waterPercent: 6.25 }, 5],
+    ['MUSCLE_MASS', { muscleMass: 200.01 }, { muscleMass: 200 }, 200],
+    ['MUSCLE_MASS', { muscleMass: 4.99 }, { muscleMass: 5 }, 5],
+    ['BONE_MASS', { boneMass: 8.01 }, { boneMass: 8 }, 8],
+    ['BONE_MASS', { boneMass: 0.49 }, { boneMass: 0.5 }, 0.5],
+  ];
+
+  it.each(BOUNDS)('keeps %s inside the range HealthLog accepts', async (type, out, edge, sent) => {
+    await new HealthLogExporter(config).export({ ...sample, ...out });
+    expect(postedBodies().map((b) => b.type)).not.toContain(type);
+    expect(postedBodies()).toHaveLength(5);
+
+    vi.clearAllMocks();
+    await new HealthLogExporter(config).export({ ...sample, ...edge });
+    expect(postedBodies().find((b) => b.type === type)?.value).toBe(sent);
+  });
+
+  it('checks the range on the value as sent, after rounding', async () => {
+    await new HealthLogExporter(config).export({ ...sample, visceralFat: 30.004 });
+    expect(postedBodies().find((b) => b.type === 'VISCERAL_FAT')?.value).toBe(30);
+  });
+
   it('sends only the weight when syncMeasurements is false', async () => {
     await new HealthLogExporter({ ...config, syncMeasurements: false }).export(sample);
     expect(postedBodies().map(({ type, value }) => ({ type, value }))).toEqual([
