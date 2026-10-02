@@ -7,7 +7,7 @@
 ![Node.js](https://img.shields.io/badge/node-%3E%3D22-brightgreen?logo=node.js&logoColor=white)
 ![Docker](https://img.shields.io/badge/docker-ghcr.io-blue?logo=docker&logoColor=white)
 
-A cross-platform CLI tool that reads body composition data from **25+ BLE smart scales** and exports to **Garmin Connect**, **Strava**, **Intervals.icu**, **Runalyze**, **Wger**, **MQTT** (Home Assistant), **InfluxDB**, **Webhooks**, **Ntfy**, **Telegram**, and **local files** (CSV/JSONL). No phone app needed. Your data stays on your device.
+A cross-platform CLI tool that reads body composition data from **25+ BLE smart scales** and exports to **Garmin Connect**, **Strava**, **Intervals.icu**, **Runalyze**, **Wger**, **HealthLog**, **MQTT** (Home Assistant), **InfluxDB**, **Webhooks**, **Ntfy**, **Telegram**, and **local files** (CSV/JSONL). No phone app needed. Your data stays on your device.
 
 **[Documentation](https://blescalesync.dev)** · **[Getting Started](https://blescalesync.dev/guide/getting-started)** · **[Supported Scales](https://blescalesync.dev/guide/supported-scales)** · **[Exporters](https://blescalesync.dev/exporters)** · **[FAQ](https://blescalesync.dev/faq)**
 
@@ -91,7 +91,7 @@ Requires Node.js v22+ and a BLE adapter. See the **[full install guide](https://
 ## Features
 
 - **[25+ scale brands](https://blescalesync.dev/guide/supported-scales).** Xiaomi (Mi Scale 2 passive broadcast), Renpho (Elis 1, ES-CS20M, QN-Scale), Eufy, Yunmai, Beurer (incl. BF720), Sanitas (incl. SBF70 body composition), Medisana, and more.
-- **[11 export targets](https://blescalesync.dev/exporters).** Garmin Connect, Strava, Intervals.icu, Runalyze, Wger, MQTT (Home Assistant), InfluxDB, Webhook, Ntfy, Telegram, File (CSV/JSONL).
+- **[12 export targets](https://blescalesync.dev/exporters).** Garmin Connect, Strava, Intervals.icu, Runalyze, Wger, MQTT (Home Assistant), InfluxDB, Webhook, Ntfy, Telegram, File (CSV/JSONL).
 - **[10 body metrics](https://blescalesync.dev/body-composition).** BIA-based body composition from weight + impedance.
 - **[Multi-user](https://blescalesync.dev/multi-user).** Automatic weight-based identification with per-user exporters.
 - **Historical sync.** Replays a scale's onboard cache of offline measurements with their original timestamps to exporters that support back-dating (Garmin Connect, InfluxDB, File).

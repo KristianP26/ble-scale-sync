@@ -195,6 +195,12 @@ global_exporters:
   #   token: "${WGER_TOKEN}"               # API key from <base_url>/en/user/api-key
   #   sync_measurements: true              # also push body fat/water/muscle/bone
 
+  # -- HealthLog (self-hosted health tracker) --
+  # - type: healthlog
+  #   base_url: https://healthlog.example  # your instance URL
+  #   token: "${HEALTHLOG_TOKEN}"          # Personal API key from healthlog
+  #   sync_measurements: true              # also push body fat/water/muscle/bone
+
 # --- Runtime Settings ---
 
 runtime:

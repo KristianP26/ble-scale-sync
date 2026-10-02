@@ -14,7 +14,8 @@ export type ExporterName =
   | 'telegram'
   | 'intervals'
   | 'runalyze'
-  | 'wger';
+  | 'wger'
+  | 'healthlog';
 
 /**
  * Runtime twin of `ExporterName`, for validating `EXPORTERS=...`.
@@ -36,6 +37,7 @@ const KNOWN_EXPORTERS = new Set<ExporterName>([
   'intervals',
   'runalyze',
   'wger',
+  'healthlog',
 ]);
 
 /** @internal Exported for the registry-agreement test only. */
@@ -123,6 +125,13 @@ export interface WgerConfig {
   syncMeasurements: boolean;
 }
 
+export interface HealthLogConfig {
+  baseUrl: string;
+  token: string;
+  /** Also push body-composition metrics, not just weight. */
+  syncMeasurements: boolean;
+}
+
 export interface ExporterConfig {
   exporters: ExporterName[];
   garmin?: GarminConfig;
@@ -136,6 +145,7 @@ export interface ExporterConfig {
   intervals?: IntervalsConfig;
   runalyze?: RunalyzeConfig;
   wger?: WgerConfig;
+  healthlog?: HealthLogConfig;
 }
 
 function fail(msg: string): never {
@@ -392,6 +402,27 @@ export function loadExporterConfig(): ExporterConfig {
     };
   }
 
+  let healthlog: HealthLogConfig | undefined;
+  if (exporters.includes('healthlog')) {
+    const baseUrl = process.env.HEALTHLOG_BASE_URL?.trim();
+    if (!baseUrl) {
+      fail('HEALTHLOG_BASE_URL is required when healthlog exporter is enabled.');
+    }
+    const token = process.env.HEALTHLOG_TOKEN?.trim();
+    if (!token) {
+      fail('HEALTHLOG_TOKEN is required when healthlog exporter is enabled.');
+    }
+    healthlog = {
+      baseUrl,
+      token,
+      syncMeasurements: parseBoolean(
+        'HEALTHLOG_SYNC_MEASUREMENTS',
+        process.env.HEALTHLOG_SYNC_MEASUREMENTS?.trim(),
+        true,
+      ),
+    };
+  }
+
   return {
     exporters,
     garmin,
@@ -405,5 +436,6 @@ export function loadExporterConfig(): ExporterConfig {
     intervals,
     runalyze,
     wger,
+    healthlog,
   };
 }
