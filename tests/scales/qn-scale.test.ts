@@ -1432,15 +1432,32 @@ describe('AE02 dispatch (#75, #235)', () => {
       ]);
     }
 
+    /** A write with the (fake) wall-clock time it was issued at. */
+    interface TimedWrite {
+      at: number;
+      data: number[];
+    }
+
+    interface HandshakeOptions {
+      /** The 0x14 ready frame to feed. Defaults to the GE CS 10 G one (#235). */
+      ready?: Buffer;
+      /** The 0x21 config request to feed. Defaults to the GE CS 10 G one. */
+      configReq?: Buffer;
+      /** Filled with every write and its Date.now(), for timing assertions. */
+      timed?: TimedWrite[];
+    }
+
     /**
      * Drive the handshake from a 0x12 scale-info frame all the way to the 0x22
-     * START, collecting every write. The 0x14 and 0x21 frames are the ones the
-     * GE CS 10 G actually sends (#235).
+     * START, collecting every write. The 0x14 and 0x21 frames default to the
+     * ones the GE CS 10 G actually sends (#235); pass a unit's own frames from
+     * its capture through `opts`.
      */
     async function driveHandshake(
       adapter: QnScaleAdapter,
       info: Buffer,
       profile: UserProfile = defaultProfile(),
+      opts: HandshakeOptions = {},
     ): Promise<number[][]> {
       vi.useFakeTimers();
       try {
@@ -1448,6 +1465,7 @@ describe('AE02 dispatch (#75, #235)', () => {
         const ctx = {
           write: async (_uuid: string, data: Buffer | number[]) => {
             writes.push([...data]);
+            opts.timed?.push({ at: Date.now(), data: [...data] });
           },
           read: async () => Buffer.alloc(0),
           subscribe: async () => {},
@@ -1463,9 +1481,12 @@ describe('AE02 dispatch (#75, #235)', () => {
         await adapter.onConnected(ctx);
         adapter.parseNotification(info);
         adapter.parseNotification(
-          Buffer.from([0x14, 0x0c, 0xff, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0xfd, 0x1f]),
+          opts.ready ??
+            Buffer.from([0x14, 0x0c, 0xff, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0xfd, 0x1f]),
         );
-        adapter.parseNotification(Buffer.from([0x21, 0x07, 0xff, 0x01, 0x61, 0x2c, 0xb5]));
+        adapter.parseNotification(
+          opts.configReq ?? Buffer.from([0x21, 0x07, 0xff, 0x01, 0x61, 0x2c, 0xb5]),
+        );
         await vi.advanceTimersByTimeAsync(2000);
         return writes;
       } finally {
@@ -1622,6 +1643,32 @@ describe('AE02 dispatch (#75, #235)', () => {
       ]);
     }
 
+    // The same Arboleaf unit, from @roberfernandez's Android btsnoop of a
+    // complete vendor-app weigh-in posted in #331 on 2026-09-29. Byte for byte
+    // from the capture; [13] changes between sessions of this one unit.
+    const ARBOLEAF_2A_INFO = Buffer.from([
+      0x12, 0x13, 0xff, 0x54, 0x0b, 0x04, 0x00, 0x07, 0xff, 0x15, 0x0f, 0x27, 0x00, 0x0c, 0x05,
+      0x03, 0xe0, 0x6f, 0x3b,
+    ]);
+    const ARBOLEAF_2A_READY = Buffer.from([
+      0x14, 0x0b, 0xff, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x20,
+    ]);
+    const ARBOLEAF_2A_CONFIG_REQ = Buffer.from([0x21, 0x05, 0xff, 0x01, 0x26]);
+    /** First live 0x10 of that capture: 0x1dc4 at [5..6] = 76.20 kg. */
+    const ARBOLEAF_2A_LIVE = Buffer.from([
+      0x10, 0x14, 0x01, 0x00, 0x11, 0x1d, 0xc4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x17,
+    ]);
+    /** A live 0x10 from the GE CS 10 G vendor-app capture (#235): 78.70 kg. */
+    const GE_LIVE = Buffer.from([
+      0x10, 0x14, 0x01, 0x00, 0x11, 0x1e, 0xbe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x12,
+    ]);
+    const arboleaf2a: HandshakeOptions = {
+      ready: ARBOLEAF_2A_READY,
+      configReq: ARBOLEAF_2A_CONFIG_REQ,
+    };
+
     it('19B 0x12 frame echoes the protocol type (Arboleaf, #75/#331)', async () => {
       // Two reporters get the whole handshake acknowledged on 0x00 and then
       // silence, and every captured 0x12 in this family carries 0xff at [2].
@@ -1775,9 +1822,11 @@ describe('AE02 dispatch (#75, #235)', () => {
       }
     });
 
-    // The vendor-app capture answers every live 0x10 with that frame's own
-    // weight bytes: `11 1e be` -> `a2 06 01 1e be 85`. Exact for anyone, where
-    // the pre-stream anchor can only ever be approximate.
+    // One reading of the vendor-app capture answers every live 0x10 with that
+    // frame's own weight bytes: `11 1e be` -> `a2 06 01 1e be 85`. The frames
+    // here are SYNTHETIC 14-byte ones with the weight at [3..4]; the real GE live
+    // frame is 20 bytes with the weight at [5..6], is not echoed at all, and is
+    // covered by the 20-byte tests below (#331).
     it('echoes each live weight frame back as an A2 on the extended dialect', async () => {
       const adapter = makeAdapter();
       const writes: number[][] = [];
@@ -2131,6 +2180,51 @@ describe('AE02 dispatch (#75, #235)', () => {
       adapter.parseNotification(b);
       await Promise.resolve();
       expect(writes.filter((w) => w[0] === 0xa2)).toHaveLength(0);
+    });
+
+    // #331: the live frame both Arboleaf captures show is 20 bytes with the
+    // weight at [5..6]. The parser reads [3..4] there, 0x0011, so with the echo
+    // on every live frame used to be answered with `a2 06 01 00 11 ba`: 0.17 kg.
+    it('does not answer a real 20-byte live frame with an A2 (es26m, forced on)', async () => {
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      try {
+        const adapter = makeAdapter();
+        adapter.configure({ qnWeightAck: true });
+        const writes = await driveHandshake(
+          adapter,
+          ARBOLEAF_2A_INFO,
+          defaultProfile({ lastKnownWeight: 74.05 }),
+          arboleaf2a,
+        );
+        const before = writes.length;
+        expect(adapter.parseNotification(ARBOLEAF_2A_LIVE)).toBeNull();
+        await Promise.resolve();
+        expect(writes.slice(before).filter((w) => w[0] === 0xa2)).toEqual([]);
+        // The one diagnostic line carries the weight from where the captures put it.
+        const lines = debug.mock.calls.map((c) => String(c[0]));
+        const line = lines.find((l) => l.startsWith('QN: 20-byte live frame'));
+        expect(line).toContain('76.2 kg at [5..6]');
+        // Once per session, not once per frame.
+        adapter.parseNotification(ARBOLEAF_2A_LIVE);
+        const again = debug.mock.calls
+          .map((c) => String(c[0]))
+          .filter((l) => l.startsWith('QN: 20-byte live frame'));
+        expect(again).toHaveLength(1);
+      } finally {
+        debug.mockRestore();
+      }
+    });
+
+    // Same layout on the GE CS 10 G, where the echo is on by default. Latent
+    // there: none of the reporter's logs ever delivered a 0x10 to this adapter,
+    // but should one arrive it must not be answered with 0.17 kg either.
+    it('does not answer a real 20-byte live frame with an A2 on the extended default', async () => {
+      const adapter = makeAdapter();
+      const writes = await driveHandshake(adapter, makeExtendedScaleInfo());
+      const before = writes.length;
+      expect(adapter.parseNotification(GE_LIVE)).toBeNull();
+      await Promise.resolve();
+      expect(writes.slice(before).filter((w) => w[0] === 0xa2)).toEqual([]);
     });
 
     it('rounds the anchor to the nearest 10 g and keeps the frame well formed', () => {

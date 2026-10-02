@@ -175,6 +175,9 @@ export class QnScaleAdapter
   /** One anchor-fallback warning per session, reset in onConnected. */
   private anchorFallbackWarned = false;
 
+  /** One "20-byte live frame not decoded" line per session (#331). */
+  private twentyByteFrameLogged = false;
+
   /**
    * Whether a completed-weigh-in result frame (0xB4/0xB1) has already produced a
    * reading this session. The scale repeats the 0xB4 frame ~3x and then sends
@@ -319,6 +322,7 @@ export class QnScaleAdapter
     this.firstStableNoImpedanceAt = null;
     this.sessionStartedScaleSeconds = Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
     this.anchorFallbackWarned = false;
+    this.twentyByteFrameLogged = false;
     this.configSent = false;
     this.timeSyncSent = false;
     this.historyResponseSent = false;
@@ -757,21 +761,41 @@ export class QnScaleAdapter
       r2 = data.readUInt16BE(8);
     }
 
-    // Extended dialect: the vendor app answers EVERY live 0x10 frame with an A2
-    // carrying that frame's OWN weight bytes, not a fixed value. The GE CS 10 G
-    // capture shows the pairs plainly: a frame ending `11 1e be` is answered
-    // with `a2 06 01 1e be 85`, the next `11 1e c3` with `a2 06 01 1e c3 8a`.
+    // The live 0x10 frame every capture of the long dialects actually shows is
+    // 20 bytes, with the weight as a big-endian u16 /100 at [5..6]:
     //
-    // That is why the pre-stream anchor could only ever be approximate. This
-    // echo is exact for anyone, so it is the part that should make the dialect
-    // work for a whole household rather than for one person near 77 kg.
+    //   10 14 01 00 11 1d c4 00 .. 00 17   Arboleaf, 76.20 kg (#331)
+    //   10 14 01 00 11 22 79 00 .. 00 d1   Arboleaf, 88.25 kg (#331)
+    //   10 14 01 00 11 1e be 00 .. 00 12   GE CS 10 G, 78.70 kg (#235)
     //
-    // Sent before the stability gate, because the app acknowledges the settling
-    // frames too, and those are the ones the scale is streaming while it decides
-    // whether to finish. Gated to the 20-byte dialect: it is the only firmware
-    // any capture covers, and every other QN scale in the registry reads today
-    // without it. Fire and forget, like the 0x1F stable ACK below.
-    if (this.weightAckEnabled() && this.ctx) {
+    // Neither branch above reads it. [4] is 0x11, so it falls into the original
+    // layout, which takes the weight from [3..4] and gets 0x0011. What [4] and
+    // the stability flag mean in this layout is not decoded yet, so the frame is
+    // logged once per session with the weight where the captures put it.
+    const twentyByteLive = data.length === 20 && data[1] === 0x14;
+    if (twentyByteLive && !this.twentyByteFrameLogged) {
+      this.twentyByteFrameLogged = true;
+      bleLog.debug(
+        `QN: 20-byte live frame, weight ${data.readUInt16BE(5) / 100} kg at [5..6], ` +
+          'not echoed and not yet decoded (#331)',
+      );
+    }
+
+    // Per-frame weight echo (`ble.qn_weight_ack`, on by default on the 20-byte
+    // extended dialect). One reading of the GE CS 10 G capture has the vendor
+    // app answering live 0x10 frames with an A2 carrying that frame's own
+    // weight bytes (`... 1e be` -> `a2 06 01 1e be 85`); a later reading of the
+    // same capture disagrees, so this is unconfirmed. No hardware run has shown
+    // a scale needing it either: the completed GE weigh-ins predate the echo and
+    // never delivered a 0x10 to this adapter at all, their weight came from
+    // 0xB1 (#235).
+    //
+    // Never sent for the 20-byte layout above. rawWeight there is 0x0011, so the
+    // echo would hand the scale `a2 06 01 00 11 ba`, i.e. 0.17 kg, on every live
+    // frame. The 14-byte ES-30M and 10-byte classic frames keep it: their
+    // offsets are right. Sent before the stability gate, fire and forget, like
+    // the 0x1F stable ACK below.
+    if (this.weightAckEnabled() && this.ctx && !twentyByteLive) {
       void this.writeCmd(buildA2Frame(rawWeight));
     }
 

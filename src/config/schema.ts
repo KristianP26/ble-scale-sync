@@ -188,9 +188,10 @@ export const BleSchema = z
     /**
      * Acknowledge every live QN weight frame with its own weight (#75, #235).
      *
-     * The vendor app answers each 0x10 frame with `a2 06 01 <that weight>`, and
-     * on the scale a capture covers, the 20-byte extended dialect, the scale
-     * will not finish a weigh-in without it. That dialect does it by default.
+     * One reading of a vendor-app capture has the app answering each 0x10 frame
+     * with `a2 06 01 <that weight>`. The 20-byte extended dialect, the one that
+     * capture covers, does it by default. It is not hardware confirmed, and the
+     * 20-byte live frame, whose layout is not decoded yet, is never echoed.
      *
      * Set true on another dialect whose scale completes the whole handshake and
      * then streams nothing: it is the same class of silent failure as
