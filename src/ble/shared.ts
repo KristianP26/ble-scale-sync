@@ -10,6 +10,7 @@ import type {
 import type { WeightUnit } from '../config/schema.js';
 import { LBS_TO_KG, normalizeUuid, errMsg, bleLog } from './types.js';
 import { HistoryBuffer, HoldTimer } from './notification-processor.js';
+import { createWriteLanes, type WriteLanes } from './write-lane.js';
 
 // ─── Raw frame capture (protocol debugging) ───────────────────────────────────
 
@@ -219,6 +220,7 @@ function initializeAdapter(
   isResolved: () => boolean,
   onNotification: (sourceUuid: string, data: Buffer) => void,
   unsubscribers: (() => void)[],
+  lanes: WriteLanes,
   scaleAuth?: ScaleAuth,
 ): {
   start: () => Promise<void>;
@@ -270,6 +272,9 @@ function initializeAdapter(
   let sessionEnded = false;
   const cleanup = (): void => {
     closed = true;
+    // Drops a queued unlock; a queued ACK or adapter write still goes out (see
+    // write-lane.ts, rule 5).
+    lanes.close();
     if (unlockInterval) {
       clearInterval(unlockInterval);
       unlockInterval = null;
@@ -302,7 +307,11 @@ function initializeAdapter(
           const char = resolveChar(charMap, charUuid);
           if (!char) throw new Error(`Characteristic ${charUuid} not found`);
           const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-          await char.write(buf, withResponse);
+          // Through the session's lane, not straight to the char: BlueZ refuses
+          // a second write to a characteristic while one with a response is
+          // still open (#211). Called before the first await, so an idle lane
+          // still puts the write on the wire synchronously (#370).
+          await lanes.write(char, buf, withResponse, 'adapter');
         },
         read: async (charUuid) => {
           const char = resolveChar(charMap, charUuid);
@@ -337,7 +346,7 @@ function initializeAdapter(
         if (isResolved()) return;
         for (const buf of commands) {
           try {
-            await writeChar.write(buf, false);
+            await lanes.write(writeChar, buf, false, 'unlock');
             bleLog.debug(`Unlock write: [${toHex(buf)}]`);
           } catch (e: unknown) {
             if (!isResolved()) bleLog.error(`Unlock write error: ${errMsg(e)}`);
@@ -562,6 +571,9 @@ export function waitForRawReading(
     let resolved = false;
     const history = new HistoryBuffer(MAX_HISTORY_FRAMES, adapter.name);
     const ackWriteChar = resolveWriteChar(charMap, adapter);
+    // One FIFO per characteristic for every write of this session: ACKs, the
+    // legacy unlock and the adapter's own ctx.write (#211).
+    const lanes = createWriteLanes();
 
     const finishWith = (r: ScaleReading): void => {
       resolved = true;
@@ -623,9 +635,22 @@ export function waitForRawReading(
         const ack = adapter.buildAck(data);
         if (ack) {
           const ackBuf = Buffer.isBuffer(ack) ? ack : Buffer.from(ack);
-          void ackWriteChar.write(ackBuf, adapter.ackWithResponse ?? true).catch((e: unknown) => {
-            if (!resolved) bleLog.debug(`ACK write error: ${errMsg(e)}`);
-          });
+          const ackHex = toHex(ackBuf);
+          // Queued behind any write still open on this characteristic instead
+          // of fired next to it, which BlueZ refused as "In Progress" (#211).
+          // The timing line is there to measure a slow link.
+          void lanes.write(ackWriteChar, ackBuf, adapter.ackWithResponse ?? true, 'ack').then(
+            (t) => {
+              bleLog.debug(
+                t.coalesced
+                  ? `ACK [${ackHex}] coalesced with an identical one still waiting`
+                  : `ACK [${ackHex}] written in ${t.tookMs} ms (waited ${t.waitedMs} ms)`,
+              );
+            },
+            (e: unknown) => {
+              if (!resolved) bleLog.debug(`ACK write error: ${errMsg(e)}`);
+            },
+          );
         }
       }
 
@@ -693,6 +718,7 @@ export function waitForRawReading(
       () => resolved,
       handleNotification,
       unsubscribers,
+      lanes,
       scaleAuth,
     );
 
