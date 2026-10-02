@@ -92,9 +92,8 @@ const CONFIG_TAIL_SHORT = [0x00] as const;
  *
  * `unitFlag` is 0x01 kg / 0x02 lb per openScale's QNHandler, and 0x08 stone as
  * implemented in the reverse-engineered ESF-24 driver (etekcity_esf551_ble).
- * openScale sends 0x02 for stone too, so 0x08 is the less certain of the three:
- * a QN-S500 already on st/lb stayed there with it (#429), which is consistent
- * with 0x08 meaning stone but also with the scale ignoring an unknown value.
+ * openScale sends 0x02 for stone too, but on a QN-S500 set to kg by hand, 0x08
+ * switched the display to st/lb (#429), so the scale honours it as stone.
  * Honouring the display unit is what keeps a read from flipping the scale's
  * display (#269).
  *
