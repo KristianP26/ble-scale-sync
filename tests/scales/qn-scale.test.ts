@@ -2365,6 +2365,37 @@ describe('AE02 dispatch (#75, #235)', () => {
       expect(writes.slice(before).filter((w) => w[0] === 0xa2)).toEqual([]);
     });
 
+    // The original layout reads [5] as its stability byte, which in this shape
+    // is the weight's high byte, so a frame between 2.56 and 5.11 kg read as a
+    // stable 1.7 kg, was acknowledged with 0x1F, and at exactly 2.56 kg ([6]
+    // zero, so no impedance either) completed the session. The live stream does
+    // ramp through low weights: the #235 GE capture shows `11 14 78`, `11 11 e4`,
+    // `11 0f 78` in a row (52.40, 45.80, 39.60 kg; posted truncated). No capture
+    // has a frame inside that band, so these are the captured Arboleaf frame
+    // with only its weight field and checksum changed. They test that the frame
+    // is NOT read, not how it is read.
+    it.each([
+      ['2.56 kg, no impedance bytes', 0x0100],
+      ['5.00 kg', 0x01f4],
+    ])('does not turn a 20-byte live frame at %s into a reading', async (_name, raw) => {
+      const frame = Buffer.from(ARBOLEAF_2A_LIVE);
+      frame.writeUInt16BE(raw, 5);
+      frame[19] = [...frame.subarray(0, 19)].reduce((a, b) => a + b, 0) & 0xff;
+      const adapter = makeAdapter();
+      adapter.configure({ qnWeightAck: true });
+      const writes = await driveHandshake(
+        adapter,
+        ARBOLEAF_2A_INFO,
+        defaultProfile({ lastKnownWeight: 74.05 }),
+        arboleaf2a,
+      );
+      const before = writes.length;
+      expect(adapter.parseNotification(frame)).toBeNull();
+      await Promise.resolve();
+      // No 0x1F stable ack and no A2: nothing is written for this frame at all.
+      expect(writes.slice(before)).toEqual([]);
+    });
+
     // Every anchor frame a capture shows, rebuilt from its weight. 74.05 and
     // 71.85 sit on the Math.round boundary (7404.999... and 7184.999...).
     it('rebuilds the captured anchor frames byte for byte', () => {

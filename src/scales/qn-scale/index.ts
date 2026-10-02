@@ -782,6 +782,16 @@ export class QnScaleAdapter
       );
     }
 
+    // Nothing the original layout reads is right for this shape. Its weight is
+    // 0x0011, and its stability byte [5] is the real weight's high byte, so a
+    // frame between 2.56 and 5.11 kg, which a step-off ramps through, read as a
+    // stable 1.7 kg (0.17 at factor 100) and was acknowledged with 0x1F. At
+    // exactly 2.56 kg ([6] zero, so no impedance either) it passed isComplete
+    // and ended the session, to be exported as the weigh-in. Stop here until
+    // the layout is decoded. A 20-byte frame that takes the ES-30M branch reads
+    // its weight from [5..6] and is left as it was.
+    if (twentyByteLive && !isEs30m) return null;
+
     // Per-frame weight echo (`ble.qn_weight_ack`, on by default on the 20-byte
     // extended dialect). One reading of the GE CS 10 G capture has the vendor
     // app answering live 0x10 frames with an A2 carrying that frame's own
@@ -791,11 +801,13 @@ export class QnScaleAdapter
     // never delivered a 0x10 to this adapter at all, their weight came from
     // 0xB1 (#235).
     //
-    // Never sent for the 20-byte layout above. rawWeight there is 0x0011, so the
-    // echo would hand the scale `a2 06 01 00 11 ba`, i.e. 0.17 kg, on every live
-    // frame. The 14-byte ES-30M and 10-byte classic frames keep it: their
-    // offsets are right. Sent before the stability gate, fire and forget, like
-    // the 0x1F stable ACK below.
+    // Never sent for the 20-byte layout above. Read through the original layout
+    // its rawWeight is 0x0011, so the echo handed the scale `a2 06 01 00 11 ba`,
+    // i.e. 0.17 kg, on every live frame; that path returns above now. Whether
+    // the app echoes this shape at all is not known, so a 20-byte frame on the
+    // ES-30M branch is not echoed either. The 14-byte ES-30M and 10-byte classic
+    // frames keep it: their offsets are right. Sent before the stability gate,
+    // fire and forget, like the 0x1F stable ACK below.
     if (this.weightAckEnabled() && this.ctx && !twentyByteLive) {
       void this.writeCmd(buildA2Frame(rawWeight));
     }
