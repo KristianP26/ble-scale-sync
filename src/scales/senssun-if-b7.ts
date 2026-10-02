@@ -35,8 +35,9 @@ const ADVERTISED_NAME = 'if_b7';
  *             RAW_FIELD_OFFSET
  *   [14]      status: high nibble is the state, low nibble the display unit
  *             (1 = kg, 2 = lb)
- *   [15]      rolling counter, +1..3 from one advert to the next, wraps; it makes
- *             every advert unique, so it is left out of the logging keys below
+ *   [15]      rolling counter, +1..3 between consecutive captured adverts, wraps;
+ *             it makes every advert unique, so it is left out of the logging
+ *             keys below
  *   [16]      checksum: sum of [9..15], low 8 bits
  *
  * Evidence, all byte for byte:
@@ -144,6 +145,25 @@ function payloadKey(d: Buffer): string {
   return d.subarray(INFO_OFFSET, TRAILER_OFFSET).toString('hex');
 }
 
+/**
+ * How long a logging key outlives the last frame that carried it. Inside one
+ * finished state the #423 capture has at most 0.41 s between adverts, so a
+ * watcher stays on one key. A poll transport (node-ble, noble) stops at the
+ * first finished frame and reads again only after runtime.scan_cooldown (5 s
+ * at the least), so every one of its scans still logs the frame it completed
+ * on. Without the expiry, a scan that reads the same payload as the previous
+ * one (a finished state outliving the cooldown, or a cached advertisement)
+ * would export a reading with no frame of its own in the log, and the counter
+ * at [15] in that frame is what tells those two cases apart.
+ */
+const LOG_KEY_TTL_MS = 3_000;
+
+/** One logging key: the last payload logged, and when it was last seen. */
+interface LogKey {
+  key: string | null;
+  seenAt: number;
+}
+
 /** The six address bytes, uppercase and colon-free, or null when unknown. */
 function macBytes(address: string | undefined): string | null {
   if (!address) return null;
@@ -180,11 +200,31 @@ export class SenssunIfB7Adapter implements ScaleAdapterCore, BroadcastSource {
    * reset (which the broadcast path would not call anyway).
    */
   private lastSettlingKg: number | null = null;
-  /** [9..14] of the last finished frame logged, see payloadKey. */
-  private lastFinishedKey: string | null = null;
-  /** [9..14] of the last frame logged with an unknown status state, same reason. */
-  private lastUnknownKey: string | null = null;
+  /** [9..14] of the last finished frame logged, see payloadKey and LOG_KEY_TTL_MS. */
+  private readonly lastFinished: LogKey = { key: null, seenAt: -Infinity };
+  /** The same for a frame with an unknown status state. */
+  private readonly lastUnknown: LogKey = { key: null, seenAt: -Infinity };
   private readonly unitsWarned = new Set<number>();
+
+  /**
+   * @param now clock, injectable so the key expiry can be tested. Monotonic by
+   *   default, like Silvergear 108: a Raspberry Pi has no RTC, and a wall
+   *   clock step when NTP first syncs would bend the expiry.
+   */
+  constructor(private readonly now: () => number = () => performance.now()) {}
+
+  /**
+   * True when this frame's payload should be logged: it differs from the last
+   * one logged in this slot, or that one has not been seen for LOG_KEY_TTL_MS.
+   */
+  private firstSighting(slot: LogKey, d: Buffer): boolean {
+    const key = payloadKey(d);
+    const at = this.now();
+    const first = key !== slot.key || at - slot.seenAt > LOG_KEY_TTL_MS;
+    slot.key = key;
+    slot.seenAt = at;
+    return first;
+  }
 
   /**
    * Company id, frame grammar, and then who sent it. When the transport knows
@@ -265,8 +305,8 @@ export class SenssunIfB7Adapter implements ScaleAdapterCore, BroadcastSource {
       if (f.state === STATE_WEIGHING) {
         // A new weigh-in may end on the same payload as the last one, so the
         // keys of the other two states must not outlive it.
-        this.lastFinishedKey = null;
-        this.lastUnknownKey = null;
+        this.lastFinished.key = null;
+        this.lastUnknown.key = null;
         if (f.weight !== this.lastSettlingKg) {
           this.lastSettlingKg = f.weight;
           bleLog.debug(`Senssun IF_B7 weighing: ${f.weight.toFixed(2)} kg`);
@@ -275,9 +315,7 @@ export class SenssunIfB7Adapter implements ScaleAdapterCore, BroadcastSource {
         // A state nobody has captured yet. Say so once per payload: if this
         // unit ends a weigh-in on something other than 0xA_, this line is the
         // only thing in a DEBUG log that explains the timeout.
-        const key = payloadKey(manufacturerData);
-        if (key !== this.lastUnknownKey) {
-          this.lastUnknownKey = key;
+        if (this.firstSighting(this.lastUnknown, manufacturerData)) {
           bleLog.debug(
             `Senssun IF_B7: status 0x${manufacturerData[STATUS_OFFSET].toString(16)} is not a ` +
               `known state, frame ignored: ${manufacturerData.toString('hex')}`,
@@ -291,9 +329,7 @@ export class SenssunIfB7Adapter implements ScaleAdapterCore, BroadcastSource {
 
     // Once per payload, not per advert: the counter at [15] differs on every
     // advert of the finished state, which lasts for seconds.
-    const key = payloadKey(manufacturerData);
-    if (key !== this.lastFinishedKey) {
-      this.lastFinishedKey = key;
+    if (this.firstSighting(this.lastFinished, manufacturerData)) {
       const hex = manufacturerData.toString('hex');
       bleLog.debug(
         `Senssun IF_B7 finished: ${f.weight.toFixed(2)} kg ` +

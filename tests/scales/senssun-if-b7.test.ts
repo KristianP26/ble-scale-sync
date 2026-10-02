@@ -10,8 +10,9 @@ import { bleLog } from '../../src/ble/types.js';
 
 /**
  * Real frames only, manufacturer data with the company id stripped as every
- * transport delivers it: two from the #423 reporter's first log, more from the
- * same reporter's ESPHome export (timestamps as exported), and one from
+ * transport delivers it: two from the #423 reporter's first posts (the issue's
+ * log and a frame quoted in a comment), more from the same reporter's ESPHome
+ * export (timestamps as exported), and one from
  * ble_monitor. Nothing here is built from our own reading of the format; the
  * only altered frames below are single-byte changes to these, and each says
  * which byte.
@@ -251,6 +252,39 @@ describe('SenssunIfB7Adapter (#423)', () => {
       adapter.parseBroadcast(buf(KG_WEIGHING_88_10));
       adapter.parseBroadcast(buf(KG_FINISHED_SECOND));
       expect(finished()).toHaveLength(2);
+    });
+
+    it('logs the finished frame of every poll scan, even on the payload of the scan before', () => {
+      // A poll transport stops at the first finished frame and reads again only
+      // after scan_cooldown (5 s at the least), seeing no weighing frame in
+      // between if the finished state outlived the cooldown.
+      let t = 0;
+      const adapter = new SenssunIfB7Adapter(() => t);
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      const finished = () => debug.mock.calls.filter(([m]) => String(m).includes('finished'));
+      // A watcher first: ten seconds of the same payload, one advert every
+      // 400 ms (about the longest gap in the #423 capture), is one line.
+      for (let i = 0; i < 25; i++) {
+        adapter.parseBroadcast(buf(i % 2 === 0 ? KG_FINISHED_FIRST : KG_FINISHED_SECOND));
+        t += 400;
+      }
+      expect(finished()).toHaveLength(1);
+      t += 5_000;
+      adapter.parseBroadcast(buf(KG_FINISHED_FIRST));
+      expect(finished()).toHaveLength(2);
+    });
+
+    it('logs an unseen state again after the same expiry (derived: [14] 0xA1 -> 0xE1)', () => {
+      let t = 0;
+      const adapter = new SenssunIfB7Adapter(() => t);
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      const unknown = derived(KG_FINISHED_FIRST, 14, 0xe1);
+      adapter.parseBroadcast(unknown);
+      t += 5_000;
+      adapter.parseBroadcast(unknown);
+      expect(
+        debug.mock.calls.filter(([m]) => String(m).includes('not a known state')),
+      ).toHaveLength(2);
     });
 
     it('logs a weighing value once, and again only when it changes', () => {
