@@ -114,7 +114,7 @@ ble:
 | `qn_report_byte`             | No                          | Per dialect    | QN-family scales only. Payload byte of the history-response frame (0 to 255). Defaults to `252` (0xFC) on the long-frame dialects (es26m and extended) and `254` (0xFE) on the classic one. Try the other value if your scale completes the handshake and then reports nothing. See below.                                                                                     |
 | `auto_clear_stale_bond`      | No                          | `false`        | Delete a pairing key the scale has forgotten and pair again. Bonded scales only (Beurer BF7xx / BF9xx), node-ble transport only. See below.                                                                                                                                                                                                                                    |
 | `preemptive_adapter_reset`   | No                          | `true`         | Power-cycle the Bluetooth adapter with `btmgmt` after every GATT session, to clear a stuck-discovery state some Raspberry Pi adapters fall into. Set `false` only to test whether that cycle is what makes a bonded scale reject its next connect. node-ble transport only. See below.                                                                                         |
-| `qn_weight_ack`              | No                          | Per dialect    | QN-family scales only. Answer every live weight frame with its own weight, as the vendor app does. On by default on the 20-byte extended dialect. Try `true` if your QN scale completes the handshake and then streams nothing. See below.                                                                                                                                     |
+| `qn_weight_ack`              | No                          | Per dialect    | QN-family scales only. Send the scale your weight anchor and acknowledge live weight frames, as the vendor apps do. The acknowledgement is on by default on the 20-byte extended dialect. Try `true` if your QN scale completes the handshake and then streams nothing. See below.                                                                                             |
 | `qn_a4_prelude`              | No                          | `false`        | QN-family scales only. Send the two undecoded `0xA4` frames an Arboleaf vendor app sends between START and the first weight frame. Off by default. Try `true` only if `qn_weight_ack` did not help and your scale still goes silent right after START. See below.                                                                                                              |
 | `qn_time_sync_long`          | No                          | `false`        | QN-family scales only. Send the 9-byte form of the `0x20` time-sync frame that an Arboleaf vendor app sends, instead of the 8-byte one. Off by default; the extra byte is undecoded. See below.                                                                                                                                                                                |
 | `qn_config_long`             | No                          | `false`        | QN-family scales only. Send the 10-byte form of the `0x13` config frame the vendor app sends, instead of the 9-byte one. Off by default; the extra bytes are undecoded. See below.                                                                                                                                                                                             |
@@ -203,16 +203,16 @@ If `252` makes your scale produce a weight, please say so in an issue with the m
 
 ::: tip QN scales that finish the handshake and then stream nothing (`qn_weight_ack`)
 
-There is a third silent-failure knob in this family, and it is the one with the clearest evidence behind it.
+There is a third silent-failure knob in this family.
 
-A vendor-app capture of a GE CS 10 G answers **every** live weight frame the scale sends with an acknowledgement carrying that frame's own weight:
+One reading of a vendor-app capture of a GE CS 10 G has the app answering live weight frames with an acknowledgement carrying that frame's own weight:
 
 ```
 scale  ... 11 1e be ...   ->  app  a2 06 01 1e be 85
 scale  ... 11 1e c3 ...   ->  app  a2 06 01 1e c3 8a
 ```
 
-On that firmware the scale will not finish a weigh-in without it, so the 20-byte extended dialect does this by default and needs no setting.
+That reading is not confirmed on hardware, but the 20-byte extended dialect does it by default. The 20-byte live weight frame of the long dialects is not decoded yet and is never answered this way.
 
 There is a second place the same frame appears, and it is the more interesting one for a scale that never streams anything at all. Before the weigh-in the handshake sends `a2 06 01 32 <age>`, which openScale labels a user profile. Under the reading above those payload bytes are a weight, and `0x32` plus an age decodes to something like **128.58 kg**, which is nobody. Two es26m reporters whose scales complete the whole handshake and then go silent have exactly that in their logs.
 
@@ -225,9 +225,9 @@ ble:
   qn_weight_ack: true
 ```
 
-That does two things: an A2 frame carries your `last_known_weight` (or the midpoint of your `weight_range`) instead of the placeholder, and every live weight frame is acknowledged with its own weight. `false` turns both off everywhere, if it ever turns out to hurt a unit.
+That does two things: your `last_known_weight` (or the midpoint of your `weight_range`) is sent to the scale as a weight anchor, and live weight frames are acknowledged with their own weight. `false` turns the acknowledgement off on every dialect, if it ever turns out to hurt a unit.
 
-Where that anchor goes depends on the dialect, and it goes to exactly one place either way. On the 20-byte extended dialect it is sent after the start command, because that is where hardware confirmed it in [#235](https://github.com/KristianP26/ble-scale-sync/issues/235). On every other dialect it is sent immediately before the start command, which is where an HCI capture of an Arboleaf vendor app puts it: that app sends `a2 06 01 22 8d 58` (88.45 kg) and then the start command with nothing between them.
+Where that anchor goes depends on the dialect. On the 20-byte extended dialect it replaces the placeholder before the weigh-in, and the trigger that dialect always sends after the start command carries it too, which is what hardware confirmed in [#235](https://github.com/KristianP26/ble-scale-sync/issues/235). On every other dialect it is sent twice right after the start command, 75 ms after it and again 150 ms later, and nowhere before it. That is what two HCI captures of an Arboleaf vendor app completing a weigh-in show: the app sends `a2 06 01 1c ed b2` (74.05 kg) twice after the start command and nothing like it before.
 
 If that still leaves the scale silent right after START, there is one more thing to try:
 
@@ -236,7 +236,7 @@ ble:
   qn_a4_prelude: true
 ```
 
-An HCI capture of an Arboleaf vendor app shows two `0xA4` frames sent between START and the first live weight frame, which this app does not send. The scale acknowledges each one and only then starts streaming. Turning this on replays those two frames.
+An HCI capture of an Arboleaf vendor app shows two `0xA4` frames sent between START and the first live weight frame, which this app does not send. In that capture the scale acknowledges each one and then starts streaming. Turning this on replays those two frames. With `qn_weight_ack` on, they go out after the two anchor frames, which is the order the other Arboleaf captures show.
 
 Be aware of what that means. The frames are replayed byte for byte from one reporter's capture of their own scale, and their payload is not decoded. It looks like per-user calibration or a previous measurement handed back, so it may be right for everyone or right for nobody but the person who captured it. That is why it is off by default and why it is the last thing to try rather than the first. If it works for your unit, please say so on [issue #331](https://github.com/KristianP26/ble-scale-sync/issues/331): more than one confirmation is what would turn this from a replay into a decoded frame.
 
@@ -458,11 +458,11 @@ scale:
   display_unit: weight_unit
 ```
 
-| Field         | Required | Default | Description                                              |
-| ------------- | -------- | ------- | -------------------------------------------------------- |
-| `weight_unit` | No       | `kg`    | `kg` or `lbs`. Display only; calculations always use kg. |
-| `height_unit` | No       | `cm`    | `cm` or `in`. Used for height input in user profiles.    |
-| `display_unit` | No | `weight_unit` | Physical scale display unit: `weight_unit`, `kg`, `lbs`, or `st`. Only scales read by the QN-Scale adapter are told which unit to show (the log says `Matched adapter: QN Scale`); other scales ignore it. This is independent of exported values and calculations. |
+| Field          | Required | Default       | Description                                                                                                                                                                                                                                                         |
+| -------------- | -------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `weight_unit`  | No       | `kg`          | `kg` or `lbs`. Display only; calculations always use kg.                                                                                                                                                                                                            |
+| `height_unit`  | No       | `cm`          | `cm` or `in`. Used for height input in user profiles.                                                                                                                                                                                                               |
+| `display_unit` | No       | `weight_unit` | Physical scale display unit: `weight_unit`, `kg`, `lbs`, or `st`. Only scales read by the QN-Scale adapter are told which unit to show (the log says `Matched adapter: QN Scale`); other scales ignore it. This is independent of exported values and calculations. |
 
 For example, this keeps Home Assistant values and matching ranges in kilograms while the physical QN scale shows stones and pounds:
 
