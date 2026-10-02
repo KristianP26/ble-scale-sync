@@ -293,7 +293,7 @@ export class RenphoMsc04Adapter
       );
     }
     // Written WITHOUT response: the handler sends the identical ES-CS20M unlock
-    // without response (src/ble/shared.ts writeChar.write(buf, false)).
+    // without response (src/ble/shared.ts sendUnlock, lanes.write(.., false, 'unlock')).
     await ctx.write(CHR_WRITE, START_COMMAND, false);
     bleLog.debug('Renpho R-MSC04: start command sent');
   }
