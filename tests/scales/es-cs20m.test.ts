@@ -521,8 +521,11 @@ describe('EsCs20mAdapter 0x14 status nibble (#376)', () => {
     expect(last).toEqual({ weight: 101.2, impedance: 0 });
   });
 
-  // R-A016 official-app capture, from tests/test_x55aa_protocol.py in
-  // https://github.com/ronnnnnnnnnnnnn/renpho-escs20m (91.45 kg).
+  // R-A016 frames from tests/test_x55aa_protocol.py in
+  // https://github.com/ronnnnnnnnnnnnn/renpho-escs20m (91.45 kg). The 0x10 and
+  // 0x11 frames are from the official-app capture (the app had set zero-current
+  // mode); the 0x01 final is from a probe run on the same unit after a 0x90
+  // mode-1 write.
   it('R-A016: a zero-current settling frame (0x10) is not final', () => {
     const adapter = makeAdapter();
     const reading = adapter.parseNotification(frame('55aa14000710000023b9000006'))!;

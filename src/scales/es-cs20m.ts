@@ -145,17 +145,17 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
         ? data[2]
         : data[0];
 
-    // 0x11 - start/stop control frame
+    // 0x11 - power/status frame
     if (msgId === 0x11) {
       if (data.length < 6) return null;
       if (data[5] === 0x01) {
-        // START: reset state for new measurement
+        // Power on (also sent right after subscribe): reset state for a new weigh-in
         this.stable = false;
         this.stopped = false;
         this.resistance = 0;
         this.lastWeight = 0;
       } else if (data[5] === 0x00) {
-        // STOP: measurement complete, return last accumulated reading
+        // Power off: measurement complete, return the last accumulated reading
         this.stopped = true;
         if (this.lastWeight > 0) {
           return { weight: this.lastWeight, impedance: this.resistance };
