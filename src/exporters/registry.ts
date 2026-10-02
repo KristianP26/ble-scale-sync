@@ -14,6 +14,7 @@ import type {
   IntervalsConfig,
   RunalyzeConfig,
   WgerConfig,
+  HealthLogConfig,
 } from './config.js';
 import {
   garminSchema,
@@ -31,6 +32,7 @@ import { telegramSchema, TelegramExporter } from './telegram.js';
 import { intervalsSchema, IntervalsExporter } from './intervals.js';
 import { runalyzeSchema, RunalyzeExporter } from './runalyze.js';
 import { wgerSchema, WgerExporter } from './wger.js';
+import { healthlogSchema, HealthLogExporter } from './healthlog.js';
 
 // --- Registry entry type ---
 
@@ -325,6 +327,17 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
         syncMeasurements: optionalBool(config, 'wger', 'sync_measurements') ?? true,
       };
       return new WgerExporter(wgerConfig);
+    },
+  },
+  {
+    schema: healthlogSchema,
+    factory: (config) => {
+      const healthlogConfig: HealthLogConfig = {
+        baseUrl: requireField(config, 'healthlog', 'base_url'),
+        token: requireField(config, 'healthlog', 'token'),
+        syncMeasurements: optionalBool(config, 'healthlog', 'sync_measurements') ?? true,
+      };
+      return new HealthLogExporter(healthlogConfig);
     },
   },
 ];

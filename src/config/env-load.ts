@@ -100,6 +100,14 @@ export function loadEnvConfig(): AppConfig {
         sync_measurements: w.syncMeasurements,
       });
     }
+    if (name === 'healthlog' && exporterConfig.healthlog) {
+      const h = exporterConfig.healthlog;
+      Object.assign(entry, {
+        base_url: h.baseUrl,
+        token: h.token,
+        sync_measurements: h.syncMeasurements,
+      });
+    }
 
     return entry as ExporterEntry;
   });

@@ -1,15 +1,15 @@
 ---
 title: Exporters
-description: Configure Garmin Connect, Strava, Intervals.icu, Runalyze, Wger, MQTT, Webhook, InfluxDB, Ntfy, Telegram, and File export targets.
+description: Configure Garmin Connect, Strava, Intervals.icu, Runalyze, Wger, HealthLog, MQTT, Webhook, InfluxDB, Ntfy, Telegram, and File export targets.
 head:
   - - meta
     - name: keywords
-      content: garmin connect scale sync, strava weight sync, intervals.icu wellness weight, runalyze body composition, wger weight sync, mqtt home assistant scale, influxdb body weight, smart scale webhook, ntfy notifications, telegram scale notifications, scale data export csv, garmin body composition upload
+      content: garmin connect scale sync, strava weight sync, intervals.icu wellness weight, runalyze body composition, wger weight sync, healthlog body composition, mqtt home assistant scale, influxdb body weight, smart scale webhook, ntfy notifications, telegram scale notifications, scale data export csv, garmin body composition upload
 ---
 
 # Exporters
 
-BLE Scale Sync exports body composition data to 11 targets. The [setup wizard](/guide/configuration#setup-wizard-recommended) walks you through exporter selection, configuration, and connectivity testing.
+BLE Scale Sync exports body composition data to 12 targets. The [setup wizard](/guide/configuration#setup-wizard-recommended) walks you through exporter selection, configuration, and connectivity testing.
 
 Exporters are configured in `global_exporters` (shared by all users). For multi-user setups with separate accounts, see [Per-User Exporters](/multi-user#per-user-exporters). All enabled exporters run in parallel; the process reports an error only if **every** exporter fails.
 
@@ -26,6 +26,7 @@ Exporters are configured in `global_exporters` (shared by all users). For multi-
 | [**Intervals.icu**](#intervals) | Push weight + body fat to Intervals.icu wellness       |
 | [**Runalyze**](#runalyze)       | Push weight + body composition to Runalyze metrics     |
 | [**Wger**](#wger)               | Push weight + body composition to a Wger instance      |
+| [**HealthLog**](#healthlog)     | Push weight + body composition to a HealthLog instance |
 
 ## Garmin Connect {#garmin}
 
@@ -410,6 +411,45 @@ users:
 
 Authentication uses a permanent API key (sent as `Authorization: Token <key>`), no OAuth flow. Generate it on the Wger account settings **API** page. Weight is written to a weight entry on the reading's calendar day, so historical readings replayed from a scale's offline cache land on their original date. With `sync_measurements` enabled, body fat and water (percent) and muscle and bone (kg) are written as Wger custom measurements; the matching categories are created automatically on first use and reused afterwards. Measurement failures are logged but do not block the weight sync.
 
+## HealthLog {#healthlog}
+
+Push weight and body composition to [HealthLog](https://github.com/MBombeck/HealthLog), a self-hosted personal health record.
+
+| Field               | Required | Default | Description                                                   |
+| ------------------- | -------- | ------- | ------------------------------------------------------------- |
+| `base_url`          | Yes      | (none)  | HealthLog instance URL, e.g. `https://healthlog.example`      |
+| `token`             | Yes      | (none)  | Measurement ingest token from **Settings -> API & Tokens**    |
+| `sync_measurements` | No       | `true`  | Also push body fat, body water, muscle, bone and visceral fat |
+
+```yaml
+users:
+  - name: Alice
+    exporters:
+      - type: healthlog
+        base_url: https://healthlog.example
+        token: '${HEALTHLOG_TOKEN}'
+        sync_measurements: true
+```
+
+Authentication uses HealthLog's **Measurement ingest token**, sent as `Authorization: Bearer <token>`, no OAuth flow. Mint it in HealthLog under **Settings -> API & Tokens -> Measurement ingest token**. It is shown only once, it can only add readings to your own record (it cannot read anything back), and it **expires after a year**, so mint a new one and update `token` when it lapses. HealthLog marks the readings it receives this way as coming from an external device.
+
+Each value is a separate `POST /api/measurements` carrying the reading's exact time, so historical readings replayed from a scale's offline cache land on their original date and time. HealthLog takes the unit from the measurement type, so every value is sent already in that unit:
+
+| HealthLog type     | Sent as                                                                   | HealthLog accepts |
+| ------------------ | ------------------------------------------------------------------------- | ----------------- |
+| `WEIGHT`           | kg                                                                        | 1-500             |
+| `BODY_FAT`         | percent                                                                   | 1-80              |
+| `TOTAL_BODY_WATER` | kg, computed as weight x body water percent (HealthLog stores it as mass) | 5-100             |
+| `MUSCLE_MASS`      | kg                                                                        | 5-200             |
+| `BONE_MASS`        | kg                                                                        | 0.5-8             |
+| `VISCERAL_FAT`     | rating                                                                    | 0-30              |
+
+Everything after the weight is sent only with `sync_measurements` enabled. Those are the same values every other exporter receives, so on a scale without impedance they are the BMI-based estimates described in [Body Composition](/body-composition). A body composition value outside the range HealthLog accepts is not sent, since HealthLog would refuse it. In practice that is a visceral fat rating above 30: ours runs up to 59. A failed body composition value is logged but does not fail the export; a failed weight does.
+
+HealthLog refuses a second reading with the same type and time with `409`. The exporter counts that as already recorded rather than as a failure, so when a retry repeats a value that did reach HealthLog (the response was lost on the way back), the export does not report an error.
+
+The startup healthcheck calls HealthLog's public `/api/version` endpoint, which needs no token. It confirms the instance is reachable, not that the token is valid: a wrong or expired token shows up on the first export.
+
 ## Secrets
 
 Use `${ENV_VAR}` references in YAML for passwords and tokens. The variable must be defined in the environment or in a `.env` file:
@@ -426,7 +466,7 @@ See [Configuration: Environment Variables](/guide/configuration#environment-vari
 ::: warning A boolean field must spell a boolean
 An `${ENV_VAR}` reference is resolved to a **string** before the exporter reads it, so a true/false field only accepts a value that reads as one: `true`, `yes`, `1`, `on`, or `false`, `no`, `0`, `off`, or empty. Anything else stops that exporter from being built, with an error naming the field, rather than being guessed at in one direction or the other.
 
-This applies to `weight_only` (garmin), `retain` and `ha_discovery` (mqtt), `silent` (telegram), `report_exports` (ntfy and telegram) and `sync_measurements` (wger). So `MQTT_RETAIN=maybe` is an error, not a default.
+This applies to `weight_only` (garmin), `retain` and `ha_discovery` (mqtt), `silent` (telegram), `report_exports` (ntfy and telegram) and `sync_measurements` (wger and healthlog). So `MQTT_RETAIN=maybe` is an error, not a default.
 :::
 
 ## Historical readings
@@ -445,6 +485,7 @@ A reading with a timestamp is sent **only to exporters that can record it at tha
 | `intervals` | Yes                         |
 | `runalyze`  | Yes                         |
 | `wger`      | Yes                         |
+| `healthlog` | Yes                         |
 | `mqtt`      | No                          |
 | `webhook`   | No                          |
 | `ntfy`      | No                          |
@@ -475,6 +516,7 @@ At startup, exporters are tested for connectivity. Failures are logged as warnin
 | Intervals.icu | `GET` wellness record          |
 | Runalyze      | `GET` bodyComposition metric   |
 | Wger          | `GET` userprofile record       |
+| HealthLog     | `GET` public `/api/version`    |
 | Garmin        | None (Python subprocess)       |
 | File          | Directory writable check       |
 | Strava        | None (avoid API rate limits)   |

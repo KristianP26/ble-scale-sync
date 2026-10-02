@@ -557,4 +557,43 @@ describe('loadExporterConfig()', () => {
       expect(loadExporterConfig().wger).toBeUndefined();
     });
   });
+
+  describe('HealthLog config', () => {
+    it('requires HEALTHLOG_BASE_URL when healthlog is enabled', () => {
+      vi.stubEnv('EXPORTERS', 'healthlog');
+      vi.stubEnv('HEALTHLOG_TOKEN', 'tok-1');
+      expect(() => loadExporterConfig()).toThrow(/HEALTHLOG_BASE_URL is required/);
+    });
+
+    it('requires HEALTHLOG_TOKEN when healthlog is enabled', () => {
+      vi.stubEnv('EXPORTERS', 'healthlog');
+      vi.stubEnv('HEALTHLOG_BASE_URL', 'https://healthlog.example');
+      expect(() => loadExporterConfig()).toThrow(/HEALTHLOG_TOKEN is required/);
+    });
+
+    it('parses healthlog env vars (sync_measurements defaults true)', () => {
+      vi.stubEnv('EXPORTERS', 'healthlog');
+      vi.stubEnv('HEALTHLOG_BASE_URL', 'https://healthlog.example');
+      vi.stubEnv('HEALTHLOG_TOKEN', 'tok-1');
+      expect(loadExporterConfig().healthlog).toEqual({
+        baseUrl: 'https://healthlog.example',
+        token: 'tok-1',
+        syncMeasurements: true,
+      });
+    });
+
+    it('parses HEALTHLOG_SYNC_MEASUREMENTS=false', () => {
+      vi.stubEnv('EXPORTERS', 'healthlog');
+      vi.stubEnv('HEALTHLOG_BASE_URL', 'https://healthlog.example');
+      vi.stubEnv('HEALTHLOG_TOKEN', 'tok-1');
+      vi.stubEnv('HEALTHLOG_SYNC_MEASUREMENTS', 'false');
+      expect(loadExporterConfig().healthlog?.syncMeasurements).toBe(false);
+    });
+
+    it('does not parse healthlog config when healthlog is not enabled', () => {
+      vi.stubEnv('EXPORTERS', 'garmin');
+      vi.stubEnv('HEALTHLOG_TOKEN', 'tok-1');
+      expect(loadExporterConfig().healthlog).toBeUndefined();
+    });
+  });
 });

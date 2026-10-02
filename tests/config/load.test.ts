@@ -432,6 +432,30 @@ global_exporters:
     expect(() => createExporterFromEntry(garmin!)).not.toThrow();
   });
 
+  it('carries the HEALTHLOG_* vars into a buildable .env HealthLog exporter entry', () => {
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => String(p).endsWith('.env'));
+    vi.stubEnv('USER_HEIGHT', '183');
+    vi.stubEnv('USER_BIRTH_DATE', '1990-06-15');
+    vi.stubEnv('USER_GENDER', 'male');
+    vi.stubEnv('USER_IS_ATHLETE', 'true');
+    vi.stubEnv('EXPORTERS', 'healthlog');
+    vi.stubEnv('HEALTHLOG_BASE_URL', 'https://healthlog.example');
+    vi.stubEnv('HEALTHLOG_TOKEN', 'tok-1');
+    vi.stubEnv('HEALTHLOG_SYNC_MEASUREMENTS', 'false');
+
+    const { config } = loadAppConfig();
+    const healthlog = config.global_exporters!.find((e) => e.type === 'healthlog');
+    expect(healthlog).toEqual({
+      type: 'healthlog',
+      base_url: 'https://healthlog.example',
+      token: 'tok-1',
+      sync_measurements: false,
+    });
+    // Without the env-load mapping the entry is a bare { type } and the
+    // factory throws on the missing base_url.
+    expect(createExporterFromEntry(healthlog!).name).toBe('healthlog');
+  });
+
   it('defaults the .env Garmin entry to weight_only false', () => {
     vi.spyOn(fs, 'existsSync').mockImplementation((p) => String(p).endsWith('.env'));
     vi.stubEnv('USER_HEIGHT', '183');
