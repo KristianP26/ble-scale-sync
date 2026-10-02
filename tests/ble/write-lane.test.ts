@@ -180,6 +180,24 @@ describe('createWriteLanes()', () => {
       expect(char.started).toEqual(['e7f1580107', 'e7f1590301', 'e7f1580107']);
     });
 
+    it('joins only the tail: an identical ACK behind a different one queues again', async () => {
+      const lanes = createWriteLanes();
+      const char = createHeldChar();
+
+      void lanes.write(char, b('01'), true, 'adapter'); // running
+      void lanes.write(char, b('e7f1580107'), true, 'ack'); // waits
+      void lanes.write(char, b('e7f1590301'), true, 'ack'); // waits, the tail
+      // Joining the older identical ACK would put it on the wire before 0x59
+      // part 1's, an order the scale never saw.
+      void lanes.write(char, b('e7f1580107'), true, 'ack');
+
+      for (let i = 0; i < 4; i++) {
+        char.settle();
+        await flush();
+      }
+      expect(char.started).toEqual(['01', 'e7f1580107', 'e7f1590301', 'e7f1580107']);
+    });
+
     it('does not join an identical ACK of a different write type', async () => {
       const lanes = createWriteLanes();
       const char = createHeldChar();
@@ -329,5 +347,21 @@ describe('createWriteLanes()', () => {
     await Promise.all([p1, p2]);
 
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('I9: the release timer of a write still open does not keep the process alive', () => {
+    // Real timers: the single-shot run ends by draining the event loop, so a
+    // ref'd 5 s timer on a write the stack never answers would hold the exit.
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const lanes = createWriteLanes();
+    const char = createHeldChar();
+
+    void lanes.write(char, b('01'), true, 'adapter');
+
+    expect(setTimeoutSpy).toHaveBeenCalledTimes(1);
+    const timer = setTimeoutSpy.mock.results[0].value as NodeJS.Timeout;
+    expect(timer.hasRef()).toBe(false);
+    clearTimeout(timer);
+    setTimeoutSpy.mockRestore();
   });
 });

@@ -2579,4 +2579,62 @@ describe('waitForRawReading() write lane (#211)', () => {
     await drain(ffe1);
     expect(acks(ffe1)).toEqual(['e7f1590301', 'e7f1590302', 'e7f1590303']);
   });
+
+  it('R5: drops an unlock still queued when the session ends, and does not log it', async () => {
+    vi.useFakeTimers();
+    try {
+      const notifyChar = createMockChar();
+      const writeChar = createBluezLikeChar();
+      const device = createMockDevice();
+      const { charMap } = createCharMap([[NOTIFY_UUID, notifyChar]]);
+      charMap.set(normalizeUuid(WRITE_UUID), writeChar);
+      const errorSpy = vi.spyOn(bleLog, 'error');
+
+      const adapter = createLegacyAdapter({
+        unlockCommand: [0x13, 0x09],
+        unlockIntervalMs: 1000,
+        buildAck: (data: Buffer) => (data[0] === 0x01 ? [0xaa] : null),
+        parseNotification: vi.fn((data: Buffer) =>
+          data[0] === 0x02 ? { weight: 75, impedance: 500 } : null,
+        ),
+      });
+
+      const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(writeChar.accepted.map((a) => a.hex)).toEqual(['1309']);
+
+      notifyChar.triggerData(Buffer.from([0x01])); // ACK aa opens write_op
+      await vi.advanceTimersByTimeAsync(999); // t=1000: unlock tick, queued behind it
+      notifyChar.triggerData(Buffer.from([0x02])); // completes the reading
+      await promise;
+
+      writeChar.release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(writeChar.accepted.map((a) => a.hex)).toEqual(['1309', 'aa']);
+      expect(writeChar.rejections).toEqual([]);
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('logs how long each ACK took, and which ones were coalesced', async () => {
+    const ffe1 = createBluezLikeChar();
+    const debugSpy = vi.spyOn(bleLog, 'debug');
+    const { device } = beurerSession(ffe1);
+    await vi.waitFor(() => expect(ffe1.subscribeCalled).toBe(true));
+
+    ffe1.triggerData(SBF75_58_0732); // running
+    ffe1.triggerData(SBF75_58_0739); // waits
+    ffe1.triggerData(SBF75_58_072E); // joins it
+    await drain(ffe1);
+
+    const lines = debugSpy.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('ACK'));
+    expect(lines).toHaveLength(3);
+    expect(
+      lines.filter((l) => /^ACK \[e7 f1 58 01 07\] written in \d+ ms \(waited \d+ ms\)$/.test(l)),
+    ).toHaveLength(2);
+    expect(lines).toContain('ACK [e7 f1 58 01 07] coalesced with an identical one still waiting');
+    device.triggerDisconnect();
+  });
 });
