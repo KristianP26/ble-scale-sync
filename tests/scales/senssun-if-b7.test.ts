@@ -9,10 +9,12 @@ import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
 import { bleLog } from '../../src/ble/types.js';
 
 /**
- * The three real frames, manufacturer data with the company id stripped as
- * every transport delivers it. Nothing here is built from our own reading of
- * the format; the only altered frames below are single-byte changes to these,
- * and each says which byte.
+ * Real frames only, manufacturer data with the company id stripped as every
+ * transport delivers it: two from the #423 reporter's first log, more from the
+ * same reporter's ESPHome export (timestamps as exported), and one from
+ * ble_monitor. Nothing here is built from our own reading of the format; the
+ * only altered frames below are single-byte changes to these, and each says
+ * which byte.
  */
 
 /** #423, unit 64:FB:01:2D:92:50, taken while weighing (status 0x01): 87.30 kg. */
@@ -20,6 +22,19 @@ const LIVE_87_30 = '02031164fb012d925001221a00000190ce';
 /** #423, same unit, while weighing: 84.20 kg (the display settled on 84.3). */
 const LIVE_84_20 = '02031164fb012d92500120e40000011c22';
 const MAC_423 = '64:FB:01:2D:92:50';
+
+/*
+ * #423 comment 2026-09-29T16:52:27Z, ESPHome export of the same unit. A weigh-in
+ * with the scale displaying kg, 88.1 kg in the vendor app.
+ */
+/** Frame at 16:37:23.467Z: the last weighing frame (status 0x01), 88.10 kg. */
+const KG_WEIGHING_88_10 = '02031164fb012d925001226a000001d05e';
+/** Frame at 16:37:23.875Z: the first finished frame (status 0xA1), 88.10 kg, [12..13] = 0. */
+const KG_FINISHED_FIRST = '02031164fb012d925001226a0000a1d1ff';
+/** Frame at 16:37:24.199Z: the next advert, only [15] and the checksum (0xff -> 0x00) differ. */
+const KG_FINISHED_SECOND = '02031164fb012d925001226a0000a1d200';
+/** Frame at 16:37:25.208Z: still finished, 88.10 kg, now [12..13] = 137. */
+const KG_FINISHED_137 = '02031164fb012d925001226a0089a1d78e';
 
 /**
  * custom-components/ble_monitor test_senssun_parser.py, the payload of the raw
@@ -164,6 +179,31 @@ describe('SenssunIfB7Adapter (#423)', () => {
       expect(debug).toHaveBeenCalledTimes(1);
     });
 
+    it('logs the finished state once per payload, not once per advert', () => {
+      const adapter = new SenssunIfB7Adapter();
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      const finished = () => debug.mock.calls.filter(([m]) => String(m).includes('finished'));
+      // Two consecutive adverts that differ only in the counter at [15].
+      adapter.parseBroadcast(buf(KG_FINISHED_FIRST));
+      adapter.parseBroadcast(buf(KG_FINISHED_SECOND));
+      expect(finished()).toHaveLength(1);
+      // [12..13] turning non-zero is new information.
+      adapter.parseBroadcast(buf(KG_FINISHED_137));
+      expect(finished()).toHaveLength(2);
+      expect(String(finished()[1][0])).toContain('[12..13]=137');
+    });
+
+    it('logs the finished state of a second weigh-in that ends on the same payload', () => {
+      const adapter = new SenssunIfB7Adapter();
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      const finished = () => debug.mock.calls.filter(([m]) => String(m).includes('finished'));
+      adapter.parseBroadcast(buf(KG_FINISHED_FIRST));
+      // A weighing frame in between starts a new weigh-in.
+      adapter.parseBroadcast(buf(KG_WEIGHING_88_10));
+      adapter.parseBroadcast(buf(KG_FINISHED_SECOND));
+      expect(finished()).toHaveLength(2);
+    });
+
     it('logs a weighing value once, and again only when it changes', () => {
       const adapter = new SenssunIfB7Adapter();
       const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
@@ -199,8 +239,13 @@ describe('SenssunIfB7Adapter (#423)', () => {
       const unknown = derived(FINISHED_67_25, 14, 0xe1);
       adapter.parseBroadcast(unknown);
       adapter.parseBroadcast(unknown);
-      const lines = debug.mock.calls.filter(([m]) => String(m).includes('not a known state'));
-      expect(lines).toHaveLength(1);
+      const lines = () => debug.mock.calls.filter(([m]) => String(m).includes('not a known state'));
+      expect(lines()).toHaveLength(1);
+      // Derived: [14] 0xA1 -> 0xE1 on two adverts that differ only in [15], one
+      // payload.
+      adapter.parseBroadcast(derived(KG_FINISHED_FIRST, 14, 0xe1));
+      adapter.parseBroadcast(derived(KG_FINISHED_SECOND, 14, 0xe1));
+      expect(lines()).toHaveLength(2);
       debug.mockRestore();
     });
 

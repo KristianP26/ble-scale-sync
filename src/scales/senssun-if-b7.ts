@@ -31,7 +31,8 @@ const ADVERTISED_NAME = 'if_b7';
  *   [10..11]  weight, uint16 big-endian, kg * 100
  *   [12..13]  uint16 big-endian, 0 while weighing; NOT published, see RAW_FIELD
  *   [14]      status: high nibble is the state, low nibble the display unit
- *   [15]      unknown, varies frame to frame
+ *   [15]      rolling counter, +1..3 from one advert to the next, wraps; it makes
+ *             every advert unique, so it is left out of the logging keys below
  *   [16]      checksum: sum of [9..15], low 8 bits
  *
  * Evidence, all byte for byte:
@@ -111,6 +112,15 @@ function decode(d: Buffer): Frame {
   };
 }
 
+/**
+ * [9..14]: everything the scale says except the rolling counter at [15] and
+ * the checksum that follows it. Two adverts with the same key carry the same
+ * information.
+ */
+function payloadKey(d: Buffer): string {
+  return d.subarray(INFO_OFFSET, TRAILER_OFFSET).toString('hex');
+}
+
 /** The six address bytes, uppercase and colon-free, or null when unknown. */
 function macBytes(address: string | undefined): string | null {
   if (!address) return null;
@@ -147,9 +157,10 @@ export class SenssunIfB7Adapter implements ScaleAdapterCore, BroadcastSource {
    * reset (which the broadcast path would not call anyway).
    */
   private lastSettlingKg: number | null = null;
-  private lastFinishedHex: string | null = null;
-  /** Last frame logged with an unknown status state, same reason. */
-  private lastUnknownHex: string | null = null;
+  /** [9..14] of the last finished frame logged, see payloadKey. */
+  private lastFinishedKey: string | null = null;
+  /** [9..14] of the last frame logged with an unknown status state, same reason. */
+  private lastUnknownKey: string | null = null;
   private readonly unitsWarned = new Set<number>();
 
   /**
@@ -223,23 +234,29 @@ export class SenssunIfB7Adapter implements ScaleAdapterCore, BroadcastSource {
     if (!f) return null;
 
     if (f.state !== STATE_FINISHED) {
-      // Log the value, not the poll: node-ble re-reads BlueZ's cached
-      // advertisement on a timer, so an unchanged frame arrives many times a
-      // second, and one line per value is what tells a live stream from a
-      // frozen one (#372).
-      if (f.state === STATE_WEIGHING && f.weight !== this.lastSettlingKg) {
-        this.lastSettlingKg = f.weight;
-        bleLog.debug(`Senssun IF_B7 weighing: ${f.weight.toFixed(2)} kg`);
-      } else if (f.state !== STATE_WEIGHING) {
-        // A state nobody has captured yet. Say so once per frame: if this unit
-        // ends a weigh-in on something other than 0xA_, this line is the only
-        // thing in a DEBUG log that explains the timeout.
-        const hex = manufacturerData.toString('hex');
-        if (hex !== this.lastUnknownHex) {
-          this.lastUnknownHex = hex;
+      // Log the value, not the advert: node-ble re-reads BlueZ's cached
+      // advertisement on a timer, and a watcher sees every advert, so the same
+      // value arrives many times a second, and one line per value is what tells
+      // a live stream from a frozen one (#372).
+      if (f.state === STATE_WEIGHING) {
+        // A new weigh-in may end on the same payload as the last one, so the
+        // keys of the other two states must not outlive it.
+        this.lastFinishedKey = null;
+        this.lastUnknownKey = null;
+        if (f.weight !== this.lastSettlingKg) {
+          this.lastSettlingKg = f.weight;
+          bleLog.debug(`Senssun IF_B7 weighing: ${f.weight.toFixed(2)} kg`);
+        }
+      } else {
+        // A state nobody has captured yet. Say so once per payload: if this
+        // unit ends a weigh-in on something other than 0xA_, this line is the
+        // only thing in a DEBUG log that explains the timeout.
+        const key = payloadKey(manufacturerData);
+        if (key !== this.lastUnknownKey) {
+          this.lastUnknownKey = key;
           bleLog.debug(
             `Senssun IF_B7: status 0x${manufacturerData[STATUS_OFFSET].toString(16)} is not a ` +
-              `known state, frame ignored: ${hex}`,
+              `known state, frame ignored: ${manufacturerData.toString('hex')}`,
           );
         }
       }
@@ -248,9 +265,12 @@ export class SenssunIfB7Adapter implements ScaleAdapterCore, BroadcastSource {
     this.lastSettlingKg = null;
     if (f.weight < WEIGHT_MIN_KG || f.weight > WEIGHT_MAX_KG) return null;
 
-    const hex = manufacturerData.toString('hex');
-    if (hex !== this.lastFinishedHex) {
-      this.lastFinishedHex = hex;
+    // Once per payload, not per advert: the counter at [15] differs on every
+    // advert of the finished state, which lasts for seconds.
+    const key = payloadKey(manufacturerData);
+    if (key !== this.lastFinishedKey) {
+      this.lastFinishedKey = key;
+      const hex = manufacturerData.toString('hex');
       bleLog.debug(
         `Senssun IF_B7 finished: ${f.weight.toFixed(2)} kg ` +
           `(undecoded: [9]=0x${manufacturerData[INFO_OFFSET].toString(16)} ` +
