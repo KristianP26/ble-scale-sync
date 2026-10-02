@@ -118,7 +118,7 @@ The reading waits for that frame before it is sent, so it arrives about two seco
 
 ### **Grifema** GA2001 / **Senssun** IF_B7
 
-Weight only. The scale advertises as `IF_B7` and broadcasts its weigh-in without accepting a connection. It sends the weight in kilograms whether its display is set to kg or lb (lb is checked against a single weigh-in so far); any other display unit is ignored with a warning in the log. Its final frame carries a field that looks like impedance, but one weigh-in with a body-fat figure from the vendor app is not enough to decode it, so body composition is estimated from BMI (Deurenberg formula) and the field is logged in debug mode. More weigh-ins paired with the app's body-fat reading would settle it ([#423](https://github.com/KristianP26/ble-scale-sync/issues/423)).
+Weight only. The scale advertises as `IF_B7` and broadcasts its weigh-in without accepting a connection. It sends the weight in kilograms whether its display is set to kg or lb (the lb case rests on a single weigh-in so far); any other display unit is ignored with a warning in the log. Its final frame carries a field that looks like impedance, but one weigh-in with a body-fat figure from the vendor app is not enough to decode it, so body composition is estimated from BMI (Deurenberg formula) and the field is logged in debug mode. More weigh-ins paired with the app's body-fat reading would settle it ([#423](https://github.com/KristianP26/ble-scale-sync/issues/423)).
 
 ### **Renpho ES-CS20M / Elis 1** (some hardware variants)
 
