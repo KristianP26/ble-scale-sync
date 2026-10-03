@@ -96,6 +96,13 @@ describe('runNonInteractive()', () => {
     exitSpy.mockRestore();
   });
 
+  it('does not echo the offending line of a YAML syntax error', async () => {
+    writeFileSync(TEST_CONFIG, 'version: 1\nusers:\n  - name: A\n    pw: hunter2: x\n', 'utf8');
+
+    await expect(runNonInteractive(TEST_CONFIG)).rejects.toThrow(/Invalid YAML/);
+    await expect(runNonInteractive(TEST_CONFIG)).rejects.not.toThrow(/hunter2/);
+  });
+
   it('exits with code 1 for invalid config', async () => {
     writeTestConfig({
       version: 1,

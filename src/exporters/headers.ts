@@ -18,6 +18,17 @@ export interface HeaderParseResult {
   invalid: string[];
 }
 
+/**
+ * Name a skipped pair for a log line without its value. The typical malformed
+ * pair is "Authorization Bearer <token>" with the colon forgotten, so the text
+ * after the first word is very likely the secret.
+ */
+export function describeInvalidHeader(pair: string): string {
+  const name = pair.trim().split(/\s+/)[0] ?? '';
+  const rest = pair.trim().length - name.length;
+  return rest > 0 ? `'${name}' (value hidden, ${rest} more chars)` : `'${name}'`;
+}
+
 export function parseHeaderString(raw: string): HeaderParseResult {
   const headers: Record<string, string> = {};
   const invalid: string[] = [];

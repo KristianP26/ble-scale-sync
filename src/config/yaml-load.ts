@@ -1,5 +1,4 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { parse as parseYaml } from 'yaml';
 import { config as dotenvConfig } from 'dotenv';
 import { createLogger } from '../logger.js';
 import { AppConfigSchema, formatConfigError } from './schema.js';
@@ -8,6 +7,7 @@ import { defaultConfigPath, defaultEnvPath } from './paths.js';
 import { resolveEnvReferences } from './env-refs.js';
 import { applyEnvOverrides, filterValidExporters } from './env-overrides.js';
 import { collectUnknownKeys } from './unknown-keys.js';
+import { parseConfigYaml } from './yaml-parse.js';
 
 const log = createLogger('Config');
 
@@ -23,7 +23,7 @@ export function loadYamlConfig(configPath?: string): AppConfig {
 
   const yamlPath = configPath ?? defaultConfigPath();
   const raw = readFileSync(yamlPath, 'utf8');
-  const parsed: unknown = parseYaml(raw);
+  const parsed: unknown = parseConfigYaml(raw, yamlPath);
   const resolved = resolveEnvReferences(parsed);
 
   // Before validation on purpose: an unknown key is worth naming even when the

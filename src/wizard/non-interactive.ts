@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { stringify as stringifyYaml } from 'yaml';
 import { AppConfigSchema, formatConfigError } from '../config/schema.js';
 import { resolveEnvReferences } from '../config/load.js';
 import { generateSlug } from '../config/slugify.js';
+import { parseConfigYaml } from '../config/yaml-parse.js';
 import { atomicWrite } from '../config/write.js';
 import { createLogger } from '../logger.js';
 
@@ -26,7 +27,7 @@ export async function runNonInteractive(configPath: string): Promise<void> {
     process.exit(1);
   }
 
-  const parsed = parseYaml(raw) as Record<string, unknown>;
+  const parsed = parseConfigYaml(raw, configPath) as Record<string, unknown>;
   if (!parsed || typeof parsed !== 'object') {
     log.error('Config file is not a valid YAML object');
     process.exit(1);

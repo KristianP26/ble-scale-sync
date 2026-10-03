@@ -27,10 +27,45 @@ const SENSITIVE_KEYS = new Set([
   'ble.ha_bluetooth.token',
 ]);
 
-function maskSensitive(key: string, val: unknown): string {
-  if (!SENSITIVE_KEYS.has(key)) return fmt(val);
+// Secret fields nested inside a compared value, e.g. each additional_proxies
+// entry carries its own encryption_key and password.
+const SENSITIVE_FIELD_NAMES = new Set(['password', 'encryption_key', 'token']);
+
+function redactSecret(val: unknown): string {
   if (val === undefined || val === null || val === '') return '<unset>';
   return '<redacted>';
+}
+
+/** Hide the password in a URL's userinfo (`mqtt://user:pass@host`); other strings pass through. */
+function redactUrl(s: string): string {
+  if (!s.includes('@')) return s;
+  try {
+    const u = new URL(s);
+    if (!u.password) return s;
+    u.password = '<redacted>';
+    return u.toString();
+  } catch {
+    return s;
+  }
+}
+
+function redactDeep(val: unknown): unknown {
+  if (typeof val === 'string') return redactUrl(val);
+  if (Array.isArray(val)) return val.map(redactDeep);
+  if (val !== null && typeof val === 'object') {
+    return Object.fromEntries(
+      Object.entries(val).map(([k, v]) => [
+        k,
+        SENSITIVE_FIELD_NAMES.has(k) ? redactSecret(v) : redactDeep(v),
+      ]),
+    );
+  }
+  return val;
+}
+
+function maskSensitive(key: string, val: unknown): string {
+  if (SENSITIVE_KEYS.has(key)) return redactSecret(val);
+  return fmt(redactDeep(val));
 }
 
 function diffField(

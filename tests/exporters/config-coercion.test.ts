@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import { createExporterFromEntry } from '../../src/exporters/registry.js';
 import { parseHeaderString, normaliseHeaders } from '../../src/exporters/headers.js';
@@ -57,6 +57,21 @@ describe('webhook headers survive the trip from config to the request', () => {
     const result = normaliseHeaders('Authorization: Bearer TEST, oops');
     expect(result.headers).toEqual({ Authorization: 'Bearer TEST' });
     expect(result.invalid).toEqual(['oops']);
+  });
+
+  // "Authorization Bearer <token>" with the colon forgotten is the typical
+  // malformed pair. The warning must name the header without its value.
+  it('does not log the value of a malformed header from config.yaml', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    build({
+      type: 'webhook',
+      url: 'https://example.test/hook',
+      headers: 'Authorization Bearer s3cr3t-token, X-Source: scale',
+    });
+    const logged = warnSpy.mock.calls.flat().join('\n');
+    warnSpy.mockRestore();
+    expect(logged).toContain('Authorization');
+    expect(logged).not.toContain('s3cr3t-token');
   });
 
   it('treats an absent headers field as no headers', () => {

@@ -168,6 +168,39 @@ scale:
     expect(() => loadYamlConfig('/test/config.yaml')).toThrow();
   });
 
+  // The yaml library prints a code frame of the bad line, and a config line
+  // very often holds the secret itself. The error must locate the problem
+  // without echoing the value.
+  it('does not echo the offending line of a YAML syntax error', () => {
+    const yaml = VALID_YAML.replace('type: garmin', 'type: garmin\n    password: hunter2: x');
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(yaml);
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+
+    let message = '';
+    try {
+      loadYamlConfig('/test/config.yaml');
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain('/test/config.yaml');
+    expect(message).toMatch(/line \d+/);
+    expect(message).toContain("key 'password'");
+    expect(message).not.toContain('hunter2');
+  });
+
+  it('does not echo an unquoted value that YAML reads as an alias', () => {
+    const yaml = VALID_YAML.replace('type: garmin', 'type: garmin\n    password: *hunter2');
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(yaml);
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+
+    expect(() => loadYamlConfig('/test/config.yaml')).toThrow(/Invalid YAML/);
+    try {
+      loadYamlConfig('/test/config.yaml');
+    } catch (err) {
+      expect((err as Error).message).not.toContain('hunter2');
+    }
+  });
+
   it('warns about an unknown key under ble and keeps loading (#318)', () => {
     const yamlWithTypo = VALID_YAML.replace(
       '  scale_mac:',

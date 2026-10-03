@@ -301,4 +301,46 @@ describe('diffRestartRequired', () => {
     expect(flat).not.toContain('aaa');
     expect(flat).not.toContain('bbb');
   });
+
+  it('redacts encryption_key and password inside additional_proxies entries', () => {
+    const esp = { host: '10.0.0.5', port: 6053 };
+    const a = baseConfig({ ble: { handler: 'esphome-proxy', esphome_proxy: { ...esp } } });
+    const b = baseConfig({
+      ble: {
+        handler: 'esphome-proxy',
+        esphome_proxy: {
+          ...esp,
+          additional_proxies: [
+            { host: '10.0.0.6', port: 6053, encryption_key: 'NOISEKEY==', password: 'apipw' },
+          ],
+        },
+      },
+    } as Partial<AppConfig>);
+    const diff = diffRestartRequired(a, b);
+    const row = diff.find((f) => f.key === 'ble.esphome_proxy.additional_proxies');
+    expect(row).toBeDefined();
+    // The host stays visible so the warning still says what changed.
+    expect(row!.newValue).toContain('10.0.0.6');
+    expect(row!.newValue).toContain('<redacted>');
+    const flat = JSON.stringify(diff);
+    expect(flat).not.toContain('NOISEKEY==');
+    expect(flat).not.toContain('apipw');
+  });
+
+  it('strips the password from a broker_url with userinfo', () => {
+    const mk = (url: string) =>
+      baseConfig({
+        ble: { handler: 'mqtt-proxy', mqtt_proxy: { broker_url: url } },
+      } as Partial<AppConfig>);
+    const diff = diffRestartRequired(
+      mk('mqtt://scale:oldsecret@broker:1883'),
+      mk('mqtt://scale:newsecret@broker2:1883'),
+    );
+    const row = diff.find((f) => f.key === 'ble.mqtt_proxy.broker_url');
+    expect(row).toBeDefined();
+    expect(row!.newValue).toContain('broker2');
+    const flat = JSON.stringify(diff);
+    expect(flat).not.toContain('oldsecret');
+    expect(flat).not.toContain('newsecret');
+  });
 });

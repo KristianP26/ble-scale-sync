@@ -1,5 +1,5 @@
 import { createLogger } from '../logger.js';
-import { normaliseHeaders } from './headers.js';
+import { describeInvalidHeader, normaliseHeaders } from './headers.js';
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { Exporter } from '../interfaces/exporter.js';
 import type { ExporterEntry } from '../config/schema.js';
@@ -172,7 +172,10 @@ function optionalHeaders(
 ): Record<string, string> {
   const { headers, invalid } = normaliseHeaders(config[key]);
   for (const pair of invalid) {
-    log.warn(`Exporter "${type}" field "${key}": ignoring '${pair}' (expected "Name: value").`);
+    log.warn(
+      `Exporter "${type}" field "${key}": ignoring ${describeInvalidHeader(pair)} ` +
+        '(expected "Name: value").',
+    );
   }
   return headers;
 }

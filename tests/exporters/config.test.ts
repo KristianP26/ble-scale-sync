@@ -231,6 +231,20 @@ describe('loadExporterConfig()', () => {
       warnSpy.mockRestore();
     });
 
+    // The typical malformed pair is "Authorization Bearer <token>" with the
+    // colon forgotten. The warning must name the header without its value.
+    it('does not log the value of a malformed header', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.stubEnv('EXPORTERS', 'webhook');
+      vi.stubEnv('WEBHOOK_URL', 'https://example.com/hook');
+      vi.stubEnv('WEBHOOK_HEADERS', 'Authorization Bearer s3cr3t-token');
+      loadExporterConfig();
+      const logged = warnSpy.mock.calls.flat().join('\n');
+      expect(logged).toContain('Authorization');
+      expect(logged).not.toContain('s3cr3t-token');
+      warnSpy.mockRestore();
+    });
+
     it('skips invalid headers with warning', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       vi.stubEnv('EXPORTERS', 'webhook');

@@ -1,5 +1,5 @@
 import { createLogger } from '../logger.js';
-import { parseHeaderString } from './headers.js';
+import { describeInvalidHeader, parseHeaderString } from './headers.js';
 
 const log = createLogger('ExporterConfig');
 
@@ -165,7 +165,7 @@ function parseHeaders(raw: string | undefined): Record<string, string> {
   // being reimplemented a third time.
   const { headers, invalid } = parseHeaderString(raw ?? '');
   for (const pair of invalid) {
-    log.warn(`Ignoring invalid header (missing ':'): '${pair}'`);
+    log.warn(`Ignoring invalid header (missing ':'): ${describeInvalidHeader(pair)}`);
   }
   return headers;
 }
