@@ -65,6 +65,14 @@ describe('startEmbeddedBroker', () => {
     }
   });
 
+  // Last line of defence behind the config schema: a LAN-exposed broker with a
+  // username but no password would accept that username with an empty password.
+  it('refuses to start on a non-loopback bind with a username but no password', async () => {
+    await expect(
+      startEmbeddedBroker({ port: 0, bindHost: '0.0.0.0', username: 'user' }),
+    ).rejects.toThrow(/password/);
+  });
+
   it('accepts correct credentials when authentication is configured', async () => {
     const broker = await startEmbeddedBroker({
       port: 0,

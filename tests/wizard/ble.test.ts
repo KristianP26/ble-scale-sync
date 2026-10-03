@@ -151,6 +151,29 @@ describe('promptMqttProxy()', () => {
   });
 });
 
+describe('embedded broker password prompt', () => {
+  // An empty answer used to be accepted and then dropped from the config,
+  // leaving a LAN-exposed broker that takes the username with no password.
+  it('refuses an empty password for the LAN-exposed embedded broker', async () => {
+    const ctx = makeCtx(['embedded', 'my-esp', 'ble-proxy', '1883', true, 'admin', 'secret']);
+    let validate: ((v: string) => string | true) | undefined;
+    const base = ctx.prompts;
+    ctx.prompts = {
+      ...base,
+      password: async (message, opts) => {
+        validate = opts?.validate;
+        return base.password(message, opts);
+      },
+    };
+
+    await promptMqttProxy(ctx);
+
+    expect(validate).toBeDefined();
+    expect(validate!('')).not.toBe(true);
+    expect(validate!('secret')).toBe(true);
+  });
+});
+
 describe('validateEsphomeHost()', () => {
   it('accepts a non-empty hostname', () => {
     expect(validateEsphomeHost('ble-proxy.local')).toBe(true);

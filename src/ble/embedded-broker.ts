@@ -76,6 +76,17 @@ export async function startEmbeddedBroker(
   const authEnabled = !!opts.username;
   const drainTimeout = opts.drainTimeoutMs ?? 10_000;
 
+  // The config schema already rejects this; this is the last line of defence
+  // for any other caller. With a username set, authenticate() below compares
+  // the password against '' when none is configured, so any LAN client that
+  // knows the username would get in with an empty password.
+  if (authEnabled && !opts.password && !isLoopback(bindHost)) {
+    throw new Error(
+      `Embedded broker on ${bindHost} has mqtt_proxy.username but no password. ` +
+        'Set mqtt_proxy.password, or change embedded_broker_bind to 127.0.0.1.',
+    );
+  }
+
   if (!authEnabled && !isLoopback(bindHost)) {
     log.warn(
       `Embedded broker is binding ${bindHost} without authentication. Anyone on this ` +

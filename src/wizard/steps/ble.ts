@@ -88,8 +88,14 @@ async function promptMqttProxy(ctx: WizardContext): Promise<MqttProxyConfig> {
       { default: true },
     );
     if (wantAuth) {
-      username = await ctx.prompts.input('MQTT username:');
-      password = await ctx.prompts.password('MQTT password:');
+      // Both are required: a LAN-exposed broker with a username and an empty
+      // password lets in anyone who knows the username.
+      username = await ctx.prompts.input('MQTT username:', {
+        validate: (v) => (v.trim() ? true : 'A username is required'),
+      });
+      password = await ctx.prompts.password('MQTT password:', {
+        validate: (v) => (v ? true : 'A password is required for a LAN-exposed broker'),
+      });
     } else {
       embedded_broker_bind = '127.0.0.1';
       console.log(

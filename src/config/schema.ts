@@ -102,20 +102,22 @@ export const MqttProxySchema = z
           'Set to false to use the legacy host-initiated connect flow.',
       ),
   })
-  .refine(
-    (c) => {
-      if (c.broker_url) return true;
-      if (isLoopback(c.embedded_broker_bind)) return true;
-      return !!c.username;
-    },
-    {
+  // A LAN-exposed embedded broker needs a username AND a password. Checking
+  // only the username let a missing or empty password through, and the broker
+  // then accepted that username with an empty password from anyone on the LAN.
+  .superRefine((c, ctx) => {
+    if (c.broker_url) return;
+    if (isLoopback(c.embedded_broker_bind)) return;
+    if (c.username && c.password) return;
+    ctx.addIssue({
+      code: 'custom',
       message:
         'Embedded broker bound to a non-loopback interface must have username/password set. ' +
-        'Either add mqtt_proxy.username + mqtt_proxy.password, or change embedded_broker_bind ' +
-        'to 127.0.0.1.',
-      path: ['username'],
-    },
-  );
+        'Either add mqtt_proxy.username + mqtt_proxy.password (non-empty), or change ' +
+        'embedded_broker_bind to 127.0.0.1.',
+      path: [c.username ? 'password' : 'username'],
+    });
+  });
 
 export const BleSchema = z
   .object({

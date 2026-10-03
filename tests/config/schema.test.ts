@@ -472,6 +472,29 @@ describe('BleSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  // The refine checked only !!username, so a username with no password (or a
+  // ${VAR} that resolved to '') passed. The broker then expected '' and let
+  // in any LAN client that sent that username with an empty password.
+  it.each([
+    ['without a password', { username: 'esp32' }],
+    ['with an empty password', { username: 'esp32', password: '' }],
+  ])('rejects embedded broker on non-loopback bind %s', (_label, auth) => {
+    const result = BleSchema.safeParse({ handler: 'mqtt-proxy', mqtt_proxy: auth });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('password');
+      expect(result.error.issues[0].path).toEqual(['mqtt_proxy', 'password']);
+    }
+  });
+
+  it('accepts a username without password on a loopback bind', () => {
+    const result = BleSchema.safeParse({
+      handler: 'mqtt-proxy',
+      mqtt_proxy: { username: 'esp32', embedded_broker_bind: '127.0.0.1' },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it('rejects embedded broker on non-loopback bind without auth', () => {
     const result = BleSchema.safeParse({
       handler: 'mqtt-proxy',
