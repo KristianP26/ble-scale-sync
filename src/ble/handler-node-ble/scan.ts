@@ -29,7 +29,7 @@ import {
 } from './dbus.js';
 import { applyDbusMatchRefcountPatch } from './dbus-match-patch.js';
 import { getBus, attachBusErrorHandler, isDbusConnectionError, dbusError } from './connection.js';
-import { registerPairingAgent, setPairingTarget } from './agent.js';
+import { ensurePairingAgent, setPairingTarget } from './agent.js';
 import {
   startDiscoverySafe,
   removeDevice,
@@ -64,10 +64,14 @@ const BONDING_TIMEOUT_MS = 15_000;
  * the encryption those characteristics require. A failure is logged and the
  * read continues unbonded so adapters that do not strictly need it are not
  * blocked; pairing may need a registered BlueZ agent on some setups.
+ *
+ * `_pin` is unused: the agent reads the PIN from the cycle's pairing target,
+ * together with the scale's MAC. The parameter stays because acquireGattServer
+ * passes this function as its bonding callback with that signature.
  */
 export async function ensureBonded(
   device: Device,
-  pin: number | undefined,
+  _pin: number | undefined,
   abortSignal?: AbortSignal,
 ): Promise<void> {
   /**
@@ -99,8 +103,11 @@ export async function ensureBonded(
     // it supplies the configured PIN as the passkey for Passkey Entry, or auto-accepts
     // Just Works / numeric comparison. Without an agent BlueZ returns "Authentication
     // Failed" (#168). Best-effort; a failure here falls back to any system agent.
+    // The ambient target (setPairingTarget) carries the PIN AND the scale's MAC.
+    // This used to install a PIN-only provider instead, which silently dropped
+    // the MAC gate for the rest of the cycle (#83).
     try {
-      await registerPairingAgent(getBus(), () => pin);
+      await ensurePairingAgent(getBus());
     } catch (err) {
       bleLog.debug(`Pairing agent registration skipped: ${errMsg(err)}`);
     }
@@ -252,8 +259,10 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   // Publish this cycle's pairing target before the first getAdapter(), which is
   // where the agent registers. Stored as a closure rather than a value so a
   // config reload lands on the next cycle without a restart, and MAC-scoped so
-  // an unrelated peer cannot be handed the scale's consent PIN (#83).
-  setPairingTarget(() => ({ pin: scaleAuth?.pin, mac: targetMac }));
+  // an unrelated peer cannot be handed the scale's consent PIN (#83). In
+  // auto-discovery the closure picks up the matched address once autoDiscover
+  // sets deviceMac; until then the agent declines everything.
+  setPairingTarget(() => ({ pin: scaleAuth?.pin, mac: targetMac ?? (deviceMac || undefined) }));
 
   try {
     btAdapter = await acquireBluezAdapter(bleAdapter);

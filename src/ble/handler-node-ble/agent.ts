@@ -37,14 +37,15 @@ export const AGENT_PATH = '/org/blescalesync/agent';
  */
 export const AGENT_CAPABILITY = 'KeyboardDisplay';
 
-/** Provider for the current consent/pairing PIN (beurer_pin). May change on reload. */
-type PinProvider = () => number | undefined;
-
 /** The scale this cycle is pairing with, so unrelated peers cannot use its PIN. */
 export interface PairingTarget {
   /** users[0].beurer_pin, or undefined when none is configured. */
   pin?: number;
-  /** ble.scale_mac, or undefined in auto-discovery mode. */
+  /**
+   * ble.scale_mac, or in auto-discovery the matched scale's address once the
+   * scan has found it. Undefined means no scale is known yet, and every
+   * request is declined.
+   */
   mac?: string;
 }
 
@@ -63,34 +64,40 @@ export class BlueZPairingAgent extends dbusNext.interface.Interface {
     super('org.bluez.Agent1');
   }
 
-  /** Back-compat shim: a target with no MAC means "no MAC gate". */
-  setPinProvider(provider: PinProvider): void {
-    this.targetProvider = () => ({ pin: provider() });
-  }
-
   setTargetProvider(provider: PairingTargetProvider): void {
     this.targetProvider = provider;
   }
 
   /**
-   * True when `device` is the configured scale, or when no scale_mac is set
-   * (auto-discovery, where we cannot tell). BlueZ paths look like
+   * True only when `device` is the scale this cycle is talking to: ble.scale_mac,
+   * or in auto-discovery the address the scan matched. BlueZ paths look like
    * /org/bluez/hciN/dev_AA_BB_CC_DD_EE_FF.
+   *
+   * Fails closed. It used to answer true whenever no MAC was known, while the
+   * agent held the system-wide default role because a PIN was set, so BlueZ
+   * routed every incoming pairing and service authorization in radio range to
+   * us and we accepted it and handed out the PIN. Nothing legitimate reaches
+   * the agent before a scale is identified: we only pair with a device after
+   * connecting to it.
    */
   private isTarget(device: string): boolean {
     const mac = this.targetProvider().mac;
-    if (!mac) return true;
+    if (!mac) return false;
     const want = mac.replace(/[^0-9a-fA-F]/g, '').toUpperCase();
-    if (want.length !== 12) return true;
+    if (want.length !== 12) return false;
     const m = /dev_([0-9A-Fa-f_]+)$/.exec(device);
-    if (!m) return true;
+    if (!m) return false;
     return m[1].replace(/_/g, '').toUpperCase() === want;
   }
 
   private decline(method: string, device: string): never {
+    const known = this.targetProvider().mac !== undefined;
     bleLog.warn(
-      `BlueZ pairing agent: ${method} for ${device} is not the configured scale ` +
-        '(ble.scale_mac); declining so an unrelated device cannot use the scale PIN.',
+      `BlueZ pairing agent: ${method} for ${device} declined: ` +
+        (known
+          ? 'it is not the scale this cycle is pairing with'
+          : 'no scale has been identified yet') +
+        ', so an unrelated device cannot pair with the host or use the scale PIN.',
     );
     throw new dbusNext.DBusError('org.bluez.Error.Rejected', 'Not the configured scale');
   }
@@ -283,51 +290,7 @@ export async function ensurePairingAgent(bus: MessageBus): Promise<void> {
 }
 
 /**
- * Register our pairing agent on the given bus (idempotent). Always refreshes the
- * pin provider so a reload-changed beurer_pin is honored even though registration
- * itself runs only once. Best-effort: any failure (e.g. no AgentManager1, another
- * default agent) is logged and pairing falls back to whatever system agent exists.
- */
-export async function registerPairingAgent(
-  bus: MessageBus,
-  pinProvider: PinProvider,
-): Promise<void> {
-  if (!agentInstance) agentInstance = new BlueZPairingAgent();
-  agentInstance.setPinProvider(pinProvider);
-  if (registered) return;
-
-  try {
-    bus.export(AGENT_PATH, agentInstance);
-    const bluez = await bus.getProxyObject('org.bluez', '/org/bluez');
-    const manager = bluez.getInterface('org.bluez.AgentManager1');
-    try {
-      await manager.RegisterAgent(AGENT_PATH, AGENT_CAPABILITY);
-    } catch (err) {
-      // Re-registering the same path returns AlreadyExists; treat as success.
-      if (!errMsg(err).includes('AlreadyExists')) throw err;
-    }
-    try {
-      await manager.RequestDefaultAgent(AGENT_PATH);
-    } catch (err) {
-      bleLog.debug(`BlueZ RequestDefaultAgent failed (non-fatal): ${errMsg(err)}`);
-    }
-    registered = true;
-    bleLog.debug(`BlueZ pairing agent registered (${AGENT_CAPABILITY})`);
-  } catch (err) {
-    bleLog.warn(
-      `Could not register BlueZ pairing agent: ${errMsg(err)}. ` +
-        'Pairing will rely on any system agent that is present.',
-    );
-    try {
-      bus.unexport(AGENT_PATH, agentInstance);
-    } catch {
-      /* ignore */
-    }
-  }
-}
-
-/**
- * Forget the registered agent so the next registerPairingAgent re-exports it.
+ * Forget the registered agent so the next ensurePairingAgent re-exports it.
  * Called from resetConnection: destroying the D-Bus connection makes BlueZ drop
  * the agent automatically (the owner disconnected), so an explicit UnregisterAgent
  * is unnecessary and would race the connection teardown. Also used to reset state

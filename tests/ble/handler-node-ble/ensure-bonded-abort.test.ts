@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { Device } from '../../../src/ble/handler-node-ble/dbus.js';
 
-// getBus() would open a real D-Bus connection, and registerPairingAgent would
+// getBus() would open a real D-Bus connection, and ensurePairingAgent would
 // export an object on it. Neither is what these tests are about: the subject is
 // what ensureBonded does with an AbortSignal while Pair() is outstanding.
 vi.mock('../../../src/ble/handler-node-ble/connection.js', async (importOriginal) => {
@@ -10,7 +10,7 @@ vi.mock('../../../src/ble/handler-node-ble/connection.js', async (importOriginal
   return { ...actual, getBus: () => ({}) };
 });
 vi.mock('../../../src/ble/handler-node-ble/agent.js', () => ({
-  registerPairingAgent: async () => {},
+  ensurePairingAgent: async () => {},
   setPairingTarget: () => {},
 }));
 
@@ -174,7 +174,7 @@ describe('ensureBonded sees a stop that lands during its preparation', () => {
   });
 
   it('does not start pairing when the stop arrives during agent registration', async () => {
-    // Same window, one await later. registerPairingAgent is mocked to resolve
+    // Same window, one await later. ensurePairingAgent is mocked to resolve
     // immediately at module scope, so the abort is placed between the two
     // checks by aborting from a microtask the agent registration yields to.
     const pair = vi.fn(() => new Promise<void>(() => {}));

@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   BlueZPairingAgent,
-  registerPairingAgent,
   ensurePairingAgent,
   setPairingTarget,
   forgetPairingAgent,
@@ -18,32 +17,36 @@ beforeEach(() => {
   vi.spyOn(bleLog, 'info').mockImplementation(() => {});
 });
 
+/** The scale every callback test pairs with; the agent only serves this one. */
+const SCALE = 'D8:0B:CB:5B:B6:58';
+const SCALE_PATH = '/org/bluez/hci0/dev_D8_0B_CB_5B_B6_58';
+
 describe('BlueZPairingAgent callbacks', () => {
   it('RequestPasskey returns the configured PIN as a number', () => {
     const agent = new BlueZPairingAgent();
-    agent.setPinProvider(() => 3752);
-    expect(agent.RequestPasskey('/org/bluez/hci0/dev_X')).toBe(3752);
+    agent.setTargetProvider(() => ({ pin: 3752, mac: SCALE }));
+    expect(agent.RequestPasskey(SCALE_PATH)).toBe(3752);
   });
 
   it('RequestPinCode returns the PIN as a string', () => {
     const agent = new BlueZPairingAgent();
-    agent.setPinProvider(() => 3752);
-    expect(agent.RequestPinCode('/org/bluez/hci0/dev_X')).toBe('3752');
+    agent.setTargetProvider(() => ({ pin: 3752, mac: SCALE }));
+    expect(agent.RequestPinCode(SCALE_PATH)).toBe('3752');
   });
 
   it('reflects a refreshed PIN provider (config reload)', () => {
     const agent = new BlueZPairingAgent();
-    agent.setPinProvider(() => 1111);
-    expect(agent.RequestPasskey('/d')).toBe(1111);
-    agent.setPinProvider(() => 2222);
-    expect(agent.RequestPasskey('/d')).toBe(2222);
+    agent.setTargetProvider(() => ({ pin: 1111, mac: SCALE }));
+    expect(agent.RequestPasskey(SCALE_PATH)).toBe(1111);
+    agent.setTargetProvider(() => ({ pin: 2222, mac: SCALE }));
+    expect(agent.RequestPasskey(SCALE_PATH)).toBe(2222);
   });
 
   it('rejects passkey/pin requests when no PIN is configured', () => {
     const agent = new BlueZPairingAgent();
-    agent.setPinProvider(() => undefined);
-    expect(() => agent.RequestPasskey('/d')).toThrow(/beurer_pin/);
-    expect(() => agent.RequestPinCode('/d')).toThrow(/beurer_pin/);
+    agent.setTargetProvider(() => ({ pin: undefined, mac: SCALE }));
+    expect(() => agent.RequestPasskey(SCALE_PATH)).toThrow(/beurer_pin/);
+    expect(() => agent.RequestPinCode(SCALE_PATH)).toThrow(/beurer_pin/);
   });
 
   describe('log lines (#430)', () => {
@@ -51,7 +54,7 @@ describe('BlueZPairingAgent callbacks', () => {
 
     it('RequestPasskey without a PIN points at a manual pairing, not at beurer_pin', () => {
       const agent = new BlueZPairingAgent();
-      agent.setPinProvider(() => undefined);
+      agent.setTargetProvider(() => ({ pin: undefined, mac: SCALE }));
       expect(() => agent.RequestPasskey(DEV)).toThrow();
 
       const msg = String(vi.mocked(bleLog.warn).mock.calls.at(-1)?.[0]);
@@ -63,7 +66,7 @@ describe('BlueZPairingAgent callbacks', () => {
 
     it('RequestPinCode without a PIN names the PIN code and the manual pairing', () => {
       const agent = new BlueZPairingAgent();
-      agent.setPinProvider(() => undefined);
+      agent.setTargetProvider(() => ({ pin: undefined, mac: SCALE }));
       expect(() => agent.RequestPinCode(DEV)).toThrow();
 
       const msg = String(vi.mocked(bleLog.warn).mock.calls.at(-1)?.[0]);
@@ -73,7 +76,7 @@ describe('BlueZPairingAgent callbacks', () => {
 
     it('says at info that it answered with beurer_pin, without logging the PIN', () => {
       const agent = new BlueZPairingAgent();
-      agent.setPinProvider(() => 3752);
+      agent.setTargetProvider(() => ({ pin: 3752, mac: SCALE }));
       expect(agent.RequestPasskey(DEV)).toBe(3752);
 
       const lines = vi.mocked(bleLog.info).mock.calls.map((c) => String(c[0]));
@@ -89,19 +92,20 @@ describe('BlueZPairingAgent callbacks', () => {
     });
   });
 
-  it('accepts the confirmation/authorization models without throwing', () => {
+  it('accepts the confirmation/authorization models for the scale without throwing', () => {
     const agent = new BlueZPairingAgent();
-    expect(() => agent.RequestConfirmation('/d', 123456)).not.toThrow();
-    expect(() => agent.RequestAuthorization('/d')).not.toThrow();
+    agent.setTargetProvider(() => ({ pin: 3752, mac: SCALE }));
+    expect(() => agent.RequestConfirmation(SCALE_PATH, 123456)).not.toThrow();
+    expect(() => agent.RequestAuthorization(SCALE_PATH)).not.toThrow();
     expect(() =>
-      agent.AuthorizeService('/d', '0000181d-0000-1000-8000-00805f9b34fb'),
+      agent.AuthorizeService(SCALE_PATH, '0000181d-0000-1000-8000-00805f9b34fb'),
     ).not.toThrow();
   });
 
   it('display/lifecycle callbacks do not throw', () => {
     const agent = new BlueZPairingAgent();
-    expect(() => agent.DisplayPasskey('/d', 123456, 0)).not.toThrow();
-    expect(() => agent.DisplayPinCode('/d', '123456')).not.toThrow();
+    expect(() => agent.DisplayPasskey(SCALE_PATH, 123456, 0)).not.toThrow();
+    expect(() => agent.DisplayPinCode(SCALE_PATH, '123456')).not.toThrow();
     expect(() => agent.Release()).not.toThrow();
     expect(() => agent.Cancel()).not.toThrow();
   });
@@ -128,11 +132,15 @@ function fakeBus(manager: Partial<FakeManager> = {}, getProxyImpl?: () => Promis
   };
 }
 
-describe('registerPairingAgent', () => {
+// registerPairingAgent was removed: it installed a PIN-only provider that
+// dropped the MAC gate (#83). The same registration contract, on the one
+// entry point left.
+describe('ensurePairingAgent registration', () => {
   it('exports the agent and registers it with KeyboardDisplay capability', async () => {
     const { bus, mgr } = fakeBus();
+    setPairingTarget(() => ({ pin: 3752, mac: SCALE }));
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await registerPairingAgent(bus as any, () => 3752);
+    await ensurePairingAgent(bus as any);
     expect(bus.export).toHaveBeenCalledWith(AGENT_PATH, expect.anything());
     expect(mgr.RegisterAgent).toHaveBeenCalledWith(AGENT_PATH, AGENT_CAPABILITY);
     expect(mgr.RequestDefaultAgent).toHaveBeenCalledWith(AGENT_PATH);
@@ -141,19 +149,19 @@ describe('registerPairingAgent', () => {
   it('is idempotent: a second call does not re-export', async () => {
     const { bus } = fakeBus();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await registerPairingAgent(bus as any, () => 1);
+    await ensurePairingAgent(bus as any);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await registerPairingAgent(bus as any, () => 2);
+    await ensurePairingAgent(bus as any);
     expect(bus.export).toHaveBeenCalledTimes(1);
   });
 
   it('re-exports after forgetPairingAgent', async () => {
     const { bus } = fakeBus();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await registerPairingAgent(bus as any, () => 1);
+    await ensurePairingAgent(bus as any);
     forgetPairingAgent();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await registerPairingAgent(bus as any, () => 1);
+    await ensurePairingAgent(bus as any);
     expect(bus.export).toHaveBeenCalledTimes(2);
   });
 
@@ -163,8 +171,9 @@ describe('registerPairingAgent', () => {
         throw new Error('org.bluez.Error.AlreadyExists: Already Exists');
       }),
     });
+    setPairingTarget(() => ({ pin: 1, mac: SCALE }));
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await expect(registerPairingAgent(bus as any, () => 1)).resolves.toBeUndefined();
+    await expect(ensurePairingAgent(bus as any)).resolves.toBeUndefined();
     expect(mgr.RequestDefaultAgent).toHaveBeenCalled();
   });
 
@@ -177,7 +186,7 @@ describe('registerPairingAgent', () => {
       }),
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await expect(registerPairingAgent(bus as any, () => 1)).resolves.toBeUndefined();
+    await expect(ensurePairingAgent(bus as any)).resolves.toBeUndefined();
     expect(bus.unexport).toHaveBeenCalledWith(AGENT_PATH, expect.anything());
   });
 });
@@ -248,9 +257,15 @@ describe('pairing agent MAC scoping (#83)', () => {
     expect(() => agent.AuthorizeService(OTHER, '0000180a-0000-1000-8000-00805f9b34fb')).toThrow();
   });
 
-  it('serves any device when no scale_mac is configured (auto-discovery)', () => {
+  // This used to serve ANY device: with a PIN set the agent holds the default
+  // role, so every incoming pairing in radio range reached it and was accepted
+  // and handed the PIN. Auto-discovery now supplies the matched address once
+  // the scan finds the scale; before that nothing legitimate asks.
+  it('declines every device while no scale is identified (auto-discovery)', () => {
     const agent = agentFor(undefined);
-    expect(agent.RequestPasskey(OTHER)).toBe(1894);
-    expect(() => agent.RequestConfirmation(OTHER, 1)).not.toThrow();
+    expect(() => agent.RequestPasskey(OTHER)).toThrow();
+    expect(() => agent.RequestConfirmation(OTHER, 1)).toThrow();
+    expect(() => agent.RequestAuthorization(OTHER)).toThrow();
+    expect(() => agent.AuthorizeService(OTHER, '00001124-0000-1000-8000-00805f9b34fb')).toThrow();
   });
 });

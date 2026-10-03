@@ -64,9 +64,14 @@ const fakeDevice = {
   isPaired: async () => true,
 };
 
+/** Every provider handed to setPairingTarget, newest last. */
+const pairingTargets: (() => { pin?: number; mac?: string })[] = [];
+
 vi.mock('../../../src/ble/handler-node-ble/agent.js', () => ({
-  setPairingTarget: record('setPairingTarget'),
-  registerPairingAgent: record('registerPairingAgent', async () => {}),
+  setPairingTarget: record('setPairingTarget', (p: () => { pin?: number; mac?: string }) => {
+    pairingTargets.push(p);
+  }),
+  ensurePairingAgent: record('ensurePairingAgent', async () => {}),
 }));
 
 vi.mock('../../../src/ble/handler-node-ble/connection.js', () => ({
@@ -189,6 +194,19 @@ describe('scanAndReadRaw call order (#368)', () => {
     const seen = await run();
     expect(seen.indexOf('setPairingTarget')).toBeLessThan(seen.indexOf('getAdapter'));
     expect(seen[0]).toBe('setPairingTarget');
+  });
+
+  // The agent now declines every request while no scale MAC is known (it used
+  // to accept everything, handing the PIN to any device in range). In
+  // auto-discovery there is no scale_mac, so the target must pick up the
+  // address the scan matched, or the agent would decline the scale itself.
+  it('points the pairing target at the discovered scale in auto-discovery', async () => {
+    pairingTargets.length = 0;
+    const promise = scanAndReadRaw({ adapters: [makeAdapter()], profile: defaultProfile() });
+    await vi.runAllTimersAsync();
+    await promise;
+    expect(calls).toContain('autoDiscover');
+    expect(pairingTargets.at(-1)?.().mac).toBe('AA:BB:CC:DD:EE:FF');
   });
 
   it('evicts the cached device before starting discovery', async () => {
