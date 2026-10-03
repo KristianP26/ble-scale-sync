@@ -30,12 +30,7 @@ import {
 import { applyDbusMatchRefcountPatch } from './dbus-match-patch.js';
 import { getBus, attachBusErrorHandler, isDbusConnectionError, dbusError } from './connection.js';
 import { registerPairingAgent, setPairingTarget } from './agent.js';
-import {
-  startDiscoverySafe,
-  removeDevice,
-  autoDiscover,
-  stopDiscoveryAndQuiesce,
-} from './discovery.js';
+import { startDiscoverySafe, autoDiscover, stopDiscoveryAndQuiesce } from './discovery.js';
 import { connectWithRecovery } from './connect.js';
 import { logAdvertisementSnapshot } from './device-object.js';
 import { wrapDevice } from './gatt.js';
@@ -265,12 +260,6 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         'Bluetooth adapter is not powered on. ' +
           'Ensure bluetoothd is running: sudo systemctl start bluetooth',
       );
-    }
-
-    // In continuous mode, BlueZ caches the device from a previous cycle.
-    // Removing it forces a fresh discovery + proxy creation.
-    if (targetMac) {
-      await removeDevice(btAdapter, targetMac);
     }
 
     const discoveryResult = await startDiscoverySafe(btAdapter, bleAdapter);
