@@ -60,6 +60,14 @@ export const fileSchema: ExporterSchema = {
   supportsPerUser: true,
 };
 
+/**
+ * Every weigh-in, with names and body composition, so owner-only like the
+ * retry queue (D014). The default 0666 & ~umask made it 0644, readable by
+ * every local account. Node applies `mode` only when the file is created, so
+ * a file created by an older version keeps its permissions.
+ */
+const OWNER_ONLY = { mode: 0o600 } as const;
+
 export class FileExporter implements Exporter {
   readonly name = 'file';
   readonly supportsBackdate = true;
@@ -108,7 +116,7 @@ export class FileExporter implements Exporter {
     const needsHeader = !fs.existsSync(filePath) || fs.statSync(filePath).size === 0;
 
     if (needsHeader) {
-      fs.appendFileSync(filePath, CSV_COLUMNS.join(',') + '\n');
+      fs.appendFileSync(filePath, CSV_COLUMNS.join(',') + '\n', OWNER_ONLY);
     }
 
     const row = [
@@ -127,7 +135,7 @@ export class FileExporter implements Exporter {
       csvEscape(user),
     ].join(',');
 
-    fs.appendFileSync(filePath, row + '\n');
+    fs.appendFileSync(filePath, row + '\n', OWNER_ONLY);
   }
 
   private appendJsonl(
@@ -155,6 +163,6 @@ export class FileExporter implements Exporter {
       entry.user = user;
     }
 
-    fs.appendFileSync(filePath, JSON.stringify(entry) + '\n');
+    fs.appendFileSync(filePath, JSON.stringify(entry) + '\n', OWNER_ONLY);
   }
 }

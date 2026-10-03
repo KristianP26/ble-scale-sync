@@ -44,6 +44,22 @@ describe('FileExporter', () => {
     vi.mocked(fs.statSync).mockReturnValue({ size: 0 } as ReturnType<typeof fs.statSync>);
   });
 
+  // The file holds every weigh-in with names and body composition. Created
+  // with the default 0666 & ~umask it was world-readable (0644), while the
+  // retry queue holding the same data is 0600 (D014).
+  it.each([
+    ['csv', csvConfig],
+    ['jsonl', jsonlConfig],
+  ])('creates the %s file owner-only (0600)', async (_label, config) => {
+    const exporter = new FileExporter(config);
+    await exporter.export(samplePayload, { userName: 'Alice' });
+    const calls = vi.mocked(fs.appendFileSync).mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) {
+      expect(call[2]).toMatchObject({ mode: 0o600 });
+    }
+  });
+
   it('has name "file"', () => {
     const exporter = new FileExporter(csvConfig);
     expect(exporter.name).toBe('file');
