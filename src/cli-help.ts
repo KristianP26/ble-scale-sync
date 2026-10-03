@@ -14,7 +14,7 @@ const COMMANDS: readonly string[] = [
   '  start                  Run the sync flow',
   '  setup                  Interactive setup wizard',
   '  setup-garmin [args]    Garmin Connect authentication (needs Python 3)',
-  '  setup-strava           Strava OAuth token setup',
+  '  setup-strava [--user]  Strava OAuth token setup (--user <name> with several users)',
   '  scan                   Discover nearby BLE devices',
   '  diagnose [MAC]         BLE diagnostic dump (services, characteristics, flags)',
   '  validate               Validate config.yaml and exit',

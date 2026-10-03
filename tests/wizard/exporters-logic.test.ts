@@ -305,3 +305,49 @@ describe('EXPORTER_SCHEMAS filtering', () => {
     }
   });
 });
+
+// ─── Per-user token directories ─────────────────────────────────────────
+
+describe('exportersStep — token_dir default per user', () => {
+  // Every user used to be offered the same './garmin-tokens'. Pressing Enter
+  // twice put two Garmin accounts in one token directory, and the second auth
+  // overwrote the first: both people's weigh-ins went to the second account.
+  // The provider answers every input with the offered default, i.e. a user who
+  // just presses Enter.
+  function enterOnlyCtx(selected: string[]): WizardContext {
+    const ctx = makeCtx([]);
+    ctx.prompts = {
+      input: async (_message, opts) => opts?.default ?? 'someone@example.com',
+      password: async () => 'pw',
+      confirm: async () => true,
+      checkbox: async () => selected as never,
+      select: async (_message, choices) => choices[0].value,
+    };
+    return ctx;
+  }
+
+  it.each(['garmin', 'strava'])('offers each %s user a separate token_dir', async (type) => {
+    const ctx = enterOnlyCtx([type]);
+    ctx.config.users = [
+      { name: 'Alice', slug: 'alice' },
+      { name: 'Bob', slug: 'bob' },
+    ];
+
+    await exportersStep.run(ctx);
+
+    const dirs = (ctx.config.users ?? []).map(
+      (u) => (u as { exporters?: { token_dir?: string }[] }).exporters?.[0]?.token_dir,
+    );
+    expect(dirs).toEqual([`./${type}-tokens/alice`, `./${type}-tokens/bob`]);
+  });
+
+  it('keeps the plain default for a single user', async () => {
+    const ctx = enterOnlyCtx(['garmin']);
+    ctx.config.users = [{ name: 'Alice', slug: 'alice' }];
+
+    await exportersStep.run(ctx);
+
+    const user = ctx.config.users[0] as { exporters?: { token_dir?: string }[] };
+    expect(user.exporters?.[0]?.token_dir).toBe('./garmin-tokens');
+  });
+});

@@ -88,19 +88,41 @@ async function promptField(
 async function promptExporterFields(
   ctx: WizardContext,
   schema: ExporterSchema,
+  defaults: Record<string, string> = {},
 ): Promise<Record<string, unknown>> {
   const config: Record<string, unknown> = {};
 
   console.log(`\n  ${schema.displayName}: ${schema.description}\n`);
 
   for (const field of schema.fields) {
-    const value = await promptField(ctx, field);
+    const offered = defaults[field.key];
+    const value = await promptField(
+      ctx,
+      offered !== undefined ? ({ ...field, default: offered } as ConfigFieldDef) : field,
+    );
     if (value !== undefined) {
       config[field.key] = value;
     }
   }
 
   return config;
+}
+
+/**
+ * With several users, each one's token directory gets its own default. The
+ * schema default is one path, and two accounts in one token directory means
+ * the second auth overwrites the first, so both people's readings go to the
+ * second account (findTokenDirCollisions rejects that config at load).
+ */
+function perUserDefaults(
+  schema: ExporterSchema,
+  user: UserConfig,
+  userCount: number,
+): Record<string, string> {
+  if (userCount < 2) return {};
+  const field = schema.fields.find((f) => f.key === 'token_dir');
+  if (!field || typeof field.default !== 'string' || !user.slug) return {};
+  return { token_dir: `${field.default.replace(/\/+$/, '')}/${user.slug}` };
 }
 
 export const exportersStep: WizardStep = {
@@ -171,7 +193,11 @@ export const exportersStep: WizardStep = {
             console.log(dim('  \u2192 Skipped.'));
             continue;
           }
-          const fields = await promptExporterFields(ctx, schema);
+          const fields = await promptExporterFields(
+            ctx,
+            schema,
+            perUserDefaults(schema, user as UserConfig, users.length),
+          );
           userEntries.push({ type: schema.name, ...fields } as ExporterEntry);
         }
         (user as UserConfig).exporters = userEntries.length > 0 ? userEntries : undefined;

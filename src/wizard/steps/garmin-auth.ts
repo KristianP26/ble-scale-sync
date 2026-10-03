@@ -5,6 +5,7 @@ import type { WizardStep, WizardContext } from '../types.js';
 import type { UserConfig, ExporterEntry } from '../../config/schema.js';
 import { success, error, warn, dim } from '../ui.js';
 import { cliCommand } from '../../cli-invocation.js';
+import { findTokenDirCollisions } from '../../config/token-dirs.js';
 
 const __dirname: string = dirname(fileURLToPath(import.meta.url));
 const ROOT: string = join(__dirname, '..', '..', '..');
@@ -90,16 +91,22 @@ export const garminAuthStep: WizardStep = {
 
     const garminUsers = getUsersWithGarmin(ctx);
 
-    // Check token_dir uniqueness
-    const tokenDirs = garminUsers
-      .map((g) => (g.entry as Record<string, unknown>).token_dir as string | undefined)
-      .filter(Boolean) as string[];
-    const duplicates = tokenDirs.filter((d, i) => tokenDirs.indexOf(d) !== i);
-    if (duplicates.length > 0) {
+    // Two accounts in one token directory: the second auth would overwrite the
+    // first, and both users' readings would go to the second account. The old
+    // check here dropped entries without token_dir before comparing, so the
+    // commonest case (both on the default) passed it. Refuse to auth instead.
+    const collisions = findTokenDirCollisions({
+      users: (ctx.config.users ?? []) as Parameters<typeof findTokenDirCollisions>[0]['users'],
+      global_exporters: ctx.config.global_exporters,
+    }).filter((c) => c.type === 'garmin');
+    if (collisions.length > 0) {
+      for (const c of collisions) console.log(`\n  ${warn(c.message)}`);
       console.log(
-        `\n  ${warn(`Duplicate token_dir detected: ${[...new Set(duplicates)].join(', ')}`)}`,
+        dim(
+          `\n  Garmin authentication skipped. Fix token_dir, then run: ${cliCommand('setup-garmin')}\n`,
+        ),
       );
-      console.log(warn('  Each user should have a unique token_dir to avoid auth conflicts.\n'));
+      return;
     }
 
     // Per-user auth loop
