@@ -230,9 +230,13 @@ Push notifications to phone/desktop via [ntfy](https://ntfy.sh). Works with ntfy
 ```yaml
 global_exporters:
   - type: ntfy
-    topic: my-scale
+    topic: '<long-random-topic-name>' # your own; <> is not valid in a topic name
     priority: 4
 ```
+
+::: warning The topic is the password
+ntfy has no sign-up, so the topic name is essentially a password: anyone who knows it can subscribe and read its recent messages, and each notification carries your name, weight and body composition. Use a long random topic name of your own, or a self-hosted server or an access token.
+:::
 
 Weight, muscle and bone follow `scale.weight_unit`.
 
