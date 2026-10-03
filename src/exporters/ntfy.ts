@@ -18,7 +18,9 @@ export const ntfySchema: ExporterSchema = {
       label: 'Topic',
       type: 'string',
       required: true,
-      description: 'Ntfy topic name',
+      description:
+        'Ntfy topic name. On ntfy.sh anyone who knows the topic can read it, so use a long ' +
+        'random name',
     },
     {
       key: 'url',
