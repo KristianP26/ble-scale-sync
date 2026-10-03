@@ -17,6 +17,7 @@ import * as readline from 'node:readline';
 import { loadAppConfig } from '../config/load.js';
 import { createLogger } from '../logger.js';
 import { selectStravaEntry } from './strava-select.js';
+import { atomicWrite } from '../config/write.js';
 
 const log = createLogger('StravaSetup');
 
@@ -116,9 +117,11 @@ async function main(): Promise<void> {
 
     const tokenPath = path.join(tokenDir, 'strava_tokens.json');
     if (!fs.existsSync(tokenDir)) {
-      fs.mkdirSync(tokenDir, { recursive: true });
+      fs.mkdirSync(tokenDir, { recursive: true, mode: 0o700 });
     }
-    fs.writeFileSync(tokenPath, JSON.stringify(tokens, null, 2) + '\n', { mode: 0o600 });
+    // Through a fresh 0600 tmp file: a direct writeFileSync keeps the old
+    // permissions of an existing token file, since mode applies only on create.
+    atomicWrite(tokenPath, JSON.stringify(tokens, null, 2) + '\n');
 
     log.info(`Tokens saved to ${tokenPath}`);
     console.log('\nStrava setup complete! You can now use the Strava exporter.\n');

@@ -93,12 +93,31 @@ def resolve_env_ref(value):
     return re.sub(r"\$\{([^}]+)\}", replacer, value)
 
 
+def restrict_token_dir(token_dir):
+    """Make the token directory and the files in it owner-only.
+
+    The token grants full access to the Garmin account. makedirs() honours the
+    umask, which usually leaves the directory 0755, and the library writes the
+    token file with whatever mode it likes. The directory is what keeps other
+    local accounts out even if a later token refresh recreates the file, so it
+    is the one that matters most. Best effort: Windows and some mounts ignore it.
+    """
+    try:
+        os.chmod(token_dir, 0o700)
+        for name in os.listdir(token_dir):
+            path = os.path.join(token_dir, name)
+            if os.path.isfile(path):
+                os.chmod(path, 0o600)
+    except OSError as e:
+        print(f"[Setup] Warning: could not restrict permissions on {token_dir}: {e}")
+
+
 def authenticate(email, password, token_dir):
     """Authenticate with Garmin and save tokens (with 2FA/MFA support)."""
     print(f"[Setup] Authenticating as {email}...")
 
     try:
-        os.makedirs(token_dir, exist_ok=True)
+        os.makedirs(token_dir, mode=0o700, exist_ok=True)
         cleanup_legacy_tokens(token_dir)
 
         garmin = Garmin(email, password, return_on_mfa=True)
@@ -119,6 +138,7 @@ def authenticate(email, password, token_dir):
         # either path; both branches rely on this explicit dump, which also
         # surfaces write errors that login()'s auto-dump would have swallowed.
         garmin.client.dump(token_dir)
+        restrict_token_dir(token_dir)
 
         print(f"[Setup] Tokens saved to: {token_dir}")
         return True

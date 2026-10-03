@@ -106,6 +106,31 @@ class AuthenticateTest(unittest.TestCase):
         garmin.client.dump.side_effect = OSError("read-only filesystem")
         self.assertFalse(run_authenticate(garmin, self.token_dir))
 
+    @unittest.skipIf(os.name == "nt", "POSIX permission bits")
+    def test_token_dir_and_files_are_owner_only(self):
+        # The token grants full access to the Garmin account. makedirs()
+        # without a mode left the directory 0755 and the dumped file got
+        # whatever the library and umask gave it.
+        token_dir = os.path.join(self.token_dir, "garmin-tokens")
+        garmin = make_garmin()
+
+        def dump(path):
+            target = os.path.join(path, "garmin_tokens.json")
+            with open(target, "w") as f:
+                f.write("{}")
+            os.chmod(target, 0o644)
+
+        garmin.client.dump.side_effect = dump
+        old_umask = os.umask(0o022)
+        try:
+            self.assertTrue(run_authenticate(garmin, token_dir))
+        finally:
+            os.umask(old_umask)
+
+        self.assertEqual(os.stat(token_dir).st_mode & 0o777, 0o700)
+        token_file = os.path.join(token_dir, "garmin_tokens.json")
+        self.assertEqual(os.stat(token_file).st_mode & 0o777, 0o600)
+
     def test_prints_the_chained_cause_of_a_login_failure(self):
         garmin = make_garmin()
         cause = ConnectionError("API Error 401")

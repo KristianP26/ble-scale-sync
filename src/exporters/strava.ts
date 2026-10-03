@@ -8,6 +8,7 @@ import type { StravaConfig } from './config.js';
 import { withRetry, httpError, httpHealthcheck } from '../utils/retry.js';
 import { errMsg } from '../utils/error.js';
 import { cliCommand } from '../cli-invocation.js';
+import { atomicWrite } from '../config/write.js';
 const log = createLogger('Strava');
 
 interface StravaTokens {
@@ -173,13 +174,20 @@ export class StravaExporter implements Exporter {
     return updated.access_token;
   }
 
+  /**
+   * Strava invalidates the old refresh token the moment it returns a new one,
+   * so this write must not lose it: atomicWrite goes through a fresh 0600 tmp
+   * file and a rename. The old in-place writeFileSync could truncate the file
+   * and then fail, and its `mode` applied only when the file was created, so a
+   * token file that already existed as 0644 stayed readable to other accounts.
+   */
   private saveTokens(tokens: StravaTokens): void {
     const tokenPath = this.tokenFilePath();
     const dir = path.dirname(tokenPath);
     if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
-    fs.writeFileSync(tokenPath, JSON.stringify(tokens, null, 2) + '\n', { mode: 0o600 });
+    atomicWrite(tokenPath, JSON.stringify(tokens, null, 2) + '\n');
   }
 
   private tokenFilePath(): string {

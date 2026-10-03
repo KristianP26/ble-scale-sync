@@ -8,6 +8,9 @@ vi.mock('node:fs', () => ({
   readFileSync: vi.fn(),
   writeFileSync: vi.fn(),
   mkdirSync: vi.fn(),
+  renameSync: vi.fn(),
+  unlinkSync: vi.fn(),
+  chmodSync: vi.fn(),
 }));
 
 import * as fs from 'node:fs';
@@ -135,7 +138,7 @@ describe('StravaExporter', () => {
     expect(fs.writeFileSync).toHaveBeenCalledWith(
       expect.stringContaining('strava_tokens.json'),
       expect.stringContaining('"new_access"'),
-      { mode: 0o600 },
+      expect.objectContaining({ mode: 0o600 }),
     );
   });
 
@@ -179,11 +182,46 @@ describe('StravaExporter', () => {
     const exporter = new StravaExporter(defaultConfig);
     await exporter.export(samplePayload);
 
+    // Not a direct writeFileSync(path, ..., { mode }) on the token file: mode
+    // applies only when a file is CREATED, so an existing 0644 file stayed
+    // 0644, and an in-place truncate+write that fails loses the rotated
+    // refresh token while Strava has already invalidated the old one. The
+    // token is written to a fresh 0600 tmp file ('wx') and renamed over.
     expect(fs.writeFileSync).toHaveBeenCalledWith(
-      expect.stringContaining('strava_tokens.json'),
+      expect.stringMatching(/strava_tokens\.json\.tmp$/),
       expect.any(String),
-      { mode: 0o600 },
+      expect.objectContaining({ mode: 0o600, flag: 'wx' }),
     );
+    expect(fs.renameSync).toHaveBeenCalledWith(
+      expect.stringMatching(/strava_tokens\.json\.tmp$/),
+      expect.stringMatching(/strava_tokens\.json$/),
+    );
+    expect(fs.writeFileSync).not.toHaveBeenCalledWith(
+      expect.stringMatching(/strava_tokens\.json$/),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('creates a missing token directory owner-only', async () => {
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(expiredTokens));
+    // The token file is readable, its directory is reported missing.
+    vi.mocked(fs.existsSync).mockImplementation((p) => String(p).endsWith('strava_tokens.json'));
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({ access_token: 'a', refresh_token: 'r', expires_at: 9999999999 }),
+      })
+      .mockResolvedValueOnce({ ok: true, status: 200 });
+
+    await new StravaExporter(defaultConfig).export(samplePayload);
+
+    expect(fs.mkdirSync).toHaveBeenCalledWith(expect.any(String), {
+      recursive: true,
+      mode: 0o700,
+    });
   });
 
   it('returns failure on non-2xx upload response', async () => {
