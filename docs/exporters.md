@@ -347,6 +347,8 @@ docker run --rm -it \
 ```
 
 The script prints a browser URL for Strava authorization. After authorizing, copy the `code` parameter from the redirect URL and paste it back. Tokens are cached and automatically refreshed.
+
+With several users that each have a Strava exporter, name the one to authorize: `ble-scale-sync setup-strava --user alice` (name or slug). Each of them needs its own `token_dir`.
 :::
 
 ## Intervals.icu {#intervals}

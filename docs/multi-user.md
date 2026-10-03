@@ -76,6 +76,7 @@ users:
       - type: garmin
         email: 'alice@example.com'
         password: '${ALICE_GARMIN_PASSWORD}'
+        token_dir: './garmin-tokens/alice'
 
   - name: Bob
     # ...
@@ -83,11 +84,16 @@ users:
       - type: garmin
         email: 'bob@example.com'
         password: '${BOB_GARMIN_PASSWORD}'
+        token_dir: './garmin-tokens/bob'
 
 global_exporters:
   - type: influxdb
     # ... shared by users without their own exporters list
 ```
+
+::: warning One token directory per account
+Garmin and Strava keep each account's login tokens in `token_dir`. Give every user their own `token_dir`, as above. If two accounts share one directory, whichever account authenticates last owns the tokens and receives everyone's readings, so the config is rejected at startup with an error naming both users. Two Garmin entries with the same `email` may share a directory, since they are one account. The setup wizard offers a separate directory per user.
+:::
 
 ### Exporter behavior in multi-user mode
 
@@ -97,7 +103,8 @@ global_exporters:
 | **InfluxDB** | Adds `user={slug}` tag to line protocol                 |
 | **Webhook**  | Adds `user_name` + `user_slug` fields to JSON           |
 | **Ntfy**     | Prepends `[{name}]` to notification                     |
-| **Garmin**   | One account per user via per-user exporter config       |
+| **Garmin**   | One account per user, each with its own `token_dir`     |
+| **Strava**   | One account per user, each with its own `token_dir`     |
 
 ## Live Config Reload
 
