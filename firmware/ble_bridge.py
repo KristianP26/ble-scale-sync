@@ -193,21 +193,57 @@ def _parse_raw_entry(addr_bytes, addr_type, rssi, raw):
     return entry
 
 
+# Upper bound on distinct service data UUIDs kept per MAC in a seen entry. A
+# real peripheral carries one or two; the cap keeps a UUID-rotating neighbour
+# from growing a single entry across the whole SEEN_RESET_CYCLES window.
+_MAX_SERVICE_DATA_UUIDS = 8
+
+
+def _merge_service_data(cur, new):
+    """Latest-wins per UUID: replace a known UUID's payload, append a new UUID
+    while under _MAX_SERVICE_DATA_UUIDS. Mutates and returns `cur`."""
+    for item in new:
+        replaced = False
+        for k in range(len(cur)):
+            if cur[k]["uuid"] == item["uuid"]:
+                cur[k] = item
+                replaced = True
+                break
+        if not replaced and len(cur) < _MAX_SERVICE_DATA_UUIDS:
+            cur.append(item)
+    return cur
+
+
 def _merge_entry(seen, entry):
-    """Merge a parsed device entry into the seen dict (dedup by MAC, strongest RSSI)."""
+    """Merge a parsed device entry into the seen dict (one entry per MAC).
+
+    Fields that change between frames are latest-wins (review H-06): RSSI is
+    always the newest frame's, and manufacturer data and service data (per
+    UUID) are replaced by the newest frame that carries them. A frame without
+    the field (a name-only scan response, say) leaves the stored value alone.
+    A broadcast scale publishes its weight in these fields and changes them
+    while the user stands on it, so first-wins published the first, unstable
+    frame of the window and dropped the stable or impedance frame after it.
+
+    Name and services are static per device and are only filled in when still
+    missing.
+    """
     mac = entry["address"]
     if mac in seen:
-        if entry["rssi"] > seen[mac]["rssi"]:
-            seen[mac]["rssi"] = entry["rssi"]
-        if entry["name"] and not seen[mac]["name"]:
-            seen[mac]["name"] = entry["name"]
-        if entry.get("manufacturer_data") and not seen[mac].get("manufacturer_data"):
-            seen[mac]["manufacturer_id"] = entry["manufacturer_id"]
-            seen[mac]["manufacturer_data"] = entry["manufacturer_data"]
-        if entry.get("services") and not seen[mac].get("services"):
-            seen[mac]["services"] = entry["services"]
-        if entry.get("service_data") and not seen[mac].get("service_data"):
-            seen[mac]["service_data"] = entry["service_data"]
+        cur = seen[mac]
+        cur["rssi"] = entry["rssi"]
+        if entry["name"] and not cur["name"]:
+            cur["name"] = entry["name"]
+        if entry.get("manufacturer_data"):
+            cur["manufacturer_id"] = entry["manufacturer_id"]
+            cur["manufacturer_data"] = entry["manufacturer_data"]
+        if entry.get("services") and not cur.get("services"):
+            cur["services"] = entry["services"]
+        if entry.get("service_data"):
+            if cur.get("service_data"):
+                _merge_service_data(cur["service_data"], entry["service_data"])
+            else:
+                cur["service_data"] = entry["service_data"]
     else:
         seen[mac] = entry
 
@@ -298,8 +334,9 @@ class BleBridge:
     async def scan(self, duration_ms=None):
         """Scan for BLE peripherals using raw BLE API (batch mode).
 
-        Deduplicates by address, keeps strongest RSSI but updates manufacturer
-        data from any advertisement that carries it.
+        Deduplicates by address. RSSI, manufacturer data and service data are
+        latest-wins across the window (raw_results keeps arrival order), so a
+        broadcast scale is reported with its newest frame (see _merge_entry).
         """
         if duration_ms is None:
             duration_ms = board.SCAN_DURATION_MS
@@ -430,8 +467,13 @@ class BleBridge:
     def drain_results(self):
         """Drain accumulated raw scan results and return filtered device list.
 
-        Merges into _seen dict for cross-cycle dedup. Clears _seen every
-        SEEN_RESET_CYCLES drains to age out disappeared devices.
+        Merges into _seen dict for cross-cycle dedup: one entry per MAC, so
+        memory and the published list grow with devices, not frames, and a
+        device that advertises slower than PUBLISH_INTERVAL_MS stays listed
+        between its frames. Clears _seen every SEEN_RESET_CYCLES drains to age
+        out disappeared devices. Changing fields are latest-wins (_merge_entry),
+        so every drain publishes the newest frame seen for each MAC, not the
+        first one of the SEEN_RESET_CYCLES window (review H-06).
         """
         # Atomically swap raw_results (IRQ appends are non-preemptive)
         raw = self._raw_results
