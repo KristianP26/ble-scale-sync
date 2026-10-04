@@ -176,6 +176,8 @@ If the key is rejected on the very next connect after a session that worked, eve
 
 ### Garmin upload fails
 
+- `Garmin rejected the saved login token (HTTP 401)` means the stored token is no longer accepted; the upload is not retried. Run `ble-scale-sync setup-garmin` (or `npm run setup-garmin` from a checkout) to log in again.
+- `Garmin upload needs Python 3.12 or newer` means the Python found on the host is too old for `garminconnect`; install Python 3.12 or newer.
 - Re-run the [setup wizard](/guide/configuration#setup-wizard-recommended) or `npm run setup-garmin` to refresh tokens.
 - Check that your Garmin credentials are correct.
 - Garmin may block requests from cloud/VPN IPs. Try authenticating from a different network, then copy `~/.garmin_tokens/` to your target machine.
