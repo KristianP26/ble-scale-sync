@@ -195,7 +195,9 @@ async function promptHaBluetooth(ctx: WizardContext): Promise<HaBluetoothConfig>
     'Home Assistant URL (e.g. http://homeassistant.local:8123):',
     { validate: validateHaUrl },
   );
-  const token = await ctx.prompts.input(
+  // A password prompt: this is an admin token, and an input prompt left it on
+  // screen and in the terminal scrollback.
+  const token = await ctx.prompts.password(
     'Long-lived access token of an ADMIN user (Profile > Security), or ${HA_TOKEN} to read it from .env:',
     { validate: (v: string) => (v.trim() ? true : 'Token is required') },
   );

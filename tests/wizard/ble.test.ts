@@ -6,9 +6,11 @@ import {
   validateEsphomeHost,
   promptMqttProxy,
   promptEsphomeProxy,
+  promptHaBluetooth,
 } from '../../src/wizard/steps/ble.js';
 import type { WizardContext } from '../../src/wizard/types.js';
 import { createMockPromptProvider } from '../../src/wizard/prompt-provider.js';
+import { scriptedPrompts } from '../helpers/scripted-prompts.js';
 
 function makeCtx(answers: (string | number | boolean | string[])[]): WizardContext {
   return {
@@ -516,5 +518,28 @@ describe('bleStep scale discovery', () => {
     await bleStep.run(ctx);
 
     expect(ctx.config.ble?.scale_mac).toBeUndefined();
+  });
+});
+
+describe('promptHaBluetooth token prompt', () => {
+  // The token is an admin credential; an input prompt echoed it to the screen.
+  it('asks for the access token with a masked password prompt', async () => {
+    const { prompts } = scriptedPrompts([
+      [/Home Assistant URL/, 'http://ha.local:8123'],
+      [/access token/, 'secret-token'],
+    ]);
+    const echoed: string[] = [];
+    const input = prompts.input;
+    prompts.input = async (message, opts) => {
+      echoed.push(message);
+      return input(message, opts);
+    };
+    const ctx = makeCtx([]);
+    ctx.prompts = prompts;
+
+    const ha = await promptHaBluetooth(ctx);
+
+    expect(ha.token).toBe('secret-token');
+    expect(echoed.some((m) => /access token/.test(m))).toBe(false);
   });
 });

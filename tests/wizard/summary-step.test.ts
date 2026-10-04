@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
@@ -81,5 +81,123 @@ describe('summaryStep out_of_range (S-02)', () => {
   it('keeps an explicit out_of_range the config already has', async () => {
     const written = await save({ users: [alice, bob], out_of_range: 'warn' });
     expect(written.out_of_range).toBe('warn');
+  });
+});
+
+describe('summaryStep in edit mode keeps the comments of config.yaml', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    dir = mkdtempSync(join(tmpdir(), 'bss-summary-edit-'));
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const ORIGINAL = `# my notes about this install
+version: 1
+scale:
+  weight_unit: kg # metric household
+  height_unit: cm
+unknown_user: nearest
+users:
+  # first user
+  - name: Alice
+    slug: alice
+    height: 175
+    birth_date: '1990-01-01'
+    gender: male
+    is_athlete: false
+    weight_range: { min: 50, max: 70 }
+    last_known_weight: null
+  # second user
+  - name: Bob
+    slug: bob # do not rename
+    height: 180
+    birth_date: '1985-05-05'
+    gender: male
+    is_athlete: false
+    weight_range: { min: 70, max: 100 }
+    last_known_weight: null
+global_exporters:
+  - type: webhook
+    url: '\${HOOK_URL}' # kept in .env
+`;
+
+  async function edit(change: (config: Partial<AppConfig>) => void): Promise<string> {
+    const configPath = join(dir, 'config.yaml');
+    writeFileSync(configPath, ORIGINAL);
+    const config = parseYaml(ORIGINAL) as Partial<AppConfig>;
+    change(config);
+    const { prompts } = scriptedPrompts([[/^Save to/, true]]);
+    const ctx: WizardContext = {
+      config,
+      configPath,
+      isEditMode: true,
+      nonInteractive: false,
+      platform: {
+        os: 'win32',
+        arch: 'x64',
+        hasDocker: false,
+        hasPython: false,
+        pythonCommand: null,
+      },
+      stepHistory: [],
+      prompts,
+    };
+    await summaryStep.run(ctx);
+    return readFileSync(configPath, 'utf8');
+  }
+
+  // The whole object used to be stringified, so every comment was lost.
+  it('keeps comments on keys it did not change and on the ones it did', async () => {
+    const out = await edit((c) => {
+      c.scale!.weight_unit = 'lbs';
+    });
+
+    expect(out).toContain('# my notes about this install');
+    expect(out).toContain('weight_unit: lbs # metric household');
+    expect(out).toContain("url: '${HOOK_URL}' # kept in .env");
+    expect((parseYaml(out) as AppConfig).scale.weight_unit).toBe('lbs');
+  });
+
+  it('keeps a user comment with its user when an earlier user is removed', async () => {
+    const out = await edit((c) => {
+      c.users = c.users!.filter((u) => u.slug !== 'alice');
+    });
+
+    expect(out).not.toContain('Alice');
+    expect(out).toContain('slug: bob # do not rename');
+    expect((parseYaml(out) as AppConfig).users.map((u) => u.slug)).toEqual(['bob']);
+  });
+
+  it('writes what the wizard produced, values and all', async () => {
+    let expected: Partial<AppConfig> = {};
+    const out = await edit((c) => {
+      c.users![1].height = 181;
+      c.global_exporters!.push({ type: 'file', file_path: './m.csv' });
+      c.runtime = { continuous_mode: true } as AppConfig['runtime'];
+      expected = structuredClone(c);
+    });
+
+    // Two users: the save adds out_of_range: skip (S-02).
+    expect(parseYaml(out)).toEqual({ ...expected, out_of_range: 'skip' });
+  });
+
+  // Validated as written, a ${VAR} unit failed the enum, and "Save anyway?"
+  // defaults to no, so Enter left the file unsaved. The app resolves it first.
+  it('validates a ${VAR} value the way the app loads it', async () => {
+    vi.stubEnv('BSS_TEST_WEIGHT_UNIT', 'lbs');
+    try {
+      const out = await edit((c) => {
+        c.scale!.weight_unit = '${BSS_TEST_WEIGHT_UNIT}' as 'lbs';
+      });
+
+      expect(out).toContain('weight_unit: ${BSS_TEST_WEIGHT_UNIT} # metric household');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
