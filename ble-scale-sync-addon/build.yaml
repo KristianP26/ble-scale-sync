@@ -1,5 +1,14 @@
-# Pin to release version tag at release time (e.g. :1.8.0)
+# The application image this add-on wraps, pinned to the release the add-on
+# reports in config.yaml. Never edit the tags by hand: release-please rewrites
+# them on every release PR (generic updater, the marker at the end of each
+# line, listed under extra-files in .release-please-config.json), together with
+# the add-on version. A floating :latest let an add-on of one version wrap any
+# application version (#318, review I-03).
+#
+# Right after a release the new tag can take a few minutes to appear on GHCR.
+# An update in that window fails to build and the installed version keeps
+# running; retrying once the image exists succeeds.
 build_from:
-  amd64: ghcr.io/kristianp26/ble-scale-sync:latest
-  aarch64: ghcr.io/kristianp26/ble-scale-sync:latest
-  armv7: ghcr.io/kristianp26/ble-scale-sync:latest
+  amd64: ghcr.io/kristianp26/ble-scale-sync:1.30.0 # x-release-please-version
+  aarch64: ghcr.io/kristianp26/ble-scale-sync:1.30.0 # x-release-please-version
+  armv7: ghcr.io/kristianp26/ble-scale-sync:1.30.0 # x-release-please-version

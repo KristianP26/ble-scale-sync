@@ -27,6 +27,10 @@
         {
           "type": "generic",
           "path": "ble-scale-sync-addon/config.yaml"
+        },
+        {
+          "type": "generic",
+          "path": "ble-scale-sync-addon/build.yaml"
         }
       ]
     }
