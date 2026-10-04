@@ -96,15 +96,15 @@ The CLI and exporters display weights and heights in your chosen unit; all inter
 
 ### MQTT
 
-| Option                            | Default                  | Notes                                                                                                                                      |
-| --------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `mqtt_enabled`                    | `true`                   | Enable the MQTT exporter.                                                                                                                  |
-| `mqtt_auto`                       | `true`                   | Auto-detect the Mosquitto add-on broker via the Supervisor API. Overrides manual URL / credentials when the Mosquitto add-on is installed. |
-| `mqtt_broker_url`                 | empty                    | Manual broker URL, e.g. `mqtt://192.168.1.50:1883` or `mqtts://...`. Only used when `mqtt_auto` is off or auto-detection fails.            |
-| `mqtt_username` / `mqtt_password` | empty                    | Credentials for the manual broker.                                                                                                         |
-| `mqtt_topic`                      | `scale/body-composition` | Base topic. Payload is published to this topic; HA discovery entities use `homeassistant/sensor/<topic>/...`.                              |
-| `mqtt_ha_discovery`               | `true`                   | Publish auto-discovery entities under `homeassistant/`. Disable if you want raw MQTT only.                                                 |
-| `mqtt_ha_device_name`             | `BLE Scale`              | Device name grouping the entities in HA.                                                                                                   |
+| Option                            | Default                  | Notes                                                                                                                                                     |
+| --------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mqtt_enabled`                    | `true`                   | Enable the MQTT exporter.                                                                                                                                 |
+| `mqtt_auto`                       | `true`                   | Auto-detect the Mosquitto add-on broker via the Supervisor API. Overrides manual URL / credentials when the Mosquitto add-on is installed.                |
+| `mqtt_broker_url`                 | empty                    | Manual broker URL, e.g. `mqtt://192.168.1.50:1883` or `mqtts://...`. Only used when `mqtt_auto` is off or auto-detection fails.                           |
+| `mqtt_username` / `mqtt_password` | empty                    | Credentials for the manual broker.                                                                                                                        |
+| `mqtt_topic`                      | `scale/body-composition` | Base topic. Payload is published to this topic; HA discovery configs go to `homeassistant/sensor/<device id>/<metric>/config`, independent of this topic. |
+| `mqtt_ha_discovery`               | `true`                   | Publish auto-discovery entities under `homeassistant/`. Disable if you want raw MQTT only.                                                                |
+| `mqtt_ha_device_name`             | `BLE Scale`              | Device name grouping the entities in HA.                                                                                                                  |
 
 ### Garmin Connect
 
@@ -125,6 +125,7 @@ If your account uses MFA, see [MFA workaround](#mfa-workaround) below.
 | `idle_rescan_delay`    | `5`     | Seconds to wait before scanning again after a cycle that found no scale while the adapter was healthy. Range: 0-3600. Real failures keep their own backoff.                                                                                |
 | `retry_failed_exports` | `true`  | Keep a reading whose upload failed and retry it later, up to 72 hours. Only targets that can record a past measurement are retried; MQTT and notifications cannot. The queue lives in `/data`, which survives add-on restarts and updates. |
 | `debug`                | `false` | Enable verbose BLE logs. Useful when opening an issue.                                                                                                                                                                                     |
+| `update_check`         | `true`  | Check once a day whether a newer version exists (anonymous, see the [FAQ](/faq#what-does-the-update-check-send)). Set `false` to turn it off.                                                                                              |
 | `custom_config`        | `false` | Ignore UI options entirely and use `/share/ble-scale-sync/config.yaml` instead. See [Custom config mode](#custom-config-mode).                                                                                                             |
 
 ## MQTT auto-detection

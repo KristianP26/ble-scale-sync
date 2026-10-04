@@ -19,7 +19,7 @@ head:
 | **BLE connectivity**      | Local adapter or [ESP32 proxy](/guide/esp32-proxy) over WiFi | Phone BLE        | Phone BLE          | Phone BLE        |
 | **Garmin Connect**        | Automatic upload                                             | No               | Via Health Connect | Some (indirect)  |
 | **Strava**                | Automatic weight sync                                        | No               | No                 | No               |
-| **MQTT / Home Assistant** | Auto-discovery, LWT, 10 sensors                              | No               | MQTT 3.1 / 5.0     | No               |
+| **MQTT / Home Assistant** | Auto-discovery, LWT, 11 sensors                              | No               | MQTT 3.1 / 5.0     | No               |
 | **InfluxDB**              | Built-in                                                     | No               | No                 | No               |
 | **Webhook**               | Built-in                                                     | No               | No                 | No               |
 | **Push notifications**    | Ntfy                                                         | No               | No                 | App only         |

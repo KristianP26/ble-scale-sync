@@ -58,7 +58,7 @@ The date of the last check is stored locally in `.update-check-state.json` next 
 
 ### Can I disable the update check?
 
-Yes. Set `update_check: false` in `config.yaml`, or run with `CI=true` in the environment. See the [Configuration reference](/guide/configuration#update-check).
+Yes. Set `update_check: false` in `config.yaml` (in the Home Assistant add-on, turn off the `update_check` option), or run with `CI=true` in the environment. See the [Configuration reference](/guide/configuration#update-check).
 
 ---
 

@@ -16,7 +16,7 @@ Exporters are configured in `global_exporters` (shared by all users). For multi-
 | Target                          | Description                                            |
 | ------------------------------- | ------------------------------------------------------ |
 | [**Garmin Connect**](#garmin)   | Automatic body composition upload, no phone app needed |
-| [**MQTT**](#mqtt)               | Home Assistant auto-discovery with 10 sensors, LWT     |
+| [**MQTT**](#mqtt)               | Home Assistant auto-discovery with 11 sensors, LWT     |
 | [**InfluxDB**](#influxdb)       | Time-series database (v2 and v3)                       |
 | [**Webhook**](#webhook)         | Any HTTP endpoint (n8n, Make, Zapier, custom APIs)     |
 | [**Ntfy**](#ntfy)               | Push notifications to phone/desktop                    |
@@ -32,13 +32,13 @@ Exporters are configured in `global_exporters` (shared by all users). For multi-
 
 Automatic body composition upload to Garmin Connect, no phone app needed. Uses a Python subprocess with cached authentication tokens.
 
-| Field                | Required | Default            | Description                                                                                                          |
-| -------------------- | -------- | ------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| `email`              | Yes      | (none)             | Garmin account email                                                                                                 |
-| `password`           | Yes      | (none)             | Garmin account password                                                                                              |
-| `token_dir`          | No       | `~/.garmin_tokens` | Directory for cached auth tokens                                                                                     |
-| `weight_only`        | No       | `false`            | Upload the weight alone, leaving every derived metric unset                                                          |
-| `upload_timeout_sec` | No       | `180`              | Seconds one upload attempt may take before it is killed (10-900). Three attempts are made, with no wait between them |
+| Field                | Required | Default            | Description                                                                                                                                                     |
+| -------------------- | -------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `email`              | Yes      | (none)             | Garmin account email                                                                                                                                            |
+| `password`           | Yes      | (none)             | Garmin account password                                                                                                                                         |
+| `token_dir`          | No       | `~/.garmin_tokens` | Directory for cached auth tokens. The setup wizard fills in `./garmin-tokens`, which is relative to the directory the app is started from, not to `config.yaml` |
+| `weight_only`        | No       | `false`            | Upload the weight alone, leaving every derived metric unset                                                                                                     |
+| `upload_timeout_sec` | No       | `180`              | Seconds one upload attempt may take before it is killed (10-900). Up to three attempts are made, 1 s and 2 s apart                                              |
 
 ```yaml
 global_exporters:
@@ -48,9 +48,9 @@ global_exporters:
 ```
 
 ::: tip Slow Garmin days
-Each upload attempt is killed after `upload_timeout_sec` seconds and retried up to three times. The default of 180 s covers a Garmin Connect that is merely slow; if you see `Python uploader timed out` three times for a measurement that uploads fine by hand afterwards, raise it (the maximum is 900).
+Each upload attempt is killed after `upload_timeout_sec` seconds, and up to three attempts are made. The default of 180 s covers a Garmin Connect that is merely slow; if you see `Python uploader timed out` three times for a measurement that uploads fine by hand afterwards, raise it (the maximum is 900).
 
-The cost of a higher value is only paid when Garmin is actually failing: three attempts run back to back with no wait between them, so a dead Garmin takes three times the timeout to give up, and in continuous mode the next scan cycle and the ntfy/Telegram summary wait that long too.
+The cost of a higher value is only paid when Garmin is actually failing: the three attempts are only 1 s and 2 s apart, so a dead Garmin takes about three times the timeout to give up, and in continuous mode the next scan cycle and the ntfy/Telegram summary wait that long too.
 
 ```yaml
 global_exporters:
@@ -130,7 +130,7 @@ v1.8.1 bumps `garminconnect` to 0.3.x, which replaced the old garth-based OAuth 
 
 ## MQTT {#mqtt}
 
-Publishes body composition as JSON to an MQTT broker. **Home Assistant auto-discovery** is enabled by default; all 10 metrics appear as sensors grouped under a single device, with availability tracking (LWT) and display precision per metric.
+Publishes body composition as JSON to an MQTT broker. **Home Assistant auto-discovery** is enabled by default; all 11 metrics (weight, impedance and the nine body composition values) appear as sensors grouped under a single device, with availability tracking (LWT) and display precision per metric.
 
 ::: tip Home Assistant users
 If you run Home Assistant OS or Supervised, the [Home Assistant Add-on](./guide/home-assistant-addon) auto-detects the Mosquitto broker through the Supervisor API, so you do not need to wire MQTT manually.
@@ -240,7 +240,7 @@ ntfy has no sign-up, so the topic name is essentially a password: anyone who kno
 
 Weight, muscle and bone follow `scale.weight_unit`.
 
-With `report_exports: true` the notification is sent after the other exporters finish and ends with one line per non-reporting exporter, `✅ garmin` or `❌ garmin: <error>`, so a failed sync is visible on the phone. Two notifiers with the flag set do not report on each other. The notification arrives once the slowest exporter (and its retries) is done; with Garmin that can be up to three minutes when its uploader times out and retries. Error text is forwarded as-is (truncated to 120 characters), so a public ntfy topic will carry it.
+With `report_exports: true` the notification is sent after the other exporters finish and ends with one line per non-reporting exporter, `✅ garmin` or `❌ garmin: <error>`, so a failed sync is visible on the phone. Two notifiers with the flag set do not report on each other. The notification arrives once the slowest exporter (and its retries) is done; with Garmin that can be more than nine minutes at the default `upload_timeout_sec` of 180 s, when every attempt times out. Error text is forwarded as-is (truncated to 120 characters), so a public ntfy topic will carry it.
 
 ## Telegram {#telegram}
 
@@ -263,7 +263,7 @@ global_exporters:
     silent: false
 ```
 
-The message is sent as plain text. Weight, muscle and bone follow `scale.weight_unit`. `report_exports` works as for [Ntfy](#ntfy). In multi-user setups the user's name is prepended as `[Name]`. Historical readings replayed from a scale's offline cache are skipped (a notification for an old measurement is not meaningful).
+The message is sent as plain text. Weight, muscle and bone follow `scale.weight_unit`. `report_exports` works as for [Ntfy](#ntfy). The user's `name` is prepended as `[Name]`, with a single user as well. Historical readings replayed from a scale's offline cache are skipped (a notification for an old measurement is not meaningful).
 
 ::: tip Finding your chat ID
 Message your bot once, then open `https://api.telegram.org/bot<token>/getUpdates` in a browser - the `chat.id` field holds your chat ID. For groups, add the bot to the group first.

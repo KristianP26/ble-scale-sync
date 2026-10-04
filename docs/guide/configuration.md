@@ -611,7 +611,7 @@ Anonymous aggregated statistics are visible at [stats.blescalesync.dev](https://
 
 ### Secret references
 
-YAML values support `${ENV_VAR}` syntax for passwords and tokens. The variable must be defined in the environment or in a `.env` file; loading fails if a reference is undefined.
+YAML values support `${ENV_VAR}` syntax for passwords and tokens. The variable must be defined in the environment or in a `.env` file; loading fails if a reference is undefined. Write `$${...}` for a literal `${...}`. A config reload reads `.env` again, so a changed secret applies without a restart; variables set in the real environment always win over `.env`.
 
 ```yaml
 global_exporters:
@@ -637,13 +637,14 @@ These environment variables always override `config.yaml` values, useful for Doc
 | `BLE_ADAPTER`               | `ble.adapter`                                        |
 | `BLE_RETRY_BASE_DELAY_MS`   | Delay before the first export retry (default `1000`) |
 
-A value that is not valid for its variable is reported and ignored, and the
-value from `config.yaml` is kept. Booleans accept `true`/`false`, `yes`/`no`,
+A value that is not valid for its variable is ignored, the value from
+`config.yaml` is kept, and the log says so. An empty value is ignored too, so
+`BLE_WATCHDOG_MAX_FAILURES=` no longer turns the watchdog off. Booleans accept `true`/`false`, `yes`/`no`,
 `on`/`off` and `1`/`0`; a typo such as `DRY_RUN=treu` no longer reads as
 `false`. `SCALE_MAC` is checked against the same format `config.yaml` requires.
 
 `BLE_HANDLER` accepts `auto`, `mqtt-proxy`, `esphome-proxy` and `ha-bluetooth`. A proxy handler is applied only when that proxy is configured in `config.yaml`; otherwise the app says so and keeps the configured handler. Any other value is reported and ignored.
 
 ::: details Legacy .env support
-If `config.yaml` doesn't exist, the app falls back to `.env` configuration. See `.env.example` in the repository. When both files exist, `config.yaml` takes priority.
+If `config.yaml` doesn't exist, the app falls back to `.env` configuration. See `.env.example` in the repository. When both files exist, the configuration comes from `config.yaml` and the exporter and profile variables of the legacy format are not read. `.env` is still loaded into the environment, though: it supplies the `${VAR}` references, and any [runtime override](#runtime-overrides) left in it (`DEBUG`, `DRY_RUN`, `SCALE_MAC`, ...) overrides `config.yaml` as if it had been set with `-e`. Remove those lines from `.env` after moving to `config.yaml`.
 :::
