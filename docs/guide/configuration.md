@@ -19,9 +19,11 @@ The fastest way to configure BLE Scale Sync is with the **interactive setup wiza
 
 ```bash
 # Docker (Linux)
+mkdir -p garmin-tokens strava-tokens
 docker run --rm -it --network host --cap-add NET_ADMIN --cap-add NET_RAW \
   --group-add "$(getent group bluetooth | cut -d: -f3)" -v /var/run/dbus:/var/run/dbus:ro \
-  -v ./config.yaml:/app/config.yaml ghcr.io/kristianp26/ble-scale-sync:latest setup
+  -v ./config.yaml:/app/config.yaml -v ./garmin-tokens:/app/garmin-tokens \
+  -v ./strava-tokens:/app/strava-tokens ghcr.io/kristianp26/ble-scale-sync:latest setup
 
 # Standalone (npm install or npx)
 npx ble-scale-sync setup
@@ -30,10 +32,14 @@ npx ble-scale-sync setup
 npm run setup
 ```
 
-The wizard generates a complete `config.yaml`. If a config already exists, it offers **edit mode**: pick any section to reconfigure without starting over. In the users section each existing user can be kept, edited (every prompt starts from the current value, and keys the wizard does not ask about, such as per-user exporters and `last_known_weight`, are kept) or removed.
+The wizard generates a complete `config.yaml`. If a config already exists, it offers **edit mode**: pick any section to reconfigure without starting over. In the users section each existing user can be kept, edited (every prompt starts from the current value, and keys the wizard does not ask about, such as per-user exporters and `last_known_weight`, are kept) or removed. Saving an edit keeps the comments and key order of the file. A comment at the end of a line stays on that line when the wizard changes its value (check one like `# cm` after switching units), and the comments of a removed user go with that user.
+
+The wizard asks for the weight unit (kg or lbs) and height unit (cm or in) before the user profiles. Changing the height unit later in edit mode converts the heights already entered. A height set through an `${ENV_VAR}` reference lives in `.env`, which the wizard does not edit: it prints the converted value to set there instead.
+
+The token directories are mounted in the Docker command so the Garmin login and the Strava authorization the wizard runs are kept after the container exits. Create them first, as above: a directory Docker creates for a mount is owned by root, and the container does not run as root, so it could not write the tokens.
 
 ::: tip
-You don't need to edit `config.yaml` manually. The wizard handles everything, including BLE scale auto-discovery, Garmin authentication, and exporter connectivity tests.
+For a typical setup you don't need to edit `config.yaml` manually. The wizard covers BLE scale discovery, units, users, exporters, Garmin and Strava authorization, and exporter connectivity tests. Advanced keys (for example `display_unit`, `unknown_user` and the scale-specific `ble` options) are set by hand.
 :::
 
 ### Validation

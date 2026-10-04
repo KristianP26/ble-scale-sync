@@ -337,7 +337,7 @@ The **Authorization Callback Domain** must be set to `localhost`. During the OAu
 :::
 
 ::: tip Authentication
-After adding the Strava exporter to your config, run the setup script to authorize:
+The setup wizard offers Strava authorization after you add the exporter there (in edit mode, pick the **Strava Authorization** section). To authorize later, or for an exporter added by hand, run the setup script:
 
 **Standalone (Node.js):**
 
