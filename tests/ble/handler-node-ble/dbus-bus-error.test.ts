@@ -98,6 +98,20 @@ describe('D-Bus transport error handling (#290)', () => {
     expect(busOf(second)).not.toBe(busOf(first));
     expect(() => busOf(second).emit('error', new Error('write EPIPE'))).not.toThrow();
   });
+
+  it('does not condemn the current connection for an error on one already replaced (A-10)', async () => {
+    // dbus-next swaps message() for an error emitter once a destroyed bus sees
+    // `end`, so a late write through a proxy still holding the old bus reports
+    // `error` on THAT bus. The healthy replacement must not be torn down for it.
+    const first = getConnection() as unknown as { bluetooth: { dbus: EventEmitter } };
+    resetConnection();
+    await getAdapter();
+    expect(createBluetooth).toHaveBeenCalledTimes(2);
+
+    busOf(first).emit('error', new Error('Tried to write a message to a closed stream'));
+    await getAdapter();
+    expect(createBluetooth).toHaveBeenCalledTimes(2);
+  });
 });
 
 /**

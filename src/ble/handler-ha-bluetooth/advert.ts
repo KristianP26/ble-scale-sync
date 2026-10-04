@@ -30,8 +30,12 @@ function hexToBuffer(hex: string): Buffer {
 /** Map an HA advertisement onto the adapter-facing {@link BleDeviceInfo}. */
 export function toBleDeviceInfo(ad: HaAdvertisement): BleDeviceInfo {
   // HA reports the address as the name of a device that never sent one; the
-  // adapters expect an empty name in that case.
-  const name = ad.name && ad.name.toUpperCase() !== ad.address.toUpperCase() ? ad.name : '';
+  // adapters expect an empty name in that case. Compared without separators
+  // because BlueZ's generated Alias for a nameless device is the address with
+  // dashes, which an older bleak passed on as the name (current bleak drops it
+  // in device_name_from_props).
+  const bare = (s: string): string => s.replace(/[:-]/g, '').toUpperCase();
+  const name = ad.name && bare(ad.name) !== bare(ad.address) ? ad.name : '';
   const info: BleDeviceInfo = {
     localName: name,
     address: ad.address.toUpperCase(),

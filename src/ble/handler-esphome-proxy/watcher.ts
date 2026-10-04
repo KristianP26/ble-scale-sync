@@ -97,8 +97,9 @@ export class ReadingWatcher implements Watcher {
     bleLog.debug(`Nameless advertisement for ${addrLc}: using cached name "${safeName(cached)}"`);
     return { ...info, localName: cached };
   }
-  // LRU map (insertion-ordered): scales whose on-demand GATT connect failed,
-  // so we warn once instead of on every advertisement.
+  // LRU map (insertion-ordered): scales whose on-demand GATT read failed since
+  // their last success, so we warn once instead of on every advertisement and
+  // log the repeats at debug.
   private gattWarnedFor = new Map<string, true>();
   /** Weight-only fallback timer per address; on elapse the held reading is
    *  queued directly (no dedup — matches the prior grace-timer body). */
@@ -262,6 +263,8 @@ export class ReadingWatcher implements Watcher {
           GATT_SESSION_ABSOLUTE_MS,
           `GATT session cap exceeded for ${address}`,
         );
+        // A read that works again makes the next failure news, so it warns.
+        this.gattWarnedFor.delete(address);
         this.pushDeduped(address, raw, raw.reading.weight);
       } catch (e) {
         this.warnGattFailure(gattAdapter.name, address, errMsg(e));
@@ -280,6 +283,10 @@ export class ReadingWatcher implements Watcher {
     if (this.gattWarnedFor.has(address)) {
       this.gattWarnedFor.delete(address);
       this.gattWarnedFor.set(address, true);
+      // Not silent: the reason can change after the first warning (a transient
+      // failure, then a scale that breaks for good), and without this line a
+      // DEBUG log shows nothing a reporter could send (B-13).
+      bleLog.debug(`${adapterName} at ${address}: GATT read failed again (${reason})`);
       return;
     }
     if (this.gattWarnedFor.size >= GATT_WARN_LRU_MAX) {

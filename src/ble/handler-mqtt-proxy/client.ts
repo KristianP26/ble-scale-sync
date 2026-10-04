@@ -142,6 +142,39 @@ export async function getOrCreatePersistentClient(config: MqttProxyConfig): Prom
   return proxyState.pendingConnect;
 }
 
+/**
+ * End the persistent client, if there is one, and forget it.
+ *
+ * Nothing else ever closes it: left open, its socket to an external broker (or
+ * mqtt.js's reconnect timer once the embedded broker is gone) keeps the event
+ * loop alive, and every shutdown on this transport waited out the hard exit
+ * (B-16). Forced, because by the time this runs the watcher has unsubscribed
+ * and nothing is waiting on an in-flight publish. A connect still in flight is
+ * ended once it lands rather than awaited, so a slow broker cannot hold the
+ * shutdown either.
+ */
+export async function closePersistentClient(): Promise<void> {
+  const pending = proxyState.pendingConnect;
+  if (pending) {
+    pending
+      .then(async (late) => {
+        if (proxyState.persistentClient === late) proxyState.persistentClient = null;
+        await late.endAsync(true);
+      })
+      .catch(() => {
+        /* a connect that failed left nothing to close */
+      });
+  }
+  const client = proxyState.persistentClient;
+  proxyState.persistentClient = null;
+  if (!client) return;
+  try {
+    await client.endAsync(true);
+  } catch {
+    /* already closed */
+  }
+}
+
 /** Get the persistent client if connected, otherwise create an ephemeral one. */
 export async function getClient(
   config: MqttProxyConfig,

@@ -1,4 +1,9 @@
-import type { BleDeviceInfo, ScaleAdapter, UserProfile } from '../../interfaces/scale-adapter.js';
+import type {
+  BleDeviceInfo,
+  ScaleAdapter,
+  ScaleAuth,
+  UserProfile,
+} from '../../interfaces/scale-adapter.js';
 import type { MqttProxyConfig } from '../../config/schema.js';
 import type { RawReading } from '../shared.js';
 import { waitForRawReading } from '../shared.js';
@@ -25,6 +30,7 @@ import { AsyncQueue } from '../async-queue.js';
 import { topics } from './topics.js';
 import {
   type MqttClient,
+  closePersistentClient,
   getOrCreatePersistentClient,
   addDiscoveredMac,
   getDiscoveredMacs,
@@ -72,6 +78,12 @@ export class ReadingWatcher implements Watcher {
   private targetMac?: string;
   private config: MqttProxyConfig;
   private profile?: UserProfile;
+  /**
+   * Primary user's device auth (the Beurer consent PIN). Both GATT paths below
+   * used to pass undefined, so an adapter that authenticates in onConnected saw
+   * no PIN on this transport and asked for one that was already set (B-15).
+   */
+  private scaleAuth?: ScaleAuth;
   private gattInProgress = false;
   /** Monotonic id of the newest GATT session, so a superseded one cannot tear down its successor (#296). */
   private gattSessionSeq = 0;
@@ -117,11 +129,13 @@ export class ReadingWatcher implements Watcher {
     adapters: ScaleAdapter[],
     targetMac?: string,
     profile?: UserProfile,
+    scaleAuth?: ScaleAuth,
   ) {
     this.config = config;
     this.adapters = adapters;
     this.targetMac = targetMac;
     this.profile = profile;
+    this.scaleAuth = scaleAuth;
   }
 
   async start(): Promise<void> {
@@ -437,6 +451,11 @@ export class ReadingWatcher implements Watcher {
     }
     this._subscribedTopics = [];
 
+    // The watcher opened the persistent client in start(), so it closes it.
+    // Display publishes after this fall back to an ephemeral client, as they
+    // already do whenever the persistent one is not connected.
+    await closePersistentClient();
+
     this.started = false;
     this.lastAdvertAt = null;
     this._client = null;
@@ -453,12 +472,15 @@ export class ReadingWatcher implements Watcher {
     return this.lastAdvertAt;
   }
 
-  /** Update matching config (e.g. after SIGHUP config reload). scaleAuth is
-   *  ignored: the mqtt-proxy GATT path does not thread per-user auth. */
+  /**
+   * Update matching config (e.g. after SIGHUP config reload). scaleAuth is
+   * taken as given, unset included, so removing a PIN takes effect too.
+   */
   updateConfig(config: WatcherConfig): void {
     this.adapters = config.adapters;
     this.targetMac = config.targetMac;
     if (config.profile) this.profile = config.profile;
+    this.scaleAuth = config.scaleAuth;
   }
 
   private static readonly GATT_STALE_MS = 90_000;
@@ -614,7 +636,7 @@ export class ReadingWatcher implements Watcher {
               entry.address.replace(/[:-]/g, '').toUpperCase(),
               undefined,
               undefined,
-              undefined,
+              this.scaleAuth,
               onActivity,
             ),
           GATT_READING_IDLE_MS,
@@ -767,7 +789,7 @@ export class ReadingWatcher implements Watcher {
               data.address.replace(/[:-]/g, '').toUpperCase(),
               undefined,
               undefined,
-              undefined,
+              this.scaleAuth,
               onActivity,
             ),
           GATT_READING_IDLE_MS,

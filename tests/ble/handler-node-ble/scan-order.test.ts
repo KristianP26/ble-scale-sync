@@ -99,6 +99,7 @@ vi.mock('../../../src/ble/handler-node-ble/discovery.js', () => ({
   startDiscoverySafe: record('startDiscoverySafe', async () => undefined),
   removeDevice: record('removeDevice', async () => {}),
   stopDiscoveryAndQuiesce: record('stopDiscoveryAndQuiesce', async () => {}),
+  notifyDiscoveryStopped: record('notifyDiscoveryStopped'),
   autoDiscover: record('autoDiscover', async () => ({
     device: fakeDevice,
     adapter: makeAdapter(),
@@ -120,7 +121,7 @@ vi.mock('../../../src/ble/handler-node-ble/connect.js', () => ({
 
 vi.mock('../../../src/ble/handler-node-ble/gatt.js', () => ({
   buildCharMap: record('buildCharMap', async () => new Map()),
-  wrapDevice: record('wrapDevice', () => ({ onDisconnect: () => {} })),
+  wrapDevice: record('wrapDevice', () => ({ onDisconnect: () => {}, fireDisconnect: () => {} })),
   wrapChar: () => ({}),
 }));
 
@@ -252,11 +253,16 @@ describe('scanAndReadRaw call order (#368)', () => {
   });
 
   it('acquires the GATT server twice and builds the char map twice', async () => {
-    // Not redundant, and not to be deduplicated. The first acquire runs with
-    // the PRE-connect adapter and the second with the resolved one, and their
-    // requiresBonding can differ: that difference is the #290 bond-on-timeout
-    // gate. The first char map disambiguates adapters that share a vendor
-    // service, the second is the one the reading uses.
+    // Not redundant, and not to be deduplicated (review finding A-09 proposed
+    // reusing the first server). node-ble's GattServer.init() snapshots the
+    // services and characteristics once, and services(), getPrimaryService()
+    // and characteristics() only ever read that snapshot back, so the second
+    // acquire is the only point after the resolver where the D-Bus object tree
+    // is enumerated again. Reusing the first server would hand the reading the
+    // exact char map the resolver saw, and a characteristic BlueZ exported late
+    // (bluez/bluez#1489) could never reach it. The two acquires also run with
+    // different adapters for the #290 bond-on-timeout gate: the PRE-connect
+    // match first, the resolved one second.
     const seen = await run();
     expect(seen.filter((c) => c === 'device.gatt')).toHaveLength(2);
     expect(seen.filter((c) => c === 'buildCharMap')).toHaveLength(2);
@@ -314,6 +320,32 @@ describe('scanAndReadRaw call order (#368)', () => {
     expect(calls).not.toContain('resetConnection');
     expect(calls).not.toContain('resetAdapterBtmgmt');
     expect(calls).not.toContain('removeDevice');
+  });
+
+  it('ends the session when shut down mid-reading instead of waiting out the idle timeout (A-07)', async () => {
+    // A held reading never completes, so only the abort can end this cycle
+    // within the 5 s force-exit grace; the idle timeout would take 120 s.
+    holdNextReading = new Promise<void>(() => {});
+    const ctrl = new AbortController();
+    let settled: 'pending' | 'resolved' | 'rejected' = 'pending';
+    scanAndReadRaw({
+      targetMac: 'AA:BB:CC:DD:EE:FF',
+      adapters: [makeAdapter()],
+      profile: defaultProfile(),
+      abortSignal: ctrl.signal,
+    }).then(
+      () => (settled = 'resolved'),
+      () => (settled = 'rejected'),
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls).toContain('waitForRawReading');
+
+    ctrl.abort(new Error('shutdown'));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(settled).toBe('rejected');
+    // The shutdown branch of the teardown ran: D-Bus reset, no power-cycle.
+    expect(calls).toContain('resetConnection');
+    expect(calls).not.toContain('resetAdapterBtmgmt');
   });
 
   it('disconnects on the success path and again in the finally', async () => {

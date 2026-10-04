@@ -51,7 +51,12 @@ import {
 } from '../shared.js';
 import type { WeightUnit } from '../../config/schema.js';
 import type { ScaleAuth, ScaleReading, UserProfile } from '../../interfaces/scale-adapter.js';
-import { RAW_READING_TIMEOUT_MS, READING_SESSION_CAP_FACTOR, withIdleTimeout } from '../types.js';
+import {
+  RAW_READING_TIMEOUT_MS,
+  READING_SESSION_CAP_FACTOR,
+  untilAborted,
+  withIdleTimeout,
+} from '../types.js';
 import { tagBleFailure, bleFailureKind } from '../failure-kind.js';
 import { probeLiveness, makeLivenessAdapter } from './liveness.js';
 import { safeName } from '../advertisement.js';
@@ -253,6 +258,12 @@ export async function resolvePreConnectAdapter(
  * nothing claims the device. The char map it builds here is deliberately
  * discarded: the reading uses a fresh one built after the second
  * acquireGattServer, whose adapter may differ.
+ *
+ * That second acquire is not a duplicate of the one feeding this function.
+ * node-ble's GattServer.init() snapshots the services and characteristics, and
+ * every later services()/characteristics() call reads the snapshot back, so a
+ * new GattServer is the only way to see what BlueZ exported after the first
+ * enumeration (bluez/bluez#1489). Pinned by scan-order.test.ts.
  */
 export async function resolveAfterConnect(
   gatt: NodeBle.GattServer,
@@ -339,7 +350,6 @@ export async function buildCharMapWithRetry(
   return charMap;
 }
 
-/** Post-session cleanup. Everything here is best effort; nothing may throw out. */
 /** Whether the one-time info line for a disabled power-cycle was printed (#417). */
 let preemptiveSkipAnnounced = false;
 
@@ -348,6 +358,7 @@ export function _resetPreemptiveSkipNotice(): void {
   preemptiveSkipAnnounced = false;
 }
 
+/** Post-session cleanup. Everything here is best effort; nothing may throw out. */
 export async function teardownSession(opts: {
   device: Device | null;
   btAdapter: Adapter | undefined;
@@ -499,26 +510,33 @@ export async function readWithTimeouts(
     onLiveData?: (reading: ScaleReading) => void;
     scaleAuth?: ScaleAuth;
     readingTimeoutMs?: number;
+    abortSignal?: AbortSignal;
   },
 ): Promise<RawReading> {
   const idleMs = opts.readingTimeoutMs ?? RAW_READING_TIMEOUT_MS;
+  // A shutdown ends the session the same way a timeout does, through
+  // withAbandonmentCleanup, instead of waiting out an idle window of up to
+  // 120 s that the 5 s force-exit grace never lets finish (A-07).
   return await withAbandonmentCleanup(bleDevice, () =>
-    withIdleTimeout(
-      (onActivity) =>
-        waitForRawReading(
-          charMap,
-          bleDevice,
-          matchedAdapter,
-          opts.profile,
-          deviceMac.replace(/[:-]/g, '').toUpperCase(),
-          opts.weightUnit,
-          opts.onLiveData,
-          opts.scaleAuth,
-          onActivity,
-        ),
-      idleMs,
-      'Timed out waiting for a complete scale reading',
-      { ms: idleMs * READING_SESSION_CAP_FACTOR, message: 'GATT session cap exceeded' },
+    untilAborted(
+      withIdleTimeout(
+        (onActivity) =>
+          waitForRawReading(
+            charMap,
+            bleDevice,
+            matchedAdapter,
+            opts.profile,
+            deviceMac.replace(/[:-]/g, '').toUpperCase(),
+            opts.weightUnit,
+            opts.onLiveData,
+            opts.scaleAuth,
+            onActivity,
+          ),
+        idleMs,
+        'Timed out waiting for a complete scale reading',
+        { ms: idleMs * READING_SESSION_CAP_FACTOR, message: 'GATT session cap exceeded' },
+      ),
+      opts.abortSignal,
     ),
   );
 }

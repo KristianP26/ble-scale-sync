@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { networkInterfaces } from 'node:os';
-import { connectAsync } from 'mqtt';
+import { connectAsync, type MqttClient } from 'mqtt';
 import { startEmbeddedBroker } from '../../src/ble/embedded-broker.js';
 
 // Suppress log output during tests
@@ -131,6 +131,12 @@ describe('startEmbeddedBroker', () => {
     await expect(broker.close()).resolves.toBeUndefined();
   });
 
+  // B-19: the previous version of this test subscribed only to `ble-proxy/#`
+  // and then asserted that `rogue/topic` did not arrive, which it could not
+  // have with or without the ACL. A subscriber that is allowed to receive
+  // `rogue/topic` cannot exist while the subscribe ACL is in place either, so
+  // these assert what aedes does with a denied packet instead: it closes the
+  // offending client's connection, while an allowed one stays up.
   it('rejects publishes to topics outside the configured topic_prefix', async () => {
     const broker = await startEmbeddedBroker({
       port: 0,
@@ -151,19 +157,46 @@ describe('startEmbeddedBroker', () => {
       try {
         const received: string[] = [];
         subscriber.on('message', (t) => received.push(t));
-        // Subscribe inside prefix (allowed)
         await subscriber.subscribeAsync('ble-proxy/#');
-        // Publish inside prefix (should be delivered)
+        // Inside the prefix: delivered, and the publisher stays connected.
         await publisher.publishAsync('ble-proxy/esp32-ble-proxy/status', 'online');
-        // Publish outside prefix (should be dropped by broker ACL)
-        await publisher.publishAsync('rogue/topic', 'pwnd');
-        // Brief wait for delivery
-        await new Promise((r) => setTimeout(r, 100));
+        expect(await closesWithin(publisher, 200)).toBe(false);
         expect(received).toContain('ble-proxy/esp32-ble-proxy/status');
-        expect(received).not.toContain('rogue/topic');
+
+        // Outside the prefix: refused, which aedes enforces by dropping the
+        // publisher's connection.
+        const closed = closesWithin(publisher, 1000);
+        void publisher.publishAsync('rogue/topic', 'pwnd').catch(() => {});
+        expect(await closed).toBe(true);
       } finally {
-        await publisher.endAsync();
+        await publisher.endAsync(true);
         await subscriber.endAsync();
+      }
+    } finally {
+      await broker.close();
+    }
+  });
+
+  it('rejects subscribe filters that reach outside the configured topic_prefix', async () => {
+    const broker = await startEmbeddedBroker({
+      port: 0,
+      bindHost: '127.0.0.1',
+      topicPrefix: 'ble-proxy',
+    });
+    try {
+      for (const filter of ['#', 'rogue/#']) {
+        const client = await connectAsync(broker.url, {
+          clientId: `acl-sub-${filter.replace(/\W/g, '')}`,
+          clean: true,
+          reconnectPeriod: 0,
+        });
+        try {
+          const closed = closesWithin(client, 1000);
+          void client.subscribeAsync(filter).catch(() => {});
+          expect(await closed, `subscribe to "${filter}" was accepted`).toBe(true);
+        } finally {
+          await client.endAsync(true);
+        }
       }
     } finally {
       await broker.close();
@@ -223,6 +256,21 @@ describe('startEmbeddedBroker', () => {
     }
   });
 });
+
+/** Whether the client's connection closes within `ms`. */
+function closesWithin(client: MqttClient, ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      client.removeListener('close', onClose);
+      resolve(false);
+    }, ms);
+    const onClose = (): void => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    client.once('close', onClose);
+  });
+}
 
 function hasIpv6Loopback(): boolean {
   return Object.values(networkInterfaces()).some((list) =>

@@ -142,11 +142,20 @@ export function getConnection(): { bluetooth: NodeBle.Bluetooth; destroy: () => 
     // so the error handler fails it too rather than leaving it parked.
     let ended = false;
     attachBusErrorHandler(conn.bluetooth, (err) => {
+      // The listener outlives resetConnection(): a late write through a proxy
+      // still holding this bus emits `error` here after dbus-next has swapped
+      // message() on `end`. Latching then would tear down the healthy
+      // replacement on the next getAdapter() (A-10), the same reason the `end`
+      // handler below only counts a close on the current connection.
+      if (persistentConn !== conn) {
+        bleLog.debug(`D-Bus error on an already replaced connection (ignored): ${errMsg(err)}`);
+        return;
+      }
       busFailed = true;
       bleLog.warn(
         `D-Bus transport error: ${errMsg(err)}. The connection will be rebuilt before the next scan.`,
       );
-      if (ended && persistentConn === conn) failPendingCalls(bus);
+      if (ended) failPendingCalls(bus);
     });
     attachBusEndHandler(conn.bluetooth, () => {
       ended = true;

@@ -314,6 +314,16 @@ function blob(data: Buffer): string {
  * arrive intact. U+2028 and U+2029 are line breaks to anything that splits on
  * Unicode newlines rather than on LF.
  */
+export function safeName(name: string | undefined): string {
+  if (!name) return '';
+  return name.replace(/[\\\x00-\x1f\x7f-\x9f\u2028\u2029]/g, (c) => {
+    const code = c.charCodeAt(0);
+    return code > 0xff
+      ? `\\u${code.toString(16).padStart(4, '0')}`
+      : `\\x${code.toString(16).padStart(2, '0')}`;
+  });
+}
+
 /**
  * The emit step every watcher shares: dedup, announce, queue.
  *
@@ -349,16 +359,6 @@ export function emitDeduped(
   return true;
 }
 
-export function safeName(name: string | undefined): string {
-  if (!name) return '';
-  return name.replace(/[\\\x00-\x1f\x7f-\x9f\u2028\u2029]/g, (c) => {
-    const code = c.charCodeAt(0);
-    return code > 0xff
-      ? `\\u${code.toString(16).padStart(4, '0')}`
-      : `\\x${code.toString(16).padStart(2, '0')}`;
-  });
-}
-
 /**
  * One-line summary of everything an adapter's `matches()` is allowed to see.
  *
@@ -367,8 +367,9 @@ export function safeName(name: string | undefined): string {
  * pasted log needs the exact inputs, so this prints the whole `BleDeviceInfo`
  * rather than a summary of it.
  *
- * The address is passed separately because `BleDeviceInfo` deliberately does not
- * carry one: matching is on advertised content, never on who sent it.
+ * The address is passed separately because `BleDeviceInfo.address` is optional
+ * and not every path fills it, while every caller of this line knows which
+ * device the advert came from.
  */
 export function formatAdvert(address: string, info: BleDeviceInfo): string {
   // Canonical uppercase form: the transports hand addresses over in different

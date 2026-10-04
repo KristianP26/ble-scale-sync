@@ -49,6 +49,16 @@ describe('toBleDeviceInfo (Home Assistant advertisement)', () => {
     );
   });
 
+  it("treats BlueZ's generated alias (the address with dashes) as no name (B-17)", () => {
+    // BlueZ answers Alias for a nameless device with its address, colons
+    // replaced by dashes. Current bleak filters that out
+    // (device_name_from_props), an older one handed it on as the name.
+    expect(toBleDeviceInfo(ad({ name: 'AA-BB-CC-DD-EE-FF' })).localName).toBe('');
+    expect(toBleDeviceInfo(ad({ name: 'aa-bb-cc-dd-ee-ff' })).localName).toBe('');
+    // A different device's address is still a (strange) name, not this one's.
+    expect(toBleDeviceInfo(ad({ name: '11-22-33-44-55-66' })).localName).toBe('11-22-33-44-55-66');
+  });
+
   it('omits empty manufacturer and service data', () => {
     const info = toBleDeviceInfo(ad({ manufacturer_data: { '76': '' }, service_data: {} }));
     expect(info.manufacturerData).toBeUndefined();

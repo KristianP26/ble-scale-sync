@@ -279,10 +279,16 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
       const localName = peripheral.advertisement?.localName ?? '';
       const svcUuids = (peripheral.advertisement?.serviceUuids ?? []).map(normalizeUuid);
       const mfgData = parseMfgData(peripheral.advertisement?.manufacturerData);
+      // Same fields as discoverPeripheral builds, address and service data
+      // included: adapters that match on the MAC echo or on service data would
+      // otherwise be reported here as unrecognised while the read path picks
+      // them (B-14).
       const info: BleDeviceInfo = {
         localName,
+        address: peripheral.address ? formatMac(peripheral.address) : undefined,
         serviceUuids: svcUuids,
         manufacturerData: mfgData,
+        serviceData: parseServiceData(peripheral),
       };
       const matched = resolveAdapter(info, adapters);
 

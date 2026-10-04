@@ -1142,6 +1142,19 @@ describe('handler-mqtt-proxy', () => {
   });
 
   describe('ReadingWatcher', () => {
+    // B-16: stop() unsubscribed and dropped its listeners but left the
+    // persistent client it had opened connected. Its socket (or, once the
+    // embedded broker is gone, mqtt.js's reconnect timer) then pinned the event
+    // loop, so every shutdown on this transport waited out the 5 s hard exit.
+    it('ends the persistent MQTT client it opened when stopped', async () => {
+      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [createBroadcastAdapter()]);
+      await watcher.start();
+      expect(mockClient.endAsync).not.toHaveBeenCalled();
+
+      await watcher.stop();
+      expect(mockClient.endAsync).toHaveBeenCalledTimes(1);
+    });
+
     // #281: a wedged proxy and a house nobody has weighed in at both park
     // nextReading() forever. Advertisements are the only thing that tells them
     // apart, and they have to be counted BEFORE the targetMac filter, because
@@ -1603,6 +1616,35 @@ describe('handler-mqtt-proxy', () => {
         (c: unknown[]) => c[0] === `${PREFIX}/connect`,
       );
       expect(JSON.parse(connectCalls[0][1] as string).addr_type).toBe(1);
+    });
+
+    // B-18: the single-shot read had no deadline of its own. An ESP32 that drops
+    // off Wi-Fi mid-session sends no `disconnected`, so only the 15 min poll
+    // cycle cap ended the run, and that one abandons rather than cleans up.
+    it('ends a single-shot GATT read the scale never answers, and disconnects', async () => {
+      vi.useFakeTimers();
+      try {
+        wireGattFlow({ skipNotify: true });
+        let outcome: unknown = 'pending';
+        void scanAndReadRaw({
+          adapters: [createGattAdapter()],
+          profile: PROFILE,
+          mqttProxy: MQTT_PROXY_CONFIG,
+          readingTimeoutMs: 5_000,
+        }).then(
+          () => (outcome = 'resolved'),
+          (err: Error) => (outcome = err.message),
+        );
+
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(outcome).toMatch(/Timed out waiting for a complete scale reading/);
+        const disconnects = (mockClient.publishAsync as ReturnType<typeof vi.fn>).mock.calls.filter(
+          (c: unknown[]) => c[0] === `${PREFIX}/disconnect`,
+        );
+        expect(disconnects).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('always disconnects after GATT reading (even on error)', async () => {
@@ -2144,6 +2186,88 @@ describe('handler-mqtt-proxy', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    // B-15: both watcher GATT paths passed `undefined` for scaleAuth, so an
+    // adapter that authenticates in onConnected (the Beurer consent PIN) saw no
+    // PIN on this transport and told the user to set one they had already set.
+    describe('scaleAuth reaches the adapter on both watcher GATT paths (B-15)', () => {
+      const AUTH = { pin: 1234 };
+
+      function authCapturingAdapter(): { adapter: ScaleAdapter; seen: unknown[] } {
+        const seen: unknown[] = [];
+        const adapter = createGattAdapter();
+        adapter.onConnected = vi.fn(async (ctx) => {
+          seen.push(ctx.scaleAuth);
+          await ctx.write(GATT_WRITE_UUID, [0xa5, 0x01]);
+        });
+        return { adapter, seen };
+      }
+
+      function answerWritesWithReading(): void {
+        const origPublish = mockClient.publishAsync;
+        mockClient.publishAsync = vi.fn(async (topic: string, payload?: string | Buffer) => {
+          if (topic === `${PREFIX}/connect`) {
+            queueMicrotask(() =>
+              mockClient._simulateMessage(
+                `${PREFIX}/connected`,
+                JSON.stringify({
+                  chars: [
+                    { uuid: GATT_NOTIFY_UUID, properties: ['notify'] },
+                    { uuid: GATT_WRITE_UUID, properties: ['write'] },
+                  ],
+                }),
+              ),
+            );
+          }
+          if (topic === `${PREFIX}/write/${GATT_WRITE_UUID}`) {
+            queueMicrotask(() => {
+              const buf = Buffer.alloc(4);
+              buf.writeUInt16LE(8000, 0);
+              buf.writeUInt16LE(450, 2);
+              mockClient._simulateMessage(`${PREFIX}/notify/${GATT_NOTIFY_UUID}`, buf);
+            });
+          }
+          return origPublish(topic, payload);
+        });
+      }
+
+      it('autonomous connect, with the auth given at construction', async () => {
+        const { adapter, seen } = authCapturingAdapter();
+        const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter], undefined, PROFILE, AUTH);
+        await watcher.start();
+        answerWritesWithReading();
+        mockClient._simulateMessage(
+          `${PREFIX}/connected`,
+          JSON.stringify({
+            autonomous: true,
+            address: 'AA:BB:CC:DD:EE:FF',
+            chars: [
+              { uuid: GATT_NOTIFY_UUID, properties: ['notify'] },
+              { uuid: GATT_WRITE_UUID, properties: ['write'] },
+            ],
+          }),
+        );
+        await watcher.nextReading();
+        expect(seen).toEqual([AUTH]);
+      });
+
+      it('host-initiated connect, with the auth from a config reload', async () => {
+        const { adapter, seen } = authCapturingAdapter();
+        const config = { ...MQTT_PROXY_CONFIG, auto_connect: false };
+        const watcher = new ReadingWatcher(config, [adapter], undefined, PROFILE);
+        watcher.updateConfig({ adapters: [adapter], profile: PROFILE, scaleAuth: AUTH });
+        await watcher.start();
+        answerWritesWithReading();
+        mockClient._simulateMessage(
+          `${PREFIX}/scan/results`,
+          JSON.stringify([
+            { address: 'AA:BB:CC:DD:EE:FF', name: 'GattScale', rssi: -50, services: [] },
+          ]),
+        );
+        await watcher.nextReading();
+        expect(seen).toEqual([AUTH]);
+      });
     });
 
     it('ReadingWatcher ignores autonomous connect when no adapter matches', async () => {

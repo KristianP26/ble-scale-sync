@@ -170,7 +170,13 @@ export async function createReadingSource(opts: ReadingSourceOptions): Promise<R
   const key = resolveHandlerKey(opts.bleHandler);
 
   if (key === 'mqtt-proxy' && opts.mqttProxy) {
-    const watcher = new ReadingWatcher(opts.mqttProxy, opts.adapters, opts.targetMac, opts.profile);
+    const watcher = new ReadingWatcher(
+      opts.mqttProxy,
+      opts.adapters,
+      opts.targetMac,
+      opts.profile,
+      opts.scaleAuth,
+    );
     return { kind: 'watcher', watcher, failureLogPrefix: 'Error processing reading' };
   }
 

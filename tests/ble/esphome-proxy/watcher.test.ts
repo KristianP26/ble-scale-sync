@@ -16,6 +16,9 @@ const fireDisconnectSpy = vi.fn();
 // When set, connectGatt hands back a session that never notifies and whose
 // device never reports a disconnect - an ESP32 that dropped off Wi-Fi mid-read.
 let hangSession = false;
+// When set, connectGatt rejects with this reason (a full proxy slot, a peer
+// that refuses the link).
+let failConnectWith: string | null = null;
 
 vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
   class FakeEsphomeProxyPool {
@@ -34,6 +37,7 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
     }
     async connectGatt(mac: string) {
       connectGattSpy(mac);
+      if (failConnectWith !== null) throw new Error(failConnectWith);
       if (hangSession) {
         const silent: BleChar = {
           async read() {
@@ -88,6 +92,7 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
 });
 
 const { ReadingWatcher } = await import('../../../src/ble/handler-esphome-proxy/watcher.js');
+const { bleLog } = await import('../../../src/ble/types.js');
 
 const config = { host: 'p1', port: 6053, client_info: 'x', additional_proxies: [] } as never;
 
@@ -176,6 +181,55 @@ describe('ReadingWatcher GATT continuous (#116)', () => {
     } finally {
       hangSession = false;
       vi.useRealTimers();
+    }
+  });
+});
+
+describe('ReadingWatcher GATT failure logging (B-13)', () => {
+  it('keeps reporting why a scale fails after the first warning', async () => {
+    // The first failure for an address warns. Every later one used to say
+    // nothing at all, at any level, so a scale that broke for good after one
+    // transient failure left only "opening GATT via ESPHome proxy" in the log.
+    const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const watcher = new ReadingWatcher(config, [gattAdapter()]);
+    await watcher.start();
+    const pool = (
+      watcher as unknown as {
+        pool: { emitAdvert: (info: BleDeviceInfo, mac: string) => void };
+      }
+    ).pool;
+    const info: BleDeviceInfo = { localName: 'GATT-scale', serviceUuids: [] };
+    const mac = 'AA:BB:CC:DD:EE:04';
+    const settle = () => new Promise((r) => setImmediate(r));
+    const logged = (spy: typeof warn) => spy.mock.calls.map((c) => String(c[0])).join(' | ');
+
+    try {
+      failConnectWith = 'first-reason';
+      pool.emitAdvert(info, mac);
+      await settle();
+      expect(logged(warn)).toContain('first-reason');
+
+      failConnectWith = 'second-reason';
+      pool.emitAdvert(info, mac);
+      await settle();
+      expect(logged(warn)).not.toContain('second-reason');
+      expect(logged(debug)).toContain('second-reason');
+
+      // A success clears the record, so the next failure is news again.
+      failConnectWith = null;
+      pool.emitAdvert(info, mac);
+      await watcher.nextReading();
+      await settle();
+      failConnectWith = 'third-reason';
+      pool.emitAdvert(info, mac);
+      await settle();
+      expect(logged(warn)).toContain('third-reason');
+    } finally {
+      failConnectWith = null;
+      warn.mockRestore();
+      debug.mockRestore();
+      await watcher.stop();
     }
   });
 });

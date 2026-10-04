@@ -226,6 +226,39 @@ export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> 
   });
 }
 
+/**
+ * Settle with `promise`, or reject as soon as `signal` aborts.
+ *
+ * Like withTimeout this abandons the raced promise rather than cancelling it,
+ * so the caller still owns whatever that promise holds. The listener is removed
+ * on every path because continuous mode reuses one signal for every cycle, and
+ * a listener left behind per call is a MaxListenersExceededWarning and then a
+ * leak for the life of the process.
+ */
+export function untilAborted<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) {
+    // The raced promise still needs a handler, or its later rejection would
+    // surface as unhandled.
+    promise.catch(() => {});
+    return Promise.reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (err: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(err);
+      },
+    );
+  });
+}
+
 // Canonical home is src/utils/timeout.ts: the MQTT exporter needs it too, and
 // an exporter importing from the BLE layer would be the wrong way round.
 // Re-exported here so the BLE call sites keep their existing import.

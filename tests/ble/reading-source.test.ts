@@ -46,7 +46,7 @@ afterEach(() => {
 });
 
 describe('createReadingSource (#246)', () => {
-  it('mqtt-proxy returns a watcher with 4 ctor args (scaleAuth dropped) + mqtt prefix', async () => {
+  it('mqtt-proxy returns a watcher with scaleAuth forwarded + mqtt prefix', async () => {
     const mqttProxy = { broker_url: 'x' } as never;
     const plan = await createReadingSource({
       bleHandler: 'mqtt-proxy',
@@ -60,12 +60,14 @@ describe('createReadingSource (#246)', () => {
     if (plan.kind !== 'watcher') return;
     expect(plan.failureLogPrefix).toBe('Error processing reading');
     expect(plan.watcher).toBeInstanceOf(h.FakeMqttWatcher);
-    // 4-arg ctor: scaleAuth is NOT forwarded to the mqtt watcher.
+    // scaleAuth is forwarded like it is to the ESPHome watcher. Dropping it here
+    // left a configured consent PIN unseen on this transport (B-15).
     expect((plan.watcher as unknown as { args: unknown[] }).args).toEqual([
       mqttProxy,
       ADAPTERS,
       'AA:BB:CC:DD:EE:FF',
       PROFILE,
+      AUTH,
     ]);
   });
 

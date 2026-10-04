@@ -14,7 +14,15 @@ import {
   readsFromAdvertisement,
   safeName,
 } from '../advertisement.js';
-import { bleLog, normalizeUuid, withTimeout, formatMac } from '../types.js';
+import {
+  bleLog,
+  normalizeUuid,
+  withTimeout,
+  withIdleTimeout,
+  formatMac,
+  RAW_READING_TIMEOUT_MS,
+  READING_SESSION_CAP_FACTOR,
+} from '../types.js';
 import { COMMAND_TIMEOUT_MS, topics, type Topics } from './topics.js';
 import { type MqttClient, createMqttClient } from './client.js';
 import { mqttGattConnect, mqttGattDisconnect } from './gatt.js';
@@ -245,16 +253,29 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
           refused = { address: entry.address, name: resolved.name };
           continue;
         }
+        // Bounded like the node-ble and noble reads. An ESP32 that drops off
+        // Wi-Fi mid-session sends no `disconnected`, so without this the read
+        // waited for as long as the caller's own deadline allowed, if it had
+        // one, and that kind of deadline abandons rather than cleans up
+        // (B-18). A timeout here goes through withAbandonmentCleanup.
+        const idleMs = opts.readingTimeoutMs ?? RAW_READING_TIMEOUT_MS;
         const raw = await withAbandonmentCleanup(device, () =>
-          waitForRawReading(
-            charMap,
-            device,
-            resolved,
-            opts.profile,
-            entry.address.replace(/[:-]/g, '').toUpperCase(),
-            opts.weightUnit,
-            opts.onLiveData,
-            opts.scaleAuth,
+          withIdleTimeout(
+            (onActivity) =>
+              waitForRawReading(
+                charMap,
+                device,
+                resolved,
+                opts.profile,
+                entry.address.replace(/[:-]/g, '').toUpperCase(),
+                opts.weightUnit,
+                opts.onLiveData,
+                opts.scaleAuth,
+                onActivity,
+              ),
+            idleMs,
+            'Timed out waiting for a complete scale reading',
+            { ms: idleMs * READING_SESSION_CAP_FACTOR, message: 'GATT session cap exceeded' },
           ),
         );
         registerScaleMac(config, entry.address, resolved).catch(() => {});
