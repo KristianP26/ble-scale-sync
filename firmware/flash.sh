@@ -275,9 +275,10 @@ erase_and_flash() {
 
 install_libs() {
   local port="$1"
-  # aioble is from micropython-lib, version tracks MicroPython release (no separate pinning)
+  # Same specs as mip-packages.txt (tests/test_flash_tooling.py keeps them in
+  # sync). aioble is pinned: the firmware relies on its internals.
   blue "Installing aioble..."
-  mpremote connect "$port" mip install aioble
+  mpremote connect "$port" mip install "aioble@0.6.2"
 
   blue "Installing mqtt_as (Peter Hinch)..."
   mpremote connect "$port" mip install "github:peterhinch/micropython-mqtt@70b56a7a4aaf"

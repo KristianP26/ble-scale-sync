@@ -2,10 +2,12 @@
 """Capture a screenshot from the ESP32 display via MQTT.
 
 Usage:
-    python3 firmware/tools/capture_screenshot.py [output.png]
+    BROKER=<host> [MQTT_PORT=1883] [MQTT_USER=... MQTT_PASSWORD=...] \\
+    [BASE=ble-proxy/esp32-ble-proxy] python3 firmware/tools/capture_screenshot.py [output.png]
 
 Triggers a screenshot, receives RGB565 data over MQTT, converts to PNG.
 Waits patiently for chunks that arrive between BLE scan WiFi drops.
+The ESP32 refuses the request while a BLE connection is in progress.
 """
 
 import os
@@ -13,9 +15,14 @@ import sys
 import struct
 import time
 
-# ── Configuration ───────────────────────────────────────
-# Override via environment variables, or edit these defaults.
-BROKER = os.environ.get("BROKER", "10.1.1.15")
+# ── Configuration (environment variables) ──────────────
+# BROKER is the broker the ESP32 uses (mqtt_broker in its config.json).
+# MQTT_USER / MQTT_PASSWORD are needed whenever the broker requires a login,
+# e.g. the app's embedded broker on a LAN interface.
+BROKER = os.environ.get("BROKER")
+MQTT_PORT = os.environ.get("MQTT_PORT", "1883")
+MQTT_USER = os.environ.get("MQTT_USER")
+MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD")
 BASE = os.environ.get("BASE", "ble-proxy/esp32-ble-proxy")
 OUTPUT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/screenshot.png"
 
@@ -24,6 +31,13 @@ EXPECTED_SIZE = W * H * 2  # RGB565
 
 
 def main():
+    if not BROKER:
+        sys.exit("Set BROKER to the MQTT broker host the ESP32 uses (mqtt_broker in its config.json)")
+    try:
+        port = int(MQTT_PORT)
+    except ValueError:
+        sys.exit(f"MQTT_PORT must be a number, got {MQTT_PORT!r}")
+
     import paho.mqtt.client as mqtt
 
     CHUNK_SIZE = 4096
@@ -41,7 +55,9 @@ def main():
 
     client = mqtt.Client()
     client.on_message = on_message
-    client.connect(BROKER)
+    if MQTT_USER:
+        client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
+    client.connect(BROKER, port)
     client.subscribe(f"{BASE}/screenshot/#", qos=1)
     client.loop_start()
 

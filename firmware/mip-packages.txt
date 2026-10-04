@@ -1,8 +1,17 @@
-# MicroPython libraries — installed via mpremote mip (not pip)
-# See flash.sh for the install commands
+# MicroPython libraries, installed via mpremote mip (not pip).
+# flash.sh installs exactly these specs, in this order (guarded by
+# tests/test_flash_tooling.py).
 #
-# aioble tracks MicroPython releases (part of micropython-lib, no independent versioning).
-# Tested with MicroPython v1.24.x.
-aioble
+# aioble is pinned to a micropython-lib index release; mip fetches the
+# precompiled .mpy files for the device's bytecode version. The firmware uses
+# aioble internals (aioble.core.ble_irq, discovery, subscribe), and the
+# central, client, core and device modules are unchanged from 0.6.0 to 0.6.2.
+# Bump it deliberately and test a GATT connect on hardware when you do.
+# GitHub specs are package path first, then @commit: mpremote splits at "@",
+# so a path after the commit is taken as part of the branch name.
+#
+# MicroPython itself: flash.sh flashes v1.27.0, drivers/build.sh builds
+# v1.24.1 for the Guition 4848 (both use .mpy version 6).
+aioble@0.6.2
 github:peterhinch/micropython-mqtt@70b56a7a4aaf
-github:peterhinch/micropython-async@68b5f01e999b/v3/primitives
+github:peterhinch/micropython-async/v3/primitives@68b5f01e999b

@@ -32,18 +32,31 @@ CONNECT_DISCOVERY_RESERVE_MS = 2000
 CONNECT_MIN_ATTEMPT_MS = 1000
 
 
+# ESP-IDF MALLOC_CAP_INTERNAL (components/heap/include/esp_heap_caps.h). The
+# esp32 module only names HEAP_DATA (MALLOC_CAP_8BIT) and HEAP_EXEC, but
+# idf_heap_info() takes any capability mask.
+_MALLOC_CAP_INTERNAL = 1 << 11
+
+
 def _read_idf_heap():
-    """Return (free, largest) ESP-IDF data-heap bytes on-device, None off-device.
+    """Return (free, largest) internal ESP-IDF data-heap bytes on-device, None off-device.
 
     NimBLE allocates its connection structures from the ESP-IDF heap, which is
     separate from the MicroPython GC heap. Reading it requires the frozen
     `esp32` builtin, absent on a host, so this returns None there and every
     caller treats None as "cannot read, do not gate" (#139).
+
+    Only internal RAM is counted. NimBLE allocates with MALLOC_CAP_INTERNAL |
+    MALLOC_CAP_8BIT (ESP-IDF's default BT_NIMBLE_MEM_ALLOC_MODE_INTERNAL, which
+    MicroPython's sdkconfig does not change), while the SPIRAM builds add PSRAM
+    to the IDF heap as an 8-bit region. HEAP_DATA alone would count megabytes
+    of PSRAM on an S3 board. On boards without PSRAM every 8-bit region is
+    internal, so the result there is the same as with HEAP_DATA.
     """
     try:
         import esp32
 
-        regions = esp32.idf_heap_info(esp32.HEAP_DATA)
+        regions = esp32.idf_heap_info(esp32.HEAP_DATA | _MALLOC_CAP_INTERNAL)
         free = sum(r[1] for r in regions)
         largest = max(r[2] for r in regions)
         return (free, largest)

@@ -19,9 +19,58 @@ if board.HAS_BEEP:
 if board.HAS_DISPLAY:
     import ui
 
-# Load config
-with open("config.json") as f:
-    cfg = json.load(f)
+
+# ─── config.json ──────────────────────────────────────────────────────────────
+
+# Keys main.py cannot start without. wifi_ssid and wifi_password may be empty
+# strings (an open network); the rest must be non-empty.
+REQUIRED_CONFIG_KEYS = ("wifi_ssid", "wifi_password", "mqtt_broker", "mqtt_port", "device_id", "topic_prefix")
+_NON_EMPTY_CONFIG_KEYS = ("mqtt_broker", "device_id", "topic_prefix")
+
+
+def config_problems(c):
+    """Return a list of readable problems with a parsed config.json, empty if none."""
+    if not isinstance(c, dict):
+        return ["it must hold a JSON object like config.json.example"]
+    problems = []
+    missing = [k for k in REQUIRED_CONFIG_KEYS if c.get(k) is None]
+    if missing:
+        problems.append("missing required key(s): " + ", ".join(missing))
+    for k in _NON_EMPTY_CONFIG_KEYS:
+        if k not in missing and (not isinstance(c[k], str) or not c[k]):
+            problems.append(f"{k} must be a non-empty string")
+    for k in ("wifi_ssid", "wifi_password"):
+        if k not in missing and not isinstance(c[k], str):
+            problems.append(f"{k} must be a string")
+    port = c.get("mqtt_port")
+    # bool is an int subclass, so it is excluded explicitly.
+    if "mqtt_port" not in missing and (type(port) is not int or not 0 < port < 65536):
+        problems.append("mqtt_port must be a number from 1 to 65535, without quotes")
+    return problems
+
+
+def load_config(path="config.json"):
+    """Read and check config.json, raising an error that names what is wrong.
+
+    A broken config never heals by itself, so this fails at boot with a clear
+    message on the serial console instead of a bare KeyError further down.
+    """
+    try:
+        with open(path) as f:
+            text = f.read()
+    except OSError as e:
+        raise OSError(f"{path} cannot be read ({e}). Copy config.json.example to {path}, edit it and upload it with ./flash.sh --app-only")
+    try:
+        c = json.loads(text)
+    except ValueError as e:
+        raise ValueError(f"{path} is not valid JSON ({e}). Compare it with config.json.example")
+    problems = config_problems(c)
+    if problems:
+        raise ValueError(f"{path}: " + "; ".join(problems) + " (see config.json.example)")
+    return c
+
+
+cfg = load_config()
 
 PREFIX = cfg["topic_prefix"]
 DEVICE_ID = cfg["device_id"]
@@ -83,7 +132,9 @@ _pending = []
 
 # Scale MAC detection for instant beep
 _scale_macs = set()
-_last_beep_time = 0
+# ticks_ms of the last scale beep, None when there is none within the debounce.
+_last_beep_time = None
+SCALE_BEEP_DEBOUNCE_MS = 60000
 
 # Autonomous GATT connect: ESP32 connects itself when a known scale MAC
 # appears in a scan, eliminating the MQTT round-trip latency (#201).
@@ -266,6 +317,7 @@ def error_payload(message, op, address=None, uuid=None):
 
 async def publish_error(message, op="command", address=None, uuid=None):
     """Publish an error message so the host doesn't hang waiting for a response."""
+    print(f"Error ({op}): {message}")
     try:
         await client.publish(topic("error"), error_payload(message, op, address, uuid), qos=0)
     except Exception:
@@ -277,7 +329,6 @@ def describe_exc(e):
     exceptions (e.g. asyncio.TimeoutError), so fall back to the type name —
     otherwise the host only sees a blank "ESP32 error:" (#201)."""
     return str(e) or type(e).__name__
-    print(f"Error: {message}")
 
 
 def _error_context(t, msg):
@@ -308,10 +359,27 @@ async def _wait_not_busy(max_iters=60, sleep_ms=500):
 
 # ─── Autonomous scan loop ────────────────────────────────────────────────────
 
+def _beep_debounced(now):
+    """True while the last scale beep is under SCALE_BEEP_DEBOUNCE_MS old.
+
+    ticks_diff() is only meaningful within half the tick period (about 6.2
+    days on the ESP32 port) and turns negative past it, so an expired mark is
+    dropped here instead of being compared again later. Scan results arrive
+    every few seconds, which runs this long before any wrap.
+    """
+    global _last_beep_time
+    if _last_beep_time is None:
+        return False
+    if 0 <= time.ticks_diff(now, _last_beep_time) < SCALE_BEEP_DEBOUNCE_MS:
+        return True
+    _last_beep_time = None
+    return False
+
+
 def _check_scale_beep(results):
     """Beep/display if a known scale MAC is present (60s debounce)."""
     global _last_beep_time
-    if _scale_macs and time.ticks_diff(time.ticks_ms(), _last_beep_time) > 60000:
+    if not _beep_debounced(time.ticks_ms()) and _scale_macs:
         for r in results:
             if r["address"] in _scale_macs:
                 _last_beep_time = time.ticks_ms()
@@ -832,6 +900,50 @@ async def handle_read(uuid_str):
     await client.publish(topic(f"read/{uuid_str}/response"), data, qos=0)
 
 
+SCREENSHOT_CHUNK = 4096
+
+
+async def handle_screenshot():
+    """Publish the display framebuffer in chunks (display boards only).
+
+    About 113 QoS 1 chunks, each waiting for its PUBACK, during which this loop
+    handles no other command. A GATT connect or session needs the loop for its
+    write/ and read/ commands, so the request is refused while one is being
+    made or is up, and a transfer stops when one starts.
+    """
+    if _scan_paused or _busy or _host_connect_pending:
+        await publish_error("Screenshot refused: a BLE connection is in progress", "screenshot")
+        return
+    try:
+        # Read directly from DMA framebuffer (not LVGL snapshot)
+        fb = board.display_dev.framebuffer(0)
+        if not fb:
+            print("Screenshot failed")
+            return
+        raw = bytes(fb)
+        gc.collect()
+        total = len(raw)
+        n_chunks = (total + SCREENSHOT_CHUNK - 1) // SCREENSHOT_CHUNK
+        await client.publish(topic("screenshot/info"), json.dumps({
+            "w": board.DISPLAY_WIDTH, "h": board.DISPLAY_HEIGHT, "fmt": "rgb565", "size": total, "chunks": n_chunks
+        }), qos=1)
+        for i in range(n_chunks):
+            # The scan task may start an autonomous connect meanwhile.
+            if _scan_paused or _busy:
+                await publish_error("Screenshot aborted: a BLE connection started", "screenshot")
+                return
+            chunk = raw[i * SCREENSHOT_CHUNK : (i + 1) * SCREENSHOT_CHUNK]
+            await client.publish(topic(f"screenshot/{i}"), chunk, qos=1)
+            await asyncio.sleep_ms(20)
+        await client.publish(topic("screenshot/done"), str(n_chunks), qos=1)
+        print(f"Screenshot sent: {n_chunks} chunks")
+        gc.collect()
+    except Exception as e:
+        import sys
+
+        sys.print_exception(e)
+
+
 # ─── Connection monitor (display boards only) ────────────────────────────────
 
 if board.HAS_DISPLAY:
@@ -929,6 +1041,8 @@ async def main():
                 elif t == topic("beep"):
                     if board.HAS_BEEP:
                         if msg:
+                            # beep() caps all three values: it blocks this loop
+                            # for the length of the tone.
                             d = json.loads(msg)
                             beep(d.get("freq", 1000), d.get("duration", 200), d.get("repeat", 1))
                         else:
@@ -954,31 +1068,7 @@ async def main():
                         )
                 elif t == topic("screenshot"):
                     if board.HAS_DISPLAY:
-                        try:
-                            # Read directly from DMA framebuffer (not LVGL snapshot)
-                            fb = board.display_dev.framebuffer(0)
-                            if fb:
-                                raw = bytes(fb)
-                                gc.collect()
-                                # Publish in 4KB chunks over MQTT
-                                CHUNK = 4096
-                                total = len(raw)
-                                n_chunks = (total + CHUNK - 1) // CHUNK
-                                await client.publish(topic("screenshot/info"), json.dumps({
-                                    "w": board.DISPLAY_WIDTH, "h": board.DISPLAY_HEIGHT, "fmt": "rgb565", "size": total, "chunks": n_chunks
-                                }), qos=1)
-                                for i in range(n_chunks):
-                                    chunk = raw[i * CHUNK : (i + 1) * CHUNK]
-                                    await client.publish(topic(f"screenshot/{i}"), chunk, qos=1)
-                                    await asyncio.sleep_ms(20)
-                                await client.publish(topic("screenshot/done"), str(n_chunks), qos=1)
-                                print(f"Screenshot sent: {n_chunks} chunks")
-                                gc.collect()
-                            else:
-                                print("Screenshot failed")
-                        except Exception as e:
-                            import sys
-                            sys.print_exception(e)
+                        await handle_screenshot()
                 elif t.startswith(topic("subscribe/")):
                     uuid_str = t[len(topic("subscribe/")):]
                     await handle_subscribe(uuid_str)

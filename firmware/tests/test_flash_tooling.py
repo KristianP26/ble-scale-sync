@@ -83,5 +83,52 @@ class FlashToolingTest(unittest.TestCase):
             self.assertIn("==", pin, f"host tool `{pin}` is not pinned to an exact version")
 
 
+_MIP_INSTALL = re.compile(r'mip install "?([^"\s]+)"?')
+
+
+def _manifest_specs():
+    text = _read(os.path.join(_FIRMWARE_DIR, "mip-packages.txt"))
+    return [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+
+class MipPackagePinTest(unittest.TestCase):
+    """The device libraries flash.sh installs are pinned and match the manifest.
+
+    The firmware relies on aioble internals (aioble.core.ble_irq, discovery and
+    subscribe behaviour), so a plain `mip install aioble` could change them
+    under an unchanged firmware. mpremote splits a spec at "@" into package and
+    version, so `github:org/repo@<sha>/sub/dir` turns "<sha>/sub/dir" into the
+    branch: the package.json resolves by accident, but every file in it is then
+    fetched from <sha>/sub/dir/sub/dir and is not found.
+    """
+
+    def test_flash_sh_installs_exactly_the_manifest(self):
+        flashed = _MIP_INSTALL.findall(_read(os.path.join(_FIRMWARE_DIR, "flash.sh")))
+        self.assertTrue(flashed, "flash.sh installs no mip packages")
+        self.assertEqual(flashed, _manifest_specs())
+
+    def test_every_package_is_pinned(self):
+        for spec in _manifest_specs():
+            with self.subTest(spec=spec):
+                self.assertEqual(spec.count("@"), 1, f"`{spec}` has no single @version pin")
+                package, version = spec.split("@")
+                self.assertTrue(version, f"`{spec}` has an empty version")
+                if package.startswith("github:"):
+                    self.assertNotIn("/", version, f"`{spec}`: the path must come before @")
+                    self.assertRegex(version, r"^[0-9a-f]{7,40}$", f"`{spec}` is not pinned to a commit")
+                else:
+                    self.assertRegex(version, r"^\d+\.\d+\.\d+$", f"`{spec}` is not pinned to a release")
+
+    def test_aioble_is_pinned(self):
+        self.assertTrue(
+            any(spec.startswith("aioble@") for spec in _manifest_specs()),
+            "aioble is installed unpinned",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
