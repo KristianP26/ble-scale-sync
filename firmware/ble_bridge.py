@@ -8,6 +8,7 @@ import aioble
 import asyncio
 import bluetooth
 import board
+import time
 
 _ble = bluetooth.BLE()
 
@@ -23,6 +24,12 @@ _BT_BASE_SUFFIX = "00001000800000805f9b34fb"
 # connects are winnable is left to the board tunables, which default to 0.
 CRASH_FLOOR_LARGEST = 1024
 CRASH_FLOOR_FREE = 2048
+
+# Time budget handling for connect(budget_ms=...). The connect attempts leave
+# this much of the budget for service discovery, and an attempt with less than
+# CONNECT_MIN_ATTEMPT_MS left is not started at all.
+CONNECT_DISCOVERY_RESERVE_MS = 2000
+CONNECT_MIN_ATTEMPT_MS = 1000
 
 
 def _read_idf_heap():
@@ -457,11 +464,21 @@ class BleBridge:
             self._raw_results = []
             print("Streaming scan stopped")
 
-    async def connect(self, address, addr_type=0):
+    async def connect(self, address, addr_type=0, budget_ms=None):
         """Connect to a BLE peripheral by MAC address, discover services/chars.
 
         addr_type: 0 = public, 1 = random (from scan results).
+        budget_ms: optional upper bound for the whole call, address type
+        fallback and discovery included. The host waits a fixed time for the
+        answer to its connect command; a success after that is torn down by the
+        host's own cleanup, so every attempt is clamped to what is left and the
+        call gives up rather than overrun. None keeps the board timeouts.
         """
+        started = time.ticks_ms() if budget_ms is not None else 0
+
+        def _left_ms():
+            return budget_ms - time.ticks_diff(time.ticks_ms(), started)
+
         _ble.active(True)
         # The streaming scan installs the firmware's own _ble.irq() handler on
         # the shared BLE singleton, which replaces aioble's central dispatcher.
@@ -538,14 +555,28 @@ class BleBridge:
         # must run (#231).
         self._conn = None
         last_exc = None
+        budget_exhausted = False
         for probe, use_type in enumerate(_addr_type_probe_order(addr_type)):
             aioble_type = aioble.ADDR_RANDOM if use_type else aioble.ADDR_PUBLIC
             device = aioble.Device(aioble_type, addr_bytes)
             type_retries = retries if probe == 0 else 1
             for attempt in range(1, type_retries + 1):
+                attempt_timeout_ms = timeout_ms
+                attempt_scan_ms = scan_ms
+                if budget_ms is not None:
+                    allowed = _left_ms() - CONNECT_DISCOVERY_RESERVE_MS
+                    if allowed < CONNECT_MIN_ATTEMPT_MS:
+                        print(
+                            "GATT connect to %s: %d ms budget used up, no further attempt"
+                            % (address, budget_ms)
+                        )
+                        budget_exhausted = True
+                        break
+                    attempt_timeout_ms = min(timeout_ms, allowed)
+                    attempt_scan_ms = min(scan_ms, allowed)
                 try:
                     self._conn = await device.connect(
-                        timeout_ms=timeout_ms, scan_duration_ms=scan_ms
+                        timeout_ms=attempt_timeout_ms, scan_duration_ms=attempt_scan_ms
                     )
                     last_exc = None
                     break
@@ -558,7 +589,7 @@ class BleBridge:
                     if attempt < type_retries:
                         gc.collect()
                         await asyncio.sleep_ms(500)
-            if self._conn is not None:
+            if self._conn is not None or budget_exhausted:
                 break
             # Try the opposite address type on any connect failure, not only a
             # TimeoutError. A misreported type is the usual reason a known-awake
@@ -569,6 +600,11 @@ class BleBridge:
             gc.collect()
         if self._conn is None and last_exc is not None:
             raise last_exc
+        if self._conn is None:
+            # Only reachable through the budget: no attempt was started at all.
+            raise OSError(
+                "GATT connect to %s: no time left in the %d ms budget" % (address, budget_ms)
+            )
         self._chars = {}
 
         # aioble's services()/characteristics() return ClientDiscover async
@@ -609,8 +645,13 @@ class BleBridge:
                     chars_info.append({"uuid": uuid_str, "properties": props})
             return chars_info
 
+        discover_s = 10
+        if budget_ms is not None:
+            # Whatever the attempts left over, but never less than half a second:
+            # a connected peer is worth that much of an overrun.
+            discover_s = max(0.5, min(10, _left_ms() / 1000))
         try:
-            chars_info = await asyncio.wait_for(_discover_chars(), 10)
+            chars_info = await asyncio.wait_for(_discover_chars(), discover_s)
         except asyncio.TimeoutError:
             print(f"Service discovery timed out for {address}")
             await self.disconnect()

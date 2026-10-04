@@ -32,11 +32,31 @@ bridge = BleBridge()
 # Track whether per-char write/read wildcard topics are subscribed
 _char_subscribed = False
 
-# Guard against concurrent BLE operations
+# Guard against concurrent BLE operations. Whoever sets it owns the radio and
+# the scan state until it clears it; nobody else may pause or resume scanning
+# meanwhile.
 _busy = False
 
-# Pause autonomous scanning when a GATT connection is active
+# Pause autonomous scanning when a GATT connection is active. Set only by the
+# path that holds _busy for the connect (or by the live session it created),
+# so only that path or the session's end may resume scanning.
 _scan_paused = False
+
+# True while a host `connect` command waits for _busy. The scan loops stand
+# down (no new scan, no autonomous connect) instead of the waiting command
+# pausing scanning itself: a pause set by a path that does not own the radio
+# was cleared by the other path's failure handler, and the reverse.
+_host_connect_pending = False
+
+# Total time a host-initiated connect may take on the firmware, from taking
+# the command off the queue to publishing `connected` or `error`, busy wait
+# included. The host gives up after COMMAND_TIMEOUT_MS (30 s,
+# src/ble/handler-mqtt-proxy/topics.ts) and then sends `disconnect`, so an
+# answer later than that kills a session that just succeeded. 5 s are left for
+# the MQTT round trip over the shared 2.4 GHz radio.
+HOST_CONNECT_BUDGET_MS = getattr(board, "HOST_CONNECT_BUDGET_MS", 25000)
+# The busy wait must leave the connect at least this much of the budget.
+HOST_CONNECT_MIN_MS = 5000
 
 # GATT session guard (#296). A session the host never engages with used to park
 # the scan loop until the ESP32 was reset: with lazy notify no notify reader is
@@ -170,13 +190,84 @@ if cfg.get("mqtt_user"):
 if cfg.get("mqtt_password"):
     mqtt_config["password"] = cfg["mqtt_password"]
 
+
+def _is_ip_literal(host):
+    return ":" in host or all(c in "0123456789." for c in host)
+
+
+def mqtt_tls_settings(c, read_file):
+    """Return (ssl, ssl_params) for mqtt_as from the config.json keys below.
+
+    mqtt_tls          true: wrap the broker socket in TLS (default false).
+    mqtt_ca_file      file on the device holding the CA (PEM or one DER cert)
+                      that signed the broker certificate. With it the broker is
+                      verified; without it the link is encrypted but anyone on
+                      the path can impersonate the broker.
+    mqtt_tls_hostname name to verify and send as SNI (default: mqtt_broker),
+                      for a broker reached by IP whose certificate has a name.
+
+    mqtt_as passes ssl_params to ssl.wrap_socket(). On the mbedtls esp32 port
+    only CERT_REQUIRED validates anything, and it needs server_hostname.
+    """
+    tls = c.get("mqtt_tls") is True
+    ca_file = c.get("mqtt_ca_file")
+    if not tls:
+        if ca_file:
+            # A CA with TLS off would look configured while every byte,
+            # password included, still went out in plaintext.
+            raise ValueError("config.json: mqtt_ca_file is set but mqtt_tls is not true")
+        return False, {}
+    host = c.get("mqtt_tls_hostname") or c["mqtt_broker"]
+    params = {}
+    if ca_file:
+        import ssl
+
+        try:
+            cadata = read_file(ca_file)
+        except OSError as e:
+            # Never fall back to an unverified link the user did not ask for.
+            raise OSError(f"config.json: mqtt_ca_file {ca_file} cannot be read: {e}")
+        params["cert_reqs"] = ssl.CERT_REQUIRED
+        params["cadata"] = cadata
+        params["server_hostname"] = host
+    else:
+        print("MQTT TLS without mqtt_ca_file: encrypted, but the broker is not verified")
+        # SNI must be a name (RFC 6066), so an IP literal is left out.
+        if not _is_ip_literal(host):
+            params["server_hostname"] = host
+    return True, params
+
+
+def _read_device_file(path):
+    with open(path, "rb") as f:
+        return f.read()
+
+
+mqtt_config["ssl"], mqtt_config["ssl_params"] = mqtt_tls_settings(cfg, _read_device_file)
+
 client = MQTTClient(mqtt_config)
 
 
-async def publish_error(message):
+def error_payload(message, op, address=None, uuid=None):
+    """JSON body for the error topic, so the host can tell whose error it is.
+
+    `op` names the operation that failed: connect (host command), auto-connect,
+    scan, subscribe, write, read or command. `address` (the MAC) and `uuid`
+    (the characteristic) are included when the operation has one. A host that
+    predates this format shows the whole JSON text as the error message.
+    """
+    body = {"op": op, "message": message}
+    if address:
+        body["address"] = address
+    if uuid:
+        body["uuid"] = uuid
+    return json.dumps(body)
+
+
+async def publish_error(message, op="command", address=None, uuid=None):
     """Publish an error message so the host doesn't hang waiting for a response."""
     try:
-        await client.publish(topic("error"), message, qos=0)
+        await client.publish(topic("error"), error_payload(message, op, address, uuid), qos=0)
     except Exception:
         pass
 
@@ -187,6 +278,20 @@ def describe_exc(e):
     otherwise the host only sees a blank "ESP32 error:" (#201)."""
     return str(e) or type(e).__name__
     print(f"Error: {message}")
+
+
+def _error_context(t, msg):
+    """(op, address, uuid) for an error raised while handling command topic t."""
+    if t == topic("connect"):
+        try:
+            return "connect", json.loads(msg).get("address"), None
+        except Exception:
+            return "connect", None, None
+    for op in ("subscribe", "write", "read"):
+        prefix = topic(op + "/")
+        if t.startswith(prefix):
+            return op, None, t[len(prefix):]
+    return "command", None, None
 
 
 async def _wait_not_busy(max_iters=60, sleep_ms=500):
@@ -325,6 +430,12 @@ async def _auto_gatt_connect(mac, addr_type):
     protocol handshake is unchanged.
     """
     global _char_subscribed, _busy, _scan_paused
+    # A host connect waiting for the radio goes first: connecting here would
+    # only be torn down by it, leaving the host a session it never hears end.
+    # A paused scan means a session (or its connect) already owns the radio.
+    if _host_connect_pending or _scan_paused:
+        print(f"Auto-connect: skipped for {mac}, a host connect or session owns the radio")
+        return
     _scan_paused = True
 
     if board.CONTINUOUS_SCAN:
@@ -366,7 +477,9 @@ async def _auto_gatt_connect(mac, addr_type):
         _resume_scanning()
         if board.CONTINUOUS_SCAN:
             print(f"Auto-connect: resumed streaming scan after failure")
-        await publish_error(f"Auto-connect failed for {mac}: {describe_exc(e)}")
+        await publish_error(
+            f"Auto-connect failed for {mac}: {describe_exc(e)}", "auto-connect", address=mac
+        )
     finally:
         _busy = False
 
@@ -390,7 +503,7 @@ async def _streaming_scan_loop():
         except Exception as e:
             print(f"Streaming scan cycle error: {describe_exc(e)}")
             try:
-                await publish_error(f"Scan cycle failed: {describe_exc(e)}")
+                await publish_error(f"Scan cycle failed: {describe_exc(e)}", "scan")
             except Exception:
                 pass
             await asyncio.sleep(1)
@@ -473,7 +586,7 @@ async def _streaming_scan_cycle():
             ui.on_publish_tick()
     except Exception as e:
         try:
-            await publish_error(f"Scan publish failed: {describe_exc(e)}")
+            await publish_error(f"Scan publish failed: {describe_exc(e)}", "scan")
         except Exception:
             print(f"Scan error: {e}")
 
@@ -488,8 +601,9 @@ async def _batch_scan_loop():
         while not (client.isconnected() and _subs_ready):
             await asyncio.sleep(1)
 
-        # Skip if a GATT connection is active or another BLE op is in progress
-        if _scan_paused or _busy:
+        # Skip if a GATT connection is active, another BLE op is in progress,
+        # or a host connect is waiting for the radio
+        if _scan_paused or _busy or _host_connect_pending:
             # Same backstop as the streaming loop (#296).
             if _scan_paused and _gatt_session_armed and _gatt_session_task is None and not _busy:
                 # Nothing restarts this task, so the backstop must not let an
@@ -545,7 +659,7 @@ async def _batch_scan_loop():
                         break
         except Exception as e:
             try:
-                await publish_error(f"Scan failed: {describe_exc(e)}")
+                await publish_error(f"Scan failed: {describe_exc(e)}", "scan")
             except Exception:
                 print(f"Scan error: {e}")
         finally:
@@ -585,18 +699,35 @@ async def handle_subscribe(uuid_str):
 
 async def handle_connect(payload):
     """Connect to a BLE device, discover chars, start notify forwarding."""
-    global _char_subscribed, _busy, _scan_paused
-    _scan_paused = True  # Pause autonomous scanning
+    global _char_subscribed, _busy, _scan_paused, _host_connect_pending
+    started = time.ticks_ms()
+    try:
+        address = json.loads(payload).get("address")
+    except Exception:
+        address = None
 
     # Serialize against an in-flight BLE op. On continuous boards the autonomous
     # connect path (#201) holds _busy while it runs; without this wait a
     # host-initiated fallback connect (#231) re-enters aioble on the same bridge
-    # concurrently, which can abort the connect mid-flight.
-    if not await _wait_not_busy():
-        _resume_scanning()
-        await publish_error("Busy: another BLE operation is in progress")
+    # concurrently, which can abort the connect mid-flight. Scanning is NOT
+    # paused while waiting: the op holding _busy owns the scan state, and its
+    # failure handler resuming the scan would silently undo a pause set here.
+    # _host_connect_pending makes the scan loops stand down instead. The wait
+    # leaves the connect at least HOST_CONNECT_MIN_MS of the host's budget.
+    wait_ms = HOST_CONNECT_BUDGET_MS - HOST_CONNECT_MIN_MS
+    _host_connect_pending = True
+    try:
+        free = await _wait_not_busy(max_iters=max(1, wait_ms // 500))
+    finally:
+        _host_connect_pending = False
+    if not free:
+        # Nothing of the busy op's state is touched: it still owns the radio.
+        await publish_error("Busy: another BLE operation is in progress", "connect", address)
         return
 
+    # From here until _busy is set there is no await, so no other task can
+    # slip in between the wait and taking ownership.
+    _scan_paused = True  # Pause autonomous scanning
     if board.CONTINUOUS_SCAN:
         bridge.stop_streaming()
 
@@ -606,10 +737,19 @@ async def handle_connect(payload):
         address = data["address"]
         addr_type = data.get("addr_type", 0)  # 0 = public, 1 = random
 
-        # Disconnect any existing connection first
+        # Disconnect any existing connection first. A session the host was
+        # told about ends here, so tell it, or it waits for that session's
+        # `disconnected` forever (e.g. an autonomous connect that won the
+        # race against this command).
+        replacing = _gatt_session_armed
         await bridge.disconnect()
+        if replacing:
+            _char_subscribed = False
+            print("Host connect: ending the current GATT session first")
+            await client.publish(topic("disconnected"), "", qos=0)
 
-        result = await bridge.connect(address, addr_type)
+        budget_ms = HOST_CONNECT_BUDGET_MS - time.ticks_diff(time.ticks_ms(), started)
+        result = await bridge.connect(address, addr_type, budget_ms=budget_ms)
 
         if not _char_subscribed:
             await client.subscribe(topic("write/#"), 0)
@@ -623,6 +763,8 @@ async def handle_connect(payload):
                     await bridge.start_notify(uuid_str, make_publish_fn(uuid_str))
 
         bridge.set_on_disconnect(lambda: _pending.append(("__ble_disconnected__", b"")))
+        # The address lets the host match this answer to its own command.
+        result["address"] = address
         await client.publish(topic("connected"), json.dumps(result), qos=0)
         _arm_session_guard()
     except Exception as e:
@@ -639,6 +781,14 @@ async def handle_disconnect():
     unexpected disconnect stand down (see handle_unexpected_disconnect).
     """
     global _char_subscribed, _ending_session
+    if _busy:
+        # A scan or an autonomous connect owns the radio and has not published
+        # a session yet, so there is nothing of the host's to end. Tearing the
+        # link down and restarting the scan here used to reinstall the scan IRQ
+        # handler in the middle of that connect. Answer and leave it alone.
+        print("Host disconnect while a BLE op is in flight: nothing to end")
+        await client.publish(topic("disconnected"), "", qos=0)
+        return
     _ending_session = True
     try:
         await bridge.disconnect()
@@ -843,7 +993,8 @@ async def main():
                 import sys
 
                 sys.print_exception(e)
-                await publish_error(describe_exc(e))
+                op, address, uuid = _error_context(t, msg)
+                await publish_error(describe_exc(e), op, address, uuid)
 
         await asyncio.sleep_ms(50)
         gc_counter += 1

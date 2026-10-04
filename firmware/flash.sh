@@ -15,10 +15,18 @@
 #   ./flash.sh --app-only               # re-upload .py files (fast iteration)
 #   ./flash.sh --libs-only              # re-install MicroPython libraries
 #   ./flash.sh --board guition_4848 --app-only
+#   ./flash.sh --help                   # show usage, touch nothing
+#
+# Any other argument is refused before a tool runs: only a run with no mode
+# flag at all erases and reflashes the device.
 #
 # Board choice: --board, else "board" in config.json, else chip auto-detect.
 # A --board that differs from a non-null config.json "board" is refused. The
 # chosen board is written to board.txt on the device, which board.py reads.
+#
+# MQTT over TLS: set "mqtt_tls": true in config.json (and mqtt_port, usually
+# 8883). To verify the broker, put its CA certificate next to config.json and
+# name it in "mqtt_ca_file"; it is uploaded with the app.
 #
 # The script auto-detects the serial port. Override with:
 #   PORT=/dev/ttyACM0 ./flash.sh
@@ -54,6 +62,28 @@ green() { printf '\033[0;32m%s\033[0m\n' "$*"; }
 blue()  { printf '\033[0;34m%s\033[0m\n' "$*"; }
 
 die() { red "Error: $*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+Usage: ./flash.sh [--board BOARD] [--app-only | --libs-only]
+
+  (no mode flag)   full flash: ERASE the device, write MicroPython,
+                   install libraries, upload the app
+  --app-only       re-upload the .py files only (no erase)
+  --libs-only      re-install the MicroPython libraries only (no erase)
+  --board BOARD    atom_echo, esp_wroom_32, esp32_s3 or guition_4848
+                   (default: "board" in config.json, else chip auto-detect)
+  -h, --help       show this help and exit
+
+Serial port: auto-detected, override with PORT=/dev/ttyACM0 ./flash.sh
+EOF
+}
+
+usage_error() {
+  red "Error: $*" >&2
+  usage >&2
+  exit 2
+}
 
 check_tool() {
   # The script cd's to its own directory above, so the path is relative to firmware/.
@@ -125,13 +155,29 @@ detect_board() {
   fi
 }
 
-config_board() {
-  # Print the "board" value from config.json, or nothing when it is null,
-  # absent, or there is no config.json (--libs-only does not need one).
+config_string() {
+  # Print the string value of key $1 in config.json, or nothing when it is
+  # null, absent, or there is no config.json (--libs-only does not need one).
   [[ -f config.json ]] || return 0
-  grep -o '"board"[[:space:]]*:[[:space:]]*"[^"]*"' config.json \
+  grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" config.json \
     | head -n 1 \
     | sed 's/.*:[[:space:]]*"\([^"]*\)"/\1/' || true
+}
+
+config_board() {
+  config_string board
+}
+
+check_ca_file() {
+  # The mqtt_ca_file named in config.json is uploaded next to it, and main.py
+  # refuses to boot when it is missing. Check before anything is erased.
+  local ca_file
+  ca_file=$(config_string mqtt_ca_file)
+  [[ -n "$ca_file" ]] || return 0
+  if [[ ! "$ca_file" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    die "mqtt_ca_file \"${ca_file}\" must be a plain file name in firmware/ (letters, digits, . _ -); it is uploaded to the device root under the same name."
+  fi
+  [[ -f "$ca_file" ]] || die "mqtt_ca_file \"${ca_file}\" from config.json not found in firmware/."
 }
 
 resolve_board() {
@@ -251,6 +297,11 @@ upload_app() {
 
   blue "Uploading application files for ${BOARD}..."
   mpremote connect "$port" cp config.json :config.json
+  local ca_file
+  ca_file=$(config_string mqtt_ca_file)
+  if [[ -n "$ca_file" ]]; then
+    mpremote connect "$port" cp "$ca_file" ":$ca_file"
+  fi
   mpremote connect "$port" cp boot.py :boot.py
   mpremote connect "$port" cp board.py :board.py
   mpremote connect "$port" cp "$BOARD_MODULE" ":$BOARD_MODULE"
@@ -280,26 +331,40 @@ reset_device() {
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 main() {
-  local mode="full"
+  local mode=""
   local board_arg=""
 
-  # Parse arguments
+  # Parse arguments. Everything is validated here, before any tool runs: an
+  # unknown argument used to become the mode and fall through to the full
+  # erase-and-flash branch, so `--help` or a typo wiped the device.
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      -h|--help)
+        usage
+        exit 0
+        ;;
       --board)
+        if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+          usage_error "--board needs a value"
+        fi
         board_arg="$2"
         shift 2
         ;;
       --app-only|--libs-only)
+        if [[ -n "$mode" && "$mode" != "$1" ]]; then
+          usage_error "$mode and $1 cannot be combined"
+        fi
         mode="$1"
         shift
         ;;
       *)
-        mode="$1"
-        shift
+        usage_error "unknown argument: $1"
         ;;
     esac
   done
+  # Full flash only when no mode flag was given at all.
+  [[ -n "$mode" ]] || mode="full"
+  [[ "$mode" == "--libs-only" ]] || check_ca_file
 
   check_tool esptool
   check_tool mpremote
@@ -321,12 +386,15 @@ main() {
       install_libs "$port"
       reset_device "$port"
       ;;
-    full|*)
+    full)
       download_firmware
       erase_and_flash "$port"
       install_libs "$port"
       upload_app "$port"
       reset_device "$port"
+      ;;
+    *)
+      die "internal error: unexpected mode '$mode'"
       ;;
   esac
 

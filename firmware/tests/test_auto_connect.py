@@ -302,7 +302,7 @@ class _RecordingBridge:
     async def disconnect(self):
         pass
 
-    async def connect(self, address, addr_type=0):
+    async def connect(self, address, addr_type=0, budget_ms=None):
         return {
             "chars": [
                 {"uuid": "0000fff100001000800000805f9b34fb", "properties": ["notify"]},

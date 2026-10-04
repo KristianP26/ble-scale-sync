@@ -6,6 +6,9 @@
   "mqtt_port": 1883,
   "mqtt_user": null,
   "mqtt_password": null,
+  "mqtt_tls": false,
+  "mqtt_ca_file": null,
+  "mqtt_tls_hostname": null,
   "device_id": "esp32-ble-proxy",
   "topic_prefix": "ble-proxy"
 }
