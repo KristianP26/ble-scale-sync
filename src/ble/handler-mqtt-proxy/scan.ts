@@ -7,7 +7,7 @@ import type { MqttProxyConfig } from '../../config/schema.js';
 import type { ScanOptions, ScanResult } from '../types.js';
 import type { RawReading } from '../shared.js';
 import { waitForRawReading, withAbandonmentCleanup } from '../shared.js';
-import { resolveAdapter } from '../../scales/resolve.js';
+import { resolveAdapter, resolveAfterDiscovery } from '../../scales/resolve.js';
 import {
   evaluateAdvertisement,
   logAdvert,
@@ -233,8 +233,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         // does (#319): before discovery Mi Scale 2 claims anything advertising
         // the generic 0x181B service, and a standard BCS scale reaches its own
         // adapter only here.
-        const discovered = { ...info, characteristicUuids: [...charMap.keys()] };
-        const resolved = resolveAdapter(discovered, adapters) ?? adapter;
+        const resolved =
+          resolveAfterDiscovery(info, { characteristicUuids: [...charMap.keys()] }, adapters) ??
+          adapter;
         if (resolved.name !== adapter.name) {
           bleLog.info(
             `Re-resolved adapter after GATT discovery: ${adapter.name} -> ${resolved.name} (${entry.address})`,
@@ -272,6 +273,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
                 opts.onLiveData,
                 opts.scaleAuth,
                 onActivity,
+                info.localName,
               ),
             idleMs,
             'Timed out waiting for a complete scale reading',

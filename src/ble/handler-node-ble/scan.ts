@@ -315,6 +315,8 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     probeAdapter = btAdapter;
 
     let matchedAdapter: ScaleAdapter;
+    // Advertised name, for adapters whose protocol differs by model.
+    let deviceName = '';
 
     if (targetMac) {
       const mac = formatMac(targetMac);
@@ -328,6 +330,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         deviceMac,
         adapters,
       );
+      deviceName = name;
 
       if (
         preMatchedAdapter?.preferPassive &&
@@ -387,6 +390,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       device = result.device;
       matchedAdapter = result.adapter;
       deviceMac = result.mac;
+      deviceName = result.name;
       await logAdvertisementSnapshot(device);
 
       // Passive-mode adapters: read from advertisements without connecting.
@@ -449,6 +453,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       scaleAuth,
       readingTimeoutMs,
       abortSignal,
+      deviceName,
     });
     gattSucceeded = true;
 

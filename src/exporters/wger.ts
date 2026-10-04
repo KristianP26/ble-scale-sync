@@ -4,7 +4,7 @@ import type { Exporter, ExportContext, ExportResult } from '../interfaces/export
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { WgerConfig } from './config.js';
 import { toLocalDate } from './intervals.js';
-import { withRetry, httpError, httpHealthcheck } from '../utils/retry.js';
+import { withRetry, httpError, httpHealthcheck, NonRetryableError } from '../utils/retry.js';
 import { errMsg } from '../utils/error.js';
 
 const log = createLogger('Wger');
@@ -54,6 +54,21 @@ const MEASUREMENT_CATEGORIES: ReadonlyArray<{
   { name: 'Bone Mass', unit: 'kg', value: (d) => d.boneMass },
 ];
 
+/** Exact: 1 lb = 0.45359237 kg by definition. */
+const LB_PER_KG = 1 / 0.45359237;
+
+type WgerWeightUnit = 'kg' | 'lb';
+
+/**
+ * `GET /api/v2/userprofile/` is one object (the logged-in user's profile) on
+ * every wger version checked, 2.4 to master; a paginated `results` wrapper is
+ * accepted too rather than read as "no unit".
+ */
+interface UserProfileResponse {
+  weight_unit?: unknown;
+  results?: Array<{ weight_unit?: unknown }>;
+}
+
 interface CategoryListResponse {
   next: string | null;
   results: Array<{ id: number; name: string; unit: string }>;
@@ -83,13 +98,31 @@ export class WgerExporter implements Exporter {
   async export(data: BodyComposition, context?: ExportContext): Promise<ExportResult> {
     const date = toLocalDate(context?.timestamp ?? new Date());
 
+    // wger interprets a weight entry in the unit of the user's profile and the
+    // API takes no unit of its own (WeightEntryViewSet.perform_create stamps
+    // `profile.weight_unit`), so kilograms written to a pound profile were
+    // stored as pounds (F-03). Read the unit on every export, so a profile
+    // switched to pounds later is followed; without it, nothing is written.
+    let unit = 'kg' as WgerWeightUnit;
+    const unitResult = await withRetry(
+      async () => {
+        unit = await this.fetchWeightUnit();
+        return { success: true };
+      },
+      { log, label: 'Wger user profile' },
+    );
+    if (!unitResult.success) {
+      return unitResult;
+    }
+    const weight = unit === 'lb' ? data.weight * LB_PER_KG : data.weight;
+
     // Weight is the primary result: its failure fails the export.
     const weightResult = await withRetry(
       async () => {
         const response = await fetch(`${this.apiBase}/weightentry/`, {
           method: 'POST',
           headers: this.headers(),
-          body: JSON.stringify({ date, weight: Number(data.weight.toFixed(2)) }),
+          body: JSON.stringify({ date, weight: Number(weight.toFixed(2)) }),
           signal: AbortSignal.timeout(10_000),
         });
         if (!response.ok) {
@@ -103,7 +136,7 @@ export class WgerExporter implements Exporter {
     if (!weightResult.success) {
       return weightResult;
     }
-    log.info(`Wger weight entry pushed for ${date}.`);
+    log.info(`Wger weight entry pushed for ${date}${unit === 'lb' ? ' (in lb)' : ''}.`);
 
     // Body composition is best-effort: a failure here is logged, not fatal.
     if (this.config.syncMeasurements) {
@@ -144,6 +177,28 @@ export class WgerExporter implements Exporter {
         log.warn(`Wger ${cat.name} measurement failed: ${result.error}`);
       }
     }
+  }
+
+  /**
+   * The weight unit of the token's wger profile. A profile without the field
+   * is a server that predates it and stores kilograms; a value other than
+   * `kg` or `lb` is refused rather than guessed at.
+   */
+  private async fetchWeightUnit(): Promise<WgerWeightUnit> {
+    const response = await fetch(`${this.apiBase}/userprofile/`, {
+      headers: this.headers(),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      throw httpError(response.status, 'Wger user profile');
+    }
+    const json = (await response.json()) as UserProfileResponse;
+    const raw = Array.isArray(json.results) ? json.results[0]?.weight_unit : json.weight_unit;
+    if (raw === undefined || raw === null || raw === 'kg') return 'kg';
+    if (raw === 'lb') return 'lb';
+    throw new NonRetryableError(
+      `Wger profile weight unit '${String(raw)}' is not kg or lb; weight not written`,
+    );
   }
 
   /** List existing measurement categories, create any missing ones, cache name->id. */

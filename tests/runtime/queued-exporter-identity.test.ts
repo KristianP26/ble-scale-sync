@@ -88,3 +88,62 @@ describe('resolveQueuedExporter: a retry must not reach another user account', (
     expect(accountOf(resolveQueuedExporter(ctx, { exporter: 'garmin' }))).toBe('/tokens/anna');
   });
 });
+
+/**
+ * D029: one list may hold two exporters of a type, and both are exported to.
+ * A failed export of the SECOND must be retried through the second; the type
+ * name used to resolve every retry to the first, i.e. the other target.
+ */
+describe('resolveQueuedExporter: the config slot picks the instance within a user', () => {
+  function twoGarmins(): UserConfig {
+    return {
+      ...user('anna', '/tokens/anna-1'),
+      exporters: [
+        { type: 'garmin', email: 'a1@example.test', token_dir: '/tokens/anna-1' },
+        { type: 'garmin', email: 'a2@example.test', token_dir: '/tokens/anna-2' },
+      ],
+    } as unknown as UserConfig;
+  }
+
+  it('resolves the second entry of a type through its index', () => {
+    const ctx = ctxWith([twoGarmins()]);
+    const resolved = resolveQueuedExporter(ctx, {
+      exporter: 'garmin',
+      userSlug: 'anna',
+      exporterList: 'user',
+      exporterIndex: 1,
+    });
+    expect(accountOf(resolved)).toBe('/tokens/anna-2');
+  });
+
+  it('keeps the old answer for an entry queued before slots existed', () => {
+    const ctx = ctxWith([twoGarmins()]);
+    expect(accountOf(resolveQueuedExporter(ctx, { exporter: 'garmin', userSlug: 'anna' }))).toBe(
+      '/tokens/anna-1',
+    );
+  });
+
+  it('refuses to guess when the slot is gone and two of the type remain', () => {
+    const ctx = ctxWith([twoGarmins()]);
+    expect(
+      resolveQueuedExporter(ctx, {
+        exporter: 'garmin',
+        userSlug: 'anna',
+        exporterList: 'user',
+        exporterIndex: 5,
+      }),
+    ).toBeUndefined();
+  });
+
+  it('follows a moved entry when it is the only one of its type left', () => {
+    // Queued as global[0]; the operator since moved Garmin into the user list.
+    const ctx = ctxWith([user('anna', '/tokens/anna')]);
+    const resolved = resolveQueuedExporter(ctx, {
+      exporter: 'garmin',
+      userSlug: 'anna',
+      exporterList: 'global',
+      exporterIndex: 0,
+    });
+    expect(accountOf(resolved)).toBe('/tokens/anna');
+  });
+});

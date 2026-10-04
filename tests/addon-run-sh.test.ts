@@ -391,86 +391,92 @@ function check(fn: string, ...args: string[]): boolean {
   return res.status === 0;
 }
 
-describe.skipIf(!SHELL)('run.sh option checks agree with the config schema', () => {
-  it.skipIf(!GNU_DATE)('birth date', () => {
-    const nextYear = `${new Date().getUTCFullYear() + 1}-01-01`;
-    for (const value of [
-      '1990-06-15',
-      '2024-02-29',
-      '2023-02-29',
-      '2024-02-31',
-      '2024-13-01',
-      '1990-6-15',
-      '0050-01-01',
-      '1899-12-31',
-      '0099-12-31',
-      '0150-01-01',
-      '1900-01-01',
-      nextYear,
-      '',
-    ]) {
-      const schema = UserSchema.shape.birth_date.safeParse(value).success;
-      expect(check('valid_birth_date', value), value).toBe(schema);
-    }
-  });
+// Each case spawns a shell, a dozen per test. That takes about 3 s on Windows
+// alone and went past the default 5 s timeout under a full parallel run.
+describe.skipIf(!SHELL)(
+  'run.sh option checks agree with the config schema',
+  { timeout: 30_000 },
+  () => {
+    it.skipIf(!GNU_DATE)('birth date', () => {
+      const nextYear = `${new Date().getUTCFullYear() + 1}-01-01`;
+      for (const value of [
+        '1990-06-15',
+        '2024-02-29',
+        '2023-02-29',
+        '2024-02-31',
+        '2024-13-01',
+        '1990-6-15',
+        '0050-01-01',
+        '1899-12-31',
+        '0099-12-31',
+        '0150-01-01',
+        '1900-01-01',
+        nextYear,
+        '',
+      ]) {
+        const schema = UserSchema.shape.birth_date.safeParse(value).success;
+        expect(check('valid_birth_date', value), value).toBe(schema);
+      }
+    });
 
-  it('weight range', () => {
-    for (const [min, max] of [
-      ['40', '150'],
-      ['80', '80'],
-      ['90', '80'],
-      ['0', '80'],
-      ['10', '500'],
-    ]) {
-      const schema = UserSchema.shape.weight_range.safeParse({
-        min: Number(min),
-        max: Number(max),
-      }).success;
-      expect(check('valid_weight_range', min, max), `${min}..${max}`).toBe(schema);
-    }
-    expect(check('valid_weight_range', 'x', '80')).toBe(false);
-    expect(check('valid_weight_range', '', '80')).toBe(false);
-  });
+    it('weight range', () => {
+      for (const [min, max] of [
+        ['40', '150'],
+        ['80', '80'],
+        ['90', '80'],
+        ['0', '80'],
+        ['10', '500'],
+      ]) {
+        const schema = UserSchema.shape.weight_range.safeParse({
+          min: Number(min),
+          max: Number(max),
+        }).success;
+        expect(check('valid_weight_range', min, max), `${min}..${max}`).toBe(schema);
+      }
+      expect(check('valid_weight_range', 'x', '80')).toBe(false);
+      expect(check('valid_weight_range', '', '80')).toBe(false);
+    });
 
-  it('scale_mac', () => {
-    for (const value of [
-      'AA:BB:CC:DD:EE:FF',
-      'aa:bb:cc:dd:ee:ff',
-      'AA:BB:CC:DD:EE',
-      'AA-BB-CC-DD-EE-FF',
-      'AA:BB:CC:DD:EE:FG',
-      '360c96baf290475b14ce7c28aa3b8e81',
-      '360c96ba-f290-475b-14ce-7c28aa3b8e81',
-      'not a mac',
-    ]) {
-      expect(check('valid_scale_id', value), value).toBe(isValidScaleId(value));
-    }
-  });
+    it('scale_mac', () => {
+      for (const value of [
+        'AA:BB:CC:DD:EE:FF',
+        'aa:bb:cc:dd:ee:ff',
+        'AA:BB:CC:DD:EE',
+        'AA-BB-CC-DD-EE-FF',
+        'AA:BB:CC:DD:EE:FG',
+        '360c96baf290475b14ce7c28aa3b8e81',
+        '360c96ba-f290-475b-14ce-7c28aa3b8e81',
+        'not a mac',
+      ]) {
+        expect(check('valid_scale_id', value), value).toBe(isValidScaleId(value));
+      }
+    });
 
-  it('are applied before the config is written', () => {
-    const generate = RUN_SH.indexOf('cat > "$FRESH" <<YAML');
-    for (const call of [
-      'valid_birth_date "$USER_BIRTH_DATE"',
-      'valid_weight_range "$USER_WEIGHT_MIN" "$USER_WEIGHT_MAX"',
-      'valid_scale_id "$SCALE_MAC"',
-    ]) {
-      const at = RUN_SH.indexOf(call);
-      expect(at, call).toBeGreaterThan(-1);
-      expect(at, call).toBeLessThan(generate);
-    }
-    // force_scale_adapter is dropped when scale_mac is missing; a scale_mac
-    // dropped as invalid must reach that check too.
-    expect(RUN_SH.indexOf('valid_scale_id "$SCALE_MAC"')).toBeLessThan(
-      RUN_SH.indexOf('force_scale_adapter needs scale_mac'),
-    );
-  });
+    it('are applied before the config is written', () => {
+      const generate = RUN_SH.indexOf('cat > "$FRESH" <<YAML');
+      for (const call of [
+        'valid_birth_date "$USER_BIRTH_DATE"',
+        'valid_weight_range "$USER_WEIGHT_MIN" "$USER_WEIGHT_MAX"',
+        'valid_scale_id "$SCALE_MAC"',
+      ]) {
+        const at = RUN_SH.indexOf(call);
+        expect(at, call).toBeGreaterThan(-1);
+        expect(at, call).toBeLessThan(generate);
+      }
+      // force_scale_adapter is dropped when scale_mac is missing; a scale_mac
+      // dropped as invalid must reach that check too.
+      expect(RUN_SH.indexOf('valid_scale_id "$SCALE_MAC"')).toBeLessThan(
+        RUN_SH.indexOf('force_scale_adapter needs scale_mac'),
+      );
+    });
 
-  it('give an empty user name the default before the slug is derived', () => {
-    const fallback = RUN_SH.indexOf('USER_NAME="Default"');
-    expect(fallback).toBeGreaterThan(-1);
-    expect(fallback).toBeLessThan(RUN_SH.indexOf('USER_SLUG=$('));
-  });
-});
+    it('give an empty user name the default before the slug is derived', () => {
+      const fallback = RUN_SH.indexOf('USER_NAME="Default"');
+      expect(fallback).toBeGreaterThan(-1);
+      expect(fallback).toBeLessThan(RUN_SH.indexOf('USER_SLUG=$('));
+    });
+  },
+);
 
 /**
  * The Garmin token block of run.sh, run on its own with the /data and /share

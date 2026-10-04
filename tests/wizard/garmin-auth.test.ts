@@ -1,4 +1,6 @@
 import { EventEmitter } from 'node:events';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const spawnMock = vi.fn();
@@ -121,5 +123,42 @@ describe('garminAuthStep resolves ${VAR} references before using them', () => {
     await garminAuthStep.run(ctx);
 
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('garminAuthStep token directory (F-11)', () => {
+  beforeEach(() => {
+    spawnMock.mockReset();
+    spawnMock.mockImplementation(() => {
+      const child = new EventEmitter();
+      setImmediate(() => child.emit('close', 0));
+      return child;
+    });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  // setup_garmin.py ran without a cwd and got the relative path as written, so
+  // the token landed next to wherever the wizard was started, while the
+  // uploader (cwd = package directory) looked somewhere else.
+  it('hands setup_garmin.py a relative token_dir resolved next to the config file', async () => {
+    const configPath = join(tmpdir(), 'bss-wizard', 'config.yaml');
+    const ctx = ctxWith([
+      {
+        name: 'Alice',
+        slug: 'alice',
+        exporters: [
+          { type: 'garmin', email: 'a@x', password: 'p', token_dir: './garmin-tokens/alice' },
+        ],
+      },
+    ]);
+    ctx.configPath = configPath;
+
+    await garminAuthStep.run(ctx);
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const args = spawnMock.mock.calls[0][1] as string[];
+    expect(args[args.indexOf('--token-dir') + 1]).toBe(
+      join(tmpdir(), 'bss-wizard', 'garmin-tokens', 'alice'),
+    );
   });
 });

@@ -7,6 +7,8 @@ import type { BodyComposition } from '../interfaces/scale-adapter.js';
 import type { Exporter, ExportContext, ExportResult } from '../interfaces/exporter.js';
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import { NonRetryableError, withRetry } from '../utils/retry.js';
+import { configDir } from '../config/paths.js';
+import { resolveTokenDir } from '../config/token-dirs.js';
 
 const log = createLogger('Garmin');
 
@@ -85,8 +87,13 @@ function uploadToGarmin(
     const scriptPath: string = join(ROOT, 'garmin-scripts', 'garmin_upload.py');
     const args: string[] = [scriptPath];
 
+    // Always absolute: the uploader runs with cwd ROOT, the package directory,
+    // so a relative path handed over as written would point into the install
+    // rather than next to config.yaml, where the setup put the token (F-11).
+    // Config loading already made it absolute; this covers an entry built
+    // directly from the YAML (the wizard's connectivity test).
     if (tokenDir) {
-      args.push('--token-dir', expandTilde(tokenDir));
+      args.push('--token-dir', resolveTokenDir(expandTilde(tokenDir), configDir()));
     }
 
     const py = spawn(pythonCmd, args, {

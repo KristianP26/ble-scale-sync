@@ -9,6 +9,14 @@ export interface MatchResult {
   user: UserConfig | null;
   tier: 'exact' | 'tiebreak' | 'last_known' | 'strategy';
   warning?: string;
+  /**
+   * True when several users fit and nothing about them decided between them,
+   * so `user` is merely the first in config order. A live weigh-in still goes
+   * to that user (the person on the scale can see it and correct it); a stored
+   * record replayed from the scale's memory is dropped instead (D027), since
+   * nobody is there to notice it landed in the wrong account.
+   */
+  ambiguous?: boolean;
 }
 
 // --- Helpers ---
@@ -114,7 +122,7 @@ export function matchUserByWeight(
     const first = rangeMatches[0];
     const warning = `Multiple range matches for ${weight} kg — using ${first.name} (config order)`;
     log.warn(warning);
-    return { user: first, tier: 'tiebreak', warning };
+    return { user: first, tier: 'tiebreak', warning, ambiguous: true };
   }
 
   // Tier 4: no range match — try last_known_weight

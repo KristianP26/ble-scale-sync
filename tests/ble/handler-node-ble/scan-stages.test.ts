@@ -18,8 +18,9 @@ vi.mock('../../../src/ble/handler-node-ble/gatt.js', async (importOriginal) => {
   return { ...actual, buildCharMap: h.buildCharMap };
 });
 
-const { classifyBleFailure, buildCharMapWithRetry, readWithTimeouts } =
+const { classifyBleFailure, buildCharMapWithRetry, readWithTimeouts, resolveAfterConnect } =
   await import('../../../src/ble/handler-node-ble/scan-stages.js');
+const { adapters: registry } = await import('../../../src/scales/index.js');
 const { bleFailureKind } = await import('../../../src/ble/failure-kind.js');
 const { normalizeUuid } = await import('../../../src/ble/types.js');
 import type { BleChar, BleDevice } from '../../../src/ble/shared.js';
@@ -117,6 +118,66 @@ describe('buildCharMapWithRetry', () => {
     // reading at all.
     expect(result).toBe(partial);
     expect(h.buildCharMap.mock.calls.length).toBeGreaterThan(1);
+  }, 20_000);
+});
+
+/**
+ * bluez/bluez#1489: BlueZ can report ServicesResolved before every
+ * characteristic is exported. node-ble's GattServer.init() snapshots the tree
+ * once and services()/characteristics() only read that snapshot back, so a
+ * retry that does not rebuild it re-reads the incomplete map forever.
+ */
+describe('GATT snapshot refresh before a retry (#1489)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  /** A GattServer stand-in: init() is what node-ble's Device.gatt() runs. */
+  function fakeGatt(services: string[] = []) {
+    return {
+      init: vi.fn().mockResolvedValue(undefined),
+      services: vi.fn().mockResolvedValue(services),
+      getPrimaryService: vi.fn(),
+    };
+  }
+
+  it('buildCharMapWithRetry rebuilds the snapshot before each rebuild, not before the first', async () => {
+    const gatt = fakeGatt();
+    const partial = new Map([['a', {} as never]]);
+    const complete = new Map([
+      ['a', {} as never],
+      ['b', {} as never],
+    ]);
+    h.buildCharMap.mockResolvedValueOnce(partial).mockResolvedValue(complete);
+
+    const result = await buildCharMapWithRetry(gatt as never, (m) => (m.has('b') ? [] : ['b']));
+
+    expect(result).toBe(complete);
+    expect(gatt.init).toHaveBeenCalledTimes(1);
+    expect(gatt.init.mock.invocationCallOrder[0]).toBeGreaterThan(
+      h.buildCharMap.mock.invocationCallOrder[0],
+    );
+    expect(gatt.init.mock.invocationCallOrder[0]).toBeLessThan(
+      h.buildCharMap.mock.invocationCallOrder[1],
+    );
+  }, 20_000);
+
+  it('resolveAfterConnect rebuilds the snapshot before it retries an unrecognized device', async () => {
+    const gatt = fakeGatt();
+    // First enumeration: nothing an adapter recognizes on a nameless device.
+    // After the refresh the 1byone pair is there.
+    h.buildCharMap.mockResolvedValueOnce(new Map()).mockResolvedValue(
+      new Map([
+        [normalizeUuid('fff1'), {} as never],
+        [normalizeUuid('fff4'), {} as never],
+      ]),
+    );
+
+    const adapter = await resolveAfterConnect(gatt as never, registry, '', '', {});
+
+    expect(adapter.name).toBe('1byone (Eufy)');
+    expect(gatt.init).toHaveBeenCalledTimes(1);
+    expect(gatt.init.mock.invocationCallOrder[0]).toBeLessThan(
+      h.buildCharMap.mock.invocationCallOrder[1],
+    );
   }, 20_000);
 });
 

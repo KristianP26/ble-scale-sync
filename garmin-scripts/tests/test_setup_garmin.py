@@ -201,5 +201,51 @@ class GarminUsersFromConfigTest(unittest.TestCase):
         authenticate.assert_called_once()
 
 
+class ConfigTokenDirTest(unittest.TestCase):
+    """F-11: a relative token_dir in config.yaml is next to config.yaml."""
+
+    def run_setup(self, config, config_path, cli_token_dir=None):
+        with mock.patch.object(setup_garmin, "load_config", return_value=config):
+            with mock.patch.object(
+                setup_garmin, "authenticate", return_value=True
+            ) as authenticate:
+                with mock.patch("builtins.print"):
+                    setup_garmin.run_from_config(config_path, cli_token_dir=cli_token_dir)
+        return authenticate.call_args[0][2]
+
+    def config_with(self, token_dir):
+        entry = {"type": "garmin", "email": "a@x", "password": "pw", "token_dir": token_dir}
+        return {"users": [{"name": "Alice", "exporters": [entry]}]}
+
+    def test_relative_token_dir_resolves_from_the_config_directory(self):
+        with tempfile.TemporaryDirectory() as config_dir:
+            config_path = os.path.join(config_dir, "config.yaml")
+            token_dir = self.run_setup(self.config_with("./garmin-tokens/alice"), config_path)
+            self.assertEqual(
+                os.path.normcase(token_dir),
+                os.path.normcase(
+                    os.path.join(os.path.realpath(config_dir), "garmin-tokens", "alice")
+                ),
+            )
+
+    def test_absolute_token_dir_is_kept(self):
+        with tempfile.TemporaryDirectory() as config_dir:
+            absolute = os.path.join(config_dir, "elsewhere")
+            token_dir = self.run_setup(
+                self.config_with(absolute), os.path.join(config_dir, "sub", "config.yaml")
+            )
+            self.assertEqual(token_dir, absolute)
+
+    def test_command_line_token_dir_still_wins(self):
+        with tempfile.TemporaryDirectory() as config_dir:
+            override = os.path.join(config_dir, "override")
+            token_dir = self.run_setup(
+                self.config_with("./garmin-tokens/alice"),
+                os.path.join(config_dir, "config.yaml"),
+                cli_token_dir=override,
+            )
+            self.assertEqual(token_dir, override)
+
+
 if __name__ == "__main__":
     unittest.main()

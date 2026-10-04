@@ -4,9 +4,9 @@ import type {
   UserProfile,
   ScaleAuth,
 } from '../../interfaces/scale-adapter.js';
-import type { EsphomeProxyConfig } from '../../config/schema.js';
+import type { EsphomeProxyConfig, WeightUnit } from '../../config/schema.js';
 import { type RawReading, waitForRawReading } from '../shared.js';
-import { resolveAdapter } from '../../scales/resolve.js';
+import { resolveAdapter, resolveAfterDiscovery } from '../../scales/resolve.js';
 import {
   evaluateAdvertisement,
   GraceTimers,
@@ -52,6 +52,8 @@ export class ReadingWatcher implements Watcher {
   private targetMac?: string;
   private profile?: UserProfile;
   private scaleAuth?: ScaleAuth;
+  /** `scale.weight_unit`, passed to every GATT read (see WatcherConfig). */
+  private weightUnit?: WeightUnit;
   private config: EsphomeProxyConfig;
   private readonly dedup = new DedupWindow(DEDUP_WINDOW_MS);
   private pool: EsphomeProxyPool | null = null;
@@ -117,12 +119,14 @@ export class ReadingWatcher implements Watcher {
     targetMac?: string,
     profile?: UserProfile,
     scaleAuth?: ScaleAuth,
+    weightUnit?: WeightUnit,
   ) {
     this.config = config;
     this.adapters = adapters;
     this.targetMac = targetMac?.toLowerCase();
     this.profile = profile;
     this.scaleAuth = scaleAuth;
+    this.weightUnit = weightUnit;
   }
 
   async start(): Promise<void> {
@@ -165,11 +169,16 @@ export class ReadingWatcher implements Watcher {
     return this.lastAdvertAt;
   }
 
+  /**
+   * Hot reload. scaleAuth and weightUnit are taken as given, unset included,
+   * so removing a PIN on reload takes effect instead of keeping the old one.
+   */
   updateConfig(config: WatcherConfig): void {
     this.adapters = config.adapters;
     this.targetMac = config.targetMac?.toLowerCase();
     if (config.profile) this.profile = config.profile;
-    if (config.scaleAuth) this.scaleAuth = config.scaleAuth;
+    this.scaleAuth = config.scaleAuth;
+    this.weightUnit = config.weightUnit;
   }
 
   private handleAd(rawInfo: BleDeviceInfo, address: string): void {
@@ -235,9 +244,12 @@ export class ReadingWatcher implements Watcher {
         // the correct char-specific one. On a Eufy P1 "T9147" (fff1 + fff4, no
         // fff2) Inlife matched then failed writing fff2; with the discovered
         // chars, Inlife rejects (no fff2) and 1byone (Eufy) wins on fff4 (#251).
-        const discovered = { ...info, characteristicUuids: [...session.charMap.keys()] };
-        logAdvert(address, discovered);
-        gattAdapter = resolveAdapter(discovered, this.adapters) ?? adapter;
+        // resolveAfterDiscovery keeps a pick the advertised name made over an
+        // adapter that claims on a characteristic alone (a Digoo is not Inlife).
+        const characteristicUuids = [...session.charMap.keys()];
+        logAdvert(address, { ...info, characteristicUuids });
+        gattAdapter =
+          resolveAfterDiscovery(info, { characteristicUuids }, this.adapters) ?? adapter;
         if (gattAdapter.name !== adapter.name) {
           bleLog.info(
             `Re-resolved adapter after GATT discovery: ${adapter.name} -> ${gattAdapter.name} (${address})`,
@@ -252,10 +264,11 @@ export class ReadingWatcher implements Watcher {
                 gattAdapter,
                 this.profile ?? { height: 170, age: 30, gender: 'male', isAthlete: false },
                 address.replace(/[:-]/g, '').toUpperCase(),
-                undefined,
+                this.weightUnit,
                 undefined,
                 this.scaleAuth,
                 onActivity,
+                info.localName,
               ),
             GATT_READING_IDLE_MS,
             `GATT reading timeout for ${address}`,

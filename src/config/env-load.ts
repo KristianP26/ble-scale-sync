@@ -1,9 +1,11 @@
+import { dirname } from 'node:path';
 import { config as dotenvConfig } from 'dotenv';
 import type { AppConfig, ExporterEntry } from './schema.js';
 import { defaultEnvPath } from './paths.js';
 import { parseBleAdapterEnv } from './env-overrides.js';
 import { loadConfig as loadEnvVarConfig } from '../validate-env.js';
 import { loadExporterConfig } from '../exporters/config.js';
+import { resolveTokenDir } from './token-dirs.js';
 
 /**
  * Load config from .env, wrapping existing loadConfig() + loadExporterConfig()
@@ -52,7 +54,9 @@ export function loadEnvConfig(): AppConfig {
       Object.assign(entry, {
         client_id: s.clientId,
         client_secret: s.clientSecret,
-        token_dir: s.tokenDir,
+        // Relative to the directory the .env is in, like a token_dir in
+        // config.yaml (F-11).
+        token_dir: resolveTokenDir(s.tokenDir, dirname(defaultEnvPath())),
       });
     }
     if (name === 'mqtt' && exporterConfig.mqtt) {

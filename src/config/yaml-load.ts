@@ -1,13 +1,15 @@
 import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { createLogger } from '../logger.js';
-import { AppConfigSchema, formatConfigError } from './schema.js';
+import { createAppConfigSchema, formatConfigError } from './schema.js';
 import type { AppConfig } from './schema.js';
 import { defaultConfigPath, envPathFor } from './paths.js';
-import { loadEnvFile, resolveEnvReferences } from './env-refs.js';
+import { loadEnvFile, resolveEnvReferencesTracked } from './env-refs.js';
+import { safeParseResolved } from './env-coerce.js';
 import { applyEnvOverrides, filterValidExporters } from './env-overrides.js';
 import { collectUnknownKeys } from './unknown-keys.js';
 import { parseConfigYaml } from './yaml-parse.js';
-import { duplicateExporterTypeWarnings } from './resolve.js';
+import { resolveConfigTokenDirs } from './token-dirs.js';
 
 const log = createLogger('Config');
 
@@ -23,7 +25,7 @@ export function loadYamlConfig(configPath?: string): AppConfig {
 
   const raw = readFileSync(yamlPath, 'utf8');
   const parsed: unknown = parseConfigYaml(raw, yamlPath);
-  const resolved = resolveEnvReferences(parsed);
+  const { value: resolved, wholeRefs } = resolveEnvReferencesTracked(parsed);
 
   // Before validation on purpose: an unknown key is worth naming even when the
   // config fails to parse for an unrelated reason (#318).
@@ -34,7 +36,12 @@ export function loadYamlConfig(configPath?: string): AppConfig {
     );
   }
 
-  const result = AppConfigSchema.safeParse(resolved);
+  // A field whose whole value is one ${VAR} becomes a number or a boolean where
+  // the schema asks for one (G-21).
+  // A relative token_dir means "next to this config.yaml" (F-11), for the
+  // collision check here and for every consumer after load.
+  const configDir = dirname(resolve(yamlPath));
+  const result = safeParseResolved(createAppConfigSchema(configDir), resolved, wholeRefs);
   if (!result.success) {
     // Thrown, not also logged: every caller reports the error it catches (the
     // CLI entry, validate, the reload path), so logging here printed each
@@ -53,8 +60,7 @@ export function loadYamlConfig(configPath?: string): AppConfig {
       exporters: filterValidExporters(u.exporters),
     })),
   };
-
-  for (const warning of duplicateExporterTypeWarnings(config)) log.warn(warning);
+  config = resolveConfigTokenDirs(config, configDir);
 
   // Nothing below can throw, so a reload that fails validation above never
   // touches process.env and the running BLE handler keeps its driver.

@@ -15,7 +15,7 @@
 
 import type { BleDeviceInfo, ScaleAdapter } from '../../interfaces/scale-adapter.js';
 import type { BleChar } from '../shared.js';
-import { resolveAdapter } from '../../scales/resolve.js';
+import { resolveAdapter, resolveAfterDiscovery } from '../../scales/resolve.js';
 import {
   bleLog,
   errMsg,
@@ -252,6 +252,43 @@ export async function resolvePreConnectAdapter(
 }
 
 /**
+ * node-ble's GattServer as it is at runtime. `init()` is public in the shipped
+ * JavaScript (Device.gatt() calls it on a fresh server) but missing from the
+ * bundled typings.
+ */
+type RefreshableGattServer = NodeBle.GattServer & { init?: () => Promise<void> };
+
+/**
+ * Enumerate the GATT tree into a char map, bounded by the discovery timeout.
+ *
+ * With `refresh`, the server's snapshot is rebuilt first. node-ble's
+ * GattServer.init() snapshots the services and characteristics once, and
+ * services(), getPrimaryService() and characteristics() only ever read that
+ * snapshot back, so without it a retry re-reads the exact map that was found
+ * incomplete and a characteristic BlueZ exported late (bluez/bluez#1489) can
+ * never appear. init() is what Device.gatt() runs on a new server: it clears
+ * the snapshot, waits for ServicesResolved, and walks the device's D-Bus
+ * children with a fresh proxy object. It is safe here because every retry runs
+ * before anything is subscribed, so no caller holds a characteristic from the
+ * old snapshot that it still needs. Inside the same timeout, because the
+ * ServicesResolved wait has no bound of its own if the link drops.
+ */
+async function enumerateCharMap(
+  gatt: NodeBle.GattServer,
+  refresh: boolean,
+): Promise<Map<string, BleChar>> {
+  return withTimeout(
+    (async () => {
+      const init = (gatt as RefreshableGattServer).init;
+      if (refresh && typeof init === 'function') await init.call(gatt);
+      return buildCharMap(gatt);
+    })(),
+    GATT_DISCOVERY_TIMEOUT_MS,
+    'GATT service discovery timed out',
+  );
+}
+
+/**
  * Resolve the adapter again once characteristics are known.
  *
  * Returns the adapter rather than assigning the caller's local, and throws when
@@ -259,11 +296,14 @@ export async function resolvePreConnectAdapter(
  * discarded: the reading uses a fresh one built after the second
  * acquireGattServer, whose adapter may differ.
  *
- * That second acquire is not a duplicate of the one feeding this function.
- * node-ble's GattServer.init() snapshots the services and characteristics, and
- * every later services()/characteristics() call reads the snapshot back, so a
- * new GattServer is the only way to see what BlueZ exported after the first
- * enumeration (bluez/bluez#1489). Pinned by scan-order.test.ts.
+ * The pick goes through resolveAfterDiscovery, so the GATT services found here
+ * cannot overturn what the device's name already identified (a Digoo taken by
+ * Inlife, a Hoffen by MGB). BlueZ gives no advertised service UUIDs before
+ * connect on this path, hence `advertisedServicesKnown: false`.
+ *
+ * A retry rebuilds the GATT snapshot first (enumerateCharMap); without that it
+ * would re-read the same snapshot and could never see a late export
+ * (bluez/bluez#1489).
  */
 export async function resolveAfterConnect(
   gatt: NodeBle.GattServer,
@@ -272,37 +312,38 @@ export async function resolveAfterConnect(
   deviceMac: string,
   advert: AdvertisementSnapshot,
 ): Promise<ScaleAdapter> {
-  const serviceUuids = await gatt.services();
+  let serviceUuids = await gatt.services();
   bleLog.debug(`Services: [${serviceUuids.join(', ')}]`);
 
+  // The same record resolvePreConnectAdapter matched on. Manufacturer and
+  // service data were captured before StopDiscovery, because BlueZ drops the
+  // advertisement with the discovery session. Without them a dozen adapters
+  // that key on a company id (the Lefu OEM fingerprint, the Xiaomi and Beurer
+  // company ids) could never match on Linux, and the device fell through to
+  // whichever adapter claimed the bare vendor service (#280, #318).
+  const advertised: BleDeviceInfo = {
+    localName: name,
+    address: deviceMac ? formatMac(deviceMac) : undefined,
+    serviceUuids: [],
+    ...advert,
+  };
+
   let resolved: ScaleAdapter | undefined;
-  let matchCharMap = await withTimeout(
-    buildCharMap(gatt),
-    GATT_DISCOVERY_TIMEOUT_MS,
-    'GATT service discovery timed out',
-  );
+  let matchCharMap = await enumerateCharMap(gatt, false);
   for (let attempt = 1; attempt <= CHAR_DISCOVERY_MAX_RETRIES; attempt++) {
-    const info: BleDeviceInfo = {
-      localName: name,
-      address: deviceMac ? formatMac(deviceMac) : undefined,
-      serviceUuids: serviceUuids.map(normalizeUuid),
-      characteristicUuids: [...matchCharMap.keys()],
-      // Captured before StopDiscovery, because BlueZ drops the
-      // advertisement with the discovery session. Without it a dozen
-      // adapters that key on a company id (the Lefu OEM fingerprint, the
-      // Xiaomi and Beurer company ids) could never match on Linux, and the
-      // device fell through to whichever adapter claimed the bare vendor
-      // service (#280, #318).
-      ...advert,
-    };
-    resolved = resolveAdapter(info, adapters);
+    resolved = resolveAfterDiscovery(
+      advertised,
+      {
+        serviceUuids: serviceUuids.map(normalizeUuid),
+        characteristicUuids: [...matchCharMap.keys()],
+        advertisedServicesKnown: false,
+      },
+      adapters,
+    );
     if (resolved || attempt === CHAR_DISCOVERY_MAX_RETRIES) break;
     await sleep(CHAR_DISCOVERY_RETRY_DELAY_MS);
-    matchCharMap = await withTimeout(
-      buildCharMap(gatt),
-      GATT_DISCOVERY_TIMEOUT_MS,
-      'GATT service discovery timed out',
-    );
+    matchCharMap = await enumerateCharMap(gatt, true);
+    serviceUuids = await gatt.services();
   }
   if (!resolved) {
     throw new Error(
@@ -314,16 +355,15 @@ export async function resolveAfterConnect(
   return resolved;
 }
 
-/** Build the characteristic map, retrying while the adapter's chars are missing. */
+/**
+ * Build the characteristic map, retrying while the adapter's chars are missing.
+ * Each retry rebuilds node-ble's GATT snapshot first (see enumerateCharMap).
+ */
 export async function buildCharMapWithRetry(
   gatt: NodeBle.GattServer,
   findMissing: (map: Map<string, BleChar>) => string[],
 ): Promise<Map<string, BleChar>> {
-  let charMap = await withTimeout(
-    buildCharMap(gatt),
-    GATT_DISCOVERY_TIMEOUT_MS,
-    'GATT service discovery timed out',
-  );
+  let charMap = await enumerateCharMap(gatt, false);
   // Retry budget: MAX iterations total. Iterations 1..MAX-1 actually rebuild
   // the char map; the MAX-th iteration only logs the give-up warn and breaks,
   // so the user-facing retry counter is `attempt/(MAX-1)`.
@@ -341,11 +381,7 @@ export async function buildCharMapWithRetry(
       `GATT enumeration missing [${missing.join(', ')}], retry ${attempt}/${CHAR_DISCOVERY_MAX_RETRIES - 1} in ${CHAR_DISCOVERY_RETRY_DELAY_MS}ms...`,
     );
     await new Promise<void>((r) => setTimeout(r, CHAR_DISCOVERY_RETRY_DELAY_MS));
-    charMap = await withTimeout(
-      buildCharMap(gatt),
-      GATT_DISCOVERY_TIMEOUT_MS,
-      'GATT service discovery timed out',
-    );
+    charMap = await enumerateCharMap(gatt, true);
   }
   return charMap;
 }
@@ -511,6 +547,8 @@ export async function readWithTimeouts(
     scaleAuth?: ScaleAuth;
     readingTimeoutMs?: number;
     abortSignal?: AbortSignal;
+    /** Advertised name, handed to the adapter as ConnectionContext.deviceName. */
+    deviceName?: string;
   },
 ): Promise<RawReading> {
   const idleMs = opts.readingTimeoutMs ?? RAW_READING_TIMEOUT_MS;
@@ -531,6 +569,7 @@ export async function readWithTimeouts(
             opts.onLiveData,
             opts.scaleAuth,
             onActivity,
+            opts.deviceName,
           ),
         idleMs,
         'Timed out waiting for a complete scale reading',

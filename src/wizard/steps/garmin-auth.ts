@@ -1,11 +1,11 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import type { WizardStep, WizardContext } from '../types.js';
 import type { UserConfig, ExporterEntry } from '../../config/schema.js';
 import { success, error, warn, dim } from '../ui.js';
 import { cliCommand } from '../../cli-invocation.js';
-import { findTokenDirCollisions } from '../../config/token-dirs.js';
+import { findTokenDirCollisions, resolveTokenDir } from '../../config/token-dirs.js';
 import { resolveEnvReferences } from '../../config/env-refs.js';
 import { errMsg } from '../../utils/error.js';
 
@@ -54,9 +54,7 @@ function runSetupGarmin(pythonCmd: string, options: SetupGarminOptions = {}): Pr
     const args: string[] = [scriptPath];
 
     if (options.tokenDir) {
-      const home = process.env.HOME || process.env.USERPROFILE;
-      const expanded = home ? options.tokenDir.replace(/^~/, home) : options.tokenDir;
-      args.push('--token-dir', expanded);
+      args.push('--token-dir', options.tokenDir);
     }
 
     // Pass credentials via env vars (not CLI args) to avoid ps visibility
@@ -99,10 +97,16 @@ export const garminAuthStep: WizardStep = {
     // first, and both users' readings would go to the second account. The old
     // check here dropped entries without token_dir before comparing, so the
     // commonest case (both on the default) passed it. Refuse to auth instead.
-    const collisions = findTokenDirCollisions({
-      users: (ctx.config.users ?? []) as Parameters<typeof findTokenDirCollisions>[0]['users'],
-      global_exporters: ctx.config.global_exporters,
-    }).filter((c) => c.type === 'garmin');
+    // A relative token_dir is next to the config file being written (F-11),
+    // wherever the wizard was started from.
+    const configDir = dirname(resolve(ctx.configPath));
+    const collisions = findTokenDirCollisions(
+      {
+        users: (ctx.config.users ?? []) as Parameters<typeof findTokenDirCollisions>[0]['users'],
+        global_exporters: ctx.config.global_exporters,
+      },
+      configDir,
+    ).filter((c) => c.type === 'garmin');
     if (collisions.length > 0) {
       for (const c of collisions) console.log(`\n  ${warn(c.message)}`);
       console.log(
@@ -140,7 +144,10 @@ export const garminAuthStep: WizardStep = {
       const options: SetupGarminOptions = {
         email: entryRecord.email as string | undefined,
         password: entryRecord.password as string | undefined,
-        tokenDir: entryRecord.token_dir as string | undefined,
+        tokenDir:
+          typeof entryRecord.token_dir === 'string' && entryRecord.token_dir.trim()
+            ? resolveTokenDir(entryRecord.token_dir.trim(), configDir)
+            : undefined,
       };
 
       console.log(`\n  Running Garmin setup for ${userName}...\n`);

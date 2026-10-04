@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
-import { AppConfigSchema, formatConfigError } from '../config/schema.js';
-import { resolveEnvReferences } from '../config/load.js';
+import { createAppConfigSchema, formatConfigError } from '../config/schema.js';
+import { safeParseWithEnvRefs } from '../config/env-coerce.js';
 import { generateSlug } from '../config/slugify.js';
 import { parseConfigYaml } from '../config/yaml-parse.js';
 import { atomicWrite } from '../config/write.js';
@@ -47,11 +48,9 @@ export async function runNonInteractive(configPath: string): Promise<void> {
     }
   }
 
-  // Resolve env references
-  const resolved = resolveEnvReferences(parsed);
-
-  // Validate with Zod
-  const result = AppConfigSchema.safeParse(resolved);
+  // Resolve env references and validate, converting a whole ${VAR} in a
+  // numeric or boolean field the way loading does (G-21).
+  const result = safeParseWithEnvRefs(createAppConfigSchema(dirname(resolve(configPath))), parsed);
   if (!result.success) {
     const msg = formatConfigError(result.error);
     log.error(msg);

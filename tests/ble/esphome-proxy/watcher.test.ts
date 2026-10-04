@@ -233,3 +233,46 @@ describe('ReadingWatcher GATT failure logging (B-13)', () => {
     }
   });
 });
+
+/**
+ * The watcher is built and hot-reloaded from src/runtime/sources.ts. Before,
+ * it never received `scale.weight_unit` (a GATT read from an adapter without
+ * `normalizesWeight` was exported as kg whatever the unit), and a reload that
+ * removed the Beurer PIN kept the old one because updateConfig only assigned a
+ * truthy scaleAuth.
+ */
+describe('ReadingWatcher config: weight unit, PIN removal, device name', () => {
+  type Pool = { emitAdvert: (info: BleDeviceInfo, mac: string) => void };
+  const poolOf = (w: unknown): Pool => (w as { pool: Pool }).pool;
+  const ADVERT: BleDeviceInfo = { localName: 'GATT-scale', serviceUuids: [] };
+
+  it('converts a GATT reading with the configured lbs unit, and follows a reload', async () => {
+    const adapters = [gattAdapter()];
+    const watcher = new ReadingWatcher(config, adapters, undefined, undefined, undefined, 'lbs');
+    await watcher.start();
+    poolOf(watcher).emitAdvert(ADVERT, 'AA:BB:CC:DD:EE:10');
+    expect((await watcher.nextReading()).reading.weight).toBeCloseTo(82 * 0.45359237, 2);
+
+    watcher.updateConfig({ adapters, weightUnit: 'kg' });
+    poolOf(watcher).emitAdvert(ADVERT, 'AA:BB:CC:DD:EE:11');
+    expect((await watcher.nextReading()).reading.weight).toBe(82);
+    await watcher.stop();
+  });
+
+  it('drops the PIN when a reload no longer carries one, and passes the device name', async () => {
+    const seen: Array<{ pin?: number; name?: string }> = [];
+    const adapter = {
+      ...gattAdapter(),
+      onConnected: async (ctx: Parameters<NonNullable<ScaleAdapter['onConnected']>>[0]) => {
+        seen.push({ pin: ctx.scaleAuth?.pin, name: ctx.deviceName });
+      },
+    } as ScaleAdapter;
+    const watcher = new ReadingWatcher(config, [adapter], undefined, undefined, { pin: 1234 });
+    watcher.updateConfig({ adapters: [adapter], scaleAuth: undefined });
+    await watcher.start();
+    poolOf(watcher).emitAdvert(ADVERT, 'AA:BB:CC:DD:EE:12');
+    await watcher.nextReading();
+    expect(seen).toEqual([{ pin: undefined, name: 'GATT-scale' }]);
+    await watcher.stop();
+  });
+});

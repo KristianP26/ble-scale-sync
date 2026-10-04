@@ -1,12 +1,25 @@
-import { resolveForSingleUser, resolveExportersForUser } from '../config/resolve.js';
+import {
+  resolveExportersForUser,
+  resolveExporterSlotsForUser,
+  type ResolvedExporterEntry,
+} from '../config/resolve.js';
 import { createExporterFromEntry } from '../exporters/registry.js';
 import type { Exporter } from '../interfaces/exporter.js';
 import type { ExporterEntry } from '../config/schema.js';
 import type { AppContext } from './context.js';
+import { exporterSlot, setExporterSlot } from './exporter-slot.js';
+
+/** Build the instances for resolved entries, remembering which slot each came from. */
+function buildFromSlots(resolved: ResolvedExporterEntry[]): Exporter[] {
+  return resolved.map((r) => {
+    const exporter = createExporterFromEntry(r.entry);
+    setExporterSlot(exporter, r);
+    return exporter;
+  });
+}
 
 export function buildSingleUserExporters(ctx: AppContext): Exporter[] {
-  const { exporterEntries } = resolveForSingleUser(ctx.config);
-  return exporterEntries.map((e) => createExporterFromEntry(e));
+  return buildFromSlots(resolveExporterSlotsForUser(ctx.config, ctx.config.users[0]));
 }
 
 /**
@@ -35,8 +48,15 @@ export function collectConfiguredExporters(ctx: AppContext): Exporter[] {
  * a Garmin account produce two instances sharing one name; picking by name
  * across the deduped union therefore delivered user B's queued weigh-in
  * through user A's instance - with A's `token_dir`, i.e. into A's account.
- * Within one user `resolveExportersForUser` dedupes by type, so the name is
- * unambiguous once the slug has chosen the list.
+ *
+ * Within the user, the entry's slot (list + index, D029) picks the instance,
+ * because one list may hold two entries of the same type and the name cannot
+ * tell them apart. When the slot no longer holds that type (the config was
+ * edited while the entry waited), the type decides, but only when the user has
+ * exactly one exporter of it: with two, guessing would deliver to a target the
+ * reading was never meant for, so the entry resolves to nothing and is dropped.
+ * An entry from before slots existed has none and takes the first of its type,
+ * which is where the version that queued it would have delivered it.
  *
  * A user who no longer exists resolves to nothing and the caller drops the
  * entry, which is the point: falling back to the union is how the wrong
@@ -46,12 +66,24 @@ export function collectConfiguredExporters(ctx: AppContext): Exporter[] {
  */
 export function resolveQueuedExporter(
   ctx: AppContext,
-  entry: { exporter: string; userSlug?: string },
+  entry: {
+    exporter: string;
+    userSlug?: string;
+    exporterList?: 'user' | 'global';
+    exporterIndex?: number;
+  },
 ): Exporter | undefined {
-  const candidates = entry.userSlug
-    ? getExportersForUser(ctx, entry.userSlug)
-    : collectConfiguredExporters(ctx);
-  return candidates.find((e) => e.name === entry.exporter);
+  if (!entry.userSlug) {
+    return collectConfiguredExporters(ctx).find((e) => e.name === entry.exporter);
+  }
+  const ofType = getExportersForUser(ctx, entry.userSlug).filter((e) => e.name === entry.exporter);
+  if (entry.exporterList === undefined || entry.exporterIndex === undefined) return ofType[0];
+  const exact = ofType.find((e) => {
+    const slot = exporterSlot(e);
+    return slot?.list === entry.exporterList && slot?.index === entry.exporterIndex;
+  });
+  if (exact) return exact;
+  return ofType.length === 1 ? ofType[0] : undefined;
 }
 
 /**
@@ -64,8 +96,7 @@ export function getExportersForUser(ctx: AppContext, slug: string): Exporter[] {
   if (!exporters) {
     const user = ctx.config.users.find((u) => u.slug === slug);
     if (!user) return [];
-    const entries = resolveExportersForUser(ctx.config, user);
-    exporters = entries.map((e) => createExporterFromEntry(e));
+    exporters = buildFromSlots(resolveExporterSlotsForUser(ctx.config, user));
     ctx.exporterCache.set(slug, exporters);
   }
   return exporters;

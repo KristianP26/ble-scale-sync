@@ -216,6 +216,9 @@ describe('ExcelvanCF369Adapter session boundary (#394)', () => {
     buf[0] = 0xcf; // marker
     buf.writeUInt16BE(800, 4);
     buf.writeUInt16BE(fatTenths, 6);
+    // bone = 3.5 kg, as in the frames above. Left at 0 it is not a measurement,
+    // and buildPayload now discards the whole composition for it (D028).
+    buf[8] = 35;
     buf.writeUInt16BE(400, 9);
     buf.writeUInt16BE(550, 12);
     return buf;

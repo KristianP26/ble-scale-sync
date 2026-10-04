@@ -7,7 +7,7 @@ import type {
 import type { ScanOptions, ScanResult } from '../types.js';
 import type { RawReading } from '../shared.js';
 import { waitForRawReading, withAbandonmentCleanup } from '../shared.js';
-import { resolveAdapter } from '../../scales/resolve.js';
+import { resolveAdapter, resolveAfterDiscovery } from '../../scales/resolve.js';
 import {
   bleLog,
   normalizeUuid,
@@ -158,22 +158,16 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
           // Target-MAC mode: match adapter post-connect using full service list
           // and the discovered characteristics, so char-aware adapters (#177, #235)
           // can disambiguate devices that share a generic vendor service (fff0).
-          // Union of advertised and discovered services. Target-MAC mode skips
-          // the discovery-time match, so this is the ONLY adapter resolution for
-          // a configured scale_mac, and it must carry both kinds of evidence.
-          // A device record holding advertisement-scoped manufacturer data next
-          // to a GATT-only service list is a scope hybrid that exists on no
-          // other path, and adapters cannot tell the two apart: the Hutbit's
-          // d618 is advertised (AD type 0x03) and is not known to be a GATT
-          // primary service, so a signature check needing d618 would never fire
-          // here while the manufacturer data suggested it should (#278).
+          // Target-MAC mode skips the discovery-time match, so this is the ONLY
+          // adapter resolution for a configured scale_mac, and it must carry both
+          // kinds of evidence. resolveAfterDiscovery keeps them apart: adapters
+          // read serviceUuids as the ADVERTISED list, so a GATT-only service must
+          // not overturn what the advertisement identified (a Hoffen taken by MGB
+          // on its 0xFFB0 GATT service, an ES-WBE28 by QN on 0xFFE0). The advertised
+          // half still carries the manufacturer data: the Hutbit's d618 is
+          // advertised (AD type 0x03) and is not known to be a GATT primary
+          // service, and its signature check needs the two together (#278).
           const discoveredUuids = services.map((s) => normalizeUuid(s.uuid));
-          const serviceUuids = [
-            ...new Set([
-              ...(peripheral.advertisement?.serviceUuids ?? []).map(normalizeUuid),
-              ...discoveredUuids,
-            ]),
-          ];
           const characteristicUuids = services.flatMap((s) =>
             (s.characteristics ?? []).map((c) => normalizeUuid(c.uuid)),
           );
@@ -184,15 +178,19 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
           // that fingerprint the advertisement (the Lefu OEM signature #278,
           // Beurer 0x0611, Mi Scale, QN) silently lost that signal without it,
           // so an OEM-rebranded unit fell through to a wrong adapter.
-          const info: BleDeviceInfo = {
+          const advertised: BleDeviceInfo = {
             localName: name,
             address: peripheral.address ? formatMac(peripheral.address) : undefined,
-            serviceUuids,
-            characteristicUuids,
+            serviceUuids: (peripheral.advertisement?.serviceUuids ?? []).map(normalizeUuid),
             manufacturerData: parseMfgData(peripheral.advertisement?.manufacturerData),
             serviceData: parseServiceData(peripheral),
           };
-          const found = resolveAdapter(info, adapters);
+          const serviceUuids = [...new Set([...advertised.serviceUuids, ...discoveredUuids])];
+          const found = resolveAfterDiscovery(
+            advertised,
+            { serviceUuids: discoveredUuids, characteristicUuids },
+            adapters,
+          );
           if (!found) {
             throw new Error(
               `Device found (${safeName(name)}) but no adapter recognized it. ` +
@@ -226,6 +224,7 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
                 onLiveData,
                 scaleAuth,
                 onActivity,
+                peripheral.advertisement?.localName,
               ),
             readingTimeoutMs ?? RAW_READING_TIMEOUT_MS,
             'Timed out waiting for a complete scale reading',

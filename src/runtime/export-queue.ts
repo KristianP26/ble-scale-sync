@@ -47,7 +47,16 @@ const RETRY_DELAYS_MS = [15, 45, 5 * 60, 18 * 60, 47 * 60].map((min) => min * 60
 const MAX_ENTRIES = 50;
 
 export interface QueuedExport {
+  /** Exporter TYPE ('garmin'); with the slot below, which entry of the user's exporters. */
   exporter: string;
+  /**
+   * Which list the failed exporter's config entry is in, and where (D029). A
+   * list may hold two entries of one type, so the type alone cannot say which
+   * of them failed. Both absent in files written before this existed; such an
+   * entry is redelivered through the first exporter of its type, as before.
+   */
+  exporterList?: 'user' | 'global';
+  exporterIndex?: number;
   payload: BodyComposition;
   /**
    * ISO 8601. The time the reading was MEASURED, which is what makes it
@@ -91,7 +100,18 @@ function isDue(entry: QueuedExport, now: number): boolean {
  * one failure time.
  */
 function entryId(e: QueuedExport): string {
-  return JSON.stringify([e.exporter, e.userSlug ?? '', e.queuedAt, e.timestamp ?? '']);
+  // The slot is part of the identity: two webhooks of one user failing on the
+  // same reading in the same millisecond are two entries, and without it the
+  // re-read in flushQueue would take the second for one it already holds and
+  // drop it on the next write.
+  return JSON.stringify([
+    e.exporter,
+    e.exporterList ?? '',
+    e.exporterIndex ?? -1,
+    e.userSlug ?? '',
+    e.queuedAt,
+    e.timestamp ?? '',
+  ]);
 }
 
 /**
@@ -195,8 +215,8 @@ export function enqueue(path: string, entry: QueuedExport, now: number = Date.no
  * reading for user B was delivered through user A's instance - with A's
  * `token_dir`, i.e. into somebody else's Garmin account.
  *
- * `resolveExportersForUser` dedupes by type WITHIN a user, so once the entry's
- * `userSlug` picks the list, the name is unambiguous again.
+ * Within that user the entry's slot (`exporterList` + `exporterIndex`, D029)
+ * picks the instance, since one list may hold two exporters of a type.
  */
 export type QueuedExporterLookup = (entry: QueuedExport) => Exporter | undefined;
 
@@ -222,6 +242,7 @@ export async function flushQueue(
   path: string,
   lookup: QueuedExporterLookup,
   now: number = Date.now(),
+  signal?: AbortSignal,
 ): Promise<{ delivered: number; failed: number; dropped: number }> {
   const pending = loadQueue(path, now);
   if (pending.length === 0) {
@@ -258,6 +279,13 @@ export async function flushQueue(
   };
 
   for (let i = 0; i < pending.length; i += 1) {
+    // Stopping: start nothing new. Taking the next entry off disk now would
+    // put it at the mercy of the hard-exit floor for no gain, while left in
+    // the file it is simply retried by the next process.
+    if (signal?.aborted) {
+      keep.push(...pending.slice(i));
+      break;
+    }
     const entry = pending[i];
     if (!isDue(entry, now)) {
       // Not attempted, so it stays on disk exactly as it was.
@@ -312,6 +340,21 @@ export async function flushQueue(
       ...(entry.userSlug ? { userSlug: entry.userSlug } : {}),
     };
 
+    // The entry is already off disk (at-most-once, D014). A shutdown while it
+    // is being delivered can therefore cost it, and that must not be silent
+    // (E-10): name the reading so it can be re-entered by hand.
+    const onAbort = (): void => {
+      log.warn(
+        `Shutdown requested while retrying a queued ${entry.exporter} export` +
+          `${entry.userSlug ? ` for '${entry.userSlug}'` : ''}` +
+          `${entry.timestamp ? ` measured at ${entry.timestamp}` : ''}` +
+          ` (${entry.payload.weight} kg). It is no longer in the queue; if the process ` +
+          'exits before this attempt finishes, the reading is lost for that target.',
+      );
+    };
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
+
     try {
       const result = await exporter.export(entry.payload, context);
       if (result.success) {
@@ -337,6 +380,8 @@ export async function flushQueue(
         lastError: errMsg(err),
       });
       failed += 1;
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
     }
   }
 

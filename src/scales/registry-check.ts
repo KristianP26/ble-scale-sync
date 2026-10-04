@@ -18,9 +18,10 @@ import { descriptorNameTokens } from './match-descriptor.js';
  *  - priorities are unique, so the priority order is total.
  *
  * The fixture-based collision guard (one representative {@link
- * '../interfaces/scale-adapter.js'.BleDeviceInfo} per adapter, verifying the
- * first match resolves to the right adapter) lives in the test suite, since
- * it needs a fixture corpus that is test data, not shipped code.
+ * '../interfaces/scale-adapter.js'.BleDeviceInfo} per adapter, resolved in
+ * priority order, plus the post-discovery shapes that only collide once GATT
+ * services and characteristics are known) lives in the test suite, since it
+ * needs a fixture corpus that is test data, not shipped code.
  */
 export interface RegistryCheckResult {
   errors: string[];
@@ -48,8 +49,8 @@ export function checkRegistryIntegrity(adapters: readonly ScaleAdapter[]): Regis
   // service UUID and brand-name substrings, so it overlaps many specific
   // adapters by design. Its priority 0 (with the uniqueness check below) is
   // what sorts it under every specific adapter in resolveAdapter(); keeping it
-  // last in the array as well makes array order, which the collision test
-  // still uses, agree with that.
+  // last in the array as well keeps array order agreeing with that, so a
+  // caller that still scans the array in order cannot be shadowed by it.
   const genericIdx = adapters.findIndex((a) => a instanceof StandardGattScaleAdapter);
   if (genericIdx === -1) {
     warnings.push(

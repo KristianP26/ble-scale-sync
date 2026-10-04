@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as path from 'node:path';
 import { StravaExporter } from '../../src/exporters/strava.js';
 import type { StravaConfig } from '../../src/exporters/config.js';
 import type { BodyComposition } from '../../src/interfaces/scale-adapter.js';
@@ -293,5 +294,35 @@ describe('StravaExporter', () => {
 
     expect(result.success).toBe(true);
     expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('StravaExporter token directory (F-11)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(validTokens));
+    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+  });
+
+  // A relative token_dir was read from the working directory. setup-strava
+  // writes next to config.yaml, so any other cwd read no token at all.
+  it('reads a relative token_dir from the config directory, not as a cwd-relative path', async () => {
+    await new StravaExporter({ ...defaultConfig, tokenDir: './strava-tokens' }).export(
+      samplePayload,
+    );
+
+    // configDir(): the working directory holds a config here (existsSync is true).
+    expect(fs.readFileSync).toHaveBeenCalledWith(
+      path.join(process.cwd(), 'strava-tokens', 'strava_tokens.json'),
+      'utf-8',
+    );
+  });
+
+  it('keeps an absolute token_dir as written', async () => {
+    const abs = path.resolve('/srv/strava/alice');
+    await new StravaExporter({ ...defaultConfig, tokenDir: abs }).export(samplePayload);
+
+    expect(fs.readFileSync).toHaveBeenCalledWith(path.join(abs, 'strava_tokens.json'), 'utf-8');
   });
 });

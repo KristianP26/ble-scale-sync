@@ -66,6 +66,21 @@ export const IMPEDANCE_MIN_OHM = 150;
 export const IMPEDANCE_MAX_OHM = 1200;
 
 /**
+ * Whether an impedance may drive any body composition formula at all.
+ *
+ * The one definition of a usable impedance (ADR D028): the processor applies
+ * it to every reading before `computeMetrics()` and replaces a failing value
+ * with 0, and `biaFatIfPlausible` applies it again for callers outside the
+ * processor. 0 (no measurement), a 0xFFFF sentinel and a mis-scaled field all
+ * fail it alike.
+ */
+export function isPlausibleImpedance(impedance: number): boolean {
+  return (
+    Number.isFinite(impedance) && impedance >= IMPEDANCE_MIN_OHM && impedance <= IMPEDANCE_MAX_OHM
+  );
+}
+
+/**
  * Upper bound on a body fat percentage this project will publish as measured.
  * Well above any real reading, and well below what a corrupted 16-bit field
  * produces. It rejects rather than clamps: a value this far out is not a
@@ -73,6 +88,48 @@ export const IMPEDANCE_MAX_OHM = 1200;
  * estimate (#405).
  */
 const MAX_PLAUSIBLE_FAT_PCT = 75;
+
+/**
+ * Upper bounds for the other scale-reported fields (E-15). Like the fat bound,
+ * far outside any real body and far inside what a corrupted field produces:
+ * total body water runs roughly 35 to 75 %, bone mass a few kilograms, and
+ * muscle is a share of body weight.
+ */
+const MAX_PLAUSIBLE_WATER_PCT = 80;
+const MAX_PLAUSIBLE_BONE_KG = 10;
+const MAX_PLAUSIBLE_MUSCLE_PCT = 100;
+
+/**
+ * Why a scale-reported composition cannot be used, or null when it can (D028).
+ *
+ * Judged as a WHOLE. The fields describe one body: a water percentage only
+ * means something next to the fat percentage it was measured with, so one
+ * field that is not a measurement (0, a sentinel) discards the set rather than
+ * mixing what is left with an estimate. That mix is how a Yunmai frame with
+ * `fat = 0` exported water and muscle for a body with no fat at all.
+ *
+ * A composition is fat plus, optionally, water, bone and muscle. Water, bone
+ * or muscle without fat is rejected for the same reason. `visceralFat` is not
+ * part of it: it is a 1 to 59 index that is clamped, not a share of the body.
+ */
+export function compositionRejection(comp: ScaleBodyComp): string | null {
+  const { fat, water, bone, muscle } = comp;
+  const others = water != null || bone != null || muscle != null;
+  if (fat == null) return others ? 'water, bone or muscle without a body fat value' : null;
+  if (!(fat > 0 && fat <= MAX_PLAUSIBLE_FAT_PCT)) {
+    return `body fat ${fat} % is outside 0-${MAX_PLAUSIBLE_FAT_PCT} %`;
+  }
+  if (water != null && !(water > 0 && water <= MAX_PLAUSIBLE_WATER_PCT)) {
+    return `water ${water} % is outside 0-${MAX_PLAUSIBLE_WATER_PCT} %`;
+  }
+  if (bone != null && !(bone > 0 && bone <= MAX_PLAUSIBLE_BONE_KG)) {
+    return `bone mass ${bone} kg is outside 0-${MAX_PLAUSIBLE_BONE_KG} kg`;
+  }
+  if (muscle != null && !(muscle > 0 && muscle <= MAX_PLAUSIBLE_MUSCLE_PCT)) {
+    return `muscle ${muscle} % is outside 0-${MAX_PLAUSIBLE_MUSCLE_PCT} %`;
+  }
+  return null;
+}
 
 /**
  * BIA body fat, or `undefined` when the number is not a body.
@@ -96,7 +153,7 @@ export function biaFatIfPlausible(
   p: UserProfile,
 ): number | undefined {
   if (!(impedance > 0)) return undefined;
-  if (impedance < IMPEDANCE_MIN_OHM || impedance > IMPEDANCE_MAX_OHM) {
+  if (!isPlausibleImpedance(impedance)) {
     biaLog.debug(
       `Impedance ${impedance} ohm is outside ${IMPEDANCE_MIN_OHM}-${IMPEDANCE_MAX_OHM}, ` +
         `so body composition falls back to the BMI estimate rather than being computed ` +
@@ -117,27 +174,31 @@ export function buildPayload(
   const heightM = p.height / 100;
   const bmi = weight / (heightM * heightM);
 
-  // A scale-provided fat is used as given, but only if it is a body fat
-  // percentage at all. Nothing downstream bounds it: lean mass is
-  // weight * (1 - fat/100), so 6553.5 % (the 0xFFFF sentinel, or any other
-  // corrupted 16-bit field) makes lean mass negative and exports a negative
-  // bone mass, water percentage and muscle mass. The sentinel is rejected at
-  // the decoders now, but this is the sink they all drain into, and a decoder
-  // added later should not be able to reintroduce it (#405).
-  const reported = comp.fat;
-  const usable = reported !== undefined && reported > 0 && reported <= MAX_PLAUSIBLE_FAT_PCT;
-  if (reported !== undefined && !usable) {
-    biaLog.debug(
-      `Scale-reported body fat ${reported} % is outside 0-${MAX_PLAUSIBLE_FAT_PCT} %, ` +
-        `so the BMI estimate is used instead.`,
-    );
+  // A scale-provided composition is used as given, but only as a whole and only
+  // if every part of it is a measurement (D028, E-15). Nothing downstream
+  // bounds it: lean mass is weight * (1 - fat/100), so 6553.5 % (the 0xFFFF
+  // sentinel, or any other corrupted 16-bit field) makes lean mass negative and
+  // exports a negative bone mass, water percentage and muscle mass. The
+  // sentinel is rejected at the decoders now, but this is the sink they all
+  // drain into, and a decoder added later should not be able to reintroduce it
+  // (#405).
+  //
+  // A rejected composition falls back the way a reading without one would
+  // have: BIA when the impedance is usable, the BMI estimate otherwise.
+  const rejection = compositionRejection(comp);
+  if (rejection) {
+    biaLog.debug(`Scale-reported composition discarded (${rejection}); estimating instead.`);
   }
-  const bodyFatPercent = usable ? reported : estimateBodyFat(bmi, p);
+  const measured: ScaleBodyComp = rejection ? {} : comp;
+  const bodyFatPercent =
+    measured.fat ??
+    (rejection ? biaFatIfPlausible(weight, impedance, p) : undefined) ??
+    estimateBodyFat(bmi, p);
   const lbm = weight * (1 - bodyFatPercent / 100);
 
-  const waterPercent = comp.water ?? ((lbm * (p.isAthlete ? 0.74 : 0.73)) / weight) * 100;
+  const waterPercent = measured.water ?? ((lbm * (p.isAthlete ? 0.74 : 0.73)) / weight) * 100;
 
-  const boneMass = comp.bone ?? lbm * 0.042;
+  const boneMass = measured.bone ?? lbm * 0.042;
 
   // Skeletal muscle estimate: roughly the portion of lean mass that is skeletal
   // muscle. This is NOT what the muscleMass field means (see below), but the
@@ -154,7 +215,7 @@ export function buildPayload(
   // numbers are internally consistent with this definition and not with the old
   // one: 65.50 kg fat-free mass - 3.28 kg bone = 62.22 vs the app's 62.20 muscle
   // mass, and 65.00 - 3.25 = 61.75 vs the app's 61.80.
-  const muscleMass = comp.muscle != null ? (comp.muscle / 100) * weight : lbm - boneMass;
+  const muscleMass = measured.muscle != null ? (measured.muscle / 100) * weight : lbm - boneMass;
 
   let visceralFat: number;
   if (comp.visceralFat != null) {
@@ -165,11 +226,12 @@ export function buildPayload(
     visceralFat = 1;
   }
 
-  const physiqueRating = computePhysiqueRating(
-    bodyFatPercent,
-    comp.muscle != null ? (comp.muscle / 100) * weight : skeletalMuscleEstimate,
-    weight,
-  );
+  // Always the skeletal estimate, also when the scale reported a muscle value
+  // (D002, E-06). The thresholds are calibrated on the skeletal estimate, and a
+  // vendor muscle percentage is fat-free mass minus bone or something close to
+  // it, at 0.55 to 0.70 of body weight: fed that, the rating saturated at 9
+  // below 18 % fat and at 6 between 18 and 25 %, whatever the body.
+  const physiqueRating = computePhysiqueRating(bodyFatPercent, skeletalMuscleEstimate, weight);
 
   const sexConstant = p.gender === 'male' ? 5 : -161;
   const baseBmr = 10 * weight + 6.25 * p.height - 5 * p.age;
@@ -199,10 +261,29 @@ export function buildPayload(
   };
 }
 
-/** Deurenberg formula — fallback when no scale body-fat is available. */
+/**
+ * Age at or below which Deurenberg's children's equation applies. The paper
+ * fits children and adults separately because the BMI to body fat relation
+ * differs ("children aged 15 years and younger"); its sample starts at 7, so
+ * younger children get the children's equation as the nearest one available.
+ */
+const DEURENBERG_CHILD_MAX_AGE = 15;
+
+/**
+ * Deurenberg formula, the fallback when no scale body fat is available.
+ *
+ * Deurenberg, Weststrate and Seidell 1991, Br J Nutr 65:105-114 (sex: male 1,
+ * female 0): adults `1.20 BMI + 0.23 age - 10.8 sex - 5.4`, children (15 and
+ * younger) `1.51 BMI - 0.70 age - 3.6 sex + 1.4`. Only the adult equation was
+ * used before, for every age the config accepts (E-14): for a 10-year-old girl
+ * at BMI 17 that is 17.3 % against the children's equation's 20.1 %.
+ */
 export function estimateBodyFat(bmi: number, p: UserProfile): number {
   const sexFactor = p.gender === 'male' ? 1 : 0;
-  let bf = 1.2 * bmi + 0.23 * p.age - 10.8 * sexFactor - 5.4;
+  let bf =
+    p.age <= DEURENBERG_CHILD_MAX_AGE
+      ? 1.51 * bmi - 0.7 * p.age - 3.6 * sexFactor + 1.4
+      : 1.2 * bmi + 0.23 * p.age - 10.8 * sexFactor - 5.4;
   if (p.isAthlete) bf *= 0.85;
   return Math.max(3, Math.min(bf, 60));
 }

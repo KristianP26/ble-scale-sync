@@ -63,7 +63,40 @@ const ENV_REF_REGEX = /\$(\$?)\{([^}]+)}/g;
  * template containing `${` can be written at all (G-24).
  */
 export function resolveEnvReferences<T>(obj: T): T {
+  return resolveAt(obj, [], null);
+}
+
+/** A config path, as zod reports it in `issue.path`. */
+export type ConfigPath = ReadonlyArray<PropertyKey>;
+
+/** Key for a {@link ConfigPath}, stable between the walk here and a zod issue. */
+export function configPathKey(path: ConfigPath): string {
+  return JSON.stringify(path.map((p) => (typeof p === 'number' ? p : String(p))));
+}
+
+/**
+ * {@link resolveEnvReferences}, plus the paths whose WHOLE value was a single
+ * `${VAR}` reference, mapped to the variable name.
+ *
+ * Only those values may be converted to a number or a boolean afterwards
+ * (`safeParseWithEnvRefs`): `port: ${PORT}` is the user asking for the
+ * variable's value as the port, while `name: "v${N}"` or a quoted literal
+ * `"6053"` is a string the user typed.
+ */
+export function resolveEnvReferencesTracked<T>(obj: T): {
+  value: T;
+  wholeRefs: Map<string, string>;
+} {
+  const wholeRefs = new Map<string, string>();
+  return { value: resolveAt(obj, [], wholeRefs), wholeRefs };
+}
+
+const WHOLE_REF_REGEX = /^\$\{([^}]+)}$/;
+
+function resolveAt<T>(obj: T, path: PropertyKey[], wholeRefs: Map<string, string> | null): T {
   if (typeof obj === 'string') {
+    const whole = WHOLE_REF_REGEX.exec(obj);
+    if (whole && wholeRefs) wholeRefs.set(configPathKey(path), whole[1]);
     return obj.replace(ENV_REF_REGEX, (match, escaped: string, varName: string) => {
       if (escaped) return match.slice(1);
       const value = process.env[varName];
@@ -76,14 +109,46 @@ export function resolveEnvReferences<T>(obj: T): T {
     }) as unknown as T;
   }
   if (Array.isArray(obj)) {
-    return obj.map((item) => resolveEnvReferences(item)) as unknown as T;
+    return obj.map((item, i) => resolveAt(item, [...path, i], wholeRefs)) as unknown as T;
   }
   if (obj !== null && typeof obj === 'object') {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj)) {
-      result[key] = resolveEnvReferences(value);
+      result[key] = resolveAt(value, [...path, key], wholeRefs);
     }
     return result as T;
   }
   return obj;
+}
+
+// --- Boolean and number words ---
+
+/**
+ * The boolean spellings every environment-sourced value accepts: the env
+ * overrides (DRY_RUN, CONTINUOUS_MODE, ...) and a `${VAR}` reference in a
+ * boolean config field.
+ */
+export const BOOL_TRUE_WORDS: ReadonlySet<string> = new Set(['true', 'yes', 'on', '1']);
+export const BOOL_FALSE_WORDS: ReadonlySet<string> = new Set(['false', 'no', 'off', '0']);
+export const BOOL_WORDS_HINT = 'true/false, yes/no, on/off, 1/0';
+
+/** `true`/`false` for a recognised boolean word (any case, trimmed), else undefined. */
+export function parseBoolWord(raw: string): boolean | undefined {
+  const word = raw.trim().toLowerCase();
+  if (BOOL_TRUE_WORDS.has(word)) return true;
+  if (BOOL_FALSE_WORDS.has(word)) return false;
+  return undefined;
+}
+
+const DECIMAL_REGEX = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
+
+/**
+ * A plain decimal number (trimmed), else undefined. Stricter than `Number()`,
+ * which reads an empty string as 0 and accepts hex and `Infinity`.
+ */
+export function parseDecimal(raw: string): number | undefined {
+  const text = raw.trim();
+  if (!DECIMAL_REGEX.test(text)) return undefined;
+  const n = Number(text);
+  return Number.isFinite(n) ? n : undefined;
 }

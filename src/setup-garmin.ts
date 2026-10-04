@@ -15,7 +15,7 @@
  */
 import { spawn, execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { ROOT } from './config/paths.js';
+import { defaultConfigPath, ROOT } from './config/paths.js';
 import { isSupportedPython, parsePythonVersion, translateGarminArgs } from './garmin-cli.js';
 
 /**
@@ -53,7 +53,7 @@ if (python === null) {
 }
 
 const script = join(ROOT, 'garmin-scripts', 'setup_garmin.py');
-const args = translateGarminArgs(process.argv.slice(2));
+const args = translateGarminArgs(process.argv.slice(2), defaultConfigPath());
 const child = spawn(python, [script, ...args], { stdio: 'inherit' });
 
 child.on('error', (err: Error) => {

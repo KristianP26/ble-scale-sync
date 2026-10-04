@@ -46,7 +46,7 @@ afterEach(() => {
 });
 
 describe('createReadingSource (#246)', () => {
-  it('mqtt-proxy returns a watcher with scaleAuth forwarded + mqtt prefix', async () => {
+  it('mqtt-proxy returns a watcher with scaleAuth and weightUnit forwarded + mqtt prefix', async () => {
     const mqttProxy = { broker_url: 'x' } as never;
     const plan = await createReadingSource({
       bleHandler: 'mqtt-proxy',
@@ -55,6 +55,7 @@ describe('createReadingSource (#246)', () => {
       targetMac: 'AA:BB:CC:DD:EE:FF',
       profile: PROFILE,
       scaleAuth: AUTH,
+      weightUnit: 'lbs',
     });
     expect(plan.kind).toBe('watcher');
     if (plan.kind !== 'watcher') return;
@@ -68,10 +69,11 @@ describe('createReadingSource (#246)', () => {
       'AA:BB:CC:DD:EE:FF',
       PROFILE,
       AUTH,
+      'lbs',
     ]);
   });
 
-  it('esphome-proxy returns a watcher with 5 ctor args (scaleAuth forwarded) + esphome prefix', async () => {
+  it('esphome-proxy returns a watcher with 6 ctor args (scaleAuth, weightUnit forwarded) + esphome prefix', async () => {
     const esphomeProxy = { host: 'h' } as never;
     const plan = await createReadingSource({
       bleHandler: 'esphome-proxy',
@@ -80,6 +82,7 @@ describe('createReadingSource (#246)', () => {
       targetMac: 'AA:BB:CC:DD:EE:FF',
       profile: PROFILE,
       scaleAuth: AUTH,
+      weightUnit: 'lbs',
     });
     expect(plan.kind).toBe('watcher');
     if (plan.kind !== 'watcher') return;
@@ -91,6 +94,7 @@ describe('createReadingSource (#246)', () => {
       'AA:BB:CC:DD:EE:FF',
       PROFILE,
       AUTH,
+      'lbs',
     ]);
   });
 

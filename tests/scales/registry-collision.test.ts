@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { adapters } from '../../src/scales/index.js';
+import { resolveAdapter, resolveAfterDiscovery } from '../../src/scales/resolve.js';
+import type { GattDiscovery } from '../../src/scales/resolve.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
 
@@ -13,10 +15,8 @@ import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
  * from shadowing a more specific adapter, the root cause of #168 (BF720 vs Mi
  * Scale 2), #177 (T9146 vs Inlife) and #135 (Lefu).
  *
- * KNOWN GAP: this test still takes the first match in REGISTRY ARRAY order, not
- * in priority order. The two agree on every fixture today, including the eight
- * that match more than one adapter, but a future pair on which they disagree
- * would be pinned to the array winner, not to what production picks.
+ * The winner is taken from `resolveAdapter()`, i.e. in priority order exactly
+ * as production picks, not from the first match in registry array order.
  *
  * This test pins one representative advertisement per registered adapter and
  * asserts the FIRST matching adapter is the
@@ -146,15 +146,16 @@ describe('registry collision guard (#182)', () => {
       ).toBeDefined();
 
       const expected = KNOWN_SHADOWS[name] ?? name;
-      // filter (not find) preserves order AND collects every collider so the
-      // failure message can name them.
-      const matched = adapters.filter((a) => a.matches(info));
-      const first = matched[0]?.name;
+      // Every collider, in priority order, so the failure message can name them.
+      const matched = [...adapters]
+        .sort((a, b) => (b.match?.priority ?? 0) - (a.match?.priority ?? 0))
+        .filter((a) => a.matches(info));
+      const first = resolveAdapter(info, adapters)?.name;
 
       expect(
         first,
         `Fixture for "${name}" resolved to "${first ?? '(none)'}", expected ` +
-          `"${expected}". Colliding adapters (in registry order): ` +
+          `"${expected}". Colliding adapters (in priority order): ` +
           `[${matched.map((m) => m.name).join(', ')}]. A matches() change ` +
           `likely shadowed an adapter — fix precedence or tighten matches().`,
       ).toBe(expected);
@@ -166,4 +167,147 @@ describe('registry collision guard (#182)', () => {
     const stale = Object.keys(FIXTURES).filter((n) => !registered.has(n));
     expect(stale, `Stale fixtures (adapter removed/renamed): ${stale.join(', ')}`).toEqual([]);
   });
+});
+
+/**
+ * Post-discovery collision guard.
+ *
+ * The table above is advertisements only. On the connect paths the resolver
+ * runs again once GATT discovery is done, with the device's services and
+ * characteristics, and that is where Digoo fell to Inlife, Hoffen to MGB and
+ * the Renpho ES-WBE28 to QN Scale: none of those collisions exists in an
+ * advertisement, so the table above could never see them.
+ *
+ * Each case is the record a transport hands `resolveAfterDiscovery()`:
+ * `noble` and the proxies know the advertised service list, `node-ble` does
+ * not (`advertisedServicesKnown: false`). Provenance of every GATT shape is
+ * noted per entry. Where no capture exists the shape is the one the adapter
+ * itself declares and drives (its `charNotifyUuid` / `charWriteUuid`, ported
+ * from openScale), read from the registry rather than retyped, so a fixture
+ * cannot drift from what the adapter would subscribe to.
+ */
+const byName = (name: string) => {
+  const a = adapters.find((x) => x.name === name);
+  if (!a) throw new Error(`adapter "${name}" not registered`);
+  return a;
+};
+const digoo = byName('Digoo');
+const hoffen = byName('Hoffen BS-8107');
+
+interface PostDiscoveryCase {
+  label: string;
+  advertised: BleDeviceInfo;
+  gatt: GattDiscovery;
+  expected: string;
+}
+
+// Renpho ES-WBE28 (#267): the advertisement is the one renpho.test.ts matches
+// on; the characteristics are that test's ALL_CHARS from the btsnoop capture.
+// 0xFFE0 is the GATT service hosting the vendor 0xFFE1/0xFFE2 pair and 0x181C
+// hosts the User Data chars (0x2A8C, 0x2A8E, 0x2A85, 0x2A80).
+const WBE28_ADVERT: BleDeviceInfo = { localName: 'Renpho-Scale', serviceUuids: ['181b', '181d'] };
+const WBE28_GATT_SERVICES = [0x181b, 0x181d, 0x181c, 0xffe0].map(uuid16);
+const WBE28_CHARS = [
+  0x2a9d, 0x2a9c, 0x2a9f, 0xffe1, 0xffe2, 0x2a8c, 0x2a8e, 0x2a85, 0x2a80, 0x2aff,
+].map(uuid16);
+
+const POST_DISCOVERY: PostDiscoveryCase[] = [
+  // Service 0xFFF0 with notify 0xFFF1 / write 0xFFF2 (adapter declaration).
+  ...[true, false].map((known) => ({
+    label: `Digoo "Mengii" (advertised services ${known ? 'known' : 'unknown'})`,
+    advertised: { localName: 'Mengii', serviceUuids: [] },
+    gatt: {
+      serviceUuids: [uuid16(0xfff0)],
+      characteristicUuids: [digoo.charNotifyUuid, digoo.charWriteUuid],
+      advertisedServicesKnown: known,
+    },
+    expected: 'Digoo',
+  })),
+  // Service 0xFFB0 with the single notify+write char 0xFFB2 (adapter declaration).
+  ...['Hoffen BS-8107', 'PC-PW 3008 BT'].flatMap((name) =>
+    [true, false].map((known) => ({
+      label: `${name} (advertised services ${known ? 'known' : 'unknown'})`,
+      advertised: { localName: name, serviceUuids: [] },
+      gatt: {
+        serviceUuids: [uuid16(0xffb0)],
+        characteristicUuids: [hoffen.charNotifyUuid],
+        advertisedServicesKnown: known,
+      },
+      expected: 'Hoffen BS-8107',
+    })),
+  ),
+  {
+    label: 'Renpho ES-WBE28 on noble / proxy (advertised services known)',
+    advertised: WBE28_ADVERT,
+    gatt: { serviceUuids: WBE28_GATT_SERVICES, characteristicUuids: WBE28_CHARS },
+    expected: 'Renpho ES-WBE28',
+  },
+  // Already pinned elsewhere, kept here so the rule cannot regress them:
+  // #177 / #251 the char-aware demotion of Inlife, #278 the SWAN-branded Hutbit
+  // on node-ble, and a nameless Robi S9 refined from MGB by its FFB3 char.
+  {
+    label: '#177 eufy T9146 (fff1 + fff4 on fff0)',
+    advertised: { localName: 'eufy T9146', serviceUuids: [uuid16(0xfff0)] },
+    gatt: { serviceUuids: [uuid16(0xfff0)], characteristicUuids: [0xfff1, 0xfff4].map(uuid16) },
+    expected: '1byone (Eufy)',
+  },
+  {
+    label: '#278 SWAN-branded Hutbit on node-ble',
+    advertised: {
+      localName: 'SWAN',
+      serviceUuids: [],
+      manufacturerData: { id: 0x02ac, data: Buffer.from('7eb893ecb30301', 'hex') },
+    },
+    gatt: {
+      serviceUuids: [0xffb0, 0x1800, 0x180a].map(uuid16),
+      characteristicUuids: [0xffb1, 0xffb2, 0xffb3].map(uuid16),
+      advertisedServicesKnown: false,
+    },
+    expected: 'Hutbit',
+  },
+  {
+    label: 'nameless Robi S9 (ffb0 advertised, ffb3 discovered)',
+    advertised: { localName: '', serviceUuids: [uuid16(0xffb0)] },
+    gatt: {
+      serviceUuids: [uuid16(0xffb0)],
+      characteristicUuids: [0xffb1, 0xffb2, 0xffb3].map(uuid16),
+    },
+    expected: 'Robi S9',
+  },
+];
+
+/**
+ * Post-discovery outcomes that are known to be wrong and cannot be fixed in the
+ * resolver. Pinned so a change in either direction surfaces.
+ *
+ * node-ble cannot see advertised service UUIDs, so the pre-connect record of an
+ * ES-WBE28 carries only the "renpho" name, which QN Scale (250) claims ahead of
+ * the ES-WBE28 (240). Only a characteristic-based split between the two
+ * matchers (QN needs fff1/ffe1 + fff2/ffe3, the ES-WBE28 has neither write)
+ * can route it.
+ */
+const POST_DISCOVERY_KNOWN_SHADOWS: PostDiscoveryCase[] = [
+  {
+    label: 'Renpho ES-WBE28 on node-ble (advertised services unknown)',
+    advertised: { localName: 'Renpho-Scale', serviceUuids: [] },
+    gatt: {
+      serviceUuids: WBE28_GATT_SERVICES,
+      characteristicUuids: WBE28_CHARS,
+      advertisedServicesKnown: false,
+    },
+    expected: 'QN Scale',
+  },
+];
+
+describe('post-discovery collision guard', () => {
+  it.each(POST_DISCOVERY)('$label resolves to $expected', ({ advertised, gatt, expected }) => {
+    expect(resolveAfterDiscovery(advertised, gatt, adapters)?.name).toBe(expected);
+  });
+
+  it.each(POST_DISCOVERY_KNOWN_SHADOWS)(
+    'known shadow: $label still resolves to $expected',
+    ({ advertised, gatt, expected }) => {
+      expect(resolveAfterDiscovery(advertised, gatt, adapters)?.name).toBe(expected);
+    },
+  );
 });

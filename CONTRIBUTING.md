@@ -128,7 +128,7 @@ ble-scale-sync/
 │   │   ├── embedded-broker.ts       # Embedded aedes MQTT broker for ESP32 proxy
 │   │   └── mqtt-proxy-bootstrap.ts  # First-run scan + adapter pin for ESP32 proxy
 │   ├── exporters/
-│   │   ├── index.ts                 # Exporter factory: createExporters()
+│   │   ├── index.ts                 # Barrel re-exports (config loader, registry)
 │   │   ├── registry.ts              # Self-describing exporter registry (schemas + factories)
 │   │   ├── config.ts                # Exporter env validation + config parsing
 │   │   ├── garmin.ts                # Garmin Connect (Python subprocess)
@@ -285,10 +285,9 @@ To add a new export target:
    - Accept optional `ExportContext` in `export(data, context?)` for multi-user support
 2. Add the name to the `ExporterName` type and `KNOWN_EXPORTERS` set in `src/exporters/config.ts`
 3. Add env var parsing in `src/exporters/config.ts` (for `.env` fallback path)
-4. Add a case to the switch in `createExporters()` in `src/exporters/index.ts`
-5. Add a registry entry in `src/exporters/registry.ts` with `{ schema, factory }`
-6. Add tests in `tests/exporters/` (including `ExportContext` behavior)
-7. Document config fields in `README.md` and `.env.example`
+4. Add a registry entry in `src/exporters/registry.ts` with `{ schema, factory }` (the registry is the only place exporters are constructed)
+5. Add tests in `tests/exporters/` (including `ExportContext` behavior)
+6. Document config fields in `README.md` and `.env.example`
 
 ## Pull Request Guidelines
 

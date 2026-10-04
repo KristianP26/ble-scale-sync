@@ -125,4 +125,17 @@ describe('armHardExit', () => {
     vi.advanceTimersByTime(2_000);
     expect(exit).toHaveBeenCalledTimes(1);
   });
+
+  // The floor fires on every transport. Naming only a wedged D-Bus/BlueZ
+  // handle sent ESP32 and Home Assistant proxy users, who have no BlueZ in
+  // the path at all, looking in the wrong place.
+  it('names the proxy transports as a possible cause, not only BlueZ', () => {
+    const log = createMockLogger();
+    const exit = vi.fn();
+    armHardExit({ timeoutMs: 1_000, log, exit: exit as unknown as (c: number) => never });
+    vi.advanceTimersByTime(1_000);
+    const msg = String(vi.mocked(log.warn).mock.calls[0][0]);
+    expect(msg).toMatch(/proxy or broker connection \(MQTT, ESPHome, Home Assistant\)/);
+    expect(msg).not.toMatch(/likely a wedged D-Bus\/BlueZ handle/);
+  });
 });

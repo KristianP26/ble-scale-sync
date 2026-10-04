@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { adapters } from '../../src/scales/index.js';
-import { resolveAdapter } from '../../src/scales/resolve.js';
+import { resolveAdapter, resolveAfterDiscovery } from '../../src/scales/resolve.js';
+import { StandardGattScaleAdapter } from '../../src/scales/standard-gatt.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
-import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
+import type { BleDeviceInfo, ScaleAdapter } from '../../src/interfaces/scale-adapter.js';
 
 describe('resolveAdapter', () => {
   // A spread of fixtures from registry-collision.test.ts; resolveAdapter MUST
@@ -44,5 +45,57 @@ describe('resolveAdapter', () => {
     const shuffled = [...adapters].reverse();
     const info: BleDeviceInfo = { localName: 'QN-Scale', serviceUuids: ['fff0'] };
     expect(resolveAdapter(info, shuffled)?.name).toBe(resolveAdapter(info, adapters)?.name);
+  });
+});
+
+/**
+ * Policy of the post-discovery resolver on a mock registry. The real-device
+ * shapes (Digoo, Hoffen, ES-WBE28, Hutbit, Robi) live in
+ * registry-collision.test.ts; these pin the branches that need no device.
+ */
+describe('resolveAfterDiscovery', () => {
+  /** An adapter that claims any device exposing the given characteristic. */
+  const charClaimer = (priority: number, char: string): ScaleAdapter =>
+    ({
+      name: `char-${char}`,
+      match: { priority, custom: true, charUuids: [char] },
+      matches: (d: BleDeviceInfo) => (d.characteristicUuids ?? []).includes(char),
+    }) as unknown as ScaleAdapter;
+  /** An adapter that claims an exact name. */
+  const nameClaimer = (priority: number, name: string): ScaleAdapter =>
+    ({
+      name: `name-${name}`,
+      match: { priority, names: { exact: [name] } },
+      matches: (d: BleDeviceInfo) => (d.localName ?? '').toLowerCase() === name,
+    }) as unknown as ScaleAdapter;
+
+  it('takes the discovery pick when the advertisement picked nothing', () => {
+    const registry = [charClaimer(10, 'aaaa')];
+    const got = resolveAfterDiscovery(
+      { localName: '', serviceUuids: [] },
+      { characteristicUuids: ['aaaa'] },
+      registry,
+    );
+    expect(got?.name).toBe('char-aaaa');
+  });
+
+  it('keeps a name-identified pick over a higher adapter that claims on a characteristic', () => {
+    const registry = [charClaimer(90, 'aaaa'), nameClaimer(10, 'mine')];
+    const got = resolveAfterDiscovery(
+      { localName: 'mine', serviceUuids: [] },
+      { characteristicUuids: ['aaaa'] },
+      registry,
+    );
+    expect(got?.name).toBe('name-mine');
+  });
+
+  it('lets discovery refine the generic Standard GATT fallback even when it hit a name', () => {
+    // 'beurer' is one of Standard GATT's own name claims.
+    const generic = new StandardGattScaleAdapter();
+    const registry = [charClaimer(90, 'aaaa'), generic];
+    const advertised: BleDeviceInfo = { localName: 'beurer scale', serviceUuids: [] };
+    expect(resolveAdapter(advertised, registry)).toBe(generic);
+    const got = resolveAfterDiscovery(advertised, { characteristicUuids: ['aaaa'] }, registry);
+    expect(got?.name).toBe('char-aaaa');
   });
 });

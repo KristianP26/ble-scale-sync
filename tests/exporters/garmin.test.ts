@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { Writable, PassThrough } from 'node:stream';
+import { join } from 'node:path';
 import type { BodyComposition } from '../../src/interfaces/scale-adapter.js';
 
 const samplePayload: BodyComposition = {
@@ -222,6 +223,24 @@ describe('GarminExporter', () => {
       if (originalHome !== undefined) process.env.HOME = originalHome;
       if (originalUserProfile !== undefined) process.env.USERPROFILE = originalUserProfile;
     }
+  });
+
+  // F-11: the uploader runs with cwd = the package directory, so a relative
+  // path passed as written pointed into the install (node_modules under npm),
+  // not next to config.yaml where the setup put the token.
+  it('passes a relative token_dir as an absolute path from the config directory', async () => {
+    mockSpawn.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === '--version') return createVersionCheckProc(0);
+      return createUploadProc(JSON.stringify({ success: true }), 0);
+    });
+
+    const { GarminExporter } = await import('../../src/exporters/garmin.js');
+    const { configDir } = await import('../../src/config/paths.js');
+    const exporter = new GarminExporter({ token_dir: './garmin-tokens/alice' });
+    await exporter.export(samplePayload);
+
+    const args = mockSpawn.mock.calls[1][1] as string[];
+    expect(args[args.indexOf('--token-dir') + 1]).toBe(join(configDir(), 'garmin-tokens', 'alice'));
   });
 
   it('does not pass --token-dir when token_dir is not set (backward compat)', async () => {

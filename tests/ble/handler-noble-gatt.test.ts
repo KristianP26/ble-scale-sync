@@ -204,7 +204,12 @@ describe('noble GATT path (B-11)', () => {
     expect(notify.subscribeAsync).toHaveBeenCalled();
     expect(write.writes[0]).toEqual(Buffer.from([0x01]));
     expect(p.disconnectAsync).toHaveBeenCalledTimes(1);
-    const resolved = vi.mocked(adapter.matches).mock.calls.at(-1)![0];
+    // The resolver also asks on the advertisement alone, so pick the record
+    // that carries the discovered characteristics.
+    const resolved = vi
+      .mocked(adapter.matches)
+      .mock.calls.map((c) => c[0])
+      .find((info) => info.characteristicUuids !== undefined)!;
     expect(resolved.address).toBe(MAC.toUpperCase());
     expect(resolved.serviceUuids).toContain(normalizeUuid(SVC));
   });

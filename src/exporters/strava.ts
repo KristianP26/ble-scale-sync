@@ -9,6 +9,8 @@ import { withRetry, httpError, httpHealthcheck } from '../utils/retry.js';
 import { errMsg } from '../utils/error.js';
 import { cliCommand } from '../cli-invocation.js';
 import { atomicWrite } from '../config/write.js';
+import { configDir } from '../config/paths.js';
+import { resolveTokenDir } from '../config/token-dirs.js';
 const log = createLogger('Strava');
 
 /**
@@ -199,7 +201,13 @@ export class StravaExporter implements Exporter {
     atomicWrite(tokenPath, JSON.stringify(tokens, null, 2) + '\n');
   }
 
+  /**
+   * A relative token_dir is next to config.yaml, not in the working directory
+   * (F-11), the same directory `setup-strava` writes to. Config loading
+   * already made it absolute; this covers an entry built directly from the
+   * YAML (the wizard's connectivity test).
+   */
   private tokenFilePath(): string {
-    return path.join(this.config.tokenDir, 'strava_tokens.json');
+    return path.join(resolveTokenDir(this.config.tokenDir, configDir()), 'strava_tokens.json');
   }
 }

@@ -366,7 +366,12 @@ async function main(): Promise<void> {
     // is dropped: the queue is left for a real run.
     if (ctx.dryRun) return;
     try {
-      await flushQueue(ctx.exportQueuePath, (entry) => resolveQueuedExporter(ctx, entry));
+      await flushQueue(
+        ctx.exportQueuePath,
+        (entry) => resolveQueuedExporter(ctx, entry),
+        Date.now(),
+        ctx.signal,
+      );
     } catch (err) {
       // Warn, not debug: the queue holds weigh-ins that are in no other place,
       // and a pass that dies here is the only trace of why one went missing

@@ -26,6 +26,21 @@ def get_token_dir(token_dir=None):
     return str(new)
 
 
+def resolve_config_token_dir(token_dir, config_path):
+    """A token_dir from config.yaml, with a relative path taken from the
+    directory config.yaml is in (F-11).
+
+    The uploader gets the same absolute path from the Node side, so setup and
+    upload agree whatever directory either was started from. Resolving it
+    against the working directory put the token next to wherever setup ran,
+    and the uploader (cwd = package directory) then found none.
+    """
+    expanded = Path(token_dir).expanduser()
+    if expanded.is_absolute():
+        return str(expanded)
+    return str(Path(config_path).resolve().parent / expanded)
+
+
 def cleanup_legacy_tokens(token_dir):
     """Remove pre-0.3 garth token files (oauth1_token.json, oauth2_token.json).
 
@@ -240,7 +255,13 @@ def run_from_config(config_path, target_user=None, cli_token_dir=None):
     # logins and MFA prompts for the same account (F-20).
     done = {}
     for user in garmin_users:
-        token_dir = get_token_dir(cli_token_dir or user.get("token_dir") or None)
+        # A --token-dir on the command line is relative to where it was typed;
+        # one from config.yaml is relative to config.yaml.
+        configured = (user.get("token_dir") or "").strip()
+        token_dir = get_token_dir(
+            cli_token_dir
+            or (resolve_config_token_dir(configured, config_path) if configured else None)
+        )
         key = ((user.get("email") or "").strip().lower(), token_dir)
         if key[0] and key in done:
             print(

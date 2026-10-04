@@ -1,4 +1,5 @@
 import type { AppConfig } from '../config/schema.js';
+import { resolveTokenDir, STRAVA_DEFAULT_TOKEN_DIR } from '../config/token-dirs.js';
 
 export interface StravaExporterEntry {
   type: 'strava';
@@ -60,4 +61,14 @@ export function selectStravaEntry(config: AppConfig, user?: string): StravaSelec
     };
   }
   return { ok: true, entry: found[0].entry, owner: found[0].owner };
+}
+
+/**
+ * The directory `setup-strava` writes the selected entry's tokens to: its
+ * `token_dir`, or the default, with a relative path taken from `configDir`,
+ * the directory config.yaml is in. The exporter reads from exactly there, and
+ * from nowhere that depends on the working directory (F-11).
+ */
+export function stravaTokenDir(entry: StravaExporterEntry, configDir: string): string {
+  return resolveTokenDir(entry.token_dir?.trim() || STRAVA_DEFAULT_TOKEN_DIR, configDir);
 }

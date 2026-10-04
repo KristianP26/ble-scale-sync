@@ -1751,6 +1751,60 @@ describe('handler-mqtt-proxy', () => {
       expect(raw.adapter.name).toBe('GattScale');
     });
 
+    it('ReadingWatcher converts a GATT reading with the configured lbs unit', async () => {
+      const adapter = createGattAdapter();
+      const config = { ...MQTT_PROXY_CONFIG, auto_connect: false };
+      const watcher = new ReadingWatcher(config, [adapter], undefined, PROFILE, undefined, 'lbs');
+      await watcher.start();
+
+      // The watcher's message handler calls handleGattReading which uses
+      // publishAsync to send the connect command. Wire up publish-based responses.
+      const origPublish = mockClient.publishAsync;
+      mockClient.publishAsync = vi.fn(async (topic: string, payload?: string | Buffer) => {
+        if (topic === `${PREFIX}/connect`) {
+          queueMicrotask(() =>
+            mockClient._simulateMessage(
+              `${PREFIX}/connected`,
+              JSON.stringify({
+                chars: [
+                  { uuid: GATT_NOTIFY_UUID, properties: ['notify'] },
+                  { uuid: GATT_WRITE_UUID, properties: ['write'] },
+                ],
+              }),
+            ),
+          );
+        }
+        if (topic === `${PREFIX}/write/${GATT_WRITE_UUID}`) {
+          queueMicrotask(() => {
+            const buf = Buffer.alloc(4);
+            buf.writeUInt16LE(8000, 0); // 80.00 kg
+            buf.writeUInt16LE(450, 2); // impedance 450
+            mockClient._simulateMessage(`${PREFIX}/notify/${GATT_NOTIFY_UUID}`, buf);
+          });
+        }
+        return origPublish(topic, payload);
+      });
+
+      // Simulate scan result with no broadcast data → triggers GATT fallback
+      mockClient._simulateMessage(
+        `${PREFIX}/scan/results`,
+        JSON.stringify([
+          {
+            address: 'AA:BB:CC:DD:EE:FF',
+            name: 'GattScale',
+            rssi: -50,
+            services: [],
+            addr_type: 0,
+          },
+        ]),
+      );
+
+      const raw = await watcher.nextReading();
+      // The mock adapter does not normalize its weight, so the configured unit
+      // decides: 80 read as lbs is 36.29 kg, as on every native transport.
+      expect(raw.reading.weight).toBeCloseTo(80 * 0.45359237, 2);
+    });
+
     it('rejects with ESP32 error instead of timeout when connect fails', async () => {
       const adapter = createGattAdapter();
 

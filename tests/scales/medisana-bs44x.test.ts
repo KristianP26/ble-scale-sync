@@ -74,6 +74,46 @@ describe('MedisanaBs44xAdapter', () => {
       expect(ts).toBeGreaterThanOrEqual(before);
       expect(ts).toBeLessThanOrEqual(after);
     });
+
+    // Epoch per model, as openScale's MedisanaBs44xHandler predicts it from
+    // the name: BS444/BS440 count from 2010-01-01, the BS430 and anything
+    // unknown count Unix seconds. Only the epoch choice is tested here; there
+    // is no Medisana capture in the repo to pin a frame against.
+    const NOW_SEC = 1_790_000_000;
+    async function syncedSeconds(deviceName: string | undefined): Promise<number> {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW_SEC * 1000);
+      try {
+        const writeFn = vi.fn().mockResolvedValue(undefined);
+        const ctx = {
+          write: writeFn,
+          read: vi.fn(),
+          subscribe: vi.fn(),
+          profile: defaultProfile(),
+          deviceAddress: '',
+          availableChars: new Set<string>(),
+          ...(deviceName !== undefined ? { deviceName } : {}),
+        } as ConnectionContext;
+        await makeAdapter().onConnected!(ctx);
+        return Buffer.from(writeFn.mock.calls[0][1]).readUInt32LE(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+
+    it.each(['013197A1B2', '013198', '0202B6FF'])(
+      'sends seconds since 2010-01-01 to a BS444/BS440 named "%s"',
+      async (name) => {
+        expect(await syncedSeconds(name)).toBe(NOW_SEC - 1262304000);
+      },
+    );
+
+    it.each([['0203B0123'], ['some other name'], [undefined]])(
+      'sends Unix seconds for name %s',
+      async (name) => {
+        expect(await syncedSeconds(name)).toBe(NOW_SEC);
+      },
+    );
   });
 
   describe('parseNotification()', () => {

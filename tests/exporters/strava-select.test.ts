@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { selectStravaEntry } from '../../src/exporters/strava-select.js';
+import { join, resolve } from 'node:path';
+import { selectStravaEntry, stravaTokenDir } from '../../src/exporters/strava-select.js';
 import type { AppConfig } from '../../src/config/schema.js';
 
 const strava = (dir: string) => ({
@@ -46,5 +47,20 @@ describe('selectStravaEntry', () => {
 
   it('reports an unknown user', () => {
     expect(selectStravaEntry(two, 'carol').ok).toBe(false);
+  });
+});
+
+describe('stravaTokenDir (F-11)', () => {
+  const cfgDir = resolve('/srv', 'scale');
+  const entry = (token_dir?: string) => ({
+    type: 'strava' as const,
+    client_id: '1',
+    client_secret: 's',
+    token_dir,
+  });
+
+  it('resolves a relative token_dir, and the default, from the config directory', () => {
+    expect(stravaTokenDir(entry('./st/alice'), cfgDir)).toBe(join(cfgDir, 'st', 'alice'));
+    expect(stravaTokenDir(entry(), cfgDir)).toBe(join(cfgDir, 'strava-tokens'));
   });
 });

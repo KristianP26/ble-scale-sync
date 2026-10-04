@@ -2,6 +2,7 @@ import { createLogger } from '../logger.js';
 import type { AppConfig, ExporterEntry } from './schema.js';
 import { KNOWN_EXPORTER_NAMES } from '../exporters/registry.js';
 import { isValidScaleId, SCALE_ID_HINT } from '../ble/scale-id.js';
+import { BOOL_WORDS_HINT, parseBoolWord } from './env-refs.js';
 
 const log = createLogger('Config');
 
@@ -19,9 +20,6 @@ export function parseBleAdapterEnv(): string | null | undefined {
   log.warn(`BLE_ADAPTER='${raw}' is not valid (expected hci0, hci1, ...)`);
   return undefined;
 }
-
-const TRUE_WORDS = new Set(['true', 'yes', 'on', '1']);
-const FALSE_WORDS = new Set(['false', 'no', 'off', '0']);
 
 /**
  * Read a boolean override, keeping the configured value when the input is not
@@ -41,12 +39,11 @@ const FALSE_WORDS = new Set(['false', 'no', 'off', '0']);
 function boolEnv(name: string, current: boolean): boolean {
   const raw = process.env[name];
   if (raw === undefined) return current;
-  const word = raw.trim().toLowerCase();
-  if (word === '') return current;
-  if (TRUE_WORDS.has(word)) return true;
-  if (FALSE_WORDS.has(word)) return false;
+  if (raw.trim() === '') return current;
+  const value = parseBoolWord(raw);
+  if (value !== undefined) return value;
   log.warn(
-    `${name}='${raw}' is not a boolean (true/false, yes/no, on/off, 1/0); ` +
+    `${name}='${raw}' is not a boolean (${BOOL_WORDS_HINT}); ` +
       `keeping ${name.toLowerCase()}=${current} from the configuration.`,
   );
   return current;

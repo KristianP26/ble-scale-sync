@@ -1,9 +1,10 @@
 import { chmodSync, existsSync, copyFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import chalk from 'chalk';
 import { stringify as stringifyYaml } from 'yaml';
 import type { WizardStep, WizardContext } from '../types.js';
 import type { AppConfig, UserConfig, ExporterEntry } from '../../config/schema.js';
-import { AppConfigSchema, formatConfigError } from '../../config/schema.js';
+import { createAppConfigSchema, formatConfigError } from '../../config/schema.js';
 import { atomicWrite } from '../../config/write.js';
 import { sectionBox, success, error, dim } from '../ui.js';
 import { cliCommand } from '../../cli-invocation.js';
@@ -20,6 +21,18 @@ const YAML_HEADER = `# BLE Scale Sync - config.yaml
 
 function stripWizardFields(config: Partial<AppConfig>): Record<string, unknown> {
   return { ...config };
+}
+
+/**
+ * A multi-user setup picks the user by weight, so a reading outside every
+ * user's range (a misread, or a spoofed broadcast frame) would still be
+ * exported to the nearest user under the schema default `warn`. The wizard
+ * writes `skip` for such a setup. The schema default stays `warn`, and a value
+ * the config already carries is never overridden.
+ */
+function outOfRangeDefault(config: Partial<AppConfig>): Pick<Partial<AppConfig>, 'out_of_range'> {
+  if (config.out_of_range !== undefined) return {};
+  return (config.users?.length ?? 0) > 1 ? { out_of_range: 'skip' } : {};
 }
 
 function printSummary(config: Partial<AppConfig>): void {
@@ -84,11 +97,12 @@ export const summaryStep: WizardStep = {
       version: 1 as const,
       scale: { weight_unit: 'kg' as const, height_unit: 'cm' as const },
       unknown_user: 'nearest' as const,
+      ...outOfRangeDefault(ctx.config),
       ...stripWizardFields(ctx.config),
     };
 
     // Validate with Zod before saving
-    const result = AppConfigSchema.safeParse(finalConfig);
+    const result = createAppConfigSchema(dirname(resolve(ctx.configPath))).safeParse(finalConfig);
     if (!result.success) {
       console.log(`\n  ${error('Validation errors:')}\n`);
       console.log(formatConfigError(result.error));

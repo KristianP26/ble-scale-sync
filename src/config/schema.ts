@@ -474,74 +474,84 @@ export const DockerSchema = z.object({
   mode: z.enum(['pull', 'build']).default('pull'),
 });
 
-export const AppConfigSchema = z
-  .object({
-    version: z.literal(1),
-    ble: BleSchema.optional(),
-    scale: ScaleSchema.default({
-      weight_unit: 'kg',
-      height_unit: 'cm',
-      display_unit: 'weight_unit',
-    }),
-    unknown_user: z.enum(['nearest', 'log', 'ignore']).default('nearest'),
+const AppConfigObjectSchema = z.object({
+  version: z.literal(1),
+  ble: BleSchema.optional(),
+  scale: ScaleSchema.default({
+    weight_unit: 'kg',
+    height_unit: 'cm',
+    display_unit: 'weight_unit',
+  }),
+  unknown_user: z.enum(['nearest', 'log', 'ignore']).default('nearest'),
+  /**
+   * What to do with a reading that no configured user's `weight_range` covers.
+   *
+   * `warn` (default) is the behaviour every install has had: log it and export
+   * it anyway. `skip` stops before the exporters and before the
+   * `last_known_weight` write.
+   *
+   * The distinction matters because `weight_range` was only ever a MATCHING
+   * input, never a guard. A reading nobody's range covers still resolves to
+   * somebody, through the single-user tier or the `last_known_weight` proximity
+   * tier, and then exports normally. A reporter stood on the scale holding a
+   * suitcase, got 178 kg at 0 ohm, and it went to Garmin and to a retained MQTT
+   * topic. Worse, `last_known_weight` was rewritten to 178, so the NEXT genuine
+   * weigh-in tie-broke to the other user and was dropped (#395).
+   *
+   * The default stays `warn` so no existing install silently starts discarding
+   * readings, but `skip` is the safer setting for a multi-user household.
+   */
+  out_of_range: z.enum(['warn', 'skip']).default('warn'),
+  users: z
+    .array(UserSchema)
+    .min(1, 'At least one user is required')
     /**
-     * What to do with a reading that no configured user's `weight_range` covers.
-     *
-     * `warn` (default) is the behaviour every install has had: log it and export
-     * it anyway. `skip` stops before the exporters and before the
-     * `last_known_weight` write.
-     *
-     * The distinction matters because `weight_range` was only ever a MATCHING
-     * input, never a guard. A reading nobody's range covers still resolves to
-     * somebody, through the single-user tier or the `last_known_weight` proximity
-     * tier, and then exports normally. A reporter stood on the scale holding a
-     * suitcase, got 178 kg at 0 ohm, and it went to Garmin and to a retained MQTT
-     * topic. Worse, `last_known_weight` was rewritten to 178, so the NEXT genuine
-     * weigh-in tie-broke to the other user and was dropped (#395).
-     *
-     * The default stays `warn` so no existing install silently starts discarding
-     * readings, but `skip` is the safer setting for a multi-user household.
+     * The slug is an identity, not a label. Nothing enforced that it was
+     * unique, and everything downstream assumes it is: `getExportersForUser`
+     * caches by slug and resolves the user with `users.find`, so a second user
+     * with the same slug silently inherited the first one's exporters - and
+     * with them the first one's Garmin account. The exporter cache made it
+     * stick for the life of the process.
      */
-    out_of_range: z.enum(['warn', 'skip']).default('warn'),
-    users: z
-      .array(UserSchema)
-      .min(1, 'At least one user is required')
-      /**
-       * The slug is an identity, not a label. Nothing enforced that it was
-       * unique, and everything downstream assumes it is: `getExportersForUser`
-       * caches by slug and resolves the user with `users.find`, so a second user
-       * with the same slug silently inherited the first one's exporters - and
-       * with them the first one's Garmin account. The exporter cache made it
-       * stick for the life of the process.
-       */
-      .superRefine((users, ctx) => {
-        const seen = new Set<string>();
-        users.forEach((user, i) => {
-          if (seen.has(user.slug)) {
-            ctx.addIssue({
-              code: 'custom',
-              path: [i, 'slug'],
-              message:
-                `Duplicate user slug '${user.slug}': each user needs its own slug. ` +
-                'Exporters, the retry queue and last_known_weight are all keyed by it.',
-            });
-            return;
-          }
-          seen.add(user.slug);
-        });
-      }),
-    global_exporters: z.array(ExporterEntrySchema).optional(),
-    runtime: RuntimeSchema.optional(),
-    docker: DockerSchema.optional(),
-    update_check: z.boolean().default(true),
-  })
-  // Two accounts sharing one token directory means one user's readings upload
-  // into the other's account; see findTokenDirCollisions.
-  .superRefine((config, ctx) => {
-    for (const c of findTokenDirCollisions(config)) {
+    .superRefine((users, ctx) => {
+      const seen = new Set<string>();
+      users.forEach((user, i) => {
+        if (seen.has(user.slug)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [i, 'slug'],
+            message:
+              `Duplicate user slug '${user.slug}': each user needs its own slug. ` +
+              'Exporters, the retry queue and last_known_weight are all keyed by it.',
+          });
+          return;
+        }
+        seen.add(user.slug);
+      });
+    }),
+  global_exporters: z.array(ExporterEntrySchema).optional(),
+  runtime: RuntimeSchema.optional(),
+  docker: DockerSchema.optional(),
+  update_check: z.boolean().default(true),
+});
+
+/**
+ * The config schema for a config.yaml in `configDir`.
+ *
+ * Two accounts sharing one token directory means one user's readings upload
+ * into the other's account; see findTokenDirCollisions. A relative token_dir
+ * is taken from the config's own directory (F-11), so the check needs to know
+ * it. Without one it compares from the working directory.
+ */
+export function createAppConfigSchema(configDir?: string) {
+  return AppConfigObjectSchema.superRefine((config, ctx) => {
+    for (const c of findTokenDirCollisions(config, configDir)) {
       ctx.addIssue({ code: 'custom', path: c.path, message: c.message });
     }
   });
+}
+
+export const AppConfigSchema = createAppConfigSchema();
 
 // --- Standalone types ---
 

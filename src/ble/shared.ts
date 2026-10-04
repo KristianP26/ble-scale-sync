@@ -10,6 +10,7 @@ import type {
 import type { WeightUnit } from '../config/schema.js';
 import { LBS_TO_KG, normalizeUuid, errMsg, bleLog } from './types.js';
 import { HistoryBuffer, HoldTimer } from './notification-processor.js';
+import { isHistoricalReading } from '../interfaces/reading-time.js';
 import { createWriteLanes, type WriteLanes } from './write-lane.js';
 
 // ─── Raw frame capture (protocol debugging) ───────────────────────────────────
@@ -222,6 +223,7 @@ function initializeAdapter(
   unsubscribers: (() => void)[],
   lanes: WriteLanes,
   scaleAuth?: ScaleAuth,
+  deviceName?: string,
 ): {
   start: () => Promise<void>;
   cleanup: () => void;
@@ -302,6 +304,7 @@ function initializeAdapter(
         profile,
         scaleAuth,
         deviceAddress,
+        ...(deviceName ? { deviceName } : {}),
         availableChars,
         write: async (charUuid, data, withResponse = true) => {
           const char = resolveChar(charMap, charUuid);
@@ -535,7 +538,8 @@ export interface RawReading {
   /**
    * Earlier readings collected during the same GATT session, oldest first.
    * Populated by adapters whose protocol dumps cached offline frames (each
-   * frame carrying `ScaleReading.timestamp`) on reconnect. The primary
+   * frame carrying a `ScaleReading.timestamp` older than `HISTORY_WINDOW_MS`)
+   * on reconnect. The primary
    * `reading` is the latest live frame, or, if the scale disconnected after
    * the cache dump without producing a live one, the newest historical
    * frame, with the rest in `history`.
@@ -548,8 +552,8 @@ export interface RawReading {
  * Returns the reading + adapter WITHOUT computing body composition metrics.
  * Used by the multi-user flow to match a user by weight before computing metrics.
  *
- * Historical readings (those whose `ScaleReading.timestamp` is set by the
- * adapter from a cached-frame age field) are routed into `RawReading.history`
+ * Historical readings (those whose `ScaleReading.timestamp` is older than
+ * `HISTORY_WINDOW_MS`, D027) are routed into `RawReading.history`
  * instead of resolving the Promise. The Promise resolves on the first live
  * frame that passes `isComplete()`. If the scale disconnects after dumping
  * cache but without sending a live frame, the Promise resolves with the
@@ -566,6 +570,7 @@ export function waitForRawReading(
   onLiveData?: (reading: ScaleReading) => void,
   scaleAuth?: ScaleAuth,
   onActivity?: (minIdleMs?: number) => void,
+  deviceName?: string,
 ): Promise<RawReading> {
   return new Promise<RawReading>((resolve, reject) => {
     let resolved = false;
@@ -665,7 +670,12 @@ export function waitForRawReading(
 
       if (onLiveData) onLiveData(reading);
 
-      if (reading.timestamp) {
+      // A stored record never ends the session: it is buffered, and the live
+      // weigh-in (or the disconnect) does. "Stored" is decided by AGE, not by
+      // the presence of a stamp (D027): a scale that stamps its live frames too
+      // must still be able to end the session with one, or it would be held
+      // open until the scale gave up and the weigh-in arrived as history.
+      if (isHistoricalReading(reading)) {
         if (!adapter.isComplete(reading)) return;
         if (history.push(reading)) {
           bleLog.debug(
@@ -720,6 +730,7 @@ export function waitForRawReading(
       unsubscribers,
       lanes,
       scaleAuth,
+      deviceName,
     );
 
     bleDevice.onDisconnect(() => {

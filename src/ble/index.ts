@@ -4,7 +4,12 @@ import type {
   UserProfile,
   ScaleAuth,
 } from '../interfaces/scale-adapter.js';
-import type { MqttProxyConfig, EsphomeProxyConfig, HaBluetoothConfig } from '../config/schema.js';
+import type {
+  MqttProxyConfig,
+  EsphomeProxyConfig,
+  HaBluetoothConfig,
+  WeightUnit,
+} from '../config/schema.js';
 import type { ScanOptions, ScanResult, BleHandlerName } from './types.js';
 import type { RawReading } from './shared.js';
 import type { Watcher } from './reading-source.js';
@@ -146,6 +151,7 @@ export interface ReadingSourceOptions {
   targetMac?: string;
   profile: UserProfile;
   scaleAuth?: ScaleAuth;
+  weightUnit?: WeightUnit;
 }
 
 /**
@@ -176,6 +182,7 @@ export async function createReadingSource(opts: ReadingSourceOptions): Promise<R
       opts.targetMac,
       opts.profile,
       opts.scaleAuth,
+      opts.weightUnit,
     );
     return { kind: 'watcher', watcher, failureLogPrefix: 'Error processing reading' };
   }
@@ -189,6 +196,7 @@ export async function createReadingSource(opts: ReadingSourceOptions): Promise<R
       opts.targetMac,
       opts.profile,
       opts.scaleAuth,
+      opts.weightUnit,
     );
     return { kind: 'watcher', watcher, failureLogPrefix: 'Error processing ESPHome reading' };
   }

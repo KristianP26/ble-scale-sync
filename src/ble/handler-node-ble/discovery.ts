@@ -400,7 +400,7 @@ export async function autoDiscover(
   btAdapter: Adapter,
   adapters: ScaleAdapter[],
   abortSignal?: AbortSignal,
-): Promise<{ device: Device; adapter: ScaleAdapter; mac: string }> {
+): Promise<{ device: Device; adapter: ScaleAdapter; mac: string; name: string }> {
   const deadline = Date.now() + DISCOVERY_TIMEOUT_MS;
   /** Devices looked at with nothing left to learn; never evaluated again. */
   const checked = new Set<string>();
@@ -463,7 +463,7 @@ export async function autoDiscover(
         if (matched) {
           bleLog.info(`Auto-discovered: ${matched.name} (${safeName(name)} [${addr}])`);
           matchedDevice = true;
-          return { device: dev, adapter: matched, mac: addr };
+          return { device: dev, adapter: matched, mac: addr, name };
         }
         // A name but no advertisement data at all may be the same split
         // seen from the other side: name in one packet, manufacturer or

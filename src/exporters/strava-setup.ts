@@ -15,8 +15,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { loadAppConfig } from '../config/load.js';
+import { configDir } from '../config/paths.js';
 import { createLogger } from '../logger.js';
-import { selectStravaEntry } from './strava-select.js';
+import { selectStravaEntry, stravaTokenDir } from './strava-select.js';
 import { atomicWrite } from '../config/write.js';
 
 const log = createLogger('StravaSetup');
@@ -35,7 +36,7 @@ function prompt(rl: readline.Interface, question: string): Promise<string> {
 }
 
 async function main(): Promise<void> {
-  const { config } = loadAppConfig();
+  const { config, configPath } = loadAppConfig();
   const selection = selectStravaEntry(config, userArg(process.argv.slice(2)));
   if (!selection.ok) {
     log.error(selection.error);
@@ -45,7 +46,7 @@ async function main(): Promise<void> {
   log.info(`Authorizing the Strava exporter of ${selection.owner}.`);
 
   const { client_id, client_secret } = strava;
-  const tokenDir = strava.token_dir ?? './strava-tokens';
+  const tokenDir = stravaTokenDir(strava, configPath ? path.dirname(configPath) : configDir());
 
   if (!client_id || !client_secret) {
     log.error('client_id and client_secret are required in your Strava exporter config.');

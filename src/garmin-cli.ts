@@ -14,7 +14,20 @@
  * silently falls back to the legacy GARMIN_EMAIL / GARMIN_PASSWORD flow and
  * authenticates the wrong account into the token directory.
  */
-export function translateGarminArgs(args: readonly string[]): string[] {
+export function translateGarminArgs(args: readonly string[], configPath?: string): string[] {
+  const out = translate(args);
+  // setup_garmin.py defaults to `config.yaml` in its working directory, and
+  // resolves a relative token_dir from that file's directory (F-11). Hand it
+  // the config the app itself reads, which can be the package root's when the
+  // working directory has none, so both pick the same file and directory.
+  const hasConfigPath = out.some((a) => a === '--config-path' || a.startsWith('--config-path='));
+  if (configPath !== undefined && out.includes('--from-config') && !hasConfigPath) {
+    out.push('--config-path', configPath);
+  }
+  return out;
+}
+
+function translate(args: readonly string[]): string[] {
   if (args.length === 0) return [];
   if (args[0] === '--all-users') return ['--from-config', ...args.slice(1)];
   if (args[0] === '--user' && args[1] !== undefined) {

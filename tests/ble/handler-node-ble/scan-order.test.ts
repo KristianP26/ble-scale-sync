@@ -256,7 +256,8 @@ describe('scanAndReadRaw call order (#368)', () => {
     // Not redundant, and not to be deduplicated (review finding A-09 proposed
     // reusing the first server). node-ble's GattServer.init() snapshots the
     // services and characteristics once, and services(), getPrimaryService()
-    // and characteristics() only ever read that snapshot back, so the second
+    // and characteristics() only ever read that snapshot back. The resolver
+    // rebuilds it only when it has to retry, so on the normal path the second
     // acquire is the only point after the resolver where the D-Bus object tree
     // is enumerated again. Reusing the first server would hand the reading the
     // exact char map the resolver saw, and a characteristic BlueZ exported late

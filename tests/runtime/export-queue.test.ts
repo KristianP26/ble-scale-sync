@@ -464,3 +464,76 @@ describe('export retry queue: concurrent enqueue during a flush (E-02)', () => {
     expect(left[0].exporter).toBe('file');
   });
 });
+
+describe('export retry queue: two exporters of one type (D029) and shutdown (E-10)', () => {
+  let dir: string;
+  let file: string;
+  let warn: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'export-queue-d029-'));
+    file = path.join(dir, 'queue.jsonl');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('keeps a mid-flush entry that differs from one being flushed only in its slot', async () => {
+    // Two webhooks of one user failing on one reading in one millisecond: same
+    // type, user, queuedAt and timestamp. Without the slot in the identity the
+    // re-read took the second for the first and the next write dropped it.
+    const shared = { exporter: 'webhook', userSlug: 'dad', timestamp: '2026-09-09T07:00:00.000Z' };
+    saveQueue(file, [entry({ ...shared, exporterList: 'global', exporterIndex: 0 })]);
+    const sibling = entry({ ...shared, exporterList: 'global', exporterIndex: 1 });
+    const webhook = fakeExporter('webhook', async () => {
+      enqueue(file, sibling, NOW);
+      return { success: true };
+    });
+
+    await flushQueue(file, lookupIn(webhook), NOW);
+
+    const left = loadQueue(file, NOW);
+    expect(left).toHaveLength(1);
+    expect(left[0].exporterIndex).toBe(1);
+  });
+
+  it('starts nothing once the app is stopping, and keeps every entry on disk', async () => {
+    saveQueue(file, [entry(), entry({ exporter: 'file' })]);
+    const garmin = fakeExporter('garmin', async () => ({ success: true }));
+    const ac = new AbortController();
+    ac.abort();
+
+    const result = await flushQueue(file, lookupIn(garmin), NOW, ac.signal);
+
+    expect(garmin.export).not.toHaveBeenCalled();
+    expect(result.delivered).toBe(0);
+    expect(loadQueue(file, NOW)).toHaveLength(2);
+  });
+
+  it('names the entry in flight when the app is told to stop during its attempt', async () => {
+    saveQueue(file, [
+      entry({ userSlug: 'dad', timestamp: '2026-09-09T07:00:00.000Z' }),
+      entry({ exporter: 'file' }),
+    ]);
+    const ac = new AbortController();
+    const garmin = fakeExporter('garmin', async () => {
+      ac.abort();
+      return { success: true };
+    });
+    const fileExp = fakeExporter('file', async () => ({ success: true }));
+
+    await flushQueue(file, lookupIn(garmin, fileExp), NOW, ac.signal);
+
+    const lines = warn.mock.calls.map((c) => c.map(String).join(' ')).join(' | ');
+    expect(lines).toMatch(
+      /Shutdown requested while retrying a queued garmin export for 'dad' measured at 2026-09-09T07:00:00\.000Z/,
+    );
+    // The next entry is not started under a shutdown, and stays queued.
+    expect(fileExp.export).not.toHaveBeenCalled();
+    expect(loadQueue(file, NOW).map((e) => e.exporter)).toEqual(['file']);
+  });
+});

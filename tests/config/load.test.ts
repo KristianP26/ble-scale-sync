@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
+import { resolve as resolvePath } from 'node:path';
 import {
   resolveEnvReferences,
   detectConfigSource,
@@ -223,14 +224,18 @@ scale:
     warn.mockRestore();
   });
 
-  // resolveExportersForUser keeps the first global entry of a type and drops
-  // the rest, and a retried export goes through the first per-user entry of
-  // its type. Neither was said anywhere, so a second webhook simply never
-  // received anything.
-  it('warns about a second global exporter of the same type', () => {
+  // D029: several exporters of one type are allowed and all of them receive
+  // the reading (two webhooks, two files), and the retry queue tells them apart
+  // by their position. Loading such a config must neither drop one nor warn.
+  it('keeps a second global exporter of the same type without a warning', () => {
     const twoHooks = VALID_YAML.replace(
       '  - type: garmin',
-      '  - type: webhook\n    url: https://a.example\n  - type: webhook\n    url: https://b.example',
+      [
+        '  - type: webhook',
+        '    url: https://a.example',
+        '  - type: webhook',
+        '    url: https://b.example',
+      ].join('\n'),
     );
     vi.spyOn(fs, 'readFileSync').mockReturnValue(twoHooks);
     vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
@@ -239,41 +244,6 @@ scale:
     const config = loadYamlConfig('/test/config.yaml');
 
     expect(config.global_exporters).toHaveLength(2);
-    const text = warn.mock.calls.flat().join(' ');
-    expect(text).toContain('global_exporters');
-    expect(text).toContain("'webhook'");
-  });
-
-  it('warns about a second exporter of the same type in one user', () => {
-    const twoInflux = VALID_YAML.replace(
-      '    last_known_weight: null',
-      [
-        '    last_known_weight: null',
-        '    exporters:',
-        '      - type: file',
-        '        file_path: ./a.csv',
-        '      - type: file',
-        '        file_path: ./b.csv',
-      ].join('\n'),
-    );
-    vi.spyOn(fs, 'readFileSync').mockReturnValue(twoInflux);
-    vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    loadYamlConfig('/test/config.yaml');
-
-    const text = warn.mock.calls.flat().join(' ');
-    expect(text).toContain('users[test].exporters');
-    expect(text).toContain("'file'");
-  });
-
-  it('does not warn when every exporter type appears once per list', () => {
-    vi.spyOn(fs, 'readFileSync').mockReturnValue(VALID_YAML);
-    vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    loadYamlConfig('/test/config.yaml');
-
     expect(warn.mock.calls.flat().join(' ')).not.toContain('more than once');
   });
 
@@ -703,7 +673,9 @@ global_exporters:
       type: 'strava',
       client_id: '12345',
       client_secret: 'shh',
-      token_dir: './my-strava-tokens',
+      // Relative to the directory the .env is in (F-11), here the working
+      // directory, since that is where the stubbed .env "exists".
+      token_dir: resolvePath(process.cwd(), 'my-strava-tokens'),
     });
     expect(() => createExporterFromEntry(strava!)).not.toThrow();
   });

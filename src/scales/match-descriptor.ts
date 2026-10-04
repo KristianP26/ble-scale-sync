@@ -77,14 +77,19 @@ export function uuidClaimHits(claims: string[], deviceUuids: string[] | undefine
   });
 }
 
+/** True if the device's advertised name hits one of the descriptor's name claims. */
+export function nameClaimHits(d: MatchDescriptor, localName: string | undefined): boolean {
+  const name = (localName || '').toLowerCase();
+  if (!name || !d.names) return false;
+  if (d.names.exact?.includes(name)) return true;
+  if (d.names.includes?.some((n) => name.includes(n))) return true;
+  if (d.names.startsWith?.some((p) => name.startsWith(p))) return true;
+  return false;
+}
+
 /** Evaluate the common (data-expressible) match predicates. */
 export function matchesDescriptor(device: BleDeviceInfo, d: MatchDescriptor): boolean {
-  const name = (device.localName || '').toLowerCase();
-  if (d.names) {
-    if (name && d.names.exact?.includes(name)) return true;
-    if (name && d.names.includes?.some((n) => name.includes(n))) return true;
-    if (name && d.names.startsWith?.some((p) => name.startsWith(p))) return true;
-  }
+  if (nameClaimHits(d, device.localName)) return true;
   if (d.serviceUuids && uuidClaimHits(d.serviceUuids, device.serviceUuids)) return true;
   if (d.charUuids && uuidClaimHits(d.charUuids, device.characteristicUuids)) return true;
   return false;
