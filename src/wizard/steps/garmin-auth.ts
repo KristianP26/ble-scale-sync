@@ -46,6 +46,8 @@ interface SetupGarminOptions {
   email?: string;
   password?: string;
   tokenDir?: string;
+  /** The config being written; a relative TOKEN_DIR and .env resolve next to it. */
+  configPath?: string;
 }
 
 function runSetupGarmin(pythonCmd: string, options: SetupGarminOptions = {}): Promise<boolean> {
@@ -55,6 +57,9 @@ function runSetupGarmin(pythonCmd: string, options: SetupGarminOptions = {}): Pr
 
     if (options.tokenDir) {
       args.push('--token-dir', options.tokenDir);
+    }
+    if (options.configPath) {
+      args.push('--config-path', options.configPath);
     }
 
     // Pass credentials via env vars (not CLI args) to avoid ps visibility
@@ -148,6 +153,7 @@ export const garminAuthStep: WizardStep = {
           typeof entryRecord.token_dir === 'string' && entryRecord.token_dir.trim()
             ? resolveTokenDir(entryRecord.token_dir.trim(), configDir)
             : undefined,
+        configPath: resolve(ctx.configPath),
       };
 
       console.log(`\n  Running Garmin setup for ${userName}...\n`);

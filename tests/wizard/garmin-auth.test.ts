@@ -111,6 +111,24 @@ describe('garminAuthStep resolves ${VAR} references before using them', () => {
     expect(spawnMock.mock.calls[0][2].timeout).toBeUndefined();
   });
 
+  // A relative TOKEN_DIR (or .env) has to be resolved next to the config the
+  // wizard is writing, so setup_garmin.py needs that path even in its legacy
+  // env-credential mode.
+  it('passes the config path to setup_garmin.py', async () => {
+    const entry = {
+      type: 'garmin',
+      email: '${BSS_TEST_GARMIN_EMAIL}',
+      password: '${BSS_TEST_GARMIN_PASSWORD}',
+    };
+    await garminAuthStep.run(ctxWith([{ name: 'Alice', slug: 'alice', exporters: [entry] }]));
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const args = spawnMock.mock.calls[0][1] as string[];
+    const i = args.indexOf('--config-path');
+    expect(i).toBeGreaterThan(-1);
+    expect(args[i + 1]).toMatch(/config\.yaml$/);
+  });
+
   it('skips the auth when a referenced variable is not defined', async () => {
     const ctx = ctxWith([
       {

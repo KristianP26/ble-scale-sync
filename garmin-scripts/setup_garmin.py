@@ -10,15 +10,43 @@ from garminconnect import Garmin
 from garmin_errors import format_error_chain
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(PROJECT_ROOT / ".env")
 
 
-def get_token_dir(token_dir=None):
+def config_dir(config_path=None):
+    """The directory config.yaml and .env are read from, as the app picks it.
+
+    Mirrors configDir() and envPathFor() in src/config/paths.ts: the given
+    config's own directory, otherwise the working directory when it holds
+    config.yaml or .env, otherwise the package directory. The .env used to be
+    the package directory's whatever the working directory or --config-path
+    said, which after an npm or npx install is not where the user keeps either
+    file (F-11).
+    """
+    if config_path:
+        return Path(config_path).expanduser().resolve().parent
+    for directory in (Path.cwd(), PROJECT_ROOT):
+        if (directory / "config.yaml").exists() or (directory / ".env").exists():
+            return directory
+    return Path.cwd()
+
+
+def get_token_dir(token_dir=None, base_dir=None):
+    """The token directory to write to.
+
+    A token_dir argument (--token-dir as typed, or one from config.yaml
+    already made absolute) is taken as it is. A relative TOKEN_DIR from the
+    environment is next to config.yaml, `base_dir`, which is where the app
+    looks for it too (findTokenDirCollisions in src/config/token-dirs.ts and
+    the Garmin exporter), not wherever the setup was started (F-11).
+    """
     if token_dir:
         return str(Path(token_dir).expanduser())
     custom = os.environ.get("TOKEN_DIR", "").strip()
     if custom:
-        return str(Path(custom).expanduser())
+        path = Path(custom).expanduser()
+        if not path.is_absolute() and base_dir is not None:
+            path = Path(base_dir) / path
+        return str(path)
     new = Path.home() / ".garmin_tokens"
     old = Path.home() / ".garmin_renpho_tokens"
     if old.is_dir() and not new.is_dir():
@@ -260,7 +288,8 @@ def run_from_config(config_path, target_user=None, cli_token_dir=None):
         configured = (user.get("token_dir") or "").strip()
         token_dir = get_token_dir(
             cli_token_dir
-            or (resolve_config_token_dir(configured, config_path) if configured else None)
+            or (resolve_config_token_dir(configured, config_path) if configured else None),
+            base_dir=config_dir(config_path),
         )
         key = ((user.get("email") or "").strip().lower(), token_dir)
         if key[0] and key in done:
@@ -298,7 +327,7 @@ def run_from_config(config_path, target_user=None, cli_token_dir=None):
     )
 
 
-def run_legacy(cli_token_dir=None):
+def run_legacy(cli_token_dir=None, base_dir=None):
     """Original env-var-based authentication (backward compatible)."""
     email = os.environ.get("GARMIN_EMAIL", "").strip()
     password = os.environ.get("GARMIN_PASSWORD", "").strip()
@@ -309,7 +338,10 @@ def run_legacy(cli_token_dir=None):
         )
         sys.exit(1)
 
-    token_dir = get_token_dir(cli_token_dir)
+    # base_dir is the directory of --config-path when given (the wizard passes
+    # the config it is writing), so a relative TOKEN_DIR lands where the app
+    # looks for it.
+    token_dir = get_token_dir(cli_token_dir, base_dir=base_dir or config_dir())
 
     if not authenticate(email, password, token_dir):
         sys.exit(1)
@@ -331,8 +363,10 @@ def parse_args():
     )
     parser.add_argument(
         "--config-path",
-        default="config.yaml",
-        help="Path to config.yaml (default: config.yaml)",
+        help=(
+            "Path to config.yaml (default: config.yaml in the working directory, "
+            "else in the package directory, as the app picks it)"
+        ),
     )
     parser.add_argument(
         "--user",
@@ -348,10 +382,15 @@ def parse_args():
 def main():
     args = parse_args()
 
+    # Loaded here rather than at import, from the directory the config is in.
+    # Variables already in the environment win, as they do in the app.
+    base = config_dir(args.config_path)
+    load_dotenv(base / ".env")
+
     if args.from_config:
-        run_from_config(args.config_path, args.user, args.token_dir)
+        run_from_config(args.config_path or str(base / "config.yaml"), args.user, args.token_dir)
     else:
-        run_legacy(args.token_dir)
+        run_legacy(args.token_dir, base)
 
 
 if __name__ == "__main__":

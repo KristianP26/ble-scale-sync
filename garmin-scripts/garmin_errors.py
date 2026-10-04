@@ -21,6 +21,15 @@ def _next_link(exc):
     return None if exc.__suppress_context__ else exc.__context__
 
 
+def error_chain(exc):
+    """The exception followed by each cause chained behind it, cycles cut."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        yield exc
+        exc = _next_link(exc)
+
+
 def format_error_chain(exc):
     """Render an exception together with the causes chained behind it.
 
@@ -32,10 +41,6 @@ def format_error_chain(exc):
     setup from another network for a problem another network could not fix.
     """
     parts = [_redact(f"{exc}")]
-    seen = {id(exc)}
-    cause = _next_link(exc)
-    while cause is not None and id(cause) not in seen:
-        seen.add(id(cause))
+    for cause in list(error_chain(exc))[1:]:
         parts.append(_redact(f"  caused by: {type(cause).__name__}: {cause}"))
-        cause = _next_link(cause)
     return "\n".join(parts)

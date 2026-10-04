@@ -9,6 +9,8 @@ import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import { NonRetryableError, withRetry } from '../utils/retry.js';
 import { configDir } from '../config/paths.js';
 import { resolveTokenDir } from '../config/token-dirs.js';
+import { isSupportedPython, parsePythonVersion } from '../garmin-cli.js';
+import { errMsg } from '../utils/error.js';
 
 const log = createLogger('Garmin');
 
@@ -38,19 +40,47 @@ export const GARMIN_UPLOAD_TIMEOUT_MAX_SEC = 900;
 
 let cachedPython: string | undefined;
 
-function findPython(): Promise<string> {
-  if (cachedPython) return Promise.resolve(cachedPython);
+type PythonVersion = ReturnType<typeof parsePythonVersion>;
+
+/** What `<cmd> --version` reports, or null when it does not run or is not Python 3. */
+function probePython(cmd: string): Promise<PythonVersion> {
   return new Promise((resolve) => {
-    const check = spawn('python3', ['--version'], { stdio: 'ignore' });
-    check.on('error', () => {
-      cachedPython = 'python';
-      resolve(cachedPython);
-    });
-    check.on('close', (code) => {
-      cachedPython = code === 0 ? 'python3' : 'python';
-      resolve(cachedPython);
-    });
+    // Python 2 writes --version to stderr, Python 3 to stdout: read both.
+    let output = '';
+    const check = spawn(cmd, ['--version'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    check.stdout?.on('data', (chunk: Buffer) => (output += chunk.toString()));
+    check.stderr?.on('data', (chunk: Buffer) => (output += chunk.toString()));
+    check.on('error', () => resolve(null));
+    check.on('close', () => resolve(parsePythonVersion(output)));
   });
+}
+
+/**
+ * First of `python3` and `python` that is Python 3.12 or newer.
+ *
+ * The pinned garminconnect 0.3.x requires 3.12. Taking whichever interpreter
+ * answered `--version` let an older one through, and the upload then died at
+ * import with an error that named no version (F-20). Only a hit is cached, so
+ * a Python installed while the app runs is found on the next weigh-in.
+ */
+async function findPython(): Promise<string> {
+  if (cachedPython) return cachedPython;
+  const found: string[] = [];
+  for (const cmd of ['python3', 'python']) {
+    const version = await probePython(cmd);
+    if (isSupportedPython(version)) {
+      cachedPython = cmd;
+      return cmd;
+    }
+    if (version) found.push(`${cmd} is ${version.major}.${version.minor}`);
+  }
+  throw new Error(
+    'Garmin upload needs Python 3.12 or newer (garminconnect 0.3.x), but ' +
+      (found.length > 0
+        ? `${found.join(' and ')}.`
+        : 'neither python3 nor python was found on PATH.') +
+      ' Install a newer Python and make it python3 or python on PATH.',
+  );
 }
 
 /** @internal Reset cached python command — for testing only. */
@@ -91,9 +121,13 @@ function uploadToGarmin(
     // so a relative path handed over as written would point into the install
     // rather than next to config.yaml, where the setup put the token (F-11).
     // Config loading already made it absolute; this covers an entry built
-    // directly from the YAML (the wizard's connectivity test).
-    if (tokenDir) {
-      args.push('--token-dir', resolveTokenDir(expandTilde(tokenDir), configDir()));
+    // directly from the YAML (the wizard's connectivity test). TOKEN_DIR, the
+    // default for an entry without one, is read the same way: the token
+    // directory check (findTokenDirCollisions) and setup_garmin.py both take
+    // a relative one from the config directory.
+    const dir = tokenDir || process.env.TOKEN_DIR?.trim();
+    if (dir) {
+      args.push('--token-dir', resolveTokenDir(expandTilde(dir), configDir()));
     }
 
     const py = spawn(pythonCmd, args, {
@@ -109,19 +143,36 @@ function uploadToGarmin(
     py.stdin.end();
 
     py.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
-      if (signal === 'SIGTERM') {
-        reject(new Error(`Python uploader timed out after ${timeoutMs / 1000}s`));
-        return;
-      }
       const raw: string = Buffer.concat(chunks).toString().trim();
-      if (!raw) {
+      let result: (ExportResult & { retryable?: boolean }) | undefined;
+      try {
+        const parsed: unknown = raw ? JSON.parse(raw) : undefined;
+        if (typeof parsed === 'object' && parsed !== null && 'success' in parsed) {
+          result = parsed as ExportResult & { retryable?: boolean };
+        }
+      } catch {
+        // Handled below: a timeout or invalid output.
+      }
+
+      // The timeout kill (SIGTERM from spawn's `timeout`) is checked AFTER the
+      // output. garmin_upload.py flushes its result line the moment Garmin has
+      // answered, so a kill that lands later, while the interpreter is still
+      // shutting down, must not turn an upload that happened into a timeout:
+      // the retry would send the same weigh-in again (F-04). Without a complete
+      // line nothing is known, and it stays a timeout.
+      if (signal === 'SIGTERM') {
+        if (!result) {
+          reject(new Error(`Python uploader timed out after ${timeoutMs / 1000}s`));
+          return;
+        }
+        log.warn(
+          `Python uploader was killed after ${timeoutMs / 1000}s, but had already reported ` +
+            `${result.success ? 'the upload as done' : 'its result'}; using that result.`,
+        );
+      } else if (!raw) {
         reject(new Error(`Python uploader exited with code ${code} and no output`));
         return;
-      }
-      let result: ExportResult & { retryable?: boolean };
-      try {
-        result = JSON.parse(raw);
-      } catch {
+      } else if (!result) {
         reject(new Error(`Invalid JSON from Python (exit ${code}): ${raw}`));
         return;
       }
@@ -246,7 +297,14 @@ export class GarminExporter implements Exporter {
   }
 
   async export(data: BodyComposition, context?: ExportContext): Promise<ExportResult> {
-    const pythonCmd = await findPython();
+    let pythonCmd: string;
+    try {
+      pythonCmd = await findPython();
+    } catch (err) {
+      const error = errMsg(err);
+      log.error(error);
+      return { success: false, error };
+    }
     const payload: GarminUploadPayload = { ...data };
     if (context?.timestamp) payload.timestamp = context.timestamp.toISOString();
     if (this.entryConfig.weight_only) payload.weight_only = true;

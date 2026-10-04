@@ -24,19 +24,38 @@ interface MockProc extends EventEmitter {
   stderr: null;
 }
 
-function createVersionCheckProc(exitCode: number, errorMsg?: string): MockProc {
+function createVersionCheckProc(
+  exitCode: number,
+  errorMsg?: string,
+  versionOutput = 'Python 3.12.4\n',
+): MockProc {
   const proc = new EventEmitter() as MockProc;
+  const stdoutStream = new PassThrough();
   proc.stdin = null;
-  proc.stdout = null;
+  proc.stdout = stdoutStream;
   proc.stderr = null;
   process.nextTick(() => {
     if (errorMsg) {
       proc.emit('error', new Error(errorMsg));
     } else {
+      stdoutStream.write(versionOutput);
+      stdoutStream.end();
       proc.emit('close', exitCode);
     }
   });
   return proc;
+}
+
+/** `python3` / `python` answering `--version` with the given output, or missing (null). */
+function versionChecks(
+  versions: Partial<Record<'python3' | 'python', string | null>>,
+): (cmd: string) => MockProc {
+  return (cmd: string) => {
+    const output = versions[cmd as 'python3' | 'python'];
+    return output == null
+      ? createVersionCheckProc(0, `spawn ${cmd} ENOENT`)
+      : createVersionCheckProc(0, undefined, output);
+  };
 }
 
 function createUploadProc(stdoutData: string, exitCode: number): MockProc {
@@ -137,8 +156,9 @@ describe('GarminExporter', () => {
   it('falls back to python when python3 is not found', async () => {
     const uploadResult = JSON.stringify({ success: true });
 
-    mockSpawn.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === '--version') return createVersionCheckProc(0, 'not found');
+    const version = versionChecks({ python3: null, python: 'Python 3.12.4' });
+    mockSpawn.mockImplementation((cmd: string, args: string[]) => {
+      if (args[0] === '--version') return version(cmd);
       return createUploadProc(uploadResult, 0);
     });
 
@@ -147,9 +167,43 @@ describe('GarminExporter', () => {
     const result = await exporter.export(samplePayload);
 
     expect(result.success).toBe(true);
-    expect(mockSpawn).toHaveBeenCalledTimes(2);
-    // Second spawn call should use 'python' (fallback)
-    expect(mockSpawn.mock.calls[1][0]).toBe('python');
+    // python3 probed and missing, python probed, then the upload itself
+    expect(mockSpawn).toHaveBeenCalledTimes(3);
+    expect(mockSpawn.mock.calls[2][0]).toBe('python');
+  });
+
+  // F-20: garminconnect 0.3.x needs Python 3.12. An older python3 used to be
+  // taken because it answered --version at all, and the upload then died at
+  // import with an error that named no version.
+  it('passes over a python3 older than 3.12 for a python that is new enough', async () => {
+    const version = versionChecks({ python3: 'Python 3.11.9', python: 'Python 3.12.1' });
+    mockSpawn.mockImplementation((cmd: string, args: string[]) => {
+      if (args[0] === '--version') return version(cmd);
+      return createUploadProc(JSON.stringify({ success: true }), 0);
+    });
+
+    const { GarminExporter } = await import('../../src/exporters/garmin.js');
+    const result = await new GarminExporter().export(samplePayload);
+
+    expect(result.success).toBe(true);
+    const upload = mockSpawn.mock.calls.find((c) => (c[1] as string[])[0] !== '--version');
+    expect(upload?.[0]).toBe('python');
+  });
+
+  it('names the required version and starts no upload when no Python is new enough', async () => {
+    const version = versionChecks({ python3: 'Python 3.9.2', python: 'Python 2.7.18' });
+    mockSpawn.mockImplementation((cmd: string, args: string[]) => {
+      if (args[0] === '--version') return version(cmd);
+      return createUploadProc(JSON.stringify({ success: true }), 0);
+    });
+
+    const { GarminExporter } = await import('../../src/exporters/garmin.js');
+    const result = await new GarminExporter().export(samplePayload);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/Python 3\.12 or newer/);
+    expect(result.error).toMatch(/3\.9/);
+    expect(mockSpawn.mock.calls.every((c) => (c[1] as string[])[0] === '--version')).toBe(true);
   });
 
   it('passes token_dir as --token-dir to Python subprocess', async () => {
@@ -243,7 +297,7 @@ describe('GarminExporter', () => {
     expect(args[args.indexOf('--token-dir') + 1]).toBe(join(configDir(), 'garmin-tokens', 'alice'));
   });
 
-  it('does not pass --token-dir when token_dir is not set (backward compat)', async () => {
+  it('does not pass --token-dir when neither token_dir nor TOKEN_DIR is set (backward compat)', async () => {
     const uploadResult = JSON.stringify({ success: true });
 
     mockSpawn.mockImplementation((_cmd: string, args: string[]) => {
@@ -251,13 +305,59 @@ describe('GarminExporter', () => {
       return createUploadProc(uploadResult, 0);
     });
 
-    const { GarminExporter } = await import('../../src/exporters/garmin.js');
-    const exporter = new GarminExporter();
-    const result = await exporter.export(samplePayload);
+    vi.stubEnv('TOKEN_DIR', undefined);
+    try {
+      const { GarminExporter } = await import('../../src/exporters/garmin.js');
+      const exporter = new GarminExporter();
+      const result = await exporter.export(samplePayload);
 
-    expect(result.success).toBe(true);
-    const uploadCall = mockSpawn.mock.calls[1];
-    expect(uploadCall[1]).not.toContain('--token-dir');
+      expect(result.success).toBe(true);
+      const uploadCall = mockSpawn.mock.calls[1];
+      expect(uploadCall[1]).not.toContain('--token-dir');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  // F-11: the app reads a relative TOKEN_DIR as next to config.yaml
+  // (findTokenDirCollisions), and setup_garmin.py writes the token there. The
+  // uploader would take it from its own working directory, the package
+  // directory, so the exporter hands it over already resolved.
+  it('passes a relative TOKEN_DIR as an absolute path from the config directory', async () => {
+    mockSpawn.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === '--version') return createVersionCheckProc(0);
+      return createUploadProc(JSON.stringify({ success: true }), 0);
+    });
+
+    vi.stubEnv('TOKEN_DIR', 'env-tokens');
+    try {
+      const { GarminExporter } = await import('../../src/exporters/garmin.js');
+      const { configDir } = await import('../../src/config/paths.js');
+      await new GarminExporter().export(samplePayload);
+
+      const args = mockSpawn.mock.calls[1][1] as string[];
+      expect(args[args.indexOf('--token-dir') + 1]).toBe(join(configDir(), 'env-tokens'));
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("prefers the entry's token_dir over TOKEN_DIR", async () => {
+    mockSpawn.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === '--version') return createVersionCheckProc(0);
+      return createUploadProc(JSON.stringify({ success: true }), 0);
+    });
+
+    vi.stubEnv('TOKEN_DIR', '/from/env');
+    try {
+      const { GarminExporter } = await import('../../src/exporters/garmin.js');
+      await new GarminExporter({ token_dir: '/from/entry' }).export(samplePayload);
+
+      const args = mockSpawn.mock.calls[1][1] as string[];
+      expect(args[args.indexOf('--token-dir') + 1]).toBe('/from/entry');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   // ─── Historical (#164) ────────────────────────────────────────────────────
@@ -528,6 +628,64 @@ describe('GarminExporter upload timeout (#399)', () => {
     expect(mockSpawn.mock.calls[1][2]).toMatchObject({ timeout: 300_000 });
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/timed out after 300s/);
+  });
+
+  /** A process that printed `stdoutData` and was then killed by the spawn timeout. */
+  function createKilledProc(stdoutData: string): MockProc {
+    const proc = createSilentProc();
+    process.nextTick(() => {
+      proc.stdout!.write(stdoutData);
+      proc.stdout!.end();
+      proc.emit('close', null, 'SIGTERM');
+    });
+    return proc;
+  }
+
+  // F-04: the uploader prints its result the moment Garmin has answered. A
+  // kill after that line (the interpreter still shutting down) used to be
+  // reported as a timeout, and the retry sent the same weigh-in again.
+  it('keeps a success reported before the timeout kill, and does not upload again', async () => {
+    mockSpawn.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === '--version') return createVersionCheckProc(0);
+      return createKilledProc(JSON.stringify({ success: true, data: { weight: 80 } }) + '\n');
+    });
+
+    const { GarminExporter } = await import('../../src/exporters/garmin.js');
+    const result = await new GarminExporter({ upload_timeout_sec: 60 }).export(samplePayload);
+
+    expect(result.success).toBe(true);
+    // 1 version check + 1 upload
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a not-retryable failure reported before the timeout kill', async () => {
+    mockSpawn.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === '--version') return createVersionCheckProc(0);
+      return createKilledProc(
+        JSON.stringify({ success: false, error: 'token rejected', retryable: false }),
+      );
+    });
+
+    const { GarminExporter } = await import('../../src/exporters/garmin.js');
+    const result = await new GarminExporter({ upload_timeout_sec: 60 }).export(samplePayload);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('token rejected');
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+  });
+
+  it('still reports a timeout when the kill came before a complete result', async () => {
+    mockSpawn.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === '--version') return createVersionCheckProc(0);
+      return createKilledProc('{"success": tr');
+    });
+
+    const { GarminExporter } = await import('../../src/exporters/garmin.js');
+    const result = await new GarminExporter({ upload_timeout_sec: 60 }).export(samplePayload);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/timed out after 60s/);
+    expect(mockSpawn).toHaveBeenCalledTimes(4);
   });
 
   it('accepts the value as a string, which is what a ${ENV_VAR} reference resolves to', async () => {

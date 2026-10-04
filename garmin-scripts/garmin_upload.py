@@ -1,16 +1,18 @@
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
 from garminconnect import Garmin
 
-from garmin_errors import format_error_chain
+from garmin_errors import error_chain, format_error_chain
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(PROJECT_ROOT / ".env")
+# No .env is loaded here. The app spawns this script with its own environment,
+# which already holds the .env that belongs to its config.yaml. Loading the
+# package directory's .env as well added keys from another file whenever the
+# two directories differ, as after any npm or npx install (F-11).
 
 
 def log(msg):
@@ -52,6 +54,46 @@ class TokenSetupError(RuntimeError):
     fixes it. main() reports it with "retryable": false so the TypeScript side
     does not spend its retries on it.
     """
+
+
+# garminconnect 0.3.17 puts the HTTP status into the message, as in
+# "API Error 401 - ..." (Client._run_request), and parses it back out with this
+# same pattern (_STATUS_CODE_RE in garminconnect/__init__.py).
+_STATUS_IN_MESSAGE = re.compile(r"(?:API Error|Error|HTTP)\s*(\d{3})")
+
+REJECTED_TOKEN_HINT = (
+    "Garmin rejected the saved login token (HTTP 401), so retrying will not "
+    "help. Run 'ble-scale-sync setup-garmin' (or 'npm run setup-garmin' from "
+    "a checkout) to log in again."
+)
+
+
+def _http_status(exc):
+    for status in (
+        getattr(exc, "status_code", None),
+        getattr(getattr(exc, "response", None), "status_code", None),
+    ):
+        if isinstance(status, int):
+            return status
+    match = _STATUS_IN_MESSAGE.search(str(exc))
+    return int(match.group(1)) if match else None
+
+
+def is_rejected_token(exc):
+    """True when Garmin answered 401 somewhere along the exception chain (F-13).
+
+    By the time a 401 reaches us, garminconnect 0.3.17 has already refreshed
+    the token and repeated the request (Client._run_request), so a new process
+    seconds later loads the same token and gets the same answer. Only a new
+    login fixes it.
+
+    The status is looked for on every link, not on the outer exception's class:
+    at login, Garmin._load_social_profile wraps whatever its last attempt
+    raised, 5xx and network errors included, in the same
+    GarminConnectAuthenticationError("Failed to retrieve social profile"), and
+    those are worth retrying.
+    """
+    return any(_http_status(link) == 401 for link in error_chain(exc))
 
 
 def get_garmin_client(token_dir=None):
@@ -151,6 +193,17 @@ def parse_args():
     return parser.parse_args()
 
 
+def report(result):
+    """Write the one result line, and get it into the pipe at once.
+
+    stdout to a pipe is block-buffered, so without the flush the line sits in
+    this process until exit. The orchestrator kills the uploader with SIGTERM
+    at upload_timeout_sec, and a kill in that gap threw away a success that
+    had already happened; the orchestrator then sent the weigh-in again (F-04).
+    """
+    print(json.dumps(result), flush=True)
+
+
 def main():
     args = parse_args()
 
@@ -159,12 +212,12 @@ def main():
         payload = json.loads(raw)
     except (json.JSONDecodeError, ValueError) as e:
         log(f"[Garmin] Invalid JSON input: {e}")
-        print(json.dumps({"success": False, "error": f"Invalid JSON input: {e}"}))
+        report({"success": False, "error": f"Invalid JSON input: {e}"})
         sys.exit(1)
 
     try:
         data = upload(payload, args.token_dir)
-        print(json.dumps({"success": True, "data": data}))
+        report({"success": True, "data": data})
         sys.exit(0)
     except Exception as e:
         # The chained cause carries the status code that explains the failure.
@@ -172,11 +225,14 @@ def main():
         # profile" with the 401 only on __cause__, so str(e) alone leaves the
         # orchestrator logging the same opaque line on every retry.
         detail = format_error_chain(e)
-        log(f"[Garmin] Error: {detail}")
         result = {"success": False, "error": detail}
         if isinstance(e, TokenSetupError):
             result["retryable"] = False
-        print(json.dumps(result))
+        elif is_rejected_token(e):
+            result["retryable"] = False
+            result["error"] = f"{REJECTED_TOKEN_HINT}\n{detail}"
+        log(f"[Garmin] Error: {result['error']}")
+        report(result)
         sys.exit(1)
 
 

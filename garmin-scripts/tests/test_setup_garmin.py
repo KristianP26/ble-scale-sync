@@ -247,5 +247,154 @@ class ConfigTokenDirTest(unittest.TestCase):
             self.assertEqual(token_dir, override)
 
 
+class _Cwd:
+    """Run a block from another working directory, restoring it afterwards."""
+
+    def __init__(self, path):
+        self.path = path
+
+    def __enter__(self):
+        self.saved = os.getcwd()
+        os.chdir(self.path)
+
+    def __exit__(self, *exc):
+        os.chdir(self.saved)
+
+
+def run_main(argv, cwd, env=None):
+    """Run main() from `cwd` with authenticate() replaced; return its mock.
+
+    Every Garmin variable is removed first and `env` set, and whatever the
+    code under test loads from a .env is dropped again afterwards.
+    """
+    with mock.patch.dict(os.environ):
+        for key in ("GARMIN_EMAIL", "GARMIN_PASSWORD", "TOKEN_DIR", "BSS_TEST_GARMIN_PW"):
+            os.environ.pop(key, None)
+        os.environ.update(env or {})
+        with _Cwd(cwd):
+            with mock.patch.object(sys, "argv", ["setup_garmin.py", *argv]):
+                with mock.patch.object(
+                    setup_garmin, "authenticate", return_value=True
+                ) as authenticate:
+                    with mock.patch("builtins.print"):
+                        try:
+                            setup_garmin.main()
+                        except SystemExit:
+                            pass
+    return authenticate
+
+
+def write(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(text)
+
+
+class DotenvBesideConfigTest(unittest.TestCase):
+    """F-11: the .env read is the one next to config.yaml, as in the app.
+
+    It used to be the package directory's, which after an npm or npx install
+    is not where the user keeps either file, so the legacy setup did not see
+    GARMIN_EMAIL / GARMIN_PASSWORD and --from-config left ${VAR} unresolved.
+    """
+
+    def test_legacy_setup_reads_the_env_in_the_working_directory(self):
+        with tempfile.TemporaryDirectory() as here:
+            write(
+                os.path.join(here, ".env"),
+                "GARMIN_EMAIL=dot@x\nGARMIN_PASSWORD=pw\n",
+            )
+            authenticate = run_main([], cwd=here)
+        self.assertTrue(authenticate.called)
+        self.assertEqual(authenticate.call_args[0][0], "dot@x")
+
+    def test_from_config_reads_the_env_beside_the_given_config(self):
+        with tempfile.TemporaryDirectory() as root:
+            config_dir = os.path.join(root, "cfg")
+            elsewhere = os.path.join(root, "elsewhere")
+            os.makedirs(elsewhere)
+            write(
+                os.path.join(config_dir, "config.yaml"),
+                "users:\n"
+                "  - name: Alice\n"
+                "    exporters:\n"
+                "      - type: garmin\n"
+                "        email: a@x\n"
+                "        password: ${BSS_TEST_GARMIN_PW}\n"
+                "        token_dir: ./tokens\n",
+            )
+            write(os.path.join(config_dir, ".env"), "BSS_TEST_GARMIN_PW=from-dotenv\n")
+            authenticate = run_main(
+                ["--from-config", "--config-path", os.path.join(config_dir, "config.yaml")],
+                cwd=elsewhere,
+            )
+        self.assertTrue(authenticate.called)
+        self.assertEqual(authenticate.call_args[0][1], "from-dotenv")
+
+
+class TokenDirEnvTest(unittest.TestCase):
+    """F-11: a relative TOKEN_DIR is next to config.yaml, not the working directory.
+
+    The app reads it that way (findTokenDirCollisions resolves the Garmin
+    default against the config directory), so the setup has to write there.
+    """
+
+    def test_relative_token_dir_env_is_taken_from_the_config_directory(self):
+        with tempfile.TemporaryDirectory() as root:
+            config_dir = os.path.join(root, "cfg")
+            elsewhere = os.path.join(root, "elsewhere")
+            os.makedirs(elsewhere)
+            write(
+                os.path.join(config_dir, "config.yaml"),
+                "users:\n"
+                "  - name: Alice\n"
+                "    exporters:\n"
+                "      - type: garmin\n"
+                "        email: a@x\n"
+                "        password: pw\n",
+            )
+            authenticate = run_main(
+                ["--from-config", "--config-path", os.path.join(config_dir, "config.yaml")],
+                cwd=elsewhere,
+                env={"TOKEN_DIR": "garmin-tokens"},
+            )
+            expected = os.path.join(os.path.realpath(config_dir), "garmin-tokens")
+        self.assertTrue(authenticate.called)
+        self.assertEqual(
+            os.path.normcase(authenticate.call_args[0][2]), os.path.normcase(expected)
+        )
+
+    def test_legacy_mode_resolves_token_dir_env_against_config_path(self):
+        # The wizard runs the legacy (env credential) mode and passes the
+        # config it is writing. A relative TOKEN_DIR must land next to that
+        # config, where the app looks, not next to the package.
+        with tempfile.TemporaryDirectory() as root:
+            config_dir = os.path.join(root, "cfg")
+            elsewhere = os.path.join(root, "elsewhere")
+            os.makedirs(config_dir)
+            os.makedirs(elsewhere)
+            authenticate = run_main(
+                ["--config-path", os.path.join(config_dir, "config.yaml")],
+                cwd=elsewhere,
+                env={"GARMIN_EMAIL": "a@x", "GARMIN_PASSWORD": "pw", "TOKEN_DIR": "garmin-tokens"},
+            )
+            expected = os.path.join(os.path.realpath(config_dir), "garmin-tokens")
+        self.assertTrue(authenticate.called)
+        self.assertEqual(
+            os.path.normcase(authenticate.call_args[0][2]), os.path.normcase(expected)
+        )
+
+    def test_absolute_token_dir_env_is_kept(self):
+        with tempfile.TemporaryDirectory() as here:
+            absolute = os.path.join(here, "abs-tokens")
+            write(
+                os.path.join(here, ".env"),
+                f"GARMIN_EMAIL=a@x\nGARMIN_PASSWORD=pw\nTOKEN_DIR={absolute}\n",
+            )
+            authenticate = run_main([], cwd=here)
+        self.assertTrue(authenticate.called)
+        self.assertEqual(authenticate.call_args[0][2], absolute)
+
+
 if __name__ == "__main__":
     unittest.main()
