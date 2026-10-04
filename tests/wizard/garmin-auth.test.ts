@@ -95,6 +95,20 @@ describe('garminAuthStep resolves ${VAR} references before using them', () => {
     expect(entry.password).toBe('${BSS_TEST_GARMIN_PASSWORD}');
   });
 
+  // G-23: a 120 s spawn timeout killed the script while it waited for the MFA code.
+  it('gives the interactive script no timeout', async () => {
+    const entry = {
+      type: 'garmin',
+      email: '${BSS_TEST_GARMIN_EMAIL}',
+      password: '${BSS_TEST_GARMIN_PASSWORD}',
+      token_dir: './garmin-tokens/alice',
+    };
+    await garminAuthStep.run(ctxWith([{ name: 'Alice', slug: 'alice', exporters: [entry] }]));
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(spawnMock.mock.calls[0][2].timeout).toBeUndefined();
+  });
+
   it('skips the auth when a referenced variable is not defined', async () => {
     const ctx = ctxWith([
       {

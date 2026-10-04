@@ -10,17 +10,12 @@ export function buildSingleUserExporters(ctx: AppContext): Exporter[] {
 }
 
 /**
- * Per-user lookup that hits `ctx.exporterCache`. Cache is cleared on every
- * config reload via `AppContext.setConfig` so reload-time exporter changes
- * land on the next call.
- */
-/**
  * Every exporter any configured user has, deduped by name.
  *
- * The retry queue stores an exporter NAME, so draining it needs the set of
- * exporters that exist right now rather than the ones for one user: the entry
- * may have been queued for a user who has since been removed, and it carries
- * the user's name and slug in its own context anyway (#412).
+ * Only the fallback for a queued entry WITHOUT a `userSlug` (queued before the
+ * field existed, #412): every other entry is resolved through its own user by
+ * `resolveQueuedExporter` (D015), because the name is the exporter type and the
+ * union would hand one user's entry to another user's account.
  */
 export function collectConfiguredExporters(ctx: AppContext): Exporter[] {
   const byName = new Map<string, Exporter>();
@@ -59,6 +54,11 @@ export function resolveQueuedExporter(
   return candidates.find((e) => e.name === entry.exporter);
 }
 
+/**
+ * Per-user lookup that hits `ctx.exporterCache`. Cache is cleared on every
+ * config reload via `AppContext.setConfig` so reload-time exporter changes
+ * land on the next call.
+ */
 export function getExportersForUser(ctx: AppContext, slug: string): Exporter[] {
   let exporters = ctx.exporterCache.get(slug);
   if (!exporters) {

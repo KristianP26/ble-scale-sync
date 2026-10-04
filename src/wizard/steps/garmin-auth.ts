@@ -64,9 +64,11 @@ function runSetupGarmin(pythonCmd: string, options: SetupGarminOptions = {}): Pr
     if (options.email) env.GARMIN_EMAIL = options.email;
     if (options.password) env.GARMIN_PASSWORD = options.password;
 
+    // No timeout: the script is interactive (stdio inherited) and waits for
+    // the MFA code as long as the person needs to fetch it. A 120 s cap killed
+    // it mid-prompt and reported a failed login (G-23).
     const proc = spawn(pythonCmd, args, {
       stdio: 'inherit',
-      timeout: 120_000,
       env,
     });
 

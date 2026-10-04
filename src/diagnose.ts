@@ -9,6 +9,7 @@ import type { NobleApi } from './ble/handler-noble-shared/types.js';
 import { parseMfgData } from './ble/handler-noble-shared/peripheral.js';
 import { parseQnBroadcast } from './scales/qn-scale/broadcast.js';
 import type { HandlerKey } from './ble/transport-availability.js';
+import { diagnoseMacArg } from './cli-run-args.js';
 
 const log = createLogger('Diagnose');
 
@@ -45,7 +46,7 @@ async function main(): Promise<void> {
   const bleConfig = loadBleConfig();
   // A leading dash is a flag, never a MAC: `diagnose --config x.yaml` used to
   // scan forever for a device called "--CONFIG".
-  const positional = process.argv[2]?.startsWith('-') === false ? process.argv[2] : undefined;
+  const positional = diagnoseMacArg(process.argv.slice(2));
   const scaleMac = (positional ?? bleConfig.scaleMac)?.toUpperCase();
 
   // This tool drives a local radio through Noble directly, on purpose: it

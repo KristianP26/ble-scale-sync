@@ -75,12 +75,17 @@ def login_fresh(garmin):
 
 
 def resolve_env_ref(value):
-    """Resolve ${ENV_VAR} references in config values (matching TS behavior)."""
+    """Resolve ${ENV_VAR} references in config values (matching TS behavior).
+
+    `$${...}` is the escape for a literal `${...}`, as in resolveEnvReferences.
+    """
     if not isinstance(value, str):
         return value
 
     def replacer(match):
-        var_name = match.group(1)
+        if match.group(1):
+            return match.group(0)[1:]
+        var_name = match.group(2)
         env_val = os.environ.get(var_name)
         if env_val is None:
             print(
@@ -90,7 +95,7 @@ def resolve_env_ref(value):
             return match.group(0)
         return env_val
 
-    return re.sub(r"\$\{([^}]+)\}", replacer, value)
+    return re.sub(r"\$(\$?)\{([^}]+)\}", replacer, value)
 
 
 def restrict_token_dir(token_dir):
@@ -176,38 +181,37 @@ def load_config(config_path):
         sys.exit(1)
 
 
+def _garmin_entry(name, entry):
+    return {
+        "name": name,
+        "email": resolve_env_ref(entry.get("email", "")),
+        "password": resolve_env_ref(entry.get("password", "")),
+        "token_dir": entry.get("token_dir", ""),
+    }
+
+
 def get_garmin_users(config):
-    """Extract Garmin users from config. Returns list of (name, email, password, token_dir)."""
-    users = config.get("users", [])
-    global_exporters = config.get("global_exporters", [])
+    """Extract Garmin users from config. Returns list of (name, email, password, token_dir).
+
+    Follows the runtime rule (resolveExportersForUser in src/config/resolve.ts):
+    a user's own Garmin entries are used, and a user without one inherits the
+    first global Garmin entry. This used to be decided once for the whole
+    config, so as soon as anyone had their own entry, every user relying on
+    the global one was skipped (F-20).
+    """
+    users = config.get("users") or []
+    global_garmin = [
+        e for e in (config.get("global_exporters") or []) if e.get("type") == "garmin"
+    ]
     results = []
 
-    # Per-user garmin entries
     for user in users:
-        for entry in user.get("exporters", []):
-            if entry.get("type") == "garmin":
-                results.append(
-                    {
-                        "name": user.get("name", "Unknown"),
-                        "email": resolve_env_ref(entry.get("email", "")),
-                        "password": resolve_env_ref(entry.get("password", "")),
-                        "token_dir": entry.get("token_dir", ""),
-                    }
-                )
-
-    # Global garmin entries apply to all users (only if no per-user entries found)
-    if not results:
-        for entry in global_exporters:
-            if entry.get("type") == "garmin":
-                for user in users:
-                    results.append(
-                        {
-                            "name": user.get("name", "Unknown"),
-                            "email": resolve_env_ref(entry.get("email", "")),
-                            "password": resolve_env_ref(entry.get("password", "")),
-                            "token_dir": entry.get("token_dir", ""),
-                        }
-                    )
+        name = user.get("name", "Unknown")
+        own = [e for e in (user.get("exporters") or []) if e.get("type") == "garmin"]
+        if own:
+            results.extend(_garmin_entry(name, e) for e in own)
+        elif global_garmin:
+            results.append(_garmin_entry(name, global_garmin[0]))
 
     return results
 
@@ -231,7 +235,21 @@ def run_from_config(config_path, target_user=None, cli_token_dir=None):
             sys.exit(1)
 
     has_error = False
+    # One login per Garmin account and token directory. A global entry is
+    # inherited by every user, and logging in once per user meant as many
+    # logins and MFA prompts for the same account (F-20).
+    done = {}
     for user in garmin_users:
+        token_dir = get_token_dir(cli_token_dir or user.get("token_dir") or None)
+        key = ((user.get("email") or "").strip().lower(), token_dir)
+        if key[0] and key in done:
+            print(
+                f"\n[Setup] {user['name']} uses the same Garmin account and token "
+                f"directory as {done[key]}, which is handled above."
+            )
+            continue
+        done[key] = user["name"]
+
         print(f"\n[Setup] ===========================================")
         print(f"[Setup] Setting up Garmin for user: {user['name']}")
         print(f"[Setup] ===========================================")
@@ -246,8 +264,6 @@ def run_from_config(config_path, target_user=None, cli_token_dir=None):
             print("[Setup] Add credentials to config.yaml or set env vars.")
             has_error = True
             continue
-
-        token_dir = get_token_dir(cli_token_dir or user.get("token_dir") or None)
 
         if not authenticate(email, password, token_dir):
             has_error = True

@@ -6,7 +6,7 @@ import { createLogger } from '../logger.js';
 import type { BodyComposition } from '../interfaces/scale-adapter.js';
 import type { Exporter, ExportContext, ExportResult } from '../interfaces/exporter.js';
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
-import { withRetry } from '../utils/retry.js';
+import { NonRetryableError, withRetry } from '../utils/retry.js';
 
 const log = createLogger('Garmin');
 
@@ -22,12 +22,12 @@ const ROOT: string = join(__dirname, '..', '..');
  * gone. A reporter lost four weigh-ins over five days that way and has been
  * running 300 s locally since (#399).
  *
- * `withRetry` has no delay between attempts, so the worst case is exactly
- * three times this value. That is also why the default is not the reporter's
- * 300 s: 15 minutes of a failing Garmin would hold up the next scan cycle in
- * continuous mode, and delay the ntfy/Telegram summary that reports the
- * weigh-in. Raise it with `upload_timeout_sec` if your Garmin is habitually
- * slow.
+ * `withRetry` makes three attempts with a 1 s and a 2 s backoff between them
+ * (D017), so the worst case is three times this value plus those 3 s. That is
+ * also why the default is not the reporter's 300 s: 15 minutes of a failing
+ * Garmin would hold up the next scan cycle in continuous mode, and delay the
+ * ntfy/Telegram summary that reports the weigh-in. Raise it with
+ * `upload_timeout_sec` if your Garmin is habitually slow.
  */
 const DEFAULT_UPLOAD_TIMEOUT_MS = 180_000;
 
@@ -111,12 +111,21 @@ function uploadToGarmin(
         reject(new Error(`Python uploader exited with code ${code} and no output`));
         return;
       }
+      let result: ExportResult & { retryable?: boolean };
       try {
-        const result: ExportResult = JSON.parse(raw);
-        resolve(result);
+        result = JSON.parse(raw);
       } catch {
         reject(new Error(`Invalid JSON from Python (exit ${code}): ${raw}`));
+        return;
       }
+      // The uploader marks failures no retry can fix (no token directory, no
+      // token file, pre-0.3 tokens) with `retryable: false`. Retrying those
+      // only spawns the same process to hit the same missing file (F-13).
+      if (!result.success && result.retryable === false) {
+        reject(new NonRetryableError(result.error));
+        return;
+      }
+      resolve(result);
     });
 
     py.on('error', (err: Error) => {
@@ -138,7 +147,7 @@ export interface GarminEntryConfig {
   weight_only?: boolean;
   /**
    * Seconds one upload attempt may take before the Python process is killed
-   * (10-900). Three attempts are made, with no wait between them.
+   * (10-900). Three attempts are made, with a 1 s and a 2 s wait between them.
    */
   upload_timeout_sec?: number;
 }

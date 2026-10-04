@@ -147,5 +147,59 @@ class AuthenticateTest(unittest.TestCase):
         self.assertIn("API Error 401", output)
 
 
+class ResolveEnvRefTest(unittest.TestCase):
+    def test_resolves_a_reference(self):
+        with mock.patch.dict(os.environ, {"BSS_TEST_PW": "secret"}):
+            self.assertEqual(setup_garmin.resolve_env_ref("${BSS_TEST_PW}"), "secret")
+
+    def test_dollar_dollar_brace_is_a_literal(self):
+        # G-24: the same escape the TypeScript loader accepts.
+        with mock.patch.dict(os.environ, {"BSS_TEST_PW": "secret"}):
+            self.assertEqual(
+                setup_garmin.resolve_env_ref("pa$${BSS_TEST_PW}ss"), "pa${BSS_TEST_PW}ss"
+            )
+
+
+GLOBAL_GARMIN = {"type": "garmin", "email": "family@x", "password": "pw"}
+
+
+class GarminUsersFromConfigTest(unittest.TestCase):
+    """F-20: setup must authenticate the accounts the runtime will use."""
+
+    def test_user_without_own_entry_inherits_the_global_one(self):
+        config = {
+            "users": [
+                {
+                    "name": "Alice",
+                    "exporters": [{"type": "garmin", "email": "alice@x", "password": "a"}],
+                },
+                {"name": "Bob"},
+            ],
+            "global_exporters": [GLOBAL_GARMIN],
+        }
+        users = setup_garmin.get_garmin_users(config)
+        self.assertEqual(
+            [(u["name"], u["email"]) for u in users],
+            [("Alice", "alice@x"), ("Bob", "family@x")],
+        )
+
+    def test_only_the_first_global_entry_is_inherited(self):
+        second = dict(GLOBAL_GARMIN, email="other@x")
+        config = {"users": [{"name": "Bob"}], "global_exporters": [GLOBAL_GARMIN, second]}
+        users = setup_garmin.get_garmin_users(config)
+        self.assertEqual([u["email"] for u in users], ["family@x"])
+
+    def test_one_login_for_an_account_shared_by_every_user(self):
+        config = {"users": [{"name": "Alice"}, {"name": "Bob"}], "global_exporters": [GLOBAL_GARMIN]}
+        with tempfile.TemporaryDirectory() as token_dir:
+            with mock.patch.object(setup_garmin, "load_config", return_value=config):
+                with mock.patch.object(
+                    setup_garmin, "authenticate", return_value=True
+                ) as authenticate:
+                    with mock.patch("builtins.print"):
+                        setup_garmin.run_from_config("config.yaml", cli_token_dir=token_dir)
+        authenticate.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

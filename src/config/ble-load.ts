@@ -50,7 +50,7 @@ export function loadBleConfig(configPath?: string): BleLoadedConfig {
   // Load .env if it exists
   const envPath = defaultEnvPath();
   if (existsSync(envPath)) {
-    dotenvConfig({ path: envPath });
+    dotenvConfig({ path: envPath, quiet: true });
   }
 
   return {

@@ -1,10 +1,9 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { config as dotenvConfig } from 'dotenv';
+import { readFileSync } from 'node:fs';
 import { createLogger } from '../logger.js';
 import { AppConfigSchema, formatConfigError } from './schema.js';
 import type { AppConfig } from './schema.js';
 import { defaultConfigPath, envPathFor } from './paths.js';
-import { resolveEnvReferences } from './env-refs.js';
+import { loadEnvFile, resolveEnvReferences } from './env-refs.js';
 import { applyEnvOverrides, filterValidExporters } from './env-overrides.js';
 import { collectUnknownKeys } from './unknown-keys.js';
 import { parseConfigYaml } from './yaml-parse.js';
@@ -19,10 +18,8 @@ export function loadYamlConfig(configPath?: string): AppConfig {
   // Load .env so ${VAR} references in config.yaml can resolve secrets from .env.
   // It is the .env next to the config file, also when --config names one.
   const yamlPath = configPath ?? defaultConfigPath();
-  const envPath = envPathFor(yamlPath);
-  if (existsSync(envPath)) {
-    dotenvConfig({ path: envPath });
-  }
+  // Re-read on every load, so a reload sees an edited .env too (G-20).
+  loadEnvFile(envPathFor(yamlPath));
 
   const raw = readFileSync(yamlPath, 'utf8');
   const parsed: unknown = parseConfigYaml(raw, yamlPath);

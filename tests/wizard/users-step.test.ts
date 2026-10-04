@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { usersStep } from '../../src/wizard/steps/users.js';
 import type { PromptProvider, PromptChoice, WizardContext } from '../../src/wizard/types.js';
 import type { UserConfig } from '../../src/config/schema.js';
+import { scriptedPrompts as sharedScriptedPrompts } from '../helpers/scripted-prompts.js';
 
 /**
  * Answers by prompt text, not by position, so the test reads the same against
@@ -218,5 +219,69 @@ describe('usersStep in edit mode', () => {
     await usersStep.run(ctx);
 
     expect(ctx.config.users![0].weight_range).toEqual({ min: 50, max: 70 });
+  });
+});
+
+// G-25: a name with no Latin letters produced an empty default slug, which
+// the slug prompt itself then refused.
+describe('usersStep with a non-Latin name', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('offers a usable default slug', async () => {
+    const { prompts, rejected } = sharedScriptedPrompts([
+      [/Alice/, 'remove'],
+      [/^User name/, 'Иван'],
+      [/^Height/, '180'],
+      [/^Birth date/, '1990-01-01'],
+      [/^Gender/, 'male'],
+      [/^Athlete/, false],
+      [/minimum/, '70'],
+      [/maximum/, '95'],
+      [/^Add another user/, false],
+    ]);
+    const ctx = editContext(prompts, [alice]);
+
+    await usersStep.run(ctx);
+
+    expect(rejected).toEqual([]);
+    expect(ctx.config.users?.[0].slug).toBe('user-1');
+  });
+});
+
+// Replaces a test that recomputed the lbs -> kg formula itself and never
+// called the step, so removing the conversion would not have failed it.
+describe('usersStep weight range in lbs', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('stores a range typed in lbs as kg', async () => {
+    const { prompts, rejected } = sharedScriptedPrompts([
+      [/Alice/, 'remove'],
+      [/^User name/, 'Dan'],
+      [/^Height/, '180'],
+      [/^Birth date/, '1990-01-01'],
+      [/^Gender/, 'male'],
+      [/^Athlete/, false],
+      [/minimum/, '150'],
+      [/maximum/, '220'],
+      [/^Add another user/, false],
+    ]);
+    const ctx = editContext(prompts, [alice]);
+    ctx.config.scale = { weight_unit: 'lbs', height_unit: 'cm', display_unit: 'weight_unit' };
+
+    await usersStep.run(ctx);
+
+    expect(rejected).toEqual([]);
+    // 150 lb = 68.04 kg, 220 lb = 99.79 kg (1 lb = 0.45359237 kg).
+    expect(ctx.config.users?.[0].weight_range).toEqual({ min: 68.04, max: 99.79 });
   });
 });

@@ -49,3 +49,22 @@ export function parseRunArgs(args: readonly string[]): RunArgs {
 
   return { kind: 'ok', config: parsed.values.config, help: parsed.values.help === true };
 }
+
+/**
+ * The MAC address given to `diagnose`, if any: the first argument that is
+ * neither a flag nor the value of `--config`/`-c`.
+ *
+ * Only `argv[2]` used to be read, so `diagnose --native AA:BB:CC:DD:EE:FF`
+ * ignored the MAC and fell back to the configured one (G-23).
+ */
+export function diagnoseMacArg(args: readonly string[]): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--config' || arg === '-c') {
+      i++;
+      continue;
+    }
+    if (!arg.startsWith('-')) return arg;
+  }
+  return undefined;
+}

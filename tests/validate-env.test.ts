@@ -158,7 +158,9 @@ describe('loadConfig()', () => {
     it('rejects DRY_RUN=maybe', () => {
       setEnv({ DRY_RUN: 'maybe' });
       expect(() => loadConfig()).toThrow();
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('true/false/yes/no/1/0'));
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('true/false/yes/no/on/off/1/0'),
+      );
     });
   });
 
@@ -184,15 +186,31 @@ describe('loadConfig()', () => {
     it('rejects invalid value', () => {
       setEnv({ CONTINUOUS_MODE: 'maybe' });
       expect(() => loadConfig()).toThrow();
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('true/false/yes/no/1/0'));
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('true/false/yes/no/on/off/1/0'),
+      );
     });
   });
 
   describe('SCAN_COOLDOWN', () => {
-    it('defaults to 20 when not set', () => {
+    // G-22: was 20, against 30 in the schema and in .env.example.
+    it('defaults to 30 when not set, as config.yaml does', () => {
       setEnv();
       const cfg = loadConfig();
-      expect(cfg.scanCooldownSec).toBe(20);
+      expect(cfg.scanCooldownSec).toBe(30);
+    });
+
+    it('rejects a fractional value, as config.yaml does', () => {
+      setEnv({ SCAN_COOLDOWN: '12.5' });
+      expect(() => loadConfig()).toThrow();
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('whole number'));
+    });
+
+    it('accepts on and off for CONTINUOUS_MODE, as the config.yaml overrides do', () => {
+      setEnv({ CONTINUOUS_MODE: 'on' });
+      expect(loadConfig().continuousMode).toBe(true);
+      setEnv({ CONTINUOUS_MODE: 'off' });
+      expect(loadConfig().continuousMode).toBe(false);
     });
 
     it('accepts valid value in range', () => {
@@ -346,7 +364,9 @@ describe('loadConfig()', () => {
     it('rejects USER_IS_ATHLETE=maybe', () => {
       setEnv({ USER_IS_ATHLETE: 'maybe' });
       expect(() => loadConfig()).toThrow();
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('true/false/yes/no/1/0'));
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('true/false/yes/no/on/off/1/0'),
+      );
     });
   });
 });

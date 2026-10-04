@@ -185,18 +185,11 @@ export function diffRestartRequired(
     newConfig.runtime?.watchdog_max_consecutive_failures,
   );
 
-  // User count switching between single (==1) and multi (>1) changes the
-  // execution path. Same-side renames or weight_range edits do not require a
-  // restart and are handled by the regular reload + exporterCache.clear().
-  const oldIsMulti = oldConfig.users.length > 1;
-  const newIsMulti = newConfig.users.length > 1;
-  if (oldIsMulti !== newIsMulti) {
-    out.push({
-      key: 'users.length',
-      oldValue: `${oldConfig.users.length} (${oldIsMulti ? 'multi' : 'single'})`,
-      newValue: `${newConfig.users.length} (${newIsMulti ? 'multi' : 'single'})`,
-    });
-  }
+  // No row for switching between one user and several: processReading picks
+  // the single- or multi-user path from the live config on every reading, and
+  // the reload rebuilds the single-user exporters, so the switch takes effect
+  // at once (E-18). Only the startup banner and the startup healthchecks keep
+  // the old count, and neither changes what is exported.
 
   return out;
 }

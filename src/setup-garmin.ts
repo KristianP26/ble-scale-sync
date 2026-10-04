@@ -19,7 +19,7 @@ import { ROOT } from './config/paths.js';
 import { isSupportedPython, parsePythonVersion, translateGarminArgs } from './garmin-cli.js';
 
 /**
- * First interpreter on PATH that is actually Python 3.9+.
+ * First interpreter on PATH that is actually Python 3.12+.
  *
  * The version is parsed, not assumed: on hosts where `python3` is absent and
  * `python` is Python 2, an unchecked spawn dies with a raw SyntaxError on the
@@ -48,7 +48,7 @@ function findPython(): string | null {
 
 const python = findPython();
 if (python === null) {
-  console.error('Python 3.9 or newer was not found on PATH. Install it and try again.');
+  console.error('Python 3.12 or newer was not found on PATH. Install it and try again.');
   process.exit(1);
 }
 

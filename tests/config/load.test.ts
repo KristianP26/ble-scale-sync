@@ -60,6 +60,12 @@ describe('resolveEnvReferences', () => {
     );
   });
 
+  // G-24: there was no way to write a literal `${` at all.
+  it('reads $${...} as a literal ${...}', () => {
+    expect(resolveEnvReferences('pa$${MISSING_VAR}ss')).toBe('pa${MISSING_VAR}ss');
+    expect(resolveEnvReferences('$${TEST_VAR}-${TEST_VAR}')).toBe('${TEST_VAR}-hello');
+  });
+
   it('handles nested objects with arrays', () => {
     const input = {
       exporters: [{ type: 'mqtt', password: '${TEST_VAR}' }],
@@ -134,7 +140,7 @@ runtime:
 
   it('parses valid YAML config', () => {
     vi.spyOn(fs, 'readFileSync').mockReturnValue(VALID_YAML);
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
 
     const config = loadYamlConfig('/test/config.yaml');
     expect(config.version).toBe(1);
@@ -148,7 +154,7 @@ runtime:
     vi.stubEnv('MY_SECRET', 'secret123');
     const yaml = VALID_YAML.replace('type: garmin', 'type: garmin\n    password: "${MY_SECRET}"');
     vi.spyOn(fs, 'readFileSync').mockReturnValue(yaml);
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
 
     const config = loadYamlConfig('/test/config.yaml');
     const garminEntry = config.global_exporters?.[0];
@@ -163,7 +169,7 @@ scale:
   weight_unit: kg
 `;
     vi.spyOn(fs, 'readFileSync').mockReturnValue(invalidYaml);
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
 
     expect(() => loadYamlConfig('/test/config.yaml')).toThrow();
   });
@@ -174,7 +180,7 @@ scale:
   it('does not echo the offending line of a YAML syntax error', () => {
     const yaml = VALID_YAML.replace('type: garmin', 'type: garmin\n    password: hunter2: x');
     vi.spyOn(fs, 'readFileSync').mockReturnValue(yaml);
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
 
     let message = '';
     try {
@@ -191,7 +197,7 @@ scale:
   it('does not echo an unquoted value that YAML reads as an alias', () => {
     const yaml = VALID_YAML.replace('type: garmin', 'type: garmin\n    password: *hunter2');
     vi.spyOn(fs, 'readFileSync').mockReturnValue(yaml);
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
 
     expect(() => loadYamlConfig('/test/config.yaml')).toThrow(/Invalid YAML/);
     try {
@@ -207,7 +213,7 @@ scale:
       '  force_scale_adaptr: "Hutbit"\n  scale_mac:',
     );
     vi.spyOn(fs, 'readFileSync').mockReturnValue(yamlWithTypo);
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const config = loadYamlConfig('/test/config.yaml');
@@ -227,7 +233,7 @@ scale:
       '  - type: webhook\n    url: https://a.example\n  - type: webhook\n    url: https://b.example',
     );
     vi.spyOn(fs, 'readFileSync').mockReturnValue(twoHooks);
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const config = loadYamlConfig('/test/config.yaml');
@@ -251,7 +257,7 @@ scale:
       ].join('\n'),
     );
     vi.spyOn(fs, 'readFileSync').mockReturnValue(twoInflux);
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     loadYamlConfig('/test/config.yaml');
@@ -263,7 +269,7 @@ scale:
 
   it('does not warn when every exporter type appears once per list', () => {
     vi.spyOn(fs, 'readFileSync').mockReturnValue(VALID_YAML);
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     loadYamlConfig('/test/config.yaml');
@@ -274,7 +280,7 @@ scale:
   it('warns and skips unknown exporter types', () => {
     const yamlWithUnknown = VALID_YAML.replace('type: garmin', 'type: fakexporter');
     vi.spyOn(fs, 'readFileSync').mockReturnValue(yamlWithUnknown);
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
 
     const config = loadYamlConfig('/test/config.yaml');
     // Unknown exporter should be filtered out
@@ -283,7 +289,7 @@ scale:
 
   it('applies env overrides for runtime', () => {
     vi.spyOn(fs, 'readFileSync').mockReturnValue(VALID_YAML);
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
     vi.stubEnv('CONTINUOUS_MODE', 'true');
     vi.stubEnv('DRY_RUN', 'true');
 
@@ -294,7 +300,7 @@ scale:
 
   it('applies env overrides for BLE', () => {
     vi.spyOn(fs, 'readFileSync').mockReturnValue(VALID_YAML);
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
     vi.stubEnv('SCALE_MAC', 'AA:BB:CC:DD:EE:FF');
 
     const config = loadYamlConfig('/test/config.yaml');
@@ -303,7 +309,7 @@ scale:
 
   it('applies BLE_ADAPTER env override with trim and lowercase', () => {
     vi.spyOn(fs, 'readFileSync').mockReturnValue(VALID_YAML);
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
     vi.stubEnv('BLE_ADAPTER', '  HCI1  ');
 
     const config = loadYamlConfig('/test/config.yaml');
@@ -316,7 +322,7 @@ scale:
       'scale_mac: "FF:03:00:13:A1:04"\n  adapter: hci1',
     );
     vi.spyOn(fs, 'readFileSync').mockReturnValue(yamlWithAdapter);
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
     vi.stubEnv('BLE_ADAPTER', '');
 
     const config = loadYamlConfig('/test/config.yaml');
@@ -329,7 +335,7 @@ scale:
       'scale_mac: "FF:03:00:13:A1:04"\n  adapter: hci0',
     );
     vi.spyOn(fs, 'readFileSync').mockReturnValue(yamlWithAdapter);
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
     vi.stubEnv('BLE_ADAPTER', 'eth0');
 
     const config = loadYamlConfig('/test/config.yaml');
@@ -343,7 +349,7 @@ scale:
       'scale_mac: "FF:03:00:13:A1:04"\n  noble_driver: stoprocent',
     );
     vi.spyOn(fs, 'readFileSync').mockReturnValue(yamlWithDriver);
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
 
     loadYamlConfig('/test/config.yaml');
     expect(process.env.NOBLE_DRIVER).toBe('stoprocent');
@@ -605,6 +611,18 @@ global_exporters:
     vi.stubEnv('DEBUG', value);
 
     expect(loadAppConfig().config.runtime?.debug).toBe(true);
+  });
+
+  // G-22: the .env path cast NOBLE_DRIVER to the union without looking at it.
+  it('rejects an unknown NOBLE_DRIVER in the .env path', () => {
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => String(p).endsWith('.env'));
+    vi.stubEnv('USER_HEIGHT', '183');
+    vi.stubEnv('USER_BIRTH_DATE', '1990-06-15');
+    vi.stubEnv('USER_GENDER', 'male');
+    vi.stubEnv('USER_IS_ATHLETE', 'true');
+    vi.stubEnv('NOBLE_DRIVER', 'bluez');
+
+    expect(() => loadAppConfig()).toThrow(/NOBLE_DRIVER/);
   });
 
   it('carries GARMIN_WEIGHT_ONLY into the .env Garmin exporter entry', () => {

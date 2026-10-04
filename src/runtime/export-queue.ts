@@ -127,7 +127,15 @@ export function loadQueue(path: string, now: number = Date.now()): QueuedExport[
     try {
       const parsed = JSON.parse(trimmed) as QueuedExport;
       if (typeof parsed.exporter !== 'string' || typeof parsed.queuedAt !== 'string') continue;
-      if (now - Date.parse(parsed.queuedAt) > MAX_AGE_MS) continue;
+      // An unparseable queuedAt would make the age check below compare NaN,
+      // which is never true, so the entry could never age out. Without a time
+      // it is as unreadable as a broken line.
+      const queuedAt = Date.parse(parsed.queuedAt);
+      if (Number.isNaN(queuedAt)) {
+        log.debug('Skipping a retry queue entry with an unreadable queuedAt');
+        continue;
+      }
+      if (now - queuedAt > MAX_AGE_MS) continue;
       if ((parsed.attempts ?? 0) >= MAX_ATTEMPTS) continue;
       entries.push(parsed);
     } catch {
@@ -168,10 +176,12 @@ export function saveQueue(path: string, entries: QueuedExport[]): boolean {
 export function enqueue(path: string, entry: QueuedExport, now: number = Date.now()): void {
   const entries = loadQueue(path, now);
   entries.push(entry);
-  saveQueue(path, entries.slice(-MAX_ENTRIES));
+  // Count what is kept, not what was loaded: a full queue must not report 51.
+  const kept = entries.slice(-MAX_ENTRIES);
+  saveQueue(path, kept);
   log.info(
     `${entry.exporter} failed; the reading is queued and will be retried ` +
-      `(${entries.length} waiting).`,
+      `(${kept.length} waiting).`,
   );
 }
 

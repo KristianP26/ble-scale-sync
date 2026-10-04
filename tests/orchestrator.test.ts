@@ -270,7 +270,19 @@ describe('dispatchExports() reportsExports', () => {
       ...context,
       exportResults: [{ name: 'garmin', ok: false, error: 'timeout' }],
     });
-    expect(result.success).toBe(true);
+    // The notification is not a delivered export: it must not mask the failure.
+    expect(result.success).toBe(false);
+  });
+
+  it('decides success from the reporters when nothing else is configured', async () => {
+    const ok = await dispatchExports([reporter('ntfy')], SAMPLE_PAYLOAD, context);
+    expect(ok.success).toBe(true);
+    const failed = await dispatchExports(
+      [reporter('ntfy', { success: false, error: 'HTTP 500' })],
+      SAMPLE_PAYLOAD,
+      context,
+    );
+    expect(failed.success).toBe(false);
   });
 
   it('returns success false when the others and the reporter all fail', async () => {

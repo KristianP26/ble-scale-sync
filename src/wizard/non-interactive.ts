@@ -39,7 +39,8 @@ export async function runNonInteractive(configPath: string): Promise<void> {
   if (Array.isArray(users)) {
     for (const user of users) {
       if (!user.slug && user.name) {
-        user.slug = generateSlug(String(user.name));
+        const taken = users.map((u) => u.slug).filter((s): s is string => typeof s === 'string');
+        user.slug = generateSlug(String(user.name), taken);
         log.info(`Auto-generated slug '${user.slug}' for user '${user.name}'`);
         modified = true;
       }

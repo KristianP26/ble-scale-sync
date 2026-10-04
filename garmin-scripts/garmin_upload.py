@@ -44,19 +44,29 @@ def has_legacy_only_tokens(token_dir):
     return bool(legacy) and not new_token.exists()
 
 
+class TokenSetupError(RuntimeError):
+    """The token directory is not usable, so no retry can succeed.
+
+    Raised before anything talks to Garmin. Retrying it seconds later spawns
+    the same process to hit the same missing file; only running the setup
+    fixes it. main() reports it with "retryable": false so the TypeScript side
+    does not spend its retries on it.
+    """
+
+
 def get_garmin_client(token_dir=None):
     token_dir = get_token_dir(token_dir)
     log(f"[Garmin] Loading tokens from {token_dir}")
 
     if not os.path.isdir(token_dir):
-        raise RuntimeError(
+        raise TokenSetupError(
             f"Token directory not found: {token_dir}. "
             "Run 'ble-scale-sync setup-garmin' "
             "(or 'npm run setup-garmin' from a checkout) first."
         )
 
     if has_legacy_only_tokens(token_dir):
-        raise RuntimeError(
+        raise TokenSetupError(
             "Token format changed in garminconnect 0.3.x. "
             "Run 'ble-scale-sync setup-garmin' "
             "(or 'npm run setup-garmin' from a checkout) to re-authenticate."
@@ -66,7 +76,7 @@ def get_garmin_client(token_dir=None):
     # with none set and fails with "Username and password are required", which
     # sends people checking credentials that were never the problem (#435).
     if not (Path(token_dir) / "garmin_tokens.json").is_file():
-        raise RuntimeError(
+        raise TokenSetupError(
             f"No Garmin token in {token_dir} (garmin_tokens.json is missing), "
             "so Garmin authentication has not succeeded yet. "
             "Run 'ble-scale-sync setup-garmin' "
@@ -163,7 +173,10 @@ def main():
         # orchestrator logging the same opaque line on every retry.
         detail = format_error_chain(e)
         log(f"[Garmin] Error: {detail}")
-        print(json.dumps({"success": False, "error": detail}))
+        result = {"success": False, "error": detail}
+        if isinstance(e, TokenSetupError):
+            result["retryable"] = False
+        print(json.dumps(result))
         sys.exit(1)
 
 

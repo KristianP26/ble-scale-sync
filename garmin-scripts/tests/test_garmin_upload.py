@@ -140,6 +140,17 @@ class FailureReportingTest(unittest.TestCase):
         _, code = self.run_main(RuntimeError("Failed to retrieve social profile"))
         self.assertEqual(code, 1)
 
+    def test_leaves_other_failures_retryable(self):
+        result, _ = self.run_main(RuntimeError("Failed to retrieve social profile"))
+        self.assertNotIn("retryable", result)
+
+    def test_marks_an_unusable_token_directory_as_not_retryable(self):
+        # F-13: the TypeScript side would otherwise spawn this three times to
+        # hit the same missing file.
+        result, code = self.run_main(garmin_upload.TokenSetupError("Token directory not found"))
+        self.assertIs(result["retryable"], False)
+        self.assertEqual(code, 1)
+
 
 class MissingTokenTest(unittest.TestCase):
     """#435: no token file used to surface as "Username and password are required"."""
@@ -153,7 +164,15 @@ class MissingTokenTest(unittest.TestCase):
                     garmin_upload.get_garmin_client(empty_dir)
 
         self.assertIn("garmin_tokens.json is missing", str(ctx.exception))
+        self.assertIsInstance(ctx.exception, garmin_upload.TokenSetupError)
         garmin_cls.assert_not_called()
+
+    def test_a_missing_token_directory_is_a_setup_error(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as parent:
+            with self.assertRaises(garmin_upload.TokenSetupError):
+                garmin_upload.get_garmin_client(os.path.join(parent, "absent"))
 
     def test_logs_in_when_the_token_file_is_there(self):
         import tempfile

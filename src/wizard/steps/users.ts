@@ -44,7 +44,7 @@ async function promptUser(
 
   // An existing user keeps their slug even when renamed: the slug names their
   // token directories and is how a reload finds them again.
-  const autoSlug = existing?.slug ?? generateSlug(name);
+  const autoSlug = existing?.slug ?? generateSlug(name, takenSlugs);
   if (!existing) console.log(`  ${dim(`Auto-generated slug: ${autoSlug}`)}`);
 
   const slug = await prompts.input('Slug (press Enter to accept):', {

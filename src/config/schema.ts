@@ -319,7 +319,8 @@ export const BleSchema = z
 // checked here. Schema validation runs before applyEnvOverrides (yaml-load.ts),
 // so a config.yaml that names a forced adapter and takes its MAC from the
 // documented SCALE_MAC Docker override would be rejected while being perfectly
-// valid. The check lives in src/index.ts, after the effective MAC is known.
+// valid. The check lives in src/run.ts (and in forced-adapter.ts for
+// `validate`), after the effective MAC is known.
 
 export const ScaleSchema = z.object({
   weight_unit: z.enum(['kg', 'lbs']).default('kg'),

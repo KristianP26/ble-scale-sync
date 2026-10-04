@@ -58,7 +58,7 @@ async function main(): Promise<void> {
   // which is also the one the app reads at run time.
   const envPath = envPathFor(args.configPath);
   if (existsSync(envPath)) {
-    dotenvConfig({ path: envPath });
+    dotenvConfig({ path: envPath, quiet: true });
   }
 
   if (args.nonInteractive) {
@@ -79,7 +79,7 @@ async function main(): Promise<void> {
       const raw = readFileSync(args.configPath, 'utf8');
       existingConfig = parseYaml(raw) as Partial<AppConfig>;
     } catch {
-      // If the existing config can't be parsed, start fresh
+      // The welcome step tells the user and does not offer edit mode for it.
     }
   }
 

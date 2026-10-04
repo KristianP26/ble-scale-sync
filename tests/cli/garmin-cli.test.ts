@@ -66,15 +66,17 @@ describe('parsePythonVersion', () => {
 });
 
 describe('isSupportedPython', () => {
-  it('accepts 3.9 and newer', () => {
-    expect(isSupportedPython({ major: 3, minor: 9 })).toBe(true);
+  it('accepts 3.12 and newer', () => {
     expect(isSupportedPython({ major: 3, minor: 12 })).toBe(true);
+    expect(isSupportedPython({ major: 3, minor: 13 })).toBe(true);
     expect(isSupportedPython({ major: 4, minor: 0 })).toBe(true);
   });
 
-  it('rejects Python 2 and 3.8, whose failure is a raw f-string SyntaxError', () => {
+  // F-20: garminconnect 0.3.x requires 3.12, so 3.9 to 3.11 only failed later.
+  it('rejects anything older than 3.12, which the pinned garminconnect cannot run on', () => {
     expect(isSupportedPython({ major: 2, minor: 7 })).toBe(false);
-    expect(isSupportedPython({ major: 3, minor: 8 })).toBe(false);
+    expect(isSupportedPython({ major: 3, minor: 9 })).toBe(false);
+    expect(isSupportedPython({ major: 3, minor: 11 })).toBe(false);
     expect(isSupportedPython(null)).toBe(false);
   });
 });

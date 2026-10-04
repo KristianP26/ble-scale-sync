@@ -111,6 +111,23 @@ describe('export retry queue (#412)', () => {
     expect(loaded.some((e) => e.lastError === 'e0')).toBe(false);
   });
 
+  // E-19: the log counted the entries before the cap and could report 51.
+  it('reports the capped count when the queue is full', () => {
+    saveQueue(
+      file,
+      Array.from({ length: 50 }, () => entry()),
+    );
+    enqueue(file, entry(), NOW);
+    const lines = vi.mocked(console.log).mock.calls.map((c) => String(c[0]));
+    expect(lines.some((l) => l.includes('(50 waiting)'))).toBe(true);
+  });
+
+  // E-19: NaN never exceeds the age bound, so such an entry could never age out.
+  it('skips an entry whose queuedAt cannot be parsed', () => {
+    saveQueue(file, [entry({ queuedAt: 'not a date' }), entry()]);
+    expect(loadQueue(file, NOW)).toHaveLength(1);
+  });
+
   it('skips an unreadable line instead of losing the file', () => {
     fs.writeFileSync(file, `${JSON.stringify(entry())}\nnot json\n${JSON.stringify(entry())}\n`);
     expect(loadQueue(file, NOW)).toHaveLength(2);

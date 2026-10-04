@@ -3,7 +3,7 @@
  *
  * Kept out of index.ts and run.ts so both print the same options and
  * environment list, and so the dispatcher can answer --help without importing
- * the run path (which builds the 33-adapter registry and the exporter registry
+ * the run path (which builds the scale adapter registry and the exporter registry
  * at module evaluation).
  */
 

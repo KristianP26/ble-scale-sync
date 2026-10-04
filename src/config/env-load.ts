@@ -9,8 +9,21 @@ import { loadExporterConfig } from '../exporters/config.js';
  * Load config from .env, wrapping existing loadConfig() + loadExporterConfig()
  * into the unified AppConfig shape.
  */
+/**
+ * NOBLE_DRIVER for the legacy .env mode. It used to be cast to the union
+ * unchecked, so a typo reached the driver selection as if it were valid (G-22).
+ */
+function parseNobleDriverEnv(): 'abandonware' | 'stoprocent' | null {
+  const raw = process.env.NOBLE_DRIVER?.trim().toLowerCase();
+  if (!raw) return null;
+  if (raw === 'abandonware' || raw === 'stoprocent') return raw;
+  throw new Error(
+    `NOBLE_DRIVER must be 'abandonware' or 'stoprocent', got '${process.env.NOBLE_DRIVER}'`,
+  );
+}
+
 export function loadEnvConfig(): AppConfig {
-  dotenvConfig({ path: defaultEnvPath() });
+  dotenvConfig({ path: defaultEnvPath(), quiet: true });
 
   const envConfig = loadEnvVarConfig();
   const exporterConfig = loadExporterConfig();
@@ -138,7 +151,7 @@ export function loadEnvConfig(): AppConfig {
     ble: {
       handler: 'auto' as const,
       scale_mac: envConfig.scaleMac ?? null,
-      noble_driver: (process.env.NOBLE_DRIVER as 'abandonware' | 'stoprocent') ?? null,
+      noble_driver: parseNobleDriverEnv(),
       adapter: parseBleAdapterEnv() ?? null,
     },
     scale: {

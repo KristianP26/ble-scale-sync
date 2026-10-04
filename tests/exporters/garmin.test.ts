@@ -111,6 +111,28 @@ describe('GarminExporter', () => {
     expect(mockSpawn).toHaveBeenCalledTimes(4);
   });
 
+  // F-13: a missing token is not fixed by trying again seconds later.
+  it('does not retry a failure the uploader marks as not retryable', async () => {
+    const failResult = JSON.stringify({
+      success: false,
+      error: 'Token directory not found: /x',
+      retryable: false,
+    });
+
+    mockSpawn.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === '--version') return createVersionCheckProc(0);
+      return createUploadProc(failResult, 1);
+    });
+
+    const { GarminExporter } = await import('../../src/exporters/garmin.js');
+    const exporter = new GarminExporter();
+    const result = await exporter.export(samplePayload);
+
+    expect(result).toEqual({ success: false, error: 'Token directory not found: /x' });
+    // 1 version check + 1 upload attempt
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+  });
+
   it('falls back to python when python3 is not found', async () => {
     const uploadResult = JSON.stringify({ success: true });
 

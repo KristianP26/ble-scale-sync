@@ -133,7 +133,9 @@ describe('diffRestartRequired', () => {
     expect(diff.find((f) => f.key === 'ble.mqtt_proxy.broker_url')).toBeDefined();
   });
 
-  it('flags switch from single to multi user (and back)', () => {
+  // E-18: processReading branches on the live user count, so the switch is
+  // hot-swapped and a "restart required" warning for it was false.
+  it('does NOT flag a switch from single to multi user (or back)', () => {
     const single = baseConfig();
     const multi = baseConfig({
       users: [
@@ -150,12 +152,8 @@ describe('diffRestartRequired', () => {
         },
       ],
     });
-    const diff = diffRestartRequired(single, multi);
-    expect(diff.find((f) => f.key === 'users.length')).toEqual({
-      key: 'users.length',
-      oldValue: '1 (single)',
-      newValue: '2 (multi)',
-    });
+    expect(diffRestartRequired(single, multi)).toEqual([]);
+    expect(diffRestartRequired(multi, single)).toEqual([]);
   });
 
   it('does NOT flag user profile edits within the same multi/single bucket', () => {

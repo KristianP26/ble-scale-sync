@@ -11,6 +11,12 @@ import { cliCommand } from '../cli-invocation.js';
 import { atomicWrite } from '../config/write.js';
 const log = createLogger('Strava');
 
+/**
+ * Seconds before `expires_at` at which the access token is refreshed anyway,
+ * so the token cannot run out between this check and the PUT that uses it.
+ */
+const TOKEN_REFRESH_MARGIN_SEC = 300;
+
 interface StravaTokens {
   access_token: string;
   refresh_token: string;
@@ -136,11 +142,14 @@ export class StravaExporter implements Exporter {
 
   private async ensureFreshToken(tokens: StravaTokens): Promise<string> {
     const now = Math.floor(Date.now() / 1000);
-    if (tokens.expires_at > now) {
+    // Refresh ahead of the deadline: a token with two seconds left passes a
+    // bare `> now` check and expires before the PUT lands, which answers 401,
+    // a non-retryable failure (F-14).
+    if (tokens.expires_at - TOKEN_REFRESH_MARGIN_SEC > now) {
       return tokens.access_token;
     }
 
-    log.info('Access token expired, refreshing...');
+    log.info('Access token expired or about to, refreshing...');
     const response = await fetch('https://www.strava.com/oauth/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

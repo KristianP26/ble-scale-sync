@@ -428,7 +428,8 @@ describe('runContinuousLoop', () => {
     const ac = new AbortController();
     const { source, nextReading } = makeSource();
 
-    let reloadFlag = false;
+    // Requested before the first iteration runs.
+    let reloadFlag = true;
     const calls: string[] = [];
 
     nextReading.mockImplementation(async () => {
@@ -461,8 +462,6 @@ describe('runContinuousLoop', () => {
       onSourceReload,
     });
 
-    // Flip reload BEFORE first iteration runs.
-    reloadFlag = true;
     await vi.advanceTimersByTimeAsync(0);
     await loop;
 
@@ -470,6 +469,42 @@ describe('runContinuousLoop', () => {
     expect(onReload).toHaveBeenCalledOnce();
     expect(clearReloadRequest).toHaveBeenCalledOnce();
     expect(onSourceReload).toHaveBeenCalledOnce();
+  });
+
+  // E-17: the flush used to start before a pending reload was applied, so
+  // queued uploads went out with the old config (old dry_run, a removed
+  // exporter) one more time.
+  it('applies a pending reload before starting the queue flush', async () => {
+    const ac = new AbortController();
+    const { source, nextReading } = makeSource();
+    let reloadFlag = true;
+    const calls: string[] = [];
+    nextReading.mockImplementation(async () => {
+      calls.push('nextReading');
+      ac.abort();
+      return STUB_RAW;
+    });
+
+    const loop = runContinuousLoop({
+      source,
+      processReading: async () => true,
+      signal: ac.signal,
+      touchHeartbeat: () => {},
+      isReloadRequested: () => reloadFlag,
+      clearReloadRequest: () => {
+        reloadFlag = false;
+      },
+      onReload: async () => {
+        calls.push('onReload');
+      },
+      onCycleStart: async () => {
+        calls.push('onCycleStart');
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await loop;
+    expect(calls).toEqual(['onReload', 'onCycleStart', 'nextReading']);
   });
 
   it('graceful abort: exits cleanly mid-nextReading and calls source.stop', async () => {

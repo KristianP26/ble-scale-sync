@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseRunArgs } from '../../src/cli-run-args.js';
+import { diagnoseMacArg, parseRunArgs } from '../../src/cli-run-args.js';
 
 /**
  * The run path used to parse argv leniently and ignore anything it did not
@@ -52,5 +52,22 @@ describe('parseRunArgs', () => {
 
   it('refuses --config with no value instead of reading it as true', () => {
     expect(parseRunArgs(['--config']).kind).toBe('error');
+  });
+});
+
+// G-23: only argv[2] was read, so a MAC after --native was ignored.
+describe('diagnoseMacArg', () => {
+  it('finds the MAC after a flag', () => {
+    expect(diagnoseMacArg(['--native', 'AA:BB:CC:DD:EE:FF'])).toBe('AA:BB:CC:DD:EE:FF');
+  });
+
+  it('does not mistake the value of --config for a MAC', () => {
+    expect(diagnoseMacArg(['--config', 'x.yaml'])).toBeUndefined();
+    expect(diagnoseMacArg(['-c', 'x.yaml', 'AA:BB:CC:DD:EE:FF'])).toBe('AA:BB:CC:DD:EE:FF');
+  });
+
+  it('returns nothing without a positional argument', () => {
+    expect(diagnoseMacArg([])).toBeUndefined();
+    expect(diagnoseMacArg(['--native'])).toBeUndefined();
   });
 });

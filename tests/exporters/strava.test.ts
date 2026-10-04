@@ -116,6 +116,31 @@ describe('StravaExporter', () => {
     expect(mockFetch.mock.calls[1][1].headers.Authorization).toBe('Bearer new_access');
   });
 
+  // F-14: a token with seconds left passed the check and expired before the PUT.
+  it('refreshes a token that is about to expire', async () => {
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      JSON.stringify({ ...validTokens, expires_at: Math.floor(Date.now() / 1000) + 60 }),
+    );
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            access_token: 'new_access',
+            refresh_token: 'new_refresh',
+            expires_at: Math.floor(Date.now() / 1000) + 21600,
+          }),
+      })
+      .mockResolvedValueOnce({ ok: true, status: 200 });
+
+    const result = await new StravaExporter(defaultConfig).export(samplePayload);
+
+    expect(result.success).toBe(true);
+    expect(mockFetch.mock.calls[0][0]).toBe('https://www.strava.com/oauth/token');
+    expect(mockFetch.mock.calls[1][1].headers.Authorization).toBe('Bearer new_access');
+  });
+
   it('saves refreshed tokens to disk', async () => {
     vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(expiredTokens));
 

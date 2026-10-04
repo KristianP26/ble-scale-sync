@@ -24,8 +24,9 @@ export interface ConfigWatcherHandle {
  * replays directory history from just before the watch started, so the file's
  * own creation would otherwise arrive as an edit.
  *
- * Self-writes from updateLastKnownWeight() are suppressed via the suppress
- * window in write.ts, so this never re-fires for our own bumps. Errors from
+ * Self-writes from updateLastKnownWeight() are recognised by their content
+ * (`isSelfWrite` in write.ts), not by a time window, so this never re-fires
+ * for our own bumps while an edit landing right after one still reloads. Errors from
  * fs.watch (e.g. parent directory unmounted) are logged and the watcher
  * silently stops; the SIGHUP path remains a manual fallback.
  */

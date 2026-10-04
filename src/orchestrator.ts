@@ -88,13 +88,19 @@ export async function dispatchExports(
     payload,
     context,
   );
+  // A reporter is a notification about the other exports, not a delivered
+  // export of its own. When anything else was configured, only those results
+  // decide success, so a sent "all failed" notification cannot turn a total
+  // failure into a success (which would advance the dedup anchor and
+  // last_known_weight and let a single run exit 0).
+  const decisive = details.length;
   if (reporters.length > 0) {
     details.push(
       ...(await runExports(reporters, payload, { ...context, exportResults: [...details] })),
     );
   }
 
-  const allFailed = details.every((d) => !d.ok);
+  const allFailed = (decisive > 0 ? details.slice(0, decisive) : details).every((d) => !d.ok);
   if (allFailed) {
     log.error('All exports failed.');
     return buildResult(false, details);

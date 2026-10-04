@@ -375,7 +375,7 @@ async function processMultiUser(
   const match = matchUserByWeight(ctx.config.users, matchWeight, ctx.config.unknown_user);
 
   if (!match.user) {
-    if (match.warning) log.warn(match.warning);
+    // matchUserByWeight has already logged its warning, if it has one.
     ctx.display?.beep(600, 150, 3);
     return true;
   }

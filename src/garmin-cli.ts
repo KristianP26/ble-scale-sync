@@ -32,8 +32,13 @@ export function parsePythonVersion(output: string): { major: number; minor: numb
   return { major: Number(match[1]), minor: Number(match[2]) };
 }
 
-/** The interpreter has to be new enough for the f-strings in our scripts. */
+/**
+ * The interpreter has to be new enough for the pinned garminconnect 0.3.x,
+ * which requires Python 3.12 (the reason the Docker image carries its own
+ * 3.12). 3.9 to 3.11 passed this check and then failed at `pip install` or
+ * import time with an error that did not name the version (F-20).
+ */
 export function isSupportedPython(version: { major: number; minor: number } | null): boolean {
   if (version === null) return false;
-  return version.major > 3 || (version.major === 3 && version.minor >= 9);
+  return version.major > 3 || (version.major === 3 && version.minor >= 12);
 }

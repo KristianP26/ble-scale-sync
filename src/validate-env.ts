@@ -48,15 +48,17 @@ function parseGender(raw: string): Gender {
   fail(`USER_GENDER must be 'male' or 'female', got '${raw}'`);
 }
 
+// The same words the config.yaml overrides (boolEnv) accept, so DRY_RUN=on
+// does not start in one mode and fail in the other (G-22).
 function parseBoolean(key: string, raw: string): boolean {
-  const lower = raw.toLowerCase();
-  if (['true', 'yes', '1'].includes(lower)) return true;
-  if (['false', 'no', '0'].includes(lower)) return false;
-  fail(`${key} must be true/false/yes/no/1/0, got '${raw}'`);
+  const lower = raw.trim().toLowerCase();
+  if (['true', 'yes', 'on', '1'].includes(lower)) return true;
+  if (['false', 'no', 'off', '0'].includes(lower)) return false;
+  fail(`${key} must be true/false/yes/no/on/off/1/0, got '${raw}'`);
 }
 
 export function loadConfig(): Config {
-  config({ path: defaultEnvPath() });
+  config({ path: defaultEnvPath(), quiet: true });
 
   const weightUnit = parseWeightUnit(process.env.WEIGHT_UNIT);
   const heightUnit = parseHeightUnit(process.env.HEIGHT_UNIT);
@@ -97,9 +99,15 @@ export function loadConfig(): Config {
   const continuousMode = process.env.CONTINUOUS_MODE
     ? parseBoolean('CONTINUOUS_MODE', process.env.CONTINUOUS_MODE)
     : false;
-  const scanCooldownSec = process.env.SCAN_COOLDOWN
-    ? parseNumber('SCAN_COOLDOWN', process.env.SCAN_COOLDOWN, 5, 3600)
-    : 20;
+  // Whole seconds and a default of 30, as in the config.yaml schema and in
+  // .env.example; this path defaulted to 20 and accepted 12.5 (G-22).
+  let scanCooldownSec = 30;
+  if (process.env.SCAN_COOLDOWN) {
+    scanCooldownSec = parseNumber('SCAN_COOLDOWN', process.env.SCAN_COOLDOWN, 5, 3600);
+    if (!Number.isInteger(scanCooldownSec)) {
+      fail(`SCAN_COOLDOWN must be a whole number of seconds, got ${scanCooldownSec}`);
+    }
+  }
 
   return {
     profile: { height, age, gender, isAthlete },

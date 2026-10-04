@@ -41,9 +41,10 @@ export interface RuntimeLoopDeps {
    * nothing about the radio. Not awaited on the way out either: a shutdown is
    * bounded by the force-exit timer, which a hanging upload would outlast.
    *
-   * Not a timer. On the watcher transports an iteration begins when somebody
-   * steps on the scale, so a queue in a house that stops using the scale waits
-   * until it is used again.
+   * Not a timer. On the watcher transports an iteration begins right after
+   * the previous reading was processed and then blocks until the next one, so
+   * a queue in a house that stops using the scale is attempted once more and
+   * then waits until the scale is used again.
    */
   onCycleStart?: () => Promise<void>;
   /**
@@ -88,6 +89,16 @@ export async function runContinuousLoop(deps: RuntimeLoopDeps): Promise<void> {
     while (!signal.aborted) {
       try {
         touchHeartbeat();
+
+        // A pending reload goes first, so the queue flush below already sees
+        // the new config (dry_run, a removed exporter) instead of delivering
+        // with the old one (E-17).
+        if (isReloadRequested()) {
+          await onReload?.();
+          clearReloadRequest();
+          onSourceReload?.();
+        }
+
         // Before the source is asked for anything: a queued export must not
         // wait for the next weigh-in to even be attempted on the poll
         // transports, where an iteration is a scan cycle. Not awaited, see
@@ -110,12 +121,6 @@ export async function runContinuousLoop(deps: RuntimeLoopDeps): Promise<void> {
         // and PollReadingSource has no `start` at all. Calling on every iteration
         // costs one branch and lets the loop handle late-init sources uniformly.
         await source.start?.();
-
-        if (isReloadRequested()) {
-          await onReload?.();
-          clearReloadRequest();
-          onSourceReload?.();
-        }
 
         const raw = await source.nextReading(signal);
         await processReading(raw);

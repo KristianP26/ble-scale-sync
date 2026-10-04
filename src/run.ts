@@ -262,8 +262,8 @@ async function main(): Promise<void> {
 
   // ble.force_scale_adapter replaces the registry with the single adapter the
   // user named, bypassing protocol detection entirely (#318/#319). The schema
-  // already requires scale_mac alongside it, so the override stays pointed at
-  // one device.
+  // does NOT require scale_mac alongside it (see the note in schema.ts); the
+  // check right below does, so the override stays pointed at one device.
   let adapters: ScaleAdapter[] = [...fullRegistry];
   const forcedName = ctx.config.ble?.force_scale_adapter ?? undefined;
   if (forcedName) {

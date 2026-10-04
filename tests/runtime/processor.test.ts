@@ -276,6 +276,20 @@ describe('processReading: multi-user', () => {
     expect(display.beep).toHaveBeenCalledWith(600, 150, 3);
   });
 
+  // E-19: the matcher already logs its own warning; the processor repeated it.
+  it('logs the unknown_user: log warning once', async () => {
+    const dadNoLast: UserConfig = { ...dad, last_known_weight: null };
+    const momNoLast: UserConfig = { ...mom, last_known_weight: null };
+    const config = makeAppConfig([dadNoLast, momNoLast]);
+    config.unknown_user = 'log';
+    const ctx: AppContext = { ...makeCtx([dadNoLast, momNoLast]), config };
+    warnSpy.mockClear();
+
+    await processReading(ctx, rawReading({ weight: 200, impedance: 0 }));
+    const hits = warnSpy.mock.calls.filter((c) => String(c[0]).includes('logging and skipping'));
+    expect(hits).toHaveLength(1);
+  });
+
   it('dispatches per matched user with drift warning in ExportContext when applicable', async () => {
     const ctx = makeCtx([dad, mom], { weightUnit: 'lbs' });
     // 94 kg lands in upper 10% of dad's [75..95] range → triggers drift warn.

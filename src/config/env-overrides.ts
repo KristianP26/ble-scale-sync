@@ -84,9 +84,17 @@ export function applyEnvOverrides(config: AppConfig): AppConfig {
     }
   }
   if (process.env.BLE_WATCHDOG_MAX_FAILURES !== undefined) {
-    const num = Number(process.env.BLE_WATCHDOG_MAX_FAILURES);
-    if (Number.isInteger(num) && num >= 0 && num <= 1000) {
+    const raw = process.env.BLE_WATCHDOG_MAX_FAILURES;
+    const num = Number(raw);
+    // An empty value neutralises the variable (compose); anything else that is
+    // not a valid count is named rather than dropped without a word (G-22).
+    if (raw.trim() !== '' && Number.isInteger(num) && num >= 0 && num <= 1000) {
       runtime.watchdog_max_consecutive_failures = num;
+    } else if (raw.trim() !== '') {
+      log.warn(
+        `BLE_WATCHDOG_MAX_FAILURES='${raw}' is not a whole number between 0 and 1000; ` +
+          `keeping watchdog_max_consecutive_failures=${runtime.watchdog_max_consecutive_failures}.`,
+      );
     }
   }
 
@@ -115,9 +123,13 @@ export function applyEnvOverrides(config: AppConfig): AppConfig {
     ble.adapter = adapterResult;
   }
   if (process.env.NOBLE_DRIVER !== undefined) {
-    const driver = process.env.NOBLE_DRIVER.toLowerCase();
+    const driver = process.env.NOBLE_DRIVER.trim().toLowerCase();
     if (driver === 'abandonware' || driver === 'stoprocent') {
       ble.noble_driver = driver;
+    } else if (driver !== '') {
+      log.warn(
+        `NOBLE_DRIVER='${process.env.NOBLE_DRIVER}' is not abandonware or stoprocent; ignoring it.`,
+      );
     }
   }
   if (process.env.BLE_HANDLER !== undefined) {
