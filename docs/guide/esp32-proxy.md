@@ -148,7 +148,7 @@ Connect the ESP32 via USB and run the flash script:
 ./flash.sh --libs-only
 ```
 
-The script auto-detects the serial port. Override with `PORT=/dev/ttyACM0 ./flash.sh` if needed.
+The script auto-detects the serial port. Override with `PORT=/dev/ttyACM0 ./flash.sh` if needed. `./flash.sh --help` lists the options; an unknown option stops the script before anything is written to the board.
 
 ::: warning Windows users
 `flash.sh` is a bash script and will not run in `cmd.exe` or PowerShell directly. Running `flash.sh` from CMD just opens it in your default editor. Use one of:
@@ -281,7 +281,7 @@ If you already have an MQTT exporter configured, the ESP32 proxy can use the sam
 :::
 
 ::: warning Security
-The default `mqtt://` URL transmits data in plaintext, including body weight and composition data. On untrusted networks, use `mqtts://` with a TLS-enabled broker.
+The default `mqtt://` URL transmits data in plaintext, including body weight and composition data. On untrusted networks, use a TLS-enabled broker (usually port 8883). `mqtts://` in `broker_url` covers only the server's own connection. The ESP32 connects on its own and needs TLS turned on in its `config.json`: set `"mqtt_tls": true`, and `"mqtt_ca_file"` to a CA certificate uploaded with the firmware to verify the broker (`"mqtt_tls_hostname"` when the broker is reached by IP address). Without a CA file the link is encrypted but the broker is not verified.
 :::
 
 ## Docker Deployment
@@ -361,7 +361,7 @@ All topics are prefixed with `{topic_prefix}/{device_id}/` (default: `ble-proxy/
 | Topic                  | Direction       | Payload                                                                                                                                                                          |
 | ---------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `status`               | ESP32 -> Server | `"online"` / `"offline"` (retained, LWT)                                                                                                                                         |
-| `error`                | ESP32 -> Server | Error message string                                                                                                                                                             |
+| `error`                | ESP32 -> Server | JSON with `op` (connect, auto-connect, scan, subscribe, write, read, command), `message` and, where it applies, `address` / `uuid`. Older firmware sends a plain string          |
 | `scan/results`         | ESP32 -> Server | JSON array of discovered devices                                                                                                                                                 |
 | `config`               | Server -> ESP32 | JSON with `scales` (MAC array), `users` (array), `passive` (MACs read from advertisements, never connected), `autoConnect` (`false` to disable the autonomous connect), retained |
 | `beep`                 | Server -> ESP32 | Empty string or JSON with `freq`, `duration`, `repeat`                                                                                                                           |

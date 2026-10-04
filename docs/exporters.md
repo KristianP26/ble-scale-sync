@@ -373,7 +373,7 @@ users:
         api_key: '${INTERVALS_API_KEY}'
 ```
 
-Authentication uses HTTP Basic with the API key - no OAuth flow. Find both values on the Intervals.icu **Settings → Developer** page. The reading updates the wellness record for its day (`weight` + `bodyFat`); historical readings replayed from a scale's offline cache land on their original date.
+Authentication uses HTTP Basic with the API key - no OAuth flow. Find both values on the Intervals.icu **Settings → Developer** page. The reading updates the wellness record for its day (`weight` + `bodyFat`); historical readings replayed from a scale's offline cache land on their original date. The day is taken in your Intervals.icu timezone, not the host's, so a Docker container running on UTC files a late-evening weigh-in on the right day.
 
 ## Runalyze {#runalyze}
 

@@ -219,7 +219,7 @@ ble-scale-sync/
 │   ├── build.yaml                   # Multi-arch build config
 │   ├── config.yaml                  # Add-on manifest (options schema, HA services, perms)
 │   ├── run.sh                       # /data/options.json → config.yaml → app start
-│   ├── merge_last_weights.py        # Persist last_known_weight across restarts
+│   ├── addon-config.mjs             # Persist last_known_weight across restarts
 │   ├── DOCS.md                      # Add-on user docs (shown in HA UI)
 │   ├── CHANGELOG.md                 # Add-on version history
 │   ├── icon.png, logo.png

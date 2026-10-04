@@ -169,7 +169,7 @@ The add-on copies that file verbatim into the runtime location on each start. Se
 The copy happens once, at startup. The config watcher that picks up live edits watches the runtime copy, not the file under `/share/`, so editing `/share/ble-scale-sync/config.yaml` while the add-on is running changes nothing until you restart it.
 :::
 
-Custom config mode still benefits from `last_known_weight` persistence (see below) but the add-on does not auto-run Garmin authentication; you handle that yourself by pre-seeding `/share/ble-scale-sync/garmin-tokens/`.
+Custom config mode still benefits from `last_known_weight` persistence (see below) but the add-on does not auto-run Garmin authentication; you handle that yourself by pre-seeding `/share/ble-scale-sync/garmin-tokens/`. On start the add-on imports that token into `/data/garmin-tokens`, where every `garmin` exporter without its own `token_dir` looks. With several Garmin accounts each needs its own `token_dir`. Anything under `/share/` can be read and changed by other add-ons with share access and by Samba users, including your custom `config.yaml`.
 
 ## Testing a development build
 

@@ -59,7 +59,9 @@ Two consequences worth knowing:
 - Under `npx ble-scale-sync`, the package lives in a cache directory that is deleted again, so the only useful location is the directory you run the command in. Run the command from where your `config.yaml` lives.
 - `config.yaml` and `.env` are always taken from the **same** directory, never one from each. A stray `.env` in your working directory is the `.env` that gets used, so do not keep unrelated ones next to each other.
 
-`--config <path>` overrides the config file location for the run path, for `validate` and for `setup`. In Docker the file is mounted to `/app/config.yaml` instead, and on the add-on it lives in `/data`.
+`--config <path>` overrides the config file location for the run path, for `validate` and for `setup`, and the `.env` next to that file is the one read. A `--config` path that does not exist is an error; it no longer falls back to legacy `.env` mode. A symlinked `config.yaml` stays a symlink when the app or the wizard writes it. In Docker the file is mounted to `/app/config.yaml` instead, and on the add-on it lives in `/data`.
+
+`validate` checks the same things `start` does, including that `ble.force_scale_adapter` names a known adapter and comes with `ble.scale_mac`.
 
 ## config.yaml Reference {#config-yaml-reference}
 
