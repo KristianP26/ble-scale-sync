@@ -63,7 +63,7 @@
     "@inquirer/prompts": "^8.7.0",
     "aedes": "^1.1.1",
     "boxen": "^9.0.0",
-    "chalk": "^6.0.0",
+    "chalk": "^6.0.1",
     "dotenv": "^17.4.2",
     "encoding": "^0.1.13",
     "mqtt": "^5.15.2",
