@@ -160,12 +160,15 @@ COPY --from=native /app/node_modules ./node_modules
 
 # Every shared library the compiled code and the Python tree link against must
 # exist here, now that the -dev packages (which used to pull them in) are gone.
-# Prebuilds for musl, and _tkinter (no Tk in this image, and nothing imports
-# it), are the only expected gaps. A foreign-architecture prebuild is "not a
-# dynamic executable" to ldd and so never reports a gap.
+# Prebuilds for musl and for Android, and _tkinter (no Tk in this image, and
+# nothing imports it), are the only expected gaps. A foreign-architecture
+# prebuild is "not a dynamic executable" to ldd and never reports a gap, but an
+# Android prebuild for the build's own CPU (android-arm64 on arm64,
+# android-arm on arm/v7) is a readable ELF that links Bionic (liblog.so,
+# libc++_shared.so) and is never loaded on Linux, so it is skipped by path.
 RUN missing=$(find /app/node_modules /usr/local/lib/python3.12 -type f \
       \( -name '*.node' -o -name '*.so' -o -name '*.so.*' \) \
-      ! -name '*musl*' ! -name '_tkinter*' \
+      ! -name '*musl*' ! -name '_tkinter*' ! -path '*/prebuilds/android-*' \
       -exec sh -c 'for f; do ldd "$f" 2>/dev/null | grep "not found" | sed "s|^|$f: |"; done; exit 0' sh {} +) && \
     if [ -n "$missing" ]; then echo "Missing shared libraries:"; echo "$missing"; exit 1; fi
 
