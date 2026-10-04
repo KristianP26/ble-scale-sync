@@ -266,7 +266,23 @@ export async function flushQueue(
       return { delivered, failed, dropped };
     }
 
-    const exporter = lookup(entry);
+    let exporter: Exporter | undefined;
+    try {
+      exporter = lookup(entry);
+    } catch (err) {
+      // The entry is already off disk, so a throw escaping here deleted
+      // somebody's weigh-in with no trace above debug (E-08). Building the
+      // exporter throws when its config entry is invalid, which is an operator
+      // edit away from working again: keep the entry exactly as it was, with
+      // no attempt spent, and let the age bound decide if it never recovers.
+      log.warn(
+        `Keeping a queued ${entry.exporter} export${entry.userSlug ? ` for '${entry.userSlug}'` : ''}: ` +
+          `its exporter could not be built from the current config (${errMsg(err)})`,
+      );
+      keep.push(entry);
+      failed += 1;
+      continue;
+    }
     if (!exporter) {
       // The exporter - or the user it was queued for - was removed from the
       // config while this was waiting. Dropping is the only safe answer: the

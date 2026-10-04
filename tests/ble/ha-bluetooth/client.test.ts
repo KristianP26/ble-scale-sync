@@ -365,4 +365,64 @@ describe('HaBluetoothClient', () => {
     expect(bad).toHaveBeenCalledTimes(1);
     expect(good).toHaveBeenCalledTimes(1);
   });
+
+  it('keeps reconnecting when HA restarts before its Bluetooth integration is loaded (B-05)', async () => {
+    const error = vi.spyOn(bleLog, 'error').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    const started = client.start();
+    handshake(sockets[0]);
+    await started;
+    const cb = vi.fn();
+    client.onAdvertisement(cb);
+
+    // HA restarts. Its HTTP server, and with it the websocket API, comes up with
+    // the frontend in bootstrap stage 0; `bluetooth` is a stage 1 integration
+    // and registers bluetooth/subscribe_advertisements only when it loads.
+    sockets[0].serverCloses(1006, 'restart');
+    await vi.advanceTimersByTimeAsync(2_000);
+    const early = sockets[1];
+    early.open();
+    early.serverSays({ type: 'auth_required' });
+    early.serverSays({ type: 'auth_ok' });
+    early.serverSays({
+      id: early.lastSent().id,
+      type: 'result',
+      success: false,
+      error: { code: 'unknown_command', message: 'Unknown command.' },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(error).not.toHaveBeenCalled();
+
+    // Bluetooth is up by the next attempt, and the stream resumes on its own.
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(sockets).toHaveLength(3);
+    const id = handshake(sockets[2]);
+    sockets[2].serverSays({ id, type: 'event', event: { add: [advert()] } });
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('still gives up for good when a reconnect is refused as unauthorized', async () => {
+    const error = vi.spyOn(bleLog, 'error').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    const started = client.start();
+    handshake(sockets[0]);
+    await started;
+
+    sockets[0].serverCloses(1006, 'gone');
+    await vi.advanceTimersByTimeAsync(2_000);
+    const ws = sockets[1];
+    ws.open();
+    ws.serverSays({ type: 'auth_required' });
+    ws.serverSays({ type: 'auth_ok' });
+    ws.serverSays({
+      id: ws.lastSent().id,
+      type: 'result',
+      success: false,
+      error: { code: 'unauthorized', message: 'Unauthorized' },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/will not reconnect/));
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(sockets).toHaveLength(2);
+  });
 });

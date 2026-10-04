@@ -8,7 +8,7 @@ import {
   type EsphomeClient,
   type EsphomeBleAdvertisement,
 } from './client.js';
-import { toBleDeviceInfo, formatMacAddress } from './advert.js';
+import { toBleDeviceInfo, formatMacAddress, hasLostAdvertisementData } from './advert.js';
 import { openGattSession, type GattSession } from './gatt.js';
 
 /** A sighting kept fresh for this long counts toward proxy selection. */
@@ -82,6 +82,8 @@ export class EsphomeProxyPool {
   private addressTypes = new Map<string, number>();
   private subscribers = new Set<AdvertCb>();
   private started = false;
+  /** Proxies already warned about losing legacy advertisement data (B-02). */
+  private legacyWarned = new Set<string>();
 
   // --- advertisement liveness (#303) ---
   /** proxyId -> timestamp of the last advertisement seen from it. */
@@ -453,7 +455,31 @@ export class EsphomeProxyPool {
     // the type, not truthiness) so connectGatt can satisfy ESPHome's V3 connect.
     if (typeof ad.addressType === 'number') this.addressTypes.set(macLc, ad.addressType);
 
-    const info = toBleDeviceInfo(ad);
-    for (const cb of this.subscribers) cb(info, mac);
+    if (!this.legacyWarned.has(proxyId) && hasLostAdvertisementData(ad)) {
+      this.legacyWarned.add(proxyId);
+      bleLog.warn(
+        `ESPHome proxy ${proxyId} sends legacy advertisements (native API older than 1.9), and ` +
+          'the ESPHome client library drops their manufacturer and service data. Scales that ' +
+          'broadcast their weight will not be read through this proxy. Update its ESPHome firmware.',
+      );
+    }
+
+    // This runs inside the library's async 'ble' listener, so anything thrown
+    // here becomes an unhandled rejection: logged and lost for every
+    // subscriber in continuous mode, fatal in a single run.
+    let info: BleDeviceInfo;
+    try {
+      info = toBleDeviceInfo(ad);
+    } catch (err) {
+      bleLog.debug(`Malformed advertisement from ESPHome proxy ${proxyId}: ${errMsg(err)}`);
+      return;
+    }
+    for (const cb of this.subscribers) {
+      try {
+        cb(info, mac);
+      } catch (err) {
+        bleLog.warn(`Advertisement handler threw: ${errMsg(err)}`);
+      }
+    }
   }
 }

@@ -1,6 +1,6 @@
-import { parseArgs } from 'node:util';
 import { createRequire } from 'node:module';
 import { printRunHelp } from './cli-help.js';
+import { parseRunArgs } from './cli-run-args.js';
 import { setDisplayUsers, createMqttProxyDisplayNotifier } from './ble/handler-mqtt-proxy/index.js';
 import { bootstrapMqttProxy } from './ble/mqtt-proxy-bootstrap.js';
 import { notifyReady, startHeartbeat, stopHeartbeat } from './runtime/systemd-watchdog.js';
@@ -38,13 +38,17 @@ import {
 
 // ─── CLI flags ──────────────────────────────────────────────────────────────
 
-const { values: cliFlags } = parseArgs({
-  options: {
-    config: { type: 'string', short: 'c' },
-    help: { type: 'boolean', short: 'h' },
-  },
-  strict: false,
-});
+const cliFlags = parseRunArgs(process.argv.slice(2));
+
+if (cliFlags.kind === 'error') {
+  // Before anything else runs: a misplaced subcommand or a mistyped flag must
+  // not start a scan and an export (G-16). Exit 2, as the bin does for an
+  // unknown command.
+  console.error(cliFlags.message);
+  console.error('');
+  printRunHelp();
+  process.exit(2);
+}
 
 if (cliFlags.help) {
   // Reached only when run.js is executed directly. The bin entry point
@@ -75,7 +79,7 @@ log.info(
     (buildChannel ? ` (image ${buildChannel}${buildRef ? ` @ ${buildRef.slice(0, 7)}` : ''})` : ''),
 );
 
-const loaded = loadAppConfig(cliFlags.config as string | undefined);
+const loaded = loadAppConfig(cliFlags.config);
 const initialConfig = loaded.config;
 const initialResolved = resolveRuntimeConfig(initialConfig);
 
@@ -364,7 +368,10 @@ async function main(): Promise<void> {
     try {
       await flushQueue(ctx.exportQueuePath, (entry) => resolveQueuedExporter(ctx, entry));
     } catch (err) {
-      log.debug(`Retrying queued exports failed: ${errMsg(err)}`);
+      // Warn, not debug: the queue holds weigh-ins that are in no other place,
+      // and a pass that dies here is the only trace of why one went missing
+      // (E-08).
+      log.warn(`Retrying queued exports failed: ${errMsg(err)}`);
     }
   };
 

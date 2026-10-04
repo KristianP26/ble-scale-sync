@@ -170,6 +170,27 @@ describe('export retry queue (#412)', () => {
     expect(fs.existsSync(file)).toBe(false);
   });
 
+  it('keeps an entry whose exporter cannot be built instead of deleting it (E-08)', async () => {
+    // The entry is taken off disk before the lookup, and building an exporter
+    // from a config entry the operator just broke throws. That throw used to
+    // escape the flush with the entry already gone.
+    saveQueue(file, [entry(), entry({ exporter: 'wger' })]);
+    const wger = fakeExporter('wger', async () => ({ success: true }));
+    const lookup = (e: QueuedExport): Exporter | undefined => {
+      if (e.exporter === 'garmin') throw new Error('garmin: upload_timeout_sec must be >= 30');
+      return wger;
+    };
+
+    const outcome = await flushQueue(file, lookup, NOW).catch((err: unknown) => err);
+
+    const loaded = loadQueue(file, NOW);
+    expect(loaded.map((e) => e.exporter)).toEqual(['garmin']);
+    // A config problem says nothing about the target, so no attempt is spent.
+    expect(loaded[0].attempts).toBe(0);
+    expect(wger.export).toHaveBeenCalledTimes(1);
+    expect(outcome).toMatchObject({ delivered: 1, failed: 1, dropped: 0 });
+  });
+
   it('does not deliver an entry twice when one of several fails', async () => {
     saveQueue(file, [entry({ lastError: 'a' }), entry({ exporter: 'wger', lastError: 'b' })]);
     const garmin = fakeExporter('garmin', async () => ({ success: true }));

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 /**
  * node-ble's `Adapter.getDevice()` returns a BRAND NEW Device every call, and a
@@ -44,6 +44,8 @@ vi.mock('../../../src/scales/resolve.js', () => ({
 }));
 
 const { makeLivenessAdapter } = await import('../../../src/ble/handler-node-ble/liveness.js');
+const { logAdvertisementSnapshot } =
+  await import('../../../src/ble/handler-node-ble/device-object.js');
 const { autoDiscover, removeDevice } =
   await import('../../../src/ble/handler-node-ble/discovery.js');
 
@@ -144,6 +146,85 @@ describe('autoDiscover proxy release (#396, #397)', () => {
 
     await autoDiscover(btAdapter, []);
     expect(released).toContain('AA:04');
+  });
+});
+
+/**
+ * A Device1 object can exist before its scan response has been merged in: the
+ * kernel sends a held ADV_IND on alone when another address reports first, so
+ * a scale whose name is in the scan response shows up nameless for a moment
+ * (A-05). autoDiscover used to write an address off on its first look.
+ */
+describe('autoDiscover second look at an incomplete device (A-05)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Settles to the matched MAC, or to the error text. */
+  function discover(btAdapter: never): Promise<string> {
+    return autoDiscover(btAdapter, []).then(
+      (r) => r.mac,
+      (e: unknown) => `error: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+
+  it('matches a scale whose name arrived after the first poll', async () => {
+    resolveAdapter.mockImplementation((info: { localName: string }) =>
+      info.localName === 'scale' ? { name: 'Test Scale' } : undefined,
+    );
+    let looks = 0;
+    const btAdapter = {
+      devices: async () => ['AA:06'],
+      getDevice: async (addr: string) => device(addr, { name: looks++ === 0 ? '' : 'scale' }),
+    } as never;
+
+    const found = discover(btAdapter);
+    await vi.advanceTimersByTimeAsync(130_000);
+    expect(await found).toBe('AA:06');
+  });
+
+  it('matches a named scale whose advertisement data arrived after the first poll', async () => {
+    const manufacturerData = { id: 0x0611, data: Buffer.alloc(0) };
+    resolveAdapter.mockImplementation((info: { manufacturerData?: unknown }) =>
+      info.manufacturerData ? { name: 'Test Scale' } : undefined,
+    );
+    vi.mocked(logAdvertisementSnapshot)
+      .mockResolvedValueOnce({} as never)
+      .mockResolvedValue({ manufacturerData } as never);
+    const btAdapter = {
+      devices: async () => ['AA:07'],
+      getDevice: async (addr: string) => device(addr, { name: '108' }),
+    } as never;
+
+    const found = discover(btAdapter);
+    await vi.advanceTimersByTimeAsync(130_000);
+    expect(await found).toBe('AA:07');
+    vi.mocked(logAdvertisementSnapshot)
+      .mockReset()
+      .mockResolvedValue({} as never);
+  });
+
+  it('stops looking at a device that never gets a name', async () => {
+    // Every look costs a proxy and a match rule, and many neighbours never
+    // advertise a name at all, so the second look is bounded.
+    resolveAdapter.mockReturnValue(undefined);
+    let looks = 0;
+    const btAdapter = {
+      devices: async () => ['AA:08'],
+      getDevice: async (addr: string) => {
+        looks++;
+        return device(addr, { name: '' });
+      },
+    } as never;
+
+    const found = discover(btAdapter);
+    await vi.advanceTimersByTimeAsync(130_000);
+    expect(await found).toMatch(/^error: No recognized scale/);
+    expect(looks).toBe(5);
+    expect(released.filter((id) => id === 'AA:08')).toHaveLength(5);
   });
 });
 

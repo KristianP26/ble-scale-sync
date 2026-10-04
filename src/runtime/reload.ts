@@ -1,5 +1,7 @@
 import { loadYamlConfig } from '../config/load.js';
-import { resolveRuntimeConfig } from '../config/resolve.js';
+import { resolveRuntimeConfig, resolveExportersForUser } from '../config/resolve.js';
+import { createExporterFromEntry } from '../exporters/registry.js';
+import type { Exporter } from '../interfaces/exporter.js';
 import { diffRestartRequired } from '../config/reload-diff.js';
 import { withWriteLock } from '../config/write.js';
 import { setDisplayUsers } from '../ble/handler-mqtt-proxy/index.js';
@@ -33,7 +35,15 @@ export async function reloadAppConfig(
       const oldConfig = ctx.config;
       const newConfig = loadYamlConfig(configPath);
       const resolved = resolveRuntimeConfig(newConfig);
+      // Built BEFORE the swap. loadYamlConfig passes exporter entries through
+      // and filters only an unknown `type`, so a missing required field or a
+      // bad value first throws here. Thrown after setConfig, it left the new
+      // config installed and every later cycle failing on the same entry, with
+      // the reload request never cleared (E-07).
+      const exportersByUser = buildExportersByUser(newConfig);
       ctx.setConfig(newConfig, resolved);
+      // setConfig cleared the cache; refill it with what was just built.
+      for (const [slug, exporters] of exportersByUser) ctx.exporterCache.set(slug, exporters);
       return { oldConfig, newConfig };
     });
   } catch (err) {
@@ -72,6 +82,22 @@ export async function reloadAppConfig(
   }
 
   log.info('Config reloaded successfully');
+}
+
+/**
+ * Every user's exporters for a config, the way getExportersForUser builds them.
+ * Exporter constructors only store their config, so building them has no side
+ * effects; the point is that construction is where an invalid entry throws.
+ */
+function buildExportersByUser(config: AppConfig): Map<string, Exporter[]> {
+  const byUser = new Map<string, Exporter[]>();
+  for (const user of config.users) {
+    byUser.set(
+      user.slug,
+      resolveExportersForUser(config, user).map((e) => createExporterFromEntry(e)),
+    );
+  }
+  return byUser;
 }
 
 export function userDisplaySnapshot(config: AppConfig): string {

@@ -73,10 +73,12 @@ export const POST_DISCOVERY_QUIESCE_MS = 500;
  * so 900 s never fires on a healthy run with the default session_timeout_sec.
  *
  * It exists because dbus-next never rejects an in-flight `MessageBus.call()`
- * when the socket dies: the resolver is stored in `_methodReturnHandlers` and is
- * only ever read when a reply arrives, so a broken D-Bus transport parks the
- * cycle forever. Without a deadline the consecutive-failure watchdog is never
- * reached and a dead transport looks exactly like an idle house (#290).
+ * by itself: the resolver is stored in `_methodReturnHandlers` and is only ever
+ * read when a reply arrives, so a broken D-Bus transport parks the cycle
+ * forever. The node-ble connection fails those calls when the bus closes the
+ * socket (A-03), but a daemon that keeps the socket open and never answers is
+ * still only caught here. Without a deadline the consecutive-failure watchdog
+ * is never reached and a dead transport looks exactly like an idle house (#290).
  */
 export const POLL_CYCLE_TIMEOUT_MS = 900_000;
 

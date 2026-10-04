@@ -337,8 +337,11 @@ describe('openGattSession', () => {
     const first = char.write(Buffer.from([1]), true);
     const queued = [2, 3, 4].map((b) => char.write(Buffer.from([b]), true).catch(() => 'rejected'));
     await new Promise((r) => setTimeout(r, 5));
-    await session.close();
+    // close() queues its disconnect behind the request already in flight on the
+    // shared connection (B-04), so it settles once that write is answered.
+    const closing = session.close();
     release?.();
+    await closing;
     await first.catch(() => undefined);
     await Promise.all(queued);
     // Only the in-flight write reached the connection; the backlog rejected
@@ -436,6 +439,52 @@ describe('openGattSession', () => {
     expect(conn.connectBluetoothDeviceService).toHaveBeenNthCalledWith(1, ADDR, 0);
     expect(conn.connectBluetoothDeviceService).toHaveBeenNthCalledWith(2, ADDR, 1);
     expect(session.charMap.has(normalizeUuid('2a9d'))).toBe(true);
+    await session.close();
+  });
+
+  it('releases the proxy link when service discovery fails after connecting (B-03)', async () => {
+    const conn = fakeConnection();
+    // The library's 5 s wait for BluetoothGATTGetServicesDoneResponse ran out,
+    // but the proxy is still connected to the scale and holds a slot for it.
+    conn.listBluetoothGATTServicesService = vi.fn(async () => {
+      throw new Error('sendMessage timeout waiting for BluetoothGATTGetServicesDoneResponse');
+    });
+    await expect(
+      openGattSession({ connection: conn } as never, '00:00:00:00:00:01', 0),
+    ).rejects.toThrow(/GetServicesDoneResponse/);
+    expect(conn.disconnectBluetoothDeviceService).toHaveBeenCalledWith(ADDR);
+  });
+
+  it('cancels an unanswered connect before trying the other address type (B-03)', async () => {
+    const conn = fakeConnection();
+    const calls: string[] = [];
+    conn.connectBluetoothDeviceService = vi.fn(async (_addr: number, type?: number) => {
+      calls.push(`connect:${type}`);
+      if (type === 0)
+        throw new Error('sendMessage timeout waiting for BluetoothDeviceConnectionResponse');
+      return { address: ADDR, connected: true, mtu: 23 };
+    });
+    conn.disconnectBluetoothDeviceService = vi.fn(async () => {
+      calls.push('disconnect');
+      return { address: ADDR, connected: false };
+    });
+    const session = await openGattSession({ connection: conn } as never, '00:00:00:00:00:01');
+    // ESPHome keeps a timed-out attempt running and ignores a second connect
+    // request for the same address while it does, so it must be cancelled first.
+    expect(calls).toEqual(['connect:0', 'disconnect', 'connect:1']);
+    await session.close();
+  });
+
+  it('does not take a connection response for another device as its own (B-04)', async () => {
+    const conn = fakeConnection();
+    // An unsolicited "disconnected" for a different scale on the same proxy
+    // resolves the library's uncorrelated wait for our connect response.
+    conn.connectBluetoothDeviceService = vi
+      .fn()
+      .mockResolvedValueOnce({ address: 2, connected: true, mtu: 23 })
+      .mockResolvedValueOnce({ address: ADDR, connected: true, mtu: 23 });
+    const session = await openGattSession({ connection: conn } as never, '00:00:00:00:00:01');
+    expect(conn.connectBluetoothDeviceService).toHaveBeenCalledTimes(2);
     await session.close();
   });
 });

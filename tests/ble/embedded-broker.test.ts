@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+import { networkInterfaces } from 'node:os';
 import { connectAsync } from 'mqtt';
 import { startEmbeddedBroker } from '../../src/ble/embedded-broker.js';
 
@@ -191,4 +192,40 @@ describe('startEmbeddedBroker', () => {
       await broker.close();
     }
   });
+
+  // B-08: the URL handed to the app's own client must reach the interface the
+  // broker actually listens on, not always 127.0.0.1.
+  it.skipIf(!hasIpv6Loopback())(
+    'returns a URL its own client can reach on an IPv6 loopback bind',
+    async () => {
+      const broker = await startEmbeddedBroker({ port: 0, bindHost: '::1' });
+      try {
+        expect(broker.url).toBe(`mqtt://[::1]:${broker.port}`);
+        const client = await connectAsync(broker.url, {
+          clientId: 'b08-ipv6',
+          clean: true,
+          reconnectPeriod: 0,
+          connectTimeout: 2000,
+        });
+        await client.endAsync();
+      } finally {
+        await broker.close();
+      }
+    },
+  );
+
+  it('keeps the IPv4 loopback URL for a wildcard bind', async () => {
+    const broker = await startEmbeddedBroker({ port: 0, bindHost: '0.0.0.0' });
+    try {
+      expect(broker.url).toBe(`mqtt://127.0.0.1:${broker.port}`);
+    } finally {
+      await broker.close();
+    }
+  });
 });
+
+function hasIpv6Loopback(): boolean {
+  return Object.values(networkInterfaces()).some((list) =>
+    (list ?? []).some((a) => a.family === 'IPv6' && a.address === '::1'),
+  );
+}

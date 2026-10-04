@@ -56,6 +56,17 @@ import { safeName } from '../advertisement.js';
 const BONDING_TIMEOUT_MS = 15_000;
 
 /**
+ * Number of the most recent scanAndReadRaw() call.
+ *
+ * The poll loop abandons a cycle at POLL_CYCLE_TIMEOUT_MS without being able to
+ * stop it, and starts the next one over the same persistent D-Bus connection
+ * and the same radio. The abandoned cycle still runs to its end, and its
+ * teardown used to StopDiscovery, RemoveDevice, reset the connection and
+ * power-cycle the adapter underneath the cycle that replaced it (A-04).
+ */
+let scanCycle = 0;
+
+/**
  * Best-effort BLE bonding for adapters that need an encrypted link (#168).
  *
  * Some SIG scales (e.g. Beurer BF720, whose User Data Service 0x181C protects
@@ -232,6 +243,10 @@ export async function acquireGattServer(
  * becomes stale (e.g. bluetoothd restart), it is automatically reset.
  */
 export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
+  // Numbered so a cycle can tell, once it finally ends, whether the poll loop
+  // gave up on it and started another one meanwhile (A-04).
+  const cycle = ++scanCycle;
+  const isSuperseded = (): boolean => cycle !== scanCycle;
   const {
     targetMac,
     adapters,
@@ -417,10 +432,14 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     });
     gattSucceeded = true;
 
-    try {
-      await device.disconnect();
-    } catch {
-      /* ignore */
+    // Same device path as the newer cycle's, so a late Disconnect here would
+    // drop that cycle's link to the scale.
+    if (!isSuperseded()) {
+      try {
+        await device.disconnect();
+      } catch {
+        /* ignore */
+      }
     }
     return raw;
   } catch (err) {
@@ -436,6 +455,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       gattSucceeded,
       abortSignal,
       preemptiveAdapterReset,
+      isSuperseded,
     });
   }
 }

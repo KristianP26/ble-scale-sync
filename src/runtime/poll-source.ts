@@ -33,13 +33,15 @@ export class PollReadingSource implements ReadingSource {
     const profile = resolveUserProfile(primaryUser, this.ctx.config.scale);
 
     // Hard deadline on the whole cycle. dbus-next never rejects an in-flight
-    // MessageBus.call() when the socket dies, so a broken transport would park
-    // here forever while the heartbeat kept ticking and the consecutive-failure
-    // watchdog was never reached (#290). withTimeout races via Promise.race, so
-    // an abandoned scan stays parked; that is acceptable because the next
-    // getAdapter() destroys the connection under it and the watchdog bounds the
-    // process lifetime. Only the native poll path is wrapped: the proxy watchers
-    // wait indefinitely for a weigh-in by design.
+    // MessageBus.call() by itself when the socket dies, so a broken transport
+    // would park here forever while the heartbeat kept ticking and the
+    // consecutive-failure watchdog was never reached (#290). connection.ts now
+    // fails the parked calls when the bus closes the socket (A-03); this
+    // deadline still covers a call the daemon simply never answers. withTimeout
+    // races via Promise.race, so an abandoned scan keeps running; its teardown
+    // stands down if a newer cycle has started (A-04) and the watchdog bounds
+    // the process lifetime. Only the native poll path is wrapped: the proxy
+    // watchers wait indefinitely for a weigh-in by design.
     const scan = scanAndReadRaw({
       targetMac: this.ctx.scaleMac,
       adapters: this.adapters,

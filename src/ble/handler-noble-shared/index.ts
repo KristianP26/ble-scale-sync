@@ -22,7 +22,7 @@ import {
 } from '../types.js';
 import { wrapChar } from './char.js';
 import { wrapCharacteristics, wrapPeripheral } from './gatt.js';
-import { parseMfgData, peripheralAddress } from './peripheral.js';
+import { parseMfgData, parseServiceData, peripheralAddress } from './peripheral.js';
 import { waitForPoweredOn } from './state.js';
 import { connectWithRetries } from './connect.js';
 import { discoverPeripheral } from './discovery.js';
@@ -91,6 +91,7 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
           address: peripheral.address ? formatMac(peripheral.address) : undefined,
           serviceUuids: advSvcUuids,
           manufacturerData: mfgData,
+          serviceData: parseServiceData(peripheral),
         };
         broadcastAdapter = resolveAdapter(info, adapters);
       }
@@ -189,6 +190,7 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
             serviceUuids,
             characteristicUuids,
             manufacturerData: parseMfgData(peripheral.advertisement?.manufacturerData),
+            serviceData: parseServiceData(peripheral),
           };
           const found = resolveAdapter(info, adapters);
           if (!found) {

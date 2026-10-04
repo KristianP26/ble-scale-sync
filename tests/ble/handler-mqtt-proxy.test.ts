@@ -1755,6 +1755,74 @@ describe('handler-mqtt-proxy', () => {
       ).rejects.toThrow('ESP32 error: Connection failed: device not found');
     });
 
+    // Firmware now publishes `error` as JSON with the operation and address it
+    // belongs to. The topic is shared, so an error from an unrelated scan or
+    // another device must not fail this connect, and the message must be
+    // shown as text, not as a JSON blob.
+    it('rejects only on a structured connect error for this address', async () => {
+      const adapter = createGattAdapter();
+
+      mockClient.subscribeAsync = vi.fn(async (topic: string) => {
+        if (topic === `${PREFIX}/status`) {
+          queueMicrotask(() => mockClient._simulateMessage(`${PREFIX}/status`, 'online'));
+        }
+        if (topic === `${PREFIX}/scan/results`) {
+          queueMicrotask(() =>
+            mockClient._simulateMessage(
+              `${PREFIX}/scan/results`,
+              JSON.stringify([
+                {
+                  address: 'AA:BB:CC:DD:EE:FF',
+                  name: 'GattScale',
+                  rssi: -50,
+                  services: [],
+                  addr_type: 0,
+                },
+              ]),
+            ),
+          );
+        }
+        return [];
+      });
+
+      const origPublish = mockClient.publishAsync;
+      mockClient.publishAsync = vi.fn(async (topic: string, payload?: string | Buffer) => {
+        if (topic === `${PREFIX}/connect`) {
+          queueMicrotask(() => {
+            mockClient._simulateMessage(
+              `${PREFIX}/error`,
+              JSON.stringify({ op: 'scan', message: 'scan restart failed' }),
+            );
+            mockClient._simulateMessage(
+              `${PREFIX}/error`,
+              JSON.stringify({
+                op: 'connect',
+                message: 'other device',
+                address: '11:22:33:44:55:66',
+              }),
+            );
+            mockClient._simulateMessage(
+              `${PREFIX}/error`,
+              JSON.stringify({
+                op: 'connect',
+                message: 'device not found',
+                address: 'aa:bb:cc:dd:ee:ff',
+              }),
+            );
+          });
+        }
+        return origPublish(topic, payload);
+      });
+
+      await expect(
+        scanAndReadRaw({
+          adapters: [adapter],
+          profile: PROFILE,
+          mqttProxy: MQTT_PROXY_CONFIG,
+        }),
+      ).rejects.toThrow(/^ESP32 error: device not found$/);
+    });
+
     it('broadcast scales still work unchanged (no regression)', async () => {
       const broadcastAdapter = createBroadcastAdapter();
       const gattAdapter = createGattAdapter();

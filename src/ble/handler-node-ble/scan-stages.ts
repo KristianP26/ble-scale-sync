@@ -361,10 +361,27 @@ export async function teardownSession(opts: {
    * owns the default, callers pass the option through unchanged.
    */
   preemptiveAdapterReset?: boolean;
+  /**
+   * True once a newer scan cycle has started (A-04). Everything below except
+   * releasing our own proxy acts on state that cycle now uses: the device path,
+   * the discovery session, the D-Bus connection and the controller.
+   */
+  isSuperseded?: () => boolean;
 }): Promise<void> {
   const { device, btAdapter, deviceMac, bleAdapter, gattAttempted, gattSucceeded, abortSignal } =
     opts;
   const preemptiveAdapterReset = opts.preemptiveAdapterReset !== false;
+  const superseded = (): boolean => opts.isSuperseded?.() === true;
+  const standDown = (): void => {
+    bleLog.debug(
+      'An abandoned scan cycle ended after a newer one started; leaving BlueZ and the D-Bus connection to it',
+    );
+  };
+  if (superseded()) {
+    if (device) releaseDeviceProxy(device);
+    standDown();
+    return;
+  }
   // Best-effort disconnect if we got partway through a connection
   if (device) {
     try {
@@ -431,6 +448,12 @@ export async function teardownSession(opts: {
       bleLog.debug('Shutting down: D-Bus connection reset, skipping the btmgmt power-cycle');
     } else {
       await sleep(500);
+      // The awaits above are D-Bus calls with no deadline, so the loop can
+      // give up on this cycle and start the next one while they run.
+      if (superseded()) {
+        standDown();
+        return;
+      }
       resetConnection();
       bleLog.debug('D-Bus connection reset after GATT operation');
       if (!preemptiveAdapterReset) {

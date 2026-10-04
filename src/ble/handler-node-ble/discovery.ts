@@ -375,13 +375,46 @@ export async function removeDevice(
   }
 }
 
+/**
+ * How many looks a device that seemed incomplete gets before it is written off
+ * (A-05). A failed lookup counts as an incomplete look too.
+ *
+ * BlueZ creates the Device1 object from the first advertising report it is
+ * handed, and that report can lack the scan response. The kernel holds an
+ * ADV_IND back to merge it with its SCAN_RSP, but sends it on alone as soon as
+ * a report from any other address arrives first (`process_adv_report()` in
+ * net/bluetooth/hci_event.c: "If the pending data doesn't match this report
+ * ... force sending of the pending data"), which in a busy room is routine. A
+ * scale that puts its name in the scan response then appears with no Name,
+ * and gets it a moment later. Writing it off on the first look made it
+ * invisible for the whole discovery window while it advertised throughout.
+ *
+ * Bounded rather than open-ended because every look costs a proxy and a match
+ * rule (#396, #397), and plenty of nearby devices never advertise a name at
+ * all. Five looks span about ten seconds of polling, far longer than a scan
+ * response takes to follow its advertisement.
+ */
+const INCOMPLETE_LOOK_LIMIT = 5;
+
 export async function autoDiscover(
   btAdapter: Adapter,
   adapters: ScaleAdapter[],
   abortSignal?: AbortSignal,
 ): Promise<{ device: Device; adapter: ScaleAdapter; mac: string }> {
   const deadline = Date.now() + DISCOVERY_TIMEOUT_MS;
+  /** Devices looked at with nothing left to learn; never evaluated again. */
   const checked = new Set<string>();
+  /** How many polls found each device incomplete (see INCOMPLETE_LOOK_LIMIT). */
+  const incompleteLooks = new Map<string, number>();
+  const settle = (addr: string, complete: boolean): void => {
+    if (complete) {
+      checked.add(addr);
+      return;
+    }
+    const looks = (incompleteLooks.get(addr) ?? 0) + 1;
+    incompleteLooks.set(addr, looks);
+    if (looks >= INCOMPLETE_LOOK_LIMIT) checked.add(addr);
+  };
   let heartbeat = 0;
 
   while (Date.now() < deadline) {
@@ -392,7 +425,6 @@ export async function autoDiscover(
 
     for (const addr of addresses) {
       if (checked.has(addr)) continue;
-      checked.add(addr);
 
       // Every device BlueZ knows gets a throwaway proxy here, and each one costs
       // a D-Bus match rule plus a listener on the bus-wide signal emitter until
@@ -400,6 +432,7 @@ export async function autoDiscover(
       // other proxy is handed back before the next iteration (#396, #397).
       let dev: Device | undefined;
       let matchedDevice = false;
+      let complete = false;
       try {
         dev = await btAdapter.getDevice(addr);
         const name = await dev.getName().catch(() => '');
@@ -432,10 +465,15 @@ export async function autoDiscover(
           matchedDevice = true;
           return { device: dev, adapter: matched, mac: addr };
         }
+        // A name but no advertisement data at all may be the same split
+        // seen from the other side: name in one packet, manufacturer or
+        // service data in the other.
+        complete = advert?.manufacturerData !== undefined || (advert?.serviceData?.length ?? 0) > 0;
       } catch {
         /* device may have gone away */
       } finally {
         if (dev && !matchedDevice) releaseDeviceProxy(dev);
+        if (!matchedDevice) settle(addr, complete);
       }
     }
 

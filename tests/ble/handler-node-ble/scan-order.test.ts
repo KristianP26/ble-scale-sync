@@ -64,6 +64,9 @@ const fakeDevice = {
   isPaired: async () => true,
 };
 
+/** When set, the next waitForRawReading waits for it. */
+let holdNextReading: Promise<void> | null = null;
+
 /** Every provider handed to setPairingTarget, newest last. */
 const pairingTargets: (() => { pin?: number; mac?: string })[] = [];
 
@@ -125,10 +128,14 @@ vi.mock('../../../src/ble/shared.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/ble/shared.js')>();
   return {
     ...actual,
-    waitForRawReading: record('waitForRawReading', async () => ({
-      reading: { weight: 80, impedance: 500 },
-      adapter: makeAdapter(),
-    })),
+    waitForRawReading: record('waitForRawReading', async () => {
+      // One-shot gate: lets a test hold a cycle inside its reading phase while
+      // another cycle runs (A-04).
+      const gate = holdNextReading;
+      holdNextReading = null;
+      if (gate) await gate;
+      return { reading: { weight: 80, impedance: 500 }, adapter: makeAdapter() };
+    }),
     findMissingCharacteristics: record('findMissingCharacteristics', () => []),
   };
 });
@@ -273,6 +280,40 @@ describe('scanAndReadRaw call order (#368)', () => {
     const seen = await run({ preemptiveAdapterReset: false });
     expect(seen).toContain('resetConnection');
     expect(seen).not.toContain('resetAdapterBtmgmt');
+  });
+
+  it('leaves BlueZ alone when it ends after a newer cycle started (A-04)', async () => {
+    // The poll loop abandons a cycle at POLL_CYCLE_TIMEOUT_MS but cannot stop
+    // it, and starts the next one. When the abandoned one finally ends, its
+    // teardown must not disconnect the shared device path, reset the shared
+    // D-Bus connection or power-cycle the radio under the cycle now running.
+    let release!: () => void;
+    holdNextReading = new Promise<void>((r) => (release = r));
+    const opts = {
+      targetMac: 'AA:BB:CC:DD:EE:FF',
+      adapters: [makeAdapter()],
+      profile: defaultProfile(),
+    };
+
+    const abandoned = scanAndReadRaw(opts);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls).toContain('waitForRawReading');
+
+    // Bounded advances, not runAllTimersAsync: that would also fire the held
+    // cycle's 120 s reading timeout and turn this into a different scenario.
+    const replacement = scanAndReadRaw(opts);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await replacement;
+
+    calls.length = 0;
+    release();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await abandoned;
+
+    expect(calls).not.toContain('device.disconnect');
+    expect(calls).not.toContain('resetConnection');
+    expect(calls).not.toContain('resetAdapterBtmgmt');
+    expect(calls).not.toContain('removeDevice');
   });
 
   it('disconnects on the success path and again in the finally', async () => {
