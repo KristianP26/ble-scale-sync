@@ -216,6 +216,20 @@ export interface ConnectionContext {
 }
 
 /**
+ * What config says one user weighs (`users[].weight_range`, `last_known_weight`),
+ * for an adapter that has to choose between two readings of one raw value: the
+ * QN weight divisor when the frame that names it is lost (review C-06).
+ *
+ * Structurally a subset of the user's config entry, and the composition root
+ * passes those entries themselves, so a `last_known_weight` the runtime moves
+ * in memory after a weigh-in is visible here without a reload.
+ */
+export interface UserWeightHint {
+  readonly weight_range: { readonly min: number; readonly max: number };
+  readonly last_known_weight: number | null;
+}
+
+/**
  * Per-device runtime configuration injected into adapters at startup (and on
  * config reload) by the composition root. Distinct from the static registry:
  * carries credentials that only exist in the user's config, e.g. the Xiaomi
@@ -302,6 +316,9 @@ export interface AdapterRuntimeConfig {
    * vendor app's. Undecoded, opt-in, off by default.
    */
   qnConfigLong?: boolean;
+
+  /** Every configured user's weight hints, in config order (see UserWeightHint). */
+  userWeights?: readonly UserWeightHint[];
 }
 
 /**

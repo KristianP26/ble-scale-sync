@@ -81,6 +81,26 @@ export function isPlausibleImpedance(impedance: number): boolean {
 }
 
 /**
+ * How long a GATT session waits for body composition after the weight is
+ * final, before it completes with the weight alone (ADR D028, review D-07).
+ *
+ * A weigh-in in socks, a child or a short step-on gives the scale no
+ * bioimpedance, and an adapter whose `isComplete` demanded impedance or a fat
+ * value then never produced a reading: the session ran into its timeout and
+ * the weigh-in was lost. Adapters that report composition in a later frame
+ * than the weight use this as `completionHoldMs`, with `isComplete` on the
+ * weight and `isFinal` on the composition, so a weigh-in with composition still
+ * resolves the moment it arrives and one without it resolves after this wait.
+ *
+ * The GATT counterpart of the broadcast `IMPEDANCE_GRACE_MS`, deliberately
+ * shorter: it only runs once the scale has already reported a final weight.
+ * The length is a judgement, not a measurement, because none of the adapters
+ * using it has a capture showing how long their scale takes between the weight
+ * and the composition frame.
+ */
+export const WEIGHT_ONLY_HOLD_MS = 8_000;
+
+/**
  * Upper bound on a body fat percentage this project will publish as measured.
  * Well above any real reading, and well below what a corrupted 16-bit field
  * produces. It rejects rather than clamps: a value this far out is not a

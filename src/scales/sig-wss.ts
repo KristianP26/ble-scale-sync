@@ -23,15 +23,21 @@ import { LBS_TO_KG } from '../ble/types.js';
  *   the weight is a useful cross-check on this decoder, not a caller for it.
  *
  * Layout, per the SIG specification:
- *   Byte  0    : Flags (uint8) - bit 0 imperial, bit 1 timestamp present
+ *   Byte  0    : Flags (uint8) - bit 0 imperial, bit 1 timestamp present,
+ *                bit 2 user id present
  *   Bytes 1-2  : Weight (uint16 LE, 0.005 kg or 0.01 lb per unit)
  *   Bytes 3-9  : Date Time, when flags bit 1 is set
+ *   next byte  : User ID, when flags bit 2 is set (0xFF = unknown user)
  */
 
 /** Flags bit 0: set means pounds, clear means kilograms. */
 const FLAG_IMPERIAL = 0x01;
 /** Flags bit 1: a 7-byte Date Time follows the weight. */
 const FLAG_TIMESTAMP = 0x02;
+/** Flags bit 2: a 1-byte User ID follows the Date Time (or the weight). */
+const FLAG_USER_ID = 0x04;
+/** User ID the SIG specification reserves for "unknown user". */
+const SIG_UNKNOWN_USER = 0xff;
 
 /** Byte length of the SIG Date Time structure. */
 const DATE_TIME_LEN = 7;
@@ -101,6 +107,33 @@ export interface SigWeightMeasurement {
   weightKg?: number;
   /** Measurement time, when the frame carries a usable Date Time. */
   timestamp?: Date;
+  /**
+   * The scale's user slot the measurement was taken for, when the frame carries
+   * a User ID other than the reserved "unknown user" 0xFF.
+   */
+  userIndex?: number;
+}
+
+/**
+ * Earliest year a scale's own clock is believed (ADR D027).
+ *
+ * A scale whose clock was never set (fresh batteries, no vendor app since)
+ * counts from its firmware default, a date years in the past: 2000 on some,
+ * the start of a vendor epoch on others (Medisana counts from 2010). Passed on,
+ * such a stamp turns every live weigh-in into a stored record from long ago,
+ * which the runtime would hold back from every live exporter. No weigh-in a
+ * scale replays to this project predates it.
+ */
+const MIN_TRUSTED_YEAR = 2015;
+
+/**
+ * The frame's own measurement time, or undefined when the scale's clock cannot
+ * be trusted (see MIN_TRUSTED_YEAR). Only a time this returns belongs in
+ * `ScaleReading.timestamp`.
+ */
+export function trustedScaleTime(ts: Date | undefined): Date | undefined {
+  if (!ts || Number.isNaN(ts.getTime())) return undefined;
+  return ts.getFullYear() >= MIN_TRUSTED_YEAR ? ts : undefined;
 }
 
 /**
@@ -117,9 +150,15 @@ export function parseSigWeightMeasurement(data: Buffer): SigWeightMeasurement {
     weightKg: data.readUInt16LE(1) * (isKg ? 0.005 : 0.01 * LBS_TO_KG),
   };
 
+  let offset = 3;
   if (flags & FLAG_TIMESTAMP) {
-    const ts = parseSigDateTime(data, 3);
+    const ts = parseSigDateTime(data, offset);
     if (ts) result.timestamp = ts;
+    offset += DATE_TIME_LEN;
+  }
+  if (flags & FLAG_USER_ID && offset < data.length) {
+    const user = data[offset];
+    if (user !== SIG_UNKNOWN_USER) result.userIndex = user;
   }
 
   return result;

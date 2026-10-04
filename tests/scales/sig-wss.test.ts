@@ -27,6 +27,14 @@ describe('parseSigWeightMeasurement (0x2A9D)', () => {
     expect(ts!.getSeconds()).toBe(54);
   });
 
+  it('decodes the user slot that follows the timestamp (flags bit 2)', () => {
+    expect(parseSigWeightMeasurement(WSS_FRAME).userIndex).toBe(1);
+    // Flag clear: the byte after the timestamp is not a user id.
+    expect(parseSigWeightMeasurement(Buffer.from('02783eea07050c123536', 'hex')).userIndex).toBe(
+      undefined,
+    );
+  });
+
   it('converts a pounds frame to kilograms', () => {
     // Flags bit 0 set = imperial, 0.01 lb per unit. 26000 units = 260.00 lb.
     const lb = Buffer.alloc(3);

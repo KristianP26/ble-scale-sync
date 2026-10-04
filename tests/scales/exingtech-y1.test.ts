@@ -6,6 +6,7 @@ import {
   defaultProfile,
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
+import { WEIGHT_ONLY_HOLD_MS } from '../../src/scales/body-comp-helpers.js';
 
 function makeAdapter() {
   return new ExingtechY1Adapter();
@@ -92,14 +93,34 @@ describe('ExingtechY1Adapter', () => {
       expect(adapter.isComplete({ weight: 80, impedance: 0 })).toBe(true);
     });
 
-    it('returns false when fat is not set (incomplete frame)', () => {
+    it('completes a weigh-in without composition after a short hold (D-07, D028)', () => {
+      // The scale sends a weight-only frame first and the composition after it
+      // (openScale ExingtechY1Handler). A weigh-in it could not analyse used to
+      // be refused for good, so the session timed out and the weight was lost.
       const adapter = makeAdapter();
       const buf = Buffer.alloc(15);
       buf.writeUInt16BE(800, 4);
       buf[6] = 0xff; // incomplete → fat = undefined
-      adapter.parseNotification(buf);
+      const reading = adapter.parseNotification(buf)!;
 
-      expect(adapter.isComplete({ weight: 80, impedance: 0 })).toBe(false);
+      expect(adapter.isComplete(reading)).toBe(true);
+      expect(adapter.isFinal(reading)).toBe(false);
+      expect(adapter.completionHoldMs).toBe(WEIGHT_ONLY_HOLD_MS);
+    });
+
+    it('resolves at once on the frame that carries composition', () => {
+      const adapter = makeAdapter();
+      const buf = Buffer.alloc(15);
+      buf.writeUInt16BE(800, 4);
+      buf.writeUInt16BE(225, 6); // fat = 22.5%
+      buf.writeUInt16BE(550, 8);
+      buf.writeUInt16BE(35, 10);
+      buf.writeUInt16BE(400, 12);
+      buf[14] = 8;
+      const reading = adapter.parseNotification(buf)!;
+
+      expect(adapter.isComplete(reading)).toBe(true);
+      expect(adapter.isFinal(reading)).toBe(true);
     });
 
     it('returns false when weight is 0', () => {

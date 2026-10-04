@@ -1,9 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 // Side-effect import: building the registry registers it with the exclusion
 // derivation, so StandardGattScaleAdapter.matches() excludes names that more
 // specific adapters claim even when this file is run in isolation (#245).
 import '../../src/scales/index.js';
 import { StandardGattScaleAdapter } from '../../src/scales/standard-gatt.js';
+import { uuid16 } from '../../src/scales/body-comp-helpers.js';
+import { isHistoricalReading } from '../../src/interfaces/reading-time.js';
+import type { MultiCharNotify } from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -229,5 +232,90 @@ describe('StandardGattScaleAdapter session boundary (#394)', () => {
     a.onSessionStart();
     const payload = a.computeMetrics({ weight: 80, impedance: 0 }, defaultProfile());
     expect(payload.bodyFatPercent).not.toBe(22);
+  });
+});
+
+// Review C-02, C-05, C-09. Frames from the #168 openScale HCI snoop of a SIG
+// scale (the same bytes beurer-bf720.test.ts and sig-wss.test.ts decode):
+// 0x2A9D 79.96 kg, stamped 2026-05-12 18:53:54, user 1; 0x2A9C flags 0x0398,
+// fat 19.4 %, impedance 452 ohm and NO weight field.
+describe('StandardGattScaleAdapter: 0x2A9D and the SIG time stamp', () => {
+  const WSS = Buffer.from('0e783eea07050c12353601ee002607', 'hex');
+  const BCS = Buffer.from('9803c200df1a9701cc2fca21a811', 'hex');
+  const CHR_WSS = uuid16(0x2a9d);
+  const CHR_BCS = uuid16(0x2a9c);
+
+  /** The multi-char parser; asserted rather than called blind. */
+  function charParser(a: StandardGattScaleAdapter) {
+    const fn = (a as Partial<MultiCharNotify>).parseCharNotification;
+    expect(fn).toBeTypeOf('function');
+    return fn!.bind(a);
+  }
+
+  function atCaptureTime(fn: () => void): void {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 4, 12, 18, 54, 0));
+    try {
+      fn();
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it('subscribes Weight Measurement 0x2A9D as well as 0x2A9C', () => {
+    const notify = (makeAdapter().characteristics ?? [])
+      .filter((b) => b.type === 'notify')
+      .map((b) => b.uuid);
+    expect(notify).toContain(CHR_WSS);
+    expect(notify).toContain(CHR_BCS);
+  });
+
+  it('reads the weight of a Weight Scale only device from 0x2A9D', () => {
+    atCaptureTime(() => {
+      const a = makeAdapter();
+      const reading = charParser(a)(CHR_WSS, WSS);
+      expect(reading!.weight).toBeCloseTo(79.96, 2);
+      expect(a.isComplete(reading!)).toBe(true);
+      // Not final: a 0x2A9C may still follow, so the session holds for it.
+      expect(a.isFinal(reading!)).toBe(false);
+    });
+  });
+
+  it('completes a weigh-in whose weight is in 0x2A9D and fat in 0x2A9C', () => {
+    atCaptureTime(() => {
+      const a = makeAdapter();
+      const parse = charParser(a);
+      parse(CHR_WSS, WSS);
+      const reading = parse(CHR_BCS, BCS);
+      expect(reading!.weight).toBeCloseTo(79.96, 2);
+      expect(reading!.impedance).toBeCloseTo(452, 1);
+      expect(a.isFinal(reading!)).toBe(true);
+      expect(a.computeMetrics(reading!, defaultProfile()).bodyFatPercent).toBeCloseTo(19.4, 1);
+    });
+  });
+
+  it('carries the SIG time stamp and user slot, so a stored record is history', () => {
+    // Real clock: the capture's May stamp is months old, i.e. a stored record.
+    const a = makeAdapter();
+    const parse = charParser(a);
+    const reading = parse(CHR_WSS, WSS);
+    expect(reading!.timestamp).toEqual(new Date(2026, 4, 12, 18, 53, 54));
+    expect(reading!.userIndex).toBe(1);
+    expect(isHistoricalReading(reading!)).toBe(true);
+
+    // The record is already in the session's history buffer when its 0x2A9C
+    // arrives, so the composition joins it there instead of a second export.
+    expect(parse(CHR_BCS, BCS)).toBeNull();
+    expect(reading!.impedance).toBeCloseTo(452, 1);
+    expect(a.computeMetrics(reading!, defaultProfile()).bodyFatPercent).toBeCloseTo(19.4, 1);
+  });
+
+  // C-09: the scale measured 19.4 % at 452 ohm. Our BIA estimate from the same
+  // impedance is a different number and used to replace it.
+  it('exports the body fat the scale measured, not a BIA estimate over it', () => {
+    const a = makeAdapter();
+    a.parseNotification(BCS);
+    const payload = a.computeMetrics({ weight: 79.96, impedance: 452 }, defaultProfile());
+    expect(payload.bodyFatPercent).toBeCloseTo(19.4, 1);
   });
 });

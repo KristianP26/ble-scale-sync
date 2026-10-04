@@ -85,10 +85,11 @@ function groundedInAdvertisement(adapter: ScaleAdapter, device: BleDeviceInfo): 
  *     the Hutbit's 0x02AC company id is advertisement evidence for it (#278).
  *
  * Where `advertisedServicesKnown` is false (node-ble), rule 1 and rule 3 judge
- * against the full service list, because nothing better exists there. That is
- * why the ES-WBE28 case stays unresolved on node-ble: with no advertised services, the
- * pre-connect record already picks QN on the shared "renpho" name, and only a
- * characteristic-based split between the two matchers can change that.
+ * against the full service list, because nothing better exists there. This rule
+ * alone cannot settle the ES-WBE28 on node-ble: with no advertised services the
+ * pre-connect record picks QN on the shared "renpho" name. The Renpho and QN
+ * matchers settle it instead, by characteristics (the SIG 0x2A9F + 0x2A9D pair
+ * and no QN pair means Renpho).
  */
 export function resolveAfterDiscovery(
   advertised: BleDeviceInfo,

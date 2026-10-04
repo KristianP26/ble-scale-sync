@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { RenphoScaleAdapter } from '../../src/scales/renpho.js';
 import type { ConnectionContext } from '../../src/interfaces/scale-adapter.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
+import { isHistoricalReading } from '../../src/interfaces/reading-time.js';
+import { QnScaleAdapter } from '../../src/scales/qn-scale/index.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -27,6 +29,17 @@ const BCS_PACKET2 = Buffer.from('0c02f901f70144000dec00a500290091020600', 'hex')
 
 function makeAdapter() {
   return new RenphoScaleAdapter();
+}
+
+/** Run at the time the capture's weight frame is stamped, so it reads as live. */
+function atCaptureTime(fn: () => void): void {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(2026, 6, 4, 12, 26, 10));
+  try {
+    fn();
+  } finally {
+    vi.useRealTimers();
+  }
 }
 
 const ALL_CHARS = new Set([
@@ -70,6 +83,30 @@ describe('RenphoScaleAdapter', () => {
     );
     it('does not match an unrelated name', () => {
       expect(makeAdapter().matches(mockPeripheral('Yunmai ISM', []))).toBe(false);
+    });
+
+    // D-04: after GATT discovery the device carries the 0xFFE0 service that
+    // hosts its vendor pair, which the service rule reads as QN. Its
+    // characteristics (ALL_CHARS, from the #267 capture) say otherwise: the SIG
+    // consent pair, and no QN write characteristic (0xFFF2 / 0xFFE3).
+    it('claims the discovered ES-WBE28 on its characteristics, and QN declines it', () => {
+      const discovered = {
+        localName: 'Renpho-Scale',
+        serviceUuids: [0x181b, 0x181d, 0x181c, 0xffe0].map(uuid16),
+        characteristicUuids: [...ALL_CHARS],
+      };
+      expect(makeAdapter().matches(discovered)).toBe(true);
+      expect(new QnScaleAdapter().matches(discovered)).toBe(false);
+    });
+
+    it('leaves a renpho device with the QN characteristic pair to QN', () => {
+      const qn = {
+        localName: 'Renpho',
+        serviceUuids: [uuid16(0xfff0)],
+        characteristicUuids: [0xfff1, 0xfff2, 0x2a9d, 0x2a9f].map(uuid16),
+      };
+      expect(makeAdapter().matches(qn)).toBe(false);
+      expect(new QnScaleAdapter().matches(qn)).toBe(true);
     });
   });
 
@@ -143,12 +180,49 @@ describe('RenphoScaleAdapter', () => {
     });
 
     it('extracts impedance from a body-composition packet', () => {
+      atCaptureTime(() => {
+        const a = makeAdapter();
+        a.parseCharNotification(CHR_WEIGHT, WSS_FRAME);
+        const reading = a.parseCharNotification(CHR_BODYCOMP, BCS_PACKET2);
+        expect(reading).not.toBeNull();
+        expect(reading!.weight).toBeCloseTo(94.9, 1);
+        expect(reading!.impedance).toBeCloseTo(332.8, 1);
+      });
+    });
+
+    // D-11 / D027: the captured live weight frame has flags 0x4E, so it carries
+    // a SIG Date Time (2026-07-04 12:26:06) that the adapter used to drop.
+    it('carries the time stamp of the weight frame', () => {
+      atCaptureTime(() => {
+        const reading = makeAdapter().parseCharNotification(CHR_WEIGHT, WSS_FRAME);
+        expect(reading!.timestamp).toEqual(new Date(2026, 6, 4, 12, 26, 6));
+        expect(isHistoricalReading(reading!)).toBe(false);
+      });
+    });
+
+    // D-11: the impedance is held across frames ("first impedance seen"), so a
+    // weigh-in's impedance completed the NEXT weight's hold too: a stored record
+    // replayed after the consent lent its impedance to the live weigh-in.
+    it('does not carry one weigh-in impedance onto the next weight', () => {
+      atCaptureTime(() => {
+        const a = makeAdapter();
+        a.parseCharNotification(CHR_WEIGHT, WSS_FRAME);
+        expect(a.parseCharNotification(CHR_BODYCOMP, BCS_PACKET2)!.impedance).toBeCloseTo(332.8, 1);
+        const next = a.parseCharNotification(CHR_WEIGHT, WSS_FRAME);
+        expect(next!.impedance).toBe(0);
+        expect(a.isFinal(next!)).toBe(false);
+      });
+    });
+
+    // A stored record is buffered as history the moment it is emitted, so its
+    // impedance joins that reading instead of becoming a second export of it.
+    it('emits a stored record once, with the impedance that follows it', () => {
+      // Real clock: the July capture stamp is a stored record by now.
       const a = makeAdapter();
-      a.parseCharNotification(CHR_WEIGHT, WSS_FRAME);
-      const reading = a.parseCharNotification(CHR_BODYCOMP, BCS_PACKET2);
-      expect(reading).not.toBeNull();
-      expect(reading!.weight).toBeCloseTo(94.9, 1);
-      expect(reading!.impedance).toBeCloseTo(332.8, 1);
+      const stored = a.parseCharNotification(CHR_WEIGHT, WSS_FRAME);
+      expect(isHistoricalReading(stored!)).toBe(true);
+      expect(a.parseCharNotification(CHR_BODYCOMP, BCS_PACKET2)).toBeNull();
+      expect(stored!.impedance).toBeCloseTo(332.8, 1);
     });
 
     it('parses imperial (lb) weight frames to kg', () => {

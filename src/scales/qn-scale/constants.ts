@@ -212,6 +212,24 @@ export const REPORT_BYTE_LONG_FRAME = 0xfc;
 export const IMPEDANCE_GRACE_MS = 1500;
 
 /**
+ * Band a live 0x10 weight must fall in for the divisor its 0x12 frame named to
+ * be taken as is. Outside it, or with no 0x12 at all, the divisor is in doubt
+ * and both readings of the raw value are weighed (review C-06, see
+ * `QnScaleAdapter.resolveWeight`). The ES-26M is why the band matters: its
+ * 18-byte 0x12 implies /10, its captured frames read 978.5 kg that way and
+ * 97.85 kg at /100.
+ */
+export const WEIGHT_CERTAIN_MIN_KG = 5;
+export const WEIGHT_CERTAIN_MAX_KG = 250;
+
+/**
+ * How close to a user's `last_known_weight` a candidate weight must be to count
+ * as that user's, as a share of it. The two candidates differ tenfold, so this
+ * only has to separate a body from a tenth or ten times of one.
+ */
+export const LAST_KNOWN_WEIGHT_TOLERANCE = 0.15;
+
+/**
  * Max age (seconds) of a 0x23 stored record relative to session start before it
  * is treated as stale history and ignored. Mirrors openScale QNHandler's
  * MAX_STORED_RECORD_AGE_BEFORE_SESSION_SECONDS. Prevents importing an old

@@ -10,6 +10,7 @@ import type {
   BodyComposition,
   AdapterRuntimeConfig,
   MultiCharNotify,
+  UserWeightHint,
 } from '../../interfaces/scale-adapter.js';
 import { bleLog, errMsg, normalizeUuid } from '../../ble/types.js';
 import type { MatchDescriptor } from '../match-descriptor.js';
@@ -30,6 +31,7 @@ import {
   CHR_WRITE_T1,
   EXTENDED_INFO_FRAME_LEN,
   IMPEDANCE_GRACE_MS,
+  LAST_KNOWN_WEIGHT_TOLERANCE,
   LEGACY_PROTO_TYPE,
   MAX_AE00_RESPONSES,
   MAX_STORED_QUERY_ATTEMPTS,
@@ -48,6 +50,8 @@ import {
   TRIGGER_GAP_MS,
   TRIGGER_REPEATS,
   TRIGGER_WEIGHT_FALLBACK_KG,
+  WEIGHT_CERTAIN_MAX_KG,
+  WEIGHT_CERTAIN_MIN_KG,
 } from './constants.js';
 import { buildA2Frame, buildConfig, buildMeasurementTrigger, buildTimeSync } from './frames.js';
 import { qnMatches, warnOnOneByoneShape } from './matching.js';
@@ -92,6 +96,19 @@ export class QnScaleAdapter
    * Updated dynamically when a 0x12 scale-info frame arrives.
    */
   private weightScaleFactor = 100;
+
+  /**
+   * Whether a 0x12 frame named `weightScaleFactor` this session. Without it the
+   * factor is the default, a guess, and a 0x12 lost to the BlueZ race (which
+   * `runFallbackHandshake` exists for) is exactly when that happens (C-06).
+   */
+  private scaleFactorKnown = false;
+
+  /** Every configured user's weight hints (configure(), C-06). */
+  private userWeights: readonly UserWeightHint[] = [];
+
+  /** One "divisor in doubt, reading dropped" warning per session (C-06). */
+  private divisorDoubtWarned = false;
 
   /** Stored connection context for notification-driven state machine writes. */
   private ctx: ConnectionContext | null = null;
@@ -249,6 +266,7 @@ export class QnScaleAdapter
     this.a4PreludeEnabled = opts.qnA4Prelude === true;
     this.timeSyncLong = opts.qnTimeSyncLong === true;
     this.configLong = opts.qnConfigLong === true;
+    this.userWeights = opts.userWeights ?? [];
   }
 
   /** 0x13 config unit bit: 0x01 kg, 0x02 lb, 0x08 stone (QN protocol). */
@@ -329,6 +347,8 @@ export class QnScaleAdapter
     this.sessionGeneration += 1;
     this.seenProtocolType = this.forcedProtocolType ?? 0x00;
     this.weightScaleFactor = 100;
+    this.scaleFactorKnown = false;
+    this.divisorDoubtWarned = false;
     this.hasAe00 = false;
     this.ae02Subscribe = null;
     this.ae00ChallengeSeen = false;
@@ -634,6 +654,7 @@ export class QnScaleAdapter
         this.seenProtocolType = this.forcedProtocolType ?? data[2];
         this.weightScaleFactor = data[10] === 1 ? 100 : 10;
       }
+      this.scaleFactorKnown = true;
       const dialect = this.isExtendedLongFrame
         ? 'extended'
         : this.isLongFrameVariant
@@ -835,18 +856,8 @@ export class QnScaleAdapter
 
     if (!stable) return null;
 
-    let weight = rawWeight / this.weightScaleFactor;
-
-    // Heuristic fallback (from QNHandler): if weight looks unreasonable, try alternate factor
-    if (weight <= 5 || weight >= 250) {
-      const altFactor = this.weightScaleFactor === 100 ? 10 : 100;
-      const altWeight = rawWeight / altFactor;
-      if (altWeight > 5 && altWeight < 250) {
-        weight = altWeight;
-      }
-    }
-
-    if (weight <= 0 || !Number.isFinite(weight)) return null;
+    const weight = this.resolveWeight(rawWeight);
+    if (weight === null) return null;
 
     // R1 (primary BIA resistance) and R2 (secondary)
     const impedance = r1 > 0 ? r1 : r2;
@@ -862,6 +873,67 @@ export class QnScaleAdapter
     }
 
     return { weight, impedance };
+  }
+
+  /**
+   * Kilograms for a live 0x10 raw weight, or null to drop the frame (C-06).
+   *
+   * The divisor (100 or 10) comes from the 0x12 scale-info frame. It is taken
+   * as is when that frame arrived this session and the weight it gives is in
+   * the WEIGHT_CERTAIN band. Otherwise the divisor is in doubt: no 0x12 (lost
+   * to the BlueZ race, so the default 100 is a guess), or an out-of-band
+   * weight. Both readings of the raw value are then candidates:
+   *
+   * - one that cannot be a body (0 or below, WEIGHT_CERTAIN_MAX_KG or above) is
+   *   ruled out, and if only one is left it is the weight. This is the ES-26M
+   *   case, whose 0x12 implies /10 and whose captured frames read 978.5 kg so;
+   * - if both are left, the configured users decide: the one candidate inside
+   *   some user's `weight_range` or near their `last_known_weight` wins;
+   * - if both fit or neither does, the frame is dropped with a warning.
+   *
+   * The old rule tried the other divisor whenever the weight left the band and
+   * otherwise trusted the default, so a /10 scale whose 0x12 was lost exported
+   * 83.2 kg as 8.32 kg, and a 4 kg child or parcel on a /100 scale as 40 kg.
+   * The owner's decision is to drop rather than guess.
+   */
+  private resolveWeight(rawWeight: number): number | null {
+    const primary = rawWeight / this.weightScaleFactor;
+    if (
+      this.scaleFactorKnown &&
+      primary > WEIGHT_CERTAIN_MIN_KG &&
+      primary < WEIGHT_CERTAIN_MAX_KG
+    ) {
+      return primary;
+    }
+
+    const candidates = [rawWeight / 100, rawWeight / 10].filter(
+      (w) => Number.isFinite(w) && w > 0 && w < WEIGHT_CERTAIN_MAX_KG,
+    );
+    if (candidates.length <= 1) return candidates[0] ?? null;
+
+    const fitsSomeone = (w: number): boolean =>
+      this.userWeights.some(
+        (u) =>
+          (w >= u.weight_range.min && w <= u.weight_range.max) ||
+          (u.last_known_weight !== null &&
+            Math.abs(w - u.last_known_weight) <= u.last_known_weight * LAST_KNOWN_WEIGHT_TOLERANCE),
+      );
+    const fitting = candidates.filter(fitsSomeone);
+    if (fitting.length === 1) return fitting[0];
+
+    if (!this.divisorDoubtWarned) {
+      this.divisorDoubtWarned = true;
+      const why = this.scaleFactorKnown
+        ? `the divisor its scale-info frame (0x12) named gives ${primary} kg`
+        : 'its scale-info frame (0x12), which names the divisor, never arrived';
+      bleLog.warn(
+        `QN: dropping a weight that reads ${candidates[0]} kg or ${candidates[1]} kg: ${why}, ` +
+          `and ${fitting.length === 0 ? 'neither fits' : 'both fit'} a configured user's ` +
+          'weight_range or last_known_weight. Check weight_range in config.yaml; if this ' +
+          'repeats with the scale-info frame missing, please report the log.',
+      );
+    }
+    return null;
   }
 
   /**

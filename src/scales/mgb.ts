@@ -3,6 +3,7 @@ import type {
   ConnectionContext,
   ScaleAdapterCore,
   GattWiring,
+  HoldForComposition,
   ScaleReading,
   UserProfile,
   BodyComposition,
@@ -12,6 +13,7 @@ import {
   buildPayload,
   type ScaleBodyComp,
   ReadingComposition,
+  WEIGHT_ONLY_HOLD_MS,
 } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
@@ -29,7 +31,7 @@ import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
  *
  * Values are cached across frames until a complete reading is available.
  */
-export class MgbAdapter implements ScaleAdapterCore, GattWiring {
+export class MgbAdapter implements ScaleAdapterCore, GattWiring, HoldForComposition {
   readonly name = 'MGB (Swan/Icomon/YG)';
   readonly match: MatchDescriptor = {
     priority: 30,
@@ -143,8 +145,25 @@ export class MgbAdapter implements ScaleAdapterCore, GattWiring {
     this.cachedWater = 0;
   }
 
+  /**
+   * The weight completes the reading; a body fat value makes it final (ADR
+   * D028, review D-07).
+   *
+   * Requiring the fat here meant a weigh-in the scale could not analyse (socks,
+   * a child, fat 0 in Frame1) never produced a reading: the session ran into
+   * its timeout and the weight was lost. Now it holds the link for
+   * `WEIGHT_ONLY_HOLD_MS`, resolves at once if a frame with fat arrives, and
+   * otherwise completes with the weight alone.
+   */
   isComplete(reading: ScaleReading): boolean {
-    return reading.weight > 0 && this.cachedFat > 0;
+    return reading.weight > 0;
+  }
+
+  readonly completionHoldMs = WEIGHT_ONLY_HOLD_MS;
+
+  isFinal(reading: ScaleReading): boolean {
+    const fat = this.compByReading.of(reading, this.snapshot()).fat;
+    return fat != null && fat > 0;
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {

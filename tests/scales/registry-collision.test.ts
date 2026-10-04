@@ -242,6 +242,21 @@ const POST_DISCOVERY: PostDiscoveryCase[] = [
     gatt: { serviceUuids: WBE28_GATT_SERVICES, characteristicUuids: WBE28_CHARS },
     expected: 'Renpho ES-WBE28',
   },
+  // node-ble cannot see advertised service UUIDs, so the pre-connect record
+  // carries only the "renpho" name, which QN Scale (250) claims ahead of the
+  // ES-WBE28 (240). It used to stay there after discovery too (review D-04);
+  // both matchers now split on the characteristics: QN needs fff1/ffe1 plus
+  // fff2/ffe3, and the ES-WBE28 has the SIG consent pair and neither write.
+  {
+    label: 'Renpho ES-WBE28 on node-ble (advertised services unknown)',
+    advertised: { localName: 'Renpho-Scale', serviceUuids: [] },
+    gatt: {
+      serviceUuids: WBE28_GATT_SERVICES,
+      characteristicUuids: WBE28_CHARS,
+      advertisedServicesKnown: false,
+    },
+    expected: 'Renpho ES-WBE28',
+  },
   // Already pinned elsewhere, kept here so the rule cannot regress them:
   // #177 / #251 the char-aware demotion of Inlife, #278 the SWAN-branded Hutbit
   // on node-ble, and a nameless Robi S9 refined from MGB by its FFB3 char.
@@ -276,38 +291,8 @@ const POST_DISCOVERY: PostDiscoveryCase[] = [
   },
 ];
 
-/**
- * Post-discovery outcomes that are known to be wrong and cannot be fixed in the
- * resolver. Pinned so a change in either direction surfaces.
- *
- * node-ble cannot see advertised service UUIDs, so the pre-connect record of an
- * ES-WBE28 carries only the "renpho" name, which QN Scale (250) claims ahead of
- * the ES-WBE28 (240). Only a characteristic-based split between the two
- * matchers (QN needs fff1/ffe1 + fff2/ffe3, the ES-WBE28 has neither write)
- * can route it.
- */
-const POST_DISCOVERY_KNOWN_SHADOWS: PostDiscoveryCase[] = [
-  {
-    label: 'Renpho ES-WBE28 on node-ble (advertised services unknown)',
-    advertised: { localName: 'Renpho-Scale', serviceUuids: [] },
-    gatt: {
-      serviceUuids: WBE28_GATT_SERVICES,
-      characteristicUuids: WBE28_CHARS,
-      advertisedServicesKnown: false,
-    },
-    expected: 'QN Scale',
-  },
-];
-
 describe('post-discovery collision guard', () => {
   it.each(POST_DISCOVERY)('$label resolves to $expected', ({ advertised, gatt, expected }) => {
     expect(resolveAfterDiscovery(advertised, gatt, adapters)?.name).toBe(expected);
   });
-
-  it.each(POST_DISCOVERY_KNOWN_SHADOWS)(
-    'known shadow: $label still resolves to $expected',
-    ({ advertised, gatt, expected }) => {
-      expect(resolveAfterDiscovery(advertised, gatt, adapters)?.name).toBe(expected);
-    },
-  );
 });

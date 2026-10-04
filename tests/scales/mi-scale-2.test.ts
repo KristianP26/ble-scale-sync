@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { MiScale2Adapter } from '../../src/scales/mi-scale-2.js';
+import { XiaomiS400Adapter } from '../../src/scales/xiaomi-s400.js';
+import { buildPayload } from '../../src/scales/body-comp-helpers.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -296,5 +298,39 @@ describe('MiScale2Adapter', () => {
       assertPayloadRanges(malePayload);
       assertPayloadRanges(femalePayload);
     });
+  });
+});
+
+// D-05 / ADR D028: a weigh-in in socks has no impedance, and the broadcast
+// path still exports it once IMPEDANCE_GRACE_MS runs out. The Xiaomi equations
+// with impedance 0 are neither a measurement nor the estimate: the impedance
+// term in the lean-mass coefficient simply drops out. Impedance 0 must land on
+// the BMI estimate every other adapter uses, which is what the S400 already did.
+describe('Mi Scale 2 without impedance (D-05, D028)', () => {
+  const female = defaultProfile({ gender: 'female', height: 165, age: 40 });
+
+  it('falls back to the BMI estimate instead of the Xiaomi formula', () => {
+    const payload = makeAdapter().computeMetrics({ weight: 60, impedance: 0 }, female);
+    const estimate = buildPayload(60, 0, {}, female);
+    expect(payload).toEqual(estimate);
+    // The Xiaomi formula with impedance 0 gave 25.55 % fat, 2.64 kg bone and a
+    // visceral rating of 1 for this body.
+    expect(payload.bodyFatPercent).toBeCloseTo(30.25, 1);
+    expect(payload.visceralFat).toBeGreaterThan(1);
+  });
+
+  it('agrees with the S400 on the same weight-only reading', () => {
+    const reading = { weight: 60, impedance: 0 };
+    expect(makeAdapter().computeMetrics(reading, female)).toEqual(
+      new XiaomiS400Adapter().computeMetrics({ ...reading }, female),
+    );
+  });
+
+  it('keeps the Xiaomi formula when an impedance was measured', () => {
+    const payload = makeAdapter().computeMetrics({ weight: 60, impedance: 500 }, female);
+    expect(payload.bodyFatPercent).not.toBeCloseTo(
+      buildPayload(60, 500, {}, female).bodyFatPercent,
+      1,
+    );
   });
 });

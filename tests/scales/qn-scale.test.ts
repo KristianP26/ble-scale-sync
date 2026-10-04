@@ -324,21 +324,67 @@ describe('QnScaleAdapter', () => {
       expect(reading!.weight).toBe(80);
     });
 
-    it('applies weight heuristic when weight <= 5 (factor=100, tries /10)', () => {
-      const adapter = makeAdapter();
-      // With default scaleFactor=100, rawWeight=300 → 300/100=3.00 → <=5, try /10 → 30.00 kg
-      const buf = Buffer.alloc(10);
-      buf[0] = 0x10;
-      buf[1] = 0x0a;
-      buf[2] = 0x01;
-      buf.writeUInt16BE(300, 3);
-      buf[5] = 1;
-      buf.writeUInt16BE(500, 6);
-      buf.writeUInt16BE(500, 8);
+    // Review C-06, owner decision 2026-10-04: when the divisor is in doubt, pick
+    // the reading that fits a configured user, otherwise drop the frame. The
+    // frame is the classic 10-byte stable 0x10 shape every test in this block
+    // uses (openScale layout; no classic capture exists): the tests pin the
+    // divisor choice over its raw weight, not the layout.
+    describe('weight divisor in doubt (C-06)', () => {
+      function classicStable(raw: number): Buffer {
+        const buf = Buffer.alloc(10);
+        buf[0] = 0x10;
+        buf[1] = 0x0a;
+        buf[2] = 0x01;
+        buf.writeUInt16BE(raw, 3);
+        buf[5] = 1;
+        buf.writeUInt16BE(500, 6);
+        buf.writeUInt16BE(500, 8);
+        return buf;
+      }
+      const user = (min: number, max: number, last: number | null = null) => ({
+        weight_range: { min, max },
+        last_known_weight: last,
+      });
 
-      const reading = adapter.parseNotification(buf);
-      expect(reading).not.toBeNull();
-      expect(reading!.weight).toBe(30);
+      it('reads a lost-0x12 weight with the divisor that fits the user (83.2, not 8.32 kg)', () => {
+        const adapter = makeAdapter();
+        adapter.configure({ userWeights: [user(70, 90)] });
+        expect(adapter.parseNotification(classicStable(832))?.weight).toBeCloseTo(83.2);
+      });
+
+      it('lets last_known_weight decide when no weight_range fits', () => {
+        const adapter = makeAdapter();
+        adapter.configure({ userWeights: [user(50, 60, 84)] });
+        expect(adapter.parseNotification(classicStable(832))?.weight).toBeCloseTo(83.2);
+      });
+
+      it('drops 3.00 kg / 30.0 kg when it fits no user, instead of exporting 30 kg', () => {
+        const adapter = makeAdapter();
+        adapter.configure({ userWeights: [user(60, 90)] });
+        expect(adapter.parseNotification(classicStable(300))).toBeNull();
+      });
+
+      it('reads 3.00 kg for a user whose range is that light', () => {
+        const adapter = makeAdapter();
+        adapter.configure({ userWeights: [user(2, 10)] });
+        expect(adapter.parseNotification(classicStable(300))?.weight).toBe(3);
+      });
+
+      it('drops a weight both readings of which fit a user', () => {
+        const adapter = makeAdapter();
+        adapter.configure({ userWeights: [user(2, 10), user(20, 40)] });
+        const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+        try {
+          expect(adapter.parseNotification(classicStable(300))).toBeNull();
+          expect(warn.mock.calls.map((c) => String(c[0])).join('\n')).toContain('both fit');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it('drops it with no user configured at all', () => {
+        expect(makeAdapter().parseNotification(classicStable(832))).toBeNull();
+      });
     });
 
     it('applies weight heuristic when factor=10 gives >= 250 (tries /100)', () => {
@@ -2658,6 +2704,7 @@ describe('QN per-session reset ordering (#406)', () => {
       'a4PreludeEnabled',
       'configLong',
       'timeSyncLong',
+      'userWeights',
       // Session-boundary values: set by onConnected / onSessionEnd, bumped
       // rather than reset, re-stamped with the current time, or replaced by a
       // fresh promise that cannot equal the constructor's.

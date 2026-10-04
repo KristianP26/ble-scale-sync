@@ -6,6 +6,7 @@ import {
   defaultProfile,
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
+import { WEIGHT_ONLY_HOLD_MS } from '../../src/scales/body-comp-helpers.js';
 
 function makeAdapter() {
   return new RenphoEs26bbAdapter();
@@ -226,8 +227,23 @@ describe('RenphoEs26bbAdapter', () => {
       expect(makeAdapter().isComplete({ weight: 10, impedance: 500 })).toBe(false);
     });
 
-    it('returns false when impedance is 0', () => {
-      expect(makeAdapter().isComplete({ weight: 80, impedance: 0 })).toBe(false);
+    it('completes a final weight without impedance after a short hold (D-07, D028)', () => {
+      // The final 0x14 frame of a weigh-in the scale could not analyse (socks,
+      // a child) carries impedance 0. It used to be refused for good, so the
+      // session ended in "disconnected before reading completed" and the
+      // weight was lost.
+      const adapter = makeAdapter();
+      const reading = adapter.parseNotification(makeLiveFrame(8000, 0))!;
+      expect(adapter.isComplete(reading)).toBe(true);
+      expect(adapter.isFinal(reading)).toBe(false);
+      expect(adapter.completionHoldMs).toBe(WEIGHT_ONLY_HOLD_MS);
+    });
+
+    it('resolves at once on a final frame with impedance', () => {
+      const adapter = makeAdapter();
+      const reading = adapter.parseNotification(makeLiveFrame(8000, 500))!;
+      expect(adapter.isComplete(reading)).toBe(true);
+      expect(adapter.isFinal(reading)).toBe(true);
     });
   });
 

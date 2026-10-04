@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { SanitasSbf72Adapter } from '../../src/scales/sanitas-sbf72.js';
+import { uuid16 } from '../../src/scales/body-comp-helpers.js';
+import { isHistoricalReading } from '../../src/interfaces/reading-time.js';
+import type { MultiCharNotify } from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -87,9 +90,16 @@ function makeBcsFrame(opts: {
 
 describe('SanitasSbf72Adapter', () => {
   describe('matches()', () => {
-    it.each(['sbf72', 'sbf73', 'bf915'])('matches "%s" substring', (name) => {
+    it.each(['sbf72', 'sbf73'])('matches "%s" substring', (name) => {
       const adapter = makeAdapter();
       expect(adapter.matches(mockPeripheral(name))).toBe(true);
+    });
+
+    // Review C-07: a BF915 needs the bond, the per-device consent code and the
+    // user slot of the Beurer SIG adapter (#335, #417). This adapter has none of
+    // them, so it must not claim the name.
+    it('does not claim a Beurer BF915', () => {
+      expect(makeAdapter().matches(mockPeripheral('BF915'))).toBe(false);
     });
 
     it('matches name containing known substring', () => {
@@ -100,7 +110,7 @@ describe('SanitasSbf72Adapter', () => {
     it('matches case-insensitive', () => {
       const adapter = makeAdapter();
       expect(adapter.matches(mockPeripheral('SBF72'))).toBe(true);
-      expect(adapter.matches(mockPeripheral('BF915'))).toBe(true);
+      expect(adapter.matches(mockPeripheral('sbf73'))).toBe(true);
     });
 
     it('does not match unrelated name', () => {
@@ -214,5 +224,50 @@ describe('SanitasSbf72Adapter session boundary (#394)', () => {
     a.onSessionStart();
     const payload = a.computeMetrics({ weight: 80, impedance: 0 }, defaultProfile());
     expect(payload.bodyFatPercent).not.toBe(22);
+  });
+});
+
+// Review C-02, C-05: openScale's handler for this scale subscribes 0x2A9D too,
+// and the weight is mandatory only there. Frames from the #168 HCI snoop of a
+// SIG scale: 0x2A9D 79.96 kg stamped 2026-05-12 18:53:54 for user 1, 0x2A9C
+// with fat 19.4 % and 452 ohm and no weight field. No SBF72 capture exists.
+describe('SanitasSbf72Adapter: 0x2A9D and the SIG time stamp', () => {
+  const WSS = Buffer.from('0e783eea07050c12353601ee002607', 'hex');
+  const BCS = Buffer.from('9803c200df1a9701cc2fca21a811', 'hex');
+  const CHR_WSS = uuid16(0x2a9d);
+  const CHR_BCS = uuid16(0x2a9c);
+
+  function charParser(a: SanitasSbf72Adapter) {
+    const fn = (a as Partial<MultiCharNotify>).parseCharNotification;
+    expect(fn).toBeTypeOf('function');
+    return fn!.bind(a);
+  }
+
+  it('subscribes 0x2A9D as an optional binding next to the required 0x2A9C', () => {
+    const notify = (makeAdapter().characteristics ?? []).filter((b) => b.type === 'notify');
+    expect(notify.find((b) => b.uuid === CHR_WSS)?.optional).toBe(true);
+    expect(notify.find((b) => b.uuid === CHR_BCS)?.optional).toBeFalsy();
+  });
+
+  it('completes a weigh-in whose weight is only in 0x2A9D', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 4, 12, 18, 54, 0));
+    try {
+      const a = makeAdapter();
+      const parse = charParser(a);
+      parse(CHR_WSS, WSS);
+      const reading = parse(CHR_BCS, BCS);
+      expect(reading!.weight).toBeCloseTo(79.96, 2);
+      expect(a.isComplete(reading!)).toBe(true);
+      expect(a.computeMetrics(reading!, defaultProfile()).bodyFatPercent).toBeCloseTo(19.4, 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the SIG time stamp, so a stored record is not exported as today', () => {
+    const reading = charParser(makeAdapter())(CHR_WSS, WSS);
+    expect(reading!.timestamp).toEqual(new Date(2026, 4, 12, 18, 53, 54));
+    expect(isHistoricalReading(reading!)).toBe(true);
   });
 });

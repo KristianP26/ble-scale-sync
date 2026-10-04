@@ -3,11 +3,17 @@ import type {
   ConnectionContext,
   ScaleAdapterCore,
   GattWiring,
+  HoldForComposition,
   ScaleReading,
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, biaFatIfPlausible } from './body-comp-helpers.js';
+import {
+  uuid16,
+  buildPayload,
+  biaFatIfPlausible,
+  WEIGHT_ONLY_HOLD_MS,
+} from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 import { bleLog } from '../ble/types.js';
 
@@ -45,7 +51,7 @@ function isChecksumValid(data: Buffer): boolean {
  *   - Last byte = sum(prev) & 0xFF
  *   - Offline frames MUST be acked (55 AA 95 00 01 01 96), otherwise scale resends them on every reconnect.
  */
-export class RenphoEs26bbAdapter implements ScaleAdapterCore, GattWiring {
+export class RenphoEs26bbAdapter implements ScaleAdapterCore, GattWiring, HoldForComposition {
   readonly name = 'Renpho ES-26BB';
   readonly match: MatchDescriptor = { priority: 230, names: { exact: ['es-26bb-b'] } };
   readonly charNotifyUuid = CHR_RESULTS;
@@ -129,8 +135,24 @@ export class RenphoEs26bbAdapter implements ScaleAdapterCore, GattWiring {
     this.ctx = null;
   }
 
+  /**
+   * A final weight completes the reading; an impedance makes it final (ADR
+   * D028, review D-07).
+   *
+   * Requiring the impedance here meant the final 0x14 frame of a weigh-in the
+   * scale could not analyse (socks, a child), which carries impedance 0, never
+   * produced a reading: the session ended without one and the weight was lost.
+   * Now it holds the link for `WEIGHT_ONLY_HOLD_MS`, resolves at once if a
+   * final frame with impedance arrives, and otherwise completes weight-only.
+   */
   isComplete(reading: ScaleReading): boolean {
-    return reading.weight > 10 && reading.impedance > 0;
+    return reading.weight > 10;
+  }
+
+  readonly completionHoldMs = WEIGHT_ONLY_HOLD_MS;
+
+  isFinal(reading: ScaleReading): boolean {
+    return reading.impedance > 0;
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {

@@ -8,7 +8,14 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { buildPayload, estimateBodyFat, uuid16, ReadingComposition } from './body-comp-helpers.js';
+import {
+  biaFatIfPlausible,
+  buildPayload,
+  compositionRejection,
+  estimateBodyFat,
+  uuid16,
+  ReadingComposition,
+} from './body-comp-helpers.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
 // Yunmai GATT service / characteristic UUIDs
@@ -212,13 +219,23 @@ export class YunmaiScaleAdapter
 
     const embeddedFat = this.comp.of(reading, this.embeddedFatPercent);
 
+    // The first usable fat value wins, and every other field below is derived
+    // from THAT one (ADR D028, review D-08). `ym.fat()` returns 0 for a result
+    // outside 5-75 %, which a real impedance reaches at a BMI around 50 and
+    // above; water, muscle, bone and visceral fat used to be derived from that
+    // 0 and exported next to a fat value from somewhere else (60 % fat with a
+    // visceral rating of 1). On 0 the fat is what the processor's rule gives:
+    // BIA from the impedance when there is one, the BMI estimate otherwise.
+    const usable = (f: number | null | undefined): f is number =>
+      f != null && compositionRejection({ fat: f }) === null;
     let fat: number;
-    if (embeddedFat != null && embeddedFat > 0) {
+    if (usable(embeddedFat)) {
       fat = embeddedFat;
-    } else if (impedance > 0) {
-      fat = ym.fat(profile.age, weight, impedance);
     } else {
-      fat = estimateBodyFat(bmi, profile);
+      const yunmaiFat = impedance > 0 ? ym.fat(profile.age, weight, impedance) : 0;
+      fat = usable(yunmaiFat)
+        ? yunmaiFat
+        : (biaFatIfPlausible(weight, impedance, profile) ?? estimateBodyFat(bmi, profile));
     }
 
     const musclePct = ym.muscle(fat);

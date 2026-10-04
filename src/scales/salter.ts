@@ -11,6 +11,7 @@ import type {
 } from '../interfaces/scale-adapter.js';
 import { uuid16, buildPayload } from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
+import { HISTORY_WINDOW_MS } from '../interfaces/reading-time.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
 // ─── Salter smart scale (0xFFCC "Healthcare ELectronic" command protocol) ────
@@ -82,8 +83,13 @@ const FUTURE_TOLERANCE_SEC = 60;
  * sweep restarts every few seconds, but a continuous-mode run reconnects on its
  * own cadence, and someone who steps off before the host connects should still
  * get their reading. Anything older than this is buffer the scale never forgets.
+ *
+ * It is the same five minutes as HISTORY_WINDOW_MS, and must not exceed it: a
+ * record this adapter accepts is dated (ADR D027), and one dated older than the
+ * window would become history, which this adapter cannot deliver (see
+ * `parseNotification`).
  */
-const MAX_RECORD_AGE_SEC = 300;
+const MAX_RECORD_AGE_SEC = HISTORY_WINDOW_MS / 1000;
 
 /**
  * Plausibility ceiling on the decoded weight, matching `koogeek-s1.ts`.
@@ -519,14 +525,33 @@ export class SalterAdapter
       `Salter: ${weight.toFixed(1)} kg from ${where} ` +
         `(stamp ${timestamp}, ${Math.round(ageSec)}s old)`,
     );
-    // Deliberately UNDATED, even though every record here is a stored one.
-    // Setting `ScaleReading.timestamp` routes a reading into the cache-replay
-    // buffer in `waitForRawReading`, which returns early and only drains on
-    // disconnect. This adapter holds the link open and polls until the session
-    // times out, and a timeout rejects, so a dated reading would be buffered and
-    // never delivered. The age bound above is what replaces the platform's own
-    // replay protections, which undated readings do not get.
-    return { weight, impedance: 0 };
+    // Dated with the time it was measured (ADR D027). The stamp is on the
+    // SCALE's clock, which runs an hour or more off the host's, so it is carried
+    // over as an age: host now minus how far the record is behind the scale's
+    // own now. Rounded to the second the scale counts in, so a record read
+    // again after a process restart (the high-water mark above is in memory,
+    // review D-15) goes out with the time it was measured rather than a second
+    // receipt time.
+    //
+    // It never makes the reading history. Only records inside
+    // MAX_RECORD_AGE_SEC, which matches HISTORY_WINDOW_MS, get this far, and
+    // that matters here: a historical reading waits in the replay buffer for a
+    // disconnect, and this adapter holds the link and polls until the session
+    // times out, where the buffer is discarded. Older records stay dropped
+    // rather than replayed as history, because nothing is ever cleared from
+    // the store (see the class comment): every session would replay the same
+    // ones again.
+    return { weight, impedance: 0, timestamp: this.measuredAt(ageSec) };
+  }
+
+  /**
+   * Host time of a record `ageSec` behind the scale's clock, to the second.
+   * Rounded UP, so the result is never older than the age the gate accepted:
+   * rounding down could push a record just inside the bound past
+   * HISTORY_WINDOW_MS, into the replay buffer described above.
+   */
+  private measuredAt(ageSec: number): Date {
+    return new Date(Math.ceil(Date.now() / 1000 - Math.max(0, ageSec)) * 1000);
   }
 
   /** The scale's clock, advanced by the time since it was read. */

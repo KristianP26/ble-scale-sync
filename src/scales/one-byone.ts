@@ -3,12 +3,19 @@ import type {
   ConnectionContext,
   ScaleAdapterCore,
   GattWiring,
+  HoldForComposition,
   Unlockable,
   ScaleReading,
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, xorChecksum, biaFatIfPlausible } from './body-comp-helpers.js';
+import {
+  uuid16,
+  buildPayload,
+  xorChecksum,
+  biaFatIfPlausible,
+  WEIGHT_ONLY_HOLD_MS,
+} from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
 /**
@@ -157,7 +164,9 @@ export class OneByoneAdapter implements ScaleAdapterCore, GattWiring {
  *     0x01 = impedance: bytes [4-5] big-endian uint16.
  *     0x00 with byte[7]=0x80 = history (ignored).
  */
-export class OneByoneNewAdapter implements ScaleAdapterCore, GattWiring, Unlockable {
+export class OneByoneNewAdapter
+  implements ScaleAdapterCore, GattWiring, Unlockable, HoldForComposition
+{
   readonly name = '1byone Scale (new)';
   readonly match: MatchDescriptor = {
     priority: 60,
@@ -220,8 +229,24 @@ export class OneByoneNewAdapter implements ScaleAdapterCore, GattWiring, Unlocka
     return { weight: this.cachedWeight, impedance: this.cachedImpedance };
   }
 
+  /**
+   * The 0x80 final weight completes the reading; the 0x01 impedance makes it
+   * final (ADR D028, review D-07).
+   *
+   * Requiring the impedance here meant a weigh-in the scale could not analyse
+   * (socks, a child), whose final weight is never followed by a 0x01 frame,
+   * produced no reading at all: the session timed out and the weight was lost.
+   * Now it holds the link for `WEIGHT_ONLY_HOLD_MS`, resolves at once when the
+   * impedance arrives, and otherwise completes with the weight alone.
+   */
   isComplete(reading: ScaleReading): boolean {
-    return reading.weight > 0 && reading.impedance > 0;
+    return reading.weight > 0;
+  }
+
+  readonly completionHoldMs = WEIGHT_ONLY_HOLD_MS;
+
+  isFinal(reading: ScaleReading): boolean {
+    return reading.impedance > 0;
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {

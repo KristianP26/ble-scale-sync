@@ -319,6 +319,9 @@ async function main(): Promise<void> {
         qnA4Prelude,
         qnTimeSyncLong,
         qnConfigLong,
+        // The config entries themselves, not copies: the processor moves
+        // last_known_weight on them in memory after each live weigh-in.
+        userWeights: ctx.config.users,
       });
   };
   applyAdapterConfig(ctx.config.ble?.bind_key ?? undefined);

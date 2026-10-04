@@ -77,12 +77,23 @@ describe('StandardGattScaleAdapter keeps its own reported composition', () => {
     expect(payload.bodyFatPercent).not.toBeCloseTo(estimateBodyFat(BMI, PROFILE), 3);
   });
 
-  it('prefers BIA when the impedance is plausible', () => {
+  // Review C-09: the scale's own figure wins over our BIA estimate from the same
+  // impedance, as on every sibling SIG adapter; it used to be replaced by it.
+  it('keeps the scale-reported fat when the impedance is plausible too', () => {
     const adapter = new StandardGattScaleAdapter();
     adapter.onSessionStart?.();
     const reading = adapter.parseNotification(frame(225, 400, 5000))!;
     const payload = adapter.computeMetrics(reading, PROFILE);
 
-    expect(payload.bodyFatPercent).not.toBeCloseTo(22.5, 3);
+    expect(payload.bodyFatPercent).toBeCloseTo(22.5, 3);
+  });
+
+  it('uses BIA when the scale reported no fat and the impedance is plausible', () => {
+    const adapter = new StandardGattScaleAdapter();
+    adapter.onSessionStart?.();
+    const reading = adapter.parseNotification(frame(0, 0, 5000))!;
+    const payload = adapter.computeMetrics(reading, PROFILE);
+
+    expect(payload.bodyFatPercent).not.toBeCloseTo(estimateBodyFat(BMI, PROFILE), 3);
   });
 });

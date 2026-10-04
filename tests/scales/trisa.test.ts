@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { TrisaAdapter } from '../../src/scales/trisa.js';
+import { isHistoricalReading } from '../../src/interfaces/reading-time.js';
 import type { ConnectionContext } from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
@@ -27,6 +28,15 @@ const ADE_CHARS = new Set<string>([
   uuid16(0x8a82),
   uuid16(0x8a81),
 ]);
+
+/**
+ * Real measurement frame from the ADE BA 1600 capture in #138, on 0x8A24:
+ * flags 0x1f, weight 0x001f68 * 10^-2 = 80.40 kg, then `65 2a b2 1e`, which as
+ * u32 LE seconds since 2010-01-01 UTC is 2026-04-27 13:32:21, four days before
+ * the commit that added this fixture.
+ */
+const ADE_138_FRAME = Buffer.from('1f681f00fe652ab21e000000006a1500ff011900', 'hex');
+const ADE_138_MEASURED_AT = new Date('2026-04-27T13:32:21Z');
 
 function ctxWithChars(
   available: ReadonlySet<string>,
@@ -169,19 +179,17 @@ describe('TrisaAdapter', () => {
     });
 
     it('parses frame with timestamp + r1 + r2 (r2 >= 410)', () => {
+      // The ADE BA 1600 capture from #138, read through the Trisa branch, which
+      // walks the optional fields. flags 0x1f: timestamp, r1 and r2 present.
+      // The timestamp is 4 bytes at [5..8] (openScale's layout; the capture's
+      // value decodes to the day it was taken), so r1 is [9..12] = 0 and r2 is
+      // [13..16] = 0x00156a * 10^-1 = 548.2 -> 0.3 * (548.2 - 400) = 44.46.
+      // Before D-06 the parser skipped 7 bytes and read r2 from [16..19].
       const adapter = makeAdapter();
-      const flags = 0x07; // all: timestamp, r1, r2
-      const weightFloat = encodeFloat(8000, -2); // 80.0 kg
-      const timestamp = Buffer.alloc(7);
-      const r1Float = encodeFloat(5000, -1); // r1 = 500.0
-      const r2Float = encodeFloat(5000, -1); // r2 = 500.0 → >= 410 → 0.3*(500-400) = 30.0
-
-      const buf = Buffer.concat([Buffer.from([flags]), weightFloat, timestamp, r1Float, r2Float]);
-
-      const reading = adapter.parseNotification(buf);
+      const reading = adapter.parseNotification(ADE_138_FRAME);
       expect(reading).not.toBeNull();
-      expect(reading!.weight).toBeCloseTo(80, 1);
-      expect(reading!.impedance).toBeCloseTo(30, 1);
+      expect(reading!.weight).toBeCloseTo(80.4, 2);
+      expect(reading!.impedance).toBeCloseTo(44.46, 2);
     });
 
     it('parses frame with r2 < 410 → impedance = 3.0', () => {
@@ -494,5 +502,50 @@ describe('TrisaAdapter', () => {
       const payload = adapter.computeMetrics({ weight: 0, impedance: 0 }, profile);
       expect(payload.weight).toBe(0);
     });
+  });
+});
+
+// D-06 / ADR D027: bit 0 of the flags byte says the frame carries the time the
+// scale measured it. That stamp used to be skipped, so a stored record the
+// scale sent after connecting ended the session as today's weigh-in.
+describe('Trisa measurement time (D-06, D027)', () => {
+  it('carries the frame stamp as the reading time (ADE capture, #138)', async () => {
+    const adapter = makeAdapter();
+    const { ctx } = ctxWithChars(ADE_CHARS);
+    await adapter.onConnected!(ctx);
+
+    const reading = adapter.parseCharNotification!(uuid16(0x8a24), ADE_138_FRAME);
+    expect(reading!.timestamp).toEqual(ADE_138_MEASURED_AT);
+  });
+
+  it('carries it on the Trisa branch as well', () => {
+    const reading = makeAdapter().parseNotification(ADE_138_FRAME);
+    expect(reading!.timestamp).toEqual(ADE_138_MEASURED_AT);
+  });
+
+  it('makes a frame stamped days earlier a stored record, not a live weigh-in', () => {
+    const reading = makeAdapter().parseNotification(ADE_138_FRAME)!;
+    const fourDaysLater = ADE_138_MEASURED_AT.getTime() + 4 * 24 * 3600 * 1000;
+    expect(isHistoricalReading(reading, fourDaysLater)).toBe(true);
+    // The same frame received a minute after it was measured is live.
+    expect(isHistoricalReading(reading, ADE_138_MEASURED_AT.getTime() + 60_000)).toBe(false);
+  });
+
+  it('drops the stamp of a scale whose clock was never set', () => {
+    // The capture frame with its stamp zeroed: 2010-01-01, what the clock of a
+    // scale that was never synced counts up from. Passed on, it would make
+    // every live weigh-in look years old.
+    const frame = Buffer.from(ADE_138_FRAME);
+    frame.writeUInt32LE(0, 5);
+    const reading = makeAdapter().parseNotification(frame);
+    expect(reading!.weight).toBeCloseTo(80.4, 2);
+    expect(reading!.timestamp).toBeUndefined();
+  });
+
+  it('leaves a frame without the timestamp flag undated', () => {
+    const reading = makeAdapter().parseNotification(
+      Buffer.concat([Buffer.from([0x00]), encodeFloat(8000, -2)]),
+    );
+    expect(reading!.timestamp).toBeUndefined();
   });
 });

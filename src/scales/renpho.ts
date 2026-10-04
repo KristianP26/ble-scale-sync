@@ -16,8 +16,10 @@ import {
   biaFatIfPlausible,
   type ScaleBodyComp,
 } from './body-comp-helpers.js';
-import { bleLog } from '../ble/types.js';
+import { bleLog, normalizeUuid } from '../ble/types.js';
 import type { MatchDescriptor } from './match-descriptor.js';
+import { parseSigDateTime, trustedScaleTime } from './sig-wss.js';
+import { isHistoricalReading } from '../interfaces/reading-time.js';
 
 /**
  * Handler for RENPHO ES-WBE28 / "Renpho-Scale" (Elis 1 family).
@@ -51,7 +53,9 @@ import type { MatchDescriptor } from './match-descriptor.js';
  * only correct for the single profile the scale was registered with.
  *
  * Mutual exclusion with QnScaleAdapter: RenphoScaleAdapter claims "renpho"
- * devices that do NOT advertise the QN vendor services (0xFFE0 / 0xFFF0).
+ * devices whose characteristics show the SIG consent pair and no QN pair, and,
+ * before discovery, those that do NOT advertise the QN vendor services
+ * (0xFFE0 / 0xFFF0). See matches().
  */
 
 // Standard SIG characteristics.
@@ -125,14 +129,38 @@ export class RenphoScaleAdapter
 
   private cachedWeight = 0;
   private cachedImpedance = 0;
+  /** Time the current weigh-in's frames carry (D027), when the clock is set. */
+  private cachedTimestamp: Date | undefined;
+  /** The current weigh-in's reading when it is a stored record (see buildReading). */
+  private storedRecord: ScaleReading | null = null;
 
   /**
-   * Match "renpho" devices that do NOT advertise QN vendor service UUIDs
-   * (0xFFE0 / 0xFFF0). Those are handled by QnScaleAdapter.
+   * Match "renpho" devices that are not QN-protocol scales.
+   *
+   * Once the characteristics are known they decide (D-04). The ES-WBE28 hosts
+   * its vendor 0xFFE1/0xFFE2 pair in a 0xFFE0 GATT service, so on any path that
+   * merges discovered services into `serviceUuids` the service rule below read
+   * it as a QN scale and declined it, and QN took it on the shared name: always
+   * on node-ble, where the pre-connect record has no services and QN wins on
+   * priority. Its characteristics tell the two apart: the SIG consent pair
+   * (0x2A9F User Control Point and 0x2A9D) and no QN pair (notify 0xFFF1 or
+   * 0xFFE1 AND write 0xFFF2 or 0xFFE3), whose write half it lacks (#267
+   * capture). `qn-scale/matching.ts` applies the mirror rule.
+   *
+   * Before discovery, "renpho" devices that advertise a QN vendor service
+   * (0xFFE0 / 0xFFF0) are left to QnScaleAdapter, as before.
    */
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
     if (!name.includes('renpho')) return false;
+
+    const chars = (device.characteristicUuids || []).map((u) => normalizeUuid(u));
+    if (chars.length > 0) {
+      const has = (code: number) => chars.includes(uuid16(code));
+      const qnCanRun = (has(0xfff1) || has(0xffe1)) && (has(0xfff2) || has(0xffe3));
+      if (qnCanRun) return false;
+      if (has(0x2a9f) && has(0x2a9d)) return true;
+    }
 
     const uuids = (device.serviceUuids || []).map((u) => u.toLowerCase());
     const hasQn = uuids.some(
@@ -153,6 +181,8 @@ export class RenphoScaleAdapter
   onSessionStart(): void {
     this.cachedWeight = 0;
     this.cachedImpedance = 0;
+    this.cachedTimestamp = undefined;
+    this.storedRecord = null;
   }
 
   async onConnected(ctx: ConnectionContext): Promise<void> {
@@ -250,6 +280,14 @@ export class RenphoScaleAdapter
    * Decode a 0x2A9D Weight Measurement notification. Standard SIG layout with
    * RENPHO's 0.05 kg resolution deviation. data[0] is a FLAGS byte (bit0 = unit,
    * bit1 = timestamp, ...), NOT a fixed frame marker.
+   *
+   * A real weight opens a new weigh-in (D-11). Its SIG Date Time (bit 1, the
+   * captured live frame carries one) becomes the reading's time, so a record
+   * the scale stored while nobody was connected is told apart from today's by
+   * the runtime (D027) instead of being exported as today's. And the impedance
+   * kept from the previous weigh-in is dropped: it was held ("first impedance
+   * seen") across frames, so a stored record's impedance completed the hold of
+   * the next weight with a value measured on another day.
    */
   private parseWeightMeasurement(data: Buffer): void {
     if (data.length < 3) return;
@@ -258,7 +296,11 @@ export class RenphoScaleAdapter
     const raw = data.readUInt16LE(1);
     let weight = raw * (imperial ? LB_PER_UNIT : KG_PER_UNIT);
     if (imperial) weight *= LB_TO_KG;
-    if (weight > 0 && Number.isFinite(weight)) this.cachedWeight = weight;
+    if (!(weight > 0) || !Number.isFinite(weight)) return;
+    this.cachedWeight = weight;
+    this.cachedImpedance = 0;
+    this.storedRecord = null;
+    this.cachedTimestamp = flags & 0x02 ? trustedScaleTime(parseSigDateTime(data, 3)) : undefined;
   }
 
   /**
@@ -295,6 +337,10 @@ export class RenphoScaleAdapter
     for (const [flag, size, field] of plan) {
       if (flag !== null && !(flags & flag)) continue;
       if (off + size > n) break; // belongs to a later packet
+      if (flag === 0x0002 && !this.cachedTimestamp) {
+        // A weigh-in whose 0x2A9D carried no time can still be dated by this.
+        this.cachedTimestamp = trustedScaleTime(parseSigDateTime(data, off));
+      }
       if (field === 'impedance' && this.cachedImpedance <= 0) {
         this.cachedImpedance = data.readUInt16LE(off) * 0.1;
       } else if (field === 'weight' && this.cachedWeight <= 0) {
@@ -305,9 +351,27 @@ export class RenphoScaleAdapter
     }
   }
 
+  /**
+   * The current weigh-in. The frames' user ID is deliberately not passed on as
+   * `userIndex`: it is 170, the fixed index this adapter consents as, the same
+   * for every person, so it says nothing about whose weigh-in it is.
+   *
+   * A stored record is emitted once. The session buffers it as history the
+   * moment it is emitted, so a later frame of the same record (its impedance)
+   * updates that buffered reading in place instead of adding a second copy,
+   * which would be exported as a second weigh-in.
+   */
   private buildReading(): ScaleReading | null {
     if (this.cachedWeight <= 0) return null;
-    return { weight: this.cachedWeight, impedance: this.cachedImpedance };
+    const stored = this.storedRecord;
+    if (stored) {
+      stored.impedance = this.cachedImpedance;
+      return null;
+    }
+    const reading: ScaleReading = { weight: this.cachedWeight, impedance: this.cachedImpedance };
+    if (this.cachedTimestamp) reading.timestamp = this.cachedTimestamp;
+    if (isHistoricalReading(reading)) this.storedRecord = reading;
+    return reading;
   }
 
   isComplete(reading: ScaleReading): boolean {
