@@ -227,6 +227,13 @@ configuration:
   debug:
     name: Debug logging
     description: Enable verbose BLE debug output in the add-on logs
+  update_check:
+    name: Check for updates
+    description: >-
+      At most once a day, after a weigh-in, ask api.blescalesync.dev for the
+      latest version and say in the log when a newer one is out. Only the app
+      version, operating system and CPU architecture are sent. Turn off to send
+      nothing.
   custom_config:
     name: Use custom config.yaml
     description: >-

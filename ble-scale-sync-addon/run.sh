@@ -13,9 +13,20 @@ log() { echo "[ble-scale-sync] $*"; }
 
 # ── Read options ────────────────────────────────────────────────────────────
 
+# tests/addon-run-sh.test.ts runs these readers on their own.
+# >>> option readers
 opt() { jq -r ".$1 // empty" "$OPTIONS"; }
+# For options whose default is false: a missing key reads as false.
 opt_bool() { jq -r ".$1 // false" "$OPTIONS"; }
+# For options whose default is true. Neither helper above works for them:
+# jq's // treats false as missing, so ".x // true" turns an explicit false into
+# true, and opt_bool turns a missing key into false. Only an explicit false
+# switches one of these off, and the answer is always exactly true or false.
+opt_bool_default_true() {
+  jq -r --arg k "$1" 'if .[$k] == false then "false" else "true" end' "$OPTIONS"
+}
 opt_int() { jq -r ".$1 // $2" "$OPTIONS"; }
+# <<< option readers
 
 # Escape a string for safe YAML double-quoted output (backslash, quotes, CR, LF)
 yaml_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\r/\\r/g' | tr '\n' ' '; }
@@ -54,7 +65,7 @@ valid_weight_range() {
 # Read BLE_ADAPTER early (needed for adapter reset in both modes)
 # Normalize: trim whitespace, lowercase (app schema requires /^hci\d+$/)
 BLE_ADAPTER=$(opt ble_adapter | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-RESET_BLUETOOTH=$(opt_bool reset_bluetooth)
+RESET_BLUETOOTH=$(opt_bool_default_true reset_bluetooth)
 CUSTOM_CONFIG=$(opt_bool custom_config)
 
 # ── Custom config mode ──────────────────────────────────────────────────────
@@ -88,9 +99,14 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
   # preemptive_adapter_reset defaults to true, and the loop above cannot see a
   # false (jq's // treats false as missing), so it gets its own check. Only
   # false is worth a warning: true is what every install has.
-  if [ "$(jq -r '.preemptive_adapter_reset == false' "$OPTIONS")" = "true" ]; then
+  if [ "$(opt_bool_default_true preemptive_adapter_reset)" = "false" ]; then
     log "WARNING: custom_config is enabled, so the 'preemptive_adapter_reset' option is ignored."
     log "Set 'ble.preemptive_adapter_reset' in $CUSTOM_PATH instead."
+  fi
+  # Same for update_check, a top-level key in the file.
+  if [ "$(opt_bool_default_true update_check)" = "false" ]; then
+    log "WARNING: custom_config is enabled, so the 'update_check' option is ignored."
+    log "Set 'update_check: false' in $CUSTOM_PATH instead."
   fi
   # proxy_liveness_timeout_min is the one UI option that only means anything in
   # this mode: the liveness check runs only on the proxy transports (mqtt-proxy,
@@ -170,10 +186,8 @@ else
       ;;
   esac
   AUTO_CLEAR_STALE_BOND=$(opt_bool auto_clear_stale_bond)
-  # Defaults to true, so neither opt nor opt_bool works here: jq's // treats
-  # false as missing, which would turn an explicit false into the default and
-  # an absent key into false. Only an explicit false switches it off (#417).
-  PREEMPTIVE_ADAPTER_RESET=$(jq -r 'if .preemptive_adapter_reset == false then "false" else "true" end' "$OPTIONS")
+  # Defaults to true: only an explicit false switches it off (#417).
+  PREEMPTIVE_ADAPTER_RESET=$(opt_bool_default_true preemptive_adapter_reset)
   PROXY_LIVENESS_MIN=$(opt_int proxy_liveness_timeout_min 30)
   # Still written below, but the generated config always runs the built-in
   # Bluetooth transport, which has no liveness check. Say so instead of letting
@@ -210,13 +224,13 @@ else
   USER_WEIGHT_MIN=$(opt_int user_weight_min 40)
   USER_WEIGHT_MAX=$(opt_int user_weight_max 150)
 
-  MQTT_ENABLED=$(opt_bool mqtt_enabled)
-  MQTT_AUTO=$(opt_bool mqtt_auto)
+  MQTT_ENABLED=$(opt_bool_default_true mqtt_enabled)
+  MQTT_AUTO=$(opt_bool_default_true mqtt_auto)
   MQTT_BROKER_URL=$(opt mqtt_broker_url)
   MQTT_USERNAME=$(opt mqtt_username)
   MQTT_PASSWORD=$(opt mqtt_password)
   MQTT_TOPIC=$(opt mqtt_topic)
-  MQTT_HA_DISCOVERY=$(opt_bool mqtt_ha_discovery)
+  MQTT_HA_DISCOVERY=$(opt_bool_default_true mqtt_ha_discovery)
   MQTT_HA_DEVICE_NAME=$(opt mqtt_ha_device_name)
 
   GARMIN_ENABLED=$(opt_bool garmin_enabled)
@@ -233,11 +247,10 @@ else
   SCAN_COOLDOWN=$(opt_int scan_cooldown 30)
   # jq's // falls back only on null/false, so an explicit 0 survives.
   IDLE_RESCAN_DELAY=$(opt_int idle_rescan_delay 5)
-  RETRY_FAILED_EXPORTS=$(opt_bool retry_failed_exports)
-  # Same guard as garmin_weight_only: opt_bool echoes the raw option and this is
-  # interpolated unquoted, so anything that is not exactly "false" is true.
-  [ "$RETRY_FAILED_EXPORTS" = "false" ] || RETRY_FAILED_EXPORTS=true
+  # Always exactly true or false, so it is safe to interpolate unquoted.
+  RETRY_FAILED_EXPORTS=$(opt_bool_default_true retry_failed_exports)
   DEBUG=$(opt_bool debug)
+  UPDATE_CHECK=$(opt_bool_default_true update_check)
 
   # ── MQTT auto-detection from HA Mosquitto add-on ──────────────────────
 
@@ -247,7 +260,12 @@ else
       # apart from "no broker installed". Both used to collapse into the same
       # "auto-detection failed" line, which is how a missing `services:
       # mqtt:want` declaration (every call answered 403) went unnoticed.
-      MQTT_RESP=$(curl -s -w '\n%{http_code}' -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
+      # Bounded, because nothing else in this script is: a Supervisor API that
+      # accepts the connection and never answers would otherwise hold the
+      # add-on here, before the app (and its health heartbeat) ever starts. A
+      # timeout reports status 000, the "did not answer" case below.
+      MQTT_RESP=$(curl -s -w '\n%{http_code}' --connect-timeout 5 --max-time 10 \
+        -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
         http://supervisor/services/mqtt 2>/dev/null || true)
       MQTT_HTTP=$(printf '%s\n' "$MQTT_RESP" | tail -n 1)
       MQTT_INFO=$(printf '%s\n' "$MQTT_RESP" | sed '$d')
@@ -494,7 +512,7 @@ runtime:
   dry_run: false
   debug: $DEBUG
 
-update_check: true
+update_check: $UPDATE_CHECK
 YAML
 
   log "Config generated successfully"
@@ -647,8 +665,10 @@ else
     fi
   fi
   log "Resetting Bluetooth adapter (hci$ADAPTER_INDEX)..."
-  if btmgmt --index "$ADAPTER_INDEX" power off 2>/dev/null && \
-     btmgmt --index "$ADAPTER_INDEX" power on 2>/dev/null; then
+  # Bounded like the standalone image's entrypoint: a wedged mgmt socket must
+  # not hold the add-on here, before the app and its heartbeat start.
+  if timeout 5 btmgmt --index "$ADAPTER_INDEX" power off 2>/dev/null && \
+     timeout 5 btmgmt --index "$ADAPTER_INDEX" power on 2>/dev/null; then
     log "Bluetooth adapter reset OK"
   else
     log "Bluetooth adapter reset failed (will retry in-app)"

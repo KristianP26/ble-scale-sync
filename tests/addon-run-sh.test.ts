@@ -36,6 +36,14 @@ const MANIFEST = parse(lf(readFileSync('ble-scale-sync-addon/config.yaml', 'utf8
   options: Record<string, unknown>;
 };
 
+/**
+ * Parts of run.sh run here under dash when it is installed (the add-on's
+ * /bin/sh), else under sh.
+ */
+const SHELL = ['dash', 'sh'].find(
+  (bin) => spawnSync(bin, ['-c', 'exit 0'], { encoding: 'utf8' }).status === 0,
+);
+
 /** The Supervisor's own validator for this key (supervisor/apps/validate.py, RE_SERVICE). */
 const RE_SERVICE = /^(?<service>mqtt|mysql):(?<rights>provide|want|need)$/;
 
@@ -80,9 +88,116 @@ describe('add-on manifest: Supervisor services', () => {
     // Without the status code a 403 and "Mosquitto not installed" produced the
     // same log line, which is how the missing declaration went unnoticed.
     expect(RUN_SH).toMatch(
-      /curl -s -w '\\n%\{http_code\}'[^\n]*\n\s*http:\/\/supervisor\/services\/mqtt/,
+      /curl -s -w '\\n%\{http_code\}'(?:[^\n]*\\\n)*[^\n]*http:\/\/supervisor\/services\/mqtt/,
     );
     expect(RUN_SH).toMatch(/^\s*403\)/m);
+  });
+});
+
+/**
+ * Shell commands in run.sh, comments dropped and backslash continuations
+ * joined, so a command split over several lines is one string.
+ */
+function shellCommands(): string[] {
+  return RUN_SH.replace(/\\\n/g, ' ')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('#'));
+}
+
+describe('run.sh external calls are bounded', () => {
+  // Everything here runs before `exec node`, so before the app writes its
+  // health heartbeat: a call that never returns holds the add-on forever.
+  it('runs every btmgmt call under timeout', () => {
+    const calls = shellCommands()
+      .flatMap((cmd) => [...cmd.matchAll(/(\S+\s+\S+\s+)?btmgmt --index/g)])
+      .map((m) => m[0]);
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) expect(call, call).toMatch(/^timeout \d+ btmgmt/);
+  });
+
+  it('gives every curl call a time limit', () => {
+    const calls = shellCommands().filter((cmd) => /\bcurl\s/.test(cmd));
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) expect(call, call).toMatch(/--max-time \d+/);
+  });
+});
+
+const TRANSLATIONS = parse(
+  lf(readFileSync('ble-scale-sync-addon/translations/en.yaml', 'utf8')),
+) as { configuration: Record<string, unknown> };
+
+const JQ = spawnSync('jq', ['--version'], { encoding: 'utf8' }).status === 0;
+
+describe('add-on options that default to true', () => {
+  const defaultTrue = Object.entries(MANIFEST.options)
+    .filter(([, value]) => value === true)
+    .map(([key]) => key);
+
+  it('are read with opt_bool_default_true, never as opt_bool or opt', () => {
+    // opt_bool reads a missing key as false, so for these options a missing
+    // key turned a default of true into false.
+    expect(defaultTrue.length).toBeGreaterThan(0);
+    for (const key of defaultTrue) {
+      expect(RUN_SH, key).toMatch(new RegExp(`opt_bool_default_true ${key}\\)`));
+      expect(RUN_SH, key).not.toMatch(new RegExp(`\\$\\((opt|opt_bool) ${key}\\)`));
+    }
+  });
+
+  describe.skipIf(!SHELL || !JQ)('opt_bool_default_true', () => {
+    function read(options: unknown, key: string): string {
+      return withTempDir((dir) => {
+        const file = join(dir, 'options.json').replace(/\\/g, '/');
+        writeFileSync(file, JSON.stringify(options));
+        const m = /# >>> option readers\n([\s\S]*?)# <<< option readers/.exec(RUN_SH);
+        expect(m, 'option readers block not found in run.sh').not.toBeNull();
+        const res = spawnSync(
+          SHELL!,
+          ['-c', `OPTIONS='${file}'\n${m![1]}\nopt_bool_default_true ${key}`],
+          { encoding: 'utf8' },
+        );
+        expect(res.stderr).toBe('');
+        return res.stdout.trim();
+      });
+    }
+
+    it('keeps the default for a missing or null key', () => {
+      expect(read({}, 'mqtt_enabled')).toBe('true');
+      expect(read({ mqtt_enabled: null }, 'mqtt_enabled')).toBe('true');
+    });
+
+    it('switches off only on an explicit false', () => {
+      expect(read({ mqtt_enabled: false }, 'mqtt_enabled')).toBe('false');
+      expect(read({ mqtt_enabled: true }, 'mqtt_enabled')).toBe('true');
+    });
+
+    it('answers exactly true or false, since the value is written unquoted', () => {
+      expect(read({ mqtt_ha_discovery: 'no: [' }, 'mqtt_ha_discovery')).toBe('true');
+    });
+  });
+});
+
+describe('add-on option update_check', () => {
+  it('is an add-on option, on by default', () => {
+    expect(MANIFEST.options).toHaveProperty('update_check', true);
+    expect(TRANSLATIONS.configuration).toHaveProperty('update_check');
+  });
+
+  it('is written from the option rather than hardcoded', () => {
+    expect(RUN_SH).toMatch(/^update_check: \$UPDATE_CHECK$/m);
+    expect(RUN_SH).not.toMatch(/^update_check: true$/m);
+  });
+
+  it('is named as ignored in custom config mode when it is turned off', () => {
+    expect(customConfigBranch()).toMatch(/opt_bool_default_true update_check/);
+  });
+});
+
+describe('add-on translations', () => {
+  it('describe every option', () => {
+    for (const key of Object.keys(MANIFEST.options)) {
+      expect(TRANSLATIONS.configuration, key).toHaveProperty(key);
+    }
   });
 });
 
@@ -246,9 +361,6 @@ describe('generated config: user slug', () => {
  * dash when it is installed (the add-on's /bin/sh), else under sh, and every
  * verdict is compared with the schema's own.
  */
-const SHELL = ['dash', 'sh'].find(
-  (bin) => spawnSync(bin, ['-c', 'exit 0'], { encoding: 'utf8' }).status === 0,
-);
 const GNU_DATE =
   SHELL !== undefined &&
   spawnSync(SHELL, ['-c', 'date -u -d 2024-02-29 +%F'], { encoding: 'utf8' }).stdout.trim() ===

@@ -37,6 +37,10 @@ The add-on stores its runtime configuration at `/data/config.yaml` and preserves
 
 If you change the user slug (by renaming the user), the remembered weight does not carry over because the slug is the lookup key.
 
+## Update check
+
+**Check for updates** (`update_check`, on by default) asks `api.blescalesync.dev` for the latest version at most once a day, after a weigh-in, and writes a line to the add-on log when a newer version is out. Only the app version, operating system and CPU architecture are sent, in the `User-Agent` header; no readings, MAC addresses or user data. Turn it off to send nothing. In custom config mode set `update_check: false` in your `config.yaml` instead.
+
 ## Home Assistant Sensors
 
 With MQTT and HA auto-discovery enabled, these sensors appear automatically:

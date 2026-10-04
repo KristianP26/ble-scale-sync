@@ -82,6 +82,7 @@ options:
   retry_failed_exports: true
   reset_bluetooth: true
   debug: false
+  update_check: true
   custom_config: false
 schema:
   scale_mac: str?
@@ -125,4 +126,5 @@ schema:
   retry_failed_exports: bool?
   reset_bluetooth: bool
   debug: bool
+  update_check: bool?
   custom_config: bool

@@ -9,6 +9,12 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - dependencies
+    ignore:
+      # @types/node follows the oldest supported runtime (engines: node >=22),
+      # so tsc rejects an API that Node 22 does not have. Its major moves
+      # together with the engines floor, never on its own.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /

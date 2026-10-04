@@ -76,7 +76,7 @@
     "node-ble": "^1.13.0"
   },
   "devDependencies": {
-    "@types/node": "^26.6.3",
+    "@types/node": "^22.20.5",
     "eslint": "^10.8.0",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.9.6",
