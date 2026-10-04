@@ -68,3 +68,37 @@ export function diagnoseMacArg(args: readonly string[]): string | undefined {
   }
   return undefined;
 }
+
+export type ToolConfigArg =
+  { kind: 'ok'; config: string | undefined } | { kind: 'error'; message: string };
+
+/**
+ * The `--config`/`-c` path given to `scan` or `diagnose`, if any (G-05).
+ *
+ * Both tools used to ignore it and always read the default config.yaml. Other
+ * arguments are left alone: diagnose takes a MAC and `--native`, and scan has
+ * never refused anything, so this only picks the config path out. A
+ * `--config` without a path is an error rather than a silent fall back to the
+ * default file.
+ */
+export function toolConfigArg(args: readonly string[]): ToolConfigArg {
+  let config: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    let value: string | undefined;
+    if (arg === '--config' || arg === '-c') {
+      value = args[i + 1];
+      if (value === undefined || value.startsWith('-')) value = '';
+      else i++;
+    } else if (arg.startsWith('--config=')) {
+      value = arg.slice('--config='.length);
+    } else {
+      continue;
+    }
+    if (value === '') {
+      return { kind: 'error', message: `Option '${arg}' needs a path to config.yaml` };
+    }
+    config = value;
+  }
+  return { kind: 'ok', config };
+}

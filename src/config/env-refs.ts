@@ -51,6 +51,29 @@ export function loadEnvFile(path: string): void {
   }
 }
 
+/**
+ * Whether `process.env[name]` currently holds a value that {@link loadEnvFile}
+ * put there from a .env file, as opposed to one from the real environment
+ * (Docker `-e`, compose `environment:`, systemd `Environment=`).
+ *
+ * A key the loader set but something else has rewritten since counts as the
+ * real environment, the same rule loadEnvFile applies on a reload. On Windows
+ * process.env is case-insensitive, so a .env line `scale_mac=...` lands on
+ * SCALE_MAC there and is matched the same way.
+ */
+export function isFromEnvFile(name: string): boolean {
+  const current = process.env[name];
+  if (current === undefined) return false;
+  const fold = process.platform === 'win32';
+  for (const owned of ownedEnvKeys.values()) {
+    for (const [key, value] of owned) {
+      const sameKey = key === name || (fold && key.toUpperCase() === name.toUpperCase());
+      if (sameKey && value === current) return true;
+    }
+  }
+  return false;
+}
+
 // --- Env reference resolution ---
 
 const ENV_REF_REGEX = /\$(\$?)\{([^}]+)}/g;

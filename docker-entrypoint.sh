@@ -25,8 +25,9 @@ case "$CMD" in
     exec node dist/wizard/index.js
     ;;
   scan)
+    shift
     reset_bt_adapter
-    exec node dist/scan.js
+    exec node dist/scan.js "$@"
     ;;
   diagnose)
     shift

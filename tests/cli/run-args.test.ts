@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { diagnoseMacArg, parseRunArgs } from '../../src/cli-run-args.js';
+import { diagnoseMacArg, parseRunArgs, toolConfigArg } from '../../src/cli-run-args.js';
 
 /**
  * The run path used to parse argv leniently and ignore anything it did not
@@ -69,5 +69,39 @@ describe('diagnoseMacArg', () => {
   it('returns nothing without a positional argument', () => {
     expect(diagnoseMacArg([])).toBeUndefined();
     expect(diagnoseMacArg(['--native'])).toBeUndefined();
+  });
+});
+
+// G-05: scan and diagnose ignored --config and always read the default
+// config.yaml, so the documented `--config` path was never scanned with.
+describe('toolConfigArg', () => {
+  it('reads --config, -c and --config=', () => {
+    expect(toolConfigArg(['--config', '/data/config.yaml'])).toEqual({
+      kind: 'ok',
+      config: '/data/config.yaml',
+    });
+    expect(toolConfigArg(['-c', 'x.yaml'])).toEqual({ kind: 'ok', config: 'x.yaml' });
+    expect(toolConfigArg(['--config=x.yaml'])).toEqual({ kind: 'ok', config: 'x.yaml' });
+  });
+
+  it('finds it among the diagnose arguments', () => {
+    expect(toolConfigArg(['--native', 'AA:BB:CC:DD:EE:FF', '-c', 'x.yaml'])).toEqual({
+      kind: 'ok',
+      config: 'x.yaml',
+    });
+  });
+
+  it('is undefined without one', () => {
+    expect(toolConfigArg([])).toEqual({ kind: 'ok', config: undefined });
+    expect(toolConfigArg(['AA:BB:CC:DD:EE:FF', '--native'])).toEqual({
+      kind: 'ok',
+      config: undefined,
+    });
+  });
+
+  it('refuses --config with no path', () => {
+    expect(toolConfigArg(['--config']).kind).toBe('error');
+    expect(toolConfigArg(['--config', '--native']).kind).toBe('error');
+    expect(toolConfigArg(['--config=']).kind).toBe('error');
   });
 });

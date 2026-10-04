@@ -24,7 +24,7 @@ const COMMANDS: readonly string[] = [
 
 const OPTIONS: readonly string[] = [
   '  -c, --config <path>  Path to config.yaml (default: ./config.yaml).',
-  '                       Accepted by the run path, by validate and by setup.',
+  '                       Accepted by the run path, validate, setup, scan and diagnose.',
   '  -h, --help           Show this help message',
   '  -v, --version        Print the version and exit',
 ];
@@ -49,7 +49,7 @@ function printOptionsAndEnv(): void {
   console.log('Options:');
   for (const line of OPTIONS) console.log(line);
   console.log('');
-  console.log('Environment overrides (always applied, even with config.yaml):');
+  console.log('Environment overrides (from the real environment; ignored with a warning in .env):');
   for (const line of ENV_OVERRIDES) console.log(line);
 }
 

@@ -420,13 +420,34 @@ runtime:
 // --- loadBleConfig ---
 
 describe('loadBleConfig', () => {
+  // The YAML path applies the environment overrides now (G-05), so a value an
+  // earlier test left in process.env would leak into these.
+  const KEYS = ['SCALE_MAC', 'NOBLE_DRIVER', 'BLE_ADAPTER', 'BLE_HANDLER'] as const;
+  const saved: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const k of KEYS) {
+      saved[k] = process.env[k];
+      delete process.env[k];
+    }
+  });
+
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+    for (const k of KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
   });
 
+  /** config.yaml exists, no .env anywhere (the mocked read would serve it the YAML). */
+  const yamlOnly = (): void => {
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
+  };
+
   it('reads from YAML when config exists', () => {
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    yamlOnly();
     vi.spyOn(fs, 'readFileSync').mockReturnValue(`
 ble:
   scale_mac: "AA:BB:CC:DD:EE:FF"
@@ -438,28 +459,28 @@ ble:
     expect(config.nobleDriver).toBe('abandonware');
   });
 
+  // No path given in the legacy cases: an explicit --config that does not exist
+  // is an error now, like it is for the app.
   it('falls back to env vars when no YAML', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(false);
     vi.stubEnv('SCALE_MAC', '11:22:33:44:55:66');
     vi.stubEnv('NOBLE_DRIVER', 'stoprocent');
 
-    const config = loadBleConfig('/nonexistent/config.yaml');
+    const config = loadBleConfig();
     expect(config.scaleMac).toBe('11:22:33:44:55:66');
     expect(config.nobleDriver).toBe('stoprocent');
   });
 
   it('returns undefined for missing values', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(false);
-    delete process.env.SCALE_MAC;
-    delete process.env.NOBLE_DRIVER;
 
-    const config = loadBleConfig('/nonexistent/config.yaml');
+    const config = loadBleConfig();
     expect(config.scaleMac).toBeUndefined();
     expect(config.nobleDriver).toBeUndefined();
   });
 
   it('handles YAML without ble section', () => {
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    yamlOnly();
     vi.spyOn(fs, 'readFileSync').mockReturnValue(`
 version: 1
 scale:
@@ -469,13 +490,14 @@ scale:
     const config = loadBleConfig('/test/config.yaml');
     expect(config.scaleMac).toBeUndefined();
     expect(config.nobleDriver).toBeUndefined();
+    expect(config.bleHandler).toBe('auto');
   });
 
   it('validates BLE_ADAPTER env var in fallback path', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(false);
     vi.stubEnv('BLE_ADAPTER', ' HCI1 ');
 
-    const config = loadBleConfig('/nonexistent/config.yaml');
+    const config = loadBleConfig();
     expect(config.bleAdapter).toBe('hci1');
   });
 
@@ -483,22 +505,19 @@ scale:
     vi.spyOn(fs, 'existsSync').mockReturnValue(false);
     vi.stubEnv('BLE_ADAPTER', 'eth0');
 
-    const config = loadBleConfig('/nonexistent/config.yaml');
+    const config = loadBleConfig();
     expect(config.bleAdapter).toBeUndefined();
   });
 
-  it('handles invalid YAML gracefully', () => {
-    vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
-      if (String(p).endsWith('.env')) return false;
-      return true;
-    });
+  it('reports an unreadable config.yaml instead of scanning with defaults', () => {
+    yamlOnly();
     vi.spyOn(fs, 'readFileSync').mockImplementation(() => {
       throw new Error('read error');
     });
 
-    // Should not throw — falls through to env vars
-    const config = loadBleConfig('/test/config.yaml');
-    expect(config.scaleMac).toBeUndefined();
+    // It used to fall through to the env vars, i.e. to the native handler with
+    // nothing configured, while config.yaml asked for something else (G-05).
+    expect(() => loadBleConfig('/test/config.yaml')).toThrow('read error');
   });
 });
 

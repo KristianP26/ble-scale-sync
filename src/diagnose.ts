@@ -9,7 +9,7 @@ import type { NobleApi } from './ble/handler-noble-shared/types.js';
 import { parseMfgData } from './ble/handler-noble-shared/peripheral.js';
 import { parseQnBroadcast } from './scales/qn-scale/broadcast.js';
 import type { HandlerKey } from './ble/transport-availability.js';
-import { diagnoseMacArg } from './cli-run-args.js';
+import { diagnoseMacArg, toolConfigArg } from './cli-run-args.js';
 
 const log = createLogger('Diagnose');
 
@@ -43,7 +43,11 @@ function resolveDriver(configured?: string): string {
 }
 
 async function main(): Promise<void> {
-  const bleConfig = loadBleConfig();
+  // The config.yaml the app would run with, --config included, read with the
+  // same defaults, ${VAR} references and validation for the ble section (G-05).
+  const arg = toolConfigArg(process.argv.slice(2));
+  if (arg.kind === 'error') throw new Error(arg.message);
+  const bleConfig = loadBleConfig(arg.config);
   // A leading dash is a flag, never a MAC: `diagnose --config x.yaml` used to
   // scan forever for a device called "--CONFIG".
   const positional = diagnoseMacArg(process.argv.slice(2));

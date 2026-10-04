@@ -4,7 +4,7 @@ import { createLogger } from '../logger.js';
 import { createAppConfigSchema, formatConfigError } from './schema.js';
 import type { AppConfig } from './schema.js';
 import { defaultConfigPath, envPathFor } from './paths.js';
-import { loadEnvFile, resolveEnvReferencesTracked } from './env-refs.js';
+import { isFromEnvFile, loadEnvFile, resolveEnvReferencesTracked } from './env-refs.js';
 import { safeParseResolved } from './env-coerce.js';
 import { applyEnvOverrides, filterValidExporters } from './env-overrides.js';
 import { collectUnknownKeys } from './unknown-keys.js';
@@ -101,6 +101,13 @@ function reclaimNobleDriver(): void {
 }
 
 function publishNobleDriver(driver: string | undefined): void {
+  // A NOBLE_DRIVER that only came from .env was not applied as an override
+  // (G-03), so it must not pick the driver through process.env either. The
+  // next load puts it back from .env and removes it here again.
+  if (!driver && isFromEnvFile('NOBLE_DRIVER')) {
+    delete process.env.NOBLE_DRIVER;
+    return;
+  }
   // No driver configured: whatever the environment holds stays, exactly as an
   // unset noble_driver always behaved. Same value already there: nothing of
   // ours to remember, so it keeps counting as the user's own override.
