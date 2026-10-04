@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import {
+  mkdtempSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  symlinkSync,
+  lstatSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -87,6 +94,28 @@ describe('atomicWrite', () => {
     const path = join(badDir, 'file.txt');
     expect(() => atomicWrite(path, 'data')).toThrow();
     expect(existsSync(path + '.tmp')).toBe(false);
+  });
+
+  // rename(2) replaces the directory entry it is given. For a symlinked
+  // config.yaml that is the link itself, so the first last_known_weight write
+  // used to turn the link into a standalone copy, and later edits of the real
+  // file (in a dotfiles repo, say) were never seen again.
+  it('writes through a symlink and leaves the link in place', (ctx) => {
+    const realDir = mkdtempSync(join(tmpdir(), 'write-test-real-'));
+    const real = join(realDir, 'scale.yaml');
+    writeFileSync(real, 'old');
+    const link = join(tempDir, 'config.yaml');
+    try {
+      symlinkSync(real, link, 'file');
+    } catch {
+      ctx.skip(); // no symlink permission (Windows without developer mode)
+    }
+
+    atomicWrite(link, 'new');
+
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(readFileSync(real, 'utf8')).toBe('new');
+    expect(existsSync(real + '.tmp')).toBe(false);
   });
 });
 

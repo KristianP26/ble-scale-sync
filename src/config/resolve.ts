@@ -162,6 +162,42 @@ export function resolveExportersForUser(config: AppConfig, user: UserConfig): Ex
   return entries;
 }
 
+/**
+ * One line per exporter list that holds the same type more than once.
+ *
+ * Neither case changes what resolveExportersForUser() returns; the point is
+ * that both used to happen without a word. A second global entry of a type is
+ * dropped there, so a second webhook never receives anything. A second entry
+ * of a type in one user's list is kept and exported to, but a failed export of
+ * it is queued under the type name and redelivered through the FIRST entry of
+ * that type (resolveQueuedExporter), i.e. to the other target.
+ */
+export function duplicateExporterTypeWarnings(config: AppConfig): string[] {
+  const repeated = (entries: readonly ExporterEntry[] | undefined): string[] => {
+    const seen = new Set<string>();
+    const twice = new Set<string>();
+    for (const e of entries ?? []) (seen.has(e.type) ? twice : seen).add(e.type);
+    return [...twice];
+  };
+  const warnings: string[] = [];
+  for (const type of repeated(config.global_exporters)) {
+    warnings.push(
+      `global_exporters lists type '${type}' more than once. Only the first one is used; ` +
+        'the others never receive a reading.',
+    );
+  }
+  for (const user of config.users) {
+    for (const type of repeated(user.exporters)) {
+      warnings.push(
+        `users[${user.slug}].exporters lists type '${type}' more than once. All of them are ` +
+          'exported to, but a failed export queued for retry is redelivered through the first ' +
+          'one only.',
+      );
+    }
+  }
+  return warnings;
+}
+
 // --- Convenience: single-user resolution ---
 
 export interface ResolvedSingleUser extends ResolvedRuntimeConfig {

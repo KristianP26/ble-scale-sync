@@ -28,8 +28,15 @@ const expectedAuth = `Basic ${btoa('API_KEY:abcdef123')}`;
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
+const ATHLETE_URL = 'https://intervals.icu/api/v1/athlete/i123456';
+
+/** fetch calls to the wellness endpoint, leaving out the athlete timezone lookup. */
+function wellnessCalls() {
+  return mockFetch.mock.calls.filter(([url]) => String(url).includes('/wellness/'));
+}
+
 function lastBody(): Record<string, unknown> {
-  return JSON.parse(mockFetch.mock.calls[0][1].body as string);
+  return JSON.parse(wellnessCalls()[0][1].body as string);
 }
 
 describe('toLocalDate()', () => {
@@ -71,7 +78,7 @@ describe('IntervalsExporter', () => {
     const exporter = new IntervalsExporter(defaultConfig);
     await exporter.export(samplePayload, context);
 
-    expect(mockFetch.mock.calls[0][0]).toBe(
+    expect(wellnessCalls()[0][0]).toBe(
       'https://intervals.icu/api/v1/athlete/i123456/wellness/2024-03-14',
     );
   });
@@ -80,7 +87,7 @@ describe('IntervalsExporter', () => {
     const exporter = new IntervalsExporter(defaultConfig);
     await exporter.export(samplePayload);
 
-    const headers = mockFetch.mock.calls[0][1].headers;
+    const headers = wellnessCalls()[0][1].headers;
     expect(headers.Authorization).toBe(expectedAuth);
     expect(headers['Content-Type']).toBe('application/json');
   });
@@ -109,7 +116,7 @@ describe('IntervalsExporter', () => {
     await exporter.export(samplePayload);
 
     // Bad API key / athlete ID cannot succeed on retry — fail fast.
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(wellnessCalls()).toHaveLength(1);
   });
 
   it('retries on failure (3 total attempts)', async () => {
@@ -119,18 +126,74 @@ describe('IntervalsExporter', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toBe('timeout');
-    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(wellnessCalls()).toHaveLength(3);
   });
 
   it('succeeds on retry after an initial failure', async () => {
-    mockFetch
-      .mockRejectedValueOnce(new Error('temporary'))
-      .mockResolvedValueOnce({ ok: true, status: 200 });
+    let wellnessAttempts = 0;
+    mockFetch.mockImplementation(async (url: string) => {
+      if (url.includes('/wellness/') && ++wellnessAttempts === 1) throw new Error('temporary');
+      return { ok: true, status: 200 };
+    });
     const exporter = new IntervalsExporter(defaultConfig);
     const result = await exporter.export(samplePayload);
 
     expect(result.success).toBe(true);
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(wellnessCalls()).toHaveLength(2);
+  });
+
+  // Intervals.icu keys wellness by the athlete's local day, and defines
+  // "today" in the athlete's timezone. The day used to come from the host's
+  // clock, and a Docker container without TZ runs in UTC, so a weigh-in at
+  // 00:30 in Bratislava (22:30 UTC) overwrote the previous day's weight.
+  describe('calendar day in the athlete timezone', () => {
+    function athleteTz(timezone: unknown) {
+      mockFetch.mockImplementation(async (url: string) =>
+        url === ATHLETE_URL
+          ? { ok: true, status: 200, json: async () => ({ id: 'i123456', timezone }) }
+          : { ok: true, status: 200 },
+      );
+    }
+
+    // 10:00 UTC is already the next day at UTC+14 and still this day for any
+    // host timezone the test machine is likely to run in.
+    const at = new Date('2024-03-14T10:00:00Z');
+
+    it('uses the timezone from the athlete profile', async () => {
+      athleteTz('Pacific/Kiritimati');
+      const exporter = new IntervalsExporter(defaultConfig);
+      await exporter.export(samplePayload, { timestamp: at });
+
+      expect(wellnessCalls()[0][0]).toBe(`${ATHLETE_URL}/wellness/2024-03-15`);
+    });
+
+    it('looks the timezone up once per exporter', async () => {
+      athleteTz('Pacific/Kiritimati');
+      const exporter = new IntervalsExporter(defaultConfig);
+      await exporter.export(samplePayload, { timestamp: at });
+      await exporter.export(samplePayload, { timestamp: at });
+
+      expect(mockFetch.mock.calls.filter(([url]) => url === ATHLETE_URL)).toHaveLength(1);
+    });
+
+    it('falls back to the host day for a timezone it does not know', async () => {
+      athleteTz('Not/A_Zone');
+      const exporter = new IntervalsExporter(defaultConfig);
+      await exporter.export(samplePayload, { timestamp: at });
+
+      expect(wellnessCalls()[0][0]).toBe(`${ATHLETE_URL}/wellness/${toLocalDate(at)}`);
+    });
+
+    it('falls back to the host day when the profile cannot be read', async () => {
+      mockFetch.mockImplementation(async (url: string) =>
+        url === ATHLETE_URL ? { ok: false, status: 500 } : { ok: true, status: 200 },
+      );
+      const exporter = new IntervalsExporter(defaultConfig);
+      const result = await exporter.export(samplePayload, { timestamp: at });
+
+      expect(result.success).toBe(true);
+      expect(wellnessCalls()[0][0]).toBe(`${ATHLETE_URL}/wellness/${toLocalDate(at)}`);
+    });
   });
 
   describe('healthcheck()', () => {

@@ -6,6 +6,8 @@ import type { UserConfig, ExporterEntry } from '../../config/schema.js';
 import { success, error, warn, dim } from '../ui.js';
 import { cliCommand } from '../../cli-invocation.js';
 import { findTokenDirCollisions } from '../../config/token-dirs.js';
+import { resolveEnvReferences } from '../../config/env-refs.js';
+import { errMsg } from '../../utils/error.js';
 
 const __dirname: string = dirname(fileURLToPath(import.meta.url));
 const ROOT: string = join(__dirname, '..', '..', '..');
@@ -121,7 +123,18 @@ export const garminAuthStep: WizardStep = {
         continue;
       }
 
-      const entryRecord = entry as Record<string, unknown>;
+      // The config here is the raw YAML (edit mode loads it unresolved so that
+      // saving keeps the references), so a ${VAR} would otherwise reach
+      // setup_garmin.py as the literal password and overwrite the real
+      // GARMIN_PASSWORD in the child's environment. Resolve a copy for use.
+      let entryRecord: Record<string, unknown>;
+      try {
+        entryRecord = resolveEnvReferences(entry as Record<string, unknown>);
+      } catch (err) {
+        console.log(`\n  ${warn(`${errMsg(err)}. Skipping Garmin auth for ${userName}.`)}`);
+        console.log(dim(`  Define it in .env, then run: ${cliCommand('setup-garmin')}`));
+        continue;
+      }
       const options: SetupGarminOptions = {
         email: entryRecord.email as string | undefined,
         password: entryRecord.password as string | undefined,

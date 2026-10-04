@@ -217,6 +217,60 @@ scale:
     warn.mockRestore();
   });
 
+  // resolveExportersForUser keeps the first global entry of a type and drops
+  // the rest, and a retried export goes through the first per-user entry of
+  // its type. Neither was said anywhere, so a second webhook simply never
+  // received anything.
+  it('warns about a second global exporter of the same type', () => {
+    const twoHooks = VALID_YAML.replace(
+      '  - type: garmin',
+      '  - type: webhook\n    url: https://a.example\n  - type: webhook\n    url: https://b.example',
+    );
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(twoHooks);
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const config = loadYamlConfig('/test/config.yaml');
+
+    expect(config.global_exporters).toHaveLength(2);
+    const text = warn.mock.calls.flat().join(' ');
+    expect(text).toContain('global_exporters');
+    expect(text).toContain("'webhook'");
+  });
+
+  it('warns about a second exporter of the same type in one user', () => {
+    const twoInflux = VALID_YAML.replace(
+      '    last_known_weight: null',
+      [
+        '    last_known_weight: null',
+        '    exporters:',
+        '      - type: file',
+        '        file_path: ./a.csv',
+        '      - type: file',
+        '        file_path: ./b.csv',
+      ].join('\n'),
+    );
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(twoInflux);
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    loadYamlConfig('/test/config.yaml');
+
+    const text = warn.mock.calls.flat().join(' ');
+    expect(text).toContain('users[test].exporters');
+    expect(text).toContain("'file'");
+  });
+
+  it('does not warn when every exporter type appears once per list', () => {
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(VALID_YAML);
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    loadYamlConfig('/test/config.yaml');
+
+    expect(warn.mock.calls.flat().join(' ')).not.toContain('more than once');
+  });
+
   it('warns and skips unknown exporter types', () => {
     const yamlWithUnknown = VALID_YAML.replace('type: garmin', 'type: fakexporter');
     vi.spyOn(fs, 'readFileSync').mockReturnValue(yamlWithUnknown);

@@ -17,6 +17,8 @@ export interface PromptChoice<T = string> {
   name: string;
   value: T;
   description?: string;
+  /** checkbox only: starts ticked, so Enter keeps it selected. */
+  checked?: boolean;
 }
 
 export interface PromptProvider {

@@ -38,10 +38,12 @@ describe('detectConfigSource', () => {
     expect(detectConfigSource('/etc/scale/config.yaml')).toBe('yaml');
   });
 
-  it('does not fall back to the default path when an explicit one is missing', () => {
-    // Both defaults exist; the explicit path does not. Answering 'yaml' here
-    // would silently load a different file than the one that was asked for.
+  it('does not fall back to anything when an explicit path is missing', () => {
+    // Both defaults exist; the explicit path does not. Answering 'yaml' would
+    // load a different file than the one asked for, and answering 'env' (what
+    // this used to do) ran the legacy single-user mode with another profile and
+    // other exporters after a typo in --config, with only an info line.
     h.existsSync.mockImplementation((p: string) => p !== '/etc/scale/config.yaml');
-    expect(detectConfigSource('/etc/scale/config.yaml')).toBe('env');
+    expect(detectConfigSource('/etc/scale/config.yaml')).toBe('none');
   });
 });

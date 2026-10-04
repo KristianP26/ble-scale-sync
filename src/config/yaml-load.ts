@@ -3,11 +3,12 @@ import { config as dotenvConfig } from 'dotenv';
 import { createLogger } from '../logger.js';
 import { AppConfigSchema, formatConfigError } from './schema.js';
 import type { AppConfig } from './schema.js';
-import { defaultConfigPath, defaultEnvPath } from './paths.js';
+import { defaultConfigPath, envPathFor } from './paths.js';
 import { resolveEnvReferences } from './env-refs.js';
 import { applyEnvOverrides, filterValidExporters } from './env-overrides.js';
 import { collectUnknownKeys } from './unknown-keys.js';
 import { parseConfigYaml } from './yaml-parse.js';
+import { duplicateExporterTypeWarnings } from './resolve.js';
 
 const log = createLogger('Config');
 
@@ -15,13 +16,14 @@ const log = createLogger('Config');
  * Load and validate config from a YAML file.
  */
 export function loadYamlConfig(configPath?: string): AppConfig {
-  // Load .env so ${VAR} references in config.yaml can resolve secrets from .env
-  const envPath = defaultEnvPath();
+  // Load .env so ${VAR} references in config.yaml can resolve secrets from .env.
+  // It is the .env next to the config file, also when --config names one.
+  const yamlPath = configPath ?? defaultConfigPath();
+  const envPath = envPathFor(yamlPath);
   if (existsSync(envPath)) {
     dotenvConfig({ path: envPath });
   }
 
-  const yamlPath = configPath ?? defaultConfigPath();
   const raw = readFileSync(yamlPath, 'utf8');
   const parsed: unknown = parseConfigYaml(raw, yamlPath);
   const resolved = resolveEnvReferences(parsed);
@@ -37,9 +39,10 @@ export function loadYamlConfig(configPath?: string): AppConfig {
 
   const result = AppConfigSchema.safeParse(resolved);
   if (!result.success) {
-    const msg = formatConfigError(result.error);
-    log.error(msg);
-    throw new Error(msg);
+    // Thrown, not also logged: every caller reports the error it catches (the
+    // CLI entry, validate, the reload path), so logging here printed each
+    // schema error twice.
+    throw new Error(formatConfigError(result.error));
   }
 
   let config = result.data;
@@ -53,6 +56,8 @@ export function loadYamlConfig(configPath?: string): AppConfig {
       exporters: filterValidExporters(u.exporters),
     })),
   };
+
+  for (const warning of duplicateExporterTypeWarnings(config)) log.warn(warning);
 
   // Nothing below can throw, so a reload that fails validation above never
   // touches process.env and the running BLE handler keeps its driver.

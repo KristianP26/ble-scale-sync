@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const spawnMock = vi.fn();
 vi.mock('node:child_process', () => ({ spawn: (...args: unknown[]) => spawnMock(...args) }));
@@ -49,6 +49,59 @@ describe('garminAuthStep refuses to auth two accounts into one token directory',
         exporters: [{ type: 'garmin', email: 'a@x', password: 'p' }],
       },
       { name: 'Bob', slug: 'bob', exporters: [{ type: 'garmin', email: 'b@x', password: 'p' }] },
+    ]);
+
+    await garminAuthStep.run(ctx);
+
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('garminAuthStep resolves ${VAR} references before using them', () => {
+  beforeEach(() => {
+    spawnMock.mockReset();
+    spawnMock.mockImplementation(() => {
+      const child = new EventEmitter();
+      setImmediate(() => child.emit('close', 0));
+      return child;
+    });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.stubEnv('BSS_TEST_GARMIN_EMAIL', 'alice@example.com');
+    vi.stubEnv('BSS_TEST_GARMIN_PASSWORD', 'real-secret');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  // The edit-mode config is the raw YAML, so the entry holds the literal
+  // reference. It used to be handed to setup_garmin.py as the password,
+  // overwriting the real GARMIN_PASSWORD from .env in the child's env.
+  it('passes the referenced value, not the literal, to setup_garmin.py', async () => {
+    const entry = {
+      type: 'garmin',
+      email: '${BSS_TEST_GARMIN_EMAIL}',
+      password: '${BSS_TEST_GARMIN_PASSWORD}',
+      token_dir: './garmin-tokens/alice',
+    };
+    const ctx = ctxWith([{ name: 'Alice', slug: 'alice', exporters: [entry] }]);
+
+    await garminAuthStep.run(ctx);
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const env = spawnMock.mock.calls[0][2].env as NodeJS.ProcessEnv;
+    expect(env.GARMIN_EMAIL).toBe('alice@example.com');
+    expect(env.GARMIN_PASSWORD).toBe('real-secret');
+    // The config itself keeps the reference.
+    expect(entry.password).toBe('${BSS_TEST_GARMIN_PASSWORD}');
+  });
+
+  it('skips the auth when a referenced variable is not defined', async () => {
+    const ctx = ctxWith([
+      {
+        name: 'Alice',
+        slug: 'alice',
+        exporters: [{ type: 'garmin', email: 'a@x', password: '${BSS_TEST_UNDEFINED_GARMIN_PW}' }],
+      },
     ]);
 
     await garminAuthStep.run(ctx);

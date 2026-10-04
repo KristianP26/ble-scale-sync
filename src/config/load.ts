@@ -55,6 +55,10 @@ export function loadAppConfig(configPath?: string): LoadedConfig {
       return { source: 'env', config: loadEnvConfig() };
 
     case 'none':
+      if (configPath !== undefined) {
+        log.error(`Config file not found: ${configPath}`);
+        process.exit(1);
+      }
       log.error('No configuration found.');
       log.error('');
       log.error('Create one of:');

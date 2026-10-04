@@ -17,7 +17,8 @@ export interface ConfigWatcherHandle {
  * invoke `onChange` after a 500 ms trailing-edge debounce. Watching the parent
  * (not the file itself) survives atomic writes (tmp+rename) which replace the
  * inode, plus editor save patterns (vim `:w`, VS Code) that trigger 2+ events
- * within ~50 ms.
+ * within ~50 ms. The file itself is watched too, for edits that reach it
+ * through another directory entry (a Docker single-file mount).
  *
  * Events that leave the file's content unchanged are ignored: FSEvents on macOS
  * replays directory history from just before the watch started, so the file's
@@ -50,6 +51,14 @@ export function startConfigWatcher(configPath: string, onChange: () => void): Co
     onChange();
   };
 
+  const onEvent = () => {
+    const content = readContent(configPath);
+    if (content === lastContent) return;
+    lastContent = content;
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(fire, DEBOUNCE_MS);
+  };
+
   let watcher: FSWatcher;
   try {
     watcher = watch(dir, { persistent: false }, (_eventType, filename) => {
@@ -57,11 +66,7 @@ export function startConfigWatcher(configPath: string, onChange: () => void): Co
       // cannot tell whether the change is for our config file, so ignore.
       if (!filename) return;
       if (filename !== base) return;
-      const content = readContent(configPath);
-      if (content === lastContent) return;
-      lastContent = content;
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(fire, DEBOUNCE_MS);
+      onEvent();
     });
   } catch (err) {
     log.warn(
@@ -75,6 +80,25 @@ export function startConfigWatcher(configPath: string, onChange: () => void): Co
     log.warn(`Config watcher error: ${errMsg(err)}. Stopping watcher.`);
   });
 
+  // The file itself is watched as well. With a Docker single-file mount
+  // (`-v ./config.yaml:/app/config.yaml`) an edit on the host goes through the
+  // host's directory entry, and the kernel reports it to watchers of the file
+  // and of the HOST directory only, so the directory watch above never fires
+  // (verified with inotify in a container). This watch follows the inode: it
+  // goes quiet after an atomic replace on a normal filesystem, which the
+  // directory watch covers. An editor that saves by rename on the host leaves
+  // the mount on the old inode, so no watch in the container can see that; the
+  // content compare in onEvent keeps the two watches from double-firing.
+  let fileWatcher: FSWatcher | null = null;
+  try {
+    fileWatcher = watch(configPath, { persistent: false }, () => onEvent());
+    fileWatcher.on('error', (err) => {
+      log.debug(`Config file watcher stopped: ${errMsg(err)}`);
+    });
+  } catch {
+    // File missing right now: the directory watch still sees it appear.
+  }
+
   log.info(`Watching ${configPath} for changes (auto-reload enabled)`);
 
   return {
@@ -84,10 +108,12 @@ export function startConfigWatcher(configPath: string, onChange: () => void): Co
         clearTimeout(debounceTimer);
         debounceTimer = null;
       }
-      try {
-        watcher.close();
-      } catch {
-        /* ignore: watcher may already be closed */
+      for (const w of [watcher, fileWatcher]) {
+        try {
+          w?.close();
+        } catch {
+          /* ignore: watcher may already be closed */
+        }
       }
     },
   };

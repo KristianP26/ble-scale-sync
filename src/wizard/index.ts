@@ -9,7 +9,7 @@ import { runNonInteractive } from './non-interactive.js';
 import { WIZARD_STEPS } from './steps/index.js';
 import type { WizardContext } from './types.js';
 import type { AppConfig } from '../config/schema.js';
-import { defaultConfigPath, defaultEnvPath } from '../config/paths.js';
+import { defaultConfigPath, envPathFor } from '../config/paths.js';
 
 function printUsage(): void {
   console.log(`
@@ -54,8 +54,9 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Load .env for ${ENV_VAR} references
-  const envPath = defaultEnvPath();
+  // Load .env for ${ENV_VAR} references: the one next to the config file,
+  // which is also the one the app reads at run time.
+  const envPath = envPathFor(args.configPath);
   if (existsSync(envPath)) {
     dotenvConfig({ path: envPath });
   }
