@@ -77,6 +77,17 @@ def _norm_uuid(uuid):
     return s.lower().replace("-", "")
 
 
+def _le_hex(buf, start, n):
+    """Hex of buf[start:start + n] in reversed (big-endian) byte order.
+
+    Little-endian wire UUIDs need reversing, but MicroPython rejects any slice
+    with a step other than 1 on bytes (NotImplementedError from bytes_subscr), so
+    a reversing step slice works on CPython and throws on the device, dropping
+    the whole scan batch. Integer indexing and `%02x` are supported everywhere.
+    """
+    return "".join("%02x" % buf[start + k] for k in range(n - 1, -1, -1))
+
+
 def _parse_raw_entry(addr_bytes, addr_type, rssi, raw):
     """Parse a single raw BLE advertisement into a device dict.
 
@@ -125,7 +136,7 @@ def _parse_raw_entry(addr_bytes, addr_type, rssi, raw):
                 services.append("%08x" % val + _BT_BASE_SUFFIX)
         elif ad_type == 0x07 or ad_type == 0x06:  # 128-bit Service UUIDs
             for j in range(0, len(ad_payload) - 15, 16):
-                services.append(ad_payload[j:j + 16][::-1].hex())
+                services.append(_le_hex(ad_payload, j, 16))
         elif ad_type == 0x16 and len(ad_payload) >= 2:  # Service Data — 16-bit
             uuid = "%04x" % (ad_payload[0] | (ad_payload[1] << 8))
             service_data.append({"uuid": uuid, "data": ad_payload[2:].hex()})
@@ -139,7 +150,7 @@ def _parse_raw_entry(addr_bytes, addr_type, rssi, raw):
             uuid = "%08x" % val + _BT_BASE_SUFFIX
             service_data.append({"uuid": uuid, "data": ad_payload[4:].hex()})
         elif ad_type == 0x21 and len(ad_payload) >= 16:  # Service Data — 128-bit
-            uuid = ad_payload[0:16][::-1].hex()
+            uuid = _le_hex(ad_payload, 0, 16)
             service_data.append({"uuid": uuid, "data": ad_payload[16:].hex()})
         elif ad_type == 0xFF and length >= 3:  # Manufacturer Specific
             mfr_id = ad_payload[0] | (ad_payload[1] << 8)
@@ -337,7 +348,18 @@ class BleBridge:
 
         IRQ handler accumulates raw results; call drain_results() periodically
         to process and publish them.
+
+        Idempotent: a second start while the scan runs is a no-op. Two resume
+        paths can end the same GATT session (the notify loop or session guard
+        plus a host disconnect, or the scan loop backstop), and NimBLE rejects a
+        second gap_scan with EALREADY (EBUSY during a connect), which MicroPython
+        raises as OSError. Never raises: a failed start leaves the bridge not
+        streaming so the scan loop can retry, instead of killing the caller.
+
+        Returns True when the scan is running.
         """
+        if self._streaming:
+            return True
         import gc
         gc.collect()
         self._streaming = True
@@ -364,10 +386,20 @@ class BleBridge:
                     self._cap_logged = True
                     print(f"Streaming scan cap reached ({board.MAX_SCAN_ENTRIES}), ignoring until drain")
 
-        _ble.active(True)
-        _ble.irq(_irq)
-        _ble.gap_scan(0, 100000, 30000, True)  # duration=0 → indefinite
+        try:
+            _ble.active(True)
+            _ble.irq(_irq)
+            _ble.gap_scan(0, 100000, 30000, True)  # duration=0 → indefinite
+        except Exception as e:
+            self._streaming = False
+            print("Streaming scan start failed: %s" % (str(e) or type(e).__name__))
+            return False
         print("Streaming scan started")
+        return True
+
+    def is_streaming(self):
+        """True while the indefinite streaming scan is running."""
+        return self._streaming
 
     def has_pending_scale_mac(self, macs):
         """True when the streaming IRQ buffer holds an advertisement from a

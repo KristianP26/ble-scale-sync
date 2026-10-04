@@ -341,6 +341,71 @@ class TestUnpackScanResult(unittest.TestCase):
         self.assertEqual(addr_type, 1)
 
 
+class _MicroPythonBytes(bytes):
+    """bytes that rejects a slice step other than 1, as MicroPython does.
+
+    MicroPython's bytes_subscr (py/objstr.c, v1.27.0) raises
+    NotImplementedError("only slices with step=1 (aka None) are supported") for
+    any step slice, so `buf[::-1]` passes on CPython and throws on the device.
+    Slices keep this type, so a parser that slices first and reverses later is
+    caught too.
+    """
+
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            if key.step not in (None, 1):
+                raise NotImplementedError("only slices with step=1 (aka None) are supported")
+            return _MicroPythonBytes(bytes.__getitem__(self, key))
+        return bytes.__getitem__(self, key)
+
+
+class TestParserUnderMicroPythonSliceRules(unittest.TestCase):
+    """The parser must not rely on step slices, which MicroPython rejects.
+
+    A single 128-bit advertiser in range used to throw out of the parser and
+    drop the whole scan batch on the device, while every CPython test passed.
+    """
+
+    def test_stub_rejects_step_slices_like_micropython(self):
+        with self.assertRaises(NotImplementedError):
+            _MicroPythonBytes(b"\x01\x02")[::-1]
+
+    def test_128bit_service_uuid(self):
+        entry = _parse(_MicroPythonBytes(_ad(0x07, _UUID_1A10_LE)))
+        self.assertEqual(entry["services"], [_UUID_1A10_FULL])
+
+    def test_128bit_service_uuid_list_of_two(self):
+        other_full = "0000fff0" + ble_bridge._BT_BASE_SUFFIX
+        raw = _ad(0x06, _UUID_1A10_LE + _uuid_le(other_full))
+        entry = _parse(_MicroPythonBytes(raw))
+        self.assertEqual(entry["services"], [_UUID_1A10_FULL, other_full])
+
+    def test_128bit_service_data(self):
+        entry = _parse(_MicroPythonBytes(_ad(0x21, _UUID_1A10_LE + bytes([0xAA, 0xBB]))))
+        self.assertEqual(entry["service_data"], [{"uuid": _UUID_1A10_FULL, "data": "aabb"}])
+
+    def test_no_step_slices_in_device_code(self):
+        # Belt and braces for code the parser tests do not reach: a step slice
+        # anywhere in a module that runs on the device is a latent device-only
+        # NotImplementedError (bytes, str and bytearray all reject it).
+        import re
+
+        # Two colons inside one pair of brackets, with no brace or quote in
+        # between (so a list of dict literals does not match).
+        inner = r"[^\[\]{}\"'\n]*"
+        step_slice = re.compile(r"\[" + inner + ":" + inner + ":" + inner + r"\]")
+        offenders = []
+        for fname in sorted(os.listdir(_FIRMWARE_DIR)):
+            if not fname.endswith(".py"):
+                continue
+            with open(os.path.join(_FIRMWARE_DIR, fname), encoding="utf-8") as handle:
+                for lineno, line in enumerate(handle, 1):
+                    code = line.split("#", 1)[0]
+                    if step_slice.search(code):
+                        offenders.append(f"{fname}:{lineno}: {line.strip()}")
+        self.assertEqual(offenders, [], "step slice in device code")
+
+
 class TestAddrTypeProbeOrder(unittest.TestCase):
     """_addr_type_probe_order: advertised type first, opposite as fallback (#231)."""
 

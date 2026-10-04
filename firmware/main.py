@@ -51,6 +51,9 @@ _gatt_session_armed = False
 # idle timeout must never apply to it, only to a session nobody ever answered.
 _host_engaged = False
 _last_host_activity = 0
+# True while a handler is ending the current GATT session, so a second producer
+# of the same end (the scan loop backstop) stands down instead of resuming twice.
+_ending_session = False
 
 # Set True after on_connect finishes re-subscribing (avoids race with isconnected)
 _subs_ready = False
@@ -369,9 +372,12 @@ async def _auto_gatt_connect(mac, addr_type):
 
 
 async def _streaming_scan_loop():
-    """Continuous indefinite scan with periodic drain+publish (ESP32-S3)."""
-    global _subs_ready
+    """Continuous indefinite scan with periodic drain+publish (ESP32-S3).
 
+    Nothing restarts this task, so no exception may escape it: one escaping the
+    backstop or the auto-connect path used to end scanning for good while the
+    status topic still said online. Each cycle runs under its own try.
+    """
     # Wait for initial MQTT connection
     while not (client.isconnected() and _subs_ready):
         await asyncio.sleep(1)
@@ -379,77 +385,97 @@ async def _streaming_scan_loop():
     bridge.start_streaming()
 
     while True:
-        # Wait for MQTT to be connected and subscriptions ready
-        while not (client.isconnected() and _subs_ready):
-            await asyncio.sleep(1)
-
-        if _scan_paused:
-            # Backstop for a paused scan with no guard running: only ever true
-            # for a session that was published to the host, so it cannot fire
-            # in the window where a connect has paused scanning but not yet
-            # taken _busy (#296).
-            if _gatt_session_armed and _gatt_session_task is None and not _busy:
-                await handle_unexpected_disconnect()
-            await asyncio.sleep(1)
-            continue
-
-        # Wait out the publish interval, but flush early the instant a known
-        # scale MAC shows up in the scan buffer: a stepped-on scale stays
-        # connectable only briefly, so shaving the batching delay matters (#201).
-        waited = 0
-        while waited < board.PUBLISH_INTERVAL_MS:
-            await asyncio.sleep_ms(250)
-            waited += 250
-            if _scan_paused:
-                break
-            if _scale_macs and bridge.has_pending_scale_mac(_scale_macs):
-                # Autonomous connect: ESP32 connects itself immediately,
-                # eliminating the MQTT round-trip (#201).
-                if _auto_connect:
-                    found = _find_scale_in_raw(bridge._raw_results)
-                    if found:
-                        mac, _addr_bytes, addr_type = found
-                        print(f"Auto-connect: scale {mac} detected after {waited}ms, connecting immediately")
-                        # A stepped-on GATT-only scale stays connectable only
-                        # briefly, so reach gap_connect with minimal delay (#231).
-                        # Snapshot scan results synchronously before stop_streaming
-                        # clears the raw buffer, but defer the awaited MQTT publish
-                        # (a WiFi round-trip) until AFTER the connect attempt.
-                        try:
-                            results = bridge.drain_results()
-                            _check_scale_beep(results)
-                            board.on_scan_complete(results, bool(_scale_macs))
-                        except Exception:
-                            results = []
-                        await _auto_gatt_connect(mac, addr_type)
-                        try:
-                            await client.publish(topic("scan/results"), json.dumps(results), qos=0)
-                        except Exception:
-                            pass
-                        break
-                # If auto-connect is disabled, just break to flush results
-                # as before (host-initiated connect path).
-                break
-
-        if _scan_paused:
-            continue
-
         try:
-            results = bridge.drain_results()
-            gc.collect()
-            print(f"Streaming scan: {len(results)} devices (free: {gc.mem_free()})")
-            if board.HAS_DISPLAY:
-                ui.on_scan_tick(len(results))
-            _check_scale_beep(results)
-            board.on_scan_complete(results, bool(_scale_macs))
-            await client.publish(topic("scan/results"), json.dumps(results), qos=0)
-            if board.HAS_DISPLAY:
-                ui.on_publish_tick()
+            await _streaming_scan_cycle()
         except Exception as e:
+            print(f"Streaming scan cycle error: {describe_exc(e)}")
             try:
-                await publish_error(f"Scan publish failed: {describe_exc(e)}")
+                await publish_error(f"Scan cycle failed: {describe_exc(e)}")
             except Exception:
-                print(f"Scan error: {e}")
+                pass
+            await asyncio.sleep(1)
+
+
+async def _streaming_scan_cycle():
+    """One wait, flush and publish cycle of the streaming scan loop."""
+    # Wait for MQTT to be connected and subscriptions ready
+    while not (client.isconnected() and _subs_ready):
+        await asyncio.sleep(1)
+
+    if _scan_paused:
+        # Backstop for a paused scan with no guard running: only ever true
+        # for a session that was published to the host, so it cannot fire
+        # in the window where a connect has paused scanning but not yet
+        # taken _busy (#296).
+        if _gatt_session_armed and _gatt_session_task is None and not _busy:
+            await handle_unexpected_disconnect()
+        await asyncio.sleep(1)
+        return
+
+    # A start that failed (the controller refused gap_scan) left the bridge
+    # not streaming; retry here rather than waiting for the next GATT session.
+    if not bridge.is_streaming():
+        if not bridge.start_streaming():
+            await asyncio.sleep(1)
+            return
+
+    # Wait out the publish interval, but flush early the instant a known
+    # scale MAC shows up in the scan buffer: a stepped-on scale stays
+    # connectable only briefly, so shaving the batching delay matters (#201).
+    waited = 0
+    while waited < board.PUBLISH_INTERVAL_MS:
+        await asyncio.sleep_ms(250)
+        waited += 250
+        if _scan_paused:
+            break
+        if _scale_macs and bridge.has_pending_scale_mac(_scale_macs):
+            # Autonomous connect: ESP32 connects itself immediately,
+            # eliminating the MQTT round-trip (#201).
+            if _auto_connect:
+                found = _find_scale_in_raw(bridge._raw_results)
+                if found:
+                    mac, _addr_bytes, addr_type = found
+                    print(f"Auto-connect: scale {mac} detected after {waited}ms, connecting immediately")
+                    # A stepped-on GATT-only scale stays connectable only
+                    # briefly, so reach gap_connect with minimal delay (#231).
+                    # Snapshot scan results synchronously before stop_streaming
+                    # clears the raw buffer, but defer the awaited MQTT publish
+                    # (a WiFi round-trip) until AFTER the connect attempt.
+                    try:
+                        results = bridge.drain_results()
+                        _check_scale_beep(results)
+                        board.on_scan_complete(results, bool(_scale_macs))
+                    except Exception:
+                        results = []
+                    await _auto_gatt_connect(mac, addr_type)
+                    try:
+                        await client.publish(topic("scan/results"), json.dumps(results), qos=0)
+                    except Exception:
+                        pass
+                    break
+            # If auto-connect is disabled, just break to flush results
+            # as before (host-initiated connect path).
+            break
+
+    if _scan_paused:
+        return
+
+    try:
+        results = bridge.drain_results()
+        gc.collect()
+        print(f"Streaming scan: {len(results)} devices (free: {gc.mem_free()})")
+        if board.HAS_DISPLAY:
+            ui.on_scan_tick(len(results))
+        _check_scale_beep(results)
+        board.on_scan_complete(results, bool(_scale_macs))
+        await client.publish(topic("scan/results"), json.dumps(results), qos=0)
+        if board.HAS_DISPLAY:
+            ui.on_publish_tick()
+    except Exception as e:
+        try:
+            await publish_error(f"Scan publish failed: {describe_exc(e)}")
+        except Exception:
+            print(f"Scan error: {e}")
 
 
 async def _batch_scan_loop():
@@ -466,7 +492,12 @@ async def _batch_scan_loop():
         if _scan_paused or _busy:
             # Same backstop as the streaming loop (#296).
             if _scan_paused and _gatt_session_armed and _gatt_session_task is None and not _busy:
-                await handle_unexpected_disconnect()
+                # Nothing restarts this task, so the backstop must not let an
+                # exception escape it (same reasoning as the streaming loop).
+                try:
+                    await handle_unexpected_disconnect()
+                except Exception as e:
+                    print(f"Scan backstop error: {describe_exc(e)}")
             await asyncio.sleep(1)
             continue
 
@@ -602,22 +633,42 @@ async def handle_connect(payload):
 
 
 async def handle_disconnect():
-    """Disconnect from BLE device and resume autonomous scanning."""
-    global _char_subscribed
-    await bridge.disconnect()
-    _char_subscribed = False
-    _resume_scanning()  # Resume autonomous scanning
-    await client.publish(topic("disconnected"), "", qos=0)
+    """Disconnect from BLE device and resume autonomous scanning.
+
+    Always answers the host. While it runs, the scan loop backstop and a queued
+    unexpected disconnect stand down (see handle_unexpected_disconnect).
+    """
+    global _char_subscribed, _ending_session
+    _ending_session = True
+    try:
+        await bridge.disconnect()
+        _char_subscribed = False
+        _resume_scanning()  # Resume autonomous scanning
+        await client.publish(topic("disconnected"), "", qos=0)
+    finally:
+        _ending_session = False
 
 
 async def handle_unexpected_disconnect():
-    """Handle unexpected BLE peripheral disconnect, notify the host, resume scanning."""
-    global _char_subscribed
-    print("BLE peripheral disconnected unexpectedly")
-    await bridge.disconnect()
-    _char_subscribed = False
-    _resume_scanning()
-    await client.publish(topic("disconnected"), "", qos=0)
+    """Handle unexpected BLE peripheral disconnect, notify the host, resume scanning.
+
+    Two producers can report the end of one session: the queued disconnect
+    callback (notify loop or session guard) handled by the main loop, and the
+    scan loop backstop. The second one, or one arriving after the session was
+    already ended, is a no-op, so the host gets one `disconnected` per session.
+    """
+    global _char_subscribed, _ending_session
+    if _ending_session or not _scan_paused:
+        return
+    _ending_session = True
+    try:
+        print("BLE peripheral disconnected unexpectedly")
+        await bridge.disconnect()
+        _char_subscribed = False
+        _resume_scanning()
+        await client.publish(topic("disconnected"), "", qos=0)
+    finally:
+        _ending_session = False
 
 
 async def handle_write(uuid_str, payload):
@@ -653,6 +704,53 @@ if board.HAS_DISPLAY:
             await asyncio.sleep(2)
 
 
+# ─── Initial connect ──────────────────────────────────────────────────────────
+
+# mqtt_as reconnects on its own only after the first connect has succeeded; a
+# failed first connect raises OSError and is never retried by the library. A
+# board that boots before the router or broker (power cut, broker started by
+# the Node app) would otherwise drop to the REPL and stay offline until reset.
+CONNECT_RETRY_START_MS = 5000
+CONNECT_RETRY_MAX_MS = 60000
+# Safety net for a radio stuck in a bad state: reboot after this many failed
+# attempts in a row (with the backoff above, at least about ten minutes).
+CONNECT_RESET_AFTER = 15
+
+
+def _hard_reset():
+    import machine
+
+    machine.reset()
+
+
+async def _connect_with_retry():
+    """First MQTT connect with exponential backoff, then a reboot as last resort."""
+    delay = CONNECT_RETRY_START_MS
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            await client.connect()
+            if attempt > 1:
+                print(f"MQTT connected after {attempt} attempts")
+            return
+        except Exception as e:
+            print(f"MQTT connect attempt {attempt} failed: {describe_exc(e)}")
+        if attempt >= CONNECT_RESET_AFTER:
+            print(f"MQTT unreachable after {attempt} attempts, rebooting")
+            _hard_reset()
+        # Same clean slate the library's own reconnect loop starts from: close
+        # the socket and drop the WiFi association, so the next connect() brings
+        # both up again from scratch.
+        try:
+            client.close()
+        except Exception:
+            pass
+        print(f"Retrying MQTT connect in {delay // 1000}s")
+        await asyncio.sleep_ms(delay)
+        delay = min(delay * 2, CONNECT_RETRY_MAX_MS)
+
+
 # ─── Main loop ────────────────────────────────────────────────────────────────
 
 async def main():
@@ -660,7 +758,7 @@ async def main():
     if board.HAS_DISPLAY:
         ui.init()
         asyncio.create_task(_connection_monitor())
-    await client.connect()
+    await _connect_with_retry()
     if board.HAS_DISPLAY:
         ui.on_wifi_change(True)
         ui.on_mqtt_change(True)

@@ -16,6 +16,10 @@
 #   ./flash.sh --libs-only              # re-install MicroPython libraries
 #   ./flash.sh --board guition_4848 --app-only
 #
+# Board choice: --board, else "board" in config.json, else chip auto-detect.
+# A --board that differs from a non-null config.json "board" is refused. The
+# chosen board is written to board.txt on the device, which board.py reads.
+#
 # The script auto-detects the serial port. Override with:
 #   PORT=/dev/ttyACM0 ./flash.sh
 #
@@ -121,6 +125,38 @@ detect_board() {
   fi
 }
 
+config_board() {
+  # Print the "board" value from config.json, or nothing when it is null,
+  # absent, or there is no config.json (--libs-only does not need one).
+  [[ -f config.json ]] || return 0
+  grep -o '"board"[[:space:]]*:[[:space:]]*"[^"]*"' config.json \
+    | head -n 1 \
+    | sed 's/.*:[[:space:]]*"\([^"]*\)"/\1/' || true
+}
+
+resolve_board() {
+  # Pick the board the same way board.py does at runtime, so the board_*.py
+  # uploaded here is the one the device imports: --board, else config.json
+  # "board", else chip auto-detect. The choice is written to board.txt on the
+  # device (upload_app), which board.py reads when config.json has no "board".
+  local port="$1" board_arg="$2"
+  local cfg_board
+  cfg_board=$(config_board)
+
+  if [[ -n "$board_arg" && -n "$cfg_board" && "$board_arg" != "$cfg_board" ]]; then
+    die "--board ${board_arg} conflicts with \"board\": \"${cfg_board}\" in config.json. The device follows config.json, so it would look for board_${cfg_board}.py, which this run would not upload. Make them match, or set \"board\": null."
+  fi
+
+  if [[ -n "$board_arg" ]]; then
+    configure_board "$board_arg"
+  elif [[ -n "$cfg_board" ]]; then
+    green "Board from config.json: ${cfg_board}"
+    configure_board "$cfg_board"
+  else
+    detect_board "$port"
+  fi
+}
+
 # ─── Port detection ──────────────────────────────────────────────────────────
 
 detect_port() {
@@ -218,6 +254,12 @@ upload_app() {
   mpremote connect "$port" cp boot.py :boot.py
   mpremote connect "$port" cp board.py :board.py
   mpremote connect "$port" cp "$BOARD_MODULE" ":$BOARD_MODULE"
+  # Record the board this upload is for. board.py loads it when config.json
+  # has no "board" override; without it, a WROOM-32 or Guition flashed with
+  # --board was detected as an Atom Echo / plain S3 at runtime and failed to
+  # import a board module that was never uploaded. BOARD is one of the names
+  # configure_board accepts, so it is safe to embed.
+  mpremote connect "$port" exec "open('board.txt', 'w').write('${BOARD}')"
   mpremote connect "$port" cp ble_bridge.py :ble_bridge.py
   mpremote connect "$port" cp beep.py :beep.py
   if [[ "$BOARD" == "guition_4848" ]]; then
@@ -266,12 +308,8 @@ main() {
   port=$(detect_port)
   blue "Using port: $port"
 
-  # Configure board (explicit or auto-detect)
-  if [[ -n "$board_arg" ]]; then
-    configure_board "$board_arg"
-  else
-    detect_board "$port"
-  fi
+  # Configure board (--board, config.json "board", or auto-detect)
+  resolve_board "$port" "$board_arg"
   blue "Board: ${BOARD} (chip: ${CHIP}, baud: ${BAUD})"
 
   case "$mode" in
