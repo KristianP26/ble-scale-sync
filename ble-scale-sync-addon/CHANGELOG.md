@@ -7,6 +7,50 @@
 The add-on version always matches the application version, so every entry below
 applies to this add-on.
 
+## [1.30.1](https://github.com/KristianP26/ble-scale-sync/compare/v1.30.0...v1.30.1) (2026-10-04)
+
+
+### Fixed
+
+* **addon:** declare the MQTT service and give btmgmt its capability ([80cb57d](https://github.com/KristianP26/ble-scale-sync/commit/80cb57de32af8fc23157ea7b142b98788b4429cb))
+* **addon:** restart the app after it exits and guard the Garmin token ([26be7ba](https://github.com/KristianP26/ble-scale-sync/commit/26be7bad1a7babe289b3524e6ce1be54fda5998d))
+* **ble:** harden the BLE transports, reloads and the run path ([1cf535f](https://github.com/KristianP26/ble-scale-sync/commit/1cf535f0cf7f80f295a96b5ec84e84b8efd66309))
+* **ble:** honour shutdown mid-session and tidy the transport edges ([90572d6](https://github.com/KristianP26/ble-scale-sync/commit/90572d6bf4ffb0b2c5a3d5b786b0cc1aa420511b))
+* **ble:** keep the pairing agent scoped to the scale being paired ([7dde25d](https://github.com/KristianP26/ble-scale-sync/commit/7dde25df5b4b9fa9db9d08cc229fdfc2117601f6))
+* **ble:** stop abandoned poll cycles, drop the SIG 0xFFFF weight, remember Salter exports ([08dacba](https://github.com/KristianP26/ble-scale-sync/commit/08dacbad84350645b188d89611615217f044ed27))
+* **ci:** repair GHCR cleanup, pin actions and images, harden add-on and worker ([e61d823](https://github.com/KristianP26/ble-scale-sync/commit/e61d82395aa7e828f6dd94480d65a12cbc519c59))
+* **config:** honour env overrides, legacy .env exporters and wizard edits ([9f1fd7b](https://github.com/KristianP26/ble-scale-sync/commit/9f1fd7b24d773c9bd531579033b7304a5428ca3f))
+* **config:** keep edits, read .env beside --config and follow symlinks ([5f5d394](https://github.com/KristianP26/ble-scale-sync/commit/5f5d3942ab237aa47b06551605dd08713268d637))
+* **config:** keep secrets out of reload, YAML and header log lines ([3483bf5](https://github.com/KristianP26/ble-scale-sync/commit/3483bf50d4762121906390267cbb63ebe666c9ca))
+* **config:** refuse two accounts sharing one Garmin or Strava token dir ([ac8e5fa](https://github.com/KristianP26/ble-scale-sync/commit/ac8e5fac9b03b3da7b3e4eea45f85b713348975a))
+* **config:** reload .env, escape ${ and tidy runtime and exporter edges ([2bff4cd](https://github.com/KristianP26/ble-scale-sync/commit/2bff4cdade9858fac3af5610305b3857b949abb5))
+* **config:** stop .env leftovers overriding config.yaml, load scan config properly ([242b605](https://github.com/KristianP26/ble-scale-sync/commit/242b6059a7ea6386532041d0ebf840bc2faeb422))
+* **exporters:** keep Garmin and Strava token directories owner-only ([b494e84](https://github.com/KristianP26/ble-scale-sync/commit/b494e84b9d91aa4892498ca077de38e643b7f16a))
+* **file:** create the export file owner-only ([891733e](https://github.com/KristianP26/ble-scale-sync/commit/891733e1476c10097cd6d35cc07b785a16b09b6d))
+* **firmware:** give host connects ownership, a time budget and TLS ([21a3bc7](https://github.com/KristianP26/ble-scale-sync/commit/21a3bc7ee1f06493ac9b5dcde9d6eb17d98310cb))
+* **firmware:** keep the ESP32 proxy scanning and connected ([1152b4c](https://github.com/KristianP26/ble-scale-sync/commit/1152b4ca7a123930f7a73b01b9c5fb3f998a39ac))
+* **firmware:** publish the newest advertisement of each device ([ae14129](https://github.com/KristianP26/ble-scale-sync/commit/ae141297c4be0095f75d133e65fb04ecf414ef42))
+* **firmware:** validate config, bound MQTT inputs and pin aioble ([a50398c](https://github.com/KristianP26/ble-scale-sync/commit/a50398c31f8f617afd6d43533970a6b78c2edbdb))
+* **garmin:** keep results across SIGTERM, treat 401 as permanent, check Python ([09af3e3](https://github.com/KristianP26/ble-scale-sync/commit/09af3e31d4c7e1ca790f111377d6ac69fff62132))
+* **mqtt-proxy:** require a password for a LAN-exposed embedded broker ([1f4057d](https://github.com/KristianP26/ble-scale-sync/commit/1f4057dd76db21ea1d5a1edd2e8c4d0e32b9631f))
+* **runtime:** give stored records their own time and owner, validate composition ([0e7d395](https://github.com/KristianP26/ble-scale-sync/commit/0e7d395f336c22e2d6ef654d3af9e33aae27b9e4))
+* **runtime:** keep scanning while the retry queue drains and exit cleanly ([40cbdb7](https://github.com/KristianP26/ble-scale-sync/commit/40cbdb70782198d4fb318a8e975c83bb66ee5f60))
+* **scales:** apply the record-time and composition rules to the adapters ([38f1b9b](https://github.com/KristianP26/ble-scale-sync/commit/38f1b9bb16e8c271fccf68732eb9f6a29f0b059b))
+* **scales:** bind QN timers to their session and check ESF-551 checksums ([40920fe](https://github.com/KristianP26/ble-scale-sync/commit/40920fe7411951b40d67c3f2f24470b3b0cc7d4d))
+* **wizard:** stop suggesting a public MQTT broker for health data ([a405cf8](https://github.com/KristianP26/ble-scale-sync/commit/a405cf87d6c7a37da25081ab01f4fc6ba1e7e260))
+
+
+### Docs
+
+* bring the guides back in line with the code ([c48cbc7](https://github.com/KristianP26/ble-scale-sync/commit/c48cbc76c4a92b8ea1e038d21e18912346a32795))
+* **configuration:** overrides come from the real environment, not .env ([9bf6778](https://github.com/KristianP26/ble-scale-sync/commit/9bf67784a98303610162a1f7576b60fb7c70ceca))
+* cover --config with .env, ESP32 TLS, structured proxy errors and live reload limits ([94709e1](https://github.com/KristianP26/ble-scale-sync/commit/94709e10fe1917ca6bd194bb280952b37e07e6d2))
+* describe the retry schedule, add-on MQTT and liveness fixes and wizard user edits ([835d37e](https://github.com/KristianP26/ble-scale-sync/commit/835d37e7bb9a9c4180b92ec04d06debca925615b))
+* **exporters:** do not ship a guessable ntfy topic in the examples ([879d78b](https://github.com/KristianP26/ble-scale-sync/commit/879d78bad4069c208bad1d1e1e983ccd40b9b8a8))
+* Garmin 401 and Python version messages, Salter dedup mark file ([a18e293](https://github.com/KristianP26/ble-scale-sync/commit/a18e2939e782de4c8008ddfea13df3d0694eb2f1))
+* **multi-user:** give each Garmin and Strava account its own token_dir ([5150f07](https://github.com/KristianP26/ble-scale-sync/commit/5150f076706a5a96b17ecd1e65e95eafd3e650fd))
+* per-user exporters merge, stored weigh-ins, composition without impedance ([7b0e5e9](https://github.com/KristianP26/ble-scale-sync/commit/7b0e5e9c983e2e07e9af8f36f5312e9ddb0f5578))
+
 ## [1.30.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.29.0...v1.30.0) (2026-10-02)
 
 
