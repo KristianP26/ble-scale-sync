@@ -8,9 +8,12 @@ import type { ScaleReading } from '../interfaces/scale-adapter.js';
  * `sanitas-sbf72.ts` and `beurer-bf720.ts` each walked the same flags and the
  * same offsets, and only the Beurer copy rejected the sentinels. The other two
  * exported a fabricated body composition from a frame that says it has none
- * (#405). `renpho.ts` has a fourth walk over the same characteristic and is
- * deliberately NOT folded in: it keeps the first impedance across a split
- * indication and ignores the fat outright, so its rules genuinely differ.
+ * (#405), and those two now decode through this module. `beurer-bf720.ts`
+ * still has its own walk (it caches fields across frames and has its own
+ * zeroed-stub rules); `tests/scales/sig-bcs.test.ts` cross-checks the two on
+ * the #229 captures. `renpho.ts` has a fourth walk over the same characteristic
+ * and is deliberately NOT folded in: it keeps the first impedance across a
+ * split indication and ignores the fat outright, so its rules genuinely differ.
  *
  * Layout, per the SIG specification:
  *   Bytes 0-1 : Flags (uint16 LE)

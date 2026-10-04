@@ -351,14 +351,17 @@ describe('BeurerBf720Adapter', () => {
       atCaptureTime(() => {
         const a = makeAdapter();
         a.parseCharNotification(CHR_WEIGHT, WEIGHT_FRAME);
-        const sentinel = Buffer.from('9803ffff962300000000000000000', 'hex');
+        // The captured zeroed stub (ZEROED_COMP) with its fat field set to 0xFFFF.
+        const sentinel = Buffer.from('9803ffff96230000000000000000', 'hex');
+        expect(sentinel).toHaveLength(ZEROED_COMP.length);
         expect(a.parseCharNotification(CHR_BODYCOMP, sentinel)).toBeNull();
       });
     });
 
     // A zeroed frame must RESET the cache, not merely skip assignment.
-    // cachedComp is cleared only in onConnected(), so a stale real value would
-    // otherwise be stamped onto every backdated history entry that follows.
+    // cachedComp is otherwise cleared only at the session boundaries, so a stale
+    // real value would be stamped onto every backdated history entry that
+    // follows in the same session.
     it('does not leak a previously decoded body fat onto a later zeroed frame', () => {
       atCaptureTime(() => {
         const a = makeAdapter();
@@ -366,6 +369,10 @@ describe('BeurerBf720Adapter', () => {
         expect(a.parseCharNotification(CHR_BODYCOMP, REAL_COMP)).not.toBeNull();
 
         // History frame: same shape, different weight, paired with a stub.
+        // The return of this weight frame is deliberately not asserted: today it
+        // is a reading built from the PREVIOUS frame's composition, which is the
+        // open defect of pairing a new weight with a stale composition. Its fix
+        // should add `toBeNull()` here rather than pin the current value.
         a.parseCharNotification(CHR_WEIGHT, WEIGHT_FRAME);
         expect(a.parseCharNotification(CHR_BODYCOMP, ZEROED_COMP)).toBeNull();
       });

@@ -2099,6 +2099,88 @@ describe('AE02 dispatch (#75, #235)', () => {
       }
     });
 
+    // The same binding for every other step that sleeps between writes: the
+    // A00D pair and START here, the 0x13 config after the AE01 init, and the
+    // whole fallback handshake below. Default config, no opt-ins.
+    it('does not hand a reconnected session the previous session A00D or START', async () => {
+      const adapter = makeAdapter();
+      const makeCtx = (sink: number[][]): ConnectionContext =>
+        ({
+          write: async (_uuid: string, data: Buffer | number[]) => {
+            sink.push([...data]);
+          },
+          read: async () => Buffer.alloc(0),
+          subscribe: async () => {},
+          profile: defaultProfile(),
+          deviceAddress: '',
+          availableChars: new Set<string>(),
+        }) as unknown as ConnectionContext;
+      vi.useFakeTimers();
+      try {
+        const first: number[][] = [];
+        const second: number[][] = [];
+        adapter.onSessionStart?.();
+        await adapter.onConnected(makeCtx(first));
+        adapter.parseNotification(ARBOLEAF_2A_INFO);
+        adapter.parseNotification(ARBOLEAF_2A_READY);
+        adapter.parseNotification(ARBOLEAF_2A_CONFIG_REQ);
+        // The first A00D is out; the second, the 0x13 config and START are
+        // still sleeping when the session ends.
+        await vi.advanceTimersByTimeAsync(100);
+        expect(first.some((w) => w[0] === 0xa0 && w[2] === 0x04)).toBe(true);
+        adapter.onSessionEnd!();
+        adapter.onSessionStart?.();
+        await adapter.onConnected(makeCtx(second));
+        // Past the old sequence, short of the new session's 2 s fallback.
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(second).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not let a previous fallback handshake run into a reconnected session', async () => {
+      const adapter = makeAdapter();
+      const makeCtx = (sink: number[][]): ConnectionContext =>
+        ({
+          write: async (_uuid: string, data: Buffer | number[]) => {
+            sink.push([...data]);
+          },
+          read: async () => Buffer.alloc(0),
+          subscribe: async () => {},
+          profile: defaultProfile(),
+          deviceAddress: '',
+          availableChars: new Set<string>(),
+        }) as unknown as ConnectionContext;
+      vi.useFakeTimers();
+      try {
+        const first: number[][] = [];
+        const second: number[][] = [];
+        adapter.onSessionStart?.();
+        await adapter.onConnected(makeCtx(first));
+        // No 0x12 ever arrives, so the 2 s fallback starts and sends the AE01
+        // init, then sleeps 200 ms before the 0x13 config.
+        await vi.advanceTimersByTimeAsync(2100);
+        expect(first.some((w) => w[0] === 0xfe)).toBe(true);
+        adapter.onSessionEnd!();
+        adapter.onSessionStart?.();
+        await adapter.onConnected(makeCtx(second));
+        // Past the old fallback's config, time sync and START, short of the
+        // new session's own fallback.
+        await vi.advanceTimersByTimeAsync(1500);
+        expect(second).toEqual([]);
+        // The new session's own fallback still runs in full: the old one must
+        // not have set its dedup flags. It fires 2 s after this connect and
+        // reaches START about 1.6 s later.
+        await vi.advanceTimersByTimeAsync(3000);
+        expect(second.some((w) => w[0] === 0x13)).toBe(true);
+        expect(second.some((w) => w[0] === 0x20)).toBe(true);
+        expect(second.some((w) => w[0] === 0x22)).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('sends no pre-START anchor on the 19-byte dialect by default', async () => {
       const adapter = makeAdapter();
       const writes = await driveHandshake(
@@ -2551,5 +2633,77 @@ describe('QN per-session reset ordering (#406)', () => {
     expect(first.isLongFrameVariant).toBe(false);
     expect(first.configSent).toBe(false);
     expect(first.weightScaleFactor).toBe(100);
+  });
+
+  // The test above checks three fields. This one covers every instance field
+  // that is not configuration or a session-boundary value, so a reset dropped
+  // from onSessionStart, or a new per-session field added without one, fails
+  // here by name. A field that genuinely must survive a session belongs in
+  // SURVIVES, with the reason next to it.
+  it('resets every per-session field to its constructor value', () => {
+    const SURVIVES = new Set([
+      // Identity and wiring, fixed for the instance.
+      'name',
+      'match',
+      'charNotifyUuid',
+      'charWriteUuid',
+      'altCharNotifyUuid',
+      'altCharWriteUuid',
+      'normalizesWeight',
+      // Configuration from configure(), not session state.
+      'displayUnit',
+      'forcedProtocolType',
+      'forcedReportByte',
+      'forcedWeightAck',
+      'a4PreludeEnabled',
+      'configLong',
+      'timeSyncLong',
+      // Session-boundary values: set by onConnected / onSessionEnd, bumped
+      // rather than reset, re-stamped with the current time, or replaced by a
+      // fresh promise that cannot equal the constructor's.
+      'ctx',
+      'sessionGeneration',
+      'sessionStartedScaleSeconds',
+      'ae01Chain',
+    ]);
+    vi.useFakeTimers();
+    try {
+      const fresh = new QnScaleAdapter() as unknown as Record<string, unknown>;
+      const used = new QnScaleAdapter() as unknown as Record<string, unknown>;
+      const perSession = Object.keys(fresh).filter((k) => !SURVIVES.has(k));
+      // Guards the filter itself: if these vanished, the loop below would
+      // silently check nothing.
+      expect(perSession).toEqual(
+        expect.arrayContaining([
+          'seenProtocolType',
+          'weightScaleFactor',
+          'isExtendedLongFrame',
+          'extendedResultEmitted',
+          'historyResponseSent',
+          'timeSyncSent',
+          'firstStableNoImpedanceAt',
+          'fallbackTimer',
+          'storedRetryTimer',
+        ]),
+      );
+
+      // Dirty every per-session field with a value its constructor never has.
+      for (const key of perSession) {
+        const v = fresh[key];
+        if (key.endsWith('Timer')) used[key] = setTimeout(() => {}, 60_000);
+        else if (typeof v === 'boolean') used[key] = !v;
+        else if (typeof v === 'number') used[key] = v + 7;
+        else if (v === null) used[key] = key === 'ae02Subscribe' ? Promise.resolve(true) : 12345;
+        else throw new Error(`no dirty value for field ${key} (${typeof v}); extend this test`);
+      }
+
+      (used as unknown as QnScaleAdapter).onSessionStart();
+
+      for (const key of perSession) {
+        expect({ [key]: used[key] }).toEqual({ [key]: fresh[key] });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -6,14 +6,20 @@ import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
 /**
  * Registry collision guard for #182.
  *
- * Production resolves a scale with `adapters.find(a => a.matches(info))`
- * (uniformly across handler-noble*, handler-mqtt-proxy/*,
- * handler-esphome-proxy/*). Precedence (registry array order) is the ONLY
- * thing stopping a broad `matches()` from shadowing a more specific adapter —
- * the root cause of #168 (BF720↔Mi Scale 2), #177 (T9146↔Inlife), #135 (Lefu).
+ * Production resolves a scale with `resolveAdapter()` (src/scales/resolve.ts),
+ * which orders the registry by `match.priority`, highest first, and returns
+ * the first adapter whose `matches()` accepts the device; array position only
+ * breaks priority ties (#245). Precedence is what stops a broad `matches()`
+ * from shadowing a more specific adapter, the root cause of #168 (BF720 vs Mi
+ * Scale 2), #177 (T9146 vs Inlife) and #135 (Lefu).
+ *
+ * KNOWN GAP: this test still takes the first match in REGISTRY ARRAY order, not
+ * in priority order. The two agree on every fixture today, including the eight
+ * that match more than one adapter, but a future pair on which they disagree
+ * would be pinned to the array winner, not to what production picks.
  *
  * This test pins one representative advertisement per registered adapter and
- * asserts the FIRST matching adapter (i.e. what production picks) is the
+ * asserts the FIRST matching adapter is the
  * intended one. It fails the moment a new or widened `matches()` shadows an
  * existing adapter, and names every colliding adapter so the offender is
  * obvious. Each fixture mirrors that adapter's own per-adapter test (incl.
@@ -21,8 +27,9 @@ import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
  *
  * NOTE: strict mutual exclusion is intentionally NOT asserted —
  * `StandardGattScaleAdapter` is a deliberately broad BCS/WSS fallback that
- * overlaps many specific adapters by design; precedence (it is last) is the
- * mechanism. First-match correctness is the real invariant.
+ * overlaps many specific adapters by design; precedence (priority 0, and last
+ * in the array) is the mechanism. First-match correctness is the real
+ * invariant.
  */
 
 /** One representative BleDeviceInfo per registered adapter, keyed by name. */

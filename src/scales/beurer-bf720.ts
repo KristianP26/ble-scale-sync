@@ -757,7 +757,7 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
           'log on issue #229.',
       );
     }
-    // Clearing the cache here, not only in onConnected, matters: multi-char
+    // Clearing the cache here as well as in onSessionStart matters: multi-char
     // subscriptions are enabled before onConnected is awaited, so a frame from
     // the next session could otherwise be parsed against this session's values
     // and inherit its composition snapshot and timestamp.
@@ -828,9 +828,10 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     // `leanBodyMass - softLean`, so a zeroed frame yields boneMass equal to the
     // entire body weight (verified: 117.92 kg of "bone" from this capture).
     //
-    // Reset rather than merely skip. `cachedComp` is cleared only in
-    // onConnected(), so leaving a previously decoded real value in place would
-    // stamp the live weigh-in's body fat onto every backdated history entry.
+    // Reset rather than merely skip. `cachedComp` is otherwise cleared only at
+    // the session boundaries (onSessionStart, onSessionEnd), so leaving a
+    // previously decoded real value in place would stamp the live weigh-in's
+    // body fat onto every backdated history entry of the same session.
     // 0xFFFF is the SIG sentinel for "measurement unsuccessful / unavailable".
     // buildPayload does not clamp a scale-provided fat, so letting it through
     // would export 6553.5 % and a negative bone mass. Not observed on these

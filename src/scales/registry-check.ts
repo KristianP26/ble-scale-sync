@@ -5,18 +5,22 @@ import { descriptorNameTokens } from './match-descriptor.js';
 /**
  * Structural integrity checks for the scale-adapter registry.
  *
- * These run at startup and do NOT need BLE fixtures — they assert the
- * invariants the registry array relies on for correct precedence:
+ * These run at startup and do NOT need BLE fixtures. Precedence itself is
+ * decided by `resolveAdapter()` (resolve.ts): highest `match.priority` first,
+ * array position only breaking ties (#245). These checks assert the
+ * invariants around it:
  *
  *  - adapter names are unique (the name is used in logs and as the stable
  *    identifier in collision diagnostics);
  *  - the generic {@link StandardGattScaleAdapter} fallback is positioned last,
- *    so it never shadows a specific adapter via its broad BCS/WSS match.
+ *    so array order agrees with its priority 0 and it never shadows a
+ *    specific adapter via its broad BCS/WSS match;
+ *  - priorities are unique, so the priority order is total.
  *
  * The fixture-based collision guard (one representative {@link
- * '../interfaces/scale-adapter.js'.BleDeviceInfo} per adapter, verifying
- * `adapters.find(matches)` resolves to the right adapter) lives in the test
- * suite — it needs a fixture corpus that is test data, not shipped code.
+ * '../interfaces/scale-adapter.js'.BleDeviceInfo} per adapter, verifying the
+ * first match resolves to the right adapter) lives in the test suite, since
+ * it needs a fixture corpus that is test data, not shipped code.
  */
 export interface RegistryCheckResult {
   errors: string[];
@@ -42,8 +46,10 @@ export function checkRegistryIntegrity(adapters: readonly ScaleAdapter[]): Regis
 
   // The generic GATT adapter matches by bare Body Composition / Weight Scale
   // service UUID and brand-name substrings, so it overlaps many specific
-  // adapters by design. Precedence (registry order) is the disambiguation
-  // mechanism, which only holds if it stays last.
+  // adapters by design. Its priority 0 (with the uniqueness check below) is
+  // what sorts it under every specific adapter in resolveAdapter(); keeping it
+  // last in the array as well makes array order, which the collision test
+  // still uses, agree with that.
   const genericIdx = adapters.findIndex((a) => a instanceof StandardGattScaleAdapter);
   if (genericIdx === -1) {
     warnings.push(

@@ -96,6 +96,22 @@ export class QnScaleAdapter
   /** Stored connection context for notification-driven state machine writes. */
   private ctx: ConnectionContext | null = null;
 
+  /**
+   * Bumped on every session boundary (onSessionStart and onSessionEnd). The
+   * handshake steps are fire-and-forget coroutines that sleep between writes
+   * and write through `this.ctx`, so each one captures this value on entry and
+   * stops after any await that crossed a boundary. Without it a step still
+   * sleeping when its session ended would write into the NEXT session, and
+   * because onSessionStart clears the dedup flags it would also set them there,
+   * so the new session's own answer to that frame would be skipped.
+   *
+   * A generation rather than the context itself, because on the multi-char
+   * transports a 0x12 can be parsed after onSessionStart but before
+   * onConnected sets `this.ctx`, and that step must keep running once the
+   * context appears.
+   */
+  private sessionGeneration = 0;
+
   /** Protocol type byte captured from the scale's 0x12 frame, echoed in config commands. */
   private seenProtocolType = 0x00;
 
@@ -310,6 +326,7 @@ export class QnScaleAdapter
    * until then.
    */
   onSessionStart(): void {
+    this.sessionGeneration += 1;
     this.seenProtocolType = this.forcedProtocolType ?? 0x00;
     this.weightScaleFactor = 100;
     this.hasAe00 = false;
@@ -424,6 +441,7 @@ export class QnScaleAdapter
     if (!this.ctx) return;
     this.fallbackTimer = null;
     const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    const gen = this.sessionGeneration;
 
     if (!this.configSent) {
       this.seenProtocolType = this.forcedProtocolType ?? 0xff;
@@ -434,12 +452,14 @@ export class QnScaleAdapter
       // handleScaleInfo sends AE01 init + 0x13 config
       await this.handleScaleInfo();
       await wait(500);
+      if (gen !== this.sessionGeneration) return;
     }
 
     if (!this.timeSyncSent) {
       bleLog.debug('QN: fallback: sending time sync + profile');
       await this.handleReady();
       await wait(500);
+      if (gen !== this.sessionGeneration) return;
     }
 
     if (!this.historyResponseSent) {
@@ -705,9 +725,10 @@ export class QnScaleAdapter
     // 0x10: live weight frame.
     // Anything else lands here and used to be discarded in silence, which is why
     // #75 read as a decode bug: the AE00 challenge frames the scale sends on AE02
-    // reach this parser (we declare no parseCharNotification, so shared.ts feeds
-    // every characteristic through the same UUID-blind path) and vanished without
-    // a trace. Log the frame so the next reporter log carries the evidence.
+    // reached this parser through a UUID-blind path and vanished without a trace.
+    // parseCharNotification now intercepts the challenge, but any other AE02
+    // frame still falls through to here, so log it and the next reporter log
+    // carries the evidence.
     if (opcode !== 0x10 || data.length < 10) {
       bleLog.debug(
         `QN: ignoring frame opcode=0x${opcode.toString(16).padStart(2, '0')} ` +
@@ -931,15 +952,19 @@ export class QnScaleAdapter
     }
 
     const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    // See sessionGeneration: every await below can outlive this session.
+    const gen = this.sessionGeneration;
 
     // Step 1: subscribe AE02 if it has not happened yet. On Linux 0x12 can
     // arrive before onConnected finishes, so both paths call the same memoised
     // helper instead of racing two independent subscribes (#75).
     await this.ensureAe02Subscribed();
+    if (gen !== this.sessionGeneration) return;
 
     // Step 2: AE01 init. Fails silently on firmware without AE00.
     await this.writeAe01([0xfe, 0xdc, 0xba, 0xc0, 0x06, 0x00, 0x02, 0x01, 0x01, 0xef]);
     await wait(200);
+    if (gen !== this.sessionGeneration) return;
 
     // Step 3: 0x13 config. See buildConfig for the 9 vs 10 byte forms and why
     // the longer one is opt-in.
@@ -956,10 +981,12 @@ export class QnScaleAdapter
   private async handleReady(): Promise<void> {
     if (this.timeSyncSent) return;
     this.timeSyncSent = true;
+    const gen = this.sessionGeneration;
     // 0x20 time sync: seconds since 2000-01-01, little-endian. See
     // TIME_SYNC_TRAILER for the 9-byte form and why it is opt-in.
     const secs = Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
     await this.writeCmd(buildTimeSync(this.seenProtocolType, secs, this.timeSyncLong));
+    if (gen !== this.sessionGeneration) return;
     if (this.timeSyncLong) {
       bleLog.debug(
         'QN: 0x20 time sync sent in the 9-byte vendor-app form ' +
@@ -1000,6 +1027,7 @@ export class QnScaleAdapter
         );
       }
       await this.writeCmd(profileCmd);
+      if (gen !== this.sessionGeneration) return;
     }
 
     // "pass" authentication on AE01. Always attempted; fails silently without AE00.
@@ -1011,6 +1039,12 @@ export class QnScaleAdapter
     if (this.historyResponseSent) return;
     this.historyResponseSent = true;
     const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    // See sessionGeneration. The whole sequence spans several timers, and
+    // writeCmd reads this.ctx at write time, so a session that ends and
+    // reconnects inside it must not be handed this one's A00D, START, anchor,
+    // prelude or trigger.
+    const gen = this.sessionGeneration;
+    const live = (): boolean => gen === this.sessionGeneration;
 
     // A00D response 1 (from openScale QNHandler). byte[3] is the payload byte
     // `ble.qn_report_byte` overrides; see REPORT_BYTE_DEFAULT and
@@ -1042,6 +1076,7 @@ export class QnScaleAdapter
     await this.writeCmd(msg1);
 
     await wait(200);
+    if (!live()) return;
 
     // A00D response 2 (from openScale QNHandler)
     const msg2 = [0xa0, 0x0d, 0x02, 0x01, 0x00, 0x08, 0x00, 0x21, 0x06, 0xb8, 0x04, 0x02, 0x00];
@@ -1049,9 +1084,11 @@ export class QnScaleAdapter
     await this.writeCmd(msg2);
 
     await wait(200);
+    if (!live()) return;
 
     // 0x22 start measurement / stored-data query with echoed protocol type
     await this.writeCmd(this.buildStoredDataQuery());
+    if (!live()) return;
 
     // Weight anchor, twice, right after START. Every dialect except the 20-byte
     // extended one, which has its own hardware-confirmed burst further down,
@@ -1078,16 +1115,14 @@ export class QnScaleAdapter
     // twice unconditionally rather than on the a3, which a proxy transport may
     // deliver late or not at all.
     //
-    // The burst spans two timers, so it is bound to the session that started
-    // it: writeCmd reads this.ctx at write time, and a session that ends and
-    // reconnects inside the window must not be handed this one's anchor.
+    // The burst spans two timers, so like the rest of this sequence it is bound
+    // to the session that started it (`live()`).
     if (this.forcedWeightAck === true && !this.isExtendedLongFrame) {
-      const owner = this.ctx;
       const anchorKg = this.resolveAnchorKg();
       const anchor = buildMeasurementTrigger(anchorKg);
       for (let i = 0; i < TRIGGER_REPEATS; i++) {
         await wait(i === 0 ? POST_START_ANCHOR_DELAY_MS : TRIGGER_GAP_MS);
-        if (!owner || this.ctx !== owner) return;
+        if (!live()) return;
         await this.writeCmd([...anchor]);
       }
       bleLog.debug(
@@ -1102,6 +1137,7 @@ export class QnScaleAdapter
     if (this.a4PreludeEnabled) {
       for (let i = 0; i < A4_PRELUDE.length; i++) {
         if (i > 0) await wait(A4_PRELUDE_GAP_MS);
+        if (!live()) return;
         await this.writeCmd([...A4_PRELUDE[i]]);
       }
       bleLog.debug(
@@ -1124,6 +1160,7 @@ export class QnScaleAdapter
     const trigger = buildMeasurementTrigger(anchorKg);
     for (let i = 0; i < TRIGGER_REPEATS; i++) {
       if (i > 0) await wait(TRIGGER_GAP_MS);
+      if (!live()) return;
       await this.writeCmd([...trigger]);
     }
     bleLog.debug(
@@ -1140,6 +1177,7 @@ export class QnScaleAdapter
    * worse against the next session's context. Same class of defect as #138.
    */
   onSessionEnd(): void {
+    this.sessionGeneration += 1;
     if (this.fallbackTimer) {
       clearTimeout(this.fallbackTimer);
       this.fallbackTimer = null;

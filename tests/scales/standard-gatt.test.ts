@@ -61,6 +61,17 @@ describe('StandardGattScaleAdapter', () => {
       const p = mockPeripheral('Unknown', []);
       expect(adapter.matches(p)).toBe(false);
     });
+
+    // The descriptor is informational (custom, priority 0), but it is what a
+    // reader takes as the adapter's name claims, and it once missed the names
+    // matches() gained in #409.
+    it('declares in match.names every name that matches() claims by name alone (#409)', () => {
+      const adapter = makeAdapter();
+      for (const name of ['bf1000', 'sbf76', 'sbf77']) {
+        expect(adapter.matches(mockPeripheral(name.toUpperCase(), []))).toBe(true);
+        expect(adapter.match.names?.includes).toContain(name);
+      }
+    });
   });
 
   describe('parseNotification()', () => {

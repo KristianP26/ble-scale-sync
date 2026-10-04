@@ -62,7 +62,10 @@ export class ActiveEraAdapter implements ScaleAdapterCore, GattWiring, Unlockabl
 
       // Impedance correction for high values
       if (imp >= 1500) {
-        imp = (imp - 1000 + this.cachedWeight * 10 * -0.4) / 0.6 / 10;
+        // Clamped at 0: just over the gate at a heavy weight the formula goes
+        // negative (raw 1500 at 130 kg gives -3.3), which no resistance can be.
+        // 0 is the "no impedance" value isComplete already refuses.
+        imp = Math.max(0, (imp - 1000 + this.cachedWeight * 10 * -0.4) / 0.6 / 10);
       }
 
       // The RAW value is the one number that settles whether this correction is

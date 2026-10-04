@@ -70,8 +70,11 @@ export class StandardGattScaleAdapter implements ScaleAdapterCore, GattWiring, U
   readonly match: MatchDescriptor = {
     priority: 0,
     custom: true,
+    // Derived from KNOWN_NAMES so the descriptor cannot drift from matches()
+    // again (it missed the #409 names). Informational only: the descriptor is
+    // custom, and genericExcludes() skips priority 0.
     names: {
-      includes: ['beurer', 'silvercrest', 'bf600', 'bf850', 'medisana'],
+      includes: [...KNOWN_NAMES],
     },
     serviceUuids: ['181b', '181d'],
   };

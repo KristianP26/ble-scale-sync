@@ -35,7 +35,8 @@ interface CachedGattData {
  * for user management.
  *
  * Subscribes to Body Composition Measurement (0x2A9C) for weight/fat data.
- * Unlock sends user list request to trigger connection handshake.
+ * Unlock writes the User Control Point consent `02 01 00 00` (user index 1,
+ * consent code 0) to trigger the connection handshake.
  */
 export class SanitasSbf72Adapter implements ScaleAdapterCore, GattWiring, Unlockable {
   readonly name = 'Sanitas SBF72/73';
