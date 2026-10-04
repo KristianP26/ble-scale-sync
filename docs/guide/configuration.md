@@ -59,7 +59,7 @@ Two consequences worth knowing:
 - Under `npx ble-scale-sync`, the package lives in a cache directory that is deleted again, so the only useful location is the directory you run the command in. Run the command from where your `config.yaml` lives.
 - `config.yaml` and `.env` are always taken from the **same** directory, never one from each. A stray `.env` in your working directory is the `.env` that gets used, so do not keep unrelated ones next to each other.
 
-`--config <path>` overrides the config file location for the run path, for `validate` and for `setup`, and the `.env` next to that file is the one read. A `--config` path that does not exist is an error; it no longer falls back to legacy `.env` mode. A symlinked `config.yaml` stays a symlink when the app or the wizard writes it. In Docker the file is mounted to `/app/config.yaml` instead, and on the add-on it lives in `/data`.
+`--config <path>` overrides the config file location for the run path, `validate`, `setup`, `scan` and `diagnose`, and the `.env` next to that file is the one read. A `--config` path that does not exist is an error; it no longer falls back to legacy `.env` mode. A symlinked `config.yaml` stays a symlink when the app or the wizard writes it. In Docker the file is mounted to `/app/config.yaml` instead, and on the add-on it lives in `/data`.
 
 `validate` checks the same things `start` does, including that `ble.force_scale_adapter` names a known adapter and comes with `ble.scale_mac`.
 
@@ -622,7 +622,7 @@ global_exporters:
 
 ### Runtime overrides
 
-These environment variables always override `config.yaml` values, useful for Docker `-e` flags:
+These environment variables override `config.yaml` values when they are set in the real environment, useful for Docker `-e` flags and compose `environment:`. Each override is logged (without its value). Set only in `.env`, they do not override; see the note on legacy `.env` below.
 
 | Variable                    | Overrides                                            |
 | --------------------------- | ---------------------------------------------------- |
@@ -646,5 +646,5 @@ A value that is not valid for its variable is ignored, the value from
 `BLE_HANDLER` accepts `auto`, `mqtt-proxy`, `esphome-proxy` and `ha-bluetooth`. A proxy handler is applied only when that proxy is configured in `config.yaml`; otherwise the app says so and keeps the configured handler. Any other value is reported and ignored.
 
 ::: details Legacy .env support
-If `config.yaml` doesn't exist, the app falls back to `.env` configuration. See `.env.example` in the repository. When both files exist, the configuration comes from `config.yaml` and the exporter and profile variables of the legacy format are not read. `.env` is still loaded into the environment, though: it supplies the `${VAR}` references, and any [runtime override](#runtime-overrides) left in it (`DEBUG`, `DRY_RUN`, `SCALE_MAC`, ...) overrides `config.yaml` as if it had been set with `-e`. Remove those lines from `.env` after moving to `config.yaml`.
+If `config.yaml` doesn't exist, the app falls back to `.env` configuration. See `.env.example` in the repository. When both files exist, the configuration comes from `config.yaml` and the exporter and profile variables of the legacy format are not read. `.env` is still loaded into the environment, though: it supplies the `${VAR}` references, but a [runtime override](#runtime-overrides) left in it (`DEBUG`, `DRY_RUN`, `SCALE_MAC`, ...) is ignored, with a warning that names it. Move the setting into `config.yaml` or remove the line from `.env`.
 :::
