@@ -6,7 +6,15 @@ export enum LogLevel {
   SILENT = 4,
 }
 
-let currentLevel = process.env.DEBUG ? LogLevel.DEBUG : LogLevel.INFO;
+// Same TRUE words as the DEBUG override in config/env-overrides.ts (D016).
+// The old test was plain truthiness, so DEBUG=false and DEBUG=0 switched debug
+// output ON. Duplicated rather than imported: env-overrides imports this
+// module, and the level has to be known before anything else loads.
+const DEBUG_TRUE_WORDS = new Set(['true', 'yes', 'on', '1']);
+
+let currentLevel = DEBUG_TRUE_WORDS.has((process.env.DEBUG ?? '').trim().toLowerCase())
+  ? LogLevel.DEBUG
+  : LogLevel.INFO;
 
 export function setLogLevel(level: LogLevel): void {
   currentLevel = level;

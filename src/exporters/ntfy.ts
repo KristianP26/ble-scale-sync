@@ -59,6 +59,23 @@ export const ntfySchema: ExporterSchema = {
   supportsPerUser: false,
 };
 
+/**
+ * Make a header value safe to hand to fetch.
+ *
+ * Node's fetch (undici) rejects any header value that is not a ByteString, so
+ * a title like "Vážení" or one with an emoji threw a TypeError before the
+ * request left, on every attempt. Latin-1 text passes that check but is sent
+ * as raw ISO-8859-1 bytes, which ntfy reads as broken UTF-8. ntfy documents
+ * RFC 2047 encoded words as the way to send a UTF-8 header
+ * (https://docs.ntfy.sh/publish/, "Message title"), so anything outside
+ * printable ASCII goes out as one base64 encoded word. Plain ASCII is left
+ * alone so existing titles reach older servers exactly as before.
+ */
+function encodeHeaderValue(value: string): string {
+  if (/^[\x20-\x7e]*$/.test(value)) return value;
+  return `=?UTF-8?B?${Buffer.from(value, 'utf8').toString('base64')}?=`;
+}
+
 export class NtfyExporter implements Exporter {
   readonly name = 'ntfy';
   readonly reportsExports: boolean;
@@ -79,7 +96,7 @@ export class NtfyExporter implements Exporter {
     const targetUrl = `${url.replace(/\/+$/, '')}/${topic}`;
 
     const headers: Record<string, string> = {
-      Title: title,
+      Title: encodeHeaderValue(title),
       Priority: String(priority),
       Tags: 'scales',
     };

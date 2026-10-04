@@ -22,6 +22,24 @@ export function loadEnvConfig(): AppConfig {
     if (name === 'garmin' && exporterConfig.garmin) {
       Object.assign(entry, {
         weight_only: exporterConfig.garmin.weightOnly,
+        // undefined when GARMIN_UPLOAD_TIMEOUT_SEC is unset, which the
+        // exporter reads as "use the default", same as an absent YAML key.
+        upload_timeout_sec: exporterConfig.garmin.uploadTimeoutSec,
+      });
+    }
+    if (name === 'file' && exporterConfig.file) {
+      const f = exporterConfig.file;
+      Object.assign(entry, {
+        file_path: f.filePath,
+        format: f.format,
+      });
+    }
+    if (name === 'strava' && exporterConfig.strava) {
+      const s = exporterConfig.strava;
+      Object.assign(entry, {
+        client_id: s.clientId,
+        client_secret: s.clientSecret,
+        token_dir: s.tokenDir,
       });
     }
     if (name === 'mqtt' && exporterConfig.mqtt) {
@@ -149,7 +167,9 @@ export function loadEnvConfig(): AppConfig {
       continuous_mode: envConfig.continuousMode,
       scan_cooldown: envConfig.scanCooldownSec,
       dry_run: envConfig.dryRun,
-      debug: process.env.DEBUG === 'true',
+      // Same TRUE words as the logger and the yaml override, so DEBUG=1 does
+      // not mean debug logs on but runtime.debug off.
+      debug: ['true', 'yes', 'on', '1'].includes((process.env.DEBUG ?? '').trim().toLowerCase()),
       watchdog_max_consecutive_failures: 10,
       watch_config: true,
       idle_rescan_delay: 5,

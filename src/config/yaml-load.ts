@@ -54,23 +54,49 @@ export function loadYamlConfig(configPath?: string): AppConfig {
     })),
   };
 
-  // Set NOBLE_DRIVER env var if configured (needed before BLE handler import)
-  if (config.ble?.noble_driver) {
-    process.env.NOBLE_DRIVER = config.ble.noble_driver;
-  }
-
-  // Set BLE_HANDLER env var if configured (needed before BLE handler import)
-  if (config.ble?.handler && config.ble.handler !== 'auto') {
-    process.env.BLE_HANDLER = config.ble.handler;
-  }
-
-  // Set DEBUG env var if configured (needed for logger level)
-  if (config.runtime?.debug) {
-    process.env.DEBUG = 'true';
-  }
-
-  // Apply env overrides
+  // Nothing below can throw, so a reload that fails validation above never
+  // touches process.env and the running BLE handler keeps its driver.
+  reclaimNobleDriver();
   config = applyEnvOverrides(config);
+  publishNobleDriver(config.ble?.noble_driver ?? undefined);
+
+  // DEBUG and BLE_HANDLER are deliberately NOT written to process.env. They
+  // used to be, before applyEnvOverrides() ran, so the config value overwrote
+  // the very environment variable that was meant to override it, and on a
+  // reload the value written last time came back as an "override" (debug: true
+  // -> false had no effect until a restart). Nothing reads either variable
+  // except applyEnvOverrides(): the log level is set from runtime.debug by the
+  // caller (setLogLevel) and the handler is taken from ble.handler.
 
   return config;
+}
+
+/**
+ * The NOBLE_DRIVER value this module last wrote, and what the variable held
+ * before that write. src/ble/index.ts picks the noble driver from the
+ * environment, so the final noble_driver has to be published there. Without
+ * remembering that the value is ours, the next reload would read it back as
+ * an environment override and a config change (or removal) of noble_driver
+ * would never be seen.
+ */
+let publishedNobleDriver: { written: string; before: string | undefined } | null = null;
+
+/** Put NOBLE_DRIVER back to what the environment had before our last write. */
+function reclaimNobleDriver(): void {
+  // If someone else changed the variable since, their value is the real
+  // environment and is left alone.
+  if (publishedNobleDriver && process.env.NOBLE_DRIVER === publishedNobleDriver.written) {
+    if (publishedNobleDriver.before === undefined) delete process.env.NOBLE_DRIVER;
+    else process.env.NOBLE_DRIVER = publishedNobleDriver.before;
+  }
+  publishedNobleDriver = null;
+}
+
+function publishNobleDriver(driver: string | undefined): void {
+  // No driver configured: whatever the environment holds stays, exactly as an
+  // unset noble_driver always behaved. Same value already there: nothing of
+  // ours to remember, so it keeps counting as the user's own override.
+  if (!driver || process.env.NOBLE_DRIVER === driver) return;
+  publishedNobleDriver = { written: driver, before: process.env.NOBLE_DRIVER };
+  process.env.NOBLE_DRIVER = driver;
 }

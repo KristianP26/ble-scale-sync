@@ -68,6 +68,48 @@ describe('NtfyExporter', () => {
     expect(headers.Tags).toBe('scales');
   });
 
+  // A header value must be a ByteString, so Node's fetch (undici) throws on a
+  // title such as "Vážení" before anything is sent, and retrying cannot help.
+  // The mock builds a real Headers object to reproduce that check; ntfy
+  // documents RFC 2047 encoded words as the way to send a UTF-8 header.
+  describe('non-ASCII titles', () => {
+    const decodeRfc2047 = (value: string): string => {
+      const m = /^=\?UTF-8\?B\?([A-Za-z0-9+/=]*)\?=$/.exec(value);
+      return m ? Buffer.from(m[1], 'base64').toString('utf8') : value;
+    };
+
+    it.each(['Vážení', 'Scale ⚖️ 🎉'])('delivers the title %j', async (title) => {
+      mockFetch.mockImplementation(async (_url: string, init: RequestInit) => {
+        new Headers(init.headers);
+        return { ok: true, status: 200 };
+      });
+      const exporter = new NtfyExporter({ ...defaultConfig, title });
+      const result = await exporter.export(samplePayload);
+
+      expect(result).toEqual({ success: true });
+      const sent = new Headers(mockFetch.mock.calls[0][1].headers).get('Title')!;
+      expect(decodeRfc2047(sent)).toBe(title);
+    });
+
+    // Latin-1 passes the ByteString check but goes out as raw ISO-8859-1
+    // bytes, which a UTF-8 reader such as ntfy turns into garbage.
+    it('encodes a Latin-1 title too, so only ASCII ever goes out raw', async () => {
+      const exporter = new NtfyExporter({ ...defaultConfig, title: 'Café' });
+      await exporter.export(samplePayload);
+
+      const sent = mockFetch.mock.calls[0][1].headers.Title as string;
+      expect(sent).toMatch(/^[\x20-\x7e]*$/);
+      expect(decodeRfc2047(sent)).toBe('Café');
+    });
+
+    it('leaves a plain ASCII title untouched', async () => {
+      const exporter = new NtfyExporter({ ...defaultConfig, title: 'Scale Measurement' });
+      await exporter.export(samplePayload);
+
+      expect(mockFetch.mock.calls[0][1].headers.Title).toBe('Scale Measurement');
+    });
+  });
+
   it('formats message body with emoji', async () => {
     const exporter = new NtfyExporter(defaultConfig);
     await exporter.export(samplePayload);

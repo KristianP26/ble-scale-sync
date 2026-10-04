@@ -7,7 +7,7 @@ import {
   loadAppConfig,
   loadBleConfig,
 } from '../../src/config/load.js';
-import { createExporterFromEntry } from '../../src/exporters/registry.js';
+import { createExporterFromEntry, KNOWN_EXPORTER_NAMES } from '../../src/exporters/registry.js';
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -296,6 +296,97 @@ scale:
   });
 });
 
+// --- env overrides vs. values loadYamlConfig publishes to process.env ---
+
+// loadYamlConfig used to write DEBUG, BLE_HANDLER and NOBLE_DRIVER from
+// config.yaml into process.env BEFORE applyEnvOverrides() read them, so an
+// override from the real environment was overwritten by the value it was
+// meant to override, and on a reload the value written last time came back
+// as if it were an override.
+describe('loadYamlConfig env override precedence', () => {
+  const KEYS = ['DEBUG', 'BLE_HANDLER', 'NOBLE_DRIVER'] as const;
+  const saved: Record<string, string | undefined> = {};
+
+  const yaml = (ble: string, debug: boolean): string => `
+version: 1
+ble:
+${ble}
+users:
+  - name: Test
+    slug: test
+    height: 183
+    birth_date: "1990-06-15"
+    gender: male
+    is_athlete: false
+    weight_range: { min: 70, max: 100 }
+runtime:
+  debug: ${debug}
+`;
+  const PROXY = `  mqtt_proxy:\n    broker_url: "mqtt://broker.local:1883"`;
+
+  const load = (raw: string) => {
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(raw);
+    return loadYamlConfig('/test/config.yaml');
+  };
+
+  beforeEach(() => {
+    for (const k of KEYS) {
+      saved[k] = process.env[k];
+      delete process.env[k];
+    }
+    // Keep the developer's real .env out of these tests.
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('.env'));
+  });
+
+  afterEach(() => {
+    for (const k of KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+    vi.restoreAllMocks();
+  });
+
+  it('DEBUG=false in the environment turns off debug: true from config.yaml', () => {
+    process.env.DEBUG = 'false';
+    expect(load(yaml('  handler: auto', true)).runtime?.debug).toBe(false);
+  });
+
+  it('a reload from debug: true to debug: false turns debug off', () => {
+    expect(load(yaml('  handler: auto', true)).runtime?.debug).toBe(true);
+    expect(load(yaml('  handler: auto', false)).runtime?.debug).toBe(false);
+  });
+
+  it('BLE_HANDLER=auto in the environment overrides handler: mqtt-proxy', () => {
+    process.env.BLE_HANDLER = 'auto';
+    expect(load(yaml(`  handler: mqtt-proxy\n${PROXY}`, false)).ble?.handler).toBe('auto');
+  });
+
+  it('a reload from handler: mqtt-proxy to handler: auto takes the new handler', () => {
+    expect(load(yaml(`  handler: mqtt-proxy\n${PROXY}`, false)).ble?.handler).toBe('mqtt-proxy');
+    expect(load(yaml(`  handler: auto\n${PROXY}`, false)).ble?.handler).toBe('auto');
+  });
+
+  it('NOBLE_DRIVER in the environment overrides noble_driver and stays published', () => {
+    process.env.NOBLE_DRIVER = 'stoprocent';
+    expect(load(yaml('  noble_driver: abandonware', false)).ble?.noble_driver).toBe('stoprocent');
+    expect(process.env.NOBLE_DRIVER).toBe('stoprocent');
+    // And it keeps winning on a reload.
+    expect(load(yaml('  noble_driver: abandonware', false)).ble?.noble_driver).toBe('stoprocent');
+  });
+
+  it('publishes noble_driver from config.yaml for the BLE handler import', () => {
+    load(yaml('  noble_driver: abandonware', false));
+    expect(process.env.NOBLE_DRIVER).toBe('abandonware');
+  });
+
+  it('a reload that removes noble_driver drops the value config.yaml had published', () => {
+    load(yaml('  noble_driver: abandonware', false));
+    const config = load(yaml('  handler: auto', false));
+    expect(config.ble?.noble_driver).toBeUndefined();
+    expect(process.env.NOBLE_DRIVER).toBeUndefined();
+  });
+});
+
 // --- loadBleConfig ---
 
 describe('loadBleConfig', () => {
@@ -449,6 +540,19 @@ global_exporters:
     expect(createExporterFromEntry(byType.telegram).reportsExports).toBe(true);
   });
 
+  // The logger reads DEBUG with the same TRUE words as the yaml override, so
+  // the legacy path must too: DEBUG=1 meant debug logs but runtime.debug false.
+  it.each(['1', 'yes', 'on', 'TRUE'])('reads DEBUG=%s as on in the .env path', (value) => {
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => String(p).endsWith('.env'));
+    vi.stubEnv('USER_HEIGHT', '183');
+    vi.stubEnv('USER_BIRTH_DATE', '1990-06-15');
+    vi.stubEnv('USER_GENDER', 'male');
+    vi.stubEnv('USER_IS_ATHLETE', 'true');
+    vi.stubEnv('DEBUG', value);
+
+    expect(loadAppConfig().config.runtime?.debug).toBe(true);
+  });
+
   it('carries GARMIN_WEIGHT_ONLY into the .env Garmin exporter entry', () => {
     vi.spyOn(fs, 'existsSync').mockImplementation((p) => String(p).endsWith('.env'));
     vi.stubEnv('USER_HEIGHT', '183');
@@ -487,6 +591,114 @@ global_exporters:
     // Without the env-load mapping the entry is a bare { type } and the
     // factory throws on the missing base_url.
     expect(createExporterFromEntry(healthlog!).name).toBe('healthlog');
+  });
+
+  // `.env.example` lists file and strava under "Available", and
+  // loadExporterConfig() parses and validates FILE_* and STRAVA_*, but the
+  // values never reached the entry: the factory got a bare { type } and the
+  // app refused to start with an error pointing at a config.yaml the user does
+  // not have.
+  it('carries FILE_PATH and FILE_FORMAT into a buildable .env file exporter entry', () => {
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => String(p).endsWith('.env'));
+    vi.stubEnv('USER_HEIGHT', '183');
+    vi.stubEnv('USER_BIRTH_DATE', '1990-06-15');
+    vi.stubEnv('USER_GENDER', 'male');
+    vi.stubEnv('USER_IS_ATHLETE', 'true');
+    vi.stubEnv('EXPORTERS', 'file');
+    vi.stubEnv('FILE_PATH', './measurements.jsonl');
+    vi.stubEnv('FILE_FORMAT', 'jsonl');
+
+    const { config } = loadAppConfig();
+    const file = config.global_exporters!.find((e) => e.type === 'file');
+    expect(file).toEqual({ type: 'file', file_path: './measurements.jsonl', format: 'jsonl' });
+    expect(() => createExporterFromEntry(file!)).not.toThrow();
+  });
+
+  it('carries the STRAVA_* vars into a buildable .env Strava exporter entry', () => {
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => String(p).endsWith('.env'));
+    vi.stubEnv('USER_HEIGHT', '183');
+    vi.stubEnv('USER_BIRTH_DATE', '1990-06-15');
+    vi.stubEnv('USER_GENDER', 'male');
+    vi.stubEnv('USER_IS_ATHLETE', 'true');
+    vi.stubEnv('EXPORTERS', 'strava');
+    vi.stubEnv('STRAVA_CLIENT_ID', '12345');
+    vi.stubEnv('STRAVA_CLIENT_SECRET', 'shh');
+    vi.stubEnv('STRAVA_TOKEN_DIR', './my-strava-tokens');
+
+    const { config } = loadAppConfig();
+    const strava = config.global_exporters!.find((e) => e.type === 'strava');
+    expect(strava).toEqual({
+      type: 'strava',
+      client_id: '12345',
+      client_secret: 'shh',
+      token_dir: './my-strava-tokens',
+    });
+    expect(() => createExporterFromEntry(strava!)).not.toThrow();
+  });
+
+  // Parsed and range-checked by loadExporterConfig(), then dropped on the way
+  // into the entry, so a slow Garmin stayed on the 180 s default (#399).
+  it('carries GARMIN_UPLOAD_TIMEOUT_SEC into the .env Garmin exporter entry', () => {
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => String(p).endsWith('.env'));
+    vi.stubEnv('USER_HEIGHT', '183');
+    vi.stubEnv('USER_BIRTH_DATE', '1990-06-15');
+    vi.stubEnv('USER_GENDER', 'male');
+    vi.stubEnv('USER_IS_ATHLETE', 'true');
+    vi.stubEnv('EXPORTERS', 'garmin');
+    vi.stubEnv('GARMIN_UPLOAD_TIMEOUT_SEC', '300');
+
+    const { config } = loadAppConfig();
+    const garmin = config.global_exporters!.find((e) => e.type === 'garmin');
+    expect(garmin).toMatchObject({ upload_timeout_sec: 300 });
+    expect(() => createExporterFromEntry(garmin!)).not.toThrow();
+  });
+
+  // Every exporter `.env.example` offers must come out of the legacy loader as
+  // an entry the factory can build. Catches the next exporter whose mapping
+  // block is forgotten in env-load.ts.
+  it('builds every known exporter from its minimal .env variables', () => {
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => String(p).endsWith('.env'));
+    vi.stubEnv('USER_HEIGHT', '183');
+    vi.stubEnv('USER_BIRTH_DATE', '1990-06-15');
+    vi.stubEnv('USER_GENDER', 'male');
+    vi.stubEnv('USER_IS_ATHLETE', 'true');
+    const minimalEnv: Record<string, string> = {
+      MQTT_BROKER_URL: 'mqtt://localhost:1883',
+      WEBHOOK_URL: 'https://hook.example/scale',
+      INFLUXDB_URL: 'http://localhost:8086',
+      INFLUXDB_TOKEN: 'tok',
+      INFLUXDB_ORG: 'org',
+      INFLUXDB_BUCKET: 'bucket',
+      NTFY_TOPIC: 'scale-topic',
+      FILE_PATH: './measurements.csv',
+      STRAVA_CLIENT_ID: '12345',
+      STRAVA_CLIENT_SECRET: 'shh',
+      TELEGRAM_BOT_TOKEN: '123:abc',
+      TELEGRAM_CHAT_ID: '42',
+      INTERVALS_ATHLETE_ID: 'i42',
+      INTERVALS_API_KEY: 'key',
+      RUNALYZE_TOKEN: 'tok',
+      WGER_BASE_URL: 'https://wger.example',
+      WGER_TOKEN: 'tok',
+      HEALTHLOG_BASE_URL: 'https://healthlog.example',
+      HEALTHLOG_TOKEN: 'tok',
+    };
+    for (const [key, value] of Object.entries(minimalEnv)) vi.stubEnv(key, value);
+    vi.stubEnv('EXPORTERS', [...KNOWN_EXPORTER_NAMES].join(','));
+
+    const { config } = loadAppConfig();
+    const unbuildable: string[] = [];
+    for (const entry of config.global_exporters!) {
+      try {
+        createExporterFromEntry(entry);
+      } catch (err) {
+        unbuildable.push(`${entry.type}: ${(err as Error).message}`);
+      }
+    }
+    expect(config.global_exporters!.map((e) => e.type).sort()).toEqual(
+      [...KNOWN_EXPORTER_NAMES].sort(),
+    );
+    expect(unbuildable).toEqual([]);
   });
 
   it('defaults the .env Garmin entry to weight_only false', () => {
