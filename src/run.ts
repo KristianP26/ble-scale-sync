@@ -26,6 +26,7 @@ import { createAppContext } from './runtime/context.js';
 import { processReading } from './runtime/processor.js';
 import { PollReadingSource } from './runtime/poll-source.js';
 import { runContinuousLoop } from './runtime/loop.js';
+import { runSingleShot } from './runtime/single-run.js';
 import { reloadAppConfig, userDisplaySnapshot } from './runtime/reload.js';
 import { buildReadingSource } from './runtime/sources.js';
 import {
@@ -350,9 +351,10 @@ async function main(): Promise<void> {
       getExportersForUser: (slug) => getExportersForUser(ctx, slug),
     });
 
-  // At the START of a single run, not after its dispatch: a total export
-  // failure exits non-zero below, before any post-dispatch code could run, and
-  // that is exactly the run that just queued something (#412).
+  // Started with the scan of a single run and awaited before it reports, so a
+  // total export failure, which exits non-zero below, still lets the flush
+  // finish first (#412). In continuous mode the loop starts it at the top of
+  // each iteration without waiting for it (E-02).
   const flushQueuedExports = async (): Promise<void> => {
     if (!ctx.exportQueuePath) return;
     // A dry run promises to skip exports, and a queued upload firing under it
@@ -367,10 +369,12 @@ async function main(): Promise<void> {
   };
 
   if (!initialResolved.continuousMode) {
-    await flushQueuedExports();
-    const source = new PollReadingSource(ctx, adapters);
-    const raw = await source.nextReading(ctx.signal);
-    const success = await runProcessReading(raw);
+    const success = await runSingleShot({
+      source: new PollReadingSource(ctx, adapters),
+      signal: ctx.signal,
+      processReading: runProcessReading,
+      flush: flushQueuedExports,
+    });
     if (!success) process.exit(1);
     runFinished = true;
     return;

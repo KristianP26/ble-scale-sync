@@ -62,7 +62,9 @@ describe('export queue when the file cannot be written', () => {
     const queued = (weight: number) => ({
       exporter: 'garmin',
       payload: { weight } as unknown as BodyComposition,
-      queuedAt: new Date(NOW - 60_000).toISOString(),
+      // Due for a retry, so the write failure is the only thing that can stop
+      // the attempt (E-01 spaces attempts in time).
+      queuedAt: new Date(NOW - 60 * 60_000).toISOString(),
       attempts: 0,
     });
     saveQueue(file, [queued(80), queued(81)]);

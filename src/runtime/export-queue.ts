@@ -25,6 +25,24 @@ export const EXPORT_QUEUE_FILENAME = '.export-retry-queue.jsonl';
 const MAX_AGE_MS = 72 * 60 * 60 * 1000;
 /** A target that has refused this many times is not coming back on its own. */
 const MAX_ATTEMPTS = 5;
+/**
+ * Minimum wait before retry N+1, indexed by the attempts already spent (E-01).
+ *
+ * ADR D014 bounds an entry at 72 h and 5 attempts and relies on the age bound
+ * being the one that decides. That only holds when attempts are spaced in
+ * time: a flush runs at the start of every loop iteration, which on node-ble
+ * is a scan cycle of about two minutes, so without spacing all five attempts
+ * were gone ten minutes after the failure and an overnight outage still cost
+ * the reading.
+ *
+ * Measured from the previous attempt (or the original failure), not from
+ * queuedAt, so attempts the process could not make on time (process down, or
+ * a watcher transport where an iteration needs a weigh-in) are never made up
+ * in a burst. On time, retries land about 15 min, 1 h, 6 h, 24 h and 71 h
+ * after the failure: a short outage recovers quickly, and the fifth and last
+ * attempt sits just inside the age bound, which therefore still decides.
+ */
+const RETRY_DELAYS_MS = [15, 45, 5 * 60, 18 * 60, 47 * 60].map((min) => min * 60 * 1000);
 /** Hard cap; the oldest go first. */
 const MAX_ENTRIES = 50;
 
@@ -47,7 +65,33 @@ export interface QueuedExport {
   /** ISO 8601, when the failure happened. Drives the age bound. */
   queuedAt: string;
   attempts: number;
+  /**
+   * ISO 8601, when the last retry failed. Absent until the first retry, and in
+   * files written before attempts were spaced in time, where queuedAt stands
+   * in for it.
+   */
+  lastAttemptAt?: string;
   lastError?: string;
+}
+
+/** Whether the spacing in RETRY_DELAYS_MS allows another attempt at `now`. */
+function isDue(entry: QueuedExport, now: number): boolean {
+  const attempts = entry.attempts ?? 0;
+  const delay = RETRY_DELAYS_MS[Math.min(attempts, RETRY_DELAYS_MS.length - 1)];
+  const last = Date.parse(entry.lastAttemptAt ?? entry.queuedAt);
+  // An unparseable stamp must not park the entry forever; the age bound in
+  // loadQueue still retires it.
+  if (Number.isNaN(last)) return true;
+  return now - last >= delay;
+}
+
+/**
+ * Identity of an entry across rewrites. Stable while its attempt count and
+ * error change, and distinct for every failed export: one exporter, one user,
+ * one failure time.
+ */
+function entryId(e: QueuedExport): string {
+  return JSON.stringify([e.exporter, e.userSlug ?? '', e.queuedAt, e.timestamp ?? '']);
 }
 
 /**
@@ -147,7 +191,7 @@ export function enqueue(path: string, entry: QueuedExport, now: number = Date.no
 export type QueuedExporterLookup = (entry: QueuedExport) => Exporter | undefined;
 
 /**
- * Try every queued entry once, oldest first.
+ * Try every queued entry that is due, oldest first.
  *
  * At-most-once on purpose: an entry is removed from the file BEFORE it is
  * attempted and only put back on a clean failure, so a crash mid-flush loses it
@@ -156,11 +200,13 @@ export type QueuedExporterLookup = (entry: QueuedExport) => Exporter | undefined
  * and runalyze carries no request id, so at-least-once would leave a duplicate
  * in the user's own data. A lost reading is the better failure of the two.
  *
- * No in-flight guard: the only callers are the continuous loop, which awaits
- * this before asking the source for a reading, and the single-run path, which
- * calls it once before anything else. Serialisation comes from that sequencing
- * rather than from this function, so a future caller that fires it concurrently
- * needs its own.
+ * Safe against an `enqueue` that runs while an export here is awaited (E-02:
+ * the loop no longer waits for a flush before it scans, so a live weigh-in can
+ * fail and be queued mid-flush). Every write re-reads the file first and
+ * carries over any entry this pass did not load, instead of writing back only
+ * its own view, which used to erase the newly queued reading. Two flushes at
+ * once are NOT safe: each would attempt the same entries, so the caller keeps
+ * at most one in flight.
  */
 export async function flushQueue(
   path: string,
@@ -175,14 +221,39 @@ export async function flushQueue(
     return { delivered: 0, failed: 0, dropped: 0 };
   }
 
-  log.info(`Retrying ${pending.length} queued export(s)...`);
+  const dueCount = pending.filter((e) => isDue(e, now)).length;
+  if (dueCount === 0) {
+    log.debug(`${pending.length} queued export(s) waiting; none is due for a retry yet.`);
+    return { delivered: 0, failed: 0, dropped: 0 };
+  }
+
+  log.info(`Retrying ${dueCount} queued export(s)...`);
   const keep: QueuedExport[] = [];
+  // Entries somebody else queued while this pass was running. Written last:
+  // they are the newest.
+  const foreign: QueuedExport[] = [];
+  const known = new Set(pending.map(entryId));
   let delivered = 0;
   let failed = 0;
   let dropped = 0;
 
+  const persist = (rest: QueuedExport[]): boolean => {
+    for (const e of loadQueue(path, now)) {
+      const id = entryId(e);
+      if (known.has(id)) continue;
+      known.add(id);
+      foreign.push(e);
+    }
+    return saveQueue(path, [...keep, ...rest, ...foreign]);
+  };
+
   for (let i = 0; i < pending.length; i += 1) {
     const entry = pending[i];
+    if (!isDue(entry, now)) {
+      // Not attempted, so it stays on disk exactly as it was.
+      keep.push(entry);
+      continue;
+    }
     // Remove before attempting: everything not yet tried stays on disk, so a
     // crash costs at most the one in flight.
     //
@@ -190,7 +261,7 @@ export async function flushQueue(
     // would deliver a reading the next flush delivers again. A full disk is not
     // a reason to duplicate somebody's weigh-in: stop, and let the next cycle
     // try the whole queue.
-    if (!saveQueue(path, [...keep, ...pending.slice(i + 1)])) {
+    if (!persist(pending.slice(i + 1))) {
       log.warn('Stopping the retry pass: the queue could not be written, so nothing is attempted.');
       return { delivered, failed, dropped };
     }
@@ -233,11 +304,16 @@ export async function flushQueue(
         continue;
       }
       log.debug(`${entry.exporter} retry ${attempts} failed: ${errMsg(err)}`);
-      keep.push({ ...entry, attempts, lastError: errMsg(err) });
+      keep.push({
+        ...entry,
+        attempts,
+        lastAttemptAt: new Date(now).toISOString(),
+        lastError: errMsg(err),
+      });
       failed += 1;
     }
   }
 
-  saveQueue(path, keep);
+  persist([]);
   return { delivered, failed, dropped };
 }

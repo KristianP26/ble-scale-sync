@@ -8,7 +8,7 @@ import type { MqttProxyConfig, EsphomeProxyConfig, HaBluetoothConfig } from '../
 import type { ScanOptions, ScanResult, BleHandlerName } from './types.js';
 import type { RawReading } from './shared.js';
 import type { Watcher } from './reading-source.js';
-import { bleLog } from './types.js';
+import { bleLog, errMsg } from './types.js';
 import { ReadingWatcher } from './handler-mqtt-proxy/index.js';
 import { HANDLER_LABELS, rethrowAsTransportError } from './transport-availability.js';
 import type { HandlerKey } from './transport-availability.js';
@@ -105,6 +105,33 @@ async function loadHandler(key: HandlerKey): Promise<CommonHandler> {
 export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   const handler = await loadHandler(resolveHandlerKey(opts.bleHandler));
   return handler.scanAndReadRaw(opts);
+}
+
+/**
+ * Release whatever a native BLE handler keeps open between scans, once the
+ * caller is done with BLE: after the one scan of a single run, and when the
+ * continuous loop stops.
+ *
+ * Only node-ble holds anything. It keeps one D-Bus connection across scan
+ * cycles on purpose (fewer discovery start/stop cycles, bluez/bluez#807), but
+ * resets it only after a GATT attempt, so a broadcast reading or a scan that
+ * found nothing left the dbus-next socket open. dbus-next never unrefs that
+ * socket, so it pinned the event loop: a single run exported and then hung, and
+ * every continuous-mode shutdown ended through the force-exit timer (A-02).
+ * BlueZ ties a discovery session to the D-Bus client that started it, so
+ * closing the connection ends ours as well.
+ *
+ * Best effort and never throws: it runs on the way out, where a failure to
+ * close must not replace the result being reported.
+ */
+export async function releaseTransport(bleHandler?: BleHandlerName): Promise<void> {
+  if (resolveHandlerKey(bleHandler) !== 'node-ble') return;
+  try {
+    const handler = await import('./handler-node-ble/index.js');
+    handler.releaseTransport();
+  } catch (err) {
+    bleLog.debug(`Could not release the node-ble connection: ${errMsg(err)}`);
+  }
 }
 
 export { ReadingWatcher };

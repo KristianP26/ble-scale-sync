@@ -1,6 +1,6 @@
 import type { RawReading } from '../ble/shared.js';
 import type { ScaleAdapter } from '../interfaces/scale-adapter.js';
-import { scanAndReadRaw } from '../ble/index.js';
+import { scanAndReadRaw, releaseTransport } from '../ble/index.js';
 import { withTimeout, POLL_CYCLE_TIMEOUT_MS } from '../ble/types.js';
 import { resolveUserProfile } from '../config/resolve.js';
 import { fmtWeight } from './format.js';
@@ -9,13 +9,24 @@ import type { ReadingSource } from './loop.js';
 
 /**
  * Wraps `scanAndReadRaw` as a `ReadingSource`. Stateless: hot-swap fields
- * (scaleMac, weightUnit, mqttProxy, ...) take effect on the next cycle.
+ * (scaleMac, weightUnit, mqttProxy, ...) take effect on the next cycle. The
+ * handler's own connection state lives in the handler and is released by
+ * stop().
  */
 export class PollReadingSource implements ReadingSource {
   constructor(
     private readonly ctx: AppContext,
     private readonly adapters: ScaleAdapter[],
   ) {}
+
+  /**
+   * Called by the loop on its way out. Without it a shutdown during an idle
+   * cycle (the usual state) left node-ble's D-Bus socket open, and the process
+   * ended through the force-exit timer rather than by draining (A-02).
+   */
+  async stop(): Promise<void> {
+    await releaseTransport(this.ctx.bleHandler);
+  }
 
   async nextReading(signal: AbortSignal): Promise<RawReading> {
     const primaryUser = this.ctx.config.users[0];

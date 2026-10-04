@@ -118,26 +118,71 @@ export class EsphomeProxyPool {
     else this.gattInFlight.set(proxyId, n);
   }
 
+  /**
+   * Connect every configured proxy. Resolves as soon as the attempts settle
+   * with at least one proxy connected; rejects only when none is.
+   *
+   * Not all-or-nothing on purpose (B-01). `additional_proxies` exists to add
+   * coverage, and a second node that is switched off or moved by DHCP used to
+   * take the working one down with it: the first failure threw out of here,
+   * the watcher tore every client down, and the loop retried into the same
+   * failure forever while the scale sat in range of a healthy proxy.
+   *
+   * A proxy that fails here keeps its client. The library is built with
+   * `reconnect: true`, and a failed socket emits `close`, which schedules the
+   * next connect attempt 30 s later (`lib/connection.js`), so it keeps retrying
+   * in the background and its advertisements flow through the handler
+   * registered below as soon as it is back. stop() still owns it, so the
+   * retry timer cannot outlive the pool.
+   *
+   * The endpoints connect in parallel: one host that never answers costs the
+   * full connect timeout, and the reachable proxies should not wait for it.
+   */
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
-    for (const ep of this.endpoints) {
-      const client = await createEsphomeClient({
-        host: ep.host,
-        port: ep.port,
-        encryption_key: ep.encryption_key,
-        password: ep.password,
-        client_info: ep.client_info,
-        additional_proxies: [],
-        advertisement_timeout: 0,
-      } as EsphomeProxyConfig);
-      const handler = (ad: EsphomeBleAdvertisement): void => this.onAd(ep.id, ad);
-      client.on('ble', handler);
-      this.clients.set(ep.id, client);
-      this.adHandlers.set(ep.id, handler);
-      await waitForConnected(client, ep.id);
-      this.lastAdAt.set(ep.id, Date.now());
-      bleLog.info(`ESPHome proxy connected at ${ep.id}`);
+    const results = await Promise.allSettled(
+      this.endpoints.map(async (ep) => {
+        const client = await createEsphomeClient({
+          host: ep.host,
+          port: ep.port,
+          encryption_key: ep.encryption_key,
+          password: ep.password,
+          client_info: ep.client_info,
+          additional_proxies: [],
+          advertisement_timeout: 0,
+        } as EsphomeProxyConfig);
+        const handler = (ad: EsphomeBleAdvertisement): void => this.onAd(ep.id, ad);
+        client.on('ble', handler);
+        this.clients.set(ep.id, client);
+        this.adHandlers.set(ep.id, handler);
+        // Stamped before the connect so the liveness sweep measures a proxy
+        // that never connected from its start, and rebuilds it like any other
+        // silent one when the advertisement watchdog is on.
+        this.lastAdAt.set(ep.id, Date.now());
+        await waitForConnected(client, ep.id);
+        bleLog.info(`ESPHome proxy connected at ${ep.id}`);
+      }),
+    );
+
+    const failures: Array<{ id: string; err: unknown }> = [];
+    results.forEach((r, i) => {
+      if (r.status === 'rejected') failures.push({ id: this.endpoints[i].id, err: r.reason });
+    });
+
+    if (failures.length === results.length) {
+      // Nothing to fall back on. Release every client before reporting it, or
+      // the caller's next start() stacks a second set of reconnecting clients
+      // on top of these.
+      await this.stop();
+      throw failures[0].err;
+    }
+
+    for (const { id, err } of failures) {
+      bleLog.warn(
+        `ESPHome proxy ${id} is unreachable (${errMsg(err)}). Continuing with the other ` +
+          'proxies; this one keeps retrying in the background.',
+      );
     }
     if (this.livenessEnabled && this.advertisementTimeoutMs > 0) {
       bleLog.info(
