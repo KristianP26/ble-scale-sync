@@ -60,6 +60,52 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
     log "WARNING: custom_config is enabled, so the 'preemptive_adapter_reset' option is ignored."
     log "Set 'ble.preemptive_adapter_reset' in $CUSTOM_PATH instead."
   fi
+  # proxy_liveness_timeout_min is the one UI option that only means anything in
+  # this mode: the liveness check runs only on the proxy transports (mqtt-proxy,
+  # esphome-proxy, ha-bluetooth), and the generated config never selects one.
+  # So unlike the options above it is applied here rather than ignored, but
+  # only when the file does not set its own value, which always wins. The
+  # default (30) is the app's own default and needs no write.
+  PROXY_LIVENESS_MIN=$(opt_int proxy_liveness_timeout_min 30)
+  if [ "$PROXY_LIVENESS_MIN" != "30" ]; then
+    _plrc=0
+    python3 - "$FRESH" "$PROXY_LIVENESS_MIN" <<'PY' 2>/dev/null || _plrc=$?
+import sys
+import yaml
+
+path, raw = sys.argv[1], sys.argv[2]
+try:
+    value = int(raw)
+except ValueError:
+    sys.exit(4)
+if not 0 <= value <= 1440:
+    sys.exit(4)
+with open(path, "r", encoding="utf-8") as f:
+    data = yaml.safe_load(f)
+if not isinstance(data, dict):
+    sys.exit(5)
+ble = data.get("ble")
+if ble is None:
+    ble = data["ble"] = {}
+if not isinstance(ble, dict):
+    sys.exit(5)
+if "proxy_liveness_timeout_min" in ble:
+    sys.exit(3)
+ble["proxy_liveness_timeout_min"] = value
+with open(path, "w", encoding="utf-8") as f:
+    yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
+PY
+    case "$_plrc" in
+      0) log "Applied proxy_liveness_timeout_min=$PROXY_LIVENESS_MIN from the add-on options." ;;
+      3)
+        log "WARNING: 'ble.proxy_liveness_timeout_min' is set in $CUSTOM_PATH, so the add-on option ($PROXY_LIVENESS_MIN) is ignored."
+        ;;
+      4) log "WARNING: ignoring proxy_liveness_timeout_min='$PROXY_LIVENESS_MIN' (expected 0 to 1440)." ;;
+      *)
+        log "WARNING: could not apply proxy_liveness_timeout_min to $CUSTOM_PATH; set 'ble.proxy_liveness_timeout_min' there instead."
+        ;;
+    esac
+  fi
 else
 
   # ── Read all options ────────────────────────────────────────────────────
@@ -121,6 +167,14 @@ else
   # an absent key into false. Only an explicit false switches it off (#417).
   PREEMPTIVE_ADAPTER_RESET=$(jq -r 'if .preemptive_adapter_reset == false then "false" else "true" end' "$OPTIONS")
   PROXY_LIVENESS_MIN=$(opt_int proxy_liveness_timeout_min 30)
+  # Still written below, but the generated config always runs the built-in
+  # Bluetooth transport, which has no liveness check. Say so instead of letting
+  # the option look like it did something.
+  if [ "$PROXY_LIVENESS_MIN" != "30" ]; then
+    log "NOTE: proxy_liveness_timeout_min only affects proxy transports (ESP32 or ESPHome"
+    log "proxy, HA Bluetooth), which this add-on runs only with custom_config. It has no"
+    log "effect on the built-in Bluetooth adapter."
+  fi
   DISPLAY_UNIT=$(opt display_unit)
 
   WEIGHT_UNIT=$(opt weight_unit)
@@ -181,20 +235,42 @@ else
 
   if [ "$MQTT_ENABLED" = "true" ] && [ "$MQTT_AUTO" = "true" ]; then
     if [ -n "$SUPERVISOR_TOKEN" ]; then
-      MQTT_INFO=$(curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
-        http://supervisor/services/mqtt 2>/dev/null || echo '{}')
-      MQTT_HOST=$(echo "$MQTT_INFO" | jq -r '.data.host // empty')
-      MQTT_PORT=$(echo "$MQTT_INFO" | jq -r '.data.port // empty')
-      AUTO_USER=$(echo "$MQTT_INFO" | jq -r '.data.username // empty')
-      AUTO_PASS=$(echo "$MQTT_INFO" | jq -r '.data.password // empty')
+      # The HTTP status is appended on its own line so a refusal can be told
+      # apart from "no broker installed". Both used to collapse into the same
+      # "auto-detection failed" line, which is how a missing `services:
+      # mqtt:want` declaration (every call answered 403) went unnoticed.
+      MQTT_RESP=$(curl -s -w '\n%{http_code}' -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
+        http://supervisor/services/mqtt 2>/dev/null || true)
+      MQTT_HTTP=$(printf '%s\n' "$MQTT_RESP" | tail -n 1)
+      MQTT_INFO=$(printf '%s\n' "$MQTT_RESP" | sed '$d')
+      [ -n "$MQTT_INFO" ] || MQTT_INFO='{}'
+      MQTT_HOST=$(echo "$MQTT_INFO" | jq -r '.data.host // empty' 2>/dev/null || true)
+      MQTT_PORT=$(echo "$MQTT_INFO" | jq -r '.data.port // empty' 2>/dev/null || true)
+      AUTO_USER=$(echo "$MQTT_INFO" | jq -r '.data.username // empty' 2>/dev/null || true)
+      AUTO_PASS=$(echo "$MQTT_INFO" | jq -r '.data.password // empty' 2>/dev/null || true)
 
-      if [ -n "$MQTT_HOST" ]; then
+      if [ "$MQTT_HTTP" = "200" ] && [ -n "$MQTT_HOST" ]; then
         MQTT_BROKER_URL="mqtt://${MQTT_HOST}:${MQTT_PORT:-1883}"
         MQTT_USERNAME="${AUTO_USER}"
         MQTT_PASSWORD="${AUTO_PASS}"
         log "MQTT auto-detected: $MQTT_BROKER_URL"
       else
-        log "MQTT auto-detection failed, using manual settings"
+        # Only the error message is logged, never the body: on success the
+        # body carries the broker password.
+        MQTT_ERR=$(echo "$MQTT_INFO" | jq -r '.message // empty' 2>/dev/null || true)
+        case "$MQTT_HTTP" in
+          403)
+            log "MQTT auto-detection refused by the Supervisor (HTTP 403${MQTT_ERR:+: $MQTT_ERR})."
+            log "This add-on build does not declare the mqtt service; please report it. Using manual settings."
+            ;;
+          000 | "")
+            log "MQTT auto-detection failed: the Supervisor API did not answer. Using manual settings."
+            ;;
+          *)
+            log "MQTT auto-detection failed (HTTP $MQTT_HTTP${MQTT_ERR:+: $MQTT_ERR})."
+            log "Is the Mosquitto broker add-on installed and running? Using manual settings."
+            ;;
+        esac
       fi
     else
       log "No SUPERVISOR_TOKEN, MQTT auto-detection unavailable"

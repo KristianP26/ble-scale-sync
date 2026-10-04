@@ -89,13 +89,16 @@ configuration:
   proxy_liveness_timeout_min:
     name: Proxy silence before restart (minutes)
     description: >-
-      ESP32 and ESPHome proxy setups only. If the proxy stops delivering
-      Bluetooth advertisements entirely for this many minutes, the link is
-      treated as wedged and the add-on restarts to rebuild it. Advertisements
-      arrive constantly from any nearby phone or watch while the link is
-      healthy, so silence means the link, not an empty house. Raise it, or set
-      0 to disable, if your proxy sits somewhere with no other Bluetooth
-      devices in range.
+      Proxy setups only (ESP32 proxy, ESPHome proxy or Home Assistant
+      Bluetooth), which this add-on runs only with custom_config enabled; it
+      has no effect on the built-in Bluetooth adapter. If the proxy stops
+      delivering Bluetooth advertisements entirely for this many minutes, the
+      link is treated as wedged and the add-on restarts to rebuild it.
+      Advertisements arrive constantly from any nearby phone or watch while the
+      link is healthy, so silence means the link, not an empty house. Raise it,
+      or set 0 to disable, if your proxy sits somewhere with no other Bluetooth
+      devices in range. A value set in your custom config file takes
+      precedence over this option.
   weight_unit:
     name: Weight unit
     description: >-

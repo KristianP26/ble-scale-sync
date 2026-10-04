@@ -123,7 +123,7 @@ To use one, enable **Use custom config.yaml** and place your configuration at:
 
 See [config.yaml.example](https://github.com/KristianP26/ble-scale-sync/blob/main/config.yaml.example) for the full reference.
 
-When custom config is enabled, all other options in the Configuration tab are ignored.
+When custom config is enabled, all other options in the Configuration tab are ignored, with one exception: **Proxy silence before restart** (`proxy_liveness_timeout_min`) only does anything with a proxy transport, which needs custom config, so the add-on applies it on top of your file (the file itself is not modified) when you change it from 30 and the file does not set `ble.proxy_liveness_timeout_min` itself. A value in the file always wins.
 
 ### Alternative BLE transports (no host Bluetooth needed)
 
@@ -164,6 +164,7 @@ Separately from that startup reset, the add-on also power-cycles the adapter aft
 ### MQTT not connecting
 
 - Check that the Mosquitto add-on is running
+- With auto-detect on, the add-on log says at startup whether it found the broker (`MQTT auto-detected: ...`) or why not (the HTTP status from the Supervisor)
 - If using an external broker, verify the URL and credentials
 - Enable debug logging for detailed MQTT connection info
 

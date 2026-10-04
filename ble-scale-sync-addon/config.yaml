@@ -32,6 +32,12 @@ privileged:
 # be tested in CI. See issue #271.
 apparmor: false
 hassio_api: true
+# run.sh reads the Mosquitto credentials from GET http://supervisor/services/mqtt
+# (mqtt_auto). The Supervisor answers 403 to any add-on that has not declared
+# the service here, so without this entry auto-detection could never succeed.
+# `want`, not `need`: MQTT is optional, a Garmin-only install has no broker.
+services:
+  - mqtt:want
 map:
   - share:rw
 options:

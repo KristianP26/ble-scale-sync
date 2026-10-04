@@ -65,7 +65,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libreadline8 \
       libncursesw6 \
       tini \
-    && rm -rf /var/lib/apt/lists/*
+      rfkill \
+      libcap2-bin \
+    && rm -rf /var/lib/apt/lists/* \
+    && setcap cap_net_admin+ep /usr/bin/btmgmt
+
+# Why btmgmt carries a file capability. The container runs as USER node (below),
+# and Docker gives a non-root process no effective capabilities at all: the
+# documented `--cap-add NET_ADMIN` only widens the bounding set. Without this,
+# `btmgmt power off/on` is refused by the kernel (the mgmt SET_POWERED command
+# needs CAP_NET_ADMIN), so the entrypoint reset, the preemptive power-cycle
+# after each GATT session and the btmgmt recovery tier all failed silently.
+# The file capability is masked by the bounding set, so it grants nothing the
+# operator did not already grant with --cap-add NET_ADMIN; without that flag
+# exec of btmgmt fails with EPERM, the same "reset failed" outcome as before.
+# It also does nothing under --security-opt no-new-privileges. Only btmgmt is
+# marked, not node: a capability on node would put every node process in
+# secure-execution mode and make it unrunnable without --cap-add.
+#
+# rfkill backs the last recovery tier (block/unblock). It needs no capability,
+# only write access to /dev/rfkill, which comes from the device node the host
+# passes in (docker-compose.example.yml maps it). As USER node that also needs
+# the device to be writable by one of the container's groups, so for a non-root
+# container this tier still depends on how the host sets up /dev/rfkill.
 
 # Python 3.12 (Garmin upload), copied from the python stage above — see the
 # comment there for why this isn't just `apt-get install python3`.
