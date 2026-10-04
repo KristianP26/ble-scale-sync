@@ -68,7 +68,9 @@ opening an issue with it.
 
 ### Body fat fallback (Deurenberg)
 
-When impedance is not available (e.g. the scale only measures weight), only **weight**, **BMI**, and **body fat** (estimated) are calculated. The remaining metrics (water, bone, muscle, visceral fat, physique rating) require impedance and will not be available.
+When impedance is not available (the scale only measures weight, you stood on it in socks, or it sent 0 or a value outside 150 to 1200 ohm), only **weight**, **BMI**, and **body fat** (estimated) are calculated. The remaining metrics (water, bone, muscle, visceral fat, physique rating) require impedance and will not be available. A weigh-in without impedance still completes and is exported with these values. For ages 15 and under the children's form of the Deurenberg equation is used.
+
+Some scales measure body composition themselves. Their values are used only when the whole set is plausible; if one of them is missing or out of range, the app calculates the composition as above instead of mixing the two.
 
 Body fat without impedance is estimated from BMI:
 

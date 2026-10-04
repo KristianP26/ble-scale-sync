@@ -611,7 +611,7 @@ Anonymous aggregated statistics are visible at [stats.blescalesync.dev](https://
 
 ### Secret references
 
-YAML values support `${ENV_VAR}` syntax for passwords and tokens. The variable must be defined in the environment or in a `.env` file; loading fails if a reference is undefined. Write `$${...}` for a literal `${...}`. A config reload reads `.env` again, so a changed secret applies without a restart; variables set in the real environment always win over `.env`.
+YAML values support `${ENV_VAR}` syntax for passwords and tokens. The variable must be defined in the environment or in a `.env` file; loading fails if a reference is undefined. Write `$${...}` for a literal `${...}`. A field that expects a number or a true/false value accepts a reference too, when the reference is the whole value (`port: ${MQTT_PORT}`); booleans take `true`/`false`, `yes`/`no`, `on`/`off` or `1`/`0`. A config reload reads `.env` again, so a changed secret applies without a restart; variables set in the real environment always win over `.env`.
 
 ```yaml
 global_exporters:

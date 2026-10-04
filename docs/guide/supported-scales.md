@@ -33,8 +33,8 @@ _Weight only_ means weight is reported normally but body composition is estimate
 | **Beurer** BF700 / BF710 / BF800                                      | Yes              | BF710: register it in the Beurer app first                                                                                                        |
 | **Salter** SA00656 / SA00432 (Salter Health)                          | Weight only      | Powers off after weighing; suits continuous mode                                                                                                  |
 | **Sanitas** SBF70 / SBF75                                             | Yes              |                                                                                                                                                   |
-| **Sanitas** SBF72 / SBF73 / **Beurer** BF915                          | Yes              | Needs user slot 1 in the vendor app                                                                                                               |
-| **Beurer** BF720 / BF105 / BF500 / BF788 / BF950                      | Yes              | Needs `users[].beurer_pin` and a bonded link                                                                                                      |
+| **Sanitas** SBF72 / SBF73                                             | Yes              | Needs user slot 1 in the vendor app                                                                                                               |
+| **Beurer** BF720 / BF105 / BF500 / BF788 / BF915 / BF950              | Yes              | Needs `users[].beurer_pin` and a bonded link                                                                                                      |
 | **Soehnle** Shape200 / Shape100 / Shape50 / Style100                  | Yes              | Needs user slot 1 in the vendor app                                                                                                               |
 | **Medisana** BS430 / BS440 / BS444                                    | Yes              |                                                                                                                                                   |
 | **Active Era** BS-06                                                  | Weight only      | Reports a resistance, but its scaling has never been checked against a capture ([#386](https://github.com/KristianP26/ble-scale-sync/issues/386)) |
@@ -78,7 +78,7 @@ We recommend setting `scale_mac` in `config.yaml`. It prevents the app from acci
 
 Everything below still works; these are the quirks worth knowing before you buy or debug.
 
-### **Soehnle**, **Sanitas** SBF72/73, **Beurer** BF915
+### **Soehnle**, **Sanitas** SBF72/73
 
 Create user slot 1 in the manufacturer's phone app first.
 

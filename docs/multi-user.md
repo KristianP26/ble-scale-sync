@@ -52,7 +52,9 @@ If no match is found, the `unknown_user` strategy decides what happens:
 | `log`               | Logs a warning and skips                          |
 | `ignore`            | Silently skips                                    |
 
-Note what tiers 1 and 4 mean in practice: a reading outside every configured range is not rejected, it is assigned anyway. `unknown_user` is never consulted, because tier 4 already produced a match. If you want such a reading dropped instead, set `out_of_range: skip`; see [Out-of-range readings](/guide/configuration#out-of-range-readings).
+Note what tiers 1 and 4 mean in practice: a reading outside every configured range is not rejected, it is assigned anyway. `unknown_user` is never consulted, because tier 4 already produced a match. If you want such a reading dropped instead, set `out_of_range: skip`; see [Out-of-range readings](/guide/configuration#out-of-range-readings). The setup wizard writes `out_of_range: skip` whenever it saves a config with more than one user.
+
+Some scales also send weigh-ins stored in their memory while the app was not running. Each stored weigh-in is assigned by its own weight (or by the scale's user slot, when the scale sends one), not to whoever is standing on the scale right now. A stored weigh-in that matches nobody, or more than one user equally, is dropped and logged.
 
 ## Drift Detection
 
@@ -66,7 +68,7 @@ After each measurement, the matched user's `last_known_weight` is automatically 
 
 ## Per-User Exporters
 
-By default, all users share `global_exporters`. If a user needs different export targets (e.g., separate Garmin accounts), define `exporters` on that user; it completely replaces `global_exporters` for them:
+By default, all users share `global_exporters`. If a user needs their own export targets (e.g., separate Garmin accounts), define `exporters` on that user. Their own exporters are added to `global_exporters`; when a user has their own exporter of a type that is also global (for example `garmin`), only theirs is used for that type. A list may hold several exporters of one type (two webhooks), and each of them gets the reading:
 
 ```yaml
 users:

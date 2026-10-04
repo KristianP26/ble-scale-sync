@@ -154,6 +154,8 @@ Home Assistant add-ons run without an interactive terminal, so the add-on cannot
 2. Copy that file to `/share/ble-scale-sync/garmin-tokens/` on the Home Assistant host. The Samba and File editor add-ons both expose `/share/` for easy uploads.
 3. Restart BLE Scale Sync. On startup the add-on detects the pre-generated token and imports it into `/data/garmin-tokens/`.
 
+The import only happens while the add-on has no Garmin token yet. A token placed in `/share/` later is not used (the log says so), because other add-ons and Samba users can write there. To switch to another Garmin account, reinstall the add-on, which clears `/data`, and import again.
+
 The same workflow applies if Garmin is blocking your HA host's IP as a data-centre / VPN address: authenticate from a trusted network and import the tokens.
 
 ## Custom config mode
@@ -203,6 +205,8 @@ When reporting back, paste the `Version` line from the top of the log. On an ima
 ```
 
 ## Persistence
+
+If the app stops on its own (for example after repeated Bluetooth failures, to start the adapter fresh), the add-on starts it again after a short, growing delay and says so in the log. You do not need to turn on the Supervisor's Watchdog switch for that.
 
 Everything that should survive add-on restarts lives under `/data/` inside the container, which the Supervisor maps to persistent storage:
 

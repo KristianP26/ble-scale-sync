@@ -13,6 +13,8 @@ BLE Scale Sync exports body composition data to 12 targets. The [setup wizard](/
 
 Exporters are configured in `global_exporters` (shared by all users). For multi-user setups with separate accounts, see [Per-User Exporters](/multi-user#per-user-exporters). All enabled exporters run in parallel; the process reports an error only if **every** exporter fails.
 
+A weigh-in a scale stored in its memory and sends later keeps its original time. It goes only to exporters that can record a past measurement (Garmin, InfluxDB, file, Intervals, Runalyze, wger, HealthLog), never to MQTT, webhooks or notifications, and it does not end the live weigh-in.
+
 | Target                          | Description                                            |
 | ------------------------------- | ------------------------------------------------------ |
 | [**Garmin Connect**](#garmin)   | Automatic body composition upload, no phone app needed |
@@ -32,13 +34,13 @@ Exporters are configured in `global_exporters` (shared by all users). For multi-
 
 Automatic body composition upload to Garmin Connect, no phone app needed. Uses a Python subprocess with cached authentication tokens.
 
-| Field                | Required | Default            | Description                                                                                                                                                     |
-| -------------------- | -------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `email`              | Yes      | (none)             | Garmin account email                                                                                                                                            |
-| `password`           | Yes      | (none)             | Garmin account password                                                                                                                                         |
-| `token_dir`          | No       | `~/.garmin_tokens` | Directory for cached auth tokens. The setup wizard fills in `./garmin-tokens`, which is relative to the directory the app is started from, not to `config.yaml` |
-| `weight_only`        | No       | `false`            | Upload the weight alone, leaving every derived metric unset                                                                                                     |
-| `upload_timeout_sec` | No       | `180`              | Seconds one upload attempt may take before it is killed (10-900). Up to three attempts are made, 1 s and 2 s apart                                              |
+| Field                | Required | Default            | Description                                                                                                                                     |
+| -------------------- | -------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `email`              | Yes      | (none)             | Garmin account email                                                                                                                            |
+| `password`           | Yes      | (none)             | Garmin account password                                                                                                                         |
+| `token_dir`          | No       | `~/.garmin_tokens` | Directory for cached auth tokens. A relative path is relative to the directory `config.yaml` is in; the setup wizard fills in `./garmin-tokens` |
+| `weight_only`        | No       | `false`            | Upload the weight alone, leaving every derived metric unset                                                                                     |
+| `upload_timeout_sec` | No       | `180`              | Seconds one upload attempt may take before it is killed (10-900). Up to three attempts are made, 1 s and 2 s apart                              |
 
 ```yaml
 global_exporters:
@@ -136,17 +138,17 @@ Publishes body composition as JSON to an MQTT broker. **Home Assistant auto-disc
 If you run Home Assistant OS or Supervised, the [Home Assistant Add-on](./guide/home-assistant-addon) auto-detects the Mosquitto broker through the Supervisor API, so you do not need to wire MQTT manually.
 :::
 
-| Field            | Required | Default                  | Description                              |
-| ---------------- | -------- | ------------------------ | ---------------------------------------- |
-| `broker_url`     | Yes      | (none)                   | `mqtt://host:1883` or `mqtts://` for TLS |
-| `topic`          | No       | `scale/body-composition` | Publish topic                            |
-| `qos`            | No       | `1`                      | QoS level (0, 1, or 2)                   |
-| `retain`         | No       | `true`                   | Retain last message                      |
-| `username`       | No       | (none)                   | Broker auth username                     |
-| `password`       | No       | (none)                   | Broker auth password                     |
-| `client_id`      | No       | `ble-scale-sync`         | MQTT client identifier                   |
-| `ha_discovery`   | No       | `true`                   | Home Assistant auto-discovery            |
-| `ha_device_name` | No       | `BLE Scale`              | Device name in Home Assistant            |
+| Field            | Required | Default                  | Description                                                              |
+| ---------------- | -------- | ------------------------ | ------------------------------------------------------------------------ |
+| `broker_url`     | Yes      | (none)                   | `mqtt://host:1883` or `mqtts://` for TLS                                 |
+| `topic`          | No       | `scale/body-composition` | Base topic; readings go to `<topic>/<user slug>`, with a single user too |
+| `qos`            | No       | `1`                      | QoS level (0, 1, or 2)                                                   |
+| `retain`         | No       | `true`                   | Retain last message                                                      |
+| `username`       | No       | (none)                   | Broker auth username                                                     |
+| `password`       | No       | (none)                   | Broker auth password                                                     |
+| `client_id`      | No       | `ble-scale-sync`         | MQTT client identifier                                                   |
+| `ha_discovery`   | No       | `true`                   | Home Assistant auto-discovery                                            |
+| `ha_device_name` | No       | `BLE Scale`              | Device name in Home Assistant                                            |
 
 ```yaml
 global_exporters:
@@ -155,6 +157,8 @@ global_exporters:
     username: myuser
     password: '${MQTT_PASSWORD}'
 ```
+
+Availability uses an MQTT last will: when the app loses the broker without a clean shutdown (a crash, a network drop), the broker publishes `offline` for it, so Home Assistant shows the sensors as unavailable until the app reconnects.
 
 ## Webhook {#webhook}
 
@@ -302,11 +306,11 @@ volumes:
 
 Update your weight in the Strava athlete profile. Requires a Strava API application.
 
-| Field           | Required | Default           | Description                          |
-| --------------- | -------- | ----------------- | ------------------------------------ |
-| `client_id`     | Yes      |                   | Strava API application client ID     |
-| `client_secret` | Yes      |                   | Strava API application client secret |
-| `token_dir`     | No       | `./strava-tokens` | Directory for cached OAuth tokens    |
+| Field           | Required | Default           | Description                                                                      |
+| --------------- | -------- | ----------------- | -------------------------------------------------------------------------------- |
+| `client_id`     | Yes      |                   | Strava API application client ID                                                 |
+| `client_secret` | Yes      |                   | Strava API application client secret                                             |
+| `token_dir`     | No       | `./strava-tokens` | Directory for cached OAuth tokens, relative to the directory `config.yaml` is in |
 
 ```yaml
 users:
@@ -416,6 +420,8 @@ users:
 ```
 
 Authentication uses a permanent API key (sent as `Authorization: Token <key>`), no OAuth flow. Generate it on the Wger account settings **API** page. Weight is written to a weight entry on the reading's calendar day, so historical readings replayed from a scale's offline cache land on their original date. With `sync_measurements` enabled, body fat and water (percent) and muscle and bone (kg) are written as Wger custom measurements; the matching categories are created automatically on first use and reused afterwards. Measurement failures are logged but do not block the weight sync.
+
+Wger stores the weight in the unit set in your Wger profile, so the exporter reads `/api/v2/userprofile/` before each export and sends pounds to a profile set to pounds; the API key must be allowed to read the profile. The calendar day comes from the host's clock, so in Docker set `TZ` to your time zone (the compose examples do), or a late-evening weigh-in lands on the next day.
 
 ## HealthLog {#healthlog}
 
