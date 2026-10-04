@@ -115,4 +115,73 @@ describe('runSetupCommand', () => {
   it('exits 0 for --help', async () => {
     expect(await runSetupCommand(['--help'])).toBe(0);
   });
+
+  /** A fresh setup of one user, Alice, with the given per-user exporter answers. */
+  function freshSetupAnswers(exporterAnswers: Array<[RegExp, string | boolean | string[]]>) {
+    return scriptedPrompts([
+      [/^How do you want to identify your scale/, 'skip'],
+      [/^User name/, 'Alice'],
+      [/^Height \(cm\)/, '180'],
+      [/^Birth date/, '1990-01-01'],
+      [/^Weight range minimum/, '60'],
+      [/^Weight range maximum/, '90'],
+      ...exporterAnswers,
+    ]);
+  }
+
+  function logged(): string {
+    return vi
+      .mocked(console.log)
+      .mock.calls.map((c) => c.map(String).join(' '))
+      .join('\n');
+  }
+
+  // The steps were filtered by shouldRun before the first one ran, when a
+  // fresh config has no users and no exporters, so Strava authorization was
+  // dropped from every fresh setup.
+  it('reaches Strava authorization in a fresh setup that adds a Strava exporter', async () => {
+    const scripted = freshSetupAnswers([
+      [/^Exporters/, ['strava']],
+      [/^Client ID/, '42'],
+      [/^Client Secret/, 'secret'],
+      [/^Authorize Strava for Alice now/, false],
+      [/^Test exporter connectivity/, false],
+    ]);
+
+    const code = await runSetupCommand(['--config', configPath], {
+      prompts: scripted.prompts,
+      platform,
+    });
+
+    expect(code).toBe(0);
+    expect(scripted.rejected).toEqual([]);
+    expect(scripted.pending).toEqual([]);
+    const authorize = scripted.asked.indexOf(
+      'Authorize Strava for Alice now? (needs a browser to approve the app)',
+    );
+    expect(authorize).toBeGreaterThan(scripted.asked.indexOf('Client Secret:'));
+    // Before the connectivity test, which would otherwise report a missing token.
+    expect(authorize).toBeLessThan(scripted.asked.indexOf('Test exporter connectivity?'));
+    expect(logged()).toMatch(/Strava Authorization/);
+  });
+
+  // Same filter, older: Garmin authentication never ran in a fresh setup.
+  it('reaches Garmin authentication in a fresh setup that adds a Garmin exporter', async () => {
+    const scripted = freshSetupAnswers([
+      [/^Exporters/, ['garmin']],
+      [/^Garmin Email/, 'alice@example.com'],
+      [/^Garmin Password/, 'pw'],
+    ]);
+
+    const code = await runSetupCommand(['--config', configPath], {
+      prompts: scripted.prompts,
+      platform,
+    });
+
+    expect(code).toBe(0);
+    expect(scripted.rejected).toEqual([]);
+    expect(scripted.pending).toEqual([]);
+    // No Python on this platform: the step runs and says it is skipping.
+    expect(logged()).toMatch(/Python is not available/);
+  });
 });

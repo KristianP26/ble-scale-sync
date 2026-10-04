@@ -275,6 +275,87 @@ describe('runWizard()', () => {
     // a runs, back prompt → back → a runs again, continue → b runs
     expect(calls).toEqual(['a', 'a', 'b']);
   });
+
+  // shouldRun used to be asked once, before the first step, so a step that
+  // depends on an earlier answer (Garmin or Strava auth on a fresh setup,
+  // where no exporter exists yet) never ran.
+  it('asks shouldRun when the step comes up, after the earlier steps ran', async () => {
+    const calls: string[] = [];
+    const steps = [
+      makeStep('a', 10, {
+        run: async (c) => {
+          calls.push('a');
+          c.config.version = 1;
+        },
+      }),
+      makeStep('b', 20, {
+        shouldRun: (c) => c.config.version === 1,
+        run: async () => {
+          calls.push('b');
+        },
+      }),
+    ];
+
+    await runWizard(steps, makeCtx({ prompts: createMockPromptProvider(['continue']) }));
+
+    expect(calls).toEqual(['a', 'b']);
+  });
+
+  it('skips a step on the way back when it no longer runs', async () => {
+    const calls: string[] = [];
+    let cThrown = false;
+    const steps = [
+      makeStep('a', 10, {
+        run: async (c) => {
+          calls.push('a');
+          if (c.config.unknown_user === undefined) c.config.unknown_user = 'nearest';
+        },
+      }),
+      makeStep('b', 20, {
+        shouldRun: (c) => c.config.unknown_user === 'nearest',
+        run: async () => {
+          calls.push('b');
+        },
+      }),
+      makeStep('c', 30, {
+        run: async (c) => {
+          calls.push('c');
+          if (!cThrown) {
+            // An answer here switches b off, then the person goes back.
+            cThrown = true;
+            c.config.unknown_user = 'ignore';
+            throw new BackNavigation();
+          }
+        },
+      }),
+    ];
+
+    // continue for b, continue for c, c throws back to a (b is off now),
+    // continue for c
+    const ctx = makeCtx({
+      prompts: createMockPromptProvider(['continue', 'continue', 'continue']),
+    });
+
+    await runWizard(steps, ctx);
+
+    expect(calls).toEqual(['a', 'b', 'c', 'a', 'c']);
+  });
+
+  it('counts only the steps that run in the step header', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const steps = [
+      makeStep('a', 10),
+      makeStep('b', 20, { shouldRun: () => false }),
+      makeStep('c', 30),
+    ];
+
+    await runWizard(steps, makeCtx({ prompts: createMockPromptProvider(['continue']) }));
+
+    const out = log.mock.calls.map((c) => String(c[0])).join('\n');
+    log.mockRestore();
+    expect(out).toMatch(/Step 2\/2/);
+    expect(out).not.toMatch(/\/3/);
+  });
 });
 
 // ─── runEditMode() ────────────────────────────────────────────────────────
@@ -337,5 +418,43 @@ describe('runEditMode()', () => {
 
     const result = await runEditMode(steps, ctx);
     expect(result).toBeDefined();
+  });
+
+  // The menu was built once, so a Strava exporter added in the same session
+  // could not be authorized until the wizard was started again.
+  it('rebuilds the menu after each section, as shouldRun changes', async () => {
+    const menus: string[][] = [];
+    const answers = ['exporters', 'strava-auth', 'exporters', '__save__'];
+    const prompts = createMockPromptProvider([]);
+    prompts.select = (async (_message: string, choices: { value: string }[]) => {
+      menus.push(choices.map((c) => c.value));
+      return answers.shift();
+    }) as typeof prompts.select;
+    let stravaRuns = 0;
+    const steps = [
+      makeStep('exporters', 40, {
+        run: async (c) => {
+          // First visit adds the exporter, the second removes it.
+          c.config.version = c.config.version === 1 ? undefined : 1;
+        },
+      }),
+      makeStep('strava-auth', 55, {
+        shouldRun: (c) => c.config.version === 1,
+        run: async () => {
+          stravaRuns++;
+        },
+      }),
+      makeStep('summary', 80),
+    ];
+
+    await runEditMode(steps, makeCtx({ prompts }));
+
+    expect(stravaRuns).toBe(1);
+    expect(menus).toEqual([
+      ['exporters', '__save__'],
+      ['exporters', 'strava-auth', '__save__'],
+      ['exporters', 'strava-auth', '__save__'],
+      ['exporters', '__save__'],
+    ]);
   });
 });
