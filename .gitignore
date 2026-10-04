@@ -58,6 +58,10 @@ strava-tokens/
 .update-check-state.json
 .update-check-state.json.tmp
 
+# Scale adapter de-duplication marks (runtime artifact, written next to config.yaml)
+.scale-dedup-marks.json
+.scale-dedup-marks.json.tmp
+
 # VitePress
 docs/.vitepress/dist/
 docs/.vitepress/cache/

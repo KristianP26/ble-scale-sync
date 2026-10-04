@@ -446,6 +446,31 @@ export interface ScaleAdapterCore {
   onSessionEnd?(): void;
 
   /**
+   * De-duplication state that has to survive a process restart (review D-15).
+   *
+   * For a scale that answers every session from a store it never clears
+   * (Salter), the only thing between a weigh-in and its second export is a
+   * high-water mark of what was already reported. Kept in memory it started at
+   * zero after every deploy, crash or add-on restart, and a record still inside
+   * the adapter's own age bound went out again. The runtime reads this after it
+   * has processed a reading from the adapter and writes it next to config.yaml
+   * (`src/runtime/dedup-marks.ts`); at startup it hands the stored value back
+   * through `restoreDedupMark`. The adapter itself never does I/O.
+   *
+   * The value is opaque to the runtime: a number in whatever domain the
+   * adapter's protocol counts in (Salter: the scale's own clock). Undefined
+   * means "no mark", and the stored one is then dropped.
+   */
+  dedupMark?(): number | undefined;
+
+  /**
+   * Take back a mark `dedupMark` returned in an earlier process. Called once at
+   * startup, before the first session. Must validate the value, since it comes
+   * from a file anyone can edit, and must not throw or perform I/O.
+   */
+  restoreDedupMark?(mark: number): void;
+
+  /**
    * Set only on the wrapper produced by `ble.force_scale_adapter`.
    *
    * Detection normally guarantees that an adapter was selected BY the

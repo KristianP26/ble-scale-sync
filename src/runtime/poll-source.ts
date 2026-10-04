@@ -1,7 +1,7 @@
 import type { RawReading } from '../ble/shared.js';
 import type { ScaleAdapter } from '../interfaces/scale-adapter.js';
 import { scanAndReadRaw, releaseTransport } from '../ble/index.js';
-import { withTimeout, POLL_CYCLE_TIMEOUT_MS } from '../ble/types.js';
+import { POLL_CYCLE_TIMEOUT_MS } from '../ble/types.js';
 import { resolveUserProfile } from '../config/resolve.js';
 import { fmtWeight } from './format.js';
 import type { AppContext } from './context.js';
@@ -37,11 +37,22 @@ export class PollReadingSource implements ReadingSource {
     // would park here forever while the heartbeat kept ticking and the
     // consecutive-failure watchdog was never reached (#290). connection.ts now
     // fails the parked calls when the bus closes the socket (A-03); this
-    // deadline still covers a call the daemon simply never answers. withTimeout
-    // races via Promise.race, so an abandoned scan keeps running; its teardown
-    // stands down if a newer cycle has started (A-04) and the watchdog bounds
-    // the process lifetime. Only the native poll path is wrapped: the proxy
-    // watchers wait indefinitely for a weigh-in by design.
+    // deadline still covers a call the daemon simply never answers. Only the
+    // native poll path is wrapped: the proxy watchers wait indefinitely for a
+    // weigh-in by design.
+    //
+    // withTimeout only stops waiting, so the cycle gets an abort of its own and
+    // the deadline fires it (A-04). Every stage of the session follows the
+    // signal (A-07), so an abandoned cycle stops at its next await instead of
+    // retrying connects and making BlueZ calls next to the cycle that replaced
+    // it. A call the daemon never answers still parks it; its teardown then
+    // stands down once a newer cycle has started. A loop shutdown is forwarded
+    // unchanged, and a cycle that finished is never aborted afterwards.
+    const cycle = new AbortController();
+    const forwardShutdown = (): void => cycle.abort(signal.reason);
+    if (signal.aborted) forwardShutdown();
+    else signal.addEventListener('abort', forwardShutdown, { once: true });
+
     const scan = scanAndReadRaw({
       targetMac: this.ctx.scaleMac,
       adapters: this.adapters,
@@ -53,7 +64,7 @@ export class PollReadingSource implements ReadingSource {
         registerNewUser: primaryUser.beurer_register_new_user,
       },
       weightUnit: this.ctx.weightUnit,
-      abortSignal: signal,
+      abortSignal: cycle.signal,
       bleHandler: this.ctx.bleHandler,
       mqttProxy: this.ctx.mqttProxy,
       esphomeProxy: this.ctx.esphomeProxy,
@@ -82,10 +93,25 @@ export class PollReadingSource implements ReadingSource {
       },
     });
 
-    return withTimeout(
-      scan,
-      POLL_CYCLE_TIMEOUT_MS,
-      `Scan cycle exceeded ${POLL_CYCLE_TIMEOUT_MS / 1000}s and was abandoned (transport wedge?)`,
-    );
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        const err = new Error(
+          `Scan cycle exceeded ${POLL_CYCLE_TIMEOUT_MS / 1000}s and was abandoned (transport wedge?)`,
+        );
+        // Reject first, so the loop sees the deadline and not the abort error
+        // the scan settles with afterwards.
+        reject(err);
+        cycle.abort(err);
+      }, POLL_CYCLE_TIMEOUT_MS);
+    });
+    try {
+      return await Promise.race([scan, deadline]);
+    } finally {
+      clearTimeout(timer);
+      // Continuous mode hands every cycle the same loop signal, so a listener
+      // left on it per cycle would leak for the life of the process.
+      signal.removeEventListener('abort', forwardShutdown);
+    }
   }
 }

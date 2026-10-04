@@ -451,6 +451,10 @@ export class SalterAdapter
    * Deliberately NOT reset by {@link onSessionEnd} — it is de-duplication state,
    * not session state. It is cleared only when the scale's clock goes backwards;
    * see {@link noteClock}.
+   *
+   * It also outlives the process: the runtime persists it through
+   * {@link dedupMark} and restores it at startup (review D-15). Without that a
+   * restart within MAX_RECORD_AGE_SEC of a weigh-in exported it a second time.
    */
   private lastReportedTs = 0;
 
@@ -529,9 +533,9 @@ export class SalterAdapter
     // SCALE's clock, which runs an hour or more off the host's, so it is carried
     // over as an age: host now minus how far the record is behind the scale's
     // own now. Rounded to the second the scale counts in, so a record read
-    // again after a process restart (the high-water mark above is in memory,
-    // review D-15) goes out with the time it was measured rather than a second
-    // receipt time.
+    // again after a process restart that lost the persisted mark (a crash
+    // before it was written, an unwritable directory; review D-15) goes out
+    // with the time it was measured rather than a second receipt time.
     //
     // It never makes the reading history. Only records inside
     // MAX_RECORD_AGE_SEC, which matches HISTORY_WINDOW_MS, get this far, and
@@ -542,6 +546,25 @@ export class SalterAdapter
     // the store (see the class comment): every session would replay the same
     // ones again.
     return { weight, impedance: 0, timestamp: this.measuredAt(ageSec) };
+  }
+
+  /** The high-water mark, for the runtime to persist (D-15). */
+  dedupMark(): number | undefined {
+    return this.lastReportedTs || undefined;
+  }
+
+  /**
+   * Restore a mark persisted by an earlier process (D-15).
+   *
+   * Only ever raises the mark: this runs before the first session, but a lower
+   * value must never re-open records this process already reported. A value
+   * that cannot be a u32 record stamp is ignored rather than trusted. A mark
+   * from before a battery change is let go by {@link noteClock} exactly like
+   * one set in this process, so restoring it cannot silence the scale.
+   */
+  restoreDedupMark(mark: number): void {
+    if (!Number.isInteger(mark) || mark <= 0 || mark >= TIMESTAMP_UNSET) return;
+    if (mark > this.lastReportedTs) this.lastReportedTs = mark;
   }
 
   /**

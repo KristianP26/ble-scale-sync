@@ -38,6 +38,12 @@ const FLAG_TIMESTAMP = 0x02;
 const FLAG_USER_ID = 0x04;
 /** User ID the SIG specification reserves for "unknown user". */
 const SIG_UNKNOWN_USER = 0xff;
+/**
+ * Weight field value meaning "Measurement Unsuccessful". spec: Weight Scale
+ * Service v1.0.0 (2014-10-21), section 3.2.1.2. Time Stamp and User ID may
+ * still be present in such a frame; every other optional field is disabled.
+ */
+const SIG_MEASUREMENT_UNSUCCESSFUL = 0xffff;
 
 /** Byte length of the SIG Date Time structure. */
 const DATE_TIME_LEN = 7;
@@ -100,9 +106,10 @@ export interface SigWeightMeasurement {
    * to skip its own conversion) cannot export pounds as kilograms, a 2.2x
    * error.
    *
-   * Undefined only when the frame is too short to carry the field. A zero is
-   * returned as zero rather than swallowed: whether a zero weight is a stub or
-   * a measurement is the caller's rule, not this decoder's.
+   * Undefined when the frame is too short to carry the field, or when it
+   * carries the 0xFFFF "Measurement Unsuccessful" sentinel (review C-10). A
+   * zero is returned as zero rather than swallowed: whether a zero weight is a
+   * stub or a measurement is the caller's rule, not this decoder's.
    */
   weightKg?: number;
   /** Measurement time, when the frame carries a usable Date Time. */
@@ -146,9 +153,13 @@ export function parseSigWeightMeasurement(data: Buffer): SigWeightMeasurement {
 
   const flags = data[0];
   const isKg = (flags & FLAG_IMPERIAL) === 0;
-  const result: SigWeightMeasurement = {
-    weightKg: data.readUInt16LE(1) * (isKg ? 0.005 : 0.01 * LBS_TO_KG),
-  };
+  const raw = data.readUInt16LE(1);
+  const result: SigWeightMeasurement = {};
+  // The sentinel is a raw field value in either unit. Decoded it was 327.675 kg
+  // (or 297 kg in pounds), a plausible weight that every caller would export.
+  if (raw !== SIG_MEASUREMENT_UNSUCCESSFUL) {
+    result.weightKg = raw * (isKg ? 0.005 : 0.01 * LBS_TO_KG);
+  }
 
   let offset = 3;
   if (flags & FLAG_TIMESTAMP) {

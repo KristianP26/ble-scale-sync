@@ -399,6 +399,41 @@ describe('SalterAdapter', () => {
       }
     });
 
+    it('does not report a record again after a restart that restored its mark (D-15)', () => {
+      // The runtime persists the high-water mark next to config.yaml and hands
+      // it back to the fresh process. A record still inside the age bound must
+      // then be the de-duplicated weigh-in it is, not a second export.
+      const first = primed(makeAdapter(), REC_897_SLOT2, 20);
+      expect(first.parseNotification(REC_897_SLOT2)).not.toBeNull();
+      const mark = first.dedupMark?.();
+      expect(mark).toBe(tsOf(REC_897_SLOT2));
+
+      const restarted = makeAdapter();
+      restarted.restoreDedupMark?.(mark!);
+      restarted.parseNotification(clockReply(tsOf(REC_897_SLOT2), 140));
+      expect(restarted.parseNotification(REC_897_SLOT2)).toBeNull();
+      // Older records stay refused as well, and a newer one still goes out.
+      expect(restarted.parseNotification(REC_888_SLOT7)).toBeNull();
+      expect(restarted.dedupMark?.()).toBe(tsOf(REC_897_SLOT2));
+    });
+
+    it('lets a restored mark from before a battery change go, like the in-memory one', () => {
+      // The persisted mark is on the old epoch's clock. The backwards-clock check
+      // has to see it the same way it sees one this process set, or a restart
+      // after new batteries would suppress every weigh-in from then on.
+      const a = makeAdapter();
+      a.restoreDedupMark?.(tsOf(REC_897_SLOT2));
+      a.parseNotification(clockReply(0, 500));
+      expect(a.dedupMark?.()).toBeUndefined();
+    });
+
+    it('ignores a restored mark that is not a scale timestamp', () => {
+      const a = makeAdapter();
+      for (const bad of [Number.NaN, -1, 1.5, 2 ** 32]) a.restoreDedupMark?.(bad);
+      expect(a.dedupMark?.()).toBeUndefined();
+      expect(primed(a, REC_897_SLOT2).parseNotification(REC_897_SLOT2)).not.toBeNull();
+    });
+
     it('drops records from before a battery change', () => {
       // New batteries restart the clock near zero while stored records keep the
       // old epoch's timestamps, so they read as far in the future. Reporting one

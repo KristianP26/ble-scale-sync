@@ -20,6 +20,11 @@ import { resolveDisplayUnit, resolveRuntimeConfig } from './config/resolve.js';
 import { startConfigWatcher, type ConfigWatcherHandle } from './config/watch.js';
 import { configureUpdateState } from './update-state.js';
 import { flushQueue } from './runtime/export-queue.js';
+import {
+  persistDedupMark,
+  resolveDedupMarksPath,
+  restoreDedupMarks,
+} from './runtime/dedup-marks.js';
 import type { Exporter } from './interfaces/exporter.js';
 import type { ScaleAdapter } from './interfaces/scale-adapter.js';
 import { createAppContext } from './runtime/context.js';
@@ -326,6 +331,12 @@ async function main(): Promise<void> {
   };
   applyAdapterConfig(ctx.config.ble?.bind_key ?? undefined);
 
+  // Before the first session: a Salter weigh-in exported just before a restart
+  // is still inside the adapter's age bound, and only the persisted mark keeps
+  // the fresh process from exporting it again (review D-15).
+  const dedupMarksPath = resolveDedupMarksPath(ctx.configPath);
+  restoreDedupMarks(dedupMarksPath, adapters);
+
   let singleUserExporters: Exporter[] | undefined;
   if (!ctx.dryRun) {
     if (isMultiUser) {
@@ -352,11 +363,19 @@ async function main(): Promise<void> {
   notifyReady();
   startHeartbeat();
 
-  const runProcessReading = (raw: Parameters<typeof processReading>[1]): Promise<boolean> =>
-    processReading(ctx, raw, {
-      singleUserExporters,
-      getExportersForUser: (slug) => getExportersForUser(ctx, slug),
-    });
+  const runProcessReading = async (raw: Parameters<typeof processReading>[1]): Promise<boolean> => {
+    try {
+      return await processReading(ctx, raw, {
+        singleUserExporters,
+        getExportersForUser: (slug) => getExportersForUser(ctx, slug),
+      });
+    } finally {
+      // After the exports, so a process killed mid-export re-reads and delivers
+      // the weigh-in instead of having marked it done. Not on a dry run, which
+      // promises to leave things for a real run, as the queue flush does.
+      if (!ctx.dryRun) persistDedupMark(dedupMarksPath, raw.adapter);
+    }
+  };
 
   // Started with the scan of a single run and awaited before it reports, so a
   // total export failure, which exits non-zero below, still lets the flush

@@ -39,6 +39,8 @@ config.yaml
 config.yaml.*
 .update-check-state.json
 .update-check-state.json.tmp
+.scale-dedup-marks.json
+.scale-dedup-marks.json.tmp
 
 # IDE & editor
 .idea

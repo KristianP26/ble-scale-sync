@@ -444,6 +444,14 @@ export async function teardownSession(opts: {
     releaseDeviceProxy(device);
   }
 
+  // The disconnect above is a D-Bus call with no deadline. The poll loop aborts
+  // a cycle it gives up on, so this teardown can start before the next cycle
+  // exists and still be parked here when it does (A-04).
+  if (superseded()) {
+    standDown();
+    return;
+  }
+
   if (gattAttempted) {
     // Cleanup after a FAILED read (scale disconnected before completion,
     // GATT discovery timed out, etc.). BlueZ keeps the device proxy plus
@@ -490,9 +498,19 @@ export async function teardownSession(opts: {
     // works and a next connect whose stored key is rejected (#417), so it has
     // to be possible to rule it in or out. The D-Bus reset stays, and the
     // reactive recovery tiers in startDiscoverySafe still cover a wedge.
+    //
+    // An abort is either a shutdown or the poll loop giving up on this cycle
+    // (A-04), and neither should power-cycle the radio: a shutdown has no next
+    // cycle, and an abandoned cycle's power-cycle would land on the next one,
+    // which starts after a 5 s backoff. A controller that really is wedged is
+    // still recovered by the tiers in startDiscoverySafe.
+    if (superseded()) {
+      standDown();
+      return;
+    }
     if (abortSignal?.aborted) {
       resetConnection();
-      bleLog.debug('Shutting down: D-Bus connection reset, skipping the btmgmt power-cycle');
+      bleLog.debug('Cycle aborted: D-Bus connection reset, skipping the btmgmt power-cycle');
     } else {
       await sleep(500);
       // The awaits above are D-Bus calls with no deadline, so the loop can

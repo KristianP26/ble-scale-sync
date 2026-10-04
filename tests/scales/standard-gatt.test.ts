@@ -281,6 +281,16 @@ describe('StandardGattScaleAdapter: 0x2A9D and the SIG time stamp', () => {
     });
   });
 
+  it('emits no reading for a 0x2A9D "measurement unsuccessful" frame (C-10)', () => {
+    // spec: WSS v1.0.0 3.2.1.2, 0xFFFF means the scale could not measure. The
+    // captured frame with only the weight field set to the sentinel.
+    const sentinel = Buffer.from(WSS);
+    sentinel.writeUInt16LE(0xffff, 1);
+    atCaptureTime(() => {
+      expect(charParser(makeAdapter())(CHR_WSS, sentinel)).toBeNull();
+    });
+  });
+
   it('completes a weigh-in whose weight is in 0x2A9D and fat in 0x2A9C', () => {
     atCaptureTime(() => {
       const a = makeAdapter();

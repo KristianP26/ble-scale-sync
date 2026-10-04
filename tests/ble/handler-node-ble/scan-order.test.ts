@@ -323,6 +323,56 @@ describe('scanAndReadRaw call order (#368)', () => {
     expect(calls).not.toContain('removeDevice');
   });
 
+  it('stands down mid-teardown when a newer cycle starts while it is aborted (A-04)', async () => {
+    // The poll loop now aborts the cycle it gives up on, so its teardown starts
+    // right away, before the next cycle exists. The first await there (the
+    // disconnect) is a D-Bus call with no deadline; if the next cycle starts
+    // while it is parked, everything after it acts on that cycle's state.
+    holdNextReading = new Promise<void>(() => {});
+    let releaseDisconnect!: () => void;
+    const disconnectGate = new Promise<void>((r) => (releaseDisconnect = r));
+    const realDisconnect = fakeDevice.disconnect;
+    let gateUsed = false;
+    fakeDevice.disconnect = async () => {
+      calls.push('device.disconnect');
+      if (!gateUsed) {
+        gateUsed = true;
+        await disconnectGate;
+      }
+    };
+    const opts = {
+      targetMac: 'AA:BB:CC:DD:EE:FF',
+      adapters: [makeAdapter()],
+      profile: defaultProfile(),
+    };
+    try {
+      const ctrl = new AbortController();
+      const abandoned = scanAndReadRaw({ ...opts, abortSignal: ctrl.signal });
+      void abandoned.catch(() => {});
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(calls).toContain('waitForRawReading');
+
+      ctrl.abort(new Error('poll cycle abandoned'));
+      await vi.advanceTimersByTimeAsync(100);
+      expect(gateUsed).toBe(true);
+
+      const replacement = scanAndReadRaw(opts);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await replacement;
+
+      calls.length = 0;
+      releaseDisconnect();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(abandoned).rejects.toThrow(/abandoned/);
+
+      expect(calls).not.toContain('removeDevice');
+      expect(calls).not.toContain('resetConnection');
+      expect(calls).not.toContain('resetAdapterBtmgmt');
+    } finally {
+      fakeDevice.disconnect = realDisconnect;
+    }
+  });
+
   it('ends the session when shut down mid-reading instead of waiting out the idle timeout (A-07)', async () => {
     // A held reading never completes, so only the abort can end this cycle
     // within the 5 s force-exit grace; the idle timeout would take 120 s.

@@ -61,15 +61,35 @@ describe('parseSigWeightMeasurement (0x2A9D)', () => {
     expect(out.timestamp).toBeUndefined();
   });
 
-  it('passes 0xFFFF through as a weight rather than suppressing it', () => {
-    // Pins today's behaviour rather than endorsing it. `sig-bcs.ts` treats
-    // 0xFFFF as the SIG "measurement unsuccessful" sentinel in every field;
-    // this decoder does not, so 0xFFFF decodes as 327.675 kg. No capture shows
-    // a scale sending it on 0x2A9D, so it is not suppressed on a guess - but a
-    // second caller must make that decision knowingly, and this test is what
-    // makes it visible when they do.
-    const sentinel = Buffer.from('00ffff', 'hex');
-    expect(parseSigWeightMeasurement(sentinel).weightKg).toBeCloseTo(327.675, 3);
+  it('yields no weight for the 0xFFFF "measurement unsuccessful" sentinel (C-10)', () => {
+    // spec: Weight Scale Service v1.0.0, 3.2.1.2: "The special value of 0xFFFF
+    // can be used to indicate 'Measurement Unsuccessful'". It used to decode as
+    // 327.675 kg. No capture shows a scale sending it, so the frame is the
+    // captured WSS_FRAME with only the weight field set to the sentinel; the
+    // spec keeps Time Stamp and User ID meaningful in such a frame.
+    const sentinel = Buffer.from(WSS_FRAME);
+    sentinel.writeUInt16LE(0xffff, 1);
+    const out = parseSigWeightMeasurement(sentinel);
+    expect(out.weightKg).toBeUndefined();
+    expect(out.timestamp).toBeInstanceOf(Date);
+    expect(out.userIndex).toBe(1);
+
+    // Same sentinel in a pounds frame: the field is raw, the unit is not.
+    expect(parseSigWeightMeasurement(Buffer.from('01ffff', 'hex')).weightKg).toBeUndefined();
+  });
+
+  it('keeps the BF720 cached weight when a 0xFFFF frame follows a real one (C-10)', () => {
+    const a = new BeurerBf720Adapter();
+    a.onSessionStart?.('E7DB49F186DE');
+    a.parseCharNotification!(uuid16(0x2a9d), WSS_FRAME);
+    const sentinel = Buffer.from(WSS_FRAME);
+    sentinel.writeUInt16LE(0xffff, 1);
+    a.parseCharNotification!(uuid16(0x2a9d), sentinel);
+    // A body composition frame without a weight field closes the weigh-in on
+    // the cached weight, which must still be the real one and not 327.675 kg.
+    const reading = a.parseCharNotification!(uuid16(0x2a9c), Buffer.from('0000c200', 'hex'));
+    expect(reading).not.toBeNull();
+    expect(reading!.weight).toBeCloseTo(79.96, 2);
   });
 
   it('still yields the weight when the flagged timestamp is truncated away', () => {

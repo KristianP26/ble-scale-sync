@@ -224,11 +224,10 @@ export class SigMeasurementPairing {
   onWeight(data: Buffer): ScaleReading | null {
     const m = parseSigWeightMeasurement(data);
     const kg = m.weightKg;
-    // A zero weight is a stub, not a measurement, and 0xFFFF is the spec's
-    // "measurement unsuccessful" (PHD Transcoding WP 3.5.4.1).
-    if (kg === undefined || !(kg > 0) || !Number.isFinite(kg) || data.readUInt16LE(1) === 0xffff) {
-      return null;
-    }
+    // A zero weight is a stub, not a measurement. The 0xFFFF "measurement
+    // unsuccessful" sentinel already comes back as no weight from the decoder
+    // (WSS v1.0.0 3.2.1.2, review C-10).
+    if (kg === undefined || !(kg > 0) || !Number.isFinite(kg)) return null;
     const reading: ScaleReading = { weight: kg, impedance: 0 };
     const ts = trustedScaleTime(m.timestamp);
     if (ts) reading.timestamp = ts;
