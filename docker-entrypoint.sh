@@ -10,6 +10,7 @@ reset_bt_adapter() {
       echo "Bluetooth adapter reset OK"
     else
       echo "Bluetooth adapter reset failed (will retry in-app)"
+      echo "The reset needs the container started with --cap-add NET_ADMIN (cap_add in compose)"
     fi
     sleep 2
   fi
@@ -24,8 +25,9 @@ case "$CMD" in
     exec node dist/wizard/index.js
     ;;
   scan)
+    shift
     reset_bt_adapter
-    exec node dist/scan.js
+    exec node dist/scan.js "$@"
     ;;
   diagnose)
     shift

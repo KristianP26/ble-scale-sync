@@ -1,16 +1,24 @@
 import type { ScaleAdapter, UserProfile, ScaleAuth } from '../interfaces/scale-adapter.js';
 import type { RawReading } from './shared.js';
+import type { WeightUnit } from '../config/schema.js';
 
 /**
  * Config delivered to a {@link Watcher} on construction and on hot reload. The
  * shape is uniform across transports; a watcher ignores fields it does not use
- * (mqtt-proxy ignores `scaleAuth`). See #246.
+ * (ha-bluetooth reads no GATT, so it ignores `scaleAuth` and `weightUnit`).
+ * See #246.
  */
 export interface WatcherConfig {
   adapters: ScaleAdapter[];
   targetMac?: string;
   profile?: UserProfile;
   scaleAuth?: ScaleAuth;
+  /**
+   * Configured `scale.weight_unit`, for the GATT reads: a reading from an
+   * adapter without `normalizesWeight` is converted from lbs when this is
+   * 'lbs', exactly as on the native transports.
+   */
+  weightUnit?: WeightUnit;
 }
 
 /**

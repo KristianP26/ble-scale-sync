@@ -27,6 +27,10 @@ This policy covers:
 
 - The BLE Scale Sync application (`src/`)
 - Docker image and entrypoint
+- The Home Assistant add-on (`ble-scale-sync-addon/`, including `run.sh`)
+- The ESP32 MQTT proxy firmware (`firmware/`)
+- The Garmin Connect helper scripts (`garmin-scripts/`)
+- The update-check service at `api.blescalesync.dev` (`worker/`)
 - GitHub Actions workflows
 - Documentation site (blescalesync.dev)
 

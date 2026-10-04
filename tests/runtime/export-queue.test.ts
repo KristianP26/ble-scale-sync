@@ -25,12 +25,16 @@ function lookupIn(...exporters: Exporter[]) {
 }
 
 const NOW = Date.parse('2026-09-09T12:00:00.000Z');
+const MIN = 60_000;
+const HOUR = 60 * MIN;
 
 function entry(over: Partial<QueuedExport> = {}): QueuedExport {
   return {
     exporter: 'garmin',
     payload: PAYLOAD,
-    queuedAt: new Date(NOW - 60_000).toISOString(),
+    // An hour back, so a first retry is due: the fixture is about queue
+    // mechanics, not about the spacing between attempts (E-01).
+    queuedAt: new Date(NOW - 60 * 60_000).toISOString(),
     attempts: 0,
     ...over,
   };
@@ -107,6 +111,23 @@ describe('export retry queue (#412)', () => {
     expect(loaded.some((e) => e.lastError === 'e0')).toBe(false);
   });
 
+  // E-19: the log counted the entries before the cap and could report 51.
+  it('reports the capped count when the queue is full', () => {
+    saveQueue(
+      file,
+      Array.from({ length: 50 }, () => entry()),
+    );
+    enqueue(file, entry(), NOW);
+    const lines = vi.mocked(console.log).mock.calls.map((c) => String(c[0]));
+    expect(lines.some((l) => l.includes('(50 waiting)'))).toBe(true);
+  });
+
+  // E-19: NaN never exceeds the age bound, so such an entry could never age out.
+  it('skips an entry whose queuedAt cannot be parsed', () => {
+    saveQueue(file, [entry({ queuedAt: 'not a date' }), entry()]);
+    expect(loadQueue(file, NOW)).toHaveLength(1);
+  });
+
   it('skips an unreadable line instead of losing the file', () => {
     fs.writeFileSync(file, `${JSON.stringify(entry())}\nnot json\n${JSON.stringify(entry())}\n`);
     expect(loadQueue(file, NOW)).toHaveLength(2);
@@ -140,7 +161,13 @@ describe('export retry queue (#412)', () => {
   });
 
   it('gives up on the last attempt rather than keeping a dead entry forever', async () => {
-    saveQueue(file, [entry({ attempts: 4 })]);
+    saveQueue(file, [
+      entry({
+        attempts: 4,
+        queuedAt: new Date(NOW - 71 * HOUR).toISOString(),
+        lastAttemptAt: new Date(NOW - 48 * HOUR).toISOString(),
+      }),
+    ]);
     const garmin = fakeExporter('garmin', async () => ({ success: false, error: 'nope' }));
 
     const result = await flushQueue(file, lookupIn(garmin), NOW);
@@ -158,6 +185,27 @@ describe('export retry queue (#412)', () => {
     );
     expect(result.dropped).toBe(1);
     expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('keeps an entry whose exporter cannot be built instead of deleting it (E-08)', async () => {
+    // The entry is taken off disk before the lookup, and building an exporter
+    // from a config entry the operator just broke throws. That throw used to
+    // escape the flush with the entry already gone.
+    saveQueue(file, [entry(), entry({ exporter: 'wger' })]);
+    const wger = fakeExporter('wger', async () => ({ success: true }));
+    const lookup = (e: QueuedExport): Exporter | undefined => {
+      if (e.exporter === 'garmin') throw new Error('garmin: upload_timeout_sec must be >= 30');
+      return wger;
+    };
+
+    const outcome = await flushQueue(file, lookup, NOW).catch((err: unknown) => err);
+
+    const loaded = loadQueue(file, NOW);
+    expect(loaded.map((e) => e.exporter)).toEqual(['garmin']);
+    // A config problem says nothing about the target, so no attempt is spent.
+    expect(loaded[0].attempts).toBe(0);
+    expect(wger.export).toHaveBeenCalledTimes(1);
+    expect(outcome).toMatchObject({ delivered: 1, failed: 1, dropped: 0 });
   });
 
   it('does not deliver an entry twice when one of several fails', async () => {
@@ -292,5 +340,200 @@ describe('export retry queue: the cases that could lose a reading (#412)', () =>
 
     expect(annaGarmin.export).not.toHaveBeenCalled();
     expect(result).toMatchObject({ delivered: 0, dropped: 1 });
+  });
+});
+
+/**
+ * E-01: the attempt budget used to be spent per loop iteration, not per unit
+ * of time. ADR D014 sets 72 h / 5 attempts and says the age bound is the one
+ * that decides in practice, but with a flush at the start of every scan cycle
+ * (about two minutes on node-ble) the fifth failure landed some ten minutes
+ * after the first, and an overnight outage still cost the reading.
+ */
+describe('export retry queue: attempts are spaced in time (E-01)', () => {
+  let dir: string;
+  let file: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'export-queue-spacing-'));
+    file = path.join(dir, 'queue.jsonl');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('does not spend an attempt on an entry whose retry is not due yet', async () => {
+    // Queued a few seconds ago, which is exactly where the watcher transports
+    // used to burn the first retry: the next iteration starts right after the
+    // failed dispatch.
+    saveQueue(file, [entry({ queuedAt: new Date(NOW - 5_000).toISOString() })]);
+    const garmin = fakeExporter('garmin', async () => ({ success: false, error: 'down' }));
+
+    await flushQueue(file, lookupIn(garmin), NOW);
+
+    expect(garmin.export).not.toHaveBeenCalled();
+    expect(loadQueue(file, NOW)[0].attempts).toBe(0);
+  });
+
+  it('keeps an entry alive across a long outage at poll cadence, then delivers it', async () => {
+    const t0 = NOW;
+    saveQueue(file, [entry({ queuedAt: new Date(t0).toISOString() })]);
+    let targetUp = false;
+    const garmin = fakeExporter('garmin', async () =>
+      targetUp ? { success: true } : { success: false, error: 'ENOTFOUND' },
+    );
+
+    // A flush every two minutes, the node-ble idle cadence, for a full day
+    // with the target down the whole time.
+    for (let t = t0; t <= t0 + 24 * HOUR; t += 2 * MIN) {
+      await flushQueue(file, lookupIn(garmin), t);
+    }
+    const afterOutage = loadQueue(file, t0 + 24 * HOUR);
+    expect(afterOutage).toHaveLength(1);
+    expect(afterOutage[0].attempts).toBeLessThan(5);
+
+    // The target is back on day two. The reading must still get through
+    // before the 72 h age bound retires it.
+    targetUp = true;
+    let delivered = 0;
+    for (let t = t0 + 24 * HOUR; t <= t0 + 72 * HOUR; t += 2 * MIN) {
+      delivered += (await flushQueue(file, lookupIn(garmin), t)).delivered;
+    }
+    expect(delivered).toBe(1);
+  });
+});
+
+/**
+ * E-02: the flush no longer blocks the scan, so a live weigh-in can fail and
+ * be queued while a flush is still waiting on an earlier upload. The flush
+ * used to finish by writing its own in-memory view back, which erased that
+ * newly queued reading.
+ */
+describe('export retry queue: concurrent enqueue during a flush (E-02)', () => {
+  let dir: string;
+  let file: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'export-queue-concurrent-'));
+    file = path.join(dir, 'queue.jsonl');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('keeps a reading queued while the flush was waiting on an export', async () => {
+    saveQueue(file, [entry({ lastError: 'old' })]);
+    const live = entry({
+      exporter: 'file',
+      queuedAt: new Date(NOW).toISOString(),
+      lastError: 'live',
+    });
+    const garmin = fakeExporter('garmin', async () => {
+      // The live dispatch fails and queues its reading mid-flush.
+      enqueue(file, live, NOW);
+      return { success: false, error: 'slow server' };
+    });
+
+    await flushQueue(file, lookupIn(garmin), NOW);
+
+    const left = loadQueue(file, NOW);
+    expect(left.map((e) => e.lastError).sort()).toEqual(['live', 'slow server']);
+  });
+
+  it('keeps a reading queued mid-flush even when the flush empties its own entries', async () => {
+    saveQueue(file, [entry()]);
+    const live = entry({ exporter: 'file', queuedAt: new Date(NOW).toISOString() });
+    const garmin = fakeExporter('garmin', async () => {
+      enqueue(file, live, NOW);
+      return { success: true };
+    });
+
+    const result = await flushQueue(file, lookupIn(garmin), NOW);
+
+    expect(result.delivered).toBe(1);
+    const left = loadQueue(file, NOW);
+    expect(left).toHaveLength(1);
+    expect(left[0].exporter).toBe('file');
+  });
+});
+
+describe('export retry queue: two exporters of one type (D029) and shutdown (E-10)', () => {
+  let dir: string;
+  let file: string;
+  let warn: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'export-queue-d029-'));
+    file = path.join(dir, 'queue.jsonl');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('keeps a mid-flush entry that differs from one being flushed only in its slot', async () => {
+    // Two webhooks of one user failing on one reading in one millisecond: same
+    // type, user, queuedAt and timestamp. Without the slot in the identity the
+    // re-read took the second for the first and the next write dropped it.
+    const shared = { exporter: 'webhook', userSlug: 'dad', timestamp: '2026-09-09T07:00:00.000Z' };
+    saveQueue(file, [entry({ ...shared, exporterList: 'global', exporterIndex: 0 })]);
+    const sibling = entry({ ...shared, exporterList: 'global', exporterIndex: 1 });
+    const webhook = fakeExporter('webhook', async () => {
+      enqueue(file, sibling, NOW);
+      return { success: true };
+    });
+
+    await flushQueue(file, lookupIn(webhook), NOW);
+
+    const left = loadQueue(file, NOW);
+    expect(left).toHaveLength(1);
+    expect(left[0].exporterIndex).toBe(1);
+  });
+
+  it('starts nothing once the app is stopping, and keeps every entry on disk', async () => {
+    saveQueue(file, [entry(), entry({ exporter: 'file' })]);
+    const garmin = fakeExporter('garmin', async () => ({ success: true }));
+    const ac = new AbortController();
+    ac.abort();
+
+    const result = await flushQueue(file, lookupIn(garmin), NOW, ac.signal);
+
+    expect(garmin.export).not.toHaveBeenCalled();
+    expect(result.delivered).toBe(0);
+    expect(loadQueue(file, NOW)).toHaveLength(2);
+  });
+
+  it('names the entry in flight when the app is told to stop during its attempt', async () => {
+    saveQueue(file, [
+      entry({ userSlug: 'dad', timestamp: '2026-09-09T07:00:00.000Z' }),
+      entry({ exporter: 'file' }),
+    ]);
+    const ac = new AbortController();
+    const garmin = fakeExporter('garmin', async () => {
+      ac.abort();
+      return { success: true };
+    });
+    const fileExp = fakeExporter('file', async () => ({ success: true }));
+
+    await flushQueue(file, lookupIn(garmin, fileExp), NOW, ac.signal);
+
+    const lines = warn.mock.calls.map((c) => c.map(String).join(' ')).join(' | ');
+    expect(lines).toMatch(
+      /Shutdown requested while retrying a queued garmin export for 'dad' measured at 2026-09-09T07:00:00\.000Z/,
+    );
+    // The next entry is not started under a shutdown, and stays queued.
+    expect(fileExp.export).not.toHaveBeenCalled();
+    expect(loadQueue(file, NOW).map((e) => e.exporter)).toEqual(['file']);
   });
 });

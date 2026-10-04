@@ -4,9 +4,9 @@ import type {
   UserProfile,
   ScaleAuth,
 } from '../../interfaces/scale-adapter.js';
-import type { EsphomeProxyConfig } from '../../config/schema.js';
+import type { EsphomeProxyConfig, WeightUnit } from '../../config/schema.js';
 import { type RawReading, waitForRawReading } from '../shared.js';
-import { resolveAdapter } from '../../scales/resolve.js';
+import { resolveAdapter, resolveAfterDiscovery } from '../../scales/resolve.js';
 import {
   evaluateAdvertisement,
   GraceTimers,
@@ -52,6 +52,8 @@ export class ReadingWatcher implements Watcher {
   private targetMac?: string;
   private profile?: UserProfile;
   private scaleAuth?: ScaleAuth;
+  /** `scale.weight_unit`, passed to every GATT read (see WatcherConfig). */
+  private weightUnit?: WeightUnit;
   private config: EsphomeProxyConfig;
   private readonly dedup = new DedupWindow(DEDUP_WINDOW_MS);
   private pool: EsphomeProxyPool | null = null;
@@ -97,8 +99,9 @@ export class ReadingWatcher implements Watcher {
     bleLog.debug(`Nameless advertisement for ${addrLc}: using cached name "${safeName(cached)}"`);
     return { ...info, localName: cached };
   }
-  // LRU map (insertion-ordered): scales whose on-demand GATT connect failed,
-  // so we warn once instead of on every advertisement.
+  // LRU map (insertion-ordered): scales whose on-demand GATT read failed since
+  // their last success, so we warn once instead of on every advertisement and
+  // log the repeats at debug.
   private gattWarnedFor = new Map<string, true>();
   /** Weight-only fallback timer per address; on elapse the held reading is
    *  queued directly (no dedup — matches the prior grace-timer body). */
@@ -116,12 +119,14 @@ export class ReadingWatcher implements Watcher {
     targetMac?: string,
     profile?: UserProfile,
     scaleAuth?: ScaleAuth,
+    weightUnit?: WeightUnit,
   ) {
     this.config = config;
     this.adapters = adapters;
     this.targetMac = targetMac?.toLowerCase();
     this.profile = profile;
     this.scaleAuth = scaleAuth;
+    this.weightUnit = weightUnit;
   }
 
   async start(): Promise<void> {
@@ -164,11 +169,16 @@ export class ReadingWatcher implements Watcher {
     return this.lastAdvertAt;
   }
 
+  /**
+   * Hot reload. scaleAuth and weightUnit are taken as given, unset included,
+   * so removing a PIN on reload takes effect instead of keeping the old one.
+   */
   updateConfig(config: WatcherConfig): void {
     this.adapters = config.adapters;
     this.targetMac = config.targetMac?.toLowerCase();
     if (config.profile) this.profile = config.profile;
-    if (config.scaleAuth) this.scaleAuth = config.scaleAuth;
+    this.scaleAuth = config.scaleAuth;
+    this.weightUnit = config.weightUnit;
   }
 
   private handleAd(rawInfo: BleDeviceInfo, address: string): void {
@@ -234,9 +244,12 @@ export class ReadingWatcher implements Watcher {
         // the correct char-specific one. On a Eufy P1 "T9147" (fff1 + fff4, no
         // fff2) Inlife matched then failed writing fff2; with the discovered
         // chars, Inlife rejects (no fff2) and 1byone (Eufy) wins on fff4 (#251).
-        const discovered = { ...info, characteristicUuids: [...session.charMap.keys()] };
-        logAdvert(address, discovered);
-        gattAdapter = resolveAdapter(discovered, this.adapters) ?? adapter;
+        // resolveAfterDiscovery keeps a pick the advertised name made over an
+        // adapter that claims on a characteristic alone (a Digoo is not Inlife).
+        const characteristicUuids = [...session.charMap.keys()];
+        logAdvert(address, { ...info, characteristicUuids });
+        gattAdapter =
+          resolveAfterDiscovery(info, { characteristicUuids }, this.adapters) ?? adapter;
         if (gattAdapter.name !== adapter.name) {
           bleLog.info(
             `Re-resolved adapter after GATT discovery: ${adapter.name} -> ${gattAdapter.name} (${address})`,
@@ -251,10 +264,11 @@ export class ReadingWatcher implements Watcher {
                 gattAdapter,
                 this.profile ?? { height: 170, age: 30, gender: 'male', isAthlete: false },
                 address.replace(/[:-]/g, '').toUpperCase(),
-                undefined,
+                this.weightUnit,
                 undefined,
                 this.scaleAuth,
                 onActivity,
+                info.localName,
               ),
             GATT_READING_IDLE_MS,
             `GATT reading timeout for ${address}`,
@@ -262,6 +276,8 @@ export class ReadingWatcher implements Watcher {
           GATT_SESSION_ABSOLUTE_MS,
           `GATT session cap exceeded for ${address}`,
         );
+        // A read that works again makes the next failure news, so it warns.
+        this.gattWarnedFor.delete(address);
         this.pushDeduped(address, raw, raw.reading.weight);
       } catch (e) {
         this.warnGattFailure(gattAdapter.name, address, errMsg(e));
@@ -280,6 +296,10 @@ export class ReadingWatcher implements Watcher {
     if (this.gattWarnedFor.has(address)) {
       this.gattWarnedFor.delete(address);
       this.gattWarnedFor.set(address, true);
+      // Not silent: the reason can change after the first warning (a transient
+      // failure, then a scale that breaks for good), and without this line a
+      // DEBUG log shows nothing a reporter could send (B-13).
+      bleLog.debug(`${adapterName} at ${address}: GATT read failed again (${reason})`);
       return;
     }
     if (this.gattWarnedFor.size >= GATT_WARN_LRU_MAX) {

@@ -154,12 +154,22 @@ export class MiScale2Adapter implements ScaleAdapterCore, GattWiring, Unlockable
  * below. Shared by the Xiaomi scales that broadcast raw impedance: the Mi
  * Scale 2, and the S400, whose own app lands within a couple of points of these
  * equations while the generic BIA coefficients are off by five or more.
+ *
+ * Impedance 0 (a weigh-in in socks, or a value the processor refused) gets the
+ * BMI estimate, never the Xiaomi equations (ADR D028, review D-05). With 0 the
+ * impedance term of the lean-mass coefficient simply drops out, which is
+ * neither a measurement nor the estimate: 25.55 % fat and a visceral rating of
+ * 1 for a 165 cm, 40-year-old, 60 kg woman whose estimate is 30.25 %. The
+ * broadcast path does export weight-only Mi Scale 2 frames once
+ * `IMPEDANCE_GRACE_MS` runs out, so this is a real path, not a corner case.
  */
 export function computeMiScaleComposition(
   weight: number,
   impedance: number,
   profile: UserProfile,
 ): BodyComposition {
+  if (!(impedance > 0)) return buildPayload(weight, impedance, {}, profile);
+
   const mi = new MiScaleCalc(profile.gender === 'male' ? 1 : 0, profile.age, profile.height);
 
   const fat = mi.bodyFat(weight, impedance);

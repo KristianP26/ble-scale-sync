@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock the client factory so no real sockets open.
 const fakeClients = new Map<string, FakeClient>();
@@ -55,6 +55,7 @@ vi.mock('../../../src/ble/handler-esphome-proxy/gatt.js', () => ({
 
 import { EsphomeProxyPool } from '../../../src/ble/handler-esphome-proxy/pool.js';
 import { openGattSession } from '../../../src/ble/handler-esphome-proxy/gatt.js';
+import { waitForConnected, safeDisconnect } from '../../../src/ble/handler-esphome-proxy/client.js';
 
 const adv = (addr: number, rssi: number, addressType?: number) => ({
   address: addr,
@@ -177,5 +178,75 @@ describe('EsphomeProxyPool', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * B-01: one unreachable proxy in `additional_proxies` used to take the whole
+ * transport down. start() awaited every endpoint in turn and threw on the
+ * first failure, the watcher tore the healthy proxies down with it, and the
+ * loop retried into the same failure forever: no weigh-in was ever read even
+ * though the scale sat in range of a working proxy.
+ */
+describe('EsphomeProxyPool start with an unreachable proxy (B-01)', () => {
+  const config = {
+    host: 'p1',
+    port: 6053,
+    client_info: 'x',
+    additional_proxies: [{ host: 'p2', port: 6053, client_info: 'x' }],
+  } as never;
+
+  beforeEach(() => {
+    fakeClients.clear();
+    vi.mocked(safeDisconnect).mockClear();
+  });
+
+  afterEach(() => {
+    vi.mocked(waitForConnected).mockImplementation(async () => {});
+  });
+
+  it('keeps the healthy proxy and leaves the unreachable one to reconnect', async () => {
+    vi.mocked(waitForConnected).mockImplementation(async (_client, id) => {
+      if (id === 'p2:6053') throw new Error('connect ECONNREFUSED 10.0.0.2:6053');
+    });
+    const pool = new EsphomeProxyPool(config);
+
+    await expect(pool.start()).resolves.toBeUndefined();
+
+    const seen: string[] = [];
+    pool.onAdvertisement((_info, mac) => seen.push(mac));
+    fakeClients.get('p1')!._emit('ble', adv(0x112233445566, -50));
+    expect(seen).toEqual(['11:22:33:44:55:66']);
+
+    // The failed client is kept, not disconnected: the library was built with
+    // reconnect:true and retries it in the background. Once it comes back its
+    // advertisements must reach subscribers like any other proxy's.
+    expect(vi.mocked(safeDisconnect)).not.toHaveBeenCalled();
+    expect(pool.getClient('p2:6053')).not.toBeNull();
+    fakeClients.get('p2')!._emit('ble', adv(0xaabbccddeeff, -60));
+    expect(seen).toContain('AA:BB:CC:DD:EE:FF');
+
+    // stop() still owns the failed client, so its reconnect timer cannot
+    // outlive the pool.
+    await pool.stop();
+    expect(vi.mocked(safeDisconnect)).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails the start and releases every client when no proxy is reachable', async () => {
+    vi.mocked(waitForConnected).mockRejectedValue(new Error('connect EHOSTUNREACH'));
+    const pool = new EsphomeProxyPool(config);
+
+    await expect(pool.start()).rejects.toThrow('EHOSTUNREACH');
+    // Nothing may be left reconnecting behind a start that reported failure:
+    // the loop calls start() again after its backoff and would stack clients.
+    expect(vi.mocked(safeDisconnect)).toHaveBeenCalledTimes(2);
+    expect(pool.getClient('p1:6053')).toBeNull();
+    expect(pool.getClient('p2:6053')).toBeNull();
+
+    // And a later start() is a real retry, not a no-op on a stale flag.
+    vi.mocked(waitForConnected).mockImplementation(async () => {});
+    await pool.start();
+    expect(pool.getClient('p1:6053')).not.toBeNull();
+    await pool.stop();
   });
 });

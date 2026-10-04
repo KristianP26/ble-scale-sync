@@ -23,7 +23,7 @@ const CHR_WRITE = uuid16(0xfff2);
  *   [0-1]   a5 02        protocol marker
  *   [2]     sequence, increments once per frame and wraps
  *   [3-4]   10 00        payload length, 16
- *   [5]     checksum
+ *   [5]     checksum, see checksumCloses
  *   [6-9]   01 61 a1 00  fixed, part of the frame signature
  *   [10-12] weight, 24-bit LITTLE-endian, in grams
  *   [13-14] impedance, uint16 LE, ohms
@@ -72,6 +72,21 @@ function isMeasurementFrame(d: Buffer): boolean {
     d[8] === 0xa1 &&
     d[9] === 0x00
   );
+}
+
+/**
+ * Byte [5] is `(0xFF - sum of every other byte) & 0xFF`. It closes on every
+ * frame of the #385 log (settling, settled and the short status frame), and on
+ * the host-to-scale unit command the independent etekcity_esf551_ble driver
+ * builds (`build_unit_update_payload`, `payload[5] = 43 - unit`, which is this
+ * same sum over `a5 22 03 05 00 .. 01 63 a1 00 00 <unit>`). That driver does not
+ * check it on received frames; we do, because the signature bytes alone pass a
+ * frame whose weight bytes were garbled in transit.
+ */
+function checksumCloses(d: Buffer): boolean {
+  let sum = 0;
+  for (let i = 0; i < d.length; i++) if (i !== 5) sum += d[i];
+  return ((0xff - sum) & 0xff) === d[5];
 }
 
 /**
@@ -129,6 +144,10 @@ export class EtekcityEsf551Adapter implements ScaleAdapterCore, GattWiring {
 
   parseNotification(data: Buffer): ScaleReading | null {
     if (!isMeasurementFrame(data)) return null;
+    if (!checksumCloses(data)) {
+      bleLog.debug(`Etekcity: dropping frame with a bad checksum: ${data.toString('hex')}`);
+      return null;
+    }
 
     if (!this.loggedUnit) {
       this.loggedUnit = true;

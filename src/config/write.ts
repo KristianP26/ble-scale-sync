@@ -5,6 +5,8 @@ import {
   unlinkSync,
   existsSync,
   chmodSync,
+  lstatSync,
+  realpathSync,
 } from 'node:fs';
 import { parseDocument } from 'yaml';
 import { createLogger } from '../logger.js';
@@ -41,7 +43,12 @@ const SECRET_FILE_MODE = 0o600;
  * MOVEFILE_REPLACE_EXISTING on Windows, so replacing in place is not
  * POSIX-only; EEXIST is handled below for any filesystem that refuses anyway.
  */
-export function atomicWrite(filePath: string, content: string): void {
+export function atomicWrite(linkOrFilePath: string, content: string): void {
+  // rename(2) replaces the directory entry it is given, so renaming onto a
+  // symlinked config.yaml replaced the LINK with a plain file: the first
+  // last_known_weight write cut the link and later edits of the real file
+  // were never read again. Write beside the file the link points at instead.
+  const filePath = resolveSymlink(linkOrFilePath);
   const tmpPath = filePath + '.tmp';
   try {
     // A stale tmp from an earlier interrupted write must not be reused:
@@ -91,6 +98,16 @@ export function atomicWrite(filePath: string, content: string): void {
       // ignore cleanup failure
     }
     throw err;
+  }
+}
+
+/** The real path behind a symlink; the path itself when it is none or missing. */
+function resolveSymlink(path: string): string {
+  try {
+    return lstatSync(path).isSymbolicLink() ? realpathSync(path) : path;
+  } catch {
+    // Missing (first write) or a dangling link: keep the old behaviour.
+    return path;
   }
 }
 

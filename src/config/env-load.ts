@@ -1,16 +1,31 @@
+import { dirname } from 'node:path';
 import { config as dotenvConfig } from 'dotenv';
 import type { AppConfig, ExporterEntry } from './schema.js';
 import { defaultEnvPath } from './paths.js';
 import { parseBleAdapterEnv } from './env-overrides.js';
 import { loadConfig as loadEnvVarConfig } from '../validate-env.js';
 import { loadExporterConfig } from '../exporters/config.js';
+import { resolveTokenDir } from './token-dirs.js';
 
 /**
  * Load config from .env, wrapping existing loadConfig() + loadExporterConfig()
  * into the unified AppConfig shape.
  */
+/**
+ * NOBLE_DRIVER for the legacy .env mode. It used to be cast to the union
+ * unchecked, so a typo reached the driver selection as if it were valid (G-22).
+ */
+function parseNobleDriverEnv(): 'abandonware' | 'stoprocent' | null {
+  const raw = process.env.NOBLE_DRIVER?.trim().toLowerCase();
+  if (!raw) return null;
+  if (raw === 'abandonware' || raw === 'stoprocent') return raw;
+  throw new Error(
+    `NOBLE_DRIVER must be 'abandonware' or 'stoprocent', got '${process.env.NOBLE_DRIVER}'`,
+  );
+}
+
 export function loadEnvConfig(): AppConfig {
-  dotenvConfig({ path: defaultEnvPath() });
+  dotenvConfig({ path: defaultEnvPath(), quiet: true });
 
   const envConfig = loadEnvVarConfig();
   const exporterConfig = loadExporterConfig();
@@ -22,6 +37,26 @@ export function loadEnvConfig(): AppConfig {
     if (name === 'garmin' && exporterConfig.garmin) {
       Object.assign(entry, {
         weight_only: exporterConfig.garmin.weightOnly,
+        // undefined when GARMIN_UPLOAD_TIMEOUT_SEC is unset, which the
+        // exporter reads as "use the default", same as an absent YAML key.
+        upload_timeout_sec: exporterConfig.garmin.uploadTimeoutSec,
+      });
+    }
+    if (name === 'file' && exporterConfig.file) {
+      const f = exporterConfig.file;
+      Object.assign(entry, {
+        file_path: f.filePath,
+        format: f.format,
+      });
+    }
+    if (name === 'strava' && exporterConfig.strava) {
+      const s = exporterConfig.strava;
+      Object.assign(entry, {
+        client_id: s.clientId,
+        client_secret: s.clientSecret,
+        // Relative to the directory the .env is in, like a token_dir in
+        // config.yaml (F-11).
+        token_dir: resolveTokenDir(s.tokenDir, dirname(defaultEnvPath())),
       });
     }
     if (name === 'mqtt' && exporterConfig.mqtt) {
@@ -120,7 +155,7 @@ export function loadEnvConfig(): AppConfig {
     ble: {
       handler: 'auto' as const,
       scale_mac: envConfig.scaleMac ?? null,
-      noble_driver: (process.env.NOBLE_DRIVER as 'abandonware' | 'stoprocent') ?? null,
+      noble_driver: parseNobleDriverEnv(),
       adapter: parseBleAdapterEnv() ?? null,
     },
     scale: {
@@ -149,7 +184,9 @@ export function loadEnvConfig(): AppConfig {
       continuous_mode: envConfig.continuousMode,
       scan_cooldown: envConfig.scanCooldownSec,
       dry_run: envConfig.dryRun,
-      debug: process.env.DEBUG === 'true',
+      // Same TRUE words as the logger and the yaml override, so DEBUG=1 does
+      // not mean debug logs on but runtime.debug off.
+      debug: ['true', 'yes', 'on', '1'].includes((process.env.DEBUG ?? '').trim().toLowerCase()),
       watchdog_max_consecutive_failures: 10,
       watch_config: true,
       idle_rescan_delay: 5,

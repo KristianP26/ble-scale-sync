@@ -15,7 +15,7 @@
 
 import type { BleDeviceInfo, ScaleAdapter } from '../../interfaces/scale-adapter.js';
 import type { BleChar } from '../shared.js';
-import { resolveAdapter } from '../../scales/resolve.js';
+import { resolveAdapter, resolveAfterDiscovery } from '../../scales/resolve.js';
 import {
   bleLog,
   errMsg,
@@ -51,7 +51,12 @@ import {
 } from '../shared.js';
 import type { WeightUnit } from '../../config/schema.js';
 import type { ScaleAuth, ScaleReading, UserProfile } from '../../interfaces/scale-adapter.js';
-import { RAW_READING_TIMEOUT_MS, READING_SESSION_CAP_FACTOR, withIdleTimeout } from '../types.js';
+import {
+  RAW_READING_TIMEOUT_MS,
+  READING_SESSION_CAP_FACTOR,
+  untilAborted,
+  withIdleTimeout,
+} from '../types.js';
 import { tagBleFailure, bleFailureKind } from '../failure-kind.js';
 import { probeLiveness, makeLivenessAdapter } from './liveness.js';
 import { safeName } from '../advertisement.js';
@@ -247,12 +252,58 @@ export async function resolvePreConnectAdapter(
 }
 
 /**
+ * node-ble's GattServer as it is at runtime. `init()` is public in the shipped
+ * JavaScript (Device.gatt() calls it on a fresh server) but missing from the
+ * bundled typings.
+ */
+type RefreshableGattServer = NodeBle.GattServer & { init?: () => Promise<void> };
+
+/**
+ * Enumerate the GATT tree into a char map, bounded by the discovery timeout.
+ *
+ * With `refresh`, the server's snapshot is rebuilt first. node-ble's
+ * GattServer.init() snapshots the services and characteristics once, and
+ * services(), getPrimaryService() and characteristics() only ever read that
+ * snapshot back, so without it a retry re-reads the exact map that was found
+ * incomplete and a characteristic BlueZ exported late (bluez/bluez#1489) can
+ * never appear. init() is what Device.gatt() runs on a new server: it clears
+ * the snapshot, waits for ServicesResolved, and walks the device's D-Bus
+ * children with a fresh proxy object. It is safe here because every retry runs
+ * before anything is subscribed, so no caller holds a characteristic from the
+ * old snapshot that it still needs. Inside the same timeout, because the
+ * ServicesResolved wait has no bound of its own if the link drops.
+ */
+async function enumerateCharMap(
+  gatt: NodeBle.GattServer,
+  refresh: boolean,
+): Promise<Map<string, BleChar>> {
+  return withTimeout(
+    (async () => {
+      const init = (gatt as RefreshableGattServer).init;
+      if (refresh && typeof init === 'function') await init.call(gatt);
+      return buildCharMap(gatt);
+    })(),
+    GATT_DISCOVERY_TIMEOUT_MS,
+    'GATT service discovery timed out',
+  );
+}
+
+/**
  * Resolve the adapter again once characteristics are known.
  *
  * Returns the adapter rather than assigning the caller's local, and throws when
  * nothing claims the device. The char map it builds here is deliberately
  * discarded: the reading uses a fresh one built after the second
  * acquireGattServer, whose adapter may differ.
+ *
+ * The pick goes through resolveAfterDiscovery, so the GATT services found here
+ * cannot overturn what the device's name already identified (a Digoo taken by
+ * Inlife, a Hoffen by MGB). BlueZ gives no advertised service UUIDs before
+ * connect on this path, hence `advertisedServicesKnown: false`.
+ *
+ * A retry rebuilds the GATT snapshot first (enumerateCharMap); without that it
+ * would re-read the same snapshot and could never see a late export
+ * (bluez/bluez#1489).
  */
 export async function resolveAfterConnect(
   gatt: NodeBle.GattServer,
@@ -261,37 +312,38 @@ export async function resolveAfterConnect(
   deviceMac: string,
   advert: AdvertisementSnapshot,
 ): Promise<ScaleAdapter> {
-  const serviceUuids = await gatt.services();
+  let serviceUuids = await gatt.services();
   bleLog.debug(`Services: [${serviceUuids.join(', ')}]`);
 
+  // The same record resolvePreConnectAdapter matched on. Manufacturer and
+  // service data were captured before StopDiscovery, because BlueZ drops the
+  // advertisement with the discovery session. Without them a dozen adapters
+  // that key on a company id (the Lefu OEM fingerprint, the Xiaomi and Beurer
+  // company ids) could never match on Linux, and the device fell through to
+  // whichever adapter claimed the bare vendor service (#280, #318).
+  const advertised: BleDeviceInfo = {
+    localName: name,
+    address: deviceMac ? formatMac(deviceMac) : undefined,
+    serviceUuids: [],
+    ...advert,
+  };
+
   let resolved: ScaleAdapter | undefined;
-  let matchCharMap = await withTimeout(
-    buildCharMap(gatt),
-    GATT_DISCOVERY_TIMEOUT_MS,
-    'GATT service discovery timed out',
-  );
+  let matchCharMap = await enumerateCharMap(gatt, false);
   for (let attempt = 1; attempt <= CHAR_DISCOVERY_MAX_RETRIES; attempt++) {
-    const info: BleDeviceInfo = {
-      localName: name,
-      address: deviceMac ? formatMac(deviceMac) : undefined,
-      serviceUuids: serviceUuids.map(normalizeUuid),
-      characteristicUuids: [...matchCharMap.keys()],
-      // Captured before StopDiscovery, because BlueZ drops the
-      // advertisement with the discovery session. Without it a dozen
-      // adapters that key on a company id (the Lefu OEM fingerprint, the
-      // Xiaomi and Beurer company ids) could never match on Linux, and the
-      // device fell through to whichever adapter claimed the bare vendor
-      // service (#280, #318).
-      ...advert,
-    };
-    resolved = resolveAdapter(info, adapters);
+    resolved = resolveAfterDiscovery(
+      advertised,
+      {
+        serviceUuids: serviceUuids.map(normalizeUuid),
+        characteristicUuids: [...matchCharMap.keys()],
+        advertisedServicesKnown: false,
+      },
+      adapters,
+    );
     if (resolved || attempt === CHAR_DISCOVERY_MAX_RETRIES) break;
     await sleep(CHAR_DISCOVERY_RETRY_DELAY_MS);
-    matchCharMap = await withTimeout(
-      buildCharMap(gatt),
-      GATT_DISCOVERY_TIMEOUT_MS,
-      'GATT service discovery timed out',
-    );
+    matchCharMap = await enumerateCharMap(gatt, true);
+    serviceUuids = await gatt.services();
   }
   if (!resolved) {
     throw new Error(
@@ -303,16 +355,15 @@ export async function resolveAfterConnect(
   return resolved;
 }
 
-/** Build the characteristic map, retrying while the adapter's chars are missing. */
+/**
+ * Build the characteristic map, retrying while the adapter's chars are missing.
+ * Each retry rebuilds node-ble's GATT snapshot first (see enumerateCharMap).
+ */
 export async function buildCharMapWithRetry(
   gatt: NodeBle.GattServer,
   findMissing: (map: Map<string, BleChar>) => string[],
 ): Promise<Map<string, BleChar>> {
-  let charMap = await withTimeout(
-    buildCharMap(gatt),
-    GATT_DISCOVERY_TIMEOUT_MS,
-    'GATT service discovery timed out',
-  );
+  let charMap = await enumerateCharMap(gatt, false);
   // Retry budget: MAX iterations total. Iterations 1..MAX-1 actually rebuild
   // the char map; the MAX-th iteration only logs the give-up warn and breaks,
   // so the user-facing retry counter is `attempt/(MAX-1)`.
@@ -330,16 +381,11 @@ export async function buildCharMapWithRetry(
       `GATT enumeration missing [${missing.join(', ')}], retry ${attempt}/${CHAR_DISCOVERY_MAX_RETRIES - 1} in ${CHAR_DISCOVERY_RETRY_DELAY_MS}ms...`,
     );
     await new Promise<void>((r) => setTimeout(r, CHAR_DISCOVERY_RETRY_DELAY_MS));
-    charMap = await withTimeout(
-      buildCharMap(gatt),
-      GATT_DISCOVERY_TIMEOUT_MS,
-      'GATT service discovery timed out',
-    );
+    charMap = await enumerateCharMap(gatt, true);
   }
   return charMap;
 }
 
-/** Post-session cleanup. Everything here is best effort; nothing may throw out. */
 /** Whether the one-time info line for a disabled power-cycle was printed (#417). */
 let preemptiveSkipAnnounced = false;
 
@@ -348,6 +394,7 @@ export function _resetPreemptiveSkipNotice(): void {
   preemptiveSkipAnnounced = false;
 }
 
+/** Post-session cleanup. Everything here is best effort; nothing may throw out. */
 export async function teardownSession(opts: {
   device: Device | null;
   btAdapter: Adapter | undefined;
@@ -361,10 +408,27 @@ export async function teardownSession(opts: {
    * owns the default, callers pass the option through unchanged.
    */
   preemptiveAdapterReset?: boolean;
+  /**
+   * True once a newer scan cycle has started (A-04). Everything below except
+   * releasing our own proxy acts on state that cycle now uses: the device path,
+   * the discovery session, the D-Bus connection and the controller.
+   */
+  isSuperseded?: () => boolean;
 }): Promise<void> {
   const { device, btAdapter, deviceMac, bleAdapter, gattAttempted, gattSucceeded, abortSignal } =
     opts;
   const preemptiveAdapterReset = opts.preemptiveAdapterReset !== false;
+  const superseded = (): boolean => opts.isSuperseded?.() === true;
+  const standDown = (): void => {
+    bleLog.debug(
+      'An abandoned scan cycle ended after a newer one started; leaving BlueZ and the D-Bus connection to it',
+    );
+  };
+  if (superseded()) {
+    if (device) releaseDeviceProxy(device);
+    standDown();
+    return;
+  }
   // Best-effort disconnect if we got partway through a connection
   if (device) {
     try {
@@ -378,6 +442,14 @@ export async function teardownSession(opts: {
     // D-Bus match rule per cycle for the life of the process (#396, #397). The
     // session is over here, so nothing else can be holding it.
     releaseDeviceProxy(device);
+  }
+
+  // The disconnect above is a D-Bus call with no deadline. The poll loop aborts
+  // a cycle it gives up on, so this teardown can start before the next cycle
+  // exists and still be parked here when it does (A-04).
+  if (superseded()) {
+    standDown();
+    return;
   }
 
   if (gattAttempted) {
@@ -426,11 +498,27 @@ export async function teardownSession(opts: {
     // works and a next connect whose stored key is rejected (#417), so it has
     // to be possible to rule it in or out. The D-Bus reset stays, and the
     // reactive recovery tiers in startDiscoverySafe still cover a wedge.
+    //
+    // An abort is either a shutdown or the poll loop giving up on this cycle
+    // (A-04), and neither should power-cycle the radio: a shutdown has no next
+    // cycle, and an abandoned cycle's power-cycle would land on the next one,
+    // which starts after a 5 s backoff. A controller that really is wedged is
+    // still recovered by the tiers in startDiscoverySafe.
+    if (superseded()) {
+      standDown();
+      return;
+    }
     if (abortSignal?.aborted) {
       resetConnection();
-      bleLog.debug('Shutting down: D-Bus connection reset, skipping the btmgmt power-cycle');
+      bleLog.debug('Cycle aborted: D-Bus connection reset, skipping the btmgmt power-cycle');
     } else {
       await sleep(500);
+      // The awaits above are D-Bus calls with no deadline, so the loop can
+      // give up on this cycle and start the next one while they run.
+      if (superseded()) {
+        standDown();
+        return;
+      }
       resetConnection();
       bleLog.debug('D-Bus connection reset after GATT operation');
       if (!preemptiveAdapterReset) {
@@ -476,26 +564,36 @@ export async function readWithTimeouts(
     onLiveData?: (reading: ScaleReading) => void;
     scaleAuth?: ScaleAuth;
     readingTimeoutMs?: number;
+    abortSignal?: AbortSignal;
+    /** Advertised name, handed to the adapter as ConnectionContext.deviceName. */
+    deviceName?: string;
   },
 ): Promise<RawReading> {
   const idleMs = opts.readingTimeoutMs ?? RAW_READING_TIMEOUT_MS;
+  // A shutdown ends the session the same way a timeout does, through
+  // withAbandonmentCleanup, instead of waiting out an idle window of up to
+  // 120 s that the 5 s force-exit grace never lets finish (A-07).
   return await withAbandonmentCleanup(bleDevice, () =>
-    withIdleTimeout(
-      (onActivity) =>
-        waitForRawReading(
-          charMap,
-          bleDevice,
-          matchedAdapter,
-          opts.profile,
-          deviceMac.replace(/[:-]/g, '').toUpperCase(),
-          opts.weightUnit,
-          opts.onLiveData,
-          opts.scaleAuth,
-          onActivity,
-        ),
-      idleMs,
-      'Timed out waiting for a complete scale reading',
-      { ms: idleMs * READING_SESSION_CAP_FACTOR, message: 'GATT session cap exceeded' },
+    untilAborted(
+      withIdleTimeout(
+        (onActivity) =>
+          waitForRawReading(
+            charMap,
+            bleDevice,
+            matchedAdapter,
+            opts.profile,
+            deviceMac.replace(/[:-]/g, '').toUpperCase(),
+            opts.weightUnit,
+            opts.onLiveData,
+            opts.scaleAuth,
+            onActivity,
+            opts.deviceName,
+          ),
+        idleMs,
+        'Timed out waiting for a complete scale reading',
+        { ms: idleMs * READING_SESSION_CAP_FACTOR, message: 'GATT session cap exceeded' },
+      ),
+      opts.abortSignal,
     ),
   );
 }

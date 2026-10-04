@@ -48,16 +48,23 @@ describe('generateSlug()', () => {
     expect(generateSlug('dad')).toBe('dad');
   });
 
-  it('handles empty string', () => {
-    expect(generateSlug('')).toBe('');
+  // G-25: these used to return '', which the schema then rejected with a bare
+  // regex error and the wizard offered as the default.
+  it('falls back to user-1 for an empty string', () => {
+    expect(generateSlug('')).toBe('user-1');
   });
 
-  it('handles string with only special characters', () => {
-    expect(generateSlug('!@#$%')).toBe('');
+  it('falls back to user-1 for a string with only special characters', () => {
+    expect(generateSlug('!@#$%')).toBe('user-1');
   });
 
-  it('handles CJK characters (stripped to empty)', () => {
-    expect(generateSlug('日本語')).toBe('');
+  it('falls back for names with no Latin letters at all', () => {
+    expect(generateSlug('日本語')).toBe('user-1');
+    expect(generateSlug('Иван')).toBe('user-1');
+  });
+
+  it('picks the first fallback slug that is not taken', () => {
+    expect(generateSlug('王芳', ['user-1', 'user-2', 'dad'])).toBe('user-3');
   });
 
   it('handles mixed ASCII and unicode', () => {

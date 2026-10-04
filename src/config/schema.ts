@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { isLoopback } from '../ble/loopback.js';
 import { isValidScaleId, SCALE_ID_HINT } from '../ble/scale-id.js';
 import { cliCommand } from '../cli-invocation.js';
+import { findTokenDirCollisions } from './token-dirs.js';
 
 // --- Sub-schemas ---
 
@@ -101,20 +102,22 @@ export const MqttProxySchema = z
           'Set to false to use the legacy host-initiated connect flow.',
       ),
   })
-  .refine(
-    (c) => {
-      if (c.broker_url) return true;
-      if (isLoopback(c.embedded_broker_bind)) return true;
-      return !!c.username;
-    },
-    {
+  // A LAN-exposed embedded broker needs a username AND a password. Checking
+  // only the username let a missing or empty password through, and the broker
+  // then accepted that username with an empty password from anyone on the LAN.
+  .superRefine((c, ctx) => {
+    if (c.broker_url) return;
+    if (isLoopback(c.embedded_broker_bind)) return;
+    if (c.username && c.password) return;
+    ctx.addIssue({
+      code: 'custom',
       message:
         'Embedded broker bound to a non-loopback interface must have username/password set. ' +
-        'Either add mqtt_proxy.username + mqtt_proxy.password, or change embedded_broker_bind ' +
-        'to 127.0.0.1.',
-      path: ['username'],
-    },
-  );
+        'Either add mqtt_proxy.username + mqtt_proxy.password (non-empty), or change ' +
+        'embedded_broker_bind to 127.0.0.1.',
+      path: [c.username ? 'password' : 'username'],
+    });
+  });
 
 export const BleSchema = z
   .object({
@@ -316,7 +319,8 @@ export const BleSchema = z
 // checked here. Schema validation runs before applyEnvOverrides (yaml-load.ts),
 // so a config.yaml that names a forced adapter and takes its MAC from the
 // documented SCALE_MAC Docker override would be rejected while being perfectly
-// valid. The check lives in src/index.ts, after the effective MAC is known.
+// valid. The check lives in src/run.ts (and in forced-adapter.ts for
+// `validate`), after the effective MAC is known.
 
 export const ScaleSchema = z.object({
   weight_unit: z.enum(['kg', 'lbs']).default('kg'),
@@ -470,7 +474,7 @@ export const DockerSchema = z.object({
   mode: z.enum(['pull', 'build']).default('pull'),
 });
 
-export const AppConfigSchema = z.object({
+const AppConfigObjectSchema = z.object({
   version: z.literal(1),
   ble: BleSchema.optional(),
   scale: ScaleSchema.default({
@@ -530,6 +534,24 @@ export const AppConfigSchema = z.object({
   docker: DockerSchema.optional(),
   update_check: z.boolean().default(true),
 });
+
+/**
+ * The config schema for a config.yaml in `configDir`.
+ *
+ * Two accounts sharing one token directory means one user's readings upload
+ * into the other's account; see findTokenDirCollisions. A relative token_dir
+ * is taken from the config's own directory (F-11), so the check needs to know
+ * it. Without one it compares from the working directory.
+ */
+export function createAppConfigSchema(configDir?: string) {
+  return AppConfigObjectSchema.superRefine((config, ctx) => {
+    for (const c of findTokenDirCollisions(config, configDir)) {
+      ctx.addIssue({ code: 'custom', path: c.path, message: c.message });
+    }
+  });
+}
+
+export const AppConfigSchema = createAppConfigSchema();
 
 // --- Standalone types ---
 

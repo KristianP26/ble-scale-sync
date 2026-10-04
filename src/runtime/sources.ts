@@ -65,6 +65,7 @@ export async function buildReadingSource(
     targetMac: ctx.scaleMac,
     profile: profile(),
     scaleAuth: scaleAuth(),
+    weightUnit: ctx.weightUnit,
   });
 
   if (plan.kind === 'watcher') {
@@ -92,6 +93,7 @@ export async function buildReadingSource(
           targetMac: ctx.scaleMac,
           profile: profile(),
           scaleAuth: scaleAuth(),
+          weightUnit: ctx.weightUnit,
         }),
       onFailure: (err) => {
         if (!(err instanceof TransportWedgedError)) return;

@@ -37,6 +37,10 @@ The add-on stores its runtime configuration at `/data/config.yaml` and preserves
 
 If you change the user slug (by renaming the user), the remembered weight does not carry over because the slug is the lookup key.
 
+## Update check
+
+**Check for updates** (`update_check`, on by default) asks `api.blescalesync.dev` for the latest version at most once a day, after a weigh-in, and writes a line to the add-on log when a newer version is out. Only the app version, operating system and CPU architecture are sent, in the `User-Agent` header; no readings, MAC addresses or user data. Turn it off to send nothing. In custom config mode set `update_check: false` in your `config.yaml` instead.
+
 ## Home Assistant Sensors
 
 With MQTT and HA auto-discovery enabled, these sensors appear automatically:
@@ -101,7 +105,9 @@ Home Assistant add-ons run without an interactive terminal, so the add-on cannot
    ```
    Enter your email, password, and MFA code when prompted. This writes `garmin_tokens.json` to `~/.garmin_tokens/`.
 2. Copy that file into `/share/ble-scale-sync/garmin-tokens/` on the Home Assistant host (use the Samba or File editor add-on).
-3. Restart the BLE Scale Sync add-on. On startup it detects the pre-generated token and imports it into `/data/garmin-tokens/`.
+3. Restart the BLE Scale Sync add-on. On startup it detects the pre-generated token and imports it into `/data/garmin-tokens/`, and says so in the log.
+
+The import only happens while `/data/garmin-tokens/` holds no token yet. A token already in use is never replaced from `/share`, because anything that can write to `/share` could otherwise send your measurements to a different Garmin account. When a different token is waiting in `/share`, the log says it was not imported. To switch to it on purpose, uninstall and reinstall the add-on (this also clears the remembered weights and the queue of failed uploads in `/data`), then start it with the new token in place.
 
 If Garmin also blocks cloud or residential proxy IPs, the same workflow applies: authenticate from a trusted network, then import the token.
 
@@ -123,7 +129,17 @@ To use one, enable **Use custom config.yaml** and place your configuration at:
 
 See [config.yaml.example](https://github.com/KristianP26/ble-scale-sync/blob/main/config.yaml.example) for the full reference.
 
-When custom config is enabled, all other options in the Configuration tab are ignored.
+When custom config is enabled, all other options in the Configuration tab are ignored, with one exception: **Proxy silence before restart** (`proxy_liveness_timeout_min`) only does anything with a proxy transport, which needs custom config, so the add-on applies it on top of your file (the file itself is not modified) when you change it from 30 and the file does not set `ble.proxy_liveness_timeout_min` itself. A value in the file always wins.
+
+### Garmin Connect with custom config
+
+In custom config mode the add-on does not sign in to Garmin for you. Authenticate on another machine as in the MFA workaround above, copy `garmin_tokens.json` into `/share/ble-scale-sync/garmin-tokens/` and restart: the add-on imports it into `/data/garmin-tokens/` (only while no token is stored there yet, as above), which is where every `garmin` exporter without its own `token_dir` looks. A multi-user config with several Garmin accounts needs a separate `token_dir` per account. Only the default directory is imported, so point the others at a folder you can write to, such as `/share/ble-scale-sync/garmin-tokens/<name>`.
+
+Anything under `/share/` can be read and changed by every add-on with share access and by Samba users. That includes the custom `config.yaml` itself, with the Garmin password in it.
+
+### Strava with custom config
+
+A `strava` exporter without its own `token_dir` keeps its tokens in `/data/strava-tokens`, which survives restarts and updates. That matters because Strava issues a new refresh token on every refresh, so a lost token file means authorising again.
 
 ### Alternative BLE transports (no host Bluetooth needed)
 
@@ -148,6 +164,12 @@ The full error mentions `An AppArmor policy prevents this sender from sending th
 
 The Supervisor's default AppArmor profile does not allow the D-Bus calls this add-on makes to reach BlueZ. Newer add-on versions run unconfined instead, so updating to the latest version fixes it. If you still see this after updating, uninstall and reinstall the add-on so the Supervisor picks up the new manifest.
 
+### The app restarts on its own
+
+When the app cannot recover inside the running process (for example after ten failed scans in a row, or when a Bluetooth proxy stays silent), it exits on purpose. The add-on then starts it again by itself, without the Supervisor's Watchdog switch: the log shows `BLE Scale Sync exited with code N ...; restart #M in Ns`. The wait starts at 5 seconds and doubles while the app keeps exiting soon after starting, up to 5 minutes. A run of 10 minutes or more resets it. Stopping the add-on stops the app cleanly and does not start it again.
+
+If the log shows a long series of these restarts, the reason is in the lines just above each one.
+
 ### Bluetooth adapter reset
 
 The add-on power-cycles the Bluetooth adapter on startup to ensure a clean state. This is enabled by default (**Reset Bluetooth adapter on startup**). If you have other HA Bluetooth integrations that lose connectivity when this add-on restarts, disable the option.
@@ -164,6 +186,7 @@ Separately from that startup reset, the add-on also power-cycles the adapter aft
 ### MQTT not connecting
 
 - Check that the Mosquitto add-on is running
+- With auto-detect on, the add-on log says at startup whether it found the broker (`MQTT auto-detected: ...`) or why not (the HTTP status from the Supervisor)
 - If using an external broker, verify the URL and credentials
 - Enable debug logging for detailed MQTT connection info
 

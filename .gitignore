@@ -36,9 +36,11 @@ config.py
 firmware/config.json
 firmware/*.bin
 
-# Garmin tokens (should not be committed)
+# Garmin tokens (should not be committed). garmin-tokens/ is the setup
+# wizard's default token_dir, the dot-directories are the Python default.
 .garmin_tokens/
 .garmin_renpho_tokens/
+garmin-tokens/
 
 # Docker Compose (local overrides)
 docker-compose.override.yml
@@ -46,12 +48,19 @@ docker-compose.override.yml
 # Strava tokens (should not be committed)
 strava-tokens/
 
-# Data files
+# Data files (file exporter output and the export retry queue hold names
+# and body composition)
 *.csv
+*.jsonl
+.export-retry-queue.jsonl*
 
 # Update check cooldown state (runtime artifact, written next to config.yaml)
 .update-check-state.json
 .update-check-state.json.tmp
+
+# Scale adapter de-duplication marks (runtime artifact, written next to config.yaml)
+.scale-dedup-marks.json
+.scale-dedup-marks.json.tmp
 
 # VitePress
 docs/.vitepress/dist/

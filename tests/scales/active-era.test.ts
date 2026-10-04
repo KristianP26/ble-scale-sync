@@ -65,6 +65,17 @@ describe('ActiveEraAdapter', () => {
       expect(reading.impedance).toBeCloseTo(expected, 1);
     });
 
+    // Just over the gate at a heavy weight the formula goes negative:
+    // (1500 - 1000 - 0.4 * 1300) / 6 = -3.3. A resistance below zero is not a
+    // value this field can hold, whatever the formula's true scale turns out to
+    // be (#386), so it is clamped rather than carried into the reading.
+    it('never yields a negative impedance from the correction', () => {
+      adapter.parseNotification(weightFrame(130000));
+      const reading = parseOk(adapter, impedanceFrame(1500));
+      expect(reading.weight).toBeCloseTo(130, 2);
+      expect(reading.impedance).toBe(0);
+    });
+
     it('returns null for wrong magic', () => {
       const buf = Buffer.alloc(20);
       buf[0] = 0xab; // wrong magic

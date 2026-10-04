@@ -298,11 +298,16 @@ class SessionGuardTest(unittest.TestCase):
         self.assertFalse(main._gatt_session_armed)
         self.assertFalse(main._scan_paused)
 
-    def test_a_busy_timeout_leaves_no_armed_session(self):
+    def test_a_busy_timeout_leaves_the_busy_owner_alone(self):
+        # The op holding _busy (here an autonomous connect mid-discovery) owns
+        # the scan state. A host connect that gave up waiting used to resume
+        # scanning underneath it, reinstalling the scan IRQ handler in the
+        # middle of an aioble connect and disarming the live session.
         async def scenario():
             main._busy = True
             main._gatt_session_armed = True
             main._scan_paused = True
+            self.bridge.streaming = False
             await main.handle_connect(b'{"address": "AA:BB:CC:DD:EE:FF"}')
 
         orig = main._wait_not_busy
@@ -317,8 +322,14 @@ class SessionGuardTest(unittest.TestCase):
             main._wait_not_busy = orig
             main._busy = False
 
-        self.assertFalse(main._gatt_session_armed)
-        self.assertFalse(main._scan_paused)
+        self.assertTrue(main._gatt_session_armed)
+        self.assertTrue(main._scan_paused)
+        self.assertFalse(self.bridge.streaming)
+        self.assertFalse(main._host_connect_pending)
+        errors = [json.loads(p) for t, p in self.client.published if t == main.topic("error")]
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0]["op"], "connect")
+        self.assertEqual(errors[0]["address"], "AA:BB:CC:DD:EE:FF")
 
 
 class BridgeDisconnectTest(unittest.TestCase):

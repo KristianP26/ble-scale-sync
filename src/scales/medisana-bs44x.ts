@@ -18,6 +18,26 @@ import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 const CHR_NOTIFY = uuid16(0x8a21);
 const CHR_WRITE = uuid16(0x8a81);
 
+/** Seconds from the Unix epoch to 2010-01-01T00:00:00Z. */
+export const MEDISANA_EPOCH_2010_OFFSET = 1262304000;
+
+/**
+ * Offset to subtract from Unix time for the time-sync command.
+ *
+ * openScale's MedisanaBs44xHandler predicts the epoch from the name: the
+ * BS444/BS440 families ("013197", "013198", "0202b6") count seconds from
+ * 2010-01-01, the BS430 ("0203b") and anything unrecognised count Unix
+ * seconds. A BS444 sent Unix time sets its clock about 40 years ahead. Without
+ * a name (a transport that saw none) Unix stays the default, as in openScale.
+ */
+export function medisanaTimeEpochOffset(deviceName: string | undefined): number {
+  const name = (deviceName ?? '').toLowerCase();
+  if (name.startsWith('013197') || name.startsWith('013198') || name.startsWith('0202b6')) {
+    return MEDISANA_EPOCH_2010_OFFSET;
+  }
+  return 0;
+}
+
 /**
  * Adapter for Medisana BS44x / BS440 BLE body-composition scales.
  *
@@ -57,12 +77,15 @@ export class MedisanaBs44xAdapter implements ScaleAdapterCore, GattWiring {
    */
   private readonly compByReading = new ReadingComposition<ScaleBodyComp>();
 
-  /** Time sync with real Unix timestamp. */
+  /**
+   * Time sync: [0x02, u32 LE seconds]. The epoch depends on the model, which
+   * only the advertised name tells apart (see medisanaTimeEpochOffset).
+   */
   async onConnected(ctx: ConnectionContext): Promise<void> {
     const now = Math.floor(Date.now() / 1000);
     const cmd = Buffer.alloc(5);
     cmd[0] = 0x02;
-    cmd.writeUInt32LE(now, 1);
+    cmd.writeUInt32LE(now - medisanaTimeEpochOffset(ctx.deviceName), 1);
     await ctx.write(this.charWriteUuid, [...cmd], true);
   }
 

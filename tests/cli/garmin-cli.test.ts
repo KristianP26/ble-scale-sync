@@ -7,6 +7,30 @@ import {
 } from '../../src/garmin-cli.js';
 
 describe('translateGarminArgs', () => {
+  // F-11: setup_garmin.py read `config.yaml` from its own working directory and
+  // resolved token_dir from there, not from the config the app reads.
+  it('names the app config for every --from-config run that does not name one', () => {
+    expect(translateGarminArgs(['--all-users'], '/srv/scale/config.yaml')).toEqual([
+      '--from-config',
+      '--config-path',
+      '/srv/scale/config.yaml',
+    ]);
+    expect(translateGarminArgs(['--user', 'Bob'], '/srv/scale/config.yaml')).toEqual([
+      '--from-config',
+      '--user',
+      'Bob',
+      '--config-path',
+      '/srv/scale/config.yaml',
+    ]);
+  });
+
+  it('keeps an explicit --config-path and leaves the legacy flow alone', () => {
+    expect(
+      translateGarminArgs(['--all-users', '--config-path', 'x.yaml'], '/srv/scale/config.yaml'),
+    ).toEqual(['--from-config', '--config-path', 'x.yaml']);
+    expect(translateGarminArgs([], '/srv/scale/config.yaml')).toEqual([]);
+  });
+
   it('passes no arguments through as the legacy env-var flow', () => {
     expect(translateGarminArgs([])).toEqual([]);
   });
@@ -66,15 +90,17 @@ describe('parsePythonVersion', () => {
 });
 
 describe('isSupportedPython', () => {
-  it('accepts 3.9 and newer', () => {
-    expect(isSupportedPython({ major: 3, minor: 9 })).toBe(true);
+  it('accepts 3.12 and newer', () => {
     expect(isSupportedPython({ major: 3, minor: 12 })).toBe(true);
+    expect(isSupportedPython({ major: 3, minor: 13 })).toBe(true);
     expect(isSupportedPython({ major: 4, minor: 0 })).toBe(true);
   });
 
-  it('rejects Python 2 and 3.8, whose failure is a raw f-string SyntaxError', () => {
+  // F-20: garminconnect 0.3.x requires 3.12, so 3.9 to 3.11 only failed later.
+  it('rejects anything older than 3.12, which the pinned garminconnect cannot run on', () => {
     expect(isSupportedPython({ major: 2, minor: 7 })).toBe(false);
-    expect(isSupportedPython({ major: 3, minor: 8 })).toBe(false);
+    expect(isSupportedPython({ major: 3, minor: 9 })).toBe(false);
+    expect(isSupportedPython({ major: 3, minor: 11 })).toBe(false);
     expect(isSupportedPython(null)).toBe(false);
   });
 });

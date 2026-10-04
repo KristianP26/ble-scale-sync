@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, renameSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, renameSync, linkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startConfigWatcher } from '../../src/config/watch.js';
@@ -179,6 +179,40 @@ describe('startConfigWatcher', () => {
     await new Promise((r) => setTimeout(r, SETTLE_MS));
     expect(onChange).not.toHaveBeenCalled();
   });
+
+  // A Docker single-file mount (`-v ./config.yaml:/app/config.yaml`) is edited
+  // through the HOST directory entry, and the kernel reports such a write only
+  // to watchers of that entry's parent and of the file itself, never to a
+  // watcher of /app (verified with inotify in a container, 2026-10-04). A hard
+  // link written from another directory produces the same event pattern
+  // without needing a mount, so the old directory-only watcher never fired
+  // (checked on Linux: old watcher 0 fires, new 1). Skipped on Windows, where
+  // libuv implements a file watch by watching the parent directory, so no
+  // watch there can see a write made through another directory's entry.
+  it.skipIf(process.platform === 'win32')(
+    'fires for an in-place write made through another directory entry',
+    async () => {
+      const elsewhere = mkdtempSync(join(tmpdir(), 'ble-watch-host-'));
+      const hostPath = join(elsewhere, 'config.yaml');
+      try {
+        linkSync(configPath, hostPath);
+      } catch {
+        rmSync(elsewhere, { recursive: true, force: true });
+        return; // filesystem without hard links: nothing to test here
+      }
+      const onChange = vi.fn();
+      const handle = startConfigWatcher(configPath, onChange);
+
+      try {
+        writeFileSync(hostPath, 'version: 1\nedited-on-host: true\n');
+        await new Promise((r) => setTimeout(r, SETTLE_MS));
+        expect(onChange).toHaveBeenCalledTimes(1);
+      } finally {
+        handle.close();
+        rmSync(elsewhere, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('returns a no-op handle when fs.watch fails (parent dir missing)', () => {
     const onChange = vi.fn();

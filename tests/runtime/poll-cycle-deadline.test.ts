@@ -81,6 +81,56 @@ describe('poll cycle deadline (#290)', () => {
     await assertion;
   });
 
+  it('aborts the abandoned cycle so it stops instead of running on (A-04)', async () => {
+    // withTimeout only stops waiting. Without an abort of its own the abandoned
+    // cycle kept retrying connects and making BlueZ calls while the loop had
+    // already started the next cycle over the same connection and radio.
+    scanAndReadRaw.mockReturnValue(new Promise(() => {}));
+    const source = makeSource();
+    const loop = new AbortController();
+
+    const pending = source.nextReading(loop.signal);
+    const assertion = expect(pending).rejects.toThrow(/abandoned/);
+    const cycleSignal = scanAndReadRaw.mock.calls[0][0].abortSignal as AbortSignal;
+    expect(cycleSignal.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(POLL_CYCLE_TIMEOUT_MS + 1);
+    await assertion;
+    expect(cycleSignal.aborted).toBe(true);
+    // Only the cycle gives up; the loop itself is not shutting down.
+    expect(loop.signal.aborted).toBe(false);
+  });
+
+  it('still hands a shutdown to the running cycle (A-04)', async () => {
+    scanAndReadRaw.mockReturnValue(new Promise(() => {}));
+    const source = makeSource();
+    const loop = new AbortController();
+
+    const pending = source.nextReading(loop.signal);
+    void pending.catch(() => {});
+    const cycleSignal = scanAndReadRaw.mock.calls[0][0].abortSignal as AbortSignal;
+    const reason = new Error('shutdown');
+    loop.abort(reason);
+    expect(cycleSignal.aborted).toBe(true);
+    expect(cycleSignal.reason).toBe(reason);
+    await vi.advanceTimersByTimeAsync(POLL_CYCLE_TIMEOUT_MS + 1);
+  });
+
+  it('leaves a completed cycle unaborted and detaches from the loop signal (A-04)', async () => {
+    const reading = { weight: 82.4, impedance: 500 };
+    scanAndReadRaw.mockResolvedValue(reading);
+    const source = makeSource();
+    const loop = new AbortController();
+    const remove = vi.spyOn(loop.signal, 'removeEventListener');
+
+    await expect(source.nextReading(loop.signal)).resolves.toBe(reading);
+    const cycleSignal = scanAndReadRaw.mock.calls[0][0].abortSignal as AbortSignal;
+    expect(cycleSignal.aborted).toBe(false);
+    // Continuous mode reuses one loop signal for every cycle, so a listener
+    // left behind per cycle would leak for the life of the process.
+    expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+  });
+
   it('passes a normal reading straight through', async () => {
     const reading = { weight: 82.4, impedance: 500 };
     scanAndReadRaw.mockResolvedValue(reading);

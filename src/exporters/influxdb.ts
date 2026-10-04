@@ -98,7 +98,11 @@ export function toLineProtocol(
   }
 
   const tsMs = (timestamp ?? new Date()).getTime();
-  return `${measurement}${tags} ${fields.join(',')} ${tsMs}`;
+  // Line protocol ends the measurement at the first unescaped comma or space,
+  // so `body composition` was a malformed line and every write failed with a
+  // 400 (F-18). The `user` tag needs nothing: slugs are `^[a-z0-9-]+$`.
+  const escapedMeasurement = measurement.replace(/[, ]/g, '\\$&');
+  return `${escapedMeasurement}${tags} ${fields.join(',')} ${tsMs}`;
 }
 
 export class InfluxDbExporter implements Exporter {

@@ -26,6 +26,14 @@ describe('loadExporterConfig()', () => {
       expect(loadExporterConfig().garmin?.weightOnly).toBe(false);
     });
 
+    // F-16: config.yaml and the env overrides accept on/off, this did not.
+    it('parses on and off', () => {
+      vi.stubEnv('GARMIN_WEIGHT_ONLY', 'on');
+      expect(loadExporterConfig().garmin?.weightOnly).toBe(true);
+      vi.stubEnv('GARMIN_WEIGHT_ONLY', 'off');
+      expect(loadExporterConfig().garmin?.weightOnly).toBe(false);
+    });
+
     it('throws on a non-boolean value', () => {
       vi.stubEnv('GARMIN_WEIGHT_ONLY', 'maybe');
       expect(() => loadExporterConfig()).toThrow(/GARMIN_WEIGHT_ONLY/);
@@ -196,6 +204,14 @@ describe('loadExporterConfig()', () => {
       expect(cfg.webhook!.timeout).toBe(5000);
     });
 
+    // F-16: `Number(raw) || 10_000` turned a typo into the default silently.
+    it('throws on a WEBHOOK_TIMEOUT that is not a whole number', () => {
+      vi.stubEnv('EXPORTERS', 'webhook');
+      vi.stubEnv('WEBHOOK_URL', 'https://example.com/hook');
+      vi.stubEnv('WEBHOOK_TIMEOUT', 'abc');
+      expect(() => loadExporterConfig()).toThrow(/WEBHOOK_TIMEOUT/);
+    });
+
     it('parses valid headers', () => {
       vi.stubEnv('EXPORTERS', 'webhook');
       vi.stubEnv('WEBHOOK_URL', 'https://example.com/hook');
@@ -231,6 +247,20 @@ describe('loadExporterConfig()', () => {
       warnSpy.mockRestore();
     });
 
+    // The typical malformed pair is "Authorization Bearer <token>" with the
+    // colon forgotten. The warning must name the header without its value.
+    it('does not log the value of a malformed header', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.stubEnv('EXPORTERS', 'webhook');
+      vi.stubEnv('WEBHOOK_URL', 'https://example.com/hook');
+      vi.stubEnv('WEBHOOK_HEADERS', 'Authorization Bearer s3cr3t-token');
+      loadExporterConfig();
+      const logged = warnSpy.mock.calls.flat().join('\n');
+      expect(logged).toContain('Authorization');
+      expect(logged).not.toContain('s3cr3t-token');
+      warnSpy.mockRestore();
+    });
+
     it('skips invalid headers with warning', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       vi.stubEnv('EXPORTERS', 'webhook');
@@ -262,11 +292,14 @@ describe('loadExporterConfig()', () => {
       expect(() => loadExporterConfig()).toThrow(/INFLUXDB_TOKEN is required/);
     });
 
-    it('requires INFLUXDB_ORG when influxdb is enabled', () => {
+    // F-16: optional in config.yaml, so InfluxDB v3 (no organizations) must
+    // work through .env as well.
+    it('accepts a missing INFLUXDB_ORG, as InfluxDB v3 has none', () => {
       vi.stubEnv('EXPORTERS', 'influxdb');
-      vi.stubEnv('INFLUXDB_URL', 'http://localhost:8086');
+      vi.stubEnv('INFLUXDB_URL', 'http://localhost:8181');
       vi.stubEnv('INFLUXDB_TOKEN', 'my-token');
-      expect(() => loadExporterConfig()).toThrow(/INFLUXDB_ORG is required/);
+      vi.stubEnv('INFLUXDB_BUCKET', 'my-bucket');
+      expect(loadExporterConfig().influxdb?.org).toBeUndefined();
     });
 
     it('requires INFLUXDB_BUCKET when influxdb is enabled', () => {

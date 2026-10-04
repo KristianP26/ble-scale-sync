@@ -33,7 +33,7 @@ No. The [Home Assistant Add-on](/guide/home-assistant-addon) is one deployment t
 
 BLE read and body composition calculation are fully offline. Local exporters (File CSV/JSONL, a local MQTT broker, a local InfluxDB) work with no internet at all. Cloud exporters (Garmin Connect, Strava, public Ntfy) need internet only at the moment of export.
 
-Since v1.29 there **is** a retry queue, for the targets that can accept a past reading: a failed Garmin, InfluxDB, file, Intervals, Runalyze, wger or HealthLog export is kept and retried on a later cycle for up to 72 hours. MQTT, webhook, ntfy, Strava and Telegram cannot record a past measurement, so a failure there is still final. Other exporters in the same fan-out run independently, so a File or local MQTT export still succeeds regardless.
+Since v1.29 there **is** a retry queue, for the targets that can accept a past reading: a failed Garmin, InfluxDB, file, Intervals, Runalyze, wger or HealthLog export is kept and retried for up to 72 hours, at roughly 15 minutes, 1 hour, 6 hours, 24 hours and 71 hours after the failure. MQTT, webhook, ntfy, Strava and Telegram cannot record a past measurement, so a failure there is still final. Other exporters in the same fan-out run independently, so a File or local MQTT export still succeeds regardless.
 
 Each export is attempted **three times** before it is given up on, waiting 1 s and then 2 s between them. A 5xx, a 408 or a 429 from the server is retried; any other 4xx is not, because a rejected token or a malformed request fails the same way every time. So a momentary blip is usually absorbed by an HTTP exporter, and a rejected token fails on the first attempt rather than three times. The Garmin exporter is the exception: it talks to a Python uploader rather than an HTTP endpoint, so it cannot tell those apart and retries either way.
 
@@ -58,7 +58,7 @@ The date of the last check is stored locally in `.update-check-state.json` next 
 
 ### Can I disable the update check?
 
-Yes. Set `update_check: false` in `config.yaml`, or run with `CI=true` in the environment. See the [Configuration reference](/guide/configuration#update-check).
+Yes. Set `update_check: false` in `config.yaml` (in the Home Assistant add-on, turn off the `update_check` option), or run with `CI=true` in the environment. See the [Configuration reference](/guide/configuration#update-check).
 
 ---
 

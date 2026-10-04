@@ -55,15 +55,42 @@ export interface LiveWeight {
 
 export interface ScaleReading {
   weight: number;
+  /**
+   * Raw impedance in ohms as the scale reported it, or 0 when the frame has
+   * none. Adapters report what they decoded and do NOT decide whether it is
+   * usable (ADR D028): the processor checks it against the plausible band
+   * (`IMPEDANCE_MIN_OHM`..`IMPEDANCE_MAX_OHM`) and sets it to 0 on this same
+   * object before `computeMetrics()` runs, so `computeMetrics()` sees either a
+   * plausible impedance or 0, and on 0 must fall back to the BMI estimate
+   * (`buildPayload` without a fat value) rather than run any impedance formula.
+   */
   impedance: number;
   /**
-   * When set, marks this reading as historical: the scale dumped it from its
-   * onboard cache rather than producing it live. Adapters populate it for
-   * offline frames whose protocol carries an age field (e.g. ES-26BB-B 0x15
-   * `secondsAgo`). Consumers route timestamped readings into the cache-replay
-   * pipeline; live readings leave it undefined.
+   * When the scale measured this reading (ADR D027).
+   *
+   * An adapter whose frame carries a time (the SIG Time Stamp flag, a vendor
+   * epoch, an age field such as ES-26BB-B 0x15 `secondsAgo`) MUST put it here,
+   * for live frames as well as stored ones; a frame without one leaves it
+   * undefined and is treated as measured on receipt. The runtime, not the
+   * adapter, decides what the time means: older than `HISTORY_WINDOW_MS`
+   * (`reading-time.ts`) is a stored record, which does not end the live
+   * session, goes only to exporters with `supportsBackdate`, and does not move
+   * `last_known_weight`. A fresher stamp is an ordinary live weigh-in.
+   *
+   * Only a clock the adapter can trust belongs here. A scale whose clock is
+   * unset (a year-2000 or epoch-zero default) would make every live weigh-in
+   * look like history; such a stamp must be dropped, not passed on.
    */
   timestamp?: Date;
+  /**
+   * The scale's own user slot for this reading, when the frame says which
+   * profile on the scale it was taken for (a SIG User Index, a vendor user
+   * byte). Used to attribute a stored record in multi-user mode before falling
+   * back to weight matching (D027): it is matched against
+   * `users[].beurer_user_index`. Leave undefined when the frame does not carry
+   * one; never default it.
+   */
+  userIndex?: number;
 }
 
 export interface UserProfile {
@@ -172,6 +199,13 @@ export interface ConnectionContext {
    */
   deviceAddress: string;
   /**
+   * Advertised local name of the connected device, as the transport saw it.
+   * Absent when the transport has none (a nameless advertisement, an ESP32
+   * autonomous connect without a cached advertisement). Lets an adapter whose
+   * protocol differs by model pick the variant, e.g. the Medisana time epoch.
+   */
+  deviceName?: string;
+  /**
    * Set of characteristic UUIDs (normalized 32-char hex, lowercase) that were
    * actually discovered on the connected device. Adapters with `optional`
    * bindings can use this to detect firmware variants and switch behavior.
@@ -179,6 +213,20 @@ export interface ConnectionContext {
    * whether `characteristics` is declared.
    */
   availableChars: ReadonlySet<string>;
+}
+
+/**
+ * What config says one user weighs (`users[].weight_range`, `last_known_weight`),
+ * for an adapter that has to choose between two readings of one raw value: the
+ * QN weight divisor when the frame that names it is lost (review C-06).
+ *
+ * Structurally a subset of the user's config entry, and the composition root
+ * passes those entries themselves, so a `last_known_weight` the runtime moves
+ * in memory after a weigh-in is visible here without a reload.
+ */
+export interface UserWeightHint {
+  readonly weight_range: { readonly min: number; readonly max: number };
+  readonly last_known_weight: number | null;
 }
 
 /**
@@ -268,6 +316,9 @@ export interface AdapterRuntimeConfig {
    * vendor app's. Undecoded, opt-in, off by default.
    */
   qnConfigLong?: boolean;
+
+  /** Every configured user's weight hints, in config order (see UserWeightHint). */
+  userWeights?: readonly UserWeightHint[];
 }
 
 /**
@@ -393,6 +444,31 @@ export interface ScaleAdapterCore {
    * Must not throw and must not perform I/O: the session is already gone.
    */
   onSessionEnd?(): void;
+
+  /**
+   * De-duplication state that has to survive a process restart (review D-15).
+   *
+   * For a scale that answers every session from a store it never clears
+   * (Salter), the only thing between a weigh-in and its second export is a
+   * high-water mark of what was already reported. Kept in memory it started at
+   * zero after every deploy, crash or add-on restart, and a record still inside
+   * the adapter's own age bound went out again. The runtime reads this after it
+   * has processed a reading from the adapter and writes it next to config.yaml
+   * (`src/runtime/dedup-marks.ts`); at startup it hands the stored value back
+   * through `restoreDedupMark`. The adapter itself never does I/O.
+   *
+   * The value is opaque to the runtime: a number in whatever domain the
+   * adapter's protocol counts in (Salter: the scale's own clock). Undefined
+   * means "no mark", and the stored one is then dropped.
+   */
+  dedupMark?(): number | undefined;
+
+  /**
+   * Take back a mark `dedupMark` returned in an earlier process. Called once at
+   * startup, before the first session. Must validate the value, since it comes
+   * from a file anyone can edit, and must not throw or perform I/O.
+   */
+  restoreDedupMark?(mark: number): void;
 
   /**
    * Set only on the wrapper produced by `ble.force_scale_adapter`.

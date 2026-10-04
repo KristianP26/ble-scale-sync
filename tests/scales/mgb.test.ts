@@ -6,6 +6,7 @@ import {
   defaultProfile,
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
+import { WEIGHT_ONLY_HOLD_MS } from '../../src/scales/body-comp-helpers.js';
 
 function makeAdapter() {
   return new MgbAdapter();
@@ -198,9 +199,34 @@ describe('MgbAdapter', () => {
       expect(adapter.isComplete({ weight: 80, impedance: 0 })).toBe(true);
     });
 
-    it('returns false when only Frame2 received (no fat)', () => {
+    it('completes a weigh-in without body fat after a short hold (D-07, D028)', () => {
+      // Frame1 with fat 0: the scale could not analyse this weigh-in (socks, a
+      // child). It used to be refused for good, so the session ran into its
+      // timeout and the weight was lost.
       const adapter = makeAdapter();
-      expect(adapter.isComplete({ weight: 80, impedance: 0 })).toBe(false);
+      const f1 = Buffer.alloc(20);
+      f1[0] = 0xac;
+      f1[1] = 0x02;
+      f1[2] = 0xff;
+      f1.writeUInt16BE(800, 12);
+      const reading = adapter.parseNotification(f1)!;
+
+      expect(adapter.isComplete(reading)).toBe(true);
+      expect(adapter.isFinal(reading)).toBe(false);
+      expect(adapter.completionHoldMs).toBe(WEIGHT_ONLY_HOLD_MS);
+    });
+
+    it('resolves at once on the frame that carries body fat', () => {
+      const adapter = makeAdapter();
+      const f1 = Buffer.alloc(20);
+      f1[0] = 0xac;
+      f1[1] = 0x02;
+      f1[2] = 0xff;
+      f1.writeUInt16BE(800, 12);
+      f1.writeUInt16BE(225, 16);
+      const reading = adapter.parseNotification(f1)!;
+
+      expect(adapter.isFinal(reading)).toBe(true);
     });
 
     it('returns false when weight is 0', () => {

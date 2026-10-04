@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { isHistoricalReading } from '../../src/interfaces/reading-time.js';
 import { SalterAdapter } from '../../src/scales/salter.js';
 import { adapters } from '../../src/scales/index.js';
 import { resolveAdapter } from '../../src/scales/resolve.js';
@@ -354,13 +355,83 @@ describe('SalterAdapter', () => {
       expect(a.parseNotification(aged(REC_897_SLOT2, nowUnix, 5))).toBeNull();
     });
 
-    it('never emits a historical reading', () => {
-      // A `timestamp` routes a reading into the cache-replay buffer, which only
-      // drains on disconnect — and this adapter's poll holds the link open until
-      // the session times out, where a timeout rejects instead.
+    it('dates a record with the time it was measured, never as a historical one (D027)', () => {
+      // The record's stamp is on the SCALE's clock, which runs an hour or more
+      // off the host's (see the class comment), so it is carried over as an
+      // age: measured 30 s before the clock reply arrived. Only records inside
+      // the age bound are emitted, so the time never makes one history, which
+      // would park it in the replay buffer of a session that only ends on its
+      // timeout.
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-10-04T08:00:00Z'));
+        const a = makeAdapter();
+        a.parseNotification(clockReply(tsOf(REC_897_SLOT2), 30));
+        const reading = a.parseNotification(REC_897_SLOT2)!;
+        expect(reading.timestamp).toEqual(new Date('2026-10-04T07:59:30Z'));
+        expect(isHistoricalReading(reading)).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('gives a record re-read after a process restart the same time (D-15)', () => {
+      // The high-water mark lives in memory, so a fresh process reads the same
+      // weigh-in again while it is inside the age bound. It used to go out a
+      // second time stamped with the second receipt; now both exports carry
+      // the time it was measured, which is the same measurement to the target.
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-10-04T08:00:00Z'));
+        const first = makeAdapter();
+        first.parseNotification(clockReply(tsOf(REC_897_SLOT2), 20));
+        const firstTime = first.parseNotification(REC_897_SLOT2)!.timestamp;
+
+        vi.setSystemTime(new Date('2026-10-04T08:02:00Z'));
+        const restarted = makeAdapter();
+        restarted.parseNotification(clockReply(tsOf(REC_897_SLOT2), 140));
+        const secondTime = restarted.parseNotification(REC_897_SLOT2)!.timestamp;
+
+        expect(firstTime).toEqual(new Date('2026-10-04T07:59:40Z'));
+        expect(secondTime).toEqual(firstTime);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not report a record again after a restart that restored its mark (D-15)', () => {
+      // The runtime persists the high-water mark next to config.yaml and hands
+      // it back to the fresh process. A record still inside the age bound must
+      // then be the de-duplicated weigh-in it is, not a second export.
+      const first = primed(makeAdapter(), REC_897_SLOT2, 20);
+      expect(first.parseNotification(REC_897_SLOT2)).not.toBeNull();
+      const mark = first.dedupMark?.();
+      expect(mark).toBe(tsOf(REC_897_SLOT2));
+
+      const restarted = makeAdapter();
+      restarted.restoreDedupMark?.(mark!);
+      restarted.parseNotification(clockReply(tsOf(REC_897_SLOT2), 140));
+      expect(restarted.parseNotification(REC_897_SLOT2)).toBeNull();
+      // Older records stay refused as well, and a newer one still goes out.
+      expect(restarted.parseNotification(REC_888_SLOT7)).toBeNull();
+      expect(restarted.dedupMark?.()).toBe(tsOf(REC_897_SLOT2));
+    });
+
+    it('lets a restored mark from before a battery change go, like the in-memory one', () => {
+      // The persisted mark is on the old epoch's clock. The backwards-clock check
+      // has to see it the same way it sees one this process set, or a restart
+      // after new batteries would suppress every weigh-in from then on.
       const a = makeAdapter();
-      a.parseNotification(clockReply(tsOf(REC_897_SLOT2), 30));
-      expect(a.parseNotification(REC_897_SLOT2)!.timestamp).toBeUndefined();
+      a.restoreDedupMark?.(tsOf(REC_897_SLOT2));
+      a.parseNotification(clockReply(0, 500));
+      expect(a.dedupMark?.()).toBeUndefined();
+    });
+
+    it('ignores a restored mark that is not a scale timestamp', () => {
+      const a = makeAdapter();
+      for (const bad of [Number.NaN, -1, 1.5, 2 ** 32]) a.restoreDedupMark?.(bad);
+      expect(a.dedupMark?.()).toBeUndefined();
+      expect(primed(a, REC_897_SLOT2).parseNotification(REC_897_SLOT2)).not.toBeNull();
     });
 
     it('drops records from before a battery change', () => {

@@ -132,6 +132,12 @@ describe('toLineProtocol()', () => {
     expect(line).toMatch(/^body_composition /);
   });
 
+  // F-18: an unescaped space or comma ends the measurement and the line is rejected.
+  it('escapes spaces and commas in the measurement name', () => {
+    const line = toLineProtocol(samplePayload, 'body composition,v2', 'dad');
+    expect(line).toMatch(/^body\\ composition\\,v2,user=dad /);
+  });
+
   it('ends with timestamp in milliseconds', () => {
     const before = Date.now();
     const line = toLineProtocol(samplePayload, 'test');

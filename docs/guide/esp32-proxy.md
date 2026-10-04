@@ -28,7 +28,7 @@ The ESP32 scans autonomously for BLE advertisements and publishes results over M
 
 **Broadcast scales** (weight in BLE advertisements):
 
-1. The ESP32 continuously scans for BLE advertisements (~every 10s)
+1. The ESP32 continuously scans for BLE advertisements (results every 2 s on ESP32-S3 boards, every 10 to 13 s on classic ESP32 boards)
 2. Scan results (names, services, manufacturer data) are published to MQTT
 3. BLE Scale Sync reads weight from broadcast advertisement data
 4. Body composition is computed and dispatched to exporters
@@ -148,7 +148,7 @@ Connect the ESP32 via USB and run the flash script:
 ./flash.sh --libs-only
 ```
 
-The script auto-detects the serial port. Override with `PORT=/dev/ttyACM0 ./flash.sh` if needed.
+The script auto-detects the serial port. Override with `PORT=/dev/ttyACM0 ./flash.sh` if needed. `./flash.sh --help` lists the options; an unknown option stops the script before anything is written to the board.
 
 ::: warning Windows users
 `flash.sh` is a bash script and will not run in `cmd.exe` or PowerShell directly. Running `flash.sh` from CMD just opens it in your default editor. Use one of:
@@ -168,9 +168,9 @@ The script auto-detects the serial port. Override with `PORT=/dev/ttyACM0 ./flas
   esptool --chip esp32s3 --port COM3 --baud 460800 write-flash 0x0 ESP32_GENERIC_S3-SPIRAM_OCT-v1.27.0.bin
 
   # 2. Install MicroPython libraries
-  mpremote connect COM3 mip install aioble
+  mpremote connect COM3 mip install "aioble@0.6.2"
   mpremote connect COM3 mip install "github:peterhinch/micropython-mqtt@70b56a7a4aaf"
-  mpremote connect COM3 mip install "github:peterhinch/micropython-async@68b5f01e999b/v3/primitives"
+  mpremote connect COM3 mip install "github:peterhinch/micropython-async/v3/primitives@68b5f01e999b"
 
   # 3. Upload application files (run from firmware/)
   mpremote connect COM3 cp config.json :config.json
@@ -281,7 +281,7 @@ If you already have an MQTT exporter configured, the ESP32 proxy can use the sam
 :::
 
 ::: warning Security
-The default `mqtt://` URL transmits data in plaintext, including body weight and composition data. On untrusted networks, use `mqtts://` with a TLS-enabled broker.
+The default `mqtt://` URL transmits data in plaintext, including body weight and composition data. On untrusted networks, use a TLS-enabled broker (usually port 8883). `mqtts://` in `broker_url` covers only the server's own connection. The ESP32 connects on its own and needs TLS turned on in its `config.json`: set `"mqtt_tls": true`, and `"mqtt_ca_file"` to a CA certificate uploaded with the firmware to verify the broker (`"mqtt_tls_hostname"` when the broker is reached by IP address). Without a CA file the link is encrypted but the broker is not verified.
 :::
 
 ## Docker Deployment
@@ -344,7 +344,7 @@ Compare this to the standard [Docker deployment](/guide/getting-started#docker) 
 
 ### What the firmware does
 
-- **Autonomous scanning**: scans for BLE advertisements in a continuous loop (interval is board-specific, ~2-10s)
+- **Autonomous scanning**: scans for BLE advertisements in a continuous loop. ESP32-S3 boards scan without pause and publish every 2 s; classic ESP32 boards scan for 5 to 8 s, publish, and wait 5 s (`SCAN_DURATION_MS`, `SCAN_INTERVAL_MS`, `PUBLISH_INTERVAL_MS` in the board file)
 - **Scale detection**: beeps when a known scale MAC is seen (MACs registered by the server after adapter matching)
 - **Radio management**: on shared-radio boards (ESP32-PICO), deactivates BLE after each scan so WiFi can recover
 - **Display UI** (4848 board): shows WiFi/MQTT/BLE status, scan activity, user match results, and export outcomes
@@ -358,23 +358,26 @@ See [`docs/images/scan-modes.drawio`](https://github.com/KristianP26/ble-scale-s
 
 All topics are prefixed with `{topic_prefix}/{device_id}/` (default: `ble-proxy/esp32-ble-proxy/`).
 
-| Topic                  | Direction       | Payload                                                                                                                                                                          |
-| ---------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `status`               | ESP32 -> Server | `"online"` / `"offline"` (retained, LWT)                                                                                                                                         |
-| `error`                | ESP32 -> Server | Error message string                                                                                                                                                             |
-| `scan/results`         | ESP32 -> Server | JSON array of discovered devices                                                                                                                                                 |
-| `config`               | Server -> ESP32 | JSON with `scales` (MAC array), `users` (array), `passive` (MACs read from advertisements, never connected), `autoConnect` (`false` to disable the autonomous connect), retained |
-| `beep`                 | Server -> ESP32 | Empty string or JSON with `freq`, `duration`, `repeat`                                                                                                                           |
-| `display/reading`      | Server -> ESP32 | JSON with user slug, name, weight, impedance, and exporter list                                                                                                                  |
-| `display/result`       | Server -> ESP32 | JSON with user slug, name, weight, and per-exporter success/failure results                                                                                                      |
-| `connect`              | Server -> ESP32 | JSON with `address` and `addr_type`                                                                                                                                              |
-| `connected`            | ESP32 -> Server | JSON with discovered `chars` (uuid + properties per characteristic)                                                                                                              |
-| `disconnect`           | Server -> ESP32 | Any payload (triggers disconnect)                                                                                                                                                |
-| `disconnected`         | ESP32 -> Server | Empty payload                                                                                                                                                                    |
-| `notify/{uuid}`        | ESP32 -> Server | Raw binary (characteristic notification)                                                                                                                                         |
-| `write/{uuid}`         | Server -> ESP32 | Raw binary (characteristic write)                                                                                                                                                |
-| `read/{uuid}`          | Server -> ESP32 | Empty payload (triggers read)                                                                                                                                                    |
-| `read/{uuid}/response` | ESP32 -> Server | Raw binary (read result)                                                                                                                                                         |
+| Topic                                                  | Direction       | Payload                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------ | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status`                                               | ESP32 -> Server | `"online"` / `"offline"` (retained, LWT)                                                                                                                                                                                                                   |
+| `error`                                                | ESP32 -> Server | JSON with `op` (connect, auto-connect, scan, subscribe, write, read, command), `message` and, where it applies, `address` / `uuid`. Older firmware sends a plain string                                                                                    |
+| `scan/results`                                         | ESP32 -> Server | JSON array of discovered devices                                                                                                                                                                                                                           |
+| `config`                                               | Server -> ESP32 | JSON with `scales` (MAC array), `users` (array), `passive` (MACs read from advertisements, never connected), `autoConnect` (`false` to disable the autonomous connect), `lazy_notify` (`true`: enable a notification only on `subscribe/{uuid}`), retained |
+| `beep`                                                 | Server -> ESP32 | Empty string or JSON with `freq` (20 to 4000 Hz), `duration` (1 to 500 ms), `repeat` (1 to 3); values outside are clamped                                                                                                                                  |
+| `display/reading`                                      | Server -> ESP32 | JSON with user slug, name, weight, impedance, and exporter list                                                                                                                                                                                            |
+| `display/result`                                       | Server -> ESP32 | JSON with user slug, name, weight, and per-exporter success/failure results                                                                                                                                                                                |
+| `connect`                                              | Server -> ESP32 | JSON with `address` and `addr_type`                                                                                                                                                                                                                        |
+| `connected`                                            | ESP32 -> Server | JSON with `address`, discovered `chars` (uuid + properties per characteristic), and `autonomous: true` when the ESP32 connected on its own                                                                                                                 |
+| `disconnect`                                           | Server -> ESP32 | Any payload (triggers disconnect)                                                                                                                                                                                                                          |
+| `disconnected`                                         | ESP32 -> Server | Empty payload                                                                                                                                                                                                                                              |
+| `subscribe/{uuid}`                                     | Server -> ESP32 | Empty payload; enables the notification on that characteristic (with `lazy_notify`)                                                                                                                                                                        |
+| `notify/{uuid}`                                        | ESP32 -> Server | Raw binary (characteristic notification)                                                                                                                                                                                                                   |
+| `write/{uuid}`                                         | Server -> ESP32 | Raw binary (characteristic write)                                                                                                                                                                                                                          |
+| `read/{uuid}`                                          | Server -> ESP32 | Empty payload (triggers read)                                                                                                                                                                                                                              |
+| `read/{uuid}/response`                                 | ESP32 -> Server | Raw binary (read result)                                                                                                                                                                                                                                   |
+| `screenshot`                                           | Server -> ESP32 | Display boards only: request a framebuffer dump. Refused (an `error` with `op: "screenshot"`) while a BLE connection is in progress                                                                                                                        |
+| `screenshot/info`, `screenshot/{n}`, `screenshot/done` | ESP32 -> Server | Display size and format, then the RGB565 framebuffer in numbered chunks, then the chunk count                                                                                                                                                              |
 
 ## Troubleshooting
 
@@ -414,7 +417,7 @@ Boards without PSRAM have ~100 KB free after boot. If you see `MemoryError`:
 
 A GATT-connect scale (one that needs an active connection, not just a broadcast) can make a no-PSRAM board time out on connect. The cause is the ESP-IDF heap running out: the BLE stack allocates the connection from that heap (separate from the MicroPython heap), and WiFi + MQTT leave little room on a classic ESP32 / Atom Echo.
 
-As of this release the firmware no longer reboots on a near-empty ESP-IDF heap. It reads the heap right before connecting, and when it is too low it refuses the connect, prints a clear line, keeps scanning, and reports an MQTT error to the host instead of crashing with the NimBLE semaphore assertion (`assertion:semaphor->handle / npl_freertos_sem_init`, Guru Meditation). The skip line looks like:
+As of this release the firmware no longer reboots on a near-empty ESP-IDF heap. It reads the internal-RAM part of the heap right before connecting (on PSRAM boards the SPIRAM is not counted, since the BLE stack does not allocate from it), and when it is too low it refuses the connect, prints a clear line, keeps scanning, and reports an MQTT error to the host instead of crashing with the NimBLE semaphore assertion (`assertion:semaphor->handle / npl_freertos_sem_init`, Guru Meditation). The skip line looks like:
 
 ```
 IDF heap too low for GATT connect: free=<bytes> largest=<bytes> (#139)
@@ -431,7 +434,7 @@ IDF heap before connect: free=<bytes> largest=<bytes>
 
 **Advanced: tuning the guard.** The guard ships with per-board tunables `CONNECT_MIN_IDF_LARGEST` and `CONNECT_MIN_IDF_FREE` set to `0`, so by default only an always-on conservative crash floor (about 1 KB largest, 2 KB free) is active. That floor only ever trips the pathological near-empty case and never refuses a connect that could have succeeded.
 
-To calibrate a higher floor: on a PSRAM board where a connect succeeds, temporarily log the IDF heap before connect and again after connect plus discovery, take the `(free_before - free_after)` delta and the post-connect largest block, then set `CONNECT_MIN_IDF_FREE` a little above the delta and `CONNECT_MIN_IDF_LARGEST` a little above the post-connect largest in that board's `board_*.py`. On a no-PSRAM board with WiFi up a non-zero tunable only ever produces a clean skip, never a successful connect, because `gc.collect()` cannot hand kilobytes back to the IDF heap.
+To calibrate a higher floor: on a PSRAM board where a connect succeeds, temporarily log the IDF heap before connect and again after connect plus discovery, take the `(free_before - free_after)` delta and the post-connect largest block, then set `CONNECT_MIN_IDF_FREE` a little above the delta and `CONNECT_MIN_IDF_LARGEST` a little above the post-connect largest in that board's `board_*.py`. Treat a value calibrated this way with care: the logged figures sum every ESP-IDF data-heap region, which on a PSRAM board likely includes PSRAM as well as the internal RAM the BLE stack allocates from, so they can look healthier than the memory a connect actually needs. On a no-PSRAM board with WiFi up a non-zero tunable only ever produces a clean skip, never a successful connect, because `gc.collect()` cannot hand kilobytes back to the IDF heap.
 
 Broadcast-only scales are unaffected and work on every board.
 
@@ -443,10 +446,10 @@ Some scales (for example the QN-Scale) expose no broadcast data and must be GATT
 
 The proxy pauses its scan for the duration of a GATT session, and a session used to end only when the server said so or when a notify reader saw the link drop. With lazy notify no reader runs until the server subscribes, so a session the server never engaged with left the scan paused until the ESP32 was reset: exactly one autonomous connect per boot.
 
-The firmware now guards every session it publishes. It ends the session and resumes scanning by itself when the link is already down, when no server command arrives for about 20 seconds, or when the session runs past three minutes, and prints the reason (`GATT session guard: ...`) on the serial console. Boards can tune this with `GATT_SESSION_IDLE_MS` and `GATT_SESSION_MAX_MS`.
+The firmware now guards every session it publishes. It ends the session and resumes scanning by itself when the link is already down, when the server has not engaged with the session at all within about 20 seconds, or when the session runs past three minutes, and prints the reason (`GATT session guard: ...`) on the serial console. Boards can tune this with `GATT_SESSION_IDLE_MS` and `GATT_SESSION_MAX_MS`.
 
 If the server did engage but the session still ends this way, the usual cause is a server not in continuous mode: see the autonomous-connect note above.
 
 ### A random-address scale times out on connect
 
-Some scales advertise a random Bluetooth address (the first MAC byte is `C0` or higher, for example `FF:03:..`) rather than a fixed public one. The proxy reads the advertised address type and connects with it, and when the MAC is an unambiguous random address it connects with that type even if the controller reported the scan result as public. If a connect still times out it retries once with the opposite address type. The proxy connects with minimal delay after spotting the scale and publishes the scan results afterward, because a GATT-only scale that was just stepped on stays connectable for only a short window. If your scale used to log `GATT connect attempt ... failed ... TimeoutError` on every weigh-in, update the firmware and try again.
+Some scales advertise a random Bluetooth address (the first MAC byte is `C0` or higher, for example `FF:03:..`) rather than a fixed public one. The proxy connects with the address type the controller reported for the scan result first. If that connect times out it retries once with the opposite address type, so a scale reported with the wrong type still connects on the second try. The proxy connects with minimal delay after spotting the scale and publishes the scan results afterward, because a GATT-only scale that was just stepped on stays connectable for only a short window. If your scale used to log `GATT connect attempt ... failed ... TimeoutError` on every weigh-in, update the firmware and try again.

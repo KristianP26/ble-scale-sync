@@ -9,6 +9,12 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - dependencies
+    ignore:
+      # @types/node follows the oldest supported runtime (engines: node >=22),
+      # so tsc rejects an API that Node 22 does not have. Its major moves
+      # together with the engines floor, never on its own.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
@@ -18,6 +24,42 @@ updates:
       prefix: "ci:"
     labels:
       - ci
+
+  # The Cloudflare Worker behind api.blescalesync.dev, with its own lockfile.
+  - package-ecosystem: npm
+    directory: /worker
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "deps:"
+    labels:
+      - dependencies
+
+  # Python packages installed into every Docker image (Garmin upload).
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "deps:"
+    labels:
+      - dependencies
+
+  # Base images of the root Dockerfile, pinned by digest. Only digest and
+  # patch-level moves: Node 22 is the documented runtime floor, and the Python
+  # stage is copied by path (python3.12), so a minor bump would break the build.
+  # The add-on Dockerfile builds FROM an ARG and has nothing to track here.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "build:"
+    labels:
+      - dependencies
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   # Host tools for firmware/flash.sh only. Scoped to /firmware, which now holds
   # exactly one pip manifest: the MicroPython package list was renamed to

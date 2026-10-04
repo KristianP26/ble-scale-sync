@@ -4,22 +4,50 @@ on:
   schedule:
     - cron: '0 3 * * 0' # Weekly on Sunday at 3:00 UTC
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Only list what would be deleted'
+        type: boolean
+        default: true
 
-permissions:
-  packages: write
+# The cleanup authenticates with its own token (below), not GITHUB_TOKEN.
+permissions: {}
 
 jobs:
   cleanup:
     runs-on: ubuntu-latest
+    env:
+      # Secrets cannot be tested in a step `if:`; a job env var can.
+      HAS_TOKEN: ${{ secrets.GHCR_CLEANUP_TOKEN != '' }}
 
     steps:
+      # Why a token of its own. The package is owned by a personal account, and
+      # GitHub's package REST endpoints for a user (list, get, delete versions)
+      # document only classic personal access tokens and OAuth tokens; the
+      # action's tracker (snok/container-retention-policy#119, February 2026)
+      # reports the workflow GITHUB_TOKEN failing on them with the same panic
+      # this job showed, fixed by a classic PAT. Needs a classic
+      # PAT with read:packages and delete:packages, stored as GHCR_CLEANUP_TOKEN.
+      # Until that secret exists the job says so and stays green instead of
+      # failing every week.
+      - name: Cleanup token missing
+        if: env.HAS_TOKEN != 'true'
+        run: >-
+          echo "::warning::GHCR_CLEANUP_TOKEN is not set, so no image was pruned.
+          Add a classic personal access token with read:packages and delete:packages."
+
       - name: Clean up old container images
-        # Pinned to an exact release: there is no floating v3 tag, so
-        # `@v3` failed to resolve and every scheduled run died at "Set up job".
-        uses: snok/container-retention-policy@v3.1.0
+        if: env.HAS_TOKEN == 'true'
+        # v3.1.0. Pinned to the commit: this step holds a token that can delete
+        # every published image.
+        uses: snok/container-retention-policy@d3bdcf5ce9b05f685154e4a16c39233b245e3d53 # v3.1.0
         with:
-          account: KristianP26
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # `user`, not the account name. Any other value is taken as an
+          # organisation name, so `KristianP26` sent every request to
+          # /orgs/KristianP26/packages/..., got a 404 body back and died with
+          # "Failed to fetch packages: missing field `id`".
+          account: user
+          token: ${{ secrets.GHCR_CLEANUP_TOKEN }}
           image-names: ble-scale-sync
           cut-off: 30d
           keep-n-most-recent: 10
@@ -30,3 +58,5 @@ jobs:
           # month must not remove it from under them.
           image-tags: "dev-*"
           tag-selection: tagged
+          # Scheduled runs delete; a manual run lists only, unless told not to.
+          dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}

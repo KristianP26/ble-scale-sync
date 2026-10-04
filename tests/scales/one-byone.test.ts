@@ -6,7 +6,7 @@ import {
   defaultProfile,
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
-import { uuid16 } from '../../src/scales/body-comp-helpers.js';
+import { uuid16, WEIGHT_ONLY_HOLD_MS } from '../../src/scales/body-comp-helpers.js';
 
 // ─── OneByoneAdapter ─────────────────────────────────────────────────────────
 
@@ -349,9 +349,30 @@ describe('OneByoneNewAdapter', () => {
       expect(adapter.isComplete({ weight: 0, impedance: 500 })).toBe(false);
     });
 
-    it('returns false when impedance is 0', () => {
+    it('completes a final weight without impedance after a short hold (D-07, D028)', () => {
+      // The 0x80 final weight of a weigh-in the scale could not analyse (socks,
+      // a child) is never followed by a 0x01 impedance frame. It used to be
+      // refused for good, so the session timed out and the weight was lost.
       const adapter = makeAdapter();
-      expect(adapter.isComplete({ weight: 80, impedance: 0 })).toBe(false);
+      const wBuf = Buffer.alloc(6);
+      wBuf[0] = 0xab;
+      wBuf[1] = 0x2a;
+      wBuf[2] = 0x80;
+      const raw = 80000;
+      wBuf[3] = (raw >> 16) & 0xff;
+      wBuf[4] = (raw >> 8) & 0xff;
+      wBuf[5] = raw & 0xff;
+      const reading = adapter.parseNotification(wBuf)!;
+
+      expect(adapter.isComplete(reading)).toBe(true);
+      expect(adapter.isFinal!(reading)).toBe(false);
+      expect(adapter.completionHoldMs).toBe(WEIGHT_ONLY_HOLD_MS);
+    });
+
+    it('resolves at once when the impedance frame arrives', () => {
+      const adapter = makeAdapter();
+      expect(adapter.isFinal!({ weight: 80, impedance: 500 })).toBe(true);
+      expect(adapter.isComplete({ weight: 80, impedance: 500 })).toBe(true);
     });
   });
 

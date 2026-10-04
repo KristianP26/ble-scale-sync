@@ -136,6 +136,8 @@ export class HaBluetoothClient {
   private staleDropped = 0;
   /** Advertisements actually handed to subscribers, for the skew warning. */
   private delivered = 0;
+  /** Set on the first successful subscription; see the subscribe-result branch. */
+  private subscribedOnce = false;
 
   constructor(
     private readonly config: HaBluetoothConfig,
@@ -269,6 +271,7 @@ export class HaBluetoothClient {
         if (msg.id !== this.subscriptionId) return;
         if (msg.success) {
           this.reconnectDelay = RECONNECT_MIN_MS;
+          this.subscribedOnce = true;
           this.startPing();
           bleLog.info(
             `Subscribed to Home Assistant Bluetooth advertisements` +
@@ -277,8 +280,21 @@ export class HaBluetoothClient {
           settle();
           return;
         }
-        this.stopped = true;
-        settle(new HaBluetoothPermanentError(describeSubscribeError(msg)));
+        // Once this token has subscribed successfully, only a refusal of the
+        // token itself is final. Anything else on a reconnect is HA still
+        // starting: its websocket API is served from bootstrap stage 0 (with
+        // the frontend), while `bluetooth` is a stage 1 integration and
+        // registers this command only when it loads, so the first reconnect
+        // after an HA restart can be answered `unknown_command` (B-05). Giving
+        // up there left the transport dead until the liveness watchdog ended
+        // the process, up to 30 minutes later. The first start() stays strict,
+        // so a wrong setup is reported, not retried in silence.
+        if (this.subscribedOnce && msg.error?.code !== 'unauthorized') {
+          settle(new Error(describeSubscribeError(msg)));
+        } else {
+          this.stopped = true;
+          settle(new HaBluetoothPermanentError(describeSubscribeError(msg)));
+        }
         this.dropSocket();
         return;
       case 'event':
@@ -399,7 +415,9 @@ export class HaBluetoothClient {
       this.reconnectTimer = null;
       if (this.stopped) return;
       this.connectOnce().catch((err) => {
-        if (this.stopped) return;
+        // Checked before `stopped`: the permanent branches set `stopped`
+        // themselves before rejecting, so testing it first made this log
+        // unreachable and the transport went quiet without saying why.
         if (err instanceof HaBluetoothPermanentError) {
           // Terminal: nothing reconnects after this, so a warn line buried in a
           // running log is not enough. Someone who rotates their long-lived
@@ -410,6 +428,7 @@ export class HaBluetoothClient {
           );
           return;
         }
+        if (this.stopped) return;
         bleLog.warn(`Home Assistant reconnect failed: ${errMsg(err)}`);
         this.scheduleReconnect();
       });

@@ -55,9 +55,14 @@ export function armHardExit({ timeoutMs, log, fallbackCode = 1, exit }: ArmHardE
     // aborting, and that must win. `fallbackCode` decides only the case where
     // nothing set one, which is the plain signal path.
     const code = typeof process.exitCode === 'number' ? process.exitCode : fallbackCode;
+    // The cause is named by transport only loosely on purpose: this fires on
+    // every handler, and a "D-Bus/BlueZ" hint sent ESP32 and Home Assistant
+    // proxy users, who have no BlueZ at all, looking in the wrong place.
     log.warn(
       `Shutdown did not complete within ${timeoutMs / 1000}s ` +
-        `(event loop still pinned, likely a wedged D-Bus/BlueZ handle). ` +
+        '(event loop still pinned by an open handle: a wedged D-Bus/BlueZ call on a local ' +
+        'Bluetooth adapter, a proxy or broker connection (MQTT, ESPHome, Home Assistant), ' +
+        'or an export still running). ' +
         `Force-exiting with code ${code}` +
         (code === 0
           ? ', which is a stop you asked for rather than a failure.'

@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import { AppConfigSchema, formatConfigError } from '../config/schema.js';
-import { resolveEnvReferences } from '../config/load.js';
+import { dirname, resolve } from 'node:path';
+import { stringify as stringifyYaml } from 'yaml';
+import { createAppConfigSchema, formatConfigError } from '../config/schema.js';
+import { safeParseWithEnvRefs } from '../config/env-coerce.js';
 import { generateSlug } from '../config/slugify.js';
+import { parseConfigYaml } from '../config/yaml-parse.js';
 import { atomicWrite } from '../config/write.js';
 import { createLogger } from '../logger.js';
 
@@ -26,7 +28,7 @@ export async function runNonInteractive(configPath: string): Promise<void> {
     process.exit(1);
   }
 
-  const parsed = parseYaml(raw) as Record<string, unknown>;
+  const parsed = parseConfigYaml(raw, configPath) as Record<string, unknown>;
   if (!parsed || typeof parsed !== 'object') {
     log.error('Config file is not a valid YAML object');
     process.exit(1);
@@ -38,18 +40,17 @@ export async function runNonInteractive(configPath: string): Promise<void> {
   if (Array.isArray(users)) {
     for (const user of users) {
       if (!user.slug && user.name) {
-        user.slug = generateSlug(String(user.name));
+        const taken = users.map((u) => u.slug).filter((s): s is string => typeof s === 'string');
+        user.slug = generateSlug(String(user.name), taken);
         log.info(`Auto-generated slug '${user.slug}' for user '${user.name}'`);
         modified = true;
       }
     }
   }
 
-  // Resolve env references
-  const resolved = resolveEnvReferences(parsed);
-
-  // Validate with Zod
-  const result = AppConfigSchema.safeParse(resolved);
+  // Resolve env references and validate, converting a whole ${VAR} in a
+  // numeric or boolean field the way loading does (G-21).
+  const result = safeParseWithEnvRefs(createAppConfigSchema(dirname(resolve(configPath))), parsed);
   if (!result.success) {
     const msg = formatConfigError(result.error);
     log.error(msg);

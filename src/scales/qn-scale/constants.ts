@@ -65,8 +65,10 @@ import { uuid16 } from '../body-comp-helpers.js';
  *   Note that only the 0x22 matches the app byte for byte: the app's 0x13 and
  *   0x20 are each one byte longer than ours. The 0x20 delta is one trailing
  *   0x08 before the checksum and is reproducible behind `ble.qn_time_sync_long`
- *   (see TIME_SYNC_TRAILER); the 0x13 delta is still unexplained and no capture
- *   shows its extra byte.
+ *   (see TIME_SYNC_TRAILER). The 0x13 delta IS in the #235 captures: bytes
+ *   `[0..6]` match ours and the whole difference is a pair at `[7..8]` where we
+ *   send one byte. What that pair means is not decoded; it is reproducible
+ *   behind `ble.qn_config_long` (see CONFIG_TRAILER in frames.ts).
  */
 
 // Type 2 UUIDs (most common variant)
@@ -210,6 +212,24 @@ export const REPORT_BYTE_LONG_FRAME = 0xfc;
 export const IMPEDANCE_GRACE_MS = 1500;
 
 /**
+ * Band a live 0x10 weight must fall in for the divisor its 0x12 frame named to
+ * be taken as is. Outside it, or with no 0x12 at all, the divisor is in doubt
+ * and both readings of the raw value are weighed (review C-06, see
+ * `QnScaleAdapter.resolveWeight`). The ES-26M is why the band matters: its
+ * 18-byte 0x12 implies /10, its captured frames read 978.5 kg that way and
+ * 97.85 kg at /100.
+ */
+export const WEIGHT_CERTAIN_MIN_KG = 5;
+export const WEIGHT_CERTAIN_MAX_KG = 250;
+
+/**
+ * How close to a user's `last_known_weight` a candidate weight must be to count
+ * as that user's, as a share of it. The two candidates differ tenfold, so this
+ * only has to separate a body from a tenth or ten times of one.
+ */
+export const LAST_KNOWN_WEIGHT_TOLERANCE = 0.15;
+
+/**
  * Max age (seconds) of a 0x23 stored record relative to session start before it
  * is treated as stale history and ignored. Mirrors openScale QNHandler's
  * MAX_STORED_RECORD_AGE_BEFORE_SESSION_SECONDS. Prevents importing an old
@@ -339,10 +359,12 @@ export const POST_START_ANCHOR_DELAY_MS = 75;
  * have exported 67.10 kg to Garmin for a 75 kg user. The middle connect sends no
  * 0xB4 at all, so 0xB1 is not a fallback in any case: it is the live value.
  *
- * The 0xB4 is still accepted when its timestamp is inside the same freshness
- * window the 0x23 stored records use, since a genuinely current record is the
- * scale's own averaged figure. Anything older is left to the stored-record path,
- * which exists for exactly that.
+ * The 0xB4 is still accepted when it was written during this session (its
+ * timestamp no more than RESULT_RECORD_CLOCK_TOLERANCE_SEC before the session
+ * opened), since a genuinely current record is the scale's own averaged figure.
+ * That is deliberately stricter than the backward-looking window the 0x23
+ * stored records use (MAX_STORED_RECORD_AGE_SEC): see the 0xB4 branch in
+ * index.ts for why. Anything older is left to the stored-record path.
  *
  * @hedoric hardware-verified the live values against the scale's own display:
  * 75.20 kg, BMI 20.2 in the 0xB1 03 03 tail, cross-checked as

@@ -1,9 +1,10 @@
 /**
  * Interactive Strava OAuth2 token setup.
  *
- * Usage: npm run setup-strava
+ * Usage: npm run setup-strava [-- --user <name or slug>]
  *
- * 1. Reads client_id and client_secret from config.yaml (first strava exporter found)
+ * 1. Reads client_id and client_secret from config.yaml (with several strava
+ *    exporters, the one of the user named by --user <name or slug>)
  * 2. Prints an authorization URL for the user to open in a browser
  * 3. User authorizes and copies the `code` parameter from the redirect URL
  * 4. Exchanges the code for access + refresh tokens
@@ -14,26 +15,18 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { loadAppConfig } from '../config/load.js';
+import { configDir } from '../config/paths.js';
 import { createLogger } from '../logger.js';
+import { selectStravaEntry, stravaTokenDir } from './strava-select.js';
+import { atomicWrite } from '../config/write.js';
 
 const log = createLogger('StravaSetup');
 
-interface StravaExporterEntry {
-  type: 'strava';
-  client_id: string;
-  client_secret: string;
-  token_dir?: string;
-}
-
-function findStravaConfig(): StravaExporterEntry | undefined {
-  const { config } = loadAppConfig();
-
-  const allExporters = [
-    ...(config.global_exporters ?? []),
-    ...config.users.flatMap((u) => u.exporters ?? []),
-  ];
-
-  return allExporters.find((e) => e.type === 'strava') as StravaExporterEntry | undefined;
+function userArg(argv: string[]): string | undefined {
+  const i = argv.indexOf('--user');
+  if (i >= 0) return argv[i + 1];
+  const eq = argv.find((a) => a.startsWith('--user='));
+  return eq?.slice('--user='.length);
 }
 
 function prompt(rl: readline.Interface, question: string): Promise<string> {
@@ -43,15 +36,17 @@ function prompt(rl: readline.Interface, question: string): Promise<string> {
 }
 
 async function main(): Promise<void> {
-  const strava = findStravaConfig();
-  if (!strava) {
-    log.error('No Strava exporter found in config.yaml.');
-    log.error('Add a strava exporter to your config first, then run this script again.');
+  const { config, configPath } = loadAppConfig();
+  const selection = selectStravaEntry(config, userArg(process.argv.slice(2)));
+  if (!selection.ok) {
+    log.error(selection.error);
     process.exit(1);
   }
+  const strava = selection.entry;
+  log.info(`Authorizing the Strava exporter of ${selection.owner}.`);
 
   const { client_id, client_secret } = strava;
-  const tokenDir = strava.token_dir ?? './strava-tokens';
+  const tokenDir = stravaTokenDir(strava, configPath ? path.dirname(configPath) : configDir());
 
   if (!client_id || !client_secret) {
     log.error('client_id and client_secret are required in your Strava exporter config.');
@@ -123,9 +118,11 @@ async function main(): Promise<void> {
 
     const tokenPath = path.join(tokenDir, 'strava_tokens.json');
     if (!fs.existsSync(tokenDir)) {
-      fs.mkdirSync(tokenDir, { recursive: true });
+      fs.mkdirSync(tokenDir, { recursive: true, mode: 0o700 });
     }
-    fs.writeFileSync(tokenPath, JSON.stringify(tokens, null, 2) + '\n', { mode: 0o600 });
+    // Through a fresh 0600 tmp file: a direct writeFileSync keeps the old
+    // permissions of an existing token file, since mode applies only on create.
+    atomicWrite(tokenPath, JSON.stringify(tokens, null, 2) + '\n');
 
     log.info(`Tokens saved to ${tokenPath}`);
     console.log('\nStrava setup complete! You can now use the Strava exporter.\n');

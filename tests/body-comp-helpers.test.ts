@@ -8,6 +8,8 @@ import {
   computeBiaFat,
   buildPayload,
   biaFatIfPlausible,
+  compositionRejection,
+  isPlausibleImpedance,
   IMPEDANCE_MIN_OHM,
   IMPEDANCE_MAX_OHM,
 } from '../src/scales/body-comp-helpers.js';
@@ -390,5 +392,78 @@ describe('biaFatIfPlausible', () => {
     // a plausible-looking 4 % body fat, not an obvious error.
     expect(computeBiaFat(80, 50, p)).toBeCloseTo(4, 1);
     expect(biaFatIfPlausible(80, 50, p)).toBeUndefined();
+  });
+});
+
+// D028 / E-15: a scale-reported composition is used only as a whole. Only fat
+// used to be checked, so `water: 0` exported 0 % water next to a real fat value.
+describe('buildPayload: scale composition is validated as a whole (D028, E-15)', () => {
+  const p: UserProfile = { height: 183, age: 30, gender: 'male', isAthlete: false };
+
+  it.each([
+    ['water 0', { fat: 22, water: 0, muscle: 42, bone: 3.2 }],
+    ['water sentinel', { fat: 22, water: 6553.5 }],
+    ['bone 0', { fat: 22, bone: 0 }],
+    ['muscle above 100 %', { fat: 22, muscle: 150 }],
+    ['water without fat', { water: 55 }],
+  ])('discards the whole set on %s', (_label, comp) => {
+    const p0 = buildPayload(80, 0, comp, p);
+    const estimate = buildPayload(80, 0, {}, p);
+    expect(p0.bodyFatPercent).toBe(estimate.bodyFatPercent);
+    expect(p0.waterPercent).toBe(estimate.waterPercent);
+    expect(p0.boneMass).toBe(estimate.boneMass);
+    expect(p0.muscleMass).toBe(estimate.muscleMass);
+  });
+
+  it('falls back to BIA, not the BMI estimate, when the impedance is usable', () => {
+    const rejected = buildPayload(80, 500, { fat: 22, water: 0 }, p);
+    expect(rejected.bodyFatPercent).toBeCloseTo(biaFatIfPlausible(80, 500, p)!, 2);
+  });
+
+  it('accepts a complete, plausible set unchanged', () => {
+    expect(compositionRejection({ fat: 22, water: 55, muscle: 42, bone: 3.2 })).toBeNull();
+    expect(compositionRejection({})).toBeNull();
+  });
+});
+
+// E-06 / D002: the rating's thresholds are calibrated on the skeletal estimate.
+// A vendor muscle percentage (fat-free mass minus bone, about 0.55 to 0.70 of
+// body weight) used to be fed in instead and pinned the rating.
+describe('buildPayload: physique rating ignores a scale muscle value (E-06)', () => {
+  const p: UserProfile = { height: 183, age: 30, gender: 'male', isAthlete: false };
+
+  it('rates the same body the same with or without a vendor muscle %', () => {
+    // fat 17 %: skeletal estimate 0.54 * 66.4 = 35.9 kg < 0.45 * 80 -> 8.
+    // 72 % muscle (57.6 kg) would have read as 9.
+    const withMuscle = buildPayload(80, 0, { fat: 17, muscle: 72 }, p);
+    const without = buildPayload(80, 0, { fat: 17 }, p);
+    expect(withMuscle.physiqueRating).toBe(8);
+    expect(withMuscle.physiqueRating).toBe(without.physiqueRating);
+    // The exported muscle mass still comes from the scale.
+    expect(withMuscle.muscleMass).toBe(r2(0.72 * 80));
+  });
+});
+
+// E-14: Deurenberg et al. 1991 fit children (15 and younger) separately.
+describe('estimateBodyFat: children (E-14)', () => {
+  it("uses the children's equation at 15 and younger", () => {
+    const girl: UserProfile = { height: 140, age: 10, gender: 'female', isAthlete: false };
+    // 1.51 * 17 - 0.70 * 10 - 3.6 * 0 + 1.4 = 20.07 (adult equation: 17.3)
+    expect(estimateBodyFat(17, girl)).toBeCloseTo(20.07, 2);
+  });
+
+  it('keeps the adult equation from 16 on', () => {
+    const teen: UserProfile = { height: 175, age: 16, gender: 'male', isAthlete: false };
+    expect(estimateBodyFat(20, teen)).toBeCloseTo(1.2 * 20 + 0.23 * 16 - 10.8 - 5.4, 5);
+  });
+});
+
+describe('isPlausibleImpedance (D028)', () => {
+  it('accepts the band and refuses 0, sentinels and non-numbers', () => {
+    expect(isPlausibleImpedance(IMPEDANCE_MIN_OHM)).toBe(true);
+    expect(isPlausibleImpedance(IMPEDANCE_MAX_OHM)).toBe(true);
+    for (const z of [0, 6553.5, 65535, Number.NaN, Number.POSITIVE_INFINITY, -500]) {
+      expect(isPlausibleImpedance(z)).toBe(false);
+    }
   });
 });

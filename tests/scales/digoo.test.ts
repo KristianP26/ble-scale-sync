@@ -7,6 +7,7 @@ import {
   parseOk,
   expectValidMetrics,
 } from '../helpers/scale-test-utils.js';
+import { WEIGHT_ONLY_HOLD_MS } from '../../src/scales/body-comp-helpers.js';
 
 /** Full Digoo frame: weight + control byte (bit0 stable, bit1 allValues) + body comp. */
 function frame(control: number, weight = 8000): Buffer {
@@ -53,22 +54,37 @@ describe('DigooScaleAdapter', () => {
   });
 
   describe('isComplete()', () => {
-    it('returns true when weight > 0 and stable and allValues', () => {
-      adapter.parseNotification(frame(0x03)); // stable + allValues
-      expect(adapter.isComplete({ weight: 80, impedance: 0 })).toBe(true);
+    it('returns true and final when weight > 0 and stable and allValues', () => {
+      const reading = adapter.parseNotification(frame(0x03))!; // stable + allValues
+      expect(adapter.isComplete(reading)).toBe(true);
+      expect(adapter.isFinal(reading)).toBe(true);
     });
 
-    it('returns false when not stable', () => {
-      adapter.parseNotification(frame(0x02)); // allValues but not stable
-      expect(adapter.isComplete({ weight: 80, impedance: 0 })).toBe(false);
+    it('treats an allValues frame without the stable bit as the final reading', () => {
+      // openScale's DigooDGSO38HHandler returns early on a stable frame (it
+      // answers with its profile request there) and publishes only from an
+      // allValues frame that reaches the next branch, i.e. one without the
+      // stable bit. Requiring both bits could therefore never complete.
+      const reading = adapter.parseNotification(frame(0x02))!; // allValues, not stable
+      expect(adapter.isComplete(reading)).toBe(true);
+      expect(adapter.isFinal(reading)).toBe(true);
     });
 
-    it('returns false when not allValues', () => {
+    it('completes a stable weight without composition after a short hold (D-07, D028)', () => {
+      // A weigh-in the scale could not analyse used to be refused for good, so
+      // the session ran into its timeout and the weight was lost.
       const buf = Buffer.alloc(19);
       buf.writeUInt16BE(8000, 3);
       buf[5] = 0x01; // stable but no allValues
-      adapter.parseNotification(buf);
-      expect(adapter.isComplete({ weight: 80, impedance: 0 })).toBe(false);
+      const reading = adapter.parseNotification(buf)!;
+      expect(adapter.isComplete(reading)).toBe(true);
+      expect(adapter.isFinal(reading)).toBe(false);
+      expect(adapter.completionHoldMs).toBe(WEIGHT_ONLY_HOLD_MS);
+    });
+
+    it('returns false for a settling weight (neither stable nor allValues)', () => {
+      const reading = adapter.parseNotification(frame(0x00))!;
+      expect(adapter.isComplete(reading)).toBe(false);
     });
 
     it('returns false when weight is 0', () => {

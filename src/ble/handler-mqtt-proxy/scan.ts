@@ -7,14 +7,22 @@ import type { MqttProxyConfig } from '../../config/schema.js';
 import type { ScanOptions, ScanResult } from '../types.js';
 import type { RawReading } from '../shared.js';
 import { waitForRawReading, withAbandonmentCleanup } from '../shared.js';
-import { resolveAdapter } from '../../scales/resolve.js';
+import { resolveAdapter, resolveAfterDiscovery } from '../../scales/resolve.js';
 import {
   evaluateAdvertisement,
   logAdvert,
   readsFromAdvertisement,
   safeName,
 } from '../advertisement.js';
-import { bleLog, normalizeUuid, withTimeout, formatMac } from '../types.js';
+import {
+  bleLog,
+  normalizeUuid,
+  withTimeout,
+  withIdleTimeout,
+  formatMac,
+  RAW_READING_TIMEOUT_MS,
+  READING_SESSION_CAP_FACTOR,
+} from '../types.js';
 import { COMMAND_TIMEOUT_MS, topics, type Topics } from './topics.js';
 import { type MqttClient, createMqttClient } from './client.js';
 import { mqttGattConnect, mqttGattDisconnect } from './gatt.js';
@@ -225,8 +233,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         // does (#319): before discovery Mi Scale 2 claims anything advertising
         // the generic 0x181B service, and a standard BCS scale reaches its own
         // adapter only here.
-        const discovered = { ...info, characteristicUuids: [...charMap.keys()] };
-        const resolved = resolveAdapter(discovered, adapters) ?? adapter;
+        const resolved =
+          resolveAfterDiscovery(info, { characteristicUuids: [...charMap.keys()] }, adapters) ??
+          adapter;
         if (resolved.name !== adapter.name) {
           bleLog.info(
             `Re-resolved adapter after GATT discovery: ${adapter.name} -> ${resolved.name} (${entry.address})`,
@@ -245,16 +254,30 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
           refused = { address: entry.address, name: resolved.name };
           continue;
         }
+        // Bounded like the node-ble and noble reads. An ESP32 that drops off
+        // Wi-Fi mid-session sends no `disconnected`, so without this the read
+        // waited for as long as the caller's own deadline allowed, if it had
+        // one, and that kind of deadline abandons rather than cleans up
+        // (B-18). A timeout here goes through withAbandonmentCleanup.
+        const idleMs = opts.readingTimeoutMs ?? RAW_READING_TIMEOUT_MS;
         const raw = await withAbandonmentCleanup(device, () =>
-          waitForRawReading(
-            charMap,
-            device,
-            resolved,
-            opts.profile,
-            entry.address.replace(/[:-]/g, '').toUpperCase(),
-            opts.weightUnit,
-            opts.onLiveData,
-            opts.scaleAuth,
+          withIdleTimeout(
+            (onActivity) =>
+              waitForRawReading(
+                charMap,
+                device,
+                resolved,
+                opts.profile,
+                entry.address.replace(/[:-]/g, '').toUpperCase(),
+                opts.weightUnit,
+                opts.onLiveData,
+                opts.scaleAuth,
+                onActivity,
+                info.localName,
+              ),
+            idleMs,
+            'Timed out waiting for a complete scale reading',
+            { ms: idleMs * READING_SESSION_CAP_FACTOR, message: 'GATT session cap exceeded' },
           ),
         );
         registerScaleMac(config, entry.address, resolved).catch(() => {});

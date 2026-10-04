@@ -4,6 +4,7 @@ import {
   resolveUserProfile,
   resolveRuntimeConfig,
   resolveExportersForUser,
+  resolveExporterSlotsForUser,
   resolveForSingleUser,
 } from '../../src/config/resolve.js';
 import type { AppConfig, UserConfig, ScaleConfig } from '../../src/config/schema.js';
@@ -255,6 +256,46 @@ describe('resolveExportersForUser', () => {
     expect(entries[0].type).toBe('garmin');
     expect((entries[0] as Record<string, unknown>).email).toBe('user@example.com');
     expect(entries[1].type).toBe('mqtt');
+  });
+
+  // D029 (G-14): several entries of one type in one list are all exported to.
+  // The second global webhook used to be dropped without a word.
+  it('keeps every global entry of a type, not only the first', () => {
+    const config = {
+      ...BASE_CONFIG,
+      global_exporters: [
+        { type: 'webhook', url: 'http://a' },
+        { type: 'webhook', url: 'http://b' },
+      ],
+    } as AppConfig;
+    const entries = resolveExportersForUser(config, USER);
+    expect(entries.map((e) => (e as Record<string, unknown>).url)).toEqual([
+      'http://a',
+      'http://b',
+    ]);
+  });
+
+  it("drops every global entry of a type the user configured, keeps the user's duplicates", () => {
+    const config = {
+      ...BASE_CONFIG,
+      global_exporters: [
+        { type: 'webhook', url: 'http://global' },
+        { type: 'mqtt', broker_url: 'mqtt://x' },
+      ],
+    } as AppConfig;
+    const u = {
+      ...USER,
+      exporters: [
+        { type: 'webhook', url: 'http://mine-1' },
+        { type: 'webhook', url: 'http://mine-2' },
+      ],
+    } as UserConfig;
+    const slots = resolveExporterSlotsForUser(config, u);
+    expect(slots.map((s) => [s.list, s.index, s.entry.type])).toEqual([
+      ['user', 0, 'webhook'],
+      ['user', 1, 'webhook'],
+      ['global', 1, 'mqtt'],
+    ]);
   });
 
   it('returns empty array when no exporters configured', () => {

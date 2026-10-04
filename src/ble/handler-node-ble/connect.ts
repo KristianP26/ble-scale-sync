@@ -2,7 +2,9 @@ import {
   bleLog,
   formatMac,
   sleep,
+  abortableSleep,
   errMsg,
+  untilAborted,
   withTimeout,
   CONNECT_TIMEOUT_MS,
   DISCOVERY_TIMEOUT_MS,
@@ -40,23 +42,14 @@ export interface ConnectRecoveryContext {
    * the diagnostic (`ble.auto_clear_stale_bond`, #335). Off by default.
    */
   autoClearStaleBond?: boolean;
+  /**
+   * Shutdown. Up to six 30 s connect attempts with re-discovery in between is
+   * far past the 5 s force-exit grace, and a hard exit skips teardownSession,
+   * leaving the LE link to the scale up (A-07).
+   */
+  abortSignal?: AbortSignal;
 }
 
-/**
- * Connect to a BLE device with recovery for BlueZ-specific failures.
- * On each failed attempt: disconnect -> RemoveDevice -> re-discover -> quiesce -> retry.
- * Returns the (possibly refreshed) Device reference.
- */
-/**
- * Hand back a Device proxy that has just been replaced by a fresh one for the
- * same peer.
- *
- * `waitDevice`/`getDevice` build a brand new proxy every time, and each one
- * holds a listener on the bus-wide signal emitter plus a D-Bus match rule until
- * it is released. A retry loop that swaps the reference without releasing is
- * exactly the per-path listener growth reported in #397. Guarded on identity
- * because the fallback path can legitimately hand back the same object.
- */
 /**
  * `btAdapter.waitDevice()` bounded by a timeout, releasing the proxy nobody
  * asked for any more.
@@ -71,6 +64,7 @@ async function waitDeviceBounded(
   btAdapter: Adapter,
   formattedMac: string,
   timeoutMessage: string,
+  abortSignal?: AbortSignal,
 ): Promise<Device> {
   let abandoned = false;
   const pending = btAdapter.waitDevice(formattedMac);
@@ -82,21 +76,46 @@ async function waitDeviceBounded(
       /* the timeout below is what the caller sees */
     });
   try {
-    return await withTimeout(pending, DISCOVERY_TIMEOUT_MS, timeoutMessage);
+    // An abort abandons the wait exactly like the deadline does, so the late
+    // proxy is released by the same path.
+    return await untilAborted(
+      withTimeout(pending, DISCOVERY_TIMEOUT_MS, timeoutMessage),
+      abortSignal,
+    );
   } catch (err) {
     abandoned = true;
     throw err;
   }
 }
 
+/**
+ * Hand back a Device proxy that has just been replaced by a fresh one for the
+ * same peer.
+ *
+ * `waitDevice`/`getDevice` build a brand new proxy every time, and each one
+ * holds a listener on the bus-wide signal emitter plus a D-Bus match rule until
+ * it is released. A retry loop that swaps the reference without releasing is
+ * exactly the per-path listener growth reported in #397. Guarded on identity
+ * because the fallback path can legitimately hand back the same object.
+ */
 function releaseSuperseded(previous: Device, current: Device): void {
   if (previous !== current) releaseDeviceProxy(previous);
 }
 
+/**
+ * Connect to a BLE device with recovery for BlueZ-specific failures.
+ * On each failed attempt: disconnect -> RemoveDevice -> re-discover -> quiesce -> retry.
+ * Returns the (possibly refreshed) Device reference.
+ */
 export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<Device> {
   let { btAdapter } = ctx;
-  const { mac, maxRetries, bleAdapter } = ctx;
+  const { mac, maxRetries, bleAdapter, abortSignal } = ctx;
   const formattedMac = formatMac(mac);
+  const throwIfAborted = (): void => {
+    if (abortSignal?.aborted) {
+      throw abortSignal.reason ?? new DOMException('Aborted', 'AbortError');
+    }
+  };
   let device = ctx.initialDevice;
   // RSSI freshness re-discovery is a one-shot defense per call: if the peer
   // already looks dark, we re-discover once. Repeating it on every retry just
@@ -125,6 +144,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
   try {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
+        throwIfAborted();
         // Skip the dying-peer connect attempt: a missing or 127-sentinel RSSI
         // OR no PropertiesChanged for RSSI within RSSI_FRESHNESS_MS means
         // BlueZ has not heard a fresh advertisement, and connect will stall
@@ -148,6 +168,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
               btAdapter,
               formattedMac,
               `Device ${formattedMac} not found during RSSI re-discovery`,
+              abortSignal,
             );
             // Every swap here is a fresh proxy for the same path. Stopping the
             // tracker unhooks OUR listener but not the one node-ble's BusHelper
@@ -171,7 +192,12 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
 
         const t0 = Date.now();
         bleLog.debug(`Connect attempt ${attempt + 1}/${maxRetries + 1}...`);
-        await withTimeout(device.connect(), CONNECT_TIMEOUT_MS, 'Connection timed out');
+        // On abort the pending Connect is left to teardownSession, whose
+        // Disconnect on the same device path cancels it in BlueZ.
+        await untilAborted(
+          withTimeout(device.connect(), CONNECT_TIMEOUT_MS, 'Connection timed out'),
+          abortSignal,
+        );
         bleLog.debug(`Connected (took ${Date.now() - t0}ms)`);
         if (keepDiscovery) {
           // Restore the "no discovery during GATT" invariant the callers rely
@@ -183,6 +209,9 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
         succeeded = true;
         return device;
       } catch (err: unknown) {
+        // A shutdown is not a connect failure: no retry, no diagnosis, and the
+        // abort reason rather than whatever the abandoned step wrapped it in.
+        throwIfAborted();
         const msg = errMsg(err);
         authClassFailures = isAuthClassConnectFailure(err) ? authClassFailures + 1 : 0;
         if (isDeviceObjectGone(err)) sawObjectGone = true;
@@ -252,7 +281,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
         await removeDevice(btAdapter, mac, { includeBonded: clearBond });
 
         // 3. Progressive delay
-        await sleep(delay);
+        await abortableSleep(delay, abortSignal);
 
         // 4. Re-discover and acquire fresh device reference + rebind tracker
         tracker.stop();
@@ -264,6 +293,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
             btAdapter,
             formattedMac,
             `Device ${formattedMac} not found during retry`,
+            abortSignal,
           );
 
           if (keepDiscovery) {
@@ -280,6 +310,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           }
           await sleep(POST_DISCOVERY_QUIESCE_MS);
         } catch (retryErr: unknown) {
+          throwIfAborted();
           bleLog.debug(`Re-discovery during retry failed: ${errMsg(retryErr)}`);
           // Fallback: try to get device directly without re-discovery
           try {

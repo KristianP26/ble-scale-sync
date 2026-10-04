@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import type { MqttProxyConfig } from '../../config/schema.js';
 import { withTimeout } from '../types.js';
 import { COMMAND_TIMEOUT_MS } from './topics.js';
@@ -25,10 +26,29 @@ function requireBrokerUrl(config: MqttProxyConfig): string {
   return config.broker_url;
 }
 
+/** Client id of the persistent continuous-mode session. */
+function persistentClientId(config: MqttProxyConfig): string {
+  return `ble-scale-sync-${config.device_id}`;
+}
+
+/**
+ * Client id for a short-lived connection: unique per connection.
+ *
+ * A broker closes the older of two connections that present the same client
+ * id ([MQTT-3.1.4-2], aedes `registerClient`). These used to share the
+ * persistent session's id, so a register or display publish while that
+ * session was briefly offline kicked it (and, being `clean: true`, wiped its
+ * queued QoS 1 messages), and in single-shot mode the publish kicked the scan's
+ * own client mid-wait and dropped its QoS 0 replies (B-06).
+ */
+function ephemeralClientId(config: MqttProxyConfig): string {
+  return `${persistentClientId(config)}-tx-${randomBytes(4).toString('hex')}`;
+}
+
 export async function createMqttClient(config: MqttProxyConfig): Promise<MqttClient> {
   const { connectAsync } = await import('mqtt');
   const brokerUrl = requireBrokerUrl(config);
-  const clientId = `ble-scale-sync-${config.device_id}`;
+  const clientId = ephemeralClientId(config);
   const client = await withTimeout(
     connectAsync(brokerUrl, {
       clientId,
@@ -104,7 +124,7 @@ export async function getOrCreatePersistentClient(config: MqttProxyConfig): Prom
       const { connectAsync } = await import('mqtt');
       const client = await withTimeout(
         connectAsync(brokerUrl, {
-          clientId: `ble-scale-sync-${config.device_id}`,
+          clientId: persistentClientId(config),
           username: config.username ?? undefined,
           password: config.password ?? undefined,
           clean: false,
@@ -120,6 +140,39 @@ export async function getOrCreatePersistentClient(config: MqttProxyConfig): Prom
     }
   })();
   return proxyState.pendingConnect;
+}
+
+/**
+ * End the persistent client, if there is one, and forget it.
+ *
+ * Nothing else ever closes it: left open, its socket to an external broker (or
+ * mqtt.js's reconnect timer once the embedded broker is gone) keeps the event
+ * loop alive, and every shutdown on this transport waited out the hard exit
+ * (B-16). Forced, because by the time this runs the watcher has unsubscribed
+ * and nothing is waiting on an in-flight publish. A connect still in flight is
+ * ended once it lands rather than awaited, so a slow broker cannot hold the
+ * shutdown either.
+ */
+export async function closePersistentClient(): Promise<void> {
+  const pending = proxyState.pendingConnect;
+  if (pending) {
+    pending
+      .then(async (late) => {
+        if (proxyState.persistentClient === late) proxyState.persistentClient = null;
+        await late.endAsync(true);
+      })
+      .catch(() => {
+        /* a connect that failed left nothing to close */
+      });
+  }
+  const client = proxyState.persistentClient;
+  proxyState.persistentClient = null;
+  if (!client) return;
+  try {
+    await client.endAsync(true);
+  } catch {
+    /* already closed */
+  }
 }
 
 /** Get the persistent client if connected, otherwise create an ephemeral one. */

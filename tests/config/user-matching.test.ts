@@ -68,6 +68,7 @@ describe('matchUserByWeight', () => {
       const result = matchUserByWeight([aliceWithLkw, charlieWithLkw], 67, 'nearest');
       expect(result.user?.name).toBe('Charlie');
       expect(result.tier).toBe('tiebreak');
+      expect(result.ambiguous).toBeUndefined();
     });
 
     it('falls back to config order when no last_known_weight', () => {
@@ -76,6 +77,9 @@ describe('matchUserByWeight', () => {
       expect(result.user).toBe(ALICE);
       expect(result.tier).toBe('tiebreak');
       expect(result.warning).toContain('config order');
+      // D027: a stored record placed only by config order is dropped, so the
+      // caller has to be able to tell this tie-break from a real one.
+      expect(result.ambiguous).toBe(true);
     });
 
     it('prefers user with last_known_weight over one without', () => {

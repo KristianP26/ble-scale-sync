@@ -3,6 +3,7 @@ import type {
   ConnectionContext,
   ScaleAdapterCore,
   GattWiring,
+  HoldForComposition,
   ScaleReading,
   UserProfile,
   BodyComposition,
@@ -12,6 +13,7 @@ import {
   buildPayload,
   xorChecksum,
   ReadingComposition,
+  WEIGHT_ONLY_HOLD_MS,
   type ScaleBodyComp,
 } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
@@ -28,9 +30,10 @@ const CHR_WRITE = uuid16(0xfff1);
  *   - Weight at bytes [4-5] big-endian / 10 (kg)
  *   - Fat at [6-7] BE / 10, bone at [8] / 10, muscle at [9-10] BE / 10
  *   - Visceral fat at [11], water at [12-13] BE / 10
- *   - Complete when weight > 0 and fat byte at [6] is not 0xFF
+ *   - Composition present when the fat byte at [6] is not 0xFF; a frame without it
+ *     completes weight-only after WEIGHT_ONLY_HOLD_MS (D028)
  */
-export class ExcelvanCF369Adapter implements ScaleAdapterCore, GattWiring {
+export class ExcelvanCF369Adapter implements ScaleAdapterCore, GattWiring, HoldForComposition {
   readonly name = 'Excelvan CF369';
   readonly match: MatchDescriptor = { priority: 110, names: { exact: ['electronic scale'] } };
   readonly charNotifyUuid = CHR_NOTIFY;
@@ -113,8 +116,25 @@ export class ExcelvanCF369Adapter implements ScaleAdapterCore, GattWiring {
     return reading;
   }
 
+  /**
+   * The weight completes the reading; the composition makes it final (ADR D028,
+   * review D-07).
+   *
+   * Requiring a fat value here meant a weigh-in the scale could not analyse
+   * (socks, a child, a short step-on) never produced a reading at all: the
+   * session ran into its timeout and the weight was lost. Now such a reading
+   * holds the link for `WEIGHT_ONLY_HOLD_MS`, resolves at once if a frame with
+   * composition arrives, and otherwise completes with the weight alone.
+   */
   isComplete(reading: ScaleReading): boolean {
-    return reading.weight > 0 && this.cachedComp.fat != null && this.cachedComp.fat > 0;
+    return reading.weight > 0;
+  }
+
+  readonly completionHoldMs = WEIGHT_ONLY_HOLD_MS;
+
+  isFinal(reading: ScaleReading): boolean {
+    const fat = this.comp.of(reading, this.cachedComp).fat;
+    return fat != null && fat > 0;
   }
 
   /**

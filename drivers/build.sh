@@ -19,7 +19,13 @@ FIRMWARE_DIR="${SCRIPT_DIR}/../firmware"
 
 # Versions
 MICROPYTHON_VERSION="v1.24.1"
-LV_BINDING_BRANCH="master"
+# lv_binding_micropython has no releases, so it is pinned to a commit rather
+# than following master. This one was master when the driver moved to the
+# binding (2026-02-20) and stayed master until 2026-05-02, so it is what every
+# build of drivers/rgb_panel_lvgl and lv_conf.h so far was made against. It
+# carries LVGL v9.3.0, the version lv_conf.h is based on. Move it on purpose,
+# together with a test build, never by following master.
+LV_BINDING_COMMIT="f33add088fb69b41fd01f0a9e5f3424005bf04f2"
 
 # Build paths
 MPY_DIR="${BUILD_ROOT}/micropython"
@@ -62,11 +68,20 @@ clone_deps() {
 
     # lv_binding_micropython
     if [[ ! -d "${LV_BINDING_DIR}" ]]; then
-        blue "Cloning lv_binding_micropython..."
-        git clone --recurse-submodules --branch "${LV_BINDING_BRANCH}" \
-            https://github.com/lvgl/lv_binding_micropython.git "${LV_BINDING_DIR}"
+        blue "Cloning lv_binding_micropython ${LV_BINDING_COMMIT:0:12}..."
+        # Submodules only after the checkout, so they are the ones this
+        # commit records, not the ones master records.
+        git clone https://github.com/lvgl/lv_binding_micropython.git "${LV_BINDING_DIR}"
+        git -C "${LV_BINDING_DIR}" checkout --detach "${LV_BINDING_COMMIT}"
+        git -C "${LV_BINDING_DIR}" submodule update --init --recursive
     else
         green "lv_binding_micropython already cloned at ${LV_BINDING_DIR}"
+        local head
+        head="$(git -C "${LV_BINDING_DIR}" rev-parse HEAD 2>/dev/null || echo unknown)"
+        if [[ "${head}" != "${LV_BINDING_COMMIT}" ]]; then
+            red "Warning: it is at ${head}, not the pinned ${LV_BINDING_COMMIT}."
+            red "  Delete ${LV_BINDING_DIR} to re-clone it at the pinned commit."
+        fi
     fi
 
     # Override lv_conf.h with our version (extra Montserrat font sizes)

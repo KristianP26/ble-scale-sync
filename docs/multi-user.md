@@ -52,7 +52,9 @@ If no match is found, the `unknown_user` strategy decides what happens:
 | `log`               | Logs a warning and skips                          |
 | `ignore`            | Silently skips                                    |
 
-Note what tiers 1 and 4 mean in practice: a reading outside every configured range is not rejected, it is assigned anyway. `unknown_user` is never consulted, because tier 4 already produced a match. If you want such a reading dropped instead, set `out_of_range: skip`; see [Out-of-range readings](/guide/configuration#out-of-range-readings).
+Note what tiers 1 and 4 mean in practice: a reading outside every configured range is not rejected, it is assigned anyway. `unknown_user` is never consulted, because tier 4 already produced a match. If you want such a reading dropped instead, set `out_of_range: skip`; see [Out-of-range readings](/guide/configuration#out-of-range-readings). The setup wizard writes `out_of_range: skip` whenever it saves a config with more than one user.
+
+Some scales also send weigh-ins stored in their memory while the app was not running. Each stored weigh-in is assigned by its own weight (or by the scale's user slot, when the scale sends one), not to whoever is standing on the scale right now. A stored weigh-in that matches nobody, or more than one user equally, is dropped and logged.
 
 ## Drift Detection
 
@@ -66,7 +68,7 @@ After each measurement, the matched user's `last_known_weight` is automatically 
 
 ## Per-User Exporters
 
-By default, all users share `global_exporters`. If a user needs different export targets (e.g., separate Garmin accounts), define `exporters` on that user; it completely replaces `global_exporters` for them:
+By default, all users share `global_exporters`. If a user needs their own export targets (e.g., separate Garmin accounts), define `exporters` on that user. Their own exporters are added to `global_exporters`; when a user has their own exporter of a type that is also global (for example `garmin`), only theirs is used for that type. A list may hold several exporters of one type (two webhooks), and each of them gets the reading:
 
 ```yaml
 users:
@@ -76,6 +78,7 @@ users:
       - type: garmin
         email: 'alice@example.com'
         password: '${ALICE_GARMIN_PASSWORD}'
+        token_dir: './garmin-tokens/alice'
 
   - name: Bob
     # ...
@@ -83,21 +86,27 @@ users:
       - type: garmin
         email: 'bob@example.com'
         password: '${BOB_GARMIN_PASSWORD}'
+        token_dir: './garmin-tokens/bob'
 
 global_exporters:
   - type: influxdb
     # ... shared by users without their own exporters list
 ```
 
+::: warning One token directory per account
+Garmin and Strava keep each account's login tokens in `token_dir`. Give every user their own `token_dir`, as above. If two accounts share one directory, whichever account authenticates last owns the tokens and receives everyone's readings, so the config is rejected at startup with an error naming both users. Two Garmin entries with the same `email` may share a directory, since they are one account. The setup wizard offers a separate directory per user.
+:::
+
 ### Exporter behavior in multi-user mode
 
-| Exporter     | What changes                                            |
-| ------------ | ------------------------------------------------------- |
-| **MQTT**     | Publishes to `{topic}/{slug}`, per-user HA device + LWT |
-| **InfluxDB** | Adds `user={slug}` tag to line protocol                 |
-| **Webhook**  | Adds `user_name` + `user_slug` fields to JSON           |
-| **Ntfy**     | Prepends `[{name}]` to notification                     |
-| **Garmin**   | One account per user via per-user exporter config       |
+| Exporter     | What changes                                                    |
+| ------------ | --------------------------------------------------------------- |
+| **MQTT**     | Publishes to `{topic}/{slug}`, per-user HA device + LWT         |
+| **InfluxDB** | Adds `user={slug}` tag to line protocol                         |
+| **Webhook**  | Adds `user_name` + `user_slug` fields to JSON                   |
+| **Ntfy**     | Prepends `[{name}]` to notification (a single user gets it too) |
+| **Garmin**   | One account per user, each with its own `token_dir`             |
+| **Strava**   | One account per user, each with its own `token_dir`             |
 
 ## Live Config Reload
 
@@ -114,9 +123,11 @@ Hot-swappable on edit:
 - `ble.scale_mac`
 - `update_check`
 
-Restart-required (the change is detected and logged with a warning, but only takes effect after restart): `runtime.retry_failed_exports` (read once at startup), `ble.handler`, `ble.adapter`, `ble.noble_driver`, `ble.force_scale_adapter`, every `ble.mqtt_proxy.*` field including `embedded_broker_port` and `embedded_broker_bind`, every `ble.esphome_proxy.*` field including `client_info`, `additional_proxies` and `advertisement_timeout`, `ble.ha_bluetooth.url`, `ble.ha_bluetooth.token`, `ble.ha_bluetooth.source`, `runtime.continuous_mode`, `runtime.watchdog_max_consecutive_failures`, switching between single-user (1 user) and multi-user (>1).
+Restart-required (the change is detected and logged with a warning, but only takes effect after restart): `runtime.retry_failed_exports` (read once at startup), `ble.handler`, `ble.adapter`, `ble.noble_driver`, `ble.force_scale_adapter`, every `ble.mqtt_proxy.*` field including `embedded_broker_port` and `embedded_broker_bind`, every `ble.esphome_proxy.*` field including `client_info`, `additional_proxies` and `advertisement_timeout`, `ble.ha_bluetooth.url`, `ble.ha_bluetooth.token`, `ble.ha_bluetooth.source`, `runtime.continuous_mode`, `runtime.watchdog_max_consecutive_failures`. Adding or removing users, including switching between one user and several, applies on reload.
 
 Everything not in that list is hot-swapped, including the keys people most often tune while a scale is misbehaving: `ble.session_timeout_sec`, `ble.auto_clear_stale_bond`, `ble.preemptive_adapter_reset`, `ble.bind_key`, every `ble.qn_*` option and `ble.proxy_liveness_timeout_min`. On the proxy transports the liveness timeout is re-read when the next advertisement wait begins, so a change to it lands on the next cycle rather than the same instant.
+
+In Docker with `config.yaml` mounted as a single file, edits made in place are picked up. An editor that saves by writing a new file and renaming it over the old one replaces the file on the host, and the container keeps seeing the old one; after such an edit send `SIGHUP` or restart the container, or mount the directory instead of the file.
 
 To opt out (e.g. on a flaky network filesystem) and rely solely on the `SIGHUP` flow:
 

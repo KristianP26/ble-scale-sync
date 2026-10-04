@@ -1,8 +1,13 @@
-import type { BleDeviceInfo, ScaleAdapter, UserProfile } from '../../interfaces/scale-adapter.js';
-import type { MqttProxyConfig } from '../../config/schema.js';
+import type {
+  BleDeviceInfo,
+  ScaleAdapter,
+  ScaleAuth,
+  UserProfile,
+} from '../../interfaces/scale-adapter.js';
+import type { MqttProxyConfig, WeightUnit } from '../../config/schema.js';
 import type { RawReading } from '../shared.js';
 import { waitForRawReading } from '../shared.js';
-import { resolveAdapter } from '../../scales/resolve.js';
+import { resolveAdapter, resolveAfterDiscovery } from '../../scales/resolve.js';
 import {
   evaluateAdvertisement,
   GraceTimers,
@@ -25,6 +30,7 @@ import { AsyncQueue } from '../async-queue.js';
 import { topics } from './topics.js';
 import {
   type MqttClient,
+  closePersistentClient,
   getOrCreatePersistentClient,
   addDiscoveredMac,
   getDiscoveredMacs,
@@ -72,6 +78,14 @@ export class ReadingWatcher implements Watcher {
   private targetMac?: string;
   private config: MqttProxyConfig;
   private profile?: UserProfile;
+  /**
+   * Primary user's device auth (the Beurer consent PIN). Both GATT paths below
+   * used to pass undefined, so an adapter that authenticates in onConnected saw
+   * no PIN on this transport and asked for one that was already set (B-15).
+   */
+  private scaleAuth?: ScaleAuth;
+  /** `scale.weight_unit`, passed to every GATT read (see WatcherConfig). */
+  private weightUnit?: WeightUnit;
   private gattInProgress = false;
   /** Monotonic id of the newest GATT session, so a superseded one cannot tear down its successor (#296). */
   private gattSessionSeq = 0;
@@ -117,11 +131,15 @@ export class ReadingWatcher implements Watcher {
     adapters: ScaleAdapter[],
     targetMac?: string,
     profile?: UserProfile,
+    scaleAuth?: ScaleAuth,
+    weightUnit?: WeightUnit,
   ) {
     this.config = config;
     this.adapters = adapters;
     this.targetMac = targetMac;
     this.profile = profile;
+    this.scaleAuth = scaleAuth;
+    this.weightUnit = weightUnit;
   }
 
   async start(): Promise<void> {
@@ -437,6 +455,11 @@ export class ReadingWatcher implements Watcher {
     }
     this._subscribedTopics = [];
 
+    // The watcher opened the persistent client in start(), so it closes it.
+    // Display publishes after this fall back to an ephemeral client, as they
+    // already do whenever the persistent one is not connected.
+    await closePersistentClient();
+
     this.started = false;
     this.lastAdvertAt = null;
     this._client = null;
@@ -453,12 +476,17 @@ export class ReadingWatcher implements Watcher {
     return this.lastAdvertAt;
   }
 
-  /** Update matching config (e.g. after SIGHUP config reload). scaleAuth is
-   *  ignored: the mqtt-proxy GATT path does not thread per-user auth. */
+  /**
+   * Update matching config (e.g. after SIGHUP config reload). scaleAuth and
+   * weightUnit are taken as given, unset included, so removing a PIN takes
+   * effect too.
+   */
   updateConfig(config: WatcherConfig): void {
     this.adapters = config.adapters;
     this.targetMac = config.targetMac;
     if (config.profile) this.profile = config.profile;
+    this.scaleAuth = config.scaleAuth;
+    this.weightUnit = config.weightUnit;
   }
 
   private static readonly GATT_STALE_MS = 90_000;
@@ -494,18 +522,19 @@ export class ReadingWatcher implements Watcher {
    * Pick the adapter that drives the read once the characteristics are known.
    * Falls back to the pre-discovery choice when nothing matches.
    *
-   * Not a guaranteed improvement: `matchesDescriptor` is a pure OR of positive
-   * claims, so adding characteristics can only make MORE adapters match, and the
-   * highest-priority one of them wins. That is the same trade the node-ble and
-   * esphome paths already make, and it is what lets a structural matcher correct
-   * an advertisement-time guess.
+   * Adding characteristics can make MORE adapters match, which is what lets a
+   * structural matcher correct an advertisement-time guess. resolveAfterDiscovery
+   * bounds that the same way on every transport: a pick the advertised name made
+   * is not overturned by an adapter that claims on a characteristic alone.
    */
   private reresolveAfterDiscovery(
-    info: BleDeviceInfo,
+    advertised: BleDeviceInfo,
+    characteristicUuids: string[],
     fallback: ScaleAdapter,
     address: string,
   ): ScaleAdapter {
-    const resolved = resolveAdapter(info, this.adapters) ?? fallback;
+    const resolved =
+      resolveAfterDiscovery(advertised, { characteristicUuids }, this.adapters) ?? fallback;
     if (resolved.name !== fallback.name) {
       bleLog.info(
         `Re-resolved adapter after GATT discovery: ${fallback.name} -> ${resolved.name} (${address})`,
@@ -588,7 +617,8 @@ export class ReadingWatcher implements Watcher {
       // would strip every name-matched adapter of its match and collapse
       // resolution onto structural matchers only.
       gattAdapter = this.reresolveAfterDiscovery(
-        { ...toBleDeviceInfo(entry), characteristicUuids: [...connected.charMap.keys()] },
+        toBleDeviceInfo(entry),
+        [...connected.charMap.keys()],
         adapter,
         entry.address,
       );
@@ -612,10 +642,11 @@ export class ReadingWatcher implements Watcher {
               gattAdapter,
               profile,
               entry.address.replace(/[:-]/g, '').toUpperCase(),
+              this.weightUnit,
               undefined,
-              undefined,
-              undefined,
+              this.scaleAuth,
               onActivity,
+              entry.name,
             ),
           GATT_READING_IDLE_MS,
           `GATT reading timeout for ${entry.address}`,
@@ -690,14 +721,14 @@ export class ReadingWatcher implements Watcher {
       const info = toBleDeviceInfo(
         cached ?? { address: data.address, name: '', rssi: 0, services: [] },
       );
-      info.characteristicUuids = data.chars.map((c) => c.uuid.toLowerCase());
-      logAdvert(data.address, info);
+      const characteristicUuids = data.chars.map((c) => c.uuid.toLowerCase());
+      logAdvert(data.address, { ...info, characteristicUuids });
       if (cached?.name) {
         bleLog.debug(
           `Autonomous connect: using cached advertisement name "${safeName(cached.name)}"`,
         );
       }
-      let adapter = resolveAdapter(info, this.adapters);
+      let adapter = resolveAfterDiscovery(info, { characteristicUuids }, this.adapters);
       if (!adapter) {
         // No structural match: fall back to a priority-ordered notify-char scan
         // so name/notify-only adapters still resolve when nothing matches by
@@ -765,10 +796,11 @@ export class ReadingWatcher implements Watcher {
               adapter,
               profile,
               data.address.replace(/[:-]/g, '').toUpperCase(),
+              this.weightUnit,
               undefined,
-              undefined,
-              undefined,
+              this.scaleAuth,
               onActivity,
+              info.localName,
             ),
           GATT_READING_IDLE_MS,
           `GATT reading timeout for ${data.address} (autonomous)`,

@@ -3,6 +3,8 @@ import { loadAppConfig } from './load.js';
 import { resolveExportersForUser } from './resolve.js';
 import { createExporterFromEntry } from '../exporters/registry.js';
 import { errMsg } from '../utils/error.js';
+import { forcedAdapterProblem } from './forced-adapter.js';
+import { adapters } from '../scales/index.js';
 
 const { values } = parseArgs({
   options: {
@@ -54,13 +56,22 @@ try {
     process.exit(1);
   }
 
+  // The same check start makes before scanning, so a config start would refuse
+  // is not reported as valid here.
+  const forced = forcedAdapterProblem(config, adapters);
+  if (forced) {
+    console.error(`Config invalid: ${forced}`);
+    process.exit(1);
+  }
+
   console.log(
     `Config valid \u2713 (source: ${source}, ${userCount} user(s), ${exporterCount} exporter(s), continuous: ${continuous})`,
   );
 } catch (err) {
-  // Zod errors are logged by loadAppConfig; env-reference / parse errors need explicit logging
-  if (err instanceof Error && !err.message.startsWith('Config validation failed')) {
-    console.error(err.message);
-  }
+  // loadAppConfig throws without logging (schema, YAML and env-reference
+  // errors alike), so this is the one place the reason is printed. The old
+  // filter here matched a prefix nothing generates, and the loader logged the
+  // schema error itself, so every schema error was printed twice.
+  console.error(errMsg(err));
   process.exit(1);
 }

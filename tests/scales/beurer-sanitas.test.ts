@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { BeurerSanitasScaleAdapter } from '../../src/scales/beurer-sanitas.js';
+import { biaFatIfPlausible } from '../../src/scales/body-comp-helpers.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -275,14 +276,25 @@ describe('BeurerSanitasScaleAdapter', () => {
       expect(reading!.impedance).toBe(437);
     });
 
-    it('exposes the decoded composition through computeMetrics', () => {
+    // Changed with ADR D028. This capture decodes to fat 22.3 %, water 52.1 %,
+    // muscle 39.7 % and bone 11.65 kg, and 11.65 kg of bone on an 83.55 kg
+    // body is not bone mass (a few kilograms), so the bone field's scaling
+    // (`* 50 / 1000`, carried over from the BF700 layout) is in doubt. D028
+    // uses a scale composition only as a whole, so the set is discarded and
+    // the reading falls back to BIA on its plausible 437 ohm. Restoring the
+    // scale's own figures needs the bone field decoded against the vendor app,
+    // which is adapter work, not something this test should paper over.
+    it('discards the decoded composition while its bone field is implausible (D028)', () => {
       const adapter = sbf70Adapter();
       adapter.parseNotification(PART1);
       adapter.parseNotification(PART2);
       const reading = adapter.parseNotification(PART3)!;
       const payload = adapter.computeMetrics(reading, defaultProfile());
-      expect(payload.bodyFatPercent).toBeCloseTo(22.3, 1);
-      expect(payload.waterPercent).toBeCloseTo(52.1, 1);
+      expect(payload.boneMass).toBeLessThan(10);
+      expect(payload.bodyFatPercent).toBeCloseTo(
+        biaFatIfPlausible(reading.weight, 437, defaultProfile())!,
+        2,
+      );
       assertPayloadRanges(payload);
     });
 

@@ -329,11 +329,107 @@ describe('runContinuousLoop', () => {
     ]);
   });
 
+  // E-02: the flush used to be awaited before nextReading, so a queued Garmin
+  // upload hanging on a slow server (3 x upload_timeout_sec per entry) kept the
+  // scan off for as long as it took, and a scale that only advertises while
+  // somebody stands on it was simply never heard.
+  it('does not hold the scan back while a queue flush is still running', async () => {
+    const ac = new AbortController();
+    const { source, nextReading } = makeSource();
+    const flush = deferred<void>();
+    const onCycleStart = vi.fn(() => flush.promise);
+    let readings = 0;
+    nextReading.mockImplementation(async () => {
+      readings += 1;
+      if (readings >= 2) ac.abort();
+      return STUB_RAW;
+    });
+
+    const loop = runContinuousLoop({
+      source,
+      processReading: async () => true,
+      signal: ac.signal,
+      touchHeartbeat: vi.fn(),
+      isReloadRequested: vi.fn(() => false),
+      clearReloadRequest: vi.fn(),
+      onCycleStart,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    // Two scans happened while the first flush never finished...
+    expect(nextReading).toHaveBeenCalledTimes(2);
+    // ...and the second iteration did not start a second flush on top of it:
+    // two passes at once would attempt the same queued entries twice.
+    expect(onCycleStart).toHaveBeenCalledTimes(1);
+
+    flush.resolve();
+    await loop;
+  });
+
+  it('starts the next flush once the previous one has finished', async () => {
+    const ac = new AbortController();
+    const { source, nextReading } = makeSource();
+    const onCycleStart = vi.fn(async () => {});
+    let readings = 0;
+    nextReading.mockImplementation(async () => {
+      readings += 1;
+      if (readings >= 3) ac.abort();
+      return STUB_RAW;
+    });
+
+    const loop = runContinuousLoop({
+      source,
+      processReading: async () => true,
+      signal: ac.signal,
+      touchHeartbeat: vi.fn(),
+      isReloadRequested: vi.fn(() => false),
+      clearReloadRequest: vi.fn(),
+      onCycleStart,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await loop;
+    expect(onCycleStart).toHaveBeenCalledTimes(3);
+  });
+
+  it('a failing flush is not an iteration failure', async () => {
+    const ac = new AbortController();
+    const { source, nextReading } = makeSource();
+    // Aborts too, so a regression ends the loop and fails on the assertions
+    // below instead of parking in the backoff sleep.
+    const onFailure = vi.fn(() => ac.abort());
+    nextReading.mockImplementation(async () => {
+      ac.abort();
+      return STUB_RAW;
+    });
+
+    const loop = runContinuousLoop({
+      source,
+      processReading: async () => true,
+      signal: ac.signal,
+      touchHeartbeat: vi.fn(),
+      isReloadRequested: vi.fn(() => false),
+      clearReloadRequest: vi.fn(),
+      onCycleStart: async () => {
+        throw new Error('queue file unreadable');
+      },
+      onFailure,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await loop;
+    // Nothing about the queue says anything about the radio: it must neither
+    // feed the watchdog nor delay the scan with a backoff.
+    expect(onFailure).not.toHaveBeenCalled();
+    expect(nextReading).toHaveBeenCalledTimes(1);
+  });
+
   it('SIGHUP reload runs onReload -> clearReloadRequest -> onSourceReload before nextReading', async () => {
     const ac = new AbortController();
     const { source, nextReading } = makeSource();
 
-    let reloadFlag = false;
+    // Requested before the first iteration runs.
+    let reloadFlag = true;
     const calls: string[] = [];
 
     nextReading.mockImplementation(async () => {
@@ -366,8 +462,6 @@ describe('runContinuousLoop', () => {
       onSourceReload,
     });
 
-    // Flip reload BEFORE first iteration runs.
-    reloadFlag = true;
     await vi.advanceTimersByTimeAsync(0);
     await loop;
 
@@ -375,6 +469,42 @@ describe('runContinuousLoop', () => {
     expect(onReload).toHaveBeenCalledOnce();
     expect(clearReloadRequest).toHaveBeenCalledOnce();
     expect(onSourceReload).toHaveBeenCalledOnce();
+  });
+
+  // E-17: the flush used to start before a pending reload was applied, so
+  // queued uploads went out with the old config (old dry_run, a removed
+  // exporter) one more time.
+  it('applies a pending reload before starting the queue flush', async () => {
+    const ac = new AbortController();
+    const { source, nextReading } = makeSource();
+    let reloadFlag = true;
+    const calls: string[] = [];
+    nextReading.mockImplementation(async () => {
+      calls.push('nextReading');
+      ac.abort();
+      return STUB_RAW;
+    });
+
+    const loop = runContinuousLoop({
+      source,
+      processReading: async () => true,
+      signal: ac.signal,
+      touchHeartbeat: () => {},
+      isReloadRequested: () => reloadFlag,
+      clearReloadRequest: () => {
+        reloadFlag = false;
+      },
+      onReload: async () => {
+        calls.push('onReload');
+      },
+      onCycleStart: async () => {
+        calls.push('onCycleStart');
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await loop;
+    expect(calls).toEqual(['onReload', 'onCycleStart', 'nextReading']);
   });
 
   it('graceful abort: exits cleanly mid-nextReading and calls source.stop', async () => {

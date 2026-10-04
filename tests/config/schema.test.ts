@@ -472,6 +472,29 @@ describe('BleSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  // The refine checked only !!username, so a username with no password (or a
+  // ${VAR} that resolved to '') passed. The broker then expected '' and let
+  // in any LAN client that sent that username with an empty password.
+  it.each([
+    ['without a password', { username: 'esp32' }],
+    ['with an empty password', { username: 'esp32', password: '' }],
+  ])('rejects embedded broker on non-loopback bind %s', (_label, auth) => {
+    const result = BleSchema.safeParse({ handler: 'mqtt-proxy', mqtt_proxy: auth });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('password');
+      expect(result.error.issues[0].path).toEqual(['mqtt_proxy', 'password']);
+    }
+  });
+
+  it('accepts a username without password on a loopback bind', () => {
+    const result = BleSchema.safeParse({
+      handler: 'mqtt-proxy',
+      mqtt_proxy: { username: 'esp32', embedded_broker_bind: '127.0.0.1' },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it('rejects embedded broker on non-loopback bind without auth', () => {
     const result = BleSchema.safeParse({
       handler: 'mqtt-proxy',
@@ -987,5 +1010,77 @@ describe('birth_date is a real date, not just a shape', () => {
     // Discriminates against a `new Date(...)` NaN check alone: JS normalises
     // this to 2023-03-01 instead of failing.
     expect(UserSchema.safeParse({ ...VALID_USER, birth_date: '2023-02-29' }).success).toBe(false);
+  });
+});
+
+describe('token directories are not shared between accounts', () => {
+  // Without token_dir every garmin entry falls back to the same default, so
+  // the last account to authenticate owns the token file and every other
+  // user's readings upload into it. docs/multi-user.md showed exactly that.
+  const alice = { ...VALID_USER, name: 'Alice', slug: 'alice' };
+  const bob = { ...VALID_USER, name: 'Bob', slug: 'bob' };
+  const garmin = (email: string, extra: Record<string, unknown> = {}) => ({
+    type: 'garmin',
+    email,
+    password: 'x',
+    ...extra,
+  });
+
+  function parse(users: unknown[], global_exporters: unknown[] = []) {
+    return AppConfigSchema.safeParse({ ...VALID_CONFIG, users, global_exporters });
+  }
+
+  it('rejects two users whose garmin entries both rely on the default', () => {
+    const result = parse([
+      { ...alice, exporters: [garmin('alice@example.com')] },
+      { ...bob, exporters: [garmin('bob@example.com')] },
+    ]);
+    expect(result.success).toBe(false);
+    const issue = result.error?.issues.find((i) => i.message.includes('same token directory'));
+    expect(issue?.message).toContain("user 'Alice'");
+    expect(issue?.message).toContain("user 'Bob'");
+    expect(issue?.path).toEqual(['users', 1, 'exporters', 0, 'token_dir']);
+  });
+
+  it('rejects the same explicit garmin token_dir for two accounts', () => {
+    const dir = { token_dir: './garmin-tokens' };
+    const result = parse([
+      { ...alice, exporters: [garmin('alice@example.com', dir)] },
+      { ...bob, exporters: [garmin('bob@example.com', dir)] },
+    ]);
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts a separate token_dir per user', () => {
+    const result = parse([
+      {
+        ...alice,
+        exporters: [garmin('alice@example.com', { token_dir: './garmin-tokens/alice' })],
+      },
+      { ...bob, exporters: [garmin('bob@example.com', { token_dir: './garmin-tokens/bob' })] },
+    ]);
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts a shared directory for the same garmin account', () => {
+    const result = parse([
+      { ...alice, exporters: [garmin('Family@example.com')] },
+      { ...bob, exporters: [garmin('family@example.com')] },
+    ]);
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects two strava entries on the default directory', () => {
+    const strava = { type: 'strava', client_id: '1', client_secret: 's' };
+    const result = parse([
+      { ...alice, exporters: [strava] },
+      { ...bob, exporters: [strava] },
+    ]);
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts a single garmin entry and a global entry shared by every user', () => {
+    expect(parse([{ ...alice, exporters: [garmin('alice@example.com')] }, bob]).success).toBe(true);
+    expect(parse([alice, bob], [garmin('family@example.com')]).success).toBe(true);
   });
 });

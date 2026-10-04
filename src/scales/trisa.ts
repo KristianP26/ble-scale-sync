@@ -47,6 +47,19 @@ const OP_RESPONSE_ADE = 0x20;
 const EPOCH_2010 = 1262304000;
 
 /**
+ * Earliest measurement time a Trisa stamp is believed for: 2020-09-13, the
+ * bound Salter uses for the same question. The stamp counts seconds from
+ * 2010-01-01, which is also where the clock of a scale nobody has synced
+ * starts, so a stamp below this is an unset clock rather than a weigh-in from
+ * years ago. Passed on, it would make every live weigh-in look like history
+ * (ADR D027), so it is dropped and the reading counts as measured on receipt.
+ */
+const MIN_TRUSTED_UNIX_SEC = 1_600_000_000;
+
+/** Width of the optional measurement-time field (u32 LE seconds since 2010). */
+const TIMESTAMP_LEN = 4;
+
+/**
  * Retry budget for a challenge-response write. BlueZ answers a badly timed
  * write with a transient `org.bluez.Error.InProgress`, and the scale is waiting
  * on that single ack (#138).
@@ -364,24 +377,31 @@ export class TrisaAdapter implements ScaleAdapterCore, GattWiring, MultiCharNoti
   /**
    * Parse a Trisa measurement frame.
    *
-   * Layout (verified for Trisa 0x8A21 and ADE BA 1600 0x8A24, weight only):
+   * Layout (openScale TrisaBodyAnalyzeHandler; weight and timestamp confirmed
+   * by the ADE BA 1600 capture in #138):
    *   [0]      info flags
-   *             bit 0: timestamp present (7 bytes at offset 5)
+   *             bit 0: timestamp present (4 bytes at offset 5)
    *             bit 1: resistance1 present (4 bytes base-10 float)
    *             bit 2: resistance2 present (4 bytes base-10 float)
    *   [1-3]    weight mantissa, unsigned 24-bit little-endian
    *   [4]      weight exponent, signed int8
-   *   [5+]     optional timestamp (7 bytes if bit0 set)
+   *   [5-8]    optional timestamp, u32 LE seconds since 2010-01-01 UTC (bit0)
    *   then:    optional resistance1 (4 bytes if bit1 set)
    *   then:    optional resistance2 (4 bytes if bit2 set)
    *
    * Weight = mantissa * 10^exponent.
    * Impedance from resistance2: r2 < 410 ? 3.0 : 0.3 * (r2 - 400).
    *
-   * NOTE: only the Trisa branch walks the optional-field table. For ADE the
-   * post-weight layout is unverified (timestamp may be 8 bytes instead of 7)
-   * and body comp arrives on a separate 0x8A22 push, so the parser
-   * short-circuits to weight-only after computing the weight.
+   * The timestamp is the time the scale measured the frame and goes into
+   * `ScaleReading.timestamp` (ADR D027, review D-06): a stored record the scale
+   * sends after connecting is then history rather than today's weigh-in. The
+   * capture's stamp `65 2a b2 1e` decodes to 2026-04-27 13:32:21 UTC, four days
+   * before it was committed, which is what pins the width at 4 bytes; this
+   * parser used to skip 7.
+   *
+   * NOTE: only the Trisa branch walks the resistance fields. For ADE their
+   * meaning is unverified and body comp arrives on a separate 0x8A22 push, so
+   * the parser returns the weight and the timestamp only.
    */
   private parseMeasurement(data: Buffer): ScaleReading | null {
     if (data.length < 5) return null;
@@ -391,12 +411,6 @@ export class TrisaAdapter implements ScaleAdapterCore, GattWiring, MultiCharNoti
     const hasResistance1 = (flags & 0x02) !== 0;
     const hasResistance2 = (flags & 0x04) !== 0;
 
-    // Skip frames that are just timestamps (only bit0 set, no weight data expected)
-    if (hasTimestamp && !hasResistance1 && !hasResistance2) {
-      const mantissa = data[1] | (data[2] << 8) | (data[3] << 16);
-      if (mantissa === 0) return null;
-    }
-
     // Weight: 24-bit unsigned LE mantissa + signed exponent
     const mantissa = data[1] | (data[2] << 8) | (data[3] << 16);
     const exponent = data.readInt8(4);
@@ -404,31 +418,47 @@ export class TrisaAdapter implements ScaleAdapterCore, GattWiring, MultiCharNoti
 
     if (weight <= 0 || !Number.isFinite(weight)) return null;
 
-    // ADE BA 1600: only the weight bytes are verified (single capture frame in
-    // #138). The post-weight layout (timestamp width, resistance encoding)
-    // is not confirmed and body-comp values arrive on a separate 0x8A22 push
-    // anyway. Don't walk the offset table; return weight only until more
-    // captures are available.
-    if (this.variant === 'ade') return { weight, impedance: 0 };
+    const timestamp = hasTimestamp ? this.readTimestamp(data) : undefined;
+    const reading: ScaleReading = { weight, impedance: 0 };
+    if (timestamp) reading.timestamp = timestamp;
+
+    // ADE BA 1600: the resistance fields after the timestamp are not decoded
+    // for this firmware, and body-comp values arrive on a separate 0x8A22 push
+    // anyway. Weight and time only until more captures are available.
+    if (this.variant === 'ade') return reading;
 
     // Walk through optional fields to find resistance2.
     let offset = 5;
-    if (hasTimestamp) offset += 7;
+    if (hasTimestamp) offset += TIMESTAMP_LEN;
     if (hasResistance1) offset += 4;
 
-    let impedance = 0;
     if (hasResistance2 && offset + 4 <= data.length) {
       const r2Mantissa = data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16);
       const r2Exponent = data.readInt8(offset + 3);
       const r2 = r2Mantissa * Math.pow(10, r2Exponent);
 
       if (r2 < 410) {
-        impedance = 3.0;
+        reading.impedance = 3.0;
       } else {
-        impedance = 0.3 * (r2 - 400);
+        reading.impedance = 0.3 * (r2 - 400);
       }
     }
 
-    return { weight, impedance };
+    return reading;
+  }
+
+  /**
+   * The measurement time at [5..8], or undefined when it cannot be trusted:
+   * the field is cut short, or the scale's clock was never set (see
+   * MIN_TRUSTED_UNIX_SEC).
+   */
+  private readTimestamp(data: Buffer): Date | undefined {
+    if (data.length < 5 + TIMESTAMP_LEN) return undefined;
+    const unixSec = EPOCH_2010 + data.readUInt32LE(5);
+    if (unixSec < MIN_TRUSTED_UNIX_SEC) {
+      bleLog.debug(`Trisa: ignoring the stamp of an unset scale clock (${unixSec})`);
+      return undefined;
+    }
+    return new Date(unixSec * 1000);
   }
 }

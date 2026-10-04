@@ -1,6 +1,6 @@
-import { parseArgs } from 'node:util';
 import { createRequire } from 'node:module';
 import { printRunHelp } from './cli-help.js';
+import { parseRunArgs } from './cli-run-args.js';
 import { setDisplayUsers, createMqttProxyDisplayNotifier } from './ble/handler-mqtt-proxy/index.js';
 import { bootstrapMqttProxy } from './ble/mqtt-proxy-bootstrap.js';
 import { notifyReady, startHeartbeat, stopHeartbeat } from './runtime/systemd-watchdog.js';
@@ -20,12 +20,18 @@ import { resolveDisplayUnit, resolveRuntimeConfig } from './config/resolve.js';
 import { startConfigWatcher, type ConfigWatcherHandle } from './config/watch.js';
 import { configureUpdateState } from './update-state.js';
 import { flushQueue } from './runtime/export-queue.js';
+import {
+  persistDedupMark,
+  resolveDedupMarksPath,
+  restoreDedupMarks,
+} from './runtime/dedup-marks.js';
 import type { Exporter } from './interfaces/exporter.js';
 import type { ScaleAdapter } from './interfaces/scale-adapter.js';
 import { createAppContext } from './runtime/context.js';
 import { processReading } from './runtime/processor.js';
 import { PollReadingSource } from './runtime/poll-source.js';
 import { runContinuousLoop } from './runtime/loop.js';
+import { runSingleShot } from './runtime/single-run.js';
 import { reloadAppConfig, userDisplaySnapshot } from './runtime/reload.js';
 import { buildReadingSource } from './runtime/sources.js';
 import {
@@ -37,13 +43,17 @@ import {
 
 // ─── CLI flags ──────────────────────────────────────────────────────────────
 
-const { values: cliFlags } = parseArgs({
-  options: {
-    config: { type: 'string', short: 'c' },
-    help: { type: 'boolean', short: 'h' },
-  },
-  strict: false,
-});
+const cliFlags = parseRunArgs(process.argv.slice(2));
+
+if (cliFlags.kind === 'error') {
+  // Before anything else runs: a misplaced subcommand or a mistyped flag must
+  // not start a scan and an export (G-16). Exit 2, as the bin does for an
+  // unknown command.
+  console.error(cliFlags.message);
+  console.error('');
+  printRunHelp();
+  process.exit(2);
+}
 
 if (cliFlags.help) {
   // Reached only when run.js is executed directly. The bin entry point
@@ -74,7 +84,7 @@ log.info(
     (buildChannel ? ` (image ${buildChannel}${buildRef ? ` @ ${buildRef.slice(0, 7)}` : ''})` : ''),
 );
 
-const loaded = loadAppConfig(cliFlags.config as string | undefined);
+const loaded = loadAppConfig(cliFlags.config);
 const initialConfig = loaded.config;
 const initialResolved = resolveRuntimeConfig(initialConfig);
 
@@ -257,8 +267,8 @@ async function main(): Promise<void> {
 
   // ble.force_scale_adapter replaces the registry with the single adapter the
   // user named, bypassing protocol detection entirely (#318/#319). The schema
-  // already requires scale_mac alongside it, so the override stays pointed at
-  // one device.
+  // does NOT require scale_mac alongside it (see the note in schema.ts); the
+  // check right below does, so the override stays pointed at one device.
   let adapters: ScaleAdapter[] = [...fullRegistry];
   const forcedName = ctx.config.ble?.force_scale_adapter ?? undefined;
   if (forcedName) {
@@ -314,9 +324,18 @@ async function main(): Promise<void> {
         qnA4Prelude,
         qnTimeSyncLong,
         qnConfigLong,
+        // The config entries themselves, not copies: the processor moves
+        // last_known_weight on them in memory after each live weigh-in.
+        userWeights: ctx.config.users,
       });
   };
   applyAdapterConfig(ctx.config.ble?.bind_key ?? undefined);
+
+  // Before the first session: a Salter weigh-in exported just before a restart
+  // is still inside the adapter's age bound, and only the persisted mark keeps
+  // the fresh process from exporting it again (review D-15).
+  const dedupMarksPath = resolveDedupMarksPath(ctx.configPath);
+  restoreDedupMarks(dedupMarksPath, adapters);
 
   let singleUserExporters: Exporter[] | undefined;
   if (!ctx.dryRun) {
@@ -344,15 +363,24 @@ async function main(): Promise<void> {
   notifyReady();
   startHeartbeat();
 
-  const runProcessReading = (raw: Parameters<typeof processReading>[1]): Promise<boolean> =>
-    processReading(ctx, raw, {
-      singleUserExporters,
-      getExportersForUser: (slug) => getExportersForUser(ctx, slug),
-    });
+  const runProcessReading = async (raw: Parameters<typeof processReading>[1]): Promise<boolean> => {
+    try {
+      return await processReading(ctx, raw, {
+        singleUserExporters,
+        getExportersForUser: (slug) => getExportersForUser(ctx, slug),
+      });
+    } finally {
+      // After the exports, so a process killed mid-export re-reads and delivers
+      // the weigh-in instead of having marked it done. Not on a dry run, which
+      // promises to leave things for a real run, as the queue flush does.
+      if (!ctx.dryRun) persistDedupMark(dedupMarksPath, raw.adapter);
+    }
+  };
 
-  // At the START of a single run, not after its dispatch: a total export
-  // failure exits non-zero below, before any post-dispatch code could run, and
-  // that is exactly the run that just queued something (#412).
+  // Started with the scan of a single run and awaited before it reports, so a
+  // total export failure, which exits non-zero below, still lets the flush
+  // finish first (#412). In continuous mode the loop starts it at the top of
+  // each iteration without waiting for it (E-02).
   const flushQueuedExports = async (): Promise<void> => {
     if (!ctx.exportQueuePath) return;
     // A dry run promises to skip exports, and a queued upload firing under it
@@ -360,17 +388,27 @@ async function main(): Promise<void> {
     // is dropped: the queue is left for a real run.
     if (ctx.dryRun) return;
     try {
-      await flushQueue(ctx.exportQueuePath, (entry) => resolveQueuedExporter(ctx, entry));
+      await flushQueue(
+        ctx.exportQueuePath,
+        (entry) => resolveQueuedExporter(ctx, entry),
+        Date.now(),
+        ctx.signal,
+      );
     } catch (err) {
-      log.debug(`Retrying queued exports failed: ${errMsg(err)}`);
+      // Warn, not debug: the queue holds weigh-ins that are in no other place,
+      // and a pass that dies here is the only trace of why one went missing
+      // (E-08).
+      log.warn(`Retrying queued exports failed: ${errMsg(err)}`);
     }
   };
 
   if (!initialResolved.continuousMode) {
-    await flushQueuedExports();
-    const source = new PollReadingSource(ctx, adapters);
-    const raw = await source.nextReading(ctx.signal);
-    const success = await runProcessReading(raw);
+    const success = await runSingleShot({
+      source: new PollReadingSource(ctx, adapters),
+      signal: ctx.signal,
+      processReading: runProcessReading,
+      flush: flushQueuedExports,
+    });
     if (!success) process.exit(1);
     runFinished = true;
     return;

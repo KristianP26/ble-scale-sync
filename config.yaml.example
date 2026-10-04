@@ -170,7 +170,7 @@ global_exporters:
   # -- Ntfy (push notifications) --
   # - type: ntfy
   #   url: "https://ntfy.sh"
-  #   topic: my-scale
+  #   topic: "<long-random-topic-name>"   # your own: on ntfy.sh the topic is the password
   #   title: Scale Measurement
   #   priority: 3
   #   token: "${NTFY_TOKEN}"               # Bearer token auth

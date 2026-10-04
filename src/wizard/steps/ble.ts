@@ -4,6 +4,7 @@ import type {
   EsphomeProxyConfig,
   HaBluetoothConfig,
 } from '../../config/schema.js';
+import { resolveEnvReferences } from '../../config/env-refs.js';
 import { isValidScaleId, SCALE_ID_HINT } from '../../ble/scale-id.js';
 import { missingPackagesFor } from '../../ble/transport-availability.js';
 import { success, warn, info } from '../ui.js';
@@ -88,8 +89,14 @@ async function promptMqttProxy(ctx: WizardContext): Promise<MqttProxyConfig> {
       { default: true },
     );
     if (wantAuth) {
-      username = await ctx.prompts.input('MQTT username:');
-      password = await ctx.prompts.password('MQTT password:');
+      // Both are required: a LAN-exposed broker with a username and an empty
+      // password lets in anyone who knows the username.
+      username = await ctx.prompts.input('MQTT username:', {
+        validate: (v) => (v.trim() ? true : 'A username is required'),
+      });
+      password = await ctx.prompts.password('MQTT password:', {
+        validate: (v) => (v ? true : 'A password is required for a LAN-exposed broker'),
+      });
     } else {
       embedded_broker_bind = '127.0.0.1';
       console.log(
@@ -412,7 +419,11 @@ export const bleStep: WizardStep = {
         const { adapters } = await import('../../scales/index.js');
         const { bootstrapMqttProxy } = await import('../../ble/mqtt-proxy-bootstrap.js');
 
-        let mqttProxy = ctx.config.ble!.mqtt_proxy;
+        // The config keeps ${VAR} references (it is written back as typed, and
+        // the token prompt suggests ${HA_TOKEN}); the scan needs the values.
+        // An undefined variable throws here and is reported as a failed scan.
+        const ble = resolveEnvReferences(ctx.config.ble!);
+        let mqttProxy = ble.mqtt_proxy;
         let embeddedBroker: Awaited<ReturnType<typeof bootstrapMqttProxy>>['embeddedBroker'] = null;
         if (ctx.config.ble!.handler === 'mqtt-proxy' && mqttProxy) {
           const bootstrapped = await bootstrapMqttProxy(mqttProxy);
@@ -427,9 +438,9 @@ export const bleStep: WizardStep = {
             15_000,
             ctx.config.ble!.handler,
             mqttProxy,
-            ctx.config.ble!.adapter ?? undefined,
-            ctx.config.ble!.esphome_proxy,
-            ctx.config.ble!.ha_bluetooth,
+            ble.adapter ?? undefined,
+            ble.esphome_proxy,
+            ble.ha_bluetooth,
           );
         } finally {
           if (embeddedBroker) await embeddedBroker.close();

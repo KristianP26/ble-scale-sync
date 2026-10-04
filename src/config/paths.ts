@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 const __dirname: string = dirname(fileURLToPath(import.meta.url));
 
@@ -48,4 +48,16 @@ export function defaultConfigPath(): string {
 /** Default .env location: alongside the config.yaml, working directory first. */
 export function defaultEnvPath(): string {
   return join(configDir(), '.env');
+}
+
+/**
+ * The .env that belongs to a config file: the one in the same directory.
+ *
+ * With an explicit `--config` the .env used to come from configDir() anyway,
+ * i.e. from the working directory or the package root, so a `${VAR}` defined
+ * next to `/etc/scale/config.yaml` was "not defined", and an unrelated .env in
+ * the working directory could feed that config its secrets.
+ */
+export function envPathFor(configPath?: string): string {
+  return configPath ? join(dirname(resolve(configPath)), '.env') : defaultEnvPath();
 }

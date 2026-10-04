@@ -1,6 +1,7 @@
 import type { WizardStep, WizardContext } from '../types.js';
 import { EXPORTER_SCHEMAS, createExporterFromEntry } from '../../exporters/registry.js';
 import type { ExporterEntry, UserConfig } from '../../config/schema.js';
+import { resolveEnvReferences } from '../../config/env-refs.js';
 import { success, error, info, dim } from '../ui.js';
 
 function getAllExporterEntries(ctx: WizardContext): ExporterEntry[] {
@@ -61,7 +62,9 @@ export const validateStep: WizardStep = {
       process.stdout.write(`  Testing ${displayName}... `);
 
       try {
-        const exporter = createExporterFromEntry(entry);
+        // The wizard holds the raw YAML so that saving keeps ${VAR} references;
+        // testing it as-is sent the literal reference as URL or token.
+        const exporter = createExporterFromEntry(resolveEnvReferences(entry));
         if (exporter.healthcheck) {
           const result = await exporter.healthcheck();
           if (result.success) {

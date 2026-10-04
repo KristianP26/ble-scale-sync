@@ -6,8 +6,9 @@ dist
 .git
 .gitignore
 
-# Tests
+# Tests (the root suite, and the Garmin uploader's under garmin-scripts/)
 tests
+garmin-scripts/tests
 
 # CI / GitHub
 .github
@@ -38,6 +39,8 @@ config.yaml
 config.yaml.*
 .update-check-state.json
 .update-check-state.json.tmp
+.scale-dedup-marks.json
+.scale-dedup-marks.json.tmp
 
 # IDE & editor
 .idea
@@ -49,11 +52,14 @@ config.yaml.*
 .garmin_tokens
 .garmin_renpho_tokens
 
-# Python virtual environments
-.venv
+# Python virtual environments and caches, at any depth: a bare name only
+# matches at the root of the build context.
+**/.venv
 env
 venv
-__pycache__
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
 
 # Lint / format configs (not needed at runtime)
 eslint.config.js

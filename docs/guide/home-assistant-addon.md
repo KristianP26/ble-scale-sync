@@ -68,9 +68,9 @@ All options live under the **Configuration** tab. The add-on regenerates `/data/
 | `qn_time_sync_long`          | unset                | QN-family scales only. Sends the 9-byte form of the clock-setting frame the same Arboleaf capture shows, instead of the 8-byte one. The extra byte is undecoded.                                                                                                                                                                         |
 | `qn_config_long`             | unset                | QN-family scales only, and the last difference anyone has found between our start-up conversation and the vendor app's. Sends the 10-byte form of the settings frame instead of the 9-byte one. The extra bytes are undecoded.                                                                                                           |
 | `display_unit`               | `weight_unit`        | Unit requested on the physical display independently of exported values. Only QN-family scales are told which unit to show.                                                                                                                                                                                                              |
-| `proxy_liveness_timeout_min` | `30`                 | Proxy transports only. Minutes of total advertisement silence before the link is treated as wedged and the add-on restarts. 0 disables. Raise it if your proxy sits somewhere with no other Bluetooth devices in range.                                                                                                                  |
+| `proxy_liveness_timeout_min` | `30`                 | Proxy transports only, which the add-on uses only with `custom_config`. Minutes of total advertisement silence before the link is treated as wedged and the add-on restarts. 0 disables. A value in your custom config file takes precedence. No effect on the built-in Bluetooth adapter.                                               |
 
-The QN options, `auto_clear_stale_bond`, `preemptive_adapter_reset` and `display_unit` are ignored when `custom_config` is enabled, since that mode skips config generation entirely; set them in the corresponding `ble:` or `scale:` section of your own file instead. The add-on logs a warning if you leave one of the `ble:` options set.
+The QN options, `auto_clear_stale_bond`, `preemptive_adapter_reset` and `display_unit` are ignored when `custom_config` is enabled, since that mode skips config generation entirely; set them in the corresponding `ble:` or `scale:` section of your own file instead. The add-on logs a warning if you leave one of the `ble:` options set. `proxy_liveness_timeout_min` is the exception: it only matters with a proxy transport, so the add-on applies it on top of your file (the file itself is not changed) unless the file sets `ble.proxy_liveness_timeout_min` itself.
 
 ### Unit preferences
 
@@ -96,15 +96,15 @@ The CLI and exporters display weights and heights in your chosen unit; all inter
 
 ### MQTT
 
-| Option                            | Default                  | Notes                                                                                                                                      |
-| --------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `mqtt_enabled`                    | `true`                   | Enable the MQTT exporter.                                                                                                                  |
-| `mqtt_auto`                       | `true`                   | Auto-detect the Mosquitto add-on broker via the Supervisor API. Overrides manual URL / credentials when the Mosquitto add-on is installed. |
-| `mqtt_broker_url`                 | empty                    | Manual broker URL, e.g. `mqtt://192.168.1.50:1883` or `mqtts://...`. Only used when `mqtt_auto` is off or auto-detection fails.            |
-| `mqtt_username` / `mqtt_password` | empty                    | Credentials for the manual broker.                                                                                                         |
-| `mqtt_topic`                      | `scale/body-composition` | Base topic. Payload is published to this topic; HA discovery entities use `homeassistant/sensor/<topic>/...`.                              |
-| `mqtt_ha_discovery`               | `true`                   | Publish auto-discovery entities under `homeassistant/`. Disable if you want raw MQTT only.                                                 |
-| `mqtt_ha_device_name`             | `BLE Scale`              | Device name grouping the entities in HA.                                                                                                   |
+| Option                            | Default                  | Notes                                                                                                                                                     |
+| --------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mqtt_enabled`                    | `true`                   | Enable the MQTT exporter.                                                                                                                                 |
+| `mqtt_auto`                       | `true`                   | Auto-detect the Mosquitto add-on broker via the Supervisor API. Overrides manual URL / credentials when the Mosquitto add-on is installed.                |
+| `mqtt_broker_url`                 | empty                    | Manual broker URL, e.g. `mqtt://192.168.1.50:1883` or `mqtts://...`. Only used when `mqtt_auto` is off or auto-detection fails.                           |
+| `mqtt_username` / `mqtt_password` | empty                    | Credentials for the manual broker.                                                                                                                        |
+| `mqtt_topic`                      | `scale/body-composition` | Base topic. Payload is published to this topic; HA discovery configs go to `homeassistant/sensor/<device id>/<metric>/config`, independent of this topic. |
+| `mqtt_ha_discovery`               | `true`                   | Publish auto-discovery entities under `homeassistant/`. Disable if you want raw MQTT only.                                                                |
+| `mqtt_ha_device_name`             | `BLE Scale`              | Device name grouping the entities in HA.                                                                                                                  |
 
 ### Garmin Connect
 
@@ -125,6 +125,7 @@ If your account uses MFA, see [MFA workaround](#mfa-workaround) below.
 | `idle_rescan_delay`    | `5`     | Seconds to wait before scanning again after a cycle that found no scale while the adapter was healthy. Range: 0-3600. Real failures keep their own backoff.                                                                                |
 | `retry_failed_exports` | `true`  | Keep a reading whose upload failed and retry it later, up to 72 hours. Only targets that can record a past measurement are retried; MQTT and notifications cannot. The queue lives in `/data`, which survives add-on restarts and updates. |
 | `debug`                | `false` | Enable verbose BLE logs. Useful when opening an issue.                                                                                                                                                                                     |
+| `update_check`         | `true`  | Check once a day whether a newer version exists (anonymous, see the [FAQ](/faq#what-does-the-update-check-send)). Set `false` to turn it off.                                                                                              |
 | `custom_config`        | `false` | Ignore UI options entirely and use `/share/ble-scale-sync/config.yaml` instead. See [Custom config mode](#custom-config-mode).                                                                                                             |
 
 ## MQTT auto-detection
@@ -135,7 +136,7 @@ When `mqtt_auto: true` and the Mosquitto add-on is running on the same host, BLE
 [ble-scale-sync] MQTT auto-detected: mqtt://core-mosquitto:1883
 ```
 
-If the Mosquitto add-on is not installed or the API call fails, the add-on falls back to whatever you set in `mqtt_broker_url` / `mqtt_username` / `mqtt_password`.
+If the Mosquitto add-on is not installed or the API call fails, the add-on falls back to whatever you set in `mqtt_broker_url` / `mqtt_username` / `mqtt_password`, and the log says why, with the HTTP status from the Supervisor. Before this was fixed the add-on did not declare the MQTT service, so the Supervisor refused every request and auto-detection never worked; if you set the broker by hand for that reason, you can switch back to auto-detection after updating.
 
 ## Garmin Connect
 
@@ -153,6 +154,8 @@ Home Assistant add-ons run without an interactive terminal, so the add-on cannot
 2. Copy that file to `/share/ble-scale-sync/garmin-tokens/` on the Home Assistant host. The Samba and File editor add-ons both expose `/share/` for easy uploads.
 3. Restart BLE Scale Sync. On startup the add-on detects the pre-generated token and imports it into `/data/garmin-tokens/`.
 
+The import only happens while the add-on has no Garmin token yet. A token placed in `/share/` later is not used (the log says so), because other add-ons and Samba users can write there. To switch to another Garmin account, reinstall the add-on, which clears `/data`, and import again.
+
 The same workflow applies if Garmin is blocking your HA host's IP as a data-centre / VPN address: authenticate from a trusted network and import the tokens.
 
 ## Custom config mode
@@ -169,7 +172,7 @@ The add-on copies that file verbatim into the runtime location on each start. Se
 The copy happens once, at startup. The config watcher that picks up live edits watches the runtime copy, not the file under `/share/`, so editing `/share/ble-scale-sync/config.yaml` while the add-on is running changes nothing until you restart it.
 :::
 
-Custom config mode still benefits from `last_known_weight` persistence (see below) but the add-on does not auto-run Garmin authentication; you handle that yourself by pre-seeding `/share/ble-scale-sync/garmin-tokens/`.
+Custom config mode still benefits from `last_known_weight` persistence (see below) but the add-on does not auto-run Garmin authentication; you handle that yourself by pre-seeding `/share/ble-scale-sync/garmin-tokens/`. On start the add-on imports that token into `/data/garmin-tokens`, where every `garmin` exporter without its own `token_dir` looks. With several Garmin accounts each needs its own `token_dir`. Anything under `/share/` can be read and changed by other add-ons with share access and by Samba users, including your custom `config.yaml`.
 
 ## Testing a development build
 
@@ -202,6 +205,8 @@ When reporting back, paste the `Version` line from the top of the log. On an ima
 ```
 
 ## Persistence
+
+If the app stops on its own (for example after repeated Bluetooth failures, to start the adapter fresh), the add-on starts it again after a short, growing delay and says so in the log. You do not need to turn on the Supervisor's Watchdog switch for that.
 
 Everything that should survive add-on restarts lives under `/data/` inside the container, which the Supervisor maps to persistent storage:
 

@@ -3,17 +3,6 @@ import { generateSlug, validateSlugUniqueness } from '../../config/slugify.js';
 import type { UserConfig } from '../../config/schema.js';
 import { success, warn, dim } from '../ui.js';
 
-interface PartialUser {
-  name: string;
-  slug: string;
-  height: number;
-  birth_date: string;
-  gender: 'male' | 'female';
-  is_athlete: boolean;
-  weight_range: { min: number; max: number };
-  last_known_weight: null;
-}
-
 function validateDate(v: string): string | true {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return 'Must be YYYY-MM-DD format';
   const [y, m, d] = v.split('-').map(Number);
@@ -31,16 +20,32 @@ function validatePositiveNumber(v: string): string | true {
   return true;
 }
 
-async function promptUser(ctx: WizardContext, existingSlugs: string[]): Promise<PartialUser> {
+const KG_PER_LB = 2.20462;
+
+/**
+ * Ask for one user's profile.
+ *
+ * `takenSlugs` are the slugs other users hold. With `existing`, every prompt
+ * is pre-filled with that user's value and the result is merged into a copy
+ * of it, so the keys this step never asks about (per-user `exporters`,
+ * `last_known_weight`, the `beurer_*` keys) survive an edit.
+ */
+async function promptUser(
+  ctx: WizardContext,
+  takenSlugs: string[],
+  existing?: UserConfig,
+): Promise<UserConfig> {
   const { prompts, config } = ctx;
 
   const name = await prompts.input('User name:', {
+    default: existing?.name,
     validate: (v) => (v.trim().length > 0 ? true : 'Name is required'),
   });
 
-  // Slug generation with preview
-  const autoSlug = generateSlug(name);
-  console.log(`  ${dim(`Auto-generated slug: ${autoSlug}`)}`);
+  // An existing user keeps their slug even when renamed: the slug names their
+  // token directories and is how a reload finds them again.
+  const autoSlug = existing?.slug ?? generateSlug(name, takenSlugs);
+  if (!existing) console.log(`  ${dim(`Auto-generated slug: ${autoSlug}`)}`);
 
   const slug = await prompts.input('Slug (press Enter to accept):', {
     default: autoSlug,
@@ -48,7 +53,7 @@ async function promptUser(ctx: WizardContext, existingSlugs: string[]): Promise<
       if (!/^[a-z0-9-]+$/.test(v)) {
         return 'Slug must contain only lowercase letters, numbers, and hyphens';
       }
-      if ([...existingSlugs, ...getAllSlugs(ctx)].includes(v)) {
+      if (takenSlugs.includes(v)) {
         return `Slug '${v}' is already in use`;
       }
       return true;
@@ -59,26 +64,42 @@ async function promptUser(ctx: WizardContext, existingSlugs: string[]): Promise<
   const heightUnit = config.scale?.height_unit ?? 'cm';
 
   const heightLabel = heightUnit === 'in' ? 'Height (inches):' : 'Height (cm):';
-  const heightStr = await prompts.input(heightLabel, { validate: validatePositiveNumber });
+  const heightStr = await prompts.input(heightLabel, {
+    default: existing ? String(existing.height) : undefined,
+    validate: validatePositiveNumber,
+  });
   const height = Number(heightStr);
 
-  const birth_date = await prompts.input('Birth date (YYYY-MM-DD):', { validate: validateDate });
-
-  const gender = await prompts.select<'male' | 'female'>('Gender:', [
-    { name: 'Male', value: 'male' },
-    { name: 'Female', value: 'female' },
-  ]);
-
-  const is_athlete = await prompts.confirm('Athlete mode? (adjusts body composition formulas)', {
-    default: false,
+  const birth_date = await prompts.input('Birth date (YYYY-MM-DD):', {
+    default: existing?.birth_date,
+    validate: validateDate,
   });
 
-  // Weight range
+  // The prompt provider has no select default; the first choice is what Enter
+  // picks, so the current gender goes first.
+  const genderChoices: { name: string; value: 'male' | 'female' }[] = [
+    { name: 'Male', value: 'male' },
+    { name: 'Female', value: 'female' },
+  ];
+  if (existing?.gender === 'female') genderChoices.reverse();
+  const gender = await prompts.select<'male' | 'female'>('Gender:', genderChoices);
+
+  const is_athlete = await prompts.confirm('Athlete mode? (adjusts body composition formulas)', {
+    default: existing?.is_athlete ?? false,
+  });
+
+  // Weight range, stored in kg, asked in the display unit
   const unitLabel = weightUnit === 'lbs' ? 'lbs' : 'kg';
+  const shown = (kg: number): string =>
+    weightUnit === 'lbs' ? String(Math.round(kg * KG_PER_LB * 10) / 10) : String(kg);
+  const minDefault = existing ? shown(existing.weight_range.min) : undefined;
+  const maxDefault = existing ? shown(existing.weight_range.max) : undefined;
   const minStr = await prompts.input(`Weight range minimum (${unitLabel}):`, {
+    default: minDefault,
     validate: validatePositiveNumber,
   });
   const maxStr = await prompts.input(`Weight range maximum (${unitLabel}):`, {
+    default: maxDefault,
     validate: (v) => {
       const result = validatePositiveNumber(v);
       if (result !== true) return result;
@@ -87,19 +108,24 @@ async function promptUser(ctx: WizardContext, existingSlugs: string[]): Promise<
     },
   });
 
-  let min = Number(minStr);
-  let max = Number(maxStr);
-
-  // Convert lbs to kg for storage
+  // Convert lbs to kg for storage. A value accepted unchanged keeps the stored
+  // kg exactly: converting the rounded lbs default back would drift it a
+  // little on every edit.
+  const toKg = (input: string, shownDefault: string | undefined, storedKg?: number): number => {
+    if (storedKg !== undefined && input === shownDefault) return storedKg;
+    const n = Number(input);
+    return weightUnit === 'lbs' ? Math.round((n / KG_PER_LB) * 100) / 100 : n;
+  };
+  const min = toKg(minStr, minDefault, existing?.weight_range.min);
+  const max = toKg(maxStr, maxDefault, existing?.weight_range.max);
   if (weightUnit === 'lbs') {
-    min = Math.round((min / 2.20462) * 100) / 100;
-    max = Math.round((max / 2.20462) * 100) / 100;
-    console.log(dim(`  \u2192 stored as ${min}\u2013${max} kg`));
+    console.log(dim(`  → stored as ${min}–${max} kg`));
   }
 
   const weight_range = { min, max };
 
   return {
+    ...(existing ?? { last_known_weight: null }),
     name,
     slug,
     height,
@@ -107,14 +133,10 @@ async function promptUser(ctx: WizardContext, existingSlugs: string[]): Promise<
     gender,
     is_athlete,
     weight_range,
-    last_known_weight: null,
   };
 }
 
-function getAllSlugs(ctx: WizardContext): string[] {
-  const users = ctx.config.users as PartialUser[] | undefined;
-  return users ? users.map((u) => u.slug) : [];
-}
+type ExistingUserAction = 'keep' | 'edit' | 'remove';
 
 export const usersStep: WizardStep = {
   id: 'users',
@@ -122,21 +144,51 @@ export const usersStep: WizardStep = {
   order: 30,
 
   async run(ctx: WizardContext): Promise<void> {
-    const users: PartialUser[] = [];
+    const users: UserConfig[] = [];
+    const existingUsers = ctx.isEditMode ? [...((ctx.config.users as UserConfig[]) ?? [])] : [];
 
-    console.log('\nSet up user profiles (you can add multiple users):\n');
+    // Edit mode used to rebuild every user from blank prompts and replace the
+    // array, so fixing one height dropped every per-user exporter, the
+    // last_known_weight anchor and the Beurer consent keys of all users.
+    // Existing users are now kept, edited in place, or removed one by one.
+    if (existingUsers.length > 0) {
+      console.log('\nExisting user profiles:\n');
+      for (let i = 0; i < existingUsers.length; i++) {
+        const existing = existingUsers[i];
+        const action = await ctx.prompts.select<ExistingUserAction>(
+          `User "${existing.name}" (${existing.slug}):`,
+          [
+            { name: 'Keep unchanged', value: 'keep' },
+            { name: 'Edit', value: 'edit' },
+            { name: 'Remove', value: 'remove' },
+          ],
+        );
+        if (action === 'remove') continue;
+        if (action === 'keep') {
+          users.push(existing);
+          continue;
+        }
+        // Users not handled yet may still be kept, so their slugs are taken.
+        const taken = [...users, ...existingUsers.slice(i + 1)].map((u) => u.slug);
+        users.push(await promptUser(ctx, taken, existing));
+      }
+    }
 
-    // First user is always required
-    const firstUser = await promptUser(ctx, []);
-    users.push(firstUser);
+    if (users.length === 0) {
+      console.log('\nSet up user profiles (you can add multiple users):\n');
+      // At least one user is required
+      users.push(await promptUser(ctx, []));
+    }
 
     // Additional users
     for (;;) {
       const addMore = await ctx.prompts.confirm('Add another user?', { default: false });
       if (!addMore) break;
 
-      const existingSlugs = users.map((u) => u.slug);
-      const user = await promptUser(ctx, existingSlugs);
+      const user = await promptUser(
+        ctx,
+        users.map((u) => u.slug),
+      );
       users.push(user);
     }
 
@@ -147,7 +199,7 @@ export const usersStep: WizardStep = {
       console.log(`\n${warn(`Duplicate slugs detected: ${duplicates.join(', ')}`)}`);
     }
 
-    ctx.config.users = users as UserConfig[];
+    ctx.config.users = users;
 
     console.log(
       `\n  ${success(`${users.length} user(s) configured: ${users.map((u) => u.name).join(', ')}`)}`,
@@ -157,4 +209,3 @@ export const usersStep: WizardStep = {
 
 // Exported for testing
 export { validateDate, validatePositiveNumber, promptUser };
-export type { PartialUser };

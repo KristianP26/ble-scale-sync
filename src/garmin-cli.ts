@@ -14,7 +14,20 @@
  * silently falls back to the legacy GARMIN_EMAIL / GARMIN_PASSWORD flow and
  * authenticates the wrong account into the token directory.
  */
-export function translateGarminArgs(args: readonly string[]): string[] {
+export function translateGarminArgs(args: readonly string[], configPath?: string): string[] {
+  const out = translate(args);
+  // setup_garmin.py defaults to `config.yaml` in its working directory, and
+  // resolves a relative token_dir from that file's directory (F-11). Hand it
+  // the config the app itself reads, which can be the package root's when the
+  // working directory has none, so both pick the same file and directory.
+  const hasConfigPath = out.some((a) => a === '--config-path' || a.startsWith('--config-path='));
+  if (configPath !== undefined && out.includes('--from-config') && !hasConfigPath) {
+    out.push('--config-path', configPath);
+  }
+  return out;
+}
+
+function translate(args: readonly string[]): string[] {
   if (args.length === 0) return [];
   if (args[0] === '--all-users') return ['--from-config', ...args.slice(1)];
   if (args[0] === '--user' && args[1] !== undefined) {
@@ -32,8 +45,13 @@ export function parsePythonVersion(output: string): { major: number; minor: numb
   return { major: Number(match[1]), minor: Number(match[2]) };
 }
 
-/** The interpreter has to be new enough for the f-strings in our scripts. */
+/**
+ * The interpreter has to be new enough for the pinned garminconnect 0.3.x,
+ * which requires Python 3.12 (the reason the Docker image carries its own
+ * 3.12). 3.9 to 3.11 passed this check and then failed at `pip install` or
+ * import time with an error that did not name the version (F-20).
+ */
 export function isSupportedPython(version: { major: number; minor: number } | null): boolean {
   if (version === null) return false;
-  return version.major > 3 || (version.major === 3 && version.minor >= 9);
+  return version.major > 3 || (version.major === 3 && version.minor >= 12);
 }

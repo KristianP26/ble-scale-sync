@@ -15,6 +15,21 @@ const SETTLED = 'a502bb10002f0161a100521b011302 13c0986a010101'.replace(/ /g, ''
 /** The short status frame the scale sends when the session ends. */
 const SHORT = 'a502bc0500f30101a00002';
 
+/**
+ * Byte [5] is `(0xFF - sum of every other byte) & 0xFF`. It holds on all three
+ * frames above, and on the unit-change command the independent driver
+ * (etekcity_esf551_ble, `build_unit_update_payload`) sends the scale, which is
+ * how a test that edits a captured frame keeps it otherwise valid.
+ */
+function withChecksum(frame: Buffer): Buffer {
+  let sum = 0;
+  frame.forEach((b, i) => {
+    if (i !== 5) sum += b;
+  });
+  frame[5] = (0xff - sum) & 0xff;
+  return frame;
+}
+
 function makeAdapter(): EtekcityEsf551Adapter {
   return new EtekcityEsf551Adapter();
 }
@@ -83,13 +98,27 @@ describe('EtekcityEsf551Adapter (#385)', () => {
     it('rejects a frame that is the right length but not this protocol', () => {
       const wrong = Buffer.from(SETTLED, 'hex');
       wrong[7] = 0x62; // one signature byte off
-      expect(makeAdapter().parseNotification(wrong)).toBeNull();
+      // Checksum recomputed so this exercises the signature gate, not [5].
+      expect(makeAdapter().parseNotification(withChecksum(wrong))).toBeNull();
+    });
+
+    it('closes the checksum on every captured frame', () => {
+      for (const hex of [SETTLING, SETTLED, SHORT]) {
+        const frame = Buffer.from(hex, 'hex');
+        expect(withChecksum(Buffer.from(frame))[5]).toBe(frame[5]);
+      }
+    });
+
+    it('rejects a settled frame whose checksum does not close', () => {
+      const corrupt = Buffer.from(SETTLED, 'hex');
+      corrupt[11] ^= 0x01; // a flipped weight bit, [5] left as captured
+      expect(makeAdapter().parseNotification(corrupt)).toBeNull();
     });
 
     it('drops the impedance when the scale marks the field as meaningless', () => {
       const noImpedance = Buffer.from(SETTLED, 'hex');
       noImpedance[20] = 0;
-      const reading = makeAdapter().parseNotification(noImpedance);
+      const reading = makeAdapter().parseNotification(withChecksum(noImpedance));
       expect(reading!.weight).toBeCloseTo(72.53, 2);
       expect(reading!.impedance).toBe(0);
     });

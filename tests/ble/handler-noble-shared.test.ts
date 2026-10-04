@@ -169,6 +169,40 @@ describe('createNobleHandler getState injection (#181)', () => {
     expect(listeners.get('data') ?? []).toHaveLength(0);
   });
 
+  it('scanDevices matches on the same advertisement fields as the read path (B-14)', async () => {
+    // The read path hands matches() the address and the service data; this
+    // tool did not, so an adapter that matches on either (the MAC echo of an
+    // anonymous ES-CS20M, #376) was reported as unrecognised by `npm run scan`,
+    // the tool users run to fill in ble.force_scale_adapter.
+    const fake = new FakeNoble();
+    const peripheral = {
+      id: 'aabbccddeeff',
+      address: 'aa:bb:cc:dd:ee:ff',
+      advertisement: {
+        localName: '',
+        serviceUuids: [],
+        serviceData: [{ uuid: 'fff0', data: Buffer.from([0x01]) }],
+      },
+    };
+    fake.startScanningAsync = vi.fn(async () => {
+      fake.emit('discover', peripheral);
+    });
+    const handler = createNobleHandler({
+      noble: fake as unknown as NobleApi,
+      getState: () => fake._state,
+    });
+    const adapter = {
+      name: 'NeedsAddressAndServiceData',
+      matches: (info: { address?: string; serviceData?: unknown[] }) =>
+        info.address === 'AA:BB:CC:DD:EE:FF' && (info.serviceData?.length ?? 0) > 0,
+    };
+
+    const results = await handler.scanDevices([adapter as never], 1);
+
+    expect(results).toHaveLength(1);
+    expect(results[0].matchedAdapter).toBe('NeedsAddressAndServiceData');
+  });
+
   it('exposes the broadcastScan internal for both driver entrypoints', () => {
     const fake = new FakeNoble();
     const handler = createNobleHandler({

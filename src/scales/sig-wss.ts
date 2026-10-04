@@ -23,15 +23,27 @@ import { LBS_TO_KG } from '../ble/types.js';
  *   the weight is a useful cross-check on this decoder, not a caller for it.
  *
  * Layout, per the SIG specification:
- *   Byte  0    : Flags (uint8) - bit 0 imperial, bit 1 timestamp present
+ *   Byte  0    : Flags (uint8) - bit 0 imperial, bit 1 timestamp present,
+ *                bit 2 user id present
  *   Bytes 1-2  : Weight (uint16 LE, 0.005 kg or 0.01 lb per unit)
  *   Bytes 3-9  : Date Time, when flags bit 1 is set
+ *   next byte  : User ID, when flags bit 2 is set (0xFF = unknown user)
  */
 
 /** Flags bit 0: set means pounds, clear means kilograms. */
 const FLAG_IMPERIAL = 0x01;
 /** Flags bit 1: a 7-byte Date Time follows the weight. */
 const FLAG_TIMESTAMP = 0x02;
+/** Flags bit 2: a 1-byte User ID follows the Date Time (or the weight). */
+const FLAG_USER_ID = 0x04;
+/** User ID the SIG specification reserves for "unknown user". */
+const SIG_UNKNOWN_USER = 0xff;
+/**
+ * Weight field value meaning "Measurement Unsuccessful". spec: Weight Scale
+ * Service v1.0.0 (2014-10-21), section 3.2.1.2. Time Stamp and User ID may
+ * still be present in such a frame; every other optional field is disabled.
+ */
+const SIG_MEASUREMENT_UNSUCCESSFUL = 0xffff;
 
 /** Byte length of the SIG Date Time structure. */
 const DATE_TIME_LEN = 7;
@@ -94,13 +106,41 @@ export interface SigWeightMeasurement {
    * to skip its own conversion) cannot export pounds as kilograms, a 2.2x
    * error.
    *
-   * Undefined only when the frame is too short to carry the field. A zero is
-   * returned as zero rather than swallowed: whether a zero weight is a stub or
-   * a measurement is the caller's rule, not this decoder's.
+   * Undefined when the frame is too short to carry the field, or when it
+   * carries the 0xFFFF "Measurement Unsuccessful" sentinel (review C-10). A
+   * zero is returned as zero rather than swallowed: whether a zero weight is a
+   * stub or a measurement is the caller's rule, not this decoder's.
    */
   weightKg?: number;
   /** Measurement time, when the frame carries a usable Date Time. */
   timestamp?: Date;
+  /**
+   * The scale's user slot the measurement was taken for, when the frame carries
+   * a User ID other than the reserved "unknown user" 0xFF.
+   */
+  userIndex?: number;
+}
+
+/**
+ * Earliest year a scale's own clock is believed (ADR D027).
+ *
+ * A scale whose clock was never set (fresh batteries, no vendor app since)
+ * counts from its firmware default, a date years in the past: 2000 on some,
+ * the start of a vendor epoch on others (Medisana counts from 2010). Passed on,
+ * such a stamp turns every live weigh-in into a stored record from long ago,
+ * which the runtime would hold back from every live exporter. No weigh-in a
+ * scale replays to this project predates it.
+ */
+const MIN_TRUSTED_YEAR = 2015;
+
+/**
+ * The frame's own measurement time, or undefined when the scale's clock cannot
+ * be trusted (see MIN_TRUSTED_YEAR). Only a time this returns belongs in
+ * `ScaleReading.timestamp`.
+ */
+export function trustedScaleTime(ts: Date | undefined): Date | undefined {
+  if (!ts || Number.isNaN(ts.getTime())) return undefined;
+  return ts.getFullYear() >= MIN_TRUSTED_YEAR ? ts : undefined;
 }
 
 /**
@@ -113,13 +153,23 @@ export function parseSigWeightMeasurement(data: Buffer): SigWeightMeasurement {
 
   const flags = data[0];
   const isKg = (flags & FLAG_IMPERIAL) === 0;
-  const result: SigWeightMeasurement = {
-    weightKg: data.readUInt16LE(1) * (isKg ? 0.005 : 0.01 * LBS_TO_KG),
-  };
+  const raw = data.readUInt16LE(1);
+  const result: SigWeightMeasurement = {};
+  // The sentinel is a raw field value in either unit. Decoded it was 327.675 kg
+  // (or 297 kg in pounds), a plausible weight that every caller would export.
+  if (raw !== SIG_MEASUREMENT_UNSUCCESSFUL) {
+    result.weightKg = raw * (isKg ? 0.005 : 0.01 * LBS_TO_KG);
+  }
 
+  let offset = 3;
   if (flags & FLAG_TIMESTAMP) {
-    const ts = parseSigDateTime(data, 3);
+    const ts = parseSigDateTime(data, offset);
     if (ts) result.timestamp = ts;
+    offset += DATE_TIME_LEN;
+  }
+  if (flags & FLAG_USER_ID && offset < data.length) {
+    const user = data[offset];
+    if (user !== SIG_UNKNOWN_USER) result.userIndex = user;
   }
 
   return result;

@@ -85,7 +85,9 @@ function hasOwnMacEcho(device: BleDeviceInfo): boolean {
  *     after subscribe, before anyone steps on), byte[5]=0x00 off
  *   - Message ID 0x14 (weight frame): status at [5], weight at [8-9], optional
  *     resistance at [10-11]
- *   - Message ID 0x15 (extended frame): resistance at bytes [9-10]
+ *   - Message ID 0x15 (STORED offline record, not a live "extended frame"):
+ *     resistance at bytes [9-10]; the adapter still keeps that resistance,
+ *     see the 0x15 branch below
  *   - Weight at [8-9] big-endian uint16 / 100 (kg)
  *   - Complete on a 0x14 final (status low nibble 1) or on the 0x11 power-off
  *
@@ -133,7 +135,9 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
    *   [8-9]    weight, big-endian uint16 / 100 (kg)
    *   [10-11]  resistance, big-endian uint16 (optional)
    *
-   * ID 0x15 - extended frame:
+   * ID 0x15 - stored offline record (an earlier weigh-in, not a live frame;
+   * per renpho-escs20m protocol.py and a third-party capture of seven
+   * records, payload [6:10] is the seconds since that weigh-in):
    *   [9-10]   resistance, big-endian uint16
    */
   parseNotification(data: Buffer): ScaleReading | null {
@@ -165,7 +169,10 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
     }
 
     if (msgId === 0x15) {
-      // Extended frame - resistance only
+      // A stored offline record, which the original port read as an "extended
+      // frame". Keeping its resistance attaches an earlier weigh-in's value to
+      // the live weight; that change is tracked separately and deliberately
+      // not made here.
       if (data.length >= 11) {
         this.resistance = data.readUInt16BE(9);
       }

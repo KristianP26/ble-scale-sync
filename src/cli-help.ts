@@ -3,7 +3,7 @@
  *
  * Kept out of index.ts and run.ts so both print the same options and
  * environment list, and so the dispatcher can answer --help without importing
- * the run path (which builds the 33-adapter registry and the exporter registry
+ * the run path (which builds the scale adapter registry and the exporter registry
  * at module evaluation).
  */
 
@@ -14,7 +14,7 @@ const COMMANDS: readonly string[] = [
   '  start                  Run the sync flow',
   '  setup                  Interactive setup wizard',
   '  setup-garmin [args]    Garmin Connect authentication (needs Python 3)',
-  '  setup-strava           Strava OAuth token setup',
+  '  setup-strava [--user]  Strava OAuth token setup (--user <name> with several users)',
   '  scan                   Discover nearby BLE devices',
   '  diagnose [MAC]         BLE diagnostic dump (services, characteristics, flags)',
   '  validate               Validate config.yaml and exit',
@@ -24,7 +24,7 @@ const COMMANDS: readonly string[] = [
 
 const OPTIONS: readonly string[] = [
   '  -c, --config <path>  Path to config.yaml (default: ./config.yaml).',
-  '                       Accepted by the run path, by validate and by setup.',
+  '                       Accepted by the run path, validate, setup, scan and diagnose.',
   '  -h, --help           Show this help message',
   '  -v, --version        Print the version and exit',
 ];
@@ -49,7 +49,7 @@ function printOptionsAndEnv(): void {
   console.log('Options:');
   for (const line of OPTIONS) console.log(line);
   console.log('');
-  console.log('Environment overrides (always applied, even with config.yaml):');
+  console.log('Environment overrides (from the real environment; ignored with a warning in .env):');
   for (const line of ENV_OVERRIDES) console.log(line);
 }
 

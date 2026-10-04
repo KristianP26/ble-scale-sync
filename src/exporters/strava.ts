@@ -8,7 +8,16 @@ import type { StravaConfig } from './config.js';
 import { withRetry, httpError, httpHealthcheck } from '../utils/retry.js';
 import { errMsg } from '../utils/error.js';
 import { cliCommand } from '../cli-invocation.js';
+import { atomicWrite } from '../config/write.js';
+import { configDir } from '../config/paths.js';
+import { resolveTokenDir } from '../config/token-dirs.js';
 const log = createLogger('Strava');
+
+/**
+ * Seconds before `expires_at` at which the access token is refreshed anyway,
+ * so the token cannot run out between this check and the PUT that uses it.
+ */
+const TOKEN_REFRESH_MARGIN_SEC = 300;
 
 interface StravaTokens {
   access_token: string;
@@ -135,11 +144,14 @@ export class StravaExporter implements Exporter {
 
   private async ensureFreshToken(tokens: StravaTokens): Promise<string> {
     const now = Math.floor(Date.now() / 1000);
-    if (tokens.expires_at > now) {
+    // Refresh ahead of the deadline: a token with two seconds left passes a
+    // bare `> now` check and expires before the PUT lands, which answers 401,
+    // a non-retryable failure (F-14).
+    if (tokens.expires_at - TOKEN_REFRESH_MARGIN_SEC > now) {
       return tokens.access_token;
     }
 
-    log.info('Access token expired, refreshing...');
+    log.info('Access token expired or about to, refreshing...');
     const response = await fetch('https://www.strava.com/oauth/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -173,16 +185,29 @@ export class StravaExporter implements Exporter {
     return updated.access_token;
   }
 
+  /**
+   * Strava invalidates the old refresh token the moment it returns a new one,
+   * so this write must not lose it: atomicWrite goes through a fresh 0600 tmp
+   * file and a rename. The old in-place writeFileSync could truncate the file
+   * and then fail, and its `mode` applied only when the file was created, so a
+   * token file that already existed as 0644 stayed readable to other accounts.
+   */
   private saveTokens(tokens: StravaTokens): void {
     const tokenPath = this.tokenFilePath();
     const dir = path.dirname(tokenPath);
     if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
-    fs.writeFileSync(tokenPath, JSON.stringify(tokens, null, 2) + '\n', { mode: 0o600 });
+    atomicWrite(tokenPath, JSON.stringify(tokens, null, 2) + '\n');
   }
 
+  /**
+   * A relative token_dir is next to config.yaml, not in the working directory
+   * (F-11), the same directory `setup-strava` writes to. Config loading
+   * already made it absolute; this covers an entry built directly from the
+   * YAML (the wizard's connectivity test).
+   */
   private tokenFilePath(): string {
-    return path.join(this.config.tokenDir, 'strava_tokens.json');
+    return path.join(resolveTokenDir(this.config.tokenDir, configDir()), 'strava_tokens.json');
   }
 }

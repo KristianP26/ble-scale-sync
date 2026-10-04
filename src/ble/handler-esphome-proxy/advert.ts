@@ -50,14 +50,43 @@ export function extractBytes(entry: EsphomeServiceData): Buffer {
   return Buffer.alloc(0);
 }
 
+/**
+ * True for a service or manufacturer data entry that still carries its payload.
+ *
+ * esphome-native-api 1.3.6 maps a legacy advertisement (proxy API older than
+ * 1.9, which never gets raw advertisements) with
+ * `.map(sd => sd.uuid = ensureFullUuid(sd.uuid))`. That returns the assigned
+ * UUID string rather than the entry, so on such a proxy both lists arrive as
+ * bare strings and the bytes are already gone before we see them (B-02).
+ */
+function isDataEntry(entry: unknown): entry is EsphomeServiceData {
+  return (
+    typeof entry === 'object' &&
+    entry !== null &&
+    typeof (entry as { uuid?: unknown }).uuid === 'string'
+  );
+}
+
+/**
+ * Whether the library dropped the payload of any data entry in `ad` (see
+ * isDataEntry). Lets the pool tell the user once, instead of a broadcast scale
+ * on an old proxy just never producing a reading.
+ */
+export function hasLostAdvertisementData(ad: EsphomeBleAdvertisement): boolean {
+  const entries: unknown[] = [...(ad.serviceDataList ?? []), ...(ad.manufacturerDataList ?? [])];
+  return entries.some((e) => !isDataEntry(e));
+}
+
 /** Build a BleDeviceInfo from an ESPHome advertisement payload. */
 export function toBleDeviceInfo(ad: EsphomeBleAdvertisement): BleDeviceInfo {
   const info: BleDeviceInfo = {
     localName: ad.name || '',
     address: formatMacAddress(ad.address),
-    serviceUuids: (ad.serviceUuidsList ?? []).map(normalizeUuid),
+    serviceUuids: (ad.serviceUuidsList ?? [])
+      .filter((u): u is string => typeof u === 'string')
+      .map(normalizeUuid),
   };
-  const md = ad.manufacturerDataList?.[0];
+  const md = (ad.manufacturerDataList ?? []).find(isDataEntry);
   if (md) {
     const id = parseManufacturerId(md.uuid);
     const data = extractBytes(md);
@@ -65,8 +94,9 @@ export function toBleDeviceInfo(ad: EsphomeBleAdvertisement): BleDeviceInfo {
       info.manufacturerData = { id, data };
     }
   }
-  if (ad.serviceDataList && ad.serviceDataList.length > 0) {
-    info.serviceData = ad.serviceDataList
+  const serviceData = (ad.serviceDataList ?? []).filter(isDataEntry);
+  if (serviceData.length > 0) {
+    info.serviceData = serviceData
       .map((sd) => ({ uuid: normalizeUuid(sd.uuid), data: extractBytes(sd) }))
       .filter((sd) => sd.data.length > 0);
   }

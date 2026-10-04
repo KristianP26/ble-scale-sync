@@ -67,6 +67,7 @@ function makeCtx(overrides: Partial<AppContext> = {}): AppContext {
     mqttProxy: undefined,
     esphomeProxy: undefined,
     scaleMac: 'AA:BB:CC:DD:EE:FF',
+    weightUnit: 'lbs',
     signal: new AbortController().signal,
     abortApp: vi.fn(),
     config: {
@@ -121,6 +122,7 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
       targetMac: ctx.scaleMac,
       profile: { __profile: 'sentinel' },
       scaleAuth: { pin: 1234, userIndex: 2 },
+      weightUnit: 'lbs',
     });
   });
 
@@ -146,7 +148,15 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
       targetMac: ctx.scaleMac,
       profile: { __profile: 'sentinel' },
       scaleAuth: { pin: 1234, userIndex: 2 },
+      weightUnit: 'lbs',
     });
+
+    // The unit is read again on reload, like everything else the watcher gets.
+    (ctx as { weightUnit: string }).weightUnit = 'kg';
+    bundle.onSourceReload?.();
+    expect(plan.watcher.updateConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({ weightUnit: 'kg' }),
+    );
   });
 
   it('poll plan: PollReadingSource + watchdog-wired hooks', async () => {

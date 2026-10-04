@@ -134,32 +134,58 @@ export function resolveRuntimeConfig(config: AppConfig): ResolvedRuntimeConfig {
 // --- Exporter resolution ---
 
 /**
- * Merge user-level exporters with global exporters.
- * User exporters come first; global exporters are appended (deduped by type).
+ * Where one resolved exporter entry came from: which list, and its position in
+ * that list. The retry queue stores this (never the entry itself, which holds
+ * credentials, D015), so a failed export of the SECOND webhook is retried
+ * through the second webhook and not the first (D029).
+ */
+export interface ExporterSlot {
+  list: 'user' | 'global';
+  index: number;
+}
+
+export interface ResolvedExporterEntry extends ExporterSlot {
+  entry: ExporterEntry;
+}
+
+/**
+ * The exporters one user's readings go to, with where each came from (D029).
+ *
+ * Global and per-user lists are MERGED: a global exporter applies to everyone,
+ * and a user's own entries are added to it. The one exception is a type the
+ * user configured for themselves: then only the user's entries of that type
+ * apply to them, so a personal Garmin replaces the household one rather than
+ * uploading the weigh-in twice into two accounts.
+ *
+ * Several entries of one type in one list are all kept and all exported to
+ * (two webhooks, two InfluxDB buckets). An earlier version kept only the first
+ * global entry of a type and silently dropped the rest (G-14).
+ */
+export function resolveExporterSlotsForUser(
+  config: AppConfig,
+  user: UserConfig,
+): ResolvedExporterEntry[] {
+  const resolved: ResolvedExporterEntry[] = [];
+  const ownTypes = new Set<string>();
+
+  (user.exporters ?? []).forEach((entry, index) => {
+    resolved.push({ entry, list: 'user', index });
+    ownTypes.add(entry.type);
+  });
+
+  (config.global_exporters ?? []).forEach((entry, index) => {
+    if (!ownTypes.has(entry.type)) resolved.push({ entry, list: 'global', index });
+  });
+
+  return resolved;
+}
+
+/**
+ * Merge user-level exporters with global exporters (D029): user entries first,
+ * then every global entry whose type the user does not configure themselves.
  */
 export function resolveExportersForUser(config: AppConfig, user: UserConfig): ExporterEntry[] {
-  const entries: ExporterEntry[] = [];
-  const seenTypes = new Set<string>();
-
-  // User-level exporters first
-  if (user.exporters) {
-    for (const entry of user.exporters) {
-      entries.push(entry);
-      seenTypes.add(entry.type);
-    }
-  }
-
-  // Global exporters (skip if user already has one of the same type)
-  if (config.global_exporters) {
-    for (const entry of config.global_exporters) {
-      if (!seenTypes.has(entry.type)) {
-        entries.push(entry);
-        seenTypes.add(entry.type);
-      }
-    }
-  }
-
-  return entries;
+  return resolveExporterSlotsForUser(config, user).map((r) => r.entry);
 }
 
 // --- Convenience: single-user resolution ---

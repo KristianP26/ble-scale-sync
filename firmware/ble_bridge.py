@@ -8,6 +8,7 @@ import aioble
 import asyncio
 import bluetooth
 import board
+import time
 
 _ble = bluetooth.BLE()
 
@@ -24,19 +25,38 @@ _BT_BASE_SUFFIX = "00001000800000805f9b34fb"
 CRASH_FLOOR_LARGEST = 1024
 CRASH_FLOOR_FREE = 2048
 
+# Time budget handling for connect(budget_ms=...). The connect attempts leave
+# this much of the budget for service discovery, and an attempt with less than
+# CONNECT_MIN_ATTEMPT_MS left is not started at all.
+CONNECT_DISCOVERY_RESERVE_MS = 2000
+CONNECT_MIN_ATTEMPT_MS = 1000
+
+
+# ESP-IDF MALLOC_CAP_INTERNAL (components/heap/include/esp_heap_caps.h). The
+# esp32 module only names HEAP_DATA (MALLOC_CAP_8BIT) and HEAP_EXEC, but
+# idf_heap_info() takes any capability mask.
+_MALLOC_CAP_INTERNAL = 1 << 11
+
 
 def _read_idf_heap():
-    """Return (free, largest) ESP-IDF data-heap bytes on-device, None off-device.
+    """Return (free, largest) internal ESP-IDF data-heap bytes on-device, None off-device.
 
     NimBLE allocates its connection structures from the ESP-IDF heap, which is
     separate from the MicroPython GC heap. Reading it requires the frozen
     `esp32` builtin, absent on a host, so this returns None there and every
     caller treats None as "cannot read, do not gate" (#139).
+
+    Only internal RAM is counted. NimBLE allocates with MALLOC_CAP_INTERNAL |
+    MALLOC_CAP_8BIT (ESP-IDF's default BT_NIMBLE_MEM_ALLOC_MODE_INTERNAL, which
+    MicroPython's sdkconfig does not change), while the SPIRAM builds add PSRAM
+    to the IDF heap as an 8-bit region. HEAP_DATA alone would count megabytes
+    of PSRAM on an S3 board. On boards without PSRAM every 8-bit region is
+    internal, so the result there is the same as with HEAP_DATA.
     """
     try:
         import esp32
 
-        regions = esp32.idf_heap_info(esp32.HEAP_DATA)
+        regions = esp32.idf_heap_info(esp32.HEAP_DATA | _MALLOC_CAP_INTERNAL)
         free = sum(r[1] for r in regions)
         largest = max(r[2] for r in regions)
         return (free, largest)
@@ -75,6 +95,17 @@ def _norm_uuid(uuid):
     if s.startswith("UUID('") and s.endswith("')"):
         return s[6:-2].replace("-", "").lower()
     return s.lower().replace("-", "")
+
+
+def _le_hex(buf, start, n):
+    """Hex of buf[start:start + n] in reversed (big-endian) byte order.
+
+    Little-endian wire UUIDs need reversing, but MicroPython rejects any slice
+    with a step other than 1 on bytes (NotImplementedError from bytes_subscr), so
+    a reversing step slice works on CPython and throws on the device, dropping
+    the whole scan batch. Integer indexing and `%02x` are supported everywhere.
+    """
+    return "".join("%02x" % buf[start + k] for k in range(n - 1, -1, -1))
 
 
 def _parse_raw_entry(addr_bytes, addr_type, rssi, raw):
@@ -125,7 +156,7 @@ def _parse_raw_entry(addr_bytes, addr_type, rssi, raw):
                 services.append("%08x" % val + _BT_BASE_SUFFIX)
         elif ad_type == 0x07 or ad_type == 0x06:  # 128-bit Service UUIDs
             for j in range(0, len(ad_payload) - 15, 16):
-                services.append(ad_payload[j:j + 16][::-1].hex())
+                services.append(_le_hex(ad_payload, j, 16))
         elif ad_type == 0x16 and len(ad_payload) >= 2:  # Service Data — 16-bit
             uuid = "%04x" % (ad_payload[0] | (ad_payload[1] << 8))
             service_data.append({"uuid": uuid, "data": ad_payload[2:].hex()})
@@ -139,7 +170,7 @@ def _parse_raw_entry(addr_bytes, addr_type, rssi, raw):
             uuid = "%08x" % val + _BT_BASE_SUFFIX
             service_data.append({"uuid": uuid, "data": ad_payload[4:].hex()})
         elif ad_type == 0x21 and len(ad_payload) >= 16:  # Service Data — 128-bit
-            uuid = ad_payload[0:16][::-1].hex()
+            uuid = _le_hex(ad_payload, 0, 16)
             service_data.append({"uuid": uuid, "data": ad_payload[16:].hex()})
         elif ad_type == 0xFF and length >= 3:  # Manufacturer Specific
             mfr_id = ad_payload[0] | (ad_payload[1] << 8)
@@ -162,21 +193,57 @@ def _parse_raw_entry(addr_bytes, addr_type, rssi, raw):
     return entry
 
 
+# Upper bound on distinct service data UUIDs kept per MAC in a seen entry. A
+# real peripheral carries one or two; the cap keeps a UUID-rotating neighbour
+# from growing a single entry across the whole SEEN_RESET_CYCLES window.
+_MAX_SERVICE_DATA_UUIDS = 8
+
+
+def _merge_service_data(cur, new):
+    """Latest-wins per UUID: replace a known UUID's payload, append a new UUID
+    while under _MAX_SERVICE_DATA_UUIDS. Mutates and returns `cur`."""
+    for item in new:
+        replaced = False
+        for k in range(len(cur)):
+            if cur[k]["uuid"] == item["uuid"]:
+                cur[k] = item
+                replaced = True
+                break
+        if not replaced and len(cur) < _MAX_SERVICE_DATA_UUIDS:
+            cur.append(item)
+    return cur
+
+
 def _merge_entry(seen, entry):
-    """Merge a parsed device entry into the seen dict (dedup by MAC, strongest RSSI)."""
+    """Merge a parsed device entry into the seen dict (one entry per MAC).
+
+    Fields that change between frames are latest-wins (review H-06): RSSI is
+    always the newest frame's, and manufacturer data and service data (per
+    UUID) are replaced by the newest frame that carries them. A frame without
+    the field (a name-only scan response, say) leaves the stored value alone.
+    A broadcast scale publishes its weight in these fields and changes them
+    while the user stands on it, so first-wins published the first, unstable
+    frame of the window and dropped the stable or impedance frame after it.
+
+    Name and services are static per device and are only filled in when still
+    missing.
+    """
     mac = entry["address"]
     if mac in seen:
-        if entry["rssi"] > seen[mac]["rssi"]:
-            seen[mac]["rssi"] = entry["rssi"]
-        if entry["name"] and not seen[mac]["name"]:
-            seen[mac]["name"] = entry["name"]
-        if entry.get("manufacturer_data") and not seen[mac].get("manufacturer_data"):
-            seen[mac]["manufacturer_id"] = entry["manufacturer_id"]
-            seen[mac]["manufacturer_data"] = entry["manufacturer_data"]
-        if entry.get("services") and not seen[mac].get("services"):
-            seen[mac]["services"] = entry["services"]
-        if entry.get("service_data") and not seen[mac].get("service_data"):
-            seen[mac]["service_data"] = entry["service_data"]
+        cur = seen[mac]
+        cur["rssi"] = entry["rssi"]
+        if entry["name"] and not cur["name"]:
+            cur["name"] = entry["name"]
+        if entry.get("manufacturer_data"):
+            cur["manufacturer_id"] = entry["manufacturer_id"]
+            cur["manufacturer_data"] = entry["manufacturer_data"]
+        if entry.get("services") and not cur.get("services"):
+            cur["services"] = entry["services"]
+        if entry.get("service_data"):
+            if cur.get("service_data"):
+                _merge_service_data(cur["service_data"], entry["service_data"])
+            else:
+                cur["service_data"] = entry["service_data"]
     else:
         seen[mac] = entry
 
@@ -267,8 +334,9 @@ class BleBridge:
     async def scan(self, duration_ms=None):
         """Scan for BLE peripherals using raw BLE API (batch mode).
 
-        Deduplicates by address, keeps strongest RSSI but updates manufacturer
-        data from any advertisement that carries it.
+        Deduplicates by address. RSSI, manufacturer data and service data are
+        latest-wins across the window (raw_results keeps arrival order), so a
+        broadcast scale is reported with its newest frame (see _merge_entry).
         """
         if duration_ms is None:
             duration_ms = board.SCAN_DURATION_MS
@@ -337,7 +405,18 @@ class BleBridge:
 
         IRQ handler accumulates raw results; call drain_results() periodically
         to process and publish them.
+
+        Idempotent: a second start while the scan runs is a no-op. Two resume
+        paths can end the same GATT session (the notify loop or session guard
+        plus a host disconnect, or the scan loop backstop), and NimBLE rejects a
+        second gap_scan with EALREADY (EBUSY during a connect), which MicroPython
+        raises as OSError. Never raises: a failed start leaves the bridge not
+        streaming so the scan loop can retry, instead of killing the caller.
+
+        Returns True when the scan is running.
         """
+        if self._streaming:
+            return True
         import gc
         gc.collect()
         self._streaming = True
@@ -364,10 +443,20 @@ class BleBridge:
                     self._cap_logged = True
                     print(f"Streaming scan cap reached ({board.MAX_SCAN_ENTRIES}), ignoring until drain")
 
-        _ble.active(True)
-        _ble.irq(_irq)
-        _ble.gap_scan(0, 100000, 30000, True)  # duration=0 → indefinite
+        try:
+            _ble.active(True)
+            _ble.irq(_irq)
+            _ble.gap_scan(0, 100000, 30000, True)  # duration=0 → indefinite
+        except Exception as e:
+            self._streaming = False
+            print("Streaming scan start failed: %s" % (str(e) or type(e).__name__))
+            return False
         print("Streaming scan started")
+        return True
+
+    def is_streaming(self):
+        """True while the indefinite streaming scan is running."""
+        return self._streaming
 
     def has_pending_scale_mac(self, macs):
         """True when the streaming IRQ buffer holds an advertisement from a
@@ -378,8 +467,13 @@ class BleBridge:
     def drain_results(self):
         """Drain accumulated raw scan results and return filtered device list.
 
-        Merges into _seen dict for cross-cycle dedup. Clears _seen every
-        SEEN_RESET_CYCLES drains to age out disappeared devices.
+        Merges into _seen dict for cross-cycle dedup: one entry per MAC, so
+        memory and the published list grow with devices, not frames, and a
+        device that advertises slower than PUBLISH_INTERVAL_MS stays listed
+        between its frames. Clears _seen every SEEN_RESET_CYCLES drains to age
+        out disappeared devices. Changing fields are latest-wins (_merge_entry),
+        so every drain publishes the newest frame seen for each MAC, not the
+        first one of the SEEN_RESET_CYCLES window (review H-06).
         """
         # Atomically swap raw_results (IRQ appends are non-preemptive)
         raw = self._raw_results
@@ -425,11 +519,21 @@ class BleBridge:
             self._raw_results = []
             print("Streaming scan stopped")
 
-    async def connect(self, address, addr_type=0):
+    async def connect(self, address, addr_type=0, budget_ms=None):
         """Connect to a BLE peripheral by MAC address, discover services/chars.
 
         addr_type: 0 = public, 1 = random (from scan results).
+        budget_ms: optional upper bound for the whole call, address type
+        fallback and discovery included. The host waits a fixed time for the
+        answer to its connect command; a success after that is torn down by the
+        host's own cleanup, so every attempt is clamped to what is left and the
+        call gives up rather than overrun. None keeps the board timeouts.
         """
+        started = time.ticks_ms() if budget_ms is not None else 0
+
+        def _left_ms():
+            return budget_ms - time.ticks_diff(time.ticks_ms(), started)
+
         _ble.active(True)
         # The streaming scan installs the firmware's own _ble.irq() handler on
         # the shared BLE singleton, which replaces aioble's central dispatcher.
@@ -506,14 +610,28 @@ class BleBridge:
         # must run (#231).
         self._conn = None
         last_exc = None
+        budget_exhausted = False
         for probe, use_type in enumerate(_addr_type_probe_order(addr_type)):
             aioble_type = aioble.ADDR_RANDOM if use_type else aioble.ADDR_PUBLIC
             device = aioble.Device(aioble_type, addr_bytes)
             type_retries = retries if probe == 0 else 1
             for attempt in range(1, type_retries + 1):
+                attempt_timeout_ms = timeout_ms
+                attempt_scan_ms = scan_ms
+                if budget_ms is not None:
+                    allowed = _left_ms() - CONNECT_DISCOVERY_RESERVE_MS
+                    if allowed < CONNECT_MIN_ATTEMPT_MS:
+                        print(
+                            "GATT connect to %s: %d ms budget used up, no further attempt"
+                            % (address, budget_ms)
+                        )
+                        budget_exhausted = True
+                        break
+                    attempt_timeout_ms = min(timeout_ms, allowed)
+                    attempt_scan_ms = min(scan_ms, allowed)
                 try:
                     self._conn = await device.connect(
-                        timeout_ms=timeout_ms, scan_duration_ms=scan_ms
+                        timeout_ms=attempt_timeout_ms, scan_duration_ms=attempt_scan_ms
                     )
                     last_exc = None
                     break
@@ -526,7 +644,7 @@ class BleBridge:
                     if attempt < type_retries:
                         gc.collect()
                         await asyncio.sleep_ms(500)
-            if self._conn is not None:
+            if self._conn is not None or budget_exhausted:
                 break
             # Try the opposite address type on any connect failure, not only a
             # TimeoutError. A misreported type is the usual reason a known-awake
@@ -537,6 +655,11 @@ class BleBridge:
             gc.collect()
         if self._conn is None and last_exc is not None:
             raise last_exc
+        if self._conn is None:
+            # Only reachable through the budget: no attempt was started at all.
+            raise OSError(
+                "GATT connect to %s: no time left in the %d ms budget" % (address, budget_ms)
+            )
         self._chars = {}
 
         # aioble's services()/characteristics() return ClientDiscover async
@@ -577,8 +700,13 @@ class BleBridge:
                     chars_info.append({"uuid": uuid_str, "properties": props})
             return chars_info
 
+        discover_s = 10
+        if budget_ms is not None:
+            # Whatever the attempts left over, but never less than half a second:
+            # a connected peer is worth that much of an overrun.
+            discover_s = max(0.5, min(10, _left_ms() / 1000))
         try:
-            chars_info = await asyncio.wait_for(_discover_chars(), 10)
+            chars_info = await asyncio.wait_for(_discover_chars(), discover_s)
         except asyncio.TimeoutError:
             print(f"Service discovery timed out for {address}")
             await self.disconnect()

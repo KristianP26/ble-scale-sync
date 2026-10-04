@@ -6,6 +6,7 @@ import {
   defaultProfile,
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
+import { WEIGHT_ONLY_HOLD_MS } from '../../src/scales/body-comp-helpers.js';
 
 function makeAdapter() {
   return new ExcelvanCF369Adapter();
@@ -103,15 +104,37 @@ describe('ExcelvanCF369Adapter', () => {
       expect(adapter.isComplete({ weight: 80, impedance: 0 })).toBe(true);
     });
 
-    it('returns false when fat is not set (incomplete frame)', () => {
+    it('completes a weigh-in without composition after a short hold (D-07, D028)', () => {
+      // A weigh-in the scale could not analyse (socks, a child) used to be
+      // refused here, so the session never produced a reading and ran into its
+      // timeout. Now the weight completes, waits WEIGHT_ONLY_HOLD_MS for a frame
+      // with composition, and resolves weight-only when none comes.
       const adapter = makeAdapter();
       const buf = Buffer.alloc(14);
       buf[0] = 0xcf;
       buf.writeUInt16BE(800, 4);
       buf[6] = 0xff;
-      adapter.parseNotification(buf);
+      const reading = adapter.parseNotification(buf)!;
 
-      expect(adapter.isComplete({ weight: 80, impedance: 0 })).toBe(false);
+      expect(adapter.isComplete(reading)).toBe(true);
+      expect(adapter.isFinal(reading)).toBe(false);
+      expect(adapter.completionHoldMs).toBe(WEIGHT_ONLY_HOLD_MS);
+    });
+
+    it('resolves at once on the frame that carries composition', () => {
+      const adapter = makeAdapter();
+      const buf = Buffer.alloc(14);
+      buf[0] = 0xcf;
+      buf.writeUInt16BE(800, 4);
+      buf.writeUInt16BE(225, 6);
+      buf[8] = 35;
+      buf.writeUInt16BE(400, 9);
+      buf[11] = 8;
+      buf.writeUInt16BE(550, 12);
+      const reading = adapter.parseNotification(buf)!;
+
+      expect(adapter.isComplete(reading)).toBe(true);
+      expect(adapter.isFinal(reading)).toBe(true);
     });
 
     it('returns false when weight is 0', () => {
@@ -216,6 +239,9 @@ describe('ExcelvanCF369Adapter session boundary (#394)', () => {
     buf[0] = 0xcf; // marker
     buf.writeUInt16BE(800, 4);
     buf.writeUInt16BE(fatTenths, 6);
+    // bone = 3.5 kg, as in the frames above. Left at 0 it is not a measurement,
+    // and buildPayload now discards the whole composition for it (D028).
+    buf[8] = 35;
     buf.writeUInt16BE(400, 9);
     buf.writeUInt16BE(550, 12);
     return buf;

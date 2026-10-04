@@ -108,6 +108,37 @@ export class MqttBleDevice implements BleDevice {
   }
 }
 
+interface ProxyError {
+  message: string;
+  op?: string;
+  address?: string;
+}
+
+/**
+ * Read an `error` payload from the ESP32 proxy. Current firmware sends JSON
+ * `{ op, message, address?, uuid? }`; older firmware sends plain text, and
+ * MicroPython exceptions with an empty str() (asyncio.TimeoutError) produce a
+ * blank payload, which gets a placeholder so the log is not a dangling
+ * "ESP32 error:".
+ */
+function parseProxyError(raw: string): ProxyError {
+  if (raw.startsWith('{')) {
+    try {
+      const data = JSON.parse(raw) as Record<string, unknown>;
+      if (typeof data.op === 'string') {
+        return {
+          op: data.op,
+          message: typeof data.message === 'string' && data.message ? data.message : '(no detail)',
+          address: typeof data.address === 'string' ? data.address : undefined,
+        };
+      }
+    } catch {
+      // Not JSON after all: treat it as legacy text below.
+    }
+  }
+  return { message: raw || '(no detail)' };
+}
+
 /** Send GATT connect command over MQTT and wait for the connected response with char list. */
 export async function mqttGattConnect(
   client: MqttClient,
@@ -142,11 +173,16 @@ export async function mqttGattConnect(
       resolveResponse(data as { chars: Array<{ uuid: string; properties: string[] }> });
     }
     if (topic === t.error) {
-      // Older firmware (and MicroPython exceptions like asyncio.TimeoutError
-      // whose str() is empty) can publish a blank payload — surface a
-      // placeholder so the host log is not a dangling "ESP32 error:".
-      const detail = payload.toString() || '(no detail)';
-      rejectResponse(new Error(`ESP32 error: ${detail}`));
+      const err = parseProxyError(payload.toString());
+      // Current firmware says which operation and device an error belongs to.
+      // The topic is shared, so a scan or auto-connect error, or one for a
+      // different scale, must not fail this connect. Plain-text payloads come
+      // from older firmware and keep the old meaning: this connect failed.
+      if (err.op !== undefined && err.op !== 'connect') return;
+      if (err.address !== undefined && err.address.toUpperCase() !== address.toUpperCase()) {
+        return;
+      }
+      rejectResponse(new Error(`ESP32 error: ${err.message}`));
     }
   };
   client.on('message', handler);

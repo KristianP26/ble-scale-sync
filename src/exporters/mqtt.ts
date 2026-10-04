@@ -80,7 +80,9 @@ export const mqttSchema: ExporterSchema = {
       label: 'Broker URL',
       type: 'string',
       required: true,
-      description: 'e.g., mqtts://broker.hivemq.com:8883',
+      // Not a public broker: readings are published retained on a predictable
+      // topic, so anyone subscribing there would get them.
+      description: 'Your own broker, e.g., mqtt://homeassistant.local:1883',
     },
     {
       key: 'topic',

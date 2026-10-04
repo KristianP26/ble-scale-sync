@@ -451,6 +451,37 @@ describe('waitForReading() — onConnected mode', () => {
     await expect(promise).resolves.toEqual(SAMPLE_BODY_COMP);
   });
 
+  it('hands the advertised device name to onConnected as ConnectionContext.deviceName', async () => {
+    const notifyChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([[NOTIFY_UUID, notifyChar]]);
+    const seen: Array<string | undefined> = [];
+    const adapter = createLegacyAdapter({
+      characteristics: [{ uuid: NOTIFY_UUID, type: 'notify' }],
+      onConnected: vi.fn(async (ctx: ConnectionContext) => {
+        seen.push(ctx.deviceName);
+      }),
+      parseNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
+    });
+
+    const promise = waitForRawReading(
+      charMap,
+      device,
+      adapter,
+      PROFILE,
+      '',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      '013197A1',
+    );
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+    notifyChar.triggerData(Buffer.from([0x01]));
+    await promise;
+    expect(seen[0]).toBe('013197A1');
+  });
+
   it('ConnectionContext.write sends data to the correct characteristic', async () => {
     const notifyChar = createMockChar();
     const writeChar = createMockChar();
@@ -978,6 +1009,37 @@ describe('waitForRawReading() history collection', () => {
     await expect(promise).rejects.toThrow('Scale disconnected before reading completed');
   });
 
+  // D027: history is decided by AGE. A scale that stamps its live frames too
+  // (the SIG Time Stamp flag) used to have its weigh-in buffered as history,
+  // and the session never ended on it: it waited for the scale to disconnect.
+  it('ends the session on a live frame the scale stamped seconds ago', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const stamped = new Date(Date.now() - 20_000);
+    const adapter = createLegacyAdapter({
+      parseNotification: vi
+        .fn()
+        .mockReturnValueOnce({ weight: 82, impedance: 500, timestamp: stamped }),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    notifyChar.triggerData(Buffer.from([0x01]));
+
+    // No disconnect: the stamped live frame alone must resolve the session.
+    const result = await promise;
+    expect(result.reading.weight).toBe(82);
+    expect(result.reading.timestamp).toBe(stamped);
+    expect(result.history).toBeUndefined();
+  });
+
   it('skips an incomplete timestamped reading (does not push to history)', async () => {
     const notifyChar = createMockChar();
     const writeChar = createMockChar();
@@ -990,7 +1052,13 @@ describe('waitForRawReading() history collection', () => {
     const adapter = createLegacyAdapter({
       parseNotification: vi
         .fn()
-        .mockReturnValueOnce({ weight: 70, impedance: 0, timestamp: new Date() })
+        // An hour old: a stamp of "now" is a live frame since D027, and this
+        // test is about an incomplete STORED record.
+        .mockReturnValueOnce({
+          weight: 70,
+          impedance: 0,
+          timestamp: new Date(Date.now() - 3600_000),
+        })
         .mockReturnValueOnce({ weight: 82, impedance: 500 }),
     });
 

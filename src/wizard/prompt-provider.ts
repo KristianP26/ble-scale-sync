@@ -47,6 +47,7 @@ export async function createRealPromptProvider(): Promise<PromptProvider> {
         choices: choices.map((c) => ({
           name: c.name,
           value: c.value,
+          checked: c.checked,
         })),
       });
     },

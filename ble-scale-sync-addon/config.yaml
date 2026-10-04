@@ -22,6 +22,12 @@ host_dbus: true
 privileged:
   - NET_ADMIN
   - NET_RAW
+# The last BLE recovery tier runs `rfkill block/unblock bluetooth`, which only
+# needs write access to this device node (the add-on already runs as root).
+# Without the mapping the tier fails on every install. The Supervisor skips a
+# path the host does not have, so this cannot stop the add-on from starting.
+devices:
+  - /dev/rfkill
 # The Supervisor's default AppArmor profile denies the D-Bus method calls this
 # add-on needs, so it dies on the very first `Hello` handshake to
 # org.freedesktop.DBus before any BLE scan starts. Running unconfined is what
@@ -32,6 +38,12 @@ privileged:
 # be tested in CI. See issue #271.
 apparmor: false
 hassio_api: true
+# run.sh reads the Mosquitto credentials from GET http://supervisor/services/mqtt
+# (mqtt_auto). The Supervisor answers 403 to any add-on that has not declared
+# the service here, so without this entry auto-detection could never succeed.
+# `want`, not `need`: MQTT is optional, a Garmin-only install has no broker.
+services:
+  - mqtt:want
 map:
   - share:rw
 options:
@@ -76,6 +88,7 @@ options:
   retry_failed_exports: true
   reset_bluetooth: true
   debug: false
+  update_check: true
   custom_config: false
 schema:
   scale_mac: str?
@@ -119,4 +132,5 @@ schema:
   retry_failed_exports: bool?
   reset_bluetooth: bool
   debug: bool
+  update_check: bool?
   custom_config: bool

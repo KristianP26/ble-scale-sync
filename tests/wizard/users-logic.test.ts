@@ -62,25 +62,9 @@ describe('validatePositiveNumber()', () => {
   });
 });
 
-// ─── Weight range lbs→kg conversion ──────────────────────────────────────
-
-describe('Weight range lbs→kg conversion', () => {
-  it('converts lbs to kg correctly', () => {
-    const lbs = 150;
-    const kg = Math.round((lbs / 2.20462) * 100) / 100;
-    expect(kg).toBeCloseTo(68.04, 1);
-  });
-
-  it('converts 100 lbs to kg', () => {
-    const kg = Math.round((100 / 2.20462) * 100) / 100;
-    expect(kg).toBeCloseTo(45.36, 1);
-  });
-
-  it('converts 220 lbs to kg', () => {
-    const kg = Math.round((220 / 2.20462) * 100) / 100;
-    expect(kg).toBeCloseTo(99.79, 1);
-  });
-});
+// The lbs -> kg conversion of the weight range is tested through the users
+// step itself (users-step.test.ts). A copy of the formula here could not fail
+// when the step's own conversion broke.
 
 // ─── Slug generation + preview ───────────────────────────────────────────
 

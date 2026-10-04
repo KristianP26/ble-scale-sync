@@ -270,7 +270,19 @@ describe('dispatchExports() reportsExports', () => {
       ...context,
       exportResults: [{ name: 'garmin', ok: false, error: 'timeout' }],
     });
-    expect(result.success).toBe(true);
+    // The notification is not a delivered export: it must not mask the failure.
+    expect(result.success).toBe(false);
+  });
+
+  it('decides success from the reporters when nothing else is configured', async () => {
+    const ok = await dispatchExports([reporter('ntfy')], SAMPLE_PAYLOAD, context);
+    expect(ok.success).toBe(true);
+    const failed = await dispatchExports(
+      [reporter('ntfy', { success: false, error: 'HTTP 500' })],
+      SAMPLE_PAYLOAD,
+      context,
+    );
+    expect(failed.success).toBe(false);
   });
 
   it('returns success false when the others and the reporter all fail', async () => {
@@ -297,10 +309,14 @@ describe('dispatchExports() reportsExports', () => {
 // ─── dispatchExports: historical reading + supportsBackdate ─────────────────
 
 describe('dispatchExports() historical reading filter', () => {
+  // D027: `historical` marks a stored record. A timestamp alone no longer
+  // does, because the processor stamps live readings with their measurement
+  // time too.
   const HIST_CTX: ExportContext = {
     userName: 'Dad',
     userSlug: 'dad',
     timestamp: new Date('2025-07-01T07:15:00Z'),
+    historical: true,
   };
 
   it('skips exporters without supportsBackdate on historical reading', async () => {
@@ -359,5 +375,81 @@ describe('dispatchExports() historical reading filter', () => {
     expect(result.success).toBe(true);
     expect(result.details).toEqual([]);
     expect(result.skipped).toBe(2);
+  });
+});
+
+// D027, F-04, F-06: the processor now sends the measurement time with EVERY
+// dispatch. The filter used to key on the mere presence of a timestamp, so
+// stamping a live reading would have silently stopped live MQTT and webhooks.
+describe('dispatchExports() live reading that carries its measurement time', () => {
+  it('does not treat a timestamp without `historical` as a stored record', async () => {
+    const garmin: Exporter = {
+      name: 'garmin',
+      supportsBackdate: true,
+      export: vi.fn(async () => ({ success: true as const })),
+    };
+    const mqtt: Exporter = {
+      name: 'mqtt',
+      export: vi.fn(async () => ({ success: true as const })),
+    };
+    const ctx: ExportContext = { userSlug: 'dad', timestamp: new Date('2026-10-04T07:00:00Z') };
+
+    const result = await dispatchExports([garmin, mqtt], SAMPLE_PAYLOAD, ctx);
+
+    expect(mqtt.export).toHaveBeenCalledWith(SAMPLE_PAYLOAD, ctx);
+    expect(garmin.export).toHaveBeenCalledWith(SAMPLE_PAYLOAD, ctx);
+    expect(result.skipped).toBeUndefined();
+  });
+});
+
+// D029: one list may hold two exporters of one type, so the queue needs to
+// know WHICH instance failed. Names cannot say it; the attempts can.
+describe('dispatchExports() attempts', () => {
+  it('pairs each outcome with the instance that produced it', async () => {
+    const first = mockExporter('webhook', { success: true });
+    const second = mockExporter('webhook', { success: false, error: 'HTTP 500' });
+
+    const result = await dispatchExports([first, second], SAMPLE_PAYLOAD, { userSlug: 'dad' });
+
+    expect(result.attempts.map((a) => a.exporter)).toEqual([first, second]);
+    expect(result.attempts[1].detail).toEqual({ name: 'webhook', ok: false, error: 'HTTP 500' });
+  });
+});
+
+// E-10: at-most-once stays (D014), but a shutdown during an export must say
+// which reading and which exports it may have cut off.
+describe('dispatchExports() shutdown during an export', () => {
+  it('names the reading and the exports still running when the app is told to stop', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const ac = new AbortController();
+    let release!: () => void;
+    const slow: Exporter = {
+      name: 'garmin',
+      export: vi.fn(
+        () =>
+          new Promise<ExportResult>((resolve) => {
+            release = () => resolve({ success: true });
+          }),
+      ),
+    };
+    const fast = mockExporter('mqtt', { success: true });
+
+    const pending = dispatchExports([fast, slow], SAMPLE_PAYLOAD, undefined, {
+      signal: ac.signal,
+      label: '82.40 kg for Dad measured at 2026-10-04T07:00:00.000Z',
+    });
+    await vi.waitFor(() => expect(slow.export).toHaveBeenCalled());
+    await Promise.resolve();
+    ac.abort();
+    release();
+    await pending;
+
+    const lines = warn.mock.calls.map((c) => c.map(String).join(' ')).join(' | ');
+    warn.mockRestore();
+    expect(lines).toMatch(
+      /Shutdown requested while exporting 82\.40 kg for Dad measured at 2026-10-04/,
+    );
+    expect(lines).toMatch(/\[garmin\] had not finished/);
+    expect(lines).not.toMatch(/mqtt/);
   });
 });

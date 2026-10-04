@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { YunmaiScaleAdapter } from '../../src/scales/yunmai.js';
+import { computeBiaFat } from '../../src/scales/body-comp-helpers.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -348,5 +349,37 @@ describe('Yunmai variant per device (#406)', () => {
     expect(
       adapter.parseNotification(makeFrame({ weightRaw: 8000, impedanceRaw: 500 }))!.impedance,
     ).toBe(500);
+  });
+});
+
+// D-08 / ADR D028: YunmaiCalc.fat() returns 0 for "outside 5-75 %", which is
+// reachable from a real impedance at a BMI around 50 and above. Every other
+// field was then derived from that 0: a visceral rating of 1 next to 60 % body
+// fat. The composition is one set, so all of it has to come from the fat value
+// that is actually exported.
+describe('Yunmai when its own fat formula gives up (D-08, D028)', () => {
+  // BMI 55: the Yunmai equation lands above 75 % and is discarded.
+  const profile = defaultProfile({ gender: 'female', height: 160, age: 40 });
+  const reading = () => ({ weight: 141, impedance: 500 });
+
+  it('falls back to BIA on the plausible impedance, as the processor would', () => {
+    const payload = makeAdapter().computeMetrics(reading(), profile);
+    expect(payload.bodyFatPercent).toBeCloseTo(computeBiaFat(141, 500, profile), 1);
+  });
+
+  it('derives water, muscle, bone and visceral fat from that same fat value', () => {
+    const payload = makeAdapter().computeMetrics(reading(), profile);
+    // Yunmai's water equation, (100 - fat) * 0.726, on the exported fat.
+    expect(payload.waterPercent).toBeCloseTo((100 - payload.bodyFatPercent) * 0.726, 1);
+    // Was 1, the rating Yunmai's formula gives a body with no fat at all.
+    expect(payload.visceralFat).toBeGreaterThan(20);
+    expect(payload.bodyFatPercent + payload.waterPercent).toBeLessThan(100);
+    assertPayloadRanges(payload);
+  });
+
+  it('keeps the Yunmai equation whenever it gives a usable value', () => {
+    const typical = defaultProfile();
+    const payload = makeAdapter().computeMetrics({ weight: 80, impedance: 500 }, typical);
+    expect(payload.bodyFatPercent).not.toBeCloseTo(computeBiaFat(80, 500, typical), 1);
   });
 });

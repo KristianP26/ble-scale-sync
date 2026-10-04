@@ -137,7 +137,7 @@ Runs natively on **Linux, macOS, and Windows**: no containers, no Supervisor req
 The three BLE stacks are optional dependencies. `npm install` completes even when one of them cannot be built, and the app names the missing package and the remaining transports if you select one that is not installed.
 :::
 
-::: details Garmin Connect requires Python 3.9+
+::: details Garmin Connect requires Python 3.12+
 
 ```bash
 python3 -m venv venv
@@ -191,7 +191,7 @@ The same commands exist in both shapes. From a clone they are npm scripts, from 
 | ------------------------------ | ------------------------- | ------------------------------------------------ |
 | `ble-scale-sync`               | `npm start`               | Run the sync flow                                 |
 | `ble-scale-sync setup`         | `npm run setup`           | Interactive setup wizard                          |
-| `ble-scale-sync setup-garmin`  | `npm run setup-garmin`    | Garmin Connect authentication (needs Python 3.9+) |
+| `ble-scale-sync setup-garmin`  | `npm run setup-garmin`    | Garmin Connect authentication (needs Python 3.12+)|
 | `ble-scale-sync setup-strava`  | `npm run setup-strava`    | Strava OAuth token setup                          |
 | `ble-scale-sync scan`          | `npm run scan`            | Discover nearby BLE devices                       |
 | `ble-scale-sync diagnose MAC`  | `npm run diagnose -- MAC` | BLE diagnostic dump                               |

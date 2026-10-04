@@ -27,13 +27,24 @@ export interface RuntimeLoopDeps {
   onSuccess?: () => Promise<void> | void;
   onFailure?: (err: unknown) => void;
   /**
-   * Run at the start of every iteration, before the source is asked for a
+   * Started at the top of every iteration, before the source is asked for a
    * reading. Used to drain the failed-export queue (#412): the network is as
-   * likely to be back here as anywhere, and nothing else is competing for it.
+   * likely to be back here as anywhere.
    *
-   * Not a timer. On the watcher transports an iteration begins when somebody
-   * steps on the scale, so a queue in a house that stops using the scale waits
-   * until it is used again.
+   * Started, not awaited (E-02). A queued Garmin upload can take up to three
+   * times `upload_timeout_sec` per entry, and while it was awaited here the
+   * scan did not run, so a scale that only advertises while somebody stands on
+   * it went unheard for the whole flush. At most one runs at a time: an
+   * iteration that finds the previous one still running starts nothing, since
+   * two passes over the same file would attempt the same entries twice. A
+   * rejection is logged and is not an iteration failure; the queue says
+   * nothing about the radio. Not awaited on the way out either: a shutdown is
+   * bounded by the force-exit timer, which a hanging upload would outlast.
+   *
+   * Not a timer. On the watcher transports an iteration begins right after
+   * the previous reading was processed and then blocks until the next one, so
+   * a queue in a house that stops using the scale is attempted once more and
+   * then waits until the scale is used again.
    */
   onCycleStart?: () => Promise<void>;
   /**
@@ -72,27 +83,44 @@ export async function runContinuousLoop(deps: RuntimeLoopDeps): Promise<void> {
   } = deps;
 
   let backoffMs = 0;
+  let cycleStartRunning = false;
 
   try {
     while (!signal.aborted) {
       try {
         touchHeartbeat();
+
+        // A pending reload goes first, so the queue flush below already sees
+        // the new config (dry_run, a removed exporter) instead of delivering
+        // with the old one (E-17).
+        if (isReloadRequested()) {
+          await onReload?.();
+          clearReloadRequest();
+          onSourceReload?.();
+        }
+
         // Before the source is asked for anything: a queued export must not
         // wait for the next weigh-in to even be attempted on the poll
-        // transports, where an iteration is a scan cycle.
-        if (onCycleStart) await onCycleStart();
+        // transports, where an iteration is a scan cycle. Not awaited, see
+        // onCycleStart.
+        if (onCycleStart && !cycleStartRunning) {
+          cycleStartRunning = true;
+          void (async () => {
+            try {
+              await onCycleStart();
+            } catch (err) {
+              log.debug(`Cycle-start task failed: ${errMsg(err)}`);
+            } finally {
+              cycleStartRunning = false;
+            }
+          })();
+        }
 
         // Start hook is idempotent in every concrete source: ReadingWatcher
         // (mqtt-proxy, esphome-proxy) early-returns when `this.started === true`,
         // and PollReadingSource has no `start` at all. Calling on every iteration
         // costs one branch and lets the loop handle late-init sources uniformly.
         await source.start?.();
-
-        if (isReloadRequested()) {
-          await onReload?.();
-          clearReloadRequest();
-          onSourceReload?.();
-        }
 
         const raw = await source.nextReading(signal);
         await processReading(raw);

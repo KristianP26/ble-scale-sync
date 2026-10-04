@@ -53,6 +53,50 @@ interface ConnectResponse extends EsphomeDeviceConnection {
 }
 
 /**
+ * Tail of the request queue for each proxy connection.
+ *
+ * The library's sendMessageAwaitResponse() resolves on the FIRST response event
+ * of the awaited type and does not correlate by address or handle, so two
+ * requests in flight at once can swap replies (a descriptor write and a
+ * characteristic write both await BluetoothGATTWriteResponse). That holds
+ * across sessions as much as within one: the watcher only keeps a second
+ * session off the same ADDRESS, so two scales behind one proxy run at the same
+ * time on the same connection, and one scale's GetServicesDone would end the
+ * other's discovery (B-04). Every request on a connection therefore goes
+ * through one queue, keyed by the connection object itself so a rebuilt client
+ * starts with a fresh one. Each library request carries its own 5 or 10 s
+ * timeout, so a stuck peer delays the queue but cannot wedge it.
+ */
+const connectionQueues = new WeakMap<EsphomeConnection, Promise<unknown>>();
+
+function serialOnConnection<T>(conn: EsphomeConnection, fn: () => Promise<T>): Promise<T> {
+  const tail = connectionQueues.get(conn) ?? Promise.resolve();
+  const next = tail.then(fn, fn);
+  connectionQueues.set(
+    conn,
+    next.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return next;
+}
+
+/**
+ * Best-effort disconnect of `addr` on the proxy, for paths that give up on a
+ * session the proxy may still be holding (B-03). ESPHome answers a disconnect
+ * for an address it has no link to with a plain "disconnected", so sending one
+ * when nothing is open is harmless.
+ */
+async function releaseProxyLink(conn: EsphomeConnection, addr: number, mac: string): Promise<void> {
+  try {
+    await serialOnConnection(conn, () => conn.disconnectBluetoothDeviceService(addr));
+  } catch (e) {
+    bleLog.debug(`ESPHome GATT disconnect for ${mac} ignored: ${errMsg(e)}`);
+  }
+}
+
+/**
  * Connect to `mac` through an ESPHome proxy client, discover its GATT table,
  * and expose it as the UUID-keyed BleChar map + BleDevice that the shared
  * waitForRawReading() seam expects. ESPHome speaks numeric handles and a uint64
@@ -77,35 +121,58 @@ export async function openGattSession(
   let connResp: ConnectResponse | undefined;
   let lastErr = 'no connect attempt made';
   for (const type of candidates) {
+    let resp: ConnectResponse | undefined;
     try {
-      const resp = (await conn.connectBluetoothDeviceService(addr, type)) as ConnectResponse;
-      if (resp && resp.connected === true) {
-        connResp = resp;
-        break;
-      }
-      lastErr = `connected=false (addr_type=${type})`;
+      resp = (await serialOnConnection(conn, () =>
+        conn.connectBluetoothDeviceService(addr, type),
+      )) as ConnectResponse;
     } catch (e) {
       lastErr = `${errMsg(e)} (addr_type=${type})`;
+      // No answer within the library's 10 s does not mean the proxy gave up:
+      // ESPHome keeps the attempt running, and ignores another connect request
+      // for the same address while it does. Cancel it, so the next candidate
+      // gets a clean start and no slot is left holding a link nobody owns.
+      await releaseProxyLink(conn, addr, mac);
+      continue;
     }
+    if (resp && typeof resp.address === 'number' && resp.address !== addr) {
+      // The library's uncorrelated wait was settled by a connection frame for a
+      // different device on this proxy (B-04). Our own attempt is in an
+      // unknown state, so treat it like an unanswered one.
+      lastErr = `connection response for another device (addr_type=${type})`;
+      await releaseProxyLink(conn, addr, mac);
+      continue;
+    }
+    if (resp && resp.connected === true) {
+      connResp = resp;
+      break;
+    }
+    lastErr = `connected=false (addr_type=${type})`;
   }
   if (!connResp) {
     throw new Error(`ESPHome proxy could not connect to ${mac}: ${lastErr}`);
   }
-  const services = (await conn.listBluetoothGATTServicesService(
-    addr,
-  )) as EsphomeGattServicesResponse;
+  let services: EsphomeGattServicesResponse;
+  try {
+    services = (await serialOnConnection(conn, () =>
+      conn.listBluetoothGATTServicesService(addr),
+    )) as EsphomeGattServicesResponse;
+  } catch (e) {
+    // The proxy reported the link as up, so it keeps the scale connected and
+    // one of its few connection slots busy until told otherwise. A connected
+    // scale usually stops advertising, so leaving it there also fails the
+    // fallback to the next proxy (B-03).
+    await releaseProxyLink(conn, addr, mac);
+    throw e;
+  }
 
   bleLog.debug(`ESPHome connected to ${mac} (mtu=${connResp.mtu ?? 'unknown'})`);
 
   let closed = false;
 
-  // The library's sendMessageAwaitResponse() resolves on the FIRST matching
-  // response event and does not correlate by address or handle, so two GATT
-  // requests in flight at once can swap replies (a descriptor write and a
-  // characteristic write both await BluetoothGATTWriteResponse). Adapters do run
-  // concurrently with subscribe during startInit, so every request for this
-  // session goes through one queue (#252).
-  let queue: Promise<unknown> = Promise.resolve();
+  // Every request goes through the connection-wide queue (see
+  // connectionQueues), which also covers adapters running concurrently with
+  // subscribe during startInit inside this session (#252).
   const serial = <T>(fn: () => Promise<T>): Promise<T> => {
     // `closed` is checked when the unit actually runs, not when it is queued:
     // close() does not drain the backlog, so anything still queued would
@@ -114,12 +181,7 @@ export async function openGattSession(
     // next session on the same shared connection.
     const run = (): Promise<T> =>
       closed ? Promise.reject(new Error('ESPHome GATT session closed')) : fn();
-    const next = queue.then(run, run);
-    queue = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
+    return serialOnConnection(conn, run);
   };
 
   const registered: Array<{ event: string; fn: (m: unknown) => void }> = [];
@@ -302,11 +364,11 @@ export async function openGattSession(
     for (const { event, fn } of registered.splice(0)) {
       conn.removeListener(event, fn);
     }
-    try {
-      await conn.disconnectBluetoothDeviceService(addr);
-    } catch (e) {
-      bleLog.debug(`ESPHome GATT disconnect for ${mac} ignored: ${errMsg(e)}`);
-    }
+    // Queued like every other request: its BluetoothDeviceConnectionResponse
+    // would otherwise settle another session's pending connect on this proxy.
+    // This session's own backlog rejects at once (closed is set), so it only
+    // waits behind requests already issued, each bounded by a library timeout.
+    await releaseProxyLink(conn, addr, mac);
   };
 
   return { charMap, device, close };

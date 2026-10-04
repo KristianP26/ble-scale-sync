@@ -1,5 +1,5 @@
 import { createLogger } from '../logger.js';
-import { parseHeaderString } from './headers.js';
+import { describeInvalidHeader, parseHeaderString } from './headers.js';
 
 const log = createLogger('ExporterConfig');
 
@@ -165,7 +165,7 @@ function parseHeaders(raw: string | undefined): Record<string, string> {
   // being reimplemented a third time.
   const { headers, invalid } = parseHeaderString(raw ?? '');
   for (const pair of invalid) {
-    log.warn(`Ignoring invalid header (missing ':'): '${pair}'`);
+    log.warn(`Ignoring invalid header (missing ':'): ${describeInvalidHeader(pair)}`);
   }
   return headers;
 }
@@ -184,12 +184,23 @@ function parseUploadTimeout(raw: string | undefined): number | undefined {
   fail(`GARMIN_UPLOAD_TIMEOUT_SEC must be a whole number of seconds, 10-900, got '${raw}'`);
 }
 
+function parseWebhookTimeout(raw: string | undefined): number {
+  if (!raw) return 10_000;
+  const num = Number(raw);
+  // Same bound as the config.yaml path (`optionalNumber` in the registry).
+  // `Number(raw) || 10_000` turned a typo into the default without a word.
+  if (Number.isInteger(num) && num >= 1) return num;
+  fail(`WEBHOOK_TIMEOUT must be a whole number of milliseconds, got '${raw}'`);
+}
+
+// The same words `optionalBool` in the registry and `boolEnv` accept, so a
+// value that works in config.yaml or as an override works here too.
 function parseBoolean(key: string, raw: string | undefined, defaultValue: boolean): boolean {
   if (!raw) return defaultValue;
   const lower = raw.toLowerCase();
-  if (['true', 'yes', '1'].includes(lower)) return true;
-  if (['false', 'no', '0'].includes(lower)) return false;
-  fail(`${key} must be true/false/yes/no/1/0, got '${raw}'`);
+  if (['true', 'yes', '1', 'on'].includes(lower)) return true;
+  if (['false', 'no', '0', 'off'].includes(lower)) return false;
+  fail(`${key} must be true/false/yes/no/on/off/1/0, got '${raw}'`);
 }
 
 export function loadExporterConfig(): ExporterConfig {
@@ -247,7 +258,7 @@ export function loadExporterConfig(): ExporterConfig {
       url,
       method: process.env.WEBHOOK_METHOD?.trim()?.toUpperCase() || 'POST',
       headers: parseHeaders(process.env.WEBHOOK_HEADERS?.trim()),
-      timeout: Number(process.env.WEBHOOK_TIMEOUT?.trim()) || 10_000,
+      timeout: parseWebhookTimeout(process.env.WEBHOOK_TIMEOUT?.trim()),
     };
   }
 
@@ -261,10 +272,8 @@ export function loadExporterConfig(): ExporterConfig {
     if (!token) {
       fail('INFLUXDB_TOKEN is required when influxdb exporter is enabled.');
     }
-    const org = process.env.INFLUXDB_ORG?.trim();
-    if (!org) {
-      fail('INFLUXDB_ORG is required when influxdb exporter is enabled.');
-    }
+    // Optional, as in config.yaml: InfluxDB v3 has no organizations.
+    const org = process.env.INFLUXDB_ORG?.trim() || undefined;
     const bucket = process.env.INFLUXDB_BUCKET?.trim();
     if (!bucket) {
       fail('INFLUXDB_BUCKET is required when influxdb exporter is enabled.');

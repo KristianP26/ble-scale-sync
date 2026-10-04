@@ -6,11 +6,16 @@ import { loadBleConfig } from './config/load.js';
 import { bootstrapMqttProxy } from './ble/mqtt-proxy-bootstrap.js';
 import type { EmbeddedBrokerHandle } from './ble/embedded-broker.js';
 import { errMsg } from './utils/error.js';
+import { toolConfigArg } from './cli-run-args.js';
 
 const log = createLogger('Scan');
 
 async function main(): Promise<void> {
-  const bleConfig = loadBleConfig();
+  // The config.yaml the app would run with, --config included, read with the
+  // same defaults, ${VAR} references and validation for the ble section (G-05).
+  const arg = toolConfigArg(process.argv.slice(2));
+  if (arg.kind === 'error') throw new Error(arg.message);
+  const bleConfig = loadBleConfig(arg.config);
 
   // Set NOBLE_DRIVER before BLE handler import (dynamic import happens in scanDevices)
   if (bleConfig.nobleDriver) {

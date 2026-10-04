@@ -114,6 +114,15 @@ export function qnMatches(device: BleDeviceInfo): boolean {
           u === SVC_SIG_BCS || u === SVC_SIG_WSS || u === uuid16(0x181b) || u === uuid16(0x181d),
       );
     if (onlyRenpho && looksLikeWbe28) return false;
+    // D-04: once the characteristics are known they settle it, whatever the
+    // service list says. The ES-WBE28 hosts its vendor 0xFFE1/0xFFE2 pair in a
+    // 0xFFE0 GATT service, so after discovery it carries the very service the
+    // rule above reads as QN, and on node-ble (no advertised services at all)
+    // this adapter used to win it on the shared name and priority. The SIG
+    // consent pair without a QN pair is an ES-WBE28 (#267 capture), never a
+    // scale this handshake can drive. Mirrors RenphoScaleAdapter.matches().
+    const hasSigConsentPair = hasChar(chars, 0x2a9f) && hasChar(chars, 0x2a9d);
+    if (onlyRenpho && hasSigConsentPair && !qnCanRun) return false;
     return true;
   }
 

@@ -15,7 +15,10 @@ import { applyDbusMatchRefcountPatch } from './dbus-match-patch.js';
 let persistentConn: { bluetooth: NodeBle.Bluetooth; destroy: () => void } | null = null;
 let persistentAdapter: Adapter | null = null;
 
-/** Latched when the D-Bus transport errors. Cleared by resetConnection(). */
+/**
+ * Latched when the D-Bus transport errors or the bus closes the socket.
+ * Cleared by resetConnection().
+ */
 let busFailed = false;
 
 /**
@@ -58,6 +61,71 @@ export function attachBusErrorHandler(
   }
 }
 
+/**
+ * The parts of a dbus-next 0.10.2 MessageBus that a closed socket leaves
+ * stranded. Neither is on the public surface (same "declare only what we use"
+ * convention as dbus-match-patch.ts), so both are optional and checked.
+ */
+interface ClosableBus {
+  _connection?: { on?: (event: 'end', listener: () => void) => unknown };
+  _methodReturnHandlers?: Record<string, (reply: unknown) => void>;
+}
+
+/** D-Bus wire message type ERROR (D-Bus spec; `dbus-next/lib/constants.js`). */
+const DBUS_MESSAGE_TYPE_ERROR = 3;
+
+/**
+ * Reject every call still waiting for a reply on a bus whose socket closed.
+ *
+ * `MessageBus.call()` parks its resolver in `_methodReturnHandlers` and only a
+ * reply from the daemon ever takes it out, so once the socket is gone those
+ * promises neither resolve nor reject. Handing each one a synthetic ERROR reply
+ * goes through dbus-next's own reply path, so the caller sees an ordinary
+ * DBusError. Its text contains "connection closed", which
+ * isStaleConnectionError() already routes into the reset-and-retry path.
+ *
+ * Returns how many calls were failed.
+ */
+function failPendingCalls(bus: unknown): number {
+  const handlers = (bus as ClosableBus | null | undefined)?._methodReturnHandlers;
+  if (!handlers || typeof handlers !== 'object') return 0;
+  const serials = Object.keys(handlers);
+  for (const serial of serials) {
+    const handler = handlers[serial];
+    delete handlers[serial];
+    try {
+      handler({
+        type: DBUS_MESSAGE_TYPE_ERROR,
+        errorName: 'org.freedesktop.DBus.Error.Disconnected',
+        body: ['D-Bus connection closed'],
+        sender: undefined,
+      });
+    } catch (err) {
+      bleLog.debug(`Could not fail a pending D-Bus call: ${errMsg(err)}`);
+    }
+  }
+  return serials.length;
+}
+
+/**
+ * Attach a listener for the bus socket closing under us.
+ *
+ * dbus-next reports a socket the daemon closed as `end` on its internal
+ * connection object and does NOT forward it to the MessageBus as `error`
+ * (`dbus-next/lib/connection.js`, the `stream.on('end')` handler): it only swaps
+ * `message()` for a function that emits `error` on the NEXT write. Listening for
+ * `error` alone therefore noticed a dead socket one write late, and that write
+ * was itself a call that never settles.
+ */
+function attachBusEndHandler(bluetooth: NodeBle.Bluetooth, onEnd: () => void): void {
+  try {
+    const bus = (bluetooth as unknown as { dbus: ClosableBus }).dbus;
+    bus._connection?.on?.('end', onEnd);
+  } catch (err) {
+    bleLog.debug(`Could not attach D-Bus end handler: ${errMsg(err)}`);
+  }
+}
+
 export function getConnection(): { bluetooth: NodeBle.Bluetooth; destroy: () => void } {
   if (!persistentConn) {
     // Before the first bus exists: dbus-next never sends RemoveMatch, so every
@@ -66,11 +134,42 @@ export function getConnection(): { bluetooth: NodeBle.Bluetooth; destroy: () => 
     // would work too (the methods are looked up dynamically), but doing it here
     // means no bus is ever built on the unpatched implementation.
     applyDbusMatchRefcountPatch();
-    persistentConn = NodeBle.createBluetooth();
-    attachBusErrorHandler(persistentConn.bluetooth, (err) => {
+    const conn = NodeBle.createBluetooth();
+    persistentConn = conn;
+    const bus = (conn.bluetooth as unknown as { dbus: unknown }).dbus;
+    // Set once the socket has closed. A write after that emits `error` from
+    // inside MessageBus.call(), after the call has already parked its resolver,
+    // so the error handler fails it too rather than leaving it parked.
+    let ended = false;
+    attachBusErrorHandler(conn.bluetooth, (err) => {
+      // The listener outlives resetConnection(): a late write through a proxy
+      // still holding this bus emits `error` here after dbus-next has swapped
+      // message() on `end`. Latching then would tear down the healthy
+      // replacement on the next getAdapter() (A-10), the same reason the `end`
+      // handler below only counts a close on the current connection.
+      if (persistentConn !== conn) {
+        bleLog.debug(`D-Bus error on an already replaced connection (ignored): ${errMsg(err)}`);
+        return;
+      }
       busFailed = true;
       bleLog.warn(
         `D-Bus transport error: ${errMsg(err)}. The connection will be rebuilt before the next scan.`,
+      );
+      if (ended) failPendingCalls(bus);
+    });
+    attachBusEndHandler(conn.bluetooth, () => {
+      ended = true;
+      // Our own resetConnection() ends the stream too, and the `end` arrives
+      // later, once the daemon has closed its side. By then this connection is
+      // no longer the current one: latching would condemn the healthy
+      // replacement, so only a close we did not ask for counts.
+      if (persistentConn !== conn) return;
+      busFailed = true;
+      const failed = failPendingCalls(bus);
+      bleLog.warn(
+        'D-Bus connection closed by the bus' +
+          (failed > 0 ? ` (${failed} pending call(s) failed)` : '') +
+          '. The connection will be rebuilt before the next scan.',
       );
     });
     bleLog.debug('D-Bus connection established');

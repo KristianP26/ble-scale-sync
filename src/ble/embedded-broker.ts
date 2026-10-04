@@ -37,7 +37,7 @@ export interface EmbeddedBrokerOptions {
 }
 
 export interface EmbeddedBrokerHandle {
-  /** URL an internal client can use to connect (loopback). */
+  /** URL an internal client can use to connect (loopback for a wildcard bind, else the bound address). */
   url: string;
   /** Actual port the server is listening on (useful when `port: 0`). */
   port: number;
@@ -75,6 +75,17 @@ export async function startEmbeddedBroker(
   const bindHost = opts.bindHost ?? '0.0.0.0';
   const authEnabled = !!opts.username;
   const drainTimeout = opts.drainTimeoutMs ?? 10_000;
+
+  // The config schema already rejects this; this is the last line of defence
+  // for any other caller. With a username set, authenticate() below compares
+  // the password against '' when none is configured, so any LAN client that
+  // knows the username would get in with an empty password.
+  if (authEnabled && !opts.password && !isLoopback(bindHost)) {
+    throw new Error(
+      `Embedded broker on ${bindHost} has mqtt_proxy.username but no password. ` +
+        'Set mqtt_proxy.password, or change embedded_broker_bind to 127.0.0.1.',
+    );
+  }
 
   if (!authEnabled && !isLoopback(bindHost)) {
     log.warn(
@@ -184,7 +195,7 @@ export async function startEmbeddedBroker(
 
   const addr = server.address();
   const actualPort = typeof addr === 'object' && addr ? addr.port : opts.port;
-  const url = `mqtt://127.0.0.1:${actualPort}`;
+  const url = `mqtt://${internalClientHost(typeof addr === 'object' ? addr : null)}:${actualPort}`;
 
   log.info(
     `Embedded MQTT broker listening on ${bindHost}:${actualPort}` +
@@ -211,6 +222,21 @@ export async function startEmbeddedBroker(
   };
 
   return { url, port: actualPort, close };
+}
+
+/**
+ * Host the app's own client should dial, derived from where the server really
+ * listens. A hard-coded 127.0.0.1 only reaches a wildcard or IPv4 loopback
+ * bind: with `embedded_broker_bind: ::1`, a specific LAN address, or
+ * `localhost` resolving to ::1, the app could never connect to its own broker
+ * (B-08). A wildcard bind is reached through the loopback of its family.
+ */
+function internalClientHost(addr: { address: string; family: string | number } | null): string {
+  if (!addr) return '127.0.0.1';
+  const ipv6 = addr.family === 'IPv6' || addr.family === 6;
+  if (addr.address === '0.0.0.0') return '127.0.0.1';
+  if (addr.address === '::') return '[::1]';
+  return ipv6 ? `[${addr.address}]` : addr.address;
 }
 
 /**

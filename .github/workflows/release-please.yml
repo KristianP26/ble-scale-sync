@@ -35,7 +35,8 @@ jobs:
       # - Falls back to GITHUB_TOKEN so the workflow keeps working out of
       #   the box; maintainer can then re-run ci.yml / trigger docker.yml
       #   manually until the PAT is configured.
-      - uses: googleapis/release-please-action@v5
+      # Pinned to a commit: this step receives RELEASE_PLEASE_TOKEN.
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
@@ -55,18 +56,43 @@ jobs:
         with:
           node-version: 24
 
+      # The branch is the one release-please just created or updated (its `pr`
+      # output), not the first `release-please--*` branch on the remote: a
+      # leftover branch from an earlier configuration would sort first and get
+      # the sync commit instead. When this run left the release PR unchanged
+      # the output is unset; the open release PR is then looked up by its
+      # label, so a sync that failed on an earlier run still gets redone.
       - name: Sync the add-on changelog on the release PR
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          RELEASE_PR: ${{ steps.release.outputs.pr }}
         run: |
           set -euo pipefail
-          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo-sync
-          cd repo-sync
-          BRANCH=$(git ls-remote --heads origin 'release-please--*' | awk '{print $2}' | sed 's#refs/heads/##' | head -1)
+          if [ -n "$RELEASE_PR" ]; then
+            BRANCH=$(printf '%s' "$RELEASE_PR" | jq -r '.headBranchName // empty')
+          else
+            OPEN=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --base main \
+              --label 'autorelease: pending' --json headRefName --jq '.[].headRefName')
+            COUNT=$(printf '%s\n' "$OPEN" | grep -c . || true)
+            if [ "$COUNT" -gt 1 ]; then
+              echo "::warning::More than one open release PR, not syncing: $(printf '%s' "$OPEN" | tr '\n' ' ')"
+              exit 0
+            fi
+            BRANCH="$OPEN"
+          fi
           if [ -z "$BRANCH" ]; then
-            echo "No release-please branch, nothing to sync."
+            echo "No release PR, nothing to sync."
             exit 0
           fi
+          case "$BRANCH" in
+            release-please--*) ;;
+            *)
+              echo "::error::Unexpected release PR branch '$BRANCH'"
+              exit 1
+              ;;
+          esac
+          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo-sync
+          cd repo-sync
           # Explicit refspec: a shallow clone has no remote-tracking ref for
           # this branch, and a plain `fetch <branch>` only writes FETCH_HEAD.
           # `checkout -B` rather than `switch --track`, because a ref fetched
@@ -113,10 +139,12 @@ jobs:
           cache: npm
 
       # Trusted publishing needs npm >= 11.5.1, and Node 22 still bundles
-      # npm 10.x. Pinned to the major so a future npm 12 cannot change the
-      # publish semantics of a release build without an edit here.
+      # npm 10.x. Pinned to an exact version: this job holds the OIDC token
+      # the registry accepts as the package's publisher, so a newly published
+      # npm must not run here without an edit to this line. Dependabot does
+      # not see this pin; move it by hand (any 11.x from 11.5.1 up).
       - name: Use an npm that can publish through OIDC
-        run: npm install -g npm@^11.5.1
+        run: npm install -g npm@11.20.0
 
       # Full install (dev included): prepublishOnly runs `npm run build`, which
       # needs typescript. --ignore-scripts keeps the native BLE stacks from

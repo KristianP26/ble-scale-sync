@@ -13,6 +13,7 @@ import {
   formatMac,
   sleep,
   errMsg,
+  untilAborted,
   withTimeout,
   MAX_CONNECT_RETRIES,
   DISCOVERY_POLL_MS,
@@ -28,8 +29,15 @@ import {
   type Device,
 } from './dbus.js';
 import { applyDbusMatchRefcountPatch } from './dbus-match-patch.js';
-import { getBus, attachBusErrorHandler, isDbusConnectionError, dbusError } from './connection.js';
-import { registerPairingAgent, setPairingTarget } from './agent.js';
+import {
+  getBus,
+  attachBusErrorHandler,
+  currentConnectionGeneration,
+  isDbusConnectionError,
+  dbusError,
+  resetConnection,
+} from './connection.js';
+import { ensurePairingAgent, setPairingTarget } from './agent.js';
 import {
   startDiscoverySafe,
   removeDevice,
@@ -56,6 +64,17 @@ import { safeName } from '../advertisement.js';
 const BONDING_TIMEOUT_MS = 15_000;
 
 /**
+ * Number of the most recent scanAndReadRaw() call.
+ *
+ * The poll loop abandons a cycle at POLL_CYCLE_TIMEOUT_MS without being able to
+ * stop it, and starts the next one over the same persistent D-Bus connection
+ * and the same radio. The abandoned cycle still runs to its end, and its
+ * teardown used to StopDiscovery, RemoveDevice, reset the connection and
+ * power-cycle the adapter underneath the cycle that replaced it (A-04).
+ */
+let scanCycle = 0;
+
+/**
  * Best-effort BLE bonding for adapters that need an encrypted link (#168).
  *
  * Some SIG scales (e.g. Beurer BF720, whose User Data Service 0x181C protects
@@ -64,10 +83,14 @@ const BONDING_TIMEOUT_MS = 15_000;
  * the encryption those characteristics require. A failure is logged and the
  * read continues unbonded so adapters that do not strictly need it are not
  * blocked; pairing may need a registered BlueZ agent on some setups.
+ *
+ * `_pin` is unused: the agent reads the PIN from the cycle's pairing target,
+ * together with the scale's MAC. The parameter stays because acquireGattServer
+ * passes this function as its bonding callback with that signature.
  */
 export async function ensureBonded(
   device: Device,
-  pin: number | undefined,
+  _pin: number | undefined,
   abortSignal?: AbortSignal,
 ): Promise<void> {
   /**
@@ -99,8 +122,11 @@ export async function ensureBonded(
     // it supplies the configured PIN as the passkey for Passkey Entry, or auto-accepts
     // Just Works / numeric comparison. Without an agent BlueZ returns "Authentication
     // Failed" (#168). Best-effort; a failure here falls back to any system agent.
+    // The ambient target (setPairingTarget) carries the PIN AND the scale's MAC.
+    // This used to install a PIN-only provider instead, which silently dropped
+    // the MAC gate for the rest of the cycle (#83).
     try {
-      await registerPairingAgent(getBus(), () => pin);
+      await ensurePairingAgent(getBus());
     } catch (err) {
       bleLog.debug(`Pairing agent registration skipped: ${errMsg(err)}`);
     }
@@ -198,12 +224,17 @@ export async function acquireGattServer(
   bond: (d: Device, p: number | undefined, s?: AbortSignal) => Promise<void> = ensureBonded,
   abortSignal?: AbortSignal,
 ): Promise<NodeBle.GattServer> {
+  // Raced against the abort as well as the deadline: a shutdown otherwise sat
+  // out up to 30 s here, past the 5 s force-exit grace (A-07).
   const acquire = (): Promise<NodeBle.GattServer> =>
-    withTimeout(device.gatt(), GATT_DISCOVERY_TIMEOUT_MS, 'GATT server acquisition timed out');
+    untilAborted(
+      withTimeout(device.gatt(), GATT_DISCOVERY_TIMEOUT_MS, 'GATT server acquisition timed out'),
+      abortSignal,
+    );
   try {
     return await acquire();
   } catch (err) {
-    if (!adapter?.requiresBonding) throw err;
+    if (abortSignal?.aborted || !adapter?.requiresBonding) throw err;
     const alreadyBonded = await isBonded(device);
     // Already bonded but still timing out means the stall is not a missing bond;
     // pairing again would not help, so surface the original timeout.
@@ -225,6 +256,10 @@ export async function acquireGattServer(
  * becomes stale (e.g. bluetoothd restart), it is automatically reset.
  */
 export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
+  // Numbered so a cycle can tell, once it finally ends, whether the poll loop
+  // gave up on it and started another one meanwhile (A-04).
+  const cycle = ++scanCycle;
+  const isSuperseded = (): boolean => cycle !== scanCycle;
   const {
     targetMac,
     adapters,
@@ -252,8 +287,10 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   // Publish this cycle's pairing target before the first getAdapter(), which is
   // where the agent registers. Stored as a closure rather than a value so a
   // config reload lands on the next cycle without a restart, and MAC-scoped so
-  // an unrelated peer cannot be handed the scale's consent PIN (#83).
-  setPairingTarget(() => ({ pin: scaleAuth?.pin, mac: targetMac }));
+  // an unrelated peer cannot be handed the scale's consent PIN (#83). In
+  // auto-discovery the closure picks up the matched address once autoDiscover
+  // sets deviceMac; until then the agent declines everything.
+  setPairingTarget(() => ({ pin: scaleAuth?.pin, mac: targetMac ?? (deviceMac || undefined) }));
 
   try {
     btAdapter = await acquireBluezAdapter(bleAdapter);
@@ -278,6 +315,8 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     probeAdapter = btAdapter;
 
     let matchedAdapter: ScaleAdapter;
+    // Advertised name, for adapters whose protocol differs by model.
+    let deviceName = '';
 
     if (targetMac) {
       const mac = formatMac(targetMac);
@@ -291,6 +330,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         deviceMac,
         adapters,
       );
+      deviceName = name;
 
       if (
         preMatchedAdapter?.preferPassive &&
@@ -317,6 +357,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         maxRetries: MAX_CONNECT_RETRIES,
         bleAdapter,
         autoClearStaleBond,
+        abortSignal,
       });
       bleLog.info('Connected. Discovering services...');
 
@@ -338,7 +379,10 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         ensureBonded,
         abortSignal,
       );
-      matchedAdapter = await resolveAfterConnect(gatt, adapters, name, deviceMac, advert);
+      matchedAdapter = await untilAborted(
+        resolveAfterConnect(gatt, adapters, name, deviceMac, advert),
+        abortSignal,
+      );
       bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
     } else {
       // Auto-discovery: poll discovered devices, match by name, connect, verify
@@ -346,6 +390,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       device = result.device;
       matchedAdapter = result.adapter;
       deviceMac = result.mac;
+      deviceName = result.name;
       await logAdvertisementSnapshot(device);
 
       // Passive-mode adapters: read from advertisements without connecting.
@@ -373,6 +418,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         maxRetries: MAX_CONNECT_RETRIES,
         bleAdapter,
         autoClearStaleBond,
+        abortSignal,
       });
       bleLog.info('Connected. Discovering services...');
     }
@@ -390,8 +436,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       ensureBonded,
       abortSignal,
     );
-    const charMap = await buildCharMapWithRetry(gatt, (map) =>
-      findMissingCharacteristics(map, matchedAdapter),
+    const charMap = await untilAborted(
+      buildCharMapWithRetry(gatt, (map) => findMissingCharacteristics(map, matchedAdapter)),
+      abortSignal,
     );
     // Establish an encrypted link before enabling notifications for adapters
     // whose SIG services protect their CCCDs (#168). Best-effort: see ensureBonded.
@@ -405,13 +452,19 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       onLiveData,
       scaleAuth,
       readingTimeoutMs,
+      abortSignal,
+      deviceName,
     });
     gattSucceeded = true;
 
-    try {
-      await device.disconnect();
-    } catch {
-      /* ignore */
+    // Same device path as the newer cycle's, so a late Disconnect here would
+    // drop that cycle's link to the scale.
+    if (!isSuperseded()) {
+      try {
+        await device.disconnect();
+      } catch {
+        /* ignore */
+      }
     }
     return raw;
   } catch (err) {
@@ -427,6 +480,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       gattSucceeded,
       abortSignal,
       preemptiveAdapterReset,
+      isSuperseded,
     });
   }
 }
@@ -470,6 +524,12 @@ export async function scanDevices(
   );
 
   let btAdapter: Adapter | null = null;
+  // startDiscoverySafe's btmgmt/rfkill/bluetoothd tiers reset the PERSISTENT
+  // connection and hand back an adapter from a fresh one, which also registers
+  // the pairing agent on it. Each reset bumps the generation, so a change means
+  // this one-shot scan opened a persistent connection that nothing else will
+  // close, and the CLI would never exit (A-08).
+  const generationBefore = currentConnectionGeneration();
 
   try {
     try {
@@ -567,5 +627,6 @@ export async function scanDevices(
     }
     await sleep(POST_DISCOVERY_QUIESCE_MS);
     destroy();
+    if (currentConnectionGeneration() !== generationBefore) resetConnection();
   }
 }

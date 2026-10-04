@@ -9,7 +9,7 @@
  * stay alive with one implementation each.
  *
  * Nothing but two side-effect-free local modules is imported at the top on
- * purpose. The run path (./run.js) builds the 33-adapter registry, the exporter
+ * purpose. The run path (./run.js) builds the scale adapter registry, the exporter
  * registry and the mqtt-proxy graph at module evaluation, and
  * `ble-scale-sync validate` must not pay for any of it.
  */

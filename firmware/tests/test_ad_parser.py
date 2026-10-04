@@ -3,7 +3,7 @@
 Runs under CPython by stubbing the MicroPython-only modules (aioble,
 bluetooth, board) before importing the firmware module. Covers all AD
 types the parser recognizes, malformed/truncated input, and the
-_merge_entry dedup semantics.
+_merge_entry dedup semantics (latest-wins for changing fields, H-06).
 
 Run: python -m unittest discover -s firmware/tests
 """
@@ -12,6 +12,7 @@ import os
 import sys
 import types
 import unittest
+from unittest import mock
 
 _FIRMWARE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _FIRMWARE_DIR not in sys.path:
@@ -203,17 +204,18 @@ class TestMergeEntry(unittest.TestCase):
         ble_bridge._merge_entry(seen, entry)
         self.assertIs(seen[_MAC_STR], entry)
 
-    def test_stronger_rssi_replaces_weaker(self):
+    def test_rssi_latest_wins_when_stronger(self):
         seen = {}
         ble_bridge._merge_entry(seen, self._entry(rssi=-80))
         ble_bridge._merge_entry(seen, self._entry(rssi=-60))
         self.assertEqual(seen[_MAC_STR]["rssi"], -60)
 
-    def test_weaker_rssi_does_not_overwrite(self):
+    def test_rssi_latest_wins_when_weaker(self):
+        # H-06: RSSI is a live value, the newest frame reports the current link.
         seen = {}
         ble_bridge._merge_entry(seen, self._entry(rssi=-50))
         ble_bridge._merge_entry(seen, self._entry(rssi=-90))
-        self.assertEqual(seen[_MAC_STR]["rssi"], -50)
+        self.assertEqual(seen[_MAC_STR]["rssi"], -90)
 
     def test_name_fills_in_when_empty(self):
         seen = {}
@@ -237,7 +239,9 @@ class TestMergeEntry(unittest.TestCase):
         self.assertEqual(seen[_MAC_STR]["manufacturer_id"], 0x004C)
         self.assertEqual(seen[_MAC_STR]["manufacturer_data"], "ff")
 
-    def test_manufacturer_data_preserved(self):
+    def test_manufacturer_data_latest_wins(self):
+        # H-06: a broadcast scale changes its payload while the user stands on
+        # it (unstable, then stable, then impedance), so the newest frame wins.
         seen = {}
         ble_bridge._merge_entry(
             seen, self._entry(manufacturer_id=0x0059, manufacturer_data="aa")
@@ -245,8 +249,19 @@ class TestMergeEntry(unittest.TestCase):
         ble_bridge._merge_entry(
             seen, self._entry(manufacturer_id=0x004C, manufacturer_data="bb")
         )
+        self.assertEqual(seen[_MAC_STR]["manufacturer_id"], 0x004C)
+        self.assertEqual(seen[_MAC_STR]["manufacturer_data"], "bb")
+
+    def test_manufacturer_data_kept_when_newer_frame_lacks_it(self):
+        # A scan response (name only) must not wipe the advertisement payload.
+        seen = {}
+        ble_bridge._merge_entry(
+            seen, self._entry(manufacturer_id=0x0059, manufacturer_data="aa")
+        )
+        ble_bridge._merge_entry(seen, self._entry(name="scale"))
         self.assertEqual(seen[_MAC_STR]["manufacturer_id"], 0x0059)
         self.assertEqual(seen[_MAC_STR]["manufacturer_data"], "aa")
+        self.assertEqual(seen[_MAC_STR]["name"], "scale")
 
     def test_services_fill_in(self):
         seen = {}
@@ -272,18 +287,136 @@ class TestMergeEntry(unittest.TestCase):
             [{"uuid": "1a10", "data": "ab"}],
         )
 
-    def test_service_data_preserved(self):
+    def test_service_data_latest_wins_per_uuid(self):
+        # H-06: Mi Scale 2 style service data changes between frames; the
+        # newest payload for the same UUID replaces the older one.
         seen = {}
         ble_bridge._merge_entry(
-            seen, self._entry(service_data=[{"uuid": "1a10", "data": "01"}])
+            seen, self._entry(service_data=[{"uuid": "181b", "data": "01"}])
         )
         ble_bridge._merge_entry(
-            seen, self._entry(service_data=[{"uuid": "1a10", "data": "02"}])
+            seen, self._entry(service_data=[{"uuid": "181b", "data": "02"}])
         )
         self.assertEqual(
             seen[_MAC_STR]["service_data"],
-            [{"uuid": "1a10", "data": "01"}],
+            [{"uuid": "181b", "data": "02"}],
         )
+
+    def test_service_data_other_uuid_kept(self):
+        # A UUID carried only by another frame type (ADV vs scan response)
+        # stays, so the published set does not flicker between drains.
+        seen = {}
+        ble_bridge._merge_entry(
+            seen, self._entry(service_data=[{"uuid": "181b", "data": "01"}])
+        )
+        ble_bridge._merge_entry(
+            seen, self._entry(service_data=[{"uuid": "fe95", "data": "aa"}])
+        )
+        ble_bridge._merge_entry(
+            seen, self._entry(service_data=[{"uuid": "181b", "data": "02"}])
+        )
+        self.assertEqual(
+            seen[_MAC_STR]["service_data"],
+            [{"uuid": "181b", "data": "02"}, {"uuid": "fe95", "data": "aa"}],
+        )
+
+    def test_service_data_kept_when_newer_frame_lacks_it(self):
+        seen = {}
+        ble_bridge._merge_entry(
+            seen, self._entry(service_data=[{"uuid": "181b", "data": "01"}])
+        )
+        ble_bridge._merge_entry(seen, self._entry(name="MIBFS"))
+        self.assertEqual(
+            seen[_MAC_STR]["service_data"],
+            [{"uuid": "181b", "data": "01"}],
+        )
+
+    def test_service_data_uuid_count_is_bounded(self):
+        # Memory bound: a peripheral rotating service data UUIDs cannot grow
+        # one seen entry without limit across the SEEN_RESET_CYCLES window.
+        seen = {}
+        cap = ble_bridge._MAX_SERVICE_DATA_UUIDS
+        for k in range(cap + 5):
+            ble_bridge._merge_entry(
+                seen, self._entry(service_data=[{"uuid": "%04x" % k, "data": "00"}])
+            )
+        self.assertEqual(len(seen[_MAC_STR]["service_data"]), cap)
+        # A known UUID still updates once the cap is reached.
+        ble_bridge._merge_entry(
+            seen, self._entry(service_data=[{"uuid": "0000", "data": "ff"}])
+        )
+        self.assertEqual(seen[_MAC_STR]["service_data"][0], {"uuid": "0000", "data": "ff"})
+
+
+class TestStreamingDrainLatestFrame(unittest.TestCase):
+    """H-06: every streaming drain must publish the newest frame of each MAC.
+
+    _seen keeps one entry per MAC across SEEN_RESET_CYCLES drains (so a device
+    that advertises slower than PUBLISH_INTERVAL_MS stays in the published
+    list, and memory is bounded by MACs, not frames), but the entry must carry
+    the latest payload, not the first one captured in the window.
+    """
+
+    _OTHER = b"\x11\x22\x33\x44\x55\x66"
+
+    def setUp(self):
+        self._board = types.SimpleNamespace(SEEN_RESET_CYCLES=5)
+        self._patch = mock.patch.object(ble_bridge, "board", self._board)
+        self._patch.start()
+        self.bridge = ble_bridge.BleBridge()
+
+    def tearDown(self):
+        self._patch.stop()
+
+    @staticmethod
+    def _svc(data_hex, mac=_MAC, rssi=-60):
+        # Mi Scale 2 style: 16-bit service data 0x181B plus payload.
+        raw = _ad(0x16, b"\x1b\x18" + bytes.fromhex(data_hex))
+        return (mac, 0, rssi, raw)
+
+    @staticmethod
+    def _mfr(data_hex, mac=_MAC, rssi=-60):
+        raw = _ad(0xFF, b"\x59\x00" + bytes.fromhex(data_hex))
+        return (mac, 0, rssi, raw)
+
+    def _drain(self, *frames):
+        self.bridge._raw_results = list(frames)
+        return {e["address"]: e for e in self.bridge.drain_results()}
+
+    def test_later_frame_in_same_drain_wins(self):
+        out = self._drain(self._svc("01"), self._svc("02"), self._svc("03"))
+        self.assertEqual(out[_MAC_STR]["service_data"], [{"uuid": "181b", "data": "03"}])
+
+    def test_next_drain_replaces_stale_service_data(self):
+        self._drain(self._svc("01"))
+        out = self._drain(self._svc("02"))
+        self.assertEqual(out[_MAC_STR]["service_data"], [{"uuid": "181b", "data": "02"}])
+
+    def test_next_drain_replaces_stale_manufacturer_data(self):
+        self._drain(self._mfr("aa"))
+        out = self._drain(self._mfr("bb"))
+        self.assertEqual(out[_MAC_STR]["manufacturer_data"], "bb")
+
+    def test_next_drain_reports_current_rssi(self):
+        self._drain(self._mfr("aa", rssi=-40))
+        out = self._drain(self._mfr("aa", rssi=-85))
+        self.assertEqual(out[_MAC_STR]["rssi"], -85)
+
+    def test_silent_mac_still_published_with_its_last_frame(self):
+        # Original _seen intent: a MAC silent in this drain stays listed until
+        # the reset cycle ages it out.
+        self._drain(self._svc("01"), self._mfr("aa", mac=self._OTHER))
+        out = self._drain(self._svc("02"))
+        self.assertEqual(out["11:22:33:44:55:66"]["manufacturer_data"], "aa")
+        self.assertEqual(out[_MAC_STR]["service_data"], [{"uuid": "181b", "data": "02"}])
+
+    def test_reset_cycle_ages_out_silent_mac(self):
+        self._drain(self._mfr("aa", mac=self._OTHER))
+        for _ in range(self._board.SEEN_RESET_CYCLES - 1):
+            self._drain()
+        out = self._drain(self._svc("05"))
+        self.assertNotIn("11:22:33:44:55:66", out)
+        self.assertEqual(out[_MAC_STR]["service_data"], [{"uuid": "181b", "data": "05"}])
 
 
 class TestRawHasMac(unittest.TestCase):
@@ -339,6 +472,71 @@ class TestUnpackScanResult(unittest.TestCase):
         data = (1, _MAC, 0, -50, b"")
         addr_type, _addr, _rssi, _adv = ble_bridge._unpack_scan_result(data)
         self.assertEqual(addr_type, 1)
+
+
+class _MicroPythonBytes(bytes):
+    """bytes that rejects a slice step other than 1, as MicroPython does.
+
+    MicroPython's bytes_subscr (py/objstr.c, v1.27.0) raises
+    NotImplementedError("only slices with step=1 (aka None) are supported") for
+    any step slice, so `buf[::-1]` passes on CPython and throws on the device.
+    Slices keep this type, so a parser that slices first and reverses later is
+    caught too.
+    """
+
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            if key.step not in (None, 1):
+                raise NotImplementedError("only slices with step=1 (aka None) are supported")
+            return _MicroPythonBytes(bytes.__getitem__(self, key))
+        return bytes.__getitem__(self, key)
+
+
+class TestParserUnderMicroPythonSliceRules(unittest.TestCase):
+    """The parser must not rely on step slices, which MicroPython rejects.
+
+    A single 128-bit advertiser in range used to throw out of the parser and
+    drop the whole scan batch on the device, while every CPython test passed.
+    """
+
+    def test_stub_rejects_step_slices_like_micropython(self):
+        with self.assertRaises(NotImplementedError):
+            _MicroPythonBytes(b"\x01\x02")[::-1]
+
+    def test_128bit_service_uuid(self):
+        entry = _parse(_MicroPythonBytes(_ad(0x07, _UUID_1A10_LE)))
+        self.assertEqual(entry["services"], [_UUID_1A10_FULL])
+
+    def test_128bit_service_uuid_list_of_two(self):
+        other_full = "0000fff0" + ble_bridge._BT_BASE_SUFFIX
+        raw = _ad(0x06, _UUID_1A10_LE + _uuid_le(other_full))
+        entry = _parse(_MicroPythonBytes(raw))
+        self.assertEqual(entry["services"], [_UUID_1A10_FULL, other_full])
+
+    def test_128bit_service_data(self):
+        entry = _parse(_MicroPythonBytes(_ad(0x21, _UUID_1A10_LE + bytes([0xAA, 0xBB]))))
+        self.assertEqual(entry["service_data"], [{"uuid": _UUID_1A10_FULL, "data": "aabb"}])
+
+    def test_no_step_slices_in_device_code(self):
+        # Belt and braces for code the parser tests do not reach: a step slice
+        # anywhere in a module that runs on the device is a latent device-only
+        # NotImplementedError (bytes, str and bytearray all reject it).
+        import re
+
+        # Two colons inside one pair of brackets, with no brace or quote in
+        # between (so a list of dict literals does not match).
+        inner = r"[^\[\]{}\"'\n]*"
+        step_slice = re.compile(r"\[" + inner + ":" + inner + ":" + inner + r"\]")
+        offenders = []
+        for fname in sorted(os.listdir(_FIRMWARE_DIR)):
+            if not fname.endswith(".py"):
+                continue
+            with open(os.path.join(_FIRMWARE_DIR, fname), encoding="utf-8") as handle:
+                for lineno, line in enumerate(handle, 1):
+                    code = line.split("#", 1)[0]
+                    if step_slice.search(code):
+                        offenders.append(f"{fname}:{lineno}: {line.strip()}")
+        self.assertEqual(offenders, [], "step slice in device code")
 
 
 class TestAddrTypeProbeOrder(unittest.TestCase):

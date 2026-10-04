@@ -15,6 +15,18 @@
 #   ./flash.sh --app-only               # re-upload .py files (fast iteration)
 #   ./flash.sh --libs-only              # re-install MicroPython libraries
 #   ./flash.sh --board guition_4848 --app-only
+#   ./flash.sh --help                   # show usage, touch nothing
+#
+# Any other argument is refused before a tool runs: only a run with no mode
+# flag at all erases and reflashes the device.
+#
+# Board choice: --board, else "board" in config.json, else chip auto-detect.
+# A --board that differs from a non-null config.json "board" is refused. The
+# chosen board is written to board.txt on the device, which board.py reads.
+#
+# MQTT over TLS: set "mqtt_tls": true in config.json (and mqtt_port, usually
+# 8883). To verify the broker, put its CA certificate next to config.json and
+# name it in "mqtt_ca_file"; it is uploaded with the app.
 #
 # The script auto-detects the serial port. Override with:
 #   PORT=/dev/ttyACM0 ./flash.sh
@@ -50,6 +62,28 @@ green() { printf '\033[0;32m%s\033[0m\n' "$*"; }
 blue()  { printf '\033[0;34m%s\033[0m\n' "$*"; }
 
 die() { red "Error: $*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+Usage: ./flash.sh [--board BOARD] [--app-only | --libs-only]
+
+  (no mode flag)   full flash: ERASE the device, write MicroPython,
+                   install libraries, upload the app
+  --app-only       re-upload the .py files only (no erase)
+  --libs-only      re-install the MicroPython libraries only (no erase)
+  --board BOARD    atom_echo, esp_wroom_32, esp32_s3 or guition_4848
+                   (default: "board" in config.json, else chip auto-detect)
+  -h, --help       show this help and exit
+
+Serial port: auto-detected, override with PORT=/dev/ttyACM0 ./flash.sh
+EOF
+}
+
+usage_error() {
+  red "Error: $*" >&2
+  usage >&2
+  exit 2
+}
 
 check_tool() {
   # The script cd's to its own directory above, so the path is relative to firmware/.
@@ -118,6 +152,54 @@ detect_board() {
     configure_board "atom_echo"
   else
     die "Could not identify chip type from esptool output"
+  fi
+}
+
+config_string() {
+  # Print the string value of key $1 in config.json, or nothing when it is
+  # null, absent, or there is no config.json (--libs-only does not need one).
+  [[ -f config.json ]] || return 0
+  grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" config.json \
+    | head -n 1 \
+    | sed 's/.*:[[:space:]]*"\([^"]*\)"/\1/' || true
+}
+
+config_board() {
+  config_string board
+}
+
+check_ca_file() {
+  # The mqtt_ca_file named in config.json is uploaded next to it, and main.py
+  # refuses to boot when it is missing. Check before anything is erased.
+  local ca_file
+  ca_file=$(config_string mqtt_ca_file)
+  [[ -n "$ca_file" ]] || return 0
+  if [[ ! "$ca_file" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    die "mqtt_ca_file \"${ca_file}\" must be a plain file name in firmware/ (letters, digits, . _ -); it is uploaded to the device root under the same name."
+  fi
+  [[ -f "$ca_file" ]] || die "mqtt_ca_file \"${ca_file}\" from config.json not found in firmware/."
+}
+
+resolve_board() {
+  # Pick the board the same way board.py does at runtime, so the board_*.py
+  # uploaded here is the one the device imports: --board, else config.json
+  # "board", else chip auto-detect. The choice is written to board.txt on the
+  # device (upload_app), which board.py reads when config.json has no "board".
+  local port="$1" board_arg="$2"
+  local cfg_board
+  cfg_board=$(config_board)
+
+  if [[ -n "$board_arg" && -n "$cfg_board" && "$board_arg" != "$cfg_board" ]]; then
+    die "--board ${board_arg} conflicts with \"board\": \"${cfg_board}\" in config.json. The device follows config.json, so it would look for board_${cfg_board}.py, which this run would not upload. Make them match, or set \"board\": null."
+  fi
+
+  if [[ -n "$board_arg" ]]; then
+    configure_board "$board_arg"
+  elif [[ -n "$cfg_board" ]]; then
+    green "Board from config.json: ${cfg_board}"
+    configure_board "$cfg_board"
+  else
+    detect_board "$port"
   fi
 }
 
@@ -193,9 +275,10 @@ erase_and_flash() {
 
 install_libs() {
   local port="$1"
-  # aioble is from micropython-lib, version tracks MicroPython release (no separate pinning)
+  # Same specs as mip-packages.txt (tests/test_flash_tooling.py keeps them in
+  # sync). aioble is pinned: the firmware relies on its internals.
   blue "Installing aioble..."
-  mpremote connect "$port" mip install aioble
+  mpremote connect "$port" mip install "aioble@0.6.2"
 
   blue "Installing mqtt_as (Peter Hinch)..."
   mpremote connect "$port" mip install "github:peterhinch/micropython-mqtt@70b56a7a4aaf"
@@ -215,9 +298,20 @@ upload_app() {
 
   blue "Uploading application files for ${BOARD}..."
   mpremote connect "$port" cp config.json :config.json
+  local ca_file
+  ca_file=$(config_string mqtt_ca_file)
+  if [[ -n "$ca_file" ]]; then
+    mpremote connect "$port" cp "$ca_file" ":$ca_file"
+  fi
   mpremote connect "$port" cp boot.py :boot.py
   mpremote connect "$port" cp board.py :board.py
   mpremote connect "$port" cp "$BOARD_MODULE" ":$BOARD_MODULE"
+  # Record the board this upload is for. board.py loads it when config.json
+  # has no "board" override; without it, a WROOM-32 or Guition flashed with
+  # --board was detected as an Atom Echo / plain S3 at runtime and failed to
+  # import a board module that was never uploaded. BOARD is one of the names
+  # configure_board accepts, so it is safe to embed.
+  mpremote connect "$port" exec "open('board.txt', 'w').write('${BOARD}')"
   mpremote connect "$port" cp ble_bridge.py :ble_bridge.py
   mpremote connect "$port" cp beep.py :beep.py
   if [[ "$BOARD" == "guition_4848" ]]; then
@@ -238,26 +332,40 @@ reset_device() {
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 main() {
-  local mode="full"
+  local mode=""
   local board_arg=""
 
-  # Parse arguments
+  # Parse arguments. Everything is validated here, before any tool runs: an
+  # unknown argument used to become the mode and fall through to the full
+  # erase-and-flash branch, so `--help` or a typo wiped the device.
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      -h|--help)
+        usage
+        exit 0
+        ;;
       --board)
+        if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+          usage_error "--board needs a value"
+        fi
         board_arg="$2"
         shift 2
         ;;
       --app-only|--libs-only)
+        if [[ -n "$mode" && "$mode" != "$1" ]]; then
+          usage_error "$mode and $1 cannot be combined"
+        fi
         mode="$1"
         shift
         ;;
       *)
-        mode="$1"
-        shift
+        usage_error "unknown argument: $1"
         ;;
     esac
   done
+  # Full flash only when no mode flag was given at all.
+  [[ -n "$mode" ]] || mode="full"
+  [[ "$mode" == "--libs-only" ]] || check_ca_file
 
   check_tool esptool
   check_tool mpremote
@@ -266,12 +374,8 @@ main() {
   port=$(detect_port)
   blue "Using port: $port"
 
-  # Configure board (explicit or auto-detect)
-  if [[ -n "$board_arg" ]]; then
-    configure_board "$board_arg"
-  else
-    detect_board "$port"
-  fi
+  # Configure board (--board, config.json "board", or auto-detect)
+  resolve_board "$port" "$board_arg"
   blue "Board: ${BOARD} (chip: ${CHIP}, baud: ${BAUD})"
 
   case "$mode" in
@@ -283,12 +387,15 @@ main() {
       install_libs "$port"
       reset_device "$port"
       ;;
-    full|*)
+    full)
       download_firmware
       erase_and_flash "$port"
       install_libs "$port"
       upload_app "$port"
       reset_device "$port"
+      ;;
+    *)
+      die "internal error: unexpected mode '$mode'"
       ;;
   esac
 

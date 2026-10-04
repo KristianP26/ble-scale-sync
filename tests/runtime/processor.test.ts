@@ -16,7 +16,8 @@ import type {
 } from '../../src/interfaces/scale-adapter.js';
 import type { RawReading } from '../../src/ble/shared.js';
 import type { AppContext } from '../../src/runtime/context.js';
-import type { Exporter } from '../../src/interfaces/exporter.js';
+import type { Exporter, ExportResultDetail } from '../../src/interfaces/exporter.js';
+import type { DispatchResult } from '../../src/orchestrator.js';
 import type { DisplayNotifier } from '../../src/interfaces/display-notifier.js';
 
 // Capture (and suppress) log output. console.log is the sink for logger.info().
@@ -43,6 +44,7 @@ vi.mock(import('../../src/update-check.js'), () => ({
 }));
 
 const { processReading } = await import('../../src/runtime/processor.js');
+const { setExporterSlot } = await import('../../src/runtime/exporter-slot.js');
 const { dispatchExports } = await import('../../src/orchestrator.js');
 const { updateLastKnownWeight } = await import('../../src/config/write.js');
 const { checkAndLogUpdate } = await import('../../src/update-check.js');
@@ -134,7 +136,13 @@ interface CtxOverrides {
 
 function makeCtx(users: UserConfig[], overrides: CtxOverrides = {}): AppContext {
   return {
-    config: makeAppConfig(users, overrides.outOfRange),
+    // Copies: the processor now keeps last_known_weight current in memory
+    // (E-03), so the shared fixtures would otherwise carry one test's weigh-in
+    // into the next.
+    config: makeAppConfig(
+      users.map((u) => ({ ...u })),
+      overrides.outOfRange,
+    ),
     scaleMac: undefined,
     weightUnit: overrides.weightUnit ?? 'kg',
     dryRun: overrides.dryRun ?? false,
@@ -169,11 +177,31 @@ function fakeExporter(name = 'webhook'): Exporter {
   return { name, export: vi.fn(async () => ({ success: true })) } as unknown as Exporter;
 }
 
+/**
+ * A dispatch outcome as the real orchestrator returns it: the details paired
+ * with the exporter INSTANCES they came from (D029), matched here by name in
+ * the order given. The queue reads the instance, not the name.
+ */
+function withAttempts(result: { success: boolean; details: ExportResultDetail[] }) {
+  return async (exporters: Exporter[]): Promise<DispatchResult> => {
+    const unused = [...exporters];
+    const attempts = result.details.map((detail) => {
+      const at = unused.findIndex((e) => e.name === detail.name);
+      const [exporter] = unused.splice(at, 1);
+      return { exporter, detail };
+    });
+    return { ...result, attempts };
+  };
+}
+
 beforeEach(() => {
   vi.mocked(dispatchExports).mockReset();
-  vi.mocked(dispatchExports).mockResolvedValue({
-    success: true,
-    details: [{ name: 'webhook', ok: true }],
+  vi.mocked(dispatchExports).mockImplementation(async (exporters) => {
+    const attempts = exporters.map((exporter) => ({
+      exporter,
+      detail: { name: exporter.name, ok: true as const },
+    }));
+    return { success: true, details: attempts.map((a) => a.detail), attempts };
   });
   vi.mocked(updateLastKnownWeight).mockClear();
   vi.mocked(checkAndLogUpdate).mockClear();
@@ -200,16 +228,23 @@ describe('processReading: single-user', () => {
     const [calledExporters, payload, context] = vi.mocked(dispatchExports).mock.calls[0];
     expect(calledExporters).toBe(exporters);
     expect(payload.weight).toBe(80);
+    // timestamp: every dispatch now carries the measurement time, live ones
+    // included (D027, F-06). No `historical` flag: this is a live weigh-in.
     expect(context).toEqual({
       userName: 'Dad',
       userSlug: 'dad',
-      userConfig: dad,
+      // The configured user object itself; its last_known_weight is the live
+      // weigh-in by the time this runs (E-03), so not the `dad` fixture.
+      userConfig: ctx.config.users[0],
       weightUnit: 'kg',
+      timestamp: expect.any(Date),
     });
   });
 
   it('returns false when dispatchExports reports failure', async () => {
-    vi.mocked(dispatchExports).mockResolvedValueOnce({ success: false, details: [] });
+    vi.mocked(dispatchExports).mockImplementationOnce(
+      withAttempts({ success: false, details: [] }),
+    );
     const ctx = makeCtx([dad]);
     const ok = await processReading(ctx, rawReading(), { singleUserExporters: [fakeExporter()] });
     expect(ok).toBe(false);
@@ -276,6 +311,20 @@ describe('processReading: multi-user', () => {
     expect(display.beep).toHaveBeenCalledWith(600, 150, 3);
   });
 
+  // E-19: the matcher already logs its own warning; the processor repeated it.
+  it('logs the unknown_user: log warning once', async () => {
+    const dadNoLast: UserConfig = { ...dad, last_known_weight: null };
+    const momNoLast: UserConfig = { ...mom, last_known_weight: null };
+    const config = makeAppConfig([dadNoLast, momNoLast]);
+    config.unknown_user = 'log';
+    const ctx: AppContext = { ...makeCtx([dadNoLast, momNoLast]), config };
+    warnSpy.mockClear();
+
+    await processReading(ctx, rawReading({ weight: 200, impedance: 0 }));
+    const hits = warnSpy.mock.calls.filter((c) => String(c[0]).includes('logging and skipping'));
+    expect(hits).toHaveLength(1);
+  });
+
   it('dispatches per matched user with drift warning in ExportContext when applicable', async () => {
     const ctx = makeCtx([dad, mom], { weightUnit: 'lbs' });
     // 94 kg lands in upper 10% of dad's [75..95] range → triggers drift warn.
@@ -319,7 +368,9 @@ describe('processReading: multi-user', () => {
     // total failure poisoned the retry: the scale reconnects, replays the same
     // frame now carrying a timestamp, and the replay dedup drops it as already
     // synced. The weigh-in is lost with nothing left to retry from.
-    vi.mocked(dispatchExports).mockResolvedValueOnce({ success: false, details: [] });
+    vi.mocked(dispatchExports).mockImplementationOnce(
+      withAttempts({ success: false, details: [] }),
+    );
     const ctx = makeCtx([dad, mom], { configSource: 'yaml', configPath: '/tmp/config.yaml' });
     const ok = await processReading(ctx, rawReading({ weight: 82, impedance: 500 }), {
       getExportersForUser: () => [fakeExporter()],
@@ -329,7 +380,9 @@ describe('processReading: multi-user', () => {
   });
 
   it('does not set the single-user replay anchor when every exporter failed', async () => {
-    vi.mocked(dispatchExports).mockResolvedValueOnce({ success: false, details: [] });
+    vi.mocked(dispatchExports).mockImplementationOnce(
+      withAttempts({ success: false, details: [] }),
+    );
     const ctx = makeCtx([dad]);
     await processReading(ctx, rawReading({ weight: 82, impedance: 500 }), {
       singleUserExporters: [fakeExporter()],
@@ -410,13 +463,20 @@ describe('processReading: historical replay', () => {
     expect((calls[1][2] as { timestamp?: Date }).timestamp?.toISOString()).toBe(
       '2025-07-02T07:00:00.000Z',
     );
-    expect((calls[2][2] as { timestamp?: Date }).timestamp).toBeUndefined();
+    // The stored records are flagged; the live one is not, and carries the
+    // receipt time rather than no time at all (D027, F-06).
+    expect(calls[0][2]?.historical).toBe(true);
+    expect(calls[1][2]?.historical).toBe(true);
+    expect(calls[2][2]?.historical).toBeUndefined();
+    expect(calls[2][2]?.timestamp).toBeInstanceOf(Date);
   });
 
   it('returns success of the last dispatch (live)', async () => {
     vi.mocked(dispatchExports)
-      .mockResolvedValueOnce({ success: false, details: [] })
-      .mockResolvedValueOnce({ success: true, details: [{ name: 'garmin', ok: true }] });
+      .mockImplementationOnce(withAttempts({ success: false, details: [] }))
+      .mockImplementationOnce(
+        withAttempts({ success: true, details: [{ name: 'garmin', ok: true }] }),
+      );
     const ctx = makeCtx([dad]);
     const raw = rawWithHistory(
       { weight: 80, impedance: 480, timestamp: new Date('2025-07-01T07:00:00Z') },
@@ -471,7 +531,9 @@ describe('processReading: historical replay', () => {
   });
 
   it('single-user: dispatches each entry with timestamp when last is also historical (no live frame)', async () => {
-    const ctx = makeCtx([dad]);
+    // No last_known_weight: the newest record (82 kg) would otherwise be
+    // deduped against it, which single-user mode now does too (E-09).
+    const ctx = makeCtx([{ ...dad, last_known_weight: null }]);
     const exporters = [fakeExporter('garmin')];
     // Three historical readings, no live. shared.ts disconnect-with-history
     // promotes the newest as `reading` (timestamp still set), rest in history.
@@ -503,15 +565,18 @@ describe('processReading: historical replay', () => {
     );
   });
 
-  it('single-user: does NOT dedup historical readings against last_known_weight', async () => {
-    // Build a local user with a fixed last_known_weight so the test does not
-    // depend on the shared `dad` fixture.
+  // Reversed on purpose (E-09). Single-user used to ignore last_known_weight
+  // for the replay dedup because it never wrote the field, so the value could
+  // only be a stale hand-entered one. It now persists it after every exported
+  // live weigh-in, and in single-run mode (a new process per run) that file
+  // value is the ONLY memory of what was already exported, so ignoring it
+  // re-exported the same stored records on every run.
+  it('single-user: dedups stored records against the persisted last_known_weight', async () => {
     const lone: UserConfig = { ...dad, last_known_weight: 82 };
     const ctx = makeCtx([lone]);
     const exporters = [fakeExporter('garmin')];
-    // Both historical readings within +/-0.1 of last_known_weight. In
-    // multi-user mode the dedup branch would skip these; single-user mode
-    // has no dedup path, so all three must dispatch.
+    // Both stored records within +/-0.1 of last_known_weight; only the live
+    // weigh-in goes out.
     const raw = rawWithHistory(
       { weight: 82.05, impedance: 480, timestamp: new Date('2025-07-01T07:00:00Z') },
       { weight: 82.07, impedance: 490, timestamp: new Date('2025-07-02T07:00:00Z') },
@@ -520,7 +585,9 @@ describe('processReading: historical replay', () => {
 
     await processReading(ctx, raw, { singleUserExporters: exporters });
 
-    expect(dispatchExports).toHaveBeenCalledTimes(3);
+    expect(dispatchExports).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(dispatchExports).mock.calls[0][1].weight).toBe(80); // FIXED_BODY_COMP
+    expect(vi.mocked(dispatchExports).mock.calls[0][2]?.historical).toBeUndefined();
   });
 
   it('single-user: dedups a replay frame against the runtime anchor on a LATER reading (#164)', async () => {
@@ -544,9 +611,8 @@ describe('processReading: historical replay', () => {
     await processReading(ctx, raw, { singleUserExporters: exporters });
 
     expect(dispatchExports).toHaveBeenCalledTimes(1);
-    expect(
-      (vi.mocked(dispatchExports).mock.calls[0][2] as { timestamp?: Date }).timestamp,
-    ).toBeUndefined();
+    // The one dispatch is the live weigh-in: not flagged as a stored record.
+    expect(vi.mocked(dispatchExports).mock.calls[0][2]?.historical).toBeUndefined();
     expect(ctx.lastExportedWeights.get('dad')).toBe(83.0);
   });
 
@@ -655,7 +721,12 @@ describe('processReading: out_of_range', () => {
     expect(checkAndLogUpdate).not.toHaveBeenCalled();
   });
 
-  it('does not skip a live reading in range because a replayed frame is not', async () => {
+  // Both reversed on purpose (E-04, D027). The guard used to gate the whole
+  // batch on the live weight, because the stored records were assumed to be
+  // the live user's. They are now attributed and gated one by one on their own
+  // weight, so an out-of-range stored record is dropped on its own, and an
+  // out-of-range live reading no longer takes good stored records with it.
+  it('drops an out-of-range stored record and still exports the live reading', async () => {
     const ctx = makeCtx([dad], { outOfRange: 'skip' });
     const raw: RawReading = {
       reading: { weight: 82.5, impedance: 500 },
@@ -664,12 +735,11 @@ describe('processReading: out_of_range', () => {
     };
     await processReading(ctx, raw, { singleUserExporters: [fakeExporter()] });
 
-    // Both frames go: the guard reads the live weight, which is the same weight
-    // the matcher used, not whatever the scale had stored from an earlier day.
-    expect(dispatchExports).toHaveBeenCalledTimes(2);
+    expect(dispatchExports).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(dispatchExports).mock.calls[0][2]?.historical).toBeUndefined();
   });
 
-  it('gates on the live weight, so a whole replay is skipped with it', async () => {
+  it('skips an out-of-range live reading without taking an in-range stored record with it', async () => {
     const ctx = makeCtx([dad], { outOfRange: 'skip' });
     const raw: RawReading = {
       reading: { weight: 178, impedance: 0 },
@@ -678,7 +748,10 @@ describe('processReading: out_of_range', () => {
     };
     await processReading(ctx, raw, { singleUserExporters: [fakeExporter()] });
 
-    expect(dispatchExports).not.toHaveBeenCalled();
+    expect(dispatchExports).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(dispatchExports).mock.calls[0][2]?.historical).toBe(true);
+    // A stored record never moves the anchor (D027).
+    expect(ctx.lastExportedWeights.has('dad')).toBe(false);
   });
 });
 
@@ -700,10 +773,12 @@ describe('failed exports are queued for a later cycle (#412)', () => {
   }
 
   it('queues a backdate-capable exporter, with the user it was measured for', async () => {
-    vi.mocked(dispatchExports).mockResolvedValueOnce({
-      success: false,
-      details: [{ name: 'garmin', ok: false, error: 'target down' }],
-    });
+    vi.mocked(dispatchExports).mockImplementationOnce(
+      withAttempts({
+        success: false,
+        details: [{ name: 'garmin', ok: false, error: 'target down' }],
+      }),
+    );
     const ctx = makeCtx([dad], { exportQueuePath: queuePath });
 
     await processReading(ctx, rawReading(), {
@@ -725,10 +800,12 @@ describe('failed exports are queued for a later cycle (#412)', () => {
   });
 
   it('does not queue an exporter that cannot record a past reading', async () => {
-    vi.mocked(dispatchExports).mockResolvedValueOnce({
-      success: false,
-      details: [{ name: 'mqtt', ok: false, error: 'broker down' }],
-    });
+    vi.mocked(dispatchExports).mockImplementationOnce(
+      withAttempts({
+        success: false,
+        details: [{ name: 'mqtt', ok: false, error: 'broker down' }],
+      }),
+    );
     const ctx = makeCtx([dad], { exportQueuePath: queuePath });
 
     await processReading(ctx, rawReading(), {
@@ -743,13 +820,15 @@ describe('failed exports are queued for a later cycle (#412)', () => {
   });
 
   it('queues only the failures, not the exporters that succeeded', async () => {
-    vi.mocked(dispatchExports).mockResolvedValueOnce({
-      success: true,
-      details: [
-        { name: 'file', ok: true },
-        { name: 'garmin', ok: false, error: 'target down' },
-      ],
-    });
+    vi.mocked(dispatchExports).mockImplementationOnce(
+      withAttempts({
+        success: true,
+        details: [
+          { name: 'file', ok: true },
+          { name: 'garmin', ok: false, error: 'target down' },
+        ],
+      }),
+    );
     const ctx = makeCtx([dad], { exportQueuePath: queuePath });
 
     await processReading(ctx, rawReading(), {
@@ -761,11 +840,42 @@ describe('failed exports are queued for a later cycle (#412)', () => {
     expect(JSON.parse(lines[0]).exporter).toBe('garmin');
   });
 
-  it('writes nothing when retrying is turned off, even with a path available', async () => {
-    vi.mocked(dispatchExports).mockResolvedValueOnce({
-      success: false,
-      details: [{ name: 'garmin', ok: false, error: 'target down' }],
+  // D029: two exporters of one type in one list are both exported to, so the
+  // queue entry must say WHICH one failed. The type name cannot.
+  it('queues the failed instance with the config slot it was built from', async () => {
+    vi.mocked(dispatchExports).mockImplementationOnce(
+      withAttempts({
+        success: true,
+        details: [
+          { name: 'webhook', ok: true },
+          { name: 'webhook', ok: false, error: 'HTTP 500' },
+        ],
+      }),
+    );
+    const first = exporterNamed('webhook', true);
+    const second = exporterNamed('webhook', true);
+    setExporterSlot(first, { list: 'global', index: 0 });
+    setExporterSlot(second, { list: 'global', index: 1 });
+    const ctx = makeCtx([dad], { exportQueuePath: queuePath });
+
+    await processReading(ctx, rawReading(), { singleUserExporters: [first, second] });
+
+    const lines = fs.readFileSync(queuePath, 'utf-8').trim().split(String.fromCharCode(10));
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0])).toMatchObject({
+      exporter: 'webhook',
+      exporterList: 'global',
+      exporterIndex: 1,
     });
+  });
+
+  it('writes nothing when retrying is turned off, even with a path available', async () => {
+    vi.mocked(dispatchExports).mockImplementationOnce(
+      withAttempts({
+        success: false,
+        details: [{ name: 'garmin', ok: false, error: 'target down' }],
+      }),
+    );
     // A path AND the flag off: without both, this test could pass because the
     // path was missing rather than because the flag was respected.
     const ctx = { ...makeCtx([dad], { exportQueuePath: queuePath }), retryFailedExports: false };
@@ -782,10 +892,12 @@ describe('failed exports are queued for a later cycle (#412)', () => {
     // be written without one. On retry the exporter then got no timestamp at
     // all and `file` fell back to `new Date()`, recording a reading taken at
     // 07:00 as having happened whenever the retry succeeded.
-    vi.mocked(dispatchExports).mockResolvedValueOnce({
-      success: false,
-      details: [{ name: 'garmin', ok: false, error: 'target down' }],
-    });
+    vi.mocked(dispatchExports).mockImplementationOnce(
+      withAttempts({
+        success: false,
+        details: [{ name: 'garmin', ok: false, error: 'target down' }],
+      }),
+    );
     const ctx = makeCtx([dad], { exportQueuePath: queuePath });
 
     const before = Date.now();
@@ -807,10 +919,12 @@ describe('failed exports are queued for a later cycle (#412)', () => {
 
   it('keeps a historical frame own timestamp rather than the observation time', async () => {
     const measured = new Date('2026-09-01T07:00:00.000Z');
-    vi.mocked(dispatchExports).mockResolvedValueOnce({
-      success: false,
-      details: [{ name: 'garmin', ok: false, error: 'target down' }],
-    });
+    vi.mocked(dispatchExports).mockImplementationOnce(
+      withAttempts({
+        success: false,
+        details: [{ name: 'garmin', ok: false, error: 'target down' }],
+      }),
+    );
     const ctx = makeCtx([dad], { exportQueuePath: queuePath });
     await processReading(ctx, rawReading({ weight: 80, impedance: 500, timestamp: measured }), {
       singleUserExporters: [exporterNamed('garmin', true)],
@@ -822,15 +936,18 @@ describe('failed exports are queued for a later cycle (#412)', () => {
     expect(queued.timestamp).toBe(measured.toISOString());
   });
 
-  it('still hands the LIVE dispatch a context with no timestamp', async () => {
-    // The queue fix must not leak into the live path: dispatchExports reads a
-    // present timestamp as "this is a backdated reading" and skips every
-    // exporter that cannot record one, so stamping the live context here would
-    // silently stop live MQTT.
-    vi.mocked(dispatchExports).mockResolvedValueOnce({
-      success: false,
-      details: [{ name: 'garmin', ok: false, error: 'target down' }],
-    });
+  // Reversed on purpose (F-06). The live dispatch used to carry no
+  // timestamp, so every backdate exporter took its own `new Date()` while the
+  // queue entry carried a different, earlier time: a retry was then a second
+  // measurement to the target, not the same one. "Historical" is now its own
+  // flag, so stamping the live dispatch no longer filters out live MQTT.
+  it('hands the LIVE dispatch the same measurement time the queue entry carries', async () => {
+    vi.mocked(dispatchExports).mockImplementationOnce(
+      withAttempts({
+        success: false,
+        details: [{ name: 'garmin', ok: false, error: 'target down' }],
+      }),
+    );
     const ctx = makeCtx([dad], { exportQueuePath: queuePath });
 
     await processReading(ctx, rawReading(), {
@@ -838,6 +955,11 @@ describe('failed exports are queued for a later cycle (#412)', () => {
     });
 
     const [, , context] = vi.mocked(dispatchExports).mock.calls[0];
-    expect(context.timestamp).toBeUndefined();
+    const queued = JSON.parse(
+      fs.readFileSync(queuePath, 'utf-8').trim().split(String.fromCharCode(10))[0],
+    ) as { timestamp?: string };
+    expect(context?.timestamp).toBeInstanceOf(Date);
+    expect(context?.timestamp?.toISOString()).toBe(queued.timestamp);
+    expect(context?.historical).toBeUndefined();
   });
 });

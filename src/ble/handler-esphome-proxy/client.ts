@@ -27,6 +27,42 @@ class UnknownEsphomeMessage {
 /** Set before the attempt so a failing patch is not retried on every reconnect. */
 let patchAttempted = false;
 
+/** Marks our replacement, so a second module instance does not wrap it again. */
+const PATCHED = Symbol.for('ble-scale-sync.esphome.buildMessage.patched');
+
+type BuildMessage = (
+  this: { emit: (event: string, err: Error) => void; end: () => void },
+  messageId: number,
+  bytes: Uint8Array,
+) => unknown;
+
+/**
+ * Ask the library's own `buildMessage` what it does with an id it does not
+ * know, on a stand-in frame helper. The bug is two-fold (it ends the connection
+ * and returns undefined, which the caller then dereferences), so the library
+ * counts as fixed only when it does neither.
+ */
+function originalIgnoresUnknownIds(
+  original: BuildMessage,
+  idToType: Record<string, unknown>,
+): boolean {
+  let probeId = 0xffff;
+  while (probeId in idToType) probeId--;
+  let ended = false;
+  const probe = {
+    emit: () => {},
+    end: () => {
+      ended = true;
+    },
+  };
+  try {
+    const result = original.call(probe, probeId, new Uint8Array(0));
+    return !ended && result !== undefined;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Repair `FrameHelper.buildMessage` in `@2colors/esphome-native-api` (1.3.6).
  *
@@ -46,9 +82,18 @@ let patchAttempted = false;
  *
  * Patching the prototype covers both NoiseFrameHelper and PlaintextFrameHelper.
  * `createRequire` resolves the same module instance the dynamically imported
- * Client uses (Node shares the CJS require cache with ESM interop). If a future
- * release moves these internals the feature check and try/catch fall back to the
- * library default, which is the current behaviour, so this cannot regress.
+ * Client uses (Node shares the CJS require cache with ESM interop).
+ *
+ * The D012 contract, point by point: (1) the feature check covers everything
+ * the replacement reads, not just `buildMessage`, because a release that keeps
+ * `buildMessage` but renames `id_to_type` or `pb` would make the replacement
+ * throw on EVERY frame and the proxy would decode nothing; (2) a marker on the
+ * replacement makes a second call a no-op even across module instances; (3) the
+ * original is asked about an unused id first, and a library that already keeps
+ * the link up and returns a message is left alone. A change the check cannot
+ * see (say, a different `deserializeBinary` contract) is not caught at runtime:
+ * `tests/ble/esphome-proxy/frame-patch.test.ts` runs against the real internals
+ * so it fails CI on the upgrade instead.
  */
 function patchUnknownMessageHandling(): void {
   if (patchAttempted) return;
@@ -56,13 +101,29 @@ function patchUnknownMessageHandling(): void {
   try {
     const FrameHelper = nodeRequire('@2colors/esphome-native-api/lib/utils/frameHelper.js');
     const { id_to_type, pb } = nodeRequire('@2colors/esphome-native-api/lib/utils/messages.js');
-    if (typeof FrameHelper?.prototype?.buildMessage !== 'function') {
+    const original: unknown = FrameHelper?.prototype?.buildMessage;
+    const helloType: unknown = id_to_type?.[1];
+    const internalsMatch =
+      typeof original === 'function' &&
+      typeof id_to_type === 'object' &&
+      id_to_type !== null &&
+      typeof pb === 'object' &&
+      pb !== null &&
+      typeof helloType === 'string' &&
+      typeof pb[helloType]?.deserializeBinary === 'function';
+    if (!internalsMatch) {
       bleLog.warn(
-        'ESPHome unknown-message patch skipped: buildMessage not found (library internals changed).',
+        'ESPHome unknown-message patch skipped: library internals changed ' +
+          '(buildMessage, id_to_type or pb not in the expected shape).',
       );
       return;
     }
-    FrameHelper.prototype.buildMessage = function (
+    if ((original as { [PATCHED]?: boolean })[PATCHED]) return;
+    if (originalIgnoresUnknownIds(original as BuildMessage, id_to_type)) {
+      bleLog.debug('ESPHome unknown-message patch not needed: the library already ignores them.');
+      return;
+    }
+    const patched = function (
       this: { emit: (event: string, err: Error) => void; end: () => void },
       messageId: number,
       bytes: Uint8Array,
@@ -80,6 +141,8 @@ function patchUnknownMessageHandling(): void {
         return undefined;
       }
     };
+    Object.defineProperty(patched, PATCHED, { value: true });
+    FrameHelper.prototype.buildMessage = patched;
   } catch (e: unknown) {
     bleLog.warn(`ESPHome unknown-message patch failed, using library default: ${errMsg(e)}`);
   }

@@ -202,6 +202,26 @@ describe('a malformed env override must not be stronger than a good one', () => 
     expect(applyEnvOverrides(baseConfig()).ble?.scale_mac).toBe('AA:BB:CC:DD:EE:FF');
   });
 
+  // G-22: both were dropped without a word, unlike every other override here.
+  it('warns about an invalid BLE_WATCHDOG_MAX_FAILURES and keeps the configured value', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubEnv('BLE_WATCHDOG_MAX_FAILURES', 'ten');
+    const out = applyEnvOverrides(baseConfig());
+    expect(out.runtime?.watchdog_max_consecutive_failures).toBe(10);
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('BLE_WATCHDOG_MAX_FAILURES'))).toBe(
+      true,
+    );
+    warn.mockRestore();
+  });
+
+  it('warns about an invalid NOBLE_DRIVER', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubEnv('NOBLE_DRIVER', 'bluez');
+    expect(applyEnvOverrides(baseConfig()).ble?.noble_driver).toBeUndefined();
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('NOBLE_DRIVER'))).toBe(true);
+    warn.mockRestore();
+  });
+
   it('rejects a fractional SCAN_COOLDOWN the schema would have refused', () => {
     vi.stubEnv('SCAN_COOLDOWN', '12.5');
     expect(applyEnvOverrides(baseConfig()).runtime?.scan_cooldown).toBe(30);

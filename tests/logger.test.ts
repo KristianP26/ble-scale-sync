@@ -120,3 +120,28 @@ describe('setLogLevel()', () => {
     expect(errorSpy).not.toHaveBeenCalled();
   });
 });
+
+// The starting level is read from DEBUG when the module loads. Any non-empty
+// value used to switch debug ON, so DEBUG=false and DEBUG=0 did the opposite
+// of what they say; the words now match the DEBUG override in env-overrides.
+describe('initial level from DEBUG', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  const debugOnLoad = async (value: string): Promise<boolean> => {
+    vi.stubEnv('DEBUG', value);
+    vi.resetModules();
+    const fresh = await import('../src/logger.js');
+    return fresh.isDebugEnabled();
+  };
+
+  it.each(['false', '0', 'no', 'off', ''])('DEBUG=%j starts at INFO', async (value) => {
+    expect(await debugOnLoad(value)).toBe(false);
+  });
+
+  it.each(['true', '1', 'yes', 'on', 'TRUE'])('DEBUG=%j starts at DEBUG', async (value) => {
+    expect(await debugOnLoad(value)).toBe(true);
+  });
+});

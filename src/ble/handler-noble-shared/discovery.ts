@@ -9,7 +9,7 @@ import {
   DISCOVERY_POLL_MS,
   DISCOVERY_TIMEOUT_MS,
 } from '../types.js';
-import { matchesTarget, parseMfgData, peripheralAddress } from './peripheral.js';
+import { matchesTarget, parseMfgData, parseServiceData, peripheralAddress } from './peripheral.js';
 import type { NobleApi } from './types.js';
 import { safeName } from '../advertisement.js';
 
@@ -85,6 +85,7 @@ export function discoverPeripheral(
           address: peripheral.address ? formatMac(peripheral.address) : undefined,
           serviceUuids: svcUuids,
           manufacturerData: mfgData,
+          serviceData: parseServiceData(peripheral),
         };
         const matched = resolveAdapter(info, adapters);
         if (!matched) return;
