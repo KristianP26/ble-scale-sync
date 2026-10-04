@@ -1,6 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parse } from 'yaml';
@@ -478,9 +487,17 @@ describe.skipIf(!SHELL)('run.sh Garmin token import', () => {
       .replaceAll('/share/ble-scale-sync/garmin-tokens', `${dir}/share`);
   }
 
-  function runBlock(vars: Record<string, string>, shareToken: boolean) {
+  function runBlock(vars: Record<string, string>, shareToken: boolean, dataToken = false) {
     return withTempDir((raw) => {
       const dir = raw.replace(/\\/g, '/');
+      if (dataToken) {
+        // An older token already in use, so the /share copy is the newer one:
+        // the case the old newer-wins rule imported.
+        mkdirSync(`${dir}/data`, { recursive: true });
+        writeFileSync(`${dir}/data/garmin_tokens.json`, '{"token":"data"}');
+        const old = new Date(Date.now() - 86_400_000);
+        utimesSync(`${dir}/data/garmin_tokens.json`, old, old);
+      }
       if (shareToken) {
         mkdirSync(`${dir}/share`, { recursive: true });
         writeFileSync(`${dir}/share/garmin_tokens.json`, '{"token":"share"}');
@@ -527,5 +544,186 @@ describe.skipIf(!SHELL)('run.sh Garmin token import', () => {
   it('does not import in the generated mode while Garmin is off', () => {
     const r = runBlock({ CUSTOM_CONFIG: 'false', GARMIN_ENABLED: 'false' }, true);
     expect(r.token).toBeNull();
+  });
+
+  // Review S-04: anything that can write to /share must not be able to swap
+  // the token, and with it the Garmin account the measurements go to.
+  const GENERATED = {
+    CUSTOM_CONFIG: 'false',
+    GARMIN_ENABLED: 'true',
+    GARMIN_EMAIL: 'a@example.com',
+    GARMIN_PASSWORD: 'x',
+    CONFIG: '/nonexistent',
+  };
+
+  it('never replaces an existing token with a newer one from /share (generated mode)', () => {
+    const r = runBlock(GENERATED, true, true);
+    expect(r.status).toBe(0);
+    expect(r.token).toBe('{"token":"data"}');
+    expect(r.stdout).toMatch(/was NOT imported/);
+    expect(r.stdout).not.toMatch(/IMPORTING/);
+  });
+
+  it('never replaces an existing token with a newer one from /share (custom config mode)', () => {
+    const r = runBlock(CUSTOM, true, true);
+    expect(r.status).toBe(0);
+    expect(r.token).toBe('{"token":"data"}');
+    expect(r.stdout).toMatch(/was NOT imported/);
+  });
+
+  it('says loudly when it does import a token', () => {
+    for (const vars of [CUSTOM, GENERATED]) {
+      const r = runBlock(vars, true);
+      expect(r.token).toBe('{"token":"share"}');
+      expect(r.stdout).toMatch(/IMPORTING a Garmin token/);
+    }
+  });
+});
+
+/**
+ * The Strava token block of run.sh, run on its own with /app and /data pointed
+ * at a temp directory. Git Bash's ln copies instead of linking unless told
+ * otherwise, hence the MSYS setting; Linux ignores it.
+ */
+describe.skipIf(!SHELL)('run.sh Strava token directory', () => {
+  function run(dir: string): { status: number | null; stdout: string } {
+    const m = /# >>> strava token dir\n([\s\S]*?)# <<< strava token dir/.exec(RUN_SH);
+    expect(m, 'strava token dir block not found in run.sh').not.toBeNull();
+    const block = m![1]
+      .replaceAll('/data/strava-tokens', `${dir}/data/strava-tokens`)
+      .replaceAll('/app/strava-tokens', `${dir}/app/strava-tokens`);
+    const script = [
+      'set -e',
+      'log() { echo "[ble-scale-sync] $*"; }',
+      block,
+      `sh -c 'echo "STRAVA_TOKEN_DIR=$STRAVA_TOKEN_DIR"'`,
+    ].join('\n');
+    const res = spawnSync(SHELL!, ['-c', script], {
+      encoding: 'utf8',
+      env: { ...process.env, MSYS: 'winsymlinks:nativestrict' },
+    });
+    return { status: res.status, stdout: res.stdout.replaceAll(dir, '<tmp>') };
+  }
+
+  it('makes the default ./strava-tokens of the app a persistent directory in /data', () => {
+    withTempDir((raw) => {
+      const dir = raw.replace(/\\/g, '/');
+      mkdirSync(`${dir}/app`);
+      const r = run(dir);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('STRAVA_TOKEN_DIR=<tmp>/data/strava-tokens');
+      expect(lstatSync(`${dir}/app/strava-tokens`).isSymbolicLink()).toBe(true);
+      // A token the app writes through its default path lands in /data.
+      writeFileSync(`${dir}/app/strava-tokens/strava_tokens.json`, '{"t":1}');
+      expect(readFileSync(`${dir}/data/strava-tokens/strava_tokens.json`, 'utf8')).toBe('{"t":1}');
+      // A second start in the same container keeps the link.
+      expect(run(dir).status).toBe(0);
+      expect(lstatSync(`${dir}/app/strava-tokens`).isSymbolicLink()).toBe(true);
+    });
+  });
+
+  it('leaves an existing directory alone and says what to set instead', () => {
+    withTempDir((raw) => {
+      const dir = raw.replace(/\\/g, '/');
+      mkdirSync(`${dir}/app/strava-tokens`, { recursive: true });
+      writeFileSync(`${dir}/app/strava-tokens/strava_tokens.json`, '{"t":1}');
+      const r = run(dir);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toMatch(/token_dir: <tmp>\/data\/strava-tokens/);
+      expect(readFileSync(`${dir}/app/strava-tokens/strava_tokens.json`, 'utf8')).toBe('{"t":1}');
+    });
+  });
+});
+
+/**
+ * The restart loop at the end of run.sh (ADR D030), run with a stub in place
+ * of the app. The stub counts its starts in a file and, on the start the test
+ * picks, plays the Supervisor: it sends SIGTERM to the script.
+ */
+describe.skipIf(!SHELL)('run.sh restarts the app after it exits', () => {
+  function supervisorBlock(): string {
+    const m = /# >>> app supervisor\n([\s\S]*?)# <<< app supervisor/.exec(RUN_SH);
+    expect(m, 'app supervisor block not found in run.sh').not.toBeNull();
+    return m![1];
+  }
+
+  function run(stub: string, block: string) {
+    return withTempDir((raw) => {
+      const dir = raw.replace(/\\/g, '/');
+      writeFileSync(`${dir}/stub.sh`, stub.replaceAll('$DIR', dir));
+      const script = [
+        'set -e',
+        'log() { echo "[ble-scale-sync] $*"; }',
+        `start_app() { exec ${SHELL} '${dir}/stub.sh'; }`,
+        block,
+      ].join('\n');
+      const t0 = Date.now();
+      const res = spawnSync(SHELL!, ['-c', script], { encoding: 'utf8', timeout: 30_000 });
+      return {
+        status: res.status,
+        signal: res.signal,
+        stdout: res.stdout,
+        seconds: (Date.now() - t0) / 1000,
+        starts: Number(readFileSync(`${dir}/count`, 'utf8').trim()),
+        gotTerm: existsSync(`${dir}/term`),
+      };
+    });
+  }
+
+  const COUNT =
+    'n=$(cat "$DIR/count" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$DIR/count"';
+
+  it('restarts after every exit with a growing, capped delay, and stops on SIGTERM', () => {
+    // Delays shortened to 1 s doubling up to a 2 s cap, so the test takes ~5 s.
+    const block = supervisorBlock()
+      .replace(/^RESTART_DELAY_MIN=\d+$/m, 'RESTART_DELAY_MIN=1')
+      .replace(/^RESTART_DELAY_MAX=\d+$/m, 'RESTART_DELAY_MAX=2');
+    const stub = [
+      COUNT,
+      '[ "$n" -ge 4 ] || exit "$n"',
+      // Fourth start: stay up until stopped, the way the app does.
+      `trap 'echo term > "$DIR/term"; exit 0' TERM`,
+      'kill -TERM "$PPID"',
+      'while :; do sleep 0.1; done',
+    ].join('\n');
+    const r = run(stub, block);
+    expect(r.signal).toBeNull();
+    expect(r.starts).toBe(4);
+    expect(r.stdout).toMatch(/exited with code 1 after \d+s; restart #1 in 1s/);
+    expect(r.stdout).toMatch(/exited with code 2 after \d+s; restart #2 in 2s/);
+    expect(r.stdout).toMatch(/exited with code 3 after \d+s; restart #3 in 2s/);
+    // The stop reached the app, which shut down on its own, and nothing
+    // started after it.
+    expect(r.gotTerm).toBe(true);
+    expect(r.stdout).toMatch(/Add-on stopping: BLE Scale Sync exited with code 0, not restarting/);
+    expect(r.status).toBe(0);
+    expect(r.stdout.match(/Starting BLE Scale Sync/g)).toHaveLength(4);
+  }, 30_000);
+
+  it('stops without another start when SIGTERM arrives during the delay', () => {
+    // The real 5 s delay: the stop must cut it short.
+    const stub = [COUNT, '(sleep 0.5; kill -TERM "$PPID") &', 'exit 1'].join('\n');
+    const r = run(stub, supervisorBlock());
+    expect(r.starts).toBe(1);
+    expect(r.stdout).toMatch(/restart #1 in 5s/);
+    expect(r.stdout).toMatch(/Add-on stopping: not restarting/);
+    expect(r.status).toBe(0);
+    expect(r.seconds).toBeLessThan(4);
+  }, 30_000);
+
+  it('is how run.sh starts the app: no exec, which would leave nothing to restart it', () => {
+    expect(RUN_SH).not.toMatch(/^exec node/m);
+    expect(RUN_SH).toMatch(/^start_app\(\) \{ exec node dist\/index\.js --config "\$CONFIG"; \}$/m);
+    expect(RUN_SH.indexOf('start_app() {')).toBeLessThan(RUN_SH.indexOf('# >>> app supervisor'));
+  });
+});
+
+describe('add-on manifest: rfkill', () => {
+  it('maps /dev/rfkill as a plain path (host:container:perms is deprecated)', () => {
+    // The last BLE recovery tier runs `rfkill block/unblock`, which needs the
+    // device node; without it the tier fails on every add-on install.
+    const devices = (MANIFEST as { devices?: string[] }).devices ?? [];
+    expect(devices).toContain('/dev/rfkill');
+    for (const d of devices) expect(d, d).toMatch(/^\/dev\/[^:]+$/);
   });
 });

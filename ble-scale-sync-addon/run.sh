@@ -581,30 +581,26 @@ if [ "$GARMIN_BOOTSTRAP" = "true" ] \
 
   # Option 1: user pre-generated tokens on another machine (MFA workaround).
   #
-  # Import when /data has no token, and also when the /share copy is newer.
-  # Gating on absence alone made the documented recovery (drop a freshly
-  # generated token into /share and restart) silently do nothing whenever a
-  # rejected token was already sitting in /data, which is exactly when someone
-  # goes looking for that recovery. The stale token then kept failing every
-  # upload with "Failed to retrieve social profile" and the only way out was a
-  # shell inside the container or reinstalling the add-on.
-  #
-  # Newer-wins is the usual signal: a token placed there to replace a rejected
-  # one is normally newer than the one it replaces. Not always (a copy that
-  # keeps its original mtime, or garminconnect re-dumping the cached token
-  # after a refresh), which is what the hint further down is for. cp does not
-  # preserve mtime, so the imported copy is newer than its source from then on
-  # and a restart does not re-import. dash (the base image's /bin/sh) and
-  # busybox ash both support -nt.
+  # Imported ONLY while /data holds no token at all (review S-04). /share is
+  # writable by every add-on with share access and by Samba users, and the
+  # token decides which Garmin account receives the measurements. Replacing
+  # an existing token whenever the /share copy looked newer let any of them
+  # redirect every later upload, retry queue included, to another account on
+  # the next restart. An existing token is therefore never replaced from
+  # /share; the hint further down says so whenever a different token sits
+  # there. The import itself is logged loudly for the same reason.
   SHARE_TOKEN_IMPORTED=false
   # Hash of the /share file last imported. garminconnect re-dumps the token in
   # /data after every refresh, so after an import the two files differ for good;
   # the hint below must not read that as a skipped import.
   SHARE_MARKER="$TOKEN_DIR/.share_token_imported.sha256"
-  if [ -f "$SHARE_DIR/garmin_tokens.json" ] \
-     && { [ ! -f "$TOKEN_DIR/garmin_tokens.json" ] \
-          || [ "$SHARE_DIR/garmin_tokens.json" -nt "$TOKEN_DIR/garmin_tokens.json" ]; }; then
-    log "Importing Garmin tokens from $SHARE_DIR"
+  if [ -f "$SHARE_DIR/garmin_tokens.json" ] && [ ! -f "$TOKEN_DIR/garmin_tokens.json" ]; then
+    log "=================================================================="
+    log "IMPORTING a Garmin token from $SHARE_DIR/garmin_tokens.json"
+    log "into $TOKEN_DIR. Measurements now go to the Garmin account that"
+    log "token belongs to. If you did not put this file there, stop the"
+    log "add-on and check who can write to /share."
+    log "=================================================================="
     if cp "$SHARE_DIR/garmin_tokens.json" "$TOKEN_DIR/" 2>/dev/null; then
       SHARE_TOKEN_IMPORTED=true
       sha256sum < "$SHARE_DIR/garmin_tokens.json" | cut -d' ' -f1 > "$SHARE_MARKER" 2>/dev/null || true
@@ -640,12 +636,46 @@ if [ "$GARMIN_BOOTSTRAP" = "true" ] \
        && ! cmp -s "$SHARE_DIR/garmin_tokens.json" "$TOKEN_DIR/garmin_tokens.json" \
        && [ "$(sha256sum < "$SHARE_DIR/garmin_tokens.json" | cut -d' ' -f1)" \
             != "$(cat "$SHARE_MARKER" 2>/dev/null)" ]; then
-      log "A token in $SHARE_DIR was not imported: it is not newer than the one in $TOKEN_DIR."
-      log "To import it anyway, give it a newer timestamp (re-save it in the File"
-      log "editor add-on, or 'touch $SHARE_DIR/garmin_tokens.json'), then restart."
+      log "NOTE: the Garmin token in $SHARE_DIR was NOT imported, because"
+      log "$TOKEN_DIR already holds one. The add-on never replaces an existing"
+      log "token from /share: anything that can write to /share could otherwise"
+      log "send your measurements to another Garmin account. To switch tokens on"
+      log "purpose, uninstall and reinstall the add-on (this clears /data,"
+      log "including remembered weights and queued exports), then start it with"
+      log "the new token in $SHARE_DIR."
     fi
   fi
 fi
+
+# ── Strava token directory ─────────────────────────────────────────────────
+# A strava exporter without its own token_dir keeps its tokens in
+# ./strava-tokens, relative to the app's working directory /app. That is the
+# container's own filesystem, which every add-on restart or update replaces, and
+# Strava rotates the refresh token on every exchange: losing the file breaks
+# uploads until someone authorises again. Only custom config mode can define a
+# strava exporter, but the link costs nothing in the generated mode either.
+#
+# The app's YAML config path reads no environment variable for this default
+# (src/exporters/registry.ts), so the directory itself is made persistent: it
+# becomes a link into /data. STRAVA_TOKEN_DIR is exported as well for the
+# app's environment-only config path, which does read it.
+# >>> strava token dir
+STRAVA_DATA_DIR="/data/strava-tokens"
+STRAVA_APP_DIR="/app/strava-tokens"
+STRAVA_TOKEN_DIR="$STRAVA_DATA_DIR"
+export STRAVA_TOKEN_DIR
+mkdir -p "$STRAVA_DATA_DIR"
+if [ -L "$STRAVA_APP_DIR" ]; then
+  :
+elif [ -e "$STRAVA_APP_DIR" ]; then
+  # Never deleted here: the image does not ship this directory, so whatever is
+  # in it was put there on purpose.
+  log "WARNING: $STRAVA_APP_DIR already exists, so Strava tokens kept there do not"
+  log "survive a restart. Set 'token_dir: $STRAVA_DATA_DIR' on the strava exporter."
+else
+  ln -s "$STRAVA_DATA_DIR" "$STRAVA_APP_DIR"
+fi
+# <<< strava token dir
 
 # ── Reset Bluetooth adapter ────────────────────────────────────────────────
 
@@ -676,7 +706,89 @@ else
   sleep 2
 fi
 
-# ── Start ───────────────────────────────────────────────────────────────────
+# ── Start, and restart after the app exits ─────────────────────────────────
+# The app exits on purpose when it cannot recover in-process (the BLE scan
+# watchdog, the proxy liveness check, a hard exit) and expects a supervisor to
+# start it again. The Supervisor restarts a stopped add-on only when its
+# Watchdog switch is on, and that switch is off by default, so the add-on used
+# to stay down after the first such exit (ADR D030, review I-02). This loop is
+# that supervisor: every exit is logged with its code and followed by a new
+# start, after a delay that doubles from 5 s up to 5 minutes while the app keeps
+# exiting soon after it starts, and drops back to 5 s after a run of 10 minutes
+# or more.
+#
+# Stopping the add-on is different. The Supervisor sends SIGTERM, which tini
+# (PID 1 here, or the child of Docker's own init) passes to this script only, so
+# the trap below passes it on to the app, waits for the app's own shutdown and
+# leaves the loop without another start. The app is not exec'd any more for the
+# same reason: this script has to outlive it to restart it. Orphans the app
+# leaves behind are reaped by PID 1 (tini, or Docker's init under the
+# Supervisor's default `init: true`).
 
-log "Starting BLE Scale Sync..."
-exec node dist/index.js --config "$CONFIG"
+# exec inside the background subshell, so the PID in $! is the app itself and
+# the TERM below reaches it. tests/addon-run-sh.test.ts runs the block between
+# the markers with a stub in place of this function.
+start_app() { exec node dist/index.js --config "$CONFIG"; }
+
+# >>> app supervisor
+RESTART_DELAY_MIN=5
+RESTART_DELAY_MAX=300
+RESTART_RESET_AFTER=600
+APP_PID=""
+SLEEP_PID=""
+STOPPING=false
+
+on_stop() {
+  STOPPING=true
+  # TERM even for INT: a background job of a non-interactive shell ignores
+  # SIGINT, and TERM is what the app's graceful shutdown listens for.
+  # `|| true`: under set -e a failed kill (the process is already gone) would
+  # end the script right here, inside the trap.
+  [ -z "$APP_PID" ] || kill -TERM "$APP_PID" 2>/dev/null || true
+  [ -z "$SLEEP_PID" ] || kill -TERM "$SLEEP_PID" 2>/dev/null || true
+}
+trap on_stop TERM INT
+
+# Wait for the app and leave its exit code in APP_RC. A trapped signal cuts
+# `wait` short while the app is still shutting down, so wait again until it is
+# really gone (`kill -0` still finds a child that exited but is not yet reaped).
+wait_app() {
+  while :; do
+    APP_RC=0
+    wait "$APP_PID" || APP_RC=$?
+    kill -0 "$APP_PID" 2>/dev/null || return 0
+  done
+}
+
+RESTARTS=0
+DELAY=$RESTART_DELAY_MIN
+while :; do
+  log "Starting BLE Scale Sync..."
+  STARTED=$(date +%s)
+  start_app &
+  APP_PID=$!
+  # A stop that arrived between the start and the line above found no PID.
+  [ "$STOPPING" != "true" ] || kill -TERM "$APP_PID" 2>/dev/null || true
+  wait_app
+  APP_PID=""
+  if [ "$STOPPING" = "true" ]; then
+    log "Add-on stopping: BLE Scale Sync exited with code $APP_RC, not restarting."
+    exit "$APP_RC"
+  fi
+
+  RAN=$(($(date +%s) - STARTED))
+  [ "$RAN" -lt "$RESTART_RESET_AFTER" ] || DELAY=$RESTART_DELAY_MIN
+  RESTARTS=$((RESTARTS + 1))
+  log "BLE Scale Sync exited with code $APP_RC after ${RAN}s; restart #$RESTARTS in ${DELAY}s."
+  sleep "$DELAY" &
+  SLEEP_PID=$!
+  wait "$SLEEP_PID" || true
+  SLEEP_PID=""
+  if [ "$STOPPING" = "true" ]; then
+    log "Add-on stopping: not restarting BLE Scale Sync."
+    exit 0
+  fi
+  DELAY=$((DELAY * 2))
+  [ "$DELAY" -le "$RESTART_DELAY_MAX" ] || DELAY=$RESTART_DELAY_MAX
+done
+# <<< app supervisor

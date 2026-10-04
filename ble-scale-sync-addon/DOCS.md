@@ -105,7 +105,9 @@ Home Assistant add-ons run without an interactive terminal, so the add-on cannot
    ```
    Enter your email, password, and MFA code when prompted. This writes `garmin_tokens.json` to `~/.garmin_tokens/`.
 2. Copy that file into `/share/ble-scale-sync/garmin-tokens/` on the Home Assistant host (use the Samba or File editor add-on).
-3. Restart the BLE Scale Sync add-on. On startup it detects the pre-generated token and imports it into `/data/garmin-tokens/`.
+3. Restart the BLE Scale Sync add-on. On startup it detects the pre-generated token and imports it into `/data/garmin-tokens/`, and says so in the log.
+
+The import only happens while `/data/garmin-tokens/` holds no token yet. A token already in use is never replaced from `/share`, because anything that can write to `/share` could otherwise send your measurements to a different Garmin account. When a different token is waiting in `/share`, the log says it was not imported. To switch to it on purpose, uninstall and reinstall the add-on (this also clears the remembered weights and the queue of failed uploads in `/data`), then start it with the new token in place.
 
 If Garmin also blocks cloud or residential proxy IPs, the same workflow applies: authenticate from a trusted network, then import the token.
 
@@ -131,9 +133,13 @@ When custom config is enabled, all other options in the Configuration tab are ig
 
 ### Garmin Connect with custom config
 
-In custom config mode the add-on does not sign in to Garmin for you. Authenticate on another machine as in the MFA workaround above, copy `garmin_tokens.json` into `/share/ble-scale-sync/garmin-tokens/` and restart: the add-on imports it into `/data/garmin-tokens/`, which is where every `garmin` exporter without its own `token_dir` looks. A multi-user config with several Garmin accounts needs a separate `token_dir` per account. Only the default directory is imported, so point the others at a folder you can write to, such as `/share/ble-scale-sync/garmin-tokens/<name>`.
+In custom config mode the add-on does not sign in to Garmin for you. Authenticate on another machine as in the MFA workaround above, copy `garmin_tokens.json` into `/share/ble-scale-sync/garmin-tokens/` and restart: the add-on imports it into `/data/garmin-tokens/` (only while no token is stored there yet, as above), which is where every `garmin` exporter without its own `token_dir` looks. A multi-user config with several Garmin accounts needs a separate `token_dir` per account. Only the default directory is imported, so point the others at a folder you can write to, such as `/share/ble-scale-sync/garmin-tokens/<name>`.
 
 Anything under `/share/` can be read and changed by every add-on with share access and by Samba users. That includes the custom `config.yaml` itself, with the Garmin password in it.
+
+### Strava with custom config
+
+A `strava` exporter without its own `token_dir` keeps its tokens in `/data/strava-tokens`, which survives restarts and updates. That matters because Strava issues a new refresh token on every refresh, so a lost token file means authorising again.
 
 ### Alternative BLE transports (no host Bluetooth needed)
 
@@ -157,6 +163,12 @@ See the [full list](https://blescalesync.dev/guide/supported-scales).
 The full error mentions `An AppArmor policy prevents this sender from sending this message`, names `member="Hello"`, and appears before any scanning starts.
 
 The Supervisor's default AppArmor profile does not allow the D-Bus calls this add-on makes to reach BlueZ. Newer add-on versions run unconfined instead, so updating to the latest version fixes it. If you still see this after updating, uninstall and reinstall the add-on so the Supervisor picks up the new manifest.
+
+### The app restarts on its own
+
+When the app cannot recover inside the running process (for example after ten failed scans in a row, or when a Bluetooth proxy stays silent), it exits on purpose. The add-on then starts it again by itself, without the Supervisor's Watchdog switch: the log shows `BLE Scale Sync exited with code N ...; restart #M in Ns`. The wait starts at 5 seconds and doubles while the app keeps exiting soon after starting, up to 5 minutes. A run of 10 minutes or more resets it. Stopping the add-on stops the app cleanly and does not start it again.
+
+If the log shows a long series of these restarts, the reason is in the lines just above each one.
 
 ### Bluetooth adapter reset
 

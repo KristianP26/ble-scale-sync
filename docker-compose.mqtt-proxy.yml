@@ -11,6 +11,10 @@ services:
       - garmin-tokens:/app/garmin-tokens
     environment:
       - CONTINUOUS_MODE=true
+      # Your local time zone. Without it the container runs in UTC, and the
+      # Intervals.icu and wger exporters file a weigh-in made shortly after
+      # midnight under the previous day. Change it to your own zone.
+      - TZ=Europe/Bratislava
     restart: unless-stopped
     logging:
       driver: json-file

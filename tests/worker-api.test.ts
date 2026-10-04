@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   BACKOFF_KEY,
   LAST_KNOWN_KEY,
@@ -13,6 +14,8 @@ import {
   emptyStats,
   parseUserAgent,
 } from '../worker/src/stats.js';
+import { mayRecordHit } from '../worker/src/rate-limit.js';
+import type { StatsLimiter } from '../worker/src/rate-limit.js';
 
 /** In-memory KV with switchable failures; TTLs are recorded, not enforced. */
 class FakeKv implements VersionStore {
@@ -140,5 +143,58 @@ describe('worker stats', () => {
       totalChecks: 2,
       versions: { '1.30.0': 1, '1.29.0': 1 },
     });
+  });
+});
+
+/** Fixed-window limiter per key, like the binding's `simple` mode in one location. */
+function fakeLimiter(limit: number): StatsLimiter & { keys: string[] } {
+  const counts = new Map<string, number>();
+  const keys: string[] = [];
+  return {
+    keys,
+    async limit({ key }) {
+      keys.push(key);
+      const n = (counts.get(key) ?? 0) + 1;
+      counts.set(key, n);
+      return { success: n <= limit };
+    },
+  };
+}
+
+describe('worker stats rate limit', () => {
+  it('stops counting one address past the limit, and keys on the address', async () => {
+    const limiter = fakeLimiter(5);
+    const verdicts = [];
+    for (let i = 0; i < 8; i++) verdicts.push(await mayRecordHit(limiter, '203.0.113.7'));
+    expect(verdicts).toEqual([true, true, true, true, true, false, false, false]);
+    // Another address has its own budget.
+    expect(await mayRecordHit(limiter, '198.51.100.1')).toBe(true);
+    expect(new Set(limiter.keys).size).toBe(2);
+  });
+
+  it('skips the write when the limiter itself fails', async () => {
+    const broken: StatsLimiter = {
+      limit: async () => {
+        throw new Error('limiter unavailable');
+      },
+    };
+    expect(await mayRecordHit(broken, '203.0.113.7')).toBe(false);
+  });
+
+  it('counts as before when no limiter is bound', async () => {
+    expect(await mayRecordHit(undefined, '203.0.113.7')).toBe(true);
+  });
+
+  it('is what GET /version records through, with the binding declared in wrangler.toml', () => {
+    const lf = (s: string): string => s.replace(/\r\n/g, '\n');
+    const index = lf(readFileSync('worker/src/index.ts', 'utf8'));
+    const toml = lf(readFileSync('worker/wrangler.toml', 'utf8'));
+    expect(index).toMatch(/mayRecordHit\(env\.STATS_LIMITER, clientIp\)/);
+    expect(index).toMatch(/request\.headers\.get\('CF-Connecting-IP'\)/);
+    // The only recordHit call is the one behind the limiter.
+    expect(index.match(/recordHit\(env\.STATS/g)).toHaveLength(1);
+    expect(index).toMatch(/allowed \? recordHit\(env\.STATS, client\)/);
+    expect(toml).toMatch(/\[\[ratelimits\]\]\nname = "STATS_LIMITER"\nnamespace_id = "\d+"/);
+    expect(toml).toMatch(/\[ratelimits\.simple\]\nlimit = \d+\nperiod = (10|60)\n/);
   });
 });

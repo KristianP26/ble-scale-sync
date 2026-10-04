@@ -22,6 +22,12 @@ host_dbus: true
 privileged:
   - NET_ADMIN
   - NET_RAW
+# The last BLE recovery tier runs `rfkill block/unblock bluetooth`, which only
+# needs write access to this device node (the add-on already runs as root).
+# Without the mapping the tier fails on every install. The Supervisor skips a
+# path the host does not have, so this cannot stop the add-on from starting.
+devices:
+  - /dev/rfkill
 # The Supervisor's default AppArmor profile denies the D-Bus method calls this
 # add-on needs, so it dies on the very first `Hello` handshake to
 # org.freedesktop.DBus before any BLE scan starts. Running unconfined is what

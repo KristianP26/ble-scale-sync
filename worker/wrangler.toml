@@ -13,3 +13,17 @@ custom_domain = true
 [[kv_namespaces]]
 binding = "STATS"
 id = "716153b9797d4c5589aa976ee6f3cae2"
+
+# Caps how often one client address is counted in the daily stats (review
+# I-15/S-09). Going over it never refuses GET /version, it only skips the KV
+# write, see src/rate-limit.ts. A real install checks once a day, so 5 per
+# minute per address is far above legitimate traffic. namespace_id is any
+# positive integer that no other rate limiter in this Cloudflare account uses.
+# Needs Wrangler 4.36.0 or later (the lockfile has 4.78.0).
+[[ratelimits]]
+name = "STATS_LIMITER"
+namespace_id = "1001"
+
+[ratelimits.simple]
+limit = 5
+period = 60

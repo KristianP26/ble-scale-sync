@@ -41,6 +41,10 @@ services:
 
     environment:
       - CONTINUOUS_MODE=true
+      # Your local time zone. Without it the container runs in UTC, and the
+      # Intervals.icu and wger exporters file a weigh-in made shortly after
+      # midnight under the previous day. Change it to your own zone.
+      - TZ=Europe/Bratislava
       # Secrets referenced via ${ENV_VAR} in config.yaml:
       # - GARMIN_EMAIL=your_email@example.com
       # - GARMIN_PASSWORD=your_password

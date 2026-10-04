@@ -11,11 +11,14 @@
  */
 
 import { getLatestVersion } from './version';
+import { mayRecordHit } from './rate-limit';
 import { addHit, aggregate, emptyStats, parseUserAgent } from './stats';
 import type { AggregatedStats, ClientInfo, DailyStats } from './stats';
 
 export interface Env {
   STATS: KVNamespace;
+  /** [[ratelimits]] in wrangler.toml: caps how often one address is counted. */
+  STATS_LIMITER?: RateLimit;
 }
 
 const DAYS_KEPT = 30;
@@ -283,9 +286,16 @@ export default {
     if (url.pathname === '/version') {
       const client = parseUserAgent(request.headers.get('User-Agent'));
 
-      // Record stats asynchronously (don't block the response)
+      // Record stats asynchronously (don't block the response). Over the
+      // per-address limit the hit is not counted, but the answer below is
+      // still sent: see rate-limit.ts.
       if (client) {
-        ctx.waitUntil(recordHit(env.STATS, client));
+        const clientIp = request.headers.get('CF-Connecting-IP');
+        ctx.waitUntil(
+          mayRecordHit(env.STATS_LIMITER, clientIp).then((allowed) =>
+            allowed ? recordHit(env.STATS, client) : undefined,
+          ),
+        );
       }
 
       const { version, fresh } = await getLatestVersion(env.STATS);
