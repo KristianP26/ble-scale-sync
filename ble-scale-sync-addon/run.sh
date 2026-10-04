@@ -6,6 +6,7 @@ OPTIONS="/data/options.json"
 # restarts. The app is launched with --config to read from this path.
 CONFIG="/data/config.yaml"
 FRESH="/tmp/config-fresh.yaml"
+ADDON_CONFIG="/app/addon-config.mjs"
 mkdir -p /data
 
 log() { echo "[ble-scale-sync] $*"; }
@@ -18,6 +19,37 @@ opt_int() { jq -r ".$1 // $2" "$OPTIONS"; }
 
 # Escape a string for safe YAML double-quoted output (backslash, quotes, CR, LF)
 yaml_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\r/\\r/g' | tr '\n' ' '; }
+
+# ── Option checks that mirror the app's config schema ───────────────────────
+# The Supervisor only checks each option's type, and the app refuses to start
+# on a value its schema rejects. A bad value is therefore dropped here with a
+# warning, the same as the QN bytes and out_of_range below, instead of taking
+# the whole add-on down. tests/addon-run-sh.test.ts runs these on their own.
+# >>> option checks
+
+# src/ble/scale-id.ts: a MAC, or a CoreBluetooth UUID (dashed or 32 hex).
+valid_scale_id() {
+  printf '%s\n' "$1" | grep -Eq '^(([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}|[0-9A-Fa-f]{32})$'
+}
+
+# src/config/schema.ts isRealCalendarDate: YYYY-MM-DD, a day that exists, not
+# in the future (UTC). GNU date rejects 2024-02-31 outright. Years 0000 to
+# 0099 are refused too: the schema builds the date with Date.UTC, which reads
+# them as 1900 to 1999 and so rejects them.
+valid_birth_date() {
+  printf '%s\n' "$1" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || return 1
+  [ "$(date -u -d "$1" +%Y-%m-%d 2>/dev/null)" = "$1" ] || return 1
+  case "$1" in 00*) return 1 ;; esac
+  [ "$(printf '%s' "$1" | sed 's/-//g')" -le "$(date -u +%Y%m%d)" ]
+}
+
+# src/config/schema.ts WeightRangeSchema: both positive, max greater than min.
+valid_weight_range() {
+  case "$1:$2" in *[!0-9:]* | :* | *:) return 1 ;; esac
+  [ "$1" -gt 0 ] 2>/dev/null && [ "$2" -gt "$1" ] 2>/dev/null
+}
+
+# <<< option checks
 
 # Read BLE_ADAPTER early (needed for adapter reset in both modes)
 # Normalize: trim whitespace, lowercase (app schema requires /^hci\d+$/)
@@ -69,32 +101,8 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
   PROXY_LIVENESS_MIN=$(opt_int proxy_liveness_timeout_min 30)
   if [ "$PROXY_LIVENESS_MIN" != "30" ]; then
     _plrc=0
-    python3 - "$FRESH" "$PROXY_LIVENESS_MIN" <<'PY' 2>/dev/null || _plrc=$?
-import sys
-import yaml
-
-path, raw = sys.argv[1], sys.argv[2]
-try:
-    value = int(raw)
-except ValueError:
-    sys.exit(4)
-if not 0 <= value <= 1440:
-    sys.exit(4)
-with open(path, "r", encoding="utf-8") as f:
-    data = yaml.safe_load(f)
-if not isinstance(data, dict):
-    sys.exit(5)
-ble = data.get("ble")
-if ble is None:
-    ble = data["ble"] = {}
-if not isinstance(ble, dict):
-    sys.exit(5)
-if "proxy_liveness_timeout_min" in ble:
-    sys.exit(3)
-ble["proxy_liveness_timeout_min"] = value
-with open(path, "w", encoding="utf-8") as f:
-    yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
-PY
+    # Edited with the app's own YAML parser, not PyYAML: see addon-config.mjs.
+    node "$ADDON_CONFIG" proxy-liveness "$FRESH" "$PROXY_LIVENESS_MIN" 2>/dev/null || _plrc=$?
     case "$_plrc" in
       0) log "Applied proxy_liveness_timeout_min=$PROXY_LIVENESS_MIN from the add-on options." ;;
       3)
@@ -279,14 +287,34 @@ else
 
   # ── Generate slug from user name ──────────────────────────────────────
 
+  # The Supervisor accepts an empty `str`, and the schema requires a name.
+  if [ -z "$(printf '%s' "$USER_NAME" | tr -d '[:space:]')" ]; then
+    log "WARNING: user_name is empty. Using 'Default'."
+    USER_NAME="Default"
+  fi
+
   USER_SLUG=$(echo "$USER_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
   [ -z "$USER_SLUG" ] && USER_SLUG="default"
 
   # ── Validate inputs ──────────────────────────────────────────────────
 
-  if [ -z "$USER_BIRTH_DATE" ] || ! printf '%s\n' "$USER_BIRTH_DATE" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
-    log "WARNING: Invalid birth date '$USER_BIRTH_DATE' (expected YYYY-MM-DD). Using 2000-01-01."
+  if ! valid_birth_date "$USER_BIRTH_DATE"; then
+    log "WARNING: Invalid birth date '$USER_BIRTH_DATE' (expected a real past date, YYYY-MM-DD). Using 2000-01-01."
     USER_BIRTH_DATE="2000-01-01"
+  fi
+
+  if ! valid_weight_range "$USER_WEIGHT_MIN" "$USER_WEIGHT_MAX"; then
+    log "WARNING: Invalid weight range $USER_WEIGHT_MIN to $USER_WEIGHT_MAX (max must be greater than min). Using 40 to 150."
+    USER_WEIGHT_MIN=40
+    USER_WEIGHT_MAX=150
+  fi
+
+  # Surrounding whitespace comes free from a text field; anything else that is
+  # not a MAC or UUID is dropped, which means scanning for any supported scale.
+  SCALE_MAC=$(printf '%s' "$SCALE_MAC" | tr -d '[:space:]')
+  if [ -n "$SCALE_MAC" ] && ! valid_scale_id "$SCALE_MAC"; then
+    log "WARNING: Invalid scale_mac '$SCALE_MAC' (expected XX:XX:XX:XX:XX:XX). Ignoring it."
+    SCALE_MAC=""
   fi
 
   # ── Generate config.yaml ──────────────────────────────────────────────
@@ -318,13 +346,14 @@ YAML
   # 255 integer is dropped with a warning rather than written into config.yaml,
   # where it would fail schema validation and stop the add-on from starting.
   #
-  # The value is normalised to decimal before it is written. This file is later
-  # round-tripped through PyYAML, which is YAML 1.1 and reads a leading zero as
-  # octal: "010" would reach the adapter as 8 and "064" as 52. Both of these
+  # The value is normalised to decimal before it is written. A leading zero is
+  # read as octal by any YAML 1.1 reader ("010" as 8, "064" as 52), and this
+  # file used to pass through one (PyYAML) on its way to the app. Both of these
   # settings fail silently when wrong (every command acknowledged, no weight
   # ever arriving), so a reporter told to try a value and typing a leading zero
-  # would run a different experiment and report a false negative. Surrounding
-  # whitespace is trimmed for the same reason: it comes free from a text field.
+  # would run a different experiment and report a false negative. A plain
+  # decimal means the same thing to every reader. Surrounding whitespace is
+  # trimmed for the same reason: it comes free from a text field.
   for _qn in QN_PROTOCOL_BYTE QN_REPORT_BYTE; do
     eval "_qv=\$$_qn"
     _qv=$(printf '%s' "$_qv" | tr -d '[:space:]')
@@ -392,7 +421,7 @@ out_of_range: $OUT_OF_RANGE
 
 users:
   - name: "$(yaml_escape "$USER_NAME")"
-    slug: $USER_SLUG
+    slug: "$USER_SLUG"
     height: $USER_HEIGHT
     birth_date: "$(yaml_escape "$USER_BIRTH_DATE")"
     gender: $USER_GENDER
@@ -472,13 +501,14 @@ YAML
 fi
 
 # ── Merge last_known_weight from previous run ────────────────────────────────
-# merge_last_weights.py reads the freshly generated config and, if the
+# addon-config.mjs reads the fresh config (generated or copied) and, if the
 # persistent config.yaml already exists (from a previous run), copies each
-# user's last_known_weight into the fresh config before overwriting.
-# Result is written to $CONFIG so the app reads a merged view.
+# user's last_known_weight into it before overwriting. Result is written to
+# $CONFIG so the app reads a merged view. It parses with the app's own YAML
+# library, so no other value in the file can change type on the way through.
 
-if ! python3 /app/merge_last_weights.py "$FRESH" "$CONFIG"; then
-  log "WARNING: merge_last_weights.py failed, using fresh config without preserved weights"
+if ! node "$ADDON_CONFIG" merge-weights "$FRESH" "$CONFIG"; then
+  log "WARNING: merging last_known_weight failed, using fresh config without preserved weights"
   cp "$FRESH" "$CONFIG"
 fi
 rm -f "$FRESH"
@@ -495,10 +525,32 @@ rm -f "$FRESH"
 # over from pre-0.3 are stripped by setup_garmin.py before writing the new
 # format.
 
+TOKEN_DIR="/data/garmin-tokens"
+SHARE_DIR="/share/ble-scale-sync/garmin-tokens"
+
+# Default token directory for every garmin entry without its own token_dir.
+# The generated config always sets token_dir, so this only changes custom
+# config mode, where the default used to be ~/.garmin_tokens: a path inside the
+# container that a restart wipes and that the /share import below never wrote
+# to, so a token pre-seeded as the documentation describes was never used.
+# garmin_upload.py, setup_garmin.py and the app's token directory check all
+# read TOKEN_DIR.
+export TOKEN_DIR
+
+GARMIN_BOOTSTRAP=false
 if [ "$CUSTOM_CONFIG" != "true" ] && [ "$GARMIN_ENABLED" = "true" ] \
    && [ -n "$GARMIN_EMAIL" ] && [ -n "$GARMIN_PASSWORD" ]; then
-  TOKEN_DIR="/data/garmin-tokens"
-  SHARE_DIR="/share/ble-scale-sync/garmin-tokens"
+  GARMIN_BOOTSTRAP=true
+fi
+
+# Custom config mode gets the /share import too, but not the authentication
+# step. Importing there hands a writer of /share nothing new: in that mode the
+# whole config, Garmin credentials and token_dir included, is read from /share
+# already. In the generated mode the import is a separate trust decision (the
+# token decides which Garmin account receives the measurements) and it is left
+# exactly as it was.
+if [ "$GARMIN_BOOTSTRAP" = "true" ] \
+   || { [ "$CUSTOM_CONFIG" = "true" ] && [ -f "$SHARE_DIR/garmin_tokens.json" ]; }; then
   mkdir -p "$TOKEN_DIR"
 
   # If only legacy pre-0.3 tokens are present, treat the dir as empty so we
@@ -541,8 +593,11 @@ if [ "$CUSTOM_CONFIG" != "true" ] && [ "$GARMIN_ENABLED" = "true" ] \
     fi
   fi
 
-  # Option 2: auto-authenticate if tokens still missing
-  if [ ! -f "$TOKEN_DIR/garmin_tokens.json" ]; then
+  # Option 2: auto-authenticate if tokens still missing. Generated mode only:
+  # custom config mode gets this far only with a token in /share to import.
+  if [ ! -f "$TOKEN_DIR/garmin_tokens.json" ] && [ "$GARMIN_BOOTSTRAP" != "true" ]; then
+    log "WARNING: could not import $SHARE_DIR/garmin_tokens.json into $TOKEN_DIR"
+  elif [ ! -f "$TOKEN_DIR/garmin_tokens.json" ]; then
     log "Garmin tokens missing, authenticating with provided credentials..."
     if python3 /app/garmin-scripts/setup_garmin.py --from-config --config-path "$CONFIG"; then
       log "Garmin authentication successful, tokens saved to $TOKEN_DIR"

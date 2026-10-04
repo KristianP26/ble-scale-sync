@@ -9,7 +9,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY run.sh /app/run.sh
-COPY merge_last_weights.py /app/merge_last_weights.py
-RUN chmod +x /app/run.sh /app/merge_last_weights.py
+# Next to the app on purpose: its `import 'yaml'` resolves from
+# /app/node_modules, the same YAML library the app reads config.yaml with.
+COPY addon-config.mjs /app/addon-config.mjs
+RUN chmod +x /app/run.sh
 
 ENTRYPOINT ["tini", "--", "/app/run.sh"]

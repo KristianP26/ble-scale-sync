@@ -10,138 +10,48 @@
  *   ble-scale-sync/1.6.4 (linux; arm64)
  */
 
+import { getLatestVersion } from './version';
+import { addHit, aggregate, emptyStats, parseUserAgent } from './stats';
+import type { AggregatedStats, ClientInfo, DailyStats } from './stats';
+
 export interface Env {
   STATS: KVNamespace;
 }
 
-const GITHUB_RELEASES_URL =
-  'https://api.github.com/repos/KristianP26/ble-scale-sync/releases/latest';
-const VERSION_CACHE_KEY = 'latest-version';
-const VERSION_CACHE_TTL = 3600; // 1 hour
+const DAYS_KEPT = 30;
 
-/** Fetch latest version from GitHub Releases API, cached in KV for 1h. */
-async function getLatestVersion(kv: KVNamespace): Promise<string> {
-  const cached = await kv.get(VERSION_CACHE_KEY);
-  if (cached) return cached;
-
-  try {
-    const res = await fetch(GITHUB_RELEASES_URL, {
-      headers: { 'User-Agent': 'ble-scale-sync-api-worker' },
-    });
-    if (!res.ok) return cached ?? '0.0.0';
-
-    const data = (await res.json()) as { tag_name?: string };
-    const version = data.tag_name?.replace(/^v/, '') ?? '0.0.0';
-
-    await kv.put(VERSION_CACHE_KEY, version, { expirationTtl: VERSION_CACHE_TTL });
-    return version;
-  } catch {
-    return cached ?? '0.0.0';
-  }
-}
-
-// ─── User-Agent parsing ─────────────────────────────────────────────────────
-
-interface ClientInfo {
-  version: string;
-  os: string;
-  arch: string;
-}
-
-const KNOWN_OS = new Set(['linux', 'darwin', 'win32', 'freebsd', 'openbsd', 'sunos', 'aix']);
-const KNOWN_ARCH = new Set(['arm', 'arm64', 'x64', 'ia32', 'ppc64', 's390x', 'riscv64', 'mips', 'mipsel', 'loong64']);
-const MAX_VERSION_LENGTH = 20;
-
-function parseUserAgent(ua: string | null): ClientInfo | null {
-  if (!ua) return null;
-  const match = ua.match(/^ble-scale-sync\/([\d.]+)\s+\(([^;]+);\s*([^)]+)\)$/);
-  if (!match) return null;
-
-  const version = match[1].slice(0, MAX_VERSION_LENGTH);
-  const os = KNOWN_OS.has(match[2]) ? match[2] : 'other';
-  const arch = KNOWN_ARCH.has(match[3]) ? match[3] : 'other';
-
-  return { version, os, arch };
-}
-
-// ─── KV helpers ─────────────────────────────────────────────────────────────
-
-/** Date key in YYYY-MM-DD format (UTC). */
-function todayKey(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-interface DailyStats {
-  total: number;
-  versions: Record<string, number>;
-  os: Record<string, number>;
-  arch: Record<string, number>;
+/** Date key in YYYY-MM-DD format (UTC), `daysAgo` days before today. */
+function dayKey(daysAgo = 0): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - daysAgo);
+  return `stats:${d.toISOString().slice(0, 10)}`;
 }
 
 // Note: read-modify-write is not atomic. Under concurrent requests, some increments
 // may be lost due to KV's eventual consistency. This is acceptable for anonymous
 // aggregate stats where approximate counts are sufficient.
 async function recordHit(kv: KVNamespace, client: ClientInfo): Promise<void> {
-  const key = `stats:${todayKey()}`;
-  const raw = await kv.get(key);
-  const stats: DailyStats = raw
-    ? (JSON.parse(raw) as DailyStats)
-    : { total: 0, versions: {}, os: {}, arch: {} };
-
-  stats.total++;
-  stats.versions[client.version] = (stats.versions[client.version] ?? 0) + 1;
-  stats.os[client.os] = (stats.os[client.os] ?? 0) + 1;
-  stats.arch[client.arch] = (stats.arch[client.arch] ?? 0) + 1;
-
-  // Keep daily stats for 90 days
-  await kv.put(key, JSON.stringify(stats), { expirationTtl: 90 * 86400 });
-}
-
-// ─── Stats aggregation ──────────────────────────────────────────────────────
-
-interface AggregatedStats {
-  period: string;
-  days: number;
-  uniqueDays: number;
-  totalChecks: number;
-  versions: Record<string, number>;
-  os: Record<string, number>;
-  arch: Record<string, number>;
-}
-
-async function aggregateStats(kv: KVNamespace, days: number): Promise<AggregatedStats> {
-  const now = new Date();
-  const versions: Record<string, number> = {};
-  const os: Record<string, number> = {};
-  const arch: Record<string, number> = {};
-  let totalChecks = 0;
-  let uniqueDays = 0;
-
-  for (let i = 0; i < days; i++) {
-    const d = new Date(now);
-    d.setUTCDate(d.getUTCDate() - i);
-    const key = `stats:${d.toISOString().slice(0, 10)}`;
+  try {
+    const key = dayKey();
     const raw = await kv.get(key);
-    if (!raw) continue;
-
-    uniqueDays++;
-    const stats = JSON.parse(raw) as DailyStats;
-    totalChecks += stats.total;
-
-    for (const [k, v] of Object.entries(stats.versions)) {
-      versions[k] = (versions[k] ?? 0) + v;
-    }
-    for (const [k, v] of Object.entries(stats.os)) {
-      os[k] = (os[k] ?? 0) + v;
-    }
-    for (const [k, v] of Object.entries(stats.arch)) {
-      arch[k] = (arch[k] ?? 0) + v;
-    }
+    const stats = addHit(raw ? (JSON.parse(raw) as DailyStats) : emptyStats(), client);
+    // Keep daily stats for 90 days
+    await kv.put(key, JSON.stringify(stats), { expirationTtl: 90 * 86400 });
+  } catch {
+    // Stats are best effort: a KV limit must not surface as an error.
   }
+}
 
-  const label = days === 1 ? '24h' : days === 7 ? '7d' : '30d';
-
-  return { period: label, days, uniqueDays, totalChecks, versions, os, arch };
+async function readStats(
+  kv: KVNamespace,
+): Promise<[AggregatedStats, AggregatedStats, AggregatedStats]> {
+  const daily = await Promise.all(
+    Array.from({ length: DAYS_KEPT }, async (_, i) => {
+      const raw = await kv.get(dayKey(i));
+      return raw ? (JSON.parse(raw) as DailyStats) : null;
+    }),
+  );
+  return [aggregate(daily, 1), aggregate(daily, 7), aggregate(daily, DAYS_KEPT)];
 }
 
 // ─── Stats dashboard HTML ───────────────────────────────────────────────────
@@ -378,12 +288,25 @@ export default {
         ctx.waitUntil(recordHit(env.STATS, client));
       }
 
-      const latest = await getLatestVersion(env.STATS);
+      const { version, fresh } = await getLatestVersion(env.STATS);
 
-      return new Response(JSON.stringify({ latest }), {
+      // No version confirmed yet: the client treats a non-2xx as "no answer".
+      if (version === null) {
+        return new Response(JSON.stringify({ error: 'latest version unavailable' }), {
+          status: 503,
+          headers: {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-store',
+            ...CORS_HEADERS,
+          },
+        });
+      }
+
+      return new Response(JSON.stringify({ latest: version }), {
         headers: {
           'Content-Type': 'application/json',
-          'Cache-Control': 'public, max-age=3600',
+          // A fallback answer is cached briefly, so a recovered GitHub shows up soon.
+          'Cache-Control': fresh ? 'public, max-age=3600' : 'public, max-age=300',
           ...CORS_HEADERS,
         },
       });
@@ -391,11 +314,7 @@ export default {
 
     // GET /stats/json
     if (url.pathname === '/stats/json') {
-      const [stats24h, stats7d, stats30d] = await Promise.all([
-        aggregateStats(env.STATS, 1),
-        aggregateStats(env.STATS, 7),
-        aggregateStats(env.STATS, 30),
-      ]);
+      const [stats24h, stats7d, stats30d] = await readStats(env.STATS);
 
       return new Response(JSON.stringify({ stats24h, stats7d, stats30d }, null, 2), {
         headers: {
@@ -409,11 +328,7 @@ export default {
     // GET /stats (or / on stats.blescalesync.dev)
     const isStatsDomain = url.hostname === 'stats.blescalesync.dev';
     if (url.pathname === '/stats' || (isStatsDomain && url.pathname === '/')) {
-      const [stats24h, stats7d, stats30d] = await Promise.all([
-        aggregateStats(env.STATS, 1),
-        aggregateStats(env.STATS, 7),
-        aggregateStats(env.STATS, 30),
-      ]);
+      const [stats24h, stats7d, stats30d] = await readStats(env.STATS);
 
       return new Response(renderDashboard(stats24h, stats7d, stats30d), {
         headers: {

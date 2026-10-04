@@ -1,6 +1,9 @@
 # ── Build stage: compile TypeScript ──────────────────────────────────
+# Base images are pinned by digest (the multi-arch index), so two builds of
+# the same commit get the same base. Dependabot (docker ecosystem) moves the
+# digests; keep the three references in step when bumping by hand.
 ARG BUILDPLATFORM
-FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS build
+FROM --platform=$BUILDPLATFORM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS build
 
 WORKDIR /app
 
@@ -18,10 +21,10 @@ RUN npm run build
 # boards). python:3.12-slim-bookworm is a self-contained Python 3.12 built
 # against bookworm's glibc *and* does publish arm/v7, so copy just the
 # interpreter across instead of changing the base OS.
-FROM python:3.12-slim-bookworm AS python
+FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3 AS python
 
 # ── Runtime stage ────────────────────────────────────────────────────
-FROM node:22-bookworm-slim
+FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c
 
 # OCI labels
 ARG VERSION=local

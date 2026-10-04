@@ -125,6 +125,12 @@ See [config.yaml.example](https://github.com/KristianP26/ble-scale-sync/blob/mai
 
 When custom config is enabled, all other options in the Configuration tab are ignored, with one exception: **Proxy silence before restart** (`proxy_liveness_timeout_min`) only does anything with a proxy transport, which needs custom config, so the add-on applies it on top of your file (the file itself is not modified) when you change it from 30 and the file does not set `ble.proxy_liveness_timeout_min` itself. A value in the file always wins.
 
+### Garmin Connect with custom config
+
+In custom config mode the add-on does not sign in to Garmin for you. Authenticate on another machine as in the MFA workaround above, copy `garmin_tokens.json` into `/share/ble-scale-sync/garmin-tokens/` and restart: the add-on imports it into `/data/garmin-tokens/`, which is where every `garmin` exporter without its own `token_dir` looks. A multi-user config with several Garmin accounts needs a separate `token_dir` per account. Only the default directory is imported, so point the others at a folder you can write to, such as `/share/ble-scale-sync/garmin-tokens/<name>`.
+
+Anything under `/share/` can be read and changed by every add-on with share access and by Samba users. That includes the custom `config.yaml` itself, with the Garmin password in it.
+
 ### Alternative BLE transports (no host Bluetooth needed)
 
 If your Home Assistant host has no Bluetooth adapter, or its built-in radio gets stuck under continuous-mode load, custom config mode unlocks two BLE-free transport options shipped in 1.10.0:
