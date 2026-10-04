@@ -68,9 +68,9 @@ All options live under the **Configuration** tab. The add-on regenerates `/data/
 | `qn_time_sync_long`          | unset                | QN-family scales only. Sends the 9-byte form of the clock-setting frame the same Arboleaf capture shows, instead of the 8-byte one. The extra byte is undecoded.                                                                                                                                                                         |
 | `qn_config_long`             | unset                | QN-family scales only, and the last difference anyone has found between our start-up conversation and the vendor app's. Sends the 10-byte form of the settings frame instead of the 9-byte one. The extra bytes are undecoded.                                                                                                           |
 | `display_unit`               | `weight_unit`        | Unit requested on the physical display independently of exported values. Only QN-family scales are told which unit to show.                                                                                                                                                                                                              |
-| `proxy_liveness_timeout_min` | `30`                 | Proxy transports only. Minutes of total advertisement silence before the link is treated as wedged and the add-on restarts. 0 disables. Raise it if your proxy sits somewhere with no other Bluetooth devices in range.                                                                                                                  |
+| `proxy_liveness_timeout_min` | `30`                 | Proxy transports only, which the add-on uses only with `custom_config`. Minutes of total advertisement silence before the link is treated as wedged and the add-on restarts. 0 disables. A value in your custom config file takes precedence. No effect on the built-in Bluetooth adapter.                                               |
 
-The QN options, `auto_clear_stale_bond`, `preemptive_adapter_reset` and `display_unit` are ignored when `custom_config` is enabled, since that mode skips config generation entirely; set them in the corresponding `ble:` or `scale:` section of your own file instead. The add-on logs a warning if you leave one of the `ble:` options set.
+The QN options, `auto_clear_stale_bond`, `preemptive_adapter_reset` and `display_unit` are ignored when `custom_config` is enabled, since that mode skips config generation entirely; set them in the corresponding `ble:` or `scale:` section of your own file instead. The add-on logs a warning if you leave one of the `ble:` options set. `proxy_liveness_timeout_min` is the exception: it only matters with a proxy transport, so the add-on applies it on top of your file (the file itself is not changed) unless the file sets `ble.proxy_liveness_timeout_min` itself.
 
 ### Unit preferences
 
@@ -135,7 +135,7 @@ When `mqtt_auto: true` and the Mosquitto add-on is running on the same host, BLE
 [ble-scale-sync] MQTT auto-detected: mqtt://core-mosquitto:1883
 ```
 
-If the Mosquitto add-on is not installed or the API call fails, the add-on falls back to whatever you set in `mqtt_broker_url` / `mqtt_username` / `mqtt_password`.
+If the Mosquitto add-on is not installed or the API call fails, the add-on falls back to whatever you set in `mqtt_broker_url` / `mqtt_username` / `mqtt_password`, and the log says why, with the HTTP status from the Supervisor. Before this was fixed the add-on did not declare the MQTT service, so the Supervisor refused every request and auto-detection never worked; if you set the broker by hand for that reason, you can switch back to auto-detection after updating.
 
 ## Garmin Connect
 
