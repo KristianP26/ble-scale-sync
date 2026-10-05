@@ -124,6 +124,14 @@ Weight only. The scale advertises as `IF_B7` and broadcasts its weigh-in without
 
 Some units use broadcast-only firmware that does not allow GATT connections. The same model name can ship with different internal hardware. If your ES-CS20M or Elis 1 is broadcast-only, ble-scale-sync reads weight directly from BLE advertisements. Body composition is estimated from BMI (Deurenberg formula) instead of impedance, since impedance is not available in broadcast mode. Run `ble-scale-sync diagnose` (`npm run diagnose` from a clone) to check whether your unit is connectable or broadcast-only.
 
+### **Renpho ES-CS20M** on service 0x1A10 with AE01/AE02
+
+Newer ES-CS20M revisions (for example HVIN `ESCS20MB2`) use Renpho's own protocol on service 0x1A10 instead of QN. Some of them also expose the characteristics AE01 and AE02. One such unit sent no weight to ble-scale-sync, while the Renpho app, which sends the commands below, received weights from it ([#436](https://github.com/KristianP26/ble-scale-sync/issues/436)). On such a unit, every time the scale switches on during a connection, ble-scale-sync sets the scale's clock to the host's time and time zone, writes a guest profile, and tells the scale to keep the display unit it already shows.
+
+The guest profile holds the **first configured user's** sex, birth date, height and last known weight. That weight is `last_known_weight`; when that is not set, the middle of `weight_range`, as long as the range lies between 20 and 250 kg and spans no more than 100 kg; otherwise 70 kg. It is written on every weigh-in, also in multi-user setups, whoever steps on. The scale uses it for that weigh-in only: it goes to the guest slot, which the scale does not keep as a user, so profiles saved by the Renpho app are left alone. ble-scale-sync never writes the profile it sends to its log, but with debug logging on it logs every frame the scale sends back raw, including the reply to the profile and the weigh-in itself. With the [ESP32 proxy](/guide/esp32-proxy), that frame passes through your MQTT broker unencrypted like every other frame (TLS, when enabled, protects only the links to the broker), so anyone who can read the proxy's topics can read it.
+
+Units without AE01/AE02 get only the kg display command, as before. The AE01/AE02 behaviour is not yet confirmed on hardware.
+
 ## Don't See Your Scale?
 
 If your scale uses BLE but isn't listed, it might still work. The **Standard BT SIG** adapter catches any scale that follows the official Bluetooth specification. Run the [setup wizard](/guide/configuration#setup-wizard-recommended) or `ble-scale-sync scan` to check.
