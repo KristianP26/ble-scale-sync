@@ -53,12 +53,24 @@ import {
   WEIGHT_CERTAIN_MAX_KG,
   WEIGHT_CERTAIN_MIN_KG,
 } from './constants.js';
-import { buildA2Frame, buildConfig, buildMeasurementTrigger, buildTimeSync } from './frames.js';
+import {
+  buildA2Frame,
+  buildConfig,
+  buildMeasurementTrigger,
+  buildTimeSync,
+  buildUserProfileFrame,
+} from './frames.js';
 import { qnMatches, warnOnOneByoneShape } from './matching.js';
 import { parseQnBroadcast } from './broadcast.js';
 
 // Re-exported so importers keep the paths they had before the split.
-export { buildA2Frame, buildConfig, buildMeasurementTrigger, buildTimeSync } from './frames.js';
+export {
+  buildA2Frame,
+  buildConfig,
+  buildMeasurementTrigger,
+  buildTimeSync,
+  buildUserProfileFrame,
+} from './frames.js';
 
 /** Format bytes as hex string for debug logging. */
 const hex = (data: number[] | Buffer): string =>
@@ -179,6 +191,30 @@ export class QnScaleAdapter
    * it, unlike the 18-byte ES-26M frame which needs 0x00.
    */
   private isExtendedLongFrame = false;
+
+  /**
+   * Whether the 0x12 frame was exactly 19 bytes (Arboleaf). Set only in the
+   * long-frame branch: the classic branch accepts other lengths too, and a
+   * classic frame must never select the app profile sequence below.
+   */
+  private isNineteenByteInfo = false;
+
+  /**
+   * The vendor-app profile sequence for the 19-byte dialect (#331, D033).
+   * Decided once, by whichever of the ready step and the config-request step
+   * runs first, from the 0x12 seen at that point, so the ready-time A2 and the
+   * A00D #2 profile frame always come from the same choice. A 0x12 that
+   * arrives later (after a fallback handshake) does not change it. Null until
+   * decided.
+   */
+  private appProfileSequence: boolean | null = null;
+
+  private decideAppProfileSequence(): boolean {
+    if (this.appProfileSequence === null) {
+      this.appProfileSequence = this.forcedWeightAck === true && this.isNineteenByteInfo;
+    }
+    return this.appProfileSequence;
+  }
 
   /**
    * Protocol byte forced by `ble.qn_protocol_byte`, overriding what the frame
@@ -356,6 +392,8 @@ export class QnScaleAdapter
     this.ae00ResponsesSent = 0;
     this.isLongFrameVariant = false;
     this.isExtendedLongFrame = false;
+    this.isNineteenByteInfo = false;
+    this.appProfileSequence = null;
     this.extendedResultEmitted = false;
     this.firstStableNoImpedanceAt = null;
     this.sessionStartedScaleSeconds = Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
@@ -606,6 +644,7 @@ export class QnScaleAdapter
    * Implements a notification-driven state machine for the handshake:
    *   0x12 (scale info) -> AE01 init + 0x13 config with echoed protocol type
    *   0x14 (ready ACK)  -> 0x20 time sync + A2 user profile + "pass" auth
+   *                        (no A2 on the 19-byte dialect with ble.qn_weight_ack)
    *   0x21 (config req)  -> A00D history responses + 0x22 start
    *   0x10 (weight)      -> parse weight (original or ES-30M format)
    *
@@ -644,6 +683,17 @@ export class QnScaleAdapter
         // scale nobody is standing on does.
         this.isLongFrameVariant = true;
         this.isExtendedLongFrame = data.length >= EXTENDED_INFO_FRAME_LEN;
+        this.isNineteenByteInfo = data.length === PROTO_ECHO_MIN_INFO_FRAME_LEN;
+        if (
+          this.isNineteenByteInfo &&
+          this.forcedWeightAck === true &&
+          this.appProfileSequence === false
+        ) {
+          bleLog.debug(
+            "QN: 19-byte 0x12 after the handshake already chose openScale's frames; " +
+              'the profile frame stays as sent (#331)',
+          );
+        }
         const byLength = data.length >= PROTO_ECHO_MIN_INFO_FRAME_LEN ? data[2] : LEGACY_PROTO_TYPE;
         this.seenProtocolType = this.forcedProtocolType ?? byLength;
         this.weightScaleFactor = 10;
@@ -651,6 +701,7 @@ export class QnScaleAdapter
         // Classic short frame
         this.isLongFrameVariant = false;
         this.isExtendedLongFrame = false;
+        this.isNineteenByteInfo = false;
         this.seenProtocolType = this.forcedProtocolType ?? data[2];
         this.weightScaleFactor = data[10] === 1 ? 100 : 10;
       }
@@ -679,7 +730,7 @@ export class QnScaleAdapter
 
     // 0x14: ready/config ACK, respond with time sync + user profile
     if (opcode === 0x14) {
-      bleLog.debug('QN: ready frame, sending time sync + profile');
+      bleLog.debug('QN: ready frame, sending time sync and the ready-time frames');
       void this.handleReady();
       return null;
     }
@@ -1054,6 +1105,7 @@ export class QnScaleAdapter
     if (this.timeSyncSent) return;
     this.timeSyncSent = true;
     const gen = this.sessionGeneration;
+    const appProfile = this.decideAppProfileSequence();
     // 0x20 time sync: seconds since 2000-01-01, little-endian. See
     // TIME_SYNC_TRAILER for the 9-byte form and why it is opt-in.
     const secs = Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
@@ -1076,7 +1128,15 @@ export class QnScaleAdapter
     // registry reads with today, and two silent units are not enough to move a
     // default under the whole family. `ble.qn_weight_ack` swaps in the
     // configured anchor for the reporters who can actually test it.
-    if (this.ctx) {
+    // On the 19-byte dialect with `ble.qn_weight_ack` the frame is not sent at
+    // all: the Arboleaf app sends no A2 before START, and with the user's age
+    // in it this frame reads as an anchor of roughly 128 kg (#331, D033).
+    if (appProfile) {
+      bleLog.debug(
+        'QN: no A2 before START on the 19-byte dialect, as the vendor app ' +
+          '(ble.qn_weight_ack, #331)',
+      );
+    } else if (this.ctx) {
       // The anchor goes here ONLY on the 20-byte extended dialect. Everywhere
       // else `handleConfigRequest` sends it twice right after START instead,
       // which is where both Android captures of the Arboleaf app put it (#331,
@@ -1110,6 +1170,7 @@ export class QnScaleAdapter
   private async handleConfigRequest(): Promise<void> {
     if (this.historyResponseSent) return;
     this.historyResponseSent = true;
+    const appProfile = this.decideAppProfileSequence();
     const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
     // See sessionGeneration. The whole sequence spans several timers, and
     // writeCmd reads this.ctx at write time, so a session that ends and
@@ -1150,9 +1211,19 @@ export class QnScaleAdapter
     await wait(200);
     if (!live()) return;
 
-    // A00D response 2 (from openScale QNHandler)
-    const msg2 = [0xa0, 0x0d, 0x02, 0x01, 0x00, 0x08, 0x00, 0x21, 0x06, 0xb8, 0x04, 0x02, 0x00];
+    // A00D response 2, the user profile. openScale's constant everywhere except
+    // the 19-byte dialect with `ble.qn_weight_ack`, which gets the first user's
+    // age and height the way the vendor app sends them (#331, D033).
+    let msg2 = [0xa0, 0x0d, 0x02, 0x01, 0x00, 0x08, 0x00, 0x21, 0x06, 0xb8, 0x04, 0x02, 0x00];
     msg2[12] = msg2.reduce((a, b) => a + b, 0) & 0xff;
+    const profile = this.ctx?.profile;
+    if (appProfile && profile) {
+      msg2 = buildUserProfileFrame(profile.age, profile.height);
+      bleLog.debug(
+        `QN: A00D profile frame with age ${msg2[7]}, height ${(msg2[8] << 8) | msg2[9]} mm ` +
+          `(ble.qn_weight_ack, 19-byte dialect, #331)`,
+      );
+    }
     await this.writeCmd(msg2);
 
     await wait(200);

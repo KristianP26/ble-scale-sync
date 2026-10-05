@@ -204,7 +204,9 @@ export const BleSchema = z
      * True also hands the scale the configured weight anchor: on the 20-byte
      * extended dialect in the ready-time A2, everywhere else as two A2 frames
      * right after START, the sequence two Android captures of the Arboleaf app
-     * show (#331, #75).
+     * show (#331, #75). On the 19-byte dialect it also drops the ready-time A2
+     * and sends the A00D #2 profile frame with the first user's age and
+     * height, as that app does (#331, D033).
      */
     qn_weight_ack: z.boolean().optional().nullable(),
     /**

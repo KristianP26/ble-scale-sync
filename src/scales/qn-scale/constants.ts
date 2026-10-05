@@ -33,6 +33,7 @@ import { uuid16 } from '../body-comp-helpers.js';
  *
  *   0x12 (scale info) -> AE01 init (if AE00) -> 0x13 config
  *   0x14 (ready ACK)  -> 0x20 time sync + A2 user profile + "pass" auth
+ *                        (no A2 on the 19-byte dialect with ble.qn_weight_ack)
  *   0x21 (config req)  -> A00D history responses + 0x22 start measurement
  *   0x10 (weight)      -> parse weight + 0x1F acknowledge stable reading
  *
@@ -179,7 +180,7 @@ export const SCALE_EPOCH_OFFSET = 946684800;
 export const REPORT_BYTE_DEFAULT = 0xfe;
 
 /**
- * Report byte for the LONG-FRAME dialects, es26m (19-byte) and extended
+ * Report byte for the LONG-FRAME dialects, es26m (18- or 19-byte) and extended
  * (20-byte). See #235 and #75.
  *
  * Unlike the default above, this one is not an inference. Two vendor-app
