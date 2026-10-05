@@ -298,6 +298,39 @@ describe('BeurerSanitasScaleAdapter', () => {
       assertPayloadRanges(payload);
     });
 
+    // #211: on a slow link part 1 arrives about a second before the 15 s hold
+    // ends, so the hold is extended while the stream is between part 1 and its
+    // last part. The SBF75 in that report resent part 1 after each ACK.
+    it('reports a composition pending from part 1 until the last part', () => {
+      const adapter = sbf70Adapter();
+      expect(adapter.isCompositionPending!()).toBe(false);
+      adapter.parseNotification(PART1);
+      expect(adapter.isCompositionPending!()).toBe(true);
+      adapter.parseNotification(PART1); // resent
+      expect(adapter.isCompositionPending!()).toBe(true);
+      adapter.parseNotification(PART2);
+      expect(adapter.isCompositionPending!()).toBe(true);
+      adapter.parseNotification(PART3);
+      expect(adapter.isCompositionPending!()).toBe(false);
+    });
+
+    // Structural guard, not a protocol fixture: no capture has a one-part
+    // stream. PART1 with byte [2] (count) changed from 0x03 to 0x01.
+    it('does not report a composition pending for a one-part stream', () => {
+      const adapter = sbf70Adapter();
+      const single = Buffer.from(PART1);
+      single[2] = 0x01;
+      adapter.parseNotification(single);
+      expect(adapter.isCompositionPending!()).toBe(false);
+    });
+
+    it('clears a pending composition at the next session start', () => {
+      const adapter = sbf70Adapter();
+      adapter.parseNotification(PART1);
+      adapter.onSessionStart!();
+      expect(adapter.isCompositionPending!()).toBe(false);
+    });
+
     it('isFinal is true for a composition reading, false for weight-only', () => {
       const adapter = sbf70Adapter();
       expect(adapter.isFinal!({ weight: 83.55, impedance: 437 })).toBe(true);

@@ -126,6 +126,8 @@ export class BeurerSanitasScaleAdapter
 
   /** Accumulated 0x59 composition parts (part number -> payload after byte 4). */
   private compParts = new Map<number, Buffer>();
+  /** A 0x59 stream has sent part 1 and not yet its last part; see isCompositionPending. */
+  private compPending = false;
 
   /** Per-frame ACK echoing bytes [1..3]; BF710/SBF70 gate the 0x59 stream on it. */
   buildAck(data: Buffer): number[] | null {
@@ -143,6 +145,16 @@ export class BeurerSanitasScaleAdapter
   /** A reading carrying impedance is the final composition reading. */
   isFinal(reading: ScaleReading): boolean {
     return reading.impedance > 0;
+  }
+
+  /**
+   * True from 0x59 part 1 until the stream's last part. On a slow link the
+   * SBF75 sends part 1 about a second before the 15 s hold ends, and each
+   * part waits for an ACK round trip, so the hold is extended while this is
+   * set (#211).
+   */
+  isCompositionPending(): boolean {
+    return this.compPending;
   }
 
   matches(device: BleDeviceInfo): boolean {
@@ -267,11 +279,13 @@ export class BeurerSanitasScaleAdapter
 
     if (part <= 1) {
       this.compParts.clear();
+      this.compPending = count > 1;
       return null;
     }
 
     this.compParts.set(part, Buffer.from(data.subarray(4)));
     if (part < count) return null;
+    this.compPending = false;
 
     const ordered: Buffer[] = [];
     for (let p = 2; p <= count; p++) {
@@ -354,6 +368,7 @@ export class BeurerSanitasScaleAdapter
   onSessionStart(): void {
     this.readingBuffer.length = 0;
     this.compParts.clear();
+    this.compPending = false;
   }
 
   isComplete(reading: ScaleReading): boolean {
