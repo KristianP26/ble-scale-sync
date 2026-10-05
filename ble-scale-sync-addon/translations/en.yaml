@@ -40,8 +40,10 @@ configuration:
       above. Sends your weight anchor (last known weight, or the middle of
       your weight range) twice right after the start command, as the
       Arboleaf vendor app does, and acknowledges live weight frames with their
-      own weight. Leave empty unless your QN scale completes the whole
-      handshake in the log and then reports no weight at all; then set true.
+      own weight. On the 19-byte Arboleaf dialect it also sends your age and
+      height as the app does. Leave empty unless your QN scale completes the
+      whole handshake in the log and then reports no weight at all; then set
+      true.
   qn_a4_prelude:
     name: QN A4 prelude
     description: >-
