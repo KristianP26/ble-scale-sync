@@ -174,7 +174,17 @@ If the log shows a long series of these restarts, the reason is in the lines jus
 
 The add-on power-cycles the Bluetooth adapter on startup to ensure a clean state. This is enabled by default (**Reset Bluetooth adapter on startup**). If you have other HA Bluetooth integrations that lose connectivity when this add-on restarts, disable the option.
 
-Separately from that startup reset, the add-on also power-cycles the adapter after every connection to the scale (built-in Bluetooth only, not with an ESPHome or ESP32 proxy), to clear a stuck scanning state some Raspberry Pi adapters fall into. **Power-cycle the adapter after every weigh-in** (`preemptive_adapter_reset`) turns that off. Leave it on unless you are testing whether the power-cycle is what makes a paired scale reject the next connection.
+Separately from that startup reset, the add-on also power-cycles the adapter after every connection to the scale (built-in Bluetooth only, not with an ESPHome or ESP32 proxy), to clear a stuck scanning state some Raspberry Pi adapters fall into. **Power-cycle the adapter after every weigh-in** (`preemptive_adapter_reset`) turns that off. Leave it on unless other Home Assistant Bluetooth integrations on the same adapter suffer from the brief drop after each weigh-in. It was not the cause of the Beurer BF915 re-pairing in #417; for a scale that asks to pair again before every weigh-in, see the next section.
+
+### Beurer scale asks to pair again before every weigh-in
+
+Some Beurer scales (the BF915 is confirmed) keep a pairing only from a device that handed over an identity key while pairing, and Linux hands one over only while the Bluetooth adapter has LE privacy turned on, which it does not by default. The pairing then works once and is rejected on the next connect. **Pair with a host identity key (LE privacy)** (`adapter_privacy`) turns privacy on with a key derived from the adapter's address, which stays the same across restarts, reinstalls and reboots.
+
+1. Turn the option on and restart the add-on. The log shows `uses an IRK derived from its address (fingerprint ...)` and `LE privacy is on`.
+2. Remove the old pairing once: `bluetoothctl remove AA:BB:CC:DD:EE:FF` in the host shell (or turn on **Re-pair a scale that forgot its pairing**).
+3. Weigh in and confirm the pairing on the scale, as you did the first time. Later weigh-ins should not ask again.
+
+Privacy applies to the whole adapter: every Bluetooth LE connection it makes, Home Assistant's own Bluetooth integration included, then uses a random address, and other paired LE devices may need pairing again. If that is a problem, give the add-on its own USB adapter with **BLE adapter** (`ble_adapter`). If LE privacy cannot be turned on, the add-on skips the connect and says why rather than pair without the key.
 
 ### No scale found
 
