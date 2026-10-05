@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import {
   bleStep,
   validateMac,
@@ -9,11 +9,30 @@ import {
   promptHaBluetooth,
 } from '../../src/wizard/steps/ble.js';
 import type { WizardContext } from '../../src/wizard/types.js';
-import { createMockPromptProvider } from '../../src/wizard/prompt-provider.js';
-import { scriptedPrompts } from '../helpers/scripted-prompts.js';
+import { scriptedPrompts, type ScriptedAnswer } from '../helpers/scripted-prompts.js';
 
-function makeCtx(answers: (string | number | boolean | string[])[]): WizardContext {
-  return {
+const HANDLER = /^How does this device connect/;
+const ADAPTER = /select a specific Bluetooth adapter/;
+const DISCOVERY = /^How do you want to identify your scale/;
+const MANUAL_MAC = /^Enter scale MAC address/;
+const STORE_ENV = /Store it in \.env/;
+
+const scripts: ReturnType<typeof scriptedPrompts>[] = [];
+
+// Every scripted answer must have been asked for and accepted. A regex that
+// matches no prompt would otherwise leave that prompt on its default, and the
+// test would pass on a path it never meant to take.
+afterEach(() => {
+  for (const s of scripts.splice(0)) {
+    expect(s.pending.map(([re]) => String(re))).toEqual([]);
+    expect(s.rejected).toEqual([]);
+  }
+});
+
+function makeCtx(answers: Array<[RegExp, ScriptedAnswer]> = []) {
+  const scripted = scriptedPrompts(answers);
+  scripts.push(scripted);
+  const ctx: WizardContext = {
     config: {},
     configPath: 'config.yaml',
     isEditMode: false,
@@ -25,8 +44,9 @@ function makeCtx(answers: (string | number | boolean | string[])[]): WizardConte
       hasPython: true,
       pythonCommand: 'python3',
     },
-    prompts: createMockPromptProvider(answers),
+    prompts: scripted.prompts,
   };
+  return { ctx, asked: scripted.asked };
 }
 
 // ─── validateMac() ──────────────────────────────────────────────────────
@@ -73,12 +93,12 @@ describe('validateBrokerUrl()', () => {
 
 describe('promptMqttProxy()', () => {
   it('collects external broker details without auth', async () => {
-    const ctx = makeCtx([
-      'external', // broker mode
-      'my-esp32', // device_id
-      'my-prefix', // topic_prefix
-      'mqtt://10.1.1.15:1883', // broker_url
-      false, // hasAuth = no
+    const { ctx } = makeCtx([
+      [/^MQTT broker:/, 'external'],
+      [/^ESP32 device ID:/, 'my-esp32'],
+      [/^MQTT topic prefix:/, 'my-prefix'],
+      [/^MQTT broker URL:/, 'mqtt://10.1.1.15:1883'],
+      [/require authentication/, false],
     ]);
 
     const result = await promptMqttProxy(ctx);
@@ -90,15 +110,15 @@ describe('promptMqttProxy()', () => {
   });
 
   it('collects external broker details with auth', async () => {
-    const ctx = makeCtx([
-      'external', // broker mode
-      'esp32-device', // device_id
-      'ble-proxy', // topic_prefix
-      'mqtts://broker.example.com:8883', // broker_url
-      true, // hasAuth = yes
-      'myuser', // username
-      'mypass', // password
-      false, // keep it in config.yaml, not .env
+    const { ctx } = makeCtx([
+      [/^MQTT broker:/, 'external'],
+      [/^ESP32 device ID:/, 'esp32-device'],
+      [/^MQTT topic prefix:/, 'ble-proxy'],
+      [/^MQTT broker URL:/, 'mqtts://broker.example.com:8883'],
+      [/require authentication/, true],
+      [/^MQTT username:/, 'myuser'],
+      [/^MQTT password/, 'mypass'],
+      [STORE_ENV, false], // keep it in config.yaml
     ]);
 
     const result = await promptMqttProxy(ctx);
@@ -112,12 +132,12 @@ describe('promptMqttProxy()', () => {
   });
 
   it('configures the embedded broker on loopback when the user declines auth', async () => {
-    const ctx = makeCtx([
-      'embedded', // broker mode
-      'esp32-ble-proxy', // device_id
-      'ble-proxy', // topic_prefix
-      '1883', // embedded_broker_port
-      false, // wantAuth = no -> bind switches to 127.0.0.1
+    const { ctx } = makeCtx([
+      [/^MQTT broker:/, 'embedded'],
+      [/^ESP32 device ID:/, 'esp32-ble-proxy'],
+      [/^MQTT topic prefix:/, 'ble-proxy'],
+      [/^Embedded broker port:/, '1883'],
+      [/^Require username\/password for the embedded broker/, false], // bind -> 127.0.0.1
     ]);
 
     const result = await promptMqttProxy(ctx);
@@ -131,15 +151,15 @@ describe('promptMqttProxy()', () => {
   });
 
   it('configures the embedded broker with a custom port and auth', async () => {
-    const ctx = makeCtx([
-      'embedded', // broker mode
-      'my-esp', // device_id
-      'ble-proxy', // topic_prefix
-      '1884', // embedded_broker_port
-      true, // wantAuth = yes
-      'admin', // username
-      'secret', // password
-      false, // keep it in config.yaml, not .env
+    const { ctx } = makeCtx([
+      [/^MQTT broker:/, 'embedded'],
+      [/^ESP32 device ID:/, 'my-esp'],
+      [/^MQTT topic prefix:/, 'ble-proxy'],
+      [/^Embedded broker port:/, '1884'],
+      [/^Require username\/password for the embedded broker/, true],
+      [/^MQTT username:/, 'admin'],
+      [/^MQTT password/, 'secret'],
+      [STORE_ENV, false], // keep it in config.yaml
     ]);
 
     const result = await promptMqttProxy(ctx);
@@ -158,15 +178,15 @@ describe('embedded broker password prompt', () => {
   // An empty answer used to be accepted and then dropped from the config,
   // leaving a LAN-exposed broker that takes the username with no password.
   it('refuses an empty password for the LAN-exposed embedded broker', async () => {
-    const ctx = makeCtx([
-      'embedded',
-      'my-esp',
-      'ble-proxy',
-      '1883',
-      true,
-      'admin',
-      'secret',
-      false,
+    const { ctx } = makeCtx([
+      [/^MQTT broker:/, 'embedded'],
+      [/^ESP32 device ID:/, 'my-esp'],
+      [/^MQTT topic prefix:/, 'ble-proxy'],
+      [/^Embedded broker port:/, '1883'],
+      [/^Require username\/password for the embedded broker/, true],
+      [/^MQTT username:/, 'admin'],
+      [/^MQTT password/, 'secret'],
+      [STORE_ENV, false],
     ]);
     let validate: ((v: string) => string | true) | undefined;
     const base = ctx.prompts;
@@ -203,11 +223,11 @@ describe('validateEsphomeHost()', () => {
 
 describe('promptEsphomeProxy()', () => {
   it('collects host + port with no auth', async () => {
-    const ctx = makeCtx([
-      'ble-proxy.local', // host
-      '6053', // port
-      'none', // auth mode
-      false, // add another proxy? -> no
+    const { ctx } = makeCtx([
+      [/^ESPHome proxy host/, 'ble-proxy.local'],
+      [/^ESPHome proxy API port:/, '6053'],
+      [/^ESPHome proxy authentication:/, 'none'],
+      [/^Add another ESPHome proxy/, false],
     ]);
 
     const result = await promptEsphomeProxy(ctx);
@@ -219,13 +239,13 @@ describe('promptEsphomeProxy()', () => {
   });
 
   it('collects host + port + encryption_key when noise selected', async () => {
-    const ctx = makeCtx([
-      '192.168.1.42', // host
-      '6053', // port
-      'noise', // auth mode
-      'SUPER_SECRET_BASE64_KEY==', // encryption key
-      false, // keep it in config.yaml, not .env
-      false, // add another proxy? -> no
+    const { ctx } = makeCtx([
+      [/^ESPHome proxy host/, '192.168.1.42'],
+      [/^ESPHome proxy API port:/, '6053'],
+      [/^ESPHome proxy authentication:/, 'noise'],
+      [/^ESPHome API encryption key/, 'SUPER_SECRET_BASE64_KEY=='],
+      [STORE_ENV, false], // keep it in config.yaml
+      [/^Add another ESPHome proxy/, false],
     ]);
 
     const result = await promptEsphomeProxy(ctx);
@@ -238,13 +258,13 @@ describe('promptEsphomeProxy()', () => {
   });
 
   it('collects host + port + legacy password when password selected', async () => {
-    const ctx = makeCtx([
-      'ble-proxy.local', // host
-      '6053', // port
-      'password', // auth mode
-      'legacy-pass', // password
-      false, // keep it in config.yaml, not .env
-      false, // add another proxy? -> no
+    const { ctx } = makeCtx([
+      [/^ESPHome proxy host/, 'ble-proxy.local'],
+      [/^ESPHome proxy API port:/, '6053'],
+      [/^ESPHome proxy authentication:/, 'password'],
+      [/^ESPHome API password/, 'legacy-pass'],
+      [STORE_ENV, false], // keep it in config.yaml
+      [/^Add another ESPHome proxy/, false],
     ]);
 
     const result = await promptEsphomeProxy(ctx);
@@ -257,23 +277,28 @@ describe('promptEsphomeProxy()', () => {
   });
 
   it('trims whitespace from host input', async () => {
-    const ctx = makeCtx(['  192.168.1.42  ', '6053', 'none', false]);
+    const { ctx } = makeCtx([
+      [/^ESPHome proxy host/, '  192.168.1.42  '],
+      [/^ESPHome proxy API port:/, '6053'],
+      [/^ESPHome proxy authentication:/, 'none'],
+      [/^Add another ESPHome proxy/, false],
+    ]);
     const result = await promptEsphomeProxy(ctx);
     expect(result.host).toBe('192.168.1.42');
   });
 
   it('collects additional proxies for a mesh setup (#116)', async () => {
-    const ctx = makeCtx([
-      'ble-proxy.local', // primary host
-      '6053', // primary port
-      'none', // primary auth
-      true, // add another?
-      'proxy2.local', // extra host
-      '6053', // extra port
-      'noise', // extra auth
-      'KEY2==', // extra encryption key
-      false, // keep it in config.yaml, not .env
-      false, // add another? -> no
+    const { ctx, asked } = makeCtx([
+      [/^ESPHome proxy host/, 'ble-proxy.local'],
+      [/^ESPHome proxy API port:/, '6053'],
+      [/^ESPHome proxy authentication:/, 'none'],
+      [/^Add another ESPHome proxy/, true],
+      [/^Additional ESPHome proxy host/, 'proxy2.local'],
+      [/^Additional ESPHome proxy API port:/, '6053'],
+      [/^Additional ESPHome proxy authentication:/, 'noise'],
+      [/^ESPHome API encryption key/, 'KEY2=='],
+      [STORE_ENV, false], // keep it in config.yaml
+      [/^Add another ESPHome proxy/, false],
     ]);
 
     const result = await promptEsphomeProxy(ctx);
@@ -290,18 +315,26 @@ describe('promptEsphomeProxy()', () => {
         },
       ],
     });
+    // The extra proxy is asked for after "add another", and the question
+    // comes back once it is done.
+    expect(asked.filter((m) => /host|Add another/.test(m))).toEqual([
+      expect.stringMatching(/^ESPHome proxy host/),
+      expect.stringMatching(/^Add another ESPHome proxy/),
+      expect.stringMatching(/^Additional ESPHome proxy host/),
+      expect.stringMatching(/^Add another ESPHome proxy/),
+    ]);
   });
 });
 
 describe('bleStep + esphome-proxy handler', () => {
   it('sets handler to esphome-proxy and clears mqtt_proxy', async () => {
-    const ctx = makeCtx([
-      'esphome-proxy', // handler
-      'ble-proxy.local', // host
-      '6053', // port
-      'none', // auth
-      false, // add another proxy? -> no
-      'skip', // scale discovery
+    const { ctx } = makeCtx([
+      [HANDLER, 'esphome-proxy'],
+      [/^ESPHome proxy host/, 'ble-proxy.local'],
+      [/^ESPHome proxy API port:/, '6053'],
+      [/^ESPHome proxy authentication:/, 'none'],
+      [/^Add another ESPHome proxy/, false],
+      [DISCOVERY, 'skip'],
     ]);
 
     await bleStep.run(ctx);
@@ -318,12 +351,12 @@ describe('bleStep + esphome-proxy handler', () => {
 
 describe('bleStep + ha-bluetooth handler', () => {
   it('sets handler to ha-bluetooth and clears the other proxy blocks', async () => {
-    const ctx = makeCtx([
-      'ha-bluetooth', // handler
-      'http://homeassistant.local:8123', // url
-      '${HA_TOKEN}', // token
-      '', // source filter -> none
-      'skip', // scale discovery
+    const { ctx } = makeCtx([
+      [HANDLER, 'ha-bluetooth'],
+      [/^Home Assistant URL/, 'http://homeassistant.local:8123'],
+      [/access token/, '${HA_TOKEN}'], // a reference is not offered for .env
+      [/^Only accept advertisements from this HA scanner/, ''], // no source filter
+      [DISCOVERY, 'skip'],
     ]);
 
     await bleStep.run(ctx);
@@ -342,10 +375,10 @@ describe('bleStep + ha-bluetooth handler', () => {
 
 describe('bleStep handler selection', () => {
   it('sets handler to auto and clears mqtt_proxy when auto selected', async () => {
-    const ctx = makeCtx([
-      'auto', // handler selection
-      false, // adapter selection → no
-      'skip', // scale discovery → skip
+    const { ctx } = makeCtx([
+      [HANDLER, 'auto'],
+      [ADAPTER, false],
+      [DISCOVERY, 'skip'],
     ]);
 
     await bleStep.run(ctx);
@@ -355,14 +388,14 @@ describe('bleStep handler selection', () => {
   });
 
   it('sets handler to mqtt-proxy with external broker config', async () => {
-    const ctx = makeCtx([
-      'mqtt-proxy', // handler selection
-      'external', // broker mode
-      'esp32-ble-proxy', // device_id
-      'ble-proxy', // topic_prefix
-      'mqtt://10.1.1.15:1883', // broker_url
-      false, // no auth
-      'skip', // scale discovery → skip
+    const { ctx } = makeCtx([
+      [HANDLER, 'mqtt-proxy'],
+      [/^MQTT broker:/, 'external'],
+      [/^ESP32 device ID:/, 'esp32-ble-proxy'],
+      [/^MQTT topic prefix:/, 'ble-proxy'],
+      [/^MQTT broker URL:/, 'mqtt://10.1.1.15:1883'],
+      [/require authentication/, false],
+      [DISCOVERY, 'skip'],
     ]);
 
     await bleStep.run(ctx);
@@ -376,18 +409,18 @@ describe('bleStep handler selection', () => {
   });
 
   it('sets handler to mqtt-proxy with external broker and auth', async () => {
-    const ctx = makeCtx([
-      'mqtt-proxy', // handler selection
-      'external', // broker mode
-      'my-esp', // device_id
-      'prefix', // topic_prefix
-      'mqtt://broker:1883', // broker_url
-      true, // has auth
-      'admin', // username
-      'secret', // password
-      false, // keep it in config.yaml, not .env
-      'manual', // scale discovery → manual
-      'AA:BB:CC:DD:EE:FF', // MAC address
+    const { ctx } = makeCtx([
+      [HANDLER, 'mqtt-proxy'],
+      [/^MQTT broker:/, 'external'],
+      [/^ESP32 device ID:/, 'my-esp'],
+      [/^MQTT topic prefix:/, 'prefix'],
+      [/^MQTT broker URL:/, 'mqtt://broker:1883'],
+      [/require authentication/, true],
+      [/^MQTT username:/, 'admin'],
+      [/^MQTT password/, 'secret'],
+      [STORE_ENV, false], // keep it in config.yaml
+      [DISCOVERY, 'manual'],
+      [MANUAL_MAC, 'AA:BB:CC:DD:EE:FF'],
     ]);
 
     await bleStep.run(ctx);
@@ -399,14 +432,14 @@ describe('bleStep handler selection', () => {
   });
 
   it('sets handler to mqtt-proxy with embedded broker bound to loopback when auth declined', async () => {
-    const ctx = makeCtx([
-      'mqtt-proxy', // handler selection
-      'embedded', // broker mode
-      'esp32-ble-proxy', // device_id
-      'ble-proxy', // topic_prefix
-      '1883', // embedded_broker_port
-      false, // wantAuth = no -> bind switches to 127.0.0.1
-      'skip', // scale discovery → skip
+    const { ctx } = makeCtx([
+      [HANDLER, 'mqtt-proxy'],
+      [/^MQTT broker:/, 'embedded'],
+      [/^ESP32 device ID:/, 'esp32-ble-proxy'],
+      [/^MQTT topic prefix:/, 'ble-proxy'],
+      [/^Embedded broker port:/, '1883'],
+      [/^Require username\/password for the embedded broker/, false], // bind -> 127.0.0.1
+      [DISCOVERY, 'skip'],
     ]);
 
     await bleStep.run(ctx);
@@ -422,7 +455,11 @@ describe('bleStep handler selection', () => {
   });
 
   it('initializes ble config if not present', async () => {
-    const ctx = makeCtx(['auto', false, 'skip']);
+    const { ctx } = makeCtx([
+      [HANDLER, 'auto'],
+      [ADAPTER, false],
+      [DISCOVERY, 'skip'],
+    ]);
     ctx.config.ble = undefined;
 
     await bleStep.run(ctx);
@@ -436,39 +473,41 @@ describe('bleStep handler selection', () => {
 
 describe('bleStep adapter selection', () => {
   it('skips adapter prompt on non-Linux platforms', async () => {
-    const ctx = makeCtx([
-      'auto', // handler
-      'skip', // scale discovery (no adapter prompt expected)
+    const { ctx, asked } = makeCtx([
+      [HANDLER, 'auto'],
+      [DISCOVERY, 'skip'],
     ]);
     ctx.platform.os = 'darwin';
 
     await bleStep.run(ctx);
 
+    expect(asked.some((m) => ADAPTER.test(m))).toBe(false);
     expect(ctx.config.ble?.adapter).toBeUndefined();
   });
 
   it('skips adapter prompt when handler is mqtt-proxy', async () => {
-    const ctx = makeCtx([
-      'mqtt-proxy', // handler
-      'external', // broker mode
-      'esp32-ble-proxy', // device_id
-      'ble-proxy', // topic_prefix
-      'mqtt://localhost:1883', // broker_url
-      false, // no auth
-      'skip', // scale discovery
+    const { ctx, asked } = makeCtx([
+      [HANDLER, 'mqtt-proxy'],
+      [/^MQTT broker:/, 'external'],
+      [/^ESP32 device ID:/, 'esp32-ble-proxy'],
+      [/^MQTT topic prefix:/, 'ble-proxy'],
+      [/^MQTT broker URL:/, 'mqtt://localhost:1883'],
+      [/require authentication/, false],
+      [DISCOVERY, 'skip'],
     ]);
     ctx.platform.os = 'linux';
 
     await bleStep.run(ctx);
 
+    expect(asked.some((m) => ADAPTER.test(m))).toBe(false);
     expect(ctx.config.ble?.adapter).toBeUndefined();
   });
 
   it('leaves adapter undefined when user declines on Linux (no existing adapter)', async () => {
-    const ctx = makeCtx([
-      'auto', // handler
-      false, // wantAdapter = no
-      'skip', // scale discovery
+    const { ctx } = makeCtx([
+      [HANDLER, 'auto'],
+      [ADAPTER, false],
+      [DISCOVERY, 'skip'],
     ]);
     ctx.platform.os = 'linux';
 
@@ -478,10 +517,10 @@ describe('bleStep adapter selection', () => {
   });
 
   it('preserves existing adapter when user declines on Linux', async () => {
-    const ctx = makeCtx([
-      'auto', // handler
-      false, // wantAdapter = no (default is true because adapter exists)
-      'skip', // scale discovery
+    const { ctx } = makeCtx([
+      [HANDLER, 'auto'],
+      [ADAPTER, false], // the default is yes because an adapter exists
+      [DISCOVERY, 'skip'],
     ]);
     ctx.platform.os = 'linux';
     ctx.config.ble = { handler: 'auto', adapter: 'hci1' };
@@ -496,10 +535,10 @@ describe('bleStep adapter selection', () => {
 
 describe('bleStep scale discovery', () => {
   it('sets scale_mac to undefined when skip is selected', async () => {
-    const ctx = makeCtx([
-      'auto', // handler
-      false, // adapter selection → no
-      'skip', // discovery
+    const { ctx } = makeCtx([
+      [HANDLER, 'auto'],
+      [ADAPTER, false],
+      [DISCOVERY, 'skip'],
     ]);
 
     await bleStep.run(ctx);
@@ -508,11 +547,11 @@ describe('bleStep scale discovery', () => {
   });
 
   it('sets scale_mac when manual entry is used', async () => {
-    const ctx = makeCtx([
-      'auto', // handler
-      false, // adapter selection → no
-      'manual', // discovery
-      'AA:BB:CC:DD:EE:FF', // MAC
+    const { ctx } = makeCtx([
+      [HANDLER, 'auto'],
+      [ADAPTER, false],
+      [DISCOVERY, 'manual'],
+      [MANUAL_MAC, 'AA:BB:CC:DD:EE:FF'],
     ]);
 
     await bleStep.run(ctx);
@@ -521,36 +560,39 @@ describe('bleStep scale discovery', () => {
   });
 
   it('goes back to discovery menu when manual entry is empty', async () => {
-    const ctx = makeCtx([
-      'auto', // handler
-      false, // adapter selection → no
-      'manual', // discovery (first attempt)
-      '', // empty → go back
-      'skip', // discovery (second attempt) → skip
+    const { ctx, asked } = makeCtx([
+      [HANDLER, 'auto'],
+      [ADAPTER, false],
+      [DISCOVERY, 'manual'], // first attempt
+      [MANUAL_MAC, ''], // empty -> go back
+      [DISCOVERY, 'skip'], // second attempt
     ]);
 
     await bleStep.run(ctx);
 
     expect(ctx.config.ble?.scale_mac).toBeUndefined();
+    expect(asked.filter((m) => DISCOVERY.test(m) || MANUAL_MAC.test(m))).toEqual([
+      expect.stringMatching(DISCOVERY),
+      expect.stringMatching(MANUAL_MAC),
+      expect.stringMatching(DISCOVERY),
+    ]);
   });
 });
 
 describe('promptHaBluetooth token prompt', () => {
   // The token is an admin credential; an input prompt echoed it to the screen.
   it('asks for the access token with a masked password prompt', async () => {
-    const { prompts } = scriptedPrompts([
+    const { ctx } = makeCtx([
       [/Home Assistant URL/, 'http://ha.local:8123'],
       [/access token/, 'secret-token'],
-      [/Store it in \.env/, false],
+      [STORE_ENV, false],
     ]);
     const echoed: string[] = [];
-    const input = prompts.input;
-    prompts.input = async (message, opts) => {
+    const input = ctx.prompts.input;
+    ctx.prompts.input = async (message, opts) => {
       echoed.push(message);
       return input(message, opts);
     };
-    const ctx = makeCtx([]);
-    ctx.prompts = prompts;
 
     const ha = await promptHaBluetooth(ctx);
 

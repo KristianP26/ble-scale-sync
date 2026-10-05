@@ -7,9 +7,10 @@ import { scriptedPrompts as sharedScriptedPrompts } from '../helpers/scripted-pr
 /**
  * Answers by prompt text, not by position, so the test reads the same against
  * any prompt order. Like the real provider, an unanswered input returns its
- * default (the user pressing Enter). Unlike createMockPromptProvider it also
- * runs `validate`, and records a rejection instead of looping, so an answer
- * the real wizard would refuse shows up as an assertion.
+ * default (the user pressing Enter). Unlike the positional
+ * createMockPromptProvider (tests/helpers/mock-prompts.ts) it also runs
+ * `validate`, and records a rejection instead of looping, so an answer the
+ * real wizard would refuse shows up as an assertion.
  */
 function scriptedPrompts(answers: Array<[RegExp, string | boolean]>) {
   const rejected: string[] = [];

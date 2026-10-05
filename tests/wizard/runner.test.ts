@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { runWizard, runEditMode, runSectionMenu } from '../../src/wizard/runner.js';
 import type { WizardStep, WizardContext } from '../../src/wizard/types.js';
-import { createMockPromptProvider } from '../../src/wizard/prompt-provider.js';
+import { createMockPromptProvider } from '../helpers/mock-prompts.js';
 
 function makeStep(
   id: string,
