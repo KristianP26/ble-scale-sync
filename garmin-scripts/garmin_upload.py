@@ -148,6 +148,9 @@ def upload(payload, token_dir=None):
     # weight and leaves the rest blank rather than storing a zero.
     weight_only = bool(payload.get("weight_only"))
 
+    # skip_metabolic_age leaves just that one metric unset, the same way.
+    skip_metabolic_age = bool(payload.get("skip_metabolic_age"))
+
     def derived(key):
         return None if weight_only else payload.get(key)
 
@@ -165,7 +168,7 @@ def upload(payload, token_dir=None):
         muscle_mass=derived("muscleMass"),
         visceral_fat_rating=derived("visceralFat"),
         physique_rating=derived("physiqueRating"),
-        metabolic_age=derived("metabolicAge"),
+        metabolic_age=None if skip_metabolic_age else derived("metabolicAge"),
         bmi=derived("bmi"),
         basal_met=derived("bmr"),
     )

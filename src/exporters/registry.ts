@@ -193,6 +193,7 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
         password: config.password as string | undefined,
         token_dir: config.token_dir as string | undefined,
         weight_only: optionalBool(config, 'garmin', 'weight_only'),
+        skip_metabolic_age: optionalBool(config, 'garmin', 'skip_metabolic_age'),
         upload_timeout_sec: optionalNumber(config, 'garmin', 'upload_timeout_sec', {
           min: GARMIN_UPLOAD_TIMEOUT_MIN_SEC,
           max: GARMIN_UPLOAD_TIMEOUT_MAX_SEC,

@@ -40,6 +40,7 @@ Automatic body composition upload to Garmin Connect, no phone app needed. Uses a
 | `password`           | Yes      | (none)             | Garmin account password                                                                                                                         |
 | `token_dir`          | No       | `~/.garmin_tokens` | Directory for cached auth tokens. A relative path is relative to the directory `config.yaml` is in; the setup wizard fills in `./garmin-tokens` |
 | `weight_only`        | No       | `false`            | Upload the weight alone, leaving every derived metric unset                                                                                     |
+| `skip_metabolic_age` | No       | `false`            | Upload every metric except metabolic age                                                                                                        |
 | `upload_timeout_sec` | No       | `180`              | Seconds one upload attempt may take before it is killed (10-900). Up to three attempts are made, 1 s and 2 s apart                              |
 
 ```yaml
@@ -75,6 +76,19 @@ global_exporters:
     email: '${GARMIN_EMAIL}'
     password: '${GARMIN_PASSWORD}'
     weight_only: true
+```
+
+:::
+
+::: tip Skip metabolic age
+Set `skip_metabolic_age: true` to upload everything except metabolic age. The estimate compares your BMR with a reference BMR for the same weight and height, so weight and height cancel and the result depends on age alone; it carries no body composition. Garmin Connect then shows no metabolic age on the entry. Garmin's own Fitness Age is calculated separately and is not affected.
+
+```yaml
+global_exporters:
+  - type: garmin
+    email: '${GARMIN_EMAIL}'
+    password: '${GARMIN_PASSWORD}'
+    skip_metabolic_age: true
 ```
 
 :::

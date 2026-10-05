@@ -577,6 +577,60 @@ describe('GarminExporter', () => {
       }),
     ).toThrow(/must be true or false/);
   });
+
+  // ─── Skip metabolic age ───────────────────────────────────────────────────
+
+  it('flags the stdin payload skip_metabolic_age when configured', async () => {
+    const captured = makeCapturingUploadFactory(JSON.stringify({ success: true }), 0);
+
+    mockSpawn.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === '--version') return createVersionCheckProc(0);
+      return captured.factory();
+    });
+
+    const { GarminExporter } = await import('../../src/exporters/garmin.js');
+    const exporter = new GarminExporter({ skip_metabolic_age: true });
+    await exporter.export(samplePayload);
+
+    const payload = JSON.parse(captured.getStdinBody());
+    expect(payload.skip_metabolic_age).toBe(true);
+    expect(payload.weight_only).toBeUndefined();
+  });
+
+  it('omits skip_metabolic_age from the payload by default', async () => {
+    const captured = makeCapturingUploadFactory(JSON.stringify({ success: true }), 0);
+
+    mockSpawn.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === '--version') return createVersionCheckProc(0);
+      return captured.factory();
+    });
+
+    const { createExporterFromEntry } = await import('../../src/exporters/registry.js');
+    const exporter = createExporterFromEntry({ type: 'garmin', email: 'a@b.c', password: 'x' });
+    await exporter.export(samplePayload);
+
+    expect(captured.getStdinBody()).not.toContain('skip_metabolic_age');
+  });
+
+  it('is on when the registry factory gets skip_metabolic_age: true from config.yaml', async () => {
+    const captured = makeCapturingUploadFactory(JSON.stringify({ success: true }), 0);
+
+    mockSpawn.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === '--version') return createVersionCheckProc(0);
+      return captured.factory();
+    });
+
+    const { createExporterFromEntry } = await import('../../src/exporters/registry.js');
+    const exporter = createExporterFromEntry({
+      type: 'garmin',
+      email: 'a@b.c',
+      password: 'x',
+      skip_metabolic_age: true,
+    });
+    await exporter.export(samplePayload);
+
+    expect(JSON.parse(captured.getStdinBody()).skip_metabolic_age).toBe(true);
+  });
 });
 
 describe('GarminExporter upload timeout (#399)', () => {
