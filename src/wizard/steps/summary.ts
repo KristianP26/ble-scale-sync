@@ -9,6 +9,7 @@ import { atomicWrite } from '../../config/write.js';
 import { sectionBox, success, error, dim } from '../ui.js';
 import { cliCommand } from '../../cli-invocation.js';
 import { mergeIntoYaml } from '../yaml-merge.js';
+import { renderConfigDiff } from '../config-diff.js';
 import { appendEnvFile } from '../../config/env-file.js';
 import { envPathFor } from '../../config/paths.js';
 import { errMsg } from '../../utils/error.js';
@@ -151,6 +152,42 @@ function serialize(ctx: WizardContext, finalConfig: Record<string, unknown>): st
   return YAML_HEADER + '\n' + stringifyYaml(finalConfig, { lineWidth: 0 });
 }
 
+/**
+ * What the save will change. In edit mode the settings of the file on disk
+ * against the text about to replace it, so a section visited "just to look"
+ * that changed a value shows up before it is written. A fresh setup over an
+ * existing file replaces it whole, which a diff would only bury.
+ */
+function printChanges(ctx: WizardContext, yamlContent: string): void {
+  if (!existsSync(ctx.configPath)) return;
+  if (!ctx.isEditMode) {
+    console.log(
+      `\n  ${dim(`This replaces the existing ${ctx.configPath} (the old one is kept as .bak).`)}`,
+    );
+    return;
+  }
+  let before: string;
+  try {
+    before = readFileSync(ctx.configPath, 'utf8');
+  } catch {
+    return;
+  }
+  const diff = renderConfigDiff(before, yamlContent);
+  if (diff === null) {
+    console.log(`\n  ${dim('No changes to config.yaml.')}`);
+    return;
+  }
+  const paint = (l: string): string =>
+    l.startsWith('+')
+      ? chalk.green(l)
+      : l.startsWith('-')
+        ? chalk.red(l)
+        : l.startsWith('~')
+          ? chalk.yellow(l)
+          : dim(l);
+  console.log('\n' + sectionBox('Changes (secrets hidden)', diff.map(paint).join('\n')));
+}
+
 export const summaryStep: WizardStep = {
   id: 'summary',
   title: 'Review & Save',
@@ -188,13 +225,14 @@ export const summaryStep: WizardStep = {
       }
     }
 
+    const yamlContent = serialize(ctx, finalConfig);
+    printChanges(ctx, yamlContent);
+
     const save = await ctx.prompts.confirm(`Save to ${ctx.configPath}?`, { default: true });
     if (!save) {
       console.log('  Not saved.');
       return;
     }
-
-    const yamlContent = serialize(ctx, finalConfig);
 
     // Secrets the person chose to keep in .env go there first: the config
     // refers to them by name, and a config saved without them would not load.

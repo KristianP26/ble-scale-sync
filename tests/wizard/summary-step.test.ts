@@ -288,3 +288,90 @@ describe('summaryStep writes the secrets kept for .env', () => {
     expect(readFileSync(join(dir, '.env'), 'utf8')).toBe('BSS_TEST_HOOK=https://other.example\n');
   });
 });
+
+describe('summaryStep shows what the save changes', () => {
+  let dir: string;
+  let out: string[];
+
+  beforeEach(() => {
+    out = [];
+    vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => void out.push(a.join(' ')));
+    dir = mkdtempSync(join(tmpdir(), 'bss-summary-diff-'));
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const FILE = `version: 1
+scale:
+  weight_unit: kg
+  height_unit: cm
+unknown_user: nearest
+users:
+  - name: Alice
+    slug: alice
+    height: 175
+    birth_date: '1990-01-01'
+    gender: male
+    is_athlete: false
+    weight_range: { min: 50, max: 70 }
+    last_known_weight: null
+global_exporters:
+  - type: ntfy
+    url: https://ntfy.sh
+    topic: scale
+    token: old-plain-token
+`;
+
+  async function save(isEditMode: boolean, change: (c: Partial<AppConfig>) => void) {
+    const configPath = join(dir, 'config.yaml');
+    writeFileSync(configPath, FILE);
+    const config = parseYaml(FILE) as Partial<AppConfig>;
+    change(config);
+    const scripted = scriptedPrompts([[/^Save to/, false]]);
+    await summaryStep.run({
+      config,
+      configPath,
+      isEditMode,
+      nonInteractive: false,
+      platform: {
+        os: 'win32',
+        arch: 'x64',
+        hasDocker: false,
+        hasPython: false,
+        pythonCommand: null,
+      },
+      prompts: scripted.prompts,
+    });
+    return { text: out.join('\n'), asked: scripted.asked };
+  }
+
+  it('prints the changed settings before asking to save, secrets masked', async () => {
+    const { text, asked } = await save(true, (c) => {
+      c.scale!.weight_unit = 'lbs';
+      (c.global_exporters![0] as { token: string }).token = 'new-plain-token';
+      (c.global_exporters![0] as { password?: string }).password = 'added-plain-password';
+    });
+
+    expect(text).toContain('Changes (secrets hidden)');
+    expect(text).toContain('~ scale.weight_unit: kg -> lbs');
+    expect(text).toContain('~ global_exporters[0:ntfy].token: (changed)');
+    expect(text).toContain('+ global_exporters[0:ntfy].password: ********');
+    expect(text).not.toMatch(/plain-token|plain-password/);
+    expect(asked).toContain(`Save to ${join(dir, 'config.yaml')}?`);
+  });
+
+  it('says so when nothing changed', async () => {
+    const { text } = await save(true, () => {});
+
+    expect(text).toMatch(/No changes to config\.yaml/);
+  });
+
+  it('notes that a fresh setup replaces the file instead of diffing it', async () => {
+    const { text } = await save(false, () => {});
+
+    expect(text).toMatch(/This replaces the existing/);
+    expect(text).not.toMatch(/No changes/);
+  });
+});
