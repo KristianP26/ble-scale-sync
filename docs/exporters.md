@@ -81,7 +81,7 @@ global_exporters:
 :::
 
 ::: tip Skip metabolic age
-Set `skip_metabolic_age: true` to upload everything except metabolic age. The estimate compares your BMR with a reference BMR for the same weight and height, so weight and height cancel and the result depends on age alone; it carries no body composition. Garmin Connect then shows no metabolic age on the entry. Garmin's own Fitness Age is calculated separately and is not affected.
+Set `skip_metabolic_age: true` to upload everything except metabolic age. The estimate compares your BMR with a reference BMR for the same weight and height. Unless `is_athlete` is set, weight and height cancel and the result depends on age alone. Either way it carries no body composition. Garmin Connect then shows no metabolic age on the entry. Garmin's own Fitness Age is calculated separately and is not affected.
 
 ```yaml
 global_exporters:
@@ -495,7 +495,7 @@ See [Configuration: Environment Variables](/guide/configuration#environment-vari
 ::: warning A boolean field must spell a boolean
 An `${ENV_VAR}` reference is resolved to a **string** before the exporter reads it, so a true/false field only accepts a value that reads as one: `true`, `yes`, `1`, `on`, or `false`, `no`, `0`, `off`, or empty. Anything else stops that exporter from being built, with an error naming the field, rather than being guessed at in one direction or the other.
 
-This applies to `weight_only` (garmin), `retain` and `ha_discovery` (mqtt), `silent` (telegram), `report_exports` (ntfy and telegram) and `sync_measurements` (wger and healthlog). So `MQTT_RETAIN=maybe` is an error, not a default.
+This applies to `weight_only` and `skip_metabolic_age` (garmin), `retain` and `ha_discovery` (mqtt), `silent` (telegram), `report_exports` (ntfy and telegram) and `sync_measurements` (wger and healthlog). So `MQTT_RETAIN=maybe` is an error, not a default.
 :::
 
 ## Historical readings

@@ -211,7 +211,8 @@ export interface GarminEntryConfig {
   /**
    * Leave metabolic age unset in Garmin Connect and upload everything else.
    * The estimate compares BMR with a reference BMR for the same weight and
-   * height, so the two cancel and what is left depends on age alone.
+   * height. Unless `is_athlete` is set the two cancel and what is left depends
+   * on age alone; either way it carries no body composition.
    */
   skip_metabolic_age?: boolean;
   /**
@@ -281,7 +282,8 @@ export const garminSchema: ExporterSchema = {
       type: 'boolean',
       required: false,
       default: false,
-      description: 'Upload every metric except metabolic age, which depends on age alone',
+      description:
+        'Upload every metric except metabolic age, an estimate from BMR that carries no body composition',
     },
   ],
   supportsGlobal: false,
