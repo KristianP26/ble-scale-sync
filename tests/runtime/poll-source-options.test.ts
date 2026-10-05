@@ -71,3 +71,17 @@ describe('PollReadingSource ble.preemptive_adapter_reset (#417)', () => {
     expect(scanAndReadRaw.mock.calls[1][0].preemptiveAdapterReset).toBe(false);
   });
 });
+
+describe('PollReadingSource ble.adapter_privacy (#417)', () => {
+  beforeEach(() => {
+    scanAndReadRaw.mockReset();
+    scanAndReadRaw.mockResolvedValue({ weight: 80, impedance: 500 });
+  });
+
+  it('passes the start-up value, not the live config, since the key is restart-required', async () => {
+    const ctx = { ...makeCtx({ adapter_privacy: false }), adapterPrivacy: true } as Ctx;
+    expect((await optionsFor(ctx)).adapterPrivacy).toBe(true);
+    const off = { ...makeCtx({ adapter_privacy: true }), adapterPrivacy: false } as Ctx;
+    expect((await optionsFor(off)).adapterPrivacy).toBe(false);
+  });
+});

@@ -97,6 +97,14 @@ export function diffRestartRequired(
   diffField(out, 'ble.handler', oldConfig.ble?.handler, newConfig.ble?.handler);
   diffField(out, 'ble.adapter', oldConfig.ble?.adapter, newConfig.ble?.adapter);
   diffField(out, 'ble.noble_driver', oldConfig.ble?.noble_driver, newConfig.ble?.noble_driver);
+  // Read once into the context. Turning it off live would also leave the
+  // adapter's privacy on, so a restart is the honest answer either way (#417).
+  diffField(
+    out,
+    'ble.adapter_privacy',
+    oldConfig.ble?.adapter_privacy,
+    newConfig.ble?.adapter_privacy,
+  );
   // The adapter list is built once, before the loop starts (run.ts), so a
   // hot-edited value changes nothing until a restart. Without this row the user
   // gets neither the effect nor the warning, which is neither half of the

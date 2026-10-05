@@ -168,6 +168,11 @@ export interface ScanOptions {
    * explicit false skips it. node-ble only.
    */
   preemptiveAdapterReset?: boolean;
+  /**
+   * Keep LE privacy on, with an IRK derived from the adapter address, and skip
+   * the connect when it is off (`ble.adapter_privacy`, #417). node-ble only.
+   */
+  adapterPrivacy?: boolean;
 }
 
 export interface ScanResult {

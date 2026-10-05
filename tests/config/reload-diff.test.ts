@@ -189,6 +189,14 @@ describe('diffRestartRequired', () => {
     });
   });
 
+  it('flags ble.adapter_privacy, which is read once at start-up (#417)', () => {
+    const a = baseConfig({ ble: { handler: 'auto' } });
+    const b = baseConfig({ ble: { handler: 'auto', adapter_privacy: true } });
+    expect(diffRestartRequired(a, b)).toEqual([
+      { key: 'ble.adapter_privacy', oldValue: '<unset>', newValue: 'true' },
+    ]);
+  });
+
   it('does NOT flag ble.preemptive_adapter_reset, which the poll source re-reads per cycle', () => {
     const a = baseConfig({ ble: { handler: 'auto', preemptive_adapter_reset: true } });
     const b = baseConfig({ ble: { handler: 'auto', preemptive_adapter_reset: false } });
