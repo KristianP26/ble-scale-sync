@@ -170,7 +170,15 @@ pair AA:BB:CC:DD:EE:FF
 
 If it happens every session, `ble.auto_clear_stale_bond: true` does that for you. See [the configuration reference](/guide/configuration#config-yaml-reference).
 
-If the key is rejected on the very next connect after a session that worked, every time (or the connect succeeds but then stalls at `Discovering services...` with `GATT server acquisition timed out`), try `ble.preemptive_adapter_reset: false` and see whether the bond then holds. The adapter power-cycle after each session is the only thing the host does in between, and whether it is the cause is still open ([#417](https://github.com/KristianP26/ble-scale-sync/issues/417)). Report the result there either way.
+If the key is rejected on the very next connect after a session that worked, every time, and the scale asks for SET and a new pairing before every weigh-in (or the connect succeeds but then stalls at `Discovering services...` with `GATT server acquisition timed out`), the scale is throwing away a pairing that carried no host identity key. Some Beurer scales (the BF915 is confirmed in [#417](https://github.com/KristianP26/ble-scale-sync/issues/417)) keep a pairing only from a device that handed over an identity key (IRK) while pairing. A phone normally does; Linux does only while the adapter has LE privacy turned on, which it does not by default. The adapter power-cycle after each session is not the cause: the bond is rejected without it too.
+
+The remedy:
+
+1. Set `ble.adapter_privacy: true` (in the Home Assistant add-on: **Pair with a host identity key (LE privacy)**) and restart.
+2. Remove the old pairing once with `bluetoothctl remove AA:BB:CC:DD:EE:FF`, or let `ble.auto_clear_stale_bond: true` do it.
+3. Weigh in and confirm the pairing on the scale. Let ble-scale-sync do the pairing: in #417 a manual `bluetoothctl pair` with privacy on never completed, while the pairing ble-scale-sync started did.
+
+Privacy then applies to the whole adapter, and on a native or Docker host `Privacy = device` in `/etc/bluetooth/main.conf` does the same without the option. Read [the `adapter_privacy` notes](/guide/configuration#config-yaml-reference) before turning it on.
 
 ## Exporter Issues
 

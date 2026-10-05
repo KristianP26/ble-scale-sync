@@ -123,7 +123,8 @@ ble:
 | `qn_protocol_byte`           | No                          | Auto           | QN-family scales only. Protocol byte the handshake echoes back to the scale (0 to 255). Set it when a QN scale runs the whole handshake and then reports nothing, or when its scale-info frame is lost in transit on a proxy transport. See below.                                                                                                                                                      |
 | `qn_report_byte`             | No                          | Per dialect    | QN-family scales only. Payload byte of the history-response frame (0 to 255). Defaults to `252` (0xFC) on the long-frame dialects (es26m and extended) and `254` (0xFE) on the classic one. Try the other value if your scale completes the handshake and then reports nothing. See below.                                                                                                              |
 | `auto_clear_stale_bond`      | No                          | `false`        | Delete a pairing key the scale has forgotten and pair again. Bonded scales only (Beurer BF7xx / BF9xx), node-ble transport only. See below.                                                                                                                                                                                                                                                             |
-| `preemptive_adapter_reset`   | No                          | `true`         | Power-cycle the Bluetooth adapter with `btmgmt` after every GATT session, to clear a stuck-discovery state some Raspberry Pi adapters fall into. Set `false` only to test whether that cycle is what makes a bonded scale reject its next connect. node-ble transport only. See below.                                                                                                                  |
+| `preemptive_adapter_reset`   | No                          | `true`         | Power-cycle the Bluetooth adapter with `btmgmt` after every GATT session, to clear a stuck-discovery state some Raspberry Pi adapters fall into. It was not the cause of the Beurer BF915 re-pairing in #417 (see `adapter_privacy`). node-ble transport only. See below.                                                                                                                               |
+| `adapter_privacy`            | No                          | `false`        | Turn on LE privacy on the Bluetooth adapter, with a key derived from its address, so pairing hands the scale a host identity key. For Beurer scales that ask for SET and a new pairing before every weigh-in. Affects the whole adapter. node-ble transport only. See below.                                                                                                                            |
 | `qn_weight_ack`              | No                          | Per dialect    | QN-family scales only. Send the scale your weight anchor and acknowledge live weight frames, as the vendor apps do. The acknowledgement is on by default on the 20-byte extended dialect. On the 19-byte dialect (`QN: scale info (19B, ...)`) `true` also sends your age and height as the Arboleaf app does. Try `true` if your QN scale completes the handshake and then streams nothing. See below. |
 | `qn_a4_prelude`              | No                          | `false`        | QN-family scales only. Send the two undecoded `0xA4` frames an Arboleaf vendor app sends between START and the first weight frame. Off by default. Try `true` only if `qn_weight_ack` did not help and your scale still goes silent right after START. See below.                                                                                                                                       |
 | `qn_time_sync_long`          | No                          | `false`        | QN-family scales only. Send the 9-byte form of the `0x20` time-sync frame that an Arboleaf vendor app sends, instead of the 8-byte one. Off by default; the extra byte is undecoded. See below.                                                                                                                                                                                                         |
@@ -381,7 +382,7 @@ Native BlueZ only. The proxy transports do not pair at all.
 
 After every GATT session the native Linux transport resets its D-Bus connection and then power-cycles the adapter with `btmgmt power off` / `power on`. On-board Raspberry Pi Broadcom adapters drift into a state where BlueZ reports discovery as running while the controller has stopped scanning, and the cycle clears it before it builds up. The debug log shows it as `Preemptive btmgmt reset after GATT`.
 
-It is also the only thing the host does between a bonded session that works and a next connect whose stored key is rejected, which is what the Beurer section above describes. To find out whether the cycle is the cause on your setup, switch it off:
+It is also the only thing the host does between a bonded session that works and a next connect whose stored key is rejected, which is what the Beurer section above describes. Testing in [#417](https://github.com/KristianP26/ble-scale-sync/issues/417) showed it is not the cause there (see `adapter_privacy` below), but if you want to rule it out on your setup, switch it off:
 
 ```yaml
 ble:
@@ -391,6 +392,32 @@ ble:
 Only this one step is skipped. The D-Bus reset, the cleanup after a failed session and the recovery that runs when discovery will not start all stay as they are, and the change applies from the next scan cycle without a restart. If your adapter then starts missing the scale after a few weigh-ins, turn it back on.
 
 Native BlueZ (node-ble) only. noble power-cycles the adapter only when it is not powered on at start-up, and the proxy transports never touch the host adapter.
+
+:::
+
+::: tip Beurer scales that forget the pairing after every weigh-in (`adapter_privacy`)
+
+Some Beurer scales (the BF915 is confirmed in [#417](https://github.com/KristianP26/ble-scale-sync/issues/417)) keep a pairing only from a device that handed over an identity key (IRK) while pairing. A phone normally does. Linux does so only while the adapter has LE privacy turned on, and it is off by default, so every pairing BlueZ makes is rejected on the next connect with `PIN or Key Missing` and the scale asks for SET again.
+
+```yaml
+ble:
+  adapter_privacy: true
+```
+
+With this on, at the start of the first scan cycle the app powers the adapter off, turns LE privacy on with `btmgmt privacy on <key>` and powers it back on, then checks every cycle that privacy is still on. In single-shot mode (a cron job or timer that starts a new process per run) every run is a first cycle, so every run power-cycles the adapter once. The key is derived from the adapter's own Bluetooth address, so it stays the same across restarts, re-created containers, add-on reinstalls and reboots, which is what keeps the scale able to recognise the host. The log names it only by a fingerprint: `uses an IRK derived from its address (fingerprint 1a2b3c4d)`. Right before every connect the app checks once more, and if privacy is not on it skips the connect and says why, rather than pair without the key.
+
+After turning it on, remove the old pairing once (`bluetoothctl remove <mac>`, or let `auto_clear_stale_bond` do it) and pair through ble-scale-sync, confirming on the scale as the first time. Later weigh-ins should reuse the pairing, also after the scale has slept.
+
+Before you turn it on:
+
+- **It affects the whole adapter.** Every Bluetooth LE connection and active scan on it then uses a random address, including Home Assistant's own Bluetooth integration when it shares the adapter. Other LE devices already paired with that adapter may need pairing again. A second, dedicated USB adapter selected with `ble.adapter` (`ble_adapter` in the add-on) keeps everything else out of it.
+- **It is not real privacy.** Anyone who knows the adapter's address can work out the key and recognise its random addresses. The option exists so the scale keeps the pairing, not to hide the host. The key does not let anyone impersonate the host; that would take the pairing key itself.
+- **Do not combine it with `Privacy` in BlueZ's `/etc/bluetooth/main.conf`.** bluetoothd sets its own key when it starts and this option replaces it, so the scale's stored key depends on which ran last. The app warns when it can read such a line (native installs only; in Docker and the add-on the container's own file is read, not the host's).
+- It needs `btmgmt` with root or `CAP_NET_ADMIN`, which the add-on and the Docker image (run with `--cap-add NET_ADMIN`, as in Getting Started) have. Restart after changing it; it is read once at start-up. Turning it off later does not turn privacy off on the adapter: run `sudo btmgmt --index 0 power off`, `sudo btmgmt --index 0 privacy off` and `sudo btmgmt --index 0 power on` (with your adapter's index), or reboot.
+
+On a native or Docker host there is a no-code alternative: set `Privacy = device` under `[General]` in `/etc/bluetooth/main.conf` and restart bluetoothd (`sudo systemctl restart bluetooth`). BlueZ then generates an IRK, keeps it in `/var/lib/bluetooth/<adapter address>/identity` and turns privacy on at every start. Use that or `adapter_privacy`, not both. Home Assistant OS does not let you edit that file, which is what the option is for.
+
+Native BlueZ (node-ble) only. The proxy transports pair through their own radio, if at all.
 
 :::
 
