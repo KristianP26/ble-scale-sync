@@ -1256,6 +1256,54 @@ describe('waitForRawReading() — per-frame ACK + completion hold', () => {
     }
   });
 
+  // #211: the SBF75's 0x59 stream starts just before the window ends on a slow
+  // link. The handler asks the adapter whether a transfer is under way and
+  // keeps the link open for the parts that carry the impedance.
+  it('keeps holding past the window while the adapter reports a composition pending', async () => {
+    vi.useFakeTimers();
+    try {
+      const notifyChar = createMockChar();
+      const writeChar = createMockChar();
+      const device = createMockDevice();
+      const { charMap } = createCharMap([
+        [NOTIFY_UUID, notifyChar],
+        [WRITE_UUID, writeChar],
+      ]);
+
+      let pending = false;
+      const adapter = createLegacyAdapter({
+        completionHoldMs: 15000,
+        isComplete: vi.fn((r: ScaleReading) => r.weight > 0),
+        isFinal: vi.fn((r: ScaleReading) => r.impedance > 0),
+        isCompositionPending: () => pending,
+        parseNotification: vi.fn((data: Buffer) => {
+          if (data[0] === 0x03) {
+            pending = true;
+            return null;
+          }
+          return data[0] === 0x02
+            ? { weight: 83.55, impedance: 437 }
+            : { weight: 83.4, impedance: 0 };
+        }),
+      });
+
+      const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(notifyChar.subscribeCalled).toBe(true);
+
+      notifyChar.triggerData(Buffer.from([0x01])); // weight stable, hold arms
+      await vi.advanceTimersByTimeAsync(14000);
+      notifyChar.triggerData(Buffer.from([0x03])); // 0x59 part 1, late
+      await vi.advanceTimersByTimeAsync(3000); // past the 15 s window
+      notifyChar.triggerData(Buffer.from([0x02])); // last part, with impedance
+
+      const result = await promise;
+      expect(result.reading).toEqual({ weight: 83.55, impedance: 437 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('resolves with the held reading (not reject) on disconnect during the hold', async () => {
     const notifyChar = createMockChar();
     const writeChar = createMockChar();

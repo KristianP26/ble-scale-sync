@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { HistoryBuffer, HoldTimer } from '../../src/ble/notification-processor.js';
+import {
+  HistoryBuffer,
+  HoldTimer,
+  HOLD_EXTENSION_MAX_MS,
+  HOLD_EXTENSION_STEP_MS,
+} from '../../src/ble/notification-processor.js';
 import { bleLog } from '../../src/ble/types.js';
 import type { ScaleReading } from '../../src/interfaces/scale-adapter.js';
 
@@ -106,6 +111,46 @@ describe('HoldTimer', () => {
       vi.advanceTimersByTime(5000); // 15s since first hold
       expect(onElapsed).toHaveBeenCalledTimes(1);
       expect(onElapsed.mock.calls[0][0].weight).toBe(84);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #211: a composition transfer still in progress when the window ends gets
+  // more time, in steps, so the parts carrying the impedance can land.
+  it('extends the window while a composition is pending, then resolves', () => {
+    vi.useFakeTimers();
+    try {
+      const onElapsed = vi.fn();
+      const onArm = vi.fn();
+      let pending = false;
+      const t = new HoldTimer(15000, onElapsed, onArm, () => pending);
+      t.hold(reading(83));
+      vi.advanceTimersByTime(14000);
+      pending = true; // part 1 arrived late
+      vi.advanceTimersByTime(1000);
+      expect(onElapsed).not.toHaveBeenCalled();
+      expect(onArm).toHaveBeenLastCalledWith(HOLD_EXTENSION_STEP_MS);
+
+      pending = false; // last part arrived
+      vi.advanceTimersByTime(HOLD_EXTENSION_STEP_MS);
+      expect(onElapsed).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops extending at the cap when the transfer never finishes', () => {
+    vi.useFakeTimers();
+    try {
+      const onElapsed = vi.fn();
+      const t = new HoldTimer(15000, onElapsed, undefined, () => true);
+      t.hold(reading(83));
+      vi.advanceTimersByTime(15000 + HOLD_EXTENSION_MAX_MS - 1);
+      expect(onElapsed).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(onElapsed).toHaveBeenCalledTimes(1);
+      expect(onElapsed.mock.calls[0][0].weight).toBe(83);
     } finally {
       vi.useRealTimers();
     }

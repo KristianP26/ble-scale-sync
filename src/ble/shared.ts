@@ -601,6 +601,7 @@ export function waitForRawReading(
       // session_timeout_sec shorter than the hold ends the session first, and
       // the caller's timeout discards the settled weight along with it (#434).
       (holdMs) => onActivity?.(holdMs + HOLD_IDLE_SLACK_MS),
+      () => adapter.isCompositionPending?.() === true,
     );
 
     // Raw frame capture (#211): log every notify frame and hold the connection

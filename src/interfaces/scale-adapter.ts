@@ -645,6 +645,14 @@ export interface HoldForComposition {
    * hold window. Only consulted while completionHoldMs is set.
    */
   isFinal?(reading: ScaleReading): boolean;
+  /**
+   * True while a multipart composition transfer has started but not finished.
+   * When the hold window elapses during one, the handler extends it in short
+   * steps up to a fixed cap instead of resolving with the weight alone, so a
+   * slow link does not cut off the parts that carry the impedance (#211).
+   * Only consulted while completionHoldMs is set.
+   */
+  isCompositionPending?(): boolean;
 }
 
 /**

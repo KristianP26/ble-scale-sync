@@ -41,8 +41,9 @@ export const RAW_READING_TIMEOUT_MS = 120_000;
  * silence window. The idle timer restarts on every frame, so a scale that
  * streams adapter-rejected frames forever would otherwise hold the session
  * open with no bound; the cap ends it while leaving room for a weigh-in that
- * spans several restarts. A composition hold can move it out once, by at most
- * the hold plus 2 s (withIdleTimeout). A session_timeout_sec above 300 makes
+ * spans several restarts. A composition hold can move it out, by at most the
+ * hold plus HOLD_EXTENSION_MAX_MS plus 2 s (withIdleTimeout, #211). A
+ * session_timeout_sec above 300 makes
  * POLL_CYCLE_TIMEOUT_MS the effective ceiling instead.
  */
 export const READING_SESSION_CAP_FACTOR = 3;
@@ -283,8 +284,9 @@ export { withTimeout } from '../utils/timeout.js';
  * when the window would end later: with the cap at 3 x a 5 s
  * `session_timeout_sec`, a 30 s hold armed a few seconds in was otherwise still
  * cut at 15 s, and the held weight dropped with it (#434). Only that minimum
- * window moves the cap, and the hold that requests it arms once per session,
- * so the cap stays bounded.
+ * window moves the cap, and the hold that requests it arms once per session
+ * plus at most HOLD_EXTENSION_MAX_MS of extensions (#211), so the cap stays
+ * bounded.
  */
 export async function withIdleTimeout<T>(
   start: (onActivity: (minIdleMs?: number) => void) => Promise<T>,
