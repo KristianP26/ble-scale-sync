@@ -38,6 +38,7 @@ import {
   resetConnection,
 } from './connection.js';
 import { ensurePairingAgent, setPairingTarget } from './agent.js';
+import { ensureAdapterPrivacy, requireAdapterPrivacy } from './privacy.js';
 import {
   startDiscoverySafe,
   removeDevice,
@@ -273,6 +274,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     readingTimeoutMs,
     autoClearStaleBond,
     preemptiveAdapterReset,
+    adapterPrivacy,
   } = opts;
 
   let device: Device | null = null;
@@ -302,6 +304,23 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         'Bluetooth adapter is not powered on. ' +
           'Ensure bluetoothd is running: sudo systemctl start bluetooth',
       );
+    }
+
+    // Before this cycle starts discovery, so the power-cycle an apply needs
+    // never lands on a device this cycle found. In continuous mode an idle
+    // cycle leaves its discovery running, so the power-cycle can still land on
+    // that one: the resetConnection below drops the D-Bus state it leaves
+    // behind and startDiscoverySafe starts a fresh scan. The index comes from
+    // the adapter BlueZ resolved, not from ble.adapter (#417).
+    if (adapterPrivacy) {
+      const privacy = await ensureAdapterPrivacy(btAdapter, abortSignal);
+      if (privacy.powerCycled) {
+        // btmgmt took the controller down underneath this D-Bus connection,
+        // the same situation as the btmgmt recovery tier.
+        resetConnection();
+        btAdapter = await acquireBluezAdapter(bleAdapter);
+        probeAdapter = btAdapter;
+      }
     }
 
     // In continuous mode, BlueZ caches the device from a previous cycle.
@@ -348,6 +367,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       // Stop discovery before connecting. BlueZ on low-power devices (e.g. Pi Zero)
       // often fails with le-connection-abort-by-local while discovery is still active.
       await stopDiscoveryAndQuiesce(btAdapter);
+      if (adapterPrivacy) await requireAdapterPrivacy(btAdapter);
 
       gattAttempted = true;
       device = await connectWithRecovery({
@@ -357,6 +377,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         maxRetries: MAX_CONNECT_RETRIES,
         bleAdapter,
         autoClearStaleBond,
+        adapterPrivacy,
         abortSignal,
       });
       bleLog.info('Connected. Discovering services...');
@@ -409,6 +430,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       // Stop discovery before connecting. BlueZ on low-power devices (e.g. Pi Zero)
       // often fails with le-connection-abort-by-local while discovery is still active.
       await stopDiscoveryAndQuiesce(btAdapter);
+      if (adapterPrivacy) await requireAdapterPrivacy(btAdapter);
 
       gattAttempted = true;
       device = await connectWithRecovery({
@@ -418,6 +440,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         maxRetries: MAX_CONNECT_RETRIES,
         bleAdapter,
         autoClearStaleBond,
+        adapterPrivacy,
         abortSignal,
       });
       bleLog.info('Connected. Discovering services...');

@@ -24,6 +24,8 @@ import {
   STALE_BOND_EVIDENCE_ATTEMPTS,
 } from './stale-bond.js';
 import { isDeviceObjectGone } from './device-object.js';
+import { requireAdapterPrivacy } from './privacy.js';
+import { bleFailureKind } from '../failure-kind.js';
 
 export interface ConnectRecoveryContext {
   btAdapter: Adapter;
@@ -42,6 +44,12 @@ export interface ConnectRecoveryContext {
    * the diagnostic (`ble.auto_clear_stale_bond`, #335). Off by default.
    */
   autoClearStaleBond?: boolean;
+  /**
+   * `ble.adapter_privacy` (#417). The caller checks privacy right before
+   * handing over; this re-checks before any connect that follows a
+   * startDiscoverySafe in here, since its bluetoothd restart tier can clear it.
+   */
+  adapterPrivacy?: boolean;
   /**
    * Shutdown. Up to six 30 s connect attempts with re-discovery in between is
    * far past the 5 s force-exit grace, and a hard exit skips teardownSession,
@@ -133,6 +141,9 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
   // Repeating it would delete the bond the previous attempt just established,
   // turning a scale that needs two goes at pairing into an endless re-pair.
   let staleBondCleared = false;
+  // Set before every startDiscoverySafe below, not after: a call that throws
+  // may still have restarted bluetoothd on its way (#417).
+  let privacyCheckDue = false;
   // Long-lived PropertiesChanged subscription on the current device proxy so
   // every received advertisement updates the freshness clock. The tracker is
   // rebound when the catch branch swaps the device reference.
@@ -161,6 +172,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           // freshness check throws its own clear message outside the wrap.
           try {
             tracker.stop();
+            privacyCheckDue = true;
             const result = await startDiscoverySafe(btAdapter, bleAdapter);
             if (result) btAdapter = result;
             const supersededByRediscovery = device;
@@ -190,6 +202,13 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           }
         }
 
+        // A pairing made now, without privacy, would carry no host IdKey: the
+        // bond the scale throws away (#417).
+        if (ctx.adapterPrivacy && privacyCheckDue) {
+          await requireAdapterPrivacy(btAdapter);
+          privacyCheckDue = false;
+        }
+
         const t0 = Date.now();
         bleLog.debug(`Connect attempt ${attempt + 1}/${maxRetries + 1}...`);
         // On abort the pending Connect is left to teardownSession, whose
@@ -212,6 +231,9 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
         // A shutdown is not a connect failure: no retry, no diagnosis, and the
         // abort reason rather than whatever the abandoned step wrapped it in.
         throwIfAborted();
+        // A refused precondition is not a connect failure: retrying cannot fix
+        // it, and the retry path would delete the device and rediscover.
+        if (bleFailureKind(err) === 'blocked') throw err;
         const msg = errMsg(err);
         authClassFailures = isAuthClassConnectFailure(err) ? authClassFailures + 1 : 0;
         if (isDeviceObjectGone(err)) sawObjectGone = true;
@@ -287,6 +309,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
         tracker.stop();
         const supersededByRetry = device;
         try {
+          privacyCheckDue = true;
           const result = await startDiscoverySafe(btAdapter, bleAdapter);
           if (result) btAdapter = result;
           device = await waitDeviceBounded(

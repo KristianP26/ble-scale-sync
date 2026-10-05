@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ScaleAdapter } from '../../../src/interfaces/scale-adapter.js';
 import { defaultProfile } from '../../helpers/scale-test-utils.js';
+import { makeController, fakeExecFile, type FakeController } from '../../helpers/fake-btmgmt.js';
 
 /**
  * Characterisation tests for the node-ble `scanAndReadRaw` orchestration (#368).
@@ -30,6 +31,17 @@ const record =
 vi.mock('dbus-next', () => ({ default: {}, Variant: class {} }));
 vi.mock('node-ble', () => ({ default: { createBluetooth: () => ({ bluetooth: {} }) } }));
 
+// btmgmt, for ble.adapter_privacy (#417). Each call lands in `calls` as
+// `btmgmt <command...>` so its position in the sequence can be asserted.
+let ctl: FakeController = makeController();
+const btmgmtExec = fakeExecFile(() => ctl);
+vi.mock('node:child_process', () => ({
+  execFile: (file: string, args: string[], opts: unknown, cb: never) => {
+    calls.push(`btmgmt ${args.slice(2).join(' ')}`);
+    btmgmtExec(file, args, opts, cb);
+  },
+}));
+
 const fakeAdapter = {
   isPowered: async () => {
     calls.push('isPowered');
@@ -39,7 +51,8 @@ const fakeAdapter = {
     calls.push('waitDevice');
     return fakeDevice;
   },
-  helper: { callMethod: async () => {} },
+  getAddress: async () => ctl.address,
+  helper: { callMethod: async () => {}, object: '/org/bluez/hci0' },
 };
 
 const fakeGatt = {
@@ -69,6 +82,9 @@ let holdNextReading: Promise<void> | null = null;
 
 /** Every provider handed to setPairingTarget, newest last. */
 const pairingTargets: (() => { pin?: number; mac?: string })[] = [];
+
+/** Every context handed to connectWithRecovery, newest last. */
+const connectContexts: { adapterPrivacy?: boolean }[] = [];
 
 vi.mock('../../../src/ble/handler-node-ble/agent.js', () => ({
   setPairingTarget: record('setPairingTarget', (p: () => { pin?: number; mac?: string }) => {
@@ -116,7 +132,10 @@ vi.mock('../../../src/ble/handler-node-ble/device-object.js', () => ({
 }));
 
 vi.mock('../../../src/ble/handler-node-ble/connect.js', () => ({
-  connectWithRecovery: record('connectWithRecovery', async () => fakeDevice),
+  connectWithRecovery: record('connectWithRecovery', async (ctx: unknown) => {
+    connectContexts.push(ctx as { adapterPrivacy?: boolean });
+    return fakeDevice;
+  }),
 }));
 
 vi.mock('../../../src/ble/handler-node-ble/gatt.js', () => ({
@@ -155,6 +174,9 @@ function makeAdapter(overrides: Partial<ScaleAdapter> = {}): ScaleAdapter {
 }
 
 const { scanAndReadRaw } = await import('../../../src/ble/handler-node-ble/scan.js');
+const { bleFailureKind } = await import('../../../src/ble/failure-kind.js');
+const { _resetAdapterPrivacyStateForTests } =
+  await import('../../../src/ble/handler-node-ble/privacy.js');
 
 describe('scanAndReadRaw call order (#368)', () => {
   beforeEach(() => {
@@ -404,5 +426,117 @@ describe('scanAndReadRaw call order (#368)', () => {
     // reading lands, and the finally is a catch-all for every other exit.
     const seen = await run();
     expect(seen.filter((c) => c === 'device.disconnect')).toHaveLength(2);
+  });
+});
+
+describe('scanAndReadRaw with ble.adapter_privacy (#417)', () => {
+  const ORIG_PLATFORM = process.platform;
+  const setPlatform = (p: string): void => {
+    Object.defineProperty(process, 'platform', { value: p, configurable: true });
+  };
+
+  beforeEach(() => {
+    calls.length = 0;
+    ctl = makeController();
+    fakeAdapter.helper.object = '/org/bluez/hci0';
+    connectContexts.length = 0;
+    _resetAdapterPrivacyStateForTests();
+    // btmgmt only runs on Linux; the CI matrix and a Windows checkout both run this.
+    setPlatform('linux');
+    // setImmediate stays real: privacy.ts reads /etc/bluetooth/main.conf, real
+    // I/O that a fully faked loop would never let finish.
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    });
+  });
+  afterEach(() => {
+    setPlatform(ORIG_PLATFORM);
+    fakeAdapter.helper.object = '/org/bluez/hci0';
+    vi.useRealTimers();
+  });
+
+  async function runWith(extra: {
+    adapterPrivacy?: boolean;
+    targetMac?: string;
+  }): Promise<string[]> {
+    const promise = scanAndReadRaw({
+      targetMac: 'AA:BB:CC:DD:EE:FF',
+      adapters: [makeAdapter()],
+      profile: defaultProfile(),
+      ...extra,
+    });
+    let done = false;
+    promise.then(
+      () => (done = true),
+      () => (done = true),
+    );
+    while (!done) {
+      await vi.advanceTimersByTimeAsync(250);
+      await new Promise((r) => setImmediate(r));
+    }
+    await promise;
+    return calls;
+  }
+
+  it('enables privacy before discovery and checks it again right before the connect', async () => {
+    const seen = await runWith({ adapterPrivacy: true });
+    const privacyOn = seen.findIndex((c) => c.startsWith('btmgmt privacy on '));
+    expect(privacyOn, `no privacy on in [${seen.join(', ')}]`).toBeGreaterThan(-1);
+    expect(privacyOn).toBeLessThan(seen.indexOf('removeDevice'));
+    expect(privacyOn).toBeLessThan(seen.indexOf('startDiscoverySafe'));
+    // The power-cycle went under the D-Bus connection: reset it and take the
+    // adapter again before anything else touches BlueZ. Both bounded by
+    // removeDevice, since the teardown resets the connection again later.
+    const removeAt = seen.indexOf('removeDevice');
+    const reset = seen.indexOf('resetConnection', privacyOn);
+    expect(reset).toBeGreaterThan(privacyOn);
+    expect(reset).toBeLessThan(removeAt);
+    const reacquire = seen.indexOf('getAdapter', reset);
+    expect(reacquire).toBeGreaterThan(reset);
+    expect(reacquire).toBeLessThan(removeAt);
+    // connectWithRecovery re-checks before its own retries, so it needs the flag.
+    expect(connectContexts.at(-1)?.adapterPrivacy).toBe(true);
+    // One more read of the settings between stopping discovery and connecting.
+    const stop = seen.indexOf('stopDiscoveryAndQuiesce');
+    const connect = seen.indexOf('connectWithRecovery');
+    expect(seen.indexOf('btmgmt info', stop)).toBeGreaterThan(stop);
+    expect(seen.indexOf('btmgmt info', stop)).toBeLessThan(connect);
+  });
+
+  it('skips the connect when privacy is not on by then', async () => {
+    // power off fails, so privacy is rejected while powered and never takes.
+    ctl.powerOffFails = true;
+    const err = await runWith({ adapterPrivacy: true }).catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/LE privacy is not active/);
+    expect(bleFailureKind(err)).toBe('blocked');
+    expect(calls).toContain('stopDiscoveryAndQuiesce');
+    expect(calls).not.toContain('connectWithRecovery');
+    expect(calls).not.toContain('device.gatt');
+  });
+
+  it('skips the connect in auto-discovery too', async () => {
+    ctl.powerOffFails = true;
+    const err = await runWith({ adapterPrivacy: true, targetMac: undefined }).catch(
+      (e: unknown) => e,
+    );
+    expect((err as Error).message).toMatch(/LE privacy is not active/);
+    expect(calls).toContain('autoDiscover');
+    expect(calls).not.toContain('connectWithRecovery');
+    expect(calls).not.toContain('device.gatt');
+  });
+
+  it('runs btmgmt on the adapter BlueZ resolved, not on hci0 by default', async () => {
+    // node-ble's defaultAdapter() is the first adapter under /org/bluez, which
+    // need not be hci0 when ble.adapter is unset.
+    fakeAdapter.helper.object = '/org/bluez/hci1';
+    await runWith({ adapterPrivacy: true });
+    expect(ctl.calls.length).toBeGreaterThan(0);
+    for (const args of ctl.calls) expect(args.slice(0, 2)).toEqual(['--index', '1']);
+  });
+
+  it('does not run btmgmt at all without the option', async () => {
+    const seen = await runWith({});
+    expect(ctl.calls).toEqual([]);
+    expect(seen).toContain('connectWithRecovery');
   });
 });

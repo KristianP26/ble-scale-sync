@@ -14,6 +14,7 @@ import {
 } from '../types.js';
 import { helperOf, getDbusNext, releaseDeviceProxy, type Adapter, type Device } from './dbus.js';
 import { logAdvertisementSnapshot } from './device-object.js';
+import { reensureAdapterPrivacy } from './privacy.js';
 import {
   getAdapter,
   resetConnection,
@@ -286,6 +287,9 @@ export async function startDiscoverySafe(
   bleLog.debug('Attempting bluetoothd service restart...');
   if (await restartBluetoothd()) {
     resetConnection();
+    // bluetoothd applies its own Privacy setting on start, which can clear
+    // ble.adapter_privacy's. No-op when the option is off (#417).
+    await reensureAdapterPrivacy();
     try {
       const freshAdapter = await getAdapter(bleAdapter);
       // A reset replaced the connection, so read the generation again.
