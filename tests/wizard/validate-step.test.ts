@@ -26,7 +26,6 @@ function ctxWith(global: ExporterEntry[]): WizardContext {
     isEditMode: true,
     nonInteractive: false,
     platform: { os: 'linux', arch: 'x64', hasDocker: false, hasPython: false, pythonCommand: null },
-    stepHistory: [],
     prompts: scriptedPrompts([]).prompts,
   };
 }

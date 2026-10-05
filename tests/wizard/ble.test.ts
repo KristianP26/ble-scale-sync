@@ -25,7 +25,6 @@ function makeCtx(answers: (string | number | boolean | string[])[]): WizardConte
       hasPython: true,
       pythonCommand: 'python3',
     },
-    stepHistory: [],
     prompts: createMockPromptProvider(answers),
   };
 }
@@ -99,6 +98,7 @@ describe('promptMqttProxy()', () => {
       true, // hasAuth = yes
       'myuser', // username
       'mypass', // password
+      false, // keep it in config.yaml, not .env
     ]);
 
     const result = await promptMqttProxy(ctx);
@@ -139,6 +139,7 @@ describe('promptMqttProxy()', () => {
       true, // wantAuth = yes
       'admin', // username
       'secret', // password
+      false, // keep it in config.yaml, not .env
     ]);
 
     const result = await promptMqttProxy(ctx);
@@ -157,7 +158,16 @@ describe('embedded broker password prompt', () => {
   // An empty answer used to be accepted and then dropped from the config,
   // leaving a LAN-exposed broker that takes the username with no password.
   it('refuses an empty password for the LAN-exposed embedded broker', async () => {
-    const ctx = makeCtx(['embedded', 'my-esp', 'ble-proxy', '1883', true, 'admin', 'secret']);
+    const ctx = makeCtx([
+      'embedded',
+      'my-esp',
+      'ble-proxy',
+      '1883',
+      true,
+      'admin',
+      'secret',
+      false,
+    ]);
     let validate: ((v: string) => string | true) | undefined;
     const base = ctx.prompts;
     ctx.prompts = {
@@ -214,6 +224,7 @@ describe('promptEsphomeProxy()', () => {
       '6053', // port
       'noise', // auth mode
       'SUPER_SECRET_BASE64_KEY==', // encryption key
+      false, // keep it in config.yaml, not .env
       false, // add another proxy? -> no
     ]);
 
@@ -232,6 +243,7 @@ describe('promptEsphomeProxy()', () => {
       '6053', // port
       'password', // auth mode
       'legacy-pass', // password
+      false, // keep it in config.yaml, not .env
       false, // add another proxy? -> no
     ]);
 
@@ -260,6 +272,7 @@ describe('promptEsphomeProxy()', () => {
       '6053', // extra port
       'noise', // extra auth
       'KEY2==', // extra encryption key
+      false, // keep it in config.yaml, not .env
       false, // add another? -> no
     ]);
 
@@ -372,6 +385,7 @@ describe('bleStep handler selection', () => {
       true, // has auth
       'admin', // username
       'secret', // password
+      false, // keep it in config.yaml, not .env
       'manual', // scale discovery → manual
       'AA:BB:CC:DD:EE:FF', // MAC address
     ]);
@@ -527,6 +541,7 @@ describe('promptHaBluetooth token prompt', () => {
     const { prompts } = scriptedPrompts([
       [/Home Assistant URL/, 'http://ha.local:8123'],
       [/access token/, 'secret-token'],
+      [/Store it in \.env/, false],
     ]);
     const echoed: string[] = [];
     const input = prompts.input;

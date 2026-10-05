@@ -1,9 +1,18 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EXPORTER_SCHEMAS } from '../../src/exporters/registry.js';
 import type { ConfigFieldDef } from '../../src/interfaces/exporter-schema.js';
 import { promptField, exportersStep } from '../../src/wizard/steps/exporters.js';
 import { createMockPromptProvider } from '../../src/wizard/prompt-provider.js';
 import type { WizardContext } from '../../src/wizard/types.js';
+import { snapshotEnv } from '../helpers/env-snapshot.js';
+
+// A secret accepted for .env is also set in process.env (GARMIN_PASSWORD*,
+// STRAVA_CLIENT_SECRET* from the Enter-only runs below).
+let restoreEnv: () => void;
+beforeEach(() => {
+  restoreEnv = snapshotEnv();
+});
+afterEach(() => restoreEnv());
 
 function makeCtx(answers: (string | number | boolean | string[])[]): WizardContext {
   return {
@@ -18,7 +27,6 @@ function makeCtx(answers: (string | number | boolean | string[])[]): WizardConte
       hasPython: true,
       pythonCommand: 'python3',
     },
-    stepHistory: [],
     prompts: createMockPromptProvider(answers),
   };
 }
@@ -53,7 +61,7 @@ describe('promptField()', () => {
       type: 'password',
       required: true,
     };
-    const ctx = makeCtx(['secret123']);
+    const ctx = makeCtx(['secret123', false]); // false: keep it in config.yaml, not .env
     const result = await promptField(ctx, field);
     expect(result).toBe('secret123');
   });
@@ -65,7 +73,7 @@ describe('promptField()', () => {
       type: 'password',
       required: true,
     };
-    const mockProvider = createMockPromptProvider(['secret123']);
+    const mockProvider = createMockPromptProvider(['secret123', false]);
     const passwordSpy = vi.spyOn(mockProvider, 'password');
     const inputSpy = vi.spyOn(mockProvider, 'input');
 
@@ -81,7 +89,6 @@ describe('promptField()', () => {
         hasPython: true,
         pythonCommand: 'python3',
       },
-      stepHistory: [],
       prompts: mockProvider,
     };
 

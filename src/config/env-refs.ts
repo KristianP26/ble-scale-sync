@@ -116,6 +116,23 @@ export function resolveEnvReferencesTracked<T>(obj: T): {
 
 const WHOLE_REF_REGEX = /^\$\{([^}]+)}$/;
 
+/**
+ * Every variable name a `${VAR}` reference anywhere in `obj` reads, whole
+ * value or embedded; an escaped `$${...}` is not a reference.
+ */
+export function referencedEnvNames(obj: unknown, into: Set<string> = new Set()): Set<string> {
+  if (typeof obj === 'string') {
+    for (const m of obj.matchAll(ENV_REF_REGEX)) {
+      if (!m[1]) into.add(m[2]);
+    }
+  } else if (Array.isArray(obj)) {
+    for (const item of obj) referencedEnvNames(item, into);
+  } else if (obj !== null && typeof obj === 'object') {
+    for (const value of Object.values(obj)) referencedEnvNames(value, into);
+  }
+  return into;
+}
+
 function resolveAt<T>(obj: T, path: PropertyKey[], wholeRefs: Map<string, string> | null): T {
   if (typeof obj === 'string') {
     const whole = WHOLE_REF_REGEX.exec(obj);

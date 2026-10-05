@@ -60,7 +60,6 @@ describe('stravaAuthStep', () => {
         hasPython: false,
         pythonCommand: null,
       },
-      stepHistory: [],
       prompts: scripted.prompts,
     };
     return { ctx, ...scripted };

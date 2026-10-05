@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { PlatformInfo, PromptProvider } from '../../src/wizard/types.js';
 import { scriptedPrompts } from '../helpers/scripted-prompts.js';
+import { snapshotEnv } from '../helpers/env-snapshot.js';
 
 vi.mock('../../src/update-check.js', () => ({ checkForUpdate: vi.fn(async () => null) }));
 vi.mock('../../src/update-state.js', () => ({ configureUpdateState: vi.fn() }));
@@ -62,7 +63,12 @@ describe('runSetupCommand', () => {
   let dir: string;
   let configPath: string;
 
+  let restoreEnv: () => void;
+
   beforeEach(() => {
+    // A secret stored in .env is also put in process.env, and the .env the
+    // setup loads lands there too.
+    restoreEnv = snapshotEnv();
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'setup-command-'));
     configPath = path.join(dir, 'config.yaml');
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -71,6 +77,7 @@ describe('runSetupCommand', () => {
   afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
     vi.restoreAllMocks();
+    restoreEnv();
   });
 
   // G-23: Ctrl+C ended the wizard with exit code 0, so a script running
@@ -183,5 +190,67 @@ describe('runSetupCommand', () => {
     expect(scripted.pending).toEqual([]);
     // No Python on this platform: the step runs and says it is skipping.
     expect(logged()).toMatch(/Python is not available/);
+  });
+
+  const INVALID_UNIT_CONFIG = `version: 1
+scale:
+  weight_unit: stone
+  height_unit: cm
+unknown_user: nearest
+users:
+  - name: Alice
+    slug: alice
+    height: 180
+    birth_date: '1990-01-01'
+    gender: male
+    is_athlete: false
+    weight_range: { min: 60, max: 90 }
+global_exporters:
+  - type: file
+    file_path: ./measurements.csv
+`;
+
+  // The menu ended after the summary whatever it did, so a "No" at "Save
+  // anyway?" dropped every answer and still exited 0.
+  it('goes back to the menu after a failed validation, so a fixed config saves', async () => {
+    fs.writeFileSync(configPath, INVALID_UNIT_CONFIG);
+    const scripted = scriptedPrompts([
+      [/^An existing config\.yaml was found/, 'edit'],
+      [/^Which section/, '__save__'],
+      [/^Save anyway/, false],
+      [/^Which section/, 'units'],
+      [/^Weight unit/, 'kg'],
+      // Then Enter: Review & Save, and yes to "Save to ...?".
+    ]);
+
+    const code = await runSetupCommand(['--config', configPath], {
+      prompts: scripted.prompts,
+      platform,
+    });
+
+    expect(code).toBe(0);
+    expect(scripted.pending).toEqual([]);
+    expect(scripted.asked.filter((m) => /^Save to /.test(m))).toHaveLength(1);
+    expect(fs.readFileSync(configPath, 'utf8')).toMatch(/weight_unit: kg/);
+    expect(logged()).not.toMatch(/Setup ended without saving/);
+  });
+
+  // `setup && ...` must not carry on after a setup that saved nothing.
+  it('exits 1 and writes nothing when the person quits without saving', async () => {
+    const scripted = freshSetupAnswers([
+      [/^Exporters/, ['file']],
+      [/^All sections done/, '__quit__'],
+    ]);
+
+    const code = await runSetupCommand(['--config', configPath], {
+      prompts: scripted.prompts,
+      platform,
+    });
+
+    expect(code).toBe(1);
+    expect(scripted.pending).toEqual([]);
+    expect(fs.existsSync(configPath)).toBe(false);
+    expect(fs.existsSync(path.join(dir, '.env'))).toBe(false);
+    expect(logged()).toMatch(/Setup ended without saving/);
   });
 });

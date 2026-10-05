@@ -16,7 +16,6 @@ function ctxWith(users: unknown[]): WizardContext {
     isEditMode: false,
     nonInteractive: false,
     platform: { os: 'linux', arch: 'x64', hasDocker: false, hasPython: true, pythonCommand: 'py' },
-    stepHistory: [],
     prompts: {
       input: async () => '',
       password: async () => '',
@@ -178,5 +177,32 @@ describe('garminAuthStep token directory (F-11)', () => {
     expect(args[args.indexOf('--token-dir') + 1]).toBe(
       join(tmpdir(), 'bss-wizard', 'garmin-tokens', 'alice'),
     );
+  });
+});
+
+describe('garminAuthStep with a Python too old for garminconnect', () => {
+  beforeEach(() => {
+    spawnMock.mockReset();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  // Any Python that answered --version used to count, so the login started
+  // and died at import with an error that named no version.
+  it('names the version it found and does not start the login', async () => {
+    const out: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => void out.push(a.join(' ')));
+    const ctx = ctxWith([
+      {
+        name: 'Alice',
+        slug: 'alice',
+        exporters: [{ type: 'garmin', email: 'a@x', password: 'p' }],
+      },
+    ]);
+    ctx.platform = { ...ctx.platform, pythonCommand: null, pythonVersion: '3.10' };
+
+    await garminAuthStep.run(ctx);
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(out.join('\n')).toMatch(/Python 3\.12 or newer, found 3\.10/);
   });
 });

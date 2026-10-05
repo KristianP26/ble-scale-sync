@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { parse as parseDotenv } from 'dotenv';
 import { summaryStep } from '../../src/wizard/steps/summary.js';
 import type { WizardContext } from '../../src/wizard/types.js';
 import type { AppConfig, UserConfig } from '../../src/config/schema.js';
@@ -58,7 +59,6 @@ describe('summaryStep out_of_range (S-02)', () => {
         hasPython: false,
         pythonCommand: null,
       },
-      stepHistory: [],
       prompts,
     };
     await summaryStep.run(ctx);
@@ -144,7 +144,6 @@ global_exporters:
         hasPython: false,
         pythonCommand: null,
       },
-      stepHistory: [],
       prompts,
     };
     await summaryStep.run(ctx);
@@ -199,5 +198,93 @@ global_exporters:
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe('summaryStep writes the secrets kept for .env', () => {
+  let dir: string;
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    dir = mkdtempSync(join(tmpdir(), 'bss-summary-env-'));
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function ctxFor(save: boolean): WizardContext {
+    vi.stubEnv('BSS_TEST_HOOK', 'https://hooks.example/x');
+    return {
+      config: {
+        version: 1,
+        scale: { weight_unit: 'kg', height_unit: 'cm', display_unit: 'weight_unit' },
+        unknown_user: 'nearest',
+        users: [alice],
+        global_exporters: [{ type: 'webhook', url: '${BSS_TEST_HOOK}' }],
+      },
+      configPath: join(dir, 'config.yaml'),
+      isEditMode: false,
+      nonInteractive: false,
+      platform: {
+        os: 'win32',
+        arch: 'x64',
+        hasDocker: false,
+        hasPython: false,
+        pythonCommand: null,
+      },
+      prompts: scriptedPrompts([[/^Save to/, save]]).prompts,
+      pendingEnv: new Map([['BSS_TEST_HOOK', 'https://hooks.example/x']]),
+    };
+  }
+
+  it('appends them to the .env beside the config when saving', async () => {
+    await summaryStep.run(ctxFor(true));
+
+    expect(readFileSync(join(dir, '.env'), 'utf8')).toContain(
+      "BSS_TEST_HOOK='https://hooks.example/x'",
+    );
+    expect(readFileSync(join(dir, 'config.yaml'), 'utf8')).toContain('${BSS_TEST_HOOK}');
+  });
+
+  it('writes nothing when the save is declined, and records that nothing was saved', async () => {
+    const ctx = ctxFor(false);
+    await summaryStep.run(ctx);
+
+    expect(existsSync(join(dir, '.env'))).toBe(false);
+    expect(existsSync(join(dir, 'config.yaml'))).toBe(false);
+    expect(ctx.saved).toBe(false);
+  });
+
+  it('records the save', async () => {
+    const ctx = ctxFor(true);
+    await summaryStep.run(ctx);
+
+    expect(ctx.saved).toBe(true);
+  });
+
+  // A secret typed again is stored under a new name, and an exporter can be
+  // removed after its secret was stored; both used to end up in .env anyway.
+  it('writes only the secrets the saved config still refers to', async () => {
+    const ctx = ctxFor(true);
+    ctx.pendingEnv!.set('BSS_TEST_REPLACED', 'old-secret');
+    ctx.pendingEnv!.set('BSS_TEST_REMOVED', 'gone');
+
+    await summaryStep.run(ctx);
+
+    const env = parseDotenv(readFileSync(join(dir, '.env')));
+    expect(env).toEqual({ BSS_TEST_HOOK: 'https://hooks.example/x' });
+  });
+
+  // The menu then shows again, so the person can pick another name.
+  it('does not save when .env already has the name with another value', async () => {
+    writeFileSync(join(dir, '.env'), 'BSS_TEST_HOOK=https://other.example\n');
+    const ctx = ctxFor(true);
+
+    await summaryStep.run(ctx);
+
+    expect(existsSync(join(dir, 'config.yaml'))).toBe(false);
+    expect(ctx.saved).toBe(false);
+    expect(readFileSync(join(dir, '.env'), 'utf8')).toBe('BSS_TEST_HOOK=https://other.example\n');
   });
 });

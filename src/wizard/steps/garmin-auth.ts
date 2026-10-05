@@ -91,7 +91,11 @@ export const garminAuthStep: WizardStep = {
 
   async run(ctx: WizardContext): Promise<void> {
     if (!ctx.platform.hasPython || !ctx.platform.pythonCommand) {
-      console.log(`\n  ${dim('Python is not available — skipping Garmin authentication.')}`);
+      const why =
+        ctx.platform.hasPython && ctx.platform.pythonVersion
+          ? `Garmin needs Python 3.12 or newer, found ${ctx.platform.pythonVersion}`
+          : 'Python is not available';
+      console.log(`\n  ${dim(`${why} — skipping Garmin authentication.`)}`);
       console.log(dim(`  You can run it later with: ${cliCommand('setup-garmin')}\n`));
       return;
     }

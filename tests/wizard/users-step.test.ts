@@ -81,7 +81,6 @@ function editContext(prompts: PromptProvider, users: UserConfig[]): WizardContex
     isEditMode: true,
     nonInteractive: false,
     platform: { os: 'linux', arch: 'x64', hasDocker: false, hasPython: false, pythonCommand: null },
-    stepHistory: [],
     prompts,
   };
 }
@@ -283,5 +282,22 @@ describe('usersStep weight range in lbs', () => {
     expect(rejected).toEqual([]);
     // 150 lb = 68.04 kg, 220 lb = 99.79 kg (1 lb = 0.45359237 kg).
     expect(ctx.config.users?.[0].weight_range).toEqual({ min: 68.04, max: 99.79 });
+  });
+});
+
+describe('usersStep picked again in a fresh setup', () => {
+  beforeEach(() => vi.spyOn(console, 'log').mockImplementation(() => {}));
+  afterEach(() => vi.restoreAllMocks());
+
+  // Only edit mode looked at the users already in the config, so going back to
+  // this section during a fresh setup started the list over.
+  it('keeps the users entered earlier in the same setup', async () => {
+    const { prompts, asked } = scriptedPrompts([[/^Add another user/, false]]);
+    const ctx = { ...editContext(prompts, [alice, bob]), isEditMode: false };
+
+    await usersStep.run(ctx);
+
+    expect(ctx.config.users).toEqual([alice, bob]);
+    expect(asked.some((m) => /^User name/.test(m))).toBe(false);
   });
 });

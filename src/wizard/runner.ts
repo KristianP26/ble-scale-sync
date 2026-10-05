@@ -1,5 +1,4 @@
 import type { AppConfig } from '../config/schema.js';
-import { BackNavigation } from './types.js';
 import type { WizardStep, WizardContext } from './types.js';
 import { stepHeader, editHeader, divider } from './ui.js';
 
@@ -8,14 +7,14 @@ function runsNow(step: WizardStep, ctx: WizardContext): boolean {
 }
 
 /**
- * Run the wizard in sequential mode.
- * Steps are sorted by order and executed sequentially; shouldRun() is asked
- * when a step's turn comes, not up front. Supports back navigation via the
- * BackNavigation sentinel.
+ * Run each step once, in `order`. shouldRun() is asked when a step's turn
+ * comes, not up front: filtering once before the first step dropped every step
+ * that depends on an earlier answer, so in a fresh setup Garmin and Strava
+ * authorization never ran even after both were configured.
  *
- * Filtering once before the first step dropped every step that depends on an
- * earlier answer: in a fresh setup there are no users or exporters yet, so
- * Garmin and Strava authorization never ran even after both were configured.
+ * There is no Back here. Every step starts from what the config already holds,
+ * so going back is picking the section again in the menu that follows
+ * (runSectionMenu), which a fresh setup ends with too.
  */
 export async function runWizard(
   steps: WizardStep[],
@@ -23,75 +22,40 @@ export async function runWizard(
 ): Promise<Partial<AppConfig>> {
   const ordered = [...steps].sort((a, b) => a.order - b.order);
 
-  /** The first step at or after `from` that runs now, or ordered.length. */
-  const nextFrom = (from: number): number => {
-    let j = from;
-    while (j < ordered.length && !runsNow(ordered[j], ctx)) j++;
-    return j;
-  };
-  /** The last step before `from` that runs now, or -1. */
-  const prevBefore = (from: number): number => {
-    let j = from - 1;
-    while (j >= 0 && !runsNow(ordered[j], ctx)) j--;
-    return j;
-  };
-
-  let i = nextFrom(0);
-  while (i < ordered.length) {
-    const step = ordered[i];
+  for (const step of ordered) {
+    if (!runsNow(step, ctx)) continue;
     // Counted afresh each time: the total changes as answers switch steps on or off.
     const active = ordered.filter((s) => runsNow(s, ctx));
     stepHeader(active.indexOf(step) + 1, active.length, step.title);
-
-    // Offer back navigation for non-first steps
-    const prev = prevBefore(i);
-    if (prev >= 0) {
-      const action = await ctx.prompts.select(`${step.title}:`, [
-        { name: 'Continue', value: 'continue' },
-        { name: '\u2190 Back', value: 'back' },
-      ]);
-      if (action === 'back') {
-        ctx.stepHistory.pop();
-        i = prev;
-        continue;
-      }
-    }
-
-    try {
-      await step.run(ctx);
-      ctx.stepHistory.push(step.id);
-      i = nextFrom(i + 1);
-    } catch (err) {
-      if (err instanceof BackNavigation) {
-        // Asked again: the step may have changed what runs before giving up.
-        const back = prevBefore(i);
-        if (back >= 0) {
-          // Pop the previous step from history and go back
-          ctx.stepHistory.pop();
-          i = back;
-        }
-        // With no earlier step, stay at this one
-      } else {
-        throw err;
-      }
-    }
+    await step.run(ctx);
   }
 
   return ctx.config;
 }
 
+export const SAVE_VALUE = '__save__';
+export const QUIT_VALUE = '__quit__';
+
 /**
- * Run the wizard in edit mode.
- * Shows a menu of steps; user picks which to re-run, then "Review & Save" exits.
+ * The section menu: pick a section to run again, Review & Save, which runs
+ * the summary step and ends once it saved, or Quit without saving. Edit mode
+ * is this menu alone; a fresh setup shows it after the last step, in place of
+ * the Back prompt it used to put before every step. Review & Save comes
+ * first, so Enter finishes.
+ *
+ * A save that is declined or fails comes back here: the menu used to end
+ * after the summary whatever it did, so a "No" at "Save anyway?" lost every
+ * answer and the process still exited 0. Whether anything was saved is left
+ * in ctx.saved.
+ *
  * The menu is rebuilt after every section, so adding a Strava exporter offers
  * Strava authorization right away and removing the last one takes it away.
  */
-export async function runEditMode(
+export async function runSectionMenu(
   steps: WizardStep[],
   ctx: WizardContext,
+  message = 'Which section do you want to edit?',
 ): Promise<Partial<AppConfig>> {
-  const SAVE_VALUE = '__save__';
-
   for (;;) {
     const editableSteps = steps
       .filter((s) => runsNow(s, ctx))
@@ -100,19 +64,22 @@ export async function runEditMode(
 
     divider();
     const choices = [
-      ...editableSteps.map((s) => ({ name: s.title, value: s.id })),
       { name: 'Review & Save', value: SAVE_VALUE },
+      ...editableSteps.map((s) => ({ name: s.title, value: s.id })),
+      { name: 'Quit without saving', value: QUIT_VALUE },
     ];
 
-    const choice = await ctx.prompts.select('Which section do you want to edit?', choices);
+    const choice = await ctx.prompts.select(message, choices);
+
+    if (choice === QUIT_VALUE) break;
 
     if (choice === SAVE_VALUE) {
       const summaryStep = steps.find((s) => s.id === 'summary');
-      if (summaryStep) {
-        editHeader(summaryStep.title);
-        await summaryStep.run(ctx);
-      }
-      break;
+      if (!summaryStep) break;
+      editHeader(summaryStep.title);
+      await summaryStep.run(ctx);
+      if (ctx.saved) break;
+      continue;
     }
 
     const step = editableSteps.find((s) => s.id === choice);
@@ -123,4 +90,9 @@ export async function runEditMode(
   }
 
   return ctx.config;
+}
+
+/** Edit mode: the section menu over an existing config. */
+export function runEditMode(steps: WizardStep[], ctx: WizardContext): Promise<Partial<AppConfig>> {
+  return runSectionMenu(steps, ctx);
 }

@@ -1,6 +1,7 @@
-import type { WizardStep, WizardContext, PromptChoice } from '../types.js';
+import type { WizardStep, WizardContext } from '../types.js';
 import type { ScaleConfig, UserConfig } from '../../config/schema.js';
 import { resolveEnvReferences } from '../../config/env-refs.js';
+import { currentFirst } from '../choices.js';
 import { dim, info, warn } from '../ui.js';
 
 type WeightUnit = ScaleConfig['weight_unit'];
@@ -11,13 +12,6 @@ const CM_PER_INCH = 2.54;
 const WHOLE_REF = /^\$\{([^}]+)}$/;
 
 const HEIGHT_UNIT_NAMES: Record<HeightUnit, string> = { cm: 'centimetres', in: 'inches' };
-
-/** The provider has no select default; Enter picks the first choice, so the current one goes first. */
-function currentFirst<T>(choices: PromptChoice<T>[], current: T | undefined): PromptChoice<T>[] {
-  const at = choices.findIndex((c) => c.value === current);
-  if (at > 0) choices.unshift(...choices.splice(at, 1));
-  return choices;
-}
 
 /**
  * Inches to two decimals, centimetres to one. One decimal of an inch is

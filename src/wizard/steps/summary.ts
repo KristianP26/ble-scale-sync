@@ -9,7 +9,14 @@ import { atomicWrite } from '../../config/write.js';
 import { sectionBox, success, error, dim } from '../ui.js';
 import { cliCommand } from '../../cli-invocation.js';
 import { mergeIntoYaml } from '../yaml-merge.js';
-import { configPathKey, resolveEnvReferencesTracked } from '../../config/env-refs.js';
+import { appendEnvFile } from '../../config/env-file.js';
+import { envPathFor } from '../../config/paths.js';
+import { errMsg } from '../../utils/error.js';
+import {
+  configPathKey,
+  referencedEnvNames,
+  resolveEnvReferencesTracked,
+} from '../../config/env-refs.js';
 import { safeParseResolved } from '../../config/env-coerce.js';
 
 const YAML_HEADER = `# BLE Scale Sync - config.yaml
@@ -47,8 +54,8 @@ function printSummary(config: Partial<AppConfig>): void {
     const range = user.weight_range
       ? chalk.dim(` [${user.weight_range.min}\u2013${user.weight_range.max} kg]`)
       : '';
-    const perUser = user.exporters?.length ?? 0;
-    const exporterInfo = perUser > 0 ? chalk.dim(` + ${perUser} per-user exporter(s)`) : '';
+    const own = (user.exporters ?? []).map((e) => (e as ExporterEntry).type);
+    const exporterInfo = own.length > 0 ? chalk.dim(` + ${own.join(', ')}`) : '';
     userLines.push(
       `${chalk.bold(user.name)} ${chalk.dim(`(${user.slug})`)}${range}${exporterInfo}`,
     );
@@ -57,7 +64,10 @@ function printSummary(config: Partial<AppConfig>): void {
 
   // BLE
   const mac = config.ble?.scale_mac;
-  const bleText = mac ? `${chalk.bold('scale_mac:')} ${mac}` : dim('auto-discovery');
+  const handler = config.ble?.handler ?? 'auto';
+  const bleText =
+    `${chalk.bold('handler:')} ${handler}` +
+    `, ${mac ? `${chalk.bold('scale_mac:')} ${mac}` : dim('auto-discovery')}`;
   console.log(sectionBox('BLE', bleText));
 
   // Scale
@@ -147,6 +157,7 @@ export const summaryStep: WizardStep = {
   order: 80,
 
   async run(ctx: WizardContext): Promise<void> {
+    ctx.saved = false;
     printSummary(ctx.config);
 
     // Ensure required fields have defaults
@@ -185,6 +196,29 @@ export const summaryStep: WizardStep = {
 
     const yamlContent = serialize(ctx, finalConfig);
 
+    // Secrets the person chose to keep in .env go there first: the config
+    // refers to them by name, and a config saved without them would not load.
+    // Only the ones it still refers to: a secret typed again (stored under a
+    // new name) or one whose exporter was removed would otherwise end up in
+    // .env with nothing reading it.
+    const referenced = referencedEnvNames(finalConfig);
+    const envEntries = new Map(
+      [...(ctx.pendingEnv ?? [])].filter(([name]) => referenced.has(name)),
+    );
+    if (envEntries.size > 0) {
+      const envPath = envPathFor(ctx.configPath);
+      try {
+        const written = appendEnvFile(envPath, envEntries);
+        if (written.length > 0) {
+          console.log(`\n  ${success(`Added ${written.join(', ')} to ${envPath}`)}`);
+        }
+      } catch (err) {
+        console.log(`\n  ${error(`Could not write ${envPath}: ${errMsg(err)}`)}`);
+        console.log('  Not saved: config.yaml would refer to variables that are not set.');
+        return;
+      }
+    }
+
     // Backup existing config before overwriting
     if (existsSync(ctx.configPath)) {
       try {
@@ -196,6 +230,8 @@ export const summaryStep: WizardStep = {
 
     // Write atomically
     atomicWrite(ctx.configPath, yamlContent);
+    ctx.saved = true;
+    ctx.pendingEnv?.clear();
 
     // Restrict permissions on Linux/macOS
     if (ctx.platform.os === 'linux' || ctx.platform.os === 'darwin') {

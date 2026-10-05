@@ -26,7 +26,6 @@ function ctxWith(config: Partial<AppConfig>, answers: Array<[RegExp, ScriptedAns
     isEditMode: false,
     nonInteractive: false,
     platform: { os: 'linux', arch: 'x64', hasDocker: false, hasPython: false, pythonCommand: null },
-    stepHistory: [],
     prompts: scripted.prompts,
   };
   return { ctx, ...scripted };
