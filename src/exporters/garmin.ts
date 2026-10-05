@@ -104,8 +104,13 @@ export { expandTilde as _expandTilde };
  * `garmin_upload.py` forwards as `add_body_composition(timestamp=...)`, and
  * `weight_only` tells the uploader to pass `None` for every derived metric so
  * Garmin records the weight alone.
+ * `skip_metabolic_age` does the same for metabolic age alone.
  */
-type GarminUploadPayload = BodyComposition & { timestamp?: string; weight_only?: boolean };
+type GarminUploadPayload = BodyComposition & {
+  timestamp?: string;
+  weight_only?: boolean;
+  skip_metabolic_age?: boolean;
+};
 
 function uploadToGarmin(
   payload: GarminUploadPayload,
@@ -204,6 +209,12 @@ export interface GarminEntryConfig {
    */
   weight_only?: boolean;
   /**
+   * Leave metabolic age unset in Garmin Connect and upload everything else.
+   * The estimate compares BMR with a reference BMR for the same weight and
+   * height, so the two cancel and what is left depends on age alone.
+   */
+  skip_metabolic_age?: boolean;
+  /**
    * Seconds one upload attempt may take before the Python process is killed
    * (10-900). Three attempts are made, with a 1 s and a 2 s wait between them.
    */
@@ -264,6 +275,14 @@ export const garminSchema: ExporterSchema = {
       description:
         'Send only the weight; leave BMI, body fat, water, bone, muscle, visceral fat, physique rating, metabolic age and BMR unset',
     },
+    {
+      key: 'skip_metabolic_age',
+      label: 'Skip metabolic age',
+      type: 'boolean',
+      required: false,
+      default: false,
+      description: 'Upload every metric except metabolic age, which depends on age alone',
+    },
   ],
   supportsGlobal: false,
   supportsPerUser: true,
@@ -308,6 +327,7 @@ export class GarminExporter implements Exporter {
     const payload: GarminUploadPayload = { ...data };
     if (context?.timestamp) payload.timestamp = context.timestamp.toISOString();
     if (this.entryConfig.weight_only) payload.weight_only = true;
+    if (this.entryConfig.skip_metabolic_age) payload.skip_metabolic_age = true;
 
     const configured = this.entryConfig.upload_timeout_sec;
     const timeoutMs = configured !== undefined ? configured * 1000 : DEFAULT_UPLOAD_TIMEOUT_MS;

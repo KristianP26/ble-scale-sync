@@ -138,6 +138,7 @@ global_exporters:
     # weight_only: true    # upload the weight alone; BMI, body fat, water, bone,
     #                      # muscle, visceral fat, physique rating and metabolic
     #                      # age are left unset in Garmin Connect
+    # skip_metabolic_age: true    # upload everything except metabolic age
 
   # -- MQTT (Home Assistant auto-discovery) --
   # - type: mqtt
