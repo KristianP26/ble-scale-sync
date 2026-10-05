@@ -23,8 +23,10 @@ describe('failure-kind', () => {
     expect(bleFailureKind(null)).toBeUndefined();
   });
 
-  it('counts everything except an explicit idle tag', () => {
+  it('counts everything except an explicit idle or blocked tag', () => {
     expect(shouldCountAsWatchdogFailure(tagBleFailure(new Error(), 'idle'))).toBe(false);
+    // A connect our own precondition refused says nothing about the radio (#417).
+    expect(shouldCountAsWatchdogFailure(tagBleFailure(new Error(), 'blocked'))).toBe(false);
     expect(shouldCountAsWatchdogFailure(tagBleFailure(new Error(), 'wedge-suspect'))).toBe(true);
     expect(shouldCountAsWatchdogFailure(new Error('untagged'))).toBe(true);
     expect(shouldCountAsWatchdogFailure('string')).toBe(true);

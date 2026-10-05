@@ -34,6 +34,7 @@ import { runContinuousLoop } from './runtime/loop.js';
 import { runSingleShot } from './runtime/single-run.js';
 import { reloadAppConfig, userDisplaySnapshot } from './runtime/reload.js';
 import { buildReadingSource } from './runtime/sources.js';
+import { resolveHandlerKey } from './ble/index.js';
 import {
   buildSingleUserExporters,
   getExportersForUser,
@@ -235,6 +236,13 @@ async function main(): Promise<void> {
     !process.env.NOBLE_DRIVER
   ) {
     log.info(`BLE adapter: ${ctx.bleAdapter}`);
+  }
+  if (ctx.adapterPrivacy && resolveHandlerKey(ctx.bleHandler) !== 'node-ble') {
+    // Only node-ble pairs with the host adapter. Said once, here, rather than
+    // left to look like an option that did nothing (#417).
+    log.warn(
+      'ble.adapter_privacy only applies to the built-in Linux BlueZ transport (node-ble); ignored.',
+    );
   }
 
   if (ctx.bleHandler === 'mqtt-proxy' && ctx.mqttProxy) {
@@ -457,6 +465,7 @@ async function main(): Promise<void> {
     onCycleStart: flushQueuedExports,
     failureDelayMs: bundle.failureDelayMs,
     failureLogPrefix: bundle.failureLogPrefix,
+    failureLogPrefixFor: bundle.failureLogPrefixFor,
   });
 
   log.info('Stopped.');

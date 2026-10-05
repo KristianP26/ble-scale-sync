@@ -292,6 +292,39 @@ describe('runContinuousLoop', () => {
     await loop;
   });
 
+  // #417: a connect skipped by ble.adapter_privacy found the scale, so the
+  // usual "No scale found" line would point at the wrong problem.
+  it('logs the prefix failureLogPrefixFor names, and failureLogPrefix otherwise', async () => {
+    const ac = new AbortController();
+    const { source, nextReading } = makeSource();
+    const skipped = new Error('connect skipped');
+    nextReading.mockRejectedValueOnce(skipped).mockRejectedValue(new Error('Device not found'));
+    const info = vi.mocked(console.log);
+
+    const loop = runContinuousLoop({
+      source,
+      processReading: async () => true,
+      signal: ac.signal,
+      touchHeartbeat: vi.fn(),
+      isReloadRequested: vi.fn(() => false),
+      clearReloadRequest: vi.fn(),
+      failureLogPrefix: 'No scale found',
+      failureLogPrefixFor: (err) => (err === skipped ? 'Scale found but not connected' : undefined),
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(5_000);
+    const lines = info.mock.calls.map((c) => String(c[0]));
+    expect(lines.some((l) => l.includes('Scale found but not connected, retrying in 5s'))).toBe(
+      true,
+    );
+    expect(lines.some((l) => l.includes('No scale found, retrying in 10s'))).toBe(true);
+
+    ac.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    await loop;
+  });
+
   // #412: a queued export must not wait for the next weigh-in to even be
   // attempted, so the hook runs before the source is asked for anything.
   it('runs onCycleStart before nextReading, every iteration', async () => {
