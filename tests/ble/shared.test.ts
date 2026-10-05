@@ -14,6 +14,7 @@ import { normalizeUuid, bleLog } from '../../src/ble/types.js';
 import { KoogeekS1Adapter } from '../../src/scales/koogeek-s1.js';
 import { RenphoMsc04Adapter } from '../../src/scales/renpho-msc04.js';
 import { BeurerSanitasScaleAdapter } from '../../src/scales/beurer-sanitas.js';
+import { EsCs20mAdapter, buildGuestProfileFrame } from '../../src/scales/es-cs20m.js';
 import { mockPeripheral } from '../helpers/scale-test-utils.js';
 import { uuid16, xorChecksum, buildPayload } from '../../src/scales/body-comp-helpers.js';
 import type {
@@ -1653,7 +1654,7 @@ describe('waitForReading() — adapter with no unlock wiring (#244)', () => {
   it('sends the unlock exactly once before and once after subscribe when interval is 0', async () => {
     // `?? 5000` does not catch 0, so this used to arm setInterval(fn, 0), which
     // clamps to about 1 ms on Linux and floods the link for the whole session.
-    // Four adapters declare 0 (Active Era, ES-CS20M, Hesley, 1byone new).
+    // Three adapters declare 0 (Active Era, Hesley, 1byone new).
     const notifyChar = createMockChar();
     const writeChar = createMockChar();
     const device = createMockDevice();
@@ -2219,6 +2220,52 @@ describe('R-MSC04 composition hold through waitForRawReading (#434)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ─── ES-CS20M with AE00 through waitForRawReading (#436) ─────────────────────
+
+describe('ES-CS20M on an AE00 unit through waitForRawReading (#436)', () => {
+  const hex = (h: string): Buffer => Buffer.from(h, 'hex');
+  const clock = (): Date => {
+    const d = new Date(0x6ac01376 * 1000);
+    d.getTimezoneOffset = () => 240;
+    return d;
+  };
+
+  it('writes nothing to 2A11 before the first notification, then the app sequence with response', async () => {
+    const notify = createMockChar();
+    const write = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [uuid16(0x2a10), notify],
+      [uuid16(0x2a11), write],
+      [uuid16(0xae01), createMockChar()],
+      [uuid16(0xae02), createMockChar()],
+    ]);
+    const adapter = new EsCs20mAdapter(clock);
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, 'AABBCCDDEEFF');
+    await vi.waitFor(() => expect(notify.subscribeCalled).toBe(true));
+    await new Promise((r) => setTimeout(r, 20));
+    // The legacy path wrote the kg command here, before CCCD, on every unit.
+    expect(write.writtenData).toEqual([]);
+
+    // The power-on frame from the #436 app capture (lb on the display).
+    notify.triggerData(hex('55aa11000a010201000000000000001e'));
+    await vi.waitFor(() => expect(write.writtenData).toHaveLength(4));
+    expect(write.writtenData.map((b) => Buffer.from(b).toString('hex'))).toEqual([
+      '55aa9100010192',
+      '55aa9700090100006ac01376010458',
+      buildGuestProfileFrame(PROFILE, clock()).toString('hex'),
+      '55aa9000040200000095',
+    ]);
+    expect(vi.mocked(write.write).mock.calls.every(([, withResponse]) => withResponse)).toBe(true);
+
+    // Public #376 frames to finish the session: a weight, then power-off.
+    notify.triggerData(hex('55aa140007000000286e0000b0'));
+    notify.triggerData(hex('55aa11000a0001010000550000000071'));
+    const raw = await promise;
+    expect(raw.reading).toEqual({ weight: 103.5, impedance: 0 });
   });
 });
 
