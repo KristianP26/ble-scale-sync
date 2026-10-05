@@ -32,6 +32,8 @@ describe('boolean exporter fields resolved from strings', () => {
     ['telegram', 'report_exports', 'reportExports'],
     ['wger', 'sync_measurements', 'syncMeasurements'],
     ['healthlog', 'sync_measurements', 'syncMeasurements'],
+    ['garmin', 'weight_only', 'weight_only'],
+    ['garmin', 'skip_metabolic_age', 'skip_metabolic_age'],
   ];
 
   const base: Record<string, Record<string, unknown>> = {
@@ -40,6 +42,7 @@ describe('boolean exporter fields resolved from strings', () => {
     telegram: { bot_token: 't', chat_id: '1' },
     wger: { base_url: 'https://wger.example', token: 'tok' },
     healthlog: { base_url: 'https://healthlog.example', token: 'tok' },
+    garmin: { email: 'a@b.c', password: 'x' },
   };
 
   it.each(CASES)('reads %s.%s = "false" as false, not as true', (type, key, field) => {
