@@ -348,11 +348,14 @@ ble-scale-sync setup-strava   # from a clone: npm run setup-strava
 **Docker:**
 
 ```bash
+mkdir -p strava-tokens
 docker run --rm -it \
   -v ./config.yaml:/app/config.yaml \
-  -v strava-tokens:/app/strava-tokens \
+  -v ./strava-tokens:/app/strava-tokens \
   ghcr.io/kristianp26/ble-scale-sync:latest setup-strava
 ```
+
+The run commands in [Getting Started](/guide/getting-started) and the compose examples mount only `garmin-tokens`. Add the Strava directory to the container that runs the app, or the exporter will not find the tokens: `-v ./strava-tokens:/app/strava-tokens` in the `docker run` command, or a `- ./strava-tokens:/app/strava-tokens` line under `volumes:` in the compose file. The [setup wizard](/guide/configuration#setup-wizard-recommended) command already mounts it.
 
 The script prints a browser URL for Strava authorization. After authorizing, copy the `code` parameter from the redirect URL and paste it back. Tokens are cached and automatically refreshed.
 
