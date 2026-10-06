@@ -214,11 +214,18 @@ async function watch(
   let last: DeviceSnapshot | undefined;
   let quietSince = Date.now();
   let activeRun = 0;
+  // A reader that keeps failing leaves the watchdog blind without a trace, so
+  // the first failure of a wait is said once.
+  let readFailureLogged = false;
 
   while (!over()) {
     await abortableSleep(SCAN_ACTIVITY_SAMPLE_MS, stop).catch(() => {});
     if (over()) return;
-    const snapshot = await sample(readDevices, stop);
+    const snapshot = await sample(readDevices, stop, (err) => {
+      if (readFailureLogged) return;
+      readFailureLogged = true;
+      bleLog.debug(`Scan activity watchdog could not list devices: ${errMsg(err)}`);
+    });
     if (over()) return;
     if (snapshot === undefined) continue;
     // Devices left over from earlier cycles say nothing about this scan, so
@@ -304,6 +311,7 @@ async function watch(
 function sample(
   readDevices: DeviceSnapshotReader,
   stop: AbortSignal,
+  onReadError: (err: unknown) => void,
 ): Promise<DeviceSnapshot | undefined> {
   if (stop.aborted) return Promise.resolve(undefined);
   return new Promise((resolve) => {
@@ -314,8 +322,9 @@ function sample(
         stop.removeEventListener('abort', onStop);
         resolve(snapshot);
       },
-      () => {
+      (err) => {
         stop.removeEventListener('abort', onStop);
+        if (!stop.aborted) onReadError(err);
         resolve(undefined);
       },
     );
