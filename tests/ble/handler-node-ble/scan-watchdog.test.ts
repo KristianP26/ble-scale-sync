@@ -5,11 +5,11 @@ import { FakeBluez, bluezError } from '../../helpers/fake-bluez.js';
  * The scan activity watchdog, run through the real waitForTargetDevice and the
  * real discovery code against the BlueZ model (tests/helpers/fake-bluez.ts).
  *
- * What it is for, from the maintainer's Pi (2026-10-06): in an ordinary idle
- * cycle that continued our own filtered session, BlueZ's device list fell from
- * 32 to 15 and hci0 stopped receiving advertising reports while Discovering
- * stayed true. Nothing in the cycle noticed, and a scale stepped on during it
- * was never seen.
+ * What it is for: a scan that goes deaf in the middle of a wait while BlueZ
+ * still reports Discovering, which nothing in the cycle would otherwise
+ * notice, so a scale stepped on during it is never seen. Suspected on the
+ * maintainer's Pi (2026-10-06), not proven: the silences seen there turned out
+ * to be normal for a controller that reports in bursts.
  */
 
 let bluez = new FakeBluez();

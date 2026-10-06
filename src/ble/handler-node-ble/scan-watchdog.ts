@@ -3,13 +3,12 @@
  * advertisements while BlueZ still reports Discovering, without ending the wait
  * that runs on it.
  *
- * startDiscoverySafe() only looks at discovery when a cycle starts. On the
- * maintainer's Pi (BlueZ 5.82, 2026-10-06) the same stuck state also formed in
- * the middle of an ordinary idle cycle, on a session that was ours and with no
- * GATT session or bus reset involved: BlueZ's device list fell from 32 to 15
- * and btmon saw no advertising report for 6 s, while Discovering stayed true.
- * Nothing in that cycle could notice it, and the scale stayed invisible until
- * the liveness probe at the end of the cycle classified it as wedge-suspect.
+ * startDiscoverySafe() only looks at discovery when a cycle starts, so a scan
+ * that goes deaf in the middle of a wait stays deaf until the wait ends, and a
+ * scale stepped on during it is never seen. Whether the maintainer's Pi
+ * (BlueZ 5.82, 2026-10-06) really did that mid-wait is not settled: the 6 s
+ * without an advertising report seen there first turned out to be normal for
+ * its controller, which reports in bursts (see SCAN_ACTIVITY_STALL_MS).
  *
  * The watchdog runs alongside the wait and never gates it: the wait goes on
  * unchanged, and the watchdog is stopped the moment the wait settles.
@@ -26,14 +25,14 @@ export const SCAN_ACTIVITY_SAMPLE_MS = 3_000;
  * How long a scan may hear nothing at all before it counts as stalled.
  *
  * A filtered LE discovery runs in kernel windows of about 10.24 s, and
- * bluetoothd restarts each one right away (no_scan_restart_delay), so a
- * healthy scan is never deaf for more than a moment. When a restart fails,
+ * bluetoothd restarts each one right away (no_scan_restart_delay). The Pi's
+ * controller (2026-10-06, btmon) delivers a window's reports in a burst at its
+ * start and then stays silent for 5-8 s, so the gaps between two samples that
+ * see an RSSI move run close to this threshold. When a restart fails,
  * bluetoothd retries on its own after IDLE_DISCOV_TIMEOUT * 2 = 10 s
  * (start_discovery_complete()), and 15 s leaves that retry room to land
- * before we step in. Anything advertising at the usual 0.1-2 s intervals moves
- * its RSSI many times within 15 s, because a filtered discovery reports every
- * RSSI change. And it is short against the 120 s the wait has: a heal at 15 s
- * still leaves most of the window for a scale that only advertises while
+ * before we step in. And it is short against the 120 s the wait has: a heal at
+ * 15 s still leaves most of the window for a scale that only advertises while
  * someone stands on it.
  */
 export const SCAN_ACTIVITY_STALL_MS = 15_000;
@@ -60,7 +59,9 @@ const SCAN_ACTIVITY_STALL_MAX_MS = DISCOVERY_TIMEOUT_MS / 2;
 /**
  * Consecutive samples with activity that show the radio really hears the room,
  * and so that a later silence means something again. Three samples are 9 s of
- * uninterrupted traffic, which a room with one rare advertiser does not produce.
+ * traffic, which a room with one rare advertiser does not produce. On a
+ * controller that reports in bursts it is rare too, so there the backoff
+ * mostly comes down only after a weigh-in (resetScanActivityBackoff()).
  */
 const SUSTAINED_ACTIVITY_SAMPLES = 3;
 
