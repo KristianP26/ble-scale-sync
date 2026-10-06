@@ -39,6 +39,16 @@ export const SCAN_ACTIVITY_SAMPLE_MS = 3_000;
 export const SCAN_ACTIVITY_STALL_MS = 15_000;
 
 /**
+ * How recently the watchdog must have heard the room for a failed cycle to
+ * count as idle without the liveness probe (classifyBleFailure()). Two report
+ * windows plus one sample, rounded up: one window whose few reports move no
+ * RSSI must not send the cycle back to a probe that lands in the silence
+ * between bursts. The cost is that a scan going deaf in the last 30 s of a
+ * wait keeps its latch, and the next wait's watchdog has to heal it.
+ */
+export const SCAN_HEARD_FRESH_MS = 30_000;
+
+/**
  * The backoff ceiling: half a wait, so even a fully backed-off watchdog still
  * fires once per wait. A ceiling at the whole wait never fired again once it
  * was reached, and with the session latched as ours and filtered, the next
@@ -94,6 +104,12 @@ export function _resetScanActivityWatchdogForTests(): void {
 export interface ScanWatch {
   /** Restarts that left a scan of ours running, shared ones included. */
   restarts: number;
+  /**
+   * When a sample last showed the radio hearing something (Date.now()): an
+   * RSSI that is new or has moved. Unset until one does in this cycle's wait.
+   * Restarts and a Discovering that is off reset the stall clock, not this.
+   */
+  lastHeardAt?: number;
 }
 
 /** Address -> RSSI of every device BlueZ lists under one adapter; undefined when it holds no RSSI. */
@@ -212,6 +228,7 @@ async function watch(
 
     if (active) {
       quietSince = Date.now();
+      scanWatch.lastHeardAt = quietSince;
       activeRun++;
       if (activeRun >= SUSTAINED_ACTIVITY_SAMPLES && stallMs !== SCAN_ACTIVITY_STALL_MS) {
         bleLog.debug('Scan activity is back to normal; stall threshold reset');

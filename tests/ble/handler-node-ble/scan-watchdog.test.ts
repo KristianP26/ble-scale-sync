@@ -294,7 +294,8 @@ describe('scan activity watchdog', () => {
   it('leaves a discovery that is off to the next cycle', async () => {
     for (const n of NEIGHBOURS) bluez.room.add(n);
     await startScan();
-    const outcome = wait();
+    const scanWatch: { restarts: number; lastHeardAt?: number } = { restarts: 0 };
+    const outcome = track(waitForTargetDevice(ours, SCALE, undefined, scanWatch));
     await vi.advanceTimersByTimeAsync(5_000);
     await bluez.call(us, 'StopDiscovery', []);
     await vi.advanceTimersByTimeAsync(0);
@@ -306,6 +307,8 @@ describe('scan activity watchdog', () => {
     expect(outcome.settled).toBe(false);
     expect(bluez.log).toEqual([]);
     expect(scanStallRestarts()).toBe(0);
+    // Silence with discovery off is not hearing the room.
+    expect(scanWatch.lastHeardAt).toBeUndefined();
   });
 
   it('never restarts a scan that keeps hearing the room', async () => {
@@ -702,7 +705,7 @@ describe('failure classification and the latched scan', () => {
     // the wait. Dropping the claim as well would add a stop, a quiesce and a
     // start at every cycle start on top of the watchdog's own restart.
     await startScan();
-    const scanWatch = { restarts: 0 };
+    const scanWatch: { restarts: number; lastHeardAt?: number } = { restarts: 0 };
     const outcome = track(waitForTargetDevice(ours, SCALE, undefined, scanWatch));
     await vi.advanceTimersByTimeAsync(125_000);
     expect(outcome.error).toBeDefined();
@@ -713,6 +716,9 @@ describe('failure classification and the latched scan', () => {
       gattAttempted: false,
       probeAdapter: ours,
       scanRestarted: scanWatch.restarts > 0,
+      // A restart is not hearing the room: the last one lands well within the
+      // fresh window and must not stand in for the probe.
+      scanHeardAt: scanWatch.lastHeardAt,
     });
     await vi.advanceTimersByTimeAsync(5_000);
     await classified;
@@ -722,6 +728,87 @@ describe('failure classification and the latched scan', () => {
     await nextCycleStart();
     expect(bluez.methodsOf(us)).toEqual([]);
     expect(bluez.delivering(us)).toBe(true);
+  });
+
+  it('a no-show that ends between two report bursts of a healthy scan is idle, and keeps the scan', async () => {
+    // The Pi (2026-10-06, btmon plus RSSI reads over D-Bus): every kernel
+    // discovery window of about 10.5 s delivers its advertising reports in a
+    // burst at its start, then 5-7 s in which no RSSI moves. A scan started at
+    // the cycle start puts the 120 s timeout about 4.5 s into a window, so the
+    // 3 s liveness probe saw nothing in every such cycle, dropped the latch,
+    // and the next cycle restarted the scan into the same phase again.
+    for (const n of NEIGHBOURS) bluez.advertise(n, { intervalMs: 10_500 });
+    await startScan();
+    const scanWatch: { restarts: number; lastHeardAt?: number } = { restarts: 0 };
+    const outcome = track(waitForTargetDevice(ours, SCALE, undefined, scanWatch));
+    await until(() => outcome.settled);
+    expect(outcome.error).toBeDefined(); // no scale in the room
+    expect(scanWatch.restarts).toBe(0);
+
+    const err = new Error('Device not found within 120s');
+    const classified = classifyBleFailure(err, {
+      gattAttempted: false,
+      probeAdapter: ours,
+      scanRestarted: scanWatch.restarts > 0,
+      scanHeardAt: scanWatch.lastHeardAt,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await classified;
+    expect(bleFailureKind(err)).toBe('idle');
+
+    bluez.log.length = 0;
+    await nextCycleStart();
+    expect(bluez.methodsOf(us)).toEqual([]);
+  });
+
+  it('a scan deaf for the whole wait is never taken for heard, even with devices still listed', async () => {
+    // What makes the watchdog's word safe to use in place of the probe: the
+    // RSSIs BlueZ still lists from before the scan went deaf are not activity.
+    for (const n of NEIGHBOURS) bluez.room.add(n);
+    await startScan();
+    await bluez.adapterFor(us).devices();
+    bluez.stallScan({ enable: 0 });
+
+    // Ends before the stall threshold, so no restart hears the room either.
+    const scanWatch: { restarts: number; lastHeardAt?: number } = { restarts: 0 };
+    const held = heldWait();
+    const outcome = track(withScanActivityWatchdog(ours, undefined, () => held.promise, scanWatch));
+    await vi.advanceTimersByTimeAsync(12_000);
+    held.reject(new Error('Device not found within 120s'));
+    await until(() => outcome.settled);
+    expect(bluez.managedObjectsReads).toBeGreaterThanOrEqual(3);
+    expect(scanWatch.restarts).toBe(0);
+    expect(scanWatch.lastHeardAt).toBeUndefined();
+
+    const err = new Error('Device not found within 120s');
+    const classified = classifyBleFailure(err, {
+      gattAttempted: false,
+      probeAdapter: ours,
+      scanRestarted: false,
+      scanHeardAt: scanWatch.lastHeardAt,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await classified;
+    expect(bleFailureKind(err)).toBe('wedge-suspect');
+
+    bluez.log.length = 0;
+    await nextCycleStart();
+    expect(bluez.methodsOf(us)[0]).toBe('StopDiscovery');
+  });
+
+  it('a room whose RSSIs never move is not taken for heard', async () => {
+    for (const n of NEIGHBOURS) bluez.advertise(n, { constantRssi: true });
+    await startScan();
+    await bluez.adapterFor(us).devices();
+
+    const scanWatch: { restarts: number; lastHeardAt?: number } = { restarts: 0 };
+    const held = heldWait();
+    const outcome = track(withScanActivityWatchdog(ours, undefined, () => held.promise, scanWatch));
+    await vi.advanceTimersByTimeAsync(12_000);
+    held.reject(new Error('Device not found within 120s'));
+    await until(() => outcome.settled);
+    expect(bluez.managedObjectsReads).toBeGreaterThanOrEqual(3);
+    expect(scanWatch.lastHeardAt).toBeUndefined();
   });
 
   it('a cycle that ends idle in a busy room leaves the latched scan alone (#397)', async () => {

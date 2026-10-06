@@ -146,11 +146,12 @@ export async function buildReadingSource(
     // backoff applies exactly as it did before.
     //
     // Even a zero delay cannot busy-loop: classifyBleFailure tags 'idle' only
-    // when GATT was never attempted and the liveness probe found the radio
-    // alive, which means the full discovery timeout has already elapsed.
-    // Revisit this if that timeout ever becomes configurable. A 'blocked'
-    // cycle carries no such guarantee, which is why it is not claimed here and
-    // takes the backoff instead.
+    // when GATT was never attempted and the radio was heard, either by the
+    // scan watchdog during the wait (two samples, at least 6 s in) or by the
+    // 3 s liveness probe after it. An idle cycle has listened for seconds, in
+    // practice for the full discovery timeout. A 'blocked' cycle carries no
+    // such guarantee, which is why it is not claimed here and takes the
+    // backoff instead.
     //
     // Read from config on every call so an edit lands on the next cycle, the
     // same way scan_cooldown is read in onSuccess below.

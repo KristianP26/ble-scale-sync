@@ -514,6 +514,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       probeAdapter,
       abortSignal,
       scanRestarted: scanWatch.restarts > 0,
+      scanHeardAt: scanWatch.lastHeardAt,
     });
     throw err;
   } finally {

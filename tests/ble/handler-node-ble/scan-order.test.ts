@@ -163,21 +163,36 @@ vi.mock('../../../src/ble/shared.js', async (importOriginal) => {
 });
 
 // The watchdog has its own tests over the BlueZ model. Here it only reports
-// the restarts a test says it made, to check that scan.ts hands them to the
-// failure classification.
+// the restarts a test says it made and when it last heard the room, to check
+// that scan.ts hands both to the failure classification.
 let watchdogRestarts = 0;
-vi.mock('../../../src/ble/handler-node-ble/scan-watchdog.js', () => ({
-  withScanActivityWatchdog: async (
-    _adapter: unknown,
-    _signal: unknown,
-    wait: () => Promise<unknown>,
-    scanWatch?: { restarts: number },
-  ) => {
-    if (scanWatch) scanWatch.restarts += watchdogRestarts;
-    return wait();
-  },
-  resetScanActivityBackoff: () => {},
-}));
+/** When set, the watchdog last heard the room this many ms before the wait ended. */
+let watchdogHeardAgoMs: number | undefined;
+vi.mock('../../../src/ble/handler-node-ble/scan-watchdog.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../../src/ble/handler-node-ble/scan-watchdog.js')>();
+  return {
+    SCAN_HEARD_FRESH_MS: actual.SCAN_HEARD_FRESH_MS,
+    withScanActivityWatchdog: async (
+      _adapter: unknown,
+      _signal: unknown,
+      wait: () => Promise<unknown>,
+      scanWatch?: { restarts: number; lastHeardAt?: number },
+    ) => {
+      try {
+        return await wait();
+      } finally {
+        if (scanWatch) {
+          scanWatch.restarts += watchdogRestarts;
+          if (watchdogHeardAgoMs !== undefined) {
+            scanWatch.lastHeardAt = Date.now() - watchdogHeardAgoMs;
+          }
+        }
+      }
+    },
+    resetScanActivityBackoff: () => {},
+  };
+});
 
 /** A scale adapter that claims everything, so resolveAdapter stays real. */
 function makeAdapter(overrides: Partial<ScaleAdapter> = {}): ScaleAdapter {
@@ -560,7 +575,7 @@ describe('scanAndReadRaw with ble.adapter_privacy (#417)', () => {
   });
 });
 
-describe('scanAndReadRaw hands the watchdog restarts to the failure classification', () => {
+describe('scanAndReadRaw hands what the watchdog saw to the failure classification', () => {
   const waitDevice = fakeAdapter.waitDevice;
 
   beforeEach(() => {
@@ -577,6 +592,7 @@ describe('scanAndReadRaw hands the watchdog restarts to the failure classificati
   afterEach(() => {
     fakeAdapter.waitDevice = waitDevice;
     autoDiscoverFinds = true;
+    watchdogHeardAgoMs = undefined;
     vi.useRealTimers();
   });
 
@@ -620,5 +636,28 @@ describe('scanAndReadRaw hands the watchdog restarts to the failure classificati
     expect(calls).toContain('autoDiscover');
     expect(bleFailureKind(err)).toBe('wedge-suspect');
     expect(calls).not.toContain('notifyDiscoveryStopped');
+  });
+
+  it('calls a no-show idle when the watchdog heard the room shortly before the wait ended', async () => {
+    // The probe hears nothing here (the fake adapter lists no devices), as on
+    // the Pi between two report bursts; what the watchdog heard decides.
+    watchdogHeardAgoMs = 4_000;
+    const err = await failedCycle();
+    expect(bleFailureKind(err)).toBe('idle');
+    expect(calls).not.toContain('notifyDiscoveryStopped');
+  });
+
+  it('same for auto-discovery', async () => {
+    watchdogHeardAgoMs = 4_000;
+    const err = await failedCycle(true);
+    expect(calls).toContain('autoDiscover');
+    expect(bleFailureKind(err)).toBe('idle');
+  });
+
+  it('still probes when the watchdog last heard the room too long ago', async () => {
+    watchdogHeardAgoMs = 40_000;
+    const err = await failedCycle();
+    expect(bleFailureKind(err)).toBe('wedge-suspect');
+    expect(calls).toContain('notifyDiscoveryStopped');
   });
 });
