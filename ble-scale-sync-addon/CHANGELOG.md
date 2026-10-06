@@ -7,6 +7,48 @@
 The add-on version always matches the application version, so every entry below
 applies to this add-on.
 
+## [1.31.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.30.1...v1.31.0) (2026-10-06)
+
+
+### Added
+
+* **addon:** add the adapter_privacy option ([37ad5f8](https://github.com/KristianP26/ble-scale-sync/commit/37ad5f87d387d1759d1081c983c919153a37071c))
+* **ble:** add a 'blocked' scan failure for a scale found but not connected ([70bf715](https://github.com/KristianP26/ble-scale-sync/commit/70bf715ff92076a8cdbf75f870c34b761b184df4))
+* **ble:** extend the composition hold while a transfer is still arriving ([5563ec6](https://github.com/KristianP26/ble-scale-sync/commit/5563ec6374d100d3202012fd37fdba478a1580b7))
+* **ble:** restart a scan that stops delivering advertisements ([fc465f0](https://github.com/KristianP26/ble-scale-sync/commit/fc465f016c107b194069871b39d9d7effceed82b))
+* **ble:** turn on LE privacy so a Beurer scale keeps the bond ([#417](https://github.com/KristianP26/ble-scale-sync/issues/417)) ([3b4dc23](https://github.com/KristianP26/ble-scale-sync/commit/3b4dc23231002230b53b4af4316bd22676170290))
+* **config:** add ble.adapter_privacy and pass it to the node-ble scan ([1b65828](https://github.com/KristianP26/ble-scale-sync/commit/1b65828faa94b6c7eebe294ac2c5774971125255))
+* **garmin:** add skip_metabolic_age to leave metabolic age out of the upload ([#455](https://github.com/KristianP26/ble-scale-sync/issues/455)) ([b2e5584](https://github.com/KristianP26/ble-scale-sync/commit/b2e5584a6e814b9e9055c0b96a992b1a0e9f1322))
+* **scales:** build the QN A00D profile frame from an age and a height ([760fee4](https://github.com/KristianP26/ble-scale-sync/commit/760fee4943f60f0145cd45b1ab5e0f2b42995ac8))
+* **wizard:** ask for units and authorize Strava during setup ([2a39fbb](https://github.com/KristianP26/ble-scale-sync/commit/2a39fbbb97061a45d631ac5df372509103d031e1))
+* **wizard:** section menu, edit-aware BLE and secrets kept in .env ([bd0bb53](https://github.com/KristianP26/ble-scale-sync/commit/bd0bb5304569be94596290b4dca656ababc0d212))
+* **wizard:** show what an edit changes before saving it ([116cee6](https://github.com/KristianP26/ble-scale-sync/commit/116cee6190c3bb9394a86484f719df4a5e60050a))
+
+
+### Fixed
+
+* **ble:** count a no-show as idle when the scan watchdog heard the room ([7f0877b](https://github.com/KristianP26/ble-scale-sync/commit/7f0877b16e742e28fddbd12b6d5f384313094006))
+* **ble:** log when the scan watchdog cannot list devices ([605f6b1](https://github.com/KristianP26/ble-scale-sync/commit/605f6b1a4d1d1734facd17d2d9c56ef609a2f528))
+* **ble:** read the adapter state back after a btmgmt power cycle ([72d9c47](https://github.com/KristianP26/ble-scale-sync/commit/72d9c47e03535b06d0a466c0a44dabf43cb7449e))
+* **ble:** take over a Discovering state that no client owns ([c2960aa](https://github.com/KristianP26/ble-scale-sync/commit/c2960aa905090927c18b1ed193fb6ae0aa6e1abc))
+* **scales:** hold the Beurer/Sanitas link while the 0x59 stream is arriving ([#211](https://github.com/KristianP26/ble-scale-sync/issues/211)) ([3cd85e6](https://github.com/KristianP26/ble-scale-sync/commit/3cd85e6e043df0d9ca386ac4373fad3d1fd54ba9))
+* **scales:** send the Arboleaf app's profile sequence on the 19-byte QN dialect ([#331](https://github.com/KristianP26/ble-scale-sync/issues/331)) ([6cb5ad1](https://github.com/KristianP26/ble-scale-sync/commit/6cb5ad1918a4e8a0f5fa1ab3f6fe754d96e40808))
+* **scales:** send the Renpho app's start sequence to ES-CS20M units with AE01/AE02 ([#436](https://github.com/KristianP26/ble-scale-sync/issues/436)) ([269c504](https://github.com/KristianP26/ble-scale-sync/commit/269c504af8efa908ce0f71f046531038403e9b96))
+* **wizard:** keep comments on edit, test every exporter, mask the HA token ([8c99de6](https://github.com/KristianP26/ble-scale-sync/commit/8c99de6eebbe5608a8e7944471362933acea20f5))
+
+
+### Docs
+
+* **ble:** stop citing burst silences as proof of a stalled scan ([c9bd5fb](https://github.com/KristianP26/ble-scale-sync/commit/c9bd5fbd9f786685f3f0c27cd5843884e4627395))
+* describe the 19-byte QN profile frame sent under qn_weight_ack ([a724152](https://github.com/KristianP26/ble-scale-sync/commit/a724152b3c8856f8ea43b88191574e1d4d50e405))
+* describe the athlete metabolic age rule as a clamp above actual age ([6692acf](https://github.com/KristianP26/ble-scale-sync/commit/6692acf6a1780e49e9bca1086b243dbd5f43f673))
+* describe the ES-CS20M start sequence and the profile it writes to the scale ([c093733](https://github.com/KristianP26/ble-scale-sync/commit/c0937334d42b118c8e48d75de6b14e349958102a))
+* describe the wizard section menu and secrets kept in .env ([8cfb02d](https://github.com/KristianP26/ble-scale-sync/commit/8cfb02de9e2bf1489031500e9bebec4948bff0cd))
+* describe units, comment-preserving edits and Strava in the wizard ([c40b052](https://github.com/KristianP26/ble-scale-sync/commit/c40b052f349c931825b69110fa641f7e374ef43b))
+* explain ble.adapter_privacy and the Beurer bond it keeps ([37f77b6](https://github.com/KristianP26/ble-scale-sync/commit/37f77b6647940350209dde8427b219fe6b717d16))
+* explain how a stuck BlueZ scan is now healed ([1a4377d](https://github.com/KristianP26/ble-scale-sync/commit/1a4377d72c92302576dcf16e43d2b06380dac418))
+* **garmin:** limit 'depends on age alone' to profiles without is_athlete ([52f3fb0](https://github.com/KristianP26/ble-scale-sync/commit/52f3fb0b99225d368c933af525ed18fbedffe650))
+
 ## [1.30.1](https://github.com/KristianP26/ble-scale-sync/compare/v1.30.0...v1.30.1) (2026-10-04)
 
 

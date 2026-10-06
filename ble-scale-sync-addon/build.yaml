@@ -9,6 +9,6 @@
 # An update in that window fails to build and the installed version keeps
 # running; retrying once the image exists succeeds.
 build_from:
-  amd64: ghcr.io/kristianp26/ble-scale-sync:1.30.1 # x-release-please-version
-  aarch64: ghcr.io/kristianp26/ble-scale-sync:1.30.1 # x-release-please-version
-  armv7: ghcr.io/kristianp26/ble-scale-sync:1.30.1 # x-release-please-version
+  amd64: ghcr.io/kristianp26/ble-scale-sync:1.31.0 # x-release-please-version
+  aarch64: ghcr.io/kristianp26/ble-scale-sync:1.31.0 # x-release-please-version
+  armv7: ghcr.io/kristianp26/ble-scale-sync:1.31.0 # x-release-please-version
