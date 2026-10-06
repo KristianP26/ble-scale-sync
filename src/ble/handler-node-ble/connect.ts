@@ -173,7 +173,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           try {
             tracker.stop();
             privacyCheckDue = true;
-            const result = await startDiscoverySafe(btAdapter, bleAdapter);
+            const result = await startDiscoverySafe(btAdapter, bleAdapter, { abortSignal });
             if (result) btAdapter = result;
             const supersededByRediscovery = device;
             device = await waitDeviceBounded(
@@ -310,7 +310,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
         const supersededByRetry = device;
         try {
           privacyCheckDue = true;
-          const result = await startDiscoverySafe(btAdapter, bleAdapter);
+          const result = await startDiscoverySafe(btAdapter, bleAdapter, { abortSignal });
           if (result) btAdapter = result;
           device = await waitDeviceBounded(
             btAdapter,
