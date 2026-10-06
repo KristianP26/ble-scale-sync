@@ -223,7 +223,7 @@ scale  ... 11 1e be ...   ->  app  a2 06 01 1e be 85
 scale  ... 11 1e c3 ...   ->  app  a2 06 01 1e c3 8a
 ```
 
-That reading is not confirmed on hardware, but the 20-byte extended dialect does it by default. The 20-byte live weight frame of the long dialects is not decoded yet and is never answered this way.
+That reading is not confirmed on hardware, but the 20-byte extended dialect does it by default. The 20-byte live weight frame is never answered this way: on the 19-byte dialect it is read without any answer (see below), and on the 20-byte extended dialect it is not decoded yet.
 
 There is a second place the same frame appears, and it is the more interesting one for a scale that never streams anything at all. Before the weigh-in the handshake sends `a2 06 01 32 <age>`, which openScale labels a user profile. Under the reading above those payload bytes are a weight, and `0x32` plus an age decodes to something like **128.58 kg**, which is nobody. Two es26m reporters whose scales complete the whole handshake and then go silent have exactly that in their logs.
 
@@ -242,6 +242,8 @@ Where that anchor goes depends on the dialect. On the 20-byte extended dialect i
 
 On the 19-byte dialect (`QN: scale info (19B, ...)` in the debug log) `qn_weight_ack` also sends the user profile frame the way the Arboleaf app does, with the first user's age and height, instead of openScale's fixed values. On the one captured unit, the app gets an `a1 06 02 01 01` answer to that frame where openScale's version gets `a1 06 02 01 00`. Make sure the first user's `birth_date` and `height` match the profile in the vendor app.
 
+With `qn_weight_ack: true` and `qn_time_sync_long: true` (below), one 19-byte Arboleaf has streamed a complete weigh-in; whether it needs both is not known yet, so set both. Reading that stream rests on that single log and is not yet confirmed on hardware ([#331](https://github.com/KristianP26/ble-scale-sync/issues/331)). The weight comes from the 20-byte live frame. Once it settles, the scale measures body composition for about 14 seconds more and then sends its results, so the connection stays open until the scale's last result frame: stay on the scale until its display shows the results. If that frame never comes, the weight is sent on its own 40 seconds after it settled, or at once if the scale disconnects first. The scale's own body-composition values and the result block it sends (likely segment impedances) are not decoded, so body composition is estimated from BMI (Deurenberg formula). Only a scale set to display kg has been logged so far; with lb or st the weight frame may differ, and if the log then warns about it, please attach a DEBUG log to the issue.
+
 If that still leaves the scale silent right after START, there is one more thing to try:
 
 ```yaml
@@ -251,7 +253,7 @@ ble:
 
 An HCI capture of an Arboleaf vendor app shows two `0xA4` frames sent between START and the first live weight frame, which this app does not send. In that capture the scale acknowledges each one and then starts streaming. Turning this on replays those two frames. With `qn_weight_ack` on, they go out after the two anchor frames, which is the order the other Arboleaf captures show.
 
-Be aware of what that means. The frames are replayed byte for byte from one reporter's capture of their own scale, and their payload is not decoded. It looks like per-user calibration or a previous measurement handed back, so it may be right for everyone or right for nobody but the person who captured it. That is why it is off by default and why it is the last thing to try rather than the first. If it works for your unit, please say so on [issue #331](https://github.com/KristianP26/ble-scale-sync/issues/331): more than one confirmation is what would turn this from a replay into a decoded frame.
+Be aware of what that means. The frames are replayed byte for byte from one reporter's capture of their own scale, and their payload is not decoded. Its values have the size and spread of the result block a 19-byte Arboleaf sends after a weigh-in (likely impedance records), so it looks like a previous measurement record of the person who captured it, handed back to the scale. If so, it is right for nobody but that person. That is why it is off by default and why it is the last thing to try rather than the first. If it works for your unit, please say so on [issue #331](https://github.com/KristianP26/ble-scale-sync/issues/331): more than one confirmation is what would turn this from a replay into a decoded frame.
 
 If the scale is still silent, there is one more difference between this app and the vendor app on that capture:
 
@@ -309,7 +311,15 @@ QN: no A2 before START on the 19-byte dialect, as the vendor app (ble.qn_weight_
 QN: A00D profile frame with age 40, height 1750 mm (ble.qn_weight_ack, 19-byte dialect, #331)
 ```
 
-If `true` makes your scale report a weight, please say so in an issue with the model and the dialect from the `QN: scale info` log line. Two confirmations would move the default.
+And during a 19-byte weigh-in:
+
+```
+QN: 20-byte live frame, weight 76.4 kg at [5..6], status 0x00 (19-byte dialect, #331)
+QN: 20-byte stable weight 76.4 kg, holding for the result frames; stay on the scale until its display shows the results (#331)
+QN: 0x16 closes the 19-byte weigh-in, publishing 76.4 kg weight-only (impedance block not decoded, #331)
+```
+
+If `true` makes your scale report a weight, please say so in an issue with the model and the dialect from the `QN: scale info` log line. So far one 19-byte Arboleaf has streamed its weight with it, and reading that stream is not yet confirmed on hardware; two confirmations would move the default.
 
 :::
 
