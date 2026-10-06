@@ -279,9 +279,11 @@ export interface AdapterRuntimeConfig {
    * One reading of a vendor-app capture has the app answering each 0x10 frame
    * with `a2 06 01 <that frame's weight>` (#235). The adapter does this on the
    * 20-byte extended dialect, which is the only one that capture covers, and
-   * never for the 20-byte live frame whose layout is not decoded yet. Unset
-   * keeps that gate; true enables it on every dialect, for a scale that
-   * completes the handshake and then goes quiet; false disables it everywhere.
+   * never for a 20-byte live frame: on the 19-byte dialect that frame is read
+   * without writing anything back (#331, D037), on the extended one its layout
+   * is not decoded yet. Unset keeps that gate; true enables it on every
+   * dialect, for a scale that completes the handshake and then goes quiet;
+   * false disables it everywhere.
    *
    * True also sends the configured weight anchor: on the extended dialect in
    * the ready-time A2, on every other dialect as two A2 frames right after

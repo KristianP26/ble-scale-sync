@@ -15,6 +15,7 @@ import { KoogeekS1Adapter } from '../../src/scales/koogeek-s1.js';
 import { RenphoMsc04Adapter } from '../../src/scales/renpho-msc04.js';
 import { BeurerSanitasScaleAdapter } from '../../src/scales/beurer-sanitas.js';
 import { EsCs20mAdapter, buildGuestProfileFrame } from '../../src/scales/es-cs20m.js';
+import { QnScaleAdapter } from '../../src/scales/qn-scale/index.js';
 import { mockPeripheral } from '../helpers/scale-test-utils.js';
 import { uuid16, xorChecksum, buildPayload } from '../../src/scales/body-comp-helpers.js';
 import type {
@@ -2217,6 +2218,177 @@ describe('R-MSC04 composition hold through waitForRawReading (#434)', () => {
       s.device.triggerDisconnect();
       const raw = await s.promise;
       expect(raw.reading).toEqual({ weight: 81.55, impedance: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ─── QN 19-byte dialect weigh-in, end to end (#331, D037) ───────────────────
+
+// The real adapter through the real session. The adapter tests pin what
+// isFinal and isCompositionPending answer; these pin that the session stays
+// open through the scale's BIA after the stable weight and settles on 0x16.
+describe('QN 19-byte dialect hold through waitForRawReading (#331)', () => {
+  const hex = (h: string): Buffer => Buffer.from(h.replace(/ /g, ''), 'hex');
+  const withSum = (frame: Buffer): Buffer => {
+    const f = Buffer.from(frame);
+    f[f.length - 1] = [...f.subarray(0, f.length - 1)].reduce((a, b) => a + b, 0) & 0xff;
+    return f;
+  };
+  // #331 DEBUG log, 2026-10-06. Byte for byte from the log.
+  const INFO = hex('12 13 ff 54 0b 04 00 07 ff 15 0f 27 00 00 05 03 e0 6f 2f');
+  const READY = hex('14 0b ff 01 00 01 00 00 00 00 20');
+  const CONFIG_REQ = hex('21 05 ff 01 26');
+  const STABLE = hex('10 14 01 01 11 1e 05 00 00 00 00 00 00 00 00 00 00 00 00 5a');
+  const END_MARKER = hex('23 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 23');
+  // Derived from the captured frames: payload zeroed, checksum recomputed (the
+  // payload is the person's body composition and is not decoded).
+  const PART1 = withSum(hex('10 14 01 02 31 1e 05' + ' 00'.repeat(13)));
+  const PART2 = withSum(hex('10 14 00 00 32' + ' 00'.repeat(15)));
+  const PART3 = withSum(hex('10 14 00 00 33' + ' 00'.repeat(15)));
+  const COMP_15 = withSum(hex('15 10 ff' + ' 00'.repeat(13)));
+  const DONE_16 = withSum(hex('16 10 ff' + ' 00'.repeat(13)));
+
+  async function startSession() {
+    const notify = createMockChar();
+    const write = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notify],
+      [WRITE_UUID, write],
+    ]);
+    const adapter = new QnScaleAdapter();
+    adapter.configure({ qnWeightAck: true });
+    const promise = waitForRawReading(
+      charMap,
+      device,
+      adapter,
+      { ...PROFILE, lastKnownWeight: 76 },
+      'AABBCCDDEEFF',
+    );
+    let settled = false;
+    void promise.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await vi.waitFor(() => expect(notify.subscribeCalled).toBe(true));
+    await vi.advanceTimersByTimeAsync(0);
+    notify.triggerData(INFO);
+    notify.triggerData(READY);
+    notify.triggerData(CONFIG_REQ);
+    await vi.advanceTimersByTimeAsync(2000);
+    const info = vi.spyOn(bleLog, 'info');
+    const infoLines = (needle: string): number =>
+      info.mock.calls.filter((c) => String(c[0]).includes(needle)).length;
+    return { notify, write, device, adapter, promise, isSettled: () => settled, infoLines };
+  }
+
+  it('holds past the stable weight and settles on 0x16, with the spacing of the log', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession();
+      const writesBefore = s.write.writtenData.length;
+      s.notify.triggerData(STABLE); // t = 0
+      await vi.advanceTimersByTimeAsync(13_150);
+      s.notify.triggerData(END_MARKER);
+      await vi.advanceTimersByTimeAsync(204);
+      s.notify.triggerData(PART1);
+      await vi.advanceTimersByTimeAsync(62);
+      s.notify.triggerData(PART2);
+      await vi.advanceTimersByTimeAsync(241);
+      s.notify.triggerData(PART3);
+      await vi.advanceTimersByTimeAsync(66);
+      s.notify.triggerData(COMP_15);
+      await vi.advanceTimersByTimeAsync(235);
+      expect(s.isSettled(), 'the stable weight alone must not end the session').toBe(false);
+
+      s.notify.triggerData(DONE_16); // +13.958 s
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.isSettled()).toBe(true);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual({ weight: 76.85, impedance: 0 });
+      expect(s.adapter.isFinal(raw.reading)).toBe(true);
+      // Nothing written for any frame of the weigh-in.
+      expect(s.write.writtenData.length).toBe(writesBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('extends the hold while the BIA runs past 20 s and settles on a late 0x16', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession();
+      s.notify.triggerData(STABLE);
+      await vi.advanceTimersByTimeAsync(19_999);
+      expect(s.infoLines('still arriving')).toBe(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(s.infoLines('still arriving')).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(s.isSettled()).toBe(false);
+      s.notify.triggerData(DONE_16); // 30 s after the stable weight
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.isSettled()).toBe(true);
+      const raw = await s.promise;
+      // The 0x16 reading, not the held one, which is provisional.
+      expect(s.adapter.isFinal(raw.reading)).toBe(true);
+      expect(raw.reading).toEqual({ weight: 76.85, impedance: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not restart the window on the result block's first part", async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession();
+      s.notify.triggerData(STABLE);
+      await vi.advanceTimersByTimeAsync(13_150);
+      s.notify.triggerData(END_MARKER);
+      await vi.advanceTimersByTimeAsync(204);
+      s.notify.triggerData(PART1); // repeats the weight, status 0x02
+      expect(s.infoLines('Weight stable; holding')).toBe(1);
+      // The window still ends 20 s after the stable frame, not after PART1.
+      await vi.advanceTimersByTimeAsync(20_000 - 13_354 - 1);
+      expect(s.infoLines('still arriving')).toBe(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(s.infoLines('still arriving')).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles weight-only after 20 s plus the full extension when 0x16 never comes', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession();
+      s.notify.triggerData(STABLE);
+      await vi.advanceTimersByTimeAsync(39_999);
+      expect(s.isSettled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(s.isSettled()).toBe(true);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual({ weight: 76.85, impedance: 0 });
+      expect(s.adapter.isFinal(raw.reading)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles on the held weight when the scale disconnects during the hold', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession();
+      s.notify.triggerData(STABLE);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(s.isSettled()).toBe(false);
+      s.device.triggerDisconnect();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.isSettled()).toBe(true);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual({ weight: 76.85, impedance: 0 });
     } finally {
       vi.useRealTimers();
     }

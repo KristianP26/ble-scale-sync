@@ -49,6 +49,9 @@ import { uuid16 } from '../body-comp-helpers.js';
  *   [7-8]   resistance R1 (BE uint16)
  *   [9-10]  resistance R2 (BE uint16)
  *
+ * 0x10 frame (19-byte dialect, 20 bytes, weight at [5..6] /100): see
+ *   LIVE20_FRAME_LEN below.
+ *
  * 0x12 frame (scale info, classic 11-byte format):
  *   [2]     protocol type (echoed back in all config commands)
  *   [10]    weight scale flag (1 = /100, else /10)
@@ -112,6 +115,13 @@ export const CHR_WRITE_T1 = uuid16(0xffe3);
  * arrives before them, so on that unit they are not what opens the stream.
  * With `ble.qn_weight_ack` set on any dialect but the 20-byte extended one
  * they therefore go out after that A2 pair; the extended order is unchanged.
+ *
+ * The values in the #75 frames are of the same size and spread as the
+ * 19-byte dialect's result block (see LIVE20_FRAME_LEN) from that same unit,
+ * so the payload looks like a previous measurement record of the person who
+ * captured it, handed back to the scale. Hypothesis only: one value lines up
+ * exactly, the rest are 3 to 10 percent apart. Replaying it on another
+ * person's scale is one more reason this stays off by default.
  */
 export const A4_PRELUDE: readonly (readonly number[])[] = [
   [0xa4, 0x0f, 0x01, 0x21, 0x0a, 0x48, 0x08, 0xf1, 0x0a, 0x33, 0x08, 0xda, 0x08, 0x80, 0xc7],
@@ -390,3 +400,59 @@ export const RESULT_OPCODE_B4 = 0xb4;
 export const RESULT_OPCODE_B1 = 0xb1;
 export const RESULT_MIN_WEIGHT_KG = 5;
 export const RESULT_MAX_WEIGHT_KG = 300;
+
+/**
+ * The 19-byte dialect's weigh-in stream (Arboleaf, #331, D037).
+ *
+ * After START this dialect streams 20-byte 0x10 frames:
+ *
+ *   [0]     0x10
+ *   [1]     total length, 0x14 (0x15/0x16 carry their own, 0x10)
+ *   [2]     0x01 on every first part seen; unit or slot, not decoded
+ *   [3]     status: 0x00 measuring, 0x01 stable, 0x02 result block
+ *   [4]     part: high nibble the part count, low nibble the index (0x11 = 1/1)
+ *   [5..6]  weight, BE u16 /100 kg, first part only. /100 whatever
+ *           weightScaleFactor says: the long 0x12 sets that to 10
+ *   [7..18] zero while measuring
+ *   [19]    sum of the preceding bytes
+ *
+ * One DEBUG log of a complete weigh-in is the whole evidence (#331,
+ * 2026-10-06). The scale streams status 0x00 frames, sends one stable frame
+ * (`10 14 01 01 11 1e 05 .. 5a`, 76.85 kg), then stays silent for 13.15 s while
+ * it runs its BIA, then sends `23 00 .. 00 23`, a three-part result block
+ * (`[4]` 0x31, 0x32, 0x33) and two 16-byte frames, `15 10 ff ..` and
+ * `16 10 ff ..`. 0x16 is the last frame of the weigh-in, 13.96 s after the
+ * stable one. Every one of those frames closes under the sum checksum.
+ *
+ * Only the weight is decoded. The continuation parts carry payload at [2..3]
+ * as well as [5..18], and the reassembled block reads as two ten-value records
+ * that look like a segmental, two-frequency impedance sweep (hypothesis). None
+ * of its values is a whole-body impedance the BIA formula could take: most sit
+ * far outside the 150-1200 ohm band, and the ones inside it differ between the
+ * two records, so passing one on would be a silent BIA fat from a guess (the
+ * D022 defect). 0x15 and 0x16 look like the scale's own composition results
+ * and are not decoded either. The reading is therefore weight-only.
+ */
+export const LIVE20_FRAME_LEN = 20;
+export const LIVE20_FIRST_PART_BYTE2 = 0x01;
+export const LIVE20_STATUS_MEASURING = 0x00;
+export const LIVE20_STATUS_STABLE = 0x01;
+export const LIVE20_STATUS_RESULT = 0x02;
+export const RESULT16_FRAME_LEN = 16;
+export const RESULT16_OPCODE_COMPOSITION = 0x15;
+export const RESULT16_OPCODE_DONE = 0x16;
+
+/**
+ * How long the link is held after the 19-byte dialect's stable weight for its
+ * 0x16 (#331, D037).
+ *
+ * The one sample has 0x16 13.96 s after the stable frame; 20 s leaves about
+ * 6 s. Ending the session on the stable weight instead cuts the link in the
+ * middle of the BIA while the person is still standing on the scale, and a
+ * proxy watcher can then reconnect to the still-advertising scale and send
+ * START into the running measurement. The adapter reports the composition as
+ * pending until 0x16, so a slower BIA gets the HOLD_EXTENSION_* steps on top,
+ * and a weigh-in that never sends 0x16 (in socks, say) resolves weight-only
+ * after at most 40 s.
+ */
+export const NINETEEN_BYTE_RESULT_HOLD_MS = 20_000;
