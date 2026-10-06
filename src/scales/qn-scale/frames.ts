@@ -135,6 +135,18 @@ export function buildTimeSync(protocolType: number, seconds: number, long = fals
   return [...body, body.reduce((a, b) => a + b, 0) & 0xff];
 }
 
+/**
+ * The family's trailing checksum: the sum of every byte but the last, mod 256.
+ * Pure helper; the captured 0xB4/0xB1 frames and the 19-byte dialect's
+ * weigh-in frames all close under it.
+ */
+export function hasValidSumChecksum(data: Buffer | readonly number[]): boolean {
+  if (data.length < 2) return false;
+  let sum = 0;
+  for (let i = 0; i < data.length - 1; i++) sum = (sum + data[i]) & 0xff;
+  return sum === data[data.length - 1];
+}
+
 /** Age openScale's constant A00D #2 profile frame carries. */
 export const OPENSCALE_PROFILE_AGE = 33;
 /** Height in mm openScale's constant A00D #2 profile frame carries. */

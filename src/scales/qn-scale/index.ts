@@ -59,6 +59,7 @@ import {
   buildMeasurementTrigger,
   buildTimeSync,
   buildUserProfileFrame,
+  hasValidSumChecksum,
 } from './frames.js';
 import { qnMatches, warnOnOneByoneShape } from './matching.js';
 import { parseQnBroadcast } from './broadcast.js';
@@ -1000,12 +1001,10 @@ export class QnScaleAdapter
   private parseExtendedResultFrame(data: Buffer): ScaleReading | null {
     if (this.extendedResultEmitted) return null;
 
-    // Standard QN trailing checksum: sum of every byte but the last, mod 256.
-    // Verified against every captured 0xB4/0xB1 frame; a cheap guard against a
-    // truncated or mis-framed notification being read as a weight.
-    let sum = 0;
-    for (let i = 0; i < data.length - 1; i++) sum = (sum + data[i]) & 0xff;
-    if (sum !== data[data.length - 1]) return null;
+    // Standard QN trailing checksum, verified against every captured 0xB4/0xB1
+    // frame; a cheap guard against a truncated or mis-framed notification being
+    // read as a weight.
+    if (!hasValidSumChecksum(data)) return null;
 
     let rawWeight: number | null = null;
     if (data[0] === RESULT_OPCODE_B1 && data.length >= 7 && data[2] === 0x03 && data[3] === 0x01) {
