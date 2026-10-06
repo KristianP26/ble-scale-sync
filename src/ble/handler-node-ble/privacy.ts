@@ -28,6 +28,7 @@ import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { bleLog, sleep } from '../types.js';
+import { stripAnsi, parseBtmgmtSettings, btmgmtErrorLine, type BtmgmtSettings } from '../btmgmt.js';
 import { tagBleFailure } from '../failure-kind.js';
 import { helperOf, type Adapter } from './dbus.js';
 
@@ -133,31 +134,7 @@ export function adapterIndexOf(adapter: Adapter): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
-const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]/g;
-
-/** btmgmt prints its errors in red through the same stdout as everything else. */
-export function stripAnsi(s: string): string {
-  return s.replace(ANSI_RE, '');
-}
-
-export interface BtmgmtSettings {
-  supported: string[];
-  current: string[];
-}
-
-/**
- * Parse `btmgmt --index N info`. The settings lines are space-separated
- * tokens, matched whole: `ll-privacy` is a different setting from `privacy`.
- * Undefined when either line is missing, which is what a failed read prints.
- */
-export function parseBtmgmtSettings(stdout: string): BtmgmtSettings | undefined {
-  const text = stripAnsi(stdout);
-  const supported = /^\s*supported settings:(.*)$/m.exec(text);
-  const current = /^\s*current settings:(.*)$/m.exec(text);
-  if (!supported || !current) return undefined;
-  const tokens = (s: string): string[] => s.trim().split(/\s+/).filter(Boolean);
-  return { supported: tokens(supported[1]), current: tokens(current[1]) };
-}
+export { stripAnsi, parseBtmgmtSettings, type BtmgmtSettings };
 
 interface BtmgmtRun {
   /** stdout + stderr, ANSI stripped, IRK redacted. */
@@ -206,20 +183,12 @@ function runBtmgmt(args: string[], irk?: string): Promise<BtmgmtRun> {
   });
 }
 
-/** The first line btmgmt printed as an error, for a warning a user can act on. */
-function errorLine(out: string): string | undefined {
-  return out
-    .split('\n')
-    .map((l) => l.trim())
-    .find((l) => /failed|invalid|unable|denied|not supported/i.test(l));
-}
-
 async function readSettings(index: number): Promise<BtmgmtSettings | undefined> {
   const res = await runBtmgmt(['--index', String(index), 'info']);
   const settings = parseBtmgmtSettings(res.out);
   if (!settings) {
     bleLog.debug(
-      `btmgmt info for hci${index} had no settings: ${res.failure ?? errorLine(res.out) ?? 'empty output'}`,
+      `btmgmt info for hci${index} had no settings: ${res.failure ?? btmgmtErrorLine(res.out) ?? 'empty output'}`,
     );
   }
   return settings;
@@ -294,12 +263,12 @@ async function applyPrivacy(t: PrivacyTarget): Promise<PrivacyOutcome> {
   const off = await runBtmgmt(['--index', idx, 'power', 'off']);
   try {
     const priv = await runBtmgmt(['--index', idx, 'privacy', 'on', t.irk], t.irk);
-    privacyError = priv.failure ?? errorLine(priv.out);
+    privacyError = priv.failure ?? btmgmtErrorLine(priv.out);
   } finally {
     // Unconditionally, even if the steps above went wrong: an adapter left
     // powered off takes the scale and every other BLE device on it down too.
     const on = await runBtmgmt(['--index', idx, 'power', 'on']);
-    const onError = on.failure ?? errorLine(on.out);
+    const onError = on.failure ?? btmgmtErrorLine(on.out);
     if (onError) bleLog.warn(`btmgmt power on for hci${idx} reported: ${onError}`);
   }
   await sleep(POST_POWER_ON_SETTLE_MS);
@@ -312,7 +281,7 @@ async function applyPrivacy(t: PrivacyTarget): Promise<PrivacyOutcome> {
     // A failed power-off first: the privacy command is then only rejected
     // because the adapter is still powered, and that "Rejected" hides the cause.
     const why =
-      off.failure ?? errorLine(off.out) ?? privacyError ?? 'privacy is not in the settings';
+      off.failure ?? btmgmtErrorLine(off.out) ?? privacyError ?? 'privacy is not in the settings';
     bleLog.warn(
       `Could not enable LE privacy on hci${idx}: ${why}. btmgmt needs root or CAP_NET_ADMIN. ` +
         `Next attempt in ${PRIVACY_RETRY_INTERVAL_MS / 60_000} min.`,
