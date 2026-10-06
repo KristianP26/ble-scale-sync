@@ -40,6 +40,7 @@ Automatic body composition upload to Garmin Connect, no phone app needed. Uses a
 | `password`           | Yes      | (none)             | Garmin account password                                                                                                                         |
 | `token_dir`          | No       | `~/.garmin_tokens` | Directory for cached auth tokens. A relative path is relative to the directory `config.yaml` is in; the setup wizard fills in `./garmin-tokens` |
 | `weight_only`        | No       | `false`            | Upload the weight alone, leaving every derived metric unset                                                                                     |
+| `skip_metabolic_age` | No       | `false`            | Upload every metric except metabolic age                                                                                                        |
 | `upload_timeout_sec` | No       | `180`              | Seconds one upload attempt may take before it is killed (10-900). Up to three attempts are made, 1 s and 2 s apart                              |
 
 ```yaml
@@ -75,6 +76,19 @@ global_exporters:
     email: '${GARMIN_EMAIL}'
     password: '${GARMIN_PASSWORD}'
     weight_only: true
+```
+
+:::
+
+::: tip Skip metabolic age
+Set `skip_metabolic_age: true` to upload everything except metabolic age. The estimate compares your BMR with a reference BMR for the same weight and height. Unless `is_athlete` is set, weight and height cancel and the result depends on age alone. Either way it carries no body composition. Garmin Connect then shows no metabolic age on the entry. Garmin's own Fitness Age is calculated separately and is not affected.
+
+```yaml
+global_exporters:
+  - type: garmin
+    email: '${GARMIN_EMAIL}'
+    password: '${GARMIN_PASSWORD}'
+    skip_metabolic_age: true
 ```
 
 :::
@@ -337,7 +351,7 @@ The **Authorization Callback Domain** must be set to `localhost`. During the OAu
 :::
 
 ::: tip Authentication
-After adding the Strava exporter to your config, run the setup script to authorize:
+The setup wizard offers Strava authorization after you add the exporter there (in edit mode, pick the **Strava Authorization** section). To authorize later, or for an exporter added by hand, run the setup script:
 
 **Standalone (Node.js):**
 
@@ -348,11 +362,14 @@ ble-scale-sync setup-strava   # from a clone: npm run setup-strava
 **Docker:**
 
 ```bash
+mkdir -p strava-tokens
 docker run --rm -it \
   -v ./config.yaml:/app/config.yaml \
-  -v strava-tokens:/app/strava-tokens \
+  -v ./strava-tokens:/app/strava-tokens \
   ghcr.io/kristianp26/ble-scale-sync:latest setup-strava
 ```
+
+The run commands in [Getting Started](/guide/getting-started) and the compose examples mount only `garmin-tokens`. Add the Strava directory to the container that runs the app, or the exporter will not find the tokens: `-v ./strava-tokens:/app/strava-tokens` in the `docker run` command, or a `- ./strava-tokens:/app/strava-tokens` line under `volumes:` in the compose file. The [setup wizard](/guide/configuration#setup-wizard-recommended) command already mounts it.
 
 The script prints a browser URL for Strava authorization. After authorizing, copy the `code` parameter from the redirect URL and paste it back. Tokens are cached and automatically refreshed.
 
@@ -478,7 +495,7 @@ See [Configuration: Environment Variables](/guide/configuration#environment-vari
 ::: warning A boolean field must spell a boolean
 An `${ENV_VAR}` reference is resolved to a **string** before the exporter reads it, so a true/false field only accepts a value that reads as one: `true`, `yes`, `1`, `on`, or `false`, `no`, `0`, `off`, or empty. Anything else stops that exporter from being built, with an error naming the field, rather than being guessed at in one direction or the other.
 
-This applies to `weight_only` (garmin), `retain` and `ha_discovery` (mqtt), `silent` (telegram), `report_exports` (ntfy and telegram) and `sync_measurements` (wger and healthlog). So `MQTT_RETAIN=maybe` is an error, not a default.
+This applies to `weight_only` and `skip_metabolic_age` (garmin), `retain` and `ha_discovery` (mqtt), `silent` (telegram), `report_exports` (ntfy and telegram) and `sync_measurements` (wger and healthlog). So `MQTT_RETAIN=maybe` is an error, not a default.
 :::
 
 ## Historical readings

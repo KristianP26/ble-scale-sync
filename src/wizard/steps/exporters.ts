@@ -3,6 +3,7 @@ import { EXPORTER_SCHEMAS } from '../../exporters/registry.js';
 import type { ExporterSchema, ConfigFieldDef } from '../../interfaces/exporter-schema.js';
 import type { ExporterEntry, UserConfig } from '../../config/schema.js';
 import { success, dim } from '../ui.js';
+import { promptSecret } from '../secrets.js';
 
 /** A whole-value `${VAR}` reference, kept verbatim rather than parsed as a number. */
 const ENV_REF = /^\$\{[^}]+\}$/;
@@ -19,6 +20,7 @@ async function promptField(
   ctx: WizardContext,
   field: ConfigFieldDef,
   current?: unknown,
+  secretName?: readonly (string | undefined)[],
 ): Promise<string | number | boolean | undefined> {
   const { prompts } = ctx;
   const hasCurrent = current !== undefined && current !== null && current !== '';
@@ -41,19 +43,17 @@ async function promptField(
     }
 
     case 'password': {
-      const hint = hasCurrent
-        ? ' (press Enter to keep the current value)'
-        : field.description?.includes('${ENV_VAR}')
+      const tip =
+        !hasCurrent && field.description?.includes('${ENV_VAR}')
           ? ` (tip: use \${ENV_VAR} syntax to reference .env secrets)`
           : '';
-      const value = await prompts.password(`${field.label}${hint}:`, {
-        validate: (v) => {
-          if (field.required && !v.trim() && !hasCurrent) return `${field.label} is required`;
-          return true;
-        },
-      });
-      if (!value && hasCurrent) return current as string;
-      return value || undefined;
+      return promptSecret(
+        ctx,
+        `${field.label}${tip}`,
+        hasCurrent ? String(current) : undefined,
+        secretName ?? [field.key],
+        { required: field.required ? `${field.label} is required` : undefined },
+      );
     }
 
     case 'number': {
@@ -126,6 +126,7 @@ async function promptExporterFields(
   schema: ExporterSchema,
   defaults: Record<string, string> = {},
   existing?: ExporterEntry,
+  owner?: string,
 ): Promise<Record<string, unknown>> {
   const current = (existing ?? {}) as Record<string, unknown>;
   const config: Record<string, unknown> = { ...current };
@@ -139,6 +140,7 @@ async function promptExporterFields(
       ctx,
       offered !== undefined ? ({ ...field, default: offered } as ConfigFieldDef) : field,
       current[field.key],
+      [schema.name, field.key, owner],
     );
     if (value !== undefined) {
       config[field.key] = value;
@@ -165,6 +167,7 @@ async function editExporterList(
   selected: ReadonlySet<string>,
   forWhom: string,
   defaultsFor: (schema: ExporterSchema) => Record<string, string>,
+  owner?: string,
 ): Promise<ExporterEntry[]> {
   const result: ExporterEntry[] = [];
   const handled = new Set<string>();
@@ -191,7 +194,7 @@ async function editExporterList(
       result.push(entry);
       continue;
     }
-    const fields = await promptExporterFields(ctx, schema, {}, entry);
+    const fields = await promptExporterFields(ctx, schema, {}, entry, owner);
     result.push({ type: schema.name, ...fields } as ExporterEntry);
   }
 
@@ -204,7 +207,7 @@ async function editExporterList(
       console.log(dim('  → Skipped.'));
       continue;
     }
-    const fields = await promptExporterFields(ctx, schema, defaultsFor(schema));
+    const fields = await promptExporterFields(ctx, schema, defaultsFor(schema), undefined, owner);
     result.push({ type: schema.name, ...fields } as ExporterEntry);
   }
 
@@ -303,6 +306,8 @@ export const exportersStep: WizardStep = {
         selectedSet,
         ` for ${user.name}`,
         (schema) => perUserDefaults(schema, user, users.length),
+        // GARMIN_PASSWORD_ALICE in .env once there is more than one person.
+        users.length > 1 ? user.slug : undefined,
       );
       user.exporters = userEntries.length > 0 ? userEntries : undefined;
     }

@@ -138,6 +138,22 @@ class WeightOnlyUploadTest(unittest.TestCase):
         self.assertEqual(kwargs["bmi"], 23.9)
 
 
+class SkipMetabolicAgeUploadTest(unittest.TestCase):
+    def test_leaves_metabolic_age_unset(self):
+        kwargs, _ = run_upload({**FULL_PAYLOAD, "skip_metabolic_age": True})
+        self.assertIsNone(kwargs["metabolic_age"])
+
+    def test_keeps_every_other_metric(self):
+        kwargs, _ = run_upload({**FULL_PAYLOAD, "skip_metabolic_age": True})
+        self.assertEqual(kwargs["bmi"], 23.9)
+        self.assertEqual(kwargs["percent_fat"], 18.5)
+        self.assertEqual(kwargs["basal_met"], 1750)
+
+    def test_false_behaves_like_absent(self):
+        kwargs, _ = run_upload({**FULL_PAYLOAD, "skip_metabolic_age": False})
+        self.assertEqual(kwargs["metabolic_age"], 30)
+
+
 class FailureReportingTest(unittest.TestCase):
     """The orchestrator only ever sees what main() puts on stdout.
 

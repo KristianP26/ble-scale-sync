@@ -225,6 +225,30 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
     expect(bundle.failureDelayMs?.(new Error('export failed'))).toBe(undefined);
   });
 
+  // #417. 'idle' promises the full discovery timeout elapsed, which is what
+  // makes even a zero idle_rescan_delay safe; a skipped connect makes no such
+  // promise, so it backs off, and it does not say "No scale found" either.
+  it('poll plan: a blocked failure takes the backoff and its own log prefix', async () => {
+    h.createReadingSource.mockResolvedValue({ kind: 'poll', appliesGraceFloor: false });
+    const ctx = makeCtx({
+      bleHandler: 'auto',
+      config: {
+        users: [{}],
+        scale: {},
+        runtime: { scan_cooldown: 5, idle_rescan_delay: 0 },
+      } as never,
+    });
+    const bundle = await buildReadingSource(ctx, ADAPTERS, 7, 30);
+    const blocked = tagBleFailure(new Error('LE privacy is not active'), 'blocked');
+
+    expect(bundle.failureDelayMs?.(blocked)).toBe(undefined);
+    expect(bundle.failureLogPrefixFor?.(blocked)).toBe('Scale found but not connected');
+    expect(bundle.failureLogPrefixFor?.(tagBleFailure(new Error('x'), 'idle'))).toBe(undefined);
+    expect(bundle.failureLogPrefixFor?.(new Error('untagged'))).toBe(undefined);
+    bundle.onFailure?.(blocked);
+    expect(h.watchdogInstances[0].recordFailure).not.toHaveBeenCalled();
+  });
+
   it('poll plan: the idle delay is re-read from config on every call', async () => {
     h.createReadingSource.mockResolvedValue({ kind: 'poll', appliesGraceFloor: false });
     const runtime: { scan_cooldown: number; idle_rescan_delay?: number } = {

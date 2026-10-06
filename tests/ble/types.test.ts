@@ -7,6 +7,7 @@ import {
   withIdleTimeout,
   BT_BASE_UUID_SUFFIX,
 } from '../../src/ble/types.js';
+import { HoldTimer, HOLD_EXTENSION_MAX_MS } from '../../src/ble/notification-processor.js';
 
 describe('formatMac()', () => {
   it('formats a lowercase MAC with colons', () => {
@@ -147,6 +148,40 @@ describe('withIdleTimeout()', () => {
       expect(failure).toBeNull();
       finish('reading');
       await expect(result).resolves.toBe('reading');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #211: every extension of a composition hold requests a new minimum window,
+  // which also moves the absolute cap, so a silent scale mid-transfer is not
+  // cut off by the idle timeout or the cap before the hold resolves.
+  it('lets an extended composition hold outlast the idle window and the cap (#211)', async () => {
+    vi.useFakeTimers();
+    try {
+      let failure: unknown = null;
+      const result = withIdleTimeout<number>(
+        (onActivity) =>
+          new Promise<number>((resolve) => {
+            const hold = new HoldTimer(
+              5000,
+              (r) => resolve(r.weight),
+              (ms) => onActivity(ms + 2000),
+              () => true,
+            );
+            setTimeout(() => hold.hold({ weight: 83.4, impedance: 0 }), 10_000);
+          }),
+        12_000,
+        'idle',
+        { ms: 15_000, message: 'cap' },
+      );
+      result.catch((e: unknown) => {
+        failure = e;
+      });
+      await vi.advanceTimersByTimeAsync(10_000 + 5000 + HOLD_EXTENSION_MAX_MS - 1);
+      expect(failure).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toBe(83.4);
     } finally {
       vi.useRealTimers();
     }

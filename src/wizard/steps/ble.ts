@@ -7,7 +7,10 @@ import type {
 import { resolveEnvReferences } from '../../config/env-refs.js';
 import { isValidScaleId, SCALE_ID_HINT } from '../../ble/scale-id.js';
 import { missingPackagesFor } from '../../ble/transport-availability.js';
+import { isLoopback } from '../../ble/loopback.js';
 import { success, warn, info } from '../ui.js';
+import { currentFirst } from '../choices.js';
+import { promptSecret } from '../secrets.js';
 
 function validateMac(v: string): string | true {
   if (!isValidScaleId(v)) {
@@ -29,26 +32,61 @@ function validatePort(v: string): string | true {
   return true;
 }
 
-async function promptMqttProxy(ctx: WizardContext): Promise<MqttProxyConfig> {
-  const brokerMode = await ctx.prompts.select('MQTT broker:', [
-    {
-      name: 'Use built-in embedded broker (Recommended, zero-config)',
-      value: 'embedded' as const,
-      description: 'BLE Scale Sync runs its own broker so the ESP32 connects to this machine',
-    },
-    {
-      name: 'Use an external broker (e.g. Mosquitto, Home Assistant)',
-      value: 'external' as const,
-      description: 'Point at an existing MQTT broker on your network',
-    },
-  ]);
+/** `current` without the keys a prompt function manages, so the rest survive an edit. */
+function unmanaged<T extends object>(
+  current: T | undefined,
+  managed: readonly string[],
+): Partial<T> {
+  const rest: Record<string, unknown> = { ...(current ?? {}) };
+  for (const k of managed) delete rest[k];
+  return rest as Partial<T>;
+}
+
+const MQTT_PROXY_KEYS = [
+  'broker_url',
+  'device_id',
+  'topic_prefix',
+  'username',
+  'password',
+  'embedded_broker_port',
+  'embedded_broker_bind',
+] as const;
+
+/**
+ * Ask for the ESP32 MQTT proxy settings. Every prompt starts from `current`
+ * (edit mode, or the section picked again), the password is kept on Enter, and
+ * keys this does not ask about survive. It used to start from nothing, so
+ * changing the scale MAC meant retyping the broker password.
+ */
+async function promptMqttProxy(
+  ctx: WizardContext,
+  current?: Partial<MqttProxyConfig>,
+): Promise<MqttProxyConfig> {
+  const brokerMode = await ctx.prompts.select(
+    'MQTT broker:',
+    currentFirst(
+      [
+        {
+          name: 'Use built-in embedded broker (Recommended, zero-config)',
+          value: 'embedded' as const,
+          description: 'BLE Scale Sync runs its own broker so the ESP32 connects to this machine',
+        },
+        {
+          name: 'Use an external broker (e.g. Mosquitto, Home Assistant)',
+          value: 'external' as const,
+          description: 'Point at an existing MQTT broker on your network',
+        },
+      ],
+      current ? (current.broker_url ? 'external' : 'embedded') : undefined,
+    ),
+  );
 
   const device_id = await ctx.prompts.input('ESP32 device ID:', {
-    default: 'esp32-ble-proxy',
+    default: current?.device_id ?? 'esp32-ble-proxy',
   });
 
   const topic_prefix = await ctx.prompts.input('MQTT topic prefix:', {
-    default: 'ble-proxy',
+    default: current?.topic_prefix ?? 'ble-proxy',
   });
 
   let broker_url: string | undefined;
@@ -59,45 +97,64 @@ async function promptMqttProxy(ctx: WizardContext): Promise<MqttProxyConfig> {
 
   if (brokerMode === 'external') {
     broker_url = await ctx.prompts.input('MQTT broker URL:', {
-      default: 'mqtt://localhost:1883',
+      default: current?.broker_url ?? 'mqtt://localhost:1883',
       validate: validateBrokerUrl,
     });
 
     const hasAuth = await ctx.prompts.confirm('Does the MQTT broker require authentication?', {
-      default: false,
+      default: !!current?.username,
     });
 
     if (hasAuth) {
-      username = await ctx.prompts.input('MQTT username:');
-      password = await ctx.prompts.password('MQTT password:');
+      username = await ctx.prompts.input('MQTT username:', {
+        default: current?.username ?? undefined,
+      });
+      password = await promptSecret(ctx, 'MQTT password', current?.password, [
+        'mqtt_proxy',
+        'password',
+      ]);
     }
   } else {
     const portStr = await ctx.prompts.input('Embedded broker port:', {
-      default: '1883',
+      default: String(current?.embedded_broker_port ?? 1883),
       validate: validatePort,
     });
     embedded_broker_port = Number(portStr);
 
-    embedded_broker_bind = '0.0.0.0';
+    // The bind is not asked, so an existing one is kept: rebuilding it as
+    // 0.0.0.0 silently put a broker bound to one LAN address, or to loopback
+    // with auth, on every interface.
+    embedded_broker_bind = current?.embedded_broker_bind ?? '0.0.0.0';
 
     // Default to true because the broker binds 0.0.0.0 (LAN-exposed) and the
     // schema now rejects a non-loopback bind without auth. Declining here
-    // switches the bind to loopback so the user gets a working zero-config
-    // setup on single-host deployments.
+    // switches a non-loopback bind to loopback so the user gets a working
+    // zero-config setup on single-host deployments. An existing loopback
+    // broker without auth keeps that answer as its default.
+    const wasOpenLoopback =
+      current !== undefined &&
+      !current.broker_url &&
+      !current.username &&
+      isLoopback(embedded_broker_bind);
     const wantAuth = await ctx.prompts.confirm(
       'Require username/password for the embedded broker? (recommended, broker is LAN-exposed)',
-      { default: true },
+      { default: !wasOpenLoopback },
     );
     if (wantAuth) {
       // Both are required: a LAN-exposed broker with a username and an empty
       // password lets in anyone who knows the username.
       username = await ctx.prompts.input('MQTT username:', {
+        default: current?.username ?? undefined,
         validate: (v) => (v.trim() ? true : 'A username is required'),
       });
-      password = await ctx.prompts.password('MQTT password:', {
-        validate: (v) => (v ? true : 'A password is required for a LAN-exposed broker'),
-      });
-    } else {
+      password = await promptSecret(
+        ctx,
+        'MQTT password',
+        current?.password,
+        ['mqtt_proxy', 'password'],
+        { required: 'A password is required for a LAN-exposed broker' },
+      );
+    } else if (!isLoopback(embedded_broker_bind)) {
       embedded_broker_bind = '127.0.0.1';
       console.log(
         `\n  ${info('No auth selected, binding embedded broker to 127.0.0.1 (loopback only).')}`,
@@ -106,6 +163,7 @@ async function promptMqttProxy(ctx: WizardContext): Promise<MqttProxyConfig> {
   }
 
   return {
+    ...unmanaged(current, MQTT_PROXY_KEYS),
     ...(broker_url ? { broker_url } : {}),
     device_id,
     topic_prefix,
@@ -123,58 +181,123 @@ function validateEsphomeHost(v: string): string | true {
 
 type EsphomeEndpoint = EsphomeProxyConfig['additional_proxies'][number];
 
-async function promptEsphomeEndpoint(ctx: WizardContext, label: string): Promise<EsphomeEndpoint> {
+const ESPHOME_ENDPOINT_KEYS = ['host', 'port', 'encryption_key', 'password'] as const;
+
+/**
+ * Ask for one ESPHome API endpoint, starting from `current`. `nameSuffix`
+ * tells the .env names of several proxies apart.
+ */
+async function promptEsphomeEndpoint(
+  ctx: WizardContext,
+  label: string,
+  current?: Partial<EsphomeEndpoint>,
+  nameSuffix?: string,
+): Promise<EsphomeEndpoint> {
   const host = await ctx.prompts.input(`${label} host (IP or mDNS name, e.g. ble-proxy.local):`, {
+    default: current?.host,
     validate: validateEsphomeHost,
   });
 
   const portStr = await ctx.prompts.input(`${label} API port:`, {
-    default: '6053',
+    default: String(current?.port ?? 6053),
     validate: validatePort,
   });
   const port = Number(portStr);
 
-  const authMode = await ctx.prompts.select(`${label} authentication:`, [
-    { name: 'None', value: 'none' as const },
-    {
-      name: 'Noise encryption key (Recommended)',
-      value: 'noise' as const,
-      description: '32-byte base64 pre-shared key from your ESPHome api config',
-    },
-    {
-      name: 'Legacy password',
-      value: 'password' as const,
-      description: 'Deprecated plaintext auth. Prefer Noise if your ESPHome supports it',
-    },
-  ]);
+  const currentMode = current
+    ? current.encryption_key
+      ? 'noise'
+      : current.password
+        ? 'password'
+        : 'none'
+    : undefined;
+  const authMode = await ctx.prompts.select(
+    `${label} authentication:`,
+    currentFirst(
+      [
+        { name: 'None', value: 'none' as const },
+        {
+          name: 'Noise encryption key (Recommended)',
+          value: 'noise' as const,
+          description: '32-byte base64 pre-shared key from your ESPHome api config',
+        },
+        {
+          name: 'Legacy password',
+          value: 'password' as const,
+          description: 'Deprecated plaintext auth. Prefer Noise if your ESPHome supports it',
+        },
+      ],
+      currentMode,
+    ),
+  );
 
   let encryption_key: string | undefined;
   let password: string | undefined;
   if (authMode === 'noise') {
-    encryption_key = await ctx.prompts.password('ESPHome API encryption key (base64):');
+    encryption_key = await promptSecret(
+      ctx,
+      'ESPHome API encryption key (base64)',
+      current?.encryption_key,
+      ['esphome', 'encryption_key', nameSuffix],
+    );
   } else if (authMode === 'password') {
-    password = await ctx.prompts.password('ESPHome API password:');
+    password = await promptSecret(ctx, 'ESPHome API password', current?.password, [
+      'esphome',
+      'password',
+      nameSuffix,
+    ]);
   }
 
   return {
+    ...unmanaged(current, ESPHOME_ENDPOINT_KEYS),
     host: host.trim(),
     port,
-    client_info: 'ble-scale-sync',
+    client_info: current?.client_info ?? 'ble-scale-sync',
     ...(encryption_key ? { encryption_key } : {}),
     ...(password ? { password } : {}),
   } as EsphomeEndpoint;
 }
 
-async function promptEsphomeProxy(ctx: WizardContext): Promise<EsphomeProxyConfig> {
-  const primary = await promptEsphomeEndpoint(ctx, 'ESPHome proxy');
+type KeepEditRemove = 'keep' | 'edit' | 'remove';
+
+async function promptEsphomeProxy(
+  ctx: WizardContext,
+  current?: Partial<EsphomeProxyConfig>,
+): Promise<EsphomeProxyConfig> {
+  const { additional_proxies: existing = [], ...currentPrimary } = current ?? {};
+  const primary = await promptEsphomeEndpoint(
+    ctx,
+    'ESPHome proxy',
+    current ? (currentPrimary as Partial<EsphomeEndpoint>) : undefined,
+  );
 
   const additional_proxies: EsphomeEndpoint[] = [];
+  for (const proxy of existing) {
+    const action = await ctx.prompts.select<KeepEditRemove>(
+      `Additional ESPHome proxy ${proxy.host}:`,
+      [
+        { name: 'Keep unchanged', value: 'keep' },
+        { name: 'Edit', value: 'edit' },
+        { name: 'Remove', value: 'remove' },
+      ],
+    );
+    if (action === 'keep') additional_proxies.push(proxy);
+    else if (action === 'edit') {
+      const suffix = String(additional_proxies.length + 2);
+      additional_proxies.push(
+        await promptEsphomeEndpoint(ctx, 'Additional ESPHome proxy', proxy, suffix),
+      );
+    }
+  }
   while (
     await ctx.prompts.confirm('Add another ESPHome proxy? (mesh setup, optional)', {
       default: false,
     })
   ) {
-    additional_proxies.push(await promptEsphomeEndpoint(ctx, 'Additional ESPHome proxy'));
+    const suffix = String(additional_proxies.length + 2);
+    additional_proxies.push(
+      await promptEsphomeEndpoint(ctx, 'Additional ESPHome proxy', undefined, suffix),
+    );
   }
 
   return {
@@ -190,22 +313,32 @@ function validateHaUrl(v: string): string | true {
   return true;
 }
 
-async function promptHaBluetooth(ctx: WizardContext): Promise<HaBluetoothConfig> {
+async function promptHaBluetooth(
+  ctx: WizardContext,
+  current?: Partial<HaBluetoothConfig>,
+): Promise<HaBluetoothConfig> {
   const url = await ctx.prompts.input(
     'Home Assistant URL (e.g. http://homeassistant.local:8123):',
-    { validate: validateHaUrl },
+    { default: current?.url, validate: validateHaUrl },
   );
-  const token = await ctx.prompts.input(
-    'Long-lived access token of an ADMIN user (Profile > Security), or ${HA_TOKEN} to read it from .env:',
-    { validate: (v: string) => (v.trim() ? true : 'Token is required') },
+  // A password prompt: this is an admin token, and an input prompt left it on
+  // screen and in the terminal scrollback.
+  const token = await promptSecret(
+    ctx,
+    'Long-lived access token of an ADMIN user (Profile > Security), or ${HA_TOKEN} to read it from .env',
+    current?.token,
+    ['ha', 'token'],
+    // HA rejects a token with a space, and a pasted one often ends in one.
+    { required: 'Token is required', trim: true },
   );
   const source = await ctx.prompts.input(
     'Only accept advertisements from this HA scanner (source id; leave empty for all):',
-    { default: '' },
+    { default: current?.source ?? '' },
   );
   return {
+    ...unmanaged(current, ['url', 'token', 'source']),
     url: url.trim(),
-    token: token.trim(),
+    token: (token ?? '').trim(),
     ...(source.trim() ? { source: source.trim() } : {}),
   } as HaBluetoothConfig;
 }
@@ -219,45 +352,61 @@ export const bleStep: WizardStep = {
     if (!ctx.config.ble) ctx.config.ble = { handler: 'auto' };
 
     // --- Handler selection ---
-    const handler = await ctx.prompts.select('How does this device connect to your BLE scale?', [
-      {
-        name: 'Directly via Bluetooth (Recommended)',
-        value: 'auto' as const,
-        description: 'This machine has a Bluetooth adapter',
-      },
-      {
-        name: 'Via ESP32 MQTT proxy (Experimental)',
-        value: 'mqtt-proxy' as const,
-        description: 'Remote BLE scanning via a dedicated ESP32 running our firmware',
-      },
-      {
-        name: 'Via ESPHome Bluetooth proxy (Experimental, broadcast-only)',
-        value: 'esphome-proxy' as const,
-        description: 'Reuse an existing ESPHome BT proxy from Home Assistant',
-      },
-      {
-        name: 'Via Home Assistant Bluetooth (Experimental, broadcast-only)',
-        value: 'ha-bluetooth' as const,
-        description: "Subscribe to Home Assistant's advertisement stream (any HA Bluetooth proxy)",
-      },
-    ]);
+    const handler = await ctx.prompts.select(
+      'How does this device connect to your BLE scale?',
+      currentFirst(
+        [
+          {
+            name: 'Directly via Bluetooth (Recommended)',
+            value: 'auto' as const,
+            description: 'This machine has a Bluetooth adapter',
+          },
+          {
+            name: 'Via ESP32 MQTT proxy (Experimental)',
+            value: 'mqtt-proxy' as const,
+            description: 'Remote BLE scanning via a dedicated ESP32 running our firmware',
+          },
+          {
+            name: 'Via ESPHome Bluetooth proxy (Experimental, broadcast-only)',
+            value: 'esphome-proxy' as const,
+            description: 'Reuse an existing ESPHome BT proxy from Home Assistant',
+          },
+          {
+            name: 'Via Home Assistant Bluetooth (Experimental, broadcast-only)',
+            value: 'ha-bluetooth' as const,
+            description:
+              "Subscribe to Home Assistant's advertisement stream (any HA Bluetooth proxy)",
+          },
+        ],
+        ctx.config.ble.handler,
+      ),
+    );
 
     ctx.config.ble.handler = handler;
 
     if (handler === 'mqtt-proxy') {
-      ctx.config.ble.mqtt_proxy = await promptMqttProxy(ctx);
+      ctx.config.ble.mqtt_proxy = await promptMqttProxy(
+        ctx,
+        ctx.config.ble.mqtt_proxy ?? undefined,
+      );
       ctx.config.ble.esphome_proxy = undefined;
       ctx.config.ble.ha_bluetooth = undefined;
       console.log(`\n  ${info('MQTT proxy configured. Scale discovery will use the ESP32.')}`);
     } else if (handler === 'esphome-proxy') {
-      ctx.config.ble.esphome_proxy = await promptEsphomeProxy(ctx);
+      ctx.config.ble.esphome_proxy = await promptEsphomeProxy(
+        ctx,
+        ctx.config.ble.esphome_proxy ?? undefined,
+      );
       ctx.config.ble.mqtt_proxy = undefined;
       ctx.config.ble.ha_bluetooth = undefined;
       console.log(
         `\n  ${info('ESPHome proxy configured. Only broadcast scales are supported in phase 1.')}`,
       );
     } else if (handler === 'ha-bluetooth') {
-      ctx.config.ble.ha_bluetooth = await promptHaBluetooth(ctx);
+      ctx.config.ble.ha_bluetooth = await promptHaBluetooth(
+        ctx,
+        ctx.config.ble.ha_bluetooth ?? undefined,
+      );
       ctx.config.ble.mqtt_proxy = undefined;
       ctx.config.ble.esphome_proxy = undefined;
       console.log(
@@ -374,7 +523,11 @@ export const bleStep: WizardStep = {
 
     // --- Scale discovery ---
     for (;;) {
+      // A configured scale is offered first, so picking this section again to
+      // change the proxy does not mean scanning for the scale again.
+      const currentMac = ctx.config.ble.scale_mac ?? undefined;
       const choice = await ctx.prompts.select('How do you want to identify your scale?', [
+        ...(currentMac ? [{ name: `Keep the current scale (${currentMac})`, value: 'keep' }] : []),
         {
           name: 'Scan for nearby scales (Recommended)',
           value: 'scan',
@@ -388,6 +541,8 @@ export const bleStep: WizardStep = {
         },
       ]);
 
+      if (choice === 'keep') return;
+
       if (choice === 'skip') {
         ctx.config.ble.scale_mac = undefined;
         console.log('\n  Scale MAC skipped — auto-discovery will be used.');
@@ -398,6 +553,7 @@ export const bleStep: WizardStep = {
         const mac = await ctx.prompts.input(
           'Enter scale MAC address (XX:XX:XX:XX:XX:XX, or empty to go back):',
           {
+            default: currentMac,
             validate: (v) => {
               if (!v.trim()) return true;
               return validateMac(v);

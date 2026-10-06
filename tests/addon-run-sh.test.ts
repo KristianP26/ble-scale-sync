@@ -202,6 +202,47 @@ describe('add-on option update_check', () => {
   });
 });
 
+describe('add-on option adapter_privacy (#417)', () => {
+  const SCHEMA = (
+    parse(lf(readFileSync('ble-scale-sync-addon/config.yaml', 'utf8'))) as {
+      schema: Record<string, unknown>;
+    }
+  ).schema;
+
+  it('is an add-on option, off by default, validated as a boolean', () => {
+    expect(MANIFEST.options).toHaveProperty('adapter_privacy', false);
+    expect(SCHEMA).toHaveProperty('adapter_privacy', 'bool?');
+    expect(TRANSLATIONS.configuration).toHaveProperty('adapter_privacy');
+  });
+
+  it('is read with opt_bool and written into the ble block only when true', () => {
+    expect(RUN_SH).toMatch(/^ {2}ADAPTER_PRIVACY=\$\(opt_bool adapter_privacy\)$/m);
+    expect(RUN_SH).toContain(
+      '[ "$ADAPTER_PRIVACY" = "true" ] && echo "  adapter_privacy: true" >> "$FRESH"',
+    );
+  });
+
+  it('is named as ignored in custom config mode', () => {
+    expect(customConfigBranch()).toMatch(/for _qn in [^;]*\badapter_privacy\b[^;]*; do/);
+  });
+});
+
+describe('generated config: ble block', () => {
+  it('is opened by every option it writes', () => {
+    // An option written inside the block but missing from its condition is
+    // dropped without a word whenever it is the only BLE option set, which is
+    // what happened to qn_a4_prelude.
+    const open = RUN_SH.indexOf('    echo "ble:" >> "$FRESH"');
+    expect(open, 'ble block not found in run.sh').toBeGreaterThan(-1);
+    const condStart = RUN_SH.lastIndexOf('  if [', open);
+    const condition = RUN_SH.slice(condStart, open);
+    const body = RUN_SH.slice(open, RUN_SH.indexOf('\n  fi\n', open));
+    const written = [...body.matchAll(/\[ [^\]]*"\$([A-Z_]+)"[^\]]*\] && echo/g)].map((m) => m[1]);
+    expect(written).toContain('ADAPTER_PRIVACY');
+    for (const v of written) expect(condition, v).toContain(`"$${v}"`);
+  });
+});
+
 describe('add-on translations', () => {
   it('describe every option', () => {
     for (const key of Object.keys(MANIFEST.options)) {

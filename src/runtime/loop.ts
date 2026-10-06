@@ -59,6 +59,8 @@ export interface RuntimeLoopDeps {
    */
   failureDelayMs?: (err: unknown) => number | undefined;
   failureLogPrefix?: string;
+  /** A prefix for this error instead of `failureLogPrefix`, or undefined to keep it. */
+  failureLogPrefixFor?: (err: unknown) => string | undefined;
 }
 
 /**
@@ -80,6 +82,7 @@ export async function runContinuousLoop(deps: RuntimeLoopDeps): Promise<void> {
     onCycleStart,
     failureDelayMs,
     failureLogPrefix = 'Error processing reading',
+    failureLogPrefixFor,
   } = deps;
 
   let backoffMs = 0;
@@ -138,19 +141,18 @@ export async function runContinuousLoop(deps: RuntimeLoopDeps): Promise<void> {
         // logs the message as an error and exits non-zero.
         if (err instanceof MissingTransportModuleError) throw err;
         onFailure?.(err);
+        const prefix = failureLogPrefixFor?.(err) ?? failureLogPrefix;
         const shortDelayMs = failureDelayMs?.(err);
         if (shortDelayMs !== undefined) {
           // An idle cycle neither advances nor resets a real failure streak:
           // nobody standing on the scale says nothing about the radio, in
           // either direction.
-          log.info(
-            `${failureLogPrefix}, rescanning in ${shortDelayMs / 1000}s... (${errMsg(err)})`,
-          );
+          log.info(`${prefix}, rescanning in ${shortDelayMs / 1000}s... (${errMsg(err)})`);
           await abortableSleep(shortDelayMs, signal).catch(() => {});
           continue;
         }
         backoffMs = backoffMs === 0 ? BACKOFF_INITIAL_MS : Math.min(backoffMs * 2, BACKOFF_MAX_MS);
-        log.info(`${failureLogPrefix}, retrying in ${backoffMs / 1000}s... (${errMsg(err)})`);
+        log.info(`${prefix}, retrying in ${backoffMs / 1000}s... (${errMsg(err)})`);
         await abortableSleep(backoffMs, signal).catch(() => {});
       }
     }

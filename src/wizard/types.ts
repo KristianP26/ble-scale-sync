@@ -6,9 +6,18 @@ export interface PlatformInfo {
   os: 'linux' | 'darwin' | 'win32';
   arch: string;
   hasDocker: boolean;
+  /** Some Python answered --version. */
   hasPython: boolean;
+  /** The interpreter to run the Garmin scripts with: Python 3.12+, or null. */
   pythonCommand: string | null;
+  /**
+   * `major.minor` of pythonCommand; with no pythonCommand, of the first older
+   * interpreter found, for the message that names it.
+   */
+  pythonVersion?: string;
   btGid?: number;
+  /** Running inside a container (Docker): files written outside a mount are lost. */
+  inContainer?: boolean;
 }
 
 // --- Prompt provider (DI for testability) ---
@@ -40,8 +49,15 @@ export interface WizardContext {
   isEditMode: boolean;
   nonInteractive: boolean;
   platform: PlatformInfo;
-  stepHistory: string[];
   prompts: PromptProvider;
+  /** Secrets to append to the .env beside the config when it is saved. */
+  pendingEnv?: Map<string, string>;
+  /**
+   * Set by the summary step once config.yaml is written. The section menu
+   * ends only then, so a declined or failed save goes back to the menu
+   * instead of dropping every answer.
+   */
+  saved?: boolean;
 }
 
 // --- Wizard step ---
@@ -52,10 +68,4 @@ export interface WizardStep {
   order: number;
   run(ctx: WizardContext): Promise<void>;
   shouldRun?(ctx: WizardContext): boolean;
-}
-
-// --- Back navigation sentinel ---
-
-export class BackNavigation {
-  readonly _tag = 'BackNavigation';
 }

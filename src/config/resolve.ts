@@ -101,6 +101,8 @@ export interface ResolvedRuntimeConfig {
   watchConfig: boolean;
   bleHandler: BleHandlerName;
   bleAdapter?: string;
+  /** `ble.adapter_privacy` (#417). */
+  adapterPrivacy: boolean;
   mqttProxy?: MqttProxyConfig;
   esphomeProxy?: EsphomeProxyConfig;
   haBluetooth?: HaBluetoothConfig;
@@ -125,6 +127,7 @@ export function resolveRuntimeConfig(config: AppConfig): ResolvedRuntimeConfig {
     watchConfig: config.runtime?.watch_config ?? true,
     bleHandler: config.ble?.handler ?? 'auto',
     bleAdapter: config.ble?.adapter ?? undefined,
+    adapterPrivacy: config.ble?.adapter_privacy === true,
     mqttProxy: config.ble?.mqtt_proxy ?? undefined,
     esphomeProxy: config.ble?.esphome_proxy ?? undefined,
     haBluetooth: config.ble?.ha_bluetooth ?? undefined,

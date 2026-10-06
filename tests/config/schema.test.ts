@@ -434,6 +434,18 @@ describe('BleSchema', () => {
     }
   });
 
+  it('keeps ble.adapter_privacy (#417) and accepts only a boolean, null or nothing', () => {
+    const on = BleSchema.safeParse({ adapter_privacy: true });
+    expect(on.success).toBe(true);
+    if (on.success) expect(on.data.adapter_privacy).toBe(true);
+    for (const value of [false, null]) {
+      expect(BleSchema.safeParse({ adapter_privacy: value }).success).toBe(true);
+    }
+    for (const value of ['true', 1]) {
+      expect(BleSchema.safeParse({ adapter_privacy: value }).success).toBe(false);
+    }
+  });
+
   // Documents why src/config/unknown-keys.ts exists: a key this build does not
   // know is dropped without a word, which is how #318 read as "the option does
   // nothing" rather than "your build is older than that option".

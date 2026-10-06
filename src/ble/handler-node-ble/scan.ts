@@ -38,6 +38,7 @@ import {
   resetConnection,
 } from './connection.js';
 import { ensurePairingAgent, setPairingTarget } from './agent.js';
+import { ensureAdapterPrivacy, requireAdapterPrivacy } from './privacy.js';
 import {
   startDiscoverySafe,
   removeDevice,
@@ -45,6 +46,11 @@ import {
   stopDiscoveryAndQuiesce,
 } from './discovery.js';
 import { connectWithRecovery } from './connect.js';
+import {
+  withScanActivityWatchdog,
+  resetScanActivityBackoff,
+  type ScanWatch,
+} from './scan-watchdog.js';
 import { logAdvertisementSnapshot } from './device-object.js';
 import { wrapDevice } from './gatt.js';
 import { broadcastScanNodeBle } from './broadcast.js';
@@ -273,6 +279,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     readingTimeoutMs,
     autoClearStaleBond,
     preemptiveAdapterReset,
+    adapterPrivacy,
   } = opts;
 
   let device: Device | null = null;
@@ -283,6 +290,8 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   // Latest resolved adapter handle, captured for the failure-classification
   // liveness probe (#213). Stays undefined if getAdapter never succeeds.
   let probeAdapter: Adapter | undefined;
+  /** What the scan activity watchdog did in this cycle's wait, for the same classification. */
+  const scanWatch: ScanWatch = { restarts: 0 };
 
   // Publish this cycle's pairing target before the first getAdapter(), which is
   // where the agent registers. Stored as a closure rather than a value so a
@@ -304,13 +313,30 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       );
     }
 
+    // Before this cycle starts discovery, so the power-cycle an apply needs
+    // never lands on a device this cycle found. In continuous mode an idle
+    // cycle leaves its discovery running, so the power-cycle can still land on
+    // that one: the resetConnection below drops the D-Bus state it leaves
+    // behind and startDiscoverySafe starts a fresh scan. The index comes from
+    // the adapter BlueZ resolved, not from ble.adapter (#417).
+    if (adapterPrivacy) {
+      const privacy = await ensureAdapterPrivacy(btAdapter, abortSignal);
+      if (privacy.powerCycled) {
+        // btmgmt took the controller down underneath this D-Bus connection,
+        // the same situation as the btmgmt recovery tier.
+        resetConnection();
+        btAdapter = await acquireBluezAdapter(bleAdapter);
+        probeAdapter = btAdapter;
+      }
+    }
+
     // In continuous mode, BlueZ caches the device from a previous cycle.
     // Removing it forces a fresh discovery + proxy creation.
     if (targetMac) {
       await removeDevice(btAdapter, targetMac);
     }
 
-    const discoveryResult = await startDiscoverySafe(btAdapter, bleAdapter);
+    const discoveryResult = await startDiscoverySafe(btAdapter, bleAdapter, { abortSignal });
     if (discoveryResult) btAdapter = discoveryResult;
     probeAdapter = btAdapter;
 
@@ -322,7 +348,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       const mac = formatMac(targetMac);
       bleLog.info('Scanning for device...');
 
-      device = await waitForTargetDevice(btAdapter, mac, abortSignal);
+      device = await waitForTargetDevice(btAdapter, mac, abortSignal, scanWatch);
 
       const { name, advert, preMatchedAdapter } = await resolvePreConnectAdapter(
         device,
@@ -338,16 +364,19 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       ) {
         matchedAdapter = preMatchedAdapter;
         bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
-        return await broadcastScanNodeBle(matchedAdapter, btAdapter, device, mac, {
+        const reading = await broadcastScanNodeBle(matchedAdapter, btAdapter, device, mac, {
           abortSignal,
           onLiveData,
           onLiveWeight,
         });
+        resetScanActivityBackoff();
+        return reading;
       }
 
       // Stop discovery before connecting. BlueZ on low-power devices (e.g. Pi Zero)
       // often fails with le-connection-abort-by-local while discovery is still active.
       await stopDiscoveryAndQuiesce(btAdapter);
+      if (adapterPrivacy) await requireAdapterPrivacy(btAdapter);
 
       gattAttempted = true;
       device = await connectWithRecovery({
@@ -357,6 +386,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         maxRetries: MAX_CONNECT_RETRIES,
         bleAdapter,
         autoClearStaleBond,
+        adapterPrivacy,
         abortSignal,
       });
       bleLog.info('Connected. Discovering services...');
@@ -386,7 +416,13 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
     } else {
       // Auto-discovery: poll discovered devices, match by name, connect, verify
-      const result = await autoDiscover(btAdapter, adapters, abortSignal);
+      const scanAdapter = btAdapter;
+      const result = await withScanActivityWatchdog(
+        scanAdapter,
+        abortSignal,
+        () => autoDiscover(scanAdapter, adapters, abortSignal),
+        scanWatch,
+      );
       device = result.device;
       matchedAdapter = result.adapter;
       deviceMac = result.mac;
@@ -399,16 +435,19 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         (matchedAdapter.parseServiceData || matchedAdapter.parseBroadcast)
       ) {
         bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
-        return await broadcastScanNodeBle(matchedAdapter, btAdapter, device, result.mac, {
+        const reading = await broadcastScanNodeBle(matchedAdapter, btAdapter, device, result.mac, {
           abortSignal,
           onLiveData,
           onLiveWeight,
         });
+        resetScanActivityBackoff();
+        return reading;
       }
 
       // Stop discovery before connecting. BlueZ on low-power devices (e.g. Pi Zero)
       // often fails with le-connection-abort-by-local while discovery is still active.
       await stopDiscoveryAndQuiesce(btAdapter);
+      if (adapterPrivacy) await requireAdapterPrivacy(btAdapter);
 
       gattAttempted = true;
       device = await connectWithRecovery({
@@ -418,6 +457,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         maxRetries: MAX_CONNECT_RETRIES,
         bleAdapter,
         autoClearStaleBond,
+        adapterPrivacy,
         abortSignal,
       });
       bleLog.info('Connected. Discovering services...');
@@ -456,6 +496,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       deviceName,
     });
     gattSucceeded = true;
+    resetScanActivityBackoff();
 
     // Same device path as the newer cycle's, so a late Disconnect here would
     // drop that cycle's link to the scale.
@@ -468,7 +509,13 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     }
     return raw;
   } catch (err) {
-    await classifyBleFailure(err, { gattAttempted, probeAdapter, abortSignal });
+    await classifyBleFailure(err, {
+      gattAttempted,
+      probeAdapter,
+      abortSignal,
+      scanRestarted: scanWatch.restarts > 0,
+      scanHeardAt: scanWatch.lastHeardAt,
+    });
     throw err;
   } finally {
     await teardownSession({

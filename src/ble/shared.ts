@@ -358,8 +358,8 @@ function initializeAdapter(
       };
 
       sendUnlock();
-      // `unlockIntervalMs: 0` means "send the unlock once", and four adapters
-      // declare exactly that (Active Era, ES-CS20M, Hesley, 1byone new). `??`
+      // `unlockIntervalMs: 0` means "send the unlock once", and three adapters
+      // declare exactly that (Active Era, Hesley, 1byone new). `??`
       // does not catch 0, so they used to arm setInterval(fn, 0), which clamps
       // to about 1 ms on Linux: a write flood for the whole session on every
       // transport. The 5000 ms fallback stays for an adapter that declares
@@ -508,7 +508,7 @@ async function subscribeAndInit(
     // The unlock above was necessarily written before notifications were on:
     // noble queues the CCCD write from inside its descriptor discovery
     // callback, so a send-once adapter would otherwise have its reply dropped
-    // and never retry. Repeating it here costs one write on four adapters.
+    // and never retry. Repeating it here costs one write on three adapters.
     await onNotifyEnabled();
   }
 }
@@ -601,6 +601,7 @@ export function waitForRawReading(
       // session_timeout_sec shorter than the hold ends the session first, and
       // the caller's timeout discards the settled weight along with it (#434).
       (holdMs) => onActivity?.(holdMs + HOLD_IDLE_SLACK_MS),
+      () => adapter.isCompositionPending?.() === true,
     );
 
     // Raw frame capture (#211): log every notify frame and hold the connection

@@ -170,7 +170,15 @@ pair AA:BB:CC:DD:EE:FF
 
 If it happens every session, `ble.auto_clear_stale_bond: true` does that for you. See [the configuration reference](/guide/configuration#config-yaml-reference).
 
-If the key is rejected on the very next connect after a session that worked, every time (or the connect succeeds but then stalls at `Discovering services...` with `GATT server acquisition timed out`), try `ble.preemptive_adapter_reset: false` and see whether the bond then holds. The adapter power-cycle after each session is the only thing the host does in between, and whether it is the cause is still open ([#417](https://github.com/KristianP26/ble-scale-sync/issues/417)). Report the result there either way.
+If the key is rejected on the very next connect after a session that worked, every time, and the scale asks for SET and a new pairing before every weigh-in (or the connect succeeds but then stalls at `Discovering services...` with `GATT server acquisition timed out`), the scale is throwing away a pairing that carried no host identity key. Some Beurer scales (the BF915 is confirmed in [#417](https://github.com/KristianP26/ble-scale-sync/issues/417)) keep a pairing only from a device that handed over an identity key (IRK) while pairing. A phone normally does; Linux does only while the adapter has LE privacy turned on, which it does not by default. The adapter power-cycle after each session is not the cause: the bond is rejected without it too.
+
+The remedy:
+
+1. Set `ble.adapter_privacy: true` (in the Home Assistant add-on: **Pair with a host identity key (LE privacy)**) and restart.
+2. Remove the old pairing once with `bluetoothctl remove AA:BB:CC:DD:EE:FF`, or let `ble.auto_clear_stale_bond: true` do it.
+3. Weigh in and confirm the pairing on the scale. Let ble-scale-sync do the pairing: in #417 a manual `bluetoothctl pair` with privacy on never completed, while the pairing ble-scale-sync started did.
+
+Privacy then applies to the whole adapter, and on a native or Docker host `Privacy = device` in `/etc/bluetooth/main.conf` does the same without the option. Read [the `adapter_privacy` notes](/guide/configuration#config-yaml-reference) before turning it on.
 
 ## Exporter Issues
 
@@ -341,9 +349,23 @@ The documented commands resolve this for you with `--group-add "$(getent group b
 
 - Repeated `startDiscovery failed: Discovery already in progress` and `D-Bus StopDiscovery failed: No discovery started`
 - Or `Discovery started` logs succeed, but the scale is never found even after stepping on it
+- `Discovery state at start: Discovering=true, our filtered session=no` on every cycle, with no scale found (this line is only logged with `DEBUG=true`)
 - Common on Raspberry Pi 3 / 4 / Zero 2W with the on-board Broadcom adapter under continuous-mode load
 
 **Cause.** A [known BlueZ bug](https://github.com/bluez/bluez/issues/807) (also tracked at [bluez/bluer#47](https://github.com/bluez/bluer/issues/47)): after repeated GATT connect/disconnect cycles, BlueZ's `Discovering` property desyncs from the HCI controller. The daemon reports active discovery, but the controller is no longer running LE scan.
+
+Two forms of it are now cleared within the same scan cycle.
+
+- **At the start of a cycle.** With BlueZ 5.82, `bluetoothd` can report `Discovering` as on while no client owns a discovery session and the controller is not scanning. In that state a new `StartDiscovery` is answered with success and starts nothing, and a `StopDiscovery` is refused with `No discovery started`, so nothing in BlueZ ever clears it. Releases before this fix then kept "continuing with the existing scan" for as long as the process ran. The app now takes the session over (start, stop, start again), which makes BlueZ start a real scan. The same steps simply join the scan when another program (such as Home Assistant) really is scanning on the adapter, and the log says once: `Discovery was already running under a session that is not ours; restarted it under our own session.`
+- **In the middle of a scan.** The controller can also stop delivering advertisements while the app is waiting for the scale, on a scan the app started itself, with `Discovering` still on. The app watches for that while it waits: when BlueZ has heard nothing at all for 15 seconds, it restarts discovery and keeps waiting, and logs each time:
+
+  ```
+  Scan stalled (no advertisements for 15s while BlueZ reports Discovering); restarted discovery (restart 1 since start)
+  ```
+
+  In a room with no Bluetooth devices at all, the same silence is normal. A restart that brings no traffic back makes the app wait twice as long before the next one, up to one minute, so a quiet room costs a few restarts in the first scan cycle and then one per cycle. Busy traffic or a successful weigh-in brings the 15 seconds back. When other programs (such as Home Assistant) scan on the same adapter, a stop and start from the app only leaves and rejoins their scan: it does not count as a restart and only shows with `DEBUG=true`, but it backs off the same way. If their scan uses the same transport filter as the app (LE only), it does not reach the controller at all. If it uses a different one, BlueZ restarts the controller's scan when the app leaves and again when it rejoins, which is why it backs off.
+
+If BlueZ refuses to stop discovery (it answers `In Progress`), or does not answer a discovery request at all, `bluetoothd` itself is stuck: it believes the controller is scanning when it is not, and nothing the app can send over D-Bus clears that, an adapter power cycle included. At the start of a cycle, the app then drops its D-Bus connection (which releases a request BlueZ will never answer), tries the remaining recovery steps, and logs once: ``BlueZ discovery looks stuck (...). bluetoothd keeps that state until it restarts: run `sudo systemctl restart bluetooth`.`` In the middle of a scan it logs the same warning but keeps its connection, because the wait for the scale is still using it, and leaves the recovery steps to the start of the next cycle.
 
 ::: warning Hardware/firmware limitation, not just software
 On Pi 3/4 Broadcom on-board chips, this is a kernel/firmware-level issue that even much larger projects have given up on fixing in software. See [home-assistant/operating-system#4022](https://github.com/home-assistant/operating-system/issues/4022) and [home-assistant/core#142656](https://github.com/home-assistant/core/issues/142656), both closed as **Not Planned** with HA recommending a Bluetooth proxy as the workaround. The recovery tiers below clear the wedge on most setups but not all of them.
@@ -356,6 +378,14 @@ On Pi 3/4 Broadcom on-board chips, this is a kernel/firmware-level issue that ev
 - Resets its D-Bus client after every GATT operation in continuous mode
 - Runs a preemptive `btmgmt power off/on` cycle after every GATT operation to clear zombie controller state before it accumulates (`ble.preemptive_adapter_reset: false` turns only this step off, see [the configuration reference](/guide/configuration#config-yaml-reference))
 - Escalates through 6 recovery tiers when `StartDiscovery` fails (D-Bus `StopDiscovery`, adapter power-cycle, btmgmt reset, rfkill block/unblock, `systemctl restart bluetooth`)
+
+The btmgmt steps need `CAP_NET_ADMIN`. The Docker image gives `btmgmt` that capability and the add-on runs as root. A native install under systemd that runs as a normal user does not have it, and the app then logs `btmgmt could not power-cycle hci0: ... Permission Denied` once and carries on without those steps. To enable them, give the capability to `btmgmt` only, not to Node:
+
+```bash
+sudo setcap cap_net_admin+ep $(which btmgmt)
+```
+
+Two things to know before you do. The capability is on the `btmgmt` file, so **every local user** who can run `btmgmt` can then power the adapter off, change its settings and run discovery, not just this app. And it is lost whenever the `bluez` package is upgraded or reinstalled, because the new `btmgmt` file arrives without it: run the command again after such an upgrade (`getcap $(which btmgmt)` shows whether it is still set).
 
 **Auto-restart watchdog (continuous mode).** When in-process recovery is not enough (typically Pi 3/4 Broadcom firmware lock-up), a watchdog exits the process after `runtime.watchdog_max_consecutive_failures` consecutive scan failures (default `10`, ≈30 min). With Docker `restart: unless-stopped` the container restarts cleanly, the entrypoint resets the BT adapter, and the controller is typically unwedged. The watchdog only arms after the first successful weigh-in in the process lifetime, so it does not restart-loop the container if the scale is offline (vacation) or `scale_mac` is misconfigured.
 

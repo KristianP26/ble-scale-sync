@@ -63,6 +63,43 @@ describe('classifyBleFailure', () => {
     expect(bleFailureKind(err)).toBe('wedge-suspect');
   });
 
+  it('takes a room the scan watchdog heard recently for alive, without probing', async () => {
+    // The probe would say deaf: it can land between two report bursts.
+    h.probeLiveness.mockResolvedValue(false);
+    const err = new Error('Device not found');
+    await classifyBleFailure(err, {
+      gattAttempted: false,
+      probeAdapter: {} as never,
+      scanHeardAt: Date.now() - 25_000,
+    });
+    expect(bleFailureKind(err)).toBe('idle');
+    expect(h.probeLiveness).not.toHaveBeenCalled();
+  });
+
+  it('probes when the scan watchdog last heard the room too long ago', async () => {
+    h.probeLiveness.mockResolvedValue(false);
+    const err = new Error('Device not found');
+    await classifyBleFailure(err, {
+      gattAttempted: false,
+      probeAdapter: {} as never,
+      scanHeardAt: Date.now() - 31_000,
+    });
+    expect(bleFailureKind(err)).toBe('wedge-suspect');
+    expect(h.probeLiveness).toHaveBeenCalledOnce();
+  });
+
+  it('probes when the watchdog heard the room in the future (wall clock stepped back)', async () => {
+    h.probeLiveness.mockResolvedValue(false);
+    const err = new Error('Device not found');
+    await classifyBleFailure(err, {
+      gattAttempted: false,
+      probeAdapter: {} as never,
+      scanHeardAt: Date.now() + 60_000,
+    });
+    expect(bleFailureKind(err)).toBe('wedge-suspect');
+    expect(h.probeLiveness).toHaveBeenCalledOnce();
+  });
+
   it('leaves an already tagged error alone', async () => {
     const err = new Error('Device not found');
     await classifyBleFailure(err, { gattAttempted: true, probeAdapter: {} as never });

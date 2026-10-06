@@ -4,6 +4,7 @@ import type { WizardStep, WizardContext } from '../types.js';
 import { banner, dim, warn } from '../ui.js';
 import { checkForUpdate } from '../../update-check.js';
 import { configureUpdateState } from '../../update-state.js';
+import { EXPORTER_SCHEMAS } from '../../exporters/registry.js';
 
 export const welcomeStep: WizardStep = {
   id: 'welcome',
@@ -47,10 +48,12 @@ export const welcomeStep: WizardStep = {
 
     console.log(dim('  Before you start, make sure you have:'));
     console.log(dim('    - Your scale nearby (powered on)'));
-    console.log(dim('    - Garmin credentials (if using Garmin export)'));
-    console.log(dim('    - Strava API app created (if using Strava export)'));
-    console.log(dim('    - MQTT/InfluxDB/Webhook/Ntfy details (if using those exporters)'));
-    console.log(dim('    - File path for CSV/JSONL output (if using File export)\n'));
+    // Named from the registry: the hand-written list stopped at five exporters
+    // while the app grew to twelve.
+    const targets = EXPORTER_SCHEMAS.map((s) => s.displayName).join(', ');
+    console.log(dim('    - Logins, tokens or URLs for the export targets you will use'));
+    console.log(dim(`      (${targets})`));
+    console.log(dim('    - For Strava, an API application created at strava.com/settings/api\n'));
 
     // An unparseable file used to be offered for editing as if it were empty,
     // so "Edit existing configuration" quietly started from nothing (G-23).

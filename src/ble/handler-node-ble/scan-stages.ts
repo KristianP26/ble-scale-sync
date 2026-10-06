@@ -59,6 +59,7 @@ import {
 } from '../types.js';
 import { tagBleFailure, bleFailureKind } from '../failure-kind.js';
 import { probeLiveness, makeLivenessAdapter } from './liveness.js';
+import { withScanActivityWatchdog, SCAN_HEARD_FRESH_MS, type ScanWatch } from './scan-watchdog.js';
 import { safeName } from '../advertisement.js';
 
 /**
@@ -135,11 +136,16 @@ function startScanVisibilityLog(btAdapter: Adapter, mac: string): () => void {
  * attached: continuous mode reuses one signal for every cycle, so a listener
  * per cycle produces MaxListenersExceededWarning and then leaks for the life of
  * the process.
+ *
+ * The scan activity watchdog runs alongside the wait and restarts a discovery
+ * that went deaf mid-wait (scan-watchdog.ts); the wait itself is unchanged.
+ * What it did is collected in `scanWatch`.
  */
 export async function waitForTargetDevice(
   btAdapter: Adapter,
   mac: string,
   abortSignal?: AbortSignal,
+  scanWatch?: ScanWatch,
 ): Promise<Device> {
   if (abortSignal?.aborted) {
     throw abortSignal.reason ?? new DOMException('Aborted', 'AbortError');
@@ -147,7 +153,12 @@ export async function waitForTargetDevice(
 
   const stopVisibilityLog = startScanVisibilityLog(btAdapter, mac);
   try {
-    return await awaitTargetDevice(btAdapter, mac, abortSignal);
+    return await withScanActivityWatchdog(
+      btAdapter,
+      abortSignal,
+      () => awaitTargetDevice(btAdapter, mac, abortSignal),
+      scanWatch,
+    );
   } finally {
     stopVisibilityLog();
   }
@@ -536,6 +547,8 @@ export async function teardownSession(opts: {
         );
       } else if (await resetAdapterBtmgmt(parseHciIndex(bleAdapter))) {
         bleLog.debug('Preemptive btmgmt reset after GATT');
+      } else {
+        bleLog.debug('Preemptive btmgmt reset after GATT did not take; adapter not power-cycled');
       }
     }
   }
@@ -605,16 +618,57 @@ export async function readWithTimeouts(
  * toward the consecutive-failure watchdog; a GATT failure, or a radio that sees
  * nothing at all, must. `probeAdapter` being unset means we never got far
  * enough to ask, which is itself a wedge symptom.
+ *
+ * `scanRestarted`: the scan activity watchdog restarted the scan during this
+ * cycle's wait (ScanWatch.restarts).
+ *
+ * `scanHeardAt`: when that watchdog last heard the room (ScanWatch.lastHeardAt).
+ * Recent enough, it answers for the probe: a controller that reports in bursts
+ * (the maintainer's Pi, 2026-10-06) is silent for 5-8 s between them, and the
+ * probe's 3 s fell into it at the end of most freshly started scans.
  */
 export async function classifyBleFailure(
   err: unknown,
-  ctx: { gattAttempted: boolean; probeAdapter: Adapter | undefined; abortSignal?: AbortSignal },
+  ctx: {
+    gattAttempted: boolean;
+    probeAdapter: Adapter | undefined;
+    abortSignal?: AbortSignal;
+    scanRestarted?: boolean;
+    scanHeardAt?: number;
+  },
 ): Promise<void> {
   if (ctx.abortSignal?.aborted || bleFailureKind(err) !== undefined) return;
   if (ctx.gattAttempted || !ctx.probeAdapter) {
     tagBleFailure(err, 'wedge-suspect');
     return;
   }
-  const alive = await probeLiveness(makeLivenessAdapter(ctx.probeAdapter));
+  // A negative age means the wall clock was stepped back (no RTC on a Pi), so
+  // it says nothing about when the room was heard.
+  const heardAgoMs = ctx.scanHeardAt === undefined ? undefined : Date.now() - ctx.scanHeardAt;
+  let alive: boolean;
+  if (heardAgoMs !== undefined && heardAgoMs >= 0 && heardAgoMs <= SCAN_HEARD_FRESH_MS) {
+    bleLog.debug(
+      `Scan heard the room ${Math.round(heardAgoMs / 1000)}s ago; no liveness probe needed`,
+    );
+    alive = true;
+  } else {
+    alive = await probeLiveness(makeLivenessAdapter(ctx.probeAdapter));
+    // The cycles a probe still decides are the ones the fresh window misses;
+    // how often they come out deaf is what would justify a wider window.
+    bleLog.debug(
+      `Liveness probe: radio ${alive ? 'alive' : 'heard nothing'} (scan last heard the room ` +
+        `${heardAgoMs === undefined ? 'never' : `${Math.round(heardAgoMs / 1000)}s ago`})`,
+    );
+  }
+  // A radio that hears nothing may be running a deaf scan of ours that is
+  // latched as filtered, and the next cycle would then continue it instead of
+  // cycling it, for good. Dropping the claim makes that cycle restart it once.
+  // A room the radio hears, whether the watchdog heard it or the probe did,
+  // keeps the claim, so the Device1 objects #397 lost to every restart stay
+  // where they are. So does a scan the watchdog already restarted in this
+  // wait: in a quiet room every cycle would otherwise add a stop, a quiesce and
+  // a start of its own at the next cycle start, and a scan that goes deaf
+  // again is the next wait's watchdog's job.
+  if (!alive && !ctx.scanRestarted) notifyDiscoveryStopped(ctx.probeAdapter);
   tagBleFailure(err, alive ? 'idle' : 'wedge-suspect');
 }

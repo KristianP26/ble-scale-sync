@@ -285,7 +285,9 @@ export interface AdapterRuntimeConfig {
    *
    * True also sends the configured weight anchor: on the extended dialect in
    * the ready-time A2, on every other dialect as two A2 frames right after
-   * START, as two Android captures of the Arboleaf app show (#331, #75).
+   * START, as two Android captures of the Arboleaf app show (#331, #75). On
+   * the 19-byte dialect it also drops the ready-time A2 and sends the A00D #2
+   * profile frame from the user's age and height (#331).
    */
   qnWeightAck?: boolean;
   /**
@@ -645,6 +647,14 @@ export interface HoldForComposition {
    * hold window. Only consulted while completionHoldMs is set.
    */
   isFinal?(reading: ScaleReading): boolean;
+  /**
+   * True while a multipart composition transfer has started but not finished.
+   * When the hold window elapses during one, the handler extends it in short
+   * steps up to a fixed cap instead of resolving with the weight alone, so a
+   * slow link does not cut off the parts that carry the impedance (#211).
+   * Only consulted while completionHoldMs is set.
+   */
+  isCompositionPending?(): boolean;
 }
 
 /**

@@ -21,6 +21,7 @@ version: 1
 #   force_scale_adapter: "Hutbit"     # override protocol auto-detection (requires scale_mac)
 #   session_timeout_sec: 20           # seconds one GATT session waits for a reading (default 120)
 #   preemptive_adapter_reset: false   # Linux node-ble: skip the btmgmt power-cycle after each session (default true)
+#   adapter_privacy: true             # Linux node-ble: LE privacy so Beurer scales keep the pairing (adapter-wide, see docs)
 #   qn_protocol_byte: 0               # QN scales only: 0 to 255, see below
 #   qn_report_byte: 252               # QN scales only: 0 to 255, see below
 #
@@ -138,6 +139,7 @@ global_exporters:
     # weight_only: true    # upload the weight alone; BMI, body fat, water, bone,
     #                      # muscle, visceral fat, physique rating and metabolic
     #                      # age are left unset in Garmin Connect
+    # skip_metabolic_age: true    # upload everything except metabolic age
 
   # -- MQTT (Home Assistant auto-discovery) --
   # - type: mqtt

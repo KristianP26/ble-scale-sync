@@ -2,7 +2,7 @@ import { createReadingSource } from '../ble/index.js';
 import type { ScaleAdapter } from '../interfaces/scale-adapter.js';
 import { resolveUserProfile } from '../config/resolve.js';
 import { ConsecutiveFailureWatchdog } from '../ble/watchdog.js';
-import { shouldCountAsWatchdogFailure } from '../ble/failure-kind.js';
+import { bleFailureKind, shouldCountAsWatchdogFailure } from '../ble/failure-kind.js';
 import { abortableSleep, POST_DISCONNECT_GRACE_MS } from '../ble/types.js';
 import { createLogger } from '../logger.js';
 import { PollReadingSource } from './poll-source.js';
@@ -27,6 +27,8 @@ const DEFAULT_IDLE_RESCAN_DELAY_SEC = 5;
 export interface ReadingSourceBundle {
   source: ReadingSource;
   failureLogPrefix: string;
+  /** A prefix for this error instead of `failureLogPrefix`, or undefined to keep it. */
+  failureLogPrefixFor?: (err: unknown) => string | undefined;
   onSourceReload?: () => void;
   onSuccess?: () => Promise<void> | void;
   onFailure?: (err: unknown) => void;
@@ -134,27 +136,36 @@ export async function buildReadingSource(
   return {
     source: new PollReadingSource(ctx, adapters),
     failureLogPrefix: 'No scale found',
+    // A skipped connect found the scale, so "No scale found" would send the
+    // user looking in the wrong place (#417).
+    failureLogPrefixFor: (err) =>
+      bleFailureKind(err) === 'blocked' ? 'Scale found but not connected' : undefined,
     // An idle cycle waits a few seconds instead of the 5 s -> 60 s failure
     // backoff (#398). Only the node-ble handler tags its failures, so on the
     // other native handlers nothing is tagged, nothing is claimed here, and the
     // backoff applies exactly as it did before.
     //
     // Even a zero delay cannot busy-loop: classifyBleFailure tags 'idle' only
-    // when GATT was never attempted and the liveness probe found the radio
-    // alive, which means the full discovery timeout has already elapsed.
-    // Revisit this if that timeout ever becomes configurable.
+    // when GATT was never attempted and the radio was heard, either by the
+    // scan watchdog during the wait (two samples, at least 6 s in) or by the
+    // 3 s liveness probe after it. An idle cycle has listened for seconds, in
+    // practice for the full discovery timeout. A 'blocked' cycle carries no
+    // such guarantee, which is why it is not claimed here and takes the
+    // backoff instead.
     //
     // Read from config on every call so an edit lands on the next cycle, the
     // same way scan_cooldown is read in onSuccess below.
     failureDelayMs: (err) =>
-      shouldCountAsWatchdogFailure(err)
-        ? undefined
-        : (ctx.config.runtime?.idle_rescan_delay ?? DEFAULT_IDLE_RESCAN_DELAY_SEC) * 1000,
+      bleFailureKind(err) === 'idle'
+        ? (ctx.config.runtime?.idle_rescan_delay ?? DEFAULT_IDLE_RESCAN_DELAY_SEC) * 1000
+        : undefined,
     onFailure: (err) => {
       // Idle cycles (radio alive, scale simply not advertising) must not trip
       // the watchdog (#213). Only GATT failures and dead-radio wedges count.
       if (shouldCountAsWatchdogFailure(err)) {
         watchdog.recordFailure();
+      } else if (bleFailureKind(err) === 'blocked') {
+        log.debug('Connect skipped by a configured precondition; not counting toward watchdog');
       } else {
         log.debug('Idle cycle (radio alive, scale not on); not counting toward watchdog');
       }

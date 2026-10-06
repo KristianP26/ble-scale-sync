@@ -204,7 +204,9 @@ export const BleSchema = z
      * True also hands the scale the configured weight anchor: on the 20-byte
      * extended dialect in the ready-time A2, everywhere else as two A2 frames
      * right after START, the sequence two Android captures of the Arboleaf app
-     * show (#331, #75).
+     * show (#331, #75). On the 19-byte dialect it also drops the ready-time A2
+     * and sends the A00D #2 profile frame with the first user's age and
+     * height, as that app does (#331, D033).
      */
     qn_weight_ack: z.boolean().optional().nullable(),
     /**
@@ -274,16 +276,32 @@ export const BleSchema = z
      * (#80). Default true; `false` skips that one step and nothing else.
      *
      * The cycle exists for the Broadcom "zombie discovery" state, where BlueZ
-     * reports Discovering=true while the controller has stopped scanning. It
-     * is also the only host-side event between a bonded session that works and
-     * a next connect whose stored key is rejected (#417), so this lets that be
-     * tested without a code change. The D-Bus reset, the failed-GATT cleanup
-     * and the reactive recovery tiers all still run.
+     * reports Discovering=true while the controller has stopped scanning.
+     * This switch was added to test whether the cycle makes a Beurer scale
+     * reject its stored key on the next connect; #417 showed it is not the
+     * cause (that is the missing host IdKey, see adapter_privacy), and it is
+     * kept as a diagnostic switch. The D-Bus reset, the failed-GATT cleanup and
+     * the reactive recovery tiers all still run.
      *
      * node-ble only: noble resets the adapter only reactively, and the proxy
      * transports never touch the host adapter.
      */
     preemptive_adapter_reset: z.boolean().optional().nullable(),
+    /**
+     * Turn on LE privacy on the host adapter with an IRK derived from its
+     * address, so pairing hands the scale a host identity key (#417).
+     *
+     * A Beurer BF915 keeps a bond only from a peer that distributed an IRK, and
+     * Linux distributes one only while the adapter has privacy enabled, which
+     * is off by default. Without it every bond BlueZ makes is rejected on the
+     * next reconnect with `PIN or Key Missing`.
+     *
+     * Off by default because privacy is adapter-wide: every LE connection and
+     * active scan on that adapter, including Home Assistant's own Bluetooth
+     * integration, then uses a random address. Read once at start-up
+     * (restart-required). node-ble on Linux only.
+     */
+    adapter_privacy: z.boolean().optional().nullable(),
     /**
      * Minutes of total advertisement silence before a proxy transport is
      * treated as wedged rather than idle (#281). 0 disables the check.

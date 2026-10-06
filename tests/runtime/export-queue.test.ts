@@ -224,8 +224,10 @@ describe('export retry queue (#412)', () => {
   it('resolves its path next to the config file', () => {
     const resolved = resolveExportQueuePath(path.join(dir, 'config.yaml'));
     // Same directory as the config, which is the one place writable and
-    // persistent on every deployment target.
-    expect(path.dirname(resolved)).toBe(fs.realpathSync(dir));
+    // persistent on every deployment target. Both sides go through realpath:
+    // the resolver does not follow symlinks, and on macOS the temp dir under
+    // /var is a symlink to /private/var.
+    expect(fs.realpathSync(path.dirname(resolved))).toBe(fs.realpathSync(dir));
     expect(path.basename(resolved)).toBe('.export-retry-queue.jsonl');
   });
 });

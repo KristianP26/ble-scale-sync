@@ -145,7 +145,9 @@ export const usersStep: WizardStep = {
 
   async run(ctx: WizardContext): Promise<void> {
     const users: UserConfig[] = [];
-    const existingUsers = ctx.isEditMode ? [...((ctx.config.users as UserConfig[]) ?? [])] : [];
+    // Whatever the config holds, also in a fresh setup: picking this section
+    // again from the menu must not start the user list over.
+    const existingUsers = [...((ctx.config.users as UserConfig[]) ?? [])];
 
     // Edit mode used to rebuild every user from blank prompts and replace the
     // array, so fixing one height dropped every per-user exporter, the

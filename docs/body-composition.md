@@ -102,7 +102,7 @@ Effects:
 - **Water**: higher hydration factor (74% vs 73% of LBM)
 - **Physique Rating**: its skeletal muscle input is 60% of LBM instead of 54%
 - **BMR**: +5% boost
-- **Metabolic Age**: capped at actual age minus 5
+- **Metabolic Age**: set to actual age minus 5 when it would otherwise come out above actual age
 - **Deurenberg**: result multiplied by 0.85
 
 ## Scale-Specific Algorithms

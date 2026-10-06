@@ -45,6 +45,7 @@ describe('collectUnknownKeys', () => {
         qn_config_long: true,
         auto_clear_stale_bond: true,
         preemptive_adapter_reset: false,
+        adapter_privacy: true,
         proxy_liveness_timeout_min: 45,
       },
       scale: { weight_unit: 'kg', height_unit: 'cm', display_unit: 'weight_unit' },

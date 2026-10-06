@@ -1,5 +1,10 @@
-import { describe, it, expect } from 'vitest';
-import { EsCs20mAdapter } from '../../src/scales/es-cs20m.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import {
+  EsCs20mAdapter,
+  assertAllowedWrite,
+  buildGuestProfileFrame,
+  buildSetTimeFrame,
+} from '../../src/scales/es-cs20m.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -7,7 +12,13 @@ import {
 } from '../helpers/scale-test-utils.js';
 import { adapters } from '../../src/scales/index.js';
 import { resolveAdapter } from '../../src/scales/resolve.js';
-import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
+import { uuid16 } from '../../src/scales/body-comp-helpers.js';
+import { bleLog } from '../../src/ble/types.js';
+import type {
+  BleDeviceInfo,
+  ConnectionContext,
+  UserProfile,
+} from '../../src/interfaces/scale-adapter.js';
 
 function makeAdapter() {
   return new EsCs20mAdapter();
@@ -558,5 +569,390 @@ describe('EsCs20mAdapter 0x14 status nibble (#376)', () => {
     const done = adapter.parseNotification(frame('55aa11000a0001010000550000000071'))!;
     expect(done).toEqual({ weight: 103.5, impedance: 0 });
     expect(adapter.isComplete(done)).toBe(true);
+  });
+});
+
+// ─── Writes: the Renpho app's sequence on AE00 units, the kg command elsewhere ──
+
+const hex = (h: string): Buffer => Buffer.from(h, 'hex');
+
+/** Independent of the adapter's builder, so a wrong checksum there cannot hide. */
+function frameHex(cmd: number, payload: number[]): string {
+  const body = [0x55, 0xaa, cmd, payload.length >> 8, payload.length & 0xff, ...payload];
+  const sum = body.reduce((a, b) => a + b, 0) & 0xff;
+  return Buffer.from([...body, sum]).toString('hex');
+}
+
+// From the #436 reporter's iPhone capture of the Renpho app, the only two frames
+// of it used here (the rest carries their personal data): the power-on status
+// frame (lb on the display) and the app's 0x97, written at 2026-10-02 20:26:30Z
+// from a phone on EDT.
+const POWER_ON_436 = '55aa11000a010201000000000000001e';
+const APP_SET_TIME_436 = '55aa9700090100006ac01376010458';
+const APP_POWER_ON_ACK_436 = '55aa9100010192';
+
+// The #376 unit's own frames (v1.24.0 report, public).
+const POWER_ON_376 = '55aa11000a0101010000550000000072';
+const WEIGHT_376 = '55aa140007000000286e0000b0'; // 103.50 kg, settling
+const POWER_OFF_376 = '55aa11000a0001010000550000000071';
+
+/** The capture's clock: the 0x97 above is exactly this instant on EDT (UTC-4). */
+function captureClock(): Date {
+  const d = new Date(0x6ac01376 * 1000);
+  d.getTimezoneOffset = () => 240;
+  return d;
+}
+
+// Made up, NOT from any capture: the app's 0x96 in the #436 capture holds the
+// reporter's sex, birth date, height and weight, so it never appears in a test.
+const MADE_UP_PROFILE: UserProfile = {
+  gender: 'female',
+  birthDate: '1990-06-15',
+  age: 36,
+  height: 168,
+  lastKnownWeight: 65.5,
+  isAthlete: false,
+};
+const MADE_UP_GUEST_PROFILE = '55aa96000e2907c6060f069000001996aaff05a1';
+
+const AE00_UNIT = [0x2a10, 0x2a11, 0xae01, 0xae02];
+// The #376 unit: 1A10 and an unused FFF0, no AE00 (three public btsnoops).
+const NO_AE00_UNIT = [0x2a10, 0x2a11, 0xfff1, 0xfff2, 0xfff3];
+
+interface Written {
+  char: string;
+  hex: string;
+  withResponse: boolean | undefined;
+}
+
+function mockCtx(
+  chars: number[],
+  profile: UserProfile = MADE_UP_PROFILE,
+  write?: (data: Buffer) => Promise<void>,
+): { ctx: ConnectionContext; written: Written[] } {
+  const written: Written[] = [];
+  const ctx: ConnectionContext = {
+    profile,
+    deviceAddress: '',
+    availableChars: new Set(chars.map(uuid16)),
+    write: async (char, data, withResponse) => {
+      const buf = Buffer.from(data);
+      written.push({ char, hex: buf.toString('hex'), withResponse });
+      if (write) await write(buf);
+    },
+    read: async () => Buffer.alloc(0),
+    subscribe: async () => {},
+  };
+  return { ctx, written };
+}
+
+const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+
+describe('EsCs20mAdapter on an AE00 unit (#436)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function connected(
+    write?: (data: Buffer) => Promise<void>,
+  ): Promise<{ adapter: EsCs20mAdapter; written: Written[] }> {
+    const adapter = new EsCs20mAdapter(captureClock);
+    const { ctx, written } = mockCtx(AE00_UNIT, MADE_UP_PROFILE, write);
+    adapter.onSessionStart();
+    await adapter.onConnected!(ctx);
+    return { adapter, written };
+  }
+
+  it('writes nothing at connect: the app writes nothing before the first power-on frame', async () => {
+    const { written } = await connected();
+    expect(written).toEqual([]);
+  });
+
+  it("answers the power-on frame with the app's 0x91, 0x97, 0x96 and 0x90, each with response", async () => {
+    const { adapter, written } = await connected();
+    expect(adapter.parseNotification(hex(POWER_ON_436))).toBeNull();
+    await flush();
+
+    expect(written.map((w) => w.hex)).toEqual([
+      APP_POWER_ON_ACK_436,
+      APP_SET_TIME_436,
+      MADE_UP_GUEST_PROFILE,
+      // Unit 02 echoed from the power-on frame, so the lb display stays lb. The
+      // app sends mode 1 here (`...02 00 01 00`); mode 0 is the one deliberate
+      // change to a frame the app sends.
+      '55aa9000040200000095',
+    ]);
+    expect(written.every((w) => w.withResponse === true)).toBe(true);
+    expect(written.every((w) => w.char === uuid16(0x2a11))).toBe(true);
+  });
+
+  it('echoes a kg display as kg', async () => {
+    const { adapter, written } = await connected();
+    adapter.parseNotification(hex(POWER_ON_376));
+    await flush();
+    expect(written.at(-1)?.hex).toBe('55aa9000040100000094');
+  });
+
+  it('sends the sequence once per power-on, and again after a power-off', async () => {
+    const { adapter, written } = await connected();
+    adapter.parseNotification(hex(POWER_ON_436));
+    adapter.parseNotification(hex(POWER_ON_436));
+    await flush();
+    expect(written).toHaveLength(4);
+
+    adapter.parseNotification(hex(POWER_OFF_376));
+    await flush();
+    // No 0x91 on power-off: the app sends one, but that is out of scope.
+    expect(written).toHaveLength(4);
+
+    adapter.parseNotification(hex(POWER_ON_436));
+    await flush();
+    expect(written).toHaveLength(8);
+  });
+
+  it('drops the rest of the sequence when the session ends mid-way', async () => {
+    let release: (() => void) | undefined;
+    const { adapter, written } = await connected((data) =>
+      data[2] === 0x91
+        ? new Promise<void>((r) => {
+            release = r;
+          })
+        : Promise.resolve(),
+    );
+    adapter.parseNotification(hex(POWER_ON_436));
+    await flush();
+    expect(written).toHaveLength(1);
+
+    adapter.onSessionEnd!();
+    release?.();
+    await flush();
+    expect(written).toHaveLength(1);
+  });
+
+  // Adapters are singletons: a session that ends while the scale is on never
+  // sees the power-off that re-arms the sequence.
+  it('sends the sequence again in the next session when the last one ended without a power-off', async () => {
+    const adapter = new EsCs20mAdapter(captureClock);
+    const first = mockCtx(AE00_UNIT);
+    adapter.onSessionStart();
+    await adapter.onConnected!(first.ctx);
+    adapter.parseNotification(hex(POWER_ON_436));
+    await flush();
+    expect(first.written).toHaveLength(4);
+    adapter.onSessionEnd!();
+
+    const second = mockCtx(AE00_UNIT);
+    adapter.onSessionStart();
+    await adapter.onConnected!(second.ctx);
+    adapter.parseNotification(hex(POWER_ON_436));
+    await flush();
+    expect(second.written.map((w) => w.hex.slice(4, 6))).toEqual(['91', '97', '96', '90']);
+  });
+
+  // Synthetic: no header-less 0x11 has been captured. msgId at [0], power-on
+  // at [5] and a plausible unit at [6], which the parser would otherwise take.
+  it('ignores a power-on frame without the 55AA header', async () => {
+    const { adapter, written } = await connected();
+    const headerless = Buffer.alloc(16);
+    headerless[0] = 0x11;
+    headerless[5] = 0x01;
+    headerless[6] = 0x02;
+    expect(adapter.parseNotification(headerless)).toBeNull();
+    await flush();
+    expect(written).toEqual([]);
+  });
+
+  it('carries on after a failed write', async () => {
+    const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    const { adapter, written } = await connected((data) =>
+      data[2] === 0x97 ? Promise.reject(new Error('ATT error')) : Promise.resolve(),
+    );
+    adapter.parseNotification(hex(POWER_ON_436));
+    await flush();
+    expect(written.map((w) => w.hex.slice(4, 6))).toEqual(['91', '97', '96', '90']);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('clock (0x97) not sent'));
+  });
+
+  it('never logs the guest profile bytes', async () => {
+    const lines: string[] = [];
+    for (const level of ['debug', 'info', 'warn', 'error'] as const) {
+      vi.spyOn(bleLog, level).mockImplementation((msg: string) => {
+        lines.push(msg);
+      });
+    }
+    const { adapter, written } = await connected();
+    adapter.parseNotification(hex(POWER_ON_436));
+    await flush();
+    expect(written).toHaveLength(4);
+    expect(lines.some((l) => l.includes('guest profile'))).toBe(true);
+    // Neither the frame nor any of its fields: birth year, height, weight.
+    for (const secret of [MADE_UP_GUEST_PROFILE, '07c6', '0690', '1996']) {
+      expect(lines.filter((l) => l.includes(secret))).toEqual([]);
+    }
+  });
+
+  it('needs both AE01 and AE02; AE01 alone is the kg path', async () => {
+    const adapter = new EsCs20mAdapter(captureClock);
+    const { ctx, written } = mockCtx([0x2a10, 0x2a11, 0xae01]);
+    adapter.onSessionStart();
+    await adapter.onConnected!(ctx);
+    expect(written.map((w) => w.hex)).toEqual(['55aa9000040100000094']);
+  });
+});
+
+describe('EsCs20mAdapter on a unit without AE00 (#376)', () => {
+  it('sends the kg command without response at connect and once more on the first power-on', async () => {
+    const adapter = new EsCs20mAdapter(captureClock);
+    const { ctx, written } = mockCtx(NO_AE00_UNIT);
+    adapter.onSessionStart();
+    await adapter.onConnected!(ctx);
+    expect(written).toEqual([
+      { char: uuid16(0x2a11), hex: '55aa9000040100000094', withResponse: false },
+    ]);
+
+    expect(adapter.parseNotification(hex(POWER_ON_376))).toBeNull();
+    await flush();
+    expect(written.map((w) => [w.hex, w.withResponse])).toEqual([
+      ['55aa9000040100000094', false],
+      ['55aa9000040100000094', false],
+    ]);
+
+    // The #376 v1.24.0 session still completes on power-off, with no more writes.
+    const settling = adapter.parseNotification(hex(WEIGHT_376))!;
+    expect(adapter.isComplete(settling)).toBe(false);
+    const done = adapter.parseNotification(hex(POWER_OFF_376))!;
+    expect(done).toEqual({ weight: 103.5, impedance: 0 });
+    expect(adapter.isComplete(done)).toBe(true);
+    adapter.parseNotification(hex(POWER_ON_376));
+    await flush();
+    expect(written).toHaveLength(2);
+  });
+
+  it('repeats the kg command on the first power-on of the next session too', async () => {
+    const adapter = new EsCs20mAdapter(captureClock);
+    for (let session = 0; session < 2; session++) {
+      const { ctx, written } = mockCtx(NO_AE00_UNIT);
+      adapter.onSessionStart();
+      await adapter.onConnected!(ctx);
+      adapter.parseNotification(hex(POWER_ON_376));
+      await flush();
+      expect(written).toHaveLength(2);
+      adapter.onSessionEnd!();
+    }
+  });
+});
+
+describe('EsCs20mAdapter frame builders', () => {
+  it('builds the 0x96 guest profile from the profile (made-up profile)', () => {
+    expect(buildGuestProfileFrame(MADE_UP_PROFILE, captureClock()).toString('hex')).toBe(
+      MADE_UP_GUEST_PROFILE,
+    );
+  });
+
+  // The birth date parses as UTC midnight, so a host west of Greenwich read it
+  // back as the day before with the local getters.
+  it('keeps the birth day on a host behind UTC', () => {
+    const savedTz = process.env.TZ;
+    process.env.TZ = 'America/Los_Angeles';
+    try {
+      const f = buildGuestProfileFrame(
+        { ...MADE_UP_PROFILE, birthDate: '1990-06-15' },
+        new Date(0x6ac01376 * 1000),
+      );
+      expect([f.readUInt16BE(6), f[8], f[9]]).toEqual([1990, 6, 15]);
+    } finally {
+      if (savedTz === undefined) delete process.env.TZ;
+      else process.env.TZ = savedTz;
+    }
+  });
+
+  it('falls back to 1 January, 170.0 cm and 70.00 kg, and flags the athlete curve', () => {
+    const f = buildGuestProfileFrame(
+      { gender: 'male', age: 36, height: 0, isAthlete: true },
+      captureClock(),
+    );
+    expect(() => assertAllowedWrite(f)).not.toThrow();
+    expect(f[5]).toBe(0x19); // male, slot 9
+    expect(f.readUInt16BE(6)).toBe(2026 - 36);
+    expect([f[8], f[9]]).toEqual([1, 1]);
+    expect(f.readUInt16BE(10)).toBe(1700);
+    expect(f.readUInt32BE(12)).toBe(7000);
+    expect(f[16]).toBe(0x6a);
+    expect([f[17], f[18]]).toEqual([0xff, 0x05]);
+  });
+
+  it('never sends a zero last weight', () => {
+    const f = buildGuestProfileFrame({ ...MADE_UP_PROFILE, lastKnownWeight: 0 }, captureClock());
+    expect(f.readUInt32BE(12)).toBe(7000);
+  });
+
+  it('encodes the zone as sign (1 = behind UTC) and whole hours', () => {
+    const at = (offset: number): string => {
+      const d = captureClock();
+      d.getTimezoneOffset = () => offset;
+      return buildSetTimeFrame(d).toString('hex').slice(-6, -2);
+    };
+    expect(at(240)).toBe('0104'); // EDT, as in the capture
+    expect(at(-120)).toBe('0002'); // CEST, as the 0x31 unit's app sends
+    expect(at(0)).toBe('0000');
+    expect(at(-330)).toBe('0005'); // a half-hour zone is truncated
+  });
+});
+
+describe('EsCs20mAdapter write allow-list', () => {
+  it('accepts every frame the adapter builds', () => {
+    for (const h of [
+      APP_POWER_ON_ACK_436,
+      APP_SET_TIME_436,
+      MADE_UP_GUEST_PROFILE,
+      '55aa9000040200000095',
+      '55aa9000040100000094',
+    ]) {
+      expect(() => assertAllowedWrite(hex(h))).not.toThrow();
+    }
+  });
+
+  it('refuses a 0x90 with a mode byte', () => {
+    // Mode 1 is what the Renpho app sends to the 0x31 unit (three public
+    // btsnoops on renpho-escs20m#10); mode 2 is the probe write that left the
+    // #376 unit in zero-current mode (Venomeus log).
+    expect(() => assertAllowedWrite(hex('55aa9000040100010095'))).toThrow(/0x90/);
+    expect(() => assertAllowedWrite(hex('55aa9000040100020096'))).toThrow(/0x90/);
+  });
+
+  it('refuses a 0x96 outside the guest slot', () => {
+    const p = [...hex(MADE_UP_GUEST_PROFILE).subarray(5, 19)];
+    p[0] = 0x21; // slot 1: a registered user the app owns
+    expect(() => assertAllowedWrite(hex(frameHex(0x96, p)))).toThrow(/0x96/);
+    const q = [...hex(MADE_UP_GUEST_PROFILE).subarray(5, 19)];
+    q[12] = 0x00;
+    expect(() => assertAllowedWrite(hex(frameHex(0x96, q)))).toThrow(/0x96/);
+  });
+
+  it('refuses a 0x96 with a sex other than 1 or 2', () => {
+    const p = [...hex(MADE_UP_GUEST_PROFILE).subarray(5, 19)];
+    p[0] = 0x39; // sex 3, still slot 9
+    expect(() => assertAllowedWrite(hex(frameHex(0x96, p)))).toThrow(/0x96/);
+  });
+
+  it('refuses a 0x97 other than the clock', () => {
+    const p = [...hex(APP_SET_TIME_436).subarray(5, 14)];
+    p[0] = 0x10; // sub-op 16, probed on these units with unknown effect
+    expect(() => assertAllowedWrite(hex(frameHex(0x97, p)))).toThrow(/0x97/);
+  });
+
+  it('refuses a 0x97 with an offset past 14 hours', () => {
+    const p = [...hex(APP_SET_TIME_436).subarray(5, 14)];
+    p[8] = 15;
+    expect(() => assertAllowedWrite(hex(frameHex(0x97, p)))).toThrow(/0x97/);
+  });
+
+  it('refuses a bad checksum, a length mismatch and any other command', () => {
+    expect(() => assertAllowedWrite(hex('55aa9700090100006ac01376010459'))).toThrow(/checksum/);
+    // An allowed frame with a forbidden one riding behind it.
+    expect(() => assertAllowedWrite(hex(APP_POWER_ON_ACK_436 + '55aa9000040100020096'))).toThrow(
+      /length/,
+    );
+    expect(() => assertAllowedWrite(hex(frameHex(0x99, [0x01])))).toThrow(/0x99/);
   });
 });

@@ -46,7 +46,6 @@ describe('bleStep scan resolves ${VAR} references', () => {
         hasPython: false,
         pythonCommand: null,
       },
-      stepHistory: [],
       prompts,
     };
 

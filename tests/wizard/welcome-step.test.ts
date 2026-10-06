@@ -17,7 +17,6 @@ function ctxFor(configPath: string, prompts: WizardContext['prompts']): WizardCo
     isEditMode: false,
     nonInteractive: false,
     platform: { os: 'linux', arch: 'x64', hasDocker: false, hasPython: false, pythonCommand: null },
-    stepHistory: [],
     prompts,
   };
 }

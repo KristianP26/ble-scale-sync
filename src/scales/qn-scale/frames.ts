@@ -134,3 +134,48 @@ export function buildTimeSync(protocolType: number, seconds: number, long = fals
   if (long) body.push(TIME_SYNC_TRAILER);
   return [...body, body.reduce((a, b) => a + b, 0) & 0xff];
 }
+
+/** Age openScale's constant A00D #2 profile frame carries. */
+export const OPENSCALE_PROFILE_AGE = 33;
+/** Height in mm openScale's constant A00D #2 profile frame carries. */
+export const OPENSCALE_PROFILE_HEIGHT_MM = 1720;
+
+/**
+ * Build the A00D #2 user profile frame from an age and a height in cm.
+ *
+ *   a0 0d 02 01 03 e8 00 <age> <height mm, u16 BE> 04 02 <cs>
+ *
+ * Two vendor-app captures send this shape with the app user's configured age
+ * at [7] and height in millimetres at [8..9], from different apps and scales:
+ *
+ *   GE app (20-byte scale)       a0 0d 02 01 03 e8 00 1a 07 8a 04 02 4c
+ *   Arboleaf app (19-byte scale) a0 0d 02 01 03 e8 00 33 07 1c 04 02 f7
+ *
+ * `03 e8`, `00` and `04 02` are the same in both and are NOT decoded, so they
+ * are sent as captured. openScale sends the same shape with constants (age 33,
+ * 1720 mm, `00 08` at [4..5]), and the one captured 19-byte scale answers
+ * that with `a1 06 02 01 00` where the app gets `a1 06 02 01 01` (#331).
+ */
+export function buildUserProfileFrame(age: number, heightCm: number): number[] {
+  const a = Number.isFinite(age)
+    ? Math.min(0xff, Math.max(1, Math.round(age)))
+    : OPENSCALE_PROFILE_AGE;
+  const mm = Number.isFinite(heightCm)
+    ? Math.min(0xffff, Math.max(0, Math.round(heightCm * 10)))
+    : OPENSCALE_PROFILE_HEIGHT_MM;
+  const cmd = [
+    0xa0,
+    0x0d,
+    0x02,
+    0x01,
+    0x03,
+    0xe8,
+    0x00,
+    a,
+    (mm >> 8) & 0xff,
+    mm & 0xff,
+    0x04,
+    0x02,
+  ];
+  return [...cmd, cmd.reduce((s, b) => s + b, 0) & 0xff];
+}

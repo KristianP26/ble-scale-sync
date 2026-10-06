@@ -90,7 +90,7 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
   # report a false negative. A wrong value for either is silent by nature, so a
   # setting that is silently ignored is worse here than almost anywhere else.
   for _qn in qn_protocol_byte qn_report_byte qn_weight_ack qn_a4_prelude \
-    qn_time_sync_long qn_config_long auto_clear_stale_bond; do
+    qn_time_sync_long qn_config_long auto_clear_stale_bond adapter_privacy; do
     if [ -n "$(opt "$_qn")" ]; then
       log "WARNING: custom_config is enabled, so the '$_qn' option is ignored."
       log "Set 'ble.$_qn' in $CUSTOM_PATH instead."
@@ -188,6 +188,7 @@ else
   AUTO_CLEAR_STALE_BOND=$(opt_bool auto_clear_stale_bond)
   # Defaults to true: only an explicit false switches it off (#417).
   PREEMPTIVE_ADAPTER_RESET=$(opt_bool_default_true preemptive_adapter_reset)
+  ADAPTER_PRIVACY=$(opt_bool adapter_privacy)
   PROXY_LIVENESS_MIN=$(opt_int proxy_liveness_timeout_min 30)
   # Still written below, but the generated config always runs the built-in
   # Bluetooth transport, which has no liveness check. Say so instead of letting
@@ -411,7 +412,7 @@ YAML
     [ -n "$QN_PROTOCOL_BYTE" ] || [ -n "$QN_REPORT_BYTE" ] || [ -n "$QN_WEIGHT_ACK" ] ||
     [ -n "$QN_A4_PRELUDE" ] || [ -n "$QN_TIME_SYNC_LONG" ] || [ -n "$QN_CONFIG_LONG" ] ||
     [ "$AUTO_CLEAR_STALE_BOND" = "true" ] || [ "$PREEMPTIVE_ADAPTER_RESET" = "false" ] ||
-    [ "$PROXY_LIVENESS_MIN" != "30" ]; then
+    [ "$ADAPTER_PRIVACY" = "true" ] || [ "$PROXY_LIVENESS_MIN" != "30" ]; then
     echo "ble:" >> "$FRESH"
     [ -n "$SCALE_MAC" ] && echo "  scale_mac: \"$(yaml_escape "$SCALE_MAC")\"" >> "$FRESH"
     [ -n "$BLE_ADAPTER" ] && echo "  adapter: \"$(yaml_escape "$BLE_ADAPTER")\"" >> "$FRESH"
@@ -424,6 +425,7 @@ YAML
     [ -n "$QN_CONFIG_LONG" ] && echo "  qn_config_long: $QN_CONFIG_LONG" >> "$FRESH"
     [ "$AUTO_CLEAR_STALE_BOND" = "true" ] && echo "  auto_clear_stale_bond: true" >> "$FRESH"
     [ "$PREEMPTIVE_ADAPTER_RESET" = "false" ] && echo "  preemptive_adapter_reset: false" >> "$FRESH"
+    [ "$ADAPTER_PRIVACY" = "true" ] && echo "  adapter_privacy: true" >> "$FRESH"
     [ "$PROXY_LIVENESS_MIN" != "30" ] && echo "  proxy_liveness_timeout_min: $PROXY_LIVENESS_MIN" >> "$FRESH"
     echo "" >> "$FRESH"
   fi

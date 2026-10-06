@@ -30,6 +30,11 @@ export interface AppContext {
   readonly retryFailedExports: boolean;
   readonly bleHandler: BleHandlerName;
   readonly bleAdapter: string | undefined;
+  /**
+   * `ble.adapter_privacy` (#417). Frozen: switching it off at runtime would
+   * not switch the adapter's privacy off, so a reload must not look as if it did.
+   */
+  readonly adapterPrivacy: boolean;
   readonly esphomeProxy: EsphomeProxyConfig | undefined;
   readonly haBluetooth: HaBluetoothConfig | undefined;
   readonly signal: AbortSignal;
@@ -90,6 +95,7 @@ export function createAppContext(init: AppContextInit): AppContext {
       : undefined,
     bleHandler: init.resolved.bleHandler,
     bleAdapter: init.resolved.bleAdapter,
+    adapterPrivacy: init.resolved.adapterPrivacy,
     esphomeProxy: init.resolved.esphomeProxy,
     haBluetooth: init.resolved.haBluetooth,
     signal: init.signal,

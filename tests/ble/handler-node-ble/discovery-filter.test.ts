@@ -119,6 +119,38 @@ describe('startDiscoverySafe discovery filter (#372, #397)', () => {
     ]);
   });
 
+  // BlueZ reporting Discovering while the session is nobody's: our Stop is
+  // refused, and continuing with "the existing scan" kept a scan that did not
+  // exist for the life of the process (the phantom state on the maintainer's
+  // Pi, 2026-10-06). Joining gives us a session that our own Stop can end.
+  it('takes over a running scan that is not ours, and only once', async () => {
+    let refused = false;
+    callMethod.mockImplementation(async (name: string) => {
+      calls.push(`filter:${name}`);
+      if (name === 'StopDiscovery' && !refused) {
+        refused = true;
+        throw Object.assign(new Error('No discovery started'), {
+          type: 'org.bluez.Error.Failed',
+        });
+      }
+    });
+    const adapter = makeAdapter({ isDiscovering: vi.fn(async () => true) });
+
+    await startDiscoverySafe(adapter);
+    expect(calls).toEqual([
+      'filter:StopDiscovery',
+      'filter:SetDiscoveryFilter',
+      'filter:StartDiscovery',
+      'filter:StopDiscovery',
+      'filter:SetDiscoveryFilter',
+      'filter:StartDiscovery',
+    ]);
+
+    calls.length = 0;
+    await startDiscoverySafe(adapter);
+    expect(calls).toEqual([]);
+  });
+
   // Cycling the scan is a one-time correction, not a per-cycle habit. Repeating
   // it every cycle drops BlueZ's Device1 objects (#297) and opens a window with
   // the radio not scanning, which is what a reporter saw nine cycles running

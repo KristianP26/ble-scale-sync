@@ -8,6 +8,8 @@ config.yaml.tmp
 # Node.js
 node_modules/
 dist/
+# Vitest 5 writes blob/json/junit reports and attachments here
+.vitest/
 
 # Python
 __pycache__/

@@ -4,7 +4,7 @@ import { parse as parseYaml } from 'yaml';
 import { config as dotenvConfig } from 'dotenv';
 import { detectPlatform } from './platform.js';
 import { createRealPromptProvider } from './prompt-provider.js';
-import { runWizard, runEditMode } from './runner.js';
+import { runWizard, runEditMode, runSectionMenu } from './runner.js';
 import { runNonInteractive } from './non-interactive.js';
 import { WIZARD_STEPS } from './steps/index.js';
 import type { PlatformInfo, PromptProvider, WizardContext } from './types.js';
@@ -52,12 +52,13 @@ export interface SetupCommandDeps {
   platform?: PlatformInfo;
 }
 
-async function runSetup(argv: string[], deps: SetupCommandDeps): Promise<void> {
+/** Run the setup; returns the exit code. */
+async function runSetup(argv: string[], deps: SetupCommandDeps): Promise<number> {
   const args = parseArgs(argv);
 
   if (args.help) {
     printUsage();
-    return;
+    return 0;
   }
 
   // Load .env for ${ENV_VAR} references: the one next to the config file,
@@ -69,7 +70,7 @@ async function runSetup(argv: string[], deps: SetupCommandDeps): Promise<void> {
 
   if (args.nonInteractive) {
     await runNonInteractive(args.configPath);
-    return;
+    return 0;
   }
 
   // Detect platform
@@ -96,7 +97,6 @@ async function runSetup(argv: string[], deps: SetupCommandDeps): Promise<void> {
     isEditMode: false,
     nonInteractive: false,
     platform,
-    stepHistory: [],
     prompts,
   };
 
@@ -114,10 +114,20 @@ async function runSetup(argv: string[], deps: SetupCommandDeps): Promise<void> {
     ctx.config.scale = { weight_unit: 'kg', height_unit: 'cm', display_unit: 'weight_unit' };
     ctx.config.unknown_user = 'nearest';
 
-    // Run remaining steps (skip welcome since we already ran it)
-    const remainingSteps = WIZARD_STEPS.filter((s) => s.id !== 'welcome');
-    await runWizard(remainingSteps, ctx);
+    // Every section once (welcome already ran), then the section menu, where
+    // any of them can be changed before Review & Save runs the summary.
+    const sections = WIZARD_STEPS.filter((s) => s.id !== 'welcome' && s.id !== 'summary');
+    await runWizard(sections, ctx);
+    await runSectionMenu(WIZARD_STEPS, ctx, 'All sections done. Change one, or review and save:');
   }
+
+  // Quit without saving: not the code of a completed setup, so
+  // `ble-scale-sync setup && ...` stops here as it does after Ctrl+C.
+  if (!ctx.saved) {
+    console.log('\n  Setup ended without saving.');
+    return 1;
+  }
+  return 0;
 }
 
 /** 128 + SIGINT (2): what a shell reports for a command ended by Ctrl+C. */
@@ -147,8 +157,7 @@ export async function runSetupCommand(
   deps: SetupCommandDeps = {},
 ): Promise<number> {
   try {
-    await runSetup(argv, deps);
-    return 0;
+    return await runSetup(argv, deps);
   } catch (err) {
     if (isPromptCancel(err)) {
       console.log('\n\nSetup cancelled.');

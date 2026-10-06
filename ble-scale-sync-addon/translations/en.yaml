@@ -40,8 +40,10 @@ configuration:
       above. Sends your weight anchor (last known weight, or the middle of
       your weight range) twice right after the start command, as the
       Arboleaf vendor app does, and acknowledges live weight frames with their
-      own weight. Leave empty unless your QN scale completes the whole
-      handshake in the log and then reports no weight at all; then set true.
+      own weight. On the 19-byte Arboleaf dialect it also sends your age and
+      height as the app does. Leave empty unless your QN scale completes the
+      whole handshake in the log and then reports no weight at all; then set
+      true.
   qn_a4_prelude:
     name: QN A4 prelude
     description: >-
@@ -81,11 +83,25 @@ configuration:
     description: >-
       Built-in Bluetooth only. After every connection to the scale the add-on
       switches the Bluetooth adapter off and on again, which clears a stuck
-      scanning state some Raspberry Pi adapters fall into. Leave it on unless
-      you are testing whether that power-cycle is what makes a paired scale
-      reject the next connection. Turning it off also stops the brief adapter
-      drop that other Home Assistant Bluetooth integrations see after each
-      weigh-in.
+      scanning state some Raspberry Pi adapters fall into. Leave it on. It was
+      not the cause of the Beurer BF915 re-pairing in #417; for a scale that
+      asks to pair again before every weigh-in, the Documentation tab has a
+      section of that title. Turning it
+      off stops the brief adapter drop that other Home Assistant Bluetooth
+      integrations see after each weigh-in, at the risk of that stuck scanning
+      state.
+  adapter_privacy:
+    name: Pair with a host identity key (LE privacy)
+    description: >-
+      Built-in Bluetooth only. For Beurer scales that ask you to press SET and
+      pair again before every weigh-in. Turns on LE privacy on the Bluetooth
+      adapter, with a key derived from its address, so the scale keeps the
+      pairing. This affects the whole adapter: every Bluetooth LE connection
+      it makes, including Home Assistant's own Bluetooth integration on the
+      same adapter, uses a random address, and other paired LE devices may
+      need pairing again. A second adapter set under ble_adapter avoids that.
+      After turning it on, remove the scale once (bluetoothctl remove) and pair
+      it through the add-on. Leave it off otherwise.
   proxy_liveness_timeout_min:
     name: Proxy silence before restart (minutes)
     description: >-

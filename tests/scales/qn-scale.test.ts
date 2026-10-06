@@ -5,6 +5,7 @@ import {
   buildMeasurementTrigger,
   buildTimeSync,
   buildConfig,
+  buildUserProfileFrame,
 } from '../../src/scales/qn-scale/index.js';
 import { bleLog } from '../../src/ble/types.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
@@ -877,7 +878,7 @@ describe('QnScaleAdapter', () => {
   });
 
   describe('extended-dialect result frames (#235)', () => {
-    // Real 20-byte extended scale-info frame from @hedoric's GE CS 10 G capture.
+    // Real 20-byte extended scale-info frame from a reporter's GE CS 10 G capture (#235).
     // byte[1] == 0x14 (20) marks the long frame; length 20 sets the extended
     // dialect, which is what gates the 0xB4/0xB1 decode.
     const EXT_INFO = Buffer.from('1214ff4ec70e0007ff140f4200020503e06f2b37', 'hex');
@@ -1720,7 +1721,7 @@ describe('AE02 dispatch (#75, #235)', () => {
       expect(start).toEqual([0x22, 0x06, 0x00, 0x00, 0x03, 0x2b]);
     });
 
-    /** Real 19-byte 0x12 from an Arboleaf, posted in #75 by @roberfernandez. */
+    /** Real 19-byte 0x12 from an Arboleaf, posted in #75 by a reporter. */
     function makeArboleafScaleInfo(): Buffer {
       return Buffer.from([
         0x12, 0x13, 0xff, 0x54, 0x0b, 0x04, 0x00, 0x07, 0xff, 0x15, 0x0f, 0x27, 0x00, 0x02, 0x05,
@@ -1728,7 +1729,7 @@ describe('AE02 dispatch (#75, #235)', () => {
       ]);
     }
 
-    // The same Arboleaf unit, from @roberfernandez's Android btsnoop of a
+    // The same Arboleaf unit, from a reporter's Android btsnoop of a
     // complete vendor-app weigh-in posted in #331 on 2026-09-29. Byte for byte
     // from the capture; [13] changes between sessions of this one unit.
     const ARBOLEAF_2A_INFO = Buffer.from([
@@ -2041,14 +2042,163 @@ describe('AE02 dispatch (#75, #235)', () => {
       // between the copies, so the second reaches the scale after its ack.
       expect(timed[startIndex + 1].at - timed[startIndex].at).toBeGreaterThanOrEqual(75);
       expect(timed[startIndex + 2].at - timed[startIndex + 1].at).toBeGreaterThanOrEqual(150);
-      // Before START only openScale's ready-time placeholder, age 30 from the
-      // profile, and nothing at all between the second A00D frame and START.
+      // No A2 at all before START, as in the capture (#331, D033).
       const beforeStart = writes.slice(0, startIndex).filter((w) => w[0] === 0xa2);
-      expect(beforeStart).toEqual([[0xa2, 0x06, 0x01, 0x32, 0x1e, 0xf9]]);
+      expect(beforeStart).toEqual([]);
       const a00d2 = writes.findIndex((w) => w[0] === 0xa0 && w[2] === 0x02);
       expect(a00d2).toBeGreaterThanOrEqual(0);
       expect(writes.slice(a00d2, startIndex).filter((w) => w[0] === 0xa2)).toEqual([]);
       expect(writes[startIndex - 1][0]).not.toBe(0xa2);
+    });
+
+    /** openScale's constant A00D #2 (age 33, 1720 mm), which every other path sends. */
+    const OPENSCALE_PROFILE = [
+      0xa0, 0x0d, 0x02, 0x01, 0x00, 0x08, 0x00, 0x21, 0x06, 0xb8, 0x04, 0x02, 0x9d,
+    ];
+    /** The profile frame of capture 2a, with the app user's configured age and height. */
+    const PROFILE_2A = [
+      0xa0, 0x0d, 0x02, 0x01, 0x03, 0xe8, 0x00, 0x33, 0x07, 0x1c, 0x04, 0x02, 0xf7,
+    ];
+
+    // #331: with qn_weight_ack on the 19-byte dialect, the A00D, START and A2
+    // frames from the first A00D through the second anchor match what the
+    // capture shows the app writing, given the same profile and report byte.
+    // The harness feeds 0x12, 0x14 and 0x21 back to back, so AE01 and 0x13
+    // writes interleave; only the FFF2 frames the capture lists are compared.
+    it('sends capture 2a from the first A00D frame on, given the same profile', async () => {
+      const adapter = makeAdapter();
+      adapter.configure({ qnWeightAck: true, qnReportByte: 0xfe });
+      const writes = await driveHandshake(
+        adapter,
+        ARBOLEAF_2A_INFO,
+        defaultProfile({ age: 51, height: 182, lastKnownWeight: 74.05 }),
+        arboleaf2a,
+      );
+      const first = writes.findIndex((w) => w[0] === 0xa0);
+      const sequence = writes
+        .slice(first)
+        .filter((w) => w[0] === 0xa0 || w[0] === 0x22 || w[0] === 0xa2);
+      expect(sequence).toEqual([
+        [0xa0, 0x0d, 0x04, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xaf],
+        PROFILE_2A,
+        START_FF,
+        ANCHOR_2A,
+        ANCHOR_2A,
+      ]);
+    });
+
+    it.each([
+      ['18-byte es26m', () => makeEs26mScaleInfo()],
+      ['20-byte extended', () => makeExtendedScaleInfo()],
+      [
+        '11-byte classic',
+        () => {
+          const info = Buffer.alloc(11);
+          info[0] = 0x12;
+          info[2] = 0xab;
+          info[10] = 1;
+          return info;
+        },
+      ],
+    ])('keeps openScale profile frame on the %s dialect with the ack on', async (_name, info) => {
+      const adapter = makeAdapter();
+      adapter.configure({ qnWeightAck: true });
+      const writes = await driveHandshake(adapter, info(), defaultProfile({ lastKnownWeight: 76 }));
+      expect(writes.filter((w) => w[0] === 0xa0 && w[2] === 0x02)).toEqual([OPENSCALE_PROFILE]);
+    });
+
+    /** Feed frames with time in between; `advance` runs the fake clock after the frame. */
+    async function driveSteps(
+      adapter: QnScaleAdapter,
+      profile: UserProfile,
+      steps: Array<{ frame?: Buffer; advance: number }>,
+    ): Promise<number[][]> {
+      vi.useFakeTimers();
+      try {
+        const writes: number[][] = [];
+        const ctx = {
+          write: async (_uuid: string, data: Buffer | number[]) => {
+            writes.push([...data]);
+          },
+          read: async () => Buffer.alloc(0),
+          subscribe: async () => {},
+          profile,
+          deviceAddress: '',
+          availableChars: new Set<string>(),
+        } as unknown as ConnectionContext;
+        adapter.onSessionStart?.();
+        await adapter.onConnected(ctx);
+        for (const step of steps) {
+          if (step.frame) adapter.parseNotification(step.frame);
+          await vi.advanceTimersByTimeAsync(step.advance);
+        }
+        return writes;
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+
+    const preStartA2 = (writes: number[][]): number[][] => {
+      const startIndex = writes.findIndex((w) => w[0] === 0x22);
+      return writes.slice(0, startIndex).filter((w) => w[0] === 0xa2);
+    };
+
+    // A session whose 0x12 is lost runs the fallback handshake with openScale's
+    // frames. A 19-byte 0x12 that shows up after its ready step must not switch
+    // the profile frame alone, or the scale gets half of each sequence.
+    it('keeps both openScale frames when the 19-byte 0x12 arrives after a fallback ready', async () => {
+      const adapter = makeAdapter();
+      adapter.configure({ qnWeightAck: true });
+      const writes = await driveSteps(adapter, defaultProfile({ age: 51, height: 182 }), [
+        { advance: 2701 },
+        { frame: ARBOLEAF_2A_INFO, advance: 3000 },
+      ]);
+      expect(writes.filter((w) => w[0] === 0xa0 && w[2] === 0x02)).toEqual([OPENSCALE_PROFILE]);
+      expect(preStartA2(writes)).toEqual([[0xa2, 0x06, 0x01, 0x32, 0x33, 0x0e]]);
+    });
+
+    // Same rule the other way round: a 0x21 ahead of the 0x14 decides first.
+    it('takes both frames from one decision when 0x21 comes before 0x14', async () => {
+      const adapter = makeAdapter();
+      adapter.configure({ qnWeightAck: true });
+      const writes = await driveSteps(adapter, defaultProfile({ age: 51, height: 182 }), [
+        { frame: ARBOLEAF_2A_INFO, advance: 0 },
+        { frame: ARBOLEAF_2A_CONFIG_REQ, advance: 300 },
+        { frame: ARBOLEAF_2A_READY, advance: 2000 },
+      ]);
+      expect(writes.filter((w) => w[0] === 0xa0 && w[2] === 0x02)).toEqual([PROFILE_2A]);
+      expect(preStartA2(writes)).toEqual([]);
+    });
+
+    // The classic branch accepts any length when [1] is not the frame length,
+    // so a 19-byte classic frame must not pass for the Arboleaf dialect.
+    // Synthetic, like the other classic frames in this file: no classic
+    // capture exists.
+    it('keeps openScale frames for a 19-byte classic 0x12', async () => {
+      const info = Buffer.alloc(19);
+      info[0] = 0x12;
+      info[2] = 0xab;
+      info[10] = 1;
+      const adapter = makeAdapter();
+      adapter.configure({ qnWeightAck: true });
+      const writes = await driveHandshake(adapter, info, defaultProfile({ age: 51, height: 182 }));
+      expect(writes.filter((w) => w[0] === 0xa0 && w[2] === 0x02)).toEqual([OPENSCALE_PROFILE]);
+      expect(preStartA2(writes)).toHaveLength(1);
+    });
+
+    it('keeps openScale profile frame and ready-time A2 on the 19-byte dialect without the ack', async () => {
+      const adapter = makeAdapter();
+      const writes = await driveHandshake(
+        adapter,
+        ARBOLEAF_2A_INFO,
+        defaultProfile({ age: 51, height: 182 }),
+        arboleaf2a,
+      );
+      expect(writes.filter((w) => w[0] === 0xa0 && w[2] === 0x02)).toEqual([OPENSCALE_PROFILE]);
+      const startIndex = writes.findIndex((w) => w[0] === 0x22);
+      expect(writes.slice(0, startIndex).filter((w) => w[0] === 0xa2)).toEqual([
+        [0xa2, 0x06, 0x01, 0x32, 0x33, 0x0e],
+      ]);
     });
 
     it.each([
@@ -2752,5 +2902,29 @@ describe('QN per-session reset ordering (#406)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('buildUserProfileFrame (#331)', () => {
+  // Both vendor-app captures, different apps and scales (#331, #235).
+  it('reproduces the GE and Arboleaf app profile frames', () => {
+    expect(buildUserProfileFrame(51, 182)).toEqual([
+      0xa0, 0x0d, 0x02, 0x01, 0x03, 0xe8, 0x00, 0x33, 0x07, 0x1c, 0x04, 0x02, 0xf7,
+    ]);
+    expect(buildUserProfileFrame(26, 193)).toEqual([
+      0xa0, 0x0d, 0x02, 0x01, 0x03, 0xe8, 0x00, 0x1a, 0x07, 0x8a, 0x04, 0x02, 0x4c,
+    ]);
+  });
+
+  it('rounds the height to whole millimetres and clamps the age to a byte', () => {
+    const f = buildUserProfileFrame(300, 182.04);
+    expect(f[7]).toBe(0xff);
+    expect([f[8], f[9]]).toEqual([0x07, 0x1c]);
+  });
+
+  it("falls back to openScale's age and height for a non-finite input", () => {
+    const f = buildUserProfileFrame(Number.NaN, Number.POSITIVE_INFINITY);
+    expect(f[7]).toBe(33);
+    expect((f[8] << 8) | f[9]).toBe(1720);
   });
 });

@@ -62,7 +62,6 @@ function editContext(answers: Array<[RegExp, ScriptedAnswer]>) {
     isEditMode: true,
     nonInteractive: false,
     platform: { os: 'linux', arch: 'x64', hasDocker: false, hasPython: false, pythonCommand: null },
-    stepHistory: [],
     prompts: scripted.prompts,
   };
   return { ctx, ...scripted };
