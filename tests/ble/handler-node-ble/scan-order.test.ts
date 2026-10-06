@@ -77,6 +77,9 @@ const fakeDevice = {
   isPaired: async () => true,
 };
 
+/** False: auto-discovery finds no scale. */
+let autoDiscoverFinds = true;
+
 /** When set, the next waitForRawReading waits for it. */
 let holdNextReading: Promise<void> | null = null;
 
@@ -116,11 +119,10 @@ vi.mock('../../../src/ble/handler-node-ble/discovery.js', () => ({
   removeDevice: record('removeDevice', async () => {}),
   stopDiscoveryAndQuiesce: record('stopDiscoveryAndQuiesce', async () => {}),
   notifyDiscoveryStopped: record('notifyDiscoveryStopped'),
-  autoDiscover: record('autoDiscover', async () => ({
-    device: fakeDevice,
-    adapter: makeAdapter(),
-    mac: 'AA:BB:CC:DD:EE:FF',
-  })),
+  autoDiscover: record('autoDiscover', async () => {
+    if (autoDiscoverFinds === false) throw new Error('No recognized scale found within 120s');
+    return { device: fakeDevice, adapter: makeAdapter(), mac: 'AA:BB:CC:DD:EE:FF' };
+  }),
 }));
 
 vi.mock('../../../src/ble/handler-node-ble/device-object.js', () => ({
@@ -159,6 +161,23 @@ vi.mock('../../../src/ble/shared.js', async (importOriginal) => {
     findMissingCharacteristics: record('findMissingCharacteristics', () => []),
   };
 });
+
+// The watchdog has its own tests over the BlueZ model. Here it only reports
+// the restarts a test says it made, to check that scan.ts hands them to the
+// failure classification.
+let watchdogRestarts = 0;
+vi.mock('../../../src/ble/handler-node-ble/scan-watchdog.js', () => ({
+  withScanActivityWatchdog: async (
+    _adapter: unknown,
+    _signal: unknown,
+    wait: () => Promise<unknown>,
+    scanWatch?: { restarts: number },
+  ) => {
+    if (scanWatch) scanWatch.restarts += watchdogRestarts;
+    return wait();
+  },
+  resetScanActivityBackoff: () => {},
+}));
 
 /** A scale adapter that claims everything, so resolveAdapter stays real. */
 function makeAdapter(overrides: Partial<ScaleAdapter> = {}): ScaleAdapter {
@@ -538,5 +557,68 @@ describe('scanAndReadRaw with ble.adapter_privacy (#417)', () => {
     const seen = await runWith({});
     expect(ctl.calls).toEqual([]);
     expect(seen).toContain('connectWithRecovery');
+  });
+});
+
+describe('scanAndReadRaw hands the watchdog restarts to the failure classification', () => {
+  const waitDevice = fakeAdapter.waitDevice;
+
+  beforeEach(() => {
+    calls.length = 0;
+    watchdogRestarts = 0;
+    vi.useFakeTimers();
+    // The scale never shows up, and the fake adapter lists no devices, so the
+    // liveness probe hears nothing.
+    fakeAdapter.waitDevice = async () => {
+      calls.push('waitDevice');
+      throw new Error('Device not found within 120s');
+    };
+  });
+  afterEach(() => {
+    fakeAdapter.waitDevice = waitDevice;
+    autoDiscoverFinds = true;
+    vi.useRealTimers();
+  });
+
+  /** A cycle that finds nothing: the MAC wait, or auto-discovery when `auto`. */
+  async function failedCycle(auto = false): Promise<unknown> {
+    autoDiscoverFinds = !auto;
+    const promise = scanAndReadRaw({
+      targetMac: auto ? undefined : 'AA:BB:CC:DD:EE:FF',
+      adapters: [makeAdapter()],
+      profile: defaultProfile(),
+    }).catch((e: unknown) => e);
+    let done = false;
+    void promise.then(() => (done = true));
+    while (!done) await vi.advanceTimersByTimeAsync(250);
+    return promise;
+  }
+
+  it('drops the latch after a deaf cycle the watchdog did not restart', async () => {
+    const err = await failedCycle();
+    expect(bleFailureKind(err)).toBe('wedge-suspect');
+    expect(calls).toContain('notifyDiscoveryStopped');
+  });
+
+  it('keeps the latch when the watchdog restarted the scan in this wait', async () => {
+    watchdogRestarts = 1;
+    const err = await failedCycle();
+    expect(bleFailureKind(err)).toBe('wedge-suspect');
+    expect(calls).not.toContain('notifyDiscoveryStopped');
+  });
+
+  it('drops the latch after a deaf auto-discovery the watchdog did not restart', async () => {
+    const err = await failedCycle(true);
+    expect(calls).toContain('autoDiscover');
+    expect(bleFailureKind(err)).toBe('wedge-suspect');
+    expect(calls).toContain('notifyDiscoveryStopped');
+  });
+
+  it('keeps the latch when the watchdog restarted the scan during auto-discovery', async () => {
+    watchdogRestarts = 1;
+    const err = await failedCycle(true);
+    expect(calls).toContain('autoDiscover');
+    expect(bleFailureKind(err)).toBe('wedge-suspect');
+    expect(calls).not.toContain('notifyDiscoveryStopped');
   });
 });

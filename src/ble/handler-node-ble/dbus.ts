@@ -33,12 +33,27 @@ export interface BluezHelper {
   set(name: string, value: Variant): Promise<void>;
   callMethod(method: string, ...args: unknown[]): Promise<unknown>;
   object: string;
+  /** The dbus-next bus the object lives on; node-ble keeps it untyped. */
+  dbus?: RawCallBus;
+}
+
+/** The one MessageBus method a raw call needs: no proxy, no match rule. */
+export interface RawCallBus {
+  call(msg: unknown): Promise<{ body: unknown[] } | null>;
+}
+
+export interface DbusMessageFields {
+  destination: string;
+  path: string;
+  interface: string;
+  member: string;
 }
 
 type WithHelper<T> = T & { helper: BluezHelper };
 
 export interface DbusNextModule {
   Variant: new <T>(signature: string, value: T) => Variant<T>;
+  Message: new (fields: DbusMessageFields) => unknown;
 }
 
 export const helperOf = <T>(obj: T): BluezHelper => (obj as WithHelper<T>).helper;

@@ -46,6 +46,11 @@ import {
   stopDiscoveryAndQuiesce,
 } from './discovery.js';
 import { connectWithRecovery } from './connect.js';
+import {
+  withScanActivityWatchdog,
+  resetScanActivityBackoff,
+  type ScanWatch,
+} from './scan-watchdog.js';
 import { logAdvertisementSnapshot } from './device-object.js';
 import { wrapDevice } from './gatt.js';
 import { broadcastScanNodeBle } from './broadcast.js';
@@ -285,6 +290,8 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   // Latest resolved adapter handle, captured for the failure-classification
   // liveness probe (#213). Stays undefined if getAdapter never succeeds.
   let probeAdapter: Adapter | undefined;
+  /** What the scan activity watchdog did in this cycle's wait, for the same classification. */
+  const scanWatch: ScanWatch = { restarts: 0 };
 
   // Publish this cycle's pairing target before the first getAdapter(), which is
   // where the agent registers. Stored as a closure rather than a value so a
@@ -329,7 +336,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       await removeDevice(btAdapter, targetMac);
     }
 
-    const discoveryResult = await startDiscoverySafe(btAdapter, bleAdapter);
+    const discoveryResult = await startDiscoverySafe(btAdapter, bleAdapter, { abortSignal });
     if (discoveryResult) btAdapter = discoveryResult;
     probeAdapter = btAdapter;
 
@@ -341,7 +348,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       const mac = formatMac(targetMac);
       bleLog.info('Scanning for device...');
 
-      device = await waitForTargetDevice(btAdapter, mac, abortSignal);
+      device = await waitForTargetDevice(btAdapter, mac, abortSignal, scanWatch);
 
       const { name, advert, preMatchedAdapter } = await resolvePreConnectAdapter(
         device,
@@ -357,11 +364,13 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       ) {
         matchedAdapter = preMatchedAdapter;
         bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
-        return await broadcastScanNodeBle(matchedAdapter, btAdapter, device, mac, {
+        const reading = await broadcastScanNodeBle(matchedAdapter, btAdapter, device, mac, {
           abortSignal,
           onLiveData,
           onLiveWeight,
         });
+        resetScanActivityBackoff();
+        return reading;
       }
 
       // Stop discovery before connecting. BlueZ on low-power devices (e.g. Pi Zero)
@@ -407,7 +416,13 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
     } else {
       // Auto-discovery: poll discovered devices, match by name, connect, verify
-      const result = await autoDiscover(btAdapter, adapters, abortSignal);
+      const scanAdapter = btAdapter;
+      const result = await withScanActivityWatchdog(
+        scanAdapter,
+        abortSignal,
+        () => autoDiscover(scanAdapter, adapters, abortSignal),
+        scanWatch,
+      );
       device = result.device;
       matchedAdapter = result.adapter;
       deviceMac = result.mac;
@@ -420,11 +435,13 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         (matchedAdapter.parseServiceData || matchedAdapter.parseBroadcast)
       ) {
         bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
-        return await broadcastScanNodeBle(matchedAdapter, btAdapter, device, result.mac, {
+        const reading = await broadcastScanNodeBle(matchedAdapter, btAdapter, device, result.mac, {
           abortSignal,
           onLiveData,
           onLiveWeight,
         });
+        resetScanActivityBackoff();
+        return reading;
       }
 
       // Stop discovery before connecting. BlueZ on low-power devices (e.g. Pi Zero)
@@ -479,6 +496,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       deviceName,
     });
     gattSucceeded = true;
+    resetScanActivityBackoff();
 
     // Same device path as the newer cycle's, so a late Disconnect here would
     // drop that cycle's link to the scale.
@@ -491,7 +509,12 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     }
     return raw;
   } catch (err) {
-    await classifyBleFailure(err, { gattAttempted, probeAdapter, abortSignal });
+    await classifyBleFailure(err, {
+      gattAttempted,
+      probeAdapter,
+      abortSignal,
+      scanRestarted: scanWatch.restarts > 0,
+    });
     throw err;
   } finally {
     await teardownSession({
