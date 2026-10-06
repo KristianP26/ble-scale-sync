@@ -28,6 +28,10 @@ export interface FakeController {
   llPrivacy: boolean;
   /** `power off` prints an error and changes nothing (no CAP_NET_ADMIN, say). */
   powerOffFails: boolean;
+  /** `power on` prints an error and changes nothing. */
+  powerOnFails: boolean;
+  /** `info` prints an error and no settings, whatever the adapter is doing. */
+  infoFails: boolean;
   /** Make execFile itself fail the privacy command, the way Node reports it. */
   privacyExecError: boolean;
   /** Exit 0 with a red error line that repeats the key, which real btmgmt does not do. */
@@ -45,6 +49,8 @@ export function makeController(overrides: Partial<FakeController> = {}): FakeCon
     supportsPrivacy: true,
     llPrivacy: false,
     powerOffFails: false,
+    powerOnFails: false,
+    infoFails: false,
     privacyExecError: false,
     privacyEchoesIrk: false,
     calls: [],
@@ -74,6 +80,9 @@ export function runFakeBtmgmt(c: FakeController, args: string[]): Result {
   const cmd = args[2];
   const ok = (stdout: string): Result => ({ err: null, stdout });
   if (cmd === 'info') {
+    if (c.infoFails) {
+      return ok(`${RED}Reading hci${idx} info failed with status 0x03 (Failed)${COLOR_OFF}\n`);
+    }
     const supported = `powered connectable bondable ssp br/edr le advertising secure-conn${
       c.supportsPrivacy ? ' privacy' : ''
     } ll-privacy configuration static-addr`;
@@ -90,6 +99,9 @@ export function runFakeBtmgmt(c: FakeController, args: string[]): Result {
       return ok(
         `${RED}Set Powered for hci${idx} failed with status 0x14 (Permission Denied)${COLOR_OFF}\n`,
       );
+    }
+    if (args[3] === 'on' && c.powerOnFails) {
+      return ok(`${RED}Set Powered for hci${idx} failed with status 0x03 (Failed)${COLOR_OFF}\n`);
     }
     c.powered = args[3] === 'on';
     return ok(`hci${idx} Set Powered complete, settings: ${settings(c)} \n`);

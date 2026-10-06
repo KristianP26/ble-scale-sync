@@ -13,6 +13,7 @@ import type {
 } from '../config/schema.js';
 import { createLogger } from '../logger.js';
 import { errMsg } from '../utils/error.js';
+import { stripAnsi, parseBtmgmtSettings, btmgmtErrorLine } from './btmgmt.js';
 export { errMsg };
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -332,24 +333,87 @@ export async function withIdleTimeout<T>(
   }
 }
 
+/** Set once the first refused btmgmt power-cycle has been reported at info. */
+let btmgmtRefusalAnnounced = false;
+
+/** Test seam: the announcement above is per process on purpose. */
+export function _resetBtmgmtResetStateForTests(): void {
+  btmgmtRefusalAnnounced = false;
+}
+
+/**
+ * Power-cycle the controller with `btmgmt power off` / `power on`.
+ *
+ * True only when the adapter really went down and came back. btmgmt's exit
+ * status cannot tell: it exits 0 when the kernel refuses the command, which is
+ * what happens without CAP_NET_ADMIN (`Permission Denied`), and prints the
+ * refusal in red on stdout. So the outcome is read from that output and from a
+ * separate `btmgmt info`, the same way ble.adapter_privacy checks its own
+ * writes. Reporting a refused reset as done made the btmgmt recovery tier
+ * count as a success and reset the D-Bus connection for nothing, and the
+ * preemptive reset after each session claimed a power-cycle that never ran.
+ */
 export async function resetAdapterBtmgmt(adapterIndex = 0): Promise<boolean> {
   if (process.platform !== 'linux') return false;
+  const idx = String(adapterIndex);
+  let execFile: typeof import('node:child_process').execFile;
   try {
-    const { execFile } = await import('node:child_process');
-    const { promisify } = await import('node:util');
-    const run = promisify(execFile);
-    const idx = String(adapterIndex);
-    await run('btmgmt', ['--index', idx, 'power', 'off'], { timeout: 5000 });
-    bleLog.debug('btmgmt: adapter powered off');
-    await sleep(500);
-    await run('btmgmt', ['--index', idx, 'power', 'on'], { timeout: 5000 });
-    bleLog.debug('btmgmt: adapter powered on');
-    await sleep(2000);
-    return true;
+    ({ execFile } = await import('node:child_process'));
   } catch (err) {
     bleLog.debug(`btmgmt reset failed: ${errMsg(err)}`);
     return false;
   }
+  // Never rejects: a spawn error, non-zero exit or timeout comes back as `failure`.
+  const run = (args: string[]): Promise<{ out: string; failure?: string }> =>
+    new Promise((resolve) => {
+      try {
+        execFile('btmgmt', args, { timeout: 5000, encoding: 'utf8' }, (err, stdout, stderr) => {
+          const out = stripAnsi(`${stdout ?? ''}${stderr ?? ''}`);
+          resolve(err ? { out, failure: errMsg(err) } : { out });
+        });
+      } catch (err) {
+        resolve({ out: '', failure: errMsg(err) });
+      }
+    });
+  const poweredNow = async (): Promise<boolean | undefined> =>
+    parseBtmgmtSettings((await run(['--index', idx, 'info'])).out)?.current.includes('powered');
+  const refused = (why: string): false => {
+    const line = `btmgmt could not power-cycle hci${idx}: ${why}`;
+    if (btmgmtRefusalAnnounced) {
+      bleLog.debug(line);
+    } else {
+      btmgmtRefusalAnnounced = true;
+      bleLog.info(
+        `${line}. The adapter resets need btmgmt installed and allowed CAP_NET_ADMIN ` +
+          '(sudo setcap cap_net_admin+ep $(which btmgmt)); continuing without them.',
+      );
+    }
+    return false;
+  };
+
+  const off = await run(['--index', idx, 'power', 'off']);
+  const offError = off.failure ?? btmgmtErrorLine(off.out);
+  // The state decides, not the printed result: an adapter that was already
+  // off still has to be powered on. Only an unreadable `info` leaves the
+  // printed result as the evidence.
+  const poweredAfterOff = await poweredNow();
+  if (poweredAfterOff === true || (poweredAfterOff === undefined && offError)) {
+    return refused(offError ?? 'the adapter is still powered after power off');
+  }
+  bleLog.debug('btmgmt: adapter powered off');
+  await sleep(500);
+  const on = await run(['--index', idx, 'power', 'on']);
+  await sleep(2000);
+  const onError = on.failure ?? btmgmtErrorLine(on.out);
+  const poweredAfterOn = await poweredNow();
+  if (poweredAfterOn === false || (poweredAfterOn === undefined && onError)) {
+    bleLog.warn(
+      `btmgmt power on for hci${idx} did not take (${onError ?? 'the adapter reports not powered'}).`,
+    );
+    return false;
+  }
+  bleLog.debug('btmgmt: adapter powered on');
+  return true;
 }
 
 /** Reset Bluetooth adapter via rfkill (RF-level block/unblock). */
