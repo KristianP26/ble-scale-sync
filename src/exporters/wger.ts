@@ -69,9 +69,15 @@ interface UserProfileResponse {
   results?: Array<{ weight_unit?: unknown }>;
 }
 
+/**
+ * Opaque, only passed back to the server: a UUID string since wger 2.6, an
+ * integer before.
+ */
+type WgerCategoryId = string | number;
+
 interface CategoryListResponse {
   next: string | null;
-  results: Array<{ id: number; name: string; unit: string }>;
+  results: Array<{ id: WgerCategoryId; name: string; unit: string }>;
 }
 
 export class WgerExporter implements Exporter {
@@ -80,7 +86,7 @@ export class WgerExporter implements Exporter {
   private readonly config: WgerConfig;
   private readonly apiBase: string;
   /** name -> category id, resolved lazily on first export and cached. */
-  private categories: Map<string, number> | null = null;
+  private categories: Map<string, WgerCategoryId> | null = null;
 
   constructor(config: WgerConfig) {
     this.config = config;
@@ -202,10 +208,10 @@ export class WgerExporter implements Exporter {
   }
 
   /** List existing measurement categories, create any missing ones, cache name->id. */
-  private async resolveCategories(): Promise<Map<string, number>> {
+  private async resolveCategories(): Promise<Map<string, WgerCategoryId>> {
     if (this.categories) return this.categories;
 
-    const map = new Map<string, number>();
+    const map = new Map<string, WgerCategoryId>();
     let url: string | null = `${this.apiBase}/measurement-category/`;
     let pages = 0;
     while (url && pages < 50) {
@@ -235,7 +241,7 @@ export class WgerExporter implements Exporter {
       if (!response.ok) {
         throw httpError(response.status);
       }
-      const created = (await response.json()) as { id: number };
+      const created = (await response.json()) as { id: WgerCategoryId };
       map.set(cat.name, created.id);
     }
 
