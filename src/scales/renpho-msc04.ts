@@ -18,12 +18,12 @@ import {
   type ScaleBodyComp,
 } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
-import { bleLog } from '../ble/types.js';
+import { bleLog, errMsg } from '../ble/types.js';
 
 // ─── Renpho R-MSC04 (55AA framed, vendor service 0x1A10) ────────────────────
 
 const CHR_NOTIFY = uuid16(0x2a10); // live weight stream (cmd 0x21)
-const CHR_WRITE = uuid16(0x2a11); // send the 55AA start command
+const CHR_WRITE = uuid16(0x2a11); // b2 profile, b3 clock and the b0 status acks (Write only)
 const CHR_INDICATE = uuid16(0x2a12); // status, final weight, composition record
 
 const HDR0 = 0x55;
@@ -40,10 +40,6 @@ const FRAME_OVERHEAD = 6;
 // Declared length of a 0x25 record (seq + 35 bytes), 42 bytes on the wire.
 const RECORD_LEN = 0x24;
 
-// Start/unlock command, byte-identical to the ES-CS20M unlock, which is what
-// makes the R-MSC04 begin streaming. Self-consistent 55AA frame (checksum 0x94).
-const START_COMMAND = [0x55, 0xaa, 0x90, 0x00, 0x04, 0x01, 0x00, 0x00, 0x00, 0x94];
-
 /**
  * How long the link stays open after the settled weight for the 0x25 record.
  * In the #117 capture the first fragment arrived 15.9 s after the 0x24 frame,
@@ -57,7 +53,8 @@ const RECORD_WEIGHT_TOLERANCE_KG = 0.5;
 /**
  * The scale's body fat and BMI are presumably computed from the profile last
  * written to the scale: in the #117 capture the Renpho app writes a b2 profile
- * (height 187.0 cm) on every connection, and we write none. That profile may
+ * (height 187.0 cm) on every connection. In a session where we wrote our own
+ * guest b2 the record is not exported at all (D038); otherwise the profile may
  * be another household member's. The BMI the scale reports gives the height it
  * used away; a larger gap than this to the user's configured height means the
  * scale's figures are not about this user.
@@ -88,6 +85,12 @@ interface CompositionRecord {
   impedance100kHz: number[];
 }
 
+/** A record pinned to its reading, and whether our guest b2 went out in that session. */
+interface PinnedRecord {
+  rec: CompositionRecord;
+  guestProfile: boolean;
+}
+
 function isBareFrame(data: Buffer): boolean {
   return data.length >= 2 && data[0] === HDR0 && data[1] === HDR1;
 }
@@ -110,6 +113,179 @@ function validateFrame(data: Buffer): { cmd: number; len: number; frameLen: numb
 
 function hex(data: Buffer): string {
   return data.toString('hex');
+}
+
+// ─── Connect writes: b2 guest profile and b3 clock (#434, D038) ─────────────
+//
+// The two frames a working ESPHome client on #117 writes after connecting.
+// The Renpho app writes them too, together with b7 (the user's first name)
+// and b8 (settings, not decoded), which this adapter never sends.
+
+const CMD_PROFILE = 0xb2;
+const CMD_CLOCK = 0xb3;
+
+/** b2 payload length: seq, slot, height (2), last weight (2), [11..13]. */
+const PROFILE_LEN = 9;
+/**
+ * Slot 09, the one the ESPHome client writes. The app writes the user's
+ * registered slot (01, 02) there. That 09 is a guest slot the scale does not
+ * keep as a user is a hypothesis carried over from the ES-CS20M 0x96 form.
+ */
+const GUEST_SLOT = 0x09;
+/**
+ * b2 [11..13] verbatim from the ESPHome client. [11] is not decoded (most
+ * likely sex and age; "0x80 | age" is refuted by two profiles of known age),
+ * which is why the scale's figures from such a session are not exported.
+ */
+const GUEST_TAIL = [0xa9, 0xff, 0x02];
+
+/** b3 payload length: seq, constant (3), Unix seconds (4), zone minutes (2), 00. */
+const CLOCK_LEN = 11;
+/** b3 [6..8], the same in both app captures and both client implementations. */
+const CLOCK_CONSTANT = [0x07, 0x01, 0x01];
+/**
+ * b3 [13..14] is the zone in minutes east of UTC (600 in both app captures,
+ * taken at UTC+10). No capture west of UTC exists, so its encoding there is
+ * unknown and such a zone is sent as 0.
+ */
+const MAX_ZONE_MINUTES = 840;
+
+/** Height in 0.1 cm sent when the profile has none in range: 170.0 cm, as ES-CS20M. */
+const FALLBACK_HEIGHT_TENTHS = 1700;
+const MIN_HEIGHT_TENTHS = 500;
+const MAX_HEIGHT_TENTHS = 2500;
+/** Last weight in 0.01 kg sent when the profile has none: 70.00 kg. Never 0, as ES-CS20M. */
+const FALLBACK_WEIGHT_CG = 7000;
+const MIN_WEIGHT_CG = 50;
+const MAX_WEIGHT_CG = 30000;
+
+function checksum(bytes: Uint8Array | number[]): number {
+  let sum = 0;
+  for (const b of bytes) sum += b;
+  return sum & 0xff;
+}
+
+function buildFrame(cmd: number, payload: number[]): Buffer {
+  const body = [HDR0, HDR1, cmd, (payload.length >> 8) & 0xff, payload.length & 0xff, ...payload];
+  return Buffer.from([...body, checksum(body)]);
+}
+
+/** The profile height in 0.1 cm, or null when it is missing or out of range. */
+function heightTenths(profile: UserProfile): number | null {
+  const tenths = Math.round(profile.height * 10);
+  return Number.isFinite(tenths) && tenths >= MIN_HEIGHT_TENTHS && tenths <= MAX_HEIGHT_TENTHS
+    ? tenths
+    : null;
+}
+
+/** The profile's last known weight in 0.01 kg, or null when it has none in range. */
+function weightCg(profile: UserProfile): number | null {
+  const kg = profile.lastKnownWeight;
+  if (kg === undefined || !Number.isFinite(kg) || kg <= 0.5 || kg > 300) return null;
+  return Math.round(kg * 100);
+}
+
+/** The host's zone in minutes east of UTC, or null when the b3 frame cannot carry it. */
+function zoneMinutes(now: Date): number | null {
+  // getTimezoneOffset is positive WEST of Greenwich.
+  const east = -now.getTimezoneOffset();
+  return Number.isInteger(east) && east >= 0 && east <= MAX_ZONE_MINUTES ? east : null;
+}
+
+/**
+ * `b2` in the guest form: seq, slot 09, height in 0.1 cm and last weight in
+ * 0.01 kg (both u16 BE), then a9 ff 02. The seq is echoed in the 0x22 reply.
+ */
+export function buildGuestProfileFrame(seq: number, profile: UserProfile): Buffer {
+  const height = heightTenths(profile) ?? FALLBACK_HEIGHT_TENTHS;
+  const weight = weightCg(profile) ?? FALLBACK_WEIGHT_CG;
+  return buildFrame(CMD_PROFILE, [
+    seq & 0xff,
+    GUEST_SLOT,
+    (height >> 8) & 0xff,
+    height & 0xff,
+    (weight >> 8) & 0xff,
+    weight & 0xff,
+    ...GUEST_TAIL,
+  ]);
+}
+
+/**
+ * `b3`: seq, 07 01 01, Unix seconds (UTC) as u32 BE, the zone in minutes east
+ * of UTC as u16 BE (0 west of UTC, see MAX_ZONE_MINUTES), 00. The seq is echoed
+ * in the 0x23 reply.
+ */
+export function buildClockFrame(seq: number, now: Date): Buffer {
+  const seconds = Math.floor(now.getTime() / 1000) >>> 0;
+  const zone = zoneMinutes(now) ?? 0;
+  return buildFrame(CMD_CLOCK, [
+    seq & 0xff,
+    ...CLOCK_CONSTANT,
+    (seconds >>> 24) & 0xff,
+    (seconds >>> 16) & 0xff,
+    (seconds >>> 8) & 0xff,
+    seconds & 0xff,
+    (zone >> 8) & 0xff,
+    zone & 0xff,
+    0x00,
+  ]);
+}
+
+/**
+ * Throw unless `frame` is a b2 guest profile or a b3 clock this adapter is
+ * allowed to send.
+ *
+ * The builders cannot produce anything else; this is the backstop for when one
+ * of them changes. b2 in another slot would overwrite a user the Renpho app
+ * owns, and b7 (name), b8 (settings) and b6 (deletes a stored record) are never
+ * sent. The status acks go through buildAck, not through here. The length
+ * field and checksum are checked too, so a second frame cannot ride along
+ * behind an allowed one.
+ */
+export function assertAllowedWrite(frame: Buffer): void {
+  const refuse = (why: string): never => {
+    throw new Error(`Renpho R-MSC04: refusing to write ${why}`);
+  };
+  if (frame.length < FRAME_OVERHEAD || frame[0] !== HDR0 || frame[1] !== HDR1) {
+    refuse('a frame without the 55AA header');
+  }
+  const len = frame.readUInt16BE(3);
+  if (frame.length !== len + FRAME_OVERHEAD) refuse('a frame whose length field does not match');
+  if (checksum(frame.subarray(0, frame.length - 1)) !== frame[frame.length - 1]) {
+    refuse('a frame with a bad checksum');
+  }
+  const cmd = frame[2];
+  const p = frame.subarray(5, frame.length - 1);
+  switch (cmd) {
+    case CMD_PROFILE: {
+      const height = len === PROFILE_LEN ? p.readUInt16BE(2) : 0;
+      const weight = len === PROFILE_LEN ? p.readUInt16BE(4) : 0;
+      if (
+        len !== PROFILE_LEN ||
+        p[1] !== GUEST_SLOT ||
+        height < MIN_HEIGHT_TENTHS ||
+        height > MAX_HEIGHT_TENTHS ||
+        weight < MIN_WEIGHT_CG ||
+        weight > MAX_WEIGHT_CG ||
+        GUEST_TAIL.some((b, i) => p[6 + i] !== b)
+      ) {
+        refuse('a b2 other than the guest form');
+      }
+      return;
+    }
+    case CMD_CLOCK:
+      if (
+        len !== CLOCK_LEN ||
+        CLOCK_CONSTANT.some((b, i) => p[1 + i] !== b) ||
+        p.readUInt16BE(8) > MAX_ZONE_MINUTES ||
+        p[10] !== 0x00
+      ) {
+        refuse('a b3 other than the clock form');
+      }
+      return;
+    default:
+      refuse(`command 0x${cmd.toString(16).padStart(2, '0')}`);
+  }
 }
 
 /**
@@ -206,6 +382,13 @@ function decodeRecord(f: Buffer): CompositionRecord {
  * cmd 0x21 on notify 0x2A10; the final settled weight arrives as cmd 0x24 on
  * indicate 0x2A12. For both, weight = last two payload bytes, big-endian, / 100.
  *
+ * Right after connecting, the adapter writes a b2 guest profile and then a b3
+ * clock, each as a Write Request (0x2A11 is Write only), and no start
+ * command: neither app capture sends one, and with only the start command the
+ * scale dropped every one of our connections about 5.5 s after it was made,
+ * while it held the app for 49 s (#434, D038). The scale's 0x20 status frames
+ * are acked with b0 as the iOS app does.
+ *
  * Body composition is measured AFTER the weight settles. The scale reports
  * its progress as 0x20 status frames and then sends a 0x25 record, split
  * over three indications on 0x2A12 (#117 capture: 15.9 s after the 0x24
@@ -214,9 +397,11 @@ function decodeRecord(f: Buffer): CompositionRecord {
  * lands, or weight-only when none does. 0x26 records are stored history of
  * earlier weigh-ins and are never used.
  *
- * Of the record, only the scale's body fat and visceral fat are exported, and
- * only when the profile the scale computed them for matches the user (see
- * PROFILE_HEIGHT_TOLERANCE_CM). The segment impedances are logged at debug
+ * Of the record, only the scale's body fat and visceral fat are ever exported,
+ * and only from a session in which we did NOT write our guest b2 (its [11] is
+ * not decoded, so the scale may have computed them for the wrong sex or age;
+ * D038), and only when the profile the scale computed them for matches the
+ * user (see PROFILE_HEIGHT_TOLERANCE_CM). The segment impedances are logged at debug
  * level; no whole-body impedance is derived from them, so the reading keeps
  * impedance 0.
  *
@@ -264,7 +449,21 @@ export class RenphoMsc04Adapter
    * shared singleton, and on the watcher transports the next session can start
    * before computeMetrics() runs for this one.
    */
-  private readonly records = new ReadingComposition<CompositionRecord | null>();
+  private readonly records = new ReadingComposition<PinnedRecord | null>();
+
+  /** This session's context, so a write left over from a dead session never runs. */
+  private ctx: ConnectionContext | null = null;
+  /** A b2 write was attempted in this session: the scale's figures are not exported. */
+  private guestProfileSent = false;
+  /** Log the unsendable time zone once per adapter instance (one per process in production). */
+  private zoneLogged = false;
+
+  private readonly now: () => Date;
+
+  /** `now` is the clock the b3 frame carries; durations use Date.now(). */
+  constructor(now: () => Date = () => new Date()) {
+    this.now = now;
+  }
 
   matches(device: BleDeviceInfo): boolean {
     return matchesDescriptor(device, this.match);
@@ -283,6 +482,8 @@ export class RenphoMsc04Adapter
     this.finalReceived = false;
     this.finalWeight = 0;
     this.reassembler.reset();
+    this.ctx = null;
+    this.guestProfileSent = false;
   }
 
   async onConnected(ctx: ConnectionContext): Promise<void> {
@@ -292,10 +493,66 @@ export class RenphoMsc04Adapter
           'Likely a transient GATT discovery race. Try again.',
       );
     }
-    // Written WITHOUT response: the handler sends the identical ES-CS20M unlock
-    // without response (src/ble/shared.ts sendUnlock, lanes.write(.., false, 'unlock')).
-    await ctx.write(CHR_WRITE, START_COMMAND, false);
-    bleLog.debug('Renpho R-MSC04: start command sent');
+    this.ctx = ctx;
+    await this.writeGuestProfile(ctx, 0);
+    await this.writeClock(ctx, 1);
+  }
+
+  onSessionEnd(): void {
+    this.ctx = null;
+  }
+
+  /**
+   * The guest b2. Neither the frame nor the height or weight in it ever reaches
+   * the log: they are the first user's.
+   */
+  private async writeGuestProfile(owner: ConnectionContext, seq: number): Promise<void> {
+    const profile = owner.profile;
+    if (heightTenths(profile) === null) {
+      bleLog.debug('Renpho R-MSC04: no usable height for the guest profile, sending 170.0 cm');
+    }
+    if (weightCg(profile) === null) {
+      bleLog.debug('Renpho R-MSC04: no usable last weight for the guest profile, sending 70.00 kg');
+    }
+    await this.send(owner, () => buildGuestProfileFrame(seq, profile), 'guest profile (b2)', false);
+  }
+
+  private async writeClock(owner: ConnectionContext, seq: number): Promise<void> {
+    const now = this.now();
+    if (zoneMinutes(now) === null && !this.zoneLogged) {
+      this.zoneLogged = true;
+      bleLog.debug(
+        'Renpho R-MSC04: the host time zone is west of UTC or beyond UTC+14, ' +
+          'which the clock frame cannot carry; sending the time as UTC',
+      );
+    }
+    await this.send(owner, () => buildClockFrame(seq, now), 'clock (b3)', true);
+  }
+
+  /**
+   * One checked Write Request. Never throws: a refused or failed write is
+   * logged without its bytes, and the caller carries on with the next one.
+   */
+  private async send(
+    owner: ConnectionContext,
+    frame: () => Buffer,
+    label: string,
+    logBytes: boolean,
+  ): Promise<void> {
+    if (this.ctx !== owner) return;
+    const started = Date.now();
+    try {
+      const buf = frame();
+      assertAllowedWrite(buf);
+      if (buf[2] === CMD_PROFILE) this.guestProfileSent = true;
+      await owner.write(CHR_WRITE, buf, true);
+      bleLog.debug(
+        `Renpho R-MSC04: sent ${label}${logBytes ? ` [${hex(buf)}]` : ''} ` +
+          `in ${Date.now() - started} ms`,
+      );
+    } catch (e: unknown) {
+      if (this.ctx === owner) bleLog.warn(`Renpho R-MSC04: ${label} not sent: ${errMsg(e)}`);
+    }
   }
 
   parseCharNotification(_charUuid: string, data: Buffer): ScaleReading | null {
@@ -392,7 +649,7 @@ export class RenphoMsc04Adapter
     }
 
     const reading: ScaleReading = { weight: this.finalWeight, impedance: 0 };
-    this.records.pin(reading, rec);
+    this.records.pin(reading, { rec, guestProfile: this.guestProfileSent });
     bleLog.info(
       `Renpho R-MSC04: body composition received (fat ${rec.fatPercent} %, ` +
         `visceral ${rec.visceralFat})`,
@@ -428,8 +685,16 @@ export class RenphoMsc04Adapter
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    const rec = this.records.of(reading, null);
-    return buildPayload(reading.weight, 0, rec ? this.scaleComposition(rec, profile) : {}, profile);
+    const pinned = this.records.of(reading, null);
+    if (!pinned) return buildPayload(reading.weight, 0, {}, profile);
+    if (pinned.guestProfile) {
+      bleLog.info(
+        "Renpho R-MSC04: the scale's body fat and visceral fat were computed for the guest " +
+          'profile we sent, not exported (#434); using the estimate',
+      );
+      return buildPayload(reading.weight, 0, {}, profile);
+    }
+    return buildPayload(reading.weight, 0, this.scaleComposition(pinned.rec, profile), profile);
   }
 
   /** The scale's own figures, or {} (the profile estimate) when they are not this user's. */

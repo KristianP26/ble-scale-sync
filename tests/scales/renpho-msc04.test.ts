@@ -1,10 +1,19 @@
-import { describe, it, expect, vi } from 'vitest';
-import { RenphoMsc04Adapter } from '../../src/scales/renpho-msc04.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import {
+  RenphoMsc04Adapter,
+  assertAllowedWrite,
+  buildClockFrame,
+  buildGuestProfileFrame,
+} from '../../src/scales/renpho-msc04.js';
 import { adapters } from '../../src/scales/index.js';
 import { resolveAdapter } from '../../src/scales/resolve.js';
 import { uuid16, buildPayload } from '../../src/scales/body-comp-helpers.js';
 import { bleLog } from '../../src/ble/types.js';
-import type { ConnectionContext, ScaleReading } from '../../src/interfaces/scale-adapter.js';
+import type {
+  ConnectionContext,
+  ScaleReading,
+  UserProfile,
+} from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -13,7 +22,8 @@ import {
 
 const LIVE = Buffer.from('55aa210005010000255da8', 'hex'); // cmd 0x21 -> 95.65
 const FINAL = Buffer.from('55aa240006011100002553b3', 'hex'); // cmd 0x24 -> 95.55
-const START = [0x55, 0xaa, 0x90, 0x00, 0x04, 0x01, 0x00, 0x00, 0x00, 0x94];
+// The start command adapters before #434 sent at connect.
+const OLD_START = '55aa9000040100000094';
 
 // ─── Composition record fixtures (#434) ──────────────────────────────────────
 // Byte-for-byte from @joelr's PacketLogger capture on #117 (2026-07-08), second
@@ -86,28 +96,7 @@ describe('RenphoMsc04Adapter', () => {
     });
   });
 
-  describe('onConnected() start command', () => {
-    it('writes the 55AA start command to 0x2A11 without response', async () => {
-      const writes: Array<{ uuid: string; data: number[] | Buffer; withResponse?: boolean }> = [];
-      const ctx = {
-        profile: defaultProfile(),
-        deviceAddress: 'AA',
-        availableChars: new Set<string>([uuid16(0x2a11)]),
-        write: vi.fn(async (uuid: string, data: number[] | Buffer, withResponse?: boolean) => {
-          writes.push({ uuid, data, withResponse });
-        }),
-        read: vi.fn(),
-        subscribe: vi.fn(),
-      } as unknown as ConnectionContext;
-
-      await makeAdapter().onConnected(ctx);
-
-      expect(writes).toHaveLength(1);
-      expect(writes[0].uuid).toBe(uuid16(0x2a11));
-      expect([...(writes[0].data as number[])]).toEqual(START);
-      expect(writes[0].withResponse).toBe(false);
-    });
-
+  describe('onConnected() guard', () => {
     it('throws a clear error when the write char was not discovered', async () => {
       const ctx = {
         profile: defaultProfile(),
@@ -407,5 +396,289 @@ describe('RenphoMsc04Adapter', () => {
       expect(adapter.isFinal(r)).toBe(true);
       expect(adapter.computeMetrics(r, PROFILE_187).bodyFatPercent).toBe(23.7);
     });
+  });
+});
+
+// ─── Connect handshake: b2 guest profile + b3 clock (#434, D038) ─────────────
+
+// Byte for byte from @joelr's capture on #117 (first connection, 2026-07-03):
+// the app's b3 at Unix 0x6a478eb1 with the zone 600 minutes east of UTC. The
+// same frame is public verbatim in his r-msc04-bridge. No captured b2 is used
+// anywhere: every one of them carries a person's height and weight.
+const CAPTURE_CLOCK_B3 = '55aab3000b000701016a478eb102580010';
+
+/** The capture's clock, at UTC+10 as the capture was. */
+function captureClock(): Date {
+  const d = new Date(0x6a478eb1 * 1000);
+  d.getTimezoneOffset = () => -600;
+  return d;
+}
+
+function clockAt(offset: number): () => Date {
+  return () => {
+    const d = captureClock();
+    d.getTimezoneOffset = () => offset;
+    return d;
+  };
+}
+
+// Made up, NOT from any capture (the same profile as the ES-CS20M tests).
+const MADE_UP_PROFILE: UserProfile = {
+  gender: 'female',
+  birthDate: '1990-06-15',
+  age: 36,
+  height: 168,
+  lastKnownWeight: 65.5,
+  isAthlete: false,
+};
+// seq 00, slot 09, 0x0690 = 168.0 cm, 0x1996 = 65.50 kg, a9 ff 02.
+const MADE_UP_B2 = '55aab20009000906901996a9ff02b2';
+
+/** `bytes` followed by their 55AA checksum. */
+function withSum(bytes: number[]): Buffer {
+  return Buffer.from([...bytes, bytes.reduce((a, b) => a + b, 0) & 0xff]);
+}
+
+/** A 55AA frame with a correct checksum, for the allow-list tests. */
+function frame55aa(cmd: number, payload: number[]): Buffer {
+  return withSum([0x55, 0xaa, cmd, payload.length >> 8, payload.length & 0xff, ...payload]);
+}
+
+interface Written {
+  char: string;
+  hex: string;
+  withResponse: boolean | undefined;
+}
+
+function handshakeCtx(
+  profile: UserProfile = MADE_UP_PROFILE,
+  write?: (data: Buffer) => Promise<void>,
+): { ctx: ConnectionContext; written: Written[] } {
+  const written: Written[] = [];
+  const ctx: ConnectionContext = {
+    profile,
+    deviceAddress: 'AA',
+    availableChars: new Set([uuid16(0x2a10), uuid16(0x2a11), uuid16(0x2a12)]),
+    write: async (char, data, withResponse) => {
+      const buf = Buffer.from(data);
+      written.push({ char, hex: buf.toString('hex'), withResponse });
+      if (write) await write(buf);
+    },
+    read: async () => Buffer.alloc(0),
+    subscribe: async () => {},
+  };
+  return { ctx, written };
+}
+
+async function connectedAdapter(
+  now: () => Date = captureClock,
+  profile: UserProfile = MADE_UP_PROFILE,
+): Promise<{ adapter: RenphoMsc04Adapter; written: Written[] }> {
+  const adapter = new RenphoMsc04Adapter(now);
+  const { ctx, written } = handshakeCtx(profile);
+  adapter.onSessionStart();
+  await adapter.onConnected(ctx);
+  return { adapter, written };
+}
+
+function spyAllLevels() {
+  return [
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {}),
+    vi.spyOn(bleLog, 'info').mockImplementation(() => {}),
+    vi.spyOn(bleLog, 'warn').mockImplementation(() => {}),
+    vi.spyOn(bleLog, 'error').mockImplementation(() => {}),
+  ];
+}
+
+function logged(spies: ReturnType<typeof spyAllLevels>): string[] {
+  return spies.flatMap((s) => s.mock.calls.map((c) => String(c[0])));
+}
+
+describe('RenphoMsc04Adapter connect handshake (#434, D038)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('writes the guest b2 then the b3 clock to 0x2A11, both with response, and no start command', async () => {
+    const { written } = await connectedAdapter();
+    expect(written.map((w) => w.hex)).toEqual([
+      MADE_UP_B2,
+      // The capture's b3 with seq 01 (and so checksum + 1).
+      '55aab3000b010701016a478eb102580011',
+    ]);
+    expect(written.every((w) => w.withResponse === true)).toBe(true);
+    expect(written.every((w) => w.char === uuid16(0x2a11))).toBe(true);
+    expect(written.some((w) => w.hex === OLD_START || w.hex.slice(4, 6) === '90')).toBe(false);
+  });
+
+  it('builds the captured b3 byte for byte from the capture clock', () => {
+    expect(buildClockFrame(0, captureClock()).toString('hex')).toBe(CAPTURE_CLOCK_B3);
+    expect(buildClockFrame(1, captureClock()).toString('hex')).toBe(
+      '55aab3000b010701016a478eb102580011',
+    );
+  });
+
+  it('builds the guest b2 from the profile height and last weight', () => {
+    expect(buildGuestProfileFrame(0, MADE_UP_PROFILE).toString('hex')).toBe(MADE_UP_B2);
+  });
+
+  it('falls back to 170.0 cm and 70.00 kg, and the fallback passes the allow-list', () => {
+    for (const height of [0, Number.NaN, 300]) {
+      const f = buildGuestProfileFrame(0, { ...MADE_UP_PROFILE, height });
+      expect(f.readUInt16BE(7)).toBe(1700);
+      expect(() => assertAllowedWrite(f)).not.toThrow();
+    }
+    for (const lastKnownWeight of [undefined, 0, 400]) {
+      const f = buildGuestProfileFrame(0, { ...MADE_UP_PROFILE, lastKnownWeight });
+      expect(f.readUInt16BE(9)).toBe(7000);
+      expect(() => assertAllowedWrite(f)).not.toThrow();
+    }
+    // 180 cm without a weight: 0x0708, 0x1b58.
+    const noWeight = { ...MADE_UP_PROFILE, height: 180, lastKnownWeight: undefined };
+    expect(buildGuestProfileFrame(0, noWeight).toString('hex')).toBe(
+      '55aab20009000907081b58a9ff02ef',
+    );
+  });
+
+  it('sends the zone in minutes east of UTC, and a zone west of UTC as 0', () => {
+    const zone = (offset: number): string =>
+      buildClockFrame(0, clockAt(offset)()).subarray(13, 15).toString('hex');
+    expect(zone(-600)).toBe('0258');
+    expect(zone(0)).toBe('0000');
+    expect(zone(-330)).toBe('014a');
+    expect(zone(300)).toBe('0000');
+  });
+
+  it('logs the unsendable west zone once per adapter instance', async () => {
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const westLines = (): number =>
+      debug.mock.calls.filter((c) => String(c[0]).includes('west of UTC')).length;
+    const adapter = new RenphoMsc04Adapter(clockAt(300));
+    for (let i = 0; i < 2; i++) {
+      adapter.onSessionStart();
+      await adapter.onConnected(handshakeCtx().ctx);
+    }
+    expect(westLines()).toBe(1);
+    // A fresh instance logs it again: the latch is not module state.
+    const other = new RenphoMsc04Adapter(clockAt(300));
+    other.onSessionStart();
+    await other.onConnected(handshakeCtx().ctx);
+    expect(westLines()).toBe(2);
+  });
+
+  describe('assertAllowedWrite()', () => {
+    const b2 = (p: number[]): Buffer => frame55aa(0xb2, p);
+    const b3 = (p: number[]): Buffer => frame55aa(0xb3, p);
+    const GOOD_B2 = [0x00, 0x09, 0x06, 0x90, 0x19, 0x96, 0xa9, 0xff, 0x02];
+    const GOOD_B3 = [0x00, 0x07, 0x01, 0x01, 0x6a, 0x47, 0x8e, 0xb1, 0x02, 0x58, 0x00];
+    const withByte = (p: number[], i: number, v: number): number[] =>
+      p.map((b, j) => (j === i ? v : b));
+
+    it('accepts the built b2 and b3 and the captured b3', () => {
+      expect(() => assertAllowedWrite(b2(GOOD_B2))).not.toThrow();
+      expect(() => assertAllowedWrite(b3(GOOD_B3))).not.toThrow();
+      expect(() => assertAllowedWrite(Buffer.from(CAPTURE_CLOCK_B3, 'hex'))).not.toThrow();
+    });
+
+    const refused: Array<[string, Buffer]> = [
+      ['the old start command', Buffer.from(OLD_START, 'hex')],
+      ['b2 in a registered slot (01)', b2(withByte(GOOD_B2, 1, 0x01))],
+      ['b2 with another [11]', b2(withByte(GOOD_B2, 6, 0xa8))],
+      ['b2 with another [12]', b2(withByte(GOOD_B2, 7, 0x03))],
+      ['b2 with another [13]', b2(withByte(GOOD_B2, 8, 0x03))],
+      ['b2 with a height below 50.0 cm', b2([0, 9, 0x01, 0xf3, 0x19, 0x96, 0xa9, 0xff, 0x02])],
+      ['b2 with a height above 250.0 cm', b2([0, 9, 0x09, 0xc5, 0x19, 0x96, 0xa9, 0xff, 0x02])],
+      ['b2 with a weight of 0', b2([0, 9, 0x06, 0x90, 0x00, 0x00, 0xa9, 0xff, 0x02])],
+      ['b2 with a weight above 300 kg', b2([0, 9, 0x06, 0x90, 0x75, 0x31, 0xa9, 0xff, 0x02])],
+      ['b2 with a longer payload', b2([...GOOD_B2, 0x00])],
+      ['b3 with another constant', b3(withByte(GOOD_B3, 1, 0x08))],
+      ['b3 with a zone above 840 minutes', b3(withByte(withByte(GOOD_B3, 8, 0x03), 9, 0x49))],
+      ['b3 with a non-zero last byte', b3(withByte(GOOD_B3, 10, 0x01))],
+      ['a b0 ack (acks go through buildAck)', Buffer.from('55aab000020001b2', 'hex')],
+      ['b6', frame55aa(0xb6, [0x01, 0x01])],
+      ['b7', frame55aa(0xb7, [0x00, 0x09, 0x41])],
+      ['b8', frame55aa(0xb8, [0x00, 0x09, 0x01])],
+      ['a bad checksum', Buffer.from(MADE_UP_B2.slice(0, -2) + 'b3', 'hex')],
+      [
+        'a length field longer than the frame',
+        Buffer.from('55aab2000a' + MADE_UP_B2.slice(10), 'hex'),
+      ],
+      ['a second frame behind an allowed one', Buffer.from(MADE_UP_B2 + CAPTURE_CLOCK_B3, 'hex')],
+      [
+        'bytes behind the frame, even under a checksum over all of them',
+        withSum([...Buffer.from(MADE_UP_B2, 'hex'), 0x00]),
+      ],
+      ['a frame without the 55AA header', Buffer.from('56' + MADE_UP_B2.slice(2), 'hex')],
+    ];
+
+    it.each(refused)('refuses %s', (_what, f) => {
+      expect(() => assertAllowedWrite(f)).toThrow(/refusing/);
+    });
+  });
+
+  it('never logs the b2 frame or the height and weight in it', async () => {
+    const spies = spyAllLevels();
+    const { adapter } = await connectedAdapter();
+    adapter.parseCharNotification(IND, FINAL);
+    const r = feed(adapter, RECORD)!;
+    adapter.computeMetrics(r, MADE_UP_PROFILE);
+    adapter.onSessionEnd();
+
+    const lines = logged(spies);
+    expect(lines.some((l) => l.includes('guest profile'))).toBe(true);
+    expect(lines.some((l) => l.includes('55aab3000b01'))).toBe(true);
+    for (const l of lines) {
+      expect(l).not.toContain(MADE_UP_B2);
+      expect(l).not.toContain('55aab2');
+      expect(l).not.toContain('0690');
+      expect(l).not.toContain('1996');
+      expect(l).not.toMatch(/\b168(\.0)?\b/);
+      expect(l).not.toMatch(/\b65\.5/);
+    }
+  });
+
+  it('carries on with b3 when the b2 write fails, and logs the failure without bytes', async () => {
+    const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const adapter = new RenphoMsc04Adapter(captureClock);
+    const { ctx, written } = handshakeCtx(MADE_UP_PROFILE, async (buf) => {
+      if (buf[2] === 0xb2) throw new Error('GATT write failed');
+    });
+    adapter.onSessionStart();
+    await expect(adapter.onConnected(ctx)).resolves.toBeUndefined();
+    expect(written.map((w) => w.hex.slice(4, 6))).toEqual(['b2', 'b3']);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain('guest profile (b2) not sent');
+    expect(String(warn.mock.calls[0][0])).not.toContain('55aa');
+  });
+
+  it("does not export the scale's figures from a session with our guest b2", async () => {
+    const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const { adapter } = await connectedAdapter();
+    adapter.parseCharNotification(IND, FINAL);
+    const r = feed(adapter, RECORD)!;
+    expect(adapter.isFinal(r)).toBe(true);
+    // PROFILE_187 passes the D022 height gate, so only the guest rule stops it.
+    expect(adapter.computeMetrics(r, PROFILE_187)).toEqual(buildPayload(95.55, 0, {}, PROFILE_187));
+    const infoLines = info.mock.calls.map((c) => String(c[0]));
+    expect(infoLines.some((l) => l.includes('not exported'))).toBe(true);
+  });
+
+  it('keeps the guest rule pinned to the reading when a session without b2 follows', async () => {
+    vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const { adapter } = await connectedAdapter();
+    adapter.parseCharNotification(IND, FINAL);
+    const r1 = feed(adapter, RECORD)!;
+    adapter.onSessionEnd();
+    // Session 2 without our b2 (no onConnected): its record is exported (D022).
+    adapter.onSessionStart();
+    adapter.parseCharNotification(IND, FINAL);
+    const r2 = feed(adapter, RECORD)!;
+    expect(adapter.computeMetrics(r2, PROFILE_187).bodyFatPercent).toBe(23.7);
+    expect(adapter.computeMetrics(r1, PROFILE_187)).toEqual(
+      buildPayload(95.55, 0, {}, PROFILE_187),
+    );
   });
 });

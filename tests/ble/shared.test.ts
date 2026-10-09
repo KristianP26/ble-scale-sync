@@ -2114,6 +2114,12 @@ describe('completionHoldMs through waitForRawReading', () => {
 describe('R-MSC04 composition hold through waitForRawReading (#434)', () => {
   const hex = (h: string): Buffer => Buffer.from(h, 'hex');
   const PROFILE_187: UserProfile = { height: 187, age: 30, gender: 'male', isAthlete: false };
+  /** The clock of the #117 capture's b3 (Unix 0x6a478eb1, UTC+10). */
+  const captureClock = (): Date => {
+    const d = new Date(0x6a478eb1 * 1000);
+    d.getTimezoneOffset = () => -600;
+    return d;
+  };
 
   async function startSession() {
     const write = createMockChar();
@@ -2125,7 +2131,7 @@ describe('R-MSC04 composition hold through waitForRawReading (#434)', () => {
       [uuid16(0x2a10), notify],
       [uuid16(0x2a12), indicate],
     ]);
-    const adapter = new RenphoMsc04Adapter();
+    const adapter = new RenphoMsc04Adapter(captureClock);
     const promise = waitForRawReading(charMap, device, adapter, PROFILE, 'AABBCCDDEEFF');
     let settled = false;
     void promise.then(
@@ -2164,17 +2170,24 @@ describe('R-MSC04 composition hold through waitForRawReading (#434)', () => {
       const raw = await s.promise;
       expect(raw.reading).toEqual({ weight: 95.55, impedance: 0 });
       expect(s.adapter.isFinal(raw.reading)).toBe(true);
-      expect(s.adapter.computeMetrics(raw.reading, PROFILE_187).bodyFatPercent).toBe(23.7);
+      // The record was computed for the guest b2 we wrote, so its body fat is
+      // not exported (D038): the estimate, although PROFILE_187 passes the
+      // D022 height gate.
+      expect(s.adapter.computeMetrics(raw.reading, PROFILE_187)).toEqual(
+        buildPayload(95.55, 0, {}, PROFILE_187),
+      );
 
-      // After the start command, exactly the app's three status acks, in order.
+      // The guest b2 (PROFILE: 180.0 cm, no last weight -> 70.00 kg) and the
+      // b3 clock, no start command, then exactly the app's three status acks.
       expect(s.write.writtenData.map((b) => Buffer.from(b).toString('hex'))).toEqual([
-        '55aa9000040100000094',
+        '55aab20009000907081b58a9ff02ef',
+        '55aab3000b010701016a478eb102580011',
         '55aab000020001b2',
         '55aab000020201b4',
         '55aab000020301b5',
       ]);
-      const ackCalls = vi.mocked(s.write.write).mock.calls.slice(1);
-      expect(ackCalls.every(([, withResponse]) => withResponse === true)).toBe(true);
+      const calls = vi.mocked(s.write.write).mock.calls;
+      expect(calls.every(([, withResponse]) => withResponse === true)).toBe(true);
     } finally {
       vi.useRealTimers();
     }
