@@ -156,6 +156,20 @@ describe('parseGitLog and countableCommits', () => {
     );
     expect(countableCommits(all).map((c) => c.authorName)).toEqual(['B', 'R']);
   });
+
+  it('rejects output cut off mid-record, a malformed sha and a missing parent', () => {
+    const two =
+      rec({ n: 2, parents: [1], name: 'B', email: 'b@example.com' }) +
+      rec({ n: 1, name: 'R', email: 'r@example.com' });
+    expect(() => parseGitLog(two.slice(0, -20))).toThrow(/after the last record/);
+    expect(() =>
+      parseGitLog(two.replace(sha(1), 'not-a-sha-but-forty-characters-long-xxxx')),
+    ).toThrow(/Unexpected git log record/);
+    // A shallow history: the oldest commit's parent is not in the log.
+    expect(() =>
+      countableCommits(log({ n: 2, parents: [1], name: 'B', email: 'b@example.com' })),
+    ).toThrow(/missing/);
+  });
 });
 
 describe('classify', () => {
@@ -305,6 +319,34 @@ describe('resolveIdentities and tally', () => {
     expect(JSON.stringify(res.unresolved)).not.toContain('@');
   });
 
+  it('leaves out a login listed under ignore.logins, ignoring case', async () => {
+    const commits = countableCommits(
+      log(
+        { n: 2, parents: [1], name: 'Helper', email: 'helper@example.com' },
+        { n: 1, name: 'Owner', email: 'owner@example.com' },
+      ),
+    );
+    const lookup = fakeLookup({
+      commits: { [sha(1)]: acct(1, 'Owner'), [sha(2)]: acct(2, 'Helper-Agent') },
+    });
+    const cfg = { ...CFG, ignore: { emails: [], logins: ['helper-agent'] } };
+    const res = await resolveIdentities(commits, cfg, lookup);
+    expect(tally(commits, res).map((p) => p.login)).toEqual(['Owner']);
+  });
+
+  it('fails on an alias to a login GitHub does not know', async () => {
+    const commits = countableCommits(
+      log({
+        n: 1,
+        name: 'Owner',
+        email: 'owner@example.com',
+        body: 'feat: x\n\nCo-authored-by: Milosz <milosz@example.com>\n',
+      }),
+    );
+    const lookup = fakeLookup({ commits: { [sha(1)]: acct(1, 'Owner') } });
+    await expect(resolveIdentities(commits, CFG, lookup)).rejects.toThrow(/alias target "Bretos"/);
+  });
+
   it('rejects as a whole when a lookup fails', async () => {
     const commits = countableCommits(log({ n: 1, name: 'Owner', email: 'owner@example.com' }));
     const lookup: Lookup = {
@@ -368,6 +410,12 @@ describe('rendering', () => {
     );
   });
 
+  // Logins from the API go into the HTML unescaped, so the renderer checks them too.
+  it('refuses to render a login GitHub would not allow or a bad id', () => {
+    expect(() => renderCell({ login: 'a"><script>', id: 1, commits: 1 })).toThrow(/unexpected/);
+    expect(() => renderCell({ login: 'ok', id: 0, commits: 1 })).toThrow(/unexpected/);
+  });
+
   it('wraps full rows of eight with no empty row at the end', () => {
     const people = (n: number) =>
       Array.from({ length: n }, (_, i) => ({ login: `u${i}`, id: i + 1, commits: 1 }));
@@ -428,6 +476,14 @@ describe('README block', () => {
     expect(parseGrid(renderGrid([{ login: 'y', id: 6, commits: 1089 }]))).toEqual([
       { login: 'y', id: 6, commits: 1089 },
     ]);
+  });
+
+  // A cell that does not parse would also escape the guard against dropping people.
+  it('refuses a grid with a cell it cannot read', () => {
+    const cell = renderCell({ login: 'y', id: 6, commits: 1 });
+    expect(() => parseGrid(`<table><tr>\n${cell}\n<td>hand edit</td>\n</tr></table>`)).toThrow(
+      /2 cells but only 1/,
+    );
   });
 });
 
