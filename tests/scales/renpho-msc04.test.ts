@@ -658,6 +658,26 @@ describe('RenphoMsc04Adapter connect handshake (#434, D038)', () => {
     expect(String(warn.mock.calls[0][0])).not.toContain('55aa');
   });
 
+  it('neither writes b3 nor warns for a session that ended during the b2 write', async () => {
+    const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    let drop!: (e: Error) => void;
+    const adapter = new RenphoMsc04Adapter(captureClock);
+    const { ctx, written } = handshakeCtx(MADE_UP_PROFILE, (buf) =>
+      buf[2] === 0xb2
+        ? new Promise<void>((_resolve, reject) => (drop = reject))
+        : Promise.resolve(),
+    );
+    adapter.onSessionStart();
+    const connecting = adapter.onConnected(ctx);
+    adapter.onSessionEnd();
+    // The link went down: the transport fails the write after the session ended.
+    drop(new Error('Not connected'));
+    await connecting;
+    expect(written.map((w) => w.hex.slice(4, 6))).toEqual(['b2']);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("does not export the scale's figures from a session with our guest b2", async () => {
     const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
     vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
