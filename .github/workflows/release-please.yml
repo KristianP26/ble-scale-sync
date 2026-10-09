@@ -24,6 +24,9 @@ jobs:
       # It is computed here rather than in `jobs.<id>.if` to keep the same shape
       # as the release outputs above.
       npm_publish_enabled: ${{ vars.NPM_PUBLISH_ENABLED == 'true' }}
+      # The open release PR branch, empty when there is none. Set by the add-on
+      # sync step once the branch is validated.
+      release_branch: ${{ steps.addon_sync.outputs.branch }}
     steps:
       # Token strategy:
       # - `RELEASE_PLEASE_TOKEN` (optional PAT with `repo` + `workflow` scopes)
@@ -63,6 +66,7 @@ jobs:
       # the output is unset; the open release PR is then looked up by its
       # label, so a sync that failed on an earlier run still gets redone.
       - name: Sync the add-on changelog on the release PR
+        id: addon_sync
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           RELEASE_PR: ${{ steps.release.outputs.pr }}
@@ -91,6 +95,7 @@ jobs:
               exit 1
               ;;
           esac
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
           git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo-sync
           cd repo-sync
           # Explicit refspec: a shallow clone has no remote-tracking ref for
@@ -109,6 +114,69 @@ jobs:
           git add ble-scale-sync-addon/CHANGELOG.md
           git commit -m 'chore(addon): sync the add-on changelog from the project changelog'
           git push origin "HEAD:$BRANCH"
+
+  # The README contributors grid is generated from git history by
+  # src/tools/sync-contributors.ts. It is regenerated here, on the release PR
+  # branch, and not on every push to dev: the owner's own count moves with
+  # every commit, so a push-triggered job would add a bot commit after nearly
+  # every push and reject the next local push. The README people see is the
+  # one on main, which only changes at a release anyway.
+  # A job of its own, so an API outage or an unresolved identity fails only
+  # this job, never the release or npm-publish.
+  readme-contributors:
+    needs: release-please
+    if: needs.release-please.outputs.release_branch != ''
+    runs-on: ubuntu-latest
+    # A job-level block replaces the workflow-level one. contents: write only
+    # matters for the GITHUB_TOKEN fallback push below.
+    permissions:
+      contents: write
+    concurrency:
+      group: readme-contributors
+      cancel-in-progress: false
+    steps:
+      # The release-please token, as in the add-on sync: a commit pushed with
+      # GITHUB_TOKEN does not run ci.yml on the release PR without a manual
+      # approval, so its head commit would carry no required checks.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.release_branch }}
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+      # TypeScript run straight off source with no install, like the add-on sync.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Regenerate the contributors grid
+        env:
+          # Read-only REST lookups (1,000 requests per hour per repository).
+          # Never the release-please token: the generator writes nothing remote.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ needs.release-please.outputs.release_branch }}
+        run: |
+          set -euo pipefail
+          base=$(git rev-parse HEAD)
+          status=0
+          node src/tools/sync-contributors.ts write || status=$?
+          # 0: done. 3: written, but an identity could not be resolved and is
+          # left out; the job still fails at the end so it gets noticed.
+          # Anything else wrote nothing.
+          if [ "$status" -ne 0 ] && [ "$status" -ne 3 ]; then exit "$status"; fi
+          if git diff --quiet -- README.md; then
+            echo "Contributors grid already current."
+            exit "$status"
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add README.md
+          git commit -m 'chore(readme): regenerate the contributors grid'
+          # The lease pins the branch to the commit this job read. A plain push
+          # would recreate the branch if the release PR was merged (and the
+          # branch auto-deleted) while this job ran.
+          git push --force-with-lease="refs/heads/$BRANCH:$base" origin "HEAD:refs/heads/$BRANCH"
+          exit "$status"
 
   npm-publish:
     needs: release-please
