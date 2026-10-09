@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   CONFIG_PATH,
   END_MARKER,
+  README_PATH,
   START_MARKER,
   applyGrid,
   classify,
@@ -427,6 +428,33 @@ describe('README block', () => {
     expect(parseGrid(renderGrid([{ login: 'y', id: 6, commits: 1089 }]))).toEqual([
       { login: 'y', id: 6, commits: 1089 },
     ]);
+  });
+});
+
+// The counts themselves are not checked against the history here: the owner's
+// count moves with every commit, so that check would fail after each one. This
+// guards the shape, which is what a hand edit of the grid would break.
+describe('README in the repository', () => {
+  const readme = readFileSync(README_PATH, 'utf8').replace(/\r\n/g, '\n');
+
+  it('carries the generated grid between the markers, exactly as rendered', () => {
+    expect(readme).toContain(`\n${START_MARKER}\n`);
+    expect(readme).toContain(`\n${END_MARKER}\n`);
+    const { block } = findBlock(readme);
+    const cells = parseGrid(block);
+    expect(cells.length).toBeGreaterThan(0);
+    const counted = cells.map((c) => ({ ...c, commits: c.commits ?? Number.NaN }));
+    expect(counted.every((c) => Number.isInteger(c.commits))).toBe(true);
+    expect(block).toBe(`${renderGrid(counted)}\n`);
+  });
+
+  it('is sorted by count, with unique logins and no bots', () => {
+    const cells = parseGrid(findBlock(readme).block);
+    const counts = cells.map((c) => c.commits ?? 0);
+    expect(counts).toEqual([...counts].sort((a, b) => b - a));
+    const logins = cells.map((c) => c.login.toLowerCase());
+    expect(new Set(logins).size).toBe(logins.length);
+    expect(logins.filter((l) => l.includes('[bot]'))).toEqual([]);
   });
 });
 
