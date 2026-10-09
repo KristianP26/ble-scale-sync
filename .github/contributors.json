@@ -1,0 +1,10 @@
+{
+  "$comment": "Read by src/tools/sync-contributors.ts. aliases: commit email -> GitHub login, only for addresses GitHub cannot link (Milosz is Bretos, 6eeecb3, see 9660aa5). ignore: identities never credited.",
+  "aliases": {
+    "milosz@tyborek.pl": "Bretos"
+  },
+  "ignore": {
+    "emails": ["noreply@anthropic.com"],
+    "logins": []
+  }
+}

@@ -35,6 +35,8 @@
     "check:counts:write": "tsx src/tools/check-counts.ts write",
     "sync:addon-changelog": "tsx src/tools/sync-addon-changelog.ts",
     "sync:addon-changelog:check": "tsx src/tools/sync-addon-changelog.ts check",
+    "sync:contributors": "tsx src/tools/sync-contributors.ts write",
+    "sync:contributors:check": "tsx src/tools/sync-contributors.ts",
     "test": "vitest run",
     "lint": "eslint src tests",
     "lint:fix": "eslint src tests --fix",
