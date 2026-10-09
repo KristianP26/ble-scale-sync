@@ -302,7 +302,8 @@ To add a new export target:
   - `feat:` or `feat(scope):` new user-visible capability, bumps the minor version
   - `fix:` or `fix(scope):` bug fix, bumps the patch version
   - `perf:` performance improvement, bumps the patch version
-  - `refactor:`, `docs:`, `chore:`, `ci:`, `test:`, `build:` no version bump, appears in an "Other" / "Miscellaneous" section of the release notes
+  - `docs:` no version bump, listed in the "Docs" section of the release notes
+  - `refactor:`, `chore:`, `ci:`, `test:`, `build:`, `style:` no version bump, and left out of the release notes entirely
   - Append `!` (for example `feat(ble)!:`) or include a `BREAKING CHANGE:` footer to bump the major version
   - Scopes commonly used in this repo: `ble`, `scales`, `exporters`, `wizard`, `config`, `docker`, `ci`, `docs`, plus individual adapter names
 
@@ -333,7 +334,8 @@ Releases are fully automated via [release-please](https://github.com/googleapis/
 
 - `package.json` (version field)
 - `package-lock.json` (version field)
-- `ble-scale-sync-addon/config.yaml` (version field, via the generic YAML updater + JSONPath `$.version`)
+- `ble-scale-sync-addon/config.yaml` (version field, via the generic updater between the `# x-release-please-start-version` and `# x-release-please-end` markers)
+- `ble-scale-sync-addon/build.yaml` (the image tags the add-on builds from, each marked `# x-release-please-version`)
 - `CHANGELOG.md` (generated from conventional commits since the previous tag)
 - `.release-please-manifest.json` (internal state, tracks the last released version)
 
@@ -341,19 +343,19 @@ Do not edit these files in a feature PR. If you need to correct the version or c
 
 ### Generated companion files
 
-- `ble-scale-sync-addon/CHANGELOG.md` is the changelog Home Assistant renders on the add-on page. It is generated from the root `CHANGELOG.md` by `src/tools/sync-addon-changelog.ts`; never edit it directly. After the root changelog changes (that is, in the release PR), run `npm run sync:addon-changelog` and commit the result. `tests/addon-changelog-sync.test.ts` fails the build while the copy is stale, which is how it fell 16 releases behind while it was maintained by hand (#294).
+- `ble-scale-sync-addon/CHANGELOG.md` is the changelog Home Assistant renders on the add-on page. It is generated from the root `CHANGELOG.md` by `src/tools/sync-addon-changelog.ts`; never edit it directly. The release workflow regenerates it on the release PR (step 4 of the flow above); run `npm run sync:addon-changelog` and commit the result yourself only when that step was skipped or the CHANGELOG entry was edited afterwards. `tests/addon-changelog-sync.test.ts` fails the build while the copy is stale, which is how it fell 16 releases behind while it was maintained by hand (#294).
 - The Contributors grid in `README.md` (the block between the `contributors:start` and `contributors:end` markers) is generated from the git history by `src/tools/sync-contributors.ts`; never edit it directly. A commit counts for its author and for every `Co-authored-by` line in its message, once per person; merge commits, empty commits and bots do not count. Emails are mapped to GitHub accounts through the GitHub API, plus the aliases in `.github/contributors.json` for addresses GitHub cannot link (that file also lists identities that are never credited). The grid is regenerated on the release PR, so between releases it lags behind on `dev`; `npm run sync:contributors:check` shows what would change and `npm run sync:contributors` writes it (set `GITHUB_TOKEN` or `GH_TOKEN` in the environment to avoid the anonymous API limit of 60 requests per hour).
 - `docs/changelog.md` is a one-line VitePress include (`<!--@include: ../CHANGELOG.md-->`), so it updates automatically as soon as `CHANGELOG.md` does. Do not replace that include with hand-written content.
 
 ### Optional: `RELEASE_PLEASE_TOKEN` secret
 
-By default the workflow authenticates with `GITHUB_TOKEN`. GitHub intentionally suppresses downstream workflow triggers for events raised by that token, which means the release PR does not trigger `ci.yml` and the resulting GitHub release does not trigger `docker.yml`.
+By default the workflow authenticates with `GITHUB_TOKEN`. GitHub intentionally does not chain events raised by that token into other workflows the usual way: `ci.yml` runs for the release PR wait for a manual approval instead of starting on their own, and the resulting GitHub release does not trigger `docker.yml`.
 
 To get those to chain automatically, create a classic Personal Access Token with `repo` + `workflow` scopes and save it as a repository secret named `RELEASE_PLEASE_TOKEN`. The workflow already prefers it over `GITHUB_TOKEN`.
 
 Until the PAT is configured, the fallback is:
 
-- Re-run `ci.yml` on the release PR by clicking "Close pull request" then "Reopen pull request" (or pushing an empty commit to the release branch).
+- Approve the waiting `ci.yml` run on the release PR, or start a fresh one by clicking "Close pull request" then "Reopen pull request" (or pushing an empty commit to the release branch).
 - Trigger `docker.yml` manually from the Actions tab (`workflow_dispatch`, input the new tag).
 
 ## Reporting Issues
