@@ -28,8 +28,12 @@ opt_bool_default_true() {
 opt_int() { jq -r ".$1 // $2" "$OPTIONS"; }
 # <<< option readers
 
+# tests/addon-generate.test.ts runs the blocks marked here together, as the
+# generated-config path of this script, and loads what they write.
+# >>> yaml escape
 # Escape a string for safe YAML double-quoted output (backslash, quotes, CR, LF)
 yaml_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\r/\\r/g' | tr '\n' ' '; }
+# <<< yaml escape
 
 # ── Option checks that mirror the app's config schema ───────────────────────
 # The Supervisor only checks each option's type, and the app refuses to start
@@ -62,11 +66,13 @@ valid_weight_range() {
 
 # <<< option checks
 
+# >>> mode
 # Read BLE_ADAPTER early (needed for adapter reset in both modes)
 # Normalize: trim whitespace, lowercase (app schema requires /^hci\d+$/)
 BLE_ADAPTER=$(opt ble_adapter | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 RESET_BLUETOOTH=$(opt_bool_default_true reset_bluetooth)
 CUSTOM_CONFIG=$(opt_bool custom_config)
+# <<< mode
 
 # ── Custom config mode ──────────────────────────────────────────────────────
 
@@ -132,6 +138,7 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
   fi
 else
 
+  # >>> generate config
   # ── Read all options ────────────────────────────────────────────────────
 
   SCALE_MAC=$(opt scale_mac)
@@ -518,6 +525,7 @@ update_check: $UPDATE_CHECK
 YAML
 
   log "Config generated successfully"
+  # <<< generate config
 fi
 
 # ── Merge last_known_weight from previous run ────────────────────────────────
