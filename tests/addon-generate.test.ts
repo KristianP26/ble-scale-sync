@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { parse } from 'yaml';
 import { loadYamlConfig } from '../src/config/yaml-load.js';
 import { collectUnknownKeys } from '../src/config/unknown-keys.js';
+import { resolveEnvReferences } from '../src/config/env-refs.js';
 import type { AppConfig } from '../src/config/schema.js';
 import { snapshotEnv } from './helpers/env-snapshot.js';
 
@@ -443,8 +444,99 @@ describe.skipIf(!HARNESS)(
       `);
       });
     });
+
+    describe('option values reach the app as entered', () => {
+      it('an MQTT password with a backslash and a ${...}', () => {
+        // dash's echo turned the escaped \\ back into \, so the app refused
+        // "pa\s" as a bad escape and did not start; the ${x} was read as an
+        // environment variable.
+        const r = generate({
+          options: {
+            ...DEFAULTS,
+            mqtt_auto: false,
+            mqtt_broker_url: 'mqtt://192.168.1.10:1883',
+            mqtt_username: 'u\\${mqtt_user}',
+            mqtt_password: 'pa\\s${x}',
+          },
+        });
+        const config = expectLoads(r);
+        expect(config.global_exporters?.[0]).toMatchObject({
+          username: 'u\\${mqtt_user}',
+          password: 'pa\\s${x}',
+        });
+      });
+
+      it('a Garmin password with a ${...}, written through a heredoc', () => {
+        const r = generate({
+          options: {
+            ...DEFAULTS,
+            mqtt_enabled: false,
+            garmin_enabled: true,
+            garmin_email: 'someone@example.com',
+            garmin_password: 'g\\w${y}',
+          },
+        });
+        const config = expectLoads(r);
+        expect(config.global_exporters?.[0]).toMatchObject({ password: 'g\\w${y}' });
+      });
+    });
   },
 );
+
+/**
+ * yaml_escape on its own, under dash where installed: each value is written
+ * the way run.sh writes it, then read back the way the app reads it (YAML,
+ * then ${VAR} references).
+ */
+describe.skipIf(!SHELL)('run.sh yaml_escape', { timeout: 30_000 }, () => {
+  // From a file, not `-c`: Windows command-line quoting mangles the
+  // backslashes in the sed expression on the way to Git Bash.
+  function roundTrip(value: string): unknown {
+    const dir = mkdtempSync(join(tmpdir(), 'addon-yaml-escape-'));
+    try {
+      const file = join(dir, 'escape.sh');
+      writeFileSync(
+        file,
+        `${block('yaml escape')}\nprintf '%s\\n' "v: \\"$(yaml_escape "$V")\\""\n`,
+      );
+      const res = spawnSync(SHELL!, [file.replace(/\\/g, '/')], {
+        encoding: 'utf8',
+        env: { ...process.env, V: value },
+      });
+      expect(res.stderr).toBe('');
+      const doc = parse(res.stdout) as { v: string };
+      return resolveEnvReferences(doc).v;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('gives back every value as entered, ${...} included', () => {
+    for (const value of [
+      'p${a}q',
+      '$${b}',
+      'a$b',
+      'pa\\ss"wo\\nrd',
+      '${',
+      '}',
+      '${}',
+      'a${b${c}d',
+      '$',
+      '$$',
+      'x$$${y}',
+      '${x}${y}',
+      '\\c-end',
+      'cr\rlf',
+    ]) {
+      expect(roundTrip(value), JSON.stringify(value)).toBe(value);
+    }
+  });
+
+  it('folds a newline to a space, also inside ${...}', () => {
+    expect(roundTrip('a${b\nc}d')).toBe('a${b c}d');
+    expect(roundTrip('two\nlines')).toBe('two lines');
+  });
+});
 
 describe('add-on run.sh harness', () => {
   // A skip here would leave CI green without the harness ever running, after

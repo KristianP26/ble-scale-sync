@@ -31,8 +31,20 @@ opt_int() { jq -r ".$1 // $2" "$OPTIONS"; }
 # tests/addon-generate.test.ts runs the blocks marked here together, as the
 # generated-config path of this script, and loads what they write.
 # >>> yaml escape
-# Escape a string for safe YAML double-quoted output (backslash, quotes, CR, LF)
-yaml_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\r/\\r/g' | tr '\n' ' '; }
+# Escape a string for a YAML double-quoted value: backslash, double quote and
+# CR are escaped, a newline becomes a space. The app also reads ${NAME} in any
+# value as an environment variable, so a ${...} in an option becomes $${...},
+# its escape for a literal one, and the value reaches the app as entered. Only
+# a ${ with a closing } is a reference; anything else is left alone, since an
+# escape the app would not undo would change the value instead. tr runs first
+# so that a newline inside ${...} cannot split it across two sed lines.
+#
+# Write the result with printf '%s\n' or a heredoc, never with echo: dash's
+# echo turns the \\ written here back into a single backslash.
+yaml_escape() {
+  printf '%s' "$1" | tr '\n' ' ' |
+    sed 's/\\/\\\\/g; s/"/\\"/g; s/\r/\\r/g; s/\${\([^}][^}]*}\)/$${\1/g'
+}
 # <<< yaml escape
 
 # ── Option checks that mirror the app's config schema ───────────────────────
@@ -421,9 +433,9 @@ YAML
     [ "$AUTO_CLEAR_STALE_BOND" = "true" ] || [ "$PREEMPTIVE_ADAPTER_RESET" = "false" ] ||
     [ "$ADAPTER_PRIVACY" = "true" ] || [ "$PROXY_LIVENESS_MIN" != "30" ]; then
     echo "ble:" >> "$FRESH"
-    [ -n "$SCALE_MAC" ] && echo "  scale_mac: \"$(yaml_escape "$SCALE_MAC")\"" >> "$FRESH"
-    [ -n "$BLE_ADAPTER" ] && echo "  adapter: \"$(yaml_escape "$BLE_ADAPTER")\"" >> "$FRESH"
-    [ -n "$FORCE_SCALE_ADAPTER" ] && echo "  force_scale_adapter: \"$(yaml_escape "$FORCE_SCALE_ADAPTER")\"" >> "$FRESH"
+    [ -n "$SCALE_MAC" ] && printf '%s\n' "  scale_mac: \"$(yaml_escape "$SCALE_MAC")\"" >> "$FRESH"
+    [ -n "$BLE_ADAPTER" ] && printf '%s\n' "  adapter: \"$(yaml_escape "$BLE_ADAPTER")\"" >> "$FRESH"
+    [ -n "$FORCE_SCALE_ADAPTER" ] && printf '%s\n' "  force_scale_adapter: \"$(yaml_escape "$FORCE_SCALE_ADAPTER")\"" >> "$FRESH"
     [ -n "$QN_PROTOCOL_BYTE" ] && echo "  qn_protocol_byte: $QN_PROTOCOL_BYTE" >> "$FRESH"
     [ -n "$QN_REPORT_BYTE" ] && echo "  qn_report_byte: $QN_REPORT_BYTE" >> "$FRESH"
     [ -n "$QN_WEIGHT_ACK" ] && echo "  qn_weight_ack: $QN_WEIGHT_ACK" >> "$FRESH"
@@ -490,8 +502,8 @@ YAML
     ha_discovery: $MQTT_HA_DISCOVERY
     ha_device_name: "$(yaml_escape "$MQTT_HA_DEVICE_NAME")"
 YAML
-      [ -n "$MQTT_USERNAME" ] && echo "    username: \"$(yaml_escape "$MQTT_USERNAME")\"" >> "$FRESH"
-      [ -n "$MQTT_PASSWORD" ] && echo "    password: \"$(yaml_escape "$MQTT_PASSWORD")\"" >> "$FRESH"
+      [ -n "$MQTT_USERNAME" ] && printf '%s\n' "    username: \"$(yaml_escape "$MQTT_USERNAME")\"" >> "$FRESH"
+      [ -n "$MQTT_PASSWORD" ] && printf '%s\n' "    password: \"$(yaml_escape "$MQTT_PASSWORD")\"" >> "$FRESH"
     fi
 
     # Garmin exporter

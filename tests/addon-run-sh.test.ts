@@ -237,8 +237,13 @@ describe('generated config: ble block', () => {
     const condStart = RUN_SH.lastIndexOf('  if [', open);
     const condition = RUN_SH.slice(condStart, open);
     const body = RUN_SH.slice(open, RUN_SH.indexOf('\n  fi\n', open));
-    const written = [...body.matchAll(/\[ [^\]]*"\$([A-Z_]+)"[^\]]*\] && echo/g)].map((m) => m[1]);
+    // printf as well as echo: a guard that only knew echo stopped checking every
+    // line that moved to printf, without failing.
+    const written = [...body.matchAll(/\[ [^\]]*"\$([A-Z_]+)"[^\]]*\] && (?:echo|printf)/g)].map(
+      (m) => m[1],
+    );
     expect(written).toContain('ADAPTER_PRIVACY');
+    expect(written).toContain('SCALE_MAC');
     for (const v of written) expect(condition, v).toContain(`"$${v}"`);
   });
 });
