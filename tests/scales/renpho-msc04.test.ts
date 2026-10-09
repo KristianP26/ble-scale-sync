@@ -815,6 +815,22 @@ describe('RenphoMsc04Adapter handshake diagnostics (#434)', () => {
     expect(summary).toContain('writes full: b2 not answered, b3 failed; no status;');
     expect(summary).toContain('composition record no; no frames)');
   });
+
+  it('reports a write still waiting for its response at the end as pending, not failed', async () => {
+    const lines = debugLines();
+    let release!: () => void;
+    const adapter = new RenphoMsc04Adapter(captureClock);
+    const { ctx } = handshakeCtx(MADE_UP_PROFILE, (buf) =>
+      buf[2] === 0xb2 ? new Promise<void>((resolve) => (release = resolve)) : Promise.resolve(),
+    );
+    adapter.onSessionStart();
+    const connecting = adapter.onConnected(ctx);
+    adapter.onSessionEnd();
+    const summary = lines().find((l) => l.includes('session ended'));
+    expect(summary).toContain('writes full: b2 pending; no status;');
+    release();
+    await connecting;
+  });
 });
 
 // ─── BLE_RMSC04_HANDSHAKE diagnostic switch (#434) ───────────────────────────

@@ -93,7 +93,7 @@ const REPLY_TO: Record<number, number> = { 0x22: 0xb2, 0x23: 0xb3, 0x27: 0xb7, 0
 interface SessionDiagnostics {
   handshakeAt: number | null;
   mode: ConnectWrites;
-  /** Outcome per written command, in write order: sent, failed or refused. */
+  /** Outcome per written command, in write order: pending, sent, failed or refused. */
   writes: Map<number, string>;
   /** Commands the scale answered (b2, b3, ...). */
   answered: Set<number>;
@@ -704,7 +704,10 @@ export class RenphoMsc04Adapter
       const buf = frame();
       assertAllowedWrite(buf);
       if (buf[2] === CMD_PROFILE) this.guestProfileSent = true;
-      diag.writes.set(cmd, 'failed');
+      // Pending until the transport settles the write: when the link drops
+      // first, the summary has to say the Write Response never came, not that
+      // the write failed (#434).
+      diag.writes.set(cmd, 'pending');
       await owner.write(CHR_WRITE, buf, true);
       diag.writes.set(cmd, 'sent');
       bleLog.debug(
@@ -712,6 +715,7 @@ export class RenphoMsc04Adapter
           `in ${Date.now() - started} ms`,
       );
     } catch (e: unknown) {
+      if (diag.writes.get(cmd) === 'pending') diag.writes.set(cmd, 'failed');
       if (this.ctx === owner) bleLog.warn(`Renpho R-MSC04: ${label} not sent: ${errMsg(e)}`);
     }
   }
