@@ -552,6 +552,11 @@ if ! node "$ADDON_CONFIG" merge-weights "$FRESH" "$CONFIG"; then
   cp "$FRESH" "$CONFIG"
 fi
 rm -f "$FRESH"
+# The file holds passwords, and nothing above sets its mode: on the first start
+# it was created 0644 and stayed so until the app saved a weight (the app
+# writes it 0600, and later merges keep that). Only this file: a umask here
+# would also reach every file the app writes elsewhere, /share included.
+chmod 600 "$CONFIG"
 
 # ── Garmin token bootstrap ──────────────────────────────────────────────────
 # garmin_upload.py only loads tokens; it does not authenticate from email and

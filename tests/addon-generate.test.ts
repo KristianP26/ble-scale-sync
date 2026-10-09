@@ -7,10 +7,11 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { parse } from 'yaml';
 import { loadYamlConfig } from '../src/config/yaml-load.js';
 import { collectUnknownKeys } from '../src/config/unknown-keys.js';
@@ -535,6 +536,76 @@ describe.skipIf(!SHELL)('run.sh yaml_escape', { timeout: 30_000 }, () => {
   it('folds a newline to a space, also inside ${...}', () => {
     expect(roundTrip('a${b\nc}d')).toBe('a${b c}d');
     expect(roundTrip('two\nlines')).toBe('two lines');
+  });
+});
+
+/**
+ * The step of run.sh that turns the fresh config into /data/config.yaml, run
+ * on its own with the paths in a temp directory and the container's umask.
+ * Windows has no file modes to check.
+ */
+describe.skipIf(!SHELL || process.platform === 'win32')('run.sh config.yaml mode', () => {
+  function mergeBlock(): string {
+    const start = RUN_SH.indexOf('# ── Merge last_known_weight');
+    const end = RUN_SH.indexOf('# ── Garmin token bootstrap');
+    expect(start, 'merge block not found').toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    return RUN_SH.slice(start, end);
+  }
+
+  function run(fresh: string, existing?: { text: string; mode: number }) {
+    const dir = mkdtempSync(join(tmpdir(), 'addon-mode-'));
+    try {
+      writeFileSync(join(dir, 'fresh.yaml'), fresh);
+      if (existing) {
+        writeFileSync(join(dir, 'config.yaml'), existing.text);
+        chmodSync(join(dir, 'config.yaml'), existing.mode);
+      }
+      const script = [
+        'set -e',
+        'umask 022',
+        `FRESH='${dir}/fresh.yaml'`,
+        `CONFIG='${dir}/config.yaml'`,
+        `ADDON_CONFIG='${resolve('ble-scale-sync-addon/addon-config.mjs')}'`,
+        logFunction(),
+        mergeBlock(),
+      ].join('\n');
+      const res = spawnSync(SHELL!, ['-c', script], { encoding: 'utf8' });
+      expect(res.status, res.stdout + res.stderr).toBe(0);
+      return {
+        stdout: res.stdout,
+        mode: statSync(join(dir, 'config.yaml')).mode & 0o777,
+        text: readFileSync(join(dir, 'config.yaml'), 'utf8'),
+      };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  const FRESH = 'version: 1\nusers:\n  - slug: a\n    last_known_weight: null\n';
+
+  it('is 0600 from the first start, not only after the first weight', () => {
+    expect(run(FRESH).mode).toBe(0o600);
+  });
+
+  it('is 0600 when the merge fails and the fresh file is copied instead', () => {
+    const r = run('users: [unclosed\n');
+    expect(r.stdout).toMatch(/merging last_known_weight failed/);
+    expect(r.mode).toBe(0o600);
+  });
+
+  it('is 0600 after a merge into a file an older add-on left 0644', () => {
+    const r = run(FRESH, {
+      text: 'users:\n  - slug: a\n    last_known_weight: 70.5\n',
+      mode: 0o644,
+    });
+    expect(r.text).toMatch(/last_known_weight: 70.5/);
+    expect(r.mode).toBe(0o600);
+  });
+
+  it('comes from a chmod of that one file, not from a umask the app would inherit', () => {
+    expect(mergeBlock()).toMatch(/^chmod 600 "\$CONFIG"$/m);
+    expect(RUN_SH).not.toMatch(/^\s*umask\b/m);
   });
 });
 
