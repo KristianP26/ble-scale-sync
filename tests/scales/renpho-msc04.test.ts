@@ -343,8 +343,14 @@ describe('RenphoMsc04Adapter', () => {
         expect(adapter.parseCharNotification(IND, STATUS_LOCKED)).toBeNull();
         expect(adapter.parseCharNotification(IND, STATUS_DONE)).toBeNull();
         const lines = debug.mock.calls.map((c) => String(c[0]));
-        expect(lines).toContain('Renpho R-MSC04: status seq 2, state 0x09 (weight locked)');
-        expect(lines).toContain('Renpho R-MSC04: status seq 3, state 0x11 (measurement complete)');
+        expect(lines).toContain(
+          'Renpho R-MSC04: status seq 2, state 0x09 (weight locked), 0 stored records, ' +
+            '[7] 01, [9] 50',
+        );
+        expect(lines).toContain(
+          'Renpho R-MSC04: status seq 3, state 0x11 (measurement complete), 0 stored records, ' +
+            '[7] 01, [9] 50',
+        );
       } finally {
         debug.mockRestore();
       }
@@ -680,5 +686,133 @@ describe('RenphoMsc04Adapter connect handshake (#434, D038)', () => {
     expect(adapter.computeMetrics(r1, PROFILE_187)).toEqual(
       buildPayload(95.55, 0, {}, PROFILE_187),
     );
+  });
+});
+
+// ─── Handshake diagnostics (#434) ────────────────────────────────────────────
+
+// #117 capture (@joelr, public): the scale's replies to the app's b3 and b2,
+// and two status frames of the first connection. Byte for byte.
+const A_REPLY_B3_SEQ0 = '55aa2300030007012d';
+const A_REPLY_B2_SEQ1 = '55aa220002010125';
+const A_REPLY_B3_SEQ4 = '55aa23000304070131';
+const A_REPLY_B2_SEQ5 = '55aa220002050129';
+const A_STATUS_STORED_3 = '55aa20000500050103507d'; // state 0x05, 3 stored records
+const A_STATUS_ENDING = '55aa20000504040100507d'; // state 0x04, 0 stored records
+// #434 (vossitch, public DEBUG logs): status frames.
+const C_STATUS_MEASURING = '55aa20000500010101466d'; // 1 stored record
+const C_STATUS_NOT_MEASURING_2 = '55aa200005000501024672'; // 2 stored records
+const C_STATUS_MEASURING_2 = '55aa20000500010102466e';
+const C_STATUS_LOCKED = '55aa200005010901014676';
+
+describe('RenphoMsc04Adapter handshake diagnostics (#434)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  function debugLines() {
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    return (): string[] => debug.mock.calls.map((c) => String(c[0]));
+  }
+
+  it('logs the replies to b2 and b3 with their seq, and acks none of them', () => {
+    const lines = debugLines();
+    const adapter = makeAdapter();
+    for (const f of [A_REPLY_B3_SEQ0, A_REPLY_B2_SEQ1, A_REPLY_B3_SEQ4, A_REPLY_B2_SEQ5]) {
+      expect(adapter.parseCharNotification(IND, Buffer.from(f, 'hex'))).toBeNull();
+      expect(adapter.buildAck(Buffer.from(f, 'hex'))).toBeNull();
+    }
+    expect(lines()).toEqual([
+      'Renpho R-MSC04: scale answered b3 (seq 0) with 0701',
+      'Renpho R-MSC04: scale answered b2 (seq 1) with 01',
+      'Renpho R-MSC04: scale answered b3 (seq 4) with 0701',
+      'Renpho R-MSC04: scale answered b2 (seq 5) with 01',
+    ]);
+  });
+
+  it('logs the state, the stored record count and the raw [7] and [9] of each status', () => {
+    const lines = debugLines();
+    const adapter = makeAdapter();
+    for (const f of [
+      A_STATUS_STORED_3,
+      A_STATUS_ENDING,
+      C_STATUS_MEASURING,
+      C_STATUS_NOT_MEASURING_2,
+    ]) {
+      expect(adapter.parseCharNotification(IND, Buffer.from(f, 'hex'))).toBeNull();
+    }
+    expect(lines()).toEqual([
+      'Renpho R-MSC04: status seq 0, state 0x05 (not measuring), 3 stored records, [7] 01, [9] 50',
+      'Renpho R-MSC04: status seq 4, state 0x04 (scale is ending the session), 0 stored records, ' +
+        '[7] 01, [9] 50',
+      'Renpho R-MSC04: status seq 0, state 0x01 (measuring), 1 stored record, [7] 01, [9] 46',
+      'Renpho R-MSC04: status seq 0, state 0x05 (not measuring), 2 stored records, [7] 01, [9] 46',
+    ]);
+  });
+
+  it('logs the seq of each replayed stored record', () => {
+    const lines = debugLines();
+    feed(makeAdapter(), HIST);
+    expect(lines()).toContain('Renpho R-MSC04: stored history record seq 1 ignored (1453 s old)');
+  });
+
+  it('says whether the record was computed for the height we sent, never the height', async () => {
+    const lines = debugLines();
+    // The capture's record implies 187.1 cm.
+    const ours = await connectedAdapter(captureClock, { ...MADE_UP_PROFILE, height: 187 });
+    ours.adapter.parseCharNotification(IND, FINAL);
+    feed(ours.adapter, RECORD);
+    const other = await connectedAdapter(captureClock, MADE_UP_PROFILE);
+    other.adapter.parseCharNotification(IND, FINAL);
+    feed(other.adapter, RECORD);
+    const verdicts = lines().filter((l) => l.includes('BMI height'));
+    expect(verdicts).toEqual([
+      "Renpho R-MSC04: the record's BMI height matches the height we sent (within 1 cm)",
+      "Renpho R-MSC04: the record's BMI height does not match the height we sent (within 1 cm)",
+    ]);
+  });
+
+  it('logs one summary line when the session ends', async () => {
+    vi.useFakeTimers();
+    const lines = debugLines();
+    const { adapter } = await connectedAdapter();
+    const at = (ms: number, f: string): void => {
+      vi.advanceTimersByTime(ms);
+      adapter.parseCharNotification(IND, Buffer.from(f, 'hex'));
+    };
+    // The b2 reply but no b3 reply, then the measurement.
+    at(50, A_REPLY_B2_SEQ1);
+    at(50, C_STATUS_MEASURING_2);
+    at(2000, '55aa240006011100001fdb35');
+    at(1100, C_STATUS_LOCKED);
+    vi.advanceTimersByTime(2300);
+    adapter.onSessionEnd();
+    // Only once: a second end of the same session has no handshake to report.
+    adapter.onSessionStart();
+    adapter.onSessionEnd();
+
+    const summaries = lines().filter((l) => l.includes('session ended'));
+    expect(summaries).toEqual([
+      'Renpho R-MSC04: session ended 5.5 s after the handshake started (writes full: ' +
+        'b2 answered, b3 not answered; first status 0x01 with 2 stored records; ' +
+        'last status 0x09 at 3.2 s; 0x24 yes; stored records replayed 0; ' +
+        'composition record no; last frame 2.3 s before the end)',
+    ]);
+  });
+
+  it('reports a failed write as failed in the summary', async () => {
+    vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    const lines = debugLines();
+    const adapter = new RenphoMsc04Adapter(captureClock);
+    const { ctx } = handshakeCtx(MADE_UP_PROFILE, async (buf) => {
+      if (buf[2] === 0xb3) throw new Error('GATT write failed');
+    });
+    adapter.onSessionStart();
+    await adapter.onConnected(ctx);
+    adapter.onSessionEnd();
+    const summary = lines().find((l) => l.includes('session ended'));
+    expect(summary).toContain('writes full: b2 not answered, b3 failed; no status;');
+    expect(summary).toContain('composition record no; no frames)');
   });
 });
