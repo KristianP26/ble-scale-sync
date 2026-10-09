@@ -147,8 +147,12 @@ ble_transport_problem() {
         echo "ble_transport is mqtt-proxy with mqtt_proxy_broker shared, but no MQTT broker is available. Start the Mosquitto broker add-on with MQTT auto-detect on, set mqtt_broker_url, or set mqtt_proxy_broker to embedded."
       fi
       ;;
+    ha-bluetooth)
+      [ -n "$SUPERVISOR_TOKEN" ] ||
+        echo "ble_transport is ha-bluetooth, but the Supervisor gave this add-on no SUPERVISOR_TOKEN. Please report this."
+      ;;
     *)
-      printf '%s\n' "ble_transport '$BLE_TRANSPORT' is not one of local, esphome-proxy, mqtt-proxy."
+      printf '%s\n' "ble_transport '$BLE_TRANSPORT' is not one of local, ha-bluetooth, esphome-proxy, mqtt-proxy."
       ;;
   esac
   return 0
@@ -188,6 +192,16 @@ emit_ble_transport() {
         printf '%s\n' "    device_id: \"$(yaml_escape "$MQTT_PROXY_DEVICE_ID")\""
       [ -z "$MQTT_PROXY_TOPIC_PREFIX" ] ||
         printf '%s\n' "    topic_prefix: \"$(yaml_escape "$MQTT_PROXY_TOPIC_PREFIX")\""
+      ;;
+    ha-bluetooth)
+      # Home Assistant through the Supervisor's websocket proxy, which this
+      # add-on may use because the manifest sets homeassistant_api. The token
+      # is a reference, never the value: the Supervisor issues a new one on
+      # every add-on start, and the app resolves ${...} from its environment
+      # on load. The path must be written out in full: a bare
+      # http://supervisor/core would become ws://supervisor/core.
+      printf '%s\n' '  handler: ha-bluetooth' '  ha_bluetooth:' \
+        '    url: "ws://supervisor/core/websocket"' '    token: "${SUPERVISOR_TOKEN}"'
       ;;
   esac
   return 0
@@ -274,7 +288,7 @@ else
 
   # Only a hand-edited options.json gets past the Supervisor's list check.
   case "$BLE_TRANSPORT" in
-    local | esphome-proxy | mqtt-proxy) ;;
+    local | ha-bluetooth | esphome-proxy | mqtt-proxy) ;;
     *) ble_transport_error "$(ble_transport_problem)" ;;
   esac
 
@@ -543,6 +557,9 @@ else
         _broker="embedded broker on port $MQTT_PROXY_PORT"
       fi
       log "Bluetooth transport: mqtt-proxy ($_broker, device ${MQTT_PROXY_DEVICE_ID:-esp32-ble-proxy})"
+      ;;
+    ha-bluetooth)
+      log "Bluetooth transport: ha-bluetooth (Home Assistant via the Supervisor, broadcast scales only)"
       ;;
   esac
 

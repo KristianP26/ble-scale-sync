@@ -47,6 +47,19 @@ describe('collectUnknownKeys', () => {
         preemptive_adapter_reset: false,
         adapter_privacy: true,
         proxy_liveness_timeout_min: 45,
+        // One handler at a time; every section run.sh can write is here, with
+        // every key it writes into it.
+        handler: 'esphome-proxy',
+        esphome_proxy: { host: '192.168.1.50', port: 6053, encryption_key: 'k' },
+        mqtt_proxy: {
+          broker_url: 'mqtt://core-mosquitto:1883',
+          username: 'addons',
+          password: 'p',
+          embedded_broker_port: 1883,
+          device_id: 'esp32-ble-proxy',
+          topic_prefix: 'ble-proxy',
+        },
+        ha_bluetooth: { url: 'ws://supervisor/core/websocket', token: '${SUPERVISOR_TOKEN}' },
       },
       scale: { weight_unit: 'kg', height_unit: 'cm', display_unit: 'weight_unit' },
       unknown_user: 'nearest',

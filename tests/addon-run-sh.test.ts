@@ -95,6 +95,13 @@ describe('add-on manifest: Supervisor services', () => {
     expect(MANIFEST.services).toContain('mqtt:want');
   });
 
+  it('may use the Home Assistant API proxy that run.sh points ha-bluetooth at', () => {
+    // The Supervisor refuses ws://supervisor/core/websocket to an add-on
+    // without homeassistant_api, so ble_transport ha-bluetooth could never log in.
+    expect(RUN_SH).toMatch(/supervisor\/core/);
+    expect((MANIFEST as { homeassistant_api?: unknown }).homeassistant_api).toBe(true);
+  });
+
   it('tells a Supervisor refusal apart from a missing broker', () => {
     // Without the status code a 403 and "Mosquitto not installed" produced the
     // same log line, which is how the missing declaration went unnoticed.
@@ -808,7 +815,7 @@ describe('add-on option ble_transport (#420)', () => {
 
   it('defaults to local, the built-in adapter, listed first', () => {
     expect(MANIFEST.options).toHaveProperty('ble_transport', 'local');
-    expect(SCHEMA.ble_transport).toBe('list(local|esphome-proxy|mqtt-proxy)');
+    expect(SCHEMA.ble_transport).toBe('list(local|ha-bluetooth|esphome-proxy|mqtt-proxy)');
     expect(MANIFEST.options).toHaveProperty('mqtt_proxy_broker', 'shared');
     expect(SCHEMA.mqtt_proxy_broker).toBe('list(shared|embedded)');
   });
@@ -957,6 +964,7 @@ describe.skipIf(!SHELL)('run.sh ble_transport_problem', { timeout: 30_000 }, () 
       { BLE_TRANSPORT: 'esphome-proxy', ESPHOME_HOST: 'proxy.local', ESPHOME_KEY: KEY },
       { ...MQTT_SHARED, MQTT_BROKER_URL: 'mqtt://core-mosquitto:1883' },
       { ...MQTT_EMBEDDED, MQTT_PROXY_USERNAME: 'esp32', MQTT_PROXY_PASSWORD: 'pw' },
+      { BLE_TRANSPORT: 'ha-bluetooth', SUPERVISOR_TOKEN: 'token' },
     ]) {
       expect(problem(vars), JSON.stringify(vars)).toEqual({ status: 0, out: '' });
     }
@@ -966,7 +974,12 @@ describe.skipIf(!SHELL)('run.sh ble_transport_problem', { timeout: 30_000 }, () 
     const cases: [Record<string, string>, string][] = [
       [
         { BLE_TRANSPORT: 'bogus' },
-        "ble_transport 'bogus' is not one of local, esphome-proxy, mqtt-proxy.",
+        "ble_transport 'bogus' is not one of local, ha-bluetooth, esphome-proxy, mqtt-proxy.",
+      ],
+      [
+        { BLE_TRANSPORT: 'ha-bluetooth', SUPERVISOR_TOKEN: '' },
+        'ble_transport is ha-bluetooth, but the Supervisor gave this add-on no ' +
+          'SUPERVISOR_TOKEN. Please report this.',
       ],
       [
         MQTT_SHARED,

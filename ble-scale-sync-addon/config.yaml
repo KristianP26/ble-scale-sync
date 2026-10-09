@@ -38,6 +38,11 @@ devices:
 # be tested in CI. See issue #271.
 apparmor: false
 hassio_api: true
+# ble_transport ha-bluetooth reads Home Assistant's Bluetooth advertisements
+# through ws://supervisor/core/websocket, logged in with SUPERVISOR_TOKEN. The
+# Supervisor refuses that proxy to an add-on without this flag. No user token
+# is needed, and the security rating does not change.
+homeassistant_api: true
 # run.sh reads the Mosquitto credentials from GET http://supervisor/services/mqtt
 # (mqtt_auto). The Supervisor answers 403 to any add-on that has not declared
 # the service here, so without this entry auto-detection could never succeed.
@@ -103,7 +108,7 @@ options:
   custom_config: false
 schema:
   scale_mac: str?
-  ble_transport: list(local|esphome-proxy|mqtt-proxy)
+  ble_transport: list(local|ha-bluetooth|esphome-proxy|mqtt-proxy)
   ble_adapter: str?
   force_scale_adapter: str?
   qn_protocol_byte: str?

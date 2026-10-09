@@ -3,15 +3,18 @@ configuration:
     name: Scale MAC address
     description: >-
       MAC address of your BLE scale (e.g., FF:03:00:13:A1:04).
-      Run the BLE scan from the add-on logs to find it.
+      Run the BLE scan from the add-on logs to find it, or with ble_transport
+      ha-bluetooth, Home Assistant's Bluetooth advertisement monitor.
       Leave empty for auto-discovery.
   ble_transport:
     name: Bluetooth transport
     description: >-
       How the add-on reaches the scale. local: this host's Bluetooth adapter,
-      as before. esphome-proxy: an ESPHome Bluetooth proxy that Home Assistant
-      has not adopted. mqtt-proxy: the ESP32 proxy firmware over MQTT. Options
-      below that name a transport only apply to it.
+      as before. ha-bluetooth: every Bluetooth adapter and proxy Home
+      Assistant already uses, no token needed, but only for scales that send
+      the weight in their advertisement. esphome-proxy: an ESPHome Bluetooth
+      proxy that Home Assistant has not adopted. mqtt-proxy: the ESP32 proxy
+      firmware over MQTT. Options below that name a transport only apply to it.
   ble_adapter:
     name: Bluetooth adapter
     description: >-
@@ -115,7 +118,8 @@ configuration:
     name: ESPHome proxy host
     description: >-
       esphome-proxy only. IP address or host name of the proxy, e.g.
-      192.168.1.50. Use a node Home Assistant has not adopted.
+      192.168.1.50. Use a node Home Assistant has not adopted; for one it
+      already uses, pick ha-bluetooth.
   esphome_proxy_port:
     name: ESPHome proxy port
     description: >-

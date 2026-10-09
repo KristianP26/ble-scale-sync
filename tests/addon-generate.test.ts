@@ -16,6 +16,7 @@ import { parse } from 'yaml';
 import { loadYamlConfig } from '../src/config/yaml-load.js';
 import { collectUnknownKeys } from '../src/config/unknown-keys.js';
 import { resolveEnvReferences } from '../src/config/env-refs.js';
+import { writeLastKnownWeight } from '../src/config/write.js';
 import type { AppConfig } from '../src/config/schema.js';
 import { snapshotEnv } from './helpers/env-snapshot.js';
 
@@ -61,6 +62,15 @@ function logFunction(): string {
   const m = /^log\(\) \{.*\}$/m.exec(RUN_SH);
   expect(m, 'log() not found in run.sh').not.toBeNull();
   return m![0];
+}
+
+/** The step that turns the fresh config into /data/config.yaml. */
+function mergeBlock(): string {
+  const start = RUN_SH.indexOf('# ── Merge last_known_weight');
+  const end = RUN_SH.indexOf('# ── Garmin token bootstrap');
+  expect(start, 'merge block not found').toBeGreaterThan(-1);
+  expect(end).toBeGreaterThan(start);
+  return RUN_SH.slice(start, end);
 }
 
 /** The blocks that make up the generated-config path, in script order. */
@@ -739,6 +749,66 @@ describe.skipIf(!HARNESS)(
         expect(r.stdout).not.toContain('unused-secret');
       });
     });
+
+    describe('ble_transport ha-bluetooth', () => {
+      /** Looks like a Supervisor token (112 hex characters), invented. */
+      const TOKEN = 'ab'.repeat(56);
+      const HA = { ...DEFAULTS, ble_transport: 'ha-bluetooth', scale_mac: 'A0:85:61:91:E9:4F' };
+
+      it('reads Home Assistant through the Supervisor with a token reference, not the token', () => {
+        const r = generate({ options: HA, supervisorToken: TOKEN });
+        expect(r.text).toContain('    url: "ws://supervisor/core/websocket"\n');
+        expect(r.text).toContain('    token: "${SUPERVISOR_TOKEN}"\n');
+        expect(r.text).not.toContain(TOKEN);
+        expect(r.stdout).not.toContain(TOKEN);
+        expect(r.stdout).toContain('Bluetooth transport: ha-bluetooth');
+
+        // The app resolves the reference from the environment the Supervisor
+        // gives the add-on, which the restart loop passes on to it.
+        process.env.SUPERVISOR_TOKEN = TOKEN;
+        const config = expectLoads(r);
+        expect(config.ble?.handler).toBe('ha-bluetooth');
+        expect(config.ble?.ha_bluetooth).toMatchObject({
+          url: 'ws://supervisor/core/websocket',
+          token: TOKEN,
+        });
+        expect(config.ble?.scale_mac).toBe('A0:85:61:91:E9:4F');
+      });
+
+      it('stops when the Supervisor gave the add-on no token', () => {
+        expectStopped(
+          generate({ options: HA }),
+          'ble_transport is ha-bluetooth, but the Supervisor gave this add-on no SUPERVISOR_TOKEN.',
+        );
+      });
+
+      it('keeps the token out of /data, also after the app saves a weight', () => {
+        const r = generate({ options: HA, supervisorToken: TOKEN });
+        const dir = mkdtempSync(join(tmpdir(), 'addon-ha-token-'));
+        try {
+          const fresh = join(dir, 'fresh.yaml');
+          const config = join(dir, 'config.yaml');
+          writeFileSync(fresh, r.text!.replaceAll('<tmp>', dir.replace(/\\/g, '/')));
+          const script = [
+            'set -e',
+            `FRESH='${fresh.replace(/\\/g, '/')}'`,
+            `CONFIG='${config.replace(/\\/g, '/')}'`,
+            `ADDON_CONFIG='${resolve('ble-scale-sync-addon/addon-config.mjs').replace(/\\/g, '/')}'`,
+            logFunction(),
+            mergeBlock(),
+          ].join('\n');
+          const res = spawnSync(SHELL!, ['-c', script], { encoding: 'utf8' });
+          expect(res.status, res.stdout + res.stderr).toBe(0);
+          writeLastKnownWeight(config, 'default', 72.5);
+          const saved = readFileSync(config, 'utf8');
+          expect(saved).toContain('token: "${SUPERVISOR_TOKEN}"');
+          expect(saved).toMatch(/last_known_weight: 72.5/);
+          expect(saved).not.toContain(TOKEN);
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      });
+    });
   },
 );
 
@@ -803,14 +873,6 @@ describe.skipIf(!SHELL)('run.sh yaml_escape', { timeout: 30_000 }, () => {
  * Windows has no file modes to check.
  */
 describe.skipIf(!SHELL || process.platform === 'win32')('run.sh config.yaml mode', () => {
-  function mergeBlock(): string {
-    const start = RUN_SH.indexOf('# ── Merge last_known_weight');
-    const end = RUN_SH.indexOf('# ── Garmin token bootstrap');
-    expect(start, 'merge block not found').toBeGreaterThan(-1);
-    expect(end).toBeGreaterThan(start);
-    return RUN_SH.slice(start, end);
-  }
-
   function run(fresh: string, existing?: { text: string; mode: number }) {
     const dir = mkdtempSync(join(tmpdir(), 'addon-mode-'));
     try {
