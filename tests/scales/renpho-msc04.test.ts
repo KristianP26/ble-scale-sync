@@ -816,3 +816,82 @@ describe('RenphoMsc04Adapter handshake diagnostics (#434)', () => {
     expect(summary).toContain('composition record no; no frames)');
   });
 });
+
+// ─── BLE_RMSC04_HANDSHAKE diagnostic switch (#434) ───────────────────────────
+
+describe('RenphoMsc04Adapter BLE_RMSC04_HANDSHAKE (#434)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  async function writesWith(value: string | undefined): Promise<string[]> {
+    if (value === undefined) vi.stubEnv('BLE_RMSC04_HANDSHAKE', undefined);
+    else vi.stubEnv('BLE_RMSC04_HANDSHAKE', value);
+    const { written } = await connectedAdapter();
+    return written.map((w) => w.hex);
+  }
+
+  it('writes b2 and b3 when unset or full', async () => {
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const full = [MADE_UP_B2, '55aab3000b010701016a478eb102580011'];
+    expect(await writesWith(undefined)).toEqual(full);
+    expect(await writesWith('full')).toEqual(full);
+  });
+
+  it('writes only the b3 clock, as seq 0, for time (case-insensitive)', async () => {
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    expect(await writesWith('time')).toEqual([CAPTURE_CLOCK_B3]);
+    expect(await writesWith('TIME')).toEqual([CAPTURE_CLOCK_B3]);
+  });
+
+  it('writes nothing for none, and still acks the status frames', async () => {
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    vi.stubEnv('BLE_RMSC04_HANDSHAKE', 'none');
+    const { adapter, written } = await connectedAdapter();
+    expect(written).toEqual([]);
+    expect(adapter.buildAck(Buffer.from(A_STATUS_STORED_3, 'hex'))).not.toBeNull();
+  });
+
+  it('treats an empty value as unset, without a warning', async () => {
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    expect(await writesWith('')).toEqual([MADE_UP_B2, '55aab3000b010701016a478eb102580011']);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('warns once per unknown value and adapter instance, and writes full', async () => {
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    vi.stubEnv('BLE_RMSC04_HANDSHAKE', 'bogus');
+    const adapter = new RenphoMsc04Adapter(captureClock);
+    for (let i = 0; i < 2; i++) {
+      const { ctx, written } = handshakeCtx();
+      adapter.onSessionStart();
+      await adapter.onConnected(ctx);
+      expect(written.map((w) => w.hex.slice(4, 6))).toEqual(['b2', 'b3']);
+    }
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain('BLE_RMSC04_HANDSHAKE="bogus"');
+  });
+
+  it("exports the scale's figures from a time session through the height gate (D022)", async () => {
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    vi.stubEnv('BLE_RMSC04_HANDSHAKE', 'time');
+    const { adapter } = await connectedAdapter();
+    adapter.parseCharNotification(IND, FINAL);
+    const r = feed(adapter, RECORD)!;
+    expect(adapter.computeMetrics(r, PROFILE_187).bodyFatPercent).toBe(23.7);
+  });
+
+  it('names the mode in the summary', async () => {
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    vi.stubEnv('BLE_RMSC04_HANDSHAKE', 'none');
+    const { adapter } = await connectedAdapter();
+    adapter.onSessionEnd();
+    const lines = debug.mock.calls.map((c) => String(c[0]));
+    expect(lines).toContain('Renpho R-MSC04: connect writes none');
+    expect(lines.find((l) => l.includes('session ended'))).toContain('(writes none; no status;');
+  });
+});

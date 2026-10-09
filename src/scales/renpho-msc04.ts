@@ -92,6 +92,7 @@ const REPLY_TO: Record<number, number> = { 0x22: 0xb2, 0x23: 0xb3, 0x27: 0xb7, 0
 /** What one session's summary line reports (#434). Times are Date.now() values. */
 interface SessionDiagnostics {
   handshakeAt: number | null;
+  mode: ConnectWrites;
   /** Outcome per written command, in write order: sent, failed or refused. */
   writes: Map<number, string>;
   /** Commands the scale answered (b2, b3, ...). */
@@ -106,6 +107,7 @@ interface SessionDiagnostics {
 function freshDiagnostics(): SessionDiagnostics {
   return {
     handshakeAt: null,
+    mode: 'full',
     writes: new Map(),
     answered: new Set(),
     firstStatus: null,
@@ -204,6 +206,30 @@ const CLOCK_CONSTANT = [0x07, 0x01, 0x01];
  * unknown and such a zone is sent as 0.
  */
 const MAX_ZONE_MINUTES = 840;
+
+/**
+ * Temporary diagnostic switch for #434, read from the environment (not
+ * config.yaml) on every connect: `full` (default) writes b2 and b3, `time`
+ * only b3, `none` nothing. The status acks are sent in every mode. It exists
+ * to find the smallest set of writes the scale needs, and goes away or gets
+ * documented once #434 has its answer.
+ */
+const HANDSHAKE_ENV = 'BLE_RMSC04_HANDSHAKE';
+
+export type ConnectWrites = 'full' | 'time' | 'none';
+
+/**
+ * The writes BLE_RMSC04_HANDSHAKE asks for, case-insensitive. Unset or empty
+ * is `full` (an empty value is how compose files leave a variable unset, D016);
+ * any other value is null.
+ */
+export function rmsc04ConnectWrites(
+  raw: string | undefined = process.env[HANDSHAKE_ENV],
+): ConnectWrites | null {
+  const value = (raw ?? '').trim().toLowerCase();
+  if (value === '') return 'full';
+  return value === 'full' || value === 'time' || value === 'none' ? value : null;
+}
 
 /** Height in 0.1 cm sent when the profile has none in range: 170.0 cm, as ES-CS20M. */
 const FALLBACK_HEIGHT_TENTHS = 1700;
@@ -514,6 +540,8 @@ export class RenphoMsc04Adapter
   private sentHeightTenths: number | null = null;
   /** Log the unsendable time zone once per adapter instance (one per process in production). */
   private zoneLogged = false;
+  /** BLE_RMSC04_HANDSHAKE values already warned about, once per value and instance. */
+  private readonly unknownHandshakeValues = new Set<string>();
   private diag = freshDiagnostics();
 
   private readonly now: () => Date;
@@ -554,9 +582,31 @@ export class RenphoMsc04Adapter
       );
     }
     this.ctx = ctx;
+    const mode = this.connectWrites();
     this.diag.handshakeAt = Date.now();
-    await this.writeGuestProfile(ctx, 0);
-    await this.writeClock(ctx, 1);
+    this.diag.mode = mode;
+    bleLog.debug(`Renpho R-MSC04: connect writes ${mode}`);
+    if (mode === 'full') {
+      await this.writeGuestProfile(ctx, 0);
+      await this.writeClock(ctx, 1);
+    } else if (mode === 'time') {
+      await this.writeClock(ctx, 0);
+    }
+  }
+
+  private connectWrites(): ConnectWrites {
+    const raw = process.env[HANDSHAKE_ENV];
+    const mode = rmsc04ConnectWrites(raw);
+    if (mode) return mode;
+    const value = (raw ?? '').trim();
+    if (!this.unknownHandshakeValues.has(value)) {
+      this.unknownHandshakeValues.add(value);
+      bleLog.warn(
+        `Renpho R-MSC04: ignoring ${HANDSHAKE_ENV}=${JSON.stringify(value)}, ` +
+          'expected full, time or none; using full',
+      );
+    }
+    return 'full';
   }
 
   onSessionEnd(): void {
@@ -595,7 +645,7 @@ export class RenphoMsc04Adapter
         : 'no frames';
     bleLog.debug(
       `Renpho R-MSC04: session ended ${secs(end - start)} s after the handshake started ` +
-        `(writes full: ${writes || 'none'}; ${first}; ${last}; ` +
+        `(writes ${d.mode}${writes ? `: ${writes}` : ''}; ${first}; ${last}; ` +
         `0x24 ${this.finalReceived ? 'yes' : 'no'}; stored records replayed ${d.replayed}; ` +
         `composition record ${d.record}; ${lastFrame})`,
     );

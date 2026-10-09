@@ -2193,6 +2193,34 @@ describe('R-MSC04 composition hold through waitForRawReading (#434)', () => {
     }
   });
 
+  it('writes only the clock and exports the record under BLE_RMSC04_HANDSHAKE=time', async () => {
+    vi.useFakeTimers();
+    vi.stubEnv('BLE_RMSC04_HANDSHAKE', 'time');
+    try {
+      const s = await startSession();
+      // The same #117 capture frames as above, compressed in time.
+      s.indicate.triggerData(hex('55aa200005000101005076'));
+      s.indicate.triggerData(hex('55aa240006011100002553b3'));
+      await vi.advanceTimersByTimeAsync(6165);
+      s.indicate.triggerData(hex('55aa200005020901005080'));
+      s.indicate.triggerData(hex('ad040255aa2500240411000025530a00de0c200b'));
+      s.indicate.triggerData(hex('ae0401ef08e4092a00ae0ac10a9007e108250100'));
+      s.indicate.triggerData(hex('af0400ed011101b70008ea'));
+      const raw = await s.promise;
+
+      // No guest b2 went out, so the D022 height gate decides: 187 cm passes.
+      expect(s.adapter.computeMetrics(raw.reading, PROFILE_187).bodyFatPercent).toBe(23.7);
+      expect(s.write.writtenData.map((b) => Buffer.from(b).toString('hex'))).toEqual([
+        '55aab3000b000701016a478eb102580010', // the capture's b3, byte for byte
+        '55aab000020001b2',
+        '55aab000020201b4',
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.useRealTimers();
+    }
+  });
+
   it('settles weight-only on the 0x24 weight when no record arrives within 30 s', async () => {
     vi.useFakeTimers();
     try {
