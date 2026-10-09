@@ -38,8 +38,13 @@ function res(body: unknown, opts: { ok?: boolean; status?: number } = {}) {
   };
 }
 
+/** A UUID like the ones wger (2.6+) uses as ids, distinct per n. */
+function uuid(n: number): string {
+  return `0199a3c4-5d6e-7f80-9a1b-${String(n).padStart(12, '0')}`;
+}
+
 /** Default happy-path router: configurable category list, category creation, then 201s. */
-function routeHappy(existing: Array<{ id: number; name: string; unit: string }> = []) {
+function routeHappy(existing: Array<{ id: string | number; name: string; unit: string }> = []) {
   let nextId = 100;
   mockFetch.mockImplementation((url: string, init?: { method?: string }) => {
     const method = init?.method ?? 'GET';
@@ -47,7 +52,7 @@ function routeHappy(existing: Array<{ id: number; name: string; unit: string }> 
       return Promise.resolve(res({ count: existing.length, next: null, results: existing }));
     }
     if (url.endsWith('/measurement-category/') && method === 'POST') {
-      return Promise.resolve(res({ id: nextId++, name: 'x', unit: 'x' }, { status: 201 }));
+      return Promise.resolve(res({ id: uuid(nextId++), name: 'x', unit: 'x' }, { status: 201 }));
     }
     if (url.endsWith('/measurement/') && method === 'POST') {
       return Promise.resolve(res({ id: 1 }, { status: 201 }));
@@ -107,16 +112,27 @@ describe('WgerExporter', () => {
       .map((c) => JSON.parse(c[1].body as string))
       .find((b) => b.value === 18.5);
     expect(fat).toBeDefined();
-    expect(typeof fat.category).toBe('number');
+    // Body Fat is the first category created
+    expect(fat.category).toBe(uuid(100));
     expect(fat.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
   it('reuses an existing category id and does not recreate it', async () => {
-    routeHappy([{ id: 7, name: 'Body Fat', unit: '%' }]);
+    routeHappy([{ id: uuid(7), name: 'Body Fat', unit: '%' }]);
     await new WgerExporter(config).export(sample);
 
     // Only the 3 missing categories are created (Body Fat already exists).
     expect(calls('POST', '/measurement-category/')).toHaveLength(3);
+    const fat = calls('POST', '/measurement/')
+      .map((c) => JSON.parse(c[1].body as string))
+      .find((b) => b.value === 18.5);
+    expect(fat.category).toBe(uuid(7));
+  });
+
+  it('passes the integer category id of a wger older than 2.6 back unchanged', async () => {
+    routeHappy([{ id: 7, name: 'Body Fat', unit: '%' }]);
+    await new WgerExporter(config).export(sample);
+
     const fat = calls('POST', '/measurement/')
       .map((c) => JSON.parse(c[1].body as string))
       .find((b) => b.value === 18.5);
