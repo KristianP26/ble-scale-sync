@@ -158,6 +158,10 @@ BlueZ and noble, plus the ESP32 and ESPHome proxies).
 <td align="center"><a href="https://github.com/gvarph"><img src="https://avatars.githubusercontent.com/u/17300137?v=4" width="60" height="60" alt="gvarph"><br><sub>gvarph</sub></a></td>
 <td align="center"><a href="https://github.com/chrisauer"><img src="https://avatars.githubusercontent.com/u/884764?v=4" width="60" height="60" alt="chrisauer"><br><sub>chrisauer</sub></a></td>
 </tr><tr>
+<td align="center"><a href="https://github.com/vargamihaly"><img src="https://avatars.githubusercontent.com/u/20193710?v=4" width="60" height="60" alt="vargamihaly"><br><sub>vargamihaly</sub></a></td>
+<td align="center"><a href="https://github.com/totalitarian"><img src="https://avatars.githubusercontent.com/u/2385696?v=4" width="60" height="60" alt="totalitarian"><br><sub>totalitarian</sub></a></td>
+<td align="center"><a href="https://github.com/ocurero"><img src="https://avatars.githubusercontent.com/u/2606647?v=4" width="60" height="60" alt="ocurero"><br><sub>ocurero</sub></a></td>
+<td align="center"><a href="https://github.com/ibrokemypie"><img src="https://avatars.githubusercontent.com/u/7827846?v=4" width="60" height="60" alt="ibrokemypie"><br><sub>ibrokemypie</sub></a></td>
 <td align="center"><a href="https://github.com/rolandgeider"><img src="https://avatars.githubusercontent.com/u/2280729?v=4" width="60" height="60" alt="rolandgeider"><br><sub>rolandgeider</sub></a></td>
 </tr></table>
 
