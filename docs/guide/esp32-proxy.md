@@ -284,6 +284,15 @@ If you already have an MQTT exporter configured, the ESP32 proxy can use the sam
 The default `mqtt://` URL transmits data in plaintext, including body weight and composition data. On untrusted networks, use a TLS-enabled broker (usually port 8883). `mqtts://` in `broker_url` covers only the server's own connection. The ESP32 connects on its own and needs TLS turned on in its `config.json`: set `"mqtt_tls": true`, and `"mqtt_ca_file"` to a CA certificate uploaded with the firmware to verify the broker (`"mqtt_tls_hostname"` when the broker is reached by IP address). Without a CA file the link is encrypted but the broker is not verified.
 :::
 
+### Home Assistant add-on
+
+The [add-on](/guide/home-assistant-addon#bluetooth-transports) sets this transport up from its Configuration tab: set **Bluetooth transport** to `mqtt-proxy`, then pick the broker with **ESP32 proxy broker**:
+
+- `shared` (default) uses the broker of the add-on's MQTT options, which is the Mosquitto broker add-on when MQTT auto-detection is on, even with the MQTT exporter turned off. Give the ESP32 its own login on that broker (a Home Assistant user, or an entry under `logins` in the Mosquitto add-on) and put it in `mqtt_user` and `mqtt_password` of `config.json`.
+- `embedded` starts the broker inside the add-on. **Embedded broker username** and **Embedded broker password** are required, since the broker listens on the host's network. The Mosquitto add-on usually holds port 1883 on the host, so set **Embedded broker port** to a free one such as `1884` and the same `mqtt_port` in `config.json`.
+
+Either way, `mqtt_broker` in `config.json` is the Home Assistant host's IP address, and **ESP32 proxy device ID** and **ESP32 proxy topic prefix** must match `device_id` and `topic_prefix` there.
+
 ## Docker Deployment
 
 When using the ESP32 proxy, BLE Scale Sync does not need local Bluetooth at all. This means the Docker container requires no BlueZ, D-Bus mounts, or `NET_ADMIN` capability.

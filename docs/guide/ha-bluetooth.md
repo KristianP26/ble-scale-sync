@@ -50,9 +50,18 @@ BLE Scale Sync authenticates with a long-lived access token and sends `bluetooth
 ## Requirements
 
 - Home Assistant **2026.8 or newer** (the SMLIGHT SLZB proxy needs this; the advertisement subscription itself exists since 2025)
-- A **long-lived access token of an administrator user**: Profile (bottom-left) → Security → Long-lived access tokens → Create. The subscription is admin-only; a token from a non-admin user is refused at startup.
 - At least one Bluetooth scanner in Home Assistant that can hear the scale: check **Settings → Devices & services → Bluetooth → Advertisement monitor** while standing on the scale.
-- Network reachability from BLE Scale Sync to Home Assistant on its web port (8123 by default; `https://` and reverse proxies work too).
+- Docker or a standalone install only (the [add-on](#home-assistant-add-on) needs neither):
+  - A **long-lived access token of an administrator user**: Profile (bottom-left) → Security → Long-lived access tokens → Create. The subscription is admin-only; a token from a non-admin user is refused at startup.
+  - Network reachability from BLE Scale Sync to Home Assistant on its web port (8123 by default; `https://` and reverse proxies work too).
+
+## Home Assistant add-on
+
+In the [add-on](/guide/home-assistant-addon), set **Bluetooth transport** (`ble_transport`) to `ha-bluetooth`. That is all: no URL, no token, no `config.yaml`. The add-on reaches Home Assistant through the Supervisor with the token the Supervisor gives every add-on, which is why the add-on asks for access to the Home Assistant API (the **Home Assistant** badge on its Info page).
+
+- Setting **Scale MAC address** to the address the advertisement monitor shows is still recommended.
+- When the host boots, the add-on starts before Home Assistant. Until Home Assistant is running the log shows a few reconnect attempts, then the subscription comes up on its own.
+- In custom config mode the same works without a long-lived token: `url: ws://supervisor/core/websocket` and `token: '${SUPERVISOR_TOKEN}'`. Write the URL out in full; `http://supervisor/core` alone does not reach the websocket.
 
 ## Configuring BLE Scale Sync
 

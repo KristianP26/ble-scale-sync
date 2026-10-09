@@ -96,7 +96,7 @@ Running Home Assistant **OS** or **Supervised**? One click and skip the CLI enti
 
 The badge opens your Home Assistant instance, confirms the repository, and lands you on the Add-on Store with **BLE Scale Sync** ready to install.
 
-The add-on handles config through the UI, auto-detects the Mosquitto broker for Home Assistant auto-discovery, and bootstraps Garmin tokens on first start. See the [Home Assistant Add-on guide](/guide/home-assistant-addon) for the full option reference, MFA workaround, and custom config mode.
+The add-on handles config through the UI, including the Bluetooth transport (the host adapter, Home Assistant Bluetooth, or an ESPHome or ESP32 proxy), auto-detects the Mosquitto broker for Home Assistant auto-discovery, and bootstraps Garmin tokens on first start. See the [Home Assistant Add-on guide](/guide/home-assistant-addon) for the full option reference, MFA workaround, and custom config mode.
 
 ::: warning
 Add-ons are not available on **HA Container** or **HA Core** installs (no Supervisor). Use Option 1 instead.

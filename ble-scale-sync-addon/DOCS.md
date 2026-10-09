@@ -12,12 +12,66 @@ Read body composition data from BLE smart scales and export to Home Assistant (M
 
 Your scale measurements will appear as Home Assistant sensors automatically.
 
+If this host's Bluetooth adapter is out of range of the scale, or the host has none, pick another **Bluetooth transport** first (see below).
+
 ## Finding Your Scale MAC
 
 1. Start the add-on with debug logging enabled
 2. Step on your scale to wake it up
 3. Check the add-on logs for discovered devices
 4. Copy the MAC address and paste it into the Scale MAC field
+
+With the `ha-bluetooth` transport, Home Assistant's own **Settings > Devices & services > Bluetooth > Advertisement monitor** shows the address too, while you stand on the scale.
+
+## Bluetooth transports
+
+**Bluetooth transport** (`ble_transport`) picks how the add-on reaches the scale. The default, `local`, is this host's own Bluetooth adapter, as in every earlier version.
+
+| Your setup                                                                                                          | Transport         |
+| ------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| This host's Bluetooth adapter is in range of the scale                                                              | `local` (default) |
+| The scale sends its weight in its advertisement, and Home Assistant already hears it (any adapter or proxy it uses) | `ha-bluetooth`    |
+| The scale needs a connection, and an ESPHome Bluetooth proxy that Home Assistant has not adopted is near it         | `esphome-proxy`   |
+| The scale needs a connection, and an ESP32 with the BLE Scale Sync proxy firmware is near it                        | `mqtt-proxy`      |
+
+Which scales send their weight in the advertisement is listed under [which scales work](https://blescalesync.dev/guide/ha-bluetooth#which-scales-work). Every other scale needs a connection.
+
+With any transport but `local`:
+
+- The options that only steer this host's adapter (**Bluetooth adapter**, **Re-pair a scale that forgot its pairing**, **Power-cycle the adapter after every weigh-in**, **Pair with a host identity key**) are ignored, and the log names any you have set. The adapter reset on startup is skipped as well.
+- **Scale MAC address** still applies, and is worth setting.
+- **Proxy silence before restart** (`proxy_liveness_timeout_min`) applies.
+
+A transport that cannot run with the options you gave stops the add-on with an `ERROR` line that names the option to fix (see [Troubleshooting](#add-on-stops-with-an-error-about-ble_transport)). It never falls back to this host's adapter: you chose not to use it, and with `ha-bluetooth` it is the adapter Home Assistant itself reads from.
+
+### Home Assistant Bluetooth (`ha-bluetooth`)
+
+Nothing else to fill in, and no access token. The add-on subscribes to the advertisements Home Assistant's Bluetooth integration receives from every adapter and proxy it uses, through the Supervisor. That is why the add-on asks for access to the Home Assistant API, shown as a **Home Assistant** badge on its Info page.
+
+- Broadcast scales only: a scale that needs a connection is named in a warning at startup. For those, use one of the other transports.
+- An ESPHome node used this way has `bluetooth_proxy:` and is adopted in Home Assistant, the opposite of `esphome-proxy`.
+- Check first that Home Assistant hears the scale: open the advertisement monitor above and stand on the scale.
+- When the host boots, the add-on starts before Home Assistant itself. Until Home Assistant is up the log shows a few retries, then the add-on connects on its own.
+
+### ESPHome proxy (`esphome-proxy`)
+
+For a scale that needs a connection, through an ESPHome Bluetooth proxy node that Home Assistant has **not** adopted. A node serves its Bluetooth advertisements to one client only, so one that Home Assistant already uses gives this add-on nothing; for such a node use `ha-bluetooth`.
+
+1. Set **Bluetooth transport** to `esphome-proxy`.
+2. **ESPHome proxy host**: the node's IP address. A `.local` name works on many networks, an IP address on all.
+3. **ESPHome proxy port**: `6053`, unless the device sets another.
+4. **ESPHome API encryption key**: the key under `api: encryption: key:` in the device's YAML, 44 characters ending in `=`. Leave it empty only if the device has no API encryption.
+
+A device that still uses the old API password, removed in ESPHome 2026.1, needs custom config. Setting up the node: [ESPHome proxy guide](https://blescalesync.dev/guide/esphome-proxy).
+
+### ESP32 proxy (`mqtt-proxy`)
+
+For a scale that needs a connection, through an ESP32 running the [BLE Scale Sync proxy firmware](https://blescalesync.dev/guide/esp32-proxy). The ESP32 and the add-on talk over MQTT. **ESP32 proxy broker** (`mqtt_proxy_broker`) picks the broker:
+
+- `shared` (default): the broker of the add-on's MQTT options, which is the Mosquitto broker add-on when **Auto-detect MQTT broker** is on. This works even with **Enable MQTT** off. Give the ESP32 a login of its own there, for example a Home Assistant user or an entry under `logins` in the Mosquitto add-on, and put it in `mqtt_user` and `mqtt_password` of the ESP32's `config.json`.
+- `embedded`: a broker inside this add-on. Set **Embedded broker port**, **Embedded broker username** and **Embedded broker password**; the ESP32 logs in with them. The broker listens on this host's network, which is why both are required. The Mosquitto add-on usually holds port 1883 already; then pick another port, for example 1884, and set the same `mqtt_port` in the ESP32's `config.json`.
+
+Either way, `mqtt_broker` in the ESP32's `config.json` is this host's IP address, and **ESP32 proxy device ID** and **ESP32 proxy topic prefix** match its `device_id` and `topic_prefix`.
 
 ## MQTT Auto-Detection
 
@@ -119,7 +173,7 @@ Add-on v1.8.1 bumps `garminconnect` to 0.3.x, which uses a new native auth engin
 
 ## Advanced: Custom Config
 
-The Configuration tab covers the scale, the primary user profile, MQTT and Garmin Connect. Every other exporter (InfluxDB, Webhook, Ntfy, Telegram, Intervals.icu, Strava, Runalyze, Wger, HealthLog, File), every multi-user setup and the alternative BLE transports are configured through a custom `config.yaml`. See the [exporters reference](https://blescalesync.dev/exporters) for each one's options.
+The Configuration tab covers the scale, the Bluetooth transport, the primary user profile, MQTT and Garmin Connect. Every other exporter (InfluxDB, Webhook, Ntfy, Telegram, Intervals.icu, Strava, Runalyze, Wger, HealthLog, File), every multi-user setup and the transport settings the tab does not have (several ESPHome proxies, the `source` filter of `ha-bluetooth`, the legacy ESPHome API password) are configured through a custom `config.yaml`. See the [exporters reference](https://blescalesync.dev/exporters) for each one's options.
 
 To use one, enable **Use custom config.yaml** and place your configuration at:
 
@@ -129,7 +183,7 @@ To use one, enable **Use custom config.yaml** and place your configuration at:
 
 See [config.yaml.example](https://github.com/KristianP26/ble-scale-sync/blob/main/config.yaml.example) for the full reference.
 
-When custom config is enabled, all other options in the Configuration tab are ignored, with one exception: **Proxy silence before restart** (`proxy_liveness_timeout_min`) only does anything with a proxy transport, which needs custom config, so the add-on applies it on top of your file (the file itself is not modified) when you change it from 30 and the file does not set `ble.proxy_liveness_timeout_min` itself. A value in the file always wins.
+When custom config is enabled, all other options in the Configuration tab are ignored, the Bluetooth transport options included: the file's `ble.handler` decides, and the log warns if you set a transport in the tab. The one exception is **Proxy silence before restart** (`proxy_liveness_timeout_min`), which the add-on applies on top of your file (the file itself is not modified) when you change it from 30 and the file does not set `ble.proxy_liveness_timeout_min` itself. A value in the file always wins.
 
 ### Garmin Connect with custom config
 
@@ -141,14 +195,21 @@ Anything under `/share/` can be read and changed by every add-on with share acce
 
 A `strava` exporter without its own `token_dir` keeps its tokens in `/data/strava-tokens`, which survives restarts and updates. That matters because Strava issues a new refresh token on every refresh, so a lost token file means authorising again.
 
-### Alternative BLE transports (no host Bluetooth needed)
+### Bluetooth transports with custom config
 
-If your Home Assistant host has no Bluetooth adapter, or its built-in radio gets stuck under continuous-mode load, custom config mode unlocks two BLE-free transport options shipped in 1.10.0:
+Set `ble.handler` and its section in the file, as the guides for the [ESP32 proxy](https://blescalesync.dev/guide/esp32-proxy), the [ESPHome proxy](https://blescalesync.dev/guide/esphome-proxy) and [Home Assistant Bluetooth](https://blescalesync.dev/guide/ha-bluetooth) show. For Home Assistant Bluetooth the add-on's own Supervisor access works here too, with no long-lived token:
 
-- **[ESP32 BLE Proxy](https://blescalesync.dev/guide/esp32-proxy)** (`ble.handler: mqtt-proxy`) — relay BLE over MQTT from a ~8€ ESP32 board placed near your scale. Includes an embedded MQTT broker so you do not need to install Mosquitto.
-- **[ESPHome Bluetooth proxy](https://blescalesync.dev/guide/esphome-proxy)** (`ble.handler: esphome-proxy`, experimental, broadcast-only) — reuse an existing ESPHome BT proxy mesh you already run for Home Assistant.
+```yaml
+ble:
+  handler: ha-bluetooth
+  ha_bluetooth:
+    url: ws://supervisor/core/websocket
+    token: '${SUPERVISOR_TOKEN}'
+```
 
-Both transports work without `host_dbus` or any host Bluetooth at all.
+Write the URL out in full: `http://supervisor/core` alone does not reach the websocket.
+
+With `ble_adapter` set in the tab, the adapter reset on startup still runs in custom config mode, whatever the file's transport. Turn off **Reset Bluetooth adapter on startup** if your file uses a proxy.
 
 ## Supported Scales
 
@@ -164,6 +225,17 @@ The full error mentions `An AppArmor policy prevents this sender from sending th
 
 The Supervisor's default AppArmor profile does not allow the D-Bus calls this add-on makes to reach BlueZ. Newer add-on versions run unconfined instead, so updating to the latest version fixes it. If you still see this after updating, uninstall and reinstall the add-on so the Supervisor picks up the new manifest.
 
+### Add-on stops with an error about ble_transport
+
+A transport that cannot run stops the add-on with `ERROR:` and the reason, followed by `Not falling back to the built-in Bluetooth adapter`. Fix the option it names, or set **Bluetooth transport** back to `local`:
+
+- `esphome_proxy_host is empty`, or `takes a host name or IP address, not a URL`: enter only the address, such as `192.168.1.50`, without `http://` or a path.
+- `esphome_proxy_encryption_key is not a valid ESPHome API key`: copy the whole key from `api: encryption: key:` in the device's YAML. It is 44 characters long and ends in `=`.
+- `mqtt_proxy_broker shared, but no MQTT broker is available`: start the Mosquitto broker add-on with **Auto-detect MQTT broker** on, set **MQTT broker URL**, or switch **ESP32 proxy broker** to `embedded`.
+- `mqtt_proxy_broker embedded ... needs mqtt_proxy_username and mqtt_proxy_password`: fill in both.
+- `cannot contain + or #`: those are MQTT wildcards; use the same plain device ID and topic prefix as the ESP32's `config.json`.
+- `the Supervisor gave this add-on no SUPERVISOR_TOKEN`: this should not happen; please open an issue with the log.
+
 ### The app restarts on its own
 
 When the app cannot recover inside the running process (for example after ten failed scans in a row, or when a Bluetooth proxy stays silent), it exits on purpose. The add-on then starts it again by itself, without the Supervisor's Watchdog switch: the log shows `BLE Scale Sync exited with code N ...; restart #M in Ns`. The wait starts at 5 seconds and doubles while the app keeps exiting soon after starting, up to 5 minutes. A run of 10 minutes or more resets it. Stopping the add-on stops the app cleanly and does not start it again.
@@ -172,7 +244,7 @@ If the log shows a long series of these restarts, the reason is in the lines jus
 
 ### Bluetooth adapter reset
 
-The add-on power-cycles the Bluetooth adapter on startup to ensure a clean state. This is enabled by default (**Reset Bluetooth adapter on startup**). If you have other HA Bluetooth integrations that lose connectivity when this add-on restarts, disable the option.
+The add-on power-cycles the Bluetooth adapter on startup to ensure a clean state. This is enabled by default (**Reset Bluetooth adapter on startup**). If you have other HA Bluetooth integrations that lose connectivity when this add-on restarts, disable the option. With a **Bluetooth transport** other than `local` the reset is skipped, since that transport does not use this host's adapter.
 
 Separately from that startup reset, the add-on also power-cycles the adapter after every connection to the scale (built-in Bluetooth only, not with an ESPHome or ESP32 proxy), to clear a stuck scanning state some Raspberry Pi adapters fall into. **Power-cycle the adapter after every weigh-in** (`preemptive_adapter_reset`) turns that off. Leave it on unless other Home Assistant Bluetooth integrations on the same adapter suffer from the brief drop after each weigh-in. It was not the cause of the Beurer BF915 re-pairing in #417; for a scale that asks to pair again before every weigh-in, see the next section.
 

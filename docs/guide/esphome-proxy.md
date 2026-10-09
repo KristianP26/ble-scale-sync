@@ -85,10 +85,14 @@ In your ESPHome device YAML:
 ```yaml
 api:
   encryption:
-    key: 'Lw1vKZ...YOUR_BASE64_KEY...cG=='
+    key: 'Lw1vKZ...YOUR_BASE64_KEY...cG0='
 ```
 
-Use the exact same key in `esphome_proxy.encryption_key`. If you use `secrets.yaml`, read the key from the rendered device config in Home Assistant or ESPHome Dashboard.
+Use the exact same key in `esphome_proxy.encryption_key`. It is 44 characters long and ends in a single `=`. If you use `secrets.yaml`, read the key from the rendered device config in Home Assistant or ESPHome Dashboard.
+
+::: tip Home Assistant add-on
+The [add-on](/guide/home-assistant-addon#bluetooth-transports) sets this transport up from its Configuration tab: set **Bluetooth transport** to `esphome-proxy` and fill in **ESPHome proxy host** (an IP address is more reliable than a `.local` name), **ESPHome proxy port** and **ESPHome API encryption key**. A node Home Assistant already uses is no good here, as above; for that one pick `ha-bluetooth` instead. The legacy API password and several proxies still need the add-on's custom config mode.
+:::
 
 ::: tip Wizard
 `npm run setup` includes an interactive ESPHome proxy step that prompts for the host, port and authentication choice.
