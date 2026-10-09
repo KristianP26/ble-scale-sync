@@ -71,7 +71,7 @@ For a scale that needs a connection, through an ESP32 running the [BLE Scale Syn
 - `shared` (default): the broker of the add-on's MQTT options, which is the Mosquitto broker add-on when **Auto-detect MQTT broker** is on. This works even with **Enable MQTT** off. Give the ESP32 a login of its own there, for example a Home Assistant user or an entry under `logins` in the Mosquitto add-on, and put it in `mqtt_user` and `mqtt_password` of the ESP32's `config.json`.
 - `embedded`: a broker inside this add-on. Set **Embedded broker port**, **Embedded broker username** and **Embedded broker password**; the ESP32 logs in with them. The broker listens on this host's network, which is why both are required. The Mosquitto add-on usually holds port 1883 already; then pick another port, for example 1884, and set the same `mqtt_port` in the ESP32's `config.json`.
 
-Either way, `mqtt_broker` in the ESP32's `config.json` is this host's IP address, and **ESP32 proxy device ID** and **ESP32 proxy topic prefix** match its `device_id` and `topic_prefix`.
+`mqtt_broker` in the ESP32's `config.json` is that broker's address: this host's IP address for the Mosquitto add-on and for `embedded`, the broker's own address for one you set under **MQTT broker URL**. **ESP32 proxy device ID** and **ESP32 proxy topic prefix** match its `device_id` and `topic_prefix`.
 
 ## MQTT Auto-Detection
 

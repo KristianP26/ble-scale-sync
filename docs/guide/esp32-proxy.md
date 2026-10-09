@@ -291,7 +291,7 @@ The [add-on](/guide/home-assistant-addon#bluetooth-transports) sets this transpo
 - `shared` (default) uses the broker of the add-on's MQTT options, which is the Mosquitto broker add-on when MQTT auto-detection is on, even with the MQTT exporter turned off. Give the ESP32 its own login on that broker (a Home Assistant user, or an entry under `logins` in the Mosquitto add-on) and put it in `mqtt_user` and `mqtt_password` of `config.json`.
 - `embedded` starts the broker inside the add-on. **Embedded broker username** and **Embedded broker password** are required, since the broker listens on the host's network. The Mosquitto add-on usually holds port 1883 on the host, so set **Embedded broker port** to a free one such as `1884` and the same `mqtt_port` in `config.json`.
 
-Either way, `mqtt_broker` in `config.json` is the Home Assistant host's IP address, and **ESP32 proxy device ID** and **ESP32 proxy topic prefix** must match `device_id` and `topic_prefix` there.
+`mqtt_broker` in `config.json` is that broker's address: the Home Assistant host's IP address for the Mosquitto add-on and for `embedded`, the broker's own address for one set by hand in the add-on's MQTT options. **ESP32 proxy device ID** and **ESP32 proxy topic prefix** must match `device_id` and `topic_prefix` there.
 
 ## Docker Deployment
 

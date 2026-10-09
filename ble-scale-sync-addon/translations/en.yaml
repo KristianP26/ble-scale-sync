@@ -136,8 +136,8 @@ configuration:
       mqtt-proxy only. shared: the broker from the MQTT options below
       (Mosquitto when auto-detect is on); give the ESP32 its own login there.
       embedded: a broker inside this add-on, with the port, username and
-      password below. Either way, set mqtt_broker in the ESP32's config.json to
-      this host's IP address.
+      password below. Set mqtt_broker in the ESP32's config.json to that
+      broker's address: this host's IP address for Mosquitto or embedded.
   mqtt_proxy_device_id:
     name: ESP32 proxy device ID
     description: mqtt-proxy only. Same as device_id in the ESP32's config.json.
