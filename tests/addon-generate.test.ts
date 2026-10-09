@@ -813,6 +813,71 @@ describe.skipIf(!HARNESS)(
 );
 
 /**
+ * The custom_config branch of run.sh, with the file in /share replaced by one
+ * in a temp directory. Linux only, like the harness: the transport options
+ * are compared with their defaults, and jq's CRLF would make every one differ.
+ */
+describe.skipIf(!HARNESS)('run.sh custom_config and the transport options', () => {
+  function customBranch(): string {
+    const start = RUN_SH.indexOf('if [ "$CUSTOM_CONFIG" = "true" ]; then');
+    const end = RUN_SH.indexOf('\nelse\n', start);
+    expect(start, 'custom_config branch not found').toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    return `${RUN_SH.slice(start, end)}\nfi\n`;
+  }
+
+  function run(options: Record<string, unknown>): { status: number | null; stdout: string } {
+    const raw = mkdtempSync(join(tmpdir(), 'addon-custom-'));
+    const dir = raw.replace(/\\/g, '/');
+    try {
+      writeFileSync(`${dir}/options.json`, JSON.stringify(options));
+      writeFileSync(`${dir}/custom.yaml`, 'version: 1\n');
+      const script = [
+        'set -e',
+        `OPTIONS='${dir}/options.json'`,
+        `FRESH='${dir}/fresh.yaml'`,
+        logFunction(),
+        ...['option readers', 'yaml escape', 'option checks', 'ble transport', 'mode'].map(block),
+        customBranch().replaceAll('/share/ble-scale-sync/config.yaml', `${dir}/custom.yaml`),
+      ].join('\n');
+      const res = spawnSync(SHELL!, ['-c', script], {
+        encoding: 'utf8',
+        env: { PATH: process.env.PATH },
+      });
+      expect(res.stderr).toBe('');
+      return { status: res.status, stdout: res.stdout.replaceAll(dir, '<tmp>') };
+    } finally {
+      rmSync(raw, { recursive: true, force: true });
+    }
+  }
+
+  const CUSTOM = { ...DEFAULTS, custom_config: true };
+
+  it('names the transport options it ignores, never their values', () => {
+    const r = run({
+      ...CUSTOM,
+      ble_transport: 'esphome-proxy',
+      esphome_proxy_host: '192.168.1.50',
+      esphome_proxy_encryption_key: 'custom-secret-key',
+    });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain(
+      'WARNING: custom_config is enabled, so the transport options (ble_transport, ' +
+        'esphome_proxy_host, esphome_proxy_encryption_key) are ignored.',
+    );
+    expect(r.stdout).toContain("Set 'ble.handler' and its section");
+    expect(r.stdout).not.toContain('custom-secret-key');
+    expect(r.stdout).not.toContain('192.168.1.50');
+  });
+
+  it('says nothing while every transport option has its default', () => {
+    const r = run(CUSTOM);
+    expect(r.status).toBe(0);
+    expect(r.stdout).not.toContain('transport options');
+  });
+});
+
+/**
  * yaml_escape on its own, under dash where installed: each value is written
  * the way run.sh writes it, then read back the way the app reads it (YAML,
  * then ${VAR} references).

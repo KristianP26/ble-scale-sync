@@ -259,6 +259,16 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
     log "WARNING: custom_config is enabled, so the 'update_check' option is ignored."
     log "Set 'update_check: false' in $CUSTOM_PATH instead."
   fi
+  # The transport options are named together: each of them maps to a key of a
+  # ble section in the file, not to a ble.<option> as the loop above says.
+  _transport=$(transport_options_set $ESPHOME_OPTIONS $MQTT_PROXY_OPTIONS)
+  if [ "$BLE_TRANSPORT" != "local" ]; then
+    _transport="ble_transport${_transport:+, $_transport}"
+  fi
+  if [ -n "$_transport" ]; then
+    log "WARNING: custom_config is enabled, so the transport options ($_transport) are ignored."
+    log "Set 'ble.handler' and its section (ble.esphome_proxy, ble.mqtt_proxy or ble.ha_bluetooth) in $CUSTOM_PATH instead."
+  fi
   # proxy_liveness_timeout_min is the one UI option applied in this mode too:
   # the liveness check runs only on the proxy transports (mqtt-proxy,
   # esphome-proxy, ha-bluetooth), and here only the file can choose one. So
