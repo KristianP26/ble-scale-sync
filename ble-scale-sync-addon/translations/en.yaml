@@ -10,7 +10,8 @@ configuration:
     description: >-
       How the add-on reaches the scale. local: this host's Bluetooth adapter,
       as before. esphome-proxy: an ESPHome Bluetooth proxy that Home Assistant
-      has not adopted. Options below that name a transport only apply to it.
+      has not adopted. mqtt-proxy: the ESP32 proxy firmware over MQTT. Options
+      below that name a transport only apply to it.
   ble_adapter:
     name: Bluetooth adapter
     description: >-
@@ -125,6 +126,36 @@ configuration:
       esphome-proxy only. The key under api: encryption: in the device's YAML
       (44 characters, ends in =). Leave empty only if the device has no API
       encryption. A device that still uses an API password needs custom_config.
+  mqtt_proxy_broker:
+    name: ESP32 proxy broker
+    description: >-
+      mqtt-proxy only. shared: the broker from the MQTT options below
+      (Mosquitto when auto-detect is on); give the ESP32 its own login there.
+      embedded: a broker inside this add-on, with the port, username and
+      password below. Either way, set mqtt_broker in the ESP32's config.json to
+      this host's IP address.
+  mqtt_proxy_device_id:
+    name: ESP32 proxy device ID
+    description: mqtt-proxy only. Same as device_id in the ESP32's config.json.
+  mqtt_proxy_topic_prefix:
+    name: ESP32 proxy topic prefix
+    description: mqtt-proxy only. Same as topic_prefix in the ESP32's config.json.
+  mqtt_proxy_embedded_broker_port:
+    name: Embedded broker port
+    description: >-
+      mqtt-proxy with the embedded broker only. Port on this host. Mosquitto
+      usually has 1883 already; then pick another and set the same mqtt_port
+      in the ESP32's config.json.
+  mqtt_proxy_username:
+    name: Embedded broker username
+    description: >-
+      mqtt-proxy with the embedded broker only, and required there: the broker
+      is reachable from your network and the ESP32 logs in with these.
+  mqtt_proxy_password:
+    name: Embedded broker password
+    description: >-
+      mqtt-proxy with the embedded broker only, and required there: the broker
+      is reachable from your network and the ESP32 logs in with these.
   proxy_liveness_timeout_min:
     name: Proxy silence before restart (minutes)
     description: >-
@@ -200,7 +231,8 @@ configuration:
     name: MQTT broker URL
     description: >-
       MQTT broker URL (e.g., mqtt://192.168.1.10:1883).
-      Only used when auto-detect is disabled.
+      Only used when auto-detect is disabled. With ble_transport mqtt-proxy and
+      mqtt_proxy_broker shared, the ESP32 proxy uses this broker too.
   mqtt_username:
     name: MQTT username
     description: MQTT broker username (only when auto-detect is disabled)

@@ -589,6 +589,156 @@ describe.skipIf(!HARNESS)(
         expect(r.stdout).not.toContain(bad);
       });
     });
+
+    describe('ble_transport mqtt-proxy', () => {
+      const SHARED = { ...DEFAULTS, ble_transport: 'mqtt-proxy' };
+      const EMBEDDED = {
+        ...SHARED,
+        mqtt_proxy_broker: 'embedded',
+        mqtt_proxy_username: 'esp32',
+        mqtt_proxy_password: 'embedded-broker-secret',
+      };
+      const NO_BROKER: SupervisorReply = {
+        code: '400',
+        body: { result: 'error', message: 'Service not enabled' },
+      };
+
+      it('shared: the ESP32 uses the broker Mosquitto auto-detection found', () => {
+        for (const mqtt_enabled of [true, false]) {
+          const r = generate({
+            options: { ...SHARED, mqtt_enabled },
+            supervisorToken: 'supervisor-token-sentinel',
+            supervisor: [MOSQUITTO_REPLY],
+          });
+          const config = expectLoads(r);
+          expect(config.ble?.handler).toBe('mqtt-proxy');
+          expect(config.ble?.mqtt_proxy).toMatchObject({
+            broker_url: 'mqtt://core-mosquitto:1883',
+            username: 'addons',
+            password: MOSQUITTO_PASSWORD,
+            device_id: 'esp32-ble-proxy',
+            topic_prefix: 'ble-proxy',
+          });
+          expect(r.curlCalls).toBe(1);
+          expect(r.stdout).not.toContain(MOSQUITTO_PASSWORD);
+          expect(r.stdout).toContain(
+            'Bluetooth transport: mqtt-proxy (shared broker, device esp32-ble-proxy)',
+          );
+          // The exporter only when MQTT export is on.
+          expect(config.global_exporters ?? []).toHaveLength(mqtt_enabled ? 1 : 0);
+        }
+      });
+
+      it('shared: a broker set by hand, when auto-detect is off', () => {
+        const r = generate({
+          options: {
+            ...SHARED,
+            mqtt_auto: false,
+            mqtt_broker_url: 'mqtt://192.168.1.10:1883',
+            mqtt_username: 'esp',
+            mqtt_password: 'manual-secret',
+          },
+        });
+        const config = expectLoads(r);
+        expect(config.ble?.mqtt_proxy).toMatchObject({
+          broker_url: 'mqtt://192.168.1.10:1883',
+          username: 'esp',
+          password: 'manual-secret',
+        });
+        expect(r.curlCalls).toBe(0);
+        expect(r.stdout).not.toContain('manual-secret');
+      });
+
+      it('shared: stops when there is no broker, asking the Supervisor once', () => {
+        const r = generate({
+          options: SHARED,
+          supervisorToken: 'supervisor-token-sentinel',
+          supervisor: [NO_BROKER],
+        });
+        expectStopped(r, 'ble_transport is mqtt-proxy with mqtt_proxy_broker shared, but no');
+        expect(r.curlCalls).toBe(1);
+      });
+
+      it('shared: asks a Supervisor that did not answer twice more, then stops', () => {
+        const recovered = generate({
+          options: SHARED,
+          supervisorToken: 'supervisor-token-sentinel',
+          supervisor: [{ code: '000' }, { code: '502' }, MOSQUITTO_REPLY],
+        });
+        expect(expectLoads(recovered).ble?.mqtt_proxy?.broker_url).toBe(
+          'mqtt://core-mosquitto:1883',
+        );
+        expect(recovered.curlCalls).toBe(3);
+        expect(recovered.stdout).toMatch(/trying again in 5s/);
+
+        const gone = generate({
+          options: SHARED,
+          supervisorToken: 'supervisor-token-sentinel',
+          supervisor: [{ code: '000' }],
+        });
+        expectStopped(gone, 'ble_transport is mqtt-proxy with mqtt_proxy_broker shared, but no');
+        expect(gone.curlCalls).toBe(3);
+      });
+
+      it('asks only once for the MQTT exporter alone, as before', () => {
+        const r = generate({
+          options: DEFAULTS,
+          supervisorToken: 'supervisor-token-sentinel',
+          supervisor: [{ code: '000' }],
+        });
+        expect(r.status).toBe(0);
+        expect(r.curlCalls).toBe(1);
+      });
+
+      it('embedded: the app runs its own broker with the login set here', () => {
+        const r = generate({ options: { ...EMBEDDED, mqtt_proxy_embedded_broker_port: 1884 } });
+        const config = expectLoads(r);
+        expect(config.ble?.mqtt_proxy).toMatchObject({
+          embedded_broker_port: 1884,
+          username: 'esp32',
+          password: 'embedded-broker-secret',
+        });
+        expect(config.ble?.mqtt_proxy?.broker_url ?? null).toBeNull();
+        expect(r.stdout).not.toContain('embedded-broker-secret');
+        expect(r.stdout).toContain('(embedded broker on port 1884, device esp32-ble-proxy)');
+        expect(r.stdout).not.toContain('WARNING: mqtt_proxy_broker');
+      });
+
+      it('embedded: stops without a password', () => {
+        expectStopped(
+          generate({ options: { ...EMBEDDED, mqtt_proxy_password: '' } }),
+          'mqtt_proxy_broker embedded listens on this host',
+        );
+      });
+
+      it('embedded: warns that Mosquitto probably holds port 1883', () => {
+        const r = generate({
+          options: EMBEDDED,
+          supervisorToken: 'supervisor-token-sentinel',
+          supervisor: [MOSQUITTO_REPLY],
+        });
+        expectLoads(r);
+        expect(r.stdout).toContain('WARNING: mqtt_proxy_broker embedded wants port 1883');
+      });
+
+      it('shared: names the embedded-only options it ignores', () => {
+        const r = generate({
+          options: {
+            ...SHARED,
+            mqtt_auto: false,
+            mqtt_broker_url: 'mqtt://h:1883',
+            mqtt_proxy_username: 'esp32',
+            mqtt_proxy_password: 'unused-secret',
+          },
+        });
+        expectLoads(r);
+        expect(r.stdout).toContain(
+          'only apply to mqtt_proxy_broker embedded, so they are ignored: mqtt_proxy_username, ' +
+            'mqtt_proxy_password.',
+        );
+        expect(r.stdout).not.toContain('unused-secret');
+      });
+    });
   },
 );
 

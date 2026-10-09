@@ -808,12 +808,31 @@ describe('add-on option ble_transport (#420)', () => {
 
   it('defaults to local, the built-in adapter, listed first', () => {
     expect(MANIFEST.options).toHaveProperty('ble_transport', 'local');
-    expect(SCHEMA.ble_transport).toBe('list(local|esphome-proxy)');
+    expect(SCHEMA.ble_transport).toBe('list(local|esphome-proxy|mqtt-proxy)');
+    expect(MANIFEST.options).toHaveProperty('mqtt_proxy_broker', 'shared');
+    expect(SCHEMA.mqtt_proxy_broker).toBe('list(shared|embedded)');
   });
 
   it('masks every secret transport option in the form', () => {
     expect(SCHEMA.esphome_proxy_encryption_key).toBe('password?');
+    expect(SCHEMA.mqtt_proxy_password).toBe('password?');
     expect(SCHEMA.esphome_proxy_port).toBe('port?');
+    expect(SCHEMA.mqtt_proxy_embedded_broker_port).toBe('port?');
+  });
+
+  it('counts a transport option as set only when it differs from the manifest default', () => {
+    // transport_options_set skips each default by value; a default changed in
+    // the manifest alone would make every install report the option as set.
+    const block = markedBlock('ble transport');
+    for (const key of [
+      'esphome_proxy_port',
+      'mqtt_proxy_broker',
+      'mqtt_proxy_device_id',
+      'mqtt_proxy_topic_prefix',
+      'mqtt_proxy_embedded_broker_port',
+    ]) {
+      expect(block, key).toContain(`${key}=${String(MANIFEST.options[key])}`);
+    }
   });
 
   it('lists the options in the same order in options and schema, the order of the form', () => {
@@ -826,7 +845,7 @@ describe('add-on option ble_transport (#420)', () => {
     );
     expect(m, 'ble_transport check not found in run.sh').not.toBeNull();
     expect(m![1].split('|').map((t) => t.trim())).toEqual(TRANSPORTS);
-    const e0 = /is not one of ([a-z, -]+)\./.exec(RUN_SH);
+    const e0 = /ble_transport '\$BLE_TRANSPORT' is not one of ([a-z, -]+)\./.exec(RUN_SH);
     expect(e0, 'unknown ble_transport message not found').not.toBeNull();
     expect(e0![1].split(', ')).toEqual(TRANSPORTS);
   });
@@ -917,12 +936,27 @@ describe.skipIf(!SHELL)('run.sh ble_transport_problem', { timeout: 30_000 }, () 
   }
 
   const KEY = Buffer.alloc(32, 7).toString('base64');
+  const MQTT_SHARED = {
+    BLE_TRANSPORT: 'mqtt-proxy',
+    MQTT_PROXY_BROKER: 'shared',
+    MQTT_PROXY_DEVICE_ID: 'esp32-ble-proxy',
+    MQTT_PROXY_TOPIC_PREFIX: 'ble-proxy',
+    MQTT_BROKER_URL: '',
+  };
+  const MQTT_EMBEDDED = {
+    ...MQTT_SHARED,
+    MQTT_PROXY_BROKER: 'embedded',
+    MQTT_PROXY_USERNAME: '',
+    MQTT_PROXY_PASSWORD: '',
+  };
 
   it('says nothing for a transport that can run', () => {
     for (const vars of [
       { BLE_TRANSPORT: 'local' },
       { BLE_TRANSPORT: 'esphome-proxy', ESPHOME_HOST: '192.168.1.50', ESPHOME_KEY: '' },
       { BLE_TRANSPORT: 'esphome-proxy', ESPHOME_HOST: 'proxy.local', ESPHOME_KEY: KEY },
+      { ...MQTT_SHARED, MQTT_BROKER_URL: 'mqtt://core-mosquitto:1883' },
+      { ...MQTT_EMBEDDED, MQTT_PROXY_USERNAME: 'esp32', MQTT_PROXY_PASSWORD: 'pw' },
     ]) {
       expect(problem(vars), JSON.stringify(vars)).toEqual({ status: 0, out: '' });
     }
@@ -930,7 +964,29 @@ describe.skipIf(!SHELL)('run.sh ble_transport_problem', { timeout: 30_000 }, () 
 
   it('names what is wrong, and returns 0 so set -e lets the caller report it', () => {
     const cases: [Record<string, string>, string][] = [
-      [{ BLE_TRANSPORT: 'bogus' }, "ble_transport 'bogus' is not one of local, esphome-proxy."],
+      [
+        { BLE_TRANSPORT: 'bogus' },
+        "ble_transport 'bogus' is not one of local, esphome-proxy, mqtt-proxy.",
+      ],
+      [
+        MQTT_SHARED,
+        'ble_transport is mqtt-proxy with mqtt_proxy_broker shared, but no MQTT broker is ' +
+          'available. Start the Mosquitto broker add-on with MQTT auto-detect on, set ' +
+          'mqtt_broker_url, or set mqtt_proxy_broker to embedded.',
+      ],
+      [
+        { ...MQTT_EMBEDDED, MQTT_PROXY_USERNAME: 'esp32' },
+        "mqtt_proxy_broker embedded listens on this host's network, so it needs " +
+          'mqtt_proxy_username and mqtt_proxy_password; the ESP32 logs in with them.',
+      ],
+      [
+        { ...MQTT_SHARED, MQTT_BROKER_URL: 'mqtt://h:1883', MQTT_PROXY_TOPIC_PREFIX: 'ble/#' },
+        'mqtt_proxy_device_id and mqtt_proxy_topic_prefix cannot contain + or #.',
+      ],
+      [
+        { ...MQTT_SHARED, MQTT_PROXY_BROKER: 'other' },
+        "mqtt_proxy_broker 'other' is not one of shared, embedded.",
+      ],
       [
         { BLE_TRANSPORT: 'esphome-proxy', ESPHOME_HOST: '' },
         'ble_transport is esphome-proxy, but esphome_proxy_host is empty.',
@@ -957,6 +1013,9 @@ describe.skipIf(!SHELL)('run.sh ble_transport_problem', { timeout: 30_000 }, () 
       ESPHOME_KEY: 'not-a-key-but-secret',
     });
     expect(r.out).not.toContain('not-a-key-but-secret');
+    const e = problem({ ...MQTT_EMBEDDED, MQTT_PROXY_PASSWORD: 'embedded-secret' });
+    expect(e.out).not.toBe('');
+    expect(e.out).not.toContain('embedded-secret');
   });
 });
 

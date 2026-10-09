@@ -63,6 +63,12 @@ options:
   esphome_proxy_host: ''
   esphome_proxy_port: 6053
   esphome_proxy_encryption_key: ''
+  mqtt_proxy_broker: shared
+  mqtt_proxy_device_id: esp32-ble-proxy
+  mqtt_proxy_topic_prefix: ble-proxy
+  mqtt_proxy_embedded_broker_port: 1883
+  mqtt_proxy_username: ''
+  mqtt_proxy_password: ''
   proxy_liveness_timeout_min: 30
   weight_unit: kg
   height_unit: cm
@@ -97,7 +103,7 @@ options:
   custom_config: false
 schema:
   scale_mac: str?
-  ble_transport: list(local|esphome-proxy)
+  ble_transport: list(local|esphome-proxy|mqtt-proxy)
   ble_adapter: str?
   force_scale_adapter: str?
   qn_protocol_byte: str?
@@ -112,6 +118,12 @@ schema:
   esphome_proxy_host: str?
   esphome_proxy_port: port?
   esphome_proxy_encryption_key: password?
+  mqtt_proxy_broker: list(shared|embedded)
+  mqtt_proxy_device_id: str?
+  mqtt_proxy_topic_prefix: str?
+  mqtt_proxy_embedded_broker_port: port?
+  mqtt_proxy_username: str?
+  mqtt_proxy_password: password?
   proxy_liveness_timeout_min: int(0,1440)?
   weight_unit: list(kg|lbs)
   height_unit: list(cm|in)
