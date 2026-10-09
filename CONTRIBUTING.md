@@ -296,6 +296,7 @@ To add a new export target:
 - ESLint and Prettier must be clean: `npm run lint && npm run format:check`
 - TypeScript must compile: `npx tsc --noEmit`
 - Keep commits focused, one logical change per commit
+- **You show up in the README Contributors grid automatically** from the next release on, as long as the email of your commits is linked to your GitHub account (or is your `ID+username@users.noreply.github.com` address). Do not add yourself by hand. To credit someone else for work in your commit, add a `Co-authored-by: Name <ID+username@users.noreply.github.com>` line at the end of the message, below any `Closes #N` line.
 - **PRs are squash-merged.** The repo allows squash only; merge-commit and rebase-merge are disabled. On merge, GitHub squashes the branch into a single commit on the target branch and uses the **PR title** as the commit subject. That makes the PR title the thing release-please parses, so it MUST be in Conventional Commits format (see below). The PR body becomes the commit body.
 - **Write commit messages, and your PR title, in [Conventional Commits](https://www.conventionalcommits.org/) style.** The project uses release-please to generate the changelog and version bumps, so the prefix you pick decides both whether the release notes mention the change and how the version bumps:
   - `feat:` or `feat(scope):` new user-visible capability, bumps the minor version
@@ -325,6 +326,7 @@ Releases are fully automated via [release-please](https://github.com/googleapis/
      git commit -am "chore(addon): sync the add-on changelog from the project changelog"
      git push
      ```
+   - A separate `readme-contributors` job in the same workflow then pushes a `chore(readme): regenerate the contributors grid` commit to the release branch when the counts changed. It does not show up in the PR checks, so look at the workflow run, and merge only after CI has passed on the last head commit. If the job fails, the release is not blocked; the grid is then caught up by the next release, or by running `npm run sync:contributors` on the release branch.
 5. On merge, release-please tags the release (`vX.Y.Z`), creates a GitHub Release, and emits the `release: published` event that `docker.yml` listens for. The multi-arch image is published to GHCR automatically. VitePress rebuilds `docs/changelog.md` from `CHANGELOG.md` via an `@include` directive, so the public changelog updates too.
 
 ### Files managed by release-please
@@ -340,6 +342,7 @@ Do not edit these files in a feature PR. If you need to correct the version or c
 ### Generated companion files
 
 - `ble-scale-sync-addon/CHANGELOG.md` is the changelog Home Assistant renders on the add-on page. It is generated from the root `CHANGELOG.md` by `src/tools/sync-addon-changelog.ts`; never edit it directly. After the root changelog changes (that is, in the release PR), run `npm run sync:addon-changelog` and commit the result. `tests/addon-changelog-sync.test.ts` fails the build while the copy is stale, which is how it fell 16 releases behind while it was maintained by hand (#294).
+- The Contributors grid in `README.md` (the block between the `contributors:start` and `contributors:end` markers) is generated from the git history by `src/tools/sync-contributors.ts`; never edit it directly. A commit counts for its author and for every `Co-authored-by` line in its message, once per person; merge commits, empty commits and bots do not count. Emails are mapped to GitHub accounts through the GitHub API, plus the aliases in `.github/contributors.json` for addresses GitHub cannot link (that file also lists identities that are never credited). The grid is regenerated on the release PR, so between releases it lags behind on `dev`; `npm run sync:contributors:check` shows what would change and `npm run sync:contributors` writes it (set `GITHUB_TOKEN` or `GH_TOKEN` in the environment to avoid the anonymous API limit of 60 requests per hour).
 - `docs/changelog.md` is a one-line VitePress include (`<!--@include: ../CHANGELOG.md-->`), so it updates automatically as soon as `CHANGELOG.md` does. Do not replace that include with hand-written content.
 
 ### Optional: `RELEASE_PLEASE_TOKEN` secret
