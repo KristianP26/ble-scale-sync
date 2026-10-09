@@ -659,6 +659,20 @@ describe.skipIf(!HARNESS)(
         expect(r.stdout).not.toContain('manual-secret');
       });
 
+      it('shared: stops on a broker URL the exporter takes and the proxy does not', () => {
+        // The app refused such a config on every start of the restart loop, and
+        // named ble.mqtt_proxy.broker_url, a key nobody set in the form.
+        const r = generate({
+          options: {
+            ...SHARED,
+            mqtt_auto: false,
+            mqtt_broker_url: 'ws://esp:ws-url-secret@192.168.1.10:9001',
+          },
+        });
+        expectStopped(r, 'mqtt_proxy_broker shared needs an mqtt_broker_url that starts with');
+        expect(r.stdout).not.toContain('ws-url-secret');
+      });
+
       it('shared: stops when there is no broker, asking the Supervisor once', () => {
         const r = generate({
           options: SHARED,

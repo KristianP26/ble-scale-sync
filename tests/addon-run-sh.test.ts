@@ -963,6 +963,7 @@ describe.skipIf(!SHELL)('run.sh ble_transport_problem', { timeout: 30_000 }, () 
       { BLE_TRANSPORT: 'esphome-proxy', ESPHOME_HOST: '192.168.1.50', ESPHOME_KEY: '' },
       { BLE_TRANSPORT: 'esphome-proxy', ESPHOME_HOST: 'proxy.local', ESPHOME_KEY: KEY },
       { ...MQTT_SHARED, MQTT_BROKER_URL: 'mqtt://core-mosquitto:1883' },
+      { ...MQTT_SHARED, MQTT_BROKER_URL: 'mqtts://broker.example:8883' },
       { ...MQTT_EMBEDDED, MQTT_PROXY_USERNAME: 'esp32', MQTT_PROXY_PASSWORD: 'pw' },
       { BLE_TRANSPORT: 'ha-bluetooth', SUPERVISOR_TOKEN: 'token' },
     ]) {
@@ -991,6 +992,11 @@ describe.skipIf(!SHELL)('run.sh ble_transport_problem', { timeout: 30_000 }, () 
         { ...MQTT_EMBEDDED, MQTT_PROXY_USERNAME: 'esp32' },
         "mqtt_proxy_broker embedded listens on this host's network, so it needs " +
           'mqtt_proxy_username and mqtt_proxy_password; the ESP32 logs in with them.',
+      ],
+      [
+        // The exporter takes a ws:// broker, the proxy's schema does not.
+        { ...MQTT_SHARED, MQTT_BROKER_URL: 'ws://192.168.1.10:9001' },
+        'mqtt_proxy_broker shared needs an mqtt_broker_url that starts with mqtt:// or mqtts://.',
       ],
       [
         { ...MQTT_SHARED, MQTT_BROKER_URL: 'mqtt://h:1883', MQTT_PROXY_TOPIC_PREFIX: 'ble/#' },

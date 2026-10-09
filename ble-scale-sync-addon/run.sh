@@ -145,6 +145,13 @@ ble_transport_problem() {
         echo "mqtt_proxy_broker embedded listens on this host's network, so it needs mqtt_proxy_username and mqtt_proxy_password; the ESP32 logs in with them."
       elif [ "$MQTT_PROXY_BROKER" = "shared" ] && [ -z "$MQTT_BROKER_URL" ]; then
         echo "ble_transport is mqtt-proxy with mqtt_proxy_broker shared, but no MQTT broker is available. Start the Mosquitto broker add-on with MQTT auto-detect on, set mqtt_broker_url, or set mqtt_proxy_broker to embedded."
+      elif [ "$MQTT_PROXY_BROKER" = "shared" ]; then
+        # The MQTT exporter takes any URL its client knows (ws://, tcp://), the
+        # proxy only these two; the app would refuse the config on every start.
+        case "$MQTT_BROKER_URL" in
+          mqtt://* | mqtts://*) ;;
+          *) echo "mqtt_proxy_broker shared needs an mqtt_broker_url that starts with mqtt:// or mqtts://." ;;
+        esac
       fi
       ;;
     ha-bluetooth)

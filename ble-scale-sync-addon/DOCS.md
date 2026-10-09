@@ -232,6 +232,7 @@ A transport that cannot run stops the add-on with `ERROR:` and the reason, follo
 - `esphome_proxy_host is empty`, or `takes a host name or IP address, not a URL`: enter only the address, such as `192.168.1.50`, without `http://` or a path.
 - `esphome_proxy_encryption_key is not a valid ESPHome API key`: copy the whole key from `api: encryption: key:` in the device's YAML. It is 44 characters long and ends in `=`.
 - `mqtt_proxy_broker shared, but no MQTT broker is available`: start the Mosquitto broker add-on with **Auto-detect MQTT broker** on, set **MQTT broker URL**, or switch **ESP32 proxy broker** to `embedded`.
+- `mqtt_proxy_broker shared needs an mqtt_broker_url that starts with mqtt:// or mqtts://`: the ESP32 proxy cannot share a `ws://` or other broker URL; enter the broker's `mqtt://` address, or switch **ESP32 proxy broker** to `embedded`.
 - `mqtt_proxy_broker embedded ... needs mqtt_proxy_username and mqtt_proxy_password`: fill in both.
 - `cannot contain + or #`: those are MQTT wildcards; use the same plain device ID and topic prefix as the ESP32's `config.json`.
 - `the Supervisor gave this add-on no SUPERVISOR_TOKEN`: this should not happen; please open an issue with the log.
