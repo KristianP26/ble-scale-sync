@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { createRequire } from 'node:module';
 import {
   existsSync,
   lstatSync,
@@ -238,12 +240,13 @@ describe('generated config: ble block', () => {
     const condition = RUN_SH.slice(condStart, open);
     const body = RUN_SH.slice(open, RUN_SH.indexOf('\n  fi\n', open));
     // printf as well as echo: a guard that only knew echo stopped checking every
-    // line that moved to printf, without failing.
-    const written = [...body.matchAll(/\[ [^\]]*"\$([A-Z_]+)"[^\]]*\] && (?:echo|printf)/g)].map(
-      (m) => m[1],
-    );
+    // line that moved to printf, without failing. emit_* writes whole sections.
+    const written = [
+      ...body.matchAll(/\[ [^\]]*"\$([A-Z_]+)"[^\]]*\] && (?:echo|printf|emit_[a-z_]+)/g),
+    ].map((m) => m[1]);
     expect(written).toContain('ADAPTER_PRIVACY');
     expect(written).toContain('SCALE_MAC');
+    expect(written).toContain('BLE_TRANSPORT');
     for (const v of written) expect(condition, v).toContain(`"$${v}"`);
   });
 });
@@ -261,10 +264,10 @@ describe('add-on option proxy_liveness_timeout_min', () => {
     expect(MANIFEST.options).toHaveProperty('proxy_liveness_timeout_min', 30);
   });
 
-  it('is read in custom_config mode, the only mode that can run a proxy transport', () => {
-    // The liveness check only runs on the proxy transports, and the generated
-    // config never selects one. Read only in the generated branch, the option
-    // could not have any effect at all.
+  it('is read in custom_config mode too, where only the file picks the transport', () => {
+    // The liveness check only runs on the proxy transports. Read only in the
+    // generated branch, the option would do nothing for a proxy set up in a
+    // custom config.
     expect(customConfigBranch()).toMatch(/opt_int proxy_liveness_timeout_min 30/);
   });
 
@@ -777,5 +780,230 @@ describe('add-on manifest: rfkill', () => {
     const devices = (MANIFEST as { devices?: string[] }).devices ?? [];
     expect(devices).toContain('/dev/rfkill');
     for (const d of devices) expect(d, d).toMatch(/^\/dev\/[^:]+$/);
+  });
+});
+
+/** Run a script from a file: Windows command-line quoting mangles backslashes in `-c`. */
+function runScript(script: string, env: Record<string, string> = {}) {
+  return withTempDir((raw) => {
+    const file = join(raw, 'script.sh').replace(/\\/g, '/');
+    writeFileSync(file, script);
+    return spawnSync(SHELL!, [file], { encoding: 'utf8', env: { ...process.env, ...env } });
+  });
+}
+
+function markedBlock(name: string): string {
+  const m = new RegExp(`# >>> ${name}\\n([\\s\\S]*?)# <<< ${name}\\n`).exec(RUN_SH);
+  expect(m, `${name} block not found in run.sh`).not.toBeNull();
+  return m![1];
+}
+
+describe('add-on option ble_transport (#420)', () => {
+  const SCHEMA = (
+    parse(lf(readFileSync('ble-scale-sync-addon/config.yaml', 'utf8'))) as {
+      schema: Record<string, string>;
+    }
+  ).schema;
+  const TRANSPORTS = /^list\((.*)\)$/.exec(SCHEMA.ble_transport)![1].split('|');
+
+  it('defaults to local, the built-in adapter, listed first', () => {
+    expect(MANIFEST.options).toHaveProperty('ble_transport', 'local');
+    expect(SCHEMA.ble_transport).toBe('list(local|esphome-proxy)');
+  });
+
+  it('masks every secret transport option in the form', () => {
+    expect(SCHEMA.esphome_proxy_encryption_key).toBe('password?');
+    expect(SCHEMA.esphome_proxy_port).toBe('port?');
+  });
+
+  it('lists the options in the same order in options and schema, the order of the form', () => {
+    expect(Object.keys(MANIFEST.options)).toEqual(Object.keys(SCHEMA));
+  });
+
+  it('is accepted by run.sh for exactly the values the manifest lists', () => {
+    const m = /case "\$BLE_TRANSPORT" in\n\s*([a-z| -]+)\) ;;\n\s*\*\) ble_transport_error/.exec(
+      RUN_SH,
+    );
+    expect(m, 'ble_transport check not found in run.sh').not.toBeNull();
+    expect(m![1].split('|').map((t) => t.trim())).toEqual(TRANSPORTS);
+    const e0 = /is not one of ([a-z, -]+)\./.exec(RUN_SH);
+    expect(e0, 'unknown ble_transport message not found').not.toBeNull();
+    expect(e0![1].split(', ')).toEqual(TRANSPORTS);
+  });
+});
+
+describe.skipIf(!SHELL)('run.sh valid_esphome_key', { timeout: 120_000 }, () => {
+  // The library's own check, the one that throws when the client is created.
+  const lib = createRequire(import.meta.url)(
+    '@2colors/esphome-native-api/lib/utils/mapMessageByType.js',
+  ) as { isBase64: (s: string) => boolean };
+  const libAccepts = (k: string): boolean =>
+    lib.isBase64(k) && Buffer.from(k, 'base64').length === 32;
+
+  /** valid_esphome_key's verdict on each value, one shell for all of them. */
+  function verdicts(values: string[]): boolean[] {
+    return withTempDir((raw) => {
+      const list = join(raw, 'keys.txt').replace(/\\/g, '/');
+      writeFileSync(list, values.map((v) => `${v}\n`).join(''));
+      const loop = [
+        `while IFS= read -r k; do`,
+        `  if valid_esphome_key "$k"; then echo 1; else echo 0; fi`,
+        `done < '${list}'`,
+      ].join('\n');
+      const res = runScript(`${optionChecks()}\n${loop}\n`);
+      expect(res.stderr).toBe('');
+      return res.stdout
+        .trim()
+        .split(/\r?\n/)
+        .map((v) => v === '1');
+    });
+  }
+
+  // Git Bash forks slowly; Linux, CI included, checks the full set.
+  const RANDOM = process.platform === 'win32' ? 100 : 2000;
+  const random = Array.from({ length: RANDOM }, () => randomBytes(32).toString('base64'));
+  const key = Buffer.alloc(32, 7).toString('base64');
+  // Every character in the last place before the padding, canonical or not.
+  const lastChar = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'].map(
+    (c) => `${key.slice(0, 42)}${c}=`,
+  );
+  const refused = [
+    '',
+    key.slice(0, 43),
+    `${key.slice(0, 42)}==`,
+    `${key}=`,
+    `-${key.slice(1)}`,
+    `_${key.slice(1)}`,
+    ` ${key}`,
+    `${key} `,
+    `${key.slice(0, 20)} ${key.slice(21)}`,
+    Buffer.alloc(16, 7).toString('base64'),
+    Buffer.alloc(33, 7).toString('base64'),
+  ];
+
+  it('accepts every real key', () => {
+    expect(verdicts(random).every(Boolean)).toBe(true);
+  });
+
+  it('accepts nothing the ESPHome library would refuse', () => {
+    const values = [...random, ...lastChar, ...refused];
+    const accepted = verdicts(values);
+    expect(accepted).toHaveLength(values.length);
+    values.forEach((v, i) => {
+      if (accepted[i]) expect(libAccepts(v), JSON.stringify(v)).toBe(true);
+    });
+  });
+
+  it('refuses keys of the wrong length, padding or alphabet', () => {
+    expect(verdicts(refused)).toEqual(refused.map(() => false));
+  });
+});
+
+describe.skipIf(!SHELL)('run.sh ble_transport_problem', { timeout: 30_000 }, () => {
+  /** Its output and exit status under set -e, with the given variables set. */
+  function problem(vars: Record<string, string>): { status: number | null; out: string } {
+    const res = runScript(
+      [
+        'set -e',
+        optionChecks(),
+        markedBlock('ble transport'),
+        '_p=$(ble_transport_problem)',
+        'printf "%s" "$_p"',
+      ].join('\n'),
+      vars,
+    );
+    expect(res.stderr).toBe('');
+    return { status: res.status, out: res.stdout };
+  }
+
+  const KEY = Buffer.alloc(32, 7).toString('base64');
+
+  it('says nothing for a transport that can run', () => {
+    for (const vars of [
+      { BLE_TRANSPORT: 'local' },
+      { BLE_TRANSPORT: 'esphome-proxy', ESPHOME_HOST: '192.168.1.50', ESPHOME_KEY: '' },
+      { BLE_TRANSPORT: 'esphome-proxy', ESPHOME_HOST: 'proxy.local', ESPHOME_KEY: KEY },
+    ]) {
+      expect(problem(vars), JSON.stringify(vars)).toEqual({ status: 0, out: '' });
+    }
+  });
+
+  it('names what is wrong, and returns 0 so set -e lets the caller report it', () => {
+    const cases: [Record<string, string>, string][] = [
+      [{ BLE_TRANSPORT: 'bogus' }, "ble_transport 'bogus' is not one of local, esphome-proxy."],
+      [
+        { BLE_TRANSPORT: 'esphome-proxy', ESPHOME_HOST: '' },
+        'ble_transport is esphome-proxy, but esphome_proxy_host is empty.',
+      ],
+      [
+        { BLE_TRANSPORT: 'esphome-proxy', ESPHOME_HOST: 'http://192.168.1.50' },
+        'esphome_proxy_host takes a host name or IP address, not a URL.',
+      ],
+      [
+        { BLE_TRANSPORT: 'esphome-proxy', ESPHOME_HOST: '192.168.1.50', ESPHOME_KEY: 'secret' },
+        'esphome_proxy_encryption_key is not a valid ESPHome API key. Copy the 44-character ' +
+          "key (it ends in =) from api: encryption: key: in the device's YAML.",
+      ],
+    ];
+    for (const [vars, text] of cases) {
+      expect(problem(vars), JSON.stringify(vars)).toEqual({ status: 0, out: text });
+    }
+  });
+
+  it('never prints the value of a secret option', () => {
+    const r = problem({
+      BLE_TRANSPORT: 'esphome-proxy',
+      ESPHOME_HOST: '192.168.1.50',
+      ESPHOME_KEY: 'not-a-key-but-secret',
+    });
+    expect(r.out).not.toContain('not-a-key-but-secret');
+  });
+});
+
+/**
+ * The adapter reset at start, run with btmgmt, timeout and sleep as shell
+ * functions: timeout is a real command, and through it the real btmgmt would
+ * run.
+ */
+describe.skipIf(!SHELL)('run.sh Bluetooth adapter reset', () => {
+  function reset(vars: Record<string, string>): string {
+    const start = RUN_SH.indexOf('# ── Reset Bluetooth adapter');
+    const end = RUN_SH.indexOf('# ── Start, and restart');
+    expect(start, 'reset block not found').toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const res = runScript(
+      [
+        'set -e',
+        'log() { echo "[ble-scale-sync] $*"; }',
+        'btmgmt() { echo "btmgmt $*"; }',
+        'timeout() { shift; "$@"; }',
+        'sleep() { :; }',
+        ...Object.entries({
+          RESET_BLUETOOTH: 'true',
+          CUSTOM_CONFIG: 'false',
+          BLE_ADAPTER: '',
+          ...vars,
+        }).map(([k, v]) => `${k}='${v}'`),
+        RUN_SH.slice(start, end),
+      ].join('\n'),
+    );
+    expect(res.status, res.stderr).toBe(0);
+    return res.stdout;
+  }
+
+  it('leaves the adapter alone for a proxy transport', () => {
+    const out = reset({ BLE_TRANSPORT: 'esphome-proxy' });
+    expect(out).toContain(
+      'Bluetooth adapter reset skipped: ble_transport is esphome-proxy, which does not use',
+    );
+    expect(out).not.toContain('Resetting');
+    expect(out).not.toContain('btmgmt');
+  });
+
+  it('still resets it for local', () => {
+    const out = reset({ BLE_TRANSPORT: 'local' });
+    expect(out).toContain('Resetting Bluetooth adapter (hci0)');
+    expect(out).toContain('btmgmt --index 0 power off');
+    expect(out).toContain('Bluetooth adapter reset OK');
   });
 });

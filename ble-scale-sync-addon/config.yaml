@@ -48,6 +48,7 @@ map:
   - share:rw
 options:
   scale_mac: ''
+  ble_transport: local
   ble_adapter: ''
   force_scale_adapter: ''
   qn_protocol_byte: ''
@@ -59,6 +60,9 @@ options:
   auto_clear_stale_bond: false
   preemptive_adapter_reset: true
   adapter_privacy: false
+  esphome_proxy_host: ''
+  esphome_proxy_port: 6053
+  esphome_proxy_encryption_key: ''
   proxy_liveness_timeout_min: 30
   weight_unit: kg
   height_unit: cm
@@ -93,6 +97,7 @@ options:
   custom_config: false
 schema:
   scale_mac: str?
+  ble_transport: list(local|esphome-proxy)
   ble_adapter: str?
   force_scale_adapter: str?
   qn_protocol_byte: str?
@@ -104,6 +109,9 @@ schema:
   auto_clear_stale_bond: bool?
   preemptive_adapter_reset: bool?
   adapter_privacy: bool?
+  esphome_proxy_host: str?
+  esphome_proxy_port: port?
+  esphome_proxy_encryption_key: password?
   proxy_liveness_timeout_min: int(0,1440)?
   weight_unit: list(kg|lbs)
   height_unit: list(cm|in)

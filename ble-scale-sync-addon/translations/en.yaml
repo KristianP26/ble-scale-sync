@@ -5,10 +5,16 @@ configuration:
       MAC address of your BLE scale (e.g., FF:03:00:13:A1:04).
       Run the BLE scan from the add-on logs to find it.
       Leave empty for auto-discovery.
+  ble_transport:
+    name: Bluetooth transport
+    description: >-
+      How the add-on reaches the scale. local: this host's Bluetooth adapter,
+      as before. esphome-proxy: an ESPHome Bluetooth proxy that Home Assistant
+      has not adopted. Options below that name a transport only apply to it.
   ble_adapter:
     name: Bluetooth adapter
     description: >-
-      Linux HCI adapter name (e.g., hci0, hci1).
+      local transport only. Linux HCI adapter name (e.g., hci0, hci1).
       Only needed if you have multiple Bluetooth adapters.
       Leave empty for the system default.
   force_scale_adapter:
@@ -74,7 +80,8 @@ configuration:
   auto_clear_stale_bond:
     name: Re-pair a scale that forgot its pairing
     description: >-
-      Bonded scales only (Beurer BF7xx and BF9xx). Turn this on if the scale
+      local transport only, and bonded scales only (Beurer BF7xx and BF9xx).
+      Turn this on if the scale
       works once and then every later connect fails, until you clear it by hand
       with bluetoothctl. The scale has dropped its half of the pairing while
       Home Assistant still holds the key; this lets the add-on delete that key
@@ -82,7 +89,7 @@ configuration:
   preemptive_adapter_reset:
     name: Power-cycle the adapter after every weigh-in
     description: >-
-      Built-in Bluetooth only. After every connection to the scale the add-on
+      local transport only. After every connection to the scale the add-on
       switches the Bluetooth adapter off and on again, which clears a stuck
       scanning state some Raspberry Pi adapters fall into. Leave it on. It was
       not the cause of the Beurer BF915 re-pairing in #417; for a scale that
@@ -94,7 +101,7 @@ configuration:
   adapter_privacy:
     name: Pair with a host identity key (LE privacy)
     description: >-
-      Built-in Bluetooth only. For Beurer scales that ask you to press SET and
+      local transport only. For Beurer scales that ask you to press SET and
       pair again before every weigh-in. Turns on LE privacy on the Bluetooth
       adapter, with a key derived from its address, so the scale keeps the
       pairing. This affects the whole adapter: every Bluetooth LE connection
@@ -103,12 +110,27 @@ configuration:
       need pairing again. A second adapter set under ble_adapter avoids that.
       After turning it on, remove the scale once (bluetoothctl remove) and pair
       it through the add-on. Leave it off otherwise.
+  esphome_proxy_host:
+    name: ESPHome proxy host
+    description: >-
+      esphome-proxy only. IP address or host name of the proxy, e.g.
+      192.168.1.50. Use a node Home Assistant has not adopted.
+  esphome_proxy_port:
+    name: ESPHome proxy port
+    description: >-
+      esphome-proxy only. Native API port, 6053 unless the device sets another.
+  esphome_proxy_encryption_key:
+    name: ESPHome API encryption key
+    description: >-
+      esphome-proxy only. The key under api: encryption: in the device's YAML
+      (44 characters, ends in =). Leave empty only if the device has no API
+      encryption. A device that still uses an API password needs custom_config.
   proxy_liveness_timeout_min:
     name: Proxy silence before restart (minutes)
     description: >-
-      Proxy setups only (ESP32 proxy, ESPHome proxy or Home Assistant
-      Bluetooth), which this add-on runs only with custom_config enabled; it
-      has no effect on the built-in Bluetooth adapter. If the proxy stops
+      Proxy transports only (any ble_transport but local, or a proxy handler
+      in a custom config); it has no effect on the built-in Bluetooth adapter.
+      If the proxy stops
       delivering Bluetooth advertisements entirely for this many minutes, the
       link is treated as wedged and the add-on restarts to rebuild it.
       Advertisements arrive constantly from any nearby phone or watch while the
@@ -240,7 +262,8 @@ configuration:
       Power-cycle the Bluetooth adapter when the add-on starts.
       Helps with BlueZ stability after ungraceful shutdowns.
       Disable this if other HA Bluetooth integrations lose
-      connectivity when the add-on restarts.
+      connectivity when the add-on restarts. Skipped when ble_transport is
+      not local.
   debug:
     name: Debug logging
     description: Enable verbose BLE debug output in the add-on logs
@@ -256,4 +279,5 @@ configuration:
     description: >-
       Use a custom config.yaml file from /share/ble-scale-sync/config.yaml
       instead of generating one from the options above.
-      For advanced users who need multi-user support or additional exporters.
+      For advanced users who need multi-user support, additional exporters or
+      transport settings these options do not cover.

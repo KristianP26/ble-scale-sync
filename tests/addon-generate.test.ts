@@ -68,6 +68,7 @@ const GENERATE_BLOCKS = [
   'option readers',
   'yaml escape',
   'option checks',
+  'ble transport',
   'mode',
   'generate config',
 ];
@@ -479,6 +480,113 @@ describe.skipIf(!HARNESS)(
         });
         const config = expectLoads(r);
         expect(config.global_exporters?.[0]).toMatchObject({ password: 'g\\w${y}' });
+      });
+    });
+
+    /** The add-on stopped on a transport it cannot run: no config, no fallback. */
+    function expectStopped(r: Generated, error: string): void {
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(`[ble-scale-sync] ERROR: ${error}`);
+      expect(r.stdout).toContain('Not falling back to the built-in Bluetooth adapter');
+      expect(r.text ?? '').not.toContain('handler');
+    }
+
+    describe('ble_transport', () => {
+      it('stops on a value the Supervisor would not have let through', () => {
+        const r = generate({ options: { ...DEFAULTS, ble_transport: 'bogus' } });
+        expectStopped(r, "ble_transport 'bogus' is not one of");
+      });
+
+      it('names transport options set for no use with local', () => {
+        const r = generate({ options: { ...DEFAULTS, esphome_proxy_host: '192.168.1.50' } });
+        const config = expectLoads(r);
+        expect(config.ble?.handler ?? 'auto').toBe('auto');
+        expect(r.stdout).toContain('so they are ignored: esphome_proxy_host.');
+        expect(r.text).not.toContain('esphome_proxy');
+      });
+
+      it('local still says the liveness timeout does nothing there', () => {
+        const r = generate({ options: { ...DEFAULTS, proxy_liveness_timeout_min: 45 } });
+        expectLoads(r);
+        expect(r.stdout).toContain('NOTE: proxy_liveness_timeout_min only affects a proxy');
+      });
+    });
+
+    describe('ble_transport esphome-proxy', () => {
+      /** A key of the right shape, invented here. */
+      const KEY = Buffer.alloc(32, 7).toString('base64');
+      const ESPHOME = {
+        ...DEFAULTS,
+        ble_transport: 'esphome-proxy',
+        esphome_proxy_host: ' 192.168.1.50 ',
+        esphome_proxy_encryption_key: ` ${KEY} `,
+      };
+
+      it('writes the proxy the app connects to, and never logs the key', () => {
+        const r = generate({ options: ESPHOME });
+        const config = expectLoads(r);
+        expect(config.ble?.handler).toBe('esphome-proxy');
+        expect(config.ble?.esphome_proxy).toMatchObject({
+          host: '192.168.1.50',
+          port: 6053,
+          encryption_key: KEY,
+        });
+        expect(r.stdout).toContain(
+          'Bluetooth transport: esphome-proxy (192.168.1.50:6053, encrypted)',
+        );
+        expect(r.stdout).not.toContain(KEY);
+      });
+
+      it('writes no key line for a device without API encryption', () => {
+        const r = generate({
+          options: { ...ESPHOME, esphome_proxy_encryption_key: '', esphome_proxy_port: 6054 },
+        });
+        const config = expectLoads(r);
+        expect(config.ble?.esphome_proxy).toMatchObject({ host: '192.168.1.50', port: 6054 });
+        expect(r.text).not.toContain('encryption_key');
+        expect(r.stdout).toContain('(192.168.1.50:6054, unencrypted)');
+      });
+
+      it('leaves out the options only the built-in adapter uses, and says so', () => {
+        const r = generate({
+          options: {
+            ...ESPHOME,
+            scale_mac: 'F8:83:06:4E:B6:7E',
+            ble_adapter: 'hci1',
+            adapter_privacy: true,
+            auto_clear_stale_bond: true,
+            preemptive_adapter_reset: false,
+          },
+        });
+        const config = expectLoads(r);
+        expect(config.ble?.scale_mac).toBe('F8:83:06:4E:B6:7E');
+        expect(r.text).not.toMatch(/adapter:|adapter_privacy|auto_clear_stale_bond|preemptive/);
+        expect(r.stdout).toContain(
+          'NOTE: ble_transport esphome-proxy does not use the built-in Bluetooth adapter, so these ' +
+            'options are ignored: ble_adapter, auto_clear_stale_bond, preemptive_adapter_reset, ' +
+            'adapter_privacy.',
+        );
+      });
+
+      it('applies the liveness timeout, with no note that it does nothing', () => {
+        const r = generate({ options: { ...ESPHOME, proxy_liveness_timeout_min: 45 } });
+        const config = expectLoads(r);
+        expect(config.ble?.proxy_liveness_timeout_min).toBe(45);
+        expect(r.stdout).not.toContain('proxy_liveness_timeout_min only affects');
+      });
+
+      it('stops without a host instead of falling back to the built-in adapter', () => {
+        expectStopped(
+          generate({ options: { ...ESPHOME, esphome_proxy_host: '  ' } }),
+          'ble_transport is esphome-proxy, but esphome_proxy_host is empty.',
+        );
+      });
+
+      it('stops on a key the ESPHome library would refuse, without logging it', () => {
+        const bad = KEY.slice(0, -1);
+        const r = generate({ options: { ...ESPHOME, esphome_proxy_encryption_key: bad } });
+        expectStopped(r, 'esphome_proxy_encryption_key is not a valid ESPHome API key.');
+        expect(r.stdout).not.toContain(bad);
       });
     });
   },

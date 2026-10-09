@@ -52,6 +52,11 @@ yaml_escape() {
 # on a value its schema rejects. A bad value is therefore dropped here with a
 # warning, the same as the QN bytes and out_of_range below, instead of taking
 # the whole add-on down. tests/addon-run-sh.test.ts runs these on their own.
+#
+# The one exception is the Bluetooth transport: one that cannot run with the
+# options given stops the add-on with an error. Falling back to the built-in
+# adapter would scan, and power-cycle, an adapter the user chose not to use;
+# with ha-bluetooth it is the very adapter Home Assistant reads from.
 # >>> option checks
 
 # src/ble/scale-id.ts: a MAC, or a CoreBluetooth UUID (dashed or 32 hex).
@@ -76,7 +81,80 @@ valid_weight_range() {
   [ "$1" -gt 0 ] 2>/dev/null && [ "$2" -gt "$1" ] 2>/dev/null
 }
 
+# The ESPHome API library (@2colors/esphome-native-api, lib/connection.js)
+# refuses any encryption key that is not base64 of exactly 32 bytes, and it
+# does so as the client is created. Every such key is 43 base64 characters
+# and one = of padding.
+valid_esphome_key() {
+  printf '%s\n' "$1" | grep -Eq '^[A-Za-z0-9+/]{43}=$'
+}
+
 # <<< option checks
+
+# ── Bluetooth transport ─────────────────────────────────────────────────────
+# ble_transport picks how the app reaches the scale. local, the default, writes
+# no ble.handler at all, so the config is what it was before the option existed.
+# >>> ble transport
+
+ESPHOME_OPTIONS="esphome_proxy_host esphome_proxy_port esphome_proxy_encryption_key"
+
+# Names of the given transport options that differ from their defaults in the
+# add-on manifest, comma separated. Names only: some of the values are secrets.
+transport_options_set() {
+  _set=""
+  for _o in "$@"; do
+    _v=$(opt "$_o")
+    [ -n "$_v" ] || continue
+    case "$_o=$_v" in
+      esphome_proxy_port=6053) continue ;;
+    esac
+    _set="${_set:+$_set, }$_o"
+  done
+  printf '%s' "$_set"
+  return 0
+}
+
+# Why the chosen transport cannot run with these options, on one line, or
+# nothing. Option names only, never a value: some are secrets. Always returns
+# 0, since the caller reads the output under set -e.
+ble_transport_problem() {
+  case "$BLE_TRANSPORT" in
+    local) ;;
+    esphome-proxy)
+      if [ -z "$ESPHOME_HOST" ]; then
+        echo "ble_transport is esphome-proxy, but esphome_proxy_host is empty."
+      elif printf '%s' "$ESPHOME_HOST" | grep -q /; then
+        echo "esphome_proxy_host takes a host name or IP address, not a URL."
+      elif [ -n "$ESPHOME_KEY" ] && ! valid_esphome_key "$ESPHOME_KEY"; then
+        echo "esphome_proxy_encryption_key is not a valid ESPHome API key. Copy the 44-character key (it ends in =) from api: encryption: key: in the device's YAML."
+      fi
+      ;;
+    *)
+      printf '%s\n' "ble_transport '$BLE_TRANSPORT' is not one of local, esphome-proxy."
+      ;;
+  esac
+  return 0
+}
+
+ble_transport_error() {
+  log "ERROR: $1"
+  log "Not falling back to the built-in Bluetooth adapter: fix the option above, or set ble_transport to local."
+  exit 1
+}
+
+# The ble: lines of the chosen transport, for any transport but local.
+emit_ble_transport() {
+  case "$BLE_TRANSPORT" in
+    esphome-proxy)
+      printf '%s\n' "  handler: esphome-proxy" "  esphome_proxy:" \
+        "    host: \"$(yaml_escape "$ESPHOME_HOST")\"" "    port: $ESPHOME_PORT"
+      [ -z "$ESPHOME_KEY" ] ||
+        printf '%s\n' "    encryption_key: \"$(yaml_escape "$ESPHOME_KEY")\""
+      ;;
+  esac
+  return 0
+}
+# <<< ble transport
 
 # >>> mode
 # Read BLE_ADAPTER early (needed for adapter reset in both modes)
@@ -84,6 +162,9 @@ valid_weight_range() {
 BLE_ADAPTER=$(opt ble_adapter | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 RESET_BLUETOOTH=$(opt_bool_default_true reset_bluetooth)
 CUSTOM_CONFIG=$(opt_bool custom_config)
+# Needed in both modes too: the adapter reset below is skipped for a proxy.
+BLE_TRANSPORT=$(opt ble_transport)
+[ -n "$BLE_TRANSPORT" ] || BLE_TRANSPORT=local
 # <<< mode
 
 # ── Custom config mode ──────────────────────────────────────────────────────
@@ -126,12 +207,12 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
     log "WARNING: custom_config is enabled, so the 'update_check' option is ignored."
     log "Set 'update_check: false' in $CUSTOM_PATH instead."
   fi
-  # proxy_liveness_timeout_min is the one UI option that only means anything in
-  # this mode: the liveness check runs only on the proxy transports (mqtt-proxy,
-  # esphome-proxy, ha-bluetooth), and the generated config never selects one.
-  # So unlike the options above it is applied here rather than ignored, but
-  # only when the file does not set its own value, which always wins. The
-  # default (30) is the app's own default and needs no write.
+  # proxy_liveness_timeout_min is the one UI option applied in this mode too:
+  # the liveness check runs only on the proxy transports (mqtt-proxy,
+  # esphome-proxy, ha-bluetooth), and here only the file can choose one. So
+  # unlike the options above it is applied rather than ignored, but only when
+  # the file does not set its own value, which always wins. The default (30)
+  # is the app's own default and needs no write.
   PROXY_LIVENESS_MIN=$(opt_int proxy_liveness_timeout_min 30)
   if [ "$PROXY_LIVENESS_MIN" != "30" ]; then
     _plrc=0
@@ -152,6 +233,12 @@ else
 
   # >>> generate config
   # ── Read all options ────────────────────────────────────────────────────
+
+  # Only a hand-edited options.json gets past the Supervisor's list check.
+  case "$BLE_TRANSPORT" in
+    local | esphome-proxy) ;;
+    *) ble_transport_error "$(ble_transport_problem)" ;;
+  esac
 
   SCALE_MAC=$(opt scale_mac)
   FORCE_SCALE_ADAPTER=$(opt force_scale_adapter)
@@ -209,13 +296,33 @@ else
   PREEMPTIVE_ADAPTER_RESET=$(opt_bool_default_true preemptive_adapter_reset)
   ADAPTER_PRIVACY=$(opt_bool adapter_privacy)
   PROXY_LIVENESS_MIN=$(opt_int proxy_liveness_timeout_min 30)
-  # Still written below, but the generated config always runs the built-in
-  # Bluetooth transport, which has no liveness check. Say so instead of letting
-  # the option look like it did something.
-  if [ "$PROXY_LIVENESS_MIN" != "30" ]; then
-    log "NOTE: proxy_liveness_timeout_min only affects proxy transports (ESP32 or ESPHome"
-    log "proxy, HA Bluetooth), which this add-on runs only with custom_config. It has no"
-    log "effect on the built-in Bluetooth adapter."
+  # Still written below, but the built-in Bluetooth transport has no liveness
+  # check. Say so instead of letting the option look like it did something.
+  if [ "$PROXY_LIVENESS_MIN" != "30" ] && [ "$BLE_TRANSPORT" = "local" ]; then
+    log "NOTE: proxy_liveness_timeout_min only affects a proxy transport, so it has no effect with ble_transport local."
+  fi
+
+  ESPHOME_HOST=$(opt esphome_proxy_host | tr -d '[:space:]')
+  ESPHOME_PORT=$(opt_int esphome_proxy_port 6053)
+  # The ESPHome library refuses a key with as much as a trailing space.
+  ESPHOME_KEY=$(opt esphome_proxy_encryption_key | tr -d '[:space:]')
+
+  # The options that only steer the built-in adapter are not written for a
+  # proxy transport, which has no use for them, so that the ble: block and its
+  # condition below stay the same for every transport.
+  if [ "$BLE_TRANSPORT" != "local" ]; then
+    _host_only=""
+    [ -z "$BLE_ADAPTER" ] || _host_only="ble_adapter"
+    [ "$AUTO_CLEAR_STALE_BOND" != "true" ] || _host_only="${_host_only:+$_host_only, }auto_clear_stale_bond"
+    [ "$PREEMPTIVE_ADAPTER_RESET" != "false" ] || _host_only="${_host_only:+$_host_only, }preemptive_adapter_reset"
+    [ "$ADAPTER_PRIVACY" != "true" ] || _host_only="${_host_only:+$_host_only, }adapter_privacy"
+    if [ -n "$_host_only" ]; then
+      log "NOTE: ble_transport $BLE_TRANSPORT does not use the built-in Bluetooth adapter, so these options are ignored: $_host_only."
+    fi
+    BLE_ADAPTER=""
+    AUTO_CLEAR_STALE_BOND=false
+    PREEMPTIVE_ADAPTER_RESET=true
+    ADAPTER_PRIVACY=false
   fi
   DISPLAY_UNIT=$(opt display_unit)
 
@@ -322,6 +429,28 @@ else
       log "No SUPERVISOR_TOKEN, MQTT auto-detection unavailable"
     fi
   fi
+
+  # ── Bluetooth transport ───────────────────────────────────────────────
+
+  _problem=$(ble_transport_problem)
+  [ -z "$_problem" ] || ble_transport_error "$_problem"
+
+  _other=""
+  case "$BLE_TRANSPORT" in
+    esphome-proxy) ;;
+    *) _other=$(transport_options_set $ESPHOME_OPTIONS) ;;
+  esac
+  if [ -n "$_other" ]; then
+    log "NOTE: these options belong to another transport than ble_transport $BLE_TRANSPORT, so they are ignored: $_other."
+  fi
+
+  case "$BLE_TRANSPORT" in
+    esphome-proxy)
+      _enc=unencrypted
+      [ -z "$ESPHOME_KEY" ] || _enc=encrypted
+      log "Bluetooth transport: esphome-proxy ($ESPHOME_HOST:$ESPHOME_PORT, $_enc)"
+      ;;
+  esac
 
   # ── Generate slug from user name ──────────────────────────────────────
 
@@ -431,7 +560,8 @@ YAML
     [ -n "$QN_PROTOCOL_BYTE" ] || [ -n "$QN_REPORT_BYTE" ] || [ -n "$QN_WEIGHT_ACK" ] ||
     [ -n "$QN_A4_PRELUDE" ] || [ -n "$QN_TIME_SYNC_LONG" ] || [ -n "$QN_CONFIG_LONG" ] ||
     [ "$AUTO_CLEAR_STALE_BOND" = "true" ] || [ "$PREEMPTIVE_ADAPTER_RESET" = "false" ] ||
-    [ "$ADAPTER_PRIVACY" = "true" ] || [ "$PROXY_LIVENESS_MIN" != "30" ]; then
+    [ "$ADAPTER_PRIVACY" = "true" ] || [ "$PROXY_LIVENESS_MIN" != "30" ] ||
+    [ "$BLE_TRANSPORT" != "local" ]; then
     echo "ble:" >> "$FRESH"
     [ -n "$SCALE_MAC" ] && printf '%s\n' "  scale_mac: \"$(yaml_escape "$SCALE_MAC")\"" >> "$FRESH"
     [ -n "$BLE_ADAPTER" ] && printf '%s\n' "  adapter: \"$(yaml_escape "$BLE_ADAPTER")\"" >> "$FRESH"
@@ -446,6 +576,7 @@ YAML
     [ "$PREEMPTIVE_ADAPTER_RESET" = "false" ] && echo "  preemptive_adapter_reset: false" >> "$FRESH"
     [ "$ADAPTER_PRIVACY" = "true" ] && echo "  adapter_privacy: true" >> "$FRESH"
     [ "$PROXY_LIVENESS_MIN" != "30" ] && echo "  proxy_liveness_timeout_min: $PROXY_LIVENESS_MIN" >> "$FRESH"
+    [ "$BLE_TRANSPORT" != "local" ] && emit_ble_transport >> "$FRESH"
     echo "" >> "$FRESH"
   fi
 
@@ -708,6 +839,10 @@ fi
 
 if [ "$RESET_BLUETOOTH" != "true" ]; then
   log "Bluetooth adapter reset disabled (reset_bluetooth: false)"
+elif [ "$CUSTOM_CONFIG" != "true" ] && [ "$BLE_TRANSPORT" != "local" ]; then
+  # A proxy does not use this adapter, and with ha-bluetooth a power cycle
+  # would cut off the very Bluetooth integration the transport reads from.
+  log "Bluetooth adapter reset skipped: ble_transport is $BLE_TRANSPORT, which does not use this host's adapter."
 elif ! command -v btmgmt >/dev/null 2>&1; then
   log "btmgmt not found; skipping Bluetooth adapter reset"
 elif [ "$CUSTOM_CONFIG" = "true" ] && [ -z "$BLE_ADAPTER" ]; then
