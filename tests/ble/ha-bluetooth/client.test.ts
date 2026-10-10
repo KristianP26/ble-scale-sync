@@ -212,6 +212,35 @@ describe('HaBluetoothClient', () => {
     ]);
   });
 
+  it('says once per address that undatable manufacturer data was dropped (#408)', async () => {
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const started = client.start();
+    const id = handshake(sockets[0]);
+    await started;
+    const cb = vi.fn();
+    client.onAdvertisement(cb);
+    // Two weigh-ins of the openScale #1177 Yoda0 (records #614 and #715), merged
+    // by Home Assistant, from a scanner that sends no raw packet.
+    const yoda = advert({
+      name: 'Yoda0',
+      address: '08:B8:D0:E8:5F:6D',
+      service_data: {},
+      manufacturer_data: {
+        [String(0x3fc0)]: '1dce1388000025000000000000',
+        [String(0x40c0)]: '204e1388000025000000000000',
+      },
+      raw: null,
+    });
+    sockets[0].serverSays({ id, type: 'event', event: { add: [yoda] } });
+    sockets[0].serverSays({ id, type: 'event', event: { add: [yoda] } });
+    expect(cb).toHaveBeenCalledTimes(2);
+    expect(cb.mock.calls[0][0].manufacturerData).toBeUndefined();
+    const lines = debug.mock.calls.filter(([m]) => String(m).includes('no raw packet'));
+    expect(lines).toHaveLength(1);
+    expect(String(lines[0][0])).toContain('08:B8:D0:E8:5F:6D');
+    debug.mockRestore();
+  });
+
   it('ignores events for other subscription ids and remove events', async () => {
     const started = client.start();
     const id = handshake(sockets[0]);

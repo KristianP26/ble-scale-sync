@@ -156,6 +156,8 @@ export class HaBluetoothClient {
   private skewWarned = false;
   /** Set on the first successful subscription; see the subscribe-result branch. */
   private subscribedOnce = false;
+  /** Addresses already reported by noteUndatable. */
+  private readonly undatableLogged = new Set<string>();
 
   constructor(
     private readonly config: HaBluetoothConfig,
@@ -446,10 +448,27 @@ export class HaBluetoothClient {
     }
   }
 
+  /**
+   * Once per address and process: a device whose manufacturer data was dropped
+   * because Home Assistant's merged dict cannot say which entry is current and
+   * the scanner sent no raw packet (toBleDeviceInfo). Without this line a scale
+   * that never reads over Home Assistant leaves nothing in a debug log.
+   */
+  private noteUndatable(address: string): void {
+    const key = address.toUpperCase();
+    if (this.undatableLogged.has(key)) return;
+    this.undatableLogged.add(key);
+    bleLog.debug(
+      `Home Assistant reports several manufacturer ids for ${key} and no raw packet to ` +
+        `tell the newest, so its manufacturer data is ignored. The scanner that heard it ` +
+        `does not forward raw advertisements.`,
+    );
+  }
+
   private deliver(ad: HaAdvertisement): void {
     let info: BleDeviceInfo;
     try {
-      info = toBleDeviceInfo(ad);
+      info = toBleDeviceInfo(ad, () => this.noteUndatable(ad.address));
     } catch (err) {
       bleLog.debug(`Malformed advertisement from Home Assistant: ${errMsg(err)}`);
       return;
