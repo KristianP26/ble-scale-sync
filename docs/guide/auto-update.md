@@ -44,6 +44,8 @@ If you run the add-on in custom config mode (`custom_config: true` with a file a
 
 For self-managed Docker and Docker Compose setups, the simplest option is [Watchtower](https://containrrr.dev/watchtower/), a small sidecar that watches the container registry and restarts your container when a newer image is pushed to `ghcr.io/kristianp26/ble-scale-sync:latest`.
 
+An update re-creates the container, so with the single-file `config.yaml` mount any exports still waiting in the [retry queue](/guide/configuration#runtime) are dropped.
+
 ### Watchtower with label opt-in
 
 Add a label to the `ble-scale-sync` service and a second `watchtower` service. The `WATCHTOWER_LABEL_ENABLE=true` flag makes Watchtower ignore every other container on the host, which is the safe default on a machine running other workloads.

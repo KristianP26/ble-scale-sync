@@ -202,12 +202,14 @@ In continuous mode the wait between scans depends on how the previous cycle ende
 - **A reading arrived:** `runtime.scan_cooldown` (default 30 s), and at least 25 s on Linux/BlueZ regardless, so the app does not reconnect while the scale is still advertising.
 - **No scale found, radio healthy:** `runtime.idle_rescan_delay` (default 5 s). Linux/BlueZ only; the other transports cannot tell this case from a failure and use the backoff below.
 - **The cycle failed** (a GATT error, a wedged controller, an export that threw): 5 s, then 10, 20, 40 and 60 s for as long as failures continue, resetting on the next success.
+- **The scale connected but no reading came in time** (the reading session timed out after connecting): the same backoff as a failure. The scale was found, so the log says so instead of "No scale found".
 
 So a gap of a minute between scans means failures, not a setting being ignored. The log line says which case it was:
 
 ```
 No scale found, rescanning in 5s... (Device not found)
 No scale found, retrying in 20s... (le-connection-abort-by-local)
+Scale connected but sent no reading, retrying in 60s... (Timed out waiting for a complete scale reading)
 ```
 
 ## Debug Mode
