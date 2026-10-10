@@ -241,6 +241,37 @@ describe('HaBluetoothClient', () => {
     debug.mockRestore();
   });
 
+  it('forgets the oldest undatable address past 256, so the tracker stays bounded', async () => {
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const started = client.start();
+    const id = handshake(sockets[0]);
+    await started;
+    client.onAdvertisement(() => {});
+    // The #1177 Yoda0 dict from the test above, under 257 made-up addresses.
+    const at = (i: number) =>
+      advert({
+        address: `02:00:00:00:${((i >> 8) & 0xff).toString(16).padStart(2, '0')}:${(i & 0xff)
+          .toString(16)
+          .padStart(2, '0')}`.toUpperCase(),
+        service_data: {},
+        manufacturer_data: {
+          [String(0x3fc0)]: '1dce1388000025000000000000',
+          [String(0x40c0)]: '204e1388000025000000000000',
+        },
+        raw: null,
+      });
+    for (let i = 0; i <= 256; i++) {
+      sockets[0].serverSays({ id, type: 'event', event: { add: [at(i)] } });
+    }
+    const first = () =>
+      debug.mock.calls.filter(([m]) => String(m).includes('for 02:00:00:00:00:00 and no raw'));
+    expect(first()).toHaveLength(1);
+    // The 257th address pushed the first one out, so it is reported again.
+    sockets[0].serverSays({ id, type: 'event', event: { add: [at(0)] } });
+    expect(first()).toHaveLength(2);
+    debug.mockRestore();
+  });
+
   it('ignores events for other subscription ids and remove events', async () => {
     const started = client.start();
     const id = handshake(sockets[0]);

@@ -31,6 +31,12 @@ const STALE_SKEW_WARN_AFTER = 20;
  * fresh when Home Assistant sent it. Short enough for the 15 s `scan` to warn.
  */
 const STALE_SKEW_MIN_SPAN_MS = 10_000;
+/**
+ * Cap for the once-per-address tracker behind noteUndatable. The client lives
+ * as long as the process, and devices on rotating private addresses would
+ * otherwise grow it for weeks. Oldest out, like the watchers' trackers.
+ */
+const UNDATABLE_LOG_MAX = 256;
 
 // WebSocket readyState values (WHATWG); Node's global WebSocket uses the same.
 const WS_OPEN = 1;
@@ -457,11 +463,17 @@ export class HaBluetoothClient {
   private noteUndatable(address: string): void {
     const key = address.toUpperCase();
     if (this.undatableLogged.has(key)) return;
+    if (this.undatableLogged.size >= UNDATABLE_LOG_MAX) {
+      const oldest = this.undatableLogged.values().next().value;
+      if (oldest !== undefined) this.undatableLogged.delete(oldest);
+    }
     this.undatableLogged.add(key);
+    // A raw packet without manufacturer data (a scan response) ends here too,
+    // hence "most likely".
     bleLog.debug(
       `Home Assistant reports several manufacturer ids for ${key} and no raw packet to ` +
-        `tell the newest, so its manufacturer data is ignored. The scanner that heard it ` +
-        `does not forward raw advertisements.`,
+        `tell the newest, so its manufacturer data is ignored. Most likely the scanner that ` +
+        `heard it does not forward raw advertisements.`,
     );
   }
 
