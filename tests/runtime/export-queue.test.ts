@@ -10,6 +10,7 @@ import {
   flushQueue,
   resolveExportQueuePath,
   describeQueue,
+  logQueueAtStartup,
   type QueuedExport,
 } from '../../src/runtime/export-queue.js';
 import type { Exporter } from '../../src/interfaces/exporter.js';
@@ -609,6 +610,27 @@ describe('export retry queue: the log says what waits and when (#460)', () => {
     saveQueue(file, reporterQueue());
     expect(describeQueue(file, Date.parse('2026-10-09T11:41:07.000Z'))).toBe(
       '3 queued export(s) waiting; next retry not before 2026-10-09T12:10:22.851Z.',
+    );
+  });
+
+  // The startup line went out under run.ts's [Sync] prefix, so a search for the
+  // queue's [Retry] lines, the first thing to read after a restart, missed it.
+  it('logs the startup summary under the [Retry] prefix, with a note in a dry run', () => {
+    logQueueAtStartup(file, false, NOW);
+    expect(info).not.toHaveBeenCalled();
+
+    saveQueue(file, reporterQueue());
+    const at = Date.parse('2026-10-09T11:41:07.000Z');
+    logQueueAtStartup(file, false, at);
+    logQueueAtStartup(file, true, at);
+
+    const lines = linesOf(info);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(
+      /\[Retry\] 3 queued export\(s\) waiting; next retry not before 2026-10-09T12:10:22\.851Z\.$/,
+    );
+    expect(lines[1]).toMatch(
+      /\[Retry\] 3 queued export\(s\) waiting; .* Not retried in a dry run\.$/,
     );
   });
 

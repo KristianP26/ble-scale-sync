@@ -282,6 +282,16 @@ export function describeQueue(path: string, now: number = Date.now()): string | 
 }
 
 /**
+ * Log describeQueue's line once at startup, under this module's own [Retry]
+ * prefix like every other queue line, so a search for the queue's lines finds
+ * it too. Nothing when the queue is empty.
+ */
+export function logQueueAtStartup(path: string, dryRun: boolean, now: number = Date.now()): void {
+  const waiting = describeQueue(path, now);
+  if (waiting) log.info(dryRun ? `${waiting} Not retried in a dry run.` : waiting);
+}
+
+/**
  * Write the queue, or delete the file when there is nothing left.
  *
  * Deleting matters: this holds body composition and a user name, so an empty

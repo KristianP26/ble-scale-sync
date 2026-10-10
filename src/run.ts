@@ -19,7 +19,7 @@ import { loadAppConfig } from './config/load.js';
 import { resolveDisplayUnit, resolveRuntimeConfig } from './config/resolve.js';
 import { startConfigWatcher, type ConfigWatcherHandle } from './config/watch.js';
 import { configureUpdateState } from './update-state.js';
-import { describeQueue, flushQueue } from './runtime/export-queue.js';
+import { flushQueue, logQueueAtStartup } from './runtime/export-queue.js';
 import {
   persistDedupMark,
   resolveDedupMarksPath,
@@ -413,10 +413,7 @@ async function main(): Promise<void> {
   // Once, before the first cycle: after a restart nothing else says the queue
   // survived until the first retry pass, which can be most of an hour away
   // (#460).
-  if (ctx.exportQueuePath) {
-    const waiting = describeQueue(ctx.exportQueuePath, Date.now());
-    if (waiting) log.info(ctx.dryRun ? `${waiting} Not retried in a dry run.` : waiting);
-  }
+  if (ctx.exportQueuePath) logQueueAtStartup(ctx.exportQueuePath, ctx.dryRun);
 
   if (!initialResolved.continuousMode) {
     const success = await runSingleShot({
