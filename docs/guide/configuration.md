@@ -485,7 +485,7 @@ runtime:
 Two costs, both real:
 
 - **More Bluetooth adapter resets.** Every read that ends in a timeout triggers one, and shorter sessions mean more timeouts per hour. On a Raspberry Pi that is noticeable.
-- **The failure watchdog trips sooner.** A session that times out counts as a failed cycle, so shorter sessions reach `watchdog_max_consecutive_failures` (default 10) in proportionally less time, and the process exits for the supervisor to restart. On a scale where waiting between weigh-ins is normal, raise that limit or set it to `0` to disable it, as above.
+- **The failure watchdog trips sooner.** A session that times out counts as a failed cycle when the scale sent nothing in it (on Linux/BlueZ a session in which the scale answered does not count), so shorter sessions reach `watchdog_max_consecutive_failures` (default 10) in proportionally less time, and the process exits for the supervisor to restart. On a scale where waiting between weigh-ins is normal, raise that limit or set it to `0` to disable it, as above.
 
 This option applies to the native BLE handlers only. On `mqtt-proxy`, `esphome-proxy` and `ha-bluetooth` the watcher waits for a weigh-in indefinitely by design, and the value is ignored.
 :::
