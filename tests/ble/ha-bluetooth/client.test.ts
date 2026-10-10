@@ -358,6 +358,8 @@ describe('HaBluetoothClient', () => {
     const id1 = await subscribed();
     client.onAdvertisement(vi.fn());
     sockets[0].serverSays({ id: id1, type: 'event', event: { add: [] } });
+    // A stale run too short to warn, cut off by Home Assistant restarting.
+    sendLive(sockets[0], id1, 15, 600_000);
 
     sockets[0].serverCloses(1006, 'restart');
     await vi.advanceTimersByTimeAsync(2_000);
@@ -367,6 +369,9 @@ describe('HaBluetoothClient', () => {
       aged(600_000 - i * 1_000, `AA:00:00:00:00:${String(i).padStart(2, '0')}`),
     );
     sockets[1].serverSays({ id: id2, type: 'event', event: { add: old } });
+    // Spread out, so the 10 s span cannot hide a miscount: neither this
+    // snapshot nor the run from the previous subscription may count.
+    sendLive(sockets[1], id2, 5, 600_000, 2_500);
     expect(skewWarnings(warn)).toHaveLength(0);
 
     // Real skew on the new subscription is still reported, once.
@@ -375,6 +380,24 @@ describe('HaBluetoothClient', () => {
     sendLive(sockets[1], id2, 1, 0);
     sendLive(sockets[1], id2, 25, 600_000);
     expect(skewWarnings(warn)).toHaveLength(1);
+  });
+
+  it('warns again on the next subscription', async () => {
+    const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    warn.mockClear();
+    const id1 = await subscribed();
+    sockets[0].serverSays({ id: id1, type: 'event', event: { add: [] } });
+    sendLive(sockets[0], id1, 25, 600_000);
+    expect(skewWarnings(warn)).toHaveLength(1);
+
+    // Skew that outlives a new subscription, and with it a new clock offset on
+    // the Home Assistant side, is between the hosts: say so again.
+    sockets[0].serverCloses(1006, 'restart');
+    await vi.advanceTimersByTimeAsync(2_000);
+    const id2 = handshake(sockets[1]);
+    sockets[1].serverSays({ id: id2, type: 'event', event: { add: [] } });
+    sendLive(sockets[1], id2, 25, 600_000);
+    expect(skewWarnings(warn)).toHaveLength(2);
   });
 
   it('logs one debug summary per snapshot', async () => {
@@ -591,6 +614,9 @@ describe('HaBluetoothClient', () => {
       /^Could not connect to Home Assistant at ws:\/\/ha\.local:8123\/api\/websocket: Received network error/,
     );
     expect(sockets[0].closed).not.toBeNull();
+    // The connect timeout is gone too: left armed, it would close whatever
+    // socket is current when it fires.
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('does not re-enter close() when Node 22 fires error again from close()', async () => {
@@ -639,5 +665,17 @@ describe('HaBluetoothClient', () => {
     expect(sockets).toHaveLength(3);
     await vi.advanceTimersByTimeAsync(20_000);
     expect(sockets).toHaveLength(3);
+  });
+
+  // Node 24 fires `error`, then `close`, when the server drops an open socket.
+  // Only `close` may handle that one: dropping the socket from `error` would
+  // make `close` look superseded, and nothing would ever reconnect.
+  it('reconnects when an open socket reports an error before it closes', async () => {
+    vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    await subscribed();
+    sockets[0].serverErrors('');
+    sockets[0].serverCloses(1006);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(sockets).toHaveLength(2);
   });
 });
