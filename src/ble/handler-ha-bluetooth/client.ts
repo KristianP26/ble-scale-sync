@@ -227,7 +227,9 @@ export class HaBluetoothClient {
       this.ws = ws;
       this.subscriptionId = null;
 
+      let opened = false;
       ws.addEventListener('open', () => {
+        opened = true;
         bleLog.debug(`Home Assistant websocket open: ${wsUrl}`);
       });
       ws.addEventListener('message', (ev) => {
@@ -239,6 +241,21 @@ export class HaBluetoothClient {
             ? String((ev as { message: unknown }).message)
             : 'socket error';
         bleLog.debug(`Home Assistant websocket error: ${detail}`);
+        if (opened) return; // `close` follows and handles it
+        // Node 22 fires only `error`, never `close`, when the connection is
+        // refused or the upgrade is answered without a 101 (the Supervisor
+        // proxy while HA boots), so without this every failed attempt sat out
+        // CONNECT_TIMEOUT_MS. Node 24 sends an empty message, then `close`.
+        settle(
+          new Error(
+            `Could not connect to Home Assistant at ${wsUrl}${detail ? `: ${detail}` : ''}`,
+          ),
+        );
+        // Only through dropSocket(), which clears this.ws first: on Node 22,
+        // close() on a socket that never opened fires `error` again
+        // synchronously, so calling ws.close() straight from this listener
+        // recurses until the stack overflows, which takes the process down.
+        if (this.ws === ws) this.dropSocket();
       });
       ws.addEventListener('close', (ev) => {
         if (this.ws !== ws) return; // superseded

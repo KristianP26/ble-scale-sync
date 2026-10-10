@@ -42,11 +42,28 @@ class FakeWs implements WsLike {
     this.readyState = 3;
     this.emit('close', { code, reason });
   }
+  /** The connection fails before `open`: Node 22 fires only this, never `close`. */
+  serverErrors(message = 'Received network error or non-101 status code.'): void {
+    this.emit('error', { message });
+  }
   lastSent(): Record<string, unknown> {
     return this.sent[this.sent.length - 1];
   }
-  private emit(type: string, ev: unknown): void {
+  protected emit(type: string, ev: unknown): void {
     for (const l of this.listeners[type] ?? []) l(ev);
+  }
+}
+
+/**
+ * Node 22's WebSocket: close() on a socket that never opened fires `error`
+ * again, synchronously, before it returns.
+ */
+class Node22Ws extends FakeWs {
+  closeCalls = 0;
+  close(code?: number, reason?: string): void {
+    this.closeCalls++;
+    if (this.readyState === 0) this.emit('error', { message: 'closed before open' });
+    super.close(code, reason);
   }
 }
 
@@ -557,5 +574,70 @@ describe('HaBluetoothClient', () => {
     expect(error).toHaveBeenCalledWith(expect.stringMatching(/will not reconnect/));
     await vi.advanceTimersByTimeAsync(120_000);
     expect(sockets).toHaveLength(2);
+  });
+
+  // ─── A connection that fails before `open` ───
+
+  it('fails start() at once when the websocket connection fails', async () => {
+    const started = client.start();
+    const outcome = started.then(
+      () => 'ok',
+      (e: Error) => e.message,
+    );
+    sockets[0].serverErrors();
+    await vi.advanceTimersByTimeAsync(0);
+    const result = await Promise.race([outcome, Promise.resolve('pending')]);
+    expect(result).toMatch(
+      /^Could not connect to Home Assistant at ws:\/\/ha\.local:8123\/api\/websocket: Received network error/,
+    );
+    expect(sockets[0].closed).not.toBeNull();
+  });
+
+  it('does not re-enter close() when Node 22 fires error again from close()', async () => {
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    debug.mockClear();
+    const node22: Node22Ws[] = [];
+    const strict = new HaBluetoothClient(CONFIG, {
+      wsFactory: () => node22[node22.push(new Node22Ws()) - 1],
+    });
+    const started = strict.start();
+    const outcome = started.then(
+      () => 'ok',
+      (e: Error) => e.message,
+    );
+    node22[0].serverErrors();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await Promise.race([outcome, Promise.resolve('pending')])).toMatch(
+      /Could not connect to Home Assistant/,
+    );
+    expect(node22[0].closeCalls).toBe(1);
+    expect(debug.mock.calls.filter((c) => String(c[0]).includes('websocket error'))).toHaveLength(
+      2,
+    );
+    await strict.stop();
+  });
+
+  it('retries a failed connection on the backoff, not after the connect timeout', async () => {
+    vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    await subscribed();
+    sockets[0].serverCloses(1006, 'restart');
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(sockets).toHaveLength(2);
+    sockets[1].serverErrors();
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(sockets).toHaveLength(3);
+  });
+
+  it('reconnects once when error is followed by close (Node 24)', async () => {
+    vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    await subscribed();
+    sockets[0].serverCloses(1006, 'restart');
+    await vi.advanceTimersByTimeAsync(2_000);
+    sockets[1].serverErrors('');
+    sockets[1].serverCloses(1006);
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(sockets).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(sockets).toHaveLength(3);
   });
 });
