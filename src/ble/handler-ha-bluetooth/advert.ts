@@ -17,7 +17,12 @@ export interface HaAdvertisement {
   /** Scanner that heard it (adapter MAC, ESPHome/SLZB device id, ...). */
   source: string;
   connectable: boolean;
-  /** Unix seconds (float) when HA last saw the device. */
+  /**
+   * Unix seconds (float) when HA last heard the device: HA's monotonic receive
+   * time plus the wall-clock offset HA took when this subscription started. In
+   * the subscribe snapshot that can be minutes ago; in a live event it is the
+   * time of that advertisement.
+   */
   time: number;
   tx_power?: number | null;
   raw?: string | null;

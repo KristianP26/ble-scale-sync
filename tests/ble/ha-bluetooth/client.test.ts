@@ -226,44 +226,177 @@ describe('HaBluetoothClient', () => {
     expect(cb.mock.calls[0][1]).toBe('AA:BB:CC:DD:EE:FF');
   });
 
+  // ─── Snapshot vs live traffic and the clock-skew warning (#420) ───
+  //
+  // Home Assistant answers the subscribe with one event holding its whole
+  // advertisement history (oldest first since 2026.8), then sends one event per
+  // live advertisement. Only live traffic says anything about the clocks.
+
+  /** An advertisement HA last heard `ageMs` ago, on the (fake) current clock. */
+  function aged(ageMs: number, address = 'F8:83:06:4E:B6:7E'): HaAdvertisement {
+    return advert({ address, time: (Date.now() - ageMs) / 1000 });
+  }
+
+  function skewWarnings(warn: { mock: { calls: unknown[][] } }): string[] {
+    return warn.mock.calls.map((c) => String(c[0])).filter((m) => /NTP|clock/.test(m));
+  }
+
+  /** One live event per advertisement, `stepMs` of fake time apart. */
+  function sendLive(ws: FakeWs, id: number, count: number, ageMs: number, stepMs = 500): void {
+    for (let i = 0; i < count; i++) {
+      vi.advanceTimersByTime(stepMs);
+      ws.serverSays({ id, type: 'event', event: { add: [aged(ageMs)] } });
+    }
+  }
+
+  async function subscribed(): Promise<number> {
+    const started = client.start();
+    const id = handshake(sockets[0]);
+    await started;
+    return id;
+  }
+
+  it('does not take the subscribe snapshot for clock skew', async () => {
+    const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    warn.mockClear();
+    const id = await subscribed();
+    const cb = vi.fn();
+    client.onAdvertisement(cb);
+    // The shape from the #420 log: many devices last heard minutes ago, oldest
+    // first, and the few heard just now at the end.
+    const old = Array.from({ length: 25 }, (_, i) =>
+      aged(900_000 - i * 30_000, `AA:00:00:00:00:${String(i).padStart(2, '0')}`),
+    );
+    sockets[0].serverSays({
+      id,
+      type: 'event',
+      event: { add: [...old, aged(2_000, '11:11:11:11:11:11'), aged(0, '22:22:22:22:22:22')] },
+    });
+    expect(skewWarnings(warn)).toHaveLength(0);
+    expect(cb.mock.calls.map((c) => c[1])).toEqual(['11:11:11:11:11:11', '22:22:22:22:22:22']);
+  });
+
   // A clock disagreement between the two hosts drops every advertisement while
   // the subscription still looks healthy, so the symptom is silence with no
   // error. The warning is the only thing that makes it diagnosable.
-  it('warns once when everything is dropped as stale and nothing is delivered', async () => {
+  it('warns once when live advertisements keep arriving stale', async () => {
     const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
     warn.mockClear();
-    const started = client.start();
-    const id = handshake(sockets[0]);
-    await started;
-    client.onAdvertisement(vi.fn());
-    for (let i = 0; i < 25; i++) {
-      sockets[0].serverSays({
-        id,
-        type: 'event',
-        event: { add: [advert({ time: (NOW - 600_000) / 1000 })] },
-      });
-    }
-    const skew = warn.mock.calls.filter((c) => String(c[0]).includes('clock'));
+    const id = await subscribed();
+    const cb = vi.fn();
+    client.onAdvertisement(cb);
+    sockets[0].serverSays({ id, type: 'event', event: { add: [] } });
+    sendLive(sockets[0], id, 25, 600_000);
+    const skew = skewWarnings(warn);
     expect(skew).toHaveLength(1);
-    expect(String(skew[0][0])).toMatch(/600s in the past/);
+    expect(skew[0]).toMatch(/600s in the past/);
+    expect(skew[0]).toMatch(/NTP/);
+    expect(cb).not.toHaveBeenCalled();
   });
 
-  it('does not warn about skew once anything has been delivered', async () => {
+  it('warns when live advertisements turn stale after a fresh one', async () => {
     const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
     warn.mockClear();
-    const started = client.start();
-    const id = handshake(sockets[0]);
-    await started;
+    const id = await subscribed();
+    const cb = vi.fn();
+    client.onAdvertisement(cb);
+    sockets[0].serverSays({ id, type: 'event', event: { add: [] } });
+    sendLive(sockets[0], id, 1, 0);
+    sendLive(sockets[0], id, 25, 600_000);
+    expect(skewWarnings(warn)).toHaveLength(1);
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not take a burst of stale live advertisements for clock skew', async () => {
+    const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    warn.mockClear();
+    const id = await subscribed();
+    const cb = vi.fn();
+    client.onAdvertisement(cb);
+    sockets[0].serverSays({ id, type: 'event', event: { add: [] } });
+    // What queued up while this process stalled arrives in one go.
+    sendLive(sockets[0], id, 25, 35_000, 0);
+    sendLive(sockets[0], id, 1, 0, 0);
+    expect(skewWarnings(warn)).toHaveLength(0);
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('a fresh live advertisement restarts the count', async () => {
+    const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    warn.mockClear();
+    const id = await subscribed();
+    const cb = vi.fn();
+    client.onAdvertisement(cb);
+    sockets[0].serverSays({ id, type: 'event', event: { add: [] } });
+    sendLive(sockets[0], id, 15, 600_000);
+    sendLive(sockets[0], id, 1, 0);
+    sendLive(sockets[0], id, 15, 600_000);
+    expect(skewWarnings(warn)).toHaveLength(0);
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats the first event after every subscribe as a snapshot', async () => {
+    const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    warn.mockClear();
+    const id1 = await subscribed();
     client.onAdvertisement(vi.fn());
-    sockets[0].serverSays({ id, type: 'event', event: { add: [advert()] } });
-    for (let i = 0; i < 25; i++) {
-      sockets[0].serverSays({
-        id,
-        type: 'event',
-        event: { add: [advert({ time: (NOW - 600_000) / 1000 })] },
-      });
-    }
-    expect(warn.mock.calls.filter((c) => String(c[0]).includes('clock'))).toHaveLength(0);
+    sockets[0].serverSays({ id: id1, type: 'event', event: { add: [] } });
+
+    sockets[0].serverCloses(1006, 'restart');
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(sockets).toHaveLength(2);
+    const id2 = handshake(sockets[1]);
+    const old = Array.from({ length: 25 }, (_, i) =>
+      aged(600_000 - i * 1_000, `AA:00:00:00:00:${String(i).padStart(2, '0')}`),
+    );
+    sockets[1].serverSays({ id: id2, type: 'event', event: { add: old } });
+    expect(skewWarnings(warn)).toHaveLength(0);
+
+    // Real skew on the new subscription is still reported, once.
+    sendLive(sockets[1], id2, 25, 600_000);
+    expect(skewWarnings(warn)).toHaveLength(1);
+    sendLive(sockets[1], id2, 1, 0);
+    sendLive(sockets[1], id2, 25, 600_000);
+    expect(skewWarnings(warn)).toHaveLength(1);
+  });
+
+  it('logs one debug summary per snapshot', async () => {
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    debug.mockClear();
+    const id = await subscribed();
+    client.onAdvertisement(vi.fn());
+    sockets[0].serverSays({
+      id,
+      type: 'event',
+      event: {
+        add: [
+          aged(400_000, 'AA:00:00:00:00:01'),
+          aged(300_000, 'AA:00:00:00:00:02'),
+          aged(200_000, 'AA:00:00:00:00:03'),
+          aged(100_000, 'AA:00:00:00:00:04'),
+          aged(1_000, 'AA:00:00:00:00:05'),
+        ],
+      },
+    });
+    const lines = debug.mock.calls.map((c) => String(c[0]));
+    expect(lines.filter((l) => /sent 5 cached advertisements.*skipped 4/.test(l))).toHaveLength(1);
+    expect(lines.filter((l) => /newest 1s old/.test(l))).toHaveLength(1);
+    expect(lines.filter((l) => l.includes('Ignoring'))).toHaveLength(0);
+  });
+
+  it('still warns about live skew when Home Assistant sends no snapshot event', async () => {
+    const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    warn.mockClear();
+    const id = await subscribed();
+    const cb = vi.fn();
+    client.onAdvertisement(cb);
+    // No empty snapshot after the result: the first live event is taken for
+    // it, and its fresh advertisement must still get through.
+    sendLive(sockets[0], id, 1, 0);
+    expect(cb).toHaveBeenCalledTimes(1);
+    sendLive(sockets[0], id, 25, 600_000);
+    expect(skewWarnings(warn)).toHaveLength(1);
+    expect(cb).toHaveBeenCalledTimes(1);
   });
 
   it('filters on the configured scanner source', async () => {

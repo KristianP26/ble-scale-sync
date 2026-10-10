@@ -13,19 +13,24 @@ const PING_INTERVAL_MS = 30_000;
 const RECONNECT_MIN_MS = 2_000;
 const RECONNECT_MAX_MS = 60_000;
 /**
- * Home Assistant replays every advertisement it has cached the moment a client
- * subscribes, so a restart would otherwise re-deliver the last weigh-in as if it
- * had just happened. Anything HA last saw more than this long ago is dropped;
- * live traffic always carries a fresh stamp.
+ * Home Assistant answers the subscribe with a snapshot of every device it still
+ * tracks, each stamped with when it was last heard (up to 15-20 minutes back),
+ * so a restart would otherwise re-deliver the last weigh-in as if it had just
+ * happened. Anything HA last saw more than this long ago is dropped, in the
+ * snapshot and in the live stream alike. Live traffic is stamped with when HA
+ * received it, converted to wall time with the clock offset HA took when the
+ * subscription started, so it is fresh unless the two clocks disagree.
  */
 export const STALE_ADVERT_MS = 30_000;
 
-/**
- * How many advertisements may be dropped as stale, with none delivered, before
- * the clock-skew warning fires. Enough that a genuine cache replay on subscribe
- * does not trip it, few enough to be quick.
- */
+/** Live advertisements dropped as stale in a row before the clock-skew warning. */
 const STALE_SKEW_WARN_AFTER = 20;
+/**
+ * ...and the run must have lasted this long on our clock: live advertisements
+ * that queued up while this process stalled arrive as one burst, each of them
+ * fresh when Home Assistant sent it. Short enough for the 15 s `scan` to warn.
+ */
+const STALE_SKEW_MIN_SPAN_MS = 10_000;
 
 // WebSocket readyState values (WHATWG); Node's global WebSocket uses the same.
 const WS_OPEN = 1;
@@ -118,6 +123,12 @@ function defaultWsFactory(url: string): WsLike {
  * superset of what a local radio would show: every scanner HA knows about
  * (local adapter, ESPHome proxies, SMLIGHT SLZB, Shelly) feeds it. Passive only:
  * HA exposes no GATT path over this API.
+ *
+ * Right after the subscribe result HA sends one event with its whole
+ * advertisement history (oldest first since 2026.8), then one event per live
+ * advertisement. The first event of each subscription is handled as that
+ * snapshot: it follows the same delivery rule as live traffic, but only live
+ * traffic counts towards the clock-skew warning.
  */
 export class HaBluetoothClient {
   private ws: WsLike | null = null;
@@ -133,9 +144,16 @@ export class HaBluetoothClient {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectDelay = RECONNECT_MIN_MS;
   private version: string | null = null;
-  private staleDropped = 0;
-  /** Advertisements actually handed to subscribers, for the skew warning. */
-  private delivered = 0;
+  /** True between a successful subscribe result and the snapshot event after it. */
+  private awaitingSnapshot = false;
+  /** Live advertisements dropped as stale in a row, for the skew warning. */
+  private liveStaleRun = 0;
+  /** Our clock when the current run started. */
+  private liveStaleSince = 0;
+  /** Smallest age seen in the current run, the best estimate of the offset. */
+  private liveStaleMinAgeMs = Infinity;
+  /** The skew warning fires at most once per subscription. */
+  private skewWarned = false;
   /** Set on the first successful subscription; see the subscribe-result branch. */
   private subscribedOnce = false;
 
@@ -273,6 +291,11 @@ export class HaBluetoothClient {
           this.reconnectDelay = RECONNECT_MIN_MS;
           this.subscribedOnce = true;
           this.startPing();
+          // Every subscription opens with a snapshot and a new clock offset on
+          // the HA side, so the skew record starts over with it.
+          this.awaitingSnapshot = true;
+          this.resetLiveStaleRun();
+          this.skewWarned = false;
           bleLog.info(
             `Subscribed to Home Assistant Bluetooth advertisements` +
               (this.version ? ` (HA ${this.version})` : ''),
@@ -297,10 +320,21 @@ export class HaBluetoothClient {
         }
         this.dropSocket();
         return;
-      case 'event':
+      case 'event': {
         if (msg.id !== this.subscriptionId) return;
-        for (const ad of msg.event?.add ?? []) this.dispatch(ad);
+        const ads = msg.event?.add ?? [];
+        // Classified by position, not content: HA always sends the snapshot
+        // first, even when it is empty, and a one-entry snapshot looks just like
+        // a live event. A misclassified event loses nothing, because both paths
+        // deliver the same advertisements; only the diagnostics differ.
+        if (this.awaitingSnapshot) {
+          this.awaitingSnapshot = false;
+          this.dispatchSnapshot(ads);
+        } else {
+          for (const ad of ads) this.dispatchLive(ad);
+        }
         return;
+      }
       case 'pong':
         this.awaitingPong = false;
         return;
@@ -309,36 +343,93 @@ export class HaBluetoothClient {
     }
   }
 
-  private dispatch(ad: HaAdvertisement): void {
-    if (!ad || typeof ad.address !== 'string') return;
+  private resetLiveStaleRun(): void {
+    this.liveStaleRun = 0;
+    this.liveStaleSince = 0;
+    this.liveStaleMinAgeMs = Infinity;
+  }
+
+  private accepts(ad: HaAdvertisement): boolean {
+    if (!ad || typeof ad.address !== 'string') return false;
     if (this.config.source && ad.source?.toLowerCase() !== this.config.source.toLowerCase()) {
+      return false;
+    }
+    return true;
+  }
+
+  /** Age on our clock, or null when HA sent no usable time stamp. */
+  private ageMs(ad: HaAdvertisement): number | null {
+    return typeof ad.time === 'number' ? this.now() - ad.time * 1000 : null;
+  }
+
+  /**
+   * The history HA sends on subscribe. Most of it is minutes old by design, so
+   * dropping it says nothing about the clocks and never feeds the skew warning.
+   */
+  private dispatchSnapshot(ads: HaAdvertisement[]): void {
+    let sent = 0;
+    let skipped = 0;
+    let newestMs: number | null = null;
+    for (const ad of ads) {
+      if (!this.accepts(ad)) continue;
+      sent++;
+      const age = this.ageMs(ad);
+      if (age !== null) newestMs = newestMs === null ? age : Math.min(newestMs, age);
+      if (age !== null && age > STALE_ADVERT_MS) {
+        skipped++;
+        continue;
+      }
+      this.deliver(ad);
+    }
+    // The newest entry's age is a cheap skew hint even on a quiet install: HA
+    // restamps a device on every advertisement it hears, so without skew the
+    // newest is a few seconds old.
+    bleLog.debug(
+      `Home Assistant sent ${sent} cached advertisements on subscribe; skipped ${skipped} ` +
+        `last seen more than ${STALE_ADVERT_MS / 1000}s ago` +
+        (newestMs !== null ? ` (newest ${Math.round(newestMs / 1000)}s old)` : ''),
+    );
+  }
+
+  private dispatchLive(ad: HaAdvertisement): void {
+    if (!this.accepts(ad)) return;
+    const ageMs = this.ageMs(ad);
+    if (ageMs === null || ageMs <= STALE_ADVERT_MS) {
+      if (ageMs !== null) this.resetLiveStaleRun();
+      this.deliver(ad);
       return;
     }
-    if (typeof ad.time === 'number') {
-      const ageMs = this.now() - ad.time * 1000;
-      if (ageMs > STALE_ADVERT_MS) {
-        // Replayed from HA's cache on subscribe; see STALE_ADVERT_MS.
-        this.staleDropped++;
-        if (this.staleDropped <= 3) {
-          bleLog.debug(`Ignoring stale cached advertisement for ${ad.address} from Home Assistant`);
-        }
-        // The gate compares Home Assistant's wall clock against ours. If the two
-        // hosts disagree by more than the window, EVERY advertisement is dropped
-        // and the subscription still reports itself as healthy, so the symptom
-        // is total silence with no error. A Pi with no RTC that came up before
-        // NTP settled is exactly that case. Say it once, with the measured
-        // offset, rather than leaving it to be guessed at.
-        if (this.staleDropped === STALE_SKEW_WARN_AFTER && this.delivered === 0) {
-          bleLog.warn(
-            `Dropped ${this.staleDropped} Home Assistant advertisements as stale and delivered ` +
-              `none. They are arriving about ${Math.round(ageMs / 1000)}s in the past, which for ` +
-              `live traffic means this host's clock and the Home Assistant host's clock disagree. ` +
-              `Check NTP on both.`,
-          );
-        }
-        return;
-      }
+    const now = this.now();
+    if (this.liveStaleRun === 0) this.liveStaleSince = now;
+    this.liveStaleRun++;
+    this.liveStaleMinAgeMs = Math.min(this.liveStaleMinAgeMs, ageMs);
+    if (this.liveStaleRun <= 3) {
+      bleLog.debug(`Ignoring stale live advertisement for ${ad.address} from Home Assistant`);
     }
+    // The gate compares Home Assistant's clock against ours. If they disagree
+    // by more than the window, every live advertisement is dropped while the
+    // subscription still looks healthy, so the symptom is silence with no
+    // error. Say it once, with the measured offset. The span keeps a burst that
+    // queued up while this process stalled from passing for skew.
+    const span = now - this.liveStaleSince;
+    if (
+      !this.skewWarned &&
+      this.liveStaleRun >= STALE_SKEW_WARN_AFTER &&
+      span >= STALE_SKEW_MIN_SPAN_MS
+    ) {
+      this.skewWarned = true;
+      bleLog.warn(
+        `Home Assistant's live advertisements keep arriving stamped about ` +
+          `${Math.round(this.liveStaleMinAgeMs / 1000)}s in the past ` +
+          `(${this.liveStaleRun} in a row over ${Math.round(span / 1000)}s), so they are ` +
+          `dropped as stale. This host's clock and Home Assistant's disagree, or Home ` +
+          `Assistant's clock changed after the subscription started (restarting BLE Scale ` +
+          `Sync clears that). Check NTP on both hosts.`,
+      );
+    }
+  }
+
+  private deliver(ad: HaAdvertisement): void {
     let info: BleDeviceInfo;
     try {
       info = toBleDeviceInfo(ad);
@@ -346,7 +437,6 @@ export class HaBluetoothClient {
       bleLog.debug(`Malformed advertisement from Home Assistant: ${errMsg(err)}`);
       return;
     }
-    this.delivered++;
     for (const cb of this.subscribers) {
       try {
         cb(info, ad.address.toUpperCase(), ad);
