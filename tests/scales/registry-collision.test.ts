@@ -72,6 +72,18 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
       data: Buffer.from('02031164fb012d925001221a00000190ce', 'hex'),
     },
   },
+  // Broadcast-only, nameless. The real stable 147.00 kg advert from openScale
+  // #1191 (NIX Home, btsnoop record #439): a C0 frame under the rotating
+  // company id 0x10C0, with the device's own MAC echoed at [7..12].
+  'OKOK (Chipsea broadcast)': {
+    localName: '',
+    address: '08:B8:D0:DE:B5:3A',
+    serviceUuids: [],
+    manufacturerData: {
+      id: 0x10c0,
+      data: Buffer.from('396c17700a012508b8d0deb53a', 'hex'),
+    },
+  },
   'Xiaomi Mi Scale 2': { localName: 'MIBFS', serviceUuids: [] },
   'Xiaomi Mijia Scale S800': { localName: 'Mijia Scale S800 A1AB', serviceUuids: [] },
   // Same FE95 service as the S800; the product id (0x3bd5 here) tells them apart.

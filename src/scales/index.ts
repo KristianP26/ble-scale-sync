@@ -7,6 +7,7 @@ import { MiScale2Adapter } from './mi-scale-2.js';
 import { XiaomiMiScaleLegacyAdapter } from './xiaomi-mi-scale-legacy.js';
 import { Silvergear108Adapter } from './silvergear-108.js';
 import { SenssunIfB7Adapter } from './senssun-if-b7.js';
+import { OkokChipseaAdapter } from './okok-chipsea.js';
 import { XiaomiS800Adapter } from './xiaomi-s800.js';
 import { XiaomiS400Adapter } from './xiaomi-s400.js';
 import { BeurerBf720Adapter } from './beurer-bf720.js';
@@ -69,6 +70,10 @@ export const adapters: ScaleAdapter[] = [
   // company id 0x0100 plus the 17-byte frame, its checksum and the device's own
   // MAC echoed inside it, so it cannot collide with anything else (#423).
   new SenssunIfB7Adapter(),
+  // OKOK / Chipsea broadcast scales (C0 and 2.0): broadcast-only. Claims on the
+  // device's own MAC echoed inside the frame, the 2.0 checksum, or a Yoda0/Yoda1
+  // or ADV name, so it collides with nothing else (#408).
+  new OkokChipseaAdapter(),
   new MiScale2Adapter(),
   // Xiaomi Mijia S800 (ms116): broadcast-only, matches FE95 + product id 0x51E2
   // or its own name; no collision with any other adapter (#232).
