@@ -124,20 +124,49 @@ export function resolveExportQueuePath(configPath?: string): string {
   return join(dir, EXPORT_QUEUE_FILENAME);
 }
 
+/** Set once a failed read has been reported at warn, cleared by the next good read. */
+let readFailureReported = false;
+
+/** Test seam: the read-failure warning is once per process on purpose. */
+export function _resetExportQueueStateForTests(): void {
+  readFailureReported = false;
+}
+
 /**
- * Read the queue, dropping entries that are past a bound or unreadable.
- *
- * A corrupt line is skipped rather than fatal: one bad line must not cost the
- * other readings.
+ * The reading an entry holds, in the form a person can re-enter by hand (E-10):
+ * target, user, measurement time and weight.
  */
-export function loadQueue(path: string, now: number = Date.now()): QueuedExport[] {
-  if (!existsSync(path)) return [];
+function describeEntry(e: QueuedExport): string {
+  const weight = e.payload?.weight;
+  return (
+    `${e.exporter} export${e.userSlug ? ` for '${e.userSlug}'` : ''}` +
+    (e.timestamp ? ` measured at ${e.timestamp}` : ` queued at ${e.queuedAt}`) +
+    (typeof weight === 'number' ? ` (${weight.toFixed(2)} kg)` : '')
+  );
+}
+
+type QueueRead = { ok: true; entries: QueuedExport[] } | { ok: false; error: string };
+
+/**
+ * Read the queue, telling a missing file (an empty queue) apart from one that
+ * exists and could not be read.
+ *
+ * The difference is the whole point. Both used to come back as an empty list,
+ * and the callers then acted on "empty": a flush deleted the file and an
+ * enqueue overwrote it with the one new entry, so a single failed read (EIO
+ * on an SD card, a file owned by another UID after an image update) erased
+ * every reading in it with nothing above debug (#460).
+ */
+function readQueue(path: string, now: number): QueueRead {
+  if (!existsSync(path)) return { ok: true, entries: [] };
   let raw: string;
   try {
     raw = readFileSync(path, 'utf-8');
   } catch (err) {
-    log.debug(`Could not read the retry queue: ${errMsg(err)}`);
-    return [];
+    // Gone between the check and the read: that is an empty queue, not a
+    // failure.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { ok: true, entries: [] };
+    return { ok: false, error: errMsg(err) };
   }
 
   const entries: QueuedExport[] = [];
@@ -166,7 +195,21 @@ export function loadQueue(path: string, now: number = Date.now()): QueuedExport[
   // capping on read would mean a flush over an oversized file (hand-edited, or
   // written by a version with a larger bound) permanently deleting readings it
   // never even attempted.
-  return entries;
+  return { ok: true, entries };
+}
+
+/**
+ * Read the queue, dropping entries that are past a bound or unreadable.
+ *
+ * A corrupt line is skipped rather than fatal: one bad line must not cost the
+ * other readings. A file that cannot be read at all comes back empty here;
+ * the queue's own paths tell that case apart and never act on it.
+ */
+export function loadQueue(path: string, now: number = Date.now()): QueuedExport[] {
+  const read = readQueue(path, now);
+  if (read.ok) return read.entries;
+  log.debug(`Could not read the retry queue: ${read.error}`);
+  return [];
 }
 
 /**
@@ -192,13 +235,32 @@ export function saveQueue(path: string, entries: QueuedExport[]): boolean {
   }
 }
 
-/** Add one failed export, applying the count bound. */
+/**
+ * Add one failed export, applying the count bound.
+ *
+ * When the file cannot be read, or the new state cannot be written, the
+ * reading is NOT queued and the warning names it. Overwriting an unreadable
+ * file with the one new entry used to erase every reading already in it, and
+ * a failed write used to be followed by "queued and will be retried" for an
+ * entry that was on disk nowhere (#460).
+ */
 export function enqueue(path: string, entry: QueuedExport, now: number = Date.now()): void {
-  const entries = loadQueue(path, now);
+  const read = readQueue(path, now);
+  if (!read.ok) {
+    log.warn(
+      `Could not read the retry queue (${read.error}), so the failed ${describeEntry(entry)} ` +
+        'is NOT queued and will not be retried. The queue file is left as it is.',
+    );
+    return;
+  }
+  const entries = read.entries;
   entries.push(entry);
   // Count what is kept, not what was loaded: a full queue must not report 51.
   const kept = entries.slice(-MAX_ENTRIES);
-  saveQueue(path, kept);
+  if (!saveQueue(path, kept)) {
+    log.warn(`The failed ${describeEntry(entry)} is NOT queued and will not be retried.`);
+    return;
+  }
   log.info(
     `${entry.exporter} failed; the reading is queued and will be retried ` +
       `(${kept.length} waiting).`,
@@ -244,7 +306,21 @@ export async function flushQueue(
   now: number = Date.now(),
   signal?: AbortSignal,
 ): Promise<{ delivered: number; failed: number; dropped: number }> {
-  const pending = loadQueue(path, now);
+  const read = readQueue(path, now);
+  if (!read.ok) {
+    // Attempt nothing and write nothing: the file may hold every queued
+    // reading, and the next cycle reads it again. Warn once, not on every
+    // cycle a permanently unreadable file would otherwise produce.
+    const msg =
+      `Could not read the retry queue (${read.error}); nothing is retried and the file ` +
+      'is left as it is.';
+    if (readFailureReported) log.debug(msg);
+    else log.warn(msg);
+    readFailureReported = true;
+    return { delivered: 0, failed: 0, dropped: 0 };
+  }
+  readFailureReported = false;
+  const pending = read.entries;
   if (pending.length === 0) {
     // loadQueue drops expired entries, so persist that pruning (and delete the
     // file if it emptied) rather than leaving them to be re-read every cycle.
@@ -268,15 +344,33 @@ export async function flushQueue(
   let failed = 0;
   let dropped = 0;
 
+  // Entries this pass put back into `keep` after attempting them (a failure,
+  // or a lookup that threw) since the last good write. They exist only here:
+  // the write before their attempt took them off disk. If no further write
+  // succeeds they are lost, and the warning must say which (E-10).
+  let unsaved: QueuedExport[] = [];
   const persist = (rest: QueuedExport[]): boolean => {
-    for (const e of loadQueue(path, now)) {
+    // A failed read here must not become a write of this pass's view alone:
+    // that would erase whatever was queued while the pass was running.
+    const current = readQueue(path, now);
+    if (!current.ok) {
+      log.warn(`Could not read the retry queue: ${current.error}`);
+      return false;
+    }
+    for (const e of current.entries) {
       const id = entryId(e);
       if (known.has(id)) continue;
       known.add(id);
       foreign.push(e);
     }
-    return saveQueue(path, [...keep, ...rest, ...foreign]);
+    if (!saveQueue(path, [...keep, ...rest, ...foreign])) return false;
+    unsaved = [];
+    return true;
   };
+  const lostFromQueue = (): string =>
+    unsaved.length === 0
+      ? ''
+      : ` Not saved back, so no longer queued: ${unsaved.map(describeEntry).join('; ')}.`;
 
   for (let i = 0; i < pending.length; i += 1) {
     // Stopping: start nothing new. Taking the next entry off disk now would
@@ -300,7 +394,10 @@ export async function flushQueue(
     // a reason to duplicate somebody's weigh-in: stop, and let the next cycle
     // try the whole queue.
     if (!persist(pending.slice(i + 1))) {
-      log.warn('Stopping the retry pass: the queue could not be written, so nothing is attempted.');
+      log.warn(
+        'Stopping the retry pass: the queue could not be read or written, so nothing more ' +
+          `is attempted.${lostFromQueue()}`,
+      );
       return { delivered, failed, dropped };
     }
 
@@ -318,6 +415,7 @@ export async function flushQueue(
           `its exporter could not be built from the current config (${errMsg(err)})`,
       );
       keep.push(entry);
+      unsaved.push(entry);
       failed += 1;
       continue;
     }
@@ -373,18 +471,22 @@ export async function flushQueue(
         continue;
       }
       log.debug(`${entry.exporter} retry ${attempts} failed: ${errMsg(err)}`);
-      keep.push({
+      const retried = {
         ...entry,
         attempts,
         lastAttemptAt: new Date(now).toISOString(),
         lastError: errMsg(err),
-      });
+      };
+      keep.push(retried);
+      unsaved.push(retried);
       failed += 1;
     } finally {
       signal?.removeEventListener('abort', onAbort);
     }
   }
 
-  persist([]);
+  if (!persist([]) && unsaved.length > 0) {
+    log.warn(`Could not save the retry queue after the pass.${lostFromQueue()}`);
+  }
   return { delivered, failed, dropped };
 }
