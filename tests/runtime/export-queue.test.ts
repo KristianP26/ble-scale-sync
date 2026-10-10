@@ -9,6 +9,7 @@ import {
   enqueue,
   flushQueue,
   resolveExportQueuePath,
+  describeQueue,
   type QueuedExport,
 } from '../../src/runtime/export-queue.js';
 import type { Exporter } from '../../src/interfaces/exporter.js';
@@ -537,5 +538,116 @@ describe('export retry queue: two exporters of one type (D029) and shutdown (E-1
     // The next entry is not started under a shutdown, and stays queued.
     expect(fileExp.export).not.toHaveBeenCalled();
     expect(loadQueue(file, NOW).map((e) => e.exporter)).toEqual(['file']);
+  });
+});
+
+/**
+ * #460: "Retrying 2" counted only the entries that were due, and nothing at
+ * INFO said a third was still waiting or when, so a partial pass right after
+ * a restart read exactly like a queue that had lost an entry.
+ */
+describe('export retry queue: the log says what waits and when (#460)', () => {
+  let dir: string;
+  let file: string;
+  let info: ReturnType<typeof vi.spyOn>;
+  let warn: ReturnType<typeof vi.spyOn>;
+  const linesOf = (spy: ReturnType<typeof vi.spyOn>): string[] =>
+    spy.mock.calls.map((c) => c.map(String).join(' '));
+
+  // The reporter's three entries after their first retries.
+  const A = '2026-10-09T11:10:03.643Z';
+  const B = '2026-10-09T11:10:07.596Z';
+  const C = '2026-10-09T11:10:59.620Z';
+  const reporterQueue = (): QueuedExport[] => [
+    entry({ queuedAt: A, attempts: 1, lastAttemptAt: '2026-10-09T11:25:22.851Z' }),
+    entry({ queuedAt: B, attempts: 1, lastAttemptAt: '2026-10-09T11:25:22.851Z' }),
+    entry({ queuedAt: C, attempts: 1, lastAttemptAt: '2026-10-09T11:28:41.727Z' }),
+  ];
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'export-queue-log-'));
+    file = path.join(dir, 'queue.jsonl');
+    info = vi.spyOn(console, 'log').mockImplementation(() => {});
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('says how many of how many it retries, and when the rest is due', async () => {
+    saveQueue(file, reporterQueue());
+    const garmin = fakeExporter('garmin', async () => ({ success: true }));
+
+    await flushQueue(file, lookupIn(garmin), Date.parse('2026-10-09T12:10:52.221Z'));
+
+    const lines = linesOf(info).join(' | ');
+    expect(lines).toContain('Retrying 2 of 3 queued export(s)...');
+    expect(lines).toContain(
+      '1 queued export(s) still waiting; next retry not before 2026-10-09T12:13:41.727Z.',
+    );
+  });
+
+  it('says "on the next cycle" rather than a time in the past for an entry already due', async () => {
+    // A lookup that throws keeps the entry without spending an attempt (E-08),
+    // so it is due again at once.
+    saveQueue(file, [entry()]);
+    const lookup = (): Exporter => {
+      throw new Error('garmin: upload_timeout_sec must be >= 30');
+    };
+
+    await flushQueue(file, lookup, NOW);
+
+    expect(linesOf(info).join(' | ')).toContain(
+      '1 queued export(s) still waiting; next retry on the next cycle.',
+    );
+  });
+
+  it('describes the queue at startup, and nothing for an empty one', () => {
+    expect(describeQueue(file, NOW)).toBeUndefined();
+    saveQueue(file, reporterQueue());
+    expect(describeQueue(file, Date.parse('2026-10-09T11:41:07.000Z'))).toBe(
+      '3 queued export(s) waiting; next retry not before 2026-10-09T12:10:22.851Z.',
+    );
+  });
+
+  it('warns once, by name, when an entry ages out', async () => {
+    saveQueue(file, [
+      entry({
+        queuedAt: new Date(NOW - 73 * HOUR).toISOString(),
+        lastAttemptAt: new Date(NOW - 2 * HOUR).toISOString(),
+        attempts: 4,
+        timestamp: '2026-09-06T10:59:00.000Z',
+        userSlug: 'martin',
+      }),
+      // Not due, so the pass attempts nothing and only the pruning is written.
+      entry({ queuedAt: new Date(NOW - 5 * MIN).toISOString() }),
+    ]);
+    const garmin = fakeExporter('garmin', async () => ({ success: true }));
+
+    await flushQueue(file, lookupIn(garmin), NOW);
+    await flushQueue(file, lookupIn(garmin), NOW + 2 * MIN);
+
+    const dropped = linesOf(warn).filter((l) => l.includes('Dropping a queued'));
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]).toContain(
+      "garmin export for 'martin' measured at 2026-09-06T10:59:00.000Z (80.00 kg): older than 72 h",
+    );
+    expect(garmin.export).not.toHaveBeenCalled();
+    expect(loadQueue(file, NOW)).toHaveLength(1);
+  });
+
+  it('warns when it skips an unreadable line', async () => {
+    fs.writeFileSync(
+      file,
+      `not json\n${JSON.stringify(entry({ queuedAt: new Date(NOW - 5 * MIN).toISOString() }))}\n`,
+    );
+
+    await flushQueue(file, lookupIn(), NOW);
+
+    expect(linesOf(warn).join(' | ')).toContain(
+      'Skipping an unreadable line in the retry queue; a queued reading may be lost.',
+    );
   });
 });
