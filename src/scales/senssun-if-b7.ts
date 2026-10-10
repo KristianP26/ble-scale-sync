@@ -9,7 +9,7 @@ import type {
 } from '../interfaces/scale-adapter.js';
 import { buildPayload } from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
-import type { MatchDescriptor } from './match-descriptor.js';
+import { ownAddressBytes, type MatchDescriptor } from './match-descriptor.js';
 
 // ─── Senssun IF_B7 (broadcast-only, 0x0100 manufacturer data) ────────────────
 
@@ -164,13 +164,6 @@ interface LogKey {
   seenAt: number;
 }
 
-/** The six address bytes, uppercase and colon-free, or null when unknown. */
-function macBytes(address: string | undefined): string | null {
-  if (!address) return null;
-  const clean = address.replace(/[:-]/g, '').toUpperCase();
-  return /^[0-9A-F]{12}$/.test(clean) ? clean : null;
-}
-
 /**
  * Adapter for the Senssun IF_B7 broadcast scale, sold among others as the
  * Grifema GA2001 (#423). Unrelated to the GATT-based "Senssun Fat" adapter.
@@ -238,7 +231,7 @@ export class SenssunIfB7Adapter implements ScaleAdapterCore, BroadcastSource {
   matches(device: BleDeviceInfo): boolean {
     const m = device.manufacturerData;
     if (m?.id !== COMPANY_ID || !isFrame(m.data)) return false;
-    const own = macBytes(device.address);
+    const own = ownAddressBytes(device.address);
     if (own) {
       return (
         m.data

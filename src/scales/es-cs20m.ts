@@ -8,7 +8,7 @@ import type {
   ConnectionContext,
 } from '../interfaces/scale-adapter.js';
 import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
-import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
+import { matchesDescriptor, ownAddressBytes, type MatchDescriptor } from './match-descriptor.js';
 import { bleLog, errMsg } from '../ble/types.js';
 
 const CHR_NOTIFY = uuid16(0x2a10);
@@ -217,13 +217,6 @@ const QINGNIU_COMPANY_ID = 0x1a10;
 const ANON_PAYLOAD_LEN = 12;
 const ANON_MAC_OFFSET = 4;
 
-/** The six address bytes, uppercase and colon-free, or null. */
-function macBytes(address: string | undefined): string | null {
-  if (!address) return null;
-  const clean = address.replace(/[:-]/g, '').toUpperCase();
-  return /^[0-9A-F]{12}$/.test(clean) ? clean : null;
-}
-
 /**
  * True when the advertisement carries the device's own address inside its
  * manufacturer data.
@@ -247,7 +240,7 @@ function hasOwnMacEcho(device: BleDeviceInfo): boolean {
   const md = device.manufacturerData;
   if (!md || md.id !== QINGNIU_COMPANY_ID) return false;
   if (md.data.length !== ANON_PAYLOAD_LEN) return false;
-  const own = macBytes(device.address);
+  const own = ownAddressBytes(device.address);
   if (!own) return false;
   const embedded = md.data
     .subarray(ANON_MAC_OFFSET, ANON_MAC_OFFSET + 6)

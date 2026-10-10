@@ -3,6 +3,7 @@ import {
   matchesDescriptor,
   uuidClaimHits,
   descriptorNameTokens,
+  ownAddressBytes,
   type MatchDescriptor,
 } from '../../src/scales/match-descriptor.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
@@ -76,5 +77,20 @@ describe('matchesDescriptor', () => {
   it('uuidClaimHits handles undefined device uuids', () => {
     expect(uuidClaimHits(['fff0'], undefined)).toBe(false);
     expect(uuidClaimHits(['fff0'], ['fff0'])).toBe(true);
+  });
+});
+
+describe('ownAddressBytes', () => {
+  it('strips colons or dashes and uppercases', () => {
+    expect(ownAddressBytes('08:b8:d0:de:b5:3a')).toBe('08B8D0DEB53A');
+    expect(ownAddressBytes('08-B8-D0-DE-B5-3A')).toBe('08B8D0DEB53A');
+  });
+
+  it('is null when the transport has no usable address', () => {
+    expect(ownAddressBytes(undefined)).toBeNull();
+    expect(ownAddressBytes('')).toBeNull();
+    // What noble hands over on macOS: formatMac('<unknown>').
+    expect(ownAddressBytes('<U:NK:NO:WN')).toBeNull();
+    expect(ownAddressBytes('08:B8:D0:DE:B5')).toBeNull();
   });
 });

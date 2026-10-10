@@ -95,6 +95,21 @@ export function matchesDescriptor(device: BleDeviceInfo, d: MatchDescriptor): bo
   return false;
 }
 
+/**
+ * The six bytes of a transport-reported address, uppercase hex without
+ * separators, or null when the transport has none (noble on macOS reports
+ * `<unknown>`).
+ *
+ * For adapters whose claim is the device's own address echoed inside its
+ * manufacturer data: a device that is not the scale will not happen to carry
+ * the address it is transmitting from, so the claim validates itself.
+ */
+export function ownAddressBytes(address: string | undefined): string | null {
+  if (!address) return null;
+  const clean = address.replace(/[:-]/g, '').toUpperCase();
+  return /^[0-9A-F]{12}$/.test(clean) ? clean : null;
+}
+
 /** Union of every name token a descriptor claims (for exclusion / overlap analysis). */
 export function descriptorNameTokens(d: MatchDescriptor): string[] {
   const n = d.names;
