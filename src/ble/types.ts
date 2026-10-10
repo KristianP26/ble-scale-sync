@@ -272,6 +272,31 @@ export function untilAborted<T>(promise: Promise<T>, signal?: AbortSignal): Prom
 export { withTimeout } from '../utils/timeout.js';
 
 /**
+ * A reading session that ran out of time on its own clock: the idle window
+ * passed without activity (`'idle'`), or the absolute cap was reached
+ * (`'cap'`). By then the scale was found, connected and subscribed, so the
+ * loop must not log it as "No scale found" (#460).
+ *
+ * Indistinguishable from a plain Error except by `instanceof` and `reason`:
+ * `name` stays the inherited 'Error', so `String(err)` and the log text are
+ * unchanged, and `reason` is a getter, not an own enumerable property, so a
+ * test comparing against `new Error(msg)` with toEqual still matches (Vitest
+ * compares name and own enumerable properties of errors).
+ */
+export class SessionTimeoutError extends Error {
+  readonly #reason: 'idle' | 'cap';
+
+  constructor(message: string, reason: 'idle' | 'cap') {
+    super(message);
+    this.#reason = reason;
+  }
+
+  get reason(): 'idle' | 'cap' {
+    return this.#reason;
+  }
+}
+
+/**
  * Like withTimeout, but the deadline restarts whenever `start`'s callback is
  * invoked: the returned promise rejects after `ms` with no activity. Like
  * withTimeout, the promise from `start` is abandoned rather than cancelled, so
@@ -311,7 +336,10 @@ export async function withIdleTimeout<T>(
     if (!cap) return;
     capAt = at;
     clearTimeout(capTimer);
-    capTimer = setTimeout(() => rejectTimeout(new Error(cap.message)), at - Date.now());
+    capTimer = setTimeout(
+      () => rejectTimeout(new SessionTimeoutError(cap.message, 'cap')),
+      at - Date.now(),
+    );
   };
   if (cap) armCap(Date.now() + cap.ms);
   let floorAt = 0;
@@ -322,7 +350,10 @@ export async function withIdleTimeout<T>(
       if (cap && floorAt > capAt) armCap(floorAt);
     }
     clearTimeout(timer);
-    timer = setTimeout(() => rejectTimeout(new Error(message)), Math.max(ms, floorAt - now));
+    timer = setTimeout(
+      () => rejectTimeout(new SessionTimeoutError(message, 'idle')),
+      Math.max(ms, floorAt - now),
+    );
   };
   onActivity();
   try {

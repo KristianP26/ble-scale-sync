@@ -5,6 +5,7 @@ import {
   sleep,
   withTimeout,
   withIdleTimeout,
+  SessionTimeoutError,
   BT_BASE_UUID_SUFFIX,
 } from '../../src/ble/types.js';
 import { HoldTimer, HOLD_EXTENSION_MAX_MS } from '../../src/ble/notification-processor.js';
@@ -90,6 +91,46 @@ describe('withIdleTimeout()', () => {
       const outcome = expect(never).rejects.toThrow('idle');
       await vi.advanceTimersByTimeAsync(1000);
       await outcome;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #460: the loop logged a session that connected and then timed out as
+  // "No scale found". It needs to recognise this error, with the text the log
+  // has always shown.
+  it('rejects with a SessionTimeoutError that says which clock ran out', async () => {
+    vi.useFakeTimers();
+    try {
+      const idle = withIdleTimeout(() => new Promise<never>(() => {}), 1000, 'idle message');
+      const idleOutcome = idle.catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(1000);
+      const idleErr = await idleOutcome;
+      expect(idleErr).toBeInstanceOf(SessionTimeoutError);
+      expect((idleErr as SessionTimeoutError).reason).toBe('idle');
+      expect((idleErr as Error).message).toBe('idle message');
+      expect(String(idleErr)).toBe('Error: idle message');
+
+      // Activity every 500 ms keeps the idle window open, so only the cap ends it.
+      let signal!: () => void;
+      const capped = withIdleTimeout(
+        (onActivity) => {
+          signal = onActivity;
+          return new Promise<never>(() => {});
+        },
+        1000,
+        'idle message',
+        { ms: 3000, message: 'cap message' },
+      );
+      const capOutcome = capped.catch((e: unknown) => e);
+      for (let t = 0; t < 3000; t += 500) {
+        await vi.advanceTimersByTimeAsync(500);
+        signal();
+      }
+      const capErr = await capOutcome;
+      expect(capErr).toBeInstanceOf(SessionTimeoutError);
+      expect((capErr as SessionTimeoutError).reason).toBe('cap');
+      expect((capErr as Error).message).toBe('cap message');
     } finally {
       vi.useRealTimers();
     }

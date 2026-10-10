@@ -54,7 +54,7 @@ vi.mock('../../src/ble/types.js', async (importOriginal) => {
 });
 
 const { buildReadingSource } = await import('../../src/runtime/sources.js');
-const { POST_DISCONNECT_GRACE_MS } = await import('../../src/ble/types.js');
+const { POST_DISCONNECT_GRACE_MS, SessionTimeoutError } = await import('../../src/ble/types.js');
 import type { AppContext } from '../../src/runtime/context.js';
 import type { ScaleAdapter } from '../../src/interfaces/scale-adapter.js';
 import { tagBleFailure } from '../../src/ble/failure-kind.js';
@@ -247,6 +247,28 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
     expect(bundle.failureLogPrefixFor?.(new Error('untagged'))).toBe(undefined);
     bundle.onFailure?.(blocked);
     expect(h.watchdogInstances[0].recordFailure).not.toHaveBeenCalled();
+  });
+
+  // #460: the scale was found, connected and subscribed, then the session ran
+  // out of time without a reading. "No scale found" sent people looking for a
+  // pairing or range problem that was not there.
+  it('poll plan: a session timeout says the scale connected, and keeps the backoff', async () => {
+    h.createReadingSource.mockResolvedValue({ kind: 'poll', appliesGraceFloor: false });
+    const bundle = await buildReadingSource(makeCtx(), ADAPTERS, 7, 30);
+    const timedOut = tagBleFailure(
+      new SessionTimeoutError('Timed out waiting for a complete scale reading', 'idle'),
+      'wedge-suspect',
+    );
+
+    expect(bundle.failureLogPrefixFor?.(timedOut)).toBe('Scale connected but sent no reading');
+    expect(
+      bundle.failureLogPrefixFor?.(new SessionTimeoutError('GATT session cap exceeded', 'cap')),
+    ).toBe('Scale connected but sent no reading');
+    expect(bundle.failureDelayMs?.(timedOut)).toBe(undefined);
+    // Any other GATT failure keeps the old prefix.
+    expect(bundle.failureLogPrefixFor?.(tagBleFailure(new Error('x'), 'wedge-suspect'))).toBe(
+      undefined,
+    );
   });
 
   it('poll plan: the idle delay is re-read from config on every call', async () => {
