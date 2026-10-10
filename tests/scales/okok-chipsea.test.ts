@@ -21,10 +21,11 @@ import { bleLog } from '../../src/ble/types.js';
 // ─── C0 dialect ──────────────────────────────────────────────────────────────
 
 /*
- * openScale #1191, attachments btsnoop.log and the vendor app's CSV export: a
- * nameless NIX Home unit, 08:B8:D0:DE:B5:3A. The four stable frames are the
- * only stable frames in the capture, one per weigh-in, each at the second the
- * CSV records that weigh-in with the same weight.
+ * openScale #1191, attachments scale_okok_202510171322_btsnoop_hci.log and the
+ * vendor app's CSV export scale_okok_202510171322.csv: a nameless NIX Home
+ * unit, 08:B8:D0:DE:B5:3A. The four stable frames are the only stable frames
+ * in the capture, one per weigh-in, each at the second the CSV records that
+ * weigh-in with the same weight.
  */
 const NIX_MAC = '08:B8:D0:DE:B5:3A';
 /** Record #348, idle, id 0x03C0. */

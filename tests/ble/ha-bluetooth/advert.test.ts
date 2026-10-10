@@ -99,10 +99,10 @@ const YODA0_PACKETS = [
 ];
 
 /**
- * openScale #1191 attachment btsnoop.log, a nameless OKOK scale (NIX Home,
- * 08:B8:D0:DE:B5:3A), every advert of it from record #348 to #469: idle,
- * settling, the stable 147.00 kg frame (#439), then idle again (#469). Its
- * company id changes on almost every advert.
+ * openScale #1191 attachment scale_okok_202510171322_btsnoop_hci.log, a
+ * nameless OKOK scale (NIX Home, 08:B8:D0:DE:B5:3A), every advert of it from
+ * record #348 to #469: idle, settling, the stable 147.00 kg frame (#439), then
+ * idle again (#469). Its company id changes on almost every advert.
  */
 const NIX_PACKETS = [
   '10ffc003000000000a012408b8d0deb53a',
