@@ -197,6 +197,7 @@ ble-scale-sync/
 │       ├── robi-s9.ts               # Robi S9
 │       ├── silvergear-108.ts        # Silvergear 108 (broadcast only)
 │       ├── senssun-if-b7.ts         # Senssun IF_B7 / Grifema GA2001 (broadcast only)
+│       ├── okok-chipsea.ts          # OKOK / Chipsea broadcast, C0 and 2.0 (broadcast only)
 │       └── standard-gatt.ts         # Generic BCS/WSS catch-all
 ├── tests/
 │   ├── body-comp-helpers.test.ts    # Body-comp math

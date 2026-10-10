@@ -4,7 +4,7 @@ description: Every BLE smart scale brand and model supported by BLE Scale Sync.
 head:
   - - meta
     - name: keywords
-      content: koogeek scale, xiaomi mi scale, renpho scale bluetooth, eufy smart scale, yunmai scale, beurer bf scale, sanitas scale, medisana bs scale, silvercrest scale, 1byone scale, etekcity scale, inevifit scale, arboleaf scale, lepulse scale, fitdays scale, senssun scale, grifema scale, supported ble scales
+      content: koogeek scale, xiaomi mi scale, renpho scale bluetooth, eufy smart scale, yunmai scale, beurer bf scale, sanitas scale, medisana bs scale, silvercrest scale, 1byone scale, etekcity scale, inevifit scale, arboleaf scale, lepulse scale, fitdays scale, senssun scale, grifema scale, okok scale, chipsea scale, supported ble scales
 ---
 
 # Supported Scales
@@ -21,6 +21,7 @@ _Weight only_ means weight is reported normally but body composition is estimate
 | **Xiaomi** Mi Smart Scale 2 (XMTZC04HM / MI SCALE2)                   | Weight only      | No pairing needed                                                                                                                                 |
 | **Silvergear** Smart Scale 108                                        | Weight only      | Broadcast only; the display unit does not matter                                                                                                  |
 | **Grifema** GA2001 / **Senssun** IF_B7                                | Weight only      | Broadcast only; kg or lb display                                                                                                                  |
+| **OKOK** (Chipsea broadcast): nameless, Yoda0 / Yoda1, `ADV`          | Weight only      | Broadcast only; kg display only; a nameless unit needs `ble.scale_mac` on the default Linux transport                                             |
 | **Xiaomi** Mijia Body Composition Scale S800 (ms116)                  | Weight only      | Needs a per-device `ble.bind_key` from the Mi cloud                                                                                               |
 | **Xiaomi** Body Composition Scale S400 (MJTZC01YM)                    | Yes              | Needs a per-device `ble.bind_key` from the Mi cloud plus `ble.scale_mac`; weigh barefoot for impedance                                            |
 | **Renpho** ES-CS20M / ES-32MD / Elis 1 / FITINDEX / Sencor (QN-Scale) | Yes              | The most common protocol; many rebrands                                                                                                           |
@@ -128,6 +129,15 @@ The reading waits for that frame before it is sent, so it arrives about two seco
 ### **Grifema** GA2001 / **Senssun** IF_B7
 
 Weight only. The scale advertises as `IF_B7` and broadcasts its weigh-in without accepting a connection. It sends the weight in kilograms whether its display is set to kg or lb (the lb case rests on a single weigh-in so far); any other display unit is ignored with a warning in the log. Its final frame carries a field that looks like impedance, but one weigh-in with a body-fat figure from the vendor app is not enough to decode it, so body composition is estimated from BMI (Deurenberg formula) and the field is logged in debug mode. More weigh-ins paired with the app's body-fat reading would settle it ([#423](https://github.com/KristianP26/ble-scale-sync/issues/423)).
+
+### **OKOK** app scales (Chipsea broadcast)
+
+Weight only. These Chipsea-based scales, sold under many names with the OKOK app (for example NIX Home, Xiaogui TZC4, MaxxMee QJ-J and BL-26L01), broadcast their weigh-in without accepting a connection, in one of two formats: one advertised as `ADV`, and one without a name, or named `Yoda0` / `Yoda1`.
+
+- **Nameless units** are recognised because they repeat their own Bluetooth address inside the broadcast, so the transport must report addresses. On the default Linux transport set `ble.scale_mac` (`scan` and the setup wizard list nameless scales with their address). macOS does not expose addresses, so there only units named `Yoda0`, `Yoda1` or `ADV` work.
+- **Keep the scale on kg.** Other display units and precisions are not decoded: a reading the scale marks that way is ignored with a warning in the log.
+- **No impedance.** The broadcast carries a field other tools show as impedance, but it holds the same value on every unit captured so far, so body composition is estimated from BMI (Deurenberg formula) and the field is logged in debug mode.
+- Scales advertising as `Chipsea-BLE` use other formats that are not supported yet ([#408](https://github.com/KristianP26/ble-scale-sync/issues/408)).
 
 ### **Renpho ES-CS20M / Elis 1** (some hardware variants)
 

@@ -31,6 +31,7 @@ The transport is passive, so an adapter can only be served if it reads the weigh
 | **Xiaomi** Body Composition Scale S400               | Weight, impedance and heart rate; needs `ble.bind_key` and `ble.scale_mac`                                                       |
 | **Silvergear** Smart Scale 108                       | Weight only                                                                                                                      |
 | **Grifema** GA2001 / **Senssun** IF_B7               | Weight only                                                                                                                      |
+| **OKOK** app scales (Chipsea broadcast)              | Weight only. Units without a name or named `Yoda0` / `Yoda1` need a scanner that forwards raw advertisements, see below          |
 | **Eufy** Smart Scale P2 (T9148) / P2 Pro (T9149)     | Weight only, same as the local adapter                                                                                           |
 | **QN-Scale**, broadcast-only firmware                | Weight only. Only units that send the `AABB` broadcast (some Renpho ES-CS20M / Elis 1 variants); connectable QN scales need GATT |
 
@@ -136,6 +137,8 @@ Home Assistant is too old, or the Bluetooth integration is not loaded. Add a Blu
 ### Weigh-ins are only picked up sometimes
 
 Home Assistant only emits an event when an advertisement **changes**. That is fine for every supported broadcast scale, which sends distinct frames per weigh-in. If your Home Assistant proxy is a SMLIGHT SLZB, keep the coordinator's BLE scan interval at its default; a long interval with a short window can miss the few seconds a scale broadcasts.
+
+An **OKOK** scale without a name, or named `Yoda0` / `Yoda1`, changes its manufacturer id from one weigh-in to the next (a nameless one even while weighing), and Home Assistant keeps every id it has seen in one list. Which entry is the current one can only be told from the raw advertisement, so such a scale is read only through a scanner that forwards it: Home Assistant's local Bluetooth adapter and ESPHome Bluetooth proxies normally do; whether other proxies do is not known yet. With debug logging on, a line ending in `does not forward raw advertisements` names a device this applies to. OKOK scales advertising as `ADV` are not affected.
 
 ### "Home Assistant's live advertisements keep arriving stamped ... in the past"
 
