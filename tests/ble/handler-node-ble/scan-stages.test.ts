@@ -331,4 +331,81 @@ describe('readWithTimeouts: composition hold against the session cap', () => {
       }
     });
   }
+
+  // #460, D041: a Beurer BF915 stays connectable long after a weigh-in, so a
+  // session in which it answers and nobody steps on it ends on our own
+  // timeout. Its frames prove the Bluetooth path works, so the watchdog must
+  // not count it; a session that heard nothing still must.
+  describe('watchdog classification of a session timeout (#460)', () => {
+    const IDLE_MS = 5000;
+
+    async function runSession(
+      drive: (s: ReturnType<typeof makeSession>, ac: AbortController) => Promise<void>,
+    ): Promise<unknown> {
+      vi.useFakeTimers();
+      try {
+        const s = makeSession();
+        const ac = new AbortController();
+        // Every frame is rejected: an answer to our own writes, not a weigh-in.
+        const adapter = makeAdapter({ parseNotification: () => null });
+        const promise = readWithTimeouts(s.charMap, s.device, adapter, 'AA:BB:CC:DD:EE:FF', {
+          profile: PROFILE,
+          readingTimeoutMs: IDLE_MS,
+          abortSignal: ac.signal,
+        });
+        const outcome = promise.then(
+          () => null,
+          (e: unknown) => e,
+        );
+        await drive(s, ac);
+        return await outcome;
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+
+    it('tags an idle timeout after one frame as no-reading', async () => {
+      const err = await runSession(async (s) => {
+        await vi.advanceTimersByTimeAsync(1000);
+        s.send(0x01);
+        await vi.advanceTimersByTimeAsync(IDLE_MS);
+      });
+      expect((err as Error).message).toBe('Timed out waiting for a complete scale reading');
+      expect(bleFailureKind(err)).toBe('no-reading');
+    });
+
+    it('leaves a session that heard nothing to be counted as a wedge suspect', async () => {
+      const err = await runSession(async () => {
+        await vi.advanceTimersByTimeAsync(IDLE_MS);
+      });
+      expect((err as Error).message).toBe('Timed out waiting for a complete scale reading');
+      expect(bleFailureKind(err)).toBeUndefined();
+      await classifyBleFailure(err, { gattAttempted: true, probeAdapter: {} as never });
+      expect(bleFailureKind(err)).toBe('wedge-suspect');
+    });
+
+    it('tags the session cap after frames as no-reading', async () => {
+      const err = await runSession(async (s) => {
+        const step = IDLE_MS / 2;
+        for (let t = step; t <= IDLE_MS * 3; t += step) {
+          await vi.advanceTimersByTimeAsync(step);
+          s.send(0x01);
+        }
+      });
+      expect((err as Error).message).toBe('GATT session cap exceeded');
+      expect(bleFailureKind(err)).toBe('no-reading');
+    });
+
+    it('does not tag a shutdown after a frame', async () => {
+      const err = await runSession(async (s, ac) => {
+        await vi.advanceTimersByTimeAsync(1000);
+        s.send(0x01);
+        await vi.advanceTimersByTimeAsync(1000);
+        ac.abort();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(err).not.toBeNull();
+      expect(bleFailureKind(err)).not.toBe('no-reading');
+    });
+  });
 });

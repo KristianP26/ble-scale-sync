@@ -271,6 +271,22 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
     );
   });
 
+  // #460, D041: neutral like idle and blocked, but it keeps the backoff, since
+  // every such cycle was a real connect to the scale.
+  it('poll plan: a session that heard the scale is not counted, and keeps the backoff', async () => {
+    h.createReadingSource.mockResolvedValue({ kind: 'poll', appliesGraceFloor: false });
+    const bundle = await buildReadingSource(makeCtx(), ADAPTERS, 7, 30);
+    const heard = tagBleFailure(
+      new SessionTimeoutError('Timed out waiting for a complete scale reading', 'idle'),
+      'no-reading',
+    );
+
+    bundle.onFailure?.(heard);
+    expect(h.watchdogInstances[0].recordFailure).not.toHaveBeenCalled();
+    expect(bundle.failureDelayMs?.(heard)).toBe(undefined);
+    expect(bundle.failureLogPrefixFor?.(heard)).toBe('Scale connected but sent no reading');
+  });
+
   it('poll plan: the idle delay is re-read from config on every call', async () => {
     h.createReadingSource.mockResolvedValue({ kind: 'poll', appliesGraceFloor: false });
     const runtime: { scan_cooldown: number; idle_rescan_delay?: number } = {

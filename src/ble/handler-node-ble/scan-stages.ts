@@ -54,6 +54,7 @@ import type { ScaleAuth, ScaleReading, UserProfile } from '../../interfaces/scal
 import {
   RAW_READING_TIMEOUT_MS,
   READING_SESSION_CAP_FACTOR,
+  SessionTimeoutError,
   untilAborted,
   withIdleTimeout,
 } from '../types.js';
@@ -583,32 +584,49 @@ export async function readWithTimeouts(
   },
 ): Promise<RawReading> {
   const idleMs = opts.readingTimeoutMs ?? RAW_READING_TIMEOUT_MS;
-  // A shutdown ends the session the same way a timeout does, through
-  // withAbandonmentCleanup, instead of waiting out an idle window of up to
-  // 120 s that the 5 s force-exit grace never lets finish (A-07).
-  return await withAbandonmentCleanup(bleDevice, () =>
-    untilAborted(
-      withIdleTimeout(
-        (onActivity) =>
-          waitForRawReading(
-            charMap,
-            bleDevice,
-            matchedAdapter,
-            opts.profile,
-            deviceMac.replace(/[:-]/g, '').toUpperCase(),
-            opts.weightUnit,
-            opts.onLiveData,
-            opts.scaleAuth,
-            onActivity,
-            opts.deviceName,
-          ),
-        idleMs,
-        'Timed out waiting for a complete scale reading',
-        { ms: idleMs * READING_SESSION_CAP_FACTOR, message: 'GATT session cap exceeded' },
+  // Set by the first notification frame. waitForRawReading reports activity
+  // only for an incoming frame, or for a composition hold, which arms after
+  // one; withIdleTimeout's own initial arm does not come through here.
+  let heard = false;
+  try {
+    // A shutdown ends the session the same way a timeout does, through
+    // withAbandonmentCleanup, instead of waiting out an idle window of up to
+    // 120 s that the 5 s force-exit grace never lets finish (A-07).
+    return await withAbandonmentCleanup(bleDevice, () =>
+      untilAborted(
+        withIdleTimeout(
+          (onActivity) =>
+            waitForRawReading(
+              charMap,
+              bleDevice,
+              matchedAdapter,
+              opts.profile,
+              deviceMac.replace(/[:-]/g, '').toUpperCase(),
+              opts.weightUnit,
+              opts.onLiveData,
+              opts.scaleAuth,
+              (minIdleMs) => {
+                heard = true;
+                onActivity(minIdleMs);
+              },
+              opts.deviceName,
+            ),
+          idleMs,
+          'Timed out waiting for a complete scale reading',
+          { ms: idleMs * READING_SESSION_CAP_FACTOR, message: 'GATT session cap exceeded' },
+        ),
+        opts.abortSignal,
       ),
-      opts.abortSignal,
-    ),
-  );
+    );
+  } catch (err) {
+    // The scale answered and the session simply ran out of time: nobody
+    // stepped on it, or it stays connectable long after a weigh-in (BF915,
+    // #460). Not a wedge, so the watchdog must not count it (D041). Only our
+    // own timeout qualifies; an abort, a disconnect or a GATT error after a
+    // frame keeps the usual classification.
+    if (heard && err instanceof SessionTimeoutError) tagBleFailure(err, 'no-reading');
+    throw err;
+  }
 }
 
 /**

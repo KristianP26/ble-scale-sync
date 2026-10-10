@@ -12,12 +12,21 @@
  *                    #417). The radio is fine, so do NOT count; but unlike
  *                    'idle' the discovery timeout has not necessarily elapsed,
  *                    so the cycle takes the normal failure backoff.
+ *  - 'no-reading'    the session connected and ended on its own timeout
+ *                    (idle or cap) without a reading, but the scale sent at
+ *                    least one notification frame in it (#460, D041). That
+ *                    frame proves the whole path the watchdog guards, D-Bus
+ *                    signals into this process included, so do NOT count. The
+ *                    cycle still takes the failure backoff: it was a real
+ *                    connect to the scale. A session that heard nothing stays
+ *                    'wedge-suspect', since a deaf notification path is what
+ *                    a restart fixes.
  *
  * Scales like Renpho only advertise while in use, so a `Device not found`
  * timeout is the EXPECTED idle state. The watchdog previously counted every such
  * timeout and restarted the process after N of them on a healthy radio (#213).
  */
-export type BleFailureKind = 'idle' | 'wedge-suspect' | 'blocked';
+export type BleFailureKind = 'idle' | 'wedge-suspect' | 'blocked' | 'no-reading';
 
 interface TaggedError {
   bleFailureKind?: BleFailureKind;
@@ -43,9 +52,9 @@ export function bleFailureKind(err: unknown): BleFailureKind | undefined {
 /**
  * Whether a poll failure should increment the watchdog counter. Untagged errors
  * (non-node-ble handlers, infra errors) count, preserving prior behavior; only
- * an explicit 'idle' or 'blocked' tag is treated as neutral.
+ * an explicit 'idle', 'blocked' or 'no-reading' tag is treated as neutral.
  */
 export function shouldCountAsWatchdogFailure(err: unknown): boolean {
   const kind = bleFailureKind(err);
-  return kind !== 'idle' && kind !== 'blocked';
+  return kind !== 'idle' && kind !== 'blocked' && kind !== 'no-reading';
 }

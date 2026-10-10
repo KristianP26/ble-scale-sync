@@ -171,6 +171,10 @@ export async function buildReadingSource(
         watchdog.recordFailure();
       } else if (bleFailureKind(err) === 'blocked') {
         log.debug('Connect skipped by a configured precondition; not counting toward watchdog');
+      } else if (bleFailureKind(err) === 'no-reading') {
+        // The scale sent frames, so the Bluetooth path works; nobody weighed
+        // in before the session timed out (#460, D041).
+        log.debug('Scale answered but sent no reading; not counting toward watchdog');
       } else {
         log.debug('Idle cycle (radio alive, scale not on); not counting toward watchdog');
       }

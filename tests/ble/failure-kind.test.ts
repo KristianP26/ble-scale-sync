@@ -31,4 +31,9 @@ describe('failure-kind', () => {
     expect(shouldCountAsWatchdogFailure(new Error('untagged'))).toBe(true);
     expect(shouldCountAsWatchdogFailure('string')).toBe(true);
   });
+
+  // #460, D041: the scale sent frames, so the Bluetooth path works.
+  it('does not count a connected session in which the scale was heard', () => {
+    expect(shouldCountAsWatchdogFailure(tagBleFailure(new Error(), 'no-reading'))).toBe(false);
+  });
 });
