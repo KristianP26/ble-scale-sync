@@ -368,11 +368,16 @@ describe('OkokChipseaAdapter (#408)', () => {
     it('refuses 2.0 properties 0x00 without a warning (derived [6] 0x04 -> 0x00)', () => {
       const adapter = new OkokChipseaAdapter();
       const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
-      vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
       const frame = derived20(V20_SETTLING_68_70, 6, 0x00);
-      expect(adapter.parseBroadcast(frame)).toBeNull();
-      expect(adapter.parseLiveBroadcast(frame)).toBeNull();
+      for (let i = 0; i < 3; i++) {
+        expect(adapter.parseBroadcast(frame)).toBeNull();
+        expect(adapter.parseLiveBroadcast(frame)).toBeNull();
+      }
       expect(warn).not.toHaveBeenCalled();
+      // One line, not one per advert and parser.
+      const lines = debug.mock.calls.filter(([m]) => String(m).includes('properties 0x00'));
+      expect(lines).toHaveLength(1);
     });
 
     it('refuses a 2.0 frame with a broken checksum on both channels ([12] 0x87 -> 0x86)', () => {

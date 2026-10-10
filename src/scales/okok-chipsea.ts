@@ -100,7 +100,7 @@ const V20_PROPS: ReadonlyMap<number, Props> = new Map([
 /**
  * 0x00 would be "settling, 1 decimal" by the same reading, but it is only
  * described in an issue, never captured. Expected traffic rather than an
- * unknown unit, so it is refused without a warning.
+ * unknown unit, so it is refused with one debug line instead of a warning.
  */
 const V20_PROPS_SETTLING_ONE_DECIMAL = 0x00;
 
@@ -219,7 +219,8 @@ export class OkokChipseaAdapter implements ScaleAdapterCore, BroadcastSource {
   /** Logging state only; nothing here feeds a reading. */
   private lastSettlingKg: number | null = null;
   private readonly lastFinal: LogKey = { key: null, seenAt: -Infinity };
-  private readonly propsWarned = new Set<string>();
+  /** Properties values already reported, as `dialect:value`. */
+  private readonly propsReported = new Set<string>();
 
   constructor(private readonly now: () => number = () => performance.now()) {}
 
@@ -255,23 +256,33 @@ export class OkokChipseaAdapter implements ScaleAdapterCore, BroadcastSource {
     return null;
   }
 
-  /** A frame with a whitelisted properties byte, or null (warning once per unknown value). */
+  /** A frame with a whitelisted properties byte, or null (reported once per other value). */
   private knownFrame(d: Buffer): Frame | null {
     const f = decode(d);
     if (!f) return null;
     if (f.decoded) return f;
+    // Once per value, not per advert (#372): a unit that sends one of these
+    // sends it on every frame in that state, through both parsers.
+    if (!this.firstReport(f)) return null;
     if (f.dialect === '2.0' && f.props === V20_PROPS_SETTLING_ONE_DECIMAL) {
-      bleLog.debug(`OKOK 2.0: properties 0x00 is not decoded, frame ignored: ${d.toString('hex')}`);
+      bleLog.debug(
+        `OKOK 2.0: properties 0x00 is not decoded, such frames are ignored. First one: ` +
+          d.toString('hex'),
+      );
       return null;
     }
     this.warnProps(f);
     return null;
   }
 
-  private warnProps(f: Frame): void {
+  private firstReport(f: Frame): boolean {
     const key = `${f.dialect}:${f.props}`;
-    if (this.propsWarned.has(key)) return;
-    this.propsWarned.add(key);
+    if (this.propsReported.has(key)) return false;
+    this.propsReported.add(key);
+    return true;
+  }
+
+  private warnProps(f: Frame): void {
     bleLog.warn(
       `OKOK scale (${f.dialect} frame) sent properties byte 0x${f.props.toString(16)}, a ` +
         `display unit or precision that is not decoded. Only kg is decoded, so its readings ` +
