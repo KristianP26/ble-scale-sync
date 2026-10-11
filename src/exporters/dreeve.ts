@@ -7,7 +7,8 @@ import { toLocalDate } from './intervals.js';
 import { withRetry, httpError, httpHealthcheck } from '../utils/retry.js';
 
 const log = createLogger('Dreeve');
-const POUNDS_PER_KILOGRAM = 2.2046226218;
+/** Exact: 1 lb = 0.45359237 kg by definition, the factor Dreeve converts back with. */
+const POUNDS_PER_KILOGRAM = 1 / 0.45359237;
 
 export const dreeveSchema: ExporterSchema = {
   name: 'dreeve',

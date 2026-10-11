@@ -17,6 +17,7 @@ import type {
   HealthLogConfig,
   DreeveConfig,
 } from './config.js';
+import { parseDreeveUnitSystem } from './config.js';
 import {
   garminSchema,
   GarminExporter,
@@ -349,17 +350,16 @@ export const EXPORTER_REGISTRY: ExporterRegistryEntry[] = [
   {
     schema: dreeveSchema,
     factory: (config) => {
-      const unitSystem = requireField(config, 'dreeve', 'unit_system');
-      if (unitSystem !== 'metric' && unitSystem !== 'imperial') {
+      const baseUrl = requireField(config, 'dreeve', 'base_url');
+      const token = requireField(config, 'dreeve', 'token');
+      const rawUnit = requireField(config, 'dreeve', 'unit_system');
+      const unitSystem = parseDreeveUnitSystem(rawUnit);
+      if (!unitSystem) {
         throw new Error(
-          `Exporter "dreeve" field "unit_system" must be metric or imperial, got '${unitSystem}'. Check your config.yaml.`,
+          `Exporter "dreeve" field "unit_system" must be metric or imperial, got '${rawUnit}'. Check your config.yaml.`,
         );
       }
-      const dreeveConfig: DreeveConfig = {
-        baseUrl: requireField(config, 'dreeve', 'base_url'),
-        token: requireField(config, 'dreeve', 'token'),
-        unitSystem,
-      };
+      const dreeveConfig: DreeveConfig = { baseUrl, token, unitSystem };
       return new DreeveExporter(dreeveConfig);
     },
   },

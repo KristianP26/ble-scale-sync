@@ -118,6 +118,16 @@ describe('loadExporterConfig()', () => {
       expect(() => loadExporterConfig()).toThrow(/DREEVE_UNIT_SYSTEM must be metric or imperial/);
     });
 
+    it('rejects an unknown DREEVE_UNIT_SYSTEM', () => {
+      vi.stubEnv('EXPORTERS', 'dreeve');
+      vi.stubEnv('DREEVE_BASE_URL', 'https://fit.example.com');
+      vi.stubEnv('DREEVE_TOKEN', 'drv_abc123');
+      vi.stubEnv('DREEVE_UNIT_SYSTEM', 'pounds');
+      expect(() => loadExporterConfig()).toThrow(
+        /DREEVE_UNIT_SYSTEM must be metric or imperial.*got 'pounds'/,
+      );
+    });
+
     it('reads Dreeve configuration with an explicit unit system', () => {
       vi.stubEnv('EXPORTERS', 'dreeve');
       vi.stubEnv('DREEVE_BASE_URL', 'https://fit.example.com');

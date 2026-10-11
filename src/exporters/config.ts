@@ -134,10 +134,22 @@ export interface HealthLogConfig {
   syncMeasurements: boolean;
 }
 
+export type DreeveUnitSystem = 'metric' | 'imperial';
+
 export interface DreeveConfig {
   baseUrl: string;
   token: string;
-  unitSystem: 'metric' | 'imperial';
+  unitSystem: DreeveUnitSystem;
+}
+
+/**
+ * Dreeve's Appearance unit system, read the same way from config.yaml and
+ * from DREEVE_UNIT_SYSTEM. Case is ignored on both paths: the values cannot be
+ * confused, and YAML used to refuse `Metric` while .env took `METRIC`.
+ */
+export function parseDreeveUnitSystem(raw: string): DreeveUnitSystem | undefined {
+  const value = raw.trim().toLowerCase();
+  return value === 'metric' || value === 'imperial' ? value : undefined;
 }
 
 export interface ExporterConfig {
@@ -451,9 +463,12 @@ export function loadExporterConfig(): ExporterConfig {
     if (!token) {
       fail('DREEVE_TOKEN is required when dreeve exporter is enabled.');
     }
-    const unitSystem = process.env.DREEVE_UNIT_SYSTEM?.trim().toLowerCase();
-    if (unitSystem !== 'metric' && unitSystem !== 'imperial') {
-      fail('DREEVE_UNIT_SYSTEM must be metric or imperial when dreeve exporter is enabled.');
+    const rawUnit = process.env.DREEVE_UNIT_SYSTEM?.trim() ?? '';
+    const unitSystem = parseDreeveUnitSystem(rawUnit);
+    if (!unitSystem) {
+      fail(
+        `DREEVE_UNIT_SYSTEM must be metric or imperial when dreeve exporter is enabled, got '${rawUnit}'.`,
+      );
     }
     dreeve = { baseUrl, token, unitSystem };
   }

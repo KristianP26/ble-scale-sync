@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { DreeveExporter } from '../../src/exporters/dreeve.js';
+import { createExporterFromEntry } from '../../src/exporters/registry.js';
 import type { DreeveConfig } from '../../src/exporters/config.js';
 import type { BodyComposition } from '../../src/interfaces/scale-adapter.js';
 import type { ExportContext } from '../../src/interfaces/exporter.js';
@@ -66,6 +67,21 @@ describe('DreeveExporter', () => {
     await new DreeveExporter({ ...config, unitSystem: 'imperial' }).export(sample);
 
     expect(bodyOfCall().weight).toBe(176.37);
+  });
+
+  // config.yaml used to accept only the exact lowercase value while .env
+  // lowercased it, so `unit_system: IMPERIAL` refused to start.
+  it('reads unit_system from config.yaml in any case', async () => {
+    const entry = { type: 'dreeve', base_url: config.baseUrl, token: config.token };
+
+    await createExporterFromEntry({ ...entry, unit_system: 'IMPERIAL' }).export(sample);
+    expect(bodyOfCall().weight).toBe(176.37);
+
+    for (const unit of ['Metric', ' metric ']) {
+      mockFetch.mockClear();
+      await createExporterFromEntry({ ...entry, unit_system: unit }).export(sample);
+      expect(bodyOfCall().weight).toBe(80);
+    }
   });
 
   it('normalizes a trailing slash in the base URL', async () => {
