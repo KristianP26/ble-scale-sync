@@ -27,7 +27,7 @@ features:
     link: /guide/supported-scales
     linkText: See all scales
   - icon: "\uD83D\uDCE4"
-    title: 12 Export Targets
+    title: 13 Export Targets
     details: Garmin Connect &bull; Strava &bull; Intervals.icu &bull; Runalyze &bull; Wger &bull; HealthLog &bull; MQTT (Home Assistant) &bull; InfluxDB &bull; Webhook &bull; Ntfy &bull; Telegram &bull; File (CSV/JSONL)
     link: /exporters
     linkText: Configure exporters
