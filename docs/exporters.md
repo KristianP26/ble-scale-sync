@@ -482,23 +482,33 @@ The startup healthcheck calls HealthLog's public `/api/version` endpoint, which 
 
 ## Dreeve {#dreeve}
 
-Push weight to a self-hosted [Dreeve](https://github.com/dreeveapp/dreeve) instance. Dreeve stores one measurement per calendar date, so a later reading for the same date replaces the earlier one. Body-composition values are not exported because Dreeve currently accepts weight only.
+Push weight to [Dreeve](https://github.com/dreeveapp/dreeve) (formerly Statistics for Strava), a self-hosted sports and fitness dashboard. It needs **Dreeve 5.3.3 or newer**, the first release with the weight API. Only the weight is sent, since Dreeve has nowhere to store body composition.
 
-| Field         | Required | Default | Description                                           |
-| ------------- | -------- | ------- | ----------------------------------------------------- |
-| `base_url`    | Yes      | (none)  | Dreeve instance URL, e.g. `https://fit.example.com`   |
-| `token`       | Yes      | (none)  | Bearer token from Dreeve API settings (`drv_...`)     |
-| `unit_system` | Yes      | (none)  | Dreeve Appearance unit system: `metric` or `imperial` |
+| Field         | Required | Default | Description                                                                   |
+| ------------- | -------- | ------- | ----------------------------------------------------------------------------- |
+| `base_url`    | Yes      | (none)  | Your Dreeve `APP_URL`, e.g. `https://dreeve.example`                          |
+| `token`       | Yes      | (none)  | API key (`drv_...`) from **Settings -> Security -> API access**               |
+| `unit_system` | Yes      | (none)  | `metric` or `imperial`, the same as **Settings -> Appearance -> Unit system** |
 
 ```yaml
-global_exporters:
-  - type: dreeve
-    base_url: https://fit.example.com
-    token: '${DREEVE_TOKEN}'
-    unit_system: metric
+users:
+  - name: Alice
+    exporters:
+      - type: dreeve
+        base_url: https://dreeve.example
+        token: '${DREEVE_TOKEN}'
+        unit_system: metric
 ```
 
-BLE Scale Sync readings are always calculated in kilograms. Dreeve interprets API values according to its Appearance unit system, so `unit_system` must match the Dreeve setting exactly. Select `metric` to send kilograms, or `imperial` to convert kilograms to pounds before the request. Historical readings replayed from a scale's offline cache are written to their original calendar date.
+Dreeve keeps its API closed until it has a key. Generate one in the Dreeve admin panel under **Settings -> Security -> API access**, put it in Dreeve's `.env` as `DREEVE_API_KEY`, recreate the Dreeve containers (a restart does not reread `.env`), and use the same key as `token`. It is sent as `Authorization: Bearer <key>`. Do not put a user name or password in `base_url`: such a URL is refused before any request is made.
+
+One Dreeve instance holds the history of one athlete, so Dreeve is a per-user exporter and every person needs their own instance. With more than one user, do not put Dreeve under `global_exporters`: everyone's weigh-ins would land on the same athlete, and only the last one of each day would stay.
+
+Each reading is a `POST /api/v1/athlete/weights` with the weight and its calendar day. Dreeve keeps one weight per day, so a later weigh-in on the same day replaces the earlier one and a retry never creates a duplicate. Historical readings replayed from a scale's offline cache land on their original day. The calendar day comes from the host's clock, so in Docker set `TZ` to your time zone (the compose examples do), or a late-evening weigh-in lands on the next day.
+
+Dreeve stores the number without a unit and reads it in its current unit system, so `unit_system` must match **Settings -> Appearance -> Unit system** (case does not matter). With `imperial` the weight is converted to pounds before it is sent. Dreeve does not convert entries it already has when the unit system changes; if you switch it, change `unit_system` as well.
+
+The startup healthcheck calls `GET /api/v1/status` with the key, so it checks both the URL and the key. Dreeve 5.3.0 to 5.3.2 answer that endpoint too but have no weight API; there the export fails with a 404 that says which version it needs. A `401` means a wrong key, or a Dreeve without a valid `DREEVE_API_KEY` (missing, or not `drv_` followed by 64 hex characters), which then refuses every request: check Dreeve's `.env` and recreate its containers.
 
 ## Secrets
 

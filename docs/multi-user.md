@@ -99,14 +99,15 @@ Garmin and Strava keep each account's login tokens in `token_dir`. Give every us
 
 ### Exporter behavior in multi-user mode
 
-| Exporter     | What changes                                                    |
-| ------------ | --------------------------------------------------------------- |
-| **MQTT**     | Publishes to `{topic}/{slug}`, per-user HA device + LWT         |
-| **InfluxDB** | Adds `user={slug}` tag to line protocol                         |
-| **Webhook**  | Adds `user_name` + `user_slug` fields to JSON                   |
-| **Ntfy**     | Prepends `[{name}]` to notification (a single user gets it too) |
-| **Garmin**   | One account per user, each with its own `token_dir`             |
-| **Strava**   | One account per user, each with its own `token_dir`             |
+| Exporter     | What changes                                                                |
+| ------------ | --------------------------------------------------------------------------- |
+| **MQTT**     | Publishes to `{topic}/{slug}`, per-user HA device + LWT                     |
+| **InfluxDB** | Adds `user={slug}` tag to line protocol                                     |
+| **Webhook**  | Adds `user_name` + `user_slug` fields to JSON                               |
+| **Ntfy**     | Prepends `[{name}]` to notification (a single user gets it too)             |
+| **Garmin**   | One account per user, each with its own `token_dir`                         |
+| **Strava**   | One account per user, each with its own `token_dir`                         |
+| **Dreeve**   | One instance per user; a shared one keeps only the last weigh-in of the day |
 
 ## Live Config Reload
 

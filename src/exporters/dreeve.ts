@@ -13,28 +13,28 @@ const POUNDS_PER_KILOGRAM = 1 / 0.45359237;
 export const dreeveSchema: ExporterSchema = {
   name: 'dreeve',
   displayName: 'Dreeve',
-  description: 'Push weight to a self-hosted Dreeve instance',
+  description: 'Push weight to a self-hosted Dreeve instance (5.3.3 or newer)',
   fields: [
     {
       key: 'base_url',
       label: 'Base URL',
       type: 'string',
       required: true,
-      description: 'Dreeve instance URL, e.g. https://fit.example.com',
+      description: 'Your Dreeve APP_URL, e.g. https://dreeve.example',
     },
     {
       key: 'token',
       label: 'API Token',
       type: 'password',
       required: true,
-      description: 'Bearer token from Dreeve API settings (drv_...)',
+      description: 'API key (drv_...) from Dreeve Settings -> Security -> API access',
     },
     {
       key: 'unit_system',
-      label: 'Dreeve Appearance unit system',
+      label: 'Dreeve unit system',
       type: 'select',
       required: true,
-      description: 'Must match Dreeve Appearance settings; readings are converted from kilograms',
+      description: 'Must match Dreeve Settings -> Appearance -> Unit system',
       choices: [
         { label: 'Metric (kilograms)', value: 'metric' },
         { label: 'Imperial (pounds)', value: 'imperial' },
