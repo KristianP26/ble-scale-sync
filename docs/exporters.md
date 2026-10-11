@@ -9,11 +9,11 @@ head:
 
 # Exporters
 
-BLE Scale Sync exports body composition data to 12 targets. The [setup wizard](/guide/configuration#setup-wizard-recommended) walks you through exporter selection, configuration, and connectivity testing.
+BLE Scale Sync exports body composition data to 13 targets. The [setup wizard](/guide/configuration#setup-wizard-recommended) walks you through exporter selection, configuration, and connectivity testing.
 
 Exporters are configured in `global_exporters` (shared by all users). For multi-user setups with separate accounts, see [Per-User Exporters](/multi-user#per-user-exporters). All enabled exporters run in parallel; the process reports an error only if **every** exporter fails.
 
-A weigh-in a scale stored in its memory and sends later keeps its original time. It goes only to exporters that can record a past measurement (Garmin, InfluxDB, file, Intervals, Runalyze, wger, HealthLog), never to MQTT, webhooks or notifications, and it does not end the live weigh-in.
+A weigh-in a scale stored in its memory and sends later keeps its original time. It goes only to exporters that can record a past measurement (Garmin, InfluxDB, file, Intervals, Runalyze, wger, HealthLog, Dreeve), never to MQTT, webhooks or notifications, and it does not end the live weigh-in.
 
 | Target                          | Description                                            |
 | ------------------------------- | ------------------------------------------------------ |
@@ -484,10 +484,10 @@ The startup healthcheck calls HealthLog's public `/api/version` endpoint, which 
 
 Push weight to a self-hosted [Dreeve](https://github.com/dreeveapp/dreeve) instance. Dreeve stores one measurement per calendar date, so a later reading for the same date replaces the earlier one. Body-composition values are not exported because Dreeve currently accepts weight only.
 
-| Field         | Required | Default | Description |
-| ------------- | -------- | ------- | ----------- |
-| `base_url`    | Yes      | (none)  | Dreeve instance URL, e.g. `https://fit.example.com` |
-| `token`       | Yes      | (none)  | Bearer token from Dreeve API settings (`drv_...`) |
+| Field         | Required | Default | Description                                           |
+| ------------- | -------- | ------- | ----------------------------------------------------- |
+| `base_url`    | Yes      | (none)  | Dreeve instance URL, e.g. `https://fit.example.com`   |
+| `token`       | Yes      | (none)  | Bearer token from Dreeve API settings (`drv_...`)     |
 | `unit_system` | Yes      | (none)  | Dreeve Appearance unit system: `metric` or `imperial` |
 
 ```yaml
@@ -536,6 +536,7 @@ A reading with a timestamp is sent **only to exporters that can record it at tha
 | `runalyze`  | Yes                         |
 | `wger`      | Yes                         |
 | `healthlog` | Yes                         |
+| `dreeve`    | Yes                         |
 | `mqtt`      | No                          |
 | `webhook`   | No                          |
 | `ntfy`      | No                          |
@@ -556,17 +557,18 @@ Every reading taken while the app is running is a live reading and goes to every
 
 At startup, exporters are tested for connectivity. Failures are logged as warnings but don't block the scan.
 
-| Exporter      | Method                         |
-| ------------- | ------------------------------ |
-| MQTT          | Connect + disconnect           |
-| Webhook       | HEAD request                   |
-| InfluxDB      | `/health` endpoint, with token |
-| Ntfy          | `/v1/health` endpoint          |
-| Telegram      | `getChat` endpoint             |
-| Intervals.icu | `GET` wellness record          |
-| Runalyze      | `GET` bodyComposition metric   |
-| Wger          | `GET` userprofile record       |
-| HealthLog     | `GET` public `/api/version`    |
-| Garmin        | None (Python subprocess)       |
-| File          | Directory writable check       |
-| Strava        | None (avoid API rate limits)   |
+| Exporter      | Method                             |
+| ------------- | ---------------------------------- |
+| MQTT          | Connect + disconnect               |
+| Webhook       | HEAD request                       |
+| InfluxDB      | `/health` endpoint, with token     |
+| Ntfy          | `/v1/health` endpoint              |
+| Telegram      | `getChat` endpoint                 |
+| Intervals.icu | `GET` wellness record              |
+| Runalyze      | `GET` bodyComposition metric       |
+| Wger          | `GET` userprofile record           |
+| HealthLog     | `GET` public `/api/version`        |
+| Dreeve        | `GET` `/api/v1/status`, with token |
+| Garmin        | None (Python subprocess)           |
+| File          | Directory writable check           |
+| Strava        | None (avoid API rate limits)       |

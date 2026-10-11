@@ -127,7 +127,7 @@ On first start the add-on authenticates with Garmin and stores the OAuth tokens 
 **Retry a failed export later** (`retry_failed_exports`, on by default) keeps a
 reading whose upload failed and tries again on a later cycle, for up to 72
 hours. Only targets that can record a past measurement are retried: Garmin,
-InfluxDB, file, Intervals, Runalyze, wger and HealthLog. MQTT and the
+InfluxDB, file, Intervals, Runalyze, wger, HealthLog and Dreeve. MQTT and the
 notification targets cannot express a past reading, so a failure there is final
 and the log says so.
 
@@ -173,7 +173,7 @@ Add-on v1.8.1 bumps `garminconnect` to 0.3.x, which uses a new native auth engin
 
 ## Advanced: Custom Config
 
-The Configuration tab covers the scale, the Bluetooth transport, the primary user profile, MQTT and Garmin Connect. Every other exporter (InfluxDB, Webhook, Ntfy, Telegram, Intervals.icu, Strava, Runalyze, Wger, HealthLog, File), every multi-user setup and the transport settings the tab does not have (several ESPHome proxies, the `source` filter of `ha-bluetooth`, the legacy ESPHome API password) are configured through a custom `config.yaml`. See the [exporters reference](https://blescalesync.dev/exporters) for each one's options.
+The Configuration tab covers the scale, the Bluetooth transport, the primary user profile, MQTT and Garmin Connect. Every other exporter (InfluxDB, Webhook, Ntfy, Telegram, Intervals.icu, Strava, Runalyze, Wger, HealthLog, Dreeve, File), every multi-user setup and the transport settings the tab does not have (several ESPHome proxies, the `source` filter of `ha-bluetooth`, the legacy ESPHome API password) are configured through a custom `config.yaml`. See the [exporters reference](https://blescalesync.dev/exporters) for each one's options.
 
 To use one, enable **Use custom config.yaml** and place your configuration at:
 
