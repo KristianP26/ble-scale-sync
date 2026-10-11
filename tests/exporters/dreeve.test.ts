@@ -63,6 +63,24 @@ describe('DreeveExporter', () => {
     expect(bodyOfCall()).toEqual({ on: '2024-03-14', weight: 80 });
   });
 
+  // Dreeve keeps one weight per calendar day, so a weigh-in close to local
+  // midnight must not be filed under the UTC day, east or west of Greenwich.
+  // TZ is pinned because CI runs in UTC, where the two days are the same.
+  it.each([
+    ['Europe/Bratislava', '2024-03-13T23:30:00Z'],
+    ['America/New_York', '2024-03-15T03:30:00Z'],
+  ])('files a weigh-in near midnight in %s on the local day', async (timeZone, instant) => {
+    const savedTz = process.env.TZ;
+    process.env.TZ = timeZone;
+    try {
+      await new DreeveExporter(config).export(sample, { timestamp: new Date(instant) });
+      expect(bodyOfCall().on).toBe('2024-03-14');
+    } finally {
+      if (savedTz === undefined) delete process.env.TZ;
+      else process.env.TZ = savedTz;
+    }
+  });
+
   it('converts kilograms to pounds for an Imperial Dreeve instance', async () => {
     await new DreeveExporter({ ...config, unitSystem: 'imperial' }).export(sample);
 
