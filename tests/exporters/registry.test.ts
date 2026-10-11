@@ -79,8 +79,8 @@ describe('boolean exporter fields resolved from strings', () => {
 // ─── EXPORTER_REGISTRY ─────────────────────────────────────────────────────
 
 describe('EXPORTER_REGISTRY', () => {
-  it('contains 12 exporter entries', () => {
-    expect(EXPORTER_REGISTRY).toHaveLength(12);
+  it('contains 13 exporter entries', () => {
+    expect(EXPORTER_REGISTRY).toHaveLength(13);
   });
 
   it('has entries for all known exporters', () => {
@@ -115,8 +115,8 @@ describe('EXPORTER_REGISTRY', () => {
 // ─── EXPORTER_SCHEMAS ──────────────────────────────────────────────────────
 
 describe('EXPORTER_SCHEMAS', () => {
-  it('derives 12 schemas from registry', () => {
-    expect(EXPORTER_SCHEMAS).toHaveLength(12);
+  it('derives 13 schemas from registry', () => {
+    expect(EXPORTER_SCHEMAS).toHaveLength(13);
   });
 
   it('each schema has required fields', () => {
@@ -307,9 +307,9 @@ describe('EXPORTER_SCHEMAS', () => {
 // ─── KNOWN_EXPORTER_NAMES ──────────────────────────────────────────────────
 
 describe('KNOWN_EXPORTER_NAMES', () => {
-  it('is a Set with 12 entries', () => {
+  it('is a Set with 13 entries', () => {
     expect(KNOWN_EXPORTER_NAMES).toBeInstanceOf(Set);
-    expect(KNOWN_EXPORTER_NAMES.size).toBe(12);
+    expect(KNOWN_EXPORTER_NAMES.size).toBe(13);
   });
 
   it('contains all exporter names', () => {
