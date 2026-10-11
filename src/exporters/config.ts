@@ -144,8 +144,9 @@ export interface DreeveConfig {
 
 /**
  * Dreeve's Appearance unit system, read the same way from config.yaml and
- * from DREEVE_UNIT_SYSTEM. Case is ignored on both paths: the values cannot be
- * confused, and YAML used to refuse `Metric` while .env took `METRIC`.
+ * from DREEVE_UNIT_SYSTEM. Case is ignored on both paths, so `Metric` works in
+ * config.yaml as it does in .env, where every value is lowercased; the two
+ * values cannot be confused.
  */
 export function parseDreeveUnitSystem(raw: string): DreeveUnitSystem | undefined {
   const value = raw.trim().toLowerCase();

@@ -69,8 +69,7 @@ describe('DreeveExporter', () => {
     expect(bodyOfCall().weight).toBe(176.37);
   });
 
-  // config.yaml used to accept only the exact lowercase value while .env
-  // lowercased it, so `unit_system: IMPERIAL` refused to start.
+  // The .env path lowercases every value, so config.yaml must not be stricter.
   it('reads unit_system from config.yaml in any case', async () => {
     const entry = { type: 'dreeve', base_url: config.baseUrl, token: config.token };
 
@@ -100,7 +99,7 @@ describe('DreeveExporter', () => {
   });
 
   // Dreeve 5.3.0-5.3.2 answer /api/v1/status, so the healthcheck passes, but
-  // have no weight endpoint; a bare "HTTP 404" did not say why.
+  // have no weight endpoint; the error has to say so.
   it('names the Dreeve version a 404 needs, without retrying', async () => {
     mockFetch.mockResolvedValue({ ok: false, status: 404 });
 
