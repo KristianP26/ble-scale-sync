@@ -40,7 +40,7 @@ export const dreeveSchema: ExporterSchema = {
       ],
     },
   ],
-  supportsGlobal: true,
+  supportsGlobal: false,
   supportsPerUser: true,
 };
 

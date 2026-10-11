@@ -287,10 +287,10 @@ describe('EXPORTER_SCHEMAS', () => {
     expect(requiredFields.map((f) => f.key).sort()).toEqual(['base_url', 'token']);
   });
 
-  it('dreeve schema supports global and per-user configuration', () => {
+  it('dreeve schema supports per-user only', () => {
     const dreeve = EXPORTER_SCHEMAS.find((s) => s.name === 'dreeve');
     expect(dreeve).toBeDefined();
-    expect(dreeve!.supportsGlobal).toBe(true);
+    expect(dreeve!.supportsGlobal).toBe(false);
     expect(dreeve!.supportsPerUser).toBe(true);
   });
 
