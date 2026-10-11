@@ -143,6 +143,14 @@ export function loadEnvConfig(): AppConfig {
         sync_measurements: h.syncMeasurements,
       });
     }
+    if (name === 'dreeve' && exporterConfig.dreeve) {
+      const d = exporterConfig.dreeve;
+      Object.assign(entry, {
+        base_url: d.baseUrl,
+        token: d.token,
+        unit_system: d.unitSystem,
+      });
+    }
 
     return entry as ExporterEntry;
   });

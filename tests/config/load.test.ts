@@ -675,6 +675,30 @@ global_exporters:
     expect(createExporterFromEntry(healthlog!).name).toBe('healthlog');
   });
 
+  it('carries the DREEVE_* vars into a buildable .env Dreeve exporter entry', () => {
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) => String(p).endsWith('.env'));
+    vi.stubEnv('USER_HEIGHT', '183');
+    vi.stubEnv('USER_BIRTH_DATE', '1990-06-15');
+    vi.stubEnv('USER_GENDER', 'male');
+    vi.stubEnv('USER_IS_ATHLETE', 'true');
+    vi.stubEnv('EXPORTERS', 'dreeve');
+    vi.stubEnv('DREEVE_BASE_URL', 'https://dreeve.example');
+    vi.stubEnv('DREEVE_TOKEN', 'tok-1');
+    vi.stubEnv('DREEVE_UNIT_SYSTEM', 'imperial');
+
+    const { config } = loadAppConfig();
+    const dreeve = config.global_exporters!.find((e) => e.type === 'dreeve');
+    expect(dreeve).toEqual({
+      type: 'dreeve',
+      base_url: 'https://dreeve.example',
+      token: 'tok-1',
+      unit_system: 'imperial',
+    });
+    // Without the env-load mapping the entry is a bare { type } and the
+    // factory throws on the first missing field.
+    expect(createExporterFromEntry(dreeve!).name).toBe('dreeve');
+  });
+
   // `.env.example` lists file and strava under "Available", and
   // loadExporterConfig() parses and validates FILE_* and STRAVA_*, but the
   // values never reached the entry: the factory got a bare { type } and the
@@ -766,6 +790,9 @@ global_exporters:
       WGER_TOKEN: 'tok',
       HEALTHLOG_BASE_URL: 'https://healthlog.example',
       HEALTHLOG_TOKEN: 'tok',
+      DREEVE_BASE_URL: 'https://dreeve.example',
+      DREEVE_TOKEN: 'tok',
+      DREEVE_UNIT_SYSTEM: 'metric',
     };
     for (const [key, value] of Object.entries(minimalEnv)) vi.stubEnv(key, value);
     vi.stubEnv('EXPORTERS', [...KNOWN_EXPORTER_NAMES].join(','));
