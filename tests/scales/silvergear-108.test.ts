@@ -107,6 +107,19 @@ describe('Silvergear108Adapter (#297)', () => {
       expect(adapter.isComplete(reading!)).toBe(false);
     });
 
+    // A second unit (AAA006, MAC A0:91:54:A4:C9:0C) whose idle frame reads
+    // d[1] = 0x68 rather than 0x8c. Its display showed 81.0 kg; subtracting the
+    // first unit's bias read it as -2279 kg and it never completed.
+    it('decodes a unit whose upper d[1] bits differ from the #297 unit', () => {
+      const mac = '0cc9a45491a0';
+      expect(adapter.parseBroadcast(Buffer.from(mac + 'a0c8a0a00db5', 'hex'))).toBeNull();
+      expect(adapter.parseLiveBroadcast(Buffer.from(mac + 'a0c99c820db4', 'hex'))).toEqual({
+        weight: 80.93,
+      });
+      const reading = adapter.parseBroadcast(Buffer.from(mac + '20c99cd20da4', 'hex'));
+      expect(reading).toEqual({ weight: 81.01, impedance: 0 });
+    });
+
     // The two captures share this frame byte for byte, which is what makes the
     // weight bias a measurement rather than a fit to one session.
     it('reads the idle frame shared by both captures as zero, and does not publish it', () => {
@@ -158,9 +171,10 @@ describe('Silvergear108Adapter (#297)', () => {
     });
 
     it('rejects an out-of-range weight that happens to checksum', () => {
-      // 0xffffff - 0x8C0000 grams is far past any human load; the checksum is
-      // only five bits wide, so the range bound is what stops a mangled frame.
-      const p = Buffer.from([0xa0 ^ 0x80, 0xff, 0xff, 0xff, 0x0d, 0x00]);
+      // A saturated weight field, 0x3FFFF g = 262.143 kg, is past the 250 kg
+      // bound; the checksum is only five bits wide, so the range bound is what
+      // stops a mangled frame.
+      const p = Buffer.from([0xa0 ^ 0x80, 0xa0 ^ 0x03, 0xa0 ^ 0xff, 0xa0 ^ 0xff, 0x0d, 0x00]);
       p[5] = (0xa0 + ((p[0] + p[1] + p[2] + p[3] + p[4]) & 0x1f)) & 0xff;
       expect(
         adapter.parseBroadcast(Buffer.concat([Buffer.from(MAC_REVERSED, 'hex'), p])),

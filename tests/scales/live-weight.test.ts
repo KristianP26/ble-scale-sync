@@ -38,9 +38,10 @@ describe('provisional settling weights (#356)', () => {
   });
 
   it('drops an implausible settling weight rather than putting it on a display', () => {
-    // 0xffffff grams with the settled bit clear: checksum recomputed so the
-    // frame is well formed and only the plausibility bound can reject it.
-    const p = [0xa0, 0xff, 0xff, 0xff, 0x0d, 0x00];
+    // A saturated weight field (0x3FFFF g = 262.143 kg) with the settled bit
+    // clear: checksum recomputed so the frame is well formed and only the
+    // plausibility bound can reject it.
+    const p = [0xa0, 0xa0 ^ 0x03, 0xa0 ^ 0xff, 0xa0 ^ 0xff, 0x0d, 0x00];
     p[5] = 0xa0 | ((p[0] + p[1] + p[2] + p[3] + p[4]) & 0x1f);
     const absurd = Buffer.concat([Buffer.from(MAC_REVERSED, 'hex'), Buffer.from(p)]);
     expect(adapter.parseLiveBroadcast(absurd)).toBeNull();
