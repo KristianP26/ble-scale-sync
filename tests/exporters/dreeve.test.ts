@@ -99,6 +99,18 @@ describe('DreeveExporter', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
+  // Dreeve 5.3.0-5.3.2 answer /api/v1/status, so the healthcheck passes, but
+  // have no weight endpoint; a bare "HTTP 404" did not say why.
+  it('names the Dreeve version a 404 needs, without retrying', async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 404 });
+
+    const result = await new DreeveExporter(config).export(sample);
+
+    expect(result.success).toBe(false);
+    expect(!result.success && result.error).toContain('Dreeve 5.3.3 or newer');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
   it('retries a transient failure', async () => {
     mockFetch
       .mockRejectedValueOnce(new Error('temporary'))

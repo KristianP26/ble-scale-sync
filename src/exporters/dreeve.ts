@@ -4,7 +4,7 @@ import type { Exporter, ExportContext, ExportResult } from '../interfaces/export
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { DreeveConfig } from './config.js';
 import { toLocalDate } from './intervals.js';
-import { withRetry, httpError, httpHealthcheck } from '../utils/retry.js';
+import { withRetry, httpError, httpHealthcheck, NonRetryableError } from '../utils/retry.js';
 
 const log = createLogger('Dreeve');
 /** Exact: 1 lb = 0.45359237 kg by definition, the factor Dreeve converts back with. */
@@ -90,6 +90,13 @@ export class DreeveExporter implements Exporter {
           signal: AbortSignal.timeout(10_000),
         });
 
+        if (response.status === 404) {
+          // Dreeve 5.3.0-5.3.2 already answer /api/v1/status, so the
+          // healthcheck passes, but have no weight endpoint yet.
+          throw new NonRetryableError(
+            'HTTP 404: no weight API here, it needs Dreeve 5.3.3 or newer (or base_url is wrong)',
+          );
+        }
         if (!response.ok) {
           throw httpError(response.status);
         }
