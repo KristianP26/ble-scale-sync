@@ -2520,6 +2520,118 @@ describe('ES-CS20M on an AE00 unit through waitForRawReading (#436)', () => {
     const raw = await promise;
     expect(raw.reading).toEqual({ weight: 103.5, impedance: 0 });
   });
+
+  // The two barefoot weigh-ins of #436 comment 6112383314, with the log's
+  // timing (ms after the power-on frame). The 0x18 frames have the scale's BMI
+  // and body fat zeroed and the checksum recomputed; see es-cs20m.test.ts.
+  const POWER_ON = '55aa11000a010201000000000000001e';
+  const POWER_OFF = '55aa11000a000201000000000000001d';
+  const W = (tail: string): string => '55aa140007000000' + tail;
+
+  async function startSession() {
+    const notify = createMockChar();
+    const write = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [uuid16(0x2a10), notify],
+      [uuid16(0x2a11), write],
+      [uuid16(0xae01), createMockChar()],
+      [uuid16(0xae02), createMockChar()],
+    ]);
+    const adapter = new EsCs20mAdapter(clock);
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, 'AABBCCDDEEFF');
+    let settled = false;
+    void promise.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await vi.waitFor(() => expect(notify.subscribeCalled).toBe(true));
+    await vi.advanceTimersByTimeAsync(0);
+    /** Deliver frames at their offsets from the first one's delivery. */
+    const play = async (frames: [number, string][]): Promise<void> => {
+      let at = 0;
+      for (const [t, h] of frames) {
+        await vi.advanceTimersByTimeAsync(t - at);
+        at = t;
+        notify.triggerData(hex(h));
+      }
+    };
+    return { promise, play, isSettled: () => settled };
+  }
+
+  it('completes the weigh-in that got no power-off 30 s after its 0x18', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession();
+      // First barefoot weigh-in: the session timed out 60 s after the 0x18.
+      await s.play([
+        [0, POWER_ON],
+        [323, '55aa17000201011a'],
+        [536, '55aa160001091f'],
+        [536, W('36560000a6')], // 139.10
+        [711, W('36600000b0')], // 139.20
+        [808, '55aa1000010111'],
+        [908, W('36600000b0')],
+        [1045, W('36560000a6')],
+        [11_867, '55aa18000d0101090000365601d60000000092'], // 139.10 kg, 470 ohm
+      ]);
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(s.isSettled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(s.isSettled()).toBe(true);
+      expect((await s.promise).reading).toEqual({ weight: 139.1, impedance: 470 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('holds from the 0x18 to the power-off and completes with the resistance', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession();
+      // Second barefoot weigh-in.
+      await s.play([
+        [0, POWER_ON],
+        [305, '55aa17000201011a'],
+        [413, '55aa160001091f'],
+        [528, W('3548000097')], // 136.40
+        [616, '55aa1000010111'],
+        [617, W('36c4000014')], // 140.20
+        [805, W('358e0000dd')],
+        [1042, W('37500000a1')],
+        [1144, W('35d4000023')],
+        [1345, W('369c0000ec')],
+        [1435, W('3732000083')],
+        [1976, W('35d4000023')],
+        [1978, W('367e0000ce')],
+        [1982, W('36740000c4')],
+        [2149, W('36740000c4')],
+        [2340, W('36e2000032')],
+        [2457, W('35b6000005')],
+        [2682, W('36920000e2')],
+        [2956, W('369c0000ec')],
+        [2968, W('36560000a6')], // 139.10
+        [3175, W('36560000a6')],
+        [3365, W('369c0000ec')],
+        [3480, W('36560000a6')],
+        [3687, W('36560000a6')],
+        [3896, W('36560000a6')],
+        [3992, W('36560000a6')],
+        [4134, W('36560000a6')],
+        [4338, W('36560000a6')],
+        [4509, W('36560000a6')],
+        [12_084, '55aa18000d0101090000365601940000000050'], // 139.10 kg, 404 ohm
+      ]);
+      await vi.advanceTimersByTimeAsync(22_920);
+      expect(s.isSettled()).toBe(false);
+      await s.play([[1, POWER_OFF]]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.isSettled()).toBe(true);
+      expect((await s.promise).reading).toEqual({ weight: 139.1, impedance: 404 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ─── Session hook placement (#394) ──────────────────────────────────────────
