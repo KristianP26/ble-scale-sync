@@ -97,8 +97,10 @@ function wholeCm(heightCm: number): number {
  *
  * Every byte but `[7]` is as captured; the two `00 00` pairs are weights the
  * app leaves at 0 for its main user. `[7]` is 00 in the captures, which were
- * made on kg; openScale reads it as the display unit, so a hard 00 would
- * switch a scale set to lb back to kg on every connect.
+ * made on kg, and openScale's ALPHA handler always sends 00. Its BS-06 handler
+ * puts the display unit there, in a config frame with the same field layout,
+ * so a hard 00 would likely switch a scale set to lb back to kg on every
+ * connect. That `[7]` is the unit on the FitDays frame is not yet confirmed.
  */
 export function buildAc27Profile(
   unixSec: number,
