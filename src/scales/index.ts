@@ -36,6 +36,7 @@ import { MgbAdapter } from './mgb.js';
 import { HoffenAdapter } from './hoffen.js';
 import { SenssunAdapter } from './senssun.js';
 import { EufyP2Adapter } from './eufy-p2.js';
+import { EufyC20P3Adapter } from './eufy-c20-p3.js';
 import { SalterAdapter } from './salter.js';
 import { StandardGattScaleAdapter } from './standard-gatt.js';
 import { registerExclusionRegistry } from './derived-excludes.js';
@@ -47,6 +48,11 @@ export const adapters: ScaleAdapter[] = [
   // EufyP2Adapter before QnScaleAdapter (P2/P2 Pro advertise FFF0 and would be
   // mis-detected as a QN scale; Eufy's company ID 0xFF48 + "eufy T914x" name is specific).
   new EufyP2Adapter(),
+  // Eufy C20 / P3: broadcast-only reading. Claims on the name (scan response
+  // only) or on the device's own address echoed in the company id and [0..4].
+  // Outranks EufyP2Adapter, whose 0xFF48 + [6] == 0xCF claim a P3 could meet
+  // only with an address starting 0xFF; the reverse cannot happen (#408).
+  new EufyC20P3Adapter(),
   new SenssunAdapter(),
   new QnScaleAdapter(),
   new RenphoScaleAdapter(),

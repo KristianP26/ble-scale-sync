@@ -35,6 +35,20 @@ import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
 /** One representative BleDeviceInfo per registered adapter, keyed by name. */
 const FIXTURES: Record<string, BleDeviceInfo> = {
   'Eufy Smart Scale P2/P2 Pro': { localName: 'eufy T9149', serviceUuids: [] },
+  // Broadcast, the name only in the scan response. The real locked 100.10 kg
+  // frame of a C20, BC:0F:B7:00:9C:9D, from the Home Assistant log woodsb02
+  // posted in bdr99/eufylife-ble-client#5 (comment 2564606224, line 19), here
+  // without its name: claimed by the address echo in the company id 0xBC64 and
+  // [0..4].
+  'Eufy Smart Scale C20/P3': {
+    localName: '',
+    address: 'BC:0F:B7:00:9C:9D',
+    serviceUuids: [],
+    manufacturerData: {
+      id: 0xbc64,
+      data: Buffer.from('0fb7009c9d00c5c9706705001a2700000000', 'hex'),
+    },
+  },
   'Senssun Fat Scale': { localName: 'senssun fat', serviceUuids: [] },
   'QN Scale': { localName: 'QN-Scale', serviceUuids: ['fff0'] },
   // #191: a real ES-WBE28 advertises SIG WSS/BCS (0x181D/0x181B) and no QN

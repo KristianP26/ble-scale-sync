@@ -60,6 +60,16 @@ function manufacturerFromRaw(raw: string | null | undefined): ManufacturerEntry 
 }
 
 /**
+ * Whether one manufacturer entry carries the device's own address: the high
+ * byte of its company id followed by its first five data bytes (#408).
+ */
+function echoesAddress(id: number, hex: string, address: string): boolean {
+  const own = address.replace(/[:-]/g, '').toLowerCase();
+  const echo = (id >> 8).toString(16).padStart(2, '0') + hex.slice(0, 10).toLowerCase();
+  return own.length === 12 && echo === own;
+}
+
+/**
  * Which manufacturer entry to hand to the adapters. BleDeviceInfo has one slot,
  * and Home Assistant's dict is not one packet: it is every company id the
  * device has used since the scanner last forgot it (15 minutes of silence),
@@ -73,9 +83,16 @@ function manufacturerFromRaw(raw: string | null | undefined): ManufacturerEntry 
  * its high byte, #408) piles up keys, and the lowest is an earlier weigh-in or
  * an idle frame. Then `raw`, the packet that caused this event, says which
  * entry is current. Without a usable `raw` (bleak fallback scanner, remote
- * scanners that pass parsed data only), keys that all end in the same low
- * byte are taken for such a counter and the entry is dropped rather than
- * guessed; anything else keeps the first entry as before.
+ * scanners that pass parsed data only), the entry is dropped rather than
+ * guessed when the keys are one device's changing id: they all share their
+ * low byte (OKOK C0: the counter is the high byte), or every one of them
+ * spells the device's own address (Eufy C20 / P3: the first byte of the
+ * address is the high byte of the id, the rest opens the data, the low byte
+ * changes while weighing, and a stale key held a weigh-in from minutes
+ * before). A shared high byte alone is not taken for that: every company id
+ * below 0x0100 has the same one, and a Eufy P2 / P2 Pro, also seen with more
+ * than one entry, would lose its broadcast if its ids happened to share it.
+ * Anything else keeps the first entry as before.
  */
 function pickManufacturerData(
   ad: HaAdvertisement,
@@ -85,8 +102,10 @@ function pickManufacturerData(
   if (keys.length > 1) {
     const newest = manufacturerFromRaw(ad.raw);
     if (newest) return newest;
-    const low = Number.parseInt(keys[0][0], 10) & 0xff;
-    if (keys.every(([key]) => (Number.parseInt(key, 10) & 0xff) === low)) {
+    const ids = keys.map(([key]) => Number.parseInt(key, 10));
+    const sharedLow = ids.every((id) => (id & 0xff) === (ids[0] & 0xff));
+    const ownAddress = keys.every(([, hex], i) => echoesAddress(ids[i], hex, ad.address));
+    if (sharedLow || ownAddress) {
       onUndatable?.();
       return null;
     }

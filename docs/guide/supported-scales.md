@@ -4,12 +4,12 @@ description: Every BLE smart scale brand and model supported by BLE Scale Sync.
 head:
   - - meta
     - name: keywords
-      content: koogeek scale, xiaomi mi scale, renpho scale bluetooth, eufy smart scale, yunmai scale, beurer bf scale, sanitas scale, medisana bs scale, silvercrest scale, 1byone scale, etekcity scale, inevifit scale, arboleaf scale, lepulse scale, fitdays scale, senssun scale, grifema scale, okok scale, chipsea scale, etekcity fit 8s, supported ble scales
+      content: koogeek scale, xiaomi mi scale, renpho scale bluetooth, eufy smart scale, yunmai scale, beurer bf scale, sanitas scale, medisana bs scale, silvercrest scale, 1byone scale, etekcity scale, inevifit scale, arboleaf scale, lepulse scale, fitdays scale, senssun scale, grifema scale, okok scale, chipsea scale, etekcity fit 8s, eufy c20, eufy p3, supported ble scales
 ---
 
 # Supported Scales
 
-**38 protocol adapters**, plus a Standard BT SIG catch-all for any spec-compliant scale. Most adapters cover several rebrands, so real coverage is wider than the count.
+**39 protocol adapters**, plus a Standard BT SIG catch-all for any spec-compliant scale. Most adapters cover several rebrands, so real coverage is wider than the count.
 
 ## Scale List
 
@@ -32,6 +32,7 @@ _Weight only_ means weight is reported normally but body composition is estimate
 | **Renpho** R-MSC04 (MorphoScan Nova)                                           | Weight only      |                                                                                                                                               |
 | **1byone** / **Eufy** C1 / P1                                                  | Yes              |                                                                                                                                               |
 | **Eufy** Smart Scale P2 (T9148) / P2 Pro (T9149)                               | Yes              | Body composition over a connection; the broadcast gives weight only                                                                           |
+| **Eufy** Smart Scale C20 (T9130) / P3 (T9150)                                  | Weight only      | Broadcast only; matched by its name or by its own address                                                                                     |
 | **Yunmai** Signal / Mini / SE                                                  | Yes              | The scale sends its own body composition                                                                                                      |
 | **Beurer** BF700 / BF710 / BF800                                               | Yes              | BF710: register it in the Beurer app first                                                                                                    |
 | **Salter** SA00656 / SA00432 (Salter Health)                                   | Weight only      | Powers off after weighing; suits continuous mode                                                                                              |
@@ -122,6 +123,16 @@ Only a scale set to display kg has been logged so far. None of this is confirmed
 Over a connection, the scale's impedance is read and body fat is computed from it with the generic BIA formula. That formula is not Eufy's: on the weigh-in it was checked against, it gave about 3 points more body fat than the Eufy app ([#289](https://github.com/KristianP26/ble-scale-sync/issues/289)). A weigh-in without impedance (socks or shoes on) gets the BMI estimate (Deurenberg formula).
 
 A scale read from its broadcast, without a connection, gives weight only: the broadcast carries no impedance.
+
+### **Eufy** Smart Scale C20 / P3
+
+Weight only. The C20 (T9130) and P3 (T9150) broadcast their weigh-in; ble-scale-sync reads it from the broadcast and does not connect.
+
+- **Name or address.** The scale sends its name only in the scan response, which a scan does not always get. Without the name it is recognised by its own Bluetooth address, which it repeats inside the broadcast, so on macOS, which does not expose addresses, it is found only when the name arrives.
+- **When it is sent.** The weight is sent as soon as the scale locks it. The scale's clock dates the weigh-in when it agrees with this host within two minutes; otherwise the time it was received is used.
+- **Read as kg.** The weight is read as kg, as in every weigh-in seen so far; none is known to have been taken with the display on lb or st. If yours shows lb or st, compare the first export with the display and report it on [#408](https://github.com/KristianP26/ble-scale-sync/issues/408).
+- **No impedance.** The broadcast also carries a field that looks like impedance and a heart rate, but neither has been compared with the Eufy app for the same weigh-in, so body composition is estimated from BMI (Deurenberg formula) and both are logged in debug mode.
+- **Home Assistant Bluetooth.** A P3 changes its manufacturer id while weighing, so over [Home Assistant Bluetooth](/guide/ha-bluetooth) it needs a scanner that forwards raw advertisements.
 
 ### **Xiaomi** Mi Smart Scale 2 (XMTZC04HM)
 

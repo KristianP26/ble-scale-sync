@@ -130,6 +130,13 @@ export function checkRegistryIntegrity(adapters: readonly ScaleAdapter[]): Regis
     // openScale loses them to its MGB handler exactly this way. Custom on both
     // sides, so the overlap check below is silent.
     ['Silvergear Smart Scale 108', 'MGB (Swan/Icomon/YG)'],
+    // A P3 whose address began 0xFF, with 0x48 as the low byte of its company
+    // id and 0xCF as the lowest byte of its clock, meets the P2 broadcast claim,
+    // and the P2 adapter would read a plausible wrong weight from its clock and
+    // status bytes. A P2 frame can never carry the address echo the C20 / P3
+    // claim needs, so the order costs the P2 nothing (#408). Custom on both
+    // sides, so the overlap check below is silent.
+    ['Eufy Smart Scale C20/P3', 'Eufy Smart Scale P2/P2 Pro'],
   ];
   for (const [hi, lo] of INVARIANTS) {
     const a = byName.get(hi);
