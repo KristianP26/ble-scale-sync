@@ -530,3 +530,110 @@ describe('Silvergear108Adapter (#297)', () => {
     });
   });
 });
+
+/**
+ * Foryond FG263LB, advertised name AAA002, A0:91:61:03:98:31 (openScale #1341,
+ * reporter valenipes, attachment foryond.log: an Android btsnoop of four
+ * weigh-ins, the display in kg, lb, st and st). The reporter gave 68.8 kg as the
+ * weight the first weigh-in should show. Frame numbers are the attachment's
+ * record numbers (= Wireshark frame numbers); every frame is verbatim, sent in
+ * one ADV_NONCONN_IND with the name and service 0xFFB0.
+ *
+ * Nothing in the adapter was written for this unit: these frames pin that the
+ * Silvergear 108 decoding already reads it, and that the registry resolves it
+ * here rather than to MGB, which claims these scales through FFB0 in openScale
+ * (#1341, #1546, #1550 there).
+ */
+describe('Silvergear108Adapter: Foryond FG263LB (AAA002)', () => {
+  const AAA002_MAC_REVERSED = '3198036191a0';
+  const AAA002_MAC = 'A0:91:61:03:98:31';
+  const aaa = (payloadHex: string) => Buffer.from(AAA002_MAC_REVERSED + payloadHex, 'hex');
+
+  /** #16, idle at 0 kg, display kg; the same payload as the #297 unit's idle frame. */
+  const AAA_IDLE = 'a02ca0a00db9';
+  /** #73, still settling, already on the final 68.75 kg. */
+  const AAA_SETTLING_68_75 = 'a02dac2e0db4';
+  /** #74, the first settled frame: 68.750 kg, the reporter's "68.8kg". */
+  const AAA_SETTLED_68_75 = '202dac2e0db4';
+  /** #89, the 0x06 frame, 1.569 s after #74. */
+  const AAA_BODY = 'a2b9a0a306a4';
+  /** #607, settled 69.640 kg with the display in lb. */
+  const AAA_SETTLED_LB = '202db0a80d92';
+  /** #1173, settled 69.640 kg with the display in st. */
+  const AAA_SETTLED_ST = '202db0a80df2';
+
+  const noble = (payloadHex = AAA_SETTLED_68_75): BleDeviceInfo => ({
+    localName: 'AAA002',
+    address: AAA002_MAC,
+    serviceUuids: ['ffb0'],
+    manufacturerData: { id: 0xa0ac, data: aaa(payloadHex) },
+  });
+
+  it('resolves to Silvergear, not MGB, with the advertised service (noble, proxies)', () => {
+    expect(resolveAdapter(noble(), adapters)?.name).toBe('Silvergear Smart Scale 108');
+  });
+
+  it('resolves to Silvergear without a service list (node-ble before connecting)', () => {
+    const nodeBle = { ...noble(), serviceUuids: [] };
+    expect(resolveAdapter(nodeBle, adapters)?.name).toBe('Silvergear Smart Scale 108');
+  });
+
+  it('claims every captured frame type: idle, settling, settled, 0x06, lb and st', () => {
+    const adapter = new Silvergear108Adapter();
+    for (const hex of [
+      AAA_IDLE,
+      AAA_SETTLING_68_75,
+      AAA_SETTLED_68_75,
+      AAA_BODY,
+      AAA_SETTLED_LB,
+      AAA_SETTLED_ST,
+    ]) {
+      expect(adapter.matches(noble(hex))).toBe(true);
+    }
+  });
+
+  it('reads the idle frame as nothing and the settling frame as a live weight', () => {
+    const adapter = new Silvergear108Adapter();
+    expect(adapter.parseBroadcast(aaa(AAA_IDLE))).toBeNull();
+    expect(adapter.parseLiveBroadcast(aaa(AAA_IDLE))).toBeNull();
+    expect(adapter.parseBroadcast(aaa(AAA_SETTLING_68_75))).toBeNull();
+    expect(adapter.parseLiveBroadcast(aaa(AAA_SETTLING_68_75))).toEqual({ weight: 68.75 });
+  });
+
+  it('reads the settled frame as 68.75 kg, and the lb and st weigh-ins as grams too', () => {
+    expect(new Silvergear108Adapter().parseBroadcast(aaa(AAA_SETTLED_68_75))).toEqual({
+      weight: 68.75,
+      impedance: 0,
+    });
+    expect(new Silvergear108Adapter().parseBroadcast(aaa(AAA_SETTLED_LB))).toEqual({
+      weight: 69.64,
+      impedance: 0,
+    });
+    expect(new Silvergear108Adapter().parseBroadcast(aaa(AAA_SETTLED_ST))).toEqual({
+      weight: 69.64,
+      impedance: 0,
+    });
+  });
+
+  // Timestamps are the capture's, in ms after #74.
+  it('completes the first weigh-in once, on its 0x06, as in the capture', () => {
+    let clock = 0;
+    const adapter = new Silvergear108Adapter(() => clock);
+    const done = (
+      [
+        [-126, AAA_SETTLING_68_75], // #73
+        [0, AAA_SETTLED_68_75], // #74
+        [1297, AAA_SETTLED_68_75], // #88, the last settled frame
+        [1569, AAA_BODY], // #89
+        [1617, AAA_BODY], // #91
+      ] as const
+    )
+      .map(([ms, hex]) => {
+        clock = ms;
+        const reading = adapter.parseBroadcast(aaa(hex));
+        return { ms, reading, complete: reading !== null && adapter.isComplete(reading) };
+      })
+      .filter((f) => f.complete);
+    expect(done).toEqual([{ ms: 1569, reading: { weight: 68.75, impedance: 0 }, complete: true }]);
+  });
+});

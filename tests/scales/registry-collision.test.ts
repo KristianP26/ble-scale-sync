@@ -274,6 +274,18 @@ const AC27_ADVERTS: Array<{ label: string; info: BleDeviceInfo; expected: string
     info: FIXTURES['Silvergear Smart Scale 108'],
     expected: 'Silvergear Smart Scale 108',
   },
+  // openScale #1341 (foryond.log record #74): a Foryond FG263LB named AAA002,
+  // settled 68.75 kg. openScale loses these AAA0xx units to MGB through FFB0.
+  {
+    label: 'AAA002 0xA0AC + FFB0 (openScale #1341) stays Silvergear',
+    info: {
+      localName: 'AAA002',
+      address: 'A0:91:61:03:98:31',
+      serviceUuids: ['ffb0'],
+      manufacturerData: { id: 0xa0ac, data: Buffer.from('3198036191a0202dac2e0db4', 'hex') },
+    },
+    expected: 'Silvergear Smart Scale 108',
+  },
   {
     label: 'bare FFB0, no company id, stays MGB',
     info: { localName: '', serviceUuids: ['ffb0'] },
