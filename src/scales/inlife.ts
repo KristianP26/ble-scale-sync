@@ -82,6 +82,13 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
     if (KNOWN_NAMES.includes(name)) return true;
+    // PICOOC's connection-based scales (PICOOC-CQ, PICOOC-CC in the captures in
+    // oliexdev/openScale#401 and #544) advertise 0xFFF0 and expose 0xFFF2
+    // without 0xFFF4, so both rules below would take them. This adapter reads
+    // none of their frames, and the scale repeats a time request about twice a
+    // second until it is answered, which would hold its only connection until
+    // the session cap (#408). Checked first, so it covers both rules.
+    if (name.startsWith('picooc')) return false;
 
     const chars = device.characteristicUuids;
     if (chars && chars.length > 0) {

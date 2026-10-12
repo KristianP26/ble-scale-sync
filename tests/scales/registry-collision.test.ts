@@ -355,8 +355,33 @@ interface PostDiscoveryCase {
   label: string;
   advertised: BleDeviceInfo;
   gatt: GattDiscovery;
-  expected: string;
+  expected: string | undefined;
 }
+
+// PICOOC Mini (#408): the real ADV_IND from oliexdev/openScale#401 (artsight,
+// btsnoop_hci.log, 2019-02-16 14:53:44.187): flags 0x06, service 0xFFF0, name
+// PICOOC-CQ, manufacturer data 0x000A + the unit's own address, from the public
+// address D0:49:00:30:0F:5D, an empty scan response. GATT in the same capture:
+// 0x2A00 to 0x2A05 on 0x1800 / 0x1801, 0xFFF1 (read + indicate) and 0xFFF2
+// (write with response) on 0xFFF0. No adapter reads this scale, so nothing may
+// claim it.
+const PICOOC_CQ: BleDeviceInfo = {
+  localName: 'PICOOC-CQ',
+  address: 'D0:49:00:30:0F:5D',
+  serviceUuids: ['fff0'],
+  manufacturerData: { id: 0x000a, data: Buffer.from('d04900300f5d', 'hex') },
+};
+const PICOOC_CQ_GATT = {
+  serviceUuids: [0x1800, 0x1801, 0xfff0].map(uuid16),
+  characteristicUuids: [0x2a00, 0x2a01, 0x2a02, 0x2a03, 0x2a04, 0x2a05, 0xfff1, 0xfff2].map(uuid16),
+};
+
+describe('PICOOC connection-based scales (#408)', () => {
+  it('claims nothing from the advertisement, with or without its services', () => {
+    expect(resolveAdapter(PICOOC_CQ, adapters)?.name).toBeUndefined();
+    expect(resolveAdapter({ ...PICOOC_CQ, serviceUuids: [] }, adapters)?.name).toBeUndefined();
+  });
+});
 
 // Renpho ES-WBE28 (#267): the advertisement is the one renpho.test.ts matches
 // on; the characteristics are that test's ALL_CHARS from the btsnoop capture.
@@ -485,6 +510,14 @@ const POST_DISCOVERY: PostDiscoveryCase[] = [
     },
     expected: 'Robi S9',
   },
+  // #408: Inlife used to claim it on the bare 0xFFF0 and then on 0xFFF2 without
+  // 0xFFF4, and hold the connection while the scale kept asking for the time.
+  ...[true, false].map((known) => ({
+    label: `PICOOC-CQ (advertised services ${known ? 'known' : 'unknown'})`,
+    advertised: known ? PICOOC_CQ : { ...PICOOC_CQ, serviceUuids: [] },
+    gatt: { ...PICOOC_CQ_GATT, advertisedServicesKnown: known },
+    expected: undefined,
+  })),
 ];
 
 describe('post-discovery collision guard', () => {
