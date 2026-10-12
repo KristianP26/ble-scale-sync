@@ -139,8 +139,6 @@ BlueZ and noble, plus the ESP32 and ESPHome proxies).
 
 ## Contributors
 
-Commit counts are regenerated from the git history at every release: authored and co-authored commits count, merge commits and bots do not.
-
 <!-- contributors:start - generated from git history by src/tools/sync-contributors.ts, do not edit by hand -->
 <table><tr>
 <td align="center"><a href="https://github.com/KristianP26"><img src="https://avatars.githubusercontent.com/u/28766334?v=4" width="60" height="60" alt="KristianP26"><br><sub>KristianP26</sub></a><br><sub>1,029 commits</sub></td>
