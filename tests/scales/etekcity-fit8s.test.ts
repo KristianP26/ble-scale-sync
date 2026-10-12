@@ -244,6 +244,16 @@ describe('EtekcityFit8sAdapter (#408)', () => {
       expect(adapter.parseLiveBroadcast(buf(FLAUTZ_STABLE_81_02))).toBeNull();
     });
 
+    // The adapter prefers passive reading, so a reading isComplete() refuses
+    // is not dropped: the transports hold it as partial and export it weight
+    // only once the grace runs out. The frame itself has to be refused.
+    it('refuses a stable frame outside the plausible range ([12] 0x01 -> 0x04, 268.88 kg)', () => {
+      const adapter = new EtekcityFit8sAdapter();
+      const heavy = withByte(BASJAM_STABLE_72_27, 12, 0x04);
+      expect(adapter.parseBroadcast(heavy)).toBeNull();
+      expect(evaluateAdvertisement(adapter, advert(heavy))).toEqual({ kind: 'wait' });
+    });
+
     it('refuses a frame of the wrong length on both channels', () => {
       const adapter = new EtekcityFit8sAdapter();
       const short = buf(BASJAM_STABLE_72_27).subarray(0, 19);
