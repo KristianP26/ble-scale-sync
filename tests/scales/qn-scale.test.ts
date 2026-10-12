@@ -3061,18 +3061,20 @@ describe('AE02 dispatch (#75, #235)', () => {
         }
       });
 
-      it('does not read the weight when [2] is not 0x01, and warns once', async () => {
+      // [2] is the scale's user slot per the vendor's published SDK, not a unit
+      // (#331): a weigh-in the scale assigned to another slot is still read.
+      it('reads the weight of a weigh-in on another user slot, without a warning', async () => {
         vi.useFakeTimers();
         const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
         try {
           const adapter = makeAdapter();
           await openSession(adapter);
-          const unit2 = patched(STABLE, 2, 0x02);
-          expect(adapter.parseNotification(unit2)).toBeNull();
-          expect(adapter.parseNotification(unit2)).toBeNull();
-          const hits = warn.mock.calls.filter((c) => String(c[0]).includes('at [2]'));
-          expect(hits).toHaveLength(1);
-          expect(adapter.completionHoldMs).toBeUndefined();
+          const slot2 = patched(STABLE, 2, 0x02);
+          const reading = adapter.parseNotification(slot2);
+          expect(reading).toEqual(WEIGHT);
+          expect(adapter.isFinal(reading!)).toBe(false);
+          expect(adapter.completionHoldMs).toBe(NINETEEN_BYTE_RESULT_HOLD_MS);
+          expect(warn).not.toHaveBeenCalled();
         } finally {
           warn.mockRestore();
           vi.useRealTimers();
@@ -3418,6 +3420,8 @@ describe('QN per-session reset ordering (#406)', () => {
       // (#331).
       'storedMark',
       'recentLiveResults',
+      // Keyed by reading, like provisionalReadings.
+      'scaleComposition',
     ]);
     vi.useFakeTimers();
     try {

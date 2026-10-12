@@ -10,6 +10,7 @@ import type {
   UserProfile,
 } from '../../src/interfaces/scale-adapter.js';
 import { defaultProfile } from '../helpers/scale-test-utils.js';
+import { buildPayload } from '../../src/scales/body-comp-helpers.js';
 import {
   decodeEightResult,
   decodeEightStoredRecord,
@@ -335,6 +336,7 @@ interface SessionOptions {
   /** Wall clock when the session opens. */
   now: string;
   info?: Buffer;
+  ready?: Buffer;
   profile?: Partial<UserProfile>;
   config?: AdapterRuntimeConfig;
 }
@@ -362,7 +364,7 @@ async function openSession(adapter: QnScaleAdapter, opts: SessionOptions) {
   adapter.onSessionStart();
   await adapter.onConnected(ctx);
   adapter.parseNotification(opts.info ?? R07_SESSION.INFO);
-  adapter.parseNotification(R07_SESSION.READY);
+  adapter.parseNotification(opts.ready ?? R07_SESSION.READY);
   adapter.parseNotification(R07_SESSION.CONFIG_REQ);
   await vi.advanceTimersByTimeAsync(2000);
   /** Every frame in order; the readings they return, nulls included. */
@@ -561,5 +563,212 @@ describe('QN 19-byte stored records (#331)', () => {
     s = await openSession(adapter, { now: '2026-10-07T20:06:44Z' });
     const other = s.feed(patched(R07.P1, 5, 0x1e, 0x05), ...R07_LIVE.slice(1));
     expect(other[0]).toEqual({ weight: 76.85, impedance: 0 });
+  });
+});
+
+describe("QN 19-byte: the scale's own body composition (#331)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  /** The profile the 2026-10-06 visit frame carried: 1810 mm. Age is neutral. */
+  const P181: UserProfile = { height: 181, age: 40, gender: 'male', isAthlete: false };
+  const R06_LIVE = [R06.P1, R06.P2, R06.P3, R06.C15, R06.D16];
+  const NO_RECORDS = hex('23 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 23');
+  const estimate = (profile: UserProfile, weight = 76.85) => buildPayload(weight, 0, {}, profile);
+
+  /**
+   * The 2026-10-06 weigh-in in order: the scale accepts the profile, measures,
+   * settles, answers "no stored weigh-ins", then the result block. Returns the
+   * 0x16 reading.
+   */
+  async function weighIn(
+    opts: { profile?: Partial<UserProfile>; config?: AdapterRuntimeConfig } = {},
+    frames: { visit?: Buffer | null; ready?: Buffer; live?: Buffer[] } = {},
+  ) {
+    const adapter = new QnScaleAdapter();
+    const s = await openSession(adapter, {
+      now: '2026-10-06T15:10:52Z',
+      info: R06_SESSION.INFO,
+      profile: { ...P181, ...opts.profile },
+      config: opts.config,
+      ready: frames.ready,
+    });
+    const visit = frames.visit === undefined ? R06_SESSION.VISIT_OK : frames.visit;
+    const out = s.feed(
+      ...(visit ? [visit] : []),
+      R06_SESSION.MEASURING,
+      R06_SESSION.STABLE,
+      NO_RECORDS,
+      ...(frames.live ?? R06_LIVE),
+    );
+    const reading = out[out.length - 1];
+    expect(reading).toEqual({ weight: 76.85, impedance: 0 });
+    return { adapter, reading: reading! };
+  }
+
+  it("uses the scale's values when the matched user has the profile it was sent", async () => {
+    const info = spyLines('info');
+    const { adapter, reading } = await weighIn();
+    const payload = adapter.computeMetrics(reading, P181);
+    expect(payload).toMatchObject({
+      weight: 76.85,
+      bodyFatPercent: 18,
+      waterPercent: 59.1,
+      // 77.9 % and 4.2 % of 76.85 kg.
+      muscleMass: 59.87,
+      boneMass: 3.23,
+      visceralFat: 6,
+    });
+    expect(info.lines()).toContain(
+      'QN: the scale sent its own body composition for this weigh-in (#331)',
+    );
+    expect(info.lines()).toContain(
+      "QN: using the scale's own body composition for this weigh-in (#331)",
+    );
+  });
+
+  // The reporter's app had 182 cm while the config sent 181: the scale's BMI
+  // fits what we sent, so the composition is someone else's for a user at 182.
+  it('estimates for a matched user whose profile differs from the one sent', async () => {
+    const info = spyLines('info');
+    const { adapter, reading } = await weighIn();
+    const p182 = { ...P181, height: 182 };
+    expect(adapter.computeMetrics(reading, p182)).toEqual(estimate(p182));
+    expect(info.lines().some((l) => l.includes('is not the profile sent to the scale'))).toBe(true);
+  });
+
+  // 1800 mm sent and accepted, but the scale's BMI of 23.5 fits 1810: 0.22
+  // off. A tolerance of a centimetre on the implied height would pass this.
+  it("estimates when the scale's BMI does not fit the height sent to it", async () => {
+    const info = spyLines('info');
+    const p180 = { ...P181, height: 180 };
+    const { adapter, reading } = await weighIn({ profile: p180 });
+    expect(adapter.computeMetrics(reading, p180)).toEqual(estimate(p180));
+    expect(info.lines().some((l) => l.includes('BMI does not fit the height'))).toBe(true);
+  });
+
+  it.each([
+    ['a year older', { age: 41 }],
+    ['a woman', { gender: 'female' as const }],
+  ])('estimates when the matched user is %s, unlike the profile sent', async (_name, change) => {
+    const { adapter, reading } = await weighIn();
+    const other = { ...P181, ...change };
+    expect(adapter.computeMetrics(reading, other)).toEqual(estimate(other));
+  });
+
+  // The vendor's published SDK has no athlete mode for these scales.
+  it("uses the scale's values for an athlete, and says it has no athlete mode", async () => {
+    const info = spyLines('info');
+    const athlete = { ...P181, isAthlete: true };
+    const { adapter, reading } = await weighIn({ profile: athlete });
+    expect(adapter.computeMetrics(reading, athlete)).toMatchObject({
+      bodyFatPercent: 18,
+      waterPercent: 59.1,
+    });
+    expect(info.lines()).toContain('QN: the scale computed it without an athlete mode (#331)');
+  });
+
+  // Derived frames: the scale's answer with 0 (refused) at [4], the ready frame
+  // with bit 0 of [3] clear, the result block's first part with slot 2.
+  it.each([
+    [
+      'the scale refused the profile',
+      { visit: patched(R06_SESSION.VISIT_OK, 4, 0x00) },
+      'the scale did not accept the profile',
+    ],
+    ['the scale never answered the profile', { visit: null }, 'did not answer the profile'],
+    [
+      'the scale reports its results as kilograms',
+      { ready: patched(R07_SESSION.READY, 3, 0x00) },
+      'did not report its results as percentages',
+    ],
+    [
+      'the weigh-in is on another user slot',
+      { live: [patched(R06.P1, 2, 0x02), ...R06_LIVE.slice(1)] },
+      'on another user slot',
+    ],
+  ])('estimates when %s', async (_name, frames, reason) => {
+    const info = spyLines('info');
+    const { adapter, reading } = await weighIn({}, frames);
+    expect(adapter.computeMetrics(reading, P181)).toEqual(estimate(P181));
+    expect(info.lines().some((l) => l.includes(reason))).toBe(true);
+  });
+
+  // Without qn_weight_ack the 19-byte session sends openScale's constant
+  // profile frame, which is nobody's.
+  it('estimates when the session sent no profile of a configured user', async () => {
+    const info = spyLines('info');
+    const { adapter, reading } = await weighIn({ config: {} });
+    expect(adapter.computeMetrics(reading, P181)).toEqual(estimate(P181));
+    expect(info.lines().some((l) => l.includes('no profile of a configured user'))).toBe(true);
+  });
+
+  // Those frames overwrite the slot's stored segment values, which the scale
+  // corrects its channels with, with values from someone else's capture.
+  it('estimates in a session that sent the qn_a4_prelude frames', async () => {
+    const { adapter, reading } = await weighIn({
+      config: { qnWeightAck: true, qnA4Prelude: true },
+    });
+    expect(adapter.computeMetrics(reading, P181)).toEqual(estimate(P181));
+  });
+
+  // The 2026-10-07 log: the scale finished the weigh-in before the link came
+  // up and sent its result right after accepting our profile. It may have
+  // computed it with the profile the slot held before ours.
+  it('estimates for a result the scale measured before it accepted the profile', async () => {
+    const info = spyLines('info');
+    const adapter = new QnScaleAdapter();
+    const p182 = { ...P181, height: 182 };
+    const s = await openSession(adapter, { now: R07_CONNECTED, profile: p182 });
+    const out = s.feed(R07_SESSION.VISIT_OK, ...R07_STORED, ...R07_LIVE);
+    const reading = out[out.length - 1]!;
+    expect(reading).toEqual({ weight: 76.55, impedance: 0 });
+    expect(adapter.computeMetrics(reading, p182)).toEqual(estimate(p182, 76.55));
+    expect(info.lines().some((l) => l.includes('measured before it accepted the profile'))).toBe(
+      true,
+    );
+  });
+
+  // Derived: the 2026-10-06 block with every payload byte zeroed, the shape of
+  // the all-zero blocks reported in #331.
+  it('pins nothing when the scale sent an all-zero block', async () => {
+    const info = spyLines('info');
+    const zero = R06_LIVE.map((f, i) => {
+      const z = Buffer.alloc(f.length);
+      // Kept: opcode and length; part 1's slot, status, part byte and weight;
+      // the part byte of parts 2 and 3; 0x15/0x16's [2].
+      const kept = i === 0 ? [0, 1, 2, 3, 4, 5, 6] : i < 3 ? [0, 1, 4] : [0, 1, 2];
+      for (const at of kept) z[at] = f[at];
+      return withSum(z);
+    });
+    const { adapter, reading } = await weighIn({}, { live: zero });
+    expect(adapter.computeMetrics(reading, P181)).toEqual(estimate(P181));
+    expect(info.lines()).toContain(
+      'QN: the scale sent no body composition for this weigh-in (#331)',
+    );
+  });
+
+  // Derived: 0x15 with the water at 0. The whole set goes, visceral fat
+  // included, which buildPayload would otherwise take on its own.
+  it('estimates everything, visceral fat included, when one value is not a measurement', async () => {
+    const live = [...R06_LIVE];
+    live[3] = patched(R06.C15, 5, 0x00, 0x00);
+    const { adapter, reading } = await weighIn({}, { live });
+    const payload = adapter.computeMetrics(reading, P181);
+    expect(payload).toEqual(estimate(P181));
+    expect(payload.visceralFat).not.toBe(6);
+  });
+
+  it('keeps the composition with the reading it was measured with', async () => {
+    const first = await weighIn();
+    // The next session of the same adapter opens before the first reading is
+    // processed, as the proxy watchers allow.
+    await openSession(first.adapter, { now: '2026-10-06T15:12:00Z', info: R06_SESSION.INFO });
+    expect(first.adapter.computeMetrics(first.reading, P181).bodyFatPercent).toBe(18);
   });
 });

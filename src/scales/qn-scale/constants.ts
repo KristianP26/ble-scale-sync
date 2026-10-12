@@ -466,7 +466,6 @@ export const RESULT_MAX_WEIGHT_KG = 300;
  * STORED_OPCODE_COMPOSITION).
  */
 export const LIVE20_FRAME_LEN = 20;
-export const LIVE20_FIRST_PART_BYTE2 = 0x01;
 export const LIVE20_STATUS_MEASURING = 0x00;
 export const LIVE20_STATUS_STABLE = 0x01;
 export const LIVE20_STATUS_RESULT = 0x02;
@@ -555,6 +554,16 @@ export const EIGHT_CHANNEL_ORDER = [
 export const STORED_OPCODE_COMPOSITION = 0x24;
 export const STORED_OPCODE_DONE = 0x25;
 export const STORED_UNASSIGNED_SLOT = 0xf0;
+
+/**
+ * How far the scale's own BMI (0x15) may be from the weight over the square of
+ * the height in our profile frame for its composition to count as computed for
+ * that profile (#331). The scale rounds BMI to 0.1; two real weigh-ins sit
+ * within 0.05 of the height that was sent, and one centimetre of height moves
+ * BMI by at least 0.15 for any adult (BMI 15 or more, 2 m or less). The small
+ * addition only absorbs floating point.
+ */
+export const BMI_MATCH_TOLERANCE = 0.1 + 1e-9;
 
 /**
  * Bounds on a stored weigh-in's time. The vendor's published SDK drops a
