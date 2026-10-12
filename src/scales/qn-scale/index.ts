@@ -14,6 +14,7 @@ import type {
   HoldForComposition,
 } from '../../interfaces/scale-adapter.js';
 import { bleLog, errMsg, normalizeUuid } from '../../ble/types.js';
+import { isHistoricalReading } from '../../interfaces/reading-time.js';
 import type { MatchDescriptor } from '../match-descriptor.js';
 import {
   jieliAuthResponseFrame,
@@ -39,6 +40,10 @@ import {
   LIVE20_STATUS_MEASURING,
   LIVE20_STATUS_RESULT,
   LIVE20_STATUS_STABLE,
+  LIVE_MATCH_AFTER_MS,
+  LIVE_MATCH_BEFORE_MS,
+  LIVE_MATCH_WEIGHT_KG,
+  LIVE_REPLAY_WINDOW_MS,
   MAX_AE00_RESPONSES,
   MAX_STORED_QUERY_ATTEMPTS,
   MAX_STORED_RECORD_AGE_SEC,
@@ -46,6 +51,7 @@ import {
   NO_CONTACT_RESISTANCE,
   POST_START_ANCHOR_DELAY_MS,
   PROTO_ECHO_MIN_INFO_FRAME_LEN,
+  RECENT_LIVE_RESULTS,
   RESULT16_FRAME_LEN,
   RESULT16_OPCODE_COMPOSITION,
   RESULT16_OPCODE_DONE,
@@ -55,6 +61,11 @@ import {
   RESULT_OPCODE_B4,
   RESULT_RECORD_CLOCK_TOLERANCE_SEC,
   SCALE_EPOCH_OFFSET,
+  STORED_FUTURE_TOLERANCE_MS,
+  STORED_MAX_AGE_MS,
+  STORED_OPCODE_COMPOSITION,
+  STORED_OPCODE_DONE,
+  STORED_UNASSIGNED_SLOT,
   STORED_QUERY_RETRY_MS,
   TRIGGER_GAP_MS,
   TRIGGER_REPEATS,
@@ -69,6 +80,7 @@ import {
   buildMeasurementTrigger,
   buildTimeSync,
   buildUserProfileFrame,
+  decodeEightStoredRecord,
   decodeStoredRecord,
   decryptQnResistance,
   hasValidSumChecksum,
@@ -265,8 +277,8 @@ export class QnScaleAdapter
 
   /**
    * The 19-byte dialect's streamed weigh-in (#331, D037). `live20Seen`: a
-   * well-formed 20-byte 0x10 arrived this session, which is what makes a later
-   * 0x23 marker and the 0x15/0x16 frames part of the same weigh-in.
+   * well-formed 20-byte 0x10 arrived this session, which is what makes later
+   * 0x15/0x16 frames part of the same weigh-in.
    * `live20Weight`: the stable weight, held until 0x16 (`live20ResultSeen`)
    * closes the weigh-in.
    */
@@ -286,15 +298,54 @@ export class QnScaleAdapter
   private readonly provisionalReadings = new WeakSet<ScaleReading>();
 
   /**
+   * A 0x10 first part with status measuring or stable arrived this session, so
+   * the scale measured while we were connected. A result block without one is
+   * a weigh-in the scale finished before the link came up (#331).
+   */
+  private live20Measured = false;
+
+  /** This session's result block repeated a live result already reported. */
+  private live20Replayed = false;
+
+  /**
+   * The 19-byte dialect's stored weigh-ins (#331): the frames of the record
+   * being assembled (three 0x23 parts, 0x24, 0x25), whether a fresh one is
+   * held for a live result that may replace it, and the scale-epoch seconds of
+   * the records reported this session.
+   */
+  private storedParts: Buffer[] = [];
+  private storedHoldArmed = false;
+  private readonly storedEmitted = new Set<number>();
+
+  /**
+   * High-water mark of the stored weigh-ins reported, in scale-epoch seconds,
+   * persisted by the runtime across restarts (dedupMark). Records are judged
+   * against the mark as it stood when the session started: a batch need not
+   * arrive in time order, and an earlier record behind a later one is still new.
+   */
+  private storedMark = 0;
+  private storedMarkAtSessionStart = 0;
+
+  /**
+   * The last few live results this adapter published, by weight and the time
+   * of their 0x16. Kept across sessions: they are what a stored record or a
+   * repeated result block in a later session is compared with.
+   */
+  private readonly recentLiveResults: { weight: number; atMs: number }[] = [];
+
+  /**
    * Hold the link from the 19-byte dialect's stable weight until its 0x16
-   * (D037). Undefined before a stable weight and on every other dialect, so
+   * (D037), and on a fresh stored weigh-in, so a live result in the same
+   * session replaces it. Undefined otherwise and on every other dialect, so
    * nothing else this adapter returns is held.
    */
   get completionHoldMs(): number | undefined {
-    return this.live20Weight !== null ? NINETEEN_BYTE_RESULT_HOLD_MS : undefined;
+    return this.live20Weight !== null || this.storedHoldArmed
+      ? NINETEEN_BYTE_RESULT_HOLD_MS
+      : undefined;
   }
 
-  /** Only the 19-byte stable weight is provisional; see completionHoldMs. */
+  /** Only the 19-byte stable weight and fresh stored weigh-ins are provisional. */
   isFinal(reading: ScaleReading): boolean {
     return !this.provisionalReadings.has(reading);
   }
@@ -482,6 +533,12 @@ export class QnScaleAdapter
     this.live20Weight = null;
     this.live20ResultSeen = false;
     this.live20Byte2Warned = false;
+    this.live20Measured = false;
+    this.live20Replayed = false;
+    this.storedParts = [];
+    this.storedHoldArmed = false;
+    this.storedEmitted.clear();
+    this.storedMarkAtSessionStart = this.storedMark;
     this.configSent = false;
     this.timeSyncSent = false;
     this.historyResponseSent = false;
@@ -893,24 +950,10 @@ export class QnScaleAdapter
     // with its own evidence. A session without any 0x12 reads the long layout,
     // which is what every real record we have uses.
     if (opcode === 0x23) {
-      // On the 19-byte dialect `23 00 .. 00 23` comes after the 20-byte stream,
-      // 13 s after the stable weight and 200 ms before the result block (#331),
-      // so it reads as the end of the scale's BIA. As a record it is an empty
-      // one, and the re-query that triggers is START, sent 3 s later into a
-      // finished weigh-in. Only that exact shape is the marker; any other 0x23
-      // keeps the stored-record path below.
-      if (this.isNineteenByteInfo && this.live20Seen) {
-        if (this.isEndOfMeasurementMarker(data)) {
-          bleLog.debug(
-            'QN: 0x23 end-of-measurement marker after the 20-byte stream, no re-query (#331)',
-          );
-          return null;
-        }
-        bleLog.debug(
-          'QN: 0x23 after the 20-byte stream is not the end-of-measurement marker, ' +
-            'reading it as a stored record (#331)',
-        );
-      }
+      // The 19-byte dialect sends 8-electrode records in their own layout and
+      // never gets a re-query: the scale answers our one 0x22 once it is done
+      // measuring, and a second 0x22 is the same request again (#331).
+      if (this.isNineteenByteInfo) return this.parseEightStoredPart(data);
       const record = data.length < 17 ? null : decodeStoredRecord(data);
       if (!record) {
         this.scheduleStoredDataRetry();
@@ -961,6 +1004,13 @@ export class QnScaleAdapter
     if (this.isNineteenByteInfo) {
       if (opcode === 0x10 && data.length === LIVE20_FRAME_LEN && data[1] === LIVE20_FRAME_LEN) {
         return this.parseNineteenByteLiveFrame(data);
+      }
+      if (
+        (opcode === STORED_OPCODE_COMPOSITION || opcode === STORED_OPCODE_DONE) &&
+        data.length >= RESULT16_FRAME_LEN &&
+        data[2] === 0xff
+      ) {
+        return this.parseEightStoredTail(data);
       }
       if (
         this.live20Seen &&
@@ -1289,14 +1339,38 @@ export class QnScaleAdapter
           `status 0x${status.toString(16).padStart(2, '0')} (19-byte dialect, #331)`,
       );
     }
-    if (status === LIVE20_STATUS_MEASURING) return null;
+    if (status === LIVE20_STATUS_MEASURING) {
+      this.live20Measured = true;
+      return null;
+    }
     if (status !== LIVE20_STATUS_STABLE && status !== LIVE20_STATUS_RESULT) {
       bleLog.debug(`QN: 20-byte frame with unknown status 0x${status.toString(16)} dropped (#331)`);
       return null;
     }
+    if (status === LIVE20_STATUS_STABLE) this.live20Measured = true;
     if (weight <= RESULT_MIN_WEIGHT_KG || weight >= RESULT_MAX_WEIGHT_KG) {
       bleLog.debug(`QN: 20-byte stable weight ${weight} kg out of range, dropped (#331)`);
       return null;
+    }
+
+    // A result block with no measurement before it in this session is a
+    // weigh-in the scale finished before we connected. When it repeats a
+    // result already published, it is that weigh-in handed over again after a
+    // reconnect, not a second one (#331).
+    if (status === LIVE20_STATUS_RESULT && !this.live20Measured && this.live20Weight === null) {
+      const repeated = this.recentLiveResults.find(
+        (r) =>
+          Math.abs(r.weight - weight) <= LIVE_MATCH_WEIGHT_KG &&
+          Date.now() - r.atMs <= LIVE_REPLAY_WINDOW_MS,
+      );
+      if (repeated) {
+        this.live20Replayed = true;
+        bleLog.debug(
+          `QN: result block of ${weight} kg came with no measurement in this session and ` +
+            `repeats the one reported at ${new Date(repeated.atMs).toISOString()}, dropped (#331)`,
+        );
+        return null;
+      }
     }
 
     // The result block's first part (status 0x02) repeats the weight. Returning
@@ -1328,23 +1402,171 @@ export class QnScaleAdapter
     }
     this.live20ResultSeen = true;
     if (this.live20Weight === null) {
-      bleLog.debug('QN: 0x16 closes a 19-byte weigh-in that sent no stable weight (#331)');
+      bleLog.debug(
+        this.live20Replayed
+          ? 'QN: 0x16 closes a repeated result block, nothing published (#331)'
+          : 'QN: 0x16 closes a 19-byte weigh-in that sent no stable weight (#331)',
+      );
       return null;
     }
     bleLog.debug(
       `QN: 0x16 closes the 19-byte weigh-in, publishing ${this.live20Weight} kg weight-only ` +
         '(impedance block not decoded, #331)',
     );
+    this.recentLiveResults.push({ weight: this.live20Weight, atMs: Date.now() });
+    if (this.recentLiveResults.length > RECENT_LIVE_RESULTS) this.recentLiveResults.shift();
     return { weight: this.live20Weight, impedance: 0 };
   }
 
-  /** `23 00 .. 00 23`: 20 bytes, all zero between opcode and checksum (#331). */
-  private isEndOfMeasurementMarker(data: Buffer): boolean {
-    return (
-      data.length === LIVE20_FRAME_LEN &&
-      data.subarray(1, data.length - 1).every((b) => b === 0) &&
-      hasValidSumChecksum(data)
+  /**
+   * One 0x23 part of an 8-electrode stored record on the 19-byte dialect
+   * (#331, layout at STORED_OPCODE_COMPOSITION). Parts are collected until
+   * 0x25 completes the record; nothing is ever re-queried.
+   */
+  private parseEightStoredPart(data: Buffer): null {
+    if (data.length !== LIVE20_FRAME_LEN || !hasValidSumChecksum(data)) {
+      bleLog.debug(`QN: 0x23 that is not a stored-record part dropped: [${hex(data)}] (#331)`);
+      return null;
+    }
+    if (data[4] === 0) {
+      bleLog.debug('QN: 0x23 with no parts: the scale holds no stored weigh-ins (#331)');
+      return null;
+    }
+    const total = data[4] >> 4;
+    const index = data[4] & 0x0f;
+    if (total !== 3 || index === 0 || index > total) {
+      this.storedParts = [];
+      bleLog.debug(`QN: 0x23 not read as a stored-record part: [${hex(data)}] (#331)`);
+      return null;
+    }
+    if (index === 1) {
+      if (this.storedParts.length > 0) {
+        bleLog.debug('QN: stored record left incomplete by the next one, dropped (#331)');
+      }
+      this.storedParts = [Buffer.from(data)];
+      return null;
+    }
+    if (this.storedParts.length !== index - 1) {
+      bleLog.debug(`QN: stored-record part ${index}/3 out of order, record dropped (#331)`);
+      this.storedParts = [];
+      return null;
+    }
+    this.storedParts.push(Buffer.from(data));
+    return null;
+  }
+
+  /** 0x24 or 0x25 of an 8-electrode stored record (#331); 0x25 completes it. */
+  private parseEightStoredTail(data: Buffer): ScaleReading | null {
+    const expected = data[0] === STORED_OPCODE_COMPOSITION ? 3 : 4;
+    if (this.storedParts.length !== expected) {
+      bleLog.debug(
+        `QN: 0x${data[0].toString(16)} without the stored-record frames before it, dropped (#331)`,
+      );
+      this.storedParts = [];
+      return null;
+    }
+    this.storedParts.push(Buffer.from(data));
+    if (data[0] === STORED_OPCODE_COMPOSITION) return null;
+    const [s1, s2, s3, s24, s25] = this.storedParts;
+    this.storedParts = [];
+    return this.storedWeighIn(s1, s2, s3, s24, s25);
+  }
+
+  /**
+   * A complete stored record as a reading with the time the scale took it
+   * (#331). Its weight only: which profile the scale computed the record's
+   * body composition with is not in it. A fresh record is provisional, so a
+   * live result of the same session replaces it; an older one is history, which
+   * the session keeps apart and the runtime sends only to exporters that can
+   * record a past measurement.
+   */
+  private storedWeighIn(
+    s1: Buffer,
+    s2: Buffer,
+    s3: Buffer,
+    s24: Buffer,
+    s25: Buffer,
+  ): ScaleReading | null {
+    const rec = decodeEightStoredRecord(s1, s2, s3, s24, s25, this.resistanceScrambled);
+    if (!rec) {
+      const frames = [s1, s2, s3, s24, s25].map((f) => hex(f)).join(' | ');
+      bleLog.debug(`QN: stored record did not decode, dropped: [${frames}] (#331)`);
+      return null;
+    }
+    const atMs = (rec.recordSeconds + SCALE_EPOCH_OFFSET) * 1000;
+    const what = `${rec.weight} kg at ${new Date(atMs).toISOString()}`;
+    if (rec.slot === STORED_UNASSIGNED_SLOT) {
+      bleLog.info(
+        `QN: a stored weigh-in (${what}) is not exported: the scale did not assign it to ` +
+          'a user (#331)',
+      );
+      return null;
+    }
+    const now = Date.now();
+    if (atMs > now + STORED_FUTURE_TOLERANCE_MS || now - atMs > STORED_MAX_AGE_MS) {
+      bleLog.debug(`QN: stored weigh-in ${what} is not from the past year, dropped (#331)`);
+      return null;
+    }
+    if (rec.weight <= RESULT_MIN_WEIGHT_KG || rec.weight >= RESULT_MAX_WEIGHT_KG) {
+      bleLog.debug(`QN: stored weigh-in ${what} is out of range, dropped (#331)`);
+      return null;
+    }
+    if (
+      rec.recordSeconds <= this.storedMarkAtSessionStart ||
+      this.storedEmitted.has(rec.recordSeconds)
+    ) {
+      bleLog.debug(`QN: stored weigh-in ${what} was already reported (#331)`);
+      return null;
+    }
+    const live = this.recentLiveResults.find(
+      (r) =>
+        Math.abs(r.weight - rec.weight) <= LIVE_MATCH_WEIGHT_KG &&
+        atMs >= r.atMs - LIVE_MATCH_BEFORE_MS &&
+        atMs <= r.atMs + LIVE_MATCH_AFTER_MS,
     );
+    if (live) {
+      bleLog.debug(
+        `QN: stored weigh-in ${what} is the live result reported at ` +
+          `${new Date(live.atMs).toISOString()}, dropped (#331)`,
+      );
+      return null;
+    }
+
+    const reading: ScaleReading = { weight: rec.weight, impedance: 0, timestamp: new Date(atMs) };
+    const historical = isHistoricalReading(reading, now);
+    if (this.live20Weight !== null && !historical) {
+      bleLog.info(
+        `QN: a stored weigh-in (${what}) is superseded by the weigh-in in progress, ` +
+          'not exported (#331)',
+      );
+      return null;
+    }
+    this.storedMark = Math.max(this.storedMark, rec.recordSeconds);
+    this.storedEmitted.add(rec.recordSeconds);
+    this.provisionalReadings.add(reading);
+    if (!historical) this.storedHoldArmed = true;
+    bleLog.debug(
+      `QN: stored weigh-in ${what}, user slot ${rec.slot}, ` +
+        (historical ? 'reported as history' : 'held: a live result in this session replaces it') +
+        ' (#331)',
+    );
+    return reading;
+  }
+
+  /** The newest stored weigh-in reported, in scale-epoch seconds (#331). */
+  dedupMark(): number | undefined {
+    return this.storedMark || undefined;
+  }
+
+  /**
+   * Take back the mark of an earlier process. Raises only, and ignores anything
+   * that is not a whole number of seconds up to a day past now on the scale's
+   * clock: the file can be edited by hand.
+   */
+  restoreDedupMark(mark: number): void {
+    const limit = Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET + 86_400;
+    if (!Number.isInteger(mark) || mark <= 0 || mark > limit) return;
+    if (mark > this.storedMark) this.storedMark = mark;
   }
 
   // ── State machine handlers (fire-and-forget from parseNotification) ─────

@@ -2366,8 +2366,27 @@ describe('QN 19-byte dialect hold through waitForRawReading (#331)', () => {
   const PART3 = withSum(hex('10 14 00 00 33' + ' 00'.repeat(15)));
   const COMP_15 = withSum(hex('15 10 ff' + ' 00'.repeat(13)));
   const DONE_16 = withSum(hex('16 10 ff' + ' 00'.repeat(13)));
+  // #331 attachment `qn-scale-v1.31.0-76.55kg.log.txt` (2026-10-07), byte for
+  // byte, used with the reporter's permission: scale info (line 53), a stored
+  // record from 199 s before the connect (lines 207-241) and the result block
+  // after it (lines 251-287).
+  const INFO_1007 = hex('12 13 ff 54 0b 04 00 07 ff 15 0f 27 00 01 05 03 e0 6f 30');
+  const STORED_1007 = [
+    '23 01 01 01 31 a5 60 59 32 1d e7 0e 3d 0c ad 0d e4 0c 54 40',
+    '23 09 14 01 32 08 18 09 e2 08 f7 01 75 02 8d 00 00 00 00 82',
+    '23 00 00 01 33 00 00 00 00 00 00 00 00 00 00 00 00 00 00 57',
+    '24 13 ff 00 e7 00 00 00 00 00 00 00 00 00 00 00 00 00 1d',
+    '25 0f ff 00 00 00 00 00 00 00 00 00 00 00 00 33',
+  ].map(hex);
+  const LIVE_1007 = [
+    '10 14 01 02 31 1d e7 0e 1e 0c 8e 0d bf 0c 2f 09 3f 08 4e c7',
+    '10 14 09 6b 32 08 70 01 7c 02 88 0e 1e 0c 8e 0d bf 0c 2f 16',
+    '10 14 09 3f 33 08 4e 09 6b 08 70 01 86 01 72 00 ae 00 00 89',
+    '15 10 ff 00 e7 02 54 03 10 06 2f 06 c7 00 bb 31',
+    '16 10 ff 00 00 2a 03 3a 00 9b 02 15 03 a9 04 ee',
+  ].map(hex);
 
-  async function startSession() {
+  async function startSession(scaleInfo: Buffer = INFO) {
     const notify = createMockChar();
     const write = createMockChar();
     const device = createMockDevice();
@@ -2391,7 +2410,7 @@ describe('QN 19-byte dialect hold through waitForRawReading (#331)', () => {
     );
     await vi.waitFor(() => expect(notify.subscribeCalled).toBe(true));
     await vi.advanceTimersByTimeAsync(0);
-    notify.triggerData(INFO);
+    notify.triggerData(scaleInfo);
     notify.triggerData(READY);
     notify.triggerData(CONFIG_REQ);
     await vi.advanceTimersByTimeAsync(2000);
@@ -2489,6 +2508,50 @@ describe('QN 19-byte dialect hold through waitForRawReading (#331)', () => {
       const raw = await s.promise;
       expect(raw.reading).toEqual({ weight: 76.85, impedance: 0 });
       expect(s.adapter.isFinal(raw.reading)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The 2026-10-07 log: the scale hands over a weigh-in from 199 s before the
+  // connect, then the result block of that same weigh-in.
+  it('settles on the result block after a fresh stored record, with no history', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-07T20:00:44Z'));
+      const s = await startSession(INFO_1007);
+      for (const f of STORED_1007) s.notify.triggerData(f);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(s.isSettled(), 'a fresh stored record is held, not final').toBe(false);
+      for (const f of LIVE_1007) s.notify.triggerData(f);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.isSettled()).toBe(true);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual({ weight: 76.55, impedance: 0 });
+      expect(s.adapter.isFinal(raw.reading)).toBe(true);
+      expect(raw.history ?? []).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('hands an older stored record over as history next to the live weigh-in', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-07T20:30:00Z'));
+      const s = await startSession(INFO_1007);
+      for (const f of STORED_1007) s.notify.triggerData(f);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(s.isSettled()).toBe(false);
+      s.notify.triggerData(STABLE);
+      await vi.advanceTimersByTimeAsync(13_000);
+      for (const f of [PART1, PART2, PART3, COMP_15, DONE_16]) s.notify.triggerData(f);
+      await vi.advanceTimersByTimeAsync(0);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual({ weight: 76.85, impedance: 0 });
+      expect(raw.history).toEqual([
+        { weight: 76.55, impedance: 0, timestamp: new Date('2026-10-07T19:57:25Z') },
+      ]);
     } finally {
       vi.useRealTimers();
     }

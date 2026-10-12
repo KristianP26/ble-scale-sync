@@ -557,6 +557,31 @@ export const STORED_OPCODE_DONE = 0x25;
 export const STORED_UNASSIGNED_SLOT = 0xf0;
 
 /**
+ * Bounds on a stored weigh-in's time. The vendor's published SDK drops a
+ * record stamped after "now" or more than a year before it; the minute of slack
+ * on the future side is for a scale clock running slightly ahead of ours.
+ */
+export const STORED_MAX_AGE_MS = 365 * 24 * 60 * 60 * 1000;
+export const STORED_FUTURE_TOLERANCE_MS = 60_000;
+
+/**
+ * When a stored weigh-in is the one already reported live (#331).
+ *
+ * The scale may hand a weigh-in over as a stored record in the session after
+ * the one that streamed it, and a proxy reconnects within seconds. A
+ * record within 0.05 kg of one of the last few live results, stamped from two
+ * minutes before that result's 0x16 to half a minute after it (the scale's
+ * clock may run ahead of ours), is that weigh-in again. A live result block
+ * that arrives with no measurement in its session and repeats a live result of
+ * the last ten minutes is dropped the same way.
+ */
+export const LIVE_MATCH_WEIGHT_KG = 0.05;
+export const LIVE_MATCH_BEFORE_MS = 120_000;
+export const LIVE_MATCH_AFTER_MS = 30_000;
+export const LIVE_REPLAY_WINDOW_MS = 10 * 60_000;
+export const RECENT_LIVE_RESULTS = 4;
+
+/**
  * How long the link is held after the 19-byte dialect's stable weight for its
  * 0x16 (#331, D037).
  *

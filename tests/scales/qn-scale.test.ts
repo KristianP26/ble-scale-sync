@@ -2953,9 +2953,10 @@ describe('AE02 dispatch (#75, #235)', () => {
       });
 
       // The log: `23 00 .. 00 23` read as an empty stored record, and 3 s later
-      // the re-query `22 06 ff 00 03 2a`, which is START, into a finished
-      // weigh-in.
-      it('does not re-send START after the end-of-measurement marker', async () => {
+      // the re-query `22 06 ff 00 03 2a` into a finished weigh-in. Per the
+      // vendor's published SDK the 0x23 is the "no stored weigh-ins" answer to
+      // that same 0x22.
+      it('does not re-send 0x22 after the "no stored weigh-ins" answer', async () => {
         vi.useFakeTimers();
         try {
           const adapter = makeAdapter();
@@ -2972,29 +2973,34 @@ describe('AE02 dispatch (#75, #235)', () => {
         }
       });
 
-      it('keeps the stored-record path for a 0x23 that is not the marker', async () => {
+      // Per the vendor's published SDK only the part count in [4] decides
+      // whether a 0x23 holds a stored record; with 0 parts it is the "none"
+      // answer whatever else it carries. Neither it nor a 0x23 that fails its
+      // checksum is answered with another 0x22, which is the same request again.
+      it('reads a 0x23 with no parts as "no stored weigh-ins", without a re-query', async () => {
         vi.useFakeTimers();
         const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
         try {
           const adapter = makeAdapter();
           const writes = await openSession(adapter);
           adapter.parseNotification(STABLE);
-          // The marker with one payload byte set: no longer the marker shape.
+          // The marker with one payload byte set: still 0 parts at [4].
           expect(adapter.parseNotification(patched(END_MARKER, 5, 0x01))).toBeNull();
           const lines = debug.mock.calls.map((c) => String(c[0]));
-          expect(lines.some((l) => l.includes('not the end-of-measurement marker'))).toBe(true);
-          // Weight 0 at [10..11], so the old path asks again.
-          await vi.advanceTimersByTimeAsync(3000);
-          expect(writes.filter((w) => w[0] === 0x22)).toHaveLength(2);
+          expect(lines).toContain(
+            'QN: 0x23 with no parts: the scale holds no stored weigh-ins (#331)',
+          );
+          await vi.advanceTimersByTimeAsync(20_000);
+          expect(writes.filter((w) => w[0] === 0x22)).toHaveLength(1);
         } finally {
           debug.mockRestore();
           vi.useRealTimers();
         }
       });
 
-      // With [1..18] all zero the sum is 0x23, so the payload check alone
-      // cannot tell `23 00 .. 00 24` from the marker; only the checksum does.
-      it('keeps the stored-record path for the marker shape with a bad checksum', async () => {
+      // With [1..18] all zero the sum is 0x23, so only the checksum tells
+      // `23 00 .. 00 24` from the "none" answer.
+      it('drops a 0x23 with a bad checksum, without a re-query', async () => {
         vi.useFakeTimers();
         const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
         try {
@@ -3005,11 +3011,26 @@ describe('AE02 dispatch (#75, #235)', () => {
           bad[19] = 0x24;
           expect(adapter.parseNotification(bad)).toBeNull();
           const lines = debug.mock.calls.map((c) => String(c[0]));
-          expect(lines.some((l) => l.includes('not the end-of-measurement marker'))).toBe(true);
-          await vi.advanceTimersByTimeAsync(3000);
-          expect(writes.filter((w) => w[0] === 0x22)).toHaveLength(2);
+          expect(lines.some((l) => l.includes('not a stored-record part dropped'))).toBe(true);
+          await vi.advanceTimersByTimeAsync(20_000);
+          expect(writes.filter((w) => w[0] === 0x22)).toHaveLength(1);
         } finally {
           debug.mockRestore();
+          vi.useRealTimers();
+        }
+      });
+
+      // Before the stream as well: the scale answers our 0x22 before it starts
+      // measuring when the link is up first (#331, 2026-10-06 log).
+      it('reads the "no stored weigh-ins" answer before the stream without a re-query', async () => {
+        vi.useFakeTimers();
+        try {
+          const adapter = makeAdapter();
+          const writes = await openSession(adapter);
+          expect(adapter.parseNotification(END_MARKER)).toBeNull();
+          await vi.advanceTimersByTimeAsync(20_000);
+          expect(writes.filter((w) => w[0] === 0x22)).toHaveLength(1);
+        } finally {
           vi.useRealTimers();
         }
       });
@@ -3154,18 +3175,11 @@ describe('AE02 dispatch (#75, #235)', () => {
           expect(final).toBe(true);
         });
 
-        it.each([
-          ['18-byte es26m', 'es26m'],
-          ['19-byte with no 20-byte stream', '19'],
-        ])('%s: the 0x23 marker shape still triggers the re-query', async (_name, which) => {
+        it('18-byte es26m: the 0x23 marker shape still triggers the re-query', async () => {
           vi.useFakeTimers();
           try {
             const adapter = makeAdapter();
-            const writes = await openSession(
-              adapter,
-              which === 'es26m' ? makeEs26mScaleInfo() : INFO,
-              which === 'es26m' ? {} : { ready: READY, configReq: CONFIG_REQ },
-            );
+            const writes = await openSession(adapter, makeEs26mScaleInfo(), {});
             const starts = writes.filter((w) => w[0] === 0x22).length;
             expect(adapter.parseNotification(END_MARKER)).toBeNull();
             await vi.advanceTimersByTimeAsync(3000);
@@ -3399,6 +3413,11 @@ describe('QN per-session reset ordering (#406)', () => {
       // Keyed by reading object; an earlier session's reading is never handed
       // back, so there is nothing to clear (#331).
       'provisionalReadings',
+      // What a later session's stored records and result blocks are compared
+      // with: the newest stored weigh-in reported and the recent live results
+      // (#331).
+      'storedMark',
+      'recentLiveResults',
     ]);
     vi.useFakeTimers();
     try {
@@ -3428,6 +3447,8 @@ describe('QN per-session reset ordering (#406)', () => {
         else if (typeof v === 'boolean') used[key] = !v;
         else if (typeof v === 'number') used[key] = v + 7;
         else if (v === null) used[key] = key === 'ae02Subscribe' ? Promise.resolve(true) : 12345;
+        else if (v instanceof Set) used[key] = new Set([7]);
+        else if (Array.isArray(v)) used[key] = [7];
         else throw new Error(`no dirty value for field ${key} (${typeof v}); extend this test`);
       }
 

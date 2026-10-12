@@ -1,4 +1,15 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { QnScaleAdapter } from '../../src/scales/qn-scale/index.js';
+import { NINETEEN_BYTE_RESULT_HOLD_MS } from '../../src/scales/qn-scale/constants.js';
+import { bleLog } from '../../src/ble/types.js';
+import { isHistoricalReading } from '../../src/interfaces/reading-time.js';
+import type {
+  AdapterRuntimeConfig,
+  ConnectionContext,
+  ScaleReading,
+  UserProfile,
+} from '../../src/interfaces/scale-adapter.js';
+import { defaultProfile } from '../helpers/scale-test-utils.js';
 import {
   decodeEightResult,
   decodeEightStoredRecord,
@@ -85,6 +96,47 @@ const R07_FULL = {
   S24: patched(R07.S24, 3, ...R07.C15.subarray(3, 15), ...R07.P3.subarray(15, 18)),
   S25: patched(R07.S25, 3, ...R07.D16.subarray(3, 15)),
 };
+
+/**
+ * The session frames around them, from the same two logs: 2026-10-06 lines
+ * 43, 145, 173, 211, 235 and 391 (scale info, ready, config request, the
+ * scale's acceptance of our profile, a measuring frame, the stable frame);
+ * 2026-10-07 lines 53, 107, 137 and 175.
+ */
+const R06_SESSION = {
+  INFO: hex('12 13 ff 54 0b 04 00 07 ff 15 0f 27 00 00 05 03 e0 6f 2f'),
+  READY: hex('14 0b ff 01 00 01 00 00 00 00 20'),
+  CONFIG_REQ: hex('21 05 ff 01 26'),
+  VISIT_OK: hex('a1 06 02 01 01 ab'),
+  MEASURING: hex('10 14 01 00 11 1e 05 00 00 00 00 00 00 00 00 00 00 00 00 59'),
+  STABLE: hex('10 14 01 01 11 1e 05 00 00 00 00 00 00 00 00 00 00 00 00 5a'),
+};
+const R07_SESSION = {
+  INFO: hex('12 13 ff 54 0b 04 00 07 ff 15 0f 27 00 01 05 03 e0 6f 30'),
+  READY: R06_SESSION.READY,
+  CONFIG_REQ: R06_SESSION.CONFIG_REQ,
+  VISIT_OK: R06_SESSION.VISIT_OK,
+};
+/** The 2026-10-07 session's own 0x20 time (line 113, `20 09 ff 6c 61 59 32 08 88`). */
+const R07_CONNECTED = '2026-10-07T20:00:44.000Z';
+/** The time R07's stored record carries: 199 s before that. */
+const R07_RECORD_AT = '2026-10-07T19:57:25.000Z';
+
+const R07_STORED = [R07.S1, R07.S2, R07.S3, R07.S24, R07.S25];
+const R07_LIVE = [R07.P1, R07.P2, R07.P3, R07.C15, R07.D16];
+
+/**
+ * Derived: R07's stored record moved to another time and made record `index`
+ * of a batch of `count`, checksums recomputed.
+ */
+function storedRecordAt(iso: string, index = 1, count = 1): Buffer[] {
+  const t = Math.round(new Date(iso).getTime() / 1000) - 946684800;
+  const s1 = Buffer.from(R07.S1);
+  s1[2] = count;
+  s1[3] = index;
+  s1.writeUInt32LE(t, 5);
+  return [withSum(s1), patched(R07.S2, 3, index), patched(R07.S3, 3, index), R07.S24, R07.S25];
+}
 
 const R06_RESULT = {
   slot: 1,
@@ -278,3 +330,236 @@ function zeroComposition() {
     bodyShape: 0,
   };
 }
+
+interface SessionOptions {
+  /** Wall clock when the session opens. */
+  now: string;
+  info?: Buffer;
+  profile?: Partial<UserProfile>;
+  config?: AdapterRuntimeConfig;
+}
+
+/**
+ * One 19-byte session in transport order with `qn_weight_ack` on (both
+ * reporters' config): scale info, ready, config request, then 2 s for the
+ * profile frame, 0x22 and the anchors to go out. Every write is collected.
+ * The caller runs fake timers.
+ */
+async function openSession(adapter: QnScaleAdapter, opts: SessionOptions) {
+  vi.setSystemTime(new Date(opts.now));
+  const writes: number[][] = [];
+  const ctx = {
+    write: async (_uuid: string, data: Buffer | number[]) => {
+      writes.push([...data]);
+    },
+    read: async () => Buffer.alloc(0),
+    subscribe: async () => {},
+    profile: defaultProfile({ lastKnownWeight: 76, ...opts.profile }),
+    deviceAddress: '',
+    availableChars: new Set<string>(),
+  } as unknown as ConnectionContext;
+  adapter.configure(opts.config ?? { qnWeightAck: true });
+  adapter.onSessionStart();
+  await adapter.onConnected(ctx);
+  adapter.parseNotification(opts.info ?? R07_SESSION.INFO);
+  adapter.parseNotification(R07_SESSION.READY);
+  adapter.parseNotification(R07_SESSION.CONFIG_REQ);
+  await vi.advanceTimersByTimeAsync(2000);
+  /** Every frame in order; the readings they return, nulls included. */
+  const feed = (...frames: Buffer[]): (ScaleReading | null)[] =>
+    frames.map((f) => adapter.parseNotification(f));
+  const starts = (): number => writes.filter((w) => w[0] === 0x22).length;
+  return { writes, feed, starts };
+}
+
+function spyLines(level: 'debug' | 'info') {
+  const spy = vi.spyOn(bleLog, level).mockImplementation(() => {});
+  return {
+    lines: (): string[] => spy.mock.calls.map((c) => String(c[0])),
+    restore: () => spy.mockRestore(),
+  };
+}
+
+describe('QN 19-byte stored records (#331)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  // The 2026-10-07 log: the scale handed over a weigh-in from 199 s before the
+  // connect as five frames, which the adapter read as five empty records and
+  // answered with re-queries.
+  it('reports a fresh stored record once, with its own time, held, without a re-query', async () => {
+    const adapter = new QnScaleAdapter();
+    const s = await openSession(adapter, { now: R07_CONNECTED });
+    expect(s.starts()).toBe(1);
+    const out = s.feed(R07_SESSION.VISIT_OK, ...R07_STORED);
+    expect(out.slice(0, 5)).toEqual([null, null, null, null, null]);
+    const reading = out[5]!;
+    expect(reading).toEqual({ weight: 76.55, impedance: 0, timestamp: new Date(R07_RECORD_AT) });
+    expect(isHistoricalReading(reading)).toBe(false);
+    expect(adapter.isFinal(reading)).toBe(false);
+    expect(adapter.completionHoldMs).toBe(NINETEEN_BYTE_RESULT_HOLD_MS);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(s.starts()).toBe(1);
+  });
+
+  it('reports an older stored record as history, without holding the link', async () => {
+    const adapter = new QnScaleAdapter();
+    const s = await openSession(adapter, { now: '2026-10-07T20:10:00Z' });
+    const reading = s.feed(...R07_STORED)[4]!;
+    expect(reading).toEqual({ weight: 76.55, impedance: 0, timestamp: new Date(R07_RECORD_AT) });
+    expect(isHistoricalReading(reading)).toBe(true);
+    expect(adapter.completionHoldMs).toBeUndefined();
+  });
+
+  // The same log: the result block that follows the stored record is the
+  // session's own result, which replaces the held record.
+  it('lets the live result after a fresh stored record close the weigh-in', async () => {
+    const adapter = new QnScaleAdapter();
+    const s = await openSession(adapter, { now: R07_CONNECTED });
+    const stored = s.feed(...R07_STORED)[4]!;
+    const [part1, , , , done] = s.feed(...R07_LIVE);
+    expect(part1).toEqual({ weight: 76.55, impedance: 0 });
+    expect(adapter.isFinal(part1!)).toBe(false);
+    expect(done).toEqual({ weight: 76.55, impedance: 0 });
+    expect(adapter.isFinal(done!)).toBe(true);
+    expect(adapter.isFinal(stored)).toBe(false);
+  });
+
+  it('drops a fresh stored record while a live weight is held', async () => {
+    const info = spyLines('info');
+    const adapter = new QnScaleAdapter();
+    const s = await openSession(adapter, { now: '2026-10-07T19:58:25Z' });
+    expect(s.feed(R06_SESSION.STABLE)[0]).toEqual({ weight: 76.85, impedance: 0 });
+    expect(s.feed(...R07_STORED)[4]).toBeNull();
+    expect(info.lines().some((l) => l.includes('superseded by the weigh-in in progress'))).toBe(
+      true,
+    );
+  });
+
+  it('keeps the newest reported record as a mark that survives a restart', async () => {
+    const debug = spyLines('debug');
+    const first = new QnScaleAdapter();
+    let s = await openSession(first, { now: '2026-10-07T20:10:00Z' });
+    expect(s.feed(...R07_STORED)[4]).not.toBeNull();
+    expect(first.dedupMark()).toBe(844718245);
+
+    // The same adapter in its next session.
+    s = await openSession(first, { now: '2026-10-07T20:11:00Z' });
+    expect(s.feed(...R07_STORED)[4]).toBeNull();
+
+    // A new process with the mark restored.
+    const restored = new QnScaleAdapter();
+    restored.restoreDedupMark(844718245);
+    s = await openSession(restored, { now: '2026-10-07T20:12:00Z' });
+    expect(s.feed(...R07_STORED)[4]).toBeNull();
+    expect(debug.lines().filter((l) => l.includes('was already reported'))).toHaveLength(2);
+  });
+
+  it.each([
+    ['negative', -1],
+    ['not a number', Number.NaN],
+    ['not whole seconds', 844718245.5],
+    ['two days past now', 844718245 + 2 * 86_400 + 600],
+  ])('ignores a restored mark that is %s', async (_name, mark) => {
+    const adapter = new QnScaleAdapter();
+    vi.setSystemTime(new Date('2026-10-07T20:10:00Z'));
+    adapter.restoreDedupMark(mark);
+    expect(adapter.dedupMark()).toBeUndefined();
+    const s = await openSession(adapter, { now: '2026-10-07T20:10:00Z' });
+    expect(s.feed(...R07_STORED)[4]).not.toBeNull();
+  });
+
+  // The scale may hand over the weigh-in it just streamed as a stored record in
+  // the next session; a proxy reconnects within seconds.
+  it('drops a stored record that is the live result reported just before', async () => {
+    const debug = spyLines('debug');
+    const adapter = new QnScaleAdapter();
+    // Session 1 publishes 76.55 kg 30 s after the record's time.
+    let s = await openSession(adapter, { now: '2026-10-07T19:57:53Z' });
+    expect(s.feed(...R07_LIVE)[4]).toEqual({ weight: 76.55, impedance: 0 });
+    // Session 2 gets the same weigh-in as a stored record.
+    s = await openSession(adapter, { now: '2026-10-07T19:59:30Z' });
+    expect(s.feed(...R07_STORED)[4]).toBeNull();
+    expect(debug.lines().some((l) => l.includes('is the live result reported at'))).toBe(true);
+
+    // Without that live result the record goes out.
+    const other = new QnScaleAdapter();
+    s = await openSession(other, { now: '2026-10-07T19:59:30Z' });
+    expect(s.feed(...R07_STORED)[4]).not.toBeNull();
+  });
+
+  it('drops a record the scale assigned to no user, saying so', async () => {
+    const info = spyLines('info');
+    const adapter = new QnScaleAdapter();
+    const s = await openSession(adapter, { now: '2026-10-07T20:10:00Z' });
+    // Derived: R07's record with slot 0xf0.
+    const unassigned = [patched(R07.S1, 1, 0xf0), ...R07_STORED.slice(1)];
+    expect(s.feed(...unassigned)[4]).toBeNull();
+    expect(info.lines()).toContain(
+      `QN: a stored weigh-in (76.55 kg at 2026-10-07T19:57:25.000Z) is not exported: ` +
+        'the scale did not assign it to a user (#331)',
+    );
+  });
+
+  it.each([
+    ['5 minutes ahead of now', '2026-10-07T19:52:25Z'],
+    ['366 days old', '2027-10-08T19:57:25Z'],
+  ])('drops a record stamped %s', async (_name, now) => {
+    const adapter = new QnScaleAdapter();
+    const s = await openSession(adapter, { now });
+    expect(s.feed(...R07_STORED)[4]).toBeNull();
+  });
+
+  // A batch need not come in time order. Judged against a mark that moved with
+  // each record, the earlier record behind the later one would be dropped.
+  it('reports both records of a batch whose second one is the older', async () => {
+    const adapter = new QnScaleAdapter();
+    const s = await openSession(adapter, { now: '2026-10-07T21:00:00Z' });
+    const later = storedRecordAt('2026-10-07T19:58:25Z', 1, 2);
+    const earlier = storedRecordAt(R07_RECORD_AT, 2, 2);
+    const out = s.feed(...later, ...earlier);
+    expect(out[4]?.timestamp).toEqual(new Date('2026-10-07T19:58:25Z'));
+    expect(out[9]?.timestamp).toEqual(new Date(R07_RECORD_AT));
+    expect(adapter.dedupMark()).toBe(844718305);
+  });
+
+  it('drops a record whose parts come out of order', async () => {
+    const debug = spyLines('debug');
+    const adapter = new QnScaleAdapter();
+    const s = await openSession(adapter, { now: '2026-10-07T20:10:00Z' });
+    expect(s.feed(R07.S1, R07.S3, R07.S2, R07.S24, R07.S25)).toEqual(new Array(5).fill(null));
+    expect(debug.lines()).toContain(
+      'QN: stored-record part 3/3 out of order, record dropped (#331)',
+    );
+  });
+
+  // A result block that arrives with no measurement in its session and repeats
+  // a result already published is that weigh-in handed over again.
+  it('does not publish a repeated result block a second time', async () => {
+    const debug = spyLines('debug');
+    const adapter = new QnScaleAdapter();
+    let s = await openSession(adapter, { now: '2026-10-07T20:00:44Z' });
+    expect(s.feed(...R07_LIVE)[4]).toEqual({ weight: 76.55, impedance: 0 });
+
+    s = await openSession(adapter, { now: '2026-10-07T20:02:44Z' });
+    expect(s.feed(...R07_LIVE)).toEqual(new Array(5).fill(null));
+    expect(adapter.completionHoldMs).toBeUndefined();
+    expect(debug.lines().some((l) => l.includes('repeats the one reported at'))).toBe(true);
+
+    // Measured in this session: a new weigh-in, even at the same weight.
+    s = await openSession(adapter, { now: '2026-10-07T20:04:44Z' });
+    const measured = s.feed(R06_SESSION.MEASURING, ...R07_LIVE);
+    expect(measured[1]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(measured[5]).toEqual({ weight: 76.55, impedance: 0 });
+
+    // Another weight: a new weigh-in.
+    s = await openSession(adapter, { now: '2026-10-07T20:06:44Z' });
+    const other = s.feed(patched(R07.P1, 5, 0x1e, 0x05), ...R07_LIVE.slice(1));
+    expect(other[0]).toEqual({ weight: 76.85, impedance: 0 });
+  });
+});
