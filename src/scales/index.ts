@@ -9,6 +9,7 @@ import { Silvergear108Adapter } from './silvergear-108.js';
 import { SenssunIfB7Adapter } from './senssun-if-b7.js';
 import { OkokChipseaAdapter } from './okok-chipsea.js';
 import { EtekcityFit8sAdapter } from './etekcity-fit8s.js';
+import { PicoocMiniLiteAdapter } from './picooc-mini-lite.js';
 import { XiaomiS800Adapter } from './xiaomi-s800.js';
 import { XiaomiS400Adapter } from './xiaomi-s400.js';
 import { BeurerBf720Adapter } from './beurer-bf720.js';
@@ -86,6 +87,9 @@ export const adapters: ScaleAdapter[] = [
   // the 20-byte frame carrying the scale's own MAC (reversed), plus 0xFFD0 when the
   // transport reports services (#408).
   new EtekcityFit8sAdapter(),
+  // PICOOC Mini Lite: broadcast-only, claimed by its exact name PICOOC-L; its
+  // company id is its own address, so no id is declared (#408).
+  new PicoocMiniLiteAdapter(),
   new MiScale2Adapter(),
   // Xiaomi Mijia S800 (ms116): broadcast-only, matches FE95 + product id 0x51E2
   // or its own name; no collision with any other adapter (#232).

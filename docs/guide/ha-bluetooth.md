@@ -33,6 +33,7 @@ The transport is passive, so an adapter can only be served if it reads the weigh
 | **Grifema** GA2001 / **Senssun** IF_B7               | Weight only                                                                                                                      |
 | **OKOK** app scales (Chipsea broadcast)              | Weight only. Units without a name or named `Yoda0` / `Yoda1` need a scanner that forwards raw advertisements, see below          |
 | **Etekcity** Fit 8S                                  | Weight only                                                                                                                      |
+| **PICOOC** Mini Lite (`PICOOC-L`)                    | Weight only                                                                                                                      |
 | **Eufy** Smart Scale P2 (T9148) / P2 Pro (T9149)     | Weight only. The broadcast carries no impedance; the local adapter reads it over a connection                                    |
 | **Eufy** Smart Scale C20 (T9130) / P3 (T9150)        | Weight only. A P3 needs a scanner that forwards raw advertisements, see below                                                    |
 | **QN-Scale**, broadcast-only firmware                | Weight only. Only units that send the `AABB` broadcast (some Renpho ES-CS20M / Elis 1 variants); connectable QN scales need GATT |

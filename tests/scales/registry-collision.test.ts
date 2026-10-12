@@ -111,6 +111,16 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
       data: Buffer.from('01cea18c5789a8c0a8014e1a010e020100020300', 'hex'),
     },
   },
+  // Broadcast-only, claimed by its exact name. The real 82.00 kg advert from the
+  // nRF Connect log the owner attached to oliexdev/openScale#1512 (comment
+  // 5552649285, line 252, 2026-09-05 19:44:32.834): company id 0x49D0, which is
+  // the first two bytes of the unit's own address, then the rest of it at [0..3].
+  'PICOOC Mini Lite': {
+    localName: 'PICOOC-L',
+    address: 'D0:49:00:4B:4F:1E',
+    serviceUuids: [],
+    manufacturerData: { id: 0x49d0, data: Buffer.from('004b4f1e391f066813b08710000e', 'hex') },
+  },
   'Xiaomi Mi Scale 2': { localName: 'MIBFS', serviceUuids: [] },
   'Xiaomi Mijia Scale S800': { localName: 'Mijia Scale S800 A1AB', serviceUuids: [] },
   // Same FE95 service as the S800; the product id (0x3bd5 here) tells them apart.
@@ -200,6 +210,17 @@ describe('registry collision guard (#182)', () => {
       ).toBe(expected);
     },
   );
+
+  // #408: claimed by its exact name only, so it must not reach any other
+  // adapter's fixture, including those of adapters that outrank it.
+  it('PICOOC Mini Lite claims no fixture but its own', () => {
+    const picooc = adapters.find((a) => a.name === 'PICOOC Mini Lite');
+    expect(picooc).toBeDefined();
+    const claimed = Object.entries(FIXTURES)
+      .filter(([, info]) => picooc!.matches(info))
+      .map(([name]) => name);
+    expect(claimed).toEqual(['PICOOC Mini Lite']);
+  });
 
   it('has no fixture for an adapter that is not registered', () => {
     const registered = new Set(adapters.map((a) => a.name));

@@ -4,12 +4,12 @@ description: Every BLE smart scale brand and model supported by BLE Scale Sync.
 head:
   - - meta
     - name: keywords
-      content: koogeek scale, xiaomi mi scale, renpho scale bluetooth, eufy smart scale, yunmai scale, beurer bf scale, sanitas scale, medisana bs scale, silvercrest scale, 1byone scale, etekcity scale, inevifit scale, arboleaf scale, lepulse scale, fitdays scale, senssun scale, grifema scale, okok scale, chipsea scale, etekcity fit 8s, eufy c20, eufy p3, supported ble scales
+      content: koogeek scale, xiaomi mi scale, renpho scale bluetooth, eufy smart scale, yunmai scale, beurer bf scale, sanitas scale, medisana bs scale, silvercrest scale, 1byone scale, etekcity scale, inevifit scale, arboleaf scale, lepulse scale, fitdays scale, senssun scale, grifema scale, okok scale, chipsea scale, etekcity fit 8s, eufy c20, eufy p3, picooc scale, picooc mini lite, supported ble scales
 ---
 
 # Supported Scales
 
-**39 protocol adapters**, plus a Standard BT SIG catch-all for any spec-compliant scale. Most adapters cover several rebrands, so real coverage is wider than the count.
+**40 protocol adapters**, plus a Standard BT SIG catch-all for any spec-compliant scale. Most adapters cover several rebrands, so real coverage is wider than the count.
 
 ## Scale List
 
@@ -23,6 +23,7 @@ _Weight only_ means weight is reported normally but body composition is estimate
 | **Grifema** GA2001 / **Senssun** IF_B7                                         | Weight only      | Broadcast only; kg or lb display                                                                                                              |
 | **OKOK** (Chipsea broadcast): nameless, Yoda0 / Yoda1, `ADV`                   | Weight only      | Broadcast only; kg display only; a nameless unit needs `ble.scale_mac` on the default Linux transport                                         |
 | **Etekcity** Fit 8S                                                            | Weight only      | Broadcast only; nameless, so it needs `ble.scale_mac` on the default Linux transport                                                          |
+| **PICOOC** Mini Lite (`PICOOC-L`)                                              | Weight only      | Broadcast only; matched by its name                                                                                                           |
 | **Xiaomi** Mijia Body Composition Scale S800 (ms116)                           | Weight only      | Needs a per-device `ble.bind_key` from the Mi cloud                                                                                           |
 | **Xiaomi** Body Composition Scale S400 (MJTZC01YM)                             | Yes              | Needs a per-device `ble.bind_key` from the Mi cloud plus `ble.scale_mac`; weigh barefoot for impedance                                        |
 | **Renpho** ES-CS20M / ES-32MD / Elis 1 / FITINDEX / Sencor (QN-Scale)          | Yes              | The most common protocol; many rebrands                                                                                                       |
@@ -171,6 +172,18 @@ Weight only. The Fit 8S broadcasts its weigh-in without a name and without accep
 - **Any display unit.** The weight is read the same whether the scale shows kg, lb or st, as its owners report; no lb or st weigh-in has been captured yet.
 - **Stay on the scale.** The result is sent when the scale has finished measuring, about two seconds after the weight settles.
 - **No impedance.** The broadcast carries a field that looks like impedance, but it has not been compared with the body fat the VeSync app shows for the same weigh-in, so body composition is estimated from BMI (Deurenberg formula) and the field is logged in debug mode ([#408](https://github.com/KristianP26/ble-scale-sync/issues/408)).
+
+### **PICOOC** Mini Lite
+
+Weight only. The Mini Lite advertises as `PICOOC-L` and broadcasts each finished weigh-in for about seven seconds without accepting a connection; ble-scale-sync reads it from the broadcast.
+
+- **Matched by its name**, which is in every broadcast, so it needs no `ble.scale_mac` and works on macOS too. It is silent between weigh-ins, so to find it with `scan` or the setup wizard, step on the scale while the scan runs.
+- **Only the format seen so far.** The PICOOC app knows other broadcast formats under the same name. A frame in one of them is ignored with a warning in the log rather than read wrongly; please report it on [#408](https://github.com/KristianP26/ble-scale-sync/issues/408).
+- **Read as kg**, after checking it against the pound value the scale sends alongside. Every weigh-in seen so far was taken with the display on kg; if yours shows lb or jin, compare the first export with the display, or if nothing is exported, look for the warning in the log, and report it on #408.
+- **The same result twice.** The broadcast has no counter, so a result with the same weight (to 50 g) heard again within a minute of the last time it was heard counts as the same weigh-in.
+- **No impedance.** The broadcast carries a field that looks like impedance, but the PICOOC app computes body fat from it with a calibration it learns per person, and nobody has compared our formula with it, so body composition is estimated from BMI (Deurenberg formula) and the field is logged in debug mode.
+
+Other PICOOC scales, including the older PICOOC Mini, connect over Bluetooth (names such as `PICOOC-CQ` or `PICOOC-CC`) and are not supported yet ([#408](https://github.com/KristianP26/ble-scale-sync/issues/408)).
 
 ### **Active Era** BS-06 and other `AC 27` scales
 
