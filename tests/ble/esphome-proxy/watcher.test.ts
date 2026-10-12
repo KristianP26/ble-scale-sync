@@ -275,6 +275,34 @@ describe('ReadingWatcher config: weight unit, PIN removal, device name', () => {
     expect(seen).toEqual([{ pin: undefined, name: 'GATT-scale' }]);
     await watcher.stop();
   });
+
+  it('resolves the user profile again for every GATT session (#331)', async () => {
+    const anchors: Array<number | undefined> = [];
+    const adapter = {
+      ...gattAdapter(),
+      onConnected: async (ctx: Parameters<NonNullable<ScaleAdapter['onConnected']>>[0]) => {
+        anchors.push(ctx.profile.lastKnownWeight);
+      },
+    } as ScaleAdapter;
+    // The processor moves last_known_weight after every export; the watcher
+    // must not keep the value it had when it was built.
+    const weights = [85, 91.4];
+    const profile = vi.fn(() => ({
+      height: 180,
+      age: 40,
+      gender: 'male' as const,
+      isAthlete: false,
+      lastKnownWeight: weights.shift(),
+    }));
+    const watcher = new ReadingWatcher(config, [adapter], undefined, profile);
+    await watcher.start();
+    poolOf(watcher).emitAdvert(ADVERT, 'AA:BB:CC:DD:EE:13');
+    await watcher.nextReading();
+    poolOf(watcher).emitAdvert(ADVERT, 'AA:BB:CC:DD:EE:14');
+    await watcher.nextReading();
+    expect(anchors).toEqual([85, 91.4]);
+    await watcher.stop();
+  });
 });
 
 // #461: the proxy delivers the advertisement and its scan response as two

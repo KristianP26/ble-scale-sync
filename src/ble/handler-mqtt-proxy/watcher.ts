@@ -17,7 +17,8 @@ import {
   emitDeduped,
   readsFromAdvertisement,
 } from '../advertisement.js';
-import type { Watcher, WatcherConfig } from '../reading-source.js';
+import { currentProfile } from '../reading-source.js';
+import type { ProfileSource, Watcher, WatcherConfig } from '../reading-source.js';
 import {
   bleLog,
   withIdleTimeout,
@@ -77,7 +78,7 @@ export class ReadingWatcher implements Watcher {
   private adapters: ScaleAdapter[];
   private targetMac?: string;
   private config: MqttProxyConfig;
-  private profile?: UserProfile;
+  private profile?: ProfileSource;
   /**
    * Primary user's device auth (the Beurer consent PIN). Both GATT paths below
    * used to pass undefined, so an adapter that authenticates in onConnected saw
@@ -130,7 +131,7 @@ export class ReadingWatcher implements Watcher {
     config: MqttProxyConfig,
     adapters: ScaleAdapter[],
     targetMac?: string,
-    profile?: UserProfile,
+    profile?: ProfileSource,
     scaleAuth?: ScaleAuth,
     weightUnit?: WeightUnit,
   ) {
@@ -588,13 +589,15 @@ export class ReadingWatcher implements Watcher {
     // stale-reset (#201).
     try {
       client = await getOrCreatePersistentClient(this.config);
-      if (!this.profile) {
+      // Per session, not once at startup: the anchor moves with every export.
+      const current = currentProfile(this.profile);
+      if (!current) {
         bleLog.warn(
           'No user profile configured for GATT reading. Body composition will be inaccurate. ' +
             'Set a user profile in config.yaml to get correct results.',
         );
       }
-      const profile: UserProfile = this.profile ?? {
+      const profile: UserProfile = current ?? {
         height: 170,
         age: 30,
         gender: 'male',
@@ -768,12 +771,13 @@ export class ReadingWatcher implements Watcher {
         return;
       }
 
-      if (!this.profile) {
+      const current = currentProfile(this.profile);
+      if (!current) {
         bleLog.warn(
           'No user profile configured for GATT reading. Body composition will be inaccurate.',
         );
       }
-      const profile: UserProfile = this.profile ?? {
+      const profile: UserProfile = current ?? {
         height: 170,
         age: 30,
         gender: 'male',

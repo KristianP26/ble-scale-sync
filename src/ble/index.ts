@@ -1,9 +1,4 @@
-import type {
-  ScaleAdapter,
-  BodyComposition,
-  UserProfile,
-  ScaleAuth,
-} from '../interfaces/scale-adapter.js';
+import type { ScaleAdapter, BodyComposition, ScaleAuth } from '../interfaces/scale-adapter.js';
 import type {
   MqttProxyConfig,
   EsphomeProxyConfig,
@@ -12,7 +7,7 @@ import type {
 } from '../config/schema.js';
 import type { ScanOptions, ScanResult, BleHandlerName } from './types.js';
 import type { RawReading } from './shared.js';
-import type { Watcher } from './reading-source.js';
+import type { ProfileSource, Watcher } from './reading-source.js';
 import { bleLog, errMsg } from './types.js';
 import { ReadingWatcher } from './handler-mqtt-proxy/index.js';
 import { HANDLER_LABELS, rethrowAsTransportError } from './transport-availability.js';
@@ -149,7 +144,8 @@ export interface ReadingSourceOptions {
   haBluetooth?: HaBluetoothConfig;
   adapters: ScaleAdapter[];
   targetMac?: string;
-  profile: UserProfile;
+  /** Evaluated per GATT session when it is a function (#331). */
+  profile: ProfileSource;
   scaleAuth?: ScaleAuth;
   weightUnit?: WeightUnit;
 }
