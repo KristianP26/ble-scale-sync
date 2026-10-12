@@ -742,6 +742,22 @@ export function waitForRawReading(
       if (resolved) return;
       hold.clear();
       clearCaptureHold();
+      // A held live weigh-in wins over the stored records of the same session:
+      // finishWith hands them over as history. Checked first, because with the
+      // history branch first a scale that replays its memory and then
+      // disconnects while a live weight is held lost the live weight entirely
+      // (#331). hold.clear() above stops the timer only, the reading stays.
+      const held = hold.heldReading;
+      if (held) {
+        if (history.length > 0) {
+          bleLog.debug(
+            `Disconnected while holding a live reading; ${history.length} historical ` +
+              `reading(s) go out as history.`,
+          );
+        }
+        finishWith(held);
+        return;
+      }
       if (history.length > 0) {
         resolved = true;
         init.cleanup();
@@ -752,11 +768,6 @@ export function waitForRawReading(
             `no live frame.`,
         );
         resolve({ reading: latest, adapter, history: history.snapshot() });
-        return;
-      }
-      const held = hold.heldReading;
-      if (held) {
-        finishWith(held);
         return;
       }
       const r = lastCaptureReading;

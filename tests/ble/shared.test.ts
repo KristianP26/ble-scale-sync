@@ -1372,6 +1372,42 @@ describe('waitForRawReading() — per-frame ACK + completion hold', () => {
     expect(result.reading).toEqual({ weight: 83.4, impedance: 0 });
   });
 
+  // #331: a scale that replays a stored record and then disconnects while a
+  // live weight is held. The history branch ran first, so the session ended on
+  // the stored record and the live weigh-in was lost entirely.
+  it('keeps the held live reading on disconnect after a stored record, which goes to history', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const storedAt = new Date(Date.now() - 3_600_000);
+    const adapter = createLegacyAdapter({
+      completionHoldMs: 15000,
+      isComplete: vi.fn((r: ScaleReading) => r.weight > 0),
+      isFinal: vi.fn((r: ScaleReading) => r.impedance > 0),
+      parseNotification: vi.fn((data: Buffer) =>
+        data[0] === 0x01
+          ? { weight: 70.1, impedance: 0, timestamp: storedAt }
+          : { weight: 76.85, impedance: 0 },
+      ),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    notifyChar.triggerData(Buffer.from([0x01])); // stored record, an hour old
+    notifyChar.triggerData(Buffer.from([0x02])); // live weight, held
+    device.triggerDisconnect();
+
+    const result = await promise;
+    expect(result.reading).toEqual({ weight: 76.85, impedance: 0 });
+    expect(result.history).toEqual([{ weight: 70.1, impedance: 0, timestamp: storedAt }]);
+  });
+
   it('routes per-frame ACK through the characteristics[] write binding (not charWriteUuid)', async () => {
     const notifyChar = createMockChar();
     const writeChar = createMockChar();
