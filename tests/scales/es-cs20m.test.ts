@@ -823,6 +823,15 @@ const RESULT_SLOT_0 = '55aa18000d0101000000365601d60000000089';
 const RESULT_STATUS_2 = '55aa18000d0201090000365601d60000000093';
 /** Checksum off by one (the right one is 92). */
 const RESULT_BAD_SUM = '55aa18000d0101090000365601d60000000093';
+/** One byte longer, length field still 13; the checksum holds over the longer frame. */
+const RESULT_TOO_LONG = '55aa18000d0101090000365601d6000000000092';
+/** Length field 12 on the 19-byte frame. */
+const RESULT_LEN_12 = '55aa18000c0101090000365601d60000000091';
+/**
+ * Passes every check: the resistance times ten (4700 ohm), the scaling error
+ * the 150-1200 ohm band is there to catch.
+ */
+const RESULT_4700 = '55aa18000d01010900003656125c0000000029';
 
 /** The 25 weight frames of the second barefoot weigh-in, in log order. */
 const SECOND_WEIGH_IN = [
@@ -915,6 +924,13 @@ describe('EsCs20mAdapter 0x18 result (#436)', () => {
     expect(adapter.completionHoldMs).toBeUndefined();
   });
 
+  it('ignores a 0x18 whose length is not the 13-byte result', async () => {
+    const adapter = await connected();
+    expect(feed(adapter, [POWER_ON_436, W_139_10, RESULT_TOO_LONG])).toBeNull();
+    expect(adapter.parseNotification(hex(RESULT_LEN_12))).toBeNull();
+    expect(adapter.completionHoldMs).toBeUndefined();
+  });
+
   it('ignores weight frames after the 0x18 and exports the 0x18 on power-off', async () => {
     const adapter = await connected();
     const result = feed(adapter, [POWER_ON_436, W_139_10, RESULT_404])!;
@@ -974,6 +990,30 @@ describe('EsCs20mAdapter 0x18 result (#436)', () => {
       const p = defaultProfile();
       const result = feed(adapter, [POWER_ON_436, W_139_20, RESULT_SOCKS])!;
       expect(adapter.computeMetrics(result, p)).toEqual(buildPayload(139.2, 0, {}, p));
+    });
+
+    // The processor zeroes such a resistance before computeMetrics (D028); the
+    // adapter does not count on it.
+    it('keeps the BMI estimate for a 0x18 resistance outside 150-1200 ohm', async () => {
+      const adapter = await connected();
+      const p = defaultProfile();
+      const result = feed(adapter, [POWER_ON_436, W_139_10, RESULT_4700])!;
+      expect(result).toEqual({ weight: 139.1, impedance: 4700 });
+      expect(adapter.computeMetrics(result, p)).toEqual(buildPayload(139.1, 4700, {}, p));
+    });
+
+    // computeMetrics can run after the next session has started (#394), and
+    // that start drops the held result, so the reading itself has to carry it.
+    it('still computes BIA for a 0x18 reading after the next session has started', async () => {
+      const adapter = await connected();
+      const p = defaultProfile();
+      const result = feed(adapter, [POWER_ON_436, W_139_10, RESULT_470])!;
+      expect(adapter.parseNotification(hex(POWER_OFF_436))).toBe(result);
+      adapter.onSessionEnd!();
+      adapter.onSessionStart();
+      expect(adapter.computeMetrics(result, p)).toEqual(
+        buildPayload(139.1, 470, { fat: computeBiaFat(139.1, 470, p) }, p),
+      );
     });
 
     // Basic flavor (R-A016 normal-mode final, see the #376 status describe):
