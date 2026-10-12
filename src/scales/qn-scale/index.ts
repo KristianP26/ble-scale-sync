@@ -1511,9 +1511,10 @@ export class QnScaleAdapter
     msg2[12] = msg2.reduce((a, b) => a + b, 0) & 0xff;
     const profile = this.ctx?.profile;
     if (appProfile && profile) {
-      msg2 = buildUserProfileFrame(profile.age, profile.height);
+      msg2 = buildUserProfileFrame(profile.age, profile.height, profile.gender);
       bleLog.debug(
-        `QN: A00D profile frame with age ${msg2[7]}, height ${(msg2[8] << 8) | msg2[9]} mm ` +
+        `QN: A00D profile frame with age ${msg2[7]}, height ${(msg2[8] << 8) | msg2[9]} mm, ` +
+          `sex ${msg2[6] === 0x01 ? 'female' : 'male'} ` +
           `(ble.qn_weight_ack, 19-byte dialect, #331)`,
       );
     }

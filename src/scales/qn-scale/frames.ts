@@ -6,6 +6,8 @@
  * "consolidate". See the note on buildA2Frame in particular.
  */
 
+import type { Gender } from '../../interfaces/scale-adapter.js';
+
 /**
  * Build the extended-dialect measurement trigger for a weight anchor in kg.
  *
@@ -214,9 +216,9 @@ export const OPENSCALE_PROFILE_AGE = 33;
 export const OPENSCALE_PROFILE_HEIGHT_MM = 1720;
 
 /**
- * Build the A00D #2 user profile frame from an age and a height in cm.
+ * Build the A00D #2 user profile frame from an age, a height in cm and a sex.
  *
- *   a0 0d 02 01 03 e8 00 <age> <height mm, u16 BE> 04 02 <cs>
+ *   a0 0d 02 01 03 e8 <sex> <age> <height mm, u16 BE> 04 02 <cs>
  *
  * Two vendor-app captures send this shape with the app user's configured age
  * at [7] and height in millimetres at [8..9], from different apps and scales:
@@ -224,12 +226,20 @@ export const OPENSCALE_PROFILE_HEIGHT_MM = 1720;
  *   GE app (20-byte scale)       a0 0d 02 01 03 e8 00 1a 07 8a 04 02 4c
  *   Arboleaf app (19-byte scale) a0 0d 02 01 03 e8 00 33 07 1c 04 02 f7
  *
- * `03 e8`, `00` and `04 02` are the same in both and are NOT decoded, so they
- * are sent as captured. openScale sends the same shape with constants (age 33,
- * 1720 mm, `00 08` at [4..5]), and the one captured 19-byte scale answers
- * that with `a1 06 02 01 00` where the app gets `a1 06 02 01 01` (#331).
+ * Both app users are men, and [6] is `00` in both. Per the vendor's published
+ * SDK, [6] is the sex (0 male, 1 female), [3] the user slot, [4..5] a user key,
+ * [10] the body-fat algorithm and [11] a regional grade; `03 e8` and `04 02`
+ * are sent as captured. Before #331 [6] was always `00`, so the scale stored
+ * and computed every woman's profile as a man's. openScale sends the same
+ * shape with constants (age 33, 1720 mm, `00 08` at [4..5]), and the one
+ * captured 19-byte scale answers that with `a1 06 02 01 00` where the app gets
+ * `a1 06 02 01 01` (#331).
  */
-export function buildUserProfileFrame(age: number, heightCm: number): number[] {
+export function buildUserProfileFrame(
+  age: number,
+  heightCm: number,
+  gender: Gender = 'male',
+): number[] {
   const a = Number.isFinite(age)
     ? Math.min(0xff, Math.max(1, Math.round(age)))
     : OPENSCALE_PROFILE_AGE;
@@ -243,7 +253,7 @@ export function buildUserProfileFrame(age: number, heightCm: number): number[] {
     0x01,
     0x03,
     0xe8,
-    0x00,
+    gender === 'female' ? 0x01 : 0x00,
     a,
     (mm >> 8) & 0xff,
     mm & 0xff,

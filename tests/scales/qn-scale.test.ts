@@ -2134,6 +2134,21 @@ describe('AE02 dispatch (#75, #235)', () => {
       ]);
     });
 
+    it("sends the first user's sex in the profile frame (#331)", async () => {
+      const adapter = makeAdapter();
+      adapter.configure({ qnWeightAck: true, qnReportByte: 0xfe });
+      const writes = await driveHandshake(
+        adapter,
+        ARBOLEAF_2A_INFO,
+        defaultProfile({ age: 51, height: 182, gender: 'female', lastKnownWeight: 74.05 }),
+        arboleaf2a,
+      );
+      const female = [...PROFILE_2A];
+      female[6] = 0x01;
+      female[12] = (female[12] + 1) & 0xff;
+      expect(writes.filter((w) => w[0] === 0xa0 && w[2] === 0x02)).toEqual([female]);
+    });
+
     it.each([
       ['18-byte es26m', () => makeEs26mScaleInfo()],
       ['20-byte extended', () => makeExtendedScaleInfo()],
@@ -3408,6 +3423,18 @@ describe('buildUserProfileFrame (#331)', () => {
     expect(buildUserProfileFrame(26, 193)).toEqual([
       0xa0, 0x0d, 0x02, 0x01, 0x03, 0xe8, 0x00, 0x1a, 0x07, 0x8a, 0x04, 0x02, 0x4c,
     ]);
+  });
+
+  // [6] is the sex per the vendor's published SDK (0 male, 1 female). Both
+  // captures are of men; before #331 every profile went out as male.
+  it('sends the sex at [6], 0 for male and 1 for female', () => {
+    const male = buildUserProfileFrame(51, 182, 'male');
+    expect(male).toEqual(buildUserProfileFrame(51, 182));
+    const female = buildUserProfileFrame(51, 182, 'female');
+    expect(female[6]).toBe(0x01);
+    expect(female.slice(0, 6)).toEqual(male.slice(0, 6));
+    expect(female.slice(7, 12)).toEqual(male.slice(7, 12));
+    expect(female[12]).toBe((male[12] + 1) & 0xff);
   });
 
   it('rounds the height to whole millimetres and clamps the age to a byte', () => {
