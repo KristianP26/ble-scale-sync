@@ -45,6 +45,81 @@ describe('ActiveEraAdapter', () => {
     it('does not match by service UUID alone (removed to avoid MGB collision)', () => {
       expect(adapter.matches(mockPeripheral('Unknown', ['ffb0']))).toBe(false);
     });
+
+    // ALPHA Smart Scale PRO 3, openScale PR #1534, attachment
+    // hci_snoop20260920232857_btsnoop.log (sha256 3e512091...), capture 1 at
+    // 23:30:30.015. ADV_IND raw `0201060303b0ff10ffac273891018ed3e001010030000001`
+    // from public address E0:D3:8E:01:91:38; the scan response carries the name
+    // `MY_SCALE` (`09094d595f5343414c45`). The manufacturer payload starts with
+    // the device's own MAC, reversed.
+    describe('AC 27 advertisement (#458, #462, #466)', () => {
+      const ALPHA_MAC = 'E0:D3:8E:01:91:38';
+      const ALPHA_MSD = { id: 0x27ac, data: Buffer.from('3891018ed3e001010030000001', 'hex') };
+
+      it('claims the ALPHA in every shape a transport hands over', () => {
+        expectMatches(adapter, {
+          yes: [
+            // noble / proxies: ADV_IND and scan response merged
+            {
+              localName: 'MY_SCALE',
+              address: ALPHA_MAC,
+              serviceUuids: ['ffb0'],
+              manufacturerData: ALPHA_MSD,
+            },
+            // ESPHome proxy: the ADV_IND alone, no name
+            {
+              localName: '',
+              address: ALPHA_MAC,
+              serviceUuids: ['ffb0'],
+              manufacturerData: ALPHA_MSD,
+            },
+            // node-ble before connecting: name, MSD and address, no services
+            {
+              localName: 'MY_SCALE',
+              address: ALPHA_MAC,
+              serviceUuids: [],
+              manufacturerData: ALPHA_MSD,
+            },
+            // noble on macOS: no address, so the FFB0 service carries it
+            { localName: 'MY_SCALE', serviceUuids: ['ffb0'], manufacturerData: ALPHA_MSD },
+          ],
+        });
+      });
+
+      it('needs the company id and then the MAC echo or FFB0', () => {
+        expectMatches(adapter, {
+          no: [
+            // the scan response alone: a generic name and nothing else
+            { localName: 'MY_SCALE', address: ALPHA_MAC, serviceUuids: [] },
+            // the ALPHA's payload heard from another address, without FFB0:
+            // the echo does not hold and nothing else vouches for it
+            {
+              localName: '',
+              address: '98:F6:7A:00:22:64',
+              serviceUuids: [],
+              manufacturerData: ALPHA_MSD,
+            },
+            // the same, with no address at all
+            { localName: 'MY_SCALE', serviceUuids: [], manufacturerData: ALPHA_MSD },
+            // FFB0 without the company id (#278 Lefu SWAN, 0x02AC)
+            {
+              localName: 'SWAN',
+              serviceUuids: ['ffb0', 'd618'],
+              manufacturerData: { id: 0x02ac, data: Buffer.from('7eb893ecb30301', 'hex') },
+            },
+            // Silvergear 108, company id 0xA0AC and FFB0 (registry fixture)
+            {
+              localName: '108',
+              serviceUuids: ['ffb0'],
+              manufacturerData: {
+                id: 0xa0ac,
+                data: Buffer.from('4fe9916185a0202d07600da1', 'hex'),
+              },
+            },
+          ],
+        });
+      });
+    });
   });
 
   describe('parseNotification()', () => {

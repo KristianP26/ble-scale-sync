@@ -119,6 +119,12 @@ export function checkRegistryIntegrity(adapters: readonly ScaleAdapter[]): Regis
     // see this: it skips any pair where either side is custom.
     ['Robi S9', 'Hutbit'],
     ['Hutbit', 'MGB (Swan/Icomon/YG)'],
+    // An AC 27 scale advertises the 0x27AC company id and FFB0, and both MGB
+    // (bare FFB0) and Robi S9 (nameless FFB0 with FFB3) would otherwise claim
+    // it, then send an init it ignores and parse none of its frames (#458,
+    // #462, #466). Custom on both sides, so the overlap check below is silent.
+    ['Active Era BS-06', 'MGB (Swan/Icomon/YG)'],
+    ['Active Era BS-06', 'Robi S9'],
   ];
   for (const [hi, lo] of INVARIANTS) {
     const a = byName.get(hi);

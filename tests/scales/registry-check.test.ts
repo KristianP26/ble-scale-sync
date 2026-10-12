@@ -70,6 +70,28 @@ describe('registry-check structural guard (#182)', () => {
     ).toBe(true);
   });
 
+  // #458, #462, #466: an AC 27 scale carries FFB0, which MGB claims bare and
+  // Robi S9 claims nameless; Active Era must outrank both.
+  it.each(['MGB (Swan/Icomon/YG)', 'Robi S9'])(
+    'flags Active Era BS-06 not outranking %s',
+    (lower) => {
+      const reg = [
+        fake('Active Era BS-06', 10, { custom: true }),
+        fake(lower, 90, { custom: true }),
+        new StandardGattScaleAdapter(),
+      ];
+      const { errors } = checkRegistryIntegrity(reg);
+      expect(
+        errors.some(
+          (e) =>
+            e.includes('Ordering invariant violated') &&
+            e.includes('"Active Era BS-06"') &&
+            e.includes(`"${lower}"`),
+        ),
+      ).toBe(true);
+    },
+  );
+
   it('flags a registered adapter that lacks a match descriptor', () => {
     const reg = [{ name: 'NoMatch' } as unknown as ScaleAdapter, new StandardGattScaleAdapter()];
     const { errors } = checkRegistryIntegrity(reg);

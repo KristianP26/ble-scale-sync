@@ -182,6 +182,112 @@ describe('registry collision guard (#182)', () => {
 });
 
 /**
+ * AC 27 family (#458, #462, #466): Active Era must win the FFB0 advertisement
+ * when it carries the 0x27AC company id, ahead of MGB's bare FFB0 claim.
+ *
+ * The bytes are the ALPHA Smart Scale PRO 3 advertisement from openScale PR
+ * #1534 (hci_snoop20260920232857_btsnoop.log, sha256 3e512091..., capture 1
+ * 23:30:30.015): ADV_IND `0201060303b0ff10ffac273891018ed3e001010030000001`
+ * from E0:D3:8E:01:91:38, scan response name `MY_SCALE`. The Runstar
+ * FG2431WB (#466) reports the same company id and FFB0, but its payload is
+ * not public, so no fixture pretends to know it: where a case needs a payload
+ * WITHOUT the MAC echo, it is the ALPHA payload heard from another address
+ * (the #466 one), and the entry says so.
+ */
+const ALPHA_MAC = 'E0:D3:8E:01:91:38';
+const ALPHA_MSD = { id: 0x27ac, data: Buffer.from('3891018ed3e001010030000001', 'hex') };
+const OTHER_MAC = '98:F6:7A:00:22:64'; // #466, public in the issue body
+const AE = 'Active Era BS-06';
+
+const AC27_ADVERTS: Array<{ label: string; info: BleDeviceInfo; expected: string | undefined }> = [
+  {
+    label: 'ALPHA, ADV_IND + scan response (noble, proxies)',
+    info: {
+      localName: 'MY_SCALE',
+      address: ALPHA_MAC,
+      serviceUuids: ['ffb0'],
+      manufacturerData: ALPHA_MSD,
+    },
+    expected: AE,
+  },
+  {
+    label: 'ALPHA, ADV_IND only (ESPHome proxy, no name)',
+    info: {
+      localName: '',
+      address: ALPHA_MAC,
+      serviceUuids: ['ffb0'],
+      manufacturerData: ALPHA_MSD,
+    },
+    expected: AE,
+  },
+  {
+    label: 'ALPHA, node-ble before connecting (MAC echo, no services)',
+    info: {
+      localName: 'MY_SCALE',
+      address: ALPHA_MAC,
+      serviceUuids: [],
+      manufacturerData: ALPHA_MSD,
+    },
+    expected: AE,
+  },
+  // T2: the "0x27AC + FFB0, no echo" branch, the shape noble on macOS hands over
+  {
+    label: 'ALPHA, noble on macOS (no address)',
+    info: { localName: 'MY_SCALE', serviceUuids: ['ffb0'], manufacturerData: ALPHA_MSD },
+    expected: AE,
+  },
+  {
+    label: 'ALPHA, scan response only (a generic name, nothing else)',
+    info: { localName: 'MY_SCALE', address: ALPHA_MAC, serviceUuids: [] },
+    expected: undefined,
+  },
+  {
+    label: 'ALPHA payload from another address, no FFB0 (no echo, nothing vouches)',
+    info: { localName: '', address: OTHER_MAC, serviceUuids: [], manufacturerData: ALPHA_MSD },
+    expected: undefined,
+  },
+  // Accepted and pinned (plan review F8): no captured Robi, Hutbit, Speediance or
+  // MGB advertisement carries 0x27AC, and a 0x27AC unit speaks AC 27. If a named
+  // neighbour ever shows up with it, the fix is a bow-out on its name.
+  {
+    label: 'named "Robi S9" with the ALPHA company id and FFB0',
+    info: { localName: 'Robi S9', serviceUuids: ['ffb0'], manufacturerData: ALPHA_MSD },
+    expected: AE,
+  },
+  {
+    label: 'named "icomon" with the ALPHA company id and FFB0',
+    info: { localName: 'icomon', serviceUuids: ['ffb0'], manufacturerData: ALPHA_MSD },
+    expected: AE,
+  },
+  // The neighbours that must not move.
+  {
+    label: 'Lefu SWAN 0x02AC + FFB0 (#278) stays Hutbit',
+    info: {
+      localName: 'SWAN',
+      serviceUuids: ['ffb0', 'd618'],
+      manufacturerData: { id: 0x02ac, data: Buffer.from('7eb893ecb30301', 'hex') },
+    },
+    expected: 'Hutbit',
+  },
+  {
+    label: 'Silvergear 108 0xA0AC + FFB0 stays Silvergear',
+    info: FIXTURES['Silvergear Smart Scale 108'],
+    expected: 'Silvergear Smart Scale 108',
+  },
+  {
+    label: 'bare FFB0, no company id, stays MGB',
+    info: { localName: '', serviceUuids: ['ffb0'] },
+    expected: 'MGB (Swan/Icomon/YG)',
+  },
+];
+
+describe('AC 27 advertisements (#458, #462, #466)', () => {
+  it.each(AC27_ADVERTS)('$label', ({ info, expected }) => {
+    expect(resolveAdapter(info, adapters)?.name).toBe(expected);
+  });
+});
+
+/**
  * Post-discovery collision guard.
  *
  * The table above is advertisements only. On the connect paths the resolver
@@ -291,6 +397,45 @@ const POST_DISCOVERY: PostDiscoveryCase[] = [
       advertisedServicesKnown: false,
     },
     expected: 'Hutbit',
+  },
+  // AC 27 family (#458, #462, #466), ALPHA bytes from openScale PR #1534 (see
+  // AC27_ADVERTS above). GATT: FFB0 hosting FFB2 notify and FFB1 write, the
+  // handles 0x0e/0x11 of the ALPHA capture and of the #466 log.
+  {
+    label: 'ALPHA on node-ble with scale_mac (target MAC, services unknown)',
+    advertised: {
+      localName: 'MY_SCALE',
+      address: ALPHA_MAC,
+      serviceUuids: [],
+      manufacturerData: ALPHA_MSD,
+    },
+    gatt: {
+      serviceUuids: [0xffb0, 0x1800, 0x1801].map(uuid16),
+      characteristicUuids: [0xffb1, 0xffb2].map(uuid16),
+      advertisedServicesKnown: false,
+    },
+    expected: AE,
+  },
+  {
+    label: 'AC 27 over the ESPHome proxy, payload without the echo (#466 shape)',
+    advertised: {
+      localName: '',
+      address: OTHER_MAC,
+      serviceUuids: ['ffb0'],
+      manufacturerData: ALPHA_MSD,
+    },
+    gatt: { serviceUuids: [uuid16(0xffb0)], characteristicUuids: [0xffb1, 0xffb2].map(uuid16) },
+    expected: AE,
+  },
+  {
+    label: 'AC 27 named "icomon" on node-ble (MGB name, 0x27AC company id)',
+    advertised: { localName: 'icomon', serviceUuids: [], manufacturerData: ALPHA_MSD },
+    gatt: {
+      serviceUuids: [uuid16(0xffb0)],
+      characteristicUuids: [0xffb1, 0xffb2].map(uuid16),
+      advertisedServicesKnown: false,
+    },
+    expected: AE,
   },
   {
     label: 'nameless Robi S9 (ffb0 advertised, ffb3 discovered)',

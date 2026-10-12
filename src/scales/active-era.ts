@@ -8,7 +8,12 @@ import type {
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
 import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
-import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
+import {
+  nameClaimHits,
+  ownAddressBytes,
+  uuidClaimHits,
+  type MatchDescriptor,
+} from './match-descriptor.js';
 import { bleLog } from '../ble/types.js';
 
 /**
@@ -26,9 +31,36 @@ import { bleLog } from '../ble/types.js';
  *
  * Weight and impedance are cached across frames.
  */
+/**
+ * Company id the AC 27 family advertises. It is not assigned by the Bluetooth
+ * SIG; it is the frame header `AC 27` read as a little-endian u16, the same
+ * pattern as the Lefu `0x02AC` (frames `AC 02`) and the Silvergear `0xA0AC`.
+ */
+const AC27_COMPANY_ID = 0x27ac;
+
 export class ActiveEraAdapter implements ScaleAdapterCore, GattWiring, Unlockable {
+  /**
+   * Kept although the adapter now reads the whole AC 27 family (ALPHA Smart
+   * Scale PRO 3, Runstar FG2431WB, Femmto BCS13): the name is the key of
+   * `ble.force_scale_adapter`, which owners already use (#458).
+   */
   readonly name = 'Active Era BS-06';
-  readonly match: MatchDescriptor = { priority: 50, names: { includes: ['ae bs-06'] } };
+  /**
+   * `custom` because `matches()` needs the company id AND (an echo of the
+   * device's own MAC or the advertised FFB0 service), which a descriptor cannot
+   * say. Priority 50 puts it above every other FFB0 claimant (Speediance 45,
+   * Robi S9 40, Hutbit 35, MGB 30), which `registry-check.ts` pins.
+   * `manufacturerId` makes `resolveAfterDiscovery` treat the company id as
+   * advertisement evidence, so an AC 27 scale named `icomon` stays here after
+   * GATT discovery instead of falling back to MGB.
+   */
+  readonly match: MatchDescriptor = {
+    priority: 50,
+    custom: true,
+    names: { includes: ['ae bs-06'] },
+    serviceUuids: ['ffb0'],
+    manufacturerId: AC27_COMPANY_ID,
+  };
   readonly charNotifyUuid = uuid16(0xffb2);
   readonly charWriteUuid = uuid16(0xffb1);
   readonly normalizesWeight = true;
@@ -42,8 +74,28 @@ export class ActiveEraAdapter implements ScaleAdapterCore, GattWiring, Unlockabl
   private cachedWeight = 0;
   private cachedImpedance = 0;
 
+  /**
+   * The BS-06 name, or the AC 27 advertisement (#458, #462, #466).
+   *
+   * The ALPHA Smart Scale PRO 3 (openScale PR #1534 capture) advertises FFB0
+   * and manufacturer data `0x27AC` whose first six bytes are its own MAC,
+   * reversed; the Runstar FG2431WB (#466) reports the same company id and FFB0.
+   * The bare company id is not enough on its own (D044): it needs either the
+   * MAC echo, which a device that is not this scale will not carry by
+   * accident, or the FFB0 service this family is reached through. The echo is
+   * what lets node-ble pick the scale before connecting, since that transport
+   * does not see advertised services.
+   */
   matches(device: BleDeviceInfo): boolean {
-    return matchesDescriptor(device, this.match);
+    if (nameClaimHits(this.match, device.localName)) return true;
+    const m = device.manufacturerData;
+    if (m?.id !== AC27_COMPANY_ID) return false;
+    const own = ownAddressBytes(device.address);
+    if (own && m.data.length >= 6) {
+      const echoed = Buffer.from(m.data.subarray(0, 6)).reverse().toString('hex').toUpperCase();
+      if (echoed === own) return true;
+    }
+    return uuidClaimHits(['ffb0'], device.serviceUuids);
   }
 
   parseNotification(data: Buffer): ScaleReading | null {
