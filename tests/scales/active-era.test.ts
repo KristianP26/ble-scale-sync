@@ -1,7 +1,14 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { ActiveEraAdapter, isAc27Frame, ac27ImpedanceOhm } from '../../src/scales/active-era.js';
+import {
+  ActiveEraAdapter,
+  AC27_DF01,
+  buildAc27Profile,
+  isAc27Frame,
+  ac27ImpedanceOhm,
+} from '../../src/scales/active-era.js';
 import { wla07 } from '../../src/scales/wla07.js';
-import type { ScaleReading } from '../../src/interfaces/scale-adapter.js';
+import type { ConnectionContext, ScaleReading } from '../../src/interfaces/scale-adapter.js';
+import { bleLog } from '../../src/ble/types.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -27,6 +34,7 @@ import {
   hex,
   parseDump,
   received,
+  timed,
   type TimedFrame,
 } from '../helpers/ac27-captures.js';
 
@@ -559,5 +567,100 @@ describe('ActiveEraAdapter: raw impedance is observable (#386)', () => {
     expect(logged()).toContain('raw=469');
     expect(logged()).toContain('below the 1500 correction gate');
     expect(logged()).toContain('weight 88.97 kg from the D6');
+  });
+});
+
+/**
+ * The FitDays handshake, byte for byte from the openScale PR #1534 captures:
+ * after subscribing, D0 profile, `DF 01`, D0 profile, all as Write Requests,
+ * and `AC 27 04 D6 .. DF B9` after each D6.
+ */
+describe('ActiveEraAdapter: FitDays profile handshake (#462, #466)', () => {
+  const tx = (lines: typeof ALPHA_HANDSHAKE): Buffer[] =>
+    lines.filter(([, d]) => d === 'tx').map(([, , h]) => hex(h));
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('builds the D0 profile frames of both captures', () => {
+    // capture 1, 23:30:31.978 (the first D0 of the tester's own profile)
+    expect(buildAc27Profile(0x6ab05077, 165, 31, 'female')).toEqual(
+      hex('AC 27 6A B0 50 77 08 00 00 A5 00 00 1F 02 00 00 03 00 D0 82'),
+    );
+    // capture 2, 23:55:03.158
+    expect(buildAc27Profile(0x6ab05637, 165, 31, 'female')).toEqual(tx(ALPHA_HANDSHAKE)[0]);
+    expect(AC27_DF01).toEqual(tx(ALPHA_HANDSHAKE)[3]);
+  });
+
+  it('writes D0, DF 01, D0 with response, from the profile and the clock', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0x6ab05637 * 1000); // the scale clock FitDays sent at 23:55:03
+    const writes: Array<{ uuid: string; data: Buffer; withResponse?: boolean }> = [];
+    const ctx = {
+      profile: { height: 165, age: 31, gender: 'female', isAthlete: false },
+      write: async (uuid: string, data: Buffer | number[], withResponse?: boolean) => {
+        writes.push({ uuid, data: Buffer.from(data), withResponse });
+      },
+    } as unknown as ConnectionContext;
+    await new ActiveEraAdapter().onConnected(ctx);
+    const captured = tx(ALPHA_HANDSHAKE);
+    expect(writes.map((w) => w.data)).toEqual([captured[0], captured[3], captured[4]]);
+    expect(writes.every((w) => w.withResponse === true)).toBe(true);
+    expect(writes.every((w) => w.uuid === new ActiveEraAdapter().charWriteUuid)).toBe(true);
+  });
+
+  // [7] is 00 in the captures (the scale showed kg). openScale's BS-06
+  // handler writes the display unit there: 1 lb, 2 st.
+  it.each([
+    ['lbs', 1],
+    ['st', 2],
+  ] as const)('puts display_unit %s into [7] (%i)', async (unit, byte) => {
+    const a = new ActiveEraAdapter();
+    a.configure({ displayUnit: unit });
+    const writes: Buffer[] = [];
+    const ctx = {
+      profile: { height: 165, age: 31, gender: 'female', isAthlete: false },
+      write: async (_u: string, data: Buffer | number[]) => {
+        writes.push(Buffer.from(data));
+      },
+    } as unknown as ConnectionContext;
+    await a.onConnected(ctx);
+    expect(writes[0][7]).toBe(byte);
+    const sum = [...writes[0].subarray(2, 19)].reduce((x, y) => x + y, 0) & 0xff;
+    expect(writes[0][19]).toBe(sum);
+  });
+
+  it('carries on when the scale refuses the profile write', async () => {
+    const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    const ctx = {
+      profile: { height: 175, age: 49, gender: 'male', isAthlete: false },
+      write: async () => {
+        throw new Error('Write not permitted');
+      },
+    } as unknown as ConnectionContext;
+    await expect(new ActiveEraAdapter().onConnected(ctx)).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('acknowledges a D6 as FitDays does, and nothing else', () => {
+    const a = new ActiveEraAdapter();
+    const lines = timed(ALPHA_HANDSHAKE);
+    const d6 = lines.findIndex((f) => f.dir === 'rx' && f.frame[18] === 0xd6);
+    expect(a.buildAck(lines[d6].frame)).toEqual(lines[d6 + 1].frame); // ac 27 04 d6 .. df b9
+    // A D8 is left unacknowledged, so the scale keeps it for the vendor app.
+    const d8 = received(ALPHA_STORED).find((f) => f.frame[18] === 0xd8)!.frame;
+    expect(a.buildAck(d8)).toBeNull();
+    expect(a.buildAck(lines.find((f) => f.dir === 'rx')!.frame)).toBeNull(); // D5
+    const bad = Buffer.from(lines[d6].frame);
+    bad[19] ^= 0x01; // [19] changed 0x0c -> 0x0d, checksum no longer matches
+    expect(a.buildAck(bad)).toBeNull();
+  });
+
+  it('no longer sends the all-zero unlock frame', () => {
+    const a = new ActiveEraAdapter() as unknown as Record<string, unknown>;
+    expect(a.unlockCommand).toBeUndefined();
+    expect(a.unlockIntervalMs).toBeUndefined();
   });
 });

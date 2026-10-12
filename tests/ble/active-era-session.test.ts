@@ -6,6 +6,7 @@ import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import { ActiveEraAdapter } from '../../src/scales/active-era.js';
 import type { ScaleReading, UserProfile } from '../../src/interfaces/scale-adapter.js';
 import {
+  ALPHA_HANDSHAKE,
   ALPHA_LOCK_D6,
   ALPHA_LOCK_D6_NO_IMPEDANCE,
   ALPHA_NO_WRITE,
@@ -14,6 +15,7 @@ import {
   OPENSCALE_1358,
   parseDump,
   received,
+  timed,
   type TimedFrame,
 } from '../helpers/ac27-captures.js';
 
@@ -31,8 +33,11 @@ const PROFILE: UserProfile = { height: 175, age: 49, gender: 'male', isAthlete: 
 interface MockChar extends BleChar {
   push(data: Buffer): void;
   subscribed: boolean;
-  written: Buffer[];
+  written: Array<{ data: Buffer; withResponse: boolean }>;
 }
+
+/** What reached the link, in order: a completed subscribe or a write. */
+let events: string[] = [];
 
 function mockChar(): MockChar {
   let onData: ((data: Buffer) => void) | null = null;
@@ -42,12 +47,16 @@ function mockChar(): MockChar {
     subscribe: vi.fn(async (cb) => {
       c.subscribed = true;
       onData = cb;
+      // A real CCCD write takes a round trip; a write issued meanwhile lands first.
+      await Promise.resolve();
+      events.push('subscribed');
       return () => {
         onData = null;
       };
     }),
-    write: vi.fn(async (data: Buffer) => {
-      c.written.push(Buffer.from(data));
+    write: vi.fn(async (data: Buffer, withResponse: boolean) => {
+      events.push('write');
+      c.written.push({ data: Buffer.from(data), withResponse });
     }),
     read: vi.fn(async () => Buffer.alloc(0)),
     push: (data) => onData?.(data),
@@ -66,7 +75,8 @@ function mockDevice(): BleDevice & { disconnect: () => void } {
   return { onDisconnect: (f) => (cb = f), fireDisconnect: fire, disconnect: fire };
 }
 
-async function startSession() {
+async function startSession(profile: UserProfile = PROFILE) {
+  events = [];
   const notify = mockChar();
   const write = mockChar();
   const device = mockDevice();
@@ -75,7 +85,7 @@ async function startSession() {
     [normalizeUuid(uuid16(0xffb1)), write],
   ]);
   const adapter = new ActiveEraAdapter();
-  const promise = waitForRawReading(charMap, device, adapter, PROFILE, 'E0D38E019138');
+  const promise = waitForRawReading(charMap, device, adapter, profile, 'E0D38E019138');
   let result: ScaleReading | null = null;
   let settled = false;
   void promise.then(
@@ -201,5 +211,20 @@ describe('AC 27 weigh-ins through waitForRawReading (#458, #462, #466)', () => {
     s.device.disconnect();
     await vi.advanceTimersByTimeAsync(0);
     expect(s.reading()).toEqual({ weight: 88.58, impedance: 0 });
+  });
+
+  // The FitDays order: subscribe first, then D0, DF 01, D0; ACK after the D6.
+  it('writes the profile after subscribing and acknowledges the D6', async () => {
+    vi.setSystemTime(0x6ab05637 * 1000); // the scale clock FitDays sent at 23:55:03
+    // the fake profile the openScale PR #1534 tester entered in FitDays
+    const s = await startSession({ height: 165, age: 31, gender: 'female', isAthlete: false });
+    const captured = timed(ALPHA_HANDSHAKE)
+      .filter((f) => f.dir === 'tx')
+      .map((f) => f.frame);
+    expect(s.write.written.map((w) => w.data)).toEqual([captured[0], captured[3], captured[4]]);
+    expect(events.slice(0, 2)).toEqual(['subscribed', 'write']);
+    await s.play(received(ALPHA_HANDSHAKE));
+    expect(s.reading()).toEqual({ weight: 88.95, impedance: 469 });
+    expect(s.write.written.at(-1)).toEqual({ data: captured.at(-1), withResponse: true });
   });
 });

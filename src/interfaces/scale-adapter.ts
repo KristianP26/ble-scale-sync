@@ -257,8 +257,9 @@ export interface AdapterRuntimeConfig {
    * Unit to ask the scale's own display to show (`scale.display_unit`, with its
    * `weight_unit` default already resolved by resolveDisplayUnit). Independent of
    * the unit readings are exported in. Adapters whose protocol tells the scale
-   * which unit to show (today only the QN 0x13 config command) honour it so a
-   * read does not flip the display (#269, #429). Ignored by every other adapter.
+   * which unit to show (the QN 0x13 config command, the AC 27 D0 profile frame)
+   * honour it so a read does not flip the display (#269, #429). Ignored by every
+   * other adapter.
    */
   displayUnit?: ScaleDisplayUnit;
   /**

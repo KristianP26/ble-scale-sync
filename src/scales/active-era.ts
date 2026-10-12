@@ -1,13 +1,18 @@
 import type {
+  AckProtocol,
+  AdapterRuntimeConfig,
   BleDeviceInfo,
+  CharacteristicBinding,
+  ConnectionContext,
+  Gender,
   ScaleAdapterCore,
   GattWiring,
   HoldForComposition,
-  Unlockable,
   ScaleReading,
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
+import type { ScaleDisplayUnit } from '../config/schema.js';
 import {
   uuid16,
   buildPayload,
@@ -63,6 +68,55 @@ const PLATEAU_MIN_MS = 1000;
  */
 const WLA07_ALGORITHMS = new Set([0x07, 0x24]);
 
+/** `[19]` of a frame the phone writes: `sum([2..18]) & 0xFF` (the scale uses 5 bits). */
+function withPhoneChecksum(f: Buffer): Buffer {
+  let sum = 0;
+  for (let i = 2; i <= 18; i++) sum += f[i];
+  f[19] = sum & 0xff;
+  return f;
+}
+
+/** D0 `[7]` per openScale's ActiveEraBF06Handler: 0 kg, 1 lb, 2 st. */
+const DISPLAY_UNIT_BYTE: Record<ScaleDisplayUnit, number> = { kg: 0, lbs: 1, st: 2 };
+
+/**
+ * The D0 profile frame FitDays writes after subscribing (openScale PR #1534
+ * captures): `AC 27 <unix time u32 BE> 08 <unit> <slot 00> <height cm>
+ * 00 00 <age> <sex 1/2> 00 00 03 00 D0 <checksum>`.
+ *
+ * Every byte but `[7]` is as captured; the two `00 00` pairs are weights the
+ * app leaves at 0 for its main user. `[7]` is 00 in the captures, which were
+ * made on kg; openScale reads it as the display unit, so a hard 00 would
+ * switch a scale set to lb back to kg on every connect.
+ */
+export function buildAc27Profile(
+  unixSec: number,
+  heightCm: number,
+  age: number,
+  gender: Gender,
+  unit: ScaleDisplayUnit = 'kg',
+): Buffer {
+  const f = Buffer.alloc(FRAME_LEN);
+  f[0] = 0xac;
+  f[1] = 0x27;
+  f.writeUInt32BE(unixSec >>> 0, 2);
+  f[6] = 0x08;
+  f[7] = DISPLAY_UNIT_BYTE[unit];
+  f[8] = 0x00;
+  f[9] = Math.min(0xff, Math.max(0, Math.round(heightCm)));
+  f[12] = Math.min(0xff, Math.max(0, Math.trunc(age)));
+  f[13] = gender === 'male' ? 0x01 : 0x02;
+  f[16] = 0x03;
+  f[18] = TYPE_BALANCE;
+  return withPhoneChecksum(f);
+}
+
+/** `AC 27 01 00.. DF E0`: written once between the two D0 frames, meaning unknown. */
+export const AC27_DF01 = Buffer.from('ac2701' + '00'.repeat(15) + 'dfe0', 'hex');
+
+/** FitDays' acknowledgement of a D6: `AC 27 04 D6 00.. DF B9`. */
+const AC27_ACK_D6 = Buffer.from('ac2704d6' + '00'.repeat(14) + 'dfb9', 'hex');
+
 /** 18-bit big-endian weight in grams at `[off..off+2]` (the top 6 bits are flags). */
 function weightGrams(d: Buffer, off: number): number {
   return ((d[off] << 16) | (d[off + 1] << 8) | d[off + 2]) & 0x3ffff;
@@ -117,6 +171,11 @@ export function ac27ImpedanceOhm(raw: number, weightKg: number): number {
  * steady one. Frame layout and evidence: `.claude/docs/PROTOCOLS.md`, section
  * on the AC 27 family.
  *
+ * Handshake (FitDays, openScale PR #1534): after subscribing, the D0 profile,
+ * `DF 01`, the D0 profile again, as Write Requests; a D6 is acknowledged. The
+ * same ALPHA locks and sends D6 in every captured session with the profile and
+ * in none without it (#466 and openScale #1358 look the same).
+ *
  * Completion: a locked D5, or a weight that holds still without ever locking
  * (`PLATEAU_MIN_FRAMES`), completes the weigh-in and holds the link for the D6
  * (`WEIGHT_ONLY_HOLD_MS`, extended while a locked or balancing weigh-in still
@@ -124,7 +183,7 @@ export function ac27ImpedanceOhm(raw: number, weightKg: number): number {
  * weight, which used to time out with nothing (#466, D028).
  */
 export class ActiveEraAdapter
-  implements ScaleAdapterCore, GattWiring, Unlockable, HoldForComposition
+  implements ScaleAdapterCore, GattWiring, HoldForComposition, AckProtocol
 {
   /**
    * Kept although the adapter now reads the whole AC 27 family: the name is
@@ -150,12 +209,19 @@ export class ActiveEraAdapter
   readonly charNotifyUuid = uuid16(0xffb2);
   readonly charWriteUuid = uuid16(0xffb1);
   readonly normalizesWeight = true;
-  /** 20-byte config packet — simplified with zeros for timestamp/user data. */
-  readonly unlockCommand = [
-    0xac, 0x27, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00,
+  /**
+   * Declared so the handler subscribes BEFORE `onConnected` writes the
+   * profile, the order FitDays uses (CCCD, then D0).
+   */
+  readonly characteristics: CharacteristicBinding[] = [
+    { uuid: uuid16(0xffb1), type: 'write' },
+    { uuid: uuid16(0xffb2), type: 'notify' },
   ];
-  readonly unlockIntervalMs = 0;
+  /** FFB1 is Write only (properties 0x08 in the ALPHA capture), so with response. */
+  readonly ackWithResponse = true;
+
+  /** `scale.display_unit`, echoed in D0 `[7]` so a connect does not flip the display. */
+  private displayUnit: ScaleDisplayUnit = 'kg';
 
   readonly completionHoldMs = WEIGHT_ONLY_HOLD_MS;
 
@@ -206,6 +272,42 @@ export class ActiveEraAdapter
       if (echoed === own) return true;
     }
     return uuidClaimHits(['ffb0'], device.serviceUuids);
+  }
+
+  configure(opts: AdapterRuntimeConfig): void {
+    if (opts.displayUnit) this.displayUnit = opts.displayUnit;
+  }
+
+  /**
+   * D0 profile, `DF 01`, D0 profile, from the configured user. A write the
+   * scale refuses is logged and skipped rather than failing the session: the
+   * weight still completes on its own (plateau), as it did before.
+   */
+  async onConnected(ctx: ConnectionContext): Promise<void> {
+    const { profile } = ctx;
+    const d0 = buildAc27Profile(
+      Math.floor(Date.now() / 1000),
+      profile.height,
+      profile.age,
+      profile.gender,
+      this.displayUnit,
+    );
+    for (const frame of [d0, AC27_DF01, d0]) {
+      try {
+        await ctx.write(this.charWriteUuid, frame, true);
+      } catch (e: unknown) {
+        bleLog.warn(
+          `AC 27 profile write refused (${e instanceof Error ? e.message : String(e)}); ` +
+            'continuing without it, the scale may not lock or send its impedance.',
+        );
+        return;
+      }
+    }
+  }
+
+  /** ACK the D6 the way FitDays does. A D8 is not acknowledged (see parseNotification). */
+  buildAck(data: Buffer): Buffer | null {
+    return isAc27Frame(data) && data[18] === TYPE_RESULT ? AC27_ACK_D6 : null;
   }
 
   parseNotification(data: Buffer): ScaleReading | null {
