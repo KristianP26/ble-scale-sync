@@ -286,7 +286,7 @@ describe('ReadingWatcher config: weight unit, PIN removal, device name', () => {
     } as ScaleAdapter;
     // The processor moves last_known_weight after every export; the watcher
     // must not keep the value it had when it was built.
-    const weights = [85, 91.4];
+    const weights = [70, 72.5];
     const profile = vi.fn(() => ({
       height: 180,
       age: 40,
@@ -300,7 +300,7 @@ describe('ReadingWatcher config: weight unit, PIN removal, device name', () => {
     await watcher.nextReading();
     poolOf(watcher).emitAdvert(ADVERT, 'AA:BB:CC:DD:EE:14');
     await watcher.nextReading();
-    expect(anchors).toEqual([85, 91.4]);
+    expect(anchors).toEqual([70, 72.5]);
     await watcher.stop();
   });
 });

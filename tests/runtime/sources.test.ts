@@ -138,11 +138,11 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
     const { profile } = h.createReadingSource.mock.calls[0][0] as { profile: ProfileSource };
 
     // The processor moves last_known_weight in memory after every export; a
-    // snapshot taken at startup kept the scale on the startup anchor (85.00 kg).
-    h.resolveUserProfile.mockReturnValueOnce({ lastKnownWeight: 85 } as never);
-    h.resolveUserProfile.mockReturnValueOnce({ lastKnownWeight: 91.4 } as never);
-    expect(currentProfile(profile)).toEqual({ lastKnownWeight: 85 });
-    expect(currentProfile(profile)).toEqual({ lastKnownWeight: 91.4 });
+    // snapshot taken at startup kept the scale on the startup anchor.
+    h.resolveUserProfile.mockReturnValueOnce({ lastKnownWeight: 70 } as never);
+    h.resolveUserProfile.mockReturnValueOnce({ lastKnownWeight: 72.5 } as never);
+    expect(currentProfile(profile)).toEqual({ lastKnownWeight: 70 });
+    expect(currentProfile(profile)).toEqual({ lastKnownWeight: 72.5 });
 
     bundle.onSourceReload?.();
     const sent = plan.watcher.updateConfig.mock.calls[0][0] as { profile: ProfileSource };

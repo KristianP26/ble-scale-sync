@@ -2339,7 +2339,7 @@ describe('handler-mqtt-proxy', () => {
       }
 
       function profileSource(): () => UserProfile {
-        const weights = [85, 91.4];
+        const weights = [70, 72.5];
         return () => ({ ...PROFILE, lastKnownWeight: weights.shift() });
       }
 
@@ -2402,7 +2402,7 @@ describe('handler-mqtt-proxy', () => {
         await watcher.nextReading();
         autonomousConnect();
         await watcher.nextReading();
-        expect(anchors).toEqual([85, 91.4]);
+        expect(anchors).toEqual([70, 72.5]);
       });
 
       it('host-initiated connect', async () => {
@@ -2422,7 +2422,7 @@ describe('handler-mqtt-proxy', () => {
         await watcher.nextReading();
         scan();
         await watcher.nextReading();
-        expect(anchors).toEqual([85, 91.4]);
+        expect(anchors).toEqual([70, 72.5]);
       });
     });
 
