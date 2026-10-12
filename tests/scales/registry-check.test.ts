@@ -92,6 +92,25 @@ describe('registry-check structural guard (#182)', () => {
     },
   );
 
+  // #408: AAA0xx units (e.g. AAA002, openScale #1341) send the Silvergear 108
+  // broadcast and advertise FFB0, which MGB claims bare.
+  it('flags Silvergear Smart Scale 108 not outranking MGB', () => {
+    const reg = [
+      fake('Silvergear Smart Scale 108', 10, { custom: true }),
+      fake('MGB (Swan/Icomon/YG)', 90, { custom: true }),
+      new StandardGattScaleAdapter(),
+    ];
+    const { errors } = checkRegistryIntegrity(reg);
+    expect(
+      errors.some(
+        (e) =>
+          e.includes('Ordering invariant violated') &&
+          e.includes('"Silvergear Smart Scale 108"') &&
+          e.includes('"MGB (Swan/Icomon/YG)"'),
+      ),
+    ).toBe(true);
+  });
+
   it('flags a registered adapter that lacks a match descriptor', () => {
     const reg = [{ name: 'NoMatch' } as unknown as ScaleAdapter, new StandardGattScaleAdapter()];
     const { errors } = checkRegistryIntegrity(reg);

@@ -125,6 +125,11 @@ export function checkRegistryIntegrity(adapters: readonly ScaleAdapter[]): Regis
     // #462, #466). Custom on both sides, so the overlap check below is silent.
     ['Active Era BS-06', 'MGB (Swan/Icomon/YG)'],
     ['Active Era BS-06', 'Robi S9'],
+    // AAA0xx units (AAA002 and its siblings, #408) send the Silvergear 108
+    // broadcast and advertise FFB0, so MGB's bare FFB0 claim would take them;
+    // openScale loses them to its MGB handler exactly this way. Custom on both
+    // sides, so the overlap check below is silent.
+    ['Silvergear Smart Scale 108', 'MGB (Swan/Icomon/YG)'],
   ];
   for (const [hi, lo] of INVARIANTS) {
     const a = byName.get(hi);
