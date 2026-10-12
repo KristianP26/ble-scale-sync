@@ -14,8 +14,7 @@
  * age) is not, since none of it has been compared with a vendor value here.
  *
  * Checked against the vendor's own numbers on two scales (#458 display, and
- * FitDays for the ALPHA Smart Scale PRO 3 in openScale PR #1534), see
- * `.claude/docs/PROTOCOLS.md`, section on the AC 27 family.
+ * FitDays for the ALPHA Smart Scale PRO 3 in openScale PR #1534).
  */
 
 interface Row {

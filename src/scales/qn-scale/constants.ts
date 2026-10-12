@@ -3,9 +3,8 @@
  *
  * Most of this file is evidence rather than code: which capture a value came
  * from, which unit it was hardware-confirmed on, and what was ruled out. It is
- * the only record of several of those findings, and `.claude/docs/PROTOCOLS.md`
- * cites it. Do not tidy a comment away here without checking what it is the
- * proof of.
+ * the only record in the repository of several of those findings. Do not tidy a
+ * comment away here without checking what it is the proof of.
  *
  * One wart carried over from the single-file version: the 0xB1/0xB4 narrative
  * below is attached to RESULT_RECORD_CLOCK_TOLERANCE_SEC, while what it

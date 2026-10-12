@@ -181,8 +181,8 @@ export function ac27ImpedanceOhm(raw: number, weightKg: number): number {
  *
  * The D6 frame carries no weight on #458's unit, so the impedance is paired
  * with this session's weight: the D6's own, else the locked one, else the
- * steady one. Frame layout and evidence: `.claude/docs/PROTOCOLS.md`, section
- * on the AC 27 family.
+ * steady one. Evidence: the frames in #458, #462 and #466 and the two FitDays
+ * captures attached to openScale PR #1534.
  *
  * Handshake (FitDays, openScale PR #1534): after subscribing, the D0 profile,
  * `DF 01`, the D0 profile again, as Write Requests; a D6 is acknowledged. The
