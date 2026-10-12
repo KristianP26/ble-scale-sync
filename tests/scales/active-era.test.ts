@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { ActiveEraAdapter, isAc27Frame, ac27ImpedanceOhm } from '../../src/scales/active-era.js';
+import { wla07 } from '../../src/scales/wla07.js';
 import type { ScaleReading } from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
@@ -410,21 +411,96 @@ describe('ActiveEraAdapter', () => {
       expect(payload.weight).toBe(0);
     });
 
-    // T9: never the shared BIA. On #458 it is further from the display (26.9 %)
-    // than the BMI estimate: 31.6 % against 29.4 %.
-    it('takes body fat from the BMI estimate, not the shared BIA', () => {
+    const P458 = { height: 175, age: 49, gender: 'male' as const, isAthlete: false };
+    // The fake profile the openScale PR #1534 tester entered in FitDays.
+    const PALPHA = { height: 165, age: 31, gender: 'female' as const, isAthlete: false };
+
+    const d6Of = (a: ActiveEraAdapter, frames: Buffer[]): ScaleReading => {
       let d6: ScaleReading | null = null;
-      for (const { frame } of parseDump(ISSUE_458_DUMP_2)) {
-        const r = adapter.parseNotification(frame);
-        if (frame[18] === 0xd6) d6 = r;
+      for (const f of frames) {
+        const r = a.parseNotification(f);
+        if (f[18] === 0xd6) d6 = r;
       }
-      const p = adapter.computeMetrics(d6!, {
-        height: 175,
-        age: 49,
-        gender: 'male',
-        isAthlete: false,
+      return d6!;
+    };
+
+    // T10: what #458's display showed for dump 2: fat 26.9 %, water 52.8 %,
+    // bone 2.9 kg ([17] = 07).
+    it('computes #458 dump 2 with WLA07 to the values on its display', () => {
+      const d6 = d6Of(
+        adapter,
+        parseDump(ISSUE_458_DUMP_2).map((f) => f.frame),
+      );
+      const p = adapter.computeMetrics(d6, P458);
+      expect(p.bodyFatPercent).toBe(26.9);
+      expect(p.waterPercent).toBe(52.8);
+      expect(p.boneMass).toBe(2.9);
+      expect(p.bmi).toBeCloseTo(28.6, 1);
+    });
+
+    // What FitDays showed for 88.10 kg at 469 ohm with the tester's profile.
+    // That weigh-in's frames are not in the captures, so the formula is
+    // checked directly here and through a captured ALPHA D6 below.
+    it('reproduces FitDays for the ALPHA', () => {
+      const c = wla07({ weightKg: 88.1, heightCm: 165, impedanceOhm: 469, age: 31, isMale: false });
+      expect(c.fat).toBe(43);
+      expect(c.water).toBe(44);
+      expect(c.bone).toBe(3.9);
+    });
+
+    it('uses WLA07 for a captured ALPHA D6 ([17] = 0x24)', () => {
+      const d6 = d6Of(
+        adapter,
+        received(ALPHA_LOCK_D6).map((f) => f.frame),
+      );
+      expect(d6).toEqual({ weight: 88.97, impedance: 469 });
+      const c = wla07({
+        weightKg: 88.97,
+        heightCm: 165,
+        impedanceOhm: 469,
+        age: 31,
+        isMale: false,
       });
-      expect(p.bodyFatPercent).toBeCloseTo(29.4, 1);
+      const p = adapter.computeMetrics(d6, PALPHA);
+      expect(p.bodyFatPercent).toBe(c.fat);
+      expect(p.waterPercent).toBe(c.water);
+      expect(p.boneMass).toBe(c.bone);
+    });
+
+    // [17] = 03: no vendor value to compare with, so the BMI estimate, never
+    // the shared BIA. #462 posted only its D6, so it is paired here with the
+    // #458 dump 2 lock; the pairing is constructed, the frames are not.
+    it('keeps the BMI estimate for the Femmto D6 ([17] = 03)', () => {
+      const lock = parseDump(ISSUE_458_DUMP_2).find((f) => f.frame[2] === 0x86)!.frame;
+      const d6 = d6Of(adapter, [lock, ISSUE_462_D6]);
+      expect(d6.impedance).toBe(533);
+      const p = adapter.computeMetrics(d6, P458);
+      const estimate = adapter.computeMetrics({ weight: d6.weight, impedance: 0 }, P458);
+      expect(p.bodyFatPercent).toBe(estimate.bodyFatPercent);
+    });
+
+    it('keeps the BMI estimate when the impedance is 0', () => {
+      const d6 = d6Of(
+        adapter,
+        received(ALPHA_LOCK_D6_NO_IMPEDANCE).map((f) => f.frame),
+      );
+      expect(d6).toEqual({ weight: 89.24, impedance: 0 });
+      const p = adapter.computeMetrics(d6, PALPHA);
+      const estimate = adapter.computeMetrics({ weight: 89.24, impedance: 0 }, PALPHA);
+      expect(p.bodyFatPercent).toBe(estimate.bodyFatPercent);
+    });
+
+    // D028: an implausible impedance never feeds a vendor formula, also when a
+    // direct caller skipped the processor's check.
+    it('keeps the BMI estimate for an impedance outside the plausible band', () => {
+      const d6 = d6Of(
+        adapter,
+        parseDump(ISSUE_458_DUMP_2).map((f) => f.frame),
+      );
+      d6.impedance = 1500; // changed from 434.92, outside 150-1200
+      const p = adapter.computeMetrics(d6, P458);
+      const estimate = adapter.computeMetrics({ weight: d6.weight, impedance: 0 }, P458);
+      expect(p.bodyFatPercent).toBe(estimate.bodyFatPercent);
     });
   });
 });

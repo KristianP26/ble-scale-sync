@@ -11,9 +11,11 @@ import type {
 import {
   uuid16,
   buildPayload,
-  type ScaleBodyComp,
+  isPlausibleImpedance,
+  ReadingComposition,
   WEIGHT_ONLY_HOLD_MS,
 } from './body-comp-helpers.js';
+import { wla07 } from './wla07.js';
 import {
   nameClaimHits,
   ownAddressBytes,
@@ -51,6 +53,15 @@ const FLAG_LOCKED = 0x80;
  */
 const PLATEAU_MIN_FRAMES = 5;
 const PLATEAU_MIN_MS = 1000;
+
+/**
+ * `[17]` values whose body composition is the vendor's WLA07 formula. 0x07 is
+ * #458's unit, whose display it reproduces (fat 26.9 %, water 52.8 %, bone
+ * 2.9 kg); 0x24 is the ALPHA, where it reproduces FitDays (fat 43.0 %, water
+ * 44.0 %, bone 3.9 kg). The 0x02 (#466) and 0x03 (#462) units have no vendor
+ * value to compare with yet, so they keep the BMI estimate.
+ */
+const WLA07_ALGORITHMS = new Set([0x07, 0x24]);
 
 /** 18-bit big-endian weight in grams at `[off..off+2]` (the top 6 bits are flags). */
 function weightGrams(d: Buffer, off: number): number {
@@ -167,6 +178,11 @@ export class ActiveEraAdapter
   private live = new WeakSet<ScaleReading>();
   /** Locked or steady weights: complete, but the D6 may still follow. */
   private held = new WeakSet<ScaleReading>();
+  /**
+   * The D6 `[17]` byte (body composition algorithm), pinned to the reading it
+   * came with, not kept as live state (#394).
+   */
+  private readonly algorithm = new ReadingComposition<number | undefined>();
 
   /**
    * The BS-06 name, or the AC 27 advertisement (#458, #462, #466).
@@ -302,7 +318,9 @@ export class ActiveEraAdapter
           : ' (below the 1500 correction gate)') +
         `, weight ${kg} kg from the ${source} (#386)`,
     );
-    return { weight: kg, impedance: imp };
+    const reading: ScaleReading = { weight: kg, impedance: imp };
+    this.algorithm.pin(reading, d[17]);
+    return reading;
   }
 
   /**
@@ -352,8 +370,30 @@ export class ActiveEraAdapter
     );
   }
 
+  /**
+   * The vendor's WLA07 formula for a unit that names it in `[17]`, the BMI
+   * estimate otherwise, the shared BIA never: on #458 it lands at 31.6 % body
+   * fat against the display's 26.9 %, further off than the estimate's 29.4 %.
+   * WLA07 needs a usable impedance; the processor has already set one outside
+   * the plausible band to 0 (D028), and 0 falls back to the estimate.
+   */
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    const comp: ScaleBodyComp = {};
-    return buildPayload(reading.weight, reading.impedance, comp, profile);
+    const alg = this.algorithm.of(reading, undefined);
+    if (alg !== undefined && WLA07_ALGORITHMS.has(alg) && isPlausibleImpedance(reading.impedance)) {
+      const c = wla07({
+        weightKg: reading.weight,
+        heightCm: profile.height,
+        impedanceOhm: reading.impedance,
+        age: profile.age,
+        isMale: profile.gender === 'male',
+      });
+      return buildPayload(
+        reading.weight,
+        reading.impedance,
+        { fat: c.fat, water: c.water, bone: c.bone, muscle: c.muscle },
+        profile,
+      );
+    }
+    return buildPayload(reading.weight, reading.impedance, {}, profile);
   }
 }
