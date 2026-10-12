@@ -120,8 +120,8 @@ describe('Silvergear108Adapter (#297)', () => {
       expect(reading).toEqual({ weight: 81.01, impedance: 0 });
     });
 
-    // The two captures share this frame byte for byte, which is what makes the
-    // weight bias a measurement rather than a fit to one session.
+    // The two captures share this frame byte for byte: with the 18-bit weight
+    // field masked out, the idle frame reads exactly 0 kg on this unit.
     it('reads the idle frame shared by both captures as zero, and does not publish it', () => {
       expect(adapter.parseBroadcast(mfg(IDLE))).toBeNull();
     });
