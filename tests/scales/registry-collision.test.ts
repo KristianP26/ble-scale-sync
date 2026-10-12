@@ -84,6 +84,19 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
       data: Buffer.from('396c17700a012508b8d0deb53a', 'hex'),
     },
   },
+  // Broadcast-only, nameless. The real first stable frame (72.27 kg) from
+  // oliexdev/openScale#1472, scale-capture-72.25kg-filtered.pcapng #27: company
+  // id 0x06D0, which other VeSync devices share, the 20-byte frame carrying the
+  // device's own MAC reversed at [1..6], and service 0xFFD0.
+  'Etekcity Fit 8S': {
+    localName: '',
+    address: 'A8:89:57:8C:A1:CE',
+    serviceUuids: ['ffd0'],
+    manufacturerData: {
+      id: 0x06d0,
+      data: Buffer.from('01cea18c5789a8c0a8014e1a010e020100020300', 'hex'),
+    },
+  },
   'Xiaomi Mi Scale 2': { localName: 'MIBFS', serviceUuids: [] },
   'Xiaomi Mijia Scale S800': { localName: 'Mijia Scale S800 A1AB', serviceUuids: [] },
   // Same FE95 service as the S800; the product id (0x3bd5 here) tells them apart.

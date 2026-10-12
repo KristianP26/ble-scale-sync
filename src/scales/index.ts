@@ -8,6 +8,7 @@ import { XiaomiMiScaleLegacyAdapter } from './xiaomi-mi-scale-legacy.js';
 import { Silvergear108Adapter } from './silvergear-108.js';
 import { SenssunIfB7Adapter } from './senssun-if-b7.js';
 import { OkokChipseaAdapter } from './okok-chipsea.js';
+import { EtekcityFit8sAdapter } from './etekcity-fit8s.js';
 import { XiaomiS800Adapter } from './xiaomi-s800.js';
 import { XiaomiS400Adapter } from './xiaomi-s400.js';
 import { BeurerBf720Adapter } from './beurer-bf720.js';
@@ -74,6 +75,11 @@ export const adapters: ScaleAdapter[] = [
   // device's own MAC echoed inside the frame, the 2.0 checksum, or a Yoda0/Yoda1
   // or ADV name, so it collides with nothing else (#408).
   new OkokChipseaAdapter(),
+  // Etekcity Fit 8S: broadcast-only, nameless. 0x06D0 is Etekcity's platform
+  // company id, shared with the ESF-551 and other VeSync devices, so the claim is
+  // the 20-byte frame carrying the scale's own MAC (reversed), plus 0xFFD0 when the
+  // transport reports services (#408).
+  new EtekcityFit8sAdapter(),
   new MiScale2Adapter(),
   // Xiaomi Mijia S800 (ms116): broadcast-only, matches FE95 + product id 0x51E2
   // or its own name; no collision with any other adapter (#232).
