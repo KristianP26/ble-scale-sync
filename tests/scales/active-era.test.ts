@@ -105,7 +105,7 @@ describe('ActiveEraAdapter', () => {
             // the echo does not hold and nothing else vouches for it
             {
               localName: '',
-              address: '98:F6:7A:00:22:64',
+              address: '02:00:00:00:27:AC', // made up
               serviceUuids: [],
               manufacturerData: ALPHA_MSD,
             },

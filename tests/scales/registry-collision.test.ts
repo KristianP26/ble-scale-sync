@@ -192,11 +192,11 @@ describe('registry collision guard (#182)', () => {
  * FG2431WB (#466) reports the same company id and FFB0, but its payload is
  * not public, so no fixture pretends to know it: where a case needs a payload
  * WITHOUT the MAC echo, it is the ALPHA payload heard from another address
- * (the #466 one), and the entry says so.
+ * (a made-up one), and the entry says so.
  */
 const ALPHA_MAC = 'E0:D3:8E:01:91:38';
 const ALPHA_MSD = { id: 0x27ac, data: Buffer.from('3891018ed3e001010030000001', 'hex') };
-const OTHER_MAC = '98:F6:7A:00:22:64'; // #466, public in the issue body
+const OTHER_MAC = '02:00:00:00:27:AC'; // made up: any address but the ALPHA's
 const AE = 'Active Era BS-06';
 
 const AC27_ADVERTS: Array<{ label: string; info: BleDeviceInfo; expected: string | undefined }> = [
