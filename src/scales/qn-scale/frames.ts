@@ -207,6 +207,187 @@ export function decodeStoredRecord(data: Buffer): StoredRecord | null {
   };
 }
 
+/**
+ * The 8-electrode result of one 19-byte weigh-in, as decodeEightResult reads it
+ * (layout at EIGHT_CHANNEL_ORDER in constants.ts).
+ */
+export interface EightResult {
+  /** The scale's user slot the weigh-in was taken for. */
+  slot: number;
+  /** kg */
+  weight: number;
+  /** Ten channels as measured, ohm, in EIGHT_CHANNEL_ORDER. */
+  original: number[];
+  /** The same ten channels as the scale corrected them, ohm. */
+  adjusted: number[];
+  /** The scale's own body fat, %. */
+  fatPercent: number;
+  /** Heart rate, on a scale that measures one; 0 otherwise. */
+  heartRate: number;
+}
+
+/** The scale's own results from a 0x15/0x16 pair (or 0x24/0x25 for a stored record). */
+export interface VaComposition {
+  bmi: number;
+  /** % */
+  water: number;
+  /** x0.1 of the transmitted value: % of body weight when the scale reports percentages. */
+  muscle: number;
+  visceral: number;
+  bodyAge: number;
+  /** kcal */
+  bmr: number;
+  /** % */
+  protein: number;
+  heartIndex: number;
+  /** x0.1 of the transmitted value: % of body weight when the scale reports percentages. */
+  bone: number;
+  /** % */
+  lbm: number;
+  /** % */
+  subcutaneousFat: number;
+  /** % */
+  skeletalMuscle: number;
+  score: number;
+  bodyShape: number;
+}
+
+/** One 8-electrode stored record (0x23 x3, 0x24, 0x25), as decodeEightStoredRecord reads it. */
+export interface EightStoredRecord {
+  /** The scale's user slot; STORED_UNASSIGNED_SLOT when it attributed the record to nobody. */
+  slot: number;
+  /** Records in this batch, and this record's number in it. */
+  count: number;
+  index: number;
+  /** Scale-epoch seconds (2000-01-01 UTC) the weigh-in was taken at. */
+  recordSeconds: number;
+  /** kg */
+  weight: number;
+  original: number[];
+  adjusted: number[];
+  fatPercent: number;
+  heartRate: number;
+  composition: VaComposition;
+}
+
+/** One 8-electrode channel: u16 big-endian, unscrambled first when flagged, in 0.1 ohm. */
+function eightChannel(frame: Buffer, at: number, scrambled: boolean): number {
+  const raw = frame.readUInt16BE(at);
+  return (scrambled ? decryptQnResistance(raw) : raw) / 10;
+}
+
+/** A frame of `len` bytes that starts with `opcode` and closes under the sum checksum. */
+function isFrame(frame: Buffer, opcode: number, len: number): boolean {
+  return frame.length === len && frame[0] === opcode && hasValidSumChecksum(frame);
+}
+
+/**
+ * The three-part 8-electrode result block of the 19-byte dialect (#331); see
+ * EIGHT_CHANNEL_ORDER in constants.ts for the layout. Null unless all three are
+ * well-formed 20-byte 0x10 frames with the part bytes 0x31, 0x32 and 0x33.
+ *
+ * Only the channels are scrambled on a scale whose advertisement says so; the
+ * body fat and heart rate are read as sent, as the vendor's published SDK does.
+ */
+export function decodeEightResult(
+  p1: Buffer,
+  p2: Buffer,
+  p3: Buffer,
+  scrambled: boolean,
+): EightResult | null {
+  const parts = [p1, p2, p3];
+  if (!parts.every((p, i) => isFrame(p, 0x10, 20) && p[1] === 0x14 && p[4] === 0x31 + i)) {
+    return null;
+  }
+  const ch = (frame: Buffer, at: number): number => eightChannel(frame, at, scrambled);
+  return {
+    slot: p1[2],
+    weight: p1.readUInt16BE(5) / 100,
+    original: [
+      ...[7, 9, 11, 13, 15, 17].map((at) => ch(p1, at)),
+      ...[2, 5, 7, 9].map((at) => ch(p2, at)),
+    ],
+    adjusted: [
+      ...[11, 13, 15, 17].map((at) => ch(p2, at)),
+      ...[2, 5, 7, 9, 11, 13].map((at) => ch(p3, at)),
+    ],
+    fatPercent: p3.readUInt16BE(15) / 10,
+    heartRate: p3[17],
+  };
+}
+
+/** The shared payload of 0x15/0x24 (`c`) and 0x16/0x25 (`d`), from [3]. */
+function readVaComposition(c: Buffer, d: Buffer): VaComposition {
+  return {
+    bmi: c.readUInt16BE(3) / 10,
+    water: c.readUInt16BE(5) / 10,
+    muscle: c.readUInt16BE(7) / 10,
+    visceral: c[9],
+    bodyAge: c[10],
+    bmr: c.readUInt16BE(11),
+    protein: c.readUInt16BE(13) / 10,
+    heartIndex: d[3] / 10,
+    bone: d.readUInt16BE(4) / 10,
+    lbm: d.readUInt16BE(6) / 10,
+    subcutaneousFat: d.readUInt16BE(8) / 10,
+    skeletalMuscle: d.readUInt16BE(10) / 10,
+    score: d.readUInt16BE(12) / 10,
+    bodyShape: d[14],
+  };
+}
+
+/**
+ * The scale's own results that close a 19-byte weigh-in: 0x15 and 0x16, 16
+ * bytes each (#331, layout at RESULT16_FRAME_LEN in constants.ts). Null
+ * unless both are well formed.
+ */
+export function decodeVaComposition(c15: Buffer, d16: Buffer): VaComposition | null {
+  if (!isFrame(c15, 0x15, 16) || c15[1] !== 0x10) return null;
+  if (!isFrame(d16, 0x16, 16) || d16[1] !== 0x10) return null;
+  return readVaComposition(c15, d16);
+}
+
+/**
+ * One 8-electrode stored record: three 20-byte 0x23 parts, a 19-byte 0x24 and
+ * a 0x25 of at least 16 bytes, in that order (#331, layout at
+ * STORED_OPCODE_COMPOSITION in constants.ts). Null unless every frame is well formed,
+ * the parts are 0x31, 0x32 and 0x33 and all three carry the same record number.
+ */
+export function decodeEightStoredRecord(
+  s1: Buffer,
+  s2: Buffer,
+  s3: Buffer,
+  s24: Buffer,
+  s25: Buffer,
+  scrambled: boolean,
+): EightStoredRecord | null {
+  const parts = [s1, s2, s3];
+  if (!parts.every((p, i) => isFrame(p, 0x23, 20) && p[4] === 0x31 + i && p[3] === s1[3])) {
+    return null;
+  }
+  if (!isFrame(s24, 0x24, 19)) return null;
+  if (s25.length < 16 || s25[0] !== 0x25 || !hasValidSumChecksum(s25)) return null;
+  const ch = (frame: Buffer, at: number): number => eightChannel(frame, at, scrambled);
+  return {
+    slot: s1[1],
+    count: s1[2],
+    index: s1[3],
+    recordSeconds: s1.readUInt32LE(5),
+    weight: s1.readUInt16BE(9) / 100,
+    original: [
+      ...[11, 13, 15, 17].map((at) => ch(s1, at)),
+      ...[1, 5, 7, 9, 11, 13].map((at) => ch(s2, at)),
+    ],
+    adjusted: [
+      ...[15, 17].map((at) => ch(s2, at)),
+      ...[1, 5, 7, 9, 11, 13, 15, 17].map((at) => ch(s3, at)),
+    ],
+    fatPercent: s24.readUInt16BE(15) / 10,
+    heartRate: s24[17],
+    composition: readVaComposition(s24, s25),
+  };
+}
+
 /** Exchange bits `i` and `j` of a byte. */
 function swapBits(b: number, i: number, j: number): number {
   return ((b >> i) & 1) === ((b >> j) & 1) ? b : b ^ ((1 << i) | (1 << j));

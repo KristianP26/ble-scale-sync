@@ -440,7 +440,8 @@ export const RESULT_MAX_WEIGHT_KG = 300;
  *
  *   [0]     0x10
  *   [1]     total length, 0x14 (0x15/0x16 carry their own, 0x10)
- *   [2]     0x01 on every first part seen; unit or slot, not decoded
+ *   [2]     the scale's user slot the weigh-in is for (254 a guest), first
+ *           part only; 0x01 in every log so far
  *   [3]     status: 0x00 measuring, 0x01 stable, 0x02 result block
  *   [4]     part: high nibble the part count, low nibble the index (0x11 = 1/1)
  *   [5..6]  weight, BE u16 /100 kg, first part only. /100 whatever
@@ -448,31 +449,112 @@ export const RESULT_MAX_WEIGHT_KG = 300;
  *   [7..18] zero while measuring
  *   [19]    sum of the preceding bytes
  *
- * One DEBUG log of a complete weigh-in is the whole evidence (#331,
- * 2026-10-06). The scale streams status 0x00 frames, sends one stable frame
+ * The first DEBUG log of a complete weigh-in (#331, 2026-10-06): the scale
+ * streams status 0x00 frames, sends one stable frame
  * (`10 14 01 01 11 1e 05 .. 5a`, 76.85 kg), then stays silent for 13.15 s while
  * it runs its BIA, then sends `23 00 .. 00 23`, a three-part result block
  * (`[4]` 0x31, 0x32, 0x33) and two 16-byte frames, `15 10 ff ..` and
  * `16 10 ff ..`. 0x16 is the last frame of the weigh-in, 13.96 s after the
  * stable one. Every one of those frames closes under the sum checksum.
  *
- * Only the weight is decoded. The continuation parts carry payload at [2..3]
- * as well as [5..18], and the reassembled block reads as two ten-value records
- * that look like a segmental, two-frequency impedance sweep (hypothesis). None
- * of its values is a whole-body impedance the BIA formula could take: most sit
- * far outside the 150-1200 ohm band, and the ones inside it differ between the
- * two records, so passing one on would be a silent BIA fat from a guess (the
- * D022 defect). 0x15 and 0x16 look like the scale's own composition results
- * and are not decoded either. The reading is therefore weight-only.
+ * The result block and 0x15/0x16 are decoded per the vendor's published SDK
+ * (qnsdkX 2.37.2), which reads them for its 8-electrode scales; see
+ * EIGHT_CHANNEL_ORDER and RESULT16_FRAME_LEN. `23 00 .. 00 23` is the scale's
+ * answer to our 0x22 when it holds no stored weigh-ins (0 parts at `[4]`), not
+ * the end of the BIA: the same SDK reads 0x22 as a request for the stored
+ * records of a mask of user slots, and those come back as 0x23 (see
+ * STORED_OPCODE_COMPOSITION).
  */
 export const LIVE20_FRAME_LEN = 20;
 export const LIVE20_FIRST_PART_BYTE2 = 0x01;
 export const LIVE20_STATUS_MEASURING = 0x00;
 export const LIVE20_STATUS_STABLE = 0x01;
 export const LIVE20_STATUS_RESULT = 0x02;
+
+/**
+ * 0x15 and 0x16, the 16-byte frames that close a 19-byte weigh-in (#331): the
+ * scale's own results, per the vendor's published SDK (qnsdkX 2.37.2). `[2]` is
+ * 0xff, `[15]` the sum checksum; values are BE u16 unless noted.
+ *
+ *   0x15  [3..4] BMI x0.1, [5..6] water x0.1 %, [7..8] muscle, [9] visceral
+ *         fat (1 byte), [10] body age (1 byte), [11..12] BMR kcal,
+ *         [13..14] protein x0.1 %
+ *   0x16  [3] heart index x0.1 (1 byte), [4..5] bone, [6..7] lean body mass
+ *         x0.1 %, [8..9] subcutaneous fat x0.1 %, [10..11] skeletal muscle
+ *         x0.1 %, [12..13] score x0.1, [14] body type (1 byte)
+ *
+ * Muscle and bone are x0.1 % of the body weight when bit 0 of the ready
+ * frame's (0x14) `[3]` is set, and kg x0.01 otherwise; every 19-byte log so far
+ * has it set. The SDK itself does not read the 8-electrode BMR, lean mass or
+ * score, so those three are the least certain.
+ */
 export const RESULT16_FRAME_LEN = 16;
 export const RESULT16_OPCODE_COMPOSITION = 0x15;
 export const RESULT16_OPCODE_DONE = 0x16;
+
+/**
+ * The ten 8-electrode impedance channels, in the order the vendor's published
+ * SDK (qnsdkX 2.37.2) reads them: left and right hand, left and right foot,
+ * trunk, each at 20 and 100 kHz.
+ *
+ * The 19-byte dialect's result block (#331) is three 20-byte 0x10 frames, status
+ * 0x02, part bytes 0x31, 0x32 and 0x33. Each channel is a BE u16 in 0.1 ohm,
+ * unscrambled byte by byte first on a scale that flags its resistance as
+ * scrambled (SCRAMBLE_FLAG_BIT); nothing else in these frames is scrambled.
+ *
+ *   part 1  [2] slot, [5..6] weight, [7..18] original LH20, LH100, RH20,
+ *           RH100, LF20, LF100
+ *   part 2  [2..3], [5..6], [7..8], [9..10] original RF20, RF100, T20, T100;
+ *           [11..18] adjusted LH20, LH100, RH20, RH100
+ *   part 3  [2..3], [5..6] .. [13..14] adjusted LF20, LF100, RF20, RF100,
+ *           T20, T100; [15..16] the scale's body fat, BE u16 0.1 %;
+ *           [17] heart rate (scales that measure one); [18] handle grip
+ *
+ * "Adjusted" is the scale's own correction of the measured channels. Three
+ * real blocks (#331) agree with the layout: every frame closes under the sum
+ * checksum, the measured trunk reads higher at 100 kHz than at 20 kHz and the
+ * adjusted one lower, and the scale's muscle (0x15) equals its fat-free mass
+ * minus its bone (0x16) to within 0.1 kg. None of the channels is a whole-body
+ * impedance, so none of them goes into this app's BIA formula.
+ */
+export const EIGHT_CHANNEL_ORDER = [
+  'LH20',
+  'LH100',
+  'RH20',
+  'RH100',
+  'LF20',
+  'LF100',
+  'RF20',
+  'RF100',
+  'T20',
+  'T100',
+] as const;
+
+/**
+ * 8-electrode stored weigh-ins (#331), per the vendor's published SDK (qnsdkX
+ * 2.37.2). The scale answers our 0x22 with every weigh-in it kept while
+ * nothing was connected, for the user slots in the 0x22 mask, each as five
+ * frames: three 20-byte 0x23, one 19-byte 0x24 and one 0x25 of at least 16
+ * bytes (`[1]` of 0x25 is 0x0f, not its length):
+ *
+ *   0x23 part 1  [1] slot (STORED_UNASSIGNED_SLOT: nobody), [2] records in the
+ *                batch, [3] this record's number, [4] 0x31, [5..8] time, LE u32
+ *                seconds since 2000-01-01 UTC, [9..10] weight BE /100 kg,
+ *                [11..18] original LH20, LH100, RH20, RH100
+ *   0x23 part 2  [1..2], [5..6] .. [13..14] original LF20 .. T100;
+ *                [15..18] adjusted LH20, LH100; [3] record number, [4] 0x32
+ *   0x23 part 3  [1..2], [5..6] .. [17..18] adjusted RH20 .. T100; [4] 0x33
+ *   0x24         0x15's payload at [3..14], body fat [15..16], heart rate [17]
+ *   0x25         0x16's payload at [3..14]
+ *
+ * A 0x23 with 0 parts at `[4]` (high nibble) means no stored weigh-ins. The SDK
+ * drops a record stamped in the future or more than a year ago, and sends
+ * nothing back for one. Which profile the scale computed a stored record's
+ * body composition with is not in the record.
+ */
+export const STORED_OPCODE_COMPOSITION = 0x24;
+export const STORED_OPCODE_DONE = 0x25;
+export const STORED_UNASSIGNED_SLOT = 0xf0;
 
 /**
  * How long the link is held after the 19-byte dialect's stable weight for its
