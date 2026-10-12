@@ -35,7 +35,8 @@ const SVC_FFB0 = 'ffb0';
  * Payload, after XOR-ing every byte with 0xA0 except where noted:
  *
  *   d[0]      status flags. bit 7 set = settled reading, clear = still settling
- *   d[1..3]   weight, 24-bit big-endian, in grams, biased by WEIGHT_BIAS
+ *   d[1..3]   weight in grams in the low 18 bits (WEIGHT_MASK); the top six
+ *             bits of d[1] are a per-unit constant
  *   p[4]      frame type, IN CLEAR (not XOR-ed): 0x0D weight, 0x06 body data
  *   p[5]      checksum, IN CLEAR
  *
@@ -50,13 +51,17 @@ const MFG_LEN = PAYLOAD_OFFSET + PAYLOAD_LEN;
 const OBFUSCATION_KEY = 0xa0;
 
 /**
- * Constant subtracted from the 24-bit field to get grams.
+ * Bits of the de-obfuscated 24-bit field that carry the weight in grams.
  *
- * Fixed empirically: it is the value that makes the idle frame read exactly
- * zero. That frame, payload `a0 2c a0 a0 0d b9`, appears in BOTH captures, so
- * it is a genuine zero-load reading rather than a coincidence of one session.
+ * The rest of d[1] is NOT weight and differs between units: the idle (zero
+ * load) frame reads d[1] = 0x8c on the #297 unit (payload `a0 2c a0 a0 0d b9`)
+ * and 0x68 on a second unit (`a0 c8 a0 a0 0d b5`), whose settled frame
+ * `20 c9 9c d2` is the 81.0 kg its display showed. Subtracting the first unit's
+ * 0x8c0000 put the second at -2279 kg. Both idle values have their low two bits
+ * clear, so masking to 18 bits (262.143 kg) reads both units correctly.
+ * WEIGHT_MAX_KG sits below that ceiling; see there.
  */
-const WEIGHT_BIAS = 0x8c0000;
+const WEIGHT_MASK = 0x03ffff;
 
 /** p[4]: a weight frame. */
 const FRAME_TYPE_WEIGHT = 0x0d;
@@ -76,10 +81,12 @@ const FLAG_SETTLED = 0x80;
 /**
  * Plausibility bound on a settled weight. The checksum below is only 5 bits
  * wide, so it alone would accept roughly one malformed frame in 32; this makes
- * the frame gate depend on the payload as well as on its checksum.
+ * the frame gate depend on the payload as well as on its checksum. The upper
+ * bound sits below the 262.143 kg the masked field can hold, so a garbled frame
+ * that saturates the field is still rejected.
  */
 const WEIGHT_MIN_KG = 2;
-const WEIGHT_MAX_KG = 300;
+const WEIGHT_MAX_KG = 250;
 
 /**
  * The last payload byte is two fields, not one.
@@ -305,8 +312,8 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
     const grams =
       (((p[1] ^ OBFUSCATION_KEY) << 16) |
         ((p[2] ^ OBFUSCATION_KEY) << 8) |
-        (p[3] ^ OBFUSCATION_KEY)) -
-      WEIGHT_BIAS;
+        (p[3] ^ OBFUSCATION_KEY)) &
+      WEIGHT_MASK;
     return { settled: (flags & FLAG_SETTLED) !== 0, weight: grams / 1000 };
   }
 
@@ -341,8 +348,8 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
     const grams =
       (((p[1] ^ OBFUSCATION_KEY) << 16) |
         ((p[2] ^ OBFUSCATION_KEY) << 8) |
-        (p[3] ^ OBFUSCATION_KEY)) -
-      WEIGHT_BIAS;
+        (p[3] ^ OBFUSCATION_KEY)) &
+      WEIGHT_MASK;
     const weight = grams / 1000;
 
     // Only the settled frame is a reading. The settling stream is the scale
