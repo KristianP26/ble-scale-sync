@@ -26,6 +26,7 @@ import {
   hex,
   parseDump,
   received,
+  type TimedFrame,
 } from '../helpers/ac27-captures.js';
 
 describe('ActiveEraAdapter', () => {
@@ -240,17 +241,161 @@ describe('ActiveEraAdapter', () => {
     });
   });
 
-  describe('isComplete()', () => {
-    it('returns true when weight > 0 and impedance > 0', () => {
-      expect(adapter.isComplete({ weight: 80, impedance: 500 })).toBe(true);
+  describe('completion (#466)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
     });
 
-    it('returns false when weight is 0', () => {
+    /** Feed timed frames at their real spacing; return each frame's reading. */
+    function feed(a: ActiveEraAdapter, frames: TimedFrame[]): (ScaleReading | null)[] {
+      vi.useFakeTimers();
+      const t0 = Date.now();
+      return frames.map((f) => {
+        vi.setSystemTime(t0 + f.atMs);
+        return a.parseNotification(f.frame);
+      });
+    }
+    const completeAt = (a: ActiveEraAdapter, rs: (ScaleReading | null)[]): number =>
+      rs.findIndex((r) => r !== null && a.isComplete(r));
+
+    it('a direct reading is complete and final, also without impedance', () => {
+      expect(adapter.isComplete({ weight: 80, impedance: 0 })).toBe(true);
+      expect(adapter.isFinal({ weight: 80, impedance: 0 })).toBe(true);
       expect(adapter.isComplete({ weight: 0, impedance: 500 })).toBe(false);
     });
 
-    it('returns false when impedance is 0', () => {
-      expect(adapter.isComplete({ weight: 80, impedance: 0 })).toBe(false);
+    it('a locked weight is complete but not final; the D6 is final', () => {
+      const rs = feed(adapter, received(ALPHA_LOCK_D6));
+      const lock = rs.at(-2)!; // ac 27 80 69 5b 8a
+      const d6 = rs.at(-1)!;
+      expect(rs.slice(0, -2).every((r) => r === null || !adapter.isComplete(r))).toBe(true);
+      expect(adapter.isComplete(lock) && !adapter.isFinal(lock)).toBe(true);
+      expect(adapter.isComplete(d6) && adapter.isFinal(d6)).toBe(true);
+    });
+
+    // T7: the ALPHA without a single write from the phone never locks.
+    it('completes a weight that never locks on its fifth identical frame over a second', () => {
+      const frames = received(ALPHA_NO_WRITE);
+      const rs = feed(adapter, frames);
+      const i = completeAt(adapter, rs);
+      // 00:10:02.811 starts the run of 88.58 kg; its fifth frame is 00:10:03.862.
+      expect(frames[i].atMs - frames[0].atMs).toBe(2920);
+      expect(rs[i]).toEqual({ weight: 88.58, impedance: 0 });
+      expect(adapter.isFinal(rs[i]!)).toBe(false);
+      // 88.58 kg came once before, at 00:10:01.759, and broke off: not steady.
+      expect(rs.slice(0, i).every((r) => r === null || !adapter.isComplete(r))).toBe(true);
+    });
+
+    // #466 posted the bytes but not their timing, so they run here at the
+    // spacing of the ALPHA session above (same platform, same frame layout).
+    it('completes the #466 Runstar weight the same way', () => {
+      const times = received(ALPHA_NO_WRITE).map((f) => f.atMs);
+      const bytes = [...ISSUE_466_RAMP, ...Array(10).fill(ISSUE_466_REPEAT_1)];
+      const rs = feed(
+        adapter,
+        bytes.map((frame, k) => ({ atMs: times[k], dir: 'rx' as const, frame })),
+      );
+      const i = completeAt(adapter, rs);
+      expect(i).toBeGreaterThan(ISSUE_466_RAMP.length + 3);
+      expect(rs[i]).toEqual({ weight: 84.82, impedance: 0 });
+    });
+
+    // #458 streams fast and has 3-frame runs off the final weight inside one
+    // second. None may complete; the lock does.
+    it('does not take a short run on the way to the lock', () => {
+      const dump = parseDump(ISSUE_458_DUMP_1);
+      const rs = feed(
+        adapter,
+        dump.map((f) => ({ atMs: f.atS * 1000, dir: 'rx' as const, frame: f.frame })),
+      );
+      const i = completeAt(adapter, rs);
+      expect(dump[i].frame.subarray(2, 6).toString('hex')).toBe('868d552c');
+      expect(rs[i]!.weight).toBeCloseTo(87.34, 3);
+    });
+
+    // The order is constructed, the frames are not: the 88.58 kg plateau of
+    // the ALPHA session above, then five copies of its 88.06 kg frame
+    // (`57 fc`, 00:10:02.564) at the same spacing, standing in for a partial
+    // weight on the way off the scale, which no capture shows.
+    it('keeps the heaviest steady weight', () => {
+      const frames = received(ALPHA_NO_WRITE);
+      const lighter = frames[6].frame;
+      expect(lighter.subarray(3, 6).toString('hex')).toBe('6957fc');
+      const step = 250;
+      const last = frames.at(-1)!.atMs;
+      const tail = [1, 2, 3, 4, 5, 6].map((k) => ({
+        atMs: last + k * step,
+        dir: 'rx' as const,
+        frame: lighter,
+      }));
+      const rs = feed(adapter, [...frames, ...tail]);
+      const lastHeld = rs.filter((r) => r !== null && adapter.isComplete(r)).at(-1)!;
+      expect(lastHeld.weight).toBe(88.58);
+    });
+
+    // The spacing is constructed (the frame is real, 88.58 kg from the ALPHA
+    // session above): five identical frames inside 800 ms are not steady yet,
+    // the sixth at 1000 ms is. #458 streams this fast.
+    it('needs a second, not only five frames', () => {
+      const steady = received(ALPHA_NO_WRITE)[7].frame;
+      const seq = [0, 200, 400, 600, 800, 1000].map((atMs) => ({
+        atMs,
+        dir: 'rx' as const,
+        frame: steady,
+      }));
+      const rs = feed(adapter, seq);
+      expect(completeAt(adapter, rs)).toBe(5);
+    });
+
+    it('a weight of 0 breaks the run', () => {
+      const zero = received(ALPHA_NO_WRITE)[0].frame; // ac 27 00 68 00 00: 0 g
+      const steady = received(ALPHA_NO_WRITE)[7].frame; // 88.58 kg
+      const seq = [steady, steady, steady, steady, zero, steady].map((frame, k) => ({
+        atMs: k * 300,
+        dir: 'rx' as const,
+        frame,
+      }));
+      const rs = feed(adapter, seq);
+      expect(completeAt(adapter, rs)).toBe(-1);
+    });
+
+    it('pairs a D6 that has no weight of its own with the steady weight', () => {
+      const rs = feed(adapter, received(ALPHA_NO_WRITE));
+      expect(rs.some((r) => r && adapter.isComplete(r))).toBe(true);
+      // #462's D6 (533 ohm, [6..10] zero) after the ALPHA plateau
+      expect(adapter.parseNotification(ISSUE_462_D6)).toEqual({ weight: 88.58, impedance: 533 });
+    });
+
+    describe('isCompositionPending()', () => {
+      it('owes the D6 after a lock, until it arrives', () => {
+        const frames = received(ALPHA_LOCK_D6);
+        feed(adapter, frames.slice(0, -1));
+        expect(adapter.isCompositionPending()).toBe(true);
+        adapter.parseNotification(frames.at(-1)!.frame);
+        expect(adapter.isCompositionPending()).toBe(false);
+      });
+
+      it('owes nothing for a steady weight that never locked', () => {
+        feed(adapter, received(ALPHA_NO_WRITE));
+        expect(adapter.isCompositionPending()).toBe(false);
+      });
+
+      it('owes nothing after the heart rate frame (#458 sends it after the D6)', () => {
+        const dump = parseDump(ISSUE_458_DUMP_1);
+        const d6 = dump.findIndex((f) => f.frame[18] === 0xd6);
+        for (const f of dump.slice(0, d6)) adapter.parseNotification(f.frame);
+        expect(adapter.isCompositionPending()).toBe(true);
+        adapter.parseNotification(dump.find((f) => f.frame[18] === 0xd7)!.frame);
+        expect(adapter.isCompositionPending()).toBe(false);
+      });
+    });
+
+    it('onSessionStart forgets the lock, the plateau and the phases', () => {
+      feed(adapter, received(ALPHA_NO_WRITE));
+      adapter.onSessionStart();
+      expect(adapter.isCompositionPending()).toBe(false);
+      // the weightless #462 D6 now has nothing to pair with
+      expect(adapter.parseNotification(ISSUE_462_D6)).toBeNull();
     });
   });
 
@@ -263,6 +408,23 @@ describe('ActiveEraAdapter', () => {
     it('returns zero weight in payload for zero weight input', () => {
       const payload = adapter.computeMetrics({ weight: 0, impedance: 0 }, defaultProfile());
       expect(payload.weight).toBe(0);
+    });
+
+    // T9: never the shared BIA. On #458 it is further from the display (26.9 %)
+    // than the BMI estimate: 31.6 % against 29.4 %.
+    it('takes body fat from the BMI estimate, not the shared BIA', () => {
+      let d6: ScaleReading | null = null;
+      for (const { frame } of parseDump(ISSUE_458_DUMP_2)) {
+        const r = adapter.parseNotification(frame);
+        if (frame[18] === 0xd6) d6 = r;
+      }
+      const p = adapter.computeMetrics(d6!, {
+        height: 175,
+        age: 49,
+        gender: 'male',
+        isAthlete: false,
+      });
+      expect(p.bodyFatPercent).toBeCloseTo(29.4, 1);
     });
   });
 });
