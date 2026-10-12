@@ -362,6 +362,13 @@ export class QnScaleAdapter
   private readonly storedEmitted = new Set<number>();
 
   /**
+   * The fresh stored weigh-in the session holds right now ("W kg at T"), so the
+   * log can say when a later reading takes its place in the hold and it is not
+   * exported (#331).
+   */
+  private heldStoredWeighIn: string | null = null;
+
+  /**
    * High-water mark of the stored weigh-ins reported, in scale-epoch seconds,
    * persisted by the runtime across restarts (dedupMark). Records are judged
    * against the mark as it stood when the session started: a batch need not
@@ -587,6 +594,7 @@ export class QnScaleAdapter
     this.live20Replayed = false;
     this.storedParts = [];
     this.storedHoldArmed = false;
+    this.heldStoredWeighIn = null;
     this.storedEmitted.clear();
     this.storedMarkAtSessionStart = this.storedMark;
     this.configSent = false;
@@ -1441,6 +1449,7 @@ export class QnScaleAdapter
     // it too keeps the hold armed if the single stable frame was lost on a proxy
     // link; once armed, a second held reading does not move the window.
     this.live20Weight = weight;
+    this.replaceHeldStoredWeighIn(`the weigh-in in progress (${weight} kg)`);
     const reading: ScaleReading = { weight, impedance: 0 };
     this.provisionalReadings.add(reading);
     bleLog.debug(
@@ -1691,13 +1700,31 @@ export class QnScaleAdapter
     this.storedMark = Math.max(this.storedMark, rec.recordSeconds);
     this.storedEmitted.add(rec.recordSeconds);
     this.provisionalReadings.add(reading);
-    if (!historical) this.storedHoldArmed = true;
+    if (!historical) {
+      this.storedHoldArmed = true;
+      this.replaceHeldStoredWeighIn(`a later stored weigh-in (${what})`);
+      this.heldStoredWeighIn = what;
+    }
     bleLog.debug(
       `QN: stored weigh-in ${what}, user slot ${rec.slot}, ` +
         (historical ? 'reported as history' : 'held: a live result in this session replaces it') +
         ' (#331)',
     );
     return reading;
+  }
+
+  /**
+   * The session hold keeps one reading, so a fresh stored weigh-in held there
+   * is gone once `by` takes its place, and it is already counted in the mark.
+   * Said at info with its weight and time, so it can be entered by hand (#331).
+   */
+  private replaceHeldStoredWeighIn(by: string): void {
+    if (this.heldStoredWeighIn === null) return;
+    bleLog.info(
+      `QN: a stored weigh-in (${this.heldStoredWeighIn}) is replaced by ${by}, ` +
+        'not exported (#331)',
+    );
+    this.heldStoredWeighIn = null;
   }
 
   /** The newest stored weigh-in reported, in scale-epoch seconds (#331). */

@@ -421,6 +421,7 @@ describe('QN 19-byte stored records (#331)', () => {
   // The same log: the result block that follows the stored record is the
   // session's own result, which replaces the held record.
   it('lets the live result after a fresh stored record close the weigh-in', async () => {
+    const info = spyLines('info');
     const adapter = new QnScaleAdapter();
     const s = await openSession(adapter, { now: R07_CONNECTED });
     const stored = s.feed(...R07_STORED)[4]!;
@@ -430,6 +431,28 @@ describe('QN 19-byte stored records (#331)', () => {
     expect(done).toEqual({ weight: 76.55, impedance: 0 });
     expect(adapter.isFinal(done!)).toBe(true);
     expect(adapter.isFinal(stored)).toBe(false);
+    // The held record is gone once the live weight takes its place in the
+    // hold, and the mark already counts it: the log keeps its weight and time.
+    expect(info.lines()).toContain(
+      `QN: a stored weigh-in (76.55 kg at ${R07_RECORD_AT}) is replaced by the weigh-in ` +
+        'in progress (76.55 kg), not exported (#331)',
+    );
+  });
+
+  it('says so when a later fresh stored record takes the place of the held one', async () => {
+    const info = spyLines('info');
+    const adapter = new QnScaleAdapter();
+    const s = await openSession(adapter, { now: R07_CONNECTED });
+    const out = s.feed(
+      ...storedRecordAt(R07_RECORD_AT, 1, 2),
+      ...storedRecordAt('2026-10-07T19:58:25Z', 2, 2),
+    );
+    expect(out[4]?.timestamp).toEqual(new Date(R07_RECORD_AT));
+    expect(out[9]?.timestamp).toEqual(new Date('2026-10-07T19:58:25Z'));
+    expect(info.lines()).toContain(
+      `QN: a stored weigh-in (76.55 kg at ${R07_RECORD_AT}) is replaced by a later stored ` +
+        'weigh-in (76.55 kg at 2026-10-07T19:58:25.000Z), not exported (#331)',
+    );
   });
 
   it('drops a fresh stored record while a live weight is held', async () => {
