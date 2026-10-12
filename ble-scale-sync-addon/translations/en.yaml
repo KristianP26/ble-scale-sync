@@ -70,9 +70,9 @@ configuration:
     description: >-
       QN-family scales only, and only worth trying after everything else. The
       same Arboleaf capture shows the vendor app's clock-setting frame carrying
-      one extra byte that this add-on does not send. Set true to send that
-      longer frame. What the extra byte selects is not known, so this is a
-      diagnostic to try, not a fix. Leave empty otherwise.
+      one extra byte that this add-on does not send: the phone's UTC offset.
+      Set true to send that longer frame with your Home Assistant time zone's
+      offset. This is a diagnostic to try, not a fix. Leave empty otherwise.
   qn_config_long:
     name: QN long config frame
     description: >-

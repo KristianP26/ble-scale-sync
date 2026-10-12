@@ -72,6 +72,7 @@ import {
   decodeStoredRecord,
   decryptQnResistance,
   hasValidSumChecksum,
+  timeZoneByte,
 } from './frames.js';
 import { qnAdvertTraits, qnMatches, warnOnOneByoneShape } from './matching.js';
 import { parseQnBroadcast } from './broadcast.js';
@@ -83,6 +84,7 @@ export {
   buildMeasurementTrigger,
   buildTimeSync,
   buildUserProfileFrame,
+  timeZoneByte,
 } from './frames.js';
 
 /** Format bytes as hex string for debug logging. */
@@ -1399,14 +1401,18 @@ export class QnScaleAdapter
     const gen = this.sessionGeneration;
     const appProfile = this.decideAppProfileSequence();
     // 0x20 time sync: seconds since 2000-01-01, little-endian. See
-    // TIME_SYNC_TRAILER for the 9-byte form and why it is opt-in.
+    // TIME_SYNC_TRAILER for the 9-byte form and why it is opt-in. Its extra
+    // byte is the host's UTC offset now, daylight saving included.
     const secs = Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
-    await this.writeCmd(buildTimeSync(this.seenProtocolType, secs, this.timeSyncLong));
+    const offsetMin = -new Date().getTimezoneOffset();
+    const tz = timeZoneByte(offsetMin);
+    await this.writeCmd(buildTimeSync(this.seenProtocolType, secs, this.timeSyncLong, tz));
     if (gen !== this.sessionGeneration) return;
     if (this.timeSyncLong) {
       bleLog.debug(
-        'QN: 0x20 time sync sent in the 9-byte vendor-app form ' +
-          '(ble.qn_time_sync_long, trailing byte undecoded, #331)',
+        `QN: 0x20 time sync sent in the 9-byte vendor-app form with UTC offset ` +
+          `${offsetMin >= 0 ? '+' : '-'}${Math.abs(offsetMin)} min ` +
+          `(0x${tz.toString(16).padStart(2, '0')}, ble.qn_time_sync_long, #331)`,
       );
     }
 

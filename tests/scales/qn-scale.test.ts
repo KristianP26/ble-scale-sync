@@ -11,6 +11,7 @@ import {
   decodeStoredRecord,
   decryptQnResistance,
   hasValidSumChecksum,
+  timeZoneByte,
 } from '../../src/scales/qn-scale/frames.js';
 import { qnAdvertTraits } from '../../src/scales/qn-scale/matching.js';
 import { NINETEEN_BYTE_RESULT_HOLD_MS } from '../../src/scales/qn-scale/constants.js';
@@ -2492,17 +2493,44 @@ describe('AE02 dispatch (#75, #235)', () => {
         expect(t.slice(0, 3)).toEqual([0x20, 0x08, 0xff]);
       });
 
-      it('sends the 9-byte form when ble.qn_time_sync_long is set', async () => {
-        const adapter = makeAdapter();
-        adapter.configure({ qnTimeSyncLong: true });
-        const writes = await driveHandshake(adapter, makeArboleafScaleInfo());
-        const t = writes.find((w) => w[0] === 0x20)!;
-        expect(t).toHaveLength(9);
-        // The timestamp bytes are wall-clock dependent, but nothing else is:
-        // the trailer must be appended after them, never inside them. The two
-        // tests above pin the arithmetic against the captured frames.
-        expect(t.slice(0, 3)).toEqual([0x20, 0x09, 0xff]);
-        expect(t[7]).toBe(0x08);
+      // The extra byte is the host's UTC offset in 15-minute units, bit 7 west
+      // of UTC (the vendor's published SDK). All three captures were taken in
+      // CEST, hence their 0x08. It used to be that 0x08 for every host.
+      it.each([
+        ['UTC+2, as in the captures', -120, 0x08],
+        ['UTC+1', -60, 0x04],
+        ['UTC-5', 300, 0x94],
+        ['UTC+5:45', -345, 0x17],
+        ['UTC', 0, 0x00],
+      ])(
+        'sends the 9-byte form with the host UTC offset (%s) when ble.qn_time_sync_long is set',
+        async (_name, jsOffset, tz) => {
+          const spy = vi.spyOn(Date.prototype, 'getTimezoneOffset').mockReturnValue(jsOffset);
+          try {
+            const adapter = makeAdapter();
+            adapter.configure({ qnTimeSyncLong: true });
+            const writes = await driveHandshake(adapter, makeArboleafScaleInfo());
+            const t = writes.find((w) => w[0] === 0x20)!;
+            expect(t).toHaveLength(9);
+            // The timestamp bytes are wall-clock dependent, but nothing else is:
+            // the trailer must be appended after them, never inside them. The
+            // tests above pin the arithmetic against the captured frames.
+            expect(t.slice(0, 3)).toEqual([0x20, 0x09, 0xff]);
+            expect(t[7]).toBe(tz);
+            expect(hasValidSumChecksum(t)).toBe(true);
+          } finally {
+            spy.mockRestore();
+          }
+        },
+      );
+
+      it('reproduces both captured 9-byte frames from the CEST offset', () => {
+        expect(buildTimeSync(0xff, 0x3222b3f3, true, timeZoneByte(120))).toEqual([
+          0x20, 0x09, 0xff, 0xf3, 0xb3, 0x22, 0x32, 0x08, 0x2a,
+        ]);
+        expect(buildTimeSync(0xff, 0x324ebca0, true, timeZoneByte(120))).toEqual([
+          0x20, 0x09, 0xff, 0xa0, 0xbc, 0x4e, 0x32, 0x08, 0x0c,
+        ]);
       });
 
       it('leaves every other frame alone when the long form is on', async () => {

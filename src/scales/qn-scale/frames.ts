@@ -52,15 +52,29 @@ export function buildA2Frame(raw: number): number[] {
  * field, its position and the checksum rule are identical and the entire
  * difference is this one byte before the checksum.
  *
- * WHAT IT MEANS IS NOT DECODED. That is why `ble.qn_time_sync_long` is off by
- * default: a wrong value here is silent in exactly the way `qn_protocol_byte`
- * is, and every QN scale in the registry reads today on the 8-byte form.
+ * Per the vendor's published SDK it is the phone's UTC offset in 15-minute
+ * units, with bit 7 set west of UTC, including daylight saving: 0x08 is UTC+2,
+ * and all three captures were taken in CEST. The adapter sends the host's own
+ * offset there (`timeZoneByte`); this captured value is only the default that
+ * keeps the frame tests byte for byte. `ble.qn_time_sync_long` stays off by
+ * default: every QN scale in the registry reads today on the 8-byte form.
  *
  * The app's 0x13 config frame is likewise one byte longer than ours. That one
  * lives in `buildConfig` below, behind its own switch for the same reason: two
  * frames moving at once makes a reporter's result unreadable.
  */
 const TIME_SYNC_TRAILER = 0x08;
+
+/**
+ * The 9-byte 0x20's time-zone byte for a UTC offset in minutes (east
+ * positive): whole 15-minute units, bit 7 for a western offset, as the vendor's
+ * published SDK computes it. UTC+2 -> 0x08, UTC+1 -> 0x04, UTC-5 -> 0x94.
+ */
+export function timeZoneByte(offsetMinutes: number): number {
+  if (!Number.isFinite(offsetMinutes)) return 0;
+  const units = Math.min(0x7f, Math.trunc(Math.abs(offsetMinutes) / 15));
+  return offsetMinutes < 0 && units > 0 ? units | 0x80 : units;
+}
 
 /**
  * 0x13 config frame trailer, the two bytes the vendor app has where this app
@@ -122,7 +136,12 @@ export function buildConfig(protocolType: number, unitFlag: number, long = false
  * Exported so a test can pin it against the captured frame byte for byte
  * without having to control the handshake's wall clock.
  */
-export function buildTimeSync(protocolType: number, seconds: number, long = false): number[] {
+export function buildTimeSync(
+  protocolType: number,
+  seconds: number,
+  long = false,
+  tzByte = TIME_SYNC_TRAILER,
+): number[] {
   const s = seconds >>> 0;
   const body = [
     0x20,
@@ -133,7 +152,7 @@ export function buildTimeSync(protocolType: number, seconds: number, long = fals
     (s >> 16) & 0xff,
     (s >>> 24) & 0xff,
   ];
-  if (long) body.push(TIME_SYNC_TRAILER);
+  if (long) body.push(tzByte & 0xff);
   return [...body, body.reduce((a, b) => a + b, 0) & 0xff];
 }
 
