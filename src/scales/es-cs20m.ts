@@ -8,7 +8,12 @@ import type {
   BodyComposition,
   ConnectionContext,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
+import {
+  uuid16,
+  buildPayload,
+  biaFatIfPlausible,
+  type ScaleBodyComp,
+} from './body-comp-helpers.js';
 import { matchesDescriptor, ownAddressBytes, type MatchDescriptor } from './match-descriptor.js';
 import { bleLog, errMsg } from '../ble/types.js';
 
@@ -329,6 +334,12 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
   private lastWeight = 0;
   /** The accepted 0x18 of this weigh-in, held until the power-off frame. */
   private result: ScaleReading | null = null;
+  /**
+   * Readings taken from an accepted 0x18: only their resistance drives BIA.
+   * Keyed by the reading, as computeMetrics can run after the next session has
+   * started (#394), so never cleared.
+   */
+  private readonly resultReadings = new WeakSet<ScaleReading>();
 
   /**
    * The session's context, captured for the writes a power-on frame triggers.
@@ -521,6 +532,7 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
     }
     const impedance = data.readUInt16BE(12);
     this.result = { weight, impedance };
+    this.resultReadings.add(this.result);
     // BMI and body fat stay out of this line; the raw frame is already in the
     // notification debug log.
     bleLog.debug(
@@ -663,8 +675,20 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
     return reading.weight > 0 && (this.stable || this.stopped || reading === this.result);
   }
 
+  /**
+   * Body fat from the resistance of an accepted 0x18, through the shared BIA
+   * estimator and its 150-1200 ohm band, as the #386 adapters do (D046). The
+   * profile is the matched user's, not the guest profile the scale computed
+   * its own body fat from. Every other reading keeps the BMI estimate: the
+   * resistance a basic-flavor 0x14 final carries is exported, but no such
+   * unit has been checked against the app yet.
+   */
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    const comp: ScaleBodyComp = {};
+    const comp: ScaleBodyComp = {
+      fat: this.resultReadings.has(reading)
+        ? biaFatIfPlausible(reading.weight, reading.impedance, profile)
+        : undefined,
+    };
     return buildPayload(reading.weight, reading.impedance, comp, profile);
   }
 }

@@ -12,7 +12,7 @@ import {
 } from '../helpers/scale-test-utils.js';
 import { adapters } from '../../src/scales/index.js';
 import { resolveAdapter } from '../../src/scales/resolve.js';
-import { uuid16 } from '../../src/scales/body-comp-helpers.js';
+import { uuid16, buildPayload, computeBiaFat } from '../../src/scales/body-comp-helpers.js';
 import { bleLog } from '../../src/ble/types.js';
 import type {
   BleDeviceInfo,
@@ -955,6 +955,37 @@ describe('EsCs20mAdapter 0x18 result (#436)', () => {
     expect(feed(adapter, [POWER_ON_436, W_139_10, RESULT_404])).not.toBeNull();
     adapter.parseNotification(hex(POWER_ON_436));
     expect(adapter.completionHoldMs).toBeUndefined();
+  });
+
+  // The profile is the made-up defaultProfile(), never one derived from the
+  // reporter's log.
+  describe('body composition', () => {
+    it('computes body fat from the resistance of an accepted 0x18 (BIA)', async () => {
+      const adapter = await connected();
+      const p = defaultProfile();
+      const result = feed(adapter, [POWER_ON_436, W_139_10, RESULT_470])!;
+      const payload = adapter.computeMetrics(result, p);
+      expect(payload).toEqual(buildPayload(139.1, 470, { fat: computeBiaFat(139.1, 470, p) }, p));
+      expect(payload.bodyFatPercent).not.toBe(buildPayload(139.1, 470, {}, p).bodyFatPercent);
+    });
+
+    it('keeps the BMI estimate for a 0x18 in socks (0 ohm)', async () => {
+      const adapter = await connected();
+      const p = defaultProfile();
+      const result = feed(adapter, [POWER_ON_436, W_139_20, RESULT_SOCKS])!;
+      expect(adapter.computeMetrics(result, p)).toEqual(buildPayload(139.2, 0, {}, p));
+    });
+
+    // Basic flavor (R-A016 normal-mode final, see the #376 status describe):
+    // its resistance is exported, body fat stays the estimate until a
+    // basic-flavor unit can be checked against the app (D046).
+    it('keeps the BMI estimate for a 0x14 final with its own resistance', () => {
+      const adapter = makeAdapter();
+      const p = defaultProfile();
+      const reading = adapter.parseNotification(hex('55aa14000701000023b903110b'))!;
+      expect(reading).toEqual({ weight: 91.45, impedance: 785 });
+      expect(adapter.computeMetrics(reading, p)).toEqual(buildPayload(91.45, 785, {}, p));
+    });
   });
 });
 
