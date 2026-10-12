@@ -389,6 +389,16 @@ function initializeAdapter(
 }
 
 /**
+ * How each `waitForRawReading()` session still in progress on a device ends
+ * itself the way a disconnect ends it, returning what that settled it with.
+ * Read only by withAbandonmentCleanup.
+ */
+const sessionEnders = new WeakMap<BleDevice, (cause: string) => RawReading | undefined>();
+
+/** The cause waitForRawReading's own disconnect callback ends a session with. */
+const DISCONNECTED = 'Disconnected';
+
+/**
  * Run a bounded reading session and make sure an abandoned one cleans up.
  *
  * `withTimeout` / `withIdleTimeout` abandon the promise they raced rather than
@@ -396,15 +406,29 @@ function initializeAdapter(
  * its unlock interval, its notify subscriptions and the adapter's session state
  * all live. Firing the disconnect drives the one cleanup path that already
  * exists instead of giving every transport its own (#404).
+ *
+ * The abandoned session also hands over what a disconnect would: the reading
+ * held for body composition, or the stored records it buffered while no live
+ * weigh-in came. Those are returned instead of the timeout error. A timeout used
+ * to drop them, and an adapter that counts a stored record as reported once it
+ * hands it over (`dedupMark`) then never handed it over again: a 19-byte QN
+ * scale that sends its stored weigh-ins and keeps the link up until the idle
+ * timeout lost them for good (#331). On a shutdown (`abortSignal`) the session
+ * is only cleaned up.
  */
-export async function withAbandonmentCleanup<T>(
+export async function withAbandonmentCleanup(
   bleDevice: BleDevice,
-  run: () => Promise<T>,
-): Promise<T> {
+  run: () => Promise<RawReading>,
+  abortSignal?: AbortSignal,
+): Promise<RawReading> {
   try {
     return await run();
   } catch (err) {
+    const end = sessionEnders.get(bleDevice);
+    sessionEnders.delete(bleDevice);
+    const settled = abortSignal?.aborted ? undefined : end?.(`Gave up waiting (${errMsg(err)})`);
     bleDevice.fireDisconnect();
+    if (settled) return settled;
     throw err;
   }
 }
@@ -560,7 +584,8 @@ export interface RawReading {
  * frame that passes `isComplete()`. If the scale disconnects after dumping
  * cache but without sending a live frame, the Promise resolves with the
  * newest historical reading as `reading` and the rest in `history`. Reject
- * only fires when no reading at all was collected before disconnect.
+ * only fires when no reading at all was collected before disconnect. A caller
+ * whose timeout gives up gets the same through withAbandonmentCleanup.
  */
 export function waitForRawReading(
   charMap: Map<string, BleChar>,
@@ -583,14 +608,16 @@ export function waitForRawReading(
     // legacy unlock and the adapter's own ctx.write (#211).
     const lanes = createWriteLanes();
 
-    const finishWith = (r: ScaleReading): void => {
+    const finishWith = (r: ScaleReading): RawReading => {
       resolved = true;
       hold.clear();
       clearCaptureHold();
       init.cleanup();
       process.stdout.write('\r' + ' '.repeat(80) + '\r');
       bleLog.info(`Reading complete: ${r.weight.toFixed(2)} kg / ${r.impedance} Ohm`);
-      resolve({ reading: r, adapter, history: history.snapshot() });
+      const raw: RawReading = { reading: r, adapter, history: history.snapshot() };
+      resolve(raw);
+      return raw;
     };
 
     // Armed only for adapters with completionHoldMs; the hold() call below is
@@ -738,8 +765,14 @@ export function waitForRawReading(
       manufacturerData,
     );
 
-    bleDevice.onDisconnect(() => {
-      if (resolved) return;
+    /**
+     * End the session as the scale disconnecting does, and return what that
+     * settled it with; undefined when it was already settled or had nothing,
+     * which rejects it. `cause` opens the log lines: the disconnect itself, or
+     * a caller whose timeout gave up (withAbandonmentCleanup).
+     */
+    const endSession = (cause: string): RawReading | undefined => {
+      if (resolved) return undefined;
       hold.clear();
       clearCaptureHold();
       // A held live weigh-in wins over the stored records of the same session:
@@ -751,12 +784,11 @@ export function waitForRawReading(
       if (held) {
         if (history.length > 0) {
           bleLog.debug(
-            `Disconnected while holding a live reading; ${history.length} historical ` +
+            `${cause} while holding a live reading; ${history.length} historical ` +
               `reading(s) go out as history.`,
           );
         }
-        finishWith(held);
-        return;
+        return finishWith(held);
       }
       if (history.length > 0) {
         resolved = true;
@@ -764,11 +796,12 @@ export function waitForRawReading(
         const latest = history.popLatest()!;
         process.stdout.write('\r' + ' '.repeat(80) + '\r');
         bleLog.info(
-          `Disconnected after cache replay (${history.length + 1} historical reading(s)); ` +
+          `${cause} after cache replay (${history.length + 1} historical reading(s)); ` +
             `no live frame.`,
         );
-        resolve({ reading: latest, adapter, history: history.snapshot() });
-        return;
+        const raw: RawReading = { reading: latest, adapter, history: history.snapshot() };
+        resolve(raw);
+        return raw;
       }
       const r = lastCaptureReading;
       if (capture.enabled && r) {
@@ -778,9 +811,11 @@ export function waitForRawReading(
         resolved = true;
         init.cleanup();
         process.stdout.write('\r' + ' '.repeat(80) + '\r');
-        bleLog.info('Capture mode: scale disconnected; recorded frames above. Returning reading.');
-        resolve({ reading: r, adapter, history: undefined });
-        return;
+        const why = cause === DISCONNECTED ? 'scale disconnected' : cause;
+        bleLog.info(`Capture mode: ${why}; recorded frames above. Returning reading.`);
+        const raw: RawReading = { reading: r, adapter, history: undefined };
+        resolve(raw);
+        return raw;
       }
       // Latch before cleaning up. Without this a notification arriving after an
       // abandoned session is still parsed, and the capture/hold timers above
@@ -788,7 +823,12 @@ export function waitForRawReading(
       resolved = true;
       init.cleanup();
       reject(new Error('Scale disconnected before reading completed'));
+      return undefined;
+    };
+    bleDevice.onDisconnect(() => {
+      endSession(DISCONNECTED);
     });
+    sessionEnders.set(bleDevice, endSession);
 
     // Subscribe to notifications and start adapter init.
     // Errors are caught and forwarded to the Promise's reject.

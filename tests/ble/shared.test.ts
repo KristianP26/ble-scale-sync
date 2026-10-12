@@ -8,7 +8,7 @@ import {
   getRawCaptureConfig,
   toHex,
 } from '../../src/ble/shared.js';
-import { withIdleTimeout } from '../../src/ble/types.js';
+import { untilAborted, withIdleTimeout } from '../../src/ble/types.js';
 import type { BleChar, BleDevice } from '../../src/ble/shared.js';
 import { normalizeUuid, bleLog } from '../../src/ble/types.js';
 import { KoogeekS1Adapter } from '../../src/scales/koogeek-s1.js';
@@ -2386,7 +2386,12 @@ describe('QN 19-byte dialect hold through waitForRawReading (#331)', () => {
     '16 10 ff 00 00 2a 03 3a 00 9b 02 15 03 a9 04 ee',
   ].map(hex);
 
-  async function startSession(scaleInfo: Buffer = INFO) {
+  /** `idleTimeoutMs`: bound the session the way the transports do (#404). */
+  async function startSession(
+    scaleInfo: Buffer = INFO,
+    idleTimeoutMs?: number,
+    abortSignal?: AbortSignal,
+  ) {
     const notify = createMockChar();
     const write = createMockChar();
     const device = createMockDevice();
@@ -2396,13 +2401,30 @@ describe('QN 19-byte dialect hold through waitForRawReading (#331)', () => {
     ]);
     const adapter = new QnScaleAdapter();
     adapter.configure({ qnWeightAck: true });
-    const promise = waitForRawReading(
-      charMap,
-      device,
-      adapter,
-      { ...PROFILE, lastKnownWeight: 76 },
-      'AABBCCDDEEFF',
-    );
+    const wait = (onActivity?: (minIdleMs?: number) => void) =>
+      waitForRawReading(
+        charMap,
+        device,
+        adapter,
+        { ...PROFILE, lastKnownWeight: 76 },
+        'AABBCCDDEEFF',
+        undefined,
+        undefined,
+        undefined,
+        onActivity,
+      );
+    const promise =
+      idleTimeoutMs === undefined
+        ? wait()
+        : withAbandonmentCleanup(
+            device,
+            () =>
+              untilAborted(
+                withIdleTimeout(wait, idleTimeoutMs, 'GATT reading timeout'),
+                abortSignal,
+              ),
+            abortSignal,
+          );
     let settled = false;
     void promise.then(
       () => (settled = true),
@@ -2552,6 +2574,67 @@ describe('QN 19-byte dialect hold through waitForRawReading (#331)', () => {
       expect(raw.history).toEqual([
         { weight: 76.55, impedance: 0, timestamp: new Date('2026-10-07T19:57:25Z') },
       ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The scale hands over a stored weigh-in, nobody is weighing, and the scale
+  // keeps the link up until the caller's idle timeout gives up. The adapter
+  // counted the record as reported when it handed it over (dedupMark), so a
+  // timeout that dropped it would lose it for good.
+  it('hands over the stored records of a session its idle timeout ended', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-07T20:30:00Z'));
+      const s = await startSession(INFO_1007, 60_000);
+      for (const f of STORED_1007) s.notify.triggerData(f);
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(s.isSettled()).toBe(true);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual({
+        weight: 76.55,
+        impedance: 0,
+        timestamp: new Date('2026-10-07T19:57:25Z'),
+      });
+      expect(raw.history ?? []).toEqual([]);
+      expect(s.adapter.dedupMark()).toBe(844718245);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A shutdown only cleans up: the process is on its way out, and the stored
+  // records are read again by the next one (the mark is saved after processing).
+  it('hands nothing over when the session ends for a shutdown', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-07T20:30:00Z'));
+      const shutdown = new AbortController();
+      const s = await startSession(INFO_1007, 60_000, shutdown.signal);
+      for (const f of STORED_1007) s.notify.triggerData(f);
+      await vi.advanceTimersByTimeAsync(500);
+      const outcome = s.promise.then(
+        () => 'resolved',
+        (e: Error) => e.message,
+      );
+      shutdown.abort(new Error('shutting down'));
+      expect(await outcome).toBe('shutting down');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still gives up on a timed-out session that collected nothing', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession(INFO_1007, 60_000);
+      const outcome = s.promise.then(
+        () => 'resolved',
+        (e: Error) => e.message,
+      );
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(await outcome).toBe('GATT reading timeout');
     } finally {
       vi.useRealTimers();
     }

@@ -593,33 +593,37 @@ export async function readWithTimeouts(
   try {
     // A shutdown ends the session the same way a timeout does, through
     // withAbandonmentCleanup, instead of waiting out an idle window of up to
-    // 120 s that the 5 s force-exit grace never lets finish (A-07).
-    return await withAbandonmentCleanup(bleDevice, () =>
-      untilAborted(
-        withIdleTimeout(
-          (onActivity) =>
-            waitForRawReading(
-              charMap,
-              bleDevice,
-              matchedAdapter,
-              opts.profile,
-              deviceMac.replace(/[:-]/g, '').toUpperCase(),
-              opts.weightUnit,
-              opts.onLiveData,
-              opts.scaleAuth,
-              (minIdleMs) => {
-                heard = true;
-                onActivity(minIdleMs);
-              },
-              opts.deviceName,
-              opts.manufacturerData,
-            ),
-          idleMs,
-          'Timed out waiting for a complete scale reading',
-          { ms: idleMs * READING_SESSION_CAP_FACTOR, message: 'GATT session cap exceeded' },
+    // 120 s that the 5 s force-exit grace never lets finish (A-07). Unlike a
+    // timeout it hands nothing over: the process is on its way out.
+    return await withAbandonmentCleanup(
+      bleDevice,
+      () =>
+        untilAborted(
+          withIdleTimeout(
+            (onActivity) =>
+              waitForRawReading(
+                charMap,
+                bleDevice,
+                matchedAdapter,
+                opts.profile,
+                deviceMac.replace(/[:-]/g, '').toUpperCase(),
+                opts.weightUnit,
+                opts.onLiveData,
+                opts.scaleAuth,
+                (minIdleMs) => {
+                  heard = true;
+                  onActivity(minIdleMs);
+                },
+                opts.deviceName,
+                opts.manufacturerData,
+              ),
+            idleMs,
+            'Timed out waiting for a complete scale reading',
+            { ms: idleMs * READING_SESSION_CAP_FACTOR, message: 'GATT session cap exceeded' },
+          ),
+          opts.abortSignal,
         ),
-        opts.abortSignal,
-      ),
+      opts.abortSignal,
     );
   } catch (err) {
     // The scale answered and the session simply ran out of time: nobody

@@ -5,7 +5,7 @@ import type {
   ScaleAuth,
 } from '../../interfaces/scale-adapter.js';
 import type { EsphomeProxyConfig, WeightUnit } from '../../config/schema.js';
-import { type RawReading, waitForRawReading } from '../shared.js';
+import { type RawReading, waitForRawReading, withAbandonmentCleanup } from '../shared.js';
 import { resolveAdapter, resolveAfterDiscovery } from '../../scales/resolve.js';
 import {
   evaluateAdvertisement,
@@ -270,27 +270,31 @@ export class ReadingWatcher implements Watcher {
           gender: 'male',
           isAthlete: false,
         };
-        const raw = await withTimeout(
-          withIdleTimeout(
-            (onActivity) =>
-              waitForRawReading(
-                session!.charMap,
-                session!.device,
-                gattAdapter,
-                sessionProfile,
-                address.replace(/[:-]/g, '').toUpperCase(),
-                this.weightUnit,
-                undefined,
-                this.scaleAuth,
-                onActivity,
-                info.localName,
-                manufacturerData,
-              ),
-            GATT_READING_IDLE_MS,
-            `GATT reading timeout for ${address}`,
+        // Through withAbandonmentCleanup, so a timeout still hands over the
+        // stored weigh-ins the session collected (#331).
+        const raw = await withAbandonmentCleanup(session.device, () =>
+          withTimeout(
+            withIdleTimeout(
+              (onActivity) =>
+                waitForRawReading(
+                  session!.charMap,
+                  session!.device,
+                  gattAdapter,
+                  sessionProfile,
+                  address.replace(/[:-]/g, '').toUpperCase(),
+                  this.weightUnit,
+                  undefined,
+                  this.scaleAuth,
+                  onActivity,
+                  info.localName,
+                  manufacturerData,
+                ),
+              GATT_READING_IDLE_MS,
+              `GATT reading timeout for ${address}`,
+            ),
+            GATT_SESSION_ABSOLUTE_MS,
+            `GATT session cap exceeded for ${address}`,
           ),
-          GATT_SESSION_ABSOLUTE_MS,
-          `GATT session cap exceeded for ${address}`,
         );
         // A read that works again makes the next failure news, so it warns.
         this.gattWarnedFor.delete(address);
