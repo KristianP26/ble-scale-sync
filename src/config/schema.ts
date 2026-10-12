@@ -220,12 +220,14 @@ export const BleSchema = z
      * The Arboleaf vendor app sends `20 09 ff <secs LE> 08 <checksum>` where this
      * app sends `20 08 ff <secs LE> <checksum>`. The timestamp field, its
      * position and the family checksum rule are identical; the whole difference
-     * is one extra `0x08` before the checksum, and that byte is NOT decoded.
+     * is one extra byte before the checksum. Per the vendor's published SDK it
+     * is the phone's UTC offset (`0x08` = UTC+2 in the captures), and the long
+     * form sends the host's own offset there (`timeZoneByte`).
      *
      * Off by default and opt-in per install, for the same reason as
-     * `qn_a4_prelude`: a wrong value here is silent in exactly the way
-     * `qn_protocol_byte` is, and every QN scale in the registry reads today on
-     * the 8-byte form.
+     * `qn_a4_prelude`: a frame the scale does not expect fails silently in
+     * exactly the way `qn_protocol_byte` does, and every QN scale in the
+     * registry reads today on the 8-byte form.
      */
     qn_time_sync_long: z.boolean().optional().nullable(),
     /**

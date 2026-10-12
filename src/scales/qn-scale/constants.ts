@@ -68,11 +68,12 @@ import { uuid16 } from '../body-comp-helpers.js';
  *   0xff, and its 0x22 start command is then byte identical to ours (#235).
  *   Note that only the 0x22 matches the app byte for byte: the app's 0x13 and
  *   0x20 are each one byte longer than ours. The 0x20 delta is one trailing
- *   0x08 before the checksum and is reproducible behind `ble.qn_time_sync_long`
- *   (see TIME_SYNC_TRAILER). The 0x13 delta IS in the #235 captures: bytes
- *   `[0..6]` match ours and the whole difference is a pair at `[7..8]` where we
- *   send one byte. What that pair means is not decoded; it is reproducible
- *   behind `ble.qn_config_long` (see CONFIG_TRAILER in frames.ts).
+ *   byte before the checksum, the UTC offset (0x08 in the captures), sent
+ *   behind `ble.qn_time_sync_long` (see TIME_SYNC_TRAILER). The 0x13 delta IS
+ *   in the #235 captures: bytes `[0..6]` match ours and the whole difference
+ *   is a pair at `[7..8]` where we send one byte. What that pair means is not
+ *   decoded; it is reproducible behind `ble.qn_config_long` (see
+ *   CONFIG_TRAILER in frames.ts).
  */
 
 // Type 2 UUIDs (most common variant)
