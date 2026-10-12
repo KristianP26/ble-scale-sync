@@ -187,7 +187,7 @@ describe('EsCs20mAdapter', () => {
       expect(reading!.weight).toBe(80);
     });
 
-    it('parses msgId 0x15 extended frame (returns null, stores resistance)', () => {
+    it('returns null for a stored record (0x15) without the header', () => {
       const adapter = makeAdapter();
       const buf = Buffer.alloc(11);
       buf[0] = 0x15;
@@ -196,7 +196,7 @@ describe('EsCs20mAdapter', () => {
       expect(adapter.parseNotification(buf)).toBeNull();
     });
 
-    it('parses msgId 0x15 with 55 AA header', () => {
+    it('returns null for a stored record (0x15) with the 55 AA header', () => {
       const adapter = makeAdapter();
       const buf = Buffer.alloc(13);
       buf[0] = 0x55;
@@ -207,24 +207,19 @@ describe('EsCs20mAdapter', () => {
       expect(adapter.parseNotification(buf)).toBeNull();
     });
 
-    it('uses resistance from 0x15 frame in subsequent 0x14 frame', () => {
+    // MB1 frames from tests/test_x55aa_protocol.py in
+    // https://github.com/ronnnnnnnnnnnnn/renpho-escs20m: a power-on with one
+    // stored record waiting, then that record (60.95 kg, 873 ohm, taken 615 s
+    // earlier). The R-A016 zero-current final after it carries no resistance of
+    // its own, and used to be exported with the earlier weigh-in's 873 ohm.
+    it("keeps a stored record's resistance out of the live weigh-in", () => {
       const adapter = makeAdapter();
+      expect(adapter.parseNotification(hex('55aa11000501010107001f'))).toBeNull();
+      expect(adapter.parseNotification(hex('55aa15000c000017cf0369000002670000db'))).toBeNull();
 
-      // Extended frame stores resistance
-      const ext = Buffer.alloc(11);
-      ext[0] = 0x15;
-      ext.writeUInt16BE(500, 9);
-      adapter.parseNotification(ext);
-
-      // Weight frame without resistance
-      const w = Buffer.alloc(10);
-      w[0] = 0x14;
-      w[5] = 0x01;
-      w.writeUInt16BE(8000, 8);
-
-      const reading = adapter.parseNotification(w);
-      expect(reading).not.toBeNull();
-      expect(reading!.impedance).toBe(500);
+      const live = adapter.parseNotification(hex('55aa14000711000023b9000007'))!;
+      expect(live).toEqual({ weight: 91.45, impedance: 0 });
+      expect(adapter.isComplete(live)).toBe(true);
     });
 
     it('returns null for unknown msgId', () => {

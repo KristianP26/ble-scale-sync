@@ -270,8 +270,7 @@ function hasOwnMacEcho(device: BleDeviceInfo): boolean {
  *   - Message ID 0x14 (weight frame): status at [5], weight at [8-9], optional
  *     resistance at [10-11]
  *   - Message ID 0x15 (STORED offline record, not a live "extended frame"):
- *     resistance at bytes [9-10]; the adapter still keeps that resistance,
- *     see the 0x15 branch below
+ *     an earlier weigh-in, logged and not used
  *   - Weight at [8-9] big-endian uint16 / 100 (kg)
  *   - Complete on a 0x14 final (status low nibble 1) or on the 0x11 power-off
  *
@@ -353,8 +352,8 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring {
    *
    * ID 0x15 - stored offline record (an earlier weigh-in, not a live frame;
    * per renpho-escs20m protocol.py and a third-party capture of seven
-   * records, payload [6:10] is the seconds since that weigh-in):
-   *   [9-10]   resistance, big-endian uint16
+   * records, payload [6:10] is the seconds since that weigh-in). Not used:
+   * its resistance at [9-10] belongs to that earlier weigh-in.
    */
   parseNotification(data: Buffer): ScaleReading | null {
     if (data.length < 2) return null;
@@ -398,12 +397,10 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring {
 
     if (msgId === 0x15) {
       // A stored offline record, which the original port read as an "extended
-      // frame". Keeping its resistance attaches an earlier weigh-in's value to
-      // the live weight; that change is tracked separately and deliberately
-      // not made here.
-      if (data.length >= 11) {
-        this.resistance = data.readUInt16BE(9);
-      }
+      // frame" and took the resistance from. That attached an earlier
+      // weigh-in's resistance to the live weight whenever the live frames
+      // carried none of their own.
+      bleLog.debug('ES-CS20M: stored record (0x15) ignored: it is an earlier weigh-in');
       return null;
     }
 
