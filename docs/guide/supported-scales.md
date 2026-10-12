@@ -154,7 +154,7 @@ Weight only. These Chipsea-based scales, sold under many names with the OKOK app
 
 Weight only. The Fit 8S broadcasts its weigh-in without a name and without accepting a connection.
 
-- **No name.** It is recognised because it repeats its own Bluetooth address inside the broadcast, so the transport must report addresses. On the default Linux transport set `ble.scale_mac` (`scan` and the setup wizard list nameless scales with their address). macOS does not expose addresses, so there it is recognised by the service 0xFFD0 it advertises and the shape of its broadcast.
+- **No name.** It is recognised by its own Bluetooth address, which it repeats inside the broadcast. On the default Linux transport set `ble.scale_mac` (`scan` and the setup wizard list nameless scales with their address). macOS does not expose addresses, so there it is recognised by the service 0xFFD0 it advertises and the shape of its broadcast.
 - **Any display unit.** The weight is read the same whether the scale shows kg, lb or st, as its owners report; no lb or st weigh-in has been captured yet.
 - **Stay on the scale.** The result is sent when the scale has finished measuring, about two seconds after the weight settles.
 - **No impedance.** The broadcast carries a field that looks like impedance, but it has not been compared with the body fat the VeSync app shows for the same weigh-in, so body composition is estimated from BMI (Deurenberg formula) and the field is logged in debug mode ([#408](https://github.com/KristianP26/ble-scale-sync/issues/408)).
