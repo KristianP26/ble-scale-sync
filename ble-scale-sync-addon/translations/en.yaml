@@ -51,20 +51,23 @@ configuration:
       byte above. Sends your weight anchor (last known weight, or the middle of
       your weight range) twice right after the start command, as the
       Arboleaf vendor app does, and acknowledges live weight frames with their
-      own weight. On the 19-byte Arboleaf dialect it also sends your age,
-      height and sex as the app does, and one such scale streamed its weight with this
-      and QN long time sync both set true (reading it is not yet confirmed on
-      hardware, #331). Leave empty unless your QN scale completes the whole
-      handshake in the log and then reports no weight at all; then set true.
+      own weight. On the 19-byte Arboleaf dialect it also sends the first
+      user's age, height and sex as the app does, which lets the scale's own
+      body composition be exported when it was computed for that profile, and
+      one such scale streamed its weight with this and QN long time sync both
+      set true (not yet confirmed on hardware, #331). Leave empty unless your
+      QN scale completes the whole handshake in the log and then reports no
+      weight at all; then set true.
   qn_a4_prelude:
     name: QN A4 prelude
     description: >-
       QN-family scales only, and the last thing to try after the QN protocol
       byte and the weight acknowledgement. An HCI capture of an Arboleaf vendor app
-      shows two undecoded 0xA4 frames sent between the start command and the
-      first weight frame, which this add-on does not send. Set true to replay
-      them. The payload is one reporter's own bytes, so it may help your unit
-      or do nothing. Leave empty otherwise.
+      shows two 0xA4 frames sent between the start command and the first
+      weight frame, which this add-on does not send. Set true to replay them.
+      They are one reporter's own bytes and overwrite data the scale keeps for
+      its first user, and a session that sends them does not use the scale's
+      own body composition. Leave empty otherwise.
   qn_time_sync_long:
     name: QN long time sync
     description: >-

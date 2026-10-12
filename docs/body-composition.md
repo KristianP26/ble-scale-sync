@@ -129,6 +129,10 @@ The S400 broadcasts weight plus its 50 kHz impedance (and a 250 kHz impedance an
 
 The Yunmai scale computes body composition on-device and transmits the pre-calculated fat, water, muscle, and bone values in its BLE notifications. BLE Scale Sync uses those values directly; the remaining metrics (BMI, BMR, metabolic age, visceral fat, physique rating) are calculated locally.
 
+### Arboleaf and other 8-electrode QN scales (19-byte dialect)
+
+These scales measure eight segment impedances (both hands, both feet and the trunk, at two frequencies) and compute body fat, water, muscle, bone and visceral fat themselves, for the profile ble-scale-sync sends before the weigh-in: the first user's age, height and sex (with `ble.qn_weight_ack`). Those values are used as one set, only when the weigh-in is matched to a user with exactly that profile and the scale measured after it accepted the profile; BMI, BMR, metabolic age and physique rating are calculated locally. Otherwise, and for weigh-ins the scale stored while nothing was connected, body composition is estimated from BMI. The segment impedances are logged in debug mode only; no whole-body impedance is derived from them. Not yet confirmed on hardware ([#331](https://github.com/KristianP26/ble-scale-sync/issues/331)), details in [Supported Scales](/guide/supported-scales#arboleaf-qn-scale-19-byte-dialect).
+
 ## References
 
 - **BIA**: Lukaski H.C. et al. (1986), _"Assessment of fat-free mass using bioelectrical impedance measurements of the human body"_, American Journal of Clinical Nutrition
