@@ -7,6 +7,7 @@
  */
 
 import type { Gender } from '../../interfaces/scale-adapter.js';
+import { VENDOR_APP_USER_KEY, VISIT_ALGORITHM, VISIT_ATHLETE_STEP } from './constants.js';
 
 /**
  * Build the extended-dialect measurement trigger for a weight anchor in kg.
@@ -415,10 +416,19 @@ export const OPENSCALE_PROFILE_AGE = 33;
 /** Height in mm openScale's constant A00D #2 profile frame carries. */
 export const OPENSCALE_PROFILE_HEIGHT_MM = 1720;
 
+/** What the profile frame carries besides age, height and sex (#463). */
+export interface UserProfileFrameOptions {
+  /** User key at [4..5]; VENDOR_APP_USER_KEY (1000) when unset. */
+  key?: number;
+  /** Add VISIT_ATHLETE_STEP to the algorithm byte at [10]. */
+  athlete?: boolean;
+}
+
 /**
- * Build the A00D #2 user profile frame from an age, a height in cm and a sex.
+ * Build the A00D #2 user profile frame ("visit") from an age, a height in cm
+ * and a sex.
  *
- *   a0 0d 02 01 03 e8 <sex> <age> <height mm, u16 BE> 04 02 <cs>
+ *   a0 0d 02 01 <key u16 BE> <sex> <age> <height mm, u16 BE> <algorithm> 02 <cs>
  *
  * Two vendor-app captures send this shape with the app user's configured age
  * at [7] and height in millimetres at [8..9], from different apps and scales:
@@ -427,19 +437,23 @@ export const OPENSCALE_PROFILE_HEIGHT_MM = 1720;
  *   Arboleaf app (19-byte scale) a0 0d 02 01 03 e8 00 33 07 1c 04 02 f7
  *
  * Both app users are men, and [6] is `00` in both. Per the vendor's published
- * SDK, [6] is the sex (0 male, 1 female), [3] the user slot, [4..5] a user key,
- * [10] the body-fat algorithm and [11] a regional grade; `03 e8` and `04 02`
- * are sent as captured. Before #331 [6] was always `00`, so the scale stored
- * and computed every woman's profile as a man's. openScale sends the same
- * shape with constants (age 33, 1720 mm, `00 08` at [4..5]), and the one
- * captured 19-byte scale answers that with `a1 06 02 01 00` where the app gets
- * `a1 06 02 01 01` (#331).
+ * SDK, [6] is the sex (0 male, 1 female), [3] the user slot, [4..5] the user
+ * key the app registered that slot with (see VENDOR_APP_USER_KEY), [10] the
+ * body-fat algorithm (see VISIT_ALGORITHM) and [11] a regional grade, sent as
+ * captured. Before #331 [6] was always `00`, so the scale stored and computed
+ * every woman's profile as a man's. openScale sends the same shape with
+ * constants (key 8, age 33, 1720 mm), and the one captured 19-byte scale
+ * answers that with `a1 06 02 01 00` where the app gets `a1 06 02 01 01`
+ * (#331). Without options this builds the frame both captures show.
  */
 export function buildUserProfileFrame(
   age: number,
   heightCm: number,
   gender: Gender = 'male',
+  opts: UserProfileFrameOptions = {},
 ): number[] {
+  const key = opts.key ?? VENDOR_APP_USER_KEY;
+  const algorithm = opts.athlete ? VISIT_ALGORITHM + VISIT_ATHLETE_STEP : VISIT_ALGORITHM;
   const a = Number.isFinite(age)
     ? Math.min(0xff, Math.max(1, Math.round(age)))
     : OPENSCALE_PROFILE_AGE;
@@ -451,13 +465,13 @@ export function buildUserProfileFrame(
     0x0d,
     0x02,
     0x01,
-    0x03,
-    0xe8,
+    (key >> 8) & 0xff,
+    key & 0xff,
     gender === 'female' ? 0x01 : 0x00,
     a,
     (mm >> 8) & 0xff,
     mm & 0xff,
-    0x04,
+    algorithm,
     0x02,
   ];
   return [...cmd, cmd.reduce((s, b) => s + b, 0) & 0xff];

@@ -32,6 +32,23 @@ function makeAdapter() {
   return new QnScaleAdapter();
 }
 
+/**
+ * #461, the Physiq's 18-byte 0x12 (es26m), byte for byte from the reporter's
+ * public DEBUG log, as are READY_461 and CONFIG_REQ_461 (2026-10-11 session).
+ */
+const INFO_461 = Buffer.from([
+  0x12, 0x12, 0xff, 0x25, 0xe0, 0x16, 0x00, 0x05, 0xff, 0x13, 0x07, 0x16, 0x00, 0x00, 0x05, 0x9f,
+  0x32, 0x48,
+]);
+const READY_461 = Buffer.from([0x14, 0x0b, 0xff, 0x01, 0x00, 0x01, 0x09, 0x03, 0x00, 0x00, 0x2c]);
+const CONFIG_REQ_461 = Buffer.from([0x21, 0x05, 0xff, 0x01, 0x26]);
+
+/** #283, a classic scale's 17-byte 0x12, from its public log. */
+const INFO_283 = Buffer.from([
+  0x12, 0x11, 0xff, 0xd3, 0x60, 0x18, 0x00, 0x01, 0xfb, 0x0a, 0x03, 0x19, 0x00, 0x04, 0x05, 0x07,
+  0x9f,
+]);
+
 /** Build a fake AABB broadcast buffer with the given weight and stability. */
 function makeBroadcast(weightKg: number, stable: boolean): Buffer {
   const buf = Buffer.alloc(23);
@@ -2264,6 +2281,244 @@ describe('AE02 dispatch (#75, #235)', () => {
       ]);
     });
 
+    // #463: the profile frame carries the user key the vendor app registered the
+    // slot with. The Physiq refuses openScale's key 8 and accepts the Feelfit
+    // app's 1000. Its own 0x12, 0x14 and 0x21 below are from the public #461
+    // log; the profile is a neutral one (capture 2a's), so the frame the option
+    // sends can be compared with PROFILE_2A.
+    describe('ble.qn_user_key (#463)', () => {
+      const physiq: HandshakeOptions = { ready: READY_461, configReq: CONFIG_REQ_461 };
+      const profileFrames = (writes: number[][]): number[][] =>
+        writes.filter((w) => w[0] === 0xa0 && w[2] === 0x02);
+      /** The writes without 0x20, whose timestamp follows the wall clock. */
+      const timeless = (writes: number[][]): number[][] => writes.filter((w) => w[0] !== 0x20);
+      /** Accepted, `a1 06 02 01 01 ab`, from the #213 and #253 logs. */
+      const ACCEPTED = Buffer.from([0xa1, 0x06, 0x02, 0x01, 0x01, 0xab]);
+      /** Refused, `a1 06 02 01 00 aa`, from the #461 log. */
+      const REFUSED = Buffer.from([0xa1, 0x06, 0x02, 0x01, 0x00, 0xaa]);
+
+      it('sends the vendor profile frame on the 18-byte dialect, without the ready-time A2', async () => {
+        const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+        try {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000 });
+          const writes = await driveHandshake(
+            adapter,
+            INFO_461,
+            defaultProfile({ age: 51, height: 182 }),
+            physiq,
+          );
+          expect(profileFrames(writes)).toEqual([PROFILE_2A]);
+          // No A2 anywhere: none before START, and no anchor after it without
+          // qn_weight_ack.
+          expect(writes.filter((w) => w[0] === 0xa2)).toEqual([]);
+          // The ES-26M hardware guard still holds: proto 0x00 on 0x13 and 0x22.
+          expect(writes.find((w) => w[0] === 0x13 && w[4] === 0x10)![2]).toBe(0x00);
+          expect(writes.find((w) => w[0] === 0x22)).toEqual([0x22, 0x06, 0x00, 0x00, 0x03, 0x2b]);
+          const lines = debug.mock.calls.map((c) => String(c[0]));
+          expect(lines).toContain(
+            'QN: no A2 before START on the 18-byte dialect, as the vendor app (ble.qn_user_key, #463)',
+          );
+          expect(lines).toContain(
+            'QN: A00D profile frame with key 1000, age 51, height 1820 mm, sex male, athlete no ' +
+              '(ble.qn_user_key, 18-byte dialect, #463)',
+          );
+        } finally {
+          debug.mockRestore();
+        }
+      });
+
+      it('sends the athlete algorithm on the 18-byte dialect for an adult athlete only', async () => {
+        const adult = makeAdapter();
+        adult.configure({ qnUserKey: 1000 });
+        const adultWrites = await driveHandshake(
+          adult,
+          INFO_461,
+          defaultProfile({ age: 51, height: 182, isAthlete: true }),
+          physiq,
+        );
+        const athlete = [...PROFILE_2A];
+        athlete[10] = 0x0e;
+        athlete[12] = (athlete[12] + 10) & 0xff;
+        expect(profileFrames(adultWrites)).toEqual([athlete]);
+
+        // The vendor's published SDK sets the athlete step only above 17 years.
+        const young = makeAdapter();
+        young.configure({ qnUserKey: 1000 });
+        const youngWrites = await driveHandshake(
+          young,
+          INFO_461,
+          defaultProfile({ age: 17, height: 182, isAthlete: true }),
+          physiq,
+        );
+        expect(profileFrames(youngWrites)[0][10]).toBe(0x04);
+      });
+
+      it('takes the key from the option on the 19-byte dialect and keeps 04 for an athlete', async () => {
+        const adapter = makeAdapter();
+        adapter.configure({ qnWeightAck: true, qnUserKey: 1234 });
+        const writes = await driveHandshake(
+          adapter,
+          ARBOLEAF_2A_INFO,
+          defaultProfile({ age: 51, height: 182, isAthlete: true, lastKnownWeight: 74.05 }),
+          arboleaf2a,
+        );
+        const expected = [...PROFILE_2A];
+        expected[4] = 0x04;
+        expected[5] = 0xd2;
+        expected[12] = expected.slice(0, 12).reduce((a, b) => a + b, 0) & 0xff;
+        expect(profileFrames(writes)).toEqual([expected]);
+        // The rest of the qn_weight_ack sequence is unchanged.
+        const startIndex = writes.findIndex((w) => w[0] === 0x22);
+        expect(preStartA2(writes)).toEqual([]);
+        expect(writes.slice(startIndex + 1)).toEqual([ANCHOR_2A, ANCHOR_2A]);
+      });
+
+      it('sends the vendor profile frame on the 19-byte dialect without qn_weight_ack', async () => {
+        const adapter = makeAdapter();
+        adapter.configure({ qnUserKey: 1000 });
+        const writes = await driveHandshake(
+          adapter,
+          ARBOLEAF_2A_INFO,
+          defaultProfile({ age: 51, height: 182, lastKnownWeight: 74.05 }),
+          arboleaf2a,
+        );
+        expect(profileFrames(writes)).toEqual([PROFILE_2A]);
+        // Neither the ready-time A2 nor the anchor pair after START.
+        expect(writes.filter((w) => w[0] === 0xa2)).toEqual([]);
+      });
+
+      it.each([
+        ['18-byte #461', INFO_461],
+        ['18-byte ES-26M', makeEs26mScaleInfo()],
+      ])("keeps openScale's frames on the %s dialect without the option", async (_name, info) => {
+        for (const qnWeightAck of [undefined, true]) {
+          const adapter = makeAdapter();
+          adapter.configure({ qnWeightAck });
+          const writes = await driveHandshake(
+            adapter,
+            info,
+            defaultProfile({ age: 51, height: 182, lastKnownWeight: 76 }),
+            physiq,
+          );
+          expect(profileFrames(writes)).toEqual([OPENSCALE_PROFILE]);
+          expect(preStartA2(writes)).toEqual([[0xa2, 0x06, 0x01, 0x32, 0x33, 0x0e]]);
+        }
+      });
+
+      it.each([
+        ['20-byte extended', makeExtendedScaleInfo()],
+        ['17-byte classic (#283)', INFO_283],
+      ])('changes nothing on the %s dialect', async (_name, info) => {
+        const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+        try {
+          const profile = defaultProfile({ age: 51, height: 182, lastKnownWeight: 76 });
+          const plain = await driveHandshake(makeAdapter(), info, profile);
+          const keyed = makeAdapter();
+          keyed.configure({ qnUserKey: 1000 });
+          const writes = await driveHandshake(keyed, info, profile);
+          expect(timeless(writes)).toEqual(timeless(plain));
+          expect(profileFrames(writes)).toEqual([OPENSCALE_PROFILE]);
+          const notUsed = debug.mock.calls.filter((c) =>
+            String(c[0]).includes('ble.qn_user_key is not used on this dialect'),
+          );
+          expect(notUsed).toHaveLength(1);
+        } finally {
+          debug.mockRestore();
+        }
+      });
+
+      it('changes nothing on the fallback handshake without a 0x12', async () => {
+        const profile = defaultProfile({ age: 51, height: 182 });
+        const keyed = makeAdapter();
+        keyed.configure({ qnUserKey: 1000 });
+        const writes = await driveSteps(keyed, profile, [{ advance: 6000 }]);
+        expect(profileFrames(writes)).toEqual([OPENSCALE_PROFILE]);
+        expect(preStartA2(writes)).toEqual([[0xa2, 0x06, 0x01, 0x32, 0x33, 0x0e]]);
+      });
+
+      // As with qn_weight_ack on the 19-byte dialect: an 18-byte 0x12 after the
+      // fallback's ready step does not switch the profile frame alone.
+      it('keeps both openScale frames when the 18-byte 0x12 arrives after a fallback ready', async () => {
+        const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+        try {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000 });
+          const writes = await driveSteps(adapter, defaultProfile({ age: 51, height: 182 }), [
+            { advance: 2701 },
+            { frame: INFO_461, advance: 3000 },
+          ]);
+          expect(profileFrames(writes)).toEqual([OPENSCALE_PROFILE]);
+          expect(preStartA2(writes)).toEqual([[0xa2, 0x06, 0x01, 0x32, 0x33, 0x0e]]);
+          // The late 0x12 says why; "not used on this dialect" would be wrong here.
+          const lines = debug.mock.calls.map((c) => String(c[0]));
+          expect(lines).toContain(
+            "QN: 18-byte 0x12 after the handshake already chose openScale's frames; " +
+              'the profile frame stays as sent (#331)',
+          );
+          expect(lines.filter((l) => l.includes('is not used on this dialect'))).toEqual([]);
+        } finally {
+          debug.mockRestore();
+        }
+      });
+
+      it('logs one info line when the scale refuses the frame sent with the option', async () => {
+        const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+        const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+        const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+        const keyLines = () =>
+          info.mock.calls.filter((c) => String(c[0]).includes('refused the profile frame'));
+        try {
+          const keyed = makeAdapter();
+          keyed.configure({ qnUserKey: 1234 });
+          await driveHandshake(keyed, INFO_461, defaultProfile(), physiq);
+          keyed.parseNotification(REFUSED);
+          keyed.parseNotification(REFUSED);
+          // The text configuration.md quotes, with the key that was sent.
+          expect(keyLines().map((c) => String(c[0]))).toEqual([
+            'QN: the scale refused the profile frame sent with ble.qn_user_key 1234 for user ' +
+              'slot 1. Most likely the vendor app set up that slot with another key, or never ' +
+              'set it up. Check ble.qn_user_key, and that the first user in config.yaml is the ' +
+              'first user in the vendor app (#463).',
+          ]);
+          expect(warn).not.toHaveBeenCalled();
+          // The debug line the docs quote stays as it was.
+          expect(debug.mock.calls.map((c) => String(c[0]))).toContain(
+            'QN: the scale did not accept the profile for user slot 1 (#331)',
+          );
+
+          info.mockClear();
+          const accepted = makeAdapter();
+          accepted.configure({ qnUserKey: 1000 });
+          await driveHandshake(accepted, INFO_461, defaultProfile(), physiq);
+          accepted.parseNotification(ACCEPTED);
+          expect(keyLines()).toEqual([]);
+
+          // Without the option the log does not change.
+          const plain = makeAdapter();
+          await driveHandshake(plain, INFO_461, defaultProfile(), physiq);
+          plain.parseNotification(REFUSED);
+          expect(keyLines()).toEqual([]);
+          // Nor where the vendor frame goes out without it (19-byte, qn_weight_ack).
+          const acked = makeAdapter();
+          acked.configure({ qnWeightAck: true });
+          await driveHandshake(
+            acked,
+            ARBOLEAF_2A_INFO,
+            defaultProfile({ lastKnownWeight: 74.05 }),
+            arboleaf2a,
+          );
+          acked.parseNotification(REFUSED);
+          expect(keyLines()).toEqual([]);
+          expect(warn).not.toHaveBeenCalled();
+        } finally {
+          info.mockRestore();
+          warn.mockRestore();
+          debug.mockRestore();
+        }
+      });
+    });
+
     it.each([
       ['18-byte es26m', () => makeEs26mScaleInfo()],
       [
@@ -3401,6 +3656,7 @@ describe('QN per-session reset ordering (#406)', () => {
       'forcedProtocolType',
       'forcedReportByte',
       'forcedWeightAck',
+      'forcedUserKey',
       'a4PreludeEnabled',
       'configLong',
       'timeSyncLong',
@@ -3501,16 +3757,32 @@ describe('buildUserProfileFrame (#331)', () => {
     expect(f[7]).toBe(33);
     expect((f[8] << 8) | f[9]).toBe(1720);
   });
+
+  // [4..5] is the user key (#463). openScale's constant frame is this builder
+  // with key 8 and openScale's own profile, byte for byte.
+  it("builds openScale's constant frame from key 8 and its profile", () => {
+    expect(buildUserProfileFrame(33, 172, 'male', { key: 0x0008 })).toEqual([
+      0xa0, 0x0d, 0x02, 0x01, 0x00, 0x08, 0x00, 0x21, 0x06, 0xb8, 0x04, 0x02, 0x9d,
+    ]);
+    expect(buildUserProfileFrame(51, 182, 'male', { key: 1234 }).slice(4, 6)).toEqual([0x04, 0xd2]);
+  });
+
+  // Derived from the GE capture, not captured: the vendor's published SDK adds
+  // 10 to the algorithm byte for an athlete (4 -> 14), and that is the only
+  // byte that moves besides the checksum.
+  it('adds 10 to the algorithm byte for an athlete', () => {
+    const ge = [0xa0, 0x0d, 0x02, 0x01, 0x03, 0xe8, 0x00, 0x1a, 0x07, 0x8a, 0x04, 0x02, 0x4c];
+    expect(buildUserProfileFrame(26, 193, 'male', { athlete: false })).toEqual(ge);
+    expect(buildUserProfileFrame(26, 193, 'male', { athlete: true })).toEqual([
+      0xa0, 0x0d, 0x02, 0x01, 0x03, 0xe8, 0x00, 0x1a, 0x07, 0x8a, 0x0e, 0x02, 0x56,
+    ]);
+  });
 });
 
 // #461: a Physiq (QN-Scale, 18-byte es26m) that delivered its weigh-in as a
 // 0x23 stored record. Every frame below is byte for byte from the reporter's
 // public DEBUG log (node-ble); the address is the one the log shows.
 describe('QN stored record and impedance (#461)', () => {
-  const INFO_461 = Buffer.from([
-    0x12, 0x12, 0xff, 0x25, 0xe0, 0x16, 0x00, 0x05, 0xff, 0x13, 0x07, 0x16, 0x00, 0x00, 0x05, 0x9f,
-    0x32, 0x48,
-  ]);
   const RECORD_461 = Buffer.from([
     0x23, 0x14, 0xff, 0x01, 0x01, 0xf0, 0x87, 0xc0, 0x5c, 0x32, 0x1b, 0xfd, 0x10, 0xcf, 0x10, 0xcd,
     0x00, 0x00, 0x00, 0xd1,
@@ -3519,11 +3791,7 @@ describe('QN stored record and impedance (#461)', () => {
   /** Connect time in the log; the record is stamped 09:23:19. */
   const CONNECTED_461 = '2026-10-10T09:23:02.077Z';
 
-  /** #283, a classic scale: its 0x12 and the 0x23 it answered with. */
-  const INFO_283 = Buffer.from([
-    0x12, 0x11, 0xff, 0xd3, 0x60, 0x18, 0x00, 0x01, 0xfb, 0x0a, 0x03, 0x19, 0x00, 0x04, 0x05, 0x07,
-    0x9f,
-  ]);
+  /** #283, the 0x23 its classic scale (INFO_283) answered with. */
   const RECORD_283 = Buffer.from([
     0x23, 0x13, 0xff, 0x04, 0x01, 0x09, 0x11, 0xef, 0x31, 0x18, 0x1a, 0x01, 0xfc, 0x01, 0xf8, 0x00,
     0x00, 0x00, 0x9c,

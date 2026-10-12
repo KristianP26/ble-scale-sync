@@ -300,6 +300,19 @@ export interface AdapterRuntimeConfig {
    */
   qnWeightAck?: boolean;
   /**
+   * User key for the QN A00D #2 profile frame (`ble.qn_user_key`, 1 to 9999,
+   * #463).
+   *
+   * Per the vendor's published SDK the key is the one the vendor app registered
+   * the user slot with, and the scale keeps it per slot; the vendor apps send
+   * 1000, openScale's frame 8. Set, the 18- and 19-byte dialects send the
+   * vendor-app profile frame with this key and the first user's age, height,
+   * sex and (18-byte only) athlete setting, and no ready-time A2, also without
+   * `qnWeightAck`. Unset changes nothing; the 20-byte and classic dialects
+   * ignore it.
+   */
+  qnUserKey?: number;
+  /**
    * Send the two 0xA4 0x0F frames the Arboleaf vendor app sends between START
    * and the first live 0x10 frame (`ble.qn_a4_prelude`, #331).
    *

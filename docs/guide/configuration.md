@@ -125,6 +125,7 @@ ble:
 | `preemptive_adapter_reset`   | No                          | `true`         | Power-cycle the Bluetooth adapter with `btmgmt` after every GATT session, to clear a stuck-discovery state some Raspberry Pi adapters fall into. It was not the cause of the Beurer BF915 re-pairing in #417 (see `adapter_privacy`). node-ble transport only. See below.                                                                                                                                                                                            |
 | `adapter_privacy`            | No                          | `false`        | Turn on LE privacy on the Bluetooth adapter, with a key derived from its address, so pairing hands the scale a host identity key. For Beurer scales that ask for SET and a new pairing before every weigh-in. Affects the whole adapter. node-ble transport only. See below.                                                                                                                                                                                         |
 | `qn_weight_ack`              | No                          | Per dialect    | QN-family scales only. Send the scale your weight anchor and acknowledge live weight frames, as the vendor apps do. The acknowledgement is on by default on the 20-byte extended dialect. On the 19-byte dialect (`QN: scale info (19B, ...)`) `true` also sends age, height and sex as the Arboleaf app does, which is what lets the scale's own body composition be used. Try `true` if your QN scale completes the handshake and then streams nothing. See below. |
+| `qn_user_key`                | No                          | Unset          | QN-family scales with an 18- or 19-byte scale-info frame only. The user key the vendor app registered you with on the scale, 1 to 9999 (the Feelfit, Arboleaf and GE apps use 1000). Set it when the scale refuses the profile frame (`a1 06 02 01 00` in the debug log) and shows only the weight. Unset changes nothing. See below.                                                                                                                                |
 | `qn_a4_prelude`              | No                          | `false`        | QN-family scales only. Send the two `0xA4` frames an Arboleaf vendor app sends between START and the first weight frame, replayed from one reporter's capture. They overwrite data the scale keeps for its first user, and a session that sends them does not use the scale's own body composition. Off by default; keep it off unless your scale goes silent right after START with everything else tried. See below.                                               |
 | `qn_time_sync_long`          | No                          | `false`        | QN-family scales only. Send the 9-byte form of the `0x20` time-sync frame that an Arboleaf vendor app sends, instead of the 8-byte one. Off by default; the extra byte is your UTC offset. See below.                                                                                                                                                                                                                                                                |
 | `qn_config_long`             | No                          | `false`        | QN-family scales only. Send the 10-byte form of the `0x13` config frame the vendor app sends, instead of the 9-byte one. Off by default; the extra bytes are undecoded. See below.                                                                                                                                                                                                                                                                                   |
@@ -237,6 +238,8 @@ Where that anchor goes depends on the dialect. On the 20-byte extended dialect i
 
 On the 19-byte dialect (`QN: scale info (19B, ...)` in the debug log) `qn_weight_ack` also sends the user profile frame the way the Arboleaf app does, with the first user's age, height and sex, instead of openScale's fixed values. On the one captured unit, the app gets an `a1 06 02 01 01` answer to that frame where openScale's version gets `a1 06 02 01 00`. Make sure the first user's `birth_date`, `height` and `gender` match the profile in the vendor app. Versions 1.31.0 and 1.32.0 always sent male in that frame, so a scale that accepted it kept a woman's profile as a man's until the vendor app wrote the profile again. The values on its display and in the weigh-ins it keeps offline were then most likely computed as a man's; no log from a woman's scale confirms that yet. The values those versions exported were not affected, as they were estimated here.
 
+The user key in that frame is 1000, as the vendor apps send it, unless `qn_user_key` (see the next tip) sets another one. `qn_user_key` also sends this frame on its own, without `qn_weight_ack`, but then neither the anchor after the start command nor anything else from this tip is sent. If the scale accepts the profile and still stays silent, the steps below with `qn_weight_ack` and `qn_time_sync_long` still apply.
+
 With `qn_weight_ack: true` and `qn_time_sync_long: true` (below), one 19-byte Arboleaf has streamed a complete weigh-in; whether it needs both is not known yet, so set both. Reading that stream rests on that single log and is not yet confirmed on hardware ([#331](https://github.com/KristianP26/ble-scale-sync/issues/331)). The weight comes from the 20-byte live frame. Once it settles, the scale measures body composition for about 14 seconds more and then sends its results, so the connection stays open until the scale's last result frame: stay on the scale until its display shows the results. If that frame never comes, the weight is sent on its own 40 seconds after it settled, or at once if the scale disconnects first. Only a scale set to display kg has been logged so far.
 
 Those results are the scale's own body fat, water, muscle, bone and visceral fat, computed for the profile frame above, and they are decoded as the vendor's published SDK reads them. They are exported instead of the BMI estimate (Deurenberg formula) when all of this holds: the scale accepted the profile and measured after accepting it, the weigh-in is on that profile's user slot on the scale, the user the weigh-in is matched to has exactly the age, height and sex that were sent, the BMI the scale reports fits that height, the scale reports muscle and bone as percentages (every unit logged so far does), and the session did not send `qn_a4_prelude`. Otherwise the estimate is used and the log gives the reason. In a multi-user setup only the first user's weigh-ins can get the scale's values, because the profile sent is the first user's. The scale keeps data of its own for the user it computes for, so the first user in your config should also be the first user in the vendor app. A weigh-in right after stored ones can arrive without the scale's values (it then sends an all-zero result) and gets the estimate. The scale has no athlete mode, so an athlete gets its values as they are, with a note in the log. The segment impedances it sends with them are logged in debug mode only.
@@ -314,6 +317,13 @@ QN: no A2 before START on the 19-byte dialect, as the vendor app (ble.qn_weight_
 QN: A00D profile frame with age 40, height 1750 mm, sex male (ble.qn_weight_ack, 19-byte dialect, #331)
 ```
 
+With `qn_user_key` set as well, those two lines name it instead:
+
+```
+QN: no A2 before START on the 19-byte dialect, as the vendor app (ble.qn_user_key, #463)
+QN: A00D profile frame with key 1000, age 40, height 1750 mm, sex male, athlete no (ble.qn_user_key, 19-byte dialect, #463)
+```
+
 And during a 19-byte weigh-in:
 
 ```
@@ -338,6 +348,47 @@ QN: stored weigh-in 76.4 kg at 2026-10-07T06:12:44.000Z, user slot 1, reported a
 ```
 
 If `true` makes your scale report a weight, please say so in an issue with the model and the dialect from the `QN: scale info` log line. So far one 19-byte Arboleaf has streamed its weight with it, and reading that stream is not yet confirmed on hardware; two confirmations would move the default.
+
+:::
+
+::: tip QN scales that refuse the profile and show only the weight (`qn_user_key`)
+
+Before each weigh-in the handshake sends the scale a profile frame for its user slot 1, and the scale answers whether it takes it. With debug on:
+
+```
+QN write: [a0 0d 02 01 00 08 00 21 06 b8 04 02 9d]
+QN RAW (6B): [a1 06 02 01 00 aa]
+QN: the scale did not accept the profile for user slot 1 (#331)
+```
+
+`01` in that answer is accepted, `00` refused. The scale this was found on then shows only the weight on its display. In every log so far in which a scale refused the profile and someone stood on it during the connection, no live weight frames followed. On the 18-byte dialect (`QN: scale info (18B, ...)`) the weigh-in is then read from the scale's memory instead, when it is there.
+
+Going by the vendor's published SDK, the frame carries a user key, which the vendor app chooses when it sets you up on the scale, and the scale keeps that key for each user slot. ble-scale-sync sends openScale's frame, with key 8 and a fixed age and height. One 18-byte Renpho in the logs accepts that. The Feelfit, Arboleaf and GE apps send 1000, and on the scales in our logs that refuse key 8, the frame with 1000 was accepted wherever the answer is known. That the key decides it is the explanation that fits every log so far, not something confirmed in the scales' firmware.
+
+```yaml
+ble:
+  qn_user_key: 1000
+```
+
+With this set, on the 18- and 19-byte dialects the profile frame carries this key and the first user's age, height and sex, plus the athlete setting on the 18-byte dialect, the way the vendor apps send it, and the `a2 06 01 32 <age>` frame before the weigh-in is not sent (see the previous tip). If the scale accepts the frame, what it computes during the connection is for that profile, whoever is standing on it. So the first user in your config should be the first user in the vendor app, with the same `birth_date`, `height`, `gender` and `is_athlete`. In a household where someone else set the scale up in the vendor app, that person is user slot 1.
+
+It is meant for a scale a vendor app has set you up on. The one scale in the logs that never saw a vendor app refused openScale's frame as well, and whether any key works on such a scale is not known. Leave it unset if your scale already accepts the profile frame, since a key it does not expect may make it refuse a frame it accepts today. What ble-scale-sync exports on the 18-byte dialect does not change: body composition is still computed here from the impedance. On the 19-byte dialect the scale's own body composition can be used, under the conditions in the previous tip.
+
+On the one captured 18-byte unit, the vendor app's accepted frame was followed by live weight frames. Whether ble-scale-sync gets the same with this option is not yet confirmed on an 18-byte scale ([#463](https://github.com/KristianP26/ble-scale-sync/issues/463)). With debug on, look for:
+
+```
+QN: no A2 before START on the 18-byte dialect, as the vendor app (ble.qn_user_key, #463)
+QN: A00D profile frame with key 1000, age 40, height 1750 mm, sex male, athlete no (ble.qn_user_key, 18-byte dialect, #463)
+QN: the scale accepted the profile for user slot 1 (#331)
+```
+
+If the scale still refuses the frame, one line says so in the normal log as well:
+
+```
+QN: the scale refused the profile frame sent with ble.qn_user_key 1000 for user slot 1. Most likely the vendor app set up that slot with another key, or never set it up. Check ble.qn_user_key, and that the first user in config.yaml is the first user in the vendor app (#463).
+```
+
+The 20-byte and classic dialects, and a session in which the scale-info frame never arrived, ignore the option, and the debug log says so.
 
 :::
 

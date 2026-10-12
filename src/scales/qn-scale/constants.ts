@@ -32,7 +32,8 @@ import { uuid16 } from '../body-comp-helpers.js';
  *
  *   0x12 (scale info) -> AE01 init (if AE00) -> 0x13 config
  *   0x14 (ready ACK)  -> 0x20 time sync + A2 user profile + "pass" auth
- *                        (no A2 on the 19-byte dialect with ble.qn_weight_ack)
+ *                        (no A2 on the 19-byte dialect with ble.qn_weight_ack,
+ *                        nor on the 18- and 19-byte ones with ble.qn_user_key)
  *   0x21 (config req)  -> A00D profile frame + 0x22 start measurement
  *   0x10 (weight)      -> parse weight + 0x1F acknowledge stable reading
  *
@@ -189,6 +190,41 @@ export const SCALE_EPOCH_OFFSET = 946684800;
  * mask, for an install that worked with it and stops working without it.
  */
 export const USER_DELETE_SUBCOMMAND = 0x04;
+
+/**
+ * User key at [4..5] of the A00D #2 profile frame ("visit"), the one the
+ * vendor apps send (#463).
+ *
+ * Per the vendor's published SDK the key is a secret the app chooses when it
+ * registers a user on the scale (1 to 9999), and the scale keeps it per user
+ * slot. Three vendor apps send 1000 here: the GE app (#235), the Arboleaf app
+ * (#331) and the Feelfit app on a Physiq (#463). openScale sends 8, which the
+ * 18-byte Renpho in #213 and #253 accepts (`a1 06 02 01 01`) and which the
+ * Physiq (#461), a never-paired Renpho Elis 1 (#75), two Arboleafs (#75, #331)
+ * and the GE CS 10 G (#235) refuse (`a1 06 02 01 00`). Every refused unit that
+ * was weighed during the connection then streamed no live weight, and every
+ * accepting one streamed; that the refusal is the cause is a hypothesis, as
+ * other frames always differed too.
+ *
+ * Neither value can be the default for the whole family, and the scale's own
+ * record of the key is only readable over a characteristic the Physiq lacks.
+ * So `ble.qn_user_key` sets it per install, and this is the value used when
+ * the 19-byte dialect sends the vendor frame without that option (D033).
+ */
+export const VENDOR_APP_USER_KEY = 0x03e8;
+
+/**
+ * Algorithm byte at [10] of the profile frame. Per the vendor's published SDK
+ * the app derives it from the scale's algorithm type (type 5 maps to 4) and
+ * adds VISIT_ATHLETE_STEP for an athlete, and only for a user older than 17
+ * (VISIT_ATHLETE_MIN_AGE). The Feelfit capture on the 18-byte Physiq carries
+ * 0x0e for an athlete (#463). The 19-byte dialect keeps 0x04 for everyone: that
+ * is what the Arboleaf capture carries, and an athlete value there is untested
+ * (D047).
+ */
+export const VISIT_ALGORITHM = 0x04;
+export const VISIT_ATHLETE_STEP = 10;
+export const VISIT_ATHLETE_MIN_AGE = 18;
 
 /**
  * Scrambled impedance (#461).
