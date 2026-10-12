@@ -475,6 +475,32 @@ describe('ActiveEraAdapter', () => {
       expect(p.boneMass).toBe(c.bone);
     });
 
+    // `height_unit: in` makes the height fractional (70 in = 177.8 cm). The
+    // scale computes its display from the whole centimetres in the D0 frame,
+    // so WLA07 has to be fed the same number, not a truncated one.
+    it('feeds WLA07 the height the D0 frame carries', async () => {
+      const profile = { ...P458, height: 70 * 2.54 };
+      const writes: Buffer[] = [];
+      const ctx = {
+        profile,
+        write: async (_u: string, data: Buffer | number[]) => {
+          writes.push(Buffer.from(data));
+        },
+      } as unknown as ConnectionContext;
+      await adapter.onConnected(ctx);
+      expect(writes[0][9]).toBe(178);
+
+      const d6 = d6Of(
+        adapter,
+        parseDump(ISSUE_458_DUMP_2).map((f) => f.frame),
+      );
+      const fatAt = (heightCm: number): number =>
+        wla07({ weightKg: d6.weight, heightCm, impedanceOhm: d6.impedance, age: 49, isMale: true })
+          .fat;
+      expect(fatAt(177)).not.toBe(fatAt(178));
+      expect(adapter.computeMetrics(d6, profile).bodyFatPercent).toBe(fatAt(178));
+    });
+
     // [17] = 03: no vendor value to compare with, so the BMI estimate, never
     // the shared BIA. #462 posted only its D6, so it is paired here with the
     // #458 dump 2 lock; the pairing is constructed, the frames are not.

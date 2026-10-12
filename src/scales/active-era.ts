@@ -80,6 +80,17 @@ function withPhoneChecksum(f: Buffer): Buffer {
 const DISPLAY_UNIT_BYTE: Record<ScaleDisplayUnit, number> = { kg: 0, lbs: 1, st: 2 };
 
 /**
+ * The height in whole centimetres, as the D0 frame carries it and as WLA07 is
+ * fed. Both must agree: the scale computes what it displays from the D0 height,
+ * and a height configured in inches is fractional in cm (70 in = 177.8 cm).
+ * Rounding one and truncating the other put the exported body fat a few tenths
+ * of a percent off the display (0.4 % per centimetre at 88 kg).
+ */
+function wholeCm(heightCm: number): number {
+  return Math.min(0xff, Math.max(0, Math.round(heightCm)));
+}
+
+/**
  * The D0 profile frame FitDays writes after subscribing (openScale PR #1534
  * captures): `AC 27 <unix time u32 BE> 08 <unit> <slot 00> <height cm>
  * 00 00 <age> <sex 1/2> 00 00 03 00 D0 <checksum>`.
@@ -103,7 +114,7 @@ export function buildAc27Profile(
   f[6] = 0x08;
   f[7] = DISPLAY_UNIT_BYTE[unit];
   f[8] = 0x00;
-  f[9] = Math.min(0xff, Math.max(0, Math.round(heightCm)));
+  f[9] = wholeCm(heightCm);
   f[12] = Math.min(0xff, Math.max(0, Math.trunc(age)));
   f[13] = gender === 'male' ? 0x01 : 0x02;
   f[16] = 0x03;
@@ -484,7 +495,7 @@ export class ActiveEraAdapter
     if (alg !== undefined && WLA07_ALGORITHMS.has(alg) && isPlausibleImpedance(reading.impedance)) {
       const c = wla07({
         weightKg: reading.weight,
-        heightCm: profile.height,
+        heightCm: wholeCm(profile.height),
         impedanceOhm: reading.impedance,
         age: profile.age,
         isMale: profile.gender === 'male',
