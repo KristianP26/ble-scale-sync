@@ -31,7 +31,7 @@ _Weight only_ means weight is reported normally but body composition is estimate
 | **Renpho** ES-26BB-B                                                           | Yes              |                                                                                                                                               |
 | **Renpho** R-MSC04 (MorphoScan Nova)                                           | Weight only      |                                                                                                                                               |
 | **1byone** / **Eufy** C1 / P1                                                  | Yes              |                                                                                                                                               |
-| **Eufy** Smart Scale P2 (T9148) / P2 Pro (T9149)                               | Weight only      |                                                                                                                                               |
+| **Eufy** Smart Scale P2 (T9148) / P2 Pro (T9149)                               | Yes              | Body composition over a connection; the broadcast gives weight only                                                                           |
 | **Yunmai** Signal / Mini / SE                                                  | Yes              | The scale sends its own body composition                                                                                                      |
 | **Beurer** BF700 / BF710 / BF800                                               | Yes              | BF710: register it in the Beurer app first                                                                                                    |
 | **Salter** SA00656 / SA00432 (Salter Health)                                   | Weight only      | Powers off after weighing; suits continuous mode                                                                                              |
@@ -119,7 +119,9 @@ Only a scale set to display kg has been logged so far. None of this is confirmed
 
 ### **Eufy** Smart Scale P2 / P2 Pro
 
-Weight only. The bytes previously read as impedance are not a body resistance, so publishing them produced absurd body-composition figures ([#289](https://github.com/KristianP26/ble-scale-sync/issues/289)). Body composition is estimated from BMI (Deurenberg formula) instead. A raw FFF2 capture paired with the Eufy app's own body-fat figure would let the real field be decoded.
+Over a connection, the scale's impedance is read and body fat is computed from it with the generic BIA formula. That formula is not Eufy's: on the weigh-in it was checked against, it gave about 3 points more body fat than the Eufy app ([#289](https://github.com/KristianP26/ble-scale-sync/issues/289)). A weigh-in without impedance (socks or shoes on) gets the BMI estimate (Deurenberg formula).
+
+A scale read from its broadcast, without a connection, gives weight only: the broadcast carries no impedance.
 
 ### **Xiaomi** Mi Smart Scale 2 (XMTZC04HM)
 
