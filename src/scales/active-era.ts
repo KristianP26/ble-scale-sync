@@ -17,32 +17,78 @@ import {
 import { bleLog } from '../ble/types.js';
 
 /**
- * Adapter for Active Era BS-06 body-fat scales.
- *
- * Protocol: service 0xFFB0, notify 0xFFB2, write 0xFFB1.
- * Unlock via a 20-byte config packet starting with [0xAC, 0x27, ...].
- *
- * 20-byte measurement frames with magic 0xAC at byte[0].
- * Frame type at byte[18]:
- *   0xD5 = weight: bytes [3-5] 24-bit BE, mask 0x3FFFF, /1000 (kg).
- *          Stability flag at byte[2].
- *   0xD6 = impedance: bytes [4-5] BE uint16.
- *          If impedance >= 1500, correction formula is applied.
- *
- * Weight and impedance are cached across frames.
- */
-/**
  * Company id the AC 27 family advertises. It is not assigned by the Bluetooth
  * SIG; it is the frame header `AC 27` read as a little-endian u16, the same
  * pattern as the Lefu `0x02AC` (frames `AC 02`) and the Silvergear `0xA0AC`.
  */
 const AC27_COMPANY_ID = 0x27ac;
 
+const FRAME_LEN = 20;
+const TYPE_WEIGHT = 0xd5;
+const TYPE_RESULT = 0xd6;
+const TYPE_BALANCE = 0xd0;
+const TYPE_HEART_RATE = 0xd7;
+const TYPE_STORED = 0xd8;
+/** `[2]` of a D5 frame: the scale locked this weight. */
+const FLAG_LOCKED = 0x80;
+
+/** 18-bit big-endian weight in grams at `[off..off+2]` (the top 6 bits are flags). */
+function weightGrams(d: Buffer, off: number): number {
+  return ((d[off] << 16) | (d[off + 1] << 8) | d[off + 2]) & 0x3ffff;
+}
+
+/**
+ * Whether `d` is a whole AC 27 frame: 20 bytes, header `AC 27`, and the
+ * checksum `sum([2..18]) & 0x1F` in the low 5 bits of `[19]`.
+ *
+ * Only the low 5 bits are compared. Every captured kg unit (ALPHA, #458, #462,
+ * #466) has 0 in the top three, but the Taylor 5331891 in openScale's test,
+ * whose display was set to lb, carries 0x20 there. The neighbouring Silvergear
+ * 108 puts its display unit in exactly those bits, so a strict compare would
+ * likely drop every frame of a scale set to lb or st.
+ */
+export function isAc27Frame(d: Buffer): boolean {
+  if (d.length !== FRAME_LEN || d[0] !== 0xac || d[1] !== 0x27) return false;
+  let sum = 0;
+  for (let i = 2; i <= 18; i++) sum += d[i];
+  return (sum & 0x1f) === (d[19] & 0x1f);
+}
+
+/**
+ * Ohms from the D6 `[4..5]` value.
+ *
+ * Below 1500 the value is already ohms (ALPHA 469, Femmto BCS13 533, #462).
+ * From 1500 up it is a raw reading that needs the weight it was measured at:
+ * `(raw - 1000 - 4 * kg) / 6`. Confirmed on #458, where 3960 at 87.62 kg gives
+ * 434.92 ohm, and the vendor formula fed that value reproduces the fat, water
+ * and bone the scale displayed. Clamped at 0, since just over the gate at a
+ * heavy weight the formula goes negative (1500 at 130 kg gives -3.3).
+ */
+export function ac27ImpedanceOhm(raw: number, weightKg: number): number {
+  if (raw < 1500) return raw;
+  return Math.max(0, (raw - 1000 + weightKg * 10 * -0.4) / 0.6 / 10);
+}
+
+/**
+ * Adapter for the AC 27 family: Active Era BS-06, ALPHA Smart Scale PRO 3
+ * (FitDays), Runstar FG2431WB (Starfit), Femmto BCS13.
+ *
+ * Service 0xFFB0, notify 0xFFB2, write 0xFFB1. Every frame is 20 bytes,
+ * `AC 27 <body [2..17]> <type [18]> <checksum [19]>` (see `isAc27Frame`):
+ *
+ *   D5  live weight, 18-bit grams at [3..5]; `[2]` bit 0x80 = locked
+ *   D6  result: `[2]` = 01, impedance u16 at [4..5] (`ac27ImpedanceOhm`), and
+ *       on the ALPHA the locked weight again at [8..10] when `[7]` has 0x80
+ *   D0  balance phase (left foot), D7 heart rate, D8 stored record: logged only
+ *
+ * The D6 frame carries no weight on #458's unit, so the impedance is paired
+ * with this session's weight: the D6's own, else the locked one. Frame layout
+ * and evidence: `.claude/docs/PROTOCOLS.md`, section on the AC 27 family.
+ */
 export class ActiveEraAdapter implements ScaleAdapterCore, GattWiring, Unlockable {
   /**
-   * Kept although the adapter now reads the whole AC 27 family (ALPHA Smart
-   * Scale PRO 3, Runstar FG2431WB, Femmto BCS13): the name is the key of
-   * `ble.force_scale_adapter`, which owners already use (#458).
+   * Kept although the adapter now reads the whole AC 27 family: the name is
+   * the key of `ble.force_scale_adapter`, which owners already use (#458).
    */
   readonly name = 'Active Era BS-06';
   /**
@@ -71,8 +117,10 @@ export class ActiveEraAdapter implements ScaleAdapterCore, GattWiring, Unlockabl
   ];
   readonly unlockIntervalMs = 0;
 
-  private cachedWeight = 0;
-  private cachedImpedance = 0;
+  /** Kilograms of this session's last locked D5 frame, 0 when none. */
+  private lockKg = 0;
+  /** Whether the "D6 without a weight" hint was already logged this session. */
+  private noWeightHinted = false;
 
   /**
    * The BS-06 name, or the AC 27 advertisement (#458, #462, #466).
@@ -99,67 +147,95 @@ export class ActiveEraAdapter implements ScaleAdapterCore, GattWiring, Unlockabl
   }
 
   parseNotification(data: Buffer): ScaleReading | null {
-    if (data.length < 20 || data[0] !== 0xac) return null;
-
-    const frameType = data[18];
-
-    if (frameType === 0xd5) {
-      // Weight frame: 24-bit BE at [3-5], mask lower 18 bits
-      const raw24 = (data[3] << 16) | (data[4] << 8) | data[5];
-      this.cachedWeight = (raw24 & 0x3ffff) / 1000;
-    } else if (frameType === 0xd6) {
-      // Impedance frame: BE uint16 at [4-5]
-      const raw = (data[4] << 8) | data[5];
-      let imp = raw;
-
-      // Impedance correction for high values
-      if (imp >= 1500) {
-        // Clamped at 0: just over the gate at a heavy weight the formula goes
-        // negative (raw 1500 at 130 kg gives -3.3), which no resistance can be.
-        // 0 is the "no impedance" value isComplete already refuses.
-        imp = Math.max(0, (imp - 1000 + this.cachedWeight * 10 * -0.4) / 0.6 / 10);
-      }
-
-      // The RAW value is the one number that settles whether this correction is
-      // right, and until now nothing ever showed it: `imp` was reassigned in
-      // place, so the only value that reached a log was the corrected one. That
-      // made the question in #386 unanswerable by the one person who could
-      // answer it, an owner running with debug on.
-      //
-      // Why it matters: run the plausible 150-1200 ohm band backwards through
-      // `(raw - 1000 - 4w) / 6 / 10` at 80 kg and it maps to raw 2220-8520,
-      // most of the usable u16 range, so the band cannot discriminate. Drop the
-      // `/10` and the threshold and the divisor line up exactly, 1500 landing on
-      // 300 ohm. That is internal consistency, not a decode, so BIA stays off
-      // here until a real reading says which reading of the formula is right.
-      bleLog.debug(
-        `Active Era 0xD6: raw=${raw}` +
-          (raw >= 1500
-            ? ` -> corrected ${imp.toFixed(1)} ohm`
-            : ' (below the 1500 correction gate)') +
-          `, cached weight ${this.cachedWeight} kg (#386)`,
-      );
-
-      this.cachedImpedance = imp;
+    if (!isAc27Frame(data)) {
+      bleLog.debug(`AC 27 frame rejected (length, header or checksum): ${data.toString('hex')}`);
+      return null;
     }
+    switch (data[18]) {
+      case TYPE_WEIGHT:
+        return this.onWeight(data);
+      case TYPE_RESULT:
+        return this.onResult(data);
+      case TYPE_BALANCE:
+        bleLog.debug(
+          `AC 27 balance: left foot ${(data.readUInt16BE(3) / 100).toFixed(2)} kg` +
+            (data[2] === 0x01 ? ' (final)' : ''),
+        );
+        return null;
+      case TYPE_HEART_RATE:
+        bleLog.debug(`AC 27 heart rate: ${data[3]} bpm`);
+        return null;
+      case TYPE_STORED:
+        // A weigh-in the scale kept because no app took it (or it locked before
+        // the link was up). Not imported and not acknowledged: an ACK would make
+        // the scale drop it, and the vendor app would then never get it.
+        bleLog.debug(
+          `AC 27 stored record: ${(weightGrams(data, 8) / 1000).toFixed(2)} kg, ` +
+            `scale clock ${new Date(data.readUInt32BE(3) * 1000).toISOString()} (not imported)`,
+        );
+        return null;
+      default:
+        bleLog.debug(`AC 27 frame type 0x${data[18].toString(16)} ignored`);
+        return null;
+    }
+  }
 
-    if (this.cachedWeight <= 0) return null;
-
-    return { weight: this.cachedWeight, impedance: this.cachedImpedance };
+  private onWeight(d: Buffer): ScaleReading | null {
+    const kg = weightGrams(d, 3) / 1000;
+    if (kg <= 0) return null;
+    if (d[2] & FLAG_LOCKED) this.lockKg = kg;
+    return { weight: kg, impedance: 0 };
   }
 
   /**
-   * Clear the previous weigh-in (#394).
+   * D6, paired with this session's weight.
    *
-   * Adapters are shared singletons, so without this both caches survive and
-   * the next session resolves on its first frame with the previous weight and
-   * impedance. The stale weight is
-   * worse than a stale number on its own: the `imp >= 1500` correction
-   * multiplies it in, so even a fresh impedance frame decodes wrongly.
+   * The ALPHA repeats the locked weight in [8..10] (`[7]` 0x80); #458's unit
+   * leaves [6..10] zero, so its D6 takes the lock. Pairing it with "the last
+   * D5" instead, as this adapter used to, gave whatever the stream showed last,
+   * which on a unit that skips D5 entirely (#458, stepped on without waking it)
+   * was nothing, or the previous session's weight before #394.
+   */
+  private onResult(d: Buffer): ScaleReading | null {
+    if (d[2] !== 0x01) {
+      bleLog.debug(`AC 27 result frame with count ${d[2]} ignored`);
+      return null;
+    }
+    const own = d[7] & FLAG_LOCKED ? weightGrams(d, 8) / 1000 : 0;
+    const kg = own > 0 ? own : this.lockKg;
+    const source = own > 0 ? 'D6' : 'lock';
+    const raw = d.readUInt16BE(4);
+    if (kg <= 0) {
+      if (!this.noWeightHinted) {
+        this.noWeightHinted = true;
+        bleLog.info(
+          'AC 27 scale sent its result without a weight: it locked before the link was up. ' +
+            'Wake the scale, wait for the Bluetooth icon on its display, then step on (#458).',
+        );
+      }
+      return null;
+    }
+    const imp = ac27ImpedanceOhm(raw, kg);
+    // The raw value is logged next to the corrected one so a debug log alone
+    // shows whether the >= 1500 conversion applied (#386).
+    bleLog.debug(
+      `AC 27 result: raw=${raw}` +
+        (raw >= 1500
+          ? ` -> corrected ${imp.toFixed(1)} ohm`
+          : ' (below the 1500 correction gate)') +
+        `, weight ${kg} kg from the ${source} (#386)`,
+    );
+    return { weight: kg, impedance: imp };
+  }
+
+  /**
+   * Clear the previous weigh-in (#394). Adapters are shared singletons, so a
+   * lock kept from the last session would pair the next D6 with the previous
+   * person's weight, and the `>= 1500` conversion multiplies that weight in.
    */
   onSessionStart(): void {
-    this.cachedWeight = 0;
-    this.cachedImpedance = 0;
+    this.lockKg = 0;
+    this.noWeightHinted = false;
   }
 
   isComplete(reading: ScaleReading): boolean {
