@@ -58,6 +58,8 @@ const { POST_DISCONNECT_GRACE_MS, SessionTimeoutError } = await import('../../sr
 import type { AppContext } from '../../src/runtime/context.js';
 import type { ScaleAdapter } from '../../src/interfaces/scale-adapter.js';
 import { tagBleFailure } from '../../src/ble/failure-kind.js';
+import { currentProfile } from '../../src/ble/reading-source.js';
+import type { ProfileSource } from '../../src/ble/reading-source.js';
 
 const ADAPTERS = [{ name: 'A' }] as unknown as ScaleAdapter[];
 
@@ -120,10 +122,32 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
       esphomeProxy: undefined,
       adapters: ADAPTERS,
       targetMac: ctx.scaleMac,
-      profile: { __profile: 'sentinel' },
+      profile: expect.any(Function),
       scaleAuth: { pin: 1234, userIndex: 2 },
       weightUnit: 'lbs',
     });
+    const { profile } = h.createReadingSource.mock.calls[0][0] as { profile: ProfileSource };
+    expect(currentProfile(profile)).toEqual({ __profile: 'sentinel' });
+  });
+
+  it('hands the watcher a profile source that resolves users[0] on every call (#331)', async () => {
+    const plan = watcherPlan('Error processing ESPHome reading');
+    h.createReadingSource.mockResolvedValue(plan);
+    const ctx = makeCtx({ bleHandler: 'esphome-proxy', esphomeProxy: { host: 'h' } as never });
+    const bundle = await buildReadingSource(ctx, ADAPTERS, 10, 30);
+    const { profile } = h.createReadingSource.mock.calls[0][0] as { profile: ProfileSource };
+
+    // The processor moves last_known_weight in memory after every export; a
+    // snapshot taken at startup kept the scale on the startup anchor.
+    h.resolveUserProfile.mockReturnValueOnce({ lastKnownWeight: 70 } as never);
+    h.resolveUserProfile.mockReturnValueOnce({ lastKnownWeight: 72.5 } as never);
+    expect(currentProfile(profile)).toEqual({ lastKnownWeight: 70 });
+    expect(currentProfile(profile)).toEqual({ lastKnownWeight: 72.5 });
+
+    bundle.onSourceReload?.();
+    const sent = plan.watcher.updateConfig.mock.calls[0][0] as { profile: ProfileSource };
+    h.resolveUserProfile.mockReturnValueOnce({ lastKnownWeight: 92 } as never);
+    expect(currentProfile(sent.profile)).toEqual({ lastKnownWeight: 92 });
   });
 
   it('watcher plan: returns the watcher as the source with its prefix and a re-resolving reload', async () => {
@@ -146,7 +170,7 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
     expect(plan.watcher.updateConfig).toHaveBeenCalledWith({
       adapters: ADAPTERS,
       targetMac: ctx.scaleMac,
-      profile: { __profile: 'sentinel' },
+      profile: expect.any(Function),
       scaleAuth: { pin: 1234, userIndex: 2 },
       weightUnit: 'lbs',
     });

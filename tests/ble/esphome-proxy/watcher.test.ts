@@ -185,6 +185,47 @@ describe('ReadingWatcher GATT continuous (#116)', () => {
   });
 });
 
+describe('ReadingWatcher GATT session timeout with stored records (#331)', () => {
+  // A scale that hands over a weigh-in from its memory and then keeps the link
+  // up with nobody weighing: the session ends on the idle timeout, and the
+  // stored record has to reach the queue anyway. Adapters with a dedup mark
+  // count it as reported once they hand it over.
+  it('queues the stored record of a session that timed out', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-07T20:30:00Z'));
+      const stored: ScaleReading = {
+        weight: 76.55,
+        impedance: 0,
+        timestamp: new Date('2026-10-07T19:57:25Z'),
+      };
+      const adapter = {
+        ...gattAdapter(),
+        parseNotification: (): ScaleReading => ({ ...stored }),
+      } as ScaleAdapter;
+      const watcher = new ReadingWatcher(config, [adapter]);
+      await watcher.start();
+      const pool = (
+        watcher as unknown as {
+          pool: { emitAdvert: (info: BleDeviceInfo, mac: string) => void };
+        }
+      ).pool;
+      pool.emitAdvert({ localName: 'GATT-scale', serviceUuids: [] }, 'AA:BB:CC:DD:EE:05');
+      const next = watcher.nextReading();
+
+      // Past the 60 s idle timeout, before the 90 s session cap.
+      await vi.advanceTimersByTimeAsync(65_000);
+      const raw = await Promise.race([next, Promise.resolve(null)]);
+      expect(raw?.reading).toEqual(stored);
+      expect(raw?.history ?? []).toEqual([]);
+
+      await watcher.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('ReadingWatcher GATT failure logging (B-13)', () => {
   it('keeps reporting why a scale fails after the first warning', async () => {
     // The first failure for an address warns. Every later one used to say
@@ -273,6 +314,34 @@ describe('ReadingWatcher config: weight unit, PIN removal, device name', () => {
     poolOf(watcher).emitAdvert(ADVERT, 'AA:BB:CC:DD:EE:12');
     await watcher.nextReading();
     expect(seen).toEqual([{ pin: undefined, name: 'GATT-scale' }]);
+    await watcher.stop();
+  });
+
+  it('resolves the user profile again for every GATT session (#331)', async () => {
+    const anchors: Array<number | undefined> = [];
+    const adapter = {
+      ...gattAdapter(),
+      onConnected: async (ctx: Parameters<NonNullable<ScaleAdapter['onConnected']>>[0]) => {
+        anchors.push(ctx.profile.lastKnownWeight);
+      },
+    } as ScaleAdapter;
+    // The processor moves last_known_weight after every export; the watcher
+    // must not keep the value it had when it was built.
+    const weights = [70, 72.5];
+    const profile = vi.fn(() => ({
+      height: 180,
+      age: 40,
+      gender: 'male' as const,
+      isAthlete: false,
+      lastKnownWeight: weights.shift(),
+    }));
+    const watcher = new ReadingWatcher(config, [adapter], undefined, profile);
+    await watcher.start();
+    poolOf(watcher).emitAdvert(ADVERT, 'AA:BB:CC:DD:EE:13');
+    await watcher.nextReading();
+    poolOf(watcher).emitAdvert(ADVERT, 'AA:BB:CC:DD:EE:14');
+    await watcher.nextReading();
+    expect(anchors).toEqual([70, 72.5]);
     await watcher.stop();
   });
 });

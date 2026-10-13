@@ -3,6 +3,22 @@ import type { RawReading } from './shared.js';
 import type { WeightUnit } from '../config/schema.js';
 
 /**
+ * The user profile a watcher hands to a GATT session: a fixed value, or a
+ * function the watcher calls once at the start of every session.
+ *
+ * A function, because the profile is not static while the process runs: the
+ * processor moves `last_known_weight` in memory after every export, and a QN or
+ * R-MSC04 adapter writes that anchor to the scale. A value captured when the
+ * watcher was built kept a proxy install on its startup anchor for good (#331).
+ */
+export type ProfileSource = UserProfile | (() => UserProfile);
+
+/** Resolve a {@link ProfileSource} now; `undefined` stays `undefined`. */
+export function currentProfile(src: ProfileSource | undefined): UserProfile | undefined {
+  return typeof src === 'function' ? src() : src;
+}
+
+/**
  * Config delivered to a {@link Watcher} on construction and on hot reload. The
  * shape is uniform across transports; a watcher ignores fields it does not use
  * (ha-bluetooth reads no GATT, so it ignores `scaleAuth` and `weightUnit`).
@@ -11,7 +27,7 @@ import type { WeightUnit } from '../config/schema.js';
 export interface WatcherConfig {
   adapters: ScaleAdapter[];
   targetMac?: string;
-  profile?: UserProfile;
+  profile?: ProfileSource;
   scaleAuth?: ScaleAuth;
   /**
    * Configured `scale.weight_unit`, for the GATT reads: a reading from an

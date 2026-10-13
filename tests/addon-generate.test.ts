@@ -387,6 +387,7 @@ describe.skipIf(!HARNESS)(
             qn_protocol_byte: '255',
             qn_report_byte: '010',
             qn_weight_ack: 'yes',
+            qn_user_key: ' 01000 ',
             qn_a4_prelude: 'true',
             qn_time_sync_long: 'off',
             qn_config_long: '1',
@@ -410,6 +411,7 @@ describe.skipIf(!HARNESS)(
           qn_protocol_byte: 255
           qn_report_byte: 10
           qn_weight_ack: true
+          qn_user_key: 1000
           qn_a4_prelude: true
           qn_time_sync_long: false
           qn_config_long: true
@@ -490,6 +492,46 @@ describe.skipIf(!HARNESS)(
         });
         const config = expectLoads(r);
         expect(config.global_exporters?.[0]).toMatchObject({ password: 'g\\w${y}' });
+      });
+    });
+
+    // A text option like the QN bytes, so that unset stays unset (#463). Only a
+    // plain 1 to 9999 integer reaches config.yaml, as a decimal; anything else
+    // is dropped with a warning rather than failing the schema at startup.
+    describe('qn_user_key', () => {
+      it.each([
+        ['1000', 1000],
+        ['01000', 1000],
+        [' 42 ', 42],
+        ['9999', 9999],
+      ])('writes %j as %d, and opens the ble block on its own', (value, written) => {
+        const r = generate({ options: { ...DEFAULTS, qn_user_key: value } });
+        const config = expectLoads(r);
+        expect(config.ble?.qn_user_key).toBe(written);
+        expect(r.text).toContain(`ble:
+  qn_user_key: ${written}
+`);
+        expect(r.stdout).not.toContain('qn_user_key');
+      });
+
+      it.each(['0', '0000', '10000', '99999999999', 'abc', '-5', '1.5'])(
+        'drops %j with a warning',
+        (value) => {
+          const r = generate({ options: { ...DEFAULTS, qn_user_key: value } });
+          const config = expectLoads(r);
+          expect(config.ble?.qn_user_key).toBeUndefined();
+          expect(r.text).not.toContain('qn_user_key');
+          expect(r.stdout).toContain(
+            `WARNING: Invalid qn_user_key '${value}' (expected 1 to 9999). Ignoring.`,
+          );
+        },
+      );
+
+      it('writes nothing when it is empty', () => {
+        const r = generate({ options: { ...DEFAULTS, qn_user_key: '' } });
+        expectLoads(r);
+        expect(r.text).not.toContain('qn_user_key');
+        expect(r.stdout).not.toContain('qn_user_key');
       });
     });
 
@@ -882,6 +924,15 @@ describe.skipIf(!HARNESS)('run.sh custom_config and the transport options', () =
     expect(r.stdout).toContain("Set 'ble.handler' and its section");
     expect(r.stdout).not.toContain('custom-secret-key');
     expect(r.stdout).not.toContain('192.168.1.50');
+  });
+
+  it('names qn_user_key as ignored when it is set', () => {
+    const r = run({ ...CUSTOM, qn_user_key: '1000' });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain(
+      "WARNING: custom_config is enabled, so the 'qn_user_key' option is ignored.",
+    );
+    expect(r.stdout).toContain("Set 'ble.qn_user_key' in");
   });
 
   it('says nothing while every transport option has its default', () => {

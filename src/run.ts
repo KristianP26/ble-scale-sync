@@ -309,7 +309,8 @@ async function main(): Promise<void> {
 
   // Inject runtime config into adapters that read it: the Xiaomi S800 / S400
   // MiBeacon bind key (plus the scale MAC the S400 needs for its nonce), and the
-  // configured display unit that the QN 0x13 command echoes to the scale (#269).
+  // configured display unit that the QN 0x13 command and the AC 27 D0 profile
+  // frame echo to the scale (#269).
   // Optional + no-op for adapters without configure().
   // Re-applied on config reload below so a hot-edited key or unit takes effect.
   const applyAdapterConfig = (bindKey: string | undefined): void => {
@@ -318,6 +319,7 @@ async function main(): Promise<void> {
     const qnProtocolByte = ctx.config.ble?.qn_protocol_byte ?? undefined;
     const qnReportByte = ctx.config.ble?.qn_report_byte ?? undefined;
     const qnWeightAck = ctx.config.ble?.qn_weight_ack ?? undefined;
+    const qnUserKey = ctx.config.ble?.qn_user_key ?? undefined;
     const qnA4Prelude = ctx.config.ble?.qn_a4_prelude ?? undefined;
     const qnTimeSyncLong = ctx.config.ble?.qn_time_sync_long ?? undefined;
     const qnConfigLong = ctx.config.ble?.qn_config_long ?? undefined;
@@ -329,6 +331,7 @@ async function main(): Promise<void> {
         qnProtocolByte,
         qnReportByte,
         qnWeightAck,
+        qnUserKey,
         qnA4Prelude,
         qnTimeSyncLong,
         qnConfigLong,

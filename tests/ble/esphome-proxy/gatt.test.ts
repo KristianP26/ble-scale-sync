@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { openGattSession } from '../../../src/ble/handler-esphome-proxy/gatt.js';
-import { normalizeUuid } from '../../../src/ble/types.js';
+import { bleLog, normalizeUuid } from '../../../src/ble/types.js';
 
 // macToInt('00:00:00:00:00:01') === 1
 const ADDR = 1;
@@ -486,5 +486,70 @@ describe('openGattSession', () => {
     const session = await openGattSession({ connection: conn } as never, '00:00:00:00:00:01');
     expect(conn.connectBluetoothDeviceService).toHaveBeenCalledTimes(2);
     await session.close();
+  });
+
+  describe('notify handle logging (#331, #291)', () => {
+    const NOTIFY = 'message.BluetoothGATTNotifyDataResponse';
+    const unownedLines = (debug: { mock: { calls: unknown[][] } }): string[] =>
+      debug.mock.calls.map((c) => String(c[0])).filter((l) => /mismatch|did not subscribe/.test(l));
+
+    it('does not log a notification another subscribed characteristic owns', async () => {
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      try {
+        const conn = fakeConnection();
+        const session = await openGattSession({ connection: conn } as never, '00:00:00:00:00:01');
+        const a: Buffer[] = [];
+        const b: Buffer[] = [];
+        await session.charMap.get(normalizeUuid('2a9d'))!.subscribe((d) => a.push(d));
+        await session.charMap.get(normalizeUuid('2a9c'))!.subscribe((d) => b.push(d));
+        conn.emit(NOTIFY, { address: ADDR, handle: 7, data: 'qg==' });
+        conn.emit(NOTIFY, { address: ADDR, handle: 9, data: 'uw==' });
+        expect(a).toEqual([Buffer.from([0xaa])]);
+        expect(b).toEqual([Buffer.from([0xbb])]);
+        expect(unownedLines(debug)).toEqual([]);
+        await session.close();
+      } finally {
+        debug.mockRestore();
+      }
+    });
+
+    it('logs a handle nobody subscribed to once per session', async () => {
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      try {
+        const conn = fakeConnection();
+        const session = await openGattSession({ connection: conn } as never, '00:00:00:00:00:01');
+        await session.charMap.get(normalizeUuid('2a9d'))!.subscribe(() => {});
+        await session.charMap.get(normalizeUuid('2a9c'))!.subscribe(() => {});
+        conn.emit(NOTIFY, { address: ADDR, handle: 0x63, data: 'qg==' });
+        conn.emit(NOTIFY, { address: ADDR, handle: 0x63, data: 'qg==' });
+        const lines = unownedLines(debug);
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toContain('0x63');
+        await session.close();
+      } finally {
+        debug.mockRestore();
+      }
+    });
+
+    it('keeps a handle owned while a second listener on it is still subscribed (#75)', async () => {
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      try {
+        const conn = fakeConnection();
+        const session = await openGattSession({ connection: conn } as never, '00:00:00:00:00:01');
+        const char = session.charMap.get(normalizeUuid('2a9d'))!;
+        const got: Buffer[] = [];
+        const first = await char.subscribe(() => {});
+        await char.subscribe((d) => got.push(d));
+        await session.charMap.get(normalizeUuid('2a9c'))!.subscribe(() => {});
+        first();
+        first();
+        conn.emit(NOTIFY, { address: ADDR, handle: 7, data: 'qg==' });
+        expect(got).toEqual([Buffer.from([0xaa])]);
+        expect(unownedLines(debug)).toEqual([]);
+        await session.close();
+      } finally {
+        debug.mockRestore();
+      }
+    });
   });
 });

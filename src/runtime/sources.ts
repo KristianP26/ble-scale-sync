@@ -65,7 +65,7 @@ export async function buildReadingSource(
     haBluetooth: ctx.haBluetooth,
     adapters,
     targetMac: ctx.scaleMac,
-    profile: profile(),
+    profile,
     scaleAuth: scaleAuth(),
     weightUnit: ctx.weightUnit,
   });
@@ -93,7 +93,7 @@ export async function buildReadingSource(
         watcher.updateConfig({
           adapters,
           targetMac: ctx.scaleMac,
-          profile: profile(),
+          profile,
           scaleAuth: scaleAuth(),
           weightUnit: ctx.weightUnit,
         }),

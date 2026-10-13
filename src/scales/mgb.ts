@@ -16,6 +16,8 @@ import {
   WEIGHT_ONLY_HOLD_MS,
 } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
+import { isAc27Frame } from './active-era.js';
+import { bleLog } from '../ble/types.js';
 
 /**
  * Adapter for MGB-protocol scales (Swan, Icomon, YG brands).
@@ -53,6 +55,8 @@ export class MgbAdapter implements ScaleAdapterCore, GattWiring, HoldForComposit
    * the watcher transports.
    */
   private readonly compByReading = new ReadingComposition<ScaleBodyComp>();
+  /** Whether this session already pointed an AC 27 scale at its adapter. */
+  private ac27Hinted = false;
 
   matches(device: BleDeviceInfo): boolean {
     return matchesDescriptor(device, this.match);
@@ -91,6 +95,19 @@ export class MgbAdapter implements ScaleAdapterCore, GattWiring, HoldForComposit
   }
 
   parseNotification(data: Buffer): ScaleReading | null {
+    if (!this.ac27Hinted && isAc27Frame(data)) {
+      // An AC 27 scale whose advertisement did not carry the 0x27AC company id
+      // (#458 and #462 have not shown theirs, and ESPHome API < 1.9 drops
+      // manufacturer data) lands here on its bare FFB0 service. Nothing below
+      // parses its frames, and without this the session just times out.
+      this.ac27Hinted = true;
+      bleLog.info(
+        'This scale sends AC 27 frames, which the Active Era BS-06 adapter reads and this ' +
+          "one cannot. Set ble.force_scale_adapter: 'Active Era BS-06' and ble.scale_mac, " +
+          'and please report the "Advert:" line from a log with debug on, so it can be ' +
+          'picked automatically (#466).',
+      );
+    }
     if (data.length < 10) return null;
 
     // Frame1: header [0xAC, 0x02|0x03, 0xFF]
@@ -138,6 +155,7 @@ export class MgbAdapter implements ScaleAdapterCore, GattWiring, HoldForComposit
    * water against the new weight.
    */
   onSessionStart(): void {
+    this.ac27Hinted = false;
     this.cachedWeight = 0;
     this.cachedFat = 0;
     this.cachedMuscle = 0;

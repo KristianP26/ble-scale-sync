@@ -51,28 +51,42 @@ configuration:
       byte above. Sends your weight anchor (last known weight, or the middle of
       your weight range) twice right after the start command, as the
       Arboleaf vendor app does, and acknowledges live weight frames with their
-      own weight. On the 19-byte Arboleaf dialect it also sends your age and
-      height as the app does, and one such scale streamed its weight with this
-      and QN long time sync both set true (reading it is not yet confirmed on
-      hardware, #331). Leave empty unless your QN scale completes the whole
-      handshake in the log and then reports no weight at all; then set true.
+      own weight. On the 19-byte Arboleaf dialect it also sends the first
+      user's age, height and sex as the app does, which lets the scale's own
+      body composition be exported when it was computed for that profile, and
+      one such scale streamed its weight with this and QN long time sync both
+      set true (not yet confirmed on hardware, #331). Leave empty unless your
+      QN scale completes the whole handshake in the log and then reports no
+      weight at all; then set true.
+  qn_user_key:
+    name: QN user key
+    description: >-
+      QN-family scales with an 18- or 19-byte scale-info frame only. The user
+      key the vendor app registered you with on the scale, 1 to 9999; the
+      Feelfit, Arboleaf and GE apps use 1000. Set it when the debug log shows
+      the scale answering the profile frame with a1 06 02 01 00 and its display
+      shows only the weight. The first user here should be the first user in
+      the vendor app, with the same birth date, height, sex and athlete
+      setting. Not yet confirmed on an 18-byte scale (#463). Leave empty
+      otherwise.
   qn_a4_prelude:
     name: QN A4 prelude
     description: >-
       QN-family scales only, and the last thing to try after the QN protocol
       byte and the weight acknowledgement. An HCI capture of an Arboleaf vendor app
-      shows two undecoded 0xA4 frames sent between the start command and the
-      first weight frame, which this add-on does not send. Set true to replay
-      them. The payload is one reporter's own bytes, so it may help your unit
-      or do nothing. Leave empty otherwise.
+      shows two 0xA4 frames sent between the start command and the first
+      weight frame, which this add-on does not send. Set true to replay them.
+      They are one reporter's own bytes and overwrite data the scale keeps for
+      its first user, and a session that sends them does not use the scale's
+      own body composition. Leave empty otherwise.
   qn_time_sync_long:
     name: QN long time sync
     description: >-
       QN-family scales only, and only worth trying after everything else. The
       same Arboleaf capture shows the vendor app's clock-setting frame carrying
-      one extra byte that this add-on does not send. Set true to send that
-      longer frame. What the extra byte selects is not known, so this is a
-      diagnostic to try, not a fix. Leave empty otherwise.
+      one extra byte that this add-on does not send: the phone's UTC offset.
+      Set true to send that longer frame with your Home Assistant time zone's
+      offset. This is a diagnostic to try, not a fix. Leave empty otherwise.
   qn_config_long:
     name: QN long config frame
     description: >-
@@ -189,7 +203,8 @@ configuration:
     description: >-
       Unit requested on the physical scale, independently of the unit published
       to Home Assistant. Choose weight_unit to follow the setting above. Only
-      QN-family scales are told which unit to show; other scales ignore it.
+      QN-family and AC 27 (Active Era) scales are told which unit to show;
+      other scales ignore it.
   user_name:
     name: User name
     description: Display name for the user profile

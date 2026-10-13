@@ -12,7 +12,7 @@ import {
 } from '../helpers/scale-test-utils.js';
 import { adapters } from '../../src/scales/index.js';
 import { resolveAdapter } from '../../src/scales/resolve.js';
-import { uuid16 } from '../../src/scales/body-comp-helpers.js';
+import { uuid16, buildPayload, computeBiaFat } from '../../src/scales/body-comp-helpers.js';
 import { bleLog } from '../../src/ble/types.js';
 import type {
   BleDeviceInfo,
@@ -187,7 +187,7 @@ describe('EsCs20mAdapter', () => {
       expect(reading!.weight).toBe(80);
     });
 
-    it('parses msgId 0x15 extended frame (returns null, stores resistance)', () => {
+    it('returns null for a stored record (0x15) without the header', () => {
       const adapter = makeAdapter();
       const buf = Buffer.alloc(11);
       buf[0] = 0x15;
@@ -196,7 +196,7 @@ describe('EsCs20mAdapter', () => {
       expect(adapter.parseNotification(buf)).toBeNull();
     });
 
-    it('parses msgId 0x15 with 55 AA header', () => {
+    it('returns null for a stored record (0x15) with the 55 AA header', () => {
       const adapter = makeAdapter();
       const buf = Buffer.alloc(13);
       buf[0] = 0x55;
@@ -207,24 +207,19 @@ describe('EsCs20mAdapter', () => {
       expect(adapter.parseNotification(buf)).toBeNull();
     });
 
-    it('uses resistance from 0x15 frame in subsequent 0x14 frame', () => {
+    // MB1 frames from tests/test_x55aa_protocol.py in
+    // https://github.com/ronnnnnnnnnnnnn/renpho-escs20m: a power-on with one
+    // stored record waiting, then that record (60.95 kg, 873 ohm, taken 615 s
+    // earlier). The R-A016 zero-current final after it carries no resistance of
+    // its own, and used to be exported with the earlier weigh-in's 873 ohm.
+    it("keeps a stored record's resistance out of the live weigh-in", () => {
       const adapter = makeAdapter();
+      expect(adapter.parseNotification(hex('55aa11000501010107001f'))).toBeNull();
+      expect(adapter.parseNotification(hex('55aa15000c000017cf0369000002670000db'))).toBeNull();
 
-      // Extended frame stores resistance
-      const ext = Buffer.alloc(11);
-      ext[0] = 0x15;
-      ext.writeUInt16BE(500, 9);
-      adapter.parseNotification(ext);
-
-      // Weight frame without resistance
-      const w = Buffer.alloc(10);
-      w[0] = 0x14;
-      w[5] = 0x01;
-      w.writeUInt16BE(8000, 8);
-
-      const reading = adapter.parseNotification(w);
-      expect(reading).not.toBeNull();
-      expect(reading!.impedance).toBe(500);
+      const live = adapter.parseNotification(hex('55aa14000711000023b9000007'))!;
+      expect(live).toEqual({ weight: 91.45, impedance: 0 });
+      expect(adapter.isComplete(live)).toBe(true);
     });
 
     it('returns null for unknown msgId', () => {
@@ -797,6 +792,240 @@ describe('EsCs20mAdapter on an AE00 unit (#436)', () => {
     adapter.onSessionStart();
     await adapter.onConnected!(ctx);
     expect(written.map((w) => w.hex)).toEqual(['55aa9000040100000094']);
+  });
+});
+
+// ─── The 0x18 result on an AE00 unit (#436) ─────────────────────────────────
+
+// Frames from the #436 reporter's public logs (comments 6073310202 and
+// 6112383314), byte-for-byte except where marked. In every 0x18 the scale's
+// BMI and body fat ([14..17]) are zeroed and the checksum recomputed: those two
+// are health values the scale computed, the adapter does not read them, and
+// they stay out of the repository. Weight and resistance are as received.
+const POWER_OFF_436 = '55aa11000a000201000000000000001d';
+const REPLY_17 = '55aa17000201011a';
+const REPLY_16 = '55aa160001091f';
+const REPLY_10 = '55aa1000010111';
+const W_139_10 = '55aa14000700000036560000a6';
+const W_139_20 = '55aa14000700000036600000b0';
+const W_136_40 = '55aa1400070000003548000097';
+/** 6073310202, in socks: 139.20 kg, 0 ohm. */
+const RESULT_SOCKS = '55aa18000d01010900003660000000000000c5';
+/** 6112383314, first barefoot weigh-in: 139.10 kg, 470 ohm. */
+const RESULT_470 = '55aa18000d0101090000365601d60000000092';
+/** 6112383314, second barefoot weigh-in: 139.10 kg, 404 ohm. */
+const RESULT_404 = '55aa18000d0101090000365601940000000050';
+// Edited from RESULT_470 (checksum recomputed unless the checksum is the
+// point), each failing exactly one check.
+/** Slot 00, as in the first 0x18 of the #436 app capture (no 0x14 before it). */
+const RESULT_SLOT_0 = '55aa18000d0101000000365601d60000000089';
+/** Status 02: not a final. */
+const RESULT_STATUS_2 = '55aa18000d0201090000365601d60000000093';
+/** Checksum off by one (the right one is 92). */
+const RESULT_BAD_SUM = '55aa18000d0101090000365601d60000000093';
+/** One byte longer, length field still 13; the checksum holds over the longer frame. */
+const RESULT_TOO_LONG = '55aa18000d0101090000365601d6000000000092';
+/** Length field 12 on the 19-byte frame. */
+const RESULT_LEN_12 = '55aa18000c0101090000365601d60000000091';
+/**
+ * Passes every check: the resistance times ten (4700 ohm), the scaling error
+ * the 150-1200 ohm band is there to catch.
+ */
+const RESULT_4700 = '55aa18000d01010900003656125c0000000029';
+
+/** The 25 weight frames of the second barefoot weigh-in, in log order. */
+const SECOND_WEIGH_IN = [
+  '3548000097', // 136.40
+  '36c4000014', // 140.20
+  '358e0000dd', // 137.10
+  '37500000a1', // 141.60
+  '35d4000023', // 137.80
+  '369c0000ec', // 139.80
+  '3732000083', // 141.30
+  '35d4000023', // 137.80
+  '367e0000ce', // 139.50
+  '36740000c4', // 139.40
+  '36740000c4', // 139.40
+  '36e2000032', // 140.50
+  '35b6000005', // 137.50
+  '36920000e2', // 139.70
+  '369c0000ec', // 139.80
+  '36560000a6', // 139.10
+  '36560000a6', // 139.10
+  '369c0000ec', // 139.80
+  ...Array<string>(7).fill('36560000a6'), // 139.10, held
+].map((tail) => '55aa140007000000' + tail);
+
+describe('EsCs20mAdapter 0x18 result (#436)', () => {
+  async function connected(chars = AE00_UNIT): Promise<EsCs20mAdapter> {
+    const adapter = new EsCs20mAdapter(captureClock);
+    adapter.onSessionStart();
+    await adapter.onConnected!(mockCtx(chars).ctx);
+    return adapter;
+  }
+
+  /** Feed frames in order and return what the last one parsed to. */
+  function feed(adapter: EsCs20mAdapter, frames: string[]) {
+    let last = null as ReturnType<EsCs20mAdapter['parseNotification']>;
+    for (const f of frames) last = adapter.parseNotification(hex(f));
+    return last;
+  }
+
+  it('second barefoot weigh-in: completes on 0x18 with its resistance and holds until power-off', async () => {
+    const adapter = await connected();
+    feed(adapter, [POWER_ON_436, REPLY_17, REPLY_16, ...SECOND_WEIGH_IN.slice(0, 1), REPLY_10]);
+    feed(adapter, SECOND_WEIGH_IN.slice(1));
+    expect(adapter.completionHoldMs).toBeUndefined();
+
+    const result = adapter.parseNotification(hex(RESULT_404))!;
+    expect(result).toEqual({ weight: 139.1, impedance: 404 });
+    expect(adapter.isComplete(result)).toBe(true);
+    expect(adapter.isFinal(result)).toBe(false);
+    expect(adapter.completionHoldMs).toBe(30_000);
+
+    const off = adapter.parseNotification(hex(POWER_OFF_436));
+    expect(off).toBe(result);
+    expect(adapter.isComplete(off!)).toBe(true);
+    expect(adapter.isFinal(off!)).toBe(true);
+  });
+
+  it('weigh-in in socks: the 0x18 completes with 0 ohm', async () => {
+    const adapter = await connected();
+    feed(adapter, [POWER_ON_436, W_139_20, W_139_20, W_139_20, W_139_20]);
+    const result = adapter.parseNotification(hex(RESULT_SOCKS))!;
+    expect(result).toEqual({ weight: 139.2, impedance: 0 });
+    expect(adapter.isComplete(result)).toBe(true);
+  });
+
+  it('ignores a 0x18 with no weight frame since power-on (the capture shape)', async () => {
+    const adapter = await connected();
+    expect(feed(adapter, [POWER_ON_436, RESULT_470])).toBeNull();
+    expect(adapter.completionHoldMs).toBeUndefined();
+    expect(adapter.parseNotification(hex(POWER_OFF_436))).toBeNull();
+  });
+
+  it('ignores a 0x18 from slot 00 and completes on power-off as before', async () => {
+    const adapter = await connected();
+    expect(feed(adapter, [POWER_ON_436, W_139_10, RESULT_SLOT_0])).toBeNull();
+    expect(adapter.completionHoldMs).toBeUndefined();
+    expect(adapter.parseNotification(hex(POWER_OFF_436))).toEqual({ weight: 139.1, impedance: 0 });
+  });
+
+  it('ignores a 0x18 whose weight is more than 0.5 kg from the last weight frame', async () => {
+    const adapter = await connected();
+    expect(feed(adapter, [POWER_ON_436, W_136_40, RESULT_470])).toBeNull();
+    expect(adapter.completionHoldMs).toBeUndefined();
+  });
+
+  it('ignores a 0x18 that is not a final or fails its checksum', async () => {
+    const adapter = await connected();
+    expect(feed(adapter, [POWER_ON_436, W_139_10, RESULT_STATUS_2])).toBeNull();
+    expect(adapter.parseNotification(hex(RESULT_BAD_SUM))).toBeNull();
+    expect(adapter.completionHoldMs).toBeUndefined();
+  });
+
+  it('ignores a 0x18 whose length is not the 13-byte result', async () => {
+    const adapter = await connected();
+    expect(feed(adapter, [POWER_ON_436, W_139_10, RESULT_TOO_LONG])).toBeNull();
+    expect(adapter.parseNotification(hex(RESULT_LEN_12))).toBeNull();
+    expect(adapter.completionHoldMs).toBeUndefined();
+  });
+
+  it('ignores weight frames after the 0x18 and exports the 0x18 on power-off', async () => {
+    const adapter = await connected();
+    const result = feed(adapter, [POWER_ON_436, W_139_10, RESULT_404])!;
+    expect(result).toEqual({ weight: 139.1, impedance: 404 });
+    expect(adapter.parseNotification(hex(W_136_40))).toBeNull();
+    expect(adapter.parseNotification(hex(POWER_OFF_436))).toEqual({
+      weight: 139.1,
+      impedance: 404,
+    });
+  });
+
+  it('takes one 0x18 per weigh-in', async () => {
+    const adapter = await connected();
+    expect(feed(adapter, [POWER_ON_436, W_139_10, RESULT_404])).not.toBeNull();
+    expect(adapter.parseNotification(hex(RESULT_470))).toBeNull();
+  });
+
+  it('ignores a 0x18 on a unit without AE00, where no guest profile was sent', async () => {
+    const adapter = await connected(NO_AE00_UNIT);
+    expect(feed(adapter, [POWER_ON_436, W_139_10, RESULT_470])).toBeNull();
+    expect(adapter.completionHoldMs).toBeUndefined();
+    expect(adapter.parseNotification(hex(POWER_OFF_436))).toEqual({ weight: 139.1, impedance: 0 });
+  });
+
+  // Adapters are singletons: a session that ended during the hold must not
+  // hand its result to the next one.
+  it('drops the result at the next session start', async () => {
+    const adapter = await connected();
+    expect(feed(adapter, [POWER_ON_436, W_139_10, RESULT_404])).not.toBeNull();
+    adapter.onSessionEnd!();
+    adapter.onSessionStart();
+    expect(adapter.completionHoldMs).toBeUndefined();
+    expect(adapter.parseNotification(hex(POWER_OFF_436))).toBeNull();
+  });
+
+  it('drops the result at the next power-on', async () => {
+    const adapter = await connected();
+    expect(feed(adapter, [POWER_ON_436, W_139_10, RESULT_404])).not.toBeNull();
+    adapter.parseNotification(hex(POWER_ON_436));
+    expect(adapter.completionHoldMs).toBeUndefined();
+  });
+
+  // The profile is the made-up defaultProfile(), never one derived from the
+  // reporter's log.
+  describe('body composition', () => {
+    it('computes body fat from the resistance of an accepted 0x18 (BIA)', async () => {
+      const adapter = await connected();
+      const p = defaultProfile();
+      const result = feed(adapter, [POWER_ON_436, W_139_10, RESULT_470])!;
+      const payload = adapter.computeMetrics(result, p);
+      expect(payload).toEqual(buildPayload(139.1, 470, { fat: computeBiaFat(139.1, 470, p) }, p));
+      expect(payload.bodyFatPercent).not.toBe(buildPayload(139.1, 470, {}, p).bodyFatPercent);
+    });
+
+    it('keeps the BMI estimate for a 0x18 in socks (0 ohm)', async () => {
+      const adapter = await connected();
+      const p = defaultProfile();
+      const result = feed(adapter, [POWER_ON_436, W_139_20, RESULT_SOCKS])!;
+      expect(adapter.computeMetrics(result, p)).toEqual(buildPayload(139.2, 0, {}, p));
+    });
+
+    // The processor zeroes such a resistance before computeMetrics (D028); the
+    // adapter does not count on it.
+    it('keeps the BMI estimate for a 0x18 resistance outside 150-1200 ohm', async () => {
+      const adapter = await connected();
+      const p = defaultProfile();
+      const result = feed(adapter, [POWER_ON_436, W_139_10, RESULT_4700])!;
+      expect(result).toEqual({ weight: 139.1, impedance: 4700 });
+      expect(adapter.computeMetrics(result, p)).toEqual(buildPayload(139.1, 4700, {}, p));
+    });
+
+    // computeMetrics can run after the next session has started (#394), and
+    // that start drops the held result, so the reading itself has to carry it.
+    it('still computes BIA for a 0x18 reading after the next session has started', async () => {
+      const adapter = await connected();
+      const p = defaultProfile();
+      const result = feed(adapter, [POWER_ON_436, W_139_10, RESULT_470])!;
+      expect(adapter.parseNotification(hex(POWER_OFF_436))).toBe(result);
+      adapter.onSessionEnd!();
+      adapter.onSessionStart();
+      expect(adapter.computeMetrics(result, p)).toEqual(
+        buildPayload(139.1, 470, { fat: computeBiaFat(139.1, 470, p) }, p),
+      );
+    });
+
+    // Basic flavor (R-A016 normal-mode final, see the #376 status describe):
+    // its resistance is exported, body fat stays the estimate until a
+    // basic-flavor unit can be checked against the app (D046).
+    it('keeps the BMI estimate for a 0x14 final with its own resistance', () => {
+      const adapter = makeAdapter();
+      const p = defaultProfile();
+      const reading = adapter.parseNotification(hex('55aa14000701000023b903110b'))!;
+      expect(reading).toEqual({ weight: 91.45, impedance: 785 });
+      expect(adapter.computeMetrics(reading, p)).toEqual(buildPayload(91.45, 785, {}, p));
+    });
   });
 });
 

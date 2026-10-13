@@ -40,6 +40,7 @@ describe('collectUnknownKeys', () => {
         qn_protocol_byte: 255,
         qn_report_byte: 252,
         qn_weight_ack: true,
+        qn_user_key: 1000,
         qn_a4_prelude: true,
         qn_time_sync_long: true,
         qn_config_long: true,

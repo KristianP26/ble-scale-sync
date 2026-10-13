@@ -6,12 +6,17 @@ import type {
 } from '../../interfaces/scale-adapter.js';
 import type { ScanOptions, ScanResult } from '../types.js';
 import type { RawReading } from '../shared.js';
-import { findMissingCharacteristics } from '../shared.js';
+import {
+  findMissingCharacteristics,
+  hasDeferredNotifyBinding,
+  stopDeferredNotifications,
+} from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
 import {
   bleLog,
   formatMac,
   sleep,
+  abortableSleep,
   errMsg,
   untilAborted,
   withTimeout,
@@ -70,6 +75,13 @@ import { safeName } from '../advertisement.js';
 const BONDING_TIMEOUT_MS = 15_000;
 
 /**
+ * Wait after turning a deferred binding off and before disconnecting. BlueZ
+ * answers StopNotify first and writes the CCCD afterwards; the vendor app's
+ * own CCCD writes were answered 68 to 112 ms after the request (#408).
+ */
+const STOP_NOTIFY_SETTLE_MS = 500;
+
+/**
  * Number of the most recent scanAndReadRaw() call.
  *
  * The poll loop abandons a cycle at POLL_CYCLE_TIMEOUT_MS without being able to
@@ -79,6 +91,45 @@ const BONDING_TIMEOUT_MS = 15_000;
  * power-cycle the adapter underneath the cycle that replaced it (A-04).
  */
 let scanCycle = 0;
+
+/** Options `ensureBonded` takes only for a `singleBond` adapter (#408). */
+export interface BondOptions {
+  /** Take the default-agent role for this pairing and check the bond after it. */
+  forPairing?: boolean;
+}
+
+/** Whether the "paired but not bonded" warning was printed in this process. */
+let notBondedWarned = false;
+
+/** Test hook: forget that the warning was printed. */
+export function _resetNotBondedWarningForTests(): void {
+  notBondedWarned = false;
+}
+
+/**
+ * Warn once per process when BlueZ paired the scale without storing a bond.
+ *
+ * A pairing without a bond works for this one connection and is gone at the
+ * next, and a scale that sends its data only to its bonded collector then
+ * says nothing (#408). `Device1.Bonded` exists from BlueZ 5.65 on; where it is
+ * missing, or the read fails, there is nothing to say.
+ */
+async function warnIfNotBonded(device: Device): Promise<void> {
+  if (notBondedWarned) return;
+  let bonded: unknown;
+  try {
+    bonded = await helperOf(device).prop('Bonded');
+  } catch {
+    return;
+  }
+  if (bonded !== false) return;
+  notBondedWarned = true;
+  bleLog.warn(
+    'The scale is paired with this host, but BlueZ did not store the pairing as a bond, ' +
+      'so it will not survive this connection. Pair it once by hand: bluetoothctl, ' +
+      '"agent on", "default-agent", "pair <MAC>", "trust <MAC>", with the scale in pairing mode.',
+  );
+}
 
 /**
  * Best-effort BLE bonding for adapters that need an encrypted link (#168).
@@ -93,11 +144,18 @@ let scanCycle = 0;
  * `_pin` is unused: the agent reads the PIN from the cycle's pairing target,
  * together with the scale's MAC. The parameter stays because acquireGattServer
  * passes this function as its bonding callback with that signature.
+ *
+ * `opts.forPairing` is passed only for an adapter with `singleBond` (#408).
+ * It lets the agent take the default role for this one pairing, which is what
+ * makes an adapter without a PIN bondable on a BlueZ older than 5.51, and it
+ * checks afterwards that BlueZ stored the pairing as a bond. Every other
+ * adapter calls this exactly as before, with three arguments.
  */
 export async function ensureBonded(
   device: Device,
   _pin: number | undefined,
   abortSignal?: AbortSignal,
+  opts?: BondOptions,
 ): Promise<void> {
   /**
    * The abort was checked ONCE, on entry, and the listener that reacts to it is
@@ -121,6 +179,10 @@ export async function ensureBonded(
     // so the read is deliberately unguarded (#406).
     if (((await device.isPaired()) as unknown as boolean) === true) {
       bleLog.debug('Device already bonded');
+      // On BlueZ the kernel answers the scale's own Security Request when it
+      // connects, so for a single-bond scale this is the usual way in, not
+      // Pair() below; a pairing without a stored bond shows up only here.
+      if (opts?.forPairing) await warnIfNotBonded(device);
       return;
     }
     throwIfAborted('before registering the BLE pairing agent');
@@ -132,7 +194,9 @@ export async function ensureBonded(
     // This used to install a PIN-only provider instead, which silently dropped
     // the MAC gate for the rest of the cycle (#83).
     try {
-      await ensurePairingAgent(getBus());
+      await (opts?.forPairing
+        ? ensurePairingAgent(getBus(), { forPairing: true })
+        : ensurePairingAgent(getBus()));
     } catch (err) {
       bleLog.debug(`Pairing agent registration skipped: ${errMsg(err)}`);
     }
@@ -182,6 +246,7 @@ export async function ensureBonded(
       onAbort = undefined;
     }
     bleLog.info('BLE pairing succeeded');
+    if (opts?.forPairing) await warnIfNotBonded(device);
     // Mark the device trusted so subsequent reconnects re-use the bond without
     // re-invoking the agent. Best-effort: a failure does not affect this session.
     try {
@@ -227,7 +292,12 @@ export async function acquireGattServer(
   // Injectable so the branch logic (bond gate, already-bonded rethrow,
   // single retry) is unit-testable without a live D-Bus. Defaults to the real
   // ensureBonded in production.
-  bond: (d: Device, p: number | undefined, s?: AbortSignal) => Promise<void> = ensureBonded,
+  bond: (
+    d: Device,
+    p: number | undefined,
+    s?: AbortSignal,
+    o?: BondOptions,
+  ) => Promise<void> = ensureBonded,
   abortSignal?: AbortSignal,
 ): Promise<NodeBle.GattServer> {
   // Raced against the abort as well as the deadline: a shutdown otherwise sat
@@ -248,7 +318,9 @@ export async function acquireGattServer(
     bleLog.info(
       'GATT discovery timed out on a scale that requires bonding; pairing first, then retrying discovery once (#290)...',
     );
-    await bond(device, pin, abortSignal);
+    await (adapter.singleBond
+      ? bond(device, pin, abortSignal, { forPairing: true })
+      : bond(device, pin, abortSignal));
     return await acquire();
   }
 }
@@ -490,7 +562,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     // Establish an encrypted link before enabling notifications for adapters
     // whose SIG services protect their CCCDs (#168). Best-effort: see ensureBonded.
     if (matchedAdapter.requiresBonding) {
-      await ensureBonded(device, scaleAuth?.pin, abortSignal);
+      await (matchedAdapter.singleBond
+        ? ensureBonded(device, scaleAuth?.pin, abortSignal, { forPairing: true })
+        : ensureBonded(device, scaleAuth?.pin, abortSignal));
     }
 
     const raw = await readWithTimeouts(charMap, wrapDevice(device), matchedAdapter, deviceMac, {
@@ -509,10 +583,26 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     // Same device path as the newer cycle's, so a late Disconnect here would
     // drop that cycle's link to the scale.
     if (!isSuperseded()) {
-      try {
-        await device.disconnect();
-      } catch {
-        /* ignore */
+      // An adapter that enables a binding itself (CharacteristicBinding.deferred)
+      // gets it turned off again first, as its vendor app does (#408). StopNotify
+      // answers before BlueZ has written the CCCD, so the short wait lets that
+      // write reach the scale before the link goes; a shutdown cuts it short.
+      // Checked synchronously, so every adapter without a deferred binding
+      // reaches the disconnect exactly as before: no D-Bus call, no log line,
+      // no wait, not even an extra await.
+      if (!abortSignal?.aborted && hasDeferredNotifyBinding(matchedAdapter)) {
+        if ((await stopDeferredNotifications(charMap, matchedAdapter)) > 0) {
+          await abortableSleep(STOP_NOTIFY_SETTLE_MS, abortSignal).catch(() => {});
+        }
+      }
+      // The stop and the wait above take up to 2.5 s, long enough for the poll
+      // loop to give up on this cycle and start a newer one on the same device.
+      if (!isSuperseded()) {
+        try {
+          await device.disconnect();
+        } catch {
+          /* ignore */
+        }
       }
     }
     return raw;

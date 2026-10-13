@@ -2,12 +2,18 @@ import type {
   BleDeviceInfo,
   ScaleAdapterCore,
   GattWiring,
+  HoldForComposition,
   ScaleReading,
   UserProfile,
   BodyComposition,
   ConnectionContext,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
+import {
+  uuid16,
+  buildPayload,
+  biaFatIfPlausible,
+  type ScaleBodyComp,
+} from './body-comp-helpers.js';
 import { matchesDescriptor, ownAddressBytes, type MatchDescriptor } from './match-descriptor.js';
 import { bleLog, errMsg } from '../ble/types.js';
 
@@ -52,6 +58,20 @@ const TRAILER_NO_IMPEDANCE = 0x06;
  */
 const FLAGS_STANDARD = 0xa8 | 2;
 const FLAGS_ATHLETE = 0x68 | 2;
+
+// ─── The 0x18 result frame (#436) ────────────────────────────────────────────
+
+const CMD_RESULT = 0x18;
+/** 0x18 payload: status, ?, slot, u32 weight, u16 resistance, u16 BMI, u16 body fat. */
+const RESULT_PAYLOAD_LEN = 13;
+/** As R-MSC04 between its final weight and its record. */
+const RESULT_WEIGHT_TOLERANCE_KG = 0.5;
+/**
+ * The app keeps the link until the power-off frame, 19.8 to 22.9 s after the
+ * result in the #436 logs and capture. Past this, complete without it: one
+ * #436 weigh-in never got that frame and was lost to the idle timeout.
+ */
+const RESULT_HOLD_MS = 30_000;
 
 /** Used when the profile has no usable height: 170.0 cm. */
 const FALLBACK_HEIGHT_TENTHS = 1700;
@@ -270,10 +290,14 @@ function hasOwnMacEcho(device: BleDeviceInfo): boolean {
  *   - Message ID 0x14 (weight frame): status at [5], weight at [8-9], optional
  *     resistance at [10-11]
  *   - Message ID 0x15 (STORED offline record, not a live "extended frame"):
- *     resistance at bytes [9-10]; the adapter still keeps that resistance,
- *     see the 0x15 branch below
+ *     an earlier weigh-in, logged and not used
+ *   - Message ID 0x18 (result, AE00 units only): weight and resistance of the
+ *     weigh-in that just ended, plus a BMI and body fat the scale computed
+ *     from our guest profile, which are not used (ADR D046)
  *   - Weight at [8-9] big-endian uint16 / 100 (kg)
- *   - Complete on a 0x14 final (status low nibble 1) or on the 0x11 power-off
+ *   - Complete on a 0x14 final (status low nibble 1), on an accepted 0x18 or
+ *     on the 0x11 power-off. After a 0x18 the link is held until the
+ *     power-off, as the app does, for at most RESULT_HOLD_MS
  *
  * Per openScale PR #1300, some firmware variants do not flag a final 0x14
  * frame; the reading then completes on the 0x11 power-off frame. This adapter
@@ -293,7 +317,7 @@ function hasOwnMacEcho(device: BleDeviceInfo): boolean {
  *     the #436 unit sent its power frames and no weight. Which of the four
  *     writes it actually needs is not known.
  */
-export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring {
+export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComposition {
   readonly name = 'ES-CS20M';
   readonly match: MatchDescriptor = {
     priority: 130,
@@ -308,6 +332,14 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring {
   private stopped = false;
   private resistance = 0;
   private lastWeight = 0;
+  /** The accepted 0x18 of this weigh-in, held until the power-off frame. */
+  private result: ScaleReading | null = null;
+  /**
+   * Readings taken from an accepted 0x18: only their resistance drives BIA.
+   * Keyed by the reading, as computeMetrics can run after the next session has
+   * started (#394), so never cleared.
+   */
+  private readonly resultReadings = new WeakSet<ScaleReading>();
 
   /**
    * The session's context, captured for the writes a power-on frame triggers.
@@ -327,6 +359,19 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring {
 
   constructor(now: () => Date = () => new Date()) {
     this.now = now;
+  }
+
+  /**
+   * Hold the link from an accepted 0x18 until the power-off frame (D046).
+   * Undefined otherwise, so nothing else this adapter returns is held.
+   */
+  get completionHoldMs(): number | undefined {
+    return this.result !== null ? RESULT_HOLD_MS : undefined;
+  }
+
+  /** The 0x18 reading is final once the scale has switched off. */
+  isFinal(reading: ScaleReading): boolean {
+    return reading !== this.result || this.stopped;
   }
 
   matches(device: BleDeviceInfo): boolean {
@@ -353,8 +398,15 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring {
    *
    * ID 0x15 - stored offline record (an earlier weigh-in, not a live frame;
    * per renpho-escs20m protocol.py and a third-party capture of seven
-   * records, payload [6:10] is the seconds since that weigh-in):
-   *   [9-10]   resistance, big-endian uint16
+   * records, payload [6:10] is the seconds since that weigh-in). Not used:
+   * its resistance at [9-10] belongs to that earlier weigh-in.
+   *
+   * ID 0x18 - result (only seen with the 55 AA header, on AE00 units):
+   *   [5]      status, low nibble 1 = final (0x11 in zero-current mode)
+   *   [7]      slot the result was computed for, 9 = our guest profile
+   *   [8-11]   weight, big-endian uint32 / 100 (kg)
+   *   [12-13]  resistance, big-endian uint16, ohm (0 in socks)
+   *   [14-17]  BMI x10 and body fat x10 from the guest profile, not used
    */
   parseNotification(data: Buffer): ScaleReading | null {
     if (data.length < 2) return null;
@@ -364,6 +416,7 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring {
         this.logReply(data);
         return null;
       }
+      if (data[2] === CMD_RESULT) return this.onResult(data);
     }
 
     // Robust msgId: try data[2] first (with 55 AA header), fall back to data[0] (stripped)
@@ -381,14 +434,17 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring {
         this.stopped = false;
         this.resistance = 0;
         this.lastWeight = 0;
+        this.result = null;
         // The handshake echoes the display unit from [6], which every capture
         // shows in the 55AA form. No header-less 0x11 has been captured, so
         // where its unit sits is unknown and it must not pick the unit.
         if (data[0] === 0x55 && data[1] === 0xaa) this.onPowerOn(data);
       } else if (data[5] === 0x00) {
         this.handshakeArmed = true;
-        // Power off: measurement complete, return the last accumulated reading
+        // Power off: measurement complete. The 0x18 result if one was taken
+        // (the same object, now final), else the last accumulated reading.
         this.stopped = true;
+        if (this.result) return this.result;
         if (this.lastWeight > 0) {
           return { weight: this.lastWeight, impedance: this.resistance };
         }
@@ -398,17 +454,18 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring {
 
     if (msgId === 0x15) {
       // A stored offline record, which the original port read as an "extended
-      // frame". Keeping its resistance attaches an earlier weigh-in's value to
-      // the live weight; that change is tracked separately and deliberately
-      // not made here.
-      if (data.length >= 11) {
-        this.resistance = data.readUInt16BE(9);
-      }
+      // frame" and took the resistance from. That attached an earlier
+      // weigh-in's resistance to the live weight whenever the live frames
+      // carried none of their own.
+      bleLog.debug('ES-CS20M: stored record (0x15) ignored: it is an earlier weigh-in');
       return null;
     }
 
     if (msgId !== 0x14) return null;
     if (data.length < 10) return null;
+    // After the result nothing replaces it: a later weight frame would take
+    // over the held reading and lose the resistance.
+    if (this.result) return null;
 
     // Low nibble is the phase (0 settling, 1 final, other values unclassified);
     // bit 4 is the zero-current mode the Renpho app stores on the scale, so
@@ -435,6 +492,58 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring {
   }
 
   /**
+   * Take a 0x18 as this weigh-in's result only when it can be nothing else
+   * (D046). Every live #436 result came on an AE00 unit after our guest
+   * profile, from slot 9, after weight frames, at exactly the last weight;
+   * the one other 0x18 seen (the app capture's first, slot 00, no weight
+   * frame before it) fails two of these checks. Anything rejected leaves the
+   * session as it was: it completes on the power-off with the last weight.
+   */
+  private onResult(data: Buffer): ScaleReading | null {
+    const skip = (why: string): null => {
+      bleLog.debug(`ES-CS20M: 0x18 not used: ${why}`);
+      return null;
+    };
+    if (this.result) return skip('this weigh-in already has its result');
+    if (!this.handshake) return skip('no guest profile was sent on this unit');
+    if (
+      data.length !== HEADER_LEN + RESULT_PAYLOAD_LEN + 1 ||
+      data.readUInt16BE(3) !== RESULT_PAYLOAD_LEN ||
+      checksum(data.subarray(0, data.length - 1)) !== data[data.length - 1]
+    ) {
+      return skip('bad length or checksum');
+    }
+    const status = data[5];
+    if ((status & 0x0f) !== 0x01) {
+      return skip(`status 0x${status.toString(16).padStart(2, '0')} is not a final`);
+    }
+    if (data[7] !== GUEST_SLOT) return skip(`slot ${data[7]}, not the guest profile we sent`);
+    if (this.lastWeight <= 0) return skip('no weight frame since the scale switched on');
+    const weight = data.readUInt32BE(8) / 100;
+    if (
+      weight < 0.5 ||
+      weight > 300 ||
+      Math.abs(weight - this.lastWeight) > RESULT_WEIGHT_TOLERANCE_KG
+    ) {
+      return skip(
+        `${weight.toFixed(2)} kg is not the weigh-in in progress ` +
+          `(last weight frame ${this.lastWeight.toFixed(2)} kg)`,
+      );
+    }
+    const impedance = data.readUInt16BE(12);
+    this.result = { weight, impedance };
+    this.resultReadings.add(this.result);
+    // BMI and body fat stay out of this line; the raw frame is already in the
+    // notification debug log.
+    bleLog.debug(
+      `ES-CS20M: result 0x18: ${weight.toFixed(2)} kg, ${impedance} ohm (slot ${GUEST_SLOT}); ` +
+        `its BMI and body fat were computed for the guest profile we sent and are not used. ` +
+        `Keeping the link until the scale switches off (up to ${RESULT_HOLD_MS / 1000} s).`,
+    );
+    return this.result;
+  }
+
+  /**
    * Clear the previous weigh-in (#394).
    *
    * Adapters are shared singletons. These fields used to be cleared only inside
@@ -450,6 +559,7 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring {
     this.stopped = false;
     this.resistance = 0;
     this.lastWeight = 0;
+    this.result = null;
     this.handshake = false;
     this.handshakeArmed = true;
     this.legacyRepeated = false;
@@ -562,11 +672,23 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring {
   }
 
   isComplete(reading: ScaleReading): boolean {
-    return reading.weight > 0 && (this.stable || this.stopped);
+    return reading.weight > 0 && (this.stable || this.stopped || reading === this.result);
   }
 
+  /**
+   * Body fat from the resistance of an accepted 0x18, through the shared BIA
+   * estimator and its 150-1200 ohm band, as the #386 adapters do (D046). The
+   * profile is the matched user's, not the guest profile the scale computed
+   * its own body fat from. Every other reading keeps the BMI estimate: the
+   * resistance a basic-flavor 0x14 final carries is exported, but no such
+   * unit has been checked against the app yet.
+   */
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    const comp: ScaleBodyComp = {};
+    const comp: ScaleBodyComp = {
+      fat: this.resultReadings.has(reading)
+        ? biaFatIfPlausible(reading.weight, reading.impedance, profile)
+        : undefined,
+    };
     return buildPayload(reading.weight, reading.impedance, comp, profile);
   }
 }

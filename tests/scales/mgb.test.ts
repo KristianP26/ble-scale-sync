@@ -7,6 +7,8 @@ import {
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
 import { WEIGHT_ONLY_HOLD_MS } from '../../src/scales/body-comp-helpers.js';
+import { bleLog } from '../../src/ble/types.js';
+import { ISSUE_466_REPEAT_1, ISSUE_466_RAMP } from '../helpers/ac27-captures.js';
 
 function makeAdapter() {
   return new MgbAdapter();
@@ -360,5 +362,39 @@ describe('MgbAdapter session boundary (#394)', () => {
     expect(payload.waterPercent).toBeCloseTo(baseline.waterPercent!, 5);
     // 40.0 % of 65 kg is what the leak used to export.
     expect(payload.muscleMass).not.toBeCloseTo(26, 1);
+  });
+});
+
+// An AC 27 scale that reaches MGB (no 0x27AC in its advertisement) gets one
+// pointer to the adapter that reads it per session. Frames: #466 issue body.
+describe('MgbAdapter: AC 27 frames (#458, #462, #466)', () => {
+  it('logs the force_scale_adapter hint once per session and still parses nothing', () => {
+    const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    try {
+      const a = new MgbAdapter();
+      const hints = (): number =>
+        info.mock.calls.filter((c) => String(c[0]).includes("'Active Era BS-06'")).length;
+      for (const f of [...ISSUE_466_RAMP, ISSUE_466_REPEAT_1]) {
+        expect(a.parseNotification(f)).toBeNull();
+      }
+      expect(hints()).toBe(1);
+      a.onSessionStart();
+      a.parseNotification(ISSUE_466_REPEAT_1);
+      expect(hints()).toBe(2);
+    } finally {
+      info.mockRestore();
+    }
+  });
+
+  it('does not hint on a frame that only starts with AC 27', () => {
+    const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    try {
+      const bad = Buffer.from(ISSUE_466_REPEAT_1);
+      bad[19] ^= 0x01; // [19] changed 0x02 -> 0x03, checksum no longer matches
+      new MgbAdapter().parseNotification(bad);
+      expect(info).not.toHaveBeenCalled();
+    } finally {
+      info.mockRestore();
+    }
   });
 });

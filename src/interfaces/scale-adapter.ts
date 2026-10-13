@@ -151,6 +151,23 @@ export interface CharacteristicBinding {
    * the char is missing.
    */
   optional?: boolean;
+  /**
+   * A `notify` binding the handler does NOT subscribe to. The adapter turns it
+   * on itself, from `onConnected`, with `ctx.subscribe`, once it has written
+   * whatever the scale needs first. A SIG Weight Scale that is told the time
+   * before its indications are enabled is the case this exists for (#408): in
+   * multi-char mode the handler otherwise enables every notify binding before
+   * `onConnected` runs.
+   *
+   * Required unless `optional` is also set, and only valid on a `notify`
+   * binding of an adapter that has `onConnected` (registry-check enforces
+   * both). On the node-ble transport the handler turns such a binding off again
+   * (StopNotify) after a successful session, before it disconnects: a bonded
+   * peer keeps its CCCD across connections, and one left on can indicate in
+   * the next connection before the adapter has written anything or anyone is
+   * listening.
+   */
+  deferred?: boolean;
 }
 
 /**
@@ -257,8 +274,9 @@ export interface AdapterRuntimeConfig {
    * Unit to ask the scale's own display to show (`scale.display_unit`, with its
    * `weight_unit` default already resolved by resolveDisplayUnit). Independent of
    * the unit readings are exported in. Adapters whose protocol tells the scale
-   * which unit to show (today only the QN 0x13 config command) honour it so a
-   * read does not flip the display (#269, #429). Ignored by every other adapter.
+   * which unit to show (the QN 0x13 config command, the AC 27 D0 profile frame)
+   * honour it so a read does not flip the display (#269, #429). Ignored by every
+   * other adapter.
    */
   displayUnit?: ScaleDisplayUnit;
   /**
@@ -299,6 +317,19 @@ export interface AdapterRuntimeConfig {
    */
   qnWeightAck?: boolean;
   /**
+   * User key for the QN A00D #2 profile frame (`ble.qn_user_key`, 1 to 9999,
+   * #463).
+   *
+   * Per the vendor's published SDK the key is the one the vendor app registered
+   * the user slot with, and the scale keeps it per slot; the vendor apps send
+   * 1000, openScale's frame 8. Set, the 18- and 19-byte dialects send the
+   * vendor-app profile frame with this key and the first user's age, height,
+   * sex and (18-byte only) athlete setting, and no ready-time A2, also without
+   * `qnWeightAck`. Unset changes nothing; the 20-byte and classic dialects
+   * ignore it.
+   */
+  qnUserKey?: number;
+  /**
    * Send the two 0xA4 0x0F frames the Arboleaf vendor app sends between START
    * and the first live 0x10 frame (`ble.qn_a4_prelude`, #331).
    *
@@ -312,9 +343,10 @@ export interface AdapterRuntimeConfig {
    * Send the 9-byte form of the QN 0x20 time-sync frame
    * (`ble.qn_time_sync_long`, #331).
    *
-   * The vendor app's frame carries one extra `0x08` before the checksum and is
-   * otherwise identical to ours, timestamp included. The byte is undecoded, so
-   * this is off by default.
+   * The vendor app's frame carries one extra byte before the checksum and is
+   * otherwise identical to ours, timestamp included. The byte is the UTC offset
+   * (`0x08` = UTC+2 in the captures), and the long form sends the host's. Off by
+   * default: every QN scale in the registry reads today on the 8-byte form.
    */
   qnTimeSyncLong?: boolean;
 
@@ -361,6 +393,21 @@ export interface ScaleAdapterCore {
    * Best-effort: a pairing failure is logged and the read proceeds unbonded.
    */
   readonly requiresBonding?: boolean;
+
+  /**
+   * True for a scale that keeps a single bond and pairs Just Works, without a
+   * PIN (#408, A&D UC-352BLE). On Linux the kernel answers such a scale's own
+   * Security Request with a bonding pairing as soon as we connect, so merely
+   * connecting to it pairs it with this host and unpairs the vendor app.
+   *
+   * The node-ble transport therefore never picks such a scale in
+   * auto-discovery: it is used only when `ble.scale_mac` names it. Its
+   * `ensureBonded` may also take the BlueZ default-agent role for the pairing
+   * (only while the scale is not paired yet) and warns once when BlueZ paired
+   * without storing a bond. Meaningful only together with `requiresBonding`.
+   * Not enforced on the other transports, which our code never pairs on.
+   */
+  readonly singleBond?: boolean;
 
   /**
    * Receive per-device runtime config (e.g. a MiBeacon bind key) from the

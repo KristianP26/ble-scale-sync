@@ -68,6 +68,42 @@ describe('InlifeScaleAdapter', () => {
       ]);
       expect(adapter.matches(info)).toBe(false);
     });
+
+    // PICOOC's connection-based scales: the PICOOC Mini advertises PICOOC-CQ and
+    // 0xFFF0 (oliexdev/openScale#401, artsight, btsnoop_hci.log, ADV_IND at
+    // 2019-02-16 14:53:44.187 from D0:49:00:30:0F:5D), the S1 Pro PICOOC-CC
+    // (openScale#544, pililac, PICOOC_S1.zip, btsnoop_hci_1.log). Both captures
+    // show 0xFFF1 (read + indicate) and 0xFFF2 (write with response) on 0xFFF0
+    // and no 0xFFF4, and the scale sends 35 02 until it gets the time.
+    describe('PICOOC connection-based scales (#408)', () => {
+      const PICOOC_NAMES = ['PICOOC-CQ', 'PICOOC-CC'];
+
+      it.each(PICOOC_NAMES)('does not claim "%s" on its advertised 0xFFF0', (name) => {
+        const adapter = makeAdapter();
+        expect(adapter.matches(mockPeripheral(name, ['fff0']))).toBe(false);
+        expect(adapter.matches(mockPeripheral(name, [uuid16(0xfff0)]))).toBe(false);
+      });
+
+      it.each(PICOOC_NAMES)('does not claim "%s" after discovery (0xFFF2, no 0xFFF4)', (name) => {
+        const adapter = makeAdapter();
+        const info = mockPeripheral(name, [uuid16(0xfff0)], undefined, [
+          uuid16(0xfff1),
+          uuid16(0xfff2),
+        ]);
+        expect(adapter.matches(info)).toBe(false);
+      });
+
+      it('still claims its own names and an unnamed 0xFFF0 device, before and after discovery', () => {
+        const adapter = makeAdapter();
+        const chars = [uuid16(0xfff1), uuid16(0xfff2)];
+        for (const name of ['000FatScale01', 'Unknown', '']) {
+          expect(adapter.matches(mockPeripheral(name, ['fff0']))).toBe(true);
+          expect(adapter.matches(mockPeripheral(name, [uuid16(0xfff0)], undefined, chars))).toBe(
+            true,
+          );
+        }
+      });
+    });
   });
 
   describe('parseNotification()', () => {

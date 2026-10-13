@@ -1,4 +1,4 @@
-import type { ScaleAdapter, BleDeviceInfo, UserProfile } from '../../interfaces/scale-adapter.js';
+import type { ScaleAdapter, BleDeviceInfo } from '../../interfaces/scale-adapter.js';
 import type { HaBluetoothConfig } from '../../config/schema.js';
 import type { RawReading } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
@@ -9,7 +9,7 @@ import {
   logAdvert,
   emitDeduped,
 } from '../advertisement.js';
-import type { Watcher, WatcherConfig } from '../reading-source.js';
+import type { ProfileSource, Watcher, WatcherConfig } from '../reading-source.js';
 import { bleLog, IMPEDANCE_GRACE_MS } from '../types.js';
 import { AsyncQueue } from '../async-queue.js';
 import { HaBluetoothClient } from './client.js';
@@ -36,7 +36,7 @@ export class ReadingWatcher implements Watcher {
   private started = false;
   private adapters: ScaleAdapter[];
   private targetMac?: string;
-  private profile?: UserProfile;
+  private profile?: ProfileSource;
   private config: HaBluetoothConfig;
   private readonly dedup = new DedupWindow(DEDUP_WINDOW_MS);
   private client: HaBluetoothClient | null = null;
@@ -59,7 +59,7 @@ export class ReadingWatcher implements Watcher {
     config: HaBluetoothConfig,
     adapters: ScaleAdapter[],
     targetMac?: string,
-    profile?: UserProfile,
+    profile?: ProfileSource,
   ) {
     this.config = config;
     this.adapters = adapters;

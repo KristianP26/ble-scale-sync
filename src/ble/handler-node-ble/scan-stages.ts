@@ -243,13 +243,15 @@ export async function resolvePreConnectAdapter(
   // Scope: the result takes the passive branch below, and it is ALSO passed
   // to acquireGattServer, which branches on `requiresBonding` to decide
   // whether to bond before connecting and to retry on a discovery timeout
-  // (#290). Exactly one adapter in the registry sets that flag, so the whole
-  // reach of the widening on the connect path is that a MAC-pinned nameless
-  // Beurer advertising company id 0x0611 plus a SIG WSS/BCS service now
-  // reaches the bond-on-timeout retry, where the pre-match used to be
-  // undefined and the retry could never engage. That is the retry working as
-  // designed. Otherwise a device matching a connect-based adapter here falls
-  // through as before and is re-resolved after discovery.
+  // (#290). Two adapters in the registry set that flag. For the Beurer SIG
+  // one, the whole reach of the widening on the connect path is that a
+  // MAC-pinned nameless Beurer advertising company id 0x0611 plus a SIG WSS/BCS
+  // service now reaches the bond-on-timeout retry, where the pre-match used to
+  // be undefined and the retry could never engage. That is the retry working
+  // as designed. The A&D UC-352BLE (#408) is claimed by its name alone, which
+  // the name-only pre-match always had, so the widening changes nothing for
+  // it. Otherwise a device matching a connect-based adapter here falls through
+  // as before and is re-resolved after discovery.
   const preInfo: BleDeviceInfo = {
     localName: name,
     address: deviceMac ? formatMac(deviceMac) : undefined,
@@ -593,33 +595,37 @@ export async function readWithTimeouts(
   try {
     // A shutdown ends the session the same way a timeout does, through
     // withAbandonmentCleanup, instead of waiting out an idle window of up to
-    // 120 s that the 5 s force-exit grace never lets finish (A-07).
-    return await withAbandonmentCleanup(bleDevice, () =>
-      untilAborted(
-        withIdleTimeout(
-          (onActivity) =>
-            waitForRawReading(
-              charMap,
-              bleDevice,
-              matchedAdapter,
-              opts.profile,
-              deviceMac.replace(/[:-]/g, '').toUpperCase(),
-              opts.weightUnit,
-              opts.onLiveData,
-              opts.scaleAuth,
-              (minIdleMs) => {
-                heard = true;
-                onActivity(minIdleMs);
-              },
-              opts.deviceName,
-              opts.manufacturerData,
-            ),
-          idleMs,
-          'Timed out waiting for a complete scale reading',
-          { ms: idleMs * READING_SESSION_CAP_FACTOR, message: 'GATT session cap exceeded' },
+    // 120 s that the 5 s force-exit grace never lets finish (A-07). Unlike a
+    // timeout it hands nothing over: the process is on its way out.
+    return await withAbandonmentCleanup(
+      bleDevice,
+      () =>
+        untilAborted(
+          withIdleTimeout(
+            (onActivity) =>
+              waitForRawReading(
+                charMap,
+                bleDevice,
+                matchedAdapter,
+                opts.profile,
+                deviceMac.replace(/[:-]/g, '').toUpperCase(),
+                opts.weightUnit,
+                opts.onLiveData,
+                opts.scaleAuth,
+                (minIdleMs) => {
+                  heard = true;
+                  onActivity(minIdleMs);
+                },
+                opts.deviceName,
+                opts.manufacturerData,
+              ),
+            idleMs,
+            'Timed out waiting for a complete scale reading',
+            { ms: idleMs * READING_SESSION_CAP_FACTOR, message: 'GATT session cap exceeded' },
+          ),
+          opts.abortSignal,
         ),
-        opts.abortSignal,
-      ),
+      opts.abortSignal,
     );
   } catch (err) {
     // The scale answered and the session simply ran out of time: nobody

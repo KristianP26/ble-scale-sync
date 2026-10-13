@@ -816,6 +816,17 @@ export async function removeDevice(
  */
 const INCOMPLETE_LOOK_LIMIT = 5;
 
+/**
+ * Addresses of `singleBond` scales already reported as skipped, so the line is
+ * printed once per process rather than once per cycle in continuous mode.
+ */
+const singleBondAnnounced = new Set<string>();
+
+/** Test hook: forget which skipped scales were reported. */
+export function _resetSingleBondAnnouncedForTests(): void {
+  singleBondAnnounced.clear();
+}
+
 export async function autoDiscover(
   btAdapter: Adapter,
   adapters: ScaleAdapter[],
@@ -887,6 +898,21 @@ export async function autoDiscover(
             : {}),
         };
         const matched = resolveAdapter(info, adapters);
+        if (matched?.singleBond) {
+          // Connecting is enough for the kernel to pair it, and it keeps one
+          // bond, so picking it here would unpair the owner's vendor app
+          // without being asked to (#408). Only ble.scale_mac selects it.
+          if (!singleBondAnnounced.has(addr)) {
+            singleBondAnnounced.add(addr);
+            bleLog.info(
+              `${matched.name} at ${addr} keeps a single pairing, so it is not picked ` +
+                'automatically: set ble.scale_mac to its address to use it, which unpairs ' +
+                'the vendor app.',
+            );
+          }
+          complete = true;
+          continue;
+        }
         if (matched) {
           bleLog.info(`Auto-discovered: ${matched.name} (${safeName(name)} [${addr}])`);
           matchedDevice = true;

@@ -5,7 +5,7 @@ import type {
   ScaleAuth,
 } from '../../interfaces/scale-adapter.js';
 import type { EsphomeProxyConfig, WeightUnit } from '../../config/schema.js';
-import { type RawReading, waitForRawReading } from '../shared.js';
+import { type RawReading, waitForRawReading, withAbandonmentCleanup } from '../shared.js';
 import { resolveAdapter, resolveAfterDiscovery } from '../../scales/resolve.js';
 import {
   evaluateAdvertisement,
@@ -15,7 +15,8 @@ import {
   safeName,
   emitDeduped,
 } from '../advertisement.js';
-import type { Watcher, WatcherConfig } from '../reading-source.js';
+import { currentProfile } from '../reading-source.js';
+import type { ProfileSource, Watcher, WatcherConfig } from '../reading-source.js';
 import { bleLog, errMsg, IMPEDANCE_GRACE_MS, withTimeout, withIdleTimeout } from '../types.js';
 import { AsyncQueue } from '../async-queue.js';
 import { EsphomeProxyPool } from './pool.js';
@@ -51,7 +52,7 @@ export class ReadingWatcher implements Watcher {
   private started = false;
   private adapters: ScaleAdapter[];
   private targetMac?: string;
-  private profile?: UserProfile;
+  private profile?: ProfileSource;
   private scaleAuth?: ScaleAuth;
   /** `scale.weight_unit`, passed to every GATT read (see WatcherConfig). */
   private weightUnit?: WeightUnit;
@@ -121,7 +122,7 @@ export class ReadingWatcher implements Watcher {
     config: EsphomeProxyConfig,
     adapters: ScaleAdapter[],
     targetMac?: string,
-    profile?: UserProfile,
+    profile?: ProfileSource,
     scaleAuth?: ScaleAuth,
     weightUnit?: WeightUnit,
   ) {
@@ -261,27 +262,39 @@ export class ReadingWatcher implements Watcher {
             `Re-resolved adapter after GATT discovery: ${adapter.name} -> ${gattAdapter.name} (${address})`,
           );
         }
-        const raw = await withTimeout(
-          withIdleTimeout(
-            (onActivity) =>
-              waitForRawReading(
-                session!.charMap,
-                session!.device,
-                gattAdapter,
-                this.profile ?? { height: 170, age: 30, gender: 'male', isAthlete: false },
-                address.replace(/[:-]/g, '').toUpperCase(),
-                this.weightUnit,
-                undefined,
-                this.scaleAuth,
-                onActivity,
-                info.localName,
-                manufacturerData,
-              ),
-            GATT_READING_IDLE_MS,
-            `GATT reading timeout for ${address}`,
+        // Per session, not once at startup: the processor moves the weight
+        // anchor after every export and QN/R-MSC04 write it to the scale (#331).
+        const sessionProfile: UserProfile = currentProfile(this.profile) ?? {
+          height: 170,
+          age: 30,
+          gender: 'male',
+          isAthlete: false,
+        };
+        // Through withAbandonmentCleanup, so a timeout still hands over the
+        // stored weigh-ins the session collected (#331).
+        const raw = await withAbandonmentCleanup(session.device, () =>
+          withTimeout(
+            withIdleTimeout(
+              (onActivity) =>
+                waitForRawReading(
+                  session!.charMap,
+                  session!.device,
+                  gattAdapter,
+                  sessionProfile,
+                  address.replace(/[:-]/g, '').toUpperCase(),
+                  this.weightUnit,
+                  undefined,
+                  this.scaleAuth,
+                  onActivity,
+                  info.localName,
+                  manufacturerData,
+                ),
+              GATT_READING_IDLE_MS,
+              `GATT reading timeout for ${address}`,
+            ),
+            GATT_SESSION_ABSOLUTE_MS,
+            `GATT session cap exceeded for ${address}`,
           ),
-          GATT_SESSION_ABSOLUTE_MS,
-          `GATT session cap exceeded for ${address}`,
         );
         // A read that works again makes the next failure news, so it warns.
         this.gattWarnedFor.delete(address);

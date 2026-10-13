@@ -3,7 +3,9 @@ import { applyForcedAdapter, UnknownAdapterError } from '../../src/scales/force.
 import { adapters } from '../../src/scales/index.js';
 import { resolveAdapter } from '../../src/scales/resolve.js';
 import { hasParseableBroadcastSource } from '../../src/ble/shared.js';
-import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
+import { EsCs20mAdapter } from '../../src/scales/es-cs20m.js';
+import { uuid16 } from '../../src/scales/body-comp-helpers.js';
+import type { BleDeviceInfo, ConnectionContext } from '../../src/interfaces/scale-adapter.js';
 
 const anyDevice: BleDeviceInfo = {
   localName: 'something else entirely',
@@ -109,6 +111,36 @@ describe('force_scale_adapter', () => {
         manufacturerData: { id: 0xffff, data: aabb },
       }),
     ).toBe(true);
+  });
+
+  // The #436 reporter runs with force_scale_adapter. The hold from the 0x18
+  // result to the power-off reads a getter and isFinal on the real instance,
+  // so both have to pass through the proxy with its private state.
+  it('passes the ES-CS20M result hold through the proxy (#436)', async () => {
+    const forced = applyForcedAdapter([new EsCs20mAdapter()], 'ES-CS20M')[0];
+    const ctx: ConnectionContext = {
+      profile: { gender: 'female', age: 36, height: 168, isAthlete: false },
+      deviceAddress: '',
+      availableChars: new Set([0x2a10, 0x2a11, 0xae01, 0xae02].map(uuid16)),
+      write: async () => {},
+      read: async () => Buffer.alloc(0),
+      subscribe: async () => {},
+    };
+    forced.onSessionStart?.();
+    await forced.onConnected?.(ctx);
+    const frame = (h: string): Buffer => Buffer.from(h, 'hex');
+    // #436 comment 6112383314, second barefoot weigh-in: power-on, its last
+    // weight frame and its 0x18 (BMI and body fat zeroed, see es-cs20m.test.ts).
+    forced.parseNotification?.(frame('55aa11000a010201000000000000001e'));
+    forced.parseNotification?.(frame('55aa14000700000036560000a6'));
+    const result = forced.parseNotification?.(frame('55aa18000d0101090000365601940000000050'));
+    expect(result).toEqual({ weight: 139.1, impedance: 404 });
+    expect(forced.completionHoldMs).toBe(30_000);
+    expect(forced.isFinal?.(result!)).toBe(false);
+
+    forced.parseNotification?.(frame('55aa11000a000201000000000000001d'));
+    expect(forced.isFinal?.(result!)).toBe(true);
+    forced.onSessionEnd?.();
   });
 
   it('rejects an unknown name with the list of valid ones', () => {

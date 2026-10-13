@@ -7,8 +7,9 @@ import {
   resolveWriteChar,
   getRawCaptureConfig,
   toHex,
+  stopDeferredNotifications,
 } from '../../src/ble/shared.js';
-import { withIdleTimeout } from '../../src/ble/types.js';
+import { untilAborted, withIdleTimeout } from '../../src/ble/types.js';
 import type { BleChar, BleDevice } from '../../src/ble/shared.js';
 import { normalizeUuid, bleLog } from '../../src/ble/types.js';
 import { KoogeekS1Adapter } from '../../src/scales/koogeek-s1.js';
@@ -1372,6 +1373,42 @@ describe('waitForRawReading() — per-frame ACK + completion hold', () => {
     expect(result.reading).toEqual({ weight: 83.4, impedance: 0 });
   });
 
+  // #331: a scale that replays a stored record and then disconnects while a
+  // live weight is held. The history branch ran first, so the session ended on
+  // the stored record and the live weigh-in was lost entirely.
+  it('keeps the held live reading on disconnect after a stored record, which goes to history', async () => {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+
+    const storedAt = new Date(Date.now() - 3_600_000);
+    const adapter = createLegacyAdapter({
+      completionHoldMs: 15000,
+      isComplete: vi.fn((r: ScaleReading) => r.weight > 0),
+      isFinal: vi.fn((r: ScaleReading) => r.impedance > 0),
+      parseNotification: vi.fn((data: Buffer) =>
+        data[0] === 0x01
+          ? { weight: 70.1, impedance: 0, timestamp: storedAt }
+          : { weight: 76.85, impedance: 0 },
+      ),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    notifyChar.triggerData(Buffer.from([0x01])); // stored record, an hour old
+    notifyChar.triggerData(Buffer.from([0x02])); // live weight, held
+    device.triggerDisconnect();
+
+    const result = await promise;
+    expect(result.reading).toEqual({ weight: 76.85, impedance: 0 });
+    expect(result.history).toEqual([{ weight: 70.1, impedance: 0, timestamp: storedAt }]);
+  });
+
   it('routes per-frame ACK through the characteristics[] write binding (not charWriteUuid)', async () => {
     const notifyChar = createMockChar();
     const writeChar = createMockChar();
@@ -2330,8 +2367,32 @@ describe('QN 19-byte dialect hold through waitForRawReading (#331)', () => {
   const PART3 = withSum(hex('10 14 00 00 33' + ' 00'.repeat(15)));
   const COMP_15 = withSum(hex('15 10 ff' + ' 00'.repeat(13)));
   const DONE_16 = withSum(hex('16 10 ff' + ' 00'.repeat(13)));
+  // #331 attachment `qn-scale-v1.31.0-76.55kg.log.txt` (2026-10-07), byte for
+  // byte, used with the reporter's permission: scale info (line 53), a stored
+  // record from 199 s before the connect (lines 207-241) and the result block
+  // after it (lines 251-287).
+  const INFO_1007 = hex('12 13 ff 54 0b 04 00 07 ff 15 0f 27 00 01 05 03 e0 6f 30');
+  const STORED_1007 = [
+    '23 01 01 01 31 a5 60 59 32 1d e7 0e 3d 0c ad 0d e4 0c 54 40',
+    '23 09 14 01 32 08 18 09 e2 08 f7 01 75 02 8d 00 00 00 00 82',
+    '23 00 00 01 33 00 00 00 00 00 00 00 00 00 00 00 00 00 00 57',
+    '24 13 ff 00 e7 00 00 00 00 00 00 00 00 00 00 00 00 00 1d',
+    '25 0f ff 00 00 00 00 00 00 00 00 00 00 00 00 33',
+  ].map(hex);
+  const LIVE_1007 = [
+    '10 14 01 02 31 1d e7 0e 1e 0c 8e 0d bf 0c 2f 09 3f 08 4e c7',
+    '10 14 09 6b 32 08 70 01 7c 02 88 0e 1e 0c 8e 0d bf 0c 2f 16',
+    '10 14 09 3f 33 08 4e 09 6b 08 70 01 86 01 72 00 ae 00 00 89',
+    '15 10 ff 00 e7 02 54 03 10 06 2f 06 c7 00 bb 31',
+    '16 10 ff 00 00 2a 03 3a 00 9b 02 15 03 a9 04 ee',
+  ].map(hex);
 
-  async function startSession() {
+  /** `idleTimeoutMs`: bound the session the way the transports do (#404). */
+  async function startSession(
+    scaleInfo: Buffer = INFO,
+    idleTimeoutMs?: number,
+    abortSignal?: AbortSignal,
+  ) {
     const notify = createMockChar();
     const write = createMockChar();
     const device = createMockDevice();
@@ -2341,13 +2402,30 @@ describe('QN 19-byte dialect hold through waitForRawReading (#331)', () => {
     ]);
     const adapter = new QnScaleAdapter();
     adapter.configure({ qnWeightAck: true });
-    const promise = waitForRawReading(
-      charMap,
-      device,
-      adapter,
-      { ...PROFILE, lastKnownWeight: 76 },
-      'AABBCCDDEEFF',
-    );
+    const wait = (onActivity?: (minIdleMs?: number) => void) =>
+      waitForRawReading(
+        charMap,
+        device,
+        adapter,
+        { ...PROFILE, lastKnownWeight: 76 },
+        'AABBCCDDEEFF',
+        undefined,
+        undefined,
+        undefined,
+        onActivity,
+      );
+    const promise =
+      idleTimeoutMs === undefined
+        ? wait()
+        : withAbandonmentCleanup(
+            device,
+            () =>
+              untilAborted(
+                withIdleTimeout(wait, idleTimeoutMs, 'GATT reading timeout'),
+                abortSignal,
+              ),
+            abortSignal,
+          );
     let settled = false;
     void promise.then(
       () => (settled = true),
@@ -2355,7 +2433,7 @@ describe('QN 19-byte dialect hold through waitForRawReading (#331)', () => {
     );
     await vi.waitFor(() => expect(notify.subscribeCalled).toBe(true));
     await vi.advanceTimersByTimeAsync(0);
-    notify.triggerData(INFO);
+    notify.triggerData(scaleInfo);
     notify.triggerData(READY);
     notify.triggerData(CONFIG_REQ);
     await vi.advanceTimersByTimeAsync(2000);
@@ -2458,6 +2536,111 @@ describe('QN 19-byte dialect hold through waitForRawReading (#331)', () => {
     }
   });
 
+  // The 2026-10-07 log: the scale hands over a weigh-in from 199 s before the
+  // connect, then the result block of that same weigh-in.
+  it('settles on the result block after a fresh stored record, with no history', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-07T20:00:44Z'));
+      const s = await startSession(INFO_1007);
+      for (const f of STORED_1007) s.notify.triggerData(f);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(s.isSettled(), 'a fresh stored record is held, not final').toBe(false);
+      for (const f of LIVE_1007) s.notify.triggerData(f);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.isSettled()).toBe(true);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual({ weight: 76.55, impedance: 0 });
+      expect(s.adapter.isFinal(raw.reading)).toBe(true);
+      expect(raw.history ?? []).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('hands an older stored record over as history next to the live weigh-in', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-07T20:30:00Z'));
+      const s = await startSession(INFO_1007);
+      for (const f of STORED_1007) s.notify.triggerData(f);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(s.isSettled()).toBe(false);
+      s.notify.triggerData(STABLE);
+      await vi.advanceTimersByTimeAsync(13_000);
+      for (const f of [PART1, PART2, PART3, COMP_15, DONE_16]) s.notify.triggerData(f);
+      await vi.advanceTimersByTimeAsync(0);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual({ weight: 76.85, impedance: 0 });
+      expect(raw.history).toEqual([
+        { weight: 76.55, impedance: 0, timestamp: new Date('2026-10-07T19:57:25Z') },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The scale hands over a stored weigh-in, nobody is weighing, and the scale
+  // keeps the link up until the caller's idle timeout gives up. The adapter
+  // counted the record as reported when it handed it over (dedupMark), so a
+  // timeout that dropped it would lose it for good.
+  it('hands over the stored records of a session its idle timeout ended', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-07T20:30:00Z'));
+      const s = await startSession(INFO_1007, 60_000);
+      for (const f of STORED_1007) s.notify.triggerData(f);
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(s.isSettled()).toBe(true);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual({
+        weight: 76.55,
+        impedance: 0,
+        timestamp: new Date('2026-10-07T19:57:25Z'),
+      });
+      expect(raw.history ?? []).toEqual([]);
+      expect(s.adapter.dedupMark()).toBe(844718245);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A shutdown only cleans up: the process is on its way out, and the stored
+  // records are read again by the next one (the mark is saved after processing).
+  it('hands nothing over when the session ends for a shutdown', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-07T20:30:00Z'));
+      const shutdown = new AbortController();
+      const s = await startSession(INFO_1007, 60_000, shutdown.signal);
+      for (const f of STORED_1007) s.notify.triggerData(f);
+      await vi.advanceTimersByTimeAsync(500);
+      const outcome = s.promise.then(
+        () => 'resolved',
+        (e: Error) => e.message,
+      );
+      shutdown.abort(new Error('shutting down'));
+      expect(await outcome).toBe('shutting down');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still gives up on a timed-out session that collected nothing', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession(INFO_1007, 60_000);
+      const outcome = s.promise.then(
+        () => 'resolved',
+        (e: Error) => e.message,
+      );
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(await outcome).toBe('GATT reading timeout');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('settles on the held weight when the scale disconnects during the hold', async () => {
     vi.useFakeTimers();
     try {
@@ -2519,6 +2702,118 @@ describe('ES-CS20M on an AE00 unit through waitForRawReading (#436)', () => {
     notify.triggerData(hex('55aa11000a0001010000550000000071'));
     const raw = await promise;
     expect(raw.reading).toEqual({ weight: 103.5, impedance: 0 });
+  });
+
+  // The two barefoot weigh-ins of #436 comment 6112383314, with the log's
+  // timing (ms after the power-on frame). The 0x18 frames have the scale's BMI
+  // and body fat zeroed and the checksum recomputed; see es-cs20m.test.ts.
+  const POWER_ON = '55aa11000a010201000000000000001e';
+  const POWER_OFF = '55aa11000a000201000000000000001d';
+  const W = (tail: string): string => '55aa140007000000' + tail;
+
+  async function startSession() {
+    const notify = createMockChar();
+    const write = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [uuid16(0x2a10), notify],
+      [uuid16(0x2a11), write],
+      [uuid16(0xae01), createMockChar()],
+      [uuid16(0xae02), createMockChar()],
+    ]);
+    const adapter = new EsCs20mAdapter(clock);
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, 'AABBCCDDEEFF');
+    let settled = false;
+    void promise.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await vi.waitFor(() => expect(notify.subscribeCalled).toBe(true));
+    await vi.advanceTimersByTimeAsync(0);
+    /** Deliver frames at their offsets from the first one's delivery. */
+    const play = async (frames: [number, string][]): Promise<void> => {
+      let at = 0;
+      for (const [t, h] of frames) {
+        await vi.advanceTimersByTimeAsync(t - at);
+        at = t;
+        notify.triggerData(hex(h));
+      }
+    };
+    return { promise, play, isSettled: () => settled };
+  }
+
+  it('completes the weigh-in that got no power-off 30 s after its 0x18', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession();
+      // First barefoot weigh-in: the session timed out 60 s after the 0x18.
+      await s.play([
+        [0, POWER_ON],
+        [323, '55aa17000201011a'],
+        [536, '55aa160001091f'],
+        [536, W('36560000a6')], // 139.10
+        [711, W('36600000b0')], // 139.20
+        [808, '55aa1000010111'],
+        [908, W('36600000b0')],
+        [1045, W('36560000a6')],
+        [11_867, '55aa18000d0101090000365601d60000000092'], // 139.10 kg, 470 ohm
+      ]);
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(s.isSettled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(s.isSettled()).toBe(true);
+      expect((await s.promise).reading).toEqual({ weight: 139.1, impedance: 470 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('holds from the 0x18 to the power-off and completes with the resistance', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession();
+      // Second barefoot weigh-in.
+      await s.play([
+        [0, POWER_ON],
+        [305, '55aa17000201011a'],
+        [413, '55aa160001091f'],
+        [528, W('3548000097')], // 136.40
+        [616, '55aa1000010111'],
+        [617, W('36c4000014')], // 140.20
+        [805, W('358e0000dd')],
+        [1042, W('37500000a1')],
+        [1144, W('35d4000023')],
+        [1345, W('369c0000ec')],
+        [1435, W('3732000083')],
+        [1976, W('35d4000023')],
+        [1978, W('367e0000ce')],
+        [1982, W('36740000c4')],
+        [2149, W('36740000c4')],
+        [2340, W('36e2000032')],
+        [2457, W('35b6000005')],
+        [2682, W('36920000e2')],
+        [2956, W('369c0000ec')],
+        [2968, W('36560000a6')], // 139.10
+        [3175, W('36560000a6')],
+        [3365, W('369c0000ec')],
+        [3480, W('36560000a6')],
+        [3687, W('36560000a6')],
+        [3896, W('36560000a6')],
+        [3992, W('36560000a6')],
+        [4134, W('36560000a6')],
+        [4338, W('36560000a6')],
+        [4509, W('36560000a6')],
+        [12_084, '55aa18000d0101090000365601940000000050'], // 139.10 kg, 404 ohm
+      ]);
+      await vi.advanceTimersByTimeAsync(22_920);
+      expect(s.isSettled()).toBe(false);
+      await s.play([[1, POWER_OFF]]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.isSettled()).toBe(true);
+      expect((await s.promise).reading).toEqual({ weight: 139.1, impedance: 404 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -3052,5 +3347,202 @@ describe('waitForRawReading() write lane (#211)', () => {
     ).toHaveLength(2);
     expect(lines).toContain('ACK [e7 f1 58 01 07] coalesced with an identical one still waiting');
     device.triggerDisconnect();
+  });
+});
+
+// ─── Deferred notify binding (#408) ─────────────────────────────────────────
+
+describe('deferred notify binding (#408)', () => {
+  const DEFERRED_UUID = '00002a9d00001000800000805f9b34fb';
+  const TIME_UUID = '00002a0800001000800000805f9b34fb';
+
+  /** Mock chars that log every write and subscribe into one shared wire order. */
+  function wiredChar(label: string, wire: string[]): MockBleChar {
+    const char = createMockChar();
+    const baseSubscribe = char.subscribe;
+    const baseWrite = char.write;
+    char.subscribe = vi.fn(async (onData: (data: Buffer) => void) => {
+      wire.push(`subscribe ${label}`);
+      return baseSubscribe(onData);
+    });
+    char.write = vi.fn(async (data: Buffer, withResponse: boolean) => {
+      wire.push(`write ${label}`);
+      return baseWrite(data, withResponse);
+    });
+    return char;
+  }
+
+  it('leaves a deferred binding to onConnected, which writes before it subscribes', async () => {
+    // The order the vendor app uses on the wire: the time write first, then the
+    // CCCD (oliexdev/openScale#1505 capture, 3 of 3 connections). Without the
+    // flag the handler enabled the binding before onConnected ever ran.
+    const wire: string[] = [];
+    const indicate = wiredChar('2a9d', wire);
+    const time = wiredChar('2a08', wire);
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [DEFERRED_UUID, indicate],
+      [TIME_UUID, time],
+    ]);
+    const infoSpy = vi.spyOn(bleLog, 'info');
+
+    const adapter = createLegacyAdapter({
+      characteristics: [
+        { uuid: DEFERRED_UUID, type: 'notify', deferred: true },
+        { uuid: TIME_UUID, type: 'write', optional: true },
+      ],
+      onConnected: vi.fn(async (ctx: ConnectionContext) => {
+        await ctx.write(TIME_UUID, [0x01], true);
+        await ctx.subscribe(DEFERRED_UUID);
+      }),
+      parseCharNotification: vi.fn(() => ({ weight: 65.7, impedance: 500 })),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(adapter.onConnected).toHaveBeenCalled());
+    await vi.waitFor(() => expect(wire).toContain('subscribe 2a9d'));
+    indicate.triggerData(Buffer.from([0x02]));
+    const raw = await promise;
+
+    expect(raw.reading.weight).toBe(65.7);
+    expect(wire).toEqual(['write 2a08', 'subscribe 2a9d']);
+    // The handler's own prompt would come before the scale can say anything.
+    expect(
+      infoSpy.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('Subscribed')),
+    ).toEqual([]);
+  });
+
+  it('accepts an adapter whose only notify binding is deferred', async () => {
+    const indicate = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([[DEFERRED_UUID, indicate]]);
+
+    const adapter = createLegacyAdapter({
+      characteristics: [{ uuid: DEFERRED_UUID, type: 'notify', deferred: true }],
+      onConnected: vi.fn(async (ctx: ConnectionContext) => {
+        await ctx.subscribe(DEFERRED_UUID);
+      }),
+      parseCharNotification: vi.fn(() => ({ weight: 65.7, impedance: 500 })),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(indicate.subscribeCalled).toBe(true));
+    indicate.triggerData(Buffer.from([0x02]));
+    await expect(promise).resolves.toMatchObject({ reading: { weight: 65.7 } });
+    expect(indicate.subscribe).toHaveBeenCalledTimes(1);
+  });
+
+  // Guard, green before and after: every other adapter keeps its order and its
+  // log line byte for byte.
+  it('enables an ordinary binding before onConnected next to a deferred one', async () => {
+    const wire: string[] = [];
+    const ordinary = wiredChar('fff1', wire);
+    const indicate = wiredChar('2a9d', wire);
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, ordinary],
+      [DEFERRED_UUID, indicate],
+    ]);
+
+    const adapter = createLegacyAdapter({
+      characteristics: [
+        { uuid: NOTIFY_UUID, type: 'notify' },
+        { uuid: DEFERRED_UUID, type: 'notify', deferred: true },
+      ],
+      onConnected: vi.fn(async (ctx: ConnectionContext) => {
+        wire.push('onConnected');
+        await ctx.subscribe(DEFERRED_UUID);
+      }),
+      parseCharNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(wire).toContain('subscribe 2a9d'));
+    ordinary.triggerData(Buffer.from([0x01]));
+    await promise;
+    expect(wire).toEqual(['subscribe fff1', 'onConnected', 'subscribe 2a9d']);
+  });
+
+  it('keeps the order and the prompt of an adapter without a deferred binding', async () => {
+    const wire: string[] = [];
+    const first = wiredChar('fff1', wire);
+    const second = wiredChar('fff3', wire);
+    const device = createMockDevice();
+    const NOTIFY2_UUID = '0000fff300001000800000805f9b34fb';
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, first],
+      [NOTIFY2_UUID, second],
+    ]);
+    const infoSpy = vi.spyOn(bleLog, 'info');
+
+    const adapter = createLegacyAdapter({
+      characteristics: [
+        { uuid: NOTIFY_UUID, type: 'notify' },
+        { uuid: NOTIFY2_UUID, type: 'notify' },
+      ],
+      onConnected: vi.fn(() => {
+        wire.push('onConnected');
+      }),
+      parseCharNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(adapter.onConnected).toHaveBeenCalled());
+    first.triggerData(Buffer.from([0x01]));
+    await promise;
+    expect(wire).toEqual(['subscribe fff1', 'subscribe fff3', 'onConnected']);
+    expect(infoSpy.mock.calls.map((c) => String(c[0]))).toContain(
+      'Subscribed to 2 notification(s). Step on the scale.',
+    );
+  });
+});
+
+describe('stopDeferredNotifications() (#408)', () => {
+  const DEFERRED_UUID = '00002a9d00001000800000805f9b34fb';
+
+  function stoppable(): MockBleChar & { stop: ReturnType<typeof vi.fn> } {
+    return Object.assign(createMockChar(), { stop: vi.fn(async () => {}) });
+  }
+
+  it('turns off each deferred binding the transport can stop, and nothing else', async () => {
+    const deferredChar = stoppable();
+    const ordinary = stoppable();
+    const { charMap } = createCharMap([
+      [DEFERRED_UUID, deferredChar],
+      [NOTIFY_UUID, ordinary],
+    ]);
+    const adapter = createLegacyAdapter({
+      characteristics: [
+        { uuid: NOTIFY_UUID, type: 'notify' },
+        { uuid: DEFERRED_UUID, type: 'notify', deferred: true },
+      ],
+      onConnected: vi.fn(),
+    });
+
+    await expect(stopDeferredNotifications(charMap, adapter)).resolves.toBe(1);
+    expect(deferredChar.stop).toHaveBeenCalledTimes(1);
+    expect(ordinary.stop).not.toHaveBeenCalled();
+  });
+
+  it('touches nothing for an adapter without a deferred binding', async () => {
+    const char = stoppable();
+    const { charMap } = createCharMap([[NOTIFY_UUID, char]]);
+    const adapter = createLegacyAdapter({
+      characteristics: [{ uuid: NOTIFY_UUID, type: 'notify' }],
+      onConnected: vi.fn(),
+    });
+    await expect(stopDeferredNotifications(charMap, adapter)).resolves.toBe(0);
+    expect(char.stop).not.toHaveBeenCalled();
+  });
+
+  it('never throws: a failing stop costs nothing but a debug line', async () => {
+    const char = stoppable();
+    char.stop.mockRejectedValue(new Error('org.bluez.Error.NotConnected'));
+    const { charMap } = createCharMap([[DEFERRED_UUID, char]]);
+    const adapter = createLegacyAdapter({
+      characteristics: [{ uuid: DEFERRED_UUID, type: 'notify', deferred: true }],
+      onConnected: vi.fn(),
+    });
+    await expect(stopDeferredNotifications(charMap, adapter)).resolves.toBe(0);
   });
 });

@@ -407,6 +407,22 @@ describe('BleSchema', () => {
     }
   });
 
+  // BleSchema drops an unknown key without failing, so success alone would not
+  // show the key is declared: the parsed value has to come through (#463).
+  it('accepts ble.qn_user_key from 1 to 9999 and keeps the value', () => {
+    for (const key of [1, 1000, 9999, null]) {
+      const result = BleSchema.safeParse({ qn_user_key: key });
+      expect(result.success).toBe(true);
+      expect(result.data?.qn_user_key).toBe(key);
+    }
+  });
+
+  it('rejects a ble.qn_user_key outside 1 to 9999 or not an integer', () => {
+    for (const key of [0, 10000, 1.5, -1, '1000']) {
+      expect(BleSchema.safeParse({ qn_user_key: key }).success).toBe(false);
+    }
+  });
+
   it('rejects ble.session_timeout_sec outside 5 to 600', () => {
     for (const secs of [4, 601]) {
       expect(BleSchema.safeParse({ session_timeout_sec: secs }).success).toBe(false);

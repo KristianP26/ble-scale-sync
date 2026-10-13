@@ -31,9 +31,9 @@
  * rewrite eight public files to the wrong number, which is worse than the drift
  * this exists to stop.
  *
- * Deliberately NOT checked here: `CLAUDE.md` and `.claude/docs/` also carry
- * these counts, and both are local-only files excluded from git. A public
- * script that read them would fail in CI on a clean checkout.
+ * Deliberately NOT checked here: the maintainer's private notes also carry
+ * these counts, but they are not part of the repository, so a public script
+ * that read them would fail in CI on a clean checkout.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';

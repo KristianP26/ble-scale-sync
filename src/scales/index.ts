@@ -8,9 +8,12 @@ import { XiaomiMiScaleLegacyAdapter } from './xiaomi-mi-scale-legacy.js';
 import { Silvergear108Adapter } from './silvergear-108.js';
 import { SenssunIfB7Adapter } from './senssun-if-b7.js';
 import { OkokChipseaAdapter } from './okok-chipsea.js';
+import { EtekcityFit8sAdapter } from './etekcity-fit8s.js';
+import { PicoocMiniLiteAdapter } from './picooc-mini-lite.js';
 import { XiaomiS800Adapter } from './xiaomi-s800.js';
 import { XiaomiS400Adapter } from './xiaomi-s400.js';
 import { BeurerBf720Adapter } from './beurer-bf720.js';
+import { AndUc352bleAdapter } from './and-uc352ble.js';
 import { YunmaiScaleAdapter } from './yunmai.js';
 import { BeurerSanitasScaleAdapter } from './beurer-sanitas.js';
 import { SanitasSbf72Adapter } from './sanitas-sbf72.js';
@@ -35,6 +38,7 @@ import { MgbAdapter } from './mgb.js';
 import { HoffenAdapter } from './hoffen.js';
 import { SenssunAdapter } from './senssun.js';
 import { EufyP2Adapter } from './eufy-p2.js';
+import { EufyC20P3Adapter } from './eufy-c20-p3.js';
 import { SalterAdapter } from './salter.js';
 import { StandardGattScaleAdapter } from './standard-gatt.js';
 import { registerExclusionRegistry } from './derived-excludes.js';
@@ -46,6 +50,11 @@ export const adapters: ScaleAdapter[] = [
   // EufyP2Adapter before QnScaleAdapter (P2/P2 Pro advertise FFF0 and would be
   // mis-detected as a QN scale; Eufy's company ID 0xFF48 + "eufy T914x" name is specific).
   new EufyP2Adapter(),
+  // Eufy C20 / P3: broadcast-only reading. Claims on the name (scan response
+  // only) or on the device's own address echoed in the company id and [0..4].
+  // Outranks EufyP2Adapter, whose 0xFF48 + [6] == 0xCF claim a P3 could meet
+  // only with an address starting 0xFF; the reverse cannot happen (#408).
+  new EufyC20P3Adapter(),
   new SenssunAdapter(),
   new QnScaleAdapter(),
   new RenphoScaleAdapter(),
@@ -59,6 +68,14 @@ export const adapters: ScaleAdapter[] = [
   // and would otherwise be grabbed by the Mi Scale 2 adapter, so match them
   // first (by BF720/BF105 name or Beurer company id 0x0611).
   new BeurerBf720Adapter(),
+  // A&D UC-352BLE: SIG Weight Scale that needs a bond and the time written
+  // before it sends (#408). Claimed by its name prefix only, never by the WSS
+  // service, which the generic adapter keeps for nameless scales. Priority 225
+  // stays under Renpho ES-WBE28 (240): the mqtt-proxy autonomous connect falls
+  // back to the highest-priority adapter with the device's notify char, and
+  // both use 0x2A9D (registry-check invariant). It keeps a single bond, so
+  // node-ble auto-discovery skips it; it needs ble.scale_mac (singleBond).
+  new AndUc352bleAdapter(),
   // XMTZC04HM is a distinct, weight-only 0x181D broadcast protocol. It must
   // resolve before MiScale2Adapter and StandardGattScaleAdapter.
   new XiaomiMiScaleLegacyAdapter(),
@@ -74,6 +91,14 @@ export const adapters: ScaleAdapter[] = [
   // device's own MAC echoed inside the frame, the 2.0 checksum, or a Yoda0/Yoda1
   // or ADV name, so it collides with nothing else (#408).
   new OkokChipseaAdapter(),
+  // Etekcity Fit 8S: broadcast-only, nameless. 0x06D0 is Etekcity's platform
+  // company id, shared with the ESF-551 and other VeSync devices, so the claim is
+  // the 20-byte frame carrying the scale's own MAC (reversed), plus 0xFFD0 when the
+  // transport reports services (#408).
+  new EtekcityFit8sAdapter(),
+  // PICOOC Mini Lite: broadcast-only, claimed by its exact name PICOOC-L; its
+  // company id is its own address, so no id is declared (#408).
+  new PicoocMiniLiteAdapter(),
   new MiScale2Adapter(),
   // Xiaomi Mijia S800 (ms116): broadcast-only, matches FE95 + product id 0x51E2
   // or its own name; no collision with any other adapter (#232).

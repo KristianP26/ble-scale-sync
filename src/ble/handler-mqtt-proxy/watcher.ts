@@ -6,7 +6,7 @@ import type {
 } from '../../interfaces/scale-adapter.js';
 import type { MqttProxyConfig, WeightUnit } from '../../config/schema.js';
 import type { RawReading } from '../shared.js';
-import { waitForRawReading } from '../shared.js';
+import { waitForRawReading, withAbandonmentCleanup } from '../shared.js';
 import { resolveAdapter, resolveAfterDiscovery } from '../../scales/resolve.js';
 import {
   evaluateAdvertisement,
@@ -17,7 +17,8 @@ import {
   emitDeduped,
   readsFromAdvertisement,
 } from '../advertisement.js';
-import type { Watcher, WatcherConfig } from '../reading-source.js';
+import { currentProfile } from '../reading-source.js';
+import type { ProfileSource, Watcher, WatcherConfig } from '../reading-source.js';
 import {
   bleLog,
   withIdleTimeout,
@@ -77,7 +78,7 @@ export class ReadingWatcher implements Watcher {
   private adapters: ScaleAdapter[];
   private targetMac?: string;
   private config: MqttProxyConfig;
-  private profile?: UserProfile;
+  private profile?: ProfileSource;
   /**
    * Primary user's device auth (the Beurer consent PIN). Both GATT paths below
    * used to pass undefined, so an adapter that authenticates in onConnected saw
@@ -130,7 +131,7 @@ export class ReadingWatcher implements Watcher {
     config: MqttProxyConfig,
     adapters: ScaleAdapter[],
     targetMac?: string,
-    profile?: UserProfile,
+    profile?: ProfileSource,
     scaleAuth?: ScaleAuth,
     weightUnit?: WeightUnit,
   ) {
@@ -588,13 +589,15 @@ export class ReadingWatcher implements Watcher {
     // stale-reset (#201).
     try {
       client = await getOrCreatePersistentClient(this.config);
-      if (!this.profile) {
+      // Per session, not once at startup: the anchor moves with every export.
+      const current = currentProfile(this.profile);
+      if (!current) {
         bleLog.warn(
           'No user profile configured for GATT reading. Body composition will be inaccurate. ' +
             'Set a user profile in config.yaml to get correct results.',
         );
       }
-      const profile: UserProfile = this.profile ?? {
+      const profile: UserProfile = current ?? {
         height: 170,
         age: 30,
         gender: 'male',
@@ -633,27 +636,31 @@ export class ReadingWatcher implements Watcher {
         return;
       }
       bleLog.debug(`GATT read driven by adapter: ${gattAdapter.name} (${entry.address})`);
-      const raw = await withTimeout(
-        withIdleTimeout(
-          (onActivity) =>
-            waitForRawReading(
-              connected.charMap,
-              connected.device,
-              gattAdapter,
-              profile,
-              entry.address.replace(/[:-]/g, '').toUpperCase(),
-              this.weightUnit,
-              undefined,
-              this.scaleAuth,
-              onActivity,
-              entry.name,
-              toBleDeviceInfo(entry).manufacturerData,
-            ),
-          GATT_READING_IDLE_MS,
-          `GATT reading timeout for ${entry.address}`,
+      // Through withAbandonmentCleanup, so a timeout still hands over the
+      // stored weigh-ins the session collected (#331).
+      const raw = await withAbandonmentCleanup(connected.device, () =>
+        withTimeout(
+          withIdleTimeout(
+            (onActivity) =>
+              waitForRawReading(
+                connected.charMap,
+                connected.device,
+                gattAdapter,
+                profile,
+                entry.address.replace(/[:-]/g, '').toUpperCase(),
+                this.weightUnit,
+                undefined,
+                this.scaleAuth,
+                onActivity,
+                entry.name,
+                toBleDeviceInfo(entry).manufacturerData,
+              ),
+            GATT_READING_IDLE_MS,
+            `GATT reading timeout for ${entry.address}`,
+          ),
+          GATT_SESSION_ABSOLUTE_MS,
+          `GATT session cap exceeded for ${entry.address}`,
         ),
-        GATT_SESSION_ABSOLUTE_MS,
-        `GATT session cap exceeded for ${entry.address}`,
       );
       registerScaleMac(this.config, entry.address, gattAdapter).catch(() => {});
       this.queue.push(raw);
@@ -768,12 +775,13 @@ export class ReadingWatcher implements Watcher {
         return;
       }
 
-      if (!this.profile) {
+      const current = currentProfile(this.profile);
+      if (!current) {
         bleLog.warn(
           'No user profile configured for GATT reading. Body composition will be inaccurate.',
         );
       }
-      const profile: UserProfile = this.profile ?? {
+      const profile: UserProfile = current ?? {
         height: 170,
         age: 30,
         gender: 'male',
@@ -788,27 +796,29 @@ export class ReadingWatcher implements Watcher {
         `Autonomous connect: charMap built with ${charMap.size} chars, waiting for reading...`,
       );
 
-      const raw = await withTimeout(
-        withIdleTimeout(
-          (onActivity) =>
-            waitForRawReading(
-              charMap,
-              dev,
-              adapter,
-              profile,
-              data.address.replace(/[:-]/g, '').toUpperCase(),
-              this.weightUnit,
-              undefined,
-              this.scaleAuth,
-              onActivity,
-              info.localName,
-              info.manufacturerData,
-            ),
-          GATT_READING_IDLE_MS,
-          `GATT reading timeout for ${data.address} (autonomous)`,
+      const raw = await withAbandonmentCleanup(dev, () =>
+        withTimeout(
+          withIdleTimeout(
+            (onActivity) =>
+              waitForRawReading(
+                charMap,
+                dev,
+                adapter,
+                profile,
+                data.address.replace(/[:-]/g, '').toUpperCase(),
+                this.weightUnit,
+                undefined,
+                this.scaleAuth,
+                onActivity,
+                info.localName,
+                info.manufacturerData,
+              ),
+            GATT_READING_IDLE_MS,
+            `GATT reading timeout for ${data.address} (autonomous)`,
+          ),
+          GATT_SESSION_ABSOLUTE_MS,
+          `GATT session cap exceeded for ${data.address} (autonomous)`,
         ),
-        GATT_SESSION_ABSOLUTE_MS,
-        `GATT session cap exceeded for ${data.address} (autonomous)`,
       );
       registerScaleMac(this.config, data.address, adapter).catch(() => {});
       bleLog.info(

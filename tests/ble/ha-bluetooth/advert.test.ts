@@ -214,6 +214,86 @@ describe('toBleDeviceInfo manufacturer data across merged advertisements (#408)'
     expect(dropped).not.toHaveBeenCalled();
   });
 
+  /*
+   * Eufy P3 (T9150) units: the high byte of the company id is the first byte
+   * of the unit's own address, the low byte changes while it weighs. The dicts
+   * are exactly what Home Assistant logged.
+   *
+   * bdr99/eufylife-ble-client#3, comment 2870205491 (branda92), line 55,
+   * 23:19:34.170, CF:E8:07:12:20:9D: 0xCF53 is a live 68.85 kg frame from
+   * before the lock, 0xCF5D the locked 68.55 kg frame that `raw` carries.
+   */
+  const P3_LOCK_68_55 = 'e80712209d0058d6f9610500c71a010000000000000000';
+  const p3Branda = (raw: string | null | undefined) =>
+    ad({
+      name: 'eufy T9150',
+      address: 'CF:E8:07:12:20:9D',
+      manufacturer_data: {
+        '53075': 'e80712209d0055d6f9610100e51a010000000000000000',
+        '53085': P3_LOCK_68_55,
+      },
+      ...(raw !== undefined ? { raw } : {}),
+    });
+
+  it('takes the current entry of a Eufy P3 from raw (keys spelling its own address)', () => {
+    const raw =
+      '0201061aff5dcfe80712209d0058d6f9610500c71a0100000000000000000b0965756679205439313530';
+    expect(toBleDeviceInfo(p3Branda(raw)).manufacturerData).toEqual({
+      id: 0xcf5d,
+      data: Buffer.from(P3_LOCK_68_55, 'hex'),
+    });
+  });
+
+  it('drops a Eufy P3 entry it cannot date: keys spelling its own address, no raw', () => {
+    // The lowest key (0xCF53) is the stale live frame; taking it would never
+    // export this weigh-in, and a stale key can hold an earlier weigh-in.
+    const dropped = vi.fn();
+    for (const raw of [null, undefined]) {
+      expect(toBleDeviceInfo(p3Branda(raw), dropped).manufacturerData).toBeUndefined();
+    }
+    // bdr99/eufylife-ble-client#3, comment 2564412265 (duke-of-jbala), line
+    // 15, 19:19:08.600, CF:E7:09:18:28:04. Here the lowest key (0xCF4D) is by
+    // chance the current, locked 82.80 kg frame; without raw nothing can tell,
+    // so it is dropped too.
+    const p3Duke = ad({
+      name: 'eufy T9150',
+      address: 'CF:E7:09:18:28:04',
+      manufacturer_data: {
+        '53070': 'e709182804002a4f706701006720000000000000000000',
+        '53069': 'e709182804002c4f706705005820000000000000000000',
+      },
+    });
+    expect(toBleDeviceInfo(p3Duke, dropped).manufacturerData).toBeUndefined();
+    expect(dropped).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps the first entry when keys share only their high byte, without the address in them', () => {
+    // The two manufacturer data values Home Assistant showed for one Eufy P2
+    // Pro, CF:E8:12:18:33:EE, in bdr99/eufylife-ble-client#8 (fft1010); the
+    // issue gives no company ids. 0xFF48 is the id another P2 Pro sent
+    // (#98, comment 4188979134), 0xFF47 is made up: a P2 whose low byte
+    // changed. Its data starts with the whole address, so the high byte of the
+    // id does not echo it, and it is left as it was before the Eufy C20 / P3
+    // rule.
+    const dropped = vi.fn();
+    const info = toBleDeviceInfo(
+      ad({
+        name: 'eufy T9149',
+        address: 'CF:E8:12:18:33:EE',
+        manufacturer_data: {
+          '65352': 'cfe8121833eecf51c00e29dcd69700000000e4',
+          '65351': 'cfe8121833eecf4cc00e2904032c000000004f',
+        },
+      }),
+      dropped,
+    );
+    expect(info.manufacturerData).toEqual({
+      id: 0xff47,
+      data: Buffer.from('cfe8121833eecf4cc00e2904032c000000004f', 'hex'),
+    });
+    expect(dropped).not.toHaveBeenCalled();
+  });
+
   it('reads a single entry from the dict and never parses raw for it', () => {
     // A raw that names another company must not override the only key: with
     // one key Home Assistant keeps that value current itself.

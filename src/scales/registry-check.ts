@@ -64,6 +64,27 @@ export function checkRegistryIntegrity(adapters: readonly ScaleAdapter[]): Regis
     );
   }
 
+  // A deferred binding is one the handler leaves alone for the adapter to
+  // enable in onConnected. Without onConnected nothing would ever enable it,
+  // and the scale would connect and say nothing until the session timed out.
+  // On anything but a notify binding the flag would mean nothing at all.
+  for (const a of adapters) {
+    for (const b of a.characteristics ?? []) {
+      if (!b.deferred) continue;
+      if (b.type !== 'notify') {
+        errors.push(
+          `Adapter "${a.name}" marks its ${b.type} binding ${b.uuid} deferred; only a notify ` +
+            `binding can be deferred.`,
+        );
+      } else if (!a.onConnected) {
+        errors.push(
+          `Adapter "${a.name}" defers notify binding ${b.uuid} but has no onConnected to ` +
+            `enable it.`,
+        );
+      }
+    }
+  }
+
   // Every registered adapter MUST declare a match descriptor (the member is
   // optional on the interface only so test mocks can omit it).
   for (const a of adapters) {
@@ -119,6 +140,30 @@ export function checkRegistryIntegrity(adapters: readonly ScaleAdapter[]): Regis
     // see this: it skips any pair where either side is custom.
     ['Robi S9', 'Hutbit'],
     ['Hutbit', 'MGB (Swan/Icomon/YG)'],
+    // An AC 27 scale advertises the 0x27AC company id and FFB0, and both MGB
+    // (bare FFB0) and Robi S9 (nameless FFB0 with FFB3) would otherwise claim
+    // it, then send an init it ignores and parse none of its frames (#458,
+    // #462, #466). Custom on both sides, so the overlap check below is silent.
+    ['Active Era BS-06', 'MGB (Swan/Icomon/YG)'],
+    ['Active Era BS-06', 'Robi S9'],
+    // AAA0xx units (AAA002 and its siblings, #408) send the Silvergear 108
+    // broadcast and advertise FFB0, so MGB's bare FFB0 claim would take them;
+    // openScale loses them to its MGB handler exactly this way. Custom on both
+    // sides, so the overlap check below is silent.
+    ['Silvergear Smart Scale 108', 'MGB (Swan/Icomon/YG)'],
+    // A P3 whose address began 0xFF, with 0x48 as the low byte of its company
+    // id and 0xCF as the lowest byte of its clock, meets the P2 broadcast claim,
+    // and the P2 adapter would read a plausible wrong weight from its clock and
+    // status bytes. A P2 frame can never carry the address echo the C20 / P3
+    // claim needs, so the order costs the P2 nothing (#408). Custom on both
+    // sides, so the overlap check below is silent.
+    ['Eufy Smart Scale C20/P3', 'Eufy Smart Scale P2/P2 Pro'],
+    // The mqtt-proxy autonomous connect falls back to the highest-priority
+    // adapter whose charNotifyUuid the device exposes. Both declare 0x2A9D, so
+    // the A&D adapter above the ES-WBE28 would take every nameless WSS device
+    // there, a change for other scales. Name claims that never overlap, so the
+    // overlap check below cannot see it (#408).
+    ['Renpho ES-WBE28', 'A&D UC-352BLE'],
   ];
   for (const [hi, lo] of INVARIANTS) {
     const a = byName.get(hi);

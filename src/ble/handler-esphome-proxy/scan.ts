@@ -1,7 +1,7 @@
 import type { ScaleAdapter, BodyComposition } from '../../interfaces/scale-adapter.js';
 import type { EsphomeProxyConfig } from '../../config/schema.js';
 import type { ScanOptions, ScanResult } from '../types.js';
-import { type RawReading, waitForRawReading } from '../shared.js';
+import { type RawReading, waitForRawReading, withAbandonmentCleanup } from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
 import {
   armScanDeadline,
@@ -219,23 +219,30 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
             let session: Awaited<ReturnType<typeof pool.connectGatt>> | null = null;
             try {
               session = await pool.connectGatt(address);
-              const raw = await withIdleTimeout(
-                (onActivity) =>
-                  waitForRawReading(
-                    session!.charMap,
-                    session!.device,
-                    adapter,
-                    opts.profile,
-                    address.replace(/[:-]/g, '').toUpperCase(),
-                    opts.weightUnit,
-                    opts.onLiveData,
-                    opts.scaleAuth,
-                    onActivity,
-                    info.localName,
-                    manufacturerData,
+              // Through withAbandonmentCleanup, so a timeout still hands over
+              // the stored weigh-ins the session collected (#331).
+              const raw = await withAbandonmentCleanup(
+                session.device,
+                () =>
+                  withIdleTimeout(
+                    (onActivity) =>
+                      waitForRawReading(
+                        session!.charMap,
+                        session!.device,
+                        adapter,
+                        opts.profile,
+                        address.replace(/[:-]/g, '').toUpperCase(),
+                        opts.weightUnit,
+                        opts.onLiveData,
+                        opts.scaleAuth,
+                        onActivity,
+                        info.localName,
+                        manufacturerData,
+                      ),
+                    GATT_READING_IDLE_MS,
+                    `GATT reading timeout for ${address}`,
                   ),
-                GATT_READING_IDLE_MS,
-                `GATT reading timeout for ${address}`,
+                opts.abortSignal,
               );
               resolve(raw);
             } catch (e) {

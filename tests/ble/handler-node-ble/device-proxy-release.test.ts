@@ -46,8 +46,9 @@ vi.mock('../../../src/scales/resolve.js', () => ({
 const { makeLivenessAdapter } = await import('../../../src/ble/handler-node-ble/liveness.js');
 const { logAdvertisementSnapshot } =
   await import('../../../src/ble/handler-node-ble/device-object.js');
-const { autoDiscover, removeDevice } =
+const { autoDiscover, removeDevice, _resetSingleBondAnnouncedForTests } =
   await import('../../../src/ble/handler-node-ble/discovery.js');
+const { bleLog } = await import('../../../src/ble/types.js');
 
 function device(id: string, opts: { rssi?: unknown; name?: string; paired?: boolean } = {}) {
   return {
@@ -146,6 +147,47 @@ describe('autoDiscover proxy release (#396, #397)', () => {
 
     await autoDiscover(btAdapter, []);
     expect(released).toContain('AA:04');
+  });
+});
+
+/**
+ * #408: connecting to a scale that keeps a single bond pairs it (the kernel
+ * answers its Security Request), which unpairs the owner's vendor app. So
+ * auto-discovery never picks one; only ble.scale_mac does.
+ */
+describe('autoDiscover skips a single-bond scale (#408)', () => {
+  const AND = { name: 'A&D UC-352BLE', singleBond: true };
+  const OTHER = { name: 'Other Scale' };
+
+  beforeEach(() => {
+    _resetSingleBondAnnouncedForTests();
+  });
+
+  it('passes it by, releases its proxy and says why once', async () => {
+    const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    resolveAdapter.mockImplementation((i: { localName: string }) =>
+      i.localName === 'A&D_UC-352BLE_01166D' ? AND : i.localName === 'other' ? OTHER : undefined,
+    );
+    const btAdapter = {
+      devices: async () => ['5C:31:3E:01:16:6D', 'AA:09'],
+      getDevice: async (addr: string) =>
+        device(addr, { name: addr === 'AA:09' ? 'other' : 'A&D_UC-352BLE_01166D' }),
+    } as never;
+
+    const first = await autoDiscover(btAdapter, []);
+    const second = await autoDiscover(btAdapter, []);
+
+    expect(first.mac).toBe('AA:09');
+    expect(first.adapter).toBe(OTHER);
+    expect(second.mac).toBe('AA:09');
+    expect(released).toContain('5C:31:3E:01:16:6D');
+    const lines = info.mock.calls.map((c) => String(c[0]));
+    const skipped = lines.filter((l) => l.includes('keeps a single pairing'));
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]).toContain('5C:31:3E:01:16:6D');
+    expect(skipped[0]).toContain('ble.scale_mac');
+    expect(lines.filter((l) => l.startsWith('Auto-discovered: A&D'))).toEqual([]);
+    info.mockRestore();
   });
 });
 

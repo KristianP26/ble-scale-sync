@@ -35,6 +35,20 @@ import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
 /** One representative BleDeviceInfo per registered adapter, keyed by name. */
 const FIXTURES: Record<string, BleDeviceInfo> = {
   'Eufy Smart Scale P2/P2 Pro': { localName: 'eufy T9149', serviceUuids: [] },
+  // Broadcast, the name only in the scan response. The real locked 100.10 kg
+  // frame of a C20, BC:0F:B7:00:9C:9D, from the Home Assistant log woodsb02
+  // posted in bdr99/eufylife-ble-client#5 (comment 2564606224, line 19), here
+  // without its name: claimed by the address echo in the company id 0xBC64 and
+  // [0..4].
+  'Eufy Smart Scale C20/P3': {
+    localName: '',
+    address: 'BC:0F:B7:00:9C:9D',
+    serviceUuids: [],
+    manufacturerData: {
+      id: 0xbc64,
+      data: Buffer.from('0fb7009c9d00c5c9706705001a2700000000', 'hex'),
+    },
+  },
   'Senssun Fat Scale': { localName: 'senssun fat', serviceUuids: [] },
   'QN Scale': { localName: 'QN-Scale', serviceUuids: ['fff0'] },
   // #191: a real ES-WBE28 advertises SIG WSS/BCS (0x181D/0x181B) and no QN
@@ -83,6 +97,37 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
       id: 0x10c0,
       data: Buffer.from('396c17700a012508b8d0deb53a', 'hex'),
     },
+  },
+  // Broadcast-only, nameless. The real first stable frame (72.27 kg) from
+  // oliexdev/openScale#1472, scale-capture-72.25kg-filtered.pcapng #27: company
+  // id 0x06D0, which other VeSync devices share, the 20-byte frame carrying the
+  // device's own MAC reversed at [1..6], and service 0xFFD0.
+  'Etekcity Fit 8S': {
+    localName: '',
+    address: 'A8:89:57:8C:A1:CE',
+    serviceUuids: ['ffd0'],
+    manufacturerData: {
+      id: 0x06d0,
+      data: Buffer.from('01cea18c5789a8c0a8014e1a010e020100020300', 'hex'),
+    },
+  },
+  // Broadcast-only, claimed by its exact name. The real 82.00 kg advert from the
+  // nRF Connect log the owner attached to oliexdev/openScale#1512 (comment
+  // 5552649285, line 252, 2026-09-05 19:44:32.834): company id 0x49D0, which is
+  // the first two bytes of the unit's own address, then the rest of it at [0..3].
+  'PICOOC Mini Lite': {
+    localName: 'PICOOC-L',
+    address: 'D0:49:00:4B:4F:1E',
+    serviceUuids: [],
+    manufacturerData: { id: 0x49d0, data: Buffer.from('004b4f1e391f066813b08710000e', 'hex') },
+  },
+  // The ADV_IND and scan response of the public capture attached to
+  // oliexdev/openScale#1505 (2026-08-22 06:42:34.698/.699 UTC), merged as
+  // noble and the proxies deliver them: the name, the address and 0x181D.
+  'A&D UC-352BLE': {
+    localName: 'A&D_UC-352BLE_01166D',
+    address: '5C:31:3E:01:16:6D',
+    serviceUuids: ['181d'],
   },
   'Xiaomi Mi Scale 2': { localName: 'MIBFS', serviceUuids: [] },
   'Xiaomi Mijia Scale S800': { localName: 'Mijia Scale S800 A1AB', serviceUuids: [] },
@@ -174,10 +219,149 @@ describe('registry collision guard (#182)', () => {
     },
   );
 
+  // #408: claimed by its exact name only, so it must not reach any other
+  // adapter's fixture, including those of adapters that outrank it.
+  it('PICOOC Mini Lite claims no fixture but its own', () => {
+    const picooc = adapters.find((a) => a.name === 'PICOOC Mini Lite');
+    expect(picooc).toBeDefined();
+    const claimed = Object.entries(FIXTURES)
+      .filter(([, info]) => picooc!.matches(info))
+      .map(([name]) => name);
+    expect(claimed).toEqual(['PICOOC Mini Lite']);
+  });
+
+  // #408: claimed by its name prefix only, never by the WSS service.
+  it('A&D UC-352BLE claims no fixture but its own', () => {
+    const and = adapters.find((a) => a.name === 'A&D UC-352BLE');
+    expect(and).toBeDefined();
+    const claimed = Object.entries(FIXTURES)
+      .filter(([, info]) => and!.matches(info))
+      .map(([name]) => name);
+    expect(claimed).toEqual(['A&D UC-352BLE']);
+  });
+
   it('has no fixture for an adapter that is not registered', () => {
     const registered = new Set(adapters.map((a) => a.name));
     const stale = Object.keys(FIXTURES).filter((n) => !registered.has(n));
     expect(stale, `Stale fixtures (adapter removed/renamed): ${stale.join(', ')}`).toEqual([]);
+  });
+});
+
+/**
+ * AC 27 family (#458, #462, #466): Active Era must win the FFB0 advertisement
+ * when it carries the 0x27AC company id, ahead of MGB's bare FFB0 claim.
+ *
+ * The bytes are the ALPHA Smart Scale PRO 3 advertisement from openScale PR
+ * #1534 (hci_snoop20260920232857_btsnoop.log, sha256 3e512091..., capture 1
+ * 23:30:30.015): ADV_IND `0201060303b0ff10ffac273891018ed3e001010030000001`
+ * from E0:D3:8E:01:91:38, scan response name `MY_SCALE`. The Runstar
+ * FG2431WB (#466) reports the same company id and FFB0, but its payload is
+ * not public, so no fixture pretends to know it: where a case needs a payload
+ * WITHOUT the MAC echo, it is the ALPHA payload heard from another address
+ * (a made-up one), and the entry says so.
+ */
+const ALPHA_MAC = 'E0:D3:8E:01:91:38';
+const ALPHA_MSD = { id: 0x27ac, data: Buffer.from('3891018ed3e001010030000001', 'hex') };
+const OTHER_MAC = '02:00:00:00:27:AC'; // made up: any address but the ALPHA's
+const AE = 'Active Era BS-06';
+
+const AC27_ADVERTS: Array<{ label: string; info: BleDeviceInfo; expected: string | undefined }> = [
+  {
+    label: 'ALPHA, ADV_IND + scan response (noble, proxies)',
+    info: {
+      localName: 'MY_SCALE',
+      address: ALPHA_MAC,
+      serviceUuids: ['ffb0'],
+      manufacturerData: ALPHA_MSD,
+    },
+    expected: AE,
+  },
+  {
+    label: 'ALPHA, ADV_IND only (ESPHome proxy, no name)',
+    info: {
+      localName: '',
+      address: ALPHA_MAC,
+      serviceUuids: ['ffb0'],
+      manufacturerData: ALPHA_MSD,
+    },
+    expected: AE,
+  },
+  {
+    label: 'ALPHA, node-ble before connecting (MAC echo, no services)',
+    info: {
+      localName: 'MY_SCALE',
+      address: ALPHA_MAC,
+      serviceUuids: [],
+      manufacturerData: ALPHA_MSD,
+    },
+    expected: AE,
+  },
+  // T2: the "0x27AC + FFB0, no echo" branch, the shape noble on macOS hands over
+  {
+    label: 'ALPHA, noble on macOS (no address)',
+    info: { localName: 'MY_SCALE', serviceUuids: ['ffb0'], manufacturerData: ALPHA_MSD },
+    expected: AE,
+  },
+  {
+    label: 'ALPHA, scan response only (a generic name, nothing else)',
+    info: { localName: 'MY_SCALE', address: ALPHA_MAC, serviceUuids: [] },
+    expected: undefined,
+  },
+  {
+    label: 'ALPHA payload from another address, no FFB0 (no echo, nothing vouches)',
+    info: { localName: '', address: OTHER_MAC, serviceUuids: [], manufacturerData: ALPHA_MSD },
+    expected: undefined,
+  },
+  // Accepted and pinned (plan review F8): no captured Robi, Hutbit, Speediance or
+  // MGB advertisement carries 0x27AC, and a 0x27AC unit speaks AC 27. If a named
+  // neighbour ever shows up with it, the fix is a bow-out on its name.
+  {
+    label: 'named "Robi S9" with the ALPHA company id and FFB0',
+    info: { localName: 'Robi S9', serviceUuids: ['ffb0'], manufacturerData: ALPHA_MSD },
+    expected: AE,
+  },
+  {
+    label: 'named "icomon" with the ALPHA company id and FFB0',
+    info: { localName: 'icomon', serviceUuids: ['ffb0'], manufacturerData: ALPHA_MSD },
+    expected: AE,
+  },
+  // The neighbours that must not move.
+  {
+    label: 'Lefu SWAN 0x02AC + FFB0 (#278) stays Hutbit',
+    info: {
+      localName: 'SWAN',
+      serviceUuids: ['ffb0', 'd618'],
+      manufacturerData: { id: 0x02ac, data: Buffer.from('7eb893ecb30301', 'hex') },
+    },
+    expected: 'Hutbit',
+  },
+  {
+    label: 'Silvergear 108 0xA0AC + FFB0 stays Silvergear',
+    info: FIXTURES['Silvergear Smart Scale 108'],
+    expected: 'Silvergear Smart Scale 108',
+  },
+  // openScale #1341 (foryond.log record #74): a Foryond FG263LB named AAA002,
+  // settled 68.75 kg. openScale loses these AAA0xx units to MGB through FFB0.
+  {
+    label: 'AAA002 0xA0AC + FFB0 (openScale #1341) stays Silvergear',
+    info: {
+      localName: 'AAA002',
+      address: 'A0:91:61:03:98:31',
+      serviceUuids: ['ffb0'],
+      manufacturerData: { id: 0xa0ac, data: Buffer.from('3198036191a0202dac2e0db4', 'hex') },
+    },
+    expected: 'Silvergear Smart Scale 108',
+  },
+  {
+    label: 'bare FFB0, no company id, stays MGB',
+    info: { localName: '', serviceUuids: ['ffb0'] },
+    expected: 'MGB (Swan/Icomon/YG)',
+  },
+];
+
+describe('AC 27 advertisements (#458, #462, #466)', () => {
+  it.each(AC27_ADVERTS)('$label', ({ info, expected }) => {
+    expect(resolveAdapter(info, adapters)?.name).toBe(expected);
   });
 });
 
@@ -210,8 +394,33 @@ interface PostDiscoveryCase {
   label: string;
   advertised: BleDeviceInfo;
   gatt: GattDiscovery;
-  expected: string;
+  expected: string | undefined;
 }
+
+// PICOOC Mini (#408): the real ADV_IND from oliexdev/openScale#401 (artsight,
+// btsnoop_hci.log, 2019-02-16 14:53:44.187): flags 0x06, service 0xFFF0, name
+// PICOOC-CQ, manufacturer data 0x000A + the unit's own address, from the public
+// address D0:49:00:30:0F:5D, an empty scan response. GATT in the same capture:
+// 0x2A00 to 0x2A05 on 0x1800 / 0x1801, 0xFFF1 (read + indicate) and 0xFFF2
+// (write with response) on 0xFFF0. No adapter reads this scale, so nothing may
+// claim it.
+const PICOOC_CQ: BleDeviceInfo = {
+  localName: 'PICOOC-CQ',
+  address: 'D0:49:00:30:0F:5D',
+  serviceUuids: ['fff0'],
+  manufacturerData: { id: 0x000a, data: Buffer.from('d04900300f5d', 'hex') },
+};
+const PICOOC_CQ_GATT = {
+  serviceUuids: [0x1800, 0x1801, 0xfff0].map(uuid16),
+  characteristicUuids: [0x2a00, 0x2a01, 0x2a02, 0x2a03, 0x2a04, 0x2a05, 0xfff1, 0xfff2].map(uuid16),
+};
+
+describe('PICOOC connection-based scales (#408)', () => {
+  it('claims nothing from the advertisement, with or without its services', () => {
+    expect(resolveAdapter(PICOOC_CQ, adapters)?.name).toBeUndefined();
+    expect(resolveAdapter({ ...PICOOC_CQ, serviceUuids: [] }, adapters)?.name).toBeUndefined();
+  });
+});
 
 // Renpho ES-WBE28 (#267): the advertisement is the one renpho.test.ts matches
 // on; the characteristics are that test's ALL_CHARS from the btsnoop capture.
@@ -223,7 +432,51 @@ const WBE28_CHARS = [
   0x2a9d, 0x2a9c, 0x2a9f, 0xffe1, 0xffe2, 0x2a8c, 0x2a8e, 0x2a85, 0x2a80, 0x2aff,
 ].map(uuid16);
 
+// A&D UC-352BLE (#408): the GATT discovery dump in HEADS-project/ThingML-BLE,
+// another unit; every handle the capture in oliexdev/openScale#1505 touches
+// matches it.
+const AND_GATT = {
+  serviceUuids: [
+    ...[0x1800, 0x1801, 0x181d, 0x180a, 0x180f].map(uuid16),
+    '233bf0005a341b6d975c000d5690abe4',
+  ],
+  characteristicUuids: [
+    ...[
+      0x2a00, 0x2a01, 0x2a02, 0x2a03, 0x2a04, 0x2a05, 0x2a9d, 0x2a9e, 0x2a08, 0x2a29, 0x2a24,
+      0x2a25, 0x2a27, 0x2a26, 0x2a28, 0x2a23, 0x2a2a, 0x2a19,
+    ].map(uuid16),
+    '233bf0015a341b6d975c000d5690abe4',
+  ],
+};
+
 const POST_DISCOVERY: PostDiscoveryCase[] = [
+  {
+    label: 'A&D UC-352BLE on node-ble with scale_mac (services unknown)',
+    advertised: {
+      localName: 'A&D_UC-352BLE_01166D',
+      address: '5C:31:3E:01:16:6D',
+      serviceUuids: [],
+    },
+    gatt: { ...AND_GATT, advertisedServicesKnown: false },
+    expected: 'A&D UC-352BLE',
+  },
+  {
+    label: 'A&D UC-352BLE on noble / proxy (advertised services known)',
+    advertised: {
+      localName: 'A&D_UC-352BLE_01166D',
+      address: '5C:31:3E:01:16:6D',
+      serviceUuids: ['181d'],
+    },
+    gatt: AND_GATT,
+    expected: 'A&D UC-352BLE',
+  },
+  // The ADV_IND alone carries no name; the generic adapter keeps such a scale.
+  {
+    label: 'nameless 0x181D scale with the A&D GATT layout',
+    advertised: { localName: '', serviceUuids: ['181d'] },
+    gatt: AND_GATT,
+    expected: 'Standard GATT (BCS/WSS)',
+  },
   // Service 0xFFF0 with notify 0xFFF1 / write 0xFFF2 (adapter declaration).
   ...[true, false].map((known) => ({
     label: `Digoo "Mengii" (advertised services ${known ? 'known' : 'unknown'})`,
@@ -292,6 +545,45 @@ const POST_DISCOVERY: PostDiscoveryCase[] = [
     },
     expected: 'Hutbit',
   },
+  // AC 27 family (#458, #462, #466), ALPHA bytes from openScale PR #1534 (see
+  // AC27_ADVERTS above). GATT: FFB0 hosting FFB2 notify and FFB1 write, the
+  // handles 0x0e/0x11 of the ALPHA capture and of the #466 log.
+  {
+    label: 'ALPHA on node-ble with scale_mac (target MAC, services unknown)',
+    advertised: {
+      localName: 'MY_SCALE',
+      address: ALPHA_MAC,
+      serviceUuids: [],
+      manufacturerData: ALPHA_MSD,
+    },
+    gatt: {
+      serviceUuids: [0xffb0, 0x1800, 0x1801].map(uuid16),
+      characteristicUuids: [0xffb1, 0xffb2].map(uuid16),
+      advertisedServicesKnown: false,
+    },
+    expected: AE,
+  },
+  {
+    label: 'AC 27 over the ESPHome proxy, payload without the echo (#466 shape)',
+    advertised: {
+      localName: '',
+      address: OTHER_MAC,
+      serviceUuids: ['ffb0'],
+      manufacturerData: ALPHA_MSD,
+    },
+    gatt: { serviceUuids: [uuid16(0xffb0)], characteristicUuids: [0xffb1, 0xffb2].map(uuid16) },
+    expected: AE,
+  },
+  {
+    label: 'AC 27 named "icomon" on node-ble (MGB name, 0x27AC company id)',
+    advertised: { localName: 'icomon', serviceUuids: [], manufacturerData: ALPHA_MSD },
+    gatt: {
+      serviceUuids: [uuid16(0xffb0)],
+      characteristicUuids: [0xffb1, 0xffb2].map(uuid16),
+      advertisedServicesKnown: false,
+    },
+    expected: AE,
+  },
   {
     label: 'nameless Robi S9 (ffb0 advertised, ffb3 discovered)',
     advertised: { localName: '', serviceUuids: [uuid16(0xffb0)] },
@@ -301,6 +593,14 @@ const POST_DISCOVERY: PostDiscoveryCase[] = [
     },
     expected: 'Robi S9',
   },
+  // #408: Inlife used to claim it on the bare 0xFFF0 and then on 0xFFF2 without
+  // 0xFFF4, and hold the connection while the scale kept asking for the time.
+  ...[true, false].map((known) => ({
+    label: `PICOOC-CQ (advertised services ${known ? 'known' : 'unknown'})`,
+    advertised: known ? PICOOC_CQ : { ...PICOOC_CQ, serviceUuids: [] },
+    gatt: { ...PICOOC_CQ_GATT, advertisedServicesKnown: known },
+    expected: undefined,
+  })),
 ];
 
 describe('post-discovery collision guard', () => {

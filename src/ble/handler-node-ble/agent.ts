@@ -231,11 +231,23 @@ export function setPairingTarget(provider: PairingTargetProvider): void {
  * whatever agent the host already runs, and our requirePin() rejects a passkey
  * request it cannot answer, so a PIN-less install could end up worse off than
  * with no agent at all.
+ *
+ * `forPairing` is the one exception, and only `ensureBonded` passes it: for a
+ * scale that keeps a single Just Works bond (`ScaleAdapterCore.singleBond`) and
+ * is not paired yet, right before it calls Pair(). BlueZ makes the first
+ * registered agent the default by itself since 5.51, so this matters only on an
+ * older BlueZ, or where another agent holds the role or pairing was switched
+ * off, and there it is what makes the adapter bondable for that pairing. The
+ * role goes back with the D-Bus connection at the end of the cycle.
  */
-export async function ensurePairingAgent(bus: MessageBus): Promise<void> {
+export async function ensurePairingAgent(
+  bus: MessageBus,
+  opts?: { forPairing?: boolean },
+): Promise<void> {
   if (!agentInstance) agentInstance = new BlueZPairingAgent();
   agentInstance.setTargetProvider(targetProvider);
-  const wantDefault = targetProvider().pin !== undefined && !defaultAgentUnavailable;
+  const hasPin = targetProvider().pin !== undefined;
+  const wantDefault = (hasPin || opts?.forPairing === true) && !defaultAgentUnavailable;
   if (registered && (defaultAgentClaimed || !wantDefault)) return;
 
   try {
@@ -258,7 +270,11 @@ export async function ensurePairingAgent(bus: MessageBus): Promise<void> {
       try {
         await manager.RequestDefaultAgent(AGENT_PATH);
         defaultAgentClaimed = true;
-        bleLog.debug('BlueZ default-agent role claimed (a consent PIN is configured)');
+        bleLog.debug(
+          hasPin
+            ? 'BlueZ default-agent role claimed (a consent PIN is configured)'
+            : 'BlueZ default-agent role claimed for pairing a scale that keeps a single bond',
+        );
       } catch (err) {
         // Latch after the first failure. Another agent already holding the role
         // is a persistent host state, not a transient one, so retrying every

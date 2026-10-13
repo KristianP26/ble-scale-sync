@@ -213,6 +213,25 @@ export async function openGattSession(
   // by the number of subscribed characteristics.
   const loggedForeignAddresses = new Set<number>();
 
+  // Every listener sees every notify event, so with two subscribed
+  // characteristics each one used to log the other's notifications as a
+  // mismatch (#331). Only a handle no listener in this session owns is worth a
+  // line. A count, not a set: two listeners on one handle (#75) must not hide
+  // it from each other when one unsubscribes.
+  const subscribedHandles = new Map<number, number>();
+  const loggedUnownedHandles = new Set<unknown>();
+  const own = (h: number): (() => void) => {
+    subscribedHandles.set(h, (subscribedHandles.get(h) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const n = (subscribedHandles.get(h) ?? 1) - 1;
+      if (n > 0) subscribedHandles.set(h, n);
+      else subscribedHandles.delete(h);
+    };
+  };
+
   const charMap = new Map<string, BleChar>();
   for (const svc of services.servicesList ?? []) {
     for (const ch of svc.characteristicsList ?? []) {
@@ -273,17 +292,20 @@ export async function openGattSession(
                 `ESPHome notify handle 0x${handle.toString(16)} (${buf.length}B): ${buf.toString('hex')}`,
               );
               onData(buf);
-            } else {
-              // A notify for this device on a handle this listener did not
-              // subscribe to. Expected on multi-notify adapters (one listener per
-              // characteristic, and every listener sees every event); but for a
-              // single-notify adapter it means the discovered characteristic handle
-              // and the notify-event handle disagree, so notifications are being
-              // silently dropped here (#291).
+            } else if (
+              !(typeof m.handle === 'number' && subscribedHandles.has(m.handle)) &&
+              !loggedUnownedHandles.has(m.handle)
+            ) {
+              // A notify for this device on a handle no listener in this session
+              // subscribed to: the discovered characteristic handle and the
+              // notify-event handle disagree, so these notifications are dropped
+              // (#291). A handle another listener owns is delivered by that
+              // listener and is not logged.
+              loggedUnownedHandles.add(m.handle);
               const evtHandle =
                 typeof m.handle === 'number' ? `0x${m.handle.toString(16)}` : String(m.handle);
               bleLog.debug(
-                `ESPHome notify handle mismatch: event ${evtHandle} != subscribed 0x${handle.toString(16)} for this device`,
+                `ESPHome notify on handle ${evtHandle} that this session did not subscribe to, dropped (#291)`,
               );
             }
           };
@@ -292,7 +314,12 @@ export async function openGattSession(
           // a read with the CCCD write response is emitted before this function
           // could resume: a scale that fires the instant its CCCD is written
           // (QN 0x12, Robi S9, R-MSC04) would lose that first frame.
-          const untrack = track(NOTIFY_EVENT, listener);
+          const release = own(handle);
+          const untrackListener = track(NOTIFY_EVENT, listener);
+          const untrack = (): void => {
+            untrackListener();
+            release();
+          };
           try {
             await serial(() => conn.notifyBluetoothGATTCharacteristicService(addr, handle));
           } catch (e) {

@@ -2158,6 +2158,44 @@ describe('handler-mqtt-proxy', () => {
       expect(connectCalls).toHaveLength(0);
     });
 
+    // #408 guard: with no cached advertisement the autonomous connect falls back
+    // to the highest-priority adapter whose notify char the device exposes.
+    // The A&D UC-352BLE GATT layout (HEADS-project/ThingML-BLE discovery dump,
+    // every handle the capture in oliexdev/openScale#1505 touches matches) exposes
+    // 0x2A9D, which Renpho ES-WBE28 and the A&D adapter both declare; the
+    // ES-WBE28 must keep winning there, as it did before the A&D adapter.
+    it('keeps the notify-char fallback on Renpho ES-WBE28 for a nameless WSS device (#408)', async () => {
+      const infoSpy = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+      vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      vi.spyOn(bleLog, 'error').mockImplementation(() => {});
+      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [...realAdapters], undefined, PROFILE);
+      await watcher.start();
+
+      const chars = [
+        0x2a00, 0x2a01, 0x2a02, 0x2a03, 0x2a04, 0x2a05, 0x2a9d, 0x2a9e, 0x2a08, 0x2a29, 0x2a24,
+        0x2a25, 0x2a27, 0x2a26, 0x2a28, 0x2a23, 0x2a2a, 0x2a19,
+      ]
+        .map((c) => `0000${c.toString(16).padStart(4, '0')}00001000800000805f9b34fb`)
+        .concat('233bf0015a341b6d975c000d5690abe4')
+        .map((uuid) => ({
+          uuid,
+          properties: uuid.startsWith('00002a9d') ? ['indicate'] : ['read'],
+        }));
+      mockClient._simulateMessage(
+        `${PREFIX}/connected`,
+        JSON.stringify({ autonomous: true, address: '5C:31:3E:01:16:6D', chars }),
+      );
+      await new Promise((r) => setTimeout(r, 50));
+
+      const picked = infoSpy.mock.calls
+        .map((c) => String(c[0]))
+        .filter((l) => l.startsWith('Autonomous GATT connect from ESP32:'));
+      expect(picked).toEqual([
+        'Autonomous GATT connect from ESP32: Renpho ES-WBE28 (5C:31:3E:01:16:6D)',
+      ]);
+      await watcher.stop();
+    });
+
     it('autonomous session survives a weigh-in that starts near the old fixed deadline', async () => {
       vi.useFakeTimers();
       try {
@@ -2321,6 +2359,108 @@ describe('handler-mqtt-proxy', () => {
         );
         await watcher.nextReading();
         expect(seen).toEqual([AUTH]);
+      });
+    });
+
+    // #331: the processor moves last_known_weight after every export and QN /
+    // R-MSC04 write it to the scale. A profile captured at startup kept the
+    // scale on the startup anchor for as long as the process ran.
+    describe('the user profile is resolved per GATT session on both watcher paths (#331)', () => {
+      function anchorCapturingAdapter(): { adapter: ScaleAdapter; anchors: unknown[] } {
+        const anchors: unknown[] = [];
+        const adapter = createGattAdapter();
+        adapter.onConnected = vi.fn(async (ctx) => {
+          anchors.push(ctx.profile.lastKnownWeight);
+          await ctx.write(GATT_WRITE_UUID, [0xa5, 0x01]);
+        });
+        return { adapter, anchors };
+      }
+
+      function profileSource(): () => UserProfile {
+        const weights = [70, 72.5];
+        return () => ({ ...PROFILE, lastKnownWeight: weights.shift() });
+      }
+
+      // A different weight per session, so the watcher's 30 s dedup keeps both.
+      function answerWritesWithReadings(): void {
+        let centikg = 8000;
+        const origPublish = mockClient.publishAsync;
+        mockClient.publishAsync = vi.fn(async (topic: string, payload?: string | Buffer) => {
+          if (topic === `${PREFIX}/connect`) {
+            queueMicrotask(() =>
+              mockClient._simulateMessage(
+                `${PREFIX}/connected`,
+                JSON.stringify({
+                  chars: [
+                    { uuid: GATT_NOTIFY_UUID, properties: ['notify'] },
+                    { uuid: GATT_WRITE_UUID, properties: ['write'] },
+                  ],
+                }),
+              ),
+            );
+          }
+          if (topic === `${PREFIX}/write/${GATT_WRITE_UUID}`) {
+            const w = centikg;
+            centikg += 100;
+            queueMicrotask(() => {
+              const buf = Buffer.alloc(4);
+              buf.writeUInt16LE(w, 0);
+              buf.writeUInt16LE(450, 2);
+              mockClient._simulateMessage(`${PREFIX}/notify/${GATT_NOTIFY_UUID}`, buf);
+            });
+          }
+          return origPublish(topic, payload);
+        });
+      }
+
+      const autonomousConnect = (): void =>
+        mockClient._simulateMessage(
+          `${PREFIX}/connected`,
+          JSON.stringify({
+            autonomous: true,
+            address: 'AA:BB:CC:DD:EE:FF',
+            chars: [
+              { uuid: GATT_NOTIFY_UUID, properties: ['notify'] },
+              { uuid: GATT_WRITE_UUID, properties: ['write'] },
+            ],
+          }),
+        );
+
+      it('autonomous connect', async () => {
+        const { adapter, anchors } = anchorCapturingAdapter();
+        const watcher = new ReadingWatcher(
+          MQTT_PROXY_CONFIG,
+          [adapter],
+          undefined,
+          profileSource(),
+        );
+        await watcher.start();
+        answerWritesWithReadings();
+        autonomousConnect();
+        await watcher.nextReading();
+        autonomousConnect();
+        await watcher.nextReading();
+        expect(anchors).toEqual([70, 72.5]);
+      });
+
+      it('host-initiated connect', async () => {
+        const { adapter, anchors } = anchorCapturingAdapter();
+        const config = { ...MQTT_PROXY_CONFIG, auto_connect: false };
+        const watcher = new ReadingWatcher(config, [adapter], undefined, profileSource());
+        await watcher.start();
+        answerWritesWithReadings();
+        const scan = (): void =>
+          mockClient._simulateMessage(
+            `${PREFIX}/scan/results`,
+            JSON.stringify([
+              { address: 'AA:BB:CC:DD:EE:FF', name: 'GattScale', rssi: -50, services: [] },
+            ]),
+          );
+        scan();
+        await watcher.nextReading();
+        scan();
+        await watcher.nextReading();
+        expect(anchors).toEqual([70, 72.5]);
       });
     });
 

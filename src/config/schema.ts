@@ -204,6 +204,24 @@ export const BleSchema = z
      */
     qn_weight_ack: z.boolean().optional().nullable(),
     /**
+     * User key the QN profile frame carries, 1 to 9999 (#463).
+     *
+     * Per the vendor's published SDK the profile frame opens the session for a
+     * user slot and carries the key the vendor app registered that user with,
+     * and the scale keeps that key per slot. openScale's frame, the default
+     * here, sends 8; the Feelfit, Arboleaf and GE apps send 1000. The Physiq
+     * that refuses openScale's frame (`a1 06 02 01 00`) shows only the weight,
+     * and no scale in the logs has streamed a live weight after a refusal.
+     *
+     * Set, the 18- and 19-byte dialects send the vendor-app profile frame with
+     * this key, the first user's age, height and sex, and on the 18-byte one the
+     * athlete setting, and skip openScale's ready-time A2. On the 19-byte
+     * dialect that happens without `qn_weight_ack` too. A wrong key leaves the
+     * scale refusing the frame, as without the option. The 20-byte and classic
+     * dialects ignore it. Left unset it changes nothing.
+     */
+    qn_user_key: z.number().int().min(1).max(9999).optional().nullable(),
+    /**
      * Send the two 0xA4 0x0F frames an Arboleaf vendor app sends between START
      * and the first live 0x10 weight frame (#331).
      *
@@ -220,12 +238,14 @@ export const BleSchema = z
      * The Arboleaf vendor app sends `20 09 ff <secs LE> 08 <checksum>` where this
      * app sends `20 08 ff <secs LE> <checksum>`. The timestamp field, its
      * position and the family checksum rule are identical; the whole difference
-     * is one extra `0x08` before the checksum, and that byte is NOT decoded.
+     * is one extra byte before the checksum. Per the vendor's published SDK it
+     * is the phone's UTC offset (`0x08` = UTC+2 in the captures), and the long
+     * form sends the host's own offset there (`timeZoneByte`).
      *
      * Off by default and opt-in per install, for the same reason as
-     * `qn_a4_prelude`: a wrong value here is silent in exactly the way
-     * `qn_protocol_byte` is, and every QN scale in the registry reads today on
-     * the 8-byte form.
+     * `qn_a4_prelude`: a frame the scale does not expect fails silently in
+     * exactly the way `qn_protocol_byte` does, and every QN scale in the
+     * registry reads today on the 8-byte form.
      */
     qn_time_sync_long: z.boolean().optional().nullable(),
     /**
