@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseSigDateTime, parseSigWeightMeasurement } from '../../src/scales/sig-wss.js';
+import {
+  encodeSigDateTime,
+  parseSigDateTime,
+  parseSigWeightMeasurement,
+} from '../../src/scales/sig-wss.js';
 import { BeurerBf720Adapter } from '../../src/scales/beurer-bf720.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 
@@ -156,6 +160,45 @@ describe('parseSigDateTime', () => {
     // notification rather than losing one timestamp.
     expect(() => parseSigDateTime(WSS_FRAME, WSS_FRAME.length - 1)).not.toThrow();
     expect(parseSigDateTime(WSS_FRAME, WSS_FRAME.length - 1)).toBeUndefined();
+  });
+});
+
+describe('encodeSigDateTime (#408)', () => {
+  /**
+   * The A&D app's Write Request to Date Time 0x2A08 in the public capture
+   * attached to oliexdev/openScale#1505, connection 1, 2026-08-22 06:42:36.869
+   * UTC, phone on CEST: 2026-08-22 08:42:36 local.
+   */
+  const APP_WRITE = 'ea070816082a24';
+
+  /**
+   * Local getters, pinned to a zone east of Greenwich: in UTC (CI) local and
+   * UTC getters agree, and a UTC encoder would pass unseen.
+   */
+  function inBratislava<T>(fn: () => T): T {
+    const saved = process.env.TZ;
+    process.env.TZ = 'Europe/Bratislava';
+    try {
+      return fn();
+    } finally {
+      if (saved === undefined) delete process.env.TZ;
+      else process.env.TZ = saved;
+    }
+  }
+
+  it('writes the bytes the vendor app wrote, from the same instant', () => {
+    const bytes = inBratislava(() => encodeSigDateTime(new Date('2026-08-22T06:42:36Z')));
+    expect(Buffer.from(bytes).toString('hex')).toBe(APP_WRITE);
+  });
+
+  it('round-trips through parseSigDateTime in the same zone', () => {
+    inBratislava(() => {
+      const d = new Date(2026, 7, 22, 8, 42, 36);
+      expect(parseSigDateTime(Buffer.from(encodeSigDateTime(d)), 0)).toEqual(d);
+      expect(encodeSigDateTime(parseSigDateTime(Buffer.from(APP_WRITE, 'hex'), 0)!)).toEqual([
+        ...Buffer.from(APP_WRITE, 'hex'),
+      ]);
+    });
   });
 });
 

@@ -158,6 +158,12 @@ export function checkRegistryIntegrity(adapters: readonly ScaleAdapter[]): Regis
     // claim needs, so the order costs the P2 nothing (#408). Custom on both
     // sides, so the overlap check below is silent.
     ['Eufy Smart Scale C20/P3', 'Eufy Smart Scale P2/P2 Pro'],
+    // The mqtt-proxy autonomous connect falls back to the highest-priority
+    // adapter whose charNotifyUuid the device exposes. Both declare 0x2A9D, so
+    // the A&D adapter above the ES-WBE28 would take every nameless WSS device
+    // there, a change for other scales. Name claims that never overlap, so the
+    // overlap check below cannot see it (#408).
+    ['Renpho ES-WBE28', 'A&D UC-352BLE'],
   ];
   for (const [hi, lo] of INVARIANTS) {
     const a = byName.get(hi);

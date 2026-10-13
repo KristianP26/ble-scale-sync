@@ -395,6 +395,21 @@ export interface ScaleAdapterCore {
   readonly requiresBonding?: boolean;
 
   /**
+   * True for a scale that keeps a single bond and pairs Just Works, without a
+   * PIN (#408, A&D UC-352BLE). On Linux the kernel answers such a scale's own
+   * Security Request with a bonding pairing as soon as we connect, so merely
+   * connecting to it pairs it with this host and unpairs the vendor app.
+   *
+   * The node-ble transport therefore never picks such a scale in
+   * auto-discovery: it is used only when `ble.scale_mac` names it. Its
+   * `ensureBonded` may also take the BlueZ default-agent role for the pairing
+   * (only while the scale is not paired yet) and warns once when BlueZ paired
+   * without storing a bond. Meaningful only together with `requiresBonding`.
+   * Not enforced on the other transports, which our code never pairs on.
+   */
+  readonly singleBond?: boolean;
+
+  /**
    * Receive per-device runtime config (e.g. a MiBeacon bind key) from the
    * composition root at startup and on config reload. Optional: only adapters
    * that decrypt a per-device secret implement it.

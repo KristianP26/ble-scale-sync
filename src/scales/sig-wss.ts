@@ -3,7 +3,9 @@ import { LBS_TO_KG } from '../ble/types.js';
 /**
  * Decoder for the Bluetooth SIG Weight Measurement characteristic (0x2A9D) of
  * the Weight Scale Service (0x181D), and for the SIG Date Time field that both
- * this characteristic and Body Composition Measurement (0x2A9C) embed.
+ * this characteristic and Body Composition Measurement (0x2A9C) embed, plus
+ * the encoder for that same Date Time, which the A&D UC-352BLE is told the time
+ * through (#408).
  *
  * The sibling `sig-bcs.ts` decodes 0x2A9C. It deliberately returns only
  * `timestampOffset` rather than a Date, so the Date Time decoder lives here,
@@ -97,6 +99,29 @@ export function parseSigDateTime(data: Buffer, offset: number): Date | undefined
     return undefined;
   }
   return Number.isNaN(d.getTime()) ? undefined : d;
+}
+
+/**
+ * Encode a SIG Date Time (0x2A08): year uint16 LE, then month, day, hours,
+ * minutes and seconds, one byte each, 7 bytes in all.
+ *
+ * Local time, deliberately. A scale has no time zone, so it shows and stamps
+ * whatever wall clock it is given, and `parseSigDateTime` reads a stamp back
+ * with the same local getters: written and read in one zone, the round trip is
+ * exact wherever the process runs. The A&D app writes the phone's local time
+ * the same way (#408). In a container without `TZ` that zone is UTC.
+ */
+export function encodeSigDateTime(d: Date): number[] {
+  const year = d.getFullYear();
+  return [
+    year & 0xff,
+    (year >> 8) & 0xff,
+    d.getMonth() + 1,
+    d.getDate(),
+    d.getHours(),
+    d.getMinutes(),
+    d.getSeconds(),
+  ];
 }
 
 export interface SigWeightMeasurement {

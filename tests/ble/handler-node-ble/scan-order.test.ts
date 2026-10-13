@@ -469,6 +469,47 @@ describe('scanAndReadRaw call order (#368)', () => {
   });
 });
 
+describe('scanAndReadRaw bonds a single-bond scale with the option, and only that one (#408)', () => {
+  beforeEach(() => {
+    calls.length = 0;
+    vi.useFakeTimers();
+    // The bonded scale is already paired on entry (the kernel answered its
+    // Security Request at connect), so ensureBonded only reads Bonded for it.
+    (fakeDevice as unknown as { helper: unknown }).helper = {
+      prop: async (name: string) => {
+        calls.push(`prop ${name}`);
+        return true;
+      },
+    };
+  });
+  afterEach(() => {
+    delete (fakeDevice as unknown as { helper?: unknown }).helper;
+    vi.useRealTimers();
+  });
+
+  async function runWith(adapter: ScaleAdapter): Promise<string[]> {
+    const promise = scanAndReadRaw({
+      targetMac: 'AA:BB:CC:DD:EE:FF',
+      adapters: [adapter],
+      profile: defaultProfile(),
+    });
+    await vi.runAllTimersAsync();
+    await promise;
+    return calls;
+  }
+
+  it('checks the bond of a singleBond adapter after connecting', async () => {
+    const seen = await runWith(makeAdapter({ requiresBonding: true, singleBond: true }));
+    expect(seen).toContain('prop Bonded');
+    expect(seen.indexOf('prop Bonded')).toBeLessThan(seen.indexOf('waitForRawReading'));
+  });
+
+  it('bonds every other requiresBonding adapter exactly as before', async () => {
+    const seen = await runWith(makeAdapter({ requiresBonding: true }));
+    expect(seen).not.toContain('prop Bonded');
+  });
+});
+
 describe('scanAndReadRaw turns a deferred binding off before disconnecting (#408)', () => {
   const WM = '00002a9d00001000800000805f9b34fb';
   const OTHER = '0000fff100001000800000805f9b34fb';

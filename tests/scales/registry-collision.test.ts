@@ -121,6 +121,14 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
     serviceUuids: [],
     manufacturerData: { id: 0x49d0, data: Buffer.from('004b4f1e391f066813b08710000e', 'hex') },
   },
+  // The ADV_IND and scan response of the public capture attached to
+  // oliexdev/openScale#1505 (2026-08-22 06:42:34.698/.699 UTC), merged as
+  // noble and the proxies deliver them: the name, the address and 0x181D.
+  'A&D UC-352BLE': {
+    localName: 'A&D_UC-352BLE_01166D',
+    address: '5C:31:3E:01:16:6D',
+    serviceUuids: ['181d'],
+  },
   'Xiaomi Mi Scale 2': { localName: 'MIBFS', serviceUuids: [] },
   'Xiaomi Mijia Scale S800': { localName: 'Mijia Scale S800 A1AB', serviceUuids: [] },
   // Same FE95 service as the S800; the product id (0x3bd5 here) tells them apart.
@@ -220,6 +228,16 @@ describe('registry collision guard (#182)', () => {
       .filter(([, info]) => picooc!.matches(info))
       .map(([name]) => name);
     expect(claimed).toEqual(['PICOOC Mini Lite']);
+  });
+
+  // #408: claimed by its name prefix only, never by the WSS service.
+  it('A&D UC-352BLE claims no fixture but its own', () => {
+    const and = adapters.find((a) => a.name === 'A&D UC-352BLE');
+    expect(and).toBeDefined();
+    const claimed = Object.entries(FIXTURES)
+      .filter(([, info]) => and!.matches(info))
+      .map(([name]) => name);
+    expect(claimed).toEqual(['A&D UC-352BLE']);
   });
 
   it('has no fixture for an adapter that is not registered', () => {
@@ -414,7 +432,51 @@ const WBE28_CHARS = [
   0x2a9d, 0x2a9c, 0x2a9f, 0xffe1, 0xffe2, 0x2a8c, 0x2a8e, 0x2a85, 0x2a80, 0x2aff,
 ].map(uuid16);
 
+// A&D UC-352BLE (#408): the GATT discovery dump in HEADS-project/ThingML-BLE,
+// another unit; every handle the capture in oliexdev/openScale#1505 touches
+// matches it.
+const AND_GATT = {
+  serviceUuids: [
+    ...[0x1800, 0x1801, 0x181d, 0x180a, 0x180f].map(uuid16),
+    '233bf0005a341b6d975c000d5690abe4',
+  ],
+  characteristicUuids: [
+    ...[
+      0x2a00, 0x2a01, 0x2a02, 0x2a03, 0x2a04, 0x2a05, 0x2a9d, 0x2a9e, 0x2a08, 0x2a29, 0x2a24,
+      0x2a25, 0x2a27, 0x2a26, 0x2a28, 0x2a23, 0x2a2a, 0x2a19,
+    ].map(uuid16),
+    '233bf0015a341b6d975c000d5690abe4',
+  ],
+};
+
 const POST_DISCOVERY: PostDiscoveryCase[] = [
+  {
+    label: 'A&D UC-352BLE on node-ble with scale_mac (services unknown)',
+    advertised: {
+      localName: 'A&D_UC-352BLE_01166D',
+      address: '5C:31:3E:01:16:6D',
+      serviceUuids: [],
+    },
+    gatt: { ...AND_GATT, advertisedServicesKnown: false },
+    expected: 'A&D UC-352BLE',
+  },
+  {
+    label: 'A&D UC-352BLE on noble / proxy (advertised services known)',
+    advertised: {
+      localName: 'A&D_UC-352BLE_01166D',
+      address: '5C:31:3E:01:16:6D',
+      serviceUuids: ['181d'],
+    },
+    gatt: AND_GATT,
+    expected: 'A&D UC-352BLE',
+  },
+  // The ADV_IND alone carries no name; the generic adapter keeps such a scale.
+  {
+    label: 'nameless 0x181D scale with the A&D GATT layout',
+    advertised: { localName: '', serviceUuids: ['181d'] },
+    gatt: AND_GATT,
+    expected: 'Standard GATT (BCS/WSS)',
+  },
   // Service 0xFFF0 with notify 0xFFF1 / write 0xFFF2 (adapter declaration).
   ...[true, false].map((known) => ({
     label: `Digoo "Mengii" (advertised services ${known ? 'known' : 'unknown'})`,

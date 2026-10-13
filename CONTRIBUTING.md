@@ -51,7 +51,7 @@ Unit tests use [Vitest](https://vitest.dev/) and cover:
 - **Config writing** — atomic file write, write lock serialization, YAML comment preservation, debounced weight updates
 - **User matching** — 4-tier weight matching, all strategies (nearest/log/ignore), overlapping ranges, drift detection
 - **Environment validation** — `validate-env.ts` (all validation rules and edge cases)
-- **Scale adapters** — `parseNotification()`, `matches()`, `isComplete()`, `computeMetrics()`, and `onConnected()` for all 40 adapters
+- **Scale adapters** — `parseNotification()`, `matches()`, `isComplete()`, `computeMetrics()`, and `onConnected()` for all 41 adapters
 - **Exporters** — config parsing, MQTT publish/HA discovery, MQTT multi-user topic routing + per-user HA discovery, Garmin subprocess, Webhook/InfluxDB/Ntfy delivery, ExportContext, ntfy drift warning
 - **Multi-user flow** — matching → profile resolution → exporter resolution → ExportContext construction, strategy fallback, tiebreak with last_known_weight
 - **Orchestrator** — healthcheck runner, export dispatch, parallel execution, partial/total failure handling
@@ -201,6 +201,7 @@ ble-scale-sync/
 │       ├── okok-chipsea.ts          # OKOK / Chipsea broadcast, C0 and 2.0 (broadcast only)
 │       ├── etekcity-fit8s.ts        # Etekcity Fit 8S (broadcast only)
 │       ├── picooc-mini-lite.ts      # PICOOC Mini Lite (PICOOC-L, broadcast only)
+│       ├── and-uc352ble.ts          # A&D UC-352BLE (SIG WSS, bonded)
 │       └── standard-gatt.ts         # Generic BCS/WSS catch-all
 ├── tests/
 │   ├── body-comp-helpers.test.ts    # Body-comp math

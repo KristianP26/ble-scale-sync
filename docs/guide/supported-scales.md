@@ -4,12 +4,12 @@ description: Every BLE smart scale brand and model supported by BLE Scale Sync.
 head:
   - - meta
     - name: keywords
-      content: koogeek scale, xiaomi mi scale, renpho scale bluetooth, eufy smart scale, yunmai scale, beurer bf scale, sanitas scale, medisana bs scale, silvercrest scale, 1byone scale, etekcity scale, inevifit scale, arboleaf scale, lepulse scale, fitdays scale, senssun scale, grifema scale, okok scale, chipsea scale, etekcity fit 8s, eufy c20, eufy p3, picooc scale, picooc mini lite, supported ble scales
+      content: koogeek scale, xiaomi mi scale, renpho scale bluetooth, eufy smart scale, yunmai scale, beurer bf scale, sanitas scale, medisana bs scale, silvercrest scale, 1byone scale, etekcity scale, inevifit scale, arboleaf scale, lepulse scale, fitdays scale, senssun scale, grifema scale, okok scale, chipsea scale, etekcity fit 8s, eufy c20, eufy p3, picooc scale, picooc mini lite, a&d scale, uc-352ble, supported ble scales
 ---
 
 # Supported Scales
 
-**40 protocol adapters**, plus a Standard BT SIG catch-all for any spec-compliant scale. Most adapters cover several rebrands, so real coverage is wider than the count.
+**41 protocol adapters**, plus a Standard BT SIG catch-all for any spec-compliant scale. Most adapters cover several rebrands, so real coverage is wider than the count.
 
 ## Scale List
 
@@ -40,6 +40,7 @@ _Weight only_ means weight is reported normally but body composition is estimate
 | **Sanitas** SBF70 / SBF75                                                      | Yes              |                                                                                                                                               |
 | **Sanitas** SBF72 / SBF73                                                      | Yes              | Needs user slot 1 in the vendor app                                                                                                           |
 | **Beurer** BF720 / BF105 / BF500 / BF788 / BF915 / BF950                       | Yes              | Needs `users[].beurer_pin` and a bonded link                                                                                                  |
+| **A&D** UC-352BLE                                                              | Weight only      | Not confirmed on hardware yet; Linux (BlueZ) only, needs `ble.scale_mac` and a one-time pairing, see below                                    |
 | **Soehnle** Shape200 / Shape100 / Shape50 / Style100                           | Yes              | Needs user slot 1 in the vendor app                                                                                                           |
 | **Medisana** BS430 / BS440 / BS444                                             | Yes              |                                                                                                                                               |
 | **Active Era** BS-06 and other `AC 27` scales                                  | Yes              | Picked automatically when the scale advertises manufacturer id `0x27AC`; wake it before stepping on, see below                                |
@@ -184,6 +185,17 @@ Weight only. The Mini Lite advertises as `PICOOC-L` and broadcasts each finished
 - **No impedance.** The broadcast carries a field that looks like impedance, but the PICOOC app computes body fat from it with a calibration it learns per person, and nobody has compared our formula with it, so body composition is estimated from BMI (Deurenberg formula) and the field is logged in debug mode.
 
 Other PICOOC scales, including the older PICOOC Mini, connect over Bluetooth (names such as `PICOOC-CQ` or `PICOOC-CC`) and are not supported yet ([#408](https://github.com/KristianP26/ble-scale-sync/issues/408)).
+
+### **A&D** UC-352BLE
+
+Weight only: the scale measures no impedance, so body composition is estimated from BMI (Deurenberg formula). It is a standard Bluetooth weight scale that sends its weigh-ins only to the device it is paired with. The A&D app sets the scale's clock before it asks for the weigh-in, and ble-scale-sync does the same.
+
+- **Linux only, with `ble.scale_mac`.** Pairing works on the default Linux transport (BlueZ). The scale keeps a single pairing, so pairing it with ble-scale-sync unpairs the A&D app. That is why the default Linux transport never picks it on its own: set `ble.scale_mac` to its address (`npm run scan` lists it) to use it. [Home Assistant Bluetooth](/guide/ha-bluetooth), the [ESPHome proxy](/guide/esphome-proxy) and the [ESP32 proxy](/guide/esp32-proxy) are not supported for it.
+- **Pairing, once.** With ble-scale-sync running, switch the scale off, then hold SET until its display shows `Pr`. The first connection pairs it and probably ends without a reading; weigh in again after that. If it does not pair, pair it by hand: `bluetoothctl`, then `agent on`, `default-agent`, `scan on`, `pair <MAC>`, `trust <MAC>`, with the scale showing `Pr`.
+- **Clock.** ble-scale-sync sets the scale's clock on every connection, as the A&D app does, to the host's local time. In Docker set `TZ`, or the scale's clock shows UTC.
+- **Stored weigh-ins.** Per its manual the scale keeps up to 90 weigh-ins while nothing is connected and sends them on the next connection. ble-scale-sync takes the time each one is stamped with: a weigh-in stamped more than five minutes ago goes only to the exporters that can record a past measurement (see [Exporters](/exporters)). Which time the scale stamps a stored weigh-in with has not been seen in a capture yet.
+
+None of this is confirmed on hardware yet ([#408](https://github.com/KristianP26/ble-scale-sync/issues/408)): it rests on a public capture of the A&D app. If you own one, a log with `debug: true` of the pairing and of the first two weigh-ins would confirm it.
 
 ### **Active Era** BS-06 and other `AC 27` scales
 

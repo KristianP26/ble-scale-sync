@@ -111,6 +111,25 @@ describe('registry-check structural guard (#182)', () => {
     ).toBe(true);
   });
 
+  // #408: the mqtt-proxy notify-char fallback takes the highest priority with
+  // 0x2A9D; the A&D adapter above the ES-WBE28 would take nameless WSS devices.
+  it('flags A&D UC-352BLE outranking Renpho ES-WBE28', () => {
+    const reg = [
+      fake('Renpho ES-WBE28', 240, { custom: true }),
+      fake('A&D UC-352BLE', 245, { names: { startsWith: ['a&d_uc-352ble'] } }),
+      new StandardGattScaleAdapter(),
+    ];
+    const { errors } = checkRegistryIntegrity(reg);
+    expect(
+      errors.some(
+        (e) =>
+          e.includes('Ordering invariant violated') &&
+          e.includes('"Renpho ES-WBE28"') &&
+          e.includes('"A&D UC-352BLE"'),
+      ),
+    ).toBe(true);
+  });
+
   it('flags a registered adapter that lacks a match descriptor', () => {
     const reg = [{ name: 'NoMatch' } as unknown as ScaleAdapter, new StandardGattScaleAdapter()];
     const { errors } = checkRegistryIntegrity(reg);

@@ -13,6 +13,7 @@ import { PicoocMiniLiteAdapter } from './picooc-mini-lite.js';
 import { XiaomiS800Adapter } from './xiaomi-s800.js';
 import { XiaomiS400Adapter } from './xiaomi-s400.js';
 import { BeurerBf720Adapter } from './beurer-bf720.js';
+import { AndUc352bleAdapter } from './and-uc352ble.js';
 import { YunmaiScaleAdapter } from './yunmai.js';
 import { BeurerSanitasScaleAdapter } from './beurer-sanitas.js';
 import { SanitasSbf72Adapter } from './sanitas-sbf72.js';
@@ -67,6 +68,14 @@ export const adapters: ScaleAdapter[] = [
   // and would otherwise be grabbed by the Mi Scale 2 adapter, so match them
   // first (by BF720/BF105 name or Beurer company id 0x0611).
   new BeurerBf720Adapter(),
+  // A&D UC-352BLE: SIG Weight Scale that needs a bond and the time written
+  // before it sends (#408). Claimed by its name prefix only, never by the WSS
+  // service, which the generic adapter keeps for nameless scales. Priority 225
+  // stays under Renpho ES-WBE28 (240): the mqtt-proxy autonomous connect falls
+  // back to the highest-priority adapter with the device's notify char, and
+  // both use 0x2A9D (registry-check invariant). It keeps a single bond, so
+  // node-ble auto-discovery skips it; it needs ble.scale_mac (singleBond).
+  new AndUc352bleAdapter(),
   // XMTZC04HM is a distinct, weight-only 0x181D broadcast protocol. It must
   // resolve before MiScale2Adapter and StandardGattScaleAdapter.
   new XiaomiMiScaleLegacyAdapter(),

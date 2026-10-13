@@ -219,6 +219,21 @@ describe('ensurePairingAgent (#83)', () => {
     expect(noPin.mgr.RequestDefaultAgent).not.toHaveBeenCalled();
   });
 
+  // #408: a scale that keeps a single Just Works bond, paired without a PIN.
+  it('claims the default-agent role without a PIN only for a single-bond pairing', async () => {
+    const { bus, mgr } = fakeBus();
+    setPairingTarget(() => ({ mac: SCALE }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await ensurePairingAgent(bus as any);
+    expect(mgr.RequestDefaultAgent).not.toHaveBeenCalled();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await ensurePairingAgent(bus as any, { forPairing: true });
+    expect(mgr.RequestDefaultAgent).toHaveBeenCalledTimes(1);
+    expect(mgr.RequestDefaultAgent).toHaveBeenCalledWith(AGENT_PATH);
+    expect(bus.export).toHaveBeenCalledTimes(1);
+  });
+
   it('claims the default-agent role later if a PIN appears after a reload', async () => {
     const { bus, mgr } = fakeBus();
     setPairingTarget(() => ({}));

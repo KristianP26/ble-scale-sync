@@ -243,13 +243,15 @@ export async function resolvePreConnectAdapter(
   // Scope: the result takes the passive branch below, and it is ALSO passed
   // to acquireGattServer, which branches on `requiresBonding` to decide
   // whether to bond before connecting and to retry on a discovery timeout
-  // (#290). Exactly one adapter in the registry sets that flag, so the whole
-  // reach of the widening on the connect path is that a MAC-pinned nameless
-  // Beurer advertising company id 0x0611 plus a SIG WSS/BCS service now
-  // reaches the bond-on-timeout retry, where the pre-match used to be
-  // undefined and the retry could never engage. That is the retry working as
-  // designed. Otherwise a device matching a connect-based adapter here falls
-  // through as before and is re-resolved after discovery.
+  // (#290). Two adapters in the registry set that flag. For the Beurer SIG
+  // one, the whole reach of the widening on the connect path is that a
+  // MAC-pinned nameless Beurer advertising company id 0x0611 plus a SIG WSS/BCS
+  // service now reaches the bond-on-timeout retry, where the pre-match used to
+  // be undefined and the retry could never engage. That is the retry working
+  // as designed. The A&D UC-352BLE (#408) is claimed by its name alone, which
+  // the name-only pre-match always had, so the widening changes nothing for
+  // it. Otherwise a device matching a connect-based adapter here falls through
+  // as before and is re-resolved after discovery.
   const preInfo: BleDeviceInfo = {
     localName: name,
     address: deviceMac ? formatMac(deviceMac) : undefined,
