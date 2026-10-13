@@ -4,6 +4,61 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.33.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.32.0...v1.33.0) (2026-10-13)
+
+
+### Added
+
+* **ble:** let an adapter turn a notify binding on after its own writes ([361c767](https://github.com/KristianP26/ble-scale-sync/commit/361c767a348aa957da6eab8b94188686a0d895d7)), closes [#408](https://github.com/KristianP26/ble-scale-sync/issues/408)
+* **es-cs20m:** compute body fat from the 0x18 resistance ([ee1d762](https://github.com/KristianP26/ble-scale-sync/commit/ee1d762cbd6d4d1009d482d73aec888ec1a5066e)), closes [#436](https://github.com/KristianP26/ble-scale-sync/issues/436)
+* **es-cs20m:** take the weight and resistance from the scale's 0x18 result ([6dce383](https://github.com/KristianP26/ble-scale-sync/commit/6dce3837cfb0eb180a330c3c84f7288409146bd4)), closes [#436](https://github.com/KristianP26/ble-scale-sync/issues/436)
+* **qn:** send the vendor app's profile frame when ble.qn_user_key is set ([6f1cdd0](https://github.com/KristianP26/ble-scale-sync/commit/6f1cdd0f463cf6a41a27244a73630782ee139544)), closes [#463](https://github.com/KristianP26/ble-scale-sync/issues/463)
+* **qn:** use the scale's own body composition on the 19-byte dialect ([4b37ef5](https://github.com/KristianP26/ble-scale-sync/commit/4b37ef5280460fc758453393ac60dad33178b34d)), closes [#331](https://github.com/KristianP26/ble-scale-sync/issues/331)
+* **scales:** add the A&D UC-352BLE adapter ([887e68f](https://github.com/KristianP26/ble-scale-sync/commit/887e68fc17e1a20c87aa583ca31f9c703f728dfc)), closes [#408](https://github.com/KristianP26/ble-scale-sync/issues/408)
+* **scales:** add the Etekcity Fit 8S broadcast adapter ([0c21023](https://github.com/KristianP26/ble-scale-sync/commit/0c210231551d5dffc98c0fb302b54b96cd371af2)), closes [#408](https://github.com/KristianP26/ble-scale-sync/issues/408)
+* **scales:** add the Eufy C20 / P3 broadcast adapter ([cc50075](https://github.com/KristianP26/ble-scale-sync/commit/cc50075cc66a97b09f92551fdae19553df25d398)), closes [#408](https://github.com/KristianP26/ble-scale-sync/issues/408)
+* **scales:** add the PICOOC Mini Lite broadcast adapter ([66378c1](https://github.com/KristianP26/ble-scale-sync/commit/66378c167bc851aaf815c2a2921f53cbb84cfd44)), closes [#408](https://github.com/KristianP26/ble-scale-sync/issues/408)
+* **scales:** compute AC 27 body composition with the vendor's WLA07 formula ([6fbdab1](https://github.com/KristianP26/ble-scale-sync/commit/6fbdab1fe98de956791f63e2fb7606ef430eb8e8))
+* **scales:** send the FitDays profile handshake to AC 27 scales ([788d0ab](https://github.com/KristianP26/ble-scale-sync/commit/788d0ab107d969cc0871295dfb121661be93bb7b))
+
+
+### Fixed
+
+* **ble:** hand over the stored records of a session a timeout ends ([5634e05](https://github.com/KristianP26/ble-scale-sync/commit/5634e0569a2aaf3c9afff538e100ef96e0cdada6)), closes [#331](https://github.com/KristianP26/ble-scale-sync/issues/331)
+* **ble:** keep the held reading when the scale disconnects after stored records ([ec88e4f](https://github.com/KristianP26/ble-scale-sync/commit/ec88e4fa2f7861b206a3eae6e611f5c66ddda17f)), closes [#331](https://github.com/KristianP26/ble-scale-sync/issues/331)
+* **es-cs20m:** stop taking a stored record's resistance for the live weigh-in ([34a036e](https://github.com/KristianP26/ble-scale-sync/commit/34a036e5995fba913a4668031bdd04b3af45d626)), closes [#436](https://github.com/KristianP26/ble-scale-sync/issues/436)
+* **esphome:** log a notify handle mismatch only for a handle nobody subscribed to ([5f16659](https://github.com/KristianP26/ble-scale-sync/commit/5f16659e445c377e06eb94a7a83741ffdba0ad35)), closes [#331](https://github.com/KristianP26/ble-scale-sync/issues/331)
+* **qn:** read the 19-byte stored records as one record each and report them with their time ([d3abdff](https://github.com/KristianP26/ble-scale-sync/commit/d3abdff6c1ef728f082186da9eee6bb9356e45e1)), closes [#331](https://github.com/KristianP26/ble-scale-sync/issues/331)
+* **qn:** send the configured sex in the 19-byte profile frame ([32c12f4](https://github.com/KristianP26/ble-scale-sync/commit/32c12f45003e03b93992e224d9a9bbca5db7e26f)), closes [#331](https://github.com/KristianP26/ble-scale-sync/issues/331)
+* **qn:** send the host's UTC offset in the 9-byte time sync ([df3e53f](https://github.com/KristianP26/ble-scale-sync/commit/df3e53f1fa522110c7dddd0043e257497dfccd40)), closes [#331](https://github.com/KristianP26/ble-scale-sync/issues/331)
+* **runtime:** give every proxy GATT session the current user profile ([2f53dc8](https://github.com/KristianP26/ble-scale-sync/commit/2f53dc8be2222cde0d307312a0387a03d9d1bc34)), closes [#331](https://github.com/KristianP26/ble-scale-sync/issues/331)
+* **scales:** complete AC 27 weigh-ins on a locked or steady weight ([9d61d93](https://github.com/KristianP26/ble-scale-sync/commit/9d61d93bc540cdc29b2c23fb13d764650895fcaf))
+* **scales:** give WLA07 the same whole-cm height the AC 27 scale gets ([5728af6](https://github.com/KristianP26/ble-scale-sync/commit/5728af6b4f1421a3d8d2966ce97fd6eef26c5b77))
+* **scales:** pair the Active Era impedance with this session's weight ([3372c69](https://github.com/KristianP26/ble-scale-sync/commit/3372c69c38d40e469192d45847128f7e36f1b4d1))
+* **scales:** pick AC 27 scales by their 0x27AC advertisement before MGB ([f041880](https://github.com/KristianP26/ble-scale-sync/commit/f0418802590138d8b8e0a213575d631a41ecb232))
+* **scales:** stop the Inlife adapter from claiming PICOOC scales ([9972b10](https://github.com/KristianP26/ble-scale-sync/commit/9972b104fc6001bc7c07489cbfa8ccde91d08076)), closes [#408](https://github.com/KristianP26/ble-scale-sync/issues/408)
+* **silvergear:** read the weight from the low 18 bits, not a fixed bias ([#467](https://github.com/KristianP26/ble-scale-sync/issues/467)) ([37453d8](https://github.com/KristianP26/ble-scale-sync/commit/37453d84e31e5227d31395ffc244513940dc22c8))
+
+
+### Docs
+
+* describe the 19-byte QN body composition and stored weigh-ins ([e4a2fcc](https://github.com/KristianP26/ble-scale-sync/commit/e4a2fcc03613a3290cd138dda77767a74449ff6f)), closes [#331](https://github.com/KristianP26/ble-scale-sync/issues/331)
+* describe the AC 27 family on the supported scales page ([1e8b3b2](https://github.com/KristianP26/ble-scale-sync/commit/1e8b3b269b5b262bf5f356e4534cb77b23634c4e))
+* list the Etekcity Fit 8S ([cdb381d](https://github.com/KristianP26/ble-scale-sync/commit/cdb381d457e54842fc1d382b6e7c7755f3a3d4ab)), closes [#408](https://github.com/KristianP26/ble-scale-sync/issues/408)
+* point source comments at public evidence, not private notes ([c9dcf9a](https://github.com/KristianP26/ble-scale-sync/commit/c9dcf9ac0ed8784a46f2031246513ca02abd9b40))
+* **qn:** describe the 0x20 extra byte as the UTC offset in the option comments ([68010c5](https://github.com/KristianP26/ble-scale-sync/commit/68010c59eb3b2aeee88cb3d92b01a0eabf90d240)), closes [#331](https://github.com/KristianP26/ble-scale-sync/issues/331)
+* **readme:** credit etekcity_esf551_ble as the source of the Fit 8S layout ([adbafd3](https://github.com/KristianP26/ble-scale-sync/commit/adbafd3aea0302ea75a414d50c933d2b891aaaad)), closes [#408](https://github.com/KristianP26/ble-scale-sync/issues/408)
+* **readme:** drop the sentence above the contributors grid ([5012cce](https://github.com/KristianP26/ble-scale-sync/commit/5012cce4b250990fcea3fb2a5a436476ad077e85))
+* say the scale most likely, not certainly, computed with the male profile ([ededb48](https://github.com/KristianP26/ble-scale-sync/commit/ededb480ef593ac4da4deb4764756e8c1dc719a3)), closes [#331](https://github.com/KristianP26/ble-scale-sync/issues/331)
+* say when a 19-byte QN stored weigh-in gives way to a live one ([6f19e1e](https://github.com/KristianP26/ble-scale-sync/commit/6f19e1e8a703b2f38df384d19215ad15f17e71d7)), closes [#331](https://github.com/KristianP26/ble-scale-sync/issues/331)
+* **scales:** describe the ES-CS20M result frame and confirm the AE01/AE02 sequence ([2bb2f96](https://github.com/KristianP26/ble-scale-sync/commit/2bb2f9695562100f2f15792ff0448f08be61a65a)), closes [#436](https://github.com/KristianP26/ble-scale-sync/issues/436)
+* **scales:** drop the address requirement the Fit 8S does not have on macOS ([d701113](https://github.com/KristianP26/ble-scale-sync/commit/d701113a4a1619dffb047dcfa2a6fc39fd69711a)), closes [#408](https://github.com/KristianP26/ble-scale-sync/issues/408)
+* **scales:** list the Foryond FG263LB (AAA002) under the Silvergear adapter ([6801ae7](https://github.com/KristianP26/ble-scale-sync/commit/6801ae7084b229574d38705cd4e7d8fbb4909293)), closes [#408](https://github.com/KristianP26/ble-scale-sync/issues/408)
+* **scales:** list the INSMART AAA006 under the Silvergear adapter ([f15417f](https://github.com/KristianP26/ble-scale-sync/commit/f15417f48d45b6301eaba0b59b05b18f16fcfb1a)), closes [#467](https://github.com/KristianP26/ble-scale-sync/issues/467)
+* **scales:** say the AC 27 display unit byte comes from the BS-06 handler ([f5b572d](https://github.com/KristianP26/ble-scale-sync/commit/f5b572dc4c80e95e714dbfa020c33dc712060383))
+* **scales:** say the Eufy P2 / P2 Pro reads body composition over GATT ([f4aefa1](https://github.com/KristianP26/ble-scale-sync/commit/f4aefa1f92dcb3276d72eb525ac75dd1f4b28aa5)), closes [#289](https://github.com/KristianP26/ble-scale-sync/issues/289)
+* **scales:** state the 30 s bound on the ES-CS20M result hold ([574659f](https://github.com/KristianP26/ble-scale-sync/commit/574659fc6667bff0a98510ef62c17a942be7318d)), closes [#436](https://github.com/KristianP26/ble-scale-sync/issues/436)
+
 ## [1.32.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.31.0...v1.32.0) (2026-10-11)
 
 
