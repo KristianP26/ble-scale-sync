@@ -1535,6 +1535,68 @@ describe('handler-mqtt-proxy', () => {
       await watcher.stop();
     });
 
+    // A Silvergear AAA006 seeded from scale_mac: the real adapter list is not all
+    // passive, so the seed leaves the flag off and the ESP32 auto-connects on
+    // sight. The scale refuses connections, and the paused scan missed its
+    // settled frame, so no complete reading ever marked it passive.
+    it('marks a seeded scale passive on its first advertisement, before any reading', async () => {
+      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, realAdapters, 'A0:91:54:A4:C9:0C');
+      await watcher.start();
+      const configs = () =>
+        (mockClient.publishAsync as ReturnType<typeof vi.fn>).mock.calls
+          .filter((c: unknown[]) => c[0] === `${PREFIX}/config`)
+          .map((c: unknown[]) => JSON.parse(c[1] as string) as Record<string, unknown>);
+      expect(configs().at(-1)).not.toHaveProperty('passive');
+
+      // The idle (0 kg) frame: a 'wait' decision, nothing to read yet.
+      mockClient._simulateMessage(
+        `${PREFIX}/scan/results`,
+        JSON.stringify([
+          {
+            address: 'A0:91:54:A4:C9:0C',
+            name: 'AAA006',
+            rssi: -60,
+            services: ['ffb0'],
+            manufacturer_id: 0xa0ac,
+            manufacturer_data: '0cc9a45491a0a0c8a0a00db5',
+          },
+        ]),
+      );
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(configs().at(-1)).toMatchObject({
+        scales: ['A0:91:54:A4:C9:0C'],
+        passive: ['A0:91:54:A4:C9:0C'],
+        autoConnect: false,
+      });
+      await watcher.stop();
+    });
+
+    it('does not register an unknown broadcast scale before it produces a reading', async () => {
+      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, realAdapters);
+      await watcher.start();
+      mockClient._simulateMessage(
+        `${PREFIX}/scan/results`,
+        JSON.stringify([
+          {
+            address: 'A0:91:54:A4:C9:0C',
+            name: 'AAA006',
+            rssi: -60,
+            services: ['ffb0'],
+            manufacturer_id: 0xa0ac,
+            manufacturer_data: '0cc9a45491a0a0c8a0a00db5',
+          },
+        ]),
+      );
+      await new Promise((r) => setTimeout(r, 10));
+
+      const configCalls = (mockClient.publishAsync as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c: unknown[]) => c[0] === `${PREFIX}/config`,
+      );
+      expect(configCalls).toHaveLength(0);
+      await watcher.stop();
+    });
+
     it('does not seed config when no scale_mac is configured', async () => {
       const adapter = createGattAdapter();
       const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter]);

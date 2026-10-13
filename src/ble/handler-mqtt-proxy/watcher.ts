@@ -34,6 +34,7 @@ import {
   closePersistentClient,
   getOrCreatePersistentClient,
   addDiscoveredMac,
+  hasDiscoveredMac,
   getDiscoveredMacs,
   getDisplayUsers,
   addPassiveMac,
@@ -286,6 +287,22 @@ export class ReadingWatcher implements Watcher {
           logAdvert(entry.address, info);
           const adapter = resolveAdapter(info, this.adapters);
           if (!adapter) continue;
+
+          // A known scale read from its advertisements is passive from its
+          // first frame, not only from its first complete reading. Seeded from
+          // ble.scale_mac without the flag, the ESP32 auto-connects to it on
+          // sight and pauses its scan for the attempt; a broadcast-only scale
+          // that refuses connections then never delivers the complete reading
+          // that used to be the only thing marking it passive. Limited to known
+          // MACs, the only ones the ESP32 connects to, so a neighbour's scale is
+          // not added to the ESP32's list before it produces a reading.
+          if (
+            hasDiscoveredMac(entry.address) &&
+            readsFromAdvertisement(adapter) &&
+            !isPassiveMac(entry.address)
+          ) {
+            registerScaleMac(this.config, entry.address, adapter).catch(() => {});
+          }
 
           const decision = evaluateAdvertisement(adapter, info);
 
