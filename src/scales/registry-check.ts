@@ -64,6 +64,27 @@ export function checkRegistryIntegrity(adapters: readonly ScaleAdapter[]): Regis
     );
   }
 
+  // A deferred binding is one the handler leaves alone for the adapter to
+  // enable in onConnected. Without onConnected nothing would ever enable it,
+  // and the scale would connect and say nothing until the session timed out.
+  // On anything but a notify binding the flag would mean nothing at all.
+  for (const a of adapters) {
+    for (const b of a.characteristics ?? []) {
+      if (!b.deferred) continue;
+      if (b.type !== 'notify') {
+        errors.push(
+          `Adapter "${a.name}" marks its ${b.type} binding ${b.uuid} deferred; only a notify ` +
+            `binding can be deferred.`,
+        );
+      } else if (!a.onConnected) {
+        errors.push(
+          `Adapter "${a.name}" defers notify binding ${b.uuid} but has no onConnected to ` +
+            `enable it.`,
+        );
+      }
+    }
+  }
+
   // Every registered adapter MUST declare a match descriptor (the member is
   // optional on the interface only so test mocks can omit it).
   for (const a of adapters) {

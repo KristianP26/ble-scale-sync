@@ -6,12 +6,17 @@ import type {
 } from '../../interfaces/scale-adapter.js';
 import type { ScanOptions, ScanResult } from '../types.js';
 import type { RawReading } from '../shared.js';
-import { findMissingCharacteristics } from '../shared.js';
+import {
+  findMissingCharacteristics,
+  hasDeferredNotifyBinding,
+  stopDeferredNotifications,
+} from '../shared.js';
 import { resolveAdapter } from '../../scales/resolve.js';
 import {
   bleLog,
   formatMac,
   sleep,
+  abortableSleep,
   errMsg,
   untilAborted,
   withTimeout,
@@ -68,6 +73,13 @@ import { safeName } from '../advertisement.js';
 
 /** Max time to wait for a BLE pairing/bonding handshake before giving up. */
 const BONDING_TIMEOUT_MS = 15_000;
+
+/**
+ * Wait after turning a deferred binding off and before disconnecting. BlueZ
+ * answers StopNotify first and writes the CCCD afterwards; the vendor app's
+ * own CCCD writes were answered 68 to 112 ms after the request (#408).
+ */
+const STOP_NOTIFY_SETTLE_MS = 500;
 
 /**
  * Number of the most recent scanAndReadRaw() call.
@@ -509,10 +521,26 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     // Same device path as the newer cycle's, so a late Disconnect here would
     // drop that cycle's link to the scale.
     if (!isSuperseded()) {
-      try {
-        await device.disconnect();
-      } catch {
-        /* ignore */
+      // An adapter that enables a binding itself (CharacteristicBinding.deferred)
+      // gets it turned off again first, as its vendor app does (#408). StopNotify
+      // answers before BlueZ has written the CCCD, so the short wait lets that
+      // write reach the scale before the link goes; a shutdown cuts it short.
+      // Checked synchronously, so every adapter without a deferred binding
+      // reaches the disconnect exactly as before: no D-Bus call, no log line,
+      // no wait, not even an extra await.
+      if (!abortSignal?.aborted && hasDeferredNotifyBinding(matchedAdapter)) {
+        if ((await stopDeferredNotifications(charMap, matchedAdapter)) > 0) {
+          await abortableSleep(STOP_NOTIFY_SETTLE_MS, abortSignal).catch(() => {});
+        }
+      }
+      // The stop and the wait above take up to 2.5 s, long enough for the poll
+      // loop to give up on this cycle and start a newer one on the same device.
+      if (!isSuperseded()) {
+        try {
+          await device.disconnect();
+        } catch {
+          /* ignore */
+        }
       }
     }
     return raw;

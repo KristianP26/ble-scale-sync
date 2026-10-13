@@ -140,8 +140,11 @@ vi.mock('../../../src/ble/handler-node-ble/connect.js', () => ({
   }),
 }));
 
+/** The char map every buildCharMap returns; a test replaces it (#408). */
+let charMapForTest: Map<string, unknown> = new Map();
+
 vi.mock('../../../src/ble/handler-node-ble/gatt.js', () => ({
-  buildCharMap: record('buildCharMap', async () => new Map()),
+  buildCharMap: record('buildCharMap', async () => charMapForTest),
   wrapDevice: record('wrapDevice', () => ({ onDisconnect: () => {}, fireDisconnect: () => {} })),
   wrapChar: () => ({}),
 }));
@@ -190,9 +193,12 @@ vi.mock('../../../src/ble/handler-node-ble/scan-watchdog.js', async (importOrigi
         }
       }
     },
-    resetScanActivityBackoff: () => {},
+    resetScanActivityBackoff: () => onBackoffReset?.(),
   };
 });
+
+/** Runs where a successful read resets the backoff, right before the disconnect. */
+let onBackoffReset: (() => void) | undefined;
 
 /** A scale adapter that claims everything, so resolveAdapter stays real. */
 function makeAdapter(overrides: Partial<ScaleAdapter> = {}): ScaleAdapter {
@@ -460,6 +466,136 @@ describe('scanAndReadRaw call order (#368)', () => {
     // reading lands, and the finally is a catch-all for every other exit.
     const seen = await run();
     expect(seen.filter((c) => c === 'device.disconnect')).toHaveLength(2);
+  });
+});
+
+describe('scanAndReadRaw turns a deferred binding off before disconnecting (#408)', () => {
+  const WM = '00002a9d00001000800000805f9b34fb';
+  const OTHER = '0000fff100001000800000805f9b34fb';
+  const stoppable = (label: string) => ({
+    subscribe: async () => () => {},
+    write: async () => {},
+    read: async () => Buffer.alloc(0),
+    stop: async () => {
+      calls.push(`stop ${label}`);
+    },
+  });
+
+  beforeEach(() => {
+    calls.length = 0;
+    charMapForTest = new Map<string, unknown>([
+      [WM, stoppable('2a9d')],
+      [OTHER, stoppable('fff1')],
+    ]);
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    charMapForTest = new Map();
+    onBackoffReset = undefined;
+    vi.useRealTimers();
+  });
+
+  async function runWith(adapter: ScaleAdapter, signal?: AbortSignal): Promise<string[]> {
+    const promise = scanAndReadRaw({
+      targetMac: 'AA:BB:CC:DD:EE:FF',
+      adapters: [adapter],
+      profile: defaultProfile(),
+      ...(signal ? { abortSignal: signal } : {}),
+    });
+    void promise.catch(() => {});
+    await vi.runAllTimersAsync();
+    await promise.catch(() => {});
+    return calls;
+  }
+
+  const deferredAdapter = (): ScaleAdapter =>
+    makeAdapter({
+      characteristics: [
+        { uuid: OTHER, type: 'notify' },
+        { uuid: WM, type: 'notify', deferred: true },
+      ],
+      onConnected: async () => {},
+    });
+
+  it('sends StopNotify on the deferred binding, and only that one, before the disconnect', async () => {
+    const seen = await runWith(deferredAdapter());
+    expect(seen.filter((c) => c.startsWith('stop '))).toEqual(['stop 2a9d']);
+    expect(seen.indexOf('stop 2a9d')).toBeGreaterThan(seen.indexOf('waitForRawReading'));
+    expect(seen.indexOf('stop 2a9d')).toBeLessThan(seen.indexOf('device.disconnect'));
+  });
+
+  // Guard: every other adapter disconnects exactly as before.
+  it('never sends StopNotify for an adapter without a deferred binding', async () => {
+    const seen = await runWith(
+      makeAdapter({ characteristics: [{ uuid: WM, type: 'notify' }], onConnected: async () => {} }),
+    );
+    expect(seen.filter((c) => c.startsWith('stop '))).toEqual([]);
+    expect(seen).toContain('device.disconnect');
+  });
+
+  it('skips it when the app is shutting down', async () => {
+    const ctrl = new AbortController();
+    onBackoffReset = () => ctrl.abort(new Error('shutdown'));
+    const seen = await runWith(deferredAdapter(), ctrl.signal);
+    expect(seen).toContain('waitForRawReading');
+    expect(seen.filter((c) => c.startsWith('stop '))).toEqual([]);
+  });
+
+  it('cuts the wait after the stop short when the app shuts down during it', async () => {
+    const ctrl = new AbortController();
+    let stoppedAt = -1;
+    let disconnectedAt = -1;
+    charMapForTest.set(WM, {
+      ...stoppable('2a9d'),
+      stop: async () => {
+        calls.push('stop 2a9d');
+        stoppedAt = Date.now();
+        ctrl.abort(new Error('shutdown'));
+      },
+    });
+    const realDisconnect = fakeDevice.disconnect;
+    fakeDevice.disconnect = async () => {
+      calls.push('device.disconnect');
+      if (disconnectedAt < 0) disconnectedAt = Date.now();
+    };
+    try {
+      await runWith(deferredAdapter(), ctrl.signal);
+    } finally {
+      fakeDevice.disconnect = realDisconnect;
+    }
+    expect(stoppedAt).toBeGreaterThanOrEqual(0);
+    expect(disconnectedAt - stoppedAt).toBeLessThan(500);
+  });
+
+  it('leaves the link alone when a newer cycle starts during the stop (A-04)', async () => {
+    // The stop and the wait after it take up to 2.5 s, and the poll loop may
+    // give up on the cycle and start the next one on the same device path in
+    // that time. A Disconnect from the old cycle would drop the new one's link.
+    let releaseStop!: () => void;
+    const stopGate = new Promise<void>((r) => (releaseStop = r));
+    charMapForTest.set(WM, {
+      ...stoppable('2a9d'),
+      stop: async () => {
+        calls.push('stop 2a9d');
+        await stopGate;
+      },
+    });
+    const opts = { targetMac: 'AA:BB:CC:DD:EE:FF', profile: defaultProfile() };
+    const abandoned = scanAndReadRaw({ ...opts, adapters: [deferredAdapter()] });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(calls).toContain('stop 2a9d');
+
+    // Bounded advances: the stop's own 2 s timeout must not fire before the
+    // newer cycle has started.
+    const replacement = scanAndReadRaw({ ...opts, adapters: [makeAdapter()] });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await replacement;
+
+    calls.length = 0;
+    releaseStop();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await abandoned;
+    expect(calls).not.toContain('device.disconnect');
   });
 });
 

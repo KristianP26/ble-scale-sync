@@ -7,6 +7,7 @@ import {
   resolveWriteChar,
   getRawCaptureConfig,
   toHex,
+  stopDeferredNotifications,
 } from '../../src/ble/shared.js';
 import { untilAborted, withIdleTimeout } from '../../src/ble/types.js';
 import type { BleChar, BleDevice } from '../../src/ble/shared.js';
@@ -3346,5 +3347,202 @@ describe('waitForRawReading() write lane (#211)', () => {
     ).toHaveLength(2);
     expect(lines).toContain('ACK [e7 f1 58 01 07] coalesced with an identical one still waiting');
     device.triggerDisconnect();
+  });
+});
+
+// ─── Deferred notify binding (#408) ─────────────────────────────────────────
+
+describe('deferred notify binding (#408)', () => {
+  const DEFERRED_UUID = '00002a9d00001000800000805f9b34fb';
+  const TIME_UUID = '00002a0800001000800000805f9b34fb';
+
+  /** Mock chars that log every write and subscribe into one shared wire order. */
+  function wiredChar(label: string, wire: string[]): MockBleChar {
+    const char = createMockChar();
+    const baseSubscribe = char.subscribe;
+    const baseWrite = char.write;
+    char.subscribe = vi.fn(async (onData: (data: Buffer) => void) => {
+      wire.push(`subscribe ${label}`);
+      return baseSubscribe(onData);
+    });
+    char.write = vi.fn(async (data: Buffer, withResponse: boolean) => {
+      wire.push(`write ${label}`);
+      return baseWrite(data, withResponse);
+    });
+    return char;
+  }
+
+  it('leaves a deferred binding to onConnected, which writes before it subscribes', async () => {
+    // The order the vendor app uses on the wire: the time write first, then the
+    // CCCD (oliexdev/openScale#1505 capture, 3 of 3 connections). Without the
+    // flag the handler enabled the binding before onConnected ever ran.
+    const wire: string[] = [];
+    const indicate = wiredChar('2a9d', wire);
+    const time = wiredChar('2a08', wire);
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [DEFERRED_UUID, indicate],
+      [TIME_UUID, time],
+    ]);
+    const infoSpy = vi.spyOn(bleLog, 'info');
+
+    const adapter = createLegacyAdapter({
+      characteristics: [
+        { uuid: DEFERRED_UUID, type: 'notify', deferred: true },
+        { uuid: TIME_UUID, type: 'write', optional: true },
+      ],
+      onConnected: vi.fn(async (ctx: ConnectionContext) => {
+        await ctx.write(TIME_UUID, [0x01], true);
+        await ctx.subscribe(DEFERRED_UUID);
+      }),
+      parseCharNotification: vi.fn(() => ({ weight: 65.7, impedance: 500 })),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(adapter.onConnected).toHaveBeenCalled());
+    await vi.waitFor(() => expect(wire).toContain('subscribe 2a9d'));
+    indicate.triggerData(Buffer.from([0x02]));
+    const raw = await promise;
+
+    expect(raw.reading.weight).toBe(65.7);
+    expect(wire).toEqual(['write 2a08', 'subscribe 2a9d']);
+    // The handler's own prompt would come before the scale can say anything.
+    expect(
+      infoSpy.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('Subscribed')),
+    ).toEqual([]);
+  });
+
+  it('accepts an adapter whose only notify binding is deferred', async () => {
+    const indicate = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([[DEFERRED_UUID, indicate]]);
+
+    const adapter = createLegacyAdapter({
+      characteristics: [{ uuid: DEFERRED_UUID, type: 'notify', deferred: true }],
+      onConnected: vi.fn(async (ctx: ConnectionContext) => {
+        await ctx.subscribe(DEFERRED_UUID);
+      }),
+      parseCharNotification: vi.fn(() => ({ weight: 65.7, impedance: 500 })),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(indicate.subscribeCalled).toBe(true));
+    indicate.triggerData(Buffer.from([0x02]));
+    await expect(promise).resolves.toMatchObject({ reading: { weight: 65.7 } });
+    expect(indicate.subscribe).toHaveBeenCalledTimes(1);
+  });
+
+  // Guard, green before and after: every other adapter keeps its order and its
+  // log line byte for byte.
+  it('enables an ordinary binding before onConnected next to a deferred one', async () => {
+    const wire: string[] = [];
+    const ordinary = wiredChar('fff1', wire);
+    const indicate = wiredChar('2a9d', wire);
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, ordinary],
+      [DEFERRED_UUID, indicate],
+    ]);
+
+    const adapter = createLegacyAdapter({
+      characteristics: [
+        { uuid: NOTIFY_UUID, type: 'notify' },
+        { uuid: DEFERRED_UUID, type: 'notify', deferred: true },
+      ],
+      onConnected: vi.fn(async (ctx: ConnectionContext) => {
+        wire.push('onConnected');
+        await ctx.subscribe(DEFERRED_UUID);
+      }),
+      parseCharNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(wire).toContain('subscribe 2a9d'));
+    ordinary.triggerData(Buffer.from([0x01]));
+    await promise;
+    expect(wire).toEqual(['subscribe fff1', 'onConnected', 'subscribe 2a9d']);
+  });
+
+  it('keeps the order and the prompt of an adapter without a deferred binding', async () => {
+    const wire: string[] = [];
+    const first = wiredChar('fff1', wire);
+    const second = wiredChar('fff3', wire);
+    const device = createMockDevice();
+    const NOTIFY2_UUID = '0000fff300001000800000805f9b34fb';
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, first],
+      [NOTIFY2_UUID, second],
+    ]);
+    const infoSpy = vi.spyOn(bleLog, 'info');
+
+    const adapter = createLegacyAdapter({
+      characteristics: [
+        { uuid: NOTIFY_UUID, type: 'notify' },
+        { uuid: NOTIFY2_UUID, type: 'notify' },
+      ],
+      onConnected: vi.fn(() => {
+        wire.push('onConnected');
+      }),
+      parseCharNotification: vi.fn(() => ({ weight: 75, impedance: 500 })),
+    });
+
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    await vi.waitFor(() => expect(adapter.onConnected).toHaveBeenCalled());
+    first.triggerData(Buffer.from([0x01]));
+    await promise;
+    expect(wire).toEqual(['subscribe fff1', 'subscribe fff3', 'onConnected']);
+    expect(infoSpy.mock.calls.map((c) => String(c[0]))).toContain(
+      'Subscribed to 2 notification(s). Step on the scale.',
+    );
+  });
+});
+
+describe('stopDeferredNotifications() (#408)', () => {
+  const DEFERRED_UUID = '00002a9d00001000800000805f9b34fb';
+
+  function stoppable(): MockBleChar & { stop: ReturnType<typeof vi.fn> } {
+    return Object.assign(createMockChar(), { stop: vi.fn(async () => {}) });
+  }
+
+  it('turns off each deferred binding the transport can stop, and nothing else', async () => {
+    const deferredChar = stoppable();
+    const ordinary = stoppable();
+    const { charMap } = createCharMap([
+      [DEFERRED_UUID, deferredChar],
+      [NOTIFY_UUID, ordinary],
+    ]);
+    const adapter = createLegacyAdapter({
+      characteristics: [
+        { uuid: NOTIFY_UUID, type: 'notify' },
+        { uuid: DEFERRED_UUID, type: 'notify', deferred: true },
+      ],
+      onConnected: vi.fn(),
+    });
+
+    await expect(stopDeferredNotifications(charMap, adapter)).resolves.toBe(1);
+    expect(deferredChar.stop).toHaveBeenCalledTimes(1);
+    expect(ordinary.stop).not.toHaveBeenCalled();
+  });
+
+  it('touches nothing for an adapter without a deferred binding', async () => {
+    const char = stoppable();
+    const { charMap } = createCharMap([[NOTIFY_UUID, char]]);
+    const adapter = createLegacyAdapter({
+      characteristics: [{ uuid: NOTIFY_UUID, type: 'notify' }],
+      onConnected: vi.fn(),
+    });
+    await expect(stopDeferredNotifications(charMap, adapter)).resolves.toBe(0);
+    expect(char.stop).not.toHaveBeenCalled();
+  });
+
+  it('never throws: a failing stop costs nothing but a debug line', async () => {
+    const char = stoppable();
+    char.stop.mockRejectedValue(new Error('org.bluez.Error.NotConnected'));
+    const { charMap } = createCharMap([[DEFERRED_UUID, char]]);
+    const adapter = createLegacyAdapter({
+      characteristics: [{ uuid: DEFERRED_UUID, type: 'notify', deferred: true }],
+      onConnected: vi.fn(),
+    });
+    await expect(stopDeferredNotifications(charMap, adapter)).resolves.toBe(0);
   });
 });

@@ -8,7 +8,7 @@ import type {
   ScaleAuth,
 } from '../interfaces/scale-adapter.js';
 import type { WeightUnit } from '../config/schema.js';
-import { LBS_TO_KG, normalizeUuid, errMsg, bleLog } from './types.js';
+import { LBS_TO_KG, normalizeUuid, errMsg, bleLog, withTimeout } from './types.js';
 import { HistoryBuffer, HoldTimer } from './notification-processor.js';
 import { isHistoricalReading } from '../interfaces/reading-time.js';
 import { createWriteLanes, type WriteLanes } from './write-lane.js';
@@ -99,6 +99,14 @@ export interface BleChar {
   subscribe(onData: (data: Buffer) => void): Promise<() => void>;
   write(data: Buffer, withResponse: boolean): Promise<void>;
   read(): Promise<Buffer>;
+  /**
+   * Turn notifications/indications off on the peer (CCCD back to 0).
+   *
+   * The unsubscribe function `subscribe` returns only drops our listener; the
+   * CCCD stays enabled until the link goes down. Only the node-ble transport
+   * implements this, and only `stopDeferredNotifications` calls it.
+   */
+  stop?(): Promise<void>;
 }
 
 export interface BleDevice {
@@ -454,7 +462,16 @@ async function subscribeAndInit(
     }
 
     let subscribed = 0;
+    let deferred = 0;
     for (const binding of notifyBindings) {
+      // The adapter enables it from onConnected, after the writes the scale
+      // expects first (#408). Counted above, so an adapter whose only notify
+      // binding is deferred still passes the check.
+      if (binding.deferred) {
+        bleLog.debug(`Leaving notify binding ${binding.uuid} to the adapter's onConnected`);
+        deferred += 1;
+        continue;
+      }
       if (binding.optional && !resolveChar(charMap, binding.uuid)) {
         bleLog.debug(`Skipping optional notify binding ${binding.uuid} (not present on device)`);
         continue;
@@ -489,7 +506,11 @@ async function subscribeAndInit(
         );
       }
     }
-    bleLog.info(`Subscribed to ${subscribed} notification(s). Step on the scale.`);
+    // With a deferred binding nothing the weigh-in arrives on is enabled yet,
+    // so "step on the scale" would be premature; the adapter says it instead.
+    if (deferred === 0) {
+      bleLog.info(`Subscribed to ${subscribed} notification(s). Step on the scale.`);
+    }
     await startInit();
   } else {
     // Legacy mode — single notify + write pair
@@ -537,6 +558,53 @@ async function subscribeAndInit(
     // and never retry. Repeating it here costs one write on three adapters.
     await onNotifyEnabled();
   }
+}
+
+/** How long one StopNotify may take before the disconnect goes ahead anyway. */
+const STOP_NOTIFY_TIMEOUT_MS = 2_000;
+
+/**
+ * Whether the adapter declares a deferred notify binding. Synchronous on
+ * purpose: a caller checks it before awaiting anything, so an adapter without
+ * one goes on to its disconnect without even an extra await (#408).
+ */
+export function hasDeferredNotifyBinding(adapter: ScaleAdapter): boolean {
+  return (adapter.characteristics ?? []).some((b) => b.type === 'notify' && b.deferred === true);
+}
+
+/**
+ * Turn the adapter's deferred notify bindings off again, on a transport whose
+ * characteristics can (`BleChar.stop`). Returns how many were stopped.
+ *
+ * A bonded peer keeps its CCCD across connections (Core spec Vol 3 Part G
+ * 3.3.3.3). Our unsubscribe only removes the listener, so a deferred binding
+ * left on could make the scale indicate at the start of the next connection,
+ * before the adapter has written what it writes first and before anything
+ * listens; BlueZ confirms every indication by itself, so the scale would count
+ * that weigh-in as delivered. The vendor app of the one scale that needs this
+ * turns indications off before the scale disconnects (#408).
+ *
+ * Never throws: a failure here must not cost the reading already in hand.
+ * Adapters without a deferred binding are not touched at all.
+ */
+export async function stopDeferredNotifications(
+  charMap: Map<string, BleChar>,
+  adapter: ScaleAdapter,
+): Promise<number> {
+  let stopped = 0;
+  for (const binding of adapter.characteristics ?? []) {
+    if (binding.type !== 'notify' || !binding.deferred) continue;
+    const char = resolveChar(charMap, binding.uuid);
+    if (!char?.stop) continue;
+    try {
+      await withTimeout(char.stop(), STOP_NOTIFY_TIMEOUT_MS, 'StopNotify timed out');
+      bleLog.debug(`Notifications turned off on ${binding.uuid} before disconnecting`);
+      stopped += 1;
+    } catch (e: unknown) {
+      bleLog.debug(`Could not turn notifications off on ${binding.uuid}: ${errMsg(e)}`);
+    }
+  }
+  return stopped;
 }
 
 // ─── Shared reading logic ─────────────────────────────────────────────────────

@@ -126,4 +126,45 @@ describe('registry-check structural guard (#182)', () => {
     const { errors } = checkRegistryIntegrity(reg);
     expect(errors.some((e) => e.includes('claim the same name/service'))).toBe(true);
   });
+
+  // #408: a deferred binding is enabled only by the adapter's own onConnected.
+  const withBindings = (
+    name: string,
+    characteristics: unknown[],
+    onConnected?: () => void,
+  ): ScaleAdapter =>
+    ({
+      name,
+      match: { priority: 50 },
+      characteristics,
+      ...(onConnected ? { onConnected } : {}),
+    }) as unknown as ScaleAdapter;
+
+  it('flags a deferred notify binding on an adapter without onConnected', () => {
+    const reg = [
+      withBindings('Deferred', [{ uuid: '2a9d', type: 'notify', deferred: true }]),
+      new StandardGattScaleAdapter(),
+    ];
+    const { errors } = checkRegistryIntegrity(reg);
+    expect(errors.some((e) => e.includes('"Deferred"') && e.includes('no onConnected'))).toBe(true);
+  });
+
+  it('flags deferred on a binding that is not a notify binding', () => {
+    const reg = [
+      withBindings('WriteDeferred', [{ uuid: '2a08', type: 'write', deferred: true }], () => {}),
+      new StandardGattScaleAdapter(),
+    ];
+    const { errors } = checkRegistryIntegrity(reg);
+    expect(
+      errors.some((e) => e.includes('"WriteDeferred"') && e.includes('only a notify binding')),
+    ).toBe(true);
+  });
+
+  it('accepts a deferred notify binding on an adapter with onConnected', () => {
+    const reg = [
+      withBindings('Fine', [{ uuid: '2a9d', type: 'notify', deferred: true }], () => {}),
+      new StandardGattScaleAdapter(),
+    ];
+    expect(checkRegistryIntegrity(reg).errors).toEqual([]);
+  });
 });

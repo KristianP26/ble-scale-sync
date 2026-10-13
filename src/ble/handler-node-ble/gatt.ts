@@ -22,6 +22,9 @@ export function wrapChar(char: GattCharacteristic): BleChar {
       }
     },
     read: () => char.readValue(),
+    // BlueZ StopNotify writes the CCCD back to 0 itself. A direct write to the
+    // CCC descriptor is refused by BlueZ, so this is the only way to do it.
+    stop: () => char.stopNotifications(),
   };
 }
 

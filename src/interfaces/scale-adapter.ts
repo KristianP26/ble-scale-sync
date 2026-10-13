@@ -151,6 +151,23 @@ export interface CharacteristicBinding {
    * the char is missing.
    */
   optional?: boolean;
+  /**
+   * A `notify` binding the handler does NOT subscribe to. The adapter turns it
+   * on itself, from `onConnected`, with `ctx.subscribe`, once it has written
+   * whatever the scale needs first. A SIG Weight Scale that is told the time
+   * before its indications are enabled is the case this exists for (#408): in
+   * multi-char mode the handler otherwise enables every notify binding before
+   * `onConnected` runs.
+   *
+   * Required unless `optional` is also set, and only valid on a `notify`
+   * binding of an adapter that has `onConnected` (registry-check enforces
+   * both). On the node-ble transport the handler turns such a binding off again
+   * (StopNotify) after a successful session, before it disconnects: a bonded
+   * peer keeps its CCCD across connections, and one left on can indicate in
+   * the next connection before the adapter has written anything or anyone is
+   * listening.
+   */
+  deferred?: boolean;
 }
 
 /**
