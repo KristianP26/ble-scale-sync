@@ -172,6 +172,11 @@ function byteHex(b: number): string {
   return b.toString(16).padStart(2, '0');
 }
 
+/** The weight range a 0x21, 0x24 or 0x25 weight must fall in, in kg. */
+function isPlausibleKg(kg: number): boolean {
+  return Number.isFinite(kg) && kg >= 0.5 && kg <= 300;
+}
+
 // ─── Connect writes: b2 guest profile and b3 clock (#434, D038) ─────────────
 //
 // The two frames a working ESPHome client on #117 writes after connecting.
@@ -766,7 +771,7 @@ export class RenphoMsc04Adapter
     if (len < 2) return null; // need at least the 2 weight bytes
     // Weight bytes are the two just before the checksum: frameLen - 3.
     const weight = data.readUInt16BE(frameLen - 3) / 100;
-    if (weight < 0.5 || weight > 300 || !Number.isFinite(weight)) return null;
+    if (!isPlausibleKg(weight)) return null;
     return weight;
   }
 
