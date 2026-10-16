@@ -2340,6 +2340,62 @@ describe('R-MSC04 composition hold through waitForRawReading (#434)', () => {
       vi.useRealTimers();
     }
   });
+
+  it('settles on the record in a session that starts at weight locked (D057)', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession();
+      // #117 capture, second connection, from weight locked on (20:28:20.418 ..
+      // 30.363): what a session made after the 0x24 sees.
+      s.indicate.triggerData(hex('55aa200005020901005080')); // weight locked, 0 stored
+      await vi.advanceTimersByTimeAsync(9630);
+      s.indicate.triggerData(hex('55aa200005031101005089')); // complete
+      await vi.advanceTimersByTimeAsync(135);
+      s.indicate.triggerData(hex('ad040255aa2500240411000025530a00de0c200b'));
+      await vi.advanceTimersByTimeAsync(91);
+      s.indicate.triggerData(hex('ae0401ef08e4092a00ae0ac10a9007e108250100'));
+      await vi.advanceTimersByTimeAsync(89);
+      s.indicate.triggerData(hex('af0400ed011101b70008ea'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.isSettled(), 'the record must end the session').toBe(true);
+
+      const raw = await s.promise;
+      expect(raw.reading).toEqual({ weight: 95.55, impedance: 0 });
+      expect(s.adapter.isFinal(raw.reading)).toBe(true);
+      // Our guest b2 went out, so the estimate (D038).
+      expect(s.adapter.computeMetrics(raw.reading, PROFILE_187)).toEqual(
+        buildPayload(95.55, 0, {}, PROFILE_187),
+      );
+      expect(s.write.writtenData.map((b) => Buffer.from(b).toString('hex'))).toEqual([
+        '55aab20009000907081b58a9ff02ef',
+        '55aab3000b010701016a478eb102580011',
+        '55aab000020201b4',
+        '55aab000020301b5',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gets no weight when the record of such a session is ignored, so the disconnect rejects', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession();
+      // First status from vossitch's #434 log (0x09, 1 stored record), the
+      // rest from the #117 capture.
+      s.indicate.triggerData(hex('55aa200005010901014676'));
+      s.indicate.triggerData(hex('55aa200005031101005089'));
+      s.indicate.triggerData(hex('ad040255aa2500240411000025530a00de0c200b'));
+      s.indicate.triggerData(hex('ae0401ef08e4092a00ae0ac10a9007e108250100'));
+      s.indicate.triggerData(hex('af0400ed011101b70008ea'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.isSettled()).toBe(false);
+      s.device.triggerDisconnect();
+      await expect(s.promise).rejects.toThrow(/Scale disconnected before reading completed/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ─── QN 19-byte dialect weigh-in, end to end (#331, D037) ───────────────────

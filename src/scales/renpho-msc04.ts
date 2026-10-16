@@ -68,6 +68,14 @@ const MAX_REASSEMBLED_BYTES = 64;
 const FRAGMENT_HEADER_LEN = 3;
 
 /**
+ * The 0x20 state right before the 0x25 record of this weigh-in: 135 ms before
+ * it in the #117 capture, and the status just before it in a #434 session that
+ * connected after the weight locked. Without a 0x24 it is what ties the record
+ * to this weigh-in (D057).
+ */
+const STATE_COMPLETE = 0x11;
+
+/**
  * 0x20 status [6]. 0x04 and 0x05 are named after what followed them, not from
  * a spec: in the #117 capture the scale sent 0x05 as the first status of a
  * connection with stored records and nobody on it, and disconnected 133 ms
@@ -480,8 +488,11 @@ function decodeRecord(f: Buffer): CompositionRecord {
  * over three indications on 0x2A12 (#117 capture: 15.9 s after the 0x24
  * frame). So the 0x24 weight no longer ends the session: it is held for up
  * to COMPOSITION_HOLD_MS and resolves at once when a matching 0x25 record
- * lands, or weight-only when none does. 0x26 records are stored history of
- * earlier weigh-ins and are never used.
+ * lands, or weight-only when none does. A session that connects after the
+ * weight locked never gets a 0x24 (#434); its 0x25 record is then the reading,
+ * with the record's own weight, when the status right before it was 0x11 and
+ * the session started with no stored records (D057). 0x26 records are stored
+ * history of earlier weigh-ins and are never used.
  *
  * Of the record, only the scale's body fat and visceral fat are ever exported,
  * and only from a session in which we did NOT write our guest b2 (its [11] is
@@ -529,6 +540,10 @@ export class RenphoMsc04Adapter
 
   private finalReceived = false;
   private finalWeight = 0;
+  /** State of the latest 0x20 status in this session, or null before the first. */
+  private lastState: number | null = null;
+  /** Stored records ([8]) the first full 0x20 status of this session reported, or null. */
+  private storedAtStart: number | null = null;
   private readonly reassembler = new FragmentReassembler();
   /**
    * The record pinned to the reading it completed (#394): this adapter is a
@@ -572,6 +587,8 @@ export class RenphoMsc04Adapter
   onSessionStart(): void {
     this.finalReceived = false;
     this.finalWeight = 0;
+    this.lastState = null;
+    this.storedAtStart = null;
     this.reassembler.reset();
     this.ctx = null;
     this.guestProfileSent = false;
@@ -737,7 +754,7 @@ export class RenphoMsc04Adapter
     if (!frame) return null;
 
     if (frame.cmd === CMD_STATUS) {
-      this.logStatus(data, frame.len);
+      this.onStatus(data, frame.len);
       return null;
     }
     if (REPLY_TO[frame.cmd] !== undefined) {
@@ -779,11 +796,13 @@ export class RenphoMsc04Adapter
    * A 0x20 status: seq, state, then [7] (01 in every capture and log), [8]
    * the number of stored records the scale still holds (#117 capture: 03,
    * then exactly three 0x26 records, then 00) and [9] (0x50 in July, 0x46 in
-   * September and October; the battery is a guess).
+   * September and October; the battery is a guess). The state and [8] are
+   * also what the gate on a record without a 0x24 reads (D057).
    */
-  private logStatus(data: Buffer, len: number): void {
+  private onStatus(data: Buffer, len: number): void {
     if (len < 2) return;
     const state = data[6];
+    this.lastState = state;
     const name = STATUS_NAMES[state] ?? 'unknown';
     let extra = '';
     if (len >= 5) {
@@ -792,6 +811,7 @@ export class RenphoMsc04Adapter
         `, ${stored} stored ${stored === 1 ? 'record' : 'records'}, ` +
         `[7] ${byteHex(data[7])}, [9] ${byteHex(data[9])}`;
       this.diag.firstStatus ??= { state, stored };
+      this.storedAtStart ??= stored;
     }
     this.diag.lastStatus = { state, at: Date.now() };
     bleLog.debug(
@@ -850,19 +870,10 @@ export class RenphoMsc04Adapter
       );
     }
 
-    if (!this.finalReceived) {
-      bleLog.debug('Renpho R-MSC04: record arrived before the settled weight, ignored');
-      return null;
-    }
-    if (Math.abs(rec.weight - this.finalWeight) > RECORD_WEIGHT_TOLERANCE_KG) {
-      bleLog.debug(
-        `Renpho R-MSC04: record weight ${rec.weight.toFixed(2)} kg does not match the ` +
-          `settled ${this.finalWeight.toFixed(2)} kg, ignored`,
-      );
-      return null;
-    }
+    const weight = this.finalReceived ? this.weightFromFinal(rec) : this.weightFromRecord(rec);
+    if (weight === null) return null;
 
-    const reading: ScaleReading = { weight: this.finalWeight, impedance: 0 };
+    const reading: ScaleReading = { weight, impedance: 0 };
     this.records.pin(reading, { rec, guestProfile: this.guestProfileSent });
     this.diag.record = 'used';
     bleLog.info(
@@ -870,6 +881,51 @@ export class RenphoMsc04Adapter
         `visceral ${rec.visceralFat})`,
     );
     return reading;
+  }
+
+  /** The 0x24 weight when the record matches it, else null (gate unchanged). */
+  private weightFromFinal(rec: CompositionRecord): number | null {
+    if (Math.abs(rec.weight - this.finalWeight) > RECORD_WEIGHT_TOLERANCE_KG) {
+      bleLog.debug(
+        `Renpho R-MSC04: record weight ${rec.weight.toFixed(2)} kg does not match the ` +
+          `settled ${this.finalWeight.toFixed(2)} kg, ignored`,
+      );
+      return null;
+    }
+    return this.finalWeight;
+  }
+
+  /**
+   * The record's own weight in a session without a 0x24, or null (#434, D057).
+   *
+   * The scale sends 0x24 once, when the weight settles, so a session that
+   * connects after that never gets one. The record carries no age, so it is
+   * taken as this weigh-in only when the status right before it was 0x11 (a
+   * live record follows 0x11 in every capture and log) and the session started
+   * with no stored records ([8] 00), so no stored weigh-in can be what the
+   * scale delivers (a third-party log on #117 says an unacknowledged stored
+   * record can come back as 0x25). In the #117 capture the record's weight is
+   * the 0x24 weight of the same weigh-in.
+   */
+  private weightFromRecord(rec: CompositionRecord): number | null {
+    let why: string | null = null;
+    if (this.lastState !== STATE_COMPLETE) {
+      const last = this.lastState === null ? 'no status' : `status 0x${byteHex(this.lastState)}`;
+      why = `${last} right before it, not 0x11`;
+    } else if (this.storedAtStart !== 0) {
+      const n = this.storedAtStart;
+      why =
+        n === null
+          ? 'no stored-record count at the start of the session'
+          : `the session started with ${n} stored ${n === 1 ? 'record' : 'records'}`;
+    } else if (!isPlausibleKg(rec.weight)) {
+      why = `its weight ${rec.weight.toFixed(2)} kg is out of range`;
+    }
+    if (why !== null) {
+      bleLog.debug(`Renpho R-MSC04: record ignored, no 0x24 in this session: ${why}`);
+      return null;
+    }
+    return rec.weight;
   }
 
   /**
@@ -890,8 +946,9 @@ export class RenphoMsc04Adapter
     return ack;
   }
 
+  /** A 0x24 weight, or a reading a 0x25 record completed, also without a 0x24 (D057). */
   isComplete(reading: ScaleReading): boolean {
-    return reading.weight > 0 && this.finalReceived;
+    return reading.weight > 0 && (this.finalReceived || this.isFinal(reading));
   }
 
   /** Final only once a matching 0x25 record completed the reading. */

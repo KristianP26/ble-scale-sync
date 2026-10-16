@@ -49,6 +49,8 @@ const HIST = [
 const LIVE_9560 = Buffer.from('55aa2100050100002558a3', 'hex');
 const STATUS_LOCKED = Buffer.from('55aa200005020901005080', 'hex'); // state 0x09
 const STATUS_DONE = Buffer.from('55aa200005031101005089', 'hex'); // state 0x11
+// The same connection's first status (seq 00): state 0x01, 0 stored records.
+const STATUS_MEASURING = Buffer.from('55aa200005000101005076', 'hex');
 
 // #434 (vossitch, DEBUG log): settled 0x24 at 81.55 kg.
 const FINAL_8155 = Buffer.from('55aa240006011100001fdb35', 'hex');
@@ -289,9 +291,9 @@ describe('RenphoMsc04Adapter', () => {
       expect(feed(settled(), [REC_1, wrongMarker, REC_3])).toBeNull();
     });
 
-    // Two gates reject this (no settled weight yet, and so no weight to match);
-    // removing either one alone leaves the test green.
-    it('ignores a record that arrives before the settled weight', () => {
+    // Two gates reject this now (no 0x11 right before it, no stored-record
+    // count); removing either alone leaves it green, N4 and N5 isolate them.
+    it('ignores a record with neither a settled weight nor a status before it', () => {
       const adapter = makeAdapter();
       adapter.onSessionStart();
       expect(feed(adapter, RECORD)).toBeNull();
@@ -691,6 +693,20 @@ describe('RenphoMsc04Adapter connect handshake (#434, D038)', () => {
     expect(infoLines.some((l) => l.includes('not exported'))).toBe(true);
   });
 
+  it('does not export them from a full session without a 0x24 either (D057)', async () => {
+    const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const { adapter } = await connectedAdapter();
+    // The end of the #117 capture's second connection, from weight locked on.
+    const r = feed(adapter, [STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expect(r).not.toBeNull();
+    expect(adapter.computeMetrics(r!, PROFILE_187)).toEqual(
+      buildPayload(95.55, 0, {}, PROFILE_187),
+    );
+    const infoLines = info.mock.calls.map((c) => String(c[0]));
+    expect(infoLines.some((l) => l.includes('not exported'))).toBe(true);
+  });
+
   it('keeps the guest rule pinned to the reading when a session without b2 follows', async () => {
     vi.spyOn(bleLog, 'info').mockImplementation(() => {});
     vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
@@ -821,6 +837,29 @@ describe('RenphoMsc04Adapter handshake diagnostics (#434)', () => {
     ]);
   });
 
+  it('summarises a session without a 0x24 whose record was used (D057)', async () => {
+    vi.useFakeTimers();
+    const lines = debugLines();
+    const { adapter } = await connectedAdapter();
+    const at = (ms: number, f: Buffer): void => {
+      vi.advanceTimersByTime(ms);
+      adapter.parseCharNotification(IND, f);
+    };
+    // The end of the #117 capture's second connection, with its spacing.
+    at(50, STATUS_LOCKED);
+    at(9630, STATUS_DONE);
+    at(135, REC_1);
+    at(91, REC_2);
+    at(89, REC_3);
+    adapter.onSessionEnd();
+
+    const summary = lines().find((l) => l.includes('session ended'));
+    expect(summary).toContain('first status 0x09 with 0 stored records');
+    expect(summary).toContain('last status 0x11');
+    expect(summary).toContain('0x24 no');
+    expect(summary).toContain('composition record used');
+  });
+
   it('reports a failed write as failed in the summary', async () => {
     vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
     const lines = debugLines();
@@ -921,6 +960,19 @@ describe('RenphoMsc04Adapter BLE_RMSC04_HANDSHAKE (#434)', () => {
     expect(adapter.computeMetrics(r, PROFILE_187).bodyFatPercent).toBe(23.7);
   });
 
+  it('lets the D022 height gate decide in a time session without a 0x24 (D057)', async () => {
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    vi.stubEnv('BLE_RMSC04_HANDSHAKE', 'time');
+    const { adapter } = await connectedAdapter();
+    // The end of the #117 capture's second connection, from weight locked on.
+    const r = feed(adapter, [STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expect(r).not.toBeNull();
+    expect(adapter.computeMetrics(r!, PROFILE_187).bodyFatPercent).toBe(23.7);
+    const short = defaultProfile({ height: 183 });
+    expect(adapter.computeMetrics(r!, short)).toEqual(buildPayload(95.55, 0, {}, short));
+  });
+
   it('names the mode in the summary', async () => {
     const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
     vi.stubEnv('BLE_RMSC04_HANDSHAKE', 'none');
@@ -929,5 +981,103 @@ describe('RenphoMsc04Adapter BLE_RMSC04_HANDSHAKE (#434)', () => {
     const lines = debug.mock.calls.map((c) => String(c[0]));
     expect(lines).toContain('Renpho R-MSC04: connect writes none');
     expect(lines.find((l) => l.includes('session ended'))).toContain('(writes none; no status;');
+  });
+});
+
+// ─── 0x25 record in a session without a 0x24 (#434, D057) ───────────────────
+
+// A session that connects after the weight locked never gets the 0x24. These
+// replay the end of the #117 capture's second connection from its 0x09 status
+// on, which is what such a session sees; a #434 log shows the same shape
+// (0x09 with 0 stored records, 0x11, the record). Sequences that mix in a frame
+// from another source say so where they do.
+describe('RenphoMsc04Adapter 0x25 record without a settled weight (#434, D057)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  function fresh(): RenphoMsc04Adapter {
+    const adapter = makeAdapter();
+    adapter.onSessionStart();
+    return adapter;
+  }
+
+  const hexFrame = (h: string): Buffer => Buffer.from(h, 'hex');
+
+  it('takes the record as the reading in a session that starts at weight locked', () => {
+    const adapter = fresh();
+    const r = feed(adapter, [STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expect(r).toEqual({ weight: 95.55, impedance: 0 });
+    expect(adapter.isComplete(r!)).toBe(true);
+    expect(adapter.isFinal(r!)).toBe(true);
+  });
+
+  it('takes it in a session that starts at measurement complete', () => {
+    const adapter = fresh();
+    const r = feed(adapter, [STATUS_DONE, ...RECORD]);
+    expect(r).toEqual({ weight: 95.55, impedance: 0 });
+    expect(adapter.isComplete(r!)).toBe(true);
+  });
+
+  it('takes it after a first 0x01 status when no 0x24 arrives in the session', () => {
+    // The shape of a #434 log (0x01, then 0x09, no 0x24); that session itself
+    // had a stored record. Here the capture's frames without its 0x21 and 0x24.
+    const adapter = fresh();
+    const r = feed(adapter, [STATUS_MEASURING, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expect(r).toEqual({ weight: 95.55, impedance: 0 });
+    expect(adapter.isComplete(r!)).toBe(true);
+  });
+
+  it('ignores it unless 0x11 is the status right before it', () => {
+    expect(feed(fresh(), [STATUS_LOCKED, ...RECORD])).toBeNull();
+    // A_STATUS_ENDING is from the capture's first connection.
+    const ending = hexFrame(A_STATUS_ENDING);
+    expect(feed(fresh(), [STATUS_LOCKED, STATUS_DONE, ending, ...RECORD])).toBeNull();
+  });
+
+  it('ignores it when the session started with stored records', () => {
+    // C_STATUS_LOCKED is from vossitch's #434 log ([8] 01), the rest from the capture.
+    const adapter = fresh();
+    expect(feed(adapter, [hexFrame(C_STATUS_LOCKED), STATUS_DONE, ...RECORD])).toBeNull();
+  });
+
+  it('lets a 0x24 still decide: a record that does not match it is ignored after 0x11', () => {
+    // FINAL_8155 is from vossitch's #434 log, the rest from the capture.
+    const adapter = fresh();
+    expect(feed(adapter, [FINAL_8155, STATUS_LOCKED, STATUS_DONE, ...RECORD])).toBeNull();
+  });
+
+  it('does not count the statuses of the previous session', () => {
+    const a = fresh();
+    feed(a, [STATUS_LOCKED, STATUS_DONE]);
+    a.onSessionStart();
+    expect(feed(a, RECORD)).toBeNull();
+
+    // C_STATUS_LOCKED is from vossitch's #434 log, the rest from the capture.
+    const b = fresh();
+    feed(b, [STATUS_LOCKED, STATUS_DONE]);
+    b.onSessionStart();
+    expect(feed(b, [hexFrame(C_STATUS_LOCKED), STATUS_DONE, ...RECORD])).toBeNull();
+  });
+
+  it('takes the record of a clean session after one with stored records', () => {
+    // C_STATUS_LOCKED is from vossitch's #434 log, the rest from the capture.
+    const adapter = fresh();
+    feed(adapter, [hexFrame(C_STATUS_LOCKED)]);
+    adapter.onSessionStart();
+    const r = feed(adapter, [STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expect(r).toEqual({ weight: 95.55, impedance: 0 });
+    expect(adapter.isComplete(r!)).toBe(true);
+    expect(adapter.isFinal(r!)).toBe(true);
+  });
+
+  it('ignores a record whose weight is out of range (derived)', () => {
+    // Derived from REC_1 and REC_3 (#117 capture): weight [7..10] 00002553 -> 00000000,
+    // checksum ea -> 72. No real record has a weight out of range; REC_2 is unchanged.
+    const rec1 = hexFrame('ad040255aa2500240411000000000a00de0c200b');
+    const rec3 = hexFrame('af0400ed011101b7000872');
+    const adapter = fresh();
+    expect(feed(adapter, [STATUS_LOCKED, STATUS_DONE, rec1, REC_2, rec3])).toBeNull();
   });
 });
