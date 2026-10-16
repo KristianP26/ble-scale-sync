@@ -9,7 +9,7 @@ import type {
 import type { MqttProxyConfig } from '../../src/config/schema.js';
 import { adapters as realAdapters } from '../../src/scales/index.js';
 import { applyForcedAdapter } from '../../src/scales/force.js';
-import { bleLog } from '../../src/ble/types.js';
+import { bleLog, POST_READING_RECONNECT_MS } from '../../src/ble/types.js';
 
 // Suppress log output during tests
 vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -3364,6 +3364,160 @@ describe('handler-mqtt-proxy', () => {
         mockClient.publishAsync as ReturnType<typeof vi.fn>
       ).mock.calls.filter((c: unknown[]) => c[0] === `${PREFIX}/subscribe/${GATT_WRITE_UUID}`);
       expect(writeSubscribeCmds).toHaveLength(0);
+    });
+  });
+
+  /**
+   * #466: after a reading the ESP32 resumes scanning and connects to the scale
+   * again by itself while it is still on (firmware auto-connect), and the host
+   * path connects again on the next scan batch. Nobody steps on, the scale
+   * switches off, and that end used to warn after every weigh-in.
+   */
+  describe('session after a reading (#466, D058)', () => {
+    const MAC = 'AA:BB:CC:DD:EE:FF';
+    const NO_WEIGH_IN =
+      /session opened \d+\.\d s after the last reading, while the scale was still on, ended without a new weigh-in/;
+    const settle = () => new Promise((r) => setTimeout(r, 50));
+    const lines = (spy: { mock: { calls: unknown[][] } }) =>
+      spy.mock.calls.map((c) => String(c[0]));
+    const CHARS = [
+      { uuid: GATT_NOTIFY_UUID, properties: ['notify'] },
+      { uuid: GATT_WRITE_UUID, properties: ['write'] },
+    ];
+
+    /** Answer a connect command and, while `notify.on`, every write with a reading. */
+    function wireScale(notify: { on: boolean }): void {
+      const origPublish = mockClient.publishAsync;
+      mockClient.publishAsync = vi.fn(async (topic: string, payload?: string | Buffer) => {
+        if (topic === `${PREFIX}/connect`) {
+          queueMicrotask(() =>
+            mockClient._simulateMessage(`${PREFIX}/connected`, JSON.stringify({ chars: CHARS })),
+          );
+        }
+        if (topic === `${PREFIX}/write/${GATT_WRITE_UUID}` && notify.on) {
+          queueMicrotask(() => {
+            const buf = Buffer.alloc(4);
+            buf.writeUInt16LE(9000, 0); // 90.00 kg
+            buf.writeUInt16LE(520, 2); // impedance 520
+            mockClient._simulateMessage(`${PREFIX}/notify/${GATT_NOTIFY_UUID}`, buf);
+          });
+        }
+        return origPublish(topic, payload);
+      });
+    }
+
+    const autonomousConnect = () =>
+      mockClient._simulateMessage(
+        `${PREFIX}/connected`,
+        JSON.stringify({ autonomous: true, address: MAC, chars: CHARS }),
+      );
+
+    const scanBatch = () =>
+      mockClient._simulateMessage(
+        `${PREFIX}/scan/results`,
+        JSON.stringify([{ address: MAC, name: 'GattScale', rssi: -50, services: [] }]),
+      );
+
+    const unlockWrites = () =>
+      (mockClient.publishAsync as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c: unknown[]) => c[0] === `${PREFIX}/write/${GATT_WRITE_UUID}`,
+      ).length;
+
+    it('logs the autonomous reconnect to a scale still on at info, not as a failure', async () => {
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+      const watcher = new ReadingWatcher(
+        MQTT_PROXY_CONFIG,
+        [createGattAdapter()],
+        undefined,
+        PROFILE,
+      );
+      await watcher.start();
+      const notify = { on: true };
+      wireScale(notify);
+
+      autonomousConnect();
+      expect((await watcher.nextReading()).reading.weight).toBe(90);
+      await settle();
+      const writesAfterReading = unlockWrites();
+
+      notify.on = false;
+      autonomousConnect();
+      await settle();
+      // The second session really ran: it wrote its unlock again.
+      expect(unlockWrites()).toBeGreaterThan(writesAfterReading);
+      mockClient._simulateMessage(`${PREFIX}/disconnected`, '');
+      await settle();
+
+      expect(lines(warn).filter((l) => l.includes('Autonomous GATT reading failed'))).toEqual([]);
+      const told = lines(info).filter((l) => NO_WEIGH_IN.test(l));
+      expect(told).toHaveLength(1);
+      expect(told[0]).toContain(`Autonomous GATT reading for ${MAC}: session opened`);
+      expect(told[0]).toContain('(Scale disconnected before reading completed)');
+      await watcher.stop();
+    });
+
+    it('logs the host-initiated reconnect to a scale still on at info, not as a failure', async () => {
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+      const config = { ...MQTT_PROXY_CONFIG, auto_connect: false };
+      const watcher = new ReadingWatcher(config, [createGattAdapter()], undefined, PROFILE);
+      await watcher.start();
+      const notify = { on: true };
+      wireScale(notify);
+
+      scanBatch();
+      expect((await watcher.nextReading()).reading.weight).toBe(90);
+      await settle();
+
+      notify.on = false;
+      scanBatch();
+      await settle();
+      mockClient._simulateMessage(`${PREFIX}/disconnected`, '');
+      await settle();
+
+      expect(lines(warn).filter((l) => l.includes('GATT reading failed for'))).toEqual([]);
+      const told = lines(info).filter((l) => NO_WEIGH_IN.test(l));
+      expect(told).toHaveLength(1);
+      expect(told[0]).toContain(`GATT reading for ${MAC}: session opened`);
+      await watcher.stop();
+    });
+
+    it('still warns, with the same text, for a session opened after the window', async () => {
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+      const t0 = new Date('2026-10-16T08:00:00Z').getTime();
+      vi.setSystemTime(t0);
+      const watcher = new ReadingWatcher(
+        MQTT_PROXY_CONFIG,
+        [createGattAdapter()],
+        undefined,
+        PROFILE,
+      );
+      try {
+        await watcher.start();
+        const notify = { on: true };
+        wireScale(notify);
+
+        autonomousConnect();
+        await watcher.nextReading();
+        await settle();
+
+        vi.setSystemTime(t0 + POST_READING_RECONNECT_MS + 1);
+        notify.on = false;
+        autonomousConnect();
+        await settle();
+        mockClient._simulateMessage(`${PREFIX}/disconnected`, '');
+        await settle();
+
+        expect(lines(warn)).toContain(
+          `Autonomous GATT reading failed for ${MAC}: Scale disconnected before reading completed`,
+        );
+        expect(lines(info).filter((l) => NO_WEIGH_IN.test(l))).toEqual([]);
+        await watcher.stop();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

@@ -97,9 +97,27 @@ export const POLL_CYCLE_TIMEOUT_MS = 900_000;
  * BlueZ-specific: only the `node-ble` handler hits the dying-peer GATT stall.
  * Proxy handlers (mqtt-proxy, esphome-proxy) and the noble-based stacks talk
  * to a different transport and do not need this floor; the orchestrator gates
- * application based on the resolved handler. See #143.
+ * application based on the resolved handler. See #143. The proxy watchers keep
+ * no distance at all; how their session after a reading is logged is
+ * POST_READING_RECONNECT_MS.
  */
 export const POST_DISCONNECT_GRACE_MS = 25_000;
+
+/**
+ * How long after a GATT reading a proxy watcher's next session to the same
+ * scale counts as the scale still being on after that weigh-in (#466).
+ *
+ * The proxy watchers keep no distance from a scale after a reading, on
+ * purpose: a second person stepping on before it switches off is read in that
+ * session, and on mqtt-proxy the ESP32 reconnects by itself anyway. Such a
+ * session ending without a reading is expected, not a failure. Measured from
+ * the reading to the moment the next session opens. 60 s covers the usual
+ * first reconnect: under a second on ESPHome, a few seconds on an ESP32-S3,
+ * about 10 to 13 s on a classic ESP32. A classic board that also waits out a
+ * Wi-Fi recovery and connect retries can take longer, and that session warns
+ * as before.
+ */
+export const POST_READING_RECONNECT_MS = 60_000;
 
 /** Threshold below which a cached RSSI is considered stale (BlueZ uses 127 as "unavailable" sentinel). */
 export const RSSI_UNAVAILABLE = 127;

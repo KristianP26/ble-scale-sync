@@ -11,13 +11,21 @@ import {
   evaluateAdvertisement,
   GraceTimers,
   DedupWindow,
+  PostReadingWindow,
   logAdvert,
   safeName,
   emitDeduped,
 } from '../advertisement.js';
 import { currentProfile } from '../reading-source.js';
 import type { ProfileSource, Watcher, WatcherConfig } from '../reading-source.js';
-import { bleLog, errMsg, IMPEDANCE_GRACE_MS, withTimeout, withIdleTimeout } from '../types.js';
+import {
+  bleLog,
+  errMsg,
+  IMPEDANCE_GRACE_MS,
+  POST_READING_RECONNECT_MS,
+  withTimeout,
+  withIdleTimeout,
+} from '../types.js';
 import { AsyncQueue } from '../async-queue.js';
 import { EsphomeProxyPool } from './pool.js';
 import { ManufacturerDataCache } from './advert.js';
@@ -45,7 +53,8 @@ const GATT_WARN_LRU_MAX = 256;
  * pool. Broadcast scales parse from advertisements; GATT scales are connected
  * on demand through the proxy that last saw them and read via the shared
  * waitForRawReading() seam, then disconnected immediately so no proxy slot is
- * held between weigh-ins.
+ * held between weigh-ins. A scale still on after its reading is connected again
+ * on its next advertisement; see PostReadingWindow.
  */
 export class ReadingWatcher implements Watcher {
   private queue = new AsyncQueue<RawReading>();
@@ -58,6 +67,8 @@ export class ReadingWatcher implements Watcher {
   private weightUnit?: WeightUnit;
   private config: EsphomeProxyConfig;
   private readonly dedup = new DedupWindow(DEDUP_WINDOW_MS);
+  /** When each scale last gave a reading, to tell its still-on reconnect from a failure (#466). */
+  private readonly postReading = new PostReadingWindow(POST_READING_RECONNECT_MS);
   private pool: EsphomeProxyPool | null = null;
   private unsub: (() => void) | null = null;
   private gattInFlight = new Set<string>();
@@ -106,7 +117,8 @@ export class ReadingWatcher implements Watcher {
   }
   // LRU map (insertion-ordered): scales whose on-demand GATT read failed since
   // their last success, so we warn once instead of on every advertisement and
-  // log the repeats at debug.
+  // log the repeats at debug. A session that ends inside the post-reading
+  // window (PostReadingWindow) neither fills nor clears it.
   private gattWarnedFor = new Map<string, true>();
   /** Weight-only fallback timer per address; on elapse the held reading is
    *  queued directly (no dedup — matches the prior grace-timer body). */
@@ -234,6 +246,9 @@ export class ReadingWatcher implements Watcher {
     if (!this.pool) return;
     const pool = this.pool;
     this.gattInFlight.add(addrLc);
+    // Asked now, not in the catch: the session can run for 90 s, and what
+    // matters is whether it opened as the reconnect to a scale still on (#466).
+    const sinceReading = this.postReading.sinceReading(addrLc);
     bleLog.info(`Matched: ${adapter.name} (${address}); opening GATT via ESPHome proxy`);
     const manufacturerData = this.mfgCache.forSession(info, addrLc);
     void (async () => {
@@ -296,11 +311,25 @@ export class ReadingWatcher implements Watcher {
             `GATT session cap exceeded for ${address}`,
           ),
         );
-        // A read that works again makes the next failure news, so it warns.
+        // A read that works again makes the next failure outside the
+        // post-reading window news, so it warns.
         this.gattWarnedFor.delete(address);
+        this.postReading.noteReading(addrLc);
         this.pushDeduped(address, raw, raw.reading.weight);
       } catch (e) {
-        this.warnGattFailure(gattAdapter.name, address, errMsg(e));
+        if (sinceReading !== undefined) {
+          // Opened while the scale was still on after its last reading, and nobody
+          // stepped on again (#466). Not a failure, so gattWarnedFor stays as it
+          // is: the next real one must still warn.
+          this.postReading.reportNoWeighIn(
+            addrLc,
+            `${gattAdapter.name} at ${address}`,
+            sinceReading,
+            errMsg(e),
+          );
+        } else {
+          this.warnGattFailure(gattAdapter.name, address, errMsg(e));
+        }
       } finally {
         // Before close(), so the wait is finished with the session before
         // the session goes away. See fireDisconnect's own doc for why the order

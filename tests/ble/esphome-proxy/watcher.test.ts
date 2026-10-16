@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { BleChar } from '../../../src/ble/shared.js';
-import { normalizeUuid } from '../../../src/ble/types.js';
+import { normalizeUuid, POST_READING_RECONNECT_MS } from '../../../src/ble/types.js';
 import type {
   ScaleAdapter,
   ScaleReading,
@@ -19,6 +19,11 @@ let hangSession = false;
 // When set, connectGatt rejects with this reason (a full proxy slot, a peer
 // that refuses the link).
 let failConnectWith: string | null = null;
+// When set, connectGatt hands back a session that never notifies but whose
+// device does report a disconnect, when the test calls endSilentSession: a
+// scale still on after its reading that nobody steps on, until it switches off.
+let silentSession = false;
+let endSilentSession: (() => void) | null = null;
 
 vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
   class FakeEsphomeProxyPool {
@@ -38,6 +43,34 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
     async connectGatt(mac: string) {
       connectGattSpy(mac);
       if (failConnectWith !== null) throw new Error(failConnectWith);
+      if (silentSession) {
+        const quiet: BleChar = {
+          async read() {
+            return Buffer.alloc(0);
+          },
+          async write() {},
+          async subscribe() {
+            return () => {};
+          },
+        };
+        const disconnectCbs: Array<() => void> = [];
+        endSilentSession = () => {
+          for (const cb of disconnectCbs.splice(0)) cb();
+        };
+        return {
+          charMap: new Map<string, BleChar>([
+            [NOTIFY, quiet],
+            [WRITE, quiet],
+          ]),
+          device: {
+            onDisconnect: (cb: () => void) => {
+              disconnectCbs.push(cb);
+            },
+            fireDisconnect: () => {},
+          },
+          close: closeSpy,
+        };
+      }
       if (hangSession) {
         const silent: BleChar = {
           async read() {
@@ -233,6 +266,8 @@ describe('ReadingWatcher GATT failure logging (B-13)', () => {
     // transient failure left only "opening GATT via ESPHome proxy" in the log.
     const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
     const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const t0 = new Date('2026-10-16T08:00:00Z').getTime();
+    vi.setSystemTime(t0);
     const watcher = new ReadingWatcher(config, [gattAdapter()]);
     await watcher.start();
     const pool = (
@@ -257,11 +292,13 @@ describe('ReadingWatcher GATT failure logging (B-13)', () => {
       expect(logged(warn)).not.toContain('second-reason');
       expect(logged(debug)).toContain('second-reason');
 
-      // A success clears the record, so the next failure is news again.
+      // A success clears the record, so the next failure outside the
+      // post-reading window is news again.
       failConnectWith = null;
       pool.emitAdvert(info, mac);
       await watcher.nextReading();
       await settle();
+      vi.setSystemTime(t0 + POST_READING_RECONNECT_MS + 1);
       failConnectWith = 'third-reason';
       pool.emitAdvert(info, mac);
       await settle();
@@ -270,6 +307,194 @@ describe('ReadingWatcher GATT failure logging (B-13)', () => {
       failConnectWith = null;
       warn.mockRestore();
       debug.mockRestore();
+      vi.useRealTimers();
+      await watcher.stop();
+    }
+  });
+});
+
+/**
+ * #466: after a reading the scale stays on and keeps advertising, so the next
+ * advertisement opens a new session (on purpose: a second person stepping on
+ * is read in it). Nobody does, the scale switches off, and that end used to be
+ * a WARN "GATT read over the ESPHome proxy failed" after every weigh-in.
+ */
+describe('ReadingWatcher session after a reading (#466, D058)', () => {
+  type Pool = { emitAdvert: (info: BleDeviceInfo, mac: string) => void };
+  const poolOf = (w: unknown): Pool => (w as { pool: Pool }).pool;
+  const ADVERT: BleDeviceInfo = { localName: 'GATT-scale', serviceUuids: [] };
+  const NO_WEIGH_IN =
+    /session opened \d+\.\d s after the last reading, while the scale was still on, ended without a new weigh-in/;
+  const FAILED = 'GATT read over the ESPHome proxy failed';
+  const settle = () => new Promise((r) => setTimeout(r, 50));
+  const lines = (spy: { mock: { calls: unknown[][] } }) => spy.mock.calls.map((c) => String(c[0]));
+
+  function spies() {
+    return {
+      warn: vi.spyOn(bleLog, 'warn').mockImplementation(() => {}),
+      info: vi.spyOn(bleLog, 'info').mockImplementation(() => {}),
+      debug: vi.spyOn(bleLog, 'debug').mockImplementation(() => {}),
+    };
+  }
+
+  function reset(): void {
+    failConnectWith = null;
+    silentSession = false;
+    hangSession = false;
+    endSilentSession = null;
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  }
+
+  it('logs the silent session after a reading at info, not as a failure', async () => {
+    connectGattSpy.mockClear();
+    const log = spies();
+    const mac = 'AA:BB:CC:DD:EE:40';
+    const watcher = new ReadingWatcher(config, [gattAdapter()]);
+    try {
+      await watcher.start();
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      expect((await watcher.nextReading()).reading.weight).toBe(82);
+      await settle();
+
+      silentSession = true;
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await settle();
+      expect(endSilentSession).not.toBeNull();
+      endSilentSession!();
+      await settle();
+
+      // The reconnect itself stays: no hold-off after a reading.
+      expect(connectGattSpy).toHaveBeenCalledTimes(2);
+      expect(lines(log.warn).filter((l) => l.includes(FAILED))).toEqual([]);
+      const told = lines(log.info).filter((l) => NO_WEIGH_IN.test(l));
+      expect(told).toHaveLength(1);
+      expect(told[0]).toContain(`GattMock at ${mac}: session opened`);
+      expect(told[0]).toContain('(Scale disconnected before reading completed)');
+    } finally {
+      reset();
+      await watcher.stop();
+    }
+  });
+
+  it('still warns for a session opened after the window', async () => {
+    const log = spies();
+    const mac = 'AA:BB:CC:DD:EE:41';
+    const t0 = new Date('2026-10-16T08:00:00Z').getTime();
+    vi.setSystemTime(t0);
+    const watcher = new ReadingWatcher(config, [gattAdapter()]);
+    try {
+      await watcher.start();
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await watcher.nextReading();
+      await settle();
+
+      vi.setSystemTime(t0 + POST_READING_RECONNECT_MS + 1);
+      silentSession = true;
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await settle();
+      endSilentSession!();
+      await settle();
+
+      const failed = lines(log.warn).filter((l) => l.includes(FAILED));
+      expect(failed).toHaveLength(1);
+      expect(failed[0]).toContain('(Scale disconnected before reading completed)');
+      expect(lines(log.info).filter((l) => NO_WEIGH_IN.test(l))).toEqual([]);
+    } finally {
+      reset();
+      await watcher.stop();
+    }
+  });
+
+  it('leaves the failure tracker alone, so a real failure after the window warns', async () => {
+    const log = spies();
+    const mac = 'AA:BB:CC:DD:EE:42';
+    const t0 = new Date('2026-10-16T08:00:00Z').getTime();
+    vi.setSystemTime(t0);
+    const watcher = new ReadingWatcher(config, [gattAdapter()]);
+    try {
+      await watcher.start();
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await watcher.nextReading();
+      await settle();
+
+      failConnectWith = 'quiet-reason';
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await settle();
+      expect(
+        lines(log.info)
+          .filter((l) => NO_WEIGH_IN.test(l))
+          .join(' | '),
+      ).toContain('quiet-reason');
+      expect(lines(log.warn)).toEqual([]);
+
+      vi.setSystemTime(t0 + 61_000);
+      failConnectWith = 'later-reason';
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await settle();
+      expect(lines(log.warn).join(' | ')).toContain('later-reason');
+    } finally {
+      reset();
+      await watcher.stop();
+    }
+  });
+
+  it('tells once per reading and logs the repeats at debug', async () => {
+    const log = spies();
+    const mac = 'AA:BB:CC:DD:EE:43';
+    const watcher = new ReadingWatcher(config, [gattAdapter()]);
+    try {
+      await watcher.start();
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await watcher.nextReading();
+      await settle();
+
+      failConnectWith = 'slot-busy';
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await settle();
+      failConnectWith = 'scale-gone';
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await settle();
+
+      const told = lines(log.info).filter((l) => NO_WEIGH_IN.test(l));
+      expect(told).toHaveLength(1);
+      expect(told[0]).toContain('(slot-busy)');
+      expect(
+        lines(log.debug)
+          .filter((l) => NO_WEIGH_IN.test(l))
+          .join(' | '),
+      ).toContain('scale-gone');
+      expect(lines(log.warn)).toEqual([]);
+    } finally {
+      reset();
+      await watcher.stop();
+    }
+  });
+
+  it('decides by when the session opened, not by when it ended', async () => {
+    // Opened 1 s after the reading, ended by the 60 s idle timeout 61 s after
+    // it: past the window by then, and still the reconnect to a scale still on.
+    const log = spies();
+    const mac = 'AA:BB:CC:DD:EE:44';
+    vi.useFakeTimers();
+    const watcher = new ReadingWatcher(config, [gattAdapter()]);
+    try {
+      await watcher.start();
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await vi.advanceTimersByTimeAsync(0);
+      await watcher.nextReading();
+
+      await vi.advanceTimersByTimeAsync(1000);
+      hangSession = true;
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await vi.advanceTimersByTimeAsync(65_000);
+
+      expect(lines(log.warn).filter((l) => l.includes(FAILED))).toEqual([]);
+      const told = lines(log.info).filter((l) => NO_WEIGH_IN.test(l));
+      expect(told).toHaveLength(1);
+      expect(told[0]).toContain(`(GATT reading timeout for ${mac})`);
+    } finally {
+      reset();
       await watcher.stop();
     }
   });

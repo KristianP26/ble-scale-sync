@@ -166,8 +166,12 @@ Both broadcast and GATT scales work over the ESPHome proxy. On connect the
 handler logs a one-time capability summary naming each configured adapter and
 whether it is serviced by broadcast or by an on-demand GATT connection. A GATT
 scale is connected only when it advertises (it wakes when you step on it), read
-via the proxy, then disconnected so no proxy connection slot is held between
-weigh-ins.
+via the proxy, then disconnected. A scale that is still on after the reading
+keeps advertising, so it is connected once more until it switches off, and a
+second person stepping on in that time is read too. If nobody does, the log
+says so at info level (`... session opened 0.7 s after the last reading, while
+the scale was still on, ended without a new weigh-in (...)`); that is not an
+error. No proxy connection slot is held once the scale is off.
 
 If a GATT scale still does not produce readings:
 

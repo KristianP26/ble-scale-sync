@@ -12,6 +12,7 @@ import {
   evaluateAdvertisement,
   GraceTimers,
   DedupWindow,
+  PostReadingWindow,
   logAdvert,
   safeName,
   emitDeduped,
@@ -26,6 +27,7 @@ import {
   errMsg,
   normalizeUuid,
   IMPEDANCE_GRACE_MS,
+  POST_READING_RECONNECT_MS,
 } from '../types.js';
 import { AsyncQueue } from '../async-queue.js';
 import { topics } from './topics.js';
@@ -70,7 +72,9 @@ type LifecycleHandler =
 /**
  * Persistent event-driven scan watcher for continuous mode.
  * Subscribes once and keeps the message handler attached permanently,
- * queuing matched readings so none are missed during processing or cooldown.
+ * queuing matched readings so none are missed while the previous one is
+ * processed. There is no cooldown after a reading: the ESP32 reconnects to a
+ * scale still on by itself, see PostReadingWindow (#466).
  */
 export class ReadingWatcher implements Watcher {
   private queue = new AsyncQueue<RawReading>();
@@ -93,6 +97,8 @@ export class ReadingWatcher implements Watcher {
   private currentDevice: MqttBleDevice | null = null;
   private gattStartedAt = 0;
   private readonly dedup = new DedupWindow(DEDUP_WINDOW_MS);
+  /** When each scale last gave a reading, to tell its still-on reconnect from a failure (#466). */
+  private readonly postReading = new PostReadingWindow(POST_READING_RECONNECT_MS);
   /**
    * Last scan result seen per address, keyed lowercase.
    *
@@ -258,9 +264,10 @@ export class ReadingWatcher implements Watcher {
             bleLog.info(
               `Received autonomous connect from ESP32 for ${data.address} (${data.chars?.length ?? 0} chars)`,
             );
-            this.handleAutonomousConnect(data).catch((err) => {
-              bleLog.warn(`Autonomous GATT reading failed for ${data.address}: ${errMsg(err)}`);
-            });
+            const sinceReading = this.postReading.sinceReading(data.address);
+            this.handleAutonomousConnect(data).catch((err) =>
+              this.reportGattFailure('Autonomous GATT reading', data.address, err, sinceReading),
+            );
           }
         } catch {
           bleLog.debug('Connected payload was not JSON, ignoring');
@@ -363,9 +370,10 @@ export class ReadingWatcher implements Watcher {
             // fall through to the host-initiated GATT path below
           }
 
-          this.handleGattReading(entry, adapter).catch((err) => {
-            bleLog.warn(`GATT reading failed for ${entry.address}: ${errMsg(err)}`);
-          });
+          const sinceReading = this.postReading.sinceReading(entry.address);
+          this.handleGattReading(entry, adapter).catch((err) =>
+            this.reportGattFailure('GATT reading', entry.address, err, sinceReading),
+          );
         }
         // No match this scan, keep listening
       } catch (err) {
@@ -663,6 +671,7 @@ export class ReadingWatcher implements Watcher {
         ),
       );
       registerScaleMac(this.config, entry.address, gattAdapter).catch(() => {});
+      this.postReading.noteReading(entry.address);
       this.queue.push(raw);
       this.deferCounts.delete(entry.address);
     } finally {
@@ -683,6 +692,30 @@ export class ReadingWatcher implements Watcher {
         if (client) await mqttGattDisconnect(client, t).catch(() => {});
       }
     }
+  }
+
+  /**
+   * Log a GATT session that ended without a reading. A session opened inside
+   * the post-reading window is the scale still on after its weigh-in, not a
+   * failure; the WARN text is otherwise unchanged.
+   */
+  private reportGattFailure(
+    kind: string,
+    address: string,
+    err: unknown,
+    sinceReading: number | undefined,
+  ): void {
+    if (sinceReading !== undefined) {
+      // The ESP32 reconnected to a scale still on after its reading (#466).
+      this.postReading.reportNoWeighIn(
+        address,
+        `${kind} for ${address}`,
+        sinceReading,
+        errMsg(err),
+      );
+      return;
+    }
+    bleLog.warn(`${kind} failed for ${address}: ${errMsg(err)}`);
   }
 
   /**
@@ -821,6 +854,7 @@ export class ReadingWatcher implements Watcher {
         ),
       );
       registerScaleMac(this.config, data.address, adapter).catch(() => {});
+      this.postReading.noteReading(data.address);
       bleLog.info(
         `Autonomous GATT reading complete: ${raw.reading.weight} kg from ${data.address}`,
       );
