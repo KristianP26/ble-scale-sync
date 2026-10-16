@@ -4,7 +4,7 @@ description: Every BLE smart scale brand and model supported by BLE Scale Sync.
 head:
   - - meta
     - name: keywords
-      content: koogeek scale, xiaomi mi scale, renpho scale bluetooth, eufy smart scale, yunmai scale, beurer bf scale, sanitas scale, medisana bs scale, silvercrest scale, 1byone scale, etekcity scale, inevifit scale, arboleaf scale, lepulse scale, fitdays scale, senssun scale, grifema scale, okok scale, chipsea scale, etekcity fit 8s, eufy c20, eufy p3, picooc scale, picooc mini lite, a&d scale, uc-352ble, supported ble scales
+      content: koogeek scale, xiaomi mi scale, renpho scale bluetooth, eufy smart scale, yunmai scale, beurer bf scale, sanitas scale, medisana bs scale, silvercrest scale, 1byone scale, etekcity scale, inevifit scale, arboleaf scale, lepulse scale, fitdays scale, senssun scale, grifema scale, okok scale, chipsea scale, etekcity fit 8s, eufy c20, eufy p3, picooc scale, picooc mini lite, a&d scale, uc-352ble, runstar scale, starfit scale, supported ble scales
 ---
 
 # Supported Scales
@@ -43,7 +43,7 @@ _Weight only_ means weight is reported normally but body composition is estimate
 | **A&D** UC-352BLE                                                              | Weight only      | Not confirmed on hardware yet; Linux (BlueZ) only, needs `ble.scale_mac` and a one-time pairing, see below                                    |
 | **Soehnle** Shape200 / Shape100 / Shape50 / Style100                           | Yes              | Needs user slot 1 in the vendor app                                                                                                           |
 | **Medisana** BS430 / BS440 / BS444                                             | Yes              |                                                                                                                                               |
-| **Active Era** BS-06 and other `AC 27` scales                                  | Yes              | Picked automatically when the scale advertises manufacturer id `0x27AC`; wake it before stepping on, see below                                |
+| **Active Era** BS-06 and other `AC 27` scales                                  | Yes              | Picked automatically when the scale advertises manufacturer id `0x27AC`; wake it before stepping on, see below. Confirmed on Runstar FG2431WB |
 | **Senssun** Fat                                                                | Yes              | Model A only                                                                                                                                  |
 | **MGB** (Swan / Icomon / YG)                                                   | Yes              |                                                                                                                                               |
 | **Hutbit** 218008 / WL292                                                      | Yes              | Also sold under stock `SWAN` branding                                                                                                         |
@@ -207,7 +207,7 @@ Several brands sold with the FitDays, Starfit or Femmto apps use the protocol of
 - **When the reading is sent.** After the scale locks the weight, the connection stays open for the impedance; some units first measure your balance and send it up to about 18 seconds later. A unit that never locks its weight is read once the weight has held still for a second, and the weight is sent 8 seconds later if no impedance follows.
 - **Body composition.** Units that name the vendor's algorithm 7 or 0x24 in their result get the vendor's own formula, ported from openScale; on the two units it was checked against it matches the display or the app (body fat, water, bone). Other units, and weigh-ins without impedance, get the BMI estimate (Deurenberg formula). Heart rate and the balance measurement are logged only.
 
-The handshake and the automatic detection rest on vendor-app captures of one model (shared in openScale PR #1534) and on frames posted in [#458](https://github.com/KristianP26/ble-scale-sync/issues/458), [#462](https://github.com/KristianP26/ble-scale-sync/issues/462) and [#466](https://github.com/KristianP26/ble-scale-sync/issues/466); they are not yet confirmed with ble-scale-sync on hardware.
+The handshake and the automatic detection rest on vendor-app captures of one model (shared in openScale PR #1534) and on frames posted in [#458](https://github.com/KristianP26/ble-scale-sync/issues/458), [#462](https://github.com/KristianP26/ble-scale-sync/issues/462) and [#466](https://github.com/KristianP26/ble-scale-sync/issues/466). Confirmed with ble-scale-sync 1.33.0 on a Runstar FG2431WB (Starfit app) in [#466](https://github.com/KristianP26/ble-scale-sync/issues/466): the scale locks its weight once the profile is written, sends the impedance and the reading is exported. The other models are not confirmed yet.
 
 ### **Renpho ES-CS20M / Elis 1** (some hardware variants)
 
