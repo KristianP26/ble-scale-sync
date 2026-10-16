@@ -212,6 +212,8 @@ No scale found, retrying in 20s... (le-connection-abort-by-local)
 Scale connected but sent no reading, retrying in 60s... (Timed out waiting for a complete scale reading)
 ```
 
+This is about the built-in Bluetooth handlers (`ble.handler` `auto`, `node-ble` or `noble`; `ble_transport: local` in the add-on). On `mqtt-proxy`, `esphome-proxy` and `ha-bluetooth` none of these waits apply: the app does not scan in cycles, it listens all the time.
+
 ## Debug Mode
 
 Set `debug: true` in `config.yaml` or use the environment variable to see detailed BLE logs:

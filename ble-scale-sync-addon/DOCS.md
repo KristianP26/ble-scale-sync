@@ -41,6 +41,7 @@ With any transport but `local`:
 - The options that only steer this host's adapter (**Bluetooth adapter**, **Re-pair a scale that forgot its pairing**, **Power-cycle the adapter after every weigh-in**, **Pair with a host identity key**) are ignored, and the log names any you have set. The adapter reset on startup is skipped as well.
 - **Scale MAC address** still applies, and is worth setting.
 - **Proxy silence before restart** (`proxy_liveness_timeout_min`) applies.
+- **Scan cooldown** and **Rescan delay when no scale was found** are not used: the add-on listens all the time.
 
 A transport that cannot run with the options you gave stops the add-on with an `ERROR` line that names the option to fix (see [Troubleshooting](#add-on-stops-with-an-error-about-ble_transport)). It never falls back to this host's adapter: you chose not to use it, and with `ha-bluetooth` it is the adapter Home Assistant itself reads from.
 
