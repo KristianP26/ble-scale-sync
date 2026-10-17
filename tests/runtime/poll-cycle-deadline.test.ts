@@ -37,7 +37,7 @@ function makeCtx(): Ctx {
 }
 
 function makeSource() {
-  return new PollReadingSource(makeCtx(), []);
+  return new PollReadingSource(makeCtx(), [], () => null);
 }
 
 describe('poll cycle deadline (#290)', () => {

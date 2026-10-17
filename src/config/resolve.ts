@@ -1,4 +1,4 @@
-import type { UserProfile } from '../interfaces/scale-adapter.js';
+import type { UserProfile, SessionProfileSelection } from '../interfaces/scale-adapter.js';
 import type { BleHandlerName } from '../ble/types.js';
 import type {
   AppConfig,
@@ -11,6 +11,8 @@ import type {
   EsphomeProxyConfig,
   HaBluetoothConfig,
 } from './schema.js';
+
+import { isOutOfRange, matchUserByWeight } from './user-matching.js';
 
 // --- Scale display unit ---
 
@@ -84,6 +86,27 @@ export function resolveUserProfile(user: UserConfig, scaleConfig: ScaleConfig): 
     isAthlete: user.is_athlete,
     birthDate: user.birth_date,
     lastKnownWeight: resolveWeightAnchor(user),
+  };
+}
+
+/**
+ * Select the profile authorized for one measured weight.
+ *
+ * Matching remains centralized in matchUserByWeight; ambiguous range matches
+ * cannot authorize a session, even when ordinary matching resolves a tiebreak.
+ * Apply the out_of_range policy before resolving demographics.
+ */
+export function resolveSessionProfile(
+  config: AppConfig,
+  weightKg: number,
+): SessionProfileSelection | null {
+  const match = matchUserByWeight(config.users, weightKg, config.unknown_user);
+  if (!match.user || match.tier === 'tiebreak') return null;
+  if (config.out_of_range === 'skip' && isOutOfRange(match.user, weightKg)) return null;
+
+  return {
+    userSlug: match.user.slug,
+    profile: resolveUserProfile(match.user, config.scale),
   };
 }
 

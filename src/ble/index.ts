@@ -1,4 +1,9 @@
-import type { ScaleAdapter, BodyComposition, ScaleAuth } from '../interfaces/scale-adapter.js';
+import type {
+  ScaleAdapter,
+  BodyComposition,
+  ScaleAuth,
+  SessionProfileSelector,
+} from '../interfaces/scale-adapter.js';
 import type {
   MqttProxyConfig,
   EsphomeProxyConfig,
@@ -148,6 +153,7 @@ export interface ReadingSourceOptions {
   profile: ProfileSource;
   scaleAuth?: ScaleAuth;
   weightUnit?: WeightUnit;
+  selectProfile?: SessionProfileSelector;
 }
 
 /**
@@ -179,6 +185,7 @@ export async function createReadingSource(opts: ReadingSourceOptions): Promise<R
       opts.profile,
       opts.scaleAuth,
       opts.weightUnit,
+      opts.selectProfile,
     );
     return { kind: 'watcher', watcher, failureLogPrefix: 'Error processing reading' };
   }
@@ -193,6 +200,7 @@ export async function createReadingSource(opts: ReadingSourceOptions): Promise<R
       opts.profile,
       opts.scaleAuth,
       opts.weightUnit,
+      opts.selectProfile,
     );
     return { kind: 'watcher', watcher, failureLogPrefix: 'Error processing ESPHome reading' };
   }
@@ -204,6 +212,7 @@ export async function createReadingSource(opts: ReadingSourceOptions): Promise<R
       opts.adapters,
       opts.targetMac,
       opts.profile,
+      opts.selectProfile,
     );
     return {
       kind: 'watcher',

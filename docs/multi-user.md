@@ -56,6 +56,14 @@ Note what tiers 1 and 4 mean in practice: a reading outside every configured ran
 
 Some scales also send weigh-ins stored in their memory while the app was not running. Each stored weigh-in is assigned by its own weight (or by the scale's user slot, when the scale sends one), not to whoever is standing on the scale right now. A stored weigh-in that matches nobody, or more than one user equally, is dropped and logged.
 
+### Senssun IF_B2
+
+Users only need to step on a Senssun IF_B2. BLE Scale Sync waits until one uniquely matched live weight remains unchanged for two seconds, updates reusable scale profile PIN `0001`, and confirms the same user from the final current record before exporting. The scale retains the most recently acknowledged user's demographics in that profile. Use non-overlapping `weight_range` values so a quiet reading identifies one user unambiguously, and set `out_of_range: skip` to discard readings outside every configured range. If an intermediate plateau selects a different user, final correlation fails the measurement rather than routing it to the wrong account.
+
+The user must still match unambiguously when the two-second window ends. If a configuration reload removes that authorization, no profile is written. Updated demographics for the same authorized user are applied before the write.
+
+If you remove a selected user while a completed live reading is queued, that reading is skipped rather than reassigned. This also applies when only one configured user remains. Historical records do not authorize a live session selection.
+
 ## Drift Detection
 
 After matching, the app checks if the weight falls in the **outer 10%** of the user's range. If it does, a warning is logged so you can adjust the range before mismatches start happening.

@@ -275,6 +275,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
                 onActivity,
                 info.localName,
                 info.manufacturerData,
+                opts.selectProfile,
               ),
             idleMs,
             'Timed out waiting for a complete scale reading',

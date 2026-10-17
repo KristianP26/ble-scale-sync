@@ -65,6 +65,7 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
       onLiveData,
       onLiveWeight,
       abortSignal,
+      selectProfile,
     } = opts;
     const { readingTimeoutMs } = opts;
 
@@ -226,6 +227,7 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
                 onActivity,
                 peripheral.advertisement?.localName,
                 parseMfgData(peripheral.advertisement?.manufacturerData),
+                selectProfile,
               ),
             readingTimeoutMs ?? RAW_READING_TIMEOUT_MS,
             'Timed out waiting for a complete scale reading',

@@ -16,7 +16,11 @@ import { runHealthchecks } from './orchestrator.js';
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { version: string };
 import { loadAppConfig } from './config/load.js';
-import { resolveDisplayUnit, resolveRuntimeConfig } from './config/resolve.js';
+import {
+  resolveDisplayUnit,
+  resolveRuntimeConfig,
+  resolveSessionProfile,
+} from './config/resolve.js';
 import { startConfigWatcher, type ConfigWatcherHandle } from './config/watch.js';
 import { configureUpdateState } from './update-state.js';
 import { flushQueue, logQueueAtStartup } from './runtime/export-queue.js';
@@ -420,7 +424,9 @@ async function main(): Promise<void> {
 
   if (!initialResolved.continuousMode) {
     const success = await runSingleShot({
-      source: new PollReadingSource(ctx, adapters),
+      source: new PollReadingSource(ctx, adapters, (weightKg) =>
+        resolveSessionProfile(ctx.config, weightKg),
+      ),
       signal: ctx.signal,
       processReading: runProcessReading,
       flush: flushQueuedExports,
