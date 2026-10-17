@@ -36,6 +36,8 @@ import { uuid16 } from '../body-comp-helpers.js';
  *                        nor on the 18- and 19-byte ones with ble.qn_user_key)
  *   0x21 (config req)  -> A00D profile frame + 0x22 start measurement
  *   0x10 (weight)      -> parse weight + 0x1F acknowledge stable reading
+ *                        (19-byte dialect: nothing; with ble.qn_result_ack a
+ *                        0x1F after the result block's 0x16 instead)
  *
  * 0x10 frame (original format, 10 bytes):
  *   [3-4]   weight (BE uint16, / weightScaleFactor)
@@ -526,6 +528,18 @@ export const LIVE20_STATUS_RESULT = 0x02;
 export const RESULT16_FRAME_LEN = 16;
 export const RESULT16_OPCODE_COMPOSITION = 0x15;
 export const RESULT16_OPCODE_DONE = 0x16;
+
+/**
+ * The end-of-measurement frame, `1f 05 <protocol type> <code> <sum>`, per the
+ * vendor's published SDK. For an 8-electrode scale the SDK sends it with code
+ * 0x10 as soon as the 0x16 of a complete result block (three parts, 0x15,
+ * 0x16) arrives, for every user slot and for an all-zero block too, and with
+ * code 0xff for a block it could not complete; it sends nothing for stored
+ * records. This adapter sends the 0x10 form only with `ble.qn_result_ack`
+ * (#331).
+ */
+export const RESULT_ACK_OPCODE = 0x1f;
+export const RESULT_ACK_MEASURED = 0x10;
 
 /**
  * The ten 8-electrode impedance channels, in the order the vendor's published

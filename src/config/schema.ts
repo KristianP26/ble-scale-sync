@@ -269,6 +269,18 @@ export const BleSchema = z
      */
     qn_config_long: z.boolean().optional().nullable(),
     /**
+     * Send the end-of-measurement frame `1f 05 <protocol type> 10 <sum>` after
+     * the 0x16 of a complete result block on the 19-byte QN dialect (#331).
+     *
+     * The vendor's published SDK sends it there for every 8-electrode
+     * weigh-in; this app has never sent it. Whether its absence is why the
+     * scale stores a second copy of a weigh-in it already delivered, and keeps
+     * advertising after the export, is not known, so this is opt-in and off by
+     * default until reporters' logs with it show an effect and no harm. Other
+     * QN dialects ignore it.
+     */
+    qn_result_ack: z.boolean().optional().nullable(),
+    /**
      * Delete a bond the scale has forgotten and pair again, instead of stopping
      * at the diagnostic (#290, #335).
      *

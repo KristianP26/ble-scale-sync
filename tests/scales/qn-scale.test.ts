@@ -18,6 +18,7 @@ import { NINETEEN_BYTE_RESULT_HOLD_MS } from '../../src/scales/qn-scale/constant
 import { bleLog } from '../../src/ble/types.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type {
+  AdapterRuntimeConfig,
   BleDeviceInfo,
   ConnectionContext,
   UserProfile,
@@ -3405,9 +3406,14 @@ describe('AE02 dispatch (#75, #235)', () => {
 
       // Scope: every other dialect, and the 19-byte one without a stream, stays
       // as it was. These pass on the code before D037 as well.
-      describe('other dialects are untouched', () => {
+      // With ble.qn_result_ack as well: it is for the 19-byte stream only.
+      describe.each([
+        ['by default', {}],
+        ['with ble.qn_result_ack', { qnResultAck: true }],
+      ])('other dialects are untouched, %s', (_label, config: AdapterRuntimeConfig) => {
         it('extended: a GE-shaped stable 20-byte frame is still not read or answered', async () => {
           const adapter = makeAdapter();
+          adapter.configure(config);
           const writes = await driveHandshake(adapter, makeExtendedScaleInfo());
           const before = writes.length;
           // GE_LIVE (#235) with [3] 00 -> 01 and its checksum recomputed.
@@ -3419,6 +3425,7 @@ describe('AE02 dispatch (#75, #235)', () => {
 
         it('18-byte es26m: the barefoot frame still reads weight and impedance at once', async () => {
           const adapter = makeAdapter();
+          adapter.configure(config);
           await driveHandshake(adapter, makeEs26mScaleInfo());
           const reading = adapter.parseNotification(
             hex('10 0e ff 01 02 26 39 01 f5 01 f3 01 34 9e'),
@@ -3436,6 +3443,7 @@ describe('AE02 dispatch (#75, #235)', () => {
           vi.useFakeTimers();
           try {
             const adapter = makeAdapter();
+            adapter.configure(config);
             const writes = await openSession(adapter, makeEs26mScaleInfo(), {});
             const starts = writes.filter((w) => w[0] === 0x22).length;
             expect(adapter.parseNotification(END_MARKER)).toBeNull();
@@ -3453,6 +3461,7 @@ describe('AE02 dispatch (#75, #235)', () => {
           const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
           try {
             const adapter = makeAdapter();
+            adapter.configure(config);
             adapter.onSessionStart();
             if (which === 'classic') {
               const info = Buffer.alloc(11);
@@ -3660,6 +3669,7 @@ describe('QN per-session reset ordering (#406)', () => {
       'a4PreludeEnabled',
       'configLong',
       'timeSyncLong',
+      'forcedResultAck',
       'userWeights',
       // Session-boundary values: set by onConnected / onSessionEnd, bumped
       // rather than reset, re-stamped with the current time, or replaced by a

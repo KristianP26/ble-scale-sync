@@ -90,6 +90,7 @@ import {
   buildA2Frame,
   buildConfig,
   buildMeasurementTrigger,
+  buildResultAck,
   buildTimeSync,
   buildUserProfileFrame,
   decodeEightResult,
@@ -512,6 +513,13 @@ export class QnScaleAdapter
   /** Send the 9-byte 0x20 time sync (`ble.qn_time_sync_long`, #331). */
   private timeSyncLong = false;
 
+  /**
+   * Send the end-of-measurement 0x1F after the 0x16 of a complete 19-byte
+   * result block, as the vendor's published SDK does (`ble.qn_result_ack`,
+   * #331). Off by default: what it changes on the scale is not known yet.
+   */
+  private forcedResultAck = false;
+
   /** Number of 0x22 stored-data re-queries sent this session. */
   private storedQueryAttempts = 0;
 
@@ -546,6 +554,7 @@ export class QnScaleAdapter
     this.a4PreludeEnabled = opts.qnA4Prelude === true;
     this.timeSyncLong = opts.qnTimeSyncLong === true;
     this.configLong = opts.qnConfigLong === true;
+    this.forcedResultAck = opts.qnResultAck === true;
     this.userWeights = opts.userWeights ?? [];
   }
 
@@ -964,7 +973,8 @@ export class QnScaleAdapter
    *   0x21 (config req)  -> A00D profile frame + 0x22 start
    *   0x10 (weight)      -> parse weight (original or ES-30M format)
    *                        (19-byte dialect: 20-byte stream, weight held until
-   *                        its 0x16, nothing written back, D037)
+   *                        its 0x16, nothing written back, D037; with
+   *                        ble.qn_result_ack a 0x1F after the 0x16, D059)
    *
    * State machine writes are fire-and-forget (async, not awaited) so they
    * don't block the synchronous parseNotification return.
@@ -1455,8 +1465,9 @@ export class QnScaleAdapter
    * holds the link through the scale's BIA (isFinal, completionHoldMs). The
    * result block's three parts are kept for 0x16.
    *
-   * Writes nothing. The one log of a complete weigh-in got there without a
-   * 0x1F or an A2 echo, and nobody has seen what the vendor app answers here.
+   * Writes nothing: the first logs of a complete weigh-in got there without a
+   * 0x1F or an A2 echo. The vendor's published SDK answers only the block's
+   * 0x16, which `ble.qn_result_ack` copies (parseNineteenByteResultFrame).
    */
   private parseNineteenByteLiveFrame(data: Buffer): ScaleReading | null {
     if (!hasValidSumChecksum(data)) {
@@ -1517,6 +1528,13 @@ export class QnScaleAdapter
     // came before it, so it is timed before the check below reads the result.
     if (status === LIVE20_STATUS_RESULT) this.noteStoredQueryAnswer();
 
+    // Collected before the repeat check below, so a repeated block still gets
+    // the `ble.qn_result_ack` answer at its 0x16, as the vendor's SDK gives it.
+    // Nothing else reads a repeated block: its 0x16 publishes nothing.
+    if (status === LIVE20_STATUS_RESULT) {
+      this.live20Block = total === 3 ? [Buffer.from(data)] : [];
+    }
+
     // A result block with no measurement before it in this session (no live
     // frame, and a first answer to the 0x22 too soon to follow one) is a
     // weigh-in the scale finished before we connected. When it repeats a
@@ -1536,9 +1554,6 @@ export class QnScaleAdapter
         );
         return null;
       }
-    }
-    if (status === LIVE20_STATUS_RESULT) {
-      this.live20Block = total === 3 ? [Buffer.from(data)] : [];
     }
 
     // The result block's first part (status 0x02) repeats the weight. Returning
@@ -1571,6 +1586,22 @@ export class QnScaleAdapter
       return null;
     }
     this.live20ResultSeen = true;
+    // At once, before anything is decoded and before the session ends on the
+    // reading below, as the vendor's published SDK does: for a complete block
+    // on any slot, an all-zero one and a repeated one too (#331, D059).
+    if (this.forcedResultAck) {
+      if (this.live20Block.length === 3 && this.live20C15 !== null) {
+        bleLog.debug(
+          'QN: 0x16 completes the result block, sending 0x1F as the vendor app does ' +
+            '(ble.qn_result_ack, #331)',
+        );
+        void this.writeCmd(buildResultAck(this.seenProtocolType));
+      } else {
+        bleLog.debug(
+          'QN: 0x16 without a complete result block, no 0x1F sent (ble.qn_result_ack, #331)',
+        );
+      }
+    }
     if (this.live20Weight === null) {
       bleLog.debug(
         this.live20Replayed

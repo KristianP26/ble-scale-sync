@@ -359,6 +359,14 @@ export interface AdapterRuntimeConfig {
    */
   qnConfigLong?: boolean;
 
+  /**
+   * Send `1f 05 <protocol type> 10 <sum>` after the 0x16 of a complete
+   * 19-byte QN result block, as the vendor's published SDK does
+   * (`ble.qn_result_ack`, #331). Opt-in, off by default: its effect on the
+   * scale is not known yet.
+   */
+  qnResultAck?: boolean;
+
   /** Every configured user's weight hints, in config order (see UserWeightHint). */
   userWeights?: readonly UserWeightHint[];
 }

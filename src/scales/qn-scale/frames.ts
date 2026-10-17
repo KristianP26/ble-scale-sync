@@ -7,7 +7,13 @@
  */
 
 import type { Gender } from '../../interfaces/scale-adapter.js';
-import { VENDOR_APP_USER_KEY, VISIT_ALGORITHM, VISIT_ATHLETE_STEP } from './constants.js';
+import {
+  RESULT_ACK_MEASURED,
+  RESULT_ACK_OPCODE,
+  VENDOR_APP_USER_KEY,
+  VISIT_ALGORITHM,
+  VISIT_ATHLETE_STEP,
+} from './constants.js';
 
 /**
  * Build the extended-dialect measurement trigger for a weight anchor in kg.
@@ -35,6 +41,18 @@ export function buildA2Frame(raw: number): number[] {
   const v = Math.min(0xffff, Math.max(0, Math.round(raw)));
   const cmd = [0xa2, 0x06, 0x01, (v >> 8) & 0xff, v & 0xff, 0x00];
   cmd[5] = cmd.slice(0, 5).reduce((a, b) => a + b, 0) & 0xff;
+  return cmd;
+}
+
+/**
+ * The end-of-measurement frame for a complete 19-byte result
+ * (`ble.qn_result_ack`, #331), built as the vendor's published SDK builds it:
+ * `1f 05 <protocol type> 10 <sum>`, with the protocol type every other frame
+ * of the session carries.
+ */
+export function buildResultAck(protocolType: number): number[] {
+  const cmd = [RESULT_ACK_OPCODE, 0x05, protocolType & 0xff, RESULT_ACK_MEASURED, 0x00];
+  cmd[4] = cmd.slice(0, 4).reduce((a, b) => a + b, 0) & 0xff;
   return cmd;
 }
 

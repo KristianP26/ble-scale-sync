@@ -129,6 +129,7 @@ ble:
 | `qn_a4_prelude`              | No                          | `false`        | QN-family scales only. Send the two `0xA4` frames an Arboleaf vendor app sends between START and the first weight frame, replayed from one reporter's capture. They overwrite data the scale keeps for its first user, and a session that sends them does not use the scale's own body composition. Off by default; keep it off unless your scale goes silent right after START with everything else tried. See below.                                               |
 | `qn_time_sync_long`          | No                          | `false`        | QN-family scales only. Send the 9-byte form of the `0x20` time-sync frame that an Arboleaf vendor app sends, instead of the 8-byte one. Off by default; the extra byte is your UTC offset. See below.                                                                                                                                                                                                                                                                |
 | `qn_config_long`             | No                          | `false`        | QN-family scales only. Send the 10-byte form of the `0x13` config frame the vendor app sends, instead of the 9-byte one. Off by default; the extra bytes are undecoded. See below.                                                                                                                                                                                                                                                                                   |
+| `qn_result_ack`              | No                          | `false`        | QN-family scales with a 19-byte scale-info frame only. After the scale's last result frame, send the end-of-measurement frame the vendor's published SDK sends. Off by default; not yet confirmed on hardware. See below.                                                                                                                                                                                                                                            |
 | `proxy_liveness_timeout_min` | No                          | `30`           | Minutes of total advertisement silence before a proxy transport is treated as wedged and the process exits for the supervisor to restart. `0` disables. Proxy transports only. See below.                                                                                                                                                                                                                                                                            |
 | `mqtt_proxy`                 | If `handler: mqtt-proxy`    | (none)         | MQTT proxy connection (`broker_url`, `device_id`, `topic_prefix`, `username`, `password`, `auto_connect`, `embedded_broker_*`). See [ESP32 BLE Proxy](./esp32-proxy).                                                                                                                                                                                                                                                                                                |
 | `esphome_proxy`              | If `handler: esphome-proxy` | (none)         | ESPHome Native API connection (`host`, `port`, `encryption_key` or `password`, `client_info`). See [ESPHome Bluetooth Proxy](./esphome-proxy).                                                                                                                                                                                                                                                                                                                       |
@@ -349,6 +350,20 @@ QN: stored weigh-in 76.4 kg at 2026-10-07T06:12:44.000Z, user slot 1, reported a
 ```
 
 If `true` makes your scale report a weight, please say so in an issue with the model and the dialect from the `QN: scale info` log line. Two 19-byte units have streamed their weight with it and `qn_time_sync_long` both on, which confirms reading that stream on two units; the default changes once it is known which of the two options the scale needs.
+
+After the scale's last result frame the vendor's published SDK sends an end-of-measurement frame, which ble-scale-sync does not send by default. One unit later stored a copy of a weigh-in it had already delivered, and both logged units kept advertising after the export; whether that frame changes either is not known yet ([#331](https://github.com/KristianP26/ble-scale-sync/issues/331)). To try it:
+
+```yaml
+ble:
+  qn_result_ack: true
+```
+
+The debug log then shows, right after the scale's last result frame:
+
+```
+QN: 0x16 completes the result block, sending 0x1F as the vendor app does (ble.qn_result_ack, #331)
+QN write: [1f 05 ff 10 33]
+```
 
 :::
 

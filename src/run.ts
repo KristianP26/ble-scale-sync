@@ -323,6 +323,7 @@ async function main(): Promise<void> {
     const qnA4Prelude = ctx.config.ble?.qn_a4_prelude ?? undefined;
     const qnTimeSyncLong = ctx.config.ble?.qn_time_sync_long ?? undefined;
     const qnConfigLong = ctx.config.ble?.qn_config_long ?? undefined;
+    const qnResultAck = ctx.config.ble?.qn_result_ack ?? undefined;
     for (const a of adapters)
       a.configure?.({
         bindKey,
@@ -335,6 +336,7 @@ async function main(): Promise<void> {
         qnA4Prelude,
         qnTimeSyncLong,
         qnConfigLong,
+        qnResultAck,
         // The config entries themselves, not copies: the processor moves
         // last_known_weight on them in memory after each live weigh-in.
         userWeights: ctx.config.users,

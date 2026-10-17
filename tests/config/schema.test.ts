@@ -423,6 +423,16 @@ describe('BleSchema', () => {
     }
   });
 
+  // Kept through the parse, like qn_user_key above (#331).
+  it('accepts ble.qn_result_ack as a boolean or null and keeps the value', () => {
+    for (const value of [true, false, null]) {
+      const result = BleSchema.safeParse({ qn_result_ack: value });
+      expect(result.success).toBe(true);
+      expect(result.data?.qn_result_ack).toBe(value);
+    }
+    expect(BleSchema.safeParse({ qn_result_ack: 'yes' }).success).toBe(false);
+  });
+
   it('rejects ble.session_timeout_sec outside 5 to 600', () => {
     for (const secs of [4, 601]) {
       expect(BleSchema.safeParse({ session_timeout_sec: secs }).success).toBe(false);
