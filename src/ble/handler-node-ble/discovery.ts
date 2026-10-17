@@ -39,7 +39,7 @@ import { safeName } from '../advertisement.js';
 const filteredScans = new WeakMap<Adapter, number>();
 
 /** True when this adapter's running scan is ours and already carries the filter. */
-function runningScanIsFiltered(btAdapter: Adapter): boolean {
+export function runningScanIsFiltered(btAdapter: Adapter): boolean {
   const generation = filteredScans.get(btAdapter);
   return generation !== undefined && generation === currentConnectionGeneration();
 }

@@ -49,7 +49,16 @@ import {
   removeDevice,
   autoDiscover,
   stopDiscoveryAndQuiesce,
+  runningScanIsFiltered,
 } from './discovery.js';
+import {
+  announceKept,
+  armFreshAdvertLatch,
+  cachePolicyFor,
+  forgetReadingAdapter,
+  rememberReadingAdapter,
+  type FreshAdvertLatch,
+} from './device-cache.js';
 import { connectWithRecovery } from './connect.js';
 import {
   withScanActivityWatchdog,
@@ -69,7 +78,7 @@ import {
   teardownSession,
   waitForTargetDevice,
 } from './scan-stages.js';
-import { safeName } from '../advertisement.js';
+import { readsFromAdvertisement, safeName } from '../advertisement.js';
 
 /** Max time to wait for a BLE pairing/bonding handshake before giving up. */
 const BONDING_TIMEOUT_MS = 15_000;
@@ -364,6 +373,14 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   let probeAdapter: Adapter | undefined;
   /** What the scan activity watchdog did in this cycle's wait, for the same classification. */
   const scanWatch: ScanWatch = { restarts: 0 };
+  /** Listens on the scale's kept BlueZ object until the wait has used it (D060). */
+  let latch: FreshAdvertLatch | undefined;
+  /** The scale's BlueZ object was kept from an earlier cycle rather than removed (D060). */
+  let keptObject = false;
+  const releaseLatch = (): void => {
+    latch?.release();
+    latch = undefined;
+  };
 
   // Publish this cycle's pairing target before the first getAdapter(), which is
   // where the agent registers. Stored as a closure rather than a value so a
@@ -402,15 +419,64 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       }
     }
 
-    // In continuous mode, BlueZ caches the device from a previous cycle.
-    // Removing it forces a fresh discovery + proxy creation.
+    // Removing the scale's BlueZ object before the scan is what made the wait
+    // below mean "it is advertising now": waitDevice() only polls for the
+    // object, and BlueZ keeps it for good once Connect() was called on it. It
+    // also drops BlueZ's GATT cache, which a GATT-only scale then pays for with
+    // a full service discovery on every connect (#425). So it stays where a
+    // kept object could do harm, and elsewhere a latch armed before discovery
+    // starts has to hear the scale in this cycle first (D060, device-cache.ts).
     if (targetMac) {
-      await removeDevice(btAdapter, targetMac);
+      const policy = cachePolicyFor(targetMac, adapters);
+      const key = formatMac(targetMac);
+      if (!policy.keep) {
+        bleLog.debug(`Removing ${key} from BlueZ before the scan: ${policy.reason}`);
+        await removeDevice(btAdapter, targetMac);
+      } else {
+        const held = await armFreshAdvertLatch(btAdapter, key);
+        switch (held.kind) {
+          case 'absent':
+            bleLog.debug(`BlueZ no longer lists ${key}; waiting for it to appear`);
+            break;
+          case 'paired':
+            keptObject = true;
+            bleLog.debug(`${key} is paired; BlueZ keeps it either way`);
+            break;
+          case 'unknown':
+            bleLog.debug(`Could not read ${key} from BlueZ (${held.error}); removing it`);
+            await removeDevice(btAdapter, targetMac);
+            break;
+          case 'armed':
+            latch = held.latch;
+            keptObject = true;
+            announceKept(key, policy.adapter!.name);
+            bleLog.debug(`Keeping ${key} in BlueZ for this cycle: ${policy.reason}`);
+            break;
+        }
+      }
     }
 
     const discoveryResult = await startDiscoverySafe(btAdapter, bleAdapter, { abortSignal });
     if (discoveryResult) btAdapter = discoveryResult;
     probeAdapter = btAdapter;
+
+    // The latch hears reports only on the bus it was put on, and every report
+    // only while our filtered scan runs. Without either, remove the object as
+    // before, just after the scan started instead of before it.
+    if (latch && targetMac) {
+      const why =
+        btAdapter !== latch.adapter
+          ? 'the D-Bus connection was replaced while discovery started'
+          : !runningScanIsFiltered(btAdapter)
+            ? 'our filtered discovery is not running'
+            : undefined;
+      if (why) {
+        releaseLatch();
+        keptObject = false;
+        bleLog.debug(`Removing ${formatMac(targetMac)} from BlueZ after all: ${why}`);
+        await removeDevice(btAdapter, targetMac);
+      }
+    }
 
     let matchedAdapter: ScaleAdapter;
     // Advertised name, for adapters whose protocol differs by model.
@@ -423,14 +489,37 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       const mac = formatMac(targetMac);
       bleLog.info('Scanning for device...');
 
-      device = await waitForTargetDevice(btAdapter, mac, abortSignal, scanWatch);
+      device = await waitForTargetDevice(btAdapter, mac, abortSignal, scanWatch, latch);
+      releaseLatch();
 
-      const { name, advert, preMatchedAdapter } = await resolvePreConnectAdapter(
+      let { name, advert, preMatchedAdapter } = await resolvePreConnectAdapter(
         device,
         mac,
         deviceMac,
         adapters,
       );
+      // A broadcast poll must never read a kept object: its cached
+      // ManufacturerData can still be the last weigh-in's final frame, which a
+      // report without one does not clear (#372). Only GATT-only adapters keep
+      // the object, so this takes a different match on the same unit, and it
+      // costs one more wait if it ever does.
+      if (keptObject && preMatchedAdapter && readsFromAdvertisement(preMatchedAdapter)) {
+        bleLog.debug(
+          `${preMatchedAdapter.name} reads advertisements; removing the kept ${mac} and waiting for a fresh one`,
+        );
+        keptObject = false;
+        forgetReadingAdapter(targetMac);
+        releaseDeviceProxy(device);
+        device = null;
+        await removeDevice(btAdapter, targetMac);
+        device = await waitForTargetDevice(btAdapter, mac, abortSignal, scanWatch);
+        ({ name, advert, preMatchedAdapter } = await resolvePreConnectAdapter(
+          device,
+          mac,
+          deviceMac,
+          adapters,
+        ));
+      }
       deviceName = name;
       manufacturerData = advert.manufacturerData;
 
@@ -445,6 +534,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
           onLiveData,
           onLiveWeight,
         });
+        // A broadcast adapter in the memory means the next cycle removes the
+        // object again (D060).
+        rememberReadingAdapter(targetMac, matchedAdapter);
         resetScanActivityBackoff();
         return reading;
       }
@@ -578,6 +670,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       manufacturerData,
     });
     gattSucceeded = true;
+    // Even for a cycle the poll loop has given up on: which adapter read the
+    // scale is a fact about the scale, not about the cycle (D060).
+    if (targetMac) rememberReadingAdapter(targetMac, matchedAdapter);
     resetScanActivityBackoff();
 
     // Same device path as the newer cycle's, so a late Disconnect here would
@@ -616,6 +711,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     });
     throw err;
   } finally {
+    releaseLatch();
     await teardownSession({
       device,
       btAdapter: btAdapter!,

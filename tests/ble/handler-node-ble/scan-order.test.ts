@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'node:events';
 import type { ScaleAdapter } from '../../../src/interfaces/scale-adapter.js';
 import { defaultProfile } from '../../helpers/scale-test-utils.js';
 import { makeController, fakeExecFile, type FakeController } from '../../helpers/fake-btmgmt.js';
@@ -114,8 +115,14 @@ vi.mock('../../../src/ble/types.js', async (importOriginal) => {
   return { ...actual, resetAdapterBtmgmt: record('resetAdapterBtmgmt', async () => true) };
 });
 
+/** What startDiscoverySafe does in a test: an adapter it returns replaces the cycle's. */
+let onDiscoveryStart: (() => unknown) | undefined;
+/** Whether our filtered scan runs after startDiscoverySafe (D060). */
+let scanFiltered = true;
+
 vi.mock('../../../src/ble/handler-node-ble/discovery.js', () => ({
-  startDiscoverySafe: record('startDiscoverySafe', async () => undefined),
+  startDiscoverySafe: record('startDiscoverySafe', async () => onDiscoveryStart?.()),
+  runningScanIsFiltered: () => scanFiltered,
   removeDevice: record('removeDevice', async () => {}),
   stopDiscoveryAndQuiesce: record('stopDiscoveryAndQuiesce', async () => {}),
   notifyDiscoveryStopped: record('notifyDiscoveryStopped'),
@@ -125,19 +132,33 @@ vi.mock('../../../src/ble/handler-node-ble/discovery.js', () => ({
   }),
 }));
 
+/** The company id every advertisement snapshot carries; a test replaces it (D060). */
+let snapshotCompanyId = 0x0611;
+
 vi.mock('../../../src/ble/handler-node-ble/device-object.js', () => ({
   logAdvertisementSnapshot: record('logAdvertisementSnapshot', async () => ({
-    manufacturerData: { id: 0x0611, data: Buffer.alloc(0) },
+    manufacturerData: { id: snapshotCompanyId, data: Buffer.alloc(0) },
     serviceData: [],
   })),
   isDeviceObjectGone: () => false,
 }));
 
+/** True: every connect fails, as on a scale that drops the link (D060). */
+let connectFails = false;
+
 vi.mock('../../../src/ble/handler-node-ble/connect.js', () => ({
   connectWithRecovery: record('connectWithRecovery', async (ctx: unknown) => {
     connectContexts.push(ctx as { adapterPrivacy?: boolean });
+    if (connectFails) throw new Error('le-connection-abort-by-local');
     return fakeDevice;
   }),
+}));
+
+vi.mock('../../../src/ble/handler-node-ble/broadcast.js', () => ({
+  broadcastScanNodeBle: record('broadcastScanNodeBle', async (adapter: unknown) => ({
+    reading: { weight: 80, impedance: 0 },
+    adapter,
+  })),
 }));
 
 /** The char map every buildCharMap returns; a test replaces it (#408). */
@@ -217,10 +238,16 @@ const { scanAndReadRaw } = await import('../../../src/ble/handler-node-ble/scan.
 const { bleFailureKind } = await import('../../../src/ble/failure-kind.js');
 const { _resetAdapterPrivacyStateForTests } =
   await import('../../../src/ble/handler-node-ble/privacy.js');
+const { _resetDeviceCacheForTests } =
+  await import('../../../src/ble/handler-node-ble/device-cache.js');
+const { applyForcedAdapter } = await import('../../../src/scales/force.js');
 
 describe('scanAndReadRaw call order (#368)', () => {
   beforeEach(() => {
     calls.length = 0;
+    // A successful cycle writes the per-MAC memory (D060), so it would
+    // otherwise depend on which test ran before.
+    _resetDeviceCacheForTests();
     vi.useFakeTimers();
   });
   afterEach(() => {
@@ -279,9 +306,9 @@ describe('scanAndReadRaw call order (#368)', () => {
     expect(pairingTargets.at(-1)?.().mac).toBe('AA:BB:CC:DD:EE:FF');
   });
 
-  it('evicts the cached device before starting discovery', async () => {
-    // In continuous mode BlueZ hands back the previous cycle's Device1 unless
-    // it is removed, so the proxy is stale from the first frame.
+  it('evicts the cached device before starting discovery on the first cycle for a scale', async () => {
+    // Until a reading shows which adapter the scale needs, a kept object could
+    // be a broadcast scale's, carrying the last weigh-in's frame (D060).
     const seen = await run();
     expect(seen.indexOf('removeDevice')).toBeLessThan(seen.indexOf('startDiscoverySafe'));
     expect(seen.indexOf('startDiscoverySafe')).toBeLessThan(seen.indexOf('waitDevice'));
@@ -472,6 +499,9 @@ describe('scanAndReadRaw call order (#368)', () => {
 describe('scanAndReadRaw bonds a single-bond scale with the option, and only that one (#408)', () => {
   beforeEach(() => {
     calls.length = 0;
+    // A successful cycle writes the per-MAC memory (D060), so it would
+    // otherwise depend on which test ran before.
+    _resetDeviceCacheForTests();
     vi.useFakeTimers();
     // The bonded scale is already paired on entry (the kernel answered its
     // Security Request at connect), so ensureBonded only reads Bonded for it.
@@ -524,6 +554,9 @@ describe('scanAndReadRaw turns a deferred binding off before disconnecting (#408
 
   beforeEach(() => {
     calls.length = 0;
+    // A successful cycle writes the per-MAC memory (D060), so it would
+    // otherwise depend on which test ran before.
+    _resetDeviceCacheForTests();
     charMapForTest = new Map<string, unknown>([
       [WM, stoppable('2a9d')],
       [OTHER, stoppable('fff1')],
@@ -648,6 +681,9 @@ describe('scanAndReadRaw with ble.adapter_privacy (#417)', () => {
 
   beforeEach(() => {
     calls.length = 0;
+    // A successful cycle writes the per-MAC memory (D060), so it would
+    // otherwise depend on which test ran before.
+    _resetDeviceCacheForTests();
     ctl = makeController();
     fakeAdapter.helper.object = '/org/bluez/hci0';
     connectContexts.length = 0;
@@ -757,6 +793,9 @@ describe('scanAndReadRaw hands what the watchdog saw to the failure classificati
 
   beforeEach(() => {
     calls.length = 0;
+    // A successful cycle writes the per-MAC memory (D060), so it would
+    // otherwise depend on which test ran before.
+    _resetDeviceCacheForTests();
     watchdogRestarts = 0;
     vi.useFakeTimers();
     // The scale never shows up, and the fake adapter lists no devices, so the
@@ -836,5 +875,271 @@ describe('scanAndReadRaw hands what the watchdog saw to the failure classificati
     const err = await failedCycle();
     expect(bleFailureKind(err)).toBe('wedge-suspect');
     expect(calls).toContain('notifyDiscoveryStopped');
+  });
+});
+
+describe('scanAndReadRaw keeps a GATT-only scale in BlueZ between cycles (#425, D060)', () => {
+  const MAC = 'AA:BB:CC:DD:EE:FF';
+  const waitDevice = fakeAdapter.waitDevice;
+
+  /**
+   * The object BlueZ kept from the earlier cycle, as the latch sees it.
+   * Not paired by default: a paired object takes the usual path and skips the
+   * gate, so a test of the gate would pass without it.
+   */
+  let heldPaired = false;
+  let heldMissing = false;
+  let heldHelper: EventEmitter & { removeListeners: ReturnType<typeof vi.fn> };
+  const heldDevice = {
+    get helper() {
+      return heldHelper;
+    },
+    isPaired: async () => heldPaired,
+  };
+  const withGetDevice = fakeAdapter as typeof fakeAdapter & {
+    getDevice?: (mac: string) => Promise<unknown>;
+  };
+
+  /** A report from the scale while discovery starts, as BlueZ emits it. */
+  const reportOnDiscoveryStart = (): void => {
+    onDiscoveryStart = () => {
+      heldHelper.emit('PropertiesChanged', { RSSI: { value: -60 } });
+      return undefined;
+    };
+  };
+
+  beforeEach(() => {
+    calls.length = 0;
+    _resetDeviceCacheForTests();
+    vi.useFakeTimers();
+    heldPaired = false;
+    heldMissing = false;
+    heldHelper = Object.assign(new EventEmitter(), { removeListeners: vi.fn() });
+    withGetDevice.getDevice = async () => {
+      calls.push('getDevice');
+      if (heldMissing) throw new Error('Device not found');
+      return heldDevice;
+    };
+  });
+  afterEach(() => {
+    delete withGetDevice.getDevice;
+    fakeAdapter.waitDevice = waitDevice;
+    onDiscoveryStart = undefined;
+    scanFiltered = true;
+    snapshotCompanyId = 0x0611;
+    connectFails = false;
+    watchdogHeardAgoMs = undefined;
+    vi.useRealTimers();
+  });
+
+  /**
+   * One cycle. Bounded, not runAllTimersAsync: a gate that waits instead of
+   * passing must show up as a cycle still running after 5 s.
+   */
+  async function cycle(
+    adapters: ScaleAdapter[],
+    /** null: auto-discovery, no ble.scale_mac. */
+    targetMac: string | null = MAC,
+  ): Promise<{ done: boolean; result: unknown }> {
+    let done = false;
+    const promise = scanAndReadRaw({
+      targetMac: targetMac ?? undefined,
+      adapters,
+      profile: defaultProfile(),
+    }).then(
+      (r) => r as unknown,
+      (e: unknown) => e,
+    );
+    void promise.then(() => (done = true));
+    await vi.advanceTimersByTimeAsync(5_000);
+    return { done, result: done ? await promise : undefined };
+  }
+
+  /** A first cycle that reads the scale, then a clean record for the second. */
+  async function afterReading(adapters: ScaleAdapter[]): Promise<void> {
+    const first = await cycle(adapters);
+    expect(first.done).toBe(true);
+    expect(first.result).not.toBeInstanceOf(Error);
+    calls.length = 0;
+  }
+
+  const before = (a: string, b: string): boolean =>
+    calls.indexOf(a) > -1 && calls.indexOf(a) < calls.indexOf(b);
+
+  it('keeps the object after a GATT-only reading and hears the report from the scan start', async () => {
+    const adapters = [makeAdapter()];
+    await afterReading(adapters);
+    reportOnDiscoveryStart();
+    const second = await cycle(adapters);
+    expect(second.done).toBe(true);
+    expect((second.result as { reading?: unknown }).reading).toBeDefined();
+    expect(before('getDevice', 'startDiscoverySafe')).toBe(true);
+    expect(calls).not.toContain('removeDevice');
+    expect(calls).toContain('connectWithRecovery');
+    // The latch is released on this path too.
+    expect(heldHelper.listenerCount('PropertiesChanged')).toBe(0);
+    expect(heldHelper.removeListeners).toHaveBeenCalled();
+  });
+
+  it('still removes it after a broadcast reading', async () => {
+    const adapters = [makeAdapter({ preferPassive: true, parseBroadcast: () => null })];
+    await afterReading(adapters);
+    await cycle(adapters);
+    expect(before('removeDevice', 'startDiscoverySafe')).toBe(true);
+    expect(calls).not.toContain('getDevice');
+  });
+
+  it('still removes it for an adapter that parses broadcasts but read over GATT', async () => {
+    const adapters = [makeAdapter({ parseBroadcast: () => null })];
+    await afterReading(adapters);
+    await cycle(adapters);
+    expect(before('removeDevice', 'startDiscoverySafe')).toBe(true);
+    expect(calls).not.toContain('getDevice');
+  });
+
+  it('keeps it for a forced GATT-only adapter from the first cycle', async () => {
+    reportOnDiscoveryStart();
+    const first = await cycle(applyForcedAdapter([makeAdapter()], 'Fake QN'));
+    expect(first.done).toBe(true);
+    expect(before('getDevice', 'startDiscoverySafe')).toBe(true);
+    expect(calls).not.toContain('removeDevice');
+    expect(calls).toContain('connectWithRecovery');
+  });
+
+  it('still removes it for a forced adapter with a parser', async () => {
+    await cycle(applyForcedAdapter([makeAdapter({ parseBroadcast: () => null })], 'Fake QN'));
+    expect(before('removeDevice', 'startDiscoverySafe')).toBe(true);
+    expect(calls).not.toContain('getDevice');
+  });
+
+  it('ends a kept object that never advertises as an idle no-show, without a connect', async () => {
+    const adapters = [makeAdapter()];
+    await afterReading(adapters);
+    watchdogHeardAgoMs = 4_000;
+    let settled: unknown;
+    let done = false;
+    void scanAndReadRaw({ targetMac: MAC, adapters, profile: defaultProfile() }).then(
+      () => (done = true),
+      (e: unknown) => {
+        settled = e;
+        done = true;
+      },
+    );
+    await vi.advanceTimersByTimeAsync(119_000);
+    expect(done).toBe(false);
+    while (!done) await vi.advanceTimersByTimeAsync(250);
+    expect((settled as Error).message).toBe(`Device ${MAC} not found within 120s`);
+    expect(bleFailureKind(settled)).toBe('idle');
+    expect(calls).not.toContain('connectWithRecovery');
+    expect(calls).not.toContain('resetAdapterBtmgmt');
+    expect(calls).not.toContain('removeDevice');
+    // The latch is released on this path as well.
+    expect(heldHelper.listenerCount('PropertiesChanged')).toBe(0);
+    expect(heldHelper.removeListeners).toHaveBeenCalled();
+  });
+
+  it('removes it after the scan started when our filtered scan is not running', async () => {
+    const adapters = [makeAdapter()];
+    await afterReading(adapters);
+    scanFiltered = false;
+    const second = await cycle(adapters);
+    expect(second.done).toBe(true);
+    expect(before('startDiscoverySafe', 'removeDevice')).toBe(true);
+    expect(before('removeDevice', 'waitDevice')).toBe(true);
+    expect(heldHelper.listenerCount('PropertiesChanged')).toBe(0);
+    expect(calls).toContain('connectWithRecovery');
+  });
+
+  it('removes it after the scan started when the D-Bus connection was replaced', async () => {
+    const adapters = [makeAdapter()];
+    await afterReading(adapters);
+    const replaced = { ...fakeAdapter };
+    onDiscoveryStart = () => replaced;
+    const second = await cycle(adapters);
+    expect(second.done).toBe(true);
+    expect(before('startDiscoverySafe', 'removeDevice')).toBe(true);
+    expect(before('removeDevice', 'waitDevice')).toBe(true);
+    expect(heldHelper.listenerCount('PropertiesChanged')).toBe(0);
+    expect(calls).toContain('connectWithRecovery');
+  });
+
+  it('never hands a kept object to the broadcast poll', async () => {
+    // G reads over GATT; P reads advertisements and claims only company 0x1234.
+    type Seen = { manufacturerData?: { id: number } };
+    const gatt = makeAdapter({
+      name: 'G',
+      matches: (d: Seen) => d.manufacturerData?.id !== 0x1234,
+    } as unknown as Partial<ScaleAdapter>);
+    const passive = makeAdapter({
+      name: 'P',
+      match: { priority: 20, serviceUuids: ['fff0'] },
+      preferPassive: true,
+      parseBroadcast: () => null,
+      matches: (d: Seen) => d.manufacturerData?.id === 0x1234,
+    } as unknown as Partial<ScaleAdapter>);
+    const adapters = [gatt, passive];
+    await afterReading(adapters);
+
+    reportOnDiscoveryStart();
+    snapshotCompanyId = 0x1234;
+    await cycle(adapters);
+    expect(calls.filter((c) => c === 'waitDevice')).toHaveLength(2);
+    expect(calls.indexOf('removeDevice')).toBeGreaterThan(calls.indexOf('waitDevice'));
+    expect(calls.indexOf('removeDevice')).toBeLessThan(calls.lastIndexOf('waitDevice'));
+    expect(calls.lastIndexOf('waitDevice')).toBeLessThan(calls.indexOf('broadcastScanNodeBle'));
+
+    // Forgotten, and P's reading is the memory now: removed before discovery.
+    calls.length = 0;
+    await cycle(adapters);
+    expect(before('removeDevice', 'startDiscoverySafe')).toBe(true);
+  });
+
+  it('still removes it in the teardown after a failed GATT session', async () => {
+    const adapters = [makeAdapter()];
+    await afterReading(adapters);
+    reportOnDiscoveryStart();
+    connectFails = true;
+    await cycle(adapters);
+    expect(calls).toContain('connectWithRecovery');
+    expect(calls.indexOf('connectWithRecovery')).toBeLessThan(calls.lastIndexOf('removeDevice'));
+  });
+
+  it('changes nothing in auto-discovery', async () => {
+    const adapters = [makeAdapter()];
+    await cycle(adapters, null);
+    await cycle(adapters, null);
+    expect(calls).toContain('autoDiscover');
+    expect(calls).not.toContain('removeDevice');
+    expect(calls).not.toContain('getDevice');
+  });
+
+  it('removes the object of a different MAC', async () => {
+    const adapters = [makeAdapter()];
+    await afterReading(adapters);
+    await cycle(adapters, '11:22:33:44:55:66');
+    expect(before('removeDevice', 'startDiscoverySafe')).toBe(true);
+    expect(calls).not.toContain('getDevice');
+  });
+
+  it('waits as before when BlueZ no longer lists the scale', async () => {
+    const adapters = [makeAdapter()];
+    await afterReading(adapters);
+    heldMissing = true;
+    const second = await cycle(adapters);
+    expect(second.done).toBe(true);
+    expect(calls).toContain('getDevice');
+    expect(calls).not.toContain('removeDevice');
+    expect(calls).toContain('connectWithRecovery');
+  });
+
+  it('takes the usual path for a paired kept object', async () => {
+    const adapters = [makeAdapter()];
+    await afterReading(adapters);
+    heldPaired = true;
+    const second = await cycle(adapters);
+    expect(second.done).toBe(true);
+    expect(calls).toContain('getDevice');
+    expect(calls).not.toContain('removeDevice');
+    expect(calls).toContain('connectWithRecovery');
   });
 });

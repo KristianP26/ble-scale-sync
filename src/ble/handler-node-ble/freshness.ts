@@ -16,8 +16,9 @@ import { isDeviceObjectGone } from './device-object.js';
  * verified via context7). BlueZ legitimately omits the prop after
  * `StopDiscovery`, so absence is NOT a freshness signal (#167 regression).
  * The `lastRssiUpdateTs = Date.now()` init at construction is load-bearing:
- * trackers are only created after `waitDevice` resolved, which only fires on
- * a fresh advertisement.
+ * trackers are only created after `waitDevice` resolved on an object the cycle
+ * removed first, which only fires on a fresh advertisement, or after the D060
+ * gate heard a report from an object BlueZ kept from an earlier cycle.
  *
  * The 127 sentinel and time window cover the dying-peer scenario @fromport
  * reproduced for #143 / #140, where `device.connect()` would stall inside

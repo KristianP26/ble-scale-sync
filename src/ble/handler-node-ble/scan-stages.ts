@@ -62,6 +62,7 @@ import { tagBleFailure, bleFailureKind } from '../failure-kind.js';
 import { probeLiveness, makeLivenessAdapter } from './liveness.js';
 import { withScanActivityWatchdog, SCAN_HEARD_FRESH_MS, type ScanWatch } from './scan-watchdog.js';
 import { safeName } from '../advertisement.js';
+import { targetNotFoundMessage, type FreshAdvertLatch } from './device-cache.js';
 
 /**
  * Acquire the BlueZ adapter, resetting a stale D-Bus connection once.
@@ -109,17 +110,25 @@ const SCAN_VISIBILITY_LOG_MS = 30_000;
  * in flight, and so the enumeration itself never runs for anyone who has debug
  * off. The timer is unref'd: a shutdown arriving mid-wait should not be held up
  * by a diagnostic.
+ *
+ * `kept`: the target's object was kept from an earlier cycle (D060), so BlueZ
+ * listing it says nothing about whether it advertises now.
  */
-function startScanVisibilityLog(btAdapter: Adapter, mac: string): () => void {
+function startScanVisibilityLog(btAdapter: Adapter, mac: string, kept: boolean): () => void {
   const timer = setInterval(() => {
     if (!isDebugEnabled()) return;
     void (async () => {
       try {
         const addrs: string[] = await btAdapter.devices();
         const seen = addrs.some((a) => formatMac(a) === mac);
+        const note = !seen
+          ? ''
+          : kept
+            ? ' (BlueZ keeps the target from an earlier session; waiting for it to advertise)'
+            : ' (including the target)';
         bleLog.debug(
           `Still waiting for ${mac}; BlueZ currently lists ${addrs.length} device(s)` +
-            `${seen ? ' (including the target)' : ''}: ${addrs.join(', ') || 'none'}`,
+            `${note}: ${addrs.join(', ') || 'none'}`,
         );
       } catch (err) {
         bleLog.debug(`Could not enumerate BlueZ devices while waiting: ${errMsg(err)}`);
@@ -141,28 +150,62 @@ function startScanVisibilityLog(btAdapter: Adapter, mac: string): () => void {
  * The scan activity watchdog runs alongside the wait and restarts a discovery
  * that went deaf mid-wait (scan-watchdog.ts); the wait itself is unchanged.
  * What it did is collected in `scanWatch`.
+ *
+ * With a `latch`, the object is one BlueZ kept from an earlier cycle (D060).
+ * `waitDevice()` only polls for the object's path, so it returns at once even
+ * while the scale sleeps; the device is handed on only once the latch heard a
+ * report from it in this cycle. Same 120 s budget, same no-show message, and
+ * still inside the watchdog, so a scan that goes deaf during it is restarted.
  */
 export async function waitForTargetDevice(
   btAdapter: Adapter,
   mac: string,
   abortSignal?: AbortSignal,
   scanWatch?: ScanWatch,
+  latch?: FreshAdvertLatch,
 ): Promise<Device> {
   if (abortSignal?.aborted) {
     throw abortSignal.reason ?? new DOMException('Aborted', 'AbortError');
   }
 
-  const stopVisibilityLog = startScanVisibilityLog(btAdapter, mac);
+  const stopVisibilityLog = startScanVisibilityLog(btAdapter, mac, latch !== undefined);
   try {
     return await withScanActivityWatchdog(
       btAdapter,
       abortSignal,
-      () => awaitTargetDevice(btAdapter, mac, abortSignal),
+      latch
+        ? () => awaitFreshTargetDevice(btAdapter, mac, latch, abortSignal)
+        : () => awaitTargetDevice(btAdapter, mac, abortSignal),
       scanWatch,
     );
   } finally {
     stopVisibilityLog();
   }
+}
+
+async function awaitFreshTargetDevice(
+  btAdapter: Adapter,
+  mac: string,
+  latch: FreshAdvertLatch,
+  abortSignal?: AbortSignal,
+): Promise<Device> {
+  const startedAt = Date.now();
+  const device = await awaitTargetDevice(btAdapter, mac, abortSignal);
+  try {
+    await latch.heard(startedAt + DISCOVERY_TIMEOUT_MS - Date.now(), mac, abortSignal);
+  } catch (err) {
+    // The caller never gets this proxy, so its teardown cannot release it
+    // (#396, #397, #404).
+    releaseDeviceProxy(device);
+    if (!abortSignal?.aborted) {
+      bleLog.debug(
+        `BlueZ still lists ${mac} from an earlier session but did not hear it advertise in this cycle`,
+      );
+    }
+    throw err;
+  }
+  bleLog.debug(`Heard ${mac} advertise in this cycle (BlueZ kept it from an earlier session)`);
+  return device;
 }
 
 async function awaitTargetDevice(
@@ -173,7 +216,7 @@ async function awaitTargetDevice(
   const waitPromise = withTimeout(
     btAdapter.waitDevice(mac),
     DISCOVERY_TIMEOUT_MS,
-    `Device ${mac} not found within ${DISCOVERY_TIMEOUT_MS / 1000}s`,
+    targetNotFoundMessage(mac),
   );
 
   if (abortSignal) {
