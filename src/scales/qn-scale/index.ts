@@ -55,6 +55,7 @@ import {
   MAX_AE00_RESPONSES,
   MAX_STORED_QUERY_ATTEMPTS,
   MAX_STORED_RECORD_AGE_SEC,
+  MEASURED_ANSWER_MIN_MS,
   NINETEEN_BYTE_RESULT_HOLD_MS,
   NO_CONTACT_RESISTANCE,
   POST_START_ANCHOR_DELAY_MS,
@@ -127,12 +128,21 @@ interface ScaleCompositionPin {
   /** Bit 0 of the ready frame's [3]: 1 when muscle and bone are percentages. */
   valueType: number | null;
   measuredAfterVisit: boolean;
+  /**
+   * Milliseconds from the scale accepting the profile to its first answer to
+   * the 0x22; null without an accepted profile or without an answer.
+   */
+  answerAfterVisitMs: number | null;
   a4PreludeSent: boolean;
 }
 
 /** Format bytes as hex string for debug logging. */
 const hex = (data: number[] | Buffer): string =>
   [...data].map((b) => b.toString(16).padStart(2, '0')).join(' ');
+
+/** Milliseconds as seconds with one decimal for the log, or "unknown". */
+const seconds = (ms: number | null): string =>
+  ms === null ? 'unknown' : `${(ms / 1000).toFixed(1)} s`;
 
 export class QnScaleAdapter
   implements ScaleAdapterCore, GattWiring, BroadcastSource, MultiCharNotify, HoldForComposition
@@ -365,6 +375,20 @@ export class QnScaleAdapter
   private measuredAfterVisit = false;
   private a4PreludeSent = false;
 
+  /**
+   * The scale answers this session's 0x22 only once it has finished measuring
+   * (#331), so when that answer comes says whether it measured after the link
+   * came up, even for a weight that settled before the scale accepted the
+   * profile and was followed by no live frame. `visitAcceptedAtMs`: when the
+   * scale accepted the profile; `storedQuerySentAtMs`: when our 0x22 went out;
+   * `queryAnswered`: the first answer (a 0x23, or the result block) has come;
+   * `answerAfterVisitMs`: how long after the acceptance it came.
+   */
+  private visitAcceptedAtMs: number | null = null;
+  private storedQuerySentAtMs: number | null = null;
+  private queryAnswered = false;
+  private answerAfterVisitMs: number | null = null;
+
   /** The scale's own results, by the reading they belong to (#331). */
   private readonly scaleComposition = new ReadingComposition<ScaleCompositionPin | null>();
 
@@ -377,9 +401,11 @@ export class QnScaleAdapter
   private readonly provisionalReadings = new WeakSet<ScaleReading>();
 
   /**
-   * A 0x10 first part with status measuring or stable arrived this session, so
-   * the scale measured while we were connected. A result block without one is
-   * a weigh-in the scale finished before the link came up (#331).
+   * A 0x10 first part with status measuring or stable arrived this session, or
+   * the scale's first answer to our 0x22 came MEASURED_ANSWER_MIN_MS or more
+   * after it, so the scale measured while we were connected. A result block
+   * without either is a weigh-in the scale finished before the link came up
+   * (#331).
    */
   private live20Measured = false;
 
@@ -628,6 +654,10 @@ export class QnScaleAdapter
     this.readyValueType = null;
     this.measuredAfterVisit = false;
     this.a4PreludeSent = false;
+    this.visitAcceptedAtMs = null;
+    this.storedQuerySentAtMs = null;
+    this.queryAnswered = false;
+    this.answerAfterVisitMs = null;
     this.live20Measured = false;
     this.live20Replayed = false;
     this.storedParts = [];
@@ -1041,6 +1071,9 @@ export class QnScaleAdapter
         hasValidSumChecksum(data)
       ) {
         this.visitReply = { slot: data[3], ok: data[4] === 0x01 };
+        if (this.visitReply.ok && this.visitAcceptedAtMs === null) {
+          this.visitAcceptedAtMs = Date.now();
+        }
         bleLog.debug(
           `QN: the scale ${this.visitReply.ok ? 'accepted' : 'did not accept'} the profile ` +
             `for user slot ${data[3]} (#331)`,
@@ -1479,7 +1512,12 @@ export class QnScaleAdapter
       return null;
     }
 
-    // A result block with no measurement before it in this session is a
+    // The result block is the scale's first answer to the 0x22 when no 0x23
+    // came before it, so it is timed before the check below reads the result.
+    if (status === LIVE20_STATUS_RESULT) this.noteStoredQueryAnswer();
+
+    // A result block with no measurement before it in this session (no live
+    // frame, and a first answer to the 0x22 too soon to follow one) is a
     // weigh-in the scale finished before we connected. When it repeats a
     // result already published, it is that weigh-in handed over again after a
     // reconnect, not a second one (#331).
@@ -1591,8 +1629,39 @@ export class QnScaleAdapter
       reply: this.visitReply,
       valueType: this.readyValueType,
       measuredAfterVisit: this.measuredAfterVisit,
+      answerAfterVisitMs: this.answerAfterVisitMs,
       a4PreludeSent: this.a4PreludeSent,
     });
+  }
+
+  /**
+   * The scale's first answer to this session's 0x22: a 0x23, or the result
+   * block when no 0x23 came first (#331). The scale sends it once it has
+   * finished measuring, so an answer MEASURED_ANSWER_MIN_MS or more after the
+   * 0x22 means it measured during this session, and one that long after it
+   * accepted the profile means it finished measuring after accepting it, even
+   * when its weight settled before and no live frame followed.
+   */
+  private noteStoredQueryAnswer(): void {
+    if (this.queryAnswered) return;
+    this.queryAnswered = true;
+    const now = Date.now();
+    const sinceQuery = this.storedQuerySentAtMs === null ? null : now - this.storedQuerySentAtMs;
+    const sinceVisit = this.visitAcceptedAtMs === null ? null : now - this.visitAcceptedAtMs;
+    this.answerAfterVisitMs = sinceVisit;
+    if (sinceQuery !== null && sinceQuery >= MEASURED_ANSWER_MIN_MS) this.live20Measured = true;
+    if (
+      this.visitReply?.ok === true &&
+      sinceVisit !== null &&
+      sinceVisit >= MEASURED_ANSWER_MIN_MS
+    ) {
+      this.measuredAfterVisit = true;
+    }
+    bleLog.debug(
+      `QN: the scale answered the stored-record query ${seconds(sinceQuery)} after it was sent` +
+        (sinceVisit === null ? '' : `, ${seconds(sinceVisit)} after it accepted the profile`) +
+        ' (#331)',
+    );
   }
 
   /**
@@ -1602,19 +1671,28 @@ export class QnScaleAdapter
    * The scale computes it for the profile in the visit frame we sent (age,
    * height in mm, sex; its BMI in 0x15 fits the height we sent, not the app's),
    * and for nothing else we can check. So it is used only when the scale
-   * accepted that profile and measured after accepting it, the weigh-in is on
-   * that slot, the matched user has exactly that profile, and the scale's BMI
-   * fits the height to within its 0.1 rounding: one centimetre already moves
-   * it by more than that. A session that sent the `qn_a4_prelude` frames
-   * overwrote the slot's stored segment values with someone else's, which the
-   * scale corrects its channels with, so it is never used there.
+   * accepted that profile and measured after accepting it (a live frame after
+   * the acceptance, or its first answer to the 0x22 at least
+   * MEASURED_ANSWER_MIN_MS after it: the scale sends nothing during its BIA,
+   * so a weight that settled just before the acceptance has only that answer
+   * to show for it), the weigh-in is on that slot, the matched user has
+   * exactly that profile, and the scale's BMI fits the height to within its
+   * 0.1 rounding: one centimetre already moves it by more than that. A
+   * session that sent the `qn_a4_prelude` frames overwrote the slot's stored
+   * segment values with someone else's, which the scale corrects its channels
+   * with, so it is never used there.
    */
   private scaleCompositionRejection(pin: ScaleCompositionPin, profile: UserProfile): string | null {
     const { visit, reply, result, composition } = pin;
     if (!visit) return 'this session sent the scale no profile of a configured user';
     if (!reply) return 'the scale did not answer the profile frame';
     if (!reply.ok || reply.slot !== visit.slot) return 'the scale did not accept the profile';
-    if (!pin.measuredAfterVisit) return 'the scale measured before it accepted the profile';
+    if (!pin.measuredAfterVisit) {
+      return pin.answerAfterVisitMs === null
+        ? 'the scale sent no live weight after it accepted the profile'
+        : `the scale answered ${seconds(pin.answerAfterVisitMs)} after it accepted the ` +
+            'profile, with no live weight in between, so it most likely measured before that';
+    }
     if (pin.a4PreludeSent) {
       return "ble.qn_a4_prelude overwrote the scale's segment values in this session";
     }
@@ -1641,6 +1719,8 @@ export class QnScaleAdapter
       bleLog.debug(`QN: 0x23 that is not a stored-record part dropped: [${hex(data)}] (#331)`);
       return null;
     }
+    // "No stored weigh-ins" is an answer to the 0x22 as much as a record is.
+    this.noteStoredQueryAnswer();
     if (data[4] === 0) {
       bleLog.debug('QN: 0x23 with no parts: the scale holds no stored weigh-ins (#331)');
       return null;
@@ -2010,7 +2090,9 @@ export class QnScaleAdapter
     await wait(200);
     if (!live()) return;
 
-    // 0x22 start measurement / stored-data query with echoed protocol type
+    // 0x22 start measurement / stored-data query with echoed protocol type.
+    // Its send time is what the scale's first answer is measured against.
+    this.storedQuerySentAtMs ??= Date.now();
     await this.writeCmd(this.buildStoredDataQuery());
     if (!live()) return;
 

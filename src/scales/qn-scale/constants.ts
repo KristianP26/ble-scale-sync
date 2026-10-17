@@ -627,6 +627,20 @@ export const LIVE_REPLAY_WINDOW_MS = 10 * 60_000;
 export const RECENT_LIVE_RESULTS = 4;
 
 /**
+ * How long after the scale accepted the profile (and after our 0x22) its first
+ * answer to the 0x22 must come for a 19-byte weigh-in to count as measured in
+ * this session (#331).
+ *
+ * The scale answers the 0x22 once it has finished measuring: 0.9 s after
+ * accepting the profile with a result it had before the link came up, and 5.7
+ * to 18.1 s after it in five sessions where it measured with the link up. Its
+ * BIA runs about 13 s from the stable frame and it sends no 0x10 during it, so
+ * for a weight that settled before the scale accepted the profile this answer
+ * is the only sign that it finished measuring after.
+ */
+export const MEASURED_ANSWER_MIN_MS = 3_000;
+
+/**
  * How long the link is held after the 19-byte dialect's stable weight for its
  * 0x16 (#331, D037).
  *

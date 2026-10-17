@@ -3275,8 +3275,8 @@ describe('AE02 dispatch (#75, #235)', () => {
         }
       });
 
-      // Before the stream as well: the scale answers our 0x22 before it starts
-      // measuring when the link is up first (#331, 2026-10-06 log).
+      // Before the stream as well. No log shows the scale answering before it
+      // measures; even so the answer is never re-queried (#331).
       it('reads the "no stored weigh-ins" answer before the stream without a re-query', async () => {
         vi.useFakeTimers();
         try {
