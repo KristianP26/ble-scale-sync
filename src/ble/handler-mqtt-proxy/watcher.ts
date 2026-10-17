@@ -697,7 +697,7 @@ export class ReadingWatcher implements Watcher {
   /**
    * Log a GATT session that ended without a reading. A session opened inside
    * the post-reading window is the scale still on after its weigh-in, not a
-   * failure; the WARN text is otherwise unchanged.
+   * failure; any other one warns.
    */
   private reportGattFailure(
     kind: string,
@@ -706,7 +706,8 @@ export class ReadingWatcher implements Watcher {
     sinceReading: number | undefined,
   ): void {
     if (sinceReading !== undefined) {
-      // The ESP32 reconnected to a scale still on after its reading (#466).
+      // A reconnect to a scale still on after its reading (#466): by the ESP32
+      // itself, or by the host on the next scan batch.
       this.postReading.reportNoWeighIn(
         address,
         `${kind} for ${address}`,

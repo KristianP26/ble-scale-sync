@@ -91,8 +91,8 @@ export const POLL_CYCLE_TIMEOUT_MS = 900_000;
  * triggers BlueZ to accept the request against a peer that never completes
  * GATT discovery, which on some controllers stalls the D-Bus call inside
  * node-ble synchronously. A 25 s floor sidesteps the dying-peer window
- * entirely. Failed scans still respect the configured cooldown only; this
- * floor applies on success.
+ * entirely. A cycle without a reading waits for the retry backoff (or
+ * idle_rescan_delay) instead; this floor applies on success.
  *
  * BlueZ-specific: only the `node-ble` handler hits the dying-peer GATT stall.
  * Proxy handlers (mqtt-proxy, esphome-proxy) and the noble-based stacks talk
@@ -114,8 +114,8 @@ export const POST_DISCONNECT_GRACE_MS = 25_000;
  * the reading to the moment the next session opens. 60 s covers the usual
  * first reconnect: under a second on ESPHome, a few seconds on an ESP32-S3,
  * about 10 to 13 s on a classic ESP32. A classic board that also waits out a
- * Wi-Fi recovery and connect retries can take longer, and that session warns
- * as before.
+ * Wi-Fi recovery and connect retries can take longer, and that session still
+ * warns.
  */
 export const POST_READING_RECONNECT_MS = 60_000;
 
