@@ -391,6 +391,7 @@ describe.skipIf(!HARNESS)(
             qn_a4_prelude: 'true',
             qn_time_sync_long: 'off',
             qn_config_long: '1',
+            qn_result_ack: 'on',
             auto_clear_stale_bond: true,
             preemptive_adapter_reset: false,
             adapter_privacy: true,
@@ -415,6 +416,7 @@ describe.skipIf(!HARNESS)(
           qn_a4_prelude: true
           qn_time_sync_long: false
           qn_config_long: true
+          qn_result_ack: true
           auto_clear_stale_bond: true
           preemptive_adapter_reset: false
           adapter_privacy: true
@@ -532,6 +534,28 @@ describe.skipIf(!HARNESS)(
         expectLoads(r);
         expect(r.text).not.toContain('qn_user_key');
         expect(r.stdout).not.toContain('qn_user_key');
+      });
+    });
+
+    // Normalised like the other QN switches (#331).
+    describe('qn_result_ack', () => {
+      it('writes true on its own, opening the ble block', () => {
+        const r = generate({ options: { ...DEFAULTS, qn_result_ack: 'true' } });
+        const config = expectLoads(r);
+        expect(config.ble?.qn_result_ack).toBe(true);
+        expect(r.text).toContain(`ble:
+  qn_result_ack: true
+`);
+      });
+
+      it('drops a value that is not true or false with a warning', () => {
+        const r = generate({ options: { ...DEFAULTS, qn_result_ack: 'maybe' } });
+        const config = expectLoads(r);
+        expect(config.ble?.qn_result_ack).toBeUndefined();
+        expect(r.text).not.toContain('qn_result_ack');
+        expect(r.stdout).toContain(
+          "WARNING: ignoring qn_result_ack='maybe' (expected true or false).",
+        );
       });
     });
 
@@ -933,6 +957,15 @@ describe.skipIf(!HARNESS)('run.sh custom_config and the transport options', () =
       "WARNING: custom_config is enabled, so the 'qn_user_key' option is ignored.",
     );
     expect(r.stdout).toContain("Set 'ble.qn_user_key' in");
+  });
+
+  it('names qn_result_ack as ignored when it is set', () => {
+    const r = run({ ...CUSTOM, qn_result_ack: 'true' });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain(
+      "WARNING: custom_config is enabled, so the 'qn_result_ack' option is ignored.",
+    );
+    expect(r.stdout).toContain("Set 'ble.qn_result_ack' in");
   });
 
   it('says nothing while every transport option has its default', () => {

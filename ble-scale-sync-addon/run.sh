@@ -250,7 +250,7 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
   # wrong value for either is silent by nature, so a setting that is silently
   # ignored is worse here than almost anywhere else.
   for _qn in qn_protocol_byte qn_report_byte qn_weight_ack qn_user_key qn_a4_prelude \
-    qn_time_sync_long qn_config_long auto_clear_stale_bond adapter_privacy; do
+    qn_time_sync_long qn_config_long qn_result_ack auto_clear_stale_bond adapter_privacy; do
     if [ -n "$(opt "$_qn")" ]; then
       log "WARNING: custom_config is enabled, so the '$_qn' option is ignored."
       log "Set 'ble.$_qn' in $CUSTOM_PATH instead."
@@ -362,6 +362,17 @@ else
     *)
       log "WARNING: ignoring qn_config_long='$QN_CONFIG_LONG' (expected true or false)."
       QN_CONFIG_LONG=""
+      ;;
+  esac
+  # Same free-text normalisation again, same reason.
+  QN_RESULT_ACK=$(opt qn_result_ack)
+  case "$(echo "$QN_RESULT_ACK" | tr '[:upper:]' '[:lower:]')" in
+    "") QN_RESULT_ACK="" ;;
+    true | yes | on | 1) QN_RESULT_ACK="true" ;;
+    false | no | off | 0) QN_RESULT_ACK="false" ;;
+    *)
+      log "WARNING: ignoring qn_result_ack='$QN_RESULT_ACK' (expected true or false)."
+      QN_RESULT_ACK=""
       ;;
   esac
   AUTO_CLEAR_STALE_BOND=$(opt_bool auto_clear_stale_bond)
@@ -716,7 +727,7 @@ YAML
   if [ -n "$SCALE_MAC" ] || [ -n "$BLE_ADAPTER" ] || [ -n "$FORCE_SCALE_ADAPTER" ] ||
     [ -n "$QN_PROTOCOL_BYTE" ] || [ -n "$QN_REPORT_BYTE" ] || [ -n "$QN_WEIGHT_ACK" ] ||
     [ -n "$QN_USER_KEY" ] || [ -n "$QN_A4_PRELUDE" ] || [ -n "$QN_TIME_SYNC_LONG" ] || [ -n "$QN_CONFIG_LONG" ] ||
-    [ "$AUTO_CLEAR_STALE_BOND" = "true" ] || [ "$PREEMPTIVE_ADAPTER_RESET" = "false" ] ||
+    [ -n "$QN_RESULT_ACK" ] || [ "$AUTO_CLEAR_STALE_BOND" = "true" ] || [ "$PREEMPTIVE_ADAPTER_RESET" = "false" ] ||
     [ "$ADAPTER_PRIVACY" = "true" ] || [ "$PROXY_LIVENESS_MIN" != "30" ] ||
     [ "$BLE_TRANSPORT" != "local" ]; then
     echo "ble:" >> "$FRESH"
@@ -730,6 +741,7 @@ YAML
     [ -n "$QN_A4_PRELUDE" ] && echo "  qn_a4_prelude: $QN_A4_PRELUDE" >> "$FRESH"
     [ -n "$QN_TIME_SYNC_LONG" ] && echo "  qn_time_sync_long: $QN_TIME_SYNC_LONG" >> "$FRESH"
     [ -n "$QN_CONFIG_LONG" ] && echo "  qn_config_long: $QN_CONFIG_LONG" >> "$FRESH"
+    [ -n "$QN_RESULT_ACK" ] && echo "  qn_result_ack: $QN_RESULT_ACK" >> "$FRESH"
     [ "$AUTO_CLEAR_STALE_BOND" = "true" ] && echo "  auto_clear_stale_bond: true" >> "$FRESH"
     [ "$PREEMPTIVE_ADAPTER_RESET" = "false" ] && echo "  preemptive_adapter_reset: false" >> "$FRESH"
     [ "$ADAPTER_PRIVACY" = "true" ] && echo "  adapter_privacy: true" >> "$FRESH"

@@ -54,8 +54,8 @@ configuration:
       own weight. On the 19-byte Arboleaf dialect it also sends the first
       user's age, height and sex as the app does, which lets the scale's own
       body composition be exported when it was computed for that profile, and
-      one such scale streamed its weight with this and QN long time sync both
-      set true (not yet confirmed on hardware, #331). Leave empty unless your
+      two such scales have streamed their weight with this and QN long time
+      sync both set true (#331). Leave empty unless your
       QN scale completes the whole handshake in the log and then reports no
       weight at all; then set true.
   qn_user_key:
@@ -96,6 +96,14 @@ configuration:
       add-on sends. Set true to send the longer frame. What the extra bytes
       select is not known, so this is a diagnostic to try, not a fix. Leave
       empty otherwise.
+  qn_result_ack:
+    name: QN result acknowledgement
+    description: >-
+      QN-family scales with a 19-byte scale-info frame only. Sends the
+      end-of-measurement frame the vendor's published SDK sends after the
+      scale's last result frame, which this add-on does not send otherwise.
+      Not yet confirmed on hardware; leave empty unless you are testing it for
+      #331.
   auto_clear_stale_bond:
     name: Re-pair a scale that forgot its pairing
     description: >-

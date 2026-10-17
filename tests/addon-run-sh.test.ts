@@ -236,6 +236,22 @@ describe('add-on option adapter_privacy (#417)', () => {
   });
 });
 
+// A text option like the other QN switches, so that unset stays unset (#331).
+describe('add-on option qn_result_ack', () => {
+  it('is an add-on option, unset by default, validated as text', () => {
+    const { schema } = parse(lf(readFileSync('ble-scale-sync-addon/config.yaml', 'utf8'))) as {
+      schema: Record<string, unknown>;
+    };
+    expect(MANIFEST.options).toHaveProperty('qn_result_ack', '');
+    expect(schema).toHaveProperty('qn_result_ack', 'str?');
+    expect(TRANSLATIONS.configuration).toHaveProperty('qn_result_ack');
+  });
+
+  it('is named as ignored in custom config mode', () => {
+    expect(customConfigBranch()).toMatch(/for _qn in [^;]*\bqn_result_ack\b[^;]*; do/);
+  });
+});
+
 describe('generated config: ble block', () => {
   it('is opened by every option it writes', () => {
     // An option written inside the block but missing from its condition is
@@ -252,6 +268,7 @@ describe('generated config: ble block', () => {
       ...body.matchAll(/\[ [^\]]*"\$([A-Z_]+)"[^\]]*\] && (?:echo|printf|emit_[a-z_]+)/g),
     ].map((m) => m[1]);
     expect(written).toContain('ADAPTER_PRIVACY');
+    expect(written).toContain('QN_RESULT_ACK');
     expect(written).toContain('SCALE_MAC');
     expect(written).toContain('BLE_TRANSPORT');
     for (const v of written) expect(condition, v).toContain(`"$${v}"`);

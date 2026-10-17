@@ -63,6 +63,7 @@ options:
   qn_a4_prelude: ''
   qn_time_sync_long: ''
   qn_config_long: ''
+  qn_result_ack: ''
   auto_clear_stale_bond: false
   preemptive_adapter_reset: true
   adapter_privacy: false
@@ -119,6 +120,7 @@ schema:
   qn_a4_prelude: str?
   qn_time_sync_long: str?
   qn_config_long: str?
+  qn_result_ack: str?
   auto_clear_stale_bond: bool?
   preemptive_adapter_reset: bool?
   adapter_privacy: bool?

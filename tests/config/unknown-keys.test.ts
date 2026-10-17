@@ -44,6 +44,7 @@ describe('collectUnknownKeys', () => {
         qn_a4_prelude: true,
         qn_time_sync_long: true,
         qn_config_long: true,
+        qn_result_ack: true,
         auto_clear_stale_bond: true,
         preemptive_adapter_reset: false,
         adapter_privacy: true,
