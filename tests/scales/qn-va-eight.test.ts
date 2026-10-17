@@ -689,7 +689,13 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
 
   it("uses the scale's values when the matched user has the profile it was sent", async () => {
     const info = spyLines('info');
+    const debug = spyLines('debug');
     const { adapter, reading } = await weighIn();
+    // The scale's display shows the percentages; the log gives the kg exported.
+    expect(debug.lines()).toContain(
+      'QN: the scale reports muscle and bone as % of body weight: muscle 77.9 % (59.87 kg), ' +
+        'bone 4.2 % (3.23 kg); exported in kg (#331)',
+    );
     const payload = adapter.computeMetrics(reading, P181);
     expect(payload).toMatchObject({
       weight: 76.85,

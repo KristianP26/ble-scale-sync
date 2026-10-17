@@ -3,6 +3,7 @@ import {
   buildPayload,
   compositionRejection,
   isPlausibleImpedance,
+  r2,
   ReadingComposition,
   type ScaleBodyComp,
 } from '../body-comp-helpers.js';
@@ -1622,6 +1623,17 @@ export class QnScaleAdapter
         .map(([k, v]) => `${k} ${v}`)
         .join(', ')} (#331)`,
     );
+    // The line above prints muscle and bone as the scale sends them, which the
+    // display shows too; the export is in kg, so the log names both (#331).
+    if (this.readyValueType === 1) {
+      const w = reading.weight;
+      bleLog.debug(
+        'QN: the scale reports muscle and bone as % of body weight: ' +
+          `muscle ${composition.muscle} % (${r2((composition.muscle / 100) * w)} kg), ` +
+          `bone ${composition.bone} % (${r2((composition.bone * w) / 100)} kg); ` +
+          'exported in kg (#331)',
+      );
+    }
     this.scaleComposition.pin(reading, {
       result,
       composition,
