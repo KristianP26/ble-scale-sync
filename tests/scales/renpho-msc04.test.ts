@@ -291,8 +291,9 @@ describe('RenphoMsc04Adapter', () => {
       expect(feed(settled(), [REC_1, wrongMarker, REC_3])).toBeNull();
     });
 
-    // Two gates reject this now (no 0x11 right before it, no stored-record
-    // count); removing either alone leaves it green, N4 and N5 isolate them.
+    // Two gates reject this (no 0x11 right before it, no stored-record count);
+    // removing either alone leaves it green. The D057 block at the end of this
+    // file isolates each one.
     it('ignores a record with neither a settled weight nor a status before it', () => {
       const adapter = makeAdapter();
       adapter.onSessionStart();

@@ -883,7 +883,7 @@ export class RenphoMsc04Adapter
     return reading;
   }
 
-  /** The 0x24 weight when the record matches it, else null (gate unchanged). */
+  /** The 0x24 weight when the record is within RECORD_WEIGHT_TOLERANCE_KG of it, else null. */
   private weightFromFinal(rec: CompositionRecord): number | null {
     if (Math.abs(rec.weight - this.finalWeight) > RECORD_WEIGHT_TOLERANCE_KG) {
       bleLog.debug(
@@ -951,7 +951,7 @@ export class RenphoMsc04Adapter
     return reading.weight > 0 && (this.finalReceived || this.isFinal(reading));
   }
 
-  /** Final only once a matching 0x25 record completed the reading. */
+  /** Final only once a 0x25 record completed the reading, with or without a 0x24. */
   isFinal(reading: ScaleReading): boolean {
     return this.records.of(reading, null) !== null;
   }
