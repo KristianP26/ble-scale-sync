@@ -1303,8 +1303,9 @@ export class QnScaleAdapter
     // Never sent for the 20-byte layout above. Read through the original layout
     // its rawWeight is 0x0011, so the echo handed the scale `a2 06 01 00 11 ba`,
     // i.e. 0.17 kg, on every live frame; that path returns above now, and the
-    // 19-byte dialect's decode writes nothing at all, since its one complete
-    // weigh-in arrived without an echo or a 0x1F (#331). Whether the app echoes
+    // 19-byte dialect's decode echoes nothing, since its complete weigh-ins
+    // arrived without an echo; its only write is the 0x1F after the result
+    // block's 0x16 with `ble.qn_result_ack` (#331). Whether the app echoes
     // this shape at all is not known, so a 20-byte frame on the ES-30M branch is
     // not echoed either. The 14-byte ES-30M and 10-byte classic frames keep it:
     // their offsets are right. Sent before the stability gate, fire and forget,

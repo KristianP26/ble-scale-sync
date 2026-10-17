@@ -358,7 +358,7 @@ ble:
   qn_result_ack: true
 ```
 
-The debug log then shows, right after the scale's last result frame:
+The debug log then shows the first line below at the scale's last result frame, and the second a few lines later, once the frame has gone out:
 
 ```
 QN: 0x16 completes the result block, sending 0x1F as the vendor app does (ble.qn_result_ack, #331)
