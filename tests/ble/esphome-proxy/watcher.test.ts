@@ -377,6 +377,36 @@ describe('ReadingWatcher session after a reading (#466, D058)', () => {
     }
   });
 
+  it('still reads a second weigh-in in the session after a reading', async () => {
+    // That session is how a second person stepping on before the scale
+    // switches off gets read. Another weight, so the 30 s dedup lets it by.
+    connectGattSpy.mockClear();
+    const log = spies();
+    const mac = 'AA:BB:CC:DD:EE:45';
+    const adapter = {
+      ...gattAdapter(),
+      parseNotification: (): ScaleReading => ({
+        weight: connectGattSpy.mock.calls.length > 1 ? 64.5 : 82,
+        impedance: 0,
+      }),
+    } as ScaleAdapter;
+    const watcher = new ReadingWatcher(config, [adapter]);
+    try {
+      await watcher.start();
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      expect((await watcher.nextReading()).reading.weight).toBe(82);
+      await settle();
+
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      expect((await watcher.nextReading()).reading.weight).toBe(64.5);
+      expect(lines(log.info).filter((l) => NO_WEIGH_IN.test(l))).toEqual([]);
+      expect(lines(log.warn)).toEqual([]);
+    } finally {
+      reset();
+      await watcher.stop();
+    }
+  });
+
   it('still warns for a session opened after the window', async () => {
     const log = spies();
     const mac = 'AA:BB:CC:DD:EE:41';
