@@ -212,9 +212,9 @@ No scale found, retrying in 20s... (le-connection-abort-by-local)
 Scale connected but sent no reading, retrying in 60s... (Timed out waiting for a complete scale reading)
 ```
 
-This is about the built-in Bluetooth handlers (`ble.handler` `auto`, `node-ble` or `noble`; `ble_transport: local` in the add-on). On `mqtt-proxy`, `esphome-proxy` and `ha-bluetooth` none of these waits apply: the app does not scan in cycles, it listens all the time.
+This is about the built-in Bluetooth handlers (`ble.handler: auto`, which runs `node-ble` on Linux and `noble` elsewhere; `ble_transport: local` in the add-on). On `mqtt-proxy`, `esphome-proxy` and `ha-bluetooth` none of these waits apply: the app does not scan in cycles, it listens all the time.
 
-A scale that needs a connection and is still on after a reading is connected again on its next advertisement, so a second weigh-in before it switches off can be read. When nobody steps on, the log notes it at info level: `... session opened 0.7 s after the last reading, while the scale was still on, ended without a new weigh-in (...)`.
+On `mqtt-proxy` and `esphome-proxy`, a scale that needs a connection and is still on after a reading is connected again on its next advertisement, so a second weigh-in before it switches off can be read. When nobody steps on, the log notes it at info level: `... session opened 0.7 s after the last reading, while the scale was still on, ended without a new weigh-in (...)`.
 
 ## Debug Mode
 
