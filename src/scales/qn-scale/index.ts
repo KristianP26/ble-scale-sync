@@ -1530,9 +1530,12 @@ export class QnScaleAdapter
 
     // Collected before the repeat check below, so a repeated block still gets
     // the `ble.qn_result_ack` answer at its 0x16, as the vendor's SDK gives it.
-    // Nothing else reads a repeated block: its 0x16 publishes nothing.
+    // Nothing else reads a repeated block: its 0x16 publishes nothing. A 0x15
+    // from before this first part belongs to an earlier block (a repeated one
+    // leaves the session open), so it is dropped, as the SDK drops it here.
     if (status === LIVE20_STATUS_RESULT) {
       this.live20Block = total === 3 ? [Buffer.from(data)] : [];
+      this.live20C15 = null;
     }
 
     // A result block with no measurement before it in this session (no live

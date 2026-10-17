@@ -1046,6 +1046,26 @@ describe('QN 19-byte: ble.qn_result_ack (#331)', () => {
     expect(after()).toEqual([ACK]);
   });
 
+  // Derived: a repeated block leaves the session open, and the next block in
+  // it (the 2026-10-06 one) arrives without its 0x15. The repeated block's
+  // 0x15 does not complete it.
+  it("does not count an earlier block's 0x15 toward the next block", async () => {
+    const debug = spyLines('debug');
+    const adapter = new QnScaleAdapter();
+    let { s, after } = await session(ON, '2026-10-07T20:00:44Z', adapter);
+    s.feed(...R07_LIVE);
+
+    ({ s, after } = await session(ON, '2026-10-07T20:02:44Z', adapter));
+    s.feed(...R07_LIVE);
+    const out = s.feed(R06.P1, R06.P2, R06.P3, R06.D16);
+    expect(out[3]).toEqual({ weight: 76.85, impedance: 0 });
+    expect(after()).toEqual([ACK]);
+    expect(debug.lines()).toContain(
+      'QN: 0x16 without a complete result block, no 0x1F sent (ble.qn_result_ack, #331)',
+    );
+    expect(debug.lines()).toContain('QN: no complete result block for this weigh-in (#331)');
+  });
+
   it('sends nothing for a stored record', async () => {
     const { s, after } = await session(ON, R07_CONNECTED);
     expect(s.feed(R07_SESSION.VISIT_OK, ...R07_STORED)[5]).not.toBeNull();
