@@ -2904,6 +2904,82 @@ describe('handler-mqtt-proxy', () => {
         mockClient.publishAsync = origPublish;
         await watcher.stop();
       });
+
+      // An advert marks a known MAC passive only when it shows the scale is the
+      // adapter's. These are standard BCS scales that Mi Scale 2 claims before
+      // discovery, so they must stay connectable.
+      const BCS_MAC = '11:22:33:44:55:66';
+      const BCS_BARE_ADVERT = { address: BCS_MAC, name: '', rssi: -60, services: ['181b'] };
+      const lastConfig = () => {
+        const calls = (mockClient.publishAsync as ReturnType<typeof vi.fn>).mock.calls.filter(
+          (c: unknown[]) => c[0] === `${PREFIX}/config`,
+        );
+        return calls.length ? JSON.parse(calls.at(-1)![1] as string) : undefined;
+      };
+
+      it('still connects a seeded BCS scale that Mi claims by its bare advert', async () => {
+        const watcher = new ReadingWatcher(
+          { ...MQTT_PROXY_CONFIG, auto_connect: false },
+          [...realAdapters],
+          BCS_MAC,
+          PROFILE,
+        );
+        await watcher.start();
+        mockClient._simulateMessage(`${PREFIX}/scan/results`, JSON.stringify([BCS_BARE_ADVERT]));
+        await new Promise((r) => setTimeout(r, 50));
+
+        expect(lastConfig()).not.toHaveProperty('passive');
+        expect(topicsPublished().filter((t) => t === `${PREFIX}/connect`)).toHaveLength(1);
+        await watcher.stop();
+      });
+
+      it('does not flip a BCS scale read over GATT to passive on its next advert', async () => {
+        const watcher = new ReadingWatcher(
+          { ...MQTT_PROXY_CONFIG, auto_connect: false },
+          [...realAdapters],
+          undefined,
+          PROFILE,
+        );
+        await watcher.start();
+        // What handleGattReading records after a completed BCS session.
+        const std = realAdapters.find((a) => a.name === 'Standard GATT (BCS/WSS)')!;
+        await registerScaleMac(MQTT_PROXY_CONFIG, BCS_MAC, std);
+        mockClient._simulateMessage(`${PREFIX}/scan/results`, JSON.stringify([BCS_BARE_ADVERT]));
+        await new Promise((r) => setTimeout(r, 50));
+
+        expect(lastConfig()).not.toHaveProperty('passive');
+        expect(topicsPublished().filter((t) => t === `${PREFIX}/connect`)).toHaveLength(1);
+        await watcher.stop();
+      });
+
+      it('does not mark a seeded BCS scale passive on service data Mi cannot parse', async () => {
+        const { toBleDeviceInfo } = await import('../../src/ble/handler-mqtt-proxy/scan.js');
+        const { evaluateAdvertisement } = await import('../../src/ble/advertisement.js');
+        const { resolveAdapter } = await import('../../src/scales/resolve.js');
+        // BCS + WSS, with a WSS measurement as 0x181D service data: the captured
+        // XMTZC04HM frame, without its Huami company id. Mi Scale 2 claims it by
+        // 0x181B and reads any service data as 'wait'.
+        const advert = {
+          address: BCS_MAC,
+          name: '',
+          rssi: -60,
+          services: ['181b', '181d'],
+          service_data: [{ uuid: '181d', data: '238e4eea070818103913' }],
+        };
+        const info = toBleDeviceInfo(advert);
+        const claimed = resolveAdapter(info, realAdapters)!;
+        expect(claimed.name).toBe('Xiaomi Mi Scale 2');
+        expect(evaluateAdvertisement(claimed, info).kind).toBe('wait');
+
+        const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [...realAdapters], BCS_MAC, PROFILE);
+        await watcher.start();
+        mockClient._simulateMessage(`${PREFIX}/scan/results`, JSON.stringify([advert]));
+        await new Promise((r) => setTimeout(r, 50));
+
+        expect(lastConfig()).not.toHaveProperty('passive');
+        expect(lastConfig()).not.toHaveProperty('autoConnect');
+        await watcher.stop();
+      });
     });
 
     it('ReadingWatcher supersedes the in-flight session on a newer autonomous connect (#296)', async () => {
