@@ -1063,8 +1063,8 @@ describe('scanAndReadRaw keeps a GATT-only scale in BlueZ between cycles (#425, 
     expect(calls).toContain('connectWithRecovery');
   });
 
-  it('never hands a kept object to the broadcast poll', async () => {
-    // G reads over GATT; P reads advertisements and claims only company 0x1234.
+  /** G reads over GATT; P reads advertisements and claims only company 0x1234. */
+  function gattAndPassive(): ScaleAdapter[] {
     type Seen = { manufacturerData?: { id: number } };
     const gatt = makeAdapter({
       name: 'G',
@@ -1077,7 +1077,11 @@ describe('scanAndReadRaw keeps a GATT-only scale in BlueZ between cycles (#425, 
       parseBroadcast: () => null,
       matches: (d: Seen) => d.manufacturerData?.id === 0x1234,
     } as unknown as Partial<ScaleAdapter>);
-    const adapters = [gatt, passive];
+    return [gatt, passive];
+  }
+
+  it('never hands a kept object to the broadcast poll', async () => {
+    const adapters = gattAndPassive();
     await afterReading(adapters);
 
     reportOnDiscoveryStart();
@@ -1092,6 +1096,25 @@ describe('scanAndReadRaw keeps a GATT-only scale in BlueZ between cycles (#425, 
     calls.length = 0;
     await cycle(adapters);
     expect(before('removeDevice', 'startDiscoverySafe')).toBe(true);
+  });
+
+  it('removes it again after a broadcast reading replaced a GATT-only one', async () => {
+    // BlueZ no longer lists the scale, so P reads a fresh object and the
+    // safety net above never runs: only the broadcast reading's own memory
+    // write brings the removal back.
+    const adapters = gattAndPassive();
+    await afterReading(adapters);
+
+    heldMissing = true;
+    snapshotCompanyId = 0x1234;
+    await cycle(adapters);
+    expect(calls).toContain('broadcastScanNodeBle');
+    expect(calls.filter((c) => c === 'waitDevice')).toHaveLength(1);
+
+    calls.length = 0;
+    await cycle(adapters);
+    expect(before('removeDevice', 'startDiscoverySafe')).toBe(true);
+    expect(calls).not.toContain('getDevice');
   });
 
   it('still removes it in the teardown after a failed GATT session', async () => {
