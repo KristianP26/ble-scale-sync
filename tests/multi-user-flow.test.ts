@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { matchUserByWeight, detectWeightDrift } from '../src/config/user-matching.js';
-import { resolveUserProfile, resolveExportersForUser } from '../src/config/resolve.js';
+import {
+  resolveUserProfile,
+  resolveExportersForUser,
+  resolveSessionProfile,
+} from '../src/config/resolve.js';
 import type { AppConfig, UserConfig } from '../src/config/schema.js';
 import type { ExportContext } from '../src/interfaces/exporter.js';
 
@@ -74,6 +78,36 @@ describe('Multi-user flow: matching → profile resolution', () => {
     };
     const profile = resolveUserProfile(user, inchConfig.scale);
     expect(profile.height).toBeCloseTo(182.88, 1);
+  });
+});
+
+describe('Multi-user flow: session profile selection', () => {
+  it('returns the matched slug and resolved demographics for an in-range weight', () => {
+    const selection = resolveSessionProfile(appConfig, 82);
+
+    expect(selection?.userSlug).toBe('dad');
+    expect(selection?.profile.height).toBe(183);
+    expect(selection?.profile.gender).toBe('male');
+  });
+
+  it('selects the configured single user when the weight is in range', () => {
+    const config = { ...appConfig, users: [dad] };
+    const selection = resolveSessionProfile(config, 82);
+
+    expect(selection?.userSlug).toBe('dad');
+    expect(selection?.profile.height).toBe(183);
+  });
+
+  it('returns null for an out-of-range single-user weight when configured to skip', () => {
+    const config = { ...appConfig, users: [dad], out_of_range: 'skip' as const };
+
+    expect(resolveSessionProfile(config, 100)).toBeNull();
+  });
+
+  it('returns null for a multi-user fallback match outside all ranges when configured to skip', () => {
+    const config = { ...appConfig, out_of_range: 'skip' as const };
+
+    expect(resolveSessionProfile(config, 120)).toBeNull();
   });
 });
 
@@ -236,5 +270,41 @@ describe('Multi-user flow: overlapping range tiebreak', () => {
     const match = matchUserByWeight([user1, user2], 77, 'nearest');
     expect(match.user).toBe(user2);
     expect(match.tier).toBe('tiebreak');
+  });
+
+  it('rejects an ambiguous inclusive endpoint despite last_known_weight tiebreak', () => {
+    const user1: UserConfig = {
+      ...dad,
+      weight_range: { min: 70, max: 80 },
+      last_known_weight: 72,
+    };
+    const user2: UserConfig = {
+      ...mom,
+      weight_range: { min: 80, max: 90 },
+      last_known_weight: 81,
+    };
+
+    const config = { ...appConfig, users: [user1, user2] };
+    for (const out_of_range of ['skip', 'warn'] as const) {
+      expect(resolveSessionProfile({ ...config, out_of_range }, 80)).toBeNull();
+    }
+  });
+
+  it('rejects an ambiguous inclusive endpoint when config order would win without history', () => {
+    const user1: UserConfig = {
+      ...dad,
+      weight_range: { min: 70, max: 80 },
+      last_known_weight: null,
+    };
+    const user2: UserConfig = {
+      ...mom,
+      weight_range: { min: 80, max: 90 },
+      last_known_weight: null,
+    };
+
+    const config = { ...appConfig, users: [user1, user2] };
+    for (const out_of_range of ['skip', 'warn'] as const) {
+      expect(resolveSessionProfile({ ...config, out_of_range }, 80)).toBeNull();
+    }
   });
 });

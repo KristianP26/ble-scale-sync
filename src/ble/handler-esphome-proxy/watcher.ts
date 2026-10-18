@@ -3,6 +3,7 @@ import type {
   BleDeviceInfo,
   UserProfile,
   ScaleAuth,
+  SessionProfileSelector,
 } from '../../interfaces/scale-adapter.js';
 import type { EsphomeProxyConfig, WeightUnit } from '../../config/schema.js';
 import { type RawReading, waitForRawReading, withAbandonmentCleanup } from '../shared.js';
@@ -56,6 +57,7 @@ export class ReadingWatcher implements Watcher {
   private scaleAuth?: ScaleAuth;
   /** `scale.weight_unit`, passed to every GATT read (see WatcherConfig). */
   private weightUnit?: WeightUnit;
+  private selectProfile?: SessionProfileSelector;
   private config: EsphomeProxyConfig;
   private readonly dedup = new DedupWindow(DEDUP_WINDOW_MS);
   private pool: EsphomeProxyPool | null = null;
@@ -125,6 +127,7 @@ export class ReadingWatcher implements Watcher {
     profile?: ProfileSource,
     scaleAuth?: ScaleAuth,
     weightUnit?: WeightUnit,
+    selectProfile?: SessionProfileSelector,
   ) {
     this.config = config;
     this.adapters = adapters;
@@ -132,6 +135,7 @@ export class ReadingWatcher implements Watcher {
     this.profile = profile;
     this.scaleAuth = scaleAuth;
     this.weightUnit = weightUnit;
+    this.selectProfile = selectProfile;
   }
 
   async start(): Promise<void> {
@@ -184,6 +188,7 @@ export class ReadingWatcher implements Watcher {
     if (config.profile) this.profile = config.profile;
     this.scaleAuth = config.scaleAuth;
     this.weightUnit = config.weightUnit;
+    this.selectProfile = config.selectProfile;
   }
 
   private handleAd(rawInfo: BleDeviceInfo, address: string): void {
@@ -288,6 +293,7 @@ export class ReadingWatcher implements Watcher {
                   onActivity,
                   info.localName,
                   manufacturerData,
+                  this.selectProfile,
                 ),
               GATT_READING_IDLE_MS,
               `GATT reading timeout for ${address}`,

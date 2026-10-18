@@ -3,6 +3,47 @@ import { adapters } from '../../src/scales/index.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
 
+describe('adapter resolution (Senssun IF_B2 registration)', () => {
+  it('resolves the exact IF_B2 name with FFF0 service to Senssun IF_B2', () => {
+    const info: BleDeviceInfo = {
+      localName: 'IF_B2',
+      serviceUuids: [uuid16(0xfff0)],
+    };
+    const matched = adapters.find((a) => a.matches(info));
+    expect(matched?.name).toBe('Senssun IF_B2');
+  });
+
+  it('resolves a lowercase IF_B2 name identically', () => {
+    const info: BleDeviceInfo = {
+      localName: 'if_b2',
+      serviceUuids: [uuid16(0xfff0)],
+    };
+    const matched = adapters.find((a) => a.matches(info));
+    expect(matched?.name).toBe('Senssun IF_B2');
+  });
+
+  it('does not resolve an unnamed FFF0 device to Senssun IF_B2', () => {
+    const info: BleDeviceInfo = {
+      localName: '',
+      serviceUuids: [uuid16(0xfff0)],
+    };
+    const matched = adapters.find((a) => a.matches(info));
+    expect(matched?.name).not.toBe('Senssun IF_B2');
+  });
+
+  it('preserves the legacy Senssun Fat Scale resolution', () => {
+    const info: BleDeviceInfo = { localName: 'senssun fat', serviceUuids: [] };
+    const matched = adapters.find((a) => a.matches(info));
+    expect(matched?.name).toBe('Senssun Fat Scale');
+  });
+
+  it('preserves the legacy QN Scale resolution', () => {
+    const info: BleDeviceInfo = { localName: 'QN-Scale', serviceUuids: [uuid16(0xfff0)] };
+    const matched = adapters.find((a) => a.matches(info));
+    expect(matched?.name).toBe('QN Scale');
+  });
+});
+
 // Regression for #177: a Eufy/1byone T9146 advertises name "eufy T9146" and the
 // generic 0xFFF0 vendor service. Before the fix, Inlife (earlier in the adapter
 // array) shadowed the 1byone adapter via its bare 0xFFF0 fallback. Once

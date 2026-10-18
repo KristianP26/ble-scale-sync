@@ -2,6 +2,7 @@ import type {
   BleDeviceInfo,
   ScaleAdapter,
   ScaleAuth,
+  SessionProfileSelector,
   UserProfile,
 } from '../../interfaces/scale-adapter.js';
 import type { MqttProxyConfig, WeightUnit } from '../../config/schema.js';
@@ -87,6 +88,7 @@ export class ReadingWatcher implements Watcher {
   private scaleAuth?: ScaleAuth;
   /** `scale.weight_unit`, passed to every GATT read (see WatcherConfig). */
   private weightUnit?: WeightUnit;
+  private selectProfile?: SessionProfileSelector;
   private gattInProgress = false;
   /** Monotonic id of the newest GATT session, so a superseded one cannot tear down its successor (#296). */
   private gattSessionSeq = 0;
@@ -134,6 +136,7 @@ export class ReadingWatcher implements Watcher {
     profile?: ProfileSource,
     scaleAuth?: ScaleAuth,
     weightUnit?: WeightUnit,
+    selectProfile?: SessionProfileSelector,
   ) {
     this.config = config;
     this.adapters = adapters;
@@ -141,6 +144,7 @@ export class ReadingWatcher implements Watcher {
     this.profile = profile;
     this.scaleAuth = scaleAuth;
     this.weightUnit = weightUnit;
+    this.selectProfile = selectProfile;
   }
 
   async start(): Promise<void> {
@@ -488,6 +492,7 @@ export class ReadingWatcher implements Watcher {
     if (config.profile) this.profile = config.profile;
     this.scaleAuth = config.scaleAuth;
     this.weightUnit = config.weightUnit;
+    this.selectProfile = config.selectProfile;
   }
 
   private static readonly GATT_STALE_MS = 90_000;
@@ -654,6 +659,7 @@ export class ReadingWatcher implements Watcher {
                 onActivity,
                 entry.name,
                 toBleDeviceInfo(entry).manufacturerData,
+                this.selectProfile,
               ),
             GATT_READING_IDLE_MS,
             `GATT reading timeout for ${entry.address}`,
@@ -812,6 +818,7 @@ export class ReadingWatcher implements Watcher {
                 onActivity,
                 info.localName,
                 info.manufacturerData,
+                this.selectProfile,
               ),
             GATT_READING_IDLE_MS,
             `GATT reading timeout for ${data.address} (autonomous)`,

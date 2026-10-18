@@ -9,7 +9,7 @@ head:
 
 # Supported Scales
 
-**41 protocol adapters**, plus a Standard BT SIG catch-all for any spec-compliant scale. Most adapters cover several rebrands, so real coverage is wider than the count.
+**42 protocol adapters**, plus a Standard BT SIG catch-all for any spec-compliant scale. Most adapters cover several rebrands, so real coverage is wider than the count.
 
 ## Scale List
 
@@ -45,6 +45,7 @@ _Weight only_ means weight is reported normally but body composition is estimate
 | **Medisana** BS430 / BS440 / BS444                                             | Yes              |                                                                                                                                               |
 | **Active Era** BS-06 and other `AC 27` scales                                  | Yes              | Picked automatically when the scale advertises manufacturer id `0x27AC`; wake it before stepping on, see below                                |
 | **Senssun** Fat                                                                | Yes              | Model A only                                                                                                                                  |
+| **Senssun** IF_B2                                                        | Yes              | Body composition over GATT service 0xFFF0 (`0xFFF1` notify, `0xFFF2` write)                            |
 | **MGB** (Swan / Icomon / YG)                                                   | Yes              |                                                                                                                                               |
 | **Hutbit** 218008 / WL292                                                      | Yes              | Also sold under stock `SWAN` branding                                                                                                         |
 | **Robi** S9                                                                    | Weight only      |                                                                                                                                               |
@@ -83,6 +84,14 @@ We recommend setting `scale_mac` in `config.yaml`. It prevents the app from acci
 ## Known Limitations
 
 Everything below still works; these are the quirks worth knowing before you buy or debug.
+
+### **Senssun** IF_B2
+
+The IF_B2 model reports body composition over GATT service `0xFFF0`, using `0xFFF1` for notifications and `0xFFF2` for writes. Users only need to step on the scale. BLE Scale Sync waits until one uniquely matched live weight remains unchanged for two seconds, updates reusable scale profile PIN `0001`, and confirms the same user from the final current record before exporting. The scale retains the most recently acknowledged user's demographics in that profile. In multi-user mode, use non-overlapping `weight_range` values and set `out_of_range: skip` so ambiguous or unrelated weights are not exported.
+
+Fractional-centimetre heights, including values converted from inches, are rounded to the nearest whole centimetre in the scale profile command. Local body-composition calculations retain the configured height precision. Overlapping ranges, including a shared inclusive endpoint, do not authorize a session profile even when ordinary weight matching could resolve a tiebreak.
+
+The record's measurement age is retained for export timestamps. Records older than five minutes follow the normal historical-reading rules, with composition recalculated for the independently attributed user. If the processor rejects an implausible impedance value, body composition falls back to the BMI estimate rather than the scale-derived values.
 
 ### **Soehnle**, **Sanitas** SBF72/73
 

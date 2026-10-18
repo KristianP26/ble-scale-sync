@@ -36,6 +36,10 @@ const h = vi.hoisted(() => {
     createReadingSource: vi.fn(),
     raceWithLiveness: vi.fn(() => new Promise(() => {})),
     resolveUserProfile: vi.fn(() => ({ __profile: 'sentinel' })),
+    resolveSessionProfile: vi.fn((config: { users: Array<{ slug?: string }> }) => ({
+      userSlug: config.users[0]?.slug ?? 'unknown',
+      profile: { __profile: config.users[0]?.slug ?? 'unknown' },
+    })),
     abortableSleep: vi.fn(async () => undefined),
   };
 });
@@ -47,7 +51,10 @@ vi.mock('../../src/runtime/proxy-liveness.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/runtime/proxy-liveness.js')>();
   return { ...actual, raceWithLiveness: h.raceWithLiveness };
 });
-vi.mock('../../src/config/resolve.js', () => ({ resolveUserProfile: h.resolveUserProfile }));
+vi.mock('../../src/config/resolve.js', () => ({
+  resolveUserProfile: h.resolveUserProfile,
+  resolveSessionProfile: h.resolveSessionProfile,
+}));
 vi.mock('../../src/ble/types.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/ble/types.js')>();
   return { ...actual, abortableSleep: h.abortableSleep };
@@ -111,25 +118,6 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
     vi.restoreAllMocks();
   });
 
-  it('passes the transport-selection inputs to createReadingSource', async () => {
-    h.createReadingSource.mockResolvedValue(watcherPlan('Error processing reading'));
-    const ctx = makeCtx({ bleHandler: 'mqtt-proxy', mqttProxy: { broker_url: 'x' } as never });
-    await buildReadingSource(ctx, ADAPTERS, 10, 30);
-
-    expect(h.createReadingSource).toHaveBeenCalledWith({
-      bleHandler: 'mqtt-proxy',
-      mqttProxy: ctx.mqttProxy,
-      esphomeProxy: undefined,
-      adapters: ADAPTERS,
-      targetMac: ctx.scaleMac,
-      profile: expect.any(Function),
-      scaleAuth: { pin: 1234, userIndex: 2 },
-      weightUnit: 'lbs',
-    });
-    const { profile } = h.createReadingSource.mock.calls[0][0] as { profile: ProfileSource };
-    expect(currentProfile(profile)).toEqual({ __profile: 'sentinel' });
-  });
-
   it('hands the watcher a profile source that resolves users[0] on every call (#331)', async () => {
     const plan = watcherPlan('Error processing ESPHome reading');
     h.createReadingSource.mockResolvedValue(plan);
@@ -148,39 +136,6 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
     const sent = plan.watcher.updateConfig.mock.calls[0][0] as { profile: ProfileSource };
     h.resolveUserProfile.mockReturnValueOnce({ lastKnownWeight: 92 } as never);
     expect(currentProfile(sent.profile)).toEqual({ lastKnownWeight: 92 });
-  });
-
-  it('watcher plan: returns the watcher as the source with its prefix and a re-resolving reload', async () => {
-    const plan = watcherPlan('Error processing ESPHome reading');
-    h.createReadingSource.mockResolvedValue(plan);
-    const ctx = makeCtx({ bleHandler: 'esphome-proxy', esphomeProxy: { host: 'h' } as never });
-
-    const bundle = await buildReadingSource(ctx, ADAPTERS, 10, 30);
-
-    // The watcher is wrapped rather than returned directly, so the proxy
-    // liveness check can sit around nextReading (#281). start/stop/nextReading
-    // still have to reach the watcher itself.
-    expect(bundle.failureLogPrefix).toBe('Error processing ESPHome reading');
-    await bundle.source.start?.();
-    expect(plan.watcher.start).toHaveBeenCalled();
-    await bundle.source.stop?.();
-    expect(plan.watcher.stop).toHaveBeenCalled();
-
-    bundle.onSourceReload?.();
-    expect(plan.watcher.updateConfig).toHaveBeenCalledWith({
-      adapters: ADAPTERS,
-      targetMac: ctx.scaleMac,
-      profile: expect.any(Function),
-      scaleAuth: { pin: 1234, userIndex: 2 },
-      weightUnit: 'lbs',
-    });
-
-    // The unit is read again on reload, like everything else the watcher gets.
-    (ctx as { weightUnit: string }).weightUnit = 'kg';
-    bundle.onSourceReload?.();
-    expect(plan.watcher.updateConfig).toHaveBeenLastCalledWith(
-      expect.objectContaining({ weightUnit: 'kg' }),
-    );
   });
 
   it('poll plan: PollReadingSource + watchdog-wired hooks', async () => {

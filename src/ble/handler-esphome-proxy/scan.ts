@@ -238,6 +238,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
                         onActivity,
                         info.localName,
                         manufacturerData,
+                        opts.selectProfile,
                       ),
                     GATT_READING_IDLE_MS,
                     `GATT reading timeout for ${address}`,

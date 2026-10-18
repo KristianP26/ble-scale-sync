@@ -50,6 +50,8 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
     },
   },
   'Senssun Fat Scale': { localName: 'senssun fat', serviceUuids: [] },
+  // Exact-name IF_B2 match must win over broad FFF0 candidates.
+  'Senssun IF_B2': { localName: 'IF_B2', serviceUuids: [uuid16(0xfff0)] },
   'QN Scale': { localName: 'QN-Scale', serviceUuids: ['fff0'] },
   // #191: a real ES-WBE28 advertises SIG WSS/BCS (0x181D/0x181B) and no QN
   // vendor service, so QN now defers and it resolves to RenphoScaleAdapter.

@@ -6,6 +6,7 @@ import type {
   BleDeviceInfo,
   ConnectionContext,
   ScaleAuth,
+  SessionProfileSelector,
 } from '../interfaces/scale-adapter.js';
 import type { WeightUnit } from '../config/schema.js';
 import { LBS_TO_KG, normalizeUuid, errMsg, bleLog, withTimeout } from './types.js';
@@ -233,6 +234,7 @@ function initializeAdapter(
   scaleAuth?: ScaleAuth,
   deviceName?: string,
   manufacturerData?: { id: number; data: Buffer },
+  selectProfile?: SessionProfileSelector,
 ): {
   start: () => Promise<void>;
   cleanup: () => void;
@@ -311,6 +313,7 @@ function initializeAdapter(
       const availableChars = new Set<string>(charMap.keys());
       const ctx: ConnectionContext = {
         profile,
+        selectProfile,
         scaleAuth,
         deviceAddress,
         ...(deviceName ? { deviceName } : {}),
@@ -667,6 +670,7 @@ export function waitForRawReading(
   onActivity?: (minIdleMs?: number) => void,
   deviceName?: string,
   manufacturerData?: { id: number; data: Buffer },
+  selectProfile?: SessionProfileSelector,
 ): Promise<RawReading> {
   return new Promise<RawReading>((resolve, reject) => {
     let resolved = false;
@@ -758,9 +762,19 @@ export function waitForRawReading(
         }
       }
 
-      const reading: ScaleReading | null = adapter.parseCharNotification
-        ? adapter.parseCharNotification(sourceUuid, data)
-        : adapter.parseNotification(data);
+      let reading: ScaleReading | null;
+      try {
+        reading = adapter.parseCharNotification
+          ? adapter.parseCharNotification(sourceUuid, data)
+          : adapter.parseNotification(data);
+      } catch (error) {
+        resolved = true;
+        hold.clear();
+        clearCaptureHold();
+        init.cleanup();
+        reject(error);
+        return;
+      }
       if (!reading) return;
 
       if (weightUnit === 'lbs' && !adapter.normalizesWeight) {
@@ -831,6 +845,7 @@ export function waitForRawReading(
       scaleAuth,
       deviceName,
       manufacturerData,
+      selectProfile,
     );
 
     /**

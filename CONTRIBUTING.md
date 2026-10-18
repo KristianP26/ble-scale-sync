@@ -51,7 +51,7 @@ Unit tests use [Vitest](https://vitest.dev/) and cover:
 - **Config writing** — atomic file write, write lock serialization, YAML comment preservation, debounced weight updates
 - **User matching** — 4-tier weight matching, all strategies (nearest/log/ignore), overlapping ranges, drift detection
 - **Environment validation** — `validate-env.ts` (all validation rules and edge cases)
-- **Scale adapters** — `parseNotification()`, `matches()`, `isComplete()`, `computeMetrics()`, and `onConnected()` for all 41 adapters
+- **Scale adapters** — `parseNotification()`, `matches()`, `isComplete()`, `computeMetrics()`, and `onConnected()` for all 42 adapters
 - **Exporters** — config parsing, MQTT publish/HA discovery, MQTT multi-user topic routing + per-user HA discovery, Garmin subprocess, Webhook/InfluxDB/Ntfy delivery, ExportContext, ntfy drift warning
 - **Multi-user flow** — matching → profile resolution → exporter resolution → ExportContext construction, strategy fallback, tiebreak with last_known_weight
 - **Orchestrator** — healthcheck runner, export dispatch, parallel execution, partial/total failure handling
@@ -280,6 +280,8 @@ To support a new scale brand, create a class that implements `ScaleAdapter` in `
 4. Register the adapter in `src/scales/index.ts` and give it a `match.priority` — **priority decides, not array position** (the resolver sorts by `match.priority`, higher wins; the generic catch-all sits at `0`, so an adapter that omits `priority` also defaults to `0` and will not reliably beat it)
 5. If your adapter detects the weight unit from BLE data and converts to kg internally, set `normalizesWeight = true`
 6. Add tests in `tests/scales/` using mock utilities from `tests/helpers/scale-test-utils.ts`
+
+Use synthetic profiles and measurements in new test fixtures. BLE payloads can contain weight, demographics, device identifiers, and other personal information even when stored as hexadecimal strings. Check both readable values and encoded fields before committing; keep private captures and investigation notes outside the contribution.
 
 ## Adding a New Exporter
 

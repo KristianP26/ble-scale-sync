@@ -4,6 +4,7 @@ import type {
   ScaleReading,
   ScaleAuth,
   LiveWeight,
+  SessionProfileSelector,
 } from '../interfaces/scale-adapter.js';
 import type {
   WeightUnit,
@@ -174,6 +175,11 @@ export interface ScanOptions {
    * the connect when it is off (`ble.adapter_privacy`, #417). node-ble only.
    */
   adapterPrivacy?: boolean;
+  /**
+   * Select the profile authorized for body-composition data at a measured weight.
+   * Return `null` when the runtime cannot safely authorize that data for the weight.
+   */
+  selectProfile?: SessionProfileSelector;
 }
 
 export interface ScanResult {
