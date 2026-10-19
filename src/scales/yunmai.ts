@@ -188,9 +188,9 @@ export class YunmaiScaleAdapter
     // 0 and exported next to a fat value from somewhere else (60 % fat with a
     // visceral rating of 1). On 0 the fat is the BMI estimate, not generic BIA:
     // no Yunmai frame on record shows the resistance is in ohms (YunmaiLib uses
-    // it as `(R - 100) / 100`), and the SIGNAL values (105-221) pass the
-    // 150-1200 gate while BIA on them lands far from the estimate (33 % against
-    // 60 % at BMI 55, the 4 % floor at a normal BMI).
+    // it as `(R - 100) / 100`), and the SIGNAL values from 150 up (105-221
+    // seen) pass the 150-1200 gate while BIA on them lands far from the
+    // estimate (33 % against 60 % at BMI 55, the 4 % floor at a normal BMI).
     const usable = (f: number | null | undefined): f is number =>
       f != null && compositionRejection({ fat: f }) === null;
     let fat: number;

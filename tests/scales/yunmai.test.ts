@@ -361,8 +361,9 @@ describe('Yunmai when its own fat formula gives up (D-08, D028)', () => {
   const profile = defaultProfile({ gender: 'female', height: 160, age: 40 });
   const reading = () => ({ weight: 141, impedance: 500 });
 
-  // The resistance of a SIGNAL frame passes the 150-1200 gate, but nothing shows
-  // it is in ohms; generic BIA on 187 gave 33 % here against the 60 % estimate.
+  // A SIGNAL resistance from 150 up passes the 150-1200 gate (187 here), but
+  // nothing shows it is in ohms; generic BIA on it gave 33 % against the 60 %
+  // estimate.
   it('falls back to the BMI estimate, not BIA on a resistance of unknown unit', () => {
     const a = makeAdapter();
     a.onSessionStart();
