@@ -87,6 +87,15 @@ export interface ConnectRecoveryContext {
    * leaving the LE link to the scale up (A-07).
    */
   abortSignal?: AbortSignal;
+  /**
+   * Told about every adapter and device the retry loop moves to. A
+   * startDiscoverySafe in here can replace the D-Bus connection, and the
+   * caller's teardown has to reach BlueZ through the live one: proxies on the
+   * old bus are never answered (#472). Once a device has been handed over this
+   * way it is the caller's, on a throw too, and this function releases only
+   * the ones it replaces. Without it the caller keeps what it passed in.
+   */
+  onLive?: (live: { btAdapter: Adapter; device: Device }) => void;
 }
 
 /**
@@ -144,7 +153,8 @@ function releaseSuperseded(previous: Device, current: Device): void {
 /**
  * Connect to a BLE device with recovery for BlueZ-specific failures.
  * On each failed attempt: disconnect -> RemoveDevice -> re-discover -> quiesce -> retry.
- * Returns the (possibly refreshed) Device reference.
+ * Returns the (possibly refreshed) Device reference; ctx.onLive hears of every
+ * adapter and device it moves to on the way, a throw included.
  */
 export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<Device> {
   let { btAdapter } = ctx;
@@ -182,6 +192,19 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
   // Set immediately before each return, so the finally can tell "handing this
   // proxy to the caller" from "leaving by exception".
   let succeeded = false;
+  // The device the caller holds: its own, or the last one handed over below.
+  let handedOver = ctx.initialDevice;
+  /** Hand the caller what the loop uses now; no-op without ctx.onLive. */
+  const reportLive = (): void => {
+    if (!ctx.onLive) return;
+    handedOver = device;
+    ctx.onLive({ btAdapter, device });
+  };
+  const adoptAdapter = (result: Adapter | false): void => {
+    if (!result || result === btAdapter) return;
+    btAdapter = result;
+    reportLive();
+  };
 
   try {
     await logLinkStateBeforeConnect(device);
@@ -205,8 +228,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           try {
             tracker.stop();
             privacyCheckDue = true;
-            const result = await startDiscoverySafe(btAdapter, bleAdapter, { abortSignal });
-            if (result) btAdapter = result;
+            adoptAdapter(await startDiscoverySafe(btAdapter, bleAdapter, { abortSignal }));
             const supersededByRediscovery = device;
             device = await waitDeviceBounded(
               btAdapter,
@@ -220,6 +242,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
             // this the retry loop is itself a source of the listener growth in
             // #397.
             releaseSuperseded(supersededByRediscovery, device);
+            reportLive();
             tracker = startPeerFreshnessTracker(device);
             if (keepDiscovery) {
               await sleep(POST_DISCOVERY_QUIESCE_MS);
@@ -349,8 +372,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
         const supersededByRetry = device;
         try {
           privacyCheckDue = true;
-          const result = await startDiscoverySafe(btAdapter, bleAdapter, { abortSignal });
-          if (result) btAdapter = result;
+          adoptAdapter(await startDiscoverySafe(btAdapter, bleAdapter, { abortSignal }));
           device = await waitDeviceBounded(
             btAdapter,
             formattedMac,
@@ -384,6 +406,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           }
         }
         releaseSuperseded(supersededByRetry, device);
+        reportLive();
         tracker = startPeerFreshnessTracker(device);
       }
     }
@@ -398,7 +421,8 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
     // certainly registered its match rule and bus listener, because the
     // freshness tracker reads RSSI off it (#404, same mechanism as #396/#397).
     //
-    // Only proxies acquired in here: ctx.initialDevice belongs to the caller.
-    if (!succeeded && device !== ctx.initialDevice) releaseDeviceProxy(device);
+    // Only proxies the caller does not hold: ctx.initialDevice, or the last one
+    // ctx.onLive handed over, is its to disconnect and release.
+    if (!succeeded && device !== handedOver) releaseDeviceProxy(device);
   }
 }

@@ -435,6 +435,18 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     }
   };
 
+  /**
+   * Follow the connect retry loop onto the adapter and device it uses now. A
+   * re-discovery in there can replace the D-Bus connection, and the teardown's
+   * Disconnect, StopDiscovery and RemoveDevice through the proxies of the old
+   * one would never be answered (#472).
+   */
+  const followConnect = (live: { btAdapter: Adapter; device: Device }): void => {
+    btAdapter = live.btAdapter;
+    probeAdapter = live.btAdapter;
+    device = live.device;
+  };
+
   // Publish this cycle's pairing target before the first getAdapter(), which is
   // where the agent registers. Stored as a closure rather than a value so a
   // config reload lands on the next cycle without a restart, and MAC-scoped so
@@ -632,6 +644,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         autoClearStaleBond,
         adapterPrivacy,
         abortSignal,
+        onLive: followConnect,
       });
       bleLog.info('Connected. Discovering services...');
 
@@ -725,6 +738,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         autoClearStaleBond,
         adapterPrivacy,
         abortSignal,
+        onLive: followConnect,
       });
       bleLog.info('Connected. Discovering services...');
     }

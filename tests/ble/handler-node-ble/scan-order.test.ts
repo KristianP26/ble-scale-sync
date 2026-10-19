@@ -124,6 +124,8 @@ vi.mock('../../../src/ble/types.js', async (importOriginal) => {
 
 /** When set, the next removeDevice waits for it. */
 let holdNextRemoveDevice: Promise<void> | null = null;
+/** The adapter every removeDevice was sent through, in order. */
+const removedThrough: unknown[] = [];
 
 /** What startDiscoverySafe does in a test: an adapter it returns replaces the cycle's. */
 let onDiscoveryStart: (() => unknown) | undefined;
@@ -133,7 +135,8 @@ let scanFiltered = true;
 vi.mock('../../../src/ble/handler-node-ble/discovery.js', () => ({
   startDiscoverySafe: record('startDiscoverySafe', async () => onDiscoveryStart?.()),
   runningScanIsFiltered: () => scanFiltered,
-  removeDevice: record('removeDevice', async () => {
+  removeDevice: record('removeDevice', async (adapter: unknown) => {
+    removedThrough.push(adapter);
     // One-shot gate: lets a test hold a cycle inside its teardown (A-04).
     const gate = holdNextRemoveDevice;
     holdNextRemoveDevice = null;
@@ -639,6 +642,65 @@ describe('scanAndReadRaw and a Disconnect BlueZ never answers (#472)', () => {
       expect(result.state(), `cycle ${cycle}`).toBe('resolved');
       expect(calls, `cycle ${cycle}`).toContain('releaseDeviceProxy');
     }
+  });
+});
+
+describe('scanAndReadRaw after a connect retry replaced the D-Bus connection (#472)', () => {
+  beforeEach(() => {
+    calls.length = 0;
+    removedThrough.length = 0;
+    _resetDeviceCacheForTests();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    onConnect = undefined;
+    connectThrows = undefined;
+    vi.useRealTimers();
+  });
+
+  it('tears down through the adapter and device the retry loop moved to', async () => {
+    // The proxies the cycle started with belong to a bus nobody answers on any
+    // more: a Disconnect through them read as a stale link, and a RemoveDevice
+    // parked the teardown until the poll deadline.
+    const live: string[] = [];
+    const liveAdapter = {
+      ...fakeAdapter,
+      helper: {
+        callMethod: async (method: string) => void live.push(`adapter ${method}`),
+        object: '/org/bluez/hci0',
+      },
+    };
+    const liveDevice = {
+      ...fakeDevice,
+      disconnect: async () => void live.push('device.disconnect'),
+      helper: { removeListeners: () => live.push('device released') },
+    };
+    onConnect = () => {
+      const ctx = connectContexts.at(-1) as {
+        onLive?: (l: { btAdapter: unknown; device: unknown }) => void;
+      };
+      ctx.onLive?.({ btAdapter: liveAdapter, device: liveDevice });
+    };
+    connectThrows = () =>
+      new Error('Connection failed after 6 attempts: le-connection-abort-by-local');
+
+    const result = track(
+      scanAndReadRaw({
+        targetMac: 'AA:BB:CC:DD:EE:FF',
+        adapters: [makeAdapter()],
+        profile: defaultProfile(),
+        preemptiveAdapterReset: false,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(result.state()).toBe('rejected');
+    expect(live).toEqual(['device.disconnect', 'device released']);
+    expect(calls).not.toContain('device.disconnect');
+    // The purge before the scan went through the cycle's own adapter, the one
+    // after the failed GATT session through the live one.
+    expect(removedThrough).toEqual([fakeAdapter, liveAdapter]);
+    expect(calls).not.toContain('recoverStaleLink');
   });
 });
 
