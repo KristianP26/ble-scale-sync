@@ -307,10 +307,11 @@ export const BleSchema = z
      * minutes, all night. Now, once our pairing agent has handled such a
      * request and the cycle ends with the scale still unpaired, the scale is
      * not connected to again for 2 minutes three times, then twice as long
-     * each time (4, 8, 16, 32, 64 minutes and so on) until the wait reaches
-     * this cap, and then for the cap each time (`pairingRetryDelayMs`). It goes at once when the scale comes back after a
-     * scan without it, when its advertisement shows a new weigh-in (Beurer
-     * BF720 family), when it is paired by other means, or after a restart.
+     * each time (4, 8, 16, 32 minutes and so on) until the wait reaches this
+     * cap, and then for the cap each time (`pairingRetryDelayMs`). It goes at
+     * once when the scale comes back after a scan without it, when its
+     * advertisement shows a new weigh-in (Beurer BF720 family), when it is
+     * paired by other means, or after a restart.
      *
      * Read on every cycle (hot-swap). node-ble only, and only in continuous
      * mode: a single run is a fresh process and starts without the memory.
