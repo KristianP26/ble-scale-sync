@@ -21,6 +21,24 @@ export { errMsg };
 export const LBS_TO_KG = 0.453592;
 export const BT_BASE_UUID_SUFFIX = '00001000800000805f9b34fb';
 export const CONNECT_TIMEOUT_MS = 30_000;
+
+/**
+ * How long a Device1.Disconnect (node-ble) may go unanswered before the link
+ * counts as stuck in BlueZ (#472).
+ *
+ * BlueZ answers a Disconnect for a device it lists as connected only once the
+ * connection is gone, and sends the kernel its MGMT Disconnect after a 2 s
+ * timer (DISCONNECT_TIMER). A kernel from v6.11 on waits at most 2 s more for
+ * the controller (HCI_CMD_TIMEOUT) and answers either way, and a device that is
+ * not connected is answered at once, so a healthy Disconnect is in by about
+ * 4 s. With a kernel older than that the MGMT Disconnect waits for the
+ * controller's Disconnection Complete, which a weak link can stretch to the
+ * supervision timeout (up to 32 s): there this can end a slow but healthy
+ * Disconnect early and cost one unneeded power-cycle. The debug line with the
+ * measured answer time is what this number should be tuned against.
+ */
+export const DISCONNECT_TIMEOUT_MS = 10_000;
+
 export const MAX_CONNECT_RETRIES = 5;
 export const DISCOVERY_TIMEOUT_MS = 120_000;
 export const DISCOVERY_POLL_MS = 2_000;
@@ -311,6 +329,33 @@ export class SessionTimeoutError extends Error {
 
   get reason(): 'idle' | 'cap' {
     return this.#reason;
+  }
+}
+
+/**
+ * BlueZ still lists the scale as connected and did not complete a
+ * Device1.Disconnect within DISCONNECT_TIMEOUT_MS (#472). Another connect
+ * attempt would "succeed" at once from that state and then wait in vain for
+ * the services, so the retry loop stops and the teardown recovers the adapter.
+ *
+ * Same shape as SessionTimeoutError: `name` stays 'Error' and `mac` is a
+ * getter, not an own enumerable property. Lives here rather than in the
+ * node-ble handler because the runtime picks the log prefix by it, and the
+ * handler is an optional dependency the runtime must not import.
+ */
+export class StaleLinkError extends Error {
+  readonly #mac: string;
+
+  constructor(mac: string) {
+    super(
+      `BlueZ keeps ${mac} marked as connected and did not complete a Disconnect within ` +
+        `${DISCONNECT_TIMEOUT_MS / 1000}s (#472)`,
+    );
+    this.#mac = mac;
+  }
+
+  get mac(): string {
+    return this.#mac;
   }
 }
 

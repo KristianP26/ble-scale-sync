@@ -41,6 +41,7 @@ import {
   parseHciIndex,
 } from './connection.js';
 import { removeDevice, notifyDiscoveryStopped } from './discovery.js';
+import { disconnectBounded } from './stale-link.js';
 import { logAdvertisementSnapshot, type AdvertisementSnapshot } from './device-object.js';
 import { buildCharMap } from './gatt.js';
 import {
@@ -471,10 +472,18 @@ export async function teardownSession(opts: {
    * the discovery session, the D-Bus connection and the controller.
    */
   isSuperseded?: () => boolean;
+  /**
+   * The cycle already saw BlueZ leave a Disconnect for this device unanswered
+   * (#472). The teardown then does not send another one, which would wait just
+   * as long.
+   */
+  staleLink?: boolean;
 }): Promise<void> {
   const { device, btAdapter, deviceMac, bleAdapter, gattAttempted, gattSucceeded, abortSignal } =
     opts;
   const preemptiveAdapterReset = opts.preemptiveAdapterReset !== false;
+  const mac = deviceMac ? formatMac(deviceMac) : 'the scale';
+  const staleLink = opts.staleLink === true;
   const superseded = (): boolean => opts.isSuperseded?.() === true;
   const standDown = (): void => {
     bleLog.debug(
@@ -486,116 +495,121 @@ export async function teardownSession(opts: {
     standDown();
     return;
   }
-  // Best-effort disconnect if we got partway through a connection
+  // Best-effort disconnect if we got partway through a connection. Sent on an
+  // aborted cycle too, since it is what cancels a Connect still pending in
+  // BlueZ (A-07); only the wait for its answer ends with the abort.
   if (device) {
-    try {
-      await device.disconnect();
-    } catch {
-      /* already disconnected or never connected */
+    if (!staleLink) {
+      bleLog.debug(`Disconnecting ${mac} after the session...`);
+      await disconnectBounded(device, { mac, label: 'teardown', abortSignal });
     }
     // Hand the Device proxy back. On a GATT cycle the resetConnection() below
     // would drop it anyway, but an idle or broadcast cycle never resets, so
     // without this the same device path collects one more listener and one more
     // D-Bus match rule per cycle for the life of the process (#396, #397). The
-    // session is over here, so nothing else can be holding it.
+    // session is over here, so nothing else can be holding it, and that holds
+    // after an unanswered Disconnect as much as after an answered one (#472).
     releaseDeviceProxy(device);
   }
 
-  // The disconnect above is a D-Bus call with no deadline. The poll loop aborts
+  // The Disconnect above can take up to its 10 s deadline. The poll loop aborts
   // a cycle it gives up on, so this teardown can start before the next cycle
-  // exists and still be parked here when it does (A-04).
+  // exists and still be running when it does (A-04).
   if (superseded()) {
     standDown();
     return;
   }
 
-  if (gattAttempted) {
-    // Cleanup after a FAILED read (scale disconnected before completion,
-    // GATT discovery timed out, etc.). BlueZ keeps the device proxy plus
-    // any orphaned notification subscriptions cached, and the controller
-    // level Discovering flag can desync from our client state
-    // (bluez/bluez#807). Before the shared btmgmt power-cycle runs, mirror
-    // what bleak-retry-connector does on Linux: force StopDiscovery via
-    // D-Bus and RemoveDevice the scale, so the next scan cycle starts from
-    // a clean BlueZ state instead of inheriting the zombie subscription.
-    if (!gattSucceeded) {
-      try {
-        await helperOf(btAdapter!).callMethod('StopDiscovery');
-        bleLog.debug('Force StopDiscovery after failed GATT');
-      } catch (e) {
-        bleLog.debug(`Force StopDiscovery failed: ${errMsg(e)}`);
-      }
-      // The resetConnection() below would invalidate the claim anyway, but the
-      // invariant should hold by construction, not by what happens to follow.
-      if (btAdapter) notifyDiscoveryStopped(btAdapter);
-      if (deviceMac) {
-        await removeDevice(btAdapter!, deviceMac);
-      }
+  // Cleanup after a FAILED read (scale disconnected before completion,
+  // GATT discovery timed out, etc.). BlueZ keeps the device proxy plus
+  // any orphaned notification subscriptions cached, and the controller
+  // level Discovering flag can desync from our client state
+  // (bluez/bluez#807). Before the shared btmgmt power-cycle runs, mirror
+  // what bleak-retry-connector does on Linux: force StopDiscovery via
+  // D-Bus and RemoveDevice the scale, so the next scan cycle starts from
+  // a clean BlueZ state instead of inheriting the zombie subscription.
+  if (gattAttempted && !gattSucceeded) {
+    try {
+      await helperOf(btAdapter!).callMethod('StopDiscovery');
+      bleLog.debug('Force StopDiscovery after failed GATT');
+    } catch (e) {
+      bleLog.debug(`Force StopDiscovery failed: ${errMsg(e)}`);
     }
+    // The resetConnection() below would invalidate the claim anyway, but the
+    // invariant should hold by construction, not by what happens to follow.
+    if (btAdapter) notifyDiscoveryStopped(btAdapter);
+    if (deviceMac) {
+      await removeDevice(btAdapter!, deviceMac);
+    }
+  }
 
-    // After a GATT connection (successful or failed), reset the D-Bus
-    // connection AND power-cycle the HCI controller. BlueZ on Broadcom
-    // adapters (RPi) enters a "zombie discovery" state after a few
-    // connect/disconnect cycles: Discovering=true, fresh startDiscovery()
-    // succeeds, but the controller is no longer running LE scan. D-Bus
-    // reset alone is insufficient because bluetoothd's controller-state
-    // tracking survives across client reconnects. btmgmt power off/on
-    // clears the zombie at the kernel level. See bluez/bluez#807,
-    // bluez/bluer#47.
-    //
-    // None of that is worth doing while the app is shutting down: there is no
-    // next scan cycle to protect, and the power-cycle alone spends about
-    // 2.5 s in sleeps plus two btmgmt child processes, inside a 5 s
-    // force-exit grace window (#335). The D-Bus reset is kept either way,
-    // because it destroys the socket that pins the event loop open, which is
-    // the opposite of a delay.
-    //
-    // `ble.preemptive_adapter_reset: false` skips the power-cycle and nothing
-    // else. It is the only host-side event between a bonded session that
-    // works and a next connect whose stored key is rejected (#417), so it has
-    // to be possible to rule it in or out. The D-Bus reset stays, and the
-    // reactive recovery tiers in startDiscoverySafe still cover a wedge.
-    //
-    // An abort is either a shutdown or the poll loop giving up on this cycle
-    // (A-04), and neither should power-cycle the radio: a shutdown has no next
-    // cycle, and an abandoned cycle's power-cycle would land on the next one,
-    // which starts after a 5 s backoff. A controller that really is wedged is
-    // still recovered by the tiers in startDiscoverySafe.
+  // After a GATT connection (successful or failed), reset the D-Bus
+  // connection AND power-cycle the HCI controller. BlueZ on Broadcom
+  // adapters (RPi) enters a "zombie discovery" state after a few
+  // connect/disconnect cycles: Discovering=true, fresh startDiscovery()
+  // succeeds, but the controller is no longer running LE scan. D-Bus
+  // reset alone is insufficient because bluetoothd's controller-state
+  // tracking survives across client reconnects. btmgmt power off/on
+  // clears the zombie at the kernel level. See bluez/bluez#807,
+  // bluez/bluer#47.
+  //
+  // None of that is worth doing while the app is shutting down: there is no
+  // next scan cycle to protect, and the power-cycle alone spends about
+  // 2.5 s in sleeps plus two btmgmt child processes, inside a 5 s
+  // force-exit grace window (#335). The D-Bus reset is kept either way,
+  // because it destroys the socket that pins the event loop open, which is
+  // the opposite of a delay.
+  //
+  // `ble.preemptive_adapter_reset: false` skips the preemptive power-cycle
+  // and nothing else. It is the only host-side event between a bonded session
+  // that works and a next connect whose stored key is rejected (#417), so it
+  // has to be possible to rule it in or out. The D-Bus reset stays, and the
+  // reactive recovery tiers in startDiscoverySafe still cover a wedge.
+  //
+  // An abort is either a shutdown or the poll loop giving up on this cycle
+  // (A-04), and neither should power-cycle the radio: a shutdown has no next
+  // cycle, and an abandoned cycle's power-cycle would land on the next one,
+  // which starts after a 5 s backoff. A controller that really is wedged is
+  // still recovered by the tiers in startDiscoverySafe.
+  if (superseded()) {
+    standDown();
+    return;
+  }
+  if (abortSignal?.aborted) {
+    if (gattAttempted) {
+      resetConnection();
+      bleLog.debug('Cycle aborted: D-Bus connection reset, skipping the btmgmt power-cycle');
+    }
+    return;
+  }
+
+  if (gattAttempted) {
+    await sleep(500);
+    // The awaits above are D-Bus calls, some still with no deadline, so the
+    // loop can give up on this cycle and start the next one while they run.
     if (superseded()) {
       standDown();
       return;
     }
-    if (abortSignal?.aborted) {
-      resetConnection();
-      bleLog.debug('Cycle aborted: D-Bus connection reset, skipping the btmgmt power-cycle');
-    } else {
-      await sleep(500);
-      // The awaits above are D-Bus calls with no deadline, so the loop can
-      // give up on this cycle and start the next one while they run.
-      if (superseded()) {
-        standDown();
-        return;
-      }
-      resetConnection();
-      bleLog.debug('D-Bus connection reset after GATT operation');
-      if (!preemptiveAdapterReset) {
-        // Once at info, so a reporter testing #417 can see the option took
-        // effect without DEBUG; every cycle after that at debug.
-        if (!preemptiveSkipAnnounced) {
-          preemptiveSkipAnnounced = true;
-          bleLog.info(
-            'ble.preemptive_adapter_reset is false: the Bluetooth adapter is no longer ' +
-              'power-cycled after each GATT session.',
-          );
-        }
-        bleLog.debug(
-          'Skipping the preemptive btmgmt power-cycle after GATT (ble.preemptive_adapter_reset: false)',
+    resetConnection();
+    bleLog.debug('D-Bus connection reset after GATT operation');
+    if (!preemptiveAdapterReset) {
+      // Once at info, so a reporter testing #417 can see the option took
+      // effect without DEBUG; every cycle after that at debug.
+      if (!preemptiveSkipAnnounced) {
+        preemptiveSkipAnnounced = true;
+        bleLog.info(
+          'ble.preemptive_adapter_reset is false: the Bluetooth adapter is no longer ' +
+            'power-cycled after each GATT session.',
         );
-      } else if (await resetAdapterBtmgmt(parseHciIndex(bleAdapter))) {
-        bleLog.debug('Preemptive btmgmt reset after GATT');
-      } else {
-        bleLog.debug('Preemptive btmgmt reset after GATT did not take; adapter not power-cycled');
       }
+      bleLog.debug(
+        'Skipping the preemptive btmgmt power-cycle after GATT (ble.preemptive_adapter_reset: false)',
+      );
+    } else if (await resetAdapterBtmgmt(parseHciIndex(bleAdapter))) {
+      bleLog.debug('Preemptive btmgmt reset after GATT');
+    } else {
+      bleLog.debug('Preemptive btmgmt reset after GATT did not take; adapter not power-cycled');
     }
   }
   // For idle cycles (no GATT connection), discovery is kept running.

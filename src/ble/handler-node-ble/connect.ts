@@ -9,14 +9,17 @@ import {
   CONNECT_TIMEOUT_MS,
   DISCOVERY_TIMEOUT_MS,
   POST_DISCOVERY_QUIESCE_MS,
+  StaleLinkError,
 } from '../types.js';
-import { isBonded, releaseDeviceProxy, type Adapter, type Device } from './dbus.js';
+import { isDebugEnabled } from '../../logger.js';
+import { helperOf, isBonded, releaseDeviceProxy, type Adapter, type Device } from './dbus.js';
 import {
   startDiscoverySafe,
   removeDevice,
   stopDiscoveryAndQuiesce,
   notifyDiscoveryStopped,
 } from './discovery.js';
+import { disconnectBounded } from './stale-link.js';
 import { startPeerFreshnessTracker } from './freshness.js';
 import {
   isAuthClassConnectFailure,
@@ -25,7 +28,34 @@ import {
 } from './stale-bond.js';
 import { isDeviceObjectGone } from './device-object.js';
 import { requireAdapterPrivacy } from './privacy.js';
-import { bleFailureKind } from '../failure-kind.js';
+import { bleFailureKind, tagBleFailure } from '../failure-kind.js';
+
+/** Bound on the two property reads behind the debug line before a connect. */
+const LINK_CHECK_TIMEOUT_MS = 5_000;
+
+/**
+ * Debug only: what BlueZ says about the link before this cycle's first connect.
+ * `Connected=true` here is a link left over from an earlier session that BlueZ
+ * never let go of (#472). Nothing acts on it: a stuck link is recovered in the
+ * teardown, and ServicesResolved can be true on one too, so it would not make
+ * a complete rule anyway. Without DEBUG this costs no D-Bus call at all.
+ */
+async function logLinkStateBeforeConnect(device: Device): Promise<void> {
+  if (!isDebugEnabled()) return;
+  try {
+    const helper = helperOf(device);
+    const [connected, resolved] = await withTimeout(
+      Promise.all([helper.prop('Connected'), helper.prop('ServicesResolved')]),
+      LINK_CHECK_TIMEOUT_MS,
+      `no answer within ${LINK_CHECK_TIMEOUT_MS / 1000}s`,
+    );
+    bleLog.debug(
+      `Link check before connect: Connected=${String(connected)}, ServicesResolved=${String(resolved)}`,
+    );
+  } catch (err) {
+    bleLog.debug(`Link check before connect failed: ${errMsg(err)}`);
+  }
+}
 
 export interface ConnectRecoveryContext {
   btAdapter: Adapter;
@@ -153,6 +183,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
   let succeeded = false;
 
   try {
+    await logLinkStateBeforeConnect(device);
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         throwIfAborted();
@@ -272,13 +303,20 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           `Connect error: ${msg}. Retrying (${attempt + 1}/${maxRetries}) in ${delay}ms...`,
         );
 
-        // 1. Disconnect (best-effort)
-        try {
-          bleLog.debug('Disconnecting before retry...');
-          await device.disconnect();
-          bleLog.debug('Disconnect OK');
-        } catch {
-          bleLog.debug('Disconnect failed (ignored)');
+        // 1. Disconnect (best-effort, but bounded). An unanswered one means
+        // BlueZ still lists the scale as connected after the link is gone, and
+        // every further attempt would "connect" at once from that state and
+        // then wait for services that never come (#472). Stop here; the
+        // teardown takes it from there.
+        bleLog.debug('Disconnecting before retry...');
+        const disconnected = await disconnectBounded(device, {
+          mac: formattedMac,
+          label: 'retry',
+          abortSignal,
+        });
+        if (disconnected === 'aborted') throwIfAborted();
+        if (disconnected === 'timeout') {
+          throw tagBleFailure(new StaleLinkError(formattedMac), 'wedge-suspect');
         }
 
         // 2. Purge stale D-Bus proxy. With the opt-in, a run of

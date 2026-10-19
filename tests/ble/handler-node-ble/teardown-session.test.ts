@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.spyOn(console, 'log').mockImplementation(() => {});
 vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -128,5 +128,85 @@ describe('teardownSession preemptive power-cycle (#417)', () => {
   it('touches neither the D-Bus connection nor the adapter after an idle cycle', async () => {
     await teardownSession(gattCycle({ gattAttempted: false, gattSucceeded: false }));
     expect(calls).toEqual([]);
+  });
+});
+
+/** Settles to the state of `p` without ever throwing out of the test. */
+function track(p: Promise<unknown>): { state: () => 'pending' | 'resolved' | 'rejected' } {
+  let state: 'pending' | 'resolved' | 'rejected' = 'pending';
+  p.then(
+    () => (state = 'resolved'),
+    () => (state = 'rejected'),
+  );
+  return { state: () => state };
+}
+
+/**
+ * #472. BlueZ answers a Disconnect for a device it lists as connected only once
+ * that connection is gone. When it never is, the teardown used to park on its
+ * very first await, so it never released the proxy, never reset the D-Bus
+ * connection and never reached the power-cycle that would have cleared the
+ * state, and every later cycle parked on the same Disconnect.
+ */
+describe('teardownSession and a Disconnect BlueZ never answers (#472)', () => {
+  const hung = () => ({
+    disconnect: vi.fn(() => new Promise<void>(() => {})),
+    helper: { removeListeners: vi.fn() },
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    calls.length = 0;
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    h.resetConnection.mockImplementation(() => calls.push('resetConnection'));
+    h.resetAdapterBtmgmt.mockImplementation(async () => {
+      calls.push('resetAdapterBtmgmt');
+      return true;
+    });
+    h.callMethod.mockImplementation(async (name: string) => {
+      calls.push(name);
+    });
+    h.removeDevice.mockImplementation(async () => {
+      calls.push('removeDevice');
+    });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('finishes, releases the proxy, resets the connection and power-cycles once', async () => {
+    const device = hung();
+    const result = track(
+      teardownSession(gattCycle({ device: device as never, gattSucceeded: false })),
+    );
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(result.state()).toBe('resolved');
+    expect(device.helper.removeListeners).toHaveBeenCalled();
+    expect(h.resetConnection).toHaveBeenCalled();
+    expect(h.resetAdapterBtmgmt).toHaveBeenCalledTimes(1);
+    expect(h.resetAdapterBtmgmt).toHaveBeenCalledWith(1);
+  });
+
+  it('sends the Disconnect and returns at once on an aborted cycle', async () => {
+    // A shutdown during a connect leaves the pending Connect to this
+    // Disconnect, which cancels it in BlueZ, so it has to go out even though
+    // nobody waits for its answer.
+    const ac = new AbortController();
+    ac.abort();
+    const device = hung();
+    const result = track(
+      teardownSession(gattCycle({ device: device as never, abortSignal: ac.signal })),
+    );
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(result.state()).toBe('resolved');
+    expect(device.disconnect).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual(['resetConnection']);
+    expect(h.resetAdapterBtmgmt).not.toHaveBeenCalled();
   });
 });

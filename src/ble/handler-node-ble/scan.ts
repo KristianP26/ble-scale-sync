@@ -24,6 +24,7 @@ import {
   DISCOVERY_POLL_MS,
   POST_DISCOVERY_QUIESCE_MS,
   GATT_DISCOVERY_TIMEOUT_MS,
+  StaleLinkError,
 } from '../types.js';
 import {
   helperOf,
@@ -60,6 +61,7 @@ import {
   type FreshAdvertLatch,
 } from './device-cache.js';
 import { connectWithRecovery } from './connect.js';
+import { disconnectBounded } from './stale-link.js';
 import {
   withScanActivityWatchdog,
   resetScanActivityBackoff,
@@ -377,6 +379,8 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   let latch: FreshAdvertLatch | undefined;
   /** The scale's BlueZ object was kept from an earlier cycle rather than removed (D060). */
   let keptObject = false;
+  /** BlueZ left a Disconnect for the scale unanswered in this cycle (#472). */
+  let staleLink = false;
   const releaseLatch = (): void => {
     latch?.release();
     latch = undefined;
@@ -692,16 +696,21 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       }
       // The stop and the wait above take up to 2.5 s, long enough for the poll
       // loop to give up on this cycle and start a newer one on the same device.
+      // Bounded, so a Disconnect BlueZ never answers no longer takes the
+      // reading down with it (#472).
       if (!isSuperseded()) {
-        try {
-          await device.disconnect();
-        } catch {
-          /* ignore */
-        }
+        const outcome = await disconnectBounded(device, {
+          mac: formatMac(deviceMac),
+          label: 'after reading',
+          abortSignal,
+        });
+        if (outcome === 'timeout') staleLink = true;
       }
     }
     return raw;
   } catch (err) {
+    // connectWithRecovery already waited out one unanswered Disconnect.
+    if (err instanceof StaleLinkError) staleLink = true;
     await classifyBleFailure(err, {
       gattAttempted,
       probeAdapter,
@@ -722,6 +731,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       abortSignal,
       preemptiveAdapterReset,
       isSuperseded,
+      staleLink,
     });
   }
 }

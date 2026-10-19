@@ -54,7 +54,8 @@ vi.mock('../../src/ble/types.js', async (importOriginal) => {
 });
 
 const { buildReadingSource } = await import('../../src/runtime/sources.js');
-const { POST_DISCONNECT_GRACE_MS, SessionTimeoutError } = await import('../../src/ble/types.js');
+const { POST_DISCONNECT_GRACE_MS, SessionTimeoutError, StaleLinkError } =
+  await import('../../src/ble/types.js');
 import type { AppContext } from '../../src/runtime/context.js';
 import type { ScaleAdapter } from '../../src/interfaces/scale-adapter.js';
 import { tagBleFailure } from '../../src/ble/failure-kind.js';
@@ -293,6 +294,19 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
     expect(bundle.failureLogPrefixFor?.(tagBleFailure(new Error('x'), 'wedge-suspect'))).toBe(
       undefined,
     );
+  });
+
+  // #472: BlueZ still listed the scale as connected and never finished the
+  // Disconnect, so the scale was found; "No scale found" would point at range.
+  it('poll plan: a stale BlueZ link says the scale was found, and still counts', async () => {
+    h.createReadingSource.mockResolvedValue({ kind: 'poll', appliesGraceFloor: false });
+    const bundle = await buildReadingSource(makeCtx(), ADAPTERS, 7, 30);
+    const stale = tagBleFailure(new StaleLinkError('AA:BB:CC:DD:EE:FF'), 'wedge-suspect');
+
+    expect(bundle.failureLogPrefixFor?.(stale)).toBe('Scale found but not connected');
+    expect(bundle.failureDelayMs?.(stale)).toBe(undefined);
+    bundle.onFailure?.(stale);
+    expect(h.watchdogInstances[0].recordFailure).toHaveBeenCalledTimes(1);
   });
 
   // #460, D041: neutral like idle and blocked, but it keeps the backoff, since

@@ -3,7 +3,12 @@ import type { ScaleAdapter } from '../interfaces/scale-adapter.js';
 import { resolveUserProfile } from '../config/resolve.js';
 import { ConsecutiveFailureWatchdog } from '../ble/watchdog.js';
 import { bleFailureKind, shouldCountAsWatchdogFailure } from '../ble/failure-kind.js';
-import { abortableSleep, POST_DISCONNECT_GRACE_MS, SessionTimeoutError } from '../ble/types.js';
+import {
+  abortableSleep,
+  POST_DISCONNECT_GRACE_MS,
+  SessionTimeoutError,
+  StaleLinkError,
+} from '../ble/types.js';
 import { createLogger } from '../logger.js';
 import { PollReadingSource } from './poll-source.js';
 import type { ReadingSource } from './loop.js';
@@ -139,9 +144,11 @@ export async function buildReadingSource(
     // A skipped connect found the scale, so "No scale found" would send the
     // user looking in the wrong place (#417). So does a session that ran out
     // of time after connecting and subscribing (#460): the scale was there,
-    // it just never completed a reading.
+    // it just never completed a reading. A link BlueZ keeps listing as
+    // connected (#472) is a scale that was found, too.
     failureLogPrefixFor: (err) => {
       if (bleFailureKind(err) === 'blocked') return 'Scale found but not connected';
+      if (err instanceof StaleLinkError) return 'Scale found but not connected';
       if (err instanceof SessionTimeoutError) return 'Scale connected but sent no reading';
       return undefined;
     },

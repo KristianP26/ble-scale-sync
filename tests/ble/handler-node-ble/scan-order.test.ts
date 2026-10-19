@@ -115,6 +115,9 @@ vi.mock('../../../src/ble/types.js', async (importOriginal) => {
   return { ...actual, resetAdapterBtmgmt: record('resetAdapterBtmgmt', async () => true) };
 });
 
+/** When set, the next removeDevice waits for it. */
+let holdNextRemoveDevice: Promise<void> | null = null;
+
 /** What startDiscoverySafe does in a test: an adapter it returns replaces the cycle's. */
 let onDiscoveryStart: (() => unknown) | undefined;
 /** Whether our filtered scan runs after startDiscoverySafe (D060). */
@@ -123,7 +126,12 @@ let scanFiltered = true;
 vi.mock('../../../src/ble/handler-node-ble/discovery.js', () => ({
   startDiscoverySafe: record('startDiscoverySafe', async () => onDiscoveryStart?.()),
   runningScanIsFiltered: () => scanFiltered,
-  removeDevice: record('removeDevice', async () => {}),
+  removeDevice: record('removeDevice', async () => {
+    // One-shot gate: lets a test hold a cycle inside its teardown (A-04).
+    const gate = holdNextRemoveDevice;
+    holdNextRemoveDevice = null;
+    if (gate) await gate;
+  }),
   stopDiscoveryAndQuiesce: record('stopDiscoveryAndQuiesce', async () => {}),
   notifyDiscoveryStopped: record('notifyDiscoveryStopped'),
   autoDiscover: record('autoDiscover', async () => {
@@ -145,11 +153,16 @@ vi.mock('../../../src/ble/handler-node-ble/device-object.js', () => ({
 
 /** True: every connect fails, as on a scale that drops the link (D060). */
 let connectFails = false;
+/** When set, the next connect throws what it returns (#472). */
+let connectThrows: (() => Error) | undefined;
 
 vi.mock('../../../src/ble/handler-node-ble/connect.js', () => ({
   connectWithRecovery: record('connectWithRecovery', async (ctx: unknown) => {
     connectContexts.push(ctx as { adapterPrivacy?: boolean });
     if (connectFails) throw new Error('le-connection-abort-by-local');
+    const thrown = connectThrows;
+    connectThrows = undefined;
+    if (thrown) throw thrown();
     return fakeDevice;
   }),
 }));
@@ -236,6 +249,7 @@ function makeAdapter(overrides: Partial<ScaleAdapter> = {}): ScaleAdapter {
 
 const { scanAndReadRaw } = await import('../../../src/ble/handler-node-ble/scan.js');
 const { bleFailureKind } = await import('../../../src/ble/failure-kind.js');
+const { StaleLinkError } = await import('../../../src/ble/types.js');
 const { _resetAdapterPrivacyStateForTests } =
   await import('../../../src/ble/handler-node-ble/privacy.js');
 const { _resetDeviceCacheForTests } =
@@ -414,52 +428,42 @@ describe('scanAndReadRaw call order (#368)', () => {
 
   it('stands down mid-teardown when a newer cycle starts while it is aborted (A-04)', async () => {
     // The poll loop now aborts the cycle it gives up on, so its teardown starts
-    // right away, before the next cycle exists. The first await there (the
-    // disconnect) is a D-Bus call with no deadline; if the next cycle starts
-    // while it is parked, everything after it acts on that cycle's state.
+    // right away, before the next cycle exists. If the next cycle starts while
+    // the teardown waits on BlueZ, everything after that wait acts on that
+    // cycle's state. The Disconnect no longer holds an aborted teardown up
+    // (#472), so the wait held here is the RemoveDevice after the failed read.
     holdNextReading = new Promise<void>(() => {});
-    let releaseDisconnect!: () => void;
-    const disconnectGate = new Promise<void>((r) => (releaseDisconnect = r));
-    const realDisconnect = fakeDevice.disconnect;
-    let gateUsed = false;
-    fakeDevice.disconnect = async () => {
-      calls.push('device.disconnect');
-      if (!gateUsed) {
-        gateUsed = true;
-        await disconnectGate;
-      }
-    };
+    let releaseRemove!: () => void;
+    const removeGate = new Promise<void>((r) => (releaseRemove = r));
     const opts = {
       targetMac: 'AA:BB:CC:DD:EE:FF',
       adapters: [makeAdapter()],
       profile: defaultProfile(),
     };
-    try {
-      const ctrl = new AbortController();
-      const abandoned = scanAndReadRaw({ ...opts, abortSignal: ctrl.signal });
-      void abandoned.catch(() => {});
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(calls).toContain('waitForRawReading');
+    const ctrl = new AbortController();
+    const abandoned = scanAndReadRaw({ ...opts, abortSignal: ctrl.signal });
+    void abandoned.catch(() => {});
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls).toContain('waitForRawReading');
 
-      ctrl.abort(new Error('poll cycle abandoned'));
-      await vi.advanceTimersByTimeAsync(100);
-      expect(gateUsed).toBe(true);
+    // Armed only now, so the removal before this cycle's scan went through.
+    holdNextRemoveDevice = removeGate;
+    ctrl.abort(new Error('poll cycle abandoned'));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(holdNextRemoveDevice).toBe(null);
 
-      const replacement = scanAndReadRaw(opts);
-      await vi.advanceTimersByTimeAsync(5_000);
-      await replacement;
+    const replacement = scanAndReadRaw(opts);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await replacement;
 
-      calls.length = 0;
-      releaseDisconnect();
-      await vi.advanceTimersByTimeAsync(5_000);
-      await expect(abandoned).rejects.toThrow(/abandoned/);
+    calls.length = 0;
+    releaseRemove();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(abandoned).rejects.toThrow(/abandoned/);
 
-      expect(calls).not.toContain('removeDevice');
-      expect(calls).not.toContain('resetConnection');
-      expect(calls).not.toContain('resetAdapterBtmgmt');
-    } finally {
-      fakeDevice.disconnect = realDisconnect;
-    }
+    expect(calls).not.toContain('removeDevice');
+    expect(calls).not.toContain('resetConnection');
+    expect(calls).not.toContain('resetAdapterBtmgmt');
   });
 
   it('ends the session when shut down mid-reading instead of waiting out the idle timeout (A-07)', async () => {
@@ -493,6 +497,86 @@ describe('scanAndReadRaw call order (#368)', () => {
     // reading lands, and the finally is a catch-all for every other exit.
     const seen = await run();
     expect(seen.filter((c) => c === 'device.disconnect')).toHaveLength(2);
+  });
+});
+
+/** Settles to the state of `p` without ever throwing out of the test. */
+function track<T>(p: Promise<T>): {
+  state: () => 'pending' | 'resolved' | 'rejected';
+  value: () => T | undefined;
+} {
+  let state: 'pending' | 'resolved' | 'rejected' = 'pending';
+  let value: T | undefined;
+  p.then(
+    (v) => {
+      state = 'resolved';
+      value = v;
+    },
+    () => (state = 'rejected'),
+  );
+  return { state: () => state, value: () => value };
+}
+
+describe('scanAndReadRaw and a Disconnect BlueZ never answers (#472)', () => {
+  const realDisconnect = fakeDevice.disconnect;
+
+  beforeEach(() => {
+    calls.length = 0;
+    _resetDeviceCacheForTests();
+    vi.useFakeTimers();
+    fakeDevice.disconnect = async () => {
+      calls.push('device.disconnect');
+      await new Promise<void>(() => {});
+    };
+  });
+  afterEach(() => {
+    fakeDevice.disconnect = realDisconnect;
+    delete (fakeDevice as unknown as { helper?: unknown }).helper;
+    connectThrows = undefined;
+    vi.useRealTimers();
+  });
+
+  const opts = () => ({
+    targetMac: 'AA:BB:CC:DD:EE:FF',
+    adapters: [makeAdapter()],
+    profile: defaultProfile(),
+  });
+
+  it('returns the reading when the Disconnect after it is never answered', async () => {
+    const result = track(scanAndReadRaw(opts()));
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(result.state()).toBe('resolved');
+    expect(result.value()?.reading.weight).toBe(80);
+  });
+
+  it('hands a stale link to the teardown', async () => {
+    fakeDevice.disconnect = async () => {
+      calls.push('device.disconnect');
+    };
+    connectThrows = () => new StaleLinkError('AA:BB:CC:DD:EE:FF');
+    const result = track(scanAndReadRaw(opts()));
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(result.state()).toBe('rejected');
+    // connectWithRecovery already waited out one Disconnect; a second would
+    // wait just as long for nothing.
+    expect(calls).not.toContain('device.disconnect');
+  });
+
+  it('every cycle ends and releases its device proxy while BlueZ never answers Disconnect', async () => {
+    (fakeDevice as unknown as { helper: unknown }).helper = {
+      removeListeners: () => calls.push('releaseDeviceProxy'),
+    };
+    for (let cycle = 1; cycle <= 3; cycle++) {
+      calls.length = 0;
+      const result = track(scanAndReadRaw(opts()));
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(result.state(), `cycle ${cycle}`).toBe('resolved');
+      expect(calls, `cycle ${cycle}`).toContain('releaseDeviceProxy');
+    }
   });
 });
 

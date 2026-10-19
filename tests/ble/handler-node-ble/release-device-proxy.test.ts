@@ -61,3 +61,41 @@ describe('node-ble internals the release depends on', () => {
     expect(prepare).toContain("on('PropertiesChanged'");
   });
 });
+
+/**
+ * #472. The Disconnect deadline exists because of three library behaviours.
+ * They pass today and are here to fail CI when a bump changes one, since the
+ * deadline would then be fixing something else, or nothing.
+ */
+describe('library behaviour the #472 deadlines rest on', () => {
+  it('node-ble Device.disconnect releases its listeners only after BlueZ answers', () => {
+    const Device = nodeRequire('node-ble/src/Device.js') as {
+      prototype: Record<string, unknown>;
+    };
+    const src = String(Device.prototype.disconnect);
+    const call = src.indexOf("callMethod('Disconnect')");
+    const release = src.indexOf('removeListeners()');
+    expect(call).toBeGreaterThanOrEqual(0);
+    expect(release).toBeGreaterThan(call);
+    // And with no timeout of its own.
+    expect(src).not.toMatch(/setTimeout|timeout/i);
+  });
+
+  it('node-ble GattServer.init waits for ServicesResolved with no limit', () => {
+    const GattServer = nodeRequire('node-ble/src/GattServer.js') as {
+      prototype: Record<string, unknown>;
+    };
+    const src = String(GattServer.prototype.init);
+    expect(src).toContain("waitPropChange('ServicesResolved')");
+    expect(src).not.toMatch(/setTimeout|timeout/i);
+  });
+
+  it('dbus-next MessageBus.disconnect leaves pending method calls unanswered', () => {
+    const MessageBus = nodeRequire('dbus-next/lib/bus.js') as {
+      prototype: Record<string, unknown>;
+    };
+    const src = String(MessageBus.prototype.disconnect);
+    expect(src).toContain('stream.end()');
+    expect(src).not.toContain('_methodReturnHandlers');
+  });
+});
