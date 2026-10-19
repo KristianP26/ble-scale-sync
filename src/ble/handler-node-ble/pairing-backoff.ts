@@ -381,7 +381,15 @@ export async function holdUntilPairingAllowed(
         const onAbort = (): void =>
           finish(() => reject(abortSignal?.reason ?? new DOMException('Aborted', 'AbortError')));
         const onProps: PropsChangedHandler = (props) => {
-          if (FRESH_REPORT_PROPS.some((p) => p in props)) lastReportAt = Date.now();
+          if (FRESH_REPORT_PROPS.some((p) => p in props)) {
+            lastReportAt = Date.now();
+            // The radio hears the scale, which is what the failure
+            // classification asks at the end of this cycle. The watchdog
+            // sees only RSSI values that move, and a scale standing still in
+            // a quiet room keeps one, so without this a hold that heard the
+            // scale throughout would end deaf and count toward the restart.
+            if (opts.scanWatch) opts.scanWatch.lastHeardAt = lastReportAt;
+          }
           if ('Paired' in props && unwrapVariant(props.Paired) === true) {
             backoff.reset(mac);
             announceCleared(mac, 'is paired now');

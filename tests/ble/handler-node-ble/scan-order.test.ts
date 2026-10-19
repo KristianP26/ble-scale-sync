@@ -1583,6 +1583,24 @@ describe('scanAndReadRaw after a pairing nobody confirmed (#471, D063)', () => {
     expect(bleFailureKind(held)).toBe('wedge-suspect');
   });
 
+  it('ends a holding cycle that heard the scale as idle, whatever the watchdog saw', async () => {
+    // The watchdog compares RSSI values only, and a scale standing still in a
+    // quiet room keeps one; the hold hears every report, so it answers for
+    // the radio. Counted as deaf, the cycle would feed the watchdog restart
+    // that wipes the pairing memory.
+    seed();
+    watchdogHeardAgoMs = undefined;
+    const c = start();
+    for (let i = 0; i < 1_000 && !c.settled(); i++) {
+      if (i % 40 === 0) helper.emit('PropertiesChanged', { RSSI: { value: -60 } });
+      await vi.advanceTimersByTimeAsync(250);
+    }
+    expect(c.settled()).toBe(true);
+    expect(c.result()).toBeInstanceOf(PairingDeferredError);
+    expect(bleFailureKind(c.result())).toBe('idle');
+    expect(calls).not.toContain('connectWithRecovery');
+  });
+
   it('never waits past the discovery budget left in the cycle', async () => {
     seed(5);
     // The scale shows up 50 s into the cycle's 120 s discovery budget.
