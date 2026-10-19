@@ -128,7 +128,7 @@ Restart-required (the change is detected and logged with a warning, but only tak
 
 Everything not in that list is hot-swapped, including the keys people most often tune while a scale is misbehaving: `ble.session_timeout_sec`, `ble.auto_clear_stale_bond`, `ble.pairing_retry_max_min`, `ble.preemptive_adapter_reset`, `ble.bind_key`, every `ble.qn_*` option and `ble.proxy_liveness_timeout_min`. On the proxy transports the liveness timeout is re-read when the next advertisement wait begins, so a change to it lands on the next cycle rather than the same instant. `runtime.no_reading_rescan_delay` applies from the next session without a reading; a wait already running is not shortened.
 
-In Docker with `config.yaml` mounted as a single file, edits made in place are picked up. An editor that saves by writing a new file and renaming it over the old one replaces the file on the host, and the container keeps seeing the old one; after such an edit send `SIGHUP` or restart the container, or mount the directory instead of the file.
+In Docker with `config.yaml` mounted as a single file, edits made in place are picked up. A tool that saves by writing a new file and renaming it over the old one, such as `sed -i` and some editors, replaces the file on the host, and the container keeps seeing the old one. `SIGHUP` does not help then, because the app re-reads the same old file. Only a container restart picks such an edit up; to avoid the problem, mount the directory instead of the file.
 
 To opt out (e.g. on a flaky network filesystem) and rely solely on the `SIGHUP` flow:
 
