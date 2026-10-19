@@ -101,6 +101,7 @@ import {
   hasValidSumChecksum,
   timeZoneByte,
   type EightResult,
+  type StoredRecord,
   type VaComposition,
 } from './frames.js';
 import { qnAdvertTraits, qnMatches, warnOnOneByoneShape } from './matching.js';
@@ -1130,23 +1131,32 @@ export class QnScaleAdapter
       // never gets a re-query: the scale answers our one 0x22 once it is done
       // measuring, and a second 0x22 is the same request again (#331).
       if (this.isNineteenByteInfo) return this.parseEightStoredPart(data);
+      // The 18-byte scale answers our 0x22 while it is still measuring (#463),
+      // so the answer is logged here as on the 19-byte dialect; the line it
+      // sets off on the live path below needs it.
+      if (this.isEighteenByteInfo) this.noteStoredQueryAnswer();
       const record = data.length < 17 ? null : decodeStoredRecord(data);
       if (!record) {
+        bleLog.debug(
+          `QN: 0x23 too short for a stored record (${data.length} bytes): [${hex(data)}] (#463)`,
+        );
         this.scheduleStoredDataRetry();
         return null;
       }
       const { weight, recordSeconds } = record;
-      if (weight <= 5 || weight >= 300) {
-        this.scheduleStoredDataRetry();
-        return null;
-      }
+      const classic = this.scaleFactorKnown && !this.isLongFrameVariant;
       const sessionSeconds =
         this.sessionStartedScaleSeconds ?? Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
-      if (recordSeconds + MAX_STORED_RECORD_AGE_SEC < sessionSeconds) {
+      if (weight <= 5 || weight >= 300) {
+        this.logUnreadStoredRecord(data, record, sessionSeconds, 'out of range');
         this.scheduleStoredDataRetry();
         return null;
       }
-      const classic = this.scaleFactorKnown && !this.isLongFrameVariant;
+      if (recordSeconds + MAX_STORED_RECORD_AGE_SEC < sessionSeconds) {
+        this.logUnreadStoredRecord(data, record, sessionSeconds, 'old');
+        this.scheduleStoredDataRetry();
+        return null;
+      }
       const r1 = classic ? data.readUInt16LE(13) : record.r50;
       const r2 = classic ? data.readUInt16LE(15) : record.r500;
       if (this.storedRetryTimer) {
@@ -1332,7 +1342,22 @@ export class QnScaleAdapter
       void this.writeCmd(ackCmd);
     }
 
-    return { weight, impedance };
+    const reading: ScaleReading = { weight, impedance };
+    // A stored weigh-in the scale sends after the session settled on this one
+    // is never parsed (#463). The 18-byte scale answers our 0x22 within a
+    // second, so this is rare, and without the line it would be invisible.
+    if (
+      this.isEighteenByteInfo &&
+      this.storedQuerySentAtMs !== null &&
+      !this.queryAnswered &&
+      this.isComplete(reading)
+    ) {
+      bleLog.debug(
+        'QN: the weigh-in ends the session before the scale answered the stored-record ' +
+          'query; a stored weigh-in it sends after this is not read (#463)',
+      );
+    }
+    return reading;
   }
 
   /**
@@ -1895,6 +1920,53 @@ export class QnScaleAdapter
         ' (#331)',
     );
     return reading;
+  }
+
+  /**
+   * Say why a 0x23 outside the 19-byte dialect is not read (#463). The record
+   * used to vanish without a line, and a frame that arrives after the session
+   * settled is not even in the DEBUG log, so nothing showed that a weigh-in the
+   * scale kept had been handed over at all.
+   *
+   * Only the long-frame dialects get the record's values: the VA layout is
+   * known there. A classic scale's 0x23 has its own layout, so its line has the
+   * bytes only, and a session without a 0x12 does not know its dialect, so its
+   * line gives the VA reading as one possibility.
+   */
+  private logUnreadStoredRecord(
+    data: Buffer,
+    record: StoredRecord,
+    sessionSeconds: number,
+    why: 'out of range' | 'old',
+  ): void {
+    const bytes = hex(data);
+    if (this.scaleFactorKnown && !this.isLongFrameVariant) {
+      bleLog.debug(
+        `QN: 0x23 on the classic dialect is not decoded (#461 S3), not read: [${bytes}] (#463)`,
+      );
+      return;
+    }
+    const at = new Date((record.recordSeconds + SCALE_EPOCH_OFFSET) * 1000).toISOString();
+    const age = sessionSeconds - record.recordSeconds;
+    if (!this.scaleFactorKnown) {
+      bleLog.debug(
+        `QN: 0x23 in a session without a scale-info frame, not read: [${bytes}]; read as the ` +
+          `VA layout it is ${record.weight} kg at ${at}, ${age} s before the session (#463)`,
+      );
+      return;
+    }
+    if (why === 'out of range') {
+      bleLog.debug(
+        data[3] === 0
+          ? 'QN: 0x23 says the scale holds no stored weigh-ins (#463)'
+          : `QN: stored 0x23 weight ${record.weight} kg is out of range, not read (#463)`,
+      );
+      return;
+    }
+    bleLog.debug(
+      `QN: stored weigh-in ${record.weight} kg at ${at}, user slot ${data[5]}, is ${age} s ` +
+        `older than this session (window ${MAX_STORED_RECORD_AGE_SEC} s), not read (#213 / #75)`,
+    );
   }
 
   /**

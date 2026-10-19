@@ -21,6 +21,7 @@ import type {
   AdapterRuntimeConfig,
   BleDeviceInfo,
   ConnectionContext,
+  ScaleReading,
   UserProfile,
 } from '../../src/interfaces/scale-adapter.js';
 import {
@@ -4062,6 +4063,218 @@ describe('QN stored record and impedance (#461)', () => {
       });
       // R1 reads as 0 (no contact) after unscrambling.
       expect(reading).toEqual({ weight: 84.8, impedance: 0 });
+    });
+  });
+
+  // #463: the Physiq's first connection after step 3 of the reporter's test,
+  // from the public DEBUG log of 2026-10-16. The record in it is a weigh-in
+  // the scale kept from 259 s before the session (2026-10-13T17:59:38Z, user
+  // slot 1). Frames are from that log; where a frame carries the scale's own
+  // body fat (0x23 [16..17], live 0x10 [11..12]) those two bytes are zeroed
+  // and the checksum recomputed. Nothing here reads them.
+  describe('18-byte stored weigh-in from before the session (#463)', () => {
+    const INFO_463 = Buffer.from([
+      0x12, 0x12, 0xff, 0x25, 0xe0, 0x16, 0x00, 0x05, 0xff, 0x13, 0x07, 0x16, 0x00, 0x01, 0x05,
+      0x9f, 0x32, 0x49,
+    ]);
+    const VISIT_OK_463 = Buffer.from([0xa1, 0x06, 0x02, 0x01, 0x01, 0xab]);
+    const MEASURING_463 = Buffer.from([
+      0x10, 0x0f, 0xff, 0x01, 0x01, 0x1b, 0xf8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x33,
+    ]);
+    /** 71.55 kg at 2026-10-13T17:59:38Z, slot 1; [16..17] zeroed, [19] recomputed. */
+    const RECORD_463 = Buffer.from([
+      0x23, 0x14, 0xff, 0x01, 0x01, 0x01, 0x0a, 0x2e, 0x61, 0x32, 0x1b, 0xf3, 0x10, 0xd9, 0x10,
+      0xfe, 0x00, 0x00, 0x00, 0x09,
+    ]);
+    /** The live result after it, 71.60 kg / 507 Ohm; [11..12] zeroed, [14] recomputed. */
+    const LIVE_463 = Buffer.from([
+      0x10, 0x0f, 0xff, 0x01, 0x02, 0x1b, 0xf8, 0x10, 0xfb, 0x10, 0xf9, 0x00, 0x00, 0x00, 0x48,
+    ]);
+    const ADVERT_463 = {
+      id: 0xffff,
+      data: Buffer.from([
+        0x08, 0x14, 0x01, 0x00, 0x01, 0x25, 0xe0, 0x16, 0x00, 0x05, 0xff, 0x61, 0x08, 0x01, 0x00,
+        0x15,
+      ]),
+    };
+    /** Session start in the log (onSessionStart), 259 s after the record. */
+    const STARTED_463 = '2026-10-13T18:03:57.411Z';
+    /** Real 20-byte 0x12 from a GE CS 10 G (#235), as makeExtendedScaleInfo. */
+    const INFO_235 = Buffer.from([
+      0x12, 0x14, 0xff, 0x4e, 0xc7, 0x0e, 0x00, 0x07, 0xff, 0x14, 0x0f, 0x42, 0x00, 0x08, 0x05,
+      0x03, 0xe0, 0x6f, 0x2b, 0x3d,
+    ]);
+
+    /** A frame to feed, or a number of milliseconds to let pass. */
+    type Step = Buffer | number;
+
+    /**
+     * One session in transport order, frames 100 ms apart unless a number
+     * says otherwise, ended with onSessionEnd. Collects every reading, every
+     * write and every debug and info line.
+     */
+    async function session(
+      adapter: QnScaleAdapter,
+      steps: Step[],
+      now: string,
+      advert: { id: number; data: Buffer } | null = ADVERT_463,
+    ) {
+      const writes: number[][] = [];
+      const readings: ScaleReading[] = [];
+      const lines: string[] = [];
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation((m) => void lines.push(m));
+      const info = vi.spyOn(bleLog, 'info').mockImplementation((m) => void lines.push(m));
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date(now));
+        const ctx = {
+          write: async (_uuid: string, data: Buffer | number[]) => {
+            writes.push([...data]);
+          },
+          read: async () => Buffer.alloc(0),
+          subscribe: async () => {},
+          profile: defaultProfile(),
+          deviceAddress: ADDRESS_461,
+          availableChars: new Set<string>(),
+          ...(advert ? { manufacturerData: advert } : {}),
+        } as unknown as ConnectionContext;
+        adapter.onSessionStart?.();
+        await adapter.onConnected(ctx);
+        for (const step of steps) {
+          if (typeof step === 'number') {
+            await vi.advanceTimersByTimeAsync(step);
+            continue;
+          }
+          const reading = adapter.parseNotification(step);
+          if (reading) readings.push(reading);
+          await vi.advanceTimersByTimeAsync(100);
+        }
+        adapter.onSessionEnd?.();
+        return { readings, writes, lines };
+      } finally {
+        vi.useRealTimers();
+        debug.mockRestore();
+        info.mockRestore();
+      }
+    }
+
+    // The other dialects keep dropping such a record; the line says why. The
+    // 20-byte case pairs the GE CS 10 G's 0x12 with the #463 record, which no
+    // log shows together: it checks the wiring of the line, not a decode.
+    it.each([
+      [
+        'classic (#283)',
+        [INFO_283, RECORD_283],
+        '2026-07-19T04:37:40Z',
+        '0x23 on the classic dialect is not decoded (#461 S3), not read: [23 13 ff 04',
+      ],
+      [
+        'without a scale-info frame (#461)',
+        [RECORD_461],
+        '2026-10-10T09:30:00Z',
+        '0x23 in a session without a scale-info frame, not read: [23 14 ff 01 01 f0',
+      ],
+      [
+        '20-byte extended',
+        [INFO_235, RECORD_463],
+        '2026-10-13T18:09:00Z',
+        'stored weigh-in 71.55 kg at 2026-10-13T17:59:38.000Z, user slot 1, is 562 s older ' +
+          'than this session (window 90 s), not read',
+      ],
+    ])(
+      'logs why it does not read an old record on the %s dialect',
+      async (_label, frames, now, needle) => {
+        const { readings, lines } = await session(makeAdapter(), frames, now, null);
+        expect(readings).toEqual([]);
+        const line = lines.find((l) => l.startsWith('QN: 0x23') || l.startsWith('QN: stored'));
+        expect(line ?? '(no line)').toContain(needle);
+      },
+    );
+
+    it('does not read VA values into the classic line', async () => {
+      const { lines } = await session(
+        makeAdapter(),
+        [INFO_283, RECORD_283],
+        '2026-07-19T04:37:40Z',
+        null,
+      );
+      const line = lines.find((l) => l.includes('classic dialect is not decoded'));
+      expect(line).toBeDefined();
+      expect(line).not.toContain('kg');
+    });
+
+    it('says the scale holds no stored weigh-ins when the 0x23 count is 0 (#461)', async () => {
+      // The empty record #461 sent first, after its own 0x12.
+      const { lines } = await session(
+        makeAdapter(),
+        [INFO_461, EMPTY_461],
+        '2026-10-10T09:23:05.302Z',
+      );
+      expect(lines).toContain('QN: 0x23 says the scale holds no stored weigh-ins (#463)');
+    });
+
+    describe('the weigh-in ending the session before the stored-record answer', () => {
+      const RACE =
+        'QN: the weigh-in ends the session before the scale answered the stored-record query; ' +
+        'a stored weigh-in it sends after this is not read (#463)';
+
+      // Real frames of the #463 session. The order of the first case, our 0x22
+      // written and the final live frame before any 0x23, is in no log: the
+      // 18-byte scale answered 0x22 within a second in both samples we have.
+      it('says so when the final live frame comes first', async () => {
+        const adapter = makeAdapter();
+        adapter.configure({ qnUserKey: 1000 });
+        const { readings, writes, lines } = await session(
+          adapter,
+          [INFO_463, READY_461, CONFIG_REQ_461, VISIT_OK_463, 1000, MEASURING_463, LIVE_463],
+          STARTED_463,
+        );
+        expect(writes.some((w) => w[0] === 0x22)).toBe(true);
+        expect(readings).toEqual([{ weight: 71.6, impedance: 507 }]);
+        expect(lines).toContain(RACE);
+      });
+
+      it('says nothing when the scale answered first', async () => {
+        const adapter = makeAdapter();
+        adapter.configure({ qnUserKey: 1000 });
+        const { lines } = await session(
+          adapter,
+          [
+            INFO_463,
+            READY_461,
+            CONFIG_REQ_461,
+            VISIT_OK_463,
+            1000,
+            MEASURING_463,
+            RECORD_463,
+            LIVE_463,
+          ],
+          STARTED_463,
+        );
+        expect(lines).not.toContain(RACE);
+      });
+
+      it('says nothing before our 0x22 went out', async () => {
+        const { lines } = await session(makeAdapter(), [INFO_463, LIVE_463], STARTED_463);
+        expect(lines).not.toContain(RACE);
+      });
+
+      it('says nothing on the classic dialect', async () => {
+        // The classic 10-byte stable 0x10 of the C-06 tests (openScale layout,
+        // no classic capture exists), 83.2 kg / 500 Ohm after the #283 0x12.
+        const classicStable = Buffer.from([
+          0x10, 0x0a, 0x01, 0x03, 0x40, 0x01, 0x01, 0xf4, 0x01, 0xf4,
+        ]);
+        const { readings, writes, lines } = await session(
+          makeAdapter(),
+          [INFO_283, READY_461, CONFIG_REQ_461, 1000, classicStable],
+          STARTED_463,
+          null,
+        );
+        expect(writes.some((w) => w[0] === 0x22)).toBe(true);
+        expect(readings).toEqual([{ weight: 83.2, impedance: 500 }]);
+        expect(lines).not.toContain(RACE);
+      });
     });
   });
 });
