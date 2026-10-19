@@ -531,7 +531,7 @@ This applies to `weight_only` and `skip_metabolic_age` (garmin), `retain` and `h
 
 ## Historical readings
 
-Some scales keep measurements taken while nothing was listening and replay them on the next connection. Two adapters currently pass that recorded time on: **Beurer BF720** (and the BF105, BF500, BF788 and BF950 it serves) and **Renpho ES-26BB**. A reading carrying a time is treated differently from a live one.
+Some scales keep measurements taken while nothing was listening and replay them on the next connection. Several adapters pass that recorded time on, among them **Beurer BF720** (and the BF105, BF500, BF788 and BF950 it serves), **Renpho ES-26BB** and the **QN** scales with a 19-byte scale-info frame, and with an 18-byte one when `ble.qn_user_key` is set. A reading carrying a time is treated differently from a live one.
 
 Several other scales replay a cache without a usable time. Salter is the explicit case: its stored records are delivered as ordinary readings on purpose, because a dated reading it could not date correctly would be buffered rather than exported.
 

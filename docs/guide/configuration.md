@@ -391,7 +391,7 @@ With this set, on the 18- and 19-byte dialects the profile frame carries this ke
 
 It is meant for a scale a vendor app has set you up on. The one scale in the logs that never saw a vendor app refused openScale's frame as well, and whether any key works on such a scale is not known. Leave it unset if your scale already accepts the profile frame, since a key it does not expect may make it refuse a frame it accepts today. What ble-scale-sync exports on the 18-byte dialect does not change: body composition is still computed here from the impedance. On the 19-byte dialect the scale's own body composition can be used, under the conditions in the previous tip.
 
-On the one captured 18-byte unit, the vendor app's accepted frame was followed by live weight frames. Whether ble-scale-sync gets the same with this option is not yet confirmed on an 18-byte scale ([#463](https://github.com/KristianP26/ble-scale-sync/issues/463)). With debug on, look for:
+On the one captured 18-byte unit, the vendor app's accepted frame was followed by live weight frames, and with this option set ble-scale-sync gets the same on that unit: the scale accepts the frame, streams the weigh-in and shows its body composition ([#463](https://github.com/KristianP26/ble-scale-sync/issues/463)). With debug on, look for:
 
 ```
 QN: no A2 before START on the 18-byte dialect, as the vendor app (ble.qn_user_key, #463)
@@ -407,10 +407,10 @@ QN: the scale refused the profile frame sent with ble.qn_user_key 1000 for user 
 
 The 20-byte and classic dialects, and a session in which the scale-info frame never arrived, ignore the option, and the debug log says so.
 
-On the 18-byte dialect the option also brings in weigh-ins the scale stored while ble-scale-sync was not connected. A stored weigh-in from up to 90 seconds before the connection still counts as the weigh-in of that connection, as without the option. One the scale kept for user slot 1 from earlier than that goes out with its own date and time, only to the exporters that can record a past measurement (see [Historical readings](/exporters#historical-readings)), and not again once it has gone out: ble-scale-sync remembers it across restarts, and skips a stored copy of a weigh-in it has just exported live. A stored weigh-in the scale did not assign to a user, and any stored weigh-in without the option, is not exported, because nothing says whose it is. The normal log gives its weight and time, so you can add it by hand:
+On the 18-byte dialect the option also brings in weigh-ins the scale stored while ble-scale-sync was not connected. A stored weigh-in from up to 90 seconds before the connection still counts as the weigh-in of that connection, as without the option. One the scale kept for user slot 1 from earlier than that goes out with its own date and time, only to the exporters that can record a past measurement (see [Historical readings](/exporters#historical-readings)), and not again once ble-scale-sync has read it: it remembers that across restarts, and skips a stored copy of a weigh-in it has just exported live. A stored weigh-in the scale did not assign to a user, and any stored weigh-in without the option, is not exported, because nothing says whose it is. The normal log gives its weight and time, so you can add it by hand:
 
 ```
-QN: a stored weigh-in (72.40 kg at 2026-10-13T06:41:12.000Z, user slot 1) is not exported: without ble.qn_user_key ble-scale-sync cannot tell whose it is (#463)
+QN: a stored weigh-in (72.4 kg at 2026-10-13T06:41:12.000Z, user slot 1) is not exported: without ble.qn_user_key ble-scale-sync cannot tell whose it is (#463)
 ```
 
 With debug on, every stored weigh-in that is not read says why, on every dialect.
