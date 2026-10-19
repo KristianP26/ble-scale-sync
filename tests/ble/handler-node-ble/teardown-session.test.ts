@@ -21,6 +21,8 @@ const h = vi.hoisted(() => ({
   callMethod: vi.fn(),
   getAdapter: vi.fn(),
   getDevice: vi.fn(),
+  /** Runs inside the 500 ms settle, which is otherwise skipped. */
+  onSleep: undefined as (() => void) | undefined,
 }));
 
 vi.mock('../../../src/ble/types.js', async (importOriginal) => {
@@ -28,7 +30,9 @@ vi.mock('../../../src/ble/types.js', async (importOriginal) => {
   return {
     ...actual,
     // The 500 ms settle before the D-Bus reset is not the subject here.
-    sleep: async () => {},
+    sleep: async () => {
+      h.onSleep?.();
+    },
     resetAdapterBtmgmt: h.resetAdapterBtmgmt,
   };
 });
@@ -47,6 +51,8 @@ vi.mock('../../../src/ble/handler-node-ble/discovery.js', async (importOriginal)
 const { teardownSession, _resetPreemptiveSkipNotice } =
   await import('../../../src/ble/handler-node-ble/scan-stages.js');
 const { bleLog } = await import('../../../src/ble/types.js');
+const { _resetStaleLinkStateForTests } =
+  await import('../../../src/ble/handler-node-ble/stale-link.js');
 
 /** A BlueZ adapter stub whose only reachable surface is helper.callMethod. */
 const btAdapter = { helper: { callMethod: h.callMethod } } as never;
@@ -159,6 +165,8 @@ describe('teardownSession and a Disconnect BlueZ never answers (#472)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
+    _resetStaleLinkStateForTests();
+    h.onSleep = undefined;
     calls.length = 0;
     vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
     vi.spyOn(bleLog, 'info').mockImplementation(() => {});
@@ -237,6 +245,25 @@ describe('teardownSession and a Disconnect BlueZ never answers (#472)', () => {
     expect(h.resetAdapterBtmgmt).not.toHaveBeenCalled();
   });
 
+  it('stands down before the recovery when a newer cycle starts during the settle (A-04)', async () => {
+    // The newer cycle owns the D-Bus connection and the controller by then; a
+    // power-cycle here would land in the middle of its scan.
+    let superseded = false;
+    h.onSleep = () => (superseded = true);
+    const device = hung();
+    const result = track(
+      teardownSession(gattCycle({ device: device as never, isSuperseded: () => superseded })),
+    );
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(result.state()).toBe('resolved');
+    expect(device.helper.removeListeners).toHaveBeenCalled();
+    expect(h.resetConnection).not.toHaveBeenCalled();
+    expect(h.resetAdapterBtmgmt).not.toHaveBeenCalled();
+    expect(h.getAdapter).not.toHaveBeenCalled();
+  });
+
   it('recovers a stale link found by a cycle without a GATT attempt', async () => {
     // A broadcast or idle cycle that found the scale disconnects it too, and
     // the same stuck Disconnect parks it there.
@@ -259,6 +286,8 @@ describe('teardownSession and a Disconnect BlueZ never answers (#472)', () => {
 describe('teardownSession and a RemoveDevice BlueZ never answers (#472)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetStaleLinkStateForTests();
+    h.onSleep = undefined;
     calls.length = 0;
     vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
     vi.spyOn(bleLog, 'info').mockImplementation(() => {});
@@ -294,5 +323,91 @@ describe('teardownSession and a RemoveDevice BlueZ never answers (#472)', () => 
       'resetAdapterBtmgmt',
     ]);
     expect(h.getDevice).toHaveBeenCalledWith('AA:BB:CC:DD:EE:FF');
+  });
+});
+
+/**
+ * #472, the other direction: the recovery power-cycles the adapter even with
+ * `ble.preemptive_adapter_reset: false` and on cycles that never ran GATT, so
+ * it must take an unanswered call as its only evidence. A Disconnect BlueZ
+ * answers, with success or with an error such as NotConnected, has to leave
+ * every teardown exactly as it was before #472.
+ */
+describe('teardownSession and a Disconnect BlueZ answers (#472)', () => {
+  const answering = {
+    ok: () => ({
+      disconnect: vi.fn(async () => {}),
+      helper: { removeListeners: vi.fn() },
+    }),
+    'NotConnected error': () => ({
+      disconnect: vi.fn(async () => {
+        throw new Error('org.bluez.Error.NotConnected');
+      }),
+      helper: { removeListeners: vi.fn() },
+    }),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetStaleLinkStateForTests();
+    h.onSleep = undefined;
+    calls.length = 0;
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    h.resetConnection.mockImplementation(() => calls.push('resetConnection'));
+    h.resetAdapterBtmgmt.mockImplementation(async () => {
+      calls.push('resetAdapterBtmgmt');
+      return true;
+    });
+    h.callMethod.mockImplementation(async (name: string) => {
+      calls.push(name);
+    });
+    h.getAdapter.mockImplementation(async () => {
+      calls.push('getAdapter');
+      return { getDevice: h.getDevice };
+    });
+  });
+
+  describe.each(Object.entries(answering))('answered: %s', (_label, make) => {
+    it('a GATT session keeps the preemptive power-cycle, once', async () => {
+      const device = make();
+      await teardownSession(gattCycle({ device: device as never }));
+      expect(device.disconnect).toHaveBeenCalledTimes(1);
+      expect(calls).toEqual(['resetConnection', 'resetAdapterBtmgmt']);
+    });
+
+    it('a GATT session with preemptive_adapter_reset false is not power-cycled', async () => {
+      const device = make();
+      await teardownSession(gattCycle({ device: device as never, preemptiveAdapterReset: false }));
+      expect(calls).toEqual(['resetConnection']);
+    });
+
+    it('an idle or broadcast cycle touches neither the connection nor the adapter', async () => {
+      const device = make();
+      await teardownSession(
+        gattCycle({ device: device as never, gattAttempted: false, gattSucceeded: false }),
+      );
+      expect(calls).toEqual([]);
+      expect(device.helper.removeListeners).toHaveBeenCalled();
+    });
+
+    it.each(['removed', 'skipped'])(
+      'a failed GATT session whose RemoveDevice was %s keeps the usual cleanup',
+      async (outcome) => {
+        h.removeDevice.mockImplementation(async () => {
+          calls.push('removeDevice');
+          return outcome;
+        });
+        const device = make();
+        await teardownSession(
+          gattCycle({
+            device: device as never,
+            gattSucceeded: false,
+            preemptiveAdapterReset: false,
+          }),
+        );
+        expect(calls).toEqual(['StopDiscovery', 'removeDevice', 'resetConnection']);
+      },
+    );
   });
 });

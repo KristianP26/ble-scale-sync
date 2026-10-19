@@ -587,6 +587,28 @@ describe('scanAndReadRaw and a Disconnect BlueZ never answers (#472)', () => {
     expect(calls).not.toContain('noteReadingForStaleLink');
   });
 
+  it('does not lift the brake when the connect works but no reading follows', async () => {
+    // With a stuck link BlueZ answers Connect at once from its own state, so
+    // only a reading says the link is healthy again.
+    fakeDevice.disconnect = async () => {
+      calls.push('device.disconnect');
+    };
+    const realGatt = fakeDevice.gatt;
+    fakeDevice.gatt = async () => {
+      calls.push('device.gatt');
+      throw new Error('GATT server acquisition timed out');
+    };
+    try {
+      const result = track(scanAndReadRaw(opts()));
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(result.state()).toBe('rejected');
+      expect(calls).toContain('connectWithRecovery');
+      expect(calls).not.toContain('noteReadingForStaleLink');
+    } finally {
+      fakeDevice.gatt = realGatt;
+    }
+  });
+
   it('every cycle ends and releases its device proxy while BlueZ never answers Disconnect', async () => {
     (fakeDevice as unknown as { helper: unknown }).helper = {
       removeListeners: () => calls.push('releaseDeviceProxy'),
