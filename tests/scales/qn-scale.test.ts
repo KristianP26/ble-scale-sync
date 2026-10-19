@@ -4347,6 +4347,27 @@ describe('QN stored record and impedance (#461)', () => {
         );
       });
 
+      it("does not export it when the scale accepted openScale's profile, not the first user's", async () => {
+        // The #463 frames with the ready frame before the 0x12: the ready step
+        // has already chosen openScale's frames, so the accepted visit is
+        // openScale's constant (key 8), and slot 1 need not be users[0].
+        const { readings, writes, lines } = await session(
+          keyed(),
+          [READY_461, INFO_463, CONFIG_REQ_461, VISIT_OK_463, 1000, RECORD_463],
+          '2026-10-13T18:09:00Z',
+        );
+        const visit = writes.find((w) => w[0] === 0xa0 && w[1] === 0x0d && w[2] === 0x02);
+        expect(visit).toEqual([
+          0xa0, 0x0d, 0x02, 0x01, 0x00, 0x08, 0x00, 0x21, 0x06, 0xb8, 0x04, 0x02, 0x9d,
+        ]);
+        expect(readings).toEqual([]);
+        expect(lines).toContain(
+          'QN: a stored weigh-in (71.55 kg at 2026-10-13T17:59:38.000Z) is not exported: this ' +
+            "session sent openScale's profile, not the first user with ble.qn_user_key (the " +
+            '18-byte 0x12 came after the handshake), so it is not known whose it is (#463)',
+        );
+      });
+
       it('without ble.qn_user_key only logs it, once per session', async () => {
         const { readings, lines } = await session(
           makeAdapter(),

@@ -1955,7 +1955,8 @@ export class QnScaleAdapter
    *
    * Reported as history with its own time (`fromMemory`), but only for user
    * slot 1, with `ble.qn_user_key`, in a session in which the scale accepted
-   * the profile for slot 1: only then is slot 1 the first configured user,
+   * the profile built from the first user with that key (not openScale's
+   * fallback one): only then is slot 1 the first configured user,
    * as the option documents. Otherwise it gets an info line with its weight
    * and time, so it can be entered by hand, and the line names the first
    * reason in that order: a record the scale gave no user would not go out
@@ -1996,6 +1997,18 @@ export class QnScaleAdapter
     // A refused profile means the key or the first user does not match what
     // the vendor app set up, so slot 1 need not be the first configured user.
     // The profile frame always goes to slot 1, so the answer is for slot 1.
+    // It has to be the frame built from the first user with the key, too: a
+    // 0x12 that came after the handshake leaves the session on openScale's
+    // constant profile (key 8), which a scale may accept for a slot 1 that
+    // holds someone else (Renpho #213/#253).
+    if (this.visitSent === null && this.visitReply?.ok === true) {
+      bleLog.info(
+        `QN: a stored weigh-in (${what}) is not exported: this session sent openScale's ` +
+          'profile, not the first user with ble.qn_user_key (the 18-byte 0x12 came after the ' +
+          'handshake), so it is not known whose it is (#463)',
+      );
+      return null;
+    }
     if (this.visitReply?.ok !== true) {
       bleLog.info(
         `QN: a stored weigh-in (${what}) is not exported: the scale did not accept the ` +
