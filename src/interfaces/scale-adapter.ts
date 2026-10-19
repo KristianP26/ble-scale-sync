@@ -441,8 +441,9 @@ export interface ScaleAdapterCore {
    * Used for one thing only: when a pairing on the scale went unconfirmed and
    * the node-ble transport holds the next one back, a change from false to
    * true means somebody just weighed in, so pairing is tried at once instead
-   * of after the wait. Nothing else reads it, and a wrong answer costs at most
-   * one pairing attempt too many or one too few. Must not throw and must not
+   * of after the wait. Nothing else reads it. A wrong answer costs one pairing
+   * attempt too many per false step to true, or one too few; a hook that keeps
+   * flipping is never worse than no hold at all. Must not throw and must not
    * do I/O: it runs on every advertisement while the pairing is held back.
    */
   advertisesPendingReading?(device: BleDeviceInfo): boolean | undefined;

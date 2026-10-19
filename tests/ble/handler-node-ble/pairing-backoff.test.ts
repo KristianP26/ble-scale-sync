@@ -333,6 +333,10 @@ describe('holdUntilPairingAllowed (#471, D063)', () => {
     // Due 30 s in; the last report is 30 s old by then.
     await vi.advanceTimersByTimeAsync(31_000);
     expect(h.state()).toBe('pending');
+    // Another property changing is not a report.
+    report({ Connected: { signature: 'b', value: false } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.state()).toBe('pending');
     report();
     await vi.advanceTimersByTimeAsync(0);
     expect(h.state()).toBe('resolved');
@@ -346,6 +350,27 @@ describe('holdUntilPairingAllowed (#471, D063)', () => {
     report();
     await vi.advanceTimersByTimeAsync(2_000);
     expect(h.state()).toBe('resolved');
+  });
+
+  it('says when the wait is over but the scale was not heard since', async () => {
+    pairingBackoff().recordFailure(MAC, 'X', undefined);
+    const h = await hold({ budgetMs: 150_000 });
+    await vi.advanceTimersByTimeAsync(150_000);
+    expect(h.state()).toBe('rejected');
+    expect((h.error() as Error).message).toBe(
+      `${MAC} is not paired; next pairing attempt as soon as it is heard again`,
+    );
+  });
+
+  it('does not name a wait that is already over when a weigh-in opens it', async () => {
+    pairingBackoff().recordFailure(MAC, 'X', false);
+    vi.setSystemTime(Date.now() + 3 * MIN);
+    const h = await hold({ hint: true });
+    expect(h.state()).toBe('resolved');
+    const lines = vi.mocked(bleLog.info).mock.calls.map((c) => String(c[0]));
+    const line = lines.find((l) => l.includes('advertises a stored weigh-in'));
+    expect(line).toBeDefined();
+    expect(line).not.toContain('rather than');
   });
 
   it('never waits past the discovery budget left in the cycle', async () => {

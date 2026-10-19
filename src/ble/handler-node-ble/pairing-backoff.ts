@@ -321,20 +321,23 @@ export async function holdUntilPairingAllowed(
 
   const capMin = opts.capMin ?? DEFAULT_PAIRING_RETRY_MAX_MIN;
   const waitLeft = (): number => backoff.remainingMs(mac, capMin);
-  if (backoff.observeHint(mac, hint)) {
-    bleLog.info(
-      `${mac} advertises a stored weigh-in, so pairing is tried now rather than in ` +
-        `${minutes(waitLeft())} min. Confirm the pairing on the scale when it shows a code.`,
+  /** Why the attempt goes now, said only when it would otherwise have waited. */
+  const triedNow = (why: string): string => {
+    const left = waitLeft();
+    return (
+      `${mac} ${why}, so pairing is tried now` +
+      (left > 0 ? ` rather than in ${minutes(left)} min` : '') +
+      '. Confirm the pairing on the scale when it shows a code.'
     );
+  };
+  if (backoff.observeHint(mac, hint)) {
+    bleLog.info(triedNow('advertises a stored weigh-in'));
     return hint;
   }
   const decision = backoff.decide(mac, capMin);
   if (decision.go) {
     if (decision.why === 'returned') {
-      bleLog.info(
-        `${mac} is back after a scan cycle without it, so pairing is tried now rather than in ` +
-          `${minutes(waitLeft())} min. Confirm the pairing on the scale when it shows a code.`,
-      );
+      bleLog.info(triedNow('is back after a scan cycle without it'));
     } else {
       bleLog.debug(`Pairing with ${mac} is no longer held back (${decision.why})`);
     }
@@ -386,24 +389,27 @@ export async function holdUntilPairingAllowed(
             return;
           }
           if ('ServiceData' in props) {
-            const seen = advertisedReadingHint(
-              hookAdapter,
-              mac,
-              parseServiceDataProp(props.ServiceData),
+            const entries = parseServiceDataProp(props.ServiceData);
+            const seen = advertisedReadingHint(hookAdapter, mac, entries);
+            // The snapshot runs once a cycle; this shows every value in between,
+            // also the ones the hook does not know.
+            bleLog.debug(
+              `${mac} ServiceData while held: ` +
+                `${(entries ?? []).map((e) => `${e.uuid}: ${e.data.toString('hex')}`).join(', ') || 'none'}` +
+                ` (hint ${String(seen)})`,
             );
             if (seen !== undefined) {
               hint = seen;
               if (backoff.observeHint(mac, seen)) {
-                bleLog.info(
-                  `${mac} advertises a stored weigh-in, so pairing is tried now rather than in ` +
-                    `${minutes(waitLeft())} min. Confirm the pairing on the scale when it shows a code.`,
-                );
+                bleLog.info(triedNow('advertises a stored weigh-in'));
                 go();
                 return;
               }
             }
           }
-          if (due && lastReportAt !== undefined) go();
+          // Past the due time only a report itself lets the connect go: some
+          // other property changing says nothing about the scale being awake.
+          if (due && FRESH_REPORT_PROPS.some((p) => p in props)) go();
         };
 
         if (abortSignal?.aborted) {

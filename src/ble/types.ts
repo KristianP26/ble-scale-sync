@@ -385,9 +385,13 @@ export class PairingDeferredError extends Error {
 
   constructor(mac: string, waitMs: number) {
     const min = Math.max(1, Math.ceil(waitMs / 60_000));
+    // A wait that is over but heard no report since says so, rather than a
+    // minute that has nothing to do with when the next attempt goes.
     super(
-      `${mac} is not paired; next pairing attempt in ${min} min, ` +
-        'or sooner if it reappears or advertises a new weigh-in',
+      waitMs > 0
+        ? `${mac} is not paired; next pairing attempt in ${min} min, ` +
+            'or sooner if it reappears or advertises a new weigh-in'
+        : `${mac} is not paired; next pairing attempt as soon as it is heard again`,
     );
     this.#mac = mac;
   }
