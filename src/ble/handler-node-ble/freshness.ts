@@ -15,10 +15,15 @@ import { isDeviceObjectGone } from './device-object.js';
  * `RSSI` is documented Readonly+Optional on `org.bluez.Device1` (BlueZ docs,
  * verified via context7). BlueZ legitimately omits the prop after
  * `StopDiscovery`, so absence is NOT a freshness signal (#167 regression).
- * The `lastRssiUpdateTs = Date.now()` init at construction is load-bearing:
- * trackers are only created after `waitDevice` resolved on an object the cycle
- * removed first, which only fires on a fresh advertisement, or after the D060
- * gate heard a report from an object BlueZ kept from an earlier cycle.
+ * The `lastRssiUpdateTs = Date.now()` init at construction makes the first
+ * check pass on time alone. That stands for a fresh advertisement only on two
+ * paths: `waitDevice` resolved on an object the cycle removed first, or the
+ * D060 gate heard a report from an object BlueZ kept from an earlier cycle.
+ * Auto-discovery picks from objects BlueZ may hold from long ago (it removes
+ * nothing first), and a paired object is kept without the gate (removeDevice
+ * skips bonded devices). There only the 127 sentinel can fail the first
+ * check: a missing RSSI or one BlueZ cached from a scale that has since gone
+ * to sleep passes it.
  *
  * The 127 sentinel and time window cover the dying-peer scenario @fromport
  * reproduced for #143 / #140, where `device.connect()` would stall inside
