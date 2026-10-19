@@ -307,7 +307,9 @@ export const BleSchema = z
      * reject its stored key on the next connect; #417 showed it is not the
      * cause (that is the missing host IdKey, see adapter_privacy), and it is
      * kept as a diagnostic switch. The D-Bus reset, the failed-GATT cleanup and
-     * the reactive recovery tiers all still run.
+     * the reactive recovery tiers all still run, and so does the reactive
+     * power-cycle when BlueZ does not complete a Disconnect (a link it keeps
+     * listing as connected, #472, D062).
      *
      * node-ble only: noble resets the adapter only reactively, and the proxy
      * transports never touch the host adapter.

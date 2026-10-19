@@ -11,35 +11,98 @@
  * waits forever. Without a deadline each scan cycle parked on one of them until
  * the 900 s poll deadline, for days.
  *
- * Every Disconnect on the connect and teardown path gets a deadline here
- * (disconnectBounded), so the cycle ends and its teardown reaches the D-Bus
- * reset and the adapter power-cycle that follow it.
+ * Two parts: every Disconnect on the connect and teardown path gets a deadline
+ * (disconnectBounded), and a teardown that saw one go unanswered power-cycles
+ * the adapter and checks the result (recoverStaleLink). BlueZ's adapter_stop()
+ * removes every connection it holds and answers their pending Disconnects. It
+ * cannot clear a device that is missing from its connection list, which only a
+ * bluetoothd restart does, so a failed check warns with that command and backs
+ * off rather than power-cycling the adapter under every cycle.
  */
 
-import { bleLog, errMsg, DISCONNECT_TIMEOUT_MS } from '../types.js';
-import type { Device } from './dbus.js';
+import {
+  bleLog,
+  errMsg,
+  resetAdapterBtmgmt,
+  withTimeout,
+  DISCONNECT_TIMEOUT_MS,
+} from '../types.js';
+import { helperOf, releaseDeviceProxy, type Device } from './dbus.js';
+import { getAdapter, parseHciIndex } from './connection.js';
+import { powerCycleViaDbus } from './discovery.js';
 
 /** What a bounded Disconnect ended with. An error answer from BlueZ is `'done'`. */
 export type DisconnectOutcome = 'done' | 'timeout' | 'aborted';
+
+/** How long the check after the power-cycle may take, all of it together. */
+const RECOVERY_CHECK_TIMEOUT_MS = 10_000;
+
+/** The brake after a recovery that did not clear the link: 10, 20, 40, then 60 min. */
+const BRAKE_FIRST_MS = 10 * 60_000;
+const BRAKE_MAX_MS = 60 * 60_000;
 
 /** Monotonic, unlike Date.now(): a Pi without an RTC steps its wall clock. */
 const now = (): number => performance.now();
 
 const announced = new Set<string>();
 
-/** Test seam: the announcements are per process on purpose. */
-export function _resetStaleLinkStateForTests(): void {
-  announced.clear();
-}
-
 /** First time at `level`, after that at debug: these repeat while the state lasts. */
-function announceOnce(key: string, level: 'info', message: string): void {
+function announceOnce(key: string, level: 'info' | 'warn', message: string): void {
   if (announced.has(key)) {
     bleLog.debug(message);
     return;
   }
   announced.add(key);
   bleLog[level](message);
+}
+
+/** Recoveries in a row that did not clear the link, or could not tell. */
+let failedRecoveries = 0;
+/** When the last of those ran (process clock). */
+let lastFailedAt = 0;
+/** No recovery before this (process clock). */
+let nextRecoveryAt = 0;
+
+/** Test seam: the brake and the announcements are per process on purpose. */
+export function _resetStaleLinkStateForTests(): void {
+  failedRecoveries = 0;
+  lastFailedAt = 0;
+  nextRecoveryAt = 0;
+  announced.clear();
+}
+
+function liftBrake(): void {
+  failedRecoveries = 0;
+  nextRecoveryAt = 0;
+}
+
+function tightenBrake(): void {
+  failedRecoveries++;
+  lastFailedAt = now();
+  const delay = Math.min(BRAKE_FIRST_MS * 2 ** (failedRecoveries - 1), BRAKE_MAX_MS);
+  nextRecoveryAt = lastFailedAt + delay;
+}
+
+/**
+ * A reading came through, so whatever the link was stuck on is gone. Not a
+ * successful connect: with a stuck link BlueZ answers Connect at once from its
+ * own state (dev_connect()), so that would lift the brake on every cycle.
+ */
+export function noteReadingForStaleLink(): void {
+  liftBrake();
+}
+
+/** Whether a stale link found now may be recovered, or the brake holds it back. */
+export function staleLinkRecoveryDue(): boolean {
+  const at = now();
+  if (at >= nextRecoveryAt) return true;
+  const ago = Math.round((at - lastFailedAt) / 60_000);
+  const next = Math.max(1, Math.round((nextRecoveryAt - at) / 60_000));
+  bleLog.debug(
+    `Stale BlueZ link recovery skipped: the last attempt ${ago} min ago did not clear it ` +
+      `(next in ${next} min)`,
+  );
+  return false;
 }
 
 /**
@@ -99,4 +162,106 @@ export function disconnectBounded(
     abortSignal?.addEventListener('abort', onAbort, { once: true });
     void answered.then(() => finish('done'));
   });
+}
+
+/**
+ * Whether BlueZ still lists `mac` as connected, read on a fresh adapter object.
+ * Undefined when it could not tell within RECOVERY_CHECK_TIMEOUT_MS, as one
+ * bound over every call in it: getAdapter() also registers the pairing agent.
+ * A proxy that comes back after the deadline is released all the same (#404).
+ */
+async function stillConnected(
+  mac: string,
+  bleAdapter: string | undefined,
+): Promise<boolean | undefined> {
+  let abandoned = false;
+  let probe: Device | undefined;
+  const check = async (): Promise<boolean> => {
+    const adapter = await getAdapter(bleAdapter);
+    let device: Device;
+    try {
+      device = await adapter.getDevice(mac);
+    } catch (err) {
+      // BlueZ dropped the object: nothing left that it could call connected.
+      if (errMsg(err).includes('Device not found')) return false;
+      throw err;
+    }
+    if (abandoned) {
+      releaseDeviceProxy(device);
+      return false;
+    }
+    probe = device;
+    try {
+      return (await helperOf(device).prop('Connected')) === true;
+    } finally {
+      probe = undefined;
+      releaseDeviceProxy(device);
+    }
+  };
+  try {
+    return await withTimeout(
+      check(),
+      RECOVERY_CHECK_TIMEOUT_MS,
+      `no answer within ${RECOVERY_CHECK_TIMEOUT_MS / 1000}s`,
+    );
+  } catch (err) {
+    abandoned = true;
+    if (probe) releaseDeviceProxy(probe);
+    bleLog.debug(
+      `Could not check ${mac} after the adapter power-cycle within ` +
+        `${RECOVERY_CHECK_TIMEOUT_MS / 1000}s: ${errMsg(err)}`,
+    );
+    return undefined;
+  }
+}
+
+/**
+ * Power-cycle the adapter to clear a link BlueZ keeps listing as connected,
+ * then check once that it let go of the scale. Never throws.
+ *
+ * Called by the teardown after it reset the D-Bus connection. btmgmt first, on
+ * the same index as the preemptive power-cycle; where btmgmt cannot run (no
+ * CAP_NET_ADMIN, D036) BlueZ's own Powered off/on, which ends in the same
+ * adapter_stop(). Runs with `ble.preemptive_adapter_reset: false` too: that
+ * option turns off the power-cycle after every GATT session, not this one,
+ * which only happens on evidence (D062).
+ */
+export async function recoverStaleLink(opts: {
+  mac: string;
+  bleAdapter: string | undefined;
+  abortSignal?: AbortSignal;
+}): Promise<void> {
+  const { mac, bleAdapter, abortSignal } = opts;
+  if (abortSignal?.aborted) return;
+  const index = parseHciIndex(bleAdapter);
+  let how: string | undefined;
+  try {
+    if (await resetAdapterBtmgmt(index)) {
+      how = `by power-cycling hci${index}`;
+    } else if (await powerCycleViaDbus(await getAdapter(bleAdapter), abortSignal)) {
+      how = 'through BlueZ (Powered off/on)';
+    }
+  } catch (err) {
+    bleLog.debug(`Adapter power-cycle for the stale link failed: ${errMsg(err)}`);
+  }
+  if (!how) {
+    bleLog.debug(`Could not power-cycle hci${index} to clear the stale BlueZ link to ${mac}`);
+    tightenBrake();
+    return;
+  }
+  const connected = await stillConnected(mac, bleAdapter);
+  if (connected === false) {
+    announceOnce('cleared', 'info', `Cleared a stale BlueZ connection to ${mac} ${how}`);
+    liftBrake();
+    return;
+  }
+  if (connected === true) {
+    announceOnce(
+      'still-connected',
+      'warn',
+      `BlueZ still reports ${mac} as connected after the adapter power-cycle and does not ` +
+        'complete a Disconnect. Restart bluetoothd on the host: sudo systemctl restart bluetooth',
+    );
+  }
+  tightenBrake();
 }

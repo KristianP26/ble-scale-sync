@@ -24,6 +24,14 @@ vi.mock('dbus-next', () => ({
 
 vi.mock('node-ble', () => ({ default: { createBluetooth: vi.fn() } }));
 
+const brake = vi.hoisted(() => ({ noteReadingForStaleLink: vi.fn() }));
+
+vi.mock('../../../src/ble/handler-node-ble/stale-link.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../../src/ble/handler-node-ble/stale-link.js')>();
+  return { ...actual, noteReadingForStaleLink: brake.noteReadingForStaleLink };
+});
+
 const { _internals } = await import('../../../src/ble/handler-node-ble/index.js');
 const { bleFailureKind } = await import('../../../src/ble/failure-kind.js');
 const { bleLog } = await import('../../../src/ble/types.js');
@@ -249,5 +257,26 @@ describe('connectWithRecovery and a Disconnect BlueZ never answers (#472)', () =
     expect(read).not.toContain('Connected');
     expect(read).not.toContain('ServicesResolved');
     debug.mockRestore();
+  });
+
+  it('does not lift the stale-link brake on a successful connect', async () => {
+    // With a stuck link BlueZ answers Connect at once from its own state, so a
+    // connect that "worked" says nothing about whether the link is healthy.
+    const device = makeDevice(
+      'initial',
+      async () => undefined,
+      async () => undefined,
+    );
+    const result = track(
+      _internals.connectWithRecovery({
+        btAdapter: makeAdapter(async () => device) as never,
+        mac: 'AA:BB:CC:DD:EE:FF',
+        initialDevice: device as never,
+        maxRetries: 5,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(result.state()).toBe('resolved');
+    expect(brake.noteReadingForStaleLink).not.toHaveBeenCalled();
   });
 });

@@ -41,7 +41,7 @@ import {
   parseHciIndex,
 } from './connection.js';
 import { removeDevice, notifyDiscoveryStopped, withBluezDeadline } from './discovery.js';
-import { disconnectBounded } from './stale-link.js';
+import { disconnectBounded, recoverStaleLink, staleLinkRecoveryDue } from './stale-link.js';
 import { logAdvertisementSnapshot, type AdvertisementSnapshot } from './device-object.js';
 import { buildCharMap } from './gatt.js';
 import {
@@ -475,7 +475,8 @@ export async function teardownSession(opts: {
   /**
    * The cycle already saw BlueZ leave a Disconnect for this device unanswered
    * (#472). The teardown then does not send another one, which would wait just
-   * as long.
+   * as long, and recovers the adapter instead. It also finds this out by
+   * itself, from its own Disconnect or RemoveDevice.
    */
   staleLink?: boolean;
 }): Promise<void> {
@@ -483,7 +484,7 @@ export async function teardownSession(opts: {
     opts;
   const preemptiveAdapterReset = opts.preemptiveAdapterReset !== false;
   const mac = deviceMac ? formatMac(deviceMac) : 'the scale';
-  const staleLink = opts.staleLink === true;
+  let staleLink = opts.staleLink === true;
   const superseded = (): boolean => opts.isSuperseded?.() === true;
   const standDown = (): void => {
     bleLog.debug(
@@ -501,7 +502,8 @@ export async function teardownSession(opts: {
   if (device) {
     if (!staleLink) {
       bleLog.debug(`Disconnecting ${mac} after the session...`);
-      await disconnectBounded(device, { mac, label: 'teardown', abortSignal });
+      const outcome = await disconnectBounded(device, { mac, label: 'teardown', abortSignal });
+      if (outcome === 'timeout') staleLink = true;
     }
     // Hand the Device proxy back. On a GATT cycle the resetConnection() below
     // would drop it anyway, but an idle or broadcast cycle never resets, so
@@ -529,7 +531,8 @@ export async function teardownSession(opts: {
   // D-Bus and RemoveDevice the scale, so the next scan cycle starts from
   // a clean BlueZ state instead of inheriting the zombie subscription.
   // Both have a deadline: BlueZ answers a RemoveDevice for a device it
-  // lists as connected only once that link is gone (#472).
+  // lists as connected only once that link is gone, which is the same
+  // evidence as an unanswered Disconnect (#472).
   if (gattAttempted && !gattSucceeded) {
     try {
       await withBluezDeadline(helperOf(btAdapter!).callMethod('StopDiscovery'), 'StopDiscovery');
@@ -540,8 +543,8 @@ export async function teardownSession(opts: {
     // The resetConnection() below would invalidate the claim anyway, but the
     // invariant should hold by construction, not by what happens to follow.
     if (btAdapter) notifyDiscoveryStopped(btAdapter);
-    if (deviceMac) {
-      await removeDevice(btAdapter!, deviceMac);
+    if (deviceMac && (await removeDevice(btAdapter!, deviceMac)) === 'timeout') {
+      staleLink = true;
     }
   }
 
@@ -565,14 +568,16 @@ export async function teardownSession(opts: {
   // `ble.preemptive_adapter_reset: false` skips the preemptive power-cycle
   // and nothing else. It is the only host-side event between a bonded session
   // that works and a next connect whose stored key is rejected (#417), so it
-  // has to be possible to rule it in or out. The D-Bus reset stays, and the
-  // reactive recovery tiers in startDiscoverySafe still cover a wedge.
+  // has to be possible to rule it in or out. The D-Bus reset stays, the
+  // reactive recovery tiers in startDiscoverySafe still cover a wedge, and so
+  // does the stale-link recovery below (D062).
   //
   // An abort is either a shutdown or the poll loop giving up on this cycle
   // (A-04), and neither should power-cycle the radio: a shutdown has no next
   // cycle, and an abandoned cycle's power-cycle would land on the next one,
   // which starts after a 5 s backoff. A controller that really is wedged is
-  // still recovered by the tiers in startDiscoverySafe.
+  // still recovered by the tiers in startDiscoverySafe, and a stuck link by
+  // the next cycle's teardown, which finds it the same way.
   if (superseded()) {
     standDown();
     return;
@@ -582,6 +587,25 @@ export async function teardownSession(opts: {
       resetConnection();
       bleLog.debug('Cycle aborted: D-Bus connection reset, skipping the btmgmt power-cycle');
     }
+    return;
+  }
+
+  // BlueZ keeps listing the scale as connected after the link is gone (#472).
+  // On any cycle that found the device, GATT or not: a broadcast or idle cycle
+  // disconnects it just the same. The power-cycle here replaces the preemptive
+  // one, so a GATT cycle never gets two, and runs whatever
+  // ble.preemptive_adapter_reset says, since it happens only on evidence. The
+  // brake holds it back after one that did not help; the cycle then ends as it
+  // would have without it.
+  if (staleLink && staleLinkRecoveryDue()) {
+    await sleep(500);
+    if (superseded()) {
+      standDown();
+      return;
+    }
+    resetConnection();
+    bleLog.debug('D-Bus connection reset for the stale-link recovery');
+    await recoverStaleLink({ mac, bleAdapter, abortSignal });
     return;
   }
 

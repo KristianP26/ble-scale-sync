@@ -308,7 +308,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
         // BlueZ still lists the scale as connected after the link is gone, and
         // every further attempt would "connect" at once from that state and
         // then wait for services that never come (#472). Stop here; the
-        // teardown takes it from there.
+        // teardown recovers the adapter.
         bleLog.debug('Disconnecting before retry...');
         const disconnected = await disconnectBounded(device, {
           mac: formattedMac,

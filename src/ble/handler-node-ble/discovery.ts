@@ -224,7 +224,10 @@ function announceStuckDiscovery(err: unknown): void {
  * adapter left off takes the scale and every other BLE device on it down.
  * True only when both writes were accepted.
  */
-async function powerCycleViaDbus(btAdapter: Adapter, abortSignal?: AbortSignal): Promise<boolean> {
+export async function powerCycleViaDbus(
+  btAdapter: Adapter,
+  abortSignal?: AbortSignal,
+): Promise<boolean> {
   const helper = helperOf(btAdapter);
   const { Variant } = await getDbusNext();
   const setPowered = (on: boolean): Promise<void> =>

@@ -124,7 +124,8 @@ configuration:
       section of that title. Turning it
       off stops the brief adapter drop that other Home Assistant Bluetooth
       integrations see after each weigh-in, at the risk of that stuck scanning
-      state.
+      state. The power-cycle when Bluetooth keeps the scale listed as
+      connected and does not complete a disconnect still runs.
   adapter_privacy:
     name: Pair with a host identity key (LE privacy)
     description: >-

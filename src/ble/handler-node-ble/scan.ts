@@ -61,7 +61,7 @@ import {
   type FreshAdvertLatch,
 } from './device-cache.js';
 import { connectWithRecovery } from './connect.js';
-import { disconnectBounded } from './stale-link.js';
+import { disconnectBounded, noteReadingForStaleLink } from './stale-link.js';
 import {
   withScanActivityWatchdog,
   resetScanActivityBackoff,
@@ -542,6 +542,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         // object again (D060).
         rememberReadingAdapter(targetMac, matchedAdapter);
         resetScanActivityBackoff();
+        noteReadingForStaleLink();
         return reading;
       }
 
@@ -616,6 +617,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
           onLiveWeight,
         });
         resetScanActivityBackoff();
+        noteReadingForStaleLink();
         return reading;
       }
 
@@ -678,6 +680,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     // scale is a fact about the scale, not about the cycle (D060).
     if (targetMac) rememberReadingAdapter(targetMac, matchedAdapter);
     resetScanActivityBackoff();
+    noteReadingForStaleLink();
 
     // Same device path as the newer cycle's, so a late Disconnect here would
     // drop that cycle's link to the scale.
@@ -697,7 +700,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       // The stop and the wait above take up to 2.5 s, long enough for the poll
       // loop to give up on this cycle and start a newer one on the same device.
       // Bounded, so a Disconnect BlueZ never answers no longer takes the
-      // reading down with it (#472).
+      // reading down with it; the teardown recovers the link instead (#472).
       if (!isSuperseded()) {
         const outcome = await disconnectBounded(device, {
           mac: formatMac(deviceMac),

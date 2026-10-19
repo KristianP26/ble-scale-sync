@@ -19,6 +19,8 @@ const h = vi.hoisted(() => ({
   resetConnection: vi.fn(),
   removeDevice: vi.fn(),
   callMethod: vi.fn(),
+  getAdapter: vi.fn(),
+  getDevice: vi.fn(),
 }));
 
 vi.mock('../../../src/ble/types.js', async (importOriginal) => {
@@ -34,7 +36,7 @@ vi.mock('../../../src/ble/handler-node-ble/connection.js', async (importOriginal
   const actual =
     await importOriginal<typeof import('../../../src/ble/handler-node-ble/connection.js')>();
   // parseHciIndex stays real, so a wrong adapter index is caught too.
-  return { ...actual, resetConnection: h.resetConnection };
+  return { ...actual, resetConnection: h.resetConnection, getAdapter: h.getAdapter };
 });
 vi.mock('../../../src/ble/handler-node-ble/discovery.js', async (importOriginal) => {
   const actual =
@@ -172,6 +174,15 @@ describe('teardownSession and a Disconnect BlueZ never answers (#472)', () => {
       calls.push('removeDevice');
       return 'removed';
     });
+    // The check after the power-cycle: BlueZ no longer lists the scale as
+    // connected.
+    h.getDevice.mockImplementation(async () => ({
+      helper: {
+        prop: async (name: string) => (name === 'Connected' ? false : undefined),
+        removeListeners: () => {},
+      },
+    }));
+    h.getAdapter.mockImplementation(async () => ({ getDevice: h.getDevice }));
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -188,8 +199,23 @@ describe('teardownSession and a Disconnect BlueZ never answers (#472)', () => {
     expect(result.state()).toBe('resolved');
     expect(device.helper.removeListeners).toHaveBeenCalled();
     expect(h.resetConnection).toHaveBeenCalled();
+    // The recovery's power-cycle replaces the preemptive one, never both.
     expect(h.resetAdapterBtmgmt).toHaveBeenCalledTimes(1);
     expect(h.resetAdapterBtmgmt).toHaveBeenCalledWith(1);
+  });
+
+  it('still power-cycles once with preemptive_adapter_reset false when the Disconnect timed out', async () => {
+    const device = hung();
+    const result = track(
+      teardownSession(gattCycle({ device: device as never, preemptiveAdapterReset: false })),
+    );
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(result.state()).toBe('resolved');
+    expect(h.resetAdapterBtmgmt).toHaveBeenCalledTimes(1);
+    // And checked afterwards that BlueZ let go of the scale.
+    expect(h.getDevice).toHaveBeenCalledWith('AA:BB:CC:DD:EE:FF');
   });
 
   it('sends the Disconnect and returns at once on an aborted cycle', async () => {
@@ -209,5 +235,64 @@ describe('teardownSession and a Disconnect BlueZ never answers (#472)', () => {
     expect(device.disconnect).toHaveBeenCalledTimes(1);
     expect(calls).toEqual(['resetConnection']);
     expect(h.resetAdapterBtmgmt).not.toHaveBeenCalled();
+  });
+
+  it('recovers a stale link found by a cycle without a GATT attempt', async () => {
+    // A broadcast or idle cycle that found the scale disconnects it too, and
+    // the same stuck Disconnect parks it there.
+    const device = hung();
+    const result = track(
+      teardownSession(
+        gattCycle({ device: device as never, gattAttempted: false, gattSucceeded: false }),
+      ),
+    );
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(result.state()).toBe('resolved');
+    expect(device.helper.removeListeners).toHaveBeenCalled();
+    expect(h.resetConnection).toHaveBeenCalled();
+    expect(h.resetAdapterBtmgmt).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('teardownSession and a RemoveDevice BlueZ never answers (#472)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    calls.length = 0;
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    h.resetConnection.mockImplementation(() => calls.push('resetConnection'));
+    h.resetAdapterBtmgmt.mockImplementation(async () => {
+      calls.push('resetAdapterBtmgmt');
+      return true;
+    });
+    h.callMethod.mockImplementation(async (name: string) => {
+      calls.push(name);
+    });
+    h.getDevice.mockImplementation(async () => {
+      throw new Error('Device not found');
+    });
+    h.getAdapter.mockImplementation(async () => ({ getDevice: h.getDevice }));
+  });
+
+  it('takes it as the same evidence as an unanswered Disconnect', async () => {
+    // BlueZ queues a RemoveDevice for a connected device behind the same
+    // disconnect, so a timeout here is the stuck link seen from another call.
+    h.removeDevice.mockImplementation(async () => {
+      calls.push('removeDevice');
+      return 'timeout';
+    });
+    const device = { disconnect: vi.fn(async () => {}), helper: { removeListeners: vi.fn() } };
+    await teardownSession(
+      gattCycle({ device: device as never, gattSucceeded: false, preemptiveAdapterReset: false }),
+    );
+    expect(calls).toEqual([
+      'StopDiscovery',
+      'removeDevice',
+      'resetConnection',
+      'resetAdapterBtmgmt',
+    ]);
+    expect(h.getDevice).toHaveBeenCalledWith('AA:BB:CC:DD:EE:FF');
   });
 });

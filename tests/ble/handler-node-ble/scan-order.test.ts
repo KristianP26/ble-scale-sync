@@ -168,6 +168,20 @@ vi.mock('../../../src/ble/handler-node-ble/connect.js', () => ({
   }),
 }));
 
+// The stale-link recovery has its own tests. Here only whether the teardown
+// reaches it, and that a reading lifts its brake; the bounded Disconnect stays
+// real, since that is what the cycle has to get past (#472).
+vi.mock('../../../src/ble/handler-node-ble/stale-link.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../../src/ble/handler-node-ble/stale-link.js')>();
+  return {
+    ...actual,
+    staleLinkRecoveryDue: () => true,
+    recoverStaleLink: record('recoverStaleLink', async () => {}),
+    noteReadingForStaleLink: record('noteReadingForStaleLink'),
+  };
+});
+
 vi.mock('../../../src/ble/handler-node-ble/broadcast.js', () => ({
   broadcastScanNodeBle: record('broadcastScanNodeBle', async (adapter: unknown) => ({
     reading: { weight: 80, impedance: 0 },
@@ -550,6 +564,9 @@ describe('scanAndReadRaw and a Disconnect BlueZ never answers (#472)', () => {
 
     expect(result.state()).toBe('resolved');
     expect(result.value()?.reading.weight).toBe(80);
+    // The reading lifts the brake; the stale link it left goes to the recovery.
+    expect(calls).toContain('noteReadingForStaleLink');
+    expect(calls).toContain('recoverStaleLink');
   });
 
   it('hands a stale link to the teardown', async () => {
@@ -565,6 +582,9 @@ describe('scanAndReadRaw and a Disconnect BlueZ never answers (#472)', () => {
     // connectWithRecovery already waited out one Disconnect; a second would
     // wait just as long for nothing.
     expect(calls).not.toContain('device.disconnect');
+    expect(calls).toContain('recoverStaleLink');
+    // No reading, so the brake stays where it is.
+    expect(calls).not.toContain('noteReadingForStaleLink');
   });
 
   it('every cycle ends and releases its device proxy while BlueZ never answers Disconnect', async () => {
