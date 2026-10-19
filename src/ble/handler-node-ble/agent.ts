@@ -282,6 +282,14 @@ export async function ensurePairingAgent(
 ): Promise<void> {
   if (!agentInstance) agentInstance = new BlueZPairingAgent();
   agentInstance.setTargetProvider(targetProvider);
+  // forgetPairingAgent() drops the instance on every resetConnection(), and
+  // a call still out on the replaced connection fails only AFTER that reset
+  // (connection.ts rejects it once the old bus ends). Its outcome belongs to
+  // the old connection, so it must not touch the state the new one reads:
+  // latching defaultAgentUnavailable there would keep the new connection
+  // from ever asking for the role (#83).
+  const instance = agentInstance;
+  const superseded = (): boolean => agentInstance !== instance;
   const hasPin = targetProvider().pin !== undefined;
   const wantDefault = (hasPin || opts?.forPairing === true) && !defaultAgentUnavailable;
   if (registered && (defaultAgentClaimed || !wantDefault)) return;
@@ -299,12 +307,14 @@ export async function ensurePairingAgent(
         // Re-registering the same path returns AlreadyExists; treat as success.
         if (!errMsg(err).includes('AlreadyExists')) throw err;
       }
+      if (superseded()) return;
       registered = true;
       bleLog.debug(`BlueZ pairing agent registered (${AGENT_CAPABILITY})`);
     }
     if (wantDefault && !defaultAgentClaimed) {
       try {
         await manager.RequestDefaultAgent(AGENT_PATH);
+        if (superseded()) return;
         defaultAgentClaimed = true;
         bleLog.debug(
           hasPin
@@ -312,6 +322,10 @@ export async function ensurePairingAgent(
             : 'BlueZ default-agent role claimed for pairing a scale that keeps a single bond',
         );
       } catch (err) {
+        if (superseded()) {
+          bleLog.debug(`RequestDefaultAgent on a replaced D-Bus connection failed: ${errMsg(err)}`);
+          return;
+        }
         // Latch after the first failure. Another agent already holding the role
         // is a persistent host state, not a transient one, so retrying every
         // scan cycle would warn forever in continuous mode without ever
@@ -327,6 +341,10 @@ export async function ensurePairingAgent(
       bleLog.debug('Not claiming the BlueZ default-agent role (no users[].beurer_pin configured)');
     }
   } catch (err) {
+    if (superseded()) {
+      bleLog.debug(`Pairing agent setup on a replaced D-Bus connection failed: ${errMsg(err)}`);
+      return;
+    }
     bleLog.warn(
       `Could not register BlueZ pairing agent: ${errMsg(err)}. ` +
         'Pairing will rely on any system agent that is present.',
