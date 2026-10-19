@@ -19,7 +19,7 @@
  * alone lights the display. It listens to the scale's advertisements for the
  * rest of its discovery budget and ends like an idle cycle. Pairing is tried
  * again after 2, 2, 2 minutes, then after a wait that doubles each time (4, 8,
- * 16, 32, 64, ...) up to `ble.pairing_retry_max_min` (default 60), never
+ * 16, 32, ...) up to `ble.pairing_retry_max_min` (default 60), never
  * longer, and at once when the scale comes back after a cycle without it, when
  * its advertisement says it holds a new weigh-in, when it is paired by other
  * means, or after a restart: the memory lives only in this process.
