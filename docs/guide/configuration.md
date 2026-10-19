@@ -484,7 +484,7 @@ ble:
   preemptive_adapter_reset: false
 ```
 
-Only this one step is skipped. The D-Bus reset, the cleanup after a failed session and the recovery that runs when discovery will not start all stay as they are, and the change applies from the next scan cycle without a restart. So does the power-cycle when BlueZ does not complete a `Disconnect` within 10 seconds: that means BlueZ keeps listing the scale as connected after the connection is gone ([#472](https://github.com/KristianP26/ble-scale-sync/issues/472)), and it happens only then, not after every session (see [Troubleshooting](/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state)). If your adapter then starts missing the scale after a few weigh-ins, turn it back on.
+Only this one step is skipped. The D-Bus reset, the cleanup after a failed session and the recovery that runs when discovery will not start all stay as they are, and the change applies from the next scan cycle without a restart. The power-cycle when BlueZ does not complete a `Disconnect` within 10 seconds also still runs: that means BlueZ keeps listing the scale as connected after the connection is gone ([#472](https://github.com/KristianP26/ble-scale-sync/issues/472)), and it happens only then, not after every session (see [Troubleshooting](/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state), which also covers the manual fix, including on Home Assistant OS where `systemctl` is not available). If your adapter then starts missing the scale after a few weigh-ins, turn it back on.
 
 Native BlueZ (node-ble) only. noble power-cycles the adapter only when it is not powered on at start-up, and the proxy transports never touch the host adapter.
 
