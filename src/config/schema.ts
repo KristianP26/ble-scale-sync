@@ -306,8 +306,9 @@ export const BleSchema = z
      * Nobody standing there used to mean a new code every two or three
      * minutes, all night. Now, once our pairing agent has handled such a
      * request and the cycle ends with the scale still unpaired, the scale is
-     * not connected to again for 2, 2, 2, 4, 8, 16 and 32 minutes, then for
-     * this long each time. It goes at once when the scale comes back after a
+     * not connected to again for 2 minutes three times, then twice as long
+     * each time (4, 8, 16, 32, 64 minutes and so on) until the wait reaches
+     * this cap, and then for the cap each time (`pairingRetryDelayMs`). It goes at once when the scale comes back after a
      * scan without it, when its advertisement shows a new weigh-in (Beurer
      * BF720 family), when it is paired by other means, or after a restart.
      *

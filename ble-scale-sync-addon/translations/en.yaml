@@ -143,9 +143,10 @@ configuration:
     description: >-
       local transport only, and scales that show a code to confirm (Beurer
       BF7xx and BF9xx). When nobody confirms a pairing on the scale, the
-      add-on stops connecting to it for 2 minutes three times, then 4, 8, 16
-      and 32 minutes, and then this long each time, instead of showing a new
-      code every few minutes. It asks at once when the scale wakes up again,
+      add-on stops connecting to it for 2 minutes three times, then twice as
+      long each time (4, 8, 16, 32, 64 minutes and so on) until the wait
+      reaches this many minutes, and then this long each time, instead of
+      showing a new code every few minutes. It asks at once when the scale wakes up again,
       when it advertises a new weigh-in (seen on a BF915), or when the
       add-on restarts. 0 asks on every scan, as earlier versions did.
   esphome_proxy_host:

@@ -262,7 +262,7 @@ Privacy applies to the whole adapter: every Bluetooth LE connection it makes, Ho
 
 ### Beurer scale shows a pairing code again and again
 
-When nobody confirms a pairing on the scale, the add-on does not ask again on the next scan. It stops connecting to the scale for 2 minutes three times, then 4, 8, 16 and 32 minutes, and then for **Longest wait before asking to pair again** (`pairing_retry_max_min`, 60 minutes by default) each time. The log says so:
+When nobody confirms a pairing on the scale, the add-on does not ask again on the next scan. It stops connecting to the scale for 2 minutes three times, then twice as long each time (4, 8, 16, 32, 64 minutes and so on) until the wait reaches **Longest wait before asking to pair again** (`pairing_retry_max_min`, 60 minutes by default), and then for that long each time. The log says so:
 
 ```
 AA:BB:CC:DD:EE:FF asked for the pairing to be confirmed on the scale and it was not (attempt 1). Not connecting to it again for 2 min, ...
