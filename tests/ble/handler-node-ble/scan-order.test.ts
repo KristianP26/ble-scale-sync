@@ -609,6 +609,22 @@ describe('scanAndReadRaw and a Disconnect BlueZ never answers (#472)', () => {
     expect(calls).not.toContain('noteReadingForStaleLink');
   });
 
+  it('does not lift the brake on a broadcast reading, which never touches the link', async () => {
+    fakeDevice.disconnect = async () => {
+      calls.push('device.disconnect');
+    };
+    const result = track(
+      scanAndReadRaw({
+        ...opts(),
+        adapters: [makeAdapter({ preferPassive: true, parseServiceData: () => null })],
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(result.state()).toBe('resolved');
+    expect(calls).toContain('broadcastScanNodeBle');
+    expect(calls).not.toContain('noteReadingForStaleLink');
+  });
+
   it('does not lift the brake when the connect works but no reading follows', async () => {
     // With a stuck link BlueZ answers Connect at once from its own state, so
     // only a reading says the link is healthy again.

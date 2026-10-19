@@ -82,7 +82,7 @@ describe('recoverStaleLink (#472)', () => {
     expect(info).toHaveBeenCalledWith(
       `Cleared a stale BlueZ connection to ${MAC} by power-cycling hci1`,
     );
-    expect(staleLinkRecoveryDue()).toBe(true);
+    expect(staleLinkRecoveryDue(MAC)).toBe(true);
   });
 
   it('falls back to Powered off/on through BlueZ when btmgmt cannot run', async () => {
@@ -100,10 +100,10 @@ describe('recoverStaleLink (#472)', () => {
     await recover();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0][0])).toContain('sudo systemctl restart bluetooth');
-    expect(staleLinkRecoveryDue()).toBe(false);
+    expect(staleLinkRecoveryDue(MAC)).toBe(false);
 
     vi.advanceTimersByTime(10 * MIN);
-    expect(staleLinkRecoveryDue()).toBe(true);
+    expect(staleLinkRecoveryDue(MAC)).toBe(true);
     await recover();
     // The second time at debug only.
     expect(warn).toHaveBeenCalledTimes(1);
@@ -115,21 +115,23 @@ describe('recoverStaleLink (#472)', () => {
     for (const minutes of [10, 20, 40, 60, 60]) {
       await recover();
       vi.advanceTimersByTime(minutes * MIN - 1);
-      expect(staleLinkRecoveryDue(), `${minutes} min`).toBe(false);
+      expect(staleLinkRecoveryDue(MAC), `${minutes} min`).toBe(false);
       vi.advanceTimersByTime(1);
-      expect(staleLinkRecoveryDue(), `${minutes} min`).toBe(true);
+      expect(staleLinkRecoveryDue(MAC), `${minutes} min`).toBe(true);
     }
     expect(debug).toHaveBeenCalledWith(
-      expect.stringMatching(/^Stale BlueZ link recovery skipped: the last attempt \d+ min ago/),
+      expect.stringMatching(
+        /^Stale BlueZ link recovery for AA:BB:CC:DD:EE:FF skipped: the last attempt \d+ min ago/,
+      ),
     );
   });
 
   it('lifts the brake on a reading or on a check that comes back clean', async () => {
     bluezReports(true);
     await recover();
-    expect(staleLinkRecoveryDue()).toBe(false);
-    noteReadingForStaleLink();
-    expect(staleLinkRecoveryDue()).toBe(true);
+    expect(staleLinkRecoveryDue(MAC)).toBe(false);
+    noteReadingForStaleLink(MAC);
+    expect(staleLinkRecoveryDue(MAC)).toBe(true);
 
     await recover();
     await recover();
@@ -140,7 +142,24 @@ describe('recoverStaleLink (#472)', () => {
     bluezReports(true);
     await recover();
     vi.advanceTimersByTime(10 * MIN);
-    expect(staleLinkRecoveryDue()).toBe(true);
+    expect(staleLinkRecoveryDue(MAC)).toBe(true);
+  });
+
+  it('keeps a brake per scale, lifted only by a reading from that scale', async () => {
+    // Two scales in auto-discovery: a reading from the one that works must not
+    // let the stuck one power-cycle the adapter on every cycle again.
+    const OTHER = '11:22:33:44:55:66';
+    bluezReports(true);
+    await recover();
+    expect(staleLinkRecoveryDue(MAC)).toBe(false);
+    expect(staleLinkRecoveryDue(OTHER)).toBe(true);
+
+    noteReadingForStaleLink(OTHER);
+    expect(staleLinkRecoveryDue(MAC)).toBe(false);
+
+    // Any spelling of the same address.
+    noteReadingForStaleLink('aa-bb-cc-dd-ee-ff');
+    expect(staleLinkRecoveryDue(MAC)).toBe(true);
   });
 
   it('bounds the whole check, and releases a proxy that comes back late', async () => {
@@ -161,7 +180,7 @@ describe('recoverStaleLink (#472)', () => {
       expect.stringContaining(`Could not check ${MAC} after the adapter power-cycle within 10s`),
     );
     // Not knowing counts as not cleared.
-    expect(staleLinkRecoveryDue()).toBe(false);
+    expect(staleLinkRecoveryDue(MAC)).toBe(false);
 
     await vi.advanceTimersByTimeAsync(10_000);
     expect(removeListeners).toHaveBeenCalled();
@@ -189,7 +208,7 @@ describe('recoverStaleLink (#472)', () => {
 
     expect(done).toBe(true);
     expect(h.powerCycleViaDbus).not.toHaveBeenCalled();
-    expect(staleLinkRecoveryDue()).toBe(false);
+    expect(staleLinkRecoveryDue(MAC)).toBe(false);
   });
 
   it('does nothing on an aborted cycle', async () => {
@@ -207,7 +226,7 @@ describe('recoverStaleLink (#472)', () => {
     const { getDevice } = bluezReports(false);
     await recover();
     expect(getDevice).not.toHaveBeenCalled();
-    expect(staleLinkRecoveryDue()).toBe(false);
+    expect(staleLinkRecoveryDue(MAC)).toBe(false);
   });
 });
 

@@ -305,6 +305,35 @@ describe('teardownSession and a Disconnect BlueZ never answers (#472)', () => {
     expect(calls).toEqual(['resetConnection']);
   });
 
+  it('holds back the recovery only for the scale whose recovery did not help', async () => {
+    h.getDevice.mockImplementation(async () => ({
+      helper: { prop: async () => true, removeListeners: () => {} },
+    }));
+    vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    const first = track(
+      teardownSession(gattCycle({ device: hung() as never, gattAttempted: false })),
+    );
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(first.state()).toBe('resolved');
+    expect(h.resetAdapterBtmgmt).toHaveBeenCalledTimes(1);
+
+    const other = track(
+      teardownSession(
+        gattCycle({
+          device: hung() as never,
+          deviceMac: '11:22:33:44:55:66',
+          gattAttempted: false,
+          gattSucceeded: false,
+        }),
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(other.state()).toBe('resolved');
+    expect(h.resetAdapterBtmgmt).toHaveBeenCalledTimes(2);
+    expect(h.getDevice).toHaveBeenLastCalledWith('11:22:33:44:55:66');
+  });
+
   it.each([
     [true, ['StopDiscovery', 'resetConnection', 'resetAdapterBtmgmt']],
     [false, ['StopDiscovery', 'resetConnection']],

@@ -602,7 +602,7 @@ export async function teardownSession(opts: {
   // brake holds it back after one that did not help; a GATT cycle then ends as
   // it would have without it, an idle or broadcast one drops the connection
   // (below).
-  if (staleLink && staleLinkRecoveryDue()) {
+  if (staleLink && staleLinkRecoveryDue(mac)) {
     await sleep(500);
     if (superseded()) {
       standDown();

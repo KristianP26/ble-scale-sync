@@ -82,51 +82,65 @@ function announceOnce(key: string, level: 'info' | 'warn', message: string): voi
   bleLog[level](message);
 }
 
-/** Recoveries in a row that did not clear the link, or could not tell. */
-let failedRecoveries = 0;
-/** When the last of those ran (process clock). */
-let lastFailedAt = 0;
-/** No recovery before this (process clock). */
-let nextRecoveryAt = 0;
-
-/** Test seam: the brake and the announcements are per process on purpose. */
-export function _resetStaleLinkStateForTests(): void {
-  failedRecoveries = 0;
-  lastFailedAt = 0;
-  nextRecoveryAt = 0;
-  announced.clear();
-}
-
-function liftBrake(): void {
-  failedRecoveries = 0;
-  nextRecoveryAt = 0;
-}
-
-function tightenBrake(): void {
-  failedRecoveries++;
-  lastFailedAt = now();
-  const delay = Math.min(BRAKE_FIRST_MS * 2 ** (failedRecoveries - 1), BRAKE_MAX_MS);
-  nextRecoveryAt = lastFailedAt + delay;
+/** The brake for one scale. */
+interface Brake {
+  /** Recoveries in a row that did not clear the link, or could not tell. */
+  failed: number;
+  /** When the last of those ran (process clock). */
+  lastFailedAt: number;
+  /** No recovery before this (process clock). */
+  nextAt: number;
 }
 
 /**
- * A reading came through, so whatever the link was stuck on is gone. Not a
- * successful connect: with a stuck link BlueZ answers Connect at once from its
- * own state (dev_connect()), so that would lift the brake on every cycle.
+ * Per scale: one scale's stuck link says nothing about another's, and a
+ * reading from the other one must not let this one power-cycle the adapter
+ * every cycle again.
  */
-export function noteReadingForStaleLink(): void {
-  liftBrake();
+const brakes = new Map<string, Brake>();
+
+/** Any spelling of a MAC to one key; also tolerates a placeholder that is not one. */
+const brakeKey = (mac: string): string => mac.replace(/[:-]/g, '').toUpperCase();
+
+/** Test seam: the brake and the announcements are per process on purpose. */
+export function _resetStaleLinkStateForTests(): void {
+  brakes.clear();
+  announced.clear();
 }
 
-/** Whether a stale link found now may be recovered, or the brake holds it back. */
-export function staleLinkRecoveryDue(): boolean {
+function liftBrake(mac: string): void {
+  brakes.delete(brakeKey(mac));
+}
+
+function tightenBrake(mac: string): void {
+  const key = brakeKey(mac);
+  const failed = (brakes.get(key)?.failed ?? 0) + 1;
+  const lastFailedAt = now();
+  const delay = Math.min(BRAKE_FIRST_MS * 2 ** (failed - 1), BRAKE_MAX_MS);
+  brakes.set(key, { failed, lastFailedAt, nextAt: lastFailedAt + delay });
+}
+
+/**
+ * The scale sent a reading over a connection, so whatever its link was stuck
+ * on is gone. Not a successful connect: with a stuck link BlueZ answers
+ * Connect at once from its own state (dev_connect()), so that would lift the
+ * brake on every cycle. Not a broadcast reading either, which never touches
+ * the link, nor a reading from another scale.
+ */
+export function noteReadingForStaleLink(mac: string): void {
+  liftBrake(mac);
+}
+
+/** Whether a stale link to `mac` found now may be recovered, or the brake holds it back. */
+export function staleLinkRecoveryDue(mac: string): boolean {
+  const brake = brakes.get(brakeKey(mac));
   const at = now();
-  if (at >= nextRecoveryAt) return true;
-  const ago = Math.round((at - lastFailedAt) / 60_000);
-  const next = Math.max(1, Math.round((nextRecoveryAt - at) / 60_000));
+  if (!brake || at >= brake.nextAt) return true;
+  const ago = Math.round((at - brake.lastFailedAt) / 60_000);
+  const next = Math.max(1, Math.round((brake.nextAt - at) / 60_000));
   bleLog.debug(
-    `Stale BlueZ link recovery skipped: the last attempt ${ago} min ago did not clear it ` +
-      `(next in ${next} min)`,
+    `Stale BlueZ link recovery for ${mac} skipped: the last attempt ${ago} min ago did not ` +
+      `clear it (next in ${next} min)`,
   );
   return false;
 }
@@ -283,7 +297,7 @@ export async function recoverStaleLink(opts: {
   }
   if (!how) {
     bleLog.debug(`Could not power-cycle hci${index} to clear the stale BlueZ link to ${mac}`);
-    tightenBrake();
+    tightenBrake(mac);
     return;
   }
   // An abort during the power-cycle: nobody reads the result any more. A
@@ -295,7 +309,7 @@ export async function recoverStaleLink(opts: {
   const connected = await stillConnected(mac, bleAdapter);
   if (connected === false) {
     announceOnce('cleared', 'info', `Cleared a stale BlueZ connection to ${mac} ${how}`);
-    liftBrake();
+    liftBrake(mac);
     return;
   }
   if (connected === true) {
@@ -308,5 +322,5 @@ export async function recoverStaleLink(opts: {
         'restart, or run ha host reboot)',
     );
   }
-  tightenBrake();
+  tightenBrake(mac);
 }

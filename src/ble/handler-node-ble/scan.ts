@@ -616,7 +616,6 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         // object again (D060).
         rememberReadingAdapter(targetMac, matchedAdapter);
         resetScanActivityBackoff();
-        noteReadingForStaleLink();
         return reading;
       }
 
@@ -710,7 +709,6 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
           onLiveWeight,
         });
         resetScanActivityBackoff();
-        noteReadingForStaleLink();
         return reading;
       }
 
@@ -783,7 +781,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     // scale is a fact about the scale, not about the cycle (D060).
     if (targetMac) rememberReadingAdapter(targetMac, matchedAdapter);
     resetScanActivityBackoff();
-    noteReadingForStaleLink();
+    noteReadingForStaleLink(deviceMac);
 
     // Same device path as the newer cycle's, so a late Disconnect here would
     // drop that cycle's link to the scale.
