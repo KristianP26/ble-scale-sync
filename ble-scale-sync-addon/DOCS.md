@@ -38,7 +38,7 @@ Which scales send their weight in the advertisement is listed under [which scale
 
 With any transport but `local`:
 
-- The options that only steer this host's adapter (**Bluetooth adapter**, **Re-pair a scale that forgot its pairing**, **Power-cycle the adapter after every weigh-in**, **Pair with a host identity key**) are ignored, and the log names any you have set. The adapter reset on startup is skipped as well.
+- The options that only steer this host's adapter (**Bluetooth adapter**, **Re-pair a scale that forgot its pairing**, **Power-cycle the adapter after every weigh-in**, **Pair with a host identity key**, **Longest wait before asking to pair again**) are ignored, and the log names any you have set. The adapter reset on startup is skipped as well.
 - **Scale MAC address** still applies, and is worth setting.
 - **Proxy silence before restart** (`proxy_liveness_timeout_min`) applies.
 - **Scan cooldown** and **Rescan delay when no scale was found** are not used: the add-on listens all the time.
@@ -256,9 +256,20 @@ Some Beurer scales (the BF915 is confirmed) keep a pairing only from a device th
 
 1. Turn the option on and restart the add-on. The log shows `uses an IRK derived from its address (fingerprint ...)` and `LE privacy is on`.
 2. Remove the old pairing once: `bluetoothctl remove AA:BB:CC:DD:EE:FF` in the host shell (or turn on **Re-pair a scale that forgot its pairing**).
-3. Weigh in and confirm the pairing on the scale, as you did the first time. Later weigh-ins should not ask again.
+3. Stay at the scale until it shows a code, about a minute after the add-on next connects to it (it connects and looks up the scale's services first), and confirm it on the scale, as you did the first time. If you miss it, restart the add-on to be asked again at once. Later weigh-ins should not ask again.
 
 Privacy applies to the whole adapter: every Bluetooth LE connection it makes, Home Assistant's own Bluetooth integration included, then uses a random address, and other paired LE devices may need pairing again. If that is a problem, give the add-on its own USB adapter with **BLE adapter** (`ble_adapter`). If LE privacy cannot be turned on, the add-on skips the connect and says why rather than pair without the key.
+
+### Beurer scale shows a pairing code again and again
+
+When nobody confirms a pairing on the scale, the add-on does not ask again on the next scan. It stops connecting to the scale for 2 minutes three times, then 4, 8, 16 and 32 minutes, and then for **Longest wait before asking to pair again** (`pairing_retry_max_min`, 60 minutes by default) each time. The log says so:
+
+```
+AA:BB:CC:DD:EE:FF asked for the pairing to be confirmed on the scale and it was not (attempt 1). Not connecting to it again for 2 min, ...
+Scale found, waiting to pair, rescanning in 5s... (AA:BB:CC:DD:EE:FF is not paired; next pairing attempt in 2 min, or sooner if it reappears or advertises a new weigh-in)
+```
+
+It asks at once when the scale wakes up again after a scan without it, when it advertises a new weigh-in (the BF720 family, the BF915 included: weigh in and stay at the scale for about a minute; this does not work while an earlier weigh-in is still waiting on the scale), or when you restart the add-on. Set the option to 0 to be asked on every scan, as earlier versions did.
 
 ### No scale found
 

@@ -395,6 +395,7 @@ describe.skipIf(!HARNESS)(
             auto_clear_stale_bond: true,
             preemptive_adapter_reset: false,
             adapter_privacy: true,
+            pairing_retry_max_min: 15,
             mqtt_enabled: false,
             garmin_enabled: true,
             garmin_email: 'someone@example.com',
@@ -420,6 +421,7 @@ describe.skipIf(!HARNESS)(
           auto_clear_stale_bond: true
           preemptive_adapter_reset: false
           adapter_privacy: true
+          pairing_retry_max_min: 15
 
         scale:
           weight_unit: kg
@@ -632,15 +634,18 @@ describe.skipIf(!HARNESS)(
             adapter_privacy: true,
             auto_clear_stale_bond: true,
             preemptive_adapter_reset: false,
+            pairing_retry_max_min: 15,
           },
         });
         const config = expectLoads(r);
         expect(config.ble?.scale_mac).toBe('F8:83:06:4E:B6:7E');
-        expect(r.text).not.toMatch(/adapter:|adapter_privacy|auto_clear_stale_bond|preemptive/);
+        expect(r.text).not.toMatch(
+          /adapter:|adapter_privacy|auto_clear_stale_bond|preemptive|pairing_retry/,
+        );
         expect(r.stdout).toContain(
           'NOTE: ble_transport esphome-proxy does not use the built-in Bluetooth adapter, so these ' +
             'options are ignored: ble_adapter, auto_clear_stale_bond, preemptive_adapter_reset, ' +
-            'adapter_privacy.',
+            'adapter_privacy, pairing_retry_max_min.',
         );
       });
 
@@ -972,6 +977,19 @@ describe.skipIf(!HARNESS)('run.sh custom_config and the transport options', () =
     const r = run(CUSTOM);
     expect(r.status).toBe(0);
     expect(r.stdout).not.toContain('transport options');
+  });
+
+  // #471: the option has a default, so only a changed value is worth a word.
+  it('names pairing_retry_max_min as ignored only when it is not 60', () => {
+    const quiet = run(CUSTOM);
+    expect(quiet.status).toBe(0);
+    expect(quiet.stdout).not.toContain('pairing_retry_max_min');
+    const r = run({ ...CUSTOM, pairing_retry_max_min: 15 });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain(
+      "WARNING: custom_config is enabled, so the 'pairing_retry_max_min' option is ignored.",
+    );
+    expect(r.stdout).toContain("Set 'ble.pairing_retry_max_min' in");
   });
 });
 

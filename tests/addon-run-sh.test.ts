@@ -236,6 +236,36 @@ describe('add-on option adapter_privacy (#417)', () => {
   });
 });
 
+describe('add-on option pairing_retry_max_min (#471)', () => {
+  const SCHEMA = (
+    parse(lf(readFileSync('ble-scale-sync-addon/config.yaml', 'utf8'))) as {
+      schema: Record<string, unknown>;
+    }
+  ).schema;
+
+  it('is an add-on option, 60 by default, validated as a whole number from 0 to 1440', () => {
+    expect(MANIFEST.options).toHaveProperty('pairing_retry_max_min', 60);
+    expect(SCHEMA).toHaveProperty('pairing_retry_max_min', 'int(0,1440)?');
+    expect(TRANSLATIONS.configuration).toHaveProperty('pairing_retry_max_min');
+  });
+
+  it('is read with opt_int and written into the ble block only when it is not 60', () => {
+    expect(RUN_SH).toMatch(/^ {2}PAIRING_RETRY_MAX_MIN=\$\(opt_int pairing_retry_max_min 60\)$/m);
+    expect(RUN_SH).toContain(
+      '[ "$PAIRING_RETRY_MAX_MIN" != "60" ] && echo "  pairing_retry_max_min: $PAIRING_RETRY_MAX_MIN" >> "$FRESH"',
+    );
+  });
+
+  it('is named as ignored in custom config mode by its own check, not the loop', () => {
+    // opt() answers "60" for the default, so in the loop every start with
+    // custom_config would warn about an option nobody set.
+    expect(customConfigBranch()).toMatch(
+      /if \[ "\$\(opt_int pairing_retry_max_min 60\)" != "60" \]; then/,
+    );
+    expect(customConfigBranch()).not.toMatch(/for _qn in [^;]*\bpairing_retry_max_min\b/);
+  });
+});
+
 // A text option like the other QN switches, so that unset stays unset (#331).
 describe('add-on option qn_result_ack', () => {
   it('is an add-on option, unset by default, validated as text', () => {
@@ -268,6 +298,7 @@ describe('generated config: ble block', () => {
       ...body.matchAll(/\[ [^\]]*"\$([A-Z_]+)"[^\]]*\] && (?:echo|printf|emit_[a-z_]+)/g),
     ].map((m) => m[1]);
     expect(written).toContain('ADAPTER_PRIVACY');
+    expect(written).toContain('PAIRING_RETRY_MAX_MIN');
     expect(written).toContain('QN_RESULT_ACK');
     expect(written).toContain('SCALE_MAC');
     expect(written).toContain('BLE_TRANSPORT');

@@ -263,6 +263,13 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
     log "WARNING: custom_config is enabled, so the 'preemptive_adapter_reset' option is ignored."
     log "Set 'ble.preemptive_adapter_reset' in $CUSTOM_PATH instead."
   fi
+  # pairing_retry_max_min has a default in the manifest too, so opt() always
+  # answers for it and the loop would warn on every start. Only a value other
+  # than the default is worth a warning (#471).
+  if [ "$(opt_int pairing_retry_max_min 60)" != "60" ]; then
+    log "WARNING: custom_config is enabled, so the 'pairing_retry_max_min' option is ignored."
+    log "Set 'ble.pairing_retry_max_min' in $CUSTOM_PATH instead."
+  fi
   # Same for update_check, a top-level key in the file.
   if [ "$(opt_bool_default_true update_check)" = "false" ]; then
     log "WARNING: custom_config is enabled, so the 'update_check' option is ignored."
@@ -379,6 +386,8 @@ else
   # Defaults to true: only an explicit false switches it off (#417).
   PREEMPTIVE_ADAPTER_RESET=$(opt_bool_default_true preemptive_adapter_reset)
   ADAPTER_PRIVACY=$(opt_bool adapter_privacy)
+  # The app's own default (#471); only another value is written.
+  PAIRING_RETRY_MAX_MIN=$(opt_int pairing_retry_max_min 60)
   PROXY_LIVENESS_MIN=$(opt_int proxy_liveness_timeout_min 30)
   # Still written below, but the built-in Bluetooth transport has no liveness
   # check. Say so instead of letting the option look like it did something.
@@ -408,6 +417,7 @@ else
     [ "$AUTO_CLEAR_STALE_BOND" != "true" ] || _host_only="${_host_only:+$_host_only, }auto_clear_stale_bond"
     [ "$PREEMPTIVE_ADAPTER_RESET" != "false" ] || _host_only="${_host_only:+$_host_only, }preemptive_adapter_reset"
     [ "$ADAPTER_PRIVACY" != "true" ] || _host_only="${_host_only:+$_host_only, }adapter_privacy"
+    [ "$PAIRING_RETRY_MAX_MIN" = "60" ] || _host_only="${_host_only:+$_host_only, }pairing_retry_max_min"
     if [ -n "$_host_only" ]; then
       log "NOTE: ble_transport $BLE_TRANSPORT does not use the built-in Bluetooth adapter, so these options are ignored: $_host_only."
     fi
@@ -415,6 +425,7 @@ else
     AUTO_CLEAR_STALE_BOND=false
     PREEMPTIVE_ADAPTER_RESET=true
     ADAPTER_PRIVACY=false
+    PAIRING_RETRY_MAX_MIN=60
   fi
   DISPLAY_UNIT=$(opt display_unit)
 
@@ -728,7 +739,8 @@ YAML
     [ -n "$QN_PROTOCOL_BYTE" ] || [ -n "$QN_REPORT_BYTE" ] || [ -n "$QN_WEIGHT_ACK" ] ||
     [ -n "$QN_USER_KEY" ] || [ -n "$QN_A4_PRELUDE" ] || [ -n "$QN_TIME_SYNC_LONG" ] || [ -n "$QN_CONFIG_LONG" ] ||
     [ -n "$QN_RESULT_ACK" ] || [ "$AUTO_CLEAR_STALE_BOND" = "true" ] || [ "$PREEMPTIVE_ADAPTER_RESET" = "false" ] ||
-    [ "$ADAPTER_PRIVACY" = "true" ] || [ "$PROXY_LIVENESS_MIN" != "30" ] ||
+    [ "$ADAPTER_PRIVACY" = "true" ] || [ "$PAIRING_RETRY_MAX_MIN" != "60" ] ||
+    [ "$PROXY_LIVENESS_MIN" != "30" ] ||
     [ "$BLE_TRANSPORT" != "local" ]; then
     echo "ble:" >> "$FRESH"
     [ -n "$SCALE_MAC" ] && printf '%s\n' "  scale_mac: \"$(yaml_escape "$SCALE_MAC")\"" >> "$FRESH"
@@ -745,6 +757,7 @@ YAML
     [ "$AUTO_CLEAR_STALE_BOND" = "true" ] && echo "  auto_clear_stale_bond: true" >> "$FRESH"
     [ "$PREEMPTIVE_ADAPTER_RESET" = "false" ] && echo "  preemptive_adapter_reset: false" >> "$FRESH"
     [ "$ADAPTER_PRIVACY" = "true" ] && echo "  adapter_privacy: true" >> "$FRESH"
+    [ "$PAIRING_RETRY_MAX_MIN" != "60" ] && echo "  pairing_retry_max_min: $PAIRING_RETRY_MAX_MIN" >> "$FRESH"
     [ "$PROXY_LIVENESS_MIN" != "30" ] && echo "  proxy_liveness_timeout_min: $PROXY_LIVENESS_MIN" >> "$FRESH"
     [ "$BLE_TRANSPORT" != "local" ] && emit_ble_transport >> "$FRESH"
     echo "" >> "$FRESH"

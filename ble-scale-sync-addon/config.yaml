@@ -67,6 +67,7 @@ options:
   auto_clear_stale_bond: false
   preemptive_adapter_reset: true
   adapter_privacy: false
+  pairing_retry_max_min: 60
   esphome_proxy_host: ''
   esphome_proxy_port: 6053
   esphome_proxy_encryption_key: ''
@@ -124,6 +125,7 @@ schema:
   auto_clear_stale_bond: bool?
   preemptive_adapter_reset: bool?
   adapter_privacy: bool?
+  pairing_retry_max_min: int(0,1440)?
   esphome_proxy_host: str?
   esphome_proxy_port: port?
   esphome_proxy_encryption_key: password?

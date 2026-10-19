@@ -138,6 +138,16 @@ configuration:
       need pairing again. A second adapter set under ble_adapter avoids that.
       After turning it on, remove the scale once (bluetoothctl remove) and pair
       it through the add-on. Leave it off otherwise.
+  pairing_retry_max_min:
+    name: Longest wait before asking to pair again (minutes)
+    description: >-
+      local transport only, and scales that show a code to confirm (Beurer
+      BF7xx and BF9xx). When nobody confirms a pairing on the scale, the
+      add-on stops connecting to it for 2 minutes three times, then 4, 8, 16
+      and 32 minutes, and then this long each time, instead of showing a new
+      code every few minutes. It asks at once when the scale wakes up again,
+      when it shows a new weigh-in, or when the add-on restarts. 0 asks on
+      every scan, as earlier versions did.
   esphome_proxy_host:
     name: ESPHome proxy host
     description: >-
