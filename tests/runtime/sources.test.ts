@@ -54,7 +54,7 @@ vi.mock('../../src/ble/types.js', async (importOriginal) => {
 });
 
 const { buildReadingSource } = await import('../../src/runtime/sources.js');
-const { POST_DISCONNECT_GRACE_MS, SessionTimeoutError, StaleLinkError } =
+const { POST_DISCONNECT_GRACE_MS, PairingDeferredError, SessionTimeoutError, StaleLinkError } =
   await import('../../src/ble/types.js');
 import type { AppContext } from '../../src/runtime/context.js';
 import type { ScaleAdapter } from '../../src/interfaces/scale-adapter.js';
@@ -306,6 +306,40 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
     expect(bundle.failureLogPrefixFor?.(stale)).toBe('Scale found but not connected');
     expect(bundle.failureDelayMs?.(stale)).toBe(undefined);
     bundle.onFailure?.(stale);
+    expect(h.watchdogInstances[0].recordFailure).toHaveBeenCalledTimes(1);
+  });
+
+  // #471, D063: the scale was found and listened to, not connected, because
+  // nobody confirmed its last pairing. Idle when the radio heard the room.
+  it('poll plan: a deferred pairing gets the idle delay, its own prefix, and is not counted', async () => {
+    h.createReadingSource.mockResolvedValue({ kind: 'poll', appliesGraceFloor: false });
+    const ctx = makeCtx({
+      config: {
+        users: [{}],
+        scale: {},
+        runtime: { scan_cooldown: 5, idle_rescan_delay: 4 },
+      } as never,
+    });
+    const bundle = await buildReadingSource(ctx, ADAPTERS, 7, 30);
+    const deferred = tagBleFailure(new PairingDeferredError('AA:BB:CC:DD:EE:FF', 120_000), 'idle');
+
+    expect(bundle.failureLogPrefixFor?.(deferred)).toBe('Scale found, waiting to pair');
+    expect(bundle.failureDelayMs?.(deferred)).toBe(4_000);
+    bundle.onFailure?.(deferred);
+    expect(h.watchdogInstances[0].recordFailure).not.toHaveBeenCalled();
+  });
+
+  it('poll plan: a deferred pairing on a deaf radio is counted and backs off', async () => {
+    h.createReadingSource.mockResolvedValue({ kind: 'poll', appliesGraceFloor: false });
+    const bundle = await buildReadingSource(makeCtx(), ADAPTERS, 7, 30);
+    const deaf = tagBleFailure(
+      new PairingDeferredError('AA:BB:CC:DD:EE:FF', 120_000),
+      'wedge-suspect',
+    );
+
+    expect(bundle.failureLogPrefixFor?.(deaf)).toBe('Scale found, waiting to pair');
+    expect(bundle.failureDelayMs?.(deaf)).toBe(undefined);
+    bundle.onFailure?.(deaf);
     expect(h.watchdogInstances[0].recordFailure).toHaveBeenCalledTimes(1);
   });
 

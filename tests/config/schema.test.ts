@@ -460,6 +460,21 @@ describe('BleSchema', () => {
     }
   });
 
+  it('keeps ble.pairing_retry_max_min from 0 to 1440 (#471)', () => {
+    for (const value of [0, 60, 1440]) {
+      const result = BleSchema.safeParse({ pairing_retry_max_min: value });
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.pairing_retry_max_min).toBe(value);
+    }
+    expect(BleSchema.safeParse({ pairing_retry_max_min: null }).success).toBe(true);
+  });
+
+  it('rejects a ble.pairing_retry_max_min outside 0 to 1440 or not a whole number', () => {
+    for (const value of [-1, 1441, 1.5, '60']) {
+      expect(BleSchema.safeParse({ pairing_retry_max_min: value }).success).toBe(false);
+    }
+  });
+
   it('keeps ble.adapter_privacy (#417) and accepts only a boolean, null or nothing', () => {
     const on = BleSchema.safeParse({ adapter_privacy: true });
     expect(on.success).toBe(true);

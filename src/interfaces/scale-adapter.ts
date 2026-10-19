@@ -418,6 +418,20 @@ export interface ScaleAdapterCore {
   readonly singleBond?: boolean;
 
   /**
+   * Whether the scale's advertisement says it holds a weigh-in nobody has
+   * fetched yet: true, false, or undefined when the advertisement does not
+   * say (#471, D063). Meaningful only together with `requiresBonding`.
+   *
+   * Used for one thing only: when a pairing on the scale went unconfirmed and
+   * the node-ble transport holds the next one back, a change from false to
+   * true means somebody just weighed in, so pairing is tried at once instead
+   * of after the wait. Nothing else reads it, and a wrong answer costs at most
+   * one pairing attempt too many or one too few. Must not throw and must not
+   * do I/O: it runs on every advertisement while the pairing is held back.
+   */
+  advertisesPendingReading?(device: BleDeviceInfo): boolean | undefined;
+
+  /**
    * Receive per-device runtime config (e.g. a MiBeacon bind key) from the
    * composition root at startup and on config reload. Optional: only adapters
    * that decrypt a per-device secret implement it.

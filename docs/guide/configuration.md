@@ -122,6 +122,7 @@ ble:
 | `qn_protocol_byte`           | No                          | Auto           | QN-family scales only. Protocol byte the handshake echoes back to the scale (0 to 255). Set it when a QN scale runs the whole handshake and then reports nothing, or when its scale-info frame is lost in transit on a proxy transport. See below.                                                                                                                                                                                                                   |
 | `qn_report_byte`             | No                          | Unset          | QN-family scales only. Opt-in, and it deletes data on the scale: sends the frame that deletes the user slots this byte selects (0 to 255), on every connection. Unset, nothing is sent. Only for a scale that stopped reporting without it. See below.                                                                                                                                                                                                               |
 | `auto_clear_stale_bond`      | No                          | `false`        | Delete a pairing key the scale has forgotten and pair again. Bonded scales only (Beurer BF7xx / BF9xx), node-ble transport only. See below.                                                                                                                                                                                                                                                                                                                          |
+| `pairing_retry_max_min`      | No                          | `60`           | Bonded scales that show a code to confirm (Beurer BF7xx / BF9xx). After a pairing nobody confirmed on the scale, the longest wait in minutes (0 to 1440) before the app connects to the scale and asks again; the waits before it are 2, 2, 2, 4, 8, 16 and 32 minutes. `0` asks on every scan, as earlier releases did. node-ble transport only. See below.                                                                                                         |
 | `preemptive_adapter_reset`   | No                          | `true`         | Power-cycle the Bluetooth adapter with `btmgmt` after every GATT session, to clear a stuck-discovery state some Raspberry Pi adapters fall into. It was not the cause of the Beurer BF915 re-pairing in #417 (see `adapter_privacy`). `false` does not stop the power-cycle after a Disconnect BlueZ never completes (#472). node-ble transport only. See below.                                                                                                     |
 | `adapter_privacy`            | No                          | `false`        | Turn on LE privacy on the Bluetooth adapter, with a key derived from its address, so pairing hands the scale a host identity key. For Beurer scales that ask for SET and a new pairing before every weigh-in. Affects the whole adapter. node-ble transport only. See below.                                                                                                                                                                                         |
 | `qn_weight_ack`              | No                          | Per dialect    | QN-family scales only. Send the scale your weight anchor and acknowledge live weight frames, as the vendor apps do. The acknowledgement is on by default on the 20-byte extended dialect. On the 19-byte dialect (`QN: scale info (19B, ...)`) `true` also sends age, height and sex as the Arboleaf app does, which is what lets the scale's own body composition be used. Try `true` if your QN scale completes the handshake and then streams nothing. See below. |
@@ -469,7 +470,37 @@ ble:
 
 The bond is cleared at most once per connect, and only after three consecutive authentication-class failures against a device BlueZ still lists as bonded. It stays opt-in because `le-connection-abort-by-local` also has innocent causes, notably a connect issued while another client (the Home Assistant Bluetooth integration on the same adapter, for instance) still holds a discovery session, and on these scales a bond dropped in error costs a trip to the device to confirm the passkey.
 
+After a bond is cleared the scale has to be paired again, and on a Beurer that means confirming a code on the scale. If nobody is there to do it, the app asks again later rather than on every scan; see `pairing_retry_max_min` below.
+
 Native BlueZ only. The proxy transports do not pair at all.
+
+:::
+
+::: tip When nobody confirms the pairing (`pairing_retry_max_min`)
+
+Beurer scales pair with a code: the scale shows six digits and waits for you to press SET. When nobody does, the pairing fails. Earlier releases then tried again on the next scan, every two or three minutes, each time with a new code on the display, for as long as nobody was there ([#471](https://github.com/KristianP26/ble-scale-sync/issues/471)).
+
+Now, when the app's pairing agent was asked to confirm a code for the scale and the scan ends with the scale still not paired, the app stops connecting to it for a while: 2 minutes, three times, then 4, 8, 16 and 32 minutes, and then `pairing_retry_max_min` (60 by default) each time. It keeps listening to the scale in between and asks at once when:
+
+- the scale comes back after a scan without it (a scale that sleeps between weigh-ins wakes up when you step on it);
+- the scale is paired by other means, for example with `bluetoothctl pair`;
+- ble-scale-sync restarts.
+
+The log says when this starts and what each scan in between did:
+
+```
+AA:BB:CC:DD:EE:FF asked for the pairing to be confirmed on the scale and it was not (attempt 1). Not connecting to it again for 2 min, ...
+Scale found, waiting to pair, rescanning in 5s... (AA:BB:CC:DD:EE:FF is not paired; next pairing attempt in 2 min, or sooner if it reappears or advertises a new weigh-in)
+```
+
+```yaml
+ble:
+  pairing_retry_max_min: 15 # 0 asks on every scan, as before
+```
+
+The change applies from the next scan cycle. A scan that only listened is not counted toward the watchdog. A pairing attempt still is, as before, so after ten attempts in a row without a weigh-in (about three hours) the watchdog restarts the app once and the waits start again from 2 minutes. The memory lives only in the running process, so this works in continuous mode; a single-shot run (a cron job or a systemd timer) starts fresh and asks once per run. Scales that pair without a code, and scales that are already paired, are not affected.
+
+Native BlueZ (node-ble) only. The proxy transports do not pair at all.
 
 :::
 
@@ -501,7 +532,7 @@ ble:
 
 With this on, at the start of the first scan cycle the app powers the adapter off, turns LE privacy on with `btmgmt privacy on <key>` and powers it back on, then checks every cycle that privacy is still on. In single-shot mode (a cron job or timer that starts a new process per run) every run is a first cycle, so every run power-cycles the adapter once. The key is derived from the adapter's own Bluetooth address, so it stays the same across restarts, re-created containers, add-on reinstalls and reboots, which is what keeps the scale able to recognise the host. The log names it only by a fingerprint: `uses an IRK derived from its address (fingerprint 1a2b3c4d)`. Right before every connect the app checks once more, and if privacy is not on it skips the connect and says why, rather than pair without the key.
 
-After turning it on, remove the old pairing once (`bluetoothctl remove <mac>`, or let `auto_clear_stale_bond` do it) and pair through ble-scale-sync, confirming on the scale as the first time. Later weigh-ins should reuse the pairing, also after the scale has slept.
+After turning it on, remove the old pairing once (`bluetoothctl remove <mac>`, or let `auto_clear_stale_bond` do it) and pair through ble-scale-sync, confirming on the scale as the first time. Be at the scale for that: the code shows about a minute after ble-scale-sync starts, once it has connected and looked up the scale's services. If you miss it, restart ble-scale-sync to be asked again at once; otherwise it asks again after 2 minutes (see `pairing_retry_max_min` above). Later weigh-ins should reuse the pairing, also after the scale has slept.
 
 Before you turn it on:
 

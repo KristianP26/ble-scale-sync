@@ -16,6 +16,7 @@ import {
 } from '../types.js';
 import { helperOf, getDbusNext, releaseDeviceProxy, type Adapter, type Device } from './dbus.js';
 import { logAdvertisementSnapshot } from './device-object.js';
+import { noScaleRecognizedMessage } from './device-cache.js';
 import { reensureAdapterPrivacy } from './privacy.js';
 import {
   getAdapter,
@@ -984,5 +985,5 @@ export async function autoDiscover(
     await sleep(DISCOVERY_POLL_MS);
   }
 
-  throw new Error(`No recognized scale found within ${DISCOVERY_TIMEOUT_MS / 1000}s`);
+  throw new Error(noScaleRecognizedMessage());
 }

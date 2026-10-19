@@ -24,6 +24,7 @@ import {
   DISCOVERY_POLL_MS,
   POST_DISCOVERY_QUIESCE_MS,
   GATT_DISCOVERY_TIMEOUT_MS,
+  DISCOVERY_TIMEOUT_MS,
   StaleLinkError,
 } from '../types.js';
 import {
@@ -43,7 +44,7 @@ import {
   dbusError,
   resetConnection,
 } from './connection.js';
-import { ensurePairingAgent, setPairingTarget } from './agent.js';
+import { ensurePairingAgent, setPairingTarget, userPromptCount } from './agent.js';
 import { ensureAdapterPrivacy, requireAdapterPrivacy } from './privacy.js';
 import {
   startDiscoverySafe,
@@ -57,9 +58,19 @@ import {
   armFreshAdvertLatch,
   cachePolicyFor,
   forgetReadingAdapter,
+  noScaleRecognizedMessage,
   rememberReadingAdapter,
+  targetNotFoundMessage,
   type FreshAdvertLatch,
 } from './device-cache.js';
+import {
+  advertisedReadingHint,
+  hintAdapterFor,
+  holdUntilPairingAllowed,
+  noteAllScalesMissed,
+  noteScaleMissed,
+  settlePairingRecord,
+} from './pairing-backoff.js';
 import { connectWithRecovery } from './connect.js';
 import { disconnectBounded, noteReadingForStaleLink } from './stale-link.js';
 import {
@@ -363,6 +374,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     autoClearStaleBond,
     preemptiveAdapterReset,
     adapterPrivacy,
+    pairingRetryMaxMin,
   } = opts;
 
   let device: Device | null = null;
@@ -381,9 +393,46 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   let keptObject = false;
   /** BlueZ left a Disconnect for the scale unanswered in this cycle (#472). */
   let staleLink = false;
+  /** Pairing prompts the agent had handled for the scale right before this cycle's connect (#471). */
+  let promptsBefore: number | undefined;
+  /** The bonding adapter this cycle matched the scale to, if any (#471). */
+  let bondingAdapter: ScaleAdapter | undefined;
+  /** What the scale's advertisement said in this cycle about a stored weigh-in (#471). */
+  let cycleHint: boolean | undefined;
   const releaseLatch = (): void => {
     latch?.release();
     latch = undefined;
+  };
+  /**
+   * Hold the connect back while a pairing nobody confirmed stands for the
+   * scale (#471, D063). A held cycle never connected, so its teardown must not
+   * send a Disconnect to the object either: BlueZ may still list the scale as
+   * connected from an earlier cycle (#472).
+   */
+  const holdPairing = async (
+    found: Device,
+    mac: string,
+    adapter: ScaleAdapter | undefined,
+    waitStartedAt: number,
+  ): Promise<void> => {
+    try {
+      cycleHint = await holdUntilPairingAllowed({
+        device: found,
+        btAdapter,
+        mac,
+        adapter,
+        adapters,
+        capMin: pairingRetryMaxMin,
+        hint: cycleHint,
+        budgetMs: waitStartedAt + DISCOVERY_TIMEOUT_MS - Date.now(),
+        abortSignal,
+        scanWatch,
+      });
+    } catch (err) {
+      releaseDeviceProxy(found);
+      device = null;
+      throw err;
+    }
   };
 
   // Publish this cycle's pairing target before the first getAdapter(), which is
@@ -493,7 +542,18 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       const mac = formatMac(targetMac);
       bleLog.info('Scanning for device...');
 
-      device = await waitForTargetDevice(btAdapter, mac, abortSignal, scanWatch, latch);
+      // A no-show is what lets a held pairing go at once when the scale comes
+      // back (#471); an abort or any other failure says nothing about it.
+      const waitStartedAt = Date.now();
+      const noteNoShow = (err: unknown): never => {
+        if (!abortSignal?.aborted && errMsg(err) === targetNotFoundMessage(mac)) {
+          noteScaleMissed(mac);
+        }
+        throw err;
+      };
+      device = await waitForTargetDevice(btAdapter, mac, abortSignal, scanWatch, latch).catch(
+        noteNoShow,
+      );
       releaseLatch();
 
       let { name, advert, preMatchedAdapter } = await resolvePreConnectAdapter(
@@ -516,7 +576,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         releaseDeviceProxy(device);
         device = null;
         await removeDevice(btAdapter, targetMac);
-        device = await waitForTargetDevice(btAdapter, mac, abortSignal, scanWatch);
+        device = await waitForTargetDevice(btAdapter, mac, abortSignal, scanWatch).catch(
+          noteNoShow,
+        );
         ({ name, advert, preMatchedAdapter } = await resolvePreConnectAdapter(
           device,
           mac,
@@ -546,12 +608,21 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         return reading;
       }
 
+      if (preMatchedAdapter?.requiresBonding) bondingAdapter = preMatchedAdapter;
+      cycleHint = advertisedReadingHint(
+        hintAdapterFor(mac, preMatchedAdapter, adapters),
+        mac,
+        advert.serviceData,
+      );
+      await holdPairing(device, mac, preMatchedAdapter, waitStartedAt);
+
       // Stop discovery before connecting. BlueZ on low-power devices (e.g. Pi Zero)
       // often fails with le-connection-abort-by-local while discovery is still active.
       await stopDiscoveryAndQuiesce(btAdapter);
       if (adapterPrivacy) await requireAdapterPrivacy(btAdapter);
 
       gattAttempted = true;
+      promptsBefore = userPromptCount(targetMac);
       device = await connectWithRecovery({
         btAdapter,
         mac: targetMac,
@@ -586,16 +657,25 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         resolveAfterConnect(gatt, adapters, name, deviceMac, advert),
         abortSignal,
       );
+      if (matchedAdapter.requiresBonding) bondingAdapter = matchedAdapter;
       bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
     } else {
       // Auto-discovery: poll discovered devices, match by name, connect, verify
       const scanAdapter = btAdapter;
+      const waitStartedAt = Date.now();
       const result = await withScanActivityWatchdog(
         scanAdapter,
         abortSignal,
         () => autoDiscover(scanAdapter, adapters, abortSignal),
         scanWatch,
-      );
+      ).catch((err: unknown) => {
+        // No scale at all in this cycle: a held one goes at once when it is
+        // found again (#471).
+        if (!abortSignal?.aborted && errMsg(err) === noScaleRecognizedMessage()) {
+          noteAllScalesMissed();
+        }
+        throw err;
+      });
       device = result.device;
       matchedAdapter = result.adapter;
       deviceMac = result.mac;
@@ -621,12 +701,21 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         return reading;
       }
 
+      if (matchedAdapter.requiresBonding) bondingAdapter = matchedAdapter;
+      cycleHint = advertisedReadingHint(
+        hintAdapterFor(result.mac, matchedAdapter, adapters),
+        result.mac,
+        snapshot.serviceData,
+      );
+      await holdPairing(device, result.mac, matchedAdapter, waitStartedAt);
+
       // Stop discovery before connecting. BlueZ on low-power devices (e.g. Pi Zero)
       // often fails with le-connection-abort-by-local while discovery is still active.
       await stopDiscoveryAndQuiesce(btAdapter);
       if (adapterPrivacy) await requireAdapterPrivacy(btAdapter);
 
       gattAttempted = true;
+      promptsBefore = userPromptCount(result.mac);
       device = await connectWithRecovery({
         btAdapter,
         mac: result.mac,
@@ -724,6 +813,18 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     throw err;
   } finally {
     releaseLatch();
+    // Before the teardown, which disconnects and releases the device this
+    // reads Paired from (#471).
+    await settlePairingRecord({
+      device,
+      mac: deviceMac,
+      adapter: bondingAdapter,
+      promptsBefore,
+      reading: gattSucceeded,
+      hint: cycleHint,
+      capMin: pairingRetryMaxMin,
+      abortSignal,
+    });
     await teardownSession({
       device,
       btAdapter: btAdapter!,

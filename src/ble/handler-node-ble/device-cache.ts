@@ -37,6 +37,14 @@ export function targetNotFoundMessage(mac: string): string {
   return `Device ${mac} not found within ${DISCOVERY_TIMEOUT_MS / 1000}s`;
 }
 
+/**
+ * The no-show message of auto-discovery. Shared, so a cycle can tell that
+ * nothing was found apart from a wait that failed for another reason (#471).
+ */
+export function noScaleRecognizedMessage(): string {
+  return `No recognized scale found within ${DISCOVERY_TIMEOUT_MS / 1000}s`;
+}
+
 /** Any advertisement parser, passive or not (QN, Eufy P2 and Mi Scale 2 included). */
 export function canReadAdvertisement(adapter: ScaleAdapter): boolean {
   return (
@@ -130,7 +138,7 @@ export type HeldObject =
  * Clearing RSSI goes out as an invalidated property, which node-ble does not
  * forward, so that cannot open the gate.
  */
-const FRESH_REPORT_PROPS = ['RSSI', 'ManufacturerData', 'ServiceData'] as const;
+export const FRESH_REPORT_PROPS = ['RSSI', 'ManufacturerData', 'ServiceData'] as const;
 
 /**
  * Put a listener on the scale's kept BlueZ object before discovery starts.

@@ -176,9 +176,19 @@ The remedy:
 
 1. Set `ble.adapter_privacy: true` (in the Home Assistant add-on: **Pair with a host identity key (LE privacy)**) and restart.
 2. Remove the old pairing once with `bluetoothctl remove AA:BB:CC:DD:EE:FF`, or let `ble.auto_clear_stale_bond: true` do it.
-3. Weigh in and confirm the pairing on the scale. Let ble-scale-sync do the pairing: in #417 a manual `bluetoothctl pair` with privacy on never completed, while the pairing ble-scale-sync started did.
+3. Stand at the scale and confirm the pairing on it when it shows a code, about a minute after ble-scale-sync starts (the app connects and looks up the scale's services first). If you miss it, restart ble-scale-sync to be asked again at once. Let ble-scale-sync do the pairing: in #417 a manual `bluetoothctl pair` with privacy on never completed, while the pairing ble-scale-sync started did.
 
 Privacy then applies to the whole adapter, and on a native or Docker host `Privacy = device` in `/etc/bluetooth/main.conf` does the same without the option. Read [the `adapter_privacy` notes](/guide/configuration#config-yaml-reference) before turning it on.
+
+### Beurer: the scale shows a pairing code again and again
+
+When nobody confirms a pairing on the scale, earlier releases asked again on the next scan, every two or three minutes, each time with a new code on the display ([#471](https://github.com/KristianP26/ble-scale-sync/issues/471)). The app now waits before it asks again, 2 minutes three times and then longer, up to `ble.pairing_retry_max_min` (60 minutes by default), and does not connect to the scale in between:
+
+```
+AA:BB:CC:DD:EE:FF asked for the pairing to be confirmed on the scale and it was not (attempt 3). Not connecting to it again for 2 min, ...
+```
+
+To pair at once, restart ble-scale-sync and confirm on the scale when the code shows, about a minute later. `ble.pairing_retry_max_min: 0` brings back the old behavior. See [the configuration reference](/guide/configuration#config-yaml-reference).
 
 ## Exporter Issues
 
@@ -203,6 +213,7 @@ In continuous mode the wait between scans depends on how the previous cycle ende
 - **No scale found, radio healthy:** `runtime.idle_rescan_delay` (default 5 s). Linux/BlueZ only; the other transports cannot tell this case from a failure and use the backoff below.
 - **The cycle failed** (a GATT error, a wedged controller, an export that threw): 5 s, then 10, 20, 40 and 60 s for as long as failures continue, resetting on the next success.
 - **The scale connected but no reading came in time** (the reading session timed out after connecting): the same backoff as a failure. The scale was found, so the log says so instead of "No scale found".
+- **The scale was found but its pairing is held back** (nobody confirmed the last pairing on a Beurer scale, see `ble.pairing_retry_max_min`): the scan listens to the scale until its time is up instead of connecting, and then waits `runtime.idle_rescan_delay` like an idle scan. Linux/BlueZ only.
 
 So a gap of a minute between scans means failures, not a setting being ignored. The log line says which case it was:
 
@@ -210,6 +221,7 @@ So a gap of a minute between scans means failures, not a setting being ignored. 
 No scale found, rescanning in 5s... (Device not found)
 No scale found, retrying in 20s... (le-connection-abort-by-local)
 Scale connected but sent no reading, retrying in 60s... (Timed out waiting for a complete scale reading)
+Scale found, waiting to pair, rescanning in 5s... (AA:BB:CC:DD:EE:FF is not paired; next pairing attempt in 52 min, or sooner if it reappears or advertises a new weigh-in)
 ```
 
 This is about the built-in Bluetooth handlers (`ble.handler: auto`, which runs `node-ble` on Linux and `noble` elsewhere; `ble_transport: local` in the add-on). On `mqtt-proxy`, `esphome-proxy` and `ha-bluetooth` none of these waits apply: the app does not scan in cycles, it listens all the time.

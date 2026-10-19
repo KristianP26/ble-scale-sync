@@ -78,6 +78,9 @@ export class PollReadingSource implements ReadingSource {
       preemptiveAdapterReset: this.ctx.config.ble?.preemptive_adapter_reset !== false,
       // From the start-up config, not the live one: restart-required (#417).
       adapterPrivacy: this.ctx.adapterPrivacy,
+      // Per cycle, so a lower cap lands on the next one (#471). The default
+      // lives in the handler; null means unset.
+      pairingRetryMaxMin: this.ctx.config.ble?.pairing_retry_max_min ?? undefined,
       onLiveData: (reading) => {
         const impStr: string = reading.impedance > 0 ? `${reading.impedance} Ohm` : 'Measuring...';
         process.stdout.write(

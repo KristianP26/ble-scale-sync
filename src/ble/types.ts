@@ -216,6 +216,12 @@ export interface ScanOptions {
    * the connect when it is off (`ble.adapter_privacy`, #417). node-ble only.
    */
   adapterPrivacy?: boolean;
+  /**
+   * Longest wait, in minutes, before a bonding scale whose pairing nobody
+   * confirmed is connected again (`ble.pairing_retry_max_min`, #471, D063).
+   * Undefined means the handler's default; 0 never holds it back. node-ble only.
+   */
+  pairingRetryMaxMin?: number;
 }
 
 export interface ScanResult {
@@ -356,6 +362,32 @@ export class StaleLinkError extends Error {
     super(
       `BlueZ keeps ${mac} marked as connected and did not complete a Disconnect within ` +
         `${DISCONNECT_TIMEOUT_MS / 1000}s (#472)`,
+    );
+    this.#mac = mac;
+  }
+
+  get mac(): string {
+    return this.#mac;
+  }
+}
+
+/**
+ * The scale was found, but it is not paired and nobody confirmed the last
+ * pairing on it, so this cycle did not connect to it (#471, D063). The cycle
+ * listened to its advertisements for the rest of the discovery budget instead.
+ *
+ * Same shape as SessionTimeoutError: `name` stays 'Error' and `mac` is a
+ * getter. Lives here for the same reason as StaleLinkError: the runtime picks
+ * the log prefix by it and must not import the node-ble handler.
+ */
+export class PairingDeferredError extends Error {
+  readonly #mac: string;
+
+  constructor(mac: string, waitMs: number) {
+    const min = Math.max(1, Math.ceil(waitMs / 60_000));
+    super(
+      `${mac} is not paired; next pairing attempt in ${min} min, ` +
+        'or sooner if it reappears or advertises a new weigh-in',
     );
     this.#mac = mac;
   }

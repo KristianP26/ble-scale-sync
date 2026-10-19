@@ -6,6 +6,7 @@ import { bleFailureKind, shouldCountAsWatchdogFailure } from '../ble/failure-kin
 import {
   abortableSleep,
   POST_DISCONNECT_GRACE_MS,
+  PairingDeferredError,
   SessionTimeoutError,
   StaleLinkError,
 } from '../ble/types.js';
@@ -145,10 +146,12 @@ export async function buildReadingSource(
     // user looking in the wrong place (#417). So does a session that ran out
     // of time after connecting and subscribing (#460): the scale was there,
     // it just never completed a reading. A link BlueZ keeps listing as
-    // connected (#472) is a scale that was found, too.
+    // connected (#472) is a scale that was found, too, and so is one whose
+    // pairing is held back after nobody confirmed it (#471).
     failureLogPrefixFor: (err) => {
       if (bleFailureKind(err) === 'blocked') return 'Scale found but not connected';
       if (err instanceof StaleLinkError) return 'Scale found but not connected';
+      if (err instanceof PairingDeferredError) return 'Scale found, waiting to pair';
       if (err instanceof SessionTimeoutError) return 'Scale connected but sent no reading';
       return undefined;
     },
@@ -182,6 +185,9 @@ export async function buildReadingSource(
         // The scale sent frames, so the Bluetooth path works; nobody weighed
         // in before the session timed out (#460, D041).
         log.debug('Scale answered but sent no reading; not counting toward watchdog');
+      } else if (err instanceof PairingDeferredError) {
+        // Listened to the scale's advertisements instead of connecting (#471).
+        log.debug('Waiting to pair the scale; not counting toward watchdog');
       } else {
         log.debug('Idle cycle (radio alive, scale not on); not counting toward watchdog');
       }

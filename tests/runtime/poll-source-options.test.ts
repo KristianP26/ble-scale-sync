@@ -72,6 +72,39 @@ describe('PollReadingSource ble.preemptive_adapter_reset (#417)', () => {
   });
 });
 
+describe('PollReadingSource ble.pairing_retry_max_min (#471)', () => {
+  beforeEach(() => {
+    scanAndReadRaw.mockReset();
+    scanAndReadRaw.mockResolvedValue({ weight: 80, impedance: 500 });
+  });
+
+  it.each([
+    ['no ble block', undefined, undefined],
+    ['the key omitted', undefined, {}],
+    ['null', undefined, { pairing_retry_max_min: null }],
+    ['0', 0, { pairing_retry_max_min: 0 }],
+    ['45', 45, { pairing_retry_max_min: 45 }],
+  ])('maps %s to pairingRetryMaxMin: %s', async (_label, expected, ble) => {
+    const opts = await optionsFor(makeCtx(ble));
+    expect(opts).toHaveProperty('pairingRetryMaxMin');
+    expect(opts.pairingRetryMaxMin).toBe(expected);
+  });
+
+  it('re-reads it on every cycle', async () => {
+    const ctx = makeCtx({ pairing_retry_max_min: 60 });
+    const source = new PollReadingSource(ctx, []);
+
+    await source.nextReading(new AbortController().signal);
+    (ctx as { config: { ble?: Record<string, unknown> } }).config.ble = {
+      pairing_retry_max_min: 0,
+    };
+    await source.nextReading(new AbortController().signal);
+
+    expect(scanAndReadRaw.mock.calls[0][0].pairingRetryMaxMin).toBe(60);
+    expect(scanAndReadRaw.mock.calls[1][0].pairingRetryMaxMin).toBe(0);
+  });
+});
+
 describe('PollReadingSource ble.adapter_privacy (#417)', () => {
   beforeEach(() => {
     scanAndReadRaw.mockReset();

@@ -83,7 +83,8 @@ function diffField(
  *
  * Notably hot-swappable (NOT in this list): scale_mac, weight_unit, height_unit, display_unit,
  * runtime.dry_run, runtime.debug, runtime.scan_cooldown, runtime.idle_rescan_delay,
- * ble.session_timeout_sec, ble.auto_clear_stale_bond, ble.preemptive_adapter_reset,
+ * ble.session_timeout_sec, ble.auto_clear_stale_bond, ble.pairing_retry_max_min,
+ * ble.preemptive_adapter_reset,
  * ble.bind_key, every ble.qn_*,
  * ble.proxy_liveness_timeout_min, exporters,
  * unknown_user, out_of_range, user profile fields, last_known_weight, update_check.

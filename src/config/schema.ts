@@ -298,6 +298,24 @@ export const BleSchema = z
      */
     auto_clear_stale_bond: z.boolean().optional().nullable(),
     /**
+     * Longest wait, in minutes, before a bonding scale is connected and asked
+     * to pair again after a pairing nobody confirmed on it (#471, D063).
+     * Default 60; 0 tries again on every scan, as releases before it did.
+     *
+     * A Beurer scale shows a fresh code for every pairing and waits for SET.
+     * Nobody standing there used to mean a new code every two or three
+     * minutes, all night. Now, once our pairing agent has handled such a
+     * request and the cycle ends with the scale still unpaired, the scale is
+     * not connected to again for 2, 2, 2, 4, 8, 16 and 32 minutes, then for
+     * this long each time. It goes at once when the scale comes back after a
+     * scan without it, when its advertisement shows a new weigh-in (Beurer
+     * BF720 family), when it is paired by other means, or after a restart.
+     *
+     * Read on every cycle (hot-swap). node-ble only, and only in continuous
+     * mode: a single run is a fresh process and starts without the memory.
+     */
+    pairing_retry_max_min: z.number().int().min(0).max(1440).optional().nullable(),
+    /**
      * Power-cycle the HCI controller with `btmgmt` after every GATT session
      * (#80). Default true; `false` skips that one step and nothing else.
      *
