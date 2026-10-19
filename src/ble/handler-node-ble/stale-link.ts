@@ -281,7 +281,8 @@ export async function recoverStaleLink(opts: {
       'warn',
       `BlueZ still reports ${mac} as connected after the adapter power-cycle and does not ` +
         'complete a Disconnect. Restart bluetoothd on the host: sudo systemctl restart bluetooth ' +
-        '(on Home Assistant OS, restart the host)',
+        '(on Home Assistant OS, reboot the host with "Reboot system", not just a Home Assistant ' +
+        'restart, or run ha host reboot)',
     );
   }
   tightenBrake();
