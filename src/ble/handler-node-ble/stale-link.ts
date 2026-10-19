@@ -46,18 +46,24 @@ import { powerCycleViaDbus } from './discovery.js';
 export type DisconnectOutcome = 'done' | 'timeout' | 'aborted';
 
 /**
- * The error connection.ts hands a call still waiting when its D-Bus connection
- * closed (failPendingCalls). Not an answer from BlueZ: logged as one, the
- * Disconnect a stale-link recovery leaves behind on purpose would show up as
- * "answered" with the time the reset took, the number DISCONNECT_TIMEOUT_MS is
- * tuned against. Matched by name rather than imported, since the scan tests
- * replace connection.js wholesale.
+ * How a call failed because its D-Bus connection closed, rather than with an
+ * answer from BlueZ: `'pending'` is the error connection.ts hands a call still
+ * waiting when the connection closed (failPendingCalls), `'unsent'` the one
+ * dbus-next throws for a write on a stream no longer writable, typically after
+ * our own resetConnection() ended it and before the daemon closed its side
+ * (`lib/connection.js`, no `.type`). Logged as an answer, the Disconnect a stale-link recovery leaves
+ * behind on purpose would show up as "answered" with the time the reset took,
+ * the number DISCONNECT_TIMEOUT_MS is tuned against. Matched by name and text
+ * rather than imported, since the scan tests replace connection.js wholesale.
  */
-function isConnectionClosedFailure(err: unknown): boolean {
-  return (
+function connectionClosedFailure(err: unknown): 'pending' | 'unsent' | undefined {
+  if (
     (err as { type?: unknown } | null | undefined)?.type ===
     'org.freedesktop.DBus.Error.Disconnected'
-  );
+  ) {
+    return 'pending';
+  }
+  return errMsg(err).includes('Cannot send message, stream is closed') ? 'unsent' : undefined;
 }
 
 /** How long the check after the power-cycle may take, all of it together. */
@@ -176,13 +182,17 @@ export function disconnectBounded(
   // DISCONNECT_TIMEOUT_MS is tuned against.
   const answered = answer.then(
     () => bleLog.debug(`Disconnect (${label}) answered in ${Math.round(now() - t0)} ms`),
-    (err: unknown) =>
+    (err: unknown) => {
+      const closed = connectionClosedFailure(err);
       bleLog.debug(
-        isConnectionClosedFailure(err)
+        closed === 'pending'
           ? `Disconnect (${label}) got no answer before the D-Bus connection closed, ` +
               `after ${Math.round(now() - t0)} ms`
-          : `Disconnect (${label}) answered in ${Math.round(now() - t0)} ms: ${errMsg(err)}`,
-      ),
+          : closed === 'unsent'
+            ? `Disconnect (${label}) was not sent: the D-Bus connection was already closed`
+            : `Disconnect (${label}) answered in ${Math.round(now() - t0)} ms: ${errMsg(err)}`,
+      );
+    },
   );
   if (abortSignal?.aborted) return Promise.resolve('aborted');
   return new Promise<DisconnectOutcome>((resolve) => {

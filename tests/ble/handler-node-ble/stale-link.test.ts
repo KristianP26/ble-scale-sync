@@ -354,6 +354,25 @@ describe('disconnectBounded (#472)', () => {
     expect(lines.some((l) => l.startsWith('Disconnect (teardown) answered'))).toBe(false);
   });
 
+  it('does not log a write refused by a closed stream as an answer from BlueZ', async () => {
+    // After our own resetConnection() ends the stream and before the daemon
+    // closes its side, dbus-next refuses the write at once, with no D-Bus name.
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const refused = {
+      disconnect: vi.fn(async () => {
+        throw new Error('Cannot send message, stream is closed');
+      }),
+    };
+    await expect(
+      disconnectBounded(refused as never, { mac: MAC, label: 'teardown' }),
+    ).resolves.toBe('done');
+    const lines = debug.mock.calls.map(([m]) => String(m));
+    expect(lines).toContain(
+      'Disconnect (teardown) was not sent: the D-Bus connection was already closed',
+    );
+    expect(lines.some((l) => l.startsWith('Disconnect (teardown) answered'))).toBe(false);
+  });
+
   it('sends the Disconnect on an already aborted signal and returns at once', async () => {
     const ac = new AbortController();
     ac.abort();
