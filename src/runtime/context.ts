@@ -41,24 +41,27 @@ export interface AppContext {
   readonly exporterCache: Map<string, Exporter[]>;
 
   /**
-   * Per-user runtime anchor of the last successfully-exported weight, keyed by
-   * user slug. Single-user mode uses this (not config) as its #164 replay-dedup
-   * anchor, since it never writes last_known_weight. Survives config reload (it
-   * is process-lifetime dedup state, NOT a hot-swap field), so setConfig must
-   * not clear it.
+   * Per-user runtime anchor of the last exported LIVE weight, keyed by user
+   * slug. The #164 replay dedup uses it before last_known_weight from config,
+   * in both modes: the file is rewritten only after a 0.5 kg change, so it can
+   * lag behind (E-09). Survives config reload (it is process-lifetime dedup
+   * state, NOT a hot-swap field), so setConfig must not clear it.
    */
   readonly lastExportedWeights: Map<string, number>;
 
   /**
-   * When the weigh-in behind `lastExportedWeights` was measured, keyed by user
-   * slug. The replay dedup compares a stored record's own time with it (#475).
-   * Process-lifetime state like `lastExportedWeights`, kept across a reload.
+   * When the weigh-in behind `lastExportedWeights` was taken, keyed by user
+   * slug: its own stamp when it carried one, else its receipt time. The replay
+   * dedup compares a stored record's own time with it (#475). Process-lifetime
+   * state like `lastExportedWeights`, kept across a reload.
    */
   readonly lastExportedAt: Map<string, Date>;
 
   /**
    * When this process built its context. A last_known_weight read from
-   * config.yaml was exported by an earlier process, so it is no newer than this.
+   * config.yaml was exported by an earlier process, so it is no newer than this,
+   * as long as the host clock was right at startup (a Pi without an RTC can
+   * start before NTP has set it).
    */
   readonly startedAt: Date;
 

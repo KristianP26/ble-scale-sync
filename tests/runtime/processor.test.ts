@@ -784,6 +784,85 @@ describe('processReading: replay dedup by measurement time (#475, #463)', () => 
     expect(dispatchExports).not.toHaveBeenCalled();
     expect(replaySkipped()).toBe(true);
   });
+
+  it('dates the anchor by when the live weigh-in was measured, not when it was processed', async () => {
+    // Stamped 4 minutes before it was received. A record stamped 2 minutes
+    // after the receipt is 6 minutes after the weigh-in itself: a new one.
+    const { ctx, exporters } = await afterLiveWeighIn(82.5, 0, at(-4 * MIN));
+
+    vi.setSystemTime(at(20 * MIN));
+    await processReading(ctx, storedOnly(82.55, at(2 * MIN)), { singleUserExporters: exporters });
+
+    expect(dispatchExports).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(dispatchExports).mock.calls[0][2]?.historical).toBe(true);
+    expect(ctx.lastExportedAt.get('dad')?.toISOString()).toBe(at(-4 * MIN).toISOString());
+  });
+
+  it("keeps the anchor on the scale's own clock when a live weigh-in is stamped ahead of the host", async () => {
+    // A scale whose clock runs 2 h ahead (a container on UTC, a clock set
+    // before a DST change). The live export is dated by its receipt, since a
+    // stamp in the future cannot be a measurement time, but a copy of the same
+    // record replayed later carries the scale's stamp, so the anchor has to be
+    // on that clock too, or the copy would look 2 h newer and go out again.
+    const { ctx, exporters } = await afterLiveWeighIn(82.5, 0, at(120 * MIN));
+
+    vi.setSystemTime(at(180 * MIN));
+    await processReading(ctx, storedOnly(82.5, at(120 * MIN)), { singleUserExporters: exporters });
+    expect(dispatchExports).not.toHaveBeenCalled();
+    expect(replaySkipped()).toBe(true);
+
+    // A record the same clock stamped 10 minutes after the live one is new.
+    logSpy.mockClear();
+    await processReading(ctx, storedOnly(82.55, at(130 * MIN)), {
+      singleUserExporters: exporters,
+    });
+    expect(dispatchExports).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(dispatchExports).mock.calls[0][2]?.historical).toBe(true);
+    expect(ctx.lastExportedAt.get('dad')?.toISOString()).toBe(at(120 * MIN).toISOString());
+  });
+
+  it("multi-user: each user's stored records are judged against that user's own anchor time", async () => {
+    const ctx = makeCtx([dad, mom]);
+    const exportersFor = () => [fakeExporter('garmin')];
+
+    // Dad's live weigh-in at T0 + 120 min; Mom has only her config anchor (60).
+    vi.setSystemTime(at(120 * MIN));
+    await processReading(ctx, rawReading({ weight: 82.5, impedance: 500 }), {
+      getExportersForUser: exportersFor,
+    });
+    expect(dispatchExports).toHaveBeenCalledTimes(1);
+    vi.mocked(dispatchExports).mockClear();
+    logSpy.mockClear();
+
+    // Both records were measured at T0 + 60 min. For Dad that is before his
+    // live anchor, a coincidence within 0.1 kg; for Mom it is long after the
+    // process started, a weigh-in of hers that must go out.
+    vi.setSystemTime(at(150 * MIN));
+    const raw: RawReading = {
+      reading: { weight: 82.55, impedance: 480, timestamp: at(60 * MIN) },
+      history: [{ weight: 60.05, impedance: 520, timestamp: at(59 * MIN) }],
+      adapter: fakeAdapter(),
+    };
+    await processReading(ctx, raw, { getExportersForUser: exportersFor });
+
+    expect(dispatchExports).toHaveBeenCalledTimes(1);
+    const context = vi.mocked(dispatchExports).mock.calls[0][2];
+    expect(context?.userSlug).toBe('mom');
+    expect(context?.historical).toBe(true);
+    expect(replaySkipped()).toBe(true);
+  });
+
+  it('names the anchor time in the Skipping replay line', async () => {
+    const { ctx, exporters } = await afterLiveWeighIn(82.5);
+
+    vi.setSystemTime(at(20 * MIN));
+    await processReading(ctx, storedOnly(82.55, at(MIN)), { singleUserExporters: exporters });
+
+    const line = logSpy.mock.calls
+      .map((c) => String(c[0]))
+      .find((l) => l.includes('Skipping replay'));
+    expect(line).toContain(`last exported weigh-in measured at ${T0.toISOString()}`);
+  });
 });
 
 // ─── out_of_range (#395) ────────────────────────────────────────────────────

@@ -50,6 +50,17 @@ const KG_METRICS = new Set<keyof BodyComposition>(['boneMass', 'muscleMass']);
 const DEDUP_KG_TOLERANCE = 0.1;
 
 /**
+ * How far after the anchor's own weigh-in a stored record may be stamped and
+ * still be taken as that weigh-in replayed (#475). It covers a copy of a live
+ * weigh-in that arrived without a stamp, so the anchor is dated by the host,
+ * while the copy carries the scale's clock running a little ahead: the drift
+ * D027 already treats as the same moment. Equal to HISTORY_WINDOW_MS today,
+ * but a separate name, so a change to what counts as history does not quietly
+ * change the dedup as well.
+ */
+const REPLAY_CLOCK_MARGIN_MS = HISTORY_WINDOW_MS;
+
+/**
  * One reading of a cycle, classified once when the cycle is received (D027).
  *
  * `historical` and `measuredAt` are decided here and nowhere else, so the
@@ -240,24 +251,30 @@ async function exportFrame(
   // The runtime anchor first, then config: in single-run mode every run is a
   // new process, and the persisted last_known_weight is its only memory (E-09).
   const anchor = ctx.lastExportedWeights.get(user.slug) ?? user.last_known_weight;
-  // Only a record measured no later than HISTORY_WINDOW_MS after the anchor's
-  // own weigh-in can be that weigh-in again. One stored while the app waited
-  // between sessions (#475), or after the last live export (#463), is newer,
-  // and dropping it for being within 0.1 kg lost a real weigh-in. The margin is
-  // the scale clock running a little ahead of the host's, which D027 already
-  // treats as the same moment. A config anchor was written by an earlier
-  // process, so it is no newer than this process's start.
-  const anchorAt = ctx.lastExportedAt.get(user.slug) ?? ctx.startedAt;
-  const measuredAfterAnchor = frame.measuredAt.getTime() > anchorAt.getTime() + HISTORY_WINDOW_MS;
+  // Only a record measured no later than REPLAY_CLOCK_MARGIN_MS after the
+  // anchor's own weigh-in can be that weigh-in again. One stored while the app
+  // waited between sessions (#475), or after the last live export (#463), is
+  // newer, and dropping it for being within 0.1 kg lost a real weigh-in. A
+  // config anchor was written by an earlier process, so it is no newer than
+  // this process's start.
+  const liveAt = ctx.lastExportedAt.get(user.slug);
+  const anchorAt = liveAt ?? ctx.startedAt;
+  const measuredAfterAnchor =
+    frame.measuredAt.getTime() > anchorAt.getTime() + REPLAY_CLOCK_MARGIN_MS;
   if (
     frame.historical &&
     anchor !== null &&
     !measuredAfterAnchor &&
     Math.abs(reading.weight - anchor) < DEDUP_KG_TOLERANCE
   ) {
+    const anchorWhat = liveAt
+      ? 'the last exported weigh-in measured at'
+      : 'the configured last_known_weight, dated to the process start at';
     log.info(
       `${tagPrefix}Skipping replay: weight ${fmtWeight(reading.weight, ctx.weightUnit)} ` +
-        `matches the last exported weight within +/-${DEDUP_KG_TOLERANCE} kg`,
+        `matches the last exported weight within +/-${DEDUP_KG_TOLERANCE} kg and was not ` +
+        `measured more than ${REPLAY_CLOCK_MARGIN_MS / 60_000} min after ` +
+        `${anchorWhat} ${anchorAt.toISOString()}`,
     );
     return { dispatched: false, success: true, exported: false };
   }
@@ -328,6 +345,21 @@ async function exportFrame(
 const persistedWeights = new WeakMap<UserConfig, number | null>();
 
 /**
+ * The time the replay dedup dates a live anchor by: the frame's own stamp when
+ * it has a readable one, on the scale's clock, because a copy of the record
+ * replayed later carries that same stamp. `measuredAt` clips a stamp in the
+ * future to the receipt time, which is right for the export (nothing can be
+ * measured in the future) but not here: with the scale's clock more than
+ * REPLAY_CLOCK_MARGIN_MS ahead (a container on UTC, a clock set before a DST
+ * change) the copy would look newer than the anchor and go out a second time.
+ * A frame without a stamp falls back to `measuredAt`, the receipt time.
+ */
+function anchorTime(frame: Frame): Date {
+  const ts = frame.reading.timestamp;
+  return ts && !Number.isNaN(ts.getTime()) ? ts : frame.measuredAt;
+}
+
+/**
  * Remember the weight of a LIVE weigh-in that was exported (E-03, E-09).
  *
  * Three readers depend on it: the replay dedup, the matcher's tie-break and
@@ -340,22 +372,17 @@ const persistedWeights = new WeakMap<UserConfig, number | null>();
  * Never called for a stored record (D027): it is a weigh-in from the past, not
  * the person's current weight, so it must not steer the matcher or the QN
  * anchor. It is not necessarily OLDER than the anchor, though (#475, #463),
- * which is why the anchor also keeps the time it was measured: the replay
- * dedup compares a stored record's own time with it.
+ * which is why the anchor also keeps the time it was measured (`anchorTime`):
+ * the replay dedup compares a stored record's own time with it.
  *
  * The file is written only after a change of 0.5 kg against what is ON DISK,
  * not against the in-memory value, which now moves on every weigh-in: compared
  * with that, a run of small steps would never reach the threshold and the file
  * would drift away from the person indefinitely.
  */
-function recordLiveWeight(
-  ctx: AppContext,
-  user: UserConfig,
-  weight: number,
-  measuredAt: Date,
-): void {
+function recordLiveWeight(ctx: AppContext, user: UserConfig, weight: number, anchorAt: Date): void {
   ctx.lastExportedWeights.set(user.slug, weight);
-  ctx.lastExportedAt.set(user.slug, measuredAt);
+  ctx.lastExportedAt.set(user.slug, anchorAt);
   if (!persistedWeights.has(user)) persistedWeights.set(user, user.last_known_weight);
   user.last_known_weight = weight;
 
@@ -441,7 +468,7 @@ async function exportAssigned(
     // scale reconnects, replays the same weigh-in from memory, and the dedup
     // drops it as already synced.
     if (outcome.exported && !item.frame.historical) {
-      recordLiveWeight(ctx, item.user, item.frame.reading.weight, item.frame.measuredAt);
+      recordLiveWeight(ctx, item.user, item.frame.reading.weight, anchorTime(item.frame));
     }
   }
   return lastSuccess;
