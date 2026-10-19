@@ -544,8 +544,8 @@ export async function teardownSession(opts: {
     // invariant should hold by construction, not by what happens to follow.
     if (btAdapter) notifyDiscoveryStopped(btAdapter);
     if (deviceMac && staleLink) {
-      // BlueZ would queue it behind the Disconnect it has not answered, and
-      // the power-cycle below drops the device's state anyway.
+      // BlueZ would queue it behind the Disconnect it has not answered and
+      // let it time out the same way.
       bleLog.debug(`Skipping RemoveDevice for ${mac}: BlueZ has not answered its Disconnect`);
     } else if (deviceMac && (await removeDevice(btAdapter!, deviceMac)) === 'timeout') {
       staleLink = true;
@@ -599,8 +599,9 @@ export async function teardownSession(opts: {
   // disconnects it just the same. The power-cycle here replaces the preemptive
   // one, so a GATT cycle never gets two, and runs whatever
   // ble.preemptive_adapter_reset says, since it happens only on evidence. The
-  // brake holds it back after one that did not help; the cycle then ends as it
-  // would have without it.
+  // brake holds it back after one that did not help; a GATT cycle then ends as
+  // it would have without it, an idle or broadcast one drops the connection
+  // (below).
   if (staleLink && staleLinkRecoveryDue()) {
     await sleep(500);
     if (superseded()) {
@@ -615,7 +616,9 @@ export async function teardownSession(opts: {
   // Held back by the brake on a cycle that never resets the connection: the
   // unanswered Disconnect would stay parked on it, one more per cycle, until
   // the next reset. Dropping the connection lets it go on our side; bluetoothd
-  // keeps its queued copy until the link is finally cleared.
+  // keeps its queued copy until the link is finally cleared. It also ends our
+  // discovery session, so the next cycle starts discovery again, which idle
+  // cycles otherwise avoid (below); only while the link stays stuck.
   if (staleLink && !gattAttempted) {
     resetConnection();
     bleLog.debug('D-Bus connection reset: it held a Disconnect BlueZ will not answer (#472)');

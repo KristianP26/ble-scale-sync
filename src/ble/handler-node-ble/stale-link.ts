@@ -22,10 +22,12 @@
  * session still ends with the preemptive power-cycle as before.
  *
  * A timeout is taken as evidence about the link, not about our D-Bus
- * connection. A bus the daemon closed does not get here: the node-ble
+ * connection. A clean close by the daemon does not get here: the node-ble
  * connection fails every pending and later call on it (A-03), which reads as
- * an answer. Only a proxy left on an already replaced connection could time out
- * for that reason, and then the cost is one needless power-cycle.
+ * an answer. A close that only shows up as a stream error, with no end, can
+ * leave the call in flight unanswered, and so can a proxy left on an already
+ * replaced connection. Both are rare, and the cost is one needless power-cycle
+ * plus a misleading "Cleared a stale BlueZ connection" line.
  */
 
 import {
@@ -265,9 +267,11 @@ export async function recoverStaleLink(opts: {
     tightenBrake();
     return;
   }
-  // A shutdown that arrived during the power-cycle: the check would open a
-  // new D-Bus connection after the transport was released, and that socket
-  // would hold the process until the force exit. The brake stays as it is.
+  // An abort during the power-cycle: nobody reads the result any more. A
+  // shutdown would spend up to 10 s of its 5 s grace on the check, and a cycle
+  // the poll loop gave up on would build a D-Bus connection that the next
+  // cycle, or a transport already released, then inherits. The brake stays
+  // as it is.
   if (abortSignal?.aborted) return;
   const connected = await stillConnected(mac, bleAdapter);
   if (connected === false) {
