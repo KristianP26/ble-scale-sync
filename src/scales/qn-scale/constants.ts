@@ -311,10 +311,12 @@ export const WEIGHT_CERTAIN_MAX_KG = 250;
 export const LAST_KNOWN_WEIGHT_TOLERANCE = 0.15;
 
 /**
- * Max age (seconds) of a 0x23 stored record relative to session start before it
- * is treated as stale history and ignored. Mirrors openScale QNHandler's
- * MAX_STORED_RECORD_AGE_BEFORE_SESSION_SECONDS. Prevents importing an old
- * weigh-in saved days before the current connection (#213 / #75).
+ * Max age (seconds) of a 0x23 stored record relative to session start for it to
+ * count as the weigh-in of this session. Mirrors openScale QNHandler's
+ * MAX_STORED_RECORD_AGE_BEFORE_SESSION_SECONDS, which needs it because openScale
+ * dates such a record by its receipt (#213 / #75). An older record is not read,
+ * except on the 18-byte dialect with `ble.qn_user_key`, where it is the scale's
+ * memory and goes out as history with its own time (#463, D065).
  */
 export const MAX_STORED_RECORD_AGE_SEC = 90;
 

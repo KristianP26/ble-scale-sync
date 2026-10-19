@@ -632,8 +632,8 @@ export interface RawReading {
   /**
    * Earlier readings collected during the same GATT session, oldest first.
    * Populated by adapters whose protocol dumps cached offline frames (each
-   * frame carrying a `ScaleReading.timestamp` older than `HISTORY_WINDOW_MS`)
-   * on reconnect. The primary
+   * frame carrying a `ScaleReading.timestamp` older than `HISTORY_WINDOW_MS`,
+   * or flagged `fromMemory` by its adapter) on reconnect. The primary
    * `reading` is the latest live frame, or, if the scale disconnected after
    * the cache dump without producing a live one, the newest historical
    * frame, with the rest in `history`.
@@ -647,7 +647,8 @@ export interface RawReading {
  * Used by the multi-user flow to match a user by weight before computing metrics.
  *
  * Historical readings (those whose `ScaleReading.timestamp` is older than
- * `HISTORY_WINDOW_MS`, D027) are routed into `RawReading.history`
+ * `HISTORY_WINDOW_MS`, D027, or that the adapter flagged `fromMemory`, D065)
+ * are routed into `RawReading.history`
  * instead of resolving the Promise. The Promise resolves on the first live
  * frame that passes `isComplete()`. If the scale disconnects after dumping
  * cache but without sending a live frame, the Promise resolves with the
@@ -779,7 +780,7 @@ export function waitForRawReading(
         if (history.push(reading)) {
           bleLog.debug(
             `Historical reading buffered: ${reading.weight.toFixed(2)} kg / ` +
-              `${reading.impedance} Ohm @ ${reading.timestamp.toISOString()}`,
+              `${reading.impedance} Ohm @ ${reading.timestamp?.toISOString() ?? 'receipt time'}`,
           );
         }
         return;

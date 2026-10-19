@@ -563,7 +563,7 @@ Historical reading (2026-09-07T06:12:44.000Z): skipping non-back-date exporters 
 
 A past measurement within 0.1 kg of the last live weigh-in this app exported for that user is taken as that weigh-in replayed from the scale's memory and is skipped, with `Skipping replay` in the log, unless it was measured more than 5 minutes after that weigh-in. Past measurements never count as that last weigh-in themselves. When the app has exported no live weigh-in since it started, the comparison is with `last_known_weight` from `config.yaml` and the time the app started, so a stored weigh-in from before a restart within 0.1 kg of it is still skipped.
 
-A reading without a recorded time, or one received within 5 minutes of the time it carries, is a live reading and goes to every configured exporter.
+A reading without a recorded time, or one received within 5 minutes of the time it carries, is a live reading and goes to every configured exporter. The exception is a reading the scale's protocol itself marks as one from its memory: that is a past measurement however recent its time. Today these are the stored weigh-ins of QN scales with an 18-byte scale-info frame and [`ble.qn_user_key`](/guide/configuration) set.
 
 ## Healthchecks
 

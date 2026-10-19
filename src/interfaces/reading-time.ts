@@ -15,18 +15,25 @@ import type { ScaleReading } from './scale-adapter.js';
  * has drifted a minute or two over months without a sync must not turn every
  * live weigh-in into history. A stored record, on the other hand, is a weigh-in
  * the app was not around for, which in practice is hours or days old. A record
- * from four minutes ago is treated as live, which is what it effectively is.
+ * from four minutes ago is treated as live, which is what it effectively is,
+ * unless the adapter knows from the protocol that it comes from the scale's
+ * memory (`ScaleReading.fromMemory`, D065).
  *
  * Shared by the BLE session (whether a frame ends it) and the processor (where
  * the reading goes), so the two can never disagree about the same frame.
  */
 export const HISTORY_WINDOW_MS = 5 * 60 * 1000;
 
-/** True when the reading is a stored record from the scale's memory (D027). */
-export function isHistoricalReading(
-  reading: ScaleReading,
-  nowMs: number = Date.now(),
-): reading is ScaleReading & { timestamp: Date } {
+/**
+ * True when the reading is a stored record from the scale's memory (D027).
+ *
+ * A reading the adapter flagged `fromMemory` is one whatever its age (D065),
+ * even without a usable stamp: the flag is the adapter's knowledge, and of the
+ * two ways to get it wrong, history dated by its receipt is the safer one.
+ * Not a type guard for that reason: a stored record need not carry a stamp.
+ */
+export function isHistoricalReading(reading: ScaleReading, nowMs: number = Date.now()): boolean {
+  if (reading.fromMemory === true) return true;
   const ts = reading.timestamp;
   if (!ts) return false;
   const t = ts.getTime();

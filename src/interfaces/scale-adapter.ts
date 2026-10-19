@@ -83,6 +83,22 @@ export interface ScaleReading {
    */
   timestamp?: Date;
   /**
+   * The adapter knows from the protocol that this reading is a record from the
+   * scale's memory, not the weigh-in of this session (ADR D065). The runtime
+   * then treats it as a stored record whatever its age, where by `timestamp`
+   * alone a record younger than `HISTORY_WINDOW_MS` would count as live: it
+   * does not end the session, goes only to exporters with `supportsBackdate`
+   * and does not move `last_known_weight`.
+   *
+   * An adapter MUST NOT set it without a trusted `timestamp` in the past, and
+   * MUST NOT set it on a record of the weigh-in in progress. A reading flagged
+   * without a usable stamp still goes the history way, dated by its receipt,
+   * because the other way round (live) would end the session and reach MQTT
+   * with a weigh-in from the past; the replay dedup then judges it by weight
+   * alone. Leave it undefined when the protocol does not say; age decides then.
+   */
+  fromMemory?: boolean;
+  /**
    * The scale's own user slot for this reading, when the frame says which
    * profile on the scale it was taken for (a SIG User Index, a vendor user
    * byte). Used to attribute a stored record in multi-user mode before falling

@@ -4213,6 +4213,173 @@ describe('QN stored record and impedance (#461)', () => {
       expect(lines).toContain('QN: 0x23 says the scale holds no stored weigh-ins (#463)');
     });
 
+    describe('with ble.qn_user_key (D065)', () => {
+      /** The #463 handshake up to and past our 0x22, as in the log. */
+      const HANDSHAKE: Step[] = [INFO_463, READY_461, CONFIG_REQ_461, VISIT_OK_463, 1000];
+      /** The record as the reading it must become. */
+      const STORED: ScaleReading = {
+        weight: 71.55,
+        impedance: 497,
+        timestamp: new Date('2026-10-13T17:59:38.000Z'),
+        fromMemory: true,
+      };
+      const keyed = (): QnScaleAdapter => {
+        const adapter = makeAdapter();
+        adapter.configure({ qnUserKey: 1000 });
+        return adapter;
+      };
+
+      // The session time is chosen (562 s after the record); the frames are real.
+      it('reports a record from minutes before the session as history with its own time', async () => {
+        const { readings, lines } = await session(
+          keyed(),
+          [...HANDSHAKE, MEASURING_463, RECORD_463],
+          '2026-10-13T18:09:00Z',
+        );
+        expect(readings).toEqual([STORED]);
+        expect(lines).toContain(
+          'QN: stored weigh-in 71.55 kg at 2026-10-13T17:59:38.000Z, user slot 1, record 1 of 1, ' +
+            'reported as history (#463)',
+        );
+      });
+
+      it('reports the #463 record from 259 s before the session as history, too', async () => {
+        const { readings } = await session(
+          keyed(),
+          [...HANDSHAKE, MEASURING_463, RECORD_463],
+          STARTED_463,
+        );
+        expect(readings).toEqual([STORED]);
+      });
+
+      it('reports it once: not in the next session, nor after a restart that kept the mark', async () => {
+        const adapter = keyed();
+        await session(adapter, [INFO_463, RECORD_463], '2026-10-13T18:09:00Z');
+        expect(adapter.dedupMark()).toBe(845229578);
+
+        const next = await session(adapter, [INFO_463, RECORD_463], '2026-10-13T18:20:00Z');
+        expect(next.readings).toEqual([]);
+        expect(next.lines).toContain(
+          'QN: stored weigh-in 71.55 kg at 2026-10-13T17:59:38.000Z was already reported (#463)',
+        );
+
+        const restarted = keyed();
+        restarted.restoreDedupMark(845229578);
+        const after = await session(restarted, [INFO_463, RECORD_463], '2026-10-13T18:20:00Z');
+        expect(after.readings).toEqual([]);
+      });
+
+      it('does not export a record the scale assigned to no user, and says so', async () => {
+        // #461's record (slot 0xf0, 09:23:19Z) after its own 0x12, 401 s later.
+        const { readings, lines } = await session(
+          keyed(),
+          [INFO_461, RECORD_461],
+          '2026-10-10T09:30:00Z',
+        );
+        expect(readings).toEqual([]);
+        expect(lines).toContain(
+          'QN: a stored weigh-in (71.65 kg at 2026-10-10T09:23:19.000Z) is not exported: the ' +
+            'scale did not assign it to a user (#463)',
+        );
+      });
+
+      it('without ble.qn_user_key only logs it, once per session', async () => {
+        const { readings, lines } = await session(
+          makeAdapter(),
+          [INFO_463, RECORD_463, 3000, RECORD_463],
+          '2026-10-13T18:09:00Z',
+        );
+        expect(readings).toEqual([]);
+        const line =
+          'QN: a stored weigh-in (71.55 kg at 2026-10-13T17:59:38.000Z, user slot 1) is not ' +
+          'exported: without ble.qn_user_key ble-scale-sync cannot tell whose it is (#463)';
+        expect(lines.filter((l) => l === line)).toHaveLength(1);
+      });
+
+      // Real frames in a made-up order of events: the live result 10 s after
+      // the record, and the record handed over again in the next session.
+      it('drops a stored record that is the live weigh-in reported just before', async () => {
+        const LIVE_463B = Buffer.from([
+          // 2026-10-13T18:39Z comment, 71.55 kg; [11..12] zeroed, [14] recomputed.
+          0x10, 0x0f, 0xff, 0x01, 0x02, 0x1b, 0xf3, 0x10, 0xfd, 0x10, 0xfb, 0x00, 0x00, 0x00, 0x47,
+        ]);
+        const adapter = keyed();
+        const first = await session(adapter, [INFO_463, LIVE_463B], '2026-10-13T17:59:48Z');
+        expect(first.readings).toHaveLength(1);
+        const { readings, lines } = await session(
+          adapter,
+          [INFO_463, RECORD_463],
+          '2026-10-13T18:09:00Z',
+        );
+        expect(readings).toEqual([]);
+        expect(lines.some((l) => l.includes('is the live result reported at'))).toBe(true);
+      });
+
+      it('drops a stored record it already reported as the weigh-in of an earlier session', async () => {
+        // The record taken 42 s after it was stored, as this session's
+        // weigh-in, and the scale handing it over again in the next session.
+        const adapter = keyed();
+        const first = await session(adapter, [INFO_463, RECORD_463], '2026-10-13T18:00:20Z');
+        expect(first.readings).toEqual([{ weight: 71.55, impedance: 497 }]);
+        const { readings, lines } = await session(
+          adapter,
+          [INFO_463, RECORD_463],
+          '2026-10-13T18:09:00Z',
+        );
+        expect(readings).toEqual([]);
+        expect(lines.some((l) => l.includes('is the live result reported at'))).toBe(true);
+      });
+
+      it('does not read a record from more than a year ago', async () => {
+        const { readings, lines } = await session(
+          keyed(),
+          [INFO_463, RECORD_463],
+          '2027-10-14T00:00:00Z',
+        );
+        expect(readings).toEqual([]);
+        expect(lines).toContain(
+          'QN: stored weigh-in 71.55 kg at 2026-10-13T17:59:38.000Z is not from the past year, ' +
+            'dropped (#463)',
+        );
+      });
+
+      it('keeps the re-query after a stored weigh-in', async () => {
+        const { writes } = await session(
+          keyed(),
+          [INFO_463, RECORD_463, 3000],
+          '2026-10-13T18:09:00Z',
+        );
+        expect(writes.filter((w) => w[0] === 0x22)).toHaveLength(1);
+      });
+
+      it('still ends the session on the live weigh-in after it, without a hold', async () => {
+        const adapter = keyed();
+        const { readings } = await session(
+          adapter,
+          [...HANDSHAKE, RECORD_463, LIVE_463],
+          STARTED_463,
+        );
+        expect(readings).toEqual([STORED, { weight: 71.6, impedance: 507 }]);
+        expect(adapter.isComplete(readings[1])).toBe(true);
+        expect(adapter.isFinal(readings[1])).toBe(true);
+        expect(adapter.completionHoldMs).toBeUndefined();
+      });
+
+      it('counts a stored weigh-in as complete whatever its impedance', async () => {
+        // RECORD_463 with R50 and R500 overwritten to 150 Ohm (no real record
+        // has one that low), read without the advertisement, so as sent.
+        const lowR = Buffer.from(RECORD_463);
+        lowR.writeUInt16BE(150, 12);
+        lowR.writeUInt16BE(150, 14);
+        const adapter = keyed();
+        const { readings } = await session(adapter, [INFO_463, lowR], '2026-10-13T18:09:00Z', null);
+        expect(readings).toEqual([{ ...STORED, impedance: 150 }]);
+        expect(adapter.isComplete(readings[0])).toBe(true);
+        // A live reading with the same impedance still does not complete.
+        expect(adapter.isComplete({ weight: 71.55, impedance: 150 })).toBe(false);
+      });
+    });
+
     describe('the weigh-in ending the session before the stored-record answer', () => {
       const RACE =
         'QN: the weigh-in ends the session before the scale answered the stored-record query; ' +

@@ -207,6 +207,11 @@ export interface StoredRecord {
  *   [10..11]  weight, BE u16, /100 kg
  *   [12..13]  R50, BE u16
  *   [14..15]  R500, BE u16
+ *   [16..17]  the scale's own body fat x0.1, [18] heart rate when the frame
+ *             is longer than 19 bytes (not read)
+ *
+ * The Physiq (VA category 129) follows a record with 0x24 and 0x25, the rest of
+ * the scale's composition for it (#463); those are not read either.
  *
  * This is the layout the vendor's published Android SDK (qnsdkX 2.37.2) reads
  * for these scales, and three real records agree: #213 (504/502), #75

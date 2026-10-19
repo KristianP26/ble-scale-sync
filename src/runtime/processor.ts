@@ -69,19 +69,26 @@ const REPLAY_CLOCK_MARGIN_MS = HISTORY_WINDOW_MS;
  */
 interface Frame {
   reading: ScaleReading;
-  /** A record from the scale's memory, older than HISTORY_WINDOW_MS. */
+  /** A record from the scale's memory: older than HISTORY_WINDOW_MS, or flagged by its adapter. */
   historical: boolean;
   /** When it was measured: the frame's own time, or the receipt time. */
   measuredAt: Date;
+  /** `measuredAt` is the frame's own stamp, not the receipt time. */
+  stamped: boolean;
 }
 
 function classifyFrames(raw: RawReading, receivedAt: Date): Frame[] {
   const all = raw.history ? [...raw.history, raw.reading] : [raw.reading];
-  return all.map((reading) => ({
-    reading,
-    historical: isHistoricalReading(reading, receivedAt.getTime()),
-    measuredAt: measurementTime(reading, receivedAt),
-  }));
+  return all.map((reading) => {
+    const measuredAt = measurementTime(reading, receivedAt);
+    return {
+      reading,
+      historical: isHistoricalReading(reading, receivedAt.getTime()),
+      measuredAt,
+      // measurementTime hands back this very object when it does not use the stamp.
+      stamped: measuredAt !== receivedAt,
+    };
+  });
 }
 
 /** Combine the user prefix and `[historic <ISO>]` (stored records only) into the log tag. */
@@ -256,11 +263,13 @@ async function exportFrame(
   // waited between sessions (#475), or after the last live export (#463), is
   // newer, and dropping it for being within 0.1 kg lost a real weigh-in. A
   // config anchor was written by an earlier process, so it is no newer than
-  // this process's start.
+  // this process's start. Only the frame's own stamp can say so: a stored
+  // record dated by its receipt (an adapter flagged it `fromMemory` without a
+  // usable stamp, D065) would always look new, so it keeps the weight rule.
   const liveAt = ctx.lastExportedAt.get(user.slug);
   const anchorAt = liveAt ?? ctx.startedAt;
   const measuredAfterAnchor =
-    frame.measuredAt.getTime() > anchorAt.getTime() + REPLAY_CLOCK_MARGIN_MS;
+    frame.stamped && frame.measuredAt.getTime() > anchorAt.getTime() + REPLAY_CLOCK_MARGIN_MS;
   if (
     frame.historical &&
     anchor !== null &&

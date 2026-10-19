@@ -2764,6 +2764,125 @@ describe('QN 19-byte dialect hold through waitForRawReading (#331)', () => {
   });
 });
 
+// ─── QN 18-byte stored weigh-in through waitForRawReading (#463, D065) ──────
+
+// The real adapter through the real session, frames and their spacing from the
+// public #463 DEBUG log of the first connection after step 3 (2026-10-13
+// 18:03:57). Where a frame carries the scale's own body fat (0x23 [16..17],
+// live 0x10 [11..12]) those bytes are zeroed and the checksum recomputed;
+// nothing here reads them. The 0x24/0x25 composition frames of the record are
+// left out: the adapter ignores them on this dialect.
+describe('QN 18-byte stored weigh-in through waitForRawReading (#463)', () => {
+  const hex = (h: string): Buffer => Buffer.from(h.replace(/ /g, ''), 'hex');
+  const INFO = hex('12 12 ff 25 e0 16 00 05 ff 13 07 16 00 01 05 9f 32 49');
+  const READY = hex('14 0b ff 01 00 01 09 03 00 00 2c');
+  const CONFIG_REQ = hex('21 05 ff 01 26');
+  const VISIT_OK = hex('a1 06 02 01 01 ab');
+  const MEASURING = hex('10 0f ff 01 01 1b f8 00 00 00 00 00 00 00 33');
+  const RECORD = hex('23 14 ff 01 01 01 0a 2e 61 32 1b f3 10 d9 10 fe 00 00 00 09');
+  const LIVE = hex('10 0f ff 01 02 1b f8 10 fb 10 f9 00 00 00 48');
+  const ADVERT = {
+    id: 0xffff,
+    data: hex('08 14 01 00 01 25 e0 16 00 05 ff 61 08 01 00 15'),
+  };
+  const ADDRESS = 'FF050016E025';
+  /** The record, 71.55 kg at 17:59:38Z in user slot 1, as the reading it becomes. */
+  const STORED = {
+    weight: 71.55,
+    impedance: 497,
+    timestamp: new Date('2026-10-13T17:59:38.000Z'),
+    fromMemory: true,
+  };
+
+  async function startSession() {
+    const notify = createMockChar();
+    const write = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notify],
+      [WRITE_UUID, write],
+    ]);
+    const adapter = new QnScaleAdapter();
+    adapter.configure({ qnUserKey: 1000 });
+    const promise = waitForRawReading(
+      charMap,
+      device,
+      adapter,
+      PROFILE,
+      ADDRESS,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      ADVERT,
+    );
+    let settled = false;
+    void promise.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await vi.waitFor(() => expect(notify.subscribeCalled).toBe(true));
+    await vi.advanceTimersByTimeAsync(0);
+    return { notify, device, promise, isSettled: () => settled };
+  }
+
+  /** The session of the log up to and including the stored record. */
+  async function upToTheRecord(s: Awaited<ReturnType<typeof startSession>>) {
+    const steps: [number, Buffer][] = [
+      [132, INFO],
+      [732, READY],
+      [246, CONFIG_REQ],
+      [290, VISIT_OK],
+      [341, MEASURING],
+      [781, RECORD],
+    ];
+    for (const [gapMs, frame] of steps) {
+      await vi.advanceTimersByTimeAsync(gapMs);
+      s.notify.triggerData(frame);
+    }
+  }
+
+  it.each([
+    ['from minutes before the session (start chosen at 18:09:00)', '2026-10-13T18:09:00Z'],
+    ['259 s before the session, as in the log', '2026-10-13T18:03:57.411Z'],
+  ])(
+    'hands a stored weigh-in %s over as history next to the live one',
+    async (_label, startedAt) => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date(startedAt));
+        const s = await startSession();
+        await upToTheRecord(s);
+        await vi.advanceTimersByTimeAsync(974);
+        expect(s.isSettled(), 'a stored weigh-in does not end the session').toBe(false);
+        s.notify.triggerData(LIVE);
+        await vi.advanceTimersByTimeAsync(0);
+        const raw = await s.promise;
+        expect(raw.reading).toEqual({ weight: 71.6, impedance: 507 });
+        expect(raw.history).toEqual([STORED]);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('hands it over on the disconnect when no live weigh-in follows', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-13T18:09:00Z'));
+      const s = await startSession();
+      await upToTheRecord(s);
+      await vi.advanceTimersByTimeAsync(500);
+      s.device.triggerDisconnect();
+      const raw = await s.promise;
+      expect(raw.reading).toEqual(STORED);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 // ─── ES-CS20M with AE00 through waitForRawReading (#436) ─────────────────────
 
 describe('ES-CS20M on an AE00 unit through waitForRawReading (#436)', () => {

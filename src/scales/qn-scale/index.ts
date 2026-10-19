@@ -426,6 +426,13 @@ export class QnScaleAdapter
   private readonly storedEmitted = new Set<number>();
 
   /**
+   * The 18-byte dialect's stored records judged this session, by their
+   * scale-epoch seconds, so a record the re-query brings back gets no second
+   * line (#463).
+   */
+  private readonly storedJudged = new Set<number>();
+
+  /**
    * The fresh stored weigh-in the session holds right now ("W kg at T"), so the
    * log can say when a later reading takes its place in the hold and it is not
    * exported (#331).
@@ -675,6 +682,7 @@ export class QnScaleAdapter
     this.storedHoldArmed = false;
     this.heldStoredWeighIn = null;
     this.storedEmitted.clear();
+    this.storedJudged.clear();
     this.storedMarkAtSessionStart = this.storedMark;
     this.configSent = false;
     this.timeSyncSent = false;
@@ -1126,6 +1134,11 @@ export class QnScaleAdapter
     // check below as stale; changing how they are read is a separate change
     // with its own evidence. A session without any 0x12 reads the long layout,
     // which is what every real record we have uses.
+    //
+    // A record from up to MAX_STORED_RECORD_AGE_SEC before the session is this
+    // session's weigh-in and ends it, without a time. An older one is the
+    // scale's memory: on the 18-byte dialect it can go out as history
+    // (eighteenByteStoredWeighIn, #463), elsewhere it is logged and not read.
     if (opcode === 0x23) {
       // The 19-byte dialect sends 8-electrode records in their own layout and
       // never gets a re-query: the scale answers our one 0x22 once it is done
@@ -1153,8 +1166,11 @@ export class QnScaleAdapter
         return null;
       }
       if (recordSeconds + MAX_STORED_RECORD_AGE_SEC < sessionSeconds) {
-        this.logUnreadStoredRecord(data, record, sessionSeconds, 'old');
+        // The re-query stays: V10 firmware may save the fresh weigh-in only a
+        // moment after handing over an old one (#213 / #75).
         this.scheduleStoredDataRetry();
+        if (this.isEighteenByteInfo) return this.eighteenByteStoredWeighIn(data, record);
+        this.logUnreadStoredRecord(data, record, sessionSeconds, 'old');
         return null;
       }
       const r1 = classic ? data.readUInt16LE(13) : record.r50;
@@ -1167,7 +1183,11 @@ export class QnScaleAdapter
         `QN: stored 0x23 reading ${weight}kg, R50 ${r1} / R500 ${r2}` +
           (classic ? ' (classic offsets)' : ''),
       );
-      return { weight, impedance: this.resistance(r1 > 0 ? r1 : r2) };
+      const fresh: ScaleReading = { weight, impedance: this.resistance(r1 > 0 ? r1 : r2) };
+      // This session's weigh-in, so a later session that is handed the same
+      // record as history knows it went out already (#463).
+      if (this.isEighteenByteInfo && this.isComplete(fresh)) this.rememberLiveResult(weight);
+      return fresh;
     }
 
     // Extended-dialect completed-weigh-in result frames (#235). Gated to the
@@ -1357,6 +1377,7 @@ export class QnScaleAdapter
           'query; a stored weigh-in it sends after this is not read (#463)',
       );
     }
+    if (this.isEighteenByteInfo && this.isComplete(reading)) this.rememberLiveResult(weight);
     return reading;
   }
 
@@ -1923,6 +1944,93 @@ export class QnScaleAdapter
   }
 
   /**
+   * An 18-byte 0x23 record from more than MAX_STORED_RECORD_AGE_SEC before the
+   * session (#463, D065): a weigh-in the scale kept while nobody fetched it.
+   * The window used to drop it without a line, and the scale does not send a
+   * record again once it has handed it over, so the weigh-in was lost for the
+   * vendor app too.
+   *
+   * Reported as history with its own time (`fromMemory`), but only with
+   * `ble.qn_user_key` and only for user slot 1: that is the slot the option
+   * sends the first user's profile to, so only then is it known whose it is.
+   * Without the option, or for a record the scale gave no user, it gets an
+   * info line with its weight and time, so it can be entered by hand.
+   *
+   * Each record once per session, and never again once reported: the mark
+   * (dedupMark, kept across restarts) and the live results this adapter
+   * reported (a record that is a weigh-in already exported live) see to that.
+   */
+  private eighteenByteStoredWeighIn(data: Buffer, record: StoredRecord): ScaleReading | null {
+    const { weight, recordSeconds } = record;
+    if (this.storedJudged.has(recordSeconds)) return null;
+    this.storedJudged.add(recordSeconds);
+    const atMs = (recordSeconds + SCALE_EPOCH_OFFSET) * 1000;
+    const what = `${weight} kg at ${new Date(atMs).toISOString()}`;
+    const slot = data[5];
+    if (this.forcedUserKey === null) {
+      bleLog.info(
+        `QN: a stored weigh-in (${what}, user slot ${slot}) is not exported: without ` +
+          'ble.qn_user_key ble-scale-sync cannot tell whose it is (#463)',
+      );
+      return null;
+    }
+    if (slot === STORED_UNASSIGNED_SLOT) {
+      bleLog.info(
+        `QN: a stored weigh-in (${what}) is not exported: the scale did not assign it to ` +
+          'a user (#463)',
+      );
+      return null;
+    }
+    if (slot !== 1) {
+      bleLog.info(
+        `QN: a stored weigh-in (${what}) is not exported: the scale assigned it to its user ` +
+          `slot ${slot}, and ble-scale-sync sends the profile of slot 1 (#463)`,
+      );
+      return null;
+    }
+    // Only a record from the past gets here, so the year is the only bound.
+    if (Date.now() - atMs > STORED_MAX_AGE_MS) {
+      bleLog.debug(`QN: stored weigh-in ${what} is not from the past year, dropped (#463)`);
+      return null;
+    }
+    if (recordSeconds <= this.storedMarkAtSessionStart || this.storedEmitted.has(recordSeconds)) {
+      bleLog.debug(`QN: stored weigh-in ${what} was already reported (#463)`);
+      return null;
+    }
+    const live = this.recentLiveResults.find(
+      (r) =>
+        Math.abs(r.weight - weight) <= LIVE_MATCH_WEIGHT_KG &&
+        atMs >= r.atMs - LIVE_MATCH_BEFORE_MS &&
+        atMs <= r.atMs + LIVE_MATCH_AFTER_MS,
+    );
+    if (live) {
+      bleLog.debug(
+        `QN: stored weigh-in ${what} is the live result reported at ` +
+          `${new Date(live.atMs).toISOString()}, dropped (#463)`,
+      );
+      return null;
+    }
+    this.storedMark = Math.max(this.storedMark, recordSeconds);
+    this.storedEmitted.add(recordSeconds);
+    bleLog.debug(
+      `QN: stored weigh-in ${what}, user slot 1, record ${data[4]} of ${data[3]}, ` +
+        'reported as history (#463)',
+    );
+    return {
+      weight,
+      impedance: this.resistance(record.r50 > 0 ? record.r50 : record.r500),
+      timestamp: new Date(atMs),
+      fromMemory: true,
+    };
+  }
+
+  /** Keep a live result for the stored records of later sessions to be compared with. */
+  private rememberLiveResult(weight: number): void {
+    this.recentLiveResults.push({ weight, atMs: Date.now() });
+    if (this.recentLiveResults.length > RECENT_LIVE_RESULTS) this.recentLiveResults.shift();
+  }
+
+  /**
    * Say why a 0x23 outside the 19-byte dialect is not read (#463). The record
    * used to vanish without a line, and a frame that arrives after the session
    * settled is not even in the DEBUG log, so nothing showed that a weigh-in the
@@ -2391,6 +2499,11 @@ export class QnScaleAdapter
   }
 
   isComplete(reading: ScaleReading): boolean {
+    // A stored weigh-in is complete as it is: the processor judges its
+    // impedance (D028). Gated on impedance like a live frame, one with 1-200
+    // Ohm would be dropped by the session after the mark had already counted
+    // it as reported (#463).
+    if (reading.fromMemory === true) return reading.weight > 0;
     // Broadcast readings have impedance=0; GATT readings have impedance>200
     if (reading.impedance === 0) return reading.weight > 0;
     return reading.weight > 10 && reading.impedance > 200;
