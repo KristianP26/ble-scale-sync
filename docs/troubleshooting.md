@@ -188,7 +188,7 @@ When nobody confirms a pairing on the scale, earlier releases asked again on the
 AA:BB:CC:DD:EE:FF asked for the pairing to be confirmed on the scale and it was not (attempt 3). Not connecting to it again for 2 min, ...
 ```
 
-A weigh-in also asks at once when the scale advertises it (the BF720 family, the BF915 included): weigh in and stay at the scale for about a minute, until the code shows. That needs the scale to have had no weigh-in waiting on it when the pairing failed; otherwise only the wait or a restart asks again. To pair at once without weighing in, restart ble-scale-sync and confirm on the scale when the code shows, about a minute later. `ble.pairing_retry_max_min: 0` brings back the old behavior. See [the configuration reference](/guide/configuration#config-yaml-reference).
+A weigh-in should also ask at once when the scale advertises it (seen on a BF915, untested on the other models of the family): weigh in and stay at the scale for about a minute, until the code shows. That needs the scale to have had no weigh-in waiting on it when the pairing failed; otherwise only the wait or a restart asks again. To pair at once without weighing in, restart ble-scale-sync and confirm on the scale when the code shows, about a minute later. `ble.pairing_retry_max_min: 0` brings back the old behavior. See [the configuration reference](/guide/configuration#config-yaml-reference).
 
 ## Exporter Issues
 

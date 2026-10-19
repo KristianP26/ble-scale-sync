@@ -269,7 +269,7 @@ AA:BB:CC:DD:EE:FF asked for the pairing to be confirmed on the scale and it was 
 Scale found, waiting to pair, rescanning in 5s... (AA:BB:CC:DD:EE:FF is not paired; next pairing attempt in 2 min, or sooner if it reappears or advertises a new weigh-in)
 ```
 
-It asks at once when the scale wakes up again after a scan without it, when it advertises a new weigh-in (the BF720 family, the BF915 included: weigh in and stay at the scale for about a minute; this does not work while an earlier weigh-in is still waiting on the scale), or when you restart the add-on. Set the option to 0 to be asked on every scan, as earlier versions did.
+It asks at once when the scale wakes up again after a scan without it, when it advertises a new weigh-in (seen on a BF915, untested on the other models of the family: weigh in and stay at the scale for about a minute; this does not work while an earlier weigh-in is still waiting on the scale), or when you restart the add-on. Set the option to 0 to be asked on every scan, as earlier versions did.
 
 ### No scale found
 

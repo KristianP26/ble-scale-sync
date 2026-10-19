@@ -491,7 +491,7 @@ Beurer scales pair with a code: the scale shows six digits and waits for you to 
 Now, when the app's pairing agent was asked to confirm a code for the scale and the scan ends with the scale still not paired, the app stops connecting to it for a while: 2 minutes, three times, then 4, 8, 16 and 32 minutes, and then `pairing_retry_max_min` (60 by default) each time. It keeps listening to the scale in between and asks at once when:
 
 - the scale comes back after a scan without it (a scale that sleeps between weigh-ins wakes up when you step on it);
-- the scale's advertisement shows a new weigh-in waiting on it (the Beurer BF720 family; a BF915 that never stops advertising is asked this way when somebody weighs in, and shows the code about a minute later, once the app has connected and looked up its services; a weigh-in that was already waiting on the scale when the pairing failed does not count, and while it waits, a new one does not either);
+- the scale's advertisement shows a new weigh-in waiting on it (seen on a BF915, untested on the other models of the family; a BF915, which never stops advertising, should be asked this way when somebody weighs in, and show the code about a minute later, once the app has connected and looked up its services; a weigh-in that was already waiting on the scale when the pairing failed does not count, and while it waits, a new one does not either);
 - the scale is paired by other means, for example with `bluetoothctl pair`;
 - ble-scale-sync restarts.
 
@@ -507,7 +507,7 @@ ble:
   pairing_retry_max_min: 15 # 0 asks on every scan, as before
 ```
 
-The change applies from the next scan cycle. A scan that only listened is not counted toward the watchdog. A pairing attempt still is, as before, so after ten attempts in a row without a weigh-in (about three hours) the watchdog restarts the app once and the waits start again from 2 minutes. The memory lives only in the running process, so this works in continuous mode; a single-shot run (a cron job or a systemd timer) starts fresh and asks once per run. Scales that pair without a code, and scales that are already paired, are not affected.
+The change applies from the next scan cycle. A scan that only listened is not counted toward the watchdog. A pairing attempt still is, as before, so after ten attempts in a row without a weigh-in (about three hours) the watchdog restarts the app once and the waits start again from 2 minutes. That needs a weigh-in to have come through since the app started: the watchdog is armed only then, so before the first pairing it never restarts. The memory lives only in the running process, so this works in continuous mode; a single-shot run (a cron job or a systemd timer) starts fresh and asks once per run. Scales that pair without a code, and scales that are already paired, are not affected.
 
 Native BlueZ (node-ble) only. The proxy transports do not pair at all.
 
@@ -541,7 +541,7 @@ ble:
 
 With this on, at the start of the first scan cycle the app powers the adapter off, turns LE privacy on with `btmgmt privacy on <key>` and powers it back on, then checks every cycle that privacy is still on. In single-shot mode (a cron job or timer that starts a new process per run) every run is a first cycle, so every run power-cycles the adapter once. The key is derived from the adapter's own Bluetooth address, so it stays the same across restarts, re-created containers, add-on reinstalls and reboots, which is what keeps the scale able to recognise the host. The log names it only by a fingerprint: `uses an IRK derived from its address (fingerprint 1a2b3c4d)`. Right before every connect the app checks once more, and if privacy is not on it skips the connect and says why, rather than pair without the key.
 
-After turning it on, remove the old pairing once (`bluetoothctl remove <mac>`, or let `auto_clear_stale_bond` do it) and pair through ble-scale-sync, confirming on the scale as the first time. Be at the scale for that: the code shows about a minute after ble-scale-sync starts, once it has connected and looked up the scale's services. If you miss it, restart ble-scale-sync to be asked again at once; otherwise it asks again after 2 minutes, or about a minute after the next weigh-in (see `pairing_retry_max_min` above). Later weigh-ins should reuse the pairing, also after the scale has slept.
+After turning it on, remove the old pairing once (`bluetoothctl remove <mac>`, or let `auto_clear_stale_bond` do it) and pair through ble-scale-sync, confirming on the scale as the first time. Be at the scale for that: the code shows about a minute after ble-scale-sync starts, once it has connected and looked up the scale's services. If you miss it, restart ble-scale-sync to be asked again at once; otherwise it asks again after 2 minutes (see `pairing_retry_max_min` above). Later weigh-ins should reuse the pairing, also after the scale has slept.
 
 Before you turn it on:
 

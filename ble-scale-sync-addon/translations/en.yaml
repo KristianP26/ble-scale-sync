@@ -146,8 +146,8 @@ configuration:
       add-on stops connecting to it for 2 minutes three times, then 4, 8, 16
       and 32 minutes, and then this long each time, instead of showing a new
       code every few minutes. It asks at once when the scale wakes up again,
-      when it shows a new weigh-in, or when the add-on restarts. 0 asks on
-      every scan, as earlier versions did.
+      when it advertises a new weigh-in (seen on a BF915), or when the
+      add-on restarts. 0 asks on every scan, as earlier versions did.
   esphome_proxy_host:
     name: ESPHome proxy host
     description: >-
