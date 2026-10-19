@@ -389,6 +389,46 @@ describe('teardownSession and a Disconnect BlueZ never answers (#472)', () => {
   });
 });
 
+describe('teardownSession and a StopDiscovery BlueZ never answers (#472)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    _resetStaleLinkStateForTests();
+    h.onSleep = undefined;
+    calls.length = 0;
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    h.resetConnection.mockImplementation(() => calls.push('resetConnection'));
+    h.resetAdapterBtmgmt.mockImplementation(async () => {
+      calls.push('resetAdapterBtmgmt');
+      return true;
+    });
+    h.removeDevice.mockImplementation(async () => {
+      calls.push('removeDevice');
+      return 'removed';
+    });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('gives up on it after 10 s and finishes the cleanup after a failed GATT session', async () => {
+    h.callMethod.mockImplementation((name: string) => {
+      calls.push(name);
+      return new Promise(() => {});
+    });
+    const result = track(
+      teardownSession(gattCycle({ gattSucceeded: false, preemptiveAdapterReset: false })),
+    );
+
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(result.state()).toBe('pending');
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(result.state()).toBe('resolved');
+    expect(calls).toEqual(['StopDiscovery', 'removeDevice', 'resetConnection']);
+  });
+});
+
 describe('teardownSession and a RemoveDevice BlueZ never answers (#472)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

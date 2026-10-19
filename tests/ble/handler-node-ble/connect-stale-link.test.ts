@@ -48,6 +48,7 @@ vi.mock('../../../src/ble/handler-node-ble/discovery.js', async (importOriginal)
 });
 
 const { _internals } = await import('../../../src/ble/handler-node-ble/index.js');
+const { stopDiscoveryAndQuiesce } = await import('../../../src/ble/handler-node-ble/discovery.js');
 const { bleFailureKind } = await import('../../../src/ble/failure-kind.js');
 const { bleLog } = await import('../../../src/ble/types.js');
 const { setLogLevel, LogLevel } = await import('../../../src/logger.js');
@@ -198,6 +199,66 @@ describe('connectWithRecovery and a Disconnect BlueZ never answers (#472)', () =
 
     expect(result.state()).toBe('rejected');
     expect(String(result.error())).toMatch(/shutdown/);
+    // Nothing after the Disconnect: a RemoveDevice would be one more BlueZ
+    // round trip, up to 10 s, inside the 5 s grace.
+    expect(btAdapter.getDevice).not.toHaveBeenCalled();
+    expect(btAdapter.helper.callMethod).not.toHaveBeenCalledWith('RemoveDevice', expect.anything());
+  });
+
+  it('never waits for a StopDiscovery BlueZ does not answer between attempts', async () => {
+    let attempts = 0;
+    const device = makeDevice(
+      'initial',
+      async () => {
+        attempts++;
+        if (attempts === 1) throw new Error('le-connection-abort-by-local');
+      },
+      async () => undefined,
+    );
+    const btAdapter = makeAdapter(async () => device);
+    btAdapter.stopDiscovery.mockImplementation(never);
+    const result = track(
+      _internals.connectWithRecovery({
+        btAdapter: btAdapter as never,
+        mac: 'AA:BB:CC:DD:EE:FF',
+        initialDevice: device as never,
+        maxRetries: 5,
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(btAdapter.stopDiscovery).toHaveBeenCalled();
+    expect(result.state()).toBe('resolved');
+    expect(device.connect).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives the debug link check 5 s and then connects anyway', async () => {
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    setLogLevel(LogLevel.DEBUG);
+    const device = makeDevice(
+      'hung-props',
+      async () => undefined,
+      async () => undefined,
+    );
+    device.helper.prop.mockImplementation((name: string) =>
+      name === 'RSSI' ? Promise.resolve(-55) : never(),
+    );
+    const result = track(
+      _internals.connectWithRecovery({
+        btAdapter: makeAdapter(async () => device) as never,
+        mac: 'AA:BB:CC:DD:EE:FF',
+        initialDevice: device as never,
+        maxRetries: 5,
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(6_000);
+
+    expect(result.state()).toBe('resolved');
+    expect(device.connect).toHaveBeenCalledTimes(1);
+    expect(debug).toHaveBeenCalledWith('Link check before connect failed: no answer within 5s');
+    debug.mockRestore();
   });
 
   it('keeps the retry path when the Disconnect is answered', async () => {
@@ -362,5 +423,25 @@ describe('connectWithRecovery after a re-discovery replaced the D-Bus connection
 
     expect(result.state()).toBe('rejected');
     expect(fresh.helper.removeListeners).toHaveBeenCalled();
+  });
+});
+
+describe('stopDiscoveryAndQuiesce and a StopDiscovery BlueZ never answers (#472)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('gives up on it after 10 s and goes on to the quiesce', async () => {
+    // BlueZ answers StopDiscovery only once the kernel's Stop Discovery
+    // completes; before the deadline a parked one held the cycle until the
+    // poll deadline, right before the connect.
+    const btAdapter = makeAdapter(async () => undefined);
+    btAdapter.stopDiscovery.mockImplementation(never);
+    const result = track(stopDiscoveryAndQuiesce(btAdapter as never));
+
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(result.state()).toBe('pending');
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(result.state()).toBe('resolved');
   });
 });

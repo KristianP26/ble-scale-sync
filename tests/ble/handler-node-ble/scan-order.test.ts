@@ -582,9 +582,12 @@ describe('scanAndReadRaw and a Disconnect BlueZ never answers (#472)', () => {
   it('returns the reading when the Disconnect after it is never answered', async () => {
     const result = track(scanAndReadRaw(opts()));
 
-    await vi.advanceTimersByTimeAsync(30_000);
+    // One 10 s Disconnect deadline, not two: the teardown knows the link is
+    // stale and does not send another.
+    await vi.advanceTimersByTimeAsync(15_000);
 
     expect(result.state()).toBe('resolved');
+    expect(calls.filter((c) => c === 'device.disconnect')).toHaveLength(1);
     expect(result.value()?.reading.weight).toBe(80);
     // The reading lifts the brake; the stale link it left goes to the recovery.
     expect(calls).toContain('noteReadingForStaleLink');
@@ -1320,6 +1323,32 @@ describe('scanAndReadRaw keeps a GATT-only scale in BlueZ between cycles (#425, 
     calls.length = 0;
     await cycle(adapters);
     expect(before('removeDevice', 'startDiscoverySafe')).toBe(true);
+  });
+
+  it('forgets the GATT-only reading after the safety net, even when no reading follows', async () => {
+    // Otherwise the next cycle keeps the object again and runs the same
+    // safety net, a RemoveDevice and a second wait, on every cycle.
+    const adapters = gattAndPassive();
+    await afterReading(adapters);
+
+    reportOnDiscoveryStart();
+    snapshotCompanyId = 0x1234;
+    let waits = 0;
+    fakeAdapter.waitDevice = async () => {
+      calls.push('waitDevice');
+      if (++waits > 1) throw new Error('org.freedesktop.DBus.Error.NoReply');
+      return fakeDevice;
+    };
+    const second = await cycle(adapters);
+    expect(second.result).toBeInstanceOf(Error);
+    expect(calls).not.toContain('broadcastScanNodeBle');
+    fakeAdapter.waitDevice = waitDevice;
+
+    calls.length = 0;
+    snapshotCompanyId = 0x0611;
+    await cycle(adapters);
+    expect(before('removeDevice', 'startDiscoverySafe')).toBe(true);
+    expect(calls).not.toContain('getDevice');
   });
 
   it('removes it again after a broadcast reading replaced a GATT-only one', async () => {

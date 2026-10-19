@@ -164,9 +164,10 @@ describe('recoverStaleLink (#472)', () => {
 
   it('bounds the whole check, and releases a proxy that comes back late', async () => {
     const removeListeners = vi.fn();
-    const late = {
-      helper: { prop: async () => true, removeListeners },
-    };
+    // Never answers: only the release of an abandoned proxy can hand it back,
+    // not the finally of a read that completed.
+    const prop = vi.fn(() => new Promise(() => {}));
+    const late = { helper: { prop, removeListeners } };
     // getAdapter answers only after the deadline.
     h.getAdapter.mockImplementation(
       () => new Promise((r) => setTimeout(() => r({ getDevice: async () => late }), 15_000)),
@@ -183,6 +184,24 @@ describe('recoverStaleLink (#472)', () => {
     expect(staleLinkRecoveryDue(MAC)).toBe(false);
 
     await vi.advanceTimersByTimeAsync(10_000);
+    expect(removeListeners).toHaveBeenCalled();
+    // Nobody waits for the answer any more, so it is not even asked.
+    expect(prop).not.toHaveBeenCalled();
+  });
+
+  it('releases the proxy whose Connected read is still out at the deadline', async () => {
+    const removeListeners = vi.fn();
+    h.getAdapter.mockImplementation(async () => ({
+      getDevice: async () => ({
+        helper: { prop: () => new Promise(() => {}), removeListeners },
+      }),
+    }));
+    let done = false;
+    void recover().then(() => (done = true));
+
+    await vi.advanceTimersByTimeAsync(10_001);
+
+    expect(done).toBe(true);
     expect(removeListeners).toHaveBeenCalled();
   });
 
@@ -344,6 +363,23 @@ describe('disconnectBounded (#472)', () => {
     ).resolves.toBe('aborted');
     expect(hung.disconnect).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('takes its abort listener off again when BlueZ answers or the deadline passes', async () => {
+    for (const disconnect of [async () => undefined, () => new Promise<void>(() => {})]) {
+      const ac = new AbortController();
+      const added = vi.spyOn(ac.signal, 'addEventListener');
+      const removed = vi.spyOn(ac.signal, 'removeEventListener');
+      const outcome = disconnectBounded({ disconnect: vi.fn(disconnect) } as never, {
+        mac: MAC,
+        label: 't',
+        abortSignal: ac.signal,
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(['done', 'timeout']).toContain(await outcome);
+      expect(added).toHaveBeenCalledTimes(1);
+      expect(removed).toHaveBeenCalledWith('abort', added.mock.calls[0][1]);
+    }
   });
 
   it('stops waiting when the signal aborts during the wait', async () => {
