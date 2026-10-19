@@ -1729,11 +1729,15 @@ export class QnScaleAdapter
 
   /**
    * The scale's first answer to this session's 0x22: a 0x23, or the result
-   * block when no 0x23 came first (#331). The scale sends it once it has
-   * finished measuring, so an answer MEASURED_ANSWER_MIN_MS or more after the
+   * block when no 0x23 came first (#331). The 19-byte scale sends it once it
+   * has finished measuring, so an answer MEASURED_ANSWER_MIN_MS or more after the
    * 0x22 means it measured during this session, and one that long after it
    * accepted the profile means it finished measuring after accepting it, even
    * when its weight settled before and no live frame followed.
+   *
+   * The 18-byte scale answers while it is still measuring (#463), so there
+   * the flags this sets mean nothing; only the 19-byte paths read them. It is
+   * called there for the log line and for `queryAnswered`.
    */
   private noteStoredQueryAnswer(): void {
     if (this.queryAnswered) return;
@@ -1946,15 +1950,16 @@ export class QnScaleAdapter
   /**
    * An 18-byte 0x23 record from more than MAX_STORED_RECORD_AGE_SEC before the
    * session (#463, D065): a weigh-in the scale kept while nobody fetched it.
-   * The window used to drop it without a line, and the scale does not send a
-   * record again once it has handed it over, so the weigh-in was lost for the
-   * vendor app too.
+   * The window used to drop it without a line, and in #463 the scale did not
+   * send it again, not even to the vendor app, so the weigh-in was lost.
    *
-   * Reported as history with its own time (`fromMemory`), but only with
-   * `ble.qn_user_key` and only for user slot 1: that is the slot the option
-   * sends the first user's profile to, so only then is it known whose it is.
-   * Without the option, or for a record the scale gave no user, it gets an
-   * info line with its weight and time, so it can be entered by hand.
+   * Reported as history with its own time (`fromMemory`), but only for user
+   * slot 1, with `ble.qn_user_key`, in a session in which the scale accepted
+   * the profile for slot 1: only then is slot 1 the first configured user,
+   * as the option documents. Otherwise it gets an info line with its weight
+   * and time, so it can be entered by hand, and the line names the first
+   * reason in that order: a record the scale gave no user would not go out
+   * with the option either, so it does not point at the option.
    *
    * Each record once per session, and never again once reported: the mark
    * (dedupMark, kept across restarts) and the live results this adapter
@@ -1967,13 +1972,6 @@ export class QnScaleAdapter
     const atMs = (recordSeconds + SCALE_EPOCH_OFFSET) * 1000;
     const what = `${weight} kg at ${new Date(atMs).toISOString()}`;
     const slot = data[5];
-    if (this.forcedUserKey === null) {
-      bleLog.info(
-        `QN: a stored weigh-in (${what}, user slot ${slot}) is not exported: without ` +
-          'ble.qn_user_key ble-scale-sync cannot tell whose it is (#463)',
-      );
-      return null;
-    }
     if (slot === STORED_UNASSIGNED_SLOT) {
       bleLog.info(
         `QN: a stored weigh-in (${what}) is not exported: the scale did not assign it to ` +
@@ -1985,6 +1983,23 @@ export class QnScaleAdapter
       bleLog.info(
         `QN: a stored weigh-in (${what}) is not exported: the scale assigned it to its user ` +
           `slot ${slot}, and ble-scale-sync sends the profile of slot 1 (#463)`,
+      );
+      return null;
+    }
+    if (this.forcedUserKey === null) {
+      bleLog.info(
+        `QN: a stored weigh-in (${what}, user slot ${slot}) is not exported: without ` +
+          'ble.qn_user_key ble-scale-sync cannot tell whose it is (#463)',
+      );
+      return null;
+    }
+    // A refused profile means the key or the first user does not match what
+    // the vendor app set up, so slot 1 need not be the first configured user.
+    // The profile frame always goes to slot 1, so the answer is for slot 1.
+    if (this.visitReply?.ok !== true) {
+      bleLog.info(
+        `QN: a stored weigh-in (${what}) is not exported: the scale did not accept the ` +
+          'profile for user slot 1 in this session, so it is not known whose it is (#463)',
       );
       return null;
     }
@@ -2059,7 +2074,9 @@ export class QnScaleAdapter
     if (!this.scaleFactorKnown) {
       bleLog.debug(
         `QN: 0x23 in a session without a scale-info frame, not read: [${bytes}]; read as the ` +
-          `VA layout it is ${record.weight} kg at ${at}, ${age} s before the session (#463)`,
+          `VA layout it is ${record.weight} kg at ${at}, ` +
+          (why === 'old' ? `${age} s before the session` : 'out of range') +
+          ' (#463)',
       );
       return;
     }

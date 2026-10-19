@@ -4203,6 +4203,16 @@ describe('QN stored record and impedance (#461)', () => {
       expect(line).not.toContain('kg');
     });
 
+    it('names the reason, not an age, for an out-of-range record without a 0x12 (#461)', async () => {
+      // The empty record #461 sent first, here without its 0x12 before it.
+      const { lines } = await session(makeAdapter(), [EMPTY_461], '2026-10-10T09:23:05.302Z', null);
+      const line = lines.find((l) => l.includes('without a scale-info frame')) ?? '(no line)';
+      expect(line).toContain(
+        'read as the VA layout it is 0 kg at 2000-01-01T00:00:00.000Z, out of range',
+      );
+      expect(line).not.toContain('before the session');
+    });
+
     it('says the scale holds no stored weigh-ins when the 0x23 count is 0 (#461)', async () => {
       // The empty record #461 sent first, after its own 0x12.
       const { lines } = await session(
@@ -4254,10 +4264,10 @@ describe('QN stored record and impedance (#461)', () => {
 
       it('reports it once: not in the next session, nor after a restart that kept the mark', async () => {
         const adapter = keyed();
-        await session(adapter, [INFO_463, RECORD_463], '2026-10-13T18:09:00Z');
+        await session(adapter, [...HANDSHAKE, RECORD_463], '2026-10-13T18:09:00Z');
         expect(adapter.dedupMark()).toBe(845229578);
 
-        const next = await session(adapter, [INFO_463, RECORD_463], '2026-10-13T18:20:00Z');
+        const next = await session(adapter, [...HANDSHAKE, RECORD_463], '2026-10-13T18:20:00Z');
         expect(next.readings).toEqual([]);
         expect(next.lines).toContain(
           'QN: stored weigh-in 71.55 kg at 2026-10-13T17:59:38.000Z was already reported (#463)',
@@ -4265,7 +4275,10 @@ describe('QN stored record and impedance (#461)', () => {
 
         const restarted = keyed();
         restarted.restoreDedupMark(845229578);
-        const after = await session(restarted, [INFO_463, RECORD_463], '2026-10-13T18:20:00Z');
+        const after = await session(restarted, [...HANDSHAKE, RECORD_463], '2026-10-13T18:20:00Z');
+        expect(after.lines).toContain(
+          'QN: stored weigh-in 71.55 kg at 2026-10-13T17:59:38.000Z was already reported (#463)',
+        );
         expect(after.readings).toEqual([]);
       });
 
@@ -4280,6 +4293,57 @@ describe('QN stored record and impedance (#461)', () => {
         expect(lines).toContain(
           'QN: a stored weigh-in (71.65 kg at 2026-10-10T09:23:19.000Z) is not exported: the ' +
             'scale did not assign it to a user (#463)',
+        );
+      });
+
+      it('gives a record with no user the same reason without ble.qn_user_key', async () => {
+        // Not "without ble.qn_user_key": the option would not export it either.
+        const { lines } = await session(
+          makeAdapter(),
+          [INFO_461, RECORD_461],
+          '2026-10-10T09:30:00Z',
+        );
+        expect(lines).toContain(
+          'QN: a stored weigh-in (71.65 kg at 2026-10-10T09:23:19.000Z) is not exported: the ' +
+            'scale did not assign it to a user (#463)',
+        );
+        expect(lines.some((l) => l.includes('without ble.qn_user_key'))).toBe(false);
+      });
+
+      it('does not export a record of another user slot', async () => {
+        // RECORD_463 with its slot [5] set to 2 and the checksum [19]
+        // recomputed: no real record of slot 2 exists, the 0x22 mask asks for
+        // slot 1 and unassigned records only.
+        const slot2 = Buffer.from(RECORD_463);
+        slot2[5] = 2;
+        slot2[19] = [...slot2.subarray(0, 19)].reduce((a, b) => a + b, 0) & 0xff;
+        const { readings, lines } = await session(
+          keyed(),
+          [...HANDSHAKE, slot2],
+          '2026-10-13T18:09:00Z',
+        );
+        expect(readings).toEqual([]);
+        expect(lines).toContain(
+          'QN: a stored weigh-in (71.55 kg at 2026-10-13T17:59:38.000Z) is not exported: the ' +
+            'scale assigned it to its user slot 2, and ble-scale-sync sends the profile of ' +
+            'slot 1 (#463)',
+        );
+      });
+
+      it('does not export it when the scale refused the profile in this session', async () => {
+        // Refused, `a1 06 02 01 00 aa`, from the #461 log, in place of the
+        // accepted answer of the #463 session.
+        const REFUSED = Buffer.from([0xa1, 0x06, 0x02, 0x01, 0x00, 0xaa]);
+        const { readings, lines } = await session(
+          keyed(),
+          [INFO_463, READY_461, CONFIG_REQ_461, REFUSED, 1000, RECORD_463],
+          '2026-10-13T18:09:00Z',
+        );
+        expect(readings).toEqual([]);
+        expect(lines).toContain(
+          'QN: a stored weigh-in (71.55 kg at 2026-10-13T17:59:38.000Z) is not exported: the ' +
+            'scale did not accept the profile for user slot 1 in this session, so it is not ' +
+            'known whose it is (#463)',
         );
       });
 
@@ -4308,7 +4372,7 @@ describe('QN stored record and impedance (#461)', () => {
         expect(first.readings).toHaveLength(1);
         const { readings, lines } = await session(
           adapter,
-          [INFO_463, RECORD_463],
+          [...HANDSHAKE, RECORD_463],
           '2026-10-13T18:09:00Z',
         );
         expect(readings).toEqual([]);
@@ -4323,7 +4387,7 @@ describe('QN stored record and impedance (#461)', () => {
         expect(first.readings).toEqual([{ weight: 71.55, impedance: 497 }]);
         const { readings, lines } = await session(
           adapter,
-          [INFO_463, RECORD_463],
+          [...HANDSHAKE, RECORD_463],
           '2026-10-13T18:09:00Z',
         );
         expect(readings).toEqual([]);
@@ -4333,7 +4397,7 @@ describe('QN stored record and impedance (#461)', () => {
       it('does not read a record from more than a year ago', async () => {
         const { readings, lines } = await session(
           keyed(),
-          [INFO_463, RECORD_463],
+          [...HANDSHAKE, RECORD_463],
           '2027-10-14T00:00:00Z',
         );
         expect(readings).toEqual([]);
@@ -4372,7 +4436,12 @@ describe('QN stored record and impedance (#461)', () => {
         lowR.writeUInt16BE(150, 12);
         lowR.writeUInt16BE(150, 14);
         const adapter = keyed();
-        const { readings } = await session(adapter, [INFO_463, lowR], '2026-10-13T18:09:00Z', null);
+        const { readings } = await session(
+          adapter,
+          [...HANDSHAKE, lowR],
+          '2026-10-13T18:09:00Z',
+          null,
+        );
         expect(readings).toEqual([{ ...STORED, impedance: 150 }]);
         expect(adapter.isComplete(readings[0])).toBe(true);
         // A live reading with the same impedance still does not complete.
