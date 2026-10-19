@@ -266,6 +266,31 @@ describe('add-on option pairing_retry_max_min (#471)', () => {
   });
 });
 
+describe('add-on option no_reading_rescan_delay (#475)', () => {
+  const SCHEMA = (
+    parse(lf(readFileSync('ble-scale-sync-addon/config.yaml', 'utf8'))) as {
+      schema: Record<string, unknown>;
+    }
+  ).schema;
+
+  it('is an add-on option, 0 by default, validated as int(0,3600)?', () => {
+    expect(MANIFEST.options).toHaveProperty('no_reading_rescan_delay', 0);
+    expect(SCHEMA).toHaveProperty('no_reading_rescan_delay', 'int(0,3600)?');
+    expect(TRANSLATIONS.configuration).toHaveProperty('no_reading_rescan_delay');
+  });
+
+  it('is read with opt_int and a default of 0 and written into the runtime block', () => {
+    expect(RUN_SH).toMatch(
+      /^ {2}NO_READING_RESCAN_DELAY=\$\(opt_int no_reading_rescan_delay 0\)$/m,
+    );
+    // Always written, like idle_rescan_delay: 0 is the app's own default, so
+    // the line changes nothing until somebody sets the option.
+    expect(RUN_SH).toMatch(
+      /^ {2}idle_rescan_delay: \$IDLE_RESCAN_DELAY\n {2}no_reading_rescan_delay: \$NO_READING_RESCAN_DELAY$/m,
+    );
+  });
+});
+
 // A text option like the other QN switches, so that unset stays unset (#331).
 describe('add-on option qn_result_ack', () => {
   it('is an add-on option, unset by default, validated as text', () => {

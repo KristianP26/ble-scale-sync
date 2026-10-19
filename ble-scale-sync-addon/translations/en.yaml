@@ -332,6 +332,15 @@ configuration:
       while the Bluetooth adapter was healthy (0 to 3600). Real failures keep
       their own backoff. Lower it if your scale advertises only briefly. Local
       transport only.
+  no_reading_rescan_delay:
+    name: Minimum wait after a session without a reading (seconds)
+    description: >-
+      Seconds to wait at least before scanning again after the scale connected
+      and answered but sent no reading (0 to 3600). 0 keeps the normal retry
+      backoff. For a scale that stays connectable and keeps its weigh-ins; a
+      weigh-in made during the wait arrives at the next connection, more than
+      5 minutes late only to Garmin and the other targets that can record a
+      past measurement. Local transport only.
   reset_bluetooth:
     name: Reset Bluetooth adapter on startup
     description: >-

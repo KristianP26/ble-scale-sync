@@ -73,6 +73,7 @@ describe('collectUnknownKeys', () => {
         continuous_mode: true,
         scan_cooldown: 30,
         idle_rescan_delay: 5,
+        no_reading_rescan_delay: 0,
         retry_failed_exports: true,
         dry_run: false,
         debug: false,

@@ -477,6 +477,8 @@ else
   SCAN_COOLDOWN=$(opt_int scan_cooldown 30)
   # jq's // falls back only on null/false, so an explicit 0 survives.
   IDLE_RESCAN_DELAY=$(opt_int idle_rescan_delay 5)
+  # 0 keeps the retry backoff after a session without a reading (#475).
+  NO_READING_RESCAN_DELAY=$(opt_int no_reading_rescan_delay 0)
   # Always exactly true or false, so it is safe to interpolate unquoted.
   RETRY_FAILED_EXPORTS=$(opt_bool_default_true retry_failed_exports)
   DEBUG=$(opt_bool debug)
@@ -843,6 +845,7 @@ runtime:
   continuous_mode: true
   scan_cooldown: $SCAN_COOLDOWN
   idle_rescan_delay: $IDLE_RESCAN_DELAY
+  no_reading_rescan_delay: $NO_READING_RESCAN_DELAY
   retry_failed_exports: $RETRY_FAILED_EXPORTS
   dry_run: false
   debug: $DEBUG

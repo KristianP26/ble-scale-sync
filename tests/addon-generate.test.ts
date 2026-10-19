@@ -249,6 +249,7 @@ describe.skipIf(!HARNESS)(
           continuous_mode: true
           scan_cooldown: 30
           idle_rescan_delay: 5
+          no_reading_rescan_delay: 0
           retry_failed_exports: true
           dry_run: false
           debug: false
@@ -303,6 +304,7 @@ describe.skipIf(!HARNESS)(
           continuous_mode: true
           scan_cooldown: 30
           idle_rescan_delay: 5
+          no_reading_rescan_delay: 0
           retry_failed_exports: true
           dry_run: false
           debug: false
@@ -368,6 +370,7 @@ describe.skipIf(!HARNESS)(
           continuous_mode: true
           scan_cooldown: 30
           idle_rescan_delay: 5
+          no_reading_rescan_delay: 0
           retry_failed_exports: true
           dry_run: false
           debug: false
@@ -453,6 +456,7 @@ describe.skipIf(!HARNESS)(
           continuous_mode: true
           scan_cooldown: 30
           idle_rescan_delay: 5
+          no_reading_rescan_delay: 0
           retry_failed_exports: true
           dry_run: false
           debug: false
@@ -496,6 +500,12 @@ describe.skipIf(!HARNESS)(
         });
         const config = expectLoads(r);
         expect(config.global_exporters?.[0]).toMatchObject({ password: 'g\\w${y}' });
+      });
+
+      it('no_reading_rescan_delay as entered (#475)', () => {
+        const r = generate({ options: { ...DEFAULTS, no_reading_rescan_delay: 900 } });
+        const config = expectLoads(r);
+        expect(config.runtime?.no_reading_rescan_delay).toBe(900);
       });
     });
 

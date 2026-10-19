@@ -41,7 +41,7 @@ With any transport but `local`:
 - The options that only steer this host's adapter (**Bluetooth adapter**, **Re-pair a scale that forgot its pairing**, **Power-cycle the adapter after every weigh-in**, **Pair with a host identity key**, **Longest wait before asking to pair again**) are ignored, and the log names any you have set. The adapter reset on startup is skipped as well.
 - **Scale MAC address** still applies, and is worth setting.
 - **Proxy silence before restart** (`proxy_liveness_timeout_min`) applies.
-- **Scan cooldown** and **Rescan delay when no scale was found** are not used: the add-on listens all the time.
+- **Scan cooldown**, **Rescan delay when no scale was found** and **Minimum wait after a session without a reading** are not used: the add-on listens all the time.
 
 A transport that cannot run with the options you gave stops the add-on with an `ERROR` line that names the option to fix (see [Troubleshooting](#add-on-stops-with-an-error-about-ble_transport)). It never falls back to this host's adapter: you chose not to use it, and with `ha-bluetooth` it is the adapter Home Assistant itself reads from.
 
@@ -277,6 +277,14 @@ It asks at once when the scale wakes up again after a scan without it, when it a
 - Check that the Bluetooth adapter is working: enable debug logging and look for "Discovery started" in the logs
 - If you have multiple Bluetooth adapters, try setting a specific adapter (e.g., `hci1`)
 - If your scale advertises only for a few seconds after you step on it, lower **Rescan delay when no scale was found** (`idle_rescan_delay`); the add-on rescans that many seconds after an idle cycle
+
+### Beurer BF915 shows PAIR again and again
+
+A BF915 can accept a connection all the time, also with its display dark. With the local transport every scan then connects, and the scale shows `PAIR` for about two minutes when nobody steps on, logged as `Scale connected but sent no reading`, 10 to 15 times an hour.
+
+If your scale keeps a weigh-in made in the meantime and hands it over at the next connection, as the BF915 in [#475](https://github.com/KristianP26/ble-scale-sync/issues/475) does, set **Minimum wait after a session without a reading** (`no_reading_rescan_delay`), for example to 900. With debug logging on, check that these sessions log `Scale answered but sent no reading`; only those wait longer.
+
+A weigh-in that arrives more than 5 minutes after it was taken is a past measurement: Garmin and the other targets that can record one get it, MQTT and the Home Assistant sensors do not. If those matter, keep the value at about 240 or below.
 
 ### MQTT not connecting
 
