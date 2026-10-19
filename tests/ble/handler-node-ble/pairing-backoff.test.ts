@@ -127,6 +127,15 @@ describe('PairingBackoff (#471, D063)', () => {
     expect(b.observeHint(MAC, true)).toBe(true);
   });
 
+  it('does not open on a 01 first seen after a failure recorded without a hint', () => {
+    // A snapshot without 0x181D (#418: 1 of 12) says nothing; only a payload
+    // seen empty later makes the next 01 a new weigh-in.
+    b.recordFailure(MAC, 'X', undefined);
+    expect(b.observeHint(MAC, true)).toBe(false);
+    expect(b.observeHint(MAC, false)).toBe(false);
+    expect(b.observeHint(MAC, true)).toBe(true);
+  });
+
   it('keeps the hint the failure was recorded with', () => {
     b.recordFailure(MAC, 'X', true);
     b.recordFailure(MAC, 'X', false);

@@ -1377,7 +1377,13 @@ describe('scanAndReadRaw after a pairing nobody confirmed (#471, D063)', () => {
   });
 
   /** Start a cycle; `settled()` and `result()` follow it without ever throwing. */
-  function start(extra: { targetMac?: string | null; abortSignal?: AbortSignal } = {}) {
+  function start(
+    extra: {
+      targetMac?: string | null;
+      abortSignal?: AbortSignal;
+      pairingRetryMaxMin?: number;
+    } = {},
+  ) {
     let done = false;
     let result: unknown;
     const targetMac = extra.targetMac === null ? undefined : (extra.targetMac ?? MAC);
@@ -1386,6 +1392,9 @@ describe('scanAndReadRaw after a pairing nobody confirmed (#471, D063)', () => {
       adapters: [cycleAdapter()],
       profile: defaultProfile(),
       ...(extra.abortSignal ? { abortSignal: extra.abortSignal } : {}),
+      ...(extra.pairingRetryMaxMin !== undefined
+        ? { pairingRetryMaxMin: extra.pairingRetryMaxMin }
+        : {}),
     }).then(
       (r) => {
         result = r;
@@ -1400,7 +1409,7 @@ describe('scanAndReadRaw after a pairing nobody confirmed (#471, D063)', () => {
   }
 
   /** One whole cycle, held ones included (they listen for the discovery budget). */
-  async function cycle(extra: { targetMac?: string | null } = {}): Promise<unknown> {
+  async function cycle(extra: Parameters<typeof start>[0] = {}): Promise<unknown> {
     const c = start(extra);
     for (let i = 0; i < 1_000 && !c.settled(); i++) await vi.advanceTimersByTimeAsync(250);
     expect(c.settled()).toBe(true);
@@ -1408,7 +1417,7 @@ describe('scanAndReadRaw after a pairing nobody confirmed (#471, D063)', () => {
   }
 
   /** A cycle that connected, saw a pairing prompt, and got no reading. */
-  async function unconfirmedCycle(extra: { targetMac?: string | null } = {}): Promise<void> {
+  async function unconfirmedCycle(extra: Parameters<typeof start>[0] = {}): Promise<void> {
     promptOnConnect();
     const result = await cycle(extra);
     expect(result).toBeInstanceOf(Error);
@@ -1441,6 +1450,8 @@ describe('scanAndReadRaw after a pairing nobody confirmed (#471, D063)', () => {
 
   it('a holding cycle makes no Disconnect call', async () => {
     await unconfirmedCycle();
+    // The first cycle's teardown released it already; only the holding one counts.
+    helper.removeListeners.mockClear();
     await cycle();
     expect(calls).not.toContain('device.disconnect');
     expect(calls).not.toContain('connectWithRecovery');
@@ -1622,6 +1633,59 @@ describe('scanAndReadRaw after a pairing nobody confirmed (#471, D063)', () => {
     const second = await cycle({ targetMac: null });
     expect(calls).not.toContain('connectWithRecovery');
     expect(second).toBeInstanceOf(PairingDeferredError);
+  });
+
+  it('a cycle that only listened does not count as another unconfirmed pairing', async () => {
+    await unconfirmedCycle();
+    expect(pairingBackoff().failures(MAC)).toBe(1);
+    expect(await cycle()).toBeInstanceOf(PairingDeferredError);
+    expect(pairingBackoff().failures(MAC)).toBe(1);
+  });
+
+  it('holds the next cycle while the weigh-in that opened a failed attempt still waits', async () => {
+    cycleAdapter = bondingWithHint;
+    snapshotServiceData = [{ uuid: SVC_181D, data: NOTHING_WAITING }];
+    await unconfirmedCycle();
+    promptOnConnect();
+    const second = start();
+    await vi.advanceTimersByTimeAsync(30_000);
+    helper.emit('PropertiesChanged', {
+      ServiceData: {
+        signature: 'a{sv}',
+        value: { [SVC_181D]: { signature: 'ay', value: READING_WAITING } },
+      },
+    });
+    for (let i = 0; i < 1_000 && !second.settled(); i++) await vi.advanceTimersByTimeAsync(250);
+    expect(calls).toContain('connectWithRecovery');
+    expect(second.result()).toBeInstanceOf(Error);
+    onConnect = undefined;
+    calls.length = 0;
+    // Nobody fetched it, so the flag is still up in the next snapshot.
+    snapshotServiceData = [{ uuid: SVC_181D, data: READING_WAITING }];
+    const third = await cycle();
+    expect(calls).not.toContain('connectWithRecovery');
+    expect(third).toBeInstanceOf(PairingDeferredError);
+  });
+
+  it('with ble.pairing_retry_max_min 0 the next cycle connects as before', async () => {
+    await unconfirmedCycle({ pairingRetryMaxMin: 0 });
+    // Nothing written, so no "not connecting to it again" line either, and
+    // raising the cap later starts from a clean slate.
+    expect(pairingBackoff().has(MAC)).toBe(false);
+    const second = start({ pairingRetryMaxMin: 0 });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls).toContain('connectWithRecovery');
+    for (let i = 0; i < 1_000 && !second.settled(); i++) await vi.advanceTimersByTimeAsync(250);
+  });
+
+  it('applies a lower ble.pairing_retry_max_min to the running wait', async () => {
+    seed(8);
+    const second = start({ pairingRetryMaxMin: 1 });
+    await vi.advanceTimersByTimeAsync(61_000);
+    helper.emit('PropertiesChanged', { RSSI: { value: -70 } });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(calls).toContain('connectWithRecovery');
+    for (let i = 0; i < 1_000 && !second.settled(); i++) await vi.advanceTimersByTimeAsync(250);
   });
 
   it('an abort during the wait does not connect', async () => {
