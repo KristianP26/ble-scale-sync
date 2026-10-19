@@ -439,11 +439,12 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
    * Follow the connect retry loop onto the adapter and device it uses now. A
    * re-discovery in there can replace the D-Bus connection, and the teardown's
    * Disconnect, StopDiscovery and RemoveDevice through the proxies of the old
-   * one would never be answered (#472).
+   * one would never reach BlueZ: connection.ts fails them once that bus is
+   * gone (#472). probeAdapter is left alone on purpose. The connect runs only
+   * after gattAttempted is set, and classifyBleFailure never probes then.
    */
   const followConnect = (live: { btAdapter: Adapter; device: Device }): void => {
     btAdapter = live.btAdapter;
-    probeAdapter = live.btAdapter;
     device = live.device;
   };
 
