@@ -257,6 +257,53 @@ describe('ReadingWatcher GATT session timeout with stored records (#331)', () =>
       vi.useRealTimers();
     }
   });
+
+  it('does not let the stored record drop a live weigh-in of nearly the same weight right after it', async () => {
+    // The person stepped off before the final frame, so the session handed
+    // over only the stored record, and stepped on again within the 30 s dedup
+    // window. 76.55 and 76.52 both round to 76.5; keyed on weight alone the
+    // live weigh-in was a "Dedup skip" and reached no exporter at all.
+    vi.useFakeTimers();
+    connectGattSpy.mockClear();
+    try {
+      vi.setSystemTime(new Date('2026-10-07T20:30:00Z'));
+      const stored: ScaleReading = {
+        weight: 76.55,
+        impedance: 0,
+        timestamp: new Date('2026-10-07T19:57:25Z'),
+      };
+      const adapter = {
+        ...gattAdapter(),
+        parseNotification: (): ScaleReading =>
+          connectGattSpy.mock.calls.length > 1 ? { weight: 76.52, impedance: 0 } : { ...stored },
+      } as ScaleAdapter;
+      const watcher = new ReadingWatcher(config, [adapter]);
+      await watcher.start();
+      const pool = (
+        watcher as unknown as {
+          pool: { emitAdvert: (info: BleDeviceInfo, mac: string) => void };
+        }
+      ).pool;
+      const mac = 'AA:BB:CC:DD:EE:06';
+      pool.emitAdvert({ localName: 'GATT-scale', serviceUuids: [] }, mac);
+      const first = watcher.nextReading();
+      await vi.advanceTimersByTimeAsync(65_000);
+      expect((await Promise.race([first, Promise.resolve(null)]))?.reading).toEqual(stored);
+
+      // Ten seconds later, well inside the dedup window.
+      await vi.advanceTimersByTimeAsync(10_000);
+      pool.emitAdvert({ localName: 'GATT-scale', serviceUuids: [] }, mac);
+      const second = watcher.nextReading();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(connectGattSpy).toHaveBeenCalledTimes(2);
+      const live = await Promise.race([second, Promise.resolve(null)]);
+      expect(live?.reading).toEqual({ weight: 76.52, impedance: 0 });
+
+      await watcher.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('ReadingWatcher GATT failure logging (B-13)', () => {

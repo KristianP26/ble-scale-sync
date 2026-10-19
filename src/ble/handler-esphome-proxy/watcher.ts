@@ -6,6 +6,7 @@ import type {
 } from '../../interfaces/scale-adapter.js';
 import type { EsphomeProxyConfig, WeightUnit } from '../../config/schema.js';
 import { type RawReading, waitForRawReading, withAbandonmentCleanup } from '../shared.js';
+import { isHistoricalReading } from '../../interfaces/reading-time.js';
 import { resolveAdapter, resolveAfterDiscovery } from '../../scales/resolve.js';
 import {
   evaluateAdvertisement,
@@ -45,6 +46,23 @@ const GATT_SESSION_ABSOLUTE_MS = 90_000;
 // Cap for the "already warned about this scale's GATT failure" tracker. Old
 // entries are evicted LRU-style so dedup persists long-term in continuous mode.
 const GATT_WARN_LRU_MAX = 256;
+
+/**
+ * The dedup key part for a GATT session that handed over only stored records:
+ * the newest record's own time. Its `reading` is then that record (shared.ts
+ * promotes it), and keyed on weight alone it would hold the 0.1 kg bucket for
+ * DEDUP_WINDOW_MS, so a live weigh-in of nearly the same weight right after it
+ * (a person who stepped off before the final frame and on again) was dropped
+ * whole, MQTT included. Whether a stored record is a replay is the processor's
+ * call (D064), not this window's. Undefined for a live reading.
+ */
+function storedRecordTime(raw: RawReading): string | undefined {
+  const r = raw.reading;
+  if (!isHistoricalReading(r)) return undefined;
+  const ts = r.timestamp;
+  // fromMemory need not carry a readable stamp (D065).
+  return ts && !Number.isNaN(ts.getTime()) ? ts.toISOString() : 'stored';
+}
 
 // ─── ReadingWatcher (continuous mode) ────────────────────────────────────────
 
@@ -232,8 +250,13 @@ export class ReadingWatcher implements Watcher {
     }
   }
 
-  private pushDeduped(address: string, raw: RawReading, weight: number): boolean {
-    return emitDeduped(this.dedup, this.queue, address, raw, weight);
+  private pushDeduped(
+    address: string,
+    raw: RawReading,
+    weight: number,
+    recordTime?: string,
+  ): boolean {
+    return emitDeduped(this.dedup, this.queue, address, raw, weight, recordTime);
   }
 
   private readViaGatt(
@@ -315,7 +338,7 @@ export class ReadingWatcher implements Watcher {
         // post-reading window news, so it warns.
         this.gattWarnedFor.delete(address);
         this.postReading.noteReading(addrLc);
-        this.pushDeduped(address, raw, raw.reading.weight);
+        this.pushDeduped(address, raw, raw.reading.weight, storedRecordTime(raw));
       } catch (e) {
         if (sinceReading !== undefined) {
           // Opened while the scale was still on after its last reading, and nobody

@@ -221,6 +221,11 @@ export function armScanDeadline(ms: number, grace: GraceTimers, expire: () => vo
 
 // ─── Dedup window (per address+weight) ─────────────────────────────────────────
 
+function dedupKey(address: string, weight: number, recordTime?: string): string {
+  const key = `${address}:${weight.toFixed(1)}`;
+  return recordTime === undefined ? key : `${key}@${recordTime}`;
+}
+
 /**
  * Owns the `dedup` Map + prune logic duplicated in the mqtt-proxy and
  * esphome-proxy watchers (#242). Suppresses a repeated reading of the same
@@ -243,9 +248,13 @@ export class DedupWindow {
    * Return true if this (address, weight) has not been emitted within the
    * window, recording it as emitted. Return false (suppress) otherwise. Old
    * entries are pruned on every call so the map cannot grow without bound.
+   *
+   * `recordTime` keys a stored record by its own time as well, so it is a
+   * duplicate only of the same record handed over again, never of a live
+   * weigh-in that happens to round to the same 0.1 kg.
    */
-  shouldEmit(address: string, weight: number): boolean {
-    const key = `${address}:${weight.toFixed(1)}`;
+  shouldEmit(address: string, weight: number, recordTime?: string): boolean {
+    const key = dedupKey(address, weight, recordTime);
     const now = this.now();
     this.prune(now);
     const lastSeen = this.seen.get(key);
@@ -420,9 +429,10 @@ export function emitDeduped(
   address: string,
   raw: RawReading,
   weight: number,
+  recordTime?: string,
 ): boolean {
-  if (!dedup.shouldEmit(address, weight)) {
-    bleLog.debug(`Dedup skip: ${address}:${weight.toFixed(1)}`);
+  if (!dedup.shouldEmit(address, weight, recordTime)) {
+    bleLog.debug(`Dedup skip: ${dedupKey(address, weight, recordTime)}`);
     return false;
   }
   bleLog.info(`Matched: ${raw.adapter.name} (${address})`);
