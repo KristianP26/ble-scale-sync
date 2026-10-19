@@ -90,10 +90,13 @@ export interface ConnectRecoveryContext {
   /**
    * Told about every adapter and device the retry loop moves to. A
    * startDiscoverySafe in here can replace the D-Bus connection, and the
-   * caller's teardown has to reach BlueZ through the live one: proxies on the
-   * old bus are never answered (#472). Once a device has been handed over this
+   * caller's teardown has to reach BlueZ through the live one: a call through
+   * a proxy on the old bus fails as soon as that bus is gone (connection.ts)
+   * and never gets to BlueZ (#472). Once a device has been handed over this
    * way it is the caller's, on a throw too, and this function releases only
-   * the ones it replaces. Without it the caller keeps what it passed in.
+   * the ones it replaces. Without it the caller still holds what it passed in
+   * on the old adapter, and that device is released here anyway once the loop
+   * swaps it, so every caller that tears down a session passes this.
    */
   onLive?: (live: { btAdapter: Adapter; device: Device }) => void;
 }
