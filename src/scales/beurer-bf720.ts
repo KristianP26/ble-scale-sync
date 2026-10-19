@@ -15,7 +15,7 @@ import {
   type ScaleBodyComp,
   ReadingComposition,
 } from './body-comp-helpers.js';
-import { bleLog, LBS_TO_KG } from '../ble/types.js';
+import { bleLog, LBS_TO_KG, normalizeUuid } from '../ble/types.js';
 import { parseSigDateTime, parseSigWeightMeasurement, trustedScaleTime } from './sig-wss.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
@@ -331,6 +331,26 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
       (device.serviceUuids ?? []).some(isSig) ||
       (device.serviceData ?? []).some((sd) => isSig(sd.uuid))
     );
+  }
+
+  /**
+   * The Weight Scale (0x181D) service data in the advertisement: `01` while a
+   * weigh-in waits on the scale for its collector, an empty payload while none
+   * does (#418, a BF915: 11 of 12 observations, `01` held for 17 minutes until
+   * the weigh-in was fetched, also while the scale held no bond for the host).
+   * Anything else, `00` included, never occurred and says nothing.
+   *
+   * Read only to try a held-back pairing at once when somebody weighs in
+   * (#471, D063). One unit is the whole evidence, so nothing else depends on it.
+   */
+  advertisesPendingReading(device: BleDeviceInfo): boolean | undefined {
+    const entry = (device.serviceData ?? []).find(
+      (sd) => normalizeUuid(sd.uuid) === SVC_WEIGHT_SCALE,
+    );
+    if (!entry) return undefined;
+    if (entry.data.length === 0) return false;
+    if (entry.data.length === 1 && entry.data[0] === 0x01) return true;
+    return undefined;
   }
 
   /**

@@ -154,11 +154,13 @@ vi.mock('../../../src/ble/handler-node-ble/discovery.js', () => ({
 
 /** The company id every advertisement snapshot carries; a test replaces it (D060). */
 let snapshotCompanyId = 0x0611;
+/** The service data every advertisement snapshot carries; a test replaces it (#471). */
+let snapshotServiceData: Array<{ uuid: string; data: Buffer }> = [];
 
 vi.mock('../../../src/ble/handler-node-ble/device-object.js', () => ({
   logAdvertisementSnapshot: record('logAdvertisementSnapshot', async () => ({
     manufacturerData: { id: snapshotCompanyId, data: Buffer.alloc(0) },
-    serviceData: [],
+    serviceData: snapshotServiceData,
   })),
   isDeviceObjectGone: () => false,
 }));
@@ -286,6 +288,7 @@ const { _resetAdapterPrivacyStateForTests } =
 const { _resetDeviceCacheForTests } =
   await import('../../../src/ble/handler-node-ble/device-cache.js');
 const { applyForcedAdapter } = await import('../../../src/scales/force.js');
+const { BeurerBf720Adapter } = await import('../../../src/scales/beurer-bf720.js');
 
 describe('scanAndReadRaw call order (#368)', () => {
   beforeEach(() => {
@@ -1322,6 +1325,8 @@ describe('scanAndReadRaw after a pairing nobody confirmed (#471, D063)', () => {
   let helper: EventEmitter & { removeListeners: ReturnType<typeof vi.fn> };
 
   const bonding = (): ScaleAdapter => makeAdapter({ requiresBonding: true });
+  /** The adapter list a cycle in this block gets. */
+  let cycleAdapter: () => ScaleAdapter = bonding;
   /** The scale asks for the pairing to be confirmed while we connect. */
   const promptOnConnect = (): void => {
     onConnect = () => prompts.set(promptKey(MAC), (prompts.get(promptKey(MAC)) ?? 0) + 1);
@@ -1338,6 +1343,7 @@ describe('scanAndReadRaw after a pairing nobody confirmed (#471, D063)', () => {
     _resetPairingBackoffForTests(() => Date.now());
     prompts.clear();
     onConnect = undefined;
+    cycleAdapter = bonding;
     paired = false;
     gattTimesOut = true;
     // The scan heard the room, so a cycle that never connects is idle.
@@ -1365,6 +1371,7 @@ describe('scanAndReadRaw after a pairing nobody confirmed (#471, D063)', () => {
     autoDiscoverFinds = true;
     autoDiscoverAdapter = undefined;
     watchdogHeardAgoMs = undefined;
+    snapshotServiceData = [];
     prompts.clear();
     vi.useRealTimers();
   });
@@ -1376,7 +1383,7 @@ describe('scanAndReadRaw after a pairing nobody confirmed (#471, D063)', () => {
     const targetMac = extra.targetMac === null ? undefined : (extra.targetMac ?? MAC);
     void scanAndReadRaw({
       targetMac,
-      adapters: [bonding()],
+      adapters: [cycleAdapter()],
       profile: defaultProfile(),
       ...(extra.abortSignal ? { abortSignal: extra.abortSignal } : {}),
     }).then(
@@ -1563,6 +1570,58 @@ describe('scanAndReadRaw after a pairing nobody confirmed (#471, D063)', () => {
     const result = await cycle();
     expect((result as { reading?: unknown }).reading).toBeDefined();
     expect(pairingBackoff().has(MAC)).toBe(false);
+  });
+
+  // The two 0x181D payloads #418 logged on a BF915, verbatim: `01` while a
+  // weigh-in waits on the scale, an empty payload while none does.
+  const SVC_181D = '0000181d-0000-1000-8000-00805f9b34fb';
+  const NOTHING_WAITING = Buffer.alloc(0);
+  const READING_WAITING = Buffer.from([0x01]);
+  /** A bonding adapter with the BF720 hook, so the hint comes from the real code. */
+  const bf720 = new BeurerBf720Adapter();
+  const bondingWithHint = (): ScaleAdapter =>
+    makeAdapter({
+      requiresBonding: true,
+      advertisesPendingReading: (d) => bf720.advertisesPendingReading(d),
+    });
+
+  it('pairs at once when 0x181D goes from empty to 01', async () => {
+    cycleAdapter = bondingWithHint;
+    snapshotServiceData = [{ uuid: SVC_181D, data: NOTHING_WAITING }];
+    await unconfirmedCycle();
+    const second = start();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(calls).not.toContain('connectWithRecovery');
+    helper.emit('PropertiesChanged', {
+      ServiceData: {
+        signature: 'a{sv}',
+        value: { [SVC_181D]: { signature: 'ay', value: READING_WAITING } },
+      },
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls).toContain('connectWithRecovery');
+    for (let i = 0; i < 1_000 && !second.settled(); i++) await vi.advanceTimersByTimeAsync(250);
+  });
+
+  it('opens on the hint the attempt cycle saw', async () => {
+    autoDiscoverAdapter = bondingWithHint;
+    snapshotServiceData = [{ uuid: SVC_181D, data: NOTHING_WAITING }];
+    await unconfirmedCycle({ targetMac: null });
+    // Somebody weighed in between the two cycles.
+    snapshotServiceData = [{ uuid: SVC_181D, data: READING_WAITING }];
+    const second = start({ targetMac: null });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls).toContain('connectWithRecovery');
+    for (let i = 0; i < 1_000 && !second.settled(); i++) await vi.advanceTimersByTimeAsync(250);
+  });
+
+  it('does not open on a 01 that was already up when the pairing failed', async () => {
+    autoDiscoverAdapter = bondingWithHint;
+    snapshotServiceData = [{ uuid: SVC_181D, data: READING_WAITING }];
+    await unconfirmedCycle({ targetMac: null });
+    const second = await cycle({ targetMac: null });
+    expect(calls).not.toContain('connectWithRecovery');
+    expect(second).toBeInstanceOf(PairingDeferredError);
   });
 
   it('an abort during the wait does not connect', async () => {
