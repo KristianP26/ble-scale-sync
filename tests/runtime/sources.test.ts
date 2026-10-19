@@ -534,6 +534,14 @@ describe('src/run.ts wiring (#475)', () => {
     expect(RUN_TS).toMatch(/runContinuousLoop\(\{\s*\.\.\.sourceHooks,/);
   });
 
+  // Without the flag a single-shot run would announce and record a pairing
+  // wait that ends with the process, so nothing ever honours it (#471, D063).
+  it('tells the single-shot source it is one, so it keeps no pairing wait', () => {
+    expect(RUN_TS).toMatch(
+      /runSingleShot\(\{\s*source: new PollReadingSource\(ctx, adapters, \{ singleShot: true \}\),/,
+    );
+  });
+
   it('warns about runtime.no_reading_rescan_delay outside continuous mode or off node-ble', () => {
     expect(RUN_TS).toMatch(
       /\(ctx\.config\.runtime\?\.no_reading_rescan_delay \?\? 0\) > 0 &&\s*\(!initialResolved\.continuousMode \|\| resolveHandlerKey\(ctx\.bleHandler\) !== 'node-ble'\)/,
