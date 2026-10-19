@@ -30,10 +30,10 @@ import type { ScaleAdapter } from './interfaces/scale-adapter.js';
 import { createAppContext } from './runtime/context.js';
 import { processReading } from './runtime/processor.js';
 import { PollReadingSource } from './runtime/poll-source.js';
-import { runContinuousLoop } from './runtime/loop.js';
+import { runContinuousLoop, type RuntimeLoopDeps } from './runtime/loop.js';
 import { runSingleShot } from './runtime/single-run.js';
 import { reloadAppConfig, userDisplaySnapshot } from './runtime/reload.js';
-import { buildReadingSource } from './runtime/sources.js';
+import { buildReadingSource, type ReadingSourceBundle } from './runtime/sources.js';
 import { resolveHandlerKey } from './ble/index.js';
 import {
   buildSingleUserExporters,
@@ -473,6 +473,10 @@ async function main(): Promise<void> {
   // Every hook the source built goes to the loop as is. Listed one by one, a
   // new hook was dropped by forgetting a line here, which no test runs (#475).
   const { source, ...sourceHooks } = bundle;
+  // And every hook the source can build must be one the loop reads: a key
+  // only the bundle knows would pass through the spread and be ignored.
+  type HookOnlyTheSourceKnows = Exclude<keyof ReadingSourceBundle, keyof RuntimeLoopDeps>;
+  const _everyHookReachesLoop: [HookOnlyTheSourceKnows] extends [never] ? true : never = true;
   await runContinuousLoop({
     ...sourceHooks,
     source,

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 // Coverage for buildReadingSource() (#186, rewired in #246). Transport selection
 // now lives in createReadingSource (covered by tests/ble/reading-source.test.ts);
@@ -519,5 +520,23 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
 
     expect(process.exitCode).toBe(1);
     expect(ctx.abortApp).toHaveBeenCalledOnce();
+  });
+});
+
+// No test runs src/run.ts, so the wiring of the bundle into the loop is pinned
+// by its text, the way tests/addon-run-sh.test.ts pins run.sh. Listed one by
+// one, a new hook was dropped by forgetting a line there (#475).
+describe('src/run.ts wiring (#475)', () => {
+  const RUN_TS = readFileSync('src/run.ts', 'utf8').replace(/\r\n/g, '\n');
+
+  it('hands every hook of the source bundle to the loop', () => {
+    expect(RUN_TS).toMatch(/const \{ source, \.\.\.sourceHooks \} = bundle;/);
+    expect(RUN_TS).toMatch(/runContinuousLoop\(\{\s*\.\.\.sourceHooks,/);
+  });
+
+  it('warns about runtime.no_reading_rescan_delay outside continuous mode or off node-ble', () => {
+    expect(RUN_TS).toMatch(
+      /\(ctx\.config\.runtime\?\.no_reading_rescan_delay \?\? 0\) > 0 &&\s*\(!initialResolved\.continuousMode \|\| resolveHandlerKey\(ctx\.bleHandler\) !== 'node-ble'\)/,
+    );
   });
 });
