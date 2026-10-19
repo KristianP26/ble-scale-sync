@@ -491,7 +491,7 @@ Beurer scales pair with a code: the scale shows six digits and waits for you to 
 Now, when the app's pairing agent was asked to confirm a code for the scale and the scan ends with the scale still not paired, the app stops connecting to it for a while: 2 minutes, three times, then 4, 8, 16 and 32 minutes, and then `pairing_retry_max_min` (60 by default) each time. It keeps listening to the scale in between and asks at once when:
 
 - the scale comes back after a scan without it (a scale that sleeps between weigh-ins wakes up when you step on it);
-- the scale's advertisement shows a new weigh-in waiting on it (the Beurer BF720 family; a BF915 that never stops advertising is asked this way when somebody weighs in, and shows the code about a minute later, once the app has connected and looked up its services);
+- the scale's advertisement shows a new weigh-in waiting on it (the Beurer BF720 family; a BF915 that never stops advertising is asked this way when somebody weighs in, and shows the code about a minute later, once the app has connected and looked up its services; a weigh-in that was already waiting on the scale when the pairing failed does not count, and while it waits, a new one does not either);
 - the scale is paired by other means, for example with `bluetoothctl pair`;
 - ble-scale-sync restarts.
 
