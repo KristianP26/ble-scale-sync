@@ -4541,19 +4541,28 @@ describe('QN stored record and impedance (#461)', () => {
       });
 
       it('says nothing on the classic dialect', async () => {
-        // The classic 10-byte stable 0x10 of the C-06 tests (openScale layout,
-        // no classic capture exists), 83.2 kg / 500 Ohm after the #283 0x12.
-        const classicStable = Buffer.from([
-          0x10, 0x0a, 0x01, 0x03, 0x40, 0x01, 0x01, 0xf4, 0x01, 0xf4,
+        // The 17-byte 0x12 (classic dialect, factor 10) and the stable 11-byte
+        // 0x10 of one weigh-in, byte for byte from the owner's classic unit's
+        // DEBUG log of 2026-10-19 (84.15 kg / 510 Ohm there too; raw 8415 is
+        // out of band at the named factor 10, so resolveWeight takes /100).
+        // That log's ready and config-request frames are not in hand, so the
+        // #461 ones drive the handshake to our 0x22, which the line needs.
+        const INFO_CLASSIC = Buffer.from([
+          0x12, 0x11, 0xff, 0x04, 0xa1, 0x13, 0x00, 0x03, 0xff, 0x02, 0x03, 0x05, 0x00, 0x00, 0x05,
+          0x07, 0xf2,
+        ]);
+        const STABLE_CLASSIC = Buffer.from([
+          0x10, 0x0b, 0xff, 0x20, 0xdf, 0x01, 0x01, 0xfe, 0x01, 0xfc, 0x16,
         ]);
         const { readings, writes, lines } = await session(
           makeAdapter(),
-          [INFO_283, READY_461, CONFIG_REQ_461, 1000, classicStable],
+          [INFO_CLASSIC, READY_461, CONFIG_REQ_461, 1000, STABLE_CLASSIC],
           STARTED_463,
           null,
         );
+        expect(lines).toContain('QN: scale info (17B, dialect=classic), factor=10, proto=0xff');
         expect(writes.some((w) => w[0] === 0x22)).toBe(true);
-        expect(readings).toEqual([{ weight: 83.2, impedance: 500 }]);
+        expect(readings).toEqual([{ weight: 84.15, impedance: 510 }]);
         expect(lines).not.toContain(RACE);
       });
     });
