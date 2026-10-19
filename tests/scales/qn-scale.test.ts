@@ -4368,6 +4368,30 @@ describe('QN stored record and impedance (#461)', () => {
         );
       });
 
+      it("does not take a record stamped hours after its receipt as this session's weigh-in", async () => {
+        // The session time is chosen: 13:00Z, five hours before the record's
+        // stamp, as a scale whose clock a vendor app set with a UTC+8 base
+        // would show a 09:59Z weigh-in (R-6). Read as fresh it ended the
+        // session as a live 71.55 kg without a time, before the real weigh-in.
+        const adapter = keyed();
+        const { readings, lines } = await session(
+          adapter,
+          [INFO_463, RECORD_463],
+          '2026-10-13T13:00:00Z',
+        );
+        expect(readings).toEqual([]);
+        expect(lines).toContain(
+          'QN: stored weigh-in 71.55 kg at 2026-10-13T17:59:38.000Z, user slot 1, is stamped ' +
+            "17978 s ahead of this host's clock, so it is not the weigh-in of this session, not " +
+            'read (#463)',
+        );
+      });
+
+      it('still takes a record stamped up to a minute ahead as the weigh-in of this session', async () => {
+        const { readings } = await session(keyed(), [INFO_463, RECORD_463], '2026-10-13T17:58:38Z');
+        expect(readings).toEqual([{ weight: 71.55, impedance: 497 }]);
+      });
+
       it('without ble.qn_user_key only logs it, once per session', async () => {
         const { readings, lines } = await session(
           makeAdapter(),

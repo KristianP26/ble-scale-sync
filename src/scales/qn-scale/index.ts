@@ -1135,10 +1135,12 @@ export class QnScaleAdapter
     // with its own evidence. A session without any 0x12 reads the long layout,
     // which is what every real record we have uses.
     //
-    // A record from up to MAX_STORED_RECORD_AGE_SEC before the session is this
-    // session's weigh-in and ends it, without a time. An older one is the
-    // scale's memory: on the 18-byte dialect it can go out as history
-    // (eighteenByteStoredWeighIn, #463), elsewhere it is logged and not read.
+    // A record from up to MAX_STORED_RECORD_AGE_SEC before the session, and on
+    // the long dialects not stamped more than STORED_FUTURE_TOLERANCE_MS after
+    // its receipt, is this session's weigh-in and ends it, without a time. An
+    // older one is the scale's memory: on the 18-byte dialect it can go out as
+    // history (eighteenByteStoredWeighIn, #463), elsewhere it is logged and not
+    // read.
     if (opcode === 0x23) {
       // The 19-byte dialect sends 8-electrode records in their own layout and
       // never gets a re-query: the scale answers our one 0x22 once it is done
@@ -1162,6 +1164,22 @@ export class QnScaleAdapter
         this.sessionStartedScaleSeconds ?? Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
       if (weight <= 5 || weight >= 300) {
         this.logUnreadStoredRecord(data, record, sessionSeconds, 'out of range');
+        this.scheduleStoredDataRetry();
+        return null;
+      }
+      // A record stamped after it arrived was not measured in this session: the
+      // scale's clock is ahead (a vendor app that set it with a UTC+8 base,
+      // R-6), and taking it as this session's weigh-in would end the session
+      // on an old weight without a time, before the real one. The 19-byte
+      // dialect drops the same (parseEightStoredPart). The re-query stays.
+      const recordAtMs = (recordSeconds + SCALE_EPOCH_OFFSET) * 1000;
+      const aheadMs = recordAtMs - Date.now();
+      if (this.isLongFrameVariant && aheadMs > STORED_FUTURE_TOLERANCE_MS) {
+        bleLog.debug(
+          `QN: stored weigh-in ${weight} kg at ${new Date(recordAtMs).toISOString()}, user ` +
+            `slot ${data[5]}, is stamped ${Math.round(aheadMs / 1000)} s ahead of this host's ` +
+            'clock, so it is not the weigh-in of this session, not read (#463)',
+        );
         this.scheduleStoredDataRetry();
         return null;
       }
