@@ -18,7 +18,9 @@
  *                    frame proves the whole path the watchdog guards, D-Bus
  *                    signals into this process included, so do NOT count. The
  *                    cycle still takes the failure backoff: it was a real
- *                    connect to the scale. A session that heard nothing stays
+ *                    connect to the scale (at least
+ *                    runtime.no_reading_rescan_delay after an idle timeout,
+ *                    #475). A session that heard nothing stays
  *                    'wedge-suspect', since a deaf notification path is what
  *                    a restart fixes.
  *

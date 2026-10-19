@@ -244,6 +244,17 @@ async function main(): Promise<void> {
       'ble.adapter_privacy only applies to the built-in Linux BlueZ transport (node-ble); ignored.',
     );
   }
+  if (
+    (ctx.config.runtime?.no_reading_rescan_delay ?? 0) > 0 &&
+    (!initialResolved.continuousMode || resolveHandlerKey(ctx.bleHandler) !== 'node-ble')
+  ) {
+    // Only the node-ble poll loop tags a session that heard the scale (#475),
+    // and a single run has no next session to wait for.
+    log.warn(
+      'runtime.no_reading_rescan_delay only applies in continuous mode on the built-in Linux ' +
+        'BlueZ transport (node-ble); ignored.',
+    );
+  }
 
   if (ctx.bleHandler === 'mqtt-proxy' && ctx.mqttProxy) {
     const bootstrapped = await bootstrapMqttProxy(ctx.mqttProxy);
@@ -459,8 +470,12 @@ async function main(): Promise<void> {
     initialResolved.scanCooldownSec,
   );
 
+  // Every hook the source built goes to the loop as is. Listed one by one, a
+  // new hook was dropped by forgetting a line here, which no test runs (#475).
+  const { source, ...sourceHooks } = bundle;
   await runContinuousLoop({
-    source: bundle.source,
+    ...sourceHooks,
+    source,
     processReading: runProcessReading,
     signal: ctx.signal,
     touchHeartbeat,
@@ -469,13 +484,7 @@ async function main(): Promise<void> {
       needsReload = false;
     },
     onReload,
-    onSourceReload: bundle.onSourceReload,
-    onSuccess: bundle.onSuccess,
-    onFailure: bundle.onFailure,
     onCycleStart: flushQueuedExports,
-    failureDelayMs: bundle.failureDelayMs,
-    failureLogPrefix: bundle.failureLogPrefix,
-    failureLogPrefixFor: bundle.failureLogPrefixFor,
   });
 
   log.info('Stopped.');

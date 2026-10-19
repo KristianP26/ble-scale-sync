@@ -190,6 +190,19 @@ AA:BB:CC:DD:EE:FF asked for the pairing to be confirmed on the scale and it was 
 
 A weigh-in should also ask at once when the scale advertises it (seen on a BF915, untested on the other models of the family): weigh in and stay at the scale for about a minute, until the code shows. That needs the scale to have had no weigh-in waiting on it when the pairing failed; otherwise only the wait or a restart asks again. To pair at once without weighing in, restart ble-scale-sync and confirm on the scale when the code shows, about a minute later. `ble.pairing_retry_max_min: 0` brings back the old behavior. See [the configuration reference](/guide/configuration#config-yaml-reference).
 
+### Beurer BF915: PAIR on the display all day
+
+A BF915 can advertise and accept a connection all the time, also with its display dark. In continuous mode every cycle then connects, and the scale shows `PAIR` while the session is open, about two minutes when nobody steps on, logged as `Scale connected but sent no reading`. With the normal retry backoff that is 10 to 15 sessions an hour, all day ([#475](https://github.com/KristianP26/ble-scale-sync/issues/475)).
+
+The BF915 in #475 keeps a weigh-in made in the meantime and hands it over at the next connection, so a pause between such sessions mostly delays the upload:
+
+```yaml
+runtime:
+  no_reading_rescan_delay: 900
+```
+
+Check with `debug: true` that these sessions log `Scale answered but sent no reading`; only those wait longer. A weigh-in that arrives more than 5 minutes after it was taken is a past measurement: Garmin and the other exporters that can record one get it, MQTT, webhook, ntfy, Telegram and Strava do not. If those matter, keep the value at about 240 or below. A shorter `ble.session_timeout_sec` would also shorten each session's `PAIR`, untested on this model. See [the configuration reference](/guide/configuration#runtime).
+
 ## Exporter Issues
 
 ### Garmin upload fails
@@ -212,7 +225,7 @@ In continuous mode the wait between scans depends on how the previous cycle ende
 - **A reading arrived:** `runtime.scan_cooldown` (default 30 s), and at least 25 s on Linux/BlueZ regardless, so the app does not reconnect while the scale is still advertising.
 - **No scale found, radio healthy:** `runtime.idle_rescan_delay` (default 5 s). Linux/BlueZ only; the other transports cannot tell this case from a failure and use the backoff below.
 - **The cycle failed** (a GATT error, a wedged controller, an export that threw): 5 s, then 10, 20, 40 and 60 s for as long as failures continue, resetting on the next success.
-- **The scale connected but no reading came in time** (the reading session timed out after connecting): the same backoff as a failure. The scale was found, so the log says so instead of "No scale found".
+- **The scale connected but no reading came in time** (the reading session timed out after connecting): the same backoff as a failure. On Linux/BlueZ, when the scale answered in that session and then went quiet until it timed out, `runtime.no_reading_rescan_delay` (default `0`, off) sets a longer minimum. The scale was found, so the log says so instead of "No scale found".
 - **The scale was found but its pairing is held back** (nobody confirmed the last pairing on a Beurer scale, see `ble.pairing_retry_max_min`): the scan listens to the scale until its time is up instead of connecting, and then waits `runtime.idle_rescan_delay` like an idle scan. Linux/BlueZ only.
 
 So a gap of a minute between scans means failures, not a setting being ignored. The log line says which case it was:
@@ -221,6 +234,7 @@ So a gap of a minute between scans means failures, not a setting being ignored. 
 No scale found, rescanning in 5s... (Device not found)
 No scale found, retrying in 20s... (le-connection-abort-by-local)
 Scale connected but sent no reading, retrying in 60s... (Timed out waiting for a complete scale reading)
+Scale connected but sent no reading, retrying in 900s (runtime.no_reading_rescan_delay)... (Timed out waiting for a complete scale reading)
 Scale found, waiting to pair, rescanning in 5s... (AA:BB:CC:DD:EE:FF is not paired; next pairing attempt in 52 min, or sooner if it reappears or advertises a new weigh-in)
 ```
 
@@ -411,7 +425,7 @@ Two things to know before you do. The capability is on the `btmgmt` file, so **e
 
 The watchdog counts only cycles where the Bluetooth radio looks unhealthy: a connection or read failure, or a scan that saw no advertisement traffic at all (the zombie-discovery wedge). A normal idle cycle, where the radio still hears other nearby devices but your scale simply is not being stood on, does not count toward a restart. This is why a scale that only advertises while in use (such as Renpho) no longer triggers needless restarts overnight.
 
-A cycle that connected to the scale and then timed out without a reading counts only if the scale sent nothing at all in that session. Some scales, such as the Beurer BF915, stay connectable long after a weigh-in; if the scale answered, the Bluetooth path is evidently working and the cycle does not count, though it still waits the normal failure backoff before the next scan. This applies to Linux/BlueZ (`node-ble`); on the other native handlers every such timeout still counts.
+A cycle that connected to the scale and then timed out without a reading counts only if the scale sent nothing at all in that session. Some scales, such as the Beurer BF915, stay connectable long after a weigh-in; if the scale answered, the Bluetooth path is evidently working and the cycle does not count, though it still waits the normal failure backoff before the next scan (or `runtime.no_reading_rescan_delay`, when that is longer). This applies to Linux/BlueZ (`node-ble`); on the other native handlers every such timeout still counts.
 
 ::: warning The watchdog recovers by **exiting the process** - set a restart policy
 The recovery is the process _exiting_ so the supervisor starts it again. You **must** run with `restart: unless-stopped` (Compose) or `--restart unless-stopped` (`docker run`). Without a restart policy the container just stops.

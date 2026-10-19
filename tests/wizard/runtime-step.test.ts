@@ -27,6 +27,7 @@ const tuned: RuntimeConfig = {
   watchdog_max_consecutive_failures: 0,
   watch_config: false,
   idle_rescan_delay: 30,
+  no_reading_rescan_delay: 600,
   // Off on purpose (ADR D014: the queue persists body composition to disk).
   retry_failed_exports: false,
 };
@@ -75,6 +76,7 @@ describe('runtimeStep', () => {
       watchdog_max_consecutive_failures: 10,
       watch_config: true,
       idle_rescan_delay: 5,
+      no_reading_rescan_delay: 0,
       retry_failed_exports: true,
     });
   });

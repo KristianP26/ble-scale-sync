@@ -116,7 +116,8 @@ export const POLL_CYCLE_TIMEOUT_MS = 900_000;
  * GATT discovery, which on some controllers stalls the D-Bus call inside
  * node-ble synchronously. A 25 s floor sidesteps the dying-peer window
  * entirely. A cycle without a reading waits for the retry backoff (or
- * idle_rescan_delay) instead; this floor applies on success.
+ * idle_rescan_delay, or at least runtime.no_reading_rescan_delay after a
+ * session that heard the scale) instead; this floor applies on success.
  *
  * BlueZ-specific: only the `node-ble` handler hits the dying-peer GATT stall.
  * Proxy handlers (mqtt-proxy, esphome-proxy) and the noble-based stacks talk

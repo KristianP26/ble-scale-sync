@@ -12,6 +12,9 @@ const UNASKED_DEFAULTS = {
   // Not prompted: it only matters in continuous mode, the default is right
   // for every install, and one more question here buys nothing (#398).
   idle_rescan_delay: 5,
+  // Not prompted: only a scale that stays connectable without a weigh-in
+  // needs it, and 0 keeps the backoff every install has (#475).
+  no_reading_rescan_delay: 0,
   // Not prompted: the default is right for every install and one more
   // question buys nothing (#412).
   retry_failed_exports: true,

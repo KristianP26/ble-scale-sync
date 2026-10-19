@@ -83,6 +83,7 @@ function diffField(
  *
  * Notably hot-swappable (NOT in this list): scale_mac, weight_unit, height_unit, display_unit,
  * runtime.dry_run, runtime.debug, runtime.scan_cooldown, runtime.idle_rescan_delay,
+ * runtime.no_reading_rescan_delay (a wait already running is not shortened),
  * ble.session_timeout_sec, ble.auto_clear_stale_bond, ble.pairing_retry_max_min,
  * ble.preemptive_adapter_reset,
  * ble.bind_key, every ble.qn_*,

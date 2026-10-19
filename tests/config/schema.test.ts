@@ -985,6 +985,33 @@ describe('runtime.idle_rescan_delay (#398)', () => {
   });
 });
 
+describe('runtime.no_reading_rescan_delay (#475)', () => {
+  it('defaults to 0, which keeps the retry backoff as it was', () => {
+    const result = AppConfigSchema.safeParse({
+      ...VALID_CONFIG,
+      runtime: { continuous_mode: true },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.runtime?.no_reading_rescan_delay).toBe(0);
+  });
+
+  it.each([900, 3600])('keeps a configured %i', (value) => {
+    const result = AppConfigSchema.safeParse({
+      ...VALID_CONFIG,
+      runtime: { continuous_mode: true, no_reading_rescan_delay: value },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.runtime?.no_reading_rescan_delay).toBe(value);
+  });
+
+  it.each([-1, 1.5, 3601])('rejects %d', (value) => {
+    expect(
+      AppConfigSchema.safeParse({ ...VALID_CONFIG, runtime: { no_reading_rescan_delay: value } })
+        .success,
+    ).toBe(false);
+  });
+});
+
 describe('runtime.retry_failed_exports (#412)', () => {
   it('defaults to on', () => {
     const result = AppConfigSchema.safeParse({ ...VALID_CONFIG, runtime: {} });

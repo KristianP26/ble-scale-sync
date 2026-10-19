@@ -383,6 +383,97 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
     expect(bundle.failureDelayMs?.(idle)).toBe(5_000);
   });
 
+  // #475, D064: only a session that heard the scale and then went quiet until
+  // its idle timeout gets the floor. Everything else keeps the backoff as it
+  // was, including the #471 hold cycle and the #472 stale link.
+  it('poll plan: an idle no-reading timeout gets the configured floor; a cap, a silent session, a disconnect and the other kinds do not (#475)', async () => {
+    h.createReadingSource.mockResolvedValue({ kind: 'poll', appliesGraceFloor: false });
+    const ctx = makeCtx({
+      config: {
+        users: [{}],
+        scale: {},
+        runtime: { scan_cooldown: 5, idle_rescan_delay: 5, no_reading_rescan_delay: 900 },
+      } as never,
+    });
+    const bundle = await buildReadingSource(ctx, ADAPTERS, 7, 30);
+    const timedOut = (reason: 'idle' | 'cap') =>
+      new SessionTimeoutError(
+        reason === 'idle'
+          ? 'Timed out waiting for a complete scale reading'
+          : 'GATT session cap exceeded',
+        reason,
+      );
+
+    const heardThenQuiet = tagBleFailure(timedOut('idle'), 'no-reading');
+    expect(bundle.failureDelayFloor?.(heardThenQuiet)).toEqual({
+      ms: 900_000,
+      label: 'runtime.no_reading_rescan_delay',
+    });
+    // The floor is a minimum on the backoff path, not a claim.
+    expect(bundle.failureDelayMs?.(heardThenQuiet)).toBe(undefined);
+
+    const notFloored: Array<[string, unknown]> = [
+      ['no-reading after the session cap', tagBleFailure(timedOut('cap'), 'no-reading')],
+      ['a session that heard nothing', tagBleFailure(timedOut('idle'), 'wedge-suspect')],
+      ['an untagged session timeout', timedOut('idle')],
+      [
+        'a scale that disconnected after a frame',
+        tagBleFailure(new Error('Scale disconnected before reading completed'), 'wedge-suspect'),
+      ],
+      ['a no-reading tag on something else', tagBleFailure(new Error('x'), 'no-reading')],
+      ['an idle cycle', tagBleFailure(new Error('Device not found'), 'idle')],
+      ['a blocked connect', tagBleFailure(new Error('LE privacy is not active'), 'blocked')],
+      [
+        'a stale BlueZ link (#472)',
+        tagBleFailure(new StaleLinkError('AA:BB:CC:DD:EE:FF'), 'wedge-suspect'),
+      ],
+      [
+        'a held pairing (#471)',
+        tagBleFailure(new PairingDeferredError('AA:BB:CC:DD:EE:FF', 120_000), 'idle'),
+      ],
+      [
+        'a held pairing on a deaf radio (#471)',
+        tagBleFailure(new PairingDeferredError('AA:BB:CC:DD:EE:FF', 120_000), 'wedge-suspect'),
+      ],
+      ['an untagged error', new Error('export failed')],
+    ];
+    for (const [what, err] of notFloored) {
+      expect(bundle.failureDelayFloor?.(err), what).toBe(undefined);
+    }
+  });
+
+  it('poll plan: the floor is re-read from config on every call; 0 and an absent key mean none', async () => {
+    h.createReadingSource.mockResolvedValue({ kind: 'poll', appliesGraceFloor: false });
+    const runtime: { scan_cooldown: number; no_reading_rescan_delay?: number } = {
+      scan_cooldown: 5,
+      no_reading_rescan_delay: 60,
+    };
+    const ctx = makeCtx({ config: { users: [{}], scale: {}, runtime } as never });
+    const bundle = await buildReadingSource(ctx, ADAPTERS, 7, 30);
+    const heard = tagBleFailure(
+      new SessionTimeoutError('Timed out waiting for a complete scale reading', 'idle'),
+      'no-reading',
+    );
+
+    expect(bundle.failureDelayFloor?.(heard)).toEqual({
+      ms: 60_000,
+      label: 'runtime.no_reading_rescan_delay',
+    });
+    runtime.no_reading_rescan_delay = 900;
+    expect(bundle.failureDelayFloor?.(heard)?.ms).toBe(900_000);
+    runtime.no_reading_rescan_delay = 0;
+    expect(bundle.failureDelayFloor?.(heard)).toBe(undefined);
+    delete runtime.no_reading_rescan_delay;
+    expect(bundle.failureDelayFloor?.(heard)).toBe(undefined);
+  });
+
+  it('watcher plan: leaves failureDelayFloor unset', async () => {
+    h.createReadingSource.mockResolvedValue(watcherPlan('Error processing ESPHome reading'));
+    const ctx = makeCtx({ bleHandler: 'esphome-proxy', esphomeProxy: { host: 'h' } as never });
+    const bundle = await buildReadingSource(ctx, ADAPTERS, 10, 30);
+    expect(bundle.failureDelayFloor).toBeUndefined();
+  });
+
   it('watcher plan: leaves failureDelayMs unset, so a wedged proxy still backs off', async () => {
     h.createReadingSource.mockResolvedValue(watcherPlan('Error processing ESPHome reading'));
     const ctx = makeCtx({ bleHandler: 'esphome-proxy', esphomeProxy: { host: 'h' } as never });

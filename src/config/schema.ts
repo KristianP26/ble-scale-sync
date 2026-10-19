@@ -520,6 +520,27 @@ export const RuntimeSchema = z.object({
    */
   idle_rescan_delay: z.number().int().min(0).max(3600).default(5),
   /**
+   * Minimum seconds to wait after a continuous-mode session that connected,
+   * heard the scale and then went quiet until its idle timeout
+   * (`bleFailureKind === 'no-reading'`, D041), when that is longer than the
+   * 5 s -> 60 s retry backoff (#475). The backoff still advances; 0 keeps it
+   * exactly as before.
+   *
+   * For a scale that accepts a connection all the time and keeps its weigh-ins
+   * until the next one: a Beurer BF915 showed PAIR through 10 to 15 sessions an
+   * hour, all day. A weigh-in made during the wait arrives with the next
+   * session; more than 5 minutes late it is a past measurement, which only the
+   * exporters that can backdate receive (D027). A scale that does not keep its
+   * weigh-ins can lose one made during the wait.
+   *
+   * A `.default()`, not `.optional()`: applyEnvOverrides rebuilds runtime from
+   * a fixed list, and only a required key makes tsc point at it.
+   *
+   * node-ble only: nothing else tags 'no-reading'. Must stay far below
+   * 2^31 - 1 ms, above which setTimeout fires after 1 ms.
+   */
+  no_reading_rescan_delay: z.number().int().min(0).max(3600).default(0),
+  /**
    * Keep a reading whose export failed and retry it on a later cycle (#412).
    *
    * On by default. The failure it covers is silent and total: a cloud target

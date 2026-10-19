@@ -82,6 +82,15 @@ describe('collectUnknownKeys', () => {
     expect(collectUnknownKeys(generated)).toEqual([]);
   });
 
+  it('knows runtime.no_reading_rescan_delay (#475)', () => {
+    expect(
+      collectUnknownKeys({
+        ...BASE,
+        runtime: { continuous_mode: true, no_reading_rescan_delay: 900 },
+      }),
+    ).toEqual([]);
+  });
+
   it('reports a misspelled key under ble', () => {
     const cfg = {
       ...BASE,

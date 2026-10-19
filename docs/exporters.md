@@ -565,6 +565,8 @@ A past measurement within 0.1 kg of the last live weigh-in this app exported for
 
 A reading without a recorded time, or one received within 5 minutes of the time it carries, is a live reading and goes to every configured exporter. The exception is a reading the scale's protocol itself marks as one from its memory: that is a past measurement however recent its time. Today these are the stored weigh-ins of QN scales with an 18-byte scale-info frame and [`ble.qn_user_key`](/guide/configuration) set.
 
+With [`runtime.no_reading_rescan_delay`](/guide/configuration#runtime) the app waits between sessions, and a weigh-in the scale keeps during that wait can reach the app more than 5 minutes after it was taken. It is then a past measurement too.
+
 ## Healthchecks
 
 At startup, exporters are tested for connectivity. Failures are logged as warnings but don't block the scan.

@@ -46,8 +46,21 @@ describe('env-overrides (focused unit tests for #184 split)', () => {
   describe('applyEnvOverrides', () => {
     it('defaults runtime/ble when config omits them', () => {
       const out = applyEnvOverrides(baseConfig());
-      expect(out.runtime).toMatchObject({ continuous_mode: false, scan_cooldown: 30 });
+      expect(out.runtime).toMatchObject({
+        continuous_mode: false,
+        scan_cooldown: 30,
+        no_reading_rescan_delay: 0,
+      });
       expect(out.ble).toMatchObject({ handler: 'auto' });
+    });
+
+    // runtime is rebuilt from a fixed list of keys, so one missing from it is
+    // dropped on every load after it passed validation (#398, #475).
+    it('carries runtime.no_reading_rescan_delay through instead of rebuilding it away', () => {
+      const out = applyEnvOverrides(
+        baseConfig({ runtime: { no_reading_rescan_delay: 900 } } as Partial<AppConfig>),
+      );
+      expect(out.runtime?.no_reading_rescan_delay).toBe(900);
     });
 
     it('applies runtime env overrides', () => {
