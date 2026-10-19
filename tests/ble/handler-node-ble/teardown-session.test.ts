@@ -305,6 +305,42 @@ describe('teardownSession and a Disconnect BlueZ never answers (#472)', () => {
     expect(calls).toEqual(['resetConnection']);
   });
 
+  it.each([
+    [true, ['StopDiscovery', 'resetConnection', 'resetAdapterBtmgmt']],
+    [false, ['StopDiscovery', 'resetConnection']],
+  ])(
+    'ends a GATT cycle the brake holds back as before (preemptive_adapter_reset %s)',
+    async (preemptiveAdapterReset, expected) => {
+      // The brake holds back only the recovery: a GATT session still gets the
+      // settle, the D-Bus reset and, with the option on, the preemptive
+      // power-cycle, as the docs promise.
+      h.getDevice.mockImplementation(async () => ({
+        helper: { prop: async () => true, removeListeners: () => {} },
+      }));
+      vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      const first = track(
+        teardownSession(gattCycle({ device: hung() as never, gattAttempted: false })),
+      );
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(first.state()).toBe('resolved');
+
+      calls.length = 0;
+      let settled = false;
+      h.onSleep = () => (settled = true);
+      const second = track(
+        teardownSession(
+          gattCycle({ device: hung() as never, gattSucceeded: false, preemptiveAdapterReset }),
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(second.state()).toBe('resolved');
+      expect(settled).toBe(true);
+      // RemoveDevice is skipped: the cycle knows the link is stale.
+      expect(calls).toEqual(expected);
+    },
+  );
+
   it('recovers a stale link found by a cycle without a GATT attempt', async () => {
     // A broadcast or idle cycle that found the scale disconnects it too, and
     // the same stuck Disconnect parks it there.
