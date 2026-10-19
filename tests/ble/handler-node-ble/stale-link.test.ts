@@ -268,6 +268,30 @@ describe('disconnectBounded (#472)', () => {
     await vi.advanceTimersByTimeAsync(0);
   });
 
+  it('does not log a call failed by a closing D-Bus connection as an answer from BlueZ', async () => {
+    // The stale-link recovery leaves its unanswered Disconnect on the connection
+    // it resets, and connection.ts fails it once that connection closes. Logged
+    // as "answered", the reset time would pass for how long BlueZ took.
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    let fail!: (err: Error) => void;
+    const parked = {
+      disconnect: vi.fn(() => new Promise<void>((_r, reject) => (fail = reject))),
+    };
+    void disconnectBounded(parked as never, { mac: MAC, label: 'teardown' });
+    await vi.advanceTimersByTimeAsync(12_000);
+    fail(
+      Object.assign(new Error('D-Bus connection closed'), {
+        type: 'org.freedesktop.DBus.Error.Disconnected',
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    const lines = debug.mock.calls.map(([m]) => String(m));
+    expect(lines.some((l) => l.startsWith('Disconnect (teardown) got no answer before'))).toBe(
+      true,
+    );
+    expect(lines.some((l) => l.startsWith('Disconnect (teardown) answered'))).toBe(false);
+  });
+
   it('sends the Disconnect on an already aborted signal and returns at once', async () => {
     const ac = new AbortController();
     ac.abort();

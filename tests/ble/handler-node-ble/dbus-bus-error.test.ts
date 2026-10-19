@@ -256,6 +256,41 @@ describe('D-Bus socket closed by the bus (A-03)', () => {
     await getAdapter();
     expect(createBluetooth).toHaveBeenCalledTimes(2);
   });
+
+  // #472: a connect retry that replaced the connection left its caller's proxies
+  // on the old bus, and the teardown's Disconnect, StopDiscovery and
+  // RemoveDevice through them never settled.
+  it('fails a call left waiting on a connection it reset itself once the bus closes it', async () => {
+    const real = makeRealBusSession();
+    createBluetooth.mockImplementationOnce(() => real.session as never);
+    getConnection();
+    const inFlight = real.bus.call(powered());
+    resetConnection();
+    await getAdapter();
+
+    real.closeFromBus();
+
+    const outcome = await settle(inFlight);
+    expect(outcome.state).toBe('rejected');
+    // And the replacement stays: the close was ours.
+    await getAdapter();
+    expect(createBluetooth).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails a call written to a replaced connection after its close instead of parking it', async () => {
+    const real = makeRealBusSession();
+    createBluetooth.mockImplementationOnce(() => real.session as never);
+    getConnection();
+    resetConnection();
+    await getAdapter();
+    real.closeFromBus();
+
+    const outcome = await settle(real.bus.call(powered()));
+    expect(outcome.state).toBe('rejected');
+    expect(isStaleConnectionError(outcome.err)).toBe(true);
+    await getAdapter();
+    expect(createBluetooth).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('isStaleConnectionError', () => {

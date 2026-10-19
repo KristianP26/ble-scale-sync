@@ -146,9 +146,17 @@ export function getConnection(): { bluetooth: NodeBle.Bluetooth; destroy: () => 
       // still holding this bus emits `error` here after dbus-next has swapped
       // message() on `end`. Latching then would tear down the healthy
       // replacement on the next getAdapter() (A-10), the same reason the `end`
-      // handler below only counts a close on the current connection.
+      // handler below only counts a close on the current connection. The call
+      // behind that write has parked its resolver already, and nothing can
+      // answer it on a bus we dropped, so it fails here instead of hanging. A
+      // retry loop that replaced the connection under its caller sends exactly
+      // such calls (#472).
       if (persistentConn !== conn) {
-        bleLog.debug(`D-Bus error on an already replaced connection (ignored): ${errMsg(err)}`);
+        const failed = failPendingCalls(bus);
+        bleLog.debug(
+          `D-Bus error on an already replaced connection: ${errMsg(err)}` +
+            (failed > 0 ? ` (${failed} pending call(s) failed)` : ''),
+        );
         return;
       }
       busFailed = true;
@@ -162,8 +170,15 @@ export function getConnection(): { bluetooth: NodeBle.Bluetooth; destroy: () => 
       // Our own resetConnection() ends the stream too, and the `end` arrives
       // later, once the daemon has closed its side. By then this connection is
       // no longer the current one: latching would condemn the healthy
-      // replacement, so only a close we did not ask for counts.
-      if (persistentConn !== conn) return;
+      // replacement, so only a close we did not ask for counts. Whatever is
+      // still waiting on it fails all the same: no reply can come any more.
+      if (persistentConn !== conn) {
+        const failed = failPendingCalls(bus);
+        if (failed > 0) {
+          bleLog.debug(`${failed} pending call(s) failed on an already replaced D-Bus connection`);
+        }
+        return;
+      }
       busFailed = true;
       const failed = failPendingCalls(bus);
       bleLog.warn(

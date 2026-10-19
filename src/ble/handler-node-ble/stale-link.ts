@@ -22,12 +22,13 @@
  * session still ends with the preemptive power-cycle as before.
  *
  * A timeout is taken as evidence about the link, not about our D-Bus
- * connection. A clean close by the daemon does not get here: the node-ble
- * connection fails every pending and later call on it (A-03), which reads as
- * an answer. A close that only shows up as a stream error, with no end, can
- * leave the call in flight unanswered, and so can a proxy left on an already
- * replaced connection. Both are rare, and the cost is one needless power-cycle
- * plus a misleading "Cleared a stale BlueZ connection" line.
+ * connection. A clean close by the daemon does not get here: connection.ts
+ * fails every pending and later call on it (A-03), which reads as an answer,
+ * and the same goes for a call through a proxy left on a connection we
+ * replaced ourselves. A close that only shows up as a stream error, with no
+ * end, can still leave the call in flight unanswered. That is rare, and the
+ * cost is one needless power-cycle plus a misleading "Cleared a stale BlueZ
+ * connection" line.
  */
 
 import {
@@ -43,6 +44,21 @@ import { powerCycleViaDbus } from './discovery.js';
 
 /** What a bounded Disconnect ended with. An error answer from BlueZ is `'done'`. */
 export type DisconnectOutcome = 'done' | 'timeout' | 'aborted';
+
+/**
+ * The error connection.ts hands a call still waiting when its D-Bus connection
+ * closed (failPendingCalls). Not an answer from BlueZ: logged as one, the
+ * Disconnect a stale-link recovery leaves behind on purpose would show up as
+ * "answered" with the time the reset took, the number DISCONNECT_TIMEOUT_MS is
+ * tuned against. Matched by name rather than imported, since the scan tests
+ * replace connection.js wholesale.
+ */
+function isConnectionClosedFailure(err: unknown): boolean {
+  return (
+    (err as { type?: unknown } | null | undefined)?.type ===
+    'org.freedesktop.DBus.Error.Disconnected'
+  );
+}
 
 /** How long the check after the power-cycle may take, all of it together. */
 const RECOVERY_CHECK_TIMEOUT_MS = 10_000;
@@ -148,7 +164,10 @@ export function disconnectBounded(
     () => bleLog.debug(`Disconnect (${label}) answered in ${Math.round(now() - t0)} ms`),
     (err: unknown) =>
       bleLog.debug(
-        `Disconnect (${label}) answered in ${Math.round(now() - t0)} ms: ${errMsg(err)}`,
+        isConnectionClosedFailure(err)
+          ? `Disconnect (${label}) got no answer before the D-Bus connection closed, ` +
+              `after ${Math.round(now() - t0)} ms`
+          : `Disconnect (${label}) answered in ${Math.round(now() - t0)} ms: ${errMsg(err)}`,
       ),
   );
   if (abortSignal?.aborted) return Promise.resolve('aborted');
