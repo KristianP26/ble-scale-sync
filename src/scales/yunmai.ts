@@ -9,7 +9,6 @@ import type {
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
 import {
-  biaFatIfPlausible,
   buildPayload,
   compositionRejection,
   estimateBodyFat,
@@ -187,8 +186,11 @@ export class YunmaiScaleAdapter
     // outside 5-75 %, which a real impedance reaches at a BMI around 50 and
     // above; water, muscle, bone and visceral fat used to be derived from that
     // 0 and exported next to a fat value from somewhere else (60 % fat with a
-    // visceral rating of 1). On 0 the fat is what the processor's rule gives:
-    // BIA from the impedance when there is one, the BMI estimate otherwise.
+    // visceral rating of 1). On 0 the fat is the BMI estimate, not generic BIA:
+    // no Yunmai frame on record shows the resistance is in ohms (YunmaiLib uses
+    // it as `(R - 100) / 100`), and the SIGNAL values (105-221) pass the
+    // 150-1200 gate while BIA on them lands far from the estimate (33 % against
+    // 60 % at BMI 55, the 4 % floor at a normal BMI).
     const usable = (f: number | null | undefined): f is number =>
       f != null && compositionRejection({ fat: f }) === null;
     let fat: number;
@@ -196,9 +198,7 @@ export class YunmaiScaleAdapter
       fat = embeddedFat;
     } else {
       const yunmaiFat = impedance > 0 ? ym.fat(profile.age, weight, impedance) : 0;
-      fat = usable(yunmaiFat)
-        ? yunmaiFat
-        : (biaFatIfPlausible(weight, impedance, profile) ?? estimateBodyFat(bmi, profile));
+      fat = usable(yunmaiFat) ? yunmaiFat : estimateBodyFat(bmi, profile);
     }
 
     const musclePct = ym.muscle(fat);

@@ -128,7 +128,7 @@ The S400 broadcasts weight plus its 50 kHz impedance (and a 250 kHz impedance an
 
 ### Yunmai
 
-The scale's final reading carries its resistance and, on firmware with protocol version 0x1E or newer, the body fat percentage the scale computed itself for the profile the vendor app stored in it. When that value is present and plausible it is used, and water, muscle, bone mass and visceral fat are derived from it with the Yunmai formulas ported from openScale. Otherwise body fat comes from the Yunmai formula ported from openScale, which works mostly from BMI and age and adjusts slightly for the resistance; generic BIA and then the BMI estimate are the fallbacks. BMI, BMR, metabolic age and physique rating are calculated locally. The Yunmai SE reports no impedance, so its body composition is estimated from BMI.
+The scale's final reading carries its resistance and, on firmware with protocol version 0x1E or newer, the body fat percentage the scale computed itself for the profile the vendor app stored in it. When that value is present and plausible it is used, and water, muscle, bone mass and visceral fat are derived from it with the Yunmai formulas ported from openScale. Otherwise body fat comes from the Yunmai formula ported from openScale, which works mostly from BMI and age and adjusts slightly for the resistance; when that formula gives no usable value, the BMI estimate is the fallback. Generic BIA is not used, because nothing shows that the resistance the scale sends is in ohms. BMI, BMR, metabolic age and physique rating are calculated locally. The Yunmai SE reports no impedance, so its body composition is estimated from BMI.
 
 ### Arboleaf and other 8-electrode QN scales (19-byte dialect)
 

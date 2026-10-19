@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { YunmaiScaleAdapter } from '../../src/scales/yunmai.js';
 import { applyForcedAdapter } from '../../src/scales/force.js';
-import { computeBiaFat } from '../../src/scales/body-comp-helpers.js';
+import { computeBiaFat, estimateBodyFat } from '../../src/scales/body-comp-helpers.js';
 import {
   mockPeripheral,
   defaultProfile,
@@ -37,6 +37,9 @@ const M1690_17_BYTES = frame('0d 1f 11 02 00 00 0c 51 ef 00 00 12 34 1f 40 01 c6
 // openScale issue #1286 (YUNMAI-SIGNAL, protocol 0x13, openScale debug log
 // 2026-01-15), byte for byte: 18 bytes, no body fat field, [17] is the XOR.
 const SIGNAL_0X13 = frame('0d 13 12 02 00 00 00 00 6d 00 00 00 01 1f 1f 00 bb d4');
+// SIGNAL_0X13 with the weight [13..14] set to 141.00 kg (0x3714) and the XOR
+// [17] recomputed; the resistance 187 at [15..16] is as captured.
+const SIGNAL_0X13_141KG = frame('0d 13 12 02 00 00 00 00 6d 00 00 00 01 37 14 00 bb f7');
 
 function makeAdapter() {
   return new YunmaiScaleAdapter();
@@ -401,9 +404,16 @@ describe('Yunmai when its own fat formula gives up (D-08, D028)', () => {
   const profile = defaultProfile({ gender: 'female', height: 160, age: 40 });
   const reading = () => ({ weight: 141, impedance: 500 });
 
-  it('falls back to BIA on the plausible impedance, as the processor would', () => {
-    const payload = makeAdapter().computeMetrics(reading(), profile);
-    expect(payload.bodyFatPercent).toBeCloseTo(computeBiaFat(141, 500, profile), 1);
+  // The resistance of a SIGNAL frame passes the 150-1200 gate, but nothing shows
+  // it is in ohms; generic BIA on 187 gave 33 % here against the 60 % estimate.
+  it('falls back to the BMI estimate, not BIA on a resistance of unknown unit', () => {
+    const a = makeAdapter();
+    a.onSessionStart();
+    const parsed = a.parseNotification(SIGNAL_0X13_141KG)!;
+    expect(parsed).toEqual({ weight: 141, impedance: 187 });
+    const payload = a.computeMetrics(parsed, profile);
+    expect(payload.bodyFatPercent).toBeCloseTo(estimateBodyFat(141 / 1.6 ** 2, profile), 1);
+    expect(payload.bodyFatPercent).not.toBeCloseTo(computeBiaFat(141, 187, profile), 0);
   });
 
   it('derives water, muscle, bone and visceral fat from that same fat value', () => {
