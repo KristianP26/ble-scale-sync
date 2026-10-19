@@ -34,6 +34,12 @@ const M1690_DECLARES_19 = frame('0d 1f 13 02 00 00 0c 51 ef 00 00 12 34 1f 40 01
 // bytes (resistance field cut, [16] is the XOR).
 const M1690_19_BYTES = frame('0d 1f 13 02 00 00 0c 51 ef 00 00 12 34 1f 40 01 d6 09 1b');
 const M1690_17_BYTES = frame('0d 1f 11 02 00 00 0c 51 ef 00 00 12 34 1f 40 01 c6');
+// M1690_FINAL with the response type [3] set to 0x01 (measuring) and the XOR
+// recomputed. A real measuring frame is 11 bytes; this one keeps the final
+// layout so only [3] can be what rejects it.
+const M1690_TYPE_MEASURING = frame('0d 1f 14 01 00 00 0c 51 ef 00 00 12 34 1f 40 01 d6 09 f6 e9');
+// M1690_FINAL with the weight [13..14] zeroed and the XOR recomputed.
+const M1690_ZERO_WEIGHT = frame('0d 1f 14 02 00 00 0c 51 ef 00 00 12 34 00 00 01 d6 09 f6 b5');
 // openScale issue #1286 (YUNMAI-SIGNAL, protocol 0x13, openScale debug log
 // 2026-01-15), byte for byte: 18 bytes, no body fat field, [17] is the XOR.
 const SIGNAL_0X13 = frame('0d 13 12 02 00 00 00 00 6d 00 00 00 01 1f 1f 00 bb d4');
@@ -43,37 +49,6 @@ const SIGNAL_0X13_141KG = frame('0d 13 12 02 00 00 00 00 6d 00 00 00 01 37 14 00
 
 function makeAdapter() {
   return new YunmaiScaleAdapter();
-}
-
-// Synthetic, from before the fixture rule: the protocol stands on the captured
-// frames above, this one only drives state and ordering (#394).
-function makeFrame(opts: {
-  protocolVer?: number;
-  respType?: number;
-  weightRaw?: number;
-  impedanceRaw?: number;
-  fatRaw?: number;
-  length?: number;
-}): Buffer {
-  const len = opts.length ?? 20;
-  const buf = Buffer.alloc(len);
-  buf[0] = 0x0d; // marker
-  buf[1] = opts.protocolVer ?? 0x1e; // protocol version
-  buf[2] = len; // the frame's own length: it is what says the fields are there
-  buf[3] = opts.respType ?? 0x02; // final frame
-  // bytes 4: padding
-  // bytes 5-8: timestamp (zeroed)
-  // bytes 9-12: user id (zeroed)
-  buf.writeUInt16BE(opts.weightRaw ?? 8000, 13); // 8000/100=80 kg
-  if (len >= 18) {
-    buf.writeUInt16BE(opts.impedanceRaw ?? 500, 15);
-  }
-  if (len >= 20) {
-    buf.writeUInt16BE(opts.fatRaw ?? 2200, 17); // 2200/100=22%
-  }
-  // XOR only from 18 bytes: on a shorter buffer it would overwrite the weight.
-  if (len >= 18) buf[len - 1] = buf.subarray(1, len - 1).reduce((x, b) => x ^ b, 0);
-  return buf;
 }
 
 describe('YunmaiScaleAdapter', () => {
@@ -137,24 +112,11 @@ describe('YunmaiScaleAdapter', () => {
       expect(adapter.completionHoldMs).toBeUndefined();
     });
 
-    it('parses a frame that declares the resistance field', () => {
-      const adapter = makeAdapter();
-      adapter.matches(mockPeripheral('Yunmai ISM', []));
-
-      const buf = makeFrame({ weightRaw: 8000, impedanceRaw: 480 });
-      const reading = adapter.parseNotification(buf);
-
-      expect(reading).not.toBeNull();
-      expect(reading!.weight).toBe(80);
-      expect(reading!.impedance).toBe(480);
-    });
-
     it('returns null for non-final frame (respType != 0x02)', () => {
       const adapter = makeAdapter();
       adapter.matches(mockPeripheral('Yunmai ISM', []));
 
-      const buf = makeFrame({ respType: 0x01 }); // measuring, not final
-      expect(adapter.parseNotification(buf)).toBeNull();
+      expect(adapter.parseNotification(M1690_TYPE_MEASURING)).toBeNull();
     });
 
     it('returns null for too-short buffer', () => {
@@ -165,8 +127,7 @@ describe('YunmaiScaleAdapter', () => {
     it('returns null for zero weight', () => {
       const adapter = makeAdapter();
       adapter.matches(mockPeripheral('Yunmai Standard', []));
-      const buf = makeFrame({ weightRaw: 0 });
-      expect(adapter.parseNotification(buf)).toBeNull();
+      expect(adapter.parseNotification(M1690_ZERO_WEIGHT)).toBeNull();
     });
   });
 
@@ -235,31 +196,12 @@ describe('YunmaiScaleAdapter', () => {
       const adapter = makeAdapter();
       adapter.matches(mockPeripheral('Yunmai ISM', []));
 
-      // Parse a frame to set embedded fat
-      const buf = makeFrame({ protocolVer: 0x1e, fatRaw: 2200, impedanceRaw: 500 });
-      adapter.parseNotification(buf);
-
-      const profile = defaultProfile();
-      const payload = adapter.computeMetrics({ weight: 80, impedance: 500 }, profile);
+      const reading = adapter.parseNotification(M1690_FINAL)!;
+      const payload = adapter.computeMetrics(reading, defaultProfile());
 
       expect(payload.weight).toBe(80);
-      expect(payload.impedance).toBe(500);
+      expect(payload.impedance).toBe(470);
       assertPayloadRanges(payload);
-    });
-
-    it('uses embedded fat percent when available', () => {
-      const adapter = makeAdapter();
-      adapter.matches(mockPeripheral('Yunmai ISM', []));
-
-      // Parse with embedded fat = 22%
-      const buf = makeFrame({ protocolVer: 0x1e, fatRaw: 2200, impedanceRaw: 500 });
-      adapter.parseNotification(buf);
-
-      const profile = defaultProfile();
-      const payload = adapter.computeMetrics({ weight: 80, impedance: 500 }, profile);
-
-      // The embedded fat (22%) should be used
-      expect(payload.bodyFatPercent).toBeCloseTo(22, 0);
     });
   });
 });
@@ -352,13 +294,12 @@ describe('YunmaiScaleAdapter session boundary (#394)', () => {
 
   it('keeps the completed reading embedded fat when the NEXT session starts first', () => {
     const a = miniAdapter();
-    // impedanceRaw 0 so the embedded fat is the ONLY source of 22 %. With the
-    // frame default impedance the BIA branch lands near 22 % on its own and the
-    // test would pass whether or not the value was pinned.
-    const reading = a.parseNotification(makeFrame({ fatRaw: 2200, impedanceRaw: 0 }))!;
+    // Resistance 0 so the scale's 25.50 % is the ONLY source of that value: the
+    // BMI estimate for this profile is about 19 %.
+    const reading = a.parseNotification(M1690_NO_RESISTANCE)!;
     a.onSessionStart();
     const payload = a.computeMetrics(reading, defaultProfile());
-    expect(payload.bodyFatPercent).toBeCloseTo(22, 1);
+    expect(payload.bodyFatPercent).toBeCloseTo(25.5, 1);
   });
 
   // ReadingComposition.of() checks has(), not `?? live`. That distinction is the
@@ -369,28 +310,26 @@ describe('YunmaiScaleAdapter session boundary (#394)', () => {
   // except this test.
   it('a pinned null is honoured, not treated as absent', () => {
     const a = miniAdapter();
-    // Session N: protocol < 0x1E, so no embedded fat is read and null is pinned.
-    const readingN = a.parseNotification(
-      makeFrame({ protocolVer: 0x1d, impedanceRaw: 0, weightRaw: 8000 }),
-    )!;
-    // Session N+1 starts and parses a frame that DOES carry embedded fat,
-    // before N's computeMetrics runs - the watcher-transport ordering.
+    // Session N: an 18-byte 0x13 frame has no body fat field, so null is pinned.
+    const readingN = a.parseNotification(SIGNAL_0X13)!;
+    // Session N+1 starts and parses a frame that DOES carry the scale's body
+    // fat, before N's computeMetrics runs - the watcher-transport ordering.
     a.onSessionStart();
-    a.parseNotification(makeFrame({ fatRaw: 2200, impedanceRaw: 0 }));
+    a.parseNotification(M1690_NO_RESISTANCE);
 
     const payload = a.computeMetrics(readingN, defaultProfile());
-    // N must get the estimator, not the next person's 22 %.
-    expect(payload.bodyFatPercent).not.toBeCloseTo(22, 1);
+    // N must get the Yunmai formula (about 21 %), not the next person's 25.50 %.
+    expect(payload.bodyFatPercent).not.toBeCloseTo(25.5, 1);
   });
 
   it('does not hand a hand-built reading the previous session embedded fat', () => {
     const a = miniAdapter();
-    a.parseNotification(makeFrame({ fatRaw: 2200 }));
+    a.parseNotification(M1690_FINAL);
     a.onSessionStart();
     // Impedance 0 and no pinned value: must fall through to the estimator, not
-    // to the 22 % the previous weigh-in left behind.
+    // to the 25.50 % the previous weigh-in left behind.
     const payload = a.computeMetrics({ weight: 80, impedance: 0 }, defaultProfile());
-    expect(payload.bodyFatPercent).not.toBeCloseTo(22, 1);
+    expect(payload.bodyFatPercent).not.toBeCloseTo(25.5, 1);
   });
 });
 
