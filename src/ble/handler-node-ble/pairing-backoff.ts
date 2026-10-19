@@ -18,11 +18,11 @@
  * to it at all, since BlueZ can start the pairing by itself and the connect
  * alone lights the display. It listens to the scale's advertisements for the
  * rest of its discovery budget and ends like an idle cycle. Pairing is tried
- * again after 2, 2, 2, 4, 8, 16, 32 minutes and then every
- * `ble.pairing_retry_max_min` (default 60), and at once when the scale comes
- * back after a cycle without it, when its advertisement says it holds a new
- * weigh-in, when it is paired by other means, or after a restart: the memory
- * lives only in this process.
+ * again after 2, 2, 2 minutes, then after a wait that doubles each time (4, 8,
+ * 16, 32, 64, ...) up to `ble.pairing_retry_max_min` (default 60), never
+ * longer, and at once when the scale comes back after a cycle without it, when
+ * its advertisement says it holds a new weigh-in, when it is paired by other
+ * means, or after a restart: the memory lives only in this process.
  */
 
 import type { BleDeviceInfo, ScaleAdapter } from '../../interfaces/scale-adapter.js';
