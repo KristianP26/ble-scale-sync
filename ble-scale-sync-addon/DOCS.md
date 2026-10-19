@@ -134,7 +134,7 @@ and the log says so.
 
 The queue lives in `/data`, so it survives add-on restarts and updates. It
 holds body composition and the user name, is written with 0600 permissions and
-is deleted as soon as it empties. Turn the option off to write nothing at all.
+is deleted as soon as it empties. Turn the option off to keep no queue.
 
 ### Upload timeout
 

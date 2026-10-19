@@ -550,8 +550,9 @@ export const RuntimeSchema = z.object({
    * a reporter lost four that way in a week. Bounded at 72 hours, 5 attempts
    * and 50 entries, and only for exporters that can record a past reading.
    *
-   * Turning it off restores the previous behaviour exactly, including writing
-   * nothing to disk. See ADR D014: this persists body composition and a user
+   * Turning it off restores the previous behaviour exactly, including keeping
+   * no queue on disk (the de-duplication marks in `.scale-dedup-marks.json`
+   * are written either way). See ADR D014: this persists body composition and a user
    * name by default, which is why it is a decision and not just a flag.
    */
   retry_failed_exports: z.boolean().default(true),

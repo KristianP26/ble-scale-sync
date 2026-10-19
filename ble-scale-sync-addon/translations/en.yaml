@@ -325,7 +325,7 @@ configuration:
       InfluxDB, file, Intervals, Runalyze, wger, HealthLog, Dreeve) can be
       retried; MQTT and notifications cannot express a past reading and are
       not queued.
-      Turn off to write nothing to disk.
+      Turn off to keep no queue on disk.
   idle_rescan_delay:
     name: Rescan delay when no scale was found (seconds)
     description: >-
