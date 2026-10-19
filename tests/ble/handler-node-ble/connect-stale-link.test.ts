@@ -403,6 +403,75 @@ describe('connectWithRecovery after a re-discovery replaced the D-Bus connection
     expect(initial.helper.removeListeners).toHaveBeenCalled();
   });
 
+  it('hands the caller the live adapter even when no device can be had on it', async () => {
+    // The throw comes before any device swap, so only the adapter change can
+    // tell the caller where its teardown has to go.
+    const initial = makeDevice(
+      'initial',
+      async () => {
+        throw new Error('le-connection-abort-by-local');
+      },
+      async () => undefined,
+    );
+    const oldAdapter = makeAdapter(async () => initial);
+    const liveAdapter = makeAdapter(async () => {
+      throw new Error('Device not found');
+    });
+    discovery.start = async () => liveAdapter;
+    const seen: { btAdapter: unknown; device: unknown }[] = [];
+
+    const result = track(
+      _internals.connectWithRecovery({
+        btAdapter: oldAdapter as never,
+        mac: 'AA:BB:CC:DD:EE:FF',
+        initialDevice: initial as never,
+        maxRetries: 1,
+        onLive: (live) => seen.push(live),
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(result.state()).toBe('rejected');
+    expect(String(result.error())).toMatch(/device re-acquisition failed/);
+    expect(liveAdapter.getDevice).toHaveBeenCalled();
+    expect(seen.at(-1)).toEqual({ btAdapter: liveAdapter, device: initial });
+    // Still the caller's proxy: its teardown disconnects and releases it.
+    expect(initial.helper.removeListeners).not.toHaveBeenCalled();
+  });
+
+  it('hands the caller the device an RSSI re-discovery swapped in, and leaves it to it', async () => {
+    const refused = async (): Promise<void> => {
+      throw new Error('le-connection-abort-by-local');
+    };
+    // 127: BlueZ's "no advertisement heard", which sends the loop into the
+    // one RSSI re-discovery before its first connect.
+    const initial = makeDevice('initial', refused, async () => undefined);
+    initial.helper.prop.mockImplementation(async () => 127);
+    const fresh = makeDevice('fresh', refused, async () => undefined);
+    const btAdapter = makeAdapter(async () => fresh);
+    discovery.start = async () => false;
+    const seen: { btAdapter: unknown; device: unknown }[] = [];
+
+    const result = track(
+      _internals.connectWithRecovery({
+        btAdapter: btAdapter as never,
+        mac: 'AA:BB:CC:DD:EE:FF',
+        initialDevice: initial as never,
+        maxRetries: 0,
+        onLive: (live) => seen.push(live),
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(result.state()).toBe('rejected');
+    expect(initial.connect).not.toHaveBeenCalled();
+    expect(fresh.connect).toHaveBeenCalledTimes(1);
+    expect(seen.at(-1)).toEqual({ btAdapter, device: fresh });
+    // The caller's now: its teardown disconnects and releases it.
+    expect(fresh.helper.removeListeners).not.toHaveBeenCalled();
+    expect(initial.helper.removeListeners).toHaveBeenCalled();
+  });
+
   it('still releases its last proxy on a throw for a caller that does not follow it', async () => {
     const refused = async (): Promise<void> => {
       throw new Error('le-connection-abort-by-local');
