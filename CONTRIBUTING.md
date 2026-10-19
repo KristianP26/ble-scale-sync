@@ -281,6 +281,10 @@ To support a new scale brand, create a class that implements `ScaleAdapter` in `
 5. If your adapter detects the weight unit from BLE data and converts to kg internally, set `normalizesWeight = true`
 6. Add tests in `tests/scales/` using mock utilities from `tests/helpers/scale-test-utils.ts`
 
+Test frames have to come from the real scale, copied byte for byte from a capture (btsnoop, PacketLogger) or from a DEBUG log of ble-scale-sync, which prints the frames it receives. A frame you build from your own reading of the format only tests that reading: an early Silvergear 108 test encoded a wrong offset and a wrong frame type and still passed, and the real layout only showed up in a capture. Edge cases such as a bad checksum or an out-of-range value can start from a real frame with a few bytes changed; say in the test which ones. Please include the capture or log in the PR, or link the issue it comes from.
+
+Captures can contain your weight, profile and device address. For the capture session you can use a made-up user (age, height, sex) in your config. If you'd rather not post it publicly, email it to security@blescalesync.dev and mention the PR.
+
 ## Adding a New Exporter
 
 To add a new export target:
