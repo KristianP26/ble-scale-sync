@@ -189,6 +189,9 @@ vi.mock('../../../src/ble/handler-node-ble/connect.js', () => ({
   }),
 }));
 
+/** The MAC every noteReadingForStaleLink got, in order: the brake is per scale. */
+const readingBrakeMacs: string[] = [];
+
 // The stale-link recovery has its own tests. Here only whether the teardown
 // reaches it, and that a reading lifts its brake; the bounded Disconnect stays
 // real, since that is what the cycle has to get past (#472).
@@ -199,7 +202,9 @@ vi.mock('../../../src/ble/handler-node-ble/stale-link.js', async (importOriginal
     ...actual,
     staleLinkRecoveryDue: () => true,
     recoverStaleLink: record('recoverStaleLink', async () => {}),
-    noteReadingForStaleLink: record('noteReadingForStaleLink'),
+    noteReadingForStaleLink: record('noteReadingForStaleLink', (mac: string) => {
+      readingBrakeMacs.push(mac);
+    }),
   };
 });
 
@@ -561,6 +566,7 @@ describe('scanAndReadRaw and a Disconnect BlueZ never answers (#472)', () => {
 
   beforeEach(() => {
     calls.length = 0;
+    readingBrakeMacs.length = 0;
     _resetDeviceCacheForTests();
     vi.useFakeTimers();
     fakeDevice.disconnect = async () => {
@@ -591,9 +597,19 @@ describe('scanAndReadRaw and a Disconnect BlueZ never answers (#472)', () => {
     expect(result.state()).toBe('resolved');
     expect(calls.filter((c) => c === 'device.disconnect')).toHaveLength(1);
     expect(result.value()?.reading.weight).toBe(80);
-    // The reading lifts the brake; the stale link it left goes to the recovery.
-    expect(calls).toContain('noteReadingForStaleLink');
+    // The reading lifts the brake of the scale it came from; the stale link it
+    // left goes to the recovery.
+    expect(readingBrakeMacs).toEqual(['AA:BB:CC:DD:EE:FF']);
     expect(calls).toContain('recoverStaleLink');
+  });
+
+  it('lifts the brake of the scale auto-discovery found, which has no scale_mac', async () => {
+    const result = track(scanAndReadRaw({ ...opts(), targetMac: undefined }));
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(result.state()).toBe('resolved');
+    expect(calls).toContain('autoDiscover');
+    expect(readingBrakeMacs).toEqual(['AA:BB:CC:DD:EE:FF']);
   });
 
   it('hands a stale link to the teardown', async () => {
