@@ -177,13 +177,37 @@ describe('recoverStaleLink (#472)', () => {
     await vi.advanceTimersByTimeAsync(10_001);
     expect(done).toBe(true);
     expect(debug).toHaveBeenCalledWith(
-      expect.stringContaining(`Could not check ${MAC} after the adapter power-cycle within 10s`),
+      `Could not check ${MAC} after the adapter power-cycle: no answer within 10s`,
     );
     // Not knowing counts as not cleared.
     expect(staleLinkRecoveryDue(MAC)).toBe(false);
 
     await vi.advanceTimersByTimeAsync(10_000);
     expect(removeListeners).toHaveBeenCalled();
+  });
+
+  it('stops the check when a shutdown arrives during it, and leaves the brake alone', async () => {
+    // bluetoothd's main loop hangs: the check would otherwise take its whole
+    // 10 s, twice the 5 s grace a shutdown has.
+    const ac = new AbortController();
+    const removeListeners = vi.fn();
+    h.getAdapter.mockImplementation(async () => ({
+      getDevice: async () => ({
+        helper: { prop: () => new Promise(() => {}), removeListeners },
+      }),
+    }));
+    let done = false;
+    void recover(ac.signal).then(() => (done = true));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(done).toBe(false);
+
+    ac.abort();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(done).toBe(true);
+    expect(removeListeners).toHaveBeenCalled();
+    expect(staleLinkRecoveryDue(MAC)).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('skips the check when a shutdown arrives during the power-cycle', async () => {

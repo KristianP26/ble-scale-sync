@@ -210,12 +210,19 @@ export function disconnectBounded(
 /**
  * Whether BlueZ still lists `mac` as connected, read on a fresh adapter object.
  * Undefined when it could not tell within RECOVERY_CHECK_TIMEOUT_MS, as one
- * bound over every call in it: getAdapter() also registers the pairing agent.
- * A proxy that comes back after the deadline is released all the same (#404).
+ * bound over every call in it (getAdapter() also registers the pairing agent),
+ * or when `abortSignal` fired first. A proxy that comes back after either is
+ * released all the same (#404).
+ *
+ * Its own unref'd timer and abort listener, as in disconnectBounded, rather
+ * than withTimeout inside untilAborted: a shutdown during the check must not
+ * wait for it, and that timer would hold the event loop open for the rest of
+ * its 10 s.
  */
 async function stillConnected(
   mac: string,
   bleAdapter: string | undefined,
+  abortSignal?: AbortSignal,
 ): Promise<boolean | undefined> {
   let abandoned = false;
   let probe: Device | undefined;
@@ -241,21 +248,32 @@ async function stillConnected(
       releaseDeviceProxy(device);
     }
   };
-  try {
-    return await withTimeout(
-      check(),
+  return await new Promise<boolean | undefined>((resolve) => {
+    let settled = false;
+    const finish = (connected: boolean | undefined, giveUp?: string): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      abortSignal?.removeEventListener('abort', onAbort);
+      if (giveUp !== undefined) {
+        abandoned = true;
+        if (probe) releaseDeviceProxy(probe);
+        bleLog.debug(`Could not check ${mac} after the adapter power-cycle: ${giveUp}`);
+      }
+      resolve(connected);
+    };
+    const timer = setTimeout(
+      () => finish(undefined, `no answer within ${RECOVERY_CHECK_TIMEOUT_MS / 1000}s`),
       RECOVERY_CHECK_TIMEOUT_MS,
-      `no answer within ${RECOVERY_CHECK_TIMEOUT_MS / 1000}s`,
     );
-  } catch (err) {
-    abandoned = true;
-    if (probe) releaseDeviceProxy(probe);
-    bleLog.debug(
-      `Could not check ${mac} after the adapter power-cycle within ` +
-        `${RECOVERY_CHECK_TIMEOUT_MS / 1000}s: ${errMsg(err)}`,
+    timer.unref?.();
+    const onAbort = (): void => finish(undefined, 'shutting down');
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
+    check().then(
+      (connected) => finish(connected),
+      (err: unknown) => finish(undefined, errMsg(err)),
     );
-    return undefined;
-  }
+  });
 }
 
 /**
@@ -306,7 +324,9 @@ export async function recoverStaleLink(opts: {
   // cycle, or a transport already released, then inherits. The brake stays
   // as it is.
   if (abortSignal?.aborted) return;
-  const connected = await stillConnected(mac, bleAdapter);
+  const connected = await stillConnected(mac, bleAdapter, abortSignal);
+  // The same for an abort during the check.
+  if (abortSignal?.aborted) return;
   if (connected === false) {
     announceOnce('cleared', 'info', `Cleared a stale BlueZ connection to ${mac} ${how}`);
     liftBrake(mac);
