@@ -69,6 +69,12 @@ describe('PairingBackoff (#471, D063)', () => {
     ]);
   });
 
+  // The docs promise the doubling goes on past 32 minutes under a larger cap,
+  // not a jump from 32 straight to the cap.
+  it('keeps doubling past 32 minutes until it reaches a larger cap', () => {
+    expect([7, 8, 9, 10, 11].map((n) => waitsAfter(n, 240))).toEqual([32, 64, 128, 240, 240]);
+  });
+
   it('uses the current cap on every query', () => {
     for (let i = 0; i < 8; i++) b.recordFailure(MAC, 'X', undefined);
     expect(b.remainingMs(MAC, 60)).toBe(60 * MIN);
