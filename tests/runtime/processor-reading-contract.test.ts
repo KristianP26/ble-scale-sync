@@ -125,6 +125,8 @@ function makeCtx(users: UserConfig[], over: Partial<AppContext> = {}): AppContex
     signal: new AbortController().signal,
     exporterCache: new Map(),
     lastExportedWeights: new Map(),
+    lastExportedAt: new Map(),
+    startedAt: new Date(),
     embeddedBroker: null,
     retryFailedExports: false,
     exportQueuePath: undefined,

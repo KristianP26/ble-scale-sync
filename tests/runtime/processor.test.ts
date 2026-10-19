@@ -155,6 +155,8 @@ function makeCtx(users: UserConfig[], overrides: CtxOverrides = {}): AppContext 
     signal: new AbortController().signal,
     exporterCache: new Map(),
     lastExportedWeights: new Map(),
+    lastExportedAt: new Map(),
+    startedAt: new Date(),
     embeddedBroker: null,
     display: overrides.display,
     retryFailedExports: overrides.exportQueuePath !== undefined,
@@ -623,6 +625,164 @@ describe('processReading: historical replay', () => {
     await processReading(ctx, rawReading({ weight: 82.5, impedance: 500 }));
     expect(ctx.lastExportedWeights.has('dad')).toBe(false);
     expect(dispatchExports).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Replay dedup by measurement time (#475, #463) ──────────────────────────
+
+/**
+ * The replay dedup used to drop every stored record within 0.1 kg of the last
+ * exported weight, on the premise that a record from the scale's memory is
+ * older than the weigh-in the anchor reflects. A weigh-in stored while the app
+ * waited between sessions (#475), or after the last live export (#463), is
+ * newer, and it was lost, Garmin included. It is now a replay candidate only
+ * when it was measured no more than HISTORY_WINDOW_MS after the anchor's own
+ * measurement time: the last live export of this process, or the process start
+ * for an anchor read from config.yaml.
+ */
+describe('processReading: replay dedup by measurement time (#475, #463)', () => {
+  const T0 = new Date('2026-10-19T07:00:00Z');
+  const MIN = 60_000;
+  const at = (offsetMs: number): Date => new Date(T0.getTime() + offsetMs);
+
+  function storedOnly(weight: number, timestamp: Date): RawReading {
+    return { reading: { weight, impedance: 480, timestamp }, adapter: fakeAdapter() };
+  }
+
+  function replaySkipped(): boolean {
+    return logSpy.mock.calls.some((c) => String(c[0]).includes('Skipping replay'));
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T0);
+    logSpy.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A context started at T0 whose last live export was `weight`, received at T0 + `offsetMs`. */
+  async function afterLiveWeighIn(weight: number, offsetMs = 0, timestamp?: Date) {
+    const ctx = makeCtx([dad]);
+    const exporters = [fakeExporter('garmin')];
+    vi.setSystemTime(at(offsetMs));
+    await processReading(
+      ctx,
+      rawReading(timestamp ? { weight, impedance: 500, timestamp } : { weight, impedance: 500 }),
+      { singleUserExporters: exporters },
+    );
+    expect(dispatchExports).toHaveBeenCalledTimes(1);
+    vi.mocked(dispatchExports).mockClear();
+    logSpy.mockClear();
+    return { ctx, exporters };
+  }
+
+  it('exports a stored record within 0.1 kg of the last live weigh-in when it was measured more than 5 minutes after it (#475)', async () => {
+    const { ctx, exporters } = await afterLiveWeighIn(82.5);
+
+    // Ten minutes old when it arrives, 0.05 kg from the anchor, measured ten
+    // minutes after the live weigh-in the anchor reflects.
+    vi.setSystemTime(at(20 * MIN));
+    await processReading(ctx, storedOnly(82.55, at(10 * MIN)), { singleUserExporters: exporters });
+
+    expect(dispatchExports).toHaveBeenCalledTimes(1);
+    const context = vi.mocked(dispatchExports).mock.calls[0][2];
+    expect(context?.historical).toBe(true);
+    expect(context?.timestamp?.toISOString()).toBe(at(10 * MIN).toISOString());
+    expect(replaySkipped()).toBe(false);
+    // History still never moves the anchor (D027).
+    expect(ctx.lastExportedWeights.get('dad')).toBe(82.5);
+    expect(ctx.lastExportedAt.get('dad')?.toISOString()).toBe(T0.toISOString());
+  });
+
+  it('still skips the replay of the last live weigh-in', async () => {
+    const stamp = at(-30_000);
+    const { ctx, exporters } = await afterLiveWeighIn(82.5, 0, stamp);
+
+    vi.setSystemTime(at(20 * MIN));
+    await processReading(ctx, storedOnly(82.5, stamp), { singleUserExporters: exporters });
+
+    expect(dispatchExports).not.toHaveBeenCalled();
+    expect(replaySkipped()).toBe(true);
+  });
+
+  it.each([
+    ['23 s, as the QN 19-byte copy of a live weigh-in', 23_000],
+    ['4 minutes, a scale clock running ahead', 4 * MIN],
+  ])(
+    'still skips a replay stamped up to 5 minutes after an unstamped live weigh-in (%s)',
+    async (_label, offsetMs) => {
+      const { ctx, exporters } = await afterLiveWeighIn(82.5);
+
+      vi.setSystemTime(at(20 * MIN));
+      await processReading(ctx, storedOnly(82.55, at(offsetMs)), {
+        singleUserExporters: exporters,
+      });
+
+      expect(dispatchExports).not.toHaveBeenCalled();
+      expect(replaySkipped()).toBe(true);
+    },
+  );
+
+  it('treats exactly 5 minutes after the anchor as a replay, and one second more as a new weigh-in', async () => {
+    const { ctx, exporters } = await afterLiveWeighIn(82.5);
+    vi.setSystemTime(at(20 * MIN));
+
+    await processReading(ctx, storedOnly(82.55, at(5 * MIN)), { singleUserExporters: exporters });
+    expect(dispatchExports).not.toHaveBeenCalled();
+    expect(replaySkipped()).toBe(true);
+
+    logSpy.mockClear();
+    await processReading(ctx, storedOnly(82.55, at(5 * MIN + 1000)), {
+      singleUserExporters: exporters,
+    });
+    expect(dispatchExports).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(dispatchExports).mock.calls[0][2]?.historical).toBe(true);
+    expect(replaySkipped()).toBe(false);
+  });
+
+  it('exports a stored record measured more than 5 minutes after the process started, against a config anchor', async () => {
+    // No live export in this process: the anchor is last_known_weight = 82
+    // from config.yaml, written no later than the process start (T0).
+    const ctx = makeCtx([dad]);
+    vi.setSystemTime(at(60 * MIN));
+
+    await processReading(ctx, storedOnly(82.05, at(30 * MIN)), {
+      singleUserExporters: [fakeExporter('garmin')],
+    });
+
+    expect(dispatchExports).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(dispatchExports).mock.calls[0][2]?.historical).toBe(true);
+    expect(replaySkipped()).toBe(false);
+  });
+
+  it('still skips a stored record measured before the process started, against a config anchor', async () => {
+    // The single-run case (E-09): every run is a new process, the stored
+    // records predate it, and config.yaml is the only memory of what went out.
+    const ctx = makeCtx([dad]);
+    vi.setSystemTime(at(MIN));
+
+    await processReading(ctx, storedOnly(82.05, at(-24 * 60 * MIN)), {
+      singleUserExporters: [fakeExporter('garmin')],
+    });
+
+    expect(dispatchExports).not.toHaveBeenCalled();
+    expect(replaySkipped()).toBe(true);
+  });
+
+  it('keeps the weight rule for a stored record older than the live anchor', async () => {
+    // Process started at T0, live weigh-in at T0 + 120 min. A record from
+    // T0 + 60 min is long after the start but before the live anchor, so it is
+    // a coincidence within 0.1 kg, not a new weigh-in after it.
+    const { ctx, exporters } = await afterLiveWeighIn(82.5, 120 * MIN);
+
+    vi.setSystemTime(at(150 * MIN));
+    await processReading(ctx, storedOnly(82.55, at(60 * MIN)), { singleUserExporters: exporters });
+
+    expect(dispatchExports).not.toHaveBeenCalled();
+    expect(replaySkipped()).toBe(true);
   });
 });
 

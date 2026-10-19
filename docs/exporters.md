@@ -561,6 +561,8 @@ So a scale that replays its cache fills in your Garmin and InfluxDB history whil
 Historical reading (2026-09-07T06:12:44.000Z): skipping non-back-date exporters [mqtt, ntfy]
 ```
 
+A past measurement within 0.1 kg of the last weight this app exported for that user is taken as that weigh-in replayed from the scale's memory and is skipped, with `Skipping replay` in the log, unless it was measured more than 5 minutes after that weigh-in. When the app has exported no live weigh-in since it started, the last weight is `last_known_weight` from `config.yaml` and the comparison is with the time the app started, so a stored weigh-in from before a restart within 0.1 kg of it is still skipped.
+
 Every reading taken while the app is running is a live reading and goes to every configured exporter.
 
 ## Healthchecks

@@ -49,6 +49,19 @@ export interface AppContext {
    */
   readonly lastExportedWeights: Map<string, number>;
 
+  /**
+   * When the weigh-in behind `lastExportedWeights` was measured, keyed by user
+   * slug. The replay dedup compares a stored record's own time with it (#475).
+   * Process-lifetime state like `lastExportedWeights`, kept across a reload.
+   */
+  readonly lastExportedAt: Map<string, Date>;
+
+  /**
+   * When this process built its context. A last_known_weight read from
+   * config.yaml was exported by an earlier process, so it is no newer than this.
+   */
+  readonly startedAt: Date;
+
   // Lifecycle handle (mqtt-proxy only; set after bootstrapMqttProxy)
   embeddedBroker: EmbeddedBrokerHandle | null;
 
@@ -101,6 +114,8 @@ export function createAppContext(init: AppContextInit): AppContext {
     signal: init.signal,
     exporterCache: new Map(),
     lastExportedWeights: new Map(),
+    lastExportedAt: new Map(),
+    startedAt: new Date(),
 
     embeddedBroker: null,
 
