@@ -17,7 +17,15 @@
  * removes every connection it holds and answers their pending Disconnects. It
  * cannot clear a device that is missing from its connection list, which only a
  * bluetoothd restart does, so a failed check warns with that command and backs
- * off rather than power-cycling the adapter under every cycle.
+ * off rather than power-cycling the adapter under every cycle. The brake holds
+ * back only this recovery: with `ble.preemptive_adapter_reset` on, a GATT
+ * session still ends with the preemptive power-cycle as before.
+ *
+ * A timeout is taken as evidence about the link, not about our D-Bus
+ * connection. A bus the daemon closed does not get here: the node-ble
+ * connection fails every pending and later call on it (A-03), which reads as
+ * an answer. Only a proxy left on an already replaced connection could time out
+ * for that reason, and then the cost is one needless power-cycle.
  */
 
 import {
@@ -238,8 +246,16 @@ export async function recoverStaleLink(opts: {
   try {
     if (await resetAdapterBtmgmt(index)) {
       how = `by power-cycling hci${index}`;
-    } else if (await powerCycleViaDbus(await getAdapter(bleAdapter), abortSignal)) {
-      how = 'through BlueZ (Powered off/on)';
+    } else {
+      // Bounded like the check below: getAdapter() is an Introspect plus the
+      // pairing agent registration, and a bluetoothd whose main loop hangs
+      // would otherwise park the teardown until the poll deadline.
+      const adapter = await withTimeout(
+        getAdapter(bleAdapter),
+        RECOVERY_CHECK_TIMEOUT_MS,
+        `no adapter from BlueZ within ${RECOVERY_CHECK_TIMEOUT_MS / 1000}s`,
+      );
+      if (await powerCycleViaDbus(adapter, abortSignal)) how = 'through BlueZ (Powered off/on)';
     }
   } catch (err) {
     bleLog.debug(`Adapter power-cycle for the stale link failed: ${errMsg(err)}`);
@@ -249,6 +265,10 @@ export async function recoverStaleLink(opts: {
     tightenBrake();
     return;
   }
+  // A shutdown that arrived during the power-cycle: the check would open a
+  // new D-Bus connection after the transport was released, and that socket
+  // would hold the process until the force exit. The brake stays as it is.
+  if (abortSignal?.aborted) return;
   const connected = await stillConnected(mac, bleAdapter);
   if (connected === false) {
     announceOnce('cleared', 'info', `Cleared a stale BlueZ connection to ${mac} ${how}`);
@@ -260,7 +280,8 @@ export async function recoverStaleLink(opts: {
       'still-connected',
       'warn',
       `BlueZ still reports ${mac} as connected after the adapter power-cycle and does not ` +
-        'complete a Disconnect. Restart bluetoothd on the host: sudo systemctl restart bluetooth',
+        'complete a Disconnect. Restart bluetoothd on the host: sudo systemctl restart bluetooth ' +
+        '(on Home Assistant OS, restart the host)',
     );
   }
   tightenBrake();

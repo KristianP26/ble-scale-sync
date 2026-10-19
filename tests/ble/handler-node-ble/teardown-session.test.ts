@@ -264,6 +264,47 @@ describe('teardownSession and a Disconnect BlueZ never answers (#472)', () => {
     expect(h.getAdapter).not.toHaveBeenCalled();
   });
 
+  it('skips the RemoveDevice when the cycle already knows the link is stale', async () => {
+    // BlueZ would queue it behind the same unanswered Disconnect.
+    const device = hung();
+    const result = track(
+      teardownSession(
+        gattCycle({ device: device as never, gattSucceeded: false, staleLink: true }),
+      ),
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(result.state()).toBe('resolved');
+    expect(device.disconnect).not.toHaveBeenCalled();
+    expect(calls).toEqual(['StopDiscovery', 'resetConnection', 'resetAdapterBtmgmt']);
+  });
+
+  it('drops the D-Bus connection on an idle cycle while the brake holds the recovery back', async () => {
+    // A first recovery that did not clear the link arms the brake.
+    h.getDevice.mockImplementation(async () => ({
+      helper: { prop: async () => true, removeListeners: () => {} },
+    }));
+    vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+    const first = track(
+      teardownSession(gattCycle({ device: hung() as never, gattAttempted: false })),
+    );
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(first.state()).toBe('resolved');
+    expect(h.resetAdapterBtmgmt).toHaveBeenCalledTimes(1);
+
+    calls.length = 0;
+    const second = track(
+      teardownSession(
+        gattCycle({ device: hung() as never, gattAttempted: false, gattSucceeded: false }),
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(second.state()).toBe('resolved');
+    expect(calls).toEqual(['resetConnection']);
+  });
+
   it('recovers a stale link found by a cycle without a GATT attempt', async () => {
     // A broadcast or idle cycle that found the scale disconnects it too, and
     // the same stuck Disconnect parks it there.

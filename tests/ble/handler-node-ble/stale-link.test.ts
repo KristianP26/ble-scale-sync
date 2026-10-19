@@ -167,6 +167,31 @@ describe('recoverStaleLink (#472)', () => {
     expect(removeListeners).toHaveBeenCalled();
   });
 
+  it('skips the check when a shutdown arrives during the power-cycle', async () => {
+    const ac = new AbortController();
+    h.resetAdapterBtmgmt.mockImplementation(async () => {
+      ac.abort();
+      return true;
+    });
+    bluezReports(false);
+    await recover(ac.signal);
+    expect(h.resetAdapterBtmgmt).toHaveBeenCalledTimes(1);
+    expect(h.getAdapter).not.toHaveBeenCalled();
+  });
+
+  it('bounds the adapter lookup for the BlueZ power-cycle too', async () => {
+    h.resetAdapterBtmgmt.mockResolvedValue(false);
+    h.getAdapter.mockImplementation(() => new Promise(() => {}));
+    let done = false;
+    void recover().then(() => (done = true));
+
+    await vi.advanceTimersByTimeAsync(10_001);
+
+    expect(done).toBe(true);
+    expect(h.powerCycleViaDbus).not.toHaveBeenCalled();
+    expect(staleLinkRecoveryDue()).toBe(false);
+  });
+
   it('does nothing on an aborted cycle', async () => {
     const ac = new AbortController();
     ac.abort();

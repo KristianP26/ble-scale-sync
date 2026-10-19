@@ -543,7 +543,11 @@ export async function teardownSession(opts: {
     // The resetConnection() below would invalidate the claim anyway, but the
     // invariant should hold by construction, not by what happens to follow.
     if (btAdapter) notifyDiscoveryStopped(btAdapter);
-    if (deviceMac && (await removeDevice(btAdapter!, deviceMac)) === 'timeout') {
+    if (deviceMac && staleLink) {
+      // BlueZ would queue it behind the Disconnect it has not answered, and
+      // the power-cycle below drops the device's state anyway.
+      bleLog.debug(`Skipping RemoveDevice for ${mac}: BlueZ has not answered its Disconnect`);
+    } else if (deviceMac && (await removeDevice(btAdapter!, deviceMac)) === 'timeout') {
       staleLink = true;
     }
   }
@@ -606,6 +610,15 @@ export async function teardownSession(opts: {
     resetConnection();
     bleLog.debug('D-Bus connection reset for the stale-link recovery');
     await recoverStaleLink({ mac, bleAdapter, abortSignal });
+    return;
+  }
+  // Held back by the brake on a cycle that never resets the connection: the
+  // unanswered Disconnect would stay parked on it, one more per cycle, until
+  // the next reset. Dropping the connection lets it go on our side; bluetoothd
+  // keeps its queued copy until the link is finally cleared.
+  if (staleLink && !gattAttempted) {
+    resetConnection();
+    bleLog.debug('D-Bus connection reset: it held a Disconnect BlueZ will not answer (#472)');
     return;
   }
 
