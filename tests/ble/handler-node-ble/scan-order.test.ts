@@ -135,6 +135,8 @@ let scanFiltered = true;
 vi.mock('../../../src/ble/handler-node-ble/discovery.js', () => ({
   startDiscoverySafe: record('startDiscoverySafe', async () => onDiscoveryStart?.()),
   runningScanIsFiltered: () => scanFiltered,
+  // Passes the call through, so a test sees which connection it went to.
+  withBluezDeadline: <T>(call: Promise<T>) => call,
   removeDevice: record('removeDevice', async (adapter: unknown) => {
     removedThrough.push(adapter);
     // One-shot gate: lets a test hold a cycle inside its teardown (A-04).
@@ -714,7 +716,7 @@ describe('scanAndReadRaw after a connect retry replaced the D-Bus connection (#4
     await vi.advanceTimersByTimeAsync(30_000);
 
     expect(result.state()).toBe('rejected');
-    expect(live).toEqual(['device.disconnect', 'device released']);
+    expect(live).toEqual(['device.disconnect', 'device released', 'adapter StopDiscovery']);
     expect(calls).not.toContain('device.disconnect');
     // The purge before the scan went through the cycle's own adapter, the one
     // after the failed GATT session through the live one.
