@@ -34,6 +34,10 @@ describe('isHistoricalReading (D027, D065)', () => {
     // Such a reading is then dated by its receipt.
     const receivedAt = new Date(NOW);
     expect(measurementTime(reading, receivedAt)).toBe(receivedAt);
+    // The same with a stamp that cannot be read.
+    const unreadable = { ...reading, timestamp: new Date(NaN) };
+    expect(isHistoricalReading(unreadable, NOW)).toBe(true);
+    expect(measurementTime(unreadable, receivedAt)).toBe(receivedAt);
   });
 
   it('still decides an unflagged reading by age alone', () => {

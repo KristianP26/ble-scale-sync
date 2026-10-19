@@ -778,9 +778,13 @@ export function waitForRawReading(
       if (isHistoricalReading(reading)) {
         if (!adapter.isComplete(reading)) return;
         if (history.push(reading)) {
+          // A reading flagged fromMemory need not carry a readable stamp
+          // (D065), and toISOString throws on an invalid Date.
+          const ts = reading.timestamp;
+          const at = ts && !Number.isNaN(ts.getTime()) ? ts.toISOString() : 'receipt time';
           bleLog.debug(
             `Historical reading buffered: ${reading.weight.toFixed(2)} kg / ` +
-              `${reading.impedance} Ohm @ ${reading.timestamp?.toISOString() ?? 'receipt time'}`,
+              `${reading.impedance} Ohm @ ${at}`,
           );
         }
         return;

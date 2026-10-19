@@ -2764,6 +2764,49 @@ describe('QN 19-byte dialect hold through waitForRawReading (#331)', () => {
   });
 });
 
+// ─── A reading from memory whose time cannot be read (D065) ─────────────────
+
+// The contract says an adapter must not flag a reading `fromMemory` without a
+// trusted stamp; if one does anyway, the reading goes the history way dated by
+// its receipt. An unreadable Date used to throw out of the notification
+// handler instead, on node-ble straight out of the characteristic's emitter.
+describe('waitForRawReading: a reading from memory with an unreadable stamp (D065)', () => {
+  it('buffers it as history without throwing and hands it over on the disconnect', async () => {
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    try {
+      const notify = createMockChar();
+      const write = createMockChar();
+      const device = createMockDevice();
+      const { charMap } = createCharMap([
+        [NOTIFY_UUID, notify],
+        [WRITE_UUID, write],
+      ]);
+      const adapter = createLegacyAdapter({
+        parseNotification: () => ({
+          weight: 70,
+          impedance: 500,
+          timestamp: new Date(NaN),
+          fromMemory: true,
+        }),
+      });
+      const promise = waitForRawReading(charMap, device, adapter, PROFILE, 'AABBCCDDEEFF');
+      await vi.waitFor(() => expect(notify.subscribeCalled).toBe(true));
+
+      expect(() => notify.triggerData(Buffer.from([0x01]))).not.toThrow();
+      device.triggerDisconnect();
+      const raw = await promise;
+      expect(raw.reading.fromMemory).toBe(true);
+      expect(raw.reading.weight).toBe(70);
+      const lines = debug.mock.calls.map((c) => String(c[0]));
+      expect(
+        lines.some((l) => l.includes('Historical reading buffered') && l.includes('receipt time')),
+      ).toBe(true);
+    } finally {
+      debug.mockRestore();
+    }
+  });
+});
+
 // ─── QN 18-byte stored weigh-in through waitForRawReading (#463, D065) ──────
 
 // The real adapter through the real session, frames and their spacing from the
