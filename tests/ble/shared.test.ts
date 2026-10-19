@@ -17,6 +17,8 @@ import { RenphoMsc04Adapter } from '../../src/scales/renpho-msc04.js';
 import { BeurerSanitasScaleAdapter } from '../../src/scales/beurer-sanitas.js';
 import { EsCs20mAdapter, buildGuestProfileFrame } from '../../src/scales/es-cs20m.js';
 import { QnScaleAdapter } from '../../src/scales/qn-scale/index.js';
+import { YunmaiScaleAdapter } from '../../src/scales/yunmai.js';
+import { applyForcedAdapter } from '../../src/scales/force.js';
 import { mockPeripheral } from '../helpers/scale-test-utils.js';
 import { uuid16, xorChecksum, buildPayload } from '../../src/scales/body-comp-helpers.js';
 import type {
@@ -1854,6 +1856,53 @@ describe('waitForRawReading() with the real KoogeekS1Adapter (#270)', () => {
     notifyChar.triggerData(stableFrame(800, 0));
     notifyChar.triggerData(stableFrame(783, 470));
     expect((await promise).reading).toEqual({ weight: 78.3, impedance: 470 });
+  });
+});
+
+// ─── Yunmai end to end through the real adapter (#474) ──────────────────────
+
+// The real adapter through the real session (#474). The hold is decided by the
+// frame just parsed, which works only because the session reads
+// completionHoldMs when the hold arms, right after that parse (#406).
+describe('waitForRawReading() with a forced, nameless Yunmai (#474)', () => {
+  const frame = (s: string): Buffer => Buffer.from(s.replace(/\s+/g, ''), 'hex');
+  // The derived #474 frames from tests/scales/yunmai.test.ts (user id, weight,
+  // resistance and body fat replaced, XOR recomputed; the second also has its
+  // resistance field zeroed).
+  const FINAL = frame('0d 1f 14 02 00 00 0c 51 ef 00 00 12 34 1f 40 01 d6 09 f6 ea');
+  const NO_RESISTANCE = frame('0d 1f 14 02 00 00 0c 51 ef 00 00 12 34 1f 40 00 00 09 f6 3d');
+
+  it('holds after a frame whose resistance field is 0 and settles on the one that has it', async () => {
+    vi.useFakeTimers();
+    try {
+      const notifyChar = createMockChar();
+      const writeChar = createMockChar();
+      const device = createMockDevice();
+      const { charMap } = createCharMap([
+        [uuid16(0xffe4), notifyChar],
+        [uuid16(0xffe9), writeChar],
+      ]);
+      const adapter = applyForcedAdapter([new YunmaiScaleAdapter()], 'Yunmai')[0];
+      adapter.matches({ localName: '', serviceUuids: [] });
+      const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(notifyChar.subscribeCalled).toBe(true);
+
+      notifyChar.triggerData(NO_RESISTANCE);
+      let settled = false;
+      void promise.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(settled, 'a frame with an empty resistance field must not end the session').toBe(
+        false,
+      );
+
+      notifyChar.triggerData(FINAL);
+      expect((await promise).reading).toEqual({ weight: 80, impedance: 470 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

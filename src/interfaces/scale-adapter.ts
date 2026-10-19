@@ -477,9 +477,9 @@ export interface ScaleAdapterCore {
    *
    * Must not throw and must not perform I/O: nothing is connected yet. Reading
    * a value the adapter already recorded is fine, which is what the address is
-   * for: an adapter that keeps per-device state (yunmai's Mini/SE variant) can
-   * resolve it here, for the device this session is about to read, rather than
-   * carrying whatever `matches()` last saw.
+   * for: an adapter that keeps per-device state can resolve it here, for the
+   * device this session is about to read, rather than carrying whatever
+   * `matches()` last saw.
    *
    * `deviceAddress` is uppercase with no separators, and it is NOT always a
    * MAC: on macOS the noble transport supplies the CoreBluetooth UUID instead,

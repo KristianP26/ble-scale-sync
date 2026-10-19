@@ -34,7 +34,8 @@ _Weight only_ means weight is reported normally but body composition is estimate
 | **1byone** / **Eufy** C1 / P1                                                  | Yes              |                                                                                                                                               |
 | **Eufy** Smart Scale P2 (T9148) / P2 Pro (T9149)                               | Yes              | Body composition over a connection; the broadcast gives weight only                                                                           |
 | **Eufy** Smart Scale C20 (T9130) / P3 (T9150)                                  | Weight only      | Broadcast only; matched by its name or by its own address                                                                                     |
-| **Yunmai** Signal / Mini / SE                                                  | Yes              | The scale sends its own body composition                                                                                                      |
+| **Yunmai** Signal / Mini / Mini 2                                              | Yes              | Impedance and, on newer firmware, the scale's own body fat; not confirmed on hardware with ble-scale-sync yet                                 |
+| **Yunmai** SE                                                                  | Weight only      | Reports no impedance                                                                                                                          |
 | **Beurer** BF700 / BF710 / BF800                                               | Yes              | BF710: register it in the Beurer app first                                                                                                    |
 | **Salter** SA00656 / SA00432 (Salter Health)                                   | Weight only      | Powers off after weighing; suits continuous mode                                                                                              |
 | **Sanitas** SBF70 / SBF75                                                      | Yes              |                                                                                                                                               |
@@ -135,6 +136,10 @@ Weight only. The C20 (T9130) and P3 (T9150) broadcast their weigh-in; ble-scale-
 - **Read as kg.** The weight is read as kg, as in every weigh-in seen so far; none is known to have been taken with the display on lb or st. If yours shows lb or st, compare the first export with the display and report it on [#408](https://github.com/KristianP26/ble-scale-sync/issues/408).
 - **No impedance.** The broadcast also carries a field that looks like impedance and a heart rate, but neither has been compared with the Eufy app for the same weigh-in, so body composition is estimated from BMI (Deurenberg formula) and both are logged in debug mode.
 - **Home Assistant Bluetooth.** A P3 changes its manufacturer id while weighing, so over [Home Assistant Bluetooth](/guide/ha-bluetooth) it needs a scanner that forwards raw advertisements.
+
+### **Yunmai**
+
+The body fat the scale sends is computed by the scale for a profile the vendor app stored in it, normally the person it recognised. ble-scale-sync does not write a profile to the scale, so in a household with several users the value can belong to the profile the scale picked rather than to the person matched by weight. The Yunmai SE reports no impedance, so its body composition is estimated from BMI.
 
 ### **Xiaomi** Mi Smart Scale 2 (XMTZC04HM)
 

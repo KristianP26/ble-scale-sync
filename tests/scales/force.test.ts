@@ -4,6 +4,7 @@ import { adapters } from '../../src/scales/index.js';
 import { resolveAdapter } from '../../src/scales/resolve.js';
 import { hasParseableBroadcastSource } from '../../src/ble/shared.js';
 import { EsCs20mAdapter } from '../../src/scales/es-cs20m.js';
+import { BeurerSanitasScaleAdapter } from '../../src/scales/beurer-sanitas.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type { BleDeviceInfo, ConnectionContext } from '../../src/interfaces/scale-adapter.js';
 
@@ -20,14 +21,17 @@ describe('force_scale_adapter', () => {
   });
 
   // The override used to replace matches() outright, which skipped the variant
-  // latching two adapters do inside it (#384).
+  // latching Beurer/Sanitas does inside it (#384).
   it('still runs the real matcher, so a name-driven variant is latched', () => {
-    const forced = applyForcedAdapter(adapters, 'Yunmai')[0] as unknown as {
+    const forced = applyForcedAdapter(
+      [new BeurerSanitasScaleAdapter()],
+      'Beurer / Sanitas',
+    )[0] as unknown as {
       matches: (d: BleDeviceInfo) => boolean;
-      isMini?: boolean;
+      isBf710Type?: boolean;
     };
-    expect(forced.matches({ ...anyDevice, localName: 'YUNMAI-ISM-XXXX' })).toBe(true);
-    expect(forced.isMini).toBe(true);
+    expect(forced.matches({ ...anyDevice, localName: 'Sanitas SBF70' })).toBe(true);
+    expect(forced.isBf710Type).toBe(true);
   });
 
   it('claims the device even when the real matcher says no', () => {

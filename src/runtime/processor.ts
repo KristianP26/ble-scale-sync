@@ -102,7 +102,8 @@ export interface ProcessReadingOpts {
  * checks the impedance against the same plausible band the shared BIA guard
  * uses and, when it fails, sets it to 0 on the reading itself before the
  * adapter computes anything. 0 is the contract's "no impedance": the adapter
- * then has to produce the BMI estimate.
+ * then has to produce the BMI estimate, unless the scale measured the
+ * composition itself (D028).
  *
  * In place on purpose: adapters pin their decoded composition to the reading
  * OBJECT (`ReadingComposition`), so a copy would lose it.
@@ -116,7 +117,7 @@ function computeFrameMetrics(
   if (reading.impedance !== 0 && !isPlausibleImpedance(reading.impedance)) {
     log.info(
       `${tagPrefix}Impedance ${reading.impedance} Ohm is not a usable measurement ` +
-        `(${IMPEDANCE_MIN_OHM}-${IMPEDANCE_MAX_OHM} Ohm), so body composition is the BMI estimate.`,
+        `(${IMPEDANCE_MIN_OHM}-${IMPEDANCE_MAX_OHM} Ohm), so it is not used.`,
     );
     reading.impedance = 0;
   }

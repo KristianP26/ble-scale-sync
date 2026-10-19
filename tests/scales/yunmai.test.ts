@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { YunmaiScaleAdapter } from '../../src/scales/yunmai.js';
+import { applyForcedAdapter } from '../../src/scales/force.js';
 import { computeBiaFat } from '../../src/scales/body-comp-helpers.js';
 import {
   mockPeripheral,
@@ -7,10 +8,42 @@ import {
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
 
+/** Hex as printed in the logs; spaces are ignored. */
+const frame = (s: string): Buffer => Buffer.from(s.replace(/\s+/g, ''), 'hex');
+
+// #474 (Yunmai Mini 2 M1690, ESPHome proxy, force_scale_adapter: Yunmai, DEBUG
+// log 2026-10-18), derived from the captured frame with the personal values
+// replaced, so the reporter's numbers stay out of the repo: the user id
+// [9..12], weight [13..14], resistance [15..16] and body fat [17..18] are
+// 0x1234, 80.00 kg, 470 and 25.50 %, and the XOR [19] is recomputed. Bytes
+// [0..8] (start, version, length, type, [4], scale clock) are as captured.
+const M1690_FINAL = frame('0d 1f 14 02 00 00 0c 51 ef 00 00 12 34 1f 40 01 d6 09 f6 ea');
+// The frame sent 7 s earlier, when the scale recognised nobody ([9..12] = 0):
+// weight, resistance and body fat replaced (75.00 kg, 520, 24.00 %), XOR
+// recomputed.
+const M1690_NO_USER = frame('0d 1f 14 02 00 00 0c 51 e8 00 00 00 00 1d 4c 02 08 09 60 8e');
+// M1690_FINAL with the resistance [15..16] zeroed (weighed in socks, #257) and
+// the XOR recomputed.
+const M1690_NO_RESISTANCE = frame('0d 1f 14 02 00 00 0c 51 ef 00 00 12 34 1f 40 00 00 09 f6 3d');
+// M1690_FINAL with [2] set to 0x13 and the XOR recomputed: a buffer that no
+// longer says it holds the fields.
+const M1690_DECLARES_19 = frame('0d 1f 13 02 00 00 0c 51 ef 00 00 12 34 1f 40 01 d6 09 f6 ed');
+// Length boundaries nobody has seen on a real scale, cut from M1690_FINAL with
+// [2] set to the new length and the XOR recomputed into the last byte: 19
+// bytes (resistance field whole, body fat field cut, [18] is the XOR) and 17
+// bytes (resistance field cut, [16] is the XOR).
+const M1690_19_BYTES = frame('0d 1f 13 02 00 00 0c 51 ef 00 00 12 34 1f 40 01 d6 09 1b');
+const M1690_17_BYTES = frame('0d 1f 11 02 00 00 0c 51 ef 00 00 12 34 1f 40 01 c6');
+// openScale issue #1286 (YUNMAI-SIGNAL, protocol 0x13, openScale debug log
+// 2026-01-15), byte for byte: 18 bytes, no body fat field, [17] is the XOR.
+const SIGNAL_0X13 = frame('0d 13 12 02 00 00 00 00 6d 00 00 00 01 1f 1f 00 bb d4');
+
 function makeAdapter() {
   return new YunmaiScaleAdapter();
 }
 
+// Synthetic, from before the fixture rule: the protocol stands on the captured
+// frames above, this one only drives state and ordering (#394).
 function makeFrame(opts: {
   protocolVer?: number;
   respType?: number;
@@ -19,22 +52,24 @@ function makeFrame(opts: {
   fatRaw?: number;
   length?: number;
 }): Buffer {
-  const len = opts.length ?? 19;
+  const len = opts.length ?? 20;
   const buf = Buffer.alloc(len);
   buf[0] = 0x0d; // marker
   buf[1] = opts.protocolVer ?? 0x1e; // protocol version
-  buf[2] = 0x00;
+  buf[2] = len; // the frame's own length: it is what says the fields are there
   buf[3] = opts.respType ?? 0x02; // final frame
   // bytes 4: padding
   // bytes 5-8: timestamp (zeroed)
   // bytes 9-12: user id (zeroed)
   buf.writeUInt16BE(opts.weightRaw ?? 8000, 13); // 8000/100=80 kg
-  if (len >= 17) {
+  if (len >= 18) {
     buf.writeUInt16BE(opts.impedanceRaw ?? 500, 15);
   }
-  if (len >= 19) {
+  if (len >= 20) {
     buf.writeUInt16BE(opts.fatRaw ?? 2200, 17); // 2200/100=22%
   }
+  // XOR only from 18 bytes: on a shorter buffer it would overwrite the weight.
+  if (len >= 18) buf[len - 1] = buf.subarray(1, len - 1).reduce((x, b) => x ^ b, 0);
   return buf;
 }
 
@@ -52,19 +87,6 @@ describe('YunmaiScaleAdapter', () => {
       expect(adapter.matches(p)).toBe(true);
     });
 
-    it('detects Mini variant via ISM in name', () => {
-      const adapter = makeAdapter();
-      const p = mockPeripheral('Yunmai ISM', []);
-      adapter.matches(p);
-      // isMini should be set — we test this via isComplete behavior
-    });
-
-    it('detects SE variant via ISSE in name', () => {
-      const adapter = makeAdapter();
-      const p = mockPeripheral('Yunmai ISSE', []);
-      adapter.matches(p);
-    });
-
     it('does not match unrelated name', () => {
       const adapter = makeAdapter();
       const p = mockPeripheral('QN-Scale', []);
@@ -73,20 +95,46 @@ describe('YunmaiScaleAdapter', () => {
   });
 
   describe('parseNotification()', () => {
-    it('parses final frame with weight', () => {
+    it('reads only the weight of a frame whose [2] does not match its length', () => {
       const adapter = makeAdapter();
-      // Standard variant (no ISM in name) — match first
-      adapter.matches(mockPeripheral('Yunmai Standard', []));
+      adapter.matches(mockPeripheral('YUNMAI-ISM2-W', []));
+      adapter.onSessionStart();
 
-      const buf = makeFrame({ weightRaw: 8000 });
-      const reading = adapter.parseNotification(buf);
-
-      expect(reading).not.toBeNull();
-      expect(reading!.weight).toBe(80);
-      expect(reading!.impedance).toBe(0); // standard variant: no impedance
+      const reading = adapter.parseNotification(M1690_DECLARES_19)!;
+      expect(reading).toEqual({ weight: 80, impedance: 0 });
+      expect(adapter.completionHoldMs).toBeUndefined();
+      // Nor its body fat: 25.50 % sits at [17..18], and only the frame has it.
+      const profile = defaultProfile({ gender: 'female', age: 30, height: 165 });
+      expect(adapter.computeMetrics(reading, profile).bodyFatPercent).not.toBeCloseTo(25.5, 1);
     });
 
-    it('parses Mini variant with impedance', () => {
+    it('reads the resistance but no body fat from a 19-byte frame', () => {
+      const adapter = makeAdapter();
+      adapter.matches(mockPeripheral('YUNMAI-ISM2-W', []));
+      adapter.onSessionStart();
+
+      const reading = adapter.parseNotification(M1690_19_BYTES)!;
+      expect(reading).toEqual({ weight: 80, impedance: 470 });
+      // Without a body fat field this is the Yunmai formula, the value a fresh
+      // adapter with nothing pinned computes for the same reading; reading
+      // [17..18] here would give 23.31 % from the cut field and the XOR.
+      const profile = defaultProfile({ gender: 'female', age: 30, height: 165 });
+      expect(adapter.computeMetrics(reading, profile).bodyFatPercent).toBeCloseTo(
+        makeAdapter().computeMetrics({ weight: 80, impedance: 470 }, profile).bodyFatPercent,
+        5,
+      );
+    });
+
+    it('reads only the weight of a 17-byte frame', () => {
+      const adapter = makeAdapter();
+      adapter.matches(mockPeripheral('YUNMAI-ISM2-W', []));
+      adapter.onSessionStart();
+
+      expect(adapter.parseNotification(M1690_17_BYTES)).toEqual({ weight: 80, impedance: 0 });
+      expect(adapter.completionHoldMs).toBeUndefined();
+    });
+
+    it('parses a frame that declares the resistance field', () => {
       const adapter = makeAdapter();
       adapter.matches(mockPeripheral('Yunmai ISM', []));
 
@@ -96,15 +144,6 @@ describe('YunmaiScaleAdapter', () => {
       expect(reading).not.toBeNull();
       expect(reading!.weight).toBe(80);
       expect(reading!.impedance).toBe(480);
-    });
-
-    it('parses embedded fat percent for protocol >= 0x1E', () => {
-      const adapter = makeAdapter();
-      adapter.matches(mockPeripheral('Yunmai ISM', []));
-
-      const buf = makeFrame({ protocolVer: 0x1e, fatRaw: 2500 }); // 25%
-      adapter.parseNotification(buf);
-      // The embedded fat is used in computeMetrics, not returned in reading
     });
 
     it('returns null for non-final frame (respType != 0x02)', () => {
@@ -129,19 +168,19 @@ describe('YunmaiScaleAdapter', () => {
   });
 
   describe('isComplete()', () => {
-    it('Standard variant: complete when weight > 0', () => {
+    it('complete when weight > 0', () => {
       const adapter = makeAdapter();
       adapter.matches(mockPeripheral('Yunmai Standard', []));
       expect(adapter.isComplete({ weight: 80, impedance: 0 })).toBe(true);
     });
 
-    it('Standard variant: incomplete when weight = 0', () => {
+    it('incomplete when weight = 0', () => {
       const adapter = makeAdapter();
       adapter.matches(mockPeripheral('Yunmai Standard', []));
       expect(adapter.isComplete({ weight: 0, impedance: 0 })).toBe(false);
     });
 
-    it('Mini variant: complete on weight (impedance preferred via hold, not required)', () => {
+    it('complete on weight (impedance preferred via hold, not required)', () => {
       const adapter = makeAdapter();
       adapter.matches(mockPeripheral('Yunmai ISM', []));
       // #257: a weight-only final frame is complete so a unit that never reports
@@ -152,15 +191,20 @@ describe('YunmaiScaleAdapter', () => {
   });
 
   describe('completion hold (#257)', () => {
-    it('Mini/SE variant arms a hold window so impedance can arrive', () => {
+    it('a frame with an empty resistance field arms a hold so impedance can arrive', () => {
       const adapter = makeAdapter();
-      adapter.matches(mockPeripheral('Yunmai ISSE', []));
-      expect(adapter.completionHoldMs).toBeGreaterThan(0);
+      adapter.matches(mockPeripheral('YUNMAI-ISSE-US', []));
+      adapter.onSessionStart();
+      const empty = adapter.parseNotification(M1690_NO_RESISTANCE)!;
+      expect(adapter.completionHoldMs).toBe(4000);
+      expect(adapter.isFinal(empty)).toBe(false);
     });
 
-    it('Standard variant sets no hold (resolves immediately)', () => {
+    it('a frame without the resistance field sets no hold (resolves immediately)', () => {
       const adapter = makeAdapter();
-      adapter.matches(mockPeripheral('Yunmai Standard', []));
+      adapter.matches(mockPeripheral('YUNMAI-ISSE-US', []));
+      adapter.onSessionStart();
+      adapter.parseNotification(M1690_DECLARES_19);
       expect(adapter.completionHoldMs).toBeUndefined();
     });
 
@@ -173,7 +217,7 @@ describe('YunmaiScaleAdapter', () => {
   });
 
   describe('computeMetrics()', () => {
-    it('returns valid payload for standard variant (no impedance)', () => {
+    it('returns valid payload without impedance', () => {
       const adapter = makeAdapter();
       adapter.matches(mockPeripheral('Yunmai Standard', []));
 
@@ -184,7 +228,7 @@ describe('YunmaiScaleAdapter', () => {
       assertPayloadRanges(payload);
     });
 
-    it('returns valid payload for Mini variant with impedance', () => {
+    it('returns valid payload with impedance', () => {
       const adapter = makeAdapter();
       adapter.matches(mockPeripheral('Yunmai ISM', []));
 
@@ -217,6 +261,74 @@ describe('YunmaiScaleAdapter', () => {
   });
 });
 
+describe('Yunmai: the final frame says what it carries, not the name (#474)', () => {
+  const ADDRESS = '0C:1C:00:00:00:01';
+  // What the #474 reporter runs: the adapter forced onto an advertisement that
+  // gives it no Yunmai name to go by. matches() runs for its side effects, as
+  // the watcher calls it; the forced proxy claims the device either way.
+  function forcedNameless() {
+    const forced = applyForcedAdapter([new YunmaiScaleAdapter()], 'Yunmai')[0];
+    forced.matches({ localName: '', address: ADDRESS, serviceUuids: [] });
+    forced.onSessionStart?.(ADDRESS.replace(/:/g, ''));
+    return forced;
+  }
+
+  it('reads the resistance of a forced unit that advertised no name', () => {
+    expect(forcedNameless().parseNotification!(M1690_FINAL)).toEqual({
+      weight: 80,
+      impedance: 470,
+    });
+  });
+
+  it('keeps a frame whose user the scale did not recognise as a weigh-in', () => {
+    expect(forcedNameless().parseNotification!(M1690_NO_USER)).toEqual({
+      weight: 75,
+      impedance: 520,
+    });
+  });
+
+  it('uses the body fat the scale put into a 0x1F frame', () => {
+    const forced = forcedNameless();
+    const reading = forced.parseNotification!(M1690_FINAL)!;
+    // The BMI estimate (37 %) and the Yunmai formula (41 %) are both far from
+    // 25.50 % for this profile, so only the frame can produce it.
+    const profile = defaultProfile({ gender: 'female', age: 30, height: 165 });
+    expect(forced.computeMetrics!(reading, profile).bodyFatPercent).toBeCloseTo(25.5, 1);
+  });
+
+  it('holds after a frame whose resistance field is empty, not after one that has it', () => {
+    const forced = forcedNameless();
+    const empty = forced.parseNotification!(M1690_NO_RESISTANCE)!;
+    expect(forced.completionHoldMs).toBe(4000);
+    expect(forced.isFinal!(empty)).toBe(false);
+    expect(forced.isFinal!(forced.parseNotification!(M1690_FINAL)!)).toBe(true);
+  });
+
+  it('reads the resistance of an 18-byte 0x13 frame', () => {
+    const a = new YunmaiScaleAdapter();
+    // openScale counts SIGNAL as a Mini; this adapter used to call it standard.
+    expect(a.matches({ localName: 'YUNMAI-SIGNAL', serviceUuids: [] })).toBe(true);
+    a.onSessionStart();
+    expect(a.parseNotification(SIGNAL_0X13)).toEqual({ weight: 79.67, impedance: 187 });
+  });
+
+  // Names from openScale's YunmaiHandler (Mini class SIGNAL / ISM / ISC2P /
+  // Scale-3, SE = ISSE). Whatever the unit is called, the frame decides.
+  it.each([
+    'YUNMAI-ISM2-W',
+    'YUNMAI-ISSE-US',
+    'YUNMAI-SIGNAL-M1WS',
+    'YUNMAI-ISC2P-US',
+    'YUNMAI-Scale-3',
+  ])('reads the same frame the same way for %s', (localName) => {
+    const a = new YunmaiScaleAdapter();
+    expect(a.matches({ localName, serviceUuids: [] })).toBe(true);
+    a.onSessionStart();
+    expect(a.parseNotification(M1690_FINAL)).toEqual({ weight: 80, impedance: 470 });
+    expect(a.completionHoldMs).toBe(4000);
+  });
+});
+
 // #394: adapters are shared singletons and computeMetrics() runs LATER than the
 // parse that produced the reading. On the mqtt-proxy and esphome-proxy watchers
 // the loop awaits processReading() - network exports included - while the
@@ -230,7 +342,7 @@ describe('YunmaiScaleAdapter', () => {
 describe('YunmaiScaleAdapter session boundary (#394)', () => {
   function miniAdapter() {
     const a = makeAdapter();
-    // isMini gates the embedded fat read; latched from the advertised name.
+    // The name only claims the device; the frame decides what is read.
     a.matches({ localName: 'YUNMAI-ISM', serviceUuids: [] });
     return a;
   }
@@ -276,79 +388,6 @@ describe('YunmaiScaleAdapter session boundary (#394)', () => {
     // to the 22 % the previous weigh-in left behind.
     const payload = a.computeMetrics({ weight: 80, impedance: 0 }, defaultProfile());
     expect(payload.bodyFatPercent).not.toBeCloseTo(22, 1);
-  });
-});
-
-describe('Yunmai variant per device (#406)', () => {
-  const MINI = 'AA:BB:CC:00:00:01';
-  const STANDARD = 'AA:BB:CC:00:00:02';
-
-  /** mockPeripheral() has no address parameter, so spread one in. */
-  function device(name: string, address: string) {
-    return { ...mockPeripheral(name, []), address };
-  }
-
-  it('reads the impedance of the Mini even after a standard unit was matched', () => {
-    const adapter = makeAdapter();
-    adapter.matches(device('YUNMAI-ISM', MINI));
-    // A second Yunmai in range moves the singleton's flag...
-    adapter.matches(device('Yunmai Standard', STANDARD));
-
-    // ...but the session opens against the Mini, which is what decides.
-    adapter.onSessionStart?.(MINI.replace(/:/g, ''));
-    const reading = adapter.parseNotification(makeFrame({ weightRaw: 8000, impedanceRaw: 500 }));
-    expect(reading!.impedance).toBe(500);
-    expect(adapter.completionHoldMs).toBe(4000);
-  });
-
-  it('does not read [15..16] as an impedance for the standard unit', () => {
-    const adapter = makeAdapter();
-    // Mini matched LAST, so the singleton's own flag says Mini. This is the
-    // direction that matters: without the per-address lookup the standard unit
-    // would inherit the 4 s hold and have those two bytes read as an impedance
-    // no capture covers.
-    adapter.matches(device('Yunmai Standard', STANDARD));
-    adapter.matches(device('YUNMAI-ISM', MINI));
-
-    adapter.onSessionStart?.(STANDARD.replace(/:/g, ''));
-    const reading = adapter.parseNotification(makeFrame({ weightRaw: 8000, impedanceRaw: 500 }));
-    expect(reading!.impedance).toBe(0);
-    expect(adapter.completionHoldMs).toBeUndefined();
-  });
-
-  it('leaves an unknown address on whatever matches() decided', () => {
-    const adapter = makeAdapter();
-    adapter.matches(device('YUNMAI-ISM', MINI));
-
-    // What noble on macOS supplies: a CoreBluetooth UUID, which matches no
-    // advertisement. Unknown must not be read as "standard".
-    adapter.onSessionStart?.('1B2C3D4E5F60718293A4B5C6D7E8F900');
-    expect(
-      adapter.parseNotification(makeFrame({ weightRaw: 8000, impedanceRaw: 500 }))!.impedance,
-    ).toBe(500);
-  });
-
-  it('ignores a non-hex address rather than sharing one cache key for it', () => {
-    const adapter = makeAdapter();
-    adapter.matches(device('YUNMAI-ISM', MINI));
-    // noble reports the literal string 'unknown' for some macOS peripherals,
-    // which formatMac turns into 'UN:KN:OW'. Every such device would otherwise
-    // share one entry.
-    adapter.matches({ ...mockPeripheral('Yunmai Standard', []), address: 'UN:KN:OW' });
-
-    adapter.onSessionStart?.(MINI.replace(/:/g, ''));
-    expect(
-      adapter.parseNotification(makeFrame({ weightRaw: 8000, impedanceRaw: 500 }))!.impedance,
-    ).toBe(500);
-  });
-
-  it('works when the session hook is given no address at all', () => {
-    const adapter = makeAdapter();
-    adapter.matches(mockPeripheral('YUNMAI-ISM', []));
-    adapter.onSessionStart?.();
-    expect(
-      adapter.parseNotification(makeFrame({ weightRaw: 8000, impedanceRaw: 500 }))!.impedance,
-    ).toBe(500);
   });
 });
 
