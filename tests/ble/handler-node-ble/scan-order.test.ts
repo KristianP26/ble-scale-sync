@@ -131,6 +131,7 @@ vi.mock('../../../src/ble/handler-node-ble/discovery.js', () => ({
     const gate = holdNextRemoveDevice;
     holdNextRemoveDevice = null;
     if (gate) await gate;
+    return 'removed';
   }),
   stopDiscoveryAndQuiesce: record('stopDiscoveryAndQuiesce', async () => {}),
   notifyDiscoveryStopped: record('notifyDiscoveryStopped'),

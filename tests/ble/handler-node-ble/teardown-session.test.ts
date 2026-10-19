@@ -170,6 +170,7 @@ describe('teardownSession and a Disconnect BlueZ never answers (#472)', () => {
     });
     h.removeDevice.mockImplementation(async () => {
       calls.push('removeDevice');
+      return 'removed';
     });
   });
   afterEach(() => {

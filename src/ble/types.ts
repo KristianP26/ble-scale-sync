@@ -99,6 +99,12 @@ export const POST_DISCOVERY_QUIESCE_MS = 500;
  * socket (A-03), but a daemon that keeps the socket open and never answers is
  * still only caught here. Without a deadline the consecutive-failure watchdog
  * is never reached and a dead transport looks exactly like an idle house (#290).
+ *
+ * A healthy daemon can leave a call unanswered too: a Disconnect or
+ * RemoveDevice for a link BlueZ still lists as connected waits on that link
+ * (#472). Those calls carry their own 10 s deadlines on the connect and
+ * teardown path (DISCONNECT_TIMEOUT_MS, and the BlueZ call deadline in
+ * discovery.ts), so this one is only the last net there.
  */
 export const POLL_CYCLE_TIMEOUT_MS = 900_000;
 

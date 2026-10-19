@@ -61,10 +61,10 @@ export function notifyDiscoveryStopped(btAdapter: Adapter): void {
 export async function stopDiscoveryAndQuiesce(btAdapter: Adapter): Promise<void> {
   try {
     bleLog.debug('Stopping discovery before connect...');
-    await btAdapter.stopDiscovery();
+    await withBluezDeadline(btAdapter.stopDiscovery(), 'StopDiscovery');
     bleLog.debug('Discovery stopped');
-  } catch {
-    bleLog.debug('stopDiscovery failed (may already be stopped)');
+  } catch (err) {
+    bleLog.debug(`stopDiscovery failed (may already be stopped): ${errMsg(err)}`);
   }
   notifyDiscoveryStopped(btAdapter);
   await sleep(POST_DISCOVERY_QUIESCE_MS);
@@ -79,10 +79,25 @@ export async function stopDiscoveryAndQuiesce(btAdapter: Adapter): Promise<void>
  * is never answered (bluez src/adapter.c). Without a deadline that parked the
  * whole cycle until the poll loop gave up on it.
  */
-const BLUEZ_CALL_TIMEOUT_MS = 10_000;
+export const BLUEZ_CALL_TIMEOUT_MS = 10_000;
+
+/**
+ * A BlueZ call raced against BLUEZ_CALL_TIMEOUT_MS, for the calls on the
+ * connect and teardown path that are not part of the discovery recovery (no
+ * BluezCallTimeout, so nothing here feeds isStuckEvidence). A StopDiscovery is
+ * answered only after the kernel's Stop Discovery completes, and a parked one
+ * left a cycle silent until the poll deadline (#472).
+ */
+export function withBluezDeadline<T>(call: Promise<T>, what: string): Promise<T> {
+  return withTimeout(
+    call,
+    BLUEZ_CALL_TIMEOUT_MS,
+    `${what} got no answer from BlueZ within ${BLUEZ_CALL_TIMEOUT_MS / 1000}s`,
+  );
+}
 
 /** A BlueZ call that got no answer in time, which is evidence of a stuck state. */
-class BluezCallTimeout extends Error {}
+export class BluezCallTimeout extends Error {}
 
 /**
  * InProgress answers to a StartDiscovery, which are no evidence of a stuck
@@ -102,7 +117,11 @@ class BluezCallTimeout extends Error {}
  */
 const refusedStarts = new WeakSet<object>();
 
-async function bluezCall(btAdapter: Adapter, method: string, ...args: unknown[]): Promise<void> {
+export async function bluezCall(
+  btAdapter: Adapter,
+  method: string,
+  ...args: unknown[]
+): Promise<void> {
   const message = `${method} got no answer from BlueZ within ${BLUEZ_CALL_TIMEOUT_MS / 1000}s`;
   try {
     await withTimeout(
@@ -728,17 +747,30 @@ export async function startDiscoverySafe(
 }
 
 /**
+ * What removeDevice() did: BlueZ answered the RemoveDevice (an error answer such
+ * as DoesNotExist included), it was not sent, or it went unanswered for
+ * BLUEZ_CALL_TIMEOUT_MS, which is evidence of a link stuck in BlueZ (#472).
+ */
+export type RemoveDeviceOutcome = 'removed' | 'skipped' | 'timeout';
+
+/**
  * Remove a device from BlueZ D-Bus cache to force a fresh proxy on re-discovery.
  *
  * `includeBonded` also deletes the stored pairing keys, which is destructive and
  * is only ever passed by the stale-bond recovery in connect.ts, behind
  * `ble.auto_clear_stale_bond` (#335).
+ *
+ * The RemoveDevice itself has a deadline: BlueZ queues it for a device it lists
+ * as connected behind the same disconnect a stuck Disconnect waits on
+ * (remove_device() in adapter.c), so it can stay unanswered just as long
+ * (#472). The lookup before it is answered by bluetoothd's main loop and has
+ * none.
  */
 export async function removeDevice(
   btAdapter: Adapter,
   mac: string,
   opts: { includeBonded?: boolean } = {},
-): Promise<void> {
+): Promise<RemoveDeviceOutcome> {
   const formatted = formatMac(mac);
 
   // Never remove a bonded device: BlueZ RemoveDevice deletes the stored pairing
@@ -766,7 +798,7 @@ export async function removeDevice(
     // and skip removal rather than risk wiping a real bond.
     if (!errMsg(err).includes('Device not found')) {
       bleLog.debug(`Skipping RemoveDevice: bond state unknown (${errMsg(err)})`);
-      return;
+      return 'skipped';
     }
     // Worth a line: an absent node here means BlueZ already dropped the peer's
     // object, which is the signature of #297.
@@ -779,7 +811,7 @@ export async function removeDevice(
   }
   if (paired && !opts.includeBonded) {
     bleLog.debug('Skipping RemoveDevice: device is bonded (preserving pairing keys)');
-    return;
+    return 'skipped';
   }
   if (paired) {
     bleLog.warn(`Removing the bond for ${formatted} along with the BlueZ device object.`);
@@ -787,12 +819,18 @@ export async function removeDevice(
 
   try {
     const devSerialized = `dev_${formatted.replace(/:/g, '_')}`;
-    const adapterHelper = helperOf(btAdapter);
-    await adapterHelper.callMethod('RemoveDevice', `${adapterHelper.object}/${devSerialized}`);
+    await bluezCall(btAdapter, 'RemoveDevice', `${helperOf(btAdapter).object}/${devSerialized}`);
     bleLog.debug('Removed device from BlueZ cache');
-  } catch {
+  } catch (err) {
+    if (err instanceof BluezCallTimeout) {
+      bleLog.debug(
+        `RemoveDevice for ${formatted} got no answer from BlueZ within ${BLUEZ_CALL_TIMEOUT_MS / 1000}s`,
+      );
+      return 'timeout';
+    }
     // Device wasn't in cache
   }
+  return 'removed';
 }
 
 /**

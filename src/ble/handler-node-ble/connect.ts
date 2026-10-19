@@ -18,6 +18,7 @@ import {
   removeDevice,
   stopDiscoveryAndQuiesce,
   notifyDiscoveryStopped,
+  withBluezDeadline,
 } from './discovery.js';
 import { disconnectBounded } from './stale-link.js';
 import { startPeerFreshnessTracker } from './freshness.js';
@@ -361,9 +362,9 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
             bleLog.debug('Leaving discovery running for the next connect attempt (#297)');
           } else {
             try {
-              await btAdapter.stopDiscovery();
-            } catch {
-              bleLog.debug('stopDiscovery failed during retry (ignored)');
+              await withBluezDeadline(btAdapter.stopDiscovery(), 'StopDiscovery');
+            } catch (err) {
+              bleLog.debug(`stopDiscovery failed during retry (ignored): ${errMsg(err)}`);
             }
             // Our filtered scan is no longer running, so the claim on it has to
             // go with it or the next start would decline to re-apply the filter.

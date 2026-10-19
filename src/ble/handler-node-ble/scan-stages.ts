@@ -40,7 +40,7 @@ import {
   dbusError,
   parseHciIndex,
 } from './connection.js';
-import { removeDevice, notifyDiscoveryStopped } from './discovery.js';
+import { removeDevice, notifyDiscoveryStopped, withBluezDeadline } from './discovery.js';
 import { disconnectBounded } from './stale-link.js';
 import { logAdvertisementSnapshot, type AdvertisementSnapshot } from './device-object.js';
 import { buildCharMap } from './gatt.js';
@@ -528,9 +528,11 @@ export async function teardownSession(opts: {
   // what bleak-retry-connector does on Linux: force StopDiscovery via
   // D-Bus and RemoveDevice the scale, so the next scan cycle starts from
   // a clean BlueZ state instead of inheriting the zombie subscription.
+  // Both have a deadline: BlueZ answers a RemoveDevice for a device it
+  // lists as connected only once that link is gone (#472).
   if (gattAttempted && !gattSucceeded) {
     try {
-      await helperOf(btAdapter!).callMethod('StopDiscovery');
+      await withBluezDeadline(helperOf(btAdapter!).callMethod('StopDiscovery'), 'StopDiscovery');
       bleLog.debug('Force StopDiscovery after failed GATT');
     } catch (e) {
       bleLog.debug(`Force StopDiscovery failed: ${errMsg(e)}`);
@@ -585,8 +587,8 @@ export async function teardownSession(opts: {
 
   if (gattAttempted) {
     await sleep(500);
-    // The awaits above are D-Bus calls, some still with no deadline, so the
-    // loop can give up on this cycle and start the next one while they run.
+    // The awaits above can take up to their deadlines, so the loop can give
+    // up on this cycle and start the next one while they run.
     if (superseded()) {
       standDown();
       return;
