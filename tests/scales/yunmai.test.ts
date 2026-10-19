@@ -34,6 +34,11 @@ const M1690_DECLARES_19 = frame('0d 1f 13 02 00 00 0c 51 ef 00 00 12 34 1f 40 01
 // bytes (resistance field cut, [16] is the XOR).
 const M1690_19_BYTES = frame('0d 1f 13 02 00 00 0c 51 ef 00 00 12 34 1f 40 01 d6 09 1b');
 const M1690_17_BYTES = frame('0d 1f 11 02 00 00 0c 51 ef 00 00 12 34 1f 40 01 c6');
+// M1690_FINAL with the protocol version [1] set to 0x1D and 0x1E, XOR
+// recomputed: the body fat field is read from 0x1E on (openScale uses its
+// formula below that). No real 20-byte frame below 0x1F is on record.
+const M1690_PROTO_1D = frame('0d 1d 14 02 00 00 0c 51 ef 00 00 12 34 1f 40 01 d6 09 f6 e8');
+const M1690_PROTO_1E = frame('0d 1e 14 02 00 00 0c 51 ef 00 00 12 34 1f 40 01 d6 09 f6 eb');
 // M1690_FINAL with the response type [3] set to 0x01 (measuring) and the XOR
 // recomputed. A real measuring frame is 11 bytes; this one keeps the final
 // layout so only [3] can be what rejects it.
@@ -239,6 +244,19 @@ describe('Yunmai: the final frame says what it carries, not the name (#474)', ()
     // 25.50 % for this profile, so only the frame can produce it.
     const profile = defaultProfile({ gender: 'female', age: 30, height: 165 });
     expect(forced.computeMetrics!(reading, profile).bodyFatPercent).toBeCloseTo(25.5, 1);
+  });
+
+  it('reads the body fat field from protocol 0x1E on, not below it', () => {
+    // The BMI estimate (37 %) and the Yunmai formula (41 %) are far from the
+    // 25.50 % in the frame for this profile.
+    const profile = defaultProfile({ gender: 'female', age: 30, height: 165 });
+    const fatOf = (f: Buffer) => {
+      const a = new YunmaiScaleAdapter();
+      a.onSessionStart();
+      return a.computeMetrics(a.parseNotification(f)!, profile).bodyFatPercent;
+    };
+    expect(fatOf(M1690_PROTO_1E)).toBeCloseTo(25.5, 1);
+    expect(fatOf(M1690_PROTO_1D)).not.toBeCloseTo(25.5, 0);
   });
 
   it('holds after a frame whose resistance field is empty, not after one that has it', () => {
