@@ -117,7 +117,8 @@ export const POLL_CYCLE_TIMEOUT_MS = 900_000;
  * node-ble synchronously. A 25 s floor sidesteps the dying-peer window
  * entirely. A cycle without a reading waits for the retry backoff (or
  * idle_rescan_delay, or at least runtime.no_reading_rescan_delay after a
- * session that heard the scale) instead; this floor applies on success.
+ * session that heard the scale and then went quiet until its idle timeout)
+ * instead; this floor applies on success.
  *
  * BlueZ-specific: only the `node-ble` handler hits the dying-peer GATT stall.
  * Proxy handlers (mqtt-proxy, esphome-proxy) and the noble-based stacks talk

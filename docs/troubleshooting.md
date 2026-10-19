@@ -192,7 +192,7 @@ A weigh-in should also ask at once when the scale advertises it (seen on a BF915
 
 ### Beurer BF915: PAIR on the display all day
 
-A BF915 can advertise and accept a connection all the time, also with its display dark. In continuous mode every cycle then connects, and the scale shows `PAIR` while the session is open, about two minutes when nobody steps on, logged as `Scale connected but sent no reading`. With the normal retry backoff that is 10 to 15 sessions an hour, all day ([#475](https://github.com/KristianP26/ble-scale-sync/issues/475)).
+A BF915 can advertise and accept a connection all the time, also with its display dark. In continuous mode every cycle then connects, and the scale shows `PAIR` while the session is open, about two minutes when nobody steps on, logged as `Scale connected but sent no reading`. With the normal retry backoff that is 10 to 15 sessions an hour, all day ([#475](https://github.com/KristianP26/ble-scale-sync/issues/475)). If the display shows a six-digit code instead, see [Beurer: the scale shows a pairing code again and again](#beurer-the-scale-shows-a-pairing-code-again-and-again).
 
 The BF915 in #475 keeps a weigh-in made in the meantime and hands it over at the next connection, so a pause between such sessions mostly delays the upload:
 
@@ -201,7 +201,7 @@ runtime:
   no_reading_rescan_delay: 900
 ```
 
-Check with `debug: true` that these sessions log `Scale answered but sent no reading`; only those wait longer. A weigh-in that arrives more than 5 minutes after it was taken is a past measurement: Garmin and the other exporters that can record one get it, MQTT, webhook, ntfy, Telegram and Strava do not. If those matter, keep the value at about 240 or below. A shorter `ble.session_timeout_sec` would also shorten each session's `PAIR`, untested on this model. See [the configuration reference](/guide/configuration#runtime).
+Only a session in which the scale answered and then went quiet waits longer: its line ends with `(Timed out waiting for a complete scale reading)`, and with the setting in place it reads `retrying in 900s (runtime.no_reading_rescan_delay)`. A session that ends with `(GATT session cap exceeded)`, or in any other way, keeps the normal backoff. A weigh-in that arrives more than 5 minutes after it was taken is a past measurement: Garmin and the other exporters that can record one get it; MQTT, webhook, ntfy, Telegram and Strava do not. If those matter, keep the value at about 240 or below. During the wait the app scans for no scale at all and does not retry queued exports. A shorter `ble.session_timeout_sec` would also shorten each session's `PAIR`, untested on this model. See [the configuration reference](/guide/configuration#runtime).
 
 ## Exporter Issues
 

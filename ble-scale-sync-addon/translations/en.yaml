@@ -337,10 +337,10 @@ configuration:
     description: >-
       Seconds to wait at least before scanning again after the scale connected
       and answered but sent no reading (0 to 3600). 0 keeps the normal retry
-      backoff. For a scale that stays connectable and keeps its weigh-ins; a
-      weigh-in made during the wait arrives at the next connection, more than
-      5 minutes late only to Garmin and the other targets that can record a
-      past measurement. Local transport only.
+      backoff. For a scale that stays connectable and keeps its weigh-ins: a
+      weigh-in made during the wait arrives at the next connection; if that is
+      more than 5 minutes later, only Garmin and the other targets that can
+      record a past measurement get it. Local transport only.
   reset_bluetooth:
     name: Reset Bluetooth adapter on startup
     description: >-

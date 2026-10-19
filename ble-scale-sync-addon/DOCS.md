@@ -278,13 +278,13 @@ It asks at once when the scale wakes up again after a scan without it, when it a
 - If you have multiple Bluetooth adapters, try setting a specific adapter (e.g., `hci1`)
 - If your scale advertises only for a few seconds after you step on it, lower **Rescan delay when no scale was found** (`idle_rescan_delay`); the add-on rescans that many seconds after an idle cycle
 
-### Beurer BF915 shows PAIR again and again
+### Beurer BF915: PAIR on the display all day
 
-A BF915 can accept a connection all the time, also with its display dark. With the local transport every scan then connects, and the scale shows `PAIR` for about two minutes when nobody steps on, logged as `Scale connected but sent no reading`, 10 to 15 times an hour.
+A BF915 can accept a connection all the time, also with its display dark. With the local transport every scan then connects, and the scale shows `PAIR` for about two minutes when nobody steps on, logged as `Scale connected but sent no reading`, 10 to 15 times an hour. If the display shows a six-digit code instead, see [Beurer scale shows a pairing code again and again](#beurer-scale-shows-a-pairing-code-again-and-again).
 
-If your scale keeps a weigh-in made in the meantime and hands it over at the next connection, as the BF915 in [#475](https://github.com/KristianP26/ble-scale-sync/issues/475) does, set **Minimum wait after a session without a reading** (`no_reading_rescan_delay`), for example to 900. With debug logging on, check that these sessions log `Scale answered but sent no reading`; only those wait longer.
+If your scale keeps a weigh-in made in the meantime and hands it over at the next connection, as the BF915 in [#475](https://github.com/KristianP26/ble-scale-sync/issues/475) does, set **Minimum wait after a session without a reading** (`no_reading_rescan_delay`), for example to 900. Only a session in which the scale answered and then went quiet waits longer: its log line ends with `(Timed out waiting for a complete scale reading)`, and with the option set it reads `retrying in 900s (runtime.no_reading_rescan_delay)`. A session that ends with `(GATT session cap exceeded)`, or in any other way, keeps the normal backoff.
 
-A weigh-in that arrives more than 5 minutes after it was taken is a past measurement: Garmin and the other targets that can record one get it, MQTT and the Home Assistant sensors do not. If those matter, keep the value at about 240 or below.
+A weigh-in that arrives more than 5 minutes after it was taken is a past measurement: Garmin and the other targets that can record one get it; MQTT and the Home Assistant sensors do not. If those matter, keep the value at about 240 or below. During the wait the add-on scans for no scale at all and does not retry failed uploads.
 
 ### MQTT not connecting
 
