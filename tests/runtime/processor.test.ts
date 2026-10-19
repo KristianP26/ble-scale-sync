@@ -852,23 +852,38 @@ describe('processReading: replay dedup by measurement time (#475, #463)', () => 
     expect(replaySkipped()).toBe(true);
   });
 
-  it('keeps the weight rule for a reading from memory that carries no stamp of its own (D065)', async () => {
-    // An adapter must not mark a reading as from memory without a stamp, but
-    // if one does, the reading is history dated by its receipt. That receipt
-    // time says nothing about when it was measured, so it must not count as
-    // "measured more than 5 minutes after the anchor".
-    const { ctx, exporters } = await afterLiveWeighIn(82.5);
+  it.each([
+    ['no stamp', undefined],
+    ['an unreadable stamp', new Date(NaN)],
+    ['a stamp in the future', new Date('2026-10-19T08:00:00Z')],
+  ])(
+    'keeps the weight rule for a reading from memory with %s (D065)',
+    async (_label, timestamp) => {
+      // An adapter must not mark a reading as from memory without a stamp, but
+      // if one does, the reading is history dated by its receipt. That receipt
+      // time says nothing about when it was measured, so it must not count as
+      // "measured more than 5 minutes after the anchor".
+      const { ctx, exporters } = await afterLiveWeighIn(82.5);
 
-    vi.setSystemTime(at(20 * MIN));
-    await processReading(
-      ctx,
-      { reading: { weight: 82.55, impedance: 480, fromMemory: true }, adapter: fakeAdapter() },
-      { singleUserExporters: exporters },
-    );
+      vi.setSystemTime(at(20 * MIN));
+      await processReading(
+        ctx,
+        {
+          reading: {
+            weight: 82.55,
+            impedance: 480,
+            fromMemory: true,
+            ...(timestamp ? { timestamp } : {}),
+          },
+          adapter: fakeAdapter(),
+        },
+        { singleUserExporters: exporters },
+      );
 
-    expect(dispatchExports).not.toHaveBeenCalled();
-    expect(replaySkipped()).toBe(true);
-  });
+      expect(dispatchExports).not.toHaveBeenCalled();
+      expect(replaySkipped()).toBe(true);
+    },
+  );
 
   it('names the anchor time in the Skipping replay line', async () => {
     const { ctx, exporters } = await afterLiveWeighIn(82.5);

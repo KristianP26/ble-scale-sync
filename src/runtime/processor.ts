@@ -80,13 +80,14 @@ interface Frame {
 function classifyFrames(raw: RawReading, receivedAt: Date): Frame[] {
   const all = raw.history ? [...raw.history, raw.reading] : [raw.reading];
   return all.map((reading) => {
-    const measuredAt = measurementTime(reading, receivedAt);
+    const ts = reading.timestamp;
     return {
       reading,
       historical: isHistoricalReading(reading, receivedAt.getTime()),
-      measuredAt,
-      // measurementTime hands back this very object when it does not use the stamp.
-      stamped: measuredAt !== receivedAt,
+      measuredAt: measurementTime(reading, receivedAt),
+      // The same test measurementTime applies to take the stamp, spelled out
+      // rather than read off which Date object it returned.
+      stamped: !!ts && !Number.isNaN(ts.getTime()) && ts.getTime() <= receivedAt.getTime(),
     };
   });
 }
