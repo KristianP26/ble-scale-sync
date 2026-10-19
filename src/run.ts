@@ -433,7 +433,7 @@ async function main(): Promise<void> {
 
   if (!initialResolved.continuousMode) {
     const success = await runSingleShot({
-      source: new PollReadingSource(ctx, adapters),
+      source: new PollReadingSource(ctx, adapters, { singleShot: true }),
       signal: ctx.signal,
       processReading: runProcessReading,
       flush: flushQueuedExports,

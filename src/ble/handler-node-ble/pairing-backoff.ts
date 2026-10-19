@@ -485,7 +485,10 @@ export async function settlePairingRecord(opts: {
     }
     const capMin = opts.capMin ?? DEFAULT_PAIRING_RETRY_MAX_MIN;
     if (capMin <= 0) {
-      bleLog.debug(`Pairing with ${mac} went unconfirmed; ble.pairing_retry_max_min is 0`);
+      bleLog.debug(
+        `Pairing with ${mac} went unconfirmed; not held back ` +
+          '(ble.pairing_retry_max_min is 0, or a single-shot run)',
+      );
       return;
     }
     // Pair() can still complete after our own timeout gave up on it, when

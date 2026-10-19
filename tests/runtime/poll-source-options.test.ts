@@ -103,6 +103,17 @@ describe('PollReadingSource ble.pairing_retry_max_min (#471)', () => {
     expect(scanAndReadRaw.mock.calls[0][0].pairingRetryMaxMin).toBe(60);
     expect(scanAndReadRaw.mock.calls[1][0].pairingRetryMaxMin).toBe(0);
   });
+
+  it('turns the hold off for a single-shot run, which has no next cycle to hold back', async () => {
+    // The run exits with the memory, so a hold it recorded would only log a
+    // wait that never happens; the next run pairs at once anyway.
+    scanAndReadRaw.mockClear();
+    const ctx = makeCtx({ pairing_retry_max_min: 60 });
+    await new PollReadingSource(ctx, [], { singleShot: true }).nextReading(
+      new AbortController().signal,
+    );
+    expect(scanAndReadRaw.mock.calls[0][0].pairingRetryMaxMin).toBe(0);
+  });
 });
 
 describe('PollReadingSource ble.adapter_privacy (#417)', () => {

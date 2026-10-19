@@ -17,6 +17,12 @@ export class PollReadingSource implements ReadingSource {
   constructor(
     private readonly ctx: AppContext,
     private readonly adapters: ScaleAdapter[],
+    /**
+     * The `continuous_mode: false` run, which makes exactly one scan cycle.
+     * Fixed at start-up like the mode itself: a reload that flips the key
+     * changes nothing until a restart.
+     */
+    private readonly opts: { singleShot?: boolean } = {},
   ) {}
 
   /**
@@ -79,8 +85,13 @@ export class PollReadingSource implements ReadingSource {
       // From the start-up config, not the live one: restart-required (#417).
       adapterPrivacy: this.ctx.adapterPrivacy,
       // Per cycle, so a lower cap lands on the next one (#471). The default
-      // lives in the handler; null means unset.
-      pairingRetryMaxMin: this.ctx.config.ble?.pairing_retry_max_min ?? undefined,
+      // lives in the handler; null means unset. A single-shot run has no next
+      // cycle to hold back and exits with its memory, so it records nothing
+      // and does not announce a wait that never happens: the next run pairs
+      // at once anyway.
+      pairingRetryMaxMin: this.opts.singleShot
+        ? 0
+        : (this.ctx.config.ble?.pairing_retry_max_min ?? undefined),
       onLiveData: (reading) => {
         const impStr: string = reading.impedance > 0 ? `${reading.impedance} Ohm` : 'Measuring...';
         process.stdout.write(
