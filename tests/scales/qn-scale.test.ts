@@ -111,11 +111,24 @@ const INFO_CLASSIC_DIV10 = derive(INFO_CLASSIC, { 10: 0x02 });
  * naming /10, which no long unit has sent.
  */
 const INFO_461_DIV10 = derive(INFO_461, { 10: 0x06 });
+/** LIVE_253 at 20.00 kg: [5..6] 21 20 -> 07 d0, [13] recomputed. */
+const LIVE_253_2000 = derive(LIVE_253, { 5: 0x07, 6: 0xd0 });
 /** LIVE_253 with [1] 0e -> 0b, so [1] no longer gives its length; [13] recomputed. */
 const LIVE_253_NOT_ITS_LENGTH = derive(LIVE_253, { 1: 0x0b });
 /** openScale #1239, an ES-CS20M's 15-byte classic 0x12 ([10] 0x01). */
 const INFO_1239 = Buffer.from([
   0x12, 0x0f, 0x15, 0x79, 0x58, 0xcc, 0x38, 0xc1, 0xa4, 0x38, 0x01, 0x38, 0x00, 0x04, 0xe5,
+]);
+
+/** #331, an Arboleaf's 19-byte 0x12 ([10] 0x0f), from the reporter's log. */
+const INFO_ARBOLEAF_331 = Buffer.from([
+  0x12, 0x13, 0xff, 0x54, 0x0b, 0x04, 0x00, 0x07, 0xff, 0x15, 0x0f, 0x27, 0x00, 0x00, 0x05, 0x03,
+  0xe0, 0x6f, 0x2f,
+]);
+/** #235, a GE CS 10 G's 20-byte 0x12 ([10] 0x0f), from the reporter's capture. */
+const INFO_GE_235 = Buffer.from([
+  0x12, 0x14, 0xff, 0x4e, 0xc7, 0x0e, 0x00, 0x07, 0xff, 0x14, 0x0f, 0x42, 0x00, 0x08, 0x05, 0x03,
+  0xe0, 0x6f, 0x2b, 0x3d,
 ]);
 
 /** Every derived frame: [name, frame, source, the indices changed on purpose]. */
@@ -128,6 +141,7 @@ const DERIVED: [string, Buffer, Buffer, number[]][] = [
   ['LIVE_283_6144', LIVE_283_6144, LIVE_283, [4]],
   ['INFO_CLASSIC_DIV10', INFO_CLASSIC_DIV10, INFO_CLASSIC, [10]],
   ['INFO_461_DIV10', INFO_461_DIV10, INFO_461, [10]],
+  ['LIVE_253_2000', LIVE_253_2000, LIVE_253, [5, 6]],
   ['LIVE_253_NOT_ITS_LENGTH', LIVE_253_NOT_ITS_LENGTH, LIVE_253, [1]],
 ];
 
@@ -1240,13 +1254,19 @@ describe('QnScaleAdapter', () => {
       return buf;
     }
 
-    it('18B 0x12 frame sets isLongFrameVariant, proto=0x00, factor=10', () => {
+    it('18B 0x12 frame sets isLongFrameVariant, proto=0x00, and its own divisor (/100)', () => {
       const adapter = makeAdapter();
-      const result = adapter.parseNotification(makeLongScaleInfo());
-      expect(result).toBeNull(); // info frames return null
+      const lines: string[] = [];
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation((m) => void lines.push(m));
+      try {
+        expect(adapter.parseNotification(makeLongScaleInfo())).toBeNull(); // info frames return null
+      } finally {
+        debug.mockRestore();
+      }
+      // [10] 0x07, bit 0 set: /100 (D068).
+      expect(lines).toContain('QN: scale info (18B, dialect=es26m), factor=100, proto=0x00');
 
-      // Verify factor=10 by parsing a weight frame: rawWeight=9790,
-      // 9790/10=979 >=250 → heuristic tries /100 → 97.90 kg
+      // rawWeight=9790 at /100 = 97.90 kg, in the band as it stands
       const weightBuf = makeWeightFrame(9790, 0x02, 501, 499);
       const reading = adapter.parseNotification(weightBuf);
       expect(reading).not.toBeNull();
@@ -1288,7 +1308,7 @@ describe('QnScaleAdapter', () => {
 
       const reading = adapter.parseNotification(buf);
       expect(reading).not.toBeNull();
-      // 0x2639 = 9785, /10=978.5 >=250, heuristic /100 = 97.85
+      // 0x2639 = 9785 at the /100 bit 0 of its 0x12 [10] (0x07) names = 97.85
       expect(reading!.weight).toBeCloseTo(97.85);
       expect(reading!.impedance).toBe(501); // R1 = 0x01F5
     });
@@ -1478,6 +1498,12 @@ describe('QN classic divisor and live layout (D068)', () => {
     expect(readings).toEqual([{ weight: 84.5, impedance: 510 }]);
   });
 
+  // At the /10 the long 0x12 used to imply, 20.00 kg read as a certain 200 kg.
+  it('reads a long-dialect weigh-in under 25 kg at the /100 its 0x12 names (#253)', async () => {
+    const { readings } = await run([INFO_253, LIVE_253_2000], '2026-07-10T13:28:40Z');
+    expect(readings).toEqual([{ weight: 20, impedance: 501 }]);
+  });
+
   it('does not take a frame whose [1] is not its length for the ES-30M layout', async () => {
     const { readings } = await run([LIVE_253_NOT_ITS_LENGTH], '2026-07-10T13:28:40Z');
     expect(readings).toEqual([]);
@@ -1488,6 +1514,10 @@ describe('QN classic divisor and live layout (D068)', () => {
     ['#283, [10] 0x03', INFO_283, 100],
     ['openScale #1239, [10] 0x01', INFO_1239, 100],
     ['bit 0 clear, [10] 0x02 (derived)', INFO_CLASSIC_DIV10, 10],
+    ['#461, 18 bytes, [10] 0x07', INFO_461, 100],
+    ['an Arboleaf (#331), 19 bytes, [10] 0x0f', INFO_ARBOLEAF_331, 100],
+    ['a GE CS 10 G (#235), 20 bytes, [10] 0x0f', INFO_GE_235, 100],
+    ['a long 0x12 with bit 0 clear, [10] 0x06 (derived)', INFO_461_DIV10, 10],
   ])('logs the divisor of %s', (_label, info, factor) => {
     const lines: string[] = [];
     const debug = vi.spyOn(bleLog, 'debug').mockImplementation((m) => void lines.push(m));

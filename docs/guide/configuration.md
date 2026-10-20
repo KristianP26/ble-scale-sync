@@ -166,7 +166,7 @@ ble:
 The debug log states which value is in use. When the scale-info frame arrives:
 
 ```
-QN: scale info (19B, dialect=es26m), factor=10, proto=0xff
+QN: scale info (19B, dialect=es26m), factor=100, proto=0xff
 ```
 
 On a proxy transport that loses the scale-info frame, that line never prints; look for the fallback line instead, which shows the byte the handshake ran with:

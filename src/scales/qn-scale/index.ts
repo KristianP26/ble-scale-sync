@@ -177,9 +177,8 @@ export class QnScaleAdapter
   readonly normalizesWeight = true;
 
   /**
-   * Weight divisor, 100 or 10: a classic 0x12 names it by bit 0 of its flags
-   * byte [10] (INFO_DIVISOR_BIT, D068), a long one sets 10; 100 until a 0x12
-   * arrives.
+   * Weight divisor, 100 or 10, named by bit 0 of the 0x12 flags byte [10]
+   * (INFO_DIVISOR_BIT, D068); 100 until a 0x12 arrives.
    */
   private weightScaleFactor = 100;
 
@@ -1032,7 +1031,6 @@ export class QnScaleAdapter
         }
         const byLength = data.length >= PROTO_ECHO_MIN_INFO_FRAME_LEN ? data[2] : LEGACY_PROTO_TYPE;
         this.seenProtocolType = this.forcedProtocolType ?? byLength;
-        this.weightScaleFactor = 10;
       } else {
         // Classic short frame
         this.isLongFrameVariant = false;
@@ -1040,10 +1038,12 @@ export class QnScaleAdapter
         this.isNineteenByteInfo = false;
         this.isEighteenByteInfo = false;
         this.seenProtocolType = this.forcedProtocolType ?? data[2];
-        // Bit 0, as the vendor's published SDK reads it. openScale's whole-byte
-        // `[10] === 1` read the 17-byte frames ([10] 0x03) as /10 (D068).
-        this.weightScaleFactor = (data[10] & INFO_DIVISOR_BIT) !== 0 ? 100 : 10;
       }
+      // Bit 0 on every dialect, as the vendor's published SDK reads it.
+      // openScale's whole-byte `[10] === 1` read the 17-byte classic frames
+      // ([10] 0x03) as /10, and the long frame was set to /10 whatever its
+      // flags said, only to reach the ES-30M layout (D068).
+      this.weightScaleFactor = (data[10] & INFO_DIVISOR_BIT) !== 0 ? 100 : 10;
       this.scaleFactorKnown = true;
       const dialect = this.isExtendedLongFrame
         ? 'extended'
@@ -1422,8 +1422,9 @@ export class QnScaleAdapter
    * weight. Both readings of the raw value are then candidates:
    *
    * - one that cannot be a body (0 or below, WEIGHT_CERTAIN_MAX_KG or above) is
-   *   ruled out, and if only one is left it is the weight. This is the ES-26M
-   *   case, whose 0x12 implies /10 and whose captured frames read 978.5 kg so;
+   *   ruled out, and if only one is left it is the weight. Until D068 this was
+   *   the ES-26M case: its long 0x12 was taken as /10, and its captured frames
+   *   read 978.5 kg so;
    * - if both are left, the configured users decide: the one candidate inside
    *   some user's `weight_range` or near their `last_known_weight` wins;
    * - if both fit or neither does, the frame is dropped with a warning.

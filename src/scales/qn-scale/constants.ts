@@ -69,7 +69,6 @@ import { uuid16 } from '../body-comp-helpers.js';
  *   [1]     length (18 on the Renpho ES-26M, 20 on the GE CS 10 G)
  *   [2]     protocol/verify byte (0xff on every captured frame)
  *   [3-8]   MAC address, little endian
- *   Weight scale factor is 10 (ES-30M format with heuristic /100 fallback).
  *
  *   The two dialects agree on the layout and differ in the value the firmware
  *   ACCEPTS BACK. The 18-byte ES-26M was hardware verified rejecting 0xff and
@@ -327,9 +326,9 @@ export const ES30M_MIN_FRAME_LEN = 14;
  * Band a live 0x10 weight must fall in for the divisor its 0x12 frame named to
  * be taken as is. Outside it, or with no 0x12 at all, the divisor is in doubt
  * and both readings of the raw value are weighed (review C-06, see
- * `QnScaleAdapter.resolveWeight`). The ES-26M is why the band matters: its
- * 18-byte 0x12 implies /10, its captured frames read 978.5 kg that way and
- * 97.85 kg at /100.
+ * `QnScaleAdapter.resolveWeight`). Until D068 the long 0x12 named /10
+ * whatever its flags said, and this band turned its captured ES-26M frames
+ * (978.5 kg that way) back into 97.85 kg; under 25 kg it could not.
  */
 export const WEIGHT_CERTAIN_MIN_KG = 5;
 export const WEIGHT_CERTAIN_MAX_KG = 250;
@@ -516,7 +515,7 @@ export const RESULT_MAX_WEIGHT_KG = 300;
  *   [3]     status: 0x00 measuring, 0x01 stable, 0x02 result block
  *   [4]     part: high nibble the part count, low nibble the index (0x11 = 1/1)
  *   [5..6]  weight, BE u16 /100 kg, first part only. /100 whatever
- *           weightScaleFactor says: the long 0x12 sets that to 10
+ *           weightScaleFactor says
  *   [7..18] zero while measuring
  *   [19]    sum of the preceding bytes
  *
