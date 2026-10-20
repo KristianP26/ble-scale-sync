@@ -184,10 +184,11 @@ export async function buildReadingSource(
     // runtime.no_reading_rescan_delay (#475). A scale that accepts a connection
     // all the time and keeps its weigh-ins (BF915) otherwise shows PAIR through
     // a new session every few minutes, all day. Not after the session cap: frames
-    // kept coming the whole time, which is more likely somebody on the scale than
-    // nobody. Not after a session that heard nothing either: the watchdog counts
-    // those, and a long wait would only delay its recovery. A held pairing
-    // (#471) and a stale link (#472) are neither, so they keep their own waits.
+    // other than status frames kept coming the whole time (D070), which is more
+    // likely somebody on the scale than nobody. Not after a session that heard
+    // nothing either: the watchdog counts those, and a long wait would only
+    // delay its recovery. A held pairing (#471) and a stale link (#472) are
+    // neither, so they keep their own waits.
     // Only a floor: the backoff still advances (D041). Read per call, so a
     // reload lands with the next session that ends this way.
     failureDelayFloor: (err) => {

@@ -663,10 +663,10 @@ export async function teardownSession(opts: {
  * Wait for a complete reading, under both an idle timeout and an absolute cap.
  *
  * Two timeouts, not one: the inner deadline restarts on every frame the scale
- * sends, so a scale that keeps talking never trips it, and the outer one bounds
- * the whole session anyway. A composition hold still in progress moves the cap
- * out to the end of the hold, so the held weight resolves instead of being cut
- * (#434).
+ * sends, except a status frame (D070), so a scale that keeps talking never
+ * trips it, and the outer one bounds the whole session anyway. A composition
+ * hold still in progress moves the cap out to the end of the hold, so the held
+ * weight resolves instead of being cut (#434).
  */
 export async function readWithTimeouts(
   charMap: Map<string, BleChar>,
@@ -687,9 +687,10 @@ export async function readWithTimeouts(
   },
 ): Promise<RawReading> {
   const idleMs = opts.readingTimeoutMs ?? RAW_READING_TIMEOUT_MS;
-  // Set by the first notification frame. waitForRawReading reports activity
-  // only for an incoming frame, or for a composition hold, which arms after
-  // one; withIdleTimeout's own initial arm does not come through here.
+  // Set by the first notification frame of any kind (onFrame), the scale's
+  // replies to our own commands included: a scale that only answers the unlock
+  // has still proven the path the watchdog guards (D041, #474). A composition
+  // hold arms only after a frame, so it needs no flag of its own.
   let heard = false;
   try {
     // A shutdown ends the session the same way a timeout does, through
@@ -711,12 +712,12 @@ export async function readWithTimeouts(
                 opts.weightUnit,
                 opts.onLiveData,
                 opts.scaleAuth,
-                (minIdleMs) => {
-                  heard = true;
-                  onActivity(minIdleMs);
-                },
+                onActivity,
                 opts.deviceName,
                 opts.manufacturerData,
+                () => {
+                  heard = true;
+                },
               ),
             idleMs,
             'Timed out waiting for a complete scale reading',

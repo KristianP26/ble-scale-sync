@@ -341,13 +341,14 @@ describe('readWithTimeouts: composition hold against the session cap', () => {
 
     async function runSession(
       drive: (s: ReturnType<typeof makeSession>, ac: AbortController) => Promise<void>,
+      overrides: Partial<ScaleAdapter> = {},
     ): Promise<unknown> {
       vi.useFakeTimers();
       try {
         const s = makeSession();
         const ac = new AbortController();
         // Every frame is rejected: an answer to our own writes, not a weigh-in.
-        const adapter = makeAdapter({ parseNotification: () => null });
+        const adapter = makeAdapter({ parseNotification: () => null, ...overrides });
         const promise = readWithTimeouts(s.charMap, s.device, adapter, 'AA:BB:CC:DD:EE:FF', {
           profile: PROFILE,
           readingTimeoutMs: IDLE_MS,
@@ -393,6 +394,24 @@ describe('readWithTimeouts: composition hold against the session cap', () => {
         }
       });
       expect((err as Error).message).toBe('GATT session cap exceeded');
+      expect(bleFailureKind(err)).toBe('no-reading');
+    });
+
+    // A Yunmai that only answers the unlock (#474, D070): its replies no longer
+    // restart the idle timeout, but they still prove the scale answered, so the
+    // session is no-reading and not a wedge suspect.
+    it('tags the idle timeout of a scale that only sent status frames as no-reading (#474)', async () => {
+      const err = await runSession(
+        async (s) => {
+          const step = IDLE_MS / 2;
+          for (let t = step; t <= IDLE_MS * 3; t += step) {
+            await vi.advanceTimersByTimeAsync(step);
+            s.send(0x01);
+          }
+        },
+        { isStatusFrame: () => true },
+      );
+      expect((err as Error).message).toBe('Timed out waiting for a complete scale reading');
       expect(bleFailureKind(err)).toBe('no-reading');
     });
 

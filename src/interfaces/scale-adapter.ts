@@ -601,6 +601,21 @@ export interface GattWiring {
    * charNotifyUuid + charWriteUuid pair.
    */
   readonly characteristics?: CharacteristicBinding[];
+  /**
+   * True for a frame that only answers a command of ours, or reports the scale's
+   * own state, and so says nothing about a weigh-in: the Yunmai answers every
+   * GET_PROTOCOL_VERSION we write, every 5 s, with a 5-byte 0x05 frame (#474).
+   * Such a frame does not restart the session's idle timeout; every other frame
+   * does, including frames the parser rejects, since an unstable QN 0x10 is a
+   * weigh-in in progress. It is still logged, acknowledged (buildAck) and parsed,
+   * and it still counts as the scale having answered (the node-ble no-reading
+   * classification, D041).
+   *
+   * Return true only for a frame type the protocol defines as such a reply or
+   * report, never for one that may carry a weight. Must not throw and must not do
+   * I/O: it runs on every notification. GATT only (D070).
+   */
+  isStatusFrame?(charUuid: string, data: Buffer): boolean;
 }
 
 /**

@@ -10,6 +10,7 @@ import type { MqttProxyConfig } from '../../src/config/schema.js';
 import { adapters as realAdapters } from '../../src/scales/index.js';
 import { applyForcedAdapter } from '../../src/scales/force.js';
 import { bleLog, POST_READING_RECONNECT_MS } from '../../src/ble/types.js';
+import { M1690_PROTOCOL_VERSION_REPLY } from '../helpers/yunmai-m1690.js';
 
 // Suppress log output during tests
 vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -2332,6 +2333,52 @@ describe('handler-mqtt-proxy', () => {
         }
 
         // Just past 90 s the cap has fired and the teardown released the proxy.
+        await vi.advanceTimersByTimeAsync(1_000);
+        const disconnects = (mockClient.publishAsync as ReturnType<typeof vi.fn>).mock.calls.filter(
+          (c: unknown[]) => c[0] === `${PREFIX}/disconnect`,
+        );
+        expect(disconnects).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('releases the ESP32 on the idle timeout when the scale only answers with status frames (#474)', async () => {
+      vi.useFakeTimers();
+      try {
+        // A Yunmai after a weigh-in answers every unlock with a 5-byte 0x05
+        // frame and sends nothing else. The parser here would take 5 bytes as
+        // a weight, so it is stubbed out; only the hook decides (D070).
+        const adapter = {
+          ...createGattAdapter(),
+          parseNotification: vi.fn((): ScaleReading | null => null),
+          isStatusFrame: (_c: string, d: Buffer) => d.length === 5 && d[3] === 0x05,
+        } as ScaleAdapter;
+        const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [adapter], undefined, PROFILE);
+        await watcher.start();
+
+        mockClient._simulateMessage(
+          `${PREFIX}/connected`,
+          JSON.stringify({
+            autonomous: true,
+            address: 'AA:BB:CC:DD:EE:FF',
+            chars: [
+              { uuid: GATT_NOTIFY_UUID, properties: ['notify'] },
+              { uuid: GATT_WRITE_UUID, properties: ['write'] },
+            ],
+          }),
+        );
+        void watcher.nextReading();
+
+        for (let elapsed = 0; elapsed < 60_000; elapsed += 5_000) {
+          await vi.advanceTimersByTimeAsync(5_000);
+          mockClient._simulateMessage(
+            `${PREFIX}/notify/${GATT_NOTIFY_UUID}`,
+            M1690_PROTOCOL_VERSION_REPLY,
+          );
+        }
+
+        // 61 s after connect: the idle timeout, not the 90 s cap, has released it.
         await vi.advanceTimersByTimeAsync(1_000);
         const disconnects = (mockClient.publishAsync as ReturnType<typeof vi.fn>).mock.calls.filter(
           (c: unknown[]) => c[0] === `${PREFIX}/disconnect`,

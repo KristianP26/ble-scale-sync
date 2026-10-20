@@ -48,21 +48,22 @@ export const GATT_DISCOVERY_TIMEOUT_MS = 30_000;
 
 /**
  * How long the reading phase waits without a notification from the scale. The
- * timer restarts on every frame, so it counts silence rather than time since
- * connect: a window counted from connect can expire before the user steps on,
- * because connect is driven by the advertisement, not the weigh-in. Native
- * handlers only; the mqtt-proxy uses its own GATT_READING_IDLE_MS.
+ * timer restarts on every frame except a status frame (isStatusFrame, D070),
+ * so it counts silence rather than time since connect: a window counted from
+ * connect can expire before the user steps on, because connect is driven by
+ * the advertisement, not the weigh-in. Native handlers only; the mqtt-proxy
+ * uses its own GATT_READING_IDLE_MS.
  */
 export const RAW_READING_TIMEOUT_MS = 120_000;
 
 /**
  * Absolute cap on one native reading session, as a multiple of the configured
- * silence window. The idle timer restarts on every frame, so a scale that
- * streams adapter-rejected frames forever would otherwise hold the session
- * open with no bound; the cap ends it while leaving room for a weigh-in that
- * spans several restarts. A composition hold can move it out, by at most the
- * hold plus HOLD_EXTENSION_MAX_MS plus 2 s (withIdleTimeout, #211). A
- * session_timeout_sec above 300 makes
+ * silence window. The idle timer restarts on every frame except a status frame
+ * (isStatusFrame, D070), so a scale that streams adapter-rejected frames
+ * forever would otherwise hold the session open with no bound; the cap ends it
+ * while leaving room for a weigh-in that spans several restarts. A composition
+ * hold can move it out, by at most the hold plus HOLD_EXTENSION_MAX_MS plus 2 s
+ * (withIdleTimeout, #211). A session_timeout_sec above 300 makes
  * POLL_CYCLE_TIMEOUT_MS the effective ceiling instead.
  */
 export const READING_SESSION_CAP_FACTOR = 3;

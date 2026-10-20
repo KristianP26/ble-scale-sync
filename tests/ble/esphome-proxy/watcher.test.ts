@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { BleChar } from '../../../src/ble/shared.js';
 import { normalizeUuid, POST_READING_RECONNECT_MS } from '../../../src/ble/types.js';
+import { M1690_PROTOCOL_VERSION_REPLY } from '../../helpers/yunmai-m1690.js';
 import type {
   ScaleAdapter,
   ScaleReading,
@@ -27,6 +28,10 @@ let endSilentSession: (() => void) | null = null;
 // When set, the default session's device reports a disconnect right after its
 // one notification: a scale that hands over a stored record and switches off.
 let disconnectAfterNotify = false;
+// When set, connectGatt hands back a session in which the scale sends nothing
+// but this buffer, 80 ms after each write: a Yunmai after a weigh-in, which only
+// answers the unlock (#474).
+let answerWritesWith: Buffer | null = null;
 
 vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
   class FakeEsphomeProxyPool {
@@ -70,6 +75,49 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
               disconnectCbs.push(cb);
             },
             fireDisconnect: () => {},
+          },
+          close: closeSpy,
+        };
+      }
+      if (answerWritesWith !== null) {
+        const answer = answerWritesWith;
+        let onAnswer: ((d: Buffer) => void) | null = null;
+        const disconnectCbs: Array<() => void> = [];
+        const notify: BleChar = {
+          async read() {
+            return Buffer.alloc(0);
+          },
+          async write() {},
+          async subscribe(onData) {
+            onAnswer = onData;
+            return () => {
+              onAnswer = null;
+            };
+          },
+        };
+        const write: BleChar = {
+          async read() {
+            return Buffer.alloc(0);
+          },
+          async write() {
+            setTimeout(() => onAnswer?.(answer), 80);
+          },
+          async subscribe() {
+            return () => {};
+          },
+        };
+        return {
+          charMap: new Map<string, BleChar>([
+            [NOTIFY, notify],
+            [WRITE, write],
+          ]),
+          device: {
+            onDisconnect: (cb: () => void) => {
+              disconnectCbs.push(cb);
+            },
+            fireDisconnect: () => {
+              for (const cb of disconnectCbs.splice(0)) cb();
+            },
           },
           close: closeSpy,
         };
@@ -456,6 +504,7 @@ describe('ReadingWatcher session after a reading (#466, D058)', () => {
     failConnectWith = null;
     silentSession = false;
     hangSession = false;
+    answerWritesWith = null;
     endSilentSession = null;
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -638,6 +687,49 @@ describe('ReadingWatcher session after a reading (#466, D058)', () => {
       const told = lines(log.info).filter((l) => NO_WEIGH_IN.test(l));
       expect(told).toHaveLength(1);
       expect(told[0]).toContain(`(GATT reading timeout for ${mac})`);
+    } finally {
+      reset();
+      await watcher.stop();
+    }
+  });
+
+  it('ends the session after a reading on the idle timeout when the scale only answers the unlock (#474)', async () => {
+    // A Yunmai Mini 2 stays connectable after a weigh-in and answers each
+    // GET_PROTOCOL_VERSION we write, every 5 s. Counted as activity, those
+    // replies held the session open until the 90 s cap (D070).
+    closeSpy.mockClear();
+    const log = spies();
+    const mac = 'AA:BB:CC:DD:EE:46';
+    const adapter = {
+      ...gattAdapter(),
+      unlockCommand: [0x0d, 0x05, 0x13, 0x00, 0x16],
+      unlockIntervalMs: 5000,
+      parseNotification: (d: Buffer): ScaleReading | null =>
+        d.length === 5 ? null : { weight: 82, impedance: 0 },
+      isStatusFrame: (_c: string, d: Buffer) => d[3] === 0x05,
+    } as ScaleAdapter;
+    vi.useFakeTimers();
+    const watcher = new ReadingWatcher(config, [adapter]);
+    try {
+      await watcher.start();
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await vi.advanceTimersByTimeAsync(0);
+      expect((await watcher.nextReading()).reading.weight).toBe(82);
+      const closedAfterReading = closeSpy.mock.calls.length;
+
+      await vi.advanceTimersByTimeAsync(1000);
+      answerWritesWith = M1690_PROTOCOL_VERSION_REPLY;
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      // The idle timeout arms once connectGatt of this session returns.
+      await vi.advanceTimersByTimeAsync(60_500);
+
+      const told = lines(log.info).filter((l) => NO_WEIGH_IN.test(l));
+      expect(told).toHaveLength(1);
+      expect(told[0]).toContain(`(GATT reading timeout for ${mac})`);
+      expect(
+        [...lines(log.info), ...lines(log.warn)].filter((l) => l.includes('session cap')),
+      ).toEqual([]);
+      expect(closeSpy.mock.calls.length).toBeGreaterThan(closedAfterReading);
     } finally {
       reset();
       await watcher.stop();

@@ -9,8 +9,8 @@ import {
   toHex,
   stopDeferredNotifications,
 } from '../../src/ble/shared.js';
-import { untilAborted, withIdleTimeout } from '../../src/ble/types.js';
-import type { BleChar, BleDevice } from '../../src/ble/shared.js';
+import { untilAborted, withIdleTimeout, SessionTimeoutError } from '../../src/ble/types.js';
+import type { BleChar, BleDevice, RawReading } from '../../src/ble/shared.js';
 import { normalizeUuid, bleLog } from '../../src/ble/types.js';
 import { KoogeekS1Adapter } from '../../src/scales/koogeek-s1.js';
 import { RenphoMsc04Adapter } from '../../src/scales/renpho-msc04.js';
@@ -20,6 +20,7 @@ import { QnScaleAdapter } from '../../src/scales/qn-scale/index.js';
 import { YunmaiScaleAdapter } from '../../src/scales/yunmai.js';
 import { applyForcedAdapter } from '../../src/scales/force.js';
 import { mockPeripheral } from '../helpers/scale-test-utils.js';
+import { M1690_LIVE_80KG, M1690_PROTOCOL_VERSION_REPLY } from '../helpers/yunmai-m1690.js';
 import { uuid16, xorChecksum, buildPayload } from '../../src/scales/body-comp-helpers.js';
 import type {
   ScaleAdapter,
@@ -2096,6 +2097,181 @@ describe('waitForRawReading() under the native idle deadline', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ─── status frames do not restart the idle timeout (#474, D070) ─────────────
+
+describe('waitForRawReading() with status frames (#474, D070)', () => {
+  const IDLE_MS = 60_000;
+  const CAP_MS = 90_000;
+  // The Yunmai unlock, GET_PROTOCOL_VERSION, written every 5 s.
+  const UNLOCK = [0x0d, 0x05, 0x13, 0x00, 0x16];
+
+  function statusAdapter(overrides: Partial<ScaleAdapter> = {}): ScaleAdapter {
+    return createLegacyAdapter({
+      unlockCommand: UNLOCK,
+      unlockIntervalMs: 5000,
+      parseNotification: vi.fn((): ScaleReading | null => null),
+      isStatusFrame: (_c: string, d: Buffer) => d[3] === 0x05,
+      ...overrides,
+    } as Partial<ScaleAdapter>);
+  }
+
+  /** A write char that answers every write 80 ms later, as the Mini 2 does. */
+  function answeringChars(answer: Buffer | null): {
+    notifyChar: MockBleChar;
+    writeChar: MockBleChar;
+    charMap: Map<string, BleChar>;
+    answered: () => number;
+  } {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    let answered = 0;
+    writeChar.write = vi.fn(async (data: Buffer) => {
+      writeChar.writtenData.push(data);
+      if (!answer) return;
+      setTimeout(() => {
+        answered++;
+        notifyChar.triggerData(answer);
+      }, 80);
+    });
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notifyChar],
+      [WRITE_UUID, writeChar],
+    ]);
+    return { notifyChar, writeChar, charMap, answered: () => answered };
+  }
+
+  function run(
+    adapter: ScaleAdapter,
+    charMap: Map<string, BleChar>,
+    device: BleDevice,
+    onFrame?: () => void,
+  ): Promise<RawReading> {
+    return withAbandonmentCleanup(device, () =>
+      withIdleTimeout(
+        (onActivity) =>
+          waitForRawReading(
+            charMap,
+            device,
+            adapter,
+            PROFILE,
+            '',
+            undefined,
+            undefined,
+            undefined,
+            onActivity,
+            undefined,
+            undefined,
+            onFrame,
+          ),
+        IDLE_MS,
+        'GATT reading timeout',
+        { ms: CAP_MS, message: 'GATT session cap exceeded' },
+      ),
+    );
+  }
+
+  it('ends a session in which the scale only answers our unlock on the idle timeout, not the cap', async () => {
+    vi.useFakeTimers();
+    try {
+      const { writeChar, charMap, answered } = answeringChars(M1690_PROTOCOL_VERSION_REPLY);
+      let failure: unknown = null;
+      run(statusAdapter(), charMap, createMockDevice()).catch((e: unknown) => {
+        failure = e;
+      });
+
+      await vi.advanceTimersByTimeAsync(IDLE_MS + 100);
+      expect(answered()).toBeGreaterThanOrEqual(12);
+      expect(writeChar.writtenData.length).toBeGreaterThanOrEqual(12);
+      expect(failure, 'the replies to the unlock must not hold the session open').toBeInstanceOf(
+        SessionTimeoutError,
+      );
+      expect((failure as SessionTimeoutError).reason).toBe('idle');
+      expect((failure as Error).message).toBe('GATT reading timeout');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('calls onFrame for a status frame although it does not restart the idle timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const { charMap, answered } = answeringChars(M1690_PROTOCOL_VERSION_REPLY);
+      const onFrame = vi.fn();
+      run(statusAdapter(), charMap, createMockDevice(), onFrame).catch(() => {});
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(answered()).toBeGreaterThan(0);
+      expect(onFrame).toHaveBeenCalledTimes(answered());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still counts a frame that is not a status frame, even when the parser rejects it', async () => {
+    vi.useFakeTimers();
+    try {
+      const { notifyChar, charMap } = answeringChars(null);
+      let failure: unknown = null;
+      run(statusAdapter(), charMap, createMockDevice()).catch((e: unknown) => {
+        failure = e;
+      });
+      await vi.advanceTimersByTimeAsync(1);
+
+      for (let t = 0; t < 65_000; t += 5000) {
+        notifyChar.triggerData(M1690_LIVE_80KG);
+        await vi.advanceTimersByTimeAsync(5000);
+      }
+      expect(failure, 'a rejected live frame is a weigh-in in progress').toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('says once per session that a status frame does not keep the session open', async () => {
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const said = (): number =>
+      debug.mock.calls.filter((c) => String(c[0]).includes('is a status frame')).length;
+
+    for (const session of [1, 2]) {
+      const { notifyChar, charMap } = answeringChars(null);
+      const device = createMockDevice();
+      const adapter = statusAdapter({ unlockCommand: undefined, unlockIntervalMs: undefined });
+      const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+      promise.catch(() => {});
+      await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+      for (let i = 0; i < 3; i++) notifyChar.triggerData(M1690_PROTOCOL_VERSION_REPLY);
+      device.triggerDisconnect();
+      await expect(promise).rejects.toThrow();
+      expect(said(), `session ${session}`).toBe(session);
+    }
+  });
+
+  it('still acknowledges and parses a status frame', async () => {
+    const { notifyChar, writeChar, charMap } = answeringChars(null);
+    const buildAck = vi.fn((): number[] | null => [0x01]);
+    const parseNotification = vi.fn((): ScaleReading | null => null);
+    const adapter = statusAdapter({
+      unlockCommand: undefined,
+      unlockIntervalMs: undefined,
+      buildAck,
+      parseNotification,
+      isStatusFrame: () => true,
+    });
+    const device = createMockDevice();
+    const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+    promise.catch(() => {});
+    await vi.waitFor(() => expect(notifyChar.subscribeCalled).toBe(true));
+
+    notifyChar.triggerData(M1690_PROTOCOL_VERSION_REPLY);
+    expect(buildAck).toHaveBeenCalledTimes(1);
+    expect(parseNotification).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(writeChar.writtenData.map((b) => toHex(b))).toContain('01'));
+    device.triggerDisconnect();
+    await expect(promise).rejects.toThrow();
   });
 });
 

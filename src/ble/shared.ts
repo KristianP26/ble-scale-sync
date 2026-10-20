@@ -662,6 +662,11 @@ export interface RawReading {
  * newest historical reading as `reading` and the rest in `history`. Reject
  * only fires when no reading at all was collected before disconnect. A caller
  * whose timeout gives up gets the same through withAbandonmentCleanup.
+ *
+ * `onActivity` restarts the caller's idle timeout and is called for every
+ * frame except one the adapter calls a status frame (`isStatusFrame`, D070);
+ * `onFrame` is called for every frame, status frames included, for a caller
+ * that needs to know the scale answered at all (node-ble, D041).
  */
 export function waitForRawReading(
   charMap: Map<string, BleChar>,
@@ -675,9 +680,12 @@ export function waitForRawReading(
   onActivity?: (minIdleMs?: number) => void,
   deviceName?: string,
   manufacturerData?: { id: number; data: Buffer },
+  onFrame?: () => void,
 ): Promise<RawReading> {
   return new Promise<RawReading>((resolve, reject) => {
     let resolved = false;
+    // Per session, so every session says it once (D070).
+    let statusFrameLogged = false;
     const history = new HistoryBuffer(MAX_HISTORY_FRAMES, adapter.name);
     const ackWriteChar = resolveWriteChar(charMap, adapter);
     // One FIFO per characteristic for every write of this session: ACKs, the
@@ -729,9 +737,7 @@ export function waitForRawReading(
       }
       if (resolved) return;
 
-      // Counted before the adapter gate, because a frame the adapter rejects
-      // (an unstable QN 0x10) still shows the scale is mid weigh-in.
-      onActivity?.();
+      onFrame?.();
 
       // Every frame the scale sends, before any adapter gate can discard it.
       // Without this a silent cycle cannot be told apart from one where frames
@@ -742,6 +748,22 @@ export function waitForRawReading(
           .map((b) => b.toString(16).padStart(2, '0'))
           .join(' ')}]${data.length > 32 ? ` (+${data.length - 32} bytes)` : ''}`,
       );
+
+      // Counted before the adapter gate, because a frame the adapter rejects
+      // (an unstable QN 0x10) still shows the scale is mid weigh-in. A status
+      // frame does not: counted, the Yunmai's reply to the unlock written every
+      // 5 s kept a session nobody was weighing in on open until its cap (#474,
+      // D070). Asked after the Notification line, so that line is there even
+      // if the hook misbehaves.
+      const status = adapter.isStatusFrame?.(sourceUuid, data) === true;
+      if (!status) onActivity?.();
+      if (status && !statusFrameLogged) {
+        statusFrameLogged = true;
+        bleLog.debug(
+          `${adapter.name}: that frame is a status frame, not part of a weigh-in, ` +
+            'so it does not keep the session open',
+        );
+      }
 
       if (adapter.buildAck && ackWriteChar) {
         const ack = adapter.buildAck(data);
