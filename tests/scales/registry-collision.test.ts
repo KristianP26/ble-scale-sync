@@ -4,6 +4,7 @@ import { resolveAdapter, resolveAfterDiscovery } from '../../src/scales/resolve.
 import type { GattDiscovery } from '../../src/scales/resolve.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
+import { M1690_ADVERT, M1690_FE95_PID_018E } from '../helpers/yunmai-m1690.js';
 
 /**
  * Registry collision guard for #182.
@@ -422,6 +423,33 @@ describe('PICOOC connection-based scales (#408)', () => {
   });
 });
 
+// Yunmai Mini 2 M1690 (#474): no name, only the 0xFE95 service data with the
+// MiBeacon product id 0x018D (tests/helpers/yunmai-m1690.ts).
+describe('nameless Yunmai Mini 2 by its MiBeacon product id (#474)', () => {
+  it('resolves to Yunmai, and only Yunmai claims it', () => {
+    expect(resolveAdapter(M1690_ADVERT, adapters)?.name).toBe('Yunmai');
+    expect(adapters.filter((a) => a.matches(M1690_ADVERT)).map((a) => a.name)).toEqual(['Yunmai']);
+  });
+
+  // Holds on the code before #474 too: only 0x018D is claimed.
+  it('claims nothing for another product id in the same frame', () => {
+    const other = { ...M1690_ADVERT, serviceData: [{ uuid: 'fe95', data: M1690_FE95_PID_018E }] };
+    expect(adapters.filter((a) => a.matches(other)).map((a) => a.name)).toEqual([]);
+  });
+});
+
+// Characteristics: the 16 the #474 log lists after discovery. Services: the log
+// lists none; FFE0 hosting FFE4 and FFE5 hosting FFE9 is what openScale's
+// YunmaiHandler and the Yunmai notes say, FE95 hosting the Mi chars is a guess
+// (hypothesis). FFE0 is what QN's nameless fallback claims.
+const M1690_GATT = {
+  serviceUuids: [0x1800, 0x1801, 0xfe95, 0xffe0, 0xffe5].map(uuid16),
+  characteristicUuids: [
+    0x0001, 0x0002, 0x0004, 0x0007, 0x0010, 0x0013, 0x0014, 0x2a00, 0x2a01, 0x2a02, 0x2a03, 0x2a04,
+    0x2a05, 0xffe4, 0xffe9, 0xffea,
+  ].map(uuid16),
+};
+
 // Renpho ES-WBE28 (#267): the advertisement is the one renpho.test.ts matches
 // on; the characteristics are that test's ALL_CHARS from the btsnoop capture.
 // 0xFFE0 is the GATT service hosting the vendor 0xFFE1/0xFFE2 pair and 0x181C
@@ -592,6 +620,28 @@ const POST_DISCOVERY: PostDiscoveryCase[] = [
       characteristicUuids: [0xffb1, 0xffb2, 0xffb3].map(uuid16),
     },
     expected: 'Robi S9',
+  },
+  // #474: the Yunmai Mini 2 without a name. Before the product id claim the
+  // proxies (characteristics only) found nothing, and noble and node-ble with
+  // scale_mac, which pass the discovered services, gave it to QN's nameless
+  // 0xFFE0 fallback.
+  {
+    label: 'nameless Yunmai Mini 2 over a proxy (characteristics only)',
+    advertised: M1690_ADVERT,
+    gatt: { characteristicUuids: M1690_GATT.characteristicUuids },
+    expected: 'Yunmai',
+  },
+  {
+    label: 'nameless Yunmai Mini 2 on noble with scale_mac (services known)',
+    advertised: M1690_ADVERT,
+    gatt: M1690_GATT,
+    expected: 'Yunmai',
+  },
+  {
+    label: 'nameless Yunmai Mini 2 on node-ble with scale_mac (services unknown)',
+    advertised: M1690_ADVERT,
+    gatt: { ...M1690_GATT, advertisedServicesKnown: false },
+    expected: 'Yunmai',
   },
   // #408: Inlife used to claim it on the bare 0xFFF0 and then on 0xFFF2 without
   // 0xFFF4, and hold the connection while the scale kept asking for the time.

@@ -7,6 +7,7 @@ import {
   defaultProfile,
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
+import { M1690_ADVERT, M1690_FE95_PID_018E } from '../helpers/yunmai-m1690.js';
 
 /** Hex as printed in the logs; spaces are ignored. */
 const frame = (s: string): Buffer => Buffer.from(s.replace(/\s+/g, ''), 'hex');
@@ -74,6 +75,17 @@ describe('YunmaiScaleAdapter', () => {
       const adapter = makeAdapter();
       const p = mockPeripheral('QN-Scale', []);
       expect(adapter.matches(p)).toBe(false);
+    });
+
+    // #474: the Mini 2 there advertises no name, only Xiaomi 0xFE95 service data.
+    it('matches the nameless Mini 2 (M1690) by its MiBeacon product id 0x018D', () => {
+      expect(makeAdapter().matches(M1690_ADVERT)).toBe(true);
+    });
+
+    // Holds on the code before #474 too: only 0x018D is claimed.
+    it('does not match another MiBeacon product id', () => {
+      const other = { ...M1690_ADVERT, serviceData: [{ uuid: 'fe95', data: M1690_FE95_PID_018E }] };
+      expect(makeAdapter().matches(other)).toBe(false);
     });
   });
 

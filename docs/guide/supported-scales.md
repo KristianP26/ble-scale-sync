@@ -139,6 +139,8 @@ Weight only. The C20 (T9130) and P3 (T9150) broadcast their weigh-in; ble-scale-
 
 ### **Yunmai**
 
+Most Yunmai scales are found by their name. A Mini 2 (M1690) that advertises no name, only Xiaomi service data, is found by the Xiaomi product id in that data, so it does not need `ble.force_scale_adapter`. Without a name it is not picked up on its own on the default Linux transport, so set `ble.scale_mac` there (`scan` lists it with its address).
+
 The body fat the scale sends is computed by the scale for a profile the vendor app stored in it, normally the person it recognised. ble-scale-sync does not write a profile to the scale, so in a household with several users the value can belong to the profile the scale picked rather than to the person matched by weight. The Yunmai SE reports no impedance, so its body composition is estimated from BMI.
 
 ### **Xiaomi** Mi Smart Scale 2 (XMTZC04HM)

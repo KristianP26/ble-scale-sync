@@ -37,7 +37,17 @@ const PROTO_WITH_FAT = 0x1e;
 const COMPOSITION_HOLD_MS = 4000;
 
 /**
+ * MiBeacon product id of the Yunmai Mini 2 M1690 (yunmai.scales.m1690, 397 in
+ * Xiaomi's product list). The unit in #474 advertises no name, only Xiaomi
+ * 0xFE95 service data with this id.
+ */
+const PID_MINI2_M1690 = 0x018d;
+
+/**
  * Adapter for Yunmai scales (Signal, Mini, Mini 2, SE).
+ *
+ * Found by its name, or by the MiBeacon product id 0x018D a Mini 2 (M1690)
+ * advertises instead of one (#474).
  *
  * Protocol ported from openScale's YunmaiHandler:
  *   - Measurement service 0xFFE0, char 0xFFE4 (notify)
@@ -61,6 +71,7 @@ export class YunmaiScaleAdapter
   readonly match: MatchDescriptor = {
     priority: 190,
     names: { includes: ['yunmai'] },
+    miBeaconProductIds: [PID_MINI2_M1690],
   };
   readonly charNotifyUuid = CHR_MEAS;
   readonly charWriteUuid = CHR_CMD;
@@ -87,9 +98,10 @@ export class YunmaiScaleAdapter
   private readonly comp = new ReadingComposition<number | null>();
 
   matches(device: BleDeviceInfo): boolean {
-    // The name only claims the device; what the frame carries is read from the
-    // frame. openScale reads the resistance for SIGNAL as well as ISM, and a
-    // forced or nameless unit has no name to go by (#474).
+    // The name, or the product id of a Mini 2 that advertises no name, only
+    // claims the device; what the frame carries is read from the frame.
+    // openScale reads the resistance for SIGNAL as well as ISM, and a forced or
+    // nameless unit has no name to go by (#474).
     return matchesDescriptor(device, this.match);
   }
 
