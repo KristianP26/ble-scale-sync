@@ -21,13 +21,49 @@
  * replaced on every removeListeners(), so it is not borrowed.
  */
 
-import { bleLog, errMsg, untilAborted, withTimeout } from '../types.js';
+import { bleLog, errMsg } from '../types.js';
 import { helperOf, type Device, type PropsChangedHandler, type SignalInterface } from './dbus.js';
 
 const DEVICE_IFACE = 'org.bluez.Device1';
 
 /** Bound on the introspection behind the reason subscription; the connect goes ahead without it. */
 export const REASON_PROBE_TIMEOUT_MS = 2_000;
+
+/**
+ * The probe raced against its deadline and a shutdown. One timer, unref'd and
+ * cleared on every path, rather than withTimeout inside untilAborted, whose
+ * timer would keep the event loop alive for the rest of its 2 s after a
+ * shutdown (the same reason as disconnectBounded in stale-link.ts).
+ */
+function boundedProbe<T>(probe: Promise<T>, abortSignal?: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const aborted = (): unknown => abortSignal?.reason ?? new DOMException('Aborted', 'AbortError');
+    if (abortSignal?.aborted) {
+      probe.catch(() => {});
+      reject(aborted());
+      return;
+    }
+    const finish = (settle: () => void): void => {
+      clearTimeout(timer);
+      abortSignal?.removeEventListener('abort', onAbort);
+      settle();
+    };
+    const timer = setTimeout(
+      () =>
+        finish(() =>
+          reject(new Error(`no introspection answer within ${REASON_PROBE_TIMEOUT_MS / 1000}s`)),
+        ),
+      REASON_PROBE_TIMEOUT_MS,
+    );
+    timer.unref?.();
+    const onAbort = (): void => finish(() => reject(aborted()));
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
+    probe.then(
+      (value) => finish(() => resolve(value)),
+      (err: unknown) => finish(() => reject(err)),
+    );
+  });
+}
 
 export interface AttemptLinkView {
   /** Device1.Connected went true after the Connect call (a stuck link never does, #472). */
@@ -107,12 +143,8 @@ export async function observeConnectAttempt(
 
   if (opts.probeReasons && helper?.dbus?.getProxyObject) {
     try {
-      const obj = await untilAborted(
-        withTimeout(
-          helper.dbus.getProxyObject('org.bluez', helper.object),
-          REASON_PROBE_TIMEOUT_MS,
-          `no introspection answer within ${REASON_PROBE_TIMEOUT_MS / 1000}s`,
-        ),
+      const obj = await boundedProbe(
+        helper.dbus.getProxyObject('org.bluez', helper.object),
         opts.abortSignal,
       );
       const candidate = obj.getInterface(DEVICE_IFACE);

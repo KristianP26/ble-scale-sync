@@ -282,6 +282,8 @@ describe('observeConnectAttempt (#471, D066)', () => {
       ac.abort();
       const obs = await pending;
       expect(obs.view().reasonSupported).toBe(false);
+      // No deadline timer left to hold the event loop open after the shutdown.
+      expect(vi.getTimerCount()).toBe(0);
     });
 
     it('works on a device with no bus or no helper at all', async () => {
