@@ -10,7 +10,7 @@ import {
   logAdvert,
   safeName,
 } from '../advertisement.js';
-import { bleLog, errMsg, withIdleTimeout, IMPEDANCE_GRACE_MS } from '../types.js';
+import { bleLog, errMsg, untilAborted, withIdleTimeout, IMPEDANCE_GRACE_MS } from '../types.js';
 import { EsphomeProxyPool } from './pool.js';
 import { ManufacturerDataCache } from './advert.js';
 
@@ -220,27 +220,33 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
             try {
               session = await pool.connectGatt(address);
               // Through withAbandonmentCleanup, so a timeout still hands over
-              // the stored weigh-ins the session collected (#331).
+              // the stored weigh-ins the session collected (#331). A shutdown
+              // ends it at once and hands nothing over, as on node-ble (A-07,
+              // D051): the scan has rejected already, and the session would
+              // otherwise run on until its idle bound or hold settled it.
               const raw = await withAbandonmentCleanup(
                 session.device,
                 () =>
-                  withIdleTimeout(
-                    (onActivity) =>
-                      waitForRawReading(
-                        session!.charMap,
-                        session!.device,
-                        adapter,
-                        opts.profile,
-                        address.replace(/[:-]/g, '').toUpperCase(),
-                        opts.weightUnit,
-                        opts.onLiveData,
-                        opts.scaleAuth,
-                        onActivity,
-                        info.localName,
-                        manufacturerData,
-                      ),
-                    GATT_READING_IDLE_MS,
-                    `GATT reading timeout for ${address}`,
+                  untilAborted(
+                    withIdleTimeout(
+                      (onActivity) =>
+                        waitForRawReading(
+                          session!.charMap,
+                          session!.device,
+                          adapter,
+                          opts.profile,
+                          address.replace(/[:-]/g, '').toUpperCase(),
+                          opts.weightUnit,
+                          opts.onLiveData,
+                          opts.scaleAuth,
+                          onActivity,
+                          info.localName,
+                          manufacturerData,
+                        ),
+                      GATT_READING_IDLE_MS,
+                      `GATT reading timeout for ${address}`,
+                    ),
+                    opts.abortSignal,
                   ),
                 opts.abortSignal,
               );

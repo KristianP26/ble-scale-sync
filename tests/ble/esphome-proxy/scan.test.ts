@@ -166,6 +166,44 @@ describe('scanAndReadRaw GATT single-shot (#116)', () => {
       vi.useRealTimers();
     }
   });
+
+  // A shutdown ends the GATT session at once, as on node-ble (A-07, D051).
+  // The scan itself already rejected on the abort, but the session used to
+  // run on until its own idle bound or hold settled it, which a 5 s
+  // force-exit grace does not wait for, and a held reading then logged
+  // "Reading complete" for a weigh-in that went nowhere (#463).
+  it('ends the GATT session at once when the scan is aborted', async () => {
+    closeSpy.mockClear();
+    fireDisconnectSpy.mockClear();
+    vi.useFakeTimers();
+    try {
+      hangSession = true;
+      const shutdown = new AbortController();
+      const scan = scanAndReadRaw({
+        adapters: [gattAdapter()],
+        profile,
+        esphomeProxy: {
+          host: 'p1',
+          port: 6053,
+          client_info: 'x',
+          additional_proxies: [],
+        } as never,
+        abortSignal: shutdown.signal,
+      }).catch((e: unknown) => e);
+
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(closeSpy).not.toHaveBeenCalled();
+      shutdown.abort(new Error('shutting down'));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(await scan).toEqual(new Error('shutting down'));
+      expect(fireDisconnectSpy).toHaveBeenCalled();
+      expect(closeSpy).toHaveBeenCalled();
+    } finally {
+      hangSession = false;
+      vi.useRealTimers();
+    }
+  });
 });
 
 // #461: the proxy delivers the advertisement and its scan response as two
