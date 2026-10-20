@@ -218,8 +218,9 @@ export interface StoredRecord {
  * (507/505) and #461 (4303/4301). openScale reads both resistances
  * little-endian one byte later, which lands on the right R50 only because
  * R50 and R500 share their high byte; its R500 is the low byte of R500 and a
- * zero (246, 249 and 205 on those records). Classic scales use a different
- * layout and are not read through this. Null below 16 bytes.
+ * zero (246, 249 and 205 on those records). Classic scales lay the record
+ * out one byte earlier (time [5..8], weight [9..10]: the vendor's published
+ * SDK and #283) and are not read at all (D068). Null below 16 bytes.
  */
 export function decodeStoredRecord(data: Buffer): StoredRecord | null {
   if (data.length < 16) return null;

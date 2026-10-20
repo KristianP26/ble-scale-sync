@@ -1132,12 +1132,15 @@ export class QnScaleAdapter
     // R500 big-endian at [12..13] and [14..15], as the vendor SDK reads them
     // (#461), not openScale's little-endian [13..14] and [15..16].
     //
-    // A session that positively identified a classic scale (a short 0x12)
-    // keeps the old offsets. Classic firmware has a different 0x23 layout
-    // altogether, the record time included, so its records fail the freshness
-    // check below as stale; changing how they are read is a separate change
-    // with its own evidence. A session without any 0x12 reads the long layout,
-    // which is what every real record we have uses.
+    // A session that positively identified a classic scale (a 15- or 17-byte
+    // 0x12) reads no 0x23 at all. Classic firmware lays the record out one
+    // byte earlier, as the vendor's published SDK reads it (#283's record is
+    // the live weight of its session that way, 61.70 kg), and nothing here
+    // decodes that layout. Read through the long layout, a classic weight of
+    // 130.56 kg or more put the record's time in the future, past the
+    // freshness check, and it went out with the wrong weight. Every classic
+    // weigh-in in our logs came live. A session without any 0x12 reads the
+    // long layout, which is what every real record we have uses (D068).
     //
     // A record from up to MAX_STORED_RECORD_AGE_SEC before the session, and on
     // the long dialects not stamped more than STORED_FUTURE_TOLERANCE_MS after
@@ -1154,6 +1157,14 @@ export class QnScaleAdapter
       // so the answer is logged here as on the 19-byte dialect; the line it
       // sets off on the live path below needs it.
       if (this.isEighteenByteInfo) this.noteStoredQueryAnswer();
+      if (this.scaleFactorKnown && !this.isLongFrameVariant) {
+        bleLog.debug(
+          `QN: 0x23 on the classic dialect is not decoded (#461 S3), not read: [${hex(data)}] (#463)`,
+        );
+        // The re-query stays, as for every 0x23 not read.
+        this.scheduleStoredDataRetry();
+        return null;
+      }
       const record = data.length < 17 ? null : decodeStoredRecord(data);
       if (!record) {
         bleLog.debug(
@@ -1163,7 +1174,6 @@ export class QnScaleAdapter
         return null;
       }
       const { weight, recordSeconds } = record;
-      const classic = this.scaleFactorKnown && !this.isLongFrameVariant;
       const sessionSeconds =
         this.sessionStartedScaleSeconds ?? Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
       if (weight <= 5 || weight >= 300) {
@@ -1195,16 +1205,13 @@ export class QnScaleAdapter
         this.logUnreadStoredRecord(data, record, sessionSeconds, 'old');
         return null;
       }
-      const r1 = classic ? data.readUInt16LE(13) : record.r50;
-      const r2 = classic ? data.readUInt16LE(15) : record.r500;
+      const r1 = record.r50;
+      const r2 = record.r500;
       if (this.storedRetryTimer) {
         clearTimeout(this.storedRetryTimer);
         this.storedRetryTimer = null;
       }
-      bleLog.debug(
-        `QN: stored 0x23 reading ${weight}kg, R50 ${r1} / R500 ${r2}` +
-          (classic ? ' (classic offsets)' : ''),
-      );
+      bleLog.debug(`QN: stored 0x23 reading ${weight}kg, R50 ${r1} / R500 ${r2}`);
       const fresh: ScaleReading = { weight, impedance: this.resistance(r1 > 0 ? r1 : r2) };
       // This session's weigh-in, so a later session that is handed the same
       // record as history knows it went out already (#463).
@@ -2097,9 +2104,9 @@ export class QnScaleAdapter
    * scale kept had been handed over at all.
    *
    * Only the long-frame dialects get the record's values: the VA layout is
-   * known there. A classic scale's 0x23 has its own layout, so its line has the
-   * bytes only, and a session without a 0x12 does not know its dialect, so its
-   * line gives the VA reading as one possibility.
+   * known there. A session without a 0x12 does not know its dialect, so its
+   * line gives the VA reading as one possibility. A classic session never gets
+   * here: its 0x23 is logged and dropped before it is decoded (D068).
    */
   private logUnreadStoredRecord(
     data: Buffer,
@@ -2108,12 +2115,6 @@ export class QnScaleAdapter
     why: 'out of range' | 'old',
   ): void {
     const bytes = hex(data);
-    if (this.scaleFactorKnown && !this.isLongFrameVariant) {
-      bleLog.debug(
-        `QN: 0x23 on the classic dialect is not decoded (#461 S3), not read: [${bytes}] (#463)`,
-      );
-      return;
-    }
     const at = new Date((record.recordSeconds + SCALE_EPOCH_OFFSET) * 1000).toISOString();
     const age = sessionSeconds - record.recordSeconds;
     if (!this.scaleFactorKnown) {

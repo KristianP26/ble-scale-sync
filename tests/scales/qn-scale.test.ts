@@ -59,6 +59,15 @@ const READY_283 = Buffer.from([0x14, 0x0b, 0xff, 0x00, 0x00, 0x01, 0x00, 0x00, 0
 const CONFIG_REQ_283 = Buffer.from([0x21, 0x04, 0xff, 0x01, 0x25]);
 
 /**
+ * #283, the 0x23 its classic scale answered with, in the classic layout the
+ * live weight of that session (61.70 kg).
+ */
+const RECORD_283 = Buffer.from([
+  0x23, 0x13, 0xff, 0x04, 0x01, 0x09, 0x11, 0xef, 0x31, 0x18, 0x1a, 0x01, 0xfc, 0x01, 0xf8, 0x00,
+  0x00, 0x00, 0x9c,
+]);
+
+/**
  * #253, a Renpho's 18-byte 0x12 ([10] 0x17) and a stable 14-byte live 0x10 in
  * the ES-30M layout (84.80 kg, R 501), from that public log.
  */
@@ -111,6 +120,11 @@ const INFO_CLASSIC_DIV10 = derive(INFO_CLASSIC, { 10: 0x02 });
  * naming /10, which no long unit has sent.
  */
 const INFO_461_DIV10 = derive(INFO_461, { 10: 0x06 });
+/**
+ * RECORD_283 at 131.00 kg in the classic layout: [9..10] 18 1a -> 33 2c, [18]
+ * recomputed. Through the long layout its time lands in 2027.
+ */
+const RECORD_283_131 = derive(RECORD_283, { 9: 0x33, 10: 0x2c });
 /** LIVE_253 at 20.00 kg: [5..6] 21 20 -> 07 d0, [13] recomputed. */
 const LIVE_253_2000 = derive(LIVE_253, { 5: 0x07, 6: 0xd0 });
 /** LIVE_253 with [1] 0e -> 0b, so [1] no longer gives its length; [13] recomputed. */
@@ -141,6 +155,7 @@ const DERIVED: [string, Buffer, Buffer, number[]][] = [
   ['LIVE_283_6144', LIVE_283_6144, LIVE_283, [4]],
   ['INFO_CLASSIC_DIV10', INFO_CLASSIC_DIV10, INFO_CLASSIC, [10]],
   ['INFO_461_DIV10', INFO_461_DIV10, INFO_461, [10]],
+  ['RECORD_283_131', RECORD_283_131, RECORD_283, [9, 10]],
   ['LIVE_253_2000', LIVE_253_2000, LIVE_253, [5, 6]],
   ['LIVE_253_NOT_ITS_LENGTH', LIVE_253_NOT_ITS_LENGTH, LIVE_253, [1]],
 ];
@@ -631,12 +646,9 @@ describe('QnScaleAdapter', () => {
         await adapter.onConnected(ctx);
         // Feed a 0x12 scale-info frame so handleScaleInfo cancels the fallback
         // timer (which would otherwise send its own 0x22). Then flush its writes
-        // so we only count retry-driven queries.
-        const info = Buffer.alloc(11);
-        info[0] = 0x12;
-        info[2] = 0xff;
-        info[10] = 0;
-        adapter.parseNotification(info);
+        // so we only count retry-driven queries. A long one: a classic session
+        // reads no 0x23 at all, so it would never reach the stale check (D068).
+        adapter.parseNotification(INFO_461);
         await vi.advanceTimersByTimeAsync(1000);
         writes.length = 0;
 
@@ -1382,7 +1394,7 @@ describe('QnScaleAdapter', () => {
 // D068: the divisor is bit 0 of the 0x12 flags byte [10], as the vendor's
 // published SDK reads it. The frames are real (the maintainer's classic unit,
 // #283, openScale #1239) or derived from them (DERIVED, guarded below).
-describe('QN classic divisor and live layout (D068)', () => {
+describe('QN divisor, live layout and classic 0x23 (D068)', () => {
   /** A frame to feed, or a number of milliseconds to let pass. */
   type Step = Buffer | number;
 
@@ -1507,6 +1519,23 @@ describe('QN classic divisor and live layout (D068)', () => {
   it('does not take a frame whose [1] is not its length for the ES-30M layout', async () => {
     const { readings } = await run([LIVE_253_NOT_ITS_LENGTH], '2026-07-10T13:28:40Z');
     expect(readings).toEqual([]);
+  });
+
+  // Through the long layout this record reads 112.65 kg stamped in 2027, so
+  // no freshness check caught it and it went out as the session's weigh-in.
+  it('does not read a classic 0x23 through the long layout, and says so (#283)', async () => {
+    const { readings, lines } = await run([INFO_283, RECORD_283_131], '2026-07-19T04:37:40Z');
+    expect(readings).toEqual([]);
+    expect(lines).toContain(
+      `QN: 0x23 on the classic dialect is not decoded (#461 S3), not read: [${[...RECORD_283_131]
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join(' ')}] (#463)`,
+    );
+  });
+
+  it('keeps the re-query after a classic 0x23 (#283)', async () => {
+    const { writes } = await run([INFO_283, RECORD_283, 3000], '2026-07-19T04:37:40Z');
+    expect(writes.filter((w) => w[0] === 0x22)).toHaveLength(1);
   });
 
   it.each([
@@ -4030,12 +4059,6 @@ describe('QN stored record and impedance (#461)', () => {
   /** Connect time in the log; the record is stamped 09:23:19. */
   const CONNECTED_461 = '2026-10-10T09:23:02.077Z';
 
-  /** #283, the 0x23 its classic scale (INFO_283) answered with. */
-  const RECORD_283 = Buffer.from([
-    0x23, 0x13, 0xff, 0x04, 0x01, 0x09, 0x11, 0xef, 0x31, 0x18, 0x1a, 0x01, 0xfc, 0x01, 0xf8, 0x00,
-    0x00, 0x00, 0x9c,
-  ]);
-
   interface SessionOptions {
     now: string;
     deviceAddress?: string;
@@ -4117,8 +4140,7 @@ describe('QN stored record and impedance (#461)', () => {
     }
   });
 
-  // A classic scale's 0x23 has its own layout; the session that saw its short
-  // 0x12 keeps reading it exactly as before, which drops this one as stale.
+  // A classic scale's 0x23 has its own layout, which is not read at all (D068).
   it('leaves a classic session alone (#283)', async () => {
     const reading = await runSession(makeAdapter(), [INFO_283, RECORD_283], {
       now: '2026-07-19T04:37:40Z',
