@@ -34,7 +34,7 @@ vi.mock('node-ble', () => {
   return { default: mod, ...mod };
 });
 
-const { getConnection, getAdapter, resetConnection, isStaleConnectionError } =
+const { getConnection, getAdapter, resetConnection, isStaleConnectionError, CALL_NOT_SENT_TEXT } =
   await import('../../../src/ble/handler-node-ble/connection.js');
 const { bleLog } = await import('../../../src/ble/types.js');
 
@@ -216,6 +216,8 @@ describe('D-Bus socket closed by the bus (A-03)', () => {
     const outcome = await settle(inFlight);
     expect(outcome.state).toBe('rejected');
     expect(isStaleConnectionError(outcome.err)).toBe(true);
+    // It was sent: what is missing is the answer.
+    expect((outcome.err as Error).message).not.toContain(CALL_NOT_SENT_TEXT);
   });
 
   it('fails a call written after the close instead of parking it', async () => {
@@ -226,6 +228,7 @@ describe('D-Bus socket closed by the bus (A-03)', () => {
 
     const outcome = await settle(real.bus.call(powered()));
     expect(outcome.state).toBe('rejected');
+    expect((outcome.err as Error).message).toBe(CALL_NOT_SENT_TEXT);
   });
 
   it('rebuilds on the next getAdapter without touching the dead bus first', async () => {
@@ -288,6 +291,8 @@ describe('D-Bus socket closed by the bus (A-03)', () => {
     const outcome = await settle(real.bus.call(powered()));
     expect(outcome.state).toBe('rejected');
     expect(isStaleConnectionError(outcome.err)).toBe(true);
+    // Written after the close: it never left this process (stale-link.ts says so).
+    expect((outcome.err as Error).message).toBe(CALL_NOT_SENT_TEXT);
     await getAdapter();
     expect(createBluetooth).toHaveBeenCalledTimes(2);
   });

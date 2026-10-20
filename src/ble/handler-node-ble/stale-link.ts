@@ -47,23 +47,27 @@ export type DisconnectOutcome = 'done' | 'timeout' | 'aborted';
 
 /**
  * How a call failed because its D-Bus connection closed, rather than with an
- * answer from BlueZ: `'pending'` is the error connection.ts hands a call still
- * waiting when the connection closed (failPendingCalls), `'unsent'` the one
- * dbus-next throws for a write on a stream no longer writable, typically after
- * our own resetConnection() ended it and before the daemon closed its side
- * (`lib/connection.js`, no `.type`). Logged as an answer, the Disconnect a stale-link recovery leaves
- * behind on purpose would show up as "answered" with the time the reset took,
- * the number DISCONNECT_TIMEOUT_MS is tuned against. Matched by name and text
- * rather than imported, since the scan tests replace connection.js wholesale.
+ * answer from BlueZ. `'pending'`: the error connection.ts hands a call still
+ * waiting when the connection closed (failPendingCalls). `'unsent'`: the call
+ * never left this process, either because dbus-next threw for a write on a
+ * stream no longer writable, typically after our own resetConnection() ended
+ * it and before the daemon closed its side (`lib/connection.js`, no `.type`),
+ * or because it was written after the daemon's `end`, which dbus-next turns
+ * into an `error` and connection.ts fails with CALL_NOT_SENT_TEXT. Logged as
+ * an answer, the Disconnect a stale-link recovery leaves behind on purpose
+ * would show up as "answered" with the time the reset took, the number
+ * DISCONNECT_TIMEOUT_MS is tuned against. Matched by name and text rather
+ * than imported, since the scan tests replace connection.js wholesale.
  */
 function connectionClosedFailure(err: unknown): 'pending' | 'unsent' | undefined {
+  const text = errMsg(err);
   if (
     (err as { type?: unknown } | null | undefined)?.type ===
     'org.freedesktop.DBus.Error.Disconnected'
   ) {
-    return 'pending';
+    return text.includes('before the call was sent') ? 'unsent' : 'pending';
   }
-  return errMsg(err).includes('Cannot send message, stream is closed') ? 'unsent' : undefined;
+  return text.includes('Cannot send message, stream is closed') ? 'unsent' : undefined;
 }
 
 /** How long the check after the power-cycle may take, all of it together. */

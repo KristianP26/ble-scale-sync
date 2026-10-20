@@ -74,6 +74,9 @@ interface ClosableBus {
 /** D-Bus wire message type ERROR (D-Bus spec; `dbus-next/lib/constants.js`). */
 const DBUS_MESSAGE_TYPE_ERROR = 3;
 
+/** What a call failed on a closed connection before it was ever written says (stale-link.ts). */
+export const CALL_NOT_SENT_TEXT = 'D-Bus connection closed before the call was sent';
+
 /**
  * Reject every call still waiting for a reply on a bus whose socket closed.
  *
@@ -84,9 +87,13 @@ const DBUS_MESSAGE_TYPE_ERROR = 3;
  * DBusError. Its text contains "connection closed", which
  * isStaleConnectionError() already routes into the reset-and-retry path.
  *
+ * `unsent` is for the calls failed on the `error` a write after the close
+ * gives: the ones waiting at the close went at the `end`, so these never left
+ * this process, and the text says so (stale-link.ts logs them as not sent).
+ *
  * Returns how many calls were failed.
  */
-function failPendingCalls(bus: unknown): number {
+function failPendingCalls(bus: unknown, opts?: { unsent: boolean }): number {
   const handlers = (bus as ClosableBus | null | undefined)?._methodReturnHandlers;
   if (!handlers || typeof handlers !== 'object') return 0;
   const serials = Object.keys(handlers);
@@ -97,7 +104,7 @@ function failPendingCalls(bus: unknown): number {
       handler({
         type: DBUS_MESSAGE_TYPE_ERROR,
         errorName: 'org.freedesktop.DBus.Error.Disconnected',
-        body: ['D-Bus connection closed'],
+        body: [opts?.unsent ? CALL_NOT_SENT_TEXT : 'D-Bus connection closed'],
         sender: undefined,
       });
     } catch (err) {
@@ -152,7 +159,7 @@ export function getConnection(): { bluetooth: NodeBle.Bluetooth; destroy: () => 
       // retry loop that replaced the connection under its caller sends exactly
       // such calls (#472).
       if (persistentConn !== conn) {
-        const failed = failPendingCalls(bus);
+        const failed = failPendingCalls(bus, { unsent: ended });
         bleLog.debug(
           `D-Bus error on an already replaced connection: ${errMsg(err)}` +
             (failed > 0 ? ` (${failed} pending call(s) failed)` : ''),
@@ -163,7 +170,7 @@ export function getConnection(): { bluetooth: NodeBle.Bluetooth; destroy: () => 
       bleLog.warn(
         `D-Bus transport error: ${errMsg(err)}. The connection will be rebuilt before the next scan.`,
       );
-      if (ended) failPendingCalls(bus);
+      if (ended) failPendingCalls(bus, { unsent: true });
     });
     attachBusEndHandler(conn.bluetooth, () => {
       ended = true;

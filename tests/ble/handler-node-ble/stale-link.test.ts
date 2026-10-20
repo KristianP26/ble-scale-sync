@@ -373,6 +373,29 @@ describe('disconnectBounded (#472)', () => {
     expect(lines.some((l) => l.startsWith('Disconnect (teardown) answered'))).toBe(false);
   });
 
+  it('logs a Disconnect written after the daemon closed the connection as not sent', async () => {
+    // dbus-next turns a write after the `end` into an `error`, and connection.ts
+    // fails the call it parked with its own not-sent text. "got no answer
+    // before the D-Bus connection closed, after 0 ms" would be wrong twice.
+    const { CALL_NOT_SENT_TEXT } = await import('../../../src/ble/handler-node-ble/connection.js');
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const late = {
+      disconnect: vi.fn(async () => {
+        throw Object.assign(new Error(CALL_NOT_SENT_TEXT), {
+          type: 'org.freedesktop.DBus.Error.Disconnected',
+        });
+      }),
+    };
+    await expect(disconnectBounded(late as never, { mac: MAC, label: 'teardown' })).resolves.toBe(
+      'done',
+    );
+    const lines = debug.mock.calls.map(([m]) => String(m));
+    expect(lines).toContain(
+      'Disconnect (teardown) was not sent: the D-Bus connection was already closed',
+    );
+    expect(lines.some((l) => l.includes('got no answer'))).toBe(false);
+  });
+
   it('sends the Disconnect on an already aborted signal and returns at once', async () => {
     const ac = new AbortController();
     ac.abort();
