@@ -153,6 +153,18 @@ describe('describeAttempt', () => {
     expect(line('lingered', up(undefined))).toContain('was not seen going down after the error');
   });
 
+  it('does not say the connection never came up when BlueZ gave a reason for ending it', () => {
+    const l = line('never-up', {
+      linkUp: false,
+      reasonSupported: true,
+      reason: 'org.bluez.Reason.Timeout',
+    });
+    expect(l).toContain(
+      'BlueZ never reported the connection as up; BlueZ: org.bluez.Reason.Timeout',
+    );
+    expect(l).not.toContain('the connection never came up');
+  });
+
   it('says nothing for an error that is not auth-class and had no connection', () => {
     expect(line('other', { linkUp: false, reasonSupported: false })).toBeUndefined();
   });
@@ -215,6 +227,14 @@ describe('StaleBondEvidence (#471, D066)', () => {
     const e = new StaleBondEvidence();
     for (const [err, link] of attempts) e.record(err, link);
     expect(e.keptWhy().why).toBe(why);
+  });
+
+  it('keeps the bond for the reason BlueZ gave, not "never asked", when the up was merged away', () => {
+    const e = new StaleBondEvidence();
+    for (let i = 0; i < 3; i++) {
+      e.record(ABORT, { linkUp: false, reasonSupported: true, reason: 'org.bluez.Reason.Timeout' });
+    }
+    expect(e.keptWhy()).toEqual({ why: 'link-reason', reason: 'org.bluez.Reason.Timeout' });
   });
 
   it('counts only auth-class failures as aborts', () => {

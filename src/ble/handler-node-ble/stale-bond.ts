@@ -217,7 +217,12 @@ export function describeAttempt(opts: {
         `this host gives up on a refused pairing key${reasonTail}`;
       break;
     case 'never-up':
-      detail = `${up}${reasonTail}`;
+      // A reason means BlueZ had a connection; the true and false of a short
+      // one can arrive merged into one PropertiesChanged.
+      detail =
+        link?.reason !== undefined
+          ? `BlueZ never reported the connection as up${reasonTail}`
+          : `${up}${reasonTail}`;
       break;
     default:
       detail = link?.linkUp
@@ -311,6 +316,10 @@ export class StaleBondEvidence {
       case 'lingered':
         this.lingered += 1;
         this.linkUps += 1;
+        break;
+      case 'never-up':
+        // BlueZ ended a connection it never showed as up: it did exist.
+        if (link?.reason !== undefined) this.linkReason = link.reason;
         break;
       default:
         break;
