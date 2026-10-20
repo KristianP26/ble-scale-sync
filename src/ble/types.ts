@@ -203,8 +203,9 @@ export interface ScanOptions {
   readingTimeoutMs?: number;
   /**
    * Clear a bond the scale has forgotten instead of only diagnosing it
-   * (`ble.auto_clear_stale_bond`, #335). node-ble only; the other transports
-   * have no bond to clear.
+   * (`ble.auto_clear_stale_bond`, #335), and only when the scale is seen
+   * refusing the key (D066). node-ble only; the other transports have no bond
+   * to clear.
    */
   autoClearStaleBond?: boolean;
   /**

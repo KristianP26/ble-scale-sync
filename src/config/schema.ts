@@ -287,14 +287,16 @@ export const BleSchema = z
      * When a peripheral discards its half of the pairing, BlueZ replays the
      * dead key forever: every connect fails during encryption and the host
      * never invalidates anything, so the scale is unreachable until someone
-     * runs `bluetoothctl remove` by hand. Turning this on lets a run of
-     * authentication-class failures against a device BlueZ still lists as
-     * bonded clear the bond once per connect and retry.
+     * runs `bluetoothctl remove` by hand. With this on, the bond is cleared once
+     * per connect when BlueZ reports that the scale refused the key: BlueZ 5.83
+     * and later (Home Assistant OS 16.2 and later) say why a connection ended,
+     * and three refusals in one connect are enough. Every BlueZ gives a refused
+     * key and a weak radio link the same `le-connection-abort-by-local` (#471),
+     * so with older BlueZ nothing is cleared; a warning says when the failures
+     * look like a forgotten pairing.
      *
-     * Opt-in, because `le-connection-abort-by-local` also has benign producers
-     * (a connect issued while discovery is still active, or another D-Bus
-     * client holding a discovery session), and on these scales a bond dropped
-     * in error costs a physical re-pair at the device.
+     * Opt-in, because on these scales a bond dropped in error costs a physical
+     * re-pair at the device.
      */
     auto_clear_stale_bond: z.boolean().optional().nullable(),
     /**
