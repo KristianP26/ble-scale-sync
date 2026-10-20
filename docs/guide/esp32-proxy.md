@@ -45,7 +45,7 @@ The server learns which scales these are while it runs and does not keep that ac
 3. The server subscribes to notification topics and sends write commands (e.g. unlock)
 4. Scale readings arrive as notifications, forwarded to the server via MQTT
 5. The server sends a `disconnect` command when the reading is complete
-6. If the scale is still on after the reading, the ESP32 connects to it again on its next advertisement, so a second person stepping on before it switches off is read too. When nobody does, the session ends when the scale switches off and the server logs `... session opened N s after the last reading, while the scale was still on, ended without a new weigh-in (...)` at info level.
+6. If the scale is still on after the reading, the ESP32 connects to it again on its next advertisement, so a second person stepping on before it switches off is read too. When nobody does, the session ends when the scale switches off, after 60 s in which the scale sends nothing (a Yunmai's replies to the unlock do not count) or 90 s after it opened, and the server logs `... session opened N s after the last reading, while the scale was still on, ended without a new weigh-in (...)` at info level.
 
 ::: tip Autonomous connect
 The ESP32 connects to known scales autonomously the instant it detects them, eliminating the MQTT round-trip that previously caused some fast-sleeping scales to power off before the connection could be established. This behavior is on by default. To disable it and use the old host-initiated connect flow, set `auto_connect: false` under `mqtt_proxy` in your config.

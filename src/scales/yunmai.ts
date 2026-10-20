@@ -24,6 +24,12 @@ const CHR_CMD = uuid16(0xffe9); // write  — commands
 
 // Response-type markers in data[3]
 const RESP_MEASURED = 0x02;
+// The reply to GET_PROTOCOL_VERSION (openScale's ResponseType names it
+// PROTOCOL_VERSION): `0d 1f 05 05 1f` on the #474 Mini 2 and `0d 13 05 05 13` on a
+// SIGNAL (openScale #1286), the version in [1] like every frame. The Mini 2 sends
+// one for every unlock we write (26 of 26 in the #474 log of 2026-10-20) and,
+// after a weigh-in, nothing else.
+const RESP_PROTOCOL_VERSION = 0x05;
 
 // [2] is the frame's total length, start byte and XOR included (openScale's
 // YunmaiHandler and the protocol notes it cites say so). 18 bytes carry weight
@@ -56,6 +62,7 @@ const PID_MINI2_M1690 = 0x018d;
  *   - Weight at bytes [13-14] big-endian / 100  (kg)
  *   - Resistance at bytes [15-16] big-endian     (frames of 18+ bytes)
  *   - Fat at bytes [17-18] big-endian / 100      (20-byte frames, protocol >= 0x1E)
+ *   - Reply 0x05 to GET_PROTOCOL_VERSION: a status frame, not a weigh-in
  *
  * Which fields a frame carries is read from the frame, not from the advertised
  * name (#474, ADR D061). openScale counts SIGNAL, ISM, ISC2P and Scale-3 as
@@ -76,7 +83,10 @@ export class YunmaiScaleAdapter
   readonly charNotifyUuid = CHR_MEAS;
   readonly charWriteUuid = CHR_CMD;
   readonly normalizesWeight = true;
-  /** GET_PROTOCOL_VERSION — initiates measurement on connect. */
+  /**
+   * GET_PROTOCOL_VERSION: initiates measurement on connect. The scale answers
+   * each one with a 0x05 frame, see isStatusFrame.
+   */
   readonly unlockCommand = [0x0d, 0x05, 0x13, 0x00, 0x16];
   readonly unlockIntervalMs = 5000;
 
@@ -152,6 +162,21 @@ export class YunmaiScaleAdapter
     const reading: ScaleReading = { weight, impedance };
     this.comp.pin(reading, this.embeddedFatPercent);
     return reading;
+  }
+
+  /**
+   * The scale's reply to our GET_PROTOCOL_VERSION is not a weigh-in, so it must
+   * not keep the session open (#474, D070). Matched on the type [3] and on [2]
+   * being the frame's own length, as on every Yunmai frame on record; a live 0x01
+   * or final 0x02 frame never matches.
+   */
+  isStatusFrame(_charUuid: string, data: Buffer): boolean {
+    return (
+      data.length >= 4 &&
+      data[0] === 0x0d &&
+      data[2] === data.length &&
+      data[3] === RESP_PROTOCOL_VERSION
+    );
   }
 
   isComplete(reading: ScaleReading): boolean {

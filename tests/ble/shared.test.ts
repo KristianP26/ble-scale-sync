@@ -1905,6 +1905,85 @@ describe('waitForRawReading() with a forced, nameless Yunmai (#474)', () => {
       vi.useRealTimers();
     }
   });
+
+  /** The ESPHome watcher bound: 60 s without activity, 90 s in all. */
+  function runProxyBound(answerUnlock: boolean) {
+    const notifyChar = createMockChar();
+    const writeChar = createMockChar();
+    if (answerUnlock) {
+      // The Mini 2 answers each GET_PROTOCOL_VERSION 72-109 ms after the write.
+      writeChar.write = vi.fn(async (data: Buffer) => {
+        writeChar.writtenData.push(data);
+        setTimeout(() => notifyChar.triggerData(M1690_PROTOCOL_VERSION_REPLY), 80);
+      });
+    }
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [uuid16(0xffe4), notifyChar],
+      [uuid16(0xffe9), writeChar],
+    ]);
+    const adapter = applyForcedAdapter([new YunmaiScaleAdapter()], 'Yunmai')[0];
+    adapter.matches({ localName: '', serviceUuids: [] });
+    const promise = withAbandonmentCleanup(device, () =>
+      withIdleTimeout(
+        (onActivity) =>
+          waitForRawReading(
+            charMap,
+            device,
+            adapter,
+            PROFILE,
+            '',
+            undefined,
+            undefined,
+            undefined,
+            onActivity,
+          ),
+        60_000,
+        'GATT reading timeout',
+        { ms: 90_000, message: 'GATT session cap exceeded' },
+      ),
+    );
+    return { notifyChar, writeChar, promise };
+  }
+
+  it('ends a session in which the scale only answers the unlock on the idle timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const { writeChar, promise } = runProxyBound(true);
+      let failure: unknown = null;
+      promise.catch((e: unknown) => {
+        failure = e;
+      });
+      await vi.advanceTimersByTimeAsync(60_100);
+      expect(writeChar.writtenData.length).toBeGreaterThanOrEqual(12);
+      expect(failure).toBeInstanceOf(SessionTimeoutError);
+      expect((failure as SessionTimeoutError).reason).toBe('idle');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the session open while live frames stream and settles on the final frame', async () => {
+    vi.useFakeTimers();
+    try {
+      // No reply to the unlock, so only the live frames can keep it open.
+      const { notifyChar, promise } = runProxyBound(false);
+      let failure: unknown = null;
+      promise.catch((e: unknown) => {
+        failure = e;
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      for (let t = 0; t < 70_000; t += 200) {
+        notifyChar.triggerData(M1690_LIVE_80KG);
+        await vi.advanceTimersByTimeAsync(200);
+      }
+      expect(failure).toBeNull();
+      notifyChar.triggerData(FINAL);
+      expect((await promise).reading).toEqual({ weight: 80, impedance: 470 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ─── Notification teardown on a failed init ─────────────────────────────────
