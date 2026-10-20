@@ -50,6 +50,65 @@ const INFO_283 = Buffer.from([
   0x12, 0x11, 0xff, 0xd3, 0x60, 0x18, 0x00, 0x01, 0xfb, 0x0a, 0x03, 0x19, 0x00, 0x04, 0x05, 0x07,
   0x9f,
 ]);
+/**
+ * #283's stable live 0x10 (61.70 kg / 502 Ohm), and the ready and
+ * config-request frames of the same session, from that public log.
+ */
+const LIVE_283 = Buffer.from([0x10, 0x0b, 0xff, 0x18, 0x1a, 0x01, 0x01, 0xf6, 0x01, 0xf7, 0x3c]);
+const READY_283 = Buffer.from([0x14, 0x0b, 0xff, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x1f]);
+const CONFIG_REQ_283 = Buffer.from([0x21, 0x04, 0xff, 0x01, 0x25]);
+
+/**
+ * The maintainer's classic unit: its 17-byte 0x12 and the stable 11-byte 0x10
+ * of one weigh-in (84.15 kg / 510 Ohm in the vendor app), byte for byte from
+ * its DEBUG log of 2026-10-19.
+ */
+const INFO_CLASSIC = Buffer.from([
+  0x12, 0x11, 0xff, 0x04, 0xa1, 0x13, 0x00, 0x03, 0xff, 0x02, 0x03, 0x05, 0x00, 0x00, 0x05, 0x07,
+  0xf2,
+]);
+const STABLE_CLASSIC = Buffer.from([
+  0x10, 0x0b, 0xff, 0x20, 0xdf, 0x01, 0x01, 0xfe, 0x01, 0xfc, 0x16,
+]);
+
+/**
+ * A real frame with the bytes at the given indices changed and its sum
+ * checksum (the last byte) recomputed. Every derived frame is listed in
+ * DERIVED, whose guard test checks both.
+ */
+function derive(source: Buffer, changes: Record<number, number>): Buffer {
+  const frame = Buffer.from(source);
+  for (const [index, value] of Object.entries(changes)) frame[Number(index)] = value;
+  frame[frame.length - 1] = [...frame.subarray(0, -1)].reduce((a, b) => a + b, 0) & 0xff;
+  return frame;
+}
+
+/** STABLE_CLASSIC at another weight: [3..4] set, [10] recomputed (D068). */
+const classicAt = (raw: number): Buffer => derive(STABLE_CLASSIC, { 3: raw >> 8, 4: raw & 0xff });
+const CLASSIC_8450 = classicAt(0x2102);
+const CLASSIC_8448 = classicAt(0x2100);
+const CLASSIC_8449 = classicAt(0x2101);
+const CLASSIC_2000 = classicAt(0x07d0);
+const CLASSIC_2499 = classicAt(0x09c3);
+/** LIVE_283 with [4] 1a -> 00 (61.44 kg), [10] recomputed. */
+const LIVE_283_6144 = derive(LIVE_283, { 4: 0x00 });
+/** INFO_CLASSIC with bit 0 of [10] cleared (03 -> 02), [16] recomputed: /10. */
+const INFO_CLASSIC_DIV10 = derive(INFO_CLASSIC, { 10: 0x02 });
+/** openScale #1239, an ES-CS20M's 15-byte classic 0x12 ([10] 0x01). */
+const INFO_1239 = Buffer.from([
+  0x12, 0x0f, 0x15, 0x79, 0x58, 0xcc, 0x38, 0xc1, 0xa4, 0x38, 0x01, 0x38, 0x00, 0x04, 0xe5,
+]);
+
+/** Every derived frame: [name, frame, source, the indices changed on purpose]. */
+const DERIVED: [string, Buffer, Buffer, number[]][] = [
+  ['CLASSIC_8450', CLASSIC_8450, STABLE_CLASSIC, [3, 4]],
+  ['CLASSIC_8448', CLASSIC_8448, STABLE_CLASSIC, [3, 4]],
+  ['CLASSIC_8449', CLASSIC_8449, STABLE_CLASSIC, [3, 4]],
+  ['CLASSIC_2000', CLASSIC_2000, STABLE_CLASSIC, [3, 4]],
+  ['CLASSIC_2499', CLASSIC_2499, STABLE_CLASSIC, [3, 4]],
+  ['LIVE_283_6144', LIVE_283_6144, LIVE_283, [4]],
+  ['INFO_CLASSIC_DIV10', INFO_CLASSIC_DIV10, INFO_CLASSIC, [10]],
+];
 
 /** Build a fake AABB broadcast buffer with the given weight and stability. */
 function makeBroadcast(weightKg: number, stable: boolean): Buffer {
@@ -1300,6 +1359,112 @@ describe('QnScaleAdapter', () => {
       expect(reading!.weight).toBe(60);
       expect(reading!.impedance).toBe(509);
     });
+  });
+});
+
+// D068: the divisor is bit 0 of the 0x12 flags byte [10], as the vendor's
+// published SDK reads it. The frames are real (the maintainer's classic unit,
+// #283, openScale #1239) or derived from them (DERIVED, guarded below).
+describe('QN classic divisor and live layout (D068)', () => {
+  /** A frame to feed, or a number of milliseconds to let pass. */
+  type Step = Buffer | number;
+
+  /**
+   * One session in transport order, frames 100 ms apart unless a number says
+   * otherwise. Collects every reading, every write and every debug line.
+   */
+  async function run(steps: Step[], now = '2026-10-19T10:00:00Z', adapter = makeAdapter()) {
+    const readings: ScaleReading[] = [];
+    const writes: number[][] = [];
+    const lines: string[] = [];
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation((m) => void lines.push(m));
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(now));
+      const ctx = {
+        write: async (_uuid: string, data: Buffer | number[]) => {
+          writes.push([...data]);
+        },
+        read: async () => Buffer.alloc(0),
+        subscribe: async () => {},
+        profile: defaultProfile(),
+        deviceAddress: '',
+        availableChars: new Set<string>(),
+      } as unknown as ConnectionContext;
+      adapter.onSessionStart?.();
+      await adapter.onConnected(ctx);
+      for (const step of steps) {
+        if (typeof step === 'number') {
+          await vi.advanceTimersByTimeAsync(step);
+          continue;
+        }
+        const reading = adapter.parseNotification(step);
+        if (reading) readings.push(reading);
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      adapter.onSessionEnd?.();
+      return { readings, writes, lines };
+    } finally {
+      vi.useRealTimers();
+      debug.mockRestore();
+    }
+  }
+
+  it.each(DERIVED)(
+    'derives %s from a real frame, changing only the named bytes and the checksum',
+    (_name, frame, source, changed) => {
+      expect(frame).toHaveLength(source.length);
+      expect(hasValidSumChecksum(source)).toBe(true);
+      expect(hasValidSumChecksum(frame)).toBe(true);
+      const differs = [...frame.keys()].filter((i) => frame[i] !== source[i]);
+      const allowed = [...changed, frame.length - 1];
+      expect(differs.every((i) => allowed.includes(i))).toBe(true);
+      expect(changed.every((i) => differs.includes(i))).toBe(true);
+    },
+  );
+
+  it("reads the maintainer's weigh-in at the /100 its 0x12 names", async () => {
+    const { readings, lines } = await run([
+      INFO_CLASSIC,
+      READY_283,
+      CONFIG_REQ_283,
+      1000,
+      STABLE_CLASSIC,
+    ]);
+    expect(lines).toContain('QN: scale info (17B, dialect=classic), factor=100, proto=0xff');
+    expect(readings).toEqual([{ weight: 84.15, impedance: 510 }]);
+  });
+
+  // At the old /10 these left the band (84.50 read as 25.7 kg through the
+  // ES-30M layout, which [4] 0x02 picked), were dropped as measuring frames
+  // ([4] 0x00 or 0x01), or were exported ten times too heavy (20.00 -> 200 kg).
+  it.each([
+    ['84.50 kg ([4] 0x02)', INFO_CLASSIC, CLASSIC_8450, { weight: 84.5, impedance: 510 }],
+    ['84.48 kg ([4] 0x00)', INFO_CLASSIC, CLASSIC_8448, { weight: 84.48, impedance: 510 }],
+    ['84.49 kg ([4] 0x01)', INFO_CLASSIC, CLASSIC_8449, { weight: 84.49, impedance: 510 }],
+    ['20.00 kg', INFO_CLASSIC, CLASSIC_2000, { weight: 20, impedance: 510 }],
+    ['24.99 kg', INFO_CLASSIC, CLASSIC_2499, { weight: 24.99, impedance: 510 }],
+    ['#283 at 61.44 kg ([4] 0x00)', INFO_283, LIVE_283_6144, { weight: 61.44, impedance: 502 }],
+  ])('reads a classic weigh-in of %s at /100', async (_label, info, frame, want) => {
+    const { readings } = await run([info, frame]);
+    expect(readings).toEqual([want]);
+  });
+
+  it.each([
+    ["the maintainer's unit, [10] 0x03", INFO_CLASSIC, 100],
+    ['#283, [10] 0x03', INFO_283, 100],
+    ['openScale #1239, [10] 0x01', INFO_1239, 100],
+    ['bit 0 clear, [10] 0x02 (derived)', INFO_CLASSIC_DIV10, 10],
+  ])('logs the divisor of %s', (_label, info, factor) => {
+    const lines: string[] = [];
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation((m) => void lines.push(m));
+    try {
+      makeAdapter().parseNotification(info);
+    } finally {
+      debug.mockRestore();
+    }
+    const line = lines.find((l) => l.startsWith('QN: scale info'));
+    expect(line ?? '(no line)').toContain(`factor=${factor},`);
   });
 });
 
@@ -4541,26 +4706,17 @@ describe('QN stored record and impedance (#461)', () => {
       });
 
       it('says nothing on the classic dialect', async () => {
-        // The 17-byte 0x12 (classic dialect, factor 10) and the stable 11-byte
-        // 0x10 of one weigh-in, byte for byte from the owner's classic unit's
-        // DEBUG log of 2026-10-19 (84.15 kg / 510 Ohm there too; raw 8415 is
-        // out of band at the named factor 10, so resolveWeight takes /100).
-        // That log's ready and config-request frames are not in hand, so the
-        // #461 ones drive the handshake to our 0x22, which the line needs.
-        const INFO_CLASSIC = Buffer.from([
-          0x12, 0x11, 0xff, 0x04, 0xa1, 0x13, 0x00, 0x03, 0xff, 0x02, 0x03, 0x05, 0x00, 0x00, 0x05,
-          0x07, 0xf2,
-        ]);
-        const STABLE_CLASSIC = Buffer.from([
-          0x10, 0x0b, 0xff, 0x20, 0xdf, 0x01, 0x01, 0xfe, 0x01, 0xfc, 0x16,
-        ]);
+        // The maintainer's classic weigh-in (INFO_CLASSIC, STABLE_CLASSIC) at
+        // the /100 bit 0 of its [10] names (D068). That log's ready and
+        // config-request frames are not in hand, so #283's classic ones drive
+        // the handshake to our 0x22, which the line needs.
         const { readings, writes, lines } = await session(
           makeAdapter(),
-          [INFO_CLASSIC, READY_461, CONFIG_REQ_461, 1000, STABLE_CLASSIC],
+          [INFO_CLASSIC, READY_283, CONFIG_REQ_283, 1000, STABLE_CLASSIC],
           STARTED_463,
           null,
         );
-        expect(lines).toContain('QN: scale info (17B, dialect=classic), factor=10, proto=0xff');
+        expect(lines).toContain('QN: scale info (17B, dialect=classic), factor=100, proto=0xff');
         expect(writes.some((w) => w[0] === 0x22)).toBe(true);
         expect(readings).toEqual([{ weight: 84.15, impedance: 510 }]);
         expect(lines).not.toContain(RACE);

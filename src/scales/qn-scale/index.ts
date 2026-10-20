@@ -43,6 +43,7 @@ import {
   EIGHT_CHANNEL_ORDER,
   EXTENDED_INFO_FRAME_LEN,
   IMPEDANCE_GRACE_MS,
+  INFO_DIVISOR_BIT,
   LAST_KNOWN_WEIGHT_TOLERANCE,
   LEGACY_PROTO_TYPE,
   LIVE20_FRAME_LEN,
@@ -175,8 +176,9 @@ export class QnScaleAdapter
   readonly normalizesWeight = true;
 
   /**
-   * Weight divisor: 100 (Type 1 default) or 10 (Type 2).
-   * Updated dynamically when a 0x12 scale-info frame arrives.
+   * Weight divisor, 100 or 10: a classic 0x12 names it by bit 0 of its flags
+   * byte [10] (INFO_DIVISOR_BIT, D068), a long one sets 10; 100 until a 0x12
+   * arrives.
    */
   private weightScaleFactor = 100;
 
@@ -997,10 +999,9 @@ export class QnScaleAdapter
 
     // 0x12: scale info, update weight scale factor and capture protocol type
     if (opcode === 0x12 && data.length > 10) {
-      // Renpho ES-26M (and similar newer firmware) sends an 18-byte 0x12
-      // frame where byte[1] == packet length and bytes [2-7] contain the
-      // MAC address. The classic QN format has ~11 bytes with protocol
-      // type at [2] and weight scale flag at [10].
+      // Every real 0x12 carries its own length at [1] and the MAC at [3..8],
+      // the classic ones too (15 bytes on an ES-CS20M, 17 on the maintainer's
+      // unit and #283); 18 bytes and up are the long frame.
       if (data.length >= 18 && data[1] === data.length) {
         // Long frame. Every captured one carries 0xff at byte[2] whatever its
         // length, and the disagreement is over what the firmware ACCEPTS BACK:
@@ -1038,7 +1039,9 @@ export class QnScaleAdapter
         this.isNineteenByteInfo = false;
         this.isEighteenByteInfo = false;
         this.seenProtocolType = this.forcedProtocolType ?? data[2];
-        this.weightScaleFactor = data[10] === 1 ? 100 : 10;
+        // Bit 0, as the vendor's published SDK reads it. openScale's whole-byte
+        // `[10] === 1` read the 17-byte frames ([10] 0x03) as /10 (D068).
+        this.weightScaleFactor = (data[10] & INFO_DIVISOR_BIT) !== 0 ? 100 : 10;
       }
       this.scaleFactorKnown = true;
       const dialect = this.isExtendedLongFrame

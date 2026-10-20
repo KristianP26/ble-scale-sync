@@ -54,9 +54,13 @@ import { uuid16 } from '../body-comp-helpers.js';
  * 0x10 frame (19-byte dialect, 20 bytes, weight at [5..6] /100): see
  *   LIVE20_FRAME_LEN below.
  *
- * 0x12 frame (scale info, classic 11-byte format):
+ * 0x12 frame (scale info). Every real one carries its own length at [1]: the
+ * classic ones are 15 bytes (ES-CS20M) or 17 (the maintainer's unit, #283),
+ * the long ones 18 to 20. openScale's and our older synthetic tests use an
+ * 11-byte classic frame, which no capture shows:
  *   [2]     protocol type (echoed back in all config commands)
- *   [10]    weight scale flag (1 = /100, else /10)
+ *   [10]    flags; bit 0 names the weight divisor, set /100, clear /10
+ *           (INFO_DIVISOR_BIT)
  *
  * 0x12 frame (long format, byte[1] == packet length):
  *   [1]     length (18 on the Renpho ES-26M, 20 on the GE CS 10 G)
@@ -291,6 +295,19 @@ export const NO_CONTACT_RESISTANCE = 60000;
  * the weight-only reading is accepted on the next stable frame.
  */
 export const IMPEDANCE_GRACE_MS = 1500;
+
+/**
+ * Bit of the 0x12 flags byte [10] that names the weight divisor: set is /100,
+ * clear /10, as the vendor's published SDK reads it on its classic and its VA
+ * decoder alike; the rest of the byte is unit and feature flags. openScale
+ * compares the whole byte with 1, which made the 17-byte classic frames
+ * ([10] 0x03: the maintainer's unit, #283) /10 although those scales send
+ * /100. Every 0x12 in our logs sets the bit (0x01, 0x03, 0x07, 0x0f, 0x17;
+ * 0x05 in an external write-up) and every weight whose true value is known
+ * came in hundredths. /10 is the SDK's word only: no unit has sent the bit
+ * clear (D068).
+ */
+export const INFO_DIVISOR_BIT = 0x01;
 
 /**
  * Band a live 0x10 weight must fall in for the divisor its 0x12 frame named to
