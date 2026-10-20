@@ -2969,7 +2969,9 @@ describe('QN 18-byte weigh-in before the stored-record answer through waitForRaw
     return f;
   };
 
-  async function startSession(opts: { key?: boolean; idleTimeoutMs?: number } = {}) {
+  async function startSession(
+    opts: { key?: boolean; idleTimeoutMs?: number; abortSignal?: AbortSignal } = {},
+  ) {
     const notify = createMockChar();
     const write = createMockChar();
     const device = createMockDevice();
@@ -2996,8 +2998,14 @@ describe('QN 18-byte weigh-in before the stored-record answer through waitForRaw
     const promise =
       opts.idleTimeoutMs === undefined
         ? wait()
-        : withAbandonmentCleanup(device, () =>
-            withIdleTimeout(wait, opts.idleTimeoutMs!, 'GATT reading timeout'),
+        : withAbandonmentCleanup(
+            device,
+            () =>
+              untilAborted(
+                withIdleTimeout(wait, opts.idleTimeoutMs!, 'GATT reading timeout'),
+                opts.abortSignal,
+              ),
+            opts.abortSignal,
           );
     let settled = false;
     void promise.then(
@@ -3220,6 +3228,31 @@ describe('QN 18-byte weigh-in before the stored-record answer through waitForRaw
       // says "the session ends" after it has already ended.
       await vi.advanceTimersByTimeAsync(3000);
       expect(s.debugLines('did not answer the stored-record query')).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A shutdown hands nothing over (D051). The disconnect that the cleanup
+  // fires used to settle the session on the held weigh-in anyway, into a
+  // promise nobody reads, with "Reading complete" in the normal log.
+  it('hands nothing over and logs no reading when a shutdown ends the hold', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const shutdown = new AbortController();
+      const s = await startSession({ idleTimeoutMs: 60_000, abortSignal: shutdown.signal });
+      await upToTheFinal(s);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(s.isSettled()).toBe(false);
+      const outcome = s.promise.then(
+        () => 'resolved',
+        (e: Error) => e.message,
+      );
+      shutdown.abort(new Error('shutting down'));
+      expect(await outcome).toBe('shutting down');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.infoLines('Reading complete')).toBe(0);
     } finally {
       vi.useRealTimers();
     }

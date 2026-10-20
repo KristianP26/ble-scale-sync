@@ -398,10 +398,13 @@ function initializeAdapter(
 
 /**
  * How each `waitForRawReading()` session still in progress on a device ends
- * itself the way a disconnect ends it, returning what that settled it with.
- * Read only by withAbandonmentCleanup.
+ * itself the way a disconnect ends it, returning what that settled it with,
+ * or, with `handOver` false, only ends it. Read only by withAbandonmentCleanup.
  */
-const sessionEnders = new WeakMap<BleDevice, (cause: string) => RawReading | undefined>();
+const sessionEnders = new WeakMap<
+  BleDevice,
+  (cause: string, handOver?: boolean) => RawReading | undefined
+>();
 
 /** The cause waitForRawReading's own disconnect callback ends a session with. */
 const DISCONNECTED = 'Disconnected';
@@ -422,7 +425,9 @@ const DISCONNECTED = 'Disconnected';
  * hands it over (`dedupMark`) then never handed it over again: a 19-byte QN
  * scale that sends its stored weigh-ins and keeps the link up until the idle
  * timeout lost them for good (#331). On a shutdown (`abortSignal`) the session
- * is only cleaned up.
+ * is only cleaned up: it is ended before the disconnect is fired, so the
+ * disconnect does not settle it with a reading nobody receives, logged as
+ * "Reading complete" as if it had gone out (#463).
  */
 export async function withAbandonmentCleanup(
   bleDevice: BleDevice,
@@ -434,7 +439,9 @@ export async function withAbandonmentCleanup(
   } catch (err) {
     const end = sessionEnders.get(bleDevice);
     sessionEnders.delete(bleDevice);
-    const settled = abortSignal?.aborted ? undefined : end?.(`Gave up waiting (${errMsg(err)})`);
+    const settled = abortSignal?.aborted
+      ? end?.(`Shutdown (${errMsg(err)})`, false)
+      : end?.(`Gave up waiting (${errMsg(err)})`);
     bleDevice.fireDisconnect();
     if (settled) return settled;
     throw err;
@@ -842,12 +849,21 @@ export function waitForRawReading(
      * End the session as the scale disconnecting does, and return what that
      * settled it with; undefined when it was already settled or had nothing,
      * which rejects it. `cause` opens the log lines: the disconnect itself, or
-     * a caller whose timeout gave up (withAbandonmentCleanup).
+     * a caller whose timeout gave up (withAbandonmentCleanup). With `handOver`
+     * false (a shutdown) the session only ends: nothing it held or buffered is
+     * settled, since nothing would receive it (D051).
      */
-    const endSession = (cause: string): RawReading | undefined => {
+    const endSession = (cause: string, handOver = true): RawReading | undefined => {
       if (resolved) return undefined;
       hold.clear();
       clearCaptureHold();
+      if (!handOver) {
+        resolved = true;
+        init.cleanup();
+        bleLog.debug(`${cause} during the session; nothing is handed over.`);
+        reject(new Error(`Session ended: ${cause}`));
+        return undefined;
+      }
       // A held live weigh-in wins over the stored records of the same session:
       // finishWith hands them over as history. Checked first, because with the
       // history branch first a scale that replays its memory and then
