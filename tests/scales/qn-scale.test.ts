@@ -4661,9 +4661,38 @@ describe('QN stored record and impedance (#461)', () => {
         );
       });
 
+      // The record arrives 100 ms after the session's start time, so these two
+      // put it exactly 60.000 s and 60.001 s ahead of the host's clock.
       it('still takes a record stamped up to a minute ahead as the weigh-in of this session', async () => {
-        const { readings } = await session(keyed(), [INFO_463, RECORD_463], '2026-10-13T17:58:38Z');
+        const { readings } = await session(
+          keyed(),
+          [INFO_463, RECORD_463],
+          '2026-10-13T17:58:37.900Z',
+        );
         expect(readings).toEqual([{ weight: 71.55, impedance: 497 }]);
+      });
+
+      it('does not take one stamped a millisecond more than a minute ahead', async () => {
+        const { readings, lines } = await session(
+          keyed(),
+          [INFO_463, RECORD_463],
+          '2026-10-13T17:58:37.899Z',
+        );
+        expect(readings).toEqual([]);
+        expect(lines).toContain(
+          'QN: stored weigh-in 71.55 kg at 2026-10-13T17:59:38.000Z, user slot 1, is stamped ' +
+            "60 s ahead of this host's clock, so it is not the weigh-in of this session, not " +
+            'read (#463)',
+        );
+      });
+
+      it('keeps the re-query after a record stamped ahead', async () => {
+        const { writes } = await session(
+          keyed(),
+          [INFO_463, RECORD_463, 3000],
+          '2026-10-13T13:00:00Z',
+        );
+        expect(writes.filter((w) => w[0] === 0x22)).toHaveLength(1);
       });
 
       it('without ble.qn_user_key only logs it, once per session', async () => {
