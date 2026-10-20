@@ -40,6 +40,24 @@ export interface BluezHelper {
 /** The one MessageBus method a raw call needs: no proxy, no match rule. */
 export interface RawCallBus {
   call(msg: unknown): Promise<{ body: unknown[] } | null>;
+  /**
+   * dbus-next MessageBus.getProxyObject: one Introspect, and no match rule
+   * until a listener is added for a signal the introspection declared.
+   */
+  getProxyObject?(name: string, path: string): Promise<ProxyObjectLike>;
+}
+
+/** The part of a dbus-next ProxyInterface the link observer subscribes through. */
+export interface SignalInterface {
+  /** The signals this interface declared in its introspection. */
+  $signals?: ReadonlyArray<{ name: string }>;
+  on(event: string, listener: (...args: unknown[]) => void): unknown;
+  removeListener(event: string, listener: (...args: unknown[]) => void): unknown;
+}
+
+/** dbus-next ProxyObject; getInterface throws for an interface the object does not export. */
+export interface ProxyObjectLike {
+  getInterface(name: string): SignalInterface;
 }
 
 export interface DbusMessageFields {

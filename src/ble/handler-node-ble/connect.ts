@@ -23,10 +23,16 @@ import {
 import { disconnectBounded } from './stale-link.js';
 import { startPeerFreshnessTracker } from './freshness.js';
 import {
+  classifyAttempt,
+  describeAttempt,
   isAuthClassConnectFailure,
+  shouldSettle,
   staleBondMessage,
+  LINK_SETTLE_MS,
   STALE_BOND_EVIDENCE_ATTEMPTS,
+  type AttemptEvidence,
 } from './stale-bond.js';
+import { observeConnectAttempt, type AttemptLinkView, type LinkObserver } from './link-observer.js';
 import { isDeviceObjectGone } from './device-object.js';
 import { requireAdapterPrivacy } from './privacy.js';
 import { bleFailureKind, tagBleFailure } from '../failure-kind.js';
@@ -56,6 +62,19 @@ async function logLinkStateBeforeConnect(device: Device): Promise<void> {
   } catch (err) {
     bleLog.debug(`Link check before connect failed: ${errMsg(err)}`);
   }
+}
+
+/** Debug only: how a failed attempt's connection ended (#471, D066). */
+function logAttemptEnd(
+  outcome: AttemptEvidence,
+  attempt: number,
+  total: number,
+  link: AttemptLinkView | undefined,
+  err: unknown,
+  ms: number,
+): void {
+  const line = describeAttempt({ attempt, total, ms, error: errMsg(err), outcome, link });
+  if (line) bleLog.debug(line);
 }
 
 export interface ConnectRecoveryContext {
@@ -181,6 +200,12 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
   let sawObjectGone = false;
   // Consecutive authentication-class failures, reset by any other error (#290).
   let authClassFailures = 0;
+  // The current attempt's link: whether it came up, when it went down, and
+  // why (#471, D066).
+  let observer: LinkObserver | undefined;
+  // Ask BlueZ for disconnect reasons only once a connection came up and
+  // failed: a scale that connects, or never gets a link, costs no D-Bus call.
+  let probeReasons = false;
   // One bond deletion per connectWithRecovery call, and only with the opt-in.
   // Repeating it would delete the bond the previous attempt just established,
   // turning a scale that needs two goes at pairing into an endless re-pair.
@@ -212,6 +237,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
   try {
     await logLinkStateBeforeConnect(device);
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      let t0 = Date.now();
       try {
         throwIfAborted();
         // Skip the dying-peer connect attempt: a missing or 127-sentinel RSSI
@@ -267,15 +293,28 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           privacyCheckDue = false;
         }
 
-        const t0 = Date.now();
+        // On the device as it is now: a retry may have moved to a new adapter
+        // and D-Bus connection.
+        const obs = await observeConnectAttempt(device, { probeReasons, abortSignal });
+        observer = obs;
+        // The probe can take up to 2 s; a shutdown meanwhile must not send a Connect.
+        throwIfAborted();
+
+        t0 = Date.now();
         bleLog.debug(`Connect attempt ${attempt + 1}/${maxRetries + 1}...`);
+        obs.markConnectStart();
+        const pending = device.connect();
+        // The first handler on the call: the error time the link is measured from.
+        pending.catch(() => obs.markError());
         // On abort the pending Connect is left to teardownSession, whose
         // Disconnect on the same device path cancels it in BlueZ.
         await untilAborted(
-          withTimeout(device.connect(), CONNECT_TIMEOUT_MS, 'Connection timed out'),
+          withTimeout(pending, CONNECT_TIMEOUT_MS, 'Connection timed out'),
           abortSignal,
         );
         bleLog.debug(`Connected (took ${Date.now() - t0}ms)`);
+        obs.stop();
+        observer = undefined;
         if (keepDiscovery) {
           // Restore the "no discovery during GATT" invariant the callers rely
           // on. Safe now: BlueZ does not drop a device object while it is
@@ -286,6 +325,9 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
         succeeded = true;
         return device;
       } catch (err: unknown) {
+        // A timeout never settles the Connect call, so its error time is now.
+        observer?.markError();
+        const attemptMs = Date.now() - t0;
         // A shutdown is not a connect failure: no retry, no diagnosis, and the
         // abort reason rather than whatever the abandoned step wrapped it in.
         throwIfAborted();
@@ -310,6 +352,25 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
               `Connection failed after ${maxRetries + 1} attempts: BlueZ keeps removing the D-Bus object for ${formattedMac}, so no GATT connection can be opened. The scale advertises but does not accept connections (broadcast only or non-discoverable). Last error: ${msg}`,
             );
           }
+          // No Disconnect follows the last attempt, so BlueZ's word on how
+          // its connection ended (Connected=false, from 5.83 the reason) may
+          // still be on its way: on a refused key it comes about one
+          // connection interval after the error.
+          if (observer && shouldSettle(err, observer.view())) {
+            await observer.settle(LINK_SETTLE_MS, abortSignal);
+          }
+          throwIfAborted();
+          const lastLink = observer?.view();
+          logAttemptEnd(
+            classifyAttempt(err, lastLink),
+            attempt + 1,
+            maxRetries + 1,
+            lastLink,
+            err,
+            attemptMs,
+          );
+          observer?.stop();
+          observer = undefined;
           // A run of authentication-class aborts against a peer BlueZ still
           // lists as bonded is the #290 signature: the scale rejected the
           // stored key. Say so, with the remedy, instead of surfacing the bare
@@ -345,6 +406,16 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
         if (disconnected === 'timeout') {
           throw tagBleFailure(new StaleLinkError(formattedMac), 'wedge-suspect');
         }
+
+        // What this attempt's connection did, read only now: BlueZ sends
+        // Connected=false, and from 5.83 the reason, before it answers the
+        // Disconnect above.
+        const link = observer?.view();
+        const outcome = classifyAttempt(err, link);
+        logAttemptEnd(outcome, attempt + 1, maxRetries + 1, link, err, attemptMs);
+        if (link?.linkUp && outcome !== 'other') probeReasons = true;
+        observer?.stop();
+        observer = undefined;
 
         // 2. Purge stale D-Bus proxy. With the opt-in, a run of
         // authentication-class failures against a peer BlueZ still lists as
@@ -416,6 +487,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
 
     throw new Error('Connection failed');
   } finally {
+    observer?.stop();
     tracker.stop();
     // Every throw path leaves the proxy this function last acquired unreleased,
     // and the caller cannot compensate: `device = await connectWithRecovery()`
