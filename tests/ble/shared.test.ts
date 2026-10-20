@@ -3253,6 +3253,12 @@ describe('QN 18-byte weigh-in before the stored-record answer through waitForRaw
       expect(await outcome).toBe('shutting down');
       await vi.advanceTimersByTimeAsync(0);
       expect(s.infoLines('Reading complete')).toBe(0);
+      // And the session really ended there: the adapter was told once, the
+      // shutdown says it handed nothing over, and no timer of the session or
+      // of its idle bound is left behind.
+      expect(s.debugLines('the session ended while the weigh-in')).toBe(1);
+      expect(s.debugLines('nothing is handed over')).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
