@@ -59,6 +59,18 @@ const READY_283 = Buffer.from([0x14, 0x0b, 0xff, 0x00, 0x00, 0x01, 0x00, 0x00, 0
 const CONFIG_REQ_283 = Buffer.from([0x21, 0x04, 0xff, 0x01, 0x25]);
 
 /**
+ * #253, a Renpho's 18-byte 0x12 ([10] 0x17) and a stable 14-byte live 0x10 in
+ * the ES-30M layout (84.80 kg, R 501), from that public log.
+ */
+const INFO_253 = Buffer.from([
+  0x12, 0x12, 0xff, 0xcb, 0x89, 0x04, 0x00, 0x04, 0xff, 0x01, 0x17, 0x09, 0x00, 0x00, 0x05, 0x9f,
+  0x30, 0x73,
+]);
+const LIVE_253 = Buffer.from([
+  0x10, 0x0e, 0xff, 0x01, 0x02, 0x21, 0x20, 0x01, 0xf5, 0x01, 0xf3, 0x00, 0xf1, 0x3c,
+]);
+
+/**
  * The maintainer's classic unit: its 17-byte 0x12 and the stable 11-byte 0x10
  * of one weigh-in (84.15 kg / 510 Ohm in the vendor app), byte for byte from
  * its DEBUG log of 2026-10-19.
@@ -94,6 +106,13 @@ const CLASSIC_2499 = classicAt(0x09c3);
 const LIVE_283_6144 = derive(LIVE_283, { 4: 0x00 });
 /** INFO_CLASSIC with bit 0 of [10] cleared (03 -> 02), [16] recomputed: /10. */
 const INFO_CLASSIC_DIV10 = derive(INFO_CLASSIC, { 10: 0x02 });
+/**
+ * INFO_461 with bit 0 of [10] cleared (07 -> 06), [17] recomputed: a long 0x12
+ * naming /10, which no long unit has sent.
+ */
+const INFO_461_DIV10 = derive(INFO_461, { 10: 0x06 });
+/** LIVE_253 with [1] 0e -> 0b, so [1] no longer gives its length; [13] recomputed. */
+const LIVE_253_NOT_ITS_LENGTH = derive(LIVE_253, { 1: 0x0b });
 /** openScale #1239, an ES-CS20M's 15-byte classic 0x12 ([10] 0x01). */
 const INFO_1239 = Buffer.from([
   0x12, 0x0f, 0x15, 0x79, 0x58, 0xcc, 0x38, 0xc1, 0xa4, 0x38, 0x01, 0x38, 0x00, 0x04, 0xe5,
@@ -108,6 +127,8 @@ const DERIVED: [string, Buffer, Buffer, number[]][] = [
   ['CLASSIC_2499', CLASSIC_2499, STABLE_CLASSIC, [3, 4]],
   ['LIVE_283_6144', LIVE_283_6144, LIVE_283, [4]],
   ['INFO_CLASSIC_DIV10', INFO_CLASSIC_DIV10, INFO_CLASSIC, [10]],
+  ['INFO_461_DIV10', INFO_461_DIV10, INFO_461, [10]],
+  ['LIVE_253_NOT_ITS_LENGTH', LIVE_253_NOT_ITS_LENGTH, LIVE_253, [1]],
 ];
 
 /** Build a fake AABB broadcast buffer with the given weight and stability. */
@@ -805,16 +826,12 @@ describe('QnScaleAdapter', () => {
       }
     });
 
-    it('0x12 frame captures protocol type', () => {
+    it('reads a 14-byte frame in the ES-30M layout after a long 0x12 naming /10', () => {
       const adapter = makeAdapter();
-      const infoBuf = Buffer.alloc(11);
-      infoBuf[0] = 0x12;
-      infoBuf[2] = 0xff; // protocol type
-      infoBuf[10] = 0;
-      adapter.parseNotification(infoBuf);
+      // Bit 0 of [10] clear: no long unit has sent that, the divisor /10 is the
+      // vendor SDK's. The 14-byte shape picks the layout (D068).
+      adapter.parseNotification(INFO_461_DIV10);
 
-      // Verify protocol type was captured by checking ES-30M parsing
-      // works (requires weightScaleFactor=10 which was set by the 0x12 frame)
       const dataBuf = Buffer.alloc(14);
       dataBuf[0] = 0x10;
       dataBuf[1] = 0x0e;
@@ -832,18 +849,16 @@ describe('QnScaleAdapter', () => {
     });
   });
 
+  // Each test opens with the synthetic long 0x12 naming /10 (INFO_461_DIV10,
+  // bit 0 clear); the 14-byte shape picks the layout (D068).
   describe('ES-30M format parsing', () => {
     it('parses ES-30M stable frame (state=0x02) with impedance', () => {
       const adapter = makeAdapter();
-      // Set weightScaleFactor=10 via 0x12
-      const infoBuf = Buffer.alloc(11);
-      infoBuf[0] = 0x12;
-      infoBuf[2] = 0xff;
-      infoBuf[10] = 0;
-      adapter.parseNotification(infoBuf);
+      adapter.parseNotification(INFO_461_DIV10);
 
-      // From actual Renpho Elis 1 packet capture:
-      // 10 0E FF 01 02 02 58 01 FD 01 FB 00 33 A7
+      // The #84 Renpho-app capture (Renpho.txt, 21:53:34.343):
+      // 10 0E FF 01 02 02 58 01 FD 01 FB 00 33 A7. That unit's own 0x12 has
+      // [10] 0x07, which names /100 (6.00 kg); /10 here is the synthetic 0x12's.
       const buf = Buffer.from([
         0x10, 0x0e, 0xff, 0x01, 0x02, 0x02, 0x58, 0x01, 0xfd, 0x01, 0xfb, 0x00, 0x33, 0xa7,
       ]);
@@ -856,10 +871,7 @@ describe('QnScaleAdapter', () => {
 
     it('returns null for ES-30M measuring frame (state=0x00)', () => {
       const adapter = makeAdapter();
-      const infoBuf = Buffer.alloc(11);
-      infoBuf[0] = 0x12;
-      infoBuf[10] = 0;
-      adapter.parseNotification(infoBuf);
+      adapter.parseNotification(INFO_461_DIV10);
 
       const buf = Buffer.alloc(14);
       buf[0] = 0x10;
@@ -874,10 +886,7 @@ describe('QnScaleAdapter', () => {
 
     it('returns null for ES-30M stabilizing frame (state=0x01)', () => {
       const adapter = makeAdapter();
-      const infoBuf = Buffer.alloc(11);
-      infoBuf[0] = 0x12;
-      infoBuf[10] = 0;
-      adapter.parseNotification(infoBuf);
+      adapter.parseNotification(INFO_461_DIV10);
 
       const buf = Buffer.alloc(14);
       buf[0] = 0x10;
@@ -892,10 +901,7 @@ describe('QnScaleAdapter', () => {
 
     it('uses R2 when R1 is zero in ES-30M format', () => {
       const adapter = makeAdapter();
-      const infoBuf = Buffer.alloc(11);
-      infoBuf[0] = 0x12;
-      infoBuf[10] = 0;
-      adapter.parseNotification(infoBuf);
+      adapter.parseNotification(INFO_461_DIV10);
 
       const buf = Buffer.alloc(14);
       buf[0] = 0x10;
@@ -915,11 +921,7 @@ describe('QnScaleAdapter', () => {
 
     it('skips ES-30M stable frame with impedance=0 (waits for impedance)', () => {
       const adapter = makeAdapter();
-      const infoBuf = Buffer.alloc(11);
-      infoBuf[0] = 0x12;
-      infoBuf[2] = 0xff;
-      infoBuf[10] = 0;
-      adapter.parseNotification(infoBuf);
+      adapter.parseNotification(INFO_461_DIV10);
 
       // Stable frame (state=0x02) but R1=R2=0 (impedance not measured yet)
       const buf = Buffer.alloc(14);
@@ -944,11 +946,9 @@ describe('QnScaleAdapter', () => {
       expect(reading!.impedance).toBe(509);
     });
 
-    it('does not trigger ES-30M detection when weightScaleFactor=100', () => {
+    it('reads a 14-byte frame in the original layout when [4] is above 0x02', () => {
       const adapter = makeAdapter();
-      // Default weightScaleFactor=100, do not send 0x12
-
-      // Even with data[4]=0x02 and 14 bytes, factor=100 prevents ES-30M detection
+      // No 0x12: the shape alone decides, and [4] is the weight's low byte.
       const buf = Buffer.alloc(14);
       buf[0] = 0x10;
       buf[1] = 0x0e;
@@ -1339,21 +1339,18 @@ describe('QnScaleAdapter', () => {
       expect(reading!.impedance).toBe(501);
     });
 
-    it('classic ES-30M: stable R1=R2=0 is still skipped (regression guard)', () => {
+    it('without a 0x12: stable R1=R2=0 is always skipped, no grace period', () => {
       const adapter = makeAdapter();
-      // Classic 11-byte 0x12 frame → isLongFrameVariant=false
-      const infoBuf = Buffer.alloc(11);
-      infoBuf[0] = 0x12;
-      infoBuf[2] = 0xff;
-      infoBuf[10] = 0; // factor=10
-      adapter.parseNotification(infoBuf);
-
-      // Stable frame with R1=R2=0
-      const buf = makeWeightFrame(600, 0x02, 0, 0);
+      // No 0x12, so not the long-frame variant; a classic 0x12 would not read
+      // this layout at all (D068). Raw 6000: 60.00 kg, 600 kg ruled out.
+      const buf = makeWeightFrame(6000, 0x02, 0, 0);
+      expect(adapter.parseNotification(buf)).toBeNull();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (adapter as any).firstStableNoImpedanceAt = Date.now() - 2000;
       expect(adapter.parseNotification(buf)).toBeNull();
 
       // Next frame with impedance should be accepted
-      const impBuf = makeWeightFrame(600, 0x02, 509, 507);
+      const impBuf = makeWeightFrame(6000, 0x02, 509, 507);
       const reading = adapter.parseNotification(impBuf);
       expect(reading).not.toBeNull();
       expect(reading!.weight).toBe(60);
@@ -1448,6 +1445,42 @@ describe('QN classic divisor and live layout (D068)', () => {
   ])('reads a classic weigh-in of %s at /100', async (_label, info, frame, want) => {
     const { readings } = await run([info, frame]);
     expect(readings).toEqual([want]);
+  });
+
+  // The live layout follows the frame's shape, not the divisor. A classic
+  // 0x12 naming /10 used to send a frame with [4] 0x02 down the ES-30M
+  // layout (25.7 kg); it reads 845.0 kg at /10, out of band, so /100 decides.
+  it('reads a classic frame in the original layout after a 0x12 naming /10', async () => {
+    const { readings } = await run([INFO_CLASSIC_DIV10, CLASSIC_8450]);
+    expect(readings).toEqual([{ weight: 84.5, impedance: 510 }]);
+  });
+
+  it('never reads the ES-30M layout after a classic 0x12, a 14-byte frame included', async () => {
+    // Synthetic: no capture has a 14-byte classic 0x10. The vendor's published
+    // SDK reads one on classic scales in the original layout (a second weight
+    // at [11..12]); [4] 0x02 is 84.50 kg's low byte here, not a state.
+    const frame14 = Buffer.from([
+      0x10, 0x0e, 0xff, 0x21, 0x02, 0x01, 0x01, 0xfe, 0x01, 0xfc, 0x00, 0x00, 0x00, 0x00,
+    ]);
+    const { readings } = await run([INFO_CLASSIC, frame14]);
+    expect(readings).toEqual([{ weight: 84.5, impedance: 510 }]);
+  });
+
+  it('reads a VA frame in the ES-30M layout in a session without a 0x12 (#253)', async () => {
+    const { readings } = await run([LIVE_253], '2026-07-10T13:28:40Z');
+    expect(readings).toEqual([{ weight: 84.8, impedance: 501 }]);
+  });
+
+  // Classic scales do lose their 0x12 (#283's cold connection, #336); the
+  // 11-byte frame keeps the original layout without it.
+  it('reads a classic frame in the original layout in a session without a 0x12', async () => {
+    const { readings } = await run([CLASSIC_8450]);
+    expect(readings).toEqual([{ weight: 84.5, impedance: 510 }]);
+  });
+
+  it('does not take a frame whose [1] is not its length for the ES-30M layout', async () => {
+    const { readings } = await run([LIVE_253_NOT_ITS_LENGTH], '2026-07-10T13:28:40Z');
+    expect(readings).toEqual([]);
   });
 
   it.each([
@@ -4186,14 +4219,6 @@ describe('QN stored record and impedance (#461)', () => {
   // unit (#253, R 501 sent as is): it checks the wiring and the refutation
   // warning, not a value.
   describe('live frame', () => {
-    const INFO_253 = Buffer.from([
-      0x12, 0x12, 0xff, 0xcb, 0x89, 0x04, 0x00, 0x04, 0xff, 0x01, 0x17, 0x09, 0x00, 0x00, 0x05,
-      0x9f, 0x30, 0x73,
-    ]);
-    const LIVE_253 = Buffer.from([
-      0x10, 0x0e, 0xff, 0x01, 0x02, 0x21, 0x20, 0x01, 0xf5, 0x01, 0xf3, 0x00, 0xf1, 0x3c,
-    ]);
-
     it('reads it as sent without the flag', async () => {
       const reading = await runSession(makeAdapter(), [INFO_253, LIVE_253], {
         now: '2026-07-10T13:28:40Z',

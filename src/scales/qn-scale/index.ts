@@ -41,6 +41,7 @@ import {
   CHR_WRITE,
   CHR_WRITE_T1,
   EIGHT_CHANNEL_ORDER,
+  ES30M_MIN_FRAME_LEN,
   EXTENDED_INFO_FRAME_LEN,
   IMPEDANCE_GRACE_MS,
   INFO_DIVISOR_BIT,
@@ -1269,11 +1270,19 @@ export class QnScaleAdapter
     let r1: number;
     let r2: number;
 
-    // ES-30M format: byte[4] is a state flag (0x00/0x01/0x02) instead of weight LSB.
-    // Detected when weightScaleFactor=10, byte[4] <= 0x02, and frame has enough bytes.
-    // In the original format, byte[4] is the low byte of the 16-bit weight, which is
-    // almost always > 0x02 for adult weights (> 25.5 kg raw value with factor 10).
-    const isEs30m = data.length >= 11 && data[4] <= 0x02 && this.weightScaleFactor === 10;
+    // ES-30M (VA) format: byte[4] is a state flag (0x00/0x01/0x02) instead of
+    // the weight's low byte. The layout is picked by the frame's shape, 14
+    // bytes or more with its own length at [1], and never after a classic
+    // 0x12. It used to be keyed on the divisor 10, so a classic frame whose
+    // weight had a low byte of 0x00 to 0x02 went this way (84.50 kg read as
+    // 25.7 kg), and a VA frame in a session without a 0x12 went the original
+    // way (D068).
+    const classicSession = this.scaleFactorKnown && !this.isLongFrameVariant;
+    const isEs30m =
+      !classicSession &&
+      data.length >= ES30M_MIN_FRAME_LEN &&
+      data[1] === data.length &&
+      data[4] <= 0x02;
 
     if (isEs30m) {
       // ES-30M: [4]=state (0x02=stable), [5-6]=weight, [7-8]=R1, [9-10]=R2
@@ -1284,7 +1293,8 @@ export class QnScaleAdapter
 
       if (stable && r1 === 0 && r2 === 0) {
         if (!this.isLongFrameVariant) {
-          // Classic ES-30M: always skip, impedance frame follows.
+          // A session without a 0x12 (a classic one never gets here): always
+          // skip, an impedance frame follows.
           return null;
         }
         // Long-frame variant (ES-26M): accept after grace period.
@@ -1358,7 +1368,7 @@ export class QnScaleAdapter
     // arrived without an echo; its only write is the 0x1F after the result
     // block's 0x16 with `ble.qn_result_ack` (#331). Whether the app echoes
     // this shape at all is not known, so a 20-byte frame on the ES-30M branch is
-    // not echoed either. The 14-byte ES-30M and 10-byte classic frames keep it:
+    // not echoed either. The 14- and 15-byte ES-30M and 11-byte classic frames keep it:
     // their offsets are right. Sent before the stability gate, fire and forget,
     // like the 0x1F stable ACK below.
     if (this.weightAckEnabled() && this.ctx && !twentyByteLive) {

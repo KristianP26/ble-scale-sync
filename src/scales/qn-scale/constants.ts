@@ -39,13 +39,16 @@ import { uuid16 } from '../body-comp-helpers.js';
  *                        (19-byte dialect: nothing; with ble.qn_result_ack a
  *                        0x1F after the result block's 0x16 instead)
  *
- * 0x10 frame (original format, 10 bytes):
+ * 0x10 frame (original format, 11 bytes on the wire, `10 0b ..`; 10 in
+ * openScale's and our older synthetic tests):
  *   [3-4]   weight (BE uint16, / weightScaleFactor)
  *   [5]     stability (1 = stable, 0 = measuring)
  *   [6-7]   resistance R1 (BE uint16)
  *   [8-9]   resistance R2 (BE uint16)
  *
- * 0x10 frame (ES-30M format, 14 bytes, weightScaleFactor=10):
+ * 0x10 frame (ES-30M / VA format, 14 or 15 bytes with the length at [1],
+ * picked by that shape, never after a classic 0x12; ES30M_MIN_FRAME_LEN):
+ *   [3]     user slot
  *   [4]     state (0x00=measuring, 0x01=stabilizing, 0x02=stable)
  *   [5-6]   weight (BE uint16, / weightScaleFactor)
  *   [7-8]   resistance R1 (BE uint16)
@@ -308,6 +311,17 @@ export const IMPEDANCE_GRACE_MS = 1500;
  * clear (D068).
  */
 export const INFO_DIVISOR_BIT = 0x01;
+
+/**
+ * Shortest live 0x10 read in the ES-30M (VA) layout: [3] user slot, [4]
+ * state, [5..6] weight, [7..10] the two resistances. Every such frame in our
+ * logs is 14 bytes (`10 0e ff 01 ..`, #253, #84) or 15 (`10 0f ff 01 ..`,
+ * #463), with its length at [1], after an 18-byte 0x12; every classic frame
+ * is 11 bytes (`10 0b ..`). The frame picks the layout, not the divisor, and a
+ * session whose 0x12 was classic never reads it: the vendor's published SDK
+ * reads a 14-byte classic frame too, in the original layout (D068).
+ */
+export const ES30M_MIN_FRAME_LEN = 14;
 
 /**
  * Band a live 0x10 weight must fall in for the divisor its 0x12 frame named to
