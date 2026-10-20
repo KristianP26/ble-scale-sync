@@ -58,6 +58,12 @@ const LIVE_283 = Buffer.from([0x10, 0x0b, 0xff, 0x18, 0x1a, 0x01, 0x01, 0xf6, 0x
 const READY_283 = Buffer.from([0x14, 0x0b, 0xff, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x1f]);
 const CONFIG_REQ_283 = Buffer.from([0x21, 0x04, 0xff, 0x01, 0x25]);
 
+/** #461, the Physiq's stored record: 71.65 kg at 2026-10-10T09:23:19Z, no user. */
+const RECORD_461 = Buffer.from([
+  0x23, 0x14, 0xff, 0x01, 0x01, 0xf0, 0x87, 0xc0, 0x5c, 0x32, 0x1b, 0xfd, 0x10, 0xcf, 0x10, 0xcd,
+  0x00, 0x00, 0x00, 0xd1,
+]);
+
 /**
  * #283, the 0x23 its classic scale answered with, in the classic layout the
  * live weight of that session (61.70 kg).
@@ -1531,6 +1537,36 @@ describe('QN divisor, live layout and classic 0x23 (D068)', () => {
         .map((b) => b.toString(16).padStart(2, '0'))
         .join(' ')}] (#463)`,
     );
+  });
+
+  // A session without a 0x12 used to take such a record as its weigh-in: the
+  // stamp bound covered the long dialects only.
+  it.each([
+    [
+      '#283 at 131.00 kg (derived)',
+      RECORD_283_131,
+      '2026-07-19T04:37:40Z',
+      '112.65 kg at 2027-03-21T02:14:41.000Z, 21159421 s ahead',
+    ],
+    [
+      '#461',
+      RECORD_461,
+      '2026-10-10T04:00:00Z',
+      '71.65 kg at 2026-10-10T09:23:19.000Z, 19399 s ahead',
+    ],
+  ])(
+    'does not read a record stamped ahead in a session without a 0x12: %s',
+    async (_label, record, now, needle) => {
+      const { readings, lines } = await run([record], now);
+      expect(readings).toEqual([]);
+      const line = lines.find((l) => l.startsWith('QN: 0x23 in a session without a scale-info'));
+      expect(line ?? '(no line)').toContain(needle);
+    },
+  );
+
+  it('keeps the re-query after a record stamped ahead in a session without a 0x12', async () => {
+    const { writes } = await run([RECORD_461, 3000], '2026-10-10T04:00:00Z');
+    expect(writes.filter((w) => w[0] === 0x22)).toHaveLength(1);
   });
 
   it('keeps the re-query after a classic 0x23 (#283)', async () => {
@@ -4051,10 +4087,6 @@ describe('buildUserProfileFrame (#331)', () => {
 // 0x23 stored record. Every frame below is byte for byte from the reporter's
 // public DEBUG log (node-ble); the address is the one the log shows.
 describe('QN stored record and impedance (#461)', () => {
-  const RECORD_461 = Buffer.from([
-    0x23, 0x14, 0xff, 0x01, 0x01, 0xf0, 0x87, 0xc0, 0x5c, 0x32, 0x1b, 0xfd, 0x10, 0xcf, 0x10, 0xcd,
-    0x00, 0x00, 0x00, 0xd1,
-  ]);
   const EMPTY_461 = Buffer.from([0x23, 0x14, 0xff, ...new Array<number>(16).fill(0), 0x36]);
   /** Connect time in the log; the record is stamped 09:23:19. */
   const CONNECTED_461 = '2026-10-10T09:23:02.077Z';

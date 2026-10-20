@@ -1142,9 +1142,9 @@ export class QnScaleAdapter
     // weigh-in in our logs came live. A session without any 0x12 reads the
     // long layout, which is what every real record we have uses (D068).
     //
-    // A record from up to MAX_STORED_RECORD_AGE_SEC before the session, and on
-    // the long dialects not stamped more than STORED_FUTURE_TOLERANCE_MS after
-    // its receipt, is this session's weigh-in and ends it, without a time. An
+    // A record from up to MAX_STORED_RECORD_AGE_SEC before the session, and not
+    // stamped more than STORED_FUTURE_TOLERANCE_MS after its receipt, is this
+    // session's weigh-in and ends it, without a time. An
     // older one is the scale's memory: on the 18-byte dialect it can go out as
     // history (eighteenByteStoredWeighIn, #463), elsewhere it is logged and not
     // read.
@@ -1185,14 +1185,23 @@ export class QnScaleAdapter
       // scale's clock is ahead (a vendor app that set it with a UTC+8 base,
       // R-6), and taking it as this session's weigh-in would end the session
       // on an old weight without a time, before the real one. The 19-byte
-      // dialect drops the same (parseEightStoredPart). The re-query stays.
+      // dialect drops the same (parseEightStoredPart). The re-query stays. In a
+      // session without a 0x12 too: two classic scales in the reports lose
+      // theirs (#283, #336), and a classic record read through the long layout
+      // can land in the future (D068).
       const recordAtMs = (recordSeconds + SCALE_EPOCH_OFFSET) * 1000;
       const aheadMs = recordAtMs - Date.now();
-      if (this.isLongFrameVariant && aheadMs > STORED_FUTURE_TOLERANCE_MS) {
+      if (aheadMs > STORED_FUTURE_TOLERANCE_MS) {
+        const at = new Date(recordAtMs).toISOString();
+        const ahead = Math.round(aheadMs / 1000);
         bleLog.debug(
-          `QN: stored weigh-in ${weight} kg at ${new Date(recordAtMs).toISOString()}, user ` +
-            `slot ${data[5]}, is stamped ${Math.round(aheadMs / 1000)} s ahead of this host's ` +
-            'clock, so it is not the weigh-in of this session, not read (#463)',
+          this.scaleFactorKnown
+            ? `QN: stored weigh-in ${weight} kg at ${at}, user slot ${data[5]}, is stamped ` +
+                `${ahead} s ahead of this host's clock, so it is not the weigh-in of this ` +
+                'session, not read (#463)'
+            : `QN: 0x23 in a session without a scale-info frame, not read: [${hex(data)}]; ` +
+                `read as the VA layout it is ${weight} kg at ${at}, ${ahead} s ahead of this ` +
+                "host's clock (#463)",
         );
         this.scheduleStoredDataRetry();
         return null;
