@@ -35,7 +35,8 @@
 // Device1.Disconnected (org.bluez.Reason.Authentication is the kernel's mark
 // for Encryption Change 0x06), and on any BlueZ a connection the host ends
 // over a refused key outlives the error by about one connection interval
-// (#290: 74-95 ms), while a lost link goes down with it (#229, #471: 4-22 ms).
+// minus the 100 ms ATT channel timer that produces the error (#290: 74-95
+// ms), while a lost link goes down with it (#229, #471: 4-22 ms).
 
 import { bleLog, errMsg } from '../types.js';
 import type { AttemptLinkView } from './link-observer.js';

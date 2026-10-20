@@ -5,9 +5,10 @@
  * same `le-connection-abort-by-local`: att_connect_cb() turns every failed
  * ATT connect into -ECONNABORTED (checked on 5.66 to 5.86 and master). What
  * differs is the link. On a refused key (Encryption Change 0x06) the kernel
- * drops the ATT channel 100 ms later, which is the error Connect() returns,
- * and ends the connection itself one connection interval after that, so the
- * connection outlives the error (#290: the retry Disconnect waited 74-95 ms).
+ * sends HCI_Disconnect at once, and the connection ends about one connection
+ * interval later (#290: 193 ms). The ATT channel is dropped by a 100 ms timer,
+ * which is the error Connect() returns, so the connection outlives the error
+ * by that interval minus 100 ms (#290: the retry Disconnect waited 74-95 ms).
  * On a lost link the error and the end of the connection come from one kernel
  * event (#229, #471: 4-22 ms). BlueZ 5.83 and later also say why a connection
  * ended, in Device1.Disconnected, sent before Connected goes false and before

@@ -366,8 +366,8 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           }
           // No Disconnect follows the last attempt, so BlueZ's word on how
           // its connection ended (Connected=false, from 5.83 the reason) may
-          // still be on its way: on a refused key it comes about one
-          // connection interval after the error.
+          // still be on its way: on a refused key it comes one connection
+          // interval minus 100 ms after the error (#290: 74-95 ms).
           if (observer && shouldSettle(err, observer.view())) {
             await observer.settle(LINK_SETTLE_MS, abortSignal);
           }
