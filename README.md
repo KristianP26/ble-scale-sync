@@ -36,8 +36,8 @@ docker run -d --restart unless-stopped --network host \
   --cap-add NET_ADMIN --cap-add NET_RAW \
   --group-add "$(getent group bluetooth | cut -d: -f3)" --device /dev/rfkill \
   -v /var/run/dbus:/var/run/dbus:ro \
-  -v ./config.yaml:/app/config.yaml:ro \
-  -v ./garmin-tokens:/app/garmin-tokens:ro \
+  -v ./config.yaml:/app/config.yaml \
+  -v ./garmin-tokens:/app/garmin-tokens \
   -e CONTINUOUS_MODE=true \
   ghcr.io/kristianp26/ble-scale-sync:latest
 ```
