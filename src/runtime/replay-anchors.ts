@@ -46,10 +46,16 @@ export interface ReplayAnchor {
 
 /**
  * A time before this is a host clock that was not set yet (a Pi without an RTC
- * before NTP). Saved, it would make every stored record look newer than the
- * weigh-in until the next one, so it is neither saved nor restored.
+ * before NTP). As an anchor time it would make every stored record look newer
+ * than the weigh-in, so it counts as no time at all: neither kept in memory,
+ * saved nor restored.
  */
 const MIN_ANCHOR_TIME_MS = Date.UTC(2024, 0, 1);
+
+/** Whether `time` can date a weigh-in for the replay check (see MIN_ANCHOR_TIME_MS). */
+export function isUsableAnchorTime(time: Date): boolean {
+  return usableTime(time.getTime());
+}
 
 /**
  * A saved weigh-in this far from last_known_weight is older than config.yaml
@@ -181,7 +187,8 @@ function reportSaveFailure(slug: string, error: string): void {
  * Save the last live weigh-in of `slug` from the dedup maps. Called after every
  * exported live weigh-in, unlike the config write, which waits for a 0.5 kg
  * change. The other users' entries are kept: from the file when it can be
- * read, from memory for any it no longer holds (deleted while running). Never
+ * read, from memory for any it no longer holds (deleted while running). A
+ * weigh-in without a usable time removes the user's entry instead. Never
  * throws; on failure the in-memory anchor still protects this process.
  */
 export function persistReplayAnchor(
@@ -191,14 +198,17 @@ export function persistReplayAnchor(
   times: ReadonlyMap<string, Date>,
 ): void {
   const weight = weights.get(slug);
+  if (weight === undefined) return;
   const time = times.get(slug);
-  if (weight === undefined || time === undefined) return;
-  if (!usableTime(time.getTime())) {
+  const known = time !== undefined && isUsableAnchorTime(time);
+  if (!known) {
+    // Leaving the user's previous entry in place would date the last weigh-in
+    // by an earlier one after a restart, and a stored copy of this weigh-in
+    // would then look newer than it. Without an entry the weight rule decides.
     log.debug(
-      `Not saving the last weigh-in of ${slug}: its time is before 2024, so the clock ` +
-        'that dated it was not set.',
+      `No usable time for the last weigh-in of ${slug} (the clock that dated it ` +
+        'was not set), so its saved entry is dropped.',
     );
-    return;
   }
   const read = readAnchors(path);
   if (!read.ok) {
@@ -206,10 +216,15 @@ export function persistReplayAnchor(
     return;
   }
   const anchors = read.anchors;
-  anchors.set(slug, { weight, time });
+  // Nothing saved for the user and nothing to save: no write at all.
+  if (!known && !anchors.has(slug)) return;
+  if (known && time) anchors.set(slug, { weight, time });
+  else anchors.delete(slug);
   for (const [other, w] of weights) {
     const t = times.get(other);
-    if (anchors.has(other) || t === undefined || !usableTime(t.getTime())) continue;
+    if (other === slug || anchors.has(other) || t === undefined || !isUsableAnchorTime(t)) {
+      continue;
+    }
     anchors.set(other, { weight: w, time: t });
   }
   const out: Record<string, { weight: number; time: string }> = {};

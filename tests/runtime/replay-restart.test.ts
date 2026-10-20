@@ -94,9 +94,14 @@ describe('replay check across a process restart (#475, D067)', () => {
   let anchorFile: string;
   let garmin: Exporter & { export: ReturnType<typeof vi.fn> };
 
-  /** One process: its own context over the same directory, created at `startIso`. */
+  /** One process: its own context over the same directory, created at `startIso` that day. */
   function startProcess(users: UserConfig[], startIso: string, dryRun = false): AppContext {
-    vi.setSystemTime(at(startIso));
+    return startProcessAt(users, at(startIso).toISOString(), dryRun);
+  }
+
+  /** One process at a full ISO host time, for a clock on another day. */
+  function startProcessAt(users: UserConfig[], iso: string, dryRun = false): AppContext {
+    vi.setSystemTime(new Date(iso));
     const config = freshConfig(users);
     return createAppContext({
       config,
@@ -109,6 +114,11 @@ describe('replay check across a process restart (#475, D067)', () => {
       signal: new AbortController().signal,
       abortApp: () => {},
     } as Parameters<typeof createAppContext>[0]);
+  }
+
+  async function weighInAt(ctx: AppContext, iso: string, reading: ScaleReading): Promise<void> {
+    vi.setSystemTime(new Date(iso));
+    await processReading(ctx, { reading, adapter }, { singleUserExporters: [garmin] });
   }
 
   async function weighIn(
@@ -282,6 +292,43 @@ describe('replay check across a process restart (#475, D067)', () => {
     const p3 = startProcess([user('dad', 80)], '07:50:00');
     await weighIn(p3, '07:50:00', { weight: 80.5, impedance: 500 });
     expect(fs.existsSync(anchorFile)).toBe(false);
+  });
+
+  // A host clock not set yet (a Pi without an RTC before NTP) dates an
+  // unstamped live weigh-in in 1970. That time says nothing, so it must not
+  // open the time rule for a copy the scale later stamps with its own clock,
+  // in this process or, through an OLDER entry left in the file, after a
+  // restart. Both cases are the weight rule of v1.33.0, which skips the copy.
+  it('skips the stamped copy of a live weigh-in the unset host clock dated before 2024', async () => {
+    const p1 = startProcessAt([user('dad', 80)], '1970-01-01T00:05:00Z');
+    await weighInAt(p1, '1970-01-01T00:10:00Z', { weight: 80.02, impedance: 500 });
+    garmin.export.mockClear();
+
+    await weighInAt(p1, '2026-10-19T09:10:00Z', {
+      weight: 80.02,
+      impedance: 500,
+      timestamp: at('09:00:00'),
+    });
+
+    expect(garmin.export).not.toHaveBeenCalled();
+  });
+
+  it('drops the saved entry of a user whose last live weigh-in the unset host clock dated', async () => {
+    const p1 = startProcessAt([user('dad', 80)], '2026-10-18T07:00:00Z');
+    await weighInAt(p1, '2026-10-18T07:00:00Z', { weight: 80, impedance: 500 });
+    const p2 = startProcessAt([user('dad', 80)], '1970-01-01T00:05:00Z');
+    await weighInAt(p2, '1970-01-01T00:10:00Z', { weight: 80.03, impedance: 500 });
+    garmin.export.mockClear();
+
+    // The earlier entry would date the last weigh-in a day too early.
+    const p3 = startProcessAt([user('dad', 80)], '2026-10-19T09:05:00Z');
+    await weighInAt(p3, '2026-10-19T09:10:00Z', {
+      weight: 80.03,
+      impedance: 500,
+      timestamp: at('09:00:00'),
+    });
+
+    expect(garmin.export).not.toHaveBeenCalled();
   });
 
   it('keeps skipping a stored copy of an older weigh-in that matches last_known_weight (probe-a)', async () => {

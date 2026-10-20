@@ -160,6 +160,23 @@ describe('replay anchor file (D067)', () => {
     expect(loadReplayAnchors(file).size).toBe(0);
   });
 
+  it("drops the user's saved entry when the time of the last weigh-in is before 2024", () => {
+    // An older entry would otherwise stand for the last weigh-in after a restart.
+    write({
+      dad: { weight: 80, time: '2026-10-18T07:00:00.000Z' },
+      mom: { weight: 60.2, time: '2026-10-18T07:10:00.000Z' },
+    });
+    const { weights, times } = maps({ dad: [80.03, '1970-01-01T00:10:00.000Z'] });
+    persistReplayAnchor(file, 'dad', weights, times);
+
+    expect(read()).toEqual({ mom: { weight: 60.2, time: '2026-10-18T07:10:00.000Z' } });
+
+    // The same when the time is not known at all.
+    write({ dad: { weight: 80, time: '2026-10-18T07:00:00.000Z' } });
+    persistReplayAnchor(file, 'dad', new Map([['dad', 80.03]]), new Map());
+    expect(read()).toEqual({});
+  });
+
   it('warns once per process when the file cannot be written, then logs at debug', () => {
     const missing = path.join(dir, 'gone', REPLAY_ANCHORS_FILENAME);
     const { weights, times } = maps({ dad: [80, '2026-10-19T07:00:00.000Z'] });

@@ -60,9 +60,10 @@ export interface AppContext {
    * When the weigh-in behind `lastExportedWeights` was taken, keyed by user
    * slug: its own stamp when it carried one, else its receipt time. The replay
    * dedup compares a stored record's own time with it (#475). Restored and
-   * kept across a reload like `lastExportedWeights`; the two are always set
-   * together. A user without an entry has no known time, and the dedup then
-   * judges by weight alone (D067: the process start used to stand in, but it
+   * kept across a reload like `lastExportedWeights`, and set with it, except
+   * for a time before 2024 (a host clock not set yet), which is dropped. A user
+   * without an entry has no known time, and the dedup then judges by weight
+   * alone (D067: the process start used to stand in, but it
    * is the host's clock, not the scale's).
    */
   readonly lastExportedAt: Map<string, Date>;

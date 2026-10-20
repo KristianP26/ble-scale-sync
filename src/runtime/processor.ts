@@ -17,7 +17,7 @@ import { checkAndLogUpdate } from '../update-check.js';
 import { fmtWeight } from './format.js';
 import { enqueue } from './export-queue.js';
 import { exporterSlot } from './exporter-slot.js';
-import { persistReplayAnchor } from './replay-anchors.js';
+import { isUsableAnchorTime, persistReplayAnchor } from './replay-anchors.js';
 import {
   HISTORY_WINDOW_MS,
   isHistoricalReading,
@@ -408,7 +408,11 @@ function anchorTime(frame: Frame): Date {
  */
 function recordLiveWeight(ctx: AppContext, user: UserConfig, weight: number, anchorAt: Date): void {
   ctx.lastExportedWeights.set(user.slug, weight);
-  ctx.lastExportedAt.set(user.slug, anchorAt);
+  // A time from a host clock not set yet (before 2024) says nothing about when
+  // the weigh-in happened; kept, it would make its stamped copy look newer.
+  // Without a time the replay check falls back to the weight rule.
+  if (isUsableAnchorTime(anchorAt)) ctx.lastExportedAt.set(user.slug, anchorAt);
+  else ctx.lastExportedAt.delete(user.slug);
   if (ctx.replayAnchorsPath) {
     persistReplayAnchor(
       ctx.replayAnchorsPath,
