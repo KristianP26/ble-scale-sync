@@ -141,7 +141,7 @@ BlueZ and noble, plus the ESP32 and ESPHome proxies).
 
 <!-- contributors:start - generated from git history by src/tools/sync-contributors.ts, do not edit by hand -->
 <table><tr>
-<td align="center"><a href="https://github.com/KristianP26"><img src="https://avatars.githubusercontent.com/u/28766334?v=4" width="60" height="60" alt="KristianP26"><br><sub>KristianP26</sub></a><br><sub>1,080 commits</sub></td>
+<td align="center"><a href="https://github.com/KristianP26"><img src="https://avatars.githubusercontent.com/u/28766334?v=4" width="60" height="60" alt="KristianP26"><br><sub>KristianP26</sub></a><br><sub>1,211 commits</sub></td>
 <td align="center"><a href="https://github.com/APIUM"><img src="https://avatars.githubusercontent.com/u/9067013?v=4" width="60" height="60" alt="APIUM"><br><sub>APIUM</sub></a><br><sub>34 commits</sub></td>
 <td align="center"><a href="https://github.com/alasano"><img src="https://avatars.githubusercontent.com/u/14372930?v=4" width="60" height="60" alt="alasano"><br><sub>alasano</sub></a><br><sub>8 commits</sub></td>
 <td align="center"><a href="https://github.com/marcelorodrigo"><img src="https://avatars.githubusercontent.com/u/443962?v=4" width="60" height="60" alt="marcelorodrigo"><br><sub>marcelorodrigo</sub></a><br><sub>7 commits</sub></td>
@@ -155,17 +155,18 @@ BlueZ and noble, plus the ESP32 and ESPHome proxies).
 <td align="center"><a href="https://github.com/chrisauer"><img src="https://avatars.githubusercontent.com/u/884764?v=4" width="60" height="60" alt="chrisauer"><br><sub>chrisauer</sub></a><br><sub>2 commits</sub></td>
 <td align="center"><a href="https://github.com/gvarph"><img src="https://avatars.githubusercontent.com/u/17300137?v=4" width="60" height="60" alt="gvarph"><br><sub>gvarph</sub></a><br><sub>2 commits</sub></td>
 <td align="center"><a href="https://github.com/vargamihaly"><img src="https://avatars.githubusercontent.com/u/20193710?v=4" width="60" height="60" alt="vargamihaly"><br><sub>vargamihaly</sub></a><br><sub>2 commits</sub></td>
+<td align="center"><a href="https://github.com/FridoE"><img src="https://avatars.githubusercontent.com/u/75177010?v=4" width="60" height="60" alt="FridoE"><br><sub>FridoE</sub></a><br><sub>2 commits</sub></td>
 <td align="center"><a href="https://github.com/boildead"><img src="https://avatars.githubusercontent.com/u/17303016?v=4" width="60" height="60" alt="boildead"><br><sub>boildead</sub></a><br><sub>1 commit</sub></td>
 <td align="center"><a href="https://github.com/junaidk"><img src="https://avatars.githubusercontent.com/u/1422281?v=4" width="60" height="60" alt="junaidk"><br><sub>junaidk</sub></a><br><sub>1 commit</sub></td>
-<td align="center"><a href="https://github.com/hedoric"><img src="https://avatars.githubusercontent.com/u/135505862?v=4" width="60" height="60" alt="hedoric"><br><sub>hedoric</sub></a><br><sub>1 commit</sub></td>
 </tr><tr>
+<td align="center"><a href="https://github.com/hedoric"><img src="https://avatars.githubusercontent.com/u/135505862?v=4" width="60" height="60" alt="hedoric"><br><sub>hedoric</sub></a><br><sub>1 commit</sub></td>
 <td align="center"><a href="https://github.com/Bretos"><img src="https://avatars.githubusercontent.com/u/4947212?v=4" width="60" height="60" alt="Bretos"><br><sub>Bretos</sub></a><br><sub>1 commit</sub></td>
 <td align="center"><a href="https://github.com/JamieSBenson"><img src="https://avatars.githubusercontent.com/u/21150960?v=4" width="60" height="60" alt="JamieSBenson"><br><sub>JamieSBenson</sub></a><br><sub>1 commit</sub></td>
 <td align="center"><a href="https://github.com/totalitarian"><img src="https://avatars.githubusercontent.com/u/2385696?v=4" width="60" height="60" alt="totalitarian"><br><sub>totalitarian</sub></a><br><sub>1 commit</sub></td>
 <td align="center"><a href="https://github.com/ocurero"><img src="https://avatars.githubusercontent.com/u/2606647?v=4" width="60" height="60" alt="ocurero"><br><sub>ocurero</sub></a><br><sub>1 commit</sub></td>
 <td align="center"><a href="https://github.com/rolandgeider"><img src="https://avatars.githubusercontent.com/u/2280729?v=4" width="60" height="60" alt="rolandgeider"><br><sub>rolandgeider</sub></a><br><sub>1 commit</sub></td>
 <td align="center"><a href="https://github.com/sanglt"><img src="https://avatars.githubusercontent.com/u/128535?v=4" width="60" height="60" alt="sanglt"><br><sub>sanglt</sub></a><br><sub>1 commit</sub></td>
-<td align="center"><a href="https://github.com/FridoE"><img src="https://avatars.githubusercontent.com/u/75177010?v=4" width="60" height="60" alt="FridoE"><br><sub>FridoE</sub></a><br><sub>1 commit</sub></td>
+<td align="center"><a href="https://github.com/rjekelmans"><img src="https://avatars.githubusercontent.com/u/13397247?v=4" width="60" height="60" alt="rjekelmans"><br><sub>rjekelmans</sub></a><br><sub>1 commit</sub></td>
 </tr></table>
 <!-- contributors:end -->
 
