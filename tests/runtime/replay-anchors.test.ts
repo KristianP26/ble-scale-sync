@@ -217,6 +217,20 @@ describe('replay anchor file (D067)', () => {
     expect(debug).toHaveLength(1);
   });
 
+  it('does not warn again after a save that worked in between', () => {
+    // Once per process: a directory that comes and goes (a flaky mount) must
+    // not turn every other weigh-in into a warning.
+    const missing = path.join(dir, 'gone', REPLAY_ANCHORS_FILENAME);
+    const { weights, times } = maps({ dad: [80, '2026-10-19T07:00:00.000Z'] });
+
+    persistReplayAnchor(missing, 'dad', weights, times);
+    persistReplayAnchor(file, 'dad', weights, times);
+    persistReplayAnchor(missing, 'dad', weights, times);
+
+    expect(read()).toEqual({ dad: { weight: 80, time: '2026-10-19T07:00:00.000Z' } });
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ['a missing file', undefined],
     ['an empty file', ''],

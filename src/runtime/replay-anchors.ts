@@ -161,7 +161,7 @@ export function restoreReplayAnchors(
   }
 }
 
-/** Set once a save failed at warn; cleared by the next save that works. */
+/** Set by the first failed save; every later failure in this process is debug. */
 let saveFailureReported = false;
 
 /** Test seam: the save-failure warning is once per process on purpose. */
@@ -174,7 +174,8 @@ function reportSaveFailure(slug: string, error: string): void {
     `Could not save the last weigh-in of ${slug} (${error}); after a restart, ` +
     'a stored copy of it may be exported again.';
   // A directory that cannot be written stays that way, and every weigh-in of
-  // every user would repeat the same warning.
+  // every user would repeat the same warning. Not re-armed by a save that
+  // works: a mount that comes and goes would warn on every other weigh-in.
   if (saveFailureReported) {
     log.debug(msg);
     return;
@@ -234,7 +235,6 @@ export function persistReplayAnchor(
   for (const [s, a] of anchors) out[s] = { weight: a.weight, time: a.time.toISOString() };
   try {
     atomicWrite(path, JSON.stringify(out) + '\n');
-    saveFailureReported = false;
   } catch (err) {
     reportSaveFailure(slug, errMsg(err));
   }
