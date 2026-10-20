@@ -87,8 +87,8 @@ const LIVE_253 = Buffer.from([
 
 /**
  * The maintainer's classic unit: its 17-byte 0x12 and the stable 11-byte 0x10
- * of one weigh-in (84.15 kg / 510 Ohm in the vendor app), byte for byte from
- * its DEBUG log of 2026-10-19.
+ * of one weigh-in, byte for byte from its DEBUG log of 2026-10-19, in which
+ * ble-scale-sync read that weigh-in as 84.15 kg / 510 Ohm.
  */
 const INFO_CLASSIC = Buffer.from([
   0x12, 0x11, 0xff, 0x04, 0xa1, 0x13, 0x00, 0x03, 0xff, 0x02, 0x03, 0x05, 0x00, 0x00, 0x05, 0x07,

@@ -1127,10 +1127,10 @@ export class QnScaleAdapter
     }
 
     // 0x23: stored measurement record returned after the 0x22 history query.
-    // V10 Renpho / ES-CS20M firmware delivers the weigh-in here, not reliably
-    // via live 0x10 frames (#213 / #75). Layout in decodeStoredRecord: R50 and
-    // R500 big-endian at [12..13] and [14..15], as the vendor SDK reads them
-    // (#461), not openScale's little-endian [13..14] and [15..16].
+    // V10 Renpho / 18-byte ES-CS20M firmware delivers the weigh-in here, not
+    // reliably via live 0x10 frames (#213 / #75). Layout in decodeStoredRecord:
+    // R50 and R500 big-endian at [12..13] and [14..15], as the vendor SDK reads
+    // them (#461), not openScale's little-endian [13..14] and [15..16].
     //
     // A session that positively identified a classic scale (a 15- or 17-byte
     // 0x12) reads no 0x23 at all. Classic firmware lays the record out one
