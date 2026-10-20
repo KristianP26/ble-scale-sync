@@ -91,6 +91,18 @@ describe('matchesDescriptor: MiBeacon product id', () => {
     expect(matchesDescriptor(full, d)).toBe(true);
   });
 
+  // A device can carry more than one service data entry; the 0xFE95 one need
+  // not be first. The 0x181D entry is the Mi Scale 2 one of registry-collision.
+  it('finds the claimed id when the 0xFE95 entry is not the first one', () => {
+    const two = dev({
+      serviceData: [
+        { uuid: '181d', data: Buffer.from('238e4eea070818103913', 'hex') },
+        { uuid: 'fe95', data: M1690_FE95 },
+      ],
+    });
+    expect(matchesDescriptor(two, d)).toBe(true);
+  });
+
   // The three below hold on the code before #474 too: they guard the new claim
   // against another product id, another service's data and a frame without an id.
   it('ignores a product id it does not claim', () => {
