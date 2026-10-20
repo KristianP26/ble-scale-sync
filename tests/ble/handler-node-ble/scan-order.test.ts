@@ -697,9 +697,9 @@ describe('scanAndReadRaw after a connect retry replaced the D-Bus connection (#4
 
   it('tears down through the adapter and device the retry loop moved to', async () => {
     // The proxies the cycle started with belong to a bus that is gone, so
-    // BlueZ never gets a call through them. Before #472 a Disconnect through
-    // them read as a stale link, and a RemoveDevice parked the teardown until
-    // the poll deadline.
+    // BlueZ never gets a call through them. Before the cycle followed the
+    // retry loop (onLive), a Disconnect through them read as a stale link, and
+    // a RemoveDevice parked the teardown until the poll deadline.
     const live: string[] = [];
     const liveAdapter = {
       ...fakeAdapter,
