@@ -67,8 +67,7 @@ configuration:
       the scale answering the profile frame with a1 06 02 01 00 and its display
       shows only the weight. The first user here should be the first user in
       the vendor app, with the same birth date, height, sex and athlete
-      setting. Not yet confirmed on an 18-byte scale (#463). Leave empty
-      otherwise.
+      setting. Confirmed on one 18-byte scale (#463). Leave empty otherwise.
   qn_a4_prelude:
     name: QN A4 prelude
     description: >-

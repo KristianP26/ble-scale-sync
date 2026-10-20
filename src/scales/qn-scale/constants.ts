@@ -346,7 +346,10 @@ export const LAST_KNOWN_WEIGHT_TOLERANCE = 0.15;
  * MAX_STORED_RECORD_AGE_BEFORE_SESSION_SECONDS, which needs it because openScale
  * dates such a record by its receipt (#213 / #75). An older record is not read,
  * except on the 18-byte dialect with `ble.qn_user_key`, where it is the scale's
- * memory and goes out as history with its own time (#463, D065).
+ * memory and goes out as history with its own time (#463, D065). While an
+ * 18-byte weigh-in waits for the scale's stored ones (STORED_ANSWER_HOLD_MS),
+ * a record from the last 90 s is not taken for this session's weigh-in: that
+ * one is the weigh-in being held.
  */
 export const MAX_STORED_RECORD_AGE_SEC = 90;
 
@@ -700,3 +703,20 @@ export const MEASURED_ANSWER_MIN_MS = 3_000;
  * after at most 40 s.
  */
 export const NINETEEN_BYTE_RESULT_HOLD_MS = 20_000;
+
+/**
+ * How long an 18-byte live weigh-in that comes before the scale's answer to
+ * our 0x22 is held for that answer, with `ble.qn_user_key` (#463, D065).
+ *
+ * The 0x22 goes out when the scale accepts the profile, as the vendor's
+ * published SDK sends it, but in two logs the first live frame after the
+ * acceptance was already the final one, 49 ms later, and the answer takes
+ * longer: the same unit answered our 0x22 in 0.30 to 0.35 s (13 times), the
+ * vendor app's in 0.39 s, and ours in 0.99 and 1.18 s while weighing. The 12
+ * answers we could see in full each came as a 0x23, 0x24 and 0x25 within
+ * 0.35 s. Three seconds is two and a half times the slowest and leaves room
+ * for a proxy round trip. Once the answer has begun, a batch with records
+ * still to come extends it by the HOLD_EXTENSION_* steps
+ * (isCompositionPending), so the weigh-in waits at most 23 s.
+ */
+export const STORED_ANSWER_HOLD_MS = 3_000;

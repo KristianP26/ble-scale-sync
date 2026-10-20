@@ -4364,6 +4364,13 @@ describe('QN stored record and impedance (#461)', () => {
     const LIVE_463 = Buffer.from([
       0x10, 0x0f, 0xff, 0x01, 0x02, 0x1b, 0xf8, 0x10, 0xfb, 0x10, 0xf9, 0x00, 0x00, 0x00, 0x48,
     ]);
+    /**
+     * The final live frame of the 2026-10-13 18:10 session (#463 comment of
+     * 2026-10-13T18:39Z), 71.55 kg / R50 4349; [11..12] zeroed, [14] recomputed.
+     */
+    const LIVE_463B = Buffer.from([
+      0x10, 0x0f, 0xff, 0x01, 0x02, 0x1b, 0xf3, 0x10, 0xfd, 0x10, 0xfb, 0x00, 0x00, 0x00, 0x47,
+    ]);
     const ADVERT_463 = {
       id: 0xffff,
       data: Buffer.from([
@@ -4379,8 +4386,18 @@ describe('QN stored record and impedance (#461)', () => {
       0x03, 0xe0, 0x6f, 0x2b, 0x3d,
     ]);
 
-    /** A frame to feed, or a number of milliseconds to let pass. */
-    type Step = Buffer | number;
+    /** What a session has collected so far. */
+    interface Collected {
+      readings: ScaleReading[];
+      writes: number[][];
+      lines: string[];
+    }
+
+    /**
+     * A frame to feed, a number of milliseconds to let pass, or a check to run
+     * on what has been collected at that point.
+     */
+    type Step = Buffer | number | ((collected: Collected) => void);
 
     /**
      * One session in transport order, frames 100 ms apart unless a number
@@ -4417,6 +4434,10 @@ describe('QN stored record and impedance (#461)', () => {
         for (const step of steps) {
           if (typeof step === 'number') {
             await vi.advanceTimersByTimeAsync(step);
+            continue;
+          }
+          if (typeof step === 'function') {
+            step({ readings, writes, lines });
             continue;
           }
           const reading = adapter.parseNotification(step);
@@ -4711,10 +4732,6 @@ describe('QN stored record and impedance (#461)', () => {
       // Real frames in a made-up order of events: the live result 10 s after
       // the record, and the record handed over again in the next session.
       it('drops a stored record that is the live weigh-in reported just before', async () => {
-        const LIVE_463B = Buffer.from([
-          // 2026-10-13T18:39Z comment, 71.55 kg; [11..12] zeroed, [14] recomputed.
-          0x10, 0x0f, 0xff, 0x01, 0x02, 0x1b, 0xf3, 0x10, 0xfd, 0x10, 0xfb, 0x00, 0x00, 0x00, 0x47,
-        ]);
         const adapter = keyed();
         const first = await session(adapter, [INFO_463, LIVE_463B], '2026-10-13T17:59:48Z');
         expect(first.readings).toHaveLength(1);
@@ -4795,6 +4812,373 @@ describe('QN stored record and impedance (#461)', () => {
         // A live reading with the same impedance still does not complete.
         expect(adapter.isComplete({ weight: 71.55, impedance: 150 })).toBe(false);
       });
+
+      // #463, 2026-10-19 16:38: the scale accepted the profile and sent its
+      // final live frame 49 ms later, before our 0x22 went out, and the session
+      // ended on it (10-13 18:10 had the same 49 ms). INFO_1019, FINAL_1019
+      // (no body fat in it) and ADVERT_1019 are byte for byte from that DEBUG
+      // log; EMPTY_461, EMPTY_24_461 and EMPTY_25_461 are the "no stored
+      // weigh-ins" answer from the #461 log, and EMPTY_24_461/EMPTY_25_461 are
+      // also what the 0x24 and 0x25 of the 10-13 record are with their payload
+      // zeroed. The answers with a record use the file's fat-zeroed copies of
+      // real frames (RECORD_463, LIVE_463, LIVE_463B) in orders and at times no
+      // log shows. No 18-byte log has a batch of more than one record, so the
+      // batch of two (ofTwo) is derived from RECORD_463, and the incomplete
+      // weigh-in (LOW_R_1019) from FINAL_1019.
+      describe('a weigh-in that comes before the answer to the stored-record query', () => {
+        const INFO_1019 = Buffer.from([
+          0x12, 0x12, 0xff, 0x25, 0xe0, 0x16, 0x00, 0x05, 0xff, 0x13, 0x07, 0x16, 0x00, 0x03, 0x05,
+          0x9f, 0x32, 0x4b,
+        ]);
+        const FINAL_1019 = Buffer.from([
+          0x10, 0x0f, 0xff, 0x01, 0x02, 0x1b, 0xcb, 0x10, 0xdb, 0x10, 0xd9, 0x00, 0x00, 0x00, 0xdb,
+        ]);
+        const ADVERT_1019 = {
+          id: 0xffff,
+          data: Buffer.from([
+            0x08, 0x14, 0x01, 0x00, 0x03, 0x25, 0xe0, 0x16, 0x00, 0x05, 0xff, 0x61, 0x08, 0x02,
+            0x00, 0x15,
+          ]),
+        };
+        const EMPTY_24_461 = Buffer.from([
+          0x24,
+          0x10,
+          0xff,
+          ...new Array<number>(12).fill(0),
+          0x33,
+        ]);
+        const EMPTY_25_461 = Buffer.from([
+          0x25,
+          0x0f,
+          0xff,
+          ...new Array<number>(12).fill(0),
+          0x33,
+        ]);
+        const REFUSED_461 = Buffer.from([0xa1, 0x06, 0x02, 0x01, 0x00, 0xaa]);
+        /** onSessionStart in the log. */
+        const STARTED_1019 = '2026-10-19T16:38:13.480Z';
+        /**
+         * Up to the final live frame. The profile frame goes out 200 ms after
+         * the config request, so the 175 puts the acceptance 75 ms after it,
+         * as in the log (14.624 -> 14.699).
+         */
+        const BEFORE_QUERY: Step[] = [
+          INFO_1019,
+          READY_461,
+          CONFIG_REQ_461,
+          175,
+          VISIT_OK_463,
+          FINAL_1019,
+        ];
+        /** 71.15 kg, R50 4315 unscrambled with the advertisement's flag. */
+        const HELD: ScaleReading = { weight: 71.15, impedance: 499 };
+        const QUERY = [0x22, 0x06, 0x00, 0x00, 0x03, 0x2b];
+        const ACK = [0x1f, 0x05, 0x00, 0x10, 0x34];
+        /**
+         * RECORD_463 as record `index` of a batch of two, stamped `later`
+         * seconds after its own time: [3], [4] and [6..9] changed, [19]
+         * recomputed.
+         */
+        const ofTwo = (index: number, later: number): Buffer => {
+          const stamp = RECORD_463.readUInt32LE(6) + later;
+          return derive(RECORD_463, {
+            3: 2,
+            4: index,
+            6: stamp & 0xff,
+            7: (stamp >>> 8) & 0xff,
+            8: (stamp >>> 16) & 0xff,
+            9: stamp >>> 24,
+          });
+        };
+        const STORED_2: ScaleReading = {
+          ...STORED,
+          timestamp: new Date('2026-10-13T18:00:38.000Z'),
+        };
+        /**
+         * FINAL_1019 with R50 and R500 at 150 Ohm (read without the
+         * advertisement, so as sent), which no live frame has: a stable weigh-in
+         * that is not complete. [7..10] changed, [14] recomputed.
+         */
+        const LOW_R_1019 = derive(FINAL_1019, { 7: 0x00, 8: 0x96, 9: 0x00, 10: 0x96 });
+        const same = (a: number[], b: number[]): boolean =>
+          a.length === b.length && a.every((x, i) => x === b[i]);
+        const count = (writes: number[][], frame: number[]): number =>
+          writes.filter((w) => same(w, frame)).length;
+        const isVisit = (w: number[]): boolean => w[0] === 0xa0 && w[1] === 0x0d && w[2] === 0x02;
+        const ACCEPTED =
+          'QN: the scale accepted the profile, asking it for its stored weigh-ins now, as the ' +
+          'vendor app does (#463)';
+        const holding = (kg: number): string =>
+          `QN: holding the weigh-in (${kg} kg) for the scale's answer to the stored-record ` +
+          'query, up to 3 s, longer while stored weigh-ins are still arriving (#463)';
+        const ends = (why: string): string =>
+          `QN: ${why}; the session ends on the weigh-in held for it (71.15 kg) (#463)`;
+        const run = (adapter: QnScaleAdapter, steps: Step[], now = STARTED_1019) =>
+          session(adapter, steps, now, ADVERT_1019);
+
+        it('derives its frames only in the bytes they name', () => {
+          for (const [frame, later] of [
+            [ofTwo(1, 0), 0],
+            [ofTwo(2, 60), 60],
+          ] as const) {
+            expect(hasValidSumChecksum(frame)).toBe(true);
+            const changed = [...frame.keys()].filter((i) => frame[i] !== RECORD_463[i]);
+            expect(changed.every((i) => [3, 4, 6, 7, 8, 9, 19].includes(i))).toBe(true);
+            expect(frame.readUInt32LE(6) - RECORD_463.readUInt32LE(6)).toBe(later);
+          }
+          expect(hasValidSumChecksum(LOW_R_1019)).toBe(true);
+          const changed = [...LOW_R_1019.keys()].filter((i) => LOW_R_1019[i] !== FINAL_1019[i]);
+          expect(changed.every((i) => [7, 8, 9, 10, 14].includes(i))).toBe(true);
+        });
+
+        it('holds only a complete weigh-in', async () => {
+          const adapter = keyed();
+          const { readings } = await session(
+            adapter,
+            [...BEFORE_QUERY.slice(0, -1), LOW_R_1019, FINAL_1019, EMPTY_461],
+            STARTED_1019,
+            null,
+          );
+          const asSent = { weight: 71.15, impedance: 4315 };
+          expect(readings).toEqual([{ weight: 71.15, impedance: 150 }, asSent, asSent]);
+          expect(readings.map((r) => adapter.isFinal(r))).toEqual([true, false, true]);
+        });
+
+        it('asks for the stored weigh-ins as soon as the scale accepts the profile', async () => {
+          const { writes, lines } = await run(keyed(), [
+            ...BEFORE_QUERY.slice(0, -1),
+            // 100 ms after the acceptance, still before the handshake's 0x22.
+            (c) => expect(count(c.writes, QUERY)).toBe(1),
+            FINAL_1019,
+            1000,
+          ]);
+          expect(count(writes, QUERY)).toBe(1);
+          const visit = writes.findIndex(isVisit);
+          expect(writes.slice(visit + 1, visit + 3)).toEqual([QUERY, ACK]);
+          expect(lines).toContain(ACCEPTED);
+        });
+
+        it('holds the weigh-in that came before the answer', async () => {
+          const adapter = keyed();
+          const { readings, writes, lines } = await run(adapter, BEFORE_QUERY);
+          expect(readings).toEqual([HELD]);
+          expect(adapter.isFinal(readings[0])).toBe(false);
+          expect(adapter.completionHoldMs).toBe(3000);
+          expect(count(writes, ACK)).toBe(1);
+          expect(lines).toContain(holding(71.15));
+        });
+
+        it('ends the session on it once the scale says it holds no stored weigh-ins', async () => {
+          const adapter = keyed();
+          const { readings, lines } = await run(adapter, [...BEFORE_QUERY, EMPTY_461]);
+          expect(readings).toEqual([HELD, HELD]);
+          expect(readings[1]).not.toBe(readings[0]);
+          expect(adapter.isFinal(readings[1])).toBe(true);
+          expect(adapter.completionHoldMs).toBeUndefined();
+          expect(lines).toContain(ends('the scale has answered the stored-record query'));
+        });
+
+        it("still holds it after a record's 0x24", async () => {
+          const adapter = keyed();
+          const { readings } = await run(adapter, [...BEFORE_QUERY, RECORD_463, EMPTY_24_461]);
+          expect(readings).toEqual([HELD, STORED]);
+          expect(adapter.completionHoldMs).toBe(3000);
+        });
+
+        it('ends it on the 0x25 of the last record, with the record as history, once', async () => {
+          const adapter = keyed();
+          const { readings, lines } = await run(adapter, [
+            ...BEFORE_QUERY,
+            RECORD_463,
+            EMPTY_24_461,
+            EMPTY_25_461,
+            EMPTY_25_461,
+            EMPTY_461,
+          ]);
+          expect(readings).toEqual([HELD, STORED, HELD]);
+          expect(adapter.isFinal(readings[2])).toBe(true);
+          expect(adapter.dedupMark()).toBe(845229578);
+          expect(lines).toContain(
+            'QN: stored weigh-in 71.55 kg at 2026-10-13T17:59:38.000Z, user slot 1, record 1 of ' +
+              '1, reported as history (#463)',
+          );
+          expect(lines.filter((l) => l.includes('the session ends on the weigh-in held'))).toEqual([
+            ends('the scale has answered the stored-record query'),
+          ]);
+        });
+
+        it('reports the hold as pending while records of a batch are still to come', async () => {
+          const adapter = keyed();
+          const { readings } = await run(adapter, [
+            ...BEFORE_QUERY,
+            (c) => expect(c.readings).toHaveLength(1),
+            ofTwo(1, 0),
+            () => expect(adapter.isCompositionPending()).toBe(true),
+            EMPTY_24_461,
+            EMPTY_25_461,
+            (c) => expect(c.readings).toHaveLength(2),
+            ofTwo(2, 60),
+            () => expect(adapter.isCompositionPending()).toBe(false),
+            EMPTY_24_461,
+            EMPTY_25_461,
+          ]);
+          expect(readings).toEqual([HELD, STORED, STORED_2, HELD]);
+        });
+
+        it('says when the scale did not answer within the hold', async () => {
+          const { lines } = await run(keyed(), [...BEFORE_QUERY, 3000]);
+          expect(lines).toContain(
+            ends('the scale did not answer the stored-record query within 3 s'),
+          );
+        });
+
+        it('says when the scale did not finish its answer within the hold', async () => {
+          const { lines } = await run(keyed(), [...BEFORE_QUERY, RECORD_463, 3000]);
+          expect(lines).toContain(
+            ends('the scale did not finish its answer to the stored-record query within 3 s'),
+          );
+        });
+
+        // The session time is chosen: 42 s after the record's stamp, so the
+        // record is from the last 90 seconds.
+        it('does not export a record from the last 90 seconds that comes during the hold', async () => {
+          const { readings, lines } = await run(
+            keyed(),
+            [...BEFORE_QUERY, RECORD_463, EMPTY_24_461, EMPTY_25_461],
+            '2026-10-13T18:00:20Z',
+          );
+          expect(readings).toEqual([HELD, HELD]);
+          expect(lines).toContain(
+            'QN: a stored weigh-in (71.55 kg at 2026-10-13T17:59:38.000Z, user slot 1) is not ' +
+              'exported: it came while this connection held its own weigh-in for the stored ' +
+              'ones, and one from the last 90 seconds may be that weigh-in again (#463)',
+          );
+        });
+
+        // The 10-13 18:10 order (final 84 + 49 ms after the profile frame)
+        // with the record being that very weigh-in, as the scale may hand it
+        // over (R2): the session time is chosen 42 s after the record.
+        it('drops a record during the hold that is the held weigh-in itself', async () => {
+          const { readings, lines } = await run(
+            keyed(),
+            [
+              INFO_1019,
+              READY_461,
+              CONFIG_REQ_461,
+              184,
+              VISIT_OK_463,
+              LIVE_463B,
+              RECORD_463,
+              EMPTY_24_461,
+              EMPTY_25_461,
+            ],
+            '2026-10-13T18:00:20Z',
+          );
+          expect(readings).toEqual([
+            { weight: 71.55, impedance: 509 },
+            { weight: 71.55, impedance: 509 },
+          ]);
+          expect(lines.some((l) => l.includes('is the live result reported at'))).toBe(true);
+          expect(lines.some((l) => l.includes('is not exported'))).toBe(false);
+        });
+
+        it('ends the session on the held weigh-in when another one comes, and does not acknowledge that one', async () => {
+          const adapter = keyed();
+          const { readings, writes, lines } = await run(adapter, [...BEFORE_QUERY, LIVE_463]);
+          expect(readings).toEqual([HELD, HELD]);
+          expect(adapter.isFinal(readings[1])).toBe(true);
+          expect(count(writes, ACK)).toBe(1);
+          expect(lines).toContain(ends('another weigh-in (71.6 kg) came during the wait'));
+        });
+
+        it('acknowledges the same weigh-in again without handing it over twice', async () => {
+          const adapter = keyed();
+          const { readings, writes } = await run(adapter, [...BEFORE_QUERY, FINAL_1019, EMPTY_461]);
+          expect(readings).toHaveLength(2);
+          expect(readings.map((r) => adapter.isFinal(r))).toEqual([false, true]);
+          expect(count(writes, ACK)).toBe(2);
+        });
+
+        // The 10-13 18:03 order, with the 0x22 on the acceptance: the answer
+        // came before the final live frame, so nothing is held.
+        it('does not hold a weigh-in that comes after the answer', async () => {
+          const adapter = keyed();
+          const { readings, writes } = await run(
+            adapter,
+            [
+              INFO_463,
+              READY_461,
+              CONFIG_REQ_461,
+              175,
+              VISIT_OK_463,
+              (c) => expect(count(c.writes, QUERY)).toBe(1),
+              MEASURING_463,
+              RECORD_463,
+              EMPTY_24_461,
+              EMPTY_25_461,
+              LIVE_463,
+            ],
+            STARTED_463,
+          );
+          expect(readings).toEqual([STORED, { weight: 71.6, impedance: 507 }]);
+          expect(adapter.isFinal(readings[1])).toBe(true);
+          expect(count(writes, QUERY)).toBe(1);
+        });
+
+        it('does not hold it after a "no stored weigh-ins" answer', async () => {
+          const adapter = keyed();
+          const { readings } = await run(adapter, [
+            ...BEFORE_QUERY.slice(0, -1),
+            EMPTY_461,
+            EMPTY_24_461,
+            EMPTY_25_461,
+            FINAL_1019,
+          ]);
+          expect(readings).toEqual([HELD]);
+          expect(adapter.isFinal(readings[0])).toBe(true);
+        });
+
+        // The 19-byte scale answers the 0x22 only once it has measured (D037),
+        // and nothing says it wants the 0x22 earlier. The Arboleaf 0x12 with
+        // the #461 ready and config-request frames, a pairing no log shows.
+        it('leaves the 0x22 of the 19-byte dialect after the profile frame where it was', async () => {
+          const { writes } = await run(keyed(), [
+            INFO_ARBOLEAF_331,
+            READY_461,
+            CONFIG_REQ_461,
+            175,
+            VISIT_OK_463,
+            (c) => expect(c.writes.filter((w) => w[0] === 0x22)).toEqual([]),
+            100,
+          ]);
+          expect(writes.filter((w) => w[0] === 0x22)).toEqual([
+            [0x22, 0x06, 0xff, 0x00, 0x03, 0x2a],
+          ]);
+        });
+
+        it.each([
+          ['without ble.qn_user_key', makeAdapter, BEFORE_QUERY],
+          [
+            'when the scale refused the profile',
+            keyed,
+            [INFO_1019, READY_461, CONFIG_REQ_461, 175, REFUSED_461, FINAL_1019],
+          ],
+          [
+            "after openScale's profile went out (the 0x12 after the ready frame)",
+            keyed,
+            [READY_461, INFO_1019, CONFIG_REQ_461, 175, VISIT_OK_463, FINAL_1019],
+          ],
+        ] as const)('does not hold it, nor ask early, %s', async (_label, make, steps) => {
+          const adapter = make();
+          const { readings, writes } = await run(adapter, [...steps, 1000]);
+          expect(readings).toEqual([HELD]);
+          expect(adapter.isFinal(readings[0])).toBe(true);
+          expect(adapter.completionHoldMs).toBeUndefined();
+          expect(writes.findIndex((w) => same(w, ACK))).toBeLessThan(
+            writes.findIndex((w) => same(w, QUERY)),
+          );
+        });
+      });
     });
 
     describe('the weigh-in ending the session before the stored-record answer', () => {
@@ -4802,10 +5186,25 @@ describe('QN stored record and impedance (#461)', () => {
         'QN: the weigh-in ends the session before the scale answered the stored-record query; ' +
         'a stored weigh-in it sends after this is not read (#463)';
 
-      // Real frames of the #463 session. The order of the first case, our 0x22
-      // written and the final live frame before any 0x23, is in no log: the
-      // 18-byte scale answered 0x22 within a second in both samples we have.
-      it('says so when the final live frame comes first', async () => {
+      // Real frames of the #463 session. The order of these first two cases,
+      // our 0x22 written and the final live frame before any 0x23, is in no
+      // log: the 18-byte scale answered 0x22 within a second in every sample
+      // we have, and the two weigh-ins that beat it came before our 0x22.
+      it('says so when the final live frame comes first, without ble.qn_user_key', async () => {
+        const { readings, writes, lines } = await session(
+          makeAdapter(),
+          [INFO_463, READY_461, CONFIG_REQ_461, VISIT_OK_463, 1000, MEASURING_463, LIVE_463],
+          STARTED_463,
+        );
+        expect(writes.some((w) => w[0] === 0x22)).toBe(true);
+        expect(readings).toEqual([{ weight: 71.6, impedance: 507 }]);
+        expect(lines).toContain(RACE);
+      });
+
+      // With the option the weigh-in is held for the answer instead. Here the
+      // acceptance comes before our profile frame (frames 100 ms apart), so
+      // the 0x22 is the handshake's own.
+      it('holds the weigh-in instead with ble.qn_user_key', async () => {
         const adapter = makeAdapter();
         adapter.configure({ qnUserKey: 1000 });
         const { readings, writes, lines } = await session(
@@ -4813,9 +5212,11 @@ describe('QN stored record and impedance (#461)', () => {
           [INFO_463, READY_461, CONFIG_REQ_461, VISIT_OK_463, 1000, MEASURING_463, LIVE_463],
           STARTED_463,
         );
-        expect(writes.some((w) => w[0] === 0x22)).toBe(true);
-        expect(readings).toEqual([{ weight: 71.6, impedance: 507 }]);
-        expect(lines).toContain(RACE);
+        expect(writes.filter((w) => w[0] === 0x22)).toHaveLength(1);
+        expect(adapter.isFinal(readings[0])).toBe(false);
+        expect(lines).not.toContain(RACE);
+        expect(lines.some((l) => l.startsWith('QN: holding the weigh-in (71.6 kg)'))).toBe(true);
+        expect(lines.some((l) => l.includes('asking it for its stored weigh-ins now'))).toBe(false);
       });
 
       it('says nothing when the scale answered first', async () => {
