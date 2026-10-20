@@ -249,6 +249,7 @@ Everything that should survive add-on restarts lives under `/data/` inside the c
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/data/config.yaml`       | The merged runtime config. Regenerated from UI options on every start, with `last_known_weight` preserved per user.                                                                                                                |
 | `/data/garmin-tokens/`    | Garmin OAuth tokens produced by first authentication.                                                                                                                                                                              |
+| `/data/strava-tokens/`    | Strava OAuth tokens of a `strava` exporter without its own `token_dir` (only custom config mode can define one); `/app/strava-tokens` links here, so they survive a restart and an update.                                         |
 | `/data/.*` (hidden files) | State the app keeps next to the config: the export retry queue, the scale de-duplication marks, the last live weigh-in of each user for the [replay check](/exporters#historical-readings), and the date of the last update check. |
 
 User-supplied files live under `/share/ble-scale-sync/`:
