@@ -3009,6 +3009,9 @@ describe('QN 18-byte weigh-in before the stored-record answer through waitForRaw
     const info = vi.spyOn(bleLog, 'info');
     const infoLines = (needle: string): number =>
       info.mock.calls.filter((c) => String(c[0]).includes(needle)).length;
+    const debug = vi.spyOn(bleLog, 'debug');
+    const debugLines = (needle: string): number =>
+      debug.mock.calls.filter((c) => String(c[0]).includes(needle)).length;
     const writes = (frame: Buffer): number =>
       write.writtenData.filter((w) => w.equals(frame)).length;
     const writtenAt = (frame: Buffer): number =>
@@ -3019,6 +3022,7 @@ describe('QN 18-byte weigh-in before the stored-record answer through waitForRaw
       promise,
       isSettled: () => settled,
       infoLines,
+      debugLines,
       writes,
       writtenAt,
     };
@@ -3203,6 +3207,10 @@ describe('QN 18-byte weigh-in before the stored-record answer through waitForRaw
       await vi.advanceTimersByTimeAsync(0);
       expect(s.isSettled()).toBe(true);
       expect((await s.promise).reading).toEqual(WEIGH_IN);
+      // The hold's own 3 s line belongs to the session that ended: nothing
+      // says "the session ends" after it has already ended.
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(s.debugLines('did not answer the stored-record query')).toBe(0);
     } finally {
       vi.useRealTimers();
     }

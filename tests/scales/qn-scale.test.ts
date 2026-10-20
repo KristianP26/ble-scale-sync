@@ -4391,6 +4391,8 @@ describe('QN stored record and impedance (#461)', () => {
       readings: ScaleReading[];
       writes: number[][];
       lines: string[];
+      /** The info lines alone, in order (also in `lines`). */
+      infoLines: string[];
     }
 
     /**
@@ -4402,7 +4404,7 @@ describe('QN stored record and impedance (#461)', () => {
     /**
      * One session in transport order, frames 100 ms apart unless a number
      * says otherwise, ended with onSessionEnd. Collects every reading, every
-     * write and every debug and info line.
+     * write and every debug and info line, and the info lines apart.
      */
     async function session(
       adapter: QnScaleAdapter,
@@ -4413,8 +4415,12 @@ describe('QN stored record and impedance (#461)', () => {
       const writes: number[][] = [];
       const readings: ScaleReading[] = [];
       const lines: string[] = [];
+      const infoLines: string[] = [];
       const debug = vi.spyOn(bleLog, 'debug').mockImplementation((m) => void lines.push(m));
-      const info = vi.spyOn(bleLog, 'info').mockImplementation((m) => void lines.push(m));
+      const info = vi.spyOn(bleLog, 'info').mockImplementation((m) => {
+        lines.push(m);
+        infoLines.push(m);
+      });
       vi.useFakeTimers();
       try {
         vi.setSystemTime(new Date(now));
@@ -4437,7 +4443,7 @@ describe('QN stored record and impedance (#461)', () => {
             continue;
           }
           if (typeof step === 'function') {
-            step({ readings, writes, lines });
+            step({ readings, writes, lines, infoLines });
             continue;
           }
           const reading = adapter.parseNotification(step);
@@ -4445,7 +4451,7 @@ describe('QN stored record and impedance (#461)', () => {
           await vi.advanceTimersByTimeAsync(100);
         }
         adapter.onSessionEnd?.();
-        return { readings, writes, lines };
+        return { readings, writes, lines, infoLines };
       } finally {
         vi.useRealTimers();
         debug.mockRestore();
@@ -4958,6 +4964,26 @@ describe('QN stored record and impedance (#461)', () => {
           expect(lines).toContain(ACCEPTED);
         });
 
+        // An acceptance 250 ms after the profile frame (a slow link; the logs
+        // have 75 and 84 ms) comes after the handshake's 0x22, which stays the
+        // only one; the weigh-in is held for its answer all the same.
+        it('asks once when the acceptance comes after the handshake has asked', async () => {
+          const adapter = keyed();
+          const { readings, writes } = await run(adapter, [
+            INFO_1019,
+            READY_461,
+            CONFIG_REQ_461,
+            350,
+            (c) => expect(count(c.writes, QUERY)).toBe(1),
+            VISIT_OK_463,
+            FINAL_1019,
+            EMPTY_461,
+          ]);
+          expect(count(writes, QUERY)).toBe(1);
+          expect(readings).toEqual([HELD, HELD]);
+          expect(readings.map((r) => adapter.isFinal(r))).toEqual([false, true]);
+        });
+
         it('holds the weigh-in that came before the answer', async () => {
           const adapter = keyed();
           const { readings, writes, lines } = await run(adapter, BEFORE_QUERY);
@@ -5040,19 +5066,20 @@ describe('QN stored record and impedance (#461)', () => {
         });
 
         // The session time is chosen: 42 s after the record's stamp, so the
-        // record is from the last 90 seconds.
+        // record is from the last 90 seconds. It comes twice, as a re-query
+        // can bring it again, and gets one line, in the normal log.
         it('does not export a record from the last 90 seconds that comes during the hold', async () => {
-          const { readings, lines } = await run(
+          const { readings, infoLines } = await run(
             keyed(),
-            [...BEFORE_QUERY, RECORD_463, EMPTY_24_461, EMPTY_25_461],
+            [...BEFORE_QUERY, RECORD_463, RECORD_463, EMPTY_24_461, EMPTY_25_461],
             '2026-10-13T18:00:20Z',
           );
           expect(readings).toEqual([HELD, HELD]);
-          expect(lines).toContain(
+          const line =
             'QN: a stored weigh-in (71.55 kg at 2026-10-13T17:59:38.000Z, user slot 1) is not ' +
-              'exported: it came while this connection held its own weigh-in for the stored ' +
-              'ones, and one from the last 90 seconds may be that weigh-in again (#463)',
-          );
+            'exported: it came while this connection held its own weigh-in for the stored ' +
+            'ones, and one from the last 90 seconds may be that weigh-in again (#463)';
+          expect(infoLines.filter((l) => l === line)).toHaveLength(1);
         });
 
         // The 10-13 18:10 order (final 84 + 49 ms after the profile frame)
@@ -5202,14 +5229,25 @@ describe('QN stored record and impedance (#461)', () => {
       });
 
       // With the option the weigh-in is held for the answer instead. Here the
-      // acceptance comes before our profile frame (frames 100 ms apart), so
-      // the 0x22 is the handshake's own.
-      it('holds the weigh-in instead with ble.qn_user_key', async () => {
+      // acceptance comes 250 ms after our profile frame (a slow link, the
+      // logs have 75 and 84 ms), after the handshake's 0x22, so that 0x22 is
+      // the only one.
+      it('holds the weigh-in instead with ble.qn_user_key, also after a slow acceptance', async () => {
         const adapter = makeAdapter();
         adapter.configure({ qnUserKey: 1000 });
         const { readings, writes, lines } = await session(
           adapter,
-          [INFO_463, READY_461, CONFIG_REQ_461, VISIT_OK_463, 1000, MEASURING_463, LIVE_463],
+          [
+            INFO_463,
+            READY_461,
+            CONFIG_REQ_461,
+            350,
+            (c) => expect(c.writes.filter((w) => w[0] === 0x22)).toHaveLength(1),
+            VISIT_OK_463,
+            1000,
+            MEASURING_463,
+            LIVE_463,
+          ],
           STARTED_463,
         );
         expect(writes.filter((w) => w[0] === 0x22)).toHaveLength(1);
