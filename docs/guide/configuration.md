@@ -725,7 +725,7 @@ users:
 | `beurer_provision`         | No       | `false` | Write this profile into a Beurer scale that has no stored user                                                                                                                                              |
 | `beurer_register_new_user` | No       | `false` | Create a new user record on the scale instead of consenting to one. One-shot; see below                                                                                                                     |
 
-The exact weight and time of each user's last live weigh-in are kept next to this file in `.last-live-weigh-ins.json`, for the [replay check](/exporters#historical-readings). The check uses that saved weight as well as `last_known_weight`, so editing `last_known_weight` by hand does not reset it, unless the two end up 0.5 kg or more apart: the saved weigh-in is then taken as older than the file and ignored.
+The exact weight and time of each user's last live weigh-in are kept next to this file in `.last-live-weigh-ins.json`, for the [replay check](/exporters#historical-readings). The check uses that saved weight as well as `last_known_weight`, so editing `last_known_weight` by hand does not reset it. Only when the app starts and finds the two 0.5 kg or more apart is the saved weigh-in taken as older than this file and ignored; after an edit while the app runs, that happens at the next start.
 
 ### Exporters
 
