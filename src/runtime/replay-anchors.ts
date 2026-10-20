@@ -186,8 +186,9 @@ function reportSaveFailure(slug: string, error: string): void {
 /**
  * Save the last live weigh-in of `slug` from the dedup maps. Called after every
  * exported live weigh-in, unlike the config write, which waits for a 0.5 kg
- * change. The other users' entries are kept: from the file when it can be
- * read, from memory for any it no longer holds (deleted while running). A
+ * change. The other users' entries are kept, the later weigh-in of the file's
+ * and memory's for each (memory fills in after a failed save of that user, or
+ * a file deleted while running). A
  * weigh-in without a usable time removes the user's entry instead. Never
  * throws; on failure the in-memory anchor still protects this process.
  */
@@ -222,9 +223,11 @@ export function persistReplayAnchor(
   else anchors.delete(slug);
   for (const [other, w] of weights) {
     const t = times.get(other);
-    if (other === slug || anchors.has(other) || t === undefined || !isUsableAnchorTime(t)) {
-      continue;
-    }
+    if (other === slug || t === undefined || !isUsableAnchorTime(t)) continue;
+    // The later weigh-in wins: memory is newer after a failed save of that
+    // user, the file after a second instance sharing the directory saved one.
+    const inFile = anchors.get(other);
+    if (inFile && inFile.time.getTime() >= t.getTime()) continue;
     anchors.set(other, { weight: w, time: t });
   }
   const out: Record<string, { weight: number; time: string }> = {};

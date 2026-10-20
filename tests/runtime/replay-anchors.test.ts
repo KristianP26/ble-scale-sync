@@ -123,6 +123,28 @@ describe('replay anchor file (D067)', () => {
     });
   });
 
+  it("keeps the later of the file's and memory's entry for another user", () => {
+    // Mom's own save failed, so the file still holds her weigh-in before the
+    // last one; Dad's save must not write that older entry back.
+    write({
+      mom: { weight: 60.2, time: '2026-10-18T07:00:00.000Z' },
+      guest: { weight: 70.4, time: '2026-10-19T08:00:00.000Z' },
+    });
+    const { weights, times } = maps({
+      mom: [60.4, '2026-10-19T07:00:00.000Z'],
+      // A second instance sharing the directory saved a newer guest weigh-in.
+      guest: [70, '2026-10-17T07:00:00.000Z'],
+      dad: [82.3, '2026-10-19T07:30:00.000Z'],
+    });
+    persistReplayAnchor(file, 'dad', weights, times);
+
+    expect(read()).toEqual({
+      mom: { weight: 60.4, time: '2026-10-19T07:00:00.000Z' },
+      guest: { weight: 70.4, time: '2026-10-19T08:00:00.000Z' },
+      dad: { weight: 82.3, time: '2026-10-19T07:30:00.000Z' },
+    });
+  });
+
   it('does not write over the file when it cannot be read, and warns', () => {
     write({ mom: { weight: 60.2, time: '2026-10-18T07:00:00.000Z' } });
     const before = fs.readFileSync(file, 'utf-8');
