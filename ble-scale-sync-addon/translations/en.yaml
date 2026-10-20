@@ -112,7 +112,11 @@ configuration:
       works once and then every later connect fails, until you clear it by hand
       with bluetoothctl. The scale has dropped its half of the pairing while
       Home Assistant still holds the key; this lets the add-on delete that key
-      and pair again on its own. Leave it off otherwise.
+      and pair again on its own. It acts only when the host's Bluetooth reports
+      that the scale refused the key (Home Assistant OS 16.2 and later), so a
+      weak radio link does not clear a working pairing; on older hosts it
+      clears nothing and the log says when to clear the pairing by hand. Leave
+      it off otherwise.
   preemptive_adapter_reset:
     name: Power-cycle the adapter after every weigh-in
     description: >-
