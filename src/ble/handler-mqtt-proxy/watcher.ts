@@ -12,6 +12,7 @@ import {
   evaluateAdvertisement,
   GraceTimers,
   DedupWindow,
+  PostReadingWindow,
   logAdvert,
   safeName,
   emitDeduped,
@@ -26,6 +27,7 @@ import {
   errMsg,
   normalizeUuid,
   IMPEDANCE_GRACE_MS,
+  POST_READING_RECONNECT_MS,
 } from '../types.js';
 import { AsyncQueue } from '../async-queue.js';
 import { topics } from './topics.js';
@@ -34,6 +36,7 @@ import {
   closePersistentClient,
   getOrCreatePersistentClient,
   addDiscoveredMac,
+  hasDiscoveredMac,
   getDiscoveredMacs,
   getDisplayUsers,
   addPassiveMac,
@@ -70,7 +73,9 @@ type LifecycleHandler =
 /**
  * Persistent event-driven scan watcher for continuous mode.
  * Subscribes once and keeps the message handler attached permanently,
- * queuing matched readings so none are missed during processing or cooldown.
+ * queuing matched readings so none are missed while the previous one is
+ * processed. There is no cooldown after a reading: the ESP32 reconnects to a
+ * scale still on by itself, see PostReadingWindow (#466).
  */
 export class ReadingWatcher implements Watcher {
   private queue = new AsyncQueue<RawReading>();
@@ -93,6 +98,8 @@ export class ReadingWatcher implements Watcher {
   private currentDevice: MqttBleDevice | null = null;
   private gattStartedAt = 0;
   private readonly dedup = new DedupWindow(DEDUP_WINDOW_MS);
+  /** When each scale last gave a reading, to tell its still-on reconnect from a failure (#466). */
+  private readonly postReading = new PostReadingWindow(POST_READING_RECONNECT_MS);
   /**
    * Last scan result seen per address, keyed lowercase.
    *
@@ -258,9 +265,10 @@ export class ReadingWatcher implements Watcher {
             bleLog.info(
               `Received autonomous connect from ESP32 for ${data.address} (${data.chars?.length ?? 0} chars)`,
             );
-            this.handleAutonomousConnect(data).catch((err) => {
-              bleLog.warn(`Autonomous GATT reading failed for ${data.address}: ${errMsg(err)}`);
-            });
+            const sinceReading = this.postReading.sinceReading(data.address);
+            this.handleAutonomousConnect(data).catch((err) =>
+              this.reportGattFailure('Autonomous GATT reading', data.address, err, sinceReading),
+            );
           }
         } catch {
           bleLog.debug('Connected payload was not JSON, ignoring');
@@ -288,6 +296,34 @@ export class ReadingWatcher implements Watcher {
           if (!adapter) continue;
 
           const decision = evaluateAdvertisement(adapter, info);
+
+          // A known scale read from its advertisements is passive from its
+          // first frame, not only from its first complete reading. Seeded from
+          // ble.scale_mac without the flag, the ESP32 auto-connects to it on
+          // sight and pauses its scan for the attempt; a broadcast-only scale
+          // that refuses connections then never delivers the complete reading
+          // that used to be the only thing marking it passive. Limited to known
+          // MACs, the only ones the ESP32 connects to, so a neighbour's scale is
+          // not added to the ESP32's list before it produces a reading.
+          //
+          // Only on an advert that shows the scale is this adapter's. Before
+          // discovery Mi Scale 2 claims anything advertising 0x181B, and a
+          // standard BCS scale is read only through the connect that follows
+          // (see handleGattReading). Its bare advert decides 'gatt', and a 'wait'
+          // there only means some service data is present, so an adapter with a
+          // GATT path of its own counts only a frame it parsed.
+          const ownBroadcast =
+            decision.kind === 'complete' ||
+            decision.kind === 'partial' ||
+            (decision.kind === 'wait' && !adapter.charNotifyUuid);
+          if (
+            ownBroadcast &&
+            hasDiscoveredMac(entry.address) &&
+            readsFromAdvertisement(adapter) &&
+            !isPassiveMac(entry.address)
+          ) {
+            registerScaleMac(this.config, entry.address, adapter).catch(() => {});
+          }
 
           if (decision.kind === 'complete') {
             // Got the full reading; cancel any pending grace timer for this addr.
@@ -363,9 +399,10 @@ export class ReadingWatcher implements Watcher {
             // fall through to the host-initiated GATT path below
           }
 
-          this.handleGattReading(entry, adapter).catch((err) => {
-            bleLog.warn(`GATT reading failed for ${entry.address}: ${errMsg(err)}`);
-          });
+          const sinceReading = this.postReading.sinceReading(entry.address);
+          this.handleGattReading(entry, adapter).catch((err) =>
+            this.reportGattFailure('GATT reading', entry.address, err, sinceReading),
+          );
         }
         // No match this scan, keep listening
       } catch (err) {
@@ -663,6 +700,7 @@ export class ReadingWatcher implements Watcher {
         ),
       );
       registerScaleMac(this.config, entry.address, gattAdapter).catch(() => {});
+      this.postReading.noteReading(entry.address);
       this.queue.push(raw);
       this.deferCounts.delete(entry.address);
     } finally {
@@ -683,6 +721,31 @@ export class ReadingWatcher implements Watcher {
         if (client) await mqttGattDisconnect(client, t).catch(() => {});
       }
     }
+  }
+
+  /**
+   * Log a GATT session that ended without a reading. A session opened inside
+   * the post-reading window is the scale still on after its weigh-in, not a
+   * failure; any other one warns.
+   */
+  private reportGattFailure(
+    kind: string,
+    address: string,
+    err: unknown,
+    sinceReading: number | undefined,
+  ): void {
+    if (sinceReading !== undefined) {
+      // A reconnect to a scale still on after its reading (#466): by the ESP32
+      // itself, or by the host on the next scan batch.
+      this.postReading.reportNoWeighIn(
+        address,
+        `${kind} for ${address}`,
+        sinceReading,
+        errMsg(err),
+      );
+      return;
+    }
+    bleLog.warn(`${kind} failed for ${address}: ${errMsg(err)}`);
   }
 
   /**
@@ -821,6 +884,7 @@ export class ReadingWatcher implements Watcher {
         ),
       );
       registerScaleMac(this.config, data.address, adapter).catch(() => {});
+      this.postReading.noteReading(data.address);
       bleLog.info(
         `Autonomous GATT reading complete: ${raw.reading.weight} kg from ${data.address}`,
       );

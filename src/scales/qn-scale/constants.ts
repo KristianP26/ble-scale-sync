@@ -36,14 +36,19 @@ import { uuid16 } from '../body-comp-helpers.js';
  *                        nor on the 18- and 19-byte ones with ble.qn_user_key)
  *   0x21 (config req)  -> A00D profile frame + 0x22 start measurement
  *   0x10 (weight)      -> parse weight + 0x1F acknowledge stable reading
+ *                        (19-byte dialect: nothing; with ble.qn_result_ack a
+ *                        0x1F after the result block's 0x16 instead)
  *
- * 0x10 frame (original format, 10 bytes):
+ * 0x10 frame (original format, 11 bytes on the wire, `10 0b ..`; 10 in
+ * openScale's and our older synthetic tests):
  *   [3-4]   weight (BE uint16, / weightScaleFactor)
  *   [5]     stability (1 = stable, 0 = measuring)
  *   [6-7]   resistance R1 (BE uint16)
  *   [8-9]   resistance R2 (BE uint16)
  *
- * 0x10 frame (ES-30M format, 14 bytes, weightScaleFactor=10):
+ * 0x10 frame (ES-30M / VA format, 14 or 15 bytes with the length at [1],
+ * picked by that shape, never after a classic 0x12; ES30M_MIN_FRAME_LEN):
+ *   [3]     user slot
  *   [4]     state (0x00=measuring, 0x01=stabilizing, 0x02=stable)
  *   [5-6]   weight (BE uint16, / weightScaleFactor)
  *   [7-8]   resistance R1 (BE uint16)
@@ -52,15 +57,18 @@ import { uuid16 } from '../body-comp-helpers.js';
  * 0x10 frame (19-byte dialect, 20 bytes, weight at [5..6] /100): see
  *   LIVE20_FRAME_LEN below.
  *
- * 0x12 frame (scale info, classic 11-byte format):
+ * 0x12 frame (scale info). Every real one carries its own length at [1]: the
+ * classic ones are 15 bytes (ES-CS20M) or 17 (the maintainer's unit, #283),
+ * the long ones 18 to 20. openScale's and our older synthetic tests use an
+ * 11-byte classic frame, which no capture shows:
  *   [2]     protocol type (echoed back in all config commands)
- *   [10]    weight scale flag (1 = /100, else /10)
+ *   [10]    flags; bit 0 names the weight divisor, set /100, clear /10
+ *           (INFO_DIVISOR_BIT)
  *
  * 0x12 frame (long format, byte[1] == packet length):
  *   [1]     length (18 on the Renpho ES-26M, 20 on the GE CS 10 G)
  *   [2]     protocol/verify byte (0xff on every captured frame)
  *   [3-8]   MAC address, little endian
- *   Weight scale factor is 10 (ES-30M format with heuristic /100 fallback).
  *
  *   The two dialects agree on the layout and differ in the value the firmware
  *   ACCEPTS BACK. The 18-byte ES-26M was hardware verified rejecting 0xff and
@@ -291,12 +299,36 @@ export const NO_CONTACT_RESISTANCE = 60000;
 export const IMPEDANCE_GRACE_MS = 1500;
 
 /**
+ * Bit of the 0x12 flags byte [10] that names the weight divisor: set is /100,
+ * clear /10, as the vendor's published SDK reads it on its classic and its VA
+ * decoder alike; the rest of the byte is unit and feature flags. openScale
+ * compares the whole byte with 1, which made the 17-byte classic frames
+ * ([10] 0x03: the maintainer's unit, #283) /10 although those scales send
+ * /100. Every 0x12 in our logs sets the bit (0x01, 0x03, 0x07, 0x0f, 0x17;
+ * 0x05 in an external write-up) and every weight whose true value is known
+ * came in hundredths. /10 is the SDK's word only: no unit has sent the bit
+ * clear (D068).
+ */
+export const INFO_DIVISOR_BIT = 0x01;
+
+/**
+ * Shortest live 0x10 read in the ES-30M (VA) layout: [3] user slot, [4]
+ * state, [5..6] weight, [7..10] the two resistances. Every such frame in our
+ * logs is 14 bytes (`10 0e ff 01 ..`, #253, #84) or 15 (`10 0f ff 01 ..`,
+ * #463), with its length at [1], after an 18-byte 0x12; every classic frame
+ * is 11 bytes (`10 0b ..`). The frame picks the layout, not the divisor, and a
+ * session whose 0x12 was classic never reads it: the vendor's published SDK
+ * reads a 14-byte classic frame too, in the original layout (D068).
+ */
+export const ES30M_MIN_FRAME_LEN = 14;
+
+/**
  * Band a live 0x10 weight must fall in for the divisor its 0x12 frame named to
  * be taken as is. Outside it, or with no 0x12 at all, the divisor is in doubt
  * and both readings of the raw value are weighed (review C-06, see
- * `QnScaleAdapter.resolveWeight`). The ES-26M is why the band matters: its
- * 18-byte 0x12 implies /10, its captured frames read 978.5 kg that way and
- * 97.85 kg at /100.
+ * `QnScaleAdapter.resolveWeight`). Until D068 the long 0x12 named /10
+ * whatever its flags said, and this band turned its captured ES-26M frames
+ * (978.5 kg that way) back into 97.85 kg; under 25 kg it could not.
  */
 export const WEIGHT_CERTAIN_MIN_KG = 5;
 export const WEIGHT_CERTAIN_MAX_KG = 250;
@@ -309,10 +341,15 @@ export const WEIGHT_CERTAIN_MAX_KG = 250;
 export const LAST_KNOWN_WEIGHT_TOLERANCE = 0.15;
 
 /**
- * Max age (seconds) of a 0x23 stored record relative to session start before it
- * is treated as stale history and ignored. Mirrors openScale QNHandler's
- * MAX_STORED_RECORD_AGE_BEFORE_SESSION_SECONDS. Prevents importing an old
- * weigh-in saved days before the current connection (#213 / #75).
+ * Max age (seconds) of a 0x23 stored record relative to session start for it to
+ * count as the weigh-in of this session. Mirrors openScale QNHandler's
+ * MAX_STORED_RECORD_AGE_BEFORE_SESSION_SECONDS, which needs it because openScale
+ * dates such a record by its receipt (#213 / #75). An older record is not read,
+ * except on the 18-byte dialect with `ble.qn_user_key`, where it is the scale's
+ * memory and goes out as history with its own time (#463, D065). While an
+ * 18-byte weigh-in waits for the scale's stored ones (STORED_ANSWER_HOLD_MS),
+ * a record from the last 90 s is not taken for this session's weigh-in: that
+ * one is the weigh-in being held.
  */
 export const MAX_STORED_RECORD_AGE_SEC = 90;
 
@@ -481,7 +518,7 @@ export const RESULT_MAX_WEIGHT_KG = 300;
  *   [3]     status: 0x00 measuring, 0x01 stable, 0x02 result block
  *   [4]     part: high nibble the part count, low nibble the index (0x11 = 1/1)
  *   [5..6]  weight, BE u16 /100 kg, first part only. /100 whatever
- *           weightScaleFactor says: the long 0x12 sets that to 10
+ *           weightScaleFactor says
  *   [7..18] zero while measuring
  *   [19]    sum of the preceding bytes
  *
@@ -526,6 +563,18 @@ export const LIVE20_STATUS_RESULT = 0x02;
 export const RESULT16_FRAME_LEN = 16;
 export const RESULT16_OPCODE_COMPOSITION = 0x15;
 export const RESULT16_OPCODE_DONE = 0x16;
+
+/**
+ * The end-of-measurement frame, `1f 05 <protocol type> <code> <sum>`, per the
+ * vendor's published SDK. For an 8-electrode scale the SDK sends it with code
+ * 0x10 as soon as the 0x16 of a complete result block (three parts, 0x15,
+ * 0x16) arrives, for every user slot and for an all-zero block too, and with
+ * code 0xff for a block it could not complete; it sends nothing for stored
+ * records. This adapter sends the 0x10 form only with `ble.qn_result_ack`
+ * (#331).
+ */
+export const RESULT_ACK_OPCODE = 0x1f;
+export const RESULT_ACK_MEASURED = 0x10;
 
 /**
  * The ten 8-electrode impedance channels, in the order the vendor's published
@@ -627,6 +676,20 @@ export const LIVE_REPLAY_WINDOW_MS = 10 * 60_000;
 export const RECENT_LIVE_RESULTS = 4;
 
 /**
+ * How long after the scale accepted the profile (and after our 0x22) its first
+ * answer to the 0x22 must come for a 19-byte weigh-in to count as measured in
+ * this session (#331).
+ *
+ * The scale answers the 0x22 once it has finished measuring: 0.9 s after
+ * accepting the profile with a result it had before the link came up, and 5.7
+ * to 18.1 s after it in five sessions where it measured with the link up. Its
+ * BIA runs about 13 s from the stable frame and it sends no 0x10 during it, so
+ * for a weight that settled before the scale accepted the profile this answer
+ * is the only sign that it finished measuring after.
+ */
+export const MEASURED_ANSWER_MIN_MS = 3_000;
+
+/**
  * How long the link is held after the 19-byte dialect's stable weight for its
  * 0x16 (#331, D037).
  *
@@ -640,3 +703,20 @@ export const RECENT_LIVE_RESULTS = 4;
  * after at most 40 s.
  */
 export const NINETEEN_BYTE_RESULT_HOLD_MS = 20_000;
+
+/**
+ * How long an 18-byte live weigh-in that comes before the scale's answer to
+ * our 0x22 is held for that answer, with `ble.qn_user_key` (#463, D065).
+ *
+ * The 0x22 goes out when the scale accepts the profile, as the vendor's
+ * published SDK sends it, but in two logs the first live frame after the
+ * acceptance was already the final one, 49 ms later, and the answer takes
+ * longer: the same unit answered our 0x22 in 0.30 to 0.35 s (13 times), the
+ * vendor app's in 0.39 s, and ours in 0.99 and 1.18 s while weighing. The 12
+ * answers we could see in full each came as a 0x23, 0x24 and 0x25 within
+ * 0.35 s. Three seconds is two and a half times the slowest and leaves room
+ * for a proxy round trip. Once the answer has begun, a batch with records
+ * still to come extends it by the HOLD_EXTENSION_* steps
+ * (isCompositionPending), so the weigh-in waits at most 23 s.
+ */
+export const STORED_ANSWER_HOLD_MS = 3_000;

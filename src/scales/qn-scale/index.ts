@@ -3,6 +3,7 @@ import {
   buildPayload,
   compositionRejection,
   isPlausibleImpedance,
+  r2,
   ReadingComposition,
   type ScaleBodyComp,
 } from '../body-comp-helpers.js';
@@ -40,8 +41,10 @@ import {
   CHR_WRITE,
   CHR_WRITE_T1,
   EIGHT_CHANNEL_ORDER,
+  ES30M_MIN_FRAME_LEN,
   EXTENDED_INFO_FRAME_LEN,
   IMPEDANCE_GRACE_MS,
+  INFO_DIVISOR_BIT,
   LAST_KNOWN_WEIGHT_TOLERANCE,
   LEGACY_PROTO_TYPE,
   LIVE20_FRAME_LEN,
@@ -55,6 +58,7 @@ import {
   MAX_AE00_RESPONSES,
   MAX_STORED_QUERY_ATTEMPTS,
   MAX_STORED_RECORD_AGE_SEC,
+  MEASURED_ANSWER_MIN_MS,
   NINETEEN_BYTE_RESULT_HOLD_MS,
   NO_CONTACT_RESISTANCE,
   POST_START_ANCHOR_DELAY_MS,
@@ -69,6 +73,7 @@ import {
   RESULT_OPCODE_B4,
   RESULT_RECORD_CLOCK_TOLERANCE_SEC,
   SCALE_EPOCH_OFFSET,
+  STORED_ANSWER_HOLD_MS,
   STORED_FUTURE_TOLERANCE_MS,
   STORED_MAX_AGE_MS,
   STORED_OPCODE_COMPOSITION,
@@ -88,6 +93,7 @@ import {
   buildA2Frame,
   buildConfig,
   buildMeasurementTrigger,
+  buildResultAck,
   buildTimeSync,
   buildUserProfileFrame,
   decodeEightResult,
@@ -98,6 +104,7 @@ import {
   hasValidSumChecksum,
   timeZoneByte,
   type EightResult,
+  type StoredRecord,
   type VaComposition,
 } from './frames.js';
 import { qnAdvertTraits, qnMatches, warnOnOneByoneShape } from './matching.js';
@@ -127,12 +134,21 @@ interface ScaleCompositionPin {
   /** Bit 0 of the ready frame's [3]: 1 when muscle and bone are percentages. */
   valueType: number | null;
   measuredAfterVisit: boolean;
+  /**
+   * Milliseconds from the scale accepting the profile to its first answer to
+   * the 0x22; null without an accepted profile or without an answer.
+   */
+  answerAfterVisitMs: number | null;
   a4PreludeSent: boolean;
 }
 
 /** Format bytes as hex string for debug logging. */
 const hex = (data: number[] | Buffer): string =>
   [...data].map((b) => b.toString(16).padStart(2, '0')).join(' ');
+
+/** Milliseconds as seconds with one decimal for the log, or "unknown". */
+const seconds = (ms: number | null): string =>
+  ms === null ? 'unknown' : `${(ms / 1000).toFixed(1)} s`;
 
 export class QnScaleAdapter
   implements ScaleAdapterCore, GattWiring, BroadcastSource, MultiCharNotify, HoldForComposition
@@ -162,8 +178,8 @@ export class QnScaleAdapter
   readonly normalizesWeight = true;
 
   /**
-   * Weight divisor: 100 (Type 1 default) or 10 (Type 2).
-   * Updated dynamically when a 0x12 scale-info frame arrives.
+   * Weight divisor, 100 or 10, named by bit 0 of the 0x12 flags byte [10]
+   * (INFO_DIVISOR_BIT, D068); 100 until a 0x12 arrives.
    */
   private weightScaleFactor = 100;
 
@@ -365,21 +381,56 @@ export class QnScaleAdapter
   private measuredAfterVisit = false;
   private a4PreludeSent = false;
 
+  /**
+   * The scale answers this session's 0x22 only once it has finished measuring
+   * (#331), so when that answer comes says whether it measured after the link
+   * came up, even for a weight that settled before the scale accepted the
+   * profile and was followed by no live frame. `visitAcceptedAtMs`: when the
+   * scale accepted the profile; `storedQuerySentAtMs`: when our 0x22 went out;
+   * `queryAnswered`: the first answer (a 0x23, or the result block) has come;
+   * `answerAfterVisitMs`: how long after the acceptance it came.
+   */
+  private visitAcceptedAtMs: number | null = null;
+  private storedQuerySentAtMs: number | null = null;
+  private queryAnswered = false;
+  private answerAfterVisitMs: number | null = null;
+
+  /**
+   * The 18-byte weigh-in that came before the scale's answer to our 0x22,
+   * held for that answer with `ble.qn_user_key` (#463, D065), and how far the
+   * answer has got: `storedAnswerLast`, its last record (a 0x23 with [4] at
+   * [3]) has come; `storedAnswerDone`, it is over, on a 0x23 that says the
+   * scale holds no stored weigh-ins or on the 0x25 after the last record,
+   * where the vendor's SDK completes a record. `storedAnswerTimer` says so in
+   * the log when the hold runs out first, and onSessionEnd when the session
+   * ends later with the weigh-in still held; `storedAnswerReasonLogged` keeps
+   * it to one line.
+   */
+  private heldForStoredAnswer: ScaleReading | null = null;
+  private storedAnswerLast = false;
+  private storedAnswerDone = false;
+  private storedAnswerTimer: ReturnType<typeof setTimeout> | null = null;
+  private storedAnswerReasonLogged = false;
+
   /** The scale's own results, by the reading they belong to (#331). */
   private readonly scaleComposition = new ReadingComposition<ScaleCompositionPin | null>();
 
   /**
-   * Readings that stand in for a weigh-in the scale has not finished yet. Keyed
-   * by the reading, like ReadingComposition, so isFinal answers for the object
-   * it is handed rather than for whichever frame was parsed last. Never reset:
-   * a reading from an earlier session is never handed back.
+   * Readings that stand in for a weigh-in the scale has not finished yet, or
+   * (18-byte, heldForStoredAnswer) one that waits for the scale's stored
+   * weigh-ins. Keyed by the reading, like ReadingComposition, so isFinal
+   * answers for the object it is handed rather than for whichever frame was
+   * parsed last. Never reset: a reading from an earlier session is never
+   * handed back.
    */
   private readonly provisionalReadings = new WeakSet<ScaleReading>();
 
   /**
-   * A 0x10 first part with status measuring or stable arrived this session, so
-   * the scale measured while we were connected. A result block without one is
-   * a weigh-in the scale finished before the link came up (#331).
+   * A 0x10 first part with status measuring or stable arrived this session, or
+   * the scale's first answer to our 0x22 came MEASURED_ANSWER_MIN_MS or more
+   * after it, so the scale measured while we were connected. A result block
+   * without either is a weigh-in the scale finished before the link came up
+   * (#331).
    */
   private live20Measured = false;
 
@@ -395,6 +446,13 @@ export class QnScaleAdapter
   private storedParts: Buffer[] = [];
   private storedHoldArmed = false;
   private readonly storedEmitted = new Set<number>();
+
+  /**
+   * The 18-byte dialect's stored records judged this session, by their
+   * scale-epoch seconds, so a record the re-query brings back gets no second
+   * line (#463).
+   */
+  private readonly storedJudged = new Set<number>();
 
   /**
    * The fresh stored weigh-in the session holds right now ("W kg at T"), so the
@@ -422,16 +480,20 @@ export class QnScaleAdapter
   /**
    * Hold the link from the 19-byte dialect's stable weight until its 0x16
    * (D037), and on a fresh stored weigh-in, so a live result in the same
-   * session replaces it. Undefined otherwise and on every other dialect, so
-   * nothing else this adapter returns is held.
+   * session replaces it. On the 18-byte dialect, hold a weigh-in that came
+   * before the scale's answer to our 0x22 for that answer
+   * (heldForStoredAnswer, #463). Undefined otherwise, so nothing else this
+   * adapter returns is held.
    */
   get completionHoldMs(): number | undefined {
-    return this.live20Weight !== null || this.storedHoldArmed
-      ? NINETEEN_BYTE_RESULT_HOLD_MS
-      : undefined;
+    if (this.live20Weight !== null || this.storedHoldArmed) return NINETEEN_BYTE_RESULT_HOLD_MS;
+    return this.heldForStoredAnswer !== null ? STORED_ANSWER_HOLD_MS : undefined;
   }
 
-  /** Only the 19-byte stable weight and fresh stored weigh-ins are provisional. */
+  /**
+   * Only the 19-byte stable weight, fresh 19-byte stored weigh-ins and the
+   * 18-byte weigh-in held for the stored ones are provisional.
+   */
   isFinal(reading: ScaleReading): boolean {
     return !this.provisionalReadings.has(reading);
   }
@@ -440,10 +502,13 @@ export class QnScaleAdapter
    * True from the 19-byte stable weight until 0x16. HoldTimer asks only when a
    * window ends, so this has to cover the scale's whole BIA, not just the
    * result block: a BIA that outlasts the window then gets the extension steps
-   * instead of a cut link and a reconnect that sends START into it.
+   * instead of a cut link and a reconnect that sends START into it. On the
+   * 18-byte dialect, true while a weigh-in is held for the stored ones and the
+   * scale has begun its answer but not sent the last record of it (#463).
    */
   isCompositionPending(): boolean {
-    return this.live20Weight !== null && !this.live20ResultSeen;
+    if (this.live20Weight !== null && !this.live20ResultSeen) return true;
+    return this.heldForStoredAnswer !== null && this.queryAnswered && !this.storedAnswerLast;
   }
 
   /**
@@ -485,6 +550,13 @@ export class QnScaleAdapter
   /** Send the 9-byte 0x20 time sync (`ble.qn_time_sync_long`, #331). */
   private timeSyncLong = false;
 
+  /**
+   * Send the end-of-measurement 0x1F after the 0x16 of a complete 19-byte
+   * result block, as the vendor's published SDK does (`ble.qn_result_ack`,
+   * #331). Off by default: what it changes on the scale is not known yet.
+   */
+  private forcedResultAck = false;
+
   /** Number of 0x22 stored-data re-queries sent this session. */
   private storedQueryAttempts = 0;
 
@@ -519,6 +591,7 @@ export class QnScaleAdapter
     this.a4PreludeEnabled = opts.qnA4Prelude === true;
     this.timeSyncLong = opts.qnTimeSyncLong === true;
     this.configLong = opts.qnConfigLong === true;
+    this.forcedResultAck = opts.qnResultAck === true;
     this.userWeights = opts.userWeights ?? [];
   }
 
@@ -628,12 +701,22 @@ export class QnScaleAdapter
     this.readyValueType = null;
     this.measuredAfterVisit = false;
     this.a4PreludeSent = false;
+    this.visitAcceptedAtMs = null;
+    this.storedQuerySentAtMs = null;
+    this.queryAnswered = false;
+    this.answerAfterVisitMs = null;
+    this.heldForStoredAnswer = null;
+    this.storedAnswerLast = false;
+    this.storedAnswerDone = false;
+    this.storedAnswerReasonLogged = false;
+    this.clearStoredAnswerTimer();
     this.live20Measured = false;
     this.live20Replayed = false;
     this.storedParts = [];
     this.storedHoldArmed = false;
     this.heldStoredWeighIn = null;
     this.storedEmitted.clear();
+    this.storedJudged.clear();
     this.storedMarkAtSessionStart = this.storedMark;
     this.configSent = false;
     this.timeSyncSent = false;
@@ -931,14 +1014,32 @@ export class QnScaleAdapter
    *                        (no A2 on the 19-byte dialect with ble.qn_weight_ack,
    *                        nor on the 18- and 19-byte ones with ble.qn_user_key)
    *   0x21 (config req)  -> A00D profile frame + 0x22 start
+   *   0xA1 (accepted)    -> 0x22 at once, on the 18-byte dialect with
+   *                        ble.qn_user_key (#463)
    *   0x10 (weight)      -> parse weight (original or ES-30M format)
    *                        (19-byte dialect: 20-byte stream, weight held until
-   *                        its 0x16, nothing written back, D037)
+   *                        its 0x16, nothing written back, D037; with
+   *                        ble.qn_result_ack a 0x1F after the 0x16, D059;
+   *                        18-byte dialect with ble.qn_user_key: a weigh-in
+   *                        before the answer to the 0x22 held for it, #463)
    *
    * State machine writes are fire-and-forget (async, not awaited) so they
    * don't block the synchronous parseNotification return.
+   *
+   * A frame that ends the scale's answer while a weigh-in is held for it
+   * hands over a copy of that weigh-in, which is final, so the session ends on
+   * it (heldForStoredAnswer, #463).
    */
   parseNotification(data: Buffer): ScaleReading | null {
+    const reading = this.parseFrame(data);
+    if (reading === null && this.heldForStoredAnswer !== null && this.storedAnswerDone) {
+      return this.releaseHeldWeighIn('the scale has answered the stored-record query');
+    }
+    return reading;
+  }
+
+  /** One notification through the state machine above. */
+  private parseFrame(data: Buffer): ScaleReading | null {
     if (data.length < 3) return null;
 
     bleLog.debug(`QN RAW (${data.length}B): [${hex(data)}]`);
@@ -947,10 +1048,9 @@ export class QnScaleAdapter
 
     // 0x12: scale info, update weight scale factor and capture protocol type
     if (opcode === 0x12 && data.length > 10) {
-      // Renpho ES-26M (and similar newer firmware) sends an 18-byte 0x12
-      // frame where byte[1] == packet length and bytes [2-7] contain the
-      // MAC address. The classic QN format has ~11 bytes with protocol
-      // type at [2] and weight scale flag at [10].
+      // Every real 0x12 carries its own length at [1] and the MAC at [3..8],
+      // the classic ones too (15 bytes on an ES-CS20M, 17 on the maintainer's
+      // unit and #283); 18 bytes and up are the long frame.
       if (data.length >= 18 && data[1] === data.length) {
         // Long frame. Every captured one carries 0xff at byte[2] whatever its
         // length, and the disagreement is over what the firmware ACCEPTS BACK:
@@ -980,7 +1080,6 @@ export class QnScaleAdapter
         }
         const byLength = data.length >= PROTO_ECHO_MIN_INFO_FRAME_LEN ? data[2] : LEGACY_PROTO_TYPE;
         this.seenProtocolType = this.forcedProtocolType ?? byLength;
-        this.weightScaleFactor = 10;
       } else {
         // Classic short frame
         this.isLongFrameVariant = false;
@@ -988,8 +1087,12 @@ export class QnScaleAdapter
         this.isNineteenByteInfo = false;
         this.isEighteenByteInfo = false;
         this.seenProtocolType = this.forcedProtocolType ?? data[2];
-        this.weightScaleFactor = data[10] === 1 ? 100 : 10;
       }
+      // Bit 0 on every dialect, as the vendor's published SDK reads it.
+      // openScale's whole-byte `[10] === 1` read the 17-byte classic frames
+      // ([10] 0x03) as /10, and the long frame was set to /10 whatever its
+      // flags said, only to reach the ES-30M layout (D068).
+      this.weightScaleFactor = (data[10] & INFO_DIVISOR_BIT) !== 0 ? 100 : 10;
       this.scaleFactorKnown = true;
       const dialect = this.isExtendedLongFrame
         ? 'extended'
@@ -1041,10 +1144,33 @@ export class QnScaleAdapter
         hasValidSumChecksum(data)
       ) {
         this.visitReply = { slot: data[3], ok: data[4] === 0x01 };
+        if (this.visitReply.ok && this.visitAcceptedAtMs === null) {
+          this.visitAcceptedAtMs = Date.now();
+        }
         bleLog.debug(
           `QN: the scale ${this.visitReply.ok ? 'accepted' : 'did not accept'} the profile ` +
             `for user slot ${data[3]} (#331)`,
         );
+        // The vendor's published SDK asks for the stored weigh-ins as soon as
+        // the scale accepts the profile, and the Feelfit capture shows it. The
+        // handshake's own 0x22 comes about 125 ms later, and in two logs the
+        // final live frame came first (#463). Only for the profile built from
+        // the first user with the key, as the export of a stored weigh-in
+        // needs it; the handshake then skips its 0x22.
+        if (
+          this.visitReply.ok &&
+          this.isEighteenByteInfo &&
+          this.forcedUserKey !== null &&
+          this.visitSent !== null &&
+          this.storedQuerySentAtMs === null
+        ) {
+          bleLog.debug(
+            'QN: the scale accepted the profile, asking it for its stored weigh-ins now, as ' +
+              'the vendor app does (#463)',
+          );
+          this.storedQuerySentAtMs = Date.now();
+          void this.writeCmd(this.buildStoredDataQuery());
+        }
         // Only a frame sent with the option gets this: an install without it
         // sees the same log as before (#463). Info, not a warning, because the
         // weigh-in can still arrive, from the scale's memory.
@@ -1070,50 +1196,114 @@ export class QnScaleAdapter
     }
 
     // 0x23: stored measurement record returned after the 0x22 history query.
-    // V10 Renpho / ES-CS20M firmware delivers the weigh-in here, not reliably
-    // via live 0x10 frames (#213 / #75). Layout in decodeStoredRecord: R50 and
-    // R500 big-endian at [12..13] and [14..15], as the vendor SDK reads them
-    // (#461), not openScale's little-endian [13..14] and [15..16].
+    // V10 Renpho / 18-byte ES-CS20M firmware delivers the weigh-in here, not
+    // reliably via live 0x10 frames (#213 / #75). Layout in decodeStoredRecord:
+    // R50 and R500 big-endian at [12..13] and [14..15], as the vendor SDK reads
+    // them (#461), not openScale's little-endian [13..14] and [15..16].
     //
-    // A session that positively identified a classic scale (a short 0x12)
-    // keeps the old offsets. Classic firmware has a different 0x23 layout
-    // altogether, the record time included, so its records fail the freshness
-    // check below as stale; changing how they are read is a separate change
-    // with its own evidence. A session without any 0x12 reads the long layout,
-    // which is what every real record we have uses.
+    // A session that positively identified a classic scale (a 15- or 17-byte
+    // 0x12) reads no 0x23 at all. Classic firmware lays the record out one
+    // byte earlier, as the vendor's published SDK reads it (#283's record is
+    // the live weight of its session that way, 61.70 kg), and nothing here
+    // decodes that layout. Read through the long layout, a classic weight of
+    // 130.56 kg or more put the record's time in the future, past the
+    // freshness check, and it went out with the wrong weight. Every classic
+    // weigh-in in our logs came live. A session without any 0x12 reads the
+    // long layout, which is what every real record we have uses (D068).
+    //
+    // A record from up to MAX_STORED_RECORD_AGE_SEC before the session, and not
+    // stamped more than STORED_FUTURE_TOLERANCE_MS after its receipt, is this
+    // session's weigh-in and ends it, without a time. An
+    // older one is the scale's memory: on the 18-byte dialect it can go out as
+    // history (eighteenByteStoredWeighIn, #463), elsewhere it is logged and not
+    // read.
     if (opcode === 0x23) {
       // The 19-byte dialect sends 8-electrode records in their own layout and
       // never gets a re-query: the scale answers our one 0x22 once it is done
       // measuring, and a second 0x22 is the same request again (#331).
       if (this.isNineteenByteInfo) return this.parseEightStoredPart(data);
+      // The 18-byte scale answers our 0x22 while it is still measuring (#463),
+      // so the answer is logged here as on the 19-byte dialect; the line it
+      // sets off on the live path below needs it. [3] is how many records the
+      // answer has and [4] which one this is: the vendor's SDK has the answer
+      // complete at [4] = [3], and "no stored weigh-ins" is [3] = [4] = 0.
+      // The last record still has its 0x24 and 0x25 to come (#463).
+      if (this.isEighteenByteInfo) {
+        this.noteStoredQueryAnswer();
+        if (data.length < 5 || data[3] === 0) this.storedAnswerDone = true;
+        else if (data[4] >= data[3]) this.storedAnswerLast = true;
+      }
+      if (this.scaleFactorKnown && !this.isLongFrameVariant) {
+        bleLog.debug(
+          `QN: 0x23 on the classic dialect is not decoded (#461 S3), not read: [${hex(data)}] (#463)`,
+        );
+        // The re-query stays, as for every 0x23 not read.
+        this.scheduleStoredDataRetry();
+        return null;
+      }
       const record = data.length < 17 ? null : decodeStoredRecord(data);
       if (!record) {
+        bleLog.debug(
+          `QN: 0x23 too short for a stored record (${data.length} bytes): [${hex(data)}] (#463)`,
+        );
         this.scheduleStoredDataRetry();
         return null;
       }
       const { weight, recordSeconds } = record;
-      if (weight <= 5 || weight >= 300) {
-        this.scheduleStoredDataRetry();
-        return null;
-      }
       const sessionSeconds =
         this.sessionStartedScaleSeconds ?? Math.floor(Date.now() / 1000) - SCALE_EPOCH_OFFSET;
-      if (recordSeconds + MAX_STORED_RECORD_AGE_SEC < sessionSeconds) {
+      if (weight <= 5 || weight >= 300) {
+        this.logUnreadStoredRecord(data, record, sessionSeconds, 'out of range');
         this.scheduleStoredDataRetry();
         return null;
       }
-      const classic = this.scaleFactorKnown && !this.isLongFrameVariant;
-      const r1 = classic ? data.readUInt16LE(13) : record.r50;
-      const r2 = classic ? data.readUInt16LE(15) : record.r500;
+      // A record stamped after it arrived was not measured in this session: the
+      // scale's clock is ahead (a vendor app that set it with a UTC+8 base,
+      // R-6), and taking it as this session's weigh-in would end the session
+      // on an old weight without a time, before the real one. The 19-byte
+      // dialect drops the same (parseEightStoredPart). The re-query stays. In a
+      // session without a 0x12 too: two classic scales in the reports lose
+      // theirs (#283, #336), and a classic record read through the long layout
+      // can land in the future (D068).
+      const recordAtMs = (recordSeconds + SCALE_EPOCH_OFFSET) * 1000;
+      const aheadMs = recordAtMs - Date.now();
+      if (aheadMs > STORED_FUTURE_TOLERANCE_MS) {
+        const at = new Date(recordAtMs).toISOString();
+        const ahead = Math.round(aheadMs / 1000);
+        bleLog.debug(
+          this.scaleFactorKnown
+            ? `QN: stored weigh-in ${weight} kg at ${at}, user slot ${data[5]}, is stamped ` +
+                `${ahead} s ahead of this host's clock, so it is not the weigh-in of this ` +
+                'session, not read (#463)'
+            : `QN: 0x23 in a session without a scale-info frame, not read: [${hex(data)}]; ` +
+                `read as the VA layout it is ${weight} kg at ${at}, ${ahead} s ahead of this ` +
+                "host's clock (#463)",
+        );
+        this.scheduleStoredDataRetry();
+        return null;
+      }
+      if (recordSeconds + MAX_STORED_RECORD_AGE_SEC < sessionSeconds) {
+        // The re-query stays: V10 firmware may save the fresh weigh-in only a
+        // moment after handing over an old one (#213 / #75).
+        this.scheduleStoredDataRetry();
+        if (this.isEighteenByteInfo) return this.eighteenByteStoredWeighIn(data, record);
+        this.logUnreadStoredRecord(data, record, sessionSeconds, 'old');
+        return null;
+      }
+      // This session's weigh-in is the one held; see recentStoredDuringHold.
+      if (this.heldForStoredAnswer !== null) return this.recentStoredDuringHold(data, record);
+      const r1 = record.r50;
+      const r2 = record.r500;
       if (this.storedRetryTimer) {
         clearTimeout(this.storedRetryTimer);
         this.storedRetryTimer = null;
       }
-      bleLog.debug(
-        `QN: stored 0x23 reading ${weight}kg, R50 ${r1} / R500 ${r2}` +
-          (classic ? ' (classic offsets)' : ''),
-      );
-      return { weight, impedance: this.resistance(r1 > 0 ? r1 : r2) };
+      bleLog.debug(`QN: stored 0x23 reading ${weight}kg, R50 ${r1} / R500 ${r2}`);
+      const fresh: ScaleReading = { weight, impedance: this.resistance(r1 > 0 ? r1 : r2) };
+      // This session's weigh-in, so a later session that is handed the same
+      // record as history knows it went out already (#463).
+      if (this.isEighteenByteInfo && this.isComplete(fresh)) this.rememberLiveResult(weight);
+      return fresh;
     }
 
     // Extended-dialect completed-weigh-in result frames (#235). Gated to the
@@ -1161,6 +1351,12 @@ export class QnScaleAdapter
     // parseCharNotification now intercepts the challenge, but any other AE02
     // frame still falls through to here, so log it and the next reporter log
     // carries the evidence.
+    //
+    // The 18-byte 0x25 is not read either, but the one after the answer's last
+    // record ends the answer (storedAnswerDone, #463).
+    if (this.isEighteenByteInfo && opcode === STORED_OPCODE_DONE && this.storedAnswerLast) {
+      this.storedAnswerDone = true;
+    }
     if (opcode !== 0x10 || data.length < 10) {
       bleLog.debug(
         `QN: ignoring frame opcode=0x${opcode.toString(16).padStart(2, '0')} ` +
@@ -1174,11 +1370,19 @@ export class QnScaleAdapter
     let r1: number;
     let r2: number;
 
-    // ES-30M format: byte[4] is a state flag (0x00/0x01/0x02) instead of weight LSB.
-    // Detected when weightScaleFactor=10, byte[4] <= 0x02, and frame has enough bytes.
-    // In the original format, byte[4] is the low byte of the 16-bit weight, which is
-    // almost always > 0x02 for adult weights (> 25.5 kg raw value with factor 10).
-    const isEs30m = data.length >= 11 && data[4] <= 0x02 && this.weightScaleFactor === 10;
+    // ES-30M (VA) format: byte[4] is a state flag (0x00/0x01/0x02) instead of
+    // the weight's low byte. The layout is picked by the frame's shape, 14
+    // bytes or more with its own length at [1], and never after a classic
+    // 0x12. It used to be keyed on the divisor 10, so a classic frame whose
+    // weight had a low byte of 0x00 to 0x02 went this way (84.50 kg read as
+    // 25.7 kg), and a VA frame in a session without a 0x12 went the original
+    // way (D068).
+    const classicSession = this.scaleFactorKnown && !this.isLongFrameVariant;
+    const isEs30m =
+      !classicSession &&
+      data.length >= ES30M_MIN_FRAME_LEN &&
+      data[1] === data.length &&
+      data[4] <= 0x02;
 
     if (isEs30m) {
       // ES-30M: [4]=state (0x02=stable), [5-6]=weight, [7-8]=R1, [9-10]=R2
@@ -1189,7 +1393,8 @@ export class QnScaleAdapter
 
       if (stable && r1 === 0 && r2 === 0) {
         if (!this.isLongFrameVariant) {
-          // Classic ES-30M: always skip, impedance frame follows.
+          // A session without a 0x12 (a classic one never gets here): always
+          // skip, an impedance frame follows.
           return null;
         }
         // Long-frame variant (ES-26M): accept after grace period.
@@ -1259,10 +1464,11 @@ export class QnScaleAdapter
     // Never sent for the 20-byte layout above. Read through the original layout
     // its rawWeight is 0x0011, so the echo handed the scale `a2 06 01 00 11 ba`,
     // i.e. 0.17 kg, on every live frame; that path returns above now, and the
-    // 19-byte dialect's decode writes nothing at all, since its one complete
-    // weigh-in arrived without an echo or a 0x1F (#331). Whether the app echoes
+    // 19-byte dialect's decode echoes nothing, since its complete weigh-ins
+    // arrived without an echo; its only write is the 0x1F after the result
+    // block's 0x16 with `ble.qn_result_ack` (#331). Whether the app echoes
     // this shape at all is not known, so a 20-byte frame on the ES-30M branch is
-    // not echoed either. The 14-byte ES-30M and 10-byte classic frames keep it:
+    // not echoed either. The 14- and 15-byte ES-30M and 11-byte classic frames keep it:
     // their offsets are right. Sent before the stability gate, fire and forget,
     // like the 0x1F stable ACK below.
     if (this.weightAckEnabled() && this.ctx && !twentyByteLive) {
@@ -1280,6 +1486,18 @@ export class QnScaleAdapter
     // Reset the impedance grace timer on successful reading
     this.firstStableNoImpedanceAt = null;
 
+    const reading: ScaleReading = { weight, impedance };
+    const complete = this.isComplete(reading);
+    const held = this.heldForStoredAnswer;
+    // Another weigh-in while one is held for the stored ones: someone else
+    // stepped on. The session ends on the held one, and the new one is not
+    // acknowledged, so the scale need not count it as handed over (#463).
+    if (held !== null && complete && Math.abs(held.weight - weight) > LIVE_MATCH_WEIGHT_KG) {
+      return this.releaseHeldWeighIn(`another weigh-in (${weight} kg) came during the wait`);
+    }
+    const holds = held === null && complete && this.waitsForStoredAnswer();
+    if (holds) this.holdForStoredAnswer(reading);
+
     // Acknowledge stable reading (0x1F) so the scale knows we received it
     if (this.ctx) {
       const ackCmd = [0x1f, 0x05, this.seenProtocolType, 0x10, 0x00];
@@ -1287,7 +1505,26 @@ export class QnScaleAdapter
       void this.writeCmd(ackCmd);
     }
 
-    return { weight, impedance };
+    if (holds) return reading;
+    // The held weigh-in again: acknowledged like every stable frame, and
+    // nothing new to hand over.
+    if (held !== null && complete) return null;
+    // A stored weigh-in the scale sends after the session settled on this one
+    // is never parsed (#463). The 18-byte scale answers our 0x22 within a
+    // second, so this is rare, and without the line it would be invisible.
+    if (
+      this.isEighteenByteInfo &&
+      this.storedQuerySentAtMs !== null &&
+      !this.queryAnswered &&
+      complete
+    ) {
+      bleLog.debug(
+        'QN: the weigh-in ends the session before the scale answered the stored-record ' +
+          'query; a stored weigh-in it sends after this is not read (#463)',
+      );
+    }
+    if (this.isEighteenByteInfo && complete) this.rememberLiveResult(weight);
+    return reading;
   }
 
   /**
@@ -1300,8 +1537,9 @@ export class QnScaleAdapter
    * weight. Both readings of the raw value are then candidates:
    *
    * - one that cannot be a body (0 or below, WEIGHT_CERTAIN_MAX_KG or above) is
-   *   ruled out, and if only one is left it is the weight. This is the ES-26M
-   *   case, whose 0x12 implies /10 and whose captured frames read 978.5 kg so;
+   *   ruled out, and if only one is left it is the weight. Until D068 this was
+   *   the ES-26M case: its long 0x12 was taken as /10, and its captured frames
+   *   read 978.5 kg so;
    * - if both are left, the configured users decide: the one candidate inside
    *   some user's `weight_range` or near their `last_known_weight` wins;
    * - if both fit or neither does, the frame is dropped with a warning.
@@ -1421,8 +1659,9 @@ export class QnScaleAdapter
    * holds the link through the scale's BIA (isFinal, completionHoldMs). The
    * result block's three parts are kept for 0x16.
    *
-   * Writes nothing. The one log of a complete weigh-in got there without a
-   * 0x1F or an A2 echo, and nobody has seen what the vendor app answers here.
+   * Writes nothing: the first logs of a complete weigh-in got there without a
+   * 0x1F or an A2 echo. The vendor's published SDK answers only the block's
+   * 0x16, which `ble.qn_result_ack` copies (parseNineteenByteResultFrame).
    */
   private parseNineteenByteLiveFrame(data: Buffer): ScaleReading | null {
     if (!hasValidSumChecksum(data)) {
@@ -1479,7 +1718,22 @@ export class QnScaleAdapter
       return null;
     }
 
-    // A result block with no measurement before it in this session is a
+    // The result block is the scale's first answer to the 0x22 when no 0x23
+    // came before it, so it is timed before the check below reads the result.
+    if (status === LIVE20_STATUS_RESULT) this.noteStoredQueryAnswer();
+
+    // Collected before the repeat check below, so a repeated block still gets
+    // the `ble.qn_result_ack` answer at its 0x16, as the vendor's SDK gives it.
+    // Nothing else reads a repeated block: its 0x16 publishes nothing. A 0x15
+    // from before this first part belongs to an earlier block (a repeated one
+    // leaves the session open), so it is dropped, as the SDK drops it here.
+    if (status === LIVE20_STATUS_RESULT) {
+      this.live20Block = total === 3 ? [Buffer.from(data)] : [];
+      this.live20C15 = null;
+    }
+
+    // A result block with no measurement before it in this session (no live
+    // frame, and a first answer to the 0x22 too soon to follow one) is a
     // weigh-in the scale finished before we connected. When it repeats a
     // result already published, it is that weigh-in handed over again after a
     // reconnect, not a second one (#331).
@@ -1497,9 +1751,6 @@ export class QnScaleAdapter
         );
         return null;
       }
-    }
-    if (status === LIVE20_STATUS_RESULT) {
-      this.live20Block = total === 3 ? [Buffer.from(data)] : [];
     }
 
     // The result block's first part (status 0x02) repeats the weight. Returning
@@ -1532,6 +1783,22 @@ export class QnScaleAdapter
       return null;
     }
     this.live20ResultSeen = true;
+    // At once, before anything is decoded and before the session ends on the
+    // reading below, as the vendor's published SDK does: for a complete block
+    // on any slot, an all-zero one and a repeated one too (#331, D059).
+    if (this.forcedResultAck) {
+      if (this.live20Block.length === 3 && this.live20C15 !== null) {
+        bleLog.debug(
+          'QN: 0x16 completes the result block, sending 0x1F as the vendor app does ' +
+            '(ble.qn_result_ack, #331)',
+        );
+        void this.writeCmd(buildResultAck(this.seenProtocolType));
+      } else {
+        bleLog.debug(
+          'QN: 0x16 without a complete result block, no 0x1F sent (ble.qn_result_ack, #331)',
+        );
+      }
+    }
     if (this.live20Weight === null) {
       bleLog.debug(
         this.live20Replayed
@@ -1584,6 +1851,17 @@ export class QnScaleAdapter
         .map(([k, v]) => `${k} ${v}`)
         .join(', ')} (#331)`,
     );
+    // The line above prints muscle and bone as the scale sends them, which the
+    // display shows too; the export is in kg, so the log names both (#331).
+    if (this.readyValueType === 1) {
+      const w = reading.weight;
+      bleLog.debug(
+        'QN: the scale reports muscle and bone as % of body weight: ' +
+          `muscle ${composition.muscle} % (${r2((composition.muscle / 100) * w)} kg), ` +
+          `bone ${composition.bone} % (${r2((composition.bone * w) / 100)} kg); ` +
+          'exported in kg (#331)',
+      );
+    }
     this.scaleComposition.pin(reading, {
       result,
       composition,
@@ -1591,8 +1869,43 @@ export class QnScaleAdapter
       reply: this.visitReply,
       valueType: this.readyValueType,
       measuredAfterVisit: this.measuredAfterVisit,
+      answerAfterVisitMs: this.answerAfterVisitMs,
       a4PreludeSent: this.a4PreludeSent,
     });
+  }
+
+  /**
+   * The scale's first answer to this session's 0x22: a 0x23, or the result
+   * block when no 0x23 came first (#331). The 19-byte scale sends it once it
+   * has finished measuring, so an answer MEASURED_ANSWER_MIN_MS or more after the
+   * 0x22 means it measured during this session, and one that long after it
+   * accepted the profile means it finished measuring after accepting it, even
+   * when its weight settled before and no live frame followed.
+   *
+   * The 18-byte scale answers while it is still measuring (#463), so there
+   * the flags this sets mean nothing; only the 19-byte paths read them. It is
+   * called there for the log line and for `queryAnswered`.
+   */
+  private noteStoredQueryAnswer(): void {
+    if (this.queryAnswered) return;
+    this.queryAnswered = true;
+    const now = Date.now();
+    const sinceQuery = this.storedQuerySentAtMs === null ? null : now - this.storedQuerySentAtMs;
+    const sinceVisit = this.visitAcceptedAtMs === null ? null : now - this.visitAcceptedAtMs;
+    this.answerAfterVisitMs = sinceVisit;
+    if (sinceQuery !== null && sinceQuery >= MEASURED_ANSWER_MIN_MS) this.live20Measured = true;
+    if (
+      this.visitReply?.ok === true &&
+      sinceVisit !== null &&
+      sinceVisit >= MEASURED_ANSWER_MIN_MS
+    ) {
+      this.measuredAfterVisit = true;
+    }
+    bleLog.debug(
+      `QN: the scale answered the stored-record query ${seconds(sinceQuery)} after it was sent` +
+        (sinceVisit === null ? '' : `, ${seconds(sinceVisit)} after it accepted the profile`) +
+        ' (#331)',
+    );
   }
 
   /**
@@ -1602,19 +1915,28 @@ export class QnScaleAdapter
    * The scale computes it for the profile in the visit frame we sent (age,
    * height in mm, sex; its BMI in 0x15 fits the height we sent, not the app's),
    * and for nothing else we can check. So it is used only when the scale
-   * accepted that profile and measured after accepting it, the weigh-in is on
-   * that slot, the matched user has exactly that profile, and the scale's BMI
-   * fits the height to within its 0.1 rounding: one centimetre already moves
-   * it by more than that. A session that sent the `qn_a4_prelude` frames
-   * overwrote the slot's stored segment values with someone else's, which the
-   * scale corrects its channels with, so it is never used there.
+   * accepted that profile and measured after accepting it (a live frame after
+   * the acceptance, or its first answer to the 0x22 at least
+   * MEASURED_ANSWER_MIN_MS after it: the scale sends nothing during its BIA,
+   * so a weight that settled just before the acceptance has only that answer
+   * to show for it), the weigh-in is on that slot, the matched user has
+   * exactly that profile, and the scale's BMI fits the height to within its
+   * 0.1 rounding: one centimetre already moves it by more than that. A
+   * session that sent the `qn_a4_prelude` frames overwrote the slot's stored
+   * segment values with someone else's, which the scale corrects its channels
+   * with, so it is never used there.
    */
   private scaleCompositionRejection(pin: ScaleCompositionPin, profile: UserProfile): string | null {
     const { visit, reply, result, composition } = pin;
     if (!visit) return 'this session sent the scale no profile of a configured user';
     if (!reply) return 'the scale did not answer the profile frame';
     if (!reply.ok || reply.slot !== visit.slot) return 'the scale did not accept the profile';
-    if (!pin.measuredAfterVisit) return 'the scale measured before it accepted the profile';
+    if (!pin.measuredAfterVisit) {
+      return pin.answerAfterVisitMs === null
+        ? 'the scale sent no live weight after it accepted the profile'
+        : `the scale answered ${seconds(pin.answerAfterVisitMs)} after it accepted the ` +
+            'profile, with no live weight in between, so it most likely measured before that';
+    }
     if (pin.a4PreludeSent) {
       return "ble.qn_a4_prelude overwrote the scale's segment values in this session";
     }
@@ -1641,6 +1963,8 @@ export class QnScaleAdapter
       bleLog.debug(`QN: 0x23 that is not a stored-record part dropped: [${hex(data)}] (#331)`);
       return null;
     }
+    // "No stored weigh-ins" is an answer to the 0x22 as much as a record is.
+    this.noteStoredQueryAnswer();
     if (data[4] === 0) {
       bleLog.debug('QN: 0x23 with no parts: the scale holds no stored weigh-ins (#331)');
       return null;
@@ -1768,6 +2092,281 @@ export class QnScaleAdapter
         ' (#331)',
     );
     return reading;
+  }
+
+  /**
+   * An 18-byte 0x23 record from more than MAX_STORED_RECORD_AGE_SEC before the
+   * session (#463, D065): a weigh-in the scale kept while nobody fetched it.
+   * The window used to drop it without a line, and in #463 the scale did not
+   * send it again, not even to the vendor app, so the weigh-in was lost.
+   *
+   * Reported as history with its own time (`fromMemory`), but only for user
+   * slot 1, with `ble.qn_user_key`, in a session in which the scale accepted
+   * the profile built from the first user with that key (not openScale's
+   * fallback one): only then is slot 1 the first configured user,
+   * as the option documents. Otherwise it gets an info line with its weight
+   * and time, so it can be entered by hand, and the line names the first
+   * reason in that order: a record the scale gave no user would not go out
+   * with the option either, so it does not point at the option.
+   *
+   * Each record once per session, and never again once reported: the mark
+   * (dedupMark, kept across restarts) and the live results this adapter
+   * reported (a record that is a weigh-in already exported live) see to that.
+   */
+  private eighteenByteStoredWeighIn(data: Buffer, record: StoredRecord): ScaleReading | null {
+    const { weight, recordSeconds } = record;
+    if (this.storedJudged.has(recordSeconds)) return null;
+    this.storedJudged.add(recordSeconds);
+    const atMs = (recordSeconds + SCALE_EPOCH_OFFSET) * 1000;
+    const what = `${weight} kg at ${new Date(atMs).toISOString()}`;
+    const slot = data[5];
+    if (slot === STORED_UNASSIGNED_SLOT) {
+      bleLog.info(
+        `QN: a stored weigh-in (${what}) is not exported: the scale did not assign it to ` +
+          'a user (#463)',
+      );
+      return null;
+    }
+    if (slot !== 1) {
+      bleLog.info(
+        `QN: a stored weigh-in (${what}) is not exported: the scale assigned it to its user ` +
+          `slot ${slot}, and ble-scale-sync sends the profile of slot 1 (#463)`,
+      );
+      return null;
+    }
+    if (this.forcedUserKey === null) {
+      bleLog.info(
+        `QN: a stored weigh-in (${what}, user slot ${slot}) is not exported: without ` +
+          'ble.qn_user_key ble-scale-sync cannot tell whose it is (#463)',
+      );
+      return null;
+    }
+    // A refused profile means the key or the first user does not match what
+    // the vendor app set up, so slot 1 need not be the first configured user.
+    // The profile frame always goes to slot 1, so the answer is for slot 1.
+    // It has to be the frame built from the first user with the key, too: a
+    // 0x12 that came after the handshake leaves the session on openScale's
+    // constant profile (key 8), which a scale may accept for a slot 1 that
+    // holds someone else (Renpho #213/#253).
+    if (this.visitSent === null && this.visitReply?.ok === true) {
+      bleLog.info(
+        `QN: a stored weigh-in (${what}) is not exported: this session sent openScale's ` +
+          'profile, not the first user with ble.qn_user_key (the 18-byte 0x12 came after the ' +
+          'handshake), so it is not known whose it is (#463)',
+      );
+      return null;
+    }
+    if (this.visitReply?.ok !== true) {
+      bleLog.info(
+        `QN: a stored weigh-in (${what}) is not exported: the scale did not accept the ` +
+          'profile for user slot 1 in this session, so it is not known whose it is (#463)',
+      );
+      return null;
+    }
+    // Only a record from the past gets here, so the year is the only bound.
+    if (Date.now() - atMs > STORED_MAX_AGE_MS) {
+      bleLog.debug(`QN: stored weigh-in ${what} is not from the past year, dropped (#463)`);
+      return null;
+    }
+    if (recordSeconds <= this.storedMarkAtSessionStart || this.storedEmitted.has(recordSeconds)) {
+      bleLog.debug(`QN: stored weigh-in ${what} was already reported (#463)`);
+      return null;
+    }
+    const live = this.liveResultMatching(weight, atMs);
+    if (live) {
+      bleLog.debug(
+        `QN: stored weigh-in ${what} is the live result reported at ` +
+          `${new Date(live.atMs).toISOString()}, dropped (#463)`,
+      );
+      return null;
+    }
+    this.storedMark = Math.max(this.storedMark, recordSeconds);
+    this.storedEmitted.add(recordSeconds);
+    bleLog.debug(
+      `QN: stored weigh-in ${what}, user slot 1, record ${data[4]} of ${data[3]}, ` +
+        'reported as history (#463)',
+    );
+    return {
+      weight,
+      impedance: this.resistance(record.r50 > 0 ? record.r50 : record.r500),
+      timestamp: new Date(atMs),
+      fromMemory: true,
+    };
+  }
+
+  /** Keep a live result for the stored records of later sessions to be compared with. */
+  private rememberLiveResult(weight: number): void {
+    this.recentLiveResults.push({ weight, atMs: Date.now() });
+    if (this.recentLiveResults.length > RECENT_LIVE_RESULTS) this.recentLiveResults.shift();
+  }
+
+  /** The live result a stored weigh-in of `weight` kg taken at `atMs` is a copy of, if any. */
+  private liveResultMatching(
+    weight: number,
+    atMs: number,
+  ): { weight: number; atMs: number } | null {
+    return (
+      this.recentLiveResults.find(
+        (r) =>
+          Math.abs(r.weight - weight) <= LIVE_MATCH_WEIGHT_KG &&
+          atMs >= r.atMs - LIVE_MATCH_BEFORE_MS &&
+          atMs <= r.atMs + LIVE_MATCH_AFTER_MS,
+      ) ?? null
+    );
+  }
+
+  /**
+   * Whether a complete 18-byte live weigh-in has to wait for the scale's
+   * answer to our 0x22 (#463): with `ble.qn_user_key`, after the scale
+   * accepted the profile built from the first user with the key, which is
+   * what a stored weigh-in needs to be exported (D065), and before the answer
+   * is over. Once its last record has come, nothing is held: that record is
+   * in hand.
+   */
+  private waitsForStoredAnswer(): boolean {
+    return (
+      this.isEighteenByteInfo &&
+      this.forcedUserKey !== null &&
+      this.visitSent !== null &&
+      this.visitReply?.ok === true &&
+      !this.storedAnswerLast &&
+      !this.storedAnswerDone
+    );
+  }
+
+  /**
+   * Hold `reading` for the scale's stored weigh-ins (#463). The scale can send
+   * its weigh-in before it has answered our 0x22, and the session used to end
+   * on it with the answer still to come, so a stored weigh-in was not read.
+   * It is a live result at once, so a stored copy of it during the wait or in
+   * a later session is known for one. The 0x1F that follows is sent as for
+   * every stable frame; a weight anchor or A4 prelude still due after our 0x22
+   * goes out during the wait.
+   */
+  private holdForStoredAnswer(reading: ScaleReading): void {
+    this.heldForStoredAnswer = reading;
+    this.provisionalReadings.add(reading);
+    this.rememberLiveResult(reading.weight);
+    bleLog.debug(
+      `QN: holding the weigh-in (${reading.weight} kg) for the scale's answer to the ` +
+        `stored-record query, up to ${STORED_ANSWER_HOLD_MS / 1000} s, longer while stored ` +
+        'weigh-ins are still arriving (#463)',
+    );
+    // HoldTimer ends the wait without a word from the adapter, so the reason
+    // goes in the log here. Armed before HoldTimer's own timer of the same
+    // length, so it fires first.
+    this.clearStoredAnswerTimer();
+    this.storedAnswerTimer = setTimeout(() => {
+      this.storedAnswerTimer = null;
+      if (this.heldForStoredAnswer === null) return;
+      const why = !this.queryAnswered
+        ? 'the scale did not answer the stored-record query'
+        : this.storedAnswerLast
+          ? 'the scale did not finish its answer to the stored-record query'
+          : null;
+      // Otherwise records are still arriving and the hold goes on.
+      if (why === null) return;
+      this.storedAnswerReasonLogged = true;
+      bleLog.debug(
+        `QN: ${why} within ${STORED_ANSWER_HOLD_MS / 1000} s; the session ends on the weigh-in ` +
+          `held for it (${this.heldForStoredAnswer.weight} kg) (#463)`,
+      );
+    }, STORED_ANSWER_HOLD_MS);
+  }
+
+  /**
+   * End the wait: a copy of the held weigh-in, which is final, so the session
+   * ends on it. Once only: the hold is gone after this.
+   */
+  private releaseHeldWeighIn(why: string): ScaleReading | null {
+    const held = this.heldForStoredAnswer;
+    if (held === null) return null;
+    this.heldForStoredAnswer = null;
+    this.clearStoredAnswerTimer();
+    bleLog.debug(
+      `QN: ${why}; the session ends on the weigh-in held for it (${held.weight} kg) (#463)`,
+    );
+    return { ...held };
+  }
+
+  private clearStoredAnswerTimer(): void {
+    if (this.storedAnswerTimer) {
+      clearTimeout(this.storedAnswerTimer);
+      this.storedAnswerTimer = null;
+    }
+  }
+
+  /**
+   * An 18-byte record from the last MAX_STORED_RECORD_AGE_SEC that comes while
+   * a weigh-in is held for the stored ones (#463). Otherwise it would be this
+   * session's weigh-in, but that is the one held: the record is either the
+   * same weigh-in again, which the scale may store, or one that cannot be told
+   * apart from it. Never exported and never the end of the session; one line,
+   * at info unless it is the held weigh-in.
+   */
+  private recentStoredDuringHold(data: Buffer, record: StoredRecord): null {
+    const { weight, recordSeconds } = record;
+    if (this.storedJudged.has(recordSeconds)) return null;
+    this.storedJudged.add(recordSeconds);
+    const atMs = (recordSeconds + SCALE_EPOCH_OFFSET) * 1000;
+    const what = `${weight} kg at ${new Date(atMs).toISOString()}`;
+    const live = this.liveResultMatching(weight, atMs);
+    if (live) {
+      bleLog.debug(
+        `QN: stored weigh-in ${what} is the live result reported at ` +
+          `${new Date(live.atMs).toISOString()}, dropped (#463)`,
+      );
+      return null;
+    }
+    bleLog.info(
+      `QN: a stored weigh-in (${what}, user slot ${data[5]}) is not exported: it came while ` +
+        'this connection held its own weigh-in for the stored ones, and one from the last 90 ' +
+        'seconds may be that weigh-in again (#463)',
+    );
+    return null;
+  }
+
+  /**
+   * Say why a 0x23 outside the 19-byte dialect is not read (#463). The record
+   * used to vanish without a line, and a frame that arrives after the session
+   * settled is not even in the DEBUG log, so nothing showed that a weigh-in the
+   * scale kept had been handed over at all.
+   *
+   * Only the long-frame dialects get the record's values: the VA layout is
+   * known there. A session without a 0x12 does not know its dialect, so its
+   * line gives the VA reading as one possibility. A classic session never gets
+   * here: its 0x23 is logged and dropped before it is decoded (D068).
+   */
+  private logUnreadStoredRecord(
+    data: Buffer,
+    record: StoredRecord,
+    sessionSeconds: number,
+    why: 'out of range' | 'old',
+  ): void {
+    const bytes = hex(data);
+    const at = new Date((record.recordSeconds + SCALE_EPOCH_OFFSET) * 1000).toISOString();
+    const age = sessionSeconds - record.recordSeconds;
+    if (!this.scaleFactorKnown) {
+      bleLog.debug(
+        `QN: 0x23 in a session without a scale-info frame, not read: [${bytes}]; read as the ` +
+          `VA layout it is ${record.weight} kg at ${at}, ` +
+          (why === 'old' ? `${age} s before the session` : 'out of range') +
+          ' (#463)',
+      );
+      return;
+    }
+    if (why === 'out of range') {
+      bleLog.debug(
+        data[3] === 0
+          ? 'QN: 0x23 says the scale holds no stored weigh-ins (#463)'
+          : `QN: stored 0x23 weight ${record.weight} kg is out of range, not read (#463)`,
+      );
+      return;
+    }
+    bleLog.debug(
+      `QN: stored weigh-in ${record.weight} kg at ${at}, user slot ${data[5]}, is ${age} s ` +
+        `older than this session (window ${MAX_STORED_RECORD_AGE_SEC} s), not read (#213 / #75)`,
+    );
   }
 
   /**
@@ -2010,9 +2609,17 @@ export class QnScaleAdapter
     await wait(200);
     if (!live()) return;
 
-    // 0x22 start measurement / stored-data query with echoed protocol type
-    await this.writeCmd(this.buildStoredDataQuery());
-    if (!live()) return;
+    // 0x22 start measurement / stored-data query with echoed protocol type.
+    // Its send time is what the scale's first answer is measured against. On
+    // the 18-byte dialect with ble.qn_user_key it may have gone out already,
+    // on the scale's acceptance of the profile (#463). The anchor and prelude
+    // below still go out when they did before, after it, also while a
+    // weigh-in is held for the answer.
+    if (this.storedQuerySentAtMs === null) {
+      this.storedQuerySentAtMs = Date.now();
+      await this.writeCmd(this.buildStoredDataQuery());
+      if (!live()) return;
+    }
 
     // Weight anchor, twice, right after START. Every dialect except the 20-byte
     // extended one, which has its own hardware-confirmed burst further down,
@@ -2111,6 +2718,24 @@ export class QnScaleAdapter
       clearTimeout(this.storedRetryTimer);
       this.storedRetryTimer = null;
     }
+    this.clearStoredAnswerTimer();
+    // A session that ends with a weigh-in still held for the stored ones was
+    // not ended by the answer: the extensions ran out, the last record's 0x25
+    // never came, or the link or the caller went first (#463). Once, and not
+    // after the 3 s line, which said so already.
+    const held = this.heldForStoredAnswer;
+    if (held !== null && !this.storedAnswerReasonLogged) {
+      this.storedAnswerReasonLogged = true;
+      const why = !this.queryAnswered
+        ? 'the scale had not answered the stored-record query'
+        : this.storedAnswerLast
+          ? 'the scale had not finished its answer to the stored-record query'
+          : 'stored weigh-ins were still arriving';
+      bleLog.debug(
+        `QN: the session ended while the weigh-in (${held.weight} kg) was held for the ` +
+          `scale's stored ones: ${why} (#463)`,
+      );
+    }
     this.sessionStartedScaleSeconds = null;
     this.ctx = null;
   }
@@ -2190,6 +2815,11 @@ export class QnScaleAdapter
   }
 
   isComplete(reading: ScaleReading): boolean {
+    // A stored weigh-in is complete as it is: the processor judges its
+    // impedance (D028). Gated on impedance like a live frame, one with 1-200
+    // Ohm would be dropped by the session after the mark had already counted
+    // it as reported (#463).
+    if (reading.fromMemory === true) return reading.weight > 0;
     // Broadcast readings have impedance=0; GATT readings have impedance>200
     if (reading.impedance === 0) return reading.weight > 0;
     return reading.weight > 10 && reading.impedance > 200;

@@ -221,6 +221,11 @@ export function armScanDeadline(ms: number, grace: GraceTimers, expire: () => vo
 
 // ─── Dedup window (per address+weight) ─────────────────────────────────────────
 
+function dedupKey(address: string, weight: number, recordTime?: string): string {
+  const key = `${address}:${weight.toFixed(1)}`;
+  return recordTime === undefined ? key : `${key}@${recordTime}`;
+}
+
 /**
  * Owns the `dedup` Map + prune logic duplicated in the mqtt-proxy and
  * esphome-proxy watchers (#242). Suppresses a repeated reading of the same
@@ -243,9 +248,13 @@ export class DedupWindow {
    * Return true if this (address, weight) has not been emitted within the
    * window, recording it as emitted. Return false (suppress) otherwise. Old
    * entries are pruned on every call so the map cannot grow without bound.
+   *
+   * `recordTime` keys a stored record by its own time as well, so it is a
+   * duplicate only of the same record handed over again, never of a live
+   * weigh-in that happens to round to the same 0.1 kg.
    */
-  shouldEmit(address: string, weight: number): boolean {
-    const key = `${address}:${weight.toFixed(1)}`;
+  shouldEmit(address: string, weight: number, recordTime?: string): boolean {
+    const key = dedupKey(address, weight, recordTime);
     const now = this.now();
     this.prune(now);
     const lastSeen = this.seen.get(key);
@@ -258,6 +267,78 @@ export class DedupWindow {
     for (const [key, ts] of this.seen) {
       if (now - ts >= this.windowMs) this.seen.delete(key);
     }
+  }
+}
+
+// ─── Post-reading window (per address, proxy GATT sessions) ────────────────────
+
+/** Scales remembered at once, oldest out; one per scale that gave a reading. */
+const POST_READING_MAX_ADDRESSES = 64;
+
+/**
+ * When each scale last gave a GATT reading on a proxy watcher (#466, D058).
+ *
+ * The mqtt-proxy and esphome-proxy watchers keep no distance from a scale
+ * after a reading: a scale that stays on keeps advertising, and the next
+ * advertisement opens a new session (on mqtt-proxy the ESP32 reconnects by
+ * itself). That is how a second person stepping on before the scale switches
+ * off gets read. When nobody does, the session ends without a reading, which
+ * is expected and must not be reported as a failure.
+ *
+ * Asked when a session opens, not when it fails: a session can run for 90 s,
+ * and what matters is whether it opened as the reconnect to a scale still on.
+ * Entries are therefore not pruned by the window; the cap bounds them.
+ */
+export class PostReadingWindow {
+  private readonly last = new Map<string, { at: number; told: boolean }>();
+
+  constructor(
+    private readonly windowMs: number,
+    // Late-bound, unlike DedupWindow's `Date.now` default: that captures
+    // whichever Date.now exists when the watcher is built, so a test faking
+    // the clock afterwards would not move it.
+    private readonly now: () => number = () => Date.now(),
+  ) {}
+
+  /** A GATT session on `address` delivered a reading. */
+  noteReading(address: string): void {
+    const key = address.toLowerCase();
+    this.last.delete(key);
+    this.last.set(key, { at: this.now(), told: false });
+    if (this.last.size > POST_READING_MAX_ADDRESSES) {
+      const oldest = this.last.keys().next().value;
+      if (oldest !== undefined) this.last.delete(oldest);
+    }
+  }
+
+  /**
+   * Milliseconds since the last reading on `address` while that is within the
+   * window, else undefined. A clock that stepped back (an NTP sync on a board
+   * without a real-time clock) counts as outside it.
+   */
+  sinceReading(address: string): number | undefined {
+    const entry = this.last.get(address.toLowerCase());
+    if (!entry) return undefined;
+    const since = this.now() - entry.at;
+    return since >= 0 && since <= this.windowMs ? since : undefined;
+  }
+
+  /**
+   * Log a session opened `sinceMs` after the last reading on `address` that
+   * ended without one. Info once per reading, debug after that: ESPHome
+   * retries a refused connect on every advertisement.
+   */
+  reportNoWeighIn(address: string, subject: string, sinceMs: number, reason: string): void {
+    const line =
+      `${subject}: session opened ${(sinceMs / 1000).toFixed(1)} s after the last reading, ` +
+      `while the scale was still on, ended without a new weigh-in (${reason}).`;
+    const entry = this.last.get(address.toLowerCase());
+    if (entry && !entry.told) {
+      entry.told = true;
+      bleLog.info(line);
+      return;
+    }
+    bleLog.debug(line);
   }
 }
 
@@ -348,9 +429,10 @@ export function emitDeduped(
   address: string,
   raw: RawReading,
   weight: number,
+  recordTime?: string,
 ): boolean {
-  if (!dedup.shouldEmit(address, weight)) {
-    bleLog.debug(`Dedup skip: ${address}:${weight.toFixed(1)}`);
+  if (!dedup.shouldEmit(address, weight, recordTime)) {
+    bleLog.debug(`Dedup skip: ${dedupKey(address, weight, recordTime)}`);
     return false;
   }
   bleLog.info(`Matched: ${raw.adapter.name} (${address})`);

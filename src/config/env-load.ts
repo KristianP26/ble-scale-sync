@@ -198,6 +198,7 @@ export function loadEnvConfig(): AppConfig {
       watchdog_max_consecutive_failures: 10,
       watch_config: true,
       idle_rescan_delay: 5,
+      no_reading_rescan_delay: 0,
       retry_failed_exports: true,
     },
     update_check: true,

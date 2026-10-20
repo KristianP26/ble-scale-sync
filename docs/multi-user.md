@@ -120,15 +120,15 @@ Hot-swappable on edit:
 - `scale.weight_unit`, `scale.height_unit`
 - `unknown_user` strategy
 - `out_of_range` strategy
-- `runtime.dry_run`, `runtime.debug`, `runtime.scan_cooldown`, `runtime.idle_rescan_delay`
+- `runtime.dry_run`, `runtime.debug`, `runtime.scan_cooldown`, `runtime.idle_rescan_delay`, `runtime.no_reading_rescan_delay`
 - `ble.scale_mac`
 - `update_check`
 
 Restart-required (the change is detected and logged with a warning, but only takes effect after restart): `runtime.retry_failed_exports` (read once at startup), `ble.handler`, `ble.adapter`, `ble.adapter_privacy`, `ble.noble_driver`, `ble.force_scale_adapter`, every `ble.mqtt_proxy.*` field including `embedded_broker_port` and `embedded_broker_bind`, every `ble.esphome_proxy.*` field including `client_info`, `additional_proxies` and `advertisement_timeout`, `ble.ha_bluetooth.url`, `ble.ha_bluetooth.token`, `ble.ha_bluetooth.source`, `runtime.continuous_mode`, `runtime.watchdog_max_consecutive_failures`. Adding or removing users, including switching between one user and several, applies on reload.
 
-Everything not in that list is hot-swapped, including the keys people most often tune while a scale is misbehaving: `ble.session_timeout_sec`, `ble.auto_clear_stale_bond`, `ble.preemptive_adapter_reset`, `ble.bind_key`, every `ble.qn_*` option and `ble.proxy_liveness_timeout_min`. On the proxy transports the liveness timeout is re-read when the next advertisement wait begins, so a change to it lands on the next cycle rather than the same instant.
+Everything not in that list is hot-swapped, including the keys people most often tune while a scale is misbehaving: `ble.session_timeout_sec`, `ble.auto_clear_stale_bond`, `ble.pairing_retry_max_min`, `ble.preemptive_adapter_reset`, `ble.bind_key`, every `ble.qn_*` option and `ble.proxy_liveness_timeout_min`. On the proxy transports the liveness timeout is re-read when the next advertisement wait begins, so a change to it lands on the next cycle rather than the same instant. `runtime.no_reading_rescan_delay` applies from the next session without a reading; a wait already running is not shortened.
 
-In Docker with `config.yaml` mounted as a single file, edits made in place are picked up. An editor that saves by writing a new file and renaming it over the old one replaces the file on the host, and the container keeps seeing the old one; after such an edit send `SIGHUP` or restart the container, or mount the directory instead of the file.
+In Docker with `config.yaml` mounted as a single file, edits made in place are picked up. A tool that saves by writing a new file and renaming it over the old one, such as `sed -i` and some editors, replaces the file on the host, and the container keeps seeing the old one. `SIGHUP` does not help then, because the app re-reads the same old file. Only a container restart picks such an edit up; to avoid the problem, mount the directory instead of the file.
 
 To opt out (e.g. on a flaky network filesystem) and rely solely on the `SIGHUP` flow:
 

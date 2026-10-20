@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { removeDevice } from '../../src/ble/handler-node-ble/discovery.js';
 import type { Adapter } from '../../src/ble/handler-node-ble/dbus.js';
 
@@ -14,10 +14,14 @@ function makeAdapter(opts: {
   deviceInCache?: boolean; // default true
   isPairedThrows?: boolean;
   removeThrows?: boolean;
+  removeNeverAnswers?: boolean;
 }) {
   const callMethod = vi.fn(async (method: string) => {
     if (method === 'RemoveDevice' && opts.removeThrows) {
       throw new Error('org.bluez.Error.DoesNotExist');
+    }
+    if (method === 'RemoveDevice' && opts.removeNeverAnswers) {
+      await new Promise<void>(() => {});
     }
     return undefined;
   });
@@ -83,6 +87,32 @@ describe('removeDevice() bond guard (#168)', () => {
 
   it('does not reject when RemoveDevice itself fails', async () => {
     const { adapter } = makeAdapter({ paired: false, removeThrows: true });
-    await expect(removeDevice(adapter, MAC)).resolves.toBeUndefined();
+    // BlueZ answered, even if with an error: not the stuck state below.
+    await expect(removeDevice(adapter, MAC)).resolves.toBe('removed');
+  });
+
+  it('says it skipped a bonded device', async () => {
+    const { adapter } = makeAdapter({ paired: true });
+    await expect(removeDevice(adapter, MAC)).resolves.toBe('skipped');
+  });
+});
+
+describe('removeDevice() and a RemoveDevice BlueZ never answers (#472)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // BlueZ queues a RemoveDevice for a device it lists as connected behind the
+  // same disconnect a stuck Disconnect waits on (adapter.c remove_device()), so
+  // it can stay unanswered just as long.
+  it('gives up after the BlueZ call deadline and reports the timeout', async () => {
+    vi.useFakeTimers();
+    const { adapter } = makeAdapter({ paired: false, removeNeverAnswers: true });
+    let outcome: unknown = 'pending';
+    void removeDevice(adapter, MAC).then((r) => (outcome = r));
+
+    await vi.advanceTimersByTimeAsync(11_000);
+
+    expect(outcome).toBe('timeout');
   });
 });

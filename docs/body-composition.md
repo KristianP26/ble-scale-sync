@@ -52,7 +52,7 @@ The coefficients vary by gender and athlete status:
 
 An impedance only drives the calculation when it looks like a body. Anything
 below **150 ohm** or above **1200 ohm** is refused, and the reading falls back
-to the Deurenberg estimate below.
+to the Deurenberg estimate below, unless the scale measured its own body fat.
 
 The reason is that a wrong resistance is worse than none, and it fails
 convincingly rather than obviously. A value far too high pins the 60 % ceiling.
@@ -61,11 +61,12 @@ like, drives `height² / impedance` up until lean body mass exceeds body weight,
 and the result then pins the 4 % floor. Neither reads as an error; both silently
 move every derived metric.
 
-A refused impedance is exported as 0, together with the estimate. The value the
+A refused impedance is exported as 0, together with the estimate, or with the
+body fat the scale measured itself where it sends one (Yunmai). The value the
 scale sent is in the log instead, on an info line:
 
 ```
-Impedance 4317 Ohm is not a usable measurement (150-1200 Ohm), so body composition is the BMI estimate.
+Impedance 4317 Ohm is not a usable measurement (150-1200 Ohm), so it is not used.
 ```
 
 If your scale measures impedance and your body fat still looks like a BMI
@@ -127,11 +128,11 @@ The S400 broadcasts weight plus its 50 kHz impedance (and a 250 kHz impedance an
 
 ### Yunmai
 
-The Yunmai scale computes body composition on-device and transmits the pre-calculated fat, water, muscle, and bone values in its BLE notifications. BLE Scale Sync uses those values directly; the remaining metrics (BMI, BMR, metabolic age, visceral fat, physique rating) are calculated locally.
+The scale's final reading carries its resistance and, on firmware with protocol version 0x1E or newer, the body fat percentage the scale computed itself for the profile the vendor app stored in it. When that value is present and plausible it is used, and water, muscle, bone mass and visceral fat are derived from it with the Yunmai formulas ported from openScale. Otherwise body fat comes from the Yunmai formula ported from openScale, which works mostly from BMI and age and adjusts slightly for the resistance; when that formula gives no usable value, the BMI estimate is the fallback. Generic BIA is not used, because nothing shows that the resistance the scale sends is in ohms. BMI, BMR, metabolic age and physique rating are calculated locally. The Yunmai SE reports no impedance, so its body composition is estimated from BMI.
 
 ### Arboleaf and other 8-electrode QN scales (19-byte dialect)
 
-These scales measure eight segment impedances (both hands, both feet and the trunk, at two frequencies) and compute body fat, water, muscle, bone and visceral fat themselves, for the profile ble-scale-sync sends before the weigh-in: the first user's age, height and sex (with `ble.qn_weight_ack` or `ble.qn_user_key`). Those values are used as one set, only when the weigh-in is matched to a user with exactly that profile and the scale measured after it accepted the profile; BMI, BMR, metabolic age and physique rating are calculated locally. Otherwise, and for weigh-ins the scale stored while nothing was connected, body composition is estimated from BMI. The segment impedances are logged in debug mode only; no whole-body impedance is derived from them. Not yet confirmed on hardware ([#331](https://github.com/KristianP26/ble-scale-sync/issues/331)), details in [Supported Scales](/guide/supported-scales#arboleaf-qn-scale-19-byte-dialect).
+These scales measure eight segment impedances (both hands, both feet and the trunk, at two frequencies) and compute body fat, water, muscle, bone and visceral fat themselves, for the profile ble-scale-sync sends before the weigh-in: the first user's age, height and sex (with `ble.qn_weight_ack` or `ble.qn_user_key`). Those values are used as one set, only when the weigh-in is matched to a user with exactly that profile and the scale measured after it accepted the profile; BMI, BMR, metabolic age and physique rating are calculated locally. Otherwise, and for weigh-ins the scale stored while nothing was connected, body composition is estimated from BMI. The segment impedances are logged in debug mode only; no whole-body impedance is derived from them. The scale reports muscle and bone as a percentage of body weight, which its display shows; they are exported in kg. Confirmed on two units ([#331](https://github.com/KristianP26/ble-scale-sync/issues/331)), details in [Supported Scales](/guide/supported-scales#arboleaf-qn-scale-19-byte-dialect).
 
 ## References
 

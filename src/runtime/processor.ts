@@ -17,7 +17,12 @@ import { checkAndLogUpdate } from '../update-check.js';
 import { fmtWeight } from './format.js';
 import { enqueue } from './export-queue.js';
 import { exporterSlot } from './exporter-slot.js';
-import { isHistoricalReading, measurementTime } from '../interfaces/reading-time.js';
+import { isUsableAnchorTime, persistReplayAnchor } from './replay-anchors.js';
+import {
+  HISTORY_WINDOW_MS,
+  isHistoricalReading,
+  measurementTime,
+} from '../interfaces/reading-time.js';
 import {
   IMPEDANCE_MAX_OHM,
   IMPEDANCE_MIN_OHM,
@@ -46,6 +51,17 @@ const KG_METRICS = new Set<keyof BodyComposition>(['boneMass', 'muscleMass']);
 const DEDUP_KG_TOLERANCE = 0.1;
 
 /**
+ * How far after the anchor's own weigh-in a stored record may be stamped and
+ * still be taken as that weigh-in replayed (#475). It covers a copy of a live
+ * weigh-in that arrived without a stamp, so the anchor is dated by the host,
+ * while the copy carries the scale's clock running a little ahead: the drift
+ * D027 already treats as the same moment. Equal to HISTORY_WINDOW_MS today,
+ * but a separate name, so a change to what counts as history does not quietly
+ * change the dedup as well.
+ */
+const REPLAY_CLOCK_MARGIN_MS = HISTORY_WINDOW_MS;
+
+/**
  * One reading of a cycle, classified once when the cycle is received (D027).
  *
  * `historical` and `measuredAt` are decided here and nowhere else, so the
@@ -54,19 +70,27 @@ const DEDUP_KG_TOLERANCE = 0.1;
  */
 interface Frame {
   reading: ScaleReading;
-  /** A record from the scale's memory, older than HISTORY_WINDOW_MS. */
+  /** A record from the scale's memory: older than HISTORY_WINDOW_MS, or flagged by its adapter. */
   historical: boolean;
   /** When it was measured: the frame's own time, or the receipt time. */
   measuredAt: Date;
+  /** `measuredAt` is the frame's own stamp, not the receipt time. */
+  stamped: boolean;
 }
 
 function classifyFrames(raw: RawReading, receivedAt: Date): Frame[] {
   const all = raw.history ? [...raw.history, raw.reading] : [raw.reading];
-  return all.map((reading) => ({
-    reading,
-    historical: isHistoricalReading(reading, receivedAt.getTime()),
-    measuredAt: measurementTime(reading, receivedAt),
-  }));
+  return all.map((reading) => {
+    const ts = reading.timestamp;
+    return {
+      reading,
+      historical: isHistoricalReading(reading, receivedAt.getTime()),
+      measuredAt: measurementTime(reading, receivedAt),
+      // The same test measurementTime applies to take the stamp, spelled out
+      // rather than read off which Date object it returned.
+      stamped: !!ts && !Number.isNaN(ts.getTime()) && ts.getTime() <= receivedAt.getTime(),
+    };
+  });
 }
 
 /** Combine the user prefix and `[historic <ISO>]` (stored records only) into the log tag. */
@@ -102,7 +126,8 @@ export interface ProcessReadingOpts {
  * checks the impedance against the same plausible band the shared BIA guard
  * uses and, when it fails, sets it to 0 on the reading itself before the
  * adapter computes anything. 0 is the contract's "no impedance": the adapter
- * then has to produce the BMI estimate.
+ * then has to produce the BMI estimate, unless the scale measured the
+ * composition itself (D028).
  *
  * In place on purpose: adapters pin their decoded composition to the reading
  * OBJECT (`ReadingComposition`), so a copy would lose it.
@@ -116,7 +141,7 @@ function computeFrameMetrics(
   if (reading.impedance !== 0 && !isPlausibleImpedance(reading.impedance)) {
     log.info(
       `${tagPrefix}Impedance ${reading.impedance} Ohm is not a usable measurement ` +
-        `(${IMPEDANCE_MIN_OHM}-${IMPEDANCE_MAX_OHM} Ohm), so body composition is the BMI estimate.`,
+        `(${IMPEDANCE_MIN_OHM}-${IMPEDANCE_MAX_OHM} Ohm), so it is not used.`,
     );
     reading.impedance = 0;
   }
@@ -230,19 +255,46 @@ async function exportFrame(
   const tag = frameTag(prefix, frame);
   const tagPrefix = tag ? `${tag} ` : '';
 
-  // Replay dedup: skip a stored record whose weight matches the last weight
+  // Replay dedup: skip a stored record whose weight matches a weight already
   // exported for this user (likely a re-export of an already-synced weigh-in).
-  // The runtime anchor first, then config: in single-run mode every run is a
-  // new process, and the persisted last_known_weight is its only memory (E-09).
-  const anchor = ctx.lastExportedWeights.get(user.slug) ?? user.last_known_weight;
-  if (
-    frame.historical &&
-    anchor !== null &&
-    Math.abs(reading.weight - anchor) < DEDUP_KG_TOLERANCE
-  ) {
+  // Two weights count: the last live weigh-in (this process's, or the one an
+  // earlier process saved, D067) and last_known_weight from config. In
+  // single-run mode every run is a new process, and those are its only memory
+  // (E-09). The config value counts even next to a saved weigh-in: it can be an
+  // earlier weigh-in that config.yaml still holds (it is rewritten only after a
+  // 0.5 kg change), and v1.33.0 skipped a stored copy of that one too.
+  const saved = ctx.lastExportedWeights.get(user.slug);
+  const near = (w: number | null | undefined): boolean =>
+    w !== null && w !== undefined && Math.abs(reading.weight - w) < DEDUP_KG_TOLERANCE;
+  // Only a record measured no later than REPLAY_CLOCK_MARGIN_MS after the last
+  // live weigh-in can be that weigh-in again. One stored while the app waited
+  // between sessions (#475), or after the last live export (#463), is newer,
+  // and dropping it for being within 0.1 kg lost a real weigh-in. That takes
+  // the weigh-in's own time; last_known_weight alone has none, and the process
+  // start that stood in for it is the host's clock while the record carries
+  // the scale's, so a replay from before a restart looked new (review C1).
+  // Only the frame's own stamp can say so: a stored record dated by its
+  // receipt (an adapter flagged it `fromMemory` without a usable stamp, D065)
+  // would always look new, so it keeps the weight rule.
+  const anchorAt = ctx.lastExportedAt.get(user.slug);
+  const measuredAfterAnchor =
+    anchorAt !== undefined &&
+    frame.stamped &&
+    frame.measuredAt.getTime() > anchorAt.getTime() + REPLAY_CLOCK_MARGIN_MS;
+  const matchesSaved = near(saved);
+  if (frame.historical && !measuredAfterAnchor && (matchesSaved || near(user.last_known_weight))) {
+    const what =
+      matchesSaved || saved === undefined
+        ? 'the last exported weight'
+        : 'last_known_weight from the config';
+    const why = anchorAt
+      ? `was not measured more than ${REPLAY_CLOCK_MARGIN_MS / 60_000} min after ` +
+        `the last exported weigh-in measured at ${anchorAt.toISOString()}`
+      : 'no measurement time is saved for that weight yet (last_known_weight from the ' +
+        'config), so a newer weigh-in cannot be told apart from a replay';
     log.info(
       `${tagPrefix}Skipping replay: weight ${fmtWeight(reading.weight, ctx.weightUnit)} ` +
-        `matches the last exported weight within +/-${DEDUP_KG_TOLERANCE} kg`,
+        `matches ${what} within +/-${DEDUP_KG_TOLERANCE} kg and ${why}`,
     );
     return { dispatched: false, success: true, exported: false };
   }
@@ -313,6 +365,22 @@ async function exportFrame(
 const persistedWeights = new WeakMap<UserConfig, number | null>();
 
 /**
+ * The time the replay dedup dates a live anchor by: the frame's own stamp when
+ * it has a readable one, on the scale's clock, because a copy of the record
+ * replayed later carries that same stamp. `measuredAt` clips a stamp in the
+ * future to the receipt time, which is right for the export (nothing can be
+ * measured in the future) but not here: with the scale's clock more than
+ * REPLAY_CLOCK_MARGIN_MS ahead (a container on UTC, a clock set before a DST
+ * change) the copy would look newer than the anchor and go out a second time.
+ * A frame without a stamp falls back to `measuredAt`, the receipt time. The
+ * same time is what is saved for a restart (D067), for the same reason.
+ */
+function anchorTime(frame: Frame): Date {
+  const ts = frame.reading.timestamp;
+  return ts && !Number.isNaN(ts.getTime()) ? ts : frame.measuredAt;
+}
+
+/**
  * Remember the weight of a LIVE weigh-in that was exported (E-03, E-09).
  *
  * Three readers depend on it: the replay dedup, the matcher's tie-break and
@@ -322,16 +390,37 @@ const persistedWeights = new WeakMap<UserConfig, number | null>();
  * process started with. It is now set in memory in both modes, and written to
  * the file in both modes when there is a config.yaml to write to.
  *
- * Never called for a stored record (D027): a replay from the scale's memory is
- * by definition older than the weigh-in the anchor already reflects.
+ * Never called for a stored record (D027): it is a weigh-in from the past, not
+ * the person's current weight, so it must not steer the matcher or the QN
+ * anchor. It is not necessarily OLDER than the anchor, though (#475, #463),
+ * which is why the anchor also keeps the time it was measured (`anchorTime`):
+ * the replay dedup compares a stored record's own time with it.
  *
- * The file is written only after a change of 0.5 kg against what is ON DISK,
- * not against the in-memory value, which now moves on every weigh-in: compared
- * with that, a run of small steps would never reach the threshold and the file
- * would drift away from the person indefinitely.
+ * The exact weight and that time are saved on EVERY call (D067), next to
+ * config.yaml, so a restart keeps them. They have to be the last live
+ * weigh-in's: a time saved only when config.yaml moves would belong to an
+ * older weigh-in than the one a scale replays.
+ *
+ * config.yaml is written only after a change of 0.5 kg against what is ON
+ * DISK, not against the in-memory value, which now moves on every weigh-in:
+ * compared with that, a run of small steps would never reach the threshold and
+ * the file would drift away from the person indefinitely.
  */
-function recordLiveWeight(ctx: AppContext, user: UserConfig, weight: number): void {
+function recordLiveWeight(ctx: AppContext, user: UserConfig, weight: number, anchorAt: Date): void {
   ctx.lastExportedWeights.set(user.slug, weight);
+  // A time from a host clock not set yet (before 2024) says nothing about when
+  // the weigh-in happened; kept, it would make its stamped copy look newer.
+  // Without a time the replay check falls back to the weight rule.
+  if (isUsableAnchorTime(anchorAt)) ctx.lastExportedAt.set(user.slug, anchorAt);
+  else ctx.lastExportedAt.delete(user.slug);
+  if (ctx.replayAnchorsPath) {
+    persistReplayAnchor(
+      ctx.replayAnchorsPath,
+      user.slug,
+      ctx.lastExportedWeights,
+      ctx.lastExportedAt,
+    );
+  }
   if (!persistedWeights.has(user)) persistedWeights.set(user, user.last_known_weight);
   user.last_known_weight = weight;
 
@@ -417,7 +506,7 @@ async function exportAssigned(
     // scale reconnects, replays the same weigh-in from memory, and the dedup
     // drops it as already synced.
     if (outcome.exported && !item.frame.historical) {
-      recordLiveWeight(ctx, item.user, item.frame.reading.weight);
+      recordLiveWeight(ctx, item.user, item.frame.reading.weight, anchorTime(item.frame));
     }
   }
   return lastSuccess;

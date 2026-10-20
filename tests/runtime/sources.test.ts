@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 // Coverage for buildReadingSource() (#186, rewired in #246). Transport selection
 // now lives in createReadingSource (covered by tests/ble/reading-source.test.ts);
@@ -54,7 +55,8 @@ vi.mock('../../src/ble/types.js', async (importOriginal) => {
 });
 
 const { buildReadingSource } = await import('../../src/runtime/sources.js');
-const { POST_DISCONNECT_GRACE_MS, SessionTimeoutError } = await import('../../src/ble/types.js');
+const { POST_DISCONNECT_GRACE_MS, PairingDeferredError, SessionTimeoutError, StaleLinkError } =
+  await import('../../src/ble/types.js');
 import type { AppContext } from '../../src/runtime/context.js';
 import type { ScaleAdapter } from '../../src/interfaces/scale-adapter.js';
 import { tagBleFailure } from '../../src/ble/failure-kind.js';
@@ -295,6 +297,53 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
     );
   });
 
+  // #472: BlueZ still listed the scale as connected and never finished the
+  // Disconnect, so the scale was found; "No scale found" would point at range.
+  it('poll plan: a stale BlueZ link says the scale was found, and still counts', async () => {
+    h.createReadingSource.mockResolvedValue({ kind: 'poll', appliesGraceFloor: false });
+    const bundle = await buildReadingSource(makeCtx(), ADAPTERS, 7, 30);
+    const stale = tagBleFailure(new StaleLinkError('AA:BB:CC:DD:EE:FF'), 'wedge-suspect');
+
+    expect(bundle.failureLogPrefixFor?.(stale)).toBe('Scale found but not connected');
+    expect(bundle.failureDelayMs?.(stale)).toBe(undefined);
+    bundle.onFailure?.(stale);
+    expect(h.watchdogInstances[0].recordFailure).toHaveBeenCalledTimes(1);
+  });
+
+  // #471, D063: the scale was found and listened to, not connected, because
+  // nobody confirmed its last pairing. Idle when the radio heard the room.
+  it('poll plan: a deferred pairing gets the idle delay, its own prefix, and is not counted', async () => {
+    h.createReadingSource.mockResolvedValue({ kind: 'poll', appliesGraceFloor: false });
+    const ctx = makeCtx({
+      config: {
+        users: [{}],
+        scale: {},
+        runtime: { scan_cooldown: 5, idle_rescan_delay: 4 },
+      } as never,
+    });
+    const bundle = await buildReadingSource(ctx, ADAPTERS, 7, 30);
+    const deferred = tagBleFailure(new PairingDeferredError('AA:BB:CC:DD:EE:FF', 120_000), 'idle');
+
+    expect(bundle.failureLogPrefixFor?.(deferred)).toBe('Scale found, waiting to pair');
+    expect(bundle.failureDelayMs?.(deferred)).toBe(4_000);
+    bundle.onFailure?.(deferred);
+    expect(h.watchdogInstances[0].recordFailure).not.toHaveBeenCalled();
+  });
+
+  it('poll plan: a deferred pairing on a deaf radio is counted and backs off', async () => {
+    h.createReadingSource.mockResolvedValue({ kind: 'poll', appliesGraceFloor: false });
+    const bundle = await buildReadingSource(makeCtx(), ADAPTERS, 7, 30);
+    const deaf = tagBleFailure(
+      new PairingDeferredError('AA:BB:CC:DD:EE:FF', 120_000),
+      'wedge-suspect',
+    );
+
+    expect(bundle.failureLogPrefixFor?.(deaf)).toBe('Scale found, waiting to pair');
+    expect(bundle.failureDelayMs?.(deaf)).toBe(undefined);
+    bundle.onFailure?.(deaf);
+    expect(h.watchdogInstances[0].recordFailure).toHaveBeenCalledTimes(1);
+  });
+
   // #460, D041: neutral like idle and blocked, but it keeps the backoff, since
   // every such cycle was a real connect to the scale.
   it('poll plan: a session that heard the scale is not counted, and keeps the backoff', async () => {
@@ -333,6 +382,97 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
     // Whole key gone (an older config.yaml) falls back to the schema default.
     delete runtime.idle_rescan_delay;
     expect(bundle.failureDelayMs?.(idle)).toBe(5_000);
+  });
+
+  // #475, D064: only a session that heard the scale and then went quiet until
+  // its idle timeout gets the floor. Everything else keeps the backoff as it
+  // was, including the #471 hold cycle and the #472 stale link.
+  it('poll plan: an idle no-reading timeout gets the configured floor; a cap, a silent session, a disconnect and the other kinds do not (#475)', async () => {
+    h.createReadingSource.mockResolvedValue({ kind: 'poll', appliesGraceFloor: false });
+    const ctx = makeCtx({
+      config: {
+        users: [{}],
+        scale: {},
+        runtime: { scan_cooldown: 5, idle_rescan_delay: 5, no_reading_rescan_delay: 900 },
+      } as never,
+    });
+    const bundle = await buildReadingSource(ctx, ADAPTERS, 7, 30);
+    const timedOut = (reason: 'idle' | 'cap') =>
+      new SessionTimeoutError(
+        reason === 'idle'
+          ? 'Timed out waiting for a complete scale reading'
+          : 'GATT session cap exceeded',
+        reason,
+      );
+
+    const heardThenQuiet = tagBleFailure(timedOut('idle'), 'no-reading');
+    expect(bundle.failureDelayFloor?.(heardThenQuiet)).toEqual({
+      ms: 900_000,
+      label: 'runtime.no_reading_rescan_delay',
+    });
+    // The floor is a minimum on the backoff path, not a claim.
+    expect(bundle.failureDelayMs?.(heardThenQuiet)).toBe(undefined);
+
+    const notFloored: Array<[string, unknown]> = [
+      ['no-reading after the session cap', tagBleFailure(timedOut('cap'), 'no-reading')],
+      ['a session that heard nothing', tagBleFailure(timedOut('idle'), 'wedge-suspect')],
+      ['an untagged session timeout', timedOut('idle')],
+      [
+        'a scale that disconnected after a frame',
+        tagBleFailure(new Error('Scale disconnected before reading completed'), 'wedge-suspect'),
+      ],
+      ['a no-reading tag on something else', tagBleFailure(new Error('x'), 'no-reading')],
+      ['an idle cycle', tagBleFailure(new Error('Device not found'), 'idle')],
+      ['a blocked connect', tagBleFailure(new Error('LE privacy is not active'), 'blocked')],
+      [
+        'a stale BlueZ link (#472)',
+        tagBleFailure(new StaleLinkError('AA:BB:CC:DD:EE:FF'), 'wedge-suspect'),
+      ],
+      [
+        'a held pairing (#471)',
+        tagBleFailure(new PairingDeferredError('AA:BB:CC:DD:EE:FF', 120_000), 'idle'),
+      ],
+      [
+        'a held pairing on a deaf radio (#471)',
+        tagBleFailure(new PairingDeferredError('AA:BB:CC:DD:EE:FF', 120_000), 'wedge-suspect'),
+      ],
+      ['an untagged error', new Error('export failed')],
+    ];
+    for (const [what, err] of notFloored) {
+      expect(bundle.failureDelayFloor?.(err), what).toBe(undefined);
+    }
+  });
+
+  it('poll plan: the floor is re-read from config on every call; 0 and an absent key mean none', async () => {
+    h.createReadingSource.mockResolvedValue({ kind: 'poll', appliesGraceFloor: false });
+    const runtime: { scan_cooldown: number; no_reading_rescan_delay?: number } = {
+      scan_cooldown: 5,
+      no_reading_rescan_delay: 60,
+    };
+    const ctx = makeCtx({ config: { users: [{}], scale: {}, runtime } as never });
+    const bundle = await buildReadingSource(ctx, ADAPTERS, 7, 30);
+    const heard = tagBleFailure(
+      new SessionTimeoutError('Timed out waiting for a complete scale reading', 'idle'),
+      'no-reading',
+    );
+
+    expect(bundle.failureDelayFloor?.(heard)).toEqual({
+      ms: 60_000,
+      label: 'runtime.no_reading_rescan_delay',
+    });
+    runtime.no_reading_rescan_delay = 900;
+    expect(bundle.failureDelayFloor?.(heard)?.ms).toBe(900_000);
+    runtime.no_reading_rescan_delay = 0;
+    expect(bundle.failureDelayFloor?.(heard)).toBe(undefined);
+    delete runtime.no_reading_rescan_delay;
+    expect(bundle.failureDelayFloor?.(heard)).toBe(undefined);
+  });
+
+  it('watcher plan: leaves failureDelayFloor unset', async () => {
+    h.createReadingSource.mockResolvedValue(watcherPlan('Error processing ESPHome reading'));
+    const ctx = makeCtx({ bleHandler: 'esphome-proxy', esphomeProxy: { host: 'h' } as never });
+    const bundle = await buildReadingSource(ctx, ADAPTERS, 10, 30);
+    expect(bundle.failureDelayFloor).toBeUndefined();
   });
 
   it('watcher plan: leaves failureDelayMs unset, so a wedged proxy still backs off', async () => {
@@ -380,5 +520,42 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
 
     expect(process.exitCode).toBe(1);
     expect(ctx.abortApp).toHaveBeenCalledOnce();
+  });
+});
+
+// No test runs src/run.ts, so the wiring of the bundle into the loop is pinned
+// by its text, the way tests/addon-run-sh.test.ts pins run.sh. Listed one by
+// one, a new hook was dropped by forgetting a line there (#475).
+describe('src/run.ts wiring (#475)', () => {
+  const RUN_TS = readFileSync('src/run.ts', 'utf8').replace(/\r\n/g, '\n');
+
+  it('hands every hook of the source bundle to the loop', () => {
+    expect(RUN_TS).toMatch(/const \{ source, \.\.\.sourceHooks \} = bundle;/);
+    expect(RUN_TS).toMatch(/runContinuousLoop\(\{\s*\.\.\.sourceHooks,/);
+  });
+
+  // Without the flag a single-shot run would announce and record a pairing
+  // wait that ends with the process, so nothing ever honours it (#471, D063).
+  it('tells the single-shot source it is one, so it keeps no pairing wait', () => {
+    expect(RUN_TS).toMatch(
+      /runSingleShot\(\{\s*source: new PollReadingSource\(ctx, adapters, \{ singleShot: true \}\),/,
+    );
+  });
+
+  // Every replay restart test builds its own context, so without this nothing
+  // notices a run.ts that never hands the anchor file over: the feature would
+  // be off in production with a green suite (D067).
+  it('hands the context the replay anchor file next to the config (D067)', () => {
+    // Anchored to a code line: commenting the line out is the likeliest way to
+    // switch it off, and a bare match would still find it in the comment.
+    expect(RUN_TS).toMatch(
+      /^\s*replayAnchorsPath: resolveReplayAnchorsPath\(loaded\.configPath\),$/m,
+    );
+  });
+
+  it('warns about runtime.no_reading_rescan_delay outside continuous mode or off node-ble', () => {
+    expect(RUN_TS).toMatch(
+      /\(ctx\.config\.runtime\?\.no_reading_rescan_delay \?\? 0\) > 0 &&\s*\(!initialResolved\.continuousMode \|\| resolveHandlerKey\(ctx\.bleHandler\) !== 'node-ble'\)/,
+    );
   });
 });

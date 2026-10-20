@@ -12,6 +12,9 @@ const UNASKED_DEFAULTS = {
   // Not prompted: it only matters in continuous mode, the default is right
   // for every install, and one more question here buys nothing (#398).
   idle_rescan_delay: 5,
+  // Not prompted: only a scale that stays connectable without a weigh-in
+  // needs it, and 0 keeps the backoff every install has (#475).
+  no_reading_rescan_delay: 0,
   // Not prompted: the default is right for every install and one more
   // question buys nothing (#412).
   retry_failed_exports: true,
@@ -37,7 +40,7 @@ export const runtimeStep: WizardStep = {
     let scan_cooldown = current.scan_cooldown ?? 30;
     if (continuous_mode) {
       const cooldownStr = await ctx.prompts.input(
-        'Scan cooldown between readings (seconds, 5-3600). Note: after a successful read the app waits at least 25 s on the native BLE handler to avoid reconnecting while the scale is still advertising:',
+        'Scan cooldown after a reading (seconds, 5-3600). Built-in Bluetooth only: mqtt-proxy, esphome-proxy and ha-bluetooth listen all the time and ignore it. On Linux the app waits at least 25 s after a reading regardless:',
         {
           default: String(scan_cooldown),
           validate: (v) => {

@@ -74,12 +74,13 @@ export class HoldTimer {
 
   /**
    * `holdMs` may be a getter, resolved when the timer arms rather than when it
-   * is constructed. The session builds this before `onSessionStart` runs, so an
-   * adapter that decides its variant there (yunmai's Mini/SE) would otherwise
-   * arm with the value from the PREVIOUS session: a standard unit followed by a
-   * Mini gave `setTimeout(..., 0)`, which resolved weight-only on the next tick
-   * and dropped the impedance, while logging "holding connection up to 0s"
-   * (#406).
+   * is constructed. The session builds this before `onSessionStart` runs and
+   * before any frame is parsed, so an adapter whose hold depends on what it has
+   * seen (yunmai decides it from the frame it just parsed, #474) would
+   * otherwise arm with a stale value. Read at construction, a standard Yunmai
+   * followed by a Mini gave `setTimeout(..., 0)`, which resolved weight-only on
+   * the next tick and dropped the impedance, while logging "holding connection
+   * up to 0s" (#406).
    */
   constructor(
     private readonly holdMs: number | (() => number),

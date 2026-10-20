@@ -28,12 +28,13 @@ import {
 import type { Exporter } from './interfaces/exporter.js';
 import type { ScaleAdapter } from './interfaces/scale-adapter.js';
 import { createAppContext } from './runtime/context.js';
+import { resolveReplayAnchorsPath } from './runtime/replay-anchors.js';
 import { processReading } from './runtime/processor.js';
 import { PollReadingSource } from './runtime/poll-source.js';
-import { runContinuousLoop } from './runtime/loop.js';
+import { runContinuousLoop, type RuntimeLoopDeps } from './runtime/loop.js';
 import { runSingleShot } from './runtime/single-run.js';
 import { reloadAppConfig, userDisplaySnapshot } from './runtime/reload.js';
-import { buildReadingSource } from './runtime/sources.js';
+import { buildReadingSource, type ReadingSourceBundle } from './runtime/sources.js';
 import { resolveHandlerKey } from './ble/index.js';
 import {
   buildSingleUserExporters,
@@ -142,6 +143,8 @@ const ctx = createAppContext({
   resolved: initialResolved,
   configSource: loaded.source,
   configPath: loaded.configPath,
+  // After setLogLevel, so the restored weigh-ins show at debug level (D067).
+  replayAnchorsPath: resolveReplayAnchorsPath(loaded.configPath),
   signal: ac.signal,
   abortApp: (reason) => ac.abort(reason),
 });
@@ -244,6 +247,17 @@ async function main(): Promise<void> {
       'ble.adapter_privacy only applies to the built-in Linux BlueZ transport (node-ble); ignored.',
     );
   }
+  if (
+    (ctx.config.runtime?.no_reading_rescan_delay ?? 0) > 0 &&
+    (!initialResolved.continuousMode || resolveHandlerKey(ctx.bleHandler) !== 'node-ble')
+  ) {
+    // Only the node-ble poll loop tags a session that heard the scale (#475),
+    // and a single run has no next session to wait for.
+    log.warn(
+      'runtime.no_reading_rescan_delay only applies in continuous mode on the built-in Linux ' +
+        'BlueZ transport (node-ble); ignored.',
+    );
+  }
 
   if (ctx.bleHandler === 'mqtt-proxy' && ctx.mqttProxy) {
     const bootstrapped = await bootstrapMqttProxy(ctx.mqttProxy);
@@ -323,6 +337,7 @@ async function main(): Promise<void> {
     const qnA4Prelude = ctx.config.ble?.qn_a4_prelude ?? undefined;
     const qnTimeSyncLong = ctx.config.ble?.qn_time_sync_long ?? undefined;
     const qnConfigLong = ctx.config.ble?.qn_config_long ?? undefined;
+    const qnResultAck = ctx.config.ble?.qn_result_ack ?? undefined;
     for (const a of adapters)
       a.configure?.({
         bindKey,
@@ -335,6 +350,7 @@ async function main(): Promise<void> {
         qnA4Prelude,
         qnTimeSyncLong,
         qnConfigLong,
+        qnResultAck,
         // The config entries themselves, not copies: the processor moves
         // last_known_weight on them in memory after each live weigh-in.
         userWeights: ctx.config.users,
@@ -420,7 +436,7 @@ async function main(): Promise<void> {
 
   if (!initialResolved.continuousMode) {
     const success = await runSingleShot({
-      source: new PollReadingSource(ctx, adapters),
+      source: new PollReadingSource(ctx, adapters, { singleShot: true }),
       signal: ctx.signal,
       processReading: runProcessReading,
       flush: flushQueuedExports,
@@ -457,8 +473,16 @@ async function main(): Promise<void> {
     initialResolved.scanCooldownSec,
   );
 
+  // Every hook the source built goes to the loop as is. Listed one by one, a
+  // new hook was dropped by forgetting a line here, which no test runs (#475).
+  const { source, ...sourceHooks } = bundle;
+  // And every hook the source can build must be one the loop reads: a key
+  // only the bundle knows would pass through the spread and be ignored.
+  type HookOnlyTheSourceKnows = Exclude<keyof ReadingSourceBundle, keyof RuntimeLoopDeps>;
+  const _everyHookReachesLoop: [HookOnlyTheSourceKnows] extends [never] ? true : never = true;
   await runContinuousLoop({
-    source: bundle.source,
+    ...sourceHooks,
+    source,
     processReading: runProcessReading,
     signal: ctx.signal,
     touchHeartbeat,
@@ -467,13 +491,7 @@ async function main(): Promise<void> {
       needsReload = false;
     },
     onReload,
-    onSourceReload: bundle.onSourceReload,
-    onSuccess: bundle.onSuccess,
-    onFailure: bundle.onFailure,
     onCycleStart: flushQueuedExports,
-    failureDelayMs: bundle.failureDelayMs,
-    failureLogPrefix: bundle.failureLogPrefix,
-    failureLogPrefixFor: bundle.failureLogPrefixFor,
   });
 
   log.info('Stopped.');

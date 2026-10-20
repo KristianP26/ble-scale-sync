@@ -21,6 +21,24 @@ export { errMsg };
 export const LBS_TO_KG = 0.453592;
 export const BT_BASE_UUID_SUFFIX = '00001000800000805f9b34fb';
 export const CONNECT_TIMEOUT_MS = 30_000;
+
+/**
+ * How long a Device1.Disconnect (node-ble) may go unanswered before the link
+ * counts as stuck in BlueZ (#472).
+ *
+ * BlueZ answers a Disconnect for a device it lists as connected only once the
+ * connection is gone, and sends the kernel its MGMT Disconnect after a 2 s
+ * timer (DISCONNECT_TIMER). A kernel from v6.11 on waits at most 2 s more for
+ * the controller (HCI_CMD_TIMEOUT) and answers either way, and a device that is
+ * not connected is answered at once, so a healthy Disconnect is in by about
+ * 4 s. With a kernel older than that the MGMT Disconnect waits for the
+ * controller's Disconnection Complete, which a weak link can stretch to the
+ * supervision timeout (up to 32 s): there this can end a slow but healthy
+ * Disconnect early and cost one unneeded power-cycle. The debug line with the
+ * measured answer time is what this number should be tuned against.
+ */
+export const DISCONNECT_TIMEOUT_MS = 10_000;
+
 export const MAX_CONNECT_RETRIES = 5;
 export const DISCOVERY_TIMEOUT_MS = 120_000;
 export const DISCOVERY_POLL_MS = 2_000;
@@ -81,6 +99,12 @@ export const POST_DISCOVERY_QUIESCE_MS = 500;
  * socket (A-03), but a daemon that keeps the socket open and never answers is
  * still only caught here. Without a deadline the consecutive-failure watchdog
  * is never reached and a dead transport looks exactly like an idle house (#290).
+ *
+ * A healthy daemon can leave a call unanswered too: a Disconnect or
+ * RemoveDevice for a link BlueZ still lists as connected waits on that link
+ * (#472). Those calls carry their own 10 s deadlines on the connect and
+ * teardown path (DISCONNECT_TIMEOUT_MS, and the BlueZ call deadline in
+ * discovery.ts), so this one is only the last net there.
  */
 export const POLL_CYCLE_TIMEOUT_MS = 900_000;
 
@@ -91,15 +115,35 @@ export const POLL_CYCLE_TIMEOUT_MS = 900_000;
  * triggers BlueZ to accept the request against a peer that never completes
  * GATT discovery, which on some controllers stalls the D-Bus call inside
  * node-ble synchronously. A 25 s floor sidesteps the dying-peer window
- * entirely. Failed scans still respect the configured cooldown only; this
- * floor applies on success.
+ * entirely. A cycle without a reading waits for the retry backoff (or
+ * idle_rescan_delay, or at least runtime.no_reading_rescan_delay after a
+ * session that heard the scale and then went quiet until its idle timeout)
+ * instead; this floor applies on success.
  *
  * BlueZ-specific: only the `node-ble` handler hits the dying-peer GATT stall.
  * Proxy handlers (mqtt-proxy, esphome-proxy) and the noble-based stacks talk
  * to a different transport and do not need this floor; the orchestrator gates
- * application based on the resolved handler. See #143.
+ * application based on the resolved handler. See #143. The proxy watchers keep
+ * no distance at all; how their session after a reading is logged is
+ * POST_READING_RECONNECT_MS.
  */
 export const POST_DISCONNECT_GRACE_MS = 25_000;
+
+/**
+ * How long after a GATT reading a proxy watcher's next session to the same
+ * scale counts as the scale still being on after that weigh-in (#466).
+ *
+ * The proxy watchers keep no distance from a scale after a reading, on
+ * purpose: a second person stepping on before it switches off is read in that
+ * session, and on mqtt-proxy the ESP32 reconnects by itself anyway. Such a
+ * session ending without a reading is expected, not a failure. Measured from
+ * the reading to the moment the next session opens. 60 s covers the usual
+ * first reconnect: under a second on ESPHome, a few seconds on an ESP32-S3,
+ * about 10 to 13 s on a classic ESP32. A classic board that also waits out a
+ * Wi-Fi recovery and connect retries can take longer, and that session still
+ * warns.
+ */
+export const POST_READING_RECONNECT_MS = 60_000;
 
 /** Threshold below which a cached RSSI is considered stale (BlueZ uses 127 as "unavailable" sentinel). */
 export const RSSI_UNAVAILABLE = 127;
@@ -159,8 +203,9 @@ export interface ScanOptions {
   readingTimeoutMs?: number;
   /**
    * Clear a bond the scale has forgotten instead of only diagnosing it
-   * (`ble.auto_clear_stale_bond`, #335). node-ble only; the other transports
-   * have no bond to clear.
+   * (`ble.auto_clear_stale_bond`, #335), and only when the scale is seen
+   * refusing the key (D066). node-ble only; the other transports have no bond
+   * to clear.
    */
   autoClearStaleBond?: boolean;
   /**
@@ -174,6 +219,12 @@ export interface ScanOptions {
    * the connect when it is off (`ble.adapter_privacy`, #417). node-ble only.
    */
   adapterPrivacy?: boolean;
+  /**
+   * Longest wait, in minutes, before a bonding scale whose pairing nobody
+   * confirmed is connected again (`ble.pairing_retry_max_min`, #471, D063).
+   * Undefined means the handler's default; 0 never holds it back. node-ble only.
+   */
+  pairingRetryMaxMin?: number;
 }
 
 export interface ScanResult {
@@ -293,6 +344,63 @@ export class SessionTimeoutError extends Error {
 
   get reason(): 'idle' | 'cap' {
     return this.#reason;
+  }
+}
+
+/**
+ * BlueZ still lists the scale as connected and did not complete a
+ * Device1.Disconnect within DISCONNECT_TIMEOUT_MS (#472). Another connect
+ * attempt would "succeed" at once from that state and then wait in vain for
+ * the services, so the retry loop stops and the teardown recovers the adapter.
+ *
+ * Same shape as SessionTimeoutError: `name` stays 'Error' and `mac` is a
+ * getter, not an own enumerable property. Lives here rather than in the
+ * node-ble handler because the runtime picks the log prefix by it, and the
+ * handler is an optional dependency the runtime must not import.
+ */
+export class StaleLinkError extends Error {
+  readonly #mac: string;
+
+  constructor(mac: string) {
+    super(
+      `BlueZ keeps ${mac} marked as connected and did not complete a Disconnect within ` +
+        `${DISCONNECT_TIMEOUT_MS / 1000}s (#472)`,
+    );
+    this.#mac = mac;
+  }
+
+  get mac(): string {
+    return this.#mac;
+  }
+}
+
+/**
+ * The scale was found, but it is not paired and nobody confirmed the last
+ * pairing on it, so this cycle did not connect to it (#471, D063). The cycle
+ * listened to its advertisements for the rest of the discovery budget instead.
+ *
+ * Same shape as SessionTimeoutError: `name` stays 'Error' and `mac` is a
+ * getter. Lives here for the same reason as StaleLinkError: the runtime picks
+ * the log prefix by it and must not import the node-ble handler.
+ */
+export class PairingDeferredError extends Error {
+  readonly #mac: string;
+
+  constructor(mac: string, waitMs: number) {
+    const min = Math.max(1, Math.ceil(waitMs / 60_000));
+    // A wait that is over but heard no report since says so, rather than a
+    // minute that has nothing to do with when the next attempt goes.
+    super(
+      waitMs > 0
+        ? `${mac} is not paired; next pairing attempt in ${min} min, ` +
+            'or sooner if it reappears or advertises a new weigh-in'
+        : `${mac} is not paired; next pairing attempt as soon as it is heard again`,
+    );
+    this.#mac = mac;
+  }
+
+  get mac(): string {
+    return this.#mac;
   }
 }
 

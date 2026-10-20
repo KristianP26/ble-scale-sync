@@ -7,7 +7,13 @@
  */
 
 import type { Gender } from '../../interfaces/scale-adapter.js';
-import { VENDOR_APP_USER_KEY, VISIT_ALGORITHM, VISIT_ATHLETE_STEP } from './constants.js';
+import {
+  RESULT_ACK_MEASURED,
+  RESULT_ACK_OPCODE,
+  VENDOR_APP_USER_KEY,
+  VISIT_ALGORITHM,
+  VISIT_ATHLETE_STEP,
+} from './constants.js';
 
 /**
  * Build the extended-dialect measurement trigger for a weight anchor in kg.
@@ -35,6 +41,18 @@ export function buildA2Frame(raw: number): number[] {
   const v = Math.min(0xffff, Math.max(0, Math.round(raw)));
   const cmd = [0xa2, 0x06, 0x01, (v >> 8) & 0xff, v & 0xff, 0x00];
   cmd[5] = cmd.slice(0, 5).reduce((a, b) => a + b, 0) & 0xff;
+  return cmd;
+}
+
+/**
+ * The end-of-measurement frame for a complete 19-byte result
+ * (`ble.qn_result_ack`, #331), built as the vendor's published SDK builds it:
+ * `1f 05 <protocol type> 10 <sum>`, with the protocol type every other frame
+ * of the session carries.
+ */
+export function buildResultAck(protocolType: number): number[] {
+  const cmd = [RESULT_ACK_OPCODE, 0x05, protocolType & 0xff, RESULT_ACK_MEASURED, 0x00];
+  cmd[4] = cmd.slice(0, 4).reduce((a, b) => a + b, 0) & 0xff;
   return cmd;
 }
 
@@ -189,14 +207,20 @@ export interface StoredRecord {
  *   [10..11]  weight, BE u16, /100 kg
  *   [12..13]  R50, BE u16
  *   [14..15]  R500, BE u16
+ *   [16..17]  the scale's own body fat x0.1, [18] heart rate when the frame
+ *             is longer than 19 bytes (not read)
+ *
+ * The Physiq (VA category 129) follows a record with 0x24 and 0x25, the rest of
+ * the scale's composition for it (#463); those are not read either.
  *
  * This is the layout the vendor's published Android SDK (qnsdkX 2.37.2) reads
  * for these scales, and three real records agree: #213 (504/502), #75
  * (507/505) and #461 (4303/4301). openScale reads both resistances
  * little-endian one byte later, which lands on the right R50 only because
  * R50 and R500 share their high byte; its R500 is the low byte of R500 and a
- * zero (246, 249 and 205 on those records). Classic scales use a different
- * layout and are not read through this. Null below 16 bytes.
+ * zero (246, 249 and 205 on those records). Classic scales lay the record
+ * out one byte earlier (time [5..8], weight [9..10]: the vendor's published
+ * SDK and #283) and are not read at all (D068). Null below 16 bytes.
  */
 export function decodeStoredRecord(data: Buffer): StoredRecord | null {
   if (data.length < 16) return null;

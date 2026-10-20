@@ -44,9 +44,11 @@ describe('collectUnknownKeys', () => {
         qn_a4_prelude: true,
         qn_time_sync_long: true,
         qn_config_long: true,
+        qn_result_ack: true,
         auto_clear_stale_bond: true,
         preemptive_adapter_reset: false,
         adapter_privacy: true,
+        pairing_retry_max_min: 15,
         proxy_liveness_timeout_min: 45,
         // One handler at a time; every section run.sh can write is here, with
         // every key it writes into it.
@@ -71,6 +73,7 @@ describe('collectUnknownKeys', () => {
         continuous_mode: true,
         scan_cooldown: 30,
         idle_rescan_delay: 5,
+        no_reading_rescan_delay: 0,
         retry_failed_exports: true,
         dry_run: false,
         debug: false,
@@ -78,6 +81,15 @@ describe('collectUnknownKeys', () => {
       update_check: true,
     };
     expect(collectUnknownKeys(generated)).toEqual([]);
+  });
+
+  it('knows runtime.no_reading_rescan_delay (#475)', () => {
+    expect(
+      collectUnknownKeys({
+        ...BASE,
+        runtime: { continuous_mode: true, no_reading_rescan_delay: 900 },
+      }),
+    ).toEqual([]);
   });
 
   it('reports a misspelled key under ble', () => {

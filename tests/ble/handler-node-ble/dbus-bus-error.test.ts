@@ -34,7 +34,7 @@ vi.mock('node-ble', () => {
   return { default: mod, ...mod };
 });
 
-const { getConnection, getAdapter, resetConnection, isStaleConnectionError } =
+const { getConnection, getAdapter, resetConnection, isStaleConnectionError, CALL_NOT_SENT_TEXT } =
   await import('../../../src/ble/handler-node-ble/connection.js');
 const { bleLog } = await import('../../../src/ble/types.js');
 
@@ -216,6 +216,8 @@ describe('D-Bus socket closed by the bus (A-03)', () => {
     const outcome = await settle(inFlight);
     expect(outcome.state).toBe('rejected');
     expect(isStaleConnectionError(outcome.err)).toBe(true);
+    // It was sent: what is missing is the answer.
+    expect((outcome.err as Error).message).not.toContain(CALL_NOT_SENT_TEXT);
   });
 
   it('fails a call written after the close instead of parking it', async () => {
@@ -226,6 +228,7 @@ describe('D-Bus socket closed by the bus (A-03)', () => {
 
     const outcome = await settle(real.bus.call(powered()));
     expect(outcome.state).toBe('rejected');
+    expect((outcome.err as Error).message).toBe(CALL_NOT_SENT_TEXT);
   });
 
   it('rebuilds on the next getAdapter without touching the dead bus first', async () => {
@@ -253,6 +256,60 @@ describe('D-Bus socket closed by the bus (A-03)', () => {
     // Our own destroy() ends the old stream, and the daemon's close of it
     // arrives later. It must not condemn the healthy replacement.
     real.closeFromBus();
+    await getAdapter();
+    expect(createBluetooth).toHaveBeenCalledTimes(2);
+  });
+
+  // #472: a connect retry that replaced the connection left its caller's proxies
+  // on the old bus, and the teardown's Disconnect, StopDiscovery and
+  // RemoveDevice through them never settled.
+  it('fails a call left waiting on a connection it reset itself once the bus closes it', async () => {
+    const real = makeRealBusSession();
+    createBluetooth.mockImplementationOnce(() => real.session as never);
+    getConnection();
+    const inFlight = real.bus.call(powered());
+    resetConnection();
+    await getAdapter();
+
+    real.closeFromBus();
+
+    const outcome = await settle(inFlight);
+    expect(outcome.state).toBe('rejected');
+    // And the replacement stays: the close was ours.
+    await getAdapter();
+    expect(createBluetooth).toHaveBeenCalledTimes(2);
+  });
+
+  it('treats a call failed by a stream error on a replaced connection before its end as sent', async () => {
+    // The call went out and the answer is what is missing, so stale-link.ts
+    // must log "got no answer", not "was not sent".
+    const real = makeRealBusSession();
+    createBluetooth.mockImplementationOnce(() => real.session as never);
+    getConnection();
+    const inFlight = real.bus.call(powered());
+    resetConnection();
+    await getAdapter();
+
+    real.bus.emit('error', new Error('write EPIPE'));
+
+    const outcome = await settle(inFlight);
+    expect(outcome.state).toBe('rejected');
+    expect((outcome.err as Error).message).toBe('D-Bus connection closed');
+  });
+
+  it('fails a call written to a replaced connection after its close instead of parking it', async () => {
+    const real = makeRealBusSession();
+    createBluetooth.mockImplementationOnce(() => real.session as never);
+    getConnection();
+    resetConnection();
+    await getAdapter();
+    real.closeFromBus();
+
+    const outcome = await settle(real.bus.call(powered()));
+    expect(outcome.state).toBe('rejected');
+    expect(isStaleConnectionError(outcome.err)).toBe(true);
+    // Written after the close: it never left this process (stale-link.ts says so).
+    expect((outcome.err as Error).message).toBe(CALL_NOT_SENT_TEXT);
     await getAdapter();
     expect(createBluetooth).toHaveBeenCalledTimes(2);
   });

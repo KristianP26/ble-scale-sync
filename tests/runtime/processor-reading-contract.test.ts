@@ -125,6 +125,8 @@ function makeCtx(users: UserConfig[], over: Partial<AppContext> = {}): AppContex
     signal: new AbortController().signal,
     exporterCache: new Map(),
     lastExportedWeights: new Map(),
+    lastExportedAt: new Map(),
+    replayAnchorsPath: undefined,
     embeddedBroker: null,
     retryFailedExports: false,
     exportQueuePath: undefined,
@@ -178,6 +180,28 @@ describe('D027: what time a reading carries, and what counts as history', () => 
     expect(mqtt.calls.map((c) => c.weight)).toEqual([82]);
     expect(garmin.calls.map((c) => c.weight)).toEqual([80, 82]);
     expect(garmin.calls[0].context.timestamp).toEqual(stored);
+  });
+
+  it('sends a reading the adapter marks as from memory only to backdate exporters, however young (D065)', async () => {
+    // The QN 18-byte record of #463: 260 s old, so by age alone it would be
+    // the live weigh-in, next to the live one the session ended on.
+    const mqtt = exporter('mqtt', false);
+    const garmin = exporter('garmin', true);
+    const stored = new Date(Date.now() - 260_000);
+    const ctx = makeCtx([user({ weight_range: { min: 65, max: 80 }, last_known_weight: null })]);
+    const raw: RawReading = {
+      reading: { weight: 71.6, impedance: 507 },
+      history: [{ weight: 71.55, impedance: 497, timestamp: stored, fromMemory: true }],
+      adapter: recordingAdapter(),
+    };
+
+    await processReading(ctx, raw, { singleUserExporters: [mqtt, garmin] });
+
+    expect(mqtt.calls.map((c) => c.weight)).toEqual([71.6]);
+    expect(garmin.calls.map((c) => c.weight)).toEqual([71.55, 71.6]);
+    expect(garmin.calls[0].context.timestamp).toEqual(stored);
+    expect(garmin.calls[0].context.historical).toBe(true);
+    expect(ctx.lastExportedWeights.get('dad')).toBe(71.6);
   });
 
   it('gives a live weigh-in one measurement time, and the retry queue the same one (F-04, F-06)', async () => {

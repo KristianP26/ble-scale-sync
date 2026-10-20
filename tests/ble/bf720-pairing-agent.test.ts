@@ -234,6 +234,120 @@ describe('ensurePairingAgent (#83)', () => {
     expect(bus.export).toHaveBeenCalledTimes(1);
   });
 
+  // A call still out on a replaced connection fails only after resetConnection()
+  // has forgotten the agent: connection.ts rejects it with Disconnected once the
+  // old bus ends. That failure must not latch the role away from the new bus.
+  it('a default-agent request failing on a replaced connection does not latch the new one', async () => {
+    setPairingTarget(() => ({ pin: 1234, mac: SCALE }));
+    let failOld!: (e: unknown) => void;
+    const old = fakeBus({
+      RequestDefaultAgent: vi.fn(() => new Promise<void>((_r, rej) => (failOld = rej))),
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pendingOld = ensurePairingAgent(old.bus as any);
+    await vi.waitFor(() => expect(old.mgr.RequestDefaultAgent).toHaveBeenCalledTimes(1));
+
+    forgetPairingAgent();
+    failOld(new Error('org.freedesktop.DBus.Error.Disconnected: D-Bus connection closed'));
+    await pendingOld;
+
+    const fresh = fakeBus();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await ensurePairingAgent(fresh.bus as any);
+    expect(fresh.mgr.RequestDefaultAgent).toHaveBeenCalledWith(AGENT_PATH);
+    expect(bleLog.warn).not.toHaveBeenCalled();
+  });
+
+  it('a registration failing on a replaced connection warns about nothing and keeps the new one clean', async () => {
+    setPairingTarget(() => ({ pin: 1234, mac: SCALE }));
+    let failOld!: (e: unknown) => void;
+    const old = fakeBus({
+      RegisterAgent: vi.fn(() => new Promise<void>((_r, rej) => (failOld = rej))),
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pendingOld = ensurePairingAgent(old.bus as any);
+    await vi.waitFor(() => expect(old.mgr.RegisterAgent).toHaveBeenCalledTimes(1));
+
+    forgetPairingAgent();
+    failOld(new Error('org.freedesktop.DBus.Error.Disconnected: D-Bus connection closed'));
+    await pendingOld;
+
+    const fresh = fakeBus();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await ensurePairingAgent(fresh.bus as any);
+    expect(fresh.mgr.RegisterAgent).toHaveBeenCalledWith(AGENT_PATH, AGENT_CAPABILITY);
+    expect(fresh.mgr.RequestDefaultAgent).toHaveBeenCalledWith(AGENT_PATH);
+    expect(bleLog.warn).not.toHaveBeenCalled();
+  });
+
+  it('a late success on a replaced connection does not mark the new one registered', async () => {
+    setPairingTarget(() => ({ pin: 1234, mac: SCALE }));
+    let answerOld!: () => void;
+    const old = fakeBus({
+      RegisterAgent: vi.fn(() => new Promise<void>((r) => (answerOld = r))),
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pendingOld = ensurePairingAgent(old.bus as any);
+    await vi.waitFor(() => expect(old.mgr.RegisterAgent).toHaveBeenCalledTimes(1));
+
+    forgetPairingAgent();
+    answerOld();
+    await pendingOld;
+    expect(old.mgr.RequestDefaultAgent).not.toHaveBeenCalled();
+
+    const fresh = fakeBus();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await ensurePairingAgent(fresh.bus as any);
+    expect(fresh.bus.export).toHaveBeenCalledWith(AGENT_PATH, expect.anything());
+    expect(fresh.mgr.RegisterAgent).toHaveBeenCalledWith(AGENT_PATH, AGENT_CAPABILITY);
+  });
+
+  // The answer can already sit in the socket when resetConnection() runs, and
+  // dbus-next hands it over before the end, so after forgetPairingAgent().
+  it('a late default-agent success on a replaced connection leaves the role to the new one', async () => {
+    setPairingTarget(() => ({ pin: 1234, mac: SCALE }));
+    let answerOld!: () => void;
+    const old = fakeBus({
+      RequestDefaultAgent: vi.fn(() => new Promise<void>((r) => (answerOld = r))),
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pendingOld = ensurePairingAgent(old.bus as any);
+    await vi.waitFor(() => expect(old.mgr.RequestDefaultAgent).toHaveBeenCalledTimes(1));
+
+    forgetPairingAgent();
+    answerOld();
+    await pendingOld;
+
+    const fresh = fakeBus();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await ensurePairingAgent(fresh.bus as any);
+    expect(fresh.mgr.RequestDefaultAgent).toHaveBeenCalledWith(AGENT_PATH);
+  });
+
+  // The new connection can set its agent up before the old bus ends: the
+  // daemon closes its side only after our stream.end(). The old call failing
+  // then belongs to the old agent instance, not to whichever came after it.
+  it('an old call failing after the new connection set up its agent leaves the new one alone', async () => {
+    setPairingTarget(() => ({ pin: 1234, mac: SCALE }));
+    let failOld!: (e: unknown) => void;
+    const old = fakeBus({
+      RequestDefaultAgent: vi.fn(() => new Promise<void>((_r, rej) => (failOld = rej))),
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pendingOld = ensurePairingAgent(old.bus as any);
+    await vi.waitFor(() => expect(old.mgr.RequestDefaultAgent).toHaveBeenCalledTimes(1));
+
+    forgetPairingAgent();
+    const fresh = fakeBus();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await ensurePairingAgent(fresh.bus as any);
+    failOld(new Error('org.freedesktop.DBus.Error.Disconnected: D-Bus connection closed'));
+    await pendingOld;
+
+    expect(fresh.mgr.RequestDefaultAgent).toHaveBeenCalledWith(AGENT_PATH);
+    expect(bleLog.warn).not.toHaveBeenCalled();
+  });
+
   it('claims the default-agent role later if a PIN appears after a reload', async () => {
     const { bus, mgr } = fakeBus();
     setPairingTarget(() => ({}));

@@ -9,23 +9,82 @@ import {
   CONNECT_TIMEOUT_MS,
   DISCOVERY_TIMEOUT_MS,
   POST_DISCOVERY_QUIESCE_MS,
+  StaleLinkError,
 } from '../types.js';
-import { isBonded, releaseDeviceProxy, type Adapter, type Device } from './dbus.js';
+import { isDebugEnabled } from '../../logger.js';
+import { helperOf, isBonded, releaseDeviceProxy, type Adapter, type Device } from './dbus.js';
 import {
   startDiscoverySafe,
   removeDevice,
   stopDiscoveryAndQuiesce,
   notifyDiscoveryStopped,
+  withBluezDeadline,
 } from './discovery.js';
+import { disconnectBounded } from './stale-link.js';
 import { startPeerFreshnessTracker } from './freshness.js';
 import {
-  isAuthClassConnectFailure,
+  announceBondOnce,
+  describeAttempt,
+  shouldSettle,
+  staleBondClearNotice,
+  staleBondKeptNotice,
+  staleBondLooksStaleNotice,
   staleBondMessage,
+  staleBondPossibleMessage,
+  StaleBondEvidence,
+  LINK_SETTLE_MS,
   STALE_BOND_EVIDENCE_ATTEMPTS,
+  type AttemptEvidence,
 } from './stale-bond.js';
+import {
+  observeConnectAttempt,
+  linkNow,
+  type AttemptLinkView,
+  type LinkObserver,
+} from './link-observer.js';
 import { isDeviceObjectGone } from './device-object.js';
 import { requireAdapterPrivacy } from './privacy.js';
-import { bleFailureKind } from '../failure-kind.js';
+import { bleFailureKind, tagBleFailure } from '../failure-kind.js';
+
+/** Bound on the two property reads behind the debug line before a connect. */
+const LINK_CHECK_TIMEOUT_MS = 5_000;
+
+/**
+ * Debug only: what BlueZ says about the link before this cycle's first connect.
+ * `Connected=true` here is a link left over from an earlier session that BlueZ
+ * never let go of (#472). Nothing acts on it: a stuck link is recovered in the
+ * teardown, and ServicesResolved can be true on one too, so it would not make
+ * a complete rule anyway. Without DEBUG this costs no D-Bus call at all.
+ */
+async function logLinkStateBeforeConnect(device: Device): Promise<void> {
+  if (!isDebugEnabled()) return;
+  try {
+    const helper = helperOf(device);
+    const [connected, resolved] = await withTimeout(
+      Promise.all([helper.prop('Connected'), helper.prop('ServicesResolved')]),
+      LINK_CHECK_TIMEOUT_MS,
+      `no answer within ${LINK_CHECK_TIMEOUT_MS / 1000}s`,
+    );
+    bleLog.debug(
+      `Link check before connect: Connected=${String(connected)}, ServicesResolved=${String(resolved)}`,
+    );
+  } catch (err) {
+    bleLog.debug(`Link check before connect failed: ${errMsg(err)}`);
+  }
+}
+
+/** Debug only: how a failed attempt's connection ended (#471, D066). */
+function logAttemptEnd(
+  outcome: AttemptEvidence,
+  attempt: number,
+  total: number,
+  link: AttemptLinkView | undefined,
+  err: unknown,
+  ms: number,
+): void {
+  const line = describeAttempt({ attempt, total, ms, error: errMsg(err), outcome, link });
+  if (line) bleLog.debug(line);
+}
 
 export interface ConnectRecoveryContext {
   btAdapter: Adapter;
@@ -41,7 +100,9 @@ export interface ConnectRecoveryContext {
   keepDiscoveryDuringConnect?: boolean;
   /**
    * Delete a bond the peer has forgotten and pair again, rather than stopping at
-   * the diagnostic (`ble.auto_clear_stale_bond`, #335). Off by default.
+   * the diagnostic (`ble.auto_clear_stale_bond`, #335). Off by default, and
+   * only when BlueZ reports that the scale refused the key (stale-bond.ts,
+   * D066): a weak radio link gives the same error string (#471).
    */
   autoClearStaleBond?: boolean;
   /**
@@ -56,6 +117,18 @@ export interface ConnectRecoveryContext {
    * leaving the LE link to the scale up (A-07).
    */
   abortSignal?: AbortSignal;
+  /**
+   * Told about every adapter and device the retry loop moves to. A
+   * startDiscoverySafe in here can replace the D-Bus connection, and the
+   * caller's teardown has to reach BlueZ through the live one: a call through
+   * a proxy on the old bus fails as soon as that bus is gone (connection.ts)
+   * and never gets to BlueZ (#472). Once a device has been handed over this
+   * way it is the caller's, on a throw too, and this function releases only
+   * the ones it replaces. Without it the caller still holds what it passed in
+   * on the old adapter, and that device is released here anyway once the loop
+   * swaps it, so every caller that tears down a session passes this.
+   */
+  onLive?: (live: { btAdapter: Adapter; device: Device }) => void;
 }
 
 /**
@@ -113,7 +186,8 @@ function releaseSuperseded(previous: Device, current: Device): void {
 /**
  * Connect to a BLE device with recovery for BlueZ-specific failures.
  * On each failed attempt: disconnect -> RemoveDevice -> re-discover -> quiesce -> retry.
- * Returns the (possibly refreshed) Device reference.
+ * Returns the (possibly refreshed) Device reference; ctx.onLive hears of every
+ * adapter and device it moves to on the way, a throw included.
  */
 export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<Device> {
   let { btAdapter } = ctx;
@@ -135,8 +209,16 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
   // by default, so every other node-ble user takes the identical code path.
   let keepDiscovery = ctx.keepDiscoveryDuringConnect === true;
   let sawObjectGone = false;
-  // Consecutive authentication-class failures, reset by any other error (#290).
-  let authClassFailures = 0;
+  // What this call's failed attempts say about the stored key (#290, #471,
+  // D066). The error string alone proves nothing: every BlueZ gives the same
+  // one for a refused key and a weak radio link.
+  const evidence = new StaleBondEvidence();
+  // The current attempt's link: whether it came up, when it went down, and
+  // why (#471, D066).
+  let observer: LinkObserver | undefined;
+  // Ask BlueZ for disconnect reasons only once a connection came up and
+  // failed: a scale that connects, or never gets a link, costs no D-Bus call.
+  let probeReasons = false;
   // One bond deletion per connectWithRecovery call, and only with the opt-in.
   // Repeating it would delete the bond the previous attempt just established,
   // turning a scale that needs two goes at pairing into an endless re-pair.
@@ -151,9 +233,24 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
   // Set immediately before each return, so the finally can tell "handing this
   // proxy to the caller" from "leaving by exception".
   let succeeded = false;
+  // The device the caller holds: its own, or the last one handed over below.
+  let handedOver = ctx.initialDevice;
+  /** Hand the caller what the loop uses now; no-op without ctx.onLive. */
+  const reportLive = (): void => {
+    if (!ctx.onLive) return;
+    handedOver = device;
+    ctx.onLive({ btAdapter, device });
+  };
+  const adoptAdapter = (result: Adapter | false): void => {
+    if (!result || result === btAdapter) return;
+    btAdapter = result;
+    reportLive();
+  };
 
   try {
+    await logLinkStateBeforeConnect(device);
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      let t0 = Date.now();
       try {
         throwIfAborted();
         // Skip the dying-peer connect attempt: a missing or 127-sentinel RSSI
@@ -173,8 +270,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           try {
             tracker.stop();
             privacyCheckDue = true;
-            const result = await startDiscoverySafe(btAdapter, bleAdapter, { abortSignal });
-            if (result) btAdapter = result;
+            adoptAdapter(await startDiscoverySafe(btAdapter, bleAdapter, { abortSignal }));
             const supersededByRediscovery = device;
             device = await waitDeviceBounded(
               btAdapter,
@@ -188,6 +284,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
             // this the retry loop is itself a source of the listener growth in
             // #397.
             releaseSuperseded(supersededByRediscovery, device);
+            reportLive();
             tracker = startPeerFreshnessTracker(device);
             if (keepDiscovery) {
               await sleep(POST_DISCOVERY_QUIESCE_MS);
@@ -209,15 +306,28 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           privacyCheckDue = false;
         }
 
-        const t0 = Date.now();
+        // On the device as it is now: a retry may have moved to a new adapter
+        // and D-Bus connection.
+        const obs = await observeConnectAttempt(device, { probeReasons, abortSignal });
+        observer = obs;
+        // The probe can take up to 2 s; a shutdown meanwhile must not send a Connect.
+        throwIfAborted();
+
+        t0 = Date.now();
         bleLog.debug(`Connect attempt ${attempt + 1}/${maxRetries + 1}...`);
+        obs.markConnectStart();
+        const pending = device.connect();
+        // The first handler on the call: the error time the link is measured from.
+        pending.catch(() => obs.markError());
         // On abort the pending Connect is left to teardownSession, whose
         // Disconnect on the same device path cancels it in BlueZ.
         await untilAborted(
-          withTimeout(device.connect(), CONNECT_TIMEOUT_MS, 'Connection timed out'),
+          withTimeout(pending, CONNECT_TIMEOUT_MS, 'Connection timed out'),
           abortSignal,
         );
         bleLog.debug(`Connected (took ${Date.now() - t0}ms)`);
+        obs.stop();
+        observer = undefined;
         if (keepDiscovery) {
           // Restore the "no discovery during GATT" invariant the callers rely
           // on. Safe now: BlueZ does not drop a device object while it is
@@ -228,6 +338,9 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
         succeeded = true;
         return device;
       } catch (err: unknown) {
+        // A timeout never settles the Connect call, so its error time is now.
+        observer?.markError();
+        const attemptMs = Date.now() - t0;
         // A shutdown is not a connect failure: no retry, no diagnosis, and the
         // abort reason rather than whatever the abandoned step wrapped it in.
         throwIfAborted();
@@ -235,7 +348,6 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
         // it, and the retry path would delete the device and rediscover.
         if (bleFailureKind(err) === 'blocked') throw err;
         const msg = errMsg(err);
-        authClassFailures = isAuthClassConnectFailure(err) ? authClassFailures + 1 : 0;
         if (isDeviceObjectGone(err)) sawObjectGone = true;
         if (sawObjectGone && !keepDiscovery) {
           keepDiscovery = true;
@@ -252,16 +364,63 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
               `Connection failed after ${maxRetries + 1} attempts: BlueZ keeps removing the D-Bus object for ${formattedMac}, so no GATT connection can be opened. The scale advertises but does not accept connections (broadcast only or non-discoverable). Last error: ${msg}`,
             );
           }
-          // A run of authentication-class aborts against a peer BlueZ still
-          // lists as bonded is the #290 signature: the scale rejected the
-          // stored key. Say so, with the remedy, instead of surfacing the bare
-          // BlueZ string that told nobody anything. Diagnosis only, since the
-          // same string also has benign producers (a connect issued while
-          // discovery is still active, or another D-Bus client holding a
-          // discovery session), so we never delete the bond on our own.
-          if (authClassFailures >= STALE_BOND_EVIDENCE_ATTEMPTS) {
-            if (await isBonded(device)) {
-              throw new Error(staleBondMessage(formattedMac, maxRetries + 1, msg));
+          // No Disconnect follows the last attempt, so BlueZ's word on how
+          // its connection ended (Connected=false, from 5.83 the reason) may
+          // still be on its way: on a refused key it comes one connection
+          // interval minus 100 ms after the error (#290: 74-95 ms).
+          if (observer && shouldSettle(err, observer.view())) {
+            await observer.settle(LINK_SETTLE_MS, abortSignal);
+          }
+          throwIfAborted();
+          const lastLink = observer?.view();
+          logAttemptEnd(
+            evidence.record(err, lastLink),
+            attempt + 1,
+            maxRetries + 1,
+            lastLink,
+            err,
+            attemptMs,
+          );
+          observer?.stop();
+          observer = undefined;
+          // Say what the failures point at, with the remedy, instead of the
+          // bare BlueZ string, and only as far as the evidence goes: a run of
+          // le-connection-abort-by-local alone is also what a weak radio
+          // link, a connect issued while discovery is still active, or
+          // another D-Bus client holding a discovery session give (#471).
+          const verdict = evidence.verdict();
+          const optIn = ctx.autoClearStaleBond === true && !staleBondCleared;
+          const worthAWord =
+            verdict.kind !== 'none' ||
+            (optIn && evidence.abortCount >= STALE_BOND_EVIDENCE_ATTEMPTS);
+          if (worthAWord && (await isBonded(device))) {
+            // Why the opt-in left the bond alone, once per scale and process.
+            if (optIn && verdict.kind === 'outlived') {
+              announceBondOnce(
+                'looks-stale',
+                formattedMac,
+                'warn',
+                staleBondLooksStaleNotice(formattedMac, verdict),
+              );
+            } else if (
+              optIn &&
+              verdict.kind !== 'reported' &&
+              evidence.abortCount >= STALE_BOND_EVIDENCE_ATTEMPTS
+            ) {
+              announceBondOnce(
+                'kept',
+                formattedMac,
+                'info',
+                staleBondKeptNotice(formattedMac, evidence.abortCount, evidence.keptWhy()),
+              );
+            }
+            if (verdict.kind === 'reported' || verdict.kind === 'outlived') {
+              throw new Error(staleBondMessage(formattedMac, maxRetries + 1, msg, verdict));
+            }
+            if (verdict.kind === 'possible') {
+              throw new Error(
+                staleBondPossibleMessage(formattedMac, maxRetries + 1, verdict.linkUps, msg),
+              );
             }
           }
           throw new Error(`Connection failed after ${maxRetries + 1} attempts: ${msg}`);
@@ -272,33 +431,52 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           `Connect error: ${msg}. Retrying (${attempt + 1}/${maxRetries}) in ${delay}ms...`,
         );
 
-        // 1. Disconnect (best-effort)
-        try {
-          bleLog.debug('Disconnecting before retry...');
-          await device.disconnect();
-          bleLog.debug('Disconnect OK');
-        } catch {
-          bleLog.debug('Disconnect failed (ignored)');
+        // 1. Disconnect (best-effort, but bounded). An unanswered one means
+        // BlueZ still lists the scale as connected after the link is gone, and
+        // every further attempt would "connect" at once from that state and
+        // then wait for services that never come (#472). Stop here; the
+        // teardown recovers the adapter.
+        bleLog.debug('Disconnecting before retry...');
+        const disconnectAt = linkNow();
+        const disconnected = await disconnectBounded(device, {
+          mac: formattedMac,
+          label: 'retry',
+          abortSignal,
+        });
+        // How long BlueZ held the answer back: until the connection was gone.
+        const disconnectMs = linkNow() - disconnectAt;
+        if (disconnected === 'aborted') throwIfAborted();
+        if (disconnected === 'timeout') {
+          throw tagBleFailure(new StaleLinkError(formattedMac), 'wedge-suspect');
         }
 
-        // 2. Purge stale D-Bus proxy. With the opt-in, a run of
-        // authentication-class failures against a peer BlueZ still lists as
-        // bonded also takes the pairing keys with it: the peripheral has
-        // forgotten its half, and the bonded guard in removeDevice would
-        // otherwise keep the dead key alive forever and lock the host out of
-        // the scale until someone runs `bluetoothctl remove` (#335).
+        // What this attempt's connection did, read only now: BlueZ sends
+        // Connected=false, and from 5.83 the reason, before it answers the
+        // Disconnect above.
+        const link = observer?.view();
+        const outcome = evidence.record(err, link, disconnectMs);
+        logAttemptEnd(outcome, attempt + 1, maxRetries + 1, link, err, attemptMs);
+        if (link?.linkUp && outcome !== 'other') probeReasons = true;
+        observer?.stop();
+        observer = undefined;
+
+        // 2. Purge the stale D-Bus proxy. With the opt-in and BlueZ's word
+        // that the scale refused the stored key, the pairing keys go with it:
+        // the peripheral has forgotten its half, and the bonded guard in
+        // removeDevice would otherwise keep the dead key alive forever and
+        // lock the host out of the scale until someone runs
+        // `bluetoothctl remove` (#335). The error string is not that word: a
+        // weak radio link gives the same one (#471, D066).
+        const verdict = evidence.verdict();
+        const refused = verdict.kind === 'reported' ? verdict.refused : 0;
         const clearBond =
           ctx.autoClearStaleBond === true &&
           !staleBondCleared &&
-          authClassFailures >= STALE_BOND_EVIDENCE_ATTEMPTS &&
+          refused > 0 &&
           (await isBonded(device));
         if (clearBond) {
           staleBondCleared = true;
-          bleLog.warn(
-            `${formattedMac} rejected the stored pairing key on ${authClassFailures} ` +
-              'consecutive attempts, so the bond is being cleared and re-established ' +
-              '(ble.auto_clear_stale_bond). Put the scale into pairing mode if it asks.',
-          );
+          bleLog.warn(staleBondClearNotice(formattedMac, refused));
         }
         await removeDevice(btAdapter, mac, { includeBonded: clearBond });
 
@@ -310,8 +488,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
         const supersededByRetry = device;
         try {
           privacyCheckDue = true;
-          const result = await startDiscoverySafe(btAdapter, bleAdapter, { abortSignal });
-          if (result) btAdapter = result;
+          adoptAdapter(await startDiscoverySafe(btAdapter, bleAdapter, { abortSignal }));
           device = await waitDeviceBounded(
             btAdapter,
             formattedMac,
@@ -323,9 +500,9 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
             bleLog.debug('Leaving discovery running for the next connect attempt (#297)');
           } else {
             try {
-              await btAdapter.stopDiscovery();
-            } catch {
-              bleLog.debug('stopDiscovery failed during retry (ignored)');
+              await withBluezDeadline(btAdapter.stopDiscovery(), 'StopDiscovery');
+            } catch (err) {
+              bleLog.debug(`stopDiscovery failed during retry (ignored): ${errMsg(err)}`);
             }
             // Our filtered scan is no longer running, so the claim on it has to
             // go with it or the next start would decline to re-apply the filter.
@@ -345,12 +522,14 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           }
         }
         releaseSuperseded(supersededByRetry, device);
+        reportLive();
         tracker = startPeerFreshnessTracker(device);
       }
     }
 
     throw new Error('Connection failed');
   } finally {
+    observer?.stop();
     tracker.stop();
     // Every throw path leaves the proxy this function last acquired unreleased,
     // and the caller cannot compensate: `device = await connectWithRecovery()`
@@ -359,7 +538,8 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
     // certainly registered its match rule and bus listener, because the
     // freshness tracker reads RSSI off it (#404, same mechanism as #396/#397).
     //
-    // Only proxies acquired in here: ctx.initialDevice belongs to the caller.
-    if (!succeeded && device !== ctx.initialDevice) releaseDeviceProxy(device);
+    // Only proxies the caller does not hold: ctx.initialDevice, or the last one
+    // ctx.onLive handed over, is its to disconnect and release.
+    if (!succeeded && device !== handedOver) releaseDeviceProxy(device);
   }
 }

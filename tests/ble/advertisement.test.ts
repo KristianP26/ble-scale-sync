@@ -306,4 +306,16 @@ describe('DedupWindow', () => {
     expect(d.shouldEmit('AA', 70.0)).toBe(true);
     expect(d.shouldEmit('AA', 70.0)).toBe(false);
   });
+
+  it('keys a stored record by its own time, apart from live readings of the same weight', () => {
+    const t = 1000;
+    const d = new DedupWindow(30_000, () => t);
+    const at = '2026-10-07T19:57:25.000Z';
+    expect(d.shouldEmit('AA', 76.55, at)).toBe(true);
+    // A live weigh-in in the same 0.1 kg bucket is not that record.
+    expect(d.shouldEmit('AA', 76.52)).toBe(true);
+    // The same record handed over again still is a repeat.
+    expect(d.shouldEmit('AA', 76.55, at)).toBe(false);
+    expect(d.shouldEmit('AA', 76.55, '2026-10-07T18:00:00.000Z')).toBe(true);
+  });
 });

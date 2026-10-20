@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'node:events';
 import type { ScaleAdapter } from '../../../src/interfaces/scale-adapter.js';
 import { defaultProfile } from '../../helpers/scale-test-utils.js';
 import { makeController, fakeExecFile, type FakeController } from '../../helpers/fake-btmgmt.js';
@@ -79,6 +80,8 @@ const fakeDevice = {
 
 /** False: auto-discovery finds no scale. */
 let autoDiscoverFinds = true;
+/** The adapter auto-discovery matches the scale to; a test replaces it (#471). */
+let autoDiscoverAdapter: (() => ScaleAdapter) | undefined;
 
 /** When set, the next waitForRawReading waits for it. */
 let holdNextReading: Promise<void> | null = null;
@@ -89,11 +92,16 @@ const pairingTargets: (() => { pin?: number; mac?: string })[] = [];
 /** Every context handed to connectWithRecovery, newest last. */
 const connectContexts: { adapterPrivacy?: boolean }[] = [];
 
+/** Requests the agent handled per scale, keyed by the bare upper-case hex of its MAC (#471). */
+const prompts = new Map<string, number>();
+const promptKey = (mac: string): string => mac.replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+
 vi.mock('../../../src/ble/handler-node-ble/agent.js', () => ({
   setPairingTarget: record('setPairingTarget', (p: () => { pin?: number; mac?: string }) => {
     pairingTargets.push(p);
   }),
   ensurePairingAgent: record('ensurePairingAgent', async () => {}),
+  userPromptCount: (mac: string) => prompts.get(promptKey(mac)) ?? 0,
 }));
 
 vi.mock('../../../src/ble/handler-node-ble/connection.js', () => ({
@@ -114,30 +122,97 @@ vi.mock('../../../src/ble/types.js', async (importOriginal) => {
   return { ...actual, resetAdapterBtmgmt: record('resetAdapterBtmgmt', async () => true) };
 });
 
+/** When set, the next removeDevice waits for it. */
+let holdNextRemoveDevice: Promise<void> | null = null;
+/** The adapter every removeDevice was sent through, in order. */
+const removedThrough: unknown[] = [];
+
+/** What startDiscoverySafe does in a test: an adapter it returns replaces the cycle's. */
+let onDiscoveryStart: (() => unknown) | undefined;
+/** Whether our filtered scan runs after startDiscoverySafe (D060). */
+let scanFiltered = true;
+
 vi.mock('../../../src/ble/handler-node-ble/discovery.js', () => ({
-  startDiscoverySafe: record('startDiscoverySafe', async () => undefined),
-  removeDevice: record('removeDevice', async () => {}),
+  startDiscoverySafe: record('startDiscoverySafe', async () => onDiscoveryStart?.()),
+  runningScanIsFiltered: () => scanFiltered,
+  // Passes the call through, so a test sees which connection it went to.
+  withBluezDeadline: <T>(call: Promise<T>) => call,
+  removeDevice: record('removeDevice', async (adapter: unknown) => {
+    removedThrough.push(adapter);
+    // One-shot gate: lets a test hold a cycle inside its teardown (A-04).
+    const gate = holdNextRemoveDevice;
+    holdNextRemoveDevice = null;
+    if (gate) await gate;
+    return 'removed';
+  }),
   stopDiscoveryAndQuiesce: record('stopDiscoveryAndQuiesce', async () => {}),
   notifyDiscoveryStopped: record('notifyDiscoveryStopped'),
   autoDiscover: record('autoDiscover', async () => {
     if (autoDiscoverFinds === false) throw new Error('No recognized scale found within 120s');
-    return { device: fakeDevice, adapter: makeAdapter(), mac: 'AA:BB:CC:DD:EE:FF' };
+    return {
+      device: fakeDevice,
+      adapter: autoDiscoverAdapter?.() ?? makeAdapter(),
+      mac: 'AA:BB:CC:DD:EE:FF',
+    };
   }),
 }));
 
+/** The company id every advertisement snapshot carries; a test replaces it (D060). */
+let snapshotCompanyId = 0x0611;
+/** The service data every advertisement snapshot carries; a test replaces it (#471). */
+let snapshotServiceData: Array<{ uuid: string; data: Buffer }> = [];
+
 vi.mock('../../../src/ble/handler-node-ble/device-object.js', () => ({
   logAdvertisementSnapshot: record('logAdvertisementSnapshot', async () => ({
-    manufacturerData: { id: 0x0611, data: Buffer.alloc(0) },
-    serviceData: [],
+    manufacturerData: { id: snapshotCompanyId, data: Buffer.alloc(0) },
+    serviceData: snapshotServiceData,
   })),
   isDeviceObjectGone: () => false,
 }));
 
+/** True: every connect fails, as on a scale that drops the link (D060). */
+let connectFails = false;
+/** When set, the next connect throws what it returns (#472). */
+let connectThrows: (() => Error) | undefined;
+/** Runs inside every connect, where BlueZ would ask the agent to confirm a pairing (#471). */
+let onConnect: (() => void) | undefined;
+
 vi.mock('../../../src/ble/handler-node-ble/connect.js', () => ({
   connectWithRecovery: record('connectWithRecovery', async (ctx: unknown) => {
     connectContexts.push(ctx as { adapterPrivacy?: boolean });
+    onConnect?.();
+    if (connectFails) throw new Error('le-connection-abort-by-local');
+    const thrown = connectThrows;
+    connectThrows = undefined;
+    if (thrown) throw thrown();
     return fakeDevice;
   }),
+}));
+
+/** The MAC every noteReadingForStaleLink got, in order: the brake is per scale. */
+const readingBrakeMacs: string[] = [];
+
+// The stale-link recovery has its own tests. Here only whether the teardown
+// reaches it, and that a reading lifts its brake; the bounded Disconnect stays
+// real, since that is what the cycle has to get past (#472).
+vi.mock('../../../src/ble/handler-node-ble/stale-link.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../../src/ble/handler-node-ble/stale-link.js')>();
+  return {
+    ...actual,
+    staleLinkRecoveryDue: () => true,
+    recoverStaleLink: record('recoverStaleLink', async () => {}),
+    noteReadingForStaleLink: record('noteReadingForStaleLink', (mac: string) => {
+      readingBrakeMacs.push(mac);
+    }),
+  };
+});
+
+vi.mock('../../../src/ble/handler-node-ble/broadcast.js', () => ({
+  broadcastScanNodeBle: record('broadcastScanNodeBle', async (adapter: unknown) => ({
+    reading: { weight: 80, impedance: 0 },
+    adapter,
+  })),
 }));
 
 /** The char map every buildCharMap returns; a test replaces it (#408). */
@@ -215,12 +290,22 @@ function makeAdapter(overrides: Partial<ScaleAdapter> = {}): ScaleAdapter {
 
 const { scanAndReadRaw } = await import('../../../src/ble/handler-node-ble/scan.js');
 const { bleFailureKind } = await import('../../../src/ble/failure-kind.js');
+const { StaleLinkError, PairingDeferredError } = await import('../../../src/ble/types.js');
+const { _resetPairingBackoffForTests, pairingBackoff } =
+  await import('../../../src/ble/handler-node-ble/pairing-backoff.js');
 const { _resetAdapterPrivacyStateForTests } =
   await import('../../../src/ble/handler-node-ble/privacy.js');
+const { _resetDeviceCacheForTests } =
+  await import('../../../src/ble/handler-node-ble/device-cache.js');
+const { applyForcedAdapter } = await import('../../../src/scales/force.js');
+const { BeurerBf720Adapter } = await import('../../../src/scales/beurer-bf720.js');
 
 describe('scanAndReadRaw call order (#368)', () => {
   beforeEach(() => {
     calls.length = 0;
+    // A successful cycle writes the per-MAC memory (D060), so it would
+    // otherwise depend on which test ran before.
+    _resetDeviceCacheForTests();
     vi.useFakeTimers();
   });
   afterEach(() => {
@@ -279,9 +364,9 @@ describe('scanAndReadRaw call order (#368)', () => {
     expect(pairingTargets.at(-1)?.().mac).toBe('AA:BB:CC:DD:EE:FF');
   });
 
-  it('evicts the cached device before starting discovery', async () => {
-    // In continuous mode BlueZ hands back the previous cycle's Device1 unless
-    // it is removed, so the proxy is stale from the first frame.
+  it('evicts the cached device before starting discovery on the first cycle for a scale', async () => {
+    // Until a reading shows which adapter the scale needs, a kept object could
+    // be a broadcast scale's, carrying the last weigh-in's frame (D060).
     const seen = await run();
     expect(seen.indexOf('removeDevice')).toBeLessThan(seen.indexOf('startDiscoverySafe'));
     expect(seen.indexOf('startDiscoverySafe')).toBeLessThan(seen.indexOf('waitDevice'));
@@ -387,52 +472,42 @@ describe('scanAndReadRaw call order (#368)', () => {
 
   it('stands down mid-teardown when a newer cycle starts while it is aborted (A-04)', async () => {
     // The poll loop now aborts the cycle it gives up on, so its teardown starts
-    // right away, before the next cycle exists. The first await there (the
-    // disconnect) is a D-Bus call with no deadline; if the next cycle starts
-    // while it is parked, everything after it acts on that cycle's state.
+    // right away, before the next cycle exists. If the next cycle starts while
+    // the teardown waits on BlueZ, everything after that wait acts on that
+    // cycle's state. The Disconnect no longer holds an aborted teardown up
+    // (#472), so the wait held here is the RemoveDevice after the failed read.
     holdNextReading = new Promise<void>(() => {});
-    let releaseDisconnect!: () => void;
-    const disconnectGate = new Promise<void>((r) => (releaseDisconnect = r));
-    const realDisconnect = fakeDevice.disconnect;
-    let gateUsed = false;
-    fakeDevice.disconnect = async () => {
-      calls.push('device.disconnect');
-      if (!gateUsed) {
-        gateUsed = true;
-        await disconnectGate;
-      }
-    };
+    let releaseRemove!: () => void;
+    const removeGate = new Promise<void>((r) => (releaseRemove = r));
     const opts = {
       targetMac: 'AA:BB:CC:DD:EE:FF',
       adapters: [makeAdapter()],
       profile: defaultProfile(),
     };
-    try {
-      const ctrl = new AbortController();
-      const abandoned = scanAndReadRaw({ ...opts, abortSignal: ctrl.signal });
-      void abandoned.catch(() => {});
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(calls).toContain('waitForRawReading');
+    const ctrl = new AbortController();
+    const abandoned = scanAndReadRaw({ ...opts, abortSignal: ctrl.signal });
+    void abandoned.catch(() => {});
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls).toContain('waitForRawReading');
 
-      ctrl.abort(new Error('poll cycle abandoned'));
-      await vi.advanceTimersByTimeAsync(100);
-      expect(gateUsed).toBe(true);
+    // Armed only now, so the removal before this cycle's scan went through.
+    holdNextRemoveDevice = removeGate;
+    ctrl.abort(new Error('poll cycle abandoned'));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(holdNextRemoveDevice).toBe(null);
 
-      const replacement = scanAndReadRaw(opts);
-      await vi.advanceTimersByTimeAsync(5_000);
-      await replacement;
+    const replacement = scanAndReadRaw(opts);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await replacement;
 
-      calls.length = 0;
-      releaseDisconnect();
-      await vi.advanceTimersByTimeAsync(5_000);
-      await expect(abandoned).rejects.toThrow(/abandoned/);
+    calls.length = 0;
+    releaseRemove();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(abandoned).rejects.toThrow(/abandoned/);
 
-      expect(calls).not.toContain('removeDevice');
-      expect(calls).not.toContain('resetConnection');
-      expect(calls).not.toContain('resetAdapterBtmgmt');
-    } finally {
-      fakeDevice.disconnect = realDisconnect;
-    }
+    expect(calls).not.toContain('removeDevice');
+    expect(calls).not.toContain('resetConnection');
+    expect(calls).not.toContain('resetAdapterBtmgmt');
   });
 
   it('ends the session when shut down mid-reading instead of waiting out the idle timeout (A-07)', async () => {
@@ -469,9 +544,210 @@ describe('scanAndReadRaw call order (#368)', () => {
   });
 });
 
+/** Settles to the state of `p` without ever throwing out of the test. */
+function track<T>(p: Promise<T>): {
+  state: () => 'pending' | 'resolved' | 'rejected';
+  value: () => T | undefined;
+} {
+  let state: 'pending' | 'resolved' | 'rejected' = 'pending';
+  let value: T | undefined;
+  p.then(
+    (v) => {
+      state = 'resolved';
+      value = v;
+    },
+    () => (state = 'rejected'),
+  );
+  return { state: () => state, value: () => value };
+}
+
+describe('scanAndReadRaw and a Disconnect BlueZ never answers (#472)', () => {
+  const realDisconnect = fakeDevice.disconnect;
+
+  beforeEach(() => {
+    calls.length = 0;
+    readingBrakeMacs.length = 0;
+    _resetDeviceCacheForTests();
+    vi.useFakeTimers();
+    fakeDevice.disconnect = async () => {
+      calls.push('device.disconnect');
+      await new Promise<void>(() => {});
+    };
+  });
+  afterEach(() => {
+    fakeDevice.disconnect = realDisconnect;
+    delete (fakeDevice as unknown as { helper?: unknown }).helper;
+    connectThrows = undefined;
+    vi.useRealTimers();
+  });
+
+  const opts = () => ({
+    targetMac: 'AA:BB:CC:DD:EE:FF',
+    adapters: [makeAdapter()],
+    profile: defaultProfile(),
+  });
+
+  it('returns the reading when the Disconnect after it is never answered', async () => {
+    const result = track(scanAndReadRaw(opts()));
+
+    // One 10 s Disconnect deadline, not two: the teardown knows the link is
+    // stale and does not send another.
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(result.state()).toBe('resolved');
+    expect(calls.filter((c) => c === 'device.disconnect')).toHaveLength(1);
+    expect(result.value()?.reading.weight).toBe(80);
+    // The reading lifts the brake of the scale it came from; the stale link it
+    // left goes to the recovery.
+    expect(readingBrakeMacs).toEqual(['AA:BB:CC:DD:EE:FF']);
+    expect(calls).toContain('recoverStaleLink');
+  });
+
+  it('lifts the brake of the scale auto-discovery found, which has no scale_mac', async () => {
+    const result = track(scanAndReadRaw({ ...opts(), targetMac: undefined }));
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(result.state()).toBe('resolved');
+    expect(calls).toContain('autoDiscover');
+    expect(readingBrakeMacs).toEqual(['AA:BB:CC:DD:EE:FF']);
+  });
+
+  it('hands a stale link to the teardown', async () => {
+    fakeDevice.disconnect = async () => {
+      calls.push('device.disconnect');
+    };
+    connectThrows = () => new StaleLinkError('AA:BB:CC:DD:EE:FF');
+    const result = track(scanAndReadRaw(opts()));
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(result.state()).toBe('rejected');
+    // connectWithRecovery already waited out one Disconnect; a second would
+    // wait just as long for nothing.
+    expect(calls).not.toContain('device.disconnect');
+    expect(calls).toContain('recoverStaleLink');
+    // No reading, so the brake stays where it is.
+    expect(calls).not.toContain('noteReadingForStaleLink');
+  });
+
+  it('does not lift the brake on a broadcast reading, which never touches the link', async () => {
+    fakeDevice.disconnect = async () => {
+      calls.push('device.disconnect');
+    };
+    const result = track(
+      scanAndReadRaw({
+        ...opts(),
+        adapters: [makeAdapter({ preferPassive: true, parseServiceData: () => null })],
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(result.state()).toBe('resolved');
+    expect(calls).toContain('broadcastScanNodeBle');
+    expect(calls).not.toContain('noteReadingForStaleLink');
+  });
+
+  it('does not lift the brake when the connect works but no reading follows', async () => {
+    // With a stuck link BlueZ answers Connect at once from its own state, so
+    // only a reading says the link is healthy again.
+    fakeDevice.disconnect = async () => {
+      calls.push('device.disconnect');
+    };
+    const realGatt = fakeDevice.gatt;
+    fakeDevice.gatt = async () => {
+      calls.push('device.gatt');
+      throw new Error('GATT server acquisition timed out');
+    };
+    try {
+      const result = track(scanAndReadRaw(opts()));
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(result.state()).toBe('rejected');
+      expect(calls).toContain('connectWithRecovery');
+      expect(calls).not.toContain('noteReadingForStaleLink');
+    } finally {
+      fakeDevice.gatt = realGatt;
+    }
+  });
+
+  it('every cycle ends and releases its device proxy while BlueZ never answers Disconnect', async () => {
+    (fakeDevice as unknown as { helper: unknown }).helper = {
+      removeListeners: () => calls.push('releaseDeviceProxy'),
+    };
+    for (let cycle = 1; cycle <= 3; cycle++) {
+      calls.length = 0;
+      const result = track(scanAndReadRaw(opts()));
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(result.state(), `cycle ${cycle}`).toBe('resolved');
+      expect(calls, `cycle ${cycle}`).toContain('releaseDeviceProxy');
+    }
+  });
+});
+
+describe('scanAndReadRaw after a connect retry replaced the D-Bus connection (#472)', () => {
+  beforeEach(() => {
+    calls.length = 0;
+    removedThrough.length = 0;
+    _resetDeviceCacheForTests();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    onConnect = undefined;
+    connectThrows = undefined;
+    vi.useRealTimers();
+  });
+
+  it('tears down through the adapter and device the retry loop moved to', async () => {
+    // The proxies the cycle started with belong to a bus that is gone, so
+    // BlueZ never gets a call through them. Before the cycle followed the
+    // retry loop (onLive), a Disconnect through them read as a stale link, and
+    // a RemoveDevice parked the teardown until the poll deadline.
+    const live: string[] = [];
+    const liveAdapter = {
+      ...fakeAdapter,
+      helper: {
+        callMethod: async (method: string) => void live.push(`adapter ${method}`),
+        object: '/org/bluez/hci0',
+      },
+    };
+    const liveDevice = {
+      ...fakeDevice,
+      disconnect: async () => void live.push('device.disconnect'),
+      helper: { removeListeners: () => live.push('device released') },
+    };
+    onConnect = () => {
+      const ctx = connectContexts.at(-1) as {
+        onLive?: (l: { btAdapter: unknown; device: unknown }) => void;
+      };
+      ctx.onLive?.({ btAdapter: liveAdapter, device: liveDevice });
+    };
+    connectThrows = () =>
+      new Error('Connection failed after 6 attempts: le-connection-abort-by-local');
+
+    const result = track(
+      scanAndReadRaw({
+        targetMac: 'AA:BB:CC:DD:EE:FF',
+        adapters: [makeAdapter()],
+        profile: defaultProfile(),
+        preemptiveAdapterReset: false,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(result.state()).toBe('rejected');
+    expect(live).toEqual(['device.disconnect', 'device released', 'adapter StopDiscovery']);
+    expect(calls).not.toContain('device.disconnect');
+    // The purge before the scan went through the cycle's own adapter, the one
+    // after the failed GATT session through the live one.
+    expect(removedThrough).toEqual([fakeAdapter, liveAdapter]);
+    expect(calls).not.toContain('recoverStaleLink');
+  });
+});
+
 describe('scanAndReadRaw bonds a single-bond scale with the option, and only that one (#408)', () => {
   beforeEach(() => {
     calls.length = 0;
+    // A successful cycle writes the per-MAC memory (D060), so it would
+    // otherwise depend on which test ran before.
+    _resetDeviceCacheForTests();
     vi.useFakeTimers();
     // The bonded scale is already paired on entry (the kernel answered its
     // Security Request at connect), so ensureBonded only reads Bonded for it.
@@ -524,6 +800,9 @@ describe('scanAndReadRaw turns a deferred binding off before disconnecting (#408
 
   beforeEach(() => {
     calls.length = 0;
+    // A successful cycle writes the per-MAC memory (D060), so it would
+    // otherwise depend on which test ran before.
+    _resetDeviceCacheForTests();
     charMapForTest = new Map<string, unknown>([
       [WM, stoppable('2a9d')],
       [OTHER, stoppable('fff1')],
@@ -648,6 +927,9 @@ describe('scanAndReadRaw with ble.adapter_privacy (#417)', () => {
 
   beforeEach(() => {
     calls.length = 0;
+    // A successful cycle writes the per-MAC memory (D060), so it would
+    // otherwise depend on which test ran before.
+    _resetDeviceCacheForTests();
     ctl = makeController();
     fakeAdapter.helper.object = '/org/bluez/hci0';
     connectContexts.length = 0;
@@ -757,6 +1039,9 @@ describe('scanAndReadRaw hands what the watchdog saw to the failure classificati
 
   beforeEach(() => {
     calls.length = 0;
+    // A successful cycle writes the per-MAC memory (D060), so it would
+    // otherwise depend on which test ran before.
+    _resetDeviceCacheForTests();
     watchdogRestarts = 0;
     vi.useFakeTimers();
     // The scale never shows up, and the fake adapter lists no devices, so the
@@ -836,5 +1121,728 @@ describe('scanAndReadRaw hands what the watchdog saw to the failure classificati
     const err = await failedCycle();
     expect(bleFailureKind(err)).toBe('wedge-suspect');
     expect(calls).toContain('notifyDiscoveryStopped');
+  });
+});
+
+describe('scanAndReadRaw keeps a GATT-only scale in BlueZ between cycles (#425, D060)', () => {
+  const MAC = 'AA:BB:CC:DD:EE:FF';
+  const waitDevice = fakeAdapter.waitDevice;
+
+  /**
+   * The object BlueZ kept from the earlier cycle, as the latch sees it.
+   * Not paired by default: a paired object takes the usual path and skips the
+   * gate, so a test of the gate would pass without it.
+   */
+  let heldPaired = false;
+  let heldMissing = false;
+  let heldHelper: EventEmitter & { removeListeners: ReturnType<typeof vi.fn> };
+  const heldDevice = {
+    get helper() {
+      return heldHelper;
+    },
+    isPaired: async () => heldPaired,
+  };
+  const withGetDevice = fakeAdapter as typeof fakeAdapter & {
+    getDevice?: (mac: string) => Promise<unknown>;
+  };
+
+  /** A report from the scale while discovery starts, as BlueZ emits it. */
+  const reportOnDiscoveryStart = (): void => {
+    onDiscoveryStart = () => {
+      heldHelper.emit('PropertiesChanged', { RSSI: { value: -60 } });
+      return undefined;
+    };
+  };
+
+  beforeEach(() => {
+    calls.length = 0;
+    _resetDeviceCacheForTests();
+    vi.useFakeTimers();
+    heldPaired = false;
+    heldMissing = false;
+    heldHelper = Object.assign(new EventEmitter(), { removeListeners: vi.fn() });
+    withGetDevice.getDevice = async () => {
+      calls.push('getDevice');
+      if (heldMissing) throw new Error('Device not found');
+      return heldDevice;
+    };
+  });
+  afterEach(() => {
+    delete withGetDevice.getDevice;
+    fakeAdapter.waitDevice = waitDevice;
+    onDiscoveryStart = undefined;
+    scanFiltered = true;
+    snapshotCompanyId = 0x0611;
+    connectFails = false;
+    watchdogHeardAgoMs = undefined;
+    vi.useRealTimers();
+  });
+
+  /**
+   * One cycle. Bounded, not runAllTimersAsync: a gate that waits instead of
+   * passing must show up as a cycle still running after 5 s.
+   */
+  async function cycle(
+    adapters: ScaleAdapter[],
+    /** null: auto-discovery, no ble.scale_mac. */
+    targetMac: string | null = MAC,
+  ): Promise<{ done: boolean; result: unknown }> {
+    let done = false;
+    const promise = scanAndReadRaw({
+      targetMac: targetMac ?? undefined,
+      adapters,
+      profile: defaultProfile(),
+    }).then(
+      (r) => r as unknown,
+      (e: unknown) => e,
+    );
+    void promise.then(() => (done = true));
+    await vi.advanceTimersByTimeAsync(5_000);
+    return { done, result: done ? await promise : undefined };
+  }
+
+  /** A first cycle that reads the scale, then a clean record for the second. */
+  async function afterReading(adapters: ScaleAdapter[]): Promise<void> {
+    const first = await cycle(adapters);
+    expect(first.done).toBe(true);
+    expect(first.result).not.toBeInstanceOf(Error);
+    calls.length = 0;
+  }
+
+  const before = (a: string, b: string): boolean =>
+    calls.indexOf(a) > -1 && calls.indexOf(a) < calls.indexOf(b);
+
+  it('keeps the object after a GATT-only reading and hears the report from the scan start', async () => {
+    const adapters = [makeAdapter()];
+    await afterReading(adapters);
+    reportOnDiscoveryStart();
+    const second = await cycle(adapters);
+    expect(second.done).toBe(true);
+    expect((second.result as { reading?: unknown }).reading).toBeDefined();
+    expect(before('getDevice', 'startDiscoverySafe')).toBe(true);
+    expect(calls).not.toContain('removeDevice');
+    expect(calls).toContain('connectWithRecovery');
+    // The latch is released on this path too.
+    expect(heldHelper.listenerCount('PropertiesChanged')).toBe(0);
+    expect(heldHelper.removeListeners).toHaveBeenCalled();
+  });
+
+  it('still removes it after a broadcast reading', async () => {
+    const adapters = [makeAdapter({ preferPassive: true, parseBroadcast: () => null })];
+    await afterReading(adapters);
+    await cycle(adapters);
+    expect(before('removeDevice', 'startDiscoverySafe')).toBe(true);
+    expect(calls).not.toContain('getDevice');
+  });
+
+  it('still removes it for an adapter that parses broadcasts but read over GATT', async () => {
+    const adapters = [makeAdapter({ parseBroadcast: () => null })];
+    await afterReading(adapters);
+    await cycle(adapters);
+    expect(before('removeDevice', 'startDiscoverySafe')).toBe(true);
+    expect(calls).not.toContain('getDevice');
+  });
+
+  it('keeps it for a forced GATT-only adapter from the first cycle', async () => {
+    reportOnDiscoveryStart();
+    const first = await cycle(applyForcedAdapter([makeAdapter()], 'Fake QN'));
+    expect(first.done).toBe(true);
+    expect(before('getDevice', 'startDiscoverySafe')).toBe(true);
+    expect(calls).not.toContain('removeDevice');
+    expect(calls).toContain('connectWithRecovery');
+  });
+
+  it('still removes it for a forced adapter with a parser', async () => {
+    await cycle(applyForcedAdapter([makeAdapter({ parseBroadcast: () => null })], 'Fake QN'));
+    expect(before('removeDevice', 'startDiscoverySafe')).toBe(true);
+    expect(calls).not.toContain('getDevice');
+  });
+
+  it('ends a kept object that never advertises as an idle no-show, without a connect', async () => {
+    const adapters = [makeAdapter()];
+    await afterReading(adapters);
+    watchdogHeardAgoMs = 4_000;
+    let settled: unknown;
+    let done = false;
+    void scanAndReadRaw({ targetMac: MAC, adapters, profile: defaultProfile() }).then(
+      () => (done = true),
+      (e: unknown) => {
+        settled = e;
+        done = true;
+      },
+    );
+    await vi.advanceTimersByTimeAsync(119_000);
+    expect(done).toBe(false);
+    while (!done) await vi.advanceTimersByTimeAsync(250);
+    expect((settled as Error).message).toBe(`Device ${MAC} not found within 120s`);
+    expect(bleFailureKind(settled)).toBe('idle');
+    expect(calls).not.toContain('connectWithRecovery');
+    expect(calls).not.toContain('resetAdapterBtmgmt');
+    expect(calls).not.toContain('removeDevice');
+    // The latch is released on this path as well.
+    expect(heldHelper.listenerCount('PropertiesChanged')).toBe(0);
+    expect(heldHelper.removeListeners).toHaveBeenCalled();
+  });
+
+  it('removes it after the scan started when our filtered scan is not running', async () => {
+    const adapters = [makeAdapter()];
+    await afterReading(adapters);
+    scanFiltered = false;
+    const second = await cycle(adapters);
+    expect(second.done).toBe(true);
+    expect(before('startDiscoverySafe', 'removeDevice')).toBe(true);
+    expect(before('removeDevice', 'waitDevice')).toBe(true);
+    expect(heldHelper.listenerCount('PropertiesChanged')).toBe(0);
+    expect(calls).toContain('connectWithRecovery');
+  });
+
+  it('removes it after the scan started when the D-Bus connection was replaced', async () => {
+    const adapters = [makeAdapter()];
+    await afterReading(adapters);
+    const replaced = { ...fakeAdapter };
+    onDiscoveryStart = () => replaced;
+    const second = await cycle(adapters);
+    expect(second.done).toBe(true);
+    expect(before('startDiscoverySafe', 'removeDevice')).toBe(true);
+    expect(before('removeDevice', 'waitDevice')).toBe(true);
+    expect(heldHelper.listenerCount('PropertiesChanged')).toBe(0);
+    expect(calls).toContain('connectWithRecovery');
+  });
+
+  /** G reads over GATT; P reads advertisements and claims only company 0x1234. */
+  function gattAndPassive(): ScaleAdapter[] {
+    type Seen = { manufacturerData?: { id: number } };
+    const gatt = makeAdapter({
+      name: 'G',
+      matches: (d: Seen) => d.manufacturerData?.id !== 0x1234,
+    } as unknown as Partial<ScaleAdapter>);
+    const passive = makeAdapter({
+      name: 'P',
+      match: { priority: 20, serviceUuids: ['fff0'] },
+      preferPassive: true,
+      parseBroadcast: () => null,
+      matches: (d: Seen) => d.manufacturerData?.id === 0x1234,
+    } as unknown as Partial<ScaleAdapter>);
+    return [gatt, passive];
+  }
+
+  it('never hands a kept object to the broadcast poll', async () => {
+    const adapters = gattAndPassive();
+    await afterReading(adapters);
+
+    reportOnDiscoveryStart();
+    snapshotCompanyId = 0x1234;
+    await cycle(adapters);
+    expect(calls.filter((c) => c === 'waitDevice')).toHaveLength(2);
+    expect(calls.indexOf('removeDevice')).toBeGreaterThan(calls.indexOf('waitDevice'));
+    expect(calls.indexOf('removeDevice')).toBeLessThan(calls.lastIndexOf('waitDevice'));
+    expect(calls.lastIndexOf('waitDevice')).toBeLessThan(calls.indexOf('broadcastScanNodeBle'));
+
+    // Forgotten, and P's reading is the memory now: removed before discovery.
+    calls.length = 0;
+    await cycle(adapters);
+    expect(before('removeDevice', 'startDiscoverySafe')).toBe(true);
+  });
+
+  it('forgets the GATT-only reading after the safety net, even when no reading follows', async () => {
+    // Otherwise the next cycle keeps the object again and runs the same
+    // safety net, a RemoveDevice and a second wait, on every cycle.
+    const adapters = gattAndPassive();
+    await afterReading(adapters);
+
+    reportOnDiscoveryStart();
+    snapshotCompanyId = 0x1234;
+    let waits = 0;
+    fakeAdapter.waitDevice = async () => {
+      calls.push('waitDevice');
+      if (++waits > 1) throw new Error('org.freedesktop.DBus.Error.NoReply');
+      return fakeDevice;
+    };
+    const second = await cycle(adapters);
+    expect(second.result).toBeInstanceOf(Error);
+    expect(calls).not.toContain('broadcastScanNodeBle');
+    fakeAdapter.waitDevice = waitDevice;
+
+    calls.length = 0;
+    snapshotCompanyId = 0x0611;
+    await cycle(adapters);
+    expect(before('removeDevice', 'startDiscoverySafe')).toBe(true);
+    expect(calls).not.toContain('getDevice');
+  });
+
+  it('removes it again after a broadcast reading replaced a GATT-only one', async () => {
+    // BlueZ no longer lists the scale, so P reads a fresh object and the
+    // safety net above never runs: only the broadcast reading's own memory
+    // write brings the removal back.
+    const adapters = gattAndPassive();
+    await afterReading(adapters);
+
+    heldMissing = true;
+    snapshotCompanyId = 0x1234;
+    await cycle(adapters);
+    expect(calls).toContain('broadcastScanNodeBle');
+    expect(calls.filter((c) => c === 'waitDevice')).toHaveLength(1);
+
+    calls.length = 0;
+    await cycle(adapters);
+    expect(before('removeDevice', 'startDiscoverySafe')).toBe(true);
+    expect(calls).not.toContain('getDevice');
+  });
+
+  it('still removes it in the teardown after a failed GATT session', async () => {
+    const adapters = [makeAdapter()];
+    await afterReading(adapters);
+    reportOnDiscoveryStart();
+    connectFails = true;
+    await cycle(adapters);
+    expect(calls).toContain('connectWithRecovery');
+    expect(calls.indexOf('connectWithRecovery')).toBeLessThan(calls.lastIndexOf('removeDevice'));
+  });
+
+  it('changes nothing in auto-discovery', async () => {
+    const adapters = [makeAdapter()];
+    await cycle(adapters, null);
+    await cycle(adapters, null);
+    expect(calls).toContain('autoDiscover');
+    expect(calls).not.toContain('removeDevice');
+    expect(calls).not.toContain('getDevice');
+  });
+
+  it('removes the object of a different MAC', async () => {
+    const adapters = [makeAdapter()];
+    await afterReading(adapters);
+    await cycle(adapters, '11:22:33:44:55:66');
+    expect(before('removeDevice', 'startDiscoverySafe')).toBe(true);
+    expect(calls).not.toContain('getDevice');
+  });
+
+  it('waits as before when BlueZ no longer lists the scale', async () => {
+    const adapters = [makeAdapter()];
+    await afterReading(adapters);
+    heldMissing = true;
+    const second = await cycle(adapters);
+    expect(second.done).toBe(true);
+    expect(calls).toContain('getDevice');
+    expect(calls).not.toContain('removeDevice');
+    expect(calls).toContain('connectWithRecovery');
+  });
+
+  it('takes the usual path for a paired kept object', async () => {
+    const adapters = [makeAdapter()];
+    await afterReading(adapters);
+    heldPaired = true;
+    const second = await cycle(adapters);
+    expect(second.done).toBe(true);
+    expect(calls).toContain('getDevice');
+    expect(calls).not.toContain('removeDevice');
+    expect(calls).toContain('connectWithRecovery');
+  });
+});
+
+describe('scanAndReadRaw after a pairing nobody confirmed (#471, D063)', () => {
+  const MAC = 'AA:BB:CC:DD:EE:FF';
+  const realGatt = fakeDevice.gatt;
+  const realIsPaired = fakeDevice.isPaired;
+  const realWaitDevice = fakeAdapter.waitDevice;
+  /** What Device1.Paired answers. */
+  let paired: boolean;
+  /** GATT discovery times out, as on an unpaired BF915 (#290). */
+  let gattTimesOut: boolean;
+  let helper: EventEmitter & { removeListeners: ReturnType<typeof vi.fn> };
+
+  const bonding = (): ScaleAdapter => makeAdapter({ requiresBonding: true });
+  /** The adapter list a cycle in this block gets. */
+  let cycleAdapter: () => ScaleAdapter = bonding;
+  /** The scale asks for the pairing to be confirmed while we connect. */
+  const promptOnConnect = (): void => {
+    onConnect = () => prompts.set(promptKey(MAC), (prompts.get(promptKey(MAC)) ?? 0) + 1);
+  };
+  /** What a failed cycle writes, for tests that are not about writing it. */
+  const seed = (failures = 1): void => {
+    for (let i = 0; i < failures; i++) pairingBackoff().recordFailure(MAC, 'Fake QN', undefined);
+  };
+
+  beforeEach(() => {
+    calls.length = 0;
+    _resetDeviceCacheForTests();
+    vi.useFakeTimers();
+    _resetPairingBackoffForTests(() => Date.now());
+    prompts.clear();
+    onConnect = undefined;
+    cycleAdapter = bonding;
+    paired = false;
+    gattTimesOut = true;
+    // The scan heard the room, so a cycle that never connects is idle.
+    watchdogHeardAgoMs = 4_000;
+    helper = Object.assign(new EventEmitter(), {
+      removeListeners: vi.fn(),
+      prop: async () => undefined,
+      set: async () => {},
+      callMethod: async () => {},
+    });
+    (fakeDevice as unknown as { helper: unknown }).helper = helper;
+    fakeDevice.isPaired = async () => paired;
+    fakeDevice.gatt = async () => {
+      calls.push('device.gatt');
+      if (gattTimesOut) throw new Error('GATT server acquisition timed out');
+      return fakeGatt;
+    };
+  });
+  afterEach(() => {
+    fakeDevice.gatt = realGatt;
+    fakeDevice.isPaired = realIsPaired;
+    fakeAdapter.waitDevice = realWaitDevice;
+    delete (fakeDevice as unknown as { helper?: unknown }).helper;
+    onConnect = undefined;
+    autoDiscoverFinds = true;
+    autoDiscoverAdapter = undefined;
+    watchdogHeardAgoMs = undefined;
+    snapshotServiceData = [];
+    prompts.clear();
+    vi.useRealTimers();
+  });
+
+  /** Start a cycle; `settled()` and `result()` follow it without ever throwing. */
+  function start(
+    extra: {
+      targetMac?: string | null;
+      abortSignal?: AbortSignal;
+      pairingRetryMaxMin?: number;
+    } = {},
+  ) {
+    let done = false;
+    let result: unknown;
+    const targetMac = extra.targetMac === null ? undefined : (extra.targetMac ?? MAC);
+    void scanAndReadRaw({
+      targetMac,
+      adapters: [cycleAdapter()],
+      profile: defaultProfile(),
+      ...(extra.abortSignal ? { abortSignal: extra.abortSignal } : {}),
+      ...(extra.pairingRetryMaxMin !== undefined
+        ? { pairingRetryMaxMin: extra.pairingRetryMaxMin }
+        : {}),
+    }).then(
+      (r) => {
+        result = r;
+        done = true;
+      },
+      (e: unknown) => {
+        result = e;
+        done = true;
+      },
+    );
+    return { settled: () => done, result: () => result };
+  }
+
+  /** One whole cycle, held ones included (they listen for the discovery budget). */
+  async function cycle(extra: Parameters<typeof start>[0] = {}): Promise<unknown> {
+    const c = start(extra);
+    for (let i = 0; i < 1_000 && !c.settled(); i++) await vi.advanceTimersByTimeAsync(250);
+    expect(c.settled()).toBe(true);
+    return c.result();
+  }
+
+  /** A cycle that connected, saw a pairing prompt, and got no reading. */
+  async function unconfirmedCycle(extra: Parameters<typeof start>[0] = {}): Promise<void> {
+    promptOnConnect();
+    const result = await cycle(extra);
+    expect(result).toBeInstanceOf(Error);
+    onConnect = undefined;
+    calls.length = 0;
+  }
+
+  it('does not connect again to the unpaired scale after an unconfirmed prompt', async () => {
+    await unconfirmedCycle();
+    const second = await cycle();
+    expect(calls).not.toContain('connectWithRecovery');
+    expect(second).toBeInstanceOf(PairingDeferredError);
+    expect(bleFailureKind(second)).toBe('idle');
+  });
+
+  it('connects again once the first wait has passed', async () => {
+    await unconfirmedCycle();
+    await vi.advanceTimersByTimeAsync(60_000);
+    gattTimesOut = false;
+    const second = start();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(calls).not.toContain('connectWithRecovery');
+    // Past the 2 minutes; the scale is heard again, so the connect goes.
+    await vi.advanceTimersByTimeAsync(35_000);
+    helper.emit('PropertiesChanged', { RSSI: { value: -70 } });
+    for (let i = 0; i < 100 && !second.settled(); i++) await vi.advanceTimersByTimeAsync(250);
+    expect(calls).toContain('connectWithRecovery');
+    expect((second.result() as { reading?: unknown }).reading).toBeDefined();
+  });
+
+  it('a holding cycle makes no Disconnect call', async () => {
+    await unconfirmedCycle();
+    // The first cycle's teardown released it already; only the holding one counts.
+    helper.removeListeners.mockClear();
+    await cycle();
+    expect(calls).not.toContain('device.disconnect');
+    expect(calls).not.toContain('connectWithRecovery');
+    // The proxy it never connected is handed back all the same (#396).
+    expect(helper.removeListeners).toHaveBeenCalled();
+  });
+
+  it('holds back in auto-discovery too', async () => {
+    autoDiscoverAdapter = bonding;
+    await unconfirmedCycle({ targetMac: null });
+    const second = await cycle({ targetMac: null });
+    expect(calls).toContain('autoDiscover');
+    expect(calls).not.toContain('connectWithRecovery');
+    expect(second).toBeInstanceOf(PairingDeferredError);
+  });
+
+  it('ends a holding cycle on a deaf radio as wedge-suspect, not idle', async () => {
+    seed();
+    watchdogHeardAgoMs = undefined;
+    const held = await cycle();
+    expect(held).toBeInstanceOf(PairingDeferredError);
+    expect(bleFailureKind(held)).toBe('wedge-suspect');
+  });
+
+  it('ends a holding cycle that heard the scale as idle, whatever the watchdog saw', async () => {
+    // The watchdog compares RSSI values only, and a scale standing still in a
+    // quiet room keeps one; the hold hears every report, so it answers for
+    // the radio. Counted as deaf, the cycle would feed the watchdog restart
+    // that wipes the pairing memory.
+    seed();
+    watchdogHeardAgoMs = undefined;
+    const c = start();
+    for (let i = 0; i < 1_000 && !c.settled(); i++) {
+      if (i % 40 === 0) helper.emit('PropertiesChanged', { RSSI: { value: -60 } });
+      await vi.advanceTimersByTimeAsync(250);
+    }
+    expect(c.settled()).toBe(true);
+    expect(c.result()).toBeInstanceOf(PairingDeferredError);
+    expect(bleFailureKind(c.result())).toBe('idle');
+    expect(calls).not.toContain('connectWithRecovery');
+  });
+
+  it('never waits past the discovery budget left in the cycle', async () => {
+    seed(5);
+    // The scale shows up 50 s into the cycle's 120 s discovery budget.
+    fakeAdapter.waitDevice = async () => {
+      calls.push('waitDevice');
+      await new Promise((r) => setTimeout(r, 50_000));
+      return fakeDevice;
+    };
+    const held = start();
+    await vi.advanceTimersByTimeAsync(115_000);
+    expect(held.settled()).toBe(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(held.settled()).toBe(true);
+    expect(held.result()).toBeInstanceOf(PairingDeferredError);
+  });
+
+  it('connects at once to a scale that comes back after a cycle without it', async () => {
+    await unconfirmedCycle();
+    fakeAdapter.waitDevice = async () => {
+      calls.push('waitDevice');
+      throw new Error(`Device ${MAC} not found within 120s`);
+    };
+    await cycle();
+    fakeAdapter.waitDevice = realWaitDevice;
+    calls.length = 0;
+    const back = start();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls).toContain('connectWithRecovery');
+    for (let i = 0; i < 1_000 && !back.settled(); i++) await vi.advanceTimersByTimeAsync(250);
+  });
+
+  it('connects at once in auto-discovery after a cycle that found no scale', async () => {
+    autoDiscoverAdapter = bonding;
+    await unconfirmedCycle({ targetMac: null });
+    autoDiscoverFinds = false;
+    await cycle({ targetMac: null });
+    autoDiscoverFinds = true;
+    calls.length = 0;
+    const back = start({ targetMac: null });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls).toContain('connectWithRecovery');
+    for (let i = 0; i < 1_000 && !back.settled(); i++) await vi.advanceTimersByTimeAsync(250);
+  });
+
+  it('never holds back a paired scale', async () => {
+    seed();
+    paired = true;
+    gattTimesOut = false;
+    const result = await cycle();
+    expect(calls).toContain('connectWithRecovery');
+    expect((result as { reading?: unknown }).reading).toBeDefined();
+    expect(pairingBackoff().has(MAC)).toBe(false);
+  });
+
+  it('records nothing when no prompt came', async () => {
+    const first = await cycle();
+    expect(first).toBeInstanceOf(Error);
+    calls.length = 0;
+    const second = start();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls).toContain('connectWithRecovery');
+    for (let i = 0; i < 1_000 && !second.settled(); i++) await vi.advanceTimersByTimeAsync(250);
+  });
+
+  it('records nothing for a scale that does not need bonding', async () => {
+    promptOnConnect();
+    const adapters = [makeAdapter()];
+    const run = async () => {
+      const p = scanAndReadRaw({ targetMac: MAC, adapters, profile: defaultProfile() });
+      void p.catch(() => {});
+      await vi.advanceTimersByTimeAsync(200_000);
+      return p.catch((e: unknown) => e);
+    };
+    expect(await run()).toBeInstanceOf(Error);
+    expect(pairingBackoff().has(MAC)).toBe(false);
+  });
+
+  it('records nothing when the pairing completed late in the same cycle', async () => {
+    promptOnConnect();
+    // The second GATT attempt comes after the pairing timed out on our side;
+    // somebody pressed SET in time for BlueZ.
+    let gatts = 0;
+    fakeDevice.gatt = async () => {
+      calls.push('device.gatt');
+      if (++gatts === 2) paired = true;
+      throw new Error('GATT server acquisition timed out');
+    };
+    expect(await cycle()).toBeInstanceOf(Error);
+    expect(pairingBackoff().has(MAC)).toBe(false);
+    onConnect = undefined;
+    calls.length = 0;
+    const second = start();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls).toContain('connectWithRecovery');
+    for (let i = 0; i < 1_000 && !second.settled(); i++) await vi.advanceTimersByTimeAsync(250);
+  });
+
+  it('a reading clears the wait', async () => {
+    await unconfirmedCycle();
+    expect(pairingBackoff().has(MAC)).toBe(true);
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    gattTimesOut = false;
+    const result = await cycle();
+    expect((result as { reading?: unknown }).reading).toBeDefined();
+    expect(pairingBackoff().has(MAC)).toBe(false);
+  });
+
+  // The two 0x181D payloads #418 logged on a BF915, verbatim: `01` while a
+  // weigh-in waits on the scale, an empty payload while none does.
+  const SVC_181D = '0000181d-0000-1000-8000-00805f9b34fb';
+  const NOTHING_WAITING = Buffer.alloc(0);
+  const READING_WAITING = Buffer.from([0x01]);
+  /** A bonding adapter with the BF720 hook, so the hint comes from the real code. */
+  const bf720 = new BeurerBf720Adapter();
+  const bondingWithHint = (): ScaleAdapter =>
+    makeAdapter({
+      requiresBonding: true,
+      advertisesPendingReading: (d) => bf720.advertisesPendingReading(d),
+    });
+
+  it('pairs at once when 0x181D goes from empty to 01', async () => {
+    cycleAdapter = bondingWithHint;
+    snapshotServiceData = [{ uuid: SVC_181D, data: NOTHING_WAITING }];
+    await unconfirmedCycle();
+    const second = start();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(calls).not.toContain('connectWithRecovery');
+    helper.emit('PropertiesChanged', {
+      ServiceData: {
+        signature: 'a{sv}',
+        value: { [SVC_181D]: { signature: 'ay', value: READING_WAITING } },
+      },
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls).toContain('connectWithRecovery');
+    for (let i = 0; i < 1_000 && !second.settled(); i++) await vi.advanceTimersByTimeAsync(250);
+  });
+
+  it('opens on the hint the attempt cycle saw', async () => {
+    autoDiscoverAdapter = bondingWithHint;
+    snapshotServiceData = [{ uuid: SVC_181D, data: NOTHING_WAITING }];
+    await unconfirmedCycle({ targetMac: null });
+    // Somebody weighed in between the two cycles.
+    snapshotServiceData = [{ uuid: SVC_181D, data: READING_WAITING }];
+    const second = start({ targetMac: null });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls).toContain('connectWithRecovery');
+    for (let i = 0; i < 1_000 && !second.settled(); i++) await vi.advanceTimersByTimeAsync(250);
+  });
+
+  it('does not open on a 01 that was already up when the pairing failed', async () => {
+    autoDiscoverAdapter = bondingWithHint;
+    snapshotServiceData = [{ uuid: SVC_181D, data: READING_WAITING }];
+    await unconfirmedCycle({ targetMac: null });
+    const second = await cycle({ targetMac: null });
+    expect(calls).not.toContain('connectWithRecovery');
+    expect(second).toBeInstanceOf(PairingDeferredError);
+  });
+
+  it('a cycle that only listened does not count as another unconfirmed pairing', async () => {
+    await unconfirmedCycle();
+    expect(pairingBackoff().failures(MAC)).toBe(1);
+    expect(await cycle()).toBeInstanceOf(PairingDeferredError);
+    expect(pairingBackoff().failures(MAC)).toBe(1);
+  });
+
+  it('holds the next cycle while the weigh-in that opened a failed attempt still waits', async () => {
+    cycleAdapter = bondingWithHint;
+    snapshotServiceData = [{ uuid: SVC_181D, data: NOTHING_WAITING }];
+    await unconfirmedCycle();
+    promptOnConnect();
+    const second = start();
+    await vi.advanceTimersByTimeAsync(30_000);
+    helper.emit('PropertiesChanged', {
+      ServiceData: {
+        signature: 'a{sv}',
+        value: { [SVC_181D]: { signature: 'ay', value: READING_WAITING } },
+      },
+    });
+    for (let i = 0; i < 1_000 && !second.settled(); i++) await vi.advanceTimersByTimeAsync(250);
+    expect(calls).toContain('connectWithRecovery');
+    expect(second.result()).toBeInstanceOf(Error);
+    onConnect = undefined;
+    calls.length = 0;
+    // Nobody fetched it, so the flag is still up in the next snapshot.
+    snapshotServiceData = [{ uuid: SVC_181D, data: READING_WAITING }];
+    const third = await cycle();
+    expect(calls).not.toContain('connectWithRecovery');
+    expect(third).toBeInstanceOf(PairingDeferredError);
+  });
+
+  it('with ble.pairing_retry_max_min 0 the next cycle connects as before', async () => {
+    await unconfirmedCycle({ pairingRetryMaxMin: 0 });
+    // Nothing written, so no "not connecting to it again" line either, and
+    // raising the cap later starts from a clean slate.
+    expect(pairingBackoff().has(MAC)).toBe(false);
+    const second = start({ pairingRetryMaxMin: 0 });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls).toContain('connectWithRecovery');
+    for (let i = 0; i < 1_000 && !second.settled(); i++) await vi.advanceTimersByTimeAsync(250);
+  });
+
+  it('applies a lower ble.pairing_retry_max_min to the running wait', async () => {
+    seed(8);
+    const second = start({ pairingRetryMaxMin: 1 });
+    await vi.advanceTimersByTimeAsync(61_000);
+    helper.emit('PropertiesChanged', { RSSI: { value: -70 } });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(calls).toContain('connectWithRecovery');
+    for (let i = 0; i < 1_000 && !second.settled(); i++) await vi.advanceTimersByTimeAsync(250);
+  });
+
+  it('an abort during the wait does not connect', async () => {
+    seed();
+    const ctrl = new AbortController();
+    const held = start({ abortSignal: ctrl.signal });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(held.settled()).toBe(false);
+    ctrl.abort(new Error('shutdown'));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(held.settled()).toBe(true);
+    expect((held.result() as Error).message).toBe('shutdown');
+    expect(calls).not.toContain('connectWithRecovery');
+    expect(helper.listenerCount('PropertiesChanged')).toBe(0);
   });
 });

@@ -160,7 +160,7 @@ After a reset the scale asks for the date and time, which is a useful confirmati
 Connect error: le-connection-abort-by-local
 ```
 
-The scale has dropped its half of the pairing while the host still holds the key. BlueZ replays the dead key forever and never invalidates it, so nothing recovers on its own. Clear it and pair again:
+Usually the scale has dropped its half of the pairing while the host still holds the key. BlueZ replays the dead key forever and never invalidates it, so nothing recovers on its own. A weak radio link gives the same error ([#471](https://github.com/KristianP26/ble-scale-sync/issues/471)); then some connects still get through. Clear it and pair again:
 
 ```bash
 sudo bluetoothctl
@@ -168,17 +168,40 @@ remove AA:BB:CC:DD:EE:FF
 pair AA:BB:CC:DD:EE:FF
 ```
 
-If it happens every session, `ble.auto_clear_stale_bond: true` does that for you. See [the configuration reference](/guide/configuration#config-yaml-reference).
+If it happens every session, `ble.auto_clear_stale_bond: true` does that for you on BlueZ 5.83 and later (Home Assistant OS 16.2 and later, for instance), which reports when the scale refused the key. Older BlueZ, such as 5.66 on Raspberry Pi OS bookworm or 5.82 on Raspberry Pi OS trixie, cannot tell a refused key from a weak link, so there the option clears nothing: the log says when the failures look like a refused key and leaves the clearing to you. In [debug mode](#debug-mode) the log also says, for each failed attempt that got as far as a connection, when it came up and how long it stayed up after the error, and on BlueZ 5.83 and later, from the attempt after the first such failure on, why BlueZ ended it. See [the configuration reference](/guide/configuration#config-yaml-reference).
 
 If the key is rejected on the very next connect after a session that worked, every time, and the scale asks for SET and a new pairing before every weigh-in (or the connect succeeds but then stalls at `Discovering services...` with `GATT server acquisition timed out`), the scale is throwing away a pairing that carried no host identity key. Some Beurer scales (the BF915 is confirmed in [#417](https://github.com/KristianP26/ble-scale-sync/issues/417)) keep a pairing only from a device that handed over an identity key (IRK) while pairing. A phone normally does; Linux does only while the adapter has LE privacy turned on, which it does not by default. The adapter power-cycle after each session is not the cause: the bond is rejected without it too.
 
 The remedy:
 
 1. Set `ble.adapter_privacy: true` (in the Home Assistant add-on: **Pair with a host identity key (LE privacy)**) and restart.
-2. Remove the old pairing once with `bluetoothctl remove AA:BB:CC:DD:EE:FF`, or let `ble.auto_clear_stale_bond: true` do it.
-3. Weigh in and confirm the pairing on the scale. Let ble-scale-sync do the pairing: in #417 a manual `bluetoothctl pair` with privacy on never completed, while the pairing ble-scale-sync started did.
+2. Remove the old pairing once with `bluetoothctl remove AA:BB:CC:DD:EE:FF` (or, on BlueZ 5.83 and later, let `ble.auto_clear_stale_bond: true` do it).
+3. Stand at the scale and confirm the pairing on it when it shows a code, about a minute after ble-scale-sync starts (the app connects and looks up the scale's services first). If you miss it, restart ble-scale-sync to be asked again at once. Let ble-scale-sync do the pairing: in #417 a manual `bluetoothctl pair` with privacy on never completed, while the pairing ble-scale-sync started did.
 
 Privacy then applies to the whole adapter, and on a native or Docker host `Privacy = device` in `/etc/bluetooth/main.conf` does the same without the option. Read [the `adapter_privacy` notes](/guide/configuration#config-yaml-reference) before turning it on.
+
+### Beurer: the scale shows a pairing code again and again
+
+When nobody confirms a pairing on the scale, earlier releases asked again on the next scan, every two or three minutes, each time with a new code on the display ([#471](https://github.com/KristianP26/ble-scale-sync/issues/471)). The app now waits before it asks again, 2 minutes three times and then longer, up to `ble.pairing_retry_max_min` (60 minutes by default), and does not connect to the scale in between:
+
+```
+AA:BB:CC:DD:EE:FF asked for the pairing to be confirmed on the scale and it was not (attempt 3). Not connecting to it again for 2 min, ...
+```
+
+A weigh-in should also ask at once when the scale advertises it (seen on a BF915, untested on the other models of the family): weigh in and stay at the scale for about a minute, until the code shows. That needs the scale to have had no weigh-in waiting on it when the pairing failed; otherwise only the wait or a restart asks again. To pair at once without weighing in, restart ble-scale-sync and confirm on the scale when the code shows, about a minute later. `ble.pairing_retry_max_min: 0` brings back the old behavior. See [the configuration reference](/guide/configuration#config-yaml-reference).
+
+### Beurer BF915: PAIR on the display all day
+
+A BF915 can advertise and accept a connection all the time, also with its display dark. In continuous mode every cycle then connects, and the scale shows `PAIR` while the session is open, about two minutes when nobody steps on, logged as `Scale connected but sent no reading`. With the normal retry backoff that is 10 to 15 sessions an hour, all day ([#475](https://github.com/KristianP26/ble-scale-sync/issues/475)). If the display shows a six-digit code instead, see [Beurer: the scale shows a pairing code again and again](#beurer-the-scale-shows-a-pairing-code-again-and-again).
+
+The BF915 in #475 keeps a weigh-in made in the meantime and hands it over at the next connection, so a pause between such sessions mostly delays the upload:
+
+```yaml
+runtime:
+  no_reading_rescan_delay: 900
+```
+
+Only a session in which the scale answered and then went quiet waits longer: its line ends with `(Timed out waiting for a complete scale reading)`, and with the setting in place it reads `retrying in 900s (runtime.no_reading_rescan_delay)`. A session that ends with `(GATT session cap exceeded)`, or in any other way, keeps the normal backoff. A weigh-in that arrives more than 5 minutes after it was taken is a past measurement: Garmin and the other exporters that can record one get it; MQTT, webhook, ntfy, Telegram and Strava do not. If those matter, keep the value at about 240 or below. During the wait the app scans for no scale at all and does not retry queued exports. A shorter `ble.session_timeout_sec` would also shorten each session's `PAIR`, untested on this model. See [the configuration reference](/guide/configuration#runtime).
 
 ## Exporter Issues
 
@@ -202,7 +225,8 @@ In continuous mode the wait between scans depends on how the previous cycle ende
 - **A reading arrived:** `runtime.scan_cooldown` (default 30 s), and at least 25 s on Linux/BlueZ regardless, so the app does not reconnect while the scale is still advertising.
 - **No scale found, radio healthy:** `runtime.idle_rescan_delay` (default 5 s). Linux/BlueZ only; the other transports cannot tell this case from a failure and use the backoff below.
 - **The cycle failed** (a GATT error, a wedged controller, an export that threw): 5 s, then 10, 20, 40 and 60 s for as long as failures continue, resetting on the next success.
-- **The scale connected but no reading came in time** (the reading session timed out after connecting): the same backoff as a failure. The scale was found, so the log says so instead of "No scale found".
+- **The scale connected but no reading came in time** (the reading session timed out after connecting): the same backoff as a failure. On Linux/BlueZ, when the scale answered in that session and then went quiet until it timed out, `runtime.no_reading_rescan_delay` (default `0`, off) sets a longer minimum. The scale was found, so the log says so instead of "No scale found".
+- **The scale was found but its pairing is held back** (nobody confirmed the last pairing on a Beurer scale, see `ble.pairing_retry_max_min`): the scan listens to the scale until its time is up instead of connecting, and then waits `runtime.idle_rescan_delay` like an idle scan. Linux/BlueZ only.
 
 So a gap of a minute between scans means failures, not a setting being ignored. The log line says which case it was:
 
@@ -210,7 +234,13 @@ So a gap of a minute between scans means failures, not a setting being ignored. 
 No scale found, rescanning in 5s... (Device not found)
 No scale found, retrying in 20s... (le-connection-abort-by-local)
 Scale connected but sent no reading, retrying in 60s... (Timed out waiting for a complete scale reading)
+Scale connected but sent no reading, retrying in 900s (runtime.no_reading_rescan_delay)... (Timed out waiting for a complete scale reading)
+Scale found, waiting to pair, rescanning in 5s... (AA:BB:CC:DD:EE:FF is not paired; next pairing attempt in 52 min, or sooner if it reappears or advertises a new weigh-in)
 ```
+
+This is about the built-in Bluetooth handlers (`ble.handler: auto`, which runs `node-ble` on Linux and `noble` elsewhere; `ble_transport: local` in the add-on). On `mqtt-proxy`, `esphome-proxy` and `ha-bluetooth` none of these waits apply: the app does not scan in cycles, it listens all the time.
+
+On `mqtt-proxy` and `esphome-proxy`, a scale that needs a connection and is still on after a reading is connected again on its next advertisement, so a second weigh-in before it switches off can be read. When nobody steps on, the log notes it at info level: `... session opened 0.7 s after the last reading, while the scale was still on, ended without a new weigh-in (...)`.
 
 ## Debug Mode
 
@@ -378,7 +408,7 @@ On Pi 3/4 Broadcom on-board chips, this is a kernel/firmware-level issue that ev
 **Automatic in-process recovery.** The app already:
 
 - Resets its D-Bus client after every GATT operation in continuous mode
-- Runs a preemptive `btmgmt power off/on` cycle after every GATT operation to clear zombie controller state before it accumulates (`ble.preemptive_adapter_reset: false` turns only this step off, see [the configuration reference](/guide/configuration#config-yaml-reference))
+- Runs a preemptive `btmgmt power off/on` cycle after every GATT operation to clear zombie controller state before it accumulates (`ble.preemptive_adapter_reset: false` turns only this step off, see [the configuration reference](/guide/configuration#config-yaml-reference); the power-cycle after a `Disconnect` BlueZ never completes, described below, still runs)
 - Escalates through 6 recovery tiers when `StartDiscovery` fails (D-Bus `StopDiscovery`, adapter power-cycle, btmgmt reset, rfkill block/unblock, `systemctl restart bluetooth`)
 
 The btmgmt steps need `CAP_NET_ADMIN`. The Docker image gives `btmgmt` that capability and the add-on runs as root. A native install under systemd that runs as a normal user does not have it, and the app then logs `btmgmt could not power-cycle hci0: ... Permission Denied` once and carries on without those steps. To enable them, give the capability to `btmgmt` only, not to Node:
@@ -389,11 +419,13 @@ sudo setcap cap_net_admin+ep $(which btmgmt)
 
 Two things to know before you do. The capability is on the `btmgmt` file, so **every local user** who can run `btmgmt` can then power the adapter off, change its settings and run discovery, not just this app. And it is lost whenever the `bluez` package is upgraded or reinstalled, because the new `btmgmt` file arrives without it: run the command again after such an upgrade (`getcap $(which btmgmt)` shows whether it is still set).
 
+**Every cycle ends after 15 minutes, and `bluetoothctl info` shows the scale as `Connected: yes`.** After a connect that timed out, BlueZ can keep listing the scale as connected although the connection is gone ([#472](https://github.com/KristianP26/ble-scale-sync/issues/472)). BlueZ answers a `Disconnect` for a device it lists as connected only once that connection ends, so in this state it never answers, and `bluetoothctl disconnect <scale>` hangs on `Attempting to disconnect`. Every later connect then "succeeds" at once from BlueZ's own state and never reaches the scale's services. Releases before this fix waited for that answer until the 15-minute cycle limit, on every cycle. The app now gives each `Disconnect`, `RemoveDevice` and `StopDiscovery` 10 seconds, so a cycle can no longer hang on one. When the `Disconnect` after a connect timeout gets no answer, that cycle ends with `Scale found but not connected` and the message `BlueZ keeps <MAC> marked as connected and did not complete a Disconnect within 10s (#472)`. Whenever a `Disconnect`, or the `RemoveDevice` after a connect or GATT session that gave no reading, goes unanswered, the app power-cycles the adapter at the end of the cycle, also with `ble.preemptive_adapter_reset: false`, and then checks that BlueZ let go of the scale. When it did, the log says once: `Cleared a stale BlueZ connection to <MAC> ...`. When BlueZ still lists the scale as connected, the power-cycle cannot clear it: the app warns once with `Restart bluetoothd on the host: sudo systemctl restart bluetooth (on Home Assistant OS, reboot the host with "Reboot system", not just a Home Assistant restart, or run ha host reboot)` and repeats this power-cycle and check for that scale only after 10, 20 and 40 minutes and then hourly, until a weigh-in from it is read over a connection (a broadcast reading or a reading from another scale does not count). With `ble.preemptive_adapter_reset` on, the usual power-cycle after every GATT session keeps running in between. Later cycles in that state can end with `No scale found` and a GATT timeout instead. To clear it by hand, run `sudo systemctl restart bluetooth` on the host and restart the container if the app runs in Docker; on Home Assistant OS, which gives you no shell on the host to run `systemctl`, reboot the host: **Settings** > **System**, the three-dots menu, **Restart Home Assistant** > **Reboot system** (restarting only Home Assistant does not restart Bluetooth), or run `ha host reboot`.
+
 **Auto-restart watchdog (continuous mode).** When in-process recovery is not enough (typically Pi 3/4 Broadcom firmware lock-up), a watchdog exits the process after `runtime.watchdog_max_consecutive_failures` consecutive scan failures (default `10`, ≈30 min). With Docker `restart: unless-stopped` the container restarts cleanly, the entrypoint resets the BT adapter, and the controller is typically unwedged. The watchdog only arms after the first successful weigh-in in the process lifetime, so it does not restart-loop the container if the scale is offline (vacation) or `scale_mac` is misconfigured.
 
 The watchdog counts only cycles where the Bluetooth radio looks unhealthy: a connection or read failure, or a scan that saw no advertisement traffic at all (the zombie-discovery wedge). A normal idle cycle, where the radio still hears other nearby devices but your scale simply is not being stood on, does not count toward a restart. This is why a scale that only advertises while in use (such as Renpho) no longer triggers needless restarts overnight.
 
-A cycle that connected to the scale and then timed out without a reading counts only if the scale sent nothing at all in that session. Some scales, such as the Beurer BF915, stay connectable long after a weigh-in; if the scale answered, the Bluetooth path is evidently working and the cycle does not count, though it still waits the normal failure backoff before the next scan. This applies to Linux/BlueZ (`node-ble`); on the other native handlers every such timeout still counts.
+A cycle that connected to the scale and then timed out without a reading counts only if the scale sent nothing at all in that session. Some scales, such as the Beurer BF915, stay connectable long after a weigh-in; if the scale answered, the Bluetooth path is evidently working and the cycle does not count, though it still waits the normal failure backoff before the next scan (or `runtime.no_reading_rescan_delay`, when that is longer). This applies to Linux/BlueZ (`node-ble`); on the other native handlers every such timeout still counts.
 
 ::: warning The watchdog recovers by **exiting the process** - set a restart policy
 The recovery is the process _exiting_ so the supervisor starts it again. You **must** run with `restart: unless-stopped` (Compose) or `--restart unless-stopped` (`docker run`). Without a restart policy the container just stops.

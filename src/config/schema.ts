@@ -269,22 +269,56 @@ export const BleSchema = z
      */
     qn_config_long: z.boolean().optional().nullable(),
     /**
+     * Send the end-of-measurement frame `1f 05 <protocol type> 10 <sum>` after
+     * the 0x16 of a complete result block on the 19-byte QN dialect (#331).
+     *
+     * The vendor's published SDK sends it there for every 8-electrode
+     * weigh-in; this app has never sent it. Whether its absence is why the
+     * scale stores a second copy of a weigh-in it already delivered, and keeps
+     * advertising after the export, is not known, so this is opt-in and off by
+     * default until reporters' logs with it show an effect and no harm. Other
+     * QN dialects ignore it.
+     */
+    qn_result_ack: z.boolean().optional().nullable(),
+    /**
      * Delete a bond the scale has forgotten and pair again, instead of stopping
      * at the diagnostic (#290, #335).
      *
      * When a peripheral discards its half of the pairing, BlueZ replays the
      * dead key forever: every connect fails during encryption and the host
      * never invalidates anything, so the scale is unreachable until someone
-     * runs `bluetoothctl remove` by hand. Turning this on lets a run of
-     * authentication-class failures against a device BlueZ still lists as
-     * bonded clear the bond once per connect and retry.
+     * runs `bluetoothctl remove` by hand. With this on, the bond is cleared once
+     * per connect when BlueZ reports that the scale refused the key: BlueZ 5.83
+     * and later (Home Assistant OS 16.2 and later) say why a connection ended,
+     * and three refusals in one connect are enough. Every BlueZ gives a refused
+     * key and a weak radio link the same `le-connection-abort-by-local` (#471),
+     * so with older BlueZ nothing is cleared; a warning says when the failures
+     * look like a forgotten pairing.
      *
-     * Opt-in, because `le-connection-abort-by-local` also has benign producers
-     * (a connect issued while discovery is still active, or another D-Bus
-     * client holding a discovery session), and on these scales a bond dropped
-     * in error costs a physical re-pair at the device.
+     * Opt-in, because on these scales a bond dropped in error costs a physical
+     * re-pair at the device.
      */
     auto_clear_stale_bond: z.boolean().optional().nullable(),
+    /**
+     * Longest wait, in minutes, before a bonding scale is connected and asked
+     * to pair again after a pairing nobody confirmed on it (#471, D063).
+     * Default 60; 0 tries again on every scan, as releases before it did.
+     *
+     * A Beurer scale shows a fresh code for every pairing and waits for SET.
+     * Nobody standing there used to mean a new code every two or three
+     * minutes, all night. Now, once our pairing agent has handled such a
+     * request and the cycle ends with the scale still unpaired, the scale is
+     * not connected to again for 2 minutes three times, then twice as long
+     * each time (4, 8, 16, 32 minutes and so on) until the wait reaches this
+     * cap, and then for the cap each time (`pairingRetryDelayMs`). It goes at
+     * once when the scale comes back after a scan without it, when its
+     * advertisement shows a new weigh-in (Beurer BF720 family), when it is
+     * paired by other means, or after a restart.
+     *
+     * Read on every cycle (hot-swap). node-ble only, and only in continuous
+     * mode: a single run is a fresh process and starts without the memory.
+     */
+    pairing_retry_max_min: z.number().int().min(0).max(1440).optional().nullable(),
     /**
      * Power-cycle the HCI controller with `btmgmt` after every GATT session
      * (#80). Default true; `false` skips that one step and nothing else.
@@ -295,7 +329,9 @@ export const BleSchema = z
      * reject its stored key on the next connect; #417 showed it is not the
      * cause (that is the missing host IdKey, see adapter_privacy), and it is
      * kept as a diagnostic switch. The D-Bus reset, the failed-GATT cleanup and
-     * the reactive recovery tiers all still run.
+     * the reactive recovery tiers all still run, and so does the reactive
+     * power-cycle when BlueZ does not complete a Disconnect (a link it keeps
+     * listing as connected, #472, D062).
      *
      * node-ble only: noble resets the adapter only reactively, and the proxy
      * transports never touch the host adapter.
@@ -488,6 +524,27 @@ export const RuntimeSchema = z.object({
    */
   idle_rescan_delay: z.number().int().min(0).max(3600).default(5),
   /**
+   * Minimum seconds to wait after a continuous-mode session that connected,
+   * heard the scale and then went quiet until its idle timeout
+   * (`bleFailureKind === 'no-reading'`, D041), when that is longer than the
+   * 5 s -> 60 s retry backoff (#475). The backoff still advances; 0 keeps it
+   * exactly as before.
+   *
+   * For a scale that accepts a connection all the time and keeps its weigh-ins
+   * until the next one: a Beurer BF915 showed PAIR through 10 to 15 sessions an
+   * hour, all day. A weigh-in made during the wait arrives with the next
+   * session; more than 5 minutes late it is a past measurement, which only the
+   * exporters that can backdate receive (D027). A scale that does not keep its
+   * weigh-ins can lose one made during the wait.
+   *
+   * A `.default()`, not `.optional()`: applyEnvOverrides rebuilds runtime from
+   * a fixed list, and only a required key makes tsc point at it.
+   *
+   * node-ble only: nothing else tags 'no-reading'. Must stay far below
+   * 2^31 - 1 ms, above which setTimeout fires after 1 ms.
+   */
+  no_reading_rescan_delay: z.number().int().min(0).max(3600).default(0),
+  /**
    * Keep a reading whose export failed and retry it on a later cycle (#412).
    *
    * On by default. The failure it covers is silent and total: a cloud target
@@ -495,8 +552,9 @@ export const RuntimeSchema = z.object({
    * a reporter lost four that way in a week. Bounded at 72 hours, 5 attempts
    * and 50 entries, and only for exporters that can record a past reading.
    *
-   * Turning it off restores the previous behaviour exactly, including writing
-   * nothing to disk. See ADR D014: this persists body composition and a user
+   * Turning it off restores the previous behaviour exactly, including keeping
+   * no queue on disk (the de-duplication marks in `.scale-dedup-marks.json`
+   * are written either way). See ADR D014: this persists body composition and a user
    * name by default, which is why it is a decision and not just a flag.
    */
   retry_failed_exports: z.boolean().default(true),

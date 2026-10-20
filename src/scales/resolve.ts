@@ -1,6 +1,6 @@
 import type { BleDeviceInfo, ScaleAdapter } from '../interfaces/scale-adapter.js';
 import { adapters as defaultRegistry } from './index.js';
-import { nameClaimHits } from './match-descriptor.js';
+import { miBeaconClaimHits, nameClaimHits, type MatchDescriptor } from './match-descriptor.js';
 import { StandardGattScaleAdapter } from './standard-gatt.js';
 
 /**
@@ -42,13 +42,22 @@ function unionUuids(a: readonly string[], b: readonly string[] | undefined): str
 }
 
 /**
+ * Whether the advertisement says which device this is in a way the descriptor
+ * claims: by its name, or by a MiBeacon product id (#474).
+ */
+function identifiedByAdvertisement(m: MatchDescriptor, device: BleDeviceInfo): boolean {
+  return nameClaimHits(m, device.localName) || miBeaconClaimHits(m, device);
+}
+
+/**
  * Whether an adapter was picked on something the advertisement itself says
- * about the device: its name, or the manufacturer company id it claims.
+ * about the device: its name, a MiBeacon product id it claims, or the
+ * manufacturer company id it claims.
  */
 function groundedInAdvertisement(adapter: ScaleAdapter, device: BleDeviceInfo): boolean {
   const m = adapter.match;
   if (!m) return false;
-  if (nameClaimHits(m, device.localName)) return true;
+  if (identifiedByAdvertisement(m, device)) return true;
   return m.manufacturerId !== undefined && device.manufacturerData?.id === m.manufacturerId;
 }
 
@@ -75,14 +84,19 @@ function groundedInAdvertisement(adapter: ScaleAdapter, device: BleDeviceInfo): 
  *     against the advertised services only. Characteristics are evidence the
  *     matchers were written for (#177, #229, #436 demote an adapter on them);
  *     a discovered service read as an advertised one is not.
- *  2. A was identified by name. A pick made on a bare service (MGB on 0xFFB0
- *     for a nameless Robi S9) or by the generic Standard GATT fallback is what
- *     discovery exists to refine, so it still yields.
- *  3. G is not itself grounded in the advertisement (name or claimed company
- *     id) while accepting the device on advertised services plus
- *     characteristics. That keeps a SWAN-branded Hutbit on node-ble, where the
- *     advertised services are unknown and MGB claims the "swan" name first:
- *     the Hutbit's 0x02AC company id is advertisement evidence for it (#278).
+ *  2. A was identified by name, or by a MiBeacon product id it claims. A
+ *     nameless Yunmai Mini 2 has its FFE4 in a 0xFFE0 GATT service (per
+ *     openScale's YunmaiHandler), which QN's nameless fallback claims once
+ *     node-ble or noble pass the discovered services (#474). A pick made on a
+ *     bare service (MGB on 0xFFB0 for a nameless Robi S9) or by the generic
+ *     Standard GATT fallback is what discovery exists to refine, so it still
+ *     yields.
+ *  3. G is not itself grounded in the advertisement (name, claimed product id
+ *     or claimed company id) while accepting the device on advertised
+ *     services plus characteristics. That keeps a SWAN-branded Hutbit on
+ *     node-ble, where the advertised services are unknown and MGB claims the
+ *     "swan" name first: the Hutbit's 0x02AC company id is advertisement
+ *     evidence for it (#278).
  *
  * Where `advertisedServicesKnown` is false (node-ble), rule 1 and rule 3 judge
  * against the full service list, because nothing better exists there. This rule
@@ -113,7 +127,9 @@ export function resolveAfterDiscovery(
 
   if (!fromAdvert.matches(withChars)) return fromGatt;
   if (fromAdvert instanceof StandardGattScaleAdapter) return fromGatt;
-  if (!fromAdvert.match || !nameClaimHits(fromAdvert.match, advertised.localName)) return fromGatt;
+  if (!fromAdvert.match || !identifiedByAdvertisement(fromAdvert.match, advertised)) {
+    return fromGatt;
+  }
   if (fromGatt && groundedInAdvertisement(fromGatt, advertised) && fromGatt.matches(withChars)) {
     return fromGatt;
   }

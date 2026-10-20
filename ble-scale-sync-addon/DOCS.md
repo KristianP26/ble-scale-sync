@@ -38,9 +38,10 @@ Which scales send their weight in the advertisement is listed under [which scale
 
 With any transport but `local`:
 
-- The options that only steer this host's adapter (**Bluetooth adapter**, **Re-pair a scale that forgot its pairing**, **Power-cycle the adapter after every weigh-in**, **Pair with a host identity key**) are ignored, and the log names any you have set. The adapter reset on startup is skipped as well.
+- The options that only steer this host's adapter (**Bluetooth adapter**, **Re-pair a scale that forgot its pairing**, **Power-cycle the adapter after every weigh-in**, **Pair with a host identity key**, **Longest wait before asking to pair again**) are ignored, and the log names any you have set. The adapter reset on startup is skipped as well.
 - **Scale MAC address** still applies, and is worth setting.
 - **Proxy silence before restart** (`proxy_liveness_timeout_min`) applies.
+- **Scan cooldown**, **Rescan delay when no scale was found** and **Minimum wait after a session without a reading** are not used: the add-on listens all the time.
 
 A transport that cannot run with the options you gave stops the add-on with an `ERROR` line that names the option to fix (see [Troubleshooting](#add-on-stops-with-an-error-about-ble_transport)). It never falls back to this host's adapter: you chose not to use it, and with `ha-bluetooth` it is the adapter Home Assistant itself reads from.
 
@@ -89,6 +90,8 @@ Changing units after the first reading does not reinterpret existing data. Switc
 
 The add-on stores its runtime configuration at `/data/config.yaml` and preserves each user's `last_known_weight` across add-on restarts. This is important for multi-user matching: after the first reading the remembered weight is reused to pick the right user on subsequent scans, even after you restart Home Assistant or the add-on.
 
+The weight and time of each user's last live weigh-in are kept in `/data` too, so a stored copy of the last live weigh-in that the scale hands over after a restart is not exported a second time.
+
 If you change the user slug (by renaming the user), the remembered weight does not carry over because the slug is the lookup key.
 
 ## Update check
@@ -133,7 +136,7 @@ and the log says so.
 
 The queue lives in `/data`, so it survives add-on restarts and updates. It
 holds body composition and the user name, is written with 0600 permissions and
-is deleted as soon as it empties. Turn the option off to write nothing at all.
+is deleted as soon as it empties. Turn the option off to keep no queue.
 
 ### Upload timeout
 
@@ -247,17 +250,28 @@ If the log shows a long series of these restarts, the reason is in the lines jus
 
 The add-on power-cycles the Bluetooth adapter on startup to ensure a clean state. This is enabled by default (**Reset Bluetooth adapter on startup**). If you have other HA Bluetooth integrations that lose connectivity when this add-on restarts, disable the option. With a **Bluetooth transport** other than `local` the reset is skipped, since that transport does not use this host's adapter.
 
-Separately from that startup reset, the add-on also power-cycles the adapter after every connection to the scale (built-in Bluetooth only, not with an ESPHome or ESP32 proxy), to clear a stuck scanning state some Raspberry Pi adapters fall into. **Power-cycle the adapter after every weigh-in** (`preemptive_adapter_reset`) turns that off. Leave it on unless other Home Assistant Bluetooth integrations on the same adapter suffer from the brief drop after each weigh-in. It was not the cause of the Beurer BF915 re-pairing in #417; for a scale that asks to pair again before every weigh-in, see the next section.
+Separately from that startup reset, the add-on also power-cycles the adapter after every connection to the scale (built-in Bluetooth only, not with an ESPHome or ESP32 proxy), to clear a stuck scanning state some Raspberry Pi adapters fall into. **Power-cycle the adapter after every weigh-in** (`preemptive_adapter_reset`) turns that off. It does not turn off the power-cycle the add-on does when BlueZ keeps the scale listed as connected and does not complete a disconnect within 10 seconds (#472). If the log then says `BlueZ still reports ... as connected after the adapter power-cycle`, reboot the host: **Settings** > **System**, the three-dots menu, **Restart Home Assistant** > **Reboot system** (restarting only Home Assistant does not restart Bluetooth), or run `ha host reboot`. Home Assistant OS gives you no shell on the host to restart only Bluetooth. Leave it on unless other Home Assistant Bluetooth integrations on the same adapter suffer from the brief drop after each weigh-in. It was not the cause of the Beurer BF915 re-pairing in #417; for a scale that asks to pair again before every weigh-in, see the next section.
 
 ### Beurer scale asks to pair again before every weigh-in
 
 Some Beurer scales (the BF915 is confirmed) keep a pairing only from a device that handed over an identity key while pairing, and Linux hands one over only while the Bluetooth adapter has LE privacy turned on, which it does not by default. The pairing then works once and is rejected on the next connect. **Pair with a host identity key (LE privacy)** (`adapter_privacy`) turns privacy on with a key derived from the adapter's address, which stays the same across restarts, reinstalls and reboots.
 
 1. Turn the option on and restart the add-on. The log shows `uses an IRK derived from its address (fingerprint ...)` and `LE privacy is on`.
-2. Remove the old pairing once: `bluetoothctl remove AA:BB:CC:DD:EE:FF` in the host shell (or turn on **Re-pair a scale that forgot its pairing**).
-3. Weigh in and confirm the pairing on the scale, as you did the first time. Later weigh-ins should not ask again.
+2. Remove the old pairing once: `bluetoothctl remove AA:BB:CC:DD:EE:FF` in the host shell (or turn on **Re-pair a scale that forgot its pairing**; it acts on Home Assistant OS 16.2 and later).
+3. Stay at the scale until it shows a code, about a minute after the add-on next connects to it (it connects and looks up the scale's services first), and confirm it on the scale, as you did the first time. If you miss it, restart the add-on to be asked again at once. Later weigh-ins should not ask again.
 
 Privacy applies to the whole adapter: every Bluetooth LE connection it makes, Home Assistant's own Bluetooth integration included, then uses a random address, and other paired LE devices may need pairing again. If that is a problem, give the add-on its own USB adapter with **BLE adapter** (`ble_adapter`). If LE privacy cannot be turned on, the add-on skips the connect and says why rather than pair without the key.
+
+### Beurer scale shows a pairing code again and again
+
+When nobody confirms a pairing on the scale, the add-on does not ask again on the next scan. It stops connecting to the scale for 2 minutes three times, then twice as long each time (4, 8, 16, 32 minutes and so on) until the wait reaches **Longest wait before asking to pair again** (`pairing_retry_max_min`, 60 minutes by default), and then for that long each time. The log says so:
+
+```
+AA:BB:CC:DD:EE:FF asked for the pairing to be confirmed on the scale and it was not (attempt 1). Not connecting to it again for 2 min, ...
+Scale found, waiting to pair, rescanning in 5s... (AA:BB:CC:DD:EE:FF is not paired; next pairing attempt in 2 min, or sooner if it reappears or advertises a new weigh-in)
+```
+
+It asks at once when the scale wakes up again after a scan without it, when it advertises a new weigh-in (seen on a BF915, untested on the other models of the family: weigh in and stay at the scale for about a minute; this does not work while an earlier weigh-in is still waiting on the scale), or when you restart the add-on. Set the option to 0 to be asked on every scan, as earlier versions did.
 
 ### No scale found
 
@@ -265,6 +279,14 @@ Privacy applies to the whole adapter: every Bluetooth LE connection it makes, Ho
 - Check that the Bluetooth adapter is working: enable debug logging and look for "Discovery started" in the logs
 - If you have multiple Bluetooth adapters, try setting a specific adapter (e.g., `hci1`)
 - If your scale advertises only for a few seconds after you step on it, lower **Rescan delay when no scale was found** (`idle_rescan_delay`); the add-on rescans that many seconds after an idle cycle
+
+### Beurer BF915: PAIR on the display all day
+
+A BF915 can accept a connection all the time, also with its display dark. With the local transport every scan then connects, and the scale shows `PAIR` for about two minutes when nobody steps on, logged as `Scale connected but sent no reading`, 10 to 15 times an hour. If the display shows a six-digit code instead, see [Beurer scale shows a pairing code again and again](#beurer-scale-shows-a-pairing-code-again-and-again).
+
+If your scale keeps a weigh-in made in the meantime and hands it over at the next connection, as the BF915 in [#475](https://github.com/KristianP26/ble-scale-sync/issues/475) does, set **Minimum wait after a session without a reading** (`no_reading_rescan_delay`), for example to 900. Only a session in which the scale answered and then went quiet waits longer: its log line ends with `(Timed out waiting for a complete scale reading)`, and with the option set it reads `retrying in 900s (runtime.no_reading_rescan_delay)`. A session that ends with `(GATT session cap exceeded)`, or in any other way, keeps the normal backoff.
+
+A weigh-in that arrives more than 5 minutes after it was taken is a past measurement: Garmin and the other targets that can record one get it; MQTT and the Home Assistant sensors do not. If those matter, keep the value at about 240 or below. During the wait the add-on scans for no scale at all and does not retry failed uploads.
 
 ### MQTT not connecting
 

@@ -58,6 +58,17 @@ export interface RuntimeLoopDeps {
    * recognise the errors it means rather than assuming what it is handed.
    */
   failureDelayMs?: (err: unknown) => number | undefined;
+  /**
+   * A minimum wait for this error on the backoff path, or undefined for none
+   * (#475). The backoff still advances as usual and the loop waits the longer
+   * of the two, so a floor can lengthen a wait but never shorten one, and
+   * without a floor the wait and the log line are exactly the backoff's.
+   * `label` is named in the log line when the floor sets the wait. Not asked
+   * when `failureDelayMs` claims the error. Like that hook it sees every
+   * iteration error, including one thrown by `processReading`, so an
+   * implementation must recognise the errors it means.
+   */
+  failureDelayFloor?: (err: unknown) => { ms: number; label: string } | undefined;
   failureLogPrefix?: string;
   /** A prefix for this error instead of `failureLogPrefix`, or undefined to keep it. */
   failureLogPrefixFor?: (err: unknown) => string | undefined;
@@ -66,6 +77,7 @@ export interface RuntimeLoopDeps {
 /**
  * Exponential backoff on iteration error: 5s -> 10s -> 20s -> 40s -> 60s cap,
  * unless `failureDelayMs` claims the error and names a shorter wait (#398).
+ * `failureDelayFloor` can make a backoff wait longer, never shorter (#475).
  */
 export async function runContinuousLoop(deps: RuntimeLoopDeps): Promise<void> {
   const {
@@ -81,6 +93,7 @@ export async function runContinuousLoop(deps: RuntimeLoopDeps): Promise<void> {
     onFailure,
     onCycleStart,
     failureDelayMs,
+    failureDelayFloor,
     failureLogPrefix = 'Error processing reading',
     failureLogPrefixFor,
   } = deps;
@@ -152,8 +165,14 @@ export async function runContinuousLoop(deps: RuntimeLoopDeps): Promise<void> {
           continue;
         }
         backoffMs = backoffMs === 0 ? BACKOFF_INITIAL_MS : Math.min(backoffMs * 2, BACKOFF_MAX_MS);
-        log.info(`${prefix}, retrying in ${backoffMs / 1000}s... (${errMsg(err)})`);
-        await abortableSleep(backoffMs, signal).catch(() => {});
+        // The ladder moves on under a floor too, so a real failure after a
+        // run of floored waits continues where it would have (D041).
+        const floor = failureDelayFloor?.(err);
+        const floored = floor !== undefined && floor.ms > backoffMs ? floor : undefined;
+        const waitMs = floored?.ms ?? backoffMs;
+        const why = floored ? ` (${floored.label})` : '';
+        log.info(`${prefix}, retrying in ${waitMs / 1000}s${why}... (${errMsg(err)})`);
+        await abortableSleep(waitMs, signal).catch(() => {});
       }
     }
   } finally {

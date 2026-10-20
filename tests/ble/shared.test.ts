@@ -17,6 +17,8 @@ import { RenphoMsc04Adapter } from '../../src/scales/renpho-msc04.js';
 import { BeurerSanitasScaleAdapter } from '../../src/scales/beurer-sanitas.js';
 import { EsCs20mAdapter, buildGuestProfileFrame } from '../../src/scales/es-cs20m.js';
 import { QnScaleAdapter } from '../../src/scales/qn-scale/index.js';
+import { YunmaiScaleAdapter } from '../../src/scales/yunmai.js';
+import { applyForcedAdapter } from '../../src/scales/force.js';
 import { mockPeripheral } from '../helpers/scale-test-utils.js';
 import { uuid16, xorChecksum, buildPayload } from '../../src/scales/body-comp-helpers.js';
 import type {
@@ -1857,6 +1859,53 @@ describe('waitForRawReading() with the real KoogeekS1Adapter (#270)', () => {
   });
 });
 
+// ─── Yunmai end to end through the real adapter (#474) ──────────────────────
+
+// The real adapter through the real session (#474). The hold is decided by the
+// frame just parsed, which works only because the session reads
+// completionHoldMs when the hold arms, right after that parse (#406).
+describe('waitForRawReading() with a forced, nameless Yunmai (#474)', () => {
+  const frame = (s: string): Buffer => Buffer.from(s.replace(/\s+/g, ''), 'hex');
+  // The derived #474 frames from tests/scales/yunmai.test.ts (user id, weight,
+  // resistance and body fat replaced, XOR recomputed; the second also has its
+  // resistance field zeroed).
+  const FINAL = frame('0d 1f 14 02 00 00 0c 51 ef 00 00 12 34 1f 40 01 d6 09 f6 ea');
+  const NO_RESISTANCE = frame('0d 1f 14 02 00 00 0c 51 ef 00 00 12 34 1f 40 00 00 09 f6 3d');
+
+  it('holds after a frame whose resistance field is 0 and settles on the one that has it', async () => {
+    vi.useFakeTimers();
+    try {
+      const notifyChar = createMockChar();
+      const writeChar = createMockChar();
+      const device = createMockDevice();
+      const { charMap } = createCharMap([
+        [uuid16(0xffe4), notifyChar],
+        [uuid16(0xffe9), writeChar],
+      ]);
+      const adapter = applyForcedAdapter([new YunmaiScaleAdapter()], 'Yunmai')[0];
+      adapter.matches({ localName: '', serviceUuids: [] });
+      const promise = waitForRawReading(charMap, device, adapter, PROFILE, '');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(notifyChar.subscribeCalled).toBe(true);
+
+      notifyChar.triggerData(NO_RESISTANCE);
+      let settled = false;
+      void promise.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(settled, 'a frame with an empty resistance field must not end the session').toBe(
+        false,
+      );
+
+      notifyChar.triggerData(FINAL);
+      expect((await promise).reading).toEqual({ weight: 80, impedance: 470 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 // ─── Notification teardown on a failed init ─────────────────────────────────
 
 describe('waitForRawReading() — notification teardown', () => {
@@ -2340,6 +2389,62 @@ describe('R-MSC04 composition hold through waitForRawReading (#434)', () => {
       vi.useRealTimers();
     }
   });
+
+  it('settles on the record in a session that starts at weight locked (D057)', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession();
+      // #117 capture, second connection, from weight locked on (20:28:20.418 ..
+      // 30.363): what a session made after the 0x24 sees.
+      s.indicate.triggerData(hex('55aa200005020901005080')); // weight locked, 0 stored
+      await vi.advanceTimersByTimeAsync(9630);
+      s.indicate.triggerData(hex('55aa200005031101005089')); // complete
+      await vi.advanceTimersByTimeAsync(135);
+      s.indicate.triggerData(hex('ad040255aa2500240411000025530a00de0c200b'));
+      await vi.advanceTimersByTimeAsync(91);
+      s.indicate.triggerData(hex('ae0401ef08e4092a00ae0ac10a9007e108250100'));
+      await vi.advanceTimersByTimeAsync(89);
+      s.indicate.triggerData(hex('af0400ed011101b70008ea'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.isSettled(), 'the record must end the session').toBe(true);
+
+      const raw = await s.promise;
+      expect(raw.reading).toEqual({ weight: 95.55, impedance: 0 });
+      expect(s.adapter.isFinal(raw.reading)).toBe(true);
+      // Our guest b2 went out, so the estimate (D038).
+      expect(s.adapter.computeMetrics(raw.reading, PROFILE_187)).toEqual(
+        buildPayload(95.55, 0, {}, PROFILE_187),
+      );
+      expect(s.write.writtenData.map((b) => Buffer.from(b).toString('hex'))).toEqual([
+        '55aab20009000907081b58a9ff02ef',
+        '55aab3000b010701016a478eb102580011',
+        '55aab000020201b4',
+        '55aab000020301b5',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gets no weight when the record of such a session is ignored, so the disconnect rejects', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await startSession();
+      // First status from vossitch's #434 log (0x09, 1 stored record), the
+      // rest from the #117 capture.
+      s.indicate.triggerData(hex('55aa200005010901014676'));
+      s.indicate.triggerData(hex('55aa200005031101005089'));
+      s.indicate.triggerData(hex('ad040255aa2500240411000025530a00de0c200b'));
+      s.indicate.triggerData(hex('ae0401ef08e4092a00ae0ac10a9007e108250100'));
+      s.indicate.triggerData(hex('af0400ed011101b70008ea'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.isSettled()).toBe(false);
+      s.device.triggerDisconnect();
+      await expect(s.promise).rejects.toThrow(/Scale disconnected before reading completed/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ─── QN 19-byte dialect weigh-in, end to end (#331, D037) ───────────────────
@@ -2653,6 +2758,520 @@ describe('QN 19-byte dialect hold through waitForRawReading (#331)', () => {
       expect(s.isSettled()).toBe(true);
       const raw = await s.promise;
       expect(raw.reading).toEqual({ weight: 76.85, impedance: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ─── A reading from memory whose time cannot be read (D065) ─────────────────
+
+// The contract says an adapter must not flag a reading `fromMemory` without a
+// trusted stamp; if one does anyway, the reading goes the history way dated by
+// its receipt. An unreadable Date used to throw out of the notification
+// handler instead, on node-ble straight out of the characteristic's emitter.
+describe('waitForRawReading: a reading from memory with an unreadable stamp (D065)', () => {
+  it('buffers it as history without throwing and hands it over on the disconnect', async () => {
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    try {
+      const notify = createMockChar();
+      const write = createMockChar();
+      const device = createMockDevice();
+      const { charMap } = createCharMap([
+        [NOTIFY_UUID, notify],
+        [WRITE_UUID, write],
+      ]);
+      const adapter = createLegacyAdapter({
+        parseNotification: () => ({
+          weight: 70,
+          impedance: 500,
+          timestamp: new Date(NaN),
+          fromMemory: true,
+        }),
+      });
+      const promise = waitForRawReading(charMap, device, adapter, PROFILE, 'AABBCCDDEEFF');
+      await vi.waitFor(() => expect(notify.subscribeCalled).toBe(true));
+
+      expect(() => notify.triggerData(Buffer.from([0x01]))).not.toThrow();
+      device.triggerDisconnect();
+      const raw = await promise;
+      expect(raw.reading.fromMemory).toBe(true);
+      expect(raw.reading.weight).toBe(70);
+      const lines = debug.mock.calls.map((c) => String(c[0]));
+      expect(
+        lines.some((l) => l.includes('Historical reading buffered') && l.includes('receipt time')),
+      ).toBe(true);
+    } finally {
+      debug.mockRestore();
+    }
+  });
+});
+
+// ─── QN 18-byte stored weigh-in through waitForRawReading (#463, D065) ──────
+
+// The real adapter through the real session, frames and their spacing from the
+// public #463 DEBUG log of the first connection after step 3 (2026-10-13
+// 18:03:57). Where a frame carries the scale's own body fat (0x23 [16..17],
+// live 0x10 [11..12]) those bytes are zeroed and the checksum recomputed;
+// nothing here reads them. The 0x24/0x25 composition frames of the record are
+// left out: the adapter ignores them on this dialect.
+describe('QN 18-byte stored weigh-in through waitForRawReading (#463)', () => {
+  const hex = (h: string): Buffer => Buffer.from(h.replace(/ /g, ''), 'hex');
+  const INFO = hex('12 12 ff 25 e0 16 00 05 ff 13 07 16 00 01 05 9f 32 49');
+  const READY = hex('14 0b ff 01 00 01 09 03 00 00 2c');
+  const CONFIG_REQ = hex('21 05 ff 01 26');
+  const VISIT_OK = hex('a1 06 02 01 01 ab');
+  const MEASURING = hex('10 0f ff 01 01 1b f8 00 00 00 00 00 00 00 33');
+  const RECORD = hex('23 14 ff 01 01 01 0a 2e 61 32 1b f3 10 d9 10 fe 00 00 00 09');
+  const LIVE = hex('10 0f ff 01 02 1b f8 10 fb 10 f9 00 00 00 48');
+  const ADVERT = {
+    id: 0xffff,
+    data: hex('08 14 01 00 01 25 e0 16 00 05 ff 61 08 01 00 15'),
+  };
+  const ADDRESS = 'FF050016E025';
+  /** The record, 71.55 kg at 17:59:38Z in user slot 1, as the reading it becomes. */
+  const STORED = {
+    weight: 71.55,
+    impedance: 497,
+    timestamp: new Date('2026-10-13T17:59:38.000Z'),
+    fromMemory: true,
+  };
+
+  async function startSession() {
+    const notify = createMockChar();
+    const write = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notify],
+      [WRITE_UUID, write],
+    ]);
+    const adapter = new QnScaleAdapter();
+    adapter.configure({ qnUserKey: 1000 });
+    const promise = waitForRawReading(
+      charMap,
+      device,
+      adapter,
+      PROFILE,
+      ADDRESS,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      ADVERT,
+    );
+    let settled = false;
+    void promise.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await vi.waitFor(() => expect(notify.subscribeCalled).toBe(true));
+    await vi.advanceTimersByTimeAsync(0);
+    return { notify, device, promise, isSettled: () => settled };
+  }
+
+  /** The session of the log up to and including the stored record. */
+  async function upToTheRecord(s: Awaited<ReturnType<typeof startSession>>) {
+    const steps: [number, Buffer][] = [
+      [132, INFO],
+      [732, READY],
+      [246, CONFIG_REQ],
+      [290, VISIT_OK],
+      [341, MEASURING],
+      [781, RECORD],
+    ];
+    for (const [gapMs, frame] of steps) {
+      await vi.advanceTimersByTimeAsync(gapMs);
+      s.notify.triggerData(frame);
+    }
+  }
+
+  it.each([
+    ['from minutes before the session (start chosen at 18:09:00)', '2026-10-13T18:09:00Z'],
+    ['259 s before the session, as in the log', '2026-10-13T18:03:57.411Z'],
+  ])(
+    'hands a stored weigh-in %s over as history next to the live one',
+    async (_label, startedAt) => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date(startedAt));
+        const s = await startSession();
+        await upToTheRecord(s);
+        await vi.advanceTimersByTimeAsync(974);
+        expect(s.isSettled(), 'a stored weigh-in does not end the session').toBe(false);
+        s.notify.triggerData(LIVE);
+        await vi.advanceTimersByTimeAsync(0);
+        const raw = await s.promise;
+        expect(raw.reading).toEqual({ weight: 71.6, impedance: 507 });
+        expect(raw.history).toEqual([STORED]);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('hands it over on the disconnect when no live weigh-in follows', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-13T18:09:00Z'));
+      const s = await startSession();
+      await upToTheRecord(s);
+      await vi.advanceTimersByTimeAsync(500);
+      s.device.triggerDisconnect();
+      const raw = await s.promise;
+      expect(raw.reading).toEqual(STORED);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ─── QN 18-byte weigh-in before the stored-record answer (#463, D065) ──────
+
+// The real adapter through the real session. Frames and their spacing up to
+// the final live frame are from the public #463 DEBUG log of 2026-10-19 16:38:
+// the scale accepted the profile and sent its final 49 ms later, and the
+// session used to end on it before our 0x22 went out. The answers after it
+// are real frames in orders and at times no log shows: the #463 record of
+// 2026-10-13 (body fat zeroed, checksum recomputed) or the #461 "no stored
+// weigh-ins" frames, at the 0x23 -> 0x24 -> 0x25 spacing of the 10-13 log.
+// No 18-byte log has a batch of two records, so `ofTwo` derives one.
+describe('QN 18-byte weigh-in before the stored-record answer through waitForRawReading (#463)', () => {
+  const hex = (h: string): Buffer => Buffer.from(h.replace(/ /g, ''), 'hex');
+  const INFO = hex('12 12 ff 25 e0 16 00 05 ff 13 07 16 00 03 05 9f 32 4b');
+  const READY = hex('14 0b ff 01 00 01 09 03 00 00 2c');
+  const CONFIG_REQ = hex('21 05 ff 01 26');
+  const VISIT_OK = hex('a1 06 02 01 01 ab');
+  const FINAL = hex('10 0f ff 01 02 1b cb 10 db 10 d9 00 00 00 db');
+  const RECORD = hex('23 14 ff 01 01 01 0a 2e 61 32 1b f3 10 d9 10 fe 00 00 00 09');
+  const NO_RECORDS = hex('23 14 ff' + ' 00'.repeat(16) + ' 36');
+  const EMPTY_24 = hex('24 10 ff' + ' 00'.repeat(12) + ' 33');
+  const EMPTY_25 = hex('25 0f ff' + ' 00'.repeat(12) + ' 33');
+  const ADVERT = { id: 0xffff, data: hex('08 14 01 00 03 25 e0 16 00 05 ff 61 08 02 00 15') };
+  const ADDRESS = 'FF050016E025';
+  const QUERY = hex('22 06 00 00 03 2b');
+  const ACK = hex('1f 05 00 10 34');
+  const WEIGH_IN = { weight: 71.15, impedance: 499 };
+  /** The record, 71.55 kg at 2026-10-13T17:59:38Z in user slot 1, as history. */
+  const STORED = {
+    weight: 71.55,
+    impedance: 497,
+    timestamp: new Date('2026-10-13T17:59:38.000Z'),
+    fromMemory: true,
+  };
+  /** RECORD as record `index` of two, `later` s after its time: [3], [4], [6..9], [19]. */
+  const ofTwo = (index: number, later: number): Buffer => {
+    const f = Buffer.from(RECORD);
+    f[3] = 2;
+    f[4] = index;
+    f.writeUInt32LE(RECORD.readUInt32LE(6) + later, 6);
+    f[19] = [...f.subarray(0, 19)].reduce((a, b) => a + b, 0) & 0xff;
+    return f;
+  };
+
+  async function startSession(
+    opts: { key?: boolean; idleTimeoutMs?: number; abortSignal?: AbortSignal } = {},
+  ) {
+    const notify = createMockChar();
+    const write = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notify],
+      [WRITE_UUID, write],
+    ]);
+    const adapter = new QnScaleAdapter();
+    if (opts.key !== false) adapter.configure({ qnUserKey: 1000 });
+    const wait = (onActivity?: (minIdleMs?: number) => void) =>
+      waitForRawReading(
+        charMap,
+        device,
+        adapter,
+        PROFILE,
+        ADDRESS,
+        undefined,
+        undefined,
+        undefined,
+        onActivity,
+        undefined,
+        ADVERT,
+      );
+    const promise =
+      opts.idleTimeoutMs === undefined
+        ? wait()
+        : withAbandonmentCleanup(
+            device,
+            () =>
+              untilAborted(
+                withIdleTimeout(wait, opts.idleTimeoutMs!, 'GATT reading timeout'),
+                opts.abortSignal,
+              ),
+            opts.abortSignal,
+          );
+    let settled = false;
+    void promise.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await vi.waitFor(() => expect(notify.subscribeCalled).toBe(true));
+    await vi.advanceTimersByTimeAsync(0);
+    const info = vi.spyOn(bleLog, 'info');
+    const infoLines = (needle: string): number =>
+      info.mock.calls.filter((c) => String(c[0]).includes(needle)).length;
+    const debug = vi.spyOn(bleLog, 'debug');
+    const debugLines = (needle: string): number =>
+      debug.mock.calls.filter((c) => String(c[0]).includes(needle)).length;
+    const writes = (frame: Buffer): number =>
+      write.writtenData.filter((w) => w.equals(frame)).length;
+    const writtenAt = (frame: Buffer): number =>
+      write.writtenData.findIndex((w) => w.equals(frame));
+    return {
+      notify,
+      device,
+      promise,
+      isSettled: () => settled,
+      infoLines,
+      debugLines,
+      writes,
+      writtenAt,
+    };
+  }
+
+  /** The log up to its final live frame; returns how many 0x22 went out before it. */
+  async function upToTheFinal(s: Awaited<ReturnType<typeof startSession>>): Promise<number> {
+    const steps: [number, Buffer][] = [
+      [130, INFO],
+      [194, INFO],
+      [210, INFO],
+      [146, READY],
+      [249, CONFIG_REQ],
+      [287, VISIT_OK],
+    ];
+    for (const [gapMs, frame] of steps) {
+      await vi.advanceTimersByTimeAsync(gapMs);
+      s.notify.triggerData(frame);
+    }
+    await vi.advanceTimersByTimeAsync(49);
+    const queriesBefore = s.writes(QUERY);
+    s.notify.triggerData(FINAL);
+    await vi.advanceTimersByTimeAsync(0);
+    return queriesBefore;
+  }
+
+  /** Feed frames at the given gaps (ms) and let the session react. */
+  async function feed(s: Awaited<ReturnType<typeof startSession>>, steps: [number, Buffer][]) {
+    for (const [gapMs, frame] of steps) {
+      await vi.advanceTimersByTimeAsync(gapMs);
+      s.notify.triggerData(frame);
+    }
+    await vi.advanceTimersByTimeAsync(0);
+  }
+
+  const START = '2026-10-19T16:38:13.480Z';
+
+  it('asks on the acceptance, holds the weigh-in and settles on the last 0x25 with the record', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const s = await startSession();
+      expect(await upToTheFinal(s), 'the 0x22 goes out on the acceptance').toBe(1);
+      expect(s.isSettled(), 'the weigh-in waits for the answer').toBe(false);
+      await feed(s, [
+        [300, RECORD],
+        [146, EMPTY_24],
+      ]);
+      expect(s.isSettled(), 'not on the 0x24').toBe(false);
+      await feed(s, [[146, EMPTY_25]]);
+      expect(s.isSettled()).toBe(true);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual(WEIGH_IN);
+      expect(raw.history).toEqual([STORED]);
+      expect(s.writes(QUERY)).toBe(1);
+      expect(s.writtenAt(QUERY)).toBeLessThan(s.writtenAt(ACK));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles at once on a "no stored weigh-ins" answer', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const s = await startSession();
+      await upToTheFinal(s);
+      await vi.advanceTimersByTimeAsync(305);
+      expect(s.isSettled()).toBe(false);
+      await feed(s, [[1, NO_RECORDS]]);
+      expect(s.isSettled()).toBe(true);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual(WEIGH_IN);
+      expect(raw.history ?? []).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles 3 s after the weigh-in when the scale does not answer', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const s = await startSession();
+      await upToTheFinal(s);
+      await vi.advanceTimersByTimeAsync(2999);
+      expect(s.isSettled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(s.isSettled()).toBe(true);
+      expect((await s.promise).reading).toEqual(WEIGH_IN);
+      expect(s.infoLines('holding connection up to 3s')).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps holding while a batch is still arriving', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const s = await startSession();
+      await upToTheFinal(s);
+      await feed(s, [
+        [300, ofTwo(1, 0)],
+        [146, EMPTY_24],
+        [146, EMPTY_25],
+      ]);
+      await vi.advanceTimersByTimeAsync(3000 - 592);
+      expect(s.isSettled()).toBe(false);
+      expect(s.infoLines('still arriving')).toBe(1);
+      await feed(s, [
+        [300, ofTwo(2, 60)],
+        [146, EMPTY_24],
+        [146, EMPTY_25],
+      ]);
+      expect(s.isSettled()).toBe(true);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual(WEIGH_IN);
+      expect(raw.history).toEqual([
+        STORED,
+        { ...STORED, timestamp: new Date('2026-10-13T18:00:38.000Z') },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Through the transports' idle deadline at session_timeout_sec's minimum.
+  it('settles 23 s after the weigh-in when the rest of a batch never comes', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const s = await startSession({ idleTimeoutMs: 5000 });
+      await upToTheFinal(s);
+      await feed(s, [
+        [300, ofTwo(1, 0)],
+        [146, EMPTY_24],
+        [146, EMPTY_25],
+      ]);
+      await vi.advanceTimersByTimeAsync(23_000 - 592 - 1);
+      expect(s.isSettled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(s.isSettled()).toBe(true);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual(WEIGH_IN);
+      expect(raw.history).toEqual([STORED]);
+      expect(
+        s.debugLines(
+          "QN: the session ended while the weigh-in (71.15 kg) was held for the scale's " +
+            'stored ones: stored weigh-ins were still arriving (#463)',
+        ),
+      ).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A unit that sends no 0x24 and 0x25 after its record waits the 3 s, no more.
+  it("settles 3 s after the weigh-in when the last record's 0x25 never comes", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const s = await startSession();
+      await upToTheFinal(s);
+      await feed(s, [[300, RECORD]]);
+      await vi.advanceTimersByTimeAsync(3000 - 300 - 1);
+      expect(s.isSettled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(s.isSettled()).toBe(true);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual(WEIGH_IN);
+      expect(raw.history).toEqual([STORED]);
+      expect(s.infoLines('still arriving')).toBe(0);
+      // One reason, from the 3 s line, not a second one as the session ends.
+      expect(s.debugLines('did not finish its answer to the stored-record query')).toBe(1);
+      expect(s.debugLines('the session ended while the weigh-in')).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles on the held weigh-in when the scale disconnects during the hold', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const s = await startSession();
+      await upToTheFinal(s);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(s.isSettled()).toBe(false);
+      s.device.triggerDisconnect();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.isSettled()).toBe(true);
+      expect((await s.promise).reading).toEqual(WEIGH_IN);
+      // The hold's own 3 s line belongs to the session that ended: nothing
+      // says "the session ends" after it has already ended.
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(s.debugLines('did not answer the stored-record query')).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A shutdown hands nothing over (D051). The disconnect that the cleanup
+  // fires used to settle the session on the held weigh-in anyway, into a
+  // promise nobody reads, with "Reading complete" in the normal log.
+  it('hands nothing over and logs no reading when a shutdown ends the hold', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const shutdown = new AbortController();
+      const s = await startSession({ idleTimeoutMs: 60_000, abortSignal: shutdown.signal });
+      await upToTheFinal(s);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(s.isSettled()).toBe(false);
+      const outcome = s.promise.then(
+        () => 'resolved',
+        (e: Error) => e.message,
+      );
+      shutdown.abort(new Error('shutting down'));
+      expect(await outcome).toBe('shutting down');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.infoLines('Reading complete')).toBe(0);
+      // And the session really ended there: the adapter was told once, the
+      // shutdown says it handed nothing over, and no timer of the session or
+      // of its idle bound is left behind.
+      expect(s.debugLines('the session ended while the weigh-in')).toBe(1);
+      expect(s.debugLines('nothing is handed over')).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still ends on the weigh-in at once without ble.qn_user_key', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const s = await startSession({ key: false });
+      expect(await upToTheFinal(s)).toBe(0);
+      expect(s.isSettled()).toBe(true);
+      expect((await s.promise).reading).toEqual(WEIGH_IN);
     } finally {
       vi.useRealTimers();
     }

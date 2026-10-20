@@ -83,6 +83,22 @@ export interface ScaleReading {
    */
   timestamp?: Date;
   /**
+   * The adapter knows from the protocol that this reading is a record from the
+   * scale's memory, not the weigh-in of this session (ADR D065). The runtime
+   * then treats it as a stored record whatever its age, where by `timestamp`
+   * alone a record younger than `HISTORY_WINDOW_MS` would count as live: it
+   * does not end the session, goes only to exporters with `supportsBackdate`
+   * and does not move `last_known_weight`.
+   *
+   * An adapter MUST NOT set it without a trusted `timestamp` in the past, and
+   * MUST NOT set it on a record of the weigh-in in progress. A reading flagged
+   * without a usable stamp still goes the history way, dated by its receipt,
+   * because the other way round (live) would end the session and reach MQTT
+   * with a weigh-in from the past; the replay dedup then judges it by weight
+   * alone. Leave it undefined when the protocol does not say; age decides then.
+   */
+  fromMemory?: boolean;
+  /**
    * The scale's own user slot for this reading, when the frame says which
    * profile on the scale it was taken for (a SIG User Index, a vendor user
    * byte). Used to attribute a stored record in multi-user mode before falling
@@ -359,6 +375,14 @@ export interface AdapterRuntimeConfig {
    */
   qnConfigLong?: boolean;
 
+  /**
+   * Send `1f 05 <protocol type> 10 <sum>` after the 0x16 of a complete
+   * 19-byte QN result block, as the vendor's published SDK does
+   * (`ble.qn_result_ack`, #331). Opt-in, off by default: its effect on the
+   * scale is not known yet.
+   */
+  qnResultAck?: boolean;
+
   /** Every configured user's weight hints, in config order (see UserWeightHint). */
   userWeights?: readonly UserWeightHint[];
 }
@@ -408,6 +432,21 @@ export interface ScaleAdapterCore {
    * Not enforced on the other transports, which our code never pairs on.
    */
   readonly singleBond?: boolean;
+
+  /**
+   * Whether the scale's advertisement says it holds a weigh-in nobody has
+   * fetched yet: true, false, or undefined when the advertisement does not
+   * say (#471, D063). Meaningful only together with `requiresBonding`.
+   *
+   * Used for one thing only: when a pairing on the scale went unconfirmed and
+   * the node-ble transport holds the next one back, a change from false to
+   * true means somebody just weighed in, so pairing is tried at once instead
+   * of after the wait. Nothing else reads it. A wrong answer costs one pairing
+   * attempt too many per false step to true, or one too few; a hook that keeps
+   * flipping is never worse than no hold at all. Must not throw and must not
+   * do I/O: it runs on every advertisement while the pairing is held back.
+   */
+  advertisesPendingReading?(device: BleDeviceInfo): boolean | undefined;
 
   /**
    * Receive per-device runtime config (e.g. a MiBeacon bind key) from the
@@ -469,9 +508,9 @@ export interface ScaleAdapterCore {
    *
    * Must not throw and must not perform I/O: nothing is connected yet. Reading
    * a value the adapter already recorded is fine, which is what the address is
-   * for: an adapter that keeps per-device state (yunmai's Mini/SE variant) can
-   * resolve it here, for the device this session is about to read, rather than
-   * carrying whatever `matches()` last saw.
+   * for: an adapter that keeps per-device state can resolve it here, for the
+   * device this session is about to read, rather than carrying whatever
+   * `matches()` last saw.
    *
    * `deviceAddress` is uppercase with no separators, and it is NOT always a
    * MAC: on macOS the noble transport supplies the CoreBluetooth UUID instead,

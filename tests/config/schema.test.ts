@@ -423,6 +423,16 @@ describe('BleSchema', () => {
     }
   });
 
+  // Kept through the parse, like qn_user_key above (#331).
+  it('accepts ble.qn_result_ack as a boolean or null and keeps the value', () => {
+    for (const value of [true, false, null]) {
+      const result = BleSchema.safeParse({ qn_result_ack: value });
+      expect(result.success).toBe(true);
+      expect(result.data?.qn_result_ack).toBe(value);
+    }
+    expect(BleSchema.safeParse({ qn_result_ack: 'yes' }).success).toBe(false);
+  });
+
   it('rejects ble.session_timeout_sec outside 5 to 600', () => {
     for (const secs of [4, 601]) {
       expect(BleSchema.safeParse({ session_timeout_sec: secs }).success).toBe(false);
@@ -447,6 +457,21 @@ describe('BleSchema', () => {
   it('rejects a ble.preemptive_adapter_reset that is not a boolean', () => {
     for (const value of ['false', 0, 1]) {
       expect(BleSchema.safeParse({ preemptive_adapter_reset: value }).success).toBe(false);
+    }
+  });
+
+  it('keeps ble.pairing_retry_max_min from 0 to 1440 (#471)', () => {
+    for (const value of [0, 60, 1440]) {
+      const result = BleSchema.safeParse({ pairing_retry_max_min: value });
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.pairing_retry_max_min).toBe(value);
+    }
+    expect(BleSchema.safeParse({ pairing_retry_max_min: null }).success).toBe(true);
+  });
+
+  it('rejects a ble.pairing_retry_max_min outside 0 to 1440 or not a whole number', () => {
+    for (const value of [-1, 1441, 1.5, '60']) {
+      expect(BleSchema.safeParse({ pairing_retry_max_min: value }).success).toBe(false);
     }
   });
 
@@ -956,6 +981,33 @@ describe('runtime.idle_rescan_delay (#398)', () => {
     ).toBe(false);
     expect(
       AppConfigSchema.safeParse({ ...VALID_CONFIG, runtime: { idle_rescan_delay: 1.5 } }).success,
+    ).toBe(false);
+  });
+});
+
+describe('runtime.no_reading_rescan_delay (#475)', () => {
+  it('defaults to 0, which keeps the retry backoff as it was', () => {
+    const result = AppConfigSchema.safeParse({
+      ...VALID_CONFIG,
+      runtime: { continuous_mode: true },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.runtime?.no_reading_rescan_delay).toBe(0);
+  });
+
+  it.each([900, 3600])('keeps a configured %i', (value) => {
+    const result = AppConfigSchema.safeParse({
+      ...VALID_CONFIG,
+      runtime: { continuous_mode: true, no_reading_rescan_delay: value },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.runtime?.no_reading_rescan_delay).toBe(value);
+  });
+
+  it.each([-1, 1.5, 3601])('rejects %d', (value) => {
+    expect(
+      AppConfigSchema.safeParse({ ...VALID_CONFIG, runtime: { no_reading_rescan_delay: value } })
+        .success,
     ).toBe(false);
   });
 });

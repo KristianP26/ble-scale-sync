@@ -203,6 +203,18 @@ describe('diffRestartRequired', () => {
     expect(diffRestartRequired(a, b)).toEqual([]);
   });
 
+  it('does NOT flag ble.pairing_retry_max_min, which the poll source re-reads per cycle (#471)', () => {
+    const a = baseConfig({ ble: { handler: 'auto', pairing_retry_max_min: 60 } });
+    const b = baseConfig({ ble: { handler: 'auto', pairing_retry_max_min: 0 } });
+    expect(diffRestartRequired(a, b)).toEqual([]);
+  });
+
+  it('does NOT flag runtime.no_reading_rescan_delay, which the poll source re-reads per cycle (#475)', () => {
+    const a = baseConfig({ runtime: { no_reading_rescan_delay: 0 } } as Partial<AppConfig>);
+    const b = baseConfig({ runtime: { no_reading_rescan_delay: 900 } } as Partial<AppConfig>);
+    expect(diffRestartRequired(a, b)).toEqual([]);
+  });
+
   it('redacts mqtt_proxy.password values in the warn payload', () => {
     const a = baseConfig({
       ble: {

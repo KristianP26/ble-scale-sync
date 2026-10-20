@@ -125,6 +125,26 @@ const R07_RECORD_AT = '2026-10-07T19:57:25.000Z';
 
 const R07_STORED = [R07.S1, R07.S2, R07.S3, R07.S24, R07.S25];
 const R07_LIVE = [R07.P1, R07.P2, R07.P3, R07.C15, R07.D16];
+/** The scale's "no stored weigh-ins" answer to the 0x22, 2026-10-06 line 399. */
+const NO_RECORDS = hex('23 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 23');
+const R06_LIVE = [R06.P1, R06.P2, R06.P3, R06.C15, R06.D16];
+/** The profile the 2026-10-06 visit frame carried: 1810 mm. Age is neutral. */
+const P181: UserProfile = { height: 181, age: 40, gender: 'male', isAthlete: false };
+
+/**
+ * Derived: the 2026-10-06 block with every payload byte zeroed, the shape of
+ * the all-zero blocks reported in #331.
+ */
+function allZeroBlock(): Buffer[] {
+  return R06_LIVE.map((f, i) => {
+    const z = Buffer.alloc(f.length);
+    // Kept: opcode and length; part 1's slot, status, part byte and weight;
+    // the part byte of parts 2 and 3; 0x15/0x16's [2].
+    const kept = i === 0 ? [0, 1, 2, 3, 4, 5, 6] : i < 3 ? [0, 1, 4] : [0, 1, 2];
+    for (const at of kept) z[at] = f[at];
+    return withSum(z);
+  });
+}
 
 /**
  * Derived: R07's stored record moved to another time and made record `index`
@@ -344,15 +364,17 @@ interface SessionOptions {
 /**
  * One 19-byte session in transport order with `qn_weight_ack` on (both
  * reporters' config): scale info, ready, config request, then 2 s for the
- * profile frame, 0x22 and the anchors to go out. Every write is collected.
- * The caller runs fake timers.
+ * profile frame, 0x22 and the anchors to go out. Every write is collected,
+ * with the time it went out. The caller runs fake timers.
  */
 async function openSession(adapter: QnScaleAdapter, opts: SessionOptions) {
   vi.setSystemTime(new Date(opts.now));
   const writes: number[][] = [];
+  const sentAt: number[] = [];
   const ctx = {
     write: async (_uuid: string, data: Buffer | number[]) => {
       writes.push([...data]);
+      sentAt.push(Date.now());
     },
     read: async () => Buffer.alloc(0),
     subscribe: async () => {},
@@ -371,7 +393,9 @@ async function openSession(adapter: QnScaleAdapter, opts: SessionOptions) {
   const feed = (...frames: Buffer[]): (ScaleReading | null)[] =>
     frames.map((f) => adapter.parseNotification(f));
   const starts = (): number => writes.filter((w) => w[0] === 0x22).length;
-  return { writes, feed, starts };
+  /** Milliseconds since the session's 0x22 went out. */
+  const msSinceQuery = (): number => Date.now() - sentAt[writes.findIndex((w) => w[0] === 0x22)];
+  return { writes, sentAt, feed, starts, msSinceQuery };
 }
 
 function spyLines(level: 'debug' | 'info') {
@@ -587,6 +611,54 @@ describe('QN 19-byte stored records (#331)', () => {
     const other = s.feed(patched(R07.P1, 5, 0x1e, 0x05), ...R07_LIVE.slice(1));
     expect(other[0]).toEqual({ weight: 76.85, impedance: 0 });
   });
+
+  // A weight that settled just before the scale accepted the profile leaves
+  // its session no live frame: the scale sends nothing during its BIA and
+  // answers the 0x22 once it is done, about 13 s after the acceptance. That is
+  // a new weigh-in even at the weight just published. The frames are the
+  // reporter's; their order and timing are those of such a weigh-in.
+  it('publishes a result block that answered the 0x22 long after the profile was accepted', async () => {
+    const adapter = new QnScaleAdapter();
+    let s = await openSession(adapter, { now: '2026-10-07T20:00:44Z' });
+    expect(s.feed(...R07_LIVE)[4]).toEqual({ weight: 76.55, impedance: 0 });
+
+    s = await openSession(adapter, { now: '2026-10-07T20:02:44Z' });
+    s.feed(R07_SESSION.VISIT_OK);
+    await vi.advanceTimersByTimeAsync(13_000);
+    const out = s.feed(NO_RECORDS, ...R07_LIVE);
+    expect(out[1]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(out[5]).toEqual({ weight: 76.55, impedance: 0 });
+  });
+
+  // The same with no 0x23 before the block: its first part is the answer.
+  it('times the answer from the result block when no 0x23 comes first', async () => {
+    const adapter = new QnScaleAdapter();
+    let s = await openSession(adapter, { now: '2026-10-07T20:00:44Z' });
+    expect(s.feed(...R07_LIVE)[4]).toEqual({ weight: 76.55, impedance: 0 });
+
+    s = await openSession(adapter, { now: '2026-10-07T20:02:44Z' });
+    s.feed(R07_SESSION.VISIT_OK);
+    await vi.advanceTimersByTimeAsync(13_000);
+    const out = s.feed(...R07_LIVE);
+    expect(out[0]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(out[4]).toEqual({ weight: 76.55, impedance: 0 });
+  });
+
+  // Without a profile answer only the time since the 0x22 counts.
+  it.each([
+    [2_999, null],
+    [3_000, { weight: 76.55, impedance: 0 }],
+  ])('judges a repeated block by an answer %i ms after the 0x22 went out', async (ms, expected) => {
+    const adapter = new QnScaleAdapter();
+    let s = await openSession(adapter, { now: '2026-10-07T20:00:44Z' });
+    expect(s.feed(...R07_LIVE)[4]).toEqual({ weight: 76.55, impedance: 0 });
+
+    s = await openSession(adapter, { now: '2026-10-07T20:02:44Z' });
+    await vi.advanceTimersByTimeAsync(ms - s.msSinceQuery());
+    const out = s.feed(NO_RECORDS, ...R07_LIVE);
+    expect(out[1]).toEqual(expected);
+    expect(out[5]).toEqual(expected);
+  });
 });
 
 describe("QN 19-byte: the scale's own body composition (#331)", () => {
@@ -598,10 +670,6 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
     vi.useRealTimers();
   });
 
-  /** The profile the 2026-10-06 visit frame carried: 1810 mm. Age is neutral. */
-  const P181: UserProfile = { height: 181, age: 40, gender: 'male', isAthlete: false };
-  const R06_LIVE = [R06.P1, R06.P2, R06.P3, R06.C15, R06.D16];
-  const NO_RECORDS = hex('23 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 23');
   const estimate = (profile: UserProfile, weight = 76.85) => buildPayload(weight, 0, {}, profile);
 
   /**
@@ -636,7 +704,13 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
 
   it("uses the scale's values when the matched user has the profile it was sent", async () => {
     const info = spyLines('info');
+    const debug = spyLines('debug');
     const { adapter, reading } = await weighIn();
+    // The scale's display shows the percentages; the log gives the kg exported.
+    expect(debug.lines()).toContain(
+      'QN: the scale reports muscle and bone as % of body weight: muscle 77.9 % (59.87 kg), ' +
+        'bone 4.2 % (3.23 kg); exported in kg (#331)',
+    );
     const payload = adapter.computeMetrics(reading, P181);
     expect(payload).toMatchObject({
       weight: 76.85,
@@ -740,36 +814,100 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
     expect(adapter.computeMetrics(reading, P181)).toEqual(estimate(P181));
   });
 
+  /**
+   * The 2026-10-06 frames in the order of a weigh-in whose weight settled just
+   * before the scale accepted the profile: no live frame after the acceptance
+   * (the scale sends none during its BIA), then, `answerMs` after it, "no
+   * stored weigh-ins" and the result block (#331). Returns the 0x16 reading.
+   */
+  async function settledBeforeAccept(answerMs: number) {
+    const adapter = new QnScaleAdapter();
+    const s = await openSession(adapter, {
+      now: '2026-10-06T15:10:52Z',
+      info: R06_SESSION.INFO,
+      profile: P181,
+    });
+    s.feed(R06_SESSION.VISIT_OK);
+    await vi.advanceTimersByTimeAsync(answerMs);
+    const out = s.feed(NO_RECORDS, ...R06_LIVE);
+    const reading = out[out.length - 1];
+    expect(reading).toEqual({ weight: 76.85, impedance: 0 });
+    return { adapter, reading: reading! };
+  }
+
+  // The scale finished its BIA 13 s after it accepted the profile, so it
+  // computed the result after accepting it, although no live frame followed.
+  it("uses the scale's values when its weight settled just before it accepted the profile", async () => {
+    const info = spyLines('info');
+    const debug = spyLines('debug');
+    const { adapter, reading } = await settledBeforeAccept(13_000);
+    expect(adapter.computeMetrics(reading, P181)).toMatchObject({
+      bodyFatPercent: 18,
+      waterPercent: 59.1,
+      muscleMass: 59.87,
+      boneMass: 3.23,
+      visceralFat: 6,
+    });
+    expect(info.lines()).toContain(
+      "QN: using the scale's own body composition for this weigh-in (#331)",
+    );
+    expect(debug.lines()).toContain(
+      'QN: the scale answered the stored-record query 14.6 s after it was sent, ' +
+        '13.0 s after it accepted the profile (#331)',
+    );
+  });
+
+  it.each([
+    [2_999, false],
+    [3_000, true],
+  ])("uses the scale's values for an answer %i ms after the acceptance: %s", async (ms, used) => {
+    const { adapter, reading } = await settledBeforeAccept(ms);
+    const payload = adapter.computeMetrics(reading, P181);
+    if (used) expect(payload.bodyFatPercent).toBe(18);
+    else expect(payload).toEqual(estimate(P181));
+  });
+
   // The 2026-10-07 log: the scale finished the weigh-in before the link came
-  // up and sent its result right after accepting our profile. It may have
-  // computed it with the profile the slot held before ours.
+  // up and sent its stored record and result 0.93 s after accepting our
+  // profile. It may have computed them with the profile the slot held before
+  // ours.
   it('estimates for a result the scale measured before it accepted the profile', async () => {
     const info = spyLines('info');
     const adapter = new QnScaleAdapter();
     const p182 = { ...P181, height: 182 };
     const s = await openSession(adapter, { now: R07_CONNECTED, profile: p182 });
-    const out = s.feed(R07_SESSION.VISIT_OK, ...R07_STORED, ...R07_LIVE);
+    s.feed(R07_SESSION.VISIT_OK);
+    await vi.advanceTimersByTimeAsync(928);
+    const out = s.feed(...R07_STORED, ...R07_LIVE);
     const reading = out[out.length - 1]!;
     expect(reading).toEqual({ weight: 76.55, impedance: 0 });
     expect(adapter.computeMetrics(reading, p182)).toEqual(estimate(p182, 76.55));
-    expect(info.lines().some((l) => l.includes('measured before it accepted the profile'))).toBe(
-      true,
+    expect(info.lines()).toContain(
+      "QN: the scale's own body composition is not used for this weigh-in: the scale " +
+        'answered 0.9 s after it accepted the profile, with no live weight in between, so it ' +
+        'most likely measured before that; estimating instead (#331)',
     );
   });
 
-  // Derived: the 2026-10-06 block with every payload byte zeroed, the shape of
-  // the all-zero blocks reported in #331.
+  // Only the first answer counts. Derived timing: the same frames with the
+  // result block 3 s after the stored record (in the log it came 0.85 s
+  // after).
+  it('judges by the first answer, not by a result block that comes later', async () => {
+    const adapter = new QnScaleAdapter();
+    const p182 = { ...P181, height: 182 };
+    const s = await openSession(adapter, { now: R07_CONNECTED, profile: p182 });
+    s.feed(R07_SESSION.VISIT_OK);
+    await vi.advanceTimersByTimeAsync(928);
+    s.feed(...R07_STORED);
+    await vi.advanceTimersByTimeAsync(3_000);
+    const reading = s.feed(...R07_LIVE)[4]!;
+    expect(reading).toEqual({ weight: 76.55, impedance: 0 });
+    expect(adapter.computeMetrics(reading, p182)).toEqual(estimate(p182, 76.55));
+  });
+
   it('pins nothing when the scale sent an all-zero block', async () => {
     const info = spyLines('info');
-    const zero = R06_LIVE.map((f, i) => {
-      const z = Buffer.alloc(f.length);
-      // Kept: opcode and length; part 1's slot, status, part byte and weight;
-      // the part byte of parts 2 and 3; 0x15/0x16's [2].
-      const kept = i === 0 ? [0, 1, 2, 3, 4, 5, 6] : i < 3 ? [0, 1, 4] : [0, 1, 2];
-      for (const at of kept) z[at] = f[at];
-      return withSum(z);
-    });
-    const { adapter, reading } = await weighIn({}, { live: zero });
+    const { adapter, reading } = await weighIn({}, { live: allZeroBlock() });
     expect(adapter.computeMetrics(reading, P181)).toEqual(estimate(P181));
     expect(info.lines()).toContain(
       'QN: the scale sent no body composition for this weigh-in (#331)',
@@ -793,5 +931,161 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
     // processed, as the proxy watchers allow.
     await openSession(first.adapter, { now: '2026-10-06T15:12:00Z', info: R06_SESSION.INFO });
     expect(first.adapter.computeMetrics(first.reading, P181).bodyFatPercent).toBe(18);
+  });
+});
+
+describe('QN 19-byte: ble.qn_result_ack (#331)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  /**
+   * The end-of-measurement frame as the vendor's published SDK builds it, for
+   * the protocol type 0xff of the reporter's scale-info frame.
+   */
+  const ACK = [0x1f, 0x05, 0xff, 0x10, 0x33];
+  const ON: AdapterRuntimeConfig = { qnWeightAck: true, qnResultAck: true };
+
+  /**
+   * A 2026-10-06 session after its handshake; `after()` is every write since.
+   * `now` is when it opens.
+   */
+  async function session(
+    config: AdapterRuntimeConfig,
+    now = '2026-10-06T15:10:52Z',
+    adapter = new QnScaleAdapter(),
+  ) {
+    const s = await openSession(adapter, { now, info: R06_SESSION.INFO, profile: P181, config });
+    const from = s.writes.length;
+    return { adapter, s, after: () => s.writes.slice(from) };
+  }
+
+  /** The 2026-10-06 weigh-in up to the frame before its 0x16. */
+  const UNTIL_D16 = [
+    R06_SESSION.VISIT_OK,
+    R06_SESSION.MEASURING,
+    R06_SESSION.STABLE,
+    NO_RECORDS,
+    ...R06_LIVE.slice(0, 4),
+  ];
+
+  it('sends the 0x1F at the 0x16 of a complete result block, and not before', async () => {
+    expect(hasValidSumChecksum(Buffer.from(ACK))).toBe(true);
+    const { s, after } = await session(ON);
+    s.feed(...UNTIL_D16);
+    expect(after()).toEqual([]);
+    expect(s.feed(R06.D16)[0]).toEqual({ weight: 76.85, impedance: 0 });
+    expect(after()).toEqual([ACK]);
+  });
+
+  it.each([
+    ['unset', { qnWeightAck: true }],
+    ['false', { qnWeightAck: true, qnResultAck: false }],
+  ])('sends nothing when the option is %s, and changes nothing else', async (_name, config) => {
+    /** One weigh-in: its readings, info lines, debug lines and writes. */
+    const run = async (c: AdapterRuntimeConfig) => {
+      const info = spyLines('info');
+      const debug = spyLines('debug');
+      const { adapter, s, after } = await session(c);
+      const out = s.feed(...UNTIL_D16, R06.D16);
+      const payload = adapter.computeMetrics(out[out.length - 1]!, P181);
+      // writeCmd logs a write once it has gone out.
+      await vi.advanceTimersByTimeAsync(0);
+      const result = { out, payload, info: info.lines(), debug: debug.lines(), writes: after() };
+      info.restore();
+      debug.restore();
+      return result;
+    };
+    const off = await run(config);
+    const on = await run(ON);
+    expect(off.writes).toEqual([]);
+    expect(on.writes).toEqual([ACK]);
+    expect(off.out).toEqual(on.out);
+    expect(off.payload).toEqual(on.payload);
+    expect(off.info).toEqual(on.info);
+    expect(on.debug.filter((l) => !off.debug.includes(l))).toEqual([
+      'QN: 0x16 completes the result block, sending 0x1F as the vendor app does ' +
+        '(ble.qn_result_ack, #331)',
+      'QN write: [1f 05 ff 10 33]',
+    ]);
+  });
+
+  // The vendor's SDK answers an all-zero block too; after one, a scale stored
+  // a copy of the weigh-in it had delivered.
+  it('sends it for an all-zero result block', async () => {
+    const { s, after } = await session(ON);
+    s.feed(R06_SESSION.VISIT_OK, R06_SESSION.MEASURING, R06_SESSION.STABLE, NO_RECORDS);
+    s.feed(...allZeroBlock());
+    expect(after()).toEqual([ACK]);
+  });
+
+  it('sends nothing for a result block that is missing a part', async () => {
+    const debug = spyLines('debug');
+    const { s, after } = await session(ON);
+    s.feed(...UNTIL_D16.filter((f) => f !== R06.P2), R06.D16);
+    expect(after()).toEqual([]);
+    expect(debug.lines()).toContain(
+      'QN: 0x16 without a complete result block, no 0x1F sent (ble.qn_result_ack, #331)',
+    );
+  });
+
+  // The shape of the repeated-block test above: the block is not published
+  // again, but the scale still gets its answer, as the SDK gives it.
+  it('sends it for a repeated result block that is not published again', async () => {
+    const adapter = new QnScaleAdapter();
+    let { s, after } = await session(ON, '2026-10-07T20:00:44Z', adapter);
+    expect(s.feed(...R07_LIVE)[4]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(after()).toEqual([ACK]);
+
+    ({ s, after } = await session(ON, '2026-10-07T20:02:44Z', adapter));
+    expect(s.feed(...R07_LIVE)).toEqual(new Array(5).fill(null));
+    expect(after()).toEqual([ACK]);
+  });
+
+  // Derived: a repeated block leaves the session open, and the next block in
+  // it (the 2026-10-06 one) arrives without its 0x15. The repeated block's
+  // 0x15 does not complete it.
+  it("does not count an earlier block's 0x15 toward the next block", async () => {
+    const debug = spyLines('debug');
+    const adapter = new QnScaleAdapter();
+    let { s, after } = await session(ON, '2026-10-07T20:00:44Z', adapter);
+    s.feed(...R07_LIVE);
+
+    ({ s, after } = await session(ON, '2026-10-07T20:02:44Z', adapter));
+    s.feed(...R07_LIVE);
+    const out = s.feed(R06.P1, R06.P2, R06.P3, R06.D16);
+    expect(out[3]).toEqual({ weight: 76.85, impedance: 0 });
+    expect(after()).toEqual([ACK]);
+    expect(debug.lines()).toContain(
+      'QN: 0x16 without a complete result block, no 0x1F sent (ble.qn_result_ack, #331)',
+    );
+    expect(debug.lines()).toContain('QN: no complete result block for this weigh-in (#331)');
+  });
+
+  it('sends nothing for a stored record', async () => {
+    const { s, after } = await session(ON, R07_CONNECTED);
+    expect(s.feed(R07_SESSION.VISIT_OK, ...R07_STORED)[5]).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(after()).toEqual([]);
+  });
+
+  // The session ends on the 0x16's reading in the same tick, which drops the
+  // connection context, so the write has to be issued before that.
+  it('writes the 0x1F before the session ends on the reading', async () => {
+    const { adapter, s, after } = await session(ON);
+    s.feed(...UNTIL_D16);
+    expect(adapter.parseNotification(R06.D16)).not.toBeNull();
+    adapter.onSessionEnd();
+    expect(after()).toEqual([ACK]);
+  });
+
+  it('carries the protocol byte the session sends with', async () => {
+    const { s, after } = await session({ ...ON, qnProtocolByte: 0x00 });
+    s.feed(...UNTIL_D16, R06.D16);
+    expect(after()).toEqual([[0x1f, 0x05, 0x00, 0x10, 0x34]]);
   });
 });

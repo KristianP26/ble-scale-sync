@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { BleChar } from '../../../src/ble/shared.js';
-import { normalizeUuid } from '../../../src/ble/types.js';
+import { normalizeUuid, POST_READING_RECONNECT_MS } from '../../../src/ble/types.js';
 import type {
   ScaleAdapter,
   ScaleReading,
@@ -19,6 +19,14 @@ let hangSession = false;
 // When set, connectGatt rejects with this reason (a full proxy slot, a peer
 // that refuses the link).
 let failConnectWith: string | null = null;
+// When set, connectGatt hands back a session that never notifies but whose
+// device does report a disconnect, when the test calls endSilentSession: a
+// scale still on after its reading that nobody steps on, until it switches off.
+let silentSession = false;
+let endSilentSession: (() => void) | null = null;
+// When set, the default session's device reports a disconnect right after its
+// one notification: a scale that hands over a stored record and switches off.
+let disconnectAfterNotify = false;
 
 vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
   class FakeEsphomeProxyPool {
@@ -38,6 +46,34 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
     async connectGatt(mac: string) {
       connectGattSpy(mac);
       if (failConnectWith !== null) throw new Error(failConnectWith);
+      if (silentSession) {
+        const quiet: BleChar = {
+          async read() {
+            return Buffer.alloc(0);
+          },
+          async write() {},
+          async subscribe() {
+            return () => {};
+          },
+        };
+        const disconnectCbs: Array<() => void> = [];
+        endSilentSession = () => {
+          for (const cb of disconnectCbs.splice(0)) cb();
+        };
+        return {
+          charMap: new Map<string, BleChar>([
+            [NOTIFY, quiet],
+            [WRITE, quiet],
+          ]),
+          device: {
+            onDisconnect: (cb: () => void) => {
+              disconnectCbs.push(cb);
+            },
+            fireDisconnect: () => {},
+          },
+          close: closeSpy,
+        };
+      }
       if (hangSession) {
         const silent: BleChar = {
           async read() {
@@ -58,6 +94,7 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
         };
       }
       let notifyCb: ((d: Buffer) => void) | null = null;
+      const onDisconnectCbs: Array<() => void> = [];
       const notifyChar: BleChar = {
         async read() {
           return Buffer.alloc(0);
@@ -65,7 +102,14 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
         async write() {},
         async subscribe(onData) {
           notifyCb = onData;
-          setImmediate(() => notifyCb && notifyCb(Buffer.from([0x01])));
+          setImmediate(() => {
+            if (notifyCb) notifyCb(Buffer.from([0x01]));
+            if (disconnectAfterNotify) {
+              setImmediate(() => {
+                for (const cb of onDisconnectCbs.splice(0)) cb();
+              });
+            }
+          });
           return () => {};
         },
       };
@@ -83,7 +127,12 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
           [NOTIFY, notifyChar],
           [WRITE, noop],
         ]),
-        device: { onDisconnect: (_cb: () => void) => {}, fireDisconnect: () => {} },
+        device: {
+          onDisconnect: (cb: () => void) => {
+            onDisconnectCbs.push(cb);
+          },
+          fireDisconnect: () => {},
+        },
         close: closeSpy,
       };
     }
@@ -224,6 +273,105 @@ describe('ReadingWatcher GATT session timeout with stored records (#331)', () =>
       vi.useRealTimers();
     }
   });
+
+  it('does not let the stored record drop a live weigh-in of nearly the same weight right after it', async () => {
+    // The person stepped off before the final frame, so the session handed
+    // over only the stored record, and stepped on again within the 30 s dedup
+    // window. 76.55 and 76.52 both round to 76.5; keyed on weight alone the
+    // live weigh-in was a "Dedup skip" and reached no exporter at all.
+    vi.useFakeTimers();
+    connectGattSpy.mockClear();
+    try {
+      vi.setSystemTime(new Date('2026-10-07T20:30:00Z'));
+      const stored: ScaleReading = {
+        weight: 76.55,
+        impedance: 0,
+        timestamp: new Date('2026-10-07T19:57:25Z'),
+      };
+      const adapter = {
+        ...gattAdapter(),
+        parseNotification: (): ScaleReading =>
+          connectGattSpy.mock.calls.length > 1 ? { weight: 76.52, impedance: 0 } : { ...stored },
+      } as ScaleAdapter;
+      const watcher = new ReadingWatcher(config, [adapter]);
+      await watcher.start();
+      const pool = (
+        watcher as unknown as {
+          pool: { emitAdvert: (info: BleDeviceInfo, mac: string) => void };
+        }
+      ).pool;
+      const mac = 'AA:BB:CC:DD:EE:06';
+      pool.emitAdvert({ localName: 'GATT-scale', serviceUuids: [] }, mac);
+      const first = watcher.nextReading();
+      await vi.advanceTimersByTimeAsync(65_000);
+      expect((await Promise.race([first, Promise.resolve(null)]))?.reading).toEqual(stored);
+
+      // Ten seconds later, well inside the dedup window.
+      await vi.advanceTimersByTimeAsync(10_000);
+      pool.emitAdvert({ localName: 'GATT-scale', serviceUuids: [] }, mac);
+      const second = watcher.nextReading();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(connectGattSpy).toHaveBeenCalledTimes(2);
+      const live = await Promise.race([second, Promise.resolve(null)]);
+      expect(live?.reading).toEqual({ weight: 76.52, impedance: 0 });
+
+      await watcher.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keys a stored-only session by its record time, so only the same record again is a duplicate', async () => {
+    // Three sessions a second apart, each handing over one stored record and
+    // ending on the scale's disconnect: 76.55 and 76.52 kg share the 76.5
+    // bucket but are two weigh-ins, and the third repeats the second.
+    const records: ScaleReading[] = [
+      { weight: 76.55, impedance: 0, timestamp: new Date('2026-10-07T19:57:25Z') },
+      { weight: 76.52, impedance: 0, timestamp: new Date('2026-10-07T20:05:10Z') },
+      { weight: 76.52, impedance: 0, timestamp: new Date('2026-10-07T20:05:10Z') },
+    ];
+    const lines: string[] = [];
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation((m) => void lines.push(String(m)));
+    vi.useFakeTimers();
+    connectGattSpy.mockClear();
+    disconnectAfterNotify = true;
+    try {
+      vi.setSystemTime(new Date('2026-10-07T20:30:00Z'));
+      const adapter = {
+        ...gattAdapter(),
+        parseNotification: (): ScaleReading => ({
+          ...records[connectGattSpy.mock.calls.length - 1],
+        }),
+      } as ScaleAdapter;
+      const watcher = new ReadingWatcher(config, [adapter]);
+      await watcher.start();
+      const pool = (
+        watcher as unknown as {
+          pool: { emitAdvert: (info: BleDeviceInfo, mac: string) => void };
+        }
+      ).pool;
+      const mac = 'AA:BB:CC:DD:EE:07';
+      const session = async () => {
+        pool.emitAdvert({ localName: 'GATT-scale', serviceUuids: [] }, mac);
+        const next = watcher.nextReading();
+        await vi.advanceTimersByTimeAsync(1_000);
+        return (await Promise.race([next, Promise.resolve(null)]))?.reading ?? null;
+      };
+
+      expect(await session()).toEqual(records[0]);
+      expect(await session()).toEqual(records[1]);
+      expect(await session()).toBeNull();
+      expect(connectGattSpy).toHaveBeenCalledTimes(3);
+      const skip = lines.find((l) => l.startsWith('Dedup skip:'));
+      expect(skip ?? '(no line)').toMatch(/:76\.5@2026-10-07T20:05:10\.000Z$/);
+
+      await watcher.stop();
+    } finally {
+      disconnectAfterNotify = false;
+      vi.useRealTimers();
+      debug.mockRestore();
+    }
+  });
 });
 
 describe('ReadingWatcher GATT failure logging (B-13)', () => {
@@ -233,6 +381,8 @@ describe('ReadingWatcher GATT failure logging (B-13)', () => {
     // transient failure left only "opening GATT via ESPHome proxy" in the log.
     const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
     const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const t0 = new Date('2026-10-16T08:00:00Z').getTime();
+    vi.setSystemTime(t0);
     const watcher = new ReadingWatcher(config, [gattAdapter()]);
     await watcher.start();
     const pool = (
@@ -257,11 +407,13 @@ describe('ReadingWatcher GATT failure logging (B-13)', () => {
       expect(logged(warn)).not.toContain('second-reason');
       expect(logged(debug)).toContain('second-reason');
 
-      // A success clears the record, so the next failure is news again.
+      // A success clears the record, so the next failure outside the
+      // post-reading window is news again.
       failConnectWith = null;
       pool.emitAdvert(info, mac);
       await watcher.nextReading();
       await settle();
+      vi.setSystemTime(t0 + POST_READING_RECONNECT_MS + 1);
       failConnectWith = 'third-reason';
       pool.emitAdvert(info, mac);
       await settle();
@@ -270,6 +422,224 @@ describe('ReadingWatcher GATT failure logging (B-13)', () => {
       failConnectWith = null;
       warn.mockRestore();
       debug.mockRestore();
+      vi.useRealTimers();
+      await watcher.stop();
+    }
+  });
+});
+
+/**
+ * #466: after a reading the scale stays on and keeps advertising, so the next
+ * advertisement opens a new session (on purpose: a second person stepping on
+ * is read in it). Nobody does, the scale switches off, and that end used to be
+ * a WARN "GATT read over the ESPHome proxy failed" after every weigh-in.
+ */
+describe('ReadingWatcher session after a reading (#466, D058)', () => {
+  type Pool = { emitAdvert: (info: BleDeviceInfo, mac: string) => void };
+  const poolOf = (w: unknown): Pool => (w as { pool: Pool }).pool;
+  const ADVERT: BleDeviceInfo = { localName: 'GATT-scale', serviceUuids: [] };
+  const NO_WEIGH_IN =
+    /session opened \d+\.\d s after the last reading, while the scale was still on, ended without a new weigh-in/;
+  const FAILED = 'GATT read over the ESPHome proxy failed';
+  const settle = () => new Promise((r) => setTimeout(r, 50));
+  const lines = (spy: { mock: { calls: unknown[][] } }) => spy.mock.calls.map((c) => String(c[0]));
+
+  function spies() {
+    return {
+      warn: vi.spyOn(bleLog, 'warn').mockImplementation(() => {}),
+      info: vi.spyOn(bleLog, 'info').mockImplementation(() => {}),
+      debug: vi.spyOn(bleLog, 'debug').mockImplementation(() => {}),
+    };
+  }
+
+  function reset(): void {
+    failConnectWith = null;
+    silentSession = false;
+    hangSession = false;
+    endSilentSession = null;
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  }
+
+  it('logs the silent session after a reading at info, not as a failure', async () => {
+    connectGattSpy.mockClear();
+    const log = spies();
+    const mac = 'AA:BB:CC:DD:EE:40';
+    const watcher = new ReadingWatcher(config, [gattAdapter()]);
+    try {
+      await watcher.start();
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      expect((await watcher.nextReading()).reading.weight).toBe(82);
+      await settle();
+
+      silentSession = true;
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await settle();
+      expect(endSilentSession).not.toBeNull();
+      endSilentSession!();
+      await settle();
+
+      // The reconnect itself stays: no hold-off after a reading.
+      expect(connectGattSpy).toHaveBeenCalledTimes(2);
+      expect(lines(log.warn).filter((l) => l.includes(FAILED))).toEqual([]);
+      const told = lines(log.info).filter((l) => NO_WEIGH_IN.test(l));
+      expect(told).toHaveLength(1);
+      expect(told[0]).toContain(`GattMock at ${mac}: session opened`);
+      expect(told[0]).toContain('(Scale disconnected before reading completed)');
+    } finally {
+      reset();
+      await watcher.stop();
+    }
+  });
+
+  it('still reads a second weigh-in in the session after a reading', async () => {
+    // That session is how a second person stepping on before the scale
+    // switches off gets read. Another weight, so the 30 s dedup lets it by.
+    connectGattSpy.mockClear();
+    const log = spies();
+    const mac = 'AA:BB:CC:DD:EE:45';
+    const adapter = {
+      ...gattAdapter(),
+      parseNotification: (): ScaleReading => ({
+        weight: connectGattSpy.mock.calls.length > 1 ? 64.5 : 82,
+        impedance: 0,
+      }),
+    } as ScaleAdapter;
+    const watcher = new ReadingWatcher(config, [adapter]);
+    try {
+      await watcher.start();
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      expect((await watcher.nextReading()).reading.weight).toBe(82);
+      await settle();
+
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      expect((await watcher.nextReading()).reading.weight).toBe(64.5);
+      expect(lines(log.info).filter((l) => NO_WEIGH_IN.test(l))).toEqual([]);
+      expect(lines(log.warn)).toEqual([]);
+    } finally {
+      reset();
+      await watcher.stop();
+    }
+  });
+
+  it('still warns for a session opened after the window', async () => {
+    const log = spies();
+    const mac = 'AA:BB:CC:DD:EE:41';
+    const t0 = new Date('2026-10-16T08:00:00Z').getTime();
+    vi.setSystemTime(t0);
+    const watcher = new ReadingWatcher(config, [gattAdapter()]);
+    try {
+      await watcher.start();
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await watcher.nextReading();
+      await settle();
+
+      vi.setSystemTime(t0 + POST_READING_RECONNECT_MS + 1);
+      silentSession = true;
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await settle();
+      endSilentSession!();
+      await settle();
+
+      const failed = lines(log.warn).filter((l) => l.includes(FAILED));
+      expect(failed).toHaveLength(1);
+      expect(failed[0]).toContain('(Scale disconnected before reading completed)');
+      expect(lines(log.info).filter((l) => NO_WEIGH_IN.test(l))).toEqual([]);
+    } finally {
+      reset();
+      await watcher.stop();
+    }
+  });
+
+  it('leaves the failure tracker alone, so a real failure after the window warns', async () => {
+    const log = spies();
+    const mac = 'AA:BB:CC:DD:EE:42';
+    const t0 = new Date('2026-10-16T08:00:00Z').getTime();
+    vi.setSystemTime(t0);
+    const watcher = new ReadingWatcher(config, [gattAdapter()]);
+    try {
+      await watcher.start();
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await watcher.nextReading();
+      await settle();
+
+      failConnectWith = 'quiet-reason';
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await settle();
+      expect(
+        lines(log.info)
+          .filter((l) => NO_WEIGH_IN.test(l))
+          .join(' | '),
+      ).toContain('quiet-reason');
+      expect(lines(log.warn)).toEqual([]);
+
+      vi.setSystemTime(t0 + 61_000);
+      failConnectWith = 'later-reason';
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await settle();
+      expect(lines(log.warn).join(' | ')).toContain('later-reason');
+    } finally {
+      reset();
+      await watcher.stop();
+    }
+  });
+
+  it('tells once per reading and logs the repeats at debug', async () => {
+    const log = spies();
+    const mac = 'AA:BB:CC:DD:EE:43';
+    const watcher = new ReadingWatcher(config, [gattAdapter()]);
+    try {
+      await watcher.start();
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await watcher.nextReading();
+      await settle();
+
+      failConnectWith = 'slot-busy';
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await settle();
+      failConnectWith = 'scale-gone';
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await settle();
+
+      const told = lines(log.info).filter((l) => NO_WEIGH_IN.test(l));
+      expect(told).toHaveLength(1);
+      expect(told[0]).toContain('(slot-busy)');
+      expect(
+        lines(log.debug)
+          .filter((l) => NO_WEIGH_IN.test(l))
+          .join(' | '),
+      ).toContain('scale-gone');
+      expect(lines(log.warn)).toEqual([]);
+    } finally {
+      reset();
+      await watcher.stop();
+    }
+  });
+
+  it('decides by when the session opened, not by when it ended', async () => {
+    // Opened 1 s after the reading, ended by the 60 s idle timeout 61 s after
+    // it: past the window by then, and still the reconnect to a scale still on.
+    const log = spies();
+    const mac = 'AA:BB:CC:DD:EE:44';
+    vi.useFakeTimers();
+    const watcher = new ReadingWatcher(config, [gattAdapter()]);
+    try {
+      await watcher.start();
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await vi.advanceTimersByTimeAsync(0);
+      await watcher.nextReading();
+
+      await vi.advanceTimersByTimeAsync(1000);
+      hangSession = true;
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await vi.advanceTimersByTimeAsync(65_000);
+
+      expect(lines(log.warn).filter((l) => l.includes(FAILED))).toEqual([]);
+      const told = lines(log.info).filter((l) => NO_WEIGH_IN.test(l));
+      expect(told).toHaveLength(1);
+      expect(told[0]).toContain(`(GATT reading timeout for ${mac})`);
+    } finally {
+      reset();
       await watcher.stop();
     }
   });

@@ -1,4 +1,5 @@
 import type { BleDeviceInfo } from '../interfaces/scale-adapter.js';
+import { SVC_FE95, miBeaconProductId, normUuid } from './mibeacon.js';
 
 /** Name predicates an adapter claims. All tokens MUST be lowercase. */
 export interface NameClaim {
@@ -33,6 +34,13 @@ export interface MatchDescriptor {
   charUuids?: string[];
   /** Manufacturer company id this adapter claims (a weak signal on its own). */
   manufacturerId?: number;
+  /**
+   * MiBeacon product ids this adapter claims: bytes 2-3, little-endian, of the
+   * Xiaomi 0xFE95 service data. Xiaomi assigns them per model (a model may have
+   * several), so like a name an id says which device this is, and
+   * resolveAfterDiscovery keeps a pick made on it (#474).
+   */
+  miBeaconProductIds?: number[];
   custom?: boolean;
 }
 
@@ -87,9 +95,21 @@ export function nameClaimHits(d: MatchDescriptor, localName: string | undefined)
   return false;
 }
 
+/** True if the device's 0xFE95 service data carries a product id the descriptor claims. */
+export function miBeaconClaimHits(d: MatchDescriptor, device: BleDeviceInfo): boolean {
+  const ids = d.miBeaconProductIds;
+  if (!ids || ids.length === 0) return false;
+  return (device.serviceData ?? []).some((sd) => {
+    if (normUuid(sd.uuid) !== SVC_FE95) return false;
+    const pid = miBeaconProductId(sd.data);
+    return pid !== null && ids.includes(pid);
+  });
+}
+
 /** Evaluate the common (data-expressible) match predicates. */
 export function matchesDescriptor(device: BleDeviceInfo, d: MatchDescriptor): boolean {
   if (nameClaimHits(d, device.localName)) return true;
+  if (miBeaconClaimHits(d, device)) return true;
   if (d.serviceUuids && uuidClaimHits(d.serviceUuids, device.serviceUuids)) return true;
   if (d.charUuids && uuidClaimHits(d.charUuids, device.characteristicUuids)) return true;
   return false;

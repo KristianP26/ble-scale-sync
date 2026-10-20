@@ -292,6 +292,235 @@ describe('runContinuousLoop', () => {
     await loop;
   });
 
+  // #475: a scale that accepts a connection all the time shows PAIR through a
+  // new session every few minutes. The floor only lengthens the wait; the
+  // backoff underneath still advances, so a real failure afterwards carries on
+  // where the ladder stands (D041).
+  describe('failureDelayFloor (#475)', () => {
+    const FLOOR_LABEL = 'runtime.no_reading_rescan_delay';
+
+    function infoLines(): string[] {
+      return vi.mocked(console.log).mock.calls.map((c) => String(c[0]));
+    }
+
+    it('waits the failureDelayFloor when it is longer than the backoff, and the backoff still advances under it (#475)', async () => {
+      const ac = new AbortController();
+      const { source, nextReading } = makeSource();
+      const noReading = new Error('Timed out');
+      const broken = new Error('GATT connect failed');
+      nextReading
+        .mockRejectedValueOnce(noReading) // backoff 5 s, floor 900 s
+        .mockRejectedValueOnce(noReading) // backoff 10 s, floor 900 s
+        .mockRejectedValue(broken); // backoff 20 s: the ladder moved twice
+
+      const loop = runContinuousLoop({
+        source,
+        processReading: async () => true,
+        signal: ac.signal,
+        touchHeartbeat: vi.fn(),
+        isReloadRequested: vi.fn(() => false),
+        clearReloadRequest: vi.fn(),
+        failureLogPrefix: 'No scale found',
+        failureDelayFloor: (err) =>
+          err === noReading ? { ms: 900_000, label: FLOOR_LABEL } : undefined,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(nextReading).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(899_999);
+      expect(nextReading).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(nextReading).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(899_999);
+      expect(nextReading).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(nextReading).toHaveBeenCalledTimes(3);
+
+      // 20 s, not 5 s: the two floored waits still moved the backoff on.
+      await vi.advanceTimersByTimeAsync(19_999);
+      expect(nextReading).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(nextReading).toHaveBeenCalledTimes(4);
+
+      ac.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      await loop;
+    });
+
+    it('lets the backoff decide once it reaches the floor, and names the setting only when the floor decided', async () => {
+      const ac = new AbortController();
+      const { source, nextReading } = makeSource();
+      nextReading.mockRejectedValue(new Error('Timed out'));
+
+      const loop = runContinuousLoop({
+        source,
+        processReading: async () => true,
+        signal: ac.signal,
+        touchHeartbeat: vi.fn(),
+        isReloadRequested: vi.fn(() => false),
+        clearReloadRequest: vi.fn(),
+        failureLogPrefix: 'Scale connected but sent no reading',
+        failureDelayFloor: () => ({ ms: 10_000, label: FLOOR_LABEL }),
+      });
+
+      // Backoff 5 s, floor 10 s: the floor sets the wait.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(nextReading).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(nextReading).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(nextReading).toHaveBeenCalledTimes(2);
+      // Backoff 10 s, floor 10 s: equal, so the backoff decides and the line
+      // reads exactly as it did before the setting existed.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(nextReading).toHaveBeenCalledTimes(3);
+      // Backoff 20 s, floor 10 s: the backoff.
+      await vi.advanceTimersByTimeAsync(19_999);
+      expect(nextReading).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(nextReading).toHaveBeenCalledTimes(4);
+
+      const waits = infoLines().filter((l) => l.includes('retrying in'));
+      expect(waits[0]).toContain(`retrying in 10s (${FLOOR_LABEL})...`);
+      expect(waits[1]).toContain('retrying in 10s... (Timed out)');
+      expect(waits[1]).not.toContain(FLOOR_LABEL);
+      expect(waits[2]).toContain('retrying in 20s... (Timed out)');
+      expect(waits[2]).not.toContain(FLOOR_LABEL);
+
+      ac.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      await loop;
+    });
+
+    it('ends a long floor at once on shutdown', async () => {
+      const ac = new AbortController();
+      const { source, nextReading, stop } = makeSource();
+      nextReading.mockRejectedValue(new Error('Timed out'));
+
+      let done = false;
+      const loop = runContinuousLoop({
+        source,
+        processReading: async () => true,
+        signal: ac.signal,
+        touchHeartbeat: vi.fn(),
+        isReloadRequested: vi.fn(() => false),
+        clearReloadRequest: vi.fn(),
+        failureDelayFloor: () => ({ ms: 3_600_000, label: FLOOR_LABEL }),
+      }).then(() => {
+        done = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(nextReading).toHaveBeenCalledTimes(1);
+
+      ac.abort();
+      // No clock advance beyond the current tick: a wait that ignored the
+      // signal would still be pending here, not at the test's own timeout.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(done).toBe(true);
+      expect(stop).toHaveBeenCalledOnce();
+      await loop;
+    });
+
+    it('logs the full line with the setting when the floor sets the wait', async () => {
+      const ac = new AbortController();
+      const { source, nextReading } = makeSource();
+      nextReading.mockRejectedValue(new Error('Timed out'));
+
+      const loop = runContinuousLoop({
+        source,
+        processReading: async () => true,
+        signal: ac.signal,
+        touchHeartbeat: vi.fn(),
+        isReloadRequested: vi.fn(() => false),
+        clearReloadRequest: vi.fn(),
+        failureLogPrefix: 'No scale found',
+        failureLogPrefixFor: () => 'Scale connected but sent no reading',
+        failureDelayFloor: () => ({ ms: 900_000, label: FLOOR_LABEL }),
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(
+        infoLines().some((l) =>
+          l.includes(
+            `Scale connected but sent no reading, retrying in 900s (${FLOOR_LABEL})... (Timed out)`,
+          ),
+        ),
+      ).toBe(true);
+
+      ac.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      await loop;
+    });
+
+    it('leaves the ladder and the log line as before when the floor returns undefined', async () => {
+      const ac = new AbortController();
+      const { source, nextReading } = makeSource();
+      nextReading.mockRejectedValue(new Error('Timed out'));
+      const floor = vi.fn(() => undefined);
+
+      const loop = runContinuousLoop({
+        source,
+        processReading: async () => true,
+        signal: ac.signal,
+        touchHeartbeat: vi.fn(),
+        isReloadRequested: vi.fn(() => false),
+        clearReloadRequest: vi.fn(),
+        failureLogPrefix: 'Scale connected but sent no reading',
+        failureDelayFloor: floor,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      let calls = 1;
+      for (const waitMs of [5_000, 10_000, 20_000, 40_000, 60_000, 60_000]) {
+        expect(nextReading).toHaveBeenCalledTimes(calls);
+        await vi.advanceTimersByTimeAsync(waitMs - 1);
+        expect(nextReading).toHaveBeenCalledTimes(calls);
+        await vi.advanceTimersByTimeAsync(1);
+        calls += 1;
+      }
+      expect(nextReading).toHaveBeenCalledTimes(7);
+      expect(floor).toHaveBeenCalled();
+      const waits = infoLines().filter((l) => l.includes('retrying in'));
+      expect(
+        waits[0].endsWith('Scale connected but sent no reading, retrying in 5s... (Timed out)'),
+      ).toBe(true);
+
+      ac.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      await loop;
+    });
+
+    it('still lets failureDelayMs claim an error before the floor is asked', async () => {
+      const ac = new AbortController();
+      const { source, nextReading } = makeSource();
+      nextReading.mockRejectedValue(new Error('idle'));
+      const floor = vi.fn(() => ({ ms: 900_000, label: FLOOR_LABEL }));
+
+      const loop = runContinuousLoop({
+        source,
+        processReading: async () => true,
+        signal: ac.signal,
+        touchHeartbeat: vi.fn(),
+        isReloadRequested: vi.fn(() => false),
+        clearReloadRequest: vi.fn(),
+        failureLogPrefix: 'No scale found',
+        failureDelayMs: () => 2_000,
+        failureDelayFloor: floor,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(nextReading).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(nextReading).toHaveBeenCalledTimes(2);
+      expect(floor).not.toHaveBeenCalled();
+
+      ac.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      await loop;
+    });
+  });
+
   // #417: a connect skipped by ble.adapter_privacy found the scale, so the
   // usual "No scale found" line would point at the wrong problem.
   it('logs the prefix failureLogPrefixFor names, and failureLogPrefix otherwise', async () => {

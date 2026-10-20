@@ -54,8 +54,8 @@ configuration:
       own weight. On the 19-byte Arboleaf dialect it also sends the first
       user's age, height and sex as the app does, which lets the scale's own
       body composition be exported when it was computed for that profile, and
-      one such scale streamed its weight with this and QN long time sync both
-      set true (not yet confirmed on hardware, #331). Leave empty unless your
+      two such scales have streamed their weight with this and QN long time
+      sync both set true (#331). Leave empty unless your
       QN scale completes the whole handshake in the log and then reports no
       weight at all; then set true.
   qn_user_key:
@@ -67,8 +67,7 @@ configuration:
       the scale answering the profile frame with a1 06 02 01 00 and its display
       shows only the weight. The first user here should be the first user in
       the vendor app, with the same birth date, height, sex and athlete
-      setting. Not yet confirmed on an 18-byte scale (#463). Leave empty
-      otherwise.
+      setting. Confirmed on one 18-byte scale (#463). Leave empty otherwise.
   qn_a4_prelude:
     name: QN A4 prelude
     description: >-
@@ -96,6 +95,14 @@ configuration:
       add-on sends. Set true to send the longer frame. What the extra bytes
       select is not known, so this is a diagnostic to try, not a fix. Leave
       empty otherwise.
+  qn_result_ack:
+    name: QN result acknowledgement
+    description: >-
+      QN-family scales with a 19-byte scale-info frame only. Sends the
+      end-of-measurement frame the vendor's published SDK sends after the
+      scale's last result frame, which this add-on does not send otherwise.
+      Not yet confirmed on hardware; leave empty unless you are testing it for
+      #331.
   auto_clear_stale_bond:
     name: Re-pair a scale that forgot its pairing
     description: >-
@@ -104,7 +111,11 @@ configuration:
       works once and then every later connect fails, until you clear it by hand
       with bluetoothctl. The scale has dropped its half of the pairing while
       Home Assistant still holds the key; this lets the add-on delete that key
-      and pair again on its own. Leave it off otherwise.
+      and pair again on its own. It acts only when the host's Bluetooth reports
+      that the scale refused the key (Home Assistant OS 16.2 and later), so a
+      weak radio link does not clear a working pairing; on older hosts it
+      clears nothing and the log says when to clear the pairing by hand. Leave
+      it off otherwise.
   preemptive_adapter_reset:
     name: Power-cycle the adapter after every weigh-in
     description: >-
@@ -116,7 +127,8 @@ configuration:
       section of that title. Turning it
       off stops the brief adapter drop that other Home Assistant Bluetooth
       integrations see after each weigh-in, at the risk of that stuck scanning
-      state.
+      state. The power-cycle when Bluetooth keeps the scale listed as
+      connected and does not complete a disconnect still runs.
   adapter_privacy:
     name: Pair with a host identity key (LE privacy)
     description: >-
@@ -129,6 +141,17 @@ configuration:
       need pairing again. A second adapter set under ble_adapter avoids that.
       After turning it on, remove the scale once (bluetoothctl remove) and pair
       it through the add-on. Leave it off otherwise.
+  pairing_retry_max_min:
+    name: Longest wait before asking to pair again (minutes)
+    description: >-
+      local transport only, and scales that show a code to confirm (Beurer
+      BF7xx and BF9xx). When nobody confirms a pairing on the scale, the
+      add-on stops connecting to it for 2 minutes three times, then twice as
+      long each time (4, 8, 16, 32 minutes and so on) until the wait reaches
+      this many minutes, and then this long each time, instead of showing a
+      new code every few minutes. It asks at once when the scale wakes up
+      again, when it advertises a new weigh-in (seen on a BF915), or when the
+      add-on restarts. 0 asks on every scan, as earlier versions did.
   esphome_proxy_host:
     name: ESPHome proxy host
     description: >-
@@ -293,7 +316,10 @@ configuration:
       Other exporters still receive the full body composition.
   scan_cooldown:
     name: Scan cooldown (seconds)
-    description: Seconds to wait between BLE scans in continuous mode (5 to 3600)
+    description: >-
+      Seconds to wait after a reading before scanning again (5 to 3600). Local
+      transport only: the proxy and Home Assistant transports listen all the
+      time and ignore it.
   retry_failed_exports:
     name: Retry a failed export later
     description: >-
@@ -302,13 +328,23 @@ configuration:
       InfluxDB, file, Intervals, Runalyze, wger, HealthLog, Dreeve) can be
       retried; MQTT and notifications cannot express a past reading and are
       not queued.
-      Turn off to write nothing to disk.
+      Turn off to keep no queue on disk.
   idle_rescan_delay:
     name: Rescan delay when no scale was found (seconds)
     description: >-
       Seconds to wait before scanning again after a cycle that found no scale
       while the Bluetooth adapter was healthy (0 to 3600). Real failures keep
-      their own backoff. Lower it if your scale advertises only briefly.
+      their own backoff. Lower it if your scale advertises only briefly. Local
+      transport only.
+  no_reading_rescan_delay:
+    name: Minimum wait after a session without a reading (seconds)
+    description: >-
+      Seconds to wait at least before scanning again after the scale connected
+      and answered but sent no reading (0 to 3600). 0 keeps the normal retry
+      backoff. For a scale that stays connectable and keeps its weigh-ins: a
+      weigh-in made during the wait arrives at the next connection; if that is
+      more than 5 minutes later, only Garmin and the other targets that can
+      record a past measurement get it. Local transport only.
   reset_bluetooth:
     name: Reset Bluetooth adapter on startup
     description: >-

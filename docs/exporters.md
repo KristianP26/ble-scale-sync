@@ -531,7 +531,7 @@ This applies to `weight_only` and `skip_metabolic_age` (garmin), `retain` and `h
 
 ## Historical readings
 
-Some scales keep measurements taken while nothing was listening and replay them on the next connection. Two adapters currently pass that recorded time on: **Beurer BF720** (and the BF105, BF500, BF788 and BF950 it serves) and **Renpho ES-26BB**. A reading carrying a time is treated differently from a live one.
+Some scales keep measurements taken while nothing was listening and replay them on the next connection. Several adapters pass that recorded time on, among them **Beurer BF720** (and the BF105, BF500, BF788 and BF950 it serves), **Renpho ES-26BB** and the **QN** scales with a 19-byte scale-info frame, and with an 18-byte one when `ble.qn_user_key` is set. A reading carrying a time is treated differently from a live one.
 
 Several other scales replay a cache without a usable time. Salter is the explicit case: its stored records are delivered as ordinary readings on purpose, because a dated reading it could not date correctly would be buffered rather than exported.
 
@@ -561,7 +561,13 @@ So a scale that replays its cache fills in your Garmin and InfluxDB history whil
 Historical reading (2026-09-07T06:12:44.000Z): skipping non-back-date exporters [mqtt, ntfy]
 ```
 
-Every reading taken while the app is running is a live reading and goes to every configured exporter.
+A past measurement within 0.1 kg of the last live weigh-in this app exported for that user, or of that user's `last_known_weight`, is taken as a weigh-in replayed from the scale's memory and is skipped, with `Skipping replay` in the log, unless it was measured more than 5 minutes after that last live weigh-in. Past measurements never count as that last weigh-in themselves. When the live weigh-in carried the scale's own time, that time is the one compared, so a scale clock running ahead of the host (a Docker container without `TZ`, a clock set before a daylight saving change) does not make the replay look new.
+
+The weight and time of each user's last live weigh-in are kept in `.last-live-weigh-ins.json` next to `config.yaml` (readable by its owner only), so the same holds after a restart and from one single-shot run to the next. With the settings in `.env` alone, without a `config.yaml`, nothing is kept. When nothing is saved for a user (the first start of a version that keeps the file, or after the file is gone), the comparison is with `last_known_weight` alone: a past measurement within 0.1 kg of it is skipped whenever it was taken, since nothing says whether it came before or after that weigh-in, and the log says no time is saved. The same goes for a saved weight 0.5 kg or more away from `last_known_weight` when the app starts, which means `config.yaml` changed without the file (an older version ran in between, or `config.yaml` was restored from a backup). That is checked only at the start: after a hand edit of `last_known_weight` while the app runs, the saved weigh-in counts until the next start. With Docker and the single-file `config.yaml` mount the file lives inside the container, so a re-create (an image update, Watchtower) starts over that way; on the Home Assistant add-on it is in `/data`. Deleting it while the app is stopped is safe and has the same effect. An entry is kept per user `slug`: two instances sharing a directory and a slug overwrite each other's entry, and the entry of a removed user is used again by a later user given the same slug.
+
+A reading without a recorded time, or one received within 5 minutes of the time it carries, is a live reading and goes to every configured exporter. The exception is a reading the scale's protocol itself marks as one from its memory: that is a past measurement however recent its time. Today these are the stored weigh-ins of QN scales with an 18-byte scale-info frame and [`ble.qn_user_key`](/guide/configuration) set, and only those the scale kept for user slot 1 from more than 90 seconds before the connection, handed over in a connection in which the scale accepted the profile ble-scale-sync sent for the first user with that key. One from the last 90 seconds is the weigh-in of that connection and is a live reading, unless the scale sends it while that connection's live weigh-in waits for the stored ones; it is then not exported.
+
+With [`runtime.no_reading_rescan_delay`](/guide/configuration#runtime) the app waits between sessions, and a weigh-in the scale keeps during that wait can reach the app more than 5 minutes after it was taken. It is then a past measurement too.
 
 ## Healthchecks
 
