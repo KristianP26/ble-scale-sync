@@ -280,6 +280,23 @@ describe('D-Bus socket closed by the bus (A-03)', () => {
     expect(createBluetooth).toHaveBeenCalledTimes(2);
   });
 
+  it('treats a call failed by a stream error on a replaced connection before its end as sent', async () => {
+    // The call went out and the answer is what is missing, so stale-link.ts
+    // must log "got no answer", not "was not sent".
+    const real = makeRealBusSession();
+    createBluetooth.mockImplementationOnce(() => real.session as never);
+    getConnection();
+    const inFlight = real.bus.call(powered());
+    resetConnection();
+    await getAdapter();
+
+    real.bus.emit('error', new Error('write EPIPE'));
+
+    const outcome = await settle(inFlight);
+    expect(outcome.state).toBe('rejected');
+    expect((outcome.err as Error).message).toBe('D-Bus connection closed');
+  });
+
   it('fails a call written to a replaced connection after its close instead of parking it', async () => {
     const real = makeRealBusSession();
     createBluetooth.mockImplementationOnce(() => real.session as never);
