@@ -23,16 +23,25 @@ import {
 import { disconnectBounded } from './stale-link.js';
 import { startPeerFreshnessTracker } from './freshness.js';
 import {
-  classifyAttempt,
+  announceBondOnce,
   describeAttempt,
-  isAuthClassConnectFailure,
   shouldSettle,
+  staleBondClearNotice,
+  staleBondKeptNotice,
+  staleBondLooksStaleNotice,
   staleBondMessage,
+  staleBondPossibleMessage,
+  StaleBondEvidence,
   LINK_SETTLE_MS,
   STALE_BOND_EVIDENCE_ATTEMPTS,
   type AttemptEvidence,
 } from './stale-bond.js';
-import { observeConnectAttempt, type AttemptLinkView, type LinkObserver } from './link-observer.js';
+import {
+  observeConnectAttempt,
+  linkNow,
+  type AttemptLinkView,
+  type LinkObserver,
+} from './link-observer.js';
 import { isDeviceObjectGone } from './device-object.js';
 import { requireAdapterPrivacy } from './privacy.js';
 import { bleFailureKind, tagBleFailure } from '../failure-kind.js';
@@ -91,7 +100,9 @@ export interface ConnectRecoveryContext {
   keepDiscoveryDuringConnect?: boolean;
   /**
    * Delete a bond the peer has forgotten and pair again, rather than stopping at
-   * the diagnostic (`ble.auto_clear_stale_bond`, #335). Off by default.
+   * the diagnostic (`ble.auto_clear_stale_bond`, #335). Off by default, and
+   * only when BlueZ reports that the scale refused the key (stale-bond.ts,
+   * D066): a weak radio link gives the same error string (#471).
    */
   autoClearStaleBond?: boolean;
   /**
@@ -198,8 +209,10 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
   // by default, so every other node-ble user takes the identical code path.
   let keepDiscovery = ctx.keepDiscoveryDuringConnect === true;
   let sawObjectGone = false;
-  // Consecutive authentication-class failures, reset by any other error (#290).
-  let authClassFailures = 0;
+  // What this call's failed attempts say about the stored key (#290, #471,
+  // D066). The error string alone proves nothing: every BlueZ gives the same
+  // one for a refused key and a weak radio link.
+  const evidence = new StaleBondEvidence();
   // The current attempt's link: whether it came up, when it went down, and
   // why (#471, D066).
   let observer: LinkObserver | undefined;
@@ -335,7 +348,6 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
         // it, and the retry path would delete the device and rediscover.
         if (bleFailureKind(err) === 'blocked') throw err;
         const msg = errMsg(err);
-        authClassFailures = isAuthClassConnectFailure(err) ? authClassFailures + 1 : 0;
         if (isDeviceObjectGone(err)) sawObjectGone = true;
         if (sawObjectGone && !keepDiscovery) {
           keepDiscovery = true;
@@ -362,7 +374,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           throwIfAborted();
           const lastLink = observer?.view();
           logAttemptEnd(
-            classifyAttempt(err, lastLink),
+            evidence.record(err, lastLink),
             attempt + 1,
             maxRetries + 1,
             lastLink,
@@ -371,16 +383,44 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           );
           observer?.stop();
           observer = undefined;
-          // A run of authentication-class aborts against a peer BlueZ still
-          // lists as bonded is the #290 signature: the scale rejected the
-          // stored key. Say so, with the remedy, instead of surfacing the bare
-          // BlueZ string that told nobody anything. Diagnosis only, since the
-          // same string also has benign producers (a connect issued while
-          // discovery is still active, or another D-Bus client holding a
-          // discovery session), so we never delete the bond on our own.
-          if (authClassFailures >= STALE_BOND_EVIDENCE_ATTEMPTS) {
-            if (await isBonded(device)) {
-              throw new Error(staleBondMessage(formattedMac, maxRetries + 1, msg));
+          // Say what the failures point at, with the remedy, instead of the
+          // bare BlueZ string, and only as far as the evidence goes: a run of
+          // le-connection-abort-by-local alone is also what a weak radio
+          // link, a connect issued while discovery is still active, or
+          // another D-Bus client holding a discovery session give (#471).
+          const verdict = evidence.verdict();
+          const optIn = ctx.autoClearStaleBond === true && !staleBondCleared;
+          const worthAWord =
+            verdict.kind !== 'none' ||
+            (optIn && evidence.abortCount >= STALE_BOND_EVIDENCE_ATTEMPTS);
+          if (worthAWord && (await isBonded(device))) {
+            // Why the opt-in left the bond alone, once per scale and process.
+            if (optIn && verdict.kind === 'outlived') {
+              announceBondOnce(
+                'looks-stale',
+                formattedMac,
+                'warn',
+                staleBondLooksStaleNotice(formattedMac, verdict),
+              );
+            } else if (
+              optIn &&
+              verdict.kind !== 'reported' &&
+              evidence.abortCount >= STALE_BOND_EVIDENCE_ATTEMPTS
+            ) {
+              announceBondOnce(
+                'kept',
+                formattedMac,
+                'info',
+                staleBondKeptNotice(formattedMac, evidence.abortCount, evidence.keptWhy()),
+              );
+            }
+            if (verdict.kind === 'reported' || verdict.kind === 'outlived') {
+              throw new Error(staleBondMessage(formattedMac, maxRetries + 1, msg, verdict));
+            }
+            if (verdict.kind === 'possible') {
+              throw new Error(
+                staleBondPossibleMessage(formattedMac, maxRetries + 1, verdict.linkUps, msg),
+              );
             }
           }
           throw new Error(`Connection failed after ${maxRetries + 1} attempts: ${msg}`);
@@ -397,11 +437,14 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
         // then wait for services that never come (#472). Stop here; the
         // teardown recovers the adapter.
         bleLog.debug('Disconnecting before retry...');
+        const disconnectAt = linkNow();
         const disconnected = await disconnectBounded(device, {
           mac: formattedMac,
           label: 'retry',
           abortSignal,
         });
+        // How long BlueZ held the answer back: until the connection was gone.
+        const disconnectMs = linkNow() - disconnectAt;
         if (disconnected === 'aborted') throwIfAborted();
         if (disconnected === 'timeout') {
           throw tagBleFailure(new StaleLinkError(formattedMac), 'wedge-suspect');
@@ -411,30 +454,29 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
         // Connected=false, and from 5.83 the reason, before it answers the
         // Disconnect above.
         const link = observer?.view();
-        const outcome = classifyAttempt(err, link);
+        const outcome = evidence.record(err, link, disconnectMs);
         logAttemptEnd(outcome, attempt + 1, maxRetries + 1, link, err, attemptMs);
         if (link?.linkUp && outcome !== 'other') probeReasons = true;
         observer?.stop();
         observer = undefined;
 
-        // 2. Purge stale D-Bus proxy. With the opt-in, a run of
-        // authentication-class failures against a peer BlueZ still lists as
-        // bonded also takes the pairing keys with it: the peripheral has
-        // forgotten its half, and the bonded guard in removeDevice would
-        // otherwise keep the dead key alive forever and lock the host out of
-        // the scale until someone runs `bluetoothctl remove` (#335).
+        // 2. Purge the stale D-Bus proxy. With the opt-in and BlueZ's word
+        // that the scale refused the stored key, the pairing keys go with it:
+        // the peripheral has forgotten its half, and the bonded guard in
+        // removeDevice would otherwise keep the dead key alive forever and
+        // lock the host out of the scale until someone runs
+        // `bluetoothctl remove` (#335). The error string is not that word: a
+        // weak radio link gives the same one (#471, D066).
+        const verdict = evidence.verdict();
+        const refused = verdict.kind === 'reported' ? verdict.refused : 0;
         const clearBond =
           ctx.autoClearStaleBond === true &&
           !staleBondCleared &&
-          authClassFailures >= STALE_BOND_EVIDENCE_ATTEMPTS &&
+          refused > 0 &&
           (await isBonded(device));
         if (clearBond) {
           staleBondCleared = true;
-          bleLog.warn(
-            `${formattedMac} rejected the stored pairing key on ${authClassFailures} ` +
-              'consecutive attempts, so the bond is being cleared and re-established ' +
-              '(ble.auto_clear_stale_bond). Put the scale into pairing mode if it asks.',
-          );
+          bleLog.warn(staleBondClearNotice(formattedMac, refused));
         }
         await removeDevice(btAdapter, mac, { includeBonded: clearBond });
 

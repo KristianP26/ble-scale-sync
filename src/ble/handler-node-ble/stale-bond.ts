@@ -37,7 +37,7 @@
 // over a refused key outlives the error by about one connection interval
 // (#290: 74-95 ms), while a lost link goes down with it (#229, #471: 4-22 ms).
 
-import { errMsg } from '../types.js';
+import { bleLog, errMsg } from '../types.js';
 import type { AttemptLinkView } from './link-observer.js';
 
 /**
@@ -68,8 +68,40 @@ export function isAuthClassConnectFailure(err: unknown): boolean {
  */
 export const STALE_BOND_EVIDENCE_ATTEMPTS = 3;
 
-/** Actionable replacement for the bare `le-connection-abort-by-local`. */
-export function staleBondMessage(mac: string, attempts: number, lastError: string): string {
+const repairSteps = (mac: string): string =>
+  `sudo bluetoothctl, then "remove ${mac}", put the scale into pairing mode, then "pair ${mac}"`;
+
+/**
+ * Actionable replacement for the bare `le-connection-abort-by-local`, worded
+ * on the evidence: BlueZ's own word (`reported`), or connections that
+ * outlived the error the way they do over a refused key (`outlived`).
+ * Without a verdict, the wording from before D066.
+ */
+export function staleBondMessage(
+  mac: string,
+  attempts: number,
+  lastError: string,
+  verdict?: Extract<StaleBondVerdict, { kind: 'reported' | 'outlived' }>,
+): string {
+  if (verdict?.kind === 'reported') {
+    return (
+      `Connection failed after ${attempts} attempts: ${mac} is bonded on this host but ` +
+      `rejected the stored pairing key on ${verdict.refused} attempts (BlueZ reported an ` +
+      'authentication failure), so the link was dropped during encryption before any GATT ' +
+      'traffic. The scale has forgotten its half of the pairing while this host still holds ' +
+      `it. Clear it and pair again: run ${repairSteps(mac)}. See #335. Last error: ${lastError}`
+    );
+  }
+  if (verdict?.kind === 'outlived') {
+    return (
+      `Connection failed after ${attempts} attempts: ${mac} is bonded on this host, and on ` +
+      `${verdict.count} attempts the connection came up and stayed up after ` +
+      'le-connection-abort-by-local, as it does when this host gives up on a refused pairing ' +
+      'key. The scale has most likely forgotten its half of the pairing while this host still ' +
+      `holds it. Clear it and pair again: run ${repairSteps(mac)}. See #335. Last error: ` +
+      lastError
+    );
+  }
   return (
     `Connection failed after ${attempts} attempts: ${mac} is bonded on this host but ` +
     'rejected the stored pairing key on every attempt, so the link was dropped during ' +
@@ -192,4 +224,223 @@ export function describeAttempt(opts: {
         : `${up}${reasonTail}`;
   }
   return `Connect attempt ${attempt}/${total} failed after ${ms} ms (${error}): ${detail}`;
+}
+
+/**
+ * What a whole connectWithRecovery call says about the stored key:
+ * - `reported`: BlueZ named a refused key on STALE_BOND_EVIDENCE_ATTEMPTS
+ *   attempts. The only verdict the opt-in clears a bond on (D066 phase 1).
+ * - `outlived`: as many attempts that BlueZ named a refused key on, or whose
+ *   connection outlived the error. `confirmed` counts those the retry
+ *   Disconnect also waited for (phase 2 would clear on them).
+ * - `possible`: as many auth-class failures after the connection came up,
+ *   none of them ended by the radio link or the scale as BlueZ tells it.
+ * - `none`: nothing worth more than the error itself.
+ */
+export type StaleBondVerdict =
+  | { kind: 'reported'; refused: number }
+  | {
+      kind: 'outlived';
+      count: number;
+      confirmed: number;
+      typicalMs: number;
+      reasonsSupported: boolean;
+    }
+  | { kind: 'possible'; linkUps: number }
+  | { kind: 'none' };
+
+/** Why the opt-in kept a bond in spite of a run of auth-class failures. */
+export type KeptWhy =
+  | { why: 'few' }
+  | { why: 'link-reason'; reason: string }
+  | { why: 'at-once' }
+  | { why: 'lingered' }
+  | { why: 'never-up' };
+
+/**
+ * The failed attempts of one connectWithRecovery call. Nothing carries over
+ * to the next call (D066): a scale that slept between sessions must not
+ * inherit a weak link's count, and a single-shot run sees one call anyway.
+ */
+export class StaleBondEvidence {
+  private refused = 0;
+  private outlived = 0;
+  private confirmedOutlived = 0;
+  private aborts = 0;
+  private linkUps = 0;
+  private droppedAtOnce = 0;
+  private droppedByReason = 0;
+  private lingered = 0;
+  private linkReason: string | undefined;
+  private reasonsSupported = false;
+  private readonly gaps: number[] = [];
+
+  /**
+   * Judge one failed attempt. `disconnectMs` is how long the retry Disconnect
+   * waited for BlueZ's answer; the last attempt has none.
+   */
+  record(err: unknown, link: AttemptLinkView | undefined, disconnectMs?: number): AttemptEvidence {
+    const outcome = classifyAttempt(err, link);
+    if (link?.reasonSupported) this.reasonsSupported = true;
+    if (isAuthClassConnectFailure(err)) this.aborts += 1;
+    const gap = link?.downAfterErrorMs;
+    switch (outcome) {
+      case 'refused':
+        this.refused += 1;
+        if (link?.linkUp) this.linkUps += 1;
+        if (gap !== undefined && gap >= 0) this.gaps.push(gap);
+        break;
+      case 'outlived':
+        this.outlived += 1;
+        this.linkUps += 1;
+        if (gap !== undefined) this.gaps.push(gap);
+        if (disconnectMs !== undefined && disconnectMs >= LINK_OUTLIVED_ERROR_MIN_MS) {
+          this.confirmedOutlived += 1;
+        }
+        break;
+      case 'dropped':
+        if (link?.reason !== undefined && LINK_REASONS.has(link.reason)) {
+          this.droppedByReason += 1;
+          this.linkReason = link.reason;
+        } else {
+          this.droppedAtOnce += 1;
+          this.linkUps += 1;
+        }
+        break;
+      case 'lingered':
+        this.lingered += 1;
+        this.linkUps += 1;
+        break;
+      default:
+        break;
+    }
+    return outcome;
+  }
+
+  /** Auth-class failures in this call, whatever the link did. */
+  get abortCount(): number {
+    return this.aborts;
+  }
+
+  verdict(): StaleBondVerdict {
+    if (this.refused >= STALE_BOND_EVIDENCE_ATTEMPTS) {
+      return { kind: 'reported', refused: this.refused };
+    }
+    const count = this.refused + this.outlived;
+    if (count >= STALE_BOND_EVIDENCE_ATTEMPTS) {
+      const sorted = [...this.gaps].sort((a, b) => a - b);
+      return {
+        kind: 'outlived',
+        count,
+        confirmed: this.refused + this.confirmedOutlived,
+        typicalMs: sorted[Math.floor(sorted.length / 2)] ?? 0,
+        reasonsSupported: this.reasonsSupported,
+      };
+    }
+    if (this.linkUps >= STALE_BOND_EVIDENCE_ATTEMPTS) {
+      return { kind: 'possible', linkUps: this.linkUps };
+    }
+    return { kind: 'none' };
+  }
+
+  /** For the "kept" notice: the most telling reason the evidence fell short. */
+  keptWhy(): KeptWhy {
+    if (this.refused + this.outlived > 0) return { why: 'few' };
+    if (this.linkReason !== undefined) return { why: 'link-reason', reason: this.linkReason };
+    if (this.droppedAtOnce > 0) return { why: 'at-once' };
+    if (this.lingered > 0) return { why: 'lingered' };
+    return { why: 'never-up' };
+  }
+}
+
+/** The warning when the opt-in clears a bond (D066 phase 1: BlueZ's word only). */
+export function staleBondClearNotice(mac: string, refused: number): string {
+  return (
+    `${mac} rejected the stored pairing key on ${refused} attempts (BlueZ reported an ` +
+    'authentication failure), so the bond is being cleared and re-established ' +
+    '(ble.auto_clear_stale_bond). Put the scale into pairing mode if it asks.'
+  );
+}
+
+/** The opt-in is on and the failures look like a refused key, but BlueZ did not say so. */
+export function staleBondLooksStaleNotice(
+  mac: string,
+  verdict: Extract<StaleBondVerdict, { kind: 'outlived' }>,
+): string {
+  const why = verdict.reasonsSupported
+    ? 'BlueZ did not report an authentication failure on enough of them'
+    : 'This BlueZ does not report why a connection ended (that needs BlueZ 5.83)';
+  return (
+    `${mac} looks like it has forgotten its pairing: on ${verdict.count} connect attempts the ` +
+    `connection came up and stayed up about ${verdict.typicalMs} ms after ` +
+    'le-connection-abort-by-local, as it does when this host gives up on a refused key. ' +
+    `${why}, so ble.auto_clear_stale_bond leaves the bond alone. Clear it by hand: ` +
+    `${repairSteps(mac)}. If a Beurer scale does this after every session, turn on ` +
+    'ble.adapter_privacy (#417).'
+  );
+}
+
+function keptWhyText(k: KeptWhy): string {
+  switch (k.why) {
+    case 'few':
+      return `fewer than ${STALE_BOND_EVIDENCE_ATTEMPTS} of them looked like a refused key`;
+    case 'link-reason':
+      return `BlueZ reported ${describeReason(k.reason)}, not a refused key`;
+    case 'at-once':
+      return 'the connection went down at once with the error, which is what a weak radio link does';
+    case 'lingered':
+      return 'the connection stayed up past the error for longer than it does over a refused key';
+    case 'never-up':
+      return 'the connection never came up, so the scale was never asked for its key';
+  }
+}
+
+/** The opt-in is on, the failures ran on, and nothing in them says the key was refused. */
+export function staleBondKeptNotice(mac: string, aborts: number, why: KeptWhy): string {
+  return (
+    `${mac} failed ${aborts} connect attempts with le-connection-abort-by-local, but its bond ` +
+    `is kept: ${keptWhyText(why)}. ble.auto_clear_stale_bond clears a bond only ` +
+    'when BlueZ reports that the scale refused the key (BlueZ 5.83 and later) (#471).'
+  );
+}
+
+/** The final error for auth-class failures after the connection came up, with no verdict. */
+export function staleBondPossibleMessage(
+  mac: string,
+  attempts: number,
+  linkUps: number,
+  lastError: string,
+): string {
+  return (
+    `Connection failed after ${attempts} attempts: le-connection-abort-by-local on ${linkUps} ` +
+    `of them after the connection to ${mac} came up. A weak radio link does that, and so can a ` +
+    'scale that forgot its pairing; if it keeps failing like this, clear the pairing and pair ' +
+    `again (${repairSteps(mac)}; see #335). Last error: ${lastError}`
+  );
+}
+
+const announced = new Set<string>();
+
+/**
+ * First time per process, scale and kind at `level`, debug after: the same
+ * failures repeat every cycle while the state lasts (pattern: stale-link.ts).
+ */
+export function announceBondOnce(
+  kind: 'kept' | 'looks-stale',
+  mac: string,
+  level: 'info' | 'warn',
+  text: string,
+): void {
+  const key = `${kind}:${mac.replace(/[:-]/g, '').toUpperCase()}`;
+  if (announced.has(key)) {
+    bleLog.debug(text);
+    return;
+  }
+  announced.add(key);
+  bleLog[level](text);
+}
+
+/** Test seam: the announcements are per process on purpose. */
+export function _resetStaleBondAnnouncementsForTests(): void {
+  announced.clear();
 }

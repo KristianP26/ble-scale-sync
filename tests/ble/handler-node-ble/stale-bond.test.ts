@@ -1,12 +1,20 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
+  announceBondOnce,
   classifyAttempt,
   describeAttempt,
   isAuthClassConnectFailure,
   shouldSettle,
+  staleBondClearNotice,
+  staleBondKeptNotice,
+  staleBondLooksStaleNotice,
   staleBondMessage,
+  staleBondPossibleMessage,
+  StaleBondEvidence,
   STALE_BOND_EVIDENCE_ATTEMPTS,
+  _resetStaleBondAnnouncementsForTests,
 } from '../../../src/ble/handler-node-ble/stale-bond.js';
+import { bleLog } from '../../../src/ble/types.js';
 
 describe('isAuthClassConnectFailure (#290)', () => {
   it.each([
@@ -147,5 +155,151 @@ describe('describeAttempt', () => {
 
   it('says nothing for an error that is not auth-class and had no connection', () => {
     expect(line('other', { linkUp: false, reasonSupported: false })).toBeUndefined();
+  });
+});
+
+describe('StaleBondEvidence (#471, D066)', () => {
+  const MAC = '5C:CA:D3:88:D0:EC';
+  const refusedLink = up(95, AUTH);
+
+  it('reports a refused key on three refusals in any order, timeouts in between included', () => {
+    const e = new StaleBondEvidence();
+    e.record(ABORT, refusedLink, 95);
+    e.record(TIMEOUT, undefined);
+    e.record(ABORT, up(3));
+    e.record(ABORT, refusedLink, 95);
+    expect(e.verdict().kind).not.toBe('reported');
+    e.record(ABORT, refusedLink);
+    expect(e.verdict()).toEqual({ kind: 'reported', refused: 3 });
+  });
+
+  it('counts connections that outlived the error, confirmed only when the retry Disconnect waited too', () => {
+    const e = new StaleBondEvidence();
+    e.record(ABORT, up(95), 39);
+    e.record(ABORT, up(90), 40);
+    e.record(ABORT, up(94));
+    expect(e.verdict()).toEqual({
+      kind: 'outlived',
+      count: 3,
+      confirmed: 1,
+      typicalMs: 94,
+      reasonsSupported: false,
+    });
+  });
+
+  it('calls three link-up failures without a verdict possible', () => {
+    const e = new StaleBondEvidence();
+    for (let i = 0; i < 3; i++) e.record(ABORT, up(5));
+    expect(e.verdict()).toEqual({ kind: 'possible', linkUps: 3 });
+  });
+
+  it('does not count a connection BlueZ says the radio link or the scale ended as possible', () => {
+    const e = new StaleBondEvidence();
+    for (let i = 0; i < 6; i++) e.record(ABORT, up(3, 'org.bluez.Reason.Timeout'));
+    expect(e.verdict()).toEqual({ kind: 'none' });
+    expect(e.keptWhy()).toEqual({ why: 'link-reason', reason: 'org.bluez.Reason.Timeout' });
+  });
+
+  it.each([
+    ['never-up', [[ABORT, { linkUp: false, reasonSupported: false }]]],
+    ['at-once', [[ABORT, up(5)]]],
+    ['lingered', [[ABORT, up(2000)]]],
+    [
+      'few',
+      [
+        [ABORT, up(95)],
+        [ABORT, up(5)],
+      ],
+    ],
+  ] as const)('says why the bond is kept: %s', (why, attempts) => {
+    const e = new StaleBondEvidence();
+    for (const [err, link] of attempts) e.record(err, link);
+    expect(e.keptWhy().why).toBe(why);
+  });
+
+  it('counts only auth-class failures as aborts', () => {
+    const e = new StaleBondEvidence();
+    e.record(TIMEOUT, undefined);
+    e.record(ABORT, undefined);
+    expect(e.abortCount).toBe(1);
+  });
+
+  describe('messages', () => {
+    it('without a verdict, keeps the wording from before D066', () => {
+      expect(staleBondMessage(MAC, 6, 'x')).toContain(
+        'rejected the stored pairing key on every attempt',
+      );
+    });
+
+    it('a reported refusal names the count, the cause and the remedy', () => {
+      const m = staleBondMessage(MAC, 6, 'le-connection-abort-by-local', {
+        kind: 'reported',
+        refused: 5,
+      });
+      expect(m).toContain(
+        'rejected the stored pairing key on 5 attempts (BlueZ reported an authentication failure)',
+      );
+      expect(m).toContain(`remove ${MAC}`);
+      expect(m).toContain(`pair ${MAC}`);
+      expect(m).toContain('#335');
+      expect(m).toContain('Last error: le-connection-abort-by-local');
+    });
+
+    it('an outlived verdict says what was seen, not that BlueZ said so', () => {
+      const v = {
+        kind: 'outlived',
+        count: 4,
+        confirmed: 4,
+        typicalMs: 92,
+        reasonsSupported: false,
+      } as const;
+      const m = staleBondMessage(MAC, 6, 'x', v);
+      expect(m).toContain('on 4 attempts the connection came up and stayed up after');
+      expect(m).not.toContain('BlueZ reported');
+      expect(m).toContain(`remove ${MAC}`);
+      const w = staleBondLooksStaleNotice(MAC, v);
+      expect(w).toContain('stayed up about 92 ms');
+      expect(w).toContain('that needs BlueZ 5.83');
+      expect(w).toContain('ble.adapter_privacy (#417)');
+      expect(staleBondLooksStaleNotice(MAC, { ...v, reasonsSupported: true })).toContain(
+        'BlueZ did not report an authentication failure on enough of them',
+      );
+    });
+
+    it('the clear warning and the kept notice', () => {
+      expect(staleBondClearNotice(MAC, 3)).toContain(
+        `${MAC} rejected the stored pairing key on 3 attempts (BlueZ reported an authentication failure)`,
+      );
+      expect(staleBondKeptNotice(MAC, 4, { why: 'at-once' })).toContain(
+        `${MAC} failed 4 connect attempts with le-connection-abort-by-local, but its bond is kept: ` +
+          'the connection went down at once with the error',
+      );
+    });
+
+    it('a possible verdict hedges and gives the remedy', () => {
+      const m = staleBondPossibleMessage(MAC, 6, 4, 'le-connection-abort-by-local');
+      expect(m).toContain(`on 4 of them after the connection to ${MAC} came up`);
+      expect(m).toContain('A weak radio link does that');
+      expect(m).toContain(`remove ${MAC}`);
+      expect(m).not.toContain('rejected the stored pairing key');
+    });
+  });
+});
+
+describe('announceBondOnce', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    _resetStaleBondAnnouncementsForTests();
+  });
+
+  it('logs at its level once per process, scale and kind, at debug after', () => {
+    const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    announceBondOnce('kept', 'AA:BB:CC:DD:EE:FF', 'info', 'a');
+    announceBondOnce('kept', 'aa-bb-cc-dd-ee-ff', 'info', 'b');
+    announceBondOnce('kept', '11:22:33:44:55:66', 'info', 'c');
+    announceBondOnce('looks-stale', 'AA:BB:CC:DD:EE:FF', 'info', 'd');
+    expect(info.mock.calls.map((c) => c[0])).toEqual(['a', 'c', 'd']);
+    expect(debug.mock.calls.map((c) => c[0])).toEqual(['b']);
   });
 });

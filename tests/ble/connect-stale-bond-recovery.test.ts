@@ -28,6 +28,8 @@ vi.mock('../../src/ble/handler-node-ble/device-object.js', () => ({
 const { connectWithRecovery } = await import('../../src/ble/handler-node-ble/connect.js');
 const { _resetLinkObserverForTests } =
   await import('../../src/ble/handler-node-ble/link-observer.js');
+const { _resetStaleBondAnnouncementsForTests } =
+  await import('../../src/ble/handler-node-ble/stale-bond.js');
 const { bleLog } = await import('../../src/ble/types.js');
 
 const MAC = 'AA:BB:CC:DD:EE:FF';
@@ -187,6 +189,8 @@ async function drive<T>(p: Promise<T>): Promise<T> {
 }
 
 let debug: ReturnType<typeof vi.spyOn>;
+let info: ReturnType<typeof vi.spyOn>;
+let warn: ReturnType<typeof vi.spyOn>;
 const debugLines = (): string[] => debug.mock.calls.map((c: unknown[]) => String(c[0]));
 const attemptLine = (n: number): string | undefined =>
   debugLines().find((l) => l.startsWith(`Connect attempt ${n}/6 failed`));
@@ -197,8 +201,9 @@ beforeEach(() => {
   vi.useFakeTimers();
   _resetLinkObserverForTests(() => Date.now());
   debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
-  vi.spyOn(bleLog, 'info').mockImplementation(() => {});
-  vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+  info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+  warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+  _resetStaleBondAnnouncementsForTests();
 });
 
 afterEach(() => {
@@ -353,60 +358,171 @@ describe('the reason probe (#471, D066)', () => {
   });
 });
 
-/**
- * A peer that rejects the stored key on every connect, which is what a scale
- * that has forgotten its half of the pairing looks like from BlueZ (#335).
- */
-function makeDevice(opts: { paired: boolean }): Device {
-  return {
-    connect: vi.fn(async () => {
-      throw new Error('le-connection-abort-by-local');
-    }),
-    disconnect: vi.fn(async () => undefined),
-    isPaired: vi.fn(async () => opts.paired),
-  } as unknown as Device;
-}
+/** removeDevice calls that took the pairing keys with them. */
+const clears = (): number[] =>
+  removeDevice.mock.calls
+    .map((c, i) => ((c[2] as { includeBonded?: boolean })?.includeBonded === true ? i + 1 : 0))
+    .filter((i) => i > 0);
 
-async function runLegacy(opts: { paired: boolean; autoClear?: boolean }): Promise<string> {
-  const device = makeDevice(opts);
-  const btAdapter = makeAdapter(device);
-  try {
-    await connectWithRecovery({
-      btAdapter,
-      mac: MAC,
-      initialDevice: device,
-      maxRetries: 4,
-      ...(opts.autoClear === undefined ? {} : { autoClearStaleBond: opts.autoClear }),
+const logged = (spy: ReturnType<typeof vi.spyOn>, text: string): string[] =>
+  spy.mock.calls.map((c: unknown[]) => String(c[0])).filter((l: string) => l.includes(text));
+
+describe('auto_clear_stale_bond clears only on proof of a refused key (#471, D066)', () => {
+  it('keeps the bond when two timeouts come before three aborts (#471, 15:36 UTC)', async () => {
+    const scale = makeScale({
+      steps: [timeout, timeout, ...times(4, abort({ up: true, downMs: 2 }))],
     });
-    return 'connected';
-  } catch (err) {
-    return (err as Error).message;
-  }
-}
+    await drive(run(scale, { autoClear: true }));
+    expect(clears()).toEqual([]);
+    expect(logged(info, 'but its bond is kept')).toHaveLength(1);
+    expect(logged(info, 'but its bond is kept')[0]).toContain('went down at once with the error');
+  });
 
-describe('stale-bond recovery (#335)', () => {
+  it('keeps the bond when the connection never came up on any attempt', async () => {
+    const scale = makeScale({ steps: times(6, abort()) });
+    const { result } = await drive(run(scale, { autoClear: true }));
+    expect(clears()).toEqual([]);
+    expect(result).toBe('Connection failed after 6 attempts: le-connection-abort-by-local');
+  });
+
+  it('keeps the bond when every attempt aborts and the connection goes down with the error, as on the good BF788 bond in #229', async () => {
+    const scale = makeScale({ steps: times(6, abort({ up: true, downMs: 5 })) });
+    const { result } = await drive(run(scale, { autoClear: true }));
+    expect(clears()).toEqual([]);
+    expect(result).toContain(
+      'le-connection-abort-by-local on 6 of them after the connection to AA:BB:CC:DD:EE:FF came up',
+    );
+    expect(result).not.toContain('rejected the stored pairing key');
+  });
+
+  it('on BlueZ before 5.83, keeps a bond whose connections outlive the error and says to clear it by hand (#290 timings)', async () => {
+    const scale = makeScale({ steps: times(6, abort({ up: true, downMs: 95 })) });
+    const { result } = await drive(run(scale, { autoClear: true }));
+    expect(clears()).toEqual([]);
+    const lines = logged(warn, 'looks like it has forgotten its pairing');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('stayed up about 95 ms after le-connection-abort-by-local');
+    expect(lines[0]).toContain('that needs BlueZ 5.83');
+    expect(lines[0]).toContain('remove AA:BB:CC:DD:EE:FF');
+    expect(lines[0]).toContain('ble.adapter_privacy');
+    expect(result).toContain('on 6 attempts the connection came up and stayed up after');
+  });
+
+  it('clears on three authentication failures even with a timeout between them', async () => {
+    const refusal = abort({ up: true, downMs: 95, reason: AUTH });
+    const scale = makeScale({
+      steps: [refusal, refusal, timeout, refusal, refusal, ok],
+      bluez583: true,
+    });
+    const { result } = await drive(run(scale, { autoClear: true }));
+    // The first attempt runs without the reason probe; 2, 4 and 5 are refusals.
+    expect(clears()).toEqual([5]);
+    expect(result).toBe('connected');
+    expect(logged(warn, 'so the bond is being cleared')[0]).toContain(
+      'rejected the stored pairing key on 3 attempts (BlueZ reported an authentication failure)',
+    );
+  });
+
+  it('keeps the bond when BlueZ names another reason', async () => {
+    const scale = makeScale({
+      steps: times(6, abort({ up: true, downMs: 3, reason: 'org.bluez.Reason.Timeout' })),
+      bluez583: true,
+    });
+    const { result } = await drive(run(scale, { autoClear: true }));
+    expect(clears()).toEqual([]);
+    expect(logged(info, 'but its bond is kept')[0]).toContain(
+      'BlueZ reported org.bluez.Reason.Timeout (the radio link timed out), not a refused key',
+    );
+    expect(result).toBe('Connection failed after 6 attempts: le-connection-abort-by-local');
+  });
+
+  it('without the opt-in, does not call link drops a refused key (#471)', async () => {
+    const scale = makeScale({
+      steps: [timeout, timeout, ...times(4, abort({ up: true, downMs: 2 }))],
+    });
+    const { result } = await drive(run(scale));
+    expect(result).toContain('le-connection-abort-by-local on 4 of them after the connection');
+    expect(result).not.toContain('rejected the stored pairing key');
+    expect(clears()).toEqual([]);
+    // The notices are about what the opt-in did; without it the error says it all.
+    expect(logged(info, 'but its bond is kept')).toEqual([]);
+  });
+
+  it('waits for the reason on the last attempt before the diagnosis', async () => {
+    const scale = makeScale({
+      steps: times(6, abort({ up: true, downMs: 95, reason: AUTH })),
+      bluez583: true,
+    });
+    const { result } = await drive(run(scale));
+    // 2-6: the first attempt runs without the reason probe.
+    expect(result).toContain(
+      'rejected the stored pairing key on 5 attempts (BlueZ reported an authentication failure)',
+    );
+  });
+
+  it('does not take a connection still up 1.5 s after the error as a refused key', async () => {
+    const scale = makeScale({ steps: times(6, abort({ up: true, downMs: 2000 })) });
+    const { result } = await drive(run(scale, { autoClear: true }));
+    expect(clears()).toEqual([]);
+    expect(logged(warn, 'looks like it has forgotten')).toEqual([]);
+    expect(logged(info, 'but its bond is kept')[0]).toContain(
+      'stayed up past the error for longer than it does over a refused key',
+    );
+    expect(result).not.toContain('stayed up after le-connection-abort-by-local');
+  });
+});
+
+describe('stale-bond recovery with BlueZ reporting the refused key (#335)', () => {
+  const refusing = (paired = true): Scale =>
+    makeScale({
+      steps: times(6, abort({ up: true, downMs: 95, reason: AUTH })),
+      bluez583: true,
+      paired,
+    });
+
   it('leaves the bond alone by default and reports the diagnosis', async () => {
-    const msg = await drive(runLegacy({ paired: true }));
-    expect(msg).toContain('rejected the stored pairing key');
-    for (const call of removeDevice.mock.calls) {
-      expect(call[2]).toEqual({ includeBonded: false });
-    }
+    const { result } = await drive(run(refusing()));
+    expect(result).toContain('rejected the stored pairing key');
+    expect(result).toContain('remove AA:BB:CC:DD:EE:FF');
+    for (const call of removeDevice.mock.calls) expect(call[2]).toEqual({ includeBonded: false });
   });
 
   it('clears the bond once when the opt-in is set and the peer is bonded', async () => {
-    await drive(runLegacy({ paired: true, autoClear: true }));
-    const clearing = removeDevice.mock.calls.filter(
-      (c) => (c[2] as { includeBonded?: boolean })?.includeBonded === true,
-    );
+    await drive(run(refusing(), { autoClear: true }));
     // Exactly one: re-clearing would delete the bond the previous attempt just
     // established and turn a slow re-pair into an endless one.
-    expect(clearing).toHaveLength(1);
+    expect(clears()).toEqual([4]);
   });
 
   it('never clears the bond of a peer BlueZ does not list as paired', async () => {
-    await drive(runLegacy({ paired: false, autoClear: true }));
-    for (const call of removeDevice.mock.calls) {
-      expect((call[2] as { includeBonded?: boolean }).includeBonded).toBe(false);
+    const { result } = await drive(run(refusing(false), { autoClear: true }));
+    expect(clears()).toEqual([]);
+    expect(result).toBe('Connection failed after 6 attempts: le-connection-abort-by-local');
+  });
+
+  it('clears at once after a connect that worked minutes ago when BlueZ names the reason (#417)', async () => {
+    const scale = makeScale({
+      steps: [ok, ...times(4, abort({ up: true, downMs: 95, reason: AUTH })), ok],
+      bluez583: true,
+    });
+    expect((await drive(run(scale, { autoClear: true }))).result).toBe('connected');
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    expect((await drive(run(scale, { autoClear: true }))).result).toBe('connected');
+    expect(clears()).toEqual([4]);
+  });
+
+  it('warns once per scale that a bond looks stale, and says once that it is kept', async () => {
+    for (let i = 0; i < 2; i++) {
+      await drive(
+        run(makeScale({ steps: times(6, abort({ up: true, downMs: 95 })) }), { autoClear: true }),
+      );
+      await drive(
+        run(makeScale({ steps: times(6, abort({ up: true, downMs: 2 })) }), { autoClear: true }),
+      );
     }
+    expect(logged(warn, 'looks like it has forgotten')).toHaveLength(1);
+    expect(logged(info, 'but its bond is kept')).toHaveLength(1);
+    expect(logged(debug, 'looks like it has forgotten')).toHaveLength(1);
+    expect(logged(debug, 'but its bond is kept')).toHaveLength(1);
   });
 });
