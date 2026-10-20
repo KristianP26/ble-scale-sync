@@ -28,7 +28,7 @@ const RESP_MEASURED = 0x02;
 // [2] is the frame's total length, start byte and XOR included (openScale's
 // YunmaiHandler and the protocol notes it cites say so). 18 bytes carry weight
 // and resistance (protocol 0x13), 20 add the body fat the scale computed (0x1E
-// and later). Every Yunmai final frame on record (11 frames, 6 sources) keeps
+// and later). Every Yunmai final frame on record (17 frames, 10 sources) keeps
 // [2] equal to its length; the SE is reported to send the same layout with
 // both fields zero (openScale #71).
 const LEN_WITH_RESISTANCE = 18;
@@ -114,7 +114,9 @@ export class YunmaiScaleAdapter
    *            protocol notes also name 0x1E)
    *   [2]      total frame length, [0] and the XOR included
    *   [3]      response type (0x01 = measuring, 0x02 = final)
-   *   [4]      0x00 on every frame seen ("historical info" in the notes; not read)
+   *   [4]      0x00 on 16 of the 17 final frames on record, 0x01 once (#474).
+   *            The notes call it "historical info": maybe a weigh-in the
+   *            scale kept in memory (not confirmed). Not read.
    *   [5-8]    scale clock, big-endian uint32 (often never set; not read)
    *   [9-12]   user the scale recognised, big-endian uint32 (0 = nobody)
    *   [13-14]  Weight in 0.01 kg, big-endian uint16
