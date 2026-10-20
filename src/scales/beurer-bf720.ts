@@ -29,6 +29,10 @@ const CHR_HEIGHT = uuid16(0x2a8e); // User Data Service 0x181C
 // Beurer vendor characteristics on service 0xFFF0, proven from the #229 capture.
 const CHR_VENDOR_USER_LIST = uuid16(0xfff2); // notify: one frame per user slot
 const CHR_VENDOR_ACTIVITY = uuid16(0xfff3); // read/write: activity level
+// BF500 uses service 0xFFFF, with a different vendor characteristic layout.
+const CHR_BF500_USER_LIST = uuid16(0xfff1);
+const CHR_BF500_ACTIVITY = uuid16(0xfff2);
+const CHR_BF500_TAKE_MEASUREMENT = uuid16(0xfff4);
 
 /** Render bytes as spaced lowercase hex for the diagnostic log lines. */
 const hex = (b: Buffer | number[]): string =>
@@ -233,13 +237,14 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     { uuid: CHR_BODY_COMPOSITION, type: 'notify' },
     { uuid: CHR_USER_CONTROL_POINT, type: 'notify' },
     { uuid: CHR_DB_CHANGE_INCREMENT, type: 'notify', optional: true },
-    // Vendor user-slot list. The scale answers the FFF2=00 command with one
-    // frame per stored user, which the app requests on every connection (#229).
-    { uuid: CHR_VENDOR_USER_LIST, type: 'notify', optional: true },
     { uuid: CHR_CURRENT_TIME, type: 'write' },
   ];
 
   private s = new Bf720Session();
+  private isBf500 = false;
+  private get vendorUserList(): string {
+    return this.isBf500 ? CHR_BF500_USER_LIST : CHR_VENDOR_USER_LIST;
+  }
   /**
    * The adapter instance is shared across GATT sessions, so the post-consent
    * profile sync is keyed on a session counter: a late consent response must
@@ -381,6 +386,7 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     this.userIndex = userIndex;
     this.registerNewUser = ctx.scaleAuth?.registerNewUser === true;
     this.provision = ctx.scaleAuth?.provision === true;
+    this.isBf500 = ctx.deviceName?.toLowerCase().includes('bf500') === true;
 
     await ctx.write(CHR_CURRENT_TIME, this.buildCurrentTime(), true);
 
@@ -388,9 +394,15 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     // the time write and the consent write, and the scale answers with one
     // frame per stored user (#229 capture). Purely informational for us, but it
     // keeps our sequence identical to the app's and names the slots in the log.
-    if (ctx.availableChars.has(CHR_VENDOR_USER_LIST)) {
+    if (ctx.availableChars.has(this.vendorUserList)) {
+      // Select after discovery: FFF2 is activity, not notifiable, on BF500.
       try {
-        await ctx.write(CHR_VENDOR_USER_LIST, [0x00], true);
+        await ctx.subscribe(this.vendorUserList);
+      } catch (err) {
+        bleLog.debug(`Beurer: vendor user-list subscription failed: ${String(err)}`);
+      }
+      try {
+        await ctx.write(this.vendorUserList, [0x00], true);
       } catch (err) {
         bleLog.debug(`Beurer BF720: vendor user-list query failed: ${String(err)}`);
       }
@@ -446,7 +458,11 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
       // the scale actually waits for.
       const values = new Map<string, Buffer | number[]>();
       let provisioned = 0;
-      for (const field of PROFILE_FIELDS) {
+      for (const original of PROFILE_FIELDS) {
+        const field =
+          this.isBf500 && original.uuid === CHR_VENDOR_ACTIVITY
+            ? { ...original, uuid: CHR_BF500_ACTIVITY }
+            : original;
         if (!ctx.availableChars.has(field.uuid)) continue;
         if (session !== this.session) return;
         let stored: Buffer | null = null;
@@ -479,7 +495,7 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
         }
       }
       let written = 0;
-      for (const [uuid, value] of values) {
+      const writeField = async (uuid: string, value: Buffer | number[]): Promise<void> => {
         if (session !== this.session) return;
         try {
           await ctx.write(uuid, value, true);
@@ -487,6 +503,11 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
         } catch (err) {
           bleLog.debug(`Beurer BF720: profile write ${uuid} rejected: ${String(err)}`);
         }
+      };
+      for (const [uuid, value] of values) {
+        // The BF500 capture writes activity after the increment, unlike BF788.
+        if (this.isBf500 && uuid === CHR_BF500_ACTIVITY) continue;
+        await writeField(uuid, value);
       }
       // The increment is the step the scale actually waits for, so its outcome
       // is reported in the commit line rather than inferred. It also gets its
@@ -504,6 +525,11 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
           bleLog.debug(`Beurer BF720: change increment rejected: ${String(err)}`);
         }
       }
+      if (this.isBf500) {
+        if (session !== this.session || this.ctx !== ctx) return;
+        const activity = values.get(CHR_BF500_ACTIVITY);
+        if (activity) await writeField(CHR_BF500_ACTIVITY, activity);
+      }
       // "0 from config" reads like a failure to anyone who set
       // beurer_provision expecting their values to land, so say why it is zero.
       // Config is only ever written into a field the scale reports as unset;
@@ -517,8 +543,16 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
       bleLog.debug(
         `Beurer BF720: user profile committed (${written}/${values.size} characteristics ` +
           `written, ${provisionedNote}, change increment ${increment}); ` +
-          'scale can complete the measurement',
+          'profile sync finished',
       );
+      if (this.isBf500 && session === this.session && this.ctx === ctx) {
+        try {
+          await ctx.write(CHR_BF500_TAKE_MEASUREMENT, [0x00], true);
+          bleLog.info('Beurer BF500: measurement requested; step barefoot on the scale.');
+        } catch (err) {
+          bleLog.warn(`Beurer BF500: measurement request failed: ${String(err)}`);
+        }
+      }
     } catch (err) {
       // Never fail the reading over this: on firmware that does not need the
       // commit, the measurement arrives regardless.
@@ -630,7 +664,7 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
       this.handleUcpResponse(data);
       return null;
     }
-    if (charUuid === CHR_VENDOR_USER_LIST) {
+    if (charUuid === this.vendorUserList) {
       this.handleUserListFrame(data);
       return null;
     }
@@ -680,6 +714,26 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
           `Set 'users[].beurer_user_index: ${assigned ?? '<index>'}' and turn ` +
           "'beurer_register_new_user' back off, or the next run registers another one.",
       );
+      if (this.isBf500) {
+        const ctx = this.ctx;
+        const pin = ctx?.scaleAuth?.pin;
+        if (assigned == null || !ctx || pin == null) {
+          bleLog.warn('Beurer BF500: cannot consent without the assigned user index and session.');
+          return;
+        }
+        // Registration does not replace explicit consent on the BF500.
+        this.s.consentAnswered = false;
+        void ctx
+          .write(
+            CHR_USER_CONTROL_POINT,
+            [UCP_CONSENT, assigned, pin & 0xff, (pin >> 8) & 0xff],
+            true,
+          )
+          .catch((err: unknown) => {
+            bleLog.warn(`Beurer BF500: consent after registration failed: ${String(err)}`);
+          });
+        return;
+      }
       this.s.consentAccepted = true;
       void this.syncUserProfile(this.session);
       return;
