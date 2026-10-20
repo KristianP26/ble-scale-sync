@@ -24,6 +24,9 @@ let failConnectWith: string | null = null;
 // scale still on after its reading that nobody steps on, until it switches off.
 let silentSession = false;
 let endSilentSession: (() => void) | null = null;
+// When set, the default session's device reports a disconnect right after its
+// one notification: a scale that hands over a stored record and switches off.
+let disconnectAfterNotify = false;
 
 vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
   class FakeEsphomeProxyPool {
@@ -91,6 +94,7 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
         };
       }
       let notifyCb: ((d: Buffer) => void) | null = null;
+      const onDisconnectCbs: Array<() => void> = [];
       const notifyChar: BleChar = {
         async read() {
           return Buffer.alloc(0);
@@ -98,7 +102,14 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
         async write() {},
         async subscribe(onData) {
           notifyCb = onData;
-          setImmediate(() => notifyCb && notifyCb(Buffer.from([0x01])));
+          setImmediate(() => {
+            if (notifyCb) notifyCb(Buffer.from([0x01]));
+            if (disconnectAfterNotify) {
+              setImmediate(() => {
+                for (const cb of onDisconnectCbs.splice(0)) cb();
+              });
+            }
+          });
           return () => {};
         },
       };
@@ -116,7 +127,12 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
           [NOTIFY, notifyChar],
           [WRITE, noop],
         ]),
-        device: { onDisconnect: (_cb: () => void) => {}, fireDisconnect: () => {} },
+        device: {
+          onDisconnect: (cb: () => void) => {
+            onDisconnectCbs.push(cb);
+          },
+          fireDisconnect: () => {},
+        },
         close: closeSpy,
       };
     }
@@ -302,6 +318,58 @@ describe('ReadingWatcher GATT session timeout with stored records (#331)', () =>
       await watcher.stop();
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it('keys a stored-only session by its record time, so only the same record again is a duplicate', async () => {
+    // Three sessions a second apart, each handing over one stored record and
+    // ending on the scale's disconnect: 76.55 and 76.52 kg share the 76.5
+    // bucket but are two weigh-ins, and the third repeats the second.
+    const records: ScaleReading[] = [
+      { weight: 76.55, impedance: 0, timestamp: new Date('2026-10-07T19:57:25Z') },
+      { weight: 76.52, impedance: 0, timestamp: new Date('2026-10-07T20:05:10Z') },
+      { weight: 76.52, impedance: 0, timestamp: new Date('2026-10-07T20:05:10Z') },
+    ];
+    const lines: string[] = [];
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation((m) => void lines.push(String(m)));
+    vi.useFakeTimers();
+    connectGattSpy.mockClear();
+    disconnectAfterNotify = true;
+    try {
+      vi.setSystemTime(new Date('2026-10-07T20:30:00Z'));
+      const adapter = {
+        ...gattAdapter(),
+        parseNotification: (): ScaleReading => ({
+          ...records[connectGattSpy.mock.calls.length - 1],
+        }),
+      } as ScaleAdapter;
+      const watcher = new ReadingWatcher(config, [adapter]);
+      await watcher.start();
+      const pool = (
+        watcher as unknown as {
+          pool: { emitAdvert: (info: BleDeviceInfo, mac: string) => void };
+        }
+      ).pool;
+      const mac = 'AA:BB:CC:DD:EE:07';
+      const session = async () => {
+        pool.emitAdvert({ localName: 'GATT-scale', serviceUuids: [] }, mac);
+        const next = watcher.nextReading();
+        await vi.advanceTimersByTimeAsync(1_000);
+        return (await Promise.race([next, Promise.resolve(null)]))?.reading ?? null;
+      };
+
+      expect(await session()).toEqual(records[0]);
+      expect(await session()).toEqual(records[1]);
+      expect(await session()).toBeNull();
+      expect(connectGattSpy).toHaveBeenCalledTimes(3);
+      const skip = lines.find((l) => l.startsWith('Dedup skip:'));
+      expect(skip ?? '(no line)').toMatch(/:76\.5@2026-10-07T20:05:10\.000Z$/);
+
+      await watcher.stop();
+    } finally {
+      disconnectAfterNotify = false;
+      vi.useRealTimers();
+      debug.mockRestore();
     }
   });
 });
