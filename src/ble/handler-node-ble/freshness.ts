@@ -22,7 +22,10 @@ import { isDeviceObjectGone } from './device-object.js';
  * Auto-discovery picks from objects BlueZ may hold from long ago (it removes
  * nothing first). A paired object is kept without the gate: removeDevice skips
  * bonded devices, and where the cycle keeps the object on purpose a paired one
- * goes ahead with no latch (armFreshAdvertLatch answers `'paired'`). And when
+ * goes ahead with no latch (armFreshAdvertLatch answers `'paired'`). The RSSI
+ * re-discovery before a connect in connectWithRecovery removes nothing first
+ * either, so its `waitDevice` can come back at once on the object BlueZ holds,
+ * and the check after it runs on a tracker that has just started. And when
  * the re-discovery in a connect retry fails, the retry falls back to
  * `getDevice()`, which hands back whatever object BlueZ still holds. There only
  * the 127 sentinel can fail the first check: a missing RSSI or one BlueZ
