@@ -256,6 +256,20 @@ describe('how each failed connect ended (#471, D066)', () => {
     expect(attemptLine(6)).toContain(`BlueZ: ${AUTH}`);
   });
 
+  it('ends with the shutdown, not a diagnosis, when it comes while the last attempt waits', async () => {
+    const ac = new AbortController();
+    const scale = makeScale({ steps: times(6, abort({ up: true, downMs: 2000 })) });
+    const pending = run(scale, { abortSignal: ac.signal });
+    for (let i = 0; i < 2000 && scale.connectCalls.length < 6; i++) {
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    // The sixth Connect has failed and its connection is still up: settle runs.
+    await vi.advanceTimersByTimeAsync(ERROR_AT_MS + 200);
+    ac.abort(new Error('shutting down'));
+    expect((await drive(pending)).result).toBe('shutting down');
+    expect(attemptLine(6)).toBeUndefined();
+  });
+
   it('waits no longer than 1.5 s for the last connection to go down', async () => {
     const scale = makeScale({ steps: times(6, abort({ up: true, downMs: 2000 })) });
     const { endedAt } = await drive(run(scale));
@@ -337,6 +351,20 @@ describe('the reason probe (#471, D066)', () => {
     expect((await drive(run(first))).result).toBe('connected');
     expect(second.getProxyObject).toHaveBeenCalledTimes(1);
     expect(first.getProxyObject).not.toHaveBeenCalled();
+  });
+
+  it('leaves no listener behind when an unanswered retry Disconnect ends the call (#472)', async () => {
+    // The second connection stays up and BlueZ never answers its Disconnect:
+    // the call throws StaleLinkError with the probed observer still attached.
+    const scale = makeScale({
+      steps: [abort({ up: true, downMs: 95 }), abort({ up: true })],
+      bluez583: true,
+    });
+    const { result } = await drive(run(scale));
+    expect(result).toContain('did not complete a Disconnect');
+    expect(scale.getProxyObject).toHaveBeenCalledTimes(1);
+    expect(scale.iface.listenerCount('Disconnected')).toBe(0);
+    expect(scale.helper.listenerCount('PropertiesChanged')).toBe(0);
   });
 
   it('leaves no listener on the device or on Device1', async () => {
