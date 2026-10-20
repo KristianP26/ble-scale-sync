@@ -51,8 +51,8 @@ export const GATT_DISCOVERY_TIMEOUT_MS = 30_000;
  * timer restarts on every frame except a status frame (isStatusFrame, D070),
  * so it counts silence rather than time since connect: a window counted from
  * connect can expire before the user steps on, because connect is driven by
- * the advertisement, not the weigh-in. Native handlers only; the mqtt-proxy
- * uses its own GATT_READING_IDLE_MS.
+ * the advertisement, not the weigh-in. Native handlers and the single-shot
+ * mqtt-proxy scan; the proxy watchers use their own GATT_READING_IDLE_MS.
  */
 export const RAW_READING_TIMEOUT_MS = 120_000;
 

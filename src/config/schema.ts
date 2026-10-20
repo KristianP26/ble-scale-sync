@@ -149,12 +149,12 @@ export const BleSchema = z
     /**
      * Seconds of scale silence that end one GATT session (default 120); every
      * notification restarts the clock, except a reply the scale sends to our own
-     * command (D070). Native BLE handlers only; the mqtt-proxy and esphome-proxy
-     * transports ignore it. Some scales refuse to run a standalone weigh-in while
-     * a host holds the session open (the Beurer BF500 shows "APP", #83), so a
-     * shorter session frees the scale sooner. The cost
-     * is more Bluetooth adapter churn per hour, since a timed-out read resets
-     * the adapter on node-ble and disconnects on Noble.
+     * command (D070). Native BLE handlers and the single-shot mqtt-proxy scan;
+     * esphome-proxy and the mqtt-proxy watcher (continuous mode) ignore it. Some
+     * scales refuse to run a standalone weigh-in while a host holds the session
+     * open (the Beurer BF500 shows "APP", #83), so a shorter session frees the
+     * scale sooner. The cost is more Bluetooth adapter churn per hour, since a
+     * timed-out read resets the adapter on node-ble and disconnects on Noble.
      */
     session_timeout_sec: z.number().int().min(5).max(600).optional().nullable(),
     /**
