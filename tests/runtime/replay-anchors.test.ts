@@ -145,6 +145,16 @@ describe('replay anchor file (D067)', () => {
     });
   });
 
+  it("does not save another user's weigh-in dated before 2024 from memory", () => {
+    const { weights, times } = maps({
+      mom: [60.2, '1970-01-01T00:10:00.000Z'],
+      dad: [82.3, '2026-10-19T07:30:00.000Z'],
+    });
+    persistReplayAnchor(file, 'dad', weights, times);
+
+    expect(read()).toEqual({ dad: { weight: 82.3, time: '2026-10-19T07:30:00.000Z' } });
+  });
+
   it('does not write over the file when it cannot be read, and warns', () => {
     write({ mom: { weight: 60.2, time: '2026-10-18T07:00:00.000Z' } });
     const before = fs.readFileSync(file, 'utf-8');

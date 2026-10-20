@@ -812,7 +812,11 @@ describe('processReading: replay dedup by measurement time (#475, #463)', () => 
     });
 
     expect(dispatchExports).not.toHaveBeenCalled();
-    expect(replaySkipped()).toBe(true);
+    const line = logSpy.mock.calls
+      .map((c) => String(c[0]))
+      .find((l) => l.includes('Skipping replay'));
+    // It names which weight it matched: not the saved one, 0.38 kg away.
+    expect(line).toContain('matches last_known_weight from the config within');
   });
 
   it('still skips a stored record within 0.1 kg of a last_known_weight that has no saved time (single run, E-09)', async () => {

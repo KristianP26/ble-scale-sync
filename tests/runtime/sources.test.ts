@@ -546,7 +546,11 @@ describe('src/run.ts wiring (#475)', () => {
   // notices a run.ts that never hands the anchor file over: the feature would
   // be off in production with a green suite (D067).
   it('hands the context the replay anchor file next to the config (D067)', () => {
-    expect(RUN_TS).toMatch(/replayAnchorsPath: resolveReplayAnchorsPath\(loaded\.configPath\),/);
+    // Anchored to a code line: commenting the line out is the likeliest way to
+    // switch it off, and a bare match would still find it in the comment.
+    expect(RUN_TS).toMatch(
+      /^\s*replayAnchorsPath: resolveReplayAnchorsPath\(loaded\.configPath\),$/m,
+    );
   });
 
   it('warns about runtime.no_reading_rescan_delay outside continuous mode or off node-ble', () => {
