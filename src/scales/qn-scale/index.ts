@@ -402,12 +402,15 @@ export class QnScaleAdapter
    * [3]) has come; `storedAnswerDone`, it is over, on a 0x23 that says the
    * scale holds no stored weigh-ins or on the 0x25 after the last record,
    * where the vendor's SDK completes a record. `storedAnswerTimer` says so in
-   * the log when the hold runs out first.
+   * the log when the hold runs out first, and onSessionEnd when the session
+   * ends later with the weigh-in still held; `storedAnswerReasonLogged` keeps
+   * it to one line.
    */
   private heldForStoredAnswer: ScaleReading | null = null;
   private storedAnswerLast = false;
   private storedAnswerDone = false;
   private storedAnswerTimer: ReturnType<typeof setTimeout> | null = null;
+  private storedAnswerReasonLogged = false;
 
   /** The scale's own results, by the reading they belong to (#331). */
   private readonly scaleComposition = new ReadingComposition<ScaleCompositionPin | null>();
@@ -705,6 +708,7 @@ export class QnScaleAdapter
     this.heldForStoredAnswer = null;
     this.storedAnswerLast = false;
     this.storedAnswerDone = false;
+    this.storedAnswerReasonLogged = false;
     this.clearStoredAnswerTimer();
     this.live20Measured = false;
     this.live20Replayed = false;
@@ -2262,6 +2266,7 @@ export class QnScaleAdapter
           : null;
       // Otherwise records are still arriving and the hold goes on.
       if (why === null) return;
+      this.storedAnswerReasonLogged = true;
       bleLog.debug(
         `QN: ${why} within ${STORED_ANSWER_HOLD_MS / 1000} s; the session ends on the weigh-in ` +
           `held for it (${this.heldForStoredAnswer.weight} kg) (#463)`,
@@ -2714,6 +2719,23 @@ export class QnScaleAdapter
       this.storedRetryTimer = null;
     }
     this.clearStoredAnswerTimer();
+    // A session that ends with a weigh-in still held for the stored ones was
+    // not ended by the answer: the extensions ran out, the last record's 0x25
+    // never came, or the link or the caller went first (#463). Once, and not
+    // after the 3 s line, which said so already.
+    const held = this.heldForStoredAnswer;
+    if (held !== null && !this.storedAnswerReasonLogged) {
+      this.storedAnswerReasonLogged = true;
+      const why = !this.queryAnswered
+        ? 'the scale had not answered the stored-record query'
+        : this.storedAnswerLast
+          ? 'the scale had not finished its answer to the stored-record query'
+          : 'stored weigh-ins were still arriving';
+      bleLog.debug(
+        `QN: the session ended while the weigh-in (${held.weight} kg) was held for the ` +
+          `scale's stored ones: ${why} (#463)`,
+      );
+    }
     this.sessionStartedScaleSeconds = null;
     this.ctx = null;
   }

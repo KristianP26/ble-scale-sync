@@ -3169,6 +3169,12 @@ describe('QN 18-byte weigh-in before the stored-record answer through waitForRaw
       const raw = await s.promise;
       expect(raw.reading).toEqual(WEIGH_IN);
       expect(raw.history).toEqual([STORED]);
+      expect(
+        s.debugLines(
+          "QN: the session ended while the weigh-in (71.15 kg) was held for the scale's " +
+            'stored ones: stored weigh-ins were still arriving (#463)',
+        ),
+      ).toBe(1);
     } finally {
       vi.useRealTimers();
     }
@@ -3190,6 +3196,9 @@ describe('QN 18-byte weigh-in before the stored-record answer through waitForRaw
       expect(raw.reading).toEqual(WEIGH_IN);
       expect(raw.history).toEqual([STORED]);
       expect(s.infoLines('still arriving')).toBe(0);
+      // One reason, from the 3 s line, not a second one as the session ends.
+      expect(s.debugLines('did not finish its answer to the stored-record query')).toBe(1);
+      expect(s.debugLines('the session ended while the weigh-in')).toBe(0);
     } finally {
       vi.useRealTimers();
     }
