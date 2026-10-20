@@ -96,3 +96,41 @@ describe('reloadAppConfig with an exporter that cannot be built (E-07)', () => {
     expect(getExportersForUser(ctx, 'test').map((e) => e.name)).toEqual(['webhook']);
   });
 });
+
+describe('reloadAppConfig and the restored replay anchors (D067)', () => {
+  it('keeps the weigh-ins an earlier process saved across a reload', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reload-anchors-'));
+    const file = path.join(dir, 'config.yaml');
+    const anchors = path.join(dir, '.last-live-weigh-ins.json');
+    try {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      fs.writeFileSync(file, yaml({ cooldown: 30, webhookUrl: 'https://example.invalid/hook' }));
+      fs.writeFileSync(
+        anchors,
+        JSON.stringify({ test: { weight: 82.3, time: '2026-10-19T07:00:00.000Z' } }),
+      );
+      const config = loadYamlConfig(file);
+      const ctx = createAppContext({
+        config,
+        resolved: resolveRuntimeConfig(config),
+        configSource: 'yaml',
+        configPath: file,
+        replayAnchorsPath: anchors,
+        signal: new AbortController().signal,
+        abortApp: () => {},
+      });
+      expect(ctx.lastExportedWeights.get('test')).toBe(82.3);
+
+      fs.writeFileSync(file, yaml({ cooldown: 99, webhookUrl: 'https://example.invalid/hook' }));
+      await reloadAppConfig(ctx, { value: userDisplaySnapshot(ctx.config) });
+
+      expect(ctx.config.runtime?.scan_cooldown).toBe(99);
+      expect(ctx.lastExportedWeights.get('test')).toBe(82.3);
+      expect(ctx.lastExportedAt.get('test')?.toISOString()).toBe('2026-10-19T07:00:00.000Z');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+      vi.restoreAllMocks();
+    }
+  });
+});

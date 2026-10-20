@@ -542,6 +542,13 @@ describe('src/run.ts wiring (#475)', () => {
     );
   });
 
+  // Every replay restart test builds its own context, so without this nothing
+  // notices a run.ts that never hands the anchor file over: the feature would
+  // be off in production with a green suite (D067).
+  it('hands the context the replay anchor file next to the config (D067)', () => {
+    expect(RUN_TS).toMatch(/replayAnchorsPath: resolveReplayAnchorsPath\(loaded\.configPath\),/);
+  });
+
   it('warns about runtime.no_reading_rescan_delay outside continuous mode or off node-ble', () => {
     expect(RUN_TS).toMatch(
       /\(ctx\.config\.runtime\?\.no_reading_rescan_delay \?\? 0\) > 0 &&\s*\(!initialResolved\.continuousMode \|\| resolveHandlerKey\(ctx\.bleHandler\) !== 'node-ble'\)/,

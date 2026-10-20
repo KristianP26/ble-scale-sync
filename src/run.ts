@@ -28,6 +28,7 @@ import {
 import type { Exporter } from './interfaces/exporter.js';
 import type { ScaleAdapter } from './interfaces/scale-adapter.js';
 import { createAppContext } from './runtime/context.js';
+import { resolveReplayAnchorsPath } from './runtime/replay-anchors.js';
 import { processReading } from './runtime/processor.js';
 import { PollReadingSource } from './runtime/poll-source.js';
 import { runContinuousLoop, type RuntimeLoopDeps } from './runtime/loop.js';
@@ -142,6 +143,8 @@ const ctx = createAppContext({
   resolved: initialResolved,
   configSource: loaded.source,
   configPath: loaded.configPath,
+  // After setLogLevel, so the restored weigh-ins show at debug level (D067).
+  replayAnchorsPath: resolveReplayAnchorsPath(loaded.configPath),
   signal: ac.signal,
   abortApp: (reason) => ac.abort(reason),
 });

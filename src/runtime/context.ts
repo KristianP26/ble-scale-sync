@@ -8,6 +8,7 @@ import type {
 import type { BleHandlerName } from '../ble/types.js';
 import type { ConfigSource } from '../config/load.js';
 import { resolveExportQueuePath } from './export-queue.js';
+import { restoreReplayAnchors } from './replay-anchors.js';
 import type { ResolvedRuntimeConfig } from '../config/resolve.js';
 import type { EmbeddedBrokerHandle } from '../ble/embedded-broker.js';
 import type { Exporter } from '../interfaces/exporter.js';
@@ -28,6 +29,11 @@ export interface AppContext {
   readonly exportQueuePath: string | undefined;
   /** Whether a failed export is persisted for a later cycle (#412). */
   readonly retryFailedExports: boolean;
+  /**
+   * Where the last live weigh-in of each user is kept across a restart (D067),
+   * or undefined to keep none (.env mode, and every test that does not opt in).
+   */
+  readonly replayAnchorsPath: string | undefined;
   readonly bleHandler: BleHandlerName;
   readonly bleAdapter: string | undefined;
   /**
@@ -42,28 +48,24 @@ export interface AppContext {
 
   /**
    * Per-user runtime anchor of the last exported LIVE weight, keyed by user
-   * slug. The #164 replay dedup uses it before last_known_weight from config,
+   * slug. The #164 replay dedup uses it next to last_known_weight from config,
    * in both modes: the file is rewritten only after a 0.5 kg change, so it can
-   * lag behind (E-09). Survives config reload (it is process-lifetime dedup
-   * state, NOT a hot-swap field), so setConfig must not clear it.
+   * lag behind (E-09). Starts with the weigh-ins an earlier process saved
+   * (D067). Survives config reload (it is dedup state, NOT a hot-swap field),
+   * so setConfig must not clear it.
    */
   readonly lastExportedWeights: Map<string, number>;
 
   /**
    * When the weigh-in behind `lastExportedWeights` was taken, keyed by user
    * slug: its own stamp when it carried one, else its receipt time. The replay
-   * dedup compares a stored record's own time with it (#475). Process-lifetime
-   * state like `lastExportedWeights`, kept across a reload.
+   * dedup compares a stored record's own time with it (#475). Restored and
+   * kept across a reload like `lastExportedWeights`; the two are always set
+   * together. A user without an entry has no known time, and the dedup then
+   * judges by weight alone (D067: the process start used to stand in, but it
+   * is the host's clock, not the scale's).
    */
   readonly lastExportedAt: Map<string, Date>;
-
-  /**
-   * When this process built its context. A last_known_weight read from
-   * config.yaml was exported by an earlier process, so it is no newer than this,
-   * as long as the host clock was right at startup (a Pi without an RTC can
-   * start before NTP has set it).
-   */
-  readonly startedAt: Date;
 
   // Lifecycle handle (mqtt-proxy only; set after bootstrapMqttProxy)
   embeddedBroker: EmbeddedBrokerHandle | null;
@@ -88,11 +90,23 @@ export interface AppContextInit {
   resolved: ResolvedRuntimeConfig;
   configSource: ConfigSource;
   configPath: string | undefined;
+  /** The anchor file to restore from and save to (D067); omitted = keep none. */
+  replayAnchorsPath?: string;
   signal: AbortSignal;
   abortApp: (reason?: unknown) => void;
 }
 
 export function createAppContext(init: AppContextInit): AppContext {
+  const lastExportedWeights = new Map<string, number>();
+  const lastExportedAt = new Map<string, Date>();
+  if (init.replayAnchorsPath) {
+    restoreReplayAnchors(
+      init.replayAnchorsPath,
+      init.config.users,
+      lastExportedWeights,
+      lastExportedAt,
+    );
+  }
   const ctx: AppContext = {
     config: init.config,
     scaleMac: init.resolved.scaleMac,
@@ -109,6 +123,7 @@ export function createAppContext(init: AppContextInit): AppContext {
     exportQueuePath: init.resolved.retryFailedExports
       ? resolveExportQueuePath(init.configPath)
       : undefined,
+    replayAnchorsPath: init.replayAnchorsPath,
     bleHandler: init.resolved.bleHandler,
     bleAdapter: init.resolved.bleAdapter,
     adapterPrivacy: init.resolved.adapterPrivacy,
@@ -116,9 +131,8 @@ export function createAppContext(init: AppContextInit): AppContext {
     haBluetooth: init.resolved.haBluetooth,
     signal: init.signal,
     exporterCache: new Map(),
-    lastExportedWeights: new Map(),
-    lastExportedAt: new Map(),
-    startedAt: new Date(),
+    lastExportedWeights,
+    lastExportedAt,
 
     embeddedBroker: null,
 

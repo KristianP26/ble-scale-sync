@@ -245,10 +245,11 @@ If the app stops on its own (for example after repeated Bluetooth failures, to s
 
 Everything that should survive add-on restarts lives under `/data/` inside the container, which the Supervisor maps to persistent storage:
 
-| Path                   | Purpose                                                                                                             |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `/data/config.yaml`    | The merged runtime config. Regenerated from UI options on every start, with `last_known_weight` preserved per user. |
-| `/data/garmin-tokens/` | Garmin OAuth tokens produced by first authentication.                                                               |
+| Path                      | Purpose                                                                                                                                                                                                                            |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/data/config.yaml`       | The merged runtime config. Regenerated from UI options on every start, with `last_known_weight` preserved per user.                                                                                                                |
+| `/data/garmin-tokens/`    | Garmin OAuth tokens produced by first authentication.                                                                                                                                                                              |
+| `/data/.*` (hidden files) | State the app keeps next to the config: the export retry queue, the scale de-duplication marks, the last live weigh-in of each user for the [replay check](/exporters#historical-readings), and the date of the last update check. |
 
 User-supplied files live under `/share/ble-scale-sync/`:
 

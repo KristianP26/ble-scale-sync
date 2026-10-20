@@ -90,6 +90,8 @@ Changing units after the first reading does not reinterpret existing data. Switc
 
 The add-on stores its runtime configuration at `/data/config.yaml` and preserves each user's `last_known_weight` across add-on restarts. This is important for multi-user matching: after the first reading the remembered weight is reused to pick the right user on subsequent scans, even after you restart Home Assistant or the add-on.
 
+The weight and time of each user's last live weigh-in are kept in `/data` too, so a stored copy of the last live weigh-in that the scale hands over after a restart is not exported a second time.
+
 If you change the user slug (by renaming the user), the remembered weight does not carry over because the slug is the lookup key.
 
 ## Update check

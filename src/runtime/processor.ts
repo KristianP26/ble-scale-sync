@@ -17,6 +17,7 @@ import { checkAndLogUpdate } from '../update-check.js';
 import { fmtWeight } from './format.js';
 import { enqueue } from './export-queue.js';
 import { exporterSlot } from './exporter-slot.js';
+import { persistReplayAnchor } from './replay-anchors.js';
 import {
   HISTORY_WINDOW_MS,
   isHistoricalReading,
@@ -254,37 +255,46 @@ async function exportFrame(
   const tag = frameTag(prefix, frame);
   const tagPrefix = tag ? `${tag} ` : '';
 
-  // Replay dedup: skip a stored record whose weight matches the last weight
+  // Replay dedup: skip a stored record whose weight matches a weight already
   // exported for this user (likely a re-export of an already-synced weigh-in).
-  // The runtime anchor first, then config: in single-run mode every run is a
-  // new process, and the persisted last_known_weight is its only memory (E-09).
-  const anchor = ctx.lastExportedWeights.get(user.slug) ?? user.last_known_weight;
-  // Only a record measured no later than REPLAY_CLOCK_MARGIN_MS after the
-  // anchor's own weigh-in can be that weigh-in again. One stored while the app
-  // waited between sessions (#475), or after the last live export (#463), is
-  // newer, and dropping it for being within 0.1 kg lost a real weigh-in. A
-  // config anchor was written by an earlier process, so it is no newer than
-  // this process's start. Only the frame's own stamp can say so: a stored
-  // record dated by its receipt (an adapter flagged it `fromMemory` without a
-  // usable stamp, D065) would always look new, so it keeps the weight rule.
-  const liveAt = ctx.lastExportedAt.get(user.slug);
-  const anchorAt = liveAt ?? ctx.startedAt;
+  // Two weights count: the last live weigh-in (this process's, or the one an
+  // earlier process saved, D067) and last_known_weight from config. In
+  // single-run mode every run is a new process, and those are its only memory
+  // (E-09). The config value counts even next to a saved weigh-in: it can be an
+  // earlier weigh-in that config.yaml still holds (it is rewritten only after a
+  // 0.5 kg change), and v1.33.0 skipped a stored copy of that one too.
+  const saved = ctx.lastExportedWeights.get(user.slug);
+  const near = (w: number | null | undefined): boolean =>
+    w !== null && w !== undefined && Math.abs(reading.weight - w) < DEDUP_KG_TOLERANCE;
+  // Only a record measured no later than REPLAY_CLOCK_MARGIN_MS after the last
+  // live weigh-in can be that weigh-in again. One stored while the app waited
+  // between sessions (#475), or after the last live export (#463), is newer,
+  // and dropping it for being within 0.1 kg lost a real weigh-in. That takes
+  // the weigh-in's own time; last_known_weight alone has none, and the process
+  // start that stood in for it is the host's clock while the record carries
+  // the scale's, so a replay from before a restart looked new (review C1).
+  // Only the frame's own stamp can say so: a stored record dated by its
+  // receipt (an adapter flagged it `fromMemory` without a usable stamp, D065)
+  // would always look new, so it keeps the weight rule.
+  const anchorAt = ctx.lastExportedAt.get(user.slug);
   const measuredAfterAnchor =
-    frame.stamped && frame.measuredAt.getTime() > anchorAt.getTime() + REPLAY_CLOCK_MARGIN_MS;
-  if (
-    frame.historical &&
-    anchor !== null &&
-    !measuredAfterAnchor &&
-    Math.abs(reading.weight - anchor) < DEDUP_KG_TOLERANCE
-  ) {
-    const anchorWhat = liveAt
-      ? 'the last exported weigh-in measured at'
-      : 'the configured last_known_weight, dated to the process start at';
+    anchorAt !== undefined &&
+    frame.stamped &&
+    frame.measuredAt.getTime() > anchorAt.getTime() + REPLAY_CLOCK_MARGIN_MS;
+  const matchesSaved = near(saved);
+  if (frame.historical && !measuredAfterAnchor && (matchesSaved || near(user.last_known_weight))) {
+    const what =
+      matchesSaved || saved === undefined
+        ? 'the last exported weight'
+        : 'last_known_weight from the config';
+    const why = anchorAt
+      ? `was not measured more than ${REPLAY_CLOCK_MARGIN_MS / 60_000} min after ` +
+        `the last exported weigh-in measured at ${anchorAt.toISOString()}`
+      : 'no measurement time is saved for that weight yet (last_known_weight from the ' +
+        'config), so a newer weigh-in cannot be told apart from a replay';
     log.info(
       `${tagPrefix}Skipping replay: weight ${fmtWeight(reading.weight, ctx.weightUnit)} ` +
-        `matches the last exported weight within +/-${DEDUP_KG_TOLERANCE} kg and was not ` +
-        `measured more than ${REPLAY_CLOCK_MARGIN_MS / 60_000} min after ` +
-        `${anchorWhat} ${anchorAt.toISOString()}`,
+        `matches ${what} within +/-${DEDUP_KG_TOLERANCE} kg and ${why}`,
     );
     return { dispatched: false, success: true, exported: false };
   }
@@ -362,7 +372,8 @@ const persistedWeights = new WeakMap<UserConfig, number | null>();
  * measured in the future) but not here: with the scale's clock more than
  * REPLAY_CLOCK_MARGIN_MS ahead (a container on UTC, a clock set before a DST
  * change) the copy would look newer than the anchor and go out a second time.
- * A frame without a stamp falls back to `measuredAt`, the receipt time.
+ * A frame without a stamp falls back to `measuredAt`, the receipt time. The
+ * same time is what is saved for a restart (D067), for the same reason.
  */
 function anchorTime(frame: Frame): Date {
   const ts = frame.reading.timestamp;
@@ -385,14 +396,27 @@ function anchorTime(frame: Frame): Date {
  * which is why the anchor also keeps the time it was measured (`anchorTime`):
  * the replay dedup compares a stored record's own time with it.
  *
- * The file is written only after a change of 0.5 kg against what is ON DISK,
- * not against the in-memory value, which now moves on every weigh-in: compared
- * with that, a run of small steps would never reach the threshold and the file
- * would drift away from the person indefinitely.
+ * The exact weight and that time are saved on EVERY call (D067), next to
+ * config.yaml, so a restart keeps them. They have to be the last live
+ * weigh-in's: a time saved only when config.yaml moves would belong to an
+ * older weigh-in than the one a scale replays.
+ *
+ * config.yaml is written only after a change of 0.5 kg against what is ON
+ * DISK, not against the in-memory value, which now moves on every weigh-in:
+ * compared with that, a run of small steps would never reach the threshold and
+ * the file would drift away from the person indefinitely.
  */
 function recordLiveWeight(ctx: AppContext, user: UserConfig, weight: number, anchorAt: Date): void {
   ctx.lastExportedWeights.set(user.slug, weight);
   ctx.lastExportedAt.set(user.slug, anchorAt);
+  if (ctx.replayAnchorsPath) {
+    persistReplayAnchor(
+      ctx.replayAnchorsPath,
+      user.slug,
+      ctx.lastExportedWeights,
+      ctx.lastExportedAt,
+    );
+  }
   if (!persistedWeights.has(user)) persistedWeights.set(user, user.last_known_weight);
   user.last_known_weight = weight;
 

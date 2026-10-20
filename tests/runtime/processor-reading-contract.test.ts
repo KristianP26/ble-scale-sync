@@ -126,7 +126,7 @@ function makeCtx(users: UserConfig[], over: Partial<AppContext> = {}): AppContex
     exporterCache: new Map(),
     lastExportedWeights: new Map(),
     lastExportedAt: new Map(),
-    startedAt: new Date(),
+    replayAnchorsPath: undefined,
     embeddedBroker: null,
     retryFailedExports: false,
     exportQueuePath: undefined,
