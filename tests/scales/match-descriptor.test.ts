@@ -8,6 +8,7 @@ import {
 } from '../../src/scales/match-descriptor.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
+import { M1690_ADVERT, M1690_FE95, M1690_FE95_PID_018E } from '../helpers/yunmai-m1690.js';
 
 const dev = (p: Partial<BleDeviceInfo>): BleDeviceInfo => ({
   localName: '',
@@ -77,6 +78,35 @@ describe('matchesDescriptor', () => {
   it('uuidClaimHits handles undefined device uuids', () => {
     expect(uuidClaimHits(['fff0'], undefined)).toBe(false);
     expect(uuidClaimHits(['fff0'], ['fff0'])).toBe(true);
+  });
+});
+
+// #474: a claimed MiBeacon product id identifies the device like a name.
+describe('matchesDescriptor: MiBeacon product id', () => {
+  const d: MatchDescriptor = { priority: 100, miBeaconProductIds: [0x018d] };
+
+  it('matches the claimed id in 0xFE95 service data, short or full uuid', () => {
+    expect(matchesDescriptor(M1690_ADVERT, d)).toBe(true);
+    const full = dev({ serviceData: [{ uuid: uuid16(0xfe95), data: M1690_FE95 }] });
+    expect(matchesDescriptor(full, d)).toBe(true);
+  });
+
+  // The three below hold on the code before #474 too: they guard the new claim
+  // against another product id, another service's data and a frame without an id.
+  it('ignores a product id it does not claim', () => {
+    const other = dev({ serviceData: [{ uuid: 'fe95', data: M1690_FE95_PID_018E }] });
+    expect(matchesDescriptor(other, d)).toBe(false);
+  });
+
+  it('ignores the same bytes under another service uuid', () => {
+    expect(matchesDescriptor(dev({ serviceData: [{ uuid: 'fe9f', data: M1690_FE95 }] }), d)).toBe(
+      false,
+    );
+  });
+
+  it('ignores a frame too short to carry a product id', () => {
+    const short = dev({ serviceData: [{ uuid: 'fe95', data: M1690_FE95.subarray(0, 3) }] });
+    expect(matchesDescriptor(short, d)).toBe(false);
   });
 });
 

@@ -146,6 +146,21 @@ describe('registry-check structural guard (#182)', () => {
     expect(errors.some((e) => e.includes('claim the same name/service'))).toBe(true);
   });
 
+  // #474: a product id names one product, so two plain claims on it shadow.
+  it('flags two non-custom adapters claiming the same MiBeacon product id', () => {
+    const reg = [
+      fake('A', 100, { miBeaconProductIds: [0x018d] }),
+      fake('B', 90, { miBeaconProductIds: [0x018d] }),
+      new StandardGattScaleAdapter(),
+    ];
+    const { errors } = checkRegistryIntegrity(reg);
+    expect(
+      errors.some(
+        (e) => e.includes('"A" and "B"') && e.includes('claim the same name/service/product id'),
+      ),
+    ).toBe(true);
+  });
+
   // #408: a deferred binding is enabled only by the adapter's own onConnected.
   const withBindings = (
     name: string,

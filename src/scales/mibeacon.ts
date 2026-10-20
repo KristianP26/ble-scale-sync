@@ -4,9 +4,13 @@ import { normalizeUuid } from '../ble/types.js';
 /**
  * Shared MiBeacon (Xiaomi 0xFE95 service data) helpers used by the broadcast
  * adapters for Xiaomi scales that publish encrypted MiBeacon v5 frames (S800,
- * S400). Kept protocol-only: no adapter state, no logging.
+ * S400), and by the product id claim of MatchDescriptor (match-descriptor.ts,
+ * the Yunmai Mini 2 in #474). Kept protocol-only: no adapter state, no logging.
  *
- * Frame layout (MiBeacon v4/v5):
+ * Frame layout (MiBeacon v4/v5). FC, PID and cnt sit the same way from version
+ * 2 on (xiaomi-ble reads the product id from bytes 2-3 for every version from
+ * 2); the Mini 2 sends an unencrypted version 2 frame, FC 0x2031. The
+ * decryption below is v5 only.
  *
  *   FC(2 LE) | PID(2 LE) | cnt(1) | [MAC(6) if FC&0x10] | [cap(1) [+io(1)] if FC&0x20]
  *   | payload | [extCnt(3) | MIC(4) if FC&0x08]

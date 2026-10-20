@@ -177,13 +177,13 @@ export function checkRegistryIntegrity(adapters: readonly ScaleAdapter[]): Regis
     }
   }
 
-  // Overlap detection: two NON-custom adapters that claim the same name token or
-  // service UUID would shadow each other on descriptor data alone, with no
-  // bespoke disambiguator. That is an error. Overlaps where at least one side is
-  // `custom` (its matches() applies extra char/byte/exclusion logic) are
-  // expected and intentionally NOT flagged; they are covered by the
-  // fixture-based registry-collision test. The generic adapter overlaps many by
-  // design and is skipped.
+  // Overlap detection: two NON-custom adapters that claim the same name token,
+  // service UUID or MiBeacon product id would shadow each other on descriptor
+  // data alone, with no bespoke disambiguator. That is an error. Overlaps where
+  // at least one side is `custom` (its matches() applies extra
+  // char/byte/exclusion logic) are expected and intentionally NOT flagged; they
+  // are covered by the fixture-based registry-collision test. The generic
+  // adapter overlaps many by design and is skipped.
   for (let i = 0; i < withMatch.length; i++) {
     for (let j = i + 1; j < withMatch.length; j++) {
       const a = withMatch[i];
@@ -194,9 +194,11 @@ export function checkRegistryIntegrity(adapters: readonly ScaleAdapter[]): Regis
       const sharedName = descriptorNameTokens(b.match).some((t) => aNames.has(t));
       const aSvc = new Set((a.match.serviceUuids ?? []).map((u) => u.toLowerCase()));
       const sharedSvc = (b.match.serviceUuids ?? []).some((u) => aSvc.has(u.toLowerCase()));
-      if (!sharedName && !sharedSvc) continue;
+      const aPid = new Set(a.match.miBeaconProductIds ?? []);
+      const sharedPid = (b.match.miBeaconProductIds ?? []).some((p) => aPid.has(p));
+      if (!sharedName && !sharedSvc && !sharedPid) continue;
       errors.push(
-        `Adapters "${a.name}" and "${b.name}" claim the same name/service with ` +
+        `Adapters "${a.name}" and "${b.name}" claim the same name/service/product id with ` +
           `no custom disambiguator. One will shadow the other.`,
       );
     }
