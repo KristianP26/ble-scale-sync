@@ -3704,6 +3704,66 @@ describe('handler-mqtt-proxy', () => {
         vi.useRealTimers();
       }
     });
+
+    // #474: a Yunmai Mini 2 stays connectable after a weigh-in and the ESP32
+    // connects to it again on every advertisement. Each session ended 60 s
+    // later, so from the second one on every session warned.
+    it('treats the reconnects to a scale that stays on as one window, measured from the reading (#474)', async () => {
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      const t0 = new Date('2026-10-20T13:34:16Z').getTime();
+      vi.setSystemTime(t0);
+      const watcher = new ReadingWatcher(
+        MQTT_PROXY_CONFIG,
+        [createGattAdapter()],
+        undefined,
+        PROFILE,
+      );
+      try {
+        await watcher.start();
+        const notify = { on: true };
+        wireScale(notify);
+
+        autonomousConnect();
+        await watcher.nextReading();
+        await settle();
+
+        notify.on = false;
+        let end = t0;
+        // Three sessions: the third shows the window follows every one of
+        // them, not only the first.
+        for (const gap of [1000, 2000, 2000]) {
+          vi.setSystemTime(end + gap);
+          autonomousConnect();
+          await settle();
+          end = Date.now() + 60_000;
+          vi.setSystemTime(end);
+          mockClient._simulateMessage(`${PREFIX}/disconnected`, '');
+          await settle();
+        }
+
+        expect(lines(warn).filter((l) => l.includes('Autonomous GATT reading failed'))).toEqual([]);
+        expect(lines(info).filter((l) => NO_WEIGH_IN.test(l))).toHaveLength(1);
+        expect(lines(debug).filter((l) => NO_WEIGH_IN.test(l))).toEqual([
+          expect.stringContaining('session opened 63.0 s after the last reading'),
+          expect.stringContaining('session opened 125.0 s after the last reading'),
+        ]);
+
+        // More than 60 s after the last of them it warns again.
+        vi.setSystemTime(end + POST_READING_RECONNECT_MS + 1);
+        autonomousConnect();
+        await settle();
+        mockClient._simulateMessage(`${PREFIX}/disconnected`, '');
+        await settle();
+        expect(lines(warn)).toContain(
+          `Autonomous GATT reading failed for ${MAC}: Scale disconnected before reading completed`,
+        );
+        await watcher.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe('listener leaks on abnormal teardown', () => {

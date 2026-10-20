@@ -288,9 +288,16 @@ const POST_READING_MAX_ADDRESSES = 64;
  * Asked when a session opens, not when it fails: a session can run for 90 s,
  * and what matters is whether it opened as the reconnect to a scale still on.
  * Entries are therefore not pruned by the window; the cap bounds them.
+ *
+ * A session in the window that ends without a weigh-in moves the window to
+ * its end, since the scale was still on until then: a Yunmai Mini 2 stays
+ * connectable for minutes after a weigh-in and is connected again on every
+ * advertisement, and each of those sessions after the first 60 s used to
+ * warn (#474, D070). The time of the reading itself is kept apart, so the
+ * line still says how long after the reading the session opened.
  */
 export class PostReadingWindow {
-  private readonly last = new Map<string, { at: number; told: boolean }>();
+  private readonly last = new Map<string, { at: number; from: number; told: boolean }>();
 
   constructor(
     private readonly windowMs: number,
@@ -304,7 +311,8 @@ export class PostReadingWindow {
   noteReading(address: string): void {
     const key = address.toLowerCase();
     this.last.delete(key);
-    this.last.set(key, { at: this.now(), told: false });
+    const now = this.now();
+    this.last.set(key, { at: now, from: now, told: false });
     if (this.last.size > POST_READING_MAX_ADDRESSES) {
       const oldest = this.last.keys().next().value;
       if (oldest !== undefined) this.last.delete(oldest);
@@ -312,27 +320,33 @@ export class PostReadingWindow {
   }
 
   /**
-   * Milliseconds since the last reading on `address` while that is within the
-   * window, else undefined. A clock that stepped back (an NTP sync on a board
-   * without a real-time clock) counts as outside it.
+   * Milliseconds since the last reading on `address` while within the window,
+   * else undefined. The window runs from the reading, or from the end of the
+   * last session after it that ended without a weigh-in (reportNoWeighIn). A
+   * clock that stepped back (an NTP sync on a board without a real-time clock)
+   * counts as outside it.
    */
   sinceReading(address: string): number | undefined {
     const entry = this.last.get(address.toLowerCase());
     if (!entry) return undefined;
-    const since = this.now() - entry.at;
-    return since >= 0 && since <= this.windowMs ? since : undefined;
+    const now = this.now();
+    const since = now - entry.at;
+    const inWindow = now - entry.from;
+    return since >= 0 && inWindow >= 0 && inWindow <= this.windowMs ? since : undefined;
   }
 
   /**
    * Log a session opened `sinceMs` after the last reading on `address` that
-   * ended without one. Info once per reading, debug after that: ESPHome
-   * retries a refused connect on every advertisement.
+   * ended without one, and move the window to now. Info once per reading,
+   * debug after that: ESPHome retries a refused connect on every
+   * advertisement, and a scale that stays on is connected again on each one.
    */
   reportNoWeighIn(address: string, subject: string, sinceMs: number, reason: string): void {
     const line =
       `${subject}: session opened ${(sinceMs / 1000).toFixed(1)} s after the last reading, ` +
       `while the scale was still on, ended without a new weigh-in (${reason}).`;
     const entry = this.last.get(address.toLowerCase());
+    if (entry) entry.from = Math.max(entry.from, this.now());
     if (entry && !entry.told) {
       entry.told = true;
       bleLog.info(line);

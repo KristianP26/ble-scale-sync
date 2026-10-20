@@ -175,8 +175,9 @@ first, and the log says so at info level (`... session opened 0.7 s after the
 last reading, while the scale was still on, ended without a new weigh-in
 (...)`); that is not an error. A scale that stays connectable after its display
 goes dark, such as the Yunmai Mini 2, is connected again each time it
-advertises, for as long as it advertises. No proxy connection slot is held once
-the scale is off.
+advertises, for as long as it advertises; each of those sessions that opens
+within 60 s of the end of the one before is logged the same way, at debug level
+after the first. No proxy connection slot is held once the scale is off.
 
 If a GATT scale still does not produce readings:
 

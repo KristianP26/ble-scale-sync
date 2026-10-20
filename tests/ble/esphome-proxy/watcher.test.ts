@@ -693,6 +693,54 @@ describe('ReadingWatcher session after a reading (#466, D058)', () => {
     }
   });
 
+  it('treats the reconnects to a scale that stays on as one window, measured from the reading (#474)', async () => {
+    // Each session after the reading runs 60 s and the scale is connected
+    // again 2 s after it ends. The second and third opened 63 s and 125 s
+    // after the reading; the second used to warn as a failure. The third
+    // shows the window follows every such session, not only the first.
+    const log = spies();
+    const mac = 'AA:BB:CC:DD:EE:47';
+    const t0 = new Date('2026-10-20T13:34:16Z').getTime();
+    vi.setSystemTime(t0);
+    const watcher = new ReadingWatcher(config, [gattAdapter()]);
+    try {
+      await watcher.start();
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await watcher.nextReading();
+      await settle();
+
+      silentSession = true;
+      let end = t0;
+      for (const gap of [1000, 2000, 2000]) {
+        vi.setSystemTime(end + gap);
+        poolOf(watcher).emitAdvert(ADVERT, mac);
+        await settle();
+        end = Date.now() + 60_000;
+        vi.setSystemTime(end);
+        endSilentSession!();
+        await settle();
+      }
+
+      expect(lines(log.warn).filter((l) => l.includes(FAILED))).toEqual([]);
+      expect(lines(log.info).filter((l) => NO_WEIGH_IN.test(l))).toHaveLength(1);
+      expect(lines(log.debug).filter((l) => NO_WEIGH_IN.test(l))).toEqual([
+        expect.stringContaining('session opened 63.0 s after the last reading'),
+        expect.stringContaining('session opened 125.0 s after the last reading'),
+      ]);
+
+      // A session opened more than 60 s after the last of them warns again.
+      vi.setSystemTime(end + POST_READING_RECONNECT_MS + 1);
+      poolOf(watcher).emitAdvert(ADVERT, mac);
+      await settle();
+      endSilentSession!();
+      await settle();
+      expect(lines(log.warn).filter((l) => l.includes(FAILED))).toHaveLength(1);
+    } finally {
+      reset();
+      await watcher.stop();
+    }
+  });
+
   it('ends the session after a reading on the idle timeout when the scale only answers the unlock (#474)', async () => {
     // A Yunmai Mini 2 stays connectable after a weigh-in and answers each
     // GET_PROTOCOL_VERSION we write, every 5 s. Counted as activity, those

@@ -138,7 +138,9 @@ export const POST_DISCONNECT_GRACE_MS = 25_000;
  * purpose: a second person stepping on before it switches off is read in that
  * session, and on mqtt-proxy the ESP32 reconnects by itself anyway. Such a
  * session ending without a reading is expected, not a failure. Measured from
- * the reading to the moment the next session opens. 60 s covers the usual
+ * the reading to the moment the next session opens, or from the end of such a
+ * session to the next one, for a scale that stays connectable for minutes
+ * after a weigh-in (#474, PostReadingWindow). 60 s covers the usual
  * first reconnect: under a second on ESPHome, a few seconds on an ESP32-S3,
  * about 10 to 13 s on a classic ESP32. A classic board that also waits out a
  * Wi-Fi recovery and connect retries can take longer, and that session still
