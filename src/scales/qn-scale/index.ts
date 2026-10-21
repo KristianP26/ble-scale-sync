@@ -150,6 +150,10 @@ const hex = (data: number[] | Buffer): string =>
 const seconds = (ms: number | null): string =>
   ms === null ? 'unknown' : `${(ms / 1000).toFixed(1)} s`;
 
+/** A 0x23 record's slot [5] for the log; 0xf0 is no slot at all (#463). */
+const storedSlotLabel = (slot: number): string =>
+  slot === STORED_UNASSIGNED_SLOT ? 'assigned to no user' : `user slot ${slot}`;
+
 export class QnScaleAdapter
   implements ScaleAdapterCore, GattWiring, BroadcastSource, MultiCharNotify, HoldForComposition
 {
@@ -1272,7 +1276,7 @@ export class QnScaleAdapter
         const ahead = Math.round(aheadMs / 1000);
         bleLog.debug(
           this.scaleFactorKnown
-            ? `QN: stored weigh-in ${weight} kg at ${at}, user slot ${data[5]}, is stamped ` +
+            ? `QN: stored weigh-in ${weight} kg at ${at}, ${storedSlotLabel(data[5])}, is stamped ` +
                 `${ahead} s ahead of this host's clock, so it is not the weigh-in of this ` +
                 'session, not read (#463)'
             : `QN: 0x23 in a session without a scale-info frame, not read: [${hex(data)}]; ` +
@@ -2100,14 +2104,17 @@ export class QnScaleAdapter
    * The window used to drop it without a line, and in #463 the scale did not
    * send it again, not even to the vendor app, so the weigh-in was lost.
    *
-   * Reported as history with its own time (`fromMemory`), but only for user
-   * slot 1, with `ble.qn_user_key`, in a session in which the scale accepted
-   * the profile built from the first user with that key (not openScale's
-   * fallback one): only then is slot 1 the first configured user,
-   * as the option documents. Otherwise it gets an info line with its weight
-   * and time, so it can be entered by hand, and the line names the first
-   * reason in that order: a record the scale gave no user would not go out
-   * with the option either, so it does not point at the option.
+   * Reported as history with its own time (`fromMemory`), for user slot 1 and
+   * for a record the scale assigned to no user (0xf0), with
+   * `ble.qn_user_key`, in a session in which the scale accepted the profile
+   * built from the first user with that key (not openScale's fallback one).
+   * Slot 1 is then the first configured user, as the option documents. A
+   * record kept for no user names no slot, so its `userIndex` stays unset and
+   * the runtime attributes it by its weight like any stored record without
+   * one (D027). Both of the unit's offline weigh-ins of 2026-10-20 were kept
+   * for no user (#463, D072). Any other slot, and either kind without those
+   * gates, gets an info line with its weight and time, so it can be entered
+   * by hand, and the line names the first reason in that order.
    *
    * Each record once per session, and never again once reported: the mark
    * (dedupMark, kept across restarts) and the live results this adapter
@@ -2120,14 +2127,11 @@ export class QnScaleAdapter
     const atMs = (recordSeconds + SCALE_EPOCH_OFFSET) * 1000;
     const what = `${weight} kg at ${new Date(atMs).toISOString()}`;
     const slot = data[5];
-    if (slot === STORED_UNASSIGNED_SLOT) {
-      bleLog.info(
-        `QN: a stored weigh-in (${what}) is not exported: the scale did not assign it to ` +
-          'a user (#463)',
-      );
-      return null;
-    }
-    if (slot !== 1) {
+    // No user on the scale (0xf0): exported too, under the same gates as slot 1
+    // (#463, D072). It names no user slot, so userIndex stays unset and the
+    // runtime attributes it by its weight like any stored record without one.
+    const unassigned = slot === STORED_UNASSIGNED_SLOT;
+    if (!unassigned && slot !== 1) {
       bleLog.info(
         `QN: a stored weigh-in (${what}) is not exported: the scale assigned it to its user ` +
           `slot ${slot}, and ble-scale-sync sends the profile of slot 1 (#463)`,
@@ -2136,8 +2140,12 @@ export class QnScaleAdapter
     }
     if (this.forcedUserKey === null) {
       bleLog.info(
-        `QN: a stored weigh-in (${what}, user slot ${slot}) is not exported: without ` +
-          'ble.qn_user_key ble-scale-sync cannot tell whose it is (#463)',
+        unassigned
+          ? `QN: a stored weigh-in (${what}, assigned to no user) is not exported: without ` +
+              'ble.qn_user_key ble-scale-sync does not export a weigh-in this scale kept from ' +
+              'before the connection (#463)'
+          : `QN: a stored weigh-in (${what}, user slot ${slot}) is not exported: without ` +
+              'ble.qn_user_key ble-scale-sync cannot tell whose it is (#463)',
       );
       return null;
     }
@@ -2147,19 +2155,31 @@ export class QnScaleAdapter
     // It has to be the frame built from the first user with the key, too: a
     // 0x12 that came after the handshake leaves the session on openScale's
     // constant profile (key 8), which a scale may accept for a slot 1 that
-    // holds someone else (Renpho #213/#253).
+    // holds someone else (Renpho #213/#253). A record kept for no user is
+    // attributed by its weight, not by these answers, but it takes the same
+    // gates: stored weigh-ins stay opt-in, and the export and the hold
+    // (waitsForStoredAnswer) agree on when a stored weigh-in can go out.
     if (this.visitSent === null && this.visitReply?.ok === true) {
       bleLog.info(
-        `QN: a stored weigh-in (${what}) is not exported: this session sent openScale's ` +
-          'profile, not the first user with ble.qn_user_key (the 18-byte 0x12 came after the ' +
-          'handshake), so it is not known whose it is (#463)',
+        unassigned
+          ? `QN: a stored weigh-in (${what}, assigned to no user) is not exported: this ` +
+              "session sent openScale's profile, not the first user with ble.qn_user_key (the " +
+              '18-byte 0x12 came after the handshake), and a stored weigh-in goes out only in a ' +
+              "connection in which the scale accepted the first user's profile (#463)"
+          : `QN: a stored weigh-in (${what}) is not exported: this session sent openScale's ` +
+              'profile, not the first user with ble.qn_user_key (the 18-byte 0x12 came after ' +
+              'the handshake), so it is not known whose it is (#463)',
       );
       return null;
     }
     if (this.visitReply?.ok !== true) {
       bleLog.info(
-        `QN: a stored weigh-in (${what}) is not exported: the scale did not accept the ` +
-          'profile for user slot 1 in this session, so it is not known whose it is (#463)',
+        unassigned
+          ? `QN: a stored weigh-in (${what}, assigned to no user) is not exported: the scale ` +
+              'did not accept the profile for user slot 1 in this session, and a stored ' +
+              'weigh-in goes out only in a connection in which it has (#463)'
+          : `QN: a stored weigh-in (${what}) is not exported: the scale did not accept the ` +
+              'profile for user slot 1 in this session, so it is not known whose it is (#463)',
       );
       return null;
     }
@@ -2183,8 +2203,8 @@ export class QnScaleAdapter
     this.storedMark = Math.max(this.storedMark, recordSeconds);
     this.storedEmitted.add(recordSeconds);
     bleLog.debug(
-      `QN: stored weigh-in ${what}, user slot 1, record ${data[4]} of ${data[3]}, ` +
-        'reported as history (#463)',
+      `QN: stored weigh-in ${what}, ${storedSlotLabel(slot)}, record ${data[4]} of ` +
+        `${data[3]}, reported as history (#463)`,
     );
     return {
       weight,
@@ -2319,9 +2339,9 @@ export class QnScaleAdapter
       return null;
     }
     bleLog.info(
-      `QN: a stored weigh-in (${what}, user slot ${data[5]}) is not exported: it came while ` +
-        'this connection held its own weigh-in for the stored ones, and one from the last 90 ' +
-        'seconds may be that weigh-in again (#463)',
+      `QN: a stored weigh-in (${what}, ${storedSlotLabel(data[5])}) is not exported: it came ` +
+        'while this connection held its own weigh-in for the stored ones, and one from the ' +
+        'last 90 seconds may be that weigh-in again (#463)',
     );
     return null;
   }
@@ -2364,7 +2384,7 @@ export class QnScaleAdapter
       return;
     }
     bleLog.debug(
-      `QN: stored weigh-in ${record.weight} kg at ${at}, user slot ${data[5]}, is ${age} s ` +
+      `QN: stored weigh-in ${record.weight} kg at ${at}, ${storedSlotLabel(data[5])}, is ${age} s ` +
         `older than this session (window ${MAX_STORED_RECORD_AGE_SEC} s), not read (#213 / #75)`,
     );
   }

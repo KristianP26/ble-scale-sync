@@ -64,6 +64,49 @@ const RECORD_461 = Buffer.from([
   0x00, 0x00, 0x00, 0xd1,
 ]);
 
+/*
+ * #463, the Physiq on 2026-10-20: public DEBUG logs posted 18:09Z (the 17:58
+ * session) and 19:53Z (the 19:39 session), image dev @ b958c53, byte for byte.
+ * Except FINAL_1020: the scale's body fat at [11..12] is zeroed and [14]
+ * recomputed, as for the other #463 frames in this file; nothing reads them.
+ * Both stored records are kept for no user (slot 0xf0) with no body fat of
+ * their own. The 17:58 session had the unit's advertisement (the bytes of
+ * ADVERT_1019); the 19:39 session had none.
+ */
+/** The 0x12 of both sessions, 18-byte es26m, [13] 04. */
+const INFO_1020 = Buffer.from([
+  0x12, 0x12, 0xff, 0x25, 0xe0, 0x16, 0x00, 0x05, 0xff, 0x13, 0x07, 0x16, 0x00, 0x04, 0x05, 0x9f,
+  0x32, 0x4c,
+]);
+/** 71.10 kg at 2026-10-20T17:58:08Z, no user, R50 4329 / R500 4303 (17:58:12.951). */
+const RECORD_1758 = Buffer.from([
+  0x23, 0x14, 0xff, 0x01, 0x01, 0xf0, 0x30, 0x68, 0x6a, 0x32, 0x1b, 0xc6, 0x10, 0xe9, 0x10, 0xcf,
+  0x00, 0x00, 0x00, 0x15,
+]);
+/** 72.60 kg at 2026-10-20T19:28:16Z, no user, R50 4303 / R500 4301 (19:39:52.648). */
+const RECORD_1928 = Buffer.from([
+  0x23, 0x14, 0xff, 0x01, 0x01, 0xf0, 0x50, 0x7d, 0x6a, 0x32, 0x1c, 0x5c, 0x10, 0xcf, 0x10, 0xcd,
+  0x00, 0x00, 0x00, 0xc5,
+]);
+/** Measuring (state 01), 72.55 kg, no resistance (19:39:52.257 and 53.185). */
+const MEASURING_1020 = Buffer.from([
+  0x10, 0x0f, 0xff, 0x01, 0x01, 0x1c, 0x57, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x93,
+]);
+/** Final of 19:39, 72.55 kg, R50 4317 / R500 4315; [11..12] zeroed (log: 00 77, [14] e3). */
+const FINAL_1020 = Buffer.from([
+  0x10, 0x0f, 0xff, 0x01, 0x02, 0x1c, 0x57, 0x10, 0xdd, 0x10, 0xdb, 0x00, 0x00, 0x00, 0x6c,
+]);
+/**
+ * The Physiq's advertisement of 2026-10-19 16:38 (#463), byte for byte the
+ * same at 2026-10-20 17:57:58.247: model 129, impedance scrambled.
+ */
+const ADVERT_1019 = {
+  id: 0xffff,
+  data: Buffer.from([
+    0x08, 0x14, 0x01, 0x00, 0x03, 0x25, 0xe0, 0x16, 0x00, 0x05, 0xff, 0x61, 0x08, 0x02, 0x00, 0x15,
+  ]),
+};
+
 /**
  * #283, the 0x23 its classic scale answered with, in the classic layout the
  * live weight of that session (61.70 kg).
@@ -4385,6 +4428,15 @@ describe('QN stored record and impedance (#461)', () => {
       0x12, 0x14, 0xff, 0x4e, 0xc7, 0x0e, 0x00, 0x07, 0xff, 0x14, 0x0f, 0x42, 0x00, 0x08, 0x05,
       0x03, 0xe0, 0x6f, 0x2b, 0x3d,
     ]);
+    /**
+     * The #461 "no stored weigh-ins" 0x24 and 0x25 and its refused profile,
+     * byte for byte from that log. The 0x24 and 0x25 after the 2026-10-20
+     * 19:39 record are these bytes too, as are those of the 10-13 record with
+     * their payload zeroed.
+     */
+    const EMPTY_24_461 = Buffer.from([0x24, 0x10, 0xff, ...new Array<number>(12).fill(0), 0x33]);
+    const EMPTY_25_461 = Buffer.from([0x25, 0x0f, 0xff, ...new Array<number>(12).fill(0), 0x33]);
+    const REFUSED_461 = Buffer.from([0xa1, 0x06, 0x02, 0x01, 0x00, 0xaa]);
 
     /** What a session has collected so far. */
     interface Collected {
@@ -4583,8 +4635,10 @@ describe('QN stored record and impedance (#461)', () => {
         expect(after.readings).toEqual([]);
       });
 
-      it('does not export a record the scale assigned to no user, and says so', async () => {
+      it("does not export #461's record with no user from a session without an accepted profile", async () => {
         // #461's record (slot 0xf0, 09:23:19Z) after its own 0x12, 401 s later.
+        // No ready frame, so no profile went out at all: the scale cannot have
+        // accepted one.
         const { readings, lines } = await session(
           keyed(),
           [INFO_461, RECORD_461],
@@ -4592,23 +4646,177 @@ describe('QN stored record and impedance (#461)', () => {
         );
         expect(readings).toEqual([]);
         expect(lines).toContain(
-          'QN: a stored weigh-in (71.65 kg at 2026-10-10T09:23:19.000Z) is not exported: the ' +
-            'scale did not assign it to a user (#463)',
+          'QN: a stored weigh-in (71.65 kg at 2026-10-10T09:23:19.000Z, assigned to no user) is ' +
+            'not exported: the scale did not accept the profile for user slot 1 in this ' +
+            'session, and a stored weigh-in goes out only in a connection in which it has (#463)',
         );
       });
 
-      it('gives a record with no user the same reason without ble.qn_user_key', async () => {
-        // Not "without ble.qn_user_key": the option would not export it either.
+      it('names ble.qn_user_key for a record with no user without the option', async () => {
+        // With the option it can go out (D072), so the line points at it.
         const { lines } = await session(
           makeAdapter(),
           [INFO_461, RECORD_461],
           '2026-10-10T09:30:00Z',
         );
         expect(lines).toContain(
-          'QN: a stored weigh-in (71.65 kg at 2026-10-10T09:23:19.000Z) is not exported: the ' +
-            'scale did not assign it to a user (#463)',
+          'QN: a stored weigh-in (71.65 kg at 2026-10-10T09:23:19.000Z, assigned to no user) is ' +
+            'not exported: without ble.qn_user_key ble-scale-sync does not export a weigh-in ' +
+            'this scale kept from before the connection (#463)',
         );
-        expect(lines.some((l) => l.includes('without ble.qn_user_key'))).toBe(false);
+      });
+
+      // #463, 2026-10-20 19:39 (D072): the scale kept the 19:28 weigh-in for no
+      // user, and every offline weigh-in of that day was such a record. The
+      // frames are the module's 2026-10-20 ones, with the acceptance 293 ms
+      // after the config request as in the log; the repeated 0x12 and the AE02
+      // challenge of that session are left out. The sessions carry the unit's
+      // advertisement (ADVERT_1019, which the 17:58 session had byte for byte),
+      // so the impedance does not depend on how a session without one is read.
+      describe('a weigh-in the scale kept for no user (0xf0)', () => {
+        /** onConnected in the 19:39 log; the record is 694 s older. */
+        const STARTED_1020 = '2026-10-20T19:39:50.232Z';
+        const SESSION_1020: Step[] = [INFO_1020, READY_461, CONFIG_REQ_461, 193, VISIT_OK_463];
+        /** RECORD_1928 as the reading it must become: R50 4303 unscrambled. */
+        const NO_USER: ScaleReading = {
+          weight: 72.6,
+          impedance: 502,
+          timestamp: new Date('2026-10-20T19:28:16.000Z'),
+          fromMemory: true,
+        };
+        const run1020 = (adapter: QnScaleAdapter, steps: Step[], now = STARTED_1020) =>
+          session(adapter, steps, now, ADVERT_1019);
+
+        it('reports the weigh-in the scale kept for no user as history, next to the live one', async () => {
+          const adapter = keyed();
+          const { readings, lines, infoLines } = await run1020(adapter, [
+            ...SESSION_1020,
+            MEASURING_1020,
+            RECORD_1928,
+            EMPTY_24_461,
+            EMPTY_25_461,
+            MEASURING_1020,
+            FINAL_1020,
+          ]);
+          expect(readings).toEqual([NO_USER, { weight: 72.55, impedance: 501 }]);
+          // No slot to name: the runtime attributes it by its weight (D027).
+          expect('userIndex' in readings[0]).toBe(false);
+          expect(adapter.isFinal(readings[1])).toBe(true);
+          expect(adapter.completionHoldMs).toBeUndefined();
+          expect(lines).toContain(
+            'QN: stored weigh-in 72.6 kg at 2026-10-20T19:28:16.000Z, assigned to no user, ' +
+              'record 1 of 1, reported as history (#463)',
+          );
+          expect(infoLines.some((l) => l.includes('is not exported'))).toBe(false);
+          expect(adapter.dedupMark()).toBe(845839696);
+        });
+
+        it.each([
+          [
+            'without ble.qn_user_key',
+            makeAdapter,
+            [INFO_1020, READY_461, CONFIG_REQ_461, 193, REFUSED_461, RECORD_1928],
+            'without ble.qn_user_key ble-scale-sync does not export a weigh-in this scale kept ' +
+              'from before the connection (#463)',
+          ],
+          [
+            'when the scale refused the profile',
+            keyed,
+            [INFO_1020, READY_461, CONFIG_REQ_461, 193, REFUSED_461, RECORD_1928],
+            'the scale did not accept the profile for user slot 1 in this session, and a ' +
+              'stored weigh-in goes out only in a connection in which it has (#463)',
+          ],
+          [
+            "after openScale's profile went out (the 0x12 after the ready frame)",
+            keyed,
+            [READY_461, INFO_1020, CONFIG_REQ_461, 193, VISIT_OK_463, RECORD_1928],
+            "this session sent openScale's profile, not the first user with ble.qn_user_key " +
+              '(the 18-byte 0x12 came after the handshake), and a stored weigh-in goes out only ' +
+              "in a connection in which the scale accepted the first user's profile (#463)",
+          ],
+        ] as const)('does not export it, and says why, %s', async (_label, make, steps, why) => {
+          const { readings, infoLines } = await run1020(make(), [...steps]);
+          expect(readings).toEqual([]);
+          const line =
+            'QN: a stored weigh-in (72.6 kg at 2026-10-20T19:28:16.000Z, assigned to no user) ' +
+            `is not exported: ${why}`;
+          expect(infoLines.filter((l) => l === line)).toHaveLength(1);
+        });
+
+        it('reports a weigh-in kept for no user once: not in the next session, nor after a restart that kept the mark', async () => {
+          const adapter = keyed();
+          const first = await run1020(adapter, [...SESSION_1020, RECORD_1928]);
+          expect(first.readings).toEqual([NO_USER]);
+          expect(adapter.dedupMark()).toBe(845839696);
+          const already =
+            'QN: stored weigh-in 72.6 kg at 2026-10-20T19:28:16.000Z was already reported (#463)';
+
+          const next = await run1020(
+            adapter,
+            [...SESSION_1020, RECORD_1928],
+            '2026-10-20T19:50:00Z',
+          );
+          expect(next.readings).toEqual([]);
+          expect(next.lines).toContain(already);
+
+          const restarted = keyed();
+          restarted.restoreDedupMark(845839696);
+          const after = await run1020(
+            restarted,
+            [...SESSION_1020, RECORD_1928],
+            '2026-10-20T19:50:00Z',
+          );
+          expect(after.readings).toEqual([]);
+          expect(after.lines).toContain(already);
+        });
+
+        // The 17:58 session (onConnected 17:58:11.272), and the same record
+        // handed over again at a time chosen: no log shows that.
+        it("takes the 17:58 weigh-in with no user as that session's own, and drops it as that one when handed over again", async () => {
+          const adapter = keyed();
+          const first = await run1020(
+            adapter,
+            [...SESSION_1020, RECORD_1758],
+            '2026-10-20T17:58:11.272Z',
+          );
+          expect(first.readings).toEqual([{ weight: 71.1, impedance: 504 }]);
+          const again = await run1020(
+            adapter,
+            [...SESSION_1020, RECORD_1758],
+            '2026-10-20T18:05:00Z',
+          );
+          expect(again.readings).toEqual([]);
+          expect(again.lines.some((l) => l.includes('is the live result reported at'))).toBe(true);
+        });
+
+        it('does not read one from more than a year ago', async () => {
+          const { readings, lines } = await run1020(
+            keyed(),
+            [...SESSION_1020, RECORD_1928],
+            '2027-10-21T00:00:00Z',
+          );
+          expect(readings).toEqual([]);
+          expect(lines).toContain(
+            'QN: stored weigh-in 72.6 kg at 2026-10-20T19:28:16.000Z is not from the past year, ' +
+              'dropped (#463)',
+          );
+        });
+
+        // RECORD_1928 with its slot [5] set to 2, [19] recomputed: no real
+        // record of slot 2 exists.
+        it.each([
+          ['with ble.qn_user_key', keyed],
+          ['without it', makeAdapter],
+        ] as const)('still drops a record of another user slot, %s', async (_label, make) => {
+          const slot2 = derive(RECORD_1928, { 5: 2 });
+          const { readings, infoLines } = await run1020(make(), [...SESSION_1020, slot2]);
+          expect(readings).toEqual([]);
+          expect(infoLines).toEqual([
+            'QN: a stored weigh-in (72.6 kg at 2026-10-20T19:28:16.000Z) is not exported: the ' +
+              'scale assigned it to its user slot 2, and ble-scale-sync sends the profile of ' +
+              'slot 1 (#463)',
+          ]);
+        });
       });
 
       it('does not export a record of another user slot', async () => {
@@ -4839,28 +5047,6 @@ describe('QN stored record and impedance (#461)', () => {
         const FINAL_1019 = Buffer.from([
           0x10, 0x0f, 0xff, 0x01, 0x02, 0x1b, 0xcb, 0x10, 0xdb, 0x10, 0xd9, 0x00, 0x00, 0x00, 0xdb,
         ]);
-        const ADVERT_1019 = {
-          id: 0xffff,
-          data: Buffer.from([
-            0x08, 0x14, 0x01, 0x00, 0x03, 0x25, 0xe0, 0x16, 0x00, 0x05, 0xff, 0x61, 0x08, 0x02,
-            0x00, 0x15,
-          ]),
-        };
-        const EMPTY_24_461 = Buffer.from([
-          0x24,
-          0x10,
-          0xff,
-          ...new Array<number>(12).fill(0),
-          0x33,
-        ]);
-        const EMPTY_25_461 = Buffer.from([
-          0x25,
-          0x0f,
-          0xff,
-          ...new Array<number>(12).fill(0),
-          0x33,
-        ]);
-        const REFUSED_461 = Buffer.from([0xa1, 0x06, 0x02, 0x01, 0x00, 0xaa]);
         /** onSessionStart in the log. */
         const STARTED_1019 = '2026-10-19T16:38:13.480Z';
         /**
@@ -5030,6 +5216,58 @@ describe('QN stored record and impedance (#461)', () => {
           );
           expect(lines.filter((l) => l.includes('the session ends on the weigh-in held'))).toEqual([
             ends('the scale has answered the stored-record query'),
+          ]);
+        });
+
+        // BEFORE_QUERY (2026-10-19 frames) with the 2026-10-20 19:28 record,
+        // at the 19:39 session's time: real frames in an order and at a time
+        // no log shows.
+        it('ends it on the 0x25 of a last record kept for no user, with that record as history', async () => {
+          const adapter = keyed();
+          const { readings } = await run(
+            adapter,
+            [...BEFORE_QUERY, RECORD_1928, EMPTY_24_461, EMPTY_25_461],
+            '2026-10-20T19:39:50.232Z',
+          );
+          expect(readings).toEqual([
+            HELD,
+            {
+              weight: 72.6,
+              impedance: 502,
+              timestamp: new Date('2026-10-20T19:28:16.000Z'),
+              fromMemory: true,
+            },
+            HELD,
+          ]);
+          expect(adapter.isFinal(readings[2])).toBe(true);
+        });
+
+        // The 19:39 final held, and the 17:58 record (32 s old at the chosen
+        // time) coming during the hold: an order no log shows.
+        it('names a record kept for no user as such when it comes during the hold', async () => {
+          const { readings, infoLines } = await run(
+            keyed(),
+            [
+              INFO_1020,
+              READY_461,
+              CONFIG_REQ_461,
+              193,
+              VISIT_OK_463,
+              FINAL_1020,
+              RECORD_1758,
+              EMPTY_24_461,
+              EMPTY_25_461,
+            ],
+            '2026-10-20T17:58:40Z',
+          );
+          expect(readings).toEqual([
+            { weight: 72.55, impedance: 501 },
+            { weight: 72.55, impedance: 501 },
+          ]);
+          expect(infoLines).toEqual([
+            'QN: a stored weigh-in (71.1 kg at 2026-10-20T17:58:08.000Z, assigned to no user) is ' +
+              'not exported: it came while this connection held its own weigh-in for the stored ' +
+              'ones, and one from the last 90 seconds may be that weigh-in again (#463)',
           ]);
         });
 

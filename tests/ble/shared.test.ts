@@ -3181,6 +3181,125 @@ describe('QN 18-byte stored weigh-in through waitForRawReading (#463)', () => {
   });
 });
 
+// ─── QN 18-byte stored weigh-in kept for no user (#463, D072) ──────────────
+
+// The real adapter through the real session. Frames and their spacing are
+// from the public #463 DEBUG log of 2026-10-20 19:39 (image dev @ b958c53),
+// byte for byte, except the final live frame, whose body fat [11..12] is
+// zeroed and checksum recomputed. The repeated 0x12 (50.698, 50.844, 51.283)
+// and the AE02 challenge and echo (51.477, 51.574) are left out, so a gap
+// spans them. That session had no advertisement; the unit's advertisement of
+// 17:57:58 that day is passed, so the impedance does not depend on how a
+// session without one is read.
+describe('QN 18-byte stored weigh-in with no user through waitForRawReading (#463)', () => {
+  const hex = (h: string): Buffer => Buffer.from(h.replace(/ /g, ''), 'hex');
+  const INFO = hex('12 12 ff 25 e0 16 00 05 ff 13 07 16 00 04 05 9f 32 4c');
+  const READY = hex('14 0b ff 01 00 01 09 03 00 00 2c');
+  const CONFIG_REQ = hex('21 05 ff 01 26');
+  const VISIT_OK = hex('a1 06 02 01 01 ab');
+  const MEASURING = hex('10 0f ff 01 01 1c 57 00 00 00 00 00 00 00 93');
+  const RECORD = hex('23 14 ff 01 01 f0 50 7d 6a 32 1c 5c 10 cf 10 cd 00 00 00 c5');
+  const EMPTY_24 = hex('24 10 ff' + ' 00'.repeat(12) + ' 33');
+  const EMPTY_25 = hex('25 0f ff' + ' 00'.repeat(12) + ' 33');
+  const FINAL = hex('10 0f ff 01 02 1c 57 10 dd 10 db 00 00 00 6c');
+  const ADVERT = { id: 0xffff, data: hex('08 14 01 00 03 25 e0 16 00 05 ff 61 08 02 00 15') };
+  const ADDRESS = 'FF050016E025';
+  /** onConnected in the log. */
+  const START = '2026-10-20T19:39:50.232Z';
+  /** The record, 72.60 kg at 19:28:16Z kept for no user, as history. */
+  const NO_USER = {
+    weight: 72.6,
+    impedance: 502,
+    timestamp: new Date('2026-10-20T19:28:16.000Z'),
+    fromMemory: true,
+  };
+
+  async function startSession() {
+    const notify = createMockChar();
+    const write = createMockChar();
+    const device = createMockDevice();
+    const { charMap } = createCharMap([
+      [NOTIFY_UUID, notify],
+      [WRITE_UUID, write],
+    ]);
+    const adapter = new QnScaleAdapter();
+    adapter.configure({ qnUserKey: 1000 });
+    const promise = waitForRawReading(
+      charMap,
+      device,
+      adapter,
+      PROFILE,
+      ADDRESS,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      ADVERT,
+    );
+    let settled = false;
+    void promise.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await vi.waitFor(() => expect(notify.subscribeCalled).toBe(true));
+    await vi.advanceTimersByTimeAsync(0);
+    return { notify, device, promise, isSettled: () => settled };
+  }
+
+  /** The log up to the 0x25 after the record. */
+  async function upToTheAnswer(s: Awaited<ReturnType<typeof startSession>>) {
+    const steps: [number, Buffer][] = [
+      [157, INFO],
+      [990, READY],
+      [244, CONFIG_REQ],
+      [293, VISIT_OK],
+      [341, MEASURING],
+      [391, RECORD],
+      [147, EMPTY_24],
+      [146, EMPTY_25],
+    ];
+    for (const [gapMs, frame] of steps) {
+      await vi.advanceTimersByTimeAsync(gapMs);
+      s.notify.triggerData(frame);
+    }
+  }
+
+  it('hands it over as history next to the live weigh-in', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const s = await startSession();
+      await upToTheAnswer(s);
+      await vi.advanceTimersByTimeAsync(244);
+      s.notify.triggerData(MEASURING);
+      await vi.advanceTimersByTimeAsync(877);
+      expect(s.isSettled(), 'a stored weigh-in does not end the session').toBe(false);
+      s.notify.triggerData(FINAL);
+      await vi.advanceTimersByTimeAsync(0);
+      const raw = await s.promise;
+      expect(raw.reading).toEqual({ weight: 72.55, impedance: 501 });
+      expect(raw.history).toEqual([NO_USER]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('hands it over on the disconnect when no live weigh-in follows', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(START));
+      const s = await startSession();
+      await upToTheAnswer(s);
+      await vi.advanceTimersByTimeAsync(200);
+      s.device.triggerDisconnect();
+      await expect(s.promise).resolves.toMatchObject({ reading: NO_USER });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 // ─── QN 18-byte weigh-in before the stored-record answer (#463, D065) ──────
 
 // The real adapter through the real session. Frames and their spacing up to
