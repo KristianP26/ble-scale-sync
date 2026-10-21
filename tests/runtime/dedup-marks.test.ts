@@ -1,7 +1,21 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+
+// A read failing with something other than ENOENT (EIO on an SD card) cannot be
+// produced on demand, so it is switched on for the marks file only.
+const readFailure = vi.hoisted(() => ({ code: '' }));
+vi.mock(import('node:fs'), async (importOriginal) => {
+  const mod = await importOriginal();
+  const readFileSync = ((...args: Parameters<typeof mod.readFileSync>) => {
+    if (readFailure.code && String(args[0]).endsWith('.scale-dedup-marks.json')) {
+      throw Object.assign(new Error(`${readFailure.code}: simulated`), { code: readFailure.code });
+    }
+    return mod.readFileSync(...args);
+  }) as typeof mod.readFileSync;
+  return { ...mod, readFileSync, default: { ...mod, readFileSync } };
+});
 
 import {
   DEDUP_MARKS_FILENAME,
@@ -46,7 +60,9 @@ describe('adapter de-duplication marks (D-15)', () => {
   });
 
   afterEach(() => {
+    readFailure.code = '';
     fs.rmSync(dir, { recursive: true, force: true });
+    vi.restoreAllMocks();
   });
 
   it('keeps a restarted process from exporting the same Salter weigh-in again', () => {
@@ -76,6 +92,24 @@ describe('adapter de-duplication marks (D-15)', () => {
     session(a, 20);
     persistDedupMark(file, a as ScaleAdapter);
     expect(JSON.parse(fs.readFileSync(file, 'utf-8'))).toEqual({ Other: 7, Salter: STAMP });
+  });
+
+  it("does not write over a file it cannot read, which would drop the other adapters' marks", () => {
+    fs.writeFileSync(file, JSON.stringify({ Other: 7 }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const a = new SalterAdapter();
+    session(a, 20);
+
+    readFailure.code = 'EIO';
+    persistDedupMark(file, a as ScaleAdapter);
+    persistDedupMark(file, a as ScaleAdapter);
+    readFailure.code = '';
+
+    expect(JSON.parse(fs.readFileSync(file, 'utf-8'))).toEqual({ Other: 7 });
+    // Once: a file that stays unreadable would otherwise warn on every reading.
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain("Could not save Salter's de-duplication mark");
+    expect(String(warn.mock.calls[0][0])).toContain('EIO');
   });
 
   it('writes nothing for an adapter that keeps no mark', () => {
