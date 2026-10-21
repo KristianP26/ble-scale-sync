@@ -80,4 +80,24 @@ describe('runtimeStep', () => {
       retry_failed_exports: true,
     });
   });
+
+  // The order is the order of the keys in a freshly written config.yaml.
+  it('writes the unasked keys first, in schema order, on a fresh setup', async () => {
+    const { prompts } = scriptedPrompts([]);
+    const ctx = ctxWith(prompts, undefined, false);
+
+    await runtimeStep.run(ctx);
+
+    expect(Object.keys(ctx.config.runtime!)).toEqual([
+      'watchdog_max_consecutive_failures',
+      'watch_config',
+      'idle_rescan_delay',
+      'no_reading_rescan_delay',
+      'retry_failed_exports',
+      'continuous_mode',
+      'scan_cooldown',
+      'dry_run',
+      'debug',
+    ]);
+  });
 });

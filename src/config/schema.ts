@@ -538,9 +538,6 @@ export const RuntimeSchema = z.object({
    * exporters that can backdate receive (D027). A scale that does not keep its
    * weigh-ins can lose one made during the wait.
    *
-   * A `.default()`, not `.optional()`: applyEnvOverrides rebuilds runtime from
-   * a fixed list, and only a required key makes tsc point at it.
-   *
    * node-ble only: nothing else tags 'no-reading'. Must stay far below
    * 2^31 - 1 ms, above which setTimeout fires after 1 ms.
    */

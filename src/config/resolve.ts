@@ -1,15 +1,16 @@
 import type { AdapterRuntimeConfig, ScaleAuth, UserProfile } from '../interfaces/scale-adapter.js';
 import type { BleHandlerName } from '../ble/types.js';
-import type {
-  AppConfig,
-  UserConfig,
-  ScaleConfig,
-  ScaleDisplayUnit,
-  ExporterEntry,
-  WeightUnit,
-  MqttProxyConfig,
-  EsphomeProxyConfig,
-  HaBluetoothConfig,
+import {
+  RuntimeSchema,
+  type AppConfig,
+  type UserConfig,
+  type ScaleConfig,
+  type ScaleDisplayUnit,
+  type ExporterEntry,
+  type WeightUnit,
+  type MqttProxyConfig,
+  type EsphomeProxyConfig,
+  type HaBluetoothConfig,
 } from './schema.js';
 
 // --- Scale display unit ---
@@ -152,17 +153,18 @@ export interface ResolvedRuntimeConfig {
 export function resolveRuntimeConfig(config: AppConfig): ResolvedRuntimeConfig {
   const user = config.users[0];
   const profile = resolveUserProfile(user, config.scale);
+  const runtime = { ...RuntimeSchema.parse({}), ...config.runtime };
 
   return {
     profile,
     scaleMac: config.ble?.scale_mac ?? undefined,
     weightUnit: config.scale.weight_unit,
-    dryRun: config.runtime?.dry_run ?? false,
-    continuousMode: config.runtime?.continuous_mode ?? false,
-    scanCooldownSec: config.runtime?.scan_cooldown ?? 30,
-    retryFailedExports: config.runtime?.retry_failed_exports ?? true,
-    watchdogMaxFailures: config.runtime?.watchdog_max_consecutive_failures ?? 10,
-    watchConfig: config.runtime?.watch_config ?? true,
+    dryRun: runtime.dry_run,
+    continuousMode: runtime.continuous_mode,
+    scanCooldownSec: runtime.scan_cooldown,
+    retryFailedExports: runtime.retry_failed_exports,
+    watchdogMaxFailures: runtime.watchdog_max_consecutive_failures,
+    watchConfig: runtime.watch_config,
     bleHandler: config.ble?.handler ?? 'auto',
     bleAdapter: config.ble?.adapter ?? undefined,
     adapterPrivacy: config.ble?.adapter_privacy === true,

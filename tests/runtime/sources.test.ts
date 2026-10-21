@@ -526,9 +526,10 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
   });
 });
 
-// No test runs src/run.ts, so the wiring of the bundle into the loop is pinned
-// by its text, the way tests/addon-run-sh.test.ts pins run.sh. Listed one by
-// one, a new hook was dropped by forgetting a line there (#475).
+// tests/cli/run.test.ts runs src/run.ts only down the single-shot path, so the
+// wiring of the bundle into the continuous loop is pinned by its text, the way
+// tests/addon-run-sh.test.ts pins run.sh. Listed one by one, a new hook was
+// dropped by forgetting a line there (#475).
 describe('src/run.ts wiring (#475)', () => {
   const RUN_TS = readFileSync('src/run.ts', 'utf8').replace(/\r\n/g, '\n');
 

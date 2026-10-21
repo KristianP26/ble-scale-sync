@@ -86,7 +86,7 @@ function maskSensitive(key: string, val: unknown): string {
  * (E-18). Only the startup banner and the startup healthchecks keep the old
  * count, and neither changes what is exported.
  */
-const RESTART_REQUIRED_KEYS = [
+export const RESTART_REQUIRED_KEYS = [
   'ble.handler',
   'ble.adapter',
   'ble.noble_driver',

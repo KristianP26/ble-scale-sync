@@ -11,6 +11,7 @@ import {
   StaleLinkError,
 } from '../ble/types.js';
 import { createLogger } from '../logger.js';
+import { RuntimeSchema } from '../config/schema.js';
 import { PollReadingSource } from './poll-source.js';
 import type { ReadingSource } from './loop.js';
 import type { AppContext } from './context.js';
@@ -27,11 +28,8 @@ const log = createLogger('Sync');
  */
 const DEFAULT_PROXY_LIVENESS_MIN = 30;
 
-/** Fallback for `runtime.idle_rescan_delay` when the whole runtime block is absent. */
-const DEFAULT_IDLE_RESCAN_DELAY_SEC = 5;
-
-/** Fallback for `runtime.no_reading_rescan_delay`: no floor, the backoff as before. */
-const DEFAULT_NO_READING_RESCAN_DELAY_SEC = 0;
+/** The schema's defaults, for a config without a runtime block. */
+const RUNTIME_DEFAULTS = RuntimeSchema.parse({});
 
 export interface ReadingSourceBundle {
   source: ReadingSource;
@@ -172,7 +170,7 @@ export async function buildReadingSource(
     // same way scan_cooldown is read in onSuccess below.
     failureDelayMs: (err) =>
       bleFailureKind(err) === 'idle'
-        ? (ctx.config.runtime?.idle_rescan_delay ?? DEFAULT_IDLE_RESCAN_DELAY_SEC) * 1000
+        ? (ctx.config.runtime?.idle_rescan_delay ?? RUNTIME_DEFAULTS.idle_rescan_delay) * 1000
         : undefined,
     // A session that connected, heard the scale and then went quiet until its
     // idle timeout ('no-reading', D041) waits at least
@@ -190,7 +188,7 @@ export async function buildReadingSource(
       if (bleFailureKind(err) !== 'no-reading') return undefined;
       if (!(err instanceof SessionTimeoutError) || err.reason !== 'idle') return undefined;
       const sec =
-        ctx.config.runtime?.no_reading_rescan_delay ?? DEFAULT_NO_READING_RESCAN_DELAY_SEC;
+        ctx.config.runtime?.no_reading_rescan_delay ?? RUNTIME_DEFAULTS.no_reading_rescan_delay;
       return sec > 0 ? { ms: sec * 1000, label: 'runtime.no_reading_rescan_delay' } : undefined;
     },
     onFailure: (err) => {

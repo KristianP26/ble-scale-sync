@@ -4,9 +4,9 @@
  * The one bin this package ships (#365).
  *
  * Dispatches on the first positional argument and delegates to the module that
- * already implements that command. Every delegate is a self-executing top-level
- * script, exactly as `npm run <script>` invokes it through tsx, so both shapes
- * stay alive with one implementation each.
+ * already implements that command. Every delegate but the run path is a
+ * self-executing top-level script, exactly as `npm run <script>` invokes it
+ * through tsx, so both shapes stay alive with one implementation each.
  *
  * Nothing but two side-effect-free local modules is imported at the top on
  * purpose. The run path (./run.js) builds the scale adapter registry, the exporter
@@ -29,7 +29,7 @@ const pkg = createRequire(import.meta.url)('../package.json') as { version: stri
 async function runSubcommand(command: Subcommand): Promise<void> {
   switch (command) {
     case 'start':
-      await import('./run.js');
+      await (await import('./run.js')).run(process.argv.slice(2));
       return;
     case 'setup':
       await import('./wizard/index.js');
@@ -57,7 +57,7 @@ async function main(): Promise<void> {
 
   switch (dispatch.kind) {
     case 'run':
-      await import('./run.js');
+      await (await import('./run.js')).run(process.argv.slice(2));
       return;
 
     case 'help':
@@ -82,8 +82,9 @@ async function main(): Promise<void> {
       process.argv.splice(2, 1);
       // Importing a delegate runs it, and the import settles when module
       // evaluation finishes, not when the command does: the async entries fire
-      // main() detached with their own .catch. Nothing may follow this await,
-      // and nothing here may call process.exit().
+      // main() detached with their own .catch. run() settles when the app
+      // stops. Nothing may follow this await, and nothing here may call
+      // process.exit().
       await runSubcommand(dispatch.command);
       return;
   }

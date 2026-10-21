@@ -1,6 +1,6 @@
 import { dirname } from 'node:path';
 import { config as dotenvConfig } from 'dotenv';
-import type { AppConfig, ExporterEntry } from './schema.js';
+import { RuntimeSchema, type AppConfig, type ExporterEntry } from './schema.js';
 import { defaultEnvPath } from './paths.js';
 import { parseBleAdapterEnv } from './env-overrides.js';
 import { loadConfig as loadEnvVarConfig } from '../validate-env.js';
@@ -189,17 +189,13 @@ export function loadEnvConfig(): AppConfig {
     ],
     global_exporters: globalExporters,
     runtime: {
+      ...RuntimeSchema.parse({}),
       continuous_mode: envConfig.continuousMode,
       scan_cooldown: envConfig.scanCooldownSec,
       dry_run: envConfig.dryRun,
       // Same TRUE words as the logger and the yaml override, so DEBUG=1 does
       // not mean debug logs on but runtime.debug off.
       debug: ['true', 'yes', 'on', '1'].includes((process.env.DEBUG ?? '').trim().toLowerCase()),
-      watchdog_max_consecutive_failures: 10,
-      watch_config: true,
-      idle_rescan_delay: 5,
-      no_reading_rescan_delay: 0,
-      retry_failed_exports: true,
     },
     update_check: true,
   };
