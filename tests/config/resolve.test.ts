@@ -22,13 +22,19 @@ const USER: UserConfig = {
   last_known_weight: null,
 };
 
-const SCALE_CM: ScaleConfig = { weight_unit: 'kg', height_unit: 'cm' };
-const SCALE_IN: ScaleConfig = { weight_unit: 'lbs', height_unit: 'in' };
+const SCALE_CM: ScaleConfig = { weight_unit: 'kg', height_unit: 'cm', display_unit: 'weight_unit' };
+const SCALE_IN: ScaleConfig = {
+  weight_unit: 'lbs',
+  height_unit: 'in',
+  display_unit: 'weight_unit',
+};
 
 const BASE_CONFIG: AppConfig = {
   version: 1,
   scale: SCALE_CM,
   unknown_user: 'nearest',
+  out_of_range: 'warn',
+  update_check: true,
   users: [USER],
   global_exporters: [{ type: 'garmin' }, { type: 'mqtt', broker_url: 'mqtt://host' }],
   runtime: {
@@ -36,8 +42,14 @@ const BASE_CONFIG: AppConfig = {
     scan_cooldown: 60,
     dry_run: false,
     debug: false,
+    watchdog_max_consecutive_failures: 10,
+    watch_config: true,
+    idle_rescan_delay: 5,
+    no_reading_rescan_delay: 0,
+    retry_failed_exports: true,
   },
   ble: {
+    handler: 'auto',
     scale_mac: 'FF:03:00:13:A1:04',
   },
 };
@@ -190,6 +202,9 @@ describe('resolveRuntimeConfig', () => {
           broker_url: 'mqtt://localhost:1883',
           device_id: 'esp32-test',
           topic_prefix: 'ble-proxy',
+          embedded_broker_port: 1883,
+          embedded_broker_bind: '0.0.0.0',
+          auto_connect: true,
         },
       },
     };
@@ -199,13 +214,16 @@ describe('resolveRuntimeConfig', () => {
       broker_url: 'mqtt://localhost:1883',
       device_id: 'esp32-test',
       topic_prefix: 'ble-proxy',
+      embedded_broker_port: 1883,
+      embedded_broker_bind: '0.0.0.0',
+      auto_connect: true,
     });
   });
 
   it('extracts bleAdapter from ble config', () => {
     const config = {
       ...BASE_CONFIG,
-      ble: { ...BASE_CONFIG.ble, adapter: 'hci1' },
+      ble: { ...BASE_CONFIG.ble!, adapter: 'hci1' },
     };
     const result = resolveRuntimeConfig(config);
     expect(result.bleAdapter).toBe('hci1');

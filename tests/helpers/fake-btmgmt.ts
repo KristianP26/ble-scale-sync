@@ -70,7 +70,7 @@ function settings(c: FakeController): string {
 }
 
 interface Result {
-  err: (Error & Record<string, unknown>) | null;
+  err: Error | null;
   stdout: string;
 }
 

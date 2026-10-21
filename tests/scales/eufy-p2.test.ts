@@ -12,7 +12,11 @@ import {
 import { xorChecksum } from '../../src/scales/body-comp-helpers.js';
 import { bleLog } from '../../src/ble/types.js';
 import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
-import { defaultProfile, assertPayloadRanges } from '../helpers/scale-test-utils.js';
+import {
+  defaultProfile,
+  assertPayloadRanges,
+  makeConnectionContext,
+} from '../helpers/scale-test-utils.js';
 
 const TEST_MAC = 'CF:E6:03:1D:09:F7';
 const TEST_MAC_FLAT = 'CFE6031D09F7';
@@ -250,7 +254,7 @@ describe('EufyP2Adapter', () => {
 
     // First session: authenticate fully so adapter holds a live EufyAuthHandler.
     const writes: Buffer[] = [];
-    const ctx = {
+    const ctx = makeConnectionContext({
       write: async (_uuid: string, data: Buffer | number[]) => {
         writes.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
       },
@@ -258,7 +262,7 @@ describe('EufyP2Adapter', () => {
       subscribe: async () => {},
       profile: defaultProfile(),
       deviceAddress: TEST_MAC_FLAT,
-    };
+    });
     await adapter.onConnected(ctx);
     const c1 = makeC1Frames(TEST_MAC, 'DEVICEUUID12345');
     for (const f of c1) adapter.parseCharNotification!('fff4', f);
@@ -299,13 +303,13 @@ describe('EufyP2Adapter', () => {
 
     it('re-arms stability per connection', async () => {
       const adapter = new EufyP2Adapter();
-      const ctx = {
+      const ctx = makeConnectionContext({
         write: async () => {},
         read: async () => Buffer.alloc(0),
         subscribe: async () => {},
         profile: defaultProfile(),
         deviceAddress: '',
-      };
+      });
 
       adapter.parseNotification(makeNotification(80, 500));
       const stable = adapter.parseNotification(makeNotification(80, 500))!;

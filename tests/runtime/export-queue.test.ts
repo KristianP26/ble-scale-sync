@@ -532,7 +532,7 @@ describe('export retry queue: two exporters of one type (D029) and shutdown (E-1
 
     await flushQueue(file, lookupIn(garmin, fileExp), NOW, ac.signal);
 
-    const lines = warn.mock.calls.map((c) => c.map(String).join(' ')).join(' | ');
+    const lines = warn.mock.calls.map((c: unknown[]) => c.map(String).join(' ')).join(' | ');
     expect(lines).toMatch(
       /Shutdown requested while retrying a queued garmin export for 'dad' measured at 2026-09-09T07:00:00\.000Z/,
     );
@@ -553,7 +553,7 @@ describe('export retry queue: the log says what waits and when (#460)', () => {
   let info: ReturnType<typeof vi.spyOn>;
   let warn: ReturnType<typeof vi.spyOn>;
   const linesOf = (spy: ReturnType<typeof vi.spyOn>): string[] =>
-    spy.mock.calls.map((c) => c.map(String).join(' '));
+    spy.mock.calls.map((c: unknown[]) => c.map(String).join(' '));
 
   // The reporter's three entries after their first retries.
   const A = '2026-10-09T11:10:03.643Z';

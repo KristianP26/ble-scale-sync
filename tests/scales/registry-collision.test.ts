@@ -386,7 +386,9 @@ describe('AC 27 advertisements (#458, #462, #466)', () => {
 const byName = (name: string) => {
   const a = adapters.find((x) => x.name === name);
   if (!a) throw new Error(`adapter "${name}" not registered`);
-  return a;
+  const { charNotifyUuid, charWriteUuid } = a;
+  if (!charNotifyUuid || !charWriteUuid) throw new Error(`adapter "${name}" has no GATT wiring`);
+  return { charNotifyUuid, charWriteUuid };
 };
 const digoo = byName('Digoo');
 const hoffen = byName('Hoffen BS-8107');

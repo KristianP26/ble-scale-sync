@@ -84,7 +84,7 @@ describe('parseSigWeightMeasurement (0x2A9D)', () => {
 
   it('keeps the BF720 cached weight when a 0xFFFF frame follows a real one (C-10)', () => {
     const a = new BeurerBf720Adapter();
-    a.onSessionStart?.('E7DB49F186DE');
+    a.onSessionStart?.();
     a.parseCharNotification!(uuid16(0x2a9d), WSS_FRAME);
     const sentinel = Buffer.from(WSS_FRAME);
     sentinel.writeUInt16LE(0xffff, 1);
@@ -214,7 +214,7 @@ describe('cross-check: the adapter and the shared decoder agree', () => {
    */
   it('BeurerBf720Adapter reports the weight the shared decoder returns', () => {
     const a = new BeurerBf720Adapter();
-    a.onSessionStart?.('E7DB49F186DE');
+    a.onSessionStart?.();
     expect(a.parseCharNotification!(uuid16(0x2a9d), WSS_FRAME)).toBeNull();
 
     // Body composition frame with no weight field: the weight can only have

@@ -115,7 +115,7 @@ describe('library behaviour the D066 reason subscription rests on', () => {
   function makeObject() {
     const signals = new EventEmitter();
     const bus = {
-      _addMatch: vi.fn(async () => undefined),
+      _addMatch: vi.fn(async (_rule: string) => undefined),
       _removeMatch: vi.fn(async () => undefined),
       _signals: signals,
       _nameOwners: { 'org.bluez': ':1.7' } as Record<string, string>,

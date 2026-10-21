@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { Mock } from 'vitest';
 import {
   waitForReading,
   waitForRawReading,
@@ -66,6 +67,7 @@ const NOTIFY_UUID = '0000fff100001000800000805f9b34fb';
 const WRITE_UUID = '0000fff200001000800000805f9b34fb';
 
 interface MockBleChar extends BleChar {
+  write: Mock<BleChar['write']>;
   triggerData(data: Buffer): void;
   subscribeCalled: boolean;
   writtenData: Buffer[];
@@ -129,7 +131,11 @@ function createCharMap(entries: [string, MockBleChar][]): {
  * Create a minimal legacy-mode adapter (no onConnected, no characteristics).
  * Uses charNotifyUuid + charWriteUuid + unlockCommand.
  */
-function createLegacyAdapter(overrides: Partial<ScaleAdapter> = {}): ScaleAdapter {
+// A passive (preferPassive: true) override would need parseBroadcast or
+// parseServiceData too; a legacy GATT adapter never is one.
+type LegacyOverrides = Partial<ScaleAdapter> & { preferPassive?: false };
+
+function createLegacyAdapter(overrides: LegacyOverrides = {}): ScaleAdapter {
   return {
     name: 'TestScale',
     charNotifyUuid: NOTIFY_UUID,
@@ -2187,14 +2193,14 @@ describe('waitForRawReading() with status frames (#474, D070)', () => {
   // The Yunmai unlock, GET_PROTOCOL_VERSION, written every 5 s.
   const UNLOCK = [0x0d, 0x05, 0x13, 0x00, 0x16];
 
-  function statusAdapter(overrides: Partial<ScaleAdapter> = {}): ScaleAdapter {
+  function statusAdapter(overrides: LegacyOverrides = {}): ScaleAdapter {
     return createLegacyAdapter({
       unlockCommand: UNLOCK,
       unlockIntervalMs: 5000,
       parseNotification: vi.fn((): ScaleReading | null => null),
       isStatusFrame: (_c: string, d: Buffer) => d[3] === 0x05,
       ...overrides,
-    } as Partial<ScaleAdapter>);
+    });
   }
 
   /** A write char that answers every write 80 ms later, as the Mini 2 does. */

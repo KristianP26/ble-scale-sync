@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TelegramExporter } from '../../src/exporters/telegram.js';
 import type { TelegramConfig } from '../../src/exporters/config.js';
 import type { BodyComposition } from '../../src/interfaces/scale-adapter.js';
-import type { ExportContext } from '../../src/interfaces/exporter.js';
+import type { ExportContext, Exporter } from '../../src/interfaces/exporter.js';
 
 const samplePayload: BodyComposition = {
   weight: 80,
@@ -45,7 +45,7 @@ describe('TelegramExporter', () => {
   });
 
   it('does not support back-dating', () => {
-    const exporter = new TelegramExporter(defaultConfig);
+    const exporter: Exporter = new TelegramExporter(defaultConfig);
     expect(exporter.supportsBackdate).toBeUndefined();
   });
 

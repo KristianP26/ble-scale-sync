@@ -91,7 +91,7 @@ function makeAdapter(waitDevice: () => Promise<unknown>) {
     helper: makeHelper('/org/bluez/hci0'),
     isDiscovering: vi.fn(async () => false),
     startDiscovery: vi.fn(async () => undefined),
-    stopDiscovery: vi.fn(async () => undefined),
+    stopDiscovery: vi.fn(async (): Promise<void> => undefined),
     waitDevice: vi.fn(waitDevice),
     getDevice: vi.fn(async () => {
       throw new Error('Device not found');

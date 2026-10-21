@@ -1,10 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { bleLog } from '../../src/ble/types.js';
 import { InlifeScaleAdapter } from '../../src/scales/inlife.js';
-import type { ConnectionContext } from '../../src/interfaces/scale-adapter.js';
+import type { ScaleAdapter } from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
   defaultProfile,
+  makeConnectionContext,
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
@@ -190,12 +191,12 @@ describe('InlifeScaleAdapter', () => {
       const writeFn = vi.fn().mockResolvedValue(undefined);
       const profile = defaultProfile({ gender: 'male', height: 183, age: 30 });
 
-      const ctx: ConnectionContext = {
+      const ctx = makeConnectionContext({
         write: writeFn,
         read: vi.fn(),
         subscribe: vi.fn(),
         profile,
-      };
+      });
 
       await adapter.onConnected!(ctx);
 
@@ -217,12 +218,12 @@ describe('InlifeScaleAdapter', () => {
       const writeFn = vi.fn().mockResolvedValue(undefined);
       const profile = defaultProfile({ gender: 'female' });
 
-      const ctx: ConnectionContext = {
+      const ctx = makeConnectionContext({
         write: writeFn,
         read: vi.fn(),
         subscribe: vi.fn(),
         profile,
-      };
+      });
 
       await adapter.onConnected!(ctx);
 
@@ -404,7 +405,7 @@ describe('InlifeScaleAdapter impedance hold (#413)', () => {
   }
 
   it('is not final on a legacy frame, so the session holds instead of resolving', () => {
-    const adapter = new InlifeScaleAdapter();
+    const adapter: ScaleAdapter = new InlifeScaleAdapter();
     adapter.onSessionStart?.();
     const reading = adapter.parseNotification(frame(0x00))!;
 
@@ -414,7 +415,7 @@ describe('InlifeScaleAdapter impedance hold (#413)', () => {
   });
 
   it('is final on an impedance frame, so that one resolves at once', () => {
-    const adapter = new InlifeScaleAdapter();
+    const adapter: ScaleAdapter = new InlifeScaleAdapter();
     adapter.onSessionStart?.();
     const reading = adapter.parseNotification(frame(0x80, 500))!;
     expect(adapter.isFinal!(reading)).toBe(true);
@@ -423,7 +424,7 @@ describe('InlifeScaleAdapter impedance hold (#413)', () => {
   it('gates on the mode flag, not on the value of the unverified field', () => {
     // The width of [4..7] is the open question in #405, so a zero there must
     // not be read as "no measurement": this frame IS the impedance frame.
-    const adapter = new InlifeScaleAdapter();
+    const adapter: ScaleAdapter = new InlifeScaleAdapter();
     adapter.onSessionStart?.();
     const reading = adapter.parseNotification(frame(0x80, 0))!;
     expect(reading.impedance).toBe(0);
@@ -431,7 +432,7 @@ describe('InlifeScaleAdapter impedance hold (#413)', () => {
   });
 
   it('goes back to not-final when a legacy frame follows an impedance one', () => {
-    const adapter = new InlifeScaleAdapter();
+    const adapter: ScaleAdapter = new InlifeScaleAdapter();
     adapter.onSessionStart?.();
     adapter.parseNotification(frame(0x80, 500));
     const legacy = adapter.parseNotification(frame(0x00))!;

@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { diffRestartRequired } from '../../src/config/reload-diff.js';
 import type { AppConfig } from '../../src/config/schema.js';
 
-function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
+// Fixtures name only the keys a case is about; the diff reads nothing else.
+// Partial all the way down, so a renamed key still fails tsc.
+type DeepPartial<T> = T extends object ? { [K in keyof T]?: DeepPartial<T[K]> } : T;
+
+function baseConfig(overrides: DeepPartial<AppConfig> = {}): AppConfig {
   return {
     version: 1,
     scale: { weight_unit: 'kg', height_unit: 'cm' },

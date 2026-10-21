@@ -575,7 +575,7 @@ describe('ActiveEraAdapter: raw impedance is observable (#386)', () => {
     vi.restoreAllMocks();
   });
 
-  const logged = (): string => debugSpy.mock.calls.map((c) => String(c[0])).join(' | ');
+  const logged = (): string => debugSpy.mock.calls.map((c: unknown[]) => String(c[0])).join(' | ');
 
   it('logs the raw value alongside the corrected one when the gate fires', () => {
     const adapter = new ActiveEraAdapter();

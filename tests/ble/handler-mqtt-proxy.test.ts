@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { Mock } from 'vitest';
 import type {
   ScaleAdapter,
   ScaleReading,
@@ -21,15 +22,15 @@ vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
 
 interface MockMqttClient {
   connected: boolean;
-  on: ReturnType<typeof vi.fn>;
-  removeListener: ReturnType<typeof vi.fn>;
-  subscribe: ReturnType<typeof vi.fn>;
-  subscribeAsync: ReturnType<typeof vi.fn>;
-  unsubscribe: ReturnType<typeof vi.fn>;
-  unsubscribeAsync: ReturnType<typeof vi.fn>;
-  publish: ReturnType<typeof vi.fn>;
-  publishAsync: ReturnType<typeof vi.fn>;
-  endAsync: ReturnType<typeof vi.fn>;
+  on: Mock;
+  removeListener: Mock;
+  subscribe: Mock;
+  subscribeAsync: Mock;
+  unsubscribe: Mock;
+  unsubscribeAsync: Mock;
+  publish: Mock;
+  publishAsync: Mock;
+  endAsync: Mock;
   _listeners: Map<string, Array<(topic: string, payload: Buffer) => void>>;
   _simulateMessage: (topic: string, payload: string | Buffer) => void;
 }
@@ -88,6 +89,9 @@ const MQTT_PROXY_CONFIG: MqttProxyConfig = {
   topic_prefix: 'ble-proxy',
   username: null,
   password: null,
+  embedded_broker_port: 1883,
+  embedded_broker_bind: '0.0.0.0',
+  auto_connect: true,
 };
 
 const PREFIX = 'ble-proxy/esp32-test';

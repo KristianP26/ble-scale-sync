@@ -106,7 +106,8 @@ describe('getOrCreatePersistentClient', () => {
       mqttMock.mockImplementation(() => {
         connectCalls += 1;
         return new Promise((resolve) => {
-          resolveConnect = (c) => resolve(c);
+          // The fake client is a partial stand-in for MqttClient.
+          resolveConnect = (c) => resolve(c as never);
         });
       });
     }

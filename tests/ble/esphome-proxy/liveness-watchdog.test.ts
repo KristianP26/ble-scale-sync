@@ -35,7 +35,7 @@ vi.mock('../../../src/ble/handler-esphome-proxy/client.js', () => ({
 const { EsphomeProxyPool } = await import('../../../src/ble/handler-esphome-proxy/pool.js');
 const { bleLog } = await import('../../../src/ble/types.js');
 
-type Cfg = Parameters<typeof EsphomeProxyPool.prototype.constructor>[0];
+type Cfg = ConstructorParameters<typeof EsphomeProxyPool>[0];
 
 function cfg(advertisement_timeout: number): Cfg {
   return {

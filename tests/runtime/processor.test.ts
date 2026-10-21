@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { Mock } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -114,7 +115,7 @@ function makeAppConfig(
 ): AppConfig {
   return {
     version: 1,
-    scale: { weight_unit: 'kg', height_unit: 'cm' },
+    scale: { weight_unit: 'kg', height_unit: 'cm', display_unit: 'weight_unit' },
     unknown_user: 'nearest',
     out_of_range: outOfRange,
     users,
@@ -153,7 +154,9 @@ function makeCtx(users: UserConfig[], overrides: CtxOverrides = {}): AppContext 
     configPath: overrides.configPath,
     bleHandler: overrides.bleHandler ?? 'auto',
     bleAdapter: undefined,
+    adapterPrivacy: false,
     esphomeProxy: undefined,
+    haBluetooth: undefined,
     signal: new AbortController().signal,
     exporterCache: new Map(),
     lastExportedWeights: new Map(
@@ -174,9 +177,9 @@ function makeCtx(users: UserConfig[], overrides: CtxOverrides = {}): AppContext 
 
 /** A DisplayNotifier whose three methods are vi mocks, for capability assertions. */
 function fakeDisplay(): DisplayNotifier & {
-  reading: ReturnType<typeof vi.fn>;
-  result: ReturnType<typeof vi.fn>;
-  beep: ReturnType<typeof vi.fn>;
+  reading: Mock;
+  result: Mock;
+  beep: Mock;
 } {
   return { reading: vi.fn(), result: vi.fn(), beep: vi.fn() };
 }

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { MockInstance } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -48,8 +49,8 @@ function user(slug: string, lastKnown: number | null): UserConfig {
 describe('replay anchor file (D067)', () => {
   let dir: string;
   let file: string;
-  let warnSpy: ReturnType<typeof vi.spyOn>;
-  let logSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: MockInstance<typeof console.warn>;
+  let logSpy: MockInstance<typeof console.log>;
 
   const write = (content: unknown): void =>
     fs.writeFileSync(file, typeof content === 'string' ? content : JSON.stringify(content));

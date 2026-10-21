@@ -32,7 +32,7 @@ const CHANGED = Buffer.from([0x00]); // #418 `01` with its byte changed, not a c
 const MIN = 60_000;
 
 /** A hook shaped like the BF720 one, so this file does not depend on that adapter. */
-function hook(device: BleDeviceInfo): boolean | undefined {
+function hook(device: Pick<BleDeviceInfo, 'localName' | 'serviceData'>): boolean | undefined {
   const sd = device.serviceData?.find((e) => e.uuid.toLowerCase().startsWith('0000181d'));
   if (!sd) return undefined;
   if (sd.data.length === 0) return false;

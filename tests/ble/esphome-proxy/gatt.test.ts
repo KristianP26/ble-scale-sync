@@ -5,6 +5,19 @@ import { bleLog, normalizeUuid } from '../../../src/ble/types.js';
 // macToInt('00:00:00:00:00:01') === 1
 const ADDR = 1;
 
+// Typed for the shapes tests swap in: a failed connect has no mtu, a malformed
+// characteristic no uuid.
+type GattChar = {
+  uuid?: string;
+  handle: number;
+  properties: number;
+  descriptorsList: { uuid: string; handle: number }[];
+};
+type GattServices = {
+  address: number;
+  servicesList: { uuid: string; handle: number; characteristicsList: GattChar[] }[];
+};
+
 function fakeConnection() {
   const listeners: Record<string, Array<(a: unknown) => void>> = {};
   return {
@@ -22,12 +35,21 @@ function fakeConnection() {
     emit(ev: string, a: unknown) {
       (listeners[ev] ?? []).forEach((f) => f(a));
     },
-    connectBluetoothDeviceService: vi.fn(async () => ({ address: ADDR, connected: true, mtu: 23 })),
+    connectBluetoothDeviceService: vi.fn(
+      async (
+        _addr: number,
+        _type?: number,
+      ): Promise<{ address: number; connected: boolean; mtu?: number }> => ({
+        address: ADDR,
+        connected: true,
+        mtu: 23,
+      }),
+    ),
     disconnectBluetoothDeviceService: vi.fn(async () => ({ address: ADDR, connected: false })),
     // Shape as emitted by @2colors/esphome-native-api 1.3.6: mapMessageByType()
     // pre-decodes the GATT uuid uint64 pair into a `uuid` string and DROPS
     // `uuidList`. The bridge must read `uuid`, not the (now absent) `uuidList`.
-    listBluetoothGATTServicesService: vi.fn(async () => ({
+    listBluetoothGATTServicesService: vi.fn(async (): Promise<GattServices> => ({
       address: ADDR,
       servicesList: [
         {
@@ -67,7 +89,9 @@ function fakeConnection() {
     })),
     // Real library shape: protobuf-JS renders `bytes data` as base64 (#291).
     readBluetoothGATTCharacteristicService: vi.fn(async () => ({ data: 'AQID' })),
-    writeBluetoothGATTCharacteristicService: vi.fn(async () => ({})),
+    writeBluetoothGATTCharacteristicService: vi.fn(
+      async (_addr: number, _handle: number, _data: Uint8Array, _response: boolean) => ({}),
+    ),
     notifyBluetoothGATTCharacteristicService: vi.fn(async () => ({})),
     writeBluetoothGATTDescriptorService: vi.fn(async () => ({})),
   };

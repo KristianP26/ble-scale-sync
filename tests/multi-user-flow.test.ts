@@ -30,8 +30,10 @@ const mom: UserConfig = {
 
 const appConfig: AppConfig = {
   version: 1,
-  scale: { weight_unit: 'kg', height_unit: 'cm' },
+  scale: { weight_unit: 'kg', height_unit: 'cm', display_unit: 'weight_unit' },
   unknown_user: 'nearest',
+  out_of_range: 'warn',
+  update_check: true,
   users: [dad, mom],
   global_exporters: [
     { type: 'influxdb', url: 'http://localhost:8086', token: 't', org: 'o', bucket: 'b' },
@@ -66,7 +68,7 @@ describe('Multi-user flow: matching → profile resolution', () => {
   it('converts height from inches when height_unit is in', () => {
     const inchConfig: AppConfig = {
       ...appConfig,
-      scale: { weight_unit: 'kg', height_unit: 'in' },
+      scale: { weight_unit: 'kg', height_unit: 'in', display_unit: 'weight_unit' },
     };
     const user: UserConfig = {
       ...dad,

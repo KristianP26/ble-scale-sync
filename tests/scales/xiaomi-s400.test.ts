@@ -66,7 +66,7 @@ function encryptFrame(
   const cipher = createCipheriv('aes-128-ccm', key, nonce, { authTagLength: 4 });
   cipher.setAAD(Buffer.from([0x11]), { plaintextLength: obj.length });
   const enc = Buffer.concat([cipher.update(obj), cipher.final()]);
-  const parts = [fc, pidBuf, Buffer.from([cnt])];
+  const parts: Buffer[] = [fc, pidBuf, Buffer.from([cnt])];
   if (includeMac) parts.push(macFrame);
   parts.push(enc, ext, cipher.getAuthTag());
   return Buffer.concat(parts);

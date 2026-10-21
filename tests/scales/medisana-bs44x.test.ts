@@ -4,6 +4,7 @@ import type { ConnectionContext } from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
   defaultProfile,
+  makeConnectionContext,
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
 
@@ -51,12 +52,12 @@ describe('MedisanaBs44xAdapter', () => {
       const adapter = makeAdapter();
       const writeFn = vi.fn().mockResolvedValue(undefined);
 
-      const ctx: ConnectionContext = {
+      const ctx = makeConnectionContext({
         write: writeFn,
         read: vi.fn(),
         subscribe: vi.fn(),
         profile: defaultProfile(),
-      };
+      });
 
       const before = Math.floor(Date.now() / 1000);
       await adapter.onConnected!(ctx);

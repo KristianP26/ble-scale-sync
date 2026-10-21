@@ -16,6 +16,7 @@ function baseConfig(overrides: Partial<MqttProxyConfig> = {}): MqttProxyConfig {
     topic_prefix: 'ble-proxy',
     embedded_broker_port: 0, // ephemeral
     embedded_broker_bind: '127.0.0.1',
+    auto_connect: true,
     ...overrides,
   };
 }

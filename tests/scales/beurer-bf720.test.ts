@@ -1221,6 +1221,7 @@ describe('BeurerBf720Adapter.advertisesPendingReading (#471)', () => {
   const LOGGED_UUID = '0000181d-0000-1000-8000-00805f9b34fb';
   const withServiceData = (uuid: string, data: Buffer): BleDeviceInfo => ({
     localName: 'BF915',
+    serviceUuids: [],
     serviceData: [{ uuid, data }],
   });
 
@@ -1234,7 +1235,9 @@ describe('BeurerBf720Adapter.advertisesPendingReading (#471)', () => {
   });
 
   it('says nothing without a 0x181D entry', () => {
-    expect(adapter.advertisesPendingReading({ localName: 'BF915' })).toBe(undefined);
+    expect(adapter.advertisesPendingReading({ localName: 'BF915', serviceUuids: [] })).toBe(
+      undefined,
+    );
     expect(
       adapter.advertisesPendingReading(
         withServiceData('0000181b-0000-1000-8000-00805f9b34fb', Buffer.from([0x01])),

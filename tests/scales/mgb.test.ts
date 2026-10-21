@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { MgbAdapter } from '../../src/scales/mgb.js';
-import type { ConnectionContext } from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
   defaultProfile,
+  makeConnectionContext,
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
 import { WEIGHT_ONLY_HOLD_MS } from '../../src/scales/body-comp-helpers.js';
@@ -55,12 +55,12 @@ describe('MgbAdapter', () => {
       const adapter = makeAdapter();
       const writeFn = vi.fn().mockResolvedValue(undefined);
 
-      const ctx: ConnectionContext = {
+      const ctx = makeConnectionContext({
         write: writeFn,
         read: vi.fn(),
         subscribe: vi.fn(),
         profile: defaultProfile({ gender: 'male', age: 30, height: 183 }),
-      };
+      });
 
       await adapter.onConnected!(ctx);
 
@@ -91,12 +91,12 @@ describe('MgbAdapter', () => {
       const adapter = makeAdapter();
       const writeFn = vi.fn().mockResolvedValue(undefined);
 
-      const ctx: ConnectionContext = {
+      const ctx = makeConnectionContext({
         write: writeFn,
         read: vi.fn(),
         subscribe: vi.fn(),
         profile: defaultProfile({ gender: 'female' }),
-      };
+      });
 
       await adapter.onConnected!(ctx);
       expect(writeFn.mock.calls[2][1][1]).toBe(0x02);
