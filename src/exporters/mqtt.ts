@@ -15,8 +15,16 @@ const log = createLogger('MQTT');
 
 const CONNECT_TIMEOUT_MS = 10_000;
 
+/**
+ * What the state topic carries: the body composition plus the time the
+ * weigh-in was measured (#478). The time is what tells one weigh-in from the
+ * next: a retained payload replayed after a Home Assistant restart resets every
+ * sensor's last_changed, and an identical weight does not move it at all.
+ */
+type MqttStatePayload = { timestamp: string } & BodyComposition;
+
 interface HaMetricDef {
-  key: keyof BodyComposition;
+  key: keyof MqttStatePayload;
   name: string;
   unit?: string;
   deviceClass?: string;
@@ -48,13 +56,17 @@ const HA_METRICS = [
   },
   { key: 'bmr', name: 'BMR', unit: 'kcal', icon: 'mdi:fire' },
   { key: 'metabolicAge', name: 'Metabolic Age', unit: 'yr', icon: 'mdi:calendar-clock' },
+  // A time, not a quantity: HA allows a timestamp sensor no state_class and no
+  // unit, and the device class brings its own icon.
+  { key: 'timestamp', name: 'Last Weigh-in', deviceClass: 'timestamp' },
   // `satisfies`, not `: HaMetricDef[]`: an annotation widens `key` to
-  // `keyof BodyComposition` and the completeness check below would then see
+  // `keyof MqttStatePayload` and the completeness check below would then see
   // every key as covered no matter what this list contains.
 ] satisfies readonly HaMetricDef[];
 
 /**
- * Compile-time check that every BodyComposition field has an HA metric.
+ * Compile-time check that every key the state topic carries (BodyComposition
+ * plus the timestamp) has an HA sensor.
  *
  * This used to be a SEPARATE hand-written `Record<keyof BodyComposition, true>`
  * listing the keys again, which only ever checked itself: `HA_METRICS = []`
@@ -66,7 +78,7 @@ const HA_METRICS = [
 const HA_METRIC_DEFS: readonly HaMetricDef[] = HA_METRICS;
 
 type CoveredMetricKey = (typeof HA_METRICS)[number]['key'];
-const _haMetricsAreComplete: Record<Exclude<keyof BodyComposition, CoveredMetricKey>, never> = {};
+const _haMetricsAreComplete: Record<Exclude<keyof MqttStatePayload, CoveredMetricKey>, never> = {};
 void _haMetricsAreComplete;
 
 export const mqttSchema: ExporterSchema = {
@@ -257,7 +269,9 @@ export class MqttExporter implements Exporter {
         unique_id: `${deviceId}_${metric.key}`,
         state_topic: dataTopic,
         value_template: `{{ value_json.${metric.key} }}`,
-        state_class: 'measurement',
+        // HA warns about any state_class on a timestamp sensor and keeps no
+        // statistics for one.
+        ...(metric.deviceClass === 'timestamp' ? {} : { state_class: 'measurement' }),
         availability: [{ topic: statusTopic }],
         device,
       };
@@ -272,7 +286,7 @@ export class MqttExporter implements Exporter {
 
     await client.publishAsync(statusTopic, 'online', { qos: 1, retain: true });
     const suffix = slug ? ` (user: ${slug})` : '';
-    log.info(`Published HA discovery for ${HA_METRIC_DEFS.length} metrics${suffix}.`);
+    log.info(`Published HA discovery for ${HA_METRIC_DEFS.length} sensors${suffix}.`);
   }
 
   async healthcheck(): Promise<ExportResult> {
@@ -310,6 +324,16 @@ export class MqttExporter implements Exporter {
     const dataTopic = context?.userSlug ? `${baseTopic}/${context.userSlug}` : baseTopic;
     const statusTopic = haDiscovery ? `${dataTopic}/status` : undefined;
 
+    // The measurement time the processor decided for this reading (D027), so
+    // all three attempts below send the same value and it matches what every
+    // other exporter records. `new Date()` only covers a caller outside the
+    // processor, as in the file exporter.
+    const state: MqttStatePayload = {
+      timestamp: (context?.timestamp ?? new Date()).toISOString(),
+      ...data,
+    };
+    const payload = JSON.stringify(state);
+
     return withRetry(
       async () => {
         const client = await connectOwned(
@@ -335,7 +359,6 @@ export class MqttExporter implements Exporter {
             );
           }
 
-          const payload = JSON.stringify(data);
           await withTimeout(
             client.publishAsync(dataTopic, payload, { qos, retain }),
             OPERATION_TIMEOUT_MS,

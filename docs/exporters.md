@@ -18,7 +18,7 @@ A weigh-in a scale stored in its memory and sends later keeps its original time.
 | Target                          | Description                                            |
 | ------------------------------- | ------------------------------------------------------ |
 | [**Garmin Connect**](#garmin)   | Automatic body composition upload, no phone app needed |
-| [**MQTT**](#mqtt)               | Home Assistant auto-discovery with 11 sensors, LWT     |
+| [**MQTT**](#mqtt)               | Home Assistant auto-discovery with 12 sensors, LWT     |
 | [**InfluxDB**](#influxdb)       | Time-series database (v2 and v3)                       |
 | [**Webhook**](#webhook)         | Any HTTP endpoint (n8n, Make, Zapier, custom APIs)     |
 | [**Ntfy**](#ntfy)               | Push notifications to phone/desktop                    |
@@ -147,7 +147,7 @@ v1.8.1 bumps `garminconnect` to 0.3.x, which replaced the old garth-based OAuth 
 
 ## MQTT {#mqtt}
 
-Publishes body composition as JSON to an MQTT broker. **Home Assistant auto-discovery** is enabled by default; all 11 metrics (weight, impedance and the nine body composition values) appear as sensors grouped under a single device, with availability tracking (LWT) and display precision per metric.
+Publishes body composition and the time of the weigh-in as JSON to an MQTT broker. **Home Assistant auto-discovery** is enabled by default; all 11 metrics (weight, impedance and the nine body composition values) and the time of the last weigh-in appear as 12 sensors grouped under one device per user, with availability tracking (LWT) and display precision per metric.
 
 ::: tip Home Assistant users
 If you run Home Assistant OS or Supervised, the [Home Assistant Add-on](./guide/home-assistant-addon) auto-detects the Mosquitto broker through the Supervisor API, so you do not need to wire MQTT manually.
@@ -171,6 +171,49 @@ global_exporters:
     broker_url: 'mqtts://broker.example.com:8883'
     username: myuser
     password: '${MQTT_PASSWORD}'
+```
+
+Each weigh-in is one JSON message on `<topic>/<user slug>`, retained unless `retain` is `false`:
+
+```json
+{
+  "timestamp": "2026-10-20T21:30:00.000Z",
+  "weight": 80,
+  "impedance": 500,
+  "bmi": 23.9,
+  "bodyFatPercent": 18.5,
+  "waterPercent": 55.2,
+  "boneMass": 3.1,
+  "muscleMass": 62.4,
+  "visceralFat": 8,
+  "physiqueRating": 5,
+  "bmr": 1750,
+  "metabolicAge": 30
+}
+```
+
+`timestamp` is when the weigh-in was measured, in ISO 8601 UTC: the scale's own time when the scale sends one, otherwise the time the reading reached the app. In Home Assistant it is the **Last Weigh-in** sensor, whose state Home Assistant keeps in whole seconds (`2026-10-20T21:30:00+00:00`). Past measurements a scale replays from its memory do not go to MQTT (see [Historical readings](#historical-readings)), so it is always the last live weigh-in.
+
+To tell a new weigh-in from an old one, use that value, not a sensor's `last_changed`. The message is retained, so after a Home Assistant restart every sensor's `last_changed` is the time of the restart, and a weigh-in with exactly the previous weight does not change the weight sensor at all. The timestamp changes with every weigh-in, identical weights included, and keeps its value across a restart, so comparing it with the last one you handled is the reliable check. A state trigger on the sensor needs `not_from`, because after a Home Assistant restart or a reconnect to the broker the sensor comes back from `unknown` or `unavailable` with the old time. The trigger then also skips a weigh-in made while Home Assistant was down.
+
+```yaml
+triggers:
+  - trigger: state
+    entity_id: sensor.ble_scale_dad_last_weigh_in # your Last Weigh-in sensor
+    not_from:
+      - unknown
+      - unavailable
+```
+
+With `ha_discovery: false`, define the sensor yourself:
+
+```yaml
+mqtt:
+  sensor:
+    - name: 'Last Weigh-in'
+      state_topic: 'scale/body-composition/dad' # <topic>/<user slug>
+      value_template: '{{ value_json.timestamp }}'
+      device_class: timestamp
 ```
 
 Availability uses an MQTT last will: when the app loses the broker without a clean shutdown (a crash, a network drop), the broker publishes `offline` for it, so Home Assistant shows the sensors as unavailable until the app reconnects.
@@ -535,7 +578,7 @@ Some scales keep measurements taken while nothing was listening and replay them 
 
 Several other scales replay a cache without a usable time. Salter is the explicit case: its stored records are delivered as ordinary readings on purpose, because a dated reading it could not date correctly would be buffered rather than exported.
 
-A reading with a timestamp is sent **only to exporters that can record it at that time**:
+A past measurement (a record from the scale's memory) is sent **only to exporters that can record it at its own time**:
 
 | Exporter    | Accepts a backdated reading |
 | ----------- | --------------------------- |
@@ -553,7 +596,7 @@ A reading with a timestamp is sent **only to exporters that can record it at tha
 | `strava`    | No                          |
 | `telegram`  | No                          |
 
-The five that say No have no way to express "this happened on Tuesday": an MQTT sensor state and a push notification are both about now, so replaying a three-day-old weigh-in through them would put a stale number in front of you as if it had just been measured.
+The five that say No cannot file a weigh-in under an earlier date. A push notification is about now, so replaying a three-day-old weigh-in through it would put a stale number in front of you as if it had just been measured. MQTT does send the measurement time, but its topic holds one retained state, the latest weigh-in: a replayed record would overwrite it with an older one and move the Last Weigh-in sensor back.
 
 So a scale that replays its cache fills in your Garmin and InfluxDB history while Home Assistant shows only the live weigh-ins. The log says so each time it happens:
 
