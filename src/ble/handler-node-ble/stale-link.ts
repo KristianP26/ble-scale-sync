@@ -41,6 +41,7 @@ import {
 import { helperOf, releaseDeviceProxy, type Device } from './dbus.js';
 import { getAdapter, parseHciIndex } from './connection.js';
 import { powerCycleViaDbus } from './discovery.js';
+import { onceLog } from './once-log.js';
 
 /** What a bounded Disconnect ended with. An error answer from BlueZ is `'done'`. */
 export type DisconnectOutcome = 'done' | 'timeout' | 'aborted';
@@ -80,17 +81,7 @@ const BRAKE_MAX_MS = 60 * 60_000;
 /** Monotonic, unlike Date.now(): a Pi without an RTC steps its wall clock. */
 const now = (): number => performance.now();
 
-const announced = new Set<string>();
-
-/** First time at `level`, after that at debug: these repeat while the state lasts. */
-function announceOnce(key: string, level: 'info' | 'warn', message: string): void {
-  if (announced.has(key)) {
-    bleLog.debug(message);
-    return;
-  }
-  announced.add(key);
-  bleLog[level](message);
-}
+const announceOnce = onceLog();
 
 /** The brake for one scale. */
 interface Brake {
@@ -115,7 +106,7 @@ const brakeKey = (mac: string): string => mac.replace(/[:-]/g, '').toUpperCase()
 /** Test seam: the brake and the announcements are per process on purpose. */
 export function _resetStaleLinkStateForTests(): void {
   brakes.clear();
-  announced.clear();
+  announceOnce.reset();
 }
 
 function liftBrake(mac: string): void {

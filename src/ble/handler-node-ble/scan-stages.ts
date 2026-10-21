@@ -51,7 +51,7 @@ import { tagBleFailure, bleFailureKind } from '../failure-kind.js';
 import { probeLiveness, makeLivenessAdapter } from './liveness.js';
 import { withScanActivityWatchdog, SCAN_HEARD_FRESH_MS, type ScanWatch } from './scan-watchdog.js';
 import { safeName } from '../advertisement.js';
-import { targetNotFoundMessage, type FreshAdvertLatch } from './device-cache.js';
+import { deviceInfoFrom, targetNotFoundMessage, type FreshAdvertLatch } from './device-cache.js';
 
 /**
  * Acquire the BlueZ adapter, resetting a stale D-Bus connection once.
@@ -284,16 +284,7 @@ export async function resolvePreConnectAdapter(
   // the name-only pre-match always had, so the widening changes nothing for
   // it. Otherwise a device matching a connect-based adapter here falls through
   // as before and is re-resolved after discovery.
-  const preInfo: BleDeviceInfo = {
-    localName: name,
-    address: deviceMac ? formatMac(deviceMac) : undefined,
-    serviceUuids: [],
-    ...(advert.manufacturerData ? { manufacturerData: advert.manufacturerData } : {}),
-    ...(advert.serviceData && advert.serviceData.length > 0
-      ? { serviceData: advert.serviceData }
-      : {}),
-  };
-  const preMatchedAdapter = resolveAdapter(preInfo, adapters);
+  const preMatchedAdapter = resolveAdapter(deviceInfoFrom(name, deviceMac, advert), adapters);
   return { name, advert, preMatchedAdapter };
 }
 

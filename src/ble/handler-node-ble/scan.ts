@@ -1,5 +1,5 @@
 import NodeBle from 'node-ble';
-import type { ScaleAdapter, BleDeviceInfo } from '../../interfaces/scale-adapter.js';
+import type { ScaleAdapter } from '../../interfaces/scale-adapter.js';
 import type { ScanOptions, ScanResult } from '../types.js';
 import type { RawReading } from '../shared.js';
 import {
@@ -53,6 +53,7 @@ import {
   announceKept,
   armFreshAdvertLatch,
   cachePolicyFor,
+  deviceInfoFrom,
   forgetReadingAdapter,
   noScaleRecognizedMessage,
   rememberReadingAdapter,
@@ -74,7 +75,7 @@ import {
   resetScanActivityBackoff,
   type ScanWatch,
 } from './scan-watchdog.js';
-import { logAdvertisementSnapshot } from './device-object.js';
+import { logAdvertisementSnapshot, type AdvertisementSnapshot } from './device-object.js';
 import { sessionManufacturerData } from './session-advert.js';
 import { wrapDevice } from './gatt.js';
 import { broadcastScanNodeBle } from './broadcast.js';
@@ -549,6 +550,67 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     // this run (session-advert.ts, #463).
     let manufacturerData: { id: number; data: Buffer } | undefined;
 
+    /**
+     * Both branches, once the scale is found: an adapter that reads
+     * advertisements gets them without a connect. Anything else waits out a
+     * pairing nobody confirmed (#471), stops discovery and connects; then this
+     * returns undefined and `device` is the connected one.
+     */
+    const readOrConnect = async (found: {
+      device: Device;
+      /** Formatted; connectWithRecovery and the prompt count format it the same way. */
+      mac: string;
+      adapter: ScaleAdapter | undefined;
+      /** Service data for the pairing hint; manufacturer data for the session only (D071). */
+      advert: AdvertisementSnapshot;
+      waitStartedAt: number;
+    }): Promise<RawReading | undefined> => {
+      const { adapter, mac } = found;
+      if (adapter && readsFromAdvertisement(adapter)) {
+        bleLog.info(`Matched adapter: ${adapter.name}`);
+        const reading = await broadcastScanNodeBle(adapter, btAdapter, found.device, mac, {
+          abortSignal,
+          onLiveData,
+          onLiveWeight,
+        });
+        // A broadcast adapter in the memory means the next cycle removes the
+        // object again (D060). The memory is the MAC branch's only.
+        if (targetMac) rememberReadingAdapter(targetMac, adapter);
+        resetScanActivityBackoff();
+        return reading;
+      }
+
+      if (adapter?.requiresBonding) bondingAdapter = adapter;
+      cycleHint = advertisedReadingHint(
+        hintAdapterFor(mac, adapter, adapters),
+        mac,
+        found.advert.serviceData,
+      );
+      await holdPairing(found.device, mac, adapter, found.waitStartedAt);
+      manufacturerData = sessionManufacturerData(mac, found.advert);
+
+      // Stop discovery before connecting. BlueZ on low-power devices (e.g. Pi Zero)
+      // often fails with le-connection-abort-by-local while discovery is still active.
+      await stopDiscoveryAndQuiesce(btAdapter);
+      if (adapterPrivacy) await requireAdapterPrivacy(btAdapter);
+
+      gattAttempted = true;
+      promptsBefore = userPromptCount(mac);
+      device = await connectWithRecovery({
+        btAdapter,
+        mac,
+        initialDevice: found.device,
+        maxRetries: MAX_CONNECT_RETRIES,
+        bleAdapter,
+        autoClearStaleBond,
+        adapterPrivacy,
+        abortSignal,
+        onLive: followConnect,
+      });
+      bleLog.info('Connected. Discovering services...');
+      return undefined;
+    };
+
     if (targetMac) {
       const mac = formatMac(targetMac);
       bleLog.info('Scanning for device...');
@@ -598,54 +660,14 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         ));
       }
       deviceName = name;
-
-      if (
-        preMatchedAdapter?.preferPassive &&
-        (preMatchedAdapter.parseServiceData || preMatchedAdapter.parseBroadcast)
-      ) {
-        matchedAdapter = preMatchedAdapter;
-        bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
-        const reading = await broadcastScanNodeBle(matchedAdapter, btAdapter, device, mac, {
-          abortSignal,
-          onLiveData,
-          onLiveWeight,
-        });
-        // A broadcast adapter in the memory means the next cycle removes the
-        // object again (D060).
-        rememberReadingAdapter(targetMac, matchedAdapter);
-        resetScanActivityBackoff();
-        return reading;
-      }
-
-      if (preMatchedAdapter?.requiresBonding) bondingAdapter = preMatchedAdapter;
-      cycleHint = advertisedReadingHint(
-        hintAdapterFor(mac, preMatchedAdapter, adapters),
+      const reading = await readOrConnect({
+        device,
         mac,
-        advert.serviceData,
-      );
-      await holdPairing(device, mac, preMatchedAdapter, waitStartedAt);
-      // For the session only, never for the matches above (D071).
-      manufacturerData = sessionManufacturerData(mac, advert);
-
-      // Stop discovery before connecting. BlueZ on low-power devices (e.g. Pi Zero)
-      // often fails with le-connection-abort-by-local while discovery is still active.
-      await stopDiscoveryAndQuiesce(btAdapter);
-      if (adapterPrivacy) await requireAdapterPrivacy(btAdapter);
-
-      gattAttempted = true;
-      promptsBefore = userPromptCount(targetMac);
-      device = await connectWithRecovery({
-        btAdapter,
-        mac: targetMac,
-        initialDevice: device,
-        maxRetries: MAX_CONNECT_RETRIES,
-        bleAdapter,
-        autoClearStaleBond,
-        adapterPrivacy,
-        abortSignal,
-        onLive: followConnect,
+        adapter: preMatchedAdapter,
+        advert,
+        waitStartedAt,
       });
-      bleLog.info('Connected. Discovering services...');
+      if (reading) return reading;
 
       // Resolve the adapter post-discovery using characteristics as well as
       // service UUIDs, so devices that share a generic vendor service (e.g.
@@ -699,51 +721,14 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       const sessionAdvert = [snapshot.manufacturerData, result.manufacturerData].find(
         (md) => md !== undefined && md.data.length > 0,
       );
-
-      // Passive-mode adapters: read from advertisements without connecting.
-      if (
-        matchedAdapter.preferPassive &&
-        (matchedAdapter.parseServiceData || matchedAdapter.parseBroadcast)
-      ) {
-        bleLog.info(`Matched adapter: ${matchedAdapter.name}`);
-        const reading = await broadcastScanNodeBle(matchedAdapter, btAdapter, device, result.mac, {
-          abortSignal,
-          onLiveData,
-          onLiveWeight,
-        });
-        resetScanActivityBackoff();
-        return reading;
-      }
-
-      if (matchedAdapter.requiresBonding) bondingAdapter = matchedAdapter;
-      cycleHint = advertisedReadingHint(
-        hintAdapterFor(result.mac, matchedAdapter, adapters),
-        result.mac,
-        snapshot.serviceData,
-      );
-      await holdPairing(device, result.mac, matchedAdapter, waitStartedAt);
-      // For the session only, never for the match above (D071).
-      manufacturerData = sessionManufacturerData(result.mac, { manufacturerData: sessionAdvert });
-
-      // Stop discovery before connecting. BlueZ on low-power devices (e.g. Pi Zero)
-      // often fails with le-connection-abort-by-local while discovery is still active.
-      await stopDiscoveryAndQuiesce(btAdapter);
-      if (adapterPrivacy) await requireAdapterPrivacy(btAdapter);
-
-      gattAttempted = true;
-      promptsBefore = userPromptCount(result.mac);
-      device = await connectWithRecovery({
-        btAdapter,
+      const reading = await readOrConnect({
+        device,
         mac: result.mac,
-        initialDevice: device,
-        maxRetries: MAX_CONNECT_RETRIES,
-        bleAdapter,
-        autoClearStaleBond,
-        adapterPrivacy,
-        abortSignal,
-        onLive: followConnect,
+        adapter: matchedAdapter,
+        advert: { serviceData: snapshot.serviceData, manufacturerData: sessionAdvert },
+        waitStartedAt,
       });
-      bleLog.info('Connected. Discovering services...');
+      if (reading) return reading;
     }
 
     // Setup GATT characteristics and wait for a complete reading.
@@ -949,16 +934,7 @@ export async function scanDevices(
           // as named.
           const name = await dev.getName().catch(() => '');
           const advert = await logAdvertisementSnapshot(dev).catch(() => undefined);
-          const info: BleDeviceInfo = {
-            localName: name,
-            address: formatMac(addr),
-            serviceUuids: [],
-            ...(advert?.manufacturerData ? { manufacturerData: advert.manufacturerData } : {}),
-            ...(advert?.serviceData && advert.serviceData.length > 0
-              ? { serviceData: advert.serviceData }
-              : {}),
-          };
-          const matched = resolveAdapter(info, adapters);
+          const matched = resolveAdapter(deviceInfoFrom(name, addr, advert), adapters);
 
           results.push({
             address: addr,
