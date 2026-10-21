@@ -205,6 +205,76 @@ describe('reloadAppConfig and the restored replay anchors (D067)', () => {
 });
 
 /**
+ * ble.noble_driver is restart-required, but the reload re-published
+ * NOBLE_DRIVER and the BLE layer reads it again on every poll cycle, so the
+ * next cycle loaded the other noble module next to the running one (C-06).
+ */
+describe('reloadAppConfig and ble.noble_driver (C-06)', () => {
+  function nobleConfig(driver: string | null): string {
+    return `
+version: 1
+ble:
+  scale_mac: "FF:03:00:13:A1:04"
+${driver ? `  noble_driver: ${driver}\n` : ''}users:
+  - name: Test
+    slug: test
+    height: 183
+    birth_date: "1990-06-15"
+    gender: male
+    is_athlete: true
+    weight_range: { min: 70, max: 100 }
+runtime:
+  continuous_mode: true
+`;
+  }
+
+  it('keeps the startup driver and only warns that a restart is required', async () => {
+    const { resolveHandlerKey } = await import('../../src/ble/index.js');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reload-noble-'));
+    const file = path.join(dir, 'config.yaml');
+    const envBefore = process.env.NOBLE_DRIVER;
+    delete process.env.NOBLE_DRIVER;
+    try {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      fs.writeFileSync(file, nobleConfig('stoprocent'));
+      const config = loadYamlConfig(file);
+      const ctx = createAppContext({
+        config,
+        resolved: resolveRuntimeConfig(config),
+        configSource: 'yaml',
+        configPath: file,
+        signal: new AbortController().signal,
+        abortApp: () => {},
+      });
+      expect(resolveHandlerKey(ctx.bleHandler)).toBe('noble');
+
+      fs.writeFileSync(file, nobleConfig('abandonware'));
+      await reloadAppConfig(ctx, { value: userDisplaySnapshot(ctx.config) });
+
+      expect(ctx.config.ble?.noble_driver).toBe('abandonware');
+      expect(resolveHandlerKey(ctx.bleHandler)).toBe('noble');
+      expect(warn.mock.calls.map((c) => c.join(' ')).join('\n')).toContain(
+        'Config change detected in ble.noble_driver (stoprocent -> abandonware)',
+      );
+
+      // The startup value is still known as ours: removing noble_driver is not
+      // read back as a NOBLE_DRIVER override from the environment.
+      fs.writeFileSync(file, nobleConfig(null));
+      await reloadAppConfig(ctx, { value: userDisplaySnapshot(ctx.config) });
+
+      expect(ctx.config.ble?.noble_driver).toBeUndefined();
+      expect(resolveHandlerKey(ctx.bleHandler)).toBe('noble');
+    } finally {
+      if (envBefore === undefined) delete process.env.NOBLE_DRIVER;
+      else process.env.NOBLE_DRIVER = envBefore;
+      fs.rmSync(dir, { recursive: true, force: true });
+      vi.restoreAllMocks();
+    }
+  });
+});
+
+/**
  * The ESP32 display board shows the users from the mqtt-proxy config topic. A
  * reload that edits them hands the new list over; one that leaves them alone
  * keeps the snapshot (T-13: reload.ts loads the handler only on this path).

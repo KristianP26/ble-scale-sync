@@ -1,4 +1,5 @@
 import { loadYamlConfig } from '../config/load.js';
+import { keepNobleDriver } from '../config/yaml-load.js';
 import { resolveRuntimeConfig, resolveExporterSlotsForUser } from '../config/resolve.js';
 import type { Exporter } from '../interfaces/exporter.js';
 import { buildFromSlots } from './exporters.js';
@@ -32,7 +33,9 @@ export async function reloadAppConfig(
   try {
     configs = await withWriteLock(async () => {
       const oldConfig = ctx.config;
-      const newConfig = loadYamlConfig(configPath);
+      // ble.noble_driver is restart-required: the reload must not hand the next
+      // poll cycle a different noble module (C-06).
+      const newConfig = keepNobleDriver(() => loadYamlConfig(configPath));
       const resolved = resolveRuntimeConfig(newConfig);
       // Built BEFORE the swap. loadYamlConfig passes exporter entries through
       // and filters only an unknown `type`, so a missing required field or a
