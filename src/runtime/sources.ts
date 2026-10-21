@@ -1,6 +1,6 @@
 import { createReadingSource } from '../ble/index.js';
 import type { ScaleAdapter } from '../interfaces/scale-adapter.js';
-import { resolveUserProfile } from '../config/resolve.js';
+import { resolveScaleAuth, resolveUserProfile } from '../config/resolve.js';
 import { ConsecutiveFailureWatchdog } from '../ble/watchdog.js';
 import { bleFailureKind, shouldCountAsWatchdogFailure } from '../ble/failure-kind.js';
 import {
@@ -62,12 +62,7 @@ export async function buildReadingSource(
   // Re-derived on each call (and on each reload) so edits to users[0] land on
   // the next cycle without a process restart.
   const profile = () => resolveUserProfile(ctx.config.users[0], ctx.config.scale);
-  const scaleAuth = () => ({
-    pin: ctx.config.users[0]?.beurer_pin,
-    userIndex: ctx.config.users[0]?.beurer_user_index,
-    provision: ctx.config.users[0]?.beurer_provision,
-    registerNewUser: ctx.config.users[0]?.beurer_register_new_user,
-  });
+  const scaleAuth = () => resolveScaleAuth(ctx.config.users[0]);
 
   const plan = await createReadingSource({
     bleHandler: ctx.bleHandler,

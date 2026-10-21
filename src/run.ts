@@ -16,7 +16,7 @@ import { runHealthchecks } from './orchestrator.js';
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { version: string };
 import { loadAppConfig } from './config/load.js';
-import { resolveDisplayUnit, resolveRuntimeConfig } from './config/resolve.js';
+import { buildAdapterRuntimeConfig, resolveRuntimeConfig } from './config/resolve.js';
 import { startConfigWatcher, type ConfigWatcherHandle } from './config/watch.js';
 import { configureUpdateState } from './update-state.js';
 import { flushQueue, logQueueAtStartup } from './runtime/export-queue.js';
@@ -321,42 +321,12 @@ async function main(): Promise<void> {
   }
   log.info(`Adapters: ${adapters.map((a) => a.name).join(', ')}\n`);
 
-  // Inject runtime config into adapters that read it: the Xiaomi S800 / S400
-  // MiBeacon bind key (plus the scale MAC the S400 needs for its nonce), and the
-  // configured display unit that the QN 0x13 command and the AC 27 D0 profile
-  // frame echo to the scale (#269).
-  // Optional + no-op for adapters without configure().
-  // Re-applied on config reload below so a hot-edited key or unit takes effect.
-  const applyAdapterConfig = (bindKey: string | undefined): void => {
-    const scaleMac = ctx.scaleMac ?? undefined;
-    const displayUnit = resolveDisplayUnit(ctx.config.scale);
-    const qnProtocolByte = ctx.config.ble?.qn_protocol_byte ?? undefined;
-    const qnReportByte = ctx.config.ble?.qn_report_byte ?? undefined;
-    const qnWeightAck = ctx.config.ble?.qn_weight_ack ?? undefined;
-    const qnUserKey = ctx.config.ble?.qn_user_key ?? undefined;
-    const qnA4Prelude = ctx.config.ble?.qn_a4_prelude ?? undefined;
-    const qnTimeSyncLong = ctx.config.ble?.qn_time_sync_long ?? undefined;
-    const qnConfigLong = ctx.config.ble?.qn_config_long ?? undefined;
-    const qnResultAck = ctx.config.ble?.qn_result_ack ?? undefined;
-    for (const a of adapters)
-      a.configure?.({
-        bindKey,
-        scaleMac,
-        displayUnit,
-        qnProtocolByte,
-        qnReportByte,
-        qnWeightAck,
-        qnUserKey,
-        qnA4Prelude,
-        qnTimeSyncLong,
-        qnConfigLong,
-        qnResultAck,
-        // The config entries themselves, not copies: the processor moves
-        // last_known_weight on them in memory after each live weigh-in.
-        userWeights: ctx.config.users,
-      });
+  // Optional + no-op for adapters without configure(). Re-applied on config
+  // reload below so a hot-edited key or unit takes effect.
+  const applyAdapterConfig = (): void => {
+    for (const a of adapters) a.configure?.(buildAdapterRuntimeConfig(ctx.config, ctx.scaleMac));
   };
-  applyAdapterConfig(ctx.config.ble?.bind_key ?? undefined);
+  applyAdapterConfig();
 
   // Before the first session: a Salter weigh-in exported just before a restart
   // is still inside the adapter's age bound, and only the persisted mark keeps
@@ -460,7 +430,7 @@ async function main(): Promise<void> {
 
   const onReload = async (): Promise<void> => {
     await reloadAppConfig(ctx, displaySnapshotRef);
-    applyAdapterConfig(ctx.config.ble?.bind_key ?? undefined);
+    applyAdapterConfig();
     if (ctx.config.users.length === 1) {
       singleUserExporters = ctx.dryRun ? undefined : buildSingleUserExporters(ctx);
     }

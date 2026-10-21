@@ -48,7 +48,10 @@ vi.mock('../../src/runtime/proxy-liveness.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/runtime/proxy-liveness.js')>();
   return { ...actual, raceWithLiveness: h.raceWithLiveness };
 });
-vi.mock('../../src/config/resolve.js', () => ({ resolveUserProfile: h.resolveUserProfile }));
+vi.mock('../../src/config/resolve.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/config/resolve.js')>();
+  return { ...actual, resolveUserProfile: h.resolveUserProfile };
+});
 vi.mock('../../src/ble/types.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/ble/types.js')>();
   return { ...actual, abortableSleep: h.abortableSleep };

@@ -1,4 +1,4 @@
-import type { UserProfile } from '../interfaces/scale-adapter.js';
+import type { AdapterRuntimeConfig, ScaleAuth, UserProfile } from '../interfaces/scale-adapter.js';
 import type { BleHandlerName } from '../ble/types.js';
 import type {
   AppConfig,
@@ -84,6 +84,44 @@ export function resolveUserProfile(user: UserConfig, scaleConfig: ScaleConfig): 
     isAthlete: user.is_athlete,
     birthDate: user.birth_date,
     lastKnownWeight: resolveWeightAnchor(user),
+  };
+}
+
+/** The Beurer consent material a session hands to the adapter, from `users[0]`. */
+export function resolveScaleAuth(user: UserConfig | undefined): ScaleAuth {
+  return {
+    pin: user?.beurer_pin,
+    userIndex: user?.beurer_user_index,
+    provision: user?.beurer_provision,
+    registerNewUser: user?.beurer_register_new_user,
+  };
+}
+
+/**
+ * What every adapter's configure() gets, at startup and on each reload: the Xiaomi
+ * MiBeacon bind key plus the effective scale MAC the S400 nonce needs, the display
+ * unit the QN 0x13 command and the AC 27 D0 frame echo (#269), the ble.qn_* knobs.
+ */
+export function buildAdapterRuntimeConfig(
+  config: AppConfig,
+  scaleMac: string | undefined,
+): AdapterRuntimeConfig {
+  const ble = config.ble;
+  return {
+    bindKey: ble?.bind_key ?? undefined,
+    scaleMac,
+    displayUnit: resolveDisplayUnit(config.scale),
+    qnProtocolByte: ble?.qn_protocol_byte ?? undefined,
+    qnReportByte: ble?.qn_report_byte ?? undefined,
+    qnWeightAck: ble?.qn_weight_ack ?? undefined,
+    qnUserKey: ble?.qn_user_key ?? undefined,
+    qnA4Prelude: ble?.qn_a4_prelude ?? undefined,
+    qnTimeSyncLong: ble?.qn_time_sync_long ?? undefined,
+    qnConfigLong: ble?.qn_config_long ?? undefined,
+    qnResultAck: ble?.qn_result_ack ?? undefined,
+    // The config entries themselves, not copies: the processor moves
+    // last_known_weight on them in memory after each live weigh-in.
+    userWeights: config.users,
   };
 }
 

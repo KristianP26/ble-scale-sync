@@ -68,18 +68,8 @@ function maskSensitive(key: string, val: unknown): string {
   return fmt(redactDeep(val));
 }
 
-function diffField(
-  out: RestartRequiredField[],
-  key: string,
-  oldVal: unknown,
-  newVal: unknown,
-): void {
-  if (fmt(oldVal) === fmt(newVal)) return;
-  out.push({ key, oldValue: maskSensitive(key, oldVal), newValue: maskSensitive(key, newVal) });
-}
-
 /**
- * Compare old vs new config and return restart-required field changes.
+ * The keys a reload cannot apply, in the order they are reported.
  *
  * Notably hot-swappable (NOT in this list): scale_mac, weight_unit, height_unit, display_unit,
  * runtime.dry_run, runtime.debug, runtime.scan_cooldown, runtime.idle_rescan_delay,
@@ -89,117 +79,71 @@ function diffField(
  * ble.bind_key, every ble.qn_*,
  * ble.proxy_liveness_timeout_min, exporters,
  * unknown_user, out_of_range, user profile fields, last_known_weight, update_check.
+ *
+ * No row for switching between one user and several: processReading picks the
+ * single- or multi-user path from the live config on every reading, and the
+ * reload rebuilds the single-user exporters, so the switch takes effect at once
+ * (E-18). Only the startup banner and the startup healthchecks keep the old
+ * count, and neither changes what is exported.
  */
+const RESTART_REQUIRED_KEYS = [
+  'ble.handler',
+  'ble.adapter',
+  'ble.noble_driver',
+  // Read once into the context. Turning it off live would also leave the
+  // adapter's privacy on, so a restart is the honest answer either way (#417).
+  'ble.adapter_privacy',
+  // The adapter list is built once, before the loop starts (run.ts), so a
+  // hot-edited value changes nothing until a restart. Without this row the user
+  // gets neither the effect nor the warning, which is neither half of the
+  // documented reload contract (#407).
+  'ble.force_scale_adapter',
+  'ble.mqtt_proxy.broker_url',
+  'ble.mqtt_proxy.device_id',
+  'ble.mqtt_proxy.topic_prefix',
+  'ble.mqtt_proxy.username',
+  'ble.mqtt_proxy.password',
+  // The embedded broker is bootstrapped once at startup, so these two are as
+  // restart-required as the connection fields above (#407).
+  'ble.mqtt_proxy.embedded_broker_port',
+  'ble.mqtt_proxy.embedded_broker_bind',
+  'ble.esphome_proxy.host',
+  'ble.esphome_proxy.port',
+  'ble.esphome_proxy.encryption_key',
+  'ble.esphome_proxy.password',
+  // The proxy pool is built when the watcher starts and is not rebuilt on
+  // reload, so these three change nothing until a restart either.
+  'ble.esphome_proxy.client_info',
+  'ble.esphome_proxy.additional_proxies',
+  'ble.esphome_proxy.advertisement_timeout',
+  'ble.ha_bluetooth.url',
+  'ble.ha_bluetooth.token',
+  'ble.ha_bluetooth.source',
+  'runtime.continuous_mode',
+  // The queue path is resolved once in createAppContext, so flipping this key
+  // does nothing until a restart. Without this row the user would get neither
+  // the effect nor the warning, which is the gap ble.force_scale_adapter had.
+  'runtime.retry_failed_exports',
+  'runtime.watchdog_max_consecutive_failures',
+];
+
+function valueAt(config: AppConfig, key: string): unknown {
+  return key
+    .split('.')
+    .reduce<unknown>((at, k) => (at as Record<string, unknown> | null | undefined)?.[k], config);
+}
+
+/** Compare old vs new config and return restart-required field changes. */
 export function diffRestartRequired(
   oldConfig: AppConfig,
   newConfig: AppConfig,
 ): RestartRequiredField[] {
   const out: RestartRequiredField[] = [];
-
-  diffField(out, 'ble.handler', oldConfig.ble?.handler, newConfig.ble?.handler);
-  diffField(out, 'ble.adapter', oldConfig.ble?.adapter, newConfig.ble?.adapter);
-  diffField(out, 'ble.noble_driver', oldConfig.ble?.noble_driver, newConfig.ble?.noble_driver);
-  // Read once into the context. Turning it off live would also leave the
-  // adapter's privacy on, so a restart is the honest answer either way (#417).
-  diffField(
-    out,
-    'ble.adapter_privacy',
-    oldConfig.ble?.adapter_privacy,
-    newConfig.ble?.adapter_privacy,
-  );
-  // The adapter list is built once, before the loop starts (run.ts), so a
-  // hot-edited value changes nothing until a restart. Without this row the user
-  // gets neither the effect nor the warning, which is neither half of the
-  // documented reload contract (#407).
-  diffField(
-    out,
-    'ble.force_scale_adapter',
-    oldConfig.ble?.force_scale_adapter,
-    newConfig.ble?.force_scale_adapter,
-  );
-
-  const oldMqtt = oldConfig.ble?.mqtt_proxy;
-  const newMqtt = newConfig.ble?.mqtt_proxy;
-  diffField(out, 'ble.mqtt_proxy.broker_url', oldMqtt?.broker_url, newMqtt?.broker_url);
-  diffField(out, 'ble.mqtt_proxy.device_id', oldMqtt?.device_id, newMqtt?.device_id);
-  diffField(out, 'ble.mqtt_proxy.topic_prefix', oldMqtt?.topic_prefix, newMqtt?.topic_prefix);
-  diffField(out, 'ble.mqtt_proxy.username', oldMqtt?.username, newMqtt?.username);
-  diffField(out, 'ble.mqtt_proxy.password', oldMqtt?.password, newMqtt?.password);
-  // The embedded broker is bootstrapped once at startup, so these two are as
-  // restart-required as the connection fields above (#407).
-  diffField(
-    out,
-    'ble.mqtt_proxy.embedded_broker_port',
-    oldMqtt?.embedded_broker_port,
-    newMqtt?.embedded_broker_port,
-  );
-  diffField(
-    out,
-    'ble.mqtt_proxy.embedded_broker_bind',
-    oldMqtt?.embedded_broker_bind,
-    newMqtt?.embedded_broker_bind,
-  );
-
-  const oldEsp = oldConfig.ble?.esphome_proxy;
-  const newEsp = newConfig.ble?.esphome_proxy;
-  diffField(out, 'ble.esphome_proxy.host', oldEsp?.host, newEsp?.host);
-  diffField(out, 'ble.esphome_proxy.port', oldEsp?.port, newEsp?.port);
-  diffField(
-    out,
-    'ble.esphome_proxy.encryption_key',
-    oldEsp?.encryption_key,
-    newEsp?.encryption_key,
-  );
-  diffField(out, 'ble.esphome_proxy.password', oldEsp?.password, newEsp?.password);
-  // The proxy pool is built when the watcher starts and is not rebuilt on
-  // reload, so these three change nothing until a restart either.
-  diffField(out, 'ble.esphome_proxy.client_info', oldEsp?.client_info, newEsp?.client_info);
-  diffField(
-    out,
-    'ble.esphome_proxy.additional_proxies',
-    oldEsp?.additional_proxies,
-    newEsp?.additional_proxies,
-  );
-  diffField(
-    out,
-    'ble.esphome_proxy.advertisement_timeout',
-    oldEsp?.advertisement_timeout,
-    newEsp?.advertisement_timeout,
-  );
-
-  const oldHa = oldConfig.ble?.ha_bluetooth;
-  const newHa = newConfig.ble?.ha_bluetooth;
-  diffField(out, 'ble.ha_bluetooth.url', oldHa?.url, newHa?.url);
-  diffField(out, 'ble.ha_bluetooth.token', oldHa?.token, newHa?.token);
-  diffField(out, 'ble.ha_bluetooth.source', oldHa?.source, newHa?.source);
-
-  diffField(
-    out,
-    'runtime.continuous_mode',
-    oldConfig.runtime?.continuous_mode,
-    newConfig.runtime?.continuous_mode,
-  );
-  // The queue path is resolved once in createAppContext, so flipping this key
-  // does nothing until a restart. Without this row the user would get neither
-  // the effect nor the warning, which is the gap ble.force_scale_adapter had.
-  diffField(
-    out,
-    'runtime.retry_failed_exports',
-    oldConfig.runtime?.retry_failed_exports,
-    newConfig.runtime?.retry_failed_exports,
-  );
-  diffField(
-    out,
-    'runtime.watchdog_max_consecutive_failures',
-    oldConfig.runtime?.watchdog_max_consecutive_failures,
-    newConfig.runtime?.watchdog_max_consecutive_failures,
-  );
-
-  // No row for switching between one user and several: processReading picks
-  // the single- or multi-user path from the live config on every reading, and
-  // the reload rebuilds the single-user exporters, so the switch takes effect
-  // at once (E-18). Only the startup banner and the startup healthchecks keep
-  // the old count, and neither changes what is exported.
-
+  for (const key of RESTART_REQUIRED_KEYS) {
+    const oldVal = valueAt(oldConfig, key);
+    const newVal = valueAt(newConfig, key);
+    if (fmt(oldVal) === fmt(newVal)) continue;
+    out.push({ key, oldValue: maskSensitive(key, oldVal), newValue: maskSensitive(key, newVal) });
+  }
   return out;
 }
