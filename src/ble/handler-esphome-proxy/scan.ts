@@ -8,11 +8,11 @@ import {
   evaluateAdvertisement,
   GraceTimers,
   logAdvert,
+  ManufacturerDataCache,
   safeName,
 } from '../advertisement.js';
 import { bleLog, errMsg, untilAborted, withIdleTimeout, IMPEDANCE_GRACE_MS } from '../types.js';
 import { EsphomeProxyPool } from './pool.js';
-import { ManufacturerDataCache } from './advert.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 

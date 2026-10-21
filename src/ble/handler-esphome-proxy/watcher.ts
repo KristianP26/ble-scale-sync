@@ -12,6 +12,7 @@ import {
   evaluateAdvertisement,
   GraceTimers,
   DedupWindow,
+  ManufacturerDataCache,
   PostReadingWindow,
   logAdvert,
   safeName,
@@ -29,7 +30,6 @@ import {
 } from '../types.js';
 import { AsyncQueue } from '../async-queue.js';
 import { EsphomeProxyPool } from './pool.js';
-import { ManufacturerDataCache } from './advert.js';
 import { logTransportCapabilities } from './scan.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────

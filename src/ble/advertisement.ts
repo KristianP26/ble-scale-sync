@@ -356,6 +356,51 @@ export class PostReadingWindow {
   }
 }
 
+// ─── Manufacturer data for the GATT session (per address) ─────────────────────
+
+/** A manufacturer-data entry as every transport hands it over. */
+type ManufacturerData = { id: number; data: Buffer };
+
+/**
+ * Last non-empty manufacturer data seen per address, for the GATT session
+ * handoff only (ConnectionContext.manufacturerData, #461).
+ *
+ * An advertisement and its scan response can arrive apart, and the one that
+ * matches an adapter (usually the named scan response) need not be the one
+ * that carries the manufacturer data. ESPHome delivers them as two events:
+ * the only QN scale logged through ESPHome matched on `name="QN-Scale"
+ * uuids=[ffe0]` with none (#331). Deliberately NOT merged into what the
+ * resolver or the broadcast parsers see: that would change which adapter
+ * matches, and hand a broadcast adapter a stale frame. Bounded like the name
+ * cache next to it.
+ */
+export class ManufacturerDataCache {
+  private readonly byAddress = new Map<string, ManufacturerData>();
+
+  constructor(private readonly max = 64) {}
+
+  /** Remember the frame's manufacturer data, if it has any. */
+  remember(info: { manufacturerData?: ManufacturerData }, key: string): void {
+    const md = info.manufacturerData;
+    if (!md || md.data.length === 0) return;
+    if (this.byAddress.has(key)) {
+      this.byAddress.delete(key);
+    } else if (this.byAddress.size >= this.max) {
+      const oldest = this.byAddress.keys().next().value;
+      if (oldest !== undefined) this.byAddress.delete(oldest);
+    }
+    this.byAddress.set(key, md);
+  }
+
+  /** The frame's own manufacturer data, else the last one seen for the address. */
+  forSession(
+    info: { manufacturerData?: ManufacturerData },
+    key: string,
+  ): ManufacturerData | undefined {
+    return info.manufacturerData ?? this.byAddress.get(key);
+  }
+}
+
 // ─── Advertisement logging (diagnostics) ───────────────────────────────────────
 
 /** How many UUIDs of one kind are printed before the rest are summarised. */
