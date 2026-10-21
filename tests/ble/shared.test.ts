@@ -517,9 +517,10 @@ describe('waitForReading() — onConnected mode', () => {
   });
 
   // #461: the advertisement the transport matched on, for adapters that read
-  // per-unit flags from it. The bytes are the #461 Physiq advertisement.
+  // per-unit flags from it. The bytes are the #461 Physiq advertisement, its
+  // MAC at [5..10] rewritten to the fake 02:00:00:00:00:01.
   it('hands the advertised manufacturer data to onConnected as ConnectionContext.manufacturerData', async () => {
-    const mfg = { id: 0xffff, data: Buffer.from('081401000025e0160005ff6108010015', 'hex') };
+    const mfg = { id: 0xffff, data: Buffer.from('08140100000100000000026108010015', 'hex') };
     const run = async (manufacturerData?: {
       id: number;
       data: Buffer;
@@ -2972,7 +2973,7 @@ describe('waitForRawReading: a reading from memory with an unreadable stamp (D06
 // left out: the adapter ignores them on this dialect.
 describe('QN 18-byte stored weigh-in through waitForRawReading (#463)', () => {
   const hex = (h: string): Buffer => Buffer.from(h.replace(/ /g, ''), 'hex');
-  const INFO = hex('12 12 ff 25 e0 16 00 05 ff 13 07 16 00 01 05 9f 32 49');
+  const INFO = hex('12 12 ff 01 00 00 00 00 02 13 07 16 00 01 05 9f 32 2d');
   const READY = hex('14 0b ff 01 00 01 09 03 00 00 2c');
   const CONFIG_REQ = hex('21 05 ff 01 26');
   const VISIT_OK = hex('a1 06 02 01 01 ab');
@@ -2981,9 +2982,10 @@ describe('QN 18-byte stored weigh-in through waitForRawReading (#463)', () => {
   const LIVE = hex('10 0f ff 01 02 1b f8 10 fb 10 f9 00 00 00 48');
   const ADVERT = {
     id: 0xffff,
-    data: hex('08 14 01 00 01 25 e0 16 00 05 ff 61 08 01 00 15'),
+    data: hex('08 14 01 00 01 01 00 00 00 00 02 61 08 01 00 15'),
   };
-  const ADDRESS = 'FF050016E025';
+  /** The fake MAC the frames echo in place of the Physiq's (0x12 [3..8] with its sum recomputed, advertisement [5..10]). */
+  const ADDRESS = '020000000001';
   /** The record, 71.55 kg at 17:59:38Z in user slot 1, as the reading it becomes. */
   const STORED = {
     weight: 71.55,
@@ -3083,7 +3085,7 @@ describe('QN 18-byte stored weigh-in through waitForRawReading (#463)', () => {
 // session without one is read.
 describe('QN 18-byte stored weigh-in with no user through waitForRawReading (#463)', () => {
   const hex = (h: string): Buffer => Buffer.from(h.replace(/ /g, ''), 'hex');
-  const INFO = hex('12 12 ff 25 e0 16 00 05 ff 13 07 16 00 04 05 9f 32 4c');
+  const INFO = hex('12 12 ff 01 00 00 00 00 02 13 07 16 00 04 05 9f 32 30');
   const READY = hex('14 0b ff 01 00 01 09 03 00 00 2c');
   const CONFIG_REQ = hex('21 05 ff 01 26');
   const VISIT_OK = hex('a1 06 02 01 01 ab');
@@ -3092,8 +3094,9 @@ describe('QN 18-byte stored weigh-in with no user through waitForRawReading (#46
   const EMPTY_24 = hex('24 10 ff' + ' 00'.repeat(12) + ' 33');
   const EMPTY_25 = hex('25 0f ff' + ' 00'.repeat(12) + ' 33');
   const FINAL = hex('10 0f ff 01 02 1c 57 10 dd 10 db 00 00 00 6c');
-  const ADVERT = { id: 0xffff, data: hex('08 14 01 00 03 25 e0 16 00 05 ff 61 08 02 00 15') };
-  const ADDRESS = 'FF050016E025';
+  const ADVERT = { id: 0xffff, data: hex('08 14 01 00 03 01 00 00 00 00 02 61 08 02 00 15') };
+  /** The fake MAC the frames echo in place of the Physiq's (0x12 [3..8] with its sum recomputed, advertisement [5..10]). */
+  const ADDRESS = '020000000001';
   /** onConnected in the log. */
   const START = '2026-10-20T19:39:50.232Z';
   /** The record, 72.60 kg at 19:28:16Z kept for no user, as history. */
@@ -3192,7 +3195,7 @@ describe('QN 18-byte stored weigh-in with no user through waitForRawReading (#46
 // No 18-byte log has a batch of two records, so `ofTwo` derives one.
 describe('QN 18-byte weigh-in before the stored-record answer through waitForRawReading (#463)', () => {
   const hex = (h: string): Buffer => Buffer.from(h.replace(/ /g, ''), 'hex');
-  const INFO = hex('12 12 ff 25 e0 16 00 05 ff 13 07 16 00 03 05 9f 32 4b');
+  const INFO = hex('12 12 ff 01 00 00 00 00 02 13 07 16 00 03 05 9f 32 2f');
   const READY = hex('14 0b ff 01 00 01 09 03 00 00 2c');
   const CONFIG_REQ = hex('21 05 ff 01 26');
   const VISIT_OK = hex('a1 06 02 01 01 ab');
@@ -3201,8 +3204,9 @@ describe('QN 18-byte weigh-in before the stored-record answer through waitForRaw
   const NO_RECORDS = hex('23 14 ff' + ' 00'.repeat(16) + ' 36');
   const EMPTY_24 = hex('24 10 ff' + ' 00'.repeat(12) + ' 33');
   const EMPTY_25 = hex('25 0f ff' + ' 00'.repeat(12) + ' 33');
-  const ADVERT = { id: 0xffff, data: hex('08 14 01 00 03 25 e0 16 00 05 ff 61 08 02 00 15') };
-  const ADDRESS = 'FF050016E025';
+  const ADVERT = { id: 0xffff, data: hex('08 14 01 00 03 01 00 00 00 00 02 61 08 02 00 15') };
+  /** The fake MAC the frames echo in place of the Physiq's (0x12 [3..8] with its sum recomputed, advertisement [5..10]). */
+  const ADDRESS = '020000000001';
   const QUERY = hex('22 06 00 00 03 2b');
   const ACK = hex('1f 05 00 10 34');
   const WEIGH_IN = { weight: 71.15, impedance: 499 };

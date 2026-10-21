@@ -32,10 +32,11 @@ export const adverts: AdvertFixture = {
     'qn-gatt-scale-advert-463': {
       provenance: 'derived',
       source:
-        '#463 Physiq advert of 2026-10-19 16:38 (ADVERT_1019 in qn-scale.test.ts, no MAC in ' +
-        'it); name and service assumed: not AABB, so the watcher waits on it',
+        '#463 Physiq advert of 2026-10-19 16:38 (ADVERT_1019 in qn-scale.test.ts), the MAC it ' +
+        'echoes at [5..10] rewritten to the fake one; name and service assumed: not AABB, so ' +
+        'the watcher waits on it',
       device: { ...QN, serviceUuids: ['fff0'] },
-      adverts: [{ atMs: 0, mfr: [0xffff, '081401000325e0160005ff6108020015'] }],
+      adverts: [{ atMs: 0, mfr: [0xffff, '08140100030100000000026108020015'] }],
     },
   },
 };

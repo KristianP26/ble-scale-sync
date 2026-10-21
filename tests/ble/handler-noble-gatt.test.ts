@@ -323,8 +323,11 @@ describe('noble passes advertised service data to the adapter resolver (B-10)', 
 // macOS. The session gets the last one the address advertised in this run;
 // the resolver keeps what the advertisement shows (D071).
 describe('noble hands a session the manufacturer data its scale advertised earlier (#463, D071)', () => {
-  /** The #463 Physiq's advertisement of 2026-10-20 17:57:58.247 with its company id 0xffff. */
-  const MSD_1020 = Buffer.from('ffff081401000325e0160005ff6108020015', 'hex');
+  /**
+   * The #463 Physiq's advertisement of 2026-10-20 17:57:58.247 with its company
+   * id 0xffff; the MAC it echoes at [5..10] is the fake 02:00:00:00:00:01.
+   */
+  const MSD_1020 = Buffer.from('ffff08140100030100000000026108020015', 'hex');
   const PAYLOAD_1020 = MSD_1020.subarray(2);
 
   /** A GATT adapter that claims the device by name and notes what its session got. */
@@ -408,7 +411,7 @@ describe('noble hands a session the manufacturer data its scale advertised earli
     const adapter = recordingAdapter(seen, []);
     await handler.scanAndReadRaw({ adapters: [adapter], profile: PROFILE });
 
-    const own = Buffer.from('ffff081401000125e0160005ff6108010015', 'hex');
+    const own = Buffer.from('ffff08140100010100000000026108010015', 'hex');
     p.advertisement.manufacturerData = own;
     await handler.scanAndReadRaw({ adapters: [adapter], profile: PROFILE });
 

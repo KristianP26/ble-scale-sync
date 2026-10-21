@@ -197,6 +197,26 @@ export async function replaySession(
 }
 
 /**
+ * Modules under tests/fixtures/ that only share frames and constants with the
+ * fixtures next to them. Every other module exports `session` or `adverts`, so
+ * a fixture whose export is misspelled fails the loaders instead of dropping
+ * out of the goldens without a word.
+ */
+const FIXTURE_HELPERS: ReadonlySet<string> = new Set(['qn/frames.ts', 'sig/frames.ts']);
+
+/** Throws for a module under tests/fixtures/ that is neither a fixture nor in FIXTURE_HELPERS. */
+export function assertFixtureModule(
+  file: string,
+  mod: { session?: unknown; adverts?: unknown },
+): void {
+  const path = file.split(sep).join('/');
+  if (mod.session || mod.adverts || FIXTURE_HELPERS.has(path)) return;
+  throw new Error(
+    `tests/fixtures/${path} exports neither session nor adverts; a helper module goes in FIXTURE_HELPERS`,
+  );
+}
+
+/**
  * Every module under tests/fixtures/ that exports `session`, with its family:
  * the directory directly under tests/fixtures/, which names the golden folder.
  */
@@ -210,7 +230,9 @@ export async function loadFixtures(): Promise<(SessionFixture & { family: string
   for (const file of files) {
     const mod = (await import(pathToFileURL(join(root, file)).href)) as {
       session?: SessionFixture;
+      adverts?: unknown;
     };
+    assertFixtureModule(file, mod);
     if (!mod.session) continue;
     if (!file.includes(sep)) throw new Error(`${file}: a fixture belongs in a family directory`);
     const family = file.split(sep)[0];

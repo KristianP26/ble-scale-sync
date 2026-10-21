@@ -7,7 +7,7 @@
     "weight": 78.4,
     "impedance": 0,
     "scaleComposition": {
-      "visceralFat": 8
+      "visceralFat": 20
     }
   },
   "history": [],
@@ -36,7 +36,7 @@
     "waterPercent": 59.28,
     "boneMass": 2.67,
     "muscleMass": 60.99,
-    "visceralFat": 8,
+    "visceralFat": 20,
     "physiqueRating": 5,
     "bmr": 1782,
     "metabolicAge": 31

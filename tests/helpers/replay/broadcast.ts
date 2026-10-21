@@ -21,7 +21,7 @@ import type {
 import { adapters } from '../../../src/scales/index.js';
 import { resolveAdapter } from '../../../src/scales/resolve.js';
 import { defaultProfile } from '../scale-test-utils.js';
-import { FAKE_ADDRESS } from './session.js';
+import { assertFixtureModule, FAKE_ADDRESS } from './session.js';
 import type { Trace } from './trace.js';
 
 /** DEDUP_WINDOW_MS of the proxy watchers (handler-*-proxy/watcher.ts, not exported). */
@@ -208,7 +208,11 @@ export async function loadAdvertFixtures(): Promise<(AdvertFixture & { family: s
   const out: (AdvertFixture & { family: string })[] = [];
   const seen = new Set<string>();
   for (const file of files) {
-    const mod = (await import(pathToFileURL(join(root, file)).href)) as { adverts?: AdvertFixture };
+    const mod = (await import(pathToFileURL(join(root, file)).href)) as {
+      adverts?: AdvertFixture;
+      session?: unknown;
+    };
+    assertFixtureModule(file, mod);
     if (!mod.adverts) continue;
     if (!file.includes(sep)) throw new Error(`${file}: a fixture belongs in a family directory`);
     const family = file.split(sep)[0];

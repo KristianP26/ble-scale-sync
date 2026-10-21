@@ -873,16 +873,17 @@ describe('ReadingWatcher config: PIN removal, device name', () => {
 
 // #461: the proxy delivers the advertisement and its scan response as two
 // events, and the one that matches (named) need not carry the manufacturer
-// data. The bytes are the #461 Physiq advertisement (node-ble log); the split
-// into a nameless event with them and a named one without is synthetic.
+// data. The bytes are the #461 Physiq advertisement (node-ble log) with MAC
+// echoed at [5..10] in place of its own; the split into a nameless event with
+// them and a named one without is synthetic.
 describe('ReadingWatcher manufacturer data handoff (#461)', () => {
   type Pool = { emitAdvert: (info: BleDeviceInfo, mac: string) => void };
   const poolOf = (w: unknown): Pool => (w as { pool: Pool }).pool;
   const MFG_461 = {
     id: 0xffff,
-    data: Buffer.from('081401000025e0160005ff6108010015', 'hex'),
+    data: Buffer.from('08140100000100000000026108010015', 'hex'),
   };
-  const MAC = 'FF:05:00:16:E0:25';
+  const MAC = '02:00:00:00:00:01';
 
   function recordingAdapter(
     matched: BleDeviceInfo[],

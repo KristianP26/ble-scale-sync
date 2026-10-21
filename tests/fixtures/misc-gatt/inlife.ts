@@ -7,7 +7,9 @@ import type { SessionFixture } from '../../helpers/replay/session.js';
  * unverified impedance field [4..7] (#405) and is final; a legacy frame
  * (visceral BE/10 at [7]) only completes and holds 4 s for one (#413).
  */
-const LEGACY = '0210031000000000500000000000'; // 78.4 kg, visceral 8.0
+// Visceral 20.0, far from the BMI estimate of 8 for this profile, so a payload
+// shows whether the scale's own value was used.
+const LEGACY = '0210031000000000c80000000000'; // 78.4 kg, visceral 20.0
 
 export const session: SessionFixture = {
   adapter: 'Inlife',

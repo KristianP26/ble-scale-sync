@@ -1907,16 +1907,16 @@ describe('scanAndReadRaw after a pairing nobody confirmed (#471, D063)', () => {
 // flag. The session gets the last one the address advertised in this run; the
 // matches keep what the snapshot shows (D071).
 describe('scanAndReadRaw hands a session the manufacturer data its scale advertised earlier (#463, D071)', () => {
-  const MAC = 'FF:05:00:16:E0:25';
-  /** The Physiq's advertisement of 2026-10-20 17:57:58.247, byte for byte. */
+  const MAC = '02:00:00:00:00:01';
+  /** The Physiq's advertisement of 2026-10-20 17:57:58.247, with MAC echoed at [5..10] in place of its own. */
   const ADVERT_1020 = {
     id: 0xffff,
-    data: Buffer.from('081401000325e0160005ff6108020015', 'hex'),
+    data: Buffer.from('08140100030100000000026108020015', 'hex'),
   };
-  /** Its advertisement of 2026-10-13, byte for byte: [4] and [13] differ. */
+  /** Its advertisement of 2026-10-13, MAC rewritten the same way: [4] and [13] differ. */
   const ADVERT_1013 = {
     id: 0xffff,
-    data: Buffer.from('081401000125e0160005ff6108010015', 'hex'),
+    data: Buffer.from('08140100010100000000026108010015', 'hex'),
   };
   const sessionMfg = (cycle: number): unknown => readingArgs[cycle]?.manufacturerData;
   const sessionAdapter = (cycle: number): string | undefined => readingArgs[cycle]?.adapter.name;
@@ -2005,7 +2005,7 @@ describe('scanAndReadRaw hands a session the manufacturer data its scale adverti
 
   it('does not hand one address what another advertised', async () => {
     await cycle({ manufacturerData: ADVERT_1020 });
-    await cycle({}, { targetMac: 'FF:05:00:16:E0:26' });
+    await cycle({}, { targetMac: '02:00:00:00:00:02' });
     expect(sessionMfg(1)).toBeUndefined();
   });
 
