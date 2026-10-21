@@ -300,96 +300,13 @@ export interface AdapterRuntimeConfig {
    * other adapter.
    */
   displayUnit?: ScaleDisplayUnit;
-  /**
-   * Protocol byte the QN handshake echoes back (`ble.qn_protocol_byte`).
-   *
-   * The value the firmware accepts differs across the family and cannot be
-   * detected: a scale on the wrong byte acknowledges every command and simply
-   * never streams a weight, which looks identical to nobody standing on it.
-   * The frame length picks a default; this overrides it (#75, #331).
-   */
-  qnProtocolByte?: number;
-  /**
-   * Slot mask of the QN A00D user-delete frame `a0 0d 04 <mask> ..`
-   * (`ble.qn_report_byte`). Unset, the frame is not sent at all; set, it is sent
-   * in every session with this mask, and the scale deletes the user slots the
-   * mask selects (bit i-1 = slot i). Opt-in only, for an install that stopped
-   * reporting without it (#461).
-   */
-  qnReportByte?: number;
-  /**
-   * Acknowledge every live QN weight frame with its own weight
-   * (`ble.qn_weight_ack`).
-   *
-   * One reading of a vendor-app capture has the app answering each 0x10 frame
-   * with `a2 06 01 <that frame's weight>` (#235). The adapter does this on the
-   * 20-byte extended dialect, which is the only one that capture covers, and
-   * never for a 20-byte live frame: on the 19-byte dialect that frame is read
-   * without writing anything back (#331, D037), on the extended one its layout
-   * is not decoded yet. Unset keeps that gate; true enables it on every
-   * dialect, for a scale that completes the handshake and then goes quiet;
-   * false disables it everywhere.
-   *
-   * True also sends the configured weight anchor: on the extended dialect in
-   * the ready-time A2, on every other dialect as two A2 frames right after
-   * START, as two Android captures of the Arboleaf app show (#331, #75). On
-   * the 19-byte dialect it also drops the ready-time A2 and sends the A00D #2
-   * profile frame from the user's age and height (#331).
-   */
-  qnWeightAck?: boolean;
-  /**
-   * User key for the QN A00D #2 profile frame (`ble.qn_user_key`, 1 to 9999,
-   * #463).
-   *
-   * Per the vendor's published SDK the key is the one the vendor app registered
-   * the user slot with, and the scale keeps it per slot; the vendor apps send
-   * 1000, openScale's frame 8. Set, the 18- and 19-byte dialects send the
-   * vendor-app profile frame with this key and the first user's age, height,
-   * sex and (18-byte only) athlete setting, and no ready-time A2, also without
-   * `qnWeightAck`. Unset changes nothing; the 20-byte and classic dialects
-   * ignore it.
-   */
-  qnUserKey?: number;
-  /**
-   * Send the two 0xA4 0x0F frames the Arboleaf vendor app sends between START
-   * and the first live 0x10 frame (`ble.qn_a4_prelude`, #331).
-   *
-   * Off by default and opt-in per install: the frames are replayed verbatim
-   * from one reporter's HCI capture of their own unit, their payload is not
-   * decoded, and every other QN scale in the registry reads today without
-   * them.
-   */
-  qnA4Prelude?: boolean;
-  /**
-   * Send the 9-byte form of the QN 0x20 time-sync frame
-   * (`ble.qn_time_sync_long`, #331).
-   *
-   * The vendor app's frame carries one extra byte before the checksum and is
-   * otherwise identical to ours, timestamp included. The byte is the UTC offset
-   * (`0x08` = UTC+2 in the captures), and the long form sends the host's. Off by
-   * default: every QN scale in the registry reads today on the 8-byte form.
-   */
-  qnTimeSyncLong?: boolean;
-
-  /**
-   * Send the 10-byte form of the QN 0x13 config frame, instead of the 9-byte
-   * one (`ble.qn_config_long`, #331).
-   *
-   * The last documented difference between this app's QN handshake and the
-   * vendor app's. Undecoded, opt-in, off by default.
-   */
-  qnConfigLong?: boolean;
-
-  /**
-   * Send `1f 05 <protocol type> 10 <sum>` after the 0x16 of a complete
-   * 19-byte QN result block, as the vendor's published SDK does
-   * (`ble.qn_result_ack`, #331). Opt-in, off by default: its effect on the
-   * scale is not known yet.
-   */
-  qnResultAck?: boolean;
-
   /** Every configured user's weight hints, in config order (see UserWeightHint). */
   userWeights?: readonly UserWeightHint[];
+  /**
+   * The adapter-owned `ble.*` keys, camelCased (`qn_user_key` -> `qnUserKey`,
+   * D076). The adapter that owns a key types it in its own configure().
+   */
+  readonly [option: string]: unknown;
 }
 
 /**

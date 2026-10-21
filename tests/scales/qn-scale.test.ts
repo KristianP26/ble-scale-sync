@@ -1,13 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import { jieliAuthResponseFrame } from '../../src/scales/jieli-auth.js';
+import { jieliAuthResponseFrame } from '../../src/scales/qn-scale/jieli-auth.js';
+import { QnScaleAdapter } from '../../src/scales/qn-scale/index.js';
 import {
-  QnScaleAdapter,
+  buildConfig,
   buildMeasurementTrigger,
   buildTimeSync,
-  buildConfig,
   buildUserProfileFrame,
-} from '../../src/scales/qn-scale/index.js';
-import {
   decodeStoredRecord,
   decryptQnResistance,
   hasValidSumChecksum,
@@ -1407,7 +1405,7 @@ describe('QnScaleAdapter', () => {
       // Simulate grace period elapsed by manipulating internal state.
       // Access private field for testing. The grace period is 1500ms.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (adapter as any).firstStableNoImpedanceAt = Date.now() - 2000;
+      (adapter as any).s.firstStableNoImpedanceAt = Date.now() - 2000;
 
       // Now it should be accepted
       const reading = adapter.parseNotification(buf);
@@ -1439,7 +1437,7 @@ describe('QnScaleAdapter', () => {
       const buf = makeWeightFrame(6000, 0x02, 0, 0);
       expect(adapter.parseNotification(buf)).toBeNull();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (adapter as any).firstStableNoImpedanceAt = Date.now() - 2000;
+      (adapter as any).s.firstStableNoImpedanceAt = Date.now() - 2000;
       expect(adapter.parseNotification(buf)).toBeNull();
 
       // Next frame with impedance should be accepted
@@ -1711,7 +1709,7 @@ describe('AE02 dispatch (#75, #235)', () => {
 
   // The gate itself: without this write the scale never sends a 0x10 frame.
   // The expected bytes are the JieLi RcspAuth response for this exact
-  // challenge, computed by src/scales/jieli-auth.ts (verified in #235 against
+  // challenge, computed by src/scales/qn-scale/jieli-auth.ts (verified in #235 against
   // ten captured pairs).
   it('answers the challenge on AE01 with the JieLi response frame', async () => {
     const adapter = makeAdapter();
@@ -3951,8 +3949,9 @@ describe('AE02 dispatch (#75, #235)', () => {
       stableNoImpedance.writeUInt16BE(9790, 5);
       // First stable R1=R2=0 frame only starts the grace timer.
       expect(adapter.parseNotification(stableNoImpedance)).toBeNull();
-      (adapter as unknown as { firstStableNoImpedanceAt: number }).firstStableNoImpedanceAt =
-        Date.now() - 2000;
+      (
+        adapter as unknown as { s: { firstStableNoImpedanceAt: number } }
+      ).s.firstStableNoImpedanceAt = Date.now() - 2000;
       const reading = adapter.parseNotification(stableNoImpedance);
       expect(reading).not.toBeNull();
       expect(reading!.weight).toBeCloseTo(97.9);
@@ -3976,12 +3975,9 @@ describe('QN per-session reset ordering (#406)', () => {
       ]),
     );
     const first = adapter as unknown as {
-      seenProtocolType: number;
-      isLongFrameVariant: boolean;
-      configSent: boolean;
-      weightScaleFactor: number;
+      s: { seenProtocolType: number; kind: string; configSent: boolean; weightScaleFactor: number };
     };
-    expect(first.isLongFrameVariant).toBe(true);
+    expect(first.s.kind).toBe('va19');
 
     adapter.onSessionEnd?.();
     // Session 2 starts. onConnected has NOT run yet, which is the real
@@ -3989,9 +3985,9 @@ describe('QN per-session reset ordering (#406)', () => {
     // init, so a frame can arrive in this window.
     adapter.onSessionStart?.();
 
-    expect(first.isLongFrameVariant).toBe(false);
-    expect(first.configSent).toBe(false);
-    expect(first.weightScaleFactor).toBe(100);
+    expect(first.s.kind).toBe('unknown');
+    expect(first.s.configSent).toBe(false);
+    expect(first.s.weightScaleFactor).toBe(100);
   });
 
   // The test above checks three fields. This one covers every instance field
@@ -4010,14 +4006,7 @@ describe('QN per-session reset ordering (#406)', () => {
       'altCharWriteUuid',
       // Configuration from configure(), not session state.
       'displayUnit',
-      'forcedProtocolType',
-      'forcedReportByte',
-      'forcedWeightAck',
-      'forcedUserKey',
-      'a4PreludeEnabled',
-      'configLong',
-      'timeSyncLong',
-      'forcedResultAck',
+      'opts',
       'userWeights',
       // Session-boundary values: set by onConnected / onSessionEnd, bumped
       // rather than reset, re-stamped with the current time, or replaced by a
@@ -4032,15 +4021,17 @@ describe('QN per-session reset ordering (#406)', () => {
       // What a later session's stored records and result blocks are compared
       // with: the newest stored weigh-in reported and the recent live results
       // (#331).
-      'storedMark',
-      'recentLiveResults',
+      'ledger',
       // Keyed by reading, like provisionalReadings.
       'scaleComposition',
     ]);
     vi.useFakeTimers();
     try {
-      const fresh = new QnScaleAdapter() as unknown as Record<string, unknown>;
-      const used = new QnScaleAdapter() as unknown as Record<string, unknown>;
+      // The per-session fields live in the adapter's session object (D075).
+      expect(Object.keys(new QnScaleAdapter()).filter((k) => !SURVIVES.has(k))).toEqual(['s']);
+      const usedAdapter = new QnScaleAdapter();
+      const fresh = (new QnScaleAdapter() as unknown as { s: Record<string, unknown> }).s;
+      const used = (usedAdapter as unknown as { s: Record<string, unknown> }).s;
       const perSession = Object.keys(fresh).filter((k) => !SURVIVES.has(k));
       // Guards the filter itself: if these vanished, the loop below would
       // silently check nothing.
@@ -4048,7 +4039,7 @@ describe('QN per-session reset ordering (#406)', () => {
         expect.arrayContaining([
           'seenProtocolType',
           'weightScaleFactor',
-          'isExtendedLongFrame',
+          'kind',
           'extendedResultEmitted',
           'historyResponseSent',
           'timeSyncSent',
@@ -4064,16 +4055,18 @@ describe('QN per-session reset ordering (#406)', () => {
         if (key.endsWith('Timer')) used[key] = setTimeout(() => {}, 60_000);
         else if (typeof v === 'boolean') used[key] = !v;
         else if (typeof v === 'number') used[key] = v + 7;
+        else if (typeof v === 'string') used[key] = `${v}-dirty`;
         else if (v === null) used[key] = key === 'ae02Subscribe' ? Promise.resolve(true) : 12345;
         else if (v instanceof Set) used[key] = new Set([7]);
         else if (Array.isArray(v)) used[key] = [7];
         else throw new Error(`no dirty value for field ${key} (${typeof v}); extend this test`);
       }
 
-      (used as unknown as QnScaleAdapter).onSessionStart();
+      usedAdapter.onSessionStart();
 
+      const next = (usedAdapter as unknown as { s: Record<string, unknown> }).s;
       for (const key of perSession) {
-        expect({ [key]: used[key] }).toEqual({ [key]: fresh[key] });
+        expect({ [key]: next[key] }).toEqual({ [key]: fresh[key] });
       }
     } finally {
       vi.useRealTimers();

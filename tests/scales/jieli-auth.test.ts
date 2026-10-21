@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { e1, jieliAuthResponseFrame } from '../../src/scales/jieli-auth.js';
+import { e1, jieliAuthResponseFrame } from '../../src/scales/qn-scale/jieli-auth.js';
 
 const h = (s: string): Buffer => Buffer.from(s, 'hex');
 

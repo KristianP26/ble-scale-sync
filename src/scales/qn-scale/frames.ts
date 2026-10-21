@@ -10,6 +10,7 @@ import type { Gender } from '../../interfaces/scale-adapter.js';
 import {
   RESULT_ACK_MEASURED,
   RESULT_ACK_OPCODE,
+  USER_DELETE_SUBCOMMAND,
   VENDOR_APP_USER_KEY,
   VISIT_ALGORITHM,
   VISIT_ATHLETE_STEP,
@@ -32,16 +33,29 @@ export function buildMeasurementTrigger(weightKg: number): number[] {
  * echoes the scale's OWN raw weight bytes back verbatim, which is independent
  * of `weightScaleFactor`; only the pre-stream anchor has to convert from kg.
  */
-// DO NOT merge this with the ready-time A2 the handshake builds inline. That
-// frame is `a2 06 01 32 <age>`, the identical shape, and buildA2Frame((0x32 <<
-// 8) | age) would emit the same bytes for every age the clamp accepts. They are
-// deliberately different frames whose payloads the scale reads differently, and
-// the comment on TRIGGER_WEIGHT_FALLBACK_KG in constants.ts says why.
+// DO NOT merge this with buildOpenScaleA2. That frame is `a2 06 01 32 <age>`,
+// the identical shape, and buildA2Frame((0x32 << 8) | age) would emit the same
+// bytes for every age the clamp accepts. They are deliberately different frames
+// whose payloads the scale reads differently, and the comment on
+// TRIGGER_WEIGHT_FALLBACK_KG in constants.ts says why.
 export function buildA2Frame(raw: number): number[] {
   const v = Math.min(0xffff, Math.max(0, Math.round(raw)));
-  const cmd = [0xa2, 0x06, 0x01, (v >> 8) & 0xff, v & 0xff, 0x00];
-  cmd[5] = cmd.slice(0, 5).reduce((a, b) => a + b, 0) & 0xff;
-  return cmd;
+  return withChecksum([0xa2, 0x06, 0x01, (v >> 8) & 0xff, v & 0xff]);
+}
+
+/** openScale's ready-time A2, `a2 06 01 32 <age>`: see buildA2Frame for why it stays apart. */
+export function buildOpenScaleA2(age: number): number[] {
+  return withChecksum([0xa2, 0x06, 0x01, 0x32, Math.min(0xff, Math.max(1, age))]);
+}
+
+/** The A00D user-delete frame for the slots `mask` selects (USER_DELETE_SUBCOMMAND, #461). */
+export function buildUserDelete(mask: number): number[] {
+  return withChecksum([0xa0, 0x0d, USER_DELETE_SUBCOMMAND, mask, 0, 0, 0, 0, 0, 0, 0, 0]);
+}
+
+/** The 0x22 start measurement / stored-data query with the session's protocol type. */
+export function buildStoredDataQuery(protocolType: number): number[] {
+  return withChecksum([0x22, 0x06, protocolType, 0x00, 0x03]);
 }
 
 /**
@@ -51,9 +65,7 @@ export function buildA2Frame(raw: number): number[] {
  * of the session carries.
  */
 export function buildResultAck(protocolType: number): number[] {
-  const cmd = [RESULT_ACK_OPCODE, 0x05, protocolType & 0xff, RESULT_ACK_MEASURED, 0x00];
-  cmd[4] = cmd.slice(0, 4).reduce((a, b) => a + b, 0) & 0xff;
-  return cmd;
+  return withChecksum([RESULT_ACK_OPCODE, 0x05, protocolType & 0xff, RESULT_ACK_MEASURED]);
 }
 
 /**
@@ -136,7 +148,7 @@ const CONFIG_TAIL_SHORT = [0x00] as const;
  * byte, the way `buildTimeSync` is.
  */
 export function buildConfig(protocolType: number, unitFlag: number, long = false): number[] {
-  const body = [
+  return withChecksum([
     0x13,
     long ? 0x0a : 0x09,
     protocolType,
@@ -145,8 +157,7 @@ export function buildConfig(protocolType: number, unitFlag: number, long = false
     0x00,
     0x00,
     ...(long ? CONFIG_TRAILER : CONFIG_TAIL_SHORT),
-  ];
-  return [...body, body.reduce((a, b) => a + b, 0) & 0xff];
+  ]);
 }
 
 /**
@@ -172,6 +183,11 @@ export function buildTimeSync(
     (s >>> 24) & 0xff,
   ];
   if (long) body.push(tzByte & 0xff);
+  return withChecksum(body);
+}
+
+/** `body` with the family's trailing checksum appended: its sum, mod 256. */
+export function withChecksum(body: number[]): number[] {
   return [...body, body.reduce((a, b) => a + b, 0) & 0xff];
 }
 

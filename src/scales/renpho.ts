@@ -17,6 +17,7 @@ import {
   type ScaleBodyComp,
 } from './body-comp-helpers.js';
 import { bleLog, normalizeUuid } from '../ble/types.js';
+import { qnCanRun } from './qn-scale/matching.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 import { parseSigDateTime, trustedScaleTime } from './sig-wss.js';
 import { isHistoricalReading } from '../interfaces/reading-time.js';
@@ -160,10 +161,8 @@ export class RenphoScaleAdapter
 
     const chars = (device.characteristicUuids || []).map((u) => normalizeUuid(u));
     if (chars.length > 0) {
-      const has = (code: number) => chars.includes(uuid16(code));
-      const qnCanRun = (has(0xfff1) || has(0xffe1)) && (has(0xfff2) || has(0xffe3));
-      if (qnCanRun) return false;
-      if (has(0x2a9f) && has(0x2a9d)) return true;
+      if (qnCanRun(chars)) return false;
+      if (chars.includes(uuid16(0x2a9f)) && chars.includes(uuid16(0x2a9d))) return true;
     }
 
     const uuids = (device.serviceUuids || []).map((u) => u.toLowerCase());
