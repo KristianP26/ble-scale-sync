@@ -55,11 +55,6 @@ const HOT_RELOADABLE = [
   'ble.qn_time_sync_long',
   'ble.qn_config_long',
   'ble.qn_result_ack',
-  // Not decided, pinned as it behaves today (no warning). A reload swaps
-  // ctx.mqttProxy, so the display config the ESP32 gets is live, but the
-  // watcher keeps the value it was built with and goes on skipping (or not)
-  // host-initiated GATT until a restart.
-  'ble.mqtt_proxy.auto_connect',
 ];
 
 const shapeKeys = (schema: unknown): string[] =>
