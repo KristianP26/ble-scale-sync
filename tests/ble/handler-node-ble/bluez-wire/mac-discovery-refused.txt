@@ -269,5 +269,5 @@
 +132500ms :1.4 Introspect hci0
 +135500ms :1.4 Introspect hci0
 +135500ms [debug] Liveness probe: radio heard nothing (scan last heard the room never)
-+135500ms => {"error":"operation timed out"}
++135500ms => {"error":"Device AA:BB:CC:DD:EE:01 not found within 120s"}
 --- match rules held

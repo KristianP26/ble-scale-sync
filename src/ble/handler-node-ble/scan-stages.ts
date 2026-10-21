@@ -202,8 +202,14 @@ async function awaitTargetDevice(
   mac: string,
   abortSignal?: AbortSignal,
 ): Promise<Device> {
+  // node-ble's waitDevice has a deadline of its own, armed just before ours
+  // with the same length, so it is the one that fires; its bare `operation
+  // timed out` is the same no-show and has to read as one, or the cycle does
+  // not count as a miss (D063). Passing the length keeps the two equal.
   const waitPromise = withTimeout(
-    btAdapter.waitDevice(mac),
+    btAdapter.waitDevice(mac, DISCOVERY_TIMEOUT_MS).catch((err: unknown) => {
+      throw errMsg(err) === 'operation timed out' ? new Error(targetNotFoundMessage(mac)) : err;
+    }),
     DISCOVERY_TIMEOUT_MS,
     targetNotFoundMessage(mac),
   );

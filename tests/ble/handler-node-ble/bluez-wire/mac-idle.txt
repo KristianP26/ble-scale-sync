@@ -178,7 +178,7 @@
 +118000ms :1.1 Introspect hci0
 +119000ms :1.1 Introspect hci0
 +120000ms [debug] Scan heard the room 3s ago; no liveness probe needed
-+120000ms => {"error":"operation timed out"}
++120000ms => {"error":"Device AA:BB:CC:DD:EE:01 not found within 120s"}
 +120000ms (5000 ms between cycles)
 +125000ms :1.1 Get hci0 Adapter1.Powered
 +125000ms [debug] Removing AA:BB:CC:DD:EE:01 from BlueZ before the scan: no reading from this scale in this run yet
@@ -348,5 +348,5 @@
 +243000ms :1.1 Introspect hci0
 +244000ms :1.1 Introspect hci0
 +245000ms [debug] Scan heard the room 3s ago; no liveness probe needed
-+245000ms => {"error":"operation timed out"}
++245000ms => {"error":"Device AA:BB:CC:DD:EE:01 not found within 120s"}
 --- match rules held

@@ -298,6 +298,22 @@ describe.skipIf(!nodeBleInstalled)('scanAndReadRaw on the D-Bus seam (X-09)', ()
     },
   );
 
+  // node-ble's waitDevice arms its own 120 s deadline just before ours, so its
+  // `operation timed out` used to end the cycle, and the no-show was never
+  // counted: a held pairing stayed held after the scale came back (D063).
+  it('ble.scale_mac, the scale does not show up: a no-show, and a held pairing goes on its return', async () => {
+    const { pairingBackoff } = await import('../../../src/ble/handler-node-ble/pairing-backoff.js');
+    // Four unconfirmed pairings hold the next one for 4 min, longer than the cycle.
+    for (let i = 0; i < 4; i++) pairingBackoff().recordFailure(GATT_MAC, 'Wire GATT', undefined);
+    phone();
+    const outcome = await cycle({ targetMac: GATT_MAC });
+    expect(outcome).toEqual({ error: `Device ${GATT_MAC} not found within 120s` });
+    expect(bluez.transcript(t0).join('\n')).toContain(
+      `${GATT_MAC} was not found in this cycle; its next pairing goes at once`,
+    );
+    expect(pairingBackoff().decide(GATT_MAC, 60)).toEqual({ go: true, why: 'returned' });
+  });
+
   // Every tier of startDiscoverySafe's ladder in order, each one's log line
   // and what it sends; then the cycle waits without a scan.
   it('ble.scale_mac, BlueZ refuses every StartDiscovery: the recovery ladder', async () => {
