@@ -49,6 +49,18 @@ const COMPOSITION_HOLD_MS = 4000;
  */
 const PID_MINI2_M1690 = 0x018d;
 
+/** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
+class YunmaiSession {
+  /**
+   * Whether the frame parsed last has a resistance field. Per frame, not per
+   * device: the session reads `completionHoldMs` when the hold arms, right
+   * after the parse of the frame that armed it.
+   */
+  frameHasResistance = false;
+  /** Cached fat percentage from protocol >= 0x1E embedded in the frame. */
+  embeddedFatPercent: number | null = null;
+}
+
 /**
  * Adapter for Yunmai scales (Signal, Mini, Mini 2, SE).
  *
@@ -89,15 +101,8 @@ export class YunmaiScaleAdapter
   readonly unlockCommand = [0x0d, 0x05, 0x13, 0x00, 0x16];
   readonly unlockIntervalMs = 5000;
 
-  /**
-   * Whether the frame parsed last has a resistance field. Per frame, not per
-   * device: the session reads `completionHoldMs` when the hold arms, right
-   * after the parse of the frame that armed it.
-   */
-  private frameHasResistance = false;
+  private s = new YunmaiSession();
 
-  /** Cached fat percentage from protocol >= 0x1E embedded in the frame. */
-  private embeddedFatPercent: number | null = null;
   /**
    * The embedded fat percentage as it stood when each reading was emitted
    * (#394): this adapter is a shared singleton and `computeMetrics()` runs
@@ -146,20 +151,20 @@ export class YunmaiScaleAdapter
     // A buffer whose [2] disagrees with its length is not a frame anyone has
     // seen, so its trailing bytes are not trusted as fields.
     const declared = data[2] === data.length;
-    this.frameHasResistance = declared && data.length >= LEN_WITH_RESISTANCE;
-    const impedance = this.frameHasResistance ? data.readUInt16BE(15) : 0;
-    this.embeddedFatPercent =
+    this.s.frameHasResistance = declared && data.length >= LEN_WITH_RESISTANCE;
+    const impedance = this.s.frameHasResistance ? data.readUInt16BE(15) : 0;
+    this.s.embeddedFatPercent =
       declared && data.length >= LEN_WITH_FAT && data[1] >= PROTO_WITH_FAT
         ? data.readUInt16BE(17) / 100
         : null;
-    if (!this.frameHasResistance) {
+    if (!this.s.frameHasResistance) {
       bleLog.debug(
         `Yunmai: ${data.length}-byte final frame declares ${data[2]}; no resistance field`,
       );
     }
 
     const reading: ScaleReading = { weight, impedance };
-    this.comp.pin(reading, this.embeddedFatPercent);
+    this.comp.pin(reading, this.s.embeddedFatPercent);
     return reading;
   }
 
@@ -192,7 +197,7 @@ export class YunmaiScaleAdapter
    * frame without the field sets no hold and resolves immediately.
    */
   get completionHoldMs(): number | undefined {
-    return this.frameHasResistance ? COMPOSITION_HOLD_MS : undefined;
+    return this.s.frameHasResistance ? COMPOSITION_HOLD_MS : undefined;
   }
 
   /**
@@ -204,9 +209,9 @@ export class YunmaiScaleAdapter
   }
 
   /** Clear the previous weigh-in (#394). */
+
   onSessionStart(): void {
-    this.embeddedFatPercent = null;
-    this.frameHasResistance = false;
+    this.s = new YunmaiSession();
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
@@ -217,7 +222,7 @@ export class YunmaiScaleAdapter
     const heightM = profile.height / 100;
     const bmi = weight / (heightM * heightM);
 
-    const embeddedFat = this.comp.of(reading, this.embeddedFatPercent);
+    const embeddedFat = this.comp.of(reading, this.s.embeddedFatPercent);
 
     // The first usable fat value wins, and every other field below is derived
     // from THAT one (ADR D028, review D-08). `ym.fat()` returns 0 for a result

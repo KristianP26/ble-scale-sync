@@ -16,6 +16,7 @@ import {
 } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 import { bleLog } from '../ble/types.js';
+import { sum8 } from './renpho-55aa.js';
 
 // Renpho ES-26BB custom service / characteristic UUIDs
 const CHR_RESULTS = uuid16(0x2a10); // notify: measurement results
@@ -34,10 +35,7 @@ const LIVE_TYPE_FINAL = 0x01;
 const LIVE_TYPE_FINAL_ALT = 0x11;
 
 function isChecksumValid(data: Buffer): boolean {
-  if (data.length < 2) return false;
-  let sum = 0;
-  for (let i = 0; i < data.length - 1; i++) sum = (sum + data[i]) & 0xff;
-  return sum === data[data.length - 1];
+  return data.length >= 2 && sum8(data.subarray(0, -1)) === data[data.length - 1];
 }
 
 /**

@@ -42,6 +42,26 @@ const KNOWN_NAMES = ['000fatscale01', '000fatscale02', '042fatscale01'];
  */
 const COMPOSITION_HOLD_MS = 4000;
 
+/** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
+class InlifeSession {
+  /** Cached body-composition values from parsed frame. */
+  cachedComp: ScaleBodyComp = {};
+  /** Cached impedance from impedance-mode frames. */
+  cachedImpedance = 0;
+  /**
+   * Which branch the last parsed frame took; see isFinal (#413).
+   *
+   * Only valid for the frame that was JUST parsed. Today that is the only way
+   * it is read (shared.ts asks immediately after the parse, and neither the
+   * hold expiry nor the disconnect path re-consults it), but a caller that held
+   * a reading and asked later would get an answer about a different frame.
+   *
+   * Cleared at session start for the contract's sake rather than because it is
+   * reachable: both branches assign it on every frame.
+   */
+  lastFrameWasImpedanceMode = false;
+}
+
 export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
   readonly name = 'Inlife';
   readonly match: MatchDescriptor = {
@@ -54,8 +74,7 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
   readonly charNotifyUuid = CHR_NOTIFY;
   readonly charWriteUuid = CHR_WRITE;
 
-  /** Cached body-composition values from parsed frame. */
-  private cachedComp: ScaleBodyComp = {};
+  private s = new InlifeSession();
   /**
    * Composition pinned to the reading it was measured with (#394): this adapter
    * is a shared singleton and `computeMetrics()` runs later than the parse, so
@@ -63,20 +82,6 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
    * weigh-in. See ReadingComposition.
    */
   private readonly comp = new ReadingComposition<ScaleBodyComp>();
-  /** Cached impedance from impedance-mode frames. */
-  private cachedImpedance = 0;
-  /**
-   * Which branch the last parsed frame took; see isFinal (#413).
-   *
-   * Only valid for the frame that was JUST parsed. Today that is the only way
-   * it is read (shared.ts asks immediately after the parse, and neither the
-   * hold expiry nor the disconnect path re-consults it), but a caller that held
-   * a reading and asked later would get an answer about a different frame.
-   *
-   * Cleared at session start for the contract's sake rather than because it is
-   * reachable: both branches assign it on every frame.
-   */
-  private lastFrameWasImpedanceMode = false;
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
@@ -172,30 +177,30 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
       // the SAME weigh-in is still needed: a divisor (Eufy P2 reads its
       // impedance /10) can put more than one candidate inside a plausible ohm
       // band, which is how the Eufy P2 field was originally misread.
-      this.lastFrameWasImpedanceMode = true;
-      this.cachedImpedance = data.readUInt32BE(4);
+      this.s.lastFrameWasImpedanceMode = true;
+      this.s.cachedImpedance = data.readUInt32BE(4);
       bleLog.debug(
-        `Inlife 0x${modeFlag.toString(16)} frame: u32[4..7]=${this.cachedImpedance}, ` +
+        `Inlife 0x${modeFlag.toString(16)} frame: u32[4..7]=${this.s.cachedImpedance}, ` +
           `u24[4..6]=${(data[4] << 16) | (data[5] << 8) | data[6]}, ` +
           `u16[4..5]=${data.readUInt16BE(4)}, u16[6..7]=${data.readUInt16BE(6)}, ` +
           `weight ${weight} kg, frame ${data.toString('hex')} (#405)`,
       );
-      this.cachedComp = {};
+      this.s.cachedComp = {};
     } else {
       // Legacy mode — body comp values embedded
-      this.lastFrameWasImpedanceMode = false;
+      this.s.lastFrameWasImpedanceMode = false;
       const _lbm = ((data[4] << 16) | (data[5] << 8) | data[6]) / 1000;
       const visceral = data.readUInt16BE(7) / 10;
       const _bmr = data.readUInt16BE(9) / 10;
 
-      this.cachedComp = {
+      this.s.cachedComp = {
         visceralFat: visceral > 0 ? visceral : undefined,
       };
-      this.cachedImpedance = 0;
+      this.s.cachedImpedance = 0;
     }
 
-    const reading: ScaleReading = { weight, impedance: this.cachedImpedance };
-    this.comp.pin(reading, this.cachedComp);
+    const reading: ScaleReading = { weight, impedance: this.s.cachedImpedance };
+    this.comp.pin(reading, this.s.cachedComp);
     return reading;
   }
 
@@ -234,34 +239,22 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
    * `data[11]` is the byte the parser already branches on.
    */
   isFinal(): boolean {
-    return this.lastFrameWasImpedanceMode;
+    return this.s.lastFrameWasImpedanceMode;
   }
 
   isComplete(reading: ScaleReading): boolean {
     return reading.weight > 0;
   }
 
-  /**
-   * Clear the previous weigh-in before anything is subscribed (#394).
-   *
-   * The pin above is what fixes the real leak. This reset covers the OTHER
-   * path: a reading built outside parseNotification (a direct caller, a test)
-   * has nothing pinned, so computeMetrics falls back to the live cache - and
-   * that must not still hold the previous person's numbers. It is also what
-   * the ScaleAdapter contract requires of every adapter, so a sibling added
-   * later inherits a correct example rather than this one's peculiarity.
-   */
   onSessionStart(): void {
-    this.cachedComp = {};
-    this.cachedImpedance = 0;
-    this.lastFrameWasImpedanceMode = false;
+    this.s = new InlifeSession();
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
     return buildPayload(
       reading.weight,
       reading.impedance,
-      this.comp.of(reading, this.cachedComp),
+      this.comp.of(reading, this.s.cachedComp),
       profile,
     );
   }

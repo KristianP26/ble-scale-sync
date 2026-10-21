@@ -9,6 +9,7 @@ import type {
 } from '../interfaces/scale-adapter.js';
 import { buildPayload } from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
+import { LogKey, UnitMap } from './device-state.js';
 import { ownAddressBytes, uuidClaimHits, type MatchDescriptor } from './match-descriptor.js';
 
 // ─── Etekcity Fit 8S (broadcast-only, nameless, 0x06D0 manufacturer data) ────
@@ -77,9 +78,6 @@ const UNIT_NAMES: Readonly<Record<number, string>> = { 0: 'kg', 1: 'lb', 2: 'st'
 const WEIGHT_MIN_KG = 2;
 const WEIGHT_MAX_KG = 250;
 
-/** See SenssunIfB7Adapter: same expiry, same reason. */
-const LOG_KEY_TTL_MS = 3_000;
-
 /**
  * How long an exported stable frame is held back when it shows up again
  * without a settling frame in between. A poll transport (node-ble, noble)
@@ -91,9 +89,6 @@ const LOG_KEY_TTL_MS = 3_000;
  * bounds it for a weigh-in whose settling frames were missed.
  */
 const REPEAT_HOLD_MS = 60_000;
-
-/** Units tracked at once, oldest out. A household has one; this is a leak bound. */
-const MAX_UNITS = 8;
 
 interface Frame {
   state: number;
@@ -107,12 +102,6 @@ interface UnitState {
   /** The stable frame last handed out as a reading, as hex, until a settling frame. */
   exported: string | null;
   exportedAt: number;
-}
-
-/** One logging key: the last payload logged, and when it was last seen. */
-interface LogKey {
-  key: string | null;
-  seenAt: number;
 }
 
 function inRange(kg: number): boolean {
@@ -145,10 +134,10 @@ export class EtekcityFit8sAdapter implements ScaleAdapterCore, BroadcastSource {
   readonly preferPassive = true;
 
   /** Per-unit repeat hold, keyed by [1..6]; see REPEAT_HOLD_MS. */
-  private readonly units = new Map<string, UnitState>();
+  private readonly units = new UnitMap<UnitState>();
   /** Logging state only; nothing below feeds a reading. */
   private lastSettlingKg: number | null = null;
-  private readonly lastStable: LogKey = { key: null, seenAt: -Infinity };
+  private readonly lastStable = new LogKey();
   /** Values already warned about, as `field:value`. */
   private readonly warned = new Set<string>();
 
@@ -241,25 +230,8 @@ export class EtekcityFit8sAdapter implements ScaleAdapterCore, BroadcastSource {
     bleLog.warn(message);
   }
 
-  /** True when this frame's payload should be logged (see SenssunIfB7Adapter). */
-  private firstSighting(slot: LogKey, key: string): boolean {
-    const at = this.now();
-    const first = key !== slot.key || at - slot.seenAt > LOG_KEY_TTL_MS;
-    slot.key = key;
-    slot.seenAt = at;
-    return first;
-  }
-
   private unitState(key: string): UnitState {
-    let state = this.units.get(key);
-    if (state) return state;
-    if (this.units.size >= MAX_UNITS) {
-      const oldest = this.units.keys().next().value;
-      if (oldest !== undefined) this.units.delete(oldest);
-    }
-    state = { exported: null, exportedAt: -Infinity };
-    this.units.set(key, state);
-    return state;
+    return this.units.get(key) ?? this.units.put(key, { exported: null, exportedAt: -Infinity });
   }
 
   /**
@@ -300,7 +272,7 @@ export class EtekcityFit8sAdapter implements ScaleAdapterCore, BroadcastSource {
 
     // Once per payload, not per advert: the stable frame repeats unchanged for
     // as long as the scale shows the result.
-    if (this.firstSighting(this.lastStable, hex)) {
+    if (this.lastStable.first(hex, this.now())) {
       const d = manufacturerData;
       bleLog.debug(
         `Etekcity Fit 8S stable: ${f.weight.toFixed(2)} kg (undecoded: ` +

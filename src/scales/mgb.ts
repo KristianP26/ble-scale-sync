@@ -19,6 +19,17 @@ import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 import { isAc27Frame } from './active-era.js';
 import { bleLog } from '../ble/types.js';
 
+/** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
+class MgbSession {
+  cachedWeight = 0;
+  cachedFat = 0;
+  cachedMuscle = 0;
+  cachedBone = 0;
+  cachedWater = 0;
+  /** Whether this session already pointed an AC 27 scale at its adapter. */
+  ac27Hinted = false;
+}
+
 /**
  * Adapter for MGB-protocol scales (Swan, Icomon, YG brands).
  *
@@ -43,19 +54,13 @@ export class MgbAdapter implements ScaleAdapterCore, GattWiring, HoldForComposit
   readonly charNotifyUuid = uuid16(0xffb2);
   readonly charWriteUuid = uuid16(0xffb1);
 
-  private cachedWeight = 0;
-  private cachedFat = 0;
-  private cachedMuscle = 0;
-  private cachedBone = 0;
-  private cachedWater = 0;
+  private s = new MgbSession();
   /**
    * Composition pinned to the reading it was measured with (#394). See
    * ReadingComposition for why computeMetrics cannot read the live cache on
    * the watcher transports.
    */
   private readonly compByReading = new ReadingComposition<ScaleBodyComp>();
-  /** Whether this session already pointed an AC 27 scale at its adapter. */
-  private ac27Hinted = false;
 
   matches(device: BleDeviceInfo): boolean {
     return matchesDescriptor(device, this.match);
@@ -94,12 +99,12 @@ export class MgbAdapter implements ScaleAdapterCore, GattWiring, HoldForComposit
   }
 
   parseNotification(data: Buffer): ScaleReading | null {
-    if (!this.ac27Hinted && isAc27Frame(data)) {
+    if (!this.s.ac27Hinted && isAc27Frame(data)) {
       // An AC 27 scale whose advertisement did not carry the 0x27AC company id
       // (#458 and #462 have not shown theirs, and ESPHome API < 1.9 drops
       // manufacturer data) lands here on its bare FFB0 service. Nothing below
       // parses its frames, and without this the session just times out.
-      this.ac27Hinted = true;
+      this.s.ac27Hinted = true;
       bleLog.info(
         'This scale sends AC 27 frames, which the Active Era BS-06 adapter reads and this ' +
           "one cannot. Set ble.force_scale_adapter: 'Active Era BS-06' and ble.scale_mac, " +
@@ -112,54 +117,38 @@ export class MgbAdapter implements ScaleAdapterCore, GattWiring, HoldForComposit
     // Frame1: header [0xAC, 0x02|0x03, 0xFF]
     if (data[0] === 0xac && (data[1] === 0x02 || data[1] === 0x03) && data[2] === 0xff) {
       if (data.length >= 18) {
-        this.cachedWeight = data.readUInt16BE(12) / 10;
-        this.cachedFat = data.readUInt16BE(16) / 10;
+        this.s.cachedWeight = data.readUInt16BE(12) / 10;
+        this.s.cachedFat = data.readUInt16BE(16) / 10;
       }
     }
 
     // Frame2: header [0x01, 0x00]
     if (data[0] === 0x01 && data[1] === 0x00) {
       if (data.length >= 10) {
-        this.cachedMuscle = data.readUInt16LE(2) / 10;
-        this.cachedBone = data.readUInt16LE(6) / 10;
-        this.cachedWater = data.readUInt16LE(8) / 10;
+        this.s.cachedMuscle = data.readUInt16LE(2) / 10;
+        this.s.cachedBone = data.readUInt16LE(6) / 10;
+        this.s.cachedWater = data.readUInt16LE(8) / 10;
       }
     }
 
-    if (this.cachedWeight <= 0) return null;
+    if (this.s.cachedWeight <= 0) return null;
 
-    const reading: ScaleReading = { weight: this.cachedWeight, impedance: 0 };
+    const reading: ScaleReading = { weight: this.s.cachedWeight, impedance: 0 };
     this.compByReading.pin(reading, this.snapshot());
     return reading;
   }
 
   private snapshot(): ScaleBodyComp {
     return {
-      fat: this.cachedFat > 0 ? this.cachedFat : undefined,
-      water: this.cachedWater > 0 ? this.cachedWater : undefined,
-      muscle: this.cachedMuscle > 0 ? this.cachedMuscle : undefined,
-      bone: this.cachedBone > 0 ? this.cachedBone : undefined,
+      fat: this.s.cachedFat > 0 ? this.s.cachedFat : undefined,
+      water: this.s.cachedWater > 0 ? this.s.cachedWater : undefined,
+      muscle: this.s.cachedMuscle > 0 ? this.s.cachedMuscle : undefined,
+      bone: this.s.cachedBone > 0 ? this.s.cachedBone : undefined,
     };
   }
 
-  /**
-   * Clear the previous weigh-in (#394).
-   *
-   * Adapters are shared singletons. Without this the guard
-   * `if (this.cachedWeight <= 0)` passes on the LAST session's weight, so any
-   * 10-byte frame resolves the next session
-   * with the previous person's weight and composition. It also leaks without
-   * any unusual precondition: Frame1 refreshes only weight and fat, so a
-   * session where Frame2 never arrives exports the previous muscle, bone and
-   * water against the new weight.
-   */
   onSessionStart(): void {
-    this.ac27Hinted = false;
-    this.cachedWeight = 0;
-    this.cachedFat = 0;
-    this.cachedMuscle = 0;
-    this.cachedBone = 0;
-    this.cachedWater = 0;
+    this.s = new MgbSession();
   }
 
   /**

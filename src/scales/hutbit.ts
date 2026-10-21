@@ -107,6 +107,19 @@ function frameChecksum(data: Buffer): number {
   return (data[2] + data[3] + data[4] + data[5] + data[6]) & 0xff;
 }
 
+/** One weigh-in's state, replaced whole at both session boundaries (#394, SCALES.md). */
+class HutbitSession {
+  final = false;
+  /**
+   * Weight from this session's stable frame, kept so the impedance frame that
+   * follows it is paired with this weigh-in's number, never the previous
+   * person's (#138).
+   */
+  lastStableWeight = 0;
+  /** When the paired weight was measured, for the pairing window. */
+  lastStableAt = 0;
+}
+
 /**
  * Adapter for the Hutbit Smart Scale (model 218008 / WL292, Fitdays app, Lefu
  * OEM). It shares service 0xFFB0 with the Robi S9 and openScale MGB families
@@ -149,21 +162,7 @@ export class HutbitAdapter implements ScaleAdapterCore, GattWiring, HoldForCompo
     { uuid: CHR_FFB2, type: 'notify' },
   ];
 
-  private final = false;
-
-  /**
-   * Weight from this session's stable frame, kept so the impedance frame that
-   * follows it can be paired with the right number.
-   *
-   * Adapters are shared singletons, so this is cleared on every session
-   * boundary. Without that, an impedance frame arriving early in one session
-   * could be paired with the previous session's weight, which on a shared scale
-   * means one person's impedance against another person's body (#138).
-   */
-  private lastStableWeight = 0;
-
-  /** When the paired weight was measured, for the pairing window above. */
-  private lastStableAt = 0;
+  private s = new HutbitSession();
 
   matches(device: BleDeviceInfo): boolean {
     // Branded units advertise "Hutbit Scale". Lefu OEM stock units advertise a
@@ -202,17 +201,8 @@ export class HutbitAdapter implements ScaleAdapterCore, GattWiring, HoldForCompo
     return isHutbitOemAdvert(device);
   }
 
-  /**
-   * Clear the previous weigh-in before anything is subscribed (#394).
-   *
-   * This used to live in `onConnected`, which is too late for a multi-char
-   * adapter: `subscribeAndInit` enables EVERY notify binding and only then
-   * awaits `startInit()`, so frames can already be arriving - through several
-   * D-Bus round trips for the second and third binding - while the reset has
-   * not run. `onSessionStart` runs before the first subscribe.
-   */
   onSessionStart(): void {
-    this.resetSession();
+    this.s = new HutbitSession();
   }
 
   async onConnected(ctx: ConnectionContext): Promise<void> {
@@ -253,9 +243,9 @@ export class HutbitAdapter implements ScaleAdapterCore, GattWiring, HoldForCompo
     const weight = data.readUInt16BE(2) / WEIGHT_DIV;
     if (!(weight > 0) || !Number.isFinite(weight)) return null;
 
-    this.final = true;
-    this.lastStableWeight = weight;
-    this.lastStableAt = Date.now();
+    this.s.final = true;
+    this.s.lastStableWeight = weight;
+    this.s.lastStableAt = Date.now();
     // Weight first, impedance second: the scale sends it after the weight has
     // settled, so this reading is complete but not final, and the handler holds
     // the link open for COMPOSITION_HOLD_MS to see whether one arrives.
@@ -289,13 +279,13 @@ export class HutbitAdapter implements ScaleAdapterCore, GattWiring, HoldForCompo
       );
       return null;
     }
-    if (!this.final || !(this.lastStableWeight > 0)) {
+    if (!this.s.final || !(this.s.lastStableWeight > 0)) {
       // An impedance with no weight of its own is not a reading, and pairing it
       // with whatever weight came last would be worse than dropping it.
       bleLog.debug(`Hutbit: impedance ${impedance} ohm arrived before any stable weight, ignoring`);
       return null;
     }
-    const age = Date.now() - this.lastStableAt;
+    const age = Date.now() - this.s.lastStableAt;
     if (age > IMPEDANCE_PAIRING_WINDOW_MS) {
       bleLog.debug(
         `Hutbit: impedance ${impedance} ohm arrived ${Math.round(age / 1000)}s after the ` +
@@ -305,11 +295,11 @@ export class HutbitAdapter implements ScaleAdapterCore, GattWiring, HoldForCompo
     }
 
     bleLog.debug(`Hutbit: impedance ${impedance} ohm (#322)`);
-    return { weight: this.lastStableWeight, impedance };
+    return { weight: this.s.lastStableWeight, impedance };
   }
 
   isComplete(reading: ScaleReading): boolean {
-    return reading.weight > 0 && this.final;
+    return reading.weight > 0 && this.s.final;
   }
 
   /**
@@ -323,13 +313,7 @@ export class HutbitAdapter implements ScaleAdapterCore, GattWiring, HoldForCompo
   }
 
   onSessionEnd(): void {
-    this.resetSession();
-  }
-
-  private resetSession(): void {
-    this.final = false;
-    this.lastStableWeight = 0;
-    this.lastStableAt = 0;
+    this.s = new HutbitSession();
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {

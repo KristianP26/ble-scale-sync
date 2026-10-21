@@ -83,6 +83,15 @@ const BF710_STABILITY_TOLERANCE_KG = 0.3;
 // 15 s leaves margin without holding an unregistered scale's link too long.
 const BF710_COMPOSITION_HOLD_MS = 15000;
 
+/** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
+class BeurerSanitasSession {
+  readingBuffer: number[] = [];
+  /** Accumulated 0x59 composition parts (part number -> payload after byte 4). */
+  compParts = new Map<number, Buffer>();
+  /** A 0x59 stream has sent part 1 and not yet its last part; see isCompositionPending. */
+  compPending = false;
+}
+
 export class BeurerSanitasScaleAdapter
   implements ScaleAdapterCore, GattWiring, Unlockable, AckProtocol, HoldForComposition
 {
@@ -113,7 +122,7 @@ export class BeurerSanitasScaleAdapter
   readonly unlockIntervalMs = 5000;
 
   private isBf710Type = false;
-  private readingBuffer: number[] = [];
+  private s = new BeurerSanitasSession();
 
   /** INIT command: F7 01 for BF700/800, E7 01 for BF710/Sanitas. */
   get unlockCommand(): number[] {
@@ -122,11 +131,6 @@ export class BeurerSanitasScaleAdapter
   private cachedComp: CachedComp | null = null;
   /** Composition as it stood when each reading was emitted; see `emit()`. */
   private readonly compByReading = new ReadingComposition<CachedComp | null>();
-
-  /** Accumulated 0x59 composition parts (part number -> payload after byte 4). */
-  private compParts = new Map<number, Buffer>();
-  /** A 0x59 stream has sent part 1 and not yet its last part; see isCompositionPending. */
-  private compPending = false;
 
   /** Per-frame ACK echoing bytes [1..3]; BF710/SBF70 gate the 0x59 stream on it. */
   buildAck(data: Buffer): number[] | null {
@@ -153,7 +157,7 @@ export class BeurerSanitasScaleAdapter
    * set (#211).
    */
   isCompositionPending(): boolean {
-    return this.compPending;
+    return this.s.compPending;
   }
 
   matches(device: BleDeviceInfo): boolean {
@@ -245,9 +249,9 @@ export class BeurerSanitasScaleAdapter
       const weight = (data.readUInt16BE(3) * 50) / 1000;
       if (weight <= 0 || weight > 300 || !Number.isFinite(weight)) return null;
 
-      this.readingBuffer.push(weight);
-      if (this.readingBuffer.length > BF710_STABILITY_COUNT) {
-        this.readingBuffer.shift();
+      this.s.readingBuffer.push(weight);
+      if (this.s.readingBuffer.length > BF710_STABILITY_COUNT) {
+        this.s.readingBuffer.shift();
       }
       this.cachedComp = null;
       return this.emit(weight, 0);
@@ -277,25 +281,25 @@ export class BeurerSanitasScaleAdapter
     const part = data[3];
 
     if (part <= 1) {
-      this.compParts.clear();
-      this.compPending = count > 1;
+      this.s.compParts.clear();
+      this.s.compPending = count > 1;
       return null;
     }
 
-    this.compParts.set(part, Buffer.from(data.subarray(4)));
+    this.s.compParts.set(part, Buffer.from(data.subarray(4)));
     if (part < count) return null;
-    this.compPending = false;
+    this.s.compPending = false;
 
     const ordered: Buffer[] = [];
     for (let p = 2; p <= count; p++) {
-      const chunk = this.compParts.get(p);
+      const chunk = this.s.compParts.get(p);
       if (!chunk) {
-        this.compParts.clear();
+        this.s.compParts.clear();
         return null;
       }
       ordered.push(chunk);
     }
-    this.compParts.clear();
+    this.s.compParts.clear();
 
     const merged = Buffer.concat(ordered);
     if (merged.length < 16) return null;
@@ -340,15 +344,7 @@ export class BeurerSanitasScaleAdapter
   }
 
   /**
-   * Clear the previous weigh-in's gating state (#394).
-   *
-   * `readingBuffer` fed the three-sample stability gate, so a second session
-   * inherited a full buffer and could satisfy it one frame in, on a weight that
-   * had not settled. `compParts` holds partial 0x59 chunks; a session that died
-   * mid-stream left them behind and the next reassembly could splice a
-   * composition out of two different weigh-ins.
-   *
-   * Two fields are deliberately NOT cleared here:
+   * Two fields are deliberately NOT in the session object:
    *
    *   - `cachedComp` is read by computeMetrics, which runs after the session is
    *     over. Clearing per-session state that a later computeMetrics reads is
@@ -365,17 +361,15 @@ export class BeurerSanitasScaleAdapter
    *     is not in KNOWN_NAMES, which is the #384 case the latch exists for.
    */
   onSessionStart(): void {
-    this.readingBuffer.length = 0;
-    this.compParts.clear();
-    this.compPending = false;
+    this.s = new BeurerSanitasSession();
   }
 
   isComplete(reading: ScaleReading): boolean {
     if (this.isBf710Type) {
       if (reading.impedance > 0) return true;
-      if (this.readingBuffer.length < BF710_STABILITY_COUNT) return false;
-      const min = Math.min(...this.readingBuffer);
-      const max = Math.max(...this.readingBuffer);
+      if (this.s.readingBuffer.length < BF710_STABILITY_COUNT) return false;
+      const min = Math.min(...this.s.readingBuffer);
+      const max = Math.max(...this.s.readingBuffer);
       return max - min <= BF710_STABILITY_TOLERANCE_KG && reading.weight > 0;
     }
     return reading.weight > 0;

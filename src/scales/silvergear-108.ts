@@ -9,6 +9,7 @@ import type {
 } from '../interfaces/scale-adapter.js';
 import { buildPayload } from './body-comp-helpers.js';
 import { bleLog, IMPEDANCE_GRACE_MS } from '../ble/types.js';
+import { UnitMap } from './device-state.js';
 import { uuidClaimHits, type MatchDescriptor } from './match-descriptor.js';
 
 // ─── Silvergear Smart Scale 108 (broadcast-only, obfuscated 0xA0AC advert) ───
@@ -184,9 +185,6 @@ const STEP_OFF_DELTA_KG = 5;
  */
 const HOLD_RESTART_MS = IMPEDANCE_GRACE_MS + 1_000;
 
-/** Units tracked at once, oldest out. A household has one; this is a leak bound. */
-const MAX_UNITS = 8;
-
 interface WeighIn {
   grams: number;
   /** First settled frame of this weigh-in; repeats of it do not move it. */
@@ -256,7 +254,7 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
   readonly preferPassive = true;
 
   /** Per-unit weigh-in state, keyed by the MAC in the payload's first six bytes. */
-  private readonly units = new Map<string, UnitState>();
+  private readonly units = new UnitMap<UnitState>();
   /** Readings built from a paired `0x06`: the only ones `isComplete` accepts. */
   private readonly completeReadings = new WeakSet<ScaleReading>();
   /** Last unpaired `0x06` logged, so a repeated advertisement logs once. */
@@ -502,15 +500,7 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
   }
 
   private unitState(mac: string): UnitState {
-    let state = this.units.get(mac);
-    if (state) return state;
-    if (this.units.size >= MAX_UNITS) {
-      const oldest = this.units.keys().next().value;
-      if (oldest !== undefined) this.units.delete(oldest);
-    }
-    state = { weighIn: null, heldAt: null };
-    this.units.set(mac, state);
-    return state;
+    return this.units.get(mac) ?? this.units.put(mac, { weighIn: null, heldAt: null });
   }
 
   /**

@@ -9,6 +9,7 @@ import type {
 } from '../interfaces/scale-adapter.js';
 import { buildPayload } from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
+import { LogKey, UnitMap } from './device-state.js';
 import { ownAddressBytes, type MatchDescriptor } from './match-descriptor.js';
 
 // ─── Eufy Smart Scale C20 (T9130) / P3 (T9150), broadcast ───────────────────
@@ -99,22 +100,10 @@ const CLOCK_TOLERANCE_MS = 2 * 60 * 1000;
  */
 const REPEAT_WINDOW_S = 60;
 
-/** Units tracked at once, oldest out. A household has one; this is a leak bound. */
-const MAX_UNITS = 8;
-
-/** See SenssunIfB7Adapter: same expiry, same reason. */
-const LOG_KEY_TTL_MS = 3_000;
-
 interface Exported {
   weightRaw: number;
   /** Scale clock, seconds, of the last final frame of this weigh-in. */
   clock: number;
-}
-
-/** One logging key: the last payload logged, and when it was last seen. */
-interface LogKey {
-  key: string | null;
-  seenAt: number;
 }
 
 function inRange(kg: number): boolean {
@@ -158,10 +147,10 @@ export class EufyC20P3Adapter implements ScaleAdapterCore, BroadcastSource {
   readonly preferPassive = true;
 
   /** Last weigh-in handed out per unit, keyed by [0..4]; see REPEAT_WINDOW_S. */
-  private readonly units = new Map<string, Exported>();
+  private readonly units = new UnitMap<Exported>();
   /** Logging state only; nothing below feeds a reading. */
   private lastLiveRaw: number | null = null;
-  private readonly lastFinal: LogKey = { key: null, seenAt: -Infinity };
+  private readonly lastFinal = new LogKey();
   /** Units whose clock was already reported as off. */
   private readonly clockReported = new Set<string>();
   /** Status values already warned about. */
@@ -243,7 +232,7 @@ export class EufyC20P3Adapter implements ScaleAdapterCore, BroadcastSource {
       last.clock = Math.max(last.clock, clock);
       return null;
     }
-    this.remember(unitKey, { weightRaw, clock });
+    this.units.put(unitKey, { weightRaw, clock });
 
     const reading: ScaleReading = { weight: kg, impedance: 0 };
     const stampMs = clock * 1000;
@@ -263,15 +252,6 @@ export class EufyC20P3Adapter implements ScaleAdapterCore, BroadcastSource {
   /** Same weight, and the scale's clock within the window of the last final frame. */
   private isRepeat(last: Exported, weightRaw: number, clock: number): boolean {
     return last.weightRaw === weightRaw && Math.abs(clock - last.clock) <= REPEAT_WINDOW_S;
-  }
-
-  private remember(unitKey: string, exported: Exported): void {
-    if (!this.units.has(unitKey) && this.units.size >= MAX_UNITS) {
-      const oldest = this.units.keys().next().value;
-      if (oldest !== undefined) this.units.delete(oldest);
-    }
-    this.units.delete(unitKey);
-    this.units.set(unitKey, exported);
   }
 
   /**
@@ -312,11 +292,7 @@ export class EufyC20P3Adapter implements ScaleAdapterCore, BroadcastSource {
     const key = Buffer.concat([d.subarray(0, CLOCK_OFFSET), d.subarray(STATUS_OFFSET)]).toString(
       'hex',
     );
-    const at = this.now();
-    const first = key !== this.lastFinal.key || at - this.lastFinal.seenAt > LOG_KEY_TTL_MS;
-    this.lastFinal.key = key;
-    this.lastFinal.seenAt = at;
-    if (!first) return;
+    if (!this.lastFinal.first(key, this.now())) return;
 
     const z =
       d.length >= IMPEDANCE_OFFSET + 2

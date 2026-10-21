@@ -9,6 +9,7 @@ import type {
 } from '../interfaces/scale-adapter.js';
 import { buildPayload } from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
+import { LogKey } from './device-state.js';
 import { ownAddressBytes, type MatchDescriptor } from './match-descriptor.js';
 
 // ─── OKOK / Chipsea broadcast (C0 and 2.0 dialects) ─────────────────────────
@@ -107,9 +108,6 @@ const V20_PROPS_SETTLING_ONE_DECIMAL = 0x00;
 const WEIGHT_MIN_KG = 2;
 const WEIGHT_MAX_KG = 300;
 
-/** See SenssunIfB7Adapter: same expiry, same reason. */
-const LOG_KEY_TTL_MS = 3_000;
-
 type Dialect = 'C0' | '2.0';
 
 interface Frame {
@@ -182,11 +180,6 @@ function payloadKey(f: Frame, d: Buffer): string {
   ]).toString('hex');
 }
 
-interface LogKey {
-  key: string | null;
-  seenAt: number;
-}
-
 /**
  * Adapter for the broadcast-only Chipsea scales sold under many brands with
  * the OKOK app (#408): the C0 dialect (nameless units such as NIX Home, Xiaogui
@@ -217,7 +210,7 @@ export class OkokChipseaAdapter implements ScaleAdapterCore, BroadcastSource {
 
   /** Logging state only; nothing here feeds a reading. */
   private lastSettlingKg: number | null = null;
-  private readonly lastFinal: LogKey = { key: null, seenAt: -Infinity };
+  private readonly lastFinal = new LogKey();
   /** Properties values already reported, as `dialect:value`. */
   private readonly propsReported = new Set<string>();
 
@@ -289,15 +282,6 @@ export class OkokChipseaAdapter implements ScaleAdapterCore, BroadcastSource {
     );
   }
 
-  /** True when this frame's payload should be logged (see SenssunIfB7Adapter). */
-  private firstSighting(slot: LogKey, key: string): boolean {
-    const at = this.now();
-    const first = key !== slot.key || at - slot.seenAt > LOG_KEY_TTL_MS;
-    slot.key = key;
-    slot.seenAt = at;
-    return first;
-  }
-
   /**
    * The settling stream, for a display that follows the scale (#356). The C0
    * scale also sends settling frames with the weight while the user steps off
@@ -327,7 +311,7 @@ export class OkokChipseaAdapter implements ScaleAdapterCore, BroadcastSource {
     this.lastSettlingKg = null;
     if (!inRange(f.weight)) return null;
 
-    if (this.firstSighting(this.lastFinal, payloadKey(f, manufacturerData))) {
+    if (this.lastFinal.first(payloadKey(f, manufacturerData), this.now())) {
       const d = manufacturerData;
       const undecoded =
         f.dialect === 'C0'

@@ -20,6 +20,12 @@ import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 const CHR_NOTIFY = '1a2ea40075b911e2be050002a5d5c51b';
 const CHR_WRITE = '29f1108075b911e28bf60002a5d5c51b';
 
+/** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
+class ExingtechSession {
+  /** Body-composition values from the most recent parsed frame. */
+  cachedComp: ScaleBodyComp = {};
+}
+
 /**
  * Adapter for Exingtech Y1 / "vscale" BLE body-fat scales.
  *
@@ -41,8 +47,7 @@ export class ExingtechY1Adapter implements ScaleAdapterCore, GattWiring, HoldFor
   readonly charNotifyUuid = CHR_NOTIFY;
   readonly charWriteUuid = CHR_WRITE;
 
-  /** Cached body-composition values from the most recent parsed frame. */
-  private cachedComp: ScaleBodyComp = {};
+  private s = new ExingtechSession();
   /**
    * Composition pinned to the reading it was measured with (#394): this adapter
    * is a shared singleton and `computeMetrics()` runs later than the parse, so
@@ -94,7 +99,7 @@ export class ExingtechY1Adapter implements ScaleAdapterCore, GattWiring, HoldFor
 
     const complete = data[6] !== 0xff;
 
-    this.cachedComp = {
+    this.s.cachedComp = {
       fat: complete ? fat : undefined,
       water: complete ? water : undefined,
       bone: complete ? bone : undefined,
@@ -103,7 +108,7 @@ export class ExingtechY1Adapter implements ScaleAdapterCore, GattWiring, HoldFor
     };
 
     const reading: ScaleReading = { weight, impedance: 0 };
-    this.comp.pin(reading, this.cachedComp);
+    this.comp.pin(reading, this.s.cachedComp);
     return reading;
   }
 
@@ -124,29 +129,19 @@ export class ExingtechY1Adapter implements ScaleAdapterCore, GattWiring, HoldFor
   readonly completionHoldMs = WEIGHT_ONLY_HOLD_MS;
 
   isFinal(reading: ScaleReading): boolean {
-    const fat = this.comp.of(reading, this.cachedComp).fat;
+    const fat = this.comp.of(reading, this.s.cachedComp).fat;
     return fat != null && fat > 0;
   }
 
-  /**
-   * Clear the previous weigh-in before anything is subscribed (#394).
-   *
-   * The pin above is what fixes the real leak. This reset covers the OTHER
-   * path: a reading built outside parseNotification (a direct caller, a test)
-   * has nothing pinned, so computeMetrics falls back to the live cache - and
-   * that must not still hold the previous person's numbers. It is also what
-   * the ScaleAdapter contract requires of every adapter, so a sibling added
-   * later inherits a correct example rather than this one's peculiarity.
-   */
   onSessionStart(): void {
-    this.cachedComp = {};
+    this.s = new ExingtechSession();
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
     return buildPayload(
       reading.weight,
       reading.impedance,
-      this.comp.of(reading, this.cachedComp),
+      this.comp.of(reading, this.s.cachedComp),
       profile,
     );
   }

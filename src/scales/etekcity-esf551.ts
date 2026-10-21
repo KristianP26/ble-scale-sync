@@ -89,6 +89,12 @@ function checksumCloses(d: Buffer): boolean {
   return ((0xff - sum) & 0xff) === d[5];
 }
 
+/** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
+class Esf551Session {
+  /** Log the display unit once per session rather than once per frame. */
+  loggedUnit = false;
+}
+
 /**
  * Etekcity ESF-551 Smart Fitness Scale.
  *
@@ -127,18 +133,14 @@ export class EtekcityEsf551Adapter implements ScaleAdapterCore, GattWiring {
     { uuid: CHR_WRITE, type: 'write', optional: true },
   ];
 
-  /** Log the display unit once per session rather than once per frame. */
-  private loggedUnit = false;
+  private s = new Esf551Session();
 
   matches(device: BleDeviceInfo): boolean {
     return (device.localName || '').toLowerCase().includes('etekcity');
   }
 
-  // onSessionStart rather than onSessionEnd: the end hook is best effort (a
-  // timeout abandons the read promise rather than cancelling it), so a session
-  // that timed out would otherwise suppress the line for the whole process.
   onSessionStart(): void {
-    this.loggedUnit = false;
+    this.s = new Esf551Session();
   }
 
   parseNotification(data: Buffer): ScaleReading | null {
@@ -148,8 +150,8 @@ export class EtekcityEsf551Adapter implements ScaleAdapterCore, GattWiring {
       return null;
     }
 
-    if (!this.loggedUnit) {
-      this.loggedUnit = true;
+    if (!this.s.loggedUnit) {
+      this.s.loggedUnit = true;
       const raw = data[DISPLAY_UNIT_OFFSET];
       bleLog.debug(
         `Etekcity: scale is displaying ${DISPLAY_UNITS[raw] ?? `0x${raw.toString(16)}`}`,

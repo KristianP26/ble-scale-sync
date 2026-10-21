@@ -19,6 +19,7 @@ import {
 } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 import { bleLog, errMsg } from '../ble/types.js';
+import { build55aaFrame, frameFault, sum8 } from './renpho-55aa.js';
 
 // ─── Renpho R-MSC04 (55AA framed, vendor service 0x1A10) ────────────────────
 
@@ -166,9 +167,7 @@ function validateFrame(data: Buffer): { cmd: number; len: number; frameLen: numb
   const len = data.readUInt16BE(3);
   const frameLen = len + FRAME_OVERHEAD;
   if (data.length < frameLen) return null; // truncated / declared-length mismatch
-  let sum = 0;
-  for (let i = 0; i < frameLen - 1; i++) sum += data[i];
-  if ((sum & 0xff) !== data[frameLen - 1]) return null; // bad checksum
+  if (sum8(data.subarray(0, frameLen - 1)) !== data[frameLen - 1]) return null; // bad checksum
   return { cmd: data[2], len, frameLen };
 }
 
@@ -253,17 +252,6 @@ const FALLBACK_WEIGHT_CG = 7000;
 const MIN_WEIGHT_CG = 50;
 const MAX_WEIGHT_CG = 30000;
 
-function checksum(bytes: Uint8Array | number[]): number {
-  let sum = 0;
-  for (const b of bytes) sum += b;
-  return sum & 0xff;
-}
-
-function buildFrame(cmd: number, payload: number[]): Buffer {
-  const body = [HDR0, HDR1, cmd, (payload.length >> 8) & 0xff, payload.length & 0xff, ...payload];
-  return Buffer.from([...body, checksum(body)]);
-}
-
 /** The profile height in 0.1 cm, or null when it is missing or out of range. */
 function heightTenths(profile: UserProfile): number | null {
   const tenths = Math.round(profile.height * 10);
@@ -293,7 +281,7 @@ function zoneMinutes(now: Date): number | null {
 export function buildGuestProfileFrame(seq: number, profile: UserProfile): Buffer {
   const height = heightTenths(profile) ?? FALLBACK_HEIGHT_TENTHS;
   const weight = weightCg(profile) ?? FALLBACK_WEIGHT_CG;
-  return buildFrame(CMD_PROFILE, [
+  return build55aaFrame(CMD_PROFILE, [
     seq & 0xff,
     GUEST_SLOT,
     (height >> 8) & 0xff,
@@ -312,7 +300,7 @@ export function buildGuestProfileFrame(seq: number, profile: UserProfile): Buffe
 export function buildClockFrame(seq: number, now: Date): Buffer {
   const seconds = Math.floor(now.getTime() / 1000) >>> 0;
   const zone = zoneMinutes(now) ?? 0;
-  return buildFrame(CMD_CLOCK, [
+  return build55aaFrame(CMD_CLOCK, [
     seq & 0xff,
     ...CLOCK_CONSTANT,
     (seconds >>> 24) & 0xff,
@@ -340,14 +328,9 @@ export function assertAllowedWrite(frame: Buffer): void {
   const refuse = (why: string): never => {
     throw new Error(`Renpho R-MSC04: refusing to write ${why}`);
   };
-  if (frame.length < FRAME_OVERHEAD || frame[0] !== HDR0 || frame[1] !== HDR1) {
-    refuse('a frame without the 55AA header');
-  }
+  const fault = frameFault(frame);
+  if (fault) refuse(fault);
   const len = frame.readUInt16BE(3);
-  if (frame.length !== len + FRAME_OVERHEAD) refuse('a frame whose length field does not match');
-  if (checksum(frame.subarray(0, frame.length - 1)) !== frame[frame.length - 1]) {
-    refuse('a frame with a bad checksum');
-  }
   const cmd = frame[2];
   const p = frame.subarray(5, frame.length - 1);
   switch (cmd) {
@@ -466,6 +449,24 @@ function decodeRecord(f: Buffer): CompositionRecord {
   };
 }
 
+/** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
+class Msc04Session {
+  finalReceived = false;
+  finalWeight = 0;
+  /** State of the latest 0x20 status in this session, or null before the first. */
+  lastState: number | null = null;
+  /** Stored records ([8]) the first full 0x20 status of this session reported, or null. */
+  storedAtStart: number | null = null;
+  reassembler = new FragmentReassembler();
+  /** This session's context, so a write left over from a dead session never runs. */
+  ctx: ConnectionContext | null = null;
+  /** A b2 write was attempted in this session: the scale's figures are not exported. */
+  guestProfileSent = false;
+  /** The height in this session's b2, in 0.1 cm. Compared, never logged. */
+  sentHeightTenths: number | null = null;
+  diag = freshDiagnostics();
+}
+
 /**
  * Adapter for the Renpho R-MSC04 body-composition scale (#117, #265, #434;
  * sibling of the R-MSC02 in #230).
@@ -537,13 +538,7 @@ export class RenphoMsc04Adapter
     { uuid: CHR_INDICATE, type: 'notify' },
   ];
 
-  private finalReceived = false;
-  private finalWeight = 0;
-  /** State of the latest 0x20 status in this session, or null before the first. */
-  private lastState: number | null = null;
-  /** Stored records ([8]) the first full 0x20 status of this session reported, or null. */
-  private storedAtStart: number | null = null;
-  private readonly reassembler = new FragmentReassembler();
+  private s = new Msc04Session();
   /**
    * The record pinned to the reading it completed (#394): this adapter is a
    * shared singleton, and on the watcher transports the next session can start
@@ -551,17 +546,10 @@ export class RenphoMsc04Adapter
    */
   private readonly records = new ReadingComposition<PinnedRecord | null>();
 
-  /** This session's context, so a write left over from a dead session never runs. */
-  private ctx: ConnectionContext | null = null;
-  /** A b2 write was attempted in this session: the scale's figures are not exported. */
-  private guestProfileSent = false;
-  /** The height in this session's b2, in 0.1 cm. Compared, never logged. */
-  private sentHeightTenths: number | null = null;
   /** Log the unsendable time zone once per adapter instance (one per process in production). */
   private zoneLogged = false;
   /** BLE_RMSC04_HANDSHAKE values already warned about, once per value and instance. */
   private readonly unknownHandshakeValues = new Set<string>();
-  private diag = freshDiagnostics();
 
   private readonly now: () => Date;
 
@@ -574,25 +562,8 @@ export class RenphoMsc04Adapter
     return matchesDescriptor(device, this.match);
   }
 
-  /**
-   * Clear the previous weigh-in before anything is subscribed (#394).
-   *
-   * This used to live in `onConnected`, which is too late for a multi-char
-   * adapter: `subscribeAndInit` enables EVERY notify binding and only then
-   * awaits `startInit()`, so frames can already be arriving - through several
-   * D-Bus round trips for the second and third binding - while the reset has
-   * not run. `onSessionStart` runs before the first subscribe.
-   */
   onSessionStart(): void {
-    this.finalReceived = false;
-    this.finalWeight = 0;
-    this.lastState = null;
-    this.storedAtStart = null;
-    this.reassembler.reset();
-    this.ctx = null;
-    this.guestProfileSent = false;
-    this.sentHeightTenths = null;
-    this.diag = freshDiagnostics();
+    this.s = new Msc04Session();
   }
 
   async onConnected(ctx: ConnectionContext): Promise<void> {
@@ -602,10 +573,10 @@ export class RenphoMsc04Adapter
           'Likely a transient GATT discovery race. Try again.',
       );
     }
-    this.ctx = ctx;
+    this.s.ctx = ctx;
     const mode = this.connectWrites();
-    this.diag.handshakeAt = Date.now();
-    this.diag.mode = mode;
+    this.s.diag.handshakeAt = Date.now();
+    this.s.diag.mode = mode;
     bleLog.debug(`Renpho R-MSC04: connect writes ${mode}`);
     if (mode === 'full') {
       await this.writeGuestProfile(ctx, 0);
@@ -631,8 +602,8 @@ export class RenphoMsc04Adapter
   }
 
   onSessionEnd(): void {
-    if (this.diag.handshakeAt !== null) this.logSummary(this.diag.handshakeAt);
-    this.ctx = null;
+    if (this.s.diag.handshakeAt !== null) this.logSummary(this.s.diag.handshakeAt);
+    this.s.ctx = null;
   }
 
   /**
@@ -642,7 +613,7 @@ export class RenphoMsc04Adapter
    * onSessionEnd does not run on every transport path.
    */
   private logSummary(start: number): void {
-    const d = this.diag;
+    const d = this.s.diag;
     const end = Date.now();
     const writes = [...d.writes]
       .map(([cmd, outcome]) => {
@@ -667,7 +638,7 @@ export class RenphoMsc04Adapter
     bleLog.debug(
       `Renpho R-MSC04: session ended ${secs(end - start)} s after the handshake started ` +
         `(writes ${d.mode}${writes ? `: ${writes}` : ''}; ${first}; ${last}; ` +
-        `0x24 ${this.finalReceived ? 'yes' : 'no'}; stored records replayed ${d.replayed}; ` +
+        `0x24 ${this.s.finalReceived ? 'yes' : 'no'}; stored records replayed ${d.replayed}; ` +
         `composition record ${d.record}; ${lastFrame})`,
     );
   }
@@ -684,7 +655,7 @@ export class RenphoMsc04Adapter
     if (weightCg(profile) === null) {
       bleLog.debug('Renpho R-MSC04: no usable last weight for the guest profile, sending 70.00 kg');
     }
-    this.sentHeightTenths = heightTenths(profile) ?? FALLBACK_HEIGHT_TENTHS;
+    this.s.sentHeightTenths = heightTenths(profile) ?? FALLBACK_HEIGHT_TENTHS;
     await this.send(
       owner,
       CMD_PROFILE,
@@ -717,14 +688,14 @@ export class RenphoMsc04Adapter
     label: string,
     logBytes: boolean,
   ): Promise<void> {
-    if (this.ctx !== owner) return;
+    if (this.s.ctx !== owner) return;
     const started = Date.now();
-    const diag = this.diag;
+    const diag = this.s.diag;
     diag.writes.set(cmd, 'refused');
     try {
       const buf = frame();
       assertAllowedWrite(buf);
-      if (buf[2] === CMD_PROFILE) this.guestProfileSent = true;
+      if (buf[2] === CMD_PROFILE) this.s.guestProfileSent = true;
       // Pending until the transport settles the write: when the link drops
       // first, the summary has to say the Write Response never came, not that
       // the write failed (#434).
@@ -737,15 +708,15 @@ export class RenphoMsc04Adapter
       );
     } catch (e: unknown) {
       if (diag.writes.get(cmd) === 'pending') diag.writes.set(cmd, 'failed');
-      if (this.ctx === owner) bleLog.warn(`Renpho R-MSC04: ${label} not sent: ${errMsg(e)}`);
+      if (this.s.ctx === owner) bleLog.warn(`Renpho R-MSC04: ${label} not sent: ${errMsg(e)}`);
     }
   }
 
   parseCharNotification(_charUuid: string, data: Buffer): ScaleReading | null {
-    this.diag.lastFrameAt = Date.now();
+    this.s.diag.lastFrameAt = Date.now();
     // Routed by content, not by characteristic: fragments carry no 55AA header.
     if (!isBareFrame(data)) {
-      const record = this.reassembler.push(data);
+      const record = this.s.reassembler.push(data);
       return record ? this.onRecord(record) : null;
     }
 
@@ -766,13 +737,13 @@ export class RenphoMsc04Adapter
     // settled reading is being held for the composition record, and a held
     // reading is replaced by every later complete one, so these must not
     // reach it.
-    if (frame.cmd === CMD_LIVE && this.finalReceived) return null;
+    if (frame.cmd === CMD_LIVE && this.s.finalReceived) return null;
 
     const weight = this.decodeWeight(data, frame.len, frame.frameLen);
     if (weight === null) return null;
     if (frame.cmd === CMD_FINAL) {
-      this.finalReceived = true;
-      this.finalWeight = weight;
+      this.s.finalReceived = true;
+      this.s.finalWeight = weight;
     }
     return { weight, impedance: 0 };
   }
@@ -801,7 +772,7 @@ export class RenphoMsc04Adapter
   private onStatus(data: Buffer, len: number): void {
     if (len < 2) return;
     const state = data[6];
-    this.lastState = state;
+    this.s.lastState = state;
     const name = STATUS_NAMES[state] ?? 'unknown';
     let extra = '';
     if (len >= 5) {
@@ -809,10 +780,10 @@ export class RenphoMsc04Adapter
       extra =
         `, ${stored} stored ${stored === 1 ? 'record' : 'records'}, ` +
         `[7] ${byteHex(data[7])}, [9] ${byteHex(data[9])}`;
-      this.diag.firstStatus ??= { state, stored };
-      this.storedAtStart ??= stored;
+      this.s.diag.firstStatus ??= { state, stored };
+      this.s.storedAtStart ??= stored;
     }
-    this.diag.lastStatus = { state, at: Date.now() };
+    this.s.diag.lastStatus = { state, at: Date.now() };
     bleLog.debug(
       `Renpho R-MSC04: status seq ${data[5]}, state 0x${byteHex(state)} (${name})${extra}`,
     );
@@ -821,7 +792,7 @@ export class RenphoMsc04Adapter
   /** 0x22/0x23 (and 0x27/0x28): the scale answering a write, with its seq and result. */
   private logReply(data: Buffer, cmd: number, frameLen: number): void {
     const to = REPLY_TO[cmd];
-    this.diag.answered.add(to);
+    this.s.diag.answered.add(to);
     const result = hex(data.subarray(6, frameLen - 1));
     bleLog.debug(
       `Renpho R-MSC04: scale answered b${(to & 0x0f).toString(16)} (seq ${data[5]})` +
@@ -837,7 +808,7 @@ export class RenphoMsc04Adapter
       return null;
     }
     if (frame.cmd === CMD_HISTORY) {
-      this.diag.replayed++;
+      this.s.diag.replayed++;
       const age = frame.len >= 6 ? `${f.readUInt32BE(7)} s old` : 'age unknown';
       bleLog.debug(`Renpho R-MSC04: stored history record seq ${f[5]} ignored (${age})`);
       return null;
@@ -855,13 +826,13 @@ export class RenphoMsc04Adapter
         `visceral ${rec.visceralFat}; impedance (trunk / L arm / R arm / L leg / R leg) ` +
         `20 kHz ${ohm(rec.impedance20kHz)} ohm, 100 kHz ${ohm(rec.impedance100kHz)} ohm`,
     );
-    this.diag.record = 'ignored';
-    if (this.guestProfileSent && this.sentHeightTenths !== null && rec.bmi > 0) {
+    this.s.diag.record = 'ignored';
+    if (this.s.guestProfileSent && this.s.sentHeightTenths !== null && rec.bmi > 0) {
       // Whether the scale computed this record for the b2 we sent. Only yes or
       // no: a signed gap next to the record's own weight and BMI would give
       // the user's height away. It tells nothing for a user whose Renpho app
       // profile has the same height as the first configured user.
-      const gap = Math.abs(100 * Math.sqrt(rec.weight / rec.bmi) - this.sentHeightTenths / 10);
+      const gap = Math.abs(100 * Math.sqrt(rec.weight / rec.bmi) - this.s.sentHeightTenths / 10);
       const verdict = gap <= SENT_HEIGHT_MATCH_CM ? 'matches' : 'does not match';
       bleLog.debug(
         `Renpho R-MSC04: the record's BMI height ${verdict} the height we sent ` +
@@ -869,12 +840,12 @@ export class RenphoMsc04Adapter
       );
     }
 
-    const weight = this.finalReceived ? this.weightFromFinal(rec) : this.weightFromRecord(rec);
+    const weight = this.s.finalReceived ? this.weightFromFinal(rec) : this.weightFromRecord(rec);
     if (weight === null) return null;
 
     const reading: ScaleReading = { weight, impedance: 0 };
-    this.records.pin(reading, { rec, guestProfile: this.guestProfileSent });
-    this.diag.record = 'used';
+    this.records.pin(reading, { rec, guestProfile: this.s.guestProfileSent });
+    this.s.diag.record = 'used';
     bleLog.info(
       `Renpho R-MSC04: body composition received (fat ${rec.fatPercent} %, ` +
         `visceral ${rec.visceralFat})`,
@@ -884,14 +855,14 @@ export class RenphoMsc04Adapter
 
   /** The 0x24 weight when the record is within RECORD_WEIGHT_TOLERANCE_KG of it, else null. */
   private weightFromFinal(rec: CompositionRecord): number | null {
-    if (Math.abs(rec.weight - this.finalWeight) > RECORD_WEIGHT_TOLERANCE_KG) {
+    if (Math.abs(rec.weight - this.s.finalWeight) > RECORD_WEIGHT_TOLERANCE_KG) {
       bleLog.debug(
         `Renpho R-MSC04: record weight ${rec.weight.toFixed(2)} kg does not match the ` +
-          `settled ${this.finalWeight.toFixed(2)} kg, ignored`,
+          `settled ${this.s.finalWeight.toFixed(2)} kg, ignored`,
       );
       return null;
     }
-    return this.finalWeight;
+    return this.s.finalWeight;
   }
 
   /**
@@ -908,11 +879,12 @@ export class RenphoMsc04Adapter
    */
   private weightFromRecord(rec: CompositionRecord): number | null {
     let why: string | null = null;
-    if (this.lastState !== STATE_COMPLETE) {
-      const last = this.lastState === null ? 'no status' : `status 0x${byteHex(this.lastState)}`;
+    if (this.s.lastState !== STATE_COMPLETE) {
+      const last =
+        this.s.lastState === null ? 'no status' : `status 0x${byteHex(this.s.lastState)}`;
       why = `${last} right before it, not 0x11`;
-    } else if (this.storedAtStart !== 0) {
-      const n = this.storedAtStart;
+    } else if (this.s.storedAtStart !== 0) {
+      const n = this.s.storedAtStart;
       why =
         n === null
           ? 'no stored-record count at the start of the session'
@@ -947,7 +919,7 @@ export class RenphoMsc04Adapter
 
   /** A 0x24 weight, or a reading a 0x25 record completed, also without a 0x24 (D057). */
   isComplete(reading: ScaleReading): boolean {
-    return reading.weight > 0 && (this.finalReceived || this.isFinal(reading));
+    return reading.weight > 0 && (this.s.finalReceived || this.isFinal(reading));
   }
 
   /** Final only once a 0x25 record completed the reading, with or without a 0x24. */

@@ -21,6 +21,12 @@ import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 const CHR_NOTIFY = uuid16(0xfff4);
 const CHR_WRITE = uuid16(0xfff1);
 
+/** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
+class ExcelvanSession {
+  /** Body-composition values from the most recent parsed frame. */
+  cachedComp: ScaleBodyComp = {};
+}
+
 /**
  * Adapter for Excelvan CF369 / "Electronic Scale" BLE body-fat scales.
  *
@@ -39,8 +45,7 @@ export class ExcelvanCF369Adapter implements ScaleAdapterCore, GattWiring, HoldF
   readonly charNotifyUuid = CHR_NOTIFY;
   readonly charWriteUuid = CHR_WRITE;
 
-  /** Cached body-composition values from the most recent parsed frame. */
-  private cachedComp: ScaleBodyComp = {};
+  private s = new ExcelvanSession();
   /**
    * Composition pinned to the reading it was measured with (#394): this adapter
    * is a shared singleton and `computeMetrics()` runs later than the parse, so
@@ -101,7 +106,7 @@ export class ExcelvanCF369Adapter implements ScaleAdapterCore, GattWiring, HoldF
     const water = data.readUInt16BE(12) / 10;
 
     // Cache body-comp for use in computeMetrics
-    this.cachedComp = {
+    this.s.cachedComp = {
       fat: data[6] !== 0xff ? fat : undefined,
       bone: data[6] !== 0xff ? bone : undefined,
       muscle: data[6] !== 0xff ? muscle : undefined,
@@ -110,7 +115,7 @@ export class ExcelvanCF369Adapter implements ScaleAdapterCore, GattWiring, HoldF
     };
 
     const reading: ScaleReading = { weight, impedance: 0 };
-    this.comp.pin(reading, this.cachedComp);
+    this.comp.pin(reading, this.s.cachedComp);
     return reading;
   }
 
@@ -131,29 +136,19 @@ export class ExcelvanCF369Adapter implements ScaleAdapterCore, GattWiring, HoldF
   readonly completionHoldMs = WEIGHT_ONLY_HOLD_MS;
 
   isFinal(reading: ScaleReading): boolean {
-    const fat = this.comp.of(reading, this.cachedComp).fat;
+    const fat = this.comp.of(reading, this.s.cachedComp).fat;
     return fat != null && fat > 0;
   }
 
-  /**
-   * Clear the previous weigh-in before anything is subscribed (#394).
-   *
-   * The pin above is what fixes the real leak. This reset covers the OTHER
-   * path: a reading built outside parseNotification (a direct caller, a test)
-   * has nothing pinned, so computeMetrics falls back to the live cache - and
-   * that must not still hold the previous person's numbers. It is also what
-   * the ScaleAdapter contract requires of every adapter, so a sibling added
-   * later inherits a correct example rather than this one's peculiarity.
-   */
   onSessionStart(): void {
-    this.cachedComp = {};
+    this.s = new ExcelvanSession();
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
     return buildPayload(
       reading.weight,
       reading.impedance,
-      this.comp.of(reading, this.cachedComp),
+      this.comp.of(reading, this.s.cachedComp),
       profile,
     );
   }

@@ -393,6 +393,23 @@ export function parseEufyAdvertisement(vendor: Buffer): ScaleReading | null {
   return { weight, impedance: 0 };
 }
 
+/** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
+class EufyP2Session {
+  auth: EufyAuthHandler | null = null;
+  /** Whether this session's C3 auth result was already handled. */
+  c3Seen = false;
+  /** Raw weight (hundredths of kg) of the previous final GATT frame this session. */
+  previousFinalRawWeight: number | null = null;
+  /** True once two consecutive final GATT frames reported the same weight. */
+  weightStable = false;
+  /** Whether an FFF2 frame-integrity mismatch has already been reported this session. */
+  frameIntegrityLogged = false;
+  /** Highest-confidence impedance seen this session (see latchImpedance). */
+  sessionImpedance = 0;
+  /** Raw weight (hundredths of kg) the latched impedance was measured at. */
+  sessionImpedanceRawWeight = 0;
+}
+
 export class EufyP2Adapter
   implements ScaleAdapterCore, GattWiring, MultiCharNotify, BroadcastSource
 {
@@ -412,22 +429,9 @@ export class EufyP2Adapter
     { service: SVC_UUID, uuid: CHR_AUTH, type: 'notify' },
   ];
 
-  /** Highest-confidence impedance seen this session (see latchImpedance). */
-  private sessionImpedance = 0;
-  /** Raw weight (hundredths of kg) the latched impedance was measured at. */
-  private sessionImpedanceRawWeight = 0;
+  private s = new EufyP2Session();
 
-  private auth: EufyAuthHandler | null = null;
   private ctx: ConnectionContext | null = null;
-  private readonly c3Seen = { done: false };
-
-  /** Raw weight (hundredths of kg) of the previous final GATT frame this session. */
-  private previousFinalRawWeight: number | null = null;
-  /** True once two consecutive final GATT frames reported the same weight. */
-  private weightStable = false;
-
-  /** Whether an FFF2 frame-integrity mismatch has already been reported this session. */
-  private frameIntegrityLogged = false;
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
@@ -445,23 +449,8 @@ export class EufyP2Adapter
     return false;
   }
 
-  /**
-   * Clear the previous weigh-in before anything is subscribed (#394).
-   *
-   * This used to live in `onConnected`, which is too late for a multi-char
-   * adapter: `subscribeAndInit` enables EVERY notify binding and only then
-   * awaits `startInit()`. A stale `weightStable` plus a stale authenticated
-   * `auth` made `isFinal()` return true on the first FFF2 frame of the next
-   * session, resolving it on the previous person's weight.
-   */
   onSessionStart(): void {
-    this.auth = null;
-    this.c3Seen.done = false;
-    this.previousFinalRawWeight = null;
-    this.weightStable = false;
-    this.frameIntegrityLogged = false;
-    this.sessionImpedance = 0;
-    this.sessionImpedanceRawWeight = 0;
+    this.s = new EufyP2Session();
   }
 
   async onConnected(ctx: ConnectionContext): Promise<void> {
@@ -470,9 +459,9 @@ export class EufyP2Adapter
       bleLog.warn('Eufy: no device address available — auth will fail without MAC');
       return;
     }
-    this.auth = new EufyAuthHandler(ctx.deviceAddress);
+    this.s.auth = new EufyAuthHandler(ctx.deviceAddress);
     bleLog.debug('Eufy: sending C0 handshake');
-    for (const frame of this.auth.buildC0()) {
+    for (const frame of this.s.auth.buildC0()) {
       await ctx.write(CHR_WRITE, frame, true);
       await new Promise<void>((r) => setTimeout(r, EUFY_WRITE_DELAY_MS));
     }
@@ -486,7 +475,7 @@ export class EufyP2Adapter
       return null;
     }
     if (uuid === normalizeUuid(CHR_DATA)) {
-      if (!this.auth?.isAuthenticated) {
+      if (!this.s.auth?.isAuthenticated) {
         bleLog.debug('Eufy: FFF2 frame received before auth complete — ignoring');
         return null;
       }
@@ -510,10 +499,10 @@ export class EufyP2Adapter
    * want to read.
    */
   private noteFrameIntegrity(data: Buffer): void {
-    if (this.frameIntegrityLogged) return;
+    if (this.s.frameIntegrityLogged) return;
     const problems = frameIntegrityProblems(data);
     if (problems.length === 0) return;
-    this.frameIntegrityLogged = true;
+    this.s.frameIntegrityLogged = true;
     bleLog.debug(
       `Eufy: FFF2 frame integrity mismatch (${problems.join('; ')}), parsed anyway (#289)`,
     );
@@ -528,8 +517,8 @@ export class EufyP2Adapter
   private trackStability(reading: ScaleReading | null): ScaleReading | null {
     if (!reading) return reading;
     const rawWeight = Math.round(reading.weight * 100);
-    this.weightStable = this.previousFinalRawWeight === rawWeight;
-    this.previousFinalRawWeight = rawWeight;
+    this.s.weightStable = this.s.previousFinalRawWeight === rawWeight;
+    this.s.previousFinalRawWeight = rawWeight;
     return this.latchImpedance(reading, rawWeight);
   }
 
@@ -544,25 +533,25 @@ export class EufyP2Adapter
    */
   private latchImpedance(reading: ScaleReading, rawWeight: number): ScaleReading {
     if (reading.impedance > 0) {
-      this.sessionImpedance = reading.impedance;
-      this.sessionImpedanceRawWeight = rawWeight;
+      this.s.sessionImpedance = reading.impedance;
+      this.s.sessionImpedanceRawWeight = rawWeight;
       return reading;
     }
-    if (this.sessionImpedance === 0) return reading;
+    if (this.s.sessionImpedance === 0) return reading;
     // Only carry it to the same body. One connection can outlive the person who
     // opened it: the session resolves on two consecutive equal-weight final
     // frames, so if someone steps off before that happens and someone else steps
     // on, an unlatched carry-forward would export person A's resistance against
     // person B's weight, and body composition is computed from exactly that
     // pair.
-    if (Math.abs(rawWeight - this.sessionImpedanceRawWeight) > LATCH_WEIGHT_TOLERANCE_RAW) {
+    if (Math.abs(rawWeight - this.s.sessionImpedanceRawWeight) > LATCH_WEIGHT_TOLERANCE_RAW) {
       bleLog.debug(
-        `Eufy: not carrying impedance ${this.sessionImpedance} ohm across a ` +
-          `${(Math.abs(rawWeight - this.sessionImpedanceRawWeight) / 100).toFixed(2)} kg change`,
+        `Eufy: not carrying impedance ${this.s.sessionImpedance} ohm across a ` +
+          `${(Math.abs(rawWeight - this.s.sessionImpedanceRawWeight) / 100).toFixed(2)} kg change`,
       );
       return reading;
     }
-    return { ...reading, impedance: this.sessionImpedance };
+    return { ...reading, impedance: this.s.sessionImpedance };
   }
 
   parseBroadcast(manufacturerData: Buffer): ScaleReading | null {
@@ -573,8 +562,8 @@ export class EufyP2Adapter
    * Drop the connection context when the session ends (#394, same class as
    * #138).
    *
-   * Everything else this adapter holds is reset in onSessionStart; this is the
-   * one field that must be released rather than reset, because it is
+   * Everything else this adapter holds is replaced in onSessionStart; this is
+   * the one field that must be released rather than reset, because it is
    * dereferenced for writes after the link is gone.
    */
   onSessionEnd(): void {
@@ -600,7 +589,7 @@ export class EufyP2Adapter
 
   /** Resolve immediately once the weight has stabilized across two final frames. */
   isFinal(_reading: ScaleReading): boolean {
-    return this.weightStable;
+    return this.s.weightStable;
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
@@ -610,11 +599,11 @@ export class EufyP2Adapter
   }
 
   private handleAuthFrame(data: Buffer): void {
-    if (!this.auth || !this.ctx) return;
+    if (!this.s.auth || !this.ctx) return;
     if (data.length === 0) return;
 
     if (data[0] === 0xc1) {
-      if (!this.auth.handleC1(data)) return;
+      if (!this.s.auth.handleC1(data)) return;
       bleLog.debug(`Eufy: C1 complete, device uuid received, sending C2`);
       void this.sendC2().catch((error: unknown) => {
         bleLog.warn(
@@ -625,10 +614,10 @@ export class EufyP2Adapter
     }
 
     if (data[0] === 0xc3) {
-      if (this.c3Seen.done) return;
-      this.c3Seen.done = true;
-      this.auth.handleC3(data);
-      if (this.auth.isAuthenticated) {
+      if (this.s.c3Seen) return;
+      this.s.c3Seen = true;
+      this.s.auth.handleC3(data);
+      if (this.s.auth.isAuthenticated) {
         bleLog.info('Eufy: authentication successful, waiting for weight on FFF2');
       } else {
         bleLog.warn('Eufy: authentication failed (scale rejected credentials)');
@@ -643,7 +632,7 @@ export class EufyP2Adapter
     // mid-handshake disconnect - surfaced as a misleading "failed to send C2
     // authentication frame (Cannot read properties of null)". Mirrors
     // renpho-es26bb.sendOfflineAck.
-    const auth = this.auth;
+    const auth = this.s.auth;
     const ctx = this.ctx;
     if (!auth || !ctx) return;
     for (const frame of auth.buildC2()) {
