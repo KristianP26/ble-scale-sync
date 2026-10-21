@@ -442,7 +442,7 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
   /**
    * Initialize a confirmed new BF500 slot from config; otherwise read the
    * stored profile back and commit it, filling unset fields only when opted in.
-   * Bump the Database Change Increment before requesting a BF500 measurement.
+   * Bump the Database Change Increment and request a reference measurement only for new BF500 users.
    *
    * The #229 capture shows the Beurer app doing exactly this immediately after
    * the consent is accepted, and only afterwards does the scale send a real
@@ -559,7 +559,7 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
           `written, ${provisionedNote}, change increment ${increment}); ` +
           'profile sync finished',
       );
-      if (this.isBf500 && session === this.session && this.ctx === ctx) {
+      if (this.initializeNewProfile && session === this.session && this.ctx === ctx) {
         try {
           await ctx.write(CHR_BF500_TAKE_MEASUREMENT, [0x00], true);
           bleLog.info('Beurer BF500: measurement requested; step barefoot on the scale.');

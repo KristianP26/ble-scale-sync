@@ -517,6 +517,7 @@ describe('BeurerBf720Adapter', () => {
       await flush();
       vi.mocked(ctx.write).mockClear();
       a.parseCharNotification(CHR_UCP, Buffer.from('200201', 'hex'));
+      a.parseCharNotification(CHR_UCP, Buffer.from('200201', 'hex'));
       await flush();
       expect(
         vi
@@ -605,7 +606,7 @@ describe('BeurerBf720Adapter', () => {
       expect(ctx.write).not.toHaveBeenCalledWith(CHR_UCP, [2, 3, 0xd2, 0x04], true);
     });
 
-    it('commits the profile then requests measurement once, matching the captured write order', async () => {
+    it('commits an existing profile once without requesting a fresh measurement', async () => {
       const a = makeAdapter();
       const ctx = bf500Ctx();
       await a.onConnected(ctx);
@@ -623,7 +624,6 @@ describe('BeurerBf720Adapter', () => {
         [HEIGHT, 'bd00'],
         [INCREMENT, '01000000'],
         [ACTIVITY, '01'],
-        [TAKE_MEASUREMENT, '00'],
       ]);
       expect(ctx.read).not.toHaveBeenCalledWith(uuid16(0xfff3));
     });
@@ -649,14 +649,16 @@ describe('BeurerBf720Adapter', () => {
       expect(ctx.read).not.toHaveBeenCalled();
     });
 
-    it('does not start a measurement after the session ends during profile sync', async () => {
+    it('does not start a measurement after the session ends during new-user profile sync', async () => {
       const a = makeAdapter();
-      const ctx = bf500Ctx();
+      const ctx = bf500Ctx({ scaleAuth: { pin: 1234, registerNewUser: true } });
       const write = vi.mocked(ctx.write);
       write.mockImplementation(async (uuid) => {
         if (uuid === INCREMENT) a.onSessionEnd();
       });
       await a.onConnected(ctx);
+      a.parseCharNotification(CHR_UCP, Buffer.from('20010103', 'hex'));
+      await flush();
       a.parseCharNotification(CHR_UCP, Buffer.from('200201', 'hex'));
       await flush();
       expect(write.mock.calls.some(([uuid]) => uuid === TAKE_MEASUREMENT)).toBe(false);
@@ -667,11 +669,14 @@ describe('BeurerBf720Adapter', () => {
       try {
         const a = makeAdapter();
         const ctx = bf500Ctx({
+          scaleAuth: { pin: 1234, registerNewUser: true },
           write: vi.fn(async (uuid: string) => {
             if (uuid === TAKE_MEASUREMENT) throw new Error('request refused');
           }),
         });
         await a.onConnected(ctx);
+        a.parseCharNotification(CHR_UCP, Buffer.from('20010103', 'hex'));
+        await flush();
         a.parseCharNotification(CHR_UCP, Buffer.from('200201', 'hex'));
         await flush();
         expect(warn.mock.calls.flat().join(' ')).toMatch(
