@@ -499,6 +499,112 @@ describe('BeurerBf720Adapter', () => {
       expect(ctx.read).not.toHaveBeenCalled();
     });
 
+    it('initializes a newly registered BF500 from config instead of the factory defaults', async () => {
+      const a = makeAdapter();
+      const defaults: Record<string, Buffer> = {
+        [DOB]: Buffer.from('c7070101', 'hex'),
+        [GENDER]: Buffer.from('01', 'hex'),
+        [HEIGHT]: Buffer.from('aa00', 'hex'),
+        [ACTIVITY]: Buffer.from('03', 'hex'),
+      };
+      const ctx = bf500Ctx({
+        profile: defaultProfile({ birthDate: '2001-03-21', height: 189, gender: 'male' }),
+        scaleAuth: { pin: 1234, registerNewUser: true },
+        read: vi.fn(async (uuid: string) => defaults[uuid] ?? Buffer.alloc(0)),
+      });
+      await a.onConnected(ctx);
+      a.parseCharNotification(CHR_UCP, Buffer.from('20010103', 'hex'));
+      await flush();
+      vi.mocked(ctx.write).mockClear();
+      a.parseCharNotification(CHR_UCP, Buffer.from('200201', 'hex'));
+      await flush();
+      expect(
+        vi
+          .mocked(ctx.write)
+          .mock.calls.map(([uuid, data]) => [uuid, Buffer.from(data).toString('hex')]),
+      ).toEqual([
+        [DOB, 'd1070315'],
+        [GENDER, '00'],
+        [HEIGHT, 'bd00'],
+        [INCREMENT, '01000000'],
+        [ACTIVITY, '03'],
+        [TAKE_MEASUREMENT, '00'],
+      ]);
+      expect(ctx.read).not.toHaveBeenCalled();
+    });
+
+    it.each([false, true])(
+      'preserves an existing BF500 profile with provisioning %s',
+      async (provision) => {
+        const a = makeAdapter();
+        const ctx = bf500Ctx({
+          profile: defaultProfile({ birthDate: '1990-01-01', height: 175, gender: 'female' }),
+          scaleAuth: { pin: 1234, provision },
+        });
+        await a.onConnected(ctx);
+        a.parseCharNotification(CHR_UCP, Buffer.from('200201', 'hex'));
+        await flush();
+        expect(ctx.write).toHaveBeenCalledWith(DOB, Buffer.from('d1070315', 'hex'), true);
+        expect(ctx.write).toHaveBeenCalledWith(GENDER, Buffer.from('00', 'hex'), true);
+        expect(ctx.write).toHaveBeenCalledWith(HEIGHT, Buffer.from('bd00', 'hex'), true);
+        expect(ctx.write).toHaveBeenCalledWith(ACTIVITY, Buffer.from('01', 'hex'), true);
+      },
+    );
+
+    it('does not initialize from config after registration fails', async () => {
+      const a = makeAdapter();
+      const ctx = bf500Ctx({ scaleAuth: { pin: 1234, registerNewUser: true } });
+      await a.onConnected(ctx);
+      vi.mocked(ctx.write).mockClear();
+      a.parseCharNotification(CHR_UCP, Buffer.from('200104', 'hex'));
+      await flush();
+      expect(ctx.write).not.toHaveBeenCalled();
+      expect(ctx.read).not.toHaveBeenCalled();
+    });
+
+    it('does not initialize a new profile when its consent is refused', async () => {
+      const a = makeAdapter();
+      const ctx = bf500Ctx({ scaleAuth: { pin: 1234, registerNewUser: true } });
+      await a.onConnected(ctx);
+      a.parseCharNotification(CHR_UCP, Buffer.from('20010103', 'hex'));
+      await flush();
+      vi.mocked(ctx.write).mockClear();
+      a.parseCharNotification(CHR_UCP, Buffer.from('200205', 'hex'));
+      await flush();
+      expect(ctx.write).not.toHaveBeenCalled();
+      expect(ctx.read).not.toHaveBeenCalled();
+    });
+
+    it('does not carry new-profile initialization into the next BF500 session', async () => {
+      const a = makeAdapter();
+      await a.onConnected(bf500Ctx({ scaleAuth: { pin: 1234, registerNewUser: true } }));
+      a.parseCharNotification(CHR_UCP, Buffer.from('20010103', 'hex'));
+      await flush();
+      a.onSessionEnd();
+      a.onSessionStart();
+      const ctx = bf500Ctx({ profile: defaultProfile({ birthDate: '1990-01-01', height: 175 }) });
+      await a.onConnected(ctx);
+      a.parseCharNotification(CHR_UCP, Buffer.from('200201', 'hex'));
+      await flush();
+      expect(ctx.write).toHaveBeenCalledWith(DOB, Buffer.from('d1070315', 'hex'), true);
+      expect(ctx.write).toHaveBeenCalledWith(HEIGHT, Buffer.from('bd00', 'hex'), true);
+    });
+
+    it('keeps BF788 registration on the existing profile write-back path', async () => {
+      const a = makeAdapter();
+      const ctx = bf500Ctx({
+        deviceName: 'BF788',
+        profile: defaultProfile({ birthDate: '1990-01-01', height: 175 }),
+        scaleAuth: { pin: 1234, registerNewUser: true, provision: true },
+      });
+      await a.onConnected(ctx);
+      a.parseCharNotification(CHR_UCP, Buffer.from('20010103', 'hex'));
+      await flush();
+      expect(ctx.write).toHaveBeenCalledWith(DOB, Buffer.from('d1070315', 'hex'), true);
+      expect(ctx.write).toHaveBeenCalledWith(HEIGHT, Buffer.from('bd00', 'hex'), true);
+      expect(ctx.write).not.toHaveBeenCalledWith(CHR_UCP, [2, 3, 0xd2, 0x04], true);
+    });
+
     it('commits the profile then requests measurement once, matching the captured write order', async () => {
       const a = makeAdapter();
       const ctx = bf500Ctx();

@@ -127,6 +127,8 @@ Provisioning only fills fields the scale reports as empty. A populated profile i
 
 Wait for `Beurer BF500: measurement requested; step barefoot on the scale.` before stepping on. Allow enough time for the initial reference weigh-in, for example `ble.session_timeout_sec: 120`; a 20-second session can end too early.
 
+A newly registered BF500 user is initialized with the date of birth, gender and height from config after consent succeeds, replacing the scale's factory defaults. Activity level uses the adapter's fixed value of 3. Existing profiles are preserved, so this does not repair a user created with default values by an older build.
+
 If registration already succeeded, keep the assigned `users[].beurer_user_index` and consent PIN, and turn `beurer_register_new_user` off. Leaving it enabled creates another user slot on each connection, even when the previous session timed out without a measurement.
 
 ### Beurer BF500: Linux asks to pair again

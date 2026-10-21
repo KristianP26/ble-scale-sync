@@ -178,6 +178,8 @@ class Bf720Session {
   cachedUserIndex: number | undefined;
   cachedComp: CachedComp = {};
   profileSyncDone = false;
+  /** Only a confirmed new BF500 slot may replace plausible factory defaults. */
+  initializeNewProfile = false;
   /** Vendor user-slot records seen on 0xFFF2 this session. */
   userSlotsSeen = 0;
   /** Whether the vendor user list terminated (or reported an error) this session. */
@@ -385,6 +387,7 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     this.ctx = ctx;
     this.userIndex = userIndex;
     this.registerNewUser = ctx.scaleAuth?.registerNewUser === true;
+    this.s.initializeNewProfile = false;
     this.provision = ctx.scaleAuth?.provision === true;
     this.isBf500 = ctx.deviceName?.toLowerCase().includes('bf500') === true;
 
@@ -437,8 +440,9 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
   }
 
   /**
-   * Read the scale's stored user data back and commit it unchanged, then bump
-   * the Database Change Increment.
+   * Initialize a confirmed new BF500 slot from config; otherwise read the
+   * stored profile back and commit it, filling unset fields only when opted in.
+   * Bump the Database Change Increment before requesting a BF500 measurement.
    *
    * The #229 capture shows the Beurer app doing exactly this immediately after
    * the consent is accepted, and only afterwards does the scale send a real
@@ -465,6 +469,16 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
             : original;
         if (!ctx.availableChars.has(field.uuid)) continue;
         if (session !== this.session) return;
+        if (this.s.initializeNewProfile) {
+          // New BF500 slots contain valid-looking defaults, not the user's profile.
+          const filled = field.fromProfile(ctx.profile);
+          values.set(field.uuid, filled);
+          provisioned += 1;
+          bleLog.info(
+            `Beurer BF500: initializing ${field.label} for new user ${this.userIndex} [${hex(filled)}]`,
+          );
+          continue;
+        }
         let stored: Buffer | null = null;
         try {
           stored = await ctx.read(field.uuid);
@@ -721,6 +735,7 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
           bleLog.warn('Beurer BF500: cannot consent without the assigned user index and session.');
           return;
         }
+        this.s.initializeNewProfile = true;
         // Registration does not replace explicit consent on the BF500.
         this.s.consentAnswered = false;
         void ctx
