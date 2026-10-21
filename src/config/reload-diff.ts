@@ -125,6 +125,9 @@ const RESTART_REQUIRED_KEYS = [
   // the effect nor the warning, which is the gap ble.force_scale_adapter had.
   'runtime.retry_failed_exports',
   'runtime.watchdog_max_consecutive_failures',
+  // The watcher is started once, before the loop, and a reload neither starts
+  // nor stops it.
+  'runtime.watch_config',
 ];
 
 function valueAt(config: AppConfig, key: string): unknown {

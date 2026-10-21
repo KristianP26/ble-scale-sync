@@ -193,6 +193,14 @@ describe('diffRestartRequired', () => {
     });
   });
 
+  it('flags runtime.watch_config, which only decides at start-up whether the watcher runs', () => {
+    const a = baseConfig({ runtime: { watch_config: true } } as Partial<AppConfig>);
+    const b = baseConfig({ runtime: { watch_config: false } } as Partial<AppConfig>);
+    expect(diffRestartRequired(a, b)).toEqual([
+      { key: 'runtime.watch_config', oldValue: 'true', newValue: 'false' },
+    ]);
+  });
+
   it('flags ble.adapter_privacy, which is read once at start-up (#417)', () => {
     const a = baseConfig({ ble: { handler: 'auto' } });
     const b = baseConfig({ ble: { handler: 'auto', adapter_privacy: true } });
