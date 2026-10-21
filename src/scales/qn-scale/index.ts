@@ -61,6 +61,7 @@ import {
   MEASURED_ANSWER_MIN_MS,
   NINETEEN_BYTE_RESULT_HOLD_MS,
   NO_CONTACT_RESISTANCE,
+  SCRAMBLED_ONLY_HIGH_BYTES,
   POST_START_ANCHOR_DELAY_MS,
   PROTO_ECHO_MIN_INFO_FRAME_LEN,
   RECENT_LIVE_RESULTS,
@@ -575,6 +576,17 @@ export class QnScaleAdapter
    */
   private resistanceScrambled = false;
 
+  /**
+   * No manufacturer data reached this session, or only a company id without
+   * bytes (#463), so the flag is unknown: the 18-byte dialect then reads a
+   * resistance with high byte 0x10 or 0x12 unscrambled (see
+   * SCRAMBLED_ONLY_HIGH_BYTES). Set in onConnected.
+   */
+  private noAdvertisement = false;
+
+  /** One info line per 18-byte session without an advertisement (#463). */
+  private noAdvertisementLogged = false;
+
   /** One "unscrambled impedance is not a body" warning per session (#461). */
   private unscrambledImplausibleWarned = false;
 
@@ -727,6 +739,8 @@ export class QnScaleAdapter
     this.historyResponseSent = false;
     this.storedQueryAttempts = 0;
     this.resistanceScrambled = false;
+    this.noAdvertisement = false;
+    this.noAdvertisementLogged = false;
     this.unscrambledImplausibleWarned = false;
     if (this.fallbackTimer) {
       clearTimeout(this.fallbackTimer);
@@ -852,15 +866,25 @@ export class QnScaleAdapter
     }
   }
 
-  /** Read the impedance flag from the session's advertisement (#461). */
+  /**
+   * Read the impedance flag from the session's advertisement (#461). A company
+   * id without bytes carries no flag, so it counts as no advertisement (#463).
+   */
   private readImpedanceFlag(ctx: ConnectionContext): void {
-    const traits = qnAdvertTraits(ctx.manufacturerData, ctx.deviceAddress);
+    const md = ctx.manufacturerData?.data.length ? ctx.manufacturerData : undefined;
+    const traits = qnAdvertTraits(md, ctx.deviceAddress);
     this.resistanceScrambled = traits?.scrambled === true;
-    if (!ctx.manufacturerData) {
-      bleLog.debug('QN: no advertisement for this session, impedance read as sent (#461)');
+    this.noAdvertisement = md === undefined;
+    if (!md) {
+      bleLog.debug(
+        'QN: no advertisement for this session, impedance read as sent unless the 18-byte ' +
+          'dialect sends one only a scrambled body gives (#461, #463)',
+      );
+      // A 0x12 parsed before onConnected has told the dialect already.
+      if (this.isEighteenByteInfo) this.logNoAdvertisementOnce();
     } else if (!traits) {
       bleLog.debug(
-        `QN: advertisement (company 0x${ctx.manufacturerData.id.toString(16).padStart(4, '0')}) ` +
+        `QN: advertisement (company 0x${md.id.toString(16).padStart(4, '0')}) ` +
           'is not a QN one for this device, impedance read as sent (#461)',
       );
     } else if (traits.category === null) {
@@ -879,11 +903,21 @@ export class QnScaleAdapter
 
   /**
    * The resistance a frame carries, unscrambled when the advertisement said so
-   * (see SCRAMBLE_FLAG_BIT). Untouched otherwise, so a scale that does not set
-   * the flag gets exactly the bytes it sent.
+   * (see SCRAMBLE_FLAG_BIT). Untouched otherwise, so a scale that advertises
+   * without the flag gets exactly the bytes it sent. Without any advertisement,
+   * an 18-byte value only a scrambled body resistance can be is unscrambled
+   * (readsUnscrambledWithoutAdvert, #463).
    */
   private resistance(raw: number): number {
-    if (!this.resistanceScrambled || raw === 0) return raw;
+    if (raw === 0) return raw;
+    if (!this.resistanceScrambled) {
+      if (!this.readsUnscrambledWithoutAdvert(raw)) return raw;
+      const value = decryptQnResistance(raw);
+      bleLog.debug(
+        `QN: impedance ${raw} read unscrambled as ${value} Ohm without an advertisement (#463)`,
+      );
+      return value;
+    }
     const unscrambled = decryptQnResistance(raw);
     const value = unscrambled >= NO_CONTACT_RESISTANCE ? 0 : unscrambled;
     bleLog.debug(`QN: impedance ${raw} unscrambled to ${value} Ohm (#461)`);
@@ -895,6 +929,36 @@ export class QnScaleAdapter
       );
     }
     return value;
+  }
+
+  /**
+   * Once per 18-byte session without an advertisement, at info, whether or not
+   * a resistance is changed later: a scrambled one that is already in the body
+   * range stays wrong without a trace otherwise (#463, D071). Called from the
+   * 0x12 and from onConnected, whichever comes second, since it needs both.
+   */
+  private logNoAdvertisementOnce(): void {
+    if (!this.isEighteenByteInfo || !this.noAdvertisement || this.noAdvertisementLogged) return;
+    this.noAdvertisementLogged = true;
+    bleLog.info(
+      'QN: no advertisement reached this connection, so whether the scale scrambles its ' +
+        'impedance is not known: one of 4096-4351 or 4608-4863 Ohm, which only a scrambled ' +
+        'body gives, is read unscrambled, any other as sent, so a scrambled one of 151-255, ' +
+        '512-767 or 1024-1200 Ohm can be off by up to 39 Ohm (#463)',
+    );
+  }
+
+  /**
+   * An 18-byte resistance in a session without any advertisement whose high
+   * byte only a scrambled body resistance has (SCRAMBLED_ONLY_HIGH_BYTES,
+   * #463, D071).
+   */
+  private readsUnscrambledWithoutAdvert(raw: number): boolean {
+    return (
+      this.noAdvertisement &&
+      this.isEighteenByteInfo &&
+      SCRAMBLED_ONLY_HIGH_BYTES.includes(raw >> 8)
+    );
   }
 
   /** See matching.ts. Pure over the advertisement, so it lives outside the class. */
@@ -1076,6 +1140,8 @@ export class QnScaleAdapter
         this.isExtendedLongFrame = data.length >= EXTENDED_INFO_FRAME_LEN;
         this.isNineteenByteInfo = data.length === PROTO_ECHO_MIN_INFO_FRAME_LEN;
         this.isEighteenByteInfo = data.length === 18;
+        // Only the 0x12 tells the dialect, so the line waits for it.
+        this.logNoAdvertisementOnce();
         if (this.wantsAppProfileSequence() && this.appProfileSequence === false) {
           bleLog.debug(
             `QN: ${data.length}-byte 0x12 after the handshake already chose openScale's frames; ` +

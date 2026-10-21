@@ -81,8 +81,13 @@ uses the one the same scale advertised earlier while the app has been running,
 so in continuous mode and on the Home Assistant add-on a connection goes
 without it only until one has carried it. Through the ESP32 MQTT proxy, and in
 a single-shot run, which starts afresh each time, nothing is remembered. A
-connection that had none has `QN: no advertisement for this session` in the
-debug log.
+connection that got no advertisement at all has
+`QN: no advertisement for this session` in the debug log. On a QN scale with
+an 18-byte scale-info frame it also says so in the normal log, and an
+impedance of 4096 to 4351 or 4608 to 4863 Ohm, which only a scrambled body
+resistance gives, is then read unscrambled. Any other value is read as sent,
+so in such a connection a scrambled one between 151 and 255, 512 and 767 or
+1024 and 1200 Ohm can still be off by up to 39 Ohm.
 
 ### Body fat fallback (Deurenberg)
 

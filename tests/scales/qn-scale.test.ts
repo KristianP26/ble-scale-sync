@@ -97,6 +97,18 @@ const FINAL_1020 = Buffer.from([
   0x10, 0x0f, 0xff, 0x01, 0x02, 0x1c, 0x57, 0x10, 0xdd, 0x10, 0xdb, 0x00, 0x00, 0x00, 0x6c,
 ]);
 /**
+ * #463, the Physiq on 2026-10-19 16:38, byte for byte from that public DEBUG
+ * log: its 0x12 and its final live frame, 71.15 kg, R50 4315 / R500 4313, no
+ * body fat in it.
+ */
+const INFO_1019 = Buffer.from([
+  0x12, 0x12, 0xff, 0x25, 0xe0, 0x16, 0x00, 0x05, 0xff, 0x13, 0x07, 0x16, 0x00, 0x03, 0x05, 0x9f,
+  0x32, 0x4b,
+]);
+const FINAL_1019 = Buffer.from([
+  0x10, 0x0f, 0xff, 0x01, 0x02, 0x1b, 0xcb, 0x10, 0xdb, 0x10, 0xd9, 0x00, 0x00, 0x00, 0xdb,
+]);
+/**
  * The Physiq's advertisement of 2026-10-19 16:38 (#463), byte for byte the
  * same at 2026-10-20 17:57:58.247: model 129, impedance scrambled.
  */
@@ -4138,6 +4150,8 @@ describe('QN stored record and impedance (#461)', () => {
     now: string;
     deviceAddress?: string;
     manufacturerData?: { id: number; data: Buffer };
+    /** Frames parsed after onSessionStart and before onConnected. */
+    beforeConnect?: Buffer[];
   }
 
   /**
@@ -4165,8 +4179,11 @@ describe('QN stored record and impedance (#461)', () => {
         ...(opts.manufacturerData ? { manufacturerData: opts.manufacturerData } : {}),
       } as unknown as ConnectionContext;
       adapter.onSessionStart?.();
-      await adapter.onConnected(ctx);
       let reading = null;
+      for (const frame of opts.beforeConnect ?? []) {
+        reading = adapter.parseNotification(frame) ?? reading;
+      }
+      await adapter.onConnected(ctx);
       for (const frame of frames) {
         reading = adapter.parseNotification(frame) ?? reading;
         await vi.advanceTimersByTimeAsync(100);
@@ -4192,11 +4209,13 @@ describe('QN stored record and impedance (#461)', () => {
     });
   });
 
-  it('reads the #461 record without an advertisement as the raw R50', async () => {
+  // No body sends 4303 as it is, so without an advertisement the 18-byte
+  // dialect reads it unscrambled (#463, D071).
+  it('reads the #461 record without an advertisement unscrambled, as no body sends 4303', async () => {
     const reading = await runSession(makeAdapter(), [INFO_461, RECORD_461], {
       now: CONNECTED_461,
     });
-    expect(reading).toEqual({ weight: 71.65, impedance: 4303 });
+    expect(reading).toEqual({ weight: 71.65, impedance: 502 });
   });
 
   it('still re-queries after the empty record #461 sent first', async () => {
@@ -4312,6 +4331,9 @@ describe('QN stored record and impedance (#461)', () => {
     expect(reading).toEqual({ weight: 71.65, impedance: 502 });
   });
 
+  // The next session has an advertisement without the flag (the classic
+  // one, address check skipped): without one at all it would be read
+  // unscrambled for another reason (D071).
   it('does not carry the flag into the next session', async () => {
     const adapter = makeAdapter();
     await runSession(adapter, [INFO_461], {
@@ -4319,7 +4341,10 @@ describe('QN stored record and impedance (#461)', () => {
       deviceAddress: ADDRESS_461,
       manufacturerData: ADVERT_461,
     });
-    const reading = await runSession(adapter, [INFO_461, RECORD_461], { now: CONNECTED_461 });
+    const reading = await runSession(adapter, [INFO_461, RECORD_461], {
+      now: CONNECTED_461,
+      manufacturerData: ADVERT_CLASSIC,
+    });
     expect(reading).toEqual({ weight: 71.65, impedance: 4303 });
   });
 
@@ -4380,6 +4405,153 @@ describe('QN stored record and impedance (#461)', () => {
       });
       // R1 reads as 0 (no contact) after unscrambling.
       expect(reading).toEqual({ weight: 84.8, impedance: 0 });
+    });
+  });
+
+  // #463, 2026-10-20 19:39: no advertisement reached the session, and the
+  // scrambled 4317 went out as sent and was dropped. On the 18-byte dialect a
+  // resistance with high byte 0x10 or 0x12 is now read unscrambled, and the
+  // connection says once that the flag is unknown (D071). The finals are the
+  // module's real frames; the derived ones say what they change.
+  describe('impedance without an advertisement (#463, D071)', () => {
+    const UNKNOWN =
+      'QN: no advertisement reached this connection, so whether the scale scrambles its ' +
+      'impedance is not known: one of 4096-4351 or 4608-4863 Ohm, which only a scrambled body ' +
+      'gives, is read unscrambled, any other as sent, so a scrambled one of 151-255, 512-767 ' +
+      'or 1024-1200 Ohm can be off by up to 39 Ohm (#463)';
+    async function withInfo(
+      adapter: QnScaleAdapter,
+      frames: Buffer[],
+      opts: SessionOptions,
+    ): Promise<{ reading: ScaleReading | null; infoLines: string[] }> {
+      const infoLines: string[] = [];
+      const info = vi.spyOn(bleLog, 'info').mockImplementation((m) => void infoLines.push(m));
+      try {
+        const reading = await runSession(adapter, frames, opts);
+        return { reading, infoLines };
+      } finally {
+        info.mockRestore();
+      }
+    }
+    const AT_1019 = { now: '2026-10-19T16:38:13.480Z', deviceAddress: ADDRESS_461 };
+    /** FINAL_1019 with R50 at [7..8] set to `raw`, [14] recomputed. */
+    const finalWithR50 = (raw: number): Buffer =>
+      derive(FINAL_1019, { 7: raw >> 8, 8: raw & 0xff });
+
+    it('reads the 2026-10-19 final unscrambled and says once that the flag is unknown', async () => {
+      // 0x12 three times, as the scale repeats it.
+      const { reading, infoLines } = await withInfo(
+        makeAdapter(),
+        [INFO_1019, INFO_1019, INFO_1019, FINAL_1019],
+        AT_1019,
+      );
+      expect(reading).toEqual({ weight: 71.15, impedance: 499 });
+      expect(infoLines.filter((l) => l === UNKNOWN)).toHaveLength(1);
+    });
+
+    it('reads the 2026-10-20 17:58 record the same way without its advertisement', async () => {
+      const { reading } = await withInfo(makeAdapter(), [INFO_1020, RECORD_1758], {
+        now: '2026-10-20T17:58:11.269Z',
+        deviceAddress: ADDRESS_461,
+      });
+      expect(reading).toEqual({ weight: 71.1, impedance: 504 });
+    });
+
+    it('reads it as the log of 17:58 did with the advertisement, without the line', async () => {
+      const { reading, infoLines } = await withInfo(makeAdapter(), [INFO_1020, RECORD_1758], {
+        now: '2026-10-20T17:58:11.269Z',
+        deviceAddress: ADDRESS_461,
+        manufacturerData: ADVERT_1019,
+      });
+      expect(reading).toEqual({ weight: 71.1, impedance: 504 });
+      expect(infoLines).not.toContain(UNKNOWN);
+    });
+
+    it('leaves it to an advertisement without the flag', async () => {
+      const { reading, infoLines } = await withInfo(makeAdapter(), [INFO_1019, FINAL_1019], {
+        ...AT_1019,
+        deviceAddress: '',
+        manufacturerData: ADVERT_CLASSIC,
+      });
+      expect(reading).toEqual({ weight: 71.15, impedance: 4315 });
+      expect(infoLines).not.toContain(UNKNOWN);
+    });
+
+    it('leaves a session without a 0x12 as sent, and says nothing', async () => {
+      const { reading, infoLines } = await withInfo(makeAdapter(), [FINAL_1019], AT_1019);
+      expect(reading).toEqual({ weight: 71.15, impedance: 4315 });
+      expect(infoLines).not.toContain(UNKNOWN);
+    });
+
+    it('says nothing on the 19-byte dialect', async () => {
+      const { infoLines } = await withInfo(makeAdapter(), [INFO_ARBOLEAF_331], AT_1019);
+      expect(infoLines).not.toContain(UNKNOWN);
+    });
+
+    it.each([
+      // Out of the body range, but unscrambled into it too: edge values a
+      // clear resistance can have, so they stay as sent.
+      ['1205 (0x04b5)', 1205, 1205],
+      ['140 (0x008c)', 140, 140],
+      // In the range: never touched, scrambled or not.
+      ['513 (0x0201)', 0x0201, 0x0201],
+      // High byte 0x12: unscrambled into 768-1023.
+      ['4829 (0x12dd)', decryptQnResistance(0x12dd), 0x12dd],
+    ])('reads R50 %s as %s', async (_label, expected, raw) => {
+      const frame = finalWithR50(raw);
+      expect(hasValidSumChecksum(frame)).toBe(true);
+      const { reading, infoLines } = await withInfo(makeAdapter(), [INFO_1019, frame], AT_1019);
+      expect(reading).toEqual({ weight: 71.15, impedance: expected });
+      // Said whether or not this value is changed.
+      expect(infoLines.filter((l) => l === UNKNOWN)).toHaveLength(1);
+    });
+
+    // BlueZ can expose a company id with an empty payload, and the transports
+    // hand none over then; a company id without bytes still carries no flag.
+    it('counts a company id without bytes as no advertisement', async () => {
+      const { reading, infoLines } = await withInfo(makeAdapter(), [INFO_1019, FINAL_1019], {
+        ...AT_1019,
+        manufacturerData: { id: 0xffff, data: Buffer.alloc(0) },
+      });
+      expect(reading).toEqual({ weight: 71.15, impedance: 499 });
+      expect(infoLines.filter((l) => l === UNKNOWN)).toHaveLength(1);
+    });
+
+    // QN's comments allow a 0x12 before onConnected; with no 0x12 after it,
+    // the line has to come from onConnected, and a later 0x12 adds none.
+    it('says it once when the 0x12 came before onConnected', async () => {
+      const once = await withInfo(makeAdapter(), [FINAL_1019], {
+        ...AT_1019,
+        beforeConnect: [INFO_1019],
+      });
+      expect(once.reading).toEqual({ weight: 71.15, impedance: 499 });
+      expect(once.infoLines.filter((l) => l === UNKNOWN)).toHaveLength(1);
+      const { reading, infoLines } = await withInfo(makeAdapter(), [INFO_1019, FINAL_1019], {
+        ...AT_1019,
+        beforeConnect: [INFO_1019],
+      });
+      expect(reading).toEqual({ weight: 71.15, impedance: 499 });
+      expect(infoLines.filter((l) => l === UNKNOWN)).toHaveLength(1);
+    });
+
+    it('unscrambles 0x12dd into the body range', () => {
+      expect(decryptQnResistance(0x12dd)).toBeGreaterThanOrEqual(768);
+      expect(decryptQnResistance(0x12dd)).toBeLessThanOrEqual(1023);
+    });
+
+    it('decides per session: with an advertisement after one without, and the line again', async () => {
+      const adapter = makeAdapter();
+      const first = await withInfo(adapter, [INFO_1019, FINAL_1019], AT_1019);
+      expect(first.reading).toEqual({ weight: 71.15, impedance: 499 });
+      const second = await withInfo(adapter, [INFO_1019, FINAL_1019], {
+        ...AT_1019,
+        deviceAddress: '',
+        manufacturerData: ADVERT_CLASSIC,
+      });
+      expect(second.reading).toEqual({ weight: 71.15, impedance: 4315 });
+      const third = await withInfo(adapter, [INFO_1019, FINAL_1019], AT_1019);
+      expect(third.reading).toEqual({ weight: 71.15, impedance: 499 });
+      expect(third.infoLines.filter((l) => l === UNKNOWN)).toHaveLength(1);
     });
   });
 
@@ -5040,13 +5212,6 @@ describe('QN stored record and impedance (#461)', () => {
       // batch of two (ofTwo) is derived from RECORD_463, and the incomplete
       // weigh-in (LOW_R_1019) from FINAL_1019.
       describe('a weigh-in that comes before the answer to the stored-record query', () => {
-        const INFO_1019 = Buffer.from([
-          0x12, 0x12, 0xff, 0x25, 0xe0, 0x16, 0x00, 0x05, 0xff, 0x13, 0x07, 0x16, 0x00, 0x03, 0x05,
-          0x9f, 0x32, 0x4b,
-        ]);
-        const FINAL_1019 = Buffer.from([
-          0x10, 0x0f, 0xff, 0x01, 0x02, 0x1b, 0xcb, 0x10, 0xdb, 0x10, 0xd9, 0x00, 0x00, 0x00, 0xdb,
-        ]);
         /** onSessionStart in the log. */
         const STARTED_1019 = '2026-10-19T16:38:13.480Z';
         /**
@@ -5131,8 +5296,9 @@ describe('QN stored record and impedance (#461)', () => {
             STARTED_1019,
             null,
           );
-          const asSent = { weight: 71.15, impedance: 4315 };
-          expect(readings).toEqual([{ weight: 71.15, impedance: 150 }, asSent, asSent]);
+          // No advertisement: 150 is read as sent, 4315 unscrambled (D071).
+          const full = { weight: 71.15, impedance: 499 };
+          expect(readings).toEqual([{ weight: 71.15, impedance: 150 }, full, full]);
           expect(readings.map((r) => adapter.isFinal(r))).toEqual([true, false, true]);
         });
 
