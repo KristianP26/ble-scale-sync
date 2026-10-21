@@ -125,7 +125,7 @@ Provisioning only fills fields the scale reports as empty. A populated profile i
 
 ### Beurer BF500: paired but stuck on APP
 
-Wait for `Beurer BF500: measurement requested; step barefoot on the scale.` before stepping on. Allow enough time for the initial reference weigh-in, for example `ble.session_timeout_sec: 120`; a 20-second session can end too early.
+During new-user initialization, wait for `Beurer BF500: measurement requested; step barefoot on the scale.` before stepping on. Allow enough time for the initial reference weigh-in, for example `ble.session_timeout_sec: 120`; a 20-second session can end too early. Normal connections to an existing user do not send this measurement request; the app can receive stored readings without prompting for another weigh-in.
 
 A newly registered BF500 user is initialized with the date of birth, gender and height from config after consent succeeds, replacing the scale's factory defaults. Activity level uses the adapter's fixed value of 3. Existing profiles are preserved, so this does not repair a user created with default values by an older build.
 
