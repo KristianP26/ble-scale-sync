@@ -1,0 +1,29 @@
+{
+  "returned": true,
+  "exports": [],
+  "computeMetrics": [],
+  "queued": [],
+  "lastKnownWeightWrites": [],
+  "replayAnchorWrites": [],
+  "updateChecks": 0,
+  "display": [
+    [
+      "beep",
+      600,
+      150,
+      3
+    ]
+  ],
+  "after": {
+    "lastExportedWeights": {},
+    "lastExportedAt": {},
+    "lastKnownWeight": {
+      "dad": null,
+      "mom": null
+    }
+  },
+  "log": [
+    "[Sync] Raw reading: 30.00 kg / 500 Ohm (+ 1 historical)",
+    "[Sync] [historic 2026-10-21T03:00:00.000Z] Dropping a stored record of 30.00 kg: it matches no user."
+  ]
+}

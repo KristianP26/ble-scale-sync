@@ -1,0 +1,112 @@
+{
+  "settled": {
+    "by": "reading",
+    "atMs": 15250
+  },
+  "reading": {
+    "weight": 83.55,
+    "impedance": 0,
+    "scaleComposition": null
+  },
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 1,
+      "atMs": 0,
+      "uuid": "ffe1"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 2,
+      "atMs": 0,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 3,
+      "atMs": 150,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 4,
+      "atMs": 250,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 5,
+      "atMs": 400,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 6,
+      "atMs": 5000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 7,
+      "atMs": 7000,
+      "uuid": "ffe1",
+      "hex": "e7f1590301",
+      "withResponse": true
+    },
+    {
+      "seq": 8,
+      "atMs": 7100,
+      "uuid": "ffe1",
+      "hex": "e7f1590302",
+      "withResponse": true
+    },
+    {
+      "seq": 9,
+      "atMs": 7200,
+      "uuid": "ffe1",
+      "hex": "e7f1590303",
+      "withResponse": true
+    },
+    {
+      "seq": 10,
+      "atMs": 10000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 11,
+      "atMs": 15000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    }
+  ],
+  "rxDropped": 0,
+  "payload": {
+    "weight": 83.55,
+    "impedance": 0,
+    "bmi": 24.95,
+    "bodyFatPercent": 20.64,
+    "waterPercent": 57.93,
+    "boneMass": 2.78,
+    "muscleMass": 63.52,
+    "visceralFat": 9,
+    "physiqueRating": 5,
+    "bmr": 1834,
+    "metabolicAge": 31
+  }
+}

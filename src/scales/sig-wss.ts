@@ -126,10 +126,8 @@ export function encodeSigDateTime(d: Date): number[] {
 
 export interface SigWeightMeasurement {
   /**
-   * Kilograms. Always kilograms: a pounds frame is converted here, so an
-   * adapter that sets `normalizesWeight = true` (which tells the shared layer
-   * to skip its own conversion) cannot export pounds as kilograms, a 2.2x
-   * error.
+   * Kilograms. Always kilograms: a pounds frame is converted here, because
+   * nothing after the decoder converts (`ScaleReading.weight`).
    *
    * Undefined when the frame is too short to carry the field, or when it
    * carries the 0xFFFF "Measurement Unsuccessful" sentinel (review C-10). A

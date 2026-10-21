@@ -17,6 +17,7 @@ import { checkAndLogUpdate } from '../update-check.js';
 import { fmtWeight } from './format.js';
 import { enqueue } from './export-queue.js';
 import { exporterSlot } from './exporter-slot.js';
+import { METRIC_KEYS } from '../exporters/metrics.js';
 import { isUsableAnchorTime, persistReplayAnchor } from './replay-anchors.js';
 import {
   HISTORY_WINDOW_MS,
@@ -32,19 +33,9 @@ import {
 const log = createLogger('Sync');
 
 // Fixed log order for body-composition metrics, independent of the order in
-// which the adapter populates the payload. Matches the BodyComposition shape
-// minus `weight` and `impedance` (logged separately above).
-const BODY_COMP_LOG_KEYS: ReadonlyArray<keyof BodyComposition> = [
-  'bmi',
-  'bodyFatPercent',
-  'waterPercent',
-  'boneMass',
-  'muscleMass',
-  'visceralFat',
-  'physiqueRating',
-  'bmr',
-  'metabolicAge',
-];
+// which the adapter populates the payload; `weight` and `impedance` are logged
+// separately above.
+const BODY_COMP_LOG_KEYS = METRIC_KEYS.filter((k) => k !== 'weight' && k !== 'impedance');
 const KG_METRICS = new Set<keyof BodyComposition>(['boneMass', 'muscleMass']);
 
 /** Tolerance for treating a historical replay weight as a duplicate of the last exported weight. */
@@ -128,9 +119,6 @@ export interface ProcessReadingOpts {
  * adapter computes anything. 0 is the contract's "no impedance": the adapter
  * then has to produce the BMI estimate, unless the scale measured the
  * composition itself (D028).
- *
- * In place on purpose: adapters pin their decoded composition to the reading
- * OBJECT (`ReadingComposition`), so a copy would lose it.
  */
 function computeFrameMetrics(
   adapter: ScaleAdapter,
@@ -330,7 +318,6 @@ async function exportFrame(
   const context: ExportContext = {
     userName: user.name,
     userSlug: user.slug,
-    userConfig: user,
     weightUnit: ctx.weightUnit,
     ...(item.drift ? { driftWarning: item.drift } : {}),
     // Always set, live or not: every backdate exporter records this one time,

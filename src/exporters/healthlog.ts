@@ -3,7 +3,7 @@ import type { BodyComposition } from '../interfaces/scale-adapter.js';
 import type { Exporter, ExportContext, ExportResult } from '../interfaces/exporter.js';
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { HealthLogConfig } from './config.js';
-import { withRetry, httpError, httpHealthcheck } from '../utils/retry.js';
+import { sendWithRetry, probe } from './http.js';
 import { errMsg } from '../utils/error.js';
 
 const log = createLogger('HealthLog');
@@ -138,32 +138,27 @@ export class HealthLogExporter implements Exporter {
    * redelivery from the failed-export queue. That counts as success.
    */
   private postMeasurement(type: string, value: number, timestamp: string): Promise<ExportResult> {
-    return withRetry(
-      async () => {
-        const response = await fetch(`${this.apiBase}/measurements`, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${this.config.token}`,
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-          },
-          body: JSON.stringify({
-            type,
-            value: round2(value),
-            measuredAt: timestamp,
-          }),
-          signal: AbortSignal.timeout(10_000),
-        });
-        if (response.status === 409) {
-          log.debug(`HealthLog ${type} for ${timestamp} already recorded.`);
-          return { success: true };
-        }
-        if (!response.ok) {
-          throw httpError(response.status);
-        }
-        return { success: true };
+    return sendWithRetry(
+      `${this.apiBase}/measurements`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.config.token}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ type, value: round2(value), measuredAt: timestamp }),
       },
-      { log, label: `HealthLog ${type} measurement` },
+      {
+        log,
+        label: `HealthLog ${type} measurement`,
+        onStatus: (response) => {
+          if (response.status === 409) {
+            log.debug(`HealthLog ${type} for ${timestamp} already recorded.`);
+            return { success: true };
+          }
+        },
+      },
     );
   }
 
@@ -175,11 +170,6 @@ export class HealthLogExporter implements Exporter {
    * the ingest token cannot read anything that would.
    */
   async healthcheck(): Promise<ExportResult> {
-    return httpHealthcheck(() =>
-      fetch(`${this.apiBase}/version`, {
-        headers: { Accept: 'application/json' },
-        signal: AbortSignal.timeout(5000),
-      }),
-    );
+    return probe(`${this.apiBase}/version`, { headers: { Accept: 'application/json' } });
   }
 }

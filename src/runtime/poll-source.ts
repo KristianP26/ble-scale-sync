@@ -2,7 +2,7 @@ import type { RawReading } from '../ble/shared.js';
 import type { ScaleAdapter } from '../interfaces/scale-adapter.js';
 import { scanAndReadRaw, releaseTransport } from '../ble/index.js';
 import { POLL_CYCLE_TIMEOUT_MS } from '../ble/types.js';
-import { resolveUserProfile } from '../config/resolve.js';
+import { resolveScaleAuth, resolveUserProfile } from '../config/resolve.js';
 import { fmtWeight } from './format.js';
 import type { AppContext } from './context.js';
 import type { ReadingSource } from './loop.js';
@@ -63,13 +63,7 @@ export class PollReadingSource implements ReadingSource {
       targetMac: this.ctx.scaleMac,
       adapters: this.adapters,
       profile,
-      scaleAuth: {
-        pin: primaryUser.beurer_pin,
-        userIndex: primaryUser.beurer_user_index,
-        provision: primaryUser.beurer_provision,
-        registerNewUser: primaryUser.beurer_register_new_user,
-      },
-      weightUnit: this.ctx.weightUnit,
+      scaleAuth: resolveScaleAuth(primaryUser),
       abortSignal: cycle.signal,
       bleHandler: this.ctx.bleHandler,
       mqttProxy: this.ctx.mqttProxy,

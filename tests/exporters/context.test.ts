@@ -131,6 +131,7 @@ describe('NtfyExporter with ExportContext', () => {
     topic: 'my-scale',
     title: 'Scale Measurement',
     priority: 3,
+    reportExports: false,
   };
 
   it('prepends [Name] to message when context has userName', async () => {

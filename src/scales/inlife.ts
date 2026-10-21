@@ -7,13 +7,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import {
-  uuid16,
-  buildPayload,
-  xorChecksum,
-  ReadingComposition,
-  type ScaleBodyComp,
-} from './body-comp-helpers.js';
+import { uuid16, buildPayload, xorChecksum, type ScaleBodyComp } from './body-comp-helpers.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 import { bleLog } from '../ble/types.js';
 
@@ -42,30 +36,12 @@ const KNOWN_NAMES = ['000fatscale01', '000fatscale02', '042fatscale01'];
  */
 const COMPOSITION_HOLD_MS = 4000;
 
-export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
-  readonly name = 'Inlife';
-  readonly match: MatchDescriptor = {
-    priority: 90,
-    custom: true,
-    names: { exact: ['000fatscale01', '000fatscale02', '042fatscale01'] },
-    serviceUuids: ['fff0'],
-    charUuids: ['fff2'],
-  };
-  readonly charNotifyUuid = CHR_NOTIFY;
-  readonly charWriteUuid = CHR_WRITE;
-  readonly normalizesWeight = true;
-
+/** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
+class InlifeSession {
   /** Cached body-composition values from parsed frame. */
-  private cachedComp: ScaleBodyComp = {};
-  /**
-   * Composition pinned to the reading it was measured with (#394): this adapter
-   * is a shared singleton and `computeMetrics()` runs later than the parse, so
-   * on the watcher transports the live cache can already belong to the next
-   * weigh-in. See ReadingComposition.
-   */
-  private readonly comp = new ReadingComposition<ScaleBodyComp>();
+  cachedComp: ScaleBodyComp = {};
   /** Cached impedance from impedance-mode frames. */
-  private cachedImpedance = 0;
+  cachedImpedance = 0;
   /**
    * Which branch the last parsed frame took; see isFinal (#413).
    *
@@ -77,7 +53,22 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
    * Cleared at session start for the contract's sake rather than because it is
    * reachable: both branches assign it on every frame.
    */
-  private lastFrameWasImpedanceMode = false;
+  lastFrameWasImpedanceMode = false;
+}
+
+export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
+  readonly name = 'Inlife';
+  readonly match: MatchDescriptor = {
+    priority: 90,
+    custom: true,
+    names: { exact: ['000fatscale01', '000fatscale02', '042fatscale01'] },
+    serviceUuids: ['fff0'],
+    charUuids: ['fff2'],
+  };
+  readonly charNotifyUuid = CHR_NOTIFY;
+  readonly charWriteUuid = CHR_WRITE;
+
+  private s = new InlifeSession();
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
@@ -139,7 +130,7 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
    *   [11]     mode flag (0x80/0x81 = impedance mode)
    *   [12-13]  (remaining bytes)
    */
-  parseNotification(data: Buffer): ScaleReading | null {
+  parseNotification(data: Buffer): ScaleReading<ScaleBodyComp> | null {
     // Logged BEFORE the gates, not after. A rejected frame is the case a
     // reporter most needs to see: without this, a unit whose frames this
     // adapter refuses produces exactly the same silence as one that was never
@@ -173,31 +164,29 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
       // the SAME weigh-in is still needed: a divisor (Eufy P2 reads its
       // impedance /10) can put more than one candidate inside a plausible ohm
       // band, which is how the Eufy P2 field was originally misread.
-      this.lastFrameWasImpedanceMode = true;
-      this.cachedImpedance = data.readUInt32BE(4);
+      this.s.lastFrameWasImpedanceMode = true;
+      this.s.cachedImpedance = data.readUInt32BE(4);
       bleLog.debug(
-        `Inlife 0x${modeFlag.toString(16)} frame: u32[4..7]=${this.cachedImpedance}, ` +
+        `Inlife 0x${modeFlag.toString(16)} frame: u32[4..7]=${this.s.cachedImpedance}, ` +
           `u24[4..6]=${(data[4] << 16) | (data[5] << 8) | data[6]}, ` +
           `u16[4..5]=${data.readUInt16BE(4)}, u16[6..7]=${data.readUInt16BE(6)}, ` +
           `weight ${weight} kg, frame ${data.toString('hex')} (#405)`,
       );
-      this.cachedComp = {};
+      this.s.cachedComp = {};
     } else {
       // Legacy mode — body comp values embedded
-      this.lastFrameWasImpedanceMode = false;
+      this.s.lastFrameWasImpedanceMode = false;
       const _lbm = ((data[4] << 16) | (data[5] << 8) | data[6]) / 1000;
       const visceral = data.readUInt16BE(7) / 10;
       const _bmr = data.readUInt16BE(9) / 10;
 
-      this.cachedComp = {
+      this.s.cachedComp = {
         visceralFat: visceral > 0 ? visceral : undefined,
       };
-      this.cachedImpedance = 0;
+      this.s.cachedImpedance = 0;
     }
 
-    const reading: ScaleReading = { weight, impedance: this.cachedImpedance };
-    this.comp.pin(reading, this.cachedComp);
-    return reading;
+    return { weight, impedance: this.s.cachedImpedance, scaleComposition: this.s.cachedComp };
   }
 
   /**
@@ -220,7 +209,7 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
    *
    * What makes a held reading safe to deliver later: the impedance is read into
    * the reading itself at parse time, and the composition is pinned per reading
-   * (see the ReadingComposition field), so a frame that arrives during the hold
+   * (`ScaleReading.scaleComposition`), so a frame that arrives during the hold
    * cannot rewrite either one. Moving impedance out of the reading would break
    * that quietly.
    */
@@ -235,34 +224,22 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
    * `data[11]` is the byte the parser already branches on.
    */
   isFinal(): boolean {
-    return this.lastFrameWasImpedanceMode;
+    return this.s.lastFrameWasImpedanceMode;
   }
 
   isComplete(reading: ScaleReading): boolean {
     return reading.weight > 0;
   }
 
-  /**
-   * Clear the previous weigh-in before anything is subscribed (#394).
-   *
-   * The pin above is what fixes the real leak. This reset covers the OTHER
-   * path: a reading built outside parseNotification (a direct caller, a test)
-   * has nothing pinned, so computeMetrics falls back to the live cache - and
-   * that must not still hold the previous person's numbers. It is also what
-   * the ScaleAdapter contract requires of every adapter, so a sibling added
-   * later inherits a correct example rather than this one's peculiarity.
-   */
   onSessionStart(): void {
-    this.cachedComp = {};
-    this.cachedImpedance = 0;
-    this.lastFrameWasImpedanceMode = false;
+    this.s = new InlifeSession();
   }
 
-  computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
+  computeMetrics(reading: ScaleReading<ScaleBodyComp>, profile: UserProfile): BodyComposition {
     return buildPayload(
       reading.weight,
       reading.impedance,
-      this.comp.of(reading, this.cachedComp),
+      reading.scaleComposition ?? this.s.cachedComp,
       profile,
     );
   }

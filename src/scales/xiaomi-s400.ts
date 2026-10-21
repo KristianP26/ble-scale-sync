@@ -128,7 +128,6 @@ export class XiaomiS400Adapter implements ScaleAdapterCore, BroadcastSource {
   };
   // Broadcast-only: no GATT characteristics. preferPassive forces the broadcast
   // path even though the scale is connectable.
-  readonly normalizesWeight = true;
   readonly preferPassive = true;
 
   private bindKey: Buffer | null = null;

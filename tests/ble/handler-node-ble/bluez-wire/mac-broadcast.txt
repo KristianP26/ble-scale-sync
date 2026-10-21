@@ -1,0 +1,76 @@
++0ms [debug] D-Bus connection established
++0ms :1.1 Hello
++0ms :1.1 Introspect /org/bluez
++0ms :1.1 Introspect /org/bluez
++0ms :1.1 Introspect /org/bluez
++0ms :1.1 AgentManager1.RegisterAgent /org/bluez /org/blescalesync/agent KeyboardDisplay
++0ms [debug] BlueZ pairing agent registered (KeyboardDisplay)
++0ms [debug] Not claiming the BlueZ default-agent role (no users[].beurer_pin configured)
++0ms :1.1 Introspect hci0
++0ms :1.1 Get hci0 Adapter1.Powered
++0ms [debug] Removing AA:BB:CC:DD:EE:02 from BlueZ before the scan: no reading from this scale in this run yet
++0ms :1.1 Introspect hci0
++0ms [debug] Device not in BlueZ cache; RemoveDevice is a no-op
++0ms :1.1 Adapter1.RemoveDevice hci0 hci0/dev_AA_BB_CC_DD_EE_02 -> DoesNotExist
++0ms :1.1 Get hci0 Adapter1.Discovering
++0ms [debug] Discovery state at start: Discovering=false, our filtered session=no
++0ms :1.1 Adapter1.SetDiscoveryFilter hci0 {Transport=le,DuplicateData=true}
++0ms [debug] Discovery filter: Transport=le, DuplicateData=true
++0ms :1.1 Adapter1.StartDiscovery hci0
++0ms [debug] Discovery started
++0ms [info] Scanning for device...
++1000ms :1.1 Introspect hci0
++1000ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_02
++1000ms :1.1 AddMatch hci0/dev_AA_BB_CC_DD_EE_02 Properties.PropertiesChanged
++1000ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.Name
++1000ms [debug] Found device: WIRE-BCAST [AA:BB:CC:DD:EE:02]
++1000ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.AddressType
++1000ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.AdvertisingFlags -> InvalidArgs
++1000ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.UUIDs -> InvalidArgs
++1000ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.ServiceData -> InvalidArgs
++1000ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.ManufacturerData
++1000ms [info] Matched adapter: Wire Broadcast
++1000ms [info] Adapter prefers passive mode. Listening for broadcast weight data. Step on the scale.
++1000ms [debug] Subscribed to Device1 PropertiesChanged for advertisement data
++1000ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.ManufacturerData
++1000ms [info] Broadcast reading: 72.50 kg
++1000ms [debug] Disconnecting AA:BB:CC:DD:EE:02 after the session...
++1000ms :1.1 Device1.Disconnect hci0/dev_AA_BB_CC_DD_EE_02
++1000ms :1.1 RemoveMatch hci0/dev_AA_BB_CC_DD_EE_02 Properties.PropertiesChanged
++1000ms [debug] Disconnect (teardown) answered in 0 ms
++1000ms => {"reading":{"weight":72.5,"impedance":480},"adapter":"Wire Broadcast"}
++1000ms (5000 ms between cycles)
++6000ms :1.1 Get hci0 Adapter1.Powered
++6000ms [debug] Removing AA:BB:CC:DD:EE:02 from BlueZ before the scan: Wire Broadcast can read advertisements
++6000ms :1.1 Introspect hci0
++6000ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_02
++6000ms :1.1 AddMatch hci0/dev_AA_BB_CC_DD_EE_02 Properties.PropertiesChanged
++6000ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.Paired
++6000ms :1.1 RemoveMatch hci0/dev_AA_BB_CC_DD_EE_02 Properties.PropertiesChanged
++6000ms :1.1 Adapter1.RemoveDevice hci0 hci0/dev_AA_BB_CC_DD_EE_02
++6000ms [debug] Removed device from BlueZ cache
++6000ms :1.1 Get hci0 Adapter1.Discovering
++6000ms [debug] Discovery state at start: Discovering=true, our filtered session=yes
++6000ms [debug] Discovery already active and already filtered; continuing with it
++6000ms [info] Scanning for device...
++7000ms :1.1 Introspect hci0
++7000ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_02
++7000ms :1.1 AddMatch hci0/dev_AA_BB_CC_DD_EE_02 Properties.PropertiesChanged
++7000ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.Name
++7000ms [debug] Found device: WIRE-BCAST [AA:BB:CC:DD:EE:02]
++7000ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.AddressType
++7000ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.AdvertisingFlags -> InvalidArgs
++7000ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.UUIDs -> InvalidArgs
++7000ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.ServiceData -> InvalidArgs
++7000ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.ManufacturerData
++7000ms [info] Matched adapter: Wire Broadcast
++7000ms [info] Adapter prefers passive mode. Listening for broadcast weight data. Step on the scale.
++7000ms [debug] Subscribed to Device1 PropertiesChanged for advertisement data
++7000ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_02 Device1.ManufacturerData
++7000ms [info] Broadcast reading: 72.50 kg
++7000ms [debug] Disconnecting AA:BB:CC:DD:EE:02 after the session...
++7000ms :1.1 Device1.Disconnect hci0/dev_AA_BB_CC_DD_EE_02
++7000ms :1.1 RemoveMatch hci0/dev_AA_BB_CC_DD_EE_02 Properties.PropertiesChanged
++7000ms [debug] Disconnect (teardown) answered in 0 ms
++7000ms => {"reading":{"weight":72.5,"impedance":480},"adapter":"Wire Broadcast"}
+--- match rules held

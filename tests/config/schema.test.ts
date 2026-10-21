@@ -910,7 +910,6 @@ describe('formatConfigError()', () => {
       {
         code: 'invalid_type',
         expected: 'object',
-        received: 'string',
         path: [],
         message: 'Expected object, received string',
       },

@@ -1,5 +1,5 @@
 import type { Characteristic, Peripheral, Service } from '@stoprocent/noble';
-import type { BleChar, BleDevice } from '../shared.js';
+import type { BleChar, BleDevice } from '../session/ports.js';
 import { bleLog, normalizeUuid } from '../types.js';
 import { wrapChar } from './char.js';
 

@@ -256,16 +256,31 @@ export const VISIT_ATHLETE_MIN_AGE = 18;
  *
  * Not a tenth of an ohm: 4303 / 10 lands in the body range only because the
  * scrambled high byte of 0x01 is 0x10, and the vendor SDK never divides. Not
- * decided from the value either: unscrambling a clear resistance between 512
- * and 767 leaves it inside the body range, off by up to 39 ohm, with nothing to
- * show for it. So only the advertised flag decides, and without an
- * advertisement nothing is unscrambled.
+ * decided from the value either: the high bytes 0x00, 0x02 and 0x04 unscramble
+ * to themselves, so a resistance of 151-255, 512-767 or 1024-1200 mostly stays
+ * inside the body range either way, off by up to 39 ohm, with nothing to show
+ * for it. So the advertised flag decides whenever the session has an
+ * advertisement, whatever it says.
+ *
+ * One exception, on the 18-byte dialect only, for a session that got no
+ * advertisement at all (#463, D071): a resistance whose high byte is 0x10 or
+ * 0x12 (4096-4351, 4608-4863) is read unscrambled. No body sends that as it
+ * is, the processor would drop it as sent, and its unscrambled value is
+ * 256-511 or 768-1023, inside the body range: of the values unscrambling would
+ * move into the range, exactly these are 4096 or more. The other twenty
+ * (135-143, and eleven between 1201 and 1214) sit at the edge of the range,
+ * where a clear resistance can be, so they stay as sent, as does every value
+ * already in the range. That is why a scrambled 151-255, 512-767 or 1024-1200
+ * still cannot be told from a clear one without the advertisement. The vendor
+ * SDK has no such rule; it never connects without the advertisement.
  *
  * The SDK also defines a flag for its older scale family (bit 0 of [12]), but
  * its category there depends on the advertised name and services as well, and
  * no unit of that kind in our logs sets it, so it is not read here.
  */
 export const SCRAMBLE_MARKER_OFFSET = 11;
+/** High bytes of an 18-byte resistance read unscrambled without an advertisement (D071). */
+export const SCRAMBLED_ONLY_HIGH_BYTES: readonly number[] = [0x10, 0x12];
 export const SCRAMBLE_FLAG_OFFSET = 15;
 export const SCRAMBLE_FLAG_BIT = 0x04;
 
@@ -558,7 +573,11 @@ export const LIVE20_STATUS_RESULT = 0x02;
  * Muscle and bone are x0.1 % of the body weight when bit 0 of the ready
  * frame's (0x14) `[3]` is set, and kg x0.01 otherwise; every 19-byte log so far
  * has it set. The SDK itself does not read the 8-electrode BMR, lean mass or
- * score, so those three are the least certain.
+ * score, so those three are the least certain. The BMR is nonetheless
+ * 370 + 21.6 x the fat-free mass the scale's own body fat gives (Katch-McArdle)
+ * to within 1.3 kcal on every logged block, and with the body age it is close
+ * to what the vendor app showed for another weigh-in the same day; both are
+ * exported with the scale's own composition (D078).
  */
 export const RESULT16_FRAME_LEN = 16;
 export const RESULT16_OPCODE_COMPOSITION = 0x15;

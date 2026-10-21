@@ -38,8 +38,9 @@
 // minus the 100 ms ATT channel timer that produces the error (#290: 74-95
 // ms), while a lost link goes down with it (#229, #471: 4-22 ms).
 
-import { bleLog, errMsg } from '../types.js';
+import { errMsg } from '../types.js';
 import type { AttemptLinkView } from './link-observer.js';
+import { onceLog } from './once-log.js';
 
 /**
  * True when the string is a BlueZ authentication-class connect failure.
@@ -429,11 +430,11 @@ export function staleBondPossibleMessage(
   );
 }
 
-const announced = new Set<string>();
+const announced = onceLog();
 
 /**
  * First time per process, scale and kind at `level`, debug after: the same
- * failures repeat every cycle while the state lasts (pattern: stale-link.ts).
+ * failures repeat every cycle while the state lasts.
  */
 export function announceBondOnce(
   kind: 'kept' | 'looks-stale',
@@ -441,16 +442,10 @@ export function announceBondOnce(
   level: 'info' | 'warn',
   text: string,
 ): void {
-  const key = `${kind}:${mac.replace(/[:-]/g, '').toUpperCase()}`;
-  if (announced.has(key)) {
-    bleLog.debug(text);
-    return;
-  }
-  announced.add(key);
-  bleLog[level](text);
+  announced(`${kind}:${mac.replace(/[:-]/g, '').toUpperCase()}`, level, text);
 }
 
 /** Test seam: the announcements are per process on purpose. */
 export function _resetStaleBondAnnouncementsForTests(): void {
-  announced.clear();
+  announced.reset();
 }

@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { applyForcedAdapter, UnknownAdapterError } from '../../src/scales/force.js';
+import { applyForcedAdapter, isForced, UnknownAdapterError } from '../../src/scales/force.js';
 import { adapters } from '../../src/scales/index.js';
 import { resolveAdapter } from '../../src/scales/resolve.js';
-import { hasParseableBroadcastSource } from '../../src/ble/shared.js';
+import { hasParseableBroadcastSource } from '../../src/ble/advertisement.js';
 import { EsCs20mAdapter } from '../../src/scales/es-cs20m.js';
 import { BeurerSanitasScaleAdapter } from '../../src/scales/beurer-sanitas.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
@@ -83,8 +83,8 @@ describe('force_scale_adapter', () => {
   // gate returns "wait" forever and the GATT path never runs.
   it('marks itself as a forced override so the broadcast gate demands a real parse', () => {
     const forced = applyForcedAdapter(adapters, 'QN Scale')[0];
-    expect(forced.isForcedOverride).toBe(true);
-    expect(adapters.find((a) => a.name === 'QN Scale')!.isForcedOverride).toBeUndefined();
+    expect(isForced(forced)).toBe(true);
+    expect(isForced(adapters.find((a) => a.name === 'QN Scale')!)).toBe(false);
 
     const unparseable: BleDeviceInfo = {
       localName: '',
@@ -138,7 +138,7 @@ describe('force_scale_adapter', () => {
     forced.parseNotification?.(frame('55aa11000a010201000000000000001e'));
     forced.parseNotification?.(frame('55aa14000700000036560000a6'));
     const result = forced.parseNotification?.(frame('55aa18000d0101090000365601940000000050'));
-    expect(result).toEqual({ weight: 139.1, impedance: 404 });
+    expect(result).toEqual({ weight: 139.1, impedance: 404, scaleComposition: 'bia' });
     expect(forced.completionHoldMs).toBe(30_000);
     expect(forced.isFinal?.(result!)).toBe(false);
 

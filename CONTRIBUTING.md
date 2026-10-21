@@ -55,7 +55,7 @@ Unit tests use [Vitest](https://vitest.dev/) and cover:
 - **Exporters** — config parsing, MQTT publish/HA discovery, MQTT multi-user topic routing + per-user HA discovery, Garmin subprocess, Webhook/InfluxDB/Ntfy delivery, ExportContext, ntfy drift warning
 - **Multi-user flow** — matching → profile resolution → exporter resolution → ExportContext construction, strategy fallback, tiebreak with last_known_weight
 - **Orchestrator** — healthcheck runner, export dispatch, parallel execution, partial/total failure handling
-- **BLE shared logic** — `waitForRawReading()` and `waitForReading()` in legacy, onConnected, and multi-char modes; weight normalization; disconnect handling
+- **BLE shared logic** — `waitForRawReading()` in legacy, onConnected, and multi-char modes; disconnect handling
 - **BLE utilities** — `formatMac()`, `normalizeUuid()`, `sleep()`, `withTimeout()`, abort signal handling
 - **Logger** — `createLogger()`, `setLogLevel()`
 - **Utilities** — shared retry logic (`withRetry`), error conversion (`errMsg`)
@@ -113,9 +113,10 @@ ble-scale-sync/
 │   │   ├── user-matching.ts         # Weight-based multi-user matching (4-tier)
 │   │   └── write.ts                 # Atomic YAML write + debounced weight updates
 │   ├── ble/
-│   │   ├── index.ts                 # OS detection + handler barrel (scanAndRead, scanAndReadRaw)
+│   │   ├── index.ts                 # OS detection + handler barrel (scanAndReadRaw)
 │   │   ├── types.ts                 # ScanOptions, ScanResult, constants, utilities
-│   │   ├── shared.ts                # BleChar/BleDevice abstractions, waitForReading()
+│   │   ├── shared.ts                # waitForRawReading(): one GATT reading session
+│   │   ├── session/                 # BleChar/BleDevice ports, char wiring, raw capture
 │   │   ├── async-queue.ts           # Async notification queue for GATT handlers
 │   │   ├── loopback.ts              # In-process loopback handler (tests)
 │   │   ├── handler-node-ble/        # Linux native: node-ble (BlueZ D-Bus) (split: dbus, connection, discovery, freshness, connect, gatt, broadcast, scan, scan-stages)
@@ -278,7 +279,7 @@ To support a new scale brand, create a class that implements `ScaleAdapter` in `
 2. Define `matches()` to recognize the device by its BLE advertisement name
 3. Implement `parseNotification()` for the brand's data protocol
 4. Register the adapter in `src/scales/index.ts` and give it a `match.priority` — **priority decides, not array position** (the resolver sorts by `match.priority`, higher wins; the generic catch-all sits at `0`, so an adapter that omits `priority` also defaults to `0` and will not reliably beat it)
-5. If your adapter detects the weight unit from BLE data and converts to kg internally, set `normalizesWeight = true`
+5. Return the weight in kg: if the scale sends pounds or another unit, convert it in your parser, because nothing after it does
 6. Add tests in `tests/scales/` using mock utilities from `tests/helpers/scale-test-utils.ts`
 
 Test frames have to come from the real scale, copied byte for byte from a capture (btsnoop, PacketLogger) or from a DEBUG log of ble-scale-sync, which prints the frames it receives. A frame you build from your own reading of the format only tests that reading: an early Silvergear 108 test encoded a wrong offset and a wrong frame type and still passed, and the real layout only showed up in a capture. Edge cases such as a bad checksum or an out-of-range value can start from a real frame with a few bytes changed; say in the test which ones. Please include the capture or log in the PR, or link the issue it comes from.
@@ -292,7 +293,7 @@ To add a new export target:
 1. Create `src/exporters/your-exporter.ts` implementing the `Exporter` interface from `src/interfaces/exporter.ts`
    - Export an `ExporterSchema` describing fields, display info, and `supportsGlobal`/`supportsPerUser`
    - Accept optional `ExportContext` in `export(data, context?)` for multi-user support
-2. Add the name to the `ExporterName` type and `KNOWN_EXPORTERS` set in `src/exporters/config.ts`
+2. Add the name to `EXPORTER_NAMES` in `src/exporters/config.ts` (the `ExporterName` type and the `KNOWN_EXPORTERS` set derive from it)
 3. Add env var parsing in `src/exporters/config.ts` (for `.env` fallback path)
 4. Map the parsed values to the config field names in `loadEnvConfig()` in `src/config/env-load.ts`, and add your minimal variables to the `builds every known exporter from its minimal .env variables` test in `tests/config/load.test.ts`. That test fails for any exporter the `.env` path cannot build.
 5. Add a registry entry in `src/exporters/registry.ts` with `{ schema, factory }` (the registry is the only place exporters are constructed)

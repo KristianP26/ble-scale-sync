@@ -1,0 +1,114 @@
+{
+  "returned": true,
+  "exports": [
+    {
+      "to": "dad/garmin@global:0",
+      "weight": 83,
+      "impedance": 480,
+      "user": "dad",
+      "timestamp": "2026-10-21T08:00:00.000Z"
+    },
+    {
+      "to": "dad/mqtt@global:1",
+      "weight": 83,
+      "impedance": 480,
+      "user": "dad",
+      "timestamp": "2026-10-21T08:00:00.000Z"
+    },
+    {
+      "to": "dad/ntfy@user:0",
+      "weight": 83,
+      "impedance": 480,
+      "user": "dad",
+      "timestamp": "2026-10-21T08:00:00.000Z",
+      "exportResults": [
+        {
+          "name": "garmin",
+          "ok": true
+        },
+        {
+          "name": "mqtt",
+          "ok": false,
+          "error": "HTTP 500"
+        }
+      ]
+    }
+  ],
+  "computeMetrics": [
+    {
+      "weight": 83,
+      "impedance": 480,
+      "profile": {
+        "height": 183,
+        "age": 36,
+        "gender": "male",
+        "isAthlete": false,
+        "birthDate": "1990-06-15",
+        "lastKnownWeight": 82
+      }
+    }
+  ],
+  "queued": [],
+  "lastKnownWeightWrites": [],
+  "replayAnchorWrites": [
+    {
+      "slug": "dad",
+      "weight": 83,
+      "time": "2026-10-21T08:00:00.000Z"
+    }
+  ],
+  "updateChecks": 1,
+  "display": [
+    [
+      "reading",
+      "dad",
+      "Dad",
+      83,
+      480,
+      [
+        "garmin",
+        "mqtt",
+        "ntfy"
+      ]
+    ],
+    [
+      "result",
+      "dad",
+      "Dad",
+      83,
+      [
+        {
+          "name": "garmin",
+          "ok": true
+        },
+        {
+          "name": "mqtt",
+          "ok": false,
+          "error": "HTTP 500"
+        },
+        {
+          "name": "ntfy",
+          "ok": true
+        }
+      ]
+    ]
+  ],
+  "after": {
+    "lastExportedWeights": {
+      "dad": 83
+    },
+    "lastExportedAt": {
+      "dad": "2026-10-21T08:00:00.000Z"
+    },
+    "lastKnownWeight": {
+      "dad": 83
+    }
+  },
+  "log": [
+    "[Sync] Measurement: 83.00 kg / 480 Ohm",
+    "[Sync] Exporting to: garmin, mqtt, ntfy...",
+    "[Sync] mqtt: HTTP 500",
+    "[Sync] Done.",
+    "[Sync] mqtt cannot record a past reading, so this measurement is not recoverable for that target."
+  ]
+}

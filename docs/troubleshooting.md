@@ -240,7 +240,7 @@ Scale found, waiting to pair, rescanning in 5s... (AA:BB:CC:DD:EE:FF is not pair
 
 This is about the built-in Bluetooth handlers (`ble.handler: auto`, which runs `node-ble` on Linux and `noble` elsewhere; `ble_transport: local` in the add-on). On `mqtt-proxy`, `esphome-proxy` and `ha-bluetooth` none of these waits apply: the app does not scan in cycles, it listens all the time.
 
-On `mqtt-proxy` and `esphome-proxy`, a scale that needs a connection and is still on after a reading is connected again on its next advertisement, so a second weigh-in before it switches off can be read. When nobody steps on, the log notes it at info level: `... session opened 0.7 s after the last reading, while the scale was still on, ended without a new weigh-in (...)`.
+On `mqtt-proxy` and `esphome-proxy`, a scale that needs a connection and is still on after a reading is connected again on its next advertisement, so a second weigh-in before it switches off can be read. When nobody steps on, the session ends when the scale switches off, after 60 s in which it sends nothing (a Yunmai's replies to the app's own unlock do not count), or 90 s after it opened, and the log notes it at info level: `... session opened 0.7 s after the last reading, while the scale was still on, ended without a new weigh-in (...)`. A scale that stays connectable after its display goes dark, such as the Yunmai Mini 2, is connected again each time it advertises, for as long as it advertises; each of those sessions that opens within 60 s of the end of the one before is logged the same way, at debug level after the first, and only a session that opens later than that is reported as a failure.
 
 ## Debug Mode
 

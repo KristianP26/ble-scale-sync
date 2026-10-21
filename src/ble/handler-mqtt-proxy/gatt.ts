@@ -1,9 +1,9 @@
-import type { BleChar, BleDevice } from '../shared.js';
+import type { BleChar, BleDevice } from '../session/ports.js';
 import { withTimeout, bleLog } from '../types.js';
 import { COMMAND_TIMEOUT_MS, type Topics } from './topics.js';
 import type { MqttClient } from './client.js';
 
-/** Implements BleChar from shared.ts over MQTT topics. */
+/** Implements BleChar from session/ports.ts over MQTT topics. */
 export class MqttBleChar implements BleChar {
   constructor(
     private client: MqttClient,
@@ -69,7 +69,7 @@ export class MqttBleChar implements BleChar {
   }
 }
 
-/** Implements BleDevice from shared.ts. Watches for MQTT disconnect events. */
+/** Implements BleDevice from session/ports.ts. Watches for MQTT disconnect events. */
 export class MqttBleDevice implements BleDevice {
   private disconnectCb?: () => void;
   private disconnectFired = false;

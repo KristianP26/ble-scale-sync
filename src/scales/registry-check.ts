@@ -28,6 +28,46 @@ export interface RegistryCheckResult {
   warnings: string[];
 }
 
+/** Documented ordering invariants as priority comparisons: [higher-precedence, lower]. */
+export const ORDERING_INVARIANTS: ReadonlyArray<readonly [string, string]> = [
+  ['Senssun Fat Scale', 'QN Scale'],
+  ['Eufy Smart Scale P2/P2 Pro', 'QN Scale'],
+  ['QN Scale', 'Renpho ES-WBE28'],
+  ['Beurer BF720/BF105', 'Xiaomi Mi Scale 2'],
+  ['Robi S9', 'MGB (Swan/Icomon/YG)'],
+  // The FFB0 Lefu family resolves strictly Robi > Hutbit > MGB (#278). Robi
+  // must outrank Hutbit so a named Robi carrying the OEM signature is never
+  // stolen, and Hutbit must outrank MGB so a SWAN-branded Hutbit is not swept
+  // up by MGB's bare-ffb0 descriptor claim. The overlap analysis below cannot
+  // see this: it skips any pair where either side is custom.
+  ['Robi S9', 'Hutbit'],
+  ['Hutbit', 'MGB (Swan/Icomon/YG)'],
+  // An AC 27 scale advertises the 0x27AC company id and FFB0, and both MGB
+  // (bare FFB0) and Robi S9 (nameless FFB0 with FFB3) would otherwise claim
+  // it, then send an init it ignores and parse none of its frames (#458,
+  // #462, #466). Custom on both sides, so the overlap check below is silent.
+  ['Active Era BS-06', 'MGB (Swan/Icomon/YG)'],
+  ['Active Era BS-06', 'Robi S9'],
+  // AAA0xx units (AAA002 and its siblings, #408) send the Silvergear 108
+  // broadcast and advertise FFB0, so MGB's bare FFB0 claim would take them;
+  // openScale loses them to its MGB handler exactly this way. Custom on both
+  // sides, so the overlap check below is silent.
+  ['Silvergear Smart Scale 108', 'MGB (Swan/Icomon/YG)'],
+  // A P3 whose address began 0xFF, with 0x48 as the low byte of its company
+  // id and 0xCF as the lowest byte of its clock, meets the P2 broadcast claim,
+  // and the P2 adapter would read a plausible wrong weight from its clock and
+  // status bytes. A P2 frame can never carry the address echo the C20 / P3
+  // claim needs, so the order costs the P2 nothing (#408). Custom on both
+  // sides, so the overlap check below is silent.
+  ['Eufy Smart Scale C20/P3', 'Eufy Smart Scale P2/P2 Pro'],
+  // The mqtt-proxy autonomous connect falls back to the highest-priority
+  // adapter whose charNotifyUuid the device exposes. Both declare 0x2A9D, so
+  // the A&D adapter above the ES-WBE28 would take every nameless WSS device
+  // there, a change for other scales. Name claims that never overlap, so the
+  // overlap check below cannot see it (#408).
+  ['Renpho ES-WBE28', 'A&D UC-352BLE'],
+];
+
 /** Run structural checks over an adapter registry. Pure — no throw, no log. */
 export function checkRegistryIntegrity(adapters: readonly ScaleAdapter[]): RegistryCheckResult {
   const errors: string[] = [];
@@ -124,51 +164,11 @@ export function checkRegistryIntegrity(adapters: readonly ScaleAdapter[]): Regis
     }
   }
 
-  // Documented ordering invariants, expressed as data (priority comparisons)
-  // rather than array position. Each pair: [higher-precedence, lower].
   const byName = new Map(withMatch.map((a) => [a.name, a] as const));
-  const INVARIANTS: ReadonlyArray<readonly [string, string]> = [
-    ['Senssun Fat Scale', 'QN Scale'],
-    ['Eufy Smart Scale P2/P2 Pro', 'QN Scale'],
-    ['QN Scale', 'Renpho ES-WBE28'],
-    ['Beurer BF720/BF105', 'Xiaomi Mi Scale 2'],
-    ['Robi S9', 'MGB (Swan/Icomon/YG)'],
-    // The FFB0 Lefu family resolves strictly Robi > Hutbit > MGB (#278). Robi
-    // must outrank Hutbit so a named Robi carrying the OEM signature is never
-    // stolen, and Hutbit must outrank MGB so a SWAN-branded Hutbit is not swept
-    // up by MGB's bare-ffb0 descriptor claim. The overlap analysis below cannot
-    // see this: it skips any pair where either side is custom.
-    ['Robi S9', 'Hutbit'],
-    ['Hutbit', 'MGB (Swan/Icomon/YG)'],
-    // An AC 27 scale advertises the 0x27AC company id and FFB0, and both MGB
-    // (bare FFB0) and Robi S9 (nameless FFB0 with FFB3) would otherwise claim
-    // it, then send an init it ignores and parse none of its frames (#458,
-    // #462, #466). Custom on both sides, so the overlap check below is silent.
-    ['Active Era BS-06', 'MGB (Swan/Icomon/YG)'],
-    ['Active Era BS-06', 'Robi S9'],
-    // AAA0xx units (AAA002 and its siblings, #408) send the Silvergear 108
-    // broadcast and advertise FFB0, so MGB's bare FFB0 claim would take them;
-    // openScale loses them to its MGB handler exactly this way. Custom on both
-    // sides, so the overlap check below is silent.
-    ['Silvergear Smart Scale 108', 'MGB (Swan/Icomon/YG)'],
-    // A P3 whose address began 0xFF, with 0x48 as the low byte of its company
-    // id and 0xCF as the lowest byte of its clock, meets the P2 broadcast claim,
-    // and the P2 adapter would read a plausible wrong weight from its clock and
-    // status bytes. A P2 frame can never carry the address echo the C20 / P3
-    // claim needs, so the order costs the P2 nothing (#408). Custom on both
-    // sides, so the overlap check below is silent.
-    ['Eufy Smart Scale C20/P3', 'Eufy Smart Scale P2/P2 Pro'],
-    // The mqtt-proxy autonomous connect falls back to the highest-priority
-    // adapter whose charNotifyUuid the device exposes. Both declare 0x2A9D, so
-    // the A&D adapter above the ES-WBE28 would take every nameless WSS device
-    // there, a change for other scales. Name claims that never overlap, so the
-    // overlap check below cannot see it (#408).
-    ['Renpho ES-WBE28', 'A&D UC-352BLE'],
-  ];
-  for (const [hi, lo] of INVARIANTS) {
+  for (const [hi, lo] of ORDERING_INVARIANTS) {
     const a = byName.get(hi);
     const b = byName.get(lo);
-    if (!a || !b) continue; // a missing/renamed adapter is caught elsewhere
+    if (!a || !b) continue; // a renamed adapter fails registry-check.test.ts
     if (a.match.priority <= b.match.priority) {
       errors.push(
         `Ordering invariant violated: "${hi}" (priority ${a.match.priority}) must ` +

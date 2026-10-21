@@ -5,6 +5,7 @@ import { InfluxDbExporter } from '../../src/exporters/influxdb.js';
 import { NtfyExporter } from '../../src/exporters/ntfy.js';
 import { GarminExporter } from '../../src/exporters/garmin.js';
 import type { MqttConfig } from '../../src/exporters/config.js';
+import type { Exporter } from '../../src/interfaces/exporter.js';
 
 const { fakeMqtt } = await vi.hoisted(async () => {
   const { createFakeMqtt } = await import('../helpers/fake-mqtt.js');
@@ -142,6 +143,7 @@ describe('Exporter healthchecks', () => {
       topic: 'my-scale',
       title: 'Scale Measurement',
       priority: 3,
+      reportExports: false,
     };
 
     it('calls /v1/health and returns success on 200', async () => {
@@ -175,7 +177,7 @@ describe('Exporter healthchecks', () => {
 
   describe('GarminExporter', () => {
     it('does not have healthcheck method', () => {
-      const exporter = new GarminExporter();
+      const exporter: Exporter = new GarminExporter();
       expect(exporter.healthcheck).toBeUndefined();
     });
   });

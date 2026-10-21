@@ -21,7 +21,7 @@ import { readFileSync } from 'node:fs';
 const nodeRequire = createRequire(import.meta.url);
 
 const calls: string[] = [];
-const recordCall = async (name: string): Promise<void> => {
+const recordCall = async (name: string, ..._args: unknown[]): Promise<void> => {
   calls.push(`filter:${name}`);
 };
 const callMethod = vi.fn(recordCall);

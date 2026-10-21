@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { DigooScaleAdapter } from '../../src/scales/digoo.js';
-import type { ConnectionContext } from '../../src/interfaces/scale-adapter.js';
 import {
   defaultProfile,
+  makeConnectionContext,
   expectMatches,
   parseOk,
   expectValidMetrics,
@@ -97,12 +97,12 @@ describe('DigooScaleAdapter', () => {
       const writeFn = vi.fn().mockResolvedValue(undefined);
       const profile = defaultProfile({ gender: 'male', height: 183, age: 30 });
 
-      const ctx: ConnectionContext = {
+      const ctx = makeConnectionContext({
         write: writeFn,
         read: vi.fn(),
         subscribe: vi.fn(),
         profile,
-      };
+      });
 
       await adapter.onConnected!(ctx);
 
@@ -124,12 +124,12 @@ describe('DigooScaleAdapter', () => {
       const writeFn = vi.fn().mockResolvedValue(undefined);
       const profile = defaultProfile({ gender: 'female', height: 165, age: 25 });
 
-      const ctx: ConnectionContext = {
+      const ctx = makeConnectionContext({
         write: writeFn,
         read: vi.fn(),
         subscribe: vi.fn(),
         profile,
-      };
+      });
 
       await adapter.onConnected!(ctx);
 

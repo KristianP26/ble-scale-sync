@@ -7,12 +7,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import {
-  uuid16,
-  buildPayload,
-  type ScaleBodyComp,
-  ReadingComposition,
-} from './body-comp-helpers.js';
+import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
 const CHR_NOTIFY = uuid16(0x8a21);
@@ -36,6 +31,14 @@ export function medisanaTimeEpochOffset(deviceName: string | undefined): number 
     return MEDISANA_EPOCH_2010_OFFSET;
   }
   return 0;
+}
+
+/** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
+class MedisanaSession {
+  /** Cached weight from weight frames. */
+  cachedWeight = 0;
+  /** Cached body-composition values from feature frames. */
+  cachedComp: ScaleBodyComp = {};
 }
 
 /**
@@ -63,19 +66,7 @@ export class MedisanaBs44xAdapter implements ScaleAdapterCore, GattWiring {
   readonly charNotifyUuid = CHR_NOTIFY;
   readonly charWriteUuid = CHR_WRITE;
 
-  readonly normalizesWeight = true;
-
-  /** Cached weight from weight frames. */
-  private cachedWeight = 0;
-
-  /** Cached body-composition values from feature frames. */
-  private cachedComp: ScaleBodyComp = {};
-  /**
-   * Composition pinned to the reading it was measured with (#394). See
-   * ReadingComposition for why computeMetrics cannot read the live cache on
-   * the watcher transports.
-   */
-  private readonly compByReading = new ReadingComposition<ScaleBodyComp>();
+  private s = new MedisanaSession();
 
   /**
    * Time sync: [0x02, u32 LE seconds]. The epoch depends on the model, which
@@ -105,7 +96,7 @@ export class MedisanaBs44xAdapter implements ScaleAdapterCore, GattWiring {
    *   [12-13]  muscle %, little-endian uint16 & 0x0FFF / 10
    *   [14-15]  bone mass, little-endian uint16 & 0x0FFF / 10
    */
-  parseNotification(data: Buffer): ScaleReading | null {
+  parseNotification(data: Buffer): ScaleReading<ScaleBodyComp> | null {
     if (data.length < 3) return null;
 
     if (data.length >= 16) {
@@ -115,7 +106,7 @@ export class MedisanaBs44xAdapter implements ScaleAdapterCore, GattWiring {
       const muscle = (data.readUInt16LE(12) & 0x0fff) / 10;
       const bone = (data.readUInt16LE(14) & 0x0fff) / 10;
 
-      this.cachedComp = {
+      this.s.cachedComp = {
         fat: fat > 0 ? fat : undefined,
         water: water > 0 ? water : undefined,
         muscle: muscle > 0 ? muscle : undefined,
@@ -126,41 +117,33 @@ export class MedisanaBs44xAdapter implements ScaleAdapterCore, GattWiring {
       if (data.length >= 3) {
         const weight = data.readUInt16LE(1) / 100;
         if (weight > 0 && Number.isFinite(weight)) {
-          this.cachedWeight = weight;
+          this.s.cachedWeight = weight;
         }
       }
     }
 
-    if (this.cachedWeight <= 0) return null;
+    if (this.s.cachedWeight <= 0) return null;
 
-    const reading: ScaleReading = { weight: this.cachedWeight, impedance: 0 };
-    this.compByReading.pin(reading, { ...this.cachedComp });
-    return reading;
+    return {
+      weight: this.s.cachedWeight,
+      impedance: 0,
+      scaleComposition: { ...this.s.cachedComp },
+    };
   }
 
-  /**
-   * Clear the previous weigh-in (#394).
-   *
-   * Adapters are shared singletons. Without this the stale `cachedWeight` passes
-   * the guard and the stale `cachedComp.fat` satisfies isComplete, so the first
-   * frame of the next
-   * session resolves it: a feature frame exports the previous weight, a
-   * weight frame exports the previous composition.
-   */
   onSessionStart(): void {
-    this.cachedWeight = 0;
-    this.cachedComp = {};
+    this.s = new MedisanaSession();
   }
 
   isComplete(reading: ScaleReading): boolean {
-    return reading.weight > 0 && this.cachedComp.fat != null && this.cachedComp.fat > 0;
+    return reading.weight > 0 && this.s.cachedComp.fat != null && this.s.cachedComp.fat > 0;
   }
 
-  computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
+  computeMetrics(reading: ScaleReading<ScaleBodyComp>, profile: UserProfile): BodyComposition {
     // Per-reading snapshot taken in parseNotification(). The live cache is only
     // a fallback for a reading this adapter did not build (direct callers,
-    // tests); see the compByReading field comment for why it cannot be trusted.
-    const comp = this.compByReading.of(reading, this.cachedComp);
+    // tests); see `ScaleReading.scaleComposition` for why it cannot be trusted.
+    const comp = reading.scaleComposition ?? this.s.cachedComp;
     return buildPayload(reading.weight, reading.impedance, comp, profile);
   }
 }

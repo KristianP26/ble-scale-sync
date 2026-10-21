@@ -1,0 +1,90 @@
+{
+  "settled": {
+    "by": "reading",
+    "atMs": 20000
+  },
+  "reading": {
+    "weight": 139.1,
+    "impedance": 0
+  },
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "2a10"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 1,
+      "atMs": 0,
+      "uuid": "2a11",
+      "hex": "55aa9100010192",
+      "withResponse": true
+    },
+    {
+      "seq": 2,
+      "atMs": 0,
+      "uuid": "2a11",
+      "hex": "55aa9700090100006955b900000017",
+      "withResponse": true
+    },
+    {
+      "seq": 3,
+      "atMs": 0,
+      "uuid": "2a11",
+      "hex": "55aa96000e1907cc030f070800001f40aaff05bd",
+      "withResponse": true
+    },
+    {
+      "seq": 4,
+      "atMs": 0,
+      "uuid": "2a11",
+      "hex": "55aa9000040200000095",
+      "withResponse": true
+    },
+    {
+      "seq": 5,
+      "atMs": 8000,
+      "uuid": "2a11",
+      "hex": "55aa9100010192",
+      "withResponse": true
+    },
+    {
+      "seq": 6,
+      "atMs": 8000,
+      "uuid": "2a11",
+      "hex": "55aa9700090100006955b90800001f",
+      "withResponse": true
+    },
+    {
+      "seq": 7,
+      "atMs": 8000,
+      "uuid": "2a11",
+      "hex": "55aa96000e1907cc030f070800001f40aaff05bd",
+      "withResponse": true
+    },
+    {
+      "seq": 8,
+      "atMs": 8000,
+      "uuid": "2a11",
+      "hex": "55aa9000040200000095",
+      "withResponse": true
+    }
+  ],
+  "rxDropped": 0,
+  "payload": {
+    "weight": 139.1,
+    "impedance": 0,
+    "bmi": 42.93,
+    "bodyFatPercent": 42.22,
+    "waterPercent": 42.18,
+    "boneMass": 3.38,
+    "muscleMass": 77,
+    "visceralFat": 21,
+    "physiqueRating": 1,
+    "bmr": 2371,
+    "metabolicAge": 31
+  }
+}

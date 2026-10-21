@@ -141,14 +141,16 @@ describe('the BF720 copy agrees with the shared decoder', () => {
     const reading = adapter.parseCharNotification!(CHR_BODYCOMP, frame);
     const cached = (
       adapter as unknown as {
-        cachedComp: {
-          fat?: number;
-          muscle?: number;
-          softLean?: number;
-          waterMass?: number;
+        s: {
+          cachedComp: {
+            fat?: number;
+            muscle?: number;
+            softLean?: number;
+            waterMass?: number;
+          };
         };
       }
-    ).cachedComp;
+    ).s.cachedComp;
     return {
       bodyFatPercent: cached.fat,
       musclePct: cached.muscle,

@@ -17,6 +17,7 @@ import {
   type ScaleBodyComp,
 } from './body-comp-helpers.js';
 import { bleLog, normalizeUuid } from '../ble/types.js';
+import { qnCanRun } from './qn-scale/matching.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 import { parseSigDateTime, trustedScaleTime } from './sig-wss.js';
 import { isHistoricalReading } from '../interfaces/reading-time.js';
@@ -99,6 +100,16 @@ const KG_PER_UNIT = 0.05;
 const LB_PER_UNIT = 0.1;
 const LB_TO_KG = 0.45359237;
 
+/** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
+class RenphoSession {
+  cachedWeight = 0;
+  cachedImpedance = 0;
+  /** Time the current weigh-in's frames carry (D027), when the clock is set. */
+  cachedTimestamp: Date | undefined;
+  /** The current weigh-in's reading when it is a stored record (see buildReading). */
+  storedRecord: ScaleReading | null = null;
+}
+
 export class RenphoScaleAdapter
   implements ScaleAdapterCore, GattWiring, MultiCharNotify, HoldForComposition
 {
@@ -112,7 +123,6 @@ export class RenphoScaleAdapter
   // Legacy single-char fallback (unused in multi-char mode).
   readonly charNotifyUuid = CHR_WEIGHT;
   readonly charWriteUuid = CHR_VENDOR_WRITE;
-  readonly normalizesWeight = true;
 
   // Only the channels that must be live BEFORE the handshake are auto-subscribed
   // here. The weight + body-composition CCCDs are enabled LAST, inside
@@ -127,12 +137,7 @@ export class RenphoScaleAdapter
   // body-composition indications (carrying impedance) can land.
   readonly completionHoldMs = 8000;
 
-  private cachedWeight = 0;
-  private cachedImpedance = 0;
-  /** Time the current weigh-in's frames carry (D027), when the clock is set. */
-  private cachedTimestamp: Date | undefined;
-  /** The current weigh-in's reading when it is a stored record (see buildReading). */
-  private storedRecord: ScaleReading | null = null;
+  private s = new RenphoSession();
 
   /**
    * Match "renpho" devices that are not QN-protocol scales.
@@ -156,10 +161,8 @@ export class RenphoScaleAdapter
 
     const chars = (device.characteristicUuids || []).map((u) => normalizeUuid(u));
     if (chars.length > 0) {
-      const has = (code: number) => chars.includes(uuid16(code));
-      const qnCanRun = (has(0xfff1) || has(0xffe1)) && (has(0xfff2) || has(0xffe3));
-      if (qnCanRun) return false;
-      if (has(0x2a9f) && has(0x2a9d)) return true;
+      if (qnCanRun(chars)) return false;
+      if (chars.includes(uuid16(0x2a9f)) && chars.includes(uuid16(0x2a9d))) return true;
     }
 
     const uuids = (device.serviceUuids || []).map((u) => u.toLowerCase());
@@ -169,20 +172,8 @@ export class RenphoScaleAdapter
     return !hasQn;
   }
 
-  /**
-   * Clear the previous weigh-in before anything is subscribed (#394).
-   *
-   * This used to live in `onConnected`, which is too late for a multi-char
-   * adapter: `subscribeAndInit` enables EVERY notify binding and only then
-   * awaits `startInit()`, so frames can already be arriving - through several
-   * D-Bus round trips for the second and third binding - while the reset has
-   * not run. `onSessionStart` runs before the first subscribe.
-   */
   onSessionStart(): void {
-    this.cachedWeight = 0;
-    this.cachedImpedance = 0;
-    this.cachedTimestamp = undefined;
-    this.storedRecord = null;
+    this.s = new RenphoSession();
   }
 
   async onConnected(ctx: ConnectionContext): Promise<void> {
@@ -297,10 +288,10 @@ export class RenphoScaleAdapter
     let weight = raw * (imperial ? LB_PER_UNIT : KG_PER_UNIT);
     if (imperial) weight *= LB_TO_KG;
     if (!(weight > 0) || !Number.isFinite(weight)) return;
-    this.cachedWeight = weight;
-    this.cachedImpedance = 0;
-    this.storedRecord = null;
-    this.cachedTimestamp = flags & 0x02 ? trustedScaleTime(parseSigDateTime(data, 3)) : undefined;
+    this.s.cachedWeight = weight;
+    this.s.cachedImpedance = 0;
+    this.s.storedRecord = null;
+    this.s.cachedTimestamp = flags & 0x02 ? trustedScaleTime(parseSigDateTime(data, 3)) : undefined;
   }
 
   /**
@@ -337,15 +328,15 @@ export class RenphoScaleAdapter
     for (const [flag, size, field] of plan) {
       if (flag !== null && !(flags & flag)) continue;
       if (off + size > n) break; // belongs to a later packet
-      if (flag === 0x0002 && !this.cachedTimestamp) {
+      if (flag === 0x0002 && !this.s.cachedTimestamp) {
         // A weigh-in whose 0x2A9D carried no time can still be dated by this.
-        this.cachedTimestamp = trustedScaleTime(parseSigDateTime(data, off));
+        this.s.cachedTimestamp = trustedScaleTime(parseSigDateTime(data, off));
       }
-      if (field === 'impedance' && this.cachedImpedance <= 0) {
-        this.cachedImpedance = data.readUInt16LE(off) * 0.1;
-      } else if (field === 'weight' && this.cachedWeight <= 0) {
+      if (field === 'impedance' && this.s.cachedImpedance <= 0) {
+        this.s.cachedImpedance = data.readUInt16LE(off) * 0.1;
+      } else if (field === 'weight' && this.s.cachedWeight <= 0) {
         const w = data.readUInt16LE(off) * step;
-        if (w > 0 && Number.isFinite(w)) this.cachedWeight = w;
+        if (w > 0 && Number.isFinite(w)) this.s.cachedWeight = w;
       }
       off += size;
     }
@@ -362,15 +353,18 @@ export class RenphoScaleAdapter
    * which would be exported as a second weigh-in.
    */
   private buildReading(): ScaleReading | null {
-    if (this.cachedWeight <= 0) return null;
-    const stored = this.storedRecord;
+    if (this.s.cachedWeight <= 0) return null;
+    const stored = this.s.storedRecord;
     if (stored) {
-      stored.impedance = this.cachedImpedance;
+      stored.impedance = this.s.cachedImpedance;
       return null;
     }
-    const reading: ScaleReading = { weight: this.cachedWeight, impedance: this.cachedImpedance };
-    if (this.cachedTimestamp) reading.timestamp = this.cachedTimestamp;
-    if (isHistoricalReading(reading)) this.storedRecord = reading;
+    const reading: ScaleReading = {
+      weight: this.s.cachedWeight,
+      impedance: this.s.cachedImpedance,
+    };
+    if (this.s.cachedTimestamp) reading.timestamp = this.s.cachedTimestamp;
+    if (isHistoricalReading(reading)) this.s.storedRecord = reading;
     return reading;
   }
 

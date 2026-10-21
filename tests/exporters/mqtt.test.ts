@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { MqttExporter } from '../../src/exporters/mqtt.js';
 import type { MqttConfig } from '../../src/exporters/config.js';
 import type { BodyComposition } from '../../src/interfaces/scale-adapter.js';
@@ -16,6 +16,11 @@ const samplePayload: BodyComposition = {
   bmr: 1750,
   metabolicAge: 30,
 };
+
+const MEASURED_AT = new Date('2026-10-20T21:30:00Z');
+// A literal, not MEASURED_AT.toISOString(), so the tests pin the format.
+const MEASURED_AT_ISO = '2026-10-20T21:30:00.000Z';
+const STATE_JSON = JSON.stringify({ timestamp: MEASURED_AT_ISO, ...samplePayload });
 
 const defaultConfig: MqttConfig = {
   brokerUrl: 'mqtt://localhost:1883',
@@ -45,6 +50,10 @@ describe('MqttExporter', () => {
     fakeMqtt.reset();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('has name "mqtt"', () => {
     const exporter = new MqttExporter(defaultConfig);
     expect(exporter.name).toBe('mqtt');
@@ -52,7 +61,7 @@ describe('MqttExporter', () => {
 
   it('publishes payload as JSON to configured topic', async () => {
     const exporter = new MqttExporter(defaultConfig);
-    const result = await exporter.export(samplePayload);
+    const result = await exporter.export(samplePayload, { timestamp: MEASURED_AT });
 
     expect(result.success).toBe(true);
     expect(fakeMqtt.connect).toHaveBeenCalledWith('mqtt://localhost:1883', {
@@ -61,11 +70,10 @@ describe('MqttExporter', () => {
       password: undefined,
       connectTimeout: 10_000,
     });
-    expect(fakeMqtt.publishAsync).toHaveBeenCalledWith(
-      'scale/body-composition',
-      JSON.stringify(samplePayload),
-      { qos: 1, retain: true },
-    );
+    expect(fakeMqtt.publishAsync).toHaveBeenCalledWith('scale/body-composition', STATE_JSON, {
+      qos: 1,
+      retain: true,
+    });
     expect(fakeMqtt.endAsync).toHaveBeenCalled();
   });
 
@@ -130,14 +138,57 @@ describe('MqttExporter', () => {
     });
   });
 
+  describe('measurement time (#478)', () => {
+    it('publishes the measurement time from the context, not the time of the publish', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-10-21T08:00:00Z'));
+      const exporter = new MqttExporter(defaultConfig);
+      await exporter.export(samplePayload, { timestamp: MEASURED_AT });
+
+      const { timestamp, ...rest } = JSON.parse(fakeMqtt.publishAsync.mock.calls[0][1] as string);
+      expect(timestamp).toBe(MEASURED_AT_ISO);
+      expect(rest).toEqual(samplePayload);
+    });
+
+    it('falls back to the time of the export without a measurement time', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(MEASURED_AT);
+      const exporter = new MqttExporter(defaultConfig);
+      await exporter.export(samplePayload);
+
+      const state = JSON.parse(fakeMqtt.publishAsync.mock.calls[0][1] as string);
+      expect(state.timestamp).toBe(MEASURED_AT_ISO);
+    });
+
+    it('sends the same timestamp on every retry of one export', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(MEASURED_AT);
+      // The first attempt fails seven seconds later; the retry must still send
+      // the time the export started with, not the time it was retried at.
+      fakeMqtt.publishAsync.mockImplementationOnce(async () => {
+        vi.setSystemTime(new Date('2026-10-20T21:30:07Z'));
+        throw new Error('publish refused');
+      });
+      const exporter = new MqttExporter(defaultConfig);
+      const result = await exporter.export(samplePayload);
+
+      expect(result.success).toBe(true);
+      expect(
+        fakeMqtt.publishAsync.mock.calls.map(
+          (c: unknown[]) => JSON.parse(c[1] as string).timestamp,
+        ),
+      ).toEqual([MEASURED_AT_ISO, MEASURED_AT_ISO]);
+    });
+  });
+
   describe('Home Assistant discovery', () => {
     it('publishes discovery payloads + status + data when haDiscovery is true', async () => {
       const config: MqttConfig = { ...defaultConfig, haDiscovery: true };
       const exporter = new MqttExporter(config);
-      await exporter.export(samplePayload);
+      await exporter.export(samplePayload, { timestamp: MEASURED_AT });
 
-      // 11 discovery topics + 1 status publish + 1 data topic = 13 publishAsync calls
-      expect(fakeMqtt.publishAsync).toHaveBeenCalledTimes(13);
+      // 12 discovery topics + 1 status publish + 1 data topic = 14 publishAsync calls
+      expect(fakeMqtt.publishAsync).toHaveBeenCalledTimes(14);
 
       // First call should be a discovery config topic
       const firstCall = fakeMqtt.publishAsync.mock.calls[0];
@@ -145,14 +196,55 @@ describe('MqttExporter', () => {
       expect(firstCall[2]).toEqual({ qos: 1, retain: true });
 
       // Second to last call should be the status publish
-      const statusCall = fakeMqtt.publishAsync.mock.calls[11];
+      const statusCall = fakeMqtt.publishAsync.mock.calls[12];
       expect(statusCall[0]).toBe('scale/body-composition/status');
       expect(statusCall[1]).toBe('online');
 
       // Last call should be the actual data
-      const lastCall = fakeMqtt.publishAsync.mock.calls[12];
+      const lastCall = fakeMqtt.publishAsync.mock.calls[13];
       expect(lastCall[0]).toBe('scale/body-composition');
-      expect(lastCall[1]).toBe(JSON.stringify(samplePayload));
+      expect(lastCall[1]).toBe(STATE_JSON);
+    });
+
+    it('adds a Last Weigh-in timestamp sensor, the only one without a state class', async () => {
+      const config: MqttConfig = { ...defaultConfig, haDiscovery: true };
+      const exporter = new MqttExporter(config);
+      await exporter.export(samplePayload);
+
+      const configs = new Map(
+        fakeMqtt.publishAsync.mock.calls
+          .filter((c: unknown[]) => (c[0] as string).startsWith('homeassistant/'))
+          .map((c: unknown[]) => [c[0] as string, JSON.parse(c[1] as string)]),
+      );
+      const timestampTopic = 'homeassistant/sensor/ble-scale-sync/timestamp/config';
+      const sensor = configs.get(timestampTopic);
+      expect(sensor).toBeDefined();
+      expect(sensor).toMatchObject({
+        name: 'Last Weigh-in',
+        unique_id: 'ble-scale-sync_timestamp',
+        state_topic: 'scale/body-composition',
+        value_template: '{{ value_json.timestamp }}',
+        device_class: 'timestamp',
+        availability: [{ topic: 'scale/body-composition/status' }],
+        device: { identifiers: ['ble-scale-sync'] },
+      });
+      // HA rejects a unit and warns about a state class on a timestamp sensor.
+      for (const key of [
+        'state_class',
+        'unit_of_measurement',
+        'suggested_display_precision',
+        'entity_category',
+        'icon',
+      ]) {
+        expect(sensor).not.toHaveProperty(key);
+      }
+
+      // The exception is the timestamp sensor alone, and none of them forces
+      // an update: a replayed retained message must not look like a weigh-in.
+      for (const [topic, payload] of configs) {
+        if (topic !== timestampTopic) expect(payload.state_class).toBe('measurement');
+        expect(payload).not.toHaveProperty('force_update');
+      }
     });
 
     it('sends correct discovery payload structure for weight', async () => {
@@ -218,7 +310,7 @@ describe('MqttExporter', () => {
       const discoveryCalls = fakeMqtt.publishAsync.mock.calls.filter((c: unknown[]) =>
         (c[0] as string).startsWith('homeassistant/'),
       );
-      expect(discoveryCalls.length).toBe(11);
+      expect(discoveryCalls.length).toBe(12);
 
       const devices = discoveryCalls.map((c: unknown[]) => JSON.parse(c[1] as string).device);
       // All device objects should be identical
@@ -246,8 +338,8 @@ describe('MqttExporter', () => {
       const exporter = new MqttExporter(config);
       await exporter.export(samplePayload);
 
-      // Call index 11 (after 11 discovery payloads) should be the status publish
-      const statusCall = fakeMqtt.publishAsync.mock.calls[11];
+      // Call index 12 (after 12 discovery payloads) should be the status publish
+      const statusCall = fakeMqtt.publishAsync.mock.calls[12];
       expect(statusCall[0]).toBe('scale/body-composition/status');
       expect(statusCall[1]).toBe('online');
       expect(statusCall[2]).toEqual({ qos: 1, retain: true });

@@ -1,0 +1,146 @@
+{
+  "settled": {
+    "by": "error",
+    "atMs": 85084,
+    "error": "Scale disconnected before reading completed"
+  },
+  "reading": null,
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 1,
+      "atMs": 0,
+      "uuid": "ffe4"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "ffe9",
+      "hex": "0d05130016",
+      "withResponse": false
+    },
+    {
+      "seq": 2,
+      "atMs": 5000,
+      "uuid": "ffe9",
+      "hex": "0d05130016",
+      "withResponse": false
+    },
+    {
+      "seq": 3,
+      "atMs": 10000,
+      "uuid": "ffe9",
+      "hex": "0d05130016",
+      "withResponse": false
+    },
+    {
+      "seq": 4,
+      "atMs": 15000,
+      "uuid": "ffe9",
+      "hex": "0d05130016",
+      "withResponse": false
+    },
+    {
+      "seq": 5,
+      "atMs": 20000,
+      "uuid": "ffe9",
+      "hex": "0d05130016",
+      "withResponse": false
+    },
+    {
+      "seq": 6,
+      "atMs": 25000,
+      "uuid": "ffe9",
+      "hex": "0d05130016",
+      "withResponse": false
+    },
+    {
+      "seq": 7,
+      "atMs": 30000,
+      "uuid": "ffe9",
+      "hex": "0d05130016",
+      "withResponse": false
+    },
+    {
+      "seq": 8,
+      "atMs": 35000,
+      "uuid": "ffe9",
+      "hex": "0d05130016",
+      "withResponse": false
+    },
+    {
+      "seq": 9,
+      "atMs": 40000,
+      "uuid": "ffe9",
+      "hex": "0d05130016",
+      "withResponse": false
+    },
+    {
+      "seq": 10,
+      "atMs": 45000,
+      "uuid": "ffe9",
+      "hex": "0d05130016",
+      "withResponse": false
+    },
+    {
+      "seq": 11,
+      "atMs": 50000,
+      "uuid": "ffe9",
+      "hex": "0d05130016",
+      "withResponse": false
+    },
+    {
+      "seq": 12,
+      "atMs": 55000,
+      "uuid": "ffe9",
+      "hex": "0d05130016",
+      "withResponse": false
+    },
+    {
+      "seq": 13,
+      "atMs": 60000,
+      "uuid": "ffe9",
+      "hex": "0d05130016",
+      "withResponse": false
+    },
+    {
+      "seq": 14,
+      "atMs": 65000,
+      "uuid": "ffe9",
+      "hex": "0d05130016",
+      "withResponse": false
+    },
+    {
+      "seq": 15,
+      "atMs": 70000,
+      "uuid": "ffe9",
+      "hex": "0d05130016",
+      "withResponse": false
+    },
+    {
+      "seq": 16,
+      "atMs": 75000,
+      "uuid": "ffe9",
+      "hex": "0d05130016",
+      "withResponse": false
+    },
+    {
+      "seq": 17,
+      "atMs": 80000,
+      "uuid": "ffe9",
+      "hex": "0d05130016",
+      "withResponse": false
+    },
+    {
+      "seq": 18,
+      "atMs": 85000,
+      "uuid": "ffe9",
+      "hex": "0d05130016",
+      "withResponse": false
+    }
+  ],
+  "rxDropped": 0,
+  "payload": null
+}

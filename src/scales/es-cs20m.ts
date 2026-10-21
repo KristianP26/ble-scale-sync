@@ -16,6 +16,7 @@ import {
 } from './body-comp-helpers.js';
 import { matchesDescriptor, ownAddressBytes, type MatchDescriptor } from './match-descriptor.js';
 import { bleLog, errMsg } from '../ble/types.js';
+import { build55aaFrame, frameFault, sum8 } from './renpho-55aa.js';
 
 const CHR_NOTIFY = uuid16(0x2a10);
 const CHR_WRITE = uuid16(0x2a11);
@@ -81,25 +82,14 @@ const FALLBACK_HEIGHT_TENTHS = 1700;
  */
 const FALLBACK_WEIGHT_CG = 7000;
 
-function checksum(bytes: Uint8Array): number {
-  let sum = 0;
-  for (const b of bytes) sum += b;
-  return sum & 0xff;
-}
-
-function buildFrame(cmd: number, payload: number[]): Buffer {
-  const body = [0x55, 0xaa, cmd, (payload.length >> 8) & 0xff, payload.length & 0xff, ...payload];
-  return Buffer.from([...body, checksum(Uint8Array.from(body))]);
-}
-
 /** `0x90 [unit, 0, mode, 0]` with mode 0, which leaves the scale's stored measuring mode alone. */
 export function buildDisplayUnitFrame(unit: number): Buffer {
-  return buildFrame(CMD_DISPLAY_UNIT, [unit, 0x00, 0x00, 0x00]);
+  return build55aaFrame(CMD_DISPLAY_UNIT, [unit, 0x00, 0x00, 0x00]);
 }
 
 /** `0x91 [01]`, which the app sends after every 0x11 status frame. Meaning not decoded. */
 export function buildPowerOnAckFrame(): Buffer {
-  return buildFrame(CMD_POWER_ON_ACK, [0x01]);
+  return build55aaFrame(CMD_POWER_ON_ACK, [0x01]);
 }
 
 /**
@@ -112,7 +102,7 @@ export function buildSetTimeFrame(now: Date): Buffer {
   seconds.writeUIntBE(Math.floor(now.getTime() / 1000), 0, 6);
   // getTimezoneOffset is positive west of Greenwich, which is the frame's "behind".
   const offset = now.getTimezoneOffset();
-  return buildFrame(CMD_SET_TIME, [
+  return build55aaFrame(CMD_SET_TIME, [
     SET_TIME_SUBOP,
     ...seconds,
     offset > 0 ? 1 : 0,
@@ -150,7 +140,7 @@ export function buildGuestProfileFrame(profile: UserProfile, now: Date): Buffer 
   const weightBytes = Buffer.alloc(4);
   weightBytes.writeUInt32BE(weight);
 
-  return buildFrame(CMD_GUEST_PROFILE, [
+  return build55aaFrame(CMD_GUEST_PROFILE, [
     (sex << 4) | GUEST_SLOT,
     (year >> 8) & 0xff,
     year & 0xff,
@@ -179,14 +169,9 @@ export function assertAllowedWrite(frame: Buffer): void {
   const refuse = (why: string): never => {
     throw new Error(`ES-CS20M: refusing to write ${why}`);
   };
-  if (frame.length < HEADER_LEN + 1 || frame[0] !== 0x55 || frame[1] !== 0xaa) {
-    refuse('a frame without the 55AA header');
-  }
+  const fault = frameFault(frame);
+  if (fault) refuse(fault);
   const len = frame.readUInt16BE(3);
-  if (frame.length !== HEADER_LEN + len + 1) refuse('a frame whose length field does not match');
-  if (checksum(frame.subarray(0, frame.length - 1)) !== frame[frame.length - 1]) {
-    refuse('a frame with a bad checksum');
-  }
   const cmd = frame[2];
   const p = frame.subarray(HEADER_LEN, frame.length - 1);
   switch (cmd) {
@@ -274,6 +259,23 @@ function hasOwnMacEcho(device: BleDeviceInfo): boolean {
   return embedded === own || reversed === own;
 }
 
+/** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
+class EsCs20mSession {
+  stable = false;
+  stopped = false;
+  resistance = 0;
+  lastWeight = 0;
+  /** The accepted 0x18 of this weigh-in, held until the power-off frame. */
+  result: ScaleReading | null = null;
+  /** AE00 present on this session's device: send the app's sequence. */
+  handshake = false;
+  /** Re-armed by each power-off frame, so a scale woken again gets the sequence again. */
+  handshakeArmed = true;
+  legacyRepeated = false;
+  /** Keeps the writes of one power-on in order and two power-ons from interleaving. */
+  writes: Promise<void> = Promise.resolve();
+}
+
 /**
  * Adapter for the ES-CS20M BLE body-composition scale (Yunmai lineage).
  *
@@ -326,20 +328,8 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
   };
   readonly charNotifyUuid = CHR_NOTIFY;
   readonly charWriteUuid = CHR_WRITE;
-  readonly normalizesWeight = true;
 
-  private stable = false;
-  private stopped = false;
-  private resistance = 0;
-  private lastWeight = 0;
-  /** The accepted 0x18 of this weigh-in, held until the power-off frame. */
-  private result: ScaleReading | null = null;
-  /**
-   * Readings taken from an accepted 0x18: only their resistance drives BIA.
-   * Keyed by the reading, as computeMetrics can run after the next session has
-   * started (#394), so never cleared.
-   */
-  private readonly resultReadings = new WeakSet<ScaleReading>();
+  private s = new EsCs20mSession();
 
   /**
    * The session's context, captured for the writes a power-on frame triggers.
@@ -347,13 +337,6 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
    * left over from a dead session never reaches the next one.
    */
   private ctx: ConnectionContext | null = null;
-  /** AE00 present on this session's device: send the app's sequence. */
-  private handshake = false;
-  /** Re-armed by each power-off frame, so a scale woken again gets the sequence again. */
-  private handshakeArmed = true;
-  private legacyRepeated = false;
-  /** Keeps the writes of one power-on in order and two power-ons from interleaving. */
-  private writes: Promise<void> = Promise.resolve();
 
   private readonly now: () => Date;
 
@@ -366,12 +349,12 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
    * Undefined otherwise, so nothing else this adapter returns is held.
    */
   get completionHoldMs(): number | undefined {
-    return this.result !== null ? RESULT_HOLD_MS : undefined;
+    return this.s.result !== null ? RESULT_HOLD_MS : undefined;
   }
 
   /** The 0x18 reading is final once the scale has switched off. */
   isFinal(reading: ScaleReading): boolean {
-    return reading !== this.result || this.stopped;
+    return reading !== this.s.result || this.s.stopped;
   }
 
   matches(device: BleDeviceInfo): boolean {
@@ -430,23 +413,23 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
       if (data.length < 6) return null;
       if (data[5] === 0x01) {
         // Power on (also sent right after subscribe): reset state for a new weigh-in
-        this.stable = false;
-        this.stopped = false;
-        this.resistance = 0;
-        this.lastWeight = 0;
-        this.result = null;
+        this.s.stable = false;
+        this.s.stopped = false;
+        this.s.resistance = 0;
+        this.s.lastWeight = 0;
+        this.s.result = null;
         // The handshake echoes the display unit from [6], which every capture
         // shows in the 55AA form. No header-less 0x11 has been captured, so
         // where its unit sits is unknown and it must not pick the unit.
         if (data[0] === 0x55 && data[1] === 0xaa) this.onPowerOn(data);
       } else if (data[5] === 0x00) {
-        this.handshakeArmed = true;
+        this.s.handshakeArmed = true;
         // Power off: measurement complete. The 0x18 result if one was taken
         // (the same object, now final), else the last accumulated reading.
-        this.stopped = true;
-        if (this.result) return this.result;
-        if (this.lastWeight > 0) {
-          return { weight: this.lastWeight, impedance: this.resistance };
+        this.s.stopped = true;
+        if (this.s.result) return this.s.result;
+        if (this.s.lastWeight > 0) {
+          return { weight: this.s.lastWeight, impedance: this.s.resistance };
         }
       }
       return null;
@@ -465,7 +448,7 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
     if (data.length < 10) return null;
     // After the result nothing replaces it: a later weight frame would take
     // over the held reading and lose the resistance.
-    if (this.result) return null;
+    if (this.s.result) return null;
 
     // Low nibble is the phase (0 settling, 1 final, other values unclassified);
     // bit 4 is the zero-current mode the Renpho app stores on the scale, so
@@ -475,7 +458,7 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
     // (renpho-escs20m#10). Taking any non-zero status as stable completed the
     // reading on that first frame. Status layout per renpho-escs20m
     // x55aa/protocol.py, confirmed by its R-A016 app capture.
-    this.stable = (data[5] & 0x0f) === 0x01;
+    this.s.stable = (data[5] & 0x0f) === 0x01;
     const weight = data.readUInt16BE(8) / 100;
 
     // Range validation (0.5-300 kg) filters garbage during initial connection
@@ -484,11 +467,11 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
     // Optional resistance in the weight frame
     if (data.length >= 12) {
       const r = data.readUInt16BE(10);
-      if (r > 0) this.resistance = r;
+      if (r > 0) this.s.resistance = r;
     }
 
-    this.lastWeight = weight;
-    return { weight, impedance: this.resistance };
+    this.s.lastWeight = weight;
+    return { weight, impedance: this.s.resistance };
   }
 
   /**
@@ -504,12 +487,12 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
       bleLog.debug(`ES-CS20M: 0x18 not used: ${why}`);
       return null;
     };
-    if (this.result) return skip('this weigh-in already has its result');
-    if (!this.handshake) return skip('no guest profile was sent on this unit');
+    if (this.s.result) return skip('this weigh-in already has its result');
+    if (!this.s.handshake) return skip('no guest profile was sent on this unit');
     if (
       data.length !== HEADER_LEN + RESULT_PAYLOAD_LEN + 1 ||
       data.readUInt16BE(3) !== RESULT_PAYLOAD_LEN ||
-      checksum(data.subarray(0, data.length - 1)) !== data[data.length - 1]
+      sum8(data.subarray(0, -1)) !== data[data.length - 1]
     ) {
       return skip('bad length or checksum');
     }
@@ -518,21 +501,21 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
       return skip(`status 0x${status.toString(16).padStart(2, '0')} is not a final`);
     }
     if (data[7] !== GUEST_SLOT) return skip(`slot ${data[7]}, not the guest profile we sent`);
-    if (this.lastWeight <= 0) return skip('no weight frame since the scale switched on');
+    if (this.s.lastWeight <= 0) return skip('no weight frame since the scale switched on');
     const weight = data.readUInt32BE(8) / 100;
     if (
       weight < 0.5 ||
       weight > 300 ||
-      Math.abs(weight - this.lastWeight) > RESULT_WEIGHT_TOLERANCE_KG
+      Math.abs(weight - this.s.lastWeight) > RESULT_WEIGHT_TOLERANCE_KG
     ) {
       return skip(
         `${weight.toFixed(2)} kg is not the weigh-in in progress ` +
-          `(last weight frame ${this.lastWeight.toFixed(2)} kg)`,
+          `(last weight frame ${this.s.lastWeight.toFixed(2)} kg)`,
       );
     }
     const impedance = data.readUInt16BE(12);
-    this.result = { weight, impedance };
-    this.resultReadings.add(this.result);
+    // Only an accepted 0x18's resistance drives BIA; the mark travels with the reading (#394).
+    this.s.result = { weight, impedance, scaleComposition: 'bia' };
     // BMI and body fat stay out of this line; the raw frame is already in the
     // notification debug log.
     bleLog.debug(
@@ -540,30 +523,11 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
         `its BMI and body fat were computed for the guest profile we sent and are not used. ` +
         `Keeping the link until the scale switches off (up to ${RESULT_HOLD_MS / 1000} s).`,
     );
-    return this.result;
+    return this.s.result;
   }
 
-  /**
-   * Clear the previous weigh-in (#394).
-   *
-   * Adapters are shared singletons. These fields used to be cleared only inside
-   * the 0x11 START branch, and no GATT capture of the anonymous ESCS20MB2
-   * revision exists to show that frame is always sent (#376). Without a
-   * session-start reset a stale `stopped` completes the
-   * next session on an unsettled weight, a stale `lastWeight` replays the
-   * previous reading verbatim on an orphan STOP, and a stale `resistance`
-   * drives one person's BIA from another person's impedance.
-   */
   onSessionStart(): void {
-    this.stable = false;
-    this.stopped = false;
-    this.resistance = 0;
-    this.lastWeight = 0;
-    this.result = null;
-    this.handshake = false;
-    this.handshakeArmed = true;
-    this.legacyRepeated = false;
-    this.writes = Promise.resolve();
+    this.s = new EsCs20mSession();
   }
 
   /**
@@ -575,8 +539,8 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
    */
   async onConnected(ctx: ConnectionContext): Promise<void> {
     this.ctx = ctx;
-    this.handshake = ctx.availableChars.has(CHR_AE01) && ctx.availableChars.has(CHR_AE02);
-    if (this.handshake) {
+    this.s.handshake = ctx.availableChars.has(CHR_AE01) && ctx.availableChars.has(CHR_AE02);
+    if (this.s.handshake) {
       bleLog.debug('ES-CS20M: AE00 present, sending the Renpho app sequence after power-on');
       return;
     }
@@ -590,16 +554,16 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
   private onPowerOn(data: Buffer): void {
     const owner = this.ctx;
     if (!owner) return;
-    if (!this.handshake) {
+    if (!this.s.handshake) {
       // The connect-time write went out before notifications were on (shared.ts
       // subscribes and inits in parallel); this one is known to arrive after.
-      if (this.legacyRepeated) return;
-      this.legacyRepeated = true;
+      if (this.s.legacyRepeated) return;
+      this.s.legacyRepeated = true;
       this.enqueue(() => this.send(owner, LEGACY_DISPLAY_KG, false, 'display unit kg'));
       return;
     }
-    if (!this.handshakeArmed) return;
-    this.handshakeArmed = false;
+    if (!this.s.handshakeArmed) return;
+    this.s.handshakeArmed = false;
     // Echo the unit the scale already shows (0x11 [6]: 1 kg, 2 lb, 3 st:lb,
     // 4 st), so reading it does not flip the display.
     const unit = data.length > 6 && data[6] >= 1 && data[6] <= 4 ? data[6] : 1;
@@ -608,7 +572,7 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
 
   private enqueue(step: () => Promise<void>): void {
     // Steps never reject (send catches), so the chain cannot get stuck.
-    this.writes = this.writes.then(step, step);
+    this.s.writes = this.s.writes.then(step, step);
   }
 
   /**
@@ -672,7 +636,7 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
   }
 
   isComplete(reading: ScaleReading): boolean {
-    return reading.weight > 0 && (this.stable || this.stopped || reading === this.result);
+    return reading.weight > 0 && (this.s.stable || this.s.stopped || reading === this.s.result);
   }
 
   /**
@@ -685,9 +649,10 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
    */
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
     const comp: ScaleBodyComp = {
-      fat: this.resultReadings.has(reading)
-        ? biaFatIfPlausible(reading.weight, reading.impedance, profile)
-        : undefined,
+      fat:
+        reading.scaleComposition === 'bia'
+          ? biaFatIfPlausible(reading.weight, reading.impedance, profile)
+          : undefined,
     };
     return buildPayload(reading.weight, reading.impedance, comp, profile);
   }

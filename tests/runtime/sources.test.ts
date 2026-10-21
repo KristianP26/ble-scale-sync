@@ -48,7 +48,10 @@ vi.mock('../../src/runtime/proxy-liveness.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/runtime/proxy-liveness.js')>();
   return { ...actual, raceWithLiveness: h.raceWithLiveness };
 });
-vi.mock('../../src/config/resolve.js', () => ({ resolveUserProfile: h.resolveUserProfile }));
+vi.mock('../../src/config/resolve.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/config/resolve.js')>();
+  return { ...actual, resolveUserProfile: h.resolveUserProfile };
+});
 vi.mock('../../src/ble/types.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/ble/types.js')>();
   return { ...actual, abortableSleep: h.abortableSleep };
@@ -126,7 +129,6 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
       targetMac: ctx.scaleMac,
       profile: expect.any(Function),
       scaleAuth: { pin: 1234, userIndex: 2 },
-      weightUnit: 'lbs',
     });
     const { profile } = h.createReadingSource.mock.calls[0][0] as { profile: ProfileSource };
     expect(currentProfile(profile)).toEqual({ __profile: 'sentinel' });
@@ -174,15 +176,7 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
       targetMac: ctx.scaleMac,
       profile: expect.any(Function),
       scaleAuth: { pin: 1234, userIndex: 2 },
-      weightUnit: 'lbs',
     });
-
-    // The unit is read again on reload, like everything else the watcher gets.
-    (ctx as { weightUnit: string }).weightUnit = 'kg';
-    bundle.onSourceReload?.();
-    expect(plan.watcher.updateConfig).toHaveBeenLastCalledWith(
-      expect.objectContaining({ weightUnit: 'kg' }),
-    );
   });
 
   it('poll plan: PollReadingSource + watchdog-wired hooks', async () => {
@@ -523,9 +517,10 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
   });
 });
 
-// No test runs src/run.ts, so the wiring of the bundle into the loop is pinned
-// by its text, the way tests/addon-run-sh.test.ts pins run.sh. Listed one by
-// one, a new hook was dropped by forgetting a line there (#475).
+// tests/cli/run.test.ts runs src/run.ts only down the single-shot path, so the
+// wiring of the bundle into the continuous loop is pinned by its text, the way
+// tests/addon-run-sh.test.ts pins run.sh. Listed one by one, a new hook was
+// dropped by forgetting a line there (#475).
 describe('src/run.ts wiring (#475)', () => {
   const RUN_TS = readFileSync('src/run.ts', 'utf8').replace(/\r\n/g, '\n');
 

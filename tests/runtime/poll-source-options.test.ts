@@ -10,7 +10,8 @@ const scanAndReadRaw = vi.fn();
 vi.mock('../../src/ble/index.js', () => ({ scanAndReadRaw }));
 
 // Profile resolution is not the subject here, same as poll-cycle-deadline.test.ts.
-vi.mock('../../src/config/resolve.js', () => ({
+vi.mock('../../src/config/resolve.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/config/resolve.js')>()),
   resolveUserProfile: () => ({ sex: 'male', age: 40, heightCm: 180, athlete: false }),
 }));
 

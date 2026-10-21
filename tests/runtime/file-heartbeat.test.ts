@@ -8,14 +8,14 @@ import { constants as fsConstants } from 'node:fs';
 // the path, so it can pass O_NOFOLLOW; the write then targets the fd. `constants`
 // has to be real, because the module folds the flags at import time.
 const writeFileSyncMock = vi.fn();
-const openSyncMock = vi.fn(() => 7);
+const openSyncMock = vi.fn((_path: string, _flags: number) => 7);
 const closeSyncMock = vi.fn();
 vi.mock('node:fs', async (importOriginal) => {
   const actual = (await importOriginal()) as typeof import('node:fs');
   return {
     constants: actual.constants,
     writeFileSync: (...args: unknown[]) => writeFileSyncMock(...args),
-    openSync: (...args: unknown[]) => openSyncMock(...(args as [])),
+    openSync: (...args: unknown[]) => openSyncMock(...(args as [string, number])),
     closeSync: (...args: unknown[]) => closeSyncMock(...args),
   };
 });

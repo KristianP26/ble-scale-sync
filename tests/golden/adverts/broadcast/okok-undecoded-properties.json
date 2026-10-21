@@ -1,0 +1,38 @@
+{
+  "adverts": [
+    {
+      "atMs": 0,
+      "data": "0x10c0 396c17700a0135020000000001",
+      "decision": "wait",
+      "warns": [
+        "OKOK scale (C0 frame) sent properties byte 0x35, a display unit or precision that is not decoded. Only kg is decoded, so its readings are ignored. Switch the scale to kg, or report a weigh-in in this mode on #408."
+      ]
+    },
+    {
+      "atMs": 500,
+      "data": "0x10c0 396c17700a0135020000000001",
+      "decision": "wait"
+    },
+    {
+      "atMs": 1000,
+      "data": "0x20ca 0b41af2f810100011ad60000a7020000000001",
+      "decision": "wait",
+      "untilMs": 1500,
+      "count": 2
+    },
+    {
+      "atMs": 2000,
+      "data": "0x20ca 0b41af2f810115051a90177097020000000001",
+      "decision": "wait",
+      "warns": [
+        "OKOK scale (2.0 frame) sent properties byte 0x15, a display unit or precision that is not decoded. Only kg is decoded, so its readings are ignored. Switch the scale to kg, or report a weigh-in in this mode on #408."
+      ]
+    },
+    {
+      "atMs": 3000,
+      "data": "0x20ca 0b41af2f810105051a90177086020000000001",
+      "resolvedTo": null
+    }
+  ],
+  "exports": []
+}

@@ -1,4 +1,4 @@
-import { biaFatIfPlausible, buildPayload, uuid16 } from './body-comp-helpers.js';
+import { buildPayload, uuid16, biaPayload } from './body-comp-helpers.js';
 import { SigMeasurementPairing } from './sig-bcs.js';
 import type {
   BleDeviceInfo,
@@ -94,7 +94,6 @@ export class StandardGattScaleAdapter
     { uuid: CHR_BODY_COMP_MEAS, type: 'notify', optional: true },
     { uuid: CHR_USER_CONTROL_POINT, type: 'write', optional: true },
   ];
-  readonly normalizesWeight = true;
   readonly completionHoldMs = BCS_WAIT_MS;
   /** UCP Consent opcode for user index 1 with consent code 0. */
   readonly unlockCommand = [0x02, 0x01, 0x00, 0x00];
@@ -179,7 +178,6 @@ export class StandardGattScaleAdapter
     // No fat from the scale. Water or muscle without the fat they were measured
     // with are not used (D028); BIA from a plausible impedance, else the BMI
     // estimate. An impedance of 0 never reaches a formula.
-    const fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
-    return buildPayload(reading.weight, reading.impedance, { fat }, profile);
+    return biaPayload(reading, profile);
   }
 }

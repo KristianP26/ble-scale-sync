@@ -1,0 +1,27 @@
+{
+  "settled": {
+    "by": "error",
+    "atMs": 5000,
+    "error": "Scale disconnected before reading completed"
+  },
+  "reading": null,
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 1,
+      "atMs": 0,
+      "uuid": "8a21"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "8a81",
+      "hex": "0200b95569",
+      "withResponse": true
+    }
+  ],
+  "rxDropped": 0,
+  "payload": null
+}

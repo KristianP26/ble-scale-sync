@@ -14,6 +14,5 @@ const handler = createNobleHandler({
 });
 
 export const scanAndReadRaw = handler.scanAndReadRaw;
-export const scanAndRead = handler.scanAndRead;
 export const scanDevices = handler.scanDevices;
 export const _internals = handler._internals;

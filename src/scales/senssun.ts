@@ -7,12 +7,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import {
-  uuid16,
-  buildPayload,
-  type ScaleBodyComp,
-  ReadingComposition,
-} from './body-comp-helpers.js';
+import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
 /** Bitmask flags for tracking which frame types have been received. */
@@ -21,6 +16,16 @@ const FRAME_FAT = 0x02; // 0xB0
 const FRAME_MUSCLE = 0x04; // 0xC0
 const FRAME_BMR = 0x08; // 0xD0
 const FRAME_ALL = FRAME_WEIGHT | FRAME_FAT | FRAME_MUSCLE | FRAME_BMR;
+
+/** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
+class SenssunSession {
+  cachedWeight = 0;
+  cachedFat = 0;
+  cachedWater = 0;
+  cachedMuscle = 0;
+  cachedBone = 0;
+  framesMask = 0;
+}
 
 /**
  * Adapter for the Senssun Fat Scale.
@@ -41,7 +46,6 @@ export class SenssunAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
   readonly match: MatchDescriptor = { priority: 260, names: { exact: ['senssun fat'] } };
   readonly charNotifyUuid = uuid16(0xfff1);
   readonly charWriteUuid = uuid16(0xfff2);
-  readonly normalizesWeight = true;
   /** User sync command: [0xA5, 0x10, 0x11, 0x1E, 0xA0, 0x00, 0x00, xor, 0x00]. */
   readonly unlockCommand = (() => {
     const bytes = [0xa5, 0x10, 0x11, 0x1e, 0xa0, 0x00, 0x00];
@@ -51,24 +55,13 @@ export class SenssunAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
   })();
   readonly unlockIntervalMs = 5000;
 
-  private cachedWeight = 0;
-  private cachedFat = 0;
-  private cachedWater = 0;
-  private cachedMuscle = 0;
-  private cachedBone = 0;
-  private framesMask = 0;
-  /**
-   * Composition pinned to the reading it was measured with (#394). See
-   * ReadingComposition for why computeMetrics cannot read the live cache on
-   * the watcher transports.
-   */
-  private readonly compByReading = new ReadingComposition<ScaleBodyComp>();
+  private s = new SenssunSession();
 
   matches(device: BleDeviceInfo): boolean {
     return matchesDescriptor(device, this.match);
   }
 
-  parseNotification(data: Buffer): ScaleReading | null {
+  parseNotification(data: Buffer): ScaleReading<ScaleBodyComp> | null {
     if (data.length < 2) return null;
 
     // Strip leading 0xFF padding bytes
@@ -83,68 +76,51 @@ export class SenssunAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
 
     if (type === 0xa5 && frame.length >= 6) {
       // Weight frame: BE uint16 at [1-2] / 10
-      this.cachedWeight = ((frame[1] << 8) | frame[2]) / 10;
-      this.framesMask |= FRAME_WEIGHT;
+      this.s.cachedWeight = ((frame[1] << 8) | frame[2]) / 10;
+      this.s.framesMask |= FRAME_WEIGHT;
       // Stable flag at [5] === 0xAA (informational, we still cache the weight)
     } else if (type === 0xb0 && frame.length >= 5) {
       // Fat/water frame: fat at [1-2] BE /10, water at [3-4] BE /10
-      this.cachedFat = ((frame[1] << 8) | frame[2]) / 10;
-      this.cachedWater = ((frame[3] << 8) | frame[4]) / 10;
-      this.framesMask |= FRAME_FAT;
+      this.s.cachedFat = ((frame[1] << 8) | frame[2]) / 10;
+      this.s.cachedWater = ((frame[3] << 8) | frame[4]) / 10;
+      this.s.framesMask |= FRAME_FAT;
     } else if (type === 0xc0 && frame.length >= 5) {
       // Muscle/bone frame: muscle at [1-2] BE /10, bone at [3-4] BE /10
-      this.cachedMuscle = ((frame[1] << 8) | frame[2]) / 10;
-      this.cachedBone = ((frame[3] << 8) | frame[4]) / 10;
-      this.framesMask |= FRAME_MUSCLE;
+      this.s.cachedMuscle = ((frame[1] << 8) | frame[2]) / 10;
+      this.s.cachedBone = ((frame[3] << 8) | frame[4]) / 10;
+      this.s.framesMask |= FRAME_MUSCLE;
     } else if (type === 0xd0) {
       // BMR frame — ignored but tracked
-      this.framesMask |= FRAME_BMR;
+      this.s.framesMask |= FRAME_BMR;
     }
 
-    if (this.cachedWeight <= 0) return null;
+    if (this.s.cachedWeight <= 0) return null;
 
-    const reading: ScaleReading = { weight: this.cachedWeight, impedance: 0 };
-    this.compByReading.pin(reading, this.snapshot());
-    return reading;
+    return { weight: this.s.cachedWeight, impedance: 0, scaleComposition: this.snapshot() };
   }
 
   private snapshot(): ScaleBodyComp {
     return {
-      fat: this.cachedFat > 0 ? this.cachedFat : undefined,
-      water: this.cachedWater > 0 ? this.cachedWater : undefined,
-      muscle: this.cachedMuscle > 0 ? this.cachedMuscle : undefined,
-      bone: this.cachedBone > 0 ? this.cachedBone : undefined,
+      fat: this.s.cachedFat > 0 ? this.s.cachedFat : undefined,
+      water: this.s.cachedWater > 0 ? this.s.cachedWater : undefined,
+      muscle: this.s.cachedMuscle > 0 ? this.s.cachedMuscle : undefined,
+      bone: this.s.cachedBone > 0 ? this.s.cachedBone : undefined,
     };
   }
 
-  /**
-   * Clear the previous weigh-in (#394).
-   *
-   * Adapters are shared singletons. Without this `framesMask` stays at
-   * FRAME_ALL for the life of the process once one session has seen all four
-   * frame types, which disarms
-   * the completeness gate permanently: the next session resolves on its
-   * first frame, exporting a still-unsettled weight (the 0xAA stable flag is
-   * deliberately ignored) with the previous person's composition.
-   */
   onSessionStart(): void {
-    this.cachedWeight = 0;
-    this.cachedFat = 0;
-    this.cachedWater = 0;
-    this.cachedMuscle = 0;
-    this.cachedBone = 0;
-    this.framesMask = 0;
+    this.s = new SenssunSession();
   }
 
   isComplete(reading: ScaleReading): boolean {
-    return reading.weight > 0 && (this.framesMask & FRAME_ALL) === FRAME_ALL;
+    return reading.weight > 0 && (this.s.framesMask & FRAME_ALL) === FRAME_ALL;
   }
 
-  computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
+  computeMetrics(reading: ScaleReading<ScaleBodyComp>, profile: UserProfile): BodyComposition {
     // Per-reading snapshot taken in parseNotification(). The live cache is only
     // a fallback for a reading this adapter did not build (direct callers,
-    // tests); see the compByReading field comment for why it cannot be trusted.
-    const comp = this.compByReading.of(reading, this.snapshot());
+    // tests); see `ScaleReading.scaleComposition` for why it cannot be trusted.
+    const comp = reading.scaleComposition ?? this.snapshot();
     return buildPayload(reading.weight, reading.impedance, comp, profile);
   }
 }

@@ -1,5 +1,5 @@
 import type { BodyComposition } from './scale-adapter.js';
-import type { UserConfig, WeightUnit } from '../config/schema.js';
+import type { WeightUnit } from '../config/schema.js';
 
 /**
  * The outcome of one export attempt.
@@ -22,16 +22,16 @@ export type ExportResultDetail = { name: string } & (
 export interface ExportContext {
   userName?: string;
   userSlug?: string;
-  userConfig?: UserConfig;
   driftWarning?: string;
   /** Display unit for weight-valued fields (`scale.weight_unit`); values stay in kg. */
   weightUnit?: WeightUnit;
   /**
    * When the reading was measured. The processor sets it on EVERY dispatch,
    * live or not, and the retry queue redelivers with the same value, so all
-   * attempts at one reading carry one time (D027, F-04, F-06). Exporters that
-   * write a time (`supportsBackdate`) must use this rather than `new Date()`;
-   * the `?? new Date()` fallbacks only cover a caller outside the processor.
+   * attempts at one reading carry one time (D027, F-04, F-06). Every exporter
+   * that writes a time must use this rather than `new Date()`, MQTT included
+   * (#478), whether or not it has `supportsBackdate`; the `?? new Date()`
+   * fallbacks only cover a caller outside the processor.
    */
   timestamp?: Date;
   /**
@@ -48,7 +48,11 @@ export interface ExportContext {
 
 export interface Exporter {
   readonly name: string;
-  /** True when this exporter records `context.timestamp` as the measurement time. Historical readings skip exporters without it. */
+  /**
+   * True when this exporter can record a PAST measurement at its own time
+   * (`context.timestamp`), so a stored record from the scale's memory lands
+   * where it belongs. Historical readings skip exporters without it.
+   */
   readonly supportsBackdate?: boolean;
   /** True when this exporter runs after the others and receives their outcomes in `context.exportResults`. */
   readonly reportsExports?: boolean;

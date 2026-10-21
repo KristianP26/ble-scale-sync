@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { HoffenAdapter } from '../../src/scales/hoffen.js';
-import type { ConnectionContext } from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
   defaultProfile,
+  makeConnectionContext,
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
 
@@ -41,12 +41,12 @@ describe('HoffenAdapter', () => {
       const writeFn = vi.fn().mockResolvedValue(undefined);
       const profile = defaultProfile({ gender: 'male', height: 183, age: 30 });
 
-      const ctx: ConnectionContext = {
+      const ctx = makeConnectionContext({
         write: writeFn,
         read: vi.fn(),
         subscribe: vi.fn(),
         profile,
-      };
+      });
 
       await adapter.onConnected!(ctx);
 
@@ -70,12 +70,12 @@ describe('HoffenAdapter', () => {
       const writeFn = vi.fn().mockResolvedValue(undefined);
       const profile = defaultProfile({ gender: 'female', height: 165, age: 25 });
 
-      const ctx: ConnectionContext = {
+      const ctx = makeConnectionContext({
         write: writeFn,
         read: vi.fn(),
         subscribe: vi.fn(),
         profile,
-      };
+      });
 
       await adapter.onConnected!(ctx);
 
@@ -248,16 +248,18 @@ describe('HoffenAdapter 0xFA frame handling (#405)', () => {
     adapter.onSessionStart?.();
 
     let written: Buffer | undefined;
-    await adapter.onConnected!({
-      profile: PROFILE,
-      deviceAddress: '',
-      availableChars: new Set<string>(),
-      write: async (_uuid, data) => {
-        written = Buffer.isBuffer(data) ? data : Buffer.from(data);
-      },
-      read: async () => Buffer.alloc(0),
-      subscribe: async () => undefined,
-    } as never);
+    await adapter.onConnected!(
+      makeConnectionContext({
+        profile: PROFILE,
+        deviceAddress: '',
+        availableChars: new Set<string>(),
+        write: async (_uuid, data) => {
+          written = Buffer.isBuffer(data) ? data : Buffer.from(data);
+        },
+        read: async () => Buffer.alloc(0),
+        subscribe: async () => undefined,
+      }),
+    );
 
     expect(written).toBeDefined();
     // Bytes [3..4] of the command are age and height, which decode as a
@@ -279,16 +281,18 @@ describe('HoffenAdapter 0xFA frame handling (#405)', () => {
     const adapter = new HoffenAdapter();
     adapter.onSessionStart?.();
     let written: Buffer | undefined;
-    await adapter.onConnected!({
-      profile: PROFILE,
-      deviceAddress: '',
-      availableChars: new Set<string>(),
-      write: async (_uuid, data) => {
-        written = Buffer.isBuffer(data) ? data : Buffer.from(data);
-      },
-      read: async () => Buffer.alloc(0),
-      subscribe: async () => undefined,
-    } as never);
+    await adapter.onConnected!(
+      makeConnectionContext({
+        profile: PROFILE,
+        deviceAddress: '',
+        availableChars: new Set<string>(),
+        write: async (_uuid, data) => {
+          written = Buffer.isBuffer(data) ? data : Buffer.from(data);
+        },
+        read: async () => Buffer.alloc(0),
+        subscribe: async () => undefined,
+      }),
+    );
 
     adapter.onSessionStart?.();
     // A new session has written nothing yet, so nothing is being compared

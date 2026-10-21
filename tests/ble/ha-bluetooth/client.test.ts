@@ -19,8 +19,10 @@ class FakeWs implements WsLike {
   closed: { code?: number; reason?: string } | null = null;
   private listeners: Record<string, ((ev: unknown) => void)[]> = {};
 
-  addEventListener(type: string, listener: (ev: unknown) => void): void {
-    (this.listeners[type] ??= []).push(listener);
+  // One signature for all of WsLike's overloads; emit() hands each listener the
+  // event shape its type names.
+  addEventListener(type: string, listener: (ev: never) => void): void {
+    (this.listeners[type] ??= []).push(listener as (ev: unknown) => void);
   }
   send(data: string): void {
     this.sent.push(JSON.parse(data) as Record<string, unknown>);

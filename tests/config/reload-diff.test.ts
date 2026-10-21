@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { diffRestartRequired } from '../../src/config/reload-diff.js';
 import type { AppConfig } from '../../src/config/schema.js';
 
-function baseConfig(overrides: Partial<AppConfig> = {}): AppConfig {
+// Fixtures name only the keys a case is about; the diff reads nothing else.
+// Partial all the way down, so a renamed key still fails tsc.
+type DeepPartial<T> = T extends object ? { [K in keyof T]?: DeepPartial<T[K]> } : T;
+
+function baseConfig(overrides: DeepPartial<AppConfig> = {}): AppConfig {
   return {
     version: 1,
     scale: { weight_unit: 'kg', height_unit: 'cm' },
@@ -187,6 +191,14 @@ describe('diffRestartRequired', () => {
       oldValue: 'false',
       newValue: 'true',
     });
+  });
+
+  it('flags runtime.watch_config, which only decides at start-up whether the watcher runs', () => {
+    const a = baseConfig({ runtime: { watch_config: true } } as Partial<AppConfig>);
+    const b = baseConfig({ runtime: { watch_config: false } } as Partial<AppConfig>);
+    expect(diffRestartRequired(a, b)).toEqual([
+      { key: 'runtime.watch_config', oldValue: 'true', newValue: 'false' },
+    ]);
   });
 
   it('flags ble.adapter_privacy, which is read once at start-up (#417)', () => {

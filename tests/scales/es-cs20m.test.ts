@@ -878,7 +878,7 @@ describe('EsCs20mAdapter 0x18 result (#436)', () => {
     expect(adapter.completionHoldMs).toBeUndefined();
 
     const result = adapter.parseNotification(hex(RESULT_404))!;
-    expect(result).toEqual({ weight: 139.1, impedance: 404 });
+    expect(result).toEqual({ weight: 139.1, impedance: 404, scaleComposition: 'bia' });
     expect(adapter.isComplete(result)).toBe(true);
     expect(adapter.isFinal(result)).toBe(false);
     expect(adapter.completionHoldMs).toBe(30_000);
@@ -893,7 +893,7 @@ describe('EsCs20mAdapter 0x18 result (#436)', () => {
     const adapter = await connected();
     feed(adapter, [POWER_ON_436, W_139_20, W_139_20, W_139_20, W_139_20]);
     const result = adapter.parseNotification(hex(RESULT_SOCKS))!;
-    expect(result).toEqual({ weight: 139.2, impedance: 0 });
+    expect(result).toEqual({ weight: 139.2, impedance: 0, scaleComposition: 'bia' });
     expect(adapter.isComplete(result)).toBe(true);
   });
 
@@ -934,11 +934,12 @@ describe('EsCs20mAdapter 0x18 result (#436)', () => {
   it('ignores weight frames after the 0x18 and exports the 0x18 on power-off', async () => {
     const adapter = await connected();
     const result = feed(adapter, [POWER_ON_436, W_139_10, RESULT_404])!;
-    expect(result).toEqual({ weight: 139.1, impedance: 404 });
+    expect(result).toEqual({ weight: 139.1, impedance: 404, scaleComposition: 'bia' });
     expect(adapter.parseNotification(hex(W_136_40))).toBeNull();
     expect(adapter.parseNotification(hex(POWER_OFF_436))).toEqual({
       weight: 139.1,
       impedance: 404,
+      scaleComposition: 'bia',
     });
   });
 
@@ -998,7 +999,7 @@ describe('EsCs20mAdapter 0x18 result (#436)', () => {
       const adapter = await connected();
       const p = defaultProfile();
       const result = feed(adapter, [POWER_ON_436, W_139_10, RESULT_4700])!;
-      expect(result).toEqual({ weight: 139.1, impedance: 4700 });
+      expect(result).toEqual({ weight: 139.1, impedance: 4700, scaleComposition: 'bia' });
       expect(adapter.computeMetrics(result, p)).toEqual(buildPayload(139.1, 4700, {}, p));
     });
 

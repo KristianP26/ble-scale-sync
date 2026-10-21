@@ -1,0 +1,151 @@
+{
+  "settled": {
+    "by": "reading",
+    "atMs": 4000
+  },
+  "reading": {
+    "weight": 76.35,
+    "impedance": 0
+  },
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "ffb2"
+    },
+    {
+      "seq": 1,
+      "atMs": 0,
+      "uuid": "ffb3"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 2,
+      "atMs": 0,
+      "uuid": "ffb1",
+      "hex": "000300b000000000000000000000000000000010",
+      "withResponse": true
+    },
+    {
+      "seq": 3,
+      "atMs": 150,
+      "uuid": "ffb1",
+      "hex": "011a00b86a96d1e880f001ac17709813880f0017",
+      "withResponse": true
+    },
+    {
+      "seq": 4,
+      "atMs": 300,
+      "uuid": "ffb1",
+      "hex": "011a010000000669636f6d6f6e0000000000000b",
+      "withResponse": true
+    },
+    {
+      "seq": 5,
+      "atMs": 450,
+      "uuid": "ffb1",
+      "hex": "021a00b86a96d1e880f001b11770ac13880f0030",
+      "withResponse": true
+    },
+    {
+      "seq": 6,
+      "atMs": 600,
+      "uuid": "ffb1",
+      "hex": "021a010000000669636f6d6f6e0000000000002b",
+      "withResponse": true
+    },
+    {
+      "seq": 7,
+      "atMs": 750,
+      "uuid": "ffb1",
+      "hex": "035200bd074f68747470733a2f2f617069322e38",
+      "withResponse": true
+    },
+    {
+      "seq": 8,
+      "atMs": 900,
+      "uuid": "ffb1",
+      "hex": "035201737065656469616e63652e636f6d2f612e",
+      "withResponse": true
+    },
+    {
+      "seq": 9,
+      "atMs": 1050,
+      "uuid": "ffb1",
+      "hex": "03520270692f6d6f62696c652f626f6479466124",
+      "withResponse": true
+    },
+    {
+      "seq": 10,
+      "atMs": 1200,
+      "uuid": "ffb1",
+      "hex": "035203744d6561737572656d656e742f72657030",
+      "withResponse": true
+    },
+    {
+      "seq": 11,
+      "atMs": 1350,
+      "uuid": "ffb1",
+      "hex": "0352046f72743f70726f746f636f6c3d3326732f",
+      "withResponse": true
+    },
+    {
+      "seq": 12,
+      "atMs": 1500,
+      "uuid": "ffb1",
+      "hex": "0352056e3d00000000000000000000000000002b",
+      "withResponse": true
+    },
+    {
+      "seq": 13,
+      "atMs": 1650,
+      "uuid": "ffb1",
+      "hex": "041a00b86a96d1e880f001b141a0ac13880f002a",
+      "withResponse": true
+    },
+    {
+      "seq": 14,
+      "atMs": 1800,
+      "uuid": "ffb1",
+      "hex": "041a010000000669636f6d6f6e0000000000002b",
+      "withResponse": true
+    },
+    {
+      "seq": 15,
+      "atMs": 1950,
+      "uuid": "ffb1",
+      "hex": "051500b40101b141a0ac13880f0000000006692d",
+      "withResponse": true
+    },
+    {
+      "seq": 16,
+      "atMs": 2100,
+      "uuid": "ffb1",
+      "hex": "051501636f6d6f6e00000000000000000000003c",
+      "withResponse": true
+    },
+    {
+      "seq": 17,
+      "atMs": 2250,
+      "uuid": "ffb1",
+      "hex": "060300b04d00000000000000000000000000003d",
+      "withResponse": true
+    }
+  ],
+  "rxDropped": 0,
+  "payload": {
+    "weight": 76.35,
+    "impedance": 0,
+    "bmi": 22.8,
+    "bodyFatPercent": 18.06,
+    "waterPercent": 59.82,
+    "boneMass": 2.63,
+    "muscleMass": 59.93,
+    "visceralFat": 8,
+    "physiqueRating": 5,
+    "bmr": 1762,
+    "metabolicAge": 31
+  }
+}

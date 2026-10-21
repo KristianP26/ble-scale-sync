@@ -1,0 +1,22 @@
+{
+  "returned": true,
+  "exports": [],
+  "computeMetrics": [],
+  "queued": [],
+  "lastKnownWeightWrites": [],
+  "replayAnchorWrites": [],
+  "updateChecks": 0,
+  "display": [],
+  "after": {
+    "lastExportedWeights": {},
+    "lastExportedAt": {},
+    "lastKnownWeight": {
+      "dad": 82,
+      "mom": 60
+    }
+  },
+  "log": [
+    "[Sync] 1 stored reading(s) from the scale's memory, no live weigh-in.",
+    "[Sync] [historic 2026-10-21T03:00:00.000Z] Dropping a stored record of scale user 1: Dad and Mom all claim that slot (beurer_user_index)."
+  ]
+}

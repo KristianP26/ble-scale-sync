@@ -10,6 +10,8 @@ import {
   biaFatIfPlausible,
   compositionRejection,
   isPlausibleImpedance,
+  isPlausibleBmr,
+  isPlausibleMetabolicAge,
   IMPEDANCE_MIN_OHM,
   IMPEDANCE_MAX_OHM,
 } from '../src/scales/body-comp-helpers.js';
@@ -423,6 +425,105 @@ describe('buildPayload: scale composition is validated as a whole (D028, E-15)',
   it('accepts a complete, plausible set unchanged', () => {
     expect(compositionRejection({ fat: 22, water: 55, muscle: 42, bone: 3.2 })).toBeNull();
     expect(compositionRejection({})).toBeNull();
+  });
+});
+
+// D078: an adapter may pass the scale's own BMR and body age. Each replaces its
+// formula on its own, only inside its band and only with an accepted
+// composition. 80 kg, 183 cm, 30, male: the formulas give BMR 1798 (Mifflin-St
+// Jeor 1798.75) and metabolic age 31; athlete 1888 and 26.
+describe("buildPayload: the scale's own BMR and metabolic age (D078)", () => {
+  const p: UserProfile = { height: 183, age: 30, gender: 'male', isAthlete: false };
+  const athlete: UserProfile = { ...p, isAthlete: true };
+
+  it('calculates both when the scale sent neither', () => {
+    expect(buildPayload(80, 0, { fat: 22 }, p)).toMatchObject({ bmr: 1798, metabolicAge: 31 });
+    expect(buildPayload(80, 0, { fat: 22 }, athlete)).toMatchObject({
+      bmr: 1888,
+      metabolicAge: 26,
+    });
+  });
+
+  it("exports the scale's BMR and body age and leaves everything else as it was", () => {
+    const own = buildPayload(80, 0, { fat: 22, bmr: 1650, metabolicAge: 35 }, p);
+    expect(own).toEqual({ ...buildPayload(80, 0, { fat: 22 }, p), bmr: 1650, metabolicAge: 35 });
+  });
+
+  // The trap: the formula metabolic age compares the formula BMR with the
+  // formula BMR at 25. Fed the scale's 1500 it would read 30 + trunc(323.75 /
+  // 15) = 51.
+  it("keeps the formula metabolic age, from the formula BMR, with only the scale's BMR", () => {
+    expect(buildPayload(80, 0, { fat: 22, bmr: 1500 }, p)).toMatchObject({
+      bmr: 1500,
+      metabolicAge: 31,
+    });
+  });
+
+  it("keeps the formula BMR with only the scale's body age", () => {
+    expect(buildPayload(80, 0, { fat: 22, metabolicAge: 35 }, p)).toMatchObject({
+      bmr: 1798,
+      metabolicAge: 35,
+    });
+  });
+
+  // Without a body fat value there is no measurement they could come from.
+  it('ignores them from a scale that sends no body fat', () => {
+    expect(buildPayload(80, 0, { bmr: 1650, metabolicAge: 35 }, p)).toMatchObject({
+      bmr: 1798,
+      metabolicAge: 31,
+    });
+  });
+
+  // Both describe the body the rejected set measured, so they go with it.
+  it('drops both with a rejected composition', () => {
+    const rejected = buildPayload(80, 0, { fat: 22, water: 0, bmr: 1650, metabolicAge: 35 }, p);
+    expect(rejected).toEqual(buildPayload(80, 0, {}, p));
+    expect(rejected).toMatchObject({ bmr: 1798, metabolicAge: 31 });
+  });
+
+  // 1650 would be 1732 with the athlete factor; 35 is above the age of 30, so
+  // the athlete cap would make it 25.
+  it('applies no athlete adjustment to them', () => {
+    expect(buildPayload(80, 0, { fat: 22, bmr: 1650, metabolicAge: 35 }, athlete)).toMatchObject({
+      bmr: 1650,
+      metabolicAge: 35,
+    });
+  });
+
+  it('exports them as whole numbers', () => {
+    expect(buildPayload(80, 0, { fat: 22, bmr: 1650.9, metabolicAge: 35.7 }, p)).toMatchObject({
+      bmr: 1650,
+      metabolicAge: 35,
+    });
+  });
+
+  it.each([
+    [499, false],
+    [500, true],
+    [5000, true],
+    [5001, false],
+    [0, false],
+    [65535, false],
+    [Number.NaN, false],
+    [Number.POSITIVE_INFINITY, false],
+  ])('BMR %d kcal: from the scale %s', (kcal, used) => {
+    expect(isPlausibleBmr(kcal)).toBe(used);
+    expect(buildPayload(80, 0, { fat: 22, bmr: kcal }, p).bmr).toBe(used ? kcal : 1798);
+  });
+
+  it.each([
+    [0, false],
+    [11, false],
+    [12, true],
+    [120, true],
+    [121, false],
+    [255, false],
+    [Number.NaN, false],
+  ])('body age %d: from the scale %s', (years, used) => {
+    expect(isPlausibleMetabolicAge(years)).toBe(used);
+    expect(buildPayload(80, 0, { fat: 22, metabolicAge: years }, p).metabolicAge).toBe(
+      used ? years : 31,
+    );
   });
 });
 

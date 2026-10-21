@@ -53,7 +53,8 @@ export interface LiveWeight {
   weight: number;
 }
 
-export interface ScaleReading {
+export interface ScaleReading<C = unknown> {
+  /** Kilograms, whatever unit the scale displays: the decoder converts. */
   weight: number;
   /**
    * Raw impedance in ohms as the scale reported it, or 0 when the frame has
@@ -107,6 +108,17 @@ export interface ScaleReading {
    * one; never default it.
    */
   userIndex?: number;
+  /**
+   * What `computeMetrics()` needs from the frames beyond weight and impedance:
+   * the composition the scale measured, an algorithm byte, a protocol record.
+   * The adapter that emitted the reading defines `C` and is its only reader.
+   *
+   * Set at emit time, never read back from the adapter's live cache: on the
+   * watcher transports the next session can start before this reading reaches
+   * `computeMetrics()` (#394). Plain data only, so a copy of the reading keeps
+   * it (ADR D077). Exporters never see it, only the `computeMetrics()` output.
+   */
+  scaleComposition?: C;
 }
 
 export interface UserProfile {
@@ -241,9 +253,13 @@ export interface ConnectionContext {
   /**
    * Manufacturer data of the advertisement the transport matched the device on,
    * in the same shape as `BleDeviceInfo.manufacturerData` (company id apart,
-   * `data` without it). Absent when the transport had none. Lets an adapter
-   * read per-unit flags a scale only announces there, e.g. the QN impedance
-   * encoding (#461).
+   * `data` without it), or, where that one had none, the last one the same
+   * address advertised earlier in this process (node-ble, noble, esphome-proxy;
+   * #463). Absent when the transport had none at all; those three never hand
+   * over a company id without bytes. Lets an adapter read per-unit flags a
+   * scale only announces there, e.g. the QN impedance encoding (#461); since it
+   * can be from an earlier advertisement of the unit, read only fields that do
+   * not change between its advertisements.
    */
   manufacturerData?: { id: number; data: Buffer };
   /**
@@ -295,96 +311,13 @@ export interface AdapterRuntimeConfig {
    * other adapter.
    */
   displayUnit?: ScaleDisplayUnit;
-  /**
-   * Protocol byte the QN handshake echoes back (`ble.qn_protocol_byte`).
-   *
-   * The value the firmware accepts differs across the family and cannot be
-   * detected: a scale on the wrong byte acknowledges every command and simply
-   * never streams a weight, which looks identical to nobody standing on it.
-   * The frame length picks a default; this overrides it (#75, #331).
-   */
-  qnProtocolByte?: number;
-  /**
-   * Slot mask of the QN A00D user-delete frame `a0 0d 04 <mask> ..`
-   * (`ble.qn_report_byte`). Unset, the frame is not sent at all; set, it is sent
-   * in every session with this mask, and the scale deletes the user slots the
-   * mask selects (bit i-1 = slot i). Opt-in only, for an install that stopped
-   * reporting without it (#461).
-   */
-  qnReportByte?: number;
-  /**
-   * Acknowledge every live QN weight frame with its own weight
-   * (`ble.qn_weight_ack`).
-   *
-   * One reading of a vendor-app capture has the app answering each 0x10 frame
-   * with `a2 06 01 <that frame's weight>` (#235). The adapter does this on the
-   * 20-byte extended dialect, which is the only one that capture covers, and
-   * never for a 20-byte live frame: on the 19-byte dialect that frame is read
-   * without writing anything back (#331, D037), on the extended one its layout
-   * is not decoded yet. Unset keeps that gate; true enables it on every
-   * dialect, for a scale that completes the handshake and then goes quiet;
-   * false disables it everywhere.
-   *
-   * True also sends the configured weight anchor: on the extended dialect in
-   * the ready-time A2, on every other dialect as two A2 frames right after
-   * START, as two Android captures of the Arboleaf app show (#331, #75). On
-   * the 19-byte dialect it also drops the ready-time A2 and sends the A00D #2
-   * profile frame from the user's age and height (#331).
-   */
-  qnWeightAck?: boolean;
-  /**
-   * User key for the QN A00D #2 profile frame (`ble.qn_user_key`, 1 to 9999,
-   * #463).
-   *
-   * Per the vendor's published SDK the key is the one the vendor app registered
-   * the user slot with, and the scale keeps it per slot; the vendor apps send
-   * 1000, openScale's frame 8. Set, the 18- and 19-byte dialects send the
-   * vendor-app profile frame with this key and the first user's age, height,
-   * sex and (18-byte only) athlete setting, and no ready-time A2, also without
-   * `qnWeightAck`. Unset changes nothing; the 20-byte and classic dialects
-   * ignore it.
-   */
-  qnUserKey?: number;
-  /**
-   * Send the two 0xA4 0x0F frames the Arboleaf vendor app sends between START
-   * and the first live 0x10 frame (`ble.qn_a4_prelude`, #331).
-   *
-   * Off by default and opt-in per install: the frames are replayed verbatim
-   * from one reporter's HCI capture of their own unit, their payload is not
-   * decoded, and every other QN scale in the registry reads today without
-   * them.
-   */
-  qnA4Prelude?: boolean;
-  /**
-   * Send the 9-byte form of the QN 0x20 time-sync frame
-   * (`ble.qn_time_sync_long`, #331).
-   *
-   * The vendor app's frame carries one extra byte before the checksum and is
-   * otherwise identical to ours, timestamp included. The byte is the UTC offset
-   * (`0x08` = UTC+2 in the captures), and the long form sends the host's. Off by
-   * default: every QN scale in the registry reads today on the 8-byte form.
-   */
-  qnTimeSyncLong?: boolean;
-
-  /**
-   * Send the 10-byte form of the QN 0x13 config frame, instead of the 9-byte
-   * one (`ble.qn_config_long`, #331).
-   *
-   * The last documented difference between this app's QN handshake and the
-   * vendor app's. Undecoded, opt-in, off by default.
-   */
-  qnConfigLong?: boolean;
-
-  /**
-   * Send `1f 05 <protocol type> 10 <sum>` after the 0x16 of a complete
-   * 19-byte QN result block, as the vendor's published SDK does
-   * (`ble.qn_result_ack`, #331). Opt-in, off by default: its effect on the
-   * scale is not known yet.
-   */
-  qnResultAck?: boolean;
-
   /** Every configured user's weight hints, in config order (see UserWeightHint). */
   userWeights?: readonly UserWeightHint[];
+  /**
+   * The adapter-owned `ble.*` keys, camelCased (`qn_user_key` -> `qnUserKey`,
+   * D076). The adapter that owns a key types it in its own configure().
+   */
+  readonly [option: string]: unknown;
 }
 
 /**
@@ -406,9 +339,6 @@ export interface ScaleAdapterCore {
    * metadata, not a capability: the resolver reads it off every array element.
    */
   readonly match?: MatchDescriptor;
-
-  /** True if parseNotification() already converts any non-kg reading to kg. */
-  readonly normalizesWeight?: boolean;
 
   /**
    * True if this adapter's characteristics need a bonded/encrypted BLE link
@@ -488,15 +418,9 @@ export interface ScaleAdapterCore {
    * watcher transports the watcher keeps running while `loop.ts` awaits
    * `processReading()` (network exports included) and can open the next GATT
    * session in the meantime. An adapter that carries composition out of band in
-   * its own fields must pin it onto the reading it belongs to, taking the
-   * snapshot at emit time, rather than read the live cache in `computeMetrics`.
-   * Use `ReadingComposition` from `body-comp-helpers.ts` for that: it owns the
-   * `WeakMap` and the reasoning, and `of()` deliberately checks `has()` rather
-   * than falling back on a nullish value, so an adapter whose "no composition"
-   * state is itself null stays correct. Hand-rolling it is how six copies of
-   * the same paragraph drifted apart in type; `beurer-bf720`,
-   * `beurer-sanitas`, `hoffen`, `mgb`, `medisana-bs44x` and `senssun` are those
-   * copies and are still to be converted.
+   * its own fields must put it on the reading it belongs to
+   * (`ScaleReading.scaleComposition`), taking the snapshot at emit time, rather
+   * than read the live cache in `computeMetrics`.
    *
    * It is a GATT-session hook only. The broadcast path never opens a session,
    * so `parseBroadcast` / `parseServiceData` run without it ever firing. Adding
@@ -566,16 +490,6 @@ export interface ScaleAdapterCore {
    */
   restoreDedupMark?(mark: number): void;
 
-  /**
-   * Set only on the wrapper produced by `ble.force_scale_adapter`.
-   *
-   * Detection normally guarantees that an adapter was selected BY the
-   * advertisement in front of it, and parts of the pipeline lean on that. A
-   * forced adapter breaks the guarantee on purpose, so those places need to be
-   * able to tell (see `hasParseableBroadcastSource`).
-   */
-  readonly isForcedOverride?: boolean;
-
   matches(device: BleDeviceInfo): boolean;
   parseNotification(data: Buffer): ScaleReading | null;
   isComplete(reading: ScaleReading): boolean;
@@ -601,6 +515,21 @@ export interface GattWiring {
    * charNotifyUuid + charWriteUuid pair.
    */
   readonly characteristics?: CharacteristicBinding[];
+  /**
+   * True for a frame that only answers a command of ours, or reports the scale's
+   * own state, and so says nothing about a weigh-in: the Yunmai answers every
+   * GET_PROTOCOL_VERSION we write, every 5 s, with a 5-byte 0x05 frame (#474).
+   * Such a frame does not restart the session's idle timeout; every other frame
+   * does, including frames the parser rejects, since an unstable QN 0x10 is a
+   * weigh-in in progress. It is still logged, acknowledged (buildAck) and parsed,
+   * and it still counts as the scale having answered (the node-ble no-reading
+   * classification, D041).
+   *
+   * Return true only for a frame type the protocol defines as such a reply or
+   * report, never for one that may carry a weight. Must not throw and must not do
+   * I/O: it runs on every notification. GATT only (D070).
+   */
+  isStatusFrame?(charUuid: string, data: Buffer): boolean;
 }
 
 /**
@@ -626,6 +555,9 @@ export interface Unlockable {
  * dual GATT+broadcast). This is a NAMED OPTIONAL GROUPING, not a hard contract:
  * `implements BroadcastSource` documents intent and shape-checks whatever member
  * the class declares, but does not force any single member to exist.
+ *
+ * The parsers may keep state (settling, de-dup, a cached key), so a caller
+ * hands each advertisement to them once.
  */
 export interface BroadcastSource {
   /**
@@ -669,8 +601,7 @@ export interface BroadcastSource {
  * UUID so the adapter can route by char. This is a GATT notify concern (it pairs
  * with GattWiring `characteristics` and an `onConnected` handshake), NOT a
  * passive-broadcast parser, which is why it is its own mixin and not part of
- * BroadcastSource. Declared by trisa, beurer-bf720, eufy-p2, robi-s9, ade-a2,
- * renpho, renpho-msc04 and qn-scale.
+ * BroadcastSource.
  */
 export interface MultiCharNotify {
   /**

@@ -18,7 +18,7 @@ A weigh-in a scale stored in its memory and sends later keeps its original time.
 | Target                          | Description                                            |
 | ------------------------------- | ------------------------------------------------------ |
 | [**Garmin Connect**](#garmin)   | Automatic body composition upload, no phone app needed |
-| [**MQTT**](#mqtt)               | Home Assistant auto-discovery with 11 sensors, LWT     |
+| [**MQTT**](#mqtt)               | Home Assistant auto-discovery with 12 sensors, LWT     |
 | [**InfluxDB**](#influxdb)       | Time-series database (v2 and v3)                       |
 | [**Webhook**](#webhook)         | Any HTTP endpoint (n8n, Make, Zapier, custom APIs)     |
 | [**Ntfy**](#ntfy)               | Push notifications to phone/desktop                    |
@@ -82,7 +82,7 @@ global_exporters:
 :::
 
 ::: tip Skip metabolic age
-Set `skip_metabolic_age: true` to upload everything except metabolic age. The estimate compares your BMR with a reference BMR for the same weight and height. Unless `is_athlete` is set, weight and height cancel and the result depends on age alone. Either way it carries no body composition. Garmin Connect then shows no metabolic age on the entry. Garmin's own Fitness Age is calculated separately and is not affected.
+Set `skip_metabolic_age: true` to upload everything except metabolic age. On most scales it is an estimate that compares your BMR with a reference BMR for the same weight and height. Unless `is_athlete` is set, weight and height cancel and the result depends on age alone. Either way it carries no body composition. The [19-byte QN scale](/guide/supported-scales#arboleaf-qn-scale-19-byte-dialect) sends a body age of its own, which is used instead when its own body composition is; this option skips that one too. Garmin Connect then shows no metabolic age on the entry. Garmin's own Fitness Age is calculated separately and is not affected.
 
 ```yaml
 global_exporters:
@@ -147,7 +147,7 @@ v1.8.1 bumps `garminconnect` to 0.3.x, which replaced the old garth-based OAuth 
 
 ## MQTT {#mqtt}
 
-Publishes body composition as JSON to an MQTT broker. **Home Assistant auto-discovery** is enabled by default; all 11 metrics (weight, impedance and the nine body composition values) appear as sensors grouped under a single device, with availability tracking (LWT) and display precision per metric.
+Publishes body composition and the time of the weigh-in as JSON to an MQTT broker. **Home Assistant auto-discovery** is enabled by default; all 11 metrics (weight, impedance and the nine body composition values) and the time of the last weigh-in appear as 12 sensors grouped under one device per user, with availability tracking (LWT) and display precision per metric.
 
 ::: tip Home Assistant users
 If you run Home Assistant OS or Supervised, the [Home Assistant Add-on](./guide/home-assistant-addon) auto-detects the Mosquitto broker through the Supervisor API, so you do not need to wire MQTT manually.
@@ -171,6 +171,49 @@ global_exporters:
     broker_url: 'mqtts://broker.example.com:8883'
     username: myuser
     password: '${MQTT_PASSWORD}'
+```
+
+Each weigh-in is one JSON message on `<topic>/<user slug>`, retained unless `retain` is `false`. Masses are in kg whatever `scale.weight_unit` is set to:
+
+```json
+{
+  "timestamp": "2026-10-20T21:30:00.000Z",
+  "weight": 80,
+  "impedance": 500,
+  "bmi": 23.9,
+  "bodyFatPercent": 18.5,
+  "waterPercent": 55.2,
+  "boneMass": 3.1,
+  "muscleMass": 62.4,
+  "visceralFat": 8,
+  "physiqueRating": 5,
+  "bmr": 1750,
+  "metabolicAge": 30
+}
+```
+
+`timestamp` is when the weigh-in was measured, in ISO 8601 UTC: the scale's own time when the scale sends one, otherwise the time the reading reached the app. In Home Assistant it is the **Last Weigh-in** sensor, whose state Home Assistant keeps in whole seconds (`2026-10-20T21:30:00+00:00`). Past measurements a scale replays from its memory do not go to MQTT (see [Historical readings](#historical-readings)), so it is always the last live weigh-in.
+
+To tell a new weigh-in from an old one, use that value, not a sensor's `last_changed`. The message is retained, so after a Home Assistant restart every sensor's `last_changed` is the time of the restart, and a weigh-in with exactly the previous weight does not change the weight sensor at all. The timestamp changes with every weigh-in, identical weights included, and keeps its value across a restart, so comparing it with the last one you handled is the reliable check. A state trigger on the sensor needs `not_from`, because after a Home Assistant restart or a reconnect to the broker the sensor comes back from `unknown` or `unavailable` with the old time. The trigger then also skips a weigh-in made while Home Assistant was down.
+
+```yaml
+triggers:
+  - trigger: state
+    entity_id: sensor.ble_scale_dad_last_weigh_in # your Last Weigh-in sensor
+    not_from:
+      - unknown
+      - unavailable
+```
+
+With `ha_discovery: false`, define the sensor yourself:
+
+```yaml
+mqtt:
+  sensor:
+    - name: 'Last Weigh-in'
+      state_topic: 'scale/body-composition/dad' # <topic>/<user slug>
+      value_template: '{{ value_json.timestamp }}'
+      device_class: timestamp
 ```
 
 Availability uses an MQTT last will: when the app loses the broker without a clean shutdown (a crash, a network drop), the broker publishes `offline` for it, so Home Assistant shows the sensors as unavailable until the app reconnects.
@@ -535,7 +578,7 @@ Some scales keep measurements taken while nothing was listening and replay them 
 
 Several other scales replay a cache without a usable time. Salter is the explicit case: its stored records are delivered as ordinary readings on purpose, because a dated reading it could not date correctly would be buffered rather than exported.
 
-A reading with a timestamp is sent **only to exporters that can record it at that time**:
+A past measurement (a record from the scale's memory) is sent **only to exporters that can record it at its own time**:
 
 | Exporter    | Accepts a backdated reading |
 | ----------- | --------------------------- |
@@ -553,7 +596,7 @@ A reading with a timestamp is sent **only to exporters that can record it at tha
 | `strava`    | No                          |
 | `telegram`  | No                          |
 
-The five that say No have no way to express "this happened on Tuesday": an MQTT sensor state and a push notification are both about now, so replaying a three-day-old weigh-in through them would put a stale number in front of you as if it had just been measured.
+The five that say No cannot file a weigh-in under an earlier date. A push notification is about now, so replaying a three-day-old weigh-in through it would put a stale number in front of you as if it had just been measured. MQTT does send the measurement time, but its topic holds one retained state, the latest weigh-in: a replayed record would overwrite it with an older one and move the Last Weigh-in sensor back.
 
 So a scale that replays its cache fills in your Garmin and InfluxDB history while Home Assistant shows only the live weigh-ins. The log says so each time it happens:
 
@@ -565,7 +608,7 @@ A past measurement within 0.1 kg of the last live weigh-in this app exported for
 
 The weight and time of each user's last live weigh-in are kept in `.last-live-weigh-ins.json` next to `config.yaml` (readable by its owner only), so the same holds after a restart and from one single-shot run to the next. With the settings in `.env` alone, without a `config.yaml`, nothing is kept. When nothing is saved for a user (the first start of a version that keeps the file, or after the file is gone), the comparison is with `last_known_weight` alone: a past measurement within 0.1 kg of it is skipped whenever it was taken, since nothing says whether it came before or after that weigh-in, and the log says no time is saved. The same goes for a saved weight 0.5 kg or more away from `last_known_weight` when the app starts, which means `config.yaml` changed without the file (an older version ran in between, or `config.yaml` was restored from a backup). That is checked only at the start: after a hand edit of `last_known_weight` while the app runs, the saved weigh-in counts until the next start. With Docker and the single-file `config.yaml` mount the file lives inside the container, so a re-create (an image update, Watchtower) starts over that way; on the Home Assistant add-on it is in `/data`. Deleting it while the app is stopped is safe and has the same effect. An entry is kept per user `slug`: two instances sharing a directory and a slug overwrite each other's entry, and the entry of a removed user is used again by a later user given the same slug.
 
-A reading without a recorded time, or one received within 5 minutes of the time it carries, is a live reading and goes to every configured exporter. The exception is a reading the scale's protocol itself marks as one from its memory: that is a past measurement however recent its time. Today these are the stored weigh-ins of QN scales with an 18-byte scale-info frame and [`ble.qn_user_key`](/guide/configuration) set, and only those the scale kept for user slot 1 from more than 90 seconds before the connection, handed over in a connection in which the scale accepted the profile ble-scale-sync sent for the first user with that key. One from the last 90 seconds is the weigh-in of that connection and is a live reading, unless the scale sends it while that connection's live weigh-in waits for the stored ones; it is then not exported.
+A reading without a recorded time, or one received within 5 minutes of the time it carries, is a live reading and goes to every configured exporter. The exception is a reading the scale's protocol itself marks as one from its memory: that is a past measurement however recent its time. Today these are the stored weigh-ins of QN scales with an 18-byte scale-info frame and [`ble.qn_user_key`](/guide/configuration) set, and only those the scale kept for user slot 1 or for no user from more than 90 seconds before the connection, handed over in a connection in which the scale accepted the profile ble-scale-sync sent for the first user with that key. One from the last 90 seconds is the weigh-in of that connection and is a live reading, unless the scale sends it while that connection's live weigh-in waits for the stored ones; it is then not exported.
 
 With [`runtime.no_reading_rescan_delay`](/guide/configuration#runtime) the app waits between sessions, and a weigh-in the scale keeps during that wait can reach the app more than 5 minutes after it was taken. It is then a past measurement too.
 

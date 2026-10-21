@@ -17,7 +17,6 @@ import {
   uuid16,
   buildPayload,
   isPlausibleImpedance,
-  ReadingComposition,
   WEIGHT_ONLY_HOLD_MS,
 } from './body-comp-helpers.js';
 import { wla07 } from './wla07.js';
@@ -167,6 +166,25 @@ export function ac27ImpedanceOhm(raw: number, weightKg: number): number {
   return Math.max(0, (raw - 1000 + weightKg * 10 * -0.4) / 0.6 / 10);
 }
 
+/** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
+class ActiveEraSession {
+  /** Kilograms of this session's last locked D5 frame, 0 when none. */
+  lockKg = 0;
+  /** The current run of identical unlocked D5 weights. */
+  run = { grams: -1, count: 0, firstAt: 0 };
+  /**
+   * Heaviest steady weight of a session that never locked, 0 when none. The
+   * heaviest, not the latest: a partial weight on the way off the scale would
+   * otherwise replace the right one.
+   */
+  plateauKg = 0;
+  balanceSeen = false;
+  resultSeen = false;
+  heartSeen = false;
+  /** Whether the "D6 without a weight" hint was already logged this session. */
+  noWeightHinted = false;
+}
+
 /**
  * Adapter for the AC 27 family: Active Era BS-06, ALPHA Smart Scale PRO 3
  * (FitDays), Runstar FG2431WB (Starfit), Femmto BCS13.
@@ -221,7 +239,6 @@ export class ActiveEraAdapter
   };
   readonly charNotifyUuid = uuid16(0xffb2);
   readonly charWriteUuid = uuid16(0xffb1);
-  readonly normalizesWeight = true;
   /**
    * Declared so the handler subscribes BEFORE `onConnected` writes the
    * profile, the order FitDays uses (CCCD, then D0).
@@ -238,30 +255,11 @@ export class ActiveEraAdapter
 
   readonly completionHoldMs = WEIGHT_ONLY_HOLD_MS;
 
-  /** Kilograms of this session's last locked D5 frame, 0 when none. */
-  private lockKg = 0;
-  /** The current run of identical unlocked D5 weights. */
-  private run = { grams: -1, count: 0, firstAt: 0 };
-  /**
-   * Heaviest steady weight of a session that never locked, 0 when none. The
-   * heaviest, not the latest: a partial weight on the way off the scale would
-   * otherwise replace the right one.
-   */
-  private plateauKg = 0;
-  private balanceSeen = false;
-  private resultSeen = false;
-  private heartSeen = false;
-  /** Whether the "D6 without a weight" hint was already logged this session. */
-  private noWeightHinted = false;
+  private s = new ActiveEraSession();
   /** Streaming weights, shown live but never a weigh-in. */
   private live = new WeakSet<ScaleReading>();
   /** Locked or steady weights: complete, but the D6 may still follow. */
   private held = new WeakSet<ScaleReading>();
-  /**
-   * The D6 `[17]` byte (body composition algorithm), pinned to the reading it
-   * came with, not kept as live state (#394).
-   */
-  private readonly algorithm = new ReadingComposition<number | undefined>();
 
   /**
    * The BS-06 name, or the AC 27 advertisement (#458, #462, #466).
@@ -334,14 +332,14 @@ export class ActiveEraAdapter
       case TYPE_RESULT:
         return this.onResult(data);
       case TYPE_BALANCE:
-        this.balanceSeen = true;
+        this.s.balanceSeen = true;
         bleLog.debug(
           `AC 27 balance: left foot ${(data.readUInt16BE(3) / 100).toFixed(2)} kg` +
             (data[2] === 0x01 ? ' (final)' : ''),
         );
         return null;
       case TYPE_HEART_RATE:
-        this.heartSeen = true;
+        this.s.heartSeen = true;
         bleLog.debug(`AC 27 heart rate: ${data[3]} bpm`);
         return null;
       case TYPE_STORED:
@@ -362,29 +360,29 @@ export class ActiveEraAdapter
   private onWeight(d: Buffer): ScaleReading | null {
     const grams = weightGrams(d, 3);
     if (grams <= 0) {
-      this.run = { grams: -1, count: 0, firstAt: 0 };
+      this.s.run = { grams: -1, count: 0, firstAt: 0 };
       return null;
     }
     const kg = grams / 1000;
     if (d[2] & FLAG_LOCKED) {
-      this.lockKg = kg;
+      this.s.lockKg = kg;
       return this.mark(this.held, { weight: kg, impedance: 0 });
     }
     const now = Date.now();
-    if (grams === this.run.grams) this.run.count += 1;
-    else this.run = { grams, count: 1, firstAt: now };
+    if (grams === this.s.run.grams) this.s.run.count += 1;
+    else this.s.run = { grams, count: 1, firstAt: now };
     if (
-      this.lockKg === 0 &&
-      this.run.count >= PLATEAU_MIN_FRAMES &&
-      now - this.run.firstAt >= PLATEAU_MIN_MS
+      this.s.lockKg === 0 &&
+      this.s.run.count >= PLATEAU_MIN_FRAMES &&
+      now - this.s.run.firstAt >= PLATEAU_MIN_MS
     ) {
-      if (kg > this.plateauKg) {
-        this.plateauKg = kg;
+      if (kg > this.s.plateauKg) {
+        this.s.plateauKg = kg;
         bleLog.debug(
-          `AC 27 weight steady at ${kg} kg for ${this.run.count} frames, no lock flag (#466)`,
+          `AC 27 weight steady at ${kg} kg for ${this.s.run.count} frames, no lock flag (#466)`,
         );
       }
-      return this.mark(this.held, { weight: this.plateauKg, impedance: 0 });
+      return this.mark(this.held, { weight: this.s.plateauKg, impedance: 0 });
     }
     return this.mark(this.live, { weight: kg, impedance: 0 });
   }
@@ -408,14 +406,14 @@ export class ActiveEraAdapter
       bleLog.debug(`AC 27 result frame with count ${d[2]} ignored`);
       return null;
     }
-    this.resultSeen = true;
+    this.s.resultSeen = true;
     const own = d[7] & FLAG_LOCKED ? weightGrams(d, 8) / 1000 : 0;
-    const kg = own || this.lockKg || this.plateauKg;
-    const source = own ? 'D6' : this.lockKg ? 'lock' : 'steady weight';
+    const kg = own || this.s.lockKg || this.s.plateauKg;
+    const source = own ? 'D6' : this.s.lockKg ? 'lock' : 'steady weight';
     const raw = d.readUInt16BE(4);
     if (kg <= 0) {
-      if (!this.noWeightHinted) {
-        this.noWeightHinted = true;
+      if (!this.s.noWeightHinted) {
+        this.s.noWeightHinted = true;
         bleLog.info(
           'AC 27 scale sent its result without a weight: it locked before the link was up. ' +
             'Wake the scale, wait for the Bluetooth icon on its display, then step on (#458).',
@@ -433,24 +431,12 @@ export class ActiveEraAdapter
           : ' (below the 1500 correction gate)') +
         `, weight ${kg} kg from the ${source} (#386)`,
     );
-    const reading: ScaleReading = { weight: kg, impedance: imp };
-    this.algorithm.pin(reading, d[17]);
-    return reading;
+    // The D6 `[17]` byte (composition algorithm) travels with its reading (#394).
+    return { weight: kg, impedance: imp, scaleComposition: d[17] };
   }
 
-  /**
-   * Clear the previous weigh-in (#394). Adapters are shared singletons, so a
-   * lock kept from the last session would pair the next D6 with the previous
-   * person's weight, and the `>= 1500` conversion multiplies that weight in.
-   */
   onSessionStart(): void {
-    this.lockKg = 0;
-    this.run = { grams: -1, count: 0, firstAt: 0 };
-    this.plateauKg = 0;
-    this.balanceSeen = false;
-    this.resultSeen = false;
-    this.heartSeen = false;
-    this.noWeightHinted = false;
+    this.s = new ActiveEraSession();
   }
 
   /**
@@ -478,10 +464,10 @@ export class ActiveEraAdapter
    */
   isCompositionPending(): boolean {
     return (
-      (this.lockKg > 0 || this.plateauKg > 0) &&
-      !this.resultSeen &&
-      !this.heartSeen &&
-      (this.balanceSeen || this.lockKg > 0)
+      (this.s.lockKg > 0 || this.s.plateauKg > 0) &&
+      !this.s.resultSeen &&
+      !this.s.heartSeen &&
+      (this.s.balanceSeen || this.s.lockKg > 0)
     );
   }
 
@@ -493,8 +479,12 @@ export class ActiveEraAdapter
    * the plausible band to 0 (D028), and 0 falls back to the estimate.
    */
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    const alg = this.algorithm.of(reading, undefined);
-    if (alg !== undefined && WLA07_ALGORITHMS.has(alg) && isPlausibleImpedance(reading.impedance)) {
+    const alg = reading.scaleComposition;
+    if (
+      typeof alg === 'number' &&
+      WLA07_ALGORITHMS.has(alg) &&
+      isPlausibleImpedance(reading.impedance)
+    ) {
       const c = wla07({
         weightKg: reading.weight,
         heightCm: wholeCm(profile.height),

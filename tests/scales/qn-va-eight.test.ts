@@ -128,7 +128,11 @@ const R07_LIVE = [R07.P1, R07.P2, R07.P3, R07.C15, R07.D16];
 /** The scale's "no stored weigh-ins" answer to the 0x22, 2026-10-06 line 399. */
 const NO_RECORDS = hex('23 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 23');
 const R06_LIVE = [R06.P1, R06.P2, R06.P3, R06.C15, R06.D16];
-/** The profile the 2026-10-06 visit frame carried: 1810 mm. Age is neutral. */
+/**
+ * The profile the 2026-10-06 visit frame carried: 1810 mm. The age is the
+ * fixtures' own: the frames' body age and BMR are what the scale computed for
+ * the reporter's profile, so they are checked as sent, not against 40 (D078).
+ */
 const P181: UserProfile = { height: 181, age: 40, gender: 'male', isAthlete: false };
 
 /**
@@ -452,7 +456,7 @@ describe('QN 19-byte stored records (#331)', () => {
     const [part1, , , , done] = s.feed(...R07_LIVE);
     expect(part1).toEqual({ weight: 76.55, impedance: 0 });
     expect(adapter.isFinal(part1!)).toBe(false);
-    expect(done).toEqual({ weight: 76.55, impedance: 0 });
+    expect(done).toEqual({ weight: 76.55, impedance: 0, scaleComposition: expect.any(Object) });
     expect(adapter.isFinal(done!)).toBe(true);
     expect(adapter.isFinal(stored)).toBe(false);
     // The held record is gone once the live weight takes its place in the
@@ -530,7 +534,11 @@ describe('QN 19-byte stored records (#331)', () => {
     const adapter = new QnScaleAdapter();
     // Session 1 publishes 76.55 kg 30 s after the record's time.
     let s = await openSession(adapter, { now: '2026-10-07T19:57:53Z' });
-    expect(s.feed(...R07_LIVE)[4]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(s.feed(...R07_LIVE)[4]).toEqual({
+      weight: 76.55,
+      impedance: 0,
+      scaleComposition: expect.any(Object),
+    });
     // Session 2 gets the same weigh-in as a stored record.
     s = await openSession(adapter, { now: '2026-10-07T19:59:30Z' });
     expect(s.feed(...R07_STORED)[4]).toBeNull();
@@ -593,7 +601,11 @@ describe('QN 19-byte stored records (#331)', () => {
     const debug = spyLines('debug');
     const adapter = new QnScaleAdapter();
     let s = await openSession(adapter, { now: '2026-10-07T20:00:44Z' });
-    expect(s.feed(...R07_LIVE)[4]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(s.feed(...R07_LIVE)[4]).toEqual({
+      weight: 76.55,
+      impedance: 0,
+      scaleComposition: expect.any(Object),
+    });
 
     s = await openSession(adapter, { now: '2026-10-07T20:02:44Z' });
     expect(s.feed(...R07_LIVE)).toEqual(new Array(5).fill(null));
@@ -604,7 +616,11 @@ describe('QN 19-byte stored records (#331)', () => {
     s = await openSession(adapter, { now: '2026-10-07T20:04:44Z' });
     const measured = s.feed(R06_SESSION.MEASURING, ...R07_LIVE);
     expect(measured[1]).toEqual({ weight: 76.55, impedance: 0 });
-    expect(measured[5]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(measured[5]).toEqual({
+      weight: 76.55,
+      impedance: 0,
+      scaleComposition: expect.any(Object),
+    });
 
     // Another weight: a new weigh-in.
     s = await openSession(adapter, { now: '2026-10-07T20:06:44Z' });
@@ -620,28 +636,36 @@ describe('QN 19-byte stored records (#331)', () => {
   it('publishes a result block that answered the 0x22 long after the profile was accepted', async () => {
     const adapter = new QnScaleAdapter();
     let s = await openSession(adapter, { now: '2026-10-07T20:00:44Z' });
-    expect(s.feed(...R07_LIVE)[4]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(s.feed(...R07_LIVE)[4]).toEqual({
+      weight: 76.55,
+      impedance: 0,
+      scaleComposition: expect.any(Object),
+    });
 
     s = await openSession(adapter, { now: '2026-10-07T20:02:44Z' });
     s.feed(R07_SESSION.VISIT_OK);
     await vi.advanceTimersByTimeAsync(13_000);
     const out = s.feed(NO_RECORDS, ...R07_LIVE);
     expect(out[1]).toEqual({ weight: 76.55, impedance: 0 });
-    expect(out[5]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(out[5]).toEqual({ weight: 76.55, impedance: 0, scaleComposition: expect.any(Object) });
   });
 
   // The same with no 0x23 before the block: its first part is the answer.
   it('times the answer from the result block when no 0x23 comes first', async () => {
     const adapter = new QnScaleAdapter();
     let s = await openSession(adapter, { now: '2026-10-07T20:00:44Z' });
-    expect(s.feed(...R07_LIVE)[4]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(s.feed(...R07_LIVE)[4]).toEqual({
+      weight: 76.55,
+      impedance: 0,
+      scaleComposition: expect.any(Object),
+    });
 
     s = await openSession(adapter, { now: '2026-10-07T20:02:44Z' });
     s.feed(R07_SESSION.VISIT_OK);
     await vi.advanceTimersByTimeAsync(13_000);
     const out = s.feed(...R07_LIVE);
     expect(out[0]).toEqual({ weight: 76.55, impedance: 0 });
-    expect(out[4]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(out[4]).toEqual({ weight: 76.55, impedance: 0, scaleComposition: expect.any(Object) });
   });
 
   // Without a profile answer only the time since the 0x22 counts.
@@ -651,13 +675,17 @@ describe('QN 19-byte stored records (#331)', () => {
   ])('judges a repeated block by an answer %i ms after the 0x22 went out', async (ms, expected) => {
     const adapter = new QnScaleAdapter();
     let s = await openSession(adapter, { now: '2026-10-07T20:00:44Z' });
-    expect(s.feed(...R07_LIVE)[4]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(s.feed(...R07_LIVE)[4]).toEqual({
+      weight: 76.55,
+      impedance: 0,
+      scaleComposition: expect.any(Object),
+    });
 
     s = await openSession(adapter, { now: '2026-10-07T20:02:44Z' });
     await vi.advanceTimersByTimeAsync(ms - s.msSinceQuery());
     const out = s.feed(NO_RECORDS, ...R07_LIVE);
     expect(out[1]).toEqual(expected);
-    expect(out[5]).toEqual(expected);
+    expect(out[5]).toEqual(expected && { ...expected, scaleComposition: expect.any(Object) });
   });
 });
 
@@ -698,7 +726,8 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
       ...(frames.live ?? R06_LIVE),
     );
     const reading = out[out.length - 1];
-    expect(reading).toEqual({ weight: 76.85, impedance: 0 });
+    // Whether the scale's own results came with it is up to each test.
+    expect({ ...reading, scaleComposition: undefined }).toEqual({ weight: 76.85, impedance: 0 });
     return { adapter, reading: reading! };
   }
 
@@ -720,12 +749,18 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
       muscleMass: 59.87,
       boneMass: 3.23,
       visceralFat: 6,
+      // 0x15 [11..12] and [10] (D078); the formulas give 1704 and 45.
+      bmr: 1730,
+      metabolicAge: 48,
     });
     expect(info.lines()).toContain(
       'QN: the scale sent its own body composition for this weigh-in (#331)',
     );
     expect(info.lines()).toContain(
       "QN: using the scale's own body composition for this weigh-in (#331)",
+    );
+    expect(debug.lines()).toContain(
+      "QN: BMR 1730 kcal from the scale, metabolic age 48 from the scale's body age (#331)",
     );
   });
 
@@ -763,9 +798,13 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
     const info = spyLines('info');
     const athlete = { ...P181, isAthlete: true };
     const { adapter, reading } = await weighIn({ profile: athlete });
+    // BMR and body age as the scale sent them too: the athlete formulas give
+    // 1789 and 40.
     expect(adapter.computeMetrics(reading, athlete)).toMatchObject({
       bodyFatPercent: 18,
       waterPercent: 59.1,
+      bmr: 1730,
+      metabolicAge: 48,
     });
     expect(info.lines()).toContain('QN: the scale computed it without an athlete mode (#331)');
   });
@@ -831,7 +870,7 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
     await vi.advanceTimersByTimeAsync(answerMs);
     const out = s.feed(NO_RECORDS, ...R06_LIVE);
     const reading = out[out.length - 1];
-    expect(reading).toEqual({ weight: 76.85, impedance: 0 });
+    expect(reading).toEqual({ weight: 76.85, impedance: 0, scaleComposition: expect.any(Object) });
     return { adapter, reading: reading! };
   }
 
@@ -847,6 +886,8 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
       muscleMass: 59.87,
       boneMass: 3.23,
       visceralFat: 6,
+      bmr: 1730,
+      metabolicAge: 48,
     });
     expect(info.lines()).toContain(
       "QN: using the scale's own body composition for this weigh-in (#331)",
@@ -880,7 +921,7 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
     await vi.advanceTimersByTimeAsync(928);
     const out = s.feed(...R07_STORED, ...R07_LIVE);
     const reading = out[out.length - 1]!;
-    expect(reading).toEqual({ weight: 76.55, impedance: 0 });
+    expect(reading).toEqual({ weight: 76.55, impedance: 0, scaleComposition: expect.any(Object) });
     expect(adapter.computeMetrics(reading, p182)).toEqual(estimate(p182, 76.55));
     expect(info.lines()).toContain(
       "QN: the scale's own body composition is not used for this weigh-in: the scale " +
@@ -901,7 +942,7 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
     s.feed(...R07_STORED);
     await vi.advanceTimersByTimeAsync(3_000);
     const reading = s.feed(...R07_LIVE)[4]!;
-    expect(reading).toEqual({ weight: 76.55, impedance: 0 });
+    expect(reading).toEqual({ weight: 76.55, impedance: 0, scaleComposition: expect.any(Object) });
     expect(adapter.computeMetrics(reading, p182)).toEqual(estimate(p182, 76.55));
   });
 
@@ -914,8 +955,9 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
     );
   });
 
-  // Derived: 0x15 with the water at 0. The whole set goes, visceral fat
-  // included, which buildPayload would otherwise take on its own.
+  // Derived: 0x15 with the water at 0. The whole set goes, visceral fat,
+  // BMR and body age included, which buildPayload would otherwise take on
+  // their own.
   it('estimates everything, visceral fat included, when one value is not a measurement', async () => {
     const live = [...R06_LIVE];
     live[3] = patched(R06.C15, 5, 0x00, 0x00);
@@ -923,6 +965,70 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
     const payload = adapter.computeMetrics(reading, P181);
     expect(payload).toEqual(estimate(P181));
     expect(payload.visceralFat).not.toBe(6);
+    expect(payload).toMatchObject({ bmr: 1704, metabolicAge: 45 });
+  });
+
+  // Derived: 0x15 with the BMR ([11..12]) or the body age ([10]) at 0 or at
+  // the 0xff sentinel, checksum recomputed. Only that value falls back to its
+  // formula (1704 kcal, 45 for P181); the other and the rest of the set stay
+  // the scale's (D078).
+  it.each([
+    ['a BMR of 0', 11, [0x00, 0x00], 'bmr', 'BMR calculated (the scale sent 0 kcal)'],
+    ['a BMR of 0xffff', 11, [0xff, 0xff], 'bmr', 'BMR calculated (the scale sent 65535 kcal)'],
+    [
+      'a body age of 0',
+      10,
+      [0x00],
+      'metabolicAge',
+      'metabolic age calculated (the scale sent a body age of 0)',
+    ],
+    [
+      'a body age of 0xff',
+      10,
+      [0xff],
+      'metabolicAge',
+      'metabolic age calculated (the scale sent a body age of 255)',
+    ],
+  ] as const)(
+    'calculates only that value when the scale sends %s',
+    async (_name, at, bytes, field, logged) => {
+      const debug = spyLines('debug');
+      const live = [...R06_LIVE];
+      live[3] = patched(R06.C15, at, ...bytes);
+      const { adapter, reading } = await weighIn({}, { live });
+      const payload = adapter.computeMetrics(reading, P181);
+      const formula = estimate(P181);
+      expect(payload).toMatchObject({
+        bodyFatPercent: 18,
+        waterPercent: 59.1,
+        visceralFat: 6,
+        bmr: field === 'bmr' ? formula.bmr : 1730,
+        metabolicAge: field === 'metabolicAge' ? formula.metabolicAge : 48,
+      });
+      expect(formula).toMatchObject({ bmr: 1704, metabolicAge: 45 });
+      expect(debug.lines().some((l) => l.includes(logged))).toBe(true);
+    },
+  );
+
+  // The derived R07_FULL record carries the live block's BMR and body age, but
+  // a stored record goes with its weight alone (D048 point 3), so both stay
+  // the formulas', also after an accepted profile.
+  it("keeps the formulas for a stored record that carries the scale's BMR and body age", async () => {
+    const adapter = new QnScaleAdapter();
+    const s = await openSession(adapter, { now: R07_CONNECTED });
+    const out = s.feed(
+      R07_SESSION.VISIT_OK,
+      R07_FULL.S1,
+      R07_FULL.S2,
+      R07_FULL.S3,
+      R07_FULL.S24,
+      R07_FULL.S25,
+    );
+    const reading = out[5]!;
+    expect(reading).toEqual({ weight: 76.55, impedance: 0, timestamp: new Date(R07_RECORD_AT) });
+    const payload = adapter.computeMetrics(reading, P181);
+    expect(payload).toEqual(buildPayload(76.55, 0, {}, P181));
+    expect(payload).toMatchObject({ bmr: 1701, metabolicAge: 45 });
   });
 
   it('keeps the composition with the reading it was measured with', async () => {
@@ -978,7 +1084,11 @@ describe('QN 19-byte: ble.qn_result_ack (#331)', () => {
     const { s, after } = await session(ON);
     s.feed(...UNTIL_D16);
     expect(after()).toEqual([]);
-    expect(s.feed(R06.D16)[0]).toEqual({ weight: 76.85, impedance: 0 });
+    expect(s.feed(R06.D16)[0]).toEqual({
+      weight: 76.85,
+      impedance: 0,
+      scaleComposition: expect.any(Object),
+    });
     expect(after()).toEqual([ACK]);
   });
 
@@ -1038,7 +1148,11 @@ describe('QN 19-byte: ble.qn_result_ack (#331)', () => {
   it('sends it for a repeated result block that is not published again', async () => {
     const adapter = new QnScaleAdapter();
     let { s, after } = await session(ON, '2026-10-07T20:00:44Z', adapter);
-    expect(s.feed(...R07_LIVE)[4]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(s.feed(...R07_LIVE)[4]).toEqual({
+      weight: 76.55,
+      impedance: 0,
+      scaleComposition: expect.any(Object),
+    });
     expect(after()).toEqual([ACK]);
 
     ({ s, after } = await session(ON, '2026-10-07T20:02:44Z', adapter));

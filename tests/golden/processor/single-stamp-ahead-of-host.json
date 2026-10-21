@@ -1,0 +1,76 @@
+{
+  "returned": true,
+  "exports": [
+    {
+      "to": "dad/garmin@global:0",
+      "weight": 83,
+      "impedance": 480,
+      "user": "dad",
+      "timestamp": "2026-10-21T08:00:00.000Z"
+    }
+  ],
+  "computeMetrics": [
+    {
+      "weight": 83,
+      "impedance": 480,
+      "profile": {
+        "height": 183,
+        "age": 36,
+        "gender": "male",
+        "isAthlete": false,
+        "birthDate": "1990-06-15",
+        "lastKnownWeight": 82
+      }
+    }
+  ],
+  "queued": [],
+  "lastKnownWeightWrites": [],
+  "replayAnchorWrites": [
+    {
+      "slug": "dad",
+      "weight": 83,
+      "time": "2026-10-21T08:10:00.000Z"
+    }
+  ],
+  "updateChecks": 1,
+  "display": [
+    [
+      "reading",
+      "dad",
+      "Dad",
+      83,
+      480,
+      [
+        "garmin"
+      ]
+    ],
+    [
+      "result",
+      "dad",
+      "Dad",
+      83,
+      [
+        {
+          "name": "garmin",
+          "ok": true
+        }
+      ]
+    ]
+  ],
+  "after": {
+    "lastExportedWeights": {
+      "dad": 83
+    },
+    "lastExportedAt": {
+      "dad": "2026-10-21T08:10:00.000Z"
+    },
+    "lastKnownWeight": {
+      "dad": 83
+    }
+  },
+  "log": [
+    "[Sync] Measurement: 83.00 kg / 480 Ohm",
+    "[Sync] Exporting to: garmin...",
+    "[Sync] Done."
+  ]
+}

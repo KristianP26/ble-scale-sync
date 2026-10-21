@@ -4,14 +4,17 @@ import type {
   UserProfile,
   ScaleAuth,
 } from '../../interfaces/scale-adapter.js';
-import type { EsphomeProxyConfig, WeightUnit } from '../../config/schema.js';
-import { type RawReading, waitForRawReading, withAbandonmentCleanup } from '../shared.js';
+import type { EsphomeProxyConfig } from '../../config/schema.js';
+import type { RawReading } from '../shared.js';
+import { proxyWatcherPolicy, runGattSession, selectSessionAdapter } from '../session/runner.js';
 import { isHistoricalReading } from '../../interfaces/reading-time.js';
-import { resolveAdapter, resolveAfterDiscovery } from '../../scales/resolve.js';
+import { resolveAdapter } from '../../scales/resolve.js';
 import {
+  BoundedMap,
   evaluateAdvertisement,
   GraceTimers,
   DedupWindow,
+  ManufacturerDataCache,
   PostReadingWindow,
   logAdvert,
   safeName,
@@ -19,33 +22,14 @@ import {
 } from '../advertisement.js';
 import { currentProfile } from '../reading-source.js';
 import type { ProfileSource, Watcher, WatcherConfig } from '../reading-source.js';
-import {
-  bleLog,
-  errMsg,
-  IMPEDANCE_GRACE_MS,
-  POST_READING_RECONNECT_MS,
-  withTimeout,
-  withIdleTimeout,
-} from '../types.js';
+import { bleLog, errMsg, IMPEDANCE_GRACE_MS, POST_READING_RECONNECT_MS } from '../types.js';
 import { AsyncQueue } from '../async-queue.js';
 import { EsphomeProxyPool } from './pool.js';
-import { ManufacturerDataCache } from './advert.js';
 import { logTransportCapabilities } from './scan.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const DEDUP_WINDOW_MS = 30_000;
-// Bounds for an on-demand GATT read, matching the mqtt-proxy watcher. Without
-// them a proxy that vanishes mid-session (Wi-Fi drop, reboot) never sends the
-// connection frame waitForRawReading waits on, so the read hangs forever: the
-// gattInFlight entry is never cleared (that scale is never read again) and
-// noteGattEnd never runs (the advertisement watchdog stays disarmed for that
-// endpoint, and keeps re-stamping its liveness on every sweep).
-const GATT_READING_IDLE_MS = 60_000;
-const GATT_SESSION_ABSOLUTE_MS = 90_000;
-// Cap for the "already warned about this scale's GATT failure" tracker. Old
-// entries are evicted LRU-style so dedup persists long-term in continuous mode.
-const GATT_WARN_LRU_MAX = 256;
 
 /**
  * The dedup key part for a GATT session that handed over only stored records:
@@ -81,8 +65,6 @@ export class ReadingWatcher implements Watcher {
   private targetMac?: string;
   private profile?: ProfileSource;
   private scaleAuth?: ScaleAuth;
-  /** `scale.weight_unit`, passed to every GATT read (see WatcherConfig). */
-  private weightUnit?: WeightUnit;
   private config: EsphomeProxyConfig;
   private readonly dedup = new DedupWindow(DEDUP_WINDOW_MS);
   /** When each scale last gave a reading, to tell its still-on reconnect from a failure (#466). */
@@ -137,7 +119,7 @@ export class ReadingWatcher implements Watcher {
   // their last success, so we warn once instead of on every advertisement and
   // log the repeats at debug. A session that ends inside the post-reading
   // window (PostReadingWindow) neither fills nor clears it.
-  private gattWarnedFor = new Map<string, true>();
+  private gattWarnedFor = new BoundedMap<string, true>(256, 'lru');
   /** Weight-only fallback timer per address; on elapse the held reading is
    *  queued directly (no dedup — matches the prior grace-timer body). */
   private readonly grace = new GraceTimers(IMPEDANCE_GRACE_MS, (address, gr) => {
@@ -154,14 +136,12 @@ export class ReadingWatcher implements Watcher {
     targetMac?: string,
     profile?: ProfileSource,
     scaleAuth?: ScaleAuth,
-    weightUnit?: WeightUnit,
   ) {
     this.config = config;
     this.adapters = adapters;
     this.targetMac = targetMac?.toLowerCase();
     this.profile = profile;
     this.scaleAuth = scaleAuth;
-    this.weightUnit = weightUnit;
   }
 
   async start(): Promise<void> {
@@ -205,15 +185,14 @@ export class ReadingWatcher implements Watcher {
   }
 
   /**
-   * Hot reload. scaleAuth and weightUnit are taken as given, unset included,
-   * so removing a PIN on reload takes effect instead of keeping the old one.
+   * Hot reload. scaleAuth is taken as given, unset included, so removing a PIN
+   * on reload takes effect instead of keeping the old one.
    */
   updateConfig(config: WatcherConfig): void {
     this.adapters = config.adapters;
     this.targetMac = config.targetMac?.toLowerCase();
     if (config.profile) this.profile = config.profile;
     this.scaleAuth = config.scaleAuth;
-    this.weightUnit = config.weightUnit;
   }
 
   private handleAd(rawInfo: BleDeviceInfo, address: string): void {
@@ -293,13 +272,10 @@ export class ReadingWatcher implements Watcher {
         // adapter that claims on a characteristic alone (a Digoo is not Inlife).
         const characteristicUuids = [...session.charMap.keys()];
         logAdvert(address, { ...info, characteristicUuids });
-        gattAdapter =
-          resolveAfterDiscovery(info, { characteristicUuids }, this.adapters) ?? adapter;
-        if (gattAdapter.name !== adapter.name) {
-          bleLog.info(
-            `Re-resolved adapter after GATT discovery: ${adapter.name} -> ${gattAdapter.name} (${address})`,
-          );
-        }
+        gattAdapter = selectSessionAdapter(info, { characteristicUuids }, this.adapters, {
+          advertisedPick: adapter,
+          address,
+        })!;
         // Per session, not once at startup: the processor moves the weight
         // anchor after every export and QN/R-MSC04 write it to the scale (#331).
         const sessionProfile: UserProfile = currentProfile(this.profile) ?? {
@@ -308,31 +284,18 @@ export class ReadingWatcher implements Watcher {
           gender: 'male',
           isAthlete: false,
         };
-        // Through withAbandonmentCleanup, so a timeout still hands over the
-        // stored weigh-ins the session collected (#331).
-        const raw = await withAbandonmentCleanup(session.device, () =>
-          withTimeout(
-            withIdleTimeout(
-              (onActivity) =>
-                waitForRawReading(
-                  session!.charMap,
-                  session!.device,
-                  gattAdapter,
-                  sessionProfile,
-                  address.replace(/[:-]/g, '').toUpperCase(),
-                  this.weightUnit,
-                  undefined,
-                  this.scaleAuth,
-                  onActivity,
-                  info.localName,
-                  manufacturerData,
-                ),
-              GATT_READING_IDLE_MS,
-              `GATT reading timeout for ${address}`,
-            ),
-            GATT_SESSION_ABSOLUTE_MS,
-            `GATT session cap exceeded for ${address}`,
-          ),
+        const raw = await runGattSession(
+          {
+            charMap: session.charMap,
+            device: session.device,
+            adapter: gattAdapter,
+            profile: sessionProfile,
+            address: address.replace(/[:-]/g, '').toUpperCase(),
+            scaleAuth: this.scaleAuth,
+            deviceName: info.localName,
+            manufacturerData,
+          },
+          proxyWatcherPolicy(address),
         );
         // A read that works again makes the next failure outside the
         // post-reading window news, so it warns.
@@ -365,20 +328,15 @@ export class ReadingWatcher implements Watcher {
   }
 
   private warnGattFailure(adapterName: string, address: string, reason: string): void {
-    if (this.gattWarnedFor.has(address)) {
-      this.gattWarnedFor.delete(address);
-      this.gattWarnedFor.set(address, true);
+    const repeat = this.gattWarnedFor.has(address);
+    this.gattWarnedFor.set(address, true);
+    if (repeat) {
       // Not silent: the reason can change after the first warning (a transient
       // failure, then a scale that breaks for good), and without this line a
       // DEBUG log shows nothing a reporter could send (B-13).
       bleLog.debug(`${adapterName} at ${address}: GATT read failed again (${reason})`);
       return;
     }
-    if (this.gattWarnedFor.size >= GATT_WARN_LRU_MAX) {
-      const oldest = this.gattWarnedFor.keys().next().value;
-      if (oldest !== undefined) this.gattWarnedFor.delete(oldest);
-    }
-    this.gattWarnedFor.set(address, true);
     bleLog.warn(
       `${adapterName} at ${address}: GATT read over the ESPHome proxy failed (${reason}). ` +
         `Will retry on the next advertisement.`,

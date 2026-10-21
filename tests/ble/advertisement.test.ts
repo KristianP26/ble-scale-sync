@@ -3,6 +3,7 @@ import {
   evaluateAdvertisement,
   GraceTimers,
   DedupWindow,
+  ManufacturerDataCache,
   readsFromAdvertisement,
 } from '../../src/ble/advertisement.js';
 import { MiScale2Adapter } from '../../src/scales/mi-scale-2.js';
@@ -317,5 +318,40 @@ describe('DedupWindow', () => {
     // The same record handed over again still is a repeat.
     expect(d.shouldEmit('AA', 76.55, at)).toBe(false);
     expect(d.shouldEmit('AA', 76.55, '2026-10-07T18:00:00.000Z')).toBe(true);
+  });
+});
+
+// Shared by the ESPHome proxy and node-ble for the GATT session handoff only
+// (#461, #463, D071).
+describe('ManufacturerDataCache', () => {
+  const md = (b: number) => ({ id: 0xffff, data: Buffer.from([b]) });
+  const empty = { id: 0xffff, data: Buffer.alloc(0) };
+
+  it("gives the frame's own data first, else the last one remembered for the address", () => {
+    const c = new ManufacturerDataCache();
+    c.remember({ manufacturerData: md(1) }, 'a');
+    expect(c.forSession({ manufacturerData: md(2) }, 'a')).toEqual(md(2));
+    expect(c.forSession({}, 'a')).toEqual(md(1));
+    expect(c.forSession({}, 'b')).toBeUndefined();
+  });
+
+  it('neither remembers nor prefers an entry without bytes', () => {
+    const c = new ManufacturerDataCache();
+    c.remember({ manufacturerData: md(1) }, 'a');
+    c.remember({ manufacturerData: empty }, 'a');
+    expect(c.forSession({ manufacturerData: empty }, 'a')).toEqual(md(1));
+    // With nothing remembered there is none to hand over, not an empty one.
+    expect(c.forSession({ manufacturerData: empty }, 'b')).toBeUndefined();
+  });
+
+  it('keeps the newest addresses up to its bound', () => {
+    const c = new ManufacturerDataCache(2);
+    c.remember({ manufacturerData: md(1) }, 'a');
+    c.remember({ manufacturerData: md(2) }, 'b');
+    c.remember({ manufacturerData: md(3) }, 'a');
+    c.remember({ manufacturerData: md(4) }, 'c');
+    expect(c.forSession({}, 'b')).toBeUndefined();
+    expect(c.forSession({}, 'a')).toEqual(md(3));
+    expect(c.forSession({}, 'c')).toEqual(md(4));
   });
 });

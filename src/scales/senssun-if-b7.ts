@@ -9,6 +9,7 @@ import type {
 } from '../interfaces/scale-adapter.js';
 import { buildPayload } from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
+import { LogKey } from './device-state.js';
 import { ownAddressBytes, type MatchDescriptor } from './match-descriptor.js';
 
 // ─── Senssun IF_B7 (broadcast-only, 0x0100 manufacturer data) ────────────────
@@ -146,25 +147,6 @@ function payloadKey(d: Buffer): string {
 }
 
 /**
- * How long a logging key outlives the last frame that carried it. Inside one
- * finished state the #423 capture has at most 0.41 s between adverts, so a
- * watcher stays on one key. A poll transport (node-ble, noble) stops at the
- * first finished frame and reads again only after runtime.scan_cooldown (5 s
- * at the least), so every one of its scans still logs the frame it completed
- * on. Without the expiry, a scan that reads the same payload as the previous
- * one (a finished state outliving the cooldown, or a cached advertisement)
- * would export a reading with no frame of its own in the log, and the counter
- * at [15] in that frame is what tells those two cases apart.
- */
-const LOG_KEY_TTL_MS = 3_000;
-
-/** One logging key: the last payload logged, and when it was last seen. */
-interface LogKey {
-  key: string | null;
-  seenAt: number;
-}
-
-/**
  * Adapter for the Senssun IF_B7 broadcast scale, sold among others as the
  * Grifema GA2001 (#423). Unrelated to the GATT-based "Senssun Fat" adapter.
  *
@@ -184,7 +166,6 @@ export class SenssunIfB7Adapter implements ScaleAdapterCore, BroadcastSource {
     names: { exact: [ADVERTISED_NAME] },
     manufacturerId: COMPANY_ID,
   };
-  readonly normalizesWeight = true;
   readonly preferPassive = true;
 
   /**
@@ -193,10 +174,10 @@ export class SenssunIfB7Adapter implements ScaleAdapterCore, BroadcastSource {
    * reset (which the broadcast path would not call anyway).
    */
   private lastSettlingKg: number | null = null;
-  /** [9..14] of the last finished frame logged, see payloadKey and LOG_KEY_TTL_MS. */
-  private readonly lastFinished: LogKey = { key: null, seenAt: -Infinity };
+  /** [9..14] of the last finished frame logged, see payloadKey. */
+  private readonly lastFinished = new LogKey();
   /** The same for a frame with an unknown status state. */
-  private readonly lastUnknown: LogKey = { key: null, seenAt: -Infinity };
+  private readonly lastUnknown = new LogKey();
   private readonly unitsWarned = new Set<number>();
 
   /**
@@ -205,19 +186,6 @@ export class SenssunIfB7Adapter implements ScaleAdapterCore, BroadcastSource {
    *   clock step when NTP first syncs would bend the expiry.
    */
   constructor(private readonly now: () => number = () => performance.now()) {}
-
-  /**
-   * True when this frame's payload should be logged: it differs from the last
-   * one logged in this slot, or that one has not been seen for LOG_KEY_TTL_MS.
-   */
-  private firstSighting(slot: LogKey, d: Buffer): boolean {
-    const key = payloadKey(d);
-    const at = this.now();
-    const first = key !== slot.key || at - slot.seenAt > LOG_KEY_TTL_MS;
-    slot.key = key;
-    slot.seenAt = at;
-    return first;
-  }
 
   /**
    * Company id, frame grammar, and then who sent it. When the transport knows
@@ -308,7 +276,7 @@ export class SenssunIfB7Adapter implements ScaleAdapterCore, BroadcastSource {
         // A state nobody has captured yet. Say so once per payload: if this
         // unit ends a weigh-in on something other than 0xA_, this line is the
         // only thing in a DEBUG log that explains the timeout.
-        if (this.firstSighting(this.lastUnknown, manufacturerData)) {
+        if (this.lastUnknown.first(payloadKey(manufacturerData), this.now())) {
           bleLog.debug(
             `Senssun IF_B7: status 0x${manufacturerData[STATUS_OFFSET].toString(16)} is not a ` +
               `known state, frame ignored: ${manufacturerData.toString('hex')}`,
@@ -322,7 +290,7 @@ export class SenssunIfB7Adapter implements ScaleAdapterCore, BroadcastSource {
 
     // Once per payload, not per advert: the counter at [15] differs on every
     // advert of the finished state, which lasts for seconds.
-    if (this.firstSighting(this.lastFinished, manufacturerData)) {
+    if (this.lastFinished.first(payloadKey(manufacturerData), this.now())) {
       const hex = manufacturerData.toString('hex');
       bleLog.debug(
         `Senssun IF_B7 finished: ${f.weight.toFixed(2)} kg ` +

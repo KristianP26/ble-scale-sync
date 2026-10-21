@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { MockInstance } from 'vitest';
 import type { Device } from '../../../src/ble/handler-node-ble/dbus.js';
 import type { ScaleAdapter } from '../../../src/interfaces/scale-adapter.js';
 
@@ -64,7 +65,7 @@ function fakeDevice(opts: { paired: boolean; bonded?: boolean | 'missing' }) {
   return { device, props };
 }
 
-let warn: ReturnType<typeof vi.spyOn>;
+let warn: MockInstance<typeof bleLog.warn>;
 
 beforeEach(() => {
   wire.length = 0;

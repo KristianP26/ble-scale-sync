@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { BleChar } from '../../../src/ble/shared.js';
-import { normalizeUuid } from '../../../src/ble/types.js';
+import type { BleChar } from '../../../src/ble/session/ports.js';
+import { bleLog, normalizeUuid } from '../../../src/ble/types.js';
 import type {
   ScaleAdapter,
   ScaleReading,
@@ -20,6 +20,10 @@ const fireDisconnectSpy = vi.fn();
 let hangSession = false;
 // When set, start() delivers these events instead of the default named pair.
 let startAdverts: Array<[BleDeviceInfo, string]> | null = null;
+// When set, connectGatt hands back a session whose frames the test sends
+// through sendFrame, and whose fireDisconnect reports the disconnect.
+let scriptedSession = false;
+let sendFrame: ((d: Buffer) => void) | null = null;
 
 vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
   class FakeEsphomeProxyPool {
@@ -45,6 +49,32 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
       return () => {};
     }
     async connectGatt(_mac: string) {
+      if (scriptedSession) {
+        const disconnectCbs: Array<() => void> = [];
+        const scripted: BleChar = {
+          async read() {
+            return Buffer.alloc(0);
+          },
+          async write() {},
+          async subscribe(onData) {
+            sendFrame = onData;
+            return () => {};
+          },
+        };
+        return {
+          charMap: new Map<string, BleChar>([
+            [NOTIFY, scripted],
+            [WRITE, scripted],
+          ]),
+          device: {
+            onDisconnect: (cb: () => void) => void disconnectCbs.push(cb),
+            fireDisconnect: () => {
+              for (const cb of disconnectCbs.splice(0)) cb();
+            },
+          },
+          close: closeSpy,
+        };
+      }
       if (hangSession) {
         const silent: BleChar = {
           async read() {
@@ -206,16 +236,84 @@ describe('scanAndReadRaw GATT single-shot (#116)', () => {
   });
 });
 
+// Characterization of the single-shot session policy (arch wave 2): a 60 s
+// idle bound and no cap, so a scale that keeps sending frames keeps its
+// session past the scan's own deadline; a shutdown hands nothing over.
+describe('scanAndReadRaw GATT session policy', () => {
+  const PROXY = { host: 'p1', port: 6053, client_info: 'x', additional_proxies: [] } as never;
+
+  it('bounds the session by 60 s of silence and nothing else', async () => {
+    closeSpy.mockClear();
+    vi.useFakeTimers();
+    scriptedSession = true;
+    try {
+      const adapter = { ...gattAdapter(), parseNotification: () => null } as ScaleAdapter;
+      const scan = scanAndReadRaw({ adapters: [adapter], profile, esphomeProxy: PROXY }).catch(
+        (e: unknown) => e,
+      );
+      await vi.advanceTimersByTimeAsync(1000);
+      for (let t = 0; t < 300_000; t += 30_000) {
+        sendFrame?.(Buffer.from([0x01]));
+        await vi.advanceTimersByTimeAsync(30_000);
+      }
+      expect(await scan).toBeInstanceOf(Error);
+      expect(closeSpy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(closeSpy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(closeSpy).toHaveBeenCalled();
+    } finally {
+      scriptedSession = false;
+      sendFrame = null;
+      vi.useRealTimers();
+    }
+  });
+
+  it('hands a held weight nowhere on a shutdown', async () => {
+    vi.useFakeTimers();
+    scriptedSession = true;
+    const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    try {
+      const shutdown = new AbortController();
+      const adapter = {
+        ...gattAdapter(),
+        completionHoldMs: 30_000,
+        isFinal: () => false,
+      } as ScaleAdapter;
+      const scan = scanAndReadRaw({
+        adapters: [adapter],
+        profile,
+        esphomeProxy: PROXY,
+        abortSignal: shutdown.signal,
+      }).catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(1000);
+      sendFrame?.(Buffer.from([0x01]));
+      await vi.advanceTimersByTimeAsync(1000);
+      shutdown.abort(new Error('shutting down'));
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(await scan).toEqual(new Error('shutting down'));
+      const lines = info.mock.calls.map((c) => String(c[0]));
+      expect(lines.filter((l) => l.startsWith('Reading complete'))).toEqual([]);
+    } finally {
+      scriptedSession = false;
+      sendFrame = null;
+      info.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
+
 // #461: the proxy delivers the advertisement and its scan response as two
 // events, and the one that matches (named) need not carry the manufacturer
-// data. The bytes are the #461 Physiq advertisement (node-ble log); the split
-// into a nameless event with them and a named one without is synthetic.
+// data. The bytes are the #461 Physiq advertisement (node-ble log) with MAC
+// echoed at [5..10] in place of its own; the split into a nameless event with
+// them and a named one without is synthetic.
 describe('scanAndReadRaw manufacturer data handoff (#461)', () => {
   const MFG_461 = {
     id: 0xffff,
-    data: Buffer.from('081401000025e0160005ff6108010015', 'hex'),
+    data: Buffer.from('08140100000100000000026108010015', 'hex'),
   };
-  const MAC = 'FF:05:00:16:E0:25';
+  const MAC = '02:00:00:00:00:01';
 
   it('hands the last seen manufacturer data to the session, not to the matcher', async () => {
     const matched: BleDeviceInfo[] = [];

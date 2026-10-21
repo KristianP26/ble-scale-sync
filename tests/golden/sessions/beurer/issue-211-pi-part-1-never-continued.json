@@ -1,0 +1,168 @@
+{
+  "settled": {
+    "by": "reading",
+    "atMs": 39174
+  },
+  "reading": {
+    "weight": 83.5,
+    "impedance": 0,
+    "scaleComposition": null
+  },
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 1,
+      "atMs": 0,
+      "uuid": "ffe1"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 2,
+      "atMs": 0,
+      "uuid": "ffe1",
+      "hex": "e7f1580101",
+      "withResponse": true
+    },
+    {
+      "seq": 3,
+      "atMs": 1193,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 4,
+      "atMs": 1987,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 5,
+      "atMs": 2981,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 6,
+      "atMs": 4174,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 7,
+      "atMs": 5000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 8,
+      "atMs": 5366,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 9,
+      "atMs": 6558,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 10,
+      "atMs": 6957,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 11,
+      "atMs": 8348,
+      "uuid": "ffe1",
+      "hex": "e7f1580006",
+      "withResponse": true
+    },
+    {
+      "seq": 12,
+      "atMs": 9738,
+      "uuid": "ffe1",
+      "hex": "e7f1580006",
+      "withResponse": true
+    },
+    {
+      "seq": 13,
+      "atMs": 10000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 14,
+      "atMs": 15000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 15,
+      "atMs": 15105,
+      "uuid": "ffe1",
+      "hex": "e7f1590301",
+      "withResponse": true
+    },
+    {
+      "seq": 16,
+      "atMs": 20000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 17,
+      "atMs": 25000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 18,
+      "atMs": 30000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 19,
+      "atMs": 35000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    }
+  ],
+  "rxDropped": 0,
+  "payload": {
+    "weight": 83.5,
+    "impedance": 0,
+    "bmi": 24.93,
+    "bodyFatPercent": 20.62,
+    "waterPercent": 57.95,
+    "boneMass": 2.78,
+    "muscleMass": 63.5,
+    "visceralFat": 9,
+    "physiqueRating": 5,
+    "bmr": 1833,
+    "metabolicAge": 31
+  }
+}

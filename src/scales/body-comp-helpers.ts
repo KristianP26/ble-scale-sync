@@ -3,8 +3,10 @@
  *
  * Most consumer scales provide body-fat / water / muscle / bone directly
  * in their BLE frames.  The helpers here fill in the remaining BodyComposition
- * fields (BMI, BMR, metabolic age, physique rating) that are always
- * calculated from the user profile rather than measured by the scale.
+ * fields (BMI, BMR, metabolic age, physique rating) from the user profile.
+ * BMI and the physique rating are always calculated; BMR and metabolic age are
+ * too, unless the adapter passes the scale's own (ScaleBodyComp.bmr and
+ * .metabolicAge, D078) with an accepted body fat value and inside their bands.
  */
 
 import type { UserProfile, BodyComposition, ScaleReading } from '../interfaces/scale-adapter.js';
@@ -19,6 +21,10 @@ export interface ScaleBodyComp {
   muscle?: number; // %
   bone?: number; // kg
   visceralFat?: number;
+  /** The scale's own BMR, kcal (D078). Used only with an accepted body fat value. */
+  bmr?: number;
+  /** The scale's own body age, years, exported as metabolic age (D078). Same rule. */
+  metabolicAge?: number;
 }
 
 /**
@@ -131,6 +137,10 @@ const MAX_PLAUSIBLE_MUSCLE_PCT = 100;
  * A composition is fat plus, optionally, water, bone and muscle. Water, bone
  * or muscle without fat is rejected for the same reason. `visceralFat` is not
  * part of it: it is a 1 to 59 index that is clamped, not a share of the body.
+ * Neither are `bmr` and `metabolicAge` (D078): each is checked on its own band
+ * (isPlausibleBmr, isPlausibleMetabolicAge), but buildPayload takes them only
+ * next to a body fat value this function accepted, because the scale derives
+ * them from the same measurement.
  */
 export function compositionRejection(comp: ScaleBodyComp): string | null {
   const { fat, water, bone, muscle } = comp;
@@ -149,6 +159,44 @@ export function compositionRejection(comp: ScaleBodyComp): string | null {
     return `muscle ${muscle} % is outside 0-${MAX_PLAUSIBLE_MUSCLE_PCT} %`;
   }
   return null;
+}
+
+/**
+ * Bands a scale-reported BMR and body age have to fall in before they replace
+ * the formulas (D078). Judgements, not measurements: far from any real body
+ * and far from what a broken field gives (0, a 0xFFFF or 0xFF sentinel, a
+ * value off by a factor of 10). The age floor is the 12 the metabolic age
+ * formula in buildPayload clamps to.
+ */
+export const BMR_MIN_KCAL = 500;
+export const BMR_MAX_KCAL = 5000;
+export const METABOLIC_AGE_MIN = 12;
+export const METABOLIC_AGE_MAX = 120;
+
+/** Whether a scale-reported BMR (kcal) may be exported as is (D078). */
+export function isPlausibleBmr(kcal: number): boolean {
+  return Number.isFinite(kcal) && kcal >= BMR_MIN_KCAL && kcal <= BMR_MAX_KCAL;
+}
+
+/** Whether a scale-reported body age (years) may be exported as the metabolic age (D078). */
+export function isPlausibleMetabolicAge(years: number): boolean {
+  return Number.isFinite(years) && years >= METABOLIC_AGE_MIN && years <= METABOLIC_AGE_MAX;
+}
+
+/**
+ * A scale-reported value as an integer, or undefined (and a debug line) when
+ * it is outside its band, so the caller falls back to its formula.
+ */
+function scaleValueIfPlausible(
+  value: number | undefined,
+  plausible: (v: number) => boolean,
+  what: string,
+  band: string,
+): number | undefined {
+  if (value == null) return undefined;
+  if (plausible(value)) return Math.trunc(value);
+  biaLog.debug(`Scale-reported ${what} ${value} is outside ${band}; calculating it instead.`);
+  return undefined;
 }
 
 /**
@@ -263,8 +311,29 @@ export function buildPayload(
   // 166 kcal gap as ~11 extra years for every female user (#433).
   const idealBmr = 10 * weight + 6.25 * p.height - 5 * 25 + sexConstant;
   let metabolicAge = p.age + Math.trunc((idealBmr - bmr) / 15);
-  if (metabolicAge < 12) metabolicAge = 12;
+  if (metabolicAge < METABOLIC_AGE_MIN) metabolicAge = METABOLIC_AGE_MIN;
   if (p.isAthlete && metabolicAge > p.age) metabolicAge = p.age - 5;
+
+  // The scale's own BMR and body age replace the two formulas only here, at
+  // the end (D078). The formula metabolic age above has to come from the
+  // formula BMR: fed the scale's BMR, it would compare the scale's figure with
+  // a formula reference. Taken from `measured` and only next to a measured
+  // body fat, so a rejected composition, or none, takes them with it. As sent
+  // (truncated to whole numbers): the athlete factor and the age clamps are
+  // the formulas' own.
+  const withFat = measured.fat != null;
+  const scaleBmr = scaleValueIfPlausible(
+    withFat ? measured.bmr : undefined,
+    isPlausibleBmr,
+    'BMR',
+    `${BMR_MIN_KCAL}-${BMR_MAX_KCAL} kcal`,
+  );
+  const scaleAge = scaleValueIfPlausible(
+    withFat ? measured.metabolicAge : undefined,
+    isPlausibleMetabolicAge,
+    'metabolic age',
+    `${METABOLIC_AGE_MIN}-${METABOLIC_AGE_MAX} years`,
+  );
 
   return {
     weight: r2(weight),
@@ -276,9 +345,15 @@ export function buildPayload(
     muscleMass: r2(muscleMass),
     visceralFat,
     physiqueRating,
-    bmr: Math.trunc(bmr),
-    metabolicAge,
+    bmr: scaleBmr ?? Math.trunc(bmr),
+    metabolicAge: scaleAge ?? metabolicAge,
   };
+}
+
+/** Body fat from a plausible impedance through BIA, the BMI estimate otherwise (#386). */
+export function biaPayload(reading: ScaleReading, profile: UserProfile): BodyComposition {
+  const fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
+  return buildPayload(reading.weight, reading.impedance, { fat }, profile);
 }
 
 /**
@@ -359,53 +434,4 @@ export function xorChecksum(buf: Buffer | number[], start: number, end: number):
   let xor = 0;
   for (let i = start; i < end; i++) xor ^= buf[i] & 0xff;
   return xor & 0xff;
-}
-
-/**
- * Composition pinned to the reading it was measured with (#394).
- *
- * Adapters are shared singletons and `computeMetrics()` runs LATER than the
- * parse that produced the reading. On the watcher transports (mqtt-proxy,
- * esphome-proxy) the watcher does not pause while the loop processes a
- * reading: `loop.ts` awaits `processReading()`, network exports included, and
- * the watcher can open the NEXT session - and therefore fire
- * `onSessionStart()` - in the meantime. An adapter that reads its live cache
- * in `computeMetrics()` then hands the completed reading a cache belonging to
- * somebody else, or one that was just cleared.
- *
- * So: `pin()` at emit time, `of()` in `computeMetrics()`. The map is weak, so
- * a reading the processor drops frees its entry.
- *
- * This exists to stop the rule from being re-derived per adapter. It was
- * hand-rolled six times before, each copy carrying its own version of the
- * paragraph above, and the copies had already drifted in type.
- */
-export class ReadingComposition<T> {
-  private readonly byReading = new WeakMap<ScaleReading, T>();
-
-  /**
-   * Record the composition as it stood when `reading` was emitted.
-   *
-   * Stores the REFERENCE. The value must not be mutated afterwards, or the
-   * snapshot follows the live state and the pin buys nothing. Adapters that
-   * rebuild their cache object per frame can pass it directly; ones that mutate
-   * a long-lived object in place (beurer-bf720 fills fields across several
-   * 0x2A9C notifications, and beurer-sanitas and medisana-bs44x do the same)
-   * must pass a copy, which is why their hand-rolled predecessors all spread.
-   */
-  pin(reading: ScaleReading, value: T): void {
-    this.byReading.set(reading, value);
-  }
-
-  /**
-   * The composition pinned to `reading`, or `live` when nothing was pinned.
-   *
-   * The fallback covers a reading built by hand (broadcast paths, tests) - see
-   * the class comment for why the live cache cannot be trusted otherwise. A
-   * pinned value is returned even when it is null or undefined, so an adapter
-   * whose "no composition" state is itself a value stays correct.
-   */
-  of(reading: ScaleReading, live: T): T {
-    return this.byReading.has(reading) ? (this.byReading.get(reading) as T) : live;
-  }
 }

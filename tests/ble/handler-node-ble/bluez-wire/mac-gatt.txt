@@ -1,0 +1,209 @@
++0ms [debug] D-Bus match-rule refcounting patched (dbus-next 0.10.2, #396)
++0ms [debug] D-Bus connection established
++0ms :1.1 Hello
++0ms :1.1 Introspect /org/bluez
++0ms :1.1 Introspect /org/bluez
++0ms :1.1 Introspect /org/bluez
++0ms :1.1 AgentManager1.RegisterAgent /org/bluez /org/blescalesync/agent KeyboardDisplay
++0ms [debug] BlueZ pairing agent registered (KeyboardDisplay)
++0ms [debug] Not claiming the BlueZ default-agent role (no users[].beurer_pin configured)
++0ms :1.1 Introspect hci0
++0ms :1.1 Get hci0 Adapter1.Powered
++0ms [debug] Removing AA:BB:CC:DD:EE:01 from BlueZ before the scan: no reading from this scale in this run yet
++0ms :1.1 Introspect hci0
++0ms [debug] Device not in BlueZ cache; RemoveDevice is a no-op
++0ms :1.1 Adapter1.RemoveDevice hci0 hci0/dev_AA_BB_CC_DD_EE_01 -> DoesNotExist
++0ms :1.1 Get hci0 Adapter1.Discovering
++0ms [debug] Discovery state at start: Discovering=false, our filtered session=no
++0ms :1.1 Adapter1.SetDiscoveryFilter hci0 {Transport=le,DuplicateData=true}
++0ms [debug] Discovery filter: Transport=le, DuplicateData=true
++0ms :1.1 Adapter1.StartDiscovery hci0
++0ms [debug] Discovery started
++0ms [info] Scanning for device...
++1000ms :1.1 Introspect hci0
++1000ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01
++1000ms :1.1 AddMatch hci0/dev_AA_BB_CC_DD_EE_01 Properties.PropertiesChanged
++1000ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.Name
++1000ms [debug] Found device: WIRE-GATT [AA:BB:CC:DD:EE:01]
++1000ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.AddressType
++1000ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.AdvertisingFlags -> InvalidArgs
++1000ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.UUIDs -> InvalidArgs
++1000ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.ServiceData -> InvalidArgs
++1000ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.ManufacturerData -> InvalidArgs
++1000ms [debug] Stopping discovery before connect...
++1000ms :1.1 Get hci0 Adapter1.Discovering
++1000ms :1.1 Adapter1.StopDiscovery hci0
++1000ms [debug] Discovery stopped
++1500ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.RSSI -> InvalidArgs
++1500ms [debug] Connect attempt 1/6...
++1500ms :1.1 Device1.Connect hci0/dev_AA_BB_CC_DD_EE_01
++1500ms [debug] Connected (took 0ms)
++1500ms [info] Connected. Discovering services...
++1500ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01
++1500ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.ServicesResolved
++1500ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01
++1500ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01/service0010
++1500ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010 GattService1.UUID
++1500ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01/service0010
++1500ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0011
++1500ms :1.1 AddMatch hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0011 Properties.PropertiesChanged
++1500ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0011 GattCharacteristic1.UUID
++1500ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0013
++1500ms :1.1 AddMatch hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0013 Properties.PropertiesChanged
++1500ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0013 GattCharacteristic1.UUID
++1500ms [debug] Services: [0000fff0-0000-1000-8000-00805f9b34fb]
++1500ms [debug]   Service 0000fff0-0000-1000-8000-00805f9b34fb: chars=[0000fff1-0000-1000-8000-00805f9b34fb, 0000fff2-0000-1000-8000-00805f9b34fb]
++1500ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0011 GattCharacteristic1.Flags
++1500ms [debug]     Char 0000fff1-0000-1000-8000-00805f9b34fb: flags=[notify]
++1500ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0013 GattCharacteristic1.Flags
++1500ms [debug]     Char 0000fff2-0000-1000-8000-00805f9b34fb: flags=[write-without-response]
++1500ms [info] Matched adapter: Wire GATT
++1500ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01
++1500ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.ServicesResolved
++1500ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01
++1500ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01/service0010
++1500ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010 GattService1.UUID
++1500ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01/service0010
++1500ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0011
++1500ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0011 GattCharacteristic1.UUID
++1500ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0013
++1500ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0013 GattCharacteristic1.UUID
++1500ms [debug]   Service 0000fff0-0000-1000-8000-00805f9b34fb: chars=[0000fff1-0000-1000-8000-00805f9b34fb, 0000fff2-0000-1000-8000-00805f9b34fb]
++1500ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0011 GattCharacteristic1.Flags
++1500ms [debug]     Char 0000fff1-0000-1000-8000-00805f9b34fb: flags=[notify]
++1500ms :1.1 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0013 GattCharacteristic1.Flags
++1500ms [debug]     Char 0000fff2-0000-1000-8000-00805f9b34fb: flags=[write-without-response]
++1500ms [debug] Looking for notify=0000fff1-0000-1000-8000-00805f9b34fb, write=0000fff2-0000-1000-8000-00805f9b34fb
++1500ms :1.1 GattCharacteristic1.StartNotify hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0011
++1500ms :1.1 GattCharacteristic1.WriteValue hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0013 01 command
++1500ms [debug] Unlock write: [01]
++1500ms [info] Subscribed to notifications. Step on the scale.
++1700ms [debug] Notification 0000fff100001000800000805f9b34fb: [aa 1f 68 00 00]
++2100ms [debug] Notification 0000fff100001000800000805f9b34fb: [aa 1f 72 02 00]
++2100ms [info] Reading complete: 80.50 kg / 512 Ohm
++2100ms :1.1 Device1.Disconnect hci0/dev_AA_BB_CC_DD_EE_01
++2100ms :1.1 RemoveMatch hci0/dev_AA_BB_CC_DD_EE_01 Properties.PropertiesChanged
++2100ms [debug] Disconnect (after reading) answered in 0 ms
++2100ms [debug] Disconnecting AA:BB:CC:DD:EE:01 after the session...
++2100ms :1.1 Introspect hci0/dev_AA_BB_CC_DD_EE_01
++2100ms :1.1 AddMatch hci0/dev_AA_BB_CC_DD_EE_01 Properties.PropertiesChanged
++2100ms :1.1 Device1.Disconnect hci0/dev_AA_BB_CC_DD_EE_01
++2100ms :1.1 RemoveMatch hci0/dev_AA_BB_CC_DD_EE_01 Properties.PropertiesChanged
++2100ms [debug] Disconnect (teardown) answered in 0 ms
++2600ms [debug] D-Bus connection reset
++2600ms [debug] D-Bus connection reset after GATT operation
++2600ms exec btmgmt --index 0 power off
++2600ms exec btmgmt --index 0 info
++2600ms [debug] btmgmt: adapter powered off
++3100ms exec btmgmt --index 0 power on
++5100ms exec btmgmt --index 0 info
++5100ms [debug] btmgmt: adapter powered on
++5100ms [debug] Preemptive btmgmt reset after GATT
++5100ms => {"reading":{"weight":80.5,"impedance":512},"adapter":"Wire GATT"}
++5100ms (5000 ms between cycles)
++10100ms [debug] D-Bus connection established
++10100ms :1.2 Hello
++10100ms :1.2 Introspect /org/bluez
++10100ms :1.2 Introspect /org/bluez
++10100ms :1.2 Introspect /org/bluez
++10100ms :1.2 AgentManager1.RegisterAgent /org/bluez /org/blescalesync/agent KeyboardDisplay
++10100ms [debug] BlueZ pairing agent registered (KeyboardDisplay)
++10100ms [debug] Not claiming the BlueZ default-agent role (no users[].beurer_pin configured)
++10100ms :1.2 Introspect hci0
++10100ms :1.2 Get hci0 Adapter1.Powered
++10100ms :1.2 Introspect hci0
++10100ms :1.2 Introspect hci0/dev_AA_BB_CC_DD_EE_01
++10100ms :1.2 AddMatch hci0/dev_AA_BB_CC_DD_EE_01 Properties.PropertiesChanged
++10100ms :1.2 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.Paired
++10100ms [info] Keeping AA:BB:CC:DD:EE:01 known to BlueZ between weigh-ins (Wire GATT reads over GATT only), so the next connect can reuse its service cache.
++10100ms [debug] Keeping AA:BB:CC:DD:EE:01 in BlueZ for this cycle: Wire GATT reads over GATT only
++10100ms :1.2 Get hci0 Adapter1.Discovering
++10100ms [debug] Discovery state at start: Discovering=false, our filtered session=no
++10100ms :1.2 Adapter1.SetDiscoveryFilter hci0 {Transport=le,DuplicateData=true}
++10100ms [debug] Discovery filter: Transport=le, DuplicateData=true
++10100ms :1.2 Adapter1.StartDiscovery hci0
++10100ms [debug] Discovery started
++10100ms [info] Scanning for device...
++11100ms :1.2 Introspect hci0
++11100ms [debug] Heard AA:BB:CC:DD:EE:01 advertise in this cycle (BlueZ kept it from an earlier session)
++11100ms :1.2 RemoveMatch hci0/dev_AA_BB_CC_DD_EE_01 Properties.PropertiesChanged
++11100ms :1.2 Introspect hci0/dev_AA_BB_CC_DD_EE_01
++11100ms :1.2 AddMatch hci0/dev_AA_BB_CC_DD_EE_01 Properties.PropertiesChanged
++11100ms :1.2 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.Name
++11100ms [debug] Found device: WIRE-GATT [AA:BB:CC:DD:EE:01]
++11100ms :1.2 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.AddressType
++11100ms :1.2 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.AdvertisingFlags -> InvalidArgs
++11100ms :1.2 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.UUIDs -> InvalidArgs
++11100ms :1.2 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.ServiceData -> InvalidArgs
++11100ms :1.2 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.ManufacturerData -> InvalidArgs
++11100ms [debug] Stopping discovery before connect...
++11100ms :1.2 Get hci0 Adapter1.Discovering
++11100ms :1.2 Adapter1.StopDiscovery hci0
++11100ms [debug] Discovery stopped
++11600ms :1.2 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.RSSI -> InvalidArgs
++11600ms [debug] Connect attempt 1/6...
++11600ms :1.2 Device1.Connect hci0/dev_AA_BB_CC_DD_EE_01
++11600ms [debug] Connected (took 0ms)
++11600ms [info] Connected. Discovering services...
++11600ms :1.2 Introspect hci0/dev_AA_BB_CC_DD_EE_01
++11600ms :1.2 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.ServicesResolved
++11600ms :1.2 Introspect hci0/dev_AA_BB_CC_DD_EE_01
++11600ms :1.2 Introspect hci0/dev_AA_BB_CC_DD_EE_01/service0010
++11600ms :1.2 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010 GattService1.UUID
++11600ms :1.2 Introspect hci0/dev_AA_BB_CC_DD_EE_01/service0010
++11600ms :1.2 Introspect hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0011
++11600ms :1.2 AddMatch hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0011 Properties.PropertiesChanged
++11600ms :1.2 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0011 GattCharacteristic1.UUID
++11600ms :1.2 Introspect hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0013
++11600ms :1.2 AddMatch hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0013 Properties.PropertiesChanged
++11600ms :1.2 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0013 GattCharacteristic1.UUID
++11600ms [debug] Services: [0000fff0-0000-1000-8000-00805f9b34fb]
++11600ms [debug]   Service 0000fff0-0000-1000-8000-00805f9b34fb: chars=[0000fff1-0000-1000-8000-00805f9b34fb, 0000fff2-0000-1000-8000-00805f9b34fb]
++11600ms :1.2 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0011 GattCharacteristic1.Flags
++11600ms [debug]     Char 0000fff1-0000-1000-8000-00805f9b34fb: flags=[notify]
++11600ms :1.2 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0013 GattCharacteristic1.Flags
++11600ms [debug]     Char 0000fff2-0000-1000-8000-00805f9b34fb: flags=[write-without-response]
++11600ms [info] Matched adapter: Wire GATT
++11600ms :1.2 Introspect hci0/dev_AA_BB_CC_DD_EE_01
++11600ms :1.2 Get hci0/dev_AA_BB_CC_DD_EE_01 Device1.ServicesResolved
++11600ms :1.2 Introspect hci0/dev_AA_BB_CC_DD_EE_01
++11600ms :1.2 Introspect hci0/dev_AA_BB_CC_DD_EE_01/service0010
++11600ms :1.2 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010 GattService1.UUID
++11600ms :1.2 Introspect hci0/dev_AA_BB_CC_DD_EE_01/service0010
++11600ms :1.2 Introspect hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0011
++11600ms :1.2 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0011 GattCharacteristic1.UUID
++11600ms :1.2 Introspect hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0013
++11600ms :1.2 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0013 GattCharacteristic1.UUID
++11600ms [debug]   Service 0000fff0-0000-1000-8000-00805f9b34fb: chars=[0000fff1-0000-1000-8000-00805f9b34fb, 0000fff2-0000-1000-8000-00805f9b34fb]
++11600ms :1.2 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0011 GattCharacteristic1.Flags
++11600ms [debug]     Char 0000fff1-0000-1000-8000-00805f9b34fb: flags=[notify]
++11600ms :1.2 Get hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0013 GattCharacteristic1.Flags
++11600ms [debug]     Char 0000fff2-0000-1000-8000-00805f9b34fb: flags=[write-without-response]
++11600ms [debug] Looking for notify=0000fff1-0000-1000-8000-00805f9b34fb, write=0000fff2-0000-1000-8000-00805f9b34fb
++11600ms :1.2 GattCharacteristic1.StartNotify hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0011
++11600ms :1.2 GattCharacteristic1.WriteValue hci0/dev_AA_BB_CC_DD_EE_01/service0010/char0013 01 command
++11600ms [debug] Unlock write: [01]
++11600ms [info] Subscribed to notifications. Step on the scale.
++11800ms [debug] Notification 0000fff100001000800000805f9b34fb: [aa 1f 68 00 00]
++12200ms [debug] Notification 0000fff100001000800000805f9b34fb: [aa 1f 72 02 00]
++12200ms [info] Reading complete: 80.50 kg / 512 Ohm
++12200ms :1.2 Device1.Disconnect hci0/dev_AA_BB_CC_DD_EE_01
++12200ms :1.2 RemoveMatch hci0/dev_AA_BB_CC_DD_EE_01 Properties.PropertiesChanged
++12200ms [debug] Disconnect (after reading) answered in 0 ms
++12200ms [debug] Disconnecting AA:BB:CC:DD:EE:01 after the session...
++12200ms :1.2 Introspect hci0/dev_AA_BB_CC_DD_EE_01
++12200ms :1.2 AddMatch hci0/dev_AA_BB_CC_DD_EE_01 Properties.PropertiesChanged
++12200ms :1.2 Device1.Disconnect hci0/dev_AA_BB_CC_DD_EE_01
++12200ms :1.2 RemoveMatch hci0/dev_AA_BB_CC_DD_EE_01 Properties.PropertiesChanged
++12200ms [debug] Disconnect (teardown) answered in 0 ms
++12700ms [debug] D-Bus connection reset
++12700ms [debug] D-Bus connection reset after GATT operation
++12700ms exec btmgmt --index 0 power off
++12700ms exec btmgmt --index 0 info
++12700ms [debug] btmgmt: adapter powered off
++13200ms exec btmgmt --index 0 power on
++15200ms exec btmgmt --index 0 info
++15200ms [debug] btmgmt: adapter powered on
++15200ms [debug] Preemptive btmgmt reset after GATT
++15200ms => {"reading":{"weight":80.5,"impedance":512},"adapter":"Wire GATT"}
+--- match rules held

@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { BleDeviceInfo, ScaleAdapter } from '../../../src/interfaces/scale-adapter.js';
+import type {
+  BleDeviceInfo,
+  ScaleAdapter,
+  ScaleReading,
+} from '../../../src/interfaces/scale-adapter.js';
 import type { AdvertCallback } from '../../../src/ble/handler-ha-bluetooth/client.js';
 
 // ─── Fake client (replaces the websocket layer) ───────────────────────────────
@@ -51,11 +55,11 @@ function makeBroadcastAdapter(): ScaleAdapter {
   return {
     name: 'Broadcast Test',
     match: { priority: 50, custom: true },
-    matches: (d) => d.localName === 'BCAST',
-    parseBroadcast: (data) => ({ weight: data[0], impedance: 0 }),
+    matches: (d: BleDeviceInfo) => d.localName === 'BCAST',
+    parseBroadcast: (data: Buffer) => ({ weight: data[0], impedance: 0 }),
     parseNotification: () => null,
     isComplete: () => true,
-    computeMetrics: (r) => ({
+    computeMetrics: (r: ScaleReading) => ({
       weight: r.weight,
       impedance: r.impedance,
       bmi: 22,

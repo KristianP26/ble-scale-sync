@@ -1,0 +1,18 @@
+{
+  "adverts": [
+    {
+      "atMs": 0,
+      "data": "fe95 5859e2515b01000000000226d226b545cd7ec33c97c7b80100000bb875c8",
+      "decision": "wait",
+      "warns": [
+        "Xiaomi S800 detected but ble.bind_key is not configured; cannot decode weight"
+      ]
+    },
+    {
+      "atMs": 500,
+      "data": "fe95 5859e2515b01000000000226d226b545cd7ec33c97c7b80100000bb875c8",
+      "decision": "wait"
+    }
+  ],
+  "exports": []
+}

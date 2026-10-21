@@ -464,8 +464,10 @@ describe('bleStep handler selection', () => {
 
     await bleStep.run(ctx);
 
-    expect(ctx.config.ble).toBeDefined();
-    expect(ctx.config.ble?.handler).toBe('auto');
+    // A fresh reference: tsc keeps ctx.config.ble narrowed to undefined across the await.
+    const config: WizardContext['config'] = ctx.config;
+    expect(config.ble).toBeDefined();
+    expect(config.ble?.handler).toBe('auto');
   });
 });
 

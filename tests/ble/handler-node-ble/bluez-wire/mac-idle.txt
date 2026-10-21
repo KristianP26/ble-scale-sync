@@ -1,0 +1,352 @@
++0ms [debug] D-Bus connection established
++0ms :1.1 Hello
++0ms :1.1 Introspect /org/bluez
++0ms :1.1 Introspect /org/bluez
++0ms :1.1 Introspect /org/bluez
++0ms :1.1 AgentManager1.RegisterAgent /org/bluez /org/blescalesync/agent KeyboardDisplay
++0ms [debug] BlueZ pairing agent registered (KeyboardDisplay)
++0ms [debug] Not claiming the BlueZ default-agent role (no users[].beurer_pin configured)
++0ms :1.1 Introspect hci0
++0ms :1.1 Get hci0 Adapter1.Powered
++0ms [debug] Removing AA:BB:CC:DD:EE:01 from BlueZ before the scan: no reading from this scale in this run yet
++0ms :1.1 Introspect hci0
++0ms [debug] Device not in BlueZ cache; RemoveDevice is a no-op
++0ms :1.1 Adapter1.RemoveDevice hci0 hci0/dev_AA_BB_CC_DD_EE_01 -> DoesNotExist
++0ms :1.1 Get hci0 Adapter1.Discovering
++0ms [debug] Discovery state at start: Discovering=false, our filtered session=no
++0ms :1.1 Adapter1.SetDiscoveryFilter hci0 {Transport=le,DuplicateData=true}
++0ms [debug] Discovery filter: Transport=le, DuplicateData=true
++0ms :1.1 Adapter1.StartDiscovery hci0
++0ms [debug] Discovery started
++0ms [info] Scanning for device...
++1000ms :1.1 Introspect hci0
++2000ms :1.1 Introspect hci0
++3000ms :1.1 GetManagedObjects
++3000ms :1.1 Introspect hci0
++4000ms :1.1 Introspect hci0
++5000ms :1.1 Introspect hci0
++6000ms :1.1 GetManagedObjects
++6000ms :1.1 Introspect hci0
++7000ms :1.1 Introspect hci0
++8000ms :1.1 Introspect hci0
++9000ms :1.1 GetManagedObjects
++9000ms :1.1 Introspect hci0
++10000ms :1.1 Introspect hci0
++11000ms :1.1 Introspect hci0
++12000ms :1.1 GetManagedObjects
++12000ms :1.1 Introspect hci0
++13000ms :1.1 Introspect hci0
++14000ms :1.1 Introspect hci0
++15000ms :1.1 GetManagedObjects
++15000ms :1.1 Introspect hci0
++16000ms :1.1 Introspect hci0
++17000ms :1.1 Introspect hci0
++18000ms :1.1 GetManagedObjects
++18000ms :1.1 Introspect hci0
++19000ms :1.1 Introspect hci0
++20000ms :1.1 Introspect hci0
++21000ms :1.1 GetManagedObjects
++21000ms :1.1 Introspect hci0
++22000ms :1.1 Introspect hci0
++23000ms :1.1 Introspect hci0
++24000ms :1.1 GetManagedObjects
++24000ms :1.1 Introspect hci0
++25000ms :1.1 Introspect hci0
++26000ms :1.1 Introspect hci0
++27000ms :1.1 GetManagedObjects
++27000ms :1.1 Introspect hci0
++28000ms :1.1 Introspect hci0
++29000ms :1.1 Introspect hci0
++30000ms :1.1 Introspect hci0
++30000ms :1.1 GetManagedObjects
++31000ms :1.1 Introspect hci0
++32000ms :1.1 Introspect hci0
++33000ms :1.1 GetManagedObjects
++33000ms :1.1 Introspect hci0
++34000ms :1.1 Introspect hci0
++35000ms :1.1 Introspect hci0
++36000ms :1.1 GetManagedObjects
++36000ms :1.1 Introspect hci0
++37000ms :1.1 Introspect hci0
++38000ms :1.1 Introspect hci0
++39000ms :1.1 GetManagedObjects
++39000ms :1.1 Introspect hci0
++40000ms :1.1 Introspect hci0
++41000ms :1.1 Introspect hci0
++42000ms :1.1 GetManagedObjects
++42000ms :1.1 Introspect hci0
++43000ms :1.1 Introspect hci0
++44000ms :1.1 Introspect hci0
++45000ms :1.1 GetManagedObjects
++45000ms :1.1 Introspect hci0
++46000ms :1.1 Introspect hci0
++47000ms :1.1 Introspect hci0
++48000ms :1.1 GetManagedObjects
++48000ms :1.1 Introspect hci0
++49000ms :1.1 Introspect hci0
++50000ms :1.1 Introspect hci0
++51000ms :1.1 GetManagedObjects
++51000ms :1.1 Introspect hci0
++52000ms :1.1 Introspect hci0
++53000ms :1.1 Introspect hci0
++54000ms :1.1 GetManagedObjects
++54000ms :1.1 Introspect hci0
++55000ms :1.1 Introspect hci0
++56000ms :1.1 Introspect hci0
++57000ms :1.1 GetManagedObjects
++57000ms :1.1 Introspect hci0
++58000ms :1.1 Introspect hci0
++59000ms :1.1 Introspect hci0
++60000ms :1.1 Introspect hci0
++60000ms :1.1 GetManagedObjects
++61000ms :1.1 Introspect hci0
++62000ms :1.1 Introspect hci0
++63000ms :1.1 GetManagedObjects
++63000ms :1.1 Introspect hci0
++64000ms :1.1 Introspect hci0
++65000ms :1.1 Introspect hci0
++66000ms :1.1 GetManagedObjects
++66000ms :1.1 Introspect hci0
++67000ms :1.1 Introspect hci0
++68000ms :1.1 Introspect hci0
++69000ms :1.1 GetManagedObjects
++69000ms :1.1 Introspect hci0
++70000ms :1.1 Introspect hci0
++71000ms :1.1 Introspect hci0
++72000ms :1.1 GetManagedObjects
++72000ms :1.1 Introspect hci0
++73000ms :1.1 Introspect hci0
++74000ms :1.1 Introspect hci0
++75000ms :1.1 GetManagedObjects
++75000ms :1.1 Introspect hci0
++76000ms :1.1 Introspect hci0
++77000ms :1.1 Introspect hci0
++78000ms :1.1 GetManagedObjects
++78000ms :1.1 Introspect hci0
++79000ms :1.1 Introspect hci0
++80000ms :1.1 Introspect hci0
++81000ms :1.1 GetManagedObjects
++81000ms :1.1 Introspect hci0
++82000ms :1.1 Introspect hci0
++83000ms :1.1 Introspect hci0
++84000ms :1.1 GetManagedObjects
++84000ms :1.1 Introspect hci0
++85000ms :1.1 Introspect hci0
++86000ms :1.1 Introspect hci0
++87000ms :1.1 GetManagedObjects
++87000ms :1.1 Introspect hci0
++88000ms :1.1 Introspect hci0
++89000ms :1.1 Introspect hci0
++90000ms :1.1 Introspect hci0
++90000ms :1.1 GetManagedObjects
++91000ms :1.1 Introspect hci0
++92000ms :1.1 Introspect hci0
++93000ms :1.1 GetManagedObjects
++93000ms :1.1 Introspect hci0
++94000ms :1.1 Introspect hci0
++95000ms :1.1 Introspect hci0
++96000ms :1.1 GetManagedObjects
++96000ms :1.1 Introspect hci0
++97000ms :1.1 Introspect hci0
++98000ms :1.1 Introspect hci0
++99000ms :1.1 GetManagedObjects
++99000ms :1.1 Introspect hci0
++100000ms :1.1 Introspect hci0
++101000ms :1.1 Introspect hci0
++102000ms :1.1 GetManagedObjects
++102000ms :1.1 Introspect hci0
++103000ms :1.1 Introspect hci0
++104000ms :1.1 Introspect hci0
++105000ms :1.1 GetManagedObjects
++105000ms :1.1 Introspect hci0
++106000ms :1.1 Introspect hci0
++107000ms :1.1 Introspect hci0
++108000ms :1.1 GetManagedObjects
++108000ms :1.1 Introspect hci0
++109000ms :1.1 Introspect hci0
++110000ms :1.1 Introspect hci0
++111000ms :1.1 GetManagedObjects
++111000ms :1.1 Introspect hci0
++112000ms :1.1 Introspect hci0
++113000ms :1.1 Introspect hci0
++114000ms :1.1 GetManagedObjects
++114000ms :1.1 Introspect hci0
++115000ms :1.1 Introspect hci0
++116000ms :1.1 Introspect hci0
++117000ms :1.1 GetManagedObjects
++117000ms :1.1 Introspect hci0
++118000ms :1.1 Introspect hci0
++119000ms :1.1 Introspect hci0
++120000ms [debug] Scan heard the room 3s ago; no liveness probe needed
++120000ms => {"error":"Device AA:BB:CC:DD:EE:01 not found within 120s"}
++120000ms (5000 ms between cycles)
++125000ms :1.1 Get hci0 Adapter1.Powered
++125000ms [debug] Removing AA:BB:CC:DD:EE:01 from BlueZ before the scan: no reading from this scale in this run yet
++125000ms :1.1 Introspect hci0
++125000ms [debug] Device not in BlueZ cache; RemoveDevice is a no-op
++125000ms :1.1 Adapter1.RemoveDevice hci0 hci0/dev_AA_BB_CC_DD_EE_01 -> DoesNotExist
++125000ms :1.1 Get hci0 Adapter1.Discovering
++125000ms [debug] Discovery state at start: Discovering=true, our filtered session=yes
++125000ms [debug] Discovery already active and already filtered; continuing with it
++125000ms [info] Scanning for device...
++126000ms :1.1 Introspect hci0
++127000ms :1.1 Introspect hci0
++128000ms :1.1 GetManagedObjects
++128000ms :1.1 Introspect hci0
++129000ms :1.1 Introspect hci0
++130000ms :1.1 Introspect hci0
++131000ms :1.1 GetManagedObjects
++131000ms :1.1 Introspect hci0
++132000ms :1.1 Introspect hci0
++133000ms :1.1 Introspect hci0
++134000ms :1.1 GetManagedObjects
++134000ms :1.1 Introspect hci0
++135000ms :1.1 Introspect hci0
++136000ms :1.1 Introspect hci0
++137000ms :1.1 GetManagedObjects
++137000ms :1.1 Introspect hci0
++138000ms :1.1 Introspect hci0
++139000ms :1.1 Introspect hci0
++140000ms :1.1 GetManagedObjects
++140000ms :1.1 Introspect hci0
++141000ms :1.1 Introspect hci0
++142000ms :1.1 Introspect hci0
++143000ms :1.1 GetManagedObjects
++143000ms :1.1 Introspect hci0
++144000ms :1.1 Introspect hci0
++145000ms :1.1 Introspect hci0
++146000ms :1.1 GetManagedObjects
++146000ms :1.1 Introspect hci0
++147000ms :1.1 Introspect hci0
++148000ms :1.1 Introspect hci0
++149000ms :1.1 GetManagedObjects
++149000ms :1.1 Introspect hci0
++150000ms :1.1 Introspect hci0
++151000ms :1.1 Introspect hci0
++152000ms :1.1 GetManagedObjects
++152000ms :1.1 Introspect hci0
++153000ms :1.1 Introspect hci0
++154000ms :1.1 Introspect hci0
++155000ms :1.1 Introspect hci0
++155000ms :1.1 GetManagedObjects
++156000ms :1.1 Introspect hci0
++157000ms :1.1 Introspect hci0
++158000ms :1.1 GetManagedObjects
++158000ms :1.1 Introspect hci0
++159000ms :1.1 Introspect hci0
++160000ms :1.1 Introspect hci0
++161000ms :1.1 GetManagedObjects
++161000ms :1.1 Introspect hci0
++162000ms :1.1 Introspect hci0
++163000ms :1.1 Introspect hci0
++164000ms :1.1 GetManagedObjects
++164000ms :1.1 Introspect hci0
++165000ms :1.1 Introspect hci0
++166000ms :1.1 Introspect hci0
++167000ms :1.1 GetManagedObjects
++167000ms :1.1 Introspect hci0
++168000ms :1.1 Introspect hci0
++169000ms :1.1 Introspect hci0
++170000ms :1.1 GetManagedObjects
++170000ms :1.1 Introspect hci0
++171000ms :1.1 Introspect hci0
++172000ms :1.1 Introspect hci0
++173000ms :1.1 GetManagedObjects
++173000ms :1.1 Introspect hci0
++174000ms :1.1 Introspect hci0
++175000ms :1.1 Introspect hci0
++176000ms :1.1 GetManagedObjects
++176000ms :1.1 Introspect hci0
++177000ms :1.1 Introspect hci0
++178000ms :1.1 Introspect hci0
++179000ms :1.1 GetManagedObjects
++179000ms :1.1 Introspect hci0
++180000ms :1.1 Introspect hci0
++181000ms :1.1 Introspect hci0
++182000ms :1.1 GetManagedObjects
++182000ms :1.1 Introspect hci0
++183000ms :1.1 Introspect hci0
++184000ms :1.1 Introspect hci0
++185000ms :1.1 Introspect hci0
++185000ms :1.1 GetManagedObjects
++186000ms :1.1 Introspect hci0
++187000ms :1.1 Introspect hci0
++188000ms :1.1 GetManagedObjects
++188000ms :1.1 Introspect hci0
++189000ms :1.1 Introspect hci0
++190000ms :1.1 Introspect hci0
++191000ms :1.1 GetManagedObjects
++191000ms :1.1 Introspect hci0
++192000ms :1.1 Introspect hci0
++193000ms :1.1 Introspect hci0
++194000ms :1.1 GetManagedObjects
++194000ms :1.1 Introspect hci0
++195000ms :1.1 Introspect hci0
++196000ms :1.1 Introspect hci0
++197000ms :1.1 GetManagedObjects
++197000ms :1.1 Introspect hci0
++198000ms :1.1 Introspect hci0
++199000ms :1.1 Introspect hci0
++200000ms :1.1 GetManagedObjects
++200000ms :1.1 Introspect hci0
++201000ms :1.1 Introspect hci0
++202000ms :1.1 Introspect hci0
++203000ms :1.1 GetManagedObjects
++203000ms :1.1 Introspect hci0
++204000ms :1.1 Introspect hci0
++205000ms :1.1 Introspect hci0
++206000ms :1.1 GetManagedObjects
++206000ms :1.1 Introspect hci0
++207000ms :1.1 Introspect hci0
++208000ms :1.1 Introspect hci0
++209000ms :1.1 GetManagedObjects
++209000ms :1.1 Introspect hci0
++210000ms :1.1 Introspect hci0
++211000ms :1.1 Introspect hci0
++212000ms :1.1 GetManagedObjects
++212000ms :1.1 Introspect hci0
++213000ms :1.1 Introspect hci0
++214000ms :1.1 Introspect hci0
++215000ms :1.1 Introspect hci0
++215000ms :1.1 GetManagedObjects
++216000ms :1.1 Introspect hci0
++217000ms :1.1 Introspect hci0
++218000ms :1.1 GetManagedObjects
++218000ms :1.1 Introspect hci0
++219000ms :1.1 Introspect hci0
++220000ms :1.1 Introspect hci0
++221000ms :1.1 GetManagedObjects
++221000ms :1.1 Introspect hci0
++222000ms :1.1 Introspect hci0
++223000ms :1.1 Introspect hci0
++224000ms :1.1 GetManagedObjects
++224000ms :1.1 Introspect hci0
++225000ms :1.1 Introspect hci0
++226000ms :1.1 Introspect hci0
++227000ms :1.1 GetManagedObjects
++227000ms :1.1 Introspect hci0
++228000ms :1.1 Introspect hci0
++229000ms :1.1 Introspect hci0
++230000ms :1.1 GetManagedObjects
++230000ms :1.1 Introspect hci0
++231000ms :1.1 Introspect hci0
++232000ms :1.1 Introspect hci0
++233000ms :1.1 GetManagedObjects
++233000ms :1.1 Introspect hci0
++234000ms :1.1 Introspect hci0
++235000ms :1.1 Introspect hci0
++236000ms :1.1 GetManagedObjects
++236000ms :1.1 Introspect hci0
++237000ms :1.1 Introspect hci0
++238000ms :1.1 Introspect hci0
++239000ms :1.1 GetManagedObjects
++239000ms :1.1 Introspect hci0
++240000ms :1.1 Introspect hci0
++241000ms :1.1 Introspect hci0
++242000ms :1.1 GetManagedObjects
++242000ms :1.1 Introspect hci0
++243000ms :1.1 Introspect hci0
++244000ms :1.1 Introspect hci0
++245000ms [debug] Scan heard the room 3s ago; no liveness probe needed
++245000ms => {"error":"Device AA:BB:CC:DD:EE:01 not found within 120s"}
+--- match rules held

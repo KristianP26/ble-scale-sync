@@ -1,10 +1,10 @@
 import { loadYamlConfig } from '../config/load.js';
-import { resolveRuntimeConfig, resolveExportersForUser } from '../config/resolve.js';
-import { createExporterFromEntry } from '../exporters/registry.js';
+import { keepNobleDriver } from '../config/yaml-load.js';
+import { resolveRuntimeConfig, resolveExporterSlotsForUser } from '../config/resolve.js';
 import type { Exporter } from '../interfaces/exporter.js';
+import { buildFromSlots } from './exporters.js';
 import { diffRestartRequired } from '../config/reload-diff.js';
 import { withWriteLock } from '../config/write.js';
-import { setDisplayUsers } from '../ble/handler-mqtt-proxy/index.js';
 import { createLogger, setLogLevel, LogLevel } from '../logger.js';
 import { errMsg } from '../utils/error.js';
 import type { AppConfig } from '../config/schema.js';
@@ -33,7 +33,9 @@ export async function reloadAppConfig(
   try {
     configs = await withWriteLock(async () => {
       const oldConfig = ctx.config;
-      const newConfig = loadYamlConfig(configPath);
+      // ble.noble_driver is restart-required: the reload must not hand the next
+      // poll cycle a different noble module (C-06).
+      const newConfig = keepNobleDriver(() => loadYamlConfig(configPath));
       const resolved = resolveRuntimeConfig(newConfig);
       // Built BEFORE the swap. loadYamlConfig passes exporter entries through
       // and filters only an unknown `type`, so a missing required field or a
@@ -62,13 +64,10 @@ export async function reloadAppConfig(
     ctx.mqttProxy &&
     newSnapshot !== userDisplaySnapshotRef.value
   ) {
-    setDisplayUsers(
-      newConfig.users.map((u) => ({
-        slug: u.slug,
-        name: u.name,
-        weight_range: u.weight_range,
-      })),
-    );
+    // Already loaded by run.ts on this transport; no static import keeps it
+    // off the other transports.
+    const { setDisplayUsers } = await import('../ble/handler-mqtt-proxy/index.js');
+    setDisplayUsers(displayUsers(newConfig));
     userDisplaySnapshotRef.value = newSnapshot;
   }
 
@@ -88,20 +87,22 @@ export async function reloadAppConfig(
  * Every user's exporters for a config, the way getExportersForUser builds them.
  * Exporter constructors only store their config, so building them has no side
  * effects; the point is that construction is where an invalid entry throws.
+ * Same builder as getExportersForUser so each instance keeps its D029 slot:
+ * without it the retry queue cannot tell two exporters of one type apart.
  */
 function buildExportersByUser(config: AppConfig): Map<string, Exporter[]> {
   const byUser = new Map<string, Exporter[]>();
   for (const user of config.users) {
-    byUser.set(
-      user.slug,
-      resolveExportersForUser(config, user).map((e) => createExporterFromEntry(e)),
-    );
+    byUser.set(user.slug, buildFromSlots(resolveExporterSlotsForUser(config, user)));
   }
   return byUser;
 }
 
+/** The user fields the ESP32 display board gets in its config topic. */
+export function displayUsers(config: AppConfig) {
+  return config.users.map((u) => ({ slug: u.slug, name: u.name, weight_range: u.weight_range }));
+}
+
 export function userDisplaySnapshot(config: AppConfig): string {
-  return JSON.stringify(
-    config.users.map((u) => ({ slug: u.slug, name: u.name, weight_range: u.weight_range })),
-  );
+  return JSON.stringify(displayUsers(config));
 }

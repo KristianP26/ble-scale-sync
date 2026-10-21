@@ -1,0 +1,109 @@
+{
+  "settled": {
+    "by": "reading",
+    "atMs": 20000
+  },
+  "reading": {
+    "weight": 75.2,
+    "impedance": 0
+  },
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "fff1"
+    },
+    {
+      "seq": 1,
+      "atMs": 0,
+      "uuid": "ae02"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 2,
+      "atMs": 0,
+      "uuid": "ae01",
+      "hex": "fedcbac00600020101ef",
+      "withResponse": false
+    },
+    {
+      "seq": 3,
+      "atMs": 200,
+      "uuid": "fff2",
+      "hex": "1309ff01100000002c",
+      "withResponse": false
+    },
+    {
+      "seq": 4,
+      "atMs": 300,
+      "uuid": "fff2",
+      "hex": "2008ff28ad183246",
+      "withResponse": false
+    },
+    {
+      "seq": 5,
+      "atMs": 300,
+      "uuid": "fff2",
+      "hex": "a20601321ef9",
+      "withResponse": false
+    },
+    {
+      "seq": 6,
+      "atMs": 300,
+      "uuid": "ae01",
+      "hex": "0270617373",
+      "withResponse": false
+    },
+    {
+      "seq": 7,
+      "atMs": 450,
+      "uuid": "ae01",
+      "hex": "0166511daad377dd5e489c2a314e7414cc",
+      "withResponse": false
+    },
+    {
+      "seq": 8,
+      "atMs": 800,
+      "uuid": "fff2",
+      "hex": "a00d02010008002106b804029d",
+      "withResponse": false
+    },
+    {
+      "seq": 9,
+      "atMs": 1000,
+      "uuid": "fff2",
+      "hex": "2206ff00032a",
+      "withResponse": false
+    },
+    {
+      "seq": 10,
+      "atMs": 1000,
+      "uuid": "fff2",
+      "hex": "a206011e23ea",
+      "withResponse": false
+    },
+    {
+      "seq": 11,
+      "atMs": 1150,
+      "uuid": "fff2",
+      "hex": "a206011e23ea",
+      "withResponse": false
+    }
+  ],
+  "rxDropped": 0,
+  "payload": {
+    "weight": 75.2,
+    "impedance": 0,
+    "bmi": 22.46,
+    "bodyFatPercent": 17.65,
+    "waterPercent": 60.12,
+    "boneMass": 2.6,
+    "muscleMass": 59.33,
+    "visceralFat": 8,
+    "physiqueRating": 8,
+    "bmr": 1750,
+    "metabolicAge": 31
+  }
+}

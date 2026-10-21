@@ -87,8 +87,8 @@ describe('runHealthchecks()', () => {
 
     const makeSlowHealthcheck = (name: string): Exporter => ({
       name,
-      export: vi.fn(async () => ({ success: true })),
-      healthcheck: vi.fn(async () => {
+      export: vi.fn(async (): Promise<ExportResult> => ({ success: true })),
+      healthcheck: vi.fn(async (): Promise<ExportResult> => {
         concurrent++;
         maxConcurrent = Math.max(maxConcurrent, concurrent);
         await new Promise((r) => setTimeout(r, 50));
@@ -184,7 +184,7 @@ describe('dispatchExports()', () => {
 
     const makeSlowExporter = (name: string): Exporter => ({
       name,
-      export: vi.fn(async () => {
+      export: vi.fn(async (): Promise<ExportResult> => {
         concurrent++;
         maxConcurrent = Math.max(maxConcurrent, concurrent);
         await new Promise((r) => setTimeout(r, 50));
@@ -230,7 +230,7 @@ describe('dispatchExports() reportsExports', () => {
     const order: string[] = [];
     const slow: Exporter = {
       name: 'garmin',
-      export: vi.fn(async () => {
+      export: vi.fn(async (): Promise<ExportResult> => {
         await new Promise((r) => setTimeout(r, 50));
         order.push('garmin');
         return { success: true };
@@ -323,11 +323,11 @@ describe('dispatchExports() historical reading filter', () => {
     const garmin: Exporter = {
       name: 'garmin',
       supportsBackdate: true,
-      export: vi.fn(async () => ({ success: true })),
+      export: vi.fn(async (): Promise<ExportResult> => ({ success: true })),
     };
     const mqtt: Exporter = {
       name: 'mqtt',
-      export: vi.fn(async () => ({ success: true })),
+      export: vi.fn(async (): Promise<ExportResult> => ({ success: true })),
     };
 
     const result = await dispatchExports([garmin, mqtt], SAMPLE_PAYLOAD, HIST_CTX);
@@ -343,11 +343,11 @@ describe('dispatchExports() historical reading filter', () => {
     const garmin: Exporter = {
       name: 'garmin',
       supportsBackdate: true,
-      export: vi.fn(async () => ({ success: true })),
+      export: vi.fn(async (): Promise<ExportResult> => ({ success: true })),
     };
     const mqtt: Exporter = {
       name: 'mqtt',
-      export: vi.fn(async () => ({ success: true })),
+      export: vi.fn(async (): Promise<ExportResult> => ({ success: true })),
     };
 
     const liveCtx: ExportContext = { userName: 'Dad', userSlug: 'dad' };
@@ -361,11 +361,11 @@ describe('dispatchExports() historical reading filter', () => {
   it('returns success true with empty details when all exporters skip on historical', async () => {
     const mqtt: Exporter = {
       name: 'mqtt',
-      export: vi.fn(async () => ({ success: true })),
+      export: vi.fn(async (): Promise<ExportResult> => ({ success: true })),
     };
     const ntfy: Exporter = {
       name: 'ntfy',
-      export: vi.fn(async () => ({ success: true })),
+      export: vi.fn(async (): Promise<ExportResult> => ({ success: true })),
     };
 
     const result = await dispatchExports([mqtt, ntfy], SAMPLE_PAYLOAD, HIST_CTX);

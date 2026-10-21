@@ -13,7 +13,6 @@ import {
   compositionRejection,
   estimateBodyFat,
   uuid16,
-  ReadingComposition,
 } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 import { bleLog } from '../ble/types.js';
@@ -24,6 +23,12 @@ const CHR_CMD = uuid16(0xffe9); // write  — commands
 
 // Response-type markers in data[3]
 const RESP_MEASURED = 0x02;
+// The reply to GET_PROTOCOL_VERSION (openScale's ResponseType names it
+// PROTOCOL_VERSION): `0d 1f 05 05 1f` on the #474 Mini 2 and `0d 13 05 05 13` on a
+// SIGNAL (openScale #1286), the version in [1] like every frame. The Mini 2 sends
+// one for every unlock we write (26 of 26 in the #474 log of 2026-10-20) and,
+// after a weigh-in, nothing else.
+const RESP_PROTOCOL_VERSION = 0x05;
 
 // [2] is the frame's total length, start byte and XOR included (openScale's
 // YunmaiHandler and the protocol notes it cites say so). 18 bytes carry weight
@@ -43,6 +48,18 @@ const COMPOSITION_HOLD_MS = 4000;
  */
 const PID_MINI2_M1690 = 0x018d;
 
+/** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
+class YunmaiSession {
+  /**
+   * Whether the frame parsed last has a resistance field. Per frame, not per
+   * device: the session reads `completionHoldMs` when the hold arms, right
+   * after the parse of the frame that armed it.
+   */
+  frameHasResistance = false;
+  /** Cached fat percentage from protocol >= 0x1E embedded in the frame. */
+  embeddedFatPercent: number | null = null;
+}
+
 /**
  * Adapter for Yunmai scales (Signal, Mini, Mini 2, SE).
  *
@@ -56,6 +73,7 @@ const PID_MINI2_M1690 = 0x018d;
  *   - Weight at bytes [13-14] big-endian / 100  (kg)
  *   - Resistance at bytes [15-16] big-endian     (frames of 18+ bytes)
  *   - Fat at bytes [17-18] big-endian / 100      (20-byte frames, protocol >= 0x1E)
+ *   - Reply 0x05 to GET_PROTOCOL_VERSION: a status frame, not a weigh-in
  *
  * Which fields a frame carries is read from the frame, not from the advertised
  * name (#474, ADR D061). openScale counts SIGNAL, ISM, ISC2P and Scale-3 as
@@ -75,27 +93,14 @@ export class YunmaiScaleAdapter
   };
   readonly charNotifyUuid = CHR_MEAS;
   readonly charWriteUuid = CHR_CMD;
-  readonly normalizesWeight = true;
-  /** GET_PROTOCOL_VERSION — initiates measurement on connect. */
+  /**
+   * GET_PROTOCOL_VERSION: initiates measurement on connect. The scale answers
+   * each one with a 0x05 frame, see isStatusFrame.
+   */
   readonly unlockCommand = [0x0d, 0x05, 0x13, 0x00, 0x16];
   readonly unlockIntervalMs = 5000;
 
-  /**
-   * Whether the frame parsed last has a resistance field. Per frame, not per
-   * device: the session reads `completionHoldMs` when the hold arms, right
-   * after the parse of the frame that armed it.
-   */
-  private frameHasResistance = false;
-
-  /** Cached fat percentage from protocol >= 0x1E embedded in the frame. */
-  private embeddedFatPercent: number | null = null;
-  /**
-   * The embedded fat percentage as it stood when each reading was emitted
-   * (#394): this adapter is a shared singleton and `computeMetrics()` runs
-   * later than the parse, so on the watcher transports the live field can
-   * already belong to the next weigh-in. See ReadingComposition.
-   */
-  private readonly comp = new ReadingComposition<number | null>();
+  private s = new YunmaiSession();
 
   matches(device: BleDeviceInfo): boolean {
     // The name, or the product id of a Mini 2 that advertises no name, only
@@ -137,21 +142,35 @@ export class YunmaiScaleAdapter
     // A buffer whose [2] disagrees with its length is not a frame anyone has
     // seen, so its trailing bytes are not trusted as fields.
     const declared = data[2] === data.length;
-    this.frameHasResistance = declared && data.length >= LEN_WITH_RESISTANCE;
-    const impedance = this.frameHasResistance ? data.readUInt16BE(15) : 0;
-    this.embeddedFatPercent =
+    this.s.frameHasResistance = declared && data.length >= LEN_WITH_RESISTANCE;
+    const impedance = this.s.frameHasResistance ? data.readUInt16BE(15) : 0;
+    this.s.embeddedFatPercent =
       declared && data.length >= LEN_WITH_FAT && data[1] >= PROTO_WITH_FAT
         ? data.readUInt16BE(17) / 100
         : null;
-    if (!this.frameHasResistance) {
+    if (!this.s.frameHasResistance) {
       bleLog.debug(
         `Yunmai: ${data.length}-byte final frame declares ${data[2]}; no resistance field`,
       );
     }
 
-    const reading: ScaleReading = { weight, impedance };
-    this.comp.pin(reading, this.embeddedFatPercent);
-    return reading;
+    // The embedded fat as it stood at emit time, null included (#394).
+    return { weight, impedance, scaleComposition: this.s.embeddedFatPercent };
+  }
+
+  /**
+   * The scale's reply to our GET_PROTOCOL_VERSION is not a weigh-in, so it must
+   * not keep the session open (#474, D070). Matched on the type [3] and on [2]
+   * being the frame's own length, as on every Yunmai frame on record; a live 0x01
+   * or final 0x02 frame never matches.
+   */
+  isStatusFrame(_charUuid: string, data: Buffer): boolean {
+    return (
+      data.length >= 4 &&
+      data[0] === 0x0d &&
+      data[2] === data.length &&
+      data[3] === RESP_PROTOCOL_VERSION
+    );
   }
 
   isComplete(reading: ScaleReading): boolean {
@@ -168,7 +187,7 @@ export class YunmaiScaleAdapter
    * frame without the field sets no hold and resolves immediately.
    */
   get completionHoldMs(): number | undefined {
-    return this.frameHasResistance ? COMPOSITION_HOLD_MS : undefined;
+    return this.s.frameHasResistance ? COMPOSITION_HOLD_MS : undefined;
   }
 
   /**
@@ -180,9 +199,9 @@ export class YunmaiScaleAdapter
   }
 
   /** Clear the previous weigh-in (#394). */
+
   onSessionStart(): void {
-    this.embeddedFatPercent = null;
-    this.frameHasResistance = false;
+    this.s = new YunmaiSession();
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
@@ -193,7 +212,8 @@ export class YunmaiScaleAdapter
     const heightM = profile.height / 100;
     const bmi = weight / (heightM * heightM);
 
-    const embeddedFat = this.comp.of(reading, this.embeddedFatPercent);
+    const pinned = reading.scaleComposition;
+    const embeddedFat = pinned === undefined ? this.s.embeddedFatPercent : pinned;
 
     // The first usable fat value wins, and every other field below is derived
     // from THAT one (ADR D028, review D-08). `ym.fat()` returns 0 for a result
@@ -205,8 +225,8 @@ export class YunmaiScaleAdapter
     // it as `(R - 100) / 100`), and the SIGNAL values from 150 up (105-221
     // seen) pass the 150-1200 gate while BIA on them lands far from the
     // estimate (33 % against 60 % at BMI 55, the 4 % floor at a normal BMI).
-    const usable = (f: number | null | undefined): f is number =>
-      f != null && compositionRejection({ fat: f }) === null;
+    const usable = (f: unknown): f is number =>
+      typeof f === 'number' && compositionRejection({ fat: f }) === null;
     let fat: number;
     if (usable(embeddedFat)) {
       fat = embeddedFat;

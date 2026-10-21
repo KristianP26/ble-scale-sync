@@ -1,0 +1,68 @@
+{
+  "returned": false,
+  "exports": [
+    {
+      "to": "dad/garmin@global:0",
+      "weight": 83,
+      "impedance": 480,
+      "user": "dad",
+      "timestamp": "2026-10-21T08:00:00.000Z"
+    }
+  ],
+  "computeMetrics": [
+    {
+      "weight": 83,
+      "impedance": 480,
+      "profile": {
+        "height": 183,
+        "age": 36,
+        "gender": "male",
+        "isAthlete": false,
+        "birthDate": "1990-06-15",
+        "lastKnownWeight": 82
+      }
+    }
+  ],
+  "queued": [],
+  "lastKnownWeightWrites": [],
+  "replayAnchorWrites": [],
+  "updateChecks": 1,
+  "display": [
+    [
+      "reading",
+      "dad",
+      "Dad",
+      83,
+      480,
+      [
+        "garmin"
+      ]
+    ],
+    [
+      "result",
+      "dad",
+      "Dad",
+      83,
+      [
+        {
+          "name": "garmin",
+          "ok": false,
+          "error": "HTTP 500"
+        }
+      ]
+    ]
+  ],
+  "after": {
+    "lastExportedWeights": {},
+    "lastExportedAt": {},
+    "lastKnownWeight": {
+      "dad": 82
+    }
+  },
+  "log": [
+    "[Sync] Measurement: 83.00 kg / 480 Ohm",
+    "[Sync] Exporting to: garmin...",
+    "[Sync] garmin: HTTP 500",
+    "[Sync] All exports failed."
+  ]
+}

@@ -90,6 +90,55 @@ describe('PostReadingWindow', () => {
     expect(debug).toHaveBeenCalledTimes(1);
   });
 
+  // #474: a Yunmai Mini 2 stays connectable for minutes after a weigh-in and
+  // is connected again on every advertisement, each session ending 60 s later.
+  it('runs the window from the end of a session after the reading that had no weigh-in', () => {
+    vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const t0 = 1_000_000;
+    const { win, set } = windowAt(t0);
+    win.noteReading(ADDR);
+
+    set(t0 + 1000);
+    expect(win.sinceReading(ADDR)).toBe(1000);
+    set(t0 + 61_000);
+    win.reportNoWeighIn(ADDR, 'Scale at X', 1000, 'GATT reading timeout');
+
+    // Past the window counted from the reading, inside the one counted from
+    // the end of that session; still measured from the reading.
+    set(t0 + 63_000);
+    expect(win.sinceReading(ADDR)).toBe(63_000);
+    set(t0 + 61_000 + WINDOW_MS);
+    expect(win.sinceReading(ADDR)).toBe(61_000 + WINDOW_MS);
+    set(t0 + 61_000 + WINDOW_MS + 1);
+    expect(win.sinceReading(ADDR)).toBeUndefined();
+  });
+
+  // The reconnects go on for minutes, so every such session has to move the
+  // window, not only the first one, which is the one logged at info.
+  it('moves the window again with every later session that had no weigh-in', () => {
+    vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+    vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    const t0 = 1_000_000;
+    const { win, set } = windowAt(t0);
+    win.noteReading(ADDR);
+
+    // Each session opens 2 s after the one before it ended and runs 60 s.
+    let end = t0;
+    for (const session of [1, 2, 3]) {
+      set(end + 2000);
+      const since = win.sinceReading(ADDR);
+      expect(since, `session ${session}`).toBe(end + 2000 - t0);
+      end += 2000 + 60_000;
+      set(end);
+      win.reportNoWeighIn(ADDR, 'Scale at X', since!, 'GATT reading timeout');
+    }
+    set(end + WINDOW_MS);
+    expect(win.sinceReading(ADDR)).toBe(end + WINDOW_MS - t0);
+    set(end + WINDOW_MS + 1);
+    expect(win.sinceReading(ADDR)).toBeUndefined();
+  });
+
   it('treats a clock that stepped back as outside the window', () => {
     const t0 = 1_000_000;
     const { win, set } = windowAt(t0);

@@ -1,0 +1,55 @@
+{
+  "returned": true,
+  "exports": [
+    {
+      "to": "mom/garmin@global:0",
+      "weight": 61,
+      "impedance": 0,
+      "user": "mom",
+      "timestamp": "2026-10-21T03:00:00.000Z",
+      "historical": true
+    }
+  ],
+  "computeMetrics": [
+    {
+      "weight": 61,
+      "impedance": 0,
+      "profile": {
+        "height": 165,
+        "age": 34,
+        "gender": "female",
+        "isAthlete": false,
+        "birthDate": "1992-03-20",
+        "lastKnownWeight": 60
+      }
+    }
+  ],
+  "queued": [],
+  "lastKnownWeightWrites": [],
+  "replayAnchorWrites": [],
+  "updateChecks": 1,
+  "display": [
+    [
+      "beep",
+      600,
+      150,
+      3
+    ]
+  ],
+  "after": {
+    "lastExportedWeights": {},
+    "lastExportedAt": {},
+    "lastKnownWeight": {
+      "dad": 82,
+      "mom": 60
+    }
+  },
+  "log": [
+    "[Sync] Raw reading: 120.00 kg / 0 Ohm (+ 1 historical)",
+    "[UserMatch] No range match for 120 kg — matched Dad by last_known_weight",
+    "[Sync] [Dad] Skipping 120.00 kg: outside Dad's range [75-95] kg (out_of_range: skip). Not exported, and last_known_weight is left alone.",
+    "[Sync] [Mom] [historic 2026-10-21T03:00:00.000Z] Measurement: 61.00 kg / 0 Ohm",
+    "[Sync] Exporting to: garmin...",
+    "[Sync] Done."
+  ]
+}

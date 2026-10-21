@@ -27,23 +27,19 @@ function makeSource(): {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
   nextReading: ReturnType<typeof vi.fn>;
-  updateConfig: ReturnType<typeof vi.fn>;
 } {
   const start = vi.fn(async () => undefined);
   const stop = vi.fn(async () => undefined);
   const nextReading = vi.fn(async () => STUB_RAW);
-  const updateConfig = vi.fn();
   return {
     source: {
       start,
       stop,
       nextReading: nextReading as ReadingSource['nextReading'],
-      updateConfig,
     },
     start,
     stop,
     nextReading,
-    updateConfig,
   };
 }
 

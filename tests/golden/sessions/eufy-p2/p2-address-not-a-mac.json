@@ -1,0 +1,24 @@
+{
+  "settled": {
+    "by": "error",
+    "atMs": 0,
+    "error": "Eufy: invalid MAC \"6F1C2E3A-0000-4000-8000-000000000001\" (need 6 hex octets)"
+  },
+  "reading": null,
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "fff2"
+    },
+    {
+      "seq": 1,
+      "atMs": 0,
+      "uuid": "fff4"
+    }
+  ],
+  "writes": [],
+  "rxDropped": 0,
+  "payload": null
+}

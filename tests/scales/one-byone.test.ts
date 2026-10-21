@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { OneByoneAdapter, OneByoneNewAdapter } from '../../src/scales/one-byone.js';
-import type { ConnectionContext } from '../../src/interfaces/scale-adapter.js';
 import {
   mockPeripheral,
   defaultProfile,
+  makeConnectionContext,
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
 import { uuid16, WEIGHT_ONLY_HOLD_MS } from '../../src/scales/body-comp-helpers.js';
@@ -75,12 +75,12 @@ describe('OneByoneAdapter', () => {
       const adapter = makeAdapter();
       const writeFn = vi.fn().mockResolvedValue(undefined);
 
-      const ctx: ConnectionContext = {
+      const ctx = makeConnectionContext({
         write: writeFn,
         read: vi.fn(),
         subscribe: vi.fn(),
         profile: defaultProfile(),
-      };
+      });
 
       await adapter.onConnected!(ctx);
 
@@ -206,13 +206,13 @@ describe('OneByoneAdapter', () => {
 
     it('re-arms stability on reconnect', async () => {
       const adapter = makeAdapter();
-      const ctx = {
+      const ctx = makeConnectionContext({
         write: async () => {},
         read: async () => Buffer.alloc(0),
         subscribe: async () => {},
         profile: defaultProfile(),
         deviceAddress: 'AA:BB:CC:DD:EE:FF',
-      };
+      });
 
       adapter.parseNotification(cfFrame(80));
       expect(adapter.isFinal!(adapter.parseNotification(cfFrame(80))!)).toBe(true);

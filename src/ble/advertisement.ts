@@ -4,9 +4,54 @@ import type {
   BleDeviceInfo,
   LiveWeight,
 } from '../interfaces/scale-adapter.js';
-import { hasParseableBroadcastSource, type RawReading } from './shared.js';
+import type { RawReading } from './shared.js';
+import { isForced } from '../scales/force.js';
 import { bleLog, normalizeUuid, BT_BASE_UUID_SUFFIX } from './types.js';
 import { isDebugEnabled } from '../logger.js';
+
+/**
+ * True when the matched device still carries broadcast/service data this
+ * adapter can parse — a usable reading may yet arrive in a future
+ * advertisement, so the caller should keep waiting rather than opening a GATT
+ * connection.
+ *
+ * False when the device exposes no parseable broadcast source: a dual-mode
+ * adapter (e.g. QN Scale, which declares `parseBroadcast` for the AABB
+ * broadcast variant but also has a GATT path) must then fall through to its
+ * GATT path. This is the #201 fix — the scan-batch proxy paths previously let
+ * any adapter that merely *declared* `parseBroadcast`/`parseServiceData` skip
+ * GATT entirely, so GATT-only QN scales (which advertise just a name + service
+ * UUID, no manufacturer data) were matched and then silently dropped.
+ *
+ * Known limitation (Option B): any `manufacturerData` counts as a broadcast
+ * source even if `parseBroadcast` would reject it. A QN scale advertising
+ * non-AABB manufacturer data would therefore be gated to "wait" — this matches
+ * the pre-#201 behaviour, so it is no regression. GATT-only QN scales
+ * advertise no manufacturer data at all, so they are unaffected. The
+ * esphome-proxy *watcher* intentionally does not use this helper: its
+ * per-advertisement stream GATT-connects such devices instead (QN Elis 1).
+ */
+export function hasParseableBroadcastSource(adapter: ScaleAdapter, info: BleDeviceInfo): boolean {
+  // A forced adapter (ble.force_scale_adapter) is exempt from the "any
+  // manufacturer data counts" shortcut above, because the shortcut assumes the
+  // adapter was chosen BY that advertisement. A forced one was not: it claims
+  // every device it is shown, so a dual-mode adapter like QN or Eufy P2 pointed
+  // at a scale whose manufacturer data it cannot parse would return "wait"
+  // forever and the GATT path would never run. Here the parse must actually
+  // succeed.
+  const forced = isForced(adapter);
+  if (adapter.parseBroadcast && info.manufacturerData) {
+    if (!forced) return true;
+    if (adapter.parseBroadcast(info.manufacturerData.data) !== null) return true;
+  }
+  if (adapter.parseServiceData && info.serviceData && info.serviceData.length > 0) {
+    if (!forced) return true;
+    if (info.serviceData.some((sd) => adapter.parseServiceData!(sd.uuid, sd.data) !== null)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 // ─── Advertisement decision (pure) ─────────────────────────────────────────────
 
@@ -38,7 +83,7 @@ export interface EvaluateOptions {
    * parseable broadcast source is present — it falls straight through to `gatt`
    * or `none`. The esphome-proxy watcher sets this false: it GATT-connects such
    * devices on demand from its per-advertisement stream (QN Elis 1). See the
-   * `hasParseableBroadcastSource` doc comment in shared.ts.
+   * `hasParseableBroadcastSource` doc comment above.
    */
   waitForBroadcast?: boolean;
 }
@@ -62,9 +107,9 @@ function parseAdvertisement(adapter: ScaleAdapter, info: BleDeviceInfo): ScaleRe
 }
 
 /**
- * Classify a single advertisement for a matched adapter. Pure: no side effects,
- * no timers, no I/O. Reproduces the parse-then-classify branch that was
- * copy-pasted across all five handler sites (#242).
+ * Classify a single advertisement for a matched adapter. No timers, no I/O; the
+ * adapter's parser may keep state (BroadcastSource), so call it once per
+ * advertisement. Reproduces the branch copy-pasted across five handlers (#242).
  *
  * Passive-preferring adapters (e.g. Mi Scale 2) emit a weight-only frame first
  * and a weight+impedance frame moments later, so they gate on `isComplete`
@@ -270,6 +315,44 @@ export class DedupWindow {
   }
 }
 
+// ─── Bounded per-address memory ───────────────────────────────────────────────
+
+/**
+ * A Map that keeps at most `max` entries, dropping the oldest to admit a new
+ * key. Each cache says how a key it already holds ages: `lru` makes it the
+ * newest again, `fifo` leaves it where it was. A watcher runs for weeks, and
+ * devices on rotating private addresses would otherwise grow these for good.
+ */
+export class BoundedMap<K, V> extends Map<K, V> {
+  constructor(
+    private readonly max: number,
+    private readonly mode: 'fifo' | 'lru',
+  ) {
+    super();
+  }
+
+  override set(key: K, value: V): this {
+    if (!this.has(key)) {
+      if (this.size >= this.max) this.delete(this.keys().next().value as K);
+    } else if (this.mode === 'lru') {
+      this.delete(key);
+    }
+    return super.set(key, value);
+  }
+}
+
+/** A Set of at most `max` values, dropping the oldest to admit a new one. */
+export class BoundedSet<T> extends Set<T> {
+  constructor(private readonly max: number) {
+    super();
+  }
+
+  override add(value: T): this {
+    if (!this.has(value) && this.size >= this.max) this.delete(this.values().next().value as T);
+    return super.add(value);
+  }
+}
+
 // ─── Post-reading window (per address, proxy GATT sessions) ────────────────────
 
 /** Scales remembered at once, oldest out; one per scale that gave a reading. */
@@ -288,9 +371,19 @@ const POST_READING_MAX_ADDRESSES = 64;
  * Asked when a session opens, not when it fails: a session can run for 90 s,
  * and what matters is whether it opened as the reconnect to a scale still on.
  * Entries are therefore not pruned by the window; the cap bounds them.
+ *
+ * A session in the window that ends without a weigh-in moves the window to
+ * its end, since the scale was still on until then: a Yunmai Mini 2 stays
+ * connectable for minutes after a weigh-in and is connected again on every
+ * advertisement, and each of those sessions after the first 60 s used to
+ * warn (#474, D070). The time of the reading itself is kept apart, so the
+ * line still says how long after the reading the session opened.
  */
 export class PostReadingWindow {
-  private readonly last = new Map<string, { at: number; told: boolean }>();
+  private readonly last = new BoundedMap<string, { at: number; from: number; told: boolean }>(
+    POST_READING_MAX_ADDRESSES,
+    'lru',
+  );
 
   constructor(
     private readonly windowMs: number,
@@ -302,43 +395,91 @@ export class PostReadingWindow {
 
   /** A GATT session on `address` delivered a reading. */
   noteReading(address: string): void {
-    const key = address.toLowerCase();
-    this.last.delete(key);
-    this.last.set(key, { at: this.now(), told: false });
-    if (this.last.size > POST_READING_MAX_ADDRESSES) {
-      const oldest = this.last.keys().next().value;
-      if (oldest !== undefined) this.last.delete(oldest);
-    }
+    const now = this.now();
+    this.last.set(address.toLowerCase(), { at: now, from: now, told: false });
   }
 
   /**
-   * Milliseconds since the last reading on `address` while that is within the
-   * window, else undefined. A clock that stepped back (an NTP sync on a board
-   * without a real-time clock) counts as outside it.
+   * Milliseconds since the last reading on `address` while within the window,
+   * else undefined. The window runs from the reading, or from the end of the
+   * last session after it that ended without a weigh-in (reportNoWeighIn). A
+   * clock that stepped back (an NTP sync on a board without a real-time clock)
+   * counts as outside it.
    */
   sinceReading(address: string): number | undefined {
     const entry = this.last.get(address.toLowerCase());
     if (!entry) return undefined;
-    const since = this.now() - entry.at;
-    return since >= 0 && since <= this.windowMs ? since : undefined;
+    const now = this.now();
+    const since = now - entry.at;
+    const inWindow = now - entry.from;
+    return since >= 0 && inWindow >= 0 && inWindow <= this.windowMs ? since : undefined;
   }
 
   /**
    * Log a session opened `sinceMs` after the last reading on `address` that
-   * ended without one. Info once per reading, debug after that: ESPHome
-   * retries a refused connect on every advertisement.
+   * ended without one, and move the window to now. Info once per reading,
+   * debug after that: ESPHome retries a refused connect on every
+   * advertisement, and a scale that stays on is connected again on each one.
    */
   reportNoWeighIn(address: string, subject: string, sinceMs: number, reason: string): void {
     const line =
       `${subject}: session opened ${(sinceMs / 1000).toFixed(1)} s after the last reading, ` +
       `while the scale was still on, ended without a new weigh-in (${reason}).`;
     const entry = this.last.get(address.toLowerCase());
+    if (entry) entry.from = Math.max(entry.from, this.now());
     if (entry && !entry.told) {
       entry.told = true;
       bleLog.info(line);
       return;
     }
     bleLog.debug(line);
+  }
+}
+
+// ─── Manufacturer data for the GATT session (per address) ─────────────────────
+
+/** A manufacturer-data entry as every transport hands it over. */
+type ManufacturerData = { id: number; data: Buffer };
+
+/**
+ * Last non-empty manufacturer data seen per address, for the GATT session
+ * handoff only (ConnectionContext.manufacturerData, #461).
+ *
+ * An advertisement and its scan response can arrive apart, and the one that
+ * matches an adapter (usually the named scan response) need not be the one
+ * that carries the manufacturer data. ESPHome delivers them as two events:
+ * the only QN scale logged through ESPHome matched on `name="QN-Scale"
+ * uuids=[ffe0]` with none (#331). Deliberately NOT merged into what the
+ * resolver or the broadcast parsers see: that would change which adapter
+ * matches, and hand a broadcast adapter a stale frame. Bounded like the name
+ * cache next to it.
+ */
+export class ManufacturerDataCache {
+  private readonly byAddress: BoundedMap<string, ManufacturerData>;
+
+  constructor(max = 64) {
+    this.byAddress = new BoundedMap(max, 'lru');
+  }
+
+  /** Remember the frame's manufacturer data, if it has any. */
+  remember(info: { manufacturerData?: ManufacturerData }, key: string): void {
+    const md = info.manufacturerData;
+    if (!md || md.data.length === 0) return;
+    this.byAddress.set(key, md);
+  }
+
+  /**
+   * The frame's own manufacturer data, else the last one seen for the address,
+   * else none. An entry without bytes counts as none, as in `remember`, and is
+   * never handed over: BlueZ can expose a company id with an empty payload.
+   */
+  forSession(
+    info: { manufacturerData?: ManufacturerData },
+    key: string,
+  ): ManufacturerData | undefined {
+    const own = info.manufacturerData;
+    if (own && own.data.length > 0) return own;
+    return this.byAddress.get(key);
   }
 }
 
@@ -480,15 +621,7 @@ export function formatAdvert(address: string, info: BleDeviceInfo): string {
  * fingerprint (a scan response filling in the name, or post-discovery
  * characteristics arriving) prints again, which is the interesting case.
  */
-const lastAdvertLine = new Map<string, string>();
-
-/**
- * Cap on remembered addresses. Devices using resolvable private addresses
- * rotate theirs every few minutes, and a watcher runs for weeks, so an
- * unbounded map is a slow leak on the smallest supported host. Oldest entry
- * out, same as the other caches on this path.
- */
-const ADVERT_CACHE_MAX = 64;
+const lastAdvertLine = new BoundedMap<string, string>(64, 'fifo');
 
 /**
  * Log an advertisement once per distinct content, on any transport.
@@ -508,10 +641,6 @@ export function logAdvert(address: string, info: BleDeviceInfo): void {
   const key = address.toLowerCase();
   const line = formatAdvert(address, info);
   if (lastAdvertLine.get(key) === line) return;
-  if (!lastAdvertLine.has(key) && lastAdvertLine.size >= ADVERT_CACHE_MAX) {
-    const oldest = lastAdvertLine.keys().next().value;
-    if (oldest !== undefined) lastAdvertLine.delete(oldest);
-  }
   lastAdvertLine.set(key, line);
   bleLog.debug(line);
 }

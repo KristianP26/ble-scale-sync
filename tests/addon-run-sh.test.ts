@@ -1031,7 +1031,7 @@ describe.skipIf(!SHELL)('run.sh ble_transport_problem', { timeout: 30_000 }, () 
   };
 
   it('says nothing for a transport that can run', () => {
-    for (const vars of [
+    const runnable: Record<string, string>[] = [
       { BLE_TRANSPORT: 'local' },
       { BLE_TRANSPORT: 'esphome-proxy', ESPHOME_HOST: '192.168.1.50', ESPHOME_KEY: '' },
       { BLE_TRANSPORT: 'esphome-proxy', ESPHOME_HOST: 'proxy.local', ESPHOME_KEY: KEY },
@@ -1039,7 +1039,8 @@ describe.skipIf(!SHELL)('run.sh ble_transport_problem', { timeout: 30_000 }, () 
       { ...MQTT_SHARED, MQTT_BROKER_URL: 'mqtts://broker.example:8883' },
       { ...MQTT_EMBEDDED, MQTT_PROXY_USERNAME: 'esp32', MQTT_PROXY_PASSWORD: 'pw' },
       { BLE_TRANSPORT: 'ha-bluetooth', SUPERVISOR_TOKEN: 'token' },
-    ]) {
+    ];
+    for (const vars of runnable) {
       expect(problem(vars), JSON.stringify(vars)).toEqual({ status: 0, out: '' });
     }
   });

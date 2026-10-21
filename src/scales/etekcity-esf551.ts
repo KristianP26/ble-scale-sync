@@ -7,7 +7,7 @@ import type {
   ScaleReading,
   UserProfile,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, biaFatIfPlausible } from './body-comp-helpers.js';
+import { uuid16, biaPayload } from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
@@ -31,8 +31,8 @@ const CHR_WRITE = uuid16(0xfff2);
  *   [20]    1 when the impedance field is populated
  *   [21]    display unit: 0 kg, 1 lb, 2 st
  *
- * The weight is grams regardless of what the scale is displaying, so
- * `normalizesWeight` holds and the display unit is only logged.
+ * The weight is grams regardless of what the scale is displaying, so the
+ * display unit is only logged.
  *
  * Decoded from the debug log in #385 (Etekcity Smart Fitness Scale,
  * D0:4D:00:43:40:BD, a full weigh-in from first contact to the settled frame)
@@ -89,6 +89,12 @@ function checksumCloses(d: Buffer): boolean {
   return ((0xff - sum) & 0xff) === d[5];
 }
 
+/** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
+class Esf551Session {
+  /** Log the display unit once per session rather than once per frame. */
+  loggedUnit = false;
+}
+
 /**
  * Etekcity ESF-551 Smart Fitness Scale.
  *
@@ -121,25 +127,20 @@ export class EtekcityEsf551Adapter implements ScaleAdapterCore, GattWiring {
   };
   readonly charNotifyUuid = CHR_NOTIFY;
   readonly charWriteUuid = CHR_WRITE;
-  readonly normalizesWeight = true;
 
   readonly characteristics: CharacteristicBinding[] = [
     { uuid: CHR_NOTIFY, type: 'notify' },
     { uuid: CHR_WRITE, type: 'write', optional: true },
   ];
 
-  /** Log the display unit once per session rather than once per frame. */
-  private loggedUnit = false;
+  private s = new Esf551Session();
 
   matches(device: BleDeviceInfo): boolean {
     return (device.localName || '').toLowerCase().includes('etekcity');
   }
 
-  // onSessionStart rather than onSessionEnd: the end hook is best effort (a
-  // timeout abandons the read promise rather than cancelling it), so a session
-  // that timed out would otherwise suppress the line for the whole process.
   onSessionStart(): void {
-    this.loggedUnit = false;
+    this.s = new Esf551Session();
   }
 
   parseNotification(data: Buffer): ScaleReading | null {
@@ -149,8 +150,8 @@ export class EtekcityEsf551Adapter implements ScaleAdapterCore, GattWiring {
       return null;
     }
 
-    if (!this.loggedUnit) {
-      this.loggedUnit = true;
+    if (!this.s.loggedUnit) {
+      this.s.loggedUnit = true;
       const raw = data[DISPLAY_UNIT_OFFSET];
       bleLog.debug(
         `Etekcity: scale is displaying ${DISPLAY_UNITS[raw] ?? `0x${raw.toString(16)}`}`,
@@ -184,8 +185,7 @@ export class EtekcityEsf551Adapter implements ScaleAdapterCore, GattWiring {
     // and computing it without the plausibility band would publish a pinned
     // floor or ceiling as if it were measured (#405). The capture this adapter
     // was decoded from reads 531 ohm, comfortably inside the band.
-    const fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
-    return buildPayload(reading.weight, reading.impedance, { fat }, profile);
+    return biaPayload(reading, profile);
   }
 }
 

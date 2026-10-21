@@ -1,23 +1,16 @@
 import type { Peripheral } from '@stoprocent/noble';
-import type {
-  BleDeviceInfo,
-  BodyComposition,
-  ScaleAdapter,
-} from '../../interfaces/scale-adapter.js';
+import type { BleDeviceInfo, ScaleAdapter } from '../../interfaces/scale-adapter.js';
 import type { ScanOptions, ScanResult } from '../types.js';
 import type { RawReading } from '../shared.js';
-import { waitForRawReading, withAbandonmentCleanup } from '../shared.js';
-import { resolveAdapter, resolveAfterDiscovery } from '../../scales/resolve.js';
+import { nativePolicy, runGattSession, selectSessionAdapter } from '../session/runner.js';
+import { resolveAdapter } from '../../scales/resolve.js';
 import {
   bleLog,
   normalizeUuid,
   sleep,
   withTimeout,
-  withIdleTimeout,
   MAX_CONNECT_RETRIES,
   GATT_DISCOVERY_TIMEOUT_MS,
-  RAW_READING_TIMEOUT_MS,
-  READING_SESSION_CAP_FACTOR,
   formatMac,
 } from '../types.js';
 import { wrapChar } from './char.js';
@@ -28,7 +21,7 @@ import { connectWithRetries } from './connect.js';
 import { discoverPeripheral } from './discovery.js';
 import { broadcastScan } from './broadcast.js';
 import type { NobleHandlerDeps } from './types.js';
-import { safeName } from '../advertisement.js';
+import { ManufacturerDataCache, safeName } from '../advertisement.js';
 
 export type { NobleApi, NobleHandlerDeps } from './types.js';
 
@@ -47,6 +40,17 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
    */
   let adapterWarningLogged = false;
 
+  /**
+   * The last non-empty manufacturer data each address advertised in this
+   * process, for the GATT session handoff only (#463, D071). Both noble
+   * drivers fold every report into one Peripheral, but a report without
+   * manufacturer data overwrites it there: the Windows (WinRT) and macOS
+   * bindings hand an empty buffer for it. So the session of a scale whose
+   * last report before the connect had none would go without, as on node-ble.
+   * Never fed to the resolver, as on the other transports.
+   */
+  const mfgCache = new ManufacturerDataCache();
+
   async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     if (opts.bleAdapter && !adapterWarningLogged) {
       bleLog.warn(
@@ -56,16 +60,7 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
       adapterWarningLogged = true;
     }
 
-    const {
-      targetMac,
-      adapters,
-      profile,
-      scaleAuth,
-      weightUnit,
-      onLiveData,
-      onLiveWeight,
-      abortSignal,
-    } = opts;
+    const { targetMac, adapters, profile, scaleAuth, onLiveData, onLiveWeight, abortSignal } = opts;
     const { readingTimeoutMs } = opts;
 
     try {
@@ -82,6 +77,8 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
       // discoveredAdapter is deferred until post-connect).
       const connectable = peripheral.connectable !== false;
       const mfgData = parseMfgData(peripheral.advertisement?.manufacturerData);
+      const sessionKey = peripheralAddress(peripheral).replace(/[:-]/g, '').toUpperCase();
+      mfgCache.remember({ manufacturerData: mfgData }, sessionKey);
       const advName = peripheral.advertisement?.localName ?? '';
       const advSvcUuids = (peripheral.advertisement?.serviceUuids ?? []).map(normalizeUuid);
       let broadcastAdapter = discoveredAdapter;
@@ -186,7 +183,7 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
             serviceData: parseServiceData(peripheral),
           };
           const serviceUuids = [...new Set([...advertised.serviceUuids, ...discoveredUuids])];
-          const found = resolveAfterDiscovery(
+          const found = selectSessionAdapter(
             advertised,
             { serviceUuids: discoveredUuids, characteristicUuids },
             adapters,
@@ -207,33 +204,31 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
         // Held in a variable so the abandonment cleanup below can reach the
         // same wrapper the session registered its disconnect callback on.
         const bleDevice = wrapPeripheral(peripheral);
-        // Bounded like the node-ble path (handler-node-ble/scan.ts): without
-        // this the reading phase relies entirely on the peripheral eventually
-        // disconnecting, so a stalled GATT session wedges the process (#283).
-        // A composition hold in progress moves the cap out to its end (#434).
-        const raw = await withAbandonmentCleanup(bleDevice, () =>
-          withIdleTimeout(
-            (onActivity) =>
-              waitForRawReading(
-                charMap,
-                bleDevice,
-                matchedAdapter,
-                profile,
-                peripheralAddress(peripheral).replace(/[:-]/g, '').toUpperCase(),
-                weightUnit,
-                onLiveData,
-                scaleAuth,
-                onActivity,
-                peripheral.advertisement?.localName,
-                parseMfgData(peripheral.advertisement?.manufacturerData),
-              ),
-            readingTimeoutMs ?? RAW_READING_TIMEOUT_MS,
-            'Timed out waiting for a complete scale reading',
-            {
-              ms: (readingTimeoutMs ?? RAW_READING_TIMEOUT_MS) * READING_SESSION_CAP_FACTOR,
-              message: 'GATT session cap exceeded',
-            },
-          ),
+        const ownMfg = parseMfgData(peripheral.advertisement?.manufacturerData);
+        mfgCache.remember({ manufacturerData: ownMfg }, sessionKey);
+        const sessionMfg = mfgCache.forSession({ manufacturerData: ownMfg }, sessionKey);
+        if (sessionMfg && sessionMfg !== ownMfg) {
+          bleLog.debug(
+            `${sessionKey} advertised no manufacturer data this time; the session gets what ` +
+              'it advertised earlier in this run (#463)',
+          );
+        }
+        // Bounded like the node-ble path: without this the reading phase relies
+        // entirely on the peripheral eventually disconnecting, so a stalled GATT
+        // session wedges the process (#283).
+        const raw = await runGattSession(
+          {
+            charMap,
+            device: bleDevice,
+            adapter: matchedAdapter,
+            profile,
+            address: sessionKey,
+            onLiveData,
+            scaleAuth,
+            deviceName: peripheral.advertisement?.localName,
+            manufacturerData: sessionMfg,
+          },
+          nativePolicy(readingTimeoutMs),
         );
 
         return raw;
@@ -248,12 +243,6 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
       // Safety net: stop any leftover scanning (targeted — not removeAllListeners)
       noble.stopScanningAsync().catch(() => {});
     }
-  }
-
-  /** Scan, read, and compute body composition. Wrapper around scanAndReadRaw(). */
-  async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
-    const { reading, adapter } = await scanAndReadRaw(opts);
-    return adapter.computeMetrics(reading, opts.profile);
   }
 
   /**
@@ -316,7 +305,6 @@ export function createNobleHandler({ noble, getState }: NobleHandlerDeps) {
 
   return {
     scanAndReadRaw,
-    scanAndRead,
     scanDevices,
     /** Test-only export of private helpers (#163, #283). */
     // broadcastScan takes the Noble instance explicitly now that it lives in

@@ -73,6 +73,22 @@ If your scale measures impedance and your body fat still looks like a BMI
 estimate, look for that line. The number in it is worth opening an issue with,
 together with what your vendor app reports.
 
+Some QN scales send their impedance scrambled and say so in their
+advertisement, which the app reads before it connects. The advertisement that
+reaches the app does not always carry that part. With the computer's own
+Bluetooth (Linux, Windows, macOS) and through an ESPHome proxy, the app then
+uses the one the same scale advertised earlier while the app has been running,
+so in continuous mode and on the Home Assistant add-on a connection goes
+without it only until one has carried it. Through the ESP32 MQTT proxy, and in
+a single-shot run, which starts afresh each time, nothing is remembered. A
+connection that got no advertisement at all has
+`QN: no advertisement for this session` in the debug log. On a QN scale with
+an 18-byte scale-info frame it also says so in the normal log, and an
+impedance of 4096 to 4351 or 4608 to 4863 Ohm, which only a scrambled body
+resistance gives, is then read unscrambled. Any other value is read as sent,
+so in such a connection a scrambled one between 151 and 255, 512 and 767 or
+1024 and 1200 Ohm can still be off by up to 39 Ohm.
+
 ### Body fat fallback (Deurenberg)
 
 When impedance is not available (the scale only measures weight, you stood on it in socks, or it sent 0 or a value outside 150 to 1200 ohm), only **weight**, **BMI**, and **body fat** (estimated) are calculated. The remaining metrics (water, bone, muscle, visceral fat, physique rating) require impedance and will not be available. A weigh-in without impedance still completes and is exported with these values. For ages 15 and under the children's form of the Deurenberg equation is used.
@@ -99,6 +115,8 @@ Where `sex` = 1 for male, 0 for female. For athletes, the result is multiplied b
 | **BMR**           | Mifflin-St Jeor: `10*W + 6.25*H - 5*A + s` where `s` = +5 male / -161 female |
 | **Metabolic Age** | `age + (idealBMR - BMR) / 15`                                                |
 
+The Arboleaf and other 8-electrode QN scales (19-byte dialect) compute BMR and a body age themselves. When their own body composition is used (see [below](#arboleaf-and-other-8-electrode-qn-scales-19-byte-dialect)), those two replace the BMR and metabolic age formulas. Every other scale gets the formulas.
+
 ## Athlete Mode
 
 Setting `is_athlete: true` in a user's profile adjusts the formulas for people who exercise regularly. The [setup wizard](/guide/configuration#setup-wizard-recommended) asks about this during user profile creation.
@@ -111,6 +129,8 @@ Effects:
 - **BMR**: +5% boost
 - **Metabolic Age**: set to actual age minus 5 when it would otherwise come out above actual age
 - **Deurenberg**: result multiplied by 0.85
+
+These adjustments apply to the formulas only. Values a scale computed itself are used as they are.
 
 ## Scale-Specific Algorithms
 
@@ -132,7 +152,7 @@ The scale's final reading carries its resistance and, on firmware with protocol 
 
 ### Arboleaf and other 8-electrode QN scales (19-byte dialect)
 
-These scales measure eight segment impedances (both hands, both feet and the trunk, at two frequencies) and compute body fat, water, muscle, bone and visceral fat themselves, for the profile ble-scale-sync sends before the weigh-in: the first user's age, height and sex (with `ble.qn_weight_ack` or `ble.qn_user_key`). Those values are used as one set, only when the weigh-in is matched to a user with exactly that profile and the scale measured after it accepted the profile; BMI, BMR, metabolic age and physique rating are calculated locally. Otherwise, and for weigh-ins the scale stored while nothing was connected, body composition is estimated from BMI. The segment impedances are logged in debug mode only; no whole-body impedance is derived from them. The scale reports muscle and bone as a percentage of body weight, which its display shows; they are exported in kg. Confirmed on two units ([#331](https://github.com/KristianP26/ble-scale-sync/issues/331)), details in [Supported Scales](/guide/supported-scales#arboleaf-qn-scale-19-byte-dialect).
+These scales measure eight segment impedances (both hands, both feet and the trunk, at two frequencies) and compute body fat, water, muscle, bone and visceral fat themselves, for the profile ble-scale-sync sends before the weigh-in: the first user's age, height and sex (with `ble.qn_weight_ack` or `ble.qn_user_key`). Those values are used as one set, only when the weigh-in is matched to a user with exactly that profile and the scale measured after it accepted the profile. With them come the scale's own BMR and its body age, exported as metabolic age, each only when it is plausible (500 to 5000 kcal, 12 to 120 years); a value outside that range is calculated locally instead, on its own. BMI and physique rating are always calculated locally. Otherwise, and for weigh-ins the scale stored while nothing was connected, body composition is estimated from BMI. The segment impedances are logged in debug mode only; no whole-body impedance is derived from them. The scale reports muscle and bone as a percentage of body weight, which its display shows; they are exported in kg. Confirmed on two units ([#331](https://github.com/KristianP26/ble-scale-sync/issues/331)); the BMR and body age have been compared with the vendor app on one unit only. Details in [Supported Scales](/guide/supported-scales#arboleaf-qn-scale-19-byte-dialect).
 
 ## References
 

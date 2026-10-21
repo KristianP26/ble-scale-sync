@@ -48,6 +48,19 @@ describe('resolveAdapter', () => {
     const info: BleDeviceInfo = { localName: 'QN-Scale', serviceUuids: ['fff0'] };
     expect(resolveAdapter(info, shuffled)?.name).toBe(resolveAdapter(info, adapters)?.name);
   });
+
+  // The order is kept per registry array (A-14): a second array, such as the
+  // forced one, must not be served the first one's order.
+  it('orders each registry array on its own', () => {
+    const mock = (name: string, priority: number) =>
+      ({ name, match: { priority }, matches: () => true }) as unknown as ScaleAdapter;
+    const lo = mock('lo', 1);
+    const hi = mock('hi', 2);
+    const info: BleDeviceInfo = { localName: 'x', serviceUuids: [] };
+    expect(resolveAdapter(info, [lo, hi])).toBe(hi);
+    expect(resolveAdapter(info, [lo])).toBe(lo);
+    expect(resolveAdapter(info, [hi, lo])).toBe(hi);
+  });
 });
 
 /**

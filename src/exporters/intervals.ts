@@ -3,7 +3,8 @@ import type { BodyComposition } from '../interfaces/scale-adapter.js';
 import type { Exporter, ExportContext, ExportResult } from '../interfaces/exporter.js';
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { IntervalsConfig } from './config.js';
-import { withRetry, httpError, httpHealthcheck } from '../utils/retry.js';
+import { httpError } from '../utils/retry.js';
+import { sendWithRetry, probe } from './http.js';
 import { errMsg } from '../utils/error.js';
 
 const log = createLogger('Intervals');
@@ -88,12 +89,9 @@ export class IntervalsExporter implements Exporter {
 
   async healthcheck(): Promise<ExportResult> {
     // GET today's wellness record: validates the API key and the athlete id.
-    return httpHealthcheck(() =>
-      fetch(this.wellnessUrl(toLocalDate(new Date())), {
-        headers: { Authorization: this.authHeader() },
-        signal: AbortSignal.timeout(5000),
-      }),
-    );
+    return probe(this.wellnessUrl(toLocalDate(new Date())), {
+      headers: { Authorization: this.authHeader() },
+    });
   }
 
   /**
@@ -135,26 +133,18 @@ export class IntervalsExporter implements Exporter {
       bodyFat: Number(data.bodyFatPercent.toFixed(1)),
     });
 
-    return withRetry(
-      async () => {
-        const response = await fetch(this.wellnessUrl(date), {
-          method: 'PUT',
-          headers: {
-            Authorization: this.authHeader(),
-            'Content-Type': 'application/json',
-          },
-          body,
-          signal: AbortSignal.timeout(10_000),
-        });
-
-        if (!response.ok) {
-          throw httpError(response.status);
-        }
-
-        log.info(`Intervals.icu wellness updated for ${date}.`);
-        return { success: true };
+    return sendWithRetry(
+      this.wellnessUrl(date),
+      {
+        method: 'PUT',
+        headers: { Authorization: this.authHeader(), 'Content-Type': 'application/json' },
+        body,
       },
-      { log, label: 'Intervals.icu wellness update' },
+      {
+        log,
+        label: 'Intervals.icu wellness update',
+        onOk: () => log.info(`Intervals.icu wellness updated for ${date}.`),
+      },
     );
   }
 }

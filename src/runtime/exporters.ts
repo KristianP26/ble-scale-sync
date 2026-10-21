@@ -10,7 +10,7 @@ import type { AppContext } from './context.js';
 import { exporterSlot, setExporterSlot } from './exporter-slot.js';
 
 /** Build the instances for resolved entries, remembering which slot each came from. */
-function buildFromSlots(resolved: ResolvedExporterEntry[]): Exporter[] {
+export function buildFromSlots(resolved: ResolvedExporterEntry[]): Exporter[] {
   return resolved.map((r) => {
     const exporter = createExporterFromEntry(r.entry);
     setExporterSlot(exporter, r);

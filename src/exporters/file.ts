@@ -6,6 +6,7 @@ import type { Exporter, ExportContext, ExportResult } from '../interfaces/export
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { FileConfig } from './config.js';
 import { errMsg } from '../utils/error.js';
+import { METRICS, METRIC_KEYS } from './metrics.js';
 
 const log = createLogger('File');
 
@@ -16,21 +17,7 @@ function csvEscape(value: string): string {
   return value;
 }
 
-const CSV_COLUMNS = [
-  'timestamp',
-  'weight',
-  'impedance',
-  'bmi',
-  'body_fat_percent',
-  'water_percent',
-  'bone_mass',
-  'muscle_mass',
-  'visceral_fat',
-  'physique_rating',
-  'bmr',
-  'metabolic_age',
-  'user',
-] as const;
+const CSV_COLUMNS = ['timestamp', ...METRIC_KEYS.map((k) => METRICS[k].column), 'user'];
 
 export const fileSchema: ExporterSchema = {
   name: 'file',
@@ -119,21 +106,11 @@ export class FileExporter implements Exporter {
       fs.appendFileSync(filePath, CSV_COLUMNS.join(',') + '\n', OWNER_ONLY);
     }
 
-    const row = [
-      timestamp,
-      data.weight.toFixed(2),
-      data.impedance,
-      data.bmi.toFixed(1),
-      data.bodyFatPercent.toFixed(1),
-      data.waterPercent.toFixed(1),
-      data.boneMass.toFixed(1),
-      data.muscleMass.toFixed(1),
-      data.visceralFat,
-      data.physiqueRating,
-      data.bmr,
-      data.metabolicAge,
-      csvEscape(user),
-    ].join(',');
+    const metrics = METRIC_KEYS.map((k) => {
+      const { decimals } = METRICS[k];
+      return decimals === undefined ? data[k] : data[k].toFixed(decimals);
+    });
+    const row = [timestamp, ...metrics, csvEscape(user)].join(',');
 
     fs.appendFileSync(filePath, row + '\n', OWNER_ONLY);
   }
@@ -146,17 +123,7 @@ export class FileExporter implements Exporter {
   ): void {
     const entry: Record<string, unknown> = {
       timestamp,
-      weight: data.weight,
-      impedance: data.impedance,
-      bmi: data.bmi,
-      bodyFatPercent: data.bodyFatPercent,
-      waterPercent: data.waterPercent,
-      boneMass: data.boneMass,
-      muscleMass: data.muscleMass,
-      visceralFat: data.visceralFat,
-      physiqueRating: data.physiqueRating,
-      bmr: data.bmr,
-      metabolicAge: data.metabolicAge,
+      ...Object.fromEntries(METRIC_KEYS.map((k) => [k, data[k]])),
     };
 
     if (user) {

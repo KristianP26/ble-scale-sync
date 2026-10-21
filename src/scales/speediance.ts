@@ -82,6 +82,13 @@ const IMPEDANCE_OFFSET = 15; // u16 LE
  * adapter, Hutbit and the shared BIA guard cannot drift apart (ADR D011).
  */
 
+/** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
+class SpeedianceSession {
+  cachedWeight = 0;
+  cachedImpedance = 0;
+  final = false;
+}
+
 export class SpeedianceAdapter implements ScaleAdapterCore, GattWiring, MultiCharNotify {
   readonly name = 'Speediance';
   readonly match: MatchDescriptor = {
@@ -95,7 +102,6 @@ export class SpeedianceAdapter implements ScaleAdapterCore, GattWiring, MultiCha
   };
   readonly charNotifyUuid = CHR_FFB2;
   readonly charWriteUuid = CHR_FFB1;
-  readonly normalizesWeight = true;
 
   readonly characteristics: CharacteristicBinding[] = [
     { uuid: CHR_FFB1, type: 'write' },
@@ -103,28 +109,15 @@ export class SpeedianceAdapter implements ScaleAdapterCore, GattWiring, MultiCha
     { uuid: CHR_FFB3, type: 'notify' }, // physically indicate; declared notify to get subscribed (see Robi note)
   ];
 
-  private cachedWeight = 0;
-  private cachedImpedance = 0;
-  private final = false;
+  private s = new SpeedianceSession();
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
     return name.startsWith('speed_s') || name.includes('speediance');
   }
 
-  /**
-   * Clear the previous weigh-in before anything is subscribed (#394).
-   *
-   * This used to live in `onConnected`, which is too late for a multi-char
-   * adapter: `subscribeAndInit` enables EVERY notify binding and only then
-   * awaits `startInit()`, so frames can already be arriving - through several
-   * D-Bus round trips for the second and third binding - while the reset has
-   * not run. `onSessionStart` runs before the first subscribe.
-   */
   onSessionStart(): void {
-    this.cachedWeight = 0;
-    this.cachedImpedance = 0;
-    this.final = false;
+    this.s = new SpeedianceSession();
   }
 
   async onConnected(ctx: ConnectionContext): Promise<void> {
@@ -143,7 +136,7 @@ export class SpeedianceAdapter implements ScaleAdapterCore, GattWiring, MultiCha
     if (data[3] === 0xa7) {
       const w = data.readUIntBE(WEIGHT_OFFSET, WEIGHT_BYTES) / WEIGHT_DIV;
       if (w > 0 && Number.isFinite(w)) {
-        this.cachedWeight = w;
+        this.s.cachedWeight = w;
         // The impedance field ends 5 bytes past the length the guard above
         // enforces, so a short a7 frame would make readUInt16LE throw
         // ERR_OUT_OF_RANGE out of a notification callback that has no
@@ -153,9 +146,9 @@ export class SpeedianceAdapter implements ScaleAdapterCore, GattWiring, MultiCha
         // treated below.
         const imp = data.length >= IMPEDANCE_OFFSET + 2 ? data.readUInt16LE(IMPEDANCE_OFFSET) : 0;
         if (imp >= IMPEDANCE_MIN_OHM && imp <= IMPEDANCE_MAX_OHM) {
-          this.cachedImpedance = imp;
+          this.s.cachedImpedance = imp;
         } else {
-          this.cachedImpedance = 0;
+          this.s.cachedImpedance = 0;
           if (imp > 0) {
             bleLog.debug(
               `Speediance: impedance ${imp} is outside the ${IMPEDANCE_MIN_OHM} to ` +
@@ -163,12 +156,12 @@ export class SpeedianceAdapter implements ScaleAdapterCore, GattWiring, MultiCha
             );
           }
         }
-        this.final = true;
+        this.s.final = true;
       }
     }
 
-    if (this.final && this.cachedWeight > 0) {
-      return { weight: this.cachedWeight, impedance: this.cachedImpedance };
+    if (this.s.final && this.s.cachedWeight > 0) {
+      return { weight: this.s.cachedWeight, impedance: this.s.cachedImpedance };
     }
     return null;
   }
@@ -178,7 +171,7 @@ export class SpeedianceAdapter implements ScaleAdapterCore, GattWiring, MultiCha
   }
 
   isComplete(reading: ScaleReading): boolean {
-    return reading.weight > 0 && this.final;
+    return reading.weight > 0 && this.s.final;
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {

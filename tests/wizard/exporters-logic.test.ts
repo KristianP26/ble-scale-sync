@@ -5,6 +5,19 @@ import { promptField, exportersStep } from '../../src/wizard/steps/exporters.js'
 import type { WizardContext } from '../../src/wizard/types.js';
 import { scriptedPrompts, type ScriptedAnswer } from '../helpers/scripted-prompts.js';
 import { snapshotEnv } from '../helpers/env-snapshot.js';
+import type { UserConfig } from '../../src/config/schema.js';
+
+/** The exporter step reads only name, slug and exporters; the rest is filler. */
+const testUser = (name: string, slug: string): UserConfig => ({
+  name,
+  slug,
+  height: 170,
+  birth_date: '1990-01-01',
+  gender: 'female',
+  is_athlete: false,
+  weight_range: { min: 50, max: 100 },
+  last_known_weight: null,
+});
 
 const EXPORTERS = /^Exporters:/;
 const STORE_ENV = /Store it in \.env/;
@@ -196,7 +209,7 @@ describe('exportersStep — confirm skip', () => {
       [EXPORTERS, ['webhook']], // webhook supports global
       [/^Configure Webhook\?/, false],
     ]);
-    ctx.config.users = [{ name: 'Test', slug: 'test' }];
+    ctx.config.users = [testUser('Test', 'test')];
 
     await exportersStep.run(ctx);
 
@@ -211,7 +224,7 @@ describe('exportersStep — confirm skip', () => {
       [/^Configure Webhook\?/, true],
       [/^Webhook URL:/, 'https://example.com'],
     ]);
-    ctx.config.users = [{ name: 'Test', slug: 'test' }];
+    ctx.config.users = [testUser('Test', 'test')];
 
     await exportersStep.run(ctx);
 
@@ -226,7 +239,7 @@ describe('exportersStep — confirm skip', () => {
       [EXPORTERS, []],
       [/Continue without exporters\?/, true],
     ]);
-    ctx.config.users = [{ name: 'Test', slug: 'test' }];
+    ctx.config.users = [testUser('Test', 'test')];
 
     await exportersStep.run(ctx);
 
@@ -241,7 +254,7 @@ describe('exportersStep — confirm skip', () => {
       [/^Configure Webhook\?/, true],
       [/^Webhook URL:/, 'https://example.com'],
     ]);
-    ctx.config.users = [{ name: 'Test', slug: 'test' }];
+    ctx.config.users = [testUser('Test', 'test')];
 
     await exportersStep.run(ctx);
 
@@ -336,10 +349,7 @@ describe('exportersStep — token_dir default per user', () => {
 
   it.each(['garmin', 'strava'])('offers each %s user a separate token_dir', async (type) => {
     const ctx = enterOnlyCtx(type, 2);
-    ctx.config.users = [
-      { name: 'Alice', slug: 'alice' },
-      { name: 'Bob', slug: 'bob' },
-    ];
+    ctx.config.users = [testUser('Alice', 'alice'), testUser('Bob', 'bob')];
 
     await exportersStep.run(ctx);
 
@@ -351,11 +361,11 @@ describe('exportersStep — token_dir default per user', () => {
 
   it('keeps the plain default for a single user', async () => {
     const ctx = enterOnlyCtx('garmin', 1);
-    ctx.config.users = [{ name: 'Alice', slug: 'alice' }];
+    ctx.config.users = [testUser('Alice', 'alice')];
 
     await exportersStep.run(ctx);
 
-    const user = ctx.config.users[0] as { exporters?: { token_dir?: string }[] };
+    const user = ctx.config.users![0] as { exporters?: { token_dir?: string }[] };
     expect(user.exporters?.[0]?.token_dir).toBe('./garmin-tokens');
   });
 });

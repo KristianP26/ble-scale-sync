@@ -7,7 +7,7 @@ import { loadYamlConfig } from '../../src/config/load.js';
 import { resolveRuntimeConfig } from '../../src/config/resolve.js';
 import { createAppContext, type AppContext } from '../../src/runtime/context.js';
 import { reloadAppConfig, userDisplaySnapshot } from '../../src/runtime/reload.js';
-import { getExportersForUser } from '../../src/runtime/exporters.js';
+import { getExportersForUser, resolveQueuedExporter } from '../../src/runtime/exporters.js';
 
 /**
  * A config.yaml whose exporter entry cannot be built still passes
@@ -97,6 +97,75 @@ describe('reloadAppConfig with an exporter that cannot be built (E-07)', () => {
   });
 });
 
+/**
+ * Two exporters of one type in one list: only the D029 slot tells them apart.
+ * The reload refilled the cache with instances built without a slot, so a
+ * queued entry for the second one resolved to nothing and was dropped (R-01).
+ */
+describe('reloadAppConfig and the exporter slots (D029)', () => {
+  function twoWebhooks(cooldown: number): string {
+    return `
+version: 1
+ble:
+  scale_mac: "FF:03:00:13:A1:04"
+scale:
+  weight_unit: kg
+  height_unit: cm
+unknown_user: nearest
+users:
+  - name: Test
+    slug: test
+    height: 183
+    birth_date: "1990-06-15"
+    gender: male
+    is_athlete: true
+    weight_range: { min: 70, max: 100 }
+    last_known_weight: null
+    exporters:
+      - type: webhook
+        url: "https://example.invalid/first"
+      - type: webhook
+        url: "https://example.invalid/second"
+runtime:
+  continuous_mode: true
+  scan_cooldown: ${cooldown}
+  dry_run: false
+  debug: false
+`;
+  }
+
+  it('resolves a queued entry to its own slot after a reload', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reload-slots-'));
+    const file = path.join(dir, 'config.yaml');
+    try {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      fs.writeFileSync(file, twoWebhooks(30));
+      const config = loadYamlConfig(file);
+      const ctx = createAppContext({
+        config,
+        resolved: resolveRuntimeConfig(config),
+        configSource: 'yaml',
+        configPath: file,
+        signal: new AbortController().signal,
+        abortApp: () => {},
+      });
+
+      fs.writeFileSync(file, twoWebhooks(99));
+      await reloadAppConfig(ctx, { value: userDisplaySnapshot(ctx.config) });
+      expect(ctx.config.runtime?.scan_cooldown).toBe(99);
+
+      const [first, second] = getExportersForUser(ctx, 'test');
+      const queued = { exporter: 'webhook', userSlug: 'test', exporterList: 'user' as const };
+      expect(resolveQueuedExporter(ctx, { ...queued, exporterIndex: 1 })).toBe(second);
+      expect(resolveQueuedExporter(ctx, { ...queued, exporterIndex: 0 })).toBe(first);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+      vi.restoreAllMocks();
+    }
+  });
+});
+
 describe('reloadAppConfig and the restored replay anchors (D067)', () => {
   it('keeps the weigh-ins an earlier process saved across a reload', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reload-anchors-'));
@@ -129,6 +198,141 @@ describe('reloadAppConfig and the restored replay anchors (D067)', () => {
       expect(ctx.lastExportedWeights.get('test')).toBe(82.3);
       expect(ctx.lastExportedAt.get('test')?.toISOString()).toBe('2026-10-19T07:00:00.000Z');
     } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+      vi.restoreAllMocks();
+    }
+  });
+});
+
+/**
+ * ble.noble_driver is restart-required, but the reload re-published
+ * NOBLE_DRIVER and the BLE layer reads it again on every poll cycle, so the
+ * next cycle loaded the other noble module next to the running one (C-06).
+ */
+describe('reloadAppConfig and ble.noble_driver (C-06)', () => {
+  function nobleConfig(driver: string | null): string {
+    return `
+version: 1
+ble:
+  scale_mac: "FF:03:00:13:A1:04"
+${driver ? `  noble_driver: ${driver}\n` : ''}users:
+  - name: Test
+    slug: test
+    height: 183
+    birth_date: "1990-06-15"
+    gender: male
+    is_athlete: true
+    weight_range: { min: 70, max: 100 }
+runtime:
+  continuous_mode: true
+`;
+  }
+
+  it('keeps the startup driver and only warns that a restart is required', async () => {
+    const { resolveHandlerKey } = await import('../../src/ble/index.js');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reload-noble-'));
+    const file = path.join(dir, 'config.yaml');
+    const envBefore = process.env.NOBLE_DRIVER;
+    delete process.env.NOBLE_DRIVER;
+    try {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      fs.writeFileSync(file, nobleConfig('stoprocent'));
+      const config = loadYamlConfig(file);
+      const ctx = createAppContext({
+        config,
+        resolved: resolveRuntimeConfig(config),
+        configSource: 'yaml',
+        configPath: file,
+        signal: new AbortController().signal,
+        abortApp: () => {},
+      });
+      expect(resolveHandlerKey(ctx.bleHandler)).toBe('noble');
+
+      fs.writeFileSync(file, nobleConfig('abandonware'));
+      await reloadAppConfig(ctx, { value: userDisplaySnapshot(ctx.config) });
+
+      expect(ctx.config.ble?.noble_driver).toBe('abandonware');
+      expect(resolveHandlerKey(ctx.bleHandler)).toBe('noble');
+      expect(warn.mock.calls.map((c) => c.join(' ')).join('\n')).toContain(
+        'Config change detected in ble.noble_driver (stoprocent -> abandonware)',
+      );
+
+      // The startup value is still known as ours: removing noble_driver is not
+      // read back as a NOBLE_DRIVER override from the environment.
+      fs.writeFileSync(file, nobleConfig(null));
+      await reloadAppConfig(ctx, { value: userDisplaySnapshot(ctx.config) });
+
+      expect(ctx.config.ble?.noble_driver).toBeUndefined();
+      expect(resolveHandlerKey(ctx.bleHandler)).toBe('noble');
+    } finally {
+      if (envBefore === undefined) delete process.env.NOBLE_DRIVER;
+      else process.env.NOBLE_DRIVER = envBefore;
+      fs.rmSync(dir, { recursive: true, force: true });
+      vi.restoreAllMocks();
+    }
+  });
+});
+
+/**
+ * The ESP32 display board shows the users from the mqtt-proxy config topic. A
+ * reload that edits them hands the new list over; one that leaves them alone
+ * keeps the snapshot (T-13: reload.ts loads the handler only on this path).
+ */
+describe('reloadAppConfig and the mqtt-proxy display users', () => {
+  function proxyConfig(name: string, cooldown: number): string {
+    return `
+version: 1
+ble:
+  handler: mqtt-proxy
+  mqtt_proxy:
+    broker_url: "mqtt://broker.invalid:1883"
+users:
+  - name: ${name}
+    slug: test
+    height: 183
+    birth_date: "1990-06-15"
+    gender: male
+    is_athlete: true
+    weight_range: { min: 70, max: 100 }
+runtime:
+  continuous_mode: true
+  scan_cooldown: ${cooldown}
+`;
+  }
+
+  it('hands the edited users to the display and updates the snapshot', async () => {
+    const { getDisplayUsers, _resetProxyState } =
+      await import('../../src/ble/handler-mqtt-proxy/client.js');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reload-display-'));
+    const file = path.join(dir, 'config.yaml');
+    try {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      _resetProxyState();
+      fs.writeFileSync(file, proxyConfig('Before', 30));
+      const config = loadYamlConfig(file);
+      const ctx = createAppContext({
+        config,
+        resolved: resolveRuntimeConfig(config),
+        configSource: 'yaml',
+        configPath: file,
+        signal: new AbortController().signal,
+        abortApp: () => {},
+      });
+      const snapshot = { value: userDisplaySnapshot(ctx.config) };
+
+      fs.writeFileSync(file, proxyConfig('Before', 99));
+      await reloadAppConfig(ctx, snapshot);
+      expect(getDisplayUsers()).toEqual([]);
+
+      fs.writeFileSync(file, proxyConfig('After', 99));
+      await reloadAppConfig(ctx, snapshot);
+      const users = [{ slug: 'test', name: 'After', weight_range: { min: 70, max: 100 } }];
+      expect(getDisplayUsers()).toEqual(users);
+      expect(snapshot.value).toBe(JSON.stringify(users));
+    } finally {
+      _resetProxyState();
       fs.rmSync(dir, { recursive: true, force: true });
       vi.restoreAllMocks();
     }

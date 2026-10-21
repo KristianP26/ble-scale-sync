@@ -1,0 +1,39 @@
+{
+  "adverts": [
+    {
+      "atMs": 0,
+      "data": "181b 0220ea0701010c00000000983a",
+      "decision": "partial",
+      "reading": {
+        "weight": 75,
+        "impedance": 0
+      },
+      "sink": "held",
+      "untilMs": 4000,
+      "count": 5
+    }
+  ],
+  "exports": [
+    {
+      "atMs": 12000,
+      "by": "grace",
+      "reading": {
+        "weight": 75,
+        "impedance": 0
+      },
+      "payload": {
+        "weight": 75,
+        "impedance": 0,
+        "bmi": 22.4,
+        "bodyFatPercent": 17.57,
+        "waterPercent": 60.17,
+        "boneMass": 2.6,
+        "muscleMass": 59.22,
+        "visceralFat": 8,
+        "physiqueRating": 8,
+        "bmr": 1748,
+        "metabolicAge": 31
+      }
+    }
+  ]
+}

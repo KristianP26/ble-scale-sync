@@ -325,6 +325,77 @@ describe('D027 / E-04: a stored record belongs to whoever it weighs like', () =>
   });
 });
 
+// The QN 18-byte record the scale kept for no user (#463, D072) carries no
+// userIndex, so it goes by its weight like any stored record without one. The
+// session is the reporter's of 2026-10-20 19:39 (record 72.60 kg at 19:28:16Z,
+// live 72.55 kg); the three users' ranges and last_known_weight values are
+// chosen, the reporter's are not in the log. The processor does not change for
+// D072, so this passes on the code before it too: it pins the route the
+// adapter's new reading takes.
+describe('D072: a stored weigh-in the QN scale kept for no user', () => {
+  const users = (): UserConfig[] => [
+    user({
+      name: 'User1',
+      slug: 'user1',
+      weight_range: { min: 65, max: 80 },
+      last_known_weight: 71.1,
+    }),
+    user({
+      name: 'User2',
+      slug: 'user2',
+      weight_range: { min: 50, max: 64 },
+      last_known_weight: 58,
+    }),
+    user({
+      name: 'User3',
+      slug: 'user3',
+      weight_range: { min: 85, max: 110 },
+      last_known_weight: 95,
+    }),
+  ];
+  const STORED_AT = new Date('2026-10-20T19:28:16.000Z');
+
+  it.each([
+    ['no saved weigh-in, as at 19:39', undefined],
+    ['the 17:58 weigh-in saved, 71.1 @ 17:58:18.706Z', new Date('2026-10-20T17:58:18.706Z')],
+  ])('goes to the user it weighs like as history, %s', async (_label, anchorAt) => {
+    vi.setSystemTime(new Date('2026-10-20T19:39:59.699Z'));
+    try {
+      const by: Record<string, { garmin: Recorder; mqtt: Recorder }> = {};
+      for (const slug of ['user1', 'user2', 'user3']) {
+        by[slug] = { garmin: exporter('garmin', true), mqtt: exporter('mqtt', false) };
+      }
+      const ctx = makeCtx(users());
+      if (anchorAt) {
+        ctx.lastExportedWeights.set('user1', 71.1);
+        ctx.lastExportedAt.set('user1', anchorAt);
+      }
+      const raw: RawReading = {
+        reading: { weight: 72.55, impedance: 4317 },
+        history: [{ weight: 72.6, impedance: 4303, timestamp: STORED_AT, fromMemory: true }],
+        adapter: recordingAdapter(),
+      };
+
+      await processReading(ctx, raw, {
+        getExportersForUser: (slug) => [by[slug].garmin, by[slug].mqtt],
+      });
+
+      expect(by.user1.garmin.calls.map((c) => c.weight)).toEqual([72.6, 72.55]);
+      expect(by.user1.garmin.calls[0].context.historical).toBe(true);
+      expect(by.user1.garmin.calls[0].context.timestamp).toEqual(STORED_AT);
+      expect(by.user1.mqtt.calls.map((c) => c.weight)).toEqual([72.55]);
+      for (const slug of ['user2', 'user3']) {
+        expect(by[slug].garmin.calls).toHaveLength(0);
+        expect(by[slug].mqtt.calls).toHaveLength(0);
+      }
+      const warned = warnSpy.mock.calls.map((c) => c.map(String).join(' ')).join(' | ');
+      expect(warned).not.toMatch(/Dropping a stored record/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('E-03 / E-09: last_known_weight follows the live weigh-ins', () => {
   it('multi-user: keeps the in-memory value current, so the next replay of it dedups', async () => {
     const garmin = exporter('garmin', true);

@@ -1,0 +1,101 @@
+{
+  "config": {
+    "version": 1,
+    "ble": {
+      "handler": "auto",
+      "scale_mac": "AA:BB:CC:DD:EE:03",
+      "noble_driver": "abandonware",
+      "adapter": "hci1"
+    },
+    "scale": {
+      "weight_unit": "lbs",
+      "height_unit": "cm",
+      "display_unit": "weight_unit"
+    },
+    "unknown_user": "nearest",
+    "out_of_range": "warn",
+    "users": [
+      {
+        "name": "Default",
+        "slug": "default",
+        "height": 182.88,
+        "birth_date": "1992-03-20",
+        "gender": "female",
+        "is_athlete": true,
+        "weight_range": {
+          "min": 0,
+          "max": 999
+        },
+        "last_known_weight": null
+      }
+    ],
+    "global_exporters": [
+      {
+        "type": "garmin",
+        "weight_only": true
+      },
+      {
+        "type": "mqtt",
+        "broker_url": "mqtt://broker.local:1883",
+        "topic": "scale/body-composition",
+        "qos": 1,
+        "retain": true,
+        "client_id": "ble-scale-sync",
+        "ha_discovery": true,
+        "ha_device_name": "BLE Scale"
+      },
+      {
+        "type": "webhook",
+        "url": "https://hooks.example/one",
+        "method": "POST",
+        "headers": {},
+        "timeout": 10000
+      }
+    ],
+    "runtime": {
+      "continuous_mode": true,
+      "scan_cooldown": 45,
+      "dry_run": true,
+      "debug": true,
+      "watchdog_max_consecutive_failures": 10,
+      "watch_config": true,
+      "idle_rescan_delay": 5,
+      "no_reading_rescan_delay": 0,
+      "retry_failed_exports": true
+    },
+    "update_check": true
+  },
+  "runtime": {
+    "profile": {
+      "height": 182.88,
+      "age": 34,
+      "gender": "female",
+      "isAthlete": true,
+      "birthDate": "1992-03-20"
+    },
+    "scaleMac": "AA:BB:CC:DD:EE:03",
+    "weightUnit": "lbs",
+    "dryRun": true,
+    "continuousMode": true,
+    "scanCooldownSec": 45,
+    "retryFailedExports": true,
+    "watchdogMaxFailures": 10,
+    "watchConfig": true,
+    "bleHandler": "auto",
+    "bleAdapter": "hci1",
+    "adapterPrivacy": false
+  },
+  "adapterRuntime": {
+    "scaleMac": "AA:BB:CC:DD:EE:03",
+    "displayUnit": "lbs",
+    "userWeights": "config.users"
+  },
+  "exporterSlots": {
+    "default": [
+      "global:0:garmin",
+      "global:1:mqtt",
+      "global:2:webhook"
+    ]
+  },
+  "log": []
+}

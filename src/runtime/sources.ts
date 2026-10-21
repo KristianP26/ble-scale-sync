@@ -1,6 +1,6 @@
 import { createReadingSource } from '../ble/index.js';
 import type { ScaleAdapter } from '../interfaces/scale-adapter.js';
-import { resolveUserProfile } from '../config/resolve.js';
+import { resolveScaleAuth, resolveUserProfile } from '../config/resolve.js';
 import { ConsecutiveFailureWatchdog } from '../ble/watchdog.js';
 import { bleFailureKind, shouldCountAsWatchdogFailure } from '../ble/failure-kind.js';
 import {
@@ -11,6 +11,7 @@ import {
   StaleLinkError,
 } from '../ble/types.js';
 import { createLogger } from '../logger.js';
+import { RuntimeSchema } from '../config/schema.js';
 import { PollReadingSource } from './poll-source.js';
 import type { ReadingSource } from './loop.js';
 import type { AppContext } from './context.js';
@@ -27,11 +28,8 @@ const log = createLogger('Sync');
  */
 const DEFAULT_PROXY_LIVENESS_MIN = 30;
 
-/** Fallback for `runtime.idle_rescan_delay` when the whole runtime block is absent. */
-const DEFAULT_IDLE_RESCAN_DELAY_SEC = 5;
-
-/** Fallback for `runtime.no_reading_rescan_delay`: no floor, the backoff as before. */
-const DEFAULT_NO_READING_RESCAN_DELAY_SEC = 0;
+/** The schema's defaults, for a config without a runtime block. */
+const RUNTIME_DEFAULTS = RuntimeSchema.parse({});
 
 export interface ReadingSourceBundle {
   source: ReadingSource;
@@ -62,12 +60,7 @@ export async function buildReadingSource(
   // Re-derived on each call (and on each reload) so edits to users[0] land on
   // the next cycle without a process restart.
   const profile = () => resolveUserProfile(ctx.config.users[0], ctx.config.scale);
-  const scaleAuth = () => ({
-    pin: ctx.config.users[0]?.beurer_pin,
-    userIndex: ctx.config.users[0]?.beurer_user_index,
-    provision: ctx.config.users[0]?.beurer_provision,
-    registerNewUser: ctx.config.users[0]?.beurer_register_new_user,
-  });
+  const scaleAuth = () => resolveScaleAuth(ctx.config.users[0]);
 
   const plan = await createReadingSource({
     bleHandler: ctx.bleHandler,
@@ -78,7 +71,6 @@ export async function buildReadingSource(
     targetMac: ctx.scaleMac,
     profile,
     scaleAuth: scaleAuth(),
-    weightUnit: ctx.weightUnit,
   });
 
   if (plan.kind === 'watcher') {
@@ -106,7 +98,6 @@ export async function buildReadingSource(
           targetMac: ctx.scaleMac,
           profile,
           scaleAuth: scaleAuth(),
-          weightUnit: ctx.weightUnit,
         }),
       onFailure: (err) => {
         if (!(err instanceof TransportWedgedError)) return;
@@ -177,24 +168,25 @@ export async function buildReadingSource(
     // same way scan_cooldown is read in onSuccess below.
     failureDelayMs: (err) =>
       bleFailureKind(err) === 'idle'
-        ? (ctx.config.runtime?.idle_rescan_delay ?? DEFAULT_IDLE_RESCAN_DELAY_SEC) * 1000
+        ? (ctx.config.runtime?.idle_rescan_delay ?? RUNTIME_DEFAULTS.idle_rescan_delay) * 1000
         : undefined,
     // A session that connected, heard the scale and then went quiet until its
     // idle timeout ('no-reading', D041) waits at least
     // runtime.no_reading_rescan_delay (#475). A scale that accepts a connection
     // all the time and keeps its weigh-ins (BF915) otherwise shows PAIR through
     // a new session every few minutes, all day. Not after the session cap: frames
-    // kept coming the whole time, which is more likely somebody on the scale than
-    // nobody. Not after a session that heard nothing either: the watchdog counts
-    // those, and a long wait would only delay its recovery. A held pairing
-    // (#471) and a stale link (#472) are neither, so they keep their own waits.
+    // other than status frames kept coming the whole time (D070), which is more
+    // likely somebody on the scale than nobody. Not after a session that heard
+    // nothing either: the watchdog counts those, and a long wait would only
+    // delay its recovery. A held pairing (#471) and a stale link (#472) are
+    // neither, so they keep their own waits.
     // Only a floor: the backoff still advances (D041). Read per call, so a
     // reload lands with the next session that ends this way.
     failureDelayFloor: (err) => {
       if (bleFailureKind(err) !== 'no-reading') return undefined;
       if (!(err instanceof SessionTimeoutError) || err.reason !== 'idle') return undefined;
       const sec =
-        ctx.config.runtime?.no_reading_rescan_delay ?? DEFAULT_NO_READING_RESCAN_DELAY_SEC;
+        ctx.config.runtime?.no_reading_rescan_delay ?? RUNTIME_DEFAULTS.no_reading_rescan_delay;
       return sec > 0 ? { ms: sec * 1000, label: 'runtime.no_reading_rescan_delay' } : undefined;
     },
     onFailure: (err) => {

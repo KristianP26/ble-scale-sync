@@ -34,8 +34,13 @@ export function resolveDedupMarksPath(configPath?: string): string {
   return join(dir, DEDUP_MARKS_FILENAME);
 }
 
-/** The stored marks, or an empty map when the file is missing or unreadable. */
-function loadMarks(path: string): Record<string, number> {
+/**
+ * The stored marks, or an empty map when the file is missing or unreadable.
+ * `forSave` rethrows a read that failed for any reason but bad JSON (EIO,
+ * EACCES): writing then would drop every other adapter's mark, so the save
+ * must not act on it, like the retry queue and the replay anchors (#460).
+ */
+function loadMarks(path: string, forSave = false): Record<string, number> {
   if (!existsSync(path)) return {};
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, 'utf-8'));
@@ -46,6 +51,7 @@ function loadMarks(path: string): Record<string, number> {
     }
     return marks;
   } catch (err) {
+    if (forSave && !(err instanceof SyntaxError)) throw err;
     // A broken file costs at most one duplicate export, which is what every
     // restart cost before this file existed. Refusing to start would cost more.
     log.debug(`Could not read ${DEDUP_MARKS_FILENAME}: ${errMsg(err)}`);
@@ -72,6 +78,9 @@ export function restoreDedupMarks(path: string, adapters: readonly ScaleAdapter[
   }
 }
 
+/** Set by the first failed save: a file that cannot be read or written stays that way. */
+let saveFailureReported = false;
+
 /**
  * Store the adapter's current mark, when it keeps one and it changed.
  *
@@ -85,7 +94,7 @@ export function persistDedupMark(path: string, adapter: ScaleAdapter): void {
   if (!adapter.dedupMark) return;
   try {
     const mark = adapter.dedupMark();
-    const marks = loadMarks(path);
+    const marks = loadMarks(path, true);
     if (marks[adapter.name] === mark) return;
     if (mark === undefined) {
       if (!(adapter.name in marks)) return;
@@ -95,9 +104,11 @@ export function persistDedupMark(path: string, adapter: ScaleAdapter): void {
     }
     atomicWrite(path, JSON.stringify(marks) + '\n');
   } catch (err) {
-    log.warn(
+    (saveFailureReported ? log.debug : log.warn)(
       `Could not save ${adapter.name}'s de-duplication mark (${errMsg(err)}); ` +
-        'a restart in the next few minutes may export the last weigh-in again',
+        `${DEDUP_MARKS_FILENAME} is left as it is, and a restart in the next few minutes ` +
+        'may export the last weigh-in again.',
     );
+    saveFailureReported = true;
   }
 }

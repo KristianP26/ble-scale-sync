@@ -1,0 +1,77 @@
+{
+  "returned": true,
+  "exports": [
+    {
+      "to": "dad/garmin@global:0",
+      "weight": 83,
+      "impedance": 0,
+      "user": "dad",
+      "timestamp": "2026-10-21T08:00:00.000Z"
+    }
+  ],
+  "computeMetrics": [
+    {
+      "weight": 83,
+      "impedance": 0,
+      "profile": {
+        "height": 183,
+        "age": 36,
+        "gender": "male",
+        "isAthlete": false,
+        "birthDate": "1990-06-15",
+        "lastKnownWeight": 82
+      }
+    }
+  ],
+  "queued": [],
+  "lastKnownWeightWrites": [],
+  "replayAnchorWrites": [
+    {
+      "slug": "dad",
+      "weight": 83,
+      "time": "2026-10-21T08:00:00.000Z"
+    }
+  ],
+  "updateChecks": 1,
+  "display": [
+    [
+      "reading",
+      "dad",
+      "Dad",
+      83,
+      0,
+      [
+        "garmin"
+      ]
+    ],
+    [
+      "result",
+      "dad",
+      "Dad",
+      83,
+      [
+        {
+          "name": "garmin",
+          "ok": true
+        }
+      ]
+    ]
+  ],
+  "after": {
+    "lastExportedWeights": {
+      "dad": 83
+    },
+    "lastExportedAt": {
+      "dad": "2026-10-21T08:00:00.000Z"
+    },
+    "lastKnownWeight": {
+      "dad": 83
+    }
+  },
+  "log": [
+    "[Sync] Impedance 6553 Ohm is not a usable measurement (150-1200 Ohm), so it is not used.",
+    "[Sync] Measurement: 83.00 kg / 0 Ohm",
+    "[Sync] Exporting to: garmin...",
+    "[Sync] Done."
+  ]
+}

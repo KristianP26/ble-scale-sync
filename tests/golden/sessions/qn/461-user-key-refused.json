@@ -1,0 +1,123 @@
+{
+  "settled": {
+    "by": "reading",
+    "atMs": 19067
+  },
+  "reading": {
+    "weight": 71.65,
+    "impedance": 502
+  },
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "fff1"
+    },
+    {
+      "seq": 1,
+      "atMs": 0,
+      "uuid": "ae02"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 2,
+      "atMs": 0,
+      "uuid": "ae01",
+      "hex": "fedcbac00600020101ef",
+      "withResponse": false
+    },
+    {
+      "seq": 3,
+      "atMs": 200,
+      "uuid": "fff2",
+      "hex": "13090001100000002d",
+      "withResponse": false
+    },
+    {
+      "seq": 4,
+      "atMs": 638,
+      "uuid": "fff2",
+      "hex": "20080078c05c32ee",
+      "withResponse": false
+    },
+    {
+      "seq": 5,
+      "atMs": 638,
+      "uuid": "ae01",
+      "hex": "0270617373",
+      "withResponse": false
+    },
+    {
+      "seq": 6,
+      "atMs": 739,
+      "uuid": "ae01",
+      "hex": "0148b984dbeb8c129d5a7eb925a61f5acc",
+      "withResponse": false
+    },
+    {
+      "seq": 7,
+      "atMs": 1037,
+      "uuid": "fff2",
+      "hex": "a00d020103e80033071c0e0201",
+      "withResponse": false
+    },
+    {
+      "seq": 8,
+      "atMs": 1237,
+      "uuid": "fff2",
+      "hex": "22060000032b",
+      "withResponse": false
+    },
+    {
+      "seq": 9,
+      "atMs": 4614,
+      "uuid": "fff2",
+      "hex": "22060000032b",
+      "withResponse": false
+    },
+    {
+      "seq": 10,
+      "atMs": 8807,
+      "uuid": "fff2",
+      "hex": "22060000032b",
+      "withResponse": false
+    },
+    {
+      "seq": 11,
+      "atMs": 12122,
+      "uuid": "fff2",
+      "hex": "22060000032b",
+      "withResponse": false
+    },
+    {
+      "seq": 12,
+      "atMs": 15437,
+      "uuid": "fff2",
+      "hex": "22060000032b",
+      "withResponse": false
+    },
+    {
+      "seq": 13,
+      "atMs": 18752,
+      "uuid": "fff2",
+      "hex": "22060000032b",
+      "withResponse": false
+    }
+  ],
+  "rxDropped": 0,
+  "payload": {
+    "weight": 71.65,
+    "impedance": 502,
+    "bmi": 21.63,
+    "bodyFatPercent": 16.2,
+    "waterPercent": 62.01,
+    "boneMass": 2.52,
+    "muscleMass": 57.52,
+    "visceralFat": 8,
+    "physiqueRating": 9,
+    "bmr": 1684,
+    "metabolicAge": 46
+  }
+}

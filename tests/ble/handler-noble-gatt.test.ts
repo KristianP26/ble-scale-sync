@@ -7,7 +7,8 @@ import type {
   ScaleReading,
 } from '../../src/interfaces/scale-adapter.js';
 import { createNobleHandler, type NobleApi } from '../../src/ble/handler-noble-shared/index.js';
-import { bleLog, normalizeUuid } from '../../src/ble/types.js';
+import { bleLog, normalizeUuid, SessionTimeoutError } from '../../src/ble/types.js';
+import { bleFailureKind } from '../../src/ble/failure-kind.js';
 
 /**
  * The noble GATT path is the only transport on Windows and macOS (B-11). These
@@ -131,7 +132,6 @@ function gattAdapter(name: string, matches: (info: BleDeviceInfo) => boolean): S
     charWriteUuid: WRITE,
     unlockCommand: [0x01],
     unlockIntervalMs: 0,
-    normalizesWeight: true,
     matches: vi.fn(matches),
     parseNotification: (data: Buffer): ScaleReading | null =>
       data.length > 0 ? { weight: data[0], impedance: 500 } : null,
@@ -315,5 +315,204 @@ describe('noble passes advertised service data to the adapter resolver (B-10)', 
     await expect(
       handler.scanAndReadRaw({ targetMac: MAC, adapters: [adapter], profile: PROFILE }),
     ).resolves.toMatchObject({ adapter: { name: 'ByServiceData' } });
+  });
+});
+
+// #463: both noble drivers fold every report into one Peripheral, and a report
+// without manufacturer data overwrites it with an empty buffer on Windows and
+// macOS. The session gets the last one the address advertised in this run;
+// the resolver keeps what the advertisement shows (D071).
+describe('noble hands a session the manufacturer data its scale advertised earlier (#463, D071)', () => {
+  /**
+   * The #463 Physiq's advertisement of 2026-10-20 17:57:58.247 with its company
+   * id 0xffff; the MAC it echoes at [5..10] is the fake 02:00:00:00:00:01.
+   */
+  const MSD_1020 = Buffer.from('ffff08140100030100000000026108020015', 'hex');
+  const PAYLOAD_1020 = MSD_1020.subarray(2);
+
+  /** A GATT adapter that claims the device by name and notes what its session got. */
+  function recordingAdapter(seen: unknown[], matched: unknown[]): ScaleAdapter {
+    const base = gattAdapter('ByName', (info) => {
+      matched.push(info.manufacturerData);
+      return info.localName === 'QN-Scale';
+    });
+    return {
+      ...base,
+      onConnected: async (ctx: { manufacturerData?: unknown; write: unknown }) => {
+        seen.push(ctx.manufacturerData);
+      },
+    } as unknown as ScaleAdapter;
+  }
+
+  it.each([
+    ['target MAC', MAC.toUpperCase()],
+    ['auto-discovery', undefined],
+  ])(
+    '%s: gives the session the earlier data when the last report had none',
+    async (_label, targetMac) => {
+      const { services } = standardServices(weightOn);
+      const p = new FakePeripheral({ localName: 'QN-Scale', manufacturerData: MSD_1020, services });
+      noble.peripherals = [p];
+      const seen: unknown[] = [];
+      const matched: unknown[] = [];
+      const adapter = recordingAdapter(seen, matched);
+
+      await handler.scanAndReadRaw({ targetMac, adapters: [adapter], profile: PROFILE });
+      // The WinRT binding's buffer for a report without manufacturer data.
+      p.advertisement.manufacturerData = Buffer.alloc(0);
+      matched.length = 0;
+      await handler.scanAndReadRaw({ targetMac, adapters: [adapter], profile: PROFILE });
+
+      expect(seen).toEqual([
+        { id: 0xffff, data: PAYLOAD_1020 },
+        { id: 0xffff, data: PAYLOAD_1020 },
+      ]);
+      expect(matched.length).toBeGreaterThan(0);
+      expect(matched.every((md) => md === undefined)).toBe(true);
+    },
+  );
+
+  it('remembers the data of a cycle whose connect failed', async () => {
+    vi.useFakeTimers();
+    try {
+      const { services } = standardServices(weightOn);
+      const p = new FakePeripheral({
+        localName: 'QN-Scale',
+        manufacturerData: MSD_1020,
+        services,
+        connectFailures: 6,
+      });
+      noble.peripherals = [p];
+      const seen: unknown[] = [];
+      const adapter = recordingAdapter(seen, []);
+      const failed = handler.scanAndReadRaw({ adapters: [adapter], profile: PROFILE }).then(
+        () => 'read',
+        () => 'failed',
+      );
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await failed).toBe('failed');
+      expect(seen).toEqual([]);
+
+      p.advertisement.manufacturerData = Buffer.alloc(0);
+      const read = handler.scanAndReadRaw({ adapters: [adapter], profile: PROFILE });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await read;
+      expect(seen).toEqual([{ id: 0xffff, data: PAYLOAD_1020 }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a session its own data, and another address none', async () => {
+    const { services } = standardServices(weightOn);
+    const p = new FakePeripheral({ localName: 'QN-Scale', manufacturerData: MSD_1020, services });
+    noble.peripherals = [p];
+    const seen: unknown[] = [];
+    const adapter = recordingAdapter(seen, []);
+    await handler.scanAndReadRaw({ adapters: [adapter], profile: PROFILE });
+
+    const own = Buffer.from('ffff08140100010100000000026108010015', 'hex');
+    p.advertisement.manufacturerData = own;
+    await handler.scanAndReadRaw({ adapters: [adapter], profile: PROFILE });
+
+    const other = new FakePeripheral({
+      address: '11:22:33:44:55:66',
+      localName: 'QN-Scale',
+      services: standardServices(weightOn).services,
+    });
+    noble.peripherals = [other];
+    await handler.scanAndReadRaw({ adapters: [adapter], profile: PROFILE });
+
+    expect(seen).toEqual([
+      { id: 0xffff, data: PAYLOAD_1020 },
+      { id: 0xffff, data: own.subarray(2) },
+      undefined,
+    ]);
+  });
+});
+
+// Characterization of the noble session policy (arch wave 2): idle and cap from
+// readingTimeoutMs, a composition hold moves the cap, a shutdown does not end
+// the GATT session, and nothing is tagged for the watchdog.
+describe('noble GATT session policy', () => {
+  const IDLE_MS = 1000;
+
+  async function session(
+    drive: (notify: FakeChar, ac: AbortController) => Promise<unknown>,
+    overrides: Partial<ScaleAdapter> = {},
+  ): Promise<{ result: unknown; atMs: number }> {
+    vi.useFakeTimers();
+    try {
+      const { notify, services } = standardServices();
+      noble.peripherals = [new FakePeripheral({ localName: 'FakeScale', services })];
+      const adapter = {
+        ...gattAdapter('ByName', (info) => info.localName === 'FakeScale'),
+        ...overrides,
+      } as ScaleAdapter;
+      const ac = new AbortController();
+      const t0 = Date.now();
+      let atMs = -1;
+      const outcome = handler
+        .scanAndReadRaw({
+          adapters: [adapter],
+          profile: PROFILE,
+          readingTimeoutMs: IDLE_MS,
+          abortSignal: ac.signal,
+        })
+        .then(
+          (r) => r,
+          (e: unknown) => e,
+        )
+        .finally(() => (atMs = Date.now() - t0));
+      // Discovery, connect and subscribe settle within these 50 ms.
+      await vi.advanceTimersByTimeAsync(50);
+      await drive(notify, ac);
+      return { result: await outcome, atMs };
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it('ends a silent session on the idle timeout, untagged', async () => {
+    const { result, atMs } = await session(() => vi.advanceTimersByTimeAsync(IDLE_MS));
+    expect((result as Error).message).toBe('Timed out waiting for a complete scale reading');
+    expect(atMs).toBeLessThanOrEqual(50 + IDLE_MS);
+    expect(bleFailureKind(result)).toBeUndefined();
+  });
+
+  it('ends a session that keeps sending rejected frames at 3 x idle', async () => {
+    const { result, atMs } = await session(async (notify) => {
+      for (let i = 0; i < 8; i++) {
+        notify.emit('data', Buffer.alloc(0));
+        await vi.advanceTimersByTimeAsync(IDLE_MS / 2);
+      }
+    });
+    expect(result).toBeInstanceOf(SessionTimeoutError);
+    expect((result as Error).message).toBe('GATT session cap exceeded');
+    expect(atMs).toBeGreaterThanOrEqual(3 * IDLE_MS);
+    expect(atMs).toBeLessThan(3 * IDLE_MS + 100);
+    expect(bleFailureKind(result)).toBeUndefined();
+  });
+
+  it('lets a composition hold run past the cap', async () => {
+    const { result, atMs } = await session(
+      async (notify) => {
+        weightOn(notify);
+        await vi.advanceTimersByTimeAsync(5 * IDLE_MS);
+      },
+      { completionHoldMs: 4 * IDLE_MS, isFinal: () => false, isComplete: () => true },
+    );
+    expect(result).toMatchObject({ reading: { weight: 72 } });
+    expect(atMs).toBeGreaterThan(3 * IDLE_MS);
+  });
+
+  it('does not end the GATT session on the abort signal', async () => {
+    const { result } = await session(async (notify, ac) => {
+      ac.abort(new Error('shutdown'));
+      await vi.advanceTimersByTimeAsync(100);
+      weightOn(notify);
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(result).toMatchObject({ reading: { weight: 72 } });
   });
 });

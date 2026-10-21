@@ -1,4 +1,4 @@
-import type { ScaleAdapter, BleDeviceInfo } from '../../interfaces/scale-adapter.js';
+import type { ScaleAdapter } from '../../interfaces/scale-adapter.js';
 import { resolveAdapter } from '../../scales/resolve.js';
 import {
   bleLog,
@@ -16,8 +16,9 @@ import {
 } from '../types.js';
 import { helperOf, getDbusNext, releaseDeviceProxy, type Adapter, type Device } from './dbus.js';
 import { logAdvertisementSnapshot } from './device-object.js';
-import { noScaleRecognizedMessage } from './device-cache.js';
+import { deviceInfoFrom, noScaleRecognizedMessage } from './device-cache.js';
 import { reensureAdapterPrivacy } from './privacy.js';
+import { onceLog } from './once-log.js';
 import {
   getAdapter,
   resetConnection,
@@ -182,21 +183,11 @@ export interface StartDiscoveryOptions {
   abortSignal?: AbortSignal;
 }
 
-const announced = new Set<string>();
-
-/** First time at `level`, after that at debug: these repeat every cycle while the state lasts. */
-function announceOnce(key: string, level: 'info' | 'warn', message: string): void {
-  if (announced.has(key)) {
-    bleLog.debug(message);
-    return;
-  }
-  announced.add(key);
-  bleLog[level](message);
-}
+const announceOnce = onceLog();
 
 /** Test seam: the announcements are per process on purpose. */
 export function _resetDiscoveryRecoveryStateForTests(): void {
-  announced.clear();
+  announceOnce.reset();
 }
 
 /**
@@ -684,63 +675,58 @@ export async function startDiscoverySafe(
     }
   }
 
+  /**
+   * Tiers 4-6: a reset below bluetoothd's D-Bus state, then discovery on a
+   * fresh connection. Undefined when the reset did not take or the start
+   * failed. The abort is checked before tier 4 only; whether tiers 5 and 6
+   * should check it too is open (arch audit B-09).
+   */
+  const afterReset = async (
+    what: string,
+    reset: () => Promise<boolean>,
+    beforeConnect?: () => Promise<void>,
+  ): Promise<Adapter | undefined> => {
+    if (!(await reset())) return undefined;
+    resetConnection();
+    await beforeConnect?.();
+    try {
+      const freshAdapter = await getAdapter(bleAdapter);
+      live = freshAdapter;
+      // A reset replaced the connection, so read the generation again.
+      if (await applyFilterAndStart(freshAdapter)) {
+        filteredScans.set(freshAdapter, currentConnectionGeneration());
+      }
+      bleLog.debug(`Discovery started after ${what}`);
+      return freshAdapter;
+    } catch (e) {
+      bleLog.debug(`startDiscovery after ${what} failed: ${errMsg(e)}`);
+      return undefined;
+    }
+  };
+
   // 4. Kernel-level adapter reset via btmgmt + fresh D-Bus connection
   if (opts.abortSignal?.aborted) return live ?? false;
   bleLog.debug('Attempting kernel-level adapter reset via btmgmt...');
-  if (await resetAdapterBtmgmt(parseHciIndex(bleAdapter))) {
-    resetConnection();
-    try {
-      const freshAdapter = await getAdapter(bleAdapter);
-      live = freshAdapter;
-      // A reset replaced the connection, so read the generation again.
-      if (await applyFilterAndStart(freshAdapter)) {
-        filteredScans.set(freshAdapter, currentConnectionGeneration());
-      }
-      bleLog.debug('Discovery started after btmgmt reset');
-      return freshAdapter;
-    } catch (e) {
-      bleLog.debug(`startDiscovery after btmgmt reset failed: ${errMsg(e)}`);
-    }
-  }
+  const afterBtmgmt = await afterReset('btmgmt reset', () =>
+    resetAdapterBtmgmt(parseHciIndex(bleAdapter)),
+  );
+  if (afterBtmgmt) return afterBtmgmt;
 
   // 5. RF-level reset via rfkill (more thorough than btmgmt)
   bleLog.debug('Attempting rfkill block/unblock...');
-  if (await resetAdapterRfkill()) {
-    resetConnection();
-    try {
-      const freshAdapter = await getAdapter(bleAdapter);
-      live = freshAdapter;
-      // A reset replaced the connection, so read the generation again.
-      if (await applyFilterAndStart(freshAdapter)) {
-        filteredScans.set(freshAdapter, currentConnectionGeneration());
-      }
-      bleLog.debug('Discovery started after rfkill reset');
-      return freshAdapter;
-    } catch (e) {
-      bleLog.debug(`startDiscovery after rfkill reset failed: ${errMsg(e)}`);
-    }
-  }
+  const afterRfkill = await afterReset('rfkill reset', resetAdapterRfkill);
+  if (afterRfkill) return afterRfkill;
 
-  // 6. Restart bluetoothd service (clears all D-Bus session state)
+  // 6. Restart bluetoothd service (clears all D-Bus session state). It
+  // applies its own Privacy setting on start, which can clear
+  // ble.adapter_privacy's; a no-op when the option is off (#417).
   bleLog.debug('Attempting bluetoothd service restart...');
-  if (await restartBluetoothd()) {
-    resetConnection();
-    // bluetoothd applies its own Privacy setting on start, which can clear
-    // ble.adapter_privacy's. No-op when the option is off (#417).
-    await reensureAdapterPrivacy();
-    try {
-      const freshAdapter = await getAdapter(bleAdapter);
-      live = freshAdapter;
-      // A reset replaced the connection, so read the generation again.
-      if (await applyFilterAndStart(freshAdapter)) {
-        filteredScans.set(freshAdapter, currentConnectionGeneration());
-      }
-      bleLog.debug('Discovery started after bluetoothd restart');
-      return freshAdapter;
-    } catch (e) {
-      bleLog.debug(`startDiscovery after bluetoothd restart failed: ${errMsg(e)}`);
-    }
-  }
+  const afterRestart = await afterReset(
+    'bluetoothd restart',
+    restartBluetoothd,
+    reensureAdapterPrivacy,
+  );
+  if (afterRestart) return afterRestart;
 
   // All strategies failed
   bleLog.warn(
@@ -930,15 +916,7 @@ export async function autoDiscover(
         // The loop above skips a device with no name at all, so a genuinely
         // nameless broadcast peer is still only reachable through `ble.scale_mac`.
         const advert = await logAdvertisementSnapshot(dev).catch(() => undefined);
-        const info: BleDeviceInfo = {
-          localName: name,
-          address: formatMac(addr),
-          serviceUuids: [],
-          ...(advert?.manufacturerData ? { manufacturerData: advert.manufacturerData } : {}),
-          ...(advert?.serviceData && advert.serviceData.length > 0
-            ? { serviceData: advert.serviceData }
-            : {}),
-        };
+        const info = deviceInfoFrom(name, addr, advert);
         const matched = resolveAdapter(info, adapters);
         if (matched?.singleBond) {
           // Connecting is enough for the kernel to pair it, and it keeps one

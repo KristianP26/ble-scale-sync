@@ -1,0 +1,84 @@
+{
+  "returned": true,
+  "exports": [
+    {
+      "to": "dad/garmin@global:0",
+      "weight": 120,
+      "impedance": 0,
+      "user": "dad",
+      "timestamp": "2026-10-21T08:00:00.000Z"
+    }
+  ],
+  "computeMetrics": [
+    {
+      "weight": 120,
+      "impedance": 0,
+      "profile": {
+        "height": 183,
+        "age": 36,
+        "gender": "male",
+        "isAthlete": false,
+        "birthDate": "1990-06-15",
+        "lastKnownWeight": 82
+      }
+    }
+  ],
+  "queued": [],
+  "lastKnownWeightWrites": [
+    [
+      "<config.yaml>",
+      "dad",
+      120,
+      82
+    ]
+  ],
+  "replayAnchorWrites": [
+    {
+      "slug": "dad",
+      "weight": 120,
+      "time": "2026-10-21T08:00:00.000Z"
+    }
+  ],
+  "updateChecks": 1,
+  "display": [
+    [
+      "reading",
+      "dad",
+      "Dad",
+      120,
+      0,
+      [
+        "garmin"
+      ]
+    ],
+    [
+      "result",
+      "dad",
+      "Dad",
+      120,
+      [
+        {
+          "name": "garmin",
+          "ok": true
+        }
+      ]
+    ]
+  ],
+  "after": {
+    "lastExportedWeights": {
+      "dad": 120
+    },
+    "lastExportedAt": {
+      "dad": "2026-10-21T08:00:00.000Z"
+    },
+    "lastKnownWeight": {
+      "dad": 120
+    }
+  },
+  "log": [
+    "[Sync] 120.00 kg is outside Dad's range [75-95] kg. Exporting it anyway (out_of_range: warn). Set out_of_range: skip to drop it instead.",
+    "[Sync] Measurement: 120.00 kg / 0 Ohm",
+    "[Sync] Exporting to: garmin...",
+    "[Sync] Done."
+  ]
+}

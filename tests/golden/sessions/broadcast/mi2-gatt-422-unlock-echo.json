@@ -1,0 +1,48 @@
+{
+  "settled": {
+    "by": "error",
+    "atMs": 10000,
+    "error": "Scale disconnected before reading completed"
+  },
+  "reading": null,
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 1,
+      "atMs": 0,
+      "uuid": "00002a2f0000351221180009af100700"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "00002a2f0000351221180009af100700",
+      "hex": "01968abd62",
+      "withResponse": false
+    },
+    {
+      "seq": 2,
+      "atMs": 3000,
+      "uuid": "00002a2f0000351221180009af100700",
+      "hex": "01968abd62",
+      "withResponse": false
+    },
+    {
+      "seq": 3,
+      "atMs": 6000,
+      "uuid": "00002a2f0000351221180009af100700",
+      "hex": "01968abd62",
+      "withResponse": false
+    },
+    {
+      "seq": 4,
+      "atMs": 9000,
+      "uuid": "00002a2f0000351221180009af100700",
+      "hex": "01968abd62",
+      "withResponse": false
+    }
+  ],
+  "rxDropped": 0,
+  "payload": null
+}

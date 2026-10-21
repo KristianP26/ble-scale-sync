@@ -70,6 +70,18 @@ const CHALLENGE_RETRY_MS = 250;
 type Variant = 'trisa' | 'ade';
 
 /**
+ * One weigh-in's negotiated state, replaced whole in onSessionStart (#394,
+ * SCALES.md). onSessionEnd is best effort (a timeout abandons the read rather
+ * than cancelling it), so it cannot be what clears this.
+ */
+class TrisaSession {
+  /** Stored password from opcode 0xA0 (Trisa). ADE does not send this. */
+  password: Buffer | null = null;
+  /** Challenge frame that arrived before the connection was ready (#138). */
+  pendingChallenge: Buffer | null = null;
+}
+
+/**
  * Adapter for the Trisa body-composition scale family.
  *
  * Two firmware variants are supported:
@@ -90,8 +102,6 @@ export class TrisaAdapter implements ScaleAdapterCore, GattWiring, MultiCharNoti
   readonly charNotifyUuid = CHR_MEASUREMENT_TRISA;
   readonly charWriteUuid = CHR_DOWNLOAD;
 
-  readonly normalizesWeight = true;
-
   readonly characteristics: CharacteristicBinding[] = [
     // Trisa-only measurement char.
     { uuid: CHR_MEASUREMENT_TRISA, type: 'notify', optional: true },
@@ -107,12 +117,9 @@ export class TrisaAdapter implements ScaleAdapterCore, GattWiring, MultiCharNoti
 
   /** Detected firmware variant. Set in onConnected(). */
   private variant: Variant = 'trisa';
-  /** Stored password from opcode 0xA0 (Trisa). ADE does not send this. */
-  private password: Buffer | null = null;
   /** Reference to write function, saved from onConnected context. */
   private writeFn: ConnectionContext['write'] | null = null;
-  /** Challenge frame that arrived before the connection was ready (#138). */
-  private pendingChallenge: Buffer | null = null;
+  private s = new TrisaSession();
   /**
    * True once onConnected() has run for the current session.
    *
@@ -167,47 +174,25 @@ export class TrisaAdapter implements ScaleAdapterCore, GattWiring, MultiCharNoti
 
     // Replay a challenge that beat this method to the notification handler, now
     // that both the write function and the variant are known (#138).
-    const queued: Buffer | null = this.pendingChallenge;
+    const queued: Buffer | null = this.s.pendingChallenge;
     if (queued) {
-      this.pendingChallenge = null;
+      this.s.pendingChallenge = null;
       bleLog.debug(`Replaying queued challenge: ${queued.toString('hex')}`);
       this.handleUploadChannel(queued);
     }
   }
 
-  /**
-   * End of a GATT session: forget everything tied to it.
-   *
-   * `writeFn` is a closure over the connection that just went away, so anything
-   * written through it after this point is discarded by the transport (on the
-   * mqtt-proxy it is published into the void and even resolves successfully).
-   * Clearing `connected` is also what re-arms the pre-connect challenge queue
-   * for the next cycle; without it the #138 fix would work exactly once per
-   * process, which in continuous mode means once ever.
-   */
-  /**
-   * Clear the previous session's negotiated state (#394).
-   *
-   * This is the reliable half of the pair. onSessionEnd is best effort: a
-   * timeout abandons the read promise rather than cancelling it, so it fires
-   * only if a disconnect event follows, and the ESPHome proxy scan path can
-   * drop a session without reaching cleanup. A session that ended either of
-   * those ways used to carry its password and any unreplayed challenge into
-   * the next one.
-   *
-   * Safe to clear pendingChallenge here, unlike in onConnected: nothing is
-   * subscribed yet, so no frame of THIS session can have arrived.
-   */
   onSessionStart(): void {
-    this.pendingChallenge = null;
-    this.password = null;
+    this.s = new TrisaSession();
   }
 
   /**
    * Release the connection references. These two are not session state to be
    * re-derived but a live handle to a link that is gone, and writing through a
    * stale one throws (#138), so they are dropped as soon as the session ends
-   * rather than waiting for the next one to start.
+   * rather than waiting for the next one to start. Clearing `connected` is also
+   * what re-arms the pre-connect challenge queue for the next cycle; without it
+   * the #138 fix would work exactly once per process.
    */
   onSessionEnd(): void {
     this.connected = false;
@@ -302,7 +287,7 @@ export class TrisaAdapter implements ScaleAdapterCore, GattWiring, MultiCharNoti
     // ack that never came, once per cycle, forever (#138). Hold the raw frame
     // and replay it from onConnected(), where both are known.
     if (opcode === OP_CHALLENGE && !this.connected) {
-      this.pendingChallenge = Buffer.from(data);
+      this.s.pendingChallenge = Buffer.from(data);
       bleLog.debug('Challenge arrived before connect completed; queued for replay');
       return;
     }
@@ -323,13 +308,13 @@ export class TrisaAdapter implements ScaleAdapterCore, GattWiring, MultiCharNoti
     }
 
     if (opcode === OP_PASSWORD) {
-      this.password = Buffer.from(data.subarray(1));
-    } else if (opcode === OP_CHALLENGE && this.password) {
+      this.s.password = Buffer.from(data.subarray(1));
+    } else if (opcode === OP_CHALLENGE && this.s.password) {
       const challenge = data.subarray(1);
       const response = Buffer.alloc(challenge.length + 1);
       response[0] = OP_RESPONSE_TRISA;
       for (let i = 0; i < challenge.length; i++) {
-        response[i + 1] = challenge[i] ^ (this.password[i % this.password.length] ?? 0);
+        response[i + 1] = challenge[i] ^ (this.s.password[i % this.s.password.length] ?? 0);
       }
       this.sendResponse(response, undefined, Buffer.from(data));
     }
@@ -367,7 +352,8 @@ export class TrisaAdapter implements ScaleAdapterCore, GattWiring, MultiCharNoti
           // Out of retries: the link is most likely already gone. Keep the frame
           // only while no newer one is waiting, so a late failure cannot clobber
           // a fresher challenge.
-          if (replayOnFailure && !this.pendingChallenge) this.pendingChallenge = replayOnFailure;
+          if (replayOnFailure && !this.s.pendingChallenge)
+            this.s.pendingChallenge = replayOnFailure;
         },
       );
     };

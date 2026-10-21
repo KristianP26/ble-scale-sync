@@ -19,7 +19,8 @@
  * before the object is used.
  */
 
-import type { ScaleAdapter } from '../../interfaces/scale-adapter.js';
+import type { BleDeviceInfo, ScaleAdapter } from '../../interfaces/scale-adapter.js';
+import { isForced } from '../../scales/force.js';
 import { bleLog, errMsg, formatMac, DISCOVERY_TIMEOUT_MS } from '../types.js';
 import {
   helperOf,
@@ -28,6 +29,7 @@ import {
   type Device,
   type PropsChangedHandler,
 } from './dbus.js';
+import type { AdvertisementSnapshot } from './device-object.js';
 
 /**
  * The no-show message of the MAC wait. Shared, so a kept object that never
@@ -43,6 +45,27 @@ export function targetNotFoundMessage(mac: string): string {
  */
 export function noScaleRecognizedMessage(): string {
   return `No recognized scale found within ${DISCOVERY_TIMEOUT_MS / 1000}s`;
+}
+
+/**
+ * What a BlueZ device is matched on: its name, its address and what its
+ * advertisement snapshot holds. BlueZ shows no advertised service UUIDs
+ * before a connect, so the list is empty.
+ */
+export function deviceInfoFrom(
+  name: string,
+  mac: string,
+  advert: AdvertisementSnapshot | undefined,
+): BleDeviceInfo {
+  return {
+    localName: name,
+    address: mac ? formatMac(mac) : undefined,
+    serviceUuids: [],
+    ...(advert?.manufacturerData ? { manufacturerData: advert.manufacturerData } : {}),
+    ...(advert?.serviceData && advert.serviceData.length > 0
+      ? { serviceData: advert.serviceData }
+      : {}),
+  };
 }
 
 /** Any advertisement parser, passive or not (QN, Eufy P2 and Mi Scale 2 included). */
@@ -88,7 +111,7 @@ export function cachePolicyFor(
   adapters: readonly ScaleAdapter[],
 ): { keep: boolean; adapter?: ScaleAdapter; reason: string } {
   let adapter: ScaleAdapter | undefined;
-  if (adapters.length === 1 && adapters[0].isForcedOverride === true) {
+  if (adapters.length === 1 && isForced(adapters[0])) {
     // Known from the first cycle: the override is the only adapter there is.
     adapter = adapters[0];
   } else {
