@@ -1,0 +1,23 @@
+{
+  "returned": true,
+  "exports": [],
+  "computeMetrics": [],
+  "queued": [],
+  "lastKnownWeightWrites": [],
+  "replayAnchorWrites": [],
+  "updateChecks": 0,
+  "display": [],
+  "after": {
+    "lastExportedWeights": {},
+    "lastExportedAt": {},
+    "lastKnownWeight": {
+      "dad": null,
+      "mom": null
+    }
+  },
+  "log": [
+    "[Sync] 1 stored reading(s) from the scale's memory, no live weigh-in.",
+    "[UserMatch] Multiple range matches for 72 kg — using Dad (config order)",
+    "[Sync] [historic 2026-10-21T03:00:00.000Z] Dropping a stored record of 72.00 kg: it fits more than one user and nothing tells them apart, so it cannot be attributed safely."
+  ]
+}

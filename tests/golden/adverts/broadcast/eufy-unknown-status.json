@@ -1,0 +1,55 @@
+{
+  "adverts": [
+    {
+      "atMs": 0,
+      "data": "0x0264 000000000100c5c9706745001a2700000000",
+      "decision": "wait",
+      "warns": [
+        "Eufy C20/P3 sent status 0x45, which is not decoded, so such frames are ignored. Please report a weigh-in on #408."
+      ]
+    },
+    {
+      "atMs": 500,
+      "data": "0x0264 000000000100c5c9706745001a2700000000",
+      "decision": "wait"
+    },
+    {
+      "atMs": 1000,
+      "data": "0x024d 000000000100384f7067a5805820005f000b143534d900",
+      "decision": "complete",
+      "reading": {
+        "weight": 82.8,
+        "impedance": 0
+      },
+      "sink": "queued"
+    },
+    {
+      "atMs": 1500,
+      "data": "0x024d 000000000100384f7067e5805820005f000b143534d900",
+      "decision": "wait"
+    }
+  ],
+  "exports": [
+    {
+      "atMs": 1000,
+      "by": "advert",
+      "reading": {
+        "weight": 82.8,
+        "impedance": 0
+      },
+      "payload": {
+        "weight": 82.8,
+        "impedance": 0,
+        "bmi": 24.72,
+        "bodyFatPercent": 20.37,
+        "waterPercent": 58.13,
+        "boneMass": 2.77,
+        "muscleMass": 63.16,
+        "visceralFat": 9,
+        "physiqueRating": 5,
+        "bmr": 1826,
+        "metabolicAge": 31
+      }
+    }
+  ]
+}

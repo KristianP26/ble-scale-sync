@@ -1,0 +1,68 @@
+{
+  "returned": true,
+  "exports": [
+    {
+      "to": "dad/garmin@global:0",
+      "weight": 86.5,
+      "impedance": 0,
+      "user": "dad",
+      "timestamp": "2026-10-21T04:40:00.000Z",
+      "historical": true
+    },
+    {
+      "to": "dad/garmin@global:0",
+      "weight": 87,
+      "impedance": 0,
+      "user": "dad",
+      "timestamp": "2026-10-21T06:20:00.000Z",
+      "historical": true
+    }
+  ],
+  "computeMetrics": [
+    {
+      "weight": 86.5,
+      "impedance": 0,
+      "profile": {
+        "height": 183,
+        "age": 36,
+        "gender": "male",
+        "isAthlete": false,
+        "birthDate": "1990-06-15",
+        "lastKnownWeight": 82
+      }
+    },
+    {
+      "weight": 87,
+      "impedance": 0,
+      "profile": {
+        "height": 183,
+        "age": 36,
+        "gender": "male",
+        "isAthlete": false,
+        "birthDate": "1990-06-15",
+        "lastKnownWeight": 82
+      }
+    }
+  ],
+  "queued": [],
+  "lastKnownWeightWrites": [],
+  "replayAnchorWrites": [],
+  "updateChecks": 1,
+  "display": [],
+  "after": {
+    "lastExportedWeights": {},
+    "lastExportedAt": {},
+    "lastKnownWeight": {
+      "dad": 82
+    }
+  },
+  "log": [
+    "[Sync] [historic 2026-10-21T03:00:00.000Z] Dropping a stored record of scale user 2: Dad is scale user 1, so it is somebody else's weigh-in.",
+    "[Sync] [historic 2026-10-21T04:40:00.000Z] Measurement: 86.50 kg / 0 Ohm",
+    "[Sync] Exporting to: garmin...",
+    "[Sync] Done.",
+    "[Sync] [historic 2026-10-21T06:20:00.000Z] Measurement: 87.00 kg / 0 Ohm",
+    "[Sync] Exporting to: garmin...",
+    "[Sync] Done."
+  ]
+}

@@ -1,0 +1,1226 @@
+[
+  {
+    "name": "Eufy Smart Scale P2/P2 Pro",
+    "match": {
+      "priority": 270,
+      "custom": true,
+      "names": {
+        "startsWith": [
+          "eufy t9148",
+          "eufy t9149"
+        ],
+        "exact": [
+          "eufy t9148",
+          "eufy t9149"
+        ]
+      },
+      "manufacturerId": 65352
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "0000fff200001000800000805f9b34fb",
+    "charWriteUuid": "0000fff100001000800000805f9b34fb",
+    "characteristics": [
+      {
+        "service": "0000fff000001000800000805f9b34fb",
+        "uuid": "0000fff100001000800000805f9b34fb",
+        "type": "write"
+      },
+      {
+        "service": "0000fff000001000800000805f9b34fb",
+        "uuid": "0000fff200001000800000805f9b34fb",
+        "type": "notify"
+      },
+      {
+        "service": "0000fff000001000800000805f9b34fb",
+        "uuid": "0000fff400001000800000805f9b34fb",
+        "type": "notify"
+      }
+    ],
+    "completionHoldMs": 3000,
+    "hooks": [
+      "onConnected",
+      "onSessionStart",
+      "onSessionEnd",
+      "parseCharNotification",
+      "parseBroadcast",
+      "isFinal"
+    ]
+  },
+  {
+    "name": "Eufy Smart Scale C20/P3",
+    "match": {
+      "priority": 275,
+      "custom": true,
+      "names": {
+        "startsWith": [
+          "eufy t9130",
+          "eufy t9150"
+        ]
+      }
+    },
+    "normalizesWeight": true,
+    "preferPassive": true,
+    "hooks": [
+      "parseBroadcast",
+      "parseLiveBroadcast"
+    ]
+  },
+  {
+    "name": "Senssun Fat Scale",
+    "match": {
+      "priority": 260,
+      "names": {
+        "exact": [
+          "senssun fat"
+        ]
+      }
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "0000fff100001000800000805f9b34fb",
+    "charWriteUuid": "0000fff200001000800000805f9b34fb",
+    "unlockCommand": "a510111ea00000bf00",
+    "unlockIntervalMs": 5000,
+    "hooks": [
+      "onSessionStart"
+    ]
+  },
+  {
+    "name": "QN Scale",
+    "match": {
+      "priority": 250,
+      "custom": true,
+      "names": {
+        "includes": [
+          "qn-scale",
+          "renpho",
+          "senssun",
+          "sencor",
+          "seb-scale"
+        ],
+        "exact": [
+          "fit plus"
+        ]
+      },
+      "serviceUuids": [
+        "ae00",
+        "ffe0",
+        "fff0"
+      ],
+      "charUuids": [
+        "ae01",
+        "ae02"
+      ],
+      "manufacturerId": 65535
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "0000fff100001000800000805f9b34fb",
+    "charWriteUuid": "0000fff200001000800000805f9b34fb",
+    "altCharNotifyUuid": "0000ffe100001000800000805f9b34fb",
+    "altCharWriteUuid": "0000ffe300001000800000805f9b34fb",
+    "hooks": [
+      "configure",
+      "onConnected",
+      "onSessionStart",
+      "onSessionEnd",
+      "parseCharNotification",
+      "parseBroadcast",
+      "isFinal",
+      "isCompositionPending",
+      "dedupMark",
+      "restoreDedupMark"
+    ]
+  },
+  {
+    "name": "Renpho ES-WBE28",
+    "match": {
+      "priority": 240,
+      "custom": true,
+      "names": {
+        "includes": [
+          "renpho"
+        ]
+      },
+      "serviceUuids": [
+        "181b",
+        "181d"
+      ]
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "00002a9d00001000800000805f9b34fb",
+    "charWriteUuid": "0000ffe200001000800000805f9b34fb",
+    "characteristics": [
+      {
+        "uuid": "0000ffe100001000800000805f9b34fb",
+        "type": "notify"
+      },
+      {
+        "uuid": "00002a9f00001000800000805f9b34fb",
+        "type": "notify"
+      },
+      {
+        "uuid": "0000ffe200001000800000805f9b34fb",
+        "type": "write"
+      }
+    ],
+    "completionHoldMs": 8000,
+    "hooks": [
+      "onConnected",
+      "onSessionStart",
+      "parseCharNotification",
+      "isFinal"
+    ]
+  },
+  {
+    "name": "Renpho R-MSC04",
+    "match": {
+      "priority": 235,
+      "custom": true,
+      "names": {
+        "exact": [
+          "r-msc04"
+        ]
+      }
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "00002a1000001000800000805f9b34fb",
+    "charWriteUuid": "00002a1100001000800000805f9b34fb",
+    "characteristics": [
+      {
+        "uuid": "00002a1100001000800000805f9b34fb",
+        "type": "write"
+      },
+      {
+        "uuid": "00002a1000001000800000805f9b34fb",
+        "type": "notify"
+      },
+      {
+        "uuid": "00002a1200001000800000805f9b34fb",
+        "type": "notify"
+      }
+    ],
+    "ackWithResponse": true,
+    "completionHoldMs": 30000,
+    "hooks": [
+      "onConnected",
+      "onSessionStart",
+      "onSessionEnd",
+      "buildAck",
+      "parseCharNotification",
+      "isFinal"
+    ]
+  },
+  {
+    "name": "Renpho ES-26BB",
+    "match": {
+      "priority": 230,
+      "names": {
+        "exact": [
+          "es-26bb-b"
+        ]
+      }
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "00002a1000001000800000805f9b34fb",
+    "charWriteUuid": "00002a1100001000800000805f9b34fb",
+    "completionHoldMs": 8000,
+    "hooks": [
+      "onConnected",
+      "onSessionEnd",
+      "isFinal"
+    ]
+  },
+  {
+    "name": "Beurer BF720/BF105",
+    "match": {
+      "priority": 220,
+      "custom": true,
+      "names": {
+        "includes": [
+          "bf720",
+          "bf105",
+          "bf500",
+          "bf788",
+          "bf950",
+          "bf915"
+        ]
+      },
+      "serviceUuids": [
+        "181d",
+        "181b"
+      ],
+      "manufacturerId": 1553
+    },
+    "normalizesWeight": true,
+    "requiresBonding": true,
+    "charNotifyUuid": "00002a9d00001000800000805f9b34fb",
+    "charWriteUuid": "00002a2b00001000800000805f9b34fb",
+    "characteristics": [
+      {
+        "uuid": "00002a9d00001000800000805f9b34fb",
+        "type": "notify"
+      },
+      {
+        "uuid": "00002a9c00001000800000805f9b34fb",
+        "type": "notify"
+      },
+      {
+        "uuid": "00002a9f00001000800000805f9b34fb",
+        "type": "notify"
+      },
+      {
+        "uuid": "00002a9900001000800000805f9b34fb",
+        "type": "notify",
+        "optional": true
+      },
+      {
+        "uuid": "0000fff200001000800000805f9b34fb",
+        "type": "notify",
+        "optional": true
+      },
+      {
+        "uuid": "00002a2b00001000800000805f9b34fb",
+        "type": "write"
+      }
+    ],
+    "hooks": [
+      "onConnected",
+      "onSessionStart",
+      "onSessionEnd",
+      "parseCharNotification",
+      "advertisesPendingReading"
+    ]
+  },
+  {
+    "name": "A&D UC-352BLE",
+    "match": {
+      "priority": 225,
+      "names": {
+        "startsWith": [
+          "a&d_uc-352ble"
+        ]
+      }
+    },
+    "normalizesWeight": true,
+    "requiresBonding": true,
+    "singleBond": true,
+    "charNotifyUuid": "00002a9d00001000800000805f9b34fb",
+    "charWriteUuid": "00002a0800001000800000805f9b34fb",
+    "characteristics": [
+      {
+        "uuid": "00002a9d00001000800000805f9b34fb",
+        "type": "notify",
+        "deferred": true
+      },
+      {
+        "uuid": "00002a0800001000800000805f9b34fb",
+        "type": "write",
+        "optional": true
+      }
+    ],
+    "completionHoldMs": 4000,
+    "hooks": [
+      "onConnected",
+      "parseCharNotification",
+      "isFinal"
+    ]
+  },
+  {
+    "name": "Xiaomi Mi Smart Scale 2 (XMTZC04HM)",
+    "match": {
+      "priority": 215,
+      "custom": true,
+      "names": {
+        "exact": [
+          "mi scale2"
+        ]
+      },
+      "serviceUuids": [
+        "181d"
+      ],
+      "manufacturerId": 343
+    },
+    "normalizesWeight": true,
+    "preferPassive": true,
+    "hooks": [
+      "parseServiceData"
+    ]
+  },
+  {
+    "name": "Silvergear Smart Scale 108",
+    "match": {
+      "priority": 212,
+      "custom": true,
+      "serviceUuids": [
+        "ffb0"
+      ],
+      "manufacturerId": 41132
+    },
+    "normalizesWeight": true,
+    "preferPassive": true,
+    "hooks": [
+      "parseBroadcast",
+      "parseLiveBroadcast"
+    ]
+  },
+  {
+    "name": "Senssun IF_B7",
+    "match": {
+      "priority": 213,
+      "custom": true,
+      "names": {
+        "exact": [
+          "if_b7"
+        ]
+      },
+      "manufacturerId": 256
+    },
+    "normalizesWeight": true,
+    "preferPassive": true,
+    "hooks": [
+      "parseBroadcast",
+      "parseLiveBroadcast"
+    ]
+  },
+  {
+    "name": "OKOK (Chipsea broadcast)",
+    "match": {
+      "priority": 214,
+      "custom": true,
+      "names": {
+        "exact": [
+          "adv"
+        ],
+        "startsWith": [
+          "yoda0",
+          "yoda1"
+        ]
+      }
+    },
+    "normalizesWeight": true,
+    "preferPassive": true,
+    "hooks": [
+      "parseBroadcast",
+      "parseLiveBroadcast"
+    ]
+  },
+  {
+    "name": "Etekcity Fit 8S",
+    "match": {
+      "priority": 216,
+      "custom": true,
+      "manufacturerId": 1744,
+      "serviceUuids": [
+        "ffd0"
+      ]
+    },
+    "normalizesWeight": true,
+    "preferPassive": true,
+    "hooks": [
+      "parseBroadcast",
+      "parseLiveBroadcast"
+    ]
+  },
+  {
+    "name": "PICOOC Mini Lite",
+    "match": {
+      "priority": 217,
+      "names": {
+        "exact": [
+          "picooc-l"
+        ]
+      }
+    },
+    "normalizesWeight": true,
+    "preferPassive": true,
+    "hooks": [
+      "parseBroadcast"
+    ]
+  },
+  {
+    "name": "Xiaomi Mi Scale 2",
+    "match": {
+      "priority": 210,
+      "custom": true,
+      "names": {
+        "startsWith": [
+          "mibcs",
+          "mibfs",
+          "mi scale",
+          "mi_scale"
+        ]
+      },
+      "serviceUuids": [
+        "181b"
+      ]
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "00002a2f0000351221180009af100700",
+    "charWriteUuid": "00002a2f0000351221180009af100700",
+    "unlockCommand": "01968abd62",
+    "unlockIntervalMs": 3000,
+    "preferPassive": true,
+    "hooks": [
+      "parseServiceData"
+    ]
+  },
+  {
+    "name": "Xiaomi Mijia Scale S800",
+    "match": {
+      "priority": 200,
+      "custom": true,
+      "names": {
+        "includes": [
+          "mijia scale s800"
+        ]
+      },
+      "serviceUuids": [
+        "fe95"
+      ]
+    },
+    "normalizesWeight": true,
+    "preferPassive": true,
+    "hooks": [
+      "configure",
+      "parseServiceData"
+    ]
+  },
+  {
+    "name": "Xiaomi Body Composition Scale S400",
+    "match": {
+      "priority": 205,
+      "custom": true,
+      "names": {
+        "includes": [
+          "scale s400"
+        ],
+        "exact": [
+          "xmtzc14hm"
+        ]
+      },
+      "serviceUuids": [
+        "fe95"
+      ]
+    },
+    "normalizesWeight": true,
+    "preferPassive": true,
+    "hooks": [
+      "configure",
+      "parseServiceData"
+    ]
+  },
+  {
+    "name": "Yunmai",
+    "match": {
+      "priority": 190,
+      "names": {
+        "includes": [
+          "yunmai"
+        ]
+      },
+      "miBeaconProductIds": [
+        397
+      ]
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "0000ffe400001000800000805f9b34fb",
+    "charWriteUuid": "0000ffe900001000800000805f9b34fb",
+    "unlockCommand": "0d05130016",
+    "unlockIntervalMs": 5000,
+    "hooks": [
+      "onSessionStart",
+      "isFinal",
+      "isStatusFrame"
+    ]
+  },
+  {
+    "name": "Beurer / Sanitas",
+    "match": {
+      "priority": 180,
+      "custom": true,
+      "names": {
+        "includes": [
+          "bf-700",
+          "beurer bf700",
+          "bf-800",
+          "beurer bf800",
+          "rt-libra-b",
+          "rt-libra-w",
+          "libra-b",
+          "libra-w",
+          "bf700",
+          "beurer bf710",
+          "sanitas sbf70",
+          "sbf75",
+          "aicdscale1"
+        ]
+      }
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "0000ffe100001000800000805f9b34fb",
+    "charWriteUuid": "0000ffe100001000800000805f9b34fb",
+    "unlockCommand": "f701",
+    "unlockIntervalMs": 5000,
+    "hooks": [
+      "onSessionStart",
+      "buildAck",
+      "isFinal",
+      "isCompositionPending"
+    ]
+  },
+  {
+    "name": "Sanitas SBF72/73",
+    "match": {
+      "priority": 170,
+      "names": {
+        "includes": [
+          "sbf72",
+          "sbf73"
+        ]
+      }
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "00002a9c00001000800000805f9b34fb",
+    "charWriteUuid": "00002a9f00001000800000805f9b34fb",
+    "characteristics": [
+      {
+        "uuid": "00002a9d00001000800000805f9b34fb",
+        "type": "notify",
+        "optional": true
+      },
+      {
+        "uuid": "00002a9c00001000800000805f9b34fb",
+        "type": "notify"
+      },
+      {
+        "uuid": "00002a9f00001000800000805f9b34fb",
+        "type": "write"
+      }
+    ],
+    "unlockCommand": "02010000",
+    "unlockIntervalMs": 5000,
+    "completionHoldMs": 5000,
+    "hooks": [
+      "onSessionStart",
+      "parseCharNotification",
+      "isFinal"
+    ]
+  },
+  {
+    "name": "Soehnle Shape/Style",
+    "match": {
+      "priority": 160,
+      "names": {
+        "startsWith": [
+          "shape200",
+          "shape100",
+          "shape50",
+          "style100"
+        ]
+      }
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "352e300128e940b8a3616db4cca4147c",
+    "charWriteUuid": "352e300228e940b8a3616db4cca4147c",
+    "unlockCommand": "0901",
+    "unlockIntervalMs": 5000,
+    "hooks": []
+  },
+  {
+    "name": "Medisana BS44x",
+    "match": {
+      "priority": 150,
+      "names": {
+        "startsWith": [
+          "013197",
+          "013198",
+          "0202b6",
+          "0203b"
+        ]
+      },
+      "serviceUuids": [
+        "78b2"
+      ]
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "00008a2100001000800000805f9b34fb",
+    "charWriteUuid": "00008a8100001000800000805f9b34fb",
+    "hooks": [
+      "onConnected",
+      "onSessionStart"
+    ]
+  },
+  {
+    "name": "Trisa",
+    "match": {
+      "priority": 140,
+      "names": {
+        "startsWith": [
+          "01257b",
+          "11257b"
+        ]
+      }
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "00008a2100001000800000805f9b34fb",
+    "charWriteUuid": "00008a8100001000800000805f9b34fb",
+    "characteristics": [
+      {
+        "uuid": "00008a2100001000800000805f9b34fb",
+        "type": "notify",
+        "optional": true
+      },
+      {
+        "uuid": "00008a2400001000800000805f9b34fb",
+        "type": "notify",
+        "optional": true
+      },
+      {
+        "uuid": "00008a2200001000800000805f9b34fb",
+        "type": "notify",
+        "optional": true
+      },
+      {
+        "uuid": "00008a8200001000800000805f9b34fb",
+        "type": "notify"
+      },
+      {
+        "uuid": "00008a8100001000800000805f9b34fb",
+        "type": "write"
+      }
+    ],
+    "hooks": [
+      "onConnected",
+      "onSessionStart",
+      "onSessionEnd",
+      "parseCharNotification"
+    ]
+  },
+  {
+    "name": "ES-CS20M",
+    "match": {
+      "priority": 130,
+      "names": {
+        "includes": [
+          "es-cs20m",
+          "es-32md"
+        ],
+        "startsWith": [
+          "113360_"
+        ]
+      },
+      "serviceUuids": [
+        "1a10"
+      ]
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "00002a1000001000800000805f9b34fb",
+    "charWriteUuid": "00002a1100001000800000805f9b34fb",
+    "hooks": [
+      "onConnected",
+      "onSessionStart",
+      "onSessionEnd",
+      "isFinal"
+    ]
+  },
+  {
+    "name": "Exingtech Y1",
+    "match": {
+      "priority": 120,
+      "names": {
+        "exact": [
+          "vscale"
+        ]
+      },
+      "serviceUuids": [
+        "f433bd8075b811e297d90002a5d5c51b"
+      ]
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "1a2ea40075b911e2be050002a5d5c51b",
+    "charWriteUuid": "29f1108075b911e28bf60002a5d5c51b",
+    "completionHoldMs": 8000,
+    "hooks": [
+      "onConnected",
+      "onSessionStart",
+      "isFinal"
+    ]
+  },
+  {
+    "name": "Excelvan CF369",
+    "match": {
+      "priority": 110,
+      "names": {
+        "exact": [
+          "electronic scale"
+        ]
+      }
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "0000fff400001000800000805f9b34fb",
+    "charWriteUuid": "0000fff100001000800000805f9b34fb",
+    "completionHoldMs": 8000,
+    "hooks": [
+      "onConnected",
+      "onSessionStart",
+      "isFinal"
+    ]
+  },
+  {
+    "name": "Hesley",
+    "match": {
+      "priority": 100,
+      "names": {
+        "exact": [
+          "yunchen"
+        ]
+      }
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "0000fff400001000800000805f9b34fb",
+    "charWriteUuid": "0000fff100001000800000805f9b34fb",
+    "unlockCommand": "a5012cab505a29",
+    "unlockIntervalMs": 0,
+    "hooks": [
+      "onSessionStart"
+    ]
+  },
+  {
+    "name": "Koogeek-S1",
+    "match": {
+      "priority": 95,
+      "custom": true,
+      "names": {
+        "includes": [
+          "koogeek-s1"
+        ]
+      }
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "0000fff400001000800000805f9b34fb",
+    "charWriteUuid": "0000fff300001000800000805f9b34fb",
+    "ackWithResponse": false,
+    "completionHoldMs": 2000,
+    "hooks": [
+      "buildAck",
+      "isFinal"
+    ]
+  },
+  {
+    "name": "Etekcity ESF-551",
+    "match": {
+      "priority": 96,
+      "custom": true,
+      "names": {
+        "includes": [
+          "etekcity"
+        ]
+      },
+      "serviceUuids": [
+        "fff0"
+      ],
+      "charUuids": [
+        "fff1"
+      ]
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "0000fff100001000800000805f9b34fb",
+    "charWriteUuid": "0000fff200001000800000805f9b34fb",
+    "characteristics": [
+      {
+        "uuid": "0000fff100001000800000805f9b34fb",
+        "type": "notify"
+      },
+      {
+        "uuid": "0000fff200001000800000805f9b34fb",
+        "type": "write",
+        "optional": true
+      }
+    ],
+    "hooks": [
+      "onSessionStart"
+    ]
+  },
+  {
+    "name": "Inlife",
+    "match": {
+      "priority": 90,
+      "custom": true,
+      "names": {
+        "exact": [
+          "000fatscale01",
+          "000fatscale02",
+          "042fatscale01"
+        ]
+      },
+      "serviceUuids": [
+        "fff0"
+      ],
+      "charUuids": [
+        "fff2"
+      ]
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "0000fff100001000800000805f9b34fb",
+    "charWriteUuid": "0000fff200001000800000805f9b34fb",
+    "completionHoldMs": 4000,
+    "hooks": [
+      "onConnected",
+      "onSessionStart",
+      "isFinal"
+    ]
+  },
+  {
+    "name": "Digoo",
+    "match": {
+      "priority": 80,
+      "names": {
+        "exact": [
+          "mengii"
+        ]
+      }
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "0000fff100001000800000805f9b34fb",
+    "charWriteUuid": "0000fff200001000800000805f9b34fb",
+    "completionHoldMs": 8000,
+    "hooks": [
+      "onConnected",
+      "onSessionStart",
+      "isFinal"
+    ]
+  },
+  {
+    "name": "1byone (Eufy)",
+    "match": {
+      "priority": 70,
+      "custom": true,
+      "names": {
+        "includes": [
+          "t9146",
+          "t9147",
+          "t9120",
+          "health scale"
+        ]
+      },
+      "charUuids": [
+        "fff4"
+      ]
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "0000fff400001000800000805f9b34fb",
+    "charWriteUuid": "0000fff100001000800000805f9b34fb",
+    "completionHoldMs": 3000,
+    "hooks": [
+      "onConnected",
+      "isFinal"
+    ]
+  },
+  {
+    "name": "1byone Scale (new)",
+    "match": {
+      "priority": 60,
+      "names": {
+        "exact": [
+          "1byone scale"
+        ]
+      }
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "0000ffb200001000800000805f9b34fb",
+    "charWriteUuid": "0000ffb100001000800000805f9b34fb",
+    "unlockCommand": "ab2a0000000000000000000000000000000000d7",
+    "unlockIntervalMs": 0,
+    "completionHoldMs": 8000,
+    "hooks": [
+      "onSessionStart",
+      "isFinal"
+    ]
+  },
+  {
+    "name": "Active Era BS-06",
+    "match": {
+      "priority": 50,
+      "custom": true,
+      "names": {
+        "includes": [
+          "ae bs-06"
+        ]
+      },
+      "serviceUuids": [
+        "ffb0"
+      ],
+      "manufacturerId": 10156
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "0000ffb200001000800000805f9b34fb",
+    "charWriteUuid": "0000ffb100001000800000805f9b34fb",
+    "characteristics": [
+      {
+        "uuid": "0000ffb100001000800000805f9b34fb",
+        "type": "write"
+      },
+      {
+        "uuid": "0000ffb200001000800000805f9b34fb",
+        "type": "notify"
+      }
+    ],
+    "ackWithResponse": true,
+    "completionHoldMs": 8000,
+    "hooks": [
+      "configure",
+      "onConnected",
+      "onSessionStart",
+      "buildAck",
+      "isFinal",
+      "isCompositionPending"
+    ]
+  },
+  {
+    "name": "Speediance",
+    "match": {
+      "priority": 45,
+      "custom": true,
+      "names": {
+        "includes": [
+          "speed_s",
+          "speediance"
+        ]
+      },
+      "serviceUuids": [
+        "ffb0"
+      ],
+      "charUuids": [
+        "ffb3"
+      ]
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "0000ffb200001000800000805f9b34fb",
+    "charWriteUuid": "0000ffb100001000800000805f9b34fb",
+    "characteristics": [
+      {
+        "uuid": "0000ffb100001000800000805f9b34fb",
+        "type": "write"
+      },
+      {
+        "uuid": "0000ffb200001000800000805f9b34fb",
+        "type": "notify"
+      },
+      {
+        "uuid": "0000ffb300001000800000805f9b34fb",
+        "type": "notify"
+      }
+    ],
+    "hooks": [
+      "onConnected",
+      "onSessionStart",
+      "parseCharNotification"
+    ]
+  },
+  {
+    "name": "Robi S9",
+    "match": {
+      "priority": 40,
+      "custom": true,
+      "names": {
+        "includes": [
+          "robi"
+        ]
+      },
+      "serviceUuids": [
+        "ffb0"
+      ],
+      "charUuids": [
+        "ffb3"
+      ]
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "0000ffb200001000800000805f9b34fb",
+    "charWriteUuid": "0000ffb100001000800000805f9b34fb",
+    "characteristics": [
+      {
+        "uuid": "0000ffb100001000800000805f9b34fb",
+        "type": "write"
+      },
+      {
+        "uuid": "0000ffb200001000800000805f9b34fb",
+        "type": "notify"
+      },
+      {
+        "uuid": "0000ffb300001000800000805f9b34fb",
+        "type": "notify"
+      }
+    ],
+    "hooks": [
+      "onConnected",
+      "onSessionStart",
+      "parseCharNotification"
+    ]
+  },
+  {
+    "name": "Hutbit",
+    "match": {
+      "priority": 35,
+      "custom": true,
+      "names": {
+        "includes": [
+          "hutbit",
+          "fittrack"
+        ]
+      },
+      "serviceUuids": [
+        "ffb0"
+      ],
+      "manufacturerId": 684
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "0000ffb200001000800000805f9b34fb",
+    "charWriteUuid": "0000ffb100001000800000805f9b34fb",
+    "characteristics": [
+      {
+        "uuid": "0000ffb100001000800000805f9b34fb",
+        "type": "write"
+      },
+      {
+        "uuid": "0000ffb200001000800000805f9b34fb",
+        "type": "notify"
+      }
+    ],
+    "completionHoldMs": 8000,
+    "hooks": [
+      "onConnected",
+      "onSessionStart",
+      "onSessionEnd",
+      "isFinal"
+    ]
+  },
+  {
+    "name": "MGB (Swan/Icomon/YG)",
+    "match": {
+      "priority": 30,
+      "names": {
+        "startsWith": [
+          "swan"
+        ],
+        "exact": [
+          "icomon",
+          "yg"
+        ]
+      },
+      "serviceUuids": [
+        "ffb0"
+      ]
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "0000ffb200001000800000805f9b34fb",
+    "charWriteUuid": "0000ffb100001000800000805f9b34fb",
+    "completionHoldMs": 8000,
+    "hooks": [
+      "onConnected",
+      "onSessionStart",
+      "isFinal"
+    ]
+  },
+  {
+    "name": "Hoffen BS-8107",
+    "match": {
+      "priority": 20,
+      "names": {
+        "exact": [
+          "hoffen bs-8107",
+          "pc-pw 3008 bt"
+        ]
+      }
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "0000ffb200001000800000805f9b34fb",
+    "charWriteUuid": "0000ffb200001000800000805f9b34fb",
+    "hooks": [
+      "onConnected",
+      "onSessionStart"
+    ]
+  },
+  {
+    "name": "Salter",
+    "match": {
+      "priority": 125,
+      "names": {
+        "startsWith": [
+          "salter-"
+        ]
+      },
+      "serviceUuids": [
+        "ffcc",
+        "ccff"
+      ]
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "0000ffc100001000800000805f9b34fb",
+    "charWriteUuid": "0000ffc100001000800000805f9b34fb",
+    "unlockCommand": "02",
+    "unlockCommands": [
+      "0b00",
+      "02"
+    ],
+    "unlockIntervalMs": 3000,
+    "ackWithResponse": false,
+    "completionHoldMs": 5000,
+    "hooks": [
+      "onSessionStart",
+      "buildAck",
+      "isFinal",
+      "dedupMark",
+      "restoreDedupMark"
+    ]
+  },
+  {
+    "name": "Standard GATT (BCS/WSS)",
+    "match": {
+      "priority": 0,
+      "custom": true,
+      "names": {
+        "includes": [
+          "beurer",
+          "silvercrest",
+          "bf600",
+          "bf850",
+          "bf1000",
+          "sbf76",
+          "sbf77",
+          "medisana"
+        ]
+      },
+      "serviceUuids": [
+        "181b",
+        "181d"
+      ]
+    },
+    "normalizesWeight": true,
+    "charNotifyUuid": "00002a9c00001000800000805f9b34fb",
+    "charWriteUuid": "00002a9f00001000800000805f9b34fb",
+    "characteristics": [
+      {
+        "uuid": "00002a9d00001000800000805f9b34fb",
+        "type": "notify",
+        "optional": true
+      },
+      {
+        "uuid": "00002a9c00001000800000805f9b34fb",
+        "type": "notify",
+        "optional": true
+      },
+      {
+        "uuid": "00002a9f00001000800000805f9b34fb",
+        "type": "write",
+        "optional": true
+      }
+    ],
+    "unlockCommand": "02010000",
+    "unlockIntervalMs": 5000,
+    "completionHoldMs": 5000,
+    "hooks": [
+      "onSessionStart",
+      "parseCharNotification",
+      "isFinal"
+    ]
+  }
+]

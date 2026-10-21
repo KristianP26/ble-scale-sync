@@ -1,0 +1,34 @@
+{
+  "returned": true,
+  "exports": [],
+  "computeMetrics": [
+    {
+      "weight": 83.4,
+      "impedance": 480,
+      "profile": {
+        "height": 183,
+        "age": 36,
+        "gender": "male",
+        "isAthlete": false,
+        "birthDate": "1990-06-15",
+        "lastKnownWeight": 82
+      }
+    }
+  ],
+  "queued": [],
+  "lastKnownWeightWrites": [],
+  "replayAnchorWrites": [],
+  "updateChecks": 1,
+  "display": [],
+  "after": {
+    "lastExportedWeights": {},
+    "lastExportedAt": {},
+    "lastKnownWeight": {
+      "dad": 82
+    }
+  },
+  "log": [
+    "[Sync] Measurement: 83.40 kg / 480 Ohm",
+    "[Sync] Dry run. Skipping export."
+  ]
+}

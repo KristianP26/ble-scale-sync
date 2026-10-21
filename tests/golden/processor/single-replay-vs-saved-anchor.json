@@ -1,0 +1,101 @@
+{
+  "returned": true,
+  "exports": [
+    {
+      "to": "dad/garmin@global:0",
+      "weight": 84.45,
+      "impedance": 0,
+      "user": "dad",
+      "timestamp": "2026-10-21T07:50:00.000Z",
+      "historical": true
+    },
+    {
+      "to": "dad/garmin@global:0",
+      "weight": 84.5,
+      "impedance": 480,
+      "user": "dad",
+      "timestamp": "2026-10-21T08:00:00.000Z"
+    }
+  ],
+  "computeMetrics": [
+    {
+      "weight": 84.45,
+      "impedance": 0,
+      "profile": {
+        "height": 183,
+        "age": 36,
+        "gender": "male",
+        "isAthlete": false,
+        "birthDate": "1990-06-15",
+        "lastKnownWeight": 82
+      }
+    },
+    {
+      "weight": 84.5,
+      "impedance": 480,
+      "profile": {
+        "height": 183,
+        "age": 36,
+        "gender": "male",
+        "isAthlete": false,
+        "birthDate": "1990-06-15",
+        "lastKnownWeight": 82
+      }
+    }
+  ],
+  "queued": [],
+  "lastKnownWeightWrites": [],
+  "replayAnchorWrites": [
+    {
+      "slug": "dad",
+      "weight": 84.5,
+      "time": "2026-10-21T08:00:00.000Z"
+    }
+  ],
+  "updateChecks": 1,
+  "display": [
+    [
+      "reading",
+      "dad",
+      "Dad",
+      84.5,
+      480,
+      [
+        "garmin"
+      ]
+    ],
+    [
+      "result",
+      "dad",
+      "Dad",
+      84.5,
+      [
+        {
+          "name": "garmin",
+          "ok": true
+        }
+      ]
+    ]
+  ],
+  "after": {
+    "lastExportedWeights": {
+      "dad": 84.5
+    },
+    "lastExportedAt": {
+      "dad": "2026-10-21T08:00:00.000Z"
+    },
+    "lastKnownWeight": {
+      "dad": 84.5
+    }
+  },
+  "log": [
+    "[Sync] [historic 2026-10-21T07:28:00.000Z] Skipping replay: weight 84.40 kg matches the last exported weight within +/-0.1 kg and was not measured more than 5 min after the last exported weigh-in measured at 2026-10-21T07:30:00.000Z",
+    "[Sync] [historic 2026-10-21T07:50:00.000Z] Measurement: 84.45 kg / 0 Ohm",
+    "[Sync] Exporting to: garmin...",
+    "[Sync] Done.",
+    "[Sync] [historic 2026-10-21T07:35:00.000Z] Skipping replay: weight 84.42 kg matches the last exported weight within +/-0.1 kg and was not measured more than 5 min after the last exported weigh-in measured at 2026-10-21T07:30:00.000Z",
+    "[Sync] Measurement: 84.50 kg / 480 Ohm",
+    "[Sync] Exporting to: garmin...",
+    "[Sync] Done."
+  ]
+}

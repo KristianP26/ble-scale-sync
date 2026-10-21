@@ -1,0 +1,279 @@
+{
+  "settled": {
+    "by": "reading",
+    "atMs": 16608
+  },
+  "reading": {
+    "weight": 83.55,
+    "impedance": 437
+  },
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 1,
+      "atMs": 0,
+      "uuid": "ffe1"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 2,
+      "atMs": 3158,
+      "uuid": "ffe1",
+      "hex": "e7f1580100",
+      "withResponse": true
+    },
+    {
+      "seq": 3,
+      "atMs": 5000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 4,
+      "atMs": 6159,
+      "uuid": "ffe1",
+      "hex": "e7f1580100",
+      "withResponse": true
+    },
+    {
+      "seq": 5,
+      "atMs": 6308,
+      "uuid": "ffe1",
+      "hex": "e7f1580102",
+      "withResponse": true
+    },
+    {
+      "seq": 6,
+      "atMs": 6458,
+      "uuid": "ffe1",
+      "hex": "e7f1580105",
+      "withResponse": true
+    },
+    {
+      "seq": 7,
+      "atMs": 6558,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 8,
+      "atMs": 6708,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 9,
+      "atMs": 6858,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 10,
+      "atMs": 6958,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 11,
+      "atMs": 7108,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 12,
+      "atMs": 7208,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 13,
+      "atMs": 7358,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 14,
+      "atMs": 7508,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 15,
+      "atMs": 7608,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 16,
+      "atMs": 7760,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 17,
+      "atMs": 7908,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 18,
+      "atMs": 8008,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 19,
+      "atMs": 8159,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 20,
+      "atMs": 8258,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 21,
+      "atMs": 8409,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 22,
+      "atMs": 8558,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 23,
+      "atMs": 8658,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 24,
+      "atMs": 8808,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 25,
+      "atMs": 8958,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 26,
+      "atMs": 9058,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 27,
+      "atMs": 9209,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 28,
+      "atMs": 9308,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 29,
+      "atMs": 9459,
+      "uuid": "ffe1",
+      "hex": "e7f1580106",
+      "withResponse": true
+    },
+    {
+      "seq": 30,
+      "atMs": 10000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 31,
+      "atMs": 11358,
+      "uuid": "ffe1",
+      "hex": "e7f1580006",
+      "withResponse": true
+    },
+    {
+      "seq": 32,
+      "atMs": 15000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 33,
+      "atMs": 16410,
+      "uuid": "ffe1",
+      "hex": "e7f1590301",
+      "withResponse": true
+    },
+    {
+      "seq": 34,
+      "atMs": 16508,
+      "uuid": "ffe1",
+      "hex": "e7f1590302",
+      "withResponse": true
+    },
+    {
+      "seq": 35,
+      "atMs": 16608,
+      "uuid": "ffe1",
+      "hex": "e7f1590303",
+      "withResponse": true
+    }
+  ],
+  "rxDropped": 0,
+  "payload": {
+    "weight": 83.55,
+    "impedance": 437,
+    "bmi": 24.95,
+    "bodyFatPercent": 21.73,
+    "waterPercent": 57.14,
+    "boneMass": 2.75,
+    "muscleMass": 62.65,
+    "visceralFat": 10,
+    "physiqueRating": 5,
+    "bmr": 1834,
+    "metabolicAge": 31
+  }
+}

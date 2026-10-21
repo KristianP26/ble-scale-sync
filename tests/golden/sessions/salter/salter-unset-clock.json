@@ -1,0 +1,140 @@
+{
+  "settled": {
+    "by": "reading",
+    "atMs": 5360
+  },
+  "reading": {
+    "weight": 88.8,
+    "impedance": 0,
+    "timestamp": "2026-01-01T00:00:00.000Z"
+  },
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 1,
+      "atMs": 0,
+      "uuid": "ffc1"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "ffc1",
+      "hex": "0b00",
+      "withResponse": false
+    },
+    {
+      "seq": 2,
+      "atMs": 0,
+      "uuid": "ffc1",
+      "hex": "02",
+      "withResponse": false
+    },
+    {
+      "seq": 3,
+      "atMs": 120,
+      "uuid": "ffc1",
+      "hex": "0100b95569",
+      "withResponse": false
+    },
+    {
+      "seq": 4,
+      "atMs": 180,
+      "uuid": "ffc1",
+      "hex": "02",
+      "withResponse": false
+    },
+    {
+      "seq": 5,
+      "atMs": 240,
+      "uuid": "ffc1",
+      "hex": "0800",
+      "withResponse": false
+    },
+    {
+      "seq": 6,
+      "atMs": 300,
+      "uuid": "ffc1",
+      "hex": "090000",
+      "withResponse": false
+    },
+    {
+      "seq": 7,
+      "atMs": 360,
+      "uuid": "ffc1",
+      "hex": "0801",
+      "withResponse": false
+    },
+    {
+      "seq": 8,
+      "atMs": 420,
+      "uuid": "ffc1",
+      "hex": "0802",
+      "withResponse": false
+    },
+    {
+      "seq": 9,
+      "atMs": 480,
+      "uuid": "ffc1",
+      "hex": "0803",
+      "withResponse": false
+    },
+    {
+      "seq": 10,
+      "atMs": 540,
+      "uuid": "ffc1",
+      "hex": "0804",
+      "withResponse": false
+    },
+    {
+      "seq": 11,
+      "atMs": 600,
+      "uuid": "ffc1",
+      "hex": "0805",
+      "withResponse": false
+    },
+    {
+      "seq": 12,
+      "atMs": 660,
+      "uuid": "ffc1",
+      "hex": "0806",
+      "withResponse": false
+    },
+    {
+      "seq": 13,
+      "atMs": 720,
+      "uuid": "ffc1",
+      "hex": "0807",
+      "withResponse": false
+    },
+    {
+      "seq": 14,
+      "atMs": 3000,
+      "uuid": "ffc1",
+      "hex": "0b00",
+      "withResponse": false
+    },
+    {
+      "seq": 15,
+      "atMs": 3000,
+      "uuid": "ffc1",
+      "hex": "02",
+      "withResponse": false
+    }
+  ],
+  "rxDropped": 0,
+  "payload": {
+    "weight": 88.8,
+    "impedance": 0,
+    "bmi": 26.52,
+    "bodyFatPercent": 22.52,
+    "waterPercent": 56.56,
+    "boneMass": 2.89,
+    "muscleMass": 65.91,
+    "visceralFat": 10,
+    "physiqueRating": 5,
+    "bmr": 1886,
+    "metabolicAge": 31
+  }
+}

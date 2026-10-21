@@ -1,0 +1,76 @@
+{
+  "settled": {
+    "by": "reading",
+    "atMs": 1200
+  },
+  "reading": {
+    "weight": 79.96000000000001,
+    "impedance": 0,
+    "userIndex": 1
+  },
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "2a9d"
+    },
+    {
+      "seq": 1,
+      "atMs": 0,
+      "uuid": "2a9c"
+    },
+    {
+      "seq": 2,
+      "atMs": 0,
+      "uuid": "2a9f"
+    },
+    {
+      "seq": 3,
+      "atMs": 0,
+      "uuid": "2a99"
+    },
+    {
+      "seq": 4,
+      "atMs": 0,
+      "uuid": "fff2"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 5,
+      "atMs": 0,
+      "uuid": "2a2b",
+      "hex": "ea0701010c0000040000",
+      "withResponse": true
+    },
+    {
+      "seq": 6,
+      "atMs": 0,
+      "uuid": "fff2",
+      "hex": "00",
+      "withResponse": true
+    },
+    {
+      "seq": 7,
+      "atMs": 0,
+      "uuid": "2a9f",
+      "hex": "0201d204",
+      "withResponse": true
+    }
+  ],
+  "rxDropped": 0,
+  "payload": {
+    "weight": 79.96,
+    "impedance": 0,
+    "bmi": 23.88,
+    "bodyFatPercent": 19.4,
+    "waterPercent": 58.84,
+    "boneMass": 2.71,
+    "muscleMass": 61.74,
+    "visceralFat": 9,
+    "physiqueRating": 5,
+    "bmr": 1798,
+    "metabolicAge": 31
+  }
+}

@@ -1,0 +1,95 @@
+{
+  "adverts": [
+    {
+      "atMs": 0,
+      "data": "fe95 5859e2515a01000000000263492b49010000041f5f7a",
+      "decision": "wait"
+    },
+    {
+      "atMs": 1000,
+      "data": "fe95 5859e2515b01000000000226d226b545cd7ec33c97c7b80100000bb875c8",
+      "decision": "complete",
+      "reading": {
+        "weight": 82.4,
+        "impedance": 0
+      },
+      "sink": "queued"
+    },
+    {
+      "atMs": 1500,
+      "data": "fe95 5859e2515b01000000000226d226b545cd7ec33c97c7b80100000bb875c8",
+      "decision": "complete",
+      "reading": {
+        "weight": 82.4,
+        "impedance": 0
+      },
+      "sink": "dedup",
+      "untilMs": 2500,
+      "count": 3
+    },
+    {
+      "atMs": 3000,
+      "data": "fe95 4859e2515cd19c2ddc4b61869088901320010000865eb785",
+      "decision": "complete",
+      "reading": {
+        "weight": 82.4,
+        "impedance": 0
+      },
+      "sink": "dedup"
+    },
+    {
+      "atMs": 31000,
+      "data": "fe95 5859e2515d010000000002c924bf16eec407da9dfcb4b1010000e9e89407",
+      "decision": "complete",
+      "reading": {
+        "weight": 82.4,
+        "impedance": 0
+      },
+      "sink": "queued"
+    }
+  ],
+  "exports": [
+    {
+      "atMs": 1000,
+      "by": "advert",
+      "reading": {
+        "weight": 82.4,
+        "impedance": 0
+      },
+      "payload": {
+        "weight": 82.4,
+        "impedance": 0,
+        "bmi": 24.61,
+        "bodyFatPercent": 20.23,
+        "waterPercent": 58.23,
+        "boneMass": 2.76,
+        "muscleMass": 62.97,
+        "visceralFat": 9,
+        "physiqueRating": 5,
+        "bmr": 1822,
+        "metabolicAge": 31
+      }
+    },
+    {
+      "atMs": 31000,
+      "by": "advert",
+      "reading": {
+        "weight": 82.4,
+        "impedance": 0
+      },
+      "payload": {
+        "weight": 82.4,
+        "impedance": 0,
+        "bmi": 24.61,
+        "bodyFatPercent": 20.23,
+        "waterPercent": 58.23,
+        "boneMass": 2.76,
+        "muscleMass": 62.97,
+        "visceralFat": 9,
+        "physiqueRating": 5,
+        "bmr": 1822,
+        "metabolicAge": 31
+      }
+    }
+  ]
+}

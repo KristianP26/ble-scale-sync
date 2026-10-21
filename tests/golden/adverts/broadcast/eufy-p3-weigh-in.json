@@ -1,0 +1,84 @@
+{
+  "adverts": [
+    {
+      "atMs": 0,
+      "data": "0x024d 0000000001002c4f706705005820000000000000000000",
+      "decision": "complete",
+      "reading": {
+        "weight": 82.8,
+        "impedance": 0,
+        "timestamp": "2024-12-28T19:19:08.000Z"
+      },
+      "sink": "queued"
+    },
+    {
+      "atMs": 3645,
+      "data": "0x024d 0000000001002f4f7067250058200000000b143534d900",
+      "decision": "wait"
+    },
+    {
+      "atMs": 6310,
+      "data": "0x024d 000000000100324f7067650058200000000b143534d900",
+      "decision": "wait"
+    },
+    {
+      "atMs": 7248,
+      "data": "0x024d 000000000100334f7067650058200000000b143534d900",
+      "decision": "wait"
+    },
+    {
+      "atMs": 8186,
+      "data": "0x024d 000000000100344f7067650058200000000b143534d900",
+      "decision": "wait"
+    },
+    {
+      "atMs": 9124,
+      "data": "0x024d 000000000100354f7067650058200000000b143534d900",
+      "decision": "wait"
+    },
+    {
+      "atMs": 10062,
+      "data": "0x024d 000000000100364f7067650058200000000b143534d900",
+      "decision": "wait"
+    },
+    {
+      "atMs": 11000,
+      "data": "0x024d 000000000100374f7067650058200000000b143534d900",
+      "decision": "wait"
+    },
+    {
+      "atMs": 11939,
+      "data": "0x024d 000000000100384f7067650058200000000b143534d900",
+      "decision": "wait"
+    },
+    {
+      "atMs": 12741,
+      "data": "0x024d 000000000100384f7067a5805820005f000b143534d900",
+      "decision": "wait"
+    }
+  ],
+  "exports": [
+    {
+      "atMs": 0,
+      "by": "advert",
+      "reading": {
+        "weight": 82.8,
+        "impedance": 0,
+        "timestamp": "2024-12-28T19:19:08.000Z"
+      },
+      "payload": {
+        "weight": 82.8,
+        "impedance": 0,
+        "bmi": 24.72,
+        "bodyFatPercent": 20.37,
+        "waterPercent": 58.13,
+        "boneMass": 2.77,
+        "muscleMass": 63.16,
+        "visceralFat": 9,
+        "physiqueRating": 5,
+        "bmr": 1826,
+        "metabolicAge": 31
+      }
+    }
+  ]
+}

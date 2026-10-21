@@ -1,0 +1,93 @@
+{
+  "nothing-changed": [],
+  "hot-reloadable-only": [],
+  "handler-and-adapter": [
+    {
+      "key": "ble.handler",
+      "oldValue": "mqtt-proxy",
+      "newValue": "auto"
+    },
+    {
+      "key": "ble.adapter",
+      "oldValue": "hci1",
+      "newValue": "hci0"
+    },
+    {
+      "key": "ble.noble_driver",
+      "oldValue": "<unset>",
+      "newValue": "stoprocent"
+    }
+  ],
+  "mqtt-proxy-credentials": [
+    {
+      "key": "ble.mqtt_proxy.broker_url",
+      "oldValue": "mqtt://broker.local:1883",
+      "newValue": "mqtt://user:%3Credacted%3E@broker.local:1884"
+    },
+    {
+      "key": "ble.mqtt_proxy.password",
+      "oldValue": "<redacted>",
+      "newValue": "<redacted>"
+    }
+  ],
+  "esphome-proxy-added": [
+    {
+      "key": "ble.esphome_proxy.host",
+      "oldValue": "<unset>",
+      "newValue": "esp.local"
+    },
+    {
+      "key": "ble.esphome_proxy.port",
+      "oldValue": "<unset>",
+      "newValue": "6053"
+    },
+    {
+      "key": "ble.esphome_proxy.encryption_key",
+      "oldValue": "<unset>",
+      "newValue": "<redacted>"
+    },
+    {
+      "key": "ble.esphome_proxy.client_info",
+      "oldValue": "<unset>",
+      "newValue": "ble-scale-sync"
+    },
+    {
+      "key": "ble.esphome_proxy.additional_proxies",
+      "oldValue": "<unset>",
+      "newValue": "[{\"host\":\"esp2.local\",\"port\":6053,\"password\":\"<redacted>\"}]"
+    },
+    {
+      "key": "ble.esphome_proxy.advertisement_timeout",
+      "oldValue": "<unset>",
+      "newValue": "0"
+    }
+  ],
+  "restart-required-runtime-and-ble": [
+    {
+      "key": "ble.adapter_privacy",
+      "oldValue": "true",
+      "newValue": "false"
+    },
+    {
+      "key": "ble.force_scale_adapter",
+      "oldValue": "QN Scale",
+      "newValue": "null"
+    },
+    {
+      "key": "runtime.continuous_mode",
+      "oldValue": "true",
+      "newValue": "false"
+    },
+    {
+      "key": "runtime.retry_failed_exports",
+      "oldValue": "false",
+      "newValue": "true"
+    },
+    {
+      "key": "runtime.watchdog_max_consecutive_failures",
+      "oldValue": "3",
+      "newValue": "10"
+    }
+  ],
+  "users-changed": []
+}

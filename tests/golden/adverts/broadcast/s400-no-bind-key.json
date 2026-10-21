@@ -1,0 +1,18 @@
+{
+  "adverts": [
+    {
+      "atMs": 0,
+      "data": "fe95 4859d53b713846be401fb7c03245438d8f00000026767076",
+      "decision": "wait",
+      "warns": [
+        "Xiaomi S400 detected but ble.bind_key is not configured; cannot decode weight"
+      ]
+    },
+    {
+      "atMs": 300,
+      "data": "fe95 4859d53b713846be401fb7c03245438d8f00000026767076",
+      "decision": "wait"
+    }
+  ],
+  "exports": []
+}

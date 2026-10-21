@@ -1,0 +1,23 @@
+{
+  "adverts": [
+    {
+      "atMs": 0,
+      "data": "0x0100 0203110200000000010122380000a37f7d",
+      "decision": "wait",
+      "warns": [
+        "Senssun IF_B7 is displaying unknown unit 0x3. Only kg and lb are decoded, so its readings are ignored. Switch the scale to kg or lb, or report a weigh-in in this unit on #423."
+      ]
+    },
+    {
+      "atMs": 400,
+      "data": "0x0100 0203110200000000010122380000a37f7d",
+      "decision": "wait"
+    },
+    {
+      "atMs": 1000,
+      "data": "0x0100 02031102000000000101226a0000e1d13f",
+      "decision": "wait"
+    }
+  ],
+  "exports": []
+}

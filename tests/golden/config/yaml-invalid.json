@@ -1,0 +1,4 @@
+{
+  "error": "Configuration error in config.yaml:\n\n  users.0.slug\n    Slug must contain only lowercase letters, numbers, and hyphens\n\n  users.0.height\n    Must be a positive number (e.g., 183)\n\n  users.0.birth_date\n    Must be a real calendar date, not in the future (e.g., \"1990-06-15\")\n\n  users.0.gender\n    Invalid option: expected one of \"male\"|\"female\"\n\n  users.0.weight_range\n    max must be greater than min\n\nRun 'ble-scale-sync validate' to check your config, or 'ble-scale-sync setup' to reconfigure.",
+  "log": []
+}

@@ -1,0 +1,55 @@
+{
+  "adverts": [
+    {
+      "atMs": 0,
+      "data": "fe95 4859d53b0a64133f4c6c201fd23be09325000000b6465d85",
+      "decision": "wait",
+      "warns": [
+        "Xiaomi S400 frame received before its MAC is known; set ble.scale_mac so measurements decrypt without waiting for an idle beacon"
+      ]
+    },
+    {
+      "atMs": 300,
+      "data": "fe95 4859d53b0a64133f4c6c201fd23be09325000000b6465d85",
+      "decision": "wait"
+    },
+    {
+      "atMs": 1000,
+      "data": "fe95 305ad53b0001000000000208",
+      "decision": "wait"
+    },
+    {
+      "atMs": 1300,
+      "data": "fe95 4859d53b0a64133f4c6c201fd23be09325000000b6465d85",
+      "decision": "complete",
+      "reading": {
+        "weight": 69.9,
+        "impedance": 543.2
+      },
+      "sink": "queued"
+    }
+  ],
+  "exports": [
+    {
+      "atMs": 1300,
+      "by": "advert",
+      "reading": {
+        "weight": 69.9,
+        "impedance": 543.2
+      },
+      "payload": {
+        "weight": 69.9,
+        "impedance": 543.2,
+        "bmi": 20.87,
+        "bodyFatPercent": 15.87,
+        "waterPercent": 57.71,
+        "boneMass": 2.99,
+        "muscleMass": 55.81,
+        "visceralFat": 7,
+        "physiqueRating": 9,
+        "bmr": 1697,
+        "metabolicAge": 31
+      }
+    }
+  ]
+}

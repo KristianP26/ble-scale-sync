@@ -1,0 +1,118 @@
+{
+  "settled": {
+    "by": "error",
+    "atMs": 60000,
+    "error": "Scale disconnected before reading completed"
+  },
+  "reading": null,
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 1,
+      "atMs": 0,
+      "uuid": "ffe1"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 2,
+      "atMs": 0,
+      "uuid": "ffe1",
+      "hex": "e7f1590301",
+      "withResponse": true
+    },
+    {
+      "seq": 3,
+      "atMs": 5000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 4,
+      "atMs": 10000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 5,
+      "atMs": 15000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 6,
+      "atMs": 20000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 7,
+      "atMs": 25000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 8,
+      "atMs": 30000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 9,
+      "atMs": 35000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 10,
+      "atMs": 40000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 11,
+      "atMs": 45000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 12,
+      "atMs": 50000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 13,
+      "atMs": 55000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    },
+    {
+      "seq": 14,
+      "atMs": 60000,
+      "uuid": "ffe1",
+      "hex": "f701",
+      "withResponse": false
+    }
+  ],
+  "rxDropped": 0,
+  "payload": null
+}

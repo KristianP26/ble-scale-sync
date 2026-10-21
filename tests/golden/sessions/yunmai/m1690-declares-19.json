@@ -1,0 +1,41 @@
+{
+  "settled": {
+    "by": "reading",
+    "atMs": 500
+  },
+  "reading": {
+    "weight": 80,
+    "impedance": 0
+  },
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 1,
+      "atMs": 0,
+      "uuid": "ffe4"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "ffe9",
+      "hex": "0d05130016",
+      "withResponse": false
+    }
+  ],
+  "rxDropped": 0,
+  "payload": {
+    "weight": 80,
+    "impedance": 0,
+    "bmi": 23.89,
+    "bodyFatPercent": 19.37,
+    "waterPercent": 58.55,
+    "boneMass": 3.44,
+    "muscleMass": 43.22,
+    "visceralFat": 8,
+    "physiqueRating": 5,
+    "bmr": 1798,
+    "metabolicAge": 31
+  }
+}

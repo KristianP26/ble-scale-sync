@@ -18,6 +18,9 @@ import {
   timed,
   type TimedFrame,
 } from '../helpers/ac27-captures.js';
+import { freshAdapter, replaySession } from '../helpers/replay/session.js';
+import { session as ac27 } from '../fixtures/active-era/ac27.js';
+import { session as fitdays } from '../fixtures/active-era/ac27-fitdays-profile.js';
 
 /**
  * AC 27 weigh-ins end to end through `waitForRawReading`, at the spacing the
@@ -226,5 +229,48 @@ describe('AC 27 weigh-ins through waitForRawReading (#458, #462, #466)', () => {
     await s.play(received(ALPHA_HANDSHAKE));
     expect(s.reading()).toEqual({ weight: 88.95, impedance: 469 });
     expect(s.write.written.at(-1)).toEqual({ data: captured.at(-1), withResponse: true });
+  });
+});
+
+// The session goldens of tests/fixtures/active-era rest on the generic replay
+// harness (D074), so it has to reach what the hand-driven sessions above reach.
+describe('the same AC 27 captures through the replay harness', () => {
+  it.each([
+    ['alpha-no-write', 'reading', 10920, { weight: 88.58, impedance: 0 }],
+    ['openscale-1358', 'reading', 11543, { weight: 98.64, impedance: 0 }],
+    ['alpha-lock-d6-no-impedance', 'reading', 2186, { weight: 89.24, impedance: 0 }],
+    ['alpha-lock-d6', 'reading', 9933, { weight: 88.97, impedance: 469 }],
+    [
+      'issue-458-dump-2',
+      'reading',
+      19000,
+      { weight: expect.closeTo(87.62, 3), impedance: expect.closeTo(434.92, 2) },
+    ],
+    ['alpha-plateau-then-lock', 'reading', 6767, { weight: 88.58, impedance: 469 }],
+    ['alpha-no-write-dropped-in-hold', 'disconnect', 6220, { weight: 88.58, impedance: 0 }],
+  ])('%s: settled by %s at %i ms', async (name, by, atMs, reading) => {
+    const r = await replaySession(freshAdapter(ac27), ac27.traces[name], ac27);
+    expect(r.settled).toEqual({ by, atMs });
+    expect(r.reading).toEqual(reading);
+  });
+
+  it('alpha-handshake: subscribe, the profile writes, the D6 ACK', async () => {
+    const r = await replaySession(
+      freshAdapter(fitdays),
+      fitdays.traces['alpha-handshake'],
+      fitdays,
+    );
+    const captured = timed(ALPHA_HANDSHAKE)
+      .filter((f) => f.dir === 'tx')
+      .map((f) => f.frame.toString('hex'));
+    expect(r.subscribes[0].seq).toBe(0);
+    expect(r.writes.map((w) => w.hex)).toEqual([
+      captured[0],
+      captured[3],
+      captured[4],
+      captured.at(-1),
+    ]);
+    expect(r.writes.at(-1)!.withResponse).toBe(true);
+    expect(r.reading).toEqual({ weight: 88.95, impedance: 469 });
   });
 });

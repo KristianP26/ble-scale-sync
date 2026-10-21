@@ -27,6 +27,12 @@ export default defineConfig({
        * its own delay through withRetry's options.
        */
       BLE_RETRY_BASE_DELAY_MS: '0',
+      /**
+       * Several adapters write or stamp local time (MGB fd/fc, SIG stamps, the
+       * R-MSC04 b3 zone, ES-CS20M 0x97), so the session goldens would differ
+       * between a developer's zone and CI. One zone for every run.
+       */
+      TZ: 'UTC',
     },
   },
 });

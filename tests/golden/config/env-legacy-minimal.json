@@ -1,0 +1,79 @@
+{
+  "config": {
+    "version": 1,
+    "ble": {
+      "handler": "auto",
+      "scale_mac": null,
+      "noble_driver": null,
+      "adapter": null
+    },
+    "scale": {
+      "weight_unit": "kg",
+      "height_unit": "cm",
+      "display_unit": "weight_unit"
+    },
+    "unknown_user": "nearest",
+    "out_of_range": "warn",
+    "users": [
+      {
+        "name": "Default",
+        "slug": "default",
+        "height": 183,
+        "birth_date": "1990-06-15",
+        "gender": "male",
+        "is_athlete": false,
+        "weight_range": {
+          "min": 0,
+          "max": 999
+        },
+        "last_known_weight": null
+      }
+    ],
+    "global_exporters": [
+      {
+        "type": "garmin",
+        "weight_only": false
+      }
+    ],
+    "runtime": {
+      "continuous_mode": false,
+      "scan_cooldown": 30,
+      "dry_run": false,
+      "debug": false,
+      "watchdog_max_consecutive_failures": 10,
+      "watch_config": true,
+      "idle_rescan_delay": 5,
+      "no_reading_rescan_delay": 0,
+      "retry_failed_exports": true
+    },
+    "update_check": true
+  },
+  "runtime": {
+    "profile": {
+      "height": 183,
+      "age": 36,
+      "gender": "male",
+      "isAthlete": false,
+      "birthDate": "1990-06-15"
+    },
+    "weightUnit": "kg",
+    "dryRun": false,
+    "continuousMode": false,
+    "scanCooldownSec": 30,
+    "retryFailedExports": true,
+    "watchdogMaxFailures": 10,
+    "watchConfig": true,
+    "bleHandler": "auto",
+    "adapterPrivacy": false
+  },
+  "adapterRuntime": {
+    "displayUnit": "kg",
+    "userWeights": "config.users"
+  },
+  "exporterSlots": {
+    "default": [
+      "global:0:garmin"
+    ]
+  },
+  "log": []
+}

@@ -1,0 +1,18 @@
+{
+  "adverts": [
+    {
+      "atMs": 0,
+      "data": "fe95 4859d53b0a64133f4c6c201fd23be09325000000b6465d85",
+      "decision": "wait",
+      "warns": [
+        "Xiaomi S400 frame failed to decrypt; check ble.bind_key and ble.scale_mac"
+      ]
+    },
+    {
+      "atMs": 300,
+      "data": "fe95 4859d53b0a64133f4c6c201fd23be09325000000b6465d85",
+      "decision": "wait"
+    }
+  ],
+  "exports": []
+}

@@ -1,0 +1,107 @@
+{
+  "returned": true,
+  "exports": [
+    {
+      "to": "dad/garmin@global:0",
+      "weight": 94.2,
+      "impedance": 500,
+      "user": "dad",
+      "timestamp": "2026-10-21T08:00:00.000Z",
+      "driftWarning": "Weight 94.2 kg is near the upper boundary of Dad's range [75–95]"
+    },
+    {
+      "to": "dad/mqtt@global:1",
+      "weight": 94.2,
+      "impedance": 500,
+      "user": "dad",
+      "timestamp": "2026-10-21T08:00:00.000Z",
+      "driftWarning": "Weight 94.2 kg is near the upper boundary of Dad's range [75–95]"
+    }
+  ],
+  "computeMetrics": [
+    {
+      "weight": 94.2,
+      "impedance": 500,
+      "profile": {
+        "height": 183,
+        "age": 36,
+        "gender": "male",
+        "isAthlete": false,
+        "birthDate": "1990-06-15",
+        "lastKnownWeight": 82
+      }
+    }
+  ],
+  "queued": [],
+  "lastKnownWeightWrites": [
+    [
+      "<config.yaml>",
+      "dad",
+      94.2,
+      82
+    ]
+  ],
+  "replayAnchorWrites": [
+    {
+      "slug": "dad",
+      "weight": 94.2,
+      "time": "2026-10-21T08:00:00.000Z"
+    }
+  ],
+  "updateChecks": 1,
+  "display": [
+    [
+      "beep",
+      1200,
+      200,
+      2
+    ],
+    [
+      "reading",
+      "dad",
+      "Dad",
+      94.2,
+      500,
+      [
+        "garmin",
+        "mqtt"
+      ]
+    ],
+    [
+      "result",
+      "dad",
+      "Dad",
+      94.2,
+      [
+        {
+          "name": "garmin",
+          "ok": true
+        },
+        {
+          "name": "mqtt",
+          "ok": true
+        }
+      ]
+    ]
+  ],
+  "after": {
+    "lastExportedWeights": {
+      "dad": 94.2
+    },
+    "lastExportedAt": {
+      "dad": "2026-10-21T08:00:00.000Z"
+    },
+    "lastKnownWeight": {
+      "dad": 94.2,
+      "mom": 60
+    }
+  },
+  "log": [
+    "[Sync] Raw reading: 94.20 kg / 500 Ohm",
+    "[Sync] [Dad] Matched (tier: exact)",
+    "[Sync] [Dad] Weight 94.2 kg is near the upper boundary of Dad's range [75–95]",
+    "[Sync] [Dad] Measurement: 94.20 kg / 500 Ohm",
+    "[Sync] Exporting to: garmin, mqtt...",
+    "[Sync] Done."
+  ]
+}
