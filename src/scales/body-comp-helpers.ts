@@ -3,8 +3,10 @@
  *
  * Most consumer scales provide body-fat / water / muscle / bone directly
  * in their BLE frames.  The helpers here fill in the remaining BodyComposition
- * fields (BMI, BMR, metabolic age, physique rating) that are always
- * calculated from the user profile rather than measured by the scale.
+ * fields (BMI, BMR, metabolic age, physique rating) from the user profile.
+ * BMI and the physique rating are always calculated; BMR and metabolic age are
+ * too, unless the adapter passes the scale's own (ScaleBodyComp.bmr and
+ * .metabolicAge, D078) with an accepted body fat value and inside their bands.
  */
 
 import type { UserProfile, BodyComposition, ScaleReading } from '../interfaces/scale-adapter.js';
@@ -19,6 +21,10 @@ export interface ScaleBodyComp {
   muscle?: number; // %
   bone?: number; // kg
   visceralFat?: number;
+  /** The scale's own BMR, kcal (D078). Used only with an accepted body fat value. */
+  bmr?: number;
+  /** The scale's own body age, years, exported as metabolic age (D078). Same rule. */
+  metabolicAge?: number;
 }
 
 /**
@@ -131,6 +137,10 @@ const MAX_PLAUSIBLE_MUSCLE_PCT = 100;
  * A composition is fat plus, optionally, water, bone and muscle. Water, bone
  * or muscle without fat is rejected for the same reason. `visceralFat` is not
  * part of it: it is a 1 to 59 index that is clamped, not a share of the body.
+ * Neither are `bmr` and `metabolicAge` (D078): each is checked on its own band
+ * (isPlausibleBmr, isPlausibleMetabolicAge), but buildPayload takes them only
+ * next to a body fat value this function accepted, because the scale derives
+ * them from the same measurement.
  */
 export function compositionRejection(comp: ScaleBodyComp): string | null {
   const { fat, water, bone, muscle } = comp;
@@ -149,6 +159,44 @@ export function compositionRejection(comp: ScaleBodyComp): string | null {
     return `muscle ${muscle} % is outside 0-${MAX_PLAUSIBLE_MUSCLE_PCT} %`;
   }
   return null;
+}
+
+/**
+ * Bands a scale-reported BMR and body age have to fall in before they replace
+ * the formulas (D078). Judgements, not measurements: far from any real body
+ * and far from what a broken field gives (0, a 0xFFFF or 0xFF sentinel, a
+ * value off by a factor of 10). The age floor is the 12 the metabolic age
+ * formula in buildPayload clamps to.
+ */
+export const BMR_MIN_KCAL = 500;
+export const BMR_MAX_KCAL = 5000;
+export const METABOLIC_AGE_MIN = 12;
+export const METABOLIC_AGE_MAX = 120;
+
+/** Whether a scale-reported BMR (kcal) may be exported as is (D078). */
+export function isPlausibleBmr(kcal: number): boolean {
+  return Number.isFinite(kcal) && kcal >= BMR_MIN_KCAL && kcal <= BMR_MAX_KCAL;
+}
+
+/** Whether a scale-reported body age (years) may be exported as the metabolic age (D078). */
+export function isPlausibleMetabolicAge(years: number): boolean {
+  return Number.isFinite(years) && years >= METABOLIC_AGE_MIN && years <= METABOLIC_AGE_MAX;
+}
+
+/**
+ * A scale-reported value as an integer, or undefined (and a debug line) when
+ * it is outside its band, so the caller falls back to its formula.
+ */
+function scaleValueIfPlausible(
+  value: number | undefined,
+  plausible: (v: number) => boolean,
+  what: string,
+  band: string,
+): number | undefined {
+  if (value == null) return undefined;
+  if (plausible(value)) return Math.trunc(value);
+  biaLog.debug(`Scale-reported ${what} ${value} is outside ${band}; calculating it instead.`);
+  return undefined;
 }
 
 /**
@@ -263,8 +311,29 @@ export function buildPayload(
   // 166 kcal gap as ~11 extra years for every female user (#433).
   const idealBmr = 10 * weight + 6.25 * p.height - 5 * 25 + sexConstant;
   let metabolicAge = p.age + Math.trunc((idealBmr - bmr) / 15);
-  if (metabolicAge < 12) metabolicAge = 12;
+  if (metabolicAge < METABOLIC_AGE_MIN) metabolicAge = METABOLIC_AGE_MIN;
   if (p.isAthlete && metabolicAge > p.age) metabolicAge = p.age - 5;
+
+  // The scale's own BMR and body age replace the two formulas only here, at
+  // the end (D078). The formula metabolic age above has to come from the
+  // formula BMR: fed the scale's BMR, it would compare the scale's figure with
+  // a formula reference. Taken from `measured` and only next to a measured
+  // body fat, so a rejected composition, or none, takes them with it. As sent
+  // (truncated to whole numbers): the athlete factor and the age clamps are
+  // the formulas' own.
+  const withFat = measured.fat != null;
+  const scaleBmr = scaleValueIfPlausible(
+    withFat ? measured.bmr : undefined,
+    isPlausibleBmr,
+    'BMR',
+    `${BMR_MIN_KCAL}-${BMR_MAX_KCAL} kcal`,
+  );
+  const scaleAge = scaleValueIfPlausible(
+    withFat ? measured.metabolicAge : undefined,
+    isPlausibleMetabolicAge,
+    'metabolic age',
+    `${METABOLIC_AGE_MIN}-${METABOLIC_AGE_MAX} years`,
+  );
 
   return {
     weight: r2(weight),
@@ -276,8 +345,8 @@ export function buildPayload(
     muscleMass: r2(muscleMass),
     visceralFat,
     physiqueRating,
-    bmr: Math.trunc(bmr),
-    metabolicAge,
+    bmr: scaleBmr ?? Math.trunc(bmr),
+    metabolicAge: scaleAge ?? metabolicAge,
   };
 }
 
