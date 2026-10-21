@@ -128,7 +128,11 @@ const R07_LIVE = [R07.P1, R07.P2, R07.P3, R07.C15, R07.D16];
 /** The scale's "no stored weigh-ins" answer to the 0x22, 2026-10-06 line 399. */
 const NO_RECORDS = hex('23 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 23');
 const R06_LIVE = [R06.P1, R06.P2, R06.P3, R06.C15, R06.D16];
-/** The profile the 2026-10-06 visit frame carried: 1810 mm. Age is neutral. */
+/**
+ * The profile the 2026-10-06 visit frame carried: 1810 mm. The age is the
+ * fixtures' own: the frames' body age and BMR are what the scale computed for
+ * the reporter's profile, so they are checked as sent, not against 40 (D078).
+ */
 const P181: UserProfile = { height: 181, age: 40, gender: 'male', isAthlete: false };
 
 /**
@@ -745,12 +749,18 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
       muscleMass: 59.87,
       boneMass: 3.23,
       visceralFat: 6,
+      // 0x15 [11..12] and [10] (D078); the formulas give 1704 and 45.
+      bmr: 1730,
+      metabolicAge: 48,
     });
     expect(info.lines()).toContain(
       'QN: the scale sent its own body composition for this weigh-in (#331)',
     );
     expect(info.lines()).toContain(
       "QN: using the scale's own body composition for this weigh-in (#331)",
+    );
+    expect(debug.lines()).toContain(
+      "QN: BMR 1730 kcal from the scale, metabolic age 48 from the scale's body age (#331)",
     );
   });
 
@@ -788,9 +798,13 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
     const info = spyLines('info');
     const athlete = { ...P181, isAthlete: true };
     const { adapter, reading } = await weighIn({ profile: athlete });
+    // BMR and body age as the scale sent them too: the athlete formulas give
+    // 1789 and 40.
     expect(adapter.computeMetrics(reading, athlete)).toMatchObject({
       bodyFatPercent: 18,
       waterPercent: 59.1,
+      bmr: 1730,
+      metabolicAge: 48,
     });
     expect(info.lines()).toContain('QN: the scale computed it without an athlete mode (#331)');
   });
@@ -872,6 +886,8 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
       muscleMass: 59.87,
       boneMass: 3.23,
       visceralFat: 6,
+      bmr: 1730,
+      metabolicAge: 48,
     });
     expect(info.lines()).toContain(
       "QN: using the scale's own body composition for this weigh-in (#331)",
@@ -939,8 +955,9 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
     );
   });
 
-  // Derived: 0x15 with the water at 0. The whole set goes, visceral fat
-  // included, which buildPayload would otherwise take on its own.
+  // Derived: 0x15 with the water at 0. The whole set goes, visceral fat,
+  // BMR and body age included, which buildPayload would otherwise take on
+  // their own.
   it('estimates everything, visceral fat included, when one value is not a measurement', async () => {
     const live = [...R06_LIVE];
     live[3] = patched(R06.C15, 5, 0x00, 0x00);
@@ -948,6 +965,70 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
     const payload = adapter.computeMetrics(reading, P181);
     expect(payload).toEqual(estimate(P181));
     expect(payload.visceralFat).not.toBe(6);
+    expect(payload).toMatchObject({ bmr: 1704, metabolicAge: 45 });
+  });
+
+  // Derived: 0x15 with the BMR ([11..12]) or the body age ([10]) at 0 or at
+  // the 0xff sentinel, checksum recomputed. Only that value falls back to its
+  // formula (1704 kcal, 45 for P181); the other and the rest of the set stay
+  // the scale's (D078).
+  it.each([
+    ['a BMR of 0', 11, [0x00, 0x00], 'bmr', 'BMR calculated (the scale sent 0 kcal)'],
+    ['a BMR of 0xffff', 11, [0xff, 0xff], 'bmr', 'BMR calculated (the scale sent 65535 kcal)'],
+    [
+      'a body age of 0',
+      10,
+      [0x00],
+      'metabolicAge',
+      'metabolic age calculated (the scale sent a body age of 0)',
+    ],
+    [
+      'a body age of 0xff',
+      10,
+      [0xff],
+      'metabolicAge',
+      'metabolic age calculated (the scale sent a body age of 255)',
+    ],
+  ] as const)(
+    'calculates only that value when the scale sends %s',
+    async (_name, at, bytes, field, logged) => {
+      const debug = spyLines('debug');
+      const live = [...R06_LIVE];
+      live[3] = patched(R06.C15, at, ...bytes);
+      const { adapter, reading } = await weighIn({}, { live });
+      const payload = adapter.computeMetrics(reading, P181);
+      const formula = estimate(P181);
+      expect(payload).toMatchObject({
+        bodyFatPercent: 18,
+        waterPercent: 59.1,
+        visceralFat: 6,
+        bmr: field === 'bmr' ? formula.bmr : 1730,
+        metabolicAge: field === 'metabolicAge' ? formula.metabolicAge : 48,
+      });
+      expect(formula).toMatchObject({ bmr: 1704, metabolicAge: 45 });
+      expect(debug.lines().some((l) => l.includes(logged))).toBe(true);
+    },
+  );
+
+  // The derived R07_FULL record carries the live block's BMR and body age, but
+  // a stored record goes with its weight alone (D048 point 3), so both stay
+  // the formulas', also after an accepted profile.
+  it("keeps the formulas for a stored record that carries the scale's BMR and body age", async () => {
+    const adapter = new QnScaleAdapter();
+    const s = await openSession(adapter, { now: R07_CONNECTED });
+    const out = s.feed(
+      R07_SESSION.VISIT_OK,
+      R07_FULL.S1,
+      R07_FULL.S2,
+      R07_FULL.S3,
+      R07_FULL.S24,
+      R07_FULL.S25,
+    );
+    const reading = out[5]!;
+    expect(reading).toEqual({ weight: 76.55, impedance: 0, timestamp: new Date(R07_RECORD_AT) });
+    const payload = adapter.computeMetrics(reading, P181);
+    expect(payload).toEqual(buildPayload(76.55, 0, {}, P181));
+    expect(payload).toMatchObject({ bmr: 1701, metabolicAge: 45 });
   });
 
   it('keeps the composition with the reading it was measured with', async () => {

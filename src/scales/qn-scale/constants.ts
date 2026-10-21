@@ -573,7 +573,11 @@ export const LIVE20_STATUS_RESULT = 0x02;
  * Muscle and bone are x0.1 % of the body weight when bit 0 of the ready
  * frame's (0x14) `[3]` is set, and kg x0.01 otherwise; every 19-byte log so far
  * has it set. The SDK itself does not read the 8-electrode BMR, lean mass or
- * score, so those three are the least certain.
+ * score, so those three are the least certain. The BMR is nonetheless
+ * 370 + 21.6 x the fat-free mass the scale's own body fat gives (Katch-McArdle)
+ * to within 1.3 kcal on every logged block, and with the body age it is close
+ * to what the vendor app showed for another weigh-in the same day; both are
+ * exported with the scale's own composition (D078).
  */
 export const RESULT16_FRAME_LEN = 16;
 export const RESULT16_OPCODE_COMPOSITION = 0x15;

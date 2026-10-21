@@ -28,7 +28,11 @@ export const qnSteps = (lines: readonly SnoopLine[], notify = 'fff1'): TraceStep
       (s.hex.length === 34 && s.hex.startsWith('00')) || s.hex === '0270617373' ? 'ae02' : notify,
   }));
 
-/** The 19-byte fixtures' profile, the height the #331 visit frame carried; age neutral. */
+/**
+ * The 19-byte fixtures' profile, the height the #331 visit frame carried. The
+ * age is the fixtures' own; the scale's body age and BMR in the frames are
+ * exported as sent, not checked against it (D078).
+ */
 export const P181: UserProfile = {
   height: 181,
   age: 40,

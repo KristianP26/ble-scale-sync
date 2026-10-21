@@ -8,6 +8,8 @@ import { isHistoricalReading } from '../../../interfaces/reading-time.js';
 import {
   buildPayload,
   compositionRejection,
+  isPlausibleBmr,
+  isPlausibleMetabolicAge,
   r2,
   type ScaleBodyComp,
 } from '../../body-comp-helpers.js';
@@ -564,9 +566,12 @@ function replaceHeldStoredWeighIn(q: QnScaleAdapter, by: string): void {
 /**
  * The scale's own body fat, water, muscle, bone and visceral fat, as one set
  * that stands or falls as a whole, or null with the reason logged when they
- * are not this user's or not plausible (#331). Athlete mode: the scale has none for these scales in
- * the vendor's published SDK, so an athlete gets its values with a note
- * rather than the BMI estimate, which is the worst one for a muscular body.
+ * are not this user's or not plausible (#331). With an accepted set the
+ * scale's BMR and body age (0x15 `[11..12]`, `[10]`) replace the formula BMR
+ * and metabolic age, each only inside its band (D078). Athlete mode: the scale
+ * has none for these scales in the vendor's published SDK, so an athlete gets
+ * its values with a note rather than the BMI estimate, which is the worst one
+ * for a muscular body.
  */
 export function scaleCompositionPayload(
   pin: ScaleCompositionPin,
@@ -591,7 +596,24 @@ export function scaleCompositionPayload(
   }
   const visceral = pin.composition.visceral;
   if (visceral >= 1 && visceral <= 59) set.visceralFat = visceral;
+  // Each on its own: one outside its band falls back to the formula alone
+  // (D078). They are only reached here, past both rejections above, because
+  // the scale computed them from the same measurement and profile.
+  const { bmr, bodyAge } = pin.composition;
+  if (isPlausibleBmr(bmr)) set.bmr = bmr;
+  if (isPlausibleMetabolicAge(bodyAge)) set.metabolicAge = bodyAge;
   bleLog.info("QN: using the scale's own body composition for this weigh-in (#331)");
+  bleLog.debug(
+    'QN: ' +
+      (set.bmr !== undefined
+        ? `BMR ${bmr} kcal from the scale`
+        : `BMR calculated (the scale sent ${bmr} kcal)`) +
+      ', ' +
+      (set.metabolicAge !== undefined
+        ? `metabolic age ${bodyAge} from the scale's body age`
+        : `metabolic age calculated (the scale sent a body age of ${bodyAge})`) +
+      ' (#331)',
+  );
   if (profile.isAthlete) {
     bleLog.info('QN: the scale computed it without an athlete mode (#331)');
   }

@@ -82,7 +82,7 @@ global_exporters:
 :::
 
 ::: tip Skip metabolic age
-Set `skip_metabolic_age: true` to upload everything except metabolic age. The estimate compares your BMR with a reference BMR for the same weight and height. Unless `is_athlete` is set, weight and height cancel and the result depends on age alone. Either way it carries no body composition. Garmin Connect then shows no metabolic age on the entry. Garmin's own Fitness Age is calculated separately and is not affected.
+Set `skip_metabolic_age: true` to upload everything except metabolic age. On most scales it is an estimate that compares your BMR with a reference BMR for the same weight and height. Unless `is_athlete` is set, weight and height cancel and the result depends on age alone. Either way it carries no body composition. The [19-byte QN scale](/guide/supported-scales#arboleaf-qn-scale-19-byte-dialect) sends a body age of its own, which is used instead when its own body composition is; this option skips that one too. Garmin Connect then shows no metabolic age on the entry. Garmin's own Fitness Age is calculated separately and is not affected.
 
 ```yaml
 global_exporters:

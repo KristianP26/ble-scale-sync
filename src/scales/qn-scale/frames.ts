@@ -275,8 +275,9 @@ export interface VaComposition {
   /** x0.1 of the transmitted value: % of body weight when the scale reports percentages. */
   muscle: number;
   visceral: number;
+  /** Years; exported as the metabolic age with the scale's own composition (D078). */
   bodyAge: number;
-  /** kcal */
+  /** kcal; exported as the BMR with the scale's own composition (D078). */
   bmr: number;
   /** % */
   protein: number;
