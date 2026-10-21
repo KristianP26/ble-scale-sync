@@ -97,7 +97,7 @@ The QN options, `auto_clear_stale_bond`, `preemptive_adapter_reset`, `adapter_pr
 | `height_unit`  | `cm`          | `cm`, `in`                       |
 | `display_unit` | `weight_unit` | `weight_unit`, `kg`, `lbs`, `st` |
 
-The CLI and exporters display weights and heights in your chosen unit; all internal math stays in kg / cm. `display_unit` controls the physical scale separately; today only QN-family and `AC 27` (Active Era) scales support it. For example, `weight_unit: kg` with `display_unit: st` keeps Home Assistant values in kg while asking a compatible QN scale to display stones and pounds.
+The log and the notification exporters (ntfy, Telegram) show weights in your chosen unit; all internal math stays in kg / cm. Over MQTT, weight, muscle mass and bone mass always reach Home Assistant in kg, whatever the weight unit is set to. To see pounds there, change the unit in the sensor's settings in Home Assistant. `display_unit` controls the physical scale separately; today only QN-family and `AC 27` (Active Era) scales support it. For example, `display_unit: st` asks a compatible QN scale to display stones and pounds.
 
 ### User profile
 
@@ -113,15 +113,15 @@ The CLI and exporters display weights and heights in your chosen unit; all inter
 
 ### MQTT
 
-| Option                            | Default                  | Notes                                                                                                                                                     |
-| --------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mqtt_enabled`                    | `true`                   | Enable the MQTT exporter.                                                                                                                                 |
-| `mqtt_auto`                       | `true`                   | Auto-detect the Mosquitto add-on broker via the Supervisor API. Overrides manual URL / credentials when the Mosquitto add-on is installed.                |
-| `mqtt_broker_url`                 | empty                    | Manual broker URL, e.g. `mqtt://192.168.1.50:1883` or `mqtts://...`. Only used when `mqtt_auto` is off or auto-detection fails.                           |
-| `mqtt_username` / `mqtt_password` | empty                    | Credentials for the manual broker.                                                                                                                        |
-| `mqtt_topic`                      | `scale/body-composition` | Base topic. Payload is published to this topic; HA discovery configs go to `homeassistant/sensor/<device id>/<metric>/config`, independent of this topic. |
-| `mqtt_ha_discovery`               | `true`                   | Publish auto-discovery entities under `homeassistant/`. Disable if you want raw MQTT only.                                                                |
-| `mqtt_ha_device_name`             | `BLE Scale`              | Device name grouping the entities in HA.                                                                                                                  |
+| Option                            | Default                  | Notes                                                                                                                                                             |
+| --------------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mqtt_enabled`                    | `true`                   | Enable the MQTT exporter.                                                                                                                                         |
+| `mqtt_auto`                       | `true`                   | Auto-detect the Mosquitto add-on broker via the Supervisor API. Overrides manual URL / credentials when the Mosquitto add-on is installed.                        |
+| `mqtt_broker_url`                 | empty                    | Manual broker URL, e.g. `mqtt://192.168.1.50:1883` or `mqtts://...`. Only used when `mqtt_auto` is off or auto-detection fails.                                   |
+| `mqtt_username` / `mqtt_password` | empty                    | Credentials for the manual broker.                                                                                                                                |
+| `mqtt_topic`                      | `scale/body-composition` | Base topic. Payload is published to `<topic>/<user slug>`; HA discovery configs go to `homeassistant/sensor/<device id>/<key>/config`, independent of this topic. |
+| `mqtt_ha_discovery`               | `true`                   | Publish auto-discovery entities under `homeassistant/`. Disable if you want raw MQTT only.                                                                        |
+| `mqtt_ha_device_name`             | `BLE Scale`              | Device name grouping the entities in HA.                                                                                                                          |
 
 ### Garmin Connect
 

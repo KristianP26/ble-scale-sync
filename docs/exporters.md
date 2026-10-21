@@ -173,7 +173,7 @@ global_exporters:
     password: '${MQTT_PASSWORD}'
 ```
 
-Each weigh-in is one JSON message on `<topic>/<user slug>`, retained unless `retain` is `false`:
+Each weigh-in is one JSON message on `<topic>/<user slug>`, retained unless `retain` is `false`. Masses are in kg whatever `scale.weight_unit` is set to:
 
 ```json
 {
