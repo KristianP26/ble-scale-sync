@@ -76,7 +76,6 @@ export class RobiS9Adapter implements ScaleAdapterCore, GattWiring, MultiCharNot
   // Legacy single-char fields (unused in multi-char mode).
   readonly charNotifyUuid = CHR_FFB2;
   readonly charWriteUuid = CHR_FFB1;
-  readonly normalizesWeight = true;
 
   // FFB3 is physically an indicate characteristic, but the shared subscribe loop
   // only auto-subscribes bindings of type 'notify'. node-ble/noble enable

@@ -54,6 +54,7 @@ export interface LiveWeight {
 }
 
 export interface ScaleReading {
+  /** Kilograms, whatever unit the scale displays: the decoder converts. */
   weight: number;
   /**
    * Raw impedance in ohms as the scale reported it, or 0 when the frame has
@@ -411,9 +412,6 @@ export interface ScaleAdapterCore {
    */
   readonly match?: MatchDescriptor;
 
-  /** True if parseNotification() already converts any non-kg reading to kg. */
-  readonly normalizesWeight?: boolean;
-
   /**
    * True if this adapter's characteristics need a bonded/encrypted BLE link
    * (e.g. the SIG User Data Service on the Beurer BF720). The node-ble handler
@@ -498,9 +496,7 @@ export interface ScaleAdapterCore {
    * `WeakMap` and the reasoning, and `of()` deliberately checks `has()` rather
    * than falling back on a nullish value, so an adapter whose "no composition"
    * state is itself null stays correct. Hand-rolling it is how six copies of
-   * the same paragraph drifted apart in type; `beurer-bf720`,
-   * `beurer-sanitas`, `hoffen`, `mgb`, `medisana-bs44x` and `senssun` are those
-   * copies and are still to be converted.
+   * the same paragraph drifted apart in type.
    *
    * It is a GATT-session hook only. The broadcast path never opens a session,
    * so `parseBroadcast` / `parseServiceData` run without it ever firing. Adding
@@ -570,16 +566,6 @@ export interface ScaleAdapterCore {
    */
   restoreDedupMark?(mark: number): void;
 
-  /**
-   * Set only on the wrapper produced by `ble.force_scale_adapter`.
-   *
-   * Detection normally guarantees that an adapter was selected BY the
-   * advertisement in front of it, and parts of the pipeline lean on that. A
-   * forced adapter breaks the guarantee on purpose, so those places need to be
-   * able to tell (see `hasParseableBroadcastSource`).
-   */
-  readonly isForcedOverride?: boolean;
-
   matches(device: BleDeviceInfo): boolean;
   parseNotification(data: Buffer): ScaleReading | null;
   isComplete(reading: ScaleReading): boolean;
@@ -645,6 +631,9 @@ export interface Unlockable {
  * dual GATT+broadcast). This is a NAMED OPTIONAL GROUPING, not a hard contract:
  * `implements BroadcastSource` documents intent and shape-checks whatever member
  * the class declares, but does not force any single member to exist.
+ *
+ * The parsers may keep state (settling, de-dup, a cached key), so a caller
+ * hands each advertisement to them once.
  */
 export interface BroadcastSource {
   /**
@@ -688,8 +677,7 @@ export interface BroadcastSource {
  * UUID so the adapter can route by char. This is a GATT notify concern (it pairs
  * with GattWiring `characteristics` and an `onConnected` handshake), NOT a
  * passive-broadcast parser, which is why it is its own mixin and not part of
- * BroadcastSource. Declared by trisa, beurer-bf720, eufy-p2, robi-s9, ade-a2,
- * renpho, renpho-msc04 and qn-scale.
+ * BroadcastSource.
  */
 export interface MultiCharNotify {
   /**

@@ -4,9 +4,54 @@ import type {
   BleDeviceInfo,
   LiveWeight,
 } from '../interfaces/scale-adapter.js';
-import { hasParseableBroadcastSource, type RawReading } from './shared.js';
+import type { RawReading } from './shared.js';
+import { isForced } from '../scales/force.js';
 import { bleLog, normalizeUuid, BT_BASE_UUID_SUFFIX } from './types.js';
 import { isDebugEnabled } from '../logger.js';
+
+/**
+ * True when the matched device still carries broadcast/service data this
+ * adapter can parse — a usable reading may yet arrive in a future
+ * advertisement, so the caller should keep waiting rather than opening a GATT
+ * connection.
+ *
+ * False when the device exposes no parseable broadcast source: a dual-mode
+ * adapter (e.g. QN Scale, which declares `parseBroadcast` for the AABB
+ * broadcast variant but also has a GATT path) must then fall through to its
+ * GATT path. This is the #201 fix — the scan-batch proxy paths previously let
+ * any adapter that merely *declared* `parseBroadcast`/`parseServiceData` skip
+ * GATT entirely, so GATT-only QN scales (which advertise just a name + service
+ * UUID, no manufacturer data) were matched and then silently dropped.
+ *
+ * Known limitation (Option B): any `manufacturerData` counts as a broadcast
+ * source even if `parseBroadcast` would reject it. A QN scale advertising
+ * non-AABB manufacturer data would therefore be gated to "wait" — this matches
+ * the pre-#201 behaviour, so it is no regression. GATT-only QN scales
+ * advertise no manufacturer data at all, so they are unaffected. The
+ * esphome-proxy *watcher* intentionally does not use this helper: its
+ * per-advertisement stream GATT-connects such devices instead (QN Elis 1).
+ */
+export function hasParseableBroadcastSource(adapter: ScaleAdapter, info: BleDeviceInfo): boolean {
+  // A forced adapter (ble.force_scale_adapter) is exempt from the "any
+  // manufacturer data counts" shortcut above, because the shortcut assumes the
+  // adapter was chosen BY that advertisement. A forced one was not: it claims
+  // every device it is shown, so a dual-mode adapter like QN or Eufy P2 pointed
+  // at a scale whose manufacturer data it cannot parse would return "wait"
+  // forever and the GATT path would never run. Here the parse must actually
+  // succeed.
+  const forced = isForced(adapter);
+  if (adapter.parseBroadcast && info.manufacturerData) {
+    if (!forced) return true;
+    if (adapter.parseBroadcast(info.manufacturerData.data) !== null) return true;
+  }
+  if (adapter.parseServiceData && info.serviceData && info.serviceData.length > 0) {
+    if (!forced) return true;
+    if (info.serviceData.some((sd) => adapter.parseServiceData!(sd.uuid, sd.data) !== null)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 // ─── Advertisement decision (pure) ─────────────────────────────────────────────
 
@@ -38,7 +83,7 @@ export interface EvaluateOptions {
    * parseable broadcast source is present — it falls straight through to `gatt`
    * or `none`. The esphome-proxy watcher sets this false: it GATT-connects such
    * devices on demand from its per-advertisement stream (QN Elis 1). See the
-   * `hasParseableBroadcastSource` doc comment in shared.ts.
+   * `hasParseableBroadcastSource` doc comment above.
    */
   waitForBroadcast?: boolean;
 }
@@ -62,9 +107,9 @@ function parseAdvertisement(adapter: ScaleAdapter, info: BleDeviceInfo): ScaleRe
 }
 
 /**
- * Classify a single advertisement for a matched adapter. Pure: no side effects,
- * no timers, no I/O. Reproduces the parse-then-classify branch that was
- * copy-pasted across all five handler sites (#242).
+ * Classify a single advertisement for a matched adapter. No timers, no I/O; the
+ * adapter's parser may keep state (BroadcastSource), so call it once per
+ * advertisement. Reproduces the branch copy-pasted across five handlers (#242).
  *
  * Passive-preferring adapters (e.g. Mi Scale 2) emit a weight-only frame first
  * and a weight+impedance frame moments later, so they gate on `isComplete`
@@ -270,6 +315,44 @@ export class DedupWindow {
   }
 }
 
+// ─── Bounded per-address memory ───────────────────────────────────────────────
+
+/**
+ * A Map that keeps at most `max` entries, dropping the oldest to admit a new
+ * key. Each cache says how a key it already holds ages: `lru` makes it the
+ * newest again, `fifo` leaves it where it was. A watcher runs for weeks, and
+ * devices on rotating private addresses would otherwise grow these for good.
+ */
+export class BoundedMap<K, V> extends Map<K, V> {
+  constructor(
+    private readonly max: number,
+    private readonly mode: 'fifo' | 'lru',
+  ) {
+    super();
+  }
+
+  override set(key: K, value: V): this {
+    if (!this.has(key)) {
+      if (this.size >= this.max) this.delete(this.keys().next().value as K);
+    } else if (this.mode === 'lru') {
+      this.delete(key);
+    }
+    return super.set(key, value);
+  }
+}
+
+/** A Set of at most `max` values, dropping the oldest to admit a new one. */
+export class BoundedSet<T> extends Set<T> {
+  constructor(private readonly max: number) {
+    super();
+  }
+
+  override add(value: T): this {
+    if (!this.has(value) && this.size >= this.max) this.delete(this.values().next().value as T);
+    return super.add(value);
+  }
+}
+
 // ─── Post-reading window (per address, proxy GATT sessions) ────────────────────
 
 /** Scales remembered at once, oldest out; one per scale that gave a reading. */
@@ -297,7 +380,10 @@ const POST_READING_MAX_ADDRESSES = 64;
  * line still says how long after the reading the session opened.
  */
 export class PostReadingWindow {
-  private readonly last = new Map<string, { at: number; from: number; told: boolean }>();
+  private readonly last = new BoundedMap<string, { at: number; from: number; told: boolean }>(
+    POST_READING_MAX_ADDRESSES,
+    'lru',
+  );
 
   constructor(
     private readonly windowMs: number,
@@ -309,14 +395,8 @@ export class PostReadingWindow {
 
   /** A GATT session on `address` delivered a reading. */
   noteReading(address: string): void {
-    const key = address.toLowerCase();
-    this.last.delete(key);
     const now = this.now();
-    this.last.set(key, { at: now, from: now, told: false });
-    if (this.last.size > POST_READING_MAX_ADDRESSES) {
-      const oldest = this.last.keys().next().value;
-      if (oldest !== undefined) this.last.delete(oldest);
-    }
+    this.last.set(address.toLowerCase(), { at: now, from: now, told: false });
   }
 
   /**
@@ -375,20 +455,16 @@ type ManufacturerData = { id: number; data: Buffer };
  * cache next to it.
  */
 export class ManufacturerDataCache {
-  private readonly byAddress = new Map<string, ManufacturerData>();
+  private readonly byAddress: BoundedMap<string, ManufacturerData>;
 
-  constructor(private readonly max = 64) {}
+  constructor(max = 64) {
+    this.byAddress = new BoundedMap(max, 'lru');
+  }
 
   /** Remember the frame's manufacturer data, if it has any. */
   remember(info: { manufacturerData?: ManufacturerData }, key: string): void {
     const md = info.manufacturerData;
     if (!md || md.data.length === 0) return;
-    if (this.byAddress.has(key)) {
-      this.byAddress.delete(key);
-    } else if (this.byAddress.size >= this.max) {
-      const oldest = this.byAddress.keys().next().value;
-      if (oldest !== undefined) this.byAddress.delete(oldest);
-    }
     this.byAddress.set(key, md);
   }
 
@@ -545,15 +621,7 @@ export function formatAdvert(address: string, info: BleDeviceInfo): string {
  * fingerprint (a scan response filling in the name, or post-discovery
  * characteristics arriving) prints again, which is the interesting case.
  */
-const lastAdvertLine = new Map<string, string>();
-
-/**
- * Cap on remembered addresses. Devices using resolvable private addresses
- * rotate theirs every few minutes, and a watcher runs for weeks, so an
- * unbounded map is a slow leak on the smallest supported host. Oldest entry
- * out, same as the other caches on this path.
- */
-const ADVERT_CACHE_MAX = 64;
+const lastAdvertLine = new BoundedMap<string, string>(64, 'fifo');
 
 /**
  * Log an advertisement once per distinct content, on any transport.
@@ -573,10 +641,6 @@ export function logAdvert(address: string, info: BleDeviceInfo): void {
   const key = address.toLowerCase();
   const line = formatAdvert(address, info);
   if (lastAdvertLine.get(key) === line) return;
-  if (!lastAdvertLine.has(key) && lastAdvertLine.size >= ADVERT_CACHE_MAX) {
-    const oldest = lastAdvertLine.keys().next().value;
-    if (oldest !== undefined) lastAdvertLine.delete(oldest);
-  }
   lastAdvertLine.set(key, line);
   bleLog.debug(line);
 }

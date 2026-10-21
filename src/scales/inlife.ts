@@ -53,7 +53,6 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
   };
   readonly charNotifyUuid = CHR_NOTIFY;
   readonly charWriteUuid = CHR_WRITE;
-  readonly normalizesWeight = true;
 
   /** Cached body-composition values from parsed frame. */
   private cachedComp: ScaleBodyComp = {};

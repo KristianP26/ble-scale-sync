@@ -203,3 +203,68 @@ describe('reloadAppConfig and the restored replay anchors (D067)', () => {
     }
   });
 });
+
+/**
+ * The ESP32 display board shows the users from the mqtt-proxy config topic. A
+ * reload that edits them hands the new list over; one that leaves them alone
+ * keeps the snapshot (T-13: reload.ts loads the handler only on this path).
+ */
+describe('reloadAppConfig and the mqtt-proxy display users', () => {
+  function proxyConfig(name: string, cooldown: number): string {
+    return `
+version: 1
+ble:
+  handler: mqtt-proxy
+  mqtt_proxy:
+    broker_url: "mqtt://broker.invalid:1883"
+users:
+  - name: ${name}
+    slug: test
+    height: 183
+    birth_date: "1990-06-15"
+    gender: male
+    is_athlete: true
+    weight_range: { min: 70, max: 100 }
+runtime:
+  continuous_mode: true
+  scan_cooldown: ${cooldown}
+`;
+  }
+
+  it('hands the edited users to the display and updates the snapshot', async () => {
+    const { getDisplayUsers, _resetProxyState } =
+      await import('../../src/ble/handler-mqtt-proxy/client.js');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reload-display-'));
+    const file = path.join(dir, 'config.yaml');
+    try {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      _resetProxyState();
+      fs.writeFileSync(file, proxyConfig('Before', 30));
+      const config = loadYamlConfig(file);
+      const ctx = createAppContext({
+        config,
+        resolved: resolveRuntimeConfig(config),
+        configSource: 'yaml',
+        configPath: file,
+        signal: new AbortController().signal,
+        abortApp: () => {},
+      });
+      const snapshot = { value: userDisplaySnapshot(ctx.config) };
+
+      fs.writeFileSync(file, proxyConfig('Before', 99));
+      await reloadAppConfig(ctx, snapshot);
+      expect(getDisplayUsers()).toEqual([]);
+
+      fs.writeFileSync(file, proxyConfig('After', 99));
+      await reloadAppConfig(ctx, snapshot);
+      const users = [{ slug: 'test', name: 'After', weight_range: { min: 70, max: 100 } }];
+      expect(getDisplayUsers()).toEqual(users);
+      expect(snapshot.value).toBe(JSON.stringify(users));
+    } finally {
+      _resetProxyState();
+      fs.rmSync(dir, { recursive: true, force: true });
+      vi.restoreAllMocks();
+    }
+  });
+});

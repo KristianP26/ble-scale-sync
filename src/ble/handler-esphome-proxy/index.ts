@@ -1,4 +1,4 @@
-export { scanAndReadRaw, scanAndRead, scanDevices } from './scan.js';
+export { scanAndReadRaw, scanDevices } from './scan.js';
 export { ReadingWatcher } from './watcher.js';
 
 import { formatMacAddress, parseManufacturerId, extractBytes, toBleDeviceInfo } from './advert.js';

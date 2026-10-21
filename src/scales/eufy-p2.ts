@@ -405,7 +405,6 @@ export class EufyP2Adapter
   };
   readonly charNotifyUuid = CHR_DATA;
   readonly charWriteUuid = CHR_WRITE;
-  readonly normalizesWeight = true;
 
   readonly characteristics: CharacteristicBinding[] = [
     { service: SVC_UUID, uuid: CHR_WRITE, type: 'write' },

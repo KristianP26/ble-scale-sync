@@ -95,7 +95,6 @@ export class SpeedianceAdapter implements ScaleAdapterCore, GattWiring, MultiCha
   };
   readonly charNotifyUuid = CHR_FFB2;
   readonly charWriteUuid = CHR_FFB1;
-  readonly normalizesWeight = true;
 
   readonly characteristics: CharacteristicBinding[] = [
     { uuid: CHR_FFB1, type: 'write' },

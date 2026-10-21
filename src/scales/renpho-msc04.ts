@@ -519,7 +519,6 @@ export class RenphoMsc04Adapter
   // Legacy single-char fallback (unused in multi-char mode).
   readonly charNotifyUuid = CHR_NOTIFY;
   readonly charWriteUuid = CHR_WRITE;
-  readonly normalizesWeight = true;
   readonly completionHoldMs = COMPOSITION_HOLD_MS;
   /**
    * The Renpho app writes its status acks as Write Requests, and the scale

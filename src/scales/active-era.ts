@@ -221,7 +221,6 @@ export class ActiveEraAdapter
   };
   readonly charNotifyUuid = uuid16(0xffb2);
   readonly charWriteUuid = uuid16(0xffb1);
-  readonly normalizesWeight = true;
   /**
    * Declared so the handler subscribes BEFORE `onConnected` writes the
    * profile, the order FitDays uses (CCCD, then D0).

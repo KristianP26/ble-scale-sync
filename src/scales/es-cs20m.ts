@@ -326,7 +326,6 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
   };
   readonly charNotifyUuid = CHR_NOTIFY;
   readonly charWriteUuid = CHR_WRITE;
-  readonly normalizesWeight = true;
 
   private stable = false;
   private stopped = false;

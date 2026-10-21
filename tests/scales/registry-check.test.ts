@@ -3,6 +3,7 @@ import { adapters } from '../../src/scales/index.js';
 import {
   checkRegistryIntegrity,
   assertRegistryIntegrity,
+  ORDERING_INVARIANTS,
 } from '../../src/scales/registry-check.js';
 import { StandardGattScaleAdapter } from '../../src/scales/standard-gatt.js';
 import { QnScaleAdapter } from '../../src/scales/qn-scale/index.js';
@@ -14,6 +15,13 @@ describe('registry-check structural guard (#182)', () => {
     expect(errors).toEqual([]);
     expect(warnings).toEqual([]);
     expect(assertRegistryIntegrity(adapters)).toEqual([]);
+  });
+
+  // The check skips a pair it cannot find, so a renamed adapter would turn its
+  // invariant off without a word (K-07).
+  it('names only registered adapters in its ordering invariants', () => {
+    const registered = new Set(adapters.map((a) => a.name));
+    expect(ORDERING_INVARIANTS.flat().filter((n) => !registered.has(n))).toEqual([]);
   });
 
   it('flags duplicate adapter names', () => {

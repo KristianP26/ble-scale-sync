@@ -3,7 +3,8 @@ import { join, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { vi } from 'vitest';
 import { waitForRawReading } from '../../../src/ble/shared.js';
-import type { BleChar, BleDevice, RawReading } from '../../../src/ble/shared.js';
+import type { RawReading } from '../../../src/ble/shared.js';
+import type { BleChar, BleDevice } from '../../../src/ble/session/ports.js';
 import { normalizeUuid } from '../../../src/ble/types.js';
 import type { WeightUnit } from '../../../src/config/schema.js';
 import type {
@@ -27,6 +28,7 @@ const TAIL_MS = 60_000;
 
 export interface ReplayOptions {
   profile?: UserProfile;
+  /** The reporter's `scale.weight_unit`, for the record: no session reads it, every decoder returns kg. */
   weightUnit?: WeightUnit;
   scaleAuth?: ScaleAuth;
   /** Characteristics the device exposes. Default: every one the adapter declares. */
@@ -77,10 +79,7 @@ export function freshAdapter(f: SessionFixture): ScaleAdapter {
   return a;
 }
 
-/**
- * The only call of waitForRawReading here. X-08 turns its positional
- * parameters into an options object; this is the one place to change then.
- */
+/** The only call of waitForRawReading here. */
 function startSession(
   charMap: Map<string, BleChar>,
   device: BleDevice,
@@ -88,19 +87,16 @@ function startSession(
   trace: Trace,
   o: ReplayOptions,
 ): Promise<RawReading> {
-  return waitForRawReading(
+  return waitForRawReading({
     charMap,
     device,
     adapter,
-    o.profile ?? defaultProfile(),
-    trace.advert?.address ?? FAKE_ADDRESS,
-    o.weightUnit,
-    undefined,
-    o.scaleAuth,
-    undefined,
-    trace.advert?.localName || undefined,
-    trace.advert?.manufacturerData,
-  );
+    profile: o.profile ?? defaultProfile(),
+    address: trace.advert?.address ?? FAKE_ADDRESS,
+    scaleAuth: o.scaleAuth,
+    deviceName: trace.advert?.localName || undefined,
+    manufacturerData: trace.advert?.manufacturerData,
+  });
 }
 
 /**

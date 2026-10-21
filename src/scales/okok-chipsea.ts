@@ -213,7 +213,6 @@ export class OkokChipseaAdapter implements ScaleAdapterCore, BroadcastSource {
     custom: true,
     names: { exact: [ADV_NAME], startsWith: [...YODA_PREFIXES] },
   };
-  readonly normalizesWeight = true;
   readonly preferPassive = true;
 
   /** Logging state only; nothing here feeds a reading. */

@@ -37,7 +37,6 @@ export class SoehnleScaleAdapter implements ScaleAdapterCore, GattWiring, Unlock
   };
   readonly charNotifyUuid = CHR_NOTIFY_A;
   readonly charWriteUuid = CHR_CMD;
-  readonly normalizesWeight = true;
   /** History request for index 1 — triggers measurement streaming. */
   readonly unlockCommand = [0x09, 0x01];
   readonly unlockIntervalMs = 5000;

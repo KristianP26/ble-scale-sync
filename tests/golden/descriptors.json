@@ -16,7 +16,6 @@
       },
       "manufacturerId": 65352
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "0000fff200001000800000805f9b34fb",
     "charWriteUuid": "0000fff100001000800000805f9b34fb",
     "characteristics": [
@@ -58,7 +57,6 @@
         ]
       }
     },
-    "normalizesWeight": true,
     "preferPassive": true,
     "hooks": [
       "parseBroadcast",
@@ -75,7 +73,6 @@
         ]
       }
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "0000fff100001000800000805f9b34fb",
     "charWriteUuid": "0000fff200001000800000805f9b34fb",
     "unlockCommand": "a510111ea00000bf00",
@@ -112,7 +109,6 @@
       ],
       "manufacturerId": 65535
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "0000fff100001000800000805f9b34fb",
     "charWriteUuid": "0000fff200001000800000805f9b34fb",
     "altCharNotifyUuid": "0000ffe100001000800000805f9b34fb",
@@ -145,7 +141,6 @@
         "181d"
       ]
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "00002a9d00001000800000805f9b34fb",
     "charWriteUuid": "0000ffe200001000800000805f9b34fb",
     "characteristics": [
@@ -181,7 +176,6 @@
         ]
       }
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "00002a1000001000800000805f9b34fb",
     "charWriteUuid": "00002a1100001000800000805f9b34fb",
     "characteristics": [
@@ -219,7 +213,6 @@
         ]
       }
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "00002a1000001000800000805f9b34fb",
     "charWriteUuid": "00002a1100001000800000805f9b34fb",
     "completionHoldMs": 8000,
@@ -250,7 +243,6 @@
       ],
       "manufacturerId": 1553
     },
-    "normalizesWeight": true,
     "requiresBonding": true,
     "charNotifyUuid": "00002a9d00001000800000805f9b34fb",
     "charWriteUuid": "00002a2b00001000800000805f9b34fb",
@@ -300,7 +292,6 @@
         ]
       }
     },
-    "normalizesWeight": true,
     "requiresBonding": true,
     "singleBond": true,
     "charNotifyUuid": "00002a9d00001000800000805f9b34fb",
@@ -339,7 +330,6 @@
       ],
       "manufacturerId": 343
     },
-    "normalizesWeight": true,
     "preferPassive": true,
     "hooks": [
       "parseServiceData"
@@ -355,7 +345,6 @@
       ],
       "manufacturerId": 41132
     },
-    "normalizesWeight": true,
     "preferPassive": true,
     "hooks": [
       "parseBroadcast",
@@ -374,7 +363,6 @@
       },
       "manufacturerId": 256
     },
-    "normalizesWeight": true,
     "preferPassive": true,
     "hooks": [
       "parseBroadcast",
@@ -396,7 +384,6 @@
         ]
       }
     },
-    "normalizesWeight": true,
     "preferPassive": true,
     "hooks": [
       "parseBroadcast",
@@ -413,7 +400,6 @@
         "ffd0"
       ]
     },
-    "normalizesWeight": true,
     "preferPassive": true,
     "hooks": [
       "parseBroadcast",
@@ -430,7 +416,6 @@
         ]
       }
     },
-    "normalizesWeight": true,
     "preferPassive": true,
     "hooks": [
       "parseBroadcast"
@@ -453,7 +438,6 @@
         "181b"
       ]
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "00002a2f0000351221180009af100700",
     "charWriteUuid": "00002a2f0000351221180009af100700",
     "unlockCommand": "01968abd62",
@@ -477,7 +461,6 @@
         "fe95"
       ]
     },
-    "normalizesWeight": true,
     "preferPassive": true,
     "hooks": [
       "configure",
@@ -501,7 +484,6 @@
         "fe95"
       ]
     },
-    "normalizesWeight": true,
     "preferPassive": true,
     "hooks": [
       "configure",
@@ -521,7 +503,6 @@
         397
       ]
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "0000ffe400001000800000805f9b34fb",
     "charWriteUuid": "0000ffe900001000800000805f9b34fb",
     "unlockCommand": "0d05130016",
@@ -555,7 +536,6 @@
         ]
       }
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "0000ffe100001000800000805f9b34fb",
     "charWriteUuid": "0000ffe100001000800000805f9b34fb",
     "unlockCommand": "f701",
@@ -578,7 +558,6 @@
         ]
       }
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "00002a9c00001000800000805f9b34fb",
     "charWriteUuid": "00002a9f00001000800000805f9b34fb",
     "characteristics": [
@@ -618,7 +597,6 @@
         ]
       }
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "352e300128e940b8a3616db4cca4147c",
     "charWriteUuid": "352e300228e940b8a3616db4cca4147c",
     "unlockCommand": "0901",
@@ -641,7 +619,6 @@
         "78b2"
       ]
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "00008a2100001000800000805f9b34fb",
     "charWriteUuid": "00008a8100001000800000805f9b34fb",
     "hooks": [
@@ -660,7 +637,6 @@
         ]
       }
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "00008a2100001000800000805f9b34fb",
     "charWriteUuid": "00008a8100001000800000805f9b34fb",
     "characteristics": [
@@ -712,7 +688,6 @@
         "1a10"
       ]
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "00002a1000001000800000805f9b34fb",
     "charWriteUuid": "00002a1100001000800000805f9b34fb",
     "hooks": [
@@ -735,7 +710,6 @@
         "f433bd8075b811e297d90002a5d5c51b"
       ]
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "1a2ea40075b911e2be050002a5d5c51b",
     "charWriteUuid": "29f1108075b911e28bf60002a5d5c51b",
     "completionHoldMs": 8000,
@@ -755,7 +729,6 @@
         ]
       }
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "0000fff400001000800000805f9b34fb",
     "charWriteUuid": "0000fff100001000800000805f9b34fb",
     "completionHoldMs": 8000,
@@ -775,7 +748,6 @@
         ]
       }
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "0000fff400001000800000805f9b34fb",
     "charWriteUuid": "0000fff100001000800000805f9b34fb",
     "unlockCommand": "a5012cab505a29",
@@ -795,7 +767,6 @@
         ]
       }
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "0000fff400001000800000805f9b34fb",
     "charWriteUuid": "0000fff300001000800000805f9b34fb",
     "ackWithResponse": false,
@@ -822,7 +793,6 @@
         "fff1"
       ]
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "0000fff100001000800000805f9b34fb",
     "charWriteUuid": "0000fff200001000800000805f9b34fb",
     "characteristics": [
@@ -859,7 +829,6 @@
         "fff2"
       ]
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "0000fff100001000800000805f9b34fb",
     "charWriteUuid": "0000fff200001000800000805f9b34fb",
     "completionHoldMs": 4000,
@@ -879,7 +848,6 @@
         ]
       }
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "0000fff100001000800000805f9b34fb",
     "charWriteUuid": "0000fff200001000800000805f9b34fb",
     "completionHoldMs": 8000,
@@ -906,7 +874,6 @@
         "fff4"
       ]
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "0000fff400001000800000805f9b34fb",
     "charWriteUuid": "0000fff100001000800000805f9b34fb",
     "completionHoldMs": 3000,
@@ -925,7 +892,6 @@
         ]
       }
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "0000ffb200001000800000805f9b34fb",
     "charWriteUuid": "0000ffb100001000800000805f9b34fb",
     "unlockCommand": "ab2a0000000000000000000000000000000000d7",
@@ -951,7 +917,6 @@
       ],
       "manufacturerId": 10156
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "0000ffb200001000800000805f9b34fb",
     "charWriteUuid": "0000ffb100001000800000805f9b34fb",
     "characteristics": [
@@ -993,7 +958,6 @@
         "ffb3"
       ]
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "0000ffb200001000800000805f9b34fb",
     "charWriteUuid": "0000ffb100001000800000805f9b34fb",
     "characteristics": [
@@ -1033,7 +997,6 @@
         "ffb3"
       ]
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "0000ffb200001000800000805f9b34fb",
     "charWriteUuid": "0000ffb100001000800000805f9b34fb",
     "characteristics": [
@@ -1072,7 +1035,6 @@
       ],
       "manufacturerId": 684
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "0000ffb200001000800000805f9b34fb",
     "charWriteUuid": "0000ffb100001000800000805f9b34fb",
     "characteristics": [
@@ -1110,7 +1072,6 @@
         "ffb0"
       ]
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "0000ffb200001000800000805f9b34fb",
     "charWriteUuid": "0000ffb100001000800000805f9b34fb",
     "completionHoldMs": 8000,
@@ -1131,7 +1092,6 @@
         ]
       }
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "0000ffb200001000800000805f9b34fb",
     "charWriteUuid": "0000ffb200001000800000805f9b34fb",
     "hooks": [
@@ -1153,7 +1113,6 @@
         "ccff"
       ]
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "0000ffc100001000800000805f9b34fb",
     "charWriteUuid": "0000ffc100001000800000805f9b34fb",
     "unlockCommand": "02",
@@ -1194,7 +1153,6 @@
         "181d"
       ]
     },
-    "normalizesWeight": true,
     "charNotifyUuid": "00002a9c00001000800000805f9b34fb",
     "charWriteUuid": "00002a9f00001000800000805f9b34fb",
     "characteristics": [

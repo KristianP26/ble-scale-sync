@@ -110,7 +110,6 @@ export class BeurerSanitasScaleAdapter
   };
   readonly charNotifyUuid = CHR_FFE1;
   readonly charWriteUuid = CHR_FFE1;
-  readonly normalizesWeight = true;
   readonly unlockIntervalMs = 5000;
 
   private isBf710Type = false;

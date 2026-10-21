@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { BleChar } from '../../../src/ble/shared.js';
+import type { BleChar } from '../../../src/ble/session/ports.js';
 import { normalizeUuid, POST_READING_RECONNECT_MS } from '../../../src/ble/types.js';
 import { M1690_PROTOCOL_VERSION_REPLY } from '../../helpers/yunmai-m1690.js';
 import type {
@@ -32,6 +32,10 @@ let disconnectAfterNotify = false;
 // but this buffer, 80 ms after each write: a Yunmai after a weigh-in, which only
 // answers the unlock (#474).
 let answerWritesWith: Buffer | null = null;
+// When set, connectGatt hands back a session whose frames the test sends
+// through sendFrame, and whose fireDisconnect reports the disconnect.
+let scriptedSession = false;
+let sendFrame: ((d: Buffer) => void) | null = null;
 
 vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
   class FakeEsphomeProxyPool {
@@ -51,6 +55,32 @@ vi.mock('../../../src/ble/handler-esphome-proxy/pool.js', () => {
     async connectGatt(mac: string) {
       connectGattSpy(mac);
       if (failConnectWith !== null) throw new Error(failConnectWith);
+      if (scriptedSession) {
+        const disconnectCbs: Array<() => void> = [];
+        const scripted: BleChar = {
+          async read() {
+            return Buffer.alloc(0);
+          },
+          async write() {},
+          async subscribe(onData) {
+            sendFrame = onData;
+            return () => {};
+          },
+        };
+        return {
+          charMap: new Map<string, BleChar>([
+            [NOTIFY, scripted],
+            [WRITE, scripted],
+          ]),
+          device: {
+            onDisconnect: (cb: () => void) => void disconnectCbs.push(cb),
+            fireDisconnect: () => {
+              for (const cb of disconnectCbs.splice(0)) cb();
+            },
+          },
+          close: closeSpy,
+        };
+      }
       if (silentSession) {
         const quiet: BleChar = {
           async read() {
@@ -786,29 +816,14 @@ describe('ReadingWatcher session after a reading (#466, D058)', () => {
 });
 
 /**
- * The watcher is built and hot-reloaded from src/runtime/sources.ts. Before,
- * it never received `scale.weight_unit` (a GATT read from an adapter without
- * `normalizesWeight` was exported as kg whatever the unit), and a reload that
- * removed the Beurer PIN kept the old one because updateConfig only assigned a
- * truthy scaleAuth.
+ * The watcher is built and hot-reloaded from src/runtime/sources.ts. Before, a
+ * reload that removed the Beurer PIN kept the old one because updateConfig
+ * only assigned a truthy scaleAuth.
  */
-describe('ReadingWatcher config: weight unit, PIN removal, device name', () => {
+describe('ReadingWatcher config: PIN removal, device name', () => {
   type Pool = { emitAdvert: (info: BleDeviceInfo, mac: string) => void };
   const poolOf = (w: unknown): Pool => (w as { pool: Pool }).pool;
   const ADVERT: BleDeviceInfo = { localName: 'GATT-scale', serviceUuids: [] };
-
-  it('converts a GATT reading with the configured lbs unit, and follows a reload', async () => {
-    const adapters = [gattAdapter()];
-    const watcher = new ReadingWatcher(config, adapters, undefined, undefined, undefined, 'lbs');
-    await watcher.start();
-    poolOf(watcher).emitAdvert(ADVERT, 'AA:BB:CC:DD:EE:10');
-    expect((await watcher.nextReading()).reading.weight).toBeCloseTo(82 * 0.45359237, 2);
-
-    watcher.updateConfig({ adapters, weightUnit: 'kg' });
-    poolOf(watcher).emitAdvert(ADVERT, 'AA:BB:CC:DD:EE:11');
-    expect((await watcher.nextReading()).reading.weight).toBe(82);
-    await watcher.stop();
-  });
 
   it('drops the PIN when a reload no longer carries one, and passes the device name', async () => {
     const seen: Array<{ pin?: number; name?: string }> = [];
@@ -915,5 +930,77 @@ describe('ReadingWatcher manufacturer data handoff (#461)', () => {
     await watcher.nextReading();
     expect(ctxMfg).toEqual([undefined]);
     await watcher.stop();
+  });
+});
+
+// Characterization of the watcher session policy (arch wave 2): a 90 s cap
+// that frames do not restart and a composition hold does not move; the cap
+// hands the held weight over.
+describe('ReadingWatcher GATT session cap', () => {
+  type Pool = { emitAdvert: (info: BleDeviceInfo, mac: string) => void };
+  const ADVERT: BleDeviceInfo = { localName: 'GATT-scale', serviceUuids: [] };
+
+  async function session(
+    adapter: ScaleAdapter,
+    mac: string,
+    drive: () => Promise<void>,
+  ): Promise<{ warns: string[]; reading: ScaleReading | null; atMs: number }> {
+    vi.useFakeTimers();
+    scriptedSession = true;
+    const warns: string[] = [];
+    let t0 = 0;
+    const warn = vi
+      .spyOn(bleLog, 'warn')
+      .mockImplementation((m) => void warns.push(`${Date.now() - t0} ms: ${String(m)}`));
+    const watcher = new ReadingWatcher(config, [adapter]);
+    try {
+      await watcher.start();
+      t0 = Date.now();
+      let reading: ScaleReading | null = null;
+      let atMs = -1;
+      void watcher.nextReading().then((r) => {
+        reading = r.reading;
+        atMs = Date.now() - t0;
+      });
+      (watcher as unknown as { pool: Pool }).pool.emitAdvert(ADVERT, mac);
+      await vi.advanceTimersByTimeAsync(0);
+      await drive();
+      return { warns, reading, atMs };
+    } finally {
+      await watcher.stop();
+      scriptedSession = false;
+      sendFrame = null;
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  }
+
+  it('ends a session that keeps sending rejected frames at 90 s', async () => {
+    const mac = 'AA:BB:CC:DD:EE:60';
+    const adapter = { ...gattAdapter(), parseNotification: () => null } as ScaleAdapter;
+    const { warns } = await session(adapter, mac, async () => {
+      for (let t = 0; t < 120_000; t += 30_000) {
+        sendFrame?.(Buffer.from([0x01]));
+        await vi.advanceTimersByTimeAsync(30_000);
+      }
+    });
+    expect(warns).toEqual([
+      `90000 ms: GattMock at ${mac}: GATT read over the ESPHome proxy failed ` +
+        `(GATT session cap exceeded for ${mac}). Will retry on the next advertisement.`,
+    ]);
+  });
+
+  it('hands a held weight over at the cap, which the hold does not move', async () => {
+    const adapter = {
+      ...gattAdapter(),
+      completionHoldMs: 120_000,
+      isFinal: () => false,
+    } as ScaleAdapter;
+    const { reading, atMs } = await session(adapter, 'AA:BB:CC:DD:EE:61', async () => {
+      sendFrame?.(Buffer.from([0x01]));
+      await vi.advanceTimersByTimeAsync(125_000);
+    });
+    expect(reading).toEqual({ weight: 82, impedance: 0 });
+    expect(atMs).toBe(90_000);
   });
 });

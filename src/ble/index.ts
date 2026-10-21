@@ -1,15 +1,9 @@
-import type { ScaleAdapter, BodyComposition, ScaleAuth } from '../interfaces/scale-adapter.js';
-import type {
-  MqttProxyConfig,
-  EsphomeProxyConfig,
-  HaBluetoothConfig,
-  WeightUnit,
-} from '../config/schema.js';
+import type { ScaleAdapter, ScaleAuth } from '../interfaces/scale-adapter.js';
+import type { MqttProxyConfig, EsphomeProxyConfig, HaBluetoothConfig } from '../config/schema.js';
 import type { ScanOptions, ScanResult, BleHandlerName } from './types.js';
 import type { RawReading } from './shared.js';
 import type { ProfileSource, Watcher } from './reading-source.js';
 import { bleLog, errMsg } from './types.js';
-import { ReadingWatcher } from './handler-mqtt-proxy/index.js';
 import { HANDLER_LABELS, rethrowAsTransportError } from './transport-availability.js';
 import type { HandlerKey } from './transport-availability.js';
 
@@ -18,9 +12,8 @@ export type { RawReading } from './shared.js';
 export type { Watcher, WatcherConfig } from './reading-source.js';
 
 /**
- * Resolved BLE handler identifier. The transport switch in this file used to
- * be triplicated across `scanAndReadRaw`, `scanAndRead`, and `scanDevices`;
- * `resolveHandlerKey()` is now the single source of truth (#130). The type and
+ * Resolved BLE handler identifier. `resolveHandlerKey()` is the single source
+ * of truth for the transport switch (#130). The type and
  * the labels live in ./transport-availability.js, next to the package map that
  * answers "is this transport's npm package even installed here" (#364).
  */
@@ -54,10 +47,9 @@ export function resolveHandlerKey(bleHandler?: BleHandlerName): HandlerKey {
   return 'noble';
 }
 
-/** Common surface every handler module must expose for read-and-compute paths. */
+/** Common surface every handler module must expose for the read path. */
 interface CommonHandler {
   scanAndReadRaw: (opts: ScanOptions) => Promise<RawReading>;
-  scanAndRead: (opts: ScanOptions) => Promise<BodyComposition>;
 }
 
 function importHandler(key: HandlerKey): Promise<CommonHandler> {
@@ -97,10 +89,8 @@ async function loadHandler(key: HandlerKey): Promise<CommonHandler> {
 
 /**
  * Scan for a BLE scale and return the raw weight/impedance reading + matched adapter.
- * Does NOT compute body composition metrics. Use scanAndRead() for the full flow,
- * or call adapter.computeMetrics(reading, profile) on the result.
- *
- * Used by the multi-user flow to match a user by weight before computing metrics.
+ * Does NOT compute body composition metrics: the multi-user flow matches a user
+ * by weight first. Dynamic import() ensures the unused library is never loaded.
  */
 export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
   const handler = await loadHandler(resolveHandlerKey(opts.bleHandler));
@@ -134,8 +124,6 @@ export async function releaseTransport(bleHandler?: BleHandlerName): Promise<voi
   }
 }
 
-export { ReadingWatcher };
-
 /** Inputs for {@link createReadingSource}; primitives only (no runtime ctx). */
 export interface ReadingSourceOptions {
   bleHandler?: BleHandlerName;
@@ -147,7 +135,6 @@ export interface ReadingSourceOptions {
   /** Evaluated per GATT session when it is a function (#331). */
   profile: ProfileSource;
   scaleAuth?: ScaleAuth;
-  weightUnit?: WeightUnit;
 }
 
 /**
@@ -166,19 +153,19 @@ export type ReadingSourcePlan =
  * Returns a watcher for the proxy transports (mqtt-proxy, esphome-proxy) or a
  * poll plan for the native ones, using the same `resolveHandlerKey` precedence
  * as the read-and-compute paths. The orchestrator never branches on handler
- * name. esphome's watcher stays a dynamic import so its deps load only on use.
+ * name. Every watcher is a dynamic import, so its deps load only on use.
  */
 export async function createReadingSource(opts: ReadingSourceOptions): Promise<ReadingSourcePlan> {
   const key = resolveHandlerKey(opts.bleHandler);
 
   if (key === 'mqtt-proxy' && opts.mqttProxy) {
+    const { ReadingWatcher } = await import('./handler-mqtt-proxy/index.js');
     const watcher = new ReadingWatcher(
       opts.mqttProxy,
       opts.adapters,
       opts.targetMac,
       opts.profile,
       opts.scaleAuth,
-      opts.weightUnit,
     );
     return { kind: 'watcher', watcher, failureLogPrefix: 'Error processing reading' };
   }
@@ -192,7 +179,6 @@ export async function createReadingSource(opts: ReadingSourceOptions): Promise<R
       opts.targetMac,
       opts.profile,
       opts.scaleAuth,
-      opts.weightUnit,
     );
     return { kind: 'watcher', watcher, failureLogPrefix: 'Error processing ESPHome reading' };
   }
@@ -213,21 +199,6 @@ export async function createReadingSource(opts: ReadingSourceOptions): Promise<R
   }
 
   return { kind: 'poll', appliesGraceFloor: key === 'node-ble' };
-}
-
-/**
- * Scan for a BLE scale, read weight + impedance, and compute body composition.
- *
- * Handler selection precedence (matches `resolveHandlerKey`):
- * 1. Explicit `opts.bleHandler` (`mqtt-proxy` or `esphome-proxy` from config)
- * 2. `NOBLE_DRIVER` env var (`abandonware` or `stoprocent`)
- * 3. OS-platform default (Linux: node-ble, Windows: noble-legacy, macOS / other: noble)
- *
- * Dynamic import() ensures the unused library is never loaded.
- */
-export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
-  const handler = await loadHandler(resolveHandlerKey(opts.bleHandler));
-  return handler.scanAndRead(opts);
 }
 
 /**

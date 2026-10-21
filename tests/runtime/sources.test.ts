@@ -129,7 +129,6 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
       targetMac: ctx.scaleMac,
       profile: expect.any(Function),
       scaleAuth: { pin: 1234, userIndex: 2 },
-      weightUnit: 'lbs',
     });
     const { profile } = h.createReadingSource.mock.calls[0][0] as { profile: ProfileSource };
     expect(currentProfile(profile)).toEqual({ __profile: 'sentinel' });
@@ -177,15 +176,7 @@ describe('buildReadingSource() wiring (#186, #246)', () => {
       targetMac: ctx.scaleMac,
       profile: expect.any(Function),
       scaleAuth: { pin: 1234, userIndex: 2 },
-      weightUnit: 'lbs',
     });
-
-    // The unit is read again on reload, like everything else the watcher gets.
-    (ctx as { weightUnit: string }).weightUnit = 'kg';
-    bundle.onSourceReload?.();
-    expect(plan.watcher.updateConfig).toHaveBeenLastCalledWith(
-      expect.objectContaining({ weightUnit: 'kg' }),
-    );
   });
 
   it('poll plan: PollReadingSource + watchdog-wired hooks', async () => {

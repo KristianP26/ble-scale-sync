@@ -253,7 +253,6 @@ export class Silvergear108Adapter implements ScaleAdapterCore, BroadcastSource {
     serviceUuids: [SVC_FFB0],
     manufacturerId: COMPANY_ID,
   };
-  readonly normalizesWeight = true;
   readonly preferPassive = true;
 
   /** Per-unit weigh-in state, keyed by the MAC in the payload's first six bytes. */

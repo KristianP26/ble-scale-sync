@@ -49,7 +49,6 @@ export class OneByoneAdapter implements ScaleAdapterCore, GattWiring {
   };
   readonly charNotifyUuid = uuid16(0xfff4);
   readonly charWriteUuid = uuid16(0xfff1);
-  readonly normalizesWeight = true;
 
   /** Raw weight (hundredths of kg) of the previous frame this session. */
   private previousRawWeight: number | null = null;
@@ -174,7 +173,6 @@ export class OneByoneNewAdapter
   };
   readonly charNotifyUuid = uuid16(0xffb2);
   readonly charWriteUuid = uuid16(0xffb1);
-  readonly normalizesWeight = true;
   readonly unlockCommand = [
     0xab, 0x2a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0xd7,

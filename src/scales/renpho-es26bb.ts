@@ -56,7 +56,6 @@ export class RenphoEs26bbAdapter implements ScaleAdapterCore, GattWiring, HoldFo
   readonly match: MatchDescriptor = { priority: 230, names: { exact: ['es-26bb-b'] } };
   readonly charNotifyUuid = CHR_RESULTS;
   readonly charWriteUuid = CHR_CONTROL;
-  readonly normalizesWeight = true;
 
   private ctx: ConnectionContext | null = null;
 

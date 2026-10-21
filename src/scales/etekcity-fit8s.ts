@@ -142,7 +142,6 @@ export class EtekcityFit8sAdapter implements ScaleAdapterCore, BroadcastSource {
     manufacturerId: COMPANY_ID,
     serviceUuids: [SVC_FFD0],
   };
-  readonly normalizesWeight = true;
   readonly preferPassive = true;
 
   /** Per-unit repeat hold, keyed by [1..6]; see REPEAT_HOLD_MS. */

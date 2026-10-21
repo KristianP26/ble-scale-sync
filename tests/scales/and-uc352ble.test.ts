@@ -6,7 +6,8 @@ import { resolveAdapter, resolveAfterDiscovery } from '../../src/scales/resolve.
 import { checkRegistryIntegrity } from '../../src/scales/registry-check.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import { isHistoricalReading } from '../../src/interfaces/reading-time.js';
-import { waitForRawReading, type BleChar, type BleDevice } from '../../src/ble/shared.js';
+import { waitForRawReading } from '../../src/ble/shared.js';
+import type { BleChar, BleDevice } from '../../src/ble/session/ports.js';
 import { bleLog, normalizeUuid } from '../../src/ble/types.js';
 import { assertPayloadRanges, defaultProfile } from '../helpers/scale-test-utils.js';
 import type { BleDeviceInfo, ConnectionContext } from '../../src/interfaces/scale-adapter.js';
@@ -153,7 +154,6 @@ describe('A&D UC-352BLE wiring (#394, #406 class of traps)', () => {
   it('declares what the transports and the gates read', () => {
     expect(a.requiresBonding).toBe(true);
     expect(a.singleBond).toBe(true);
-    expect(a.normalizesWeight).toBe(true);
     expect(a.charNotifyUuid).toBe(WM);
     expect(a.completionHoldMs).toBe(4000);
     expect(a.characteristics).toEqual([
@@ -302,7 +302,14 @@ describe('A&D UC-352BLE through waitForRawReading', () => {
       [normalizeUuid(DT), time],
     ]);
     const device: BleDevice = { onDisconnect: () => {}, fireDisconnect: () => {} };
-    const promise = waitForRawReading(charMap, device, a, defaultProfile(), '5C313E01166D');
+    const promise = waitForRawReading({
+      charMap,
+      device,
+      adapter: a,
+      profile: defaultProfile(),
+      address: '5C313E01166D',
+      scaleAuth: undefined,
+    });
     return {
       promise,
       send: (hex: string) => onData?.(frame(hex)),

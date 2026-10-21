@@ -41,7 +41,6 @@ export class SenssunAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
   readonly match: MatchDescriptor = { priority: 260, names: { exact: ['senssun fat'] } };
   readonly charNotifyUuid = uuid16(0xfff1);
   readonly charWriteUuid = uuid16(0xfff2);
-  readonly normalizesWeight = true;
   /** User sync command: [0xA5, 0x10, 0x11, 0x1E, 0xA0, 0x00, 0x00, xor, 0x00]. */
   readonly unlockCommand = (() => {
     const bytes = [0xa5, 0x10, 0x11, 0x1e, 0xa0, 0x00, 0x00];

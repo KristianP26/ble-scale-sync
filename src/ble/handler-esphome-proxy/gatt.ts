@@ -1,4 +1,4 @@
-import type { BleChar, BleDevice } from '../shared.js';
+import type { BleChar, BleDevice } from '../session/ports.js';
 import { bleLog, errMsg, normalizeUuid } from '../types.js';
 import type { EsphomeClient, EsphomeConnection } from './client.js';
 import { macToInt } from './advert.js';

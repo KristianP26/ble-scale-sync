@@ -112,7 +112,6 @@ export class RenphoScaleAdapter
   // Legacy single-char fallback (unused in multi-char mode).
   readonly charNotifyUuid = CHR_WEIGHT;
   readonly charWriteUuid = CHR_VENDOR_WRITE;
-  readonly normalizesWeight = true;
 
   // Only the channels that must be live BEFORE the handshake are auto-subscribed
   // here. The weight + body-composition CCCDs are enabled LAST, inside

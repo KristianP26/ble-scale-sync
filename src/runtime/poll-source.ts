@@ -64,7 +64,6 @@ export class PollReadingSource implements ReadingSource {
       adapters: this.adapters,
       profile,
       scaleAuth: resolveScaleAuth(primaryUser),
-      weightUnit: this.ctx.weightUnit,
       abortSignal: cycle.signal,
       bleHandler: this.ctx.bleHandler,
       mqttProxy: this.ctx.mqttProxy,

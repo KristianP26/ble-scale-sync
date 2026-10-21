@@ -20,6 +20,7 @@
  */
 
 import type { ScaleAdapter } from '../../interfaces/scale-adapter.js';
+import { isForced } from '../../scales/force.js';
 import { bleLog, errMsg, formatMac, DISCOVERY_TIMEOUT_MS } from '../types.js';
 import {
   helperOf,
@@ -88,7 +89,7 @@ export function cachePolicyFor(
   adapters: readonly ScaleAdapter[],
 ): { keep: boolean; adapter?: ScaleAdapter; reason: string } {
   let adapter: ScaleAdapter | undefined;
-  if (adapters.length === 1 && adapters[0].isForcedOverride === true) {
+  if (adapters.length === 1 && isForced(adapters[0])) {
     // Known from the first cycle: the override is the only adapter there is.
     adapter = adapters[0];
   } else {

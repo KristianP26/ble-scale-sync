@@ -4008,7 +4008,6 @@ describe('QN per-session reset ordering (#406)', () => {
       'charWriteUuid',
       'altCharNotifyUuid',
       'altCharWriteUuid',
-      'normalizesWeight',
       // Configuration from configure(), not session state.
       'displayUnit',
       'forcedProtocolType',

@@ -194,7 +194,6 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
   // Legacy single-char fallback (unused in multi-char mode).
   readonly charNotifyUuid = CHR_WEIGHT_MEASUREMENT;
   readonly charWriteUuid = CHR_CURRENT_TIME;
-  readonly normalizesWeight = true;
   // SIG User Data Service (0x181C) CCCD writes need an encrypted link; the
   // node-ble handler attempts a best-effort bond before subscribing. #168
   readonly requiresBonding = true;
@@ -798,8 +797,8 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
   /**
    * Weight Measurement 0x2A9D, decoded by the shared SIG decoder.
    *
-   * The kg/lb rule lives in the decoder because `normalizesWeight = true` makes
-   * it a correctness requirement rather than a preference. What stays here is
+   * The kg/lb rule lives in the decoder, because a reading is kilograms by
+   * contract (`ScaleReading.weight`). What stays here is
    * the caching rule: a zero or non-finite weight must not overwrite a weight
    * this session already has, because the scale sends zeroed frames of its own.
    *

@@ -184,7 +184,6 @@ export class SenssunIfB7Adapter implements ScaleAdapterCore, BroadcastSource {
     names: { exact: [ADVERTISED_NAME] },
     manufacturerId: COMPANY_ID,
   };
-  readonly normalizesWeight = true;
   readonly preferPassive = true;
 
   /**

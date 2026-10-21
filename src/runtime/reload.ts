@@ -4,7 +4,6 @@ import type { Exporter } from '../interfaces/exporter.js';
 import { buildFromSlots } from './exporters.js';
 import { diffRestartRequired } from '../config/reload-diff.js';
 import { withWriteLock } from '../config/write.js';
-import { setDisplayUsers } from '../ble/handler-mqtt-proxy/index.js';
 import { createLogger, setLogLevel, LogLevel } from '../logger.js';
 import { errMsg } from '../utils/error.js';
 import type { AppConfig } from '../config/schema.js';
@@ -62,13 +61,10 @@ export async function reloadAppConfig(
     ctx.mqttProxy &&
     newSnapshot !== userDisplaySnapshotRef.value
   ) {
-    setDisplayUsers(
-      newConfig.users.map((u) => ({
-        slug: u.slug,
-        name: u.name,
-        weight_range: u.weight_range,
-      })),
-    );
+    // Already loaded by run.ts on this transport; no static import keeps it
+    // off the other transports.
+    const { setDisplayUsers } = await import('../ble/handler-mqtt-proxy/index.js');
+    setDisplayUsers(displayUsers(newConfig));
     userDisplaySnapshotRef.value = newSnapshot;
   }
 
@@ -99,8 +95,11 @@ function buildExportersByUser(config: AppConfig): Map<string, Exporter[]> {
   return byUser;
 }
 
+/** The user fields the ESP32 display board gets in its config topic. */
+export function displayUsers(config: AppConfig) {
+  return config.users.map((u) => ({ slug: u.slug, name: u.name, weight_range: u.weight_range }));
+}
+
 export function userDisplaySnapshot(config: AppConfig): string {
-  return JSON.stringify(
-    config.users.map((u) => ({ slug: u.slug, name: u.name, weight_range: u.weight_range })),
-  );
+  return JSON.stringify(displayUsers(config));
 }

@@ -94,7 +94,6 @@ export class StandardGattScaleAdapter
     { uuid: CHR_BODY_COMP_MEAS, type: 'notify', optional: true },
     { uuid: CHR_USER_CONTROL_POINT, type: 'write', optional: true },
   ];
-  readonly normalizesWeight = true;
   readonly completionHoldMs = BCS_WAIT_MS;
   /** UCP Consent opcode for user index 1 with consent code 0. */
   readonly unlockCommand = [0x02, 0x01, 0x00, 0x00];

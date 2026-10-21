@@ -1,4 +1,4 @@
-import type { ScaleAdapter, BodyComposition } from '../../interfaces/scale-adapter.js';
+import type { ScaleAdapter } from '../../interfaces/scale-adapter.js';
 import type { HaBluetoothConfig } from '../../config/schema.js';
 import type { ScanOptions, ScanResult } from '../types.js';
 import type { RawReading } from '../shared.js';
@@ -181,11 +181,6 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     if (sub.unsub) sub.unsub();
     await client.stop();
   }
-}
-
-export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
-  const { reading, adapter } = await scanAndReadRaw(opts);
-  return adapter.computeMetrics(reading, opts.profile);
 }
 
 // ─── Device discovery (for `scan` and the setup wizard) ──────────────────────

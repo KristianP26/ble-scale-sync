@@ -7,7 +7,8 @@ import type {
   ScaleReading,
 } from '../../src/interfaces/scale-adapter.js';
 import { createNobleHandler, type NobleApi } from '../../src/ble/handler-noble-shared/index.js';
-import { bleLog, normalizeUuid } from '../../src/ble/types.js';
+import { bleLog, normalizeUuid, SessionTimeoutError } from '../../src/ble/types.js';
+import { bleFailureKind } from '../../src/ble/failure-kind.js';
 
 /**
  * The noble GATT path is the only transport on Windows and macOS (B-11). These
@@ -131,7 +132,6 @@ function gattAdapter(name: string, matches: (info: BleDeviceInfo) => boolean): S
     charWriteUuid: WRITE,
     unlockCommand: [0x01],
     unlockIntervalMs: 0,
-    normalizesWeight: true,
     matches: vi.fn(matches),
     parseNotification: (data: Buffer): ScaleReading | null =>
       data.length > 0 ? { weight: data[0], impedance: 500 } : null,
@@ -425,5 +425,91 @@ describe('noble hands a session the manufacturer data its scale advertised earli
       { id: 0xffff, data: own.subarray(2) },
       undefined,
     ]);
+  });
+});
+
+// Characterization of the noble session policy (arch wave 2): idle and cap from
+// readingTimeoutMs, a composition hold moves the cap, a shutdown does not end
+// the GATT session, and nothing is tagged for the watchdog.
+describe('noble GATT session policy', () => {
+  const IDLE_MS = 1000;
+
+  async function session(
+    drive: (notify: FakeChar, ac: AbortController) => Promise<unknown>,
+    overrides: Partial<ScaleAdapter> = {},
+  ): Promise<{ result: unknown; atMs: number }> {
+    vi.useFakeTimers();
+    try {
+      const { notify, services } = standardServices();
+      noble.peripherals = [new FakePeripheral({ localName: 'FakeScale', services })];
+      const adapter = {
+        ...gattAdapter('ByName', (info) => info.localName === 'FakeScale'),
+        ...overrides,
+      } as ScaleAdapter;
+      const ac = new AbortController();
+      const t0 = Date.now();
+      let atMs = -1;
+      const outcome = handler
+        .scanAndReadRaw({
+          adapters: [adapter],
+          profile: PROFILE,
+          readingTimeoutMs: IDLE_MS,
+          abortSignal: ac.signal,
+        })
+        .then(
+          (r) => r,
+          (e: unknown) => e,
+        )
+        .finally(() => (atMs = Date.now() - t0));
+      // Discovery, connect and subscribe settle within these 50 ms.
+      await vi.advanceTimersByTimeAsync(50);
+      await drive(notify, ac);
+      return { result: await outcome, atMs };
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it('ends a silent session on the idle timeout, untagged', async () => {
+    const { result, atMs } = await session(() => vi.advanceTimersByTimeAsync(IDLE_MS));
+    expect((result as Error).message).toBe('Timed out waiting for a complete scale reading');
+    expect(atMs).toBeLessThanOrEqual(50 + IDLE_MS);
+    expect(bleFailureKind(result)).toBeUndefined();
+  });
+
+  it('ends a session that keeps sending rejected frames at 3 x idle', async () => {
+    const { result, atMs } = await session(async (notify) => {
+      for (let i = 0; i < 8; i++) {
+        notify.emit('data', Buffer.alloc(0));
+        await vi.advanceTimersByTimeAsync(IDLE_MS / 2);
+      }
+    });
+    expect(result).toBeInstanceOf(SessionTimeoutError);
+    expect((result as Error).message).toBe('GATT session cap exceeded');
+    expect(atMs).toBeGreaterThanOrEqual(3 * IDLE_MS);
+    expect(atMs).toBeLessThan(3 * IDLE_MS + 100);
+    expect(bleFailureKind(result)).toBeUndefined();
+  });
+
+  it('lets a composition hold run past the cap', async () => {
+    const { result, atMs } = await session(
+      async (notify) => {
+        weightOn(notify);
+        await vi.advanceTimersByTimeAsync(5 * IDLE_MS);
+      },
+      { completionHoldMs: 4 * IDLE_MS, isFinal: () => false, isComplete: () => true },
+    );
+    expect(result).toMatchObject({ reading: { weight: 72 } });
+    expect(atMs).toBeGreaterThan(3 * IDLE_MS);
+  });
+
+  it('does not end the GATT session on the abort signal', async () => {
+    const { result } = await session(async (notify, ac) => {
+      ac.abort(new Error('shutdown'));
+      await vi.advanceTimersByTimeAsync(100);
+      weightOn(notify);
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(result).toMatchObject({ reading: { weight: 72 } });
   });
 });

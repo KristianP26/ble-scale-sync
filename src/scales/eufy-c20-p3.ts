@@ -155,7 +155,6 @@ export class EufyC20P3Adapter implements ScaleAdapterCore, BroadcastSource {
     custom: true,
     names: { startsWith: [...NAME_PREFIXES] },
   };
-  readonly normalizesWeight = true;
   readonly preferPassive = true;
 
   /** Last weigh-in handed out per unit, keyed by [0..4]; see REPEAT_WINDOW_S. */

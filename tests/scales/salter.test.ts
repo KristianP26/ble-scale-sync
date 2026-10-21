@@ -627,10 +627,6 @@ describe('SalterAdapter', () => {
       expect(a.charWriteUuid).toBe(uuid16(0xffc1));
     });
 
-    it('declares normalizesWeight — records are canonical kg', () => {
-      expect(makeAdapter().normalizesWeight).toBe(true);
-    });
-
     it('has no onConnected hook, so the periodic unlock path stays armed', () => {
       // Declaring onConnected would pre-empt the handler's unlock interval and
       // silently disable the sweep this protocol depends on.

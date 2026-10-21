@@ -23,7 +23,7 @@ const { classifyBleFailure, buildCharMapWithRetry, readWithTimeouts, resolveAfte
 const { adapters: registry } = await import('../../../src/scales/index.js');
 const { bleFailureKind } = await import('../../../src/ble/failure-kind.js');
 const { normalizeUuid } = await import('../../../src/ble/types.js');
-import type { BleChar, BleDevice } from '../../../src/ble/shared.js';
+import type { BleChar, BleDevice } from '../../../src/ble/session/ports.js';
 import type { ScaleAdapter } from '../../../src/interfaces/scale-adapter.js';
 
 /**
@@ -260,7 +260,6 @@ describe('readWithTimeouts: composition hold against the session cap', () => {
       name: 'HoldScale',
       charNotifyUuid: NOTIFY,
       charWriteUuid: NOTIFY,
-      normalizesWeight: true,
       matches: () => true,
       parseNotification: () => ({ weight: 81.55, impedance: 0 }),
       isComplete: () => true,
@@ -425,6 +424,55 @@ describe('readWithTimeouts: composition hold against the session cap', () => {
       });
       expect(err).not.toBeNull();
       expect(bleFailureKind(err)).not.toBe('no-reading');
+    });
+  });
+
+  // Characterization of the session policy (arch wave 2): what a timeout and a
+  // shutdown do with what the session holds.
+  describe('what a timeout and a shutdown hand over', () => {
+    const STORED = { weight: 76.55, impedance: 0, timestamp: new Date('2020-01-01T00:00:00Z') };
+
+    it('hands over a stored record when the idle timeout ends the session', async () => {
+      vi.useFakeTimers();
+      try {
+        const s = makeSession();
+        const adapter = makeAdapter({ parseNotification: () => ({ ...STORED }) });
+        const promise = readWithTimeouts(s.charMap, s.device, adapter, 'AA:BB:CC:DD:EE:FF', {
+          profile: PROFILE,
+          readingTimeoutMs: 5000,
+        });
+        await vi.advanceTimersByTimeAsync(1000);
+        s.send(0x01);
+        await vi.advanceTimersByTimeAsync(5000);
+        expect((await promise).reading).toEqual(STORED);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('hands nothing over on a shutdown, a held weight included', async () => {
+      vi.useFakeTimers();
+      try {
+        const s = makeSession();
+        const ac = new AbortController();
+        const adapter = makeAdapter({ completionHoldMs: HOLD_MS, isFinal: () => false });
+        const outcome = readWithTimeouts(s.charMap, s.device, adapter, 'AA:BB:CC:DD:EE:FF', {
+          profile: PROFILE,
+          readingTimeoutMs: 5000,
+          abortSignal: ac.signal,
+        }).then(
+          () => 'resolved',
+          (e: unknown) => e,
+        );
+        await vi.advanceTimersByTimeAsync(1000);
+        s.send(0x01);
+        await vi.advanceTimersByTimeAsync(1000);
+        ac.abort(new Error('shutdown'));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(((await outcome) as Error).message).toBe('shutdown');
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

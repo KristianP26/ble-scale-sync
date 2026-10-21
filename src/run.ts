@@ -1,7 +1,6 @@
 import { createRequire } from 'node:module';
 import { printRunHelp } from './cli-help.js';
 import { parseRunArgs } from './cli-run-args.js';
-import { setDisplayUsers, createMqttProxyDisplayNotifier } from './ble/handler-mqtt-proxy/index.js';
 import { bootstrapMqttProxy } from './ble/mqtt-proxy-bootstrap.js';
 import { notifyReady, startHeartbeat, stopHeartbeat } from './runtime/systemd-watchdog.js';
 import { touchHeartbeat, startFileHeartbeat, stopFileHeartbeat } from './runtime/file-heartbeat.js';
@@ -35,7 +34,7 @@ import { processReading } from './runtime/processor.js';
 import { PollReadingSource } from './runtime/poll-source.js';
 import { runContinuousLoop, type RuntimeLoopDeps } from './runtime/loop.js';
 import { runSingleShot } from './runtime/single-run.js';
-import { reloadAppConfig, userDisplaySnapshot } from './runtime/reload.js';
+import { displayUsers, reloadAppConfig, userDisplaySnapshot } from './runtime/reload.js';
 import { buildReadingSource, type ReadingSourceBundle } from './runtime/sources.js';
 import { resolveHandlerKey } from './ble/index.js';
 import {
@@ -265,9 +264,14 @@ export async function run(argv: readonly string[]): Promise<void> {
       const bootstrapped = await bootstrapMqttProxy(ctx.mqttProxy);
       ctx.mqttProxy = bootstrapped.mqttProxy;
       ctx.embeddedBroker = bootstrapped.embeddedBroker;
+      // Loaded on use, so other transports never load the mqtt-proxy handler.
+      const { createMqttProxyDisplayNotifier, setDisplayUsers } =
+        await import('./ble/handler-mqtt-proxy/index.js');
       // Attach the display capability; the getter reads the hot-swappable
       // ctx.mqttProxy live so config reloads take effect (#183).
       ctx.display = createMqttProxyDisplayNotifier(() => ctx.mqttProxy);
+      // User info for display boards (included in config topic).
+      setDisplayUsers(displayUsers(ctx.config));
       if (!initialResolved.continuousMode) {
         // The ESP32 connects to a known scale on its own and publishes the
         // session once. Only the continuous-mode watcher subscribes to that
@@ -333,17 +337,6 @@ export async function run(argv: readonly string[]): Promise<void> {
         singleUserExporters = buildSingleUserExporters(ctx);
         await runHealthchecks(singleUserExporters);
       }
-    }
-
-    // Publish user info for display boards (included in config topic)
-    if (ctx.bleHandler === 'mqtt-proxy' && ctx.mqttProxy) {
-      setDisplayUsers(
-        ctx.config.users.map((u) => ({
-          slug: u.slug,
-          name: u.name,
-          weight_range: u.weight_range,
-        })),
-      );
     }
 
     // systemd Type=notify integration (#144). No-op when NOTIFY_SOCKET is unset.

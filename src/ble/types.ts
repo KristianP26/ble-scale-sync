@@ -5,12 +5,7 @@ import type {
   ScaleAuth,
   LiveWeight,
 } from '../interfaces/scale-adapter.js';
-import type {
-  WeightUnit,
-  MqttProxyConfig,
-  EsphomeProxyConfig,
-  HaBluetoothConfig,
-} from '../config/schema.js';
+import type { MqttProxyConfig, EsphomeProxyConfig, HaBluetoothConfig } from '../config/schema.js';
 import { createLogger } from '../logger.js';
 import { errMsg } from '../utils/error.js';
 import { stripAnsi, parseBtmgmtSettings, btmgmtErrorLine } from './btmgmt.js';
@@ -189,7 +184,6 @@ export interface ScanOptions {
   adapters: ScaleAdapter[];
   profile: UserProfile;
   scaleAuth?: ScaleAuth;
-  weightUnit?: WeightUnit;
   onLiveData?: (reading: ScaleReading) => void;
   /**
    * Settling weights from a broadcast scale, for a display that follows it

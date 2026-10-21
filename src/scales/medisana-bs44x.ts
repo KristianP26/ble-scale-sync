@@ -63,8 +63,6 @@ export class MedisanaBs44xAdapter implements ScaleAdapterCore, GattWiring {
   readonly charNotifyUuid = CHR_NOTIFY;
   readonly charWriteUuid = CHR_WRITE;
 
-  readonly normalizesWeight = true;
-
   /** Cached weight from weight frames. */
   private cachedWeight = 0;
 

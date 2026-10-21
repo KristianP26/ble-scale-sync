@@ -14,8 +14,8 @@
  */
 
 import type { BleDeviceInfo, ScaleAdapter } from '../../interfaces/scale-adapter.js';
-import type { BleChar } from '../shared.js';
-import { resolveAdapter, resolveAfterDiscovery } from '../../scales/resolve.js';
+import type { BleChar, BleDevice } from '../session/ports.js';
+import { resolveAdapter } from '../../scales/resolve.js';
 import {
   bleLog,
   errMsg,
@@ -44,21 +44,9 @@ import { removeDevice, notifyDiscoveryStopped, withBluezDeadline } from './disco
 import { disconnectBounded, recoverStaleLink, staleLinkRecoveryDue } from './stale-link.js';
 import { logAdvertisementSnapshot, type AdvertisementSnapshot } from './device-object.js';
 import { buildCharMap } from './gatt.js';
-import {
-  waitForRawReading,
-  withAbandonmentCleanup,
-  type BleDevice,
-  type RawReading,
-} from '../shared.js';
-import type { WeightUnit } from '../../config/schema.js';
+import type { RawReading } from '../shared.js';
+import { nativePolicy, runGattSession, selectSessionAdapter } from '../session/runner.js';
 import type { ScaleAuth, ScaleReading, UserProfile } from '../../interfaces/scale-adapter.js';
-import {
-  RAW_READING_TIMEOUT_MS,
-  READING_SESSION_CAP_FACTOR,
-  SessionTimeoutError,
-  untilAborted,
-  withIdleTimeout,
-} from '../types.js';
 import { tagBleFailure, bleFailureKind } from '../failure-kind.js';
 import { probeLiveness, makeLivenessAdapter } from './liveness.js';
 import { withScanActivityWatchdog, SCAN_HEARD_FRESH_MS, type ScanWatch } from './scan-watchdog.js';
@@ -389,7 +377,7 @@ export async function resolveAfterConnect(
   let resolved: ScaleAdapter | undefined;
   let matchCharMap = await enumerateCharMap(gatt, false);
   for (let attempt = 1; attempt <= CHAR_DISCOVERY_MAX_RETRIES; attempt++) {
-    resolved = resolveAfterDiscovery(
+    resolved = selectSessionAdapter(
       advertised,
       {
         serviceUuids: serviceUuids.map(normalizeUuid),
@@ -660,13 +648,9 @@ export async function teardownSession(opts: {
 }
 
 /**
- * Wait for a complete reading, under both an idle timeout and an absolute cap.
- *
- * Two timeouts, not one: the inner deadline restarts on every frame the scale
- * sends, except a status frame (D070), so a scale that keeps talking never
- * trips it, and the outer one bounds the whole session anyway. A composition
- * hold still in progress moves the cap out to the end of the hold, so the held
- * weight resolves instead of being cut (#434).
+ * Wait for a complete reading under the native session policy: an idle timeout
+ * that every frame but a status frame restarts (D070), and a cap that a
+ * composition hold in progress moves out to its end (#434).
  */
 export async function readWithTimeouts(
   charMap: Map<string, BleChar>,
@@ -675,7 +659,6 @@ export async function readWithTimeouts(
   deviceMac: string,
   opts: {
     profile: UserProfile;
-    weightUnit?: WeightUnit;
     onLiveData?: (reading: ScaleReading) => void;
     scaleAuth?: ScaleAuth;
     readingTimeoutMs?: number;
@@ -686,56 +669,25 @@ export async function readWithTimeouts(
     manufacturerData?: { id: number; data: Buffer };
   },
 ): Promise<RawReading> {
-  const idleMs = opts.readingTimeoutMs ?? RAW_READING_TIMEOUT_MS;
-  // Set by the first notification frame of any kind (onFrame), the scale's
-  // replies to our own commands included: a scale that only answers the unlock
-  // has still proven the path the watchdog guards (D041, #474). A composition
-  // hold arms only after a frame, so it needs no flag of its own.
-  let heard = false;
-  try {
-    // A shutdown ends the session the same way a timeout does, through
-    // withAbandonmentCleanup, instead of waiting out an idle window of up to
-    // 120 s that the 5 s force-exit grace never lets finish (A-07). Unlike a
-    // timeout it hands nothing over: the process is on its way out.
-    return await withAbandonmentCleanup(
-      bleDevice,
-      () =>
-        untilAborted(
-          withIdleTimeout(
-            (onActivity) =>
-              waitForRawReading(
-                charMap,
-                bleDevice,
-                matchedAdapter,
-                opts.profile,
-                deviceMac.replace(/[:-]/g, '').toUpperCase(),
-                opts.weightUnit,
-                opts.onLiveData,
-                opts.scaleAuth,
-                onActivity,
-                opts.deviceName,
-                opts.manufacturerData,
-                () => {
-                  heard = true;
-                },
-              ),
-            idleMs,
-            'Timed out waiting for a complete scale reading',
-            { ms: idleMs * READING_SESSION_CAP_FACTOR, message: 'GATT session cap exceeded' },
-          ),
-          opts.abortSignal,
-        ),
-      opts.abortSignal,
-    );
-  } catch (err) {
-    // The scale answered and the session simply ran out of time: nobody
-    // stepped on it, or it stays connectable long after a weigh-in (BF915,
-    // #460). Not a wedge, so the watchdog must not count it (D041). Only our
-    // own timeout qualifies; an abort, a disconnect or a GATT error after a
-    // frame keeps the usual classification.
-    if (heard && err instanceof SessionTimeoutError) tagBleFailure(err, 'no-reading');
-    throw err;
-  }
+  // A shutdown ends the session the way a timeout does, instead of waiting out
+  // an idle window of up to 120 s that the 5 s force-exit grace never lets
+  // finish (A-07). The scale answering and the session running out of time is
+  // not a wedge: nobody stepped on it, or it stays connectable long after a
+  // weigh-in (BF915, #460, D041).
+  return runGattSession(
+    {
+      charMap,
+      device: bleDevice,
+      adapter: matchedAdapter,
+      profile: opts.profile,
+      address: deviceMac.replace(/[:-]/g, '').toUpperCase(),
+      onLiveData: opts.onLiveData,
+      scaleAuth: opts.scaleAuth,
+      deviceName: opts.deviceName,
+      manufacturerData: opts.manufacturerData,
+    },
+    { ...nativePolicy(opts.readingTimeoutMs), abortSignal: opts.abortSignal, tagNoReading: true },
+  );
 }
 
 /**

@@ -71,7 +71,6 @@ export class KoogeekS1Adapter
   };
   readonly charNotifyUuid = CHR_NOTIFY;
   readonly charWriteUuid = CHR_WRITE;
-  readonly normalizesWeight = true;
   /**
    * 0xFFF3 is a vendor OEM command characteristic. Every other adapter in the
    * 0xFFF0 family writes without a response, so we do the same.

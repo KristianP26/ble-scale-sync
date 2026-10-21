@@ -10,7 +10,8 @@ import type {
 import type { MqttProxyConfig } from '../../src/config/schema.js';
 import { adapters as realAdapters } from '../../src/scales/index.js';
 import { applyForcedAdapter } from '../../src/scales/force.js';
-import { bleLog, POST_READING_RECONNECT_MS } from '../../src/ble/types.js';
+import { bleLog, POST_READING_RECONNECT_MS, SessionTimeoutError } from '../../src/ble/types.js';
+import { bleFailureKind } from '../../src/ble/failure-kind.js';
 import { M1690_PROTOCOL_VERSION_REPLY } from '../helpers/yunmai-m1690.js';
 
 // Suppress log output during tests
@@ -254,7 +255,6 @@ function createDualModeAdapter(name = 'DualScale'): ScaleAdapter {
 // Must import AFTER vi.mock
 const {
   scanAndReadRaw,
-  scanAndRead,
   scanDevices,
   publishConfig,
   publishBeep,
@@ -641,32 +641,6 @@ describe('handler-mqtt-proxy', () => {
           mqttProxy: MQTT_PROXY_CONFIG,
         }),
       ).rejects.toThrow('No recognized scale found via ESP32 proxy');
-    });
-  });
-
-  describe('scanAndRead', () => {
-    it('calls computeMetrics on the broadcast reading', async () => {
-      const adapter = createBroadcastAdapter();
-
-      wireBroadcastFlow([
-        {
-          address: 'AA:BB:CC:DD:EE:FF',
-          name: '',
-          rssi: -50,
-          services: [],
-          manufacturer_id: 0xffff,
-          manufacturer_data: mfrHex(7550),
-        },
-      ]);
-
-      const result = await scanAndRead({
-        adapters: [adapter],
-        profile: PROFILE,
-        mqttProxy: MQTT_PROXY_CONFIG,
-      });
-
-      expect(result).toEqual(BODY_COMP);
-      expect(adapter.computeMetrics).toHaveBeenCalledWith({ weight: 75.5, impedance: 0 }, PROFILE);
     });
   });
 
@@ -1816,60 +1790,6 @@ describe('handler-mqtt-proxy', () => {
       expect(raw.reading.weight).toBe(80.0);
       expect(raw.reading.impedance).toBe(450);
       expect(raw.adapter.name).toBe('GattScale');
-    });
-
-    it('ReadingWatcher converts a GATT reading with the configured lbs unit', async () => {
-      const adapter = createGattAdapter();
-      const config = { ...MQTT_PROXY_CONFIG, auto_connect: false };
-      const watcher = new ReadingWatcher(config, [adapter], undefined, PROFILE, undefined, 'lbs');
-      await watcher.start();
-
-      // The watcher's message handler calls handleGattReading which uses
-      // publishAsync to send the connect command. Wire up publish-based responses.
-      const origPublish = mockClient.publishAsync;
-      mockClient.publishAsync = vi.fn(async (topic: string, payload?: string | Buffer) => {
-        if (topic === `${PREFIX}/connect`) {
-          queueMicrotask(() =>
-            mockClient._simulateMessage(
-              `${PREFIX}/connected`,
-              JSON.stringify({
-                chars: [
-                  { uuid: GATT_NOTIFY_UUID, properties: ['notify'] },
-                  { uuid: GATT_WRITE_UUID, properties: ['write'] },
-                ],
-              }),
-            ),
-          );
-        }
-        if (topic === `${PREFIX}/write/${GATT_WRITE_UUID}`) {
-          queueMicrotask(() => {
-            const buf = Buffer.alloc(4);
-            buf.writeUInt16LE(8000, 0); // 80.00 kg
-            buf.writeUInt16LE(450, 2); // impedance 450
-            mockClient._simulateMessage(`${PREFIX}/notify/${GATT_NOTIFY_UUID}`, buf);
-          });
-        }
-        return origPublish(topic, payload);
-      });
-
-      // Simulate scan result with no broadcast data → triggers GATT fallback
-      mockClient._simulateMessage(
-        `${PREFIX}/scan/results`,
-        JSON.stringify([
-          {
-            address: 'AA:BB:CC:DD:EE:FF',
-            name: 'GattScale',
-            rssi: -50,
-            services: [],
-            addr_type: 0,
-          },
-        ]),
-      );
-
-      const raw = await watcher.nextReading();
-      // The mock adapter does not normalize its weight, so the configured unit
-      // decides: 80 read as lbs is 36.29 kg, as on every native transport.
-      expect(raw.reading.weight).toBeCloseTo(80 * 0.45359237, 2);
     });
 
     it('rejects with ESP32 error instead of timeout when connect fails', async () => {
@@ -3884,3 +3804,203 @@ describe('handler-mqtt-proxy', () => {
     });
   });
 });
+
+// Characterization of the GATT session policy on every mqtt-proxy path (arch
+// wave 2). Single-shot: idle and cap from readingTimeoutMs, a hold moves the
+// cap, the abort signal does not end the session. Watcher (host and
+// autonomous): 60 s idle and a 90 s cap a hold does not move, which hands the
+// held weight over instead.
+describe('mqtt-proxy GATT session policy', () => {
+  const MAC = 'AA:BB:CC:DD:EE:FF';
+  const CHARS = [
+    { uuid: GATT_NOTIFY_UUID, properties: ['notify'] },
+    { uuid: GATT_WRITE_UUID, properties: ['write'] },
+  ];
+  const rejected = (): void =>
+    mockClient._simulateMessage(`${PREFIX}/notify/${GATT_NOTIFY_UUID}`, Buffer.from([0x10]));
+  const weighIn = (): void => {
+    const buf = Buffer.alloc(4);
+    buf.writeUInt16LE(8000, 0);
+    buf.writeUInt16LE(450, 2);
+    mockClient._simulateMessage(`${PREFIX}/notify/${GATT_NOTIFY_UUID}`, buf);
+  };
+  const holding = (holdMs: number): ScaleAdapter => ({
+    ...createGattAdapter(),
+    completionHoldMs: holdMs,
+    isFinal: () => false,
+  });
+
+  function answerConnect(): void {
+    const origPublish = mockClient.publishAsync;
+    mockClient.publishAsync = vi.fn(async (topic: string, payload?: string | Buffer) => {
+      if (topic === `${PREFIX}/connect`) {
+        queueMicrotask(() =>
+          mockClient._simulateMessage(`${PREFIX}/connected`, JSON.stringify({ chars: CHARS })),
+        );
+      }
+      return origPublish(topic, payload);
+    });
+  }
+
+  describe('single-shot', () => {
+    const IDLE_MS = 5_000;
+
+    async function session(
+      adapter: ScaleAdapter,
+      drive: (ac: AbortController) => Promise<void>,
+    ): Promise<{ result: unknown; atMs: number }> {
+      vi.useFakeTimers();
+      try {
+        mockClient.subscribeAsync = vi.fn(async (topic: string) => {
+          if (topic === `${PREFIX}/status`) {
+            queueMicrotask(() => mockClient._simulateMessage(`${PREFIX}/status`, 'online'));
+          }
+          if (topic === `${PREFIX}/scan/results`) {
+            queueMicrotask(() =>
+              mockClient._simulateMessage(
+                `${PREFIX}/scan/results`,
+                JSON.stringify([{ address: MAC, name: 'GattScale', rssi: -50, services: [] }]),
+              ),
+            );
+          }
+          return [];
+        });
+        answerConnect();
+        const ac = new AbortController();
+        const t0 = Date.now();
+        let atMs = -1;
+        const outcome = scanAndReadRaw({
+          adapters: [adapter],
+          profile: PROFILE,
+          mqttProxy: MQTT_PROXY_CONFIG,
+          readingTimeoutMs: IDLE_MS,
+          abortSignal: ac.signal,
+        })
+          .then(
+            (r) => r,
+            (e: unknown) => e,
+          )
+          .finally(() => (atMs = Date.now() - t0));
+        await vi.advanceTimersByTimeAsync(0);
+        await drive(ac);
+        return { result: await outcome, atMs };
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+
+    it('ends a session that keeps sending rejected frames at 3 x idle, untagged', async () => {
+      const { result, atMs } = await session(createGattAdapter(), async () => {
+        for (let i = 0; i < 8; i++) {
+          rejected();
+          await vi.advanceTimersByTimeAsync(IDLE_MS / 2);
+        }
+      });
+      expect(result).toBeInstanceOf(SessionTimeoutError);
+      expect((result as Error).message).toBe('GATT session cap exceeded');
+      expect(atMs).toBe(3 * IDLE_MS);
+      expect(bleFailureKind(result)).toBeUndefined();
+    });
+
+    it('lets a composition hold run past the cap', async () => {
+      const { result, atMs } = await session(holding(4 * IDLE_MS), async () => {
+        weighIn();
+        await vi.advanceTimersByTimeAsync(5 * IDLE_MS);
+      });
+      expect(result).toMatchObject({ reading: { weight: 80 } });
+      expect(atMs).toBe(4 * IDLE_MS);
+    });
+
+    it('does not end the GATT session on the abort signal', async () => {
+      const { result } = await session(createGattAdapter(), async (ac) => {
+        ac.abort(new Error('shutdown'));
+        await vi.advanceTimersByTimeAsync(1_000);
+        weighIn();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result).toMatchObject({ reading: { weight: 80 } });
+    });
+  });
+
+  for (const path of ['host', 'autonomous'] as const) {
+    describe(`watcher, ${path} connect`, () => {
+      const kind = path === 'host' ? 'GATT reading' : 'Autonomous GATT reading';
+      const label = path === 'host' ? MAC : `${MAC} (autonomous)`;
+
+      async function session(
+        adapter: ScaleAdapter,
+        drive: () => Promise<unknown>,
+      ): Promise<{ warns: string[]; reading: RawReadingLike | null; atMs: number }> {
+        vi.useFakeTimers();
+        const warns: string[] = [];
+        let t0 = 0;
+        vi.spyOn(bleLog, 'warn').mockImplementation(
+          (m) => void warns.push(`${Date.now() - t0} ms: ${String(m)}`),
+        );
+        try {
+          const config = { ...MQTT_PROXY_CONFIG, auto_connect: path === 'autonomous' };
+          const watcher = new ReadingWatcher(config, [adapter], undefined, PROFILE);
+          await watcher.start();
+          answerConnect();
+          t0 = Date.now();
+          let reading: RawReadingLike | null = null;
+          let atMs = -1;
+          void watcher.nextReading().then((r) => {
+            reading = r;
+            atMs = Date.now() - t0;
+          });
+          if (path === 'host') {
+            mockClient._simulateMessage(
+              `${PREFIX}/scan/results`,
+              JSON.stringify([{ address: MAC, name: 'GattScale', rssi: -50, services: [] }]),
+            );
+          } else {
+            mockClient._simulateMessage(
+              `${PREFIX}/connected`,
+              JSON.stringify({ autonomous: true, address: MAC, chars: CHARS }),
+            );
+          }
+          await vi.advanceTimersByTimeAsync(0);
+          await drive();
+          await watcher.stop();
+          return { warns: warns.filter((w) => w.includes(`: ${kind} failed`)), reading, atMs };
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+
+      it('ends a silent session on the 60 s idle timeout', async () => {
+        const { warns } = await session(createGattAdapter(), () =>
+          vi.advanceTimersByTimeAsync(65_000),
+        );
+        expect(warns).toEqual([
+          `60000 ms: ${kind} failed for ${MAC}: GATT reading timeout for ${label}`,
+        ]);
+      });
+
+      it('ends a session that keeps sending rejected frames at the 90 s cap', async () => {
+        const { warns } = await session(createGattAdapter(), async () => {
+          for (let t = 0; t < 90_000; t += 30_000) {
+            rejected();
+            await vi.advanceTimersByTimeAsync(30_000);
+          }
+        });
+        expect(warns).toEqual([
+          `90000 ms: ${kind} failed for ${MAC}: GATT session cap exceeded for ${label}`,
+        ]);
+      });
+
+      it('hands a held weight over at the 90 s cap, which the hold does not move', async () => {
+        const { reading, atMs } = await session(holding(120_000), async () => {
+          weighIn();
+          await vi.advanceTimersByTimeAsync(125_000);
+        });
+        expect(reading).toMatchObject({ reading: { weight: 80 } });
+        expect(atMs).toBe(90_000);
+      });
+    });
+  }
+});
+
+/** What nextReading resolves with, as far as these tests look at it. */
+type RawReadingLike = { reading: ScaleReading };

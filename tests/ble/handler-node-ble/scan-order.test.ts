@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { BleDeviceInfo, ScaleAdapter } from '../../../src/interfaces/scale-adapter.js';
+import type { SessionRequest } from '../../../src/ble/shared.js';
 import { defaultProfile } from '../../helpers/scale-test-utils.js';
 import { makeController, fakeExecFile, type FakeController } from '../../helpers/fake-btmgmt.js';
 
@@ -237,8 +238,8 @@ vi.mock('../../../src/ble/handler-node-ble/gatt.js', () => ({
   wrapChar: () => ({}),
 }));
 
-/** The arguments of every waitForRawReading, newest last (#463). */
-const readingArgs: unknown[][] = [];
+/** The request of every waitForRawReading, newest last (#463). */
+const readingArgs: SessionRequest[] = [];
 
 /** The manufacturer data every adapter resolution saw, in order (#463). */
 const resolvedOn: Array<{ id: number; data: Buffer } | undefined> = [];
@@ -263,8 +264,8 @@ vi.mock('../../../src/ble/shared.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/ble/shared.js')>();
   return {
     ...actual,
-    waitForRawReading: record('waitForRawReading', async (...args: unknown[]) => {
-      readingArgs.push(args);
+    waitForRawReading: record('waitForRawReading', async (req: SessionRequest) => {
+      readingArgs.push(req);
       // One-shot gate: lets a test hold a cycle inside its reading phase while
       // another cycle runs (A-04).
       const gate = holdNextReading;
@@ -272,6 +273,13 @@ vi.mock('../../../src/ble/shared.js', async (importOriginal) => {
       if (gate) await gate;
       return { reading: { weight: 80, impedance: 500 }, adapter: makeAdapter() };
     }),
+  };
+});
+
+vi.mock('../../../src/ble/session/wiring.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/ble/session/wiring.js')>();
+  return {
+    ...actual,
     findMissingCharacteristics: record('findMissingCharacteristics', () => []),
   };
 });
@@ -1910,9 +1918,8 @@ describe('scanAndReadRaw hands a session the manufacturer data its scale adverti
     id: 0xffff,
     data: Buffer.from('081401000125e0160005ff6108010015', 'hex'),
   };
-  const sessionMfg = (cycle: number): unknown => readingArgs[cycle]?.[10];
-  const sessionAdapter = (cycle: number): string | undefined =>
-    (readingArgs[cycle]?.[2] as ScaleAdapter | undefined)?.name;
+  const sessionMfg = (cycle: number): unknown => readingArgs[cycle]?.manufacturerData;
+  const sessionAdapter = (cycle: number): string | undefined => readingArgs[cycle]?.adapter.name;
 
   beforeEach(() => {
     calls.length = 0;

@@ -338,8 +338,7 @@ describe('BeurerBf720Adapter', () => {
       });
     });
 
-    // lb frames: normalizesWeight = true tells the shared layer this adapter
-    // already returns kg, so it skips its own conversion.
+    // lb frames: nothing after the decoder converts, so it returns kg itself.
     it('converts an lb-unit weight frame to kg', () => {
       const a = makeAdapter();
       const lb = Buffer.alloc(3);

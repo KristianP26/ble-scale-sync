@@ -1,16 +1,12 @@
 import NodeBle from 'node-ble';
-import type {
-  ScaleAdapter,
-  BleDeviceInfo,
-  BodyComposition,
-} from '../../interfaces/scale-adapter.js';
+import type { ScaleAdapter, BleDeviceInfo } from '../../interfaces/scale-adapter.js';
 import type { ScanOptions, ScanResult } from '../types.js';
 import type { RawReading } from '../shared.js';
 import {
   findMissingCharacteristics,
   hasDeferredNotifyBinding,
   stopDeferredNotifications,
-} from '../shared.js';
+} from '../session/wiring.js';
 import { resolveAdapter } from '../../scales/resolve.js';
 import {
   bleLog,
@@ -366,7 +362,6 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     adapters,
     profile,
     scaleAuth,
-    weightUnit,
     onLiveData,
     onLiveWeight,
     abortSignal,
@@ -778,7 +773,6 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
 
     const raw = await readWithTimeouts(charMap, wrapDevice(device), matchedAdapter, deviceMac, {
       profile,
-      weightUnit,
       onLiveData,
       scaleAuth,
       readingTimeoutMs,
@@ -860,12 +854,6 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       staleLink,
     });
   }
-}
-
-/** Scan, read, and compute body composition. Wrapper around scanAndReadRaw(). */
-export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
-  const { reading, adapter } = await scanAndReadRaw(opts);
-  return adapter.computeMetrics(reading, opts.profile);
 }
 
 /**

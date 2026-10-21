@@ -22,10 +22,8 @@ const fixtures = await loadFixtures();
 /** Declarative members of ScaleAdapter, pinned by value. */
 const FIELDS = [
   'match',
-  'normalizesWeight',
   'requiresBonding',
   'singleBond',
-  'isForcedOverride',
   'charNotifyUuid',
   'charWriteUuid',
   'altCharNotifyUuid',
@@ -73,6 +71,12 @@ describe('X-04: the declarative surface of every registered adapter', () => {
     await expect(JSON.stringify(surface, null, 2) + '\n').toMatchFileSnapshot(
       '../../golden/descriptors.json',
     );
+  });
+
+  // Nothing converts a weight after the decoder any more (A-13); a flag that
+  // says "I already return kg" would only suggest that something does.
+  it('no adapter declares normalizesWeight', () => {
+    expect(adapters.filter((a) => 'normalizesWeight' in a).map((a) => a.name)).toEqual([]);
   });
 });
 

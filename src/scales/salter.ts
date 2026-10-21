@@ -144,6 +144,11 @@ const COMPLETION_HOLD_MS = 5000;
  * from the scale (87.6, 85.7, 88.0, 88.8, 89.7, 7.4 kg).
  *
  * Only the weight is read; see the class comment for why the other six are not.
+ *
+ * The weight is taken as kg whatever the display shows. INFERRED: no capture
+ * from a scale set to lb exists, but bone mass (kg) and BMR (kcal) stay metric,
+ * and a record that switched only its weight to pounds would be strange. A lb
+ * user seeing weights off by 2.2x points here.
  */
 const RECORD_LEN = 20;
 const POSITION_OFFSET = 1;
@@ -334,23 +339,6 @@ export class SalterAdapter
 
   readonly charNotifyUuid = CHR_FFC1;
   readonly charWriteUuid = CHR_FFC1;
-
-  /**
-   * The record's weight is treated as canonical kg, so the handler must not run
-   * it through the lbs conversion on top.
-   *
-   * INFERRED, NOT DIRECTLY VERIFIED. Every capture so far was taken with the
-   * scale displaying kg, so a record from a scale set to lb has never been seen.
-   * The inference rests on the record's companion fields, which are unambiguously
-   * metric whatever the display is doing: bone mass arrives in kilograms and BMR
-   * in kilocalories. A record that switched its weight field to pounds while
-   * leaving bone mass in kilograms would be a very strange protocol, and the
-   * vendor app converts for display anyway.
-   *
-   * If a unit with a lb display ever reports weights wrong by a factor of 2.2,
-   * this flag is the first thing to check.
-   */
-  readonly normalizesWeight = true;
 
   /**
    * What each tick kicks off: a keepalive, then the clock read whose reply starts

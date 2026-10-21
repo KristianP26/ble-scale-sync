@@ -180,7 +180,6 @@ export class QnScaleAdapter
   readonly charWriteUuid = CHR_WRITE;
   readonly altCharNotifyUuid = CHR_NOTIFY_T1;
   readonly altCharWriteUuid = CHR_WRITE_T1;
-  readonly normalizesWeight = true;
 
   /**
    * Weight divisor, 100 or 10, named by bit 0 of the 0x12 flags byte [10]

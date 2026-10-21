@@ -63,7 +63,6 @@ export class SanitasSbf72Adapter
     { uuid: CHR_BODY_COMP_MEAS, type: 'notify' },
     { uuid: CHR_USER_CONTROL_POINT, type: 'write' },
   ];
-  readonly normalizesWeight = true;
   readonly completionHoldMs = BCS_WAIT_MS;
   /** UCP Consent opcode for user index 1 with consent code 0. */
   readonly unlockCommand = [0x02, 0x01, 0x00, 0x00];

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { waitForRawReading } from '../../src/ble/shared.js';
-import type { BleChar, BleDevice } from '../../src/ble/shared.js';
+import type { BleChar, BleDevice } from '../../src/ble/session/ports.js';
 import { normalizeUuid } from '../../src/ble/types.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import { ActiveEraAdapter } from '../../src/scales/active-era.js';
@@ -88,7 +88,14 @@ async function startSession(profile: UserProfile = PROFILE) {
     [normalizeUuid(uuid16(0xffb1)), write],
   ]);
   const adapter = new ActiveEraAdapter();
-  const promise = waitForRawReading(charMap, device, adapter, profile, 'E0D38E019138');
+  const promise = waitForRawReading({
+    charMap,
+    device,
+    adapter,
+    profile,
+    address: 'E0D38E019138',
+    scaleAuth: undefined,
+  });
   let result: ScaleReading | null = null;
   let settled = false;
   void promise.then(

@@ -31,8 +31,8 @@ const CHR_WRITE = uuid16(0xfff2);
  *   [20]    1 when the impedance field is populated
  *   [21]    display unit: 0 kg, 1 lb, 2 st
  *
- * The weight is grams regardless of what the scale is displaying, so
- * `normalizesWeight` holds and the display unit is only logged.
+ * The weight is grams regardless of what the scale is displaying, so the
+ * display unit is only logged.
  *
  * Decoded from the debug log in #385 (Etekcity Smart Fitness Scale,
  * D0:4D:00:43:40:BD, a full weigh-in from first contact to the settled frame)
@@ -121,7 +121,6 @@ export class EtekcityEsf551Adapter implements ScaleAdapterCore, GattWiring {
   };
   readonly charNotifyUuid = CHR_NOTIFY;
   readonly charWriteUuid = CHR_WRITE;
-  readonly normalizesWeight = true;
 
   readonly characteristics: CharacteristicBinding[] = [
     { uuid: CHR_NOTIFY, type: 'notify' },

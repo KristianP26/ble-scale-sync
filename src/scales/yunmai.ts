@@ -82,7 +82,6 @@ export class YunmaiScaleAdapter
   };
   readonly charNotifyUuid = CHR_MEAS;
   readonly charWriteUuid = CHR_CMD;
-  readonly normalizesWeight = true;
   /**
    * GET_PROTOCOL_VERSION: initiates measurement on connect. The scale answers
    * each one with a 0x05 frame, see isStatusFrame.

@@ -39,8 +39,6 @@ export class ExcelvanCF369Adapter implements ScaleAdapterCore, GattWiring, HoldF
   readonly charNotifyUuid = CHR_NOTIFY;
   readonly charWriteUuid = CHR_WRITE;
 
-  readonly normalizesWeight = true;
-
   /** Cached body-composition values from the most recent parsed frame. */
   private cachedComp: ScaleBodyComp = {};
   /**

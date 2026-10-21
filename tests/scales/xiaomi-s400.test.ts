@@ -321,7 +321,6 @@ describe('XiaomiS400Adapter metrics', () => {
   it('is broadcast-only', () => {
     expect(adapter.parseNotification()).toBeNull();
     expect(adapter.preferPassive).toBe(true);
-    expect(adapter.normalizesWeight).toBe(true);
   });
 
   it('completes on a plausible weight regardless of impedance', () => {

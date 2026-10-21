@@ -1,17 +1,19 @@
-import type { ScaleAdapter, BodyComposition } from '../../interfaces/scale-adapter.js';
+import type { ScaleAdapter } from '../../interfaces/scale-adapter.js';
 import type { EsphomeProxyConfig } from '../../config/schema.js';
 import type { ScanOptions, ScanResult } from '../types.js';
-import { type RawReading, waitForRawReading, withAbandonmentCleanup } from '../shared.js';
+import type { RawReading } from '../shared.js';
+import { proxyScanPolicy, runGattSession } from '../session/runner.js';
 import { resolveAdapter } from '../../scales/resolve.js';
 import {
   armScanDeadline,
+  BoundedMap,
   evaluateAdvertisement,
   GraceTimers,
   logAdvert,
   ManufacturerDataCache,
   safeName,
 } from '../advertisement.js';
-import { bleLog, errMsg, untilAborted, withIdleTimeout, IMPEDANCE_GRACE_MS } from '../types.js';
+import { bleLog, errMsg, IMPEDANCE_GRACE_MS } from '../types.js';
 import { EsphomeProxyPool } from './pool.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -19,10 +21,6 @@ import { EsphomeProxyPool } from './pool.js';
 // 60s matches the native BLE handlers and gives slow-advertising scales (e.g. Mi,
 // some Renpho) enough time to emit a broadcast frame after the user steps on.
 const BROADCAST_WAIT_MS = 60_000;
-// Idle bound for an on-demand GATT read. The outer BROADCAST_WAIT_MS race only
-// abandons the wait; without this the abandoned read still hangs forever when
-// the proxy vanishes and never reports a disconnect.
-const GATT_READING_IDLE_MS = 60_000;
 const SCAN_DEFAULT_MS = 15_000;
 
 // ─── Scan-and-read (broadcast + GATT) ────────────────────────────────────────
@@ -135,8 +133,7 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         // sibling protocols apart by name would match the nameless frame as
         // if the device had no name (#322), so the last name seen per address
         // is remembered and merged back in. Same reasoning as the watcher.
-        const lastAdvertName = new Map<string, string>();
-        const MAX_CACHED_NAMES = 64;
+        const lastAdvertName = new BoundedMap<string, string>(64, 'fifo');
         // For the GATT handoff only, never the match (see ManufacturerDataCache).
         const mfgCache = new ManufacturerDataCache();
 
@@ -148,10 +145,6 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
           mfgCache.remember(rawInfo, addrLc);
           let info = rawInfo;
           if (info.localName) {
-            if (lastAdvertName.size >= MAX_CACHED_NAMES && !lastAdvertName.has(addrLc)) {
-              const oldest = lastAdvertName.keys().next().value;
-              if (oldest !== undefined) lastAdvertName.delete(oldest);
-            }
             lastAdvertName.set(addrLc, info.localName);
           } else {
             const cached = lastAdvertName.get(addrLc);
@@ -219,36 +212,23 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
             let session: Awaited<ReturnType<typeof pool.connectGatt>> | null = null;
             try {
               session = await pool.connectGatt(address);
-              // Through withAbandonmentCleanup, so a timeout still hands over
-              // the stored weigh-ins the session collected (#331). A shutdown
-              // ends it at once and hands nothing over, as on node-ble (A-07,
-              // D051): the scan has rejected already, and the session would
-              // otherwise run on until its idle bound or hold settled it.
-              const raw = await withAbandonmentCleanup(
-                session.device,
-                () =>
-                  untilAborted(
-                    withIdleTimeout(
-                      (onActivity) =>
-                        waitForRawReading(
-                          session!.charMap,
-                          session!.device,
-                          adapter,
-                          opts.profile,
-                          address.replace(/[:-]/g, '').toUpperCase(),
-                          opts.weightUnit,
-                          opts.onLiveData,
-                          opts.scaleAuth,
-                          onActivity,
-                          info.localName,
-                          manufacturerData,
-                        ),
-                      GATT_READING_IDLE_MS,
-                      `GATT reading timeout for ${address}`,
-                    ),
-                    opts.abortSignal,
-                  ),
-                opts.abortSignal,
+              // A shutdown ends the session at once and hands nothing over, as on
+              // node-ble (A-07, D051): the scan has rejected already, and the
+              // session would otherwise run on until its idle bound or hold
+              // settled it.
+              const raw = await runGattSession(
+                {
+                  charMap: session.charMap,
+                  device: session.device,
+                  adapter,
+                  profile: opts.profile,
+                  address: address.replace(/[:-]/g, '').toUpperCase(),
+                  onLiveData: opts.onLiveData,
+                  scaleAuth: opts.scaleAuth,
+                  deviceName: info.localName,
+                  manufacturerData,
+                },
+                { ...proxyScanPolicy(address), abortSignal: opts.abortSignal },
               );
               resolve(raw);
             } catch (e) {
@@ -273,11 +253,6 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     if (sub.unsub) sub.unsub();
     await pool.stop();
   }
-}
-
-export async function scanAndRead(opts: ScanOptions): Promise<BodyComposition> {
-  const { reading, adapter } = await scanAndReadRaw(opts);
-  return adapter.computeMetrics(reading, opts.profile);
 }
 
 // ─── Device discovery (for setup wizard) ─────────────────────────────────────

@@ -42,7 +42,6 @@ export class MgbAdapter implements ScaleAdapterCore, GattWiring, HoldForComposit
   };
   readonly charNotifyUuid = uuid16(0xffb2);
   readonly charWriteUuid = uuid16(0xffb1);
-  readonly normalizesWeight = true;
 
   private cachedWeight = 0;
   private cachedFat = 0;

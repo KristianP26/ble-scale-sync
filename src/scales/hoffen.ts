@@ -45,7 +45,6 @@ export class HoffenAdapter implements ScaleAdapterCore, GattWiring {
   };
   readonly charNotifyUuid = uuid16(0xffb2);
   readonly charWriteUuid = uuid16(0xffb2);
-  readonly normalizesWeight = true;
 
   /** The last frame we wrote, so its echo is not decoded as a measurement. */
   private lastCommand: Buffer | null = null;

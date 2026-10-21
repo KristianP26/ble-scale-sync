@@ -135,7 +135,6 @@ export class PicoocMiniLiteAdapter implements ScaleAdapterCore, BroadcastSource 
     priority: 217,
     names: { exact: [NAME] },
   };
-  readonly normalizesWeight = true;
   readonly preferPassive = true;
 
   /** Last weight handed out per unit, keyed by [0..3]; see REPEAT_WINDOW_MS. */

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { adapters } from '../../src/scales/index.js';
 import { resolveAdapter, resolveAfterDiscovery } from '../../src/scales/resolve.js';
 import type { GattDiscovery } from '../../src/scales/resolve.js';
+import { matchesDescriptor } from '../../src/scales/match-descriptor.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
 import { M1690_ADVERT, M1690_FE95_PID_018E } from '../helpers/yunmai-m1690.js';
@@ -245,6 +246,30 @@ describe('registry collision guard (#182)', () => {
     const registered = new Set(adapters.map((a) => a.name));
     const stale = Object.keys(FIXTURES).filter((n) => !registered.has(n));
     expect(stale, `Stale fixtures (adapter removed/renamed): ${stale.join(', ')}`).toEqual([]);
+  });
+
+  // K-07: registry-check reasons about a non-custom adapter from its
+  // descriptor alone, which holds only while matches() claims nothing the
+  // descriptor does not. ES-CS20M does: it claims the anonymous ESCS20MB2 by
+  // the address echoed in its payload (#376, the reporter's capture) without
+  // being marked custom. Marking it changes the pinned descriptor, so it is
+  // listed here until that is decided.
+  it('a non-custom matches() claims no advertisement its descriptor does not', () => {
+    const escs20mb2: BleDeviceInfo = {
+      localName: '',
+      address: 'CF:EA:02:07:2C:87',
+      serviceUuids: [],
+      manufacturerData: { id: 0x1a10, data: Buffer.from('00040031cfea02072c870109', 'hex') },
+    };
+    const corpus = [...Object.values(FIXTURES), ...AC27_ADVERTS.map((c) => c.info), escs20mb2];
+    const beyond = adapters
+      .filter((a) => a.match && !a.match.custom)
+      .flatMap((a) =>
+        corpus
+          .filter((info) => a.matches(info) && !matchesDescriptor(info, a.match!))
+          .map((info) => `${a.name}: ${info.localName || info.address}`),
+      );
+    expect(beyond).toEqual(['ES-CS20M: CF:EA:02:07:2C:87']);
   });
 });
 
