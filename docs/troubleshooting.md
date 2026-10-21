@@ -123,34 +123,6 @@ One caution: on Linux, `beurer_pin` is also the passkey offered to BlueZ during 
 
 Provisioning only fills fields the scale reports as empty. A populated profile is written back byte for byte, exactly as before, and the commit line then reports `0 from config`. There is no option to overwrite a record the scale already holds; a factory reset is the only way to change one.
 
-### Beurer BF500: paired but stuck on APP
-
-During new-user initialization, wait for `Beurer BF500: measurement requested; step barefoot on the scale.` before stepping on. Allow enough time for the initial reference weigh-in, for example `ble.session_timeout_sec: 120`; a 20-second session can end too early. Normal connections to an existing user do not send this measurement request; the app can receive stored readings without prompting for another weigh-in.
-
-A newly registered BF500 user is initialized with the date of birth, gender and height from config after consent succeeds, replacing the scale's factory defaults. Activity level uses the adapter's fixed value of 3. Existing profiles are preserved, so this does not repair a user created with default values by an older build.
-
-If registration already succeeded, keep the assigned `users[].beurer_user_index` and consent PIN, and turn `beurer_register_new_user` off. Leaving it enabled creates another user slot on each connection, even when the previous session timed out without a measurement.
-
-### Beurer BF500: Linux asks to pair again
-
-Enable LE privacy on the Linux Bluetooth adapter so pairing exchanges the host's identity key. On a native Linux host, set `Privacy = device` under `[General]` in `/etc/bluetooth/main.conf`, restart Bluetooth, then pair through BLE Scale Sync. Leave `ble.adapter_privacy: false` when BlueZ manages privacy this way. Alternatively, use `ble.adapter_privacy: true`, which needs root or `CAP_NET_ADMIN` for `btmgmt`; use one method, not both. See [the privacy setup below](#beurer-every-connect-fails-after-the-first-session). Privacy alone does not address the BF500 limitation described next.
-
-On the tested **BF500 firmware 1.13**, the scale uses the standard Bluetooth LE Secure Connections **debug public/private key pair**, whose private key is publicly known. The scale's debug public key was confirmed in both Linux and Android captures. The tested Android Bluetooth stack is more permissive: it retains the derived encryption key and reuses it on subsequent connections without asking to pair again. This does not make the pairing secure.
-
-Linux normally discards debug-derived keys. To retain them between connections, set the following under `[General]` in `/etc/bluetooth/main.conf`:
-
-```ini
-Privacy = device
-DebugKeys = true
-```
-
-Restart Bluetooth with `sudo systemctl restart bluetooth` (this disconnects other Bluetooth devices), then pair once through BLE Scale Sync and confirm the code with **SET**. `btmgmt info` should list both `privacy` and `debug-keys` under **current settings**. These settings affect the host's Bluetooth adapters, not just the scale. For temporary, adapter-specific retention, `sudo btmgmt --index 1 debug-keys on` applies only to `hci1`; substitute your adapter's index.
-
-**Restart limitation:** `DebugKeys = true` persists the setting, but does not make the bond reusable after a Bluetooth service restart or host reboot on the tested Linux 7.2 setup. Linux skips stored debug-derived keys when reloading bonds, so expect another pairing confirmation after either restart. Enabling privacy or granting BLE Scale Sync more permissions does not remove this limitation. A factory reset or another scale-user registration is not needed.
-
-::: warning Debug-key security
-Someone who captures the pairing exchange can derive its encryption key using the publicly known debug private key. Enabling `DebugKeys` accepts this firmware weakness; it does not fix it. Keep Bluetooth captures private because they can contain keys and personal measurements.
-:::
 
 ### Beurer: the six-digit passkey and the four-digit consent code are different numbers
 
@@ -231,6 +203,117 @@ runtime:
 ```
 
 Only a session in which the scale answered and then went quiet waits longer: its line ends with `(Timed out waiting for a complete scale reading)`, and with the setting in place it reads `retrying in 900s (runtime.no_reading_rescan_delay)`. A session that ends with `(GATT session cap exceeded)`, or in any other way, keeps the normal backoff. A weigh-in that arrives more than 5 minutes after it was taken is a past measurement: Garmin and the other exporters that can record one get it; MQTT, webhook, ntfy, Telegram and Strava do not. If those matter, keep the value at about 240 or below. During the wait the app scans for no scale at all and does not retry queued exports. A shorter `ble.session_timeout_sec` would also shorten each session's `PAIR`, untested on this model. See [the configuration reference](/guide/configuration#runtime).
+
+### Beurer BF500: pairing and user provision
+
+#### Pairing prerequisites
+
+These details were confirmed in Linux and Android bluetooth captures; other firmware versions haven’t been checked.
+
+BF500 with firmware 1.13 uses:
+
+ - Bluetooth LE Secure Connections pairing with P-256 elliptic-curve key exchange.
+ - Numeric Comparison authentication—the displayed code you confirm with SET.
+ - AES-CCM encryption with a 128-bit key for the Bluetooth connection.
+
+The important weakness is that the scale uses Bluetooth’s publicly documented debug P-256 key pair, rather than a secret device-generated pair. AES-CCM itself isn’t broken, but someone capturing the pairing exchange can derive the connection’s
+encryption key.
+
+Android's Bluetooth stack is permissive: it retains a debug-derived encryption key and reuses it on subsequent connections without asking to pair again.
+
+Linux BlueZ normally discards debug-derived keys resulting in the initial pair/sync working, but subsequent sync attempts failing with the scale displaying `PAIr` again as the host has discarded the debug-derived key. 
+
+To retain debug-derived keys between connections, set the following under in `/etc/bluetooth/main.conf`:
+
+```ini
+[General]
+DebugKeys = true
+```
+
+For temporary, adapter-specific retention, `sudo btmgmt --index 1 debug-keys on` applies only to `hci1`; substitute your adapter's index.
+
+There is currently no config.yaml option to have ble-scale-sync handle setting this option itself.
+
+**Restart limitation:** `DebugKeys = true` persists the setting, but does not make the bond reusable after a Bluetooth service restart or host reboot (tested with Linux kernel 7.2/BlueZ 5.87). Linux skips stored debug-derived keys when reloading bonds, so expect another pairing confirmation after either restart. A factory reset or another scale-user registration is not needed.  Enabling privacy or granting BLE Scale Sync more permissions does not remove this limitation. There is currently no known way to make the linux BlueZ stack as permissive as the Android stack with these keys.
+
+**Warning Debug-key security:**
+Someone who captures the pairing exchange can derive its encryption key using the publicly known debug private key. Enabling `DebugKeys` accepts this firmware weakness; it does not fix it.
+
+Enable LE privacy on the Linux Bluetooth adapter so pairing exchanges the host's identity key. 
+
+In `/etc/bluetooth/main.conf`:
+
+```ini
+[General]
+Privacy = device
+```
+
+Alternatively, use `ble.adapter_privacy: true` in config.yaml to have ble-scale-sync manage the setting itself, which needs root or `CAP_NET_ADMIN` for `btmgmt`; use one method, not both.
+
+Restart the Bluetooth service - on systemd hosts: `sudo systemctl restart bluetooth` (this disconnects other Bluetooth devices). `btmgmt info` should list both `privacy` and `debug-keys` under **current settings**.
+
+
+#### User provision 
+
+There is currently no know way to use any existing users configured on the scale as the 4 digit consent code (as used by `users[].beurer_pin`) used when the user was created is not retrievable.
+
+Reset the scale to factory defaults:
+
+- Press SET repeatedly until `SEt` appears on the scale display
+- Press UP arrow - `CLr` flashes on the scale display
+- Press SET to confirm the reset
+
+in config.yaml, create a new profile which will be pushed to the scale:
+
+```yaml
+users:
+  - name: Alice
+    slug: alice
+    height: 168
+    birth_date: '1995-03-20'
+    gender: female
+    is_athlete: false
+    weight_range: { min: 50, max: 75 }
+    beurer_pin: 1234 # sent on new user creation and used for future syncs
+    beurer_provision: true # one time use - comment out after user created.
+    beurer_register_new_user: true # one time use - comment out after user created.
+    # beurer_user_index: 1 # uncomment after user created - should be 1 on a factory default scale
+
+runtime:
+  debug: true
+  continuous_mode: false # initially run once to allow the profile to be changed after user creation
+
+```
+
+Start ble-scale-sync.
+
+- `PAIr` is shown on the scale display followed by the 6 digit Passkey code
+- Press `SET` 
+- the scale now bonds with the bluetooth adapter
+- ble-scale-sync creates the user on the scale using the configured beurer_pin
+- Scale displays 0.0 and ble-scale-sync prompts user to step on scale
+- complete weigh-in 
+- bluetooth transfer-to-phone symbol flashes on display as reading is transferred to ble-scale-sync
+- scale switches off
+
+Check debug log to ensure all went well.  On a factory default scale, the new user should be created at user index 1.
+
+Change config.yaml to disable the new user registration, or the next sync will create another user at the next free index on the scale.
+
+```yaml
+users:
+  - name: Alice
+    slug: alice
+    height: 168
+    birth_date: '1995-03-20'
+    gender: female
+    is_athlete: false
+    weight_range: { min: 50, max: 75 }
+    last_known_weight: 70 
+    beurer_pin: 1234
+    beurer_user_index: 1 # check log for actual index
+
+```
 
 ## Exporter Issues
 
