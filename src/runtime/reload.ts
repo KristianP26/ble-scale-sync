@@ -1,7 +1,7 @@
 import { loadYamlConfig } from '../config/load.js';
-import { resolveRuntimeConfig, resolveExportersForUser } from '../config/resolve.js';
-import { createExporterFromEntry } from '../exporters/registry.js';
+import { resolveRuntimeConfig, resolveExporterSlotsForUser } from '../config/resolve.js';
 import type { Exporter } from '../interfaces/exporter.js';
+import { buildFromSlots } from './exporters.js';
 import { diffRestartRequired } from '../config/reload-diff.js';
 import { withWriteLock } from '../config/write.js';
 import { setDisplayUsers } from '../ble/handler-mqtt-proxy/index.js';
@@ -88,14 +88,13 @@ export async function reloadAppConfig(
  * Every user's exporters for a config, the way getExportersForUser builds them.
  * Exporter constructors only store their config, so building them has no side
  * effects; the point is that construction is where an invalid entry throws.
+ * Same builder as getExportersForUser so each instance keeps its D029 slot:
+ * without it the retry queue cannot tell two exporters of one type apart.
  */
 function buildExportersByUser(config: AppConfig): Map<string, Exporter[]> {
   const byUser = new Map<string, Exporter[]>();
   for (const user of config.users) {
-    byUser.set(
-      user.slug,
-      resolveExportersForUser(config, user).map((e) => createExporterFromEntry(e)),
-    );
+    byUser.set(user.slug, buildFromSlots(resolveExporterSlotsForUser(config, user)));
   }
   return byUser;
 }
