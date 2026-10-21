@@ -241,9 +241,13 @@ export interface ConnectionContext {
   /**
    * Manufacturer data of the advertisement the transport matched the device on,
    * in the same shape as `BleDeviceInfo.manufacturerData` (company id apart,
-   * `data` without it). Absent when the transport had none. Lets an adapter
-   * read per-unit flags a scale only announces there, e.g. the QN impedance
-   * encoding (#461).
+   * `data` without it), or, where that one had none, the last one the same
+   * address advertised earlier in this process (node-ble, esphome-proxy;
+   * #463). Absent when the transport had none at all; those two never hand
+   * over a company id without bytes. Lets an adapter read per-unit flags a
+   * scale only announces there, e.g. the QN impedance encoding (#461); since it
+   * can be from an earlier advertisement of the unit, read only fields that do
+   * not change between its advertisements.
    */
   manufacturerData?: { id: number; data: Buffer };
   /**

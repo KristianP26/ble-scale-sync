@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
-import type { ScaleAdapter } from '../../../src/interfaces/scale-adapter.js';
+import type { BleDeviceInfo, ScaleAdapter } from '../../../src/interfaces/scale-adapter.js';
 import { defaultProfile } from '../../helpers/scale-test-utils.js';
 import { makeController, fakeExecFile, type FakeController } from '../../helpers/fake-btmgmt.js';
 
@@ -82,6 +82,8 @@ const fakeDevice = {
 let autoDiscoverFinds = true;
 /** The adapter auto-discovery matches the scale to; a test replaces it (#471). */
 let autoDiscoverAdapter: (() => ScaleAdapter) | undefined;
+/** The manufacturer data auto-discovery matched the scale on (#463). */
+let autoDiscoverMfg: { id: number; data: Buffer } | undefined;
 
 /** When set, the next waitForRawReading waits for it. */
 let holdNextReading: Promise<void> | null = null;
@@ -153,6 +155,7 @@ vi.mock('../../../src/ble/handler-node-ble/discovery.js', () => ({
       device: fakeDevice,
       adapter: autoDiscoverAdapter?.() ?? makeAdapter(),
       mac: 'AA:BB:CC:DD:EE:FF',
+      ...(autoDiscoverMfg ? { manufacturerData: autoDiscoverMfg } : {}),
     };
   }),
 }));
@@ -162,11 +165,21 @@ let snapshotCompanyId = 0x0611;
 /** The service data every advertisement snapshot carries; a test replaces it (#471). */
 let snapshotServiceData: Array<{ uuid: string; data: Buffer }> = [];
 
+/** Snapshots to hand out first, oldest first; then the default above (#463). */
+const snapshotQueue: Array<{
+  manufacturerData?: { id: number; data: Buffer };
+  serviceData?: Array<{ uuid: string; data: Buffer }>;
+}> = [];
+
 vi.mock('../../../src/ble/handler-node-ble/device-object.js', () => ({
-  logAdvertisementSnapshot: record('logAdvertisementSnapshot', async () => ({
-    manufacturerData: { id: snapshotCompanyId, data: Buffer.alloc(0) },
-    serviceData: snapshotServiceData,
-  })),
+  logAdvertisementSnapshot: record(
+    'logAdvertisementSnapshot',
+    async () =>
+      snapshotQueue.shift() ?? {
+        manufacturerData: { id: snapshotCompanyId, data: Buffer.alloc(0) },
+        serviceData: snapshotServiceData,
+      },
+  ),
   isDeviceObjectGone: () => false,
 }));
 
@@ -224,11 +237,34 @@ vi.mock('../../../src/ble/handler-node-ble/gatt.js', () => ({
   wrapChar: () => ({}),
 }));
 
+/** The arguments of every waitForRawReading, newest last (#463). */
+const readingArgs: unknown[][] = [];
+
+/** The manufacturer data every adapter resolution saw, in order (#463). */
+const resolvedOn: Array<{ id: number; data: Buffer } | undefined> = [];
+
+// Passed through, so matching stays real; only what it was handed is noted.
+vi.mock('../../../src/scales/resolve.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/scales/resolve.js')>();
+  return {
+    ...actual,
+    resolveAdapter: (info: BleDeviceInfo, ...rest: unknown[]) => {
+      resolvedOn.push(info.manufacturerData);
+      return (actual.resolveAdapter as (...a: unknown[]) => unknown)(info, ...rest);
+    },
+    resolveAfterDiscovery: (info: BleDeviceInfo, ...rest: unknown[]) => {
+      resolvedOn.push(info.manufacturerData);
+      return (actual.resolveAfterDiscovery as (...a: unknown[]) => unknown)(info, ...rest);
+    },
+  };
+});
+
 vi.mock('../../../src/ble/shared.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/ble/shared.js')>();
   return {
     ...actual,
-    waitForRawReading: record('waitForRawReading', async () => {
+    waitForRawReading: record('waitForRawReading', async (...args: unknown[]) => {
+      readingArgs.push(args);
       // One-shot gate: lets a test hold a cycle inside its reading phase while
       // another cycle runs (A-04).
       const gate = holdNextReading;
@@ -297,6 +333,8 @@ const { _resetAdapterPrivacyStateForTests } =
   await import('../../../src/ble/handler-node-ble/privacy.js');
 const { _resetDeviceCacheForTests } =
   await import('../../../src/ble/handler-node-ble/device-cache.js');
+const { _resetSessionAdvertForTests } =
+  await import('../../../src/ble/handler-node-ble/session-advert.js');
 const { applyForcedAdapter } = await import('../../../src/scales/force.js');
 const { BeurerBf720Adapter } = await import('../../../src/scales/beurer-bf720.js');
 
@@ -306,6 +344,7 @@ describe('scanAndReadRaw call order (#368)', () => {
     // A successful cycle writes the per-MAC memory (D060), so it would
     // otherwise depend on which test ran before.
     _resetDeviceCacheForTests();
+    _resetSessionAdvertForTests();
     vi.useFakeTimers();
   });
   afterEach(() => {
@@ -568,6 +607,7 @@ describe('scanAndReadRaw and a Disconnect BlueZ never answers (#472)', () => {
     calls.length = 0;
     readingBrakeMacs.length = 0;
     _resetDeviceCacheForTests();
+    _resetSessionAdvertForTests();
     vi.useFakeTimers();
     fakeDevice.disconnect = async () => {
       calls.push('device.disconnect');
@@ -687,6 +727,7 @@ describe('scanAndReadRaw after a connect retry replaced the D-Bus connection (#4
     calls.length = 0;
     removedThrough.length = 0;
     _resetDeviceCacheForTests();
+    _resetSessionAdvertForTests();
     vi.useFakeTimers();
   });
   afterEach(() => {
@@ -748,6 +789,7 @@ describe('scanAndReadRaw bonds a single-bond scale with the option, and only tha
     // A successful cycle writes the per-MAC memory (D060), so it would
     // otherwise depend on which test ran before.
     _resetDeviceCacheForTests();
+    _resetSessionAdvertForTests();
     vi.useFakeTimers();
     // The bonded scale is already paired on entry (the kernel answered its
     // Security Request at connect), so ensureBonded only reads Bonded for it.
@@ -803,6 +845,7 @@ describe('scanAndReadRaw turns a deferred binding off before disconnecting (#408
     // A successful cycle writes the per-MAC memory (D060), so it would
     // otherwise depend on which test ran before.
     _resetDeviceCacheForTests();
+    _resetSessionAdvertForTests();
     charMapForTest = new Map<string, unknown>([
       [WM, stoppable('2a9d')],
       [OTHER, stoppable('fff1')],
@@ -930,6 +973,7 @@ describe('scanAndReadRaw with ble.adapter_privacy (#417)', () => {
     // A successful cycle writes the per-MAC memory (D060), so it would
     // otherwise depend on which test ran before.
     _resetDeviceCacheForTests();
+    _resetSessionAdvertForTests();
     ctl = makeController();
     fakeAdapter.helper.object = '/org/bluez/hci0';
     connectContexts.length = 0;
@@ -1042,6 +1086,7 @@ describe('scanAndReadRaw hands what the watchdog saw to the failure classificati
     // A successful cycle writes the per-MAC memory (D060), so it would
     // otherwise depend on which test ran before.
     _resetDeviceCacheForTests();
+    _resetSessionAdvertForTests();
     watchdogRestarts = 0;
     vi.useFakeTimers();
     // The scale never shows up, and the fake adapter lists no devices, so the
@@ -1157,6 +1202,7 @@ describe('scanAndReadRaw keeps a GATT-only scale in BlueZ between cycles (#425, 
   beforeEach(() => {
     calls.length = 0;
     _resetDeviceCacheForTests();
+    _resetSessionAdvertForTests();
     vi.useFakeTimers();
     heldPaired = false;
     heldMissing = false;
@@ -1465,6 +1511,7 @@ describe('scanAndReadRaw after a pairing nobody confirmed (#471, D063)', () => {
   beforeEach(() => {
     calls.length = 0;
     _resetDeviceCacheForTests();
+    _resetSessionAdvertForTests();
     vi.useFakeTimers();
     _resetPairingBackoffForTests(() => Date.now());
     prompts.clear();
@@ -1844,5 +1891,138 @@ describe('scanAndReadRaw after a pairing nobody confirmed (#471, D063)', () => {
     expect((held.result() as Error).message).toBe('shutdown');
     expect(calls).not.toContain('connectWithRecovery');
     expect(helper.listenerCount('PropertiesChanged')).toBe(0);
+  });
+});
+
+// #463: the Physiq's Device1 object had its manufacturer data at 17:57 and not
+// at 19:39 of the same day, and the QN session needs it for the impedance
+// flag. The session gets the last one the address advertised in this run; the
+// matches keep what the snapshot shows (D071).
+describe('scanAndReadRaw hands a session the manufacturer data its scale advertised earlier (#463, D071)', () => {
+  const MAC = 'FF:05:00:16:E0:25';
+  /** The Physiq's advertisement of 2026-10-20 17:57:58.247, byte for byte. */
+  const ADVERT_1020 = {
+    id: 0xffff,
+    data: Buffer.from('081401000325e0160005ff6108020015', 'hex'),
+  };
+  /** Its advertisement of 2026-10-13, byte for byte: [4] and [13] differ. */
+  const ADVERT_1013 = {
+    id: 0xffff,
+    data: Buffer.from('081401000125e0160005ff6108010015', 'hex'),
+  };
+  const sessionMfg = (cycle: number): unknown => readingArgs[cycle]?.[10];
+  const sessionAdapter = (cycle: number): string | undefined =>
+    (readingArgs[cycle]?.[2] as ScaleAdapter | undefined)?.name;
+
+  beforeEach(() => {
+    calls.length = 0;
+    readingArgs.length = 0;
+    resolvedOn.length = 0;
+    snapshotQueue.length = 0;
+    _resetDeviceCacheForTests();
+    _resetSessionAdvertForTests();
+    autoDiscoverMfg = undefined;
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    snapshotQueue.length = 0;
+    autoDiscoverMfg = undefined;
+    vi.useRealTimers();
+  });
+
+  /**
+   * One cycle; `snapshot` is what the scale's object shows in it. The adapter
+   * reads broadcasts, as QN does, so its object is removed before each cycle
+   * (D060), and is GATT for the session.
+   */
+  async function cycle(
+    snapshot: { manufacturerData?: { id: number; data: Buffer } },
+    opts: { targetMac?: string | null; adapters?: ScaleAdapter[] } = {},
+  ): Promise<void> {
+    snapshotQueue.push(snapshot);
+    const promise = scanAndReadRaw({
+      targetMac: opts.targetMac === null ? undefined : (opts.targetMac ?? MAC),
+      adapters: opts.adapters ?? [makeAdapter({ parseBroadcast: () => null })],
+      profile: defaultProfile(),
+    });
+    await vi.runAllTimersAsync();
+    await promise;
+  }
+
+  it('gives the session what the scale advertised in an earlier cycle when this one shows none', async () => {
+    await cycle({ manufacturerData: ADVERT_1020 });
+    await cycle({});
+    expect(sessionMfg(0)).toEqual(ADVERT_1020);
+    expect(sessionMfg(1)).toEqual(ADVERT_1020);
+  });
+
+  it('does the same in auto-discovery', async () => {
+    await cycle({ manufacturerData: ADVERT_1020 }, { targetMac: null });
+    await cycle({}, { targetMac: null });
+    expect(sessionMfg(1)).toEqual(ADVERT_1020);
+  });
+
+  it('counts a company id without bytes as none, and gives the session the earlier one', async () => {
+    await cycle({ manufacturerData: ADVERT_1020 });
+    await cycle({ manufacturerData: { id: 0xffff, data: Buffer.alloc(0) } });
+    expect(sessionMfg(1)).toEqual(ADVERT_1020);
+  });
+
+  it('hands over no company id without bytes when nothing is remembered', async () => {
+    await cycle({ manufacturerData: { id: 0xffff, data: Buffer.alloc(0) } });
+    expect(sessionMfg(0)).toBeUndefined();
+  });
+
+  // In auto-discovery an empty fresher snapshot must not shadow the data the
+  // scale was matched on, and that data is what the next cycle gets.
+  it('in auto-discovery takes what the match saw when the snapshot has no bytes, and remembers it', async () => {
+    autoDiscoverMfg = ADVERT_1020;
+    await cycle({ manufacturerData: { id: 0xffff, data: Buffer.alloc(0) } }, { targetMac: null });
+    autoDiscoverMfg = undefined;
+    await cycle({}, { targetMac: null });
+    expect(sessionMfg(0)).toEqual(ADVERT_1020);
+    expect(sessionMfg(1)).toEqual(ADVERT_1020);
+  });
+
+  it('in auto-discovery keeps the fresher snapshot when it has bytes', async () => {
+    autoDiscoverMfg = ADVERT_1013;
+    await cycle({ manufacturerData: ADVERT_1020 }, { targetMac: null });
+    expect(sessionMfg(0)).toEqual(ADVERT_1020);
+  });
+
+  it('keeps the cycle its own manufacturer data when it has some', async () => {
+    await cycle({ manufacturerData: ADVERT_1020 });
+    await cycle({ manufacturerData: ADVERT_1013 });
+    expect(sessionMfg(1)).toEqual(ADVERT_1013);
+  });
+
+  it('does not hand one address what another advertised', async () => {
+    await cycle({ manufacturerData: ADVERT_1020 });
+    await cycle({}, { targetMac: 'FF:05:00:16:E0:26' });
+    expect(sessionMfg(1)).toBeUndefined();
+  });
+
+  it('matches on what the cycle saw, not on the remembered data', async () => {
+    // A claims only a device advertising company 0xffff, B anything. The
+    // second cycle shows none, so both matches must take B, while the session
+    // still gets the remembered data.
+    const a = makeAdapter({
+      name: 'ByCompany',
+      match: { priority: 20, serviceUuids: ['fff0'] },
+      matches: (d: BleDeviceInfo) => d.manufacturerData?.id === 0xffff,
+      parseBroadcast: () => null,
+    } as Partial<ScaleAdapter>);
+    const b = makeAdapter({
+      name: 'Anything',
+      parseBroadcast: () => null,
+    } as Partial<ScaleAdapter>);
+    await cycle({ manufacturerData: ADVERT_1020 }, { adapters: [a, b] });
+    expect(sessionAdapter(0)).toBe('ByCompany');
+    resolvedOn.length = 0;
+    await cycle({}, { adapters: [a, b] });
+    expect(sessionAdapter(1)).toBe('Anything');
+    expect(resolvedOn.length).toBeGreaterThanOrEqual(2);
+    expect(resolvedOn.every((md) => md === undefined)).toBe(true);
+    expect(sessionMfg(1)).toEqual(ADVERT_1020);
   });
 });

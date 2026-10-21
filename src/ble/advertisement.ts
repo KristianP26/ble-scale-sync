@@ -392,12 +392,18 @@ export class ManufacturerDataCache {
     this.byAddress.set(key, md);
   }
 
-  /** The frame's own manufacturer data, else the last one seen for the address. */
+  /**
+   * The frame's own manufacturer data, else the last one seen for the address,
+   * else none. An entry without bytes counts as none, as in `remember`, and is
+   * never handed over: BlueZ can expose a company id with an empty payload.
+   */
   forSession(
     info: { manufacturerData?: ManufacturerData },
     key: string,
   ): ManufacturerData | undefined {
-    return info.manufacturerData ?? this.byAddress.get(key);
+    const own = info.manufacturerData;
+    if (own && own.data.length > 0) return own;
+    return this.byAddress.get(key);
   }
 }
 

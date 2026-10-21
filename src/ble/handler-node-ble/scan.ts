@@ -79,6 +79,7 @@ import {
   type ScanWatch,
 } from './scan-watchdog.js';
 import { logAdvertisementSnapshot } from './device-object.js';
+import { sessionManufacturerData } from './session-advert.js';
 import { wrapDevice } from './gatt.js';
 import { broadcastScanNodeBle } from './broadcast.js';
 import {
@@ -548,7 +549,9 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
     // Advertised name, for adapters whose protocol differs by model.
     let deviceName = '';
     // Advertised manufacturer data, for adapters that read per-unit flags from
-    // it (#461). Captured before StopDiscovery, which can drop it (#297).
+    // it (#461). Captured before StopDiscovery, which can drop it (#297); when
+    // this cycle's snapshot has none, the last one the address advertised in
+    // this run (session-advert.ts, #463).
     let manufacturerData: { id: number; data: Buffer } | undefined;
 
     if (targetMac) {
@@ -600,7 +603,6 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         ));
       }
       deviceName = name;
-      manufacturerData = advert.manufacturerData;
 
       if (
         preMatchedAdapter?.preferPassive &&
@@ -627,6 +629,8 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         advert.serviceData,
       );
       await holdPairing(device, mac, preMatchedAdapter, waitStartedAt);
+      // For the session only, never for the matches above (D071).
+      manufacturerData = sessionManufacturerData(mac, advert);
 
       // Stop discovery before connecting. BlueZ on low-power devices (e.g. Pi Zero)
       // often fails with le-connection-abort-by-local while discovery is still active.
@@ -694,9 +698,12 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
       deviceMac = result.mac;
       deviceName = result.name;
       // The fresher snapshot first; a name-only match may have had none yet
-      // (ADV_IND and SCAN_RSP arrive apart), then the one it matched on.
+      // (ADV_IND and SCAN_RSP arrive apart), then the one it matched on. Only
+      // one with bytes counts, as in session-advert.ts.
       const snapshot = await logAdvertisementSnapshot(device);
-      manufacturerData = snapshot.manufacturerData ?? result.manufacturerData;
+      const sessionAdvert = [snapshot.manufacturerData, result.manufacturerData].find(
+        (md) => md !== undefined && md.data.length > 0,
+      );
 
       // Passive-mode adapters: read from advertisements without connecting.
       if (
@@ -720,6 +727,8 @@ export async function scanAndReadRaw(opts: ScanOptions): Promise<RawReading> {
         snapshot.serviceData,
       );
       await holdPairing(device, result.mac, matchedAdapter, waitStartedAt);
+      // For the session only, never for the match above (D071).
+      manufacturerData = sessionManufacturerData(result.mac, { manufacturerData: sessionAdvert });
 
       // Stop discovery before connecting. BlueZ on low-power devices (e.g. Pi Zero)
       // often fails with le-connection-abort-by-local while discovery is still active.

@@ -73,6 +73,16 @@ If your scale measures impedance and your body fat still looks like a BMI
 estimate, look for that line. The number in it is worth opening an issue with,
 together with what your vendor app reports.
 
+Some QN scales send their impedance scrambled and say so in their
+advertisement, which the app reads before it connects. The advertisement that
+reaches the app does not always carry that part. With the computer's own
+Bluetooth on Linux, the app then uses the one the same scale advertised
+earlier while the app has been running, so in continuous mode and on the Home
+Assistant add-on a connection goes without it only until one has carried it.
+In a single-shot run, which starts afresh each time, nothing is remembered. A
+connection that had none has `QN: no advertisement for this session` in the
+debug log.
+
 ### Body fat fallback (Deurenberg)
 
 When impedance is not available (the scale only measures weight, you stood on it in socks, or it sent 0 or a value outside 150 to 1200 ohm), only **weight**, **BMI**, and **body fat** (estimated) are calculated. The remaining metrics (water, bone, muscle, visceral fat, physique rating) require impedance and will not be available. A weigh-in without impedance still completes and is exported with these values. For ages 15 and under the children's form of the Deurenberg equation is used.
