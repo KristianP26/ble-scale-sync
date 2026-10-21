@@ -317,3 +317,113 @@ describe('noble passes advertised service data to the adapter resolver (B-10)', 
     ).resolves.toMatchObject({ adapter: { name: 'ByServiceData' } });
   });
 });
+
+// #463: both noble drivers fold every report into one Peripheral, and a report
+// without manufacturer data overwrites it with an empty buffer on Windows and
+// macOS. The session gets the last one the address advertised in this run;
+// the resolver keeps what the advertisement shows (D071).
+describe('noble hands a session the manufacturer data its scale advertised earlier (#463, D071)', () => {
+  /** The #463 Physiq's advertisement of 2026-10-20 17:57:58.247 with its company id 0xffff. */
+  const MSD_1020 = Buffer.from('ffff081401000325e0160005ff6108020015', 'hex');
+  const PAYLOAD_1020 = MSD_1020.subarray(2);
+
+  /** A GATT adapter that claims the device by name and notes what its session got. */
+  function recordingAdapter(seen: unknown[], matched: unknown[]): ScaleAdapter {
+    const base = gattAdapter('ByName', (info) => {
+      matched.push(info.manufacturerData);
+      return info.localName === 'QN-Scale';
+    });
+    return {
+      ...base,
+      onConnected: async (ctx: { manufacturerData?: unknown; write: unknown }) => {
+        seen.push(ctx.manufacturerData);
+      },
+    } as unknown as ScaleAdapter;
+  }
+
+  it.each([
+    ['target MAC', MAC.toUpperCase()],
+    ['auto-discovery', undefined],
+  ])(
+    '%s: gives the session the earlier data when the last report had none',
+    async (_label, targetMac) => {
+      const { services } = standardServices(weightOn);
+      const p = new FakePeripheral({ localName: 'QN-Scale', manufacturerData: MSD_1020, services });
+      noble.peripherals = [p];
+      const seen: unknown[] = [];
+      const matched: unknown[] = [];
+      const adapter = recordingAdapter(seen, matched);
+
+      await handler.scanAndReadRaw({ targetMac, adapters: [adapter], profile: PROFILE });
+      // The WinRT binding's buffer for a report without manufacturer data.
+      p.advertisement.manufacturerData = Buffer.alloc(0);
+      matched.length = 0;
+      await handler.scanAndReadRaw({ targetMac, adapters: [adapter], profile: PROFILE });
+
+      expect(seen).toEqual([
+        { id: 0xffff, data: PAYLOAD_1020 },
+        { id: 0xffff, data: PAYLOAD_1020 },
+      ]);
+      expect(matched.length).toBeGreaterThan(0);
+      expect(matched.every((md) => md === undefined)).toBe(true);
+    },
+  );
+
+  it('remembers the data of a cycle whose connect failed', async () => {
+    vi.useFakeTimers();
+    try {
+      const { services } = standardServices(weightOn);
+      const p = new FakePeripheral({
+        localName: 'QN-Scale',
+        manufacturerData: MSD_1020,
+        services,
+        connectFailures: 6,
+      });
+      noble.peripherals = [p];
+      const seen: unknown[] = [];
+      const adapter = recordingAdapter(seen, []);
+      const failed = handler.scanAndReadRaw({ adapters: [adapter], profile: PROFILE }).then(
+        () => 'read',
+        () => 'failed',
+      );
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await failed).toBe('failed');
+      expect(seen).toEqual([]);
+
+      p.advertisement.manufacturerData = Buffer.alloc(0);
+      const read = handler.scanAndReadRaw({ adapters: [adapter], profile: PROFILE });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await read;
+      expect(seen).toEqual([{ id: 0xffff, data: PAYLOAD_1020 }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a session its own data, and another address none', async () => {
+    const { services } = standardServices(weightOn);
+    const p = new FakePeripheral({ localName: 'QN-Scale', manufacturerData: MSD_1020, services });
+    noble.peripherals = [p];
+    const seen: unknown[] = [];
+    const adapter = recordingAdapter(seen, []);
+    await handler.scanAndReadRaw({ adapters: [adapter], profile: PROFILE });
+
+    const own = Buffer.from('ffff081401000125e0160005ff6108010015', 'hex');
+    p.advertisement.manufacturerData = own;
+    await handler.scanAndReadRaw({ adapters: [adapter], profile: PROFILE });
+
+    const other = new FakePeripheral({
+      address: '11:22:33:44:55:66',
+      localName: 'QN-Scale',
+      services: standardServices(weightOn).services,
+    });
+    noble.peripherals = [other];
+    await handler.scanAndReadRaw({ adapters: [adapter], profile: PROFILE });
+
+    expect(seen).toEqual([
+      { id: 0xffff, data: PAYLOAD_1020 },
+      { id: 0xffff, data: own.subarray(2) },
+      undefined,
+    ]);
+  });
+});

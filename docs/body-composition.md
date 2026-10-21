@@ -76,10 +76,11 @@ together with what your vendor app reports.
 Some QN scales send their impedance scrambled and say so in their
 advertisement, which the app reads before it connects. The advertisement that
 reaches the app does not always carry that part. With the computer's own
-Bluetooth on Linux, the app then uses the one the same scale advertised
-earlier while the app has been running, so in continuous mode and on the Home
-Assistant add-on a connection goes without it only until one has carried it.
-In a single-shot run, which starts afresh each time, nothing is remembered. A
+Bluetooth (Linux, Windows, macOS) and through an ESPHome proxy, the app then
+uses the one the same scale advertised earlier while the app has been running,
+so in continuous mode and on the Home Assistant add-on a connection goes
+without it only until one has carried it. Through the ESP32 MQTT proxy, and in
+a single-shot run, which starts afresh each time, nothing is remembered. A
 connection that had none has `QN: no advertisement for this session` in the
 debug log.
 
