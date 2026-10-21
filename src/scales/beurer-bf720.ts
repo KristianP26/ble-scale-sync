@@ -559,7 +559,7 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
           `written, ${provisionedNote}, change increment ${increment}); ` +
           'profile sync finished',
       );
-      if (this.initializeNewProfile && session === this.session && this.ctx === ctx) {
+      if (this.s.initializeNewProfile && session === this.session && this.ctx === ctx) {
         try {
           await ctx.write(CHR_BF500_TAKE_MEASUREMENT, [0x00], true);
           bleLog.info('Beurer BF500: measurement requested; step barefoot on the scale.');
