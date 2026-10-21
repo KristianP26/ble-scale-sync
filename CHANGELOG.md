@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.35.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.34.0...v1.35.0) (2026-10-21)
+
+
+### Added
+
+* **mqtt:** publish the measurement time and a Home Assistant timestamp sensor ([60ab09e](https://github.com/KristianP26/ble-scale-sync/commit/60ab09e8ed796b892f35ef362d4423e62f3c326e))
+* **qn:** use the scale's own BMR and body age on the 19-byte dialect ([e5aff44](https://github.com/KristianP26/ble-scale-sync/commit/e5aff44f27aa4aebf3513e485df2f0e6426346dc))
+
+
+### Fixed
+
+* **ble:** count node-ble's waitDevice timeout as the MAC no-show ([3074b26](https://github.com/KristianP26/ble-scale-sync/commit/3074b26c3c9cdb10d3d9b703d9ef8e7930149658))
+* **ble:** give a noble session the manufacturer data its scale advertised earlier in the run ([41d7fbb](https://github.com/KristianP26/ble-scale-sync/commit/41d7fbb90c22a174f9c844934982f3c541ccf3d9))
+* **ble:** give a node-ble session the manufacturer data its scale advertised earlier in the run ([3deb5d7](https://github.com/KristianP26/ble-scale-sync/commit/3deb5d73dc8e74d633b1e6a59a9cfcade8c277b4))
+* **ble:** treat the reconnects to a scale that stays on as one window ([4372ee4](https://github.com/KristianP26/ble-scale-sync/commit/4372ee4720a20762ada7f0d3a27530d26abb2f39))
+* **config:** keep the startup noble driver across a config reload ([66acf20](https://github.com/KristianP26/ble-scale-sync/commit/66acf208de33fdbfb46a405877c4de2d84405a19))
+* **config:** report ble.mqtt_proxy.auto_connect as restart-required ([c8dacfe](https://github.com/KristianP26/ble-scale-sync/commit/c8dacfe90068022ca2454f62b3b9ef40252c7f98))
+* **config:** warn that a runtime.watch_config edit needs a restart ([8ffcdd2](https://github.com/KristianP26/ble-scale-sync/commit/8ffcdd2160f12eff7d2e051a1cd680ff12dcde8c))
+* **qn:** export a stored weigh-in the 18-byte scale kept for no user ([7f50115](https://github.com/KristianP26/ble-scale-sync/commit/7f50115a4390a26e00f25f7513ce2e2a9b8204e7))
+* **qn:** read an 18-byte impedance only a scrambled body gives unscrambled when no advertisement came ([3558a06](https://github.com/KristianP26/ble-scale-sync/commit/3558a060e8507f80db38d4cb117e6aa4b1764e18))
+* **runtime:** keep the dedup marks file when it cannot be read ([3eaa407](https://github.com/KristianP26/ble-scale-sync/commit/3eaa40709135b851d41d1dcaedc2618e3545342a))
+* **runtime:** keep the exporter slot across a config reload ([988adcc](https://github.com/KristianP26/ble-scale-sync/commit/988adcc2e549d9ba3d78113a0c691eec3f09c2fc))
+* **yunmai:** stop the reply to the unlock from holding a session open ([c12706a](https://github.com/KristianP26/ble-scale-sync/commit/c12706a5b91346f270042b64e8e32627e20a7506))
+
+
+### Docs
+
+* **addon:** say the MQTT sensors are always in kg and where the payload goes ([d72acfa](https://github.com/KristianP26/ble-scale-sync/commit/d72acfa34aa6225ec0e24cdaaf31a246cf689aa1))
+* **config:** say a single-shot mqtt-proxy run honours session_timeout_sec ([b958c53](https://github.com/KristianP26/ble-scale-sync/commit/b958c533befcec7f348d5bb53fb2d6b7810f6551))
+* **scales:** say the Yunmai Mini 2 impedance and body fat are confirmed on hardware ([24c59f6](https://github.com/KristianP26/ble-scale-sync/commit/24c59f601c5bd2f89b5d8c5c62303b71a16140b8))
+
 ## [1.34.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.33.0...v1.34.0) (2026-10-20)
 
 
