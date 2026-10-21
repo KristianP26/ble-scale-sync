@@ -225,7 +225,7 @@ describe('RenphoMsc04Adapter', () => {
       expect(adapter.parseCharNotification(IND, REC_1)).toBeNull();
       expect(adapter.parseCharNotification(IND, REC_2)).toBeNull();
       const r = adapter.parseCharNotification(IND, REC_3);
-      expect(r).toEqual({ weight: 95.55, impedance: 0 });
+      expect(r).toEqual({ weight: 95.55, impedance: 0, scaleComposition: expect.any(Object) });
       expect(adapter.isComplete(r!)).toBe(true);
       expect(adapter.isFinal(r!)).toBe(true);
     });
@@ -1009,7 +1009,7 @@ describe('RenphoMsc04Adapter 0x25 record without a settled weight (#434, D057)',
   it('takes the record as the reading in a session that starts at weight locked', () => {
     const adapter = fresh();
     const r = feed(adapter, [STATUS_LOCKED, STATUS_DONE, ...RECORD]);
-    expect(r).toEqual({ weight: 95.55, impedance: 0 });
+    expect(r).toEqual({ weight: 95.55, impedance: 0, scaleComposition: expect.any(Object) });
     expect(adapter.isComplete(r!)).toBe(true);
     expect(adapter.isFinal(r!)).toBe(true);
   });
@@ -1017,7 +1017,7 @@ describe('RenphoMsc04Adapter 0x25 record without a settled weight (#434, D057)',
   it('takes it in a session that starts at measurement complete', () => {
     const adapter = fresh();
     const r = feed(adapter, [STATUS_DONE, ...RECORD]);
-    expect(r).toEqual({ weight: 95.55, impedance: 0 });
+    expect(r).toEqual({ weight: 95.55, impedance: 0, scaleComposition: expect.any(Object) });
     expect(adapter.isComplete(r!)).toBe(true);
   });
 
@@ -1026,7 +1026,7 @@ describe('RenphoMsc04Adapter 0x25 record without a settled weight (#434, D057)',
     // had a stored record. Here the capture's frames without its 0x21 and 0x24.
     const adapter = fresh();
     const r = feed(adapter, [STATUS_MEASURING, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
-    expect(r).toEqual({ weight: 95.55, impedance: 0 });
+    expect(r).toEqual({ weight: 95.55, impedance: 0, scaleComposition: expect.any(Object) });
     expect(adapter.isComplete(r!)).toBe(true);
   });
 
@@ -1068,7 +1068,7 @@ describe('RenphoMsc04Adapter 0x25 record without a settled weight (#434, D057)',
     feed(adapter, [hexFrame(C_STATUS_LOCKED)]);
     adapter.onSessionStart();
     const r = feed(adapter, [STATUS_LOCKED, STATUS_DONE, ...RECORD]);
-    expect(r).toEqual({ weight: 95.55, impedance: 0 });
+    expect(r).toEqual({ weight: 95.55, impedance: 0, scaleComposition: expect.any(Object) });
     expect(adapter.isComplete(r!)).toBe(true);
     expect(adapter.isFinal(r!)).toBe(true);
   });

@@ -9,12 +9,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import {
-  uuid16,
-  buildPayload,
-  type ScaleBodyComp,
-  ReadingComposition,
-} from './body-comp-helpers.js';
+import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
 import { bleLog, LBS_TO_KG, normalizeUuid } from '../ble/types.js';
 import { parseSigDateTime, parseSigWeightMeasurement, trustedScaleTime } from './sig-wss.js';
 import type { MatchDescriptor } from './match-descriptor.js';
@@ -264,12 +259,6 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
    * four lines on every cycle, forever.
    */
   private readonly warnedFields = new Set<string>();
-  /**
-   * Composition pinned to the reading it was measured with (#394). See
-   * ReadingComposition for why computeMetrics cannot read the live cache on
-   * the watcher transports.
-   */
-  private readonly compByReading = new ReadingComposition<CachedComp>();
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
@@ -939,15 +928,13 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     const reading: ScaleReading = {
       weight: this.s.cachedWeight,
       impedance: this.s.cachedComp.impedance ?? 0,
+      // A snapshot: computeMetrics() runs once the session has resolved, when the
+      // live cachedComp holds whatever came LAST, not what this reading was built
+      // from (#394).
+      scaleComposition: { ...this.s.cachedComp },
     };
     if (this.s.cachedTimestamp) reading.timestamp = this.s.cachedTimestamp;
     if (this.s.cachedUserIndex !== undefined) reading.userIndex = this.s.cachedUserIndex;
-    // Snapshot the composition onto this specific reading. computeMetrics() runs
-    // much later (the processor calls it per buffered frame once the session has
-    // resolved), so reading the live cachedComp there would hand every history
-    // entry whatever happened to be cached at the END of the session. With a
-    // snapshot each reading keeps the composition it was actually built from.
-    this.compByReading.pin(reading, { ...this.s.cachedComp });
     this.s.readingEmitted = true;
     return reading;
   }
@@ -961,7 +948,7 @@ export class BeurerBf720Adapter implements ScaleAdapterCore, GattWiring, MultiCh
     // Per-reading snapshot taken in buildReading(). Falling back to the live
     // cache keeps direct callers (and tests) working for a reading this adapter
     // did not build.
-    const c = this.compByReading.of(reading, this.s.cachedComp);
+    const c = (reading.scaleComposition as CachedComp | undefined) ?? this.s.cachedComp;
     const comp: ScaleBodyComp = {};
 
     if (c.fat != null) comp.fat = c.fat;

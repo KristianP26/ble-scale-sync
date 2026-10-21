@@ -12,7 +12,6 @@ import {
   uuid16,
   buildPayload,
   xorChecksum,
-  ReadingComposition,
   WEIGHT_ONLY_HOLD_MS,
   type ScaleBodyComp,
 } from './body-comp-helpers.js';
@@ -46,13 +45,6 @@ export class ExcelvanCF369Adapter implements ScaleAdapterCore, GattWiring, HoldF
   readonly charWriteUuid = CHR_WRITE;
 
   private s = new ExcelvanSession();
-  /**
-   * Composition pinned to the reading it was measured with (#394): this adapter
-   * is a shared singleton and `computeMetrics()` runs later than the parse, so
-   * on the watcher transports the live cache can already belong to the next
-   * weigh-in. See ReadingComposition.
-   */
-  private readonly comp = new ReadingComposition<ScaleBodyComp>();
 
   /**
    * Send user-config command with real profile data:
@@ -92,7 +84,7 @@ export class ExcelvanCF369Adapter implements ScaleAdapterCore, GattWiring, HoldF
    *   [11]     visceral fat rating
    *   [12-13]  water %, big-endian uint16 / 10
    */
-  parseNotification(data: Buffer): ScaleReading | null {
+  parseNotification(data: Buffer): ScaleReading<ScaleBodyComp> | null {
     if (data.length < 14 || data[0] !== 0xcf) return null;
 
     const weight = data.readUInt16BE(4) / 10;
@@ -114,9 +106,7 @@ export class ExcelvanCF369Adapter implements ScaleAdapterCore, GattWiring, HoldF
       water: data[6] !== 0xff ? water : undefined,
     };
 
-    const reading: ScaleReading = { weight, impedance: 0 };
-    this.comp.pin(reading, this.s.cachedComp);
-    return reading;
+    return { weight, impedance: 0, scaleComposition: this.s.cachedComp };
   }
 
   /**
@@ -135,8 +125,8 @@ export class ExcelvanCF369Adapter implements ScaleAdapterCore, GattWiring, HoldF
 
   readonly completionHoldMs = WEIGHT_ONLY_HOLD_MS;
 
-  isFinal(reading: ScaleReading): boolean {
-    const fat = this.comp.of(reading, this.s.cachedComp).fat;
+  isFinal(reading: ScaleReading<ScaleBodyComp>): boolean {
+    const fat = (reading.scaleComposition ?? this.s.cachedComp).fat;
     return fat != null && fat > 0;
   }
 
@@ -144,11 +134,11 @@ export class ExcelvanCF369Adapter implements ScaleAdapterCore, GattWiring, HoldF
     this.s = new ExcelvanSession();
   }
 
-  computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
+  computeMetrics(reading: ScaleReading<ScaleBodyComp>, profile: UserProfile): BodyComposition {
     return buildPayload(
       reading.weight,
       reading.impedance,
-      this.comp.of(reading, this.s.cachedComp),
+      reading.scaleComposition ?? this.s.cachedComp,
       profile,
     );
   }

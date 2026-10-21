@@ -111,20 +111,32 @@ describe('X-11: a session on a used instance behaves like one on a fresh instanc
  * keyed on the reading object, so a copy of the reading gets another payload.
  * Fixing them is A-02's work; until then the test runs as an expected failure
  * and turns red once one is fixed.
+ *
+ * The copy is computed only after the next session has run, as on the watcher
+ * transports (#394): right after its own session the adapter's live cache
+ * still holds the same weigh-in, and a fallback to it would pass unnoticed.
  */
 describe('A-02: computeMetrics of a copied reading gives the same payload', () => {
   for (const name of new Set(fixtures.map((f) => f.adapter))) {
     const known = fixtures.find((f) => f.adapter === name && f.identityBound)?.identityBound;
     (known ? it.fails : it)(`${name}${known ? ` (fails today: ${known})` : ''}`, async () => {
       for (const f of fixtures.filter((x) => x.adapter === name)) {
-        for (const trace of Object.values(f.traces)) {
+        const names = Object.keys(f.traces);
+        for (const [i, trace] of names.entries()) {
           const a = freshAdapter(f);
-          const r = await replaySession(a, trace, f);
+          const r = await replaySession(a, f.traces[trace], f);
           const profile = f.profile ?? defaultProfile();
-          for (const reading of [r.reading, ...r.history].filter((x) => x !== null)) {
-            const copy = structuredClone(reading);
-            expect(a.computeMetrics(copy, profile)).toEqual(a.computeMetrics(reading, profile));
+          const readings = [r.reading, ...r.history].filter((x) => x !== null);
+          const originals = readings.map((x) => a.computeMetrics(x, profile));
+          const copies = readings.map((x) => structuredClone(x));
+          const next = names[(i + 1) % names.length];
+          if (next !== trace) {
+            await replaySession(a, f.traces[next], f);
+          } else {
+            a.onSessionEnd?.();
+            a.onSessionStart?.();
           }
+          expect(copies.map((c) => a.computeMetrics(c, profile))).toEqual(originals);
         }
       }
     });

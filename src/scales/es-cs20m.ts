@@ -330,12 +330,6 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
   readonly charWriteUuid = CHR_WRITE;
 
   private s = new EsCs20mSession();
-  /**
-   * Readings taken from an accepted 0x18: only their resistance drives BIA.
-   * Keyed by the reading, as computeMetrics can run after the next session has
-   * started (#394), so never cleared.
-   */
-  private readonly resultReadings = new WeakSet<ScaleReading>();
 
   /**
    * The session's context, captured for the writes a power-on frame triggers.
@@ -520,8 +514,8 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
       );
     }
     const impedance = data.readUInt16BE(12);
-    this.s.result = { weight, impedance };
-    this.resultReadings.add(this.s.result);
+    // Only an accepted 0x18's resistance drives BIA; the mark travels with the reading (#394).
+    this.s.result = { weight, impedance, scaleComposition: 'bia' };
     // BMI and body fat stay out of this line; the raw frame is already in the
     // notification debug log.
     bleLog.debug(
@@ -655,9 +649,10 @@ export class EsCs20mAdapter implements ScaleAdapterCore, GattWiring, HoldForComp
    */
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
     const comp: ScaleBodyComp = {
-      fat: this.resultReadings.has(reading)
-        ? biaFatIfPlausible(reading.weight, reading.impedance, profile)
-        : undefined,
+      fat:
+        reading.scaleComposition === 'bia'
+          ? biaFatIfPlausible(reading.weight, reading.impedance, profile)
+          : undefined,
     };
     return buildPayload(reading.weight, reading.impedance, comp, profile);
   }

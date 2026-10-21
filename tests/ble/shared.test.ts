@@ -1820,7 +1820,11 @@ describe('waitForRawReading() with a forced, nameless Yunmai (#474)', () => {
       );
 
       notifyChar.triggerData(FINAL);
-      expect((await promise).reading).toEqual({ weight: 80, impedance: 470 });
+      expect((await promise).reading).toEqual({
+        weight: 80,
+        impedance: 470,
+        scaleComposition: 25.5,
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -1889,7 +1893,11 @@ describe('waitForRawReading() with a forced, nameless Yunmai (#474)', () => {
       }
       expect(failure).toBeNull();
       notifyChar.triggerData(FINAL);
-      expect((await promise).reading).toEqual({ weight: 80, impedance: 470 });
+      expect((await promise).reading).toEqual({
+        weight: 80,
+        impedance: 470,
+        scaleComposition: 25.5,
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -2435,7 +2443,11 @@ describe('R-MSC04 composition hold through waitForRawReading (#434)', () => {
 
       s.indicate.triggerData(hex('af0400ed011101b70008ea'));
       const raw = await s.promise;
-      expect(raw.reading).toEqual({ weight: 95.55, impedance: 0 });
+      expect(raw.reading).toEqual({
+        weight: 95.55,
+        impedance: 0,
+        scaleComposition: expect.any(Object),
+      });
       expect(s.adapter.isFinal(raw.reading)).toBe(true);
       // The record was computed for the guest b2 we wrote, so its body fat is
       // not exported (D038): the estimate, although PROFILE_187 passes the
@@ -2550,7 +2562,11 @@ describe('R-MSC04 composition hold through waitForRawReading (#434)', () => {
       expect(s.isSettled(), 'the record must end the session').toBe(true);
 
       const raw = await s.promise;
-      expect(raw.reading).toEqual({ weight: 95.55, impedance: 0 });
+      expect(raw.reading).toEqual({
+        weight: 95.55,
+        impedance: 0,
+        scaleComposition: expect.any(Object),
+      });
       expect(s.adapter.isFinal(raw.reading)).toBe(true);
       // Our guest b2 went out, so the estimate (D038).
       expect(s.adapter.computeMetrics(raw.reading, PROFILE_187)).toEqual(
@@ -2790,7 +2806,11 @@ describe('QN 19-byte dialect hold through waitForRawReading (#331)', () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(s.isSettled()).toBe(true);
       const raw = await s.promise;
-      expect(raw.reading).toEqual({ weight: 76.55, impedance: 0 });
+      expect(raw.reading).toEqual({
+        weight: 76.55,
+        impedance: 0,
+        scaleComposition: expect.any(Object),
+      });
       expect(s.adapter.isFinal(raw.reading)).toBe(true);
       expect(raw.history ?? []).toEqual([]);
     } finally {
@@ -3608,7 +3628,11 @@ describe('ES-CS20M on an AE00 unit through waitForRawReading (#436)', () => {
       expect(s.isSettled()).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       expect(s.isSettled()).toBe(true);
-      expect((await s.promise).reading).toEqual({ weight: 139.1, impedance: 470 });
+      expect((await s.promise).reading).toEqual({
+        weight: 139.1,
+        impedance: 470,
+        scaleComposition: 'bia',
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -3656,7 +3680,11 @@ describe('ES-CS20M on an AE00 unit through waitForRawReading (#436)', () => {
       await s.play([[1, POWER_OFF]]);
       await vi.advanceTimersByTimeAsync(0);
       expect(s.isSettled()).toBe(true);
-      expect((await s.promise).reading).toEqual({ weight: 139.1, impedance: 404 });
+      expect((await s.promise).reading).toEqual({
+        weight: 139.1,
+        impedance: 404,
+        scaleComposition: 'bia',
+      });
     } finally {
       vi.useRealTimers();
     }

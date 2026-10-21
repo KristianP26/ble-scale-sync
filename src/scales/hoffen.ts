@@ -7,13 +7,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import {
-  uuid16,
-  buildPayload,
-  xorChecksum,
-  type ScaleBodyComp,
-  ReadingComposition,
-} from './body-comp-helpers.js';
+import { uuid16, buildPayload, xorChecksum, type ScaleBodyComp } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 import { bleLog } from '../ble/types.js';
 
@@ -59,13 +53,6 @@ export class HoffenAdapter implements ScaleAdapterCore, GattWiring {
 
   private s = new HoffenSession();
 
-  /**
-   * Composition pinned to the reading it was measured with (#394). See
-   * ReadingComposition for why computeMetrics cannot read the live cache on
-   * the watcher transports.
-   */
-  private readonly compByReading = new ReadingComposition<ScaleBodyComp>();
-
   matches(device: BleDeviceInfo): boolean {
     return matchesDescriptor(device, this.match);
   }
@@ -84,7 +71,7 @@ export class HoffenAdapter implements ScaleAdapterCore, GattWiring {
     await ctx.write(this.charWriteUuid, cmd, false);
   }
 
-  parseNotification(data: Buffer): ScaleReading | null {
+  parseNotification(data: Buffer): ScaleReading<ScaleBodyComp> | null {
     if (data.length < 5 || data[0] !== 0xfa) return null;
 
     // Byte [1] is a response code, and 0xFA plainly has several: onConnected
@@ -119,9 +106,7 @@ export class HoffenAdapter implements ScaleAdapterCore, GattWiring {
       this.s.cachedVisceral = data.readUInt16LE(17) / 10;
     }
 
-    const reading: ScaleReading = { weight, impedance: 0 };
-    this.compByReading.pin(reading, this.snapshot());
-    return reading;
+    return { weight, impedance: 0, scaleComposition: this.snapshot() };
   }
 
   private snapshot(): ScaleBodyComp {
@@ -142,11 +127,11 @@ export class HoffenAdapter implements ScaleAdapterCore, GattWiring {
     return reading.weight > 0;
   }
 
-  computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
+  computeMetrics(reading: ScaleReading<ScaleBodyComp>, profile: UserProfile): BodyComposition {
     // Per-reading snapshot taken in parseNotification(). The live cache is only
     // a fallback for a reading this adapter did not build (direct callers,
-    // tests); see the compByReading field comment for why it cannot be trusted.
-    const comp = this.compByReading.of(reading, this.snapshot());
+    // tests); see `ScaleReading.scaleComposition` for why it cannot be trusted.
+    const comp = reading.scaleComposition ?? this.snapshot();
     return buildPayload(reading.weight, reading.impedance, comp, profile);
   }
 }

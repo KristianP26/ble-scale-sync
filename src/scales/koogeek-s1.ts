@@ -8,7 +8,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, biaFatIfPlausible, xorChecksum } from './body-comp-helpers.js';
+import { uuid16, xorChecksum, biaPayload } from './body-comp-helpers.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
 const CHR_NOTIFY = uuid16(0xfff4);
@@ -177,7 +177,6 @@ export class KoogeekS1Adapter
     // the 60 % ceiling and publishes it as a confident number (#405). Rejected
     // means the Deurenberg estimate, which is what this adapter published
     // before the impedance was read at all.
-    const fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
-    return buildPayload(reading.weight, reading.impedance, { fat }, profile);
+    return biaPayload(reading, profile);
   }
 }

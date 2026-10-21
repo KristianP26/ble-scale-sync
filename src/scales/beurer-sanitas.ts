@@ -9,12 +9,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import {
-  uuid16,
-  buildPayload,
-  biaFatIfPlausible,
-  ReadingComposition,
-} from './body-comp-helpers.js';
+import { uuid16, buildPayload, biaFatIfPlausible } from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
@@ -129,8 +124,6 @@ export class BeurerSanitasScaleAdapter
     return this.isBf710Type ? [0xe7, 0x01] : [0xf7, 0x01];
   }
   private cachedComp: CachedComp | null = null;
-  /** Composition as it stood when each reading was emitted; see `emit()`. */
-  private readonly compByReading = new ReadingComposition<CachedComp | null>();
 
   /** Per-frame ACK echoing bytes [1..3]; BF710/SBF70 gate the 0x59 stream on it. */
   buildAck(data: Buffer): number[] | null {
@@ -327,20 +320,17 @@ export class BeurerSanitasScaleAdapter
   }
 
   /**
-   * Build a reading and pin the composition that produced it onto it.
+   * Build a reading that carries the composition that produced it.
    *
    * `computeMetrics()` runs LATER than the parse that built the reading, and
    * the very next parse nulls `cachedComp`. On the watcher transports
    * (mqtt-proxy, esphome-proxy) that next parse can belong to the NEXT session:
    * `loop.ts` awaits `processReading()` - network exports included - while the
    * watcher is free to open another GATT session. Reading the live cache in
-   * `computeMetrics` would then hand the completed reading a null. Weak so the
-   * processor dropping a reading frees the snapshot.
+   * `computeMetrics` would then hand the completed reading a null.
    */
   private emit(weight: number, impedance: number): ScaleReading {
-    const reading: ScaleReading = { weight, impedance };
-    this.compByReading.pin(reading, this.cachedComp ? { ...this.cachedComp } : null);
-    return reading;
+    return { weight, impedance, scaleComposition: this.cachedComp ? { ...this.cachedComp } : null };
   }
 
   /**
@@ -376,12 +366,12 @@ export class BeurerSanitasScaleAdapter
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    // Per-reading snapshot taken in emit(). `has` rather than `??`, because a
-    // null snapshot ("this reading carried no composition") is a real answer
-    // and must not fall through to the live cache. The fallback is only for a
-    // reading this adapter did not build (direct callers, tests).
-    const snapshot = this.compByReading.of(reading, this.cachedComp);
-    const comp = snapshot ?? {};
+    // Snapshot taken in emit(). A null one ("this reading carried no
+    // composition") is a real answer and must not fall through to the live
+    // cache, which is only for a reading this adapter did not build (direct
+    // callers, tests).
+    const own = reading.scaleComposition as CachedComp | null | undefined;
+    const comp = (own === undefined ? this.cachedComp : own) ?? {};
     // The scale's own figure wins when it sent one. Where it did not, the
     // impedance this adapter already parsed is used rather than thrown away
     // (#386). On the normal path the two arrive together, so this mostly

@@ -279,10 +279,10 @@ function parseNineteenByteResultFrame(q: QnScaleAdapter, data: Buffer): ScaleRea
 }
 
 /**
- * Pin the scale's own results for this weigh-in to its reading, when the
+ * Put the scale's own results for this weigh-in on its reading, when the
  * result block, 0x15 and 0x16 all decode and the block carries a
  * measurement: the scale sends an all-zero block when it has none (#331).
- * Snapshot at emit time, see ReadingComposition.
+ * Snapshot at emit time (#394).
  */
 function pinScaleComposition(q: QnScaleAdapter, reading: ScaleReading, d16: Buffer): void {
   const [p1, p2, p3] = q.s.live20Block;
@@ -323,7 +323,7 @@ function pinScaleComposition(q: QnScaleAdapter, reading: ScaleReading, d16: Buff
         'exported in kg (#331)',
     );
   }
-  q.scaleComposition.pin(reading, {
+  reading.scaleComposition = {
     result,
     composition,
     visit: q.s.visitSent,
@@ -332,7 +332,7 @@ function pinScaleComposition(q: QnScaleAdapter, reading: ScaleReading, d16: Buff
     measuredAfterVisit: q.s.measuredAfterVisit,
     answerAfterVisitMs: q.s.answerAfterVisitMs,
     a4PreludeSent: q.s.a4PreludeSent,
-  });
+  } satisfies ScaleCompositionPin;
 }
 
 /**

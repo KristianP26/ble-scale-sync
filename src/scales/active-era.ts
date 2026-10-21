@@ -17,7 +17,6 @@ import {
   uuid16,
   buildPayload,
   isPlausibleImpedance,
-  ReadingComposition,
   WEIGHT_ONLY_HOLD_MS,
 } from './body-comp-helpers.js';
 import { wla07 } from './wla07.js';
@@ -261,11 +260,6 @@ export class ActiveEraAdapter
   private live = new WeakSet<ScaleReading>();
   /** Locked or steady weights: complete, but the D6 may still follow. */
   private held = new WeakSet<ScaleReading>();
-  /**
-   * The D6 `[17]` byte (body composition algorithm), pinned to the reading it
-   * came with, not kept as live state (#394).
-   */
-  private readonly algorithm = new ReadingComposition<number | undefined>();
 
   /**
    * The BS-06 name, or the AC 27 advertisement (#458, #462, #466).
@@ -437,9 +431,8 @@ export class ActiveEraAdapter
           : ' (below the 1500 correction gate)') +
         `, weight ${kg} kg from the ${source} (#386)`,
     );
-    const reading: ScaleReading = { weight: kg, impedance: imp };
-    this.algorithm.pin(reading, d[17]);
-    return reading;
+    // The D6 `[17]` byte (composition algorithm) travels with its reading (#394).
+    return { weight: kg, impedance: imp, scaleComposition: d[17] };
   }
 
   onSessionStart(): void {
@@ -486,8 +479,12 @@ export class ActiveEraAdapter
    * the plausible band to 0 (D028), and 0 falls back to the estimate.
    */
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    const alg = this.algorithm.of(reading, undefined);
-    if (alg !== undefined && WLA07_ALGORITHMS.has(alg) && isPlausibleImpedance(reading.impedance)) {
+    const alg = reading.scaleComposition;
+    if (
+      typeof alg === 'number' &&
+      WLA07_ALGORITHMS.has(alg) &&
+      isPlausibleImpedance(reading.impedance)
+    ) {
       const c = wla07({
         weightKg: reading.weight,
         heightCm: wholeCm(profile.height),

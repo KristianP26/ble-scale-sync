@@ -119,9 +119,6 @@ export interface ProcessReadingOpts {
  * adapter computes anything. 0 is the contract's "no impedance": the adapter
  * then has to produce the BMI estimate, unless the scale measured the
  * composition itself (D028).
- *
- * In place on purpose: adapters pin their decoded composition to the reading
- * OBJECT (`ReadingComposition`), so a copy would lose it.
  */
 function computeFrameMetrics(
   adapter: ScaleAdapter,

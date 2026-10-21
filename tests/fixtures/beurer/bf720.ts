@@ -51,9 +51,6 @@ export const session: SessionFixture = {
   adapter: 'Beurer BF720/BF105',
   ...BF720_SETUP,
   scaleAuth: { pin: 1234, userIndex: 1 },
-  identityBound:
-    'A-02, the composition is pinned to the reading object (compByReading) and onSessionEnd ' +
-    'empties cachedComp, so a copy of the reading gets no scale composition',
   traces: {
     // Times from "consent sent" (12:28:30.876). The scale never answers the
     // consent here and sends a stored weigh-in at once.

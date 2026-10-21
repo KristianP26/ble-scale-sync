@@ -11,12 +11,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import {
-  uuid16,
-  buildPayload,
-  ReadingComposition,
-  type ScaleBodyComp,
-} from './body-comp-helpers.js';
+import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 import { bleLog, errMsg } from '../ble/types.js';
 import { build55aaFrame, frameFault, sum8 } from './renpho-55aa.js';
@@ -147,7 +142,7 @@ interface CompositionRecord {
   impedance100kHz: number[];
 }
 
-/** A record pinned to its reading, and whether our guest b2 went out in that session. */
+/** A record on the reading it completed, and whether our guest b2 went out in that session. */
 interface PinnedRecord {
   rec: CompositionRecord;
   guestProfile: boolean;
@@ -539,12 +534,6 @@ export class RenphoMsc04Adapter
   ];
 
   private s = new Msc04Session();
-  /**
-   * The record pinned to the reading it completed (#394): this adapter is a
-   * shared singleton, and on the watcher transports the next session can start
-   * before computeMetrics() runs for this one.
-   */
-  private readonly records = new ReadingComposition<PinnedRecord | null>();
 
   /** Log the unsendable time zone once per adapter instance (one per process in production). */
   private zoneLogged = false;
@@ -843,8 +832,8 @@ export class RenphoMsc04Adapter
     const weight = this.s.finalReceived ? this.weightFromFinal(rec) : this.weightFromRecord(rec);
     if (weight === null) return null;
 
-    const reading: ScaleReading = { weight, impedance: 0 };
-    this.records.pin(reading, { rec, guestProfile: this.s.guestProfileSent });
+    const record: PinnedRecord = { rec, guestProfile: this.s.guestProfileSent };
+    const reading: ScaleReading = { weight, impedance: 0, scaleComposition: record };
     this.s.diag.record = 'used';
     bleLog.info(
       `Renpho R-MSC04: body composition received (fat ${rec.fatPercent} %, ` +
@@ -924,11 +913,11 @@ export class RenphoMsc04Adapter
 
   /** Final only once a 0x25 record completed the reading, with or without a 0x24. */
   isFinal(reading: ScaleReading): boolean {
-    return this.records.of(reading, null) !== null;
+    return reading.scaleComposition != null;
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
-    const pinned = this.records.of(reading, null);
+    const pinned = reading.scaleComposition as PinnedRecord | undefined;
     if (!pinned) return buildPayload(reading.weight, 0, {}, profile);
     if (pinned.guestProfile) {
       bleLog.info(

@@ -138,7 +138,7 @@ describe('force_scale_adapter', () => {
     forced.parseNotification?.(frame('55aa11000a010201000000000000001e'));
     forced.parseNotification?.(frame('55aa14000700000036560000a6'));
     const result = forced.parseNotification?.(frame('55aa18000d0101090000365601940000000050'));
-    expect(result).toEqual({ weight: 139.1, impedance: 404 });
+    expect(result).toEqual({ weight: 139.1, impedance: 404, scaleComposition: 'bia' });
     expect(forced.completionHoldMs).toBe(30_000);
     expect(forced.isFinal?.(result!)).toBe(false);
 

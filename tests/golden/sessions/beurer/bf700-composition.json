@@ -5,7 +5,13 @@
   },
   "reading": {
     "weight": 80,
-    "impedance": 500
+    "impedance": 500,
+    "scaleComposition": {
+      "fat": 22.5,
+      "water": 55,
+      "muscle": 40,
+      "bone": 3
+    }
   },
   "history": [],
   "subscribes": [

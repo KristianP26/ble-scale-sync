@@ -7,12 +7,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import {
-  uuid16,
-  buildPayload,
-  ReadingComposition,
-  type ScaleBodyComp,
-} from './body-comp-helpers.js';
+import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
 const CHR_NOTIFY = uuid16(0xfff4);
@@ -44,13 +39,6 @@ export class HesleyScaleAdapter implements ScaleAdapterCore, GattWiring, Unlocka
   readonly unlockIntervalMs = 0;
 
   private s = new HesleySession();
-  /**
-   * Composition pinned to the reading it was measured with (#394): this adapter
-   * is a shared singleton and `computeMetrics()` runs later than the parse, so
-   * on the watcher transports the live cache can already belong to the next
-   * weigh-in. See ReadingComposition.
-   */
-  private readonly comp = new ReadingComposition<ScaleBodyComp>();
 
   matches(device: BleDeviceInfo): boolean {
     return matchesDescriptor(device, this.match);
@@ -69,7 +57,7 @@ export class HesleyScaleAdapter implements ScaleAdapterCore, GattWiring, Unlocka
    *   [12-13]  bone mass (kg), big-endian uint16 / 10
    *   [14-19]  (remaining bytes)
    */
-  parseNotification(data: Buffer): ScaleReading | null {
+  parseNotification(data: Buffer): ScaleReading<ScaleBodyComp> | null {
     if (data.length < 14) return null;
 
     const weight = data.readUInt16BE(2) / 100;
@@ -87,9 +75,7 @@ export class HesleyScaleAdapter implements ScaleAdapterCore, GattWiring, Unlocka
       bone: bone > 0 ? bone : undefined,
     };
 
-    const reading: ScaleReading = { weight, impedance: 0 };
-    this.comp.pin(reading, this.s.cachedComp);
-    return reading;
+    return { weight, impedance: 0, scaleComposition: this.s.cachedComp };
   }
 
   isComplete(reading: ScaleReading): boolean {
@@ -100,11 +86,11 @@ export class HesleyScaleAdapter implements ScaleAdapterCore, GattWiring, Unlocka
     this.s = new HesleySession();
   }
 
-  computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
+  computeMetrics(reading: ScaleReading<ScaleBodyComp>, profile: UserProfile): BodyComposition {
     return buildPayload(
       reading.weight,
       reading.impedance,
-      this.comp.of(reading, this.s.cachedComp),
+      reading.scaleComposition ?? this.s.cachedComp,
       profile,
     );
   }

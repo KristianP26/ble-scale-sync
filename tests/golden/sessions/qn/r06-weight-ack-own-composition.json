@@ -5,7 +5,81 @@
   },
   "reading": {
     "weight": 76.85,
-    "impedance": 0
+    "impedance": 0,
+    "scaleComposition": {
+      "result": {
+        "slot": 1,
+        "weight": 76.85,
+        "original": [
+          326.2,
+          246.2,
+          318.6,
+          239.3,
+          245.4,
+          216.9,
+          255.4,
+          228.5,
+          36.2,
+          59.4
+        ],
+        "adjusted": [
+          326.2,
+          246.2,
+          318.6,
+          239.3,
+          245.4,
+          216.9,
+          255.4,
+          228.5,
+          37.2,
+          33.3
+        ],
+        "fatPercent": 18,
+        "heartRate": 0
+      },
+      "composition": {
+        "bmi": 23.5,
+        "water": 59.1,
+        "muscle": 77.9,
+        "visceral": 6,
+        "bodyAge": 48,
+        "bmr": 1730,
+        "protein": 18.6,
+        "heartIndex": 0,
+        "bone": 4.2,
+        "lbm": 82,
+        "subcutaneousFat": 16.1,
+        "skeletalMuscle": 53,
+        "score": 92.1,
+        "bodyShape": 4
+      },
+      "visit": {
+        "slot": 1,
+        "frame": [
+          160,
+          13,
+          2,
+          1,
+          3,
+          232,
+          0,
+          40,
+          7,
+          18,
+          4,
+          2,
+          226
+        ]
+      },
+      "reply": {
+        "slot": 1,
+        "ok": true
+      },
+      "valueType": 1,
+      "measuredAfterVisit": true,
+      "answerAfterVisitMs": 8170,
+      "a4PreludeSent": false
+    }
   },
   "history": [],
   "subscribes": [

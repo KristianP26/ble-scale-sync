@@ -1,9 +1,4 @@
-import {
-  biaFatIfPlausible,
-  buildPayload,
-  isPlausibleImpedance,
-  ReadingComposition,
-} from '../body-comp-helpers.js';
+import { isPlausibleImpedance, biaPayload } from '../body-comp-helpers.js';
 import type {
   BleDeviceInfo,
   ConnectionContext,
@@ -193,13 +188,10 @@ export class QnScaleAdapter
     return this.s.kind === 'va18' ? 18 : 19;
   }
 
-  /** The scale's own results, by the reading they belong to (#331). */
-  readonly scaleComposition = new ReadingComposition<va19.ScaleCompositionPin | null>();
-
   /**
    * Readings that stand in for a weigh-in the scale has not finished yet, or
    * (18-byte, heldForStoredAnswer) one that waits for the scale's stored
-   * weigh-ins. Keyed by the reading, like ReadingComposition, so isFinal
+   * weigh-ins. Keyed by the reading object, so isFinal
    * answers for the object it is handed rather than for whichever frame was
    * parsed last. Never reset: a reading from an earlier session is never
    * handed back.
@@ -1481,7 +1473,7 @@ export class QnScaleAdapter
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
     // The 19-byte dialect's own results, when they belong to this user (#331).
-    const pin = this.scaleComposition.of(reading, null);
+    const pin = reading.scaleComposition as va19.ScaleCompositionPin | undefined;
     if (pin) {
       const payload = va19.scaleCompositionPayload(pin, reading, profile);
       if (payload) return payload;
@@ -1496,7 +1488,6 @@ export class QnScaleAdapter
     // WHEN a session ends), so an r1 far above the whole-body range still
     // completes a reading - it just no longer produces a pinned 60 % as if it
     // had been measured (#405).
-    const fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
-    return buildPayload(reading.weight, reading.impedance, { fat }, profile);
+    return biaPayload(reading, profile);
   }
 }

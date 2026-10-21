@@ -5,7 +5,31 @@
   },
   "reading": {
     "weight": 95.55,
-    "impedance": 0
+    "impedance": 0,
+    "scaleComposition": {
+      "rec": {
+        "weight": 95.55,
+        "impedance20kHz": [
+          22.2,
+          310.4,
+          305.5,
+          227.6,
+          234.6
+        ],
+        "impedance100kHz": [
+          17.4,
+          275.3,
+          270.4,
+          201.7,
+          208.5
+        ],
+        "fatPercent": 23.7,
+        "bmi": 27.3,
+        "skeletalMusclePercent": 43.9,
+        "visceralFat": 8
+      },
+      "guestProfile": true
+    }
   },
   "history": [],
   "subscribes": [

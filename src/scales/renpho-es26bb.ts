@@ -8,12 +8,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import {
-  uuid16,
-  buildPayload,
-  biaFatIfPlausible,
-  WEIGHT_ONLY_HOLD_MS,
-} from './body-comp-helpers.js';
+import { uuid16, WEIGHT_ONLY_HOLD_MS, biaPayload } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 import { bleLog } from '../ble/types.js';
 import { sum8 } from './renpho-55aa.js';
@@ -158,8 +153,7 @@ export class RenphoEs26bbAdapter implements ScaleAdapterCore, GattWiring, HoldFo
     // impedance and then passes an empty comp publishes the impedance and
     // ignores it (#386). biaFatIfPlausible bounds the value first, because the
     // scaling of this field has never been checked against a capture.
-    const fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
-    return buildPayload(reading.weight, reading.impedance, { fat }, profile);
+    return biaPayload(reading, profile);
   }
 
   private async sendOfflineAck(): Promise<void> {

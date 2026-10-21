@@ -110,7 +110,7 @@ describe('YunmaiScaleAdapter', () => {
       adapter.onSessionStart();
 
       const reading = adapter.parseNotification(M1690_DECLARES_19)!;
-      expect(reading).toEqual({ weight: 80, impedance: 0 });
+      expect(reading).toEqual({ weight: 80, impedance: 0, scaleComposition: null });
       expect(adapter.completionHoldMs).toBeUndefined();
       // Nor its body fat: 25.50 % sits at [17..18], and only the frame has it.
       const profile = defaultProfile({ gender: 'female', age: 30, height: 165 });
@@ -123,7 +123,7 @@ describe('YunmaiScaleAdapter', () => {
       adapter.onSessionStart();
 
       const reading = adapter.parseNotification(M1690_19_BYTES)!;
-      expect(reading).toEqual({ weight: 80, impedance: 470 });
+      expect(reading).toEqual({ weight: 80, impedance: 470, scaleComposition: null });
       // Without a body fat field this is the Yunmai formula, the value a fresh
       // adapter with nothing pinned computes for the same reading; reading
       // [17..18] here would give 23.31 % from the cut field and the XOR.
@@ -139,7 +139,11 @@ describe('YunmaiScaleAdapter', () => {
       adapter.matches(mockPeripheral('YUNMAI-ISM2-W', []));
       adapter.onSessionStart();
 
-      expect(adapter.parseNotification(M1690_17_BYTES)).toEqual({ weight: 80, impedance: 0 });
+      expect(adapter.parseNotification(M1690_17_BYTES)).toEqual({
+        weight: 80,
+        impedance: 0,
+        scaleComposition: null,
+      });
       expect(adapter.completionHoldMs).toBeUndefined();
     });
 
@@ -253,6 +257,7 @@ describe('Yunmai: the final frame says what it carries, not the name (#474)', ()
     expect(forcedNameless().parseNotification!(M1690_FINAL)).toEqual({
       weight: 80,
       impedance: 470,
+      scaleComposition: 25.5,
     });
   });
 
@@ -260,6 +265,7 @@ describe('Yunmai: the final frame says what it carries, not the name (#474)', ()
     expect(forcedNameless().parseNotification!(M1690_NO_USER)).toEqual({
       weight: 75,
       impedance: 520,
+      scaleComposition: 24,
     });
   });
 
@@ -298,7 +304,11 @@ describe('Yunmai: the final frame says what it carries, not the name (#474)', ()
     // openScale counts SIGNAL as a Mini; this adapter used to call it standard.
     expect(a.matches({ localName: 'YUNMAI-SIGNAL', serviceUuids: [] })).toBe(true);
     a.onSessionStart();
-    expect(a.parseNotification(SIGNAL_0X13)).toEqual({ weight: 79.67, impedance: 187 });
+    expect(a.parseNotification(SIGNAL_0X13)).toEqual({
+      weight: 79.67,
+      impedance: 187,
+      scaleComposition: null,
+    });
   });
 
   // Names from openScale's YunmaiHandler (Mini class SIGNAL / ISM / ISC2P /
@@ -313,7 +323,11 @@ describe('Yunmai: the final frame says what it carries, not the name (#474)', ()
     const a = new YunmaiScaleAdapter();
     expect(a.matches({ localName, serviceUuids: [] })).toBe(true);
     a.onSessionStart();
-    expect(a.parseNotification(M1690_FINAL)).toEqual({ weight: 80, impedance: 470 });
+    expect(a.parseNotification(M1690_FINAL)).toEqual({
+      weight: 80,
+      impedance: 470,
+      scaleComposition: 25.5,
+    });
     expect(a.completionHoldMs).toBe(4000);
   });
 });
@@ -346,12 +360,11 @@ describe('YunmaiScaleAdapter session boundary (#394)', () => {
     expect(payload.bodyFatPercent).toBeCloseTo(25.5, 1);
   });
 
-  // ReadingComposition.of() checks has(), not `?? live`. That distinction is the
-  // helper's one real subtlety and nothing else exercises it: Yunmai is the only
-  // current user whose "no composition" state is ITSELF a value (null), so with
-  // a nullish fallback a legitimately-null pin would silently fall through to
-  // the live field. Mutating of() to `?? live` leaves the whole suite green
-  // except this test.
+  // computeMetrics checks `scaleComposition === undefined`, not `?? live`:
+  // Yunmai's "no composition" state is ITSELF a value (null), so with a nullish
+  // fallback a legitimately-null pin would silently fall through to the live
+  // field. Mutating it to `?? live` fails this test and the Yunmai A-02 and X-11
+  // contracts.
   it('a pinned null is honoured, not treated as absent', () => {
     const a = miniAdapter();
     // Session N: an 18-byte 0x13 frame has no body fat field, so null is pinned.
@@ -394,7 +407,7 @@ describe('Yunmai when its own fat formula gives up (D-08, D028)', () => {
     const a = makeAdapter();
     a.onSessionStart();
     const parsed = a.parseNotification(SIGNAL_0X13_141KG)!;
-    expect(parsed).toEqual({ weight: 141, impedance: 187 });
+    expect(parsed).toEqual({ weight: 141, impedance: 187, scaleComposition: null });
     const payload = a.computeMetrics(parsed, profile);
     expect(payload.bodyFatPercent).toBeCloseTo(estimateBodyFat(141 / 1.6 ** 2, profile), 1);
     expect(payload.bodyFatPercent).not.toBeCloseTo(computeBiaFat(141, 187, profile), 0);

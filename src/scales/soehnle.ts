@@ -7,7 +7,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { buildPayload, biaFatIfPlausible } from './body-comp-helpers.js';
+import { biaPayload } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
 // Soehnle custom 128-bit service / characteristic UUIDs
@@ -81,7 +81,6 @@ export class SoehnleScaleAdapter implements ScaleAdapterCore, GattWiring, Unlock
     // scaling of this field has never been checked against a capture.
     // Note this is the 50 kHz value; the 5 kHz one at [11..12] is decoded by
     // nobody and deliberately not mixed in.
-    const fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
-    return buildPayload(reading.weight, reading.impedance, { fat }, profile);
+    return biaPayload(reading, profile);
   }
 }

@@ -6,6 +6,11 @@
   "reading": {
     "weight": 79.96000000000001,
     "impedance": 452,
+    "scaleComposition": {
+      "bodyFatPercent": 19.400000000000002,
+      "musclePct": 40.7,
+      "waterMassKg": 43.25
+    },
     "userIndex": 1
   },
   "history": [],

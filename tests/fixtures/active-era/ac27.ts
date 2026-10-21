@@ -77,6 +77,5 @@ const traces: Record<string, Trace> = {
 export const session: SessionFixture = {
   adapter: 'Active Era BS-06',
   profile: { height: 175, age: 49, gender: 'male', isAthlete: false },
-  identityBound: 'A-02, the D6 [17] algorithm is pinned in a WeakMap',
   traces,
 };

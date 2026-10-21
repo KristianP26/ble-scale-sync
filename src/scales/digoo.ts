@@ -11,7 +11,6 @@ import type {
 import {
   uuid16,
   buildPayload,
-  ReadingComposition,
   WEIGHT_ONLY_HOLD_MS,
   type ScaleBodyComp,
 } from './body-comp-helpers.js';
@@ -51,13 +50,6 @@ export class DigooScaleAdapter implements ScaleAdapterCore, GattWiring, HoldForC
   readonly charWriteUuid = CHR_WRITE;
 
   private s = new DigooSession();
-  /**
-   * Composition pinned to the reading it was measured with (#394): this adapter
-   * is a shared singleton and `computeMetrics()` runs later than the parse, so
-   * on the watcher transports the live cache can already belong to the next
-   * weigh-in. See ReadingComposition.
-   */
-  private readonly comp = new ReadingComposition<ScaleBodyComp>();
 
   matches(device: BleDeviceInfo): boolean {
     return matchesDescriptor(device, this.match);
@@ -98,7 +90,7 @@ export class DigooScaleAdapter implements ScaleAdapterCore, GattWiring, HoldForC
    *   [18]     bone mass / 10
    *   [19]     (remaining byte)
    */
-  parseNotification(data: Buffer): ScaleReading | null {
+  parseNotification(data: Buffer): ScaleReading<ScaleBodyComp> | null {
     if (data.length < 19) return null;
 
     const weight = data.readUInt16BE(3) / 100;
@@ -126,9 +118,7 @@ export class DigooScaleAdapter implements ScaleAdapterCore, GattWiring, HoldForC
       this.s.cachedComp = {};
     }
 
-    const reading: ScaleReading = { weight, impedance: 0 };
-    this.comp.pin(reading, this.s.cachedComp);
-    return reading;
+    return { weight, impedance: 0, scaleComposition: this.s.cachedComp };
   }
 
   /**
@@ -157,11 +147,11 @@ export class DigooScaleAdapter implements ScaleAdapterCore, GattWiring, HoldForC
     this.s = new DigooSession();
   }
 
-  computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
+  computeMetrics(reading: ScaleReading<ScaleBodyComp>, profile: UserProfile): BodyComposition {
     return buildPayload(
       reading.weight,
       reading.impedance,
-      this.comp.of(reading, this.s.cachedComp),
+      reading.scaleComposition ?? this.s.cachedComp,
       profile,
     );
   }

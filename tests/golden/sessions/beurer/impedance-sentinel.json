@@ -6,6 +6,12 @@
   "reading": {
     "weight": 117.92,
     "impedance": 0,
+    "scaleComposition": {
+      "fat": 24.3,
+      "muscle": 39.300000000000004,
+      "softLean": 84.8,
+      "waterMass": 61.410000000000004
+    },
     "userIndex": 1
   },
   "history": [],

@@ -5,7 +5,14 @@
   },
   "reading": {
     "weight": 79.5,
-    "impedance": 0
+    "impedance": 0,
+    "scaleComposition": {
+      "fat": 0,
+      "water": 0,
+      "bone": 0,
+      "muscle": 0,
+      "visceralFat": 0
+    }
   },
   "history": [],
   "subscribes": [

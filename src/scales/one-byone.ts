@@ -9,13 +9,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import {
-  uuid16,
-  buildPayload,
-  xorChecksum,
-  biaFatIfPlausible,
-  WEIGHT_ONLY_HOLD_MS,
-} from './body-comp-helpers.js';
+import { uuid16, xorChecksum, WEIGHT_ONLY_HOLD_MS, biaPayload } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
 /**
@@ -154,8 +148,7 @@ export class OneByoneAdapter implements ScaleAdapterCore, GattWiring {
     // raw field by 0.1 on the strength of an openScale port, so if that factor
     // is wrong a real 300-900 ohm body arrives as 30-90 and is refused, which
     // leaves the reading exactly where it was before this change.
-    const fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
-    return buildPayload(reading.weight, reading.impedance, { fat }, profile);
+    return biaPayload(reading, profile);
   }
 }
 
@@ -251,7 +244,6 @@ export class OneByoneNewAdapter
     // impedance and then passes an empty comp publishes the impedance and
     // ignores it (#386). biaFatIfPlausible bounds the value first, because the
     // scaling of this field has never been checked against a capture.
-    const fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
-    return buildPayload(reading.weight, reading.impedance, { fat }, profile);
+    return biaPayload(reading, profile);
   }
 }

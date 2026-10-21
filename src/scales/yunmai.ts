@@ -13,7 +13,6 @@ import {
   compositionRejection,
   estimateBodyFat,
   uuid16,
-  ReadingComposition,
 } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 import { bleLog } from '../ble/types.js';
@@ -103,14 +102,6 @@ export class YunmaiScaleAdapter
 
   private s = new YunmaiSession();
 
-  /**
-   * The embedded fat percentage as it stood when each reading was emitted
-   * (#394): this adapter is a shared singleton and `computeMetrics()` runs
-   * later than the parse, so on the watcher transports the live field can
-   * already belong to the next weigh-in. See ReadingComposition.
-   */
-  private readonly comp = new ReadingComposition<number | null>();
-
   matches(device: BleDeviceInfo): boolean {
     // The name, or the product id of a Mini 2 that advertises no name, only
     // claims the device; what the frame carries is read from the frame.
@@ -163,9 +154,8 @@ export class YunmaiScaleAdapter
       );
     }
 
-    const reading: ScaleReading = { weight, impedance };
-    this.comp.pin(reading, this.s.embeddedFatPercent);
-    return reading;
+    // The embedded fat as it stood at emit time, null included (#394).
+    return { weight, impedance, scaleComposition: this.s.embeddedFatPercent };
   }
 
   /**
@@ -222,7 +212,8 @@ export class YunmaiScaleAdapter
     const heightM = profile.height / 100;
     const bmi = weight / (heightM * heightM);
 
-    const embeddedFat = this.comp.of(reading, this.s.embeddedFatPercent);
+    const pinned = reading.scaleComposition;
+    const embeddedFat = pinned === undefined ? this.s.embeddedFatPercent : pinned;
 
     // The first usable fat value wins, and every other field below is derived
     // from THAT one (ADR D028, review D-08). `ym.fat()` returns 0 for a result
@@ -234,8 +225,8 @@ export class YunmaiScaleAdapter
     // it as `(R - 100) / 100`), and the SIGNAL values from 150 up (105-221
     // seen) pass the 150-1200 gate while BIA on them lands far from the
     // estimate (33 % against 60 % at BMI 55, the 4 % floor at a normal BMI).
-    const usable = (f: number | null | undefined): f is number =>
-      f != null && compositionRejection({ fat: f }) === null;
+    const usable = (f: unknown): f is number =>
+      typeof f === 'number' && compositionRejection({ fat: f }) === null;
     let fat: number;
     if (usable(embeddedFat)) {
       fat = embeddedFat;

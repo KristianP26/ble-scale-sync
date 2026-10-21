@@ -7,12 +7,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import {
-  uuid16,
-  buildPayload,
-  type ScaleBodyComp,
-  ReadingComposition,
-} from './body-comp-helpers.js';
+import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
 /** Bitmask flags for tracking which frame types have been received. */
@@ -61,18 +56,12 @@ export class SenssunAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
   readonly unlockIntervalMs = 5000;
 
   private s = new SenssunSession();
-  /**
-   * Composition pinned to the reading it was measured with (#394). See
-   * ReadingComposition for why computeMetrics cannot read the live cache on
-   * the watcher transports.
-   */
-  private readonly compByReading = new ReadingComposition<ScaleBodyComp>();
 
   matches(device: BleDeviceInfo): boolean {
     return matchesDescriptor(device, this.match);
   }
 
-  parseNotification(data: Buffer): ScaleReading | null {
+  parseNotification(data: Buffer): ScaleReading<ScaleBodyComp> | null {
     if (data.length < 2) return null;
 
     // Strip leading 0xFF padding bytes
@@ -107,9 +96,7 @@ export class SenssunAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
 
     if (this.s.cachedWeight <= 0) return null;
 
-    const reading: ScaleReading = { weight: this.s.cachedWeight, impedance: 0 };
-    this.compByReading.pin(reading, this.snapshot());
-    return reading;
+    return { weight: this.s.cachedWeight, impedance: 0, scaleComposition: this.snapshot() };
   }
 
   private snapshot(): ScaleBodyComp {
@@ -129,11 +116,11 @@ export class SenssunAdapter implements ScaleAdapterCore, GattWiring, Unlockable 
     return reading.weight > 0 && (this.s.framesMask & FRAME_ALL) === FRAME_ALL;
   }
 
-  computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
+  computeMetrics(reading: ScaleReading<ScaleBodyComp>, profile: UserProfile): BodyComposition {
     // Per-reading snapshot taken in parseNotification(). The live cache is only
     // a fallback for a reading this adapter did not build (direct callers,
-    // tests); see the compByReading field comment for why it cannot be trusted.
-    const comp = this.compByReading.of(reading, this.snapshot());
+    // tests); see `ScaleReading.scaleComposition` for why it cannot be trusted.
+    const comp = reading.scaleComposition ?? this.snapshot();
     return buildPayload(reading.weight, reading.impedance, comp, profile);
   }
 }

@@ -53,7 +53,7 @@ export interface LiveWeight {
   weight: number;
 }
 
-export interface ScaleReading {
+export interface ScaleReading<C = unknown> {
   /** Kilograms, whatever unit the scale displays: the decoder converts. */
   weight: number;
   /**
@@ -108,6 +108,17 @@ export interface ScaleReading {
    * one; never default it.
    */
   userIndex?: number;
+  /**
+   * What `computeMetrics()` needs from the frames beyond weight and impedance:
+   * the composition the scale measured, an algorithm byte, a protocol record.
+   * The adapter that emitted the reading defines `C` and is its only reader.
+   *
+   * Set at emit time, never read back from the adapter's live cache: on the
+   * watcher transports the next session can start before this reading reaches
+   * `computeMetrics()` (#394). Plain data only, so a copy of the reading keeps
+   * it (ADR D077). Exporters never see it, only the `computeMetrics()` output.
+   */
+  scaleComposition?: C;
 }
 
 export interface UserProfile {
@@ -407,13 +418,9 @@ export interface ScaleAdapterCore {
    * watcher transports the watcher keeps running while `loop.ts` awaits
    * `processReading()` (network exports included) and can open the next GATT
    * session in the meantime. An adapter that carries composition out of band in
-   * its own fields must pin it onto the reading it belongs to, taking the
-   * snapshot at emit time, rather than read the live cache in `computeMetrics`.
-   * Use `ReadingComposition` from `body-comp-helpers.ts` for that: it owns the
-   * `WeakMap` and the reasoning, and `of()` deliberately checks `has()` rather
-   * than falling back on a nullish value, so an adapter whose "no composition"
-   * state is itself null stays correct. Hand-rolling it is how six copies of
-   * the same paragraph drifted apart in type.
+   * its own fields must put it on the reading it belongs to
+   * (`ScaleReading.scaleComposition`), taking the snapshot at emit time, rather
+   * than read the live cache in `computeMetrics`.
    *
    * It is a GATT-session hook only. The broadcast path never opens a session,
    * so `parseBroadcast` / `parseServiceData` run without it ever firing. Adding

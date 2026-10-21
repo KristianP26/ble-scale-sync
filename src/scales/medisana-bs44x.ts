@@ -7,12 +7,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import {
-  uuid16,
-  buildPayload,
-  type ScaleBodyComp,
-  ReadingComposition,
-} from './body-comp-helpers.js';
+import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
 const CHR_NOTIFY = uuid16(0x8a21);
@@ -74,13 +69,6 @@ export class MedisanaBs44xAdapter implements ScaleAdapterCore, GattWiring {
   private s = new MedisanaSession();
 
   /**
-   * Composition pinned to the reading it was measured with (#394). See
-   * ReadingComposition for why computeMetrics cannot read the live cache on
-   * the watcher transports.
-   */
-  private readonly compByReading = new ReadingComposition<ScaleBodyComp>();
-
-  /**
    * Time sync: [0x02, u32 LE seconds]. The epoch depends on the model, which
    * only the advertised name tells apart (see medisanaTimeEpochOffset).
    */
@@ -108,7 +96,7 @@ export class MedisanaBs44xAdapter implements ScaleAdapterCore, GattWiring {
    *   [12-13]  muscle %, little-endian uint16 & 0x0FFF / 10
    *   [14-15]  bone mass, little-endian uint16 & 0x0FFF / 10
    */
-  parseNotification(data: Buffer): ScaleReading | null {
+  parseNotification(data: Buffer): ScaleReading<ScaleBodyComp> | null {
     if (data.length < 3) return null;
 
     if (data.length >= 16) {
@@ -136,9 +124,11 @@ export class MedisanaBs44xAdapter implements ScaleAdapterCore, GattWiring {
 
     if (this.s.cachedWeight <= 0) return null;
 
-    const reading: ScaleReading = { weight: this.s.cachedWeight, impedance: 0 };
-    this.compByReading.pin(reading, { ...this.s.cachedComp });
-    return reading;
+    return {
+      weight: this.s.cachedWeight,
+      impedance: 0,
+      scaleComposition: { ...this.s.cachedComp },
+    };
   }
 
   onSessionStart(): void {
@@ -149,11 +139,11 @@ export class MedisanaBs44xAdapter implements ScaleAdapterCore, GattWiring {
     return reading.weight > 0 && this.s.cachedComp.fat != null && this.s.cachedComp.fat > 0;
   }
 
-  computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
+  computeMetrics(reading: ScaleReading<ScaleBodyComp>, profile: UserProfile): BodyComposition {
     // Per-reading snapshot taken in parseNotification(). The live cache is only
     // a fallback for a reading this adapter did not build (direct callers,
-    // tests); see the compByReading field comment for why it cannot be trusted.
-    const comp = this.compByReading.of(reading, this.s.cachedComp);
+    // tests); see `ScaleReading.scaleComposition` for why it cannot be trusted.
+    const comp = reading.scaleComposition ?? this.s.cachedComp;
     return buildPayload(reading.weight, reading.impedance, comp, profile);
   }
 }

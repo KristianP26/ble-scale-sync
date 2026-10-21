@@ -6,6 +6,9 @@
   "reading": {
     "weight": 79.96000000000001,
     "impedance": 0,
+    "scaleComposition": {
+      "fat": 19.400000000000002
+    },
     "userIndex": 1
   },
   "history": [],

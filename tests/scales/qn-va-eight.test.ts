@@ -452,7 +452,7 @@ describe('QN 19-byte stored records (#331)', () => {
     const [part1, , , , done] = s.feed(...R07_LIVE);
     expect(part1).toEqual({ weight: 76.55, impedance: 0 });
     expect(adapter.isFinal(part1!)).toBe(false);
-    expect(done).toEqual({ weight: 76.55, impedance: 0 });
+    expect(done).toEqual({ weight: 76.55, impedance: 0, scaleComposition: expect.any(Object) });
     expect(adapter.isFinal(done!)).toBe(true);
     expect(adapter.isFinal(stored)).toBe(false);
     // The held record is gone once the live weight takes its place in the
@@ -530,7 +530,11 @@ describe('QN 19-byte stored records (#331)', () => {
     const adapter = new QnScaleAdapter();
     // Session 1 publishes 76.55 kg 30 s after the record's time.
     let s = await openSession(adapter, { now: '2026-10-07T19:57:53Z' });
-    expect(s.feed(...R07_LIVE)[4]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(s.feed(...R07_LIVE)[4]).toEqual({
+      weight: 76.55,
+      impedance: 0,
+      scaleComposition: expect.any(Object),
+    });
     // Session 2 gets the same weigh-in as a stored record.
     s = await openSession(adapter, { now: '2026-10-07T19:59:30Z' });
     expect(s.feed(...R07_STORED)[4]).toBeNull();
@@ -593,7 +597,11 @@ describe('QN 19-byte stored records (#331)', () => {
     const debug = spyLines('debug');
     const adapter = new QnScaleAdapter();
     let s = await openSession(adapter, { now: '2026-10-07T20:00:44Z' });
-    expect(s.feed(...R07_LIVE)[4]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(s.feed(...R07_LIVE)[4]).toEqual({
+      weight: 76.55,
+      impedance: 0,
+      scaleComposition: expect.any(Object),
+    });
 
     s = await openSession(adapter, { now: '2026-10-07T20:02:44Z' });
     expect(s.feed(...R07_LIVE)).toEqual(new Array(5).fill(null));
@@ -604,7 +612,11 @@ describe('QN 19-byte stored records (#331)', () => {
     s = await openSession(adapter, { now: '2026-10-07T20:04:44Z' });
     const measured = s.feed(R06_SESSION.MEASURING, ...R07_LIVE);
     expect(measured[1]).toEqual({ weight: 76.55, impedance: 0 });
-    expect(measured[5]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(measured[5]).toEqual({
+      weight: 76.55,
+      impedance: 0,
+      scaleComposition: expect.any(Object),
+    });
 
     // Another weight: a new weigh-in.
     s = await openSession(adapter, { now: '2026-10-07T20:06:44Z' });
@@ -620,28 +632,36 @@ describe('QN 19-byte stored records (#331)', () => {
   it('publishes a result block that answered the 0x22 long after the profile was accepted', async () => {
     const adapter = new QnScaleAdapter();
     let s = await openSession(adapter, { now: '2026-10-07T20:00:44Z' });
-    expect(s.feed(...R07_LIVE)[4]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(s.feed(...R07_LIVE)[4]).toEqual({
+      weight: 76.55,
+      impedance: 0,
+      scaleComposition: expect.any(Object),
+    });
 
     s = await openSession(adapter, { now: '2026-10-07T20:02:44Z' });
     s.feed(R07_SESSION.VISIT_OK);
     await vi.advanceTimersByTimeAsync(13_000);
     const out = s.feed(NO_RECORDS, ...R07_LIVE);
     expect(out[1]).toEqual({ weight: 76.55, impedance: 0 });
-    expect(out[5]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(out[5]).toEqual({ weight: 76.55, impedance: 0, scaleComposition: expect.any(Object) });
   });
 
   // The same with no 0x23 before the block: its first part is the answer.
   it('times the answer from the result block when no 0x23 comes first', async () => {
     const adapter = new QnScaleAdapter();
     let s = await openSession(adapter, { now: '2026-10-07T20:00:44Z' });
-    expect(s.feed(...R07_LIVE)[4]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(s.feed(...R07_LIVE)[4]).toEqual({
+      weight: 76.55,
+      impedance: 0,
+      scaleComposition: expect.any(Object),
+    });
 
     s = await openSession(adapter, { now: '2026-10-07T20:02:44Z' });
     s.feed(R07_SESSION.VISIT_OK);
     await vi.advanceTimersByTimeAsync(13_000);
     const out = s.feed(...R07_LIVE);
     expect(out[0]).toEqual({ weight: 76.55, impedance: 0 });
-    expect(out[4]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(out[4]).toEqual({ weight: 76.55, impedance: 0, scaleComposition: expect.any(Object) });
   });
 
   // Without a profile answer only the time since the 0x22 counts.
@@ -651,13 +671,17 @@ describe('QN 19-byte stored records (#331)', () => {
   ])('judges a repeated block by an answer %i ms after the 0x22 went out', async (ms, expected) => {
     const adapter = new QnScaleAdapter();
     let s = await openSession(adapter, { now: '2026-10-07T20:00:44Z' });
-    expect(s.feed(...R07_LIVE)[4]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(s.feed(...R07_LIVE)[4]).toEqual({
+      weight: 76.55,
+      impedance: 0,
+      scaleComposition: expect.any(Object),
+    });
 
     s = await openSession(adapter, { now: '2026-10-07T20:02:44Z' });
     await vi.advanceTimersByTimeAsync(ms - s.msSinceQuery());
     const out = s.feed(NO_RECORDS, ...R07_LIVE);
     expect(out[1]).toEqual(expected);
-    expect(out[5]).toEqual(expected);
+    expect(out[5]).toEqual(expected && { ...expected, scaleComposition: expect.any(Object) });
   });
 });
 
@@ -698,7 +722,8 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
       ...(frames.live ?? R06_LIVE),
     );
     const reading = out[out.length - 1];
-    expect(reading).toEqual({ weight: 76.85, impedance: 0 });
+    // Whether the scale's own results came with it is up to each test.
+    expect({ ...reading, scaleComposition: undefined }).toEqual({ weight: 76.85, impedance: 0 });
     return { adapter, reading: reading! };
   }
 
@@ -831,7 +856,7 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
     await vi.advanceTimersByTimeAsync(answerMs);
     const out = s.feed(NO_RECORDS, ...R06_LIVE);
     const reading = out[out.length - 1];
-    expect(reading).toEqual({ weight: 76.85, impedance: 0 });
+    expect(reading).toEqual({ weight: 76.85, impedance: 0, scaleComposition: expect.any(Object) });
     return { adapter, reading: reading! };
   }
 
@@ -880,7 +905,7 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
     await vi.advanceTimersByTimeAsync(928);
     const out = s.feed(...R07_STORED, ...R07_LIVE);
     const reading = out[out.length - 1]!;
-    expect(reading).toEqual({ weight: 76.55, impedance: 0 });
+    expect(reading).toEqual({ weight: 76.55, impedance: 0, scaleComposition: expect.any(Object) });
     expect(adapter.computeMetrics(reading, p182)).toEqual(estimate(p182, 76.55));
     expect(info.lines()).toContain(
       "QN: the scale's own body composition is not used for this weigh-in: the scale " +
@@ -901,7 +926,7 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
     s.feed(...R07_STORED);
     await vi.advanceTimersByTimeAsync(3_000);
     const reading = s.feed(...R07_LIVE)[4]!;
-    expect(reading).toEqual({ weight: 76.55, impedance: 0 });
+    expect(reading).toEqual({ weight: 76.55, impedance: 0, scaleComposition: expect.any(Object) });
     expect(adapter.computeMetrics(reading, p182)).toEqual(estimate(p182, 76.55));
   });
 
@@ -978,7 +1003,11 @@ describe('QN 19-byte: ble.qn_result_ack (#331)', () => {
     const { s, after } = await session(ON);
     s.feed(...UNTIL_D16);
     expect(after()).toEqual([]);
-    expect(s.feed(R06.D16)[0]).toEqual({ weight: 76.85, impedance: 0 });
+    expect(s.feed(R06.D16)[0]).toEqual({
+      weight: 76.85,
+      impedance: 0,
+      scaleComposition: expect.any(Object),
+    });
     expect(after()).toEqual([ACK]);
   });
 
@@ -1038,7 +1067,11 @@ describe('QN 19-byte: ble.qn_result_ack (#331)', () => {
   it('sends it for a repeated result block that is not published again', async () => {
     const adapter = new QnScaleAdapter();
     let { s, after } = await session(ON, '2026-10-07T20:00:44Z', adapter);
-    expect(s.feed(...R07_LIVE)[4]).toEqual({ weight: 76.55, impedance: 0 });
+    expect(s.feed(...R07_LIVE)[4]).toEqual({
+      weight: 76.55,
+      impedance: 0,
+      scaleComposition: expect.any(Object),
+    });
     expect(after()).toEqual([ACK]);
 
     ({ s, after } = await session(ON, '2026-10-07T20:02:44Z', adapter));

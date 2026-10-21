@@ -206,7 +206,7 @@ describe('ActiveEraAdapter', () => {
 
     it('takes the ALPHA D6 weight from the frame itself, without any D5 before it', () => {
       const d6 = received(ALPHA_LOCK_D6).at(-1)!.frame; // 01 00 01 d5 01 80 69 5b 8a
-      expect(parseOk(adapter, d6)).toEqual({ weight: 88.97, impedance: 469 });
+      expect(parseOk(adapter, d6)).toEqual({ weight: 88.97, impedance: 469, scaleComposition: 36 });
     });
 
     it('returns nothing for a D6 that has no weight to pair with', () => {
@@ -372,7 +372,11 @@ describe('ActiveEraAdapter', () => {
       const rs = feed(adapter, received(ALPHA_NO_WRITE));
       expect(rs.some((r) => r && adapter.isComplete(r))).toBe(true);
       // #462's D6 (533 ohm, [6..10] zero) after the ALPHA plateau
-      expect(adapter.parseNotification(ISSUE_462_D6)).toEqual({ weight: 88.58, impedance: 533 });
+      expect(adapter.parseNotification(ISSUE_462_D6)).toEqual({
+        weight: 88.58,
+        impedance: 533,
+        scaleComposition: 3,
+      });
     });
 
     describe('isCompositionPending()', () => {
@@ -461,7 +465,7 @@ describe('ActiveEraAdapter', () => {
         adapter,
         received(ALPHA_LOCK_D6).map((f) => f.frame),
       );
-      expect(d6).toEqual({ weight: 88.97, impedance: 469 });
+      expect(d6).toEqual({ weight: 88.97, impedance: 469, scaleComposition: 36 });
       const c = wla07({
         weightKg: 88.97,
         heightCm: 165,
@@ -518,7 +522,7 @@ describe('ActiveEraAdapter', () => {
         adapter,
         received(ALPHA_LOCK_D6_NO_IMPEDANCE).map((f) => f.frame),
       );
-      expect(d6).toEqual({ weight: 89.24, impedance: 0 });
+      expect(d6).toEqual({ weight: 89.24, impedance: 0, scaleComposition: 36 });
       const p = adapter.computeMetrics(d6, PALPHA);
       const estimate = adapter.computeMetrics({ weight: 89.24, impedance: 0 }, PALPHA);
       expect(p.bodyFatPercent).toBe(estimate.bodyFatPercent);

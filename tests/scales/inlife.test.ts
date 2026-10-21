@@ -389,7 +389,7 @@ describe('InlifeScaleAdapter diagnostics (#405)', () => {
   it('changes nothing about what is exported', () => {
     const adapter = new InlifeScaleAdapter();
     const reading = adapter.parseNotification(impedanceFrame(500))!;
-    expect(reading).toEqual({ weight: 78.4, impedance: 500 });
+    expect(reading).toEqual({ weight: 78.4, impedance: 500, scaleComposition: {} });
   });
 });
 

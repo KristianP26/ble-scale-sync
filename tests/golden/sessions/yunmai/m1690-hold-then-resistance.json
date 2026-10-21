@@ -5,7 +5,8 @@
   },
   "reading": {
     "weight": 80,
-    "impedance": 470
+    "impedance": 470,
+    "scaleComposition": 25.5
   },
   "history": [],
   "subscribes": [

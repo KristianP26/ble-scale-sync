@@ -151,8 +151,5 @@ export const session: SessionFixture = {
     lastKnownWeight: 80,
   },
   chars: ['2a10', '2a11', 'ae01', 'ae02'],
-  identityBound:
-    'A-02, an accepted 0x18 reading is tracked in a WeakSet (es-cs20m.ts resultReadings), ' +
-    'so a copy loses its BIA body fat',
   traces,
 };

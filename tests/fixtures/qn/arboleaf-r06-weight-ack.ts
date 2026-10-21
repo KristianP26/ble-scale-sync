@@ -14,8 +14,6 @@ export const session: SessionFixture = {
   config: { qnWeightAck: true },
   profile: P181,
   now: NOW_R06,
-  identityBound:
-    "A-02, the 19-byte dialect's own composition is pinned to the reading object (ReadingComposition, #331)",
   traces: {
     'r06-weight-ack-own-composition': {
       provenance: 'derived',

@@ -5,7 +5,10 @@
   },
   "reading": {
     "weight": 80,
-    "impedance": 500
+    "impedance": 500,
+    "scaleComposition": {
+      "bodyFatPercent": 22.5
+    }
   },
   "history": [],
   "subscribes": [

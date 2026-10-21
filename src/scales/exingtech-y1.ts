@@ -8,12 +8,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import {
-  buildPayload,
-  ReadingComposition,
-  WEIGHT_ONLY_HOLD_MS,
-  type ScaleBodyComp,
-} from './body-comp-helpers.js';
+import { buildPayload, WEIGHT_ONLY_HOLD_MS, type ScaleBodyComp } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 
 // Custom 128-bit UUIDs (remove dashes, lowercase)
@@ -48,13 +43,6 @@ export class ExingtechY1Adapter implements ScaleAdapterCore, GattWiring, HoldFor
   readonly charWriteUuid = CHR_WRITE;
 
   private s = new ExingtechSession();
-  /**
-   * Composition pinned to the reading it was measured with (#394): this adapter
-   * is a shared singleton and `computeMetrics()` runs later than the parse, so
-   * on the watcher transports the live cache can already belong to the next
-   * weigh-in. See ReadingComposition.
-   */
-  private readonly comp = new ReadingComposition<ScaleBodyComp>();
 
   matches(device: BleDeviceInfo): boolean {
     return matchesDescriptor(device, this.match);
@@ -84,7 +72,7 @@ export class ExingtechY1Adapter implements ScaleAdapterCore, GattWiring, HoldFor
    *   [14]     visceral fat rating
    *   [15-19]  padding / reserved
    */
-  parseNotification(data: Buffer): ScaleReading | null {
+  parseNotification(data: Buffer): ScaleReading<ScaleBodyComp> | null {
     if (data.length < 15) return null;
 
     const weight = data.readUInt16BE(4) / 10;
@@ -107,9 +95,7 @@ export class ExingtechY1Adapter implements ScaleAdapterCore, GattWiring, HoldFor
       visceralFat: complete ? visceral : undefined,
     };
 
-    const reading: ScaleReading = { weight, impedance: 0 };
-    this.comp.pin(reading, this.s.cachedComp);
-    return reading;
+    return { weight, impedance: 0, scaleComposition: this.s.cachedComp };
   }
 
   /**
@@ -128,8 +114,8 @@ export class ExingtechY1Adapter implements ScaleAdapterCore, GattWiring, HoldFor
 
   readonly completionHoldMs = WEIGHT_ONLY_HOLD_MS;
 
-  isFinal(reading: ScaleReading): boolean {
-    const fat = this.comp.of(reading, this.s.cachedComp).fat;
+  isFinal(reading: ScaleReading<ScaleBodyComp>): boolean {
+    const fat = (reading.scaleComposition ?? this.s.cachedComp).fat;
     return fat != null && fat > 0;
   }
 
@@ -137,11 +123,11 @@ export class ExingtechY1Adapter implements ScaleAdapterCore, GattWiring, HoldFor
     this.s = new ExingtechSession();
   }
 
-  computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
+  computeMetrics(reading: ScaleReading<ScaleBodyComp>, profile: UserProfile): BodyComposition {
     return buildPayload(
       reading.weight,
       reading.impedance,
-      this.comp.of(reading, this.s.cachedComp),
+      reading.scaleComposition ?? this.s.cachedComp,
       profile,
     );
   }

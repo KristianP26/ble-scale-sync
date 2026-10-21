@@ -1,6 +1,5 @@
 import type { ScaleReading } from '../interfaces/scale-adapter.js';
 import { isHistoricalReading } from '../interfaces/reading-time.js';
-import { ReadingComposition } from './body-comp-helpers.js';
 import { parseSigDateTime, parseSigWeightMeasurement, trustedScaleTime } from './sig-wss.js';
 
 /**
@@ -207,8 +206,6 @@ export interface SigMeasuredComp {
  *   reading instead and the 0x2A9C produces no reading of its own.
  */
 export class SigMeasurementPairing {
-  /** Composition pinned per reading (#394); null pinned on a weight-only one. */
-  private readonly comp = new ReadingComposition<SigMeasuredComp | null>();
   /** The reading of the 0x2A9D that no 0x2A9C has closed yet. */
   private open: ScaleReading | null = null;
   /** Composition of the newest 0x2A9C, for a reading nothing was pinned to. */
@@ -228,11 +225,11 @@ export class SigMeasurementPairing {
     // unsuccessful" sentinel already comes back as no weight from the decoder
     // (WSS v1.0.0 3.2.1.2, review C-10).
     if (kg === undefined || !(kg > 0) || !Number.isFinite(kg)) return null;
-    const reading: ScaleReading = { weight: kg, impedance: 0 };
+    // Composition travels with the reading (#394): null on a weight-only one.
+    const reading: ScaleReading = { weight: kg, impedance: 0, scaleComposition: null };
     const ts = trustedScaleTime(m.timestamp);
     if (ts) reading.timestamp = ts;
     if (m.userIndex !== undefined) reading.userIndex = m.userIndex;
-    this.comp.pin(reading, null);
     this.open = reading;
     return reading;
   }
@@ -256,7 +253,7 @@ export class SigMeasurementPairing {
 
     if (open && sameWeighIn && isHistoricalReading(open)) {
       open.impedance = d.impedanceOhm ?? 0;
-      this.comp.pin(open, measured);
+      open.scaleComposition = measured;
       return null;
     }
 
@@ -264,22 +261,23 @@ export class SigMeasurementPairing {
     const reading: ScaleReading = {
       weight: d.weightKg !== undefined && d.weightKg > 0 ? d.weightKg : (base?.weight ?? 0),
       impedance: d.impedanceOhm ?? 0,
+      scaleComposition: measured,
     };
     const time = ts ?? base?.timestamp;
     if (time) reading.timestamp = time;
     const user = d.userIndex ?? base?.userIndex;
     if (user !== undefined) reading.userIndex = user;
-    this.comp.pin(reading, measured);
     return reading;
   }
 
   /** True for a reading a 0x2A9C produced, which no later frame can enrich. */
   isFinal(reading: ScaleReading): boolean {
-    return this.comp.of(reading, null) !== null;
+    return reading.scaleComposition != null;
   }
 
   /** The scale's own composition for `reading`, or null when it has none. */
   compositionOf(reading: ScaleReading): SigMeasuredComp | null {
-    return this.comp.of(reading, this.latest);
+    const own = reading.scaleComposition as SigMeasuredComp | null | undefined;
+    return own === undefined ? this.latest : own;
   }
 }

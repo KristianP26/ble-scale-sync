@@ -7,13 +7,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import {
-  uuid16,
-  buildPayload,
-  xorChecksum,
-  ReadingComposition,
-  type ScaleBodyComp,
-} from './body-comp-helpers.js';
+import { uuid16, buildPayload, xorChecksum, type ScaleBodyComp } from './body-comp-helpers.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 import { bleLog } from '../ble/types.js';
 
@@ -75,13 +69,6 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
   readonly charWriteUuid = CHR_WRITE;
 
   private s = new InlifeSession();
-  /**
-   * Composition pinned to the reading it was measured with (#394): this adapter
-   * is a shared singleton and `computeMetrics()` runs later than the parse, so
-   * on the watcher transports the live cache can already belong to the next
-   * weigh-in. See ReadingComposition.
-   */
-  private readonly comp = new ReadingComposition<ScaleBodyComp>();
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
@@ -143,7 +130,7 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
    *   [11]     mode flag (0x80/0x81 = impedance mode)
    *   [12-13]  (remaining bytes)
    */
-  parseNotification(data: Buffer): ScaleReading | null {
+  parseNotification(data: Buffer): ScaleReading<ScaleBodyComp> | null {
     // Logged BEFORE the gates, not after. A rejected frame is the case a
     // reporter most needs to see: without this, a unit whose frames this
     // adapter refuses produces exactly the same silence as one that was never
@@ -199,9 +186,7 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
       this.s.cachedImpedance = 0;
     }
 
-    const reading: ScaleReading = { weight, impedance: this.s.cachedImpedance };
-    this.comp.pin(reading, this.s.cachedComp);
-    return reading;
+    return { weight, impedance: this.s.cachedImpedance, scaleComposition: this.s.cachedComp };
   }
 
   /**
@@ -224,7 +209,7 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
    *
    * What makes a held reading safe to deliver later: the impedance is read into
    * the reading itself at parse time, and the composition is pinned per reading
-   * (see the ReadingComposition field), so a frame that arrives during the hold
+   * (`ScaleReading.scaleComposition`), so a frame that arrives during the hold
    * cannot rewrite either one. Moving impedance out of the reading would break
    * that quietly.
    */
@@ -250,11 +235,11 @@ export class InlifeScaleAdapter implements ScaleAdapterCore, GattWiring {
     this.s = new InlifeSession();
   }
 
-  computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
+  computeMetrics(reading: ScaleReading<ScaleBodyComp>, profile: UserProfile): BodyComposition {
     return buildPayload(
       reading.weight,
       reading.impedance,
-      this.comp.of(reading, this.s.cachedComp),
+      reading.scaleComposition ?? this.s.cachedComp,
       profile,
     );
   }

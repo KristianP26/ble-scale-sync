@@ -7,7 +7,7 @@ import type {
   ScaleReading,
   UserProfile,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, biaFatIfPlausible } from './body-comp-helpers.js';
+import { uuid16, biaPayload } from './body-comp-helpers.js';
 import { bleLog } from '../ble/types.js';
 import type { MatchDescriptor } from './match-descriptor.js';
 
@@ -185,8 +185,7 @@ export class EtekcityEsf551Adapter implements ScaleAdapterCore, GattWiring {
     // and computing it without the plausibility band would publish a pinned
     // floor or ceiling as if it were measured (#405). The capture this adapter
     // was decoded from reads 531 ohm, comfortably inside the band.
-    const fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
-    return buildPayload(reading.weight, reading.impedance, { fat }, profile);
+    return biaPayload(reading, profile);
   }
 }
 
