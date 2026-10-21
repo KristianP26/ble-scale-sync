@@ -244,9 +244,6 @@ describe('processReading: single-user', () => {
     expect(context).toEqual({
       userName: 'Dad',
       userSlug: 'dad',
-      // The configured user object itself; its last_known_weight is the live
-      // weigh-in by the time this runs (E-03), so not the `dad` fixture.
-      userConfig: ctx.config.users[0],
       weightUnit: 'kg',
       timestamp: expect.any(Date),
     });

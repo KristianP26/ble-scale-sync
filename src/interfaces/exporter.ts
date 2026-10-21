@@ -1,5 +1,5 @@
 import type { BodyComposition } from './scale-adapter.js';
-import type { UserConfig, WeightUnit } from '../config/schema.js';
+import type { WeightUnit } from '../config/schema.js';
 
 /**
  * The outcome of one export attempt.
@@ -22,7 +22,6 @@ export type ExportResultDetail = { name: string } & (
 export interface ExportContext {
   userName?: string;
   userSlug?: string;
-  userConfig?: UserConfig;
   driftWarning?: string;
   /** Display unit for weight-valued fields (`scale.weight_unit`); values stay in kg. */
   weightUnit?: WeightUnit;

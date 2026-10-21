@@ -292,7 +292,7 @@ To add a new export target:
 1. Create `src/exporters/your-exporter.ts` implementing the `Exporter` interface from `src/interfaces/exporter.ts`
    - Export an `ExporterSchema` describing fields, display info, and `supportsGlobal`/`supportsPerUser`
    - Accept optional `ExportContext` in `export(data, context?)` for multi-user support
-2. Add the name to the `ExporterName` type and `KNOWN_EXPORTERS` set in `src/exporters/config.ts`
+2. Add the name to `EXPORTER_NAMES` in `src/exporters/config.ts` (the `ExporterName` type and the `KNOWN_EXPORTERS` set derive from it)
 3. Add env var parsing in `src/exporters/config.ts` (for `.env` fallback path)
 4. Map the parsed values to the config field names in `loadEnvConfig()` in `src/config/env-load.ts`, and add your minimal variables to the `builds every known exporter from its minimal .env variables` test in `tests/config/load.test.ts`. That test fails for any exporter the `.env` path cannot build.
 5. Add a registry entry in `src/exporters/registry.ts` with `{ schema, factory }` (the registry is the only place exporters are constructed)

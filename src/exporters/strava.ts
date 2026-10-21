@@ -5,7 +5,8 @@ import type { BodyComposition } from '../interfaces/scale-adapter.js';
 import type { Exporter, ExportContext, ExportResult } from '../interfaces/exporter.js';
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { StravaConfig } from './config.js';
-import { withRetry, httpError, httpHealthcheck } from '../utils/retry.js';
+import { withRetry, httpError } from '../utils/retry.js';
+import { probe } from './http.js';
 import { errMsg } from '../utils/error.js';
 import { cliCommand } from '../cli-invocation.js';
 import { atomicWrite } from '../config/write.js';
@@ -84,12 +85,9 @@ export class StravaExporter implements Exporter {
   async healthcheck(): Promise<ExportResult> {
     try {
       const accessToken = await this.ensureFreshToken(this.loadTokens());
-      return await httpHealthcheck(() =>
-        fetch('https://www.strava.com/api/v3/athlete', {
-          headers: { Authorization: `Bearer ${accessToken}` },
-          signal: AbortSignal.timeout(5000),
-        }),
-      );
+      return await probe('https://www.strava.com/api/v3/athlete', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
     } catch (err) {
       // A missing or malformed token file, or a refresh that was refused: all
       // of them mean this exporter cannot work, which is what a healthcheck is

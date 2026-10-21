@@ -4,7 +4,8 @@ import type { Exporter, ExportContext, ExportResult } from '../interfaces/export
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { WgerConfig } from './config.js';
 import { toLocalDate } from './intervals.js';
-import { withRetry, httpError, httpHealthcheck, NonRetryableError } from '../utils/retry.js';
+import { withRetry, httpError, NonRetryableError } from '../utils/retry.js';
+import { sendWithRetry, probe } from './http.js';
 import { errMsg } from '../utils/error.js';
 
 const log = createLogger('Wger');
@@ -123,18 +124,12 @@ export class WgerExporter implements Exporter {
     const weight = unit === 'lb' ? data.weight * LB_PER_KG : data.weight;
 
     // Weight is the primary result: its failure fails the export.
-    const weightResult = await withRetry(
-      async () => {
-        const response = await fetch(`${this.apiBase}/weightentry/`, {
-          method: 'POST',
-          headers: this.headers(),
-          body: JSON.stringify({ date, weight: Number(weight.toFixed(2)) }),
-          signal: AbortSignal.timeout(10_000),
-        });
-        if (!response.ok) {
-          throw httpError(response.status);
-        }
-        return { success: true };
+    const weightResult = await sendWithRetry(
+      `${this.apiBase}/weightentry/`,
+      {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify({ date, weight: Number(weight.toFixed(2)) }),
       },
       { log, label: 'Wger weight entry' },
     );
@@ -164,18 +159,12 @@ export class WgerExporter implements Exporter {
       const categoryId = categories.get(cat.name);
       if (categoryId === undefined) continue;
 
-      const result = await withRetry(
-        async () => {
-          const response = await fetch(`${this.apiBase}/measurement/`, {
-            method: 'POST',
-            headers: this.headers(),
-            body: JSON.stringify({ category: categoryId, date, value: Number(value.toFixed(2)) }),
-            signal: AbortSignal.timeout(10_000),
-          });
-          if (!response.ok) {
-            throw httpError(response.status);
-          }
-          return { success: true };
+      const result = await sendWithRetry(
+        `${this.apiBase}/measurement/`,
+        {
+          method: 'POST',
+          headers: this.headers(),
+          body: JSON.stringify({ category: categoryId, date, value: Number(value.toFixed(2)) }),
         },
         { log, label: `Wger ${cat.name} measurement` },
       );
@@ -250,11 +239,6 @@ export class WgerExporter implements Exporter {
   }
 
   async healthcheck(): Promise<ExportResult> {
-    return httpHealthcheck(() =>
-      fetch(`${this.apiBase}/userprofile/`, {
-        headers: this.headers(),
-        signal: AbortSignal.timeout(5000),
-      }),
-    );
+    return probe(`${this.apiBase}/userprofile/`, { headers: this.headers() });
   }
 }

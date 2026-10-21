@@ -3,42 +3,15 @@ import type { BodyComposition } from '../interfaces/scale-adapter.js';
 import type { Exporter, ExportContext, ExportResult } from '../interfaces/exporter.js';
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { InfluxDbConfig } from './config.js';
-import { withRetry, httpError, httpHealthcheck } from '../utils/retry.js';
+import { httpError } from '../utils/retry.js';
+import { sendWithRetry, probe } from './http.js';
+import { METRICS, METRIC_KEYS } from './metrics.js';
 
 const log = createLogger('InfluxDB');
 
-const FLOAT_FIELDS: (keyof BodyComposition)[] = [
-  'weight',
-  'bmi',
-  'bodyFatPercent',
-  'waterPercent',
-  'boneMass',
-  'muscleMass',
-];
-
-const INT_FIELDS: (keyof BodyComposition)[] = [
-  'impedance',
-  'visceralFat',
-  'physiqueRating',
-  'bmr',
-  'metabolicAge',
-];
-
-// Compile-time check: fails if a field is added to BodyComposition but not covered above
-const _fieldCheck: Record<keyof BodyComposition, true> = {
-  weight: true,
-  bmi: true,
-  bodyFatPercent: true,
-  waterPercent: true,
-  boneMass: true,
-  muscleMass: true,
-  impedance: true,
-  visceralFat: true,
-  physiqueRating: true,
-  bmr: true,
-  metabolicAge: true,
-};
-void _fieldCheck;
+// Floats are the metrics the CSV writes with decimals; the rest are integers.
+const FLOAT_FIELDS = METRIC_KEYS.filter((k) => METRICS[k].decimals !== undefined);
+const INT_FIELDS = METRIC_KEYS.filter((k) => METRICS[k].decimals === undefined);
 
 export const influxdbSchema: ExporterSchema = {
   name: 'influxdb',
@@ -91,10 +64,10 @@ export function toLineProtocol(
   const fields: string[] = [];
 
   for (const key of FLOAT_FIELDS) {
-    fields.push(`${key}=${(data[key] as number).toFixed(2)}`);
+    fields.push(`${key}=${data[key].toFixed(2)}`);
   }
   for (const key of INT_FIELDS) {
-    fields.push(`${key}=${Math.round(data[key] as number)}i`);
+    fields.push(`${key}=${Math.round(data[key])}i`);
   }
 
   const tsMs = (timestamp ?? new Date()).getTime();
@@ -118,12 +91,9 @@ export class InfluxDbExporter implements Exporter {
     // The token is sent even though v2 leaves /health unauthenticated: v3
     // rejects an unauthenticated /health with 401, which made the wizard
     // report a working v3 target as broken. v2 ignores the extra header.
-    return httpHealthcheck(() =>
-      fetch(`${this.config.url.replace(/\/+$/, '')}/health`, {
-        headers: { Authorization: `Token ${this.config.token}` },
-        signal: AbortSignal.timeout(5000),
-      }),
-    );
+    return probe(`${this.config.url.replace(/\/+$/, '')}/health`, {
+      headers: { Authorization: `Token ${this.config.token}` },
+    });
   }
 
   async export(data: BodyComposition, context?: ExportContext): Promise<ExportResult> {
@@ -135,26 +105,23 @@ export class InfluxDbExporter implements Exporter {
     const orgParam = org ? `org=${encodeURIComponent(org)}&` : '';
     const writeUrl = `${url.replace(/\/+$/, '')}/api/v2/write?${orgParam}bucket=${encodeURIComponent(bucket)}&precision=ms`;
 
-    return withRetry(
-      async () => {
-        const response = await fetch(writeUrl, {
-          method: 'POST',
-          headers: {
-            Authorization: `Token ${token}`,
-            'Content-Type': 'text/plain',
-          },
-          body: lineProtocol,
-          signal: AbortSignal.timeout(10_000),
-        });
-
-        if (response.status !== 204) {
-          throw httpError(response.status);
-        }
-
-        log.info('InfluxDB write succeeded.');
-        return { success: true };
+    return sendWithRetry(
+      writeUrl,
+      {
+        method: 'POST',
+        headers: { Authorization: `Token ${token}`, 'Content-Type': 'text/plain' },
+        body: lineProtocol,
       },
-      { log, label: 'InfluxDB write' },
+      {
+        log,
+        label: 'InfluxDB write',
+        // Only 204 is a stored write; anything else, a 2xx included, is a failure.
+        onStatus: (response) => {
+          if (response.status !== 204) throw httpError(response.status);
+          log.info('InfluxDB write succeeded.');
+          return { success: true };
+        },
+      },
     );
   }
 }

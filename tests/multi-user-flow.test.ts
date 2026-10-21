@@ -89,12 +89,10 @@ describe('Multi-user flow: ExportContext construction', () => {
     const context: ExportContext = {
       userName: user.name,
       userSlug: user.slug,
-      userConfig: user,
     };
 
     expect(context.userName).toBe('Dad');
     expect(context.userSlug).toBe('dad');
-    expect(context.userConfig).toBe(dad);
   });
 
   it('includes drift warning when weight is near boundary', () => {
@@ -107,7 +105,6 @@ describe('Multi-user flow: ExportContext construction', () => {
     const context: ExportContext = {
       userName: dad.name,
       userSlug: dad.slug,
-      userConfig: dad,
       ...(drift ? { driftWarning: drift } : {}),
     };
     expect(context.driftWarning).toContain('near the lower boundary');
@@ -120,7 +117,6 @@ describe('Multi-user flow: ExportContext construction', () => {
     const context: ExportContext = {
       userName: dad.name,
       userSlug: dad.slug,
-      userConfig: dad,
       ...(drift ? { driftWarning: drift } : {}),
     };
     expect(context.driftWarning).toBeUndefined();
