@@ -433,6 +433,41 @@ describe('BleSchema', () => {
     expect(BleSchema.safeParse({ qn_result_ack: 'yes' }).success).toBe(false);
   });
 
+  const PROFILE_BYTE_HINT = 'Must be one byte as two hex digits (0-9, a-f) in quotes';
+
+  // A string: YAML reads an unquoted 99 as a decimal number (#434, D079).
+  it('accepts ble.rmsc04_profile_byte as two hex digits or null and keeps the string', () => {
+    for (const value of ['9e', '9E', 'a9', '00', 'ff', null]) {
+      const result = BleSchema.safeParse({ rmsc04_profile_byte: value });
+      expect(result.success).toBe(true);
+      expect(result.data?.rmsc04_profile_byte).toBe(value);
+    }
+  });
+
+  // 'xx' is the placeholder in the docs' example.
+  it.each([77, true, '0x9e', '9', 'q7', ' 9e', 'xx'])(
+    'rejects ble.rmsc04_profile_byte %j with the hint',
+    (value) => {
+      const result = BleSchema.safeParse({ rmsc04_profile_byte: value });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues.map((i) => i.message)).toEqual([PROFILE_BYTE_HINT]);
+    },
+  );
+
+  it('names ble.rmsc04_profile_byte in the error, never its value', () => {
+    for (const value of [77, 'q7']) {
+      const result = AppConfigSchema.safeParse({
+        ...VALID_CONFIG,
+        ble: { ...VALID_CONFIG.ble, rmsc04_profile_byte: value },
+      });
+      expect(result.success).toBe(false);
+      const msg = formatConfigError(result.error!);
+      expect(msg).toContain('ble.rmsc04_profile_byte');
+      expect(msg).toContain(PROFILE_BYTE_HINT);
+      expect(msg).not.toContain(String(value));
+    }
+  });
+
   it('rejects ble.session_timeout_sec outside 5 to 600', () => {
     for (const secs of [4, 601]) {
       expect(BleSchema.safeParse({ session_timeout_sec: secs }).success).toBe(false);

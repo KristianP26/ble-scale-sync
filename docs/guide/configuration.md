@@ -121,7 +121,7 @@ ble:
 | `session_timeout_sec`        | No                          | `120`          | Seconds of scale silence that end a GATT session (5 to 600); an inbound frame restarts the clock, except a reply to the app's own command (a Yunmai answers every unlock). A session also ends after three times this value even if frames keep arriving, so a chatty scale cannot hold the radio forever, and a whole scan cycle is capped at 15 minutes regardless. Native BLE handlers and single-shot `mqtt-proxy` only; ignored on `esphome-proxy`. See below.  |
 | `qn_protocol_byte`           | No                          | Auto           | QN-family scales only. Protocol byte the handshake echoes back to the scale (0 to 255). Set it when a QN scale runs the whole handshake and then reports nothing, or when its scale-info frame is lost in transit on a proxy transport. See below.                                                                                                                                                                                                                   |
 | `qn_report_byte`             | No                          | Unset          | QN-family scales only. Opt-in, and it deletes data on the scale: sends the frame that deletes the user slots this byte selects (0 to 255), on every connection. Unset, nothing is sent. Only for a scale that stopped reporting without it. See below.                                                                                                                                                                                                               |
-| `auto_clear_stale_bond`      | No                          | `false`        | Delete a pairing key the scale has forgotten and pair again. Bonded scales only (Beurer BF7xx / BF9xx), node-ble transport only. Only when BlueZ reports that the scale refused the key, see below.                                                                                                                                                                                                                                                                  |
+| `auto_clear_stale_bond`      | No                          | `false`        | Delete a pairing key the scale has forgotten and pair again. Bonded scales only (Beurer BF7xx / BF9xx), node-ble transport only. Only on evidence that the scale refused the key, see below.                                                                                                                                                                                                                                                                         |
 | `pairing_retry_max_min`      | No                          | `60`           | Bonded scales that show a code to confirm (Beurer BF7xx / BF9xx). After a pairing nobody confirmed on the scale, the longest wait in minutes (0 to 1440) before the app connects to the scale and asks again; the waits before it are 2 minutes three times, then twice as long each time (4, 8, 16, 32 minutes and so on) until they reach it. `0` asks on every scan, as earlier releases did. node-ble transport only. See below.                                 |
 | `preemptive_adapter_reset`   | No                          | `true`         | Power-cycle the Bluetooth adapter with `btmgmt` after every GATT session, to clear a stuck-discovery state some Raspberry Pi adapters fall into. It was not the cause of the Beurer BF915 re-pairing in #417 (see `adapter_privacy`). `false` does not stop the power-cycle after a Disconnect BlueZ never completes (#472). node-ble transport only. See below.                                                                                                     |
 | `adapter_privacy`            | No                          | `false`        | Turn on LE privacy on the Bluetooth adapter, with a key derived from its address, so pairing hands the scale a host identity key. For Beurer scales that ask for SET and a new pairing before every weigh-in. Affects the whole adapter. node-ble transport only. See below.                                                                                                                                                                                         |
@@ -131,6 +131,7 @@ ble:
 | `qn_time_sync_long`          | No                          | `false`        | QN-family scales only. Send the 9-byte form of the `0x20` time-sync frame that an Arboleaf vendor app sends, instead of the 8-byte one. Off by default; the extra byte is your UTC offset. See below.                                                                                                                                                                                                                                                                |
 | `qn_config_long`             | No                          | `false`        | QN-family scales only. Send the 10-byte form of the `0x13` config frame the vendor app sends, instead of the 9-byte one. Off by default; the extra bytes are undecoded. See below.                                                                                                                                                                                                                                                                                   |
 | `qn_result_ack`              | No                          | `false`        | QN-family scales with a 19-byte scale-info frame only. After the scale's last result frame, send the end-of-measurement frame the vendor's published SDK sends. Off by default; not yet confirmed on hardware. See below.                                                                                                                                                                                                                                            |
+| `rmsc04_profile_byte`        | No                          | Unset          | Renpho R-MSC04 only. One byte of the profile the Renpho app writes to the scale for you, as two hex digits in quotes. With it the scale's own body fat and visceral fat are exported for the first user. Personal: keep it out of issues. Not yet confirmed on hardware. See below.                                                                                                                                                                                  |
 | `proxy_liveness_timeout_min` | No                          | `30`           | Minutes of total advertisement silence before a proxy transport is treated as wedged and the process exits for the supervisor to restart. `0` disables. Proxy transports only. See below.                                                                                                                                                                                                                                                                            |
 | `mqtt_proxy`                 | If `handler: mqtt-proxy`    | (none)         | MQTT proxy connection (`broker_url`, `device_id`, `topic_prefix`, `username`, `password`, `auto_connect`, `embedded_broker_*`). See [ESP32 BLE Proxy](./esp32-proxy).                                                                                                                                                                                                                                                                                                |
 | `esphome_proxy`              | If `handler: esphome-proxy` | (none)         | ESPHome Native API connection (`host`, `port`, `encryption_key` or `password`, `client_info`). See [ESPHome Bluetooth Proxy](./esphome-proxy).                                                                                                                                                                                                                                                                                                                       |
@@ -451,6 +452,58 @@ That only covers the moment before the weigh-in. Once the scale starts streaming
 
 :::
 
+::: tip Renpho R-MSC04: the scale's own body fat (`rmsc04_profile_byte`)
+
+The R-MSC04 computes body fat, BMI, skeletal muscle and visceral fat itself, for the profile last written to it. To get a weigh-in at all, ble-scale-sync writes the scale a guest profile with the first user's height and last weight. One byte of that profile is not decoded (most likely it holds sex and age), so ble-scale-sync sends the byte a working third-party client sends, and by default it does not export what the scale computed for that profile: the scale's figures are only logged, and the body fat estimate from your profile is exported.
+
+The Renpho app writes your own profile to the scale on every connection, and your byte is in it. To find it, record an Android HCI snoop log while you weigh in with the Renpho app, and look for a write to characteristic `0x2A11` that starts with `55 aa b2 00 09`:
+
+```
+55 aa b2 00 09 <seq> <slot> <height> <height> <weight> <weight> <BYTE> <xx> <xx> <checksum>
+```
+
+The value you want is the 12th byte. Put it in quotes, since YAML reads an unquoted `99` as a decimal number:
+
+```yaml
+ble:
+  rmsc04_profile_byte: 'xx' # your own byte, always in quotes
+```
+
+Replace `xx` with your byte. `xx` itself is not a valid value, so the config does not load until you do.
+
+With it set, the guest profile carries your byte instead, and the scale's body fat and visceral fat are exported when all of these hold:
+
+1. The scale reported body fat and BMI.
+2. The profile with your byte was written in the same connection.
+3. The scale acknowledged the profile before it first reported the measurement complete, and its last status before the results was measurement complete. So when ble-scale-sync connects only after the scale has finished measuring, the scale's figures for that weigh-in are not used.
+4. The weigh-in was matched to a user with the same height, sex, birth date and age as the first user, whose profile was sent.
+5. The scale's BMI fits the height that was sent.
+
+Otherwise the estimate goes out, and the normal log says why, for example:
+
+```
+Renpho R-MSC04: the scale's body fat and visceral fat are not used for this weigh-in: the scale did not answer the profile frame before it first reported the measurement complete, or its last status before the record was not measurement complete; using the estimate (#434)
+```
+
+When they are used, it says:
+
+```
+Renpho R-MSC04: using the scale's body fat and visceral fat, computed for the profile sent with ble.rmsc04_profile_byte (#434)
+```
+
+Water, bone mass and muscle mass are then derived from the scale's body fat, and BMI, BMR, metabolic age and physique rating are calculated here. Its skeletal muscle percentage appears in the debug log only.
+
+Keep in mind:
+
+- The first user in your config should be the person whose profile you captured, with the same `height`, `gender` and `birth_date` as in the Renpho app. With several users, only weigh-ins matched to the first user, or to a user with exactly the same profile, use the scale's figures.
+- The byte most likely holds your age. Capture it again after your birthday, or after you change your profile in the Renpho app.
+- The athlete setting is not sent to the scale (the Renpho app did not send it either in the capture this option is based on), so `is_athlete` does not change the scale's figures.
+- The byte is personal: do not paste it into an issue. ble-scale-sync never logs it, and the setup wizard hides its value when it lists changes. Through the ESP32 proxy the profile frame, byte included, goes over MQTT unencrypted, as the guest profile always has.
+
+Not yet confirmed on hardware ([#434](https://github.com/KristianP26/ble-scale-sync/issues/434)).
+
+:::
+
 ::: tip A proxy that is connected but no longer delivering (`proxy_liveness_timeout_min`)
 
 On `mqtt-proxy`, `esphome-proxy` and `ha-bluetooth` the app waits for the proxy to push it a weigh-in. If that link wedges while still looking connected, the wait simply never ends, and from the app's side that is indistinguishable from a house where nobody has stepped on the scale. Both are silence.
@@ -485,7 +538,7 @@ ble:
   auto_clear_stale_bond: true
 ```
 
-The bond is cleared at most once per connect, and only when BlueZ reports that the scale refused the key. Every BlueZ gives a refused key and a weak radio link the same `le-connection-abort-by-local` ([#471](https://github.com/KristianP26/ble-scale-sync/issues/471)); BlueZ 5.83 and later (Home Assistant OS 16.2 and later, for instance) also say why each connection ended, and three refusals ("authentication failure") in one connect are enough. With older BlueZ, such as 5.66 on Raspberry Pi OS bookworm and Debian 12 or 5.82 on Raspberry Pi OS trixie and Debian 13, the option clears nothing: when the failures look like a refused key, a warning says so and you clear the pairing by hand (`bluetoothctl remove <mac>`). It stays opt-in because a bond cleared in error costs a trip to the scale to confirm a new code.
+The bond is cleared at most once per connect, and only on evidence that the scale refused the key: every BlueZ gives a refused key and a weak radio link the same `le-connection-abort-by-local` ([#471](https://github.com/KristianP26/ble-scale-sync/issues/471)). BlueZ 5.83 and later (Home Assistant OS 16.2 and later, for instance) also say why each connection ended, and three refusals ("authentication failure") in one connect are enough. Older BlueZ, such as 5.66 on Raspberry Pi OS bookworm and Debian 12 or 5.82 on Raspberry Pi OS trixie and Debian 13, does not say why, so there the option goes by how the connection ended: when the scale refuses the key, this host ends the connection itself shortly after the error, while a weak radio link drops it together with the error. Three attempts of one connect before the last one whose connection stayed up 40 ms to 1.5 s after the error are enough there; a connect timeout never counts. If BlueZ does not answer when this host asks whether it says why, nothing is cleared. It stays opt-in because a bond cleared in error costs a trip to the scale to confirm a new code.
 
 After a bond is cleared the scale has to be paired again, and on a Beurer that means confirming a code on the scale. If nobody is there to do it, the app asks again later rather than on every scan; see `pairing_retry_max_min` below.
 
@@ -550,7 +603,7 @@ ble:
 
 With this on, at the start of the first scan cycle the app powers the adapter off, turns LE privacy on with `btmgmt privacy on <key>` and powers it back on, then checks every cycle that privacy is still on. In single-shot mode (a cron job or timer that starts a new process per run) every run is a first cycle, so every run power-cycles the adapter once. The key is derived from the adapter's own Bluetooth address, so it stays the same across restarts, re-created containers, add-on reinstalls and reboots, which is what keeps the scale able to recognise the host. The log names it only by a fingerprint: `uses an IRK derived from its address (fingerprint 1a2b3c4d)`. Right before every connect the app checks once more, and if privacy is not on it skips the connect and says why, rather than pair without the key.
 
-After turning it on, remove the old pairing once (`bluetoothctl remove <mac>`, or, on BlueZ 5.83 and later, let `auto_clear_stale_bond` do it) and pair through ble-scale-sync, confirming on the scale as the first time. Be at the scale for that: the code shows about a minute after ble-scale-sync starts, once it has connected and looked up the scale's services. If you miss it, restart ble-scale-sync to be asked again at once; otherwise it asks again after 2 minutes (see `pairing_retry_max_min` above). Later weigh-ins should reuse the pairing, also after the scale has slept.
+After turning it on, remove the old pairing once (`bluetoothctl remove <mac>`, or let `auto_clear_stale_bond` do it) and pair through ble-scale-sync, confirming on the scale as the first time. Be at the scale for that: the code shows about a minute after ble-scale-sync starts, once it has connected and looked up the scale's services. If you miss it, restart ble-scale-sync to be asked again at once; otherwise it asks again after 2 minutes (see `pairing_retry_max_min` above). Later weigh-ins should reuse the pairing, also after the scale has slept.
 
 Before you turn it on:
 

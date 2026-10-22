@@ -103,6 +103,15 @@ configuration:
       scale's last result frame, which this add-on does not send otherwise.
       Not yet confirmed on hardware; leave empty unless you are testing it for
       #331.
+  rmsc04_profile_byte:
+    name: Renpho R-MSC04 profile byte
+    description: >-
+      Renpho R-MSC04 only. One byte of the profile the Renpho app writes to
+      the scale for you, as two hex digits, taken from an HCI snoop log of
+      the app. With it the scale's own body fat and visceral fat are exported
+      for the first user. In the YAML editor put it in quotes (a byte like 07
+      would otherwise become a number). It is personal, do not post it in
+      issues. Not yet confirmed on hardware (#434); leave empty otherwise.
   auto_clear_stale_bond:
     name: Re-pair a scale that forgot its pairing
     description: >-
@@ -111,11 +120,10 @@ configuration:
       works once and then every later connect fails, until you clear it by hand
       with bluetoothctl. The scale has dropped its half of the pairing while
       Home Assistant still holds the key; this lets the add-on delete that key
-      and pair again on its own. It acts only when the host's Bluetooth reports
-      that the scale refused the key (Home Assistant OS 16.2 and later), so a
-      weak radio link does not clear a working pairing; on older hosts it
-      clears nothing and the log says when to clear the pairing by hand. Leave
-      it off otherwise.
+      and pair again on its own. It acts only on evidence that the scale
+      refused the key, so a weak radio link does not clear a working pairing:
+      Home Assistant OS 16.2 and later report the refusal, and on older hosts
+      it goes by how each connection ended. Leave it off otherwise.
   preemptive_adapter_reset:
     name: Power-cycle the adapter after every weigh-in
     description: >-

@@ -9,7 +9,9 @@ import {
   resolveScaleAuth,
   buildAdapterRuntimeConfig,
 } from '../../src/config/resolve.js';
-import { BleSchema } from '../../src/config/schema.js';
+import { ADAPTER_BLE_OPTIONS, BleSchema } from '../../src/config/schema.js';
+import { QN_BLE_OPTIONS } from '../../src/scales/qn-scale/options.js';
+import { RMSC04_BLE_OPTIONS } from '../../src/scales/renpho-msc04-options.js';
 import type { AppConfig, UserConfig, ScaleConfig } from '../../src/config/schema.js';
 
 // --- Test data ---
@@ -387,7 +389,7 @@ describe('resolveScaleAuth', () => {
 });
 
 describe('buildAdapterRuntimeConfig (X-06)', () => {
-  const UNSET_QN = {
+  const UNSET_OPTIONS = {
     qnProtocolByte: undefined,
     qnReportByte: undefined,
     qnWeightAck: undefined,
@@ -396,6 +398,7 @@ describe('buildAdapterRuntimeConfig (X-06)', () => {
     qnTimeSyncLong: undefined,
     qnConfigLong: undefined,
     qnResultAck: undefined,
+    rmsc04ProfileByte: undefined,
   };
 
   const cases: Array<{
@@ -408,7 +411,7 @@ describe('buildAdapterRuntimeConfig (X-06)', () => {
       name: 'no ble block',
       config: { ...BASE_CONFIG, ble: undefined },
       scaleMac: undefined,
-      expected: { bindKey: undefined, scaleMac: undefined, displayUnit: 'kg', ...UNSET_QN },
+      expected: { bindKey: undefined, scaleMac: undefined, displayUnit: 'kg', ...UNSET_OPTIONS },
     },
     {
       name: 'null ble keys read as unset',
@@ -425,6 +428,7 @@ describe('buildAdapterRuntimeConfig (X-06)', () => {
           qn_time_sync_long: null,
           qn_config_long: null,
           qn_result_ack: null,
+          rmsc04_profile_byte: null,
         },
       },
       scaleMac: 'FF:03:00:13:A1:04',
@@ -432,7 +436,7 @@ describe('buildAdapterRuntimeConfig (X-06)', () => {
         bindKey: undefined,
         scaleMac: 'FF:03:00:13:A1:04',
         displayUnit: 'kg',
-        ...UNSET_QN,
+        ...UNSET_OPTIONS,
       },
     },
     {
@@ -451,6 +455,7 @@ describe('buildAdapterRuntimeConfig (X-06)', () => {
           qn_time_sync_long: true,
           qn_config_long: false,
           qn_result_ack: true,
+          rmsc04_profile_byte: '9e',
         },
       },
       scaleMac: 'AA:BB:CC:DD:EE:FF',
@@ -466,13 +471,14 @@ describe('buildAdapterRuntimeConfig (X-06)', () => {
         qnTimeSyncLong: true,
         qnConfigLong: false,
         qnResultAck: true,
+        rmsc04ProfileByte: '9e',
       },
     },
     {
       name: 'display unit follows weight_unit by default',
       config: { ...BASE_CONFIG, scale: SCALE_IN },
       scaleMac: undefined,
-      expected: { bindKey: undefined, scaleMac: undefined, displayUnit: 'lbs', ...UNSET_QN },
+      expected: { bindKey: undefined, scaleMac: undefined, displayUnit: 'lbs', ...UNSET_OPTIONS },
     },
   ];
 
@@ -483,17 +489,25 @@ describe('buildAdapterRuntimeConfig (X-06)', () => {
     expect(out.userWeights).toBe(config.users);
   });
 
-  // A ble.qn_* key added to the schema but not wired into the mapping would be
-  // accepted by validation and then silently ignored by every adapter.
-  it('wires every ble.qn_* schema key through', () => {
+  // An adapter-owned key added to the schema outside its fragment, or a fragment
+  // left out of ADAPTER_BLE_OPTIONS, would be accepted by validation and then
+  // silently ignored by every adapter.
+  it('wires every adapter-owned ble.* key through', () => {
     const shape = BleSchema.shape as Record<
       string,
       { safeParse(v: unknown): { success: boolean } }
     >;
-    const qnKeys = Object.keys(shape).filter((k) => k.startsWith('qn_'));
-    expect(qnKeys.length).toBeGreaterThan(0);
-    for (const key of qnKeys) {
-      const value = [true, 7].find((v) => shape[key].safeParse(v).success);
+    expect(Object.keys(ADAPTER_BLE_OPTIONS)).toEqual([
+      ...Object.keys(QN_BLE_OPTIONS),
+      ...Object.keys(RMSC04_BLE_OPTIONS),
+    ]);
+    // Every key with an adapter's prefix comes from a fragment, nothing else.
+    expect(Object.keys(shape).filter((k) => /^(qn|rmsc04)_/.test(k))).toEqual(
+      Object.keys(ADAPTER_BLE_OPTIONS),
+    );
+    for (const key of Object.keys(ADAPTER_BLE_OPTIONS)) {
+      expect(shape[key], `${key} is not in BleSchema`).toBeDefined();
+      const value = [true, 7, '9e'].find((v) => shape[key].safeParse(v).success);
       expect(value, `no test value for ${key}`).toBeDefined();
       const config = { ...BASE_CONFIG, ble: { handler: 'auto', [key]: value } } as AppConfig;
       const field = key.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());

@@ -2,8 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { Device } from '../../../src/ble/handler-node-ble/dbus.js';
 
-const { observeConnectAttempt, _resetLinkObserverForTests, REASON_PROBE_TIMEOUT_MS } =
-  await import('../../../src/ble/handler-node-ble/link-observer.js');
+const {
+  observeConnectAttempt,
+  watchLoopStall,
+  _resetLinkObserverForTests,
+  REASON_PROBE_TIMEOUT_MS,
+} = await import('../../../src/ble/handler-node-ble/link-observer.js');
 const { bleLog } = await import('../../../src/ble/types.js');
 
 const DISCONNECTED = [{ name: 'Disconnected', signature: 'ss' }];
@@ -68,7 +72,7 @@ describe('observeConnectAttempt (#471, D066)', () => {
       linkUp: true,
       linkUpAfterMs: 400,
       downAfterErrorMs: 95,
-      reasonSupported: false,
+      reasonSignal: 'unknown',
       reason: undefined,
     });
   });
@@ -163,7 +167,7 @@ describe('observeConnectAttempt (#471, D066)', () => {
     vi.advanceTimersByTime(5);
     helper.emit('PropertiesChanged', connected(false));
     expect(obs.view()).toMatchObject({
-      reasonSupported: true,
+      reasonSignal: 'declared',
       reason: 'org.bluez.Reason.Authentication',
       downAfterErrorMs: 90,
     });
@@ -196,7 +200,7 @@ describe('observeConnectAttempt (#471, D066)', () => {
       const { device, getProxyObject } = makeDevice();
       const obs = await observeConnectAttempt(device, { probeReasons: false });
       expect(getProxyObject).not.toHaveBeenCalled();
-      expect(obs.view().reasonSupported).toBe(false);
+      expect(obs.view().reasonSignal).toBe('unknown');
     });
 
     it('introspects the device object on org.bluez', async () => {
@@ -214,7 +218,7 @@ describe('observeConnectAttempt (#471, D066)', () => {
       const { device } = makeDevice({ iface });
       const obs = await observeConnectAttempt(device, { probeReasons: true });
       expect(on).not.toHaveBeenCalled();
-      expect(obs.view().reasonSupported).toBe(false);
+      expect(obs.view().reasonSignal).toBe('absent');
     });
 
     it('says once per process whether this BlueZ gives reasons', async () => {
@@ -241,7 +245,7 @@ describe('observeConnectAttempt (#471, D066)', () => {
       const pending = observeConnectAttempt(device, { probeReasons: true });
       await vi.advanceTimersByTimeAsync(REASON_PROBE_TIMEOUT_MS);
       const obs = await pending;
-      expect(obs.view().reasonSupported).toBe(false);
+      expect(obs.view().reasonSignal).toBe('unknown');
       // A late answer must not add a listener, which is what holds a match rule.
       answer?.({ getInterface: () => iface });
       await vi.advanceTimersByTimeAsync(0);
@@ -257,7 +261,7 @@ describe('observeConnectAttempt (#471, D066)', () => {
         },
       });
       const obs = await observeConnectAttempt(device, { probeReasons: true });
-      expect(obs.view().reasonSupported).toBe(false);
+      expect(obs.view().reasonSignal).toBe('unknown');
     });
 
     it('goes ahead when the object does not export Device1 (#297)', async () => {
@@ -269,7 +273,7 @@ describe('observeConnectAttempt (#471, D066)', () => {
         }),
       });
       const obs = await observeConnectAttempt(device, { probeReasons: true });
-      expect(obs.view().reasonSupported).toBe(false);
+      expect(obs.view().reasonSignal).toBe('unknown');
     });
 
     it('stops waiting for the probe on a shutdown', async () => {
@@ -281,7 +285,7 @@ describe('observeConnectAttempt (#471, D066)', () => {
       });
       ac.abort();
       const obs = await pending;
-      expect(obs.view().reasonSupported).toBe(false);
+      expect(obs.view().reasonSignal).toBe('unknown');
       // No deadline timer left to hold the event loop open after the shutdown.
       expect(vi.getTimerCount()).toBe(0);
     });
@@ -362,5 +366,90 @@ describe('observeConnectAttempt (#471, D066)', () => {
       expect(helper.listenerCount('PropertiesChanged')).toBe(0);
       expect(iface.listenerCount('Disconnected')).toBe(0);
     });
+  });
+});
+
+describe('watchLoopStall (#471, D066)', () => {
+  let lag = 0;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    lag = 0;
+    _resetLinkObserverForTests(() => Date.now() + lag);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    _resetLinkObserverForTests();
+  });
+
+  it('does not hold the process open, and leaves no timer once stopped', () => {
+    const realSetInterval = globalThis.setInterval;
+    const timers: { hasRef(): boolean }[] = [];
+    const spy = vi.spyOn(globalThis, 'setInterval').mockImplementation(((
+      ...args: Parameters<typeof setInterval>
+    ) => {
+      const t = realSetInterval(...args);
+      timers.push(t as unknown as { hasRef(): boolean });
+      return t;
+    }) as typeof setInterval);
+    const stop = watchLoopStall();
+    spy.mockRestore();
+    expect(timers).toHaveLength(1);
+    expect(timers[0].hasRef()).toBe(false);
+    stop();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('gives the longest the event loop went without a turn, the open stretch included', async () => {
+    const quiet = watchLoopStall();
+    await vi.advanceTimersByTimeAsync(95);
+    expect(quiet()).toBeLessThanOrEqual(5);
+
+    const between = watchLoopStall();
+    await vi.advanceTimersByTimeAsync(7);
+    lag += 60;
+    await vi.advanceTimersByTimeAsync(20);
+    expect(between()).toBeGreaterThanOrEqual(60);
+
+    const open = watchLoopStall();
+    lag += 60;
+    expect(open()).toBe(60);
+  });
+});
+
+describe('markGone (#471, D066)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    _resetLinkObserverForTests(() => Date.now());
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    _resetLinkObserverForTests();
+  });
+
+  it('takes the answer to a Disconnect as the end of the connection only when nothing else said so', async () => {
+    const { device, helper } = makeDevice();
+    const obs = await observeConnectAttempt(device, { probeReasons: false });
+    obs.markConnectStart();
+    helper.emit('PropertiesChanged', connected(true));
+    obs.markError();
+    await vi.advanceTimersByTimeAsync(90);
+    obs.markGone();
+    expect(obs.view().downAfterErrorMs).toBe(90);
+
+    const seen = await observeConnectAttempt(device, { probeReasons: false });
+    seen.markConnectStart();
+    helper.emit('PropertiesChanged', connected(true));
+    seen.markError();
+    await vi.advanceTimersByTimeAsync(5);
+    helper.emit('PropertiesChanged', connected(false));
+    await vi.advanceTimersByTimeAsync(85);
+    seen.markGone();
+    expect(seen.view().downAfterErrorMs).toBe(5);
+
+    const never = await observeConnectAttempt(device, { probeReasons: false });
+    never.markConnectStart();
+    never.markError();
+    never.markGone();
+    expect(never.view()).toMatchObject({ linkUp: false, downAfterErrorMs: undefined });
   });
 });

@@ -106,14 +106,14 @@ Add-ons are not available on **HA Container** or **HA Core** installs (no Superv
 
 Runs natively on all major desktop and server operating systems. No containers, no Supervisor required.
 
-Zero clone, if you already have Node.js v22+:
+Zero clone, if you already have Node.js 22.23.4+, 24.22.1+ or 26.12.1+:
 
 ```bash
 npx ble-scale-sync setup                 # interactive wizard, writes ./config.yaml
 CONTINUOUS_MODE=true npx ble-scale-sync  # always-on, listens for scale indefinitely
 ```
 
-`config.yaml` and `.env` are read from the directory you run the command in. Requires Node.js v22+ and a BLE adapter.
+`config.yaml` and `.env` are read from the directory you run the command in. Requires Node.js 22.23.4+, 24.22.1+ or 26.12.1+ and a BLE adapter.
 
 Prefer a permanent install, a git clone, or the full command list? See the [Standalone install guide](/guide/getting-started#standalone).
 

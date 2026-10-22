@@ -25,10 +25,28 @@ vi.mock('../../src/ble/handler-node-ble/device-object.js', () => ({
   isDeviceObjectGone: () => false,
 }));
 
+/** When set, the stall the retry Disconnect is timed across, in place of the measured one. */
+const stall = vi.hoisted(() => ({ ms: undefined as number | undefined }));
+
+vi.mock('../../src/ble/handler-node-ble/link-observer.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../src/ble/handler-node-ble/link-observer.js')>();
+  return {
+    ...actual,
+    watchLoopStall: () => {
+      const stop = actual.watchLoopStall();
+      return () => {
+        const measured = stop();
+        return stall.ms ?? measured;
+      };
+    },
+  };
+});
+
 const { connectWithRecovery } = await import('../../src/ble/handler-node-ble/connect.js');
 const { _resetLinkObserverForTests } =
   await import('../../src/ble/handler-node-ble/link-observer.js');
-const { _resetStaleBondAnnouncementsForTests } =
+const { _resetStaleBondAnnouncementsForTests, StaleBondEvidence } =
   await import('../../src/ble/handler-node-ble/stale-bond.js');
 const { bleLog } = await import('../../src/ble/types.js');
 
@@ -44,10 +62,12 @@ const ERROR_AT_MS = 1000;
  * the connection comes up first and goes down `downMs` after the error, or,
  * with `downOn: 'disconnect'`, 90 ms after our Disconnect. `reason` is what
  * BlueZ 5.83 sends in Device1.Disconnected right before Connected=false.
+ * `timeout` never answers; with `upAtMs` its connection comes up that late,
+ * and goes down 90 ms after our Disconnect.
  */
 type Step =
   | { kind: 'ok' }
-  | { kind: 'timeout' }
+  | { kind: 'timeout'; upAtMs?: number }
   | { kind: 'abort'; up?: boolean; downMs?: number; downOn?: 'disconnect'; reason?: string };
 
 const ok: Step = { kind: 'ok' };
@@ -74,6 +94,7 @@ interface Scale {
 function makeScale(opts: {
   steps: Step[];
   bluez583?: boolean;
+  bluez578?: boolean;
   paired?: boolean;
   probe?: () => Promise<unknown>;
 }): Scale {
@@ -99,9 +120,18 @@ function makeScale(opts: {
     if (!linkUp) return;
     linkUp = false;
     if (pendingReason !== undefined) iface.emit('Disconnected', pendingReason, 'from the fake');
-    helper.emit('PropertiesChanged', { Connected: { signature: 'b', value: false } });
+    const down = (): boolean =>
+      helper.emit('PropertiesChanged', { Connected: { signature: 'b', value: false } });
     const w = waiters;
     waiters = [];
+    if (opts.bluez578 && w.length > 0) {
+      // BlueZ before 5.79 answers the Disconnect first and sends Connected=false
+      // from an idle callback, after node-ble has dropped the listeners.
+      for (const fn of w) fn();
+      setTimeout(down, 1);
+      return;
+    }
+    down();
     for (const fn of w) fn();
   };
   const goUp = (): void => {
@@ -116,7 +146,14 @@ function makeScale(opts: {
     connect: vi.fn(() => {
       connectCalls.push(Date.now());
       const step = steps.shift() ?? opts.steps[opts.steps.length - 1];
-      if (step.kind === 'timeout') return new Promise<void>(() => {});
+      if (step.kind === 'timeout') {
+        if (step.upAtMs !== undefined) {
+          pendingReason = undefined;
+          downOnDisconnect = true;
+          setTimeout(goUp, step.upAtMs);
+        }
+        return new Promise<void>(() => {});
+      }
       if (step.kind === 'ok') {
         return new Promise<void>((resolve) => {
           setTimeout(goUp, UP_AT_MS);
@@ -198,6 +235,7 @@ const attemptLine = (n: number): string | undefined =>
 beforeEach(() => {
   removeDevice.mockClear();
   discovery.next = undefined;
+  stall.ms = undefined;
   vi.useFakeTimers();
   _resetLinkObserverForTests(() => Date.now());
   debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
@@ -222,6 +260,21 @@ describe('how each failed connect ended (#471, D066)', () => {
         'gives up on a refused pairing key',
     );
     for (let n = 2; n <= 6; n++) expect(attemptLine(n)).toContain('stayed up 95 ms');
+  });
+
+  it('on BlueZ before 5.79, takes the end of the connection from the answer to the retry Disconnect', async () => {
+    // That BlueZ answers first and sends Connected=false after, when node-ble
+    // has already dropped the listeners.
+    await drive(
+      run(makeScale({ steps: times(6, abort({ up: true, downMs: 95 })), bluez578: true })),
+    );
+    for (let n = 1; n <= 5; n++)
+      expect(attemptLine(n)).toContain('stayed up 95 ms after the error');
+    debug.mockClear();
+    await drive(
+      run(makeScale({ steps: times(6, abort({ up: true, downMs: 5 })), bluez578: true })),
+    );
+    for (let n = 1; n <= 5; n++) expect(attemptLine(n)).toContain('went down 5 ms after the error');
   });
 
   it('says when the connection never came up', async () => {
@@ -278,6 +331,34 @@ describe('how each failed connect ended (#471, D066)', () => {
     expect(endedAt - lastError).toBeLessThanOrEqual(1600);
     expect(attemptLine(5)).toContain('went down 2000 ms after the error');
     expect(attemptLine(6)).toContain('was not seen going down after the error');
+  });
+});
+
+describe('what the retry Disconnect adds to the evidence (#471, D066)', () => {
+  /** The verdict the call ended on. */
+  const finalVerdict = (spy: { mock: { results: { value: unknown }[] } }): unknown =>
+    spy.mock.results.at(-1)?.value;
+
+  it('confirms a connection that outlived the error only when the retry Disconnect waited for it too', async () => {
+    const verdict = vi.spyOn(StaleBondEvidence.prototype, 'verdict');
+    await drive(run(makeScale({ steps: times(6, abort({ up: true, downMs: 95 })) })));
+    // Attempts 1-5 had a retry Disconnect that BlueZ answered 95 ms later; the
+    // last attempt has none.
+    expect(finalVerdict(verdict)).toMatchObject({ kind: 'outlived', count: 6, confirmed: 5 });
+  });
+
+  it('does not confirm on the gap alone when this host sent the retry Disconnect late', async () => {
+    // The connection went down 5 ms after the error, as on a weak link, but the
+    // retry Disconnect left 60 ms late, so the gap alone says 65 ms.
+    let lag = 0;
+    _resetLinkObserverForTests(() => Date.now() + lag);
+    warn.mockImplementation((line: unknown) => {
+      if (String(line).startsWith('Connect error:')) lag += 60;
+    });
+    const verdict = vi.spyOn(StaleBondEvidence.prototype, 'verdict');
+    await drive(run(makeScale({ steps: times(6, abort({ up: true, downMs: 5 })) })));
+    expect(attemptLine(1)).toContain('stayed up 65 ms after the error');
+    expect(finalVerdict(verdict)).toMatchObject({ kind: 'outlived', count: 5, confirmed: 0 });
   });
 });
 
@@ -423,18 +504,198 @@ describe('auto_clear_stale_bond clears only on proof of a refused key (#471, D06
     expect(result).not.toContain('rejected the stored pairing key');
   });
 
-  it('on BlueZ before 5.83, keeps a bond whose connections outlive the error and says to clear it by hand (#290 timings)', async () => {
-    const scale = makeScale({ steps: times(6, abort({ up: true, downMs: 95 })) });
+  it('on BlueZ before 5.83, clears a bond whose connections outlive the error on three attempts (#290 timings)', async () => {
+    const scale = makeScale({ steps: [...times(3, abort({ up: true, downMs: 95 })), ok] });
+    const { result } = await drive(run(scale, { autoClear: true }));
+    expect(clears()).toEqual([3]);
+    expect(result).toBe('connected');
+    const lines = logged(warn, 'so the bond is being cleared');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(
+      'AA:BB:CC:DD:EE:FF most likely rejected the stored pairing key on 3 attempts (each time ' +
+        'the connection stayed up about 95 ms after le-connection-abort-by-local',
+    );
+    expect(logged(warn, 'looks like it has forgotten')).toEqual([]);
+  });
+
+  it('on BlueZ before 5.79 too, clears a bond whose connections outlive the error on three attempts', async () => {
+    const scale = makeScale({
+      steps: [...times(3, abort({ up: true, downMs: 95 })), ok],
+      bluez578: true,
+    });
+    expect((await drive(run(scale, { autoClear: true }))).result).toBe('connected');
+    expect(clears()).toEqual([3]);
+  });
+
+  it('on BlueZ before 5.83, says to clear it by hand when the third such attempt is the last one', async () => {
+    const outlives = abort({ up: true, downMs: 95 });
+    const scale = makeScale({ steps: [outlives, outlives, abort(), abort(), abort(), outlives] });
     const { result } = await drive(run(scale, { autoClear: true }));
     expect(clears()).toEqual([]);
     const lines = logged(warn, 'looks like it has forgotten its pairing');
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('stayed up about 95 ms after le-connection-abort-by-local');
-    expect(lines[0]).toContain('that needs BlueZ 5.83');
+    expect(lines[0]).toContain(
+      'ble.auto_clear_stale_bond needs 3 such attempts before the last one, timed reliably by ' +
+        'this host, and had 2, so it left the bond alone. Clear it by hand:',
+    );
     expect(lines[0]).toContain('remove AA:BB:CC:DD:EE:FF');
     expect(lines[0]).toContain('ble.adapter_privacy');
+    expect(result).toContain('on 3 attempts the connection came up and stayed up after');
+  });
+
+  it.each([
+    [39, []],
+    [40, [3]],
+  ])(
+    'on BlueZ before 5.83, counts a connection only from 40 ms after the error: %i ms',
+    async (downMs, expected) => {
+      const scale = makeScale({ steps: [...times(3, abort({ up: true, downMs })), ok] });
+      await drive(run(scale, { autoClear: true }));
+      expect(clears()).toEqual(expected);
+    },
+  );
+
+  it('on BlueZ before 5.83, needs the retry Disconnect to have waited too', async () => {
+    // The connection went down 5 ms after the error, as on a weak link, but this
+    // host got to the retry Disconnect 60 ms late, so the gap alone says 65 ms.
+    let lag = 0;
+    _resetLinkObserverForTests(() => Date.now() + lag);
+    warn.mockImplementation((line: unknown) => {
+      if (String(line).startsWith('Connect error:')) lag += 60;
+    });
+    const scale = makeScale({ steps: [...times(3, abort({ up: true, downMs: 5 })), ok] });
+    expect((await drive(run(scale, { autoClear: true }))).result).toBe('connected');
+    for (let n = 1; n <= 3; n++) {
+      expect(attemptLine(n)).toContain('stayed up 65 ms after the error');
+    }
+    expect(clears()).toEqual([]);
+  });
+
+  it('on BlueZ before 5.83, does not promise a clear it could not time', async () => {
+    // Five connections outlive the error only because this host got to each
+    // retry Disconnect 60 ms late: none of them counts, now or next time.
+    let lag = 0;
+    _resetLinkObserverForTests(() => Date.now() + lag);
+    warn.mockImplementation((line: unknown) => {
+      if (String(line).startsWith('Connect error:')) lag += 60;
+    });
+    await drive(
+      run(makeScale({ steps: times(6, abort({ up: true, downMs: 5 })) }), { autoClear: true }),
+    );
+    expect(clears()).toEqual([]);
+    const lines = logged(warn, 'looks like it has forgotten its pairing');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('on 5 connect attempts');
+    expect(lines[0]).toContain(
+      'ble.auto_clear_stale_bond needs 3 such attempts before the last one, timed reliably by ' +
+        'this host, and had 0, so it left the bond alone. Clear it by hand:',
+    );
+    expect(lines[0]).not.toContain('the next connect may');
+  });
+
+  it('on BlueZ before 5.83, does not count a retry Disconnect timed across a stall of this process', async () => {
+    // The connection went down 5 ms after the error, as on a weak link, but this
+    // process stalled for 60 ms right after it sent the retry Disconnect, so the
+    // gap and the Disconnect both say 65 ms.
+    let lag = 0;
+    _resetLinkObserverForTests(() => Date.now() + lag);
+    const scale = makeScale({ steps: [...times(3, abort({ up: true, downMs: 5 })), ok] });
+    const answer = vi.mocked(scale.device.disconnect).getMockImplementation()!;
+    vi.mocked(scale.device.disconnect).mockImplementation(async () => {
+      lag += 60;
+      return answer();
+    });
+    expect((await drive(run(scale, { autoClear: true }))).result).toBe('connected');
+    for (let n = 1; n <= 3; n++) {
+      expect(attemptLine(n)).toContain('stayed up 65 ms after the error');
+    }
+    expect(clears()).toEqual([]);
+  });
+
+  it('on BlueZ before 5.83, does not count a weak link stretched past 40 ms by a stall of 25 ms', async () => {
+    // A connection that went down 20 ms after the error, as the slowest weak
+    // links do, and a 25 ms stall right after the retry Disconnect went out:
+    // gap and Disconnect both say 45 ms.
+    let lag = 0;
+    _resetLinkObserverForTests(() => Date.now() + lag);
+    const scale = makeScale({ steps: [...times(3, abort({ up: true, downMs: 20 })), ok] });
+    const answer = vi.mocked(scale.device.disconnect).getMockImplementation()!;
+    vi.mocked(scale.device.disconnect).mockImplementation(async () => {
+      lag += 25;
+      return answer();
+    });
+    expect((await drive(run(scale, { autoClear: true }))).result).toBe('connected');
+    for (let n = 1; n <= 3; n++) {
+      expect(attemptLine(n)).toContain('stayed up 45 ms after the error');
+    }
+    expect(clears()).toEqual([]);
+  });
+
+  it.each([
+    [19, [3]],
+    [20, []],
+  ])(
+    'on BlueZ before 5.83, times the retry Disconnect only across a stall under 20 ms: %i ms',
+    async (ms, expected) => {
+      stall.ms = ms;
+      const scale = makeScale({ steps: [...times(3, abort({ up: true, downMs: 95 })), ok] });
+      expect((await drive(run(scale, { autoClear: true }))).result).toBe('connected');
+      expect(clears()).toEqual(expected);
+    },
+  );
+
+  it('stops timing the event loop when the retry Disconnect throws', async () => {
+    const scale = makeScale({ steps: [abort({ up: true }), ok] });
+    vi.mocked(scale.device.disconnect).mockImplementation((() => undefined) as never);
+    const { result } = await drive(run(scale));
+    expect(result).toContain("reading 'then'");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('never counts a timeout, even one whose late connection outlived it like a refused key (#471)', async () => {
+    const late: Step = { kind: 'timeout', upAtMs: 29_000 };
+    const scale = makeScale({ steps: [late, late, late, ok] });
+    expect((await drive(run(scale, { autoClear: true }))).result).toBe('connected');
+    expect(attemptLine(1)).toContain(
+      '(Connection timed out): the connection came up after 29000 ms',
+    );
+    expect(attemptLine(3)).toContain('went down 90 ms after the error');
+    expect(clears()).toEqual([]);
+  });
+
+  it('on BlueZ 5.83 and later, clears on the reason only, not on connections that outlive the error', async () => {
+    const scale = makeScale({
+      steps: times(6, abort({ up: true, downMs: 95, reason: 'org.bluez.Reason.Local' })),
+      bluez583: true,
+    });
+    const { result } = await drive(run(scale, { autoClear: true }));
+    expect(clears()).toEqual([]);
+    const lines = logged(warn, 'looks like it has forgotten its pairing');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('BlueZ did not report an authentication failure on enough of them');
     expect(result).toContain('on 6 attempts the connection came up and stayed up after');
   });
+
+  it.each([
+    ['fails', () => Promise.reject(new Error('The D-Bus connection closed'))],
+    ['gets no answer', () => new Promise<never>(() => {})],
+  ])(
+    'keeps the bond when the reason probe %s on every attempt, whatever the timings',
+    async (_name, probe) => {
+      // Not knowing whether BlueZ says why is not BlueZ saying it does not:
+      // on 5.83 and later only a reported refusal clears a bond.
+      const scale = makeScale({
+        steps: [...times(3, abort({ up: true, downMs: 95, reason: 'org.bluez.Reason.Local' })), ok],
+        bluez583: true,
+        probe,
+      });
+      expect((await drive(run(scale, { autoClear: true }))).result).toBe('connected');
+      expect(scale.getProxyObject).toHaveBeenCalledTimes(3);
+      expect(attemptLine(3)).toContain('stayed up 95 ms after the error');
+      expect(clears()).toEqual([]);
+    },
+  );
 
   it('clears on three authentication failures even with a timeout between them', async () => {
     const refusal = abort({ up: true, downMs: 95, reason: AUTH });
@@ -540,10 +801,12 @@ describe('stale-bond recovery with BlueZ reporting the refused key (#335)', () =
   });
 
   it('warns once per scale that a bond looks stale, and says once that it is kept', async () => {
+    // The third connection that outlives the error comes on the last attempt,
+    // too late to clear the bond in that connect.
+    const outlives = abort({ up: true, downMs: 95 });
+    const looksStale = [outlives, outlives, abort(), abort(), abort(), outlives];
     for (let i = 0; i < 2; i++) {
-      await drive(
-        run(makeScale({ steps: times(6, abort({ up: true, downMs: 95 })) }), { autoClear: true }),
-      );
+      await drive(run(makeScale({ steps: looksStale }), { autoClear: true }));
       await drive(
         run(makeScale({ steps: times(6, abort({ up: true, downMs: 2 })) }), { autoClear: true }),
       );

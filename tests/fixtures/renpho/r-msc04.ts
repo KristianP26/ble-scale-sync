@@ -22,12 +22,12 @@ const NOTIFY = '2a10';
 const rx = (atMs: number, uuid: string, hex: string): TraceStep => ({ atMs, dir: 'rx', uuid, hex });
 
 // #117 capture: the 0x25 record of the second connection in its three fragments.
-const REC_1 = 'ad040255aa2500240411000025530a00de0c200b';
-const REC_2 = 'ae0401ef08e4092a00ae0ac10a9007e108250100';
-const REC_3 = 'af0400ed011101b70008ea';
+export const REC_1 = 'ad040255aa2500240411000025530a00de0c200b';
+export const REC_2 = 'ae0401ef08e4092a00ae0ac10a9007e108250100';
+export const REC_3 = 'af0400ed011101b70008ea';
 const FINAL_9555 = '55aa240006011100002553b3';
-const STATUS_LOCKED = '55aa200005020901005080'; // state 0x09, 0 stored records
-const STATUS_DONE = '55aa200005031101005089'; // state 0x11
+export const STATUS_LOCKED = '55aa200005020901005080'; // state 0x09, 0 stored records
+export const STATUS_DONE = '55aa200005031101005089'; // state 0x11
 
 const traces: Record<string, Trace> = {
   'msc04-117-weigh-in': {

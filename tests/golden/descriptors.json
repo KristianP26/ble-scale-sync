@@ -195,6 +195,7 @@
     "ackWithResponse": true,
     "completionHoldMs": 30000,
     "hooks": [
+      "configure",
       "onConnected",
       "onSessionStart",
       "onSessionEnd",

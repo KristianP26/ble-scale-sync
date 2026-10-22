@@ -162,7 +162,13 @@ export function staleLinkRecoveryDue(mac: string): boolean {
  */
 export function disconnectBounded(
   device: Device,
-  opts: { mac: string; label: string; abortSignal?: AbortSignal },
+  opts: {
+    mac: string;
+    label: string;
+    abortSignal?: AbortSignal;
+    /** BlueZ answered the Disconnect itself (not an error, not a closed connection). */
+    onAnswered?: () => void;
+  },
 ): Promise<DisconnectOutcome> {
   const { mac, label, abortSignal } = opts;
   const t0 = now();
@@ -176,7 +182,10 @@ export function disconnectBounded(
   // when it comes after the deadline: how long BlueZ takes is the number
   // DISCONNECT_TIMEOUT_MS is tuned against.
   const answered = answer.then(
-    () => bleLog.debug(`Disconnect (${label}) answered in ${Math.round(now() - t0)} ms`),
+    () => {
+      opts.onAnswered?.();
+      bleLog.debug(`Disconnect (${label}) answered in ${Math.round(now() - t0)} ms`);
+    },
     (err: unknown) => {
       const closed = connectionClosedFailure(err);
       bleLog.debug(

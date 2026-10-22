@@ -168,14 +168,14 @@ remove AA:BB:CC:DD:EE:FF
 pair AA:BB:CC:DD:EE:FF
 ```
 
-If it happens every session, `ble.auto_clear_stale_bond: true` does that for you on BlueZ 5.83 and later (Home Assistant OS 16.2 and later, for instance), which reports when the scale refused the key. Older BlueZ, such as 5.66 on Raspberry Pi OS bookworm or 5.82 on Raspberry Pi OS trixie, cannot tell a refused key from a weak link, so there the option clears nothing: the log says when the failures look like a refused key and leaves the clearing to you. In [debug mode](#debug-mode) the log also says, for each failed attempt that got as far as a connection, when it came up and how long it stayed up after the error, and on BlueZ 5.83 and later, from the attempt after the first such failure on, why BlueZ ended it. See [the configuration reference](/guide/configuration#config-yaml-reference).
+If it happens every session, `ble.auto_clear_stale_bond: true` does that for you. BlueZ 5.83 and later (Home Assistant OS 16.2 and later, for instance) report when the scale refused the key. Older BlueZ, such as 5.66 on Raspberry Pi OS bookworm or 5.82 on Raspberry Pi OS trixie, does not, so there the option goes by how the connection ended: over a refused key this host ends it itself shortly after the error, while a weak radio link drops it together with the error, and a connect timeout never counts. In [debug mode](#debug-mode) the log also says, for each failed attempt that got as far as a connection, when it came up and how long it stayed up after the error, and on BlueZ 5.83 and later, from the attempt after the first such failure on, why BlueZ ended it. See [the configuration reference](/guide/configuration#config-yaml-reference).
 
 If the key is rejected on the very next connect after a session that worked, every time, and the scale asks for SET and a new pairing before every weigh-in (or the connect succeeds but then stalls at `Discovering services...` with `GATT server acquisition timed out`), the scale is throwing away a pairing that carried no host identity key. Some Beurer scales (the BF915 is confirmed in [#417](https://github.com/KristianP26/ble-scale-sync/issues/417)) keep a pairing only from a device that handed over an identity key (IRK) while pairing. A phone normally does; Linux does only while the adapter has LE privacy turned on, which it does not by default. The adapter power-cycle after each session is not the cause: the bond is rejected without it too.
 
 The remedy:
 
 1. Set `ble.adapter_privacy: true` (in the Home Assistant add-on: **Pair with a host identity key (LE privacy)**) and restart.
-2. Remove the old pairing once with `bluetoothctl remove AA:BB:CC:DD:EE:FF` (or, on BlueZ 5.83 and later, let `ble.auto_clear_stale_bond: true` do it).
+2. Remove the old pairing once with `bluetoothctl remove AA:BB:CC:DD:EE:FF` (or let `ble.auto_clear_stale_bond: true` do it).
 3. Stand at the scale and confirm the pairing on it when it shows a code, about a minute after ble-scale-sync starts (the app connects and looks up the scale's services first). If you miss it, restart ble-scale-sync to be asked again at once. Let ble-scale-sync do the pairing: in #417 a manual `bluetoothctl pair` with privacy on never completed, while the pairing ble-scale-sync started did.
 
 Privacy then applies to the whole adapter, and on a native or Docker host `Privacy = device` in `/etc/bluetooth/main.conf` does the same without the option. Read [the `adapter_privacy` notes](/guide/configuration#config-yaml-reference) before turning it on.
@@ -327,6 +327,17 @@ npm install -g @stoprocent/noble       # global ble-scale-sync install
 ```
 
 Under `npx` the cache directory is thrown away between runs, so install the app itself instead: `npm install -g ble-scale-sync @stoprocent/noble`. The quickest way out on Windows is usually the prebuilt driver, `ble.noble_driver: stoprocent`, which needs no toolchain at all.
+
+### `Node.js ... is older than this release expects` or `... is not supported by this release` {#node-version-warning}
+
+At startup the app compares the running Node.js with the versions this release supports (listed under [Standalone prerequisites](/guide/getting-started#standalone)) and logs one line when they do not match:
+
+```
+[Sync] Node.js <version> is older than this release expects (<minimum>+); update Node.js
+[Sync] Node.js <version> is not supported by this release; use <supported versions>
+```
+
+The app keeps running, but on a Node.js this release was not made for. Update Node.js the way you installed it (the NodeSource apt repository, nvm, or the installer from nodejs.org) and restart the app or its service. The second line means your Node.js release line is not one of the supported ones, for example an odd-numbered line between two supported lines: install one of the listed versions. The Docker image and the Home Assistant add-on bring their own Node.js and should never show this line; if one does, please open an issue.
 
 ## Platform Issues
 

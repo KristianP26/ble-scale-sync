@@ -146,10 +146,16 @@ describe('isSecretKey', () => {
     '%s is secret',
     (key) => expect(isSecretKey(key)).toBe(true),
   );
-  it.each(['beurer_pin', 'token', 'topic', 'Authorization', 'X-Auth-Token', 'headers', 'cookie'])(
-    '%s is secret',
-    (key) => expect(isSecretKey(key)).toBe(true),
-  );
+  it.each([
+    'beurer_pin',
+    'token',
+    'topic',
+    'rmsc04_profile_byte',
+    'Authorization',
+    'X-Auth-Token',
+    'headers',
+    'cookie',
+  ])('%s is secret', (key) => expect(isSecretKey(key)).toBe(true));
   it.each(['weight_unit', 'url', 'email', 'slug', 'type'])('%s is not secret', (key) =>
     expect(isSecretKey(key)).toBe(false),
   );

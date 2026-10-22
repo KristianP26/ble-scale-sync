@@ -5,6 +5,7 @@ import { bootstrapMqttProxy } from './ble/mqtt-proxy-bootstrap.js';
 import { notifyReady, startHeartbeat, stopHeartbeat } from './runtime/systemd-watchdog.js';
 import { touchHeartbeat, startFileHeartbeat, stopFileHeartbeat } from './runtime/file-heartbeat.js';
 import { armHardExit } from './runtime/hard-exit.js';
+import { nodeVersionWarning } from './runtime/node-version.js';
 import { adapters as fullRegistry } from './scales/index.js';
 import { applyForcedAdapter } from './scales/force.js';
 import { forcedAdapterProblem } from './config/forced-adapter.js';
@@ -15,7 +16,10 @@ import { isMainModule } from './utils/entry.js';
 import { runHealthchecks } from './orchestrator.js';
 
 const require = createRequire(import.meta.url);
-const pkg = require('../package.json') as { version: string };
+const pkg = require('../package.json') as {
+  version: string;
+  engines?: { node?: unknown };
+};
 import { loadAppConfig } from './config/load.js';
 import { buildAdapterRuntimeConfig, resolveRuntimeConfig } from './config/resolve.js';
 import { startConfigWatcher, type ConfigWatcherHandle } from './config/watch.js';
@@ -102,6 +106,13 @@ export async function run(argv: readonly string[]): Promise<void> {
         ? ` (image ${buildChannel}${buildRef ? ` @ ${buildRef.slice(0, 7)}` : ''})`
         : ''),
   );
+
+  // Next to the version line and for the same reason. npm warns about engines
+  // only at install time, where the line scrolls away; the service log shows
+  // it on every start. A warning, never an exit: an older Node.js usually still
+  // runs the app, and refusing to start would take a working scale offline.
+  const nodeWarning = nodeVersionWarning(process.versions.node, pkg.engines?.node);
+  if (nodeWarning) log.warn(nodeWarning);
 
   const loaded = loadAppConfig(cliFlags.config);
   const initialConfig = loaded.config;

@@ -16,6 +16,7 @@
       "qn_time_sync_long": false,
       "qn_config_long": true,
       "qn_result_ack": false,
+      "rmsc04_profile_byte": "9e",
       "adapter_privacy": true,
       "mqtt_proxy": {
         "broker_url": "mqtt://broker.local:1883",
@@ -146,6 +147,7 @@
     "qnTimeSyncLong": false,
     "qnConfigLong": true,
     "qnResultAck": false,
+    "rmsc04ProfileByte": "9e",
     "userWeights": "config.users"
   },
   "exporterSlots": {

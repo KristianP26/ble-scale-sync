@@ -301,6 +301,28 @@ describe('disconnectBounded (#472)', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('calls onAnswered only for an answer from BlueZ, not for an error or a closed connection', async () => {
+    const onAnswered = vi.fn();
+    const answered = { disconnect: vi.fn(async () => undefined) };
+    await disconnectBounded(answered as never, { mac: MAC, label: 't', onAnswered });
+    expect(onAnswered).toHaveBeenCalledTimes(1);
+    const refused = {
+      disconnect: vi.fn(async () => {
+        throw new Error('org.bluez.Error.Failed');
+      }),
+    };
+    await disconnectBounded(refused as never, { mac: MAC, label: 't', onAnswered });
+    const closed = {
+      disconnect: vi.fn(async () => {
+        throw Object.assign(new Error('D-Bus connection closed'), {
+          type: 'org.freedesktop.DBus.Error.Disconnected',
+        });
+      }),
+    };
+    await disconnectBounded(closed as never, { mac: MAC, label: 't', onAnswered });
+    expect(onAnswered).toHaveBeenCalledTimes(1);
+  });
+
   it('gives up after 10 s on a timer that does not hold the process open', async () => {
     const realSetTimeout = globalThis.setTimeout;
     const timers: { hasRef(): boolean }[] = [];

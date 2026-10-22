@@ -76,7 +76,8 @@ function maskSensitive(key: string, val: unknown): string {
  * runtime.no_reading_rescan_delay (a wait already running is not shortened),
  * ble.session_timeout_sec, ble.auto_clear_stale_bond, ble.pairing_retry_max_min,
  * ble.preemptive_adapter_reset,
- * ble.bind_key, every ble.qn_*,
+ * ble.bind_key, every adapter-owned ble.* key (ADAPTER_BLE_OPTIONS: every
+ * ble.qn_* and ble.rmsc04_profile_byte),
  * ble.proxy_liveness_timeout_min, exporters,
  * unknown_user, out_of_range, user profile fields, last_known_weight, update_check.
  *
