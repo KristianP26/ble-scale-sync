@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -16,6 +17,12 @@ import { join } from 'node:path';
 
 const runSingleShot = vi.fn<() => Promise<boolean>>();
 vi.mock(import('../../src/runtime/single-run.js'), () => ({ runSingleShot }));
+// Mocked so the result does not depend on the Node.js running the tests.
+const nodeVersionWarning = vi.fn<(running: string, range: unknown) => string | undefined>();
+vi.mock(import('../../src/runtime/node-version.js'), () => ({ nodeVersionWarning }));
+const ENGINES_NODE = (
+  createRequire(import.meta.url)('../../package.json') as { engines: { node: string } }
+).engines.node;
 vi.mock(import('../../src/runtime/poll-source.js'), () => ({
   PollReadingSource: vi.fn() as never,
 }));
@@ -33,6 +40,8 @@ vi.mock(import('../../src/runtime/file-heartbeat.js'), async (importOriginal) =>
 }));
 
 const { run } = await import('../../src/run.js');
+// Taken before beforeEach resets the mock, so a call made while importing run.ts shows.
+const callsAtImport = nodeVersionWarning.mock.calls.length;
 
 class ExitCalled extends Error {
   constructor(readonly code: number | undefined) {
@@ -59,6 +68,7 @@ const EVENTS = ['SIGINT', 'SIGTERM', 'SIGHUP', 'unhandledRejection'] as NodeJS.S
 let dir = '';
 let exit: ReturnType<typeof vi.spyOn>;
 let errors: string[];
+let warnings: string[];
 let before: Map<string, unknown[]>;
 
 function configWith(extra: string): string {
@@ -76,11 +86,15 @@ describe('run(argv)', () => {
     }) as never);
     errors = [];
     vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    warnings = [];
+    vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+      warnings.push(args.map(String).join(' '));
+    });
     vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
       errors.push(args.map(String).join(' '));
     });
     runSingleShot.mockReset();
+    nodeVersionWarning.mockReset();
     heartbeat.stop.mockReset();
     heartbeat.stopFile.mockReset();
   });
@@ -99,6 +113,28 @@ describe('run(argv)', () => {
   it('importing it starts nothing', () => {
     expect(exit).not.toHaveBeenCalled();
     expect(runSingleShot).not.toHaveBeenCalled();
+    expect(callsAtImport).toBe(0);
+  });
+
+  it('warns once about the Node.js version before it loads the config', async () => {
+    nodeVersionWarning.mockReturnValue('NODE-LINE');
+    const path = join(dir, 'config.yaml');
+    writeFileSync(path, 'version: 1\nusers: []\n');
+    await expect(run(['--config', path])).rejects.toThrow(/At least one user is required/);
+    expect(nodeVersionWarning).toHaveBeenCalledTimes(1);
+    expect(nodeVersionWarning).toHaveBeenCalledWith(process.versions.node, ENGINES_NODE);
+    expect(warnings.filter((l) => l.endsWith('[Sync] NODE-LINE'))).toHaveLength(1);
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  it('adds no line when the version meets engines', async () => {
+    nodeVersionWarning.mockReturnValue(undefined);
+    runSingleShot.mockResolvedValue(true);
+    await run(['--config', configWith('')]);
+    expect(exit).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+    expect(nodeVersionWarning).toHaveBeenCalledTimes(1);
+    expect(warnings.filter((l) => l.endsWith(' undefined'))).toEqual([]);
   });
 
   it('exits 2 on a bad flag before loading any config (G-16)', async () => {

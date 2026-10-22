@@ -328,6 +328,17 @@ npm install -g @stoprocent/noble       # global ble-scale-sync install
 
 Under `npx` the cache directory is thrown away between runs, so install the app itself instead: `npm install -g ble-scale-sync @stoprocent/noble`. The quickest way out on Windows is usually the prebuilt driver, `ble.noble_driver: stoprocent`, which needs no toolchain at all.
 
+### `Node.js ... is older than this release expects` or `... is not supported by this release` {#node-version-warning}
+
+At startup the app compares the running Node.js with the versions this release supports (listed under [Standalone prerequisites](/guide/getting-started#standalone)) and logs one line when they do not match:
+
+```
+[Sync] Node.js <version> is older than this release expects (<minimum>+); update Node.js
+[Sync] Node.js <version> is not supported by this release; use <supported versions>
+```
+
+The app keeps running, but on a Node.js this release was not made for. Update Node.js the way you installed it (the NodeSource apt repository, nvm, or the installer from nodejs.org) and restart the app or its service. The second line means your Node.js release line is not one of the supported ones, for example an odd-numbered line between two supported lines: install one of the listed versions. The Docker image and the Home Assistant add-on bring their own Node.js and should never show this line; if one does, please open an issue.
+
 ## Platform Issues
 
 ### Install fails on Raspberry Pi Zero W (first gen)
