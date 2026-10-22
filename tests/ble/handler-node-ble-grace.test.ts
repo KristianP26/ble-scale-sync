@@ -41,8 +41,7 @@ vi.mock('node-ble', () => ({
 }));
 
 const { _internals } = await import('../../src/ble/handler-node-ble/index.js');
-const { bleLog } = await import('../../src/ble/types.js');
-const { IMPEDANCE_GRACE_MS } = await import('../../src/ble/types.js');
+const { bleLog, IMPEDANCE_GRACE_MS } = await import('../../src/ble/types.js');
 
 // ─── Mocks ───────────────────────────────────────────────────────────────────
 
@@ -294,7 +293,7 @@ describe('handler-node-ble broadcastScanNodeBle grace timer (#163 follow-up)', (
     });
   });
 
-  it('keeps polling through a dropped Device1 object and resolves when it returns', async () => {
+  it('logs each Device1 drop once and resolves once the device advertises again', async () => {
     vi.useFakeTimers({
       toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
     });
@@ -312,7 +311,10 @@ describe('handler-node-ble broadcastScanNodeBle grace timer (#163 follow-up)', (
     device.helper.prop = vi.fn(async (name: string) => {
       if (name !== 'ServiceData') return undefined;
       gets += 1;
-      if (gets <= 2) throw dropped;
+      // Dropped twice, back without data, dropped again, then a reading: the
+      // second drop must be logged again after the successful read in between.
+      if (gets === 3) return undefined;
+      if (gets <= 4) throw dropped;
       return serviceDataPayload();
     });
 
@@ -326,18 +328,16 @@ describe('handler-node-ble broadcastScanNodeBle grace timer (#163 follow-up)', (
         {},
       );
       await new Promise((r) => setImmediate(r));
-      await vi.advanceTimersByTimeAsync(600);
-      await vi.advanceTimersByTimeAsync(600);
-      await vi.advanceTimersByTimeAsync(600);
+      for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(600);
 
       const result = await promise;
       expect(result.reading.impedance).toBe(500);
-      expect(gets).toBe(3);
+      expect(gets).toBe(5);
       expect(
         debug.mock.calls.filter(([message]) =>
           String(message).includes('BlueZ dropped the device'),
         ),
-      ).toHaveLength(1);
+      ).toHaveLength(2);
       expect(
         debug.mock.calls.filter(([message]) =>
           String(message).includes('Advertisement poll error'),

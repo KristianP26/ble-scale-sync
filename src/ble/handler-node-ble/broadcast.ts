@@ -223,7 +223,7 @@ export async function broadcastScanNodeBle(
       const noteDeviceBack = (): void => {
         if (!droppedLogged) return;
         droppedLogged = false;
-        bleLog.debug('BlueZ device is back; resuming the advertisement poll');
+        bleLog.debug('BlueZ lists the device again');
       };
       while (!done && (Date.now() < deadline || graceTimer !== null)) {
         if (!deadlineLogged && Date.now() >= deadline) {
@@ -236,11 +236,9 @@ export async function broadcastScanNodeBle(
         if (abortSignal?.aborted) break;
         try {
           const helper = helperOf(device);
-          // Each property is read separately so one failing does not hide the
-          // other, but the rejection is NOT swallowed: BlueZ dropping the
-          // Device1 object is the failure this whole path exists for, and a
-          // silent poll would spin for the full discovery timeout and then
-          // report the generic "no reading" message instead of the real cause.
+          // A rejection is classified below: a dropped Device1 (UnknownObject)
+          // is logged once and polled through, the #297 shapes fail the scan,
+          // and anything else is logged on every poll.
           if (adapter.parseServiceData) {
             const sd: unknown = await helper.prop('ServiceData');
             noteDeviceBack();
