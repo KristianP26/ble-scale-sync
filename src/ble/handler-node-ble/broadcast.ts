@@ -1,7 +1,13 @@
 import type { ScaleAdapter, ScaleReading, LiveWeight } from '../../interfaces/scale-adapter.js';
 import type { RawReading } from '../shared.js';
 import { bleLog, sleep, errMsg, DISCOVERY_TIMEOUT_MS, IMPEDANCE_GRACE_MS } from '../types.js';
-import { helperOf, type PropsChangedHandler, type Adapter, type Device } from './dbus.js';
+import {
+  helperOf,
+  readDeviceProp,
+  type PropsChangedHandler,
+  type Adapter,
+  type Device,
+} from './dbus.js';
 import { isDeviceObjectGone } from './device-object.js';
 
 /** Extract a Buffer from a D-Bus value that may be a Variant wrapper, Buffer, Uint8Array, or number[]. */
@@ -227,14 +233,15 @@ export async function broadcastScanNodeBle(
         }
         if (abortSignal?.aborted) break;
         try {
-          const helper = helperOf(device);
           // Each property is read separately so one failing does not hide the
           // other, but the rejection is NOT swallowed: BlueZ dropping the
           // Device1 object is the failure this whole path exists for, and a
           // silent poll would spin for the full discovery timeout and then
           // report the generic "no reading" message instead of the real cause.
+          // readDeviceProp uses a raw Properties.Get: node-ble's proxy has no
+          // Get for the Device1 objects BlueZ makes during filtered discovery.
           if (adapter.parseServiceData) {
-            const sd: unknown = await helper.prop('ServiceData');
+            const sd: unknown = await readDeviceProp(device, 'ServiceData');
             // Re-check after every await. This loop is detached: the outer
             // promise can settle while we are parked here, and the caller's
             // teardown then hands the device proxy back. A further read would
@@ -245,7 +252,7 @@ export async function broadcastScanNodeBle(
             if (tryServiceData(sd)) break;
           }
           if (adapter.parseBroadcast) {
-            const md: unknown = await helper.prop('ManufacturerData');
+            const md: unknown = await readDeviceProp(device, 'ManufacturerData');
             if (done) break;
             if (tryManufacturerData(md)) break;
           }

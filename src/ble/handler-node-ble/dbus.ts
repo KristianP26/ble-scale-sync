@@ -65,6 +65,8 @@ export interface DbusMessageFields {
   path: string;
   interface: string;
   member: string;
+  signature?: string;
+  body?: unknown[];
 }
 
 type WithHelper<T> = T & { helper: BluezHelper };
@@ -129,4 +131,43 @@ export async function getDbusNext(): Promise<DbusNextModule> {
   if (_dbusNext) return _dbusNext;
   _dbusNext = (await import('dbus-next')) as unknown as DbusNextModule;
   return _dbusNext;
+}
+
+/**
+ * Read one Device1 property through a raw org.freedesktop.DBus.Properties.Get.
+ *
+ * node-ble's BusHelper.prop() calls through a dbus-next proxy built from the
+ * object's introspection. BlueZ does not list org.freedesktop.DBus.Properties
+ * on the passive advertisement Device1 objects it creates during filtered
+ * discovery, so that proxy has no Get method and every call rejects with
+ * `Method "Get" with signature "ss" on interface
+ * "org.freedesktop.DBus.Properties" doesn't exist`. A raw message does not
+ * depend on that introspection - it is exactly what `busctl get-property` does
+ * successfully on the same object - so it is the only way to poll ServiceData
+ * for a device that is never connected.
+ *
+ * The fallback keeps transports that hand us a Device without a dbus-next bus
+ * on their existing property path.
+ */
+export async function readDeviceProp<T>(device: Device, propName: string): Promise<T> {
+  const helper = helperOf(device);
+  const bus = helper.dbus;
+  if (!bus) return (await helper.prop(propName)) as T;
+
+  const { Message } = await getDbusNext();
+  const reply = await bus.call(
+    new Message({
+      destination: 'org.bluez',
+      path: helper.object,
+      interface: 'org.freedesktop.DBus.Properties',
+      member: 'Get',
+      signature: 'ss',
+      body: ['org.bluez.Device1', propName],
+    }),
+  );
+  const variant = reply?.body?.[0] as Variant<T> | undefined;
+  if (!variant || typeof variant !== 'object' || !('value' in variant)) {
+    throw new Error(`Unexpected Properties.Get reply for ${propName}`);
+  }
+  return variant.value;
 }
