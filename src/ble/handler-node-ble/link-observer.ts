@@ -70,7 +70,10 @@ export interface AttemptLinkView {
   linkUp: boolean;
   /** From markConnectStart() to that change. */
   linkUpAfterMs?: number;
-  /** From markError() to Connected false or Disconnected, whichever came first; below 0 if before. */
+  /**
+   * From markError() to Connected false, Disconnected or the answer to a
+   * Disconnect (markGone), whichever came first; below 0 if before.
+   */
   downAfterErrorMs?: number;
   /** This BlueZ declares Device1.Disconnected (5.83 and later) and the observer listens to it. */
   reasonSupported: boolean;
@@ -83,6 +86,13 @@ export interface LinkObserver {
   markConnectStart(): void;
   /** When the connect failed. First call wins. */
   markError(): void;
+  /**
+   * BlueZ answered a Disconnect, which it does only once the connection is
+   * gone. The end of the connection when no Connected=false was seen: BlueZ
+   * before 5.79 sends that after the answer, and node-ble drops our listener
+   * on the answer.
+   */
+  markGone(): void;
   /** At once if the connection never came up or is down already; else when it goes down, or after maxMs. */
   settle(maxMs: number, abortSignal?: AbortSignal): Promise<void>;
   view(): AttemptLinkView;
@@ -177,6 +187,9 @@ export async function observeConnectAttempt(
     },
     markError: () => {
       errorAt ??= clock();
+    },
+    markGone: () => {
+      if (upAt !== undefined && downAt === undefined) downAt = clock();
     },
     settle: (maxMs, abortSignal) => {
       if (upAt === undefined || downAt !== undefined || abortSignal?.aborted) {

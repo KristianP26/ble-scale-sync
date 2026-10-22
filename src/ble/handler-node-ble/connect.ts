@@ -442,6 +442,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           mac: formattedMac,
           label: 'retry',
           abortSignal,
+          onAnswered: () => observer?.markGone(),
         });
         // How long BlueZ held the answer back: until the connection was gone.
         const disconnectMs = linkNow() - disconnectAt;
@@ -450,9 +451,10 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           throw tagBleFailure(new StaleLinkError(formattedMac), 'wedge-suspect');
         }
 
-        // What this attempt's connection did, read only now: BlueZ sends
-        // Connected=false, and from 5.83 the reason, before it answers the
-        // Disconnect above.
+        // What this attempt's connection did, read only now: BlueZ 5.79 and
+        // later send Connected=false, and from 5.83 the reason, before they
+        // answer the Disconnect above; older BlueZ answers first, and that
+        // answer marks the end (markGone).
         const link = observer?.view();
         const outcome = evidence.record(err, link, disconnectMs);
         logAttemptEnd(outcome, attempt + 1, maxRetries + 1, link, err, attemptMs);

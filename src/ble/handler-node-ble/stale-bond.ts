@@ -155,8 +155,9 @@ export function classifyAttempt(err: unknown, link: AttemptLinkView | undefined)
 
 /**
  * Whether the last attempt should wait for its connection to go down before
- * it is judged. A retry attempt need not: BlueZ sends Connected=false, and
- * from 5.83 the reason, before it answers that attempt's Disconnect.
+ * it is judged. A retry attempt need not: BlueZ answers that attempt's
+ * Disconnect only once the connection is gone, and the answer marks the end
+ * when Connected=false came too late to be seen (markGone).
  */
 export function shouldSettle(err: unknown, link: AttemptLinkView | undefined): boolean {
   return (

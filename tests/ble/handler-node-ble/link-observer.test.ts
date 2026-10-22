@@ -364,3 +364,41 @@ describe('observeConnectAttempt (#471, D066)', () => {
     });
   });
 });
+
+describe('markGone (#471, D066)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    _resetLinkObserverForTests(() => Date.now());
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    _resetLinkObserverForTests();
+  });
+
+  it('takes the answer to a Disconnect as the end of the connection only when nothing else said so', async () => {
+    const { device, helper } = makeDevice();
+    const obs = await observeConnectAttempt(device, { probeReasons: false });
+    obs.markConnectStart();
+    helper.emit('PropertiesChanged', connected(true));
+    obs.markError();
+    await vi.advanceTimersByTimeAsync(90);
+    obs.markGone();
+    expect(obs.view().downAfterErrorMs).toBe(90);
+
+    const seen = await observeConnectAttempt(device, { probeReasons: false });
+    seen.markConnectStart();
+    helper.emit('PropertiesChanged', connected(true));
+    seen.markError();
+    await vi.advanceTimersByTimeAsync(5);
+    helper.emit('PropertiesChanged', connected(false));
+    await vi.advanceTimersByTimeAsync(85);
+    seen.markGone();
+    expect(seen.view().downAfterErrorMs).toBe(5);
+
+    const never = await observeConnectAttempt(device, { probeReasons: false });
+    never.markConnectStart();
+    never.markError();
+    never.markGone();
+    expect(never.view()).toMatchObject({ linkUp: false, downAfterErrorMs: undefined });
+  });
+});

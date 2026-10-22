@@ -74,6 +74,7 @@ interface Scale {
 function makeScale(opts: {
   steps: Step[];
   bluez583?: boolean;
+  bluez578?: boolean;
   paired?: boolean;
   probe?: () => Promise<unknown>;
 }): Scale {
@@ -99,9 +100,18 @@ function makeScale(opts: {
     if (!linkUp) return;
     linkUp = false;
     if (pendingReason !== undefined) iface.emit('Disconnected', pendingReason, 'from the fake');
-    helper.emit('PropertiesChanged', { Connected: { signature: 'b', value: false } });
+    const down = (): boolean =>
+      helper.emit('PropertiesChanged', { Connected: { signature: 'b', value: false } });
     const w = waiters;
     waiters = [];
+    if (opts.bluez578 && w.length > 0) {
+      // BlueZ before 5.79 answers the Disconnect first and sends Connected=false
+      // from an idle callback, after node-ble has dropped the listeners.
+      for (const fn of w) fn();
+      setTimeout(down, 1);
+      return;
+    }
+    down();
     for (const fn of w) fn();
   };
   const goUp = (): void => {
@@ -222,6 +232,21 @@ describe('how each failed connect ended (#471, D066)', () => {
         'gives up on a refused pairing key',
     );
     for (let n = 2; n <= 6; n++) expect(attemptLine(n)).toContain('stayed up 95 ms');
+  });
+
+  it('on BlueZ before 5.79, takes the end of the connection from the answer to the retry Disconnect', async () => {
+    // That BlueZ answers first and sends Connected=false after, when node-ble
+    // has already dropped the listeners.
+    await drive(
+      run(makeScale({ steps: times(6, abort({ up: true, downMs: 95 })), bluez578: true })),
+    );
+    for (let n = 1; n <= 5; n++)
+      expect(attemptLine(n)).toContain('stayed up 95 ms after the error');
+    debug.mockClear();
+    await drive(
+      run(makeScale({ steps: times(6, abort({ up: true, downMs: 5 })), bluez578: true })),
+    );
+    for (let n = 1; n <= 5; n++) expect(attemptLine(n)).toContain('went down 5 ms after the error');
   });
 
   it('says when the connection never came up', async () => {
