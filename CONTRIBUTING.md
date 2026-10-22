@@ -4,7 +4,7 @@ Thank you for your interest in contributing! This guide covers everything you ne
 
 ## Prerequisites
 
-- [Node.js](https://nodejs.org/) v20 or later
+- [Node.js](https://nodejs.org/) 22.23.4+, 24.22.1+ or 26.12.1+
 - [Python](https://python.org/) 3.9 or later (only needed for Garmin upload)
 - A Bluetooth Low Energy (BLE) capable adapter (for testing with real hardware)
 

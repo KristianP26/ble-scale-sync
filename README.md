@@ -68,7 +68,7 @@ The add-on handles config through the UI, auto-detects the Mosquitto broker for 
 
 Runs natively on all major desktop and server operating systems. No containers required.
 
-Zero clone, if you already have Node.js v22+:
+Zero clone, if you already have Node.js 22.23.4+, 24.22.1+ or 26.12.1+:
 
 ```bash
 npx ble-scale-sync setup                 # interactive wizard, writes ./config.yaml
@@ -86,7 +86,7 @@ npm run setup                       # interactive wizard
 CONTINUOUS_MODE=true npm start      # always-on
 ```
 
-Requires Node.js v22+ and a BLE adapter. See the **[full install guide](https://blescalesync.dev/guide/getting-started)** for prerequisites and systemd service setup.
+Requires Node.js 22.23.4+, 24.22.1+ or 26.12.1+ and a BLE adapter. See the **[full install guide](https://blescalesync.dev/guide/getting-started)** for prerequisites and systemd service setup.
 
 ## Features
 

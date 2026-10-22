@@ -39,7 +39,7 @@ Each export is attempted **three times** before it is given up on, waiting 1 s a
 
 ### What hardware do I need?
 
-Any device with a BLE radio running Node.js 22+ or Docker. Recommended: [Raspberry Pi Zero 2W](/guide/getting-started#recommended-hardware) for about 15 euros, with built-in Bluetooth and roughly 0.4 W idle power draw. The original Pi Zero W (first-gen, ARMv6) is [not supported](/troubleshooting#install-fails-on-raspberry-pi-zero-w-first-gen).
+Any device with a BLE radio running Node.js 22.23.4+, 24.22.1+ or 26.12.1+ or Docker. Recommended: [Raspberry Pi Zero 2W](/guide/getting-started#recommended-hardware) for about 15 euros, with built-in Bluetooth and roughly 0.4 W idle power draw. The original Pi Zero W (first-gen, ARMv6) is [not supported](/troubleshooting#install-fails-on-raspberry-pi-zero-w-first-gen).
 
 ---
 
