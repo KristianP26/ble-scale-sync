@@ -232,7 +232,7 @@ def chained(outer, cause):
 class RejectedTokenTest(unittest.TestCase):
     """F-13: a 401 is Garmin refusing the saved token, which no retry fixes.
 
-    The shapes are the ones garminconnect 0.3.17 produces. Client._run_request
+    The shapes are the ones garminconnect 0.3.19 produces. Client._run_request
     raises GarminConnectConnectionError("API Error 401 ...") once its own
     refresh-and-retry has failed. At login, Garmin._load_social_profile wraps
     whatever its third attempt raised in GarminConnectAuthenticationError(
