@@ -181,6 +181,22 @@ RUN node -e "for (const p of ['@abandonware/noble','@stoprocent/noble','node-ble
 # Compiled application
 COPY --from=build /app/dist/ ./dist/
 
+# The app warns at startup when the running Node.js is outside engines.node
+# in package.json. An image whose base misses it would print that warning on
+# every start of every container and add-on, and their users cannot change
+# the Node.js inside, so the build refuses such a base. Checked here, in the
+# stage that ships and once per target platform, not in the build stage,
+# which runs only on the build host. The range comes from the package.json
+# copied above and is never repeated here; one the check cannot read fails
+# the build too, because the app would stay silent about it.
+RUN node -e "import('./dist/runtime/node-version.js').then((m) => { \
+      const range = require('./package.json').engines?.node; \
+      const problem = m.parseEnginesRange(range) \
+        ? m.nodeVersionWarning(process.versions.node, range) \
+        : 'engines.node in package.json is not a range dist/runtime/node-version.js reads: ' + range; \
+      if (problem) { console.error(problem); process.exit(1); } \
+    })"
+
 # Supporting files
 COPY garmin-scripts/ ./garmin-scripts/
 COPY docker-entrypoint.sh ./

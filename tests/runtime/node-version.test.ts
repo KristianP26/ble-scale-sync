@@ -19,6 +19,7 @@ const unsupported = (v: string, use: string): string =>
   `Node.js ${v} is not supported by this release; use ${use}`;
 
 const SRC = fileURLToPath(new URL('../../src', import.meta.url));
+const DOCKERFILE = fileURLToPath(new URL('../../Dockerfile', import.meta.url));
 
 const pkg = createRequire(import.meta.url)('../../package.json') as {
   engines: { node: string };
@@ -125,13 +126,14 @@ describe('engines.node guards', () => {
     expect(lines!.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('no source file repeats a minimum version from engines.node', () => {
+  it('no source file and not the Dockerfile repeats a minimum version from engines.node', () => {
     const minima = (parseEnginesRange(pkg.engines.node) ?? []).map((l) => l.min.join('.'));
     expect(minima.length).toBeGreaterThanOrEqual(1);
     const files = readdirSync(SRC, { recursive: true, withFileTypes: true })
       .filter((d) => d.isFile() && d.name.endsWith('.ts'))
       .map((d) => join(d.parentPath, d.name));
     expect(files.length).toBeGreaterThan(0);
+    files.push(DOCKERFILE);
     const hits: string[] = [];
     for (const file of files) {
       const text = readFileSync(file, 'utf8');
@@ -141,5 +143,48 @@ describe('engines.node guards', () => {
       }
     }
     expect(hits, 'read it from package.json engines instead').toEqual([]);
+  });
+
+  it('the image build checks its own Node.js in the stage that ships, and fails closed', () => {
+    const lines = readFileSync(DOCKERFILE, 'utf8').replace(/\r\n/g, '\n').split('\n');
+    const lastFrom = lines.map((l) => /^FROM\s/.test(l)).lastIndexOf(true);
+    const dist = lines.findIndex(
+      (l, i) => i > lastFrom && /^COPY\s.*--from=build\s.*\/app\/dist\/?\s/.test(l),
+    );
+    // A commented-out RUN does not start with RUN, so a disabled check is not found.
+    const run = lines.findIndex((l) =>
+      l.startsWith(`RUN node -e "import('./dist/runtime/node-version.js')`),
+    );
+    expect(lastFrom, 'a FROM line').toBeGreaterThanOrEqual(0);
+    expect(dist, 'the COPY of dist into the runtime stage').toBeGreaterThan(lastFrom);
+    expect(run, 'the RUN that checks Node.js, after the COPY of dist').toBeGreaterThan(dist);
+
+    let end = run;
+    while (end < lines.length - 1 && lines[end].endsWith('\\')) end++;
+    const block = lines
+      .slice(run, end + 1)
+      .map((l) => l.replace(/\\$/, ''))
+      .join(' ')
+      .replace(/\s+/g, ' ');
+
+    expect(block, 'the range comes from the copied package.json').toContain(
+      "require('./package.json').engines",
+    );
+    expect(block, 'a range the check cannot read is a problem too').toMatch(
+      /parseEnginesRange\(range\)\s*\?\s*m\.nodeVersionWarning\(process\.versions\.node,\s*range\)\s*:\s*'[^']+'/,
+    );
+    expect(block, 'a problem fails the build').toMatch(
+      /if\s*\(problem\)\s*\{[^}]*process\.exit\(1\)[^}]*\}/,
+    );
+    const exits = block.match(/process\.exit\([^)]*\)/g) ?? [];
+    expect(exits.length).toBeGreaterThan(0);
+    expect(exits, 'every exit in the check fails the build').toEqual(
+      exits.map(() => 'process.exit(1)'),
+    );
+    // A missing module rejects the import, and an unhandled rejection exits
+    // non-zero; a catch that does not exit 1 would let the build pass.
+    if (block.includes('.catch(')) {
+      expect(block, 'a catch fails the build').toMatch(/\.catch\([^]*process\.exit\(1\)/);
+    }
   });
 });
