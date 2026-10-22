@@ -197,11 +197,13 @@ const PROFILE_LEN = 9;
  */
 const GUEST_SLOT = 0x09;
 /**
- * b2 [11..13] verbatim from the ESPHome client. [11] is not decoded (most
- * likely sex and age; "0x80 | age" is refuted by two profiles of known age),
- * which is why the scale's figures from such a session are not exported.
+ * b2 [11] verbatim from the ESPHome client. It is not decoded (most likely sex
+ * and age; "0x80 | age" is refuted by two profiles of known age), which is why
+ * the scale's figures from such a session are not exported.
  */
-const GUEST_TAIL = [0xa9, 0xff, 0x02];
+const GUEST_PROFILE_BYTE = 0xa9;
+/** b2 [12..13] verbatim from the ESPHome client. */
+const GUEST_TAIL = [0xff, 0x02];
 
 /** b3 payload length: seq, constant (3), Unix seconds (4), zone minutes (2), 00. */
 const CLOCK_LEN = 11;
@@ -271,9 +273,14 @@ function zoneMinutes(now: Date): number | null {
 
 /**
  * `b2` in the guest form: seq, slot 09, height in 0.1 cm and last weight in
- * 0.01 kg (both u16 BE), then a9 ff 02. The seq is echoed in the 0x22 reply.
+ * 0.01 kg (both u16 BE), then `profileByte` (a9 by default) and ff 02. The seq
+ * is echoed in the 0x22 reply.
  */
-export function buildGuestProfileFrame(seq: number, profile: UserProfile): Buffer {
+export function buildGuestProfileFrame(
+  seq: number,
+  profile: UserProfile,
+  profileByte: number = GUEST_PROFILE_BYTE,
+): Buffer {
   const height = heightTenths(profile) ?? FALLBACK_HEIGHT_TENTHS;
   const weight = weightCg(profile) ?? FALLBACK_WEIGHT_CG;
   return build55aaFrame(CMD_PROFILE, [
@@ -283,6 +290,7 @@ export function buildGuestProfileFrame(seq: number, profile: UserProfile): Buffe
     height & 0xff,
     (weight >> 8) & 0xff,
     weight & 0xff,
+    profileByte & 0xff,
     ...GUEST_TAIL,
   ]);
 }
@@ -317,9 +325,10 @@ export function buildClockFrame(seq: number, now: Date): Buffer {
  * owns, and b7 (name), b8 (settings) and b6 (deletes a stored record) are never
  * sent. The status acks go through buildAck, not through here. The length
  * field and checksum are checked too, so a second frame cannot ride along
- * behind an allowed one.
+ * behind an allowed one. A b2's [11] must be exactly `profileByte`, the byte
+ * this session sends.
  */
-export function assertAllowedWrite(frame: Buffer): void {
+export function assertAllowedWrite(frame: Buffer, profileByte: number = GUEST_PROFILE_BYTE): void {
   const refuse = (why: string): never => {
     throw new Error(`Renpho R-MSC04: refusing to write ${why}`);
   };
@@ -339,7 +348,8 @@ export function assertAllowedWrite(frame: Buffer): void {
         height > MAX_HEIGHT_TENTHS ||
         weight < MIN_WEIGHT_CG ||
         weight > MAX_WEIGHT_CG ||
-        GUEST_TAIL.some((b, i) => p[6 + i] !== b)
+        p[6] !== profileByte ||
+        GUEST_TAIL.some((b, i) => p[7 + i] !== b)
       ) {
         refuse('a b2 other than the guest form');
       }
@@ -427,6 +437,13 @@ class FragmentReassembler {
     this.reset();
     return frame;
   }
+}
+
+/** The record's body fat, and its visceral fat when it is 1 to 59. */
+function recordComposition(rec: CompositionRecord): ScaleBodyComp {
+  const comp: ScaleBodyComp = { fat: rec.fatPercent };
+  if (rec.visceralFat >= 1 && rec.visceralFat <= 59) comp.visceralFat = rec.visceralFat;
+  return comp;
 }
 
 /** Decode a validated 0x25 frame (42 bytes, all fields big-endian). */
@@ -949,8 +966,6 @@ export class RenphoMsc04Adapter
       );
       return {};
     }
-    const comp: ScaleBodyComp = { fat: rec.fatPercent };
-    if (rec.visceralFat >= 1 && rec.visceralFat <= 59) comp.visceralFat = rec.visceralFat;
-    return comp;
+    return recordComposition(rec);
   }
 }

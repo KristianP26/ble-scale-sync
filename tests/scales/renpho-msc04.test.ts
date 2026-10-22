@@ -442,6 +442,8 @@ const MADE_UP_PROFILE: UserProfile = {
 };
 // seq 00, slot 09, 0x0690 = 168.0 cm, 0x1996 = 65.50 kg, a9 ff 02.
 const MADE_UP_B2 = '55aab20009000906901996a9ff02b2';
+// The same with the made-up profile byte 9e at [11].
+const MADE_UP_B2_9E = '55aab200090009069019969eff02a7';
 
 /** `bytes` followed by their 55AA checksum. */
 function withSum(bytes: number[]): Buffer {
@@ -529,6 +531,11 @@ describe('RenphoMsc04Adapter connect handshake (#434, D038)', () => {
 
   it('builds the guest b2 from the profile height and last weight', () => {
     expect(buildGuestProfileFrame(0, MADE_UP_PROFILE).toString('hex')).toBe(MADE_UP_B2);
+  });
+
+  it('puts a given profile byte at [11] and keeps the rest of the guest form', () => {
+    // Made-up byte 9e: [11] a9 -> 9e, checksum b2 -> a7.
+    expect(buildGuestProfileFrame(0, MADE_UP_PROFILE, 0x9e).toString('hex')).toBe(MADE_UP_B2_9E);
   });
 
   it('falls back to 170.0 cm and 70.00 kg, and the fallback passes the allow-list', () => {
@@ -622,6 +629,18 @@ describe('RenphoMsc04Adapter connect handshake (#434, D038)', () => {
 
     it.each(refused)('refuses %s', (_what, f) => {
       expect(() => assertAllowedWrite(f)).toThrow(/refusing/);
+    });
+
+    it("takes a b2's [11] only when it is exactly the session's profile byte", () => {
+      const with9e = Buffer.from(MADE_UP_B2_9E, 'hex');
+      expect(() => assertAllowedWrite(with9e, 0x9e)).not.toThrow();
+      // Without the byte the default a9 applies, so 9e is refused, and a9 with 9e too.
+      expect(() => assertAllowedWrite(with9e)).toThrow(/refusing/);
+      expect(() => assertAllowedWrite(Buffer.from(MADE_UP_B2, 'hex'), 0x9e)).toThrow(/refusing/);
+      // [12] and [13] are still checked with another byte.
+      const p9e = withByte(GOOD_B2, 6, 0x9e);
+      expect(() => assertAllowedWrite(b2(withByte(p9e, 7, 0x03)), 0x9e)).toThrow(/refusing/);
+      expect(() => assertAllowedWrite(b2(withByte(p9e, 8, 0x03)), 0x9e)).toThrow(/refusing/);
     });
   });
 
