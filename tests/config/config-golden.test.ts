@@ -90,6 +90,7 @@ ble:
   qn_time_sync_long: false
   qn_config_long: true
   qn_result_ack: false
+  rmsc04_profile_byte: "9e"
   mqtt_proxy:
     broker_url: "mqtt://broker.local:1883"
     username: proxy
@@ -235,6 +236,7 @@ const RELOAD_EDITS: Record<string, Record<string, unknown>> = {
     out_of_range: 'warn',
     'users.0.last_known_weight': 90,
     'ble.qn_weight_ack': false,
+    'ble.rmsc04_profile_byte': '5c',
   },
   'handler-and-adapter': {
     'ble.handler': 'auto',

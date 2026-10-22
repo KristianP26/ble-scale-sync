@@ -55,6 +55,7 @@ const HOT_RELOADABLE = [
   'ble.qn_time_sync_long',
   'ble.qn_config_long',
   'ble.qn_result_ack',
+  'ble.rmsc04_profile_byte',
 ];
 
 const shapeKeys = (schema: unknown): string[] =>

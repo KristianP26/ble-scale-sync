@@ -4,6 +4,7 @@ import { isValidScaleId, SCALE_ID_HINT } from '../ble/scale-id.js';
 import { cliCommand } from '../cli-invocation.js';
 import { findTokenDirCollisions } from './token-dirs.js';
 import { QN_BLE_OPTIONS } from '../scales/qn-scale/options.js';
+import { RMSC04_BLE_OPTIONS } from '../scales/renpho-msc04-options.js';
 
 // --- Sub-schemas ---
 
@@ -125,7 +126,7 @@ export const MqttProxySchema = z
  * schema, BleSchema validates them, and buildAdapterRuntimeConfig passes each
  * one to configure() without a per-key mapping.
  */
-export const ADAPTER_BLE_OPTIONS = { ...QN_BLE_OPTIONS };
+export const ADAPTER_BLE_OPTIONS = { ...QN_BLE_OPTIONS, ...RMSC04_BLE_OPTIONS };
 
 export const BleSchema = z
   .object({

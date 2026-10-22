@@ -131,6 +131,7 @@ ble:
 | `qn_time_sync_long`          | No                          | `false`        | QN-family scales only. Send the 9-byte form of the `0x20` time-sync frame that an Arboleaf vendor app sends, instead of the 8-byte one. Off by default; the extra byte is your UTC offset. See below.                                                                                                                                                                                                                                                                |
 | `qn_config_long`             | No                          | `false`        | QN-family scales only. Send the 10-byte form of the `0x13` config frame the vendor app sends, instead of the 9-byte one. Off by default; the extra bytes are undecoded. See below.                                                                                                                                                                                                                                                                                   |
 | `qn_result_ack`              | No                          | `false`        | QN-family scales with a 19-byte scale-info frame only. After the scale's last result frame, send the end-of-measurement frame the vendor's published SDK sends. Off by default; not yet confirmed on hardware. See below.                                                                                                                                                                                                                                            |
+| `rmsc04_profile_byte`        | No                          | Unset          | Renpho R-MSC04 only. One byte of the profile the Renpho app writes to the scale for you, as two hex digits in quotes. With it the scale's own body fat and visceral fat are exported for the first user. Personal: keep it out of issues. Not yet confirmed on hardware. See below.                                                                                                                                                                                  |
 | `proxy_liveness_timeout_min` | No                          | `30`           | Minutes of total advertisement silence before a proxy transport is treated as wedged and the process exits for the supervisor to restart. `0` disables. Proxy transports only. See below.                                                                                                                                                                                                                                                                            |
 | `mqtt_proxy`                 | If `handler: mqtt-proxy`    | (none)         | MQTT proxy connection (`broker_url`, `device_id`, `topic_prefix`, `username`, `password`, `auto_connect`, `embedded_broker_*`). See [ESP32 BLE Proxy](./esp32-proxy).                                                                                                                                                                                                                                                                                                |
 | `esphome_proxy`              | If `handler: esphome-proxy` | (none)         | ESPHome Native API connection (`host`, `port`, `encryption_key` or `password`, `client_info`). See [ESPHome Bluetooth Proxy](./esphome-proxy).                                                                                                                                                                                                                                                                                                                       |
@@ -448,6 +449,58 @@ QN: extended-dialect measurement trigger sent, weight anchor 76.40 kg (#235, #75
 The anchor is taken from the **first** user in the list, because the scale is handed it before anyone steps on and there is nothing yet to match a person against.
 
 That only covers the moment before the weigh-in. Once the scale starts streaming, every live weight frame is acknowledged with that frame's own weight, exactly as the vendor app does, so the number the scale is told matches whoever is actually standing on it regardless of whose anchor went out first. The anchor is the opening value; the acknowledgements are exact.
+
+:::
+
+::: tip Renpho R-MSC04: the scale's own body fat (`rmsc04_profile_byte`)
+
+The R-MSC04 computes body fat, BMI, skeletal muscle and visceral fat itself, for the profile last written to it. To get a weigh-in at all, ble-scale-sync writes the scale a guest profile with the first user's height and last weight. One byte of that profile is not decoded (most likely it holds sex and age), so ble-scale-sync sends the byte a working third-party client sends, and by default it does not export what the scale computed for that profile: the scale's figures are only logged, and the body fat estimate from your profile is exported.
+
+The Renpho app writes your own profile to the scale on every connection, and your byte is in it. To find it, record an Android HCI snoop log while you weigh in with the Renpho app, and look for a write to characteristic `0x2A11` that starts with `55 aa b2 00 09`:
+
+```
+55 aa b2 00 09 <seq> <slot> <height> <height> <weight> <weight> <BYTE> <xx> <xx> <checksum>
+```
+
+The value you want is the 12th byte. Put it in quotes, since YAML reads an unquoted `99` as a decimal number:
+
+```yaml
+ble:
+  rmsc04_profile_byte: 'xx' # your own byte, always in quotes
+```
+
+Replace `xx` with your byte. `xx` itself is not a valid value, so the config does not load until you do.
+
+With it set, the guest profile carries your byte instead, and the scale's body fat and visceral fat are exported when all of these hold:
+
+1. The scale reported body fat and BMI.
+2. The profile with your byte was written in the same connection.
+3. The scale acknowledged the profile before it first reported the measurement complete, and its last status before the results was measurement complete. So when ble-scale-sync connects only after the scale has finished measuring, the scale's figures for that weigh-in are not used.
+4. The weigh-in was matched to a user with the same height, sex, birth date and age as the first user, whose profile was sent.
+5. The scale's BMI fits the height that was sent.
+
+Otherwise the estimate goes out, and the normal log says why, for example:
+
+```
+Renpho R-MSC04: the scale's body fat and visceral fat are not used for this weigh-in: the scale did not answer the profile frame before it first reported the measurement complete, or its last status before the record was not measurement complete; using the estimate (#434)
+```
+
+When they are used, it says:
+
+```
+Renpho R-MSC04: using the scale's body fat and visceral fat, computed for the profile sent with ble.rmsc04_profile_byte (#434)
+```
+
+Water, bone mass and muscle mass are then derived from the scale's body fat, and BMI, BMR, metabolic age and physique rating are calculated here. Its skeletal muscle percentage appears in the debug log only.
+
+Keep in mind:
+
+- The first user in your config should be the person whose profile you captured, with the same `height`, `gender` and `birth_date` as in the Renpho app. With several users, only weigh-ins matched to the first user, or to a user with exactly the same profile, use the scale's figures.
+- The byte most likely holds your age. Capture it again after your birthday, or after you change your profile in the Renpho app.
+- The athlete setting is not sent to the scale (the Renpho app did not send it either in the capture this option is based on), so `is_athlete` does not change the scale's figures.
+- The byte is personal: do not paste it into an issue. ble-scale-sync never logs it, and the setup wizard hides its value when it lists changes. Through the ESP32 proxy the profile frame, byte included, goes over MQTT unencrypted, as the guest profile always has.
+
+Not yet confirmed on hardware ([#434](https://github.com/KristianP26/ble-scale-sync/issues/434)).
 
 :::
 

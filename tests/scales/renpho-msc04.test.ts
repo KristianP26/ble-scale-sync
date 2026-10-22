@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import {
   RenphoMsc04Adapter,
   assertAllowedWrite,
@@ -822,10 +822,10 @@ describe('RenphoMsc04Adapter handshake diagnostics (#434)', () => {
     const other = await connectedAdapter(captureClock, MADE_UP_PROFILE);
     other.adapter.parseCharNotification(IND, FINAL);
     feed(other.adapter, RECORD);
-    const verdicts = lines().filter((l) => l.includes('BMI height'));
+    const verdicts = lines().filter((l) => l.includes('the height we sent'));
     expect(verdicts).toEqual([
-      "Renpho R-MSC04: the record's BMI height matches the height we sent (within 1 cm)",
-      "Renpho R-MSC04: the record's BMI height does not match the height we sent (within 1 cm)",
+      "Renpho R-MSC04: the record's BMI matches the height we sent (BMI within 0.1)",
+      "Renpho R-MSC04: the record's BMI does not match the height we sent (BMI within 0.1)",
     ]);
   });
 
@@ -1099,5 +1099,394 @@ describe('RenphoMsc04Adapter 0x25 record without a settled weight (#434, D057)',
     const rec3 = hexFrame('af0400ed011101b7000872');
     const adapter = fresh();
     expect(feed(adapter, [STATUS_LOCKED, STATUS_DONE, rec1, REC_2, rec3])).toBeNull();
+  });
+});
+
+// ─── ble.rmsc04_profile_byte (#434, D079) ────────────────────────────────────
+
+// Made up, NOT from any capture: 187 cm fits the #117 record (95.55 kg, BMI 27.3).
+const OWN: UserProfile = {
+  gender: 'male',
+  birthDate: '1996-03-01',
+  age: 30,
+  height: 187,
+  isAthlete: false,
+};
+// The scale's 0x22 answer to our b2 (seq 00, slot 09). Constructed: an owner's
+// DEBUG log on #434 (comment 6175828320) shows "scale answered b2 with 09", and
+// the #117 capture's answers (A_REPLY_B2_SEQ1) carry the b2 seq at [5].
+const REPLY_B2 = Buffer.from('55aa22000200092c', 'hex');
+// The 0x23 answer to our b3 (seq 01), constructed the same way.
+const REPLY_B3 = Buffer.from('55aa2300030107012e', 'hex');
+// STATUS_DONE again, with seq 04 (constructed): a second 0x11 in the session.
+const STATUS_DONE_AGAIN = Buffer.from('55aa20000504110100508a', 'hex');
+
+const USED = "Renpho R-MSC04: using the scale's body fat and visceral fat";
+const REASON = {
+  noFat: 'the scale reported no body fat',
+  notWritten: 'the profile frame with ble.rmsc04_profile_byte was not confirmed as written',
+  notAnswered:
+    'the scale did not answer the profile frame before it first reported the measurement ' +
+    'complete, or its last status before the record was not measurement complete',
+  otherProfile:
+    'the weigh-in was matched to a user whose height, sex, birth date or age is not the ' +
+    'profile sent to the scale',
+  bmi: "the scale's BMI does not fit the height sent to it",
+};
+const notUsed = (why: string): string =>
+  "Renpho R-MSC04: the scale's body fat and visceral fat are not used for this weigh-in: " +
+  `${why}; using the estimate (#434)`;
+
+describe('RenphoMsc04Adapter ble.rmsc04_profile_byte (#434, D079)', () => {
+  let spies: ReturnType<typeof spyAllLevels>;
+
+  beforeEach(() => {
+    spies = spyAllLevels();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+  });
+
+  /** One connect with the option set to `byte`, on `adapter` or a new one. */
+  async function ownSession(
+    byte: string | null = '9e',
+    profile: UserProfile = OWN,
+    write?: (data: Buffer) => Promise<void>,
+    adapter = new RenphoMsc04Adapter(captureClock),
+  ): Promise<{ adapter: RenphoMsc04Adapter; written: Written[] }> {
+    adapter.configure({ rmsc04ProfileByte: byte ?? undefined });
+    const { ctx, written } = handshakeCtx(profile, write);
+    adapter.onSessionStart();
+    await adapter.onConnected(ctx);
+    return { adapter, written };
+  }
+
+  /** computeMetrics and the info lines it logged. */
+  function metrics(adapter: RenphoMsc04Adapter, r: ScaleReading, profile: UserProfile = OWN) {
+    spies[1].mockClear();
+    const payload = adapter.computeMetrics(r, profile);
+    return { payload, info: spies[1].mock.calls.map((c) => String(c[0])) };
+  }
+
+  function expectExported(adapter: RenphoMsc04Adapter, r: ScaleReading | null, p = OWN): void {
+    expect(r).not.toBeNull();
+    const { payload, info } = metrics(adapter, r!, p);
+    expect(payload).toEqual(buildPayload(95.55, 0, { fat: 23.7, visceralFat: 8 }, p));
+    expect(info).toEqual([
+      `${USED}, computed for the profile sent with ble.rmsc04_profile_byte (#434)`,
+    ]);
+  }
+
+  function expectEstimate(
+    adapter: RenphoMsc04Adapter,
+    r: ScaleReading | null,
+    why: string,
+    p = OWN,
+  ): void {
+    expect(r).not.toBeNull();
+    const { payload, info } = metrics(adapter, r!, p);
+    expect(payload).toEqual(buildPayload(95.55, 0, {}, p));
+    expect(info).toEqual([notUsed(why)]);
+  }
+
+  it('writes the byte at [11] of the guest b2, in either case', async () => {
+    expect((await ownSession('9e', MADE_UP_PROFILE)).written[0].hex).toBe(MADE_UP_B2_9E);
+    expect((await ownSession('9E', MADE_UP_PROFILE)).written[0].hex).toBe(MADE_UP_B2_9E);
+  });
+
+  it('writes the byte 00 too, and uses the scale figures with it', async () => {
+    // 00 is falsy: [11] a9 -> 00, checksum b2 -> 09.
+    expect((await ownSession('00', MADE_UP_PROFILE)).written[0].hex).toBe(
+      '55aab2000900090690199600ff0209',
+    );
+    const { adapter } = await ownSession('00');
+    expectExported(
+      adapter,
+      feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]),
+    );
+  });
+
+  it('goes back to the guest byte a9 once the option is unset', async () => {
+    const adapter = new RenphoMsc04Adapter(captureClock);
+    await ownSession('9e', MADE_UP_PROFILE, undefined, adapter);
+    expect((await ownSession(null, MADE_UP_PROFILE, undefined, adapter)).written[0].hex).toBe(
+      MADE_UP_B2,
+    );
+    await ownSession('9e', MADE_UP_PROFILE, undefined, adapter);
+    adapter.configure({});
+    const { ctx, written } = handshakeCtx(MADE_UP_PROFILE);
+    adapter.onSessionStart();
+    await adapter.onConnected(ctx);
+    expect(written[0].hex).toBe(MADE_UP_B2);
+  });
+
+  it('logs nothing when configured', () => {
+    const adapter = new RenphoMsc04Adapter(captureClock);
+    adapter.configure({ rmsc04ProfileByte: '9e' });
+    adapter.configure({});
+    expect(logged(spies)).toEqual([]);
+  });
+
+  it("exports the scale's body fat and visceral fat from a full weigh-in", async () => {
+    const { adapter } = await ownSession();
+    const r = feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expectExported(adapter, r);
+  });
+
+  it('exports them from a session that connected at weight locked (D057)', async () => {
+    const { adapter } = await ownSession();
+    const r = feed(adapter, [STATUS_LOCKED, REPLY_B2, REPLY_B3, STATUS_DONE, ...RECORD]);
+    expectExported(adapter, r);
+  });
+
+  it('uses the estimate when the session started at measurement complete', async () => {
+    const { adapter } = await ownSession();
+    expectEstimate(adapter, feed(adapter, [STATUS_DONE, REPLY_B2, ...RECORD]), REASON.notAnswered);
+  });
+
+  it('uses the estimate when a 0x11 came before the answer, even with a second 0x11', async () => {
+    const { adapter } = await ownSession();
+    const r = feed(adapter, [STATUS_DONE, REPLY_B2, STATUS_DONE_AGAIN, ...RECORD]);
+    expectEstimate(adapter, r, REASON.notAnswered);
+  });
+
+  it('exports when a second 0x11 follows one that came after the answer', async () => {
+    const { adapter } = await ownSession();
+    const r = feed(adapter, [STATUS_LOCKED, REPLY_B2, STATUS_DONE, STATUS_DONE_AGAIN, ...RECORD]);
+    expectExported(adapter, r);
+  });
+
+  it('uses the estimate when the record follows a 0x24 without a 0x11', async () => {
+    const { adapter } = await ownSession();
+    const r = feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, ...RECORD]);
+    expectEstimate(adapter, r, REASON.notAnswered);
+  });
+
+  it('uses the estimate when another status follows the 0x11', async () => {
+    const { adapter } = await ownSession();
+    const r = feed(adapter, [REPLY_B2, FINAL, STATUS_DONE, STATUS_LOCKED, ...RECORD]);
+    expectEstimate(adapter, r, REASON.notAnswered);
+  });
+
+  it.each([
+    ['no answer', null],
+    ['an answer with another seq', '55aa22000201092d'],
+    ['an answer for another slot', '55aa220002000124'],
+    ['an answer of another length', '55aa2200030009002d'],
+    ["the app's answer from the #117 capture", A_REPLY_B2_SEQ1],
+  ])('uses the estimate with %s', async (_what, reply) => {
+    const { adapter } = await ownSession();
+    const answer = reply === null ? [] : [Buffer.from(reply, 'hex')];
+    const r = feed(adapter, [...answer, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expectEstimate(adapter, r, REASON.notAnswered);
+  });
+
+  it('does not carry the answer or the latch into the next session', async () => {
+    // (a) The answer of session 1 does not count in session 2.
+    const a = new RenphoMsc04Adapter(captureClock);
+    await ownSession('9e', OWN, undefined, a);
+    feed(a, [REPLY_B2]);
+    a.onSessionEnd();
+    await ownSession('9e', OWN, undefined, a);
+    expectEstimate(a, feed(a, [STATUS_LOCKED, STATUS_DONE, ...RECORD]), REASON.notAnswered);
+
+    // (b) A 0x11 before the answer in session 1 does not close session 2.
+    const b = new RenphoMsc04Adapter(captureClock);
+    await ownSession('9e', OWN, undefined, b);
+    feed(b, [STATUS_DONE, REPLY_B2]);
+    b.onSessionEnd();
+    await ownSession('9e', OWN, undefined, b);
+    expectExported(b, feed(b, [STATUS_LOCKED, REPLY_B2, REPLY_B3, STATUS_DONE, ...RECORD]));
+  });
+
+  it('takes a BMI within 0.1 of the height sent, and nothing further', async () => {
+    // 95.55 kg at 187.4 cm is BMI 27.21 (0.09 from 27.3), at 188 cm 27.03 (0.27).
+    const near = { ...OWN, height: 187.4 };
+    const a = (await ownSession('9e', near)).adapter;
+    expectExported(a, feed(a, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]), near);
+
+    const far = { ...OWN, height: 188 };
+    const b = (await ownSession('9e', far)).adapter;
+    spies[0].mockClear();
+    const r = feed(b, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expect(spies[0].mock.calls.map((c) => String(c[0]))).toContain(
+      "Renpho R-MSC04: the record's BMI does not match the height we sent (BMI within 0.1)",
+    );
+    expectEstimate(b, r, REASON.bmi, far);
+  });
+
+  it.each([
+    ['height', { height: 187.1 }],
+    ['sex', { gender: 'female' as const }],
+    ['birth date', { birthDate: '1996-03-02' }],
+    ['age', { age: 31 }],
+  ])('uses the estimate for a user with another %s than the profile sent', async (_f, diff) => {
+    const { adapter } = await ownSession();
+    const r = feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expectEstimate(adapter, r, REASON.otherProfile, { ...OWN, ...diff });
+  });
+
+  it('exports for an athlete: the scale is never told', async () => {
+    const athlete = { ...OWN, isAthlete: true };
+    const { adapter } = await ownSession('9e', athlete);
+    const r = feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expectExported(adapter, r, athlete);
+  });
+
+  it('uses the estimate when the profile height is out of range and 170.0 cm went out', async () => {
+    const tall = { ...OWN, height: 300 };
+    const { adapter } = await ownSession('9e', tall);
+    const r = feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expectEstimate(
+      adapter,
+      r,
+      "the first user's height is out of range, so the profile frame carried 170.0 cm",
+      tall,
+    );
+  });
+
+  it('counts an answer that arrives before the transport confirms the b2 write', async () => {
+    // The scale's 0x22 can beat the Write Response, which took up to 90 ms in
+    // the #117 captures.
+    const adapter = new RenphoMsc04Adapter(captureClock);
+    adapter.configure({ rmsc04ProfileByte: '9e' });
+    let release!: () => void;
+    const { ctx } = handshakeCtx(OWN, (buf) =>
+      buf[2] === 0xb2 ? new Promise<void>((resolve) => (release = resolve)) : Promise.resolve(),
+    );
+    adapter.onSessionStart();
+    const connecting = adapter.onConnected(ctx);
+    feed(adapter, [REPLY_B2]);
+    release();
+    await connecting;
+
+    expectExported(adapter, feed(adapter, [FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]));
+  });
+
+  it('does not count a b2 write confirmed only after its session ended', async () => {
+    // send() is true only while its session still owns the link. The session
+    // cleanup unsubscribes before it calls onSessionEnd, so a record should not
+    // follow it; this keeps the contract from depending on that.
+    const adapter = new RenphoMsc04Adapter(captureClock);
+    adapter.configure({ rmsc04ProfileByte: '9e' });
+    let release!: () => void;
+    const { ctx } = handshakeCtx(OWN, (buf) =>
+      buf[2] === 0xb2 ? new Promise<void>((resolve) => (release = resolve)) : Promise.resolve(),
+    );
+    adapter.onSessionStart();
+    const connecting = adapter.onConnected(ctx);
+    feed(adapter, [REPLY_B2]);
+    adapter.onSessionEnd();
+    release();
+    await connecting;
+
+    const r = feed(adapter, [FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expectEstimate(adapter, r, REASON.notWritten);
+  });
+
+  it('uses the estimate when the b2 write failed', async () => {
+    const { adapter } = await ownSession('9e', OWN, async (buf) => {
+      if (buf[2] === 0xb2) throw new Error('GATT write failed');
+    });
+    const r = feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expectEstimate(adapter, r, REASON.notWritten);
+  });
+
+  it("does not let a previous session's late b2 count for this session's failed one", async () => {
+    const adapter = new RenphoMsc04Adapter(captureClock);
+    adapter.configure({ rmsc04ProfileByte: '9e' });
+    let release!: () => void;
+    const one = handshakeCtx(OWN, (buf) =>
+      buf[2] === 0xb2 ? new Promise<void>((resolve) => (release = resolve)) : Promise.resolve(),
+    );
+    adapter.onSessionStart();
+    const connecting = adapter.onConnected(one.ctx);
+    adapter.onSessionEnd();
+
+    const two = handshakeCtx(OWN, async (buf) => {
+      if (buf[2] === 0xb2) throw new Error('GATT write failed');
+    });
+    adapter.onSessionStart();
+    await adapter.onConnected(two.ctx);
+    release();
+    await connecting;
+
+    const r = feed(adapter, [REPLY_B2, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    expectEstimate(adapter, r, REASON.notWritten);
+  });
+
+  it('uses the estimate for a record without body fat (derived)', async () => {
+    // Derived from REC_3: fat 00ed -> 0000, checksum ea -> fd.
+    const noFat = Buffer.from('af040000011101b70008fd', 'hex');
+    const { adapter } = await ownSession();
+    const r = feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, REC_1, REC_2, noFat]);
+    expectEstimate(adapter, r, REASON.noFat);
+  });
+
+  it('has no effect with BLE_RMSC04_HANDSHAKE=time: no b2, the D022 gate decides', async () => {
+    vi.stubEnv('BLE_RMSC04_HANDSHAKE', 'time');
+    const { adapter, written } = await ownSession();
+    expect(written.map((w) => w.hex)).toEqual([CAPTURE_CLOCK_B3]);
+    adapter.parseCharNotification(IND, FINAL);
+    const r = feed(adapter, RECORD)!;
+    expect(adapter.computeMetrics(r, PROFILE_187).bodyFatPercent).toBe(23.7);
+  });
+
+  it('never logs the byte, the frame or the height', async () => {
+    const run = async (byte: string): Promise<string[]> => {
+      vi.useFakeTimers({ now: Date.UTC(2026, 0, 1) });
+      for (const s of spies) s.mockClear();
+      const { adapter } = await ownSession(byte);
+      const r = feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD])!;
+      adapter.computeMetrics(r, OWN);
+      adapter.onSessionEnd();
+      vi.useRealTimers();
+      return logged(spies);
+    };
+    const with9e = await run('9e');
+    expect(await run('5c')).toEqual(with9e);
+    expect(with9e.some((l) => l.includes('with ble.rmsc04_profile_byte'))).toBe(true);
+    for (const l of with9e) {
+      expect(l).not.toContain('55aab2');
+      expect(l).not.toContain('074e');
+      expect(l).not.toContain('1870');
+      expect(l).not.toMatch(/\b187(\.0)?\b/);
+    }
+  });
+
+  it('keeps everything the gate reads pinned to the reading', async () => {
+    // (a) A reload that unsets the option does not change a pinned record.
+    const a = (await ownSession()).adapter;
+    const r1 = feed(a, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD])!;
+    a.configure({});
+    expectExported(a, r1);
+
+    // (b) Nor does one that sets it change a record from a session without it.
+    const b = (await ownSession(null)).adapter;
+    const r2 = feed(b, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD])!;
+    b.configure({ rmsc04ProfileByte: '9e' });
+    const { payload, info } = metrics(b, r2);
+    expect(payload).toEqual(buildPayload(95.55, 0, {}, OWN));
+    expect(info.some((l) => l.includes('not exported'))).toBe(true);
+
+    // (c) Nor does the next session starting before computeMetrics runs (#394).
+    const c = (await ownSession()).adapter;
+    const r3 = feed(c, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD])!;
+    c.onSessionEnd();
+    c.onSessionStart();
+    c.parseCharNotification(IND, STATUS_MEASURING);
+    expectExported(c, r3);
+
+    // (d) Nor do the statuses the same session sends after the record and
+    // before computeMetrics runs: 0x05, then 0x04 (#434 logs; these two frames
+    // are from the #117 capture).
+    const d = (await ownSession()).adapter;
+    const r4 = feed(d, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD])!;
+    d.parseCharNotification(IND, Buffer.from(A_STATUS_STORED_3, 'hex'));
+    d.parseCharNotification(IND, Buffer.from(A_STATUS_ENDING, 'hex'));
+    expectExported(d, r4);
   });
 });
