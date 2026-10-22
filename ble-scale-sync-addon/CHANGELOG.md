@@ -7,6 +7,29 @@
 The add-on version always matches the application version, so every entry below
 applies to this add-on.
 
+## [1.36.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.35.0...v1.36.0) (2026-10-22)
+
+
+### Added
+
+* **addon:** expose rmsc04_profile_byte as an add-on option ([dd9a52f](https://github.com/KristianP26/ble-scale-sync/commit/dd9a52fee76502e0c9d0ba6356d47be331c11360))
+* **ble:** clear a stale bond on BlueZ before 5.83 too ([#471](https://github.com/KristianP26/ble-scale-sync/issues/471)) ([5d16b89](https://github.com/KristianP26/ble-scale-sync/commit/5d16b89fc65ea57309e2650ae154cb6cc45066a4))
+* **scales:** export the R-MSC04 body fat with ble.rmsc04_profile_byte ([1076ea9](https://github.com/KristianP26/ble-scale-sync/commit/1076ea984bb546a24f0e6a90aaf6bff649d46b24))
+* warn at startup when the running Node.js is not supported ([eedf00a](https://github.com/KristianP26/ble-scale-sync/commit/eedf00a6c1ab959832ca3a5f74d0702a01d4e28c))
+
+
+### Fixed
+
+* **ble:** tell when a failed connection ended on BlueZ before 5.79 ([3521649](https://github.com/KristianP26/ble-scale-sync/commit/35216494343e147314efa9e24187e82eeda63b02))
+* **docker:** move the base image to Node.js 22.23.4 ([b2beab0](https://github.com/KristianP26/ble-scale-sync/commit/b2beab06496bd2bef57bf5ff939cbf8025b81512))
+* require a Node.js release with the October 2026 security fixes ([9a66e9f](https://github.com/KristianP26/ble-scale-sync/commit/9a66e9f86c994066b480e96904e016f4c9896994))
+
+
+### Docs
+
+* configuration, supported-scales, body-composition, multi-user. ([1076ea9](https://github.com/KristianP26/ble-scale-sync/commit/1076ea984bb546a24f0e6a90aaf6bff649d46b24))
+* troubleshooting. ([eedf00a](https://github.com/KristianP26/ble-scale-sync/commit/eedf00a6c1ab959832ca3a5f74d0702a01d4e28c))
+
 ## [1.35.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.34.0...v1.35.0) (2026-10-21)
 
 
