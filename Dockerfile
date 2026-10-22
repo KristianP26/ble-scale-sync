@@ -4,7 +4,7 @@
 # digests; keep the three node:22 references (build, native and runtime
 # stages) in step when bumping by hand.
 ARG BUILDPLATFORM
-FROM --platform=$BUILDPLATFORM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS build
+FROM --platform=$BUILDPLATFORM node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS build
 
 WORKDIR /app
 
@@ -29,7 +29,7 @@ FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf2583
 # for the target are compiled here, so the compiler and the -dev headers stay
 # out of the runtime image. Only node_modules and the Python tree go across.
 # Same base as the runtime stage: the compiled code links against its glibc.
-FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS native
+FROM node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS native
 
 # build-essential: node-gyp needs gcc/g++/make for the native BLE modules.
 # libffi-dev + libssl-dev + libcurl4-openssl-dev: cffi/cryptography/curl_cffi
@@ -70,7 +70,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 # ── Runtime stage ────────────────────────────────────────────────────
-FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c
+FROM node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
 
 # OCI labels
 ARG VERSION=local
