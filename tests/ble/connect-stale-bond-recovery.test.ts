@@ -28,7 +28,7 @@ vi.mock('../../src/ble/handler-node-ble/device-object.js', () => ({
 const { connectWithRecovery } = await import('../../src/ble/handler-node-ble/connect.js');
 const { _resetLinkObserverForTests } =
   await import('../../src/ble/handler-node-ble/link-observer.js');
-const { _resetStaleBondAnnouncementsForTests } =
+const { _resetStaleBondAnnouncementsForTests, StaleBondEvidence } =
   await import('../../src/ble/handler-node-ble/stale-bond.js');
 const { bleLog } = await import('../../src/ble/types.js');
 
@@ -278,6 +278,34 @@ describe('how each failed connect ended (#471, D066)', () => {
     expect(endedAt - lastError).toBeLessThanOrEqual(1600);
     expect(attemptLine(5)).toContain('went down 2000 ms after the error');
     expect(attemptLine(6)).toContain('was not seen going down after the error');
+  });
+});
+
+describe('what the retry Disconnect adds to the evidence (#471, D066)', () => {
+  /** The verdict the call ended on. */
+  const finalVerdict = (spy: { mock: { results: { value: unknown }[] } }): unknown =>
+    spy.mock.results.at(-1)?.value;
+
+  it('confirms a connection that outlived the error only when the retry Disconnect waited for it too', async () => {
+    const verdict = vi.spyOn(StaleBondEvidence.prototype, 'verdict');
+    await drive(run(makeScale({ steps: times(6, abort({ up: true, downMs: 95 })) })));
+    // Attempts 1-5 had a retry Disconnect that BlueZ answered 95 ms later; the
+    // last attempt has none.
+    expect(finalVerdict(verdict)).toMatchObject({ kind: 'outlived', count: 6, confirmed: 5 });
+  });
+
+  it('does not confirm on the gap alone when this host sent the retry Disconnect late', async () => {
+    // The connection went down 5 ms after the error, as on a weak link, but the
+    // retry Disconnect left 60 ms late, so the gap alone says 65 ms.
+    let lag = 0;
+    _resetLinkObserverForTests(() => Date.now() + lag);
+    warn.mockImplementation((line: unknown) => {
+      if (String(line).startsWith('Connect error:')) lag += 60;
+    });
+    const verdict = vi.spyOn(StaleBondEvidence.prototype, 'verdict');
+    await drive(run(makeScale({ steps: times(6, abort({ up: true, downMs: 5 })) })));
+    expect(attemptLine(1)).toContain('stayed up 65 ms after the error');
+    expect(finalVerdict(verdict)).toMatchObject({ kind: 'outlived', count: 5, confirmed: 0 });
   });
 });
 
