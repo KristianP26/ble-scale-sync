@@ -141,7 +141,7 @@ BlueZ and noble, plus the ESP32 and ESPHome proxies).
 
 <!-- contributors:start - generated from git history by src/tools/sync-contributors.ts, do not edit by hand -->
 <table><tr>
-<td align="center"><a href="https://github.com/KristianP26"><img src="https://avatars.githubusercontent.com/u/28766334?v=4" width="60" height="60" alt="KristianP26"><br><sub>KristianP26</sub></a><br><sub>1,243 commits</sub></td>
+<td align="center"><a href="https://github.com/KristianP26"><img src="https://avatars.githubusercontent.com/u/28766334?v=4" width="60" height="60" alt="KristianP26"><br><sub>KristianP26</sub></a><br><sub>1,256 commits</sub></td>
 <td align="center"><a href="https://github.com/APIUM"><img src="https://avatars.githubusercontent.com/u/9067013?v=4" width="60" height="60" alt="APIUM"><br><sub>APIUM</sub></a><br><sub>34 commits</sub></td>
 <td align="center"><a href="https://github.com/alasano"><img src="https://avatars.githubusercontent.com/u/14372930?v=4" width="60" height="60" alt="alasano"><br><sub>alasano</sub></a><br><sub>8 commits</sub></td>
 <td align="center"><a href="https://github.com/marcelorodrigo"><img src="https://avatars.githubusercontent.com/u/443962?v=4" width="60" height="60" alt="marcelorodrigo"><br><sub>marcelorodrigo</sub></a><br><sub>7 commits</sub></td>
