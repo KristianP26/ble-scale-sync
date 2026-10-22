@@ -34,12 +34,14 @@ import {
   staleBondPossibleMessage,
   StaleBondEvidence,
   LINK_SETTLE_MS,
+  LINK_STALL_LIMIT_MS,
   STALE_BOND_EVIDENCE_ATTEMPTS,
   type AttemptEvidence,
 } from './stale-bond.js';
 import {
   observeConnectAttempt,
   linkNow,
+  watchLoopStall,
   type AttemptLinkView,
   type LinkObserver,
 } from './link-observer.js';
@@ -102,8 +104,8 @@ export interface ConnectRecoveryContext {
   /**
    * Delete a bond the peer has forgotten and pair again, rather than stopping at
    * the diagnostic (`ble.auto_clear_stale_bond`, #335). Off by default, and
-   * only when BlueZ reports that the scale refused the key (stale-bond.ts,
-   * D066): a weak radio link gives the same error string (#471).
+   * only on proof that the scale refused the key (provesRefusedKey in
+   * stale-bond.ts, D066): a weak radio link gives the same error string (#471).
    */
   autoClearStaleBond?: boolean;
   /**
@@ -439,14 +441,24 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
         // teardown recovers the adapter.
         bleLog.debug('Disconnecting before retry...');
         const disconnectAt = linkNow();
-        const disconnected = await disconnectBounded(device, {
-          mac: formattedMac,
-          label: 'retry',
-          abortSignal,
-          onAnswered: () => observer?.markGone(),
-        });
+        const stopStallWatch = watchLoopStall();
+        let stalledMs: number;
+        let disconnected: Awaited<ReturnType<typeof disconnectBounded>>;
+        try {
+          disconnected = await disconnectBounded(device, {
+            mac: formattedMac,
+            label: 'retry',
+            abortSignal,
+            onAnswered: () => observer?.markGone(),
+          });
+        } finally {
+          // The watch is an interval: stopped on every path.
+          stalledMs = stopStallWatch();
+        }
         // How long BlueZ held the answer back: until the connection was gone.
-        const disconnectMs = linkNow() - disconnectAt;
+        // Not counted when this process stalled meanwhile: the stall alone
+        // can stretch a link that went down with the error past 40 ms.
+        const disconnectMs = stalledMs < LINK_STALL_LIMIT_MS ? linkNow() - disconnectAt : undefined;
         if (disconnected === 'aborted') throwIfAborted();
         if (disconnected === 'timeout') {
           throw tagBleFailure(new StaleLinkError(formattedMac), 'wedge-suspect');
@@ -463,12 +475,12 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
         observer?.stop();
         observer = undefined;
 
-        // 2. Purge the stale D-Bus proxy. With the opt-in and BlueZ's word
-        // that the scale refused the stored key, the pairing keys go with it:
-        // the peripheral has forgotten its half, and the bonded guard in
+        // 2. Purge the stale D-Bus proxy. With the opt-in and proof that the
+        // scale refused the stored key, the pairing keys go with it: the
+        // peripheral has forgotten its half, and the bonded guard in
         // removeDevice would otherwise keep the dead key alive forever and
         // lock the host out of the scale until someone runs
-        // `bluetoothctl remove` (#335). The error string is not that word: a
+        // `bluetoothctl remove` (#335). The error string is not that proof: a
         // weak radio link gives the same one (#471, D066).
         const verdict = evidence.verdict();
         let clearBond = false;
@@ -480,7 +492,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
         ) {
           clearBond = true;
           staleBondCleared = true;
-          bleLog.warn(staleBondClearNotice(formattedMac, verdict.refused));
+          bleLog.warn(staleBondClearNotice(formattedMac, verdict));
         }
         await removeDevice(btAdapter, mac, { includeBonded: clearBond });
 

@@ -176,12 +176,14 @@ export const BleSchema = z
      * dead key forever: every connect fails during encryption and the host
      * never invalidates anything, so the scale is unreachable until someone
      * runs `bluetoothctl remove` by hand. With this on, the bond is cleared once
-     * per connect when BlueZ reports that the scale refused the key: BlueZ 5.83
-     * and later (Home Assistant OS 16.2 and later) say why a connection ended,
-     * and three refusals in one connect are enough. Every BlueZ gives a refused
-     * key and a weak radio link the same `le-connection-abort-by-local` (#471),
-     * so with older BlueZ nothing is cleared; a warning says when the failures
-     * look like a forgotten pairing.
+     * per connect, on three attempts that show the scale refusing the key.
+     * Every BlueZ gives a refused key and a weak radio link the same
+     * `le-connection-abort-by-local` (#471), so the error alone is not enough.
+     * BlueZ 5.83 and later (Home Assistant OS 16.2 and later) say why a
+     * connection ended, and only a reported refusal counts there. With older
+     * BlueZ it goes by how the connection ended: over a refused key this host
+     * ends it itself, shortly after the error, while a weak radio link drops
+     * it with the error. A connect timeout never counts.
      *
      * Opt-in, because on these scales a bond dropped in error costs a physical
      * re-pair at the device.

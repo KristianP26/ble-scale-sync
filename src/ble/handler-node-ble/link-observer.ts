@@ -65,6 +65,14 @@ function boundedProbe<T>(probe: Promise<T>, abortSignal?: AbortSignal): Promise<
   });
 }
 
+/**
+ * What one attempt learned about Device1.Disconnected:
+ * - `declared`: BlueZ has it (5.83 and later) and the observer listens to it.
+ * - `absent`: BlueZ answered the probe without it (before 5.83).
+ * - `unknown`: no probe, or it failed or got no answer in time.
+ */
+export type ReasonSignal = 'declared' | 'absent' | 'unknown';
+
 export interface AttemptLinkView {
   /** Device1.Connected went true after the Connect call (a stuck link never does, #472). */
   linkUp: boolean;
@@ -75,8 +83,8 @@ export interface AttemptLinkView {
    * Disconnect (markGone), whichever came first; below 0 if before.
    */
   downAfterErrorMs?: number;
-  /** This BlueZ declares Device1.Disconnected (5.83 and later) and the observer listens to it. */
-  reasonSupported: boolean;
+  /** Whether this BlueZ says why a connection ended, as far as this attempt found out. */
+  reasonSignal: ReasonSignal;
   /** The first reason Device1.Disconnected gave during this attempt. */
   reason?: string;
 }
@@ -111,7 +119,8 @@ const variantValue = (v: unknown): unknown =>
  * subscribe to Device1.Disconnected where BlueZ has it, on the bus of this
  * device (the retry loop may have moved to a new D-Bus connection). Never
  * throws: a probe that fails, or gets no answer within
- * REASON_PROBE_TIMEOUT_MS, leaves the attempt without reasons.
+ * REASON_PROBE_TIMEOUT_MS, leaves the attempt without reasons, and `unknown`
+ * rather than `absent`.
  */
 export async function observeConnectAttempt(
   device: Device,
@@ -124,7 +133,7 @@ export async function observeConnectAttempt(
   let upAt: number | undefined;
   let downAt: number | undefined;
   let reason: string | undefined;
-  let reasonSupported = false;
+  let reasonSignal: ReasonSignal = 'unknown';
   let iface: SignalInterface | undefined;
   let wake: (() => void) | undefined;
 
@@ -163,12 +172,14 @@ export async function observeConnectAttempt(
         // Connect call, so the daemon has it before any reason is sent.
         candidate.on('Disconnected', onDisconnected);
         iface = candidate;
-        reasonSupported = true;
+        reasonSignal = 'declared';
+      } else {
+        reasonSignal = 'absent';
       }
       if (!supportAnnounced) {
         supportAnnounced = true;
         bleLog.debug(
-          reasonSupported
+          reasonSignal === 'declared'
             ? 'BlueZ on this host says why a connection ended (Device1.Disconnected)'
             : 'BlueZ on this host does not say why a connection ended (Device1.Disconnected needs BlueZ 5.83)',
         );
@@ -213,7 +224,7 @@ export async function observeConnectAttempt(
       linkUpAfterMs: upAt === undefined ? undefined : Math.round(upAt - connectAt),
       downAfterErrorMs:
         downAt === undefined || errorAt === undefined ? undefined : Math.round(downAt - errorAt),
-      reasonSupported,
+      reasonSignal,
       reason,
     }),
     stop: () => {
@@ -237,6 +248,31 @@ export async function observeConnectAttempt(
 /** The clock the link gaps are measured on; connect.ts times its retry Disconnect with it. */
 export function linkNow(): number {
   return clock();
+}
+
+/** How often watchLoopStall() expects a turn of the event loop. */
+const LOOP_TICK_MS = 5;
+
+/**
+ * Start timing this process's event loop; the returned stop gives the longest
+ * it went without a turn, in ms. A stall (GC, a starved CPU, swap) while the
+ * retry Disconnect is out delays both the Connected=false this side sees and
+ * BlueZ's answer, so a connection that went down with the error would look as
+ * if it had outlived it (#471, D066).
+ */
+export function watchLoopStall(): () => number {
+  let last = clock();
+  let worst = 0;
+  const timer = setInterval(() => {
+    const now = clock();
+    worst = Math.max(worst, now - last);
+    last = now;
+  }, LOOP_TICK_MS);
+  timer.unref?.();
+  return () => {
+    clearInterval(timer);
+    return Math.round(Math.max(worst, clock() - last));
+  };
 }
 
 /** Test seam: the clock (fake timers do not move performance.now()) and the one-time support line. */
