@@ -307,6 +307,37 @@ describe('add-on option qn_result_ack', () => {
   });
 });
 
+// One byte of the user's own Renpho app profile (#434, D079): personal, so a
+// warning about it never repeats the value, and quoted so 99 stays a string.
+describe('add-on option rmsc04_profile_byte', () => {
+  it('is an add-on option, unset by default, validated as text', () => {
+    const { schema } = parse(lf(readFileSync('ble-scale-sync-addon/config.yaml', 'utf8'))) as {
+      schema: Record<string, unknown>;
+    };
+    expect(MANIFEST.options).toHaveProperty('rmsc04_profile_byte', '');
+    expect(schema).toHaveProperty('rmsc04_profile_byte', 'str?');
+    expect(TRANSLATIONS.configuration).toHaveProperty('rmsc04_profile_byte');
+  });
+
+  it('is named as ignored in custom config mode', () => {
+    expect(customConfigBranch()).toMatch(/for _qn in [^;]*\brmsc04_profile_byte\b[^;]*; do/);
+  });
+
+  it('is written in quotes', () => {
+    expect(RUN_SH).toMatch(
+      /^ {4}\[ -n "\$RMSC04_PROFILE_BYTE" \] && echo " {2}rmsc04_profile_byte: \\"\$RMSC04_PROFILE_BYTE\\"" >> "\$FRESH"$/m,
+    );
+  });
+
+  it('never puts the value into a warning', () => {
+    const warnings = RUN_SH.split('\n').filter(
+      (l) => l.includes('WARNING') && l.includes('rmsc04_profile_byte'),
+    );
+    expect(warnings.length).toBeGreaterThan(0);
+    for (const l of warnings) expect(l).not.toContain('$');
+  });
+});
+
 describe('generated config: ble block', () => {
   it('is opened by every option it writes', () => {
     // An option written inside the block but missing from its condition is
@@ -319,12 +350,14 @@ describe('generated config: ble block', () => {
     const body = RUN_SH.slice(open, RUN_SH.indexOf('\n  fi\n', open));
     // printf as well as echo: a guard that only knew echo stopped checking every
     // line that moved to printf, without failing. emit_* writes whole sections.
+    // Digits too: without them RMSC04_PROFILE_BYTE was never checked.
     const written = [
-      ...body.matchAll(/\[ [^\]]*"\$([A-Z_]+)"[^\]]*\] && (?:echo|printf|emit_[a-z_]+)/g),
+      ...body.matchAll(/\[ [^\]]*"\$([A-Z0-9_]+)"[^\]]*\] && (?:echo|printf|emit_[a-z_]+)/g),
     ].map((m) => m[1]);
     expect(written).toContain('ADAPTER_PRIVACY');
     expect(written).toContain('PAIRING_RETRY_MAX_MIN');
     expect(written).toContain('QN_RESULT_ACK');
+    expect(written).toContain('RMSC04_PROFILE_BYTE');
     expect(written).toContain('SCALE_MAC');
     expect(written).toContain('BLE_TRANSPORT');
     for (const v of written) expect(condition, v).toContain(`"$${v}"`);

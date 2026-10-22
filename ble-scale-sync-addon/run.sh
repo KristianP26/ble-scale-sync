@@ -250,7 +250,8 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
   # wrong value for either is silent by nature, so a setting that is silently
   # ignored is worse here than almost anywhere else.
   for _qn in qn_protocol_byte qn_report_byte qn_weight_ack qn_user_key qn_a4_prelude \
-    qn_time_sync_long qn_config_long qn_result_ack auto_clear_stale_bond adapter_privacy; do
+    qn_time_sync_long qn_config_long qn_result_ack rmsc04_profile_byte auto_clear_stale_bond \
+    adapter_privacy; do
     if [ -n "$(opt "$_qn")" ]; then
       log "WARNING: custom_config is enabled, so the '$_qn' option is ignored."
       log "Set 'ble.$_qn' in $CUSTOM_PATH instead."
@@ -382,6 +383,7 @@ else
       QN_RESULT_ACK=""
       ;;
   esac
+  RMSC04_PROFILE_BYTE=$(opt rmsc04_profile_byte)
   AUTO_CLEAR_STALE_BOND=$(opt_bool auto_clear_stale_bond)
   # Defaults to true: only an explicit false switches it off (#417).
   PREEMPTIVE_ADAPTER_RESET=$(opt_bool_default_true preemptive_adapter_reset)
@@ -733,6 +735,23 @@ YAML
     fi
   fi
 
+  # rmsc04_profile_byte is one byte of the user's own Renpho app profile (#434,
+  # D079): spaces and a 0x prefix go, the case is lowered, and only two hex
+  # digits pass. Unlike qn_user_key the warning never repeats the value, since
+  # the byte is personal (it may carry sex and age). The HA YAML editor turns an
+  # unquoted 07 into the number 7, hence the hint about quotes. The characters
+  # are listed rather than a range so the class does not depend on the locale.
+  RMSC04_PROFILE_BYTE=$(printf '%s' "$RMSC04_PROFILE_BYTE" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]' | sed 's/^0x//')
+  if [ -n "$RMSC04_PROFILE_BYTE" ]; then
+    case "$RMSC04_PROFILE_BYTE" in
+      [0123456789abcdef][0123456789abcdef]) ;;
+      *)
+        log "WARNING: Invalid rmsc04_profile_byte (expected one byte as two hex digits, 0-9 and a-f; in the YAML editor put it in quotes). Ignoring."
+        RMSC04_PROFILE_BYTE=""
+        ;;
+    esac
+  fi
+
   # BLE section, emitted only when at least one of its options is set.
   # Every option written inside this block must also appear in the condition.
   # qn_a4_prelude did not, so an install whose only BLE option was that one
@@ -740,7 +759,8 @@ YAML
   if [ -n "$SCALE_MAC" ] || [ -n "$BLE_ADAPTER" ] || [ -n "$FORCE_SCALE_ADAPTER" ] ||
     [ -n "$QN_PROTOCOL_BYTE" ] || [ -n "$QN_REPORT_BYTE" ] || [ -n "$QN_WEIGHT_ACK" ] ||
     [ -n "$QN_USER_KEY" ] || [ -n "$QN_A4_PRELUDE" ] || [ -n "$QN_TIME_SYNC_LONG" ] || [ -n "$QN_CONFIG_LONG" ] ||
-    [ -n "$QN_RESULT_ACK" ] || [ "$AUTO_CLEAR_STALE_BOND" = "true" ] || [ "$PREEMPTIVE_ADAPTER_RESET" = "false" ] ||
+    [ -n "$QN_RESULT_ACK" ] || [ -n "$RMSC04_PROFILE_BYTE" ] ||
+    [ "$AUTO_CLEAR_STALE_BOND" = "true" ] || [ "$PREEMPTIVE_ADAPTER_RESET" = "false" ] ||
     [ "$ADAPTER_PRIVACY" = "true" ] || [ "$PAIRING_RETRY_MAX_MIN" != "60" ] ||
     [ "$PROXY_LIVENESS_MIN" != "30" ] ||
     [ "$BLE_TRANSPORT" != "local" ]; then
@@ -756,6 +776,8 @@ YAML
     [ -n "$QN_TIME_SYNC_LONG" ] && echo "  qn_time_sync_long: $QN_TIME_SYNC_LONG" >> "$FRESH"
     [ -n "$QN_CONFIG_LONG" ] && echo "  qn_config_long: $QN_CONFIG_LONG" >> "$FRESH"
     [ -n "$QN_RESULT_ACK" ] && echo "  qn_result_ack: $QN_RESULT_ACK" >> "$FRESH"
+    # Quoted, so a byte like 99 stays a string; after the check it needs no escaping.
+    [ -n "$RMSC04_PROFILE_BYTE" ] && echo "  rmsc04_profile_byte: \"$RMSC04_PROFILE_BYTE\"" >> "$FRESH"
     [ "$AUTO_CLEAR_STALE_BOND" = "true" ] && echo "  auto_clear_stale_bond: true" >> "$FRESH"
     [ "$PREEMPTIVE_ADAPTER_RESET" = "false" ] && echo "  preemptive_adapter_reset: false" >> "$FRESH"
     [ "$ADAPTER_PRIVACY" = "true" ] && echo "  adapter_privacy: true" >> "$FRESH"

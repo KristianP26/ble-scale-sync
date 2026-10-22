@@ -395,6 +395,7 @@ describe.skipIf(!HARNESS)(
             qn_time_sync_long: 'off',
             qn_config_long: '1',
             qn_result_ack: 'on',
+            rmsc04_profile_byte: ' 0x9E ',
             auto_clear_stale_bond: true,
             preemptive_adapter_reset: false,
             adapter_privacy: true,
@@ -421,6 +422,7 @@ describe.skipIf(!HARNESS)(
           qn_time_sync_long: false
           qn_config_long: true
           qn_result_ack: true
+          rmsc04_profile_byte: "9e"
           auto_clear_stale_bond: true
           preemptive_adapter_reset: false
           adapter_privacy: true
@@ -568,6 +570,48 @@ describe.skipIf(!HARNESS)(
         expect(r.stdout).toContain(
           "WARNING: ignoring qn_result_ack='maybe' (expected true or false).",
         );
+      });
+    });
+
+    // One byte of the user's own Renpho app profile (#434, D079), written quoted
+    // so that 99 stays a string. A bad value is dropped with a warning that
+    // does not repeat it: the byte is personal.
+    describe('rmsc04_profile_byte', () => {
+      const WARNING =
+        'WARNING: Invalid rmsc04_profile_byte (expected one byte as two hex digits, 0-9 ' +
+        'and a-f; in the YAML editor put it in quotes). Ignoring.';
+
+      it.each([
+        ['99', '99'],
+        [' 0x9E ', '9e'],
+        ['A9', 'a9'],
+        ['00', '00'],
+      ])('writes %j as the string %j, and opens the ble block on its own', (value, written) => {
+        const r = generate({ options: { ...DEFAULTS, rmsc04_profile_byte: value } });
+        const config = expectLoads(r);
+        expect(config.ble?.rmsc04_profile_byte).toBe(written);
+        expect(r.text).toContain(`ble:
+  rmsc04_profile_byte: "${written}"
+`);
+        expect(r.stdout).not.toContain('rmsc04_profile_byte');
+      });
+
+      it.each(['q7', '9', '0x9e1', '9e 5'])('drops %j with a warning that omits it', (value) => {
+        const r = generate({ options: { ...DEFAULTS, rmsc04_profile_byte: value } });
+        const config = expectLoads(r);
+        expect(config.ble?.rmsc04_profile_byte).toBeUndefined();
+        expect(r.text).not.toContain('rmsc04_profile_byte');
+        // The one line about the option is the fixed warning, nothing more.
+        const lines = r.stdout.split('\n').filter((l) => l.includes('rmsc04_profile_byte'));
+        expect(lines).toEqual([`[ble-scale-sync] ${WARNING}`]);
+        if (value.length > 1) expect(r.stdout).not.toContain(value);
+      });
+
+      it('writes nothing and warns about nothing when it is empty', () => {
+        const r = generate({ options: { ...DEFAULTS, rmsc04_profile_byte: '' } });
+        expectLoads(r);
+        expect(r.text).not.toContain('rmsc04_profile_byte');
+        expect(r.stdout).not.toContain('rmsc04_profile_byte');
       });
     });
 
@@ -981,6 +1025,15 @@ describe.skipIf(!HARNESS)('run.sh custom_config and the transport options', () =
       "WARNING: custom_config is enabled, so the 'qn_result_ack' option is ignored.",
     );
     expect(r.stdout).toContain("Set 'ble.qn_result_ack' in");
+  });
+
+  it('names rmsc04_profile_byte as ignored when it is set', () => {
+    const r = run({ ...CUSTOM, rmsc04_profile_byte: '9e' });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain(
+      "WARNING: custom_config is enabled, so the 'rmsc04_profile_byte' option is ignored.",
+    );
+    expect(r.stdout).toContain("Set 'ble.rmsc04_profile_byte' in");
   });
 
   it('says nothing while every transport option has its default', () => {
