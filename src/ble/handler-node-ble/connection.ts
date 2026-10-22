@@ -260,7 +260,7 @@ export function resetConnection(): void {
  * reads as `Connection ":1.7" is not allowed to add more match rules ...` with
  * the word LimitsExceeded nowhere in it.
  */
-function dbusErrorType(err: unknown): string {
+export function dbusErrorType(err: unknown): string {
   const t = (err as { type?: unknown } | null | undefined)?.type;
   return typeof t === 'string' ? t : '';
 }
