@@ -1,5 +1,6 @@
 // Detection for a bond the scale has discarded while this host still holds it
-// (#290, #335, #471). Nothing here deletes a bond; connect.ts decides that.
+// (#290, #335, #471). Nothing here deletes a bond: provesRefusedKey() says
+// when connect.ts may.
 //
 // #335 is the cleaner reproduction and the one the user-facing message points
 // at: a BF915 on a Pi 5 with fresh batteries, eight consecutive sessions, every
@@ -256,6 +257,16 @@ export type StaleBondVerdict =
     }
   | { kind: 'possible'; linkUps: number }
   | { kind: 'none' };
+
+/**
+ * Whether the opt-in may clear the bond on this verdict (D066): BlueZ's own
+ * word that the scale refused the key, on three attempts of one connect.
+ */
+export function provesRefusedKey(
+  verdict: StaleBondVerdict,
+): verdict is Extract<StaleBondVerdict, { kind: 'reported' }> {
+  return verdict.kind === 'reported';
+}
 
 /** Why the opt-in kept a bond in spite of a run of auth-class failures. */
 export type KeptWhy =

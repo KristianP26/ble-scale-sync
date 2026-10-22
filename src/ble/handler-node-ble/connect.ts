@@ -25,6 +25,7 @@ import { startPeerFreshnessTracker } from './freshness.js';
 import {
   announceBondOnce,
   describeAttempt,
+  provesRefusedKey,
   shouldSettle,
   staleBondClearNotice,
   staleBondKeptNotice,
@@ -470,15 +471,16 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
         // `bluetoothctl remove` (#335). The error string is not that word: a
         // weak radio link gives the same one (#471, D066).
         const verdict = evidence.verdict();
-        const refused = verdict.kind === 'reported' ? verdict.refused : 0;
-        const clearBond =
+        let clearBond = false;
+        if (
           ctx.autoClearStaleBond === true &&
           !staleBondCleared &&
-          refused > 0 &&
-          (await isBonded(device));
-        if (clearBond) {
+          provesRefusedKey(verdict) &&
+          (await isBonded(device))
+        ) {
+          clearBond = true;
           staleBondCleared = true;
-          bleLog.warn(staleBondClearNotice(formattedMac, refused));
+          bleLog.warn(staleBondClearNotice(formattedMac, verdict.refused));
         }
         await removeDevice(btAdapter, mac, { includeBonded: clearBond });
 

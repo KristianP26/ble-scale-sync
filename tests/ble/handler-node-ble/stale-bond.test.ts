@@ -4,6 +4,7 @@ import {
   classifyAttempt,
   describeAttempt,
   isAuthClassConnectFailure,
+  provesRefusedKey,
   shouldSettle,
   staleBondClearNotice,
   staleBondKeptNotice,
@@ -242,6 +243,19 @@ describe('StaleBondEvidence (#471, D066)', () => {
     e.record(TIMEOUT, undefined);
     e.record(ABORT, undefined);
     expect(e.abortCount).toBe(1);
+  });
+
+  it.each([
+    ['reported', { kind: 'reported', refused: 3 }, true],
+    [
+      '3 confirmed, no reasons',
+      { kind: 'outlived', count: 3, confirmed: 3, typicalMs: 90, reasonsSupported: false },
+      false,
+    ],
+    ['possible', { kind: 'possible', linkUps: 6 }, false],
+    ['none', { kind: 'none' }, false],
+  ] as const)('proves a refused key: %s', (_name, verdict, expected) => {
+    expect(provesRefusedKey(verdict)).toBe(expected);
   });
 
   describe('messages', () => {
