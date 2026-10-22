@@ -41,6 +41,7 @@ vi.mock('node-ble', () => ({
 }));
 
 const { _internals } = await import('../../src/ble/handler-node-ble/index.js');
+const { bleLog } = await import('../../src/ble/types.js');
 const { IMPEDANCE_GRACE_MS } = await import('../../src/ble/types.js');
 
 // ─── Mocks ───────────────────────────────────────────────────────────────────
@@ -291,6 +292,60 @@ describe('handler-node-ble broadcastScanNodeBle grace timer (#163 follow-up)', (
       await vi.advanceTimersByTimeAsync(IMPEDANCE_GRACE_MS);
       expect(state.ok).toBe(false);
     });
+  });
+
+  it('keeps polling through a dropped Device1 object and resolves when it returns', async () => {
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    });
+    const adapter = makePassiveAdapter('complete');
+    const device = makeDevice();
+    const btAdapter = makeAdapter();
+
+    const dropped = Object.assign(
+      new Error(
+        `Method "Get" with signature "ss" on interface "org.freedesktop.DBus.Properties" doesn't exist\n`,
+      ),
+      { name: 'DBusError', type: 'org.freedesktop.DBus.Error.UnknownObject' },
+    );
+    let gets = 0;
+    device.helper.prop = vi.fn(async (name: string) => {
+      if (name !== 'ServiceData') return undefined;
+      gets += 1;
+      if (gets <= 2) throw dropped;
+      return serviceDataPayload();
+    });
+
+    const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+    try {
+      const promise = _internals.broadcastScanNodeBle(
+        adapter,
+        btAdapter as never,
+        device as never,
+        'AA:BB:CC:DD:EE:FF',
+        {},
+      );
+      await new Promise((r) => setImmediate(r));
+      await vi.advanceTimersByTimeAsync(600);
+      await vi.advanceTimersByTimeAsync(600);
+      await vi.advanceTimersByTimeAsync(600);
+
+      const result = await promise;
+      expect(result.reading.impedance).toBe(500);
+      expect(gets).toBe(3);
+      expect(
+        debug.mock.calls.filter(([message]) =>
+          String(message).includes('BlueZ dropped the device'),
+        ),
+      ).toHaveLength(1);
+      expect(
+        debug.mock.calls.filter(([message]) =>
+          String(message).includes('Advertisement poll error'),
+        ),
+      ).toHaveLength(0);
+    } finally {
+      debug.mockRestore();
+    }
   });
 
   it('deadline with nothing held: rejects as before', async () => {

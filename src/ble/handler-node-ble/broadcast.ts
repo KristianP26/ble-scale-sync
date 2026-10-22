@@ -3,6 +3,7 @@ import type { RawReading } from '../shared.js';
 import { bleLog, sleep, errMsg, DISCOVERY_TIMEOUT_MS, IMPEDANCE_GRACE_MS } from '../types.js';
 import { helperOf, type PropsChangedHandler, type Adapter, type Device } from './dbus.js';
 import { isDeviceObjectGone } from './device-object.js';
+import { dbusErrorType } from './connection.js';
 
 /** Extract a Buffer from a D-Bus value that may be a Variant wrapper, Buffer, Uint8Array, or number[]. */
 export function extractDbusBytes(val: unknown): Buffer | null {
@@ -217,6 +218,13 @@ export async function broadcastScanNodeBle(
       // IMPEDANCE_GRACE_MS after the reading was first held (#357, see
       // armScanDeadline for the same rule on the other transports).
       let deadlineLogged = false;
+      let droppedLogged = false;
+      /** Reset the one-shot "device dropped" log once a read succeeds again. */
+      const noteDeviceBack = (): void => {
+        if (!droppedLogged) return;
+        droppedLogged = false;
+        bleLog.debug('BlueZ device is back; resuming the advertisement poll');
+      };
       while (!done && (Date.now() < deadline || graceTimer !== null)) {
         if (!deadlineLogged && Date.now() >= deadline) {
           deadlineLogged = true;
@@ -235,6 +243,7 @@ export async function broadcastScanNodeBle(
           // report the generic "no reading" message instead of the real cause.
           if (adapter.parseServiceData) {
             const sd: unknown = await helper.prop('ServiceData');
+            noteDeviceBack();
             // Re-check after every await. This loop is detached: the outer
             // promise can settle while we are parked here, and the caller's
             // teardown then hands the device proxy back. A further read would
@@ -246,20 +255,34 @@ export async function broadcastScanNodeBle(
           }
           if (adapter.parseBroadcast) {
             const md: unknown = await helper.prop('ManufacturerData');
+            noteDeviceBack();
             if (done) break;
             if (tryManufacturerData(md)) break;
           }
         } catch (err: unknown) {
-          if (isDeviceObjectGone(err)) {
+          if (dbusErrorType(err) === 'org.freedesktop.DBus.Error.UnknownObject') {
+            // BlueZ drops a temporary Device1 object about 30 s after its last
+            // advertisement and recreates it at the same path on the next one.
+            // The cached proxy starts working again (verified against real
+            // BlueZ), so keep polling; log the transition once instead of every
+            // 500 ms. noteDeviceBack resets the flag after the next success.
+            if (!droppedLogged) {
+              droppedLogged = true;
+              bleLog.debug(
+                'BlueZ dropped the device after it went quiet; waiting for it to advertise again',
+              );
+            }
+          } else if (isDeviceObjectGone(err)) {
             fail(
               new Error(
-                `BlueZ removed the device object for ${mac} during the broadcast scan, ` +
-                  `so it is only visible while scanning is active (#297): ${errMsg(err)}`,
+                `BlueZ removed the device object for ${mac} during the broadcast scan: ` +
+                  errMsg(err).trim(),
               ),
             );
             break;
+          } else {
+            bleLog.debug(`Advertisement poll error: ${errMsg(err).trim()}`);
           }
-          bleLog.debug(`Advertisement poll error: ${errMsg(err)}`);
         }
         await sleep(500);
         if (done) break;
