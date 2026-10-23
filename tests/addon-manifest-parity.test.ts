@@ -38,6 +38,7 @@ const CONFIG_KEYS: Record<string, string> = {
   display_unit: 'scale.display_unit',
   out_of_range: 'out_of_range',
   user_gender: 'users.gender',
+  user_estimate_body_composition: 'users.estimate_body_composition',
   scan_cooldown: 'runtime.scan_cooldown',
   idle_rescan_delay: 'runtime.idle_rescan_delay',
   no_reading_rescan_delay: 'runtime.no_reading_rescan_delay',

@@ -264,6 +264,15 @@ configuration:
     description: >-
       Maximum expected weight in the weight unit selected above
       (used for multi-user matching)
+  user_estimate_body_composition:
+    name: Estimate body composition
+    description: >-
+      On by default. When the scale measured no body composition for a
+      weigh-in (in socks, no usable impedance, or figures the add-on did not
+      use), body fat, water, bone mass, muscle mass, visceral fat and physique
+      rating are estimated from BMI. Turn this off to leave them empty instead;
+      weight, BMI, BMR and metabolic age still go out, and Home Assistant shows
+      the others as unknown until the next measured weigh-in.
   out_of_range:
     name: Readings outside the weight range
     description: >-

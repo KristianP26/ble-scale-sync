@@ -118,6 +118,10 @@ With MQTT and HA auto-discovery enabled, these sensors appear automatically:
 
 Last weigh-in changes with every weigh-in, also when the weight is the same as last time, and after a Home Assistant restart it still shows when the weigh-in was measured. To act once per weigh-in, compare its value with the last one you handled. A state trigger on it needs `not_from: [unknown, unavailable]`: after a Home Assistant restart or a reconnect to the broker the sensor comes back from unknown or unavailable with the old time, which is not a new weigh-in.
 
+### Weigh-ins without body composition
+
+When the scale measured no body composition for a weigh-in (in socks, no usable impedance, or figures the add-on did not use), body fat, water, bone mass, muscle mass, visceral fat and physique rating are estimated from BMI. Turn off **Estimate body composition** (`user_estimate_body_composition`) to leave them empty instead: weight, BMI, BMR, metabolic age and Last weigh-in still update, and the other sensors show unknown until the next measured weigh-in. Garmin Connect then gets the weight, BMI, BMR and metabolic age only.
+
 Weight, muscle mass and bone mass always reach Home Assistant in kg, whatever the weight unit is set to. To see pounds there, change the unit in the sensor's settings in Home Assistant.
 
 ## Garmin Connect
