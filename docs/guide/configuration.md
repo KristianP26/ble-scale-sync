@@ -491,7 +491,7 @@ When they are used, it says:
 Renpho R-MSC04: using the scale's body fat and visceral fat, computed for the profile sent with ble.rmsc04_profile_byte (#434)
 ```
 
-Water, bone mass and muscle mass are then derived from the scale's body fat, and BMI, BMR, metabolic age and physique rating are calculated here. Its skeletal muscle percentage appears in the debug log only.
+Water, bone mass and muscle mass are then derived from the scale's body fat, and BMI, BMR, metabolic age and physique rating are calculated here. Its skeletal muscle percentage appears in the debug log only. Its ten segment impedances are exported with or without this option, as diagnostic values ([Exporters](/exporters#mqtt)).
 
 Keep in mind:
 

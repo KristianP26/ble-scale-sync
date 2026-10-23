@@ -114,6 +114,7 @@ With MQTT and HA auto-discovery enabled, these sensors appear automatically:
 - Physique rating (diagnostic)
 - Impedance (diagnostic)
 - Last weigh-in (when the weigh-in was measured)
+- Segment impedances, ten of them (Renpho R-MSC04 only; diagnostic and disabled until you enable them)
 
 Last weigh-in changes with every weigh-in, also when the weight is the same as last time, and after a Home Assistant restart it still shows when the weigh-in was measured. To act once per weigh-in, compare its value with the last one you handled. A state trigger on it needs `not_from: [unknown, unavailable]`: after a Home Assistant restart or a reconnect to the broker the sensor comes back from unknown or unavailable with the old time, which is not a new weigh-in.
 

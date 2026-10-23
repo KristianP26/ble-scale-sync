@@ -47,7 +47,7 @@ Minimal config for a single-user Renpho / Xiaomi / Eufy scale with MQTT and Home
    - Leave **MQTT enabled** and **MQTT auto-detect** on. The add-on reads the Mosquitto broker details from the Supervisor API, so no broker URL or credentials are needed.
 3. Start the add-on and step on the scale. Within a few minutes new sensors appear under **Settings** > **Devices & Services** > **MQTT**.
 
-The exposed sensors cover weight, body fat, water, muscle mass, bone mass, BMI, BMR, visceral fat, metabolic age, physique rating, impedance, and the time of the last weigh-in.
+The exposed sensors cover weight, body fat, water, muscle mass, bone mass, BMI, BMR, visceral fat, metabolic age, physique rating, impedance, and the time of the last weigh-in. A Renpho R-MSC04 also gets ten segment impedance sensors, as diagnostics that stay disabled until you enable them.
 
 ## Configuration reference
 

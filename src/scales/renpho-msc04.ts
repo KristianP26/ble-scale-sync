@@ -490,6 +490,32 @@ class FragmentReassembler {
   }
 }
 
+/**
+ * The record's ten segment impedances (#497), or nothing when the record has no
+ * body fat. Diagnostic values, exported whatever happens to the scale's body
+ * fat: the D079 gates and the D022 height gate decide whose composition the
+ * record is, not whether the scale measured. Body fat in the record is taken
+ * as the sign that the scale measured at all; it does not say the record is
+ * this weigh-in's, which the 0x24 and D057 session gates decide, as for the
+ * body fat.
+ */
+function recordSegments(rec: CompositionRecord): ScaleBodyComp {
+  if (!(rec.fatPercent > 0)) return {};
+  const pair = (i: number) => ({
+    at20kHz: rec.impedance20kHz[i],
+    at100kHz: rec.impedance100kHz[i],
+  });
+  return {
+    segmentImpedance: {
+      trunk: pair(0),
+      leftArm: pair(1),
+      rightArm: pair(2),
+      leftLeg: pair(3),
+      rightLeg: pair(4),
+    },
+  };
+}
+
 /** The record's body fat, and its visceral fat when it is 1 to 59. */
 function recordComposition(rec: CompositionRecord): ScaleBodyComp {
   const comp: ScaleBodyComp = { fat: rec.fatPercent };
@@ -621,7 +647,8 @@ class Msc04Session {
  * the session started with no stored records (D057). 0x26 records are stored
  * history of earlier weigh-ins and are never used.
  *
- * Of the record, only the scale's body fat and visceral fat are ever exported.
+ * Of the record's composition, only the scale's body fat and visceral fat are
+ * ever exported.
  * From a session in which we did NOT write our guest b2, only when the profile
  * the scale computed them for matches the user (see
  * PROFILE_HEIGHT_TOLERANCE_CM). From a session with our guest b2 (its [11] a9
@@ -630,8 +657,9 @@ class Msc04Session {
  * and then only through the gates of ownProfileComposition (D079): the record
  * has body fat and BMI, our b2 was written, the scale answered it before it
  * first reported the measurement complete, the weigh-in's user has the
- * profile we sent, and the BMI fits the height we sent. The segment
- * impedances are logged at debug level; no whole-body impedance is derived
+ * profile we sent, and the BMI fits the height we sent. The ten segment
+ * impedances go out as diagnostic values from every record with body fat,
+ * whichever way those gates decide (#497); no whole-body impedance is derived
  * from them, so the reading keeps impedance 0.
  *
  * Routing is by advertised name only (names.exact ['r-msc04']). The device also
@@ -1116,18 +1144,20 @@ export class RenphoMsc04Adapter
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
     const pinned = reading.scaleComposition as PinnedRecord | undefined;
     if (!pinned) return buildPayload(reading.weight, 0, {}, profile);
+    const segments = recordSegments(pinned.rec);
     if (pinned.own) {
       const comp = ownProfileComposition(pinned.rec, pinned.own, profile);
-      return buildPayload(reading.weight, 0, comp, profile);
+      return buildPayload(reading.weight, 0, { ...comp, ...segments }, profile);
     }
     if (pinned.guestProfile) {
       bleLog.info(
         "Renpho R-MSC04: the scale's body fat and visceral fat were computed for the guest " +
           'profile we sent, not exported (#434); using the estimate',
       );
-      return buildPayload(reading.weight, 0, {}, profile);
+      return buildPayload(reading.weight, 0, segments, profile);
     }
-    return buildPayload(reading.weight, 0, this.scaleComposition(pinned.rec, profile), profile);
+    const comp = this.scaleComposition(pinned.rec, profile);
+    return buildPayload(reading.weight, 0, { ...comp, ...segments }, profile);
   }
 
   /** The scale's own figures, or {} (the profile estimate) when they are not this user's. */

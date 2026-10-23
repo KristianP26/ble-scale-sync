@@ -13,6 +13,8 @@ BLE Scale Sync exports body composition data to 13 targets. The [setup wizard](/
 
 Exporters are configured in `global_exporters` (shared by all users). For multi-user setups with separate accounts, see [Per-User Exporters](/multi-user#per-user-exporters). All enabled exporters run in parallel; the process reports an error only if **every** exporter fails.
 
+Some scales measure values the others do not. Those go out only with the weigh-ins that carry them: in the MQTT message, the webhook body, JSONL lines and InfluxDB fields. The CSV columns, the notifications and the other targets stay the same for every scale. Today that is the Renpho R-MSC04's ten segment impedances (see [MQTT](#mqtt)).
+
 A weigh-in a scale stored in its memory and sends later keeps its original time. It goes only to exporters that can record a past measurement (Garmin, InfluxDB, file, Intervals, Runalyze, wger, HealthLog, Dreeve), never to MQTT, webhooks or notifications, and it does not end the live weigh-in.
 
 | Target                          | Description                                            |
@@ -147,7 +149,7 @@ v1.8.1 bumps `garminconnect` to 0.3.x, which replaced the old garth-based OAuth 
 
 ## MQTT {#mqtt}
 
-Publishes body composition and the time of the weigh-in as JSON to an MQTT broker. **Home Assistant auto-discovery** is enabled by default; all 11 metrics (weight, impedance and the nine body composition values) and the time of the last weigh-in appear as 12 sensors grouped under one device per user, with availability tracking (LWT) and display precision per metric.
+Publishes body composition and the time of the weigh-in as JSON to an MQTT broker. **Home Assistant auto-discovery** is enabled by default; all 11 metrics (weight, impedance and the nine body composition values) and the time of the last weigh-in appear as 12 sensors grouped under one device per user, with availability tracking (LWT) and display precision per metric. Values only some scales measure get sensors of their own (see below).
 
 ::: tip Home Assistant users
 If you run Home Assistant OS or Supervised, the [Home Assistant Add-on](./guide/home-assistant-addon) auto-detects the Mosquitto broker through the Supervisor API, so you do not need to wire MQTT manually.
@@ -193,6 +195,8 @@ Each weigh-in is one JSON message on `<topic>/<user slug>`, retained unless `ret
 ```
 
 `timestamp` is when the weigh-in was measured, in ISO 8601 UTC: the scale's own time when the scale sends one, otherwise the time the reading reached the app. In Home Assistant it is the **Last Weigh-in** sensor, whose state Home Assistant keeps in whole seconds (`2026-10-20T21:30:00+00:00`). Past measurements a scale replays from its memory do not go to MQTT (see [Historical readings](#historical-readings)), so it is always the last live weigh-in.
+
+A Renpho R-MSC04 adds its ten segment impedances, in ohm at 20 and 100 kHz: `impedanceTrunk20kHz`, `impedanceTrunk100kHz`, and the same pairs for `LeftArm`, `RightArm`, `LeftLeg` and `RightLeg`. A key is in the message only when that weigh-in carries it. In Home Assistant each one gets a sensor ("Impedance Left Arm 20 kHz" and so on) the first time a message carries it, in the diagnostic category and disabled: enable the ones you want on the device page. A later message without the key shows the sensor as unknown. With `retain: false` such a sensor can miss the value of the weigh-in that created it, because Home Assistant subscribes to the topic only once the sensor exists.
 
 To tell a new weigh-in from an old one, use that value, not a sensor's `last_changed`. The message is retained, so after a Home Assistant restart every sensor's `last_changed` is the time of the restart, and a weigh-in with exactly the previous weight does not change the weight sensor at all. The timestamp changes with every weigh-in, identical weights included, and keeps its value across a restart, so comparing it with the last one you handled is the reliable check. A state trigger on the sensor needs `not_from`, because after a Home Assistant restart or a reconnect to the broker the sensor comes back from `unknown` or `unavailable` with the old time. The trigger then also skips a weigh-in made while Home Assistant was down.
 
