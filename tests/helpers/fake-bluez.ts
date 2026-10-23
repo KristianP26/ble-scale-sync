@@ -79,8 +79,10 @@
  *   DuplicateData filter reports on every report);
  * - notifications a scale sends in answer to a write (`Advertiser.respond`).
  *
- * BlueZ 5.82: no Device1.Disconnected signal (5.83). Every answer comes on a
- * microtask, notifications on timers.
+ * BlueZ 5.82 by default: no Device1.Disconnected signal. `sendsDisconnectReason`
+ * makes it 5.83: device_disconnected() declares and sends that signal with the
+ * kernel's reason, before Connected goes false and before a Disconnect is
+ * answered. Every answer comes on a microtask, notifications on timers.
  */
 
 import { EventEmitter } from 'node:events';
@@ -148,7 +150,24 @@ export interface Advertiser {
   services?: FakeService[];
   /** What the scale notifies after a write of `data` to `charUuid`. */
   respond?: (charUuid: string, data: Buffer) => FakeNotification[];
+  /** The connection ends this many ms after each Connect, for `dropReason`. */
+  dropAfterConnectMs?: number;
+  /** Why that connection ends; default `remote`, the scale hanging up. */
+  dropReason?: DisconnectCause;
 }
+
+/** The kernel's reason for the end of a connection (MGMT_DEV_DISCONN_*). */
+export type DisconnectCause = 'unknown' | 'timeout' | 'local' | 'remote' | 'auth' | 'suspend';
+
+/** device_disconnected() in BlueZ 5.83 src/device.c: the signal's name and message. */
+const DISCONNECT_REASONS: Record<DisconnectCause, [string, string]> = {
+  unknown: ['org.bluez.Reason.Unknown', 'Unspecified'],
+  timeout: ['org.bluez.Reason.Timeout', 'Connection timeout'],
+  local: ['org.bluez.Reason.Local', 'Connection terminated by local host'],
+  remote: ['org.bluez.Reason.Remote', 'Connection terminated by remote user'],
+  auth: ['org.bluez.Reason.Authentication', 'Connection terminated due to authentication failure'],
+  suspend: ['org.bluez.Reason.Suspend', 'Connection terminated by local host for suspend'],
+};
 
 export interface FakeService {
   uuid: string;
@@ -211,6 +230,8 @@ export class FakeBluez {
   managedObjectsReads = 0;
   /** How often the kernel started a scan (a Start Discovery it accepted). */
   kernelStarts = 0;
+  /** BlueZ 5.83 and later: Device1 declares and sends Disconnected (name, message). */
+  sendsDisconnectReason = false;
 
   /** Device1 objects BlueZ holds, with the RSSI it holds (undefined: none). */
   private heard = new Map<string, number | undefined>();
@@ -907,13 +928,15 @@ export class FakeBluez {
           throw bluezError('org.bluez.Error.AlreadyConnected', 'Already Connected');
         this.permanent.add(addr);
         link.connected = true;
+        link.connects++;
         this.emitProps(path, DEVICE1, { Connected: variant('b', true) });
         link.resolved = true;
         this.emitProps(path, DEVICE1, { ServicesResolved: variant('b', true) });
+        this.scheduleDrop(addr, link);
         return;
       case 'Disconnect':
         // Answered at once when there is no connection (dev_disconnect()).
-        this.dropLink(addr);
+        this.dropLink(addr, 'local');
         return;
       case 'Pair':
         link.paired = true;
@@ -961,7 +984,7 @@ export class FakeBluez {
     if (addr === undefined || !this.heard.has(addr)) {
       throw bluezError('org.bluez.Error.DoesNotExist', 'Does Not Exist');
     }
-    this.dropLink(addr);
+    this.dropLink(addr, 'local');
     this.heard.delete(addr);
     this.permanent.delete(addr);
     this.links.delete(addr);
@@ -977,21 +1000,41 @@ export class FakeBluez {
         paired: this.profiles.get(addr)?.paired === true,
         trusted: false,
         notifying: new Set(),
+        connects: 0,
       };
       this.links.set(addr, link);
     }
     return link;
   }
 
-  /** The connection ends: services unresolved, then Connected false. */
-  private dropLink(addr: string): void {
+  /**
+   * The connection ends for `cause`, in BlueZ 5.83's order: services
+   * unresolved (queued by device_remove_connection() and flushed ahead of the
+   * next signal), then Device1.Disconnected (device_disconnected()), then
+   * Connected false. `local` by default, as a power-off ends it.
+   */
+  private dropLink(addr: string, cause: DisconnectCause = 'local'): void {
     const link = this.links.get(addr);
     if (!link?.connected) return;
     link.connected = false;
     link.resolved = false;
     link.notifying.clear();
     this.emitProps(devicePath(addr), DEVICE1, { ServicesResolved: variant('b', false) });
+    if (this.sendsDisconnectReason) {
+      this.emitSignal(devicePath(addr), DEVICE1, 'Disconnected', 'ss', DISCONNECT_REASONS[cause]);
+    }
     this.emitProps(devicePath(addr), DEVICE1, { Connected: variant('b', false) });
+  }
+
+  /** `Advertiser.dropAfterConnectMs`: end this connection, not a later one, on a timer. */
+  private scheduleDrop(addr: string, link: DeviceLink): void {
+    const ms = this.profiles.get(addr)?.dropAfterConnectMs;
+    if (ms === undefined) return;
+    const connects = link.connects;
+    setTimeout(() => {
+      if (link.connects !== connects) return;
+      this.dropLink(addr, this.profiles.get(addr)?.dropReason ?? 'remote');
+    }, ms);
   }
 
   /** What one advertisement of a device BlueZ already holds reports (DuplicateData). */
@@ -1006,21 +1049,30 @@ export class FakeBluez {
 
   /** PropertiesChanged to every connection holding a rule that matches it. */
   private emitProps(path: string, iface: string, changed: Record<string, unknown>): void {
+    this.emitSignal(path, PROPERTIES, 'PropertiesChanged', 'sa{sv}as', [iface, changed, []]);
+  }
+
+  /** A signal from bluetoothd to every connection holding a rule that matches it. */
+  private emitSignal(
+    path: string,
+    iface: string,
+    member: string,
+    signature: string,
+    body: unknown[],
+  ): void {
     if (this.conns.size === 0) return;
     const { Message } = wireLib();
     const signal = new Message({
       type: SIGNAL,
       sender: BLUEZ_NAME,
       path,
-      interface: PROPERTIES,
-      member: 'PropertiesChanged',
-      signature: 'sa{sv}as',
-      body: [iface, changed, []],
+      interface: iface,
+      member,
+      signature,
+      body,
     });
     for (const conn of this.conns.values()) {
-      if (
-        [...conn.matches.keys()].some((r) => ruleMatches(r, path, PROPERTIES, 'PropertiesChanged'))
-      ) {
+      if ([...conn.matches.keys()].some((r) => ruleMatches(r, path, iface, member))) {
         queueMicrotask(() => conn.deliver(signal));
       }
     }
@@ -1078,9 +1130,11 @@ export class FakeBluez {
     const ifaces = !node?.iface
       ? []
       : [INTROSPECTABLE, node.iface, ...(node.kind === 'bluez' ? [] : [PROPERTIES])];
+    const xmlOf = (i: string): string =>
+      i === DEVICE1 && this.sendsDisconnectReason ? DEVICE1_583_XML : IFACE_XML[i];
     return (
       '<node>' +
-      ifaces.map((i) => IFACE_XML[i]).join('') +
+      ifaces.map(xmlOf).join('') +
       children.map((c) => `<node name="${c}"/>`).join('') +
       '</node>'
     );
@@ -1216,6 +1270,8 @@ interface DeviceLink {
   trusted: boolean;
   /** UUIDs of the characteristics with notifications on. */
   notifying: Set<string>;
+  /** How many Connects this link has had: tells one connection from the next. */
+  connects: number;
 }
 
 interface ServiceNode {
@@ -1348,6 +1404,12 @@ const IFACE_XML: Record<string, string> = (() => {
     ]),
   };
 })();
+
+/** Device1 as BlueZ 5.83 and later declare it: with the Disconnected signal. */
+const DEVICE1_583_XML = IFACE_XML[DEVICE1].replace(
+  '</interface>',
+  '<signal name="Disconnected"><arg type="s"/><arg type="s"/></signal></interface>',
+);
 
 /** ManufacturerData and ServiceData as Device1 holds them. */
 function advertProps(profile: Advertiser): Record<string, unknown> {
