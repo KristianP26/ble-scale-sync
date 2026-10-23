@@ -165,6 +165,23 @@ export interface BodyComposition {
    * brands.
    */
   skeletalMusclePercent?: number;
+  /**
+   * Segment impedances in ohm, at 20 and 100 kHz (#497): diagnostic values an
+   * eight-electrode scale measures. Present only when the scale sent them,
+   * each on its own (0 and the 0xFFFF sentinel are left out), whether or not
+   * its body composition was used; never estimated, and no whole-body
+   * impedance is derived from them.
+   */
+  impedanceTrunk20kHz?: number;
+  impedanceTrunk100kHz?: number;
+  impedanceLeftArm20kHz?: number;
+  impedanceLeftArm100kHz?: number;
+  impedanceRightArm20kHz?: number;
+  impedanceRightArm100kHz?: number;
+  impedanceLeftLeg20kHz?: number;
+  impedanceLeftLeg100kHz?: number;
+  impedanceRightLeg20kHz?: number;
+  impedanceRightLeg100kHz?: number;
 }
 
 /** Describes a BLE characteristic binding for multi-char adapters. */

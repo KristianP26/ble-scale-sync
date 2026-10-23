@@ -300,6 +300,23 @@ describe('processReading: single-user', () => {
     ]);
   });
 
+  // #497: segment impedances are diagnostics, not body composition.
+  it('does not log segment impedances', async () => {
+    const ctx = makeCtx([dad]);
+    await processReading(
+      ctx,
+      rawReading(undefined, {
+        ...FIXED_BODY_COMP,
+        impedanceTrunk20kHz: 22.2,
+        impedanceRightLeg100kHz: 208.5,
+      }),
+    );
+
+    const lines = logSpy.mock.calls.map((c) => String(c[0]));
+    expect(lines.some((s) => s.endsWith('Body composition:'))).toBe(true);
+    expect(lines.filter((s) => /impedance(Trunk|RightLeg)|22\.2|208\.5/.test(s))).toEqual([]);
+  });
+
   it('notifies the display with RAW scale weight, result with computed weight', async () => {
     const display = fakeDisplay();
     const ctx = makeCtx([dad], { display });

@@ -11,7 +11,15 @@ export interface MetricDef {
    * is created, and a column that comes and goes would shift every later one.
    */
   optional?: true;
+  /**
+   * A diagnostic value, not body composition (#497): kept out of the reading
+   * log and the notifications.
+   */
+  diagnostic?: true;
 }
+
+/** A segment impedance (#497): ohm, only from a scale that sent it, diagnostic. */
+const SEGMENT = { decimals: 1, optional: true, diagnostic: true } as const;
 
 /**
  * Every BodyComposition field, in the order the CSV, JSONL, InfluxDB and the
@@ -32,6 +40,16 @@ export const METRICS: Record<keyof BodyComposition, MetricDef> = {
   physiqueRating: { column: 'physique_rating' },
   bmr: { column: 'bmr' },
   metabolicAge: { column: 'metabolic_age' },
+  impedanceTrunk20kHz: { ...SEGMENT, column: 'impedance_trunk_20khz' },
+  impedanceTrunk100kHz: { ...SEGMENT, column: 'impedance_trunk_100khz' },
+  impedanceLeftArm20kHz: { ...SEGMENT, column: 'impedance_left_arm_20khz' },
+  impedanceLeftArm100kHz: { ...SEGMENT, column: 'impedance_left_arm_100khz' },
+  impedanceRightArm20kHz: { ...SEGMENT, column: 'impedance_right_arm_20khz' },
+  impedanceRightArm100kHz: { ...SEGMENT, column: 'impedance_right_arm_100khz' },
+  impedanceLeftLeg20kHz: { ...SEGMENT, column: 'impedance_left_leg_20khz' },
+  impedanceLeftLeg100kHz: { ...SEGMENT, column: 'impedance_left_leg_100khz' },
+  impedanceRightLeg20kHz: { ...SEGMENT, column: 'impedance_right_leg_20khz' },
+  impedanceRightLeg100kHz: { ...SEGMENT, column: 'impedance_right_leg_100khz' },
 };
 
 export const METRIC_KEYS = Object.keys(METRICS) as ReadonlyArray<keyof BodyComposition>;
@@ -45,3 +63,6 @@ export type CoreMetricKey = {
 export const CSV_METRIC_KEYS: ReadonlyArray<CoreMetricKey> = METRIC_KEYS.filter(
   (k): k is CoreMetricKey => !METRICS[k].optional,
 );
+
+/** What the reading log lists: every metric but the diagnostic ones, in METRICS order. */
+export const LOG_METRIC_KEYS = METRIC_KEYS.filter((k) => !METRICS[k].diagnostic);

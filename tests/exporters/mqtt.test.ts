@@ -516,6 +516,58 @@ describe('MqttExporter', () => {
         }
       });
 
+      // Segment impedances are diagnostics: HA creates them disabled.
+      it('publishes the ten segment impedances as disabled diagnostic sensors', async () => {
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+          const exporter = new MqttExporter({ ...defaultConfig, haDiscovery: true });
+          const segments = {
+            impedanceTrunk20kHz: 22.2,
+            impedanceTrunk100kHz: 17.4,
+            impedanceLeftArm20kHz: 310.4,
+            impedanceLeftArm100kHz: 275.3,
+            impedanceRightArm20kHz: 305.5,
+            impedanceRightArm100kHz: 270.4,
+            impedanceLeftLeg20kHz: 227.6,
+            impedanceLeftLeg100kHz: 201.7,
+            impedanceRightLeg20kHz: 234.6,
+            impedanceRightLeg100kHz: 208.5,
+          };
+          const data = { ...samplePayload, skeletalMusclePercent: 47.8, ...segments };
+          await exporter.export(data, { timestamp: MEASURED_AT });
+
+          // 12 + skeletal + 10 segments, status, data.
+          expect(fakeMqtt.publishAsync).toHaveBeenCalledTimes(25);
+          const configs = discovery();
+          expect(
+            configs.get('homeassistant/sensor/ble-scale-sync/impedanceLeftArm100kHz/config'),
+          ).toEqual({
+            name: 'Impedance Left Arm 100 kHz',
+            unique_id: 'ble-scale-sync_impedanceLeftArm100kHz',
+            state_topic: 'scale/body-composition',
+            value_template:
+              "{{ value_json.impedanceLeftArm100kHz if value_json.impedanceLeftArm100kHz is defined else 'None' }}",
+            state_class: 'measurement',
+            availability: [{ topic: 'scale/body-composition/status' }],
+            device: expect.objectContaining({ identifiers: ['ble-scale-sync'] }),
+            unit_of_measurement: 'Ω',
+            icon: 'mdi:flash',
+            suggested_display_precision: 1,
+            entity_category: 'diagnostic',
+            enabled_by_default: false,
+          });
+          const disabled = [...configs.entries()]
+            .filter(([, c]) => c.enabled_by_default === false)
+            .map(([t]) => t.split('/')[3]);
+          expect(disabled.sort()).toEqual(Object.keys(segments).sort());
+          expect(discoveryLog(log)).toEqual([
+            expect.stringContaining('Published HA discovery for 23 sensors.'),
+          ]);
+        } finally {
+          log.mockRestore();
+        }
+      });
+
       // A setup whose scale never measures it gets no entity at all, and the
       // twelve sensors every payload feeds keep their plain templates.
       it('publishes no sensor for it with a payload without it, and leaves the others as they were', async () => {

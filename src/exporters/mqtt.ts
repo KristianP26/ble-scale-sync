@@ -38,6 +38,25 @@ interface HaMetricDef {
    * without it instead of logging a template warning.
    */
   optional?: true;
+  /** false: HA creates the entity disabled, for the user to turn on (#497). */
+  enabledByDefault?: false;
+}
+
+/**
+ * A segment impedance sensor (#497): diagnostic, created disabled, and only
+ * once a payload carries the value.
+ */
+function segmentSensor<K extends keyof BodyComposition>(key: K, name: string) {
+  return {
+    key,
+    name,
+    unit: 'Ω',
+    icon: 'mdi:flash',
+    precision: 1,
+    entityCategory: 'diagnostic',
+    enabledByDefault: false,
+    optional: true,
+  } as const;
 }
 
 const HA_METRICS = [
@@ -71,6 +90,16 @@ const HA_METRICS = [
   },
   { key: 'bmr', name: 'BMR', unit: 'kcal', icon: 'mdi:fire' },
   { key: 'metabolicAge', name: 'Metabolic Age', unit: 'yr', icon: 'mdi:calendar-clock' },
+  segmentSensor('impedanceTrunk20kHz', 'Impedance Trunk 20 kHz'),
+  segmentSensor('impedanceTrunk100kHz', 'Impedance Trunk 100 kHz'),
+  segmentSensor('impedanceLeftArm20kHz', 'Impedance Left Arm 20 kHz'),
+  segmentSensor('impedanceLeftArm100kHz', 'Impedance Left Arm 100 kHz'),
+  segmentSensor('impedanceRightArm20kHz', 'Impedance Right Arm 20 kHz'),
+  segmentSensor('impedanceRightArm100kHz', 'Impedance Right Arm 100 kHz'),
+  segmentSensor('impedanceLeftLeg20kHz', 'Impedance Left Leg 20 kHz'),
+  segmentSensor('impedanceLeftLeg100kHz', 'Impedance Left Leg 100 kHz'),
+  segmentSensor('impedanceRightLeg20kHz', 'Impedance Right Leg 20 kHz'),
+  segmentSensor('impedanceRightLeg100kHz', 'Impedance Right Leg 100 kHz'),
   // A time, not a quantity: HA allows a timestamp sensor no state_class and no
   // unit, and the device class brings its own icon.
   { key: 'timestamp', name: 'Last Weigh-in', deviceClass: 'timestamp' },
@@ -306,6 +335,7 @@ export class MqttExporter implements Exporter {
       if (metric.icon) payload.icon = metric.icon;
       if (metric.precision !== undefined) payload.suggested_display_precision = metric.precision;
       if (metric.entityCategory) payload.entity_category = metric.entityCategory;
+      if (metric.enabledByDefault === false) payload.enabled_by_default = false;
 
       await client.publishAsync(topic, JSON.stringify(payload), { qos: 1, retain: true });
       published++;

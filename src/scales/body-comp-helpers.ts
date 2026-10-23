@@ -31,6 +31,71 @@ export interface ScaleBodyComp {
    * has no skeletal muscle at all.
    */
   skeletalMuscle?: number;
+  /**
+   * The scale's segment impedances (#497). Raw measurements, not composition:
+   * exported whether or not the rest of the set is accepted, each value on its
+   * own, and never estimated.
+   */
+  segmentImpedance?: SegmentImpedance;
+}
+
+/** One body segment's impedance at the two frequencies, in ohm (#497). */
+export interface SegmentPair {
+  at20kHz: number;
+  at100kHz: number;
+}
+
+/**
+ * The five segments an eight-electrode scale measures (#497). For the QN
+ * channels: LH -> leftArm, RH -> rightArm, LF -> leftLeg, RF -> rightLeg,
+ * T -> trunk.
+ */
+export interface SegmentImpedance {
+  trunk: SegmentPair;
+  leftArm: SegmentPair;
+  rightArm: SegmentPair;
+  leftLeg: SegmentPair;
+  rightLeg: SegmentPair;
+}
+
+/** The payload key of each segment at each frequency. */
+const SEGMENT_KEYS = {
+  trunk: ['impedanceTrunk20kHz', 'impedanceTrunk100kHz'],
+  leftArm: ['impedanceLeftArm20kHz', 'impedanceLeftArm100kHz'],
+  rightArm: ['impedanceRightArm20kHz', 'impedanceRightArm100kHz'],
+  leftLeg: ['impedanceLeftLeg20kHz', 'impedanceLeftLeg100kHz'],
+  rightLeg: ['impedanceRightLeg20kHz', 'impedanceRightLeg100kHz'],
+} as const satisfies Record<keyof SegmentImpedance, readonly [string, string]>;
+
+type SegmentImpedanceKey = (typeof SEGMENT_KEYS)[keyof SegmentImpedance][number];
+
+/**
+ * Exclusive upper bound on a segment impedance (#497): 0xFFFF read in 0.1 ohm,
+ * the sentinel of a 16-bit field that measured nothing. No band beyond that:
+ * a segment's impedance depends on the electrode path, and the QN channels
+ * read higher at 100 kHz than at 20 kHz on the trunk where R-MSC04 reads lower.
+ */
+export const SEGMENT_IMPEDANCE_SENTINEL_OHM = 6553.5;
+
+/** The segment impedances as flat payload keys, each kept only when it is a measurement. */
+function segmentImpedanceKeys(
+  seg: SegmentImpedance | undefined,
+): Partial<Record<SegmentImpedanceKey, number>> {
+  const out: Partial<Record<SegmentImpedanceKey, number>> = {};
+  if (!seg) return out;
+  for (const segment of Object.keys(SEGMENT_KEYS) as Array<keyof SegmentImpedance>) {
+    const [k20, k100] = SEGMENT_KEYS[segment];
+    const pair = seg[segment];
+    for (const [key, ohm] of [
+      [k20, pair?.at20kHz],
+      [k100, pair?.at100kHz],
+    ] as const) {
+      if (typeof ohm === 'number' && ohm > 0 && ohm < SEGMENT_IMPEDANCE_SENTINEL_OHM) {
+        out[key] = r2(ohm);
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -373,6 +438,9 @@ export function buildPayload(
     bmr: scaleBmr ?? Math.trunc(bmr),
     metabolicAge: scaleAge ?? metabolicAge,
     ...(skeletalMusclePercent !== undefined && { skeletalMusclePercent }),
+    // From `comp`, not `measured`: raw measurements, not part of the
+    // composition a rejection discards (#497).
+    ...segmentImpedanceKeys(comp.segmentImpedance),
   };
 }
 

@@ -18,6 +18,7 @@ import {
   IMPEDANCE_MAX_OHM,
 } from '../src/scales/body-comp-helpers.js';
 import type { UserProfile } from '../src/interfaces/scale-adapter.js';
+import type { SegmentImpedance } from '../src/scales/body-comp-helpers.js';
 import { defaultProfile } from './helpers/scale-test-utils.js';
 import { LogLevel, setLogLevel } from '../src/logger.js';
 
@@ -619,6 +620,81 @@ describe("buildPayload: the scale's own skeletal muscle percentage (#497)", () =
     } finally {
       setLogLevel(LogLevel.INFO);
       log.mockRestore();
+    }
+  });
+});
+
+// #497: segment impedances are raw measurements, not composition. Values from
+// the #117 R-MSC04 record (trunk / L arm / R arm / L leg / R leg).
+describe('buildPayload: segment impedances (#497)', () => {
+  const p: UserProfile = { height: 183, age: 30, gender: 'male', isAthlete: false };
+  const SEG: SegmentImpedance = {
+    trunk: { at20kHz: 22.2, at100kHz: 17.4 },
+    leftArm: { at20kHz: 310.4, at100kHz: 275.3 },
+    rightArm: { at20kHz: 305.5, at100kHz: 270.4 },
+    leftLeg: { at20kHz: 227.6, at100kHz: 201.7 },
+    rightLeg: { at20kHz: 234.6, at100kHz: 208.5 },
+  };
+  const KEYS = {
+    impedanceTrunk20kHz: 22.2,
+    impedanceTrunk100kHz: 17.4,
+    impedanceLeftArm20kHz: 310.4,
+    impedanceLeftArm100kHz: 275.3,
+    impedanceRightArm20kHz: 305.5,
+    impedanceRightArm100kHz: 270.4,
+    impedanceLeftLeg20kHz: 227.6,
+    impedanceLeftLeg100kHz: 201.7,
+    impedanceRightLeg20kHz: 234.6,
+    impedanceRightLeg100kHz: 208.5,
+  };
+
+  it('exports the ten values as flat keys and leaves everything else as it was', () => {
+    const payload = buildPayload(80, 0, { fat: 22, segmentImpedance: SEG }, p);
+    expect(payload).toEqual({ ...buildPayload(80, 0, { fat: 22 }, p), ...KEYS });
+  });
+
+  // Measurements of their own: a set without body fat, or one that is
+  // rejected, still has them.
+  it('keeps them without a body fat and with a rejected composition', () => {
+    expect(buildPayload(80, 0, { segmentImpedance: SEG }, p)).toEqual({
+      ...buildPayload(80, 0, {}, p),
+      ...KEYS,
+    });
+    expect(buildPayload(80, 0, { fat: 22, water: 0, segmentImpedance: SEG }, p)).toEqual({
+      ...buildPayload(80, 0, {}, p),
+      ...KEYS,
+    });
+  });
+
+  it.each([
+    ['0', 0],
+    ['the 0xFFFF sentinel', 6553.5],
+    ['above the sentinel', 7000],
+    ['negative', -1],
+    ['NaN', Number.NaN],
+    ['infinite', Number.POSITIVE_INFINITY],
+  ])('leaves out one value that is %s and keeps the other nine', (_what, ohm) => {
+    const seg = { ...SEG, leftLeg: { at20kHz: 227.6, at100kHz: ohm } };
+    const payload = buildPayload(80, 0, { fat: 22, segmentImpedance: seg }, p);
+    const { impedanceLeftLeg100kHz: _dropped, ...nine } = KEYS;
+    expect(payload).toEqual({ ...buildPayload(80, 0, { fat: 22 }, p), ...nine });
+    expect(Object.keys(payload)).not.toContain('impedanceLeftLeg100kHz');
+  });
+
+  it('keeps a value just below the sentinel, to 0.01', () => {
+    const seg = { ...SEG, trunk: { at20kHz: 6553.4, at100kHz: 17.456 } };
+    const payload = buildPayload(80, 0, { segmentImpedance: seg }, p);
+    expect(payload.impedanceTrunk20kHz).toBe(6553.4);
+    expect(payload.impedanceTrunk100kHz).toBe(17.46);
+  });
+
+  it('never estimates them', () => {
+    for (const payload of [
+      buildPayload(80, 0, {}, p),
+      buildPayload(80, 500, { fat: 22 }, p),
+      biaPayload({ weight: 80, impedance: 500 }, p),
+    ]) {
+      expect(Object.keys(payload).filter((k) => k.startsWith('impedance'))).toEqual(['impedance']);
     }
   });
 });

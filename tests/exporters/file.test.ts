@@ -151,7 +151,12 @@ describe('FileExporter', () => {
   // ─── Metrics only some weigh-ins carry (#497) ─────────────────────────────
 
   describe('a metric only some weigh-ins carry (#497)', () => {
-    const withSkeletal: BodyComposition = { ...samplePayload, skeletalMusclePercent: 47.8 };
+    const withSkeletal: BodyComposition = {
+      ...samplePayload,
+      skeletalMusclePercent: 47.8,
+      impedanceTrunk20kHz: 22.2,
+      impedanceRightLeg100kHz: 208.5,
+    };
 
     // The header is written once, when the file is created: a column that
     // comes and goes would shift every later one.
@@ -172,7 +177,11 @@ describe('FileExporter', () => {
       await exporter.export(withSkeletal);
 
       const line = vi.mocked(fs.appendFileSync).mock.calls[0][1] as string;
-      expect(JSON.parse(line).skeletalMusclePercent).toBe(47.8);
+      expect(JSON.parse(line)).toMatchObject({
+        skeletalMusclePercent: 47.8,
+        impedanceTrunk20kHz: 22.2,
+        impedanceRightLeg100kHz: 208.5,
+      });
     });
 
     it('writes no key for it to a JSONL line when the payload does not have it', async () => {

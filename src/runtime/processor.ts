@@ -17,7 +17,7 @@ import { checkAndLogUpdate } from '../update-check.js';
 import { fmtWeight } from './format.js';
 import { enqueue } from './export-queue.js';
 import { exporterSlot } from './exporter-slot.js';
-import { METRIC_KEYS } from '../exporters/metrics.js';
+import { LOG_METRIC_KEYS } from '../exporters/metrics.js';
 import { isUsableAnchorTime, persistReplayAnchor } from './replay-anchors.js';
 import {
   HISTORY_WINDOW_MS,
@@ -34,8 +34,9 @@ const log = createLogger('Sync');
 
 // Fixed log order for body-composition metrics, independent of the order in
 // which the adapter populates the payload; `weight` and `impedance` are logged
-// separately above.
-const BODY_COMP_LOG_KEYS = METRIC_KEYS.filter((k) => k !== 'weight' && k !== 'impedance');
+// separately above, and diagnostic values such as segment impedances not at
+// all (#497).
+const BODY_COMP_LOG_KEYS = LOG_METRIC_KEYS.filter((k) => k !== 'weight' && k !== 'impedance');
 const KG_METRICS = new Set<keyof BodyComposition>(['boneMass', 'muscleMass']);
 
 /** Tolerance for treating a historical replay weight as a duplicate of the last exported weight. */
