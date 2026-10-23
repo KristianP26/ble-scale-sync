@@ -4,6 +4,7 @@ import { bleLog, errMsg } from '../types.js';
 import type { Adapter } from './dbus.js';
 import { forgetPairingAgent, ensurePairingAgent } from './agent.js';
 import { applyDbusMatchRefcountPatch } from './dbus-match-patch.js';
+import { watchDisconnectReasons } from './disconnect-reasons.js';
 
 /**
  * Persistent D-Bus connection + adapter, reused across scan cycles in
@@ -194,6 +195,10 @@ export function getConnection(): { bluetooth: NodeBle.Bluetooth; destroy: () => 
           '. The connection will be rebuilt before the next scan.',
       );
     });
+    // Debug only: why BlueZ ended a scale connection (#434). Per connection, so
+    // the rule is on the bus every Connect of this process goes through, and
+    // after the patch above, so it is refcounted like the rest.
+    watchDisconnectReasons(bus);
     bleLog.debug('D-Bus connection established');
   }
   return persistentConn;

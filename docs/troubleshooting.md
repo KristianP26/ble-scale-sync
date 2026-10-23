@@ -30,6 +30,31 @@ sudo systemctl restart bluetooth
 
 Then step on the scale and try again.
 
+### The scale ends the connection during a weigh-in (Linux) {#connection-ended}
+
+This applies to the built-in Bluetooth handler on Linux (`ble.handler: auto` without `noble_driver`, or `ble_transport: local` in the Home Assistant add-on), which talks to BlueZ. When a weigh-in fails with `Scale disconnected before reading completed`, or a scale that sends its own body composition delivers only the weight, [debug mode](#debug-mode) shows why BlueZ ended the connection, right where it happened:
+
+```
+BlueZ: AA:BB:CC:DD:EE:FF disconnected 5.40 s after connect: org.bluez.Reason.Remote (Connection terminated by remote user) - the scale ended it
+```
+
+The time is counted from the moment the connect succeeded. What the reason means:
+
+| Reason | What it means |
+| --- | --- |
+| `org.bluez.Reason.Remote` | The scale ended the connection itself. Many scales do that after every weigh-in, so on its own this is not an error; it matters when it comes before the weigh-in was read. |
+| `org.bluez.Reason.Timeout` | The radio link was lost: the adapter stopped hearing the scale for longer than the link allows. Usually distance, walls or interference; a USB 3 device or port right next to a USB Bluetooth adapter is a common source of 2.4 GHz interference. |
+| `org.bluez.Reason.Local` | This host ended it: ble-scale-sync's own disconnect, the kernel, BlueZ itself or another program using Bluetooth. A weigh-in that ble-scale-sync ends itself shows one right before `Disconnect (after reading) answered`. |
+| `org.bluez.Reason.Authentication` | The scale refused the stored pairing key. See [Beurer: every connect fails after the first session](#beurer-every-connect-fails-after-the-first-session). |
+| `org.bluez.Reason.Suspend` | The host was going into suspend. |
+| `org.bluez.Reason.Unknown` | Some other reason. BlueZ does not say which; `btmon` shows the exact code. |
+
+BlueZ says why only from version 5.83 (Home Assistant OS 16.2 and later). Older BlueZ, such as 5.66 on Raspberry Pi OS bookworm or 5.82 on Raspberry Pi OS trixie, writes no such line: if no `BlueZ: ... disconnected` line appears at all after a weigh-in that connected, that is the reason.
+
+Debug mode is read when ble-scale-sync opens its connection to BlueZ. Switched on in a running app, the lines can start one weigh-in later; a restart starts them at once.
+
+If you open an issue about a lost connection, include these lines. [#434](https://github.com/KristianP26/ble-scale-sync/issues/434) is the one about the Renpho R-MSC04.
+
 ### Scale was found before but now isn't discovered (Linux)
 
 BlueZ can sometimes stop reporting previously-seen devices. Restart Bluetooth and try again:
