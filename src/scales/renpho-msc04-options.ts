@@ -14,7 +14,7 @@ export const RMSC04_BLE_OPTIONS = {
    * an HCI snoop log of the app.
    *
    * Set, the guest b2 carries this byte instead of a9, and the scale's own body
-   * fat and visceral fat are exported for the first user, but only when the
+   * fat, skeletal muscle and visceral fat are exported for the first user, but only when the
    * scale computed them for the profile we sent. Unset, the guest byte a9 goes
    * out and the payload is the estimate, as before.
    *

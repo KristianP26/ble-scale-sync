@@ -471,7 +471,7 @@ ble:
 
 Replace `xx` with your byte. `xx` itself is not a valid value, so the config does not load until you do.
 
-With it set, the guest profile carries your byte instead, and the scale's body fat and visceral fat are exported when all of these hold:
+With it set, the guest profile carries your byte instead, and the scale's body fat, skeletal muscle and visceral fat are exported when all of these hold:
 
 1. The scale reported body fat and BMI.
 2. The profile with your byte was written in the same connection.
@@ -482,16 +482,16 @@ With it set, the guest profile carries your byte instead, and the scale's body f
 Otherwise the estimate goes out, and the normal log says why, for example:
 
 ```
-Renpho R-MSC04: the scale's body fat and visceral fat are not used for this weigh-in: the scale did not answer the profile frame before it first reported the measurement complete, or its last status before the record was not measurement complete; using the estimate (#434)
+Renpho R-MSC04: the scale's body fat, skeletal muscle and visceral fat are not used for this weigh-in: the scale did not answer the profile frame before it first reported the measurement complete, or its last status before the record was not measurement complete; using the estimate (#434)
 ```
 
 When they are used, it says:
 
 ```
-Renpho R-MSC04: using the scale's body fat and visceral fat, computed for the profile sent with ble.rmsc04_profile_byte (#434)
+Renpho R-MSC04: using the scale's body fat, skeletal muscle and visceral fat, computed for the profile sent with ble.rmsc04_profile_byte (#434)
 ```
 
-Water, bone mass and muscle mass are then derived from the scale's body fat, and BMI, BMR, metabolic age and physique rating are calculated here. Its skeletal muscle percentage appears in the debug log only. Its ten segment impedances are exported with or without this option, as diagnostic values ([Exporters](/exporters#mqtt)).
+Water, bone mass and muscle mass are then derived from the scale's body fat, and BMI, BMR, metabolic age and physique rating are calculated here. Its skeletal muscle percentage is exported as the scale reports it (between 10 and 90 % only); on one scale it matched the Renpho app on two weigh-ins. Its ten segment impedances are exported with or without this option, as diagnostic values ([Exporters](/exporters#mqtt)).
 
 Keep in mind:
 

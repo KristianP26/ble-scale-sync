@@ -101,6 +101,7 @@
     "physiqueRating": 5,
     "bmr": 1979,
     "metabolicAge": 31,
+    "skeletalMusclePercent": 43.9,
     "impedanceTrunk20kHz": 22.2,
     "impedanceTrunk100kHz": 17.4,
     "impedanceLeftArm20kHz": 310.4,

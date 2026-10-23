@@ -27,6 +27,7 @@ BLE Scale Sync calculates 10 body composition metrics from your scale's weight a
 | **BMR**             | kcal     | Basal Metabolic Rate                                     |
 | **Metabolic Age**   | years    | Metabolic age relative to BMR                            |
 | **Physique Rating** | 1-9      | Body type classification based on fat % and muscle ratio |
+| **Skeletal Muscle** | %        | Only from a scale that reports it (see below)            |
 
 ## How It Works
 
@@ -160,7 +161,7 @@ These scales measure eight segment impedances (both hands, both feet and the tru
 
 ### Renpho R-MSC04 (MorphoScan Nova)
 
-The scale measures ten segment impedances (five segments at two frequencies) and computes body fat, BMI, skeletal muscle and visceral fat itself, for the profile last written to it. With `ble.rmsc04_profile_byte` set, its body fat and visceral fat are used, and water, muscle and bone mass are derived from that body fat; BMI, BMR, metabolic age and physique rating are calculated locally. Without the option, or when one of its conditions does not hold, body composition is estimated from BMI. The ten segment impedances are exported as diagnostic values with every record that has a body fat value, whether or not the scale's body fat is used (see [Exporters](/exporters#mqtt)); no whole-body impedance is derived from them. The skeletal muscle percentage is logged in debug mode only. The option is confirmed on one scale against the Renpho app. Details in [Supported Scales](/guide/supported-scales#renpho-r-msc04-morphoscan-nova).
+The scale measures ten segment impedances (five segments at two frequencies) and computes body fat, BMI, skeletal muscle and visceral fat itself, for the profile last written to it. With `ble.rmsc04_profile_byte` set, its body fat, skeletal muscle percentage and visceral fat are used, and water, muscle and bone mass are derived from that body fat; BMI, BMR, metabolic age and physique rating are calculated locally. Without the option, or when one of its conditions does not hold, body composition is estimated from BMI. The ten segment impedances are exported as diagnostic values with every record that has a body fat value, whether or not the scale's body fat is used (see [Exporters](/exporters#mqtt)); no whole-body impedance is derived from them. The skeletal muscle percentage is exported as the scale reports it, only with the scale's body fat and only between 10 and 90 %; on one scale it matched the Renpho app on two weigh-ins, and other brands define the figure their own way. The option is confirmed on one scale against the Renpho app for body fat and visceral fat. Details in [Supported Scales](/guide/supported-scales#renpho-r-msc04-morphoscan-nova).
 
 ## References
 
