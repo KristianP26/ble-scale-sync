@@ -103,6 +103,10 @@ Body Fat % = 1.2 * BMI + 0.23 * age - 10.8 * sex - 5.4
 
 Where `sex` = 1 for male, 0 for female. For athletes, the result is multiplied by 0.85.
 
+### Without the estimate
+
+With `estimate_body_composition: false` for a user, a weigh-in that got no body fat from the scale or from a usable impedance gets no estimate: body fat, water, bone mass, muscle mass, visceral fat and physique rating are left empty, while weight, BMI, BMR and metabolic age, which come from weight, height, age and sex, are exported as usual. See [Configuration](/guide/configuration#users).
+
 ### Other metrics
 
 | Metric            | Formula                                                                      |

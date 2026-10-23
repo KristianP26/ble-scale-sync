@@ -557,6 +557,22 @@ Dreeve stores the number without a unit and reads it in its current unit system,
 
 The startup healthcheck calls `GET /api/v1/status` with the key, so it checks both the URL and the key. Dreeve 5.3.0 to 5.3.2 answer that endpoint too but have no weight API; there the export fails with a 404 that says which version it needs. A `401` means a wrong key, or a Dreeve without a valid `DREEVE_API_KEY` (missing, or not `drv_` followed by 64 hex characters), which then refuses every request: check Dreeve's `.env` and recreate its containers.
 
+## Weigh-ins without body composition
+
+With [`estimate_body_composition: false`](/guide/configuration#users), a weigh-in the scale measured no body composition for has no body fat, water, bone mass, muscle mass, visceral fat or physique rating. Weight, impedance, BMI, BMR and metabolic age are there as usual. Each exporter leaves the missing values out its own way:
+
+| Exporter            | Missing values                                                                         |
+| ------------------- | -------------------------------------------------------------------------------------- |
+| Garmin Connect      | Not set; Garmin records the weight, BMI, BMR and metabolic age                         |
+| MQTT                | `null` in the message; the Home Assistant sensors show unknown until the next measured weigh-in |
+| Webhook, File JSONL | `null`                                                                                 |
+| File CSV            | Empty cells                                                                            |
+| InfluxDB            | No field                                                                               |
+| Ntfy, Telegram      | Left out of the message                                                                |
+| Intervals.icu       | Only the weight is sent                                                                |
+| Runalyze, Wger, HealthLog | Only the weight is sent                                                          |
+| Strava, Dreeve      | No change: they only ever receive the weight                                          |
+
 ## Secrets
 
 Use `${ENV_VAR}` references in YAML for passwords and tokens. The variable must be defined in the environment or in a `.env` file:

@@ -786,6 +786,21 @@ users:
 | `beurer_user_index`        | No       | `1`     | Scale user slot the consent code belongs to                                                                                                                                                                 |
 | `beurer_provision`         | No       | `false` | Write this profile into a Beurer scale that has no stored user                                                                                                                                              |
 | `beurer_register_new_user` | No       | `false` | Create a new user record on the scale instead of consenting to one. One-shot; see below                                                                                                                     |
+| `estimate_body_composition` | No      | `true`  | `false`: when the scale measured no body composition for a weigh-in, export none instead of the estimate from BMI. See below                                                                                 |
+
+::: tip Weigh-ins without body composition (`estimate_body_composition`)
+
+When the scale measured no body composition for a weigh-in (no usable impedance, for example in socks, no body fat of its own, or figures that were not used for you), body fat is estimated from BMI and water, bone mass, muscle mass, visceral fat and physique rating follow from that estimate (see [Body Composition](/body-composition#body-fat-fallback-deurenberg)). That keeps every graph filled, but on a scale that measures most of the time it puts estimates between measurements.
+
+With `estimate_body_composition: false` for a user, such a weigh-in goes out without them: weight, impedance, BMI, BMR and metabolic age as usual, and body fat, water, bone mass, muscle mass, visceral fat and physique rating empty. What empty means depends on the exporter, see [Exporters](/exporters#weigh-ins-without-body-composition). A weigh-in with body fat from the scale or from a usable impedance is not affected. The setting belongs to the user the weigh-in is matched to, and a change applies from the next weigh-in. The log says when it applies:
+
+```
+No measured body composition is usable for this weigh-in and estimate_body_composition is off: body fat, water, bone mass, muscle mass, visceral fat and physique rating are left empty.
+```
+
+On a Renpho R-MSC04 without `ble.rmsc04_profile_byte` this is every weigh-in, since its own body fat is not used then.
+
+:::
 
 The exact weight and time of each user's last live weigh-in are kept next to this file in `.last-live-weigh-ins.json`, for the [replay check](/exporters#historical-readings). The check uses that saved weight as well as `last_known_weight`, so editing `last_known_weight` by hand does not reset it. Only when the app starts and finds the two 0.5 kg or more apart is the saved weigh-in taken as older than this file and ignored; after an edit while the app runs, that happens at the next start.
 

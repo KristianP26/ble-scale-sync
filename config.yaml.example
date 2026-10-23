@@ -99,6 +99,7 @@ users:
     is_athlete: false
     weight_range: { min: 50, max: 75 }   # always in kg
     last_known_weight: null               # auto-updated after each measurement
+    # estimate_body_composition: false    # no BMI estimate when the scale measured no body composition
 
     # Beurer BF7xx / BF9xx only (consent-gated SIG scales):
     # beurer_pin: 1234                    # code the scale was paired with; 0 on a wiped scale

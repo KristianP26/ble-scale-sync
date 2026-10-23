@@ -930,6 +930,47 @@ describe("QN 19-byte: the scale's own body composition (#331)", () => {
     );
   });
 
+  // #497: with the estimate off the line says what goes out instead.
+  it('says it exports no body composition when the user turned the estimate off', async () => {
+    const info = spyLines('info');
+    const adapter = new QnScaleAdapter();
+    const p182 = { ...P181, height: 182 };
+    const s = await openSession(adapter, { now: R07_CONNECTED, profile: p182 });
+    s.feed(R07_SESSION.VISIT_OK);
+    await vi.advanceTimersByTimeAsync(928);
+    const out = s.feed(...R07_STORED, ...R07_LIVE);
+    const reading = out[out.length - 1]!;
+    const off = { ...p182, estimateBodyComposition: false };
+    expect(adapter.computeMetrics(reading, off).bodyFatPercent).toBeNull();
+    expect(info.lines()).toContain(
+      "QN: the scale's own body composition is not used for this weigh-in: the scale " +
+        'answered 0.9 s after it accepted the profile, with no live weight in between, so it ' +
+        'most likely measured before that; exporting no body composition ' +
+        '(estimate_body_composition is off) (#331)',
+    );
+  });
+
+  // Derived: the same weigh-in with a usable impedance. Body fat then comes
+  // from that impedance, so the setting does not apply and the line says so.
+  it('keeps estimating instead with a usable impedance and the estimate off', async () => {
+    const info = spyLines('info');
+    const adapter = new QnScaleAdapter();
+    const p182 = { ...P181, height: 182 };
+    const s = await openSession(adapter, { now: R07_CONNECTED, profile: p182 });
+    s.feed(R07_SESSION.VISIT_OK);
+    await vi.advanceTimersByTimeAsync(928);
+    const out = s.feed(...R07_STORED, ...R07_LIVE);
+    const reading = out[out.length - 1]!;
+    reading.impedance = 500;
+    const off = { ...p182, estimateBodyComposition: false };
+    expect(adapter.computeMetrics(reading, off).bodyFatPercent).toEqual(expect.any(Number));
+    expect(info.lines()).toContain(
+      "QN: the scale's own body composition is not used for this weigh-in: the scale " +
+        'answered 0.9 s after it accepted the profile, with no live weight in between, so it ' +
+        'most likely measured before that; estimating instead (#331)',
+    );
+  });
+
   // Only the first answer counts. Derived timing: the same frames with the
   // result block 3 s after the stored record (in the log it came 0.85 s
   // after).

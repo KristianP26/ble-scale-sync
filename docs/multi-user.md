@@ -97,6 +97,8 @@ global_exporters:
 Garmin and Strava keep each account's login tokens in `token_dir`. Give every user their own `token_dir`, as above. If two accounts share one directory, whichever account authenticates last owns the tokens and receives everyone's readings, so the config is rejected at startup with an error naming both users. Two Garmin entries with the same `email` may share a directory, since they are one account. The setup wizard offers a separate directory per user.
 :::
 
+Each user's own [`estimate_body_composition`](/guide/configuration#users) applies to the weigh-ins matched to that user.
+
 ### Exporter behavior in multi-user mode
 
 | Exporter     | What changes                                                                |
@@ -116,7 +118,7 @@ In **continuous mode**, edits to `config.yaml` are detected automatically and ap
 Hot-swappable on edit:
 
 - Exporter list (per-user and `global_exporters`)
-- User profiles (`name`, `slug`, `height`, `birth_date`, `gender`, `is_athlete`, `weight_range`, `last_known_weight`)
+- User profiles (`name`, `slug`, `height`, `birth_date`, `gender`, `is_athlete`, `weight_range`, `last_known_weight`, `estimate_body_composition`)
 - `scale.weight_unit`, `scale.height_unit`
 - `unknown_user` strategy
 - `out_of_range` strategy

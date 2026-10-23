@@ -9,7 +9,9 @@ import {
   buildPayload,
   compositionRejection,
   isPlausibleBmr,
+  isPlausibleImpedance,
   isPlausibleMetabolicAge,
+  noEstimateNote,
   r2,
   type ScaleBodyComp,
 } from '../../body-comp-helpers.js';
@@ -588,9 +590,14 @@ export function scaleCompositionPayload(
   };
   const implausible = why === null ? compositionRejection(set) : null;
   if (why !== null || implausible !== null) {
+    // With a usable impedance the caller still computes body fat from it, so
+    // only without one does the estimate setting decide (#497).
+    const instead =
+      (isPlausibleImpedance(reading.impedance) ? null : noEstimateNote(profile)) ??
+      'estimating instead';
     bleLog.info(
       `QN: the scale's own body composition is not used for this weigh-in: ` +
-        `${why ?? `its values are not plausible (${implausible})`}; estimating instead (#331)`,
+        `${why ?? `its values are not plausible (${implausible})`}; ${instead} (#331)`,
     );
     return null;
   }

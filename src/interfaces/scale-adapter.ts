@@ -142,6 +142,12 @@ export interface UserProfile {
    * for every configured user without a new setting.
    */
   lastKnownWeight?: number;
+  /**
+   * false (`users[].estimate_body_composition`, #497): for a weigh-in the scale
+   * measured no body composition for, export none instead of the BMI
+   * (Deurenberg) estimate. Undefined means true.
+   */
+  estimateBodyComposition?: boolean;
 }
 
 export interface BodyComposition {

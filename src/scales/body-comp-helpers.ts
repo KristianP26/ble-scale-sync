@@ -307,14 +307,45 @@ export function biaFatIfPlausible(
 ): number | undefined {
   if (!(impedance > 0)) return undefined;
   if (!isPlausibleImpedance(impedance)) {
+    const instead =
+      p.estimateBodyComposition === false
+        ? 'is not computed from it, and with estimate_body_composition off none is estimated'
+        : 'falls back to the BMI estimate rather than being computed from it';
     biaLog.debug(
       `Impedance ${impedance} ohm is outside ${IMPEDANCE_MIN_OHM}-${IMPEDANCE_MAX_OHM}, ` +
-        `so body composition falls back to the BMI estimate rather than being computed ` +
-        `from it (#386).`,
+        `so body composition ${instead} (#386).`,
     );
     return undefined;
   }
   return computeBiaFat(weight, impedance, p);
+}
+
+/**
+ * The words an adapter puts where its log line would say it uses the estimate,
+ * when the user turned the estimate off (#497), or null when the estimate is
+ * on and the line stays as it was.
+ */
+export function noEstimateNote(p: UserProfile): string | null {
+  return p.estimateBodyComposition === false
+    ? 'exporting no body composition (estimate_body_composition is off)'
+    : null;
+}
+
+/** Mifflin-St Jeor BMR and the metabolic age derived from it: weight, height, age and sex only. */
+function formulaMetabolism(weight: number, p: UserProfile): { bmr: number; metabolicAge: number } {
+  const sexConstant = p.gender === 'male' ? 5 : -161;
+  const baseBmr = 10 * weight + 6.25 * p.height - 5 * p.age;
+  let bmr = baseBmr + sexConstant;
+  if (p.isAthlete) bmr *= 1.05;
+
+  // The reference is the same Mifflin-St Jeor BMR at age 25, so it has to use
+  // the same sex constant. It used to hardcode the male +5, which read the
+  // 166 kcal gap as ~11 extra years for every female user (#433).
+  const idealBmr = 10 * weight + 6.25 * p.height - 5 * 25 + sexConstant;
+  let metabolicAge = p.age + Math.trunc((idealBmr - bmr) / 15);
+  if (metabolicAge < METABOLIC_AGE_MIN) metabolicAge = METABOLIC_AGE_MIN;
+  if (p.isAthlete && metabolicAge > p.age) metabolicAge = p.age - 5;
+  return { bmr: Math.trunc(bmr), metabolicAge };
 }
 
 /** Build a full BodyComposition from scale-provided body-comp values + user profile. */
@@ -340,13 +371,39 @@ export function buildPayload(
   // have: BIA when the impedance is usable, the BMI estimate otherwise.
   const rejection = compositionRejection(comp);
   if (rejection) {
-    biaLog.debug(`Scale-reported composition discarded (${rejection}); estimating instead.`);
+    biaLog.debug(
+      `Scale-reported composition discarded (${rejection}); ` +
+        (p.estimateBodyComposition === false
+          ? 'using the impedance if it is usable, and no estimate (estimate_body_composition is off).'
+          : 'estimating instead.'),
+    );
   }
   const measured: ScaleBodyComp = rejection ? {} : comp;
-  const bodyFatPercent =
-    measured.fat ??
-    (rejection ? biaFatIfPlausible(weight, impedance, p) : undefined) ??
-    estimateBodyFat(bmi, p);
+  const measuredFat =
+    measured.fat ?? (rejection ? biaFatIfPlausible(weight, impedance, p) : undefined);
+
+  // Nothing measured and the user turned the BMI estimate off (#497): the six
+  // values that would come from the estimated body fat are withheld, null,
+  // and the rest is what the weight, the height and the profile give.
+  // Withheld as a whole, a scale's visceral fat included, so a weigh-in never
+  // mixes measured and missing composition. Segment impedances are raw
+  // measurements and stay.
+  if (measuredFat === undefined && p.estimateBodyComposition === false) {
+    return {
+      weight: r2(weight),
+      impedance: r2(impedance),
+      bmi: r2(bmi),
+      bodyFatPercent: null,
+      waterPercent: null,
+      boneMass: null,
+      muscleMass: null,
+      visceralFat: null,
+      physiqueRating: null,
+      ...formulaMetabolism(weight, p),
+      ...segmentImpedanceKeys(comp.segmentImpedance),
+    };
+  }
+  const bodyFatPercent = measuredFat ?? estimateBodyFat(bmi, p);
   const lbm = weight * (1 - bodyFatPercent / 100);
 
   const waterPercent = measured.water ?? ((lbm * (p.isAthlete ? 0.74 : 0.73)) / weight) * 100;
@@ -386,18 +443,7 @@ export function buildPayload(
   // below 18 % fat and at 6 between 18 and 25 %, whatever the body.
   const physiqueRating = computePhysiqueRating(bodyFatPercent, skeletalMuscleEstimate, weight);
 
-  const sexConstant = p.gender === 'male' ? 5 : -161;
-  const baseBmr = 10 * weight + 6.25 * p.height - 5 * p.age;
-  let bmr = baseBmr + sexConstant;
-  if (p.isAthlete) bmr *= 1.05;
-
-  // The reference is the same Mifflin-St Jeor BMR at age 25, so it has to use
-  // the same sex constant. It used to hardcode the male +5, which read the
-  // 166 kcal gap as ~11 extra years for every female user (#433).
-  const idealBmr = 10 * weight + 6.25 * p.height - 5 * 25 + sexConstant;
-  let metabolicAge = p.age + Math.trunc((idealBmr - bmr) / 15);
-  if (metabolicAge < METABOLIC_AGE_MIN) metabolicAge = METABOLIC_AGE_MIN;
-  if (p.isAthlete && metabolicAge > p.age) metabolicAge = p.age - 5;
+  const { bmr, metabolicAge } = formulaMetabolism(weight, p);
 
   // The scale's own BMR and body age replace the two formulas only here, at
   // the end (D078). The formula metabolic age above has to come from the
@@ -435,7 +481,7 @@ export function buildPayload(
     muscleMass: r2(muscleMass),
     visceralFat,
     physiqueRating,
-    bmr: scaleBmr ?? Math.trunc(bmr),
+    bmr: scaleBmr ?? bmr,
     metabolicAge: scaleAge ?? metabolicAge,
     ...(skeletalMusclePercent !== undefined && { skeletalMusclePercent }),
     // From `comp`, not `measured`: raw measurements, not part of the

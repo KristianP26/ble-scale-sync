@@ -14,6 +14,7 @@ import {
   isPlausibleMetabolicAge,
   isPlausibleSkeletalMusclePercent,
   biaPayload,
+  noEstimateNote,
   IMPEDANCE_MIN_OHM,
   IMPEDANCE_MAX_OHM,
 } from '../src/scales/body-comp-helpers.js';
@@ -696,6 +697,110 @@ describe('buildPayload: segment impedances (#497)', () => {
     ]) {
       expect(Object.keys(payload).filter((k) => k.startsWith('impedance'))).toEqual(['impedance']);
     }
+  });
+});
+
+// #497: users[].estimate_body_composition false. Nothing measured means
+// the six values the estimated body fat would give are withheld (null).
+describe('buildPayload: estimate_body_composition off (#497)', () => {
+  const on: UserProfile = { height: 183, age: 30, gender: 'male', isAthlete: false };
+  const off: UserProfile = { ...on, estimateBodyComposition: false };
+  const WITHHELD = {
+    bodyFatPercent: null,
+    waterPercent: null,
+    boneMass: null,
+    muscleMass: null,
+    visceralFat: null,
+    physiqueRating: null,
+  };
+
+  it('withholds the six composition values and keeps weight, impedance, BMI, BMR and metabolic age', () => {
+    const estimate = buildPayload(80, 0, {}, on);
+    expect(buildPayload(80, 0, {}, off)).toEqual({
+      weight: 80,
+      impedance: 0,
+      bmi: estimate.bmi,
+      ...WITHHELD,
+      bmr: estimate.bmr,
+      metabolicAge: estimate.metabolicAge,
+    });
+  });
+
+  it('changes nothing with the setting on or absent', () => {
+    expect(buildPayload(80, 0, {}, { ...on, estimateBodyComposition: true })).toEqual(
+      buildPayload(80, 0, {}, on),
+    );
+    expect(buildPayload(80, 0, {}, on).bodyFatPercent).toBeGreaterThan(0);
+  });
+
+  // Only the BMI estimate is withheld: a measured body fat, the scale's own or
+  // BIA from a usable impedance, goes out as before.
+  it("keeps the scale's own body fat and a BIA body fat", () => {
+    expect(buildPayload(80, 0, { fat: 22 }, off)).toEqual(buildPayload(80, 0, { fat: 22 }, on));
+    const bia = { weight: 80, impedance: 500 };
+    expect(biaPayload(bia, off)).toEqual(biaPayload(bia, on));
+    expect(biaPayload(bia, off).bodyFatPercent).not.toBeNull();
+  });
+
+  it('falls back to BIA for a rejected composition with a usable impedance, and withholds without one', () => {
+    const rejected = { fat: 22, water: 0 };
+    expect(buildPayload(80, 500, rejected, off)).toEqual(buildPayload(80, 500, rejected, on));
+    expect(buildPayload(80, 0, rejected, off)).toMatchObject(WITHHELD);
+  });
+
+  it('withholds when the impedance is not usable', () => {
+    expect(biaPayload({ weight: 80, impedance: 2000 }, off)).toMatchObject(WITHHELD);
+  });
+
+  // As a whole: a weigh-in never mixes measured and missing composition.
+  it("withholds a scale's visceral fat that came without a body fat", () => {
+    expect(buildPayload(80, 0, { visceralFat: 8 }, off)).toMatchObject(WITHHELD);
+  });
+
+  it('keeps the segment impedances, and has no skeletal muscle', () => {
+    const seg: SegmentImpedance = {
+      trunk: { at20kHz: 22.2, at100kHz: 17.4 },
+      leftArm: { at20kHz: 310.4, at100kHz: 275.3 },
+      rightArm: { at20kHz: 305.5, at100kHz: 270.4 },
+      leftLeg: { at20kHz: 227.6, at100kHz: 201.7 },
+      rightLeg: { at20kHz: 234.6, at100kHz: 208.5 },
+    };
+    const payload = buildPayload(80, 0, { segmentImpedance: seg, skeletalMuscle: 43.9 }, off);
+    expect(payload).toMatchObject({ ...WITHHELD, impedanceTrunk20kHz: 22.2 });
+    expect(payload).not.toHaveProperty('skeletalMusclePercent');
+  });
+
+  it('says so in the debug lines that would otherwise promise an estimate', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    setLogLevel(LogLevel.DEBUG);
+    try {
+      biaPayload({ weight: 80, impedance: 2000 }, off);
+      buildPayload(80, 0, { fat: 22, water: 0 }, off);
+      const lines = log.mock.calls.map((c) => String(c[0]));
+      expect(lines).toContainEqual(
+        expect.stringContaining(
+          'so body composition is not computed from it, and with estimate_body_composition ' +
+            'off none is estimated (#386).',
+        ),
+      );
+      expect(lines).toContainEqual(
+        expect.stringContaining(
+          'Scale-reported composition discarded (water 0 % is outside 0-80 %); using the ' +
+            'impedance if it is usable, and no estimate (estimate_body_composition is off).',
+        ),
+      );
+      expect(lines.some((l) => l.includes('BMI estimate') || l.includes('estimating'))).toBe(false);
+    } finally {
+      setLogLevel(LogLevel.INFO);
+      log.mockRestore();
+    }
+  });
+
+  it('words the adapter note only when the setting is off', () => {
+    expect(noEstimateNote(off)).toBe(
+      'exporting no body composition (estimate_body_composition is off)',
+    );
+    expect(noEstimateNote(on)).toBeNull();
   });
 });
 

@@ -740,6 +740,16 @@ describe('RenphoMsc04Adapter connect handshake (#434, D038)', () => {
     adapter.parseCharNotification(IND, FINAL);
     const r = feed(adapter, RECORD)!;
     expect(adapter.isFinal(r)).toBe(true);
+    // #497: with the estimate off, the line says what goes out instead.
+    const off = { ...PROFILE_187, estimateBodyComposition: false };
+    info.mockClear();
+    expect(adapter.computeMetrics(r, off).bodyFatPercent).toBeNull();
+    expect(info.mock.calls.map((c) => String(c[0]))).toEqual([
+      "Renpho R-MSC04: the scale's body fat and visceral fat were computed for the guest " +
+        'profile we sent, not exported (#434); exporting no body composition ' +
+        '(estimate_body_composition is off)',
+    ]);
+    info.mockClear();
     // PROFILE_187 passes the D022 height gate, so only the guest rule stops it.
     // The segment impedances are not the guest profile's, so they go out (#497).
     expect(adapter.computeMetrics(r, PROFILE_187)).toEqual(
@@ -1494,6 +1504,32 @@ describe('RenphoMsc04Adapter ble.rmsc04_profile_byte (#434, D079)', () => {
       expect(l).not.toContain('1870');
       expect(l).not.toMatch(/\b187(\.0)?\b/);
     }
+  });
+
+  // #497: with the estimate off, a failed gate exports no body composition,
+  // and the line says so instead of promising the estimate.
+  it('exports no body composition, and says so, when the user turned the estimate off', async () => {
+    const off: UserProfile = { ...OWN, estimateBodyComposition: false };
+    const { adapter } = await ownSession('9e', off);
+    const r = feed(adapter, [FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    const { payload, info } = metrics(adapter, r!, off);
+    expect(payload).toEqual(buildPayload(95.55, 0, SEGMENTS, off));
+    expect(payload.bodyFatPercent).toBeNull();
+    expect(info).toEqual([
+      "Renpho R-MSC04: the scale's body fat and visceral fat are not used for this weigh-in: " +
+        `${REASON.notAnswered}; exporting no body composition ` +
+        '(estimate_body_composition is off) (#434)',
+    ]);
+  });
+
+  it("still exports the scale's body fat with the estimate off when the gates pass", async () => {
+    const off: UserProfile = { ...OWN, estimateBodyComposition: false };
+    const { adapter } = await ownSession('9e', off);
+    expectExported(
+      adapter,
+      feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]),
+      off,
+    );
   });
 
   it('keeps everything the gate reads pinned to the reading', async () => {

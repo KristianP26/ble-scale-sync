@@ -13,7 +13,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
+import { uuid16, buildPayload, noEstimateNote, type ScaleBodyComp } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 import { bleLog, errMsg } from '../ble/types.js';
 import { build55aaFrame, frameFault, sum8 } from './renpho-55aa.js';
@@ -567,7 +567,7 @@ function ownProfileComposition(
   if (why !== null) {
     bleLog.info(
       "Renpho R-MSC04: the scale's body fat and visceral fat are not used for this weigh-in: " +
-        `${why}; using the estimate (#434)`,
+        `${why}; ${noEstimateNote(profile) ?? 'using the estimate'} (#434)`,
     );
     return {};
   }
@@ -1152,7 +1152,7 @@ export class RenphoMsc04Adapter
     if (pinned.guestProfile) {
       bleLog.info(
         "Renpho R-MSC04: the scale's body fat and visceral fat were computed for the guest " +
-          'profile we sent, not exported (#434); using the estimate',
+          `profile we sent, not exported (#434); ${noEstimateNote(profile) ?? 'using the estimate'}`,
       );
       return buildPayload(reading.weight, 0, segments, profile);
     }
@@ -1163,18 +1163,25 @@ export class RenphoMsc04Adapter
   /** The scale's own figures, or {} (the profile estimate) when they are not this user's. */
   private scaleComposition(rec: CompositionRecord, profile: UserProfile): ScaleBodyComp {
     if (!(rec.fatPercent > 0)) {
-      bleLog.info('Renpho R-MSC04: the scale reported no body fat, using the estimate');
+      bleLog.info(
+        'Renpho R-MSC04: the scale reported no body fat, ' +
+          (noEstimateNote(profile) ?? 'using the estimate'),
+      );
       return {};
     }
     if (!(rec.bmi > 0)) {
-      bleLog.info('Renpho R-MSC04: the scale reported no BMI, using the estimate');
+      bleLog.info(
+        'Renpho R-MSC04: the scale reported no BMI, ' +
+          (noEstimateNote(profile) ?? 'using the estimate'),
+      );
       return {};
     }
     const scaleHeight = 100 * Math.sqrt(rec.weight / rec.bmi);
     if (Math.abs(scaleHeight - profile.height) > PROFILE_HEIGHT_TOLERANCE_CM) {
       bleLog.info(
         `Renpho R-MSC04: the scale's BMI implies a ${scaleHeight.toFixed(0)} cm profile, ` +
-          `not the configured ${profile.height} cm, so its figures are not used. ` +
+          `not the configured ${profile.height} cm, so its figures are not used` +
+          `${noEstimateNote(profile) ? `; ${noEstimateNote(profile)}` : ''}. ` +
           `It is likely the profile last written to the scale by the Renpho app, ` +
           `which may be another user's.`,
       );

@@ -298,6 +298,13 @@ async function exportFrame(
     `\n${tagPrefix}Measurement: ${fmtWeight(payload.weight, ctx.weightUnit)} / ${payload.impedance} Ohm`,
   );
   logBodyComp(payload, ctx.weightUnit, tag);
+  if (payload.bodyFatPercent === null) {
+    log.info(
+      `${tagPrefix}No measured body composition is usable for this weigh-in and ` +
+        'estimate_body_composition is off: body fat, water, bone mass, muscle mass, ' +
+        'visceral fat and physique rating are left empty.',
+    );
+  }
 
   // Dry-run signal is unified: ctx.dryRun OR (single-user) undefined exporters.
   // An empty exporter array is NOT a skip: it dispatches to nothing and reports

@@ -1,0 +1,108 @@
+{
+  "settled": {
+    "by": "reading",
+    "atMs": 9945
+  },
+  "reading": {
+    "weight": 95.55,
+    "impedance": 0,
+    "scaleComposition": {
+      "rec": {
+        "weight": 95.55,
+        "impedance20kHz": [
+          22.2,
+          310.4,
+          305.5,
+          227.6,
+          234.6
+        ],
+        "impedance100kHz": [
+          17.4,
+          275.3,
+          270.4,
+          201.7,
+          208.5
+        ],
+        "fatPercent": 23.7,
+        "bmi": 27.3,
+        "skeletalMusclePercent": 43.9,
+        "visceralFat": 8
+      },
+      "guestProfile": true,
+      "own": {
+        "heightTenths": 1870,
+        "gender": "male",
+        "age": 30,
+        "written": true,
+        "answeredBeforeComplete": false
+      }
+    }
+  },
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "2a10"
+    },
+    {
+      "seq": 1,
+      "atMs": 0,
+      "uuid": "2a12"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 2,
+      "atMs": 0,
+      "uuid": "2a11",
+      "hex": "55aab200090009074e1b589eff022a",
+      "withResponse": true
+    },
+    {
+      "seq": 3,
+      "atMs": 0,
+      "uuid": "2a11",
+      "hex": "55aab3000b010701016955b9000000003e",
+      "withResponse": true
+    },
+    {
+      "seq": 4,
+      "atMs": 0,
+      "uuid": "2a11",
+      "hex": "55aab000020201b4",
+      "withResponse": true
+    },
+    {
+      "seq": 5,
+      "atMs": 9630,
+      "uuid": "2a11",
+      "hex": "55aab000020301b5",
+      "withResponse": true
+    }
+  ],
+  "rxDropped": 0,
+  "payload": {
+    "weight": 95.55,
+    "impedance": 0,
+    "bmi": 27.32,
+    "bodyFatPercent": null,
+    "waterPercent": null,
+    "boneMass": null,
+    "muscleMass": null,
+    "visceralFat": null,
+    "physiqueRating": null,
+    "bmr": 1979,
+    "metabolicAge": 31,
+    "impedanceTrunk20kHz": 22.2,
+    "impedanceTrunk100kHz": 17.4,
+    "impedanceLeftArm20kHz": 310.4,
+    "impedanceLeftArm100kHz": 275.3,
+    "impedanceRightArm20kHz": 305.5,
+    "impedanceRightArm100kHz": 270.4,
+    "impedanceLeftLeg20kHz": 227.6,
+    "impedanceLeftLeg100kHz": 201.7,
+    "impedanceRightLeg20kHz": 234.6,
+    "impedanceRightLeg100kHz": 208.5
+  }
+}

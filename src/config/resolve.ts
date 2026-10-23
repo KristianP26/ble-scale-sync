@@ -87,6 +87,8 @@ export function resolveUserProfile(user: UserConfig, scaleConfig: ScaleConfig): 
     isAthlete: user.is_athlete,
     birthDate: user.birth_date,
     lastKnownWeight: resolveWeightAnchor(user),
+    // Only when off, so every profile of a config without the key is as before.
+    ...(user.estimate_body_composition === false && { estimateBodyComposition: false }),
   };
 }
 
