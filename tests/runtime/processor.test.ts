@@ -283,6 +283,23 @@ describe('processReading: single-user', () => {
     ]);
   });
 
+  // #497: a metric only some weigh-ins carry is logged in its place, when it is there.
+  it('logs a skeletal muscle percentage after the muscle mass when the payload has one', async () => {
+    const ctx = makeCtx([dad]);
+    await processReading(
+      ctx,
+      rawReading(undefined, { ...FIXED_BODY_COMP, skeletalMusclePercent: 47.8 }),
+    );
+
+    const lines = logSpy.mock.calls.map((c) => String(c[0]).replace(/^[^[]*\[Sync\] /, ''));
+    const headerIdx = lines.lastIndexOf('Body composition:');
+    expect(lines.slice(headerIdx + 5, headerIdx + 8)).toEqual([
+      '  muscleMass: 65.00 kg',
+      '  skeletalMusclePercent: 47.8',
+      '  visceralFat: 5',
+    ]);
+  });
+
   it('notifies the display with RAW scale weight, result with computed weight', async () => {
     const display = fakeDisplay();
     const ctx = makeCtx([dad], { display });

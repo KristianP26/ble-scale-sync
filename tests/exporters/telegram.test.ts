@@ -88,6 +88,24 @@ describe('TelegramExporter', () => {
     expect(text).toContain('Physique 5');
   });
 
+  // #497: only a scale that measured it sends a skeletal muscle percentage.
+  it('adds the skeletal muscle percentage to the body fat line when the payload has one', async () => {
+    const exporter = new TelegramExporter(defaultConfig);
+    await exporter.export({ ...samplePayload, skeletalMusclePercent: 47.8 });
+
+    const text = lastBody().text as string;
+    expect(text).toContain('🏋️ Body Fat 18.5% | Muscle 62.40 kg | Skeletal 47.8%\n');
+  });
+
+  it('says nothing about skeletal muscle when the payload has none', async () => {
+    const exporter = new TelegramExporter(defaultConfig);
+    await exporter.export(samplePayload);
+
+    const text = lastBody().text as string;
+    expect(text).toContain('🏋️ Body Fat 18.5% | Muscle 62.40 kg\n');
+    expect(text).not.toContain('Skeletal');
+  });
+
   it('exposes reportsExports from the config', () => {
     expect(new TelegramExporter(defaultConfig).reportsExports).toBe(false);
     expect(new TelegramExporter({ ...defaultConfig, reportExports: true }).reportsExports).toBe(

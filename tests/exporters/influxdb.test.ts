@@ -127,6 +127,21 @@ describe('toLineProtocol()', () => {
     expect(line).toContain('metabolicAge=30i');
   });
 
+  // #497: a metric only some weigh-ins carry is a field only when it is there.
+  it('writes a skeletal muscle percentage as a float field when the payload has one', () => {
+    const line = toLineProtocol({ ...samplePayload, skeletalMusclePercent: 47.8 }, 'test');
+    expect(line).toContain(',skeletalMusclePercent=47.80,');
+  });
+
+  it('writes no field, and no undefined or NaN, for a metric the payload does not have', () => {
+    const fields = toLineProtocol(samplePayload, 'test', undefined, new Date(0)).split(' ')[1];
+    expect(fields).toBe(
+      'weight=80.00,bmi=23.90,bodyFatPercent=18.50,waterPercent=55.20,boneMass=3.10,' +
+        'muscleMass=62.40,impedance=500i,visceralFat=8i,physiqueRating=5i,bmr=1750i,' +
+        'metabolicAge=30i',
+    );
+  });
+
   it('starts with measurement name', () => {
     const line = toLineProtocol(samplePayload, 'body_composition');
     expect(line).toMatch(/^body_composition /);

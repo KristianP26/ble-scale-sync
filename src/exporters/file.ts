@@ -6,7 +6,7 @@ import type { Exporter, ExportContext, ExportResult } from '../interfaces/export
 import type { ExporterSchema } from '../interfaces/exporter-schema.js';
 import type { FileConfig } from './config.js';
 import { errMsg } from '../utils/error.js';
-import { METRICS, METRIC_KEYS } from './metrics.js';
+import { CSV_METRIC_KEYS, METRICS, METRIC_KEYS } from './metrics.js';
 
 const log = createLogger('File');
 
@@ -17,7 +17,8 @@ function csvEscape(value: string): string {
   return value;
 }
 
-const CSV_COLUMNS = ['timestamp', ...METRIC_KEYS.map((k) => METRICS[k].column), 'user'];
+// Fixed columns: a metric only some weigh-ins carry goes to JSONL only (#497).
+const CSV_COLUMNS = ['timestamp', ...CSV_METRIC_KEYS.map((k) => METRICS[k].column), 'user'];
 
 export const fileSchema: ExporterSchema = {
   name: 'file',
@@ -106,7 +107,7 @@ export class FileExporter implements Exporter {
       fs.appendFileSync(filePath, CSV_COLUMNS.join(',') + '\n', OWNER_ONLY);
     }
 
-    const metrics = METRIC_KEYS.map((k) => {
+    const metrics = CSV_METRIC_KEYS.map((k) => {
       const { decimals } = METRICS[k];
       return decimals === undefined ? data[k] : data[k].toFixed(decimals);
     });
@@ -123,7 +124,9 @@ export class FileExporter implements Exporter {
   ): void {
     const entry: Record<string, unknown> = {
       timestamp,
-      ...Object.fromEntries(METRIC_KEYS.map((k) => [k, data[k]])),
+      ...Object.fromEntries(
+        METRIC_KEYS.filter((k) => data[k] !== undefined).map((k) => [k, data[k]]),
+      ),
     };
 
     if (user) {

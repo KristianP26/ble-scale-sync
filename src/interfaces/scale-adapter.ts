@@ -156,6 +156,15 @@ export interface BodyComposition {
   physiqueRating: number;
   bmr: number;
   metabolicAge: number;
+  /**
+   * The skeletal muscle percentage the scale itself reports (#497). Present
+   * only when the scale measured it, next to a body fat value buildPayload
+   * accepted, and inside its band; absent otherwise, never estimated. The
+   * skeletal estimate in buildPayload stays the physique rating's input
+   * (D002). Each vendor defines it its own way, so it does not compare across
+   * brands.
+   */
+  skeletalMusclePercent?: number;
 }
 
 /** Describes a BLE characteristic binding for multi-char adapters. */

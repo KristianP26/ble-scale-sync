@@ -53,6 +53,16 @@ describe('WebhookExporter', () => {
     );
   });
 
+  // #497: the body is the payload, so a metric only some weigh-ins carry goes
+  // out exactly when the payload has it.
+  it('sends a skeletal muscle percentage when the payload has one', async () => {
+    const exporter = new WebhookExporter(defaultConfig);
+    await exporter.export({ ...samplePayload, skeletalMusclePercent: 47.8 });
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+    expect(body).toEqual({ ...samplePayload, skeletalMusclePercent: 47.8 });
+  });
+
   it('uses custom HTTP method', async () => {
     const config: WebhookConfig = { ...defaultConfig, method: 'PUT' };
     const exporter = new WebhookExporter(config);

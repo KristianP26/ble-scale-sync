@@ -96,6 +96,8 @@ function logBodyComp(payload: BodyComposition, weightUnit: WeightUnit, prefix = 
   log.info(`${p}Body composition:`);
   for (const k of BODY_COMP_LOG_KEYS) {
     const v = payload[k];
+    // A metric only some weigh-ins carry is logged when it is there (#497).
+    if (v === undefined) continue;
     const display = KG_METRICS.has(k) ? fmtWeight(v, weightUnit) : String(v);
     log.info(`${p}  ${k}: ${display}`);
   }

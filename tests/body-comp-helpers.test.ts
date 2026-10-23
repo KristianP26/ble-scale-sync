@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   r2,
   uuid16,
@@ -12,11 +12,14 @@ import {
   isPlausibleImpedance,
   isPlausibleBmr,
   isPlausibleMetabolicAge,
+  isPlausibleSkeletalMusclePercent,
+  biaPayload,
   IMPEDANCE_MIN_OHM,
   IMPEDANCE_MAX_OHM,
 } from '../src/scales/body-comp-helpers.js';
 import type { UserProfile } from '../src/interfaces/scale-adapter.js';
 import { defaultProfile } from './helpers/scale-test-utils.js';
+import { LogLevel, setLogLevel } from '../src/logger.js';
 
 describe('r2()', () => {
   it('rounds 1.005 to 1 (IEEE 754 — 1.005*100 = 100.49999…)', () => {
@@ -542,6 +545,81 @@ describe('buildPayload: physique rating ignores a scale muscle value (E-06)', ()
     expect(withMuscle.physiqueRating).toBe(without.physiqueRating);
     // The exported muscle mass still comes from the scale.
     expect(withMuscle.muscleMass).toBe(r2(0.72 * 80));
+  });
+});
+
+// #497: a scale's own skeletal muscle percentage, by the D078 rule, but with
+// no formula behind it: the key is there only when the scale measured it.
+describe("buildPayload: the scale's own skeletal muscle percentage (#497)", () => {
+  const p: UserProfile = { height: 183, age: 30, gender: 'male', isAthlete: false };
+
+  it('exports it next to an accepted body fat and leaves everything else as it was', () => {
+    const own = buildPayload(80, 0, { fat: 22, skeletalMuscle: 43.9 }, p);
+    expect(own).toEqual({ ...buildPayload(80, 0, { fat: 22 }, p), skeletalMusclePercent: 43.9 });
+  });
+
+  it('rounds it to 0.01', () => {
+    expect(buildPayload(80, 0, { fat: 22, skeletalMuscle: 43.456 }, p).skeletalMusclePercent).toBe(
+      43.46,
+    );
+  });
+
+  // Without a body fat value there is no measurement it could come from.
+  it('leaves it out from a scale that sends no body fat', () => {
+    const payload = buildPayload(80, 0, { skeletalMuscle: 43.9 }, p);
+    expect(payload).not.toHaveProperty('skeletalMusclePercent');
+    expect(payload).toEqual(buildPayload(80, 0, {}, p));
+  });
+
+  // It describes the body the rejected set measured, so it goes with it.
+  it('leaves it out with a rejected composition', () => {
+    const payload = buildPayload(80, 0, { fat: 22, water: 0, skeletalMuscle: 43.9 }, p);
+    expect(payload).not.toHaveProperty('skeletalMusclePercent');
+    expect(payload).toEqual(buildPayload(80, 0, {}, p));
+  });
+
+  // Not even a key with undefined: a JSON consumer would see no difference,
+  // but the payload object is what the session goldens and toEqual compare.
+  it('is never estimated: no key from the BMI estimate, BIA or a scale body fat alone', () => {
+    for (const payload of [
+      buildPayload(80, 0, {}, p),
+      buildPayload(80, 0, { fat: 22, water: 55, bone: 3, muscle: 70 }, p),
+      biaPayload({ weight: 80, impedance: 500 }, p),
+    ]) {
+      expect(Object.keys(payload)).not.toContain('skeletalMusclePercent');
+    }
+  });
+
+  it.each([
+    [9.99, false],
+    [10, true],
+    [90, true],
+    [90.01, false],
+    [0, false],
+    [6553.5, false],
+    [Number.NaN, false],
+    [Number.POSITIVE_INFINITY, false],
+  ])('skeletal muscle %d %%: exported %s', (pct, used) => {
+    expect(isPlausibleSkeletalMusclePercent(pct)).toBe(used);
+    const payload = buildPayload(80, 0, { fat: 22, skeletalMuscle: pct }, p);
+    if (used) expect(payload.skeletalMusclePercent).toBe(pct);
+    else expect(payload).toEqual(buildPayload(80, 0, { fat: 22 }, p));
+  });
+
+  it('says in the debug log why an out-of-band value is not exported', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    setLogLevel(LogLevel.DEBUG);
+    try {
+      buildPayload(80, 0, { fat: 22, skeletalMuscle: 6553.5 }, p);
+      expect(log.mock.calls.map((c) => String(c[0]))).toContainEqual(
+        expect.stringContaining(
+          '[BIA:debug] Scale-reported skeletal muscle 6553.5 % is outside 10-90 %; not exported.',
+        ),
+      );
+    } finally {
+      setLogLevel(LogLevel.INFO);
+      log.mockRestore();
+    }
   });
 });
 

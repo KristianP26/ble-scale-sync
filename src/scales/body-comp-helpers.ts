@@ -25,6 +25,12 @@ export interface ScaleBodyComp {
   bmr?: number;
   /** The scale's own body age, years, exported as metabolic age (D078). Same rule. */
   metabolicAge?: number;
+  /**
+   * The scale's own skeletal muscle, % (#497). Same rule as `bmr`, but never
+   * calculated: without an accepted body fat, or outside its band, the payload
+   * has no skeletal muscle at all.
+   */
+  skeletalMuscle?: number;
 }
 
 /**
@@ -184,6 +190,20 @@ export function isPlausibleMetabolicAge(years: number): boolean {
 }
 
 /**
+ * Band a scale-reported skeletal muscle percentage has to fall in before it is
+ * exported (#497). A judgement like the D078 bands: far from any real body and
+ * far from a broken field (0, a 0xFFFF sentinel read as 6553.5, a value off by
+ * a factor of 10).
+ */
+export const SKELETAL_MUSCLE_MIN_PCT = 10;
+export const SKELETAL_MUSCLE_MAX_PCT = 90;
+
+/** Whether a scale-reported skeletal muscle percentage may be exported (#497). */
+export function isPlausibleSkeletalMusclePercent(pct: number): boolean {
+  return Number.isFinite(pct) && pct >= SKELETAL_MUSCLE_MIN_PCT && pct <= SKELETAL_MUSCLE_MAX_PCT;
+}
+
+/**
  * A scale-reported value as an integer, or undefined (and a debug line) when
  * it is outside its band, so the caller falls back to its formula.
  */
@@ -335,6 +355,11 @@ export function buildPayload(
     `${METABOLIC_AGE_MIN}-${METABOLIC_AGE_MAX} years`,
   );
 
+  // The scale's own skeletal muscle percentage goes by the same rule, but has
+  // no formula to fall back to: out of its band, or without a measured body
+  // fat, the key is left out rather than estimated (#497).
+  const skeletalMusclePercent = scaleSkeletalMuscle(withFat ? measured.skeletalMuscle : undefined);
+
   return {
     weight: r2(weight),
     impedance: r2(impedance),
@@ -347,7 +372,19 @@ export function buildPayload(
     physiqueRating,
     bmr: scaleBmr ?? Math.trunc(bmr),
     metabolicAge: scaleAge ?? metabolicAge,
+    ...(skeletalMusclePercent !== undefined && { skeletalMusclePercent }),
   };
+}
+
+/** The scale's skeletal muscle percentage to 0.01, or undefined (and a debug line) out of band. */
+function scaleSkeletalMuscle(pct: number | undefined): number | undefined {
+  if (pct == null) return undefined;
+  if (isPlausibleSkeletalMusclePercent(pct)) return r2(pct);
+  biaLog.debug(
+    `Scale-reported skeletal muscle ${pct} % is outside ` +
+      `${SKELETAL_MUSCLE_MIN_PCT}-${SKELETAL_MUSCLE_MAX_PCT} %; not exported.`,
+  );
+  return undefined;
 }
 
 /** Body fat from a plausible impedance through BIA, the BMI estimate otherwise (#386). */

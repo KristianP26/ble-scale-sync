@@ -466,5 +466,77 @@ describe('MqttExporter', () => {
       const connectOpts = fakeMqtt.connect.mock.calls[0][1];
       expect(connectOpts.will).toBeUndefined();
     });
+
+    describe('a metric only some weigh-ins carry (#497)', () => {
+      const SKELETAL_TOPIC = 'homeassistant/sensor/ble-scale-sync/skeletalMusclePercent/config';
+
+      function discovery(): Map<string, Record<string, unknown>> {
+        return new Map(
+          fakeMqtt.publishAsync.mock.calls
+            .filter((c: unknown[]) => (c[0] as string).startsWith('homeassistant/'))
+            .map((c: unknown[]) => [c[0] as string, JSON.parse(c[1] as string)]),
+        );
+      }
+
+      function discoveryLog(spy: { mock: { calls: unknown[][] } }): string[] {
+        return spy.mock.calls
+          .map((c) => String(c[0]))
+          .filter((m) => m.includes('Published HA discovery'));
+      }
+
+      it('publishes its sensor with a payload that has it: 13 configs, status, data', async () => {
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+          const exporter = new MqttExporter({ ...defaultConfig, haDiscovery: true });
+          const data = { ...samplePayload, skeletalMusclePercent: 47.8 };
+          await exporter.export(data, { timestamp: MEASURED_AT });
+
+          expect(fakeMqtt.publishAsync).toHaveBeenCalledTimes(15);
+          const sensor = discovery().get(SKELETAL_TOPIC);
+          expect(sensor).toEqual({
+            name: 'Skeletal Muscle',
+            unique_id: 'ble-scale-sync_skeletalMusclePercent',
+            state_topic: 'scale/body-composition',
+            value_template:
+              "{{ value_json.skeletalMusclePercent if value_json.skeletalMusclePercent is defined else 'None' }}",
+            state_class: 'measurement',
+            availability: [{ topic: 'scale/body-composition/status' }],
+            device: expect.objectContaining({ identifiers: ['ble-scale-sync'] }),
+            unit_of_measurement: '%',
+            icon: 'mdi:arm-flex',
+            suggested_display_precision: 1,
+          });
+          const state = JSON.parse(fakeMqtt.publishAsync.mock.calls[14][1] as string);
+          expect(state.skeletalMusclePercent).toBe(47.8);
+          expect(discoveryLog(log)).toEqual([
+            expect.stringContaining('Published HA discovery for 13 sensors.'),
+          ]);
+        } finally {
+          log.mockRestore();
+        }
+      });
+
+      // A setup whose scale never measures it gets no entity at all, and the
+      // twelve sensors every payload feeds keep their plain templates.
+      it('publishes no sensor for it with a payload without it, and leaves the others as they were', async () => {
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+          const exporter = new MqttExporter({ ...defaultConfig, haDiscovery: true });
+          await exporter.export(samplePayload, { timestamp: MEASURED_AT });
+
+          expect(fakeMqtt.publishAsync).toHaveBeenCalledTimes(14);
+          const configs = discovery();
+          expect(configs.has(SKELETAL_TOPIC)).toBe(false);
+          expect([...configs.values()].map((c) => c.value_template).sort()).toEqual(
+            [...Object.keys(samplePayload), 'timestamp'].map((k) => `{{ value_json.${k} }}`).sort(),
+          );
+          expect(discoveryLog(log)).toEqual([
+            expect.stringContaining('Published HA discovery for 12 sensors.'),
+          ]);
+        } finally {
+          log.mockRestore();
+        }
+      });
+    });
   });
 });

@@ -7,9 +7,14 @@ import { redactSecrets } from '../utils/error.js';
 export function formatNotification(data: BodyComposition, context?: ExportContext): string {
   const unit = context?.weightUnit ?? 'kg';
   const prefix = context?.userName ? `[${context.userName}] ` : '';
+  // Only a scale that measured it sends a skeletal muscle percentage (#497).
+  const skeletal =
+    data.skeletalMusclePercent !== undefined
+      ? ` | Skeletal ${data.skeletalMusclePercent.toFixed(1)}%`
+      : '';
   const lines = [
     `${prefix}⚖️ ${fmtWeight(data.weight, unit)} | BMI ${data.bmi.toFixed(1)}`,
-    `🏋️ Body Fat ${data.bodyFatPercent.toFixed(1)}% | Muscle ${fmtWeight(data.muscleMass, unit)}`,
+    `🏋️ Body Fat ${data.bodyFatPercent.toFixed(1)}% | Muscle ${fmtWeight(data.muscleMass, unit)}${skeletal}`,
     `💧 Water ${data.waterPercent.toFixed(1)}% | 🦴 Bone ${fmtWeight(data.boneMass, unit)}`,
     `🫀 Visceral Fat ${data.visceralFat} | BMR ${data.bmr} kcal`,
     `📅 Metabolic Age ${data.metabolicAge} yr | Physique ${data.physiqueRating}`,
