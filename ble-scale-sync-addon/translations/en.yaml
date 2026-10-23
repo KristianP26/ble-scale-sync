@@ -111,7 +111,7 @@ configuration:
       the app. With it the scale's own body fat and visceral fat are exported
       for the first user. In the YAML editor put it in quotes (a byte like 07
       would otherwise become a number). It is personal, do not post it in
-      issues. Not yet confirmed on hardware (#434); leave empty otherwise.
+      issues. Confirmed on one scale (#434); leave empty otherwise.
   auto_clear_stale_bond:
     name: Re-pair a scale that forgot its pairing
     description: >-

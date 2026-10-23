@@ -156,7 +156,7 @@ These scales measure eight segment impedances (both hands, both feet and the tru
 
 ### Renpho R-MSC04 (MorphoScan Nova)
 
-The scale measures ten segment impedances (five segments at two frequencies) and computes body fat, BMI, skeletal muscle and visceral fat itself, for the profile last written to it. With `ble.rmsc04_profile_byte` set, its body fat and visceral fat are used, and water, muscle and bone mass are derived from that body fat; BMI, BMR, metabolic age and physique rating are calculated locally. Without the option, or when one of its conditions does not hold, body composition is estimated from BMI. The segment impedances and the skeletal muscle percentage are logged in debug mode only. Not confirmed on hardware yet. Details in [Supported Scales](/guide/supported-scales#renpho-r-msc04-morphoscan-nova).
+The scale measures ten segment impedances (five segments at two frequencies) and computes body fat, BMI, skeletal muscle and visceral fat itself, for the profile last written to it. With `ble.rmsc04_profile_byte` set, its body fat and visceral fat are used, and water, muscle and bone mass are derived from that body fat; BMI, BMR, metabolic age and physique rating are calculated locally. Without the option, or when one of its conditions does not hold, body composition is estimated from BMI. The segment impedances and the skeletal muscle percentage are logged in debug mode only. The option is confirmed on one scale against the Renpho app. Details in [Supported Scales](/guide/supported-scales#renpho-r-msc04-morphoscan-nova).
 
 ## References
 
