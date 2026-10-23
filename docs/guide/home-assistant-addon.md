@@ -301,7 +301,7 @@ Known upstream BlueZ bug on Broadcom adapters (`bluez/bluez#807`). See the gener
 ## Limitations and roadmap
 
 - The UI is scoped to a single user. For multi-user / per-user-exporter setups, use [custom config mode](#custom-config-mode).
-- The add-on has not yet been submitted to the [HACS](https://hacs.xyz/) default repository. For now, add the GitHub URL as a custom repository.
+- The add-on is not available through [HACS](https://hacs.xyz/) and cannot be: HACS only distributes integrations, dashboards, themes, templates, AppDaemon apps and Python scripts, not Supervisor add-ons. Add this repository to the add-on store as described under [Install](#install).
 - A dedicated Home Assistant notification exporter (persistent notifications or Companion app push) is planned.
 
 Source, issue tracker, and changelog live at [github.com/KristianP26/ble-scale-sync](https://github.com/KristianP26/ble-scale-sync).
