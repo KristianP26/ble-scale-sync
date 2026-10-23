@@ -85,7 +85,7 @@ ble:
 | `@stoprocent/noble` (default on macOS)    | Linux, macOS, Windows | Newer driver, ships prebuilt binaries. Exposes service UUIDs during scan. On Windows, requires the [WinUSB driver](https://zadig.akeo.ie/). |
 
 ::: tip Note
-On Linux, `node-ble` is always used regardless of `noble_driver`. The flag only applies on macOS/Windows or when explicitly set.
+On Linux, `node-ble` is used unless `noble_driver` (or the `NOBLE_DRIVER` environment variable) is set; setting it switches Linux to that noble driver.
 :::
 
 The three stacks are optional dependencies, so a host that could not build one of them simply does not have it. If the transport you select is not installed, the app names the npm package, the install command and the transports that are still available. Install one directly with `npm install @stoprocent/noble` (or `@abandonware/noble`, or `node-ble`).
