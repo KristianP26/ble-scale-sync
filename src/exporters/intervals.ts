@@ -128,9 +128,10 @@ export class IntervalsExporter implements Exporter {
     const when = context?.timestamp ?? new Date();
     const timeZone = await this.resolveAthleteTimeZone();
     const date = (timeZone && dateInTimeZone(when, timeZone)) || toLocalDate(when);
+    // A withheld body fat (null, #497) is left out rather than sent as null.
     const body = JSON.stringify({
       weight: Number(data.weight.toFixed(2)),
-      bodyFat: Number(data.bodyFatPercent.toFixed(1)),
+      ...(data.bodyFatPercent !== null && { bodyFat: Number(data.bodyFatPercent.toFixed(1)) }),
     });
 
     return sendWithRetry(

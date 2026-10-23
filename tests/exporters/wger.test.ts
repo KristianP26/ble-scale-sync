@@ -146,6 +146,21 @@ describe('WgerExporter', () => {
     expect(values).toHaveLength(3);
   });
 
+  // #497: withheld values (null) are not sent; the weight still is.
+  it('posts no measurement for a withheld value', async () => {
+    await new WgerExporter(config).export({
+      ...sample,
+      bodyFatPercent: null,
+      waterPercent: null,
+      boneMass: null,
+      muscleMass: null,
+      visceralFat: null,
+      physiqueRating: null,
+    });
+    expect(calls('POST', '/weightentry/')).toHaveLength(1);
+    expect(calls('POST', '/measurement/')).toHaveLength(0);
+  });
+
   it('caches categories across exports (lists only once)', async () => {
     const e = new WgerExporter(config);
     await e.export(sample);

@@ -148,12 +148,16 @@ export interface BodyComposition {
   weight: number;
   impedance: number;
   bmi: number;
-  bodyFatPercent: number;
-  waterPercent: number;
-  boneMass: number;
-  muscleMass: number;
-  visceralFat: number;
-  physiqueRating: number;
+  // The six composition values below are null only when the user turned the
+  // BMI estimate off and the scale measured nothing for this weigh-in (#497).
+  // BMI, BMR and metabolic age come from weight, height, age and sex, never
+  // from body fat, so they are always there.
+  bodyFatPercent: number | null;
+  waterPercent: number | null;
+  boneMass: number | null;
+  muscleMass: number | null;
+  visceralFat: number | null;
+  physiqueRating: number | null;
   bmr: number;
   metabolicAge: number;
   /**

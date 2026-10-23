@@ -271,7 +271,7 @@ describe('RenphoMsc04Adapter', () => {
         impedanceRightLeg100kHz: 208.5,
       });
       // Not the scale's skeletal muscle percentage of body weight (#253).
-      expect(Math.abs(payload.muscleMass - 0.439 * 95.55)).toBeGreaterThan(20);
+      expect(Math.abs(payload.muscleMass! - 0.439 * 95.55)).toBeGreaterThan(20);
       assertPayloadRanges(payload);
     });
 

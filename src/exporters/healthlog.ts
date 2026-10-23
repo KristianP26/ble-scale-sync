@@ -61,14 +61,15 @@ export const healthlogSchema: ExporterSchema = {
  */
 const MEASUREMENT_TYPES: ReadonlyArray<{
   type: string;
-  value: (d: BodyComposition) => number;
+  /** null when the value was withheld (#497): nothing is sent for it. */
+  value: (d: BodyComposition) => number | null;
   min: number;
   max: number;
 }> = [
   { type: 'BODY_FAT', value: (d) => d.bodyFatPercent, min: 1, max: 80 },
   {
     type: 'TOTAL_BODY_WATER',
-    value: (d) => (d.weight * d.waterPercent) / 100,
+    value: (d) => (d.waterPercent === null ? null : (d.weight * d.waterPercent) / 100),
     min: 5,
     max: 100,
   },
@@ -113,7 +114,7 @@ export class HealthLogExporter implements Exporter {
   private async pushMeasurements(data: BodyComposition, timestamp: string): Promise<void> {
     for (const metric of MEASUREMENT_TYPES) {
       const raw = metric.value(data);
-      if (!Number.isFinite(raw) || raw <= 0) continue;
+      if (raw === null || !Number.isFinite(raw) || raw <= 0) continue;
       // Checked as sent: 30.004 goes out as 30, which HealthLog accepts.
       const value = round2(raw);
       if (value < metric.min || value > metric.max) {

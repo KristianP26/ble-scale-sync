@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 import type {
+  BodyComposition,
   ScaleAdapter,
   ScaleAdapterCore,
   ScaleReading,
@@ -102,6 +103,41 @@ describe('ConfigFieldDef ties a field kind to its values', () => {
       choices: [{ label: 'CSV', value: 'csv' }],
     };
     expect([num, sel]).toHaveLength(2);
+  });
+});
+
+describe('a body composition value is null only where it may be withheld (#497)', () => {
+  const base = {
+    weight: 80,
+    impedance: 0,
+    bmi: 23.9,
+    bodyFatPercent: null,
+    waterPercent: null,
+    boneMass: null,
+    muscleMass: null,
+    visceralFat: null,
+    physiqueRating: null,
+    bmr: 1750,
+    metabolicAge: 30,
+  };
+
+  it('accepts null for the six composition values', () => {
+    const withheld: BodyComposition = base;
+    expect(withheld.bodyFatPercent).toBeNull();
+  });
+
+  it('rejects null for weight, impedance, BMI, BMR and metabolic age', () => {
+    // @ts-expect-error the weight is always measured
+    const noWeight: BodyComposition = { ...base, weight: null };
+    // @ts-expect-error impedance is 0 when there is none, never null
+    const noImpedance: BodyComposition = { ...base, impedance: null };
+    // @ts-expect-error BMI comes from weight and height
+    const noBmi: BodyComposition = { ...base, bmi: null };
+    // @ts-expect-error BMR comes from weight, height, age and sex
+    const noBmr: BodyComposition = { ...base, bmr: null };
+    // @ts-expect-error so does the metabolic age
+    const noAge: BodyComposition = { ...base, metabolicAge: null };
+    expect([noWeight, noImpedance, noBmi, noBmr, noAge]).toHaveLength(5);
   });
 });
 

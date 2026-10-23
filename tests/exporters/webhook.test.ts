@@ -63,6 +63,17 @@ describe('WebhookExporter', () => {
     expect(body).toEqual({ ...samplePayload, skeletalMusclePercent: 47.8 });
   });
 
+  // #497: a withheld value goes out as JSON null.
+  it('sends a withheld value as null', async () => {
+    const exporter = new WebhookExporter(defaultConfig);
+    await exporter.export({ ...samplePayload, bodyFatPercent: null, visceralFat: null });
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+    expect(body.bodyFatPercent).toBeNull();
+    expect(body.visceralFat).toBeNull();
+    expect(body.bmr).toBe(1750);
+  });
+
   it('uses custom HTTP method', async () => {
     const config: WebhookConfig = { ...defaultConfig, method: 'PUT' };
     const exporter = new WebhookExporter(config);

@@ -142,6 +142,21 @@ describe('toLineProtocol()', () => {
     );
   });
 
+  // #497: line protocol has no null, so a withheld value is no field at all.
+  it('writes no field for a withheld (null) value', () => {
+    const withheld = {
+      ...samplePayload,
+      bodyFatPercent: null,
+      waterPercent: null,
+      boneMass: null,
+      muscleMass: null,
+      visceralFat: null,
+      physiqueRating: null,
+    };
+    const fields = toLineProtocol(withheld, 'test', undefined, new Date(0)).split(' ')[1];
+    expect(fields).toBe('weight=80.00,bmi=23.90,impedance=500i,bmr=1750i,metabolicAge=30i');
+  });
+
   it('starts with measurement name', () => {
     const line = toLineProtocol(samplePayload, 'body_composition');
     expect(line).toMatch(/^body_composition /);

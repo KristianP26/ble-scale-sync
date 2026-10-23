@@ -138,6 +138,17 @@ describe('MqttExporter', () => {
     });
   });
 
+  // #497: JSON null is what HA's templates render as unknown.
+  it('publishes a withheld value as null', async () => {
+    const exporter = new MqttExporter(defaultConfig);
+    await exporter.export({ ...samplePayload, bodyFatPercent: null, physiqueRating: null });
+
+    const state = JSON.parse(fakeMqtt.publishAsync.mock.calls[0][1] as string);
+    expect(state.bodyFatPercent).toBeNull();
+    expect(state.physiqueRating).toBeNull();
+    expect(state.bmr).toBe(1750);
+  });
+
   describe('measurement time (#478)', () => {
     it('publishes the measurement time from the context, not the time of the publish', async () => {
       vi.useFakeTimers();

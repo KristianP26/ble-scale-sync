@@ -193,6 +193,38 @@ describe('FileExporter', () => {
     });
   });
 
+  // ─── Withheld values (#497) ───────────────────────────────────────────────
+
+  describe('withheld (null) values (#497)', () => {
+    const withheld: BodyComposition = {
+      ...samplePayload,
+      bodyFatPercent: null,
+      waterPercent: null,
+      boneMass: null,
+      muscleMass: null,
+      visceralFat: null,
+      physiqueRating: null,
+    };
+
+    it('writes an empty CSV cell for each, never the word null', async () => {
+      const exporter = new FileExporter(csvConfig);
+      await exporter.export(withheld, { timestamp: new Date('2026-10-23T08:00:00Z') });
+
+      const row = vi.mocked(fs.appendFileSync).mock.calls[1][1] as string;
+      expect(row).toBe('2026-10-23T08:00:00.000Z,72.50,485,23.1,,,,,,,1650,25,\n');
+    });
+
+    it('writes them to a JSONL line as null', async () => {
+      const exporter = new FileExporter(jsonlConfig);
+      await exporter.export(withheld);
+
+      const parsed = JSON.parse(vi.mocked(fs.appendFileSync).mock.calls[0][1] as string);
+      expect(parsed.bodyFatPercent).toBeNull();
+      expect(parsed.physiqueRating).toBeNull();
+      expect(parsed.bmr).toBe(1650);
+    });
+  });
+
   // ─── JSONL ────────────────────────────────────────────────────────────────
 
   describe('JSONL format', () => {

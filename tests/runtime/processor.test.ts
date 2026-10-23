@@ -300,6 +300,32 @@ describe('processReading: single-user', () => {
     ]);
   });
 
+  // #497: a withheld value is left out of the log rather than printed as null.
+  it('does not log withheld (null) values', async () => {
+    const ctx = makeCtx([dad]);
+    await processReading(
+      ctx,
+      rawReading(undefined, {
+        ...FIXED_BODY_COMP,
+        bodyFatPercent: null,
+        waterPercent: null,
+        boneMass: null,
+        muscleMass: null,
+        visceralFat: null,
+        physiqueRating: null,
+      }),
+    );
+
+    const lines = logSpy.mock.calls.map((c) => String(c[0]).replace(/^[^[]*\[Sync\] /, ''));
+    const headerIdx = lines.lastIndexOf('Body composition:');
+    expect(lines.slice(headerIdx + 1, headerIdx + 4)).toEqual([
+      '  bmi: 24',
+      '  bmr: 1800',
+      '  metabolicAge: 30',
+    ]);
+    expect(lines.filter((s) => s.includes('null'))).toEqual([]);
+  });
+
   // #497: segment impedances are diagnostics, not body composition.
   it('does not log segment impedances', async () => {
     const ctx = makeCtx([dad]);

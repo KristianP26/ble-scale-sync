@@ -106,6 +106,24 @@ describe('TelegramExporter', () => {
     expect(text).not.toContain('Skeletal');
   });
 
+  // #497: a withheld value is left out, and a line with nothing left goes.
+  it('leaves withheld values out of the message', async () => {
+    const exporter = new TelegramExporter({ ...defaultConfig, title: 'My Scale' });
+    await exporter.export({
+      ...samplePayload,
+      bodyFatPercent: null,
+      waterPercent: null,
+      boneMass: null,
+      muscleMass: null,
+      visceralFat: null,
+      physiqueRating: null,
+    });
+
+    expect(lastBody().text).toBe(
+      'My Scale\n⚖️ 80.00 kg | BMI 23.9\n🫀 BMR 1750 kcal\n📅 Metabolic Age 30 yr',
+    );
+  });
+
   it('exposes reportsExports from the config', () => {
     expect(new TelegramExporter(defaultConfig).reportsExports).toBe(false);
     expect(new TelegramExporter({ ...defaultConfig, reportExports: true }).reportsExports).toBe(

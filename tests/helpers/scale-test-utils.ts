@@ -70,6 +70,18 @@ export function defaultProfile(overrides?: Partial<UserProfile>): UserProfile {
 }
 
 export function assertPayloadRanges(payload: BodyComposition): void {
+  // A value is null only when the user turned the estimate off (#497); an
+  // adapter's own payload never withholds one.
+  for (const k of [
+    'bodyFatPercent',
+    'waterPercent',
+    'boneMass',
+    'muscleMass',
+    'visceralFat',
+    'physiqueRating',
+  ] as const) {
+    expect(payload[k], `${k} is null`).not.toBeNull();
+  }
   if (payload.bmi !== 0) {
     expect(payload.bmi).toBeGreaterThanOrEqual(10);
     expect(payload.bmi).toBeLessThanOrEqual(60);

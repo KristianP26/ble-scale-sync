@@ -377,7 +377,7 @@ describe('HutbitAdapter (#254)', () => {
       // The BMI-only estimate for the same body is a different number, so this
       // asserts the impedance actually reached the estimator.
       const bmiOnly = expectValidMetrics(adapter, { weight: 84.1, impedance: 0 });
-      expect(payload.bodyFatPercent).not.toBeCloseTo(bmiOnly.bodyFatPercent, 1);
+      expect(payload.bodyFatPercent).not.toBeCloseTo(bmiOnly.bodyFatPercent!, 1);
     });
 
     it('derives a valid body-composition payload (weight-only → BIA/BMI)', () => {

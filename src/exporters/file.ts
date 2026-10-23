@@ -107,9 +107,12 @@ export class FileExporter implements Exporter {
       fs.appendFileSync(filePath, CSV_COLUMNS.join(',') + '\n', OWNER_ONLY);
     }
 
+    // A withheld value (null, #497) is an empty cell, never the word null.
     const metrics = CSV_METRIC_KEYS.map((k) => {
+      const v = data[k];
+      if (v === null) return '';
       const { decimals } = METRICS[k];
-      return decimals === undefined ? data[k] : data[k].toFixed(decimals);
+      return decimals === undefined ? v : v.toFixed(decimals);
     });
     const row = [timestamp, ...metrics, csvEscape(user)].join(',');
 
