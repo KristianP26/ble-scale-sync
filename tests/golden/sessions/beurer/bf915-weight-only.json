@@ -28,14 +28,14 @@
       "uuid": "2a99"
     },
     {
-      "seq": 4,
+      "seq": 5,
       "atMs": 0,
       "uuid": "fff2"
     }
   ],
   "writes": [
     {
-      "seq": 5,
+      "seq": 4,
       "atMs": 0,
       "uuid": "2a2b",
       "hex": "ea0701010c0000040000",

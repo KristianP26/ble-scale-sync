@@ -266,11 +266,6 @@
         "optional": true
       },
       {
-        "uuid": "0000fff200001000800000805f9b34fb",
-        "type": "notify",
-        "optional": true
-      },
-      {
         "uuid": "00002a2b00001000800000805f9b34fb",
         "type": "write"
       }

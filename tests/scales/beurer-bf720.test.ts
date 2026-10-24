@@ -431,6 +431,278 @@ describe('BeurerBf720Adapter', () => {
     });
   });
 
+  describe('BF500 vendor layout (openScale pairing capture)', () => {
+    const LIST = uuid16(0xfff1);
+    const ACTIVITY = uuid16(0xfff2);
+    const TAKE_MEASUREMENT = uuid16(0xfff4);
+    const DOB = uuid16(0x2a85);
+    const GENDER = uuid16(0x2a8c);
+    const HEIGHT = uuid16(0x2a8e);
+    const INCREMENT = uuid16(0x2a99);
+
+    function bf500Ctx(over: Partial<ConnectionContext> = {}) {
+      const stored: Record<string, Buffer> = {
+        [DOB]: Buffer.from('d1070315', 'hex'),
+        [GENDER]: Buffer.from('00', 'hex'),
+        [HEIGHT]: Buffer.from('bd00', 'hex'),
+        [ACTIVITY]: Buffer.from('01', 'hex'),
+      };
+      return makeCtx({
+        deviceName: 'BF500',
+        availableChars: new Set([
+          CHR_WEIGHT,
+          CHR_BODYCOMP,
+          CHR_UCP,
+          CHR_TIME,
+          LIST,
+          ACTIVITY,
+          uuid16(0xfff3),
+          TAKE_MEASUREMENT,
+          DOB,
+          GENDER,
+          HEIGHT,
+          INCREMENT,
+        ]),
+        read: vi.fn(async (uuid: string) => stored[uuid] ?? Buffer.alloc(0)),
+        ...over,
+      });
+    }
+
+    const flush = async () => {
+      for (let i = 0; i < 40; i++) await Promise.resolve();
+    };
+
+    it('subscribes to FFF1 before querying it, never treating activity as a user list', async () => {
+      const a = makeAdapter();
+      const ctx = bf500Ctx();
+      expect(a.characteristics.some((c) => c.uuid === ACTIVITY && c.type === 'notify')).toBe(false);
+      await a.onConnected(ctx);
+      expect(ctx.subscribe).toHaveBeenCalledWith(LIST);
+      const calls = vi.mocked(ctx.write).mock.calls;
+      expect(calls.map((c) => c[0])).toEqual([CHR_TIME, LIST, CHR_UCP]);
+      expect(calls[1][1]).toEqual([0]);
+      expect(vi.mocked(ctx.subscribe).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(ctx.write).mock.invocationCallOrder[1],
+      );
+    });
+
+    it('consents to the assigned slot after registration before touching the profile', async () => {
+      const a = makeAdapter();
+      const ctx = bf500Ctx({
+        scaleAuth: { pin: 1234, userIndex: 1, registerNewUser: true, provision: true },
+      });
+      await a.onConnected(ctx);
+      vi.mocked(ctx.write).mockClear();
+      a.parseCharNotification(CHR_UCP, Buffer.from('20010103', 'hex'));
+      await flush();
+      expect(ctx.write).toHaveBeenCalledExactlyOnceWith(CHR_UCP, [2, 3, 0xd2, 0x04], true);
+      expect(ctx.read).not.toHaveBeenCalled();
+    });
+
+    it('initializes a newly registered BF500 from config instead of the factory defaults', async () => {
+      const a = makeAdapter();
+      const defaults: Record<string, Buffer> = {
+        [DOB]: Buffer.from('c7070101', 'hex'),
+        [GENDER]: Buffer.from('01', 'hex'),
+        [HEIGHT]: Buffer.from('aa00', 'hex'),
+        [ACTIVITY]: Buffer.from('03', 'hex'),
+      };
+      const ctx = bf500Ctx({
+        profile: defaultProfile({ birthDate: '2001-03-21', height: 189, gender: 'male' }),
+        scaleAuth: { pin: 1234, registerNewUser: true },
+        read: vi.fn(async (uuid: string) => defaults[uuid] ?? Buffer.alloc(0)),
+      });
+      await a.onConnected(ctx);
+      a.parseCharNotification(CHR_UCP, Buffer.from('20010103', 'hex'));
+      await flush();
+      vi.mocked(ctx.write).mockClear();
+      a.parseCharNotification(CHR_UCP, Buffer.from('200201', 'hex'));
+      a.parseCharNotification(CHR_UCP, Buffer.from('200201', 'hex'));
+      await flush();
+      expect(
+        vi
+          .mocked(ctx.write)
+          .mock.calls.map(([uuid, data]) => [uuid, Buffer.from(data).toString('hex')]),
+      ).toEqual([
+        [DOB, 'd1070315'],
+        [GENDER, '00'],
+        [HEIGHT, 'bd00'],
+        [INCREMENT, '01000000'],
+        [ACTIVITY, '03'],
+        [TAKE_MEASUREMENT, '00'],
+      ]);
+      expect(ctx.read).not.toHaveBeenCalled();
+    });
+
+    it.each([false, true])(
+      'preserves an existing BF500 profile with provisioning %s',
+      async (provision) => {
+        const a = makeAdapter();
+        const ctx = bf500Ctx({
+          profile: defaultProfile({ birthDate: '1990-01-01', height: 175, gender: 'female' }),
+          scaleAuth: { pin: 1234, provision },
+        });
+        await a.onConnected(ctx);
+        a.parseCharNotification(CHR_UCP, Buffer.from('200201', 'hex'));
+        await flush();
+        expect(ctx.write).toHaveBeenCalledWith(DOB, Buffer.from('d1070315', 'hex'), true);
+        expect(ctx.write).toHaveBeenCalledWith(GENDER, Buffer.from('00', 'hex'), true);
+        expect(ctx.write).toHaveBeenCalledWith(HEIGHT, Buffer.from('bd00', 'hex'), true);
+        expect(ctx.write).toHaveBeenCalledWith(ACTIVITY, Buffer.from('01', 'hex'), true);
+      },
+    );
+
+    it('does not initialize from config after registration fails', async () => {
+      const a = makeAdapter();
+      const ctx = bf500Ctx({ scaleAuth: { pin: 1234, registerNewUser: true } });
+      await a.onConnected(ctx);
+      vi.mocked(ctx.write).mockClear();
+      a.parseCharNotification(CHR_UCP, Buffer.from('200104', 'hex'));
+      await flush();
+      expect(ctx.write).not.toHaveBeenCalled();
+      expect(ctx.read).not.toHaveBeenCalled();
+    });
+
+    it('does not initialize a new profile when its consent is refused', async () => {
+      const a = makeAdapter();
+      const ctx = bf500Ctx({ scaleAuth: { pin: 1234, registerNewUser: true } });
+      await a.onConnected(ctx);
+      a.parseCharNotification(CHR_UCP, Buffer.from('20010103', 'hex'));
+      await flush();
+      vi.mocked(ctx.write).mockClear();
+      a.parseCharNotification(CHR_UCP, Buffer.from('200205', 'hex'));
+      await flush();
+      expect(ctx.write).not.toHaveBeenCalled();
+      expect(ctx.read).not.toHaveBeenCalled();
+    });
+
+    it('does not carry new-profile initialization into the next BF500 session', async () => {
+      const a = makeAdapter();
+      await a.onConnected(bf500Ctx({ scaleAuth: { pin: 1234, registerNewUser: true } }));
+      a.parseCharNotification(CHR_UCP, Buffer.from('20010103', 'hex'));
+      await flush();
+      a.onSessionEnd();
+      a.onSessionStart();
+      const ctx = bf500Ctx({ profile: defaultProfile({ birthDate: '1990-01-01', height: 175 }) });
+      await a.onConnected(ctx);
+      a.parseCharNotification(CHR_UCP, Buffer.from('200201', 'hex'));
+      await flush();
+      expect(ctx.write).toHaveBeenCalledWith(DOB, Buffer.from('d1070315', 'hex'), true);
+      expect(ctx.write).toHaveBeenCalledWith(HEIGHT, Buffer.from('bd00', 'hex'), true);
+    });
+
+    it('keeps BF788 registration on the existing profile write-back path', async () => {
+      const a = makeAdapter();
+      const ctx = bf500Ctx({
+        deviceName: 'BF788',
+        profile: defaultProfile({ birthDate: '1990-01-01', height: 175 }),
+        scaleAuth: { pin: 1234, registerNewUser: true, provision: true },
+      });
+      await a.onConnected(ctx);
+      a.parseCharNotification(CHR_UCP, Buffer.from('20010103', 'hex'));
+      await flush();
+      expect(ctx.write).toHaveBeenCalledWith(DOB, Buffer.from('d1070315', 'hex'), true);
+      expect(ctx.write).toHaveBeenCalledWith(HEIGHT, Buffer.from('bd00', 'hex'), true);
+      expect(ctx.write).not.toHaveBeenCalledWith(CHR_UCP, [2, 3, 0xd2, 0x04], true);
+    });
+
+    it('commits an existing profile once without requesting a fresh measurement', async () => {
+      const a = makeAdapter();
+      const ctx = bf500Ctx();
+      await a.onConnected(ctx);
+      vi.mocked(ctx.write).mockClear();
+      a.parseCharNotification(CHR_UCP, Buffer.from('200201', 'hex'));
+      a.parseCharNotification(CHR_UCP, Buffer.from('200201', 'hex'));
+      await flush();
+      expect(
+        vi
+          .mocked(ctx.write)
+          .mock.calls.map(([uuid, data]) => [uuid, Buffer.from(data).toString('hex')]),
+      ).toEqual([
+        [DOB, 'd1070315'],
+        [GENDER, '00'],
+        [HEIGHT, 'bd00'],
+        [INCREMENT, '01000000'],
+        [ACTIVITY, '01'],
+      ]);
+      expect(ctx.read).not.toHaveBeenCalledWith(uuid16(0xfff3));
+    });
+
+    it('does not initialize or start weighing after consent is refused', async () => {
+      const a = makeAdapter();
+      const ctx = bf500Ctx();
+      await a.onConnected(ctx);
+      vi.mocked(ctx.write).mockClear();
+      a.parseCharNotification(CHR_UCP, Buffer.from('200205', 'hex'));
+      await flush();
+      expect(ctx.write).not.toHaveBeenCalled();
+    });
+
+    it('does not guess a user slot when the registration response omits it', async () => {
+      const a = makeAdapter();
+      const ctx = bf500Ctx({ scaleAuth: { pin: 1234, registerNewUser: true } });
+      await a.onConnected(ctx);
+      vi.mocked(ctx.write).mockClear();
+      a.parseCharNotification(CHR_UCP, Buffer.from('200101', 'hex'));
+      await flush();
+      expect(ctx.write).not.toHaveBeenCalled();
+      expect(ctx.read).not.toHaveBeenCalled();
+    });
+
+    it('does not start a measurement after the session ends during new-user profile sync', async () => {
+      const a = makeAdapter();
+      const ctx = bf500Ctx({ scaleAuth: { pin: 1234, registerNewUser: true } });
+      const write = vi.mocked(ctx.write);
+      write.mockImplementation(async (uuid) => {
+        if (uuid === INCREMENT) a.onSessionEnd();
+      });
+      await a.onConnected(ctx);
+      a.parseCharNotification(CHR_UCP, Buffer.from('20010103', 'hex'));
+      await flush();
+      a.parseCharNotification(CHR_UCP, Buffer.from('200201', 'hex'));
+      await flush();
+      expect(write.mock.calls.some(([uuid]) => uuid === TAKE_MEASUREMENT)).toBe(false);
+    });
+
+    it('reports a failed measurement request without an unhandled rejection', async () => {
+      const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      try {
+        const a = makeAdapter();
+        const ctx = bf500Ctx({
+          scaleAuth: { pin: 1234, registerNewUser: true },
+          write: vi.fn(async (uuid: string) => {
+            if (uuid === TAKE_MEASUREMENT) throw new Error('request refused');
+          }),
+        });
+        await a.onConnected(ctx);
+        a.parseCharNotification(CHR_UCP, Buffer.from('20010103', 'hex'));
+        await flush();
+        a.parseCharNotification(CHR_UCP, Buffer.from('200201', 'hex'));
+        await flush();
+        expect(warn.mock.calls.flat().join(' ')).toMatch(
+          /measurement request failed.*request refused/,
+        );
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('selects the original layout again when the same adapter connects to a BF788', async () => {
+      const a = makeAdapter();
+      await a.onConnected(bf500Ctx());
+      a.onSessionEnd();
+      a.onSessionStart();
+      const ctx = makeCtx({
+        deviceName: 'BF788',
+        availableChars: new Set([CHR_WEIGHT, CHR_BODYCOMP, CHR_UCP, ACTIVITY]),
+      });
+      await a.onConnected(ctx);
+      expect(ctx.subscribe).toHaveBeenCalledWith(ACTIVITY);
+      expect(ctx.write).toHaveBeenCalledWith(ACTIVITY, [0], true);
+      expect(ctx.write).not.toHaveBeenCalledWith(LIST, [0], true);
+    });
+  });
+
   // #229: the Beurer app queries the vendor user list before the consent write
   // and, once consent is accepted, reads the user data back, writes it
   // unchanged and bumps the database change increment. Only after that commit
