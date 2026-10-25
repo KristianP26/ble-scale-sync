@@ -69,7 +69,7 @@ If your scale is not found or its values look wrong, follow [Troubleshooting](ht
 
 <!-- contributors:start - generated from git history by src/tools/sync-contributors.ts, do not edit by hand -->
 <table><tr>
-<td align="center"><a href="https://github.com/KristianP26"><img src="https://avatars.githubusercontent.com/u/28766334?v=4" width="60" height="60" alt="KristianP26"><br><sub>KristianP26</sub></a><br><sub>1,256 commits</sub></td>
+<td align="center"><a href="https://github.com/KristianP26"><img src="https://avatars.githubusercontent.com/u/28766334?v=4" width="60" height="60" alt="KristianP26"><br><sub>KristianP26</sub></a><br><sub>1,282 commits</sub></td>
 <td align="center"><a href="https://github.com/APIUM"><img src="https://avatars.githubusercontent.com/u/9067013?v=4" width="60" height="60" alt="APIUM"><br><sub>APIUM</sub></a><br><sub>34 commits</sub></td>
 <td align="center"><a href="https://github.com/alasano"><img src="https://avatars.githubusercontent.com/u/14372930?v=4" width="60" height="60" alt="alasano"><br><sub>alasano</sub></a><br><sub>8 commits</sub></td>
 <td align="center"><a href="https://github.com/marcelorodrigo"><img src="https://avatars.githubusercontent.com/u/443962?v=4" width="60" height="60" alt="marcelorodrigo"><br><sub>marcelorodrigo</sub></a><br><sub>7 commits</sub></td>
@@ -95,6 +95,8 @@ If your scale is not found or its values look wrong, follow [Troubleshooting](ht
 <td align="center"><a href="https://github.com/rolandgeider"><img src="https://avatars.githubusercontent.com/u/2280729?v=4" width="60" height="60" alt="rolandgeider"><br><sub>rolandgeider</sub></a><br><sub>1 commit</sub></td>
 <td align="center"><a href="https://github.com/sanglt"><img src="https://avatars.githubusercontent.com/u/128535?v=4" width="60" height="60" alt="sanglt"><br><sub>sanglt</sub></a><br><sub>1 commit</sub></td>
 <td align="center"><a href="https://github.com/rjekelmans"><img src="https://avatars.githubusercontent.com/u/13397247?v=4" width="60" height="60" alt="rjekelmans"><br><sub>rjekelmans</sub></a><br><sub>1 commit</sub></td>
+</tr><tr>
+<td align="center"><a href="https://github.com/intrak"><img src="https://avatars.githubusercontent.com/u/36244720?v=4" width="60" height="60" alt="intrak"><br><sub>intrak</sub></a><br><sub>1 commit</sub></td>
 </tr></table>
 <!-- contributors:end -->
 
