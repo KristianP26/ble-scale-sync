@@ -1,532 +1,301 @@
 ---
 title: Troubleshooting
-description: Common issues, debug tips, and solutions for BLE Scale Sync.
-head:
-  - - meta
-    - name: keywords
-      content: bluetooth scale not found, ble troubleshooting linux, bluez docker, raspberry pi bluetooth issues, scale not connecting, dbus bluetooth error, noble ble error
+description: Fixes for BLE Scale Sync problems grouped by symptom, from a scale that is never found to a BlueZ adapter that stops scanning, plus what to attach to an issue.
 ---
 
 # Troubleshooting
 
-For general questions that are not about a specific error (supported scales, Garmin 2FA, privacy, multi-user, deployment choices), start with the [FAQ](/faq).
-
-## BLE / Scale Issues
-
-### Scale not found
-
-- **Step on the scale** to wake it up. Most scales go to sleep after a few seconds of inactivity.
-- Verify with `ble-scale-sync scan` (`npm run scan` from a clone, or the Docker `scan` command) that your scale is visible.
-- If using `scale_mac`, double-check the address matches the scan output.
-- On Linux, make sure Bluetooth is running: `sudo systemctl status bluetooth`
-
-### Connection fails on Raspberry Pi
-
-The app automatically stops BLE discovery before connecting, which resolves most `le-connection-abort-by-local` errors. If connections still fail:
-
-```bash
-sudo systemctl restart bluetooth
-```
-
-Then step on the scale and try again.
-
-### The scale ends the connection during a weigh-in (Linux) {#connection-ended}
-
-This applies to the built-in Bluetooth handler on Linux (`ble.handler: auto` without `noble_driver`, or `ble_transport: local` in the Home Assistant add-on), which talks to BlueZ. When a weigh-in fails with `Scale disconnected before reading completed`, or a scale that sends its own body composition delivers only the weight, [debug mode](#debug-mode) shows why BlueZ ended the connection, right where it happened:
-
-```
-BlueZ: AA:BB:CC:DD:EE:FF disconnected 5.40 s after connect: org.bluez.Reason.Remote (Connection terminated by remote user) - the scale ended it
-```
-
-The time is counted from the moment the connect succeeded. What the reason means:
-
-| Reason | What it means |
-| --- | --- |
-| `org.bluez.Reason.Remote` | The scale ended the connection itself. Many scales do that after every weigh-in, so on its own this is not an error; it matters when it comes before the weigh-in was read. |
-| `org.bluez.Reason.Timeout` | The radio link was lost: the adapter stopped hearing the scale for longer than the link allows. Usually distance, walls or interference; a USB 3 device or port right next to a USB Bluetooth adapter is a common source of 2.4 GHz interference. |
-| `org.bluez.Reason.Local` | This host ended it: ble-scale-sync's own disconnect, the kernel, BlueZ itself or another program using Bluetooth. A weigh-in that ble-scale-sync ends itself shows one right before `Disconnect (after reading) answered`. |
-| `org.bluez.Reason.Authentication` | The scale refused the stored pairing key. See [Beurer: every connect fails after the first session](#beurer-every-connect-fails-after-the-first-session). |
-| `org.bluez.Reason.Suspend` | The host was going into suspend. |
-| `org.bluez.Reason.Unknown` | Some other reason. BlueZ does not say which; `btmon` shows the exact code. |
-
-BlueZ says why only from version 5.83 (Home Assistant OS 16.2 and later). Older BlueZ, such as 5.66 on Raspberry Pi OS bookworm or 5.82 on Raspberry Pi OS trixie, writes no such line: if no `BlueZ: ... disconnected` line appears at all after a weigh-in that connected, that is the reason.
-
-Debug mode is read when ble-scale-sync opens its connection to BlueZ. Switched on in a running app, the lines can start one weigh-in later; a restart starts them at once.
-
-If you open an issue about a lost connection, include these lines. [#434](https://github.com/KristianP26/ble-scale-sync/issues/434) is the one about the Renpho R-MSC04.
-
-### Scale was found before but now isn't discovered (Linux)
-
-BlueZ can sometimes stop reporting previously-seen devices. Restart Bluetooth and try again:
-
-```bash
-sudo systemctl restart bluetooth
-```
-
-### Permission denied (Linux)
-
-Grant BLE capabilities to Node.js:
-
-```bash
-sudo setcap cap_net_raw+eip $(eval readlink -f $(which node))
-```
-
-You need to re-run this after every Node.js update.
-
-### Windows BLE issues
-
-- The default driver (`@abandonware/noble`) works with the native Windows Bluetooth stack, no special setup needed.
-- If using `NOBLE_DRIVER=stoprocent`, install the WinUSB driver via [Zadig](https://zadig.akeo.ie/).
-- Run your terminal as Administrator if you get permission errors.
-
-### Switching the BLE transport (`ble.handler`)
-
-BLE Scale Sync supports three transport handlers. The default `auto` picks the right local-radio stack per OS. Switch to `mqtt-proxy` or `esphome-proxy` only if you're using a remote BLE radio.
-
-```yaml
-ble:
-  handler: auto # or: mqtt-proxy, esphome-proxy
-```
-
-| Handler         | Use when                                                                                |
-| --------------- | --------------------------------------------------------------------------------------- |
-| `auto`          | Default. Local Bluetooth radio on the host (Linux/macOS/Windows).                       |
-| `mqtt-proxy`    | Remote ESP32 with custom firmware over MQTT. See [ESP32 BLE Proxy](/guide/esp32-proxy). |
-| `esphome-proxy` | Existing ESPHome BT proxy over Native API. See [ESPHome Proxy](/guide/esphome-proxy).   |
-
-### Switching the noble driver (`ble.noble_driver`)
-
-For local-radio mode (`handler: auto`), three OS-specific BLE stacks are available. If connections fail repeatedly, try the alternative driver:
-
-```yaml
-ble:
-  noble_driver: stoprocent # or: abandonware
-```
-
-| Driver                                    | Platforms             | Notes                                                                                                                                       |
-| ----------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `node-ble` (default on Linux)             | Linux only            | Uses BlueZ D-Bus. Most reliable on Raspberry Pi. Service UUIDs not available during scan (only after connecting).                           |
-| `@abandonware/noble` (default on Windows) | Linux, Windows        | Mature driver. Uses WinRT on Windows. Builds from source, so it needs a C++ toolchain.                                                      |
-| `@stoprocent/noble` (default on macOS)    | Linux, macOS, Windows | Newer driver, ships prebuilt binaries. Exposes service UUIDs during scan. On Windows, requires the [WinUSB driver](https://zadig.akeo.ie/). |
-
-::: tip Note
-On Linux, `node-ble` is used unless `noble_driver` (or the `NOBLE_DRIVER` environment variable) is set; setting it switches Linux to that noble driver.
-:::
-
-The three stacks are optional dependencies, so a host that could not build one of them simply does not have it. If the transport you select is not installed, the app names the npm package, the install command and the transports that are still available. Install one directly with `npm install @stoprocent/noble` (or `@abandonware/noble`, or `node-ble`).
-
-If your scale is not being recognized during scan but you know its MAC address, set `scale_mac` in `config.yaml`. The adapter will match post-connect using GATT service UUIDs regardless of the driver.
-
-### Beurer consent code rejected after a battery change
-
-Log line:
-
-```
-Beurer BF720: consent rejected (USER_NOT_AUTHORIZED)
-Beurer BF720: the scale reports no stored user profiles
-```
-
-Removing the batteries can wipe every user slot **and** its consent code. No code the scale was previously paired with is then correct, because the slot it belonged to no longer exists. The physical sign is that the user-slot digit is gone from the display.
-
-::: warning Not every model does this
-Reported for the BF7xx family. A **BF915** keeps its slots across a battery change: after one, `beurer_register_new_user` still came back with index 3, so slots 1 and 2 and the menu profile were all still there. On that model only a factory reset (`CLr`) clears them, so if your slots survived, the empty-scale recipe below is not your problem.
-:::
-
-On a scale in that state:
-
-1. Try `users[].beurer_pin: 0`. A scale with no users has no code to check.
-2. Set `users[].beurer_provision: true` so the profile in `config.yaml` (date of birth, gender, height, activity level) is written back into the scale instead of an empty profile being confirmed to it.
-
-```yaml
-users:
-  - name: Alice
-    beurer_pin: 0
-    beurer_provision: true
-```
-
-One caution: on Linux, `beurer_pin` is also the passkey offered to BlueZ during pairing. If the scale is already bonded, remove the bond (`bluetoothctl remove <MAC>`) before changing it.
-
-Provisioning only fills fields the scale reports as empty. A populated profile is written back byte for byte, exactly as before, and the commit line then reports `0 from config`. There is no option to overwrite a record the scale already holds; a factory reset is the only way to change one.
-
-### Beurer: the six-digit passkey and the four-digit consent code are different numbers
-
-Both get called "the PIN", and mixing them up costs hours.
-
-|                                 | Digits | What it is                                                                                         | Where it goes                                  |
-| ------------------------------- | ------ | -------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| Passkey to confirm (e.g. BF915) | 6      | BLE Numeric Comparison during pairing. New every time.                                             | Nowhere. Confirm it on the scale with **SET**. |
-| Passkey to type (e.g. BF700)    | 6      | BLE Passkey Entry during pairing: the scale shows it, the computer has to type it. New every time. | Nowhere. Pair once by hand, see below.         |
-| Consent code                    | 4      | SIG User Control Point, tied to one user slot.                                                     | `users[].beurer_pin`                           |
-
-On a BF915 the consent code is the four-digit number the scale displays when you select that profile in its own menu. It does not have to be guessed or assigned.
-
-A scale that shows a passkey for you to type cannot be paired by putting that code in `config.yaml`, because it changes on every attempt. On Linux the log then says the scale `asked for a passkey and no users[].beurer_pin is set`. Pair it once by hand, with the scale awake and BLE Scale Sync stopped:
-
-```bash
-bluetoothctl
-scan on      # wait until the scale's MAC shows up
-pair <MAC>   # type the six-digit code the scale shows when asked
-```
-
-Then start BLE Scale Sync again.
-
-### Beurer BF 405 / BF 915: factory reset and deleting one user
-
-Both live on the **UNIT** button on the underside, and differ only in how long you hold it:
-
-- **4 seconds with a user selected** deletes that user (`dEL`).
-- **5 seconds from powered on** resets the scale (`CLr`).
-
-After a reset the scale asks for the date and time, which is a useful confirmation that it actually happened.
-
-### Beurer: every connect fails after the first session
-
-```
-Connect error: le-connection-abort-by-local
-```
-
-Usually the scale has dropped its half of the pairing while the host still holds the key. BlueZ replays the dead key forever and never invalidates it, so nothing recovers on its own. A weak radio link gives the same error ([#471](https://github.com/KristianP26/ble-scale-sync/issues/471)); then some connects still get through. Clear it and pair again:
-
-```bash
-sudo bluetoothctl
-remove AA:BB:CC:DD:EE:FF
-pair AA:BB:CC:DD:EE:FF
-```
-
-If it happens every session, `ble.auto_clear_stale_bond: true` does that for you. BlueZ 5.83 and later (Home Assistant OS 16.2 and later, for instance) report when the scale refused the key. Older BlueZ, such as 5.66 on Raspberry Pi OS bookworm or 5.82 on Raspberry Pi OS trixie, does not, so there the option goes by how the connection ended: over a refused key this host ends it itself shortly after the error, while a weak radio link drops it together with the error, and a connect timeout never counts. In [debug mode](#debug-mode) the log also says, for each failed attempt that got as far as a connection, when it came up and how long it stayed up after the error, and on BlueZ 5.83 and later, from the attempt after the first such failure on, why BlueZ ended it. See [the configuration reference](/guide/configuration#config-yaml-reference).
-
-If the key is rejected on the very next connect after a session that worked, every time, and the scale asks for SET and a new pairing before every weigh-in (or the connect succeeds but then stalls at `Discovering services...` with `GATT server acquisition timed out`), the scale is throwing away a pairing that carried no host identity key. Some Beurer scales (the BF915 is confirmed in [#417](https://github.com/KristianP26/ble-scale-sync/issues/417)) keep a pairing only from a device that handed over an identity key (IRK) while pairing. A phone normally does; Linux does only while the adapter has LE privacy turned on, which it does not by default. The adapter power-cycle after each session is not the cause: the bond is rejected without it too.
-
-The remedy:
-
-1. Set `ble.adapter_privacy: true` (in the Home Assistant add-on: **Pair with a host identity key (LE privacy)**) and restart.
-2. Remove the old pairing once with `bluetoothctl remove AA:BB:CC:DD:EE:FF` (or let `ble.auto_clear_stale_bond: true` do it).
-3. Stand at the scale and confirm the pairing on it when it shows a code, about a minute after ble-scale-sync starts (the app connects and looks up the scale's services first). If you miss it, restart ble-scale-sync to be asked again at once. Let ble-scale-sync do the pairing: in #417 a manual `bluetoothctl pair` with privacy on never completed, while the pairing ble-scale-sync started did.
-
-Privacy then applies to the whole adapter, and on a native or Docker host `Privacy = device` in `/etc/bluetooth/main.conf` does the same without the option. Read [the `adapter_privacy` notes](/guide/configuration#config-yaml-reference) before turning it on.
-
-### Beurer: the scale shows a pairing code again and again
-
-When nobody confirms a pairing on the scale, earlier releases asked again on the next scan, every two or three minutes, each time with a new code on the display ([#471](https://github.com/KristianP26/ble-scale-sync/issues/471)). The app now waits before it asks again, 2 minutes three times and then longer, up to `ble.pairing_retry_max_min` (60 minutes by default), and does not connect to the scale in between:
-
-```
-AA:BB:CC:DD:EE:FF asked for the pairing to be confirmed on the scale and it was not (attempt 3). Not connecting to it again for 2 min, ...
-```
-
-A weigh-in should also ask at once when the scale advertises it (seen on a BF915, untested on the other models of the family): weigh in and stay at the scale for about a minute, until the code shows. That needs the scale to have had no weigh-in waiting on it when the pairing failed; otherwise only the wait or a restart asks again. To pair at once without weighing in, restart ble-scale-sync and confirm on the scale when the code shows, about a minute later. `ble.pairing_retry_max_min: 0` brings back the old behavior. See [the configuration reference](/guide/configuration#config-yaml-reference).
-
-### Beurer BF915: PAIR on the display all day
-
-A BF915 can advertise and accept a connection all the time, also with its display dark. In continuous mode every cycle then connects, and the scale shows `PAIR` while the session is open, about two minutes when nobody steps on, logged as `Scale connected but sent no reading`. With the normal retry backoff that is 10 to 15 sessions an hour, all day ([#475](https://github.com/KristianP26/ble-scale-sync/issues/475)). If the display shows a six-digit code instead, see [Beurer: the scale shows a pairing code again and again](#beurer-the-scale-shows-a-pairing-code-again-and-again).
-
-The BF915 in #475 keeps a weigh-in made in the meantime and hands it over at the next connection, so a pause between such sessions mostly delays the upload:
-
-```yaml
-runtime:
-  no_reading_rescan_delay: 900
-```
-
-Only a session in which the scale answered and then went quiet waits longer: its line ends with `(Timed out waiting for a complete scale reading)`, and with the setting in place it reads `retrying in 900s (runtime.no_reading_rescan_delay)`. A session that ends with `(GATT session cap exceeded)`, or in any other way, keeps the normal backoff. A weigh-in that arrives more than 5 minutes after it was taken is a past measurement: Garmin and the other exporters that can record one get it; MQTT, webhook, ntfy, Telegram and Strava do not. If those matter, keep the value at about 240 or below. During the wait the app scans for no scale at all and does not retry queued exports. A shorter `ble.session_timeout_sec` would also shorten each session's `PAIR`, untested on this model. See [the configuration reference](/guide/configuration#runtime).
-
-## Exporter Issues
-
-### Garmin upload fails
-
-- `Garmin rejected the saved login token (HTTP 401)` means the stored token is no longer accepted; the upload is not retried. Run `ble-scale-sync setup-garmin` (or `npm run setup-garmin` from a checkout) to log in again.
-- `Garmin upload needs Python 3.12 or newer` means the Python found on the host is too old for `garminconnect`; install Python 3.12 or newer.
-- Re-run the [setup wizard](/guide/configuration#setup-wizard-recommended) or `npm run setup-garmin` to refresh tokens.
-- Check that your Garmin credentials are correct.
-- Garmin may block requests from cloud/VPN IPs. Try authenticating from a different network, then copy `~/.garmin_tokens/` to your target machine.
-
-### MQTT connection hangs or fails
-
-- Make sure you're using the right protocol: `mqtt://` for plain, `mqtts://` for TLS. Using `mqtt://` on a TLS port (8883) will hang.
-- Check your broker URL, username, and password.
-
-## Why the next scan is not immediate
-
-In continuous mode the wait between scans depends on how the previous cycle ended:
-
-- **A reading arrived:** `runtime.scan_cooldown` (default 30 s), and at least 25 s on Linux/BlueZ regardless, so the app does not reconnect while the scale is still advertising.
-- **No scale found, radio healthy:** `runtime.idle_rescan_delay` (default 5 s). Linux/BlueZ only; the other transports cannot tell this case from a failure and use the backoff below.
-- **The cycle failed** (a GATT error, a wedged controller, an export that threw): 5 s, then 10, 20, 40 and 60 s for as long as failures continue, resetting on the next success.
-- **The scale connected but no reading came in time** (the reading session timed out after connecting): the same backoff as a failure. On Linux/BlueZ, when the scale answered in that session and then went quiet until it timed out, `runtime.no_reading_rescan_delay` (default `0`, off) sets a longer minimum. The scale was found, so the log says so instead of "No scale found".
-- **The scale was found but its pairing is held back** (nobody confirmed the last pairing on a Beurer scale, see `ble.pairing_retry_max_min`): the scan listens to the scale until its time is up instead of connecting, and then waits `runtime.idle_rescan_delay` like an idle scan. Linux/BlueZ only.
-
-So a gap of a minute between scans means failures, not a setting being ignored. The log line says which case it was:
-
-```
-No scale found, rescanning in 5s... (Device not found)
-No scale found, retrying in 20s... (le-connection-abort-by-local)
-Scale connected but sent no reading, retrying in 60s... (Timed out waiting for a complete scale reading)
-Scale connected but sent no reading, retrying in 900s (runtime.no_reading_rescan_delay)... (Timed out waiting for a complete scale reading)
-Scale found, waiting to pair, rescanning in 5s... (AA:BB:CC:DD:EE:FF is not paired; next pairing attempt in 52 min, or sooner if it reappears or advertises a new weigh-in)
-```
-
-This is about the built-in Bluetooth handlers (`ble.handler: auto`, which runs `node-ble` on Linux and `noble` elsewhere; `ble_transport: local` in the add-on). On `mqtt-proxy`, `esphome-proxy` and `ha-bluetooth` none of these waits apply: the app does not scan in cycles, it listens all the time.
-
-On `mqtt-proxy` and `esphome-proxy`, a scale that needs a connection and is still on after a reading is connected again on its next advertisement, so a second weigh-in before it switches off can be read. When nobody steps on, the session ends when the scale switches off, after 60 s in which it sends nothing (a Yunmai's replies to the app's own unlock do not count), or 90 s after it opened, and the log notes it at info level: `... session opened 0.7 s after the last reading, while the scale was still on, ended without a new weigh-in (...)`. A scale that stays connectable after its display goes dark, such as the Yunmai Mini 2, is connected again each time it advertises, for as long as it advertises; each of those sessions that opens within 60 s of the end of the one before is logged the same way, at debug level after the first, and only a session that opens later than that is reported as a failure.
+Find the symptom or the exact log line, then work through the fixes in order. Most log lines quoted here appear only in [debug mode](#debug-mode). For general questions, see the [FAQ](/faq).
 
 ## Debug Mode
 
-Set `debug: true` in `config.yaml` or use the environment variable to see detailed BLE logs:
+Set `runtime.debug: true` in `config.yaml` (in the Home Assistant add-on, turn on the `debug` option), or set the `DEBUG` environment variable:
 
 ```bash
 # Docker
 docker run ... -e DEBUG=true ghcr.io/kristianp26/ble-scale-sync:latest
 
 # Linux / macOS
-DEBUG=true npm start
+DEBUG=true ble-scale-sync
 
 # Windows (PowerShell)
-$env:DEBUG="true"; npm start
+$env:DEBUG="true"; ble-scale-sync
 ```
 
-This shows BLE discovery details, advertised services, discovered characteristics, and UUID matching.
+The log then shows discovery, advertised services, discovered characteristics and how the scale was matched to an adapter. For one device in detail, run `ble-scale-sync diagnose <MAC>` (`npm run diagnose` from a clone): it prints the scale's services, characteristics and their flags.
 
-### Capturing every frame, for a scale that is not decoded correctly
+### Capture Raw Frames {#capturing-every-frame-for-a-scale-that-is-not-decoded-correctly}
 
-`debug: true` logs what the app decided. When a scale is misread, or a new one needs a protocol, what is needed is what the scale actually sent, including the frames the adapter rejected:
+Debug mode logs what the app decided. For a misread scale, or a scale that needs a new protocol, the maintainer needs what the scale actually sent, including frames the adapter rejected:
 
 ```bash
-BLE_RAW_CAPTURE=true DEBUG=true npm start
+BLE_RAW_CAPTURE=true DEBUG=true ble-scale-sync
 
 # Docker
 docker run ... -e BLE_RAW_CAPTURE=true -e DEBUG=true ghcr.io/kristianp26/ble-scale-sync:latest
 ```
 
-Every notification is then logged as hex with the characteristic it arrived on, whether the adapter understood it or not:
+Every notification is then logged as hex with the characteristic it arrived on:
 
-```
+```text
 [BLE] [RAW] 0000fff100001000800000805f9b34fb (13B): 1f 05 00 02 e6 12 ...
 ```
 
-It also holds the connection open for 20 seconds past the settled weight, because several scales send their body-composition frames after the number stops moving and the app would otherwise disconnect first. Change that window with `BLE_RAW_CAPTURE_HOLD_SEC`:
+The connection stays open 20 seconds past the settled weight, because several scales send body composition after the number stops moving. `BLE_RAW_CAPTURE_HOLD_SEC=40` makes the window longer. Neither variable changes what is exported.
+
+Step on the scale once, wait until it disconnects on its own, and attach the whole log to the issue together with what the scale displayed and what the vendor app recorded for the same weigh-in. Without the known values, a field usually cannot be decoded.
+
+## Scale Not Found
+
+### The scan does not list the scale
+
+1. Step on the scale to wake it up. Most scales advertise only for a few seconds after they light up.
+2. Run `ble-scale-sync scan` (`npm run scan` from a clone, or the Docker `scan` command from [Getting Started](/guide/getting-started#docker)) while the scale is on.
+3. If you set `ble.scale_mac`, compare it with the address in the scan output.
+4. On Linux, check that Bluetooth runs: `sudo systemctl status bluetooth`.
+5. <span id="scale-was-found-before-but-now-isn-t-discovered-linux"></span>If the scale was found before and is not any more, restart Bluetooth: `sudo systemctl restart bluetooth`.
+6. If you use a noble driver, try the other one. See [noble drivers](/guide/transports#noble-drivers).
+
+If the scale shows up in the scan but is never read, see [Connects but No Reading](#connects-but-no-reading).
+
+### `Permission denied` on Linux {#permission-denied-linux}
+
+The noble drivers open the Bluetooth adapter directly and need the `cap_net_raw` capability. Grant it to Node.js, and run the command again after every Node.js update:
 
 ```bash
-BLE_RAW_CAPTURE=true BLE_RAW_CAPTURE_HOLD_SEC=40 DEBUG=true npm start
+sudo setcap cap_net_raw+eip $(eval readlink -f $(which node))
 ```
 
-Step on the scale once, wait for it to disconnect on its own, and attach the whole log to the issue. Say what the scale displayed and what the vendor app recorded for the same weigh-in: a capture with known values is what makes a field decodable, and one without them usually is not.
+The default Linux transport, `node-ble`, goes through BlueZ and does not need it.
 
-Both are off by default and neither changes what is exported.
+### The next scan starts a minute later {#why-the-next-scan-is-not-immediate}
+
+In continuous mode the wait before the next scan depends on how the last cycle ended. Failed cycles back off from 5 s up to 60 s, so a long gap means failures, not an ignored setting. The log line before the wait names the cause. The waits and their options are in [the runtime reference](/guide/configuration#runtime).
+
+## Connection Fails or Ends
+
+### `le-connection-abort-by-local` on a Raspberry Pi {#connection-fails-on-raspberry-pi}
+
+BlueZ aborted the connect, most often because the radio link is weak or the scale dropped the stored pairing.
+
+1. Restart Bluetooth with `sudo systemctl restart bluetooth`, then step on the scale again.
+2. Move the host or a USB Bluetooth adapter closer to the scale.
+3. On a Beurer or Sanitas scale that fails on every connect after the first session, clear the pairing as described in [Every connect fails after the first session](/guide/scales/beurer#every-connect-fails-after-the-first-session).
+
+### `Scale disconnected before reading completed` {#connection-ended}
+
+The connection ended before the reading was complete. With the built-in Linux transport (`ble.handler: auto` without `noble_driver`, or `ble_transport: local` in the add-on) and [debug mode](#debug-mode) on, the log says why BlueZ ended it:
+
+```text
+BlueZ: AA:BB:CC:DD:EE:FF disconnected 5.40 s after connect: org.bluez.Reason.Remote (Connection terminated by remote user) - the scale ended it
+```
+
+What to do for each reason:
+
+- `org.bluez.Reason.Remote`: the scale ended it. Many scales do that after every weigh-in, so it matters only when it comes before the reading. Stay on the scale until it shows the final result.
+- `org.bluez.Reason.Timeout`: the radio link was lost. Shorten the distance, and keep USB 3 devices and ports away from a USB Bluetooth adapter, they interfere at 2.4 GHz.
+- `org.bluez.Reason.Local`: this host ended it (this app, BlueZ, the kernel or another Bluetooth program).
+- `org.bluez.Reason.Authentication`: the scale refused the stored pairing key. Clear the pairing as described in [Every connect fails after the first session](/guide/scales/beurer#every-connect-fails-after-the-first-session).
+- Any other reason: BlueZ does not say which; `btmon` shows the code.
+
+Only BlueZ 5.83 and later (Home Assistant OS 16.2 and later) report the reason. With older BlueZ no such line appears. Debug mode is read when the app opens its D-Bus connection, so after you switch it on in a running app the lines can start one weigh-in later; a restart starts them at once.
+
+The proxy transports end a session on their own after a reading; see [when a session ends](/guide/transports#when-a-session-ends).
+
+## Connects but No Reading
+
+### `Scale connected but sent no reading`
+
+The scale accepted the connection, but no complete reading arrived before the session timed out.
+
+1. Step on the scale barefoot and stay on until the display shows the final result, body composition included.
+2. For QN-family scales (Renpho, Arboleaf, FITINDEX and others on the QN protocol), work through [QN scales](/guide/scales/qn).
+3. For a Renpho R-MSC04 or an ES-CS20M on service 0x1A10, see [Renpho scales](/guide/scales/renpho).
+4. If the reading is wrong rather than missing, make a [raw capture](#capturing-every-frame-for-a-scale-that-is-not-decoded-correctly).
+
+## Pairing
+
+### Beurer or Sanitas Pairing Problems
+
+<span id="beurer-consent-code-rejected-after-a-battery-change"></span><span id="beurer-the-six-digit-passkey-and-the-four-digit-consent-code-are-different-numbers"></span><span id="beurer-bf-405-bf-915-factory-reset-and-deleting-one-user"></span><span id="beurer-every-connect-fails-after-the-first-session"></span><span id="beurer-the-scale-shows-a-pairing-code-again-and-again"></span><span id="beurer-bf915-pair-on-the-display-all-day"></span>These scales need a BLE pairing and a four-digit consent code per user slot. A wrong or lost consent code, a pairing the scale dropped, a passkey to type, or a pairing code that appears again and again each have their own fix in [Beurer and Sanitas pairing](/guide/scales/beurer#pairing).
 
 ## Install Issues (npm / npx) {#install-issues}
 
 ### `ble-scale-sync: command not found`
 
-The package was installed into a project rather than globally, or the npm global bin directory is not on your PATH. Either run it through npx, which needs no PATH entry:
+The package was installed into a project instead of globally, or the npm global bin directory is not on your `PATH`. Run it through npx, which needs no `PATH` entry:
 
 ```bash
 npx ble-scale-sync --version
 ```
 
-or install it globally and check where npm puts the binaries:
+Or install it globally and add npm's bin directory to your `PATH`:
 
 ```bash
 npm install -g ble-scale-sync
-npm prefix -g       # Windows: the shims sit here; Linux/macOS: in its bin/ subdirectory
+npm prefix -g       # Windows: the commands are here; Linux/macOS: in its bin/ subdirectory
 ```
-
-That directory has to be on your PATH. (`npm bin -g` printed it in older npm versions and was removed in npm 9.)
 
 ### `No configuration found` even though config.yaml exists
 
-`config.yaml` is read from the directory you run the command in, not from the package. Run the command from the directory holding your config, or pass the path explicitly:
+`config.yaml` and `.env` are read from the directory you run the command in, not from the package. Run the command from the directory that holds them, or pass the path:
 
 ```bash
 ble-scale-sync --config /path/to/config.yaml
 ble-scale-sync validate --config /path/to/config.yaml
 ```
 
-Note that `.env` follows `config.yaml`: both are read from the same directory. See [Where config.yaml and .env are read from](/guide/configuration#config-location).
+See [where config.yaml and .env are read from](/guide/configuration#config-location).
 
 ### `BLE transport ... needs the npm package ...`
 
-The BLE stacks are optional dependencies, so the install completed without the one you selected (usually because `@abandonware/noble` compiles from source and the host has no C++ toolchain). The message names the package, the install command and the transports that still work on your host.
-
-Install the stack where the app itself lives, not into your working directory:
-
-```bash
-npm install -g @stoprocent/noble       # global ble-scale-sync install
-```
-
-Under `npx` the cache directory is thrown away between runs, so install the app itself instead: `npm install -g ble-scale-sync @stoprocent/noble`. The quickest way out on Windows is usually the prebuilt driver, `ble.noble_driver: stoprocent`, which needs no toolchain at all.
+The install completed without the Bluetooth stack you selected, most often `@abandonware/noble`, which compiles from source and needs a C++ toolchain. The message names the package, the install command and the transports that work on your host. Install the package next to the app as in [Adding a BLE stack later](/guide/getting-started#adding-a-ble-stack). On Windows, `ble.noble_driver: stoprocent` uses a prebuilt driver that needs no toolchain, see [noble drivers](/guide/transports#noble-drivers).
 
 ### `Node.js ... is older than this release expects` or `... is not supported by this release` {#node-version-warning}
 
-At startup the app compares the running Node.js with the versions this release supports (listed under [Standalone prerequisites](/guide/getting-started#standalone)) and logs one line when they do not match:
-
-```
-[Sync] Node.js <version> is older than this release expects (<minimum>+); update Node.js
-[Sync] Node.js <version> is not supported by this release; use <supported versions>
-```
-
-The app keeps running, but on a Node.js this release was not made for. Update Node.js the way you installed it (the NodeSource apt repository, nvm, or the installer from nodejs.org) and restart the app or its service. The second line means your Node.js release line is not one of the supported ones, for example an odd-numbered line between two supported lines: install one of the listed versions. The Docker image and the Home Assistant add-on bring their own Node.js and should never show this line; if one does, please open an issue.
-
-## Platform Issues
+The running Node.js is not one of the versions this release supports (listed in [the standalone prerequisites](/guide/getting-started#standalone)). The app keeps running. Update Node.js the way you installed it (the NodeSource apt repository, nvm or the installer from nodejs.org) and restart the app or its service. `... is not supported by this release` means your Node.js release line is not supported at all, for example an odd-numbered one: install one of the listed versions. The Docker image and the Home Assistant add-on bring their own Node.js; if either shows this line, open an issue.
 
 ### Install fails on Raspberry Pi Zero W (first gen)
 
-The original Pi Zero W has an ARMv6 CPU, which is **not supported**. The `esbuild` binary (used by the TypeScript runner `tsx`) requires ARMv7 or later and will crash with `SIGILL` (illegal instruction) on ARMv6. This affects both native installs and Docker.
-
-**Solution:** Use a [Raspberry Pi Zero 2W](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/) (~15€, ARMv7/64-bit) or any Pi 3/4/5.
+The first Pi Zero W has an ARMv6 CPU, which is not supported. The Docker image is built for amd64, arm64 and arm/v7 only, and `esbuild`, which the TypeScript runner uses, crashes with `SIGILL` (illegal instruction) on ARMv6. Use a Raspberry Pi Zero 2 W or a Pi 3, 4 or 5 instead, see [recommended hardware](/guide/getting-started#recommended-hardware).
 
 ## Docker Issues
 
 ### Container exits at startup with `DBusError` and `AccessDenied`
 
-The log names `An AppArmor policy prevents this sender from sending this message`, mentions `member="Hello"`, and the container exits before any scanning begins.
-
-The host's D-Bus daemon asks the kernel whether the container may talk to `org.freedesktop.DBus`. Docker's `docker-default` AppArmor profile carries no D-Bus rules, and that mediation is deny by default, so the handshake never completes. Ubuntu 24.04 hits this most often because its AppArmor 4.x stack tightened the defaults. Bind-mounting the D-Bus socket is not enough on those hosts. Run the container unconfined:
+The log names `An AppArmor policy prevents this sender from sending this message` and `member="Hello"`, and the container exits before it scans. Docker's default AppArmor profile has no D-Bus rules, so the host's D-Bus daemon refuses the container. Mounting the D-Bus socket is not enough on those hosts. Run the container unconfined:
 
 ```bash
 docker run --security-opt apparmor=unconfined ...
 ```
 
-Or in `docker-compose.yml`:
-
 ```yaml
+# docker-compose.yml
 services:
   ble-scale-sync:
     security_opt:
       - apparmor=unconfined
 ```
 
-The Home Assistant add-on sets the equivalent option in its manifest, so it needs no action. Reported in [#271](https://github.com/KristianP26/ble-scale-sync/issues/271).
+The Home Assistant add-on already runs without an AppArmor profile.
 
-### Container can't find BLE adapter
+### Container can't find the Bluetooth adapter {#container-can-t-find-ble-adapter}
 
-Make sure you're passing all required flags. See [Getting Started](/guide/getting-started#docker) for the full command. The most common mistake is forgetting `--network host` or the D-Bus volume mount.
-
-### Wrong Bluetooth group GID
-
-The `--group-add` value must match your system's Bluetooth group. Find it with:
+Compare your command with the one in [Getting Started](/guide/getting-started#docker). The flags most often missing are `--network host` and the D-Bus mount `-v /var/run/dbus:/var/run/dbus:ro`. <span id="wrong-bluetooth-group-gid"></span>The `--group-add` value must be the host's `bluetooth` group ID:
 
 ```bash
 getent group bluetooth | cut -d: -f3
 ```
 
-Common values: `112` (Debian/Ubuntu), `103` (Raspberry Pi OS), `108` (Arch).
+If that prints nothing, the host has no `bluetooth` group; install BlueZ on the host first.
 
-The documented commands resolve this for you with `--group-add "$(getent group bluetooth | cut -d: -f3)"`. If that produced nothing, the host has no `bluetooth` group at all, and `docker run` will say so rather than failing later with an unclear D-Bus error.
+### Container shows `unhealthy` but never restarts
 
-### BLE discovery stops working after hours (BlueZ stuck state)
+The app writes `/tmp/.ble-scale-sync-heartbeat` every 30 seconds while its event loop runs, whether or not anyone weighs in. The image reports `unhealthy` when that file is older than 5 minutes, so the process froze.
 
-**Symptoms** (visible with `DEBUG=true`):
+A Docker `restart:` policy acts only when the process exits, not on health status. Swarm, Kubernetes or a sidecar such as [autoheal](https://github.com/willfarrell/docker-autoheal) restart on health. The Home Assistant add-on restarts the app when it exits, see [Persistence](/guide/home-assistant-addon#persistence).
 
-- Repeated `startDiscovery failed: Discovery already in progress` and `D-Bus StopDiscovery failed: No discovery started`
-- Or `Discovery started` logs succeed, but the scale is never found even after stepping on it
-- `Discovery state at start: Discovering=true, our filtered session=no` on every cycle, with no scale found (this line is only logged with `DEBUG=true`)
-- Common on Raspberry Pi 3 / 4 / Zero 2W with the on-board Broadcom adapter under continuous-mode load
+A frozen event loop also stops the [watchdog](#the-app-exits-after-repeated-scan-failures). Restart the container by hand and attach the log from before the freeze to an issue.
 
-**Cause.** A [known BlueZ bug](https://github.com/bluez/bluez/issues/807) (also tracked at [bluez/bluer#47](https://github.com/bluez/bluer/issues/47)): after repeated GATT connect/disconnect cycles, BlueZ's `Discovering` property desyncs from the HCI controller. The daemon reports active discovery, but the controller is no longer running LE scan.
+## Exporter Issues
 
-Two forms of it are now cleared within the same scan cycle.
+### Garmin upload fails
 
-- **At the start of a cycle.** With BlueZ 5.82, `bluetoothd` can report `Discovering` as on while no client owns a discovery session and the controller is not scanning. In that state a new `StartDiscovery` is answered with success and starts nothing, and a `StopDiscovery` is refused with `No discovery started`, so nothing in BlueZ ever clears it. Releases before this fix then kept "continuing with the existing scan" for as long as the process ran. The app now takes the session over (start, stop, start again), which makes BlueZ start a real scan. The same steps simply join the scan when another program (such as Home Assistant) really is scanning on the adapter, and the log says once: `Discovery was already running under a session that is not ours; restarted it under our own session.`
-- **In the middle of a scan.** The controller can also stop delivering advertisements while the app is waiting for the scale, on a scan the app started itself, with `Discovering` still on. The app watches for that while it waits: when BlueZ has heard nothing at all for 15 seconds, it restarts discovery and keeps waiting, and logs each time:
+- `Garmin rejected the saved login token (HTTP 401)`: Garmin refused the stored token, and the upload is not retried. Run `ble-scale-sync setup-garmin` (`npm run setup-garmin` from a clone) to log in again.
+- `Garmin upload needs Python 3.12 or newer`: install Python 3.12 or newer on the host.
+- Login fails from a server: Garmin can block cloud and VPN addresses. Log in from another network and copy the token directory, see [Garmin Connect](/exporters#garmin). In the Home Assistant add-on, see [the MFA workaround](/guide/home-assistant-addon#mfa-workaround).
 
-  ```
-  Scan stalled (no advertisements for 15s while BlueZ reports Discovering); restarted discovery (restart 1 since start)
-  ```
+### MQTT connection hangs or fails
 
-  In a room with no Bluetooth devices at all, the same silence is normal. A restart that brings no traffic back makes the app wait twice as long before the next one, up to one minute, so a quiet room costs a few restarts in the first scan cycle and then one per cycle. Busy traffic or a successful weigh-in brings the 15 seconds back. When other programs (such as Home Assistant) scan on the same adapter, a stop and start from the app only leaves and rejoins their scan: it does not count as a restart and only shows with `DEBUG=true`, but it backs off the same way. If their scan uses the same transport filter as the app (LE only), it does not reach the controller at all. If it uses a different one, BlueZ restarts the controller's scan when the app leaves and again when it rejoins, which is why it backs off.
+Use `mqtt://` for a plain connection and `mqtts://` for TLS: `mqtt://` on the TLS port 8883 hangs. Then check the broker URL, username and password. See [MQTT](/exporters#mqtt).
 
-If BlueZ refuses to stop discovery (it answers `In Progress`), or does not answer a discovery request at all, `bluetoothd` itself is stuck: it believes the controller is scanning when it is not, and nothing the app can send over D-Bus clears that, an adapter power cycle included. At the start of a cycle, the app then drops its D-Bus connection (which releases a request BlueZ will never answer), tries the remaining recovery steps, and logs once: ``BlueZ discovery looks stuck (...). bluetoothd keeps that state until it restarts: run `sudo systemctl restart bluetooth`.`` In the middle of a scan it logs the same warning but keeps its connection, because the wait for the scale is still using it, and leaves the recovery steps to the start of the next cycle.
+## Discovery Stops Working After Hours {#ble-discovery-stops-working-after-hours-bluez-stuck-state}
 
-::: warning Hardware/firmware limitation, not just software
-On Pi 3/4 Broadcom on-board chips, this is a kernel/firmware-level issue that even much larger projects have given up on fixing in software. See [home-assistant/operating-system#4022](https://github.com/home-assistant/operating-system/issues/4022) and [home-assistant/core#142656](https://github.com/home-assistant/core/issues/142656), both closed as **Not Planned** with HA recommending a Bluetooth proxy as the workaround. The recovery tiers below clear the wedge on most setups but not all of them.
-:::
+This applies to the built-in Linux transport (`node-ble` over BlueZ). Symptoms, visible with `DEBUG=true`:
 
-**Recommended long-term fix: Bluetooth proxy.** The most reliable way to run BLE Scale Sync on a Pi long-term is to bypass the on-board Bluetooth entirely. Run an external [ESP32 BLE proxy](/guide/esp32-proxy) (≈€8 board, communicates over MQTT) or reuse an existing [ESPHome BT proxy](/guide/esphome-proxy). Both eliminate the host BlueZ stack from the BLE path completely.
+- `startDiscovery failed: Discovery already in progress` and `D-Bus StopDiscovery failed: No discovery started` repeat.
+- `Discovery started` succeeds, but the scale is never found, even when you stand on it.
+- `Discovery state at start: Discovering=true, our filtered session=no` on every cycle, with no scale found.
 
-**Automatic in-process recovery.** The app already:
+It is most common on a Raspberry Pi 3, 4 or Zero 2 W with the on-board Broadcom adapter in continuous mode. The cause is a [BlueZ bug](https://github.com/bluez/bluez/issues/807): after many connect and disconnect cycles, BlueZ reports discovery as running while the controller has stopped scanning.
 
-- Resets its D-Bus client after every GATT operation in continuous mode
-- Runs a preemptive `btmgmt power off/on` cycle after every GATT operation to clear zombie controller state before it accumulates (`ble.preemptive_adapter_reset: false` turns only this step off, see [the configuration reference](/guide/configuration#config-yaml-reference); the power-cycle after a `Disconnect` BlueZ never completes, described below, still runs)
-- Escalates through 6 recovery tiers when `StartDiscovery` fails (D-Bus `StopDiscovery`, adapter power-cycle, btmgmt reset, rfkill block/unblock, `systemctl restart bluetooth`)
+Fix it in this order:
 
-The btmgmt steps need `CAP_NET_ADMIN`. The Docker image gives `btmgmt` that capability and the add-on runs as root. A native install under systemd that runs as a normal user does not have it, and the app then logs `btmgmt could not power-cycle hci0: ... Permission Denied` once and carries on without those steps. To enable them, give the capability to `btmgmt` only, not to Node:
+1. Run `sudo systemctl restart bluetooth` on the host, and restart the container if the app runs in Docker. On Home Assistant OS, reboot the host: **Settings** > **System**, the three-dots menu, **Restart Home Assistant** > **Reboot system**, or run `ha host reboot`. Restarting only Home Assistant does not restart Bluetooth.
+2. If it comes back, check that the app can [reset the adapter](#btmgmt-could-not-power-cycle-hci0) and that a restart policy is set for the [watchdog](#the-app-exits-after-repeated-scan-failures).
+3. If it keeps coming back, move the Bluetooth work off the Pi with an [ESP32 proxy](/guide/esp32-proxy) or an [ESPHome proxy](/guide/esphome-proxy). Home Assistant recommends the same for this chip ([home-assistant/operating-system#4022](https://github.com/home-assistant/operating-system/issues/4022)).
+
+When discovery does not start, the app restarts it, resets the adapter and finally restarts `bluetoothd` on its own. In Docker one of those steps needs `/dev/rfkill` mapped into the container, as in `docker-compose.example.yml`. `Scan stalled (...)` and `Discovery was already running under a session that is not ours; restarted it under our own session.` in the log are part of that recovery and need no action.
+
+After every connection in continuous mode, the app also resets its D-Bus client and power-cycles the adapter with `btmgmt`, which clears the state before it builds up. `ble.preemptive_adapter_reset: false` turns off only the power-cycle, see [the BLE options](/guide/configuration#ble).
+
+### `btmgmt could not power-cycle hci0`
+
+The `btmgmt` resets need the `CAP_NET_ADMIN` capability. The Docker image gives it to `btmgmt` and the add-on runs as root, so this line comes from a native install running as a normal user. The app carries on without those steps. To enable them, give the capability to `btmgmt` only, not to Node.js:
 
 ```bash
 sudo setcap cap_net_admin+ep $(which btmgmt)
 ```
 
-Two things to know before you do. The capability is on the `btmgmt` file, so **every local user** who can run `btmgmt` can then power the adapter off, change its settings and run discovery, not just this app. And it is lost whenever the `bluez` package is upgraded or reinstalled, because the new `btmgmt` file arrives without it: run the command again after such an upgrade (`getcap $(which btmgmt)` shows whether it is still set).
+Every local user who can run `btmgmt` can then power the adapter off and change its settings. A `bluez` package upgrade removes the capability; `getcap $(which btmgmt)` shows whether it is still set.
 
-**Every cycle ends after 15 minutes, and `bluetoothctl info` shows the scale as `Connected: yes`.** After a connect that timed out, BlueZ can keep listing the scale as connected although the connection is gone ([#472](https://github.com/KristianP26/ble-scale-sync/issues/472)). BlueZ answers a `Disconnect` for a device it lists as connected only once that connection ends, so in this state it never answers, and `bluetoothctl disconnect <scale>` hangs on `Attempting to disconnect`. Every later connect then "succeeds" at once from BlueZ's own state and never reaches the scale's services. Releases before this fix waited for that answer until the 15-minute cycle limit, on every cycle. The app now gives each `Disconnect`, `RemoveDevice` and `StopDiscovery` 10 seconds, so a cycle can no longer hang on one. When the `Disconnect` after a connect timeout gets no answer, that cycle ends with `Scale found but not connected` and the message `BlueZ keeps <MAC> marked as connected and did not complete a Disconnect within 10s (#472)`. Whenever a `Disconnect`, or the `RemoveDevice` after a connect or GATT session that gave no reading, goes unanswered, the app power-cycles the adapter at the end of the cycle, also with `ble.preemptive_adapter_reset: false`, and then checks that BlueZ let go of the scale. When it did, the log says once: `Cleared a stale BlueZ connection to <MAC> ...`. When BlueZ still lists the scale as connected, the power-cycle cannot clear it: the app warns once with `Restart bluetoothd on the host: sudo systemctl restart bluetooth (on Home Assistant OS, reboot the host with "Reboot system", not just a Home Assistant restart, or run ha host reboot)` and repeats this power-cycle and check for that scale only after 10, 20 and 40 minutes and then hourly, until a weigh-in from it is read over a connection (a broadcast reading or a reading from another scale does not count). With `ble.preemptive_adapter_reset` on, the usual power-cycle after every GATT session keeps running in between. Later cycles in that state can end with `No scale found` and a GATT timeout instead. To clear it by hand, run `sudo systemctl restart bluetooth` on the host and restart the container if the app runs in Docker; on Home Assistant OS, which gives you no shell on the host to run `systemctl`, reboot the host: **Settings** > **System**, the three-dots menu, **Restart Home Assistant** > **Reboot system** (restarting only Home Assistant does not restart Bluetooth), or run `ha host reboot`.
+### `BlueZ discovery looks stuck`
 
-**Auto-restart watchdog (continuous mode).** When in-process recovery is not enough (typically Pi 3/4 Broadcom firmware lock-up), a watchdog exits the process after `runtime.watchdog_max_consecutive_failures` consecutive scan failures (default `10`, ≈30 min). With Docker `restart: unless-stopped` the container restarts cleanly, the entrypoint resets the BT adapter, and the controller is typically unwedged. The watchdog only arms after the first successful weigh-in in the process lifetime, so it does not restart-loop the container if the scale is offline (vacation) or `scale_mac` is misconfigured.
+`bluetoothd` refuses to stop discovery or does not answer a discovery request at all. Nothing sent over D-Bus clears that, an adapter power-cycle included. The app drops its D-Bus connection and tries the remaining steps, but only a restart of `bluetoothd` fixes it: run `sudo systemctl restart bluetooth`, or reboot the host on Home Assistant OS as in step 1 above.
 
-The watchdog counts only cycles where the Bluetooth radio looks unhealthy: a connection or read failure, or a scan that saw no advertisement traffic at all (the zombie-discovery wedge). A normal idle cycle, where the radio still hears other nearby devices but your scale simply is not being stood on, does not count toward a restart. This is why a scale that only advertises while in use (such as Renpho) no longer triggers needless restarts overnight.
+### `did not complete a Disconnect within 10s`
 
-A cycle that connected to the scale and then timed out without a reading counts only if the scale sent nothing at all in that session. Some scales, such as the Beurer BF915, stay connectable long after a weigh-in; if the scale answered, the Bluetooth path is evidently working and the cycle does not count, though it still waits the normal failure backoff before the next scan (or `runtime.no_reading_rescan_delay`, when that is longer). This applies to Linux/BlueZ (`node-ble`); on the other native handlers every such timeout still counts.
+After a connect that timed out, BlueZ can keep the scale listed as connected (`bluetoothctl info <MAC>` shows `Connected: yes`) although the link is gone. Every later connect then succeeds from BlueZ's own state and never reaches the scale. The cycle ends with `Scale found but not connected`, and the app power-cycles the adapter and checks the link again:
 
-::: warning The watchdog recovers by **exiting the process** - set a restart policy
-The recovery is the process _exiting_ so the supervisor starts it again. You **must** run with `restart: unless-stopped` (Compose) or `--restart unless-stopped` (`docker run`). Without a restart policy the container just stops.
+- `Cleared a stale BlueZ connection to <MAC>`: fixed, nothing to do.
+- `BlueZ still reports <MAC> as connected after the adapter power-cycle`: only a restart of `bluetoothd` clears it, as in step 1 above. Until then the app repeats the power-cycle for that scale after 10, 20 and 40 minutes and then hourly.
 
-A Docker/Compose `restart:` policy fires only on process **exit**. It does **not** act on the `HEALTHCHECK` going `unhealthy`. If you see the container stuck `Up (unhealthy)` but never restarting, plain Docker is working as designed: only Swarm, Kubernetes, an [autoheal](https://github.com/willfarrell/docker-autoheal) sidecar, or the **Home Assistant Supervisor** (via the add-on watchdog toggle, which is on by default) restarts on health status. With a restart policy and the hard-exit floor below, the process always exits, so the policy always fires.
-:::
+### The app exits after repeated scan failures
 
-To bound the rare case where a wedged D-Bus/BlueZ handle pins the event loop open and graceful shutdown cannot drain (the process logs `Stopped.` but never exits, so the restart policy never fires), the app force-exits 5s after any abort-driven shutdown. Override with `BLE_HARD_EXIT_GRACE_MS` (1000–60000 ms) if your cleanup legitimately needs longer.
+That is the watchdog. In continuous mode on the host's own Bluetooth adapter (not a proxy or Home Assistant Bluetooth), after `runtime.watchdog_max_consecutive_failures` failed cycles in a row (default `10`), the app logs `Watchdog triggered: ...` and exits, so Docker or systemd starts it again with a fresh Bluetooth stack. The Docker entrypoint power-cycles the adapter on start. The watchdog arms only after the first successful weigh-in of the process.
+
+Which cycles count depends on the handler:
+
+- Linux built-in Bluetooth (`node-ble`): only cycles with an unhealthy radio (a connect or read failure, or a scan that heard no advertisements at all). A scan that hears other devices but not your scale does not count, and neither does a session in which the scale sent data but no complete reading.
+- noble driver (macOS, Windows, or `ble.noble_driver` on Linux): every failed cycle, a scan that did not find the scale included. After one weigh-in, with the default value, ten cycles in a row without the scale exit the app.
+
+The restart needs a supervisor: `restart: unless-stopped` in Compose, `--restart unless-stopped` with `docker run`, or `Restart=always` in a systemd unit. Without one the app stays down; with a noble driver and no supervisor, set the value to `0`.
 
 ```yaml
 runtime:
-  watchdog_max_consecutive_failures: 10 # default; 0 = disabled
+  watchdog_max_consecutive_failures: 10 # 0 turns the watchdog off
 ```
 
-```bash
-# Or env override
-docker run ... -e BLE_WATCHDOG_MAX_FAILURES=10 ghcr.io/kristianp26/ble-scale-sync:latest
-```
+`BLE_WATCHDOG_MAX_FAILURES` overrides the value from the environment. If a wedged D-Bus handle keeps the process from exiting after `Stopped.`, the app force-exits after 5 seconds; `BLE_HARD_EXIT_GRACE_MS` (1000 to 60000) changes that.
 
-**Docker compose tip.** Make sure `/dev/rfkill` is mapped so Tier 5 recovery is available:
+### The service hangs and systemd does not restart it
 
-```yaml
-devices:
-  - /dev/rfkill:/dev/rfkill
-```
+A blocking D-Bus call can freeze the whole event loop, and then the watchdog above cannot run either. Let systemd check the process from outside. In the `[Service]` section of the unit from [Run as a Service](/guide/getting-started#run-as-a-service-linux), replace `Type=simple` with these lines and keep `Restart=always`:
 
-**Container healthcheck (Docker `HEALTHCHECK`).** The image reports healthy while `/tmp/.ble-scale-sync-heartbeat` has been written within the last 5 minutes. The app touches that file every 30 s for as long as the process is alive, independently of whether anyone is weighing in, so an idle scale never makes the container look unhealthy.
-
-::: warning Scope of this healthcheck
-Same contract as the systemd watchdog below: it only catches **whole-loop freezes**. A frozen event loop cannot run the 30 s timer either, so the file goes stale exactly when it should. If the event loop is alive but a specific BLE handler is wedged, the heartbeat keeps ticking; that case belongs to `runtime.watchdog_max_consecutive_failures` and the hard-exit floor above.
-:::
-
-**Home Assistant add-on restarts every ~7 minutes.** Fixed in versions after 1.20.0. On 1.20.0 and earlier the heartbeat file was only touched when a reading arrived, so on HAOS any idle gap longer than 5 minutes flipped the container to `unhealthy` and the Supervisor watchdog restarted the add-on, forever. Symptom in the Supervisor log: `Watchdog found app BLE Scale Sync is unhealthy, restarting...` repeating on a fixed cadence, with the add-on log showing only clean startup and shutdown cycles. Workaround on affected versions: turn off the add-on's **Watchdog** toggle. Upgrading is the real fix.
-
-**Systemd watchdog (Type=notify).** Defense in depth for the rare case where a synchronous D-Bus stall freezes the Node event loop entirely. When that happens the in-process watchdog cannot fire either, since `setTimeout` callbacks never run. Letting systemd do the liveness check from outside the process is the clean fix.
-
-::: warning Scope of this watchdog
-Only catches **whole-loop freezes**. If the event loop is alive but a specific BLE handler is wedged (e.g. an `await` that never resolves), the heartbeat keeps firing and systemd is satisfied. For BLE-specific recovery, rely on `runtime.watchdog_max_consecutive_failures` and the consecutive-failure watchdog above.
-:::
-
-Add the following to your `ble-scale.service` unit on the Pi (or any systemd host):
-
-```
-[Service]
+```ini
 Type=notify
 WatchdogSec=60
-NotifyAccess=main
-Restart=on-failure
-RestartSec=5
+NotifyAccess=all
 ```
 
-The app sends `READY=1` once at startup and `WATCHDOG=1` every `WatchdogSec / 2` seconds. If the heartbeat misses for `WatchdogSec`, systemd kills and restarts the unit. The integration is a no-op when `$NOTIFY_SOCKET` is unset (Docker, `npm start`, non-systemd installs), so the same binary works everywhere.
+The app sends `READY=1` at start and `WATCHDOG=1` every `WatchdogSec / 2` through `systemd-notify`, a child process, which is why `NotifyAccess=all` is needed. If the heartbeat stops for `WatchdogSec`, systemd restarts the unit. Without systemd, `$NOTIFY_SOCKET` is unset and the integration does nothing. It catches a call that freezes the event loop, not a Bluetooth request that never gets an answer.
 
-**Last-resort escape hatch: switch away from BlueZ.** If BlueZ keeps getting stuck despite the above, bypass it entirely by using the `@stoprocent/noble` driver (HCI socket directly, no D-Bus):
+### Discovery still gets stuck after all of this
+
+Switch away from BlueZ with the `@stoprocent/noble` driver, which talks to the adapter over an HCI socket instead of D-Bus:
 
 ```yaml
 ble:
   noble_driver: stoprocent
 ```
 
-Or set `NOBLE_DRIVER=stoprocent` as an environment variable. Trade-off: the app takes exclusive HCI access, so you cannot run `bluetoothctl`, Home Assistant's Bluetooth integration, or any other BLE consumer on the same adapter at the same time.
+It needs the capability from [`Permission denied` on Linux](#permission-denied-linux). The app then has the adapter to itself: `bluetoothctl`, Home Assistant's Bluetooth integration and other Bluetooth programs cannot use it at the same time. The other option is a proxy, see [choose a transport](/guide/transports#choose-a-transport).
 
-On the host you can also verify BlueZ state manually:
+## Report an Issue
 
-```bash
-bluetoothctl show | grep Discovering
-sudo systemctl restart bluetooth   # manual recovery
-```
+If none of this helps, [open an issue](https://github.com/KristianP26/ble-scale-sync/issues/new/choose) and attach:
+
+- the log of one failed weigh-in with [debug mode](#debug-mode) on, from the `Version` line at the top to the end of the cycle (mask the MAC address if you like),
+- the scale's brand and exact model, and what its display showed,
+- the transport (`ble.handler` or the add-on's `ble_transport`), the noble driver if set, and the host (Raspberry Pi model, OS, Docker or add-on),
+- for a scale that is misread or not supported, a [raw capture](#capturing-every-frame-for-a-scale-that-is-not-decoded-correctly) and the values the vendor app recorded.

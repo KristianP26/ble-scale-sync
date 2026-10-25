@@ -1,138 +1,51 @@
 ---
 title: Auto Updates
-description: Keep BLE Scale Sync up to date automatically on Home Assistant, Docker Compose, and Raspberry Pi systemd deployments.
-head:
-  - - meta
-    - name: keywords
-      content: ble scale sync auto update, watchtower docker, home assistant addon auto update, raspberry pi unattended update, docker pull cron, systemd timer update
+description: Update BLE Scale Sync automatically or on a schedule in the Home Assistant add-on, Docker Compose, an npm install and a systemd install from a clone.
 ---
 
 # Auto Updates
 
-BLE Scale Sync ships with an anonymous update check that logs when a newer release is available, but it does not install the update for you. This page lists the recommended way to automate actual updates for each deployment target. Pick the section that matches your setup.
-
-::: tip
-New releases are announced on the [releases page](https://github.com/KristianP26/ble-scale-sync/releases) and in the [changelog](/changelog). The update check runs at most once per UTC day, including across restarts, and can be disabled with `update_check: false` in `config.yaml`.
-:::
+The app logs `Update available: ...` when a newer release exists, but it never installs one. To turn that check off, see [Update check](/guide/configuration#update-check). Releases are listed in the [changelog](/changelog).
 
 ## Home Assistant Add-on
 
-The Home Assistant Supervisor manages add-on updates. There are two modes, both configured from the HA UI without editing any files.
+### Manual Updates (default)
 
-### Manual updates (default)
+A new version shows an **Update** button under **Settings** > **Apps** > **BLE Scale Sync**. The Supervisor pulls the new image and restarts the add-on; options and `/data` are kept.
 
-When a new version is published, the Supervisor shows an **Update** banner in:
+### Automatic Updates
 
-- **Settings** > **Add-ons** > **BLE Scale Sync**
-- **Settings** > **Updates** (aggregated view for core, OS, and add-ons)
+1. Open **Settings** > **Apps** > **BLE Scale Sync**.
+2. Turn on **Auto update**.
+3. Keep the backup toggle on in the update dialog, so the Supervisor makes a partial backup before each update. Whether that toggle starts on is set under **Settings** > **System** > **Backups**.
 
-Click **Update** and the Supervisor pulls the new image, restarts the add-on, and keeps your options and `/data` volume intact. No further action is needed.
+The Supervisor then installs new versions during its daily update check and restarts the add-on.
 
-### Automatic updates
-
-1. Open **Settings** > **Add-ons** > **BLE Scale Sync**.
-2. Toggle **Auto update** on.
-3. Optional but recommended: keep the backup toggle enabled on the update dialog so the Supervisor creates a partial backup before each upgrade. You can set the default preference in **Settings** > **System** > **Backups**.
-
-With **Auto update** on, the Supervisor picks up new versions during its daily update check (same schedule as HA core updates) and restarts the add-on unattended.
-
-::: warning
-If you run the add-on in custom config mode (`custom_config: true` with a file at `/share/ble-scale-sync/config.yaml`), auto updates still replace the container image but leave your custom YAML untouched. Review the [changelog](/changelog) for breaking schema changes before enabling unattended updates.
-:::
+In custom config mode an update replaces the image and leaves `/share/ble-scale-sync/config.yaml` as it is. Read the [changelog](/changelog) for config changes before you turn on unattended updates.
 
 ## Docker Compose
 
-For self-managed Docker and Docker Compose setups, the simplest option is [Watchtower](https://containrrr.dev/watchtower/), a small sidecar that watches the container registry and restarts your container when a newer image is pushed to `ghcr.io/kristianp26/ble-scale-sync:latest`.
+An update re-creates the container, which drops the files the app keeps next to a single-file `config.yaml` mount, the export retry queue included. See [Run](/guide/getting-started#_2-run).
 
-An update re-creates the container, so with the single-file `config.yaml` mount any exports still waiting in the [retry queue](/guide/configuration#runtime) are dropped.
+### Systemd Timer
 
-### Watchtower with label opt-in
-
-Add a label to the `ble-scale-sync` service and a second `watchtower` service. The `WATCHTOWER_LABEL_ENABLE=true` flag makes Watchtower ignore every other container on the host, which is the safe default on a machine running other workloads.
-
-```yaml
-services:
-  ble-scale-sync:
-    image: ghcr.io/kristianp26/ble-scale-sync:latest
-    container_name: ble-scale-sync
-    network_mode: host
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    # Set BLUETOOTH_GID in a .env file next to this compose file.
-    # Find it with: getent group bluetooth | cut -d: -f3
-    # Commonly 112 on Debian/Ubuntu and 103 on Raspberry Pi OS.
-    group_add:
-      - '${BLUETOOTH_GID:-112}'
-    volumes:
-      - ./config.yaml:/app/config.yaml
-      - /var/run/dbus:/var/run/dbus:ro
-      - ./garmin-tokens:/app/garmin-tokens
-    environment:
-      - CONTINUOUS_MODE=true
-    restart: unless-stopped
-    labels:
-      - 'com.centurylinklabs.watchtower.enable=true'
-
-  watchtower:
-    image: containrrr/watchtower
-    container_name: watchtower
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      - WATCHTOWER_LABEL_ENABLE=true
-      - WATCHTOWER_CLEANUP=true
-      - WATCHTOWER_POLL_INTERVAL=86400
-      - WATCHTOWER_INCLUDE_RESTARTING=true
-      - TZ=Europe/Bratislava
-```
-
-What each environment variable does:
-
-- `WATCHTOWER_LABEL_ENABLE=true` only touches containers that set `com.centurylinklabs.watchtower.enable=true`.
-- `WATCHTOWER_CLEANUP=true` removes the old image after a successful upgrade so the SD card does not fill up.
-- `WATCHTOWER_POLL_INTERVAL=86400` polls once per day.
-- `WATCHTOWER_INCLUDE_RESTARTING=true` still upgrades the container if it is stuck in a restart loop.
-
-Apply the stack:
-
-```bash
-docker compose pull
-docker compose up -d
-```
-
-### Monitor-only mode (notify, do not update)
-
-If you want Watchtower to report new versions but keep the upgrade manual, switch the sidecar into monitor-only mode and point notifications at Ntfy (the same service the app can already use as an exporter):
-
-```yaml
-environment:
-  - WATCHTOWER_LABEL_ENABLE=true
-  - WATCHTOWER_MONITOR_ONLY=true
-  - WATCHTOWER_NOTIFICATIONS=shoutrrr
-  - WATCHTOWER_NOTIFICATION_URL=ntfy://ntfy.sh/my-topic
-```
-
-### Cron-based alternative (no sidecar)
-
-If a Watchtower container feels like too much, a systemd timer that pulls and restarts works just as well and uses no background memory:
+A timer that pulls the image and restarts the stack needs no extra container. Create `/etc/systemd/system/ble-scale-sync-update.service`, with `WorkingDirectory` set to the directory of your `docker-compose.yml`:
 
 ```ini
-# /etc/systemd/system/ble-scale-sync-update.service
 [Unit]
 Description=Pull latest ble-scale-sync image and restart the stack
 After=docker.service
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/pi/ble-scale-sync
+WorkingDirectory=/home/YOUR_USER/ble-scale-sync
 ExecStart=/usr/bin/docker compose pull
 ExecStart=/usr/bin/docker compose up -d
 ```
 
+and `/etc/systemd/system/ble-scale-sync-update.timer`:
+
 ```ini
-# /etc/systemd/system/ble-scale-sync-update.timer
 [Unit]
 Description=Daily ble-scale-sync image update
 
@@ -145,7 +58,7 @@ RandomizedDelaySec=1h
 WantedBy=timers.target
 ```
 
-Enable the timer:
+Enable it and check the next run:
 
 ```bash
 sudo systemctl daemon-reload
@@ -153,19 +66,54 @@ sudo systemctl enable --now ble-scale-sync-update.timer
 systemctl list-timers ble-scale-sync-update
 ```
 
-## Raspberry Pi systemd (source deployment)
+### Watchtower {#watchtower-with-label-opt-in}
 
-If you cloned the repo directly on the Pi and run it as `ble-scale.service`, a systemd timer can keep `main` fast-forwarded and restart the service on new commits.
+[Watchtower](https://github.com/containrrr/watchtower) restarts a container when a newer image is pushed. The upstream project was archived in December 2025 and receives no more updates. If you run it, opt in only this container with a label, and add the sidecar next to your existing service:
 
-### Update script
+```yaml
+services:
+  ble-scale-sync:
+    # ... your existing service
+    labels:
+      - 'com.centurylinklabs.watchtower.enable=true'
 
-Create `/home/pi/ble-scale-sync/scripts/auto-update.sh`:
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_LABEL_ENABLE=true # touch only labelled containers
+      - WATCHTOWER_CLEANUP=true # remove the old image after an update
+      - WATCHTOWER_POLL_INTERVAL=86400 # check once a day
+      - WATCHTOWER_INCLUDE_RESTARTING=true # also update a container stuck in a restart loop
+```
+
+To get a notification instead of an update, add `WATCHTOWER_MONITOR_ONLY=true`, `WATCHTOWER_NOTIFICATIONS=shoutrrr` and `WATCHTOWER_NOTIFICATION_URL=ntfy://ntfy.sh/YOUR_TOPIC` to the `watchtower` environment.
+
+## npm Install
+
+Update the global install and restart the service:
+
+```bash
+npm install -g ble-scale-sync@latest
+sudo systemctl restart ble-scale.service
+```
+
+## Systemd Install from a Clone {#raspberry-pi-systemd-source-deployment}
+
+For a clone that runs as `ble-scale.service` (see [Run as a service](/guide/getting-started#run-as-a-service-linux)), a timer can fast-forward `main`, rebuild and restart the service. `main` can hold code that is not released yet; to stay on releases, [pin a tag](#pinning-a-version) instead.
+
+### Update Script
+
+Create `/home/YOUR_USER/ble-scale-sync/scripts/auto-update.sh` and make it executable with `chmod +x`:
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd /home/pi/ble-scale-sync
+cd /home/YOUR_USER/ble-scale-sync
 
 git fetch --quiet origin main
 LOCAL=$(git rev-parse main)
@@ -181,27 +129,24 @@ echo "Updating from $LOCAL to $REMOTE..."
 # Fast-forward only: refuse divergent history to protect local edits
 git merge --ff-only origin/main
 
-# Reinstall when package.json or package-lock.json changed. A full install, not
-# --omit=dev: the build needs TypeScript, which is a devDependency.
+# Full install when the lockfile changed: the build needs TypeScript, a devDependency
 if git diff --name-only "$LOCAL" "$REMOTE" | grep -qE '^(package(-lock)?\.json)$'; then
   npm ci
 fi
 
-# Compile to dist/ (the service runs `node dist/index.js`). tsc fails the script
-# on a type error, so this doubles as the sanity gate before restart.
+# tsc stops the script on a type error, so the service is not restarted; dist/ is already rewritten
 npm run build
 
-# Restart; systemd keeps the previous unit running if the new one fails to boot
+# Stops the old process and starts the new build; if it fails to start,
+# Restart=always in ble-scale.service keeps retrying
 sudo systemctl restart ble-scale.service
 
 echo "Updated to $REMOTE."
 ```
 
-```bash
-chmod +x /home/pi/ble-scale-sync/scripts/auto-update.sh
-```
+The `sudo systemctl restart` line needs passwordless sudo for that command.
 
-### Systemd timer
+### Timer
 
 ```ini
 # /etc/systemd/system/ble-scale-sync-update.service
@@ -212,8 +157,8 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=pi
-ExecStart=/home/pi/ble-scale-sync/scripts/auto-update.sh
+User=YOUR_USER
+ExecStart=/home/YOUR_USER/ble-scale-sync/scripts/auto-update.sh
 ```
 
 ```ini
@@ -230,45 +175,38 @@ RandomizedDelaySec=30min
 WantedBy=timers.target
 ```
 
-Enable the timer:
-
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now ble-scale-sync-update.timer
 ```
 
-This runs every Sunday at 04:30 local time with up to 30 minutes of jitter, which lines up well with the weekly reboot recommended in the Pi setup guide.
+This runs every Sunday at 04:30 local time, up to 30 minutes later. If the script fails before the restart (diverged history, failed install or build), the service keeps running the old build, and the error is in `journalctl -u ble-scale-sync-update.service`.
 
-::: tip
-`git merge --ff-only` fails fast if local commits diverge from upstream. When the update script exits non-zero, the service keeps running the old code and a journal entry lands in `journalctl -u ble-scale-sync-update.service`.
-:::
+## Pinning a Version
 
-## Pinning a version
+To upgrade only by hand, pin a release instead of `latest`.
 
-If you want predictability over freshness, pin to a specific release tag instead of `latest` and upgrade by hand when a new version is announced.
-
-Docker and Home Assistant Add-on custom registry:
+Docker: image tags are the version without the `v`. `X.Y.Z` pins one release, `X.Y` follows its patch releases.
 
 ```yaml
-image: ghcr.io/kristianp26/ble-scale-sync:v1.10.1
+image: ghcr.io/kristianp26/ble-scale-sync:X.Y.Z
 ```
 
-Raspberry Pi source deployment:
+Install from a clone: check out a release tag, then rebuild.
 
 ```bash
-cd /home/pi/ble-scale-sync
+cd /home/YOUR_USER/ble-scale-sync
 git fetch --tags
-git checkout v1.10.1
+git checkout vX.Y.Z
+npm ci && npm run build
 ```
 
-With a pinned version, skip the auto-update timer entirely and rely on the in-app update check to nudge you when it is time to upgrade.
+The Home Assistant add-on always runs the image of its own version; keep **Auto update** off to stay on it. With a pinned version, leave the update timer off; the update check still tells you when a release is out.
 
-## Safety checklist before enabling unattended updates
+## Safety Checklist Before Enabling Unattended Updates
 
-- [ ] `config.yaml` (and `/data` on HA, or your Docker volumes) is backed up off-device.
-- [ ] Your scale adapter is already stable on the current version, with no open issue affecting your hardware in the [issue tracker](https://github.com/KristianP26/ble-scale-sync/issues).
-- [ ] You scan the [changelog](/changelog) at least occasionally. Minor versions can add config fields; major versions may rename them.
-- [ ] Exporter auth tokens (Garmin, Strava) live in a volume that survives container restart.
-- [ ] You monitor the service with the heartbeat file at `/tmp/.ble-scale-sync-heartbeat`, an HA notification, or the Ntfy exporter, so a failed update does not go unnoticed for days.
-
-If any of those is missing, keep updates manual until the guardrails are in place.
+- `config.yaml` (and `/data` on Home Assistant, or your Docker volumes) is backed up off the device.
+- Your scale works on the current version, with no open [issue](https://github.com/KristianP26/ble-scale-sync/issues) for your hardware.
+- You read the [changelog](/changelog) from time to time; releases can add or rename config fields.
+- Exporter tokens (Garmin, Strava) are in a volume that survives a re-created container.
+- Something alerts you when the service stops, such as a check on `/tmp/.ble-scale-sync-heartbeat`, a Home Assistant notification or the ntfy exporter.
