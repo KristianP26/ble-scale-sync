@@ -25,6 +25,77 @@ export interface ScaleBodyComp {
   bmr?: number;
   /** The scale's own body age, years, exported as metabolic age (D078). Same rule. */
   metabolicAge?: number;
+  /**
+   * The scale's own skeletal muscle, % (#497). Same rule as `bmr`, but never
+   * calculated: without an accepted body fat, or outside its band, the payload
+   * has no skeletal muscle at all.
+   */
+  skeletalMuscle?: number;
+  /**
+   * The scale's segment impedances (#497). Raw measurements, not composition:
+   * exported whether or not the rest of the set is accepted, each value on its
+   * own, and never estimated.
+   */
+  segmentImpedance?: SegmentImpedance;
+}
+
+/** One body segment's impedance at the two frequencies, in ohm (#497). */
+export interface SegmentPair {
+  at20kHz: number;
+  at100kHz: number;
+}
+
+/**
+ * The five segments an eight-electrode scale measures (#497). For the QN
+ * channels: LH -> leftArm, RH -> rightArm, LF -> leftLeg, RF -> rightLeg,
+ * T -> trunk.
+ */
+export interface SegmentImpedance {
+  trunk: SegmentPair;
+  leftArm: SegmentPair;
+  rightArm: SegmentPair;
+  leftLeg: SegmentPair;
+  rightLeg: SegmentPair;
+}
+
+/** The payload key of each segment at each frequency. */
+const SEGMENT_KEYS = {
+  trunk: ['impedanceTrunk20kHz', 'impedanceTrunk100kHz'],
+  leftArm: ['impedanceLeftArm20kHz', 'impedanceLeftArm100kHz'],
+  rightArm: ['impedanceRightArm20kHz', 'impedanceRightArm100kHz'],
+  leftLeg: ['impedanceLeftLeg20kHz', 'impedanceLeftLeg100kHz'],
+  rightLeg: ['impedanceRightLeg20kHz', 'impedanceRightLeg100kHz'],
+} as const satisfies Record<keyof SegmentImpedance, readonly [string, string]>;
+
+type SegmentImpedanceKey = (typeof SEGMENT_KEYS)[keyof SegmentImpedance][number];
+
+/**
+ * Exclusive upper bound on a segment impedance (#497): 0xFFFF read in 0.1 ohm,
+ * the sentinel of a 16-bit field that measured nothing. No band beyond that:
+ * a segment's impedance depends on the electrode path, and the QN channels
+ * read higher at 100 kHz than at 20 kHz on the trunk where R-MSC04 reads lower.
+ */
+export const SEGMENT_IMPEDANCE_SENTINEL_OHM = 6553.5;
+
+/** The segment impedances as flat payload keys, each kept only when it is a measurement. */
+function segmentImpedanceKeys(
+  seg: SegmentImpedance | undefined,
+): Partial<Record<SegmentImpedanceKey, number>> {
+  const out: Partial<Record<SegmentImpedanceKey, number>> = {};
+  if (!seg) return out;
+  for (const segment of Object.keys(SEGMENT_KEYS) as Array<keyof SegmentImpedance>) {
+    const [k20, k100] = SEGMENT_KEYS[segment];
+    const pair = seg[segment];
+    for (const [key, ohm] of [
+      [k20, pair?.at20kHz],
+      [k100, pair?.at100kHz],
+    ] as const) {
+      if (typeof ohm === 'number' && ohm > 0 && ohm < SEGMENT_IMPEDANCE_SENTINEL_OHM) {
+        out[key] = r2(ohm);
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -184,6 +255,20 @@ export function isPlausibleMetabolicAge(years: number): boolean {
 }
 
 /**
+ * Band a scale-reported skeletal muscle percentage has to fall in before it is
+ * exported (#497). A judgement like the D078 bands: far from any real body and
+ * far from a broken field (0, a 0xFFFF sentinel read as 6553.5, a value off by
+ * a factor of 10).
+ */
+export const SKELETAL_MUSCLE_MIN_PCT = 10;
+export const SKELETAL_MUSCLE_MAX_PCT = 90;
+
+/** Whether a scale-reported skeletal muscle percentage may be exported (#497). */
+export function isPlausibleSkeletalMusclePercent(pct: number): boolean {
+  return Number.isFinite(pct) && pct >= SKELETAL_MUSCLE_MIN_PCT && pct <= SKELETAL_MUSCLE_MAX_PCT;
+}
+
+/**
  * A scale-reported value as an integer, or undefined (and a debug line) when
  * it is outside its band, so the caller falls back to its formula.
  */
@@ -222,14 +307,45 @@ export function biaFatIfPlausible(
 ): number | undefined {
   if (!(impedance > 0)) return undefined;
   if (!isPlausibleImpedance(impedance)) {
+    const instead =
+      p.estimateBodyComposition === false
+        ? 'is not computed from it, and with estimate_body_composition off none is estimated'
+        : 'falls back to the BMI estimate rather than being computed from it';
     biaLog.debug(
       `Impedance ${impedance} ohm is outside ${IMPEDANCE_MIN_OHM}-${IMPEDANCE_MAX_OHM}, ` +
-        `so body composition falls back to the BMI estimate rather than being computed ` +
-        `from it (#386).`,
+        `so body composition ${instead} (#386).`,
     );
     return undefined;
   }
   return computeBiaFat(weight, impedance, p);
+}
+
+/**
+ * The words an adapter puts where its log line would say it uses the estimate,
+ * when the user turned the estimate off (#497), or null when the estimate is
+ * on and the line stays as it was.
+ */
+export function noEstimateNote(p: UserProfile): string | null {
+  return p.estimateBodyComposition === false
+    ? 'exporting no body composition (estimate_body_composition is off)'
+    : null;
+}
+
+/** Mifflin-St Jeor BMR and the metabolic age derived from it: weight, height, age and sex only. */
+function formulaMetabolism(weight: number, p: UserProfile): { bmr: number; metabolicAge: number } {
+  const sexConstant = p.gender === 'male' ? 5 : -161;
+  const baseBmr = 10 * weight + 6.25 * p.height - 5 * p.age;
+  let bmr = baseBmr + sexConstant;
+  if (p.isAthlete) bmr *= 1.05;
+
+  // The reference is the same Mifflin-St Jeor BMR at age 25, so it has to use
+  // the same sex constant. It used to hardcode the male +5, which read the
+  // 166 kcal gap as ~11 extra years for every female user (#433).
+  const idealBmr = 10 * weight + 6.25 * p.height - 5 * 25 + sexConstant;
+  let metabolicAge = p.age + Math.trunc((idealBmr - bmr) / 15);
+  if (metabolicAge < METABOLIC_AGE_MIN) metabolicAge = METABOLIC_AGE_MIN;
+  if (p.isAthlete && metabolicAge > p.age) metabolicAge = p.age - 5;
+  return { bmr: Math.trunc(bmr), metabolicAge };
 }
 
 /** Build a full BodyComposition from scale-provided body-comp values + user profile. */
@@ -255,13 +371,39 @@ export function buildPayload(
   // have: BIA when the impedance is usable, the BMI estimate otherwise.
   const rejection = compositionRejection(comp);
   if (rejection) {
-    biaLog.debug(`Scale-reported composition discarded (${rejection}); estimating instead.`);
+    biaLog.debug(
+      `Scale-reported composition discarded (${rejection}); ` +
+        (p.estimateBodyComposition === false
+          ? 'using the impedance if it is usable, and no estimate (estimate_body_composition is off).'
+          : 'estimating instead.'),
+    );
   }
   const measured: ScaleBodyComp = rejection ? {} : comp;
-  const bodyFatPercent =
-    measured.fat ??
-    (rejection ? biaFatIfPlausible(weight, impedance, p) : undefined) ??
-    estimateBodyFat(bmi, p);
+  const measuredFat =
+    measured.fat ?? (rejection ? biaFatIfPlausible(weight, impedance, p) : undefined);
+
+  // Nothing measured and the user turned the BMI estimate off (#497): the six
+  // values that would come from the estimated body fat are withheld, null,
+  // and the rest is what the weight, the height and the profile give.
+  // Withheld as a whole, a scale's visceral fat included, so a weigh-in never
+  // mixes measured and missing composition. Segment impedances are raw
+  // measurements and stay.
+  if (measuredFat === undefined && p.estimateBodyComposition === false) {
+    return {
+      weight: r2(weight),
+      impedance: r2(impedance),
+      bmi: r2(bmi),
+      bodyFatPercent: null,
+      waterPercent: null,
+      boneMass: null,
+      muscleMass: null,
+      visceralFat: null,
+      physiqueRating: null,
+      ...formulaMetabolism(weight, p),
+      ...segmentImpedanceKeys(comp.segmentImpedance),
+    };
+  }
+  const bodyFatPercent = measuredFat ?? estimateBodyFat(bmi, p);
   const lbm = weight * (1 - bodyFatPercent / 100);
 
   const waterPercent = measured.water ?? ((lbm * (p.isAthlete ? 0.74 : 0.73)) / weight) * 100;
@@ -301,18 +443,7 @@ export function buildPayload(
   // below 18 % fat and at 6 between 18 and 25 %, whatever the body.
   const physiqueRating = computePhysiqueRating(bodyFatPercent, skeletalMuscleEstimate, weight);
 
-  const sexConstant = p.gender === 'male' ? 5 : -161;
-  const baseBmr = 10 * weight + 6.25 * p.height - 5 * p.age;
-  let bmr = baseBmr + sexConstant;
-  if (p.isAthlete) bmr *= 1.05;
-
-  // The reference is the same Mifflin-St Jeor BMR at age 25, so it has to use
-  // the same sex constant. It used to hardcode the male +5, which read the
-  // 166 kcal gap as ~11 extra years for every female user (#433).
-  const idealBmr = 10 * weight + 6.25 * p.height - 5 * 25 + sexConstant;
-  let metabolicAge = p.age + Math.trunc((idealBmr - bmr) / 15);
-  if (metabolicAge < METABOLIC_AGE_MIN) metabolicAge = METABOLIC_AGE_MIN;
-  if (p.isAthlete && metabolicAge > p.age) metabolicAge = p.age - 5;
+  const { bmr, metabolicAge } = formulaMetabolism(weight, p);
 
   // The scale's own BMR and body age replace the two formulas only here, at
   // the end (D078). The formula metabolic age above has to come from the
@@ -335,6 +466,11 @@ export function buildPayload(
     `${METABOLIC_AGE_MIN}-${METABOLIC_AGE_MAX} years`,
   );
 
+  // The scale's own skeletal muscle percentage goes by the same rule, but has
+  // no formula to fall back to: out of its band, or without a measured body
+  // fat, the key is left out rather than estimated (#497).
+  const skeletalMusclePercent = scaleSkeletalMuscle(withFat ? measured.skeletalMuscle : undefined);
+
   return {
     weight: r2(weight),
     impedance: r2(impedance),
@@ -345,9 +481,24 @@ export function buildPayload(
     muscleMass: r2(muscleMass),
     visceralFat,
     physiqueRating,
-    bmr: scaleBmr ?? Math.trunc(bmr),
+    bmr: scaleBmr ?? bmr,
     metabolicAge: scaleAge ?? metabolicAge,
+    ...(skeletalMusclePercent !== undefined && { skeletalMusclePercent }),
+    // From `comp`, not `measured`: raw measurements, not part of the
+    // composition a rejection discards (#497).
+    ...segmentImpedanceKeys(comp.segmentImpedance),
   };
+}
+
+/** The scale's skeletal muscle percentage to 0.01, or undefined (and a debug line) out of band. */
+function scaleSkeletalMuscle(pct: number | undefined): number | undefined {
+  if (pct == null) return undefined;
+  if (isPlausibleSkeletalMusclePercent(pct)) return r2(pct);
+  biaLog.debug(
+    `Scale-reported skeletal muscle ${pct} % is outside ` +
+      `${SKELETAL_MUSCLE_MIN_PCT}-${SKELETAL_MUSCLE_MAX_PCT} %; not exported.`,
+  );
+  return undefined;
 }
 
 /** Body fat from a plausible impedance through BIA, the BMI estimate otherwise (#386). */

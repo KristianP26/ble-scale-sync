@@ -31,6 +31,32 @@ interface HaMetricDef {
   icon?: string;
   precision?: number;
   entityCategory?: string;
+  /**
+   * Only some weigh-ins carry it (#497). Its config goes out only with a
+   * payload that has it, so a setup whose scale never measures it gets no
+   * entity, and its template renders 'None' (unknown in HA) for a payload
+   * without it instead of logging a template warning.
+   */
+  optional?: true;
+  /** false: HA creates the entity disabled, for the user to turn on (#497). */
+  enabledByDefault?: false;
+}
+
+/**
+ * A segment impedance sensor (#497): diagnostic, created disabled, and only
+ * once a payload carries the value.
+ */
+function segmentSensor<K extends keyof BodyComposition>(key: K, name: string) {
+  return {
+    key,
+    name,
+    unit: 'Ω',
+    icon: 'mdi:flash',
+    precision: 1,
+    entityCategory: 'diagnostic',
+    enabledByDefault: false,
+    optional: true,
+  } as const;
 }
 
 const HA_METRICS = [
@@ -47,6 +73,14 @@ const HA_METRICS = [
   { key: 'waterPercent', name: 'Water', unit: '%', icon: 'mdi:water-percent', precision: 1 },
   { key: 'boneMass', name: 'Bone Mass', unit: 'kg', deviceClass: 'weight', precision: 1 },
   { key: 'muscleMass', name: 'Muscle Mass', unit: 'kg', deviceClass: 'weight', precision: 1 },
+  {
+    key: 'skeletalMusclePercent',
+    name: 'Skeletal Muscle',
+    unit: '%',
+    icon: 'mdi:arm-flex',
+    precision: 1,
+    optional: true,
+  },
   { key: 'visceralFat', name: 'Visceral Fat', icon: 'mdi:stomach' },
   {
     key: 'physiqueRating',
@@ -56,6 +90,16 @@ const HA_METRICS = [
   },
   { key: 'bmr', name: 'BMR', unit: 'kcal', icon: 'mdi:fire' },
   { key: 'metabolicAge', name: 'Metabolic Age', unit: 'yr', icon: 'mdi:calendar-clock' },
+  segmentSensor('impedanceTrunk20kHz', 'Impedance Trunk 20 kHz'),
+  segmentSensor('impedanceTrunk100kHz', 'Impedance Trunk 100 kHz'),
+  segmentSensor('impedanceLeftArm20kHz', 'Impedance Left Arm 20 kHz'),
+  segmentSensor('impedanceLeftArm100kHz', 'Impedance Left Arm 100 kHz'),
+  segmentSensor('impedanceRightArm20kHz', 'Impedance Right Arm 20 kHz'),
+  segmentSensor('impedanceRightArm100kHz', 'Impedance Right Arm 100 kHz'),
+  segmentSensor('impedanceLeftLeg20kHz', 'Impedance Left Leg 20 kHz'),
+  segmentSensor('impedanceLeftLeg100kHz', 'Impedance Left Leg 100 kHz'),
+  segmentSensor('impedanceRightLeg20kHz', 'Impedance Right Leg 20 kHz'),
+  segmentSensor('impedanceRightLeg100kHz', 'Impedance Right Leg 100 kHz'),
   // A time, not a quantity: HA allows a timestamp sensor no state_class and no
   // unit, and the device class brings its own icon.
   { key: 'timestamp', name: 'Last Weigh-in', deviceClass: 'timestamp' },
@@ -244,7 +288,11 @@ export class MqttExporter implements Exporter {
     this.config = config;
   }
 
-  private async publishDiscovery(client: MqttClient, context?: ExportContext): Promise<void> {
+  private async publishDiscovery(
+    client: MqttClient,
+    state: MqttStatePayload,
+    context?: ExportContext,
+  ): Promise<void> {
     const slug = context?.userSlug;
     const dataTopic = slug ? `${this.config.topic}/${slug}` : this.config.topic;
     const statusTopic = `${dataTopic}/status`;
@@ -262,13 +310,20 @@ export class MqttExporter implements Exporter {
       sw_version: pkg.version,
     };
 
+    let published = 0;
     for (const metric of HA_METRIC_DEFS) {
+      if (metric.optional && state[metric.key] === undefined) continue;
       const topic = `homeassistant/sensor/${deviceId}/${metric.key}/config`;
+      const value = `value_json.${metric.key}`;
       const payload: Record<string, unknown> = {
         name: metric.name,
         unique_id: `${deviceId}_${metric.key}`,
         state_topic: dataTopic,
-        value_template: `{{ value_json.${metric.key} }}`,
+        // HA renders a missing key as '' and logs a warning for it; 'None' is
+        // its own word for unknown.
+        value_template: metric.optional
+          ? `{{ ${value} if ${value} is defined else 'None' }}`
+          : `{{ ${value} }}`,
         // HA warns about any state_class on a timestamp sensor and keeps no
         // statistics for one.
         ...(metric.deviceClass === 'timestamp' ? {} : { state_class: 'measurement' }),
@@ -280,13 +335,15 @@ export class MqttExporter implements Exporter {
       if (metric.icon) payload.icon = metric.icon;
       if (metric.precision !== undefined) payload.suggested_display_precision = metric.precision;
       if (metric.entityCategory) payload.entity_category = metric.entityCategory;
+      if (metric.enabledByDefault === false) payload.enabled_by_default = false;
 
       await client.publishAsync(topic, JSON.stringify(payload), { qos: 1, retain: true });
+      published++;
     }
 
     await client.publishAsync(statusTopic, 'online', { qos: 1, retain: true });
     const suffix = slug ? ` (user: ${slug})` : '';
-    log.info(`Published HA discovery for ${HA_METRIC_DEFS.length} sensors${suffix}.`);
+    log.info(`Published HA discovery for ${published} sensors${suffix}.`);
   }
 
   async healthcheck(): Promise<ExportResult> {
@@ -353,7 +410,7 @@ export class MqttExporter implements Exporter {
         try {
           if (haDiscovery) {
             await withTimeout(
-              this.publishDiscovery(client, context),
+              this.publishDiscovery(client, state, context),
               OPERATION_TIMEOUT_MS,
               'MQTT discovery publish timed out',
             );

@@ -14,12 +14,12 @@ export const RMSC04_BLE_OPTIONS = {
    * an HCI snoop log of the app.
    *
    * Set, the guest b2 carries this byte instead of a9, and the scale's own body
-   * fat and visceral fat are exported for the first user, but only when the
+   * fat, skeletal muscle and visceral fat are exported for the first user, but only when the
    * scale computed them for the profile we sent. Unset, the guest byte a9 goes
    * out and the payload is the estimate, as before.
    *
    * A string, because YAML reads an unquoted 99 as a decimal number. The byte is
-   * personal and is never logged. Not yet confirmed on hardware.
+   * personal and is never logged. Confirmed on one scale (#434, 2026-10-22).
    */
   rmsc04_profile_byte: z
     .string(PROFILE_BYTE_HINT)

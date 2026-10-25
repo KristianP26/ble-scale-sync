@@ -89,6 +89,7 @@ options:
   user_is_athlete: false
   user_weight_min: 40
   user_weight_max: 150
+  user_estimate_body_composition: true
   out_of_range: warn
   mqtt_enabled: true
   mqtt_auto: true
@@ -149,6 +150,7 @@ schema:
   user_is_athlete: bool
   user_weight_min: int(10,300)
   user_weight_max: int(10,500)
+  user_estimate_body_composition: bool?
   out_of_range: list(warn|skip)
   mqtt_enabled: bool
   mqtt_auto: bool

@@ -118,6 +118,7 @@ users:
     gender: female
     is_athlete: false
     weight_range: { min: 50, max: 70 }
+    estimate_body_composition: false
 global_exporters:
   - type: webhook
     url: "https://hooks.example/one"

@@ -16,7 +16,7 @@ const ownedEnvKeys = new Map<string, Map<string, string>>();
  * only those. A variable from the real environment (Docker `-e`, systemd
  * `Environment=`) still wins over .env, as it does on the first load, and a
  * key something else has rewritten since is left alone. Quiet, unlike
- * dotenv 17's `config()`, which prints a banner on every call.
+ * dotenv's `config()` without `quiet`, which prints a banner on every call.
  */
 export function loadEnvFile(path: string): void {
   // A missing .env is not an error, it is optional; it also means every key

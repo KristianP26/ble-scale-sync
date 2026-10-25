@@ -47,7 +47,8 @@ export const wgerSchema: ExporterSchema = {
 const MEASUREMENT_CATEGORIES: ReadonlyArray<{
   name: string;
   unit: string;
-  value: (d: BodyComposition) => number;
+  /** null when the value was withheld (#497): nothing is sent for it. */
+  value: (d: BodyComposition) => number | null;
 }> = [
   { name: 'Body Fat', unit: '%', value: (d) => d.bodyFatPercent },
   { name: 'Body Water', unit: '%', value: (d) => d.waterPercent },
@@ -155,7 +156,7 @@ export class WgerExporter implements Exporter {
     const categories = await this.resolveCategories();
     for (const cat of MEASUREMENT_CATEGORIES) {
       const value = cat.value(data);
-      if (!Number.isFinite(value) || value <= 0) continue;
+      if (value === null || !Number.isFinite(value) || value <= 0) continue;
       const categoryId = categories.get(cat.name);
       if (categoryId === undefined) continue;
 

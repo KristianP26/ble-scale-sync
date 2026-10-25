@@ -119,6 +119,21 @@ describe('HealthLogExporter', () => {
     expect(types).toHaveLength(5);
   });
 
+  // #497: withheld values (null) are not sent, water included (it is
+  // converted to kg from the percentage).
+  it('sends only the weight when the body composition was withheld', async () => {
+    await new HealthLogExporter(config).export({
+      ...sample,
+      bodyFatPercent: null,
+      waterPercent: null,
+      boneMass: null,
+      muscleMass: null,
+      visceralFat: null,
+      physiqueRating: null,
+    });
+    expect(postedBodies().map((b) => b.type)).toEqual(['WEIGHT']);
+  });
+
   it('skips a visceral fat rating above the 30 HealthLog accepts', async () => {
     await new HealthLogExporter(config).export({ ...sample, visceralFat: 31 });
     const types = postedBodies().map((b) => b.type);

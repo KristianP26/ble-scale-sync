@@ -13,7 +13,7 @@ import type {
   UserProfile,
   BodyComposition,
 } from '../interfaces/scale-adapter.js';
-import { uuid16, buildPayload, type ScaleBodyComp } from './body-comp-helpers.js';
+import { uuid16, buildPayload, noEstimateNote, type ScaleBodyComp } from './body-comp-helpers.js';
 import { matchesDescriptor, type MatchDescriptor } from './match-descriptor.js';
 import { bleLog, errMsg } from '../ble/types.js';
 import { build55aaFrame, frameFault, sum8 } from './renpho-55aa.js';
@@ -490,9 +490,40 @@ class FragmentReassembler {
   }
 }
 
-/** The record's body fat, and its visceral fat when it is 1 to 59. */
+/**
+ * The record's ten segment impedances (#497), or nothing when the record has no
+ * body fat. Diagnostic values, exported whatever happens to the scale's body
+ * fat: the D079 gates and the D022 height gate decide whose composition the
+ * record is, not whether the scale measured. Body fat in the record is taken
+ * as the sign that the scale measured at all; it does not say the record is
+ * this weigh-in's, which the 0x24 and D057 session gates decide, as for the
+ * body fat.
+ */
+function recordSegments(rec: CompositionRecord): ScaleBodyComp {
+  if (!(rec.fatPercent > 0)) return {};
+  const pair = (i: number) => ({
+    at20kHz: rec.impedance20kHz[i],
+    at100kHz: rec.impedance100kHz[i],
+  });
+  return {
+    segmentImpedance: {
+      trunk: pair(0),
+      leftArm: pair(1),
+      rightArm: pair(2),
+      leftLeg: pair(3),
+      rightLeg: pair(4),
+    },
+  };
+}
+
+/**
+ * The record's body fat, its skeletal muscle percentage (#497) and its visceral
+ * fat when it is 1 to 59. buildPayload exports the skeletal muscle only next to
+ * the accepted body fat and inside its band. It matched the Renpho app's figure on
+ * two weigh-ins of one scale; what base the percentage has is not known.
+ */
 function recordComposition(rec: CompositionRecord): ScaleBodyComp {
-  const comp: ScaleBodyComp = { fat: rec.fatPercent };
+  const comp: ScaleBodyComp = { fat: rec.fatPercent, skeletalMuscle: rec.skeletalMusclePercent };
   if (rec.visceralFat >= 1 && rec.visceralFat <= 59) comp.visceralFat = rec.visceralFat;
   return comp;
 }
@@ -509,7 +540,7 @@ function sameProfile(own: OwnProfilePin, profile: UserProfile): boolean {
 }
 
 /**
- * The record's body fat and visceral fat from a session whose b2 carried
+ * The record's body fat, skeletal muscle and visceral fat from a session whose b2 carried
  * ble.rmsc04_profile_byte, or {} (the estimate) with one info line saying why
  * (D079). Reads only the record, the pin and the profile, never the session or
  * the option: by now both may belong to another session or a reload. No line
@@ -540,14 +571,14 @@ function ownProfileComposition(
   }
   if (why !== null) {
     bleLog.info(
-      "Renpho R-MSC04: the scale's body fat and visceral fat are not used for this weigh-in: " +
-        `${why}; using the estimate (#434)`,
+      "Renpho R-MSC04: the scale's body fat, skeletal muscle and visceral fat are not used for " +
+        `this weigh-in: ${why}; ${noEstimateNote(profile) ?? 'using the estimate'} (#434)`,
     );
     return {};
   }
   bleLog.info(
-    "Renpho R-MSC04: using the scale's body fat and visceral fat, computed for the profile " +
-      'sent with ble.rmsc04_profile_byte (#434)',
+    "Renpho R-MSC04: using the scale's body fat, skeletal muscle and visceral fat, computed for " +
+      'the profile sent with ble.rmsc04_profile_byte (#434)',
   );
   return recordComposition(rec);
 }
@@ -621,7 +652,8 @@ class Msc04Session {
  * the session started with no stored records (D057). 0x26 records are stored
  * history of earlier weigh-ins and are never used.
  *
- * Of the record, only the scale's body fat and visceral fat are ever exported.
+ * Of the record's composition, only the scale's body fat, skeletal muscle
+ * percentage (#497) and visceral fat are ever exported.
  * From a session in which we did NOT write our guest b2, only when the profile
  * the scale computed them for matches the user (see
  * PROFILE_HEIGHT_TOLERANCE_CM). From a session with our guest b2 (its [11] a9
@@ -630,8 +662,9 @@ class Msc04Session {
  * and then only through the gates of ownProfileComposition (D079): the record
  * has body fat and BMI, our b2 was written, the scale answered it before it
  * first reported the measurement complete, the weigh-in's user has the
- * profile we sent, and the BMI fits the height we sent. The segment
- * impedances are logged at debug level; no whole-body impedance is derived
+ * profile we sent, and the BMI fits the height we sent. The ten segment
+ * impedances go out as diagnostic values from every record with body fat,
+ * whichever way those gates decide (#497); no whole-body impedance is derived
  * from them, so the reading keeps impedance 0.
  *
  * Routing is by advertised name only (names.exact ['r-msc04']). The device also
@@ -1116,35 +1149,45 @@ export class RenphoMsc04Adapter
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
     const pinned = reading.scaleComposition as PinnedRecord | undefined;
     if (!pinned) return buildPayload(reading.weight, 0, {}, profile);
+    const segments = recordSegments(pinned.rec);
     if (pinned.own) {
       const comp = ownProfileComposition(pinned.rec, pinned.own, profile);
-      return buildPayload(reading.weight, 0, comp, profile);
+      return buildPayload(reading.weight, 0, { ...comp, ...segments }, profile);
     }
     if (pinned.guestProfile) {
       bleLog.info(
-        "Renpho R-MSC04: the scale's body fat and visceral fat were computed for the guest " +
-          'profile we sent, not exported (#434); using the estimate',
+        "Renpho R-MSC04: the scale's body fat, skeletal muscle and visceral fat were computed " +
+          'for the guest profile we sent, not exported (#434); ' +
+          (noEstimateNote(profile) ?? 'using the estimate'),
       );
-      return buildPayload(reading.weight, 0, {}, profile);
+      return buildPayload(reading.weight, 0, segments, profile);
     }
-    return buildPayload(reading.weight, 0, this.scaleComposition(pinned.rec, profile), profile);
+    const comp = this.scaleComposition(pinned.rec, profile);
+    return buildPayload(reading.weight, 0, { ...comp, ...segments }, profile);
   }
 
   /** The scale's own figures, or {} (the profile estimate) when they are not this user's. */
   private scaleComposition(rec: CompositionRecord, profile: UserProfile): ScaleBodyComp {
     if (!(rec.fatPercent > 0)) {
-      bleLog.info('Renpho R-MSC04: the scale reported no body fat, using the estimate');
+      bleLog.info(
+        'Renpho R-MSC04: the scale reported no body fat, ' +
+          (noEstimateNote(profile) ?? 'using the estimate'),
+      );
       return {};
     }
     if (!(rec.bmi > 0)) {
-      bleLog.info('Renpho R-MSC04: the scale reported no BMI, using the estimate');
+      bleLog.info(
+        'Renpho R-MSC04: the scale reported no BMI, ' +
+          (noEstimateNote(profile) ?? 'using the estimate'),
+      );
       return {};
     }
     const scaleHeight = 100 * Math.sqrt(rec.weight / rec.bmi);
     if (Math.abs(scaleHeight - profile.height) > PROFILE_HEIGHT_TOLERANCE_CM) {
       bleLog.info(
         `Renpho R-MSC04: the scale's BMI implies a ${scaleHeight.toFixed(0)} cm profile, ` +
-          `not the configured ${profile.height} cm, so its figures are not used. ` +
+          `not the configured ${profile.height} cm, so its figures are not used` +
+          `${noEstimateNote(profile) ? `; ${noEstimateNote(profile)}` : ''}. ` +
           `It is likely the profile last written to the scale by the Renpho app, ` +
           `which may be another user's.`,
       );

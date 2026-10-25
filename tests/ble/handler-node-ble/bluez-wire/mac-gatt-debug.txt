@@ -1,5 +1,6 @@
 +0ms [debug] D-Bus connection established
 +0ms :1.1 Hello
++0ms :1.1 AddMatch * Device1.Disconnected
 +0ms :1.1 Introspect /org/bluez
 +0ms :1.1 Introspect /org/bluez
 +0ms :1.1 Introspect /org/bluez

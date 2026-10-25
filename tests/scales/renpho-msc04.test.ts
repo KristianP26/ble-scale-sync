@@ -7,7 +7,12 @@ import {
 } from '../../src/scales/renpho-msc04.js';
 import { adapters } from '../../src/scales/index.js';
 import { resolveAdapter } from '../../src/scales/resolve.js';
-import { uuid16, buildPayload } from '../../src/scales/body-comp-helpers.js';
+import {
+  uuid16,
+  buildPayload,
+  type ScaleBodyComp,
+  type SegmentImpedance,
+} from '../../src/scales/body-comp-helpers.js';
 import { bleLog } from '../../src/ble/types.js';
 import type {
   ConnectionContext,
@@ -36,6 +41,18 @@ const REC_1 = Buffer.from('ad040255aa2500240411000025530a00de0c200b', 'hex');
 const REC_2 = Buffer.from('ae0401ef08e4092a00ae0ac10a9007e108250100', 'hex');
 const REC_3 = Buffer.from('af0400ed011101b70008ea', 'hex');
 const RECORD = [REC_1, REC_2, REC_3];
+// The same record's segment impedances, ohm: 20 kHz [12..21], 100 kHz
+// [22..31], each trunk, left arm, right arm, left leg, right leg. flokecom-lab
+// compared all ten with the Renpho app on #117 (2026-09-19).
+const SEG_117: SegmentImpedance = {
+  trunk: { at20kHz: 22.2, at100kHz: 17.4 },
+  leftArm: { at20kHz: 310.4, at100kHz: 275.3 },
+  rightArm: { at20kHz: 305.5, at100kHz: 270.4 },
+  leftLeg: { at20kHz: 227.6, at100kHz: 201.7 },
+  rightLeg: { at20kHz: 234.6, at100kHz: 208.5 },
+};
+/** What a payload from RECORD carries whatever happens to the scale's body fat (#497). */
+const SEGMENTS: ScaleBodyComp = { segmentImpedance: SEG_117 };
 
 // First connection of the same capture: a stored 0x26 history record (age
 // 0x000005ad = 1453 s at [7..10], weight 95.85 kg), which the app acks with b6.
@@ -230,16 +247,38 @@ describe('RenphoMsc04Adapter', () => {
       expect(adapter.isFinal(r!)).toBe(true);
     });
 
-    it("exports the scale's body fat and visceral fat, and muscle mass as lean minus bone", () => {
+    it("exports the scale's body fat, skeletal muscle and visceral fat, and muscle mass as lean minus bone", () => {
       const adapter = settled();
       const r = feed(adapter, RECORD)!;
       const payload = adapter.computeMetrics(r, PROFILE_187);
       expect(payload.bodyFatPercent).toBe(23.7);
       expect(payload.visceralFat).toBe(8);
+      // The scale's own figure, [37..38] / 10 (#497).
+      expect(payload.skeletalMusclePercent).toBe(43.9);
       expect(payload.impedance).toBe(0);
-      expect(payload).toEqual(buildPayload(95.55, 0, { fat: 23.7, visceralFat: 8 }, PROFILE_187));
+      expect(payload).toEqual(
+        buildPayload(
+          95.55,
+          0,
+          { fat: 23.7, visceralFat: 8, skeletalMuscle: 43.9, ...SEGMENTS },
+          PROFILE_187,
+        ),
+      );
+      // The ten segment impedances, as the debug line prints them (#497).
+      expect(payload).toMatchObject({
+        impedanceTrunk20kHz: 22.2,
+        impedanceTrunk100kHz: 17.4,
+        impedanceLeftArm20kHz: 310.4,
+        impedanceLeftArm100kHz: 275.3,
+        impedanceRightArm20kHz: 305.5,
+        impedanceRightArm100kHz: 270.4,
+        impedanceLeftLeg20kHz: 227.6,
+        impedanceLeftLeg100kHz: 201.7,
+        impedanceRightLeg20kHz: 234.6,
+        impedanceRightLeg100kHz: 208.5,
+      });
       // Not the scale's skeletal muscle percentage of body weight (#253).
-      expect(Math.abs(payload.muscleMass - 0.439 * 95.55)).toBeGreaterThan(20);
+      expect(Math.abs(payload.muscleMass! - 0.439 * 95.55)).toBeGreaterThan(20);
       assertPayloadRanges(payload);
     });
 
@@ -364,7 +403,8 @@ describe('RenphoMsc04Adapter', () => {
       const r = feed(adapter, RECORD)!;
       // 95.55 kg at BMI 27.3 is a 187.1 cm profile: 4.1 cm from 183, 0.9 from 188.
       const short = defaultProfile({ height: 183 });
-      expect(adapter.computeMetrics(r, short)).toEqual(buildPayload(95.55, 0, {}, short));
+      // The segment impedances go out all the same (#497).
+      expect(adapter.computeMetrics(r, short)).toEqual(buildPayload(95.55, 0, SEGMENTS, short));
       const tall = defaultProfile({ height: 188 });
       expect(adapter.computeMetrics(r, tall).bodyFatPercent).toBe(23.7);
     });
@@ -707,8 +747,21 @@ describe('RenphoMsc04Adapter connect handshake (#434, D038)', () => {
     adapter.parseCharNotification(IND, FINAL);
     const r = feed(adapter, RECORD)!;
     expect(adapter.isFinal(r)).toBe(true);
+    // #497: with the estimate off, the line says what goes out instead.
+    const off = { ...PROFILE_187, estimateBodyComposition: false };
+    info.mockClear();
+    expect(adapter.computeMetrics(r, off).bodyFatPercent).toBeNull();
+    expect(info.mock.calls.map((c) => String(c[0]))).toEqual([
+      "Renpho R-MSC04: the scale's body fat, skeletal muscle and visceral fat were computed " +
+        'for the guest profile we sent, not exported (#434); exporting no body composition ' +
+        '(estimate_body_composition is off)',
+    ]);
+    info.mockClear();
     // PROFILE_187 passes the D022 height gate, so only the guest rule stops it.
-    expect(adapter.computeMetrics(r, PROFILE_187)).toEqual(buildPayload(95.55, 0, {}, PROFILE_187));
+    // The segment impedances are not the guest profile's, so they go out (#497).
+    expect(adapter.computeMetrics(r, PROFILE_187)).toEqual(
+      buildPayload(95.55, 0, SEGMENTS, PROFILE_187),
+    );
     const infoLines = info.mock.calls.map((c) => String(c[0]));
     expect(infoLines.some((l) => l.includes('not exported'))).toBe(true);
   });
@@ -721,7 +774,7 @@ describe('RenphoMsc04Adapter connect handshake (#434, D038)', () => {
     const r = feed(adapter, [STATUS_LOCKED, STATUS_DONE, ...RECORD]);
     expect(r).not.toBeNull();
     expect(adapter.computeMetrics(r!, PROFILE_187)).toEqual(
-      buildPayload(95.55, 0, {}, PROFILE_187),
+      buildPayload(95.55, 0, SEGMENTS, PROFILE_187),
     );
     const infoLines = info.mock.calls.map((c) => String(c[0]));
     expect(infoLines.some((l) => l.includes('not exported'))).toBe(true);
@@ -740,7 +793,7 @@ describe('RenphoMsc04Adapter connect handshake (#434, D038)', () => {
     const r2 = feed(adapter, RECORD)!;
     expect(adapter.computeMetrics(r2, PROFILE_187).bodyFatPercent).toBe(23.7);
     expect(adapter.computeMetrics(r1, PROFILE_187)).toEqual(
-      buildPayload(95.55, 0, {}, PROFILE_187),
+      buildPayload(95.55, 0, SEGMENTS, PROFILE_187),
     );
   });
 });
@@ -990,7 +1043,7 @@ describe('RenphoMsc04Adapter BLE_RMSC04_HANDSHAKE (#434)', () => {
     expect(r).not.toBeNull();
     expect(adapter.computeMetrics(r!, PROFILE_187).bodyFatPercent).toBe(23.7);
     const short = defaultProfile({ height: 183 });
-    expect(adapter.computeMetrics(r!, short)).toEqual(buildPayload(95.55, 0, {}, short));
+    expect(adapter.computeMetrics(r!, short)).toEqual(buildPayload(95.55, 0, SEGMENTS, short));
   });
 
   it('names the mode in the summary', async () => {
@@ -1121,7 +1174,7 @@ const REPLY_B3 = Buffer.from('55aa2300030107012e', 'hex');
 // STATUS_DONE again, with seq 04 (constructed): a second 0x11 in the session.
 const STATUS_DONE_AGAIN = Buffer.from('55aa20000504110100508a', 'hex');
 
-const USED = "Renpho R-MSC04: using the scale's body fat and visceral fat";
+const USED = "Renpho R-MSC04: using the scale's body fat, skeletal muscle and visceral fat";
 const REASON = {
   noFat: 'the scale reported no body fat',
   notWritten: 'the profile frame with ble.rmsc04_profile_byte was not confirmed as written',
@@ -1134,8 +1187,8 @@ const REASON = {
   bmi: "the scale's BMI does not fit the height sent to it",
 };
 const notUsed = (why: string): string =>
-  "Renpho R-MSC04: the scale's body fat and visceral fat are not used for this weigh-in: " +
-  `${why}; using the estimate (#434)`;
+  "Renpho R-MSC04: the scale's body fat, skeletal muscle and visceral fat are not used for " +
+  `this weigh-in: ${why}; using the estimate (#434)`;
 
 describe('RenphoMsc04Adapter ble.rmsc04_profile_byte (#434, D079)', () => {
   let spies: ReturnType<typeof spyAllLevels>;
@@ -1174,7 +1227,10 @@ describe('RenphoMsc04Adapter ble.rmsc04_profile_byte (#434, D079)', () => {
   function expectExported(adapter: RenphoMsc04Adapter, r: ScaleReading | null, p = OWN): void {
     expect(r).not.toBeNull();
     const { payload, info } = metrics(adapter, r!, p);
-    expect(payload).toEqual(buildPayload(95.55, 0, { fat: 23.7, visceralFat: 8 }, p));
+    expect(payload).toEqual(
+      buildPayload(95.55, 0, { fat: 23.7, visceralFat: 8, skeletalMuscle: 43.9, ...SEGMENTS }, p),
+    );
+    expect(payload.skeletalMusclePercent).toBe(43.9);
     expect(info).toEqual([
       `${USED}, computed for the profile sent with ble.rmsc04_profile_byte (#434)`,
     ]);
@@ -1185,10 +1241,12 @@ describe('RenphoMsc04Adapter ble.rmsc04_profile_byte (#434, D079)', () => {
     r: ScaleReading | null,
     why: string,
     p = OWN,
+    // The segment impedances go out whichever way the gates decide (#497).
+    comp: ScaleBodyComp = SEGMENTS,
   ): void {
     expect(r).not.toBeNull();
     const { payload, info } = metrics(adapter, r!, p);
-    expect(payload).toEqual(buildPayload(95.55, 0, {}, p));
+    expect(payload).toEqual(buildPayload(95.55, 0, comp, p));
     expect(info).toEqual([notUsed(why)]);
   }
 
@@ -1230,7 +1288,7 @@ describe('RenphoMsc04Adapter ble.rmsc04_profile_byte (#434, D079)', () => {
     expect(logged(spies)).toEqual([]);
   });
 
-  it("exports the scale's body fat and visceral fat from a full weigh-in", async () => {
+  it("exports the scale's body fat, skeletal muscle and visceral fat from a full weigh-in", async () => {
     const { adapter } = await ownSession();
     const r = feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
     expectExported(adapter, r);
@@ -1423,7 +1481,8 @@ describe('RenphoMsc04Adapter ble.rmsc04_profile_byte (#434, D079)', () => {
     const noFat = Buffer.from('af040000011101b70008fd', 'hex');
     const { adapter } = await ownSession();
     const r = feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, REC_1, REC_2, noFat]);
-    expectEstimate(adapter, r, REASON.noFat);
+    // Nor its segment impedances: no body fat, no sign the scale measured (#497).
+    expectEstimate(adapter, r, REASON.noFat, OWN, {});
   });
 
   it('has no effect with BLE_RMSC04_HANDSHAKE=time: no b2, the D022 gate decides', async () => {
@@ -1457,6 +1516,32 @@ describe('RenphoMsc04Adapter ble.rmsc04_profile_byte (#434, D079)', () => {
     }
   });
 
+  // #497: with the estimate off, a failed gate exports no body composition,
+  // and the line says so instead of promising the estimate.
+  it('exports no body composition, and says so, when the user turned the estimate off', async () => {
+    const off: UserProfile = { ...OWN, estimateBodyComposition: false };
+    const { adapter } = await ownSession('9e', off);
+    const r = feed(adapter, [FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]);
+    const { payload, info } = metrics(adapter, r!, off);
+    expect(payload).toEqual(buildPayload(95.55, 0, SEGMENTS, off));
+    expect(payload.bodyFatPercent).toBeNull();
+    expect(info).toEqual([
+      "Renpho R-MSC04: the scale's body fat, skeletal muscle and visceral fat are not used for " +
+        `this weigh-in: ${REASON.notAnswered}; exporting no body composition ` +
+        '(estimate_body_composition is off) (#434)',
+    ]);
+  });
+
+  it("still exports the scale's body fat with the estimate off when the gates pass", async () => {
+    const off: UserProfile = { ...OWN, estimateBodyComposition: false };
+    const { adapter } = await ownSession('9e', off);
+    expectExported(
+      adapter,
+      feed(adapter, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD]),
+      off,
+    );
+  });
+
   it('keeps everything the gate reads pinned to the reading', async () => {
     // (a) A reload that unsets the option does not change a pinned record.
     const a = (await ownSession()).adapter;
@@ -1469,7 +1554,7 @@ describe('RenphoMsc04Adapter ble.rmsc04_profile_byte (#434, D079)', () => {
     const r2 = feed(b, [REPLY_B2, FINAL, STATUS_LOCKED, STATUS_DONE, ...RECORD])!;
     b.configure({ rmsc04ProfileByte: '9e' });
     const { payload, info } = metrics(b, r2);
-    expect(payload).toEqual(buildPayload(95.55, 0, {}, OWN));
+    expect(payload).toEqual(buildPayload(95.55, 0, SEGMENTS, OWN));
     expect(info.some((l) => l.includes('not exported'))).toBe(true);
 
     // (c) Nor does the next session starting before computeMetrics runs (#394).

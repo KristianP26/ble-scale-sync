@@ -1,375 +1,111 @@
 # Contributing to BLE Scale Sync
 
-Thank you for your interest in contributing! This guide covers everything you need to get started.
+Bugs and feature requests go to [GitHub Issues](https://github.com/KristianP26/ble-scale-sync/issues), security reports to the address in [SECURITY.md](SECURITY.md).
 
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) 22.23.4+, 24.22.1+ or 26.12.1+
-- [Python](https://python.org/) 3.9 or later (only needed for Garmin upload)
-- A Bluetooth Low Energy (BLE) capable adapter (for testing with real hardware)
+- [Python](https://python.org/) 3.12 or later, only for the Garmin exporter and the Python tests
+- A Bluetooth Low Energy adapter, for testing with a real scale
 
 ## Development Setup
 
-Contributors work from a clone. `npx ble-scale-sync` is the end-user path and is documented on the site.
-
 ```bash
-# Clone and install
 git clone https://github.com/KristianP26/ble-scale-sync.git
 cd ble-scale-sync
 npm install
 
-# Python venv (only for Garmin exporter)
+# Only for the Garmin exporter and the Python tests
 python3 -m venv venv
-source venv/bin/activate        # On Windows: venv\Scripts\activate
+source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## Branches
+`npm run setup` starts the setup wizard and `npm start` runs the app from the source. Work on a branch from `dev`: pull requests target `dev`, and `main` holds released code.
 
-| Branch | Purpose                                                      |
-| ------ | ------------------------------------------------------------ |
-| `main` | Stable release branch                                        |
-| `dev`  | Active development — PRs and new features target this branch |
+## Checks
 
-CI runs on both `main` and `dev` (push + pull request).
-
-## Running Tests
+CI runs these on pushes and pull requests to `dev` and `main`, on Node 22, 24 and 26:
 
 ```bash
-npm test                    # Run all tests (Vitest)
-npx vitest run tests/exporters/mqtt.test.ts  # Single file
+npm run lint                # ESLint (npm run lint:fix to fix)
+npm run format:check        # Prettier (npm run format to fix)
+npx tsc --noEmit            # type check
+npm test                    # Vitest
+npx vitest run tests/exporters/mqtt.test.ts   # one file
 ```
 
-### Test Coverage
-
-Unit tests use [Vitest](https://vitest.dev/) and cover:
-
-- **Body composition math** — `body-comp-helpers.ts`
-- **Config schemas** — Zod validation, defaults, error formatting, slug generation
-- **Config loading** — YAML parsing, env reference resolution, config source detection, BLE config loader, env overrides
-- **Config resolution** — user profile resolution, runtime config extraction, exporter merging, single-user convenience
-- **Config writing** — atomic file write, write lock serialization, YAML comment preservation, debounced weight updates
-- **User matching** — 4-tier weight matching, all strategies (nearest/log/ignore), overlapping ranges, drift detection
-- **Environment validation** — `validate-env.ts` (all validation rules and edge cases)
-- **Scale adapters** — `parseNotification()`, `matches()`, `isComplete()`, `computeMetrics()`, and `onConnected()` for all 41 adapters
-- **Exporters** — config parsing, MQTT publish/HA discovery, MQTT multi-user topic routing + per-user HA discovery, Garmin subprocess, Webhook/InfluxDB/Ntfy delivery, ExportContext, ntfy drift warning
-- **Multi-user flow** — matching → profile resolution → exporter resolution → ExportContext construction, strategy fallback, tiebreak with last_known_weight
-- **Orchestrator** — healthcheck runner, export dispatch, parallel execution, partial/total failure handling
-- **BLE shared logic** — `waitForRawReading()` in legacy, onConnected, and multi-char modes; disconnect handling
-- **BLE utilities** — `formatMac()`, `normalizeUuid()`, `sleep()`, `withTimeout()`, abort signal handling
-- **Logger** — `createLogger()`, `setLogLevel()`
-- **Utilities** — shared retry logic (`withRetry`), error conversion (`errMsg`)
-- **Setup wizard** — runner (step ordering, back navigation, edit mode), user profile prompts (validation, lbs→kg conversion, slug generation), exporter schema-driven field rendering, non-interactive mode (validation + slug enrichment), platform detection (OS, Docker, Python)
-
-## Linting & Formatting
+CI also runs the Python tests. Run them locally when you change Python code:
 
 ```bash
-npm run lint                # ESLint check
-npm run lint:fix            # ESLint auto-fix
-npm run format              # Prettier auto-format
-npm run format:check        # Prettier check (CI)
+python -m unittest discover -s garmin-scripts/tests -v
+python -m unittest discover -s firmware/tests -v
 ```
+
+For a change to the website in `docs/`, `npm run docs:dev` serves it locally and `npm run docs:build` fails on a dead link. `npm run check:counts` checks the adapter and exporter counts on the public pages.
 
 ## Code Style
 
-- **ES Modules** — `"type": "module"` in `package.json`; imports use `.js` extension (TypeScript with Node16 module resolution)
-- **TypeScript strict mode** — target ES2022, module Node16
-- **Prettier** — semicolons, single quotes, trailing commas, 100 char width
-- **ESLint** — typescript-eslint recommended; unused vars prefixed with `_` are allowed
-
-Both ESLint and Prettier are enforced in CI.
+- ES Modules (`"type": "module"`): imports use the `.js` extension.
+- TypeScript strict mode, target ES2022, module resolution Node16.
+- Prettier: semicolons, single quotes, trailing commas, 100 characters per line.
+- ESLint with typescript-eslint recommended; prefix an unused variable with `_`.
 
 ## Project Structure
 
-```
-ble-scale-sync/
-├── .github/
-│   └── workflows/
-│       ├── ci.yml                   # CI: lint, format, typecheck, tests (Node 22/24/26), python-check
-│       ├── docker.yml               # Docker: multi-arch build + GHCR push on release
-│       ├── docker-cleanup.yml       # Prune old GHCR image tags
-│       ├── docs.yml                 # VitePress docs deploy to Cloudflare Pages
-│       └── worker.yml               # Deploy stats Cloudflare Worker
-├── src/
-│   ├── index.ts                     # The one bin: dispatches subcommands (ble-scale-sync <cmd>)
-│   ├── run.ts                       # The run path itself (single/multi-user flow, SIGHUP reload, heartbeat)
-│   ├── cli-dispatch.ts              # Pure argument classification (subcommand vs flag)
-│   ├── cli-help.ts                  # Help text shared by both entry points
-│   ├── cli-invocation.ts            # Was this started via npm script, npx, or the bin? Shapes the hints
-│   ├── setup-garmin.ts              # ble-scale-sync setup-garmin (runs the packaged Python helper)
-│   ├── garmin-cli.ts                # Argument translation + Python version check for setup-garmin
-│   ├── orchestrator.ts              # Export dispatch, healthchecks, partial/total failure handling
-│   ├── diagnose.ts                  # ble-scale-sync diagnose / npm run diagnose (BLE troubleshooting tool)
-│   ├── scan.ts                      # BLE device scanner utility (ble-scale-sync scan / npm run scan)
-│   ├── logger.ts                    # createLogger, setLogLevel (structured logging)
-│   ├── update-check.ts              # Optional anonymous version check + stats ping
-│   ├── validate-env.ts              # .env validation & typed config loader (legacy path)
-│   ├── config/
-│   │   ├── schema.ts                # Zod schemas (AppConfig, UserConfig) + WeightUnit
-│   │   ├── load.ts                  # Unified config loader (YAML + .env fallback)
-│   │   ├── resolve.ts               # Config → runtime types (UserProfile, exporters)
-│   │   ├── validate-cli.ts          # CLI entry for npm run validate
-│   │   ├── slugify.ts               # Slug generation + uniqueness validation
-│   │   ├── user-matching.ts         # Weight-based multi-user matching (4-tier)
-│   │   └── write.ts                 # Atomic YAML write + debounced weight updates
-│   ├── ble/
-│   │   ├── index.ts                 # OS detection + handler barrel (scanAndReadRaw)
-│   │   ├── types.ts                 # ScanOptions, ScanResult, constants, utilities
-│   │   ├── shared.ts                # waitForRawReading(): one GATT reading session
-│   │   ├── session/                 # BleChar/BleDevice ports, char wiring, raw capture
-│   │   ├── async-queue.ts           # Async notification queue for GATT handlers
-│   │   ├── loopback.ts              # In-process loopback handler (tests)
-│   │   ├── handler-node-ble/        # Linux native: node-ble (BlueZ D-Bus) (split: dbus, connection, discovery, freshness, connect, gatt, broadcast, scan, scan-stages)
-│   │   ├── handler-noble-shared/    # Shared Noble logic, driver injected (split: types, char, peripheral, gatt, state, connect, discovery, broadcast)
-│   │   ├── handler-noble.ts         # macOS native: @stoprocent/noble (thin entrypoint)
-│   │   ├── handler-noble-legacy.ts  # Windows native: @abandonware/noble (thin entrypoint)
-│   │   ├── handler-mqtt-proxy/      # ESP32 proxy over MQTT (split: client, topics, gatt, scan, watcher, display)
-│   │   ├── handler-esphome-proxy/   # ESPHome BT proxy over Native API (split: client, scan, advert)
-│   │   ├── handler-ha-bluetooth/    # Home Assistant websocket transport, broadcast only
-│   │   ├── embedded-broker.ts       # Embedded aedes MQTT broker for ESP32 proxy
-│   │   └── mqtt-proxy-bootstrap.ts  # First-run scan + adapter pin for ESP32 proxy
-│   ├── exporters/
-│   │   ├── index.ts                 # Barrel re-exports (config loader, registry)
-│   │   ├── registry.ts              # Self-describing exporter registry (schemas + factories)
-│   │   ├── config.ts                # Exporter env validation + config parsing
-│   │   ├── garmin.ts                # Garmin Connect (Python subprocess)
-│   │   ├── strava.ts                # Strava OAuth2 (per-user only)
-│   │   ├── strava-setup.ts          # One-time Strava OAuth (npm run setup-strava)
-│   │   ├── mqtt.ts                  # MQTT + Home Assistant auto-discovery
-│   │   ├── webhook.ts               # Generic HTTP webhook
-│   │   ├── influxdb.ts              # InfluxDB v2 (line protocol)
-│   │   ├── ntfy.ts                  # Ntfy push notifications
-│   │   ├── telegram.ts              # Telegram bot notifications
-│   │   ├── intervals.ts             # Intervals.icu wellness records
-│   │   └── file.ts                  # Local file exporter (CSV / JSONL)
-│   ├── wizard/
-│   │   ├── index.ts                 # Entry for npm run setup
-│   │   ├── types.ts                 # WizardStep, WizardContext, PromptProvider
-│   │   ├── runner.ts                # Step sequencer (sequential + edit mode)
-│   │   ├── non-interactive.ts       # Non-interactive validation + slug enrichment
-│   │   ├── platform.ts              # OS/Docker/Python detection
-│   │   ├── prompt-provider.ts       # Real + mock prompt providers (DI)
-│   │   ├── ui.ts                    # Banner, icons, section boxes, chalk helpers
-│   │   └── steps/
-│   │       ├── index.ts             # Step registry (WIZARD_STEPS)
-│   │       ├── welcome.ts           # Banner + edit mode detection
-│   │       ├── ble.ts               # BLE scale discovery / manual MAC entry
-│   │       ├── users.ts             # User profile setup
-│   │       ├── exporters.ts         # Schema-driven exporter selection
-│   │       ├── garmin-auth.ts       # Garmin Connect authentication
-│   │       ├── runtime.ts           # Runtime settings (continuous, cooldown)
-│   │       ├── validate.ts          # Exporter connectivity tests
-│   │       └── summary.ts           # Config review + YAML save
-│   ├── utils/
-│   │   ├── retry.ts                 # Shared retry utility (withRetry)
-│   │   └── error.ts                 # errMsg (unknown → string)
-│   ├── interfaces/
-│   │   ├── scale-adapter.ts         # ScaleAdapter interface & shared types
-│   │   ├── exporter.ts              # Exporter interface & ExportResult
-│   │   ├── exporter-schema.ts       # ExporterSchema for self-describing exporters
-│   │   └── display-notifier.ts      # DisplayNotifier capability (transport-agnostic display/beep)
-│   └── scales/                      # One file per adapter; a selection follows,
-│                                    # see index.ts for the authoritative registry
-│       ├── index.ts                 # Adapter registry (match.priority decides, generic is 0)
-│       ├── body-comp-helpers.ts     # Shared body-comp utilities
-│       ├── qn-scale.ts              # QN / Renpho (incl. ES-26M, ES-30M) / Senssun / Sencor
-│       ├── renpho.ts                # Renpho ES-WBE28
-│       ├── renpho-es26bb.ts         # Renpho ES-26BB-B
-│       ├── mi-scale-2.ts            # Xiaomi Mi Scale 2
-│       ├── yunmai.ts                # Yunmai Signal / Mini / SE
-│       ├── eufy-p2.ts               # Eufy P2 / P2 Pro (T9148/T9149, AES-128 handshake)
-│       ├── eufy-c20-p3.ts           # Eufy C20 / P3 (T9130/T9150, broadcast only)
-│       ├── beurer-sanitas.ts        # Beurer BF700/710/800, Sanitas SBF70/75
-│       ├── sanitas-sbf72.ts         # Sanitas SBF72/73, Beurer BF915
-│       ├── soehnle.ts               # Soehnle Shape / Style
-│       ├── medisana-bs44x.ts        # Medisana BS430/440/444
-│       ├── trisa.ts                 # Trisa Body Analyze
-│       ├── es-cs20m.ts              # ES-CS20M
-│       ├── exingtech-y1.ts          # Exingtech Y1 (vscale)
-│       ├── excelvan-cf369.ts        # Excelvan CF369
-│       ├── hesley.ts                # Hesley (YunChen)
-│       ├── inlife.ts                # Inlife (fatscale)
-│       ├── digoo.ts                 # Digoo DG-SO38H (Mengii)
-│       ├── senssun.ts               # Senssun Fat
-│       ├── one-byone.ts             # 1byone / Eufy C1 / Eufy P1
-│       ├── active-era.ts            # Active Era BF-06
-│       ├── mgb.ts                   # MGB (Swan / Icomon / YG)
-│       ├── hoffen.ts                # Hoffen BS-8107
-│       ├── hutbit.ts                # Hutbit / Lefu FFB0 "AC02" family
-│       ├── robi-s9.ts               # Robi S9
-│       ├── silvergear-108.ts        # Silvergear 108 (broadcast only)
-│       ├── senssun-if-b7.ts         # Senssun IF_B7 / Grifema GA2001 (broadcast only)
-│       ├── okok-chipsea.ts          # OKOK / Chipsea broadcast, C0 and 2.0 (broadcast only)
-│       ├── etekcity-fit8s.ts        # Etekcity Fit 8S (broadcast only)
-│       ├── picooc-mini-lite.ts      # PICOOC Mini Lite (PICOOC-L, broadcast only)
-│       ├── and-uc352ble.ts          # A&D UC-352BLE (SIG WSS, bonded)
-│       └── standard-gatt.ts         # Generic BCS/WSS catch-all
-├── tests/
-│   ├── body-comp-helpers.test.ts    # Body-comp math
-│   ├── validate-env.test.ts         # .env validation
-│   ├── orchestrator.test.ts         # Healthchecks + export dispatch
-│   ├── multi-user-flow.test.ts      # Multi-user integration
-│   ├── logger.test.ts               # Logger utility
-│   ├── update-check.test.ts         # Update check + stats ping
-│   ├── helpers/
-│   │   └── scale-test-utils.ts      # Mock peripheral + shared helpers
-│   ├── wizard/                      # Runner, users, exporters, non-interactive, platform
-│   ├── config/                      # Schema, slugify, load, resolve, write, matching
-│   ├── ble/                         # Shared logic, utilities, handlers, abort signal
-│   ├── utils/                       # Retry, error
-│   ├── scales/                      # One test file per adapter, plus shared guards
-│   └── exporters/                   # config, garmin, mqtt (+multi-user), webhook, influxdb,
-│                                    # ntfy, telegram, intervals, strava, file, context, healthcheck, registry, index
-├── ble-scale-sync-addon/            # Home Assistant Supervisor Add-on
-│   ├── Dockerfile                   # Thin layer on GHCR image + jq/curl/run.sh
-│   ├── build.yaml                   # Multi-arch build config
-│   ├── config.yaml                  # Add-on manifest (options schema, HA services, perms)
-│   ├── run.sh                       # /data/options.json → config.yaml → app start
-│   ├── addon-config.mjs             # Persist last_known_weight across restarts
-│   ├── DOCS.md                      # Add-on user docs (shown in HA UI)
-│   ├── CHANGELOG.md                 # Add-on version history
-│   ├── icon.png, logo.png
-│   └── translations/
-├── firmware/                        # ESP32 BLE proxy firmware (MicroPython)
-│   ├── main.py, boot.py, ble_bridge.py
-│   ├── board_*.py                   # Per-board pin/display setup (Atom Echo, S3, Guition)
-│   ├── ui.py, beep.py, panel_init_*.py
-│   ├── flash.sh                     # Board flashing helper
-│   ├── mip-packages.txt, requirements-flash.txt, config.json.example
-│   └── tools/
-├── worker/                          # Cloudflare Worker for stats.blescalesync.dev
-│   ├── src/, wrangler.toml, package.json, tsconfig.json
-├── garmin-scripts/
-│   ├── garmin_upload.py             # Garmin uploader (JSON stdin → JSON stdout)
-│   └── setup_garmin.py              # One-time Garmin auth setup
-├── docs/                            # VitePress site → blescalesync.dev
-│   ├── index.md, exporters.md, multi-user.md, body-composition.md
-│   ├── troubleshooting.md, changelog.md, alternatives.md, faq.md
-│   ├── guide/
-│   │   ├── getting-started.md, configuration.md, supported-scales.md
-│   │   ├── home-assistant-addon.md, esp32-proxy.md, esphome-proxy.md
-│   │   └── auto-update.md
-│   └── public/, images/
-├── drivers/                         # Bundled vendor BLE drivers / helper binaries
-├── repository.yaml                  # HA add-on repository manifest (one-click install)
-├── config.yaml.example              # Annotated config template
-├── docker-compose.example.yml       # Example Compose (native BLE)
-├── docker-compose.mqtt-proxy.yml    # Example Compose (ESP32 MQTT proxy)
-├── Dockerfile                       # Multi-arch image (node:22-slim + BlueZ + Python)
-├── docker-entrypoint.sh             # Docker entrypoint (start/setup/scan/validate/help)
-├── CONTRIBUTING.md                  # This file
-├── CHANGELOG.md                     # Version history (Keep a Changelog format)
-├── CODE_OF_CONDUCT.md
-├── SECURITY.md
-├── PORTING.md                       # Notes for porting adapters from openScale
-├── .env.example                     # Legacy .env template (config.yaml preferred)
-├── .prettierrc, eslint.config.js
-├── tsconfig.json, tsconfig.eslint.json
-├── .nvmrc, .gitattributes, .dockerignore, .gitignore
-├── package.json, package-lock.json, requirements.txt
-├── LICENSE
-└── README.md
+```text
+src/                   TypeScript source of the app and its CLI
+src/ble/               BLE transports: BlueZ, noble, ESP32 proxy, ESPHome proxy, HA Bluetooth
+src/scales/            one adapter per scale family, plus the registry in index.ts
+src/exporters/         one exporter per target, plus the registry in registry.ts
+src/config/            config.yaml schema, loading and user matching
+src/wizard/            the interactive setup wizard
+tests/                 Vitest tests; tests/fixtures/ holds recorded scale sessions
+garmin-scripts/        Python helper that uploads to Garmin Connect
+firmware/              MicroPython firmware for the ESP32 BLE proxy (boards: PORTING.md)
+ble-scale-sync-addon/  Home Assistant add-on, a thin layer over the Docker image
+worker/                Cloudflare Worker behind the update check and the usage stats
+docs/                  VitePress source of blescalesync.dev
+drivers/               bundled vendor BLE drivers and helper binaries
+.github/workflows/     CI, Docker image, docs deploy, release-please
 ```
 
-## Adding a New Scale Adapter
+## Adding a Scale Adapter
 
-To support a new scale brand, create a class that implements `ScaleAdapter` in `src/scales/`:
+1. Create `src/scales/your-brand.ts` with a class that implements `ScaleAdapter` from `src/interfaces/scale-adapter.ts`.
+2. Set `match` (its `priority` and the names, services or characteristics the adapter claims) and implement `matches()` to recognize the scale from its advertisement.
+3. Implement the parser for the scale's frames (`parseNotification()`, or the broadcast hooks for a scale that only advertises). Return the weight in kg: nothing after the adapter converts units.
+4. Register the adapter in `src/scales/index.ts`, before the generic `StandardGattScaleAdapter`, which stays last. Precedence comes from `match.priority`, highest first (`src/scales/resolve.ts`); array position only breaks a tie. The generic adapter has priority `0`, and so does an adapter without one, so give yours a priority above it.
+5. Add tests in `tests/scales/` with the helpers from `tests/helpers/scale-test-utils.ts`, and a representative advertisement for your adapter in `tests/scales/registry-collision.test.ts`.
+6. Run `npm run check:counts:write` to update the adapter count on the public pages, and add the scale to `docs/guide/supported-scales.md`.
 
-1. Create `src/scales/your-brand.ts` implementing the interface from `src/interfaces/scale-adapter.ts`
-2. Define `matches()` to recognize the device by its BLE advertisement name
-3. Implement `parseNotification()` for the brand's data protocol
-4. Register the adapter in `src/scales/index.ts` and give it a `match.priority` — **priority decides, not array position** (the resolver sorts by `match.priority`, higher wins; the generic catch-all sits at `0`, so an adapter that omits `priority` also defaults to `0` and will not reliably beat it)
-5. Return the weight in kg: if the scale sends pounds or another unit, convert it in your parser, because nothing after it does
-6. Add tests in `tests/scales/` using mock utilities from `tests/helpers/scale-test-utils.ts`
+Test frames must come from the real scale, copied byte for byte from a capture (btsnoop, PacketLogger) or from a `DEBUG=true` log of ble-scale-sync, which prints the frames it receives. A frame built from your own reading of the format only tests that reading. Edge cases such as a bad checksum can start from a real frame with a few bytes changed; say in the test which ones. A recorded session can also go in `tests/fixtures/<family>/`, where the contract tests in `tests/scales/contracts/` replay it. Include the capture or log in the pull request, or link the issue it comes from.
 
-Test frames have to come from the real scale, copied byte for byte from a capture (btsnoop, PacketLogger) or from a DEBUG log of ble-scale-sync, which prints the frames it receives. A frame you build from your own reading of the format only tests that reading: an early Silvergear 108 test encoded a wrong offset and a wrong frame type and still passed, and the real layout only showed up in a capture. Edge cases such as a bad checksum or an out-of-range value can start from a real frame with a few bytes changed; say in the test which ones. Please include the capture or log in the PR, or link the issue it comes from.
+The collision test keeps one representative advertisement for the generic adapter and for all 41 adapters with their own protocol, and fails when a new or widened `matches()` takes over another adapter's scale.
 
-Captures can contain your weight, profile and device address. For the capture session you can use a made-up user (age, height, sex) in your config. If you'd rather not post it publicly, email it to security@blescalesync.dev and mention the PR.
+A capture can contain your weight, profile and the device address. Use a made-up user (age, height, sex) in your config for the capture session. If you do not want to post it publicly, email it to security@blescalesync.dev and mention the pull request.
 
-## Adding a New Exporter
+## Adding an Exporter
 
-To add a new export target:
+1. Create `src/exporters/your-exporter.ts` that implements `Exporter` from `src/interfaces/exporter.ts`. Export an `ExporterSchema` with the fields, display info, `supportsGlobal` and `supportsPerUser`, and accept the optional `ExportContext` in `export(data, context?)` for multi-user setups. Set `supportsBackdate` when the target can record a past measurement at its own time.
+2. Add the name to `EXPORTER_NAMES` in `src/exporters/config.ts`, together with the parsing of its `.env` variables.
+3. Map the parsed values to the config fields in `loadEnvConfig()` in `src/config/env-load.ts`, and add the minimal variables to the test `builds every known exporter from its minimal .env variables` in `tests/config/load.test.ts`.
+4. Add a `{ schema, factory }` entry in `src/exporters/registry.ts`, the only place that constructs exporters.
+5. Add tests in `tests/exporters/`, including the `ExportContext` behavior, and raise the expected count in `tests/exporters/registry.test.ts`.
+6. Document the fields in a section of `docs/exporters.md` (and in its historical readings table when `supportsBackdate` is set), the variables in `.env.example`, and a commented example in `config.yaml.example`: under `users[].exporters` when `supportsGlobal` is `false`, under `global_exporters` otherwise.
+7. Run `npm run check:counts:write` to update the exporter count on the public pages. The list of exporters lives on `docs/exporters.md` only, so no other page needs the name.
 
-1. Create `src/exporters/your-exporter.ts` implementing the `Exporter` interface from `src/interfaces/exporter.ts`
-   - Export an `ExporterSchema` describing fields, display info, and `supportsGlobal`/`supportsPerUser`
-   - Accept optional `ExportContext` in `export(data, context?)` for multi-user support
-2. Add the name to `EXPORTER_NAMES` in `src/exporters/config.ts` (the `ExporterName` type and the `KNOWN_EXPORTERS` set derive from it)
-3. Add env var parsing in `src/exporters/config.ts` (for `.env` fallback path)
-4. Map the parsed values to the config field names in `loadEnvConfig()` in `src/config/env-load.ts`, and add your minimal variables to the `builds every known exporter from its minimal .env variables` test in `tests/config/load.test.ts`. That test fails for any exporter the `.env` path cannot build.
-5. Add a registry entry in `src/exporters/registry.ts` with `{ schema, factory }` (the registry is the only place exporters are constructed)
-6. Add tests in `tests/exporters/` (including `ExportContext` behavior), and raise the expected exporter count in `tests/exporters/registry.test.ts`
-7. Document the fields in a section of `docs/exporters.md`, the variables in `.env.example`, and a commented example in `config.yaml.example` (under `users[].exporters` when `supportsGlobal` is `false`, under `global_exporters` otherwise)
-8. Run `npm run check:counts:write` to update the exporter count on the published pages. `docs/exporters.md` and `docs/guide/configuration.md` also state it in prose, which the tool does not cover, so update those by hand, and add the name where the other exporters are listed (`README.md`, `docs/index.md` and others; grep for an existing exporter name)
+## Pull Requests
 
-## Pull Request Guidelines
-
-- Branch from `dev` (not `main`)
-- All tests must pass: `npm test`
-- ESLint and Prettier must be clean: `npm run lint && npm run format:check`
-- TypeScript must compile: `npx tsc --noEmit`
-- Keep commits focused, one logical change per commit
-- **You show up in the README Contributors grid automatically** from the next release on, as long as the email of your commits is linked to your GitHub account (or is your `ID+username@users.noreply.github.com` address). Do not add yourself by hand. To credit someone else for work in your commit, add a `Co-authored-by: Name <ID+username@users.noreply.github.com>` line at the end of the message, below any `Closes #N` line. In a pull request, put that line at the end of the PR description: the squash merge (next point) takes the commit body from the description, not from your branch commits.
-- **PRs are squash-merged.** The repo allows squash only; merge-commit and rebase-merge are disabled. On merge, GitHub squashes the branch into a single commit on the target branch and uses the **PR title** as the commit subject. That makes the PR title the thing release-please parses, so it MUST be in Conventional Commits format (see below). The PR body becomes the commit body.
-- **Write commit messages, and your PR title, in [Conventional Commits](https://www.conventionalcommits.org/) style.** The project uses release-please to generate the changelog and version bumps, so the prefix you pick decides both whether the release notes mention the change and how the version bumps:
-  - `feat:` or `feat(scope):` new user-visible capability, bumps the minor version
-  - `fix:` or `fix(scope):` bug fix, bumps the patch version
-  - `perf:` performance improvement, bumps the patch version
-  - `docs:` no version bump, listed in the "Docs" section of the release notes
-  - `refactor:`, `chore:`, `ci:`, `test:`, `build:`, `style:` no version bump, and left out of the release notes entirely
-  - Append `!` (for example `feat(ble)!:`) or include a `BREAKING CHANGE:` footer to bump the major version
-  - Scopes commonly used in this repo: `ble`, `scales`, `exporters`, `wizard`, `config`, `docker`, `ci`, `docs`, plus individual adapter names
-
-  > [!IMPORTANT]
-  > Non-conforming commit messages are silently ignored by release-please and will not appear in the generated changelog. When in doubt, look at `git log --oneline` for recent examples.
-
-## Releases
-
-Releases are fully automated via [release-please](https://github.com/googleapis/release-please-action). You do **not** create tags, edit `CHANGELOG.md`, or bump the version in `package.json` by hand.
-
-### Flow
-
-1. Merge feature / fix PRs into `dev` with a Conventional Commit message.
-2. When `dev` is ready to ship, open a PR `dev` → `main` and merge it.
-3. The `release-please` workflow (`.github/workflows/release-please.yml`) runs on every push to `main` and opens (or updates) a release PR titled `chore(main): release vX.Y.Z`.
-4. That PR shows the proposed version bump plus the generated `CHANGELOG.md` diff. Review, optionally edit the PR body or the CHANGELOG entry in the PR to add prose (for example a `### Thanks` section, the one thing release-please does not generate by itself), then merge it with `--admin` like any other release PR.
-   - The same workflow run also pushes a `chore(addon): sync the add-on changelog` commit to the release branch, because release-please cannot generate a second changelog. If you edit the CHANGELOG entry in the PR afterwards, or the sync step was skipped, regenerate it yourself before merging, otherwise `tests/addon-changelog-sync.test.ts` fails the release PR:
-     ```bash
-     git switch release-please--branches--main--components--ble-scale-sync
-     npm run sync:addon-changelog
-     git commit -am "chore(addon): sync the add-on changelog from the project changelog"
-     git push
-     ```
-   - A separate `readme-contributors` job in the same workflow then pushes a `chore(readme): regenerate the contributors grid` commit to the release branch when the counts changed. It does not show up in the PR checks, so look at the workflow run, and merge only after CI has passed on the last head commit. If the job fails, the release is not blocked; the grid is then caught up by the next release, or by running `npm run sync:contributors` on the release branch.
-5. On merge, release-please tags the release (`vX.Y.Z`), creates a GitHub Release, and emits the `release: published` event that `docker.yml` listens for. The multi-arch image is published to GHCR automatically. VitePress rebuilds `docs/changelog.md` from `CHANGELOG.md` via an `@include` directive, so the public changelog updates too.
-
-### Files managed by release-please
-
-- `package.json` (version field)
-- `package-lock.json` (version field)
-- `ble-scale-sync-addon/config.yaml` (version field, via the generic updater between the `# x-release-please-start-version` and `# x-release-please-end` markers)
-- `ble-scale-sync-addon/build.yaml` (the image tags the add-on builds from, each marked `# x-release-please-version`)
-- `CHANGELOG.md` (generated from conventional commits since the previous tag)
-- `.release-please-manifest.json` (internal state, tracks the last released version)
-
-Do not edit these files in a feature PR. If you need to correct the version or changelog, do it in the release PR before merging.
-
-### Generated companion files
-
-- `ble-scale-sync-addon/CHANGELOG.md` is the changelog Home Assistant renders on the add-on page. It is generated from the root `CHANGELOG.md` by `src/tools/sync-addon-changelog.ts`; never edit it directly. The release workflow regenerates it on the release PR (step 4 of the flow above); run `npm run sync:addon-changelog` and commit the result yourself only when that step was skipped or the CHANGELOG entry was edited afterwards. `tests/addon-changelog-sync.test.ts` fails the build while the copy is stale, which is how it fell 16 releases behind while it was maintained by hand (#294).
-- The Contributors grid in `README.md` (the block between the `contributors:start` and `contributors:end` markers) is generated from the git history by `src/tools/sync-contributors.ts`; never edit it directly. A commit counts for its author and for every `Co-authored-by` line in its message, once per person; merge commits, empty commits and bots do not count. Emails are mapped to GitHub accounts through the GitHub API, plus the aliases in `.github/contributors.json` for addresses GitHub cannot link (that file also lists identities that are never credited). The grid is regenerated on the release PR, so between releases it lags behind on `dev`; `npm run sync:contributors:check` shows what would change and `npm run sync:contributors` writes it (set `GITHUB_TOKEN` or `GH_TOKEN` in the environment to avoid the anonymous API limit of 60 requests per hour).
-- `docs/changelog.md` is a one-line VitePress include (`<!--@include: ../CHANGELOG.md-->`), so it updates automatically as soon as `CHANGELOG.md` does. Do not replace that include with hand-written content.
-
-### Optional: `RELEASE_PLEASE_TOKEN` secret
-
-By default the workflow authenticates with `GITHUB_TOKEN`. GitHub intentionally does not chain events raised by that token into other workflows the usual way: `ci.yml` runs for the release PR wait for a manual approval instead of starting on their own, and the resulting GitHub release does not trigger `docker.yml`.
-
-To get those to chain automatically, create a classic Personal Access Token with `repo` + `workflow` scopes and save it as a repository secret named `RELEASE_PLEASE_TOKEN`. The workflow already prefers it over `GITHUB_TOKEN`.
-
-Until the PAT is configured, the fallback is:
-
-- Approve the waiting `ci.yml` run on the release PR, or start a fresh one by clicking "Close pull request" then "Reopen pull request" (or pushing an empty commit to the release branch).
-- Trigger `docker.yml` manually from the Actions tab (`workflow_dispatch`, input the new tag).
-
-## Reporting Issues
-
-Found a bug or have a feature request? Open an issue at [github.com/KristianP26/ble-scale-sync/issues](https://github.com/KristianP26/ble-scale-sync/issues).
+- The PR title must follow [Conventional Commits](https://www.conventionalcommits.org/). Pull requests are squash-merged: the title becomes the commit subject and the description becomes the commit body. release-please reads that subject to build the changelog and the version, and leaves out a commit whose subject does not follow the format.
+- Pick the type by what the change does for a user:
+  - `feat:` new capability, minor version bump, listed under "Added"
+  - `fix:` bug fix, patch bump, listed under "Fixed"
+  - `perf:` performance improvement, patch bump, listed under "Changed"
+  - `docs:` listed under "Docs", no version bump
+  - `refactor:`, `chore:`, `ci:`, `test:`, `build:`, `style:` no version bump, not listed
+  - `!` after the type (`feat(ble)!:`) or a `BREAKING CHANGE:` footer bumps the major version
+- Common scopes: `ble`, `scales`, `exporters`, `wizard`, `config`, `docker`, `ci`, `docs`, or an adapter name.
+- Keep one logical change per pull request, and make lint, format, type check and tests pass.
+- Do not edit generated files: `CHANGELOG.md`, the `version` in `package.json` and `ble-scale-sync-addon/config.yaml`, the image tags in `ble-scale-sync-addon/build.yaml`, `ble-scale-sync-addon/CHANGELOG.md`, and the README Contributors grid between the `contributors:start` and `contributors:end` markers. The release process regenerates them.
+- You appear in the README Contributors grid from the next release on, if the email of your commits is linked to your GitHub account or is your `ID+username@users.noreply.github.com` address. To credit someone else, end the PR description with `Co-authored-by: Name <ID+username@users.noreply.github.com>`, below any `Closes #N` line. The squash merge takes the commit body from the description, not from your branch commits.

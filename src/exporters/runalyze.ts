@@ -44,9 +44,9 @@ interface BodyCompositionPayload {
   bone_percentage?: number;
 }
 
-/** Round to 1 decimal and return undefined for non-finite or non-positive values. */
-function optionalPercent(value: number): number | undefined {
-  if (!Number.isFinite(value) || value <= 0) return undefined;
+/** Round to 1 decimal and return undefined for a withheld (null, #497), non-finite or non-positive value. */
+function optionalPercent(value: number | null): number | undefined {
+  if (value === null || !Number.isFinite(value) || value <= 0) return undefined;
   return Number(value.toFixed(1));
 }
 
@@ -85,10 +85,14 @@ export class RunalyzeExporter implements Exporter {
     if (water !== undefined) payload.water_percentage = water;
 
     if (data.weight > 0) {
-      const muscle = optionalPercent((data.muscleMass / data.weight) * 100);
+      const muscle = optionalPercent(
+        data.muscleMass === null ? null : (data.muscleMass / data.weight) * 100,
+      );
       if (muscle !== undefined) payload.muscle_percentage = muscle;
 
-      const bone = optionalPercent((data.boneMass / data.weight) * 100);
+      const bone = optionalPercent(
+        data.boneMass === null ? null : (data.boneMass / data.weight) * 100,
+      );
       if (bone !== undefined) payload.bone_percentage = bone;
     }
 

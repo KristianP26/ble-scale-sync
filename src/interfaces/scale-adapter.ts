@@ -142,20 +142,56 @@ export interface UserProfile {
    * for every configured user without a new setting.
    */
   lastKnownWeight?: number;
+  /**
+   * false (`users[].estimate_body_composition`, #497): for a weigh-in the scale
+   * measured no body composition for, export none instead of the BMI
+   * (Deurenberg) estimate. Undefined means true.
+   */
+  estimateBodyComposition?: boolean;
 }
 
 export interface BodyComposition {
   weight: number;
   impedance: number;
   bmi: number;
-  bodyFatPercent: number;
-  waterPercent: number;
-  boneMass: number;
-  muscleMass: number;
-  visceralFat: number;
-  physiqueRating: number;
+  // The six composition values below are null only when the user turned the
+  // BMI estimate off and the scale measured nothing for this weigh-in (#497).
+  // BMI, BMR and metabolic age come from weight, height, age and sex, never
+  // from body fat, so they are always there.
+  bodyFatPercent: number | null;
+  waterPercent: number | null;
+  boneMass: number | null;
+  muscleMass: number | null;
+  visceralFat: number | null;
+  physiqueRating: number | null;
   bmr: number;
   metabolicAge: number;
+  /**
+   * The skeletal muscle percentage the scale itself reports (#497). Present
+   * only when the scale measured it, next to a body fat value buildPayload
+   * accepted, and inside its band; absent otherwise, never estimated. The
+   * skeletal estimate in buildPayload stays the physique rating's input
+   * (D002). Each vendor defines it its own way, so it does not compare across
+   * brands.
+   */
+  skeletalMusclePercent?: number;
+  /**
+   * Segment impedances in ohm, at 20 and 100 kHz (#497): diagnostic values an
+   * eight-electrode scale measures. Present only when the scale sent them,
+   * each on its own (0 and the 0xFFFF sentinel are left out), whether or not
+   * its body composition was used; never estimated, and no whole-body
+   * impedance is derived from them.
+   */
+  impedanceTrunk20kHz?: number;
+  impedanceTrunk100kHz?: number;
+  impedanceLeftArm20kHz?: number;
+  impedanceLeftArm100kHz?: number;
+  impedanceRightArm20kHz?: number;
+  impedanceRightArm100kHz?: number;
+  impedanceLeftLeg20kHz?: number;
+  impedanceLeftLeg100kHz?: number;
+  impedanceRightLeg20kHz?: number;
+  impedanceRightLeg100kHz?: number;
 }
 
 /** Describes a BLE characteristic binding for multi-char adapters. */

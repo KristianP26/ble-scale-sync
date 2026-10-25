@@ -135,6 +135,19 @@ describe('resolveUserProfile', () => {
     expect(profile.isAthlete).toBe(false);
   });
 
+  // #497: only an explicit false reaches the profile, so every profile of a
+  // config without the key is exactly what it was.
+  it('carries estimate_body_composition: false into the profile', () => {
+    const off = resolveUserProfile({ ...USER, estimate_body_composition: false }, SCALE_CM);
+    expect(off.estimateBodyComposition).toBe(false);
+  });
+
+  it('adds nothing for estimate_body_composition true or absent', () => {
+    for (const user of [USER, { ...USER, estimate_body_composition: true }]) {
+      expect(resolveUserProfile(user, SCALE_CM)).not.toHaveProperty('estimateBodyComposition');
+    }
+  });
+
   it('computes correct age for birthday not yet passed this year', () => {
     const today = new Date();
     // Set birth_date to Dec 31 of last year's age computation

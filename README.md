@@ -7,135 +7,63 @@
 ![Node.js](https://img.shields.io/badge/node-%3E%3D22-brightgreen?logo=node.js&logoColor=white)
 ![Docker](https://img.shields.io/badge/docker-ghcr.io-blue?logo=docker&logoColor=white)
 
-A cross-platform CLI tool that reads body composition data from **25+ BLE smart scales** and exports to **Garmin Connect**, **Strava**, **Intervals.icu**, **Runalyze**, **Wger**, **HealthLog**, **Dreeve**, **MQTT** (Home Assistant), **InfluxDB**, **Webhooks**, **Ntfy**, **Telegram**, and **local files** (CSV/JSONL). No phone app needed. Your data stays on your device.
+BLE Scale Sync reads weight and body composition from Bluetooth Low Energy smart scales and sends every reading to Garmin Connect, Home Assistant, InfluxDB and other services. It runs on a Raspberry Pi, a Linux server, macOS, Windows or as a Home Assistant add-on, so you do not need the scale's phone app.
 
-**[Documentation](https://blescalesync.dev)** · **[Getting Started](https://blescalesync.dev/guide/getting-started)** · **[Supported Scales](https://blescalesync.dev/guide/supported-scales)** · **[Exporters](https://blescalesync.dev/exporters)** · **[FAQ](https://blescalesync.dev/faq)**
+[Documentation](https://blescalesync.dev) | [Getting Started](https://blescalesync.dev/guide/getting-started) | [Supported Scales](https://blescalesync.dev/guide/supported-scales) | [Exporters](https://blescalesync.dev/exporters) | [Troubleshooting](https://blescalesync.dev/troubleshooting) | [FAQ](https://blescalesync.dev/faq)
 
-## Why This Exists
-
-Most BLE smart scales measure weight and body impedance over Bluetooth, but their companion apps have no way to sync data to **Garmin Connect**. The only workflow was: open the phone app, wait for it to sync, then manually type the numbers into Garmin. Every single time.
-
-I didn't want to depend on a phone app. So I built this tool. A **Raspberry Pi Zero 2W** sits next to the scale, always on, always listening. Step on the scale, wait a few seconds, and the reading appears in Garmin Connect - **no phone needed, no app, no manual entry**. It just works.
-
-If you can't have a Pi next to your scale, a cheap **ESP32 proxy** can sit nearby and relay BLE data over WiFi to a Docker server anywhere on your network. See the [ESP32 BLE proxy guide](https://blescalesync.dev/guide/esp32-proxy).
-
-## Quick Start
+## Install
 
 ### Docker (Linux)
 
-```bash
-# Configure
-docker run --rm -it --network host --cap-add NET_ADMIN --cap-add NET_RAW \
-  --group-add "$(getent group bluetooth | cut -d: -f3)" -v /var/run/dbus:/var/run/dbus:ro \
-  -v ./config.yaml:/app/config.yaml \
-  -v ./garmin-tokens:/app/garmin-tokens \
-  ghcr.io/kristianp26/ble-scale-sync:latest setup
-
-# Run (continuous mode, auto-restart)
-docker run -d --restart unless-stopped --network host \
-  --cap-add NET_ADMIN --cap-add NET_RAW \
-  --group-add "$(getent group bluetooth | cut -d: -f3)" --device /dev/rfkill \
-  -v /var/run/dbus:/var/run/dbus:ro \
-  -v ./config.yaml:/app/config.yaml \
-  -v ./garmin-tokens:/app/garmin-tokens \
-  -e CONTINUOUS_MODE=true \
-  ghcr.io/kristianp26/ble-scale-sync:latest
-```
-
-Ideal for Raspberry Pi, NAS, and headless servers. Works alongside any Home Assistant install (Container, Core, OS) via MQTT auto-discovery.
+Run the setup wizard in the container to write `config.yaml`, then start the container with host networking and the D-Bus socket mounted. Docker needs a Linux host with BlueZ, such as a Raspberry Pi. The commands and a Compose file are in [Getting Started: Docker](https://blescalesync.dev/guide/getting-started#docker).
 
 ### Home Assistant Add-on
 
-If you run Home Assistant **OS** or **Supervised**, one click is all it takes:
-
 [![Add BLE Scale Sync repository to your Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FKristianP26%2Fble-scale-sync)
 
-The badge opens your Home Assistant instance, confirms the repository, and shows BLE Scale Sync in the Add-on Store ready to install.
+The add-on needs Home Assistant OS or Supervised. On HA Container or Core, use Docker; the sensors still appear through MQTT discovery. The [add-on guide](https://blescalesync.dev/guide/home-assistant-addon) covers options, Garmin sign-in and MFA.
 
-<details>
-<summary>Prefer manual steps?</summary>
-
-1. **Settings** > **Add-ons** > **Add-on Store** > three-dot menu > **Repositories**
-2. Add `https://github.com/KristianP26/ble-scale-sync` and install **BLE Scale Sync**
-
-</details>
-
-The add-on handles config through the UI, auto-detects the Mosquitto broker for Home Assistant auto-discovery, and bootstraps Garmin tokens on first start. See the [Home Assistant Add-on guide](https://blescalesync.dev/guide/home-assistant-addon) for the full option reference, MFA workaround, and custom config mode.
-
-> **Note:** Add-ons are not available on **HA Container** or **HA Core** installs (no Supervisor). Use the Docker method above instead. Sensors still appear in HA via MQTT auto-discovery.
-
-### Standalone (Node.js, Linux/macOS/Windows)
-
-Runs natively on all major desktop and server operating systems. No containers required.
-
-Zero clone, if you already have Node.js 22.23.4+, 24.22.1+ or 26.12.1+:
+### Node.js (Linux, macOS, Windows)
 
 ```bash
-npx ble-scale-sync setup                 # interactive wizard, writes ./config.yaml
-CONTINUOUS_MODE=true npx ble-scale-sync  # always-on
+npx ble-scale-sync setup                 # wizard, writes ./config.yaml
+CONTINUOUS_MODE=true npx ble-scale-sync  # always on
 ```
 
-`config.yaml` and `.env` are read from the directory you run the command in. Add `npm install -g ble-scale-sync` to keep the command on your PATH.
-
-Or from a clone, which is what you want if you plan to contribute:
-
-```bash
-git clone https://github.com/KristianP26/ble-scale-sync.git
-cd ble-scale-sync && npm install
-npm run setup                       # interactive wizard
-CONTINUOUS_MODE=true npm start      # always-on
-```
-
-Requires Node.js 22.23.4+, 24.22.1+ or 26.12.1+ and a BLE adapter. See the **[full install guide](https://blescalesync.dev/guide/getting-started)** for prerequisites and systemd service setup.
+Requires Node.js 22.23.4+, 24.22.1+ or 26.12.1+ and a BLE adapter. [Getting Started: Standalone](https://blescalesync.dev/guide/getting-started#standalone) has the prerequisites, a systemd service and the install from a clone.
 
 ## Features
 
-- **[25+ scale brands](https://blescalesync.dev/guide/supported-scales).** Xiaomi (Mi Scale 2 passive broadcast), Renpho (Elis 1, ES-CS20M, QN-Scale), Eufy, Yunmai, Beurer (incl. BF720), Sanitas (incl. SBF70 body composition), Medisana, and more.
-- **[13 export targets](https://blescalesync.dev/exporters).** Garmin Connect, Strava, Intervals.icu, Runalyze, Wger, HealthLog, Dreeve, MQTT (Home Assistant), InfluxDB, Webhook, Ntfy, Telegram, File (CSV/JSONL).
-- **[10 body metrics](https://blescalesync.dev/body-composition).** BIA-based body composition from weight + impedance.
-- **[Multi-user](https://blescalesync.dev/multi-user).** Automatic weight-based identification with per-user exporters.
-- **Historical sync.** Replays a scale's onboard cache of offline measurements with their original timestamps to exporters that support back-dating (Garmin Connect, Intervals.icu, Runalyze, Wger, HealthLog, Dreeve, InfluxDB, File).
-- **[Interactive setup wizard](https://blescalesync.dev/guide/configuration).** Scale discovery (MAC or macOS CoreBluetooth UUID), exporter config, connectivity tests.
-- **[BLE diagnostic tool](https://blescalesync.dev/troubleshooting).** `ble-scale-sync diagnose` (or `npm run diagnose` from a clone) for detailed BLE troubleshooting.
-- **[Home Assistant Add-on](https://blescalesync.dev/guide/home-assistant-addon).** One-click install via My Home Assistant badge, MQTT auto-discovery, UI-driven config, Garmin token bootstrap, and MFA workaround.
-- **[ESP32 BLE proxy](https://blescalesync.dev/guide/esp32-proxy).** Use a remote ESP32 as a BLE radio over MQTT, with a built-in embedded broker for zero-config setup, simplified Docker deployment, and optional display. Set `ble.scale_mac` for GATT-only scales (for example QN-Scale) so the ESP32 can connect autonomously the instant it sees the scale. It connects to both public-address and random-address GATT scales even when the controller misreports the address type, and connects with minimal delay so a briefly-connectable scale is reached before it sleeps.
-- **[ESPHome Bluetooth proxy](https://blescalesync.dev/guide/esphome-proxy).** Reuse an existing ESPHome BT proxy mesh (Home Assistant) as a BLE radio via Native API: broadcast and GATT scales (public and random BLE addresses), multi-proxy with RSSI auto-pick.
-- **[Home Assistant Bluetooth](https://blescalesync.dev/guide/ha-bluetooth).** Use Home Assistant itself as the radio: subscribe to its Bluetooth advertisement stream over the websocket API, so every proxy HA already has (ESPHome, SMLIGHT SLZB, Shelly, local adapter) serves broadcast scales without taking it away from HA.
-- **BLE adapter selection.** `ble.adapter: hci1` for multi-adapter setups (Linux).
-- **Broadcast mode.** Supports non-connectable scales that only advertise weight via BLE advertisements.
-- **Linux stability hardening.** Auto-recovery for the BlueZ "stuck discovery" state via a consecutive-failure watchdog, plus optional [systemd `Type=notify`](https://blescalesync.dev/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state) integration for whole-loop freezes. The watchdog is idle-aware, so a scale that only advertises while in use does not trigger needless restarts when nobody is weighing.
-- **Update check.** Optional, anonymous version check after each measurement (opt-out via `update_check: false`); see the [auto update guide](https://blescalesync.dev/guide/auto-update) for Watchtower, systemd timer, and HA add-on recipes.
-- **Cross-platform.** Linux (Docker + native), macOS, Windows.
-- **Private.** Your data stays on your device, no vendor cloud.
+- Reads scales from Xiaomi, Renpho, Eufy, Yunmai, Beurer, Sanitas, Medisana and other brands, over a GATT connection or from their advertisements ([Supported Scales](https://blescalesync.dev/guide/supported-scales)).
+- Sends each reading to [13 export targets](https://blescalesync.dev/exporters), among them Garmin Connect, Strava, MQTT with Home Assistant discovery, InfluxDB, webhooks and CSV or JSONL files.
+- Computes [body composition](https://blescalesync.dev/body-composition) from weight and impedance, with a BMI-based estimate for scales that report no impedance.
+- Tells household members apart by weight and gives each person their own exporters ([Multi-User](https://blescalesync.dev/multi-user)).
+- Imports measurements stored in the scale's memory with their original time, for exporters that can record a past measurement ([historical readings](https://blescalesync.dev/exporters#historical-readings)).
+- Uses the computer's own Bluetooth adapter, an [ESP32 BLE proxy](https://blescalesync.dev/guide/esp32-proxy), an [ESPHome Bluetooth proxy](https://blescalesync.dev/guide/esphome-proxy) or [Home Assistant Bluetooth](https://blescalesync.dev/guide/ha-bluetooth) as the radio ([Bluetooth Transports](https://blescalesync.dev/guide/transports)).
+- Sets up through an interactive [setup wizard](https://blescalesync.dev/guide/configuration#setup-wizard-recommended), with `scan`, `validate` and `diagnose` commands for checking the result.
+- Recovers BlueZ on Linux when discovery stops after hours of uptime ([BlueZ stuck state](https://blescalesync.dev/troubleshooting#ble-discovery-stops-working-after-hours-bluez-stuck-state)).
+- Logs a notice when a new version is out; [Auto Updates](https://blescalesync.dev/guide/auto-update) has recipes for Watchtower, a systemd timer and the add-on.
 
-## Capturing raw BLE frames (debugging)
+## Privacy
 
-For reverse-engineering a scale protocol (e.g. decoding an undecoded impedance
-frame), the native BlueZ handler can dump every notify frame as hex and hold the
-GATT connection open past the weight-stable point so the scale finishes sending
-its trailing frames before disconnect.
+No scale vendor app or account is involved. Readings go only to the exporters you configure. The one other request is a version check, at most once a day, that sends the app version, OS and CPU architecture; those also feed the public [usage stats](https://stats.blescalesync.dev). Set `update_check: false` to turn it off ([what the update check sends](https://blescalesync.dev/faq#what-does-the-update-check-send)).
 
-- `BLE_RAW_CAPTURE=true` enables it (off by default; no effect on normal runs).
-- `BLE_RAW_CAPTURE_HOLD_SEC=20` sets how long to hold the link after the weight
-  stabilizes (default 20s, keep it under 120).
+## Help
 
-```bash
-# native
-BLE_RAW_CAPTURE=true DEBUG=true CONTINUOUS_MODE=true npm start
-# docker
-docker run ... -e BLE_RAW_CAPTURE=true -e DEBUG=true ghcr.io/kristianp26/ble-scale-sync:dev
-```
-
-Step on the scale and look for `[BLE] [RAW] <uuid> (<n>B): <hex>` lines. The run
-still exports a weight-only reading. Applies to every GATT reading path (native
-BlueZ and noble, plus the ESP32 and ESPHome proxies).
+If your scale is not found or its values look wrong, follow [Troubleshooting](https://blescalesync.dev/troubleshooting). For a scale that is not listed, collect a log with [debug mode](https://blescalesync.dev/troubleshooting#debug-mode) and open an [issue](https://github.com/KristianP26/ble-scale-sync/issues) with the log and the scale model.
 
 ## Credits
 
-- **Scale protocols** - many adapters ported from [openScale](https://github.com/oliexdev/openScale) (oliexdev and contributors); Eufy P2 / P2 Pro ported from [bdr99/eufylife-ble-client](https://github.com/bdr99/eufylife-ble-client); QN-Scale / FITINDEX and a few others reverse-engineered in this project; OKOK / Chipsea broadcast decoded from public captures and cross-checked against openScale and [ble_monitor](https://github.com/custom-components/ble_monitor); Etekcity Fit 8S frame layout from [etekcity_esf551_ble](https://github.com/ronnnnnnnnnnnnn/etekcity_esf551_ble) (FIT-8S support by Flautz), re-checked against public captures shared on openScale; Eufy C20 / P3 broadcast layout from [bdr99/eufylife-ble-client](https://github.com/bdr99/eufylife-ble-client), re-checked against the Home Assistant logs its users shared there; PICOOC Mini Lite broadcast layout from openScale (dnsfdv), re-checked against the advertisement log shared in oliexdev/openScale#1512; A&D UC-352BLE time-write order and bonding from the public capture in oliexdev/openScale#1505 (mrblowntobits), cross-checked against the GATT dump in [HEADS-project/ThingML-BLE](https://github.com/HEADS-project/ThingML-BLE) and A&D's iOS sample app
-- **Garmin upload** - powered by [garminconnect](https://github.com/cyberjunky/python-garminconnect) by cyberjunky
-- **BLE** - [node-ble](https://github.com/chrvadala/node-ble) (Linux), [@abandonware/noble](https://github.com/abandonware/noble) (Windows), [@stoprocent/noble](https://github.com/stoprocent/noble) (macOS)
-- **ESP32 proxy** - [mqtt_as](https://github.com/peterhinch/micropython-mqtt) by peterhinch, [aioble](https://github.com/micropython/micropython-lib/tree/master/micropython/bluetooth/aioble)
+- Scale protocols: many adapters are ported from [openScale](https://github.com/oliexdev/openScale) by oliexdev and contributors.
+- Eufy P2, P2 Pro, C20 and P3: [bdr99/eufylife-ble-client](https://github.com/bdr99/eufylife-ble-client).
+- Etekcity Fit 8S: [etekcity_esf551_ble](https://github.com/ronnnnnnnnnnnnn/etekcity_esf551_ble), support contributed by Flautz.
+- OKOK and Chipsea broadcast: public captures, checked against openScale and [ble_monitor](https://github.com/custom-components/ble_monitor).
+- PICOOC Mini Lite: openScale (dnsfdv) and the advertisement log in oliexdev/openScale#1512.
+- A&D UC-352BLE: the capture in oliexdev/openScale#1505 (mrblowntobits) and the GATT dump in [HEADS-project/ThingML-BLE](https://github.com/HEADS-project/ThingML-BLE).
+- QN-Scale, FITINDEX and a few others: reverse-engineered in this project.
+- Garmin upload: [garminconnect](https://github.com/cyberjunky/python-garminconnect) by cyberjunky.
+- BLE: [node-ble](https://github.com/chrvadala/node-ble) (Linux), [@abandonware/noble](https://github.com/abandonware/noble) (Windows), [@stoprocent/noble](https://github.com/stoprocent/noble) (macOS).
+- ESP32 proxy: [mqtt_as](https://github.com/peterhinch/micropython-mqtt) by peterhinch, [aioble](https://github.com/micropython/micropython-lib/tree/master/micropython/bluetooth/aioble).
 
 ## Contributors
 
@@ -172,11 +100,11 @@ BlueZ and noble, plus the ESP32 and ESPHome proxies).
 
 ## Contributing
 
-See **[CONTRIBUTING.md](CONTRIBUTING.md)** for development setup, project structure, and how to add new scale adapters or exporters.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, tests and how to add a scale adapter or an exporter.
 
 ## License
 
-GPL-3.0. See [LICENSE](LICENSE) for details.
+GPL-3.0. See [LICENSE](LICENSE).
 
 ## Star History
 

@@ -380,6 +380,15 @@ export const UserSchema = z.object({
    * that in `beurer_user_index`, then turn it off.
    */
   beurer_register_new_user: z.boolean().optional(),
+  /**
+   * false: a weigh-in the scale measured no body composition for (no usable
+   * impedance, no body fat of its own, or one the adapter did not use) exports
+   * no body fat, water, bone mass, muscle mass, visceral fat or physique rating
+   * instead of estimating them from BMI (#497). Weight, impedance, BMI, BMR and
+   * metabolic age still go out. Per user, so a weigh-in follows the matched
+   * user's choice. No default, so a config without the key loads as before.
+   */
+  estimate_body_composition: z.boolean().optional(),
 });
 
 export const RuntimeSchema = z.object({

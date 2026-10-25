@@ -17,7 +17,7 @@ import { checkAndLogUpdate } from '../update-check.js';
 import { fmtWeight } from './format.js';
 import { enqueue } from './export-queue.js';
 import { exporterSlot } from './exporter-slot.js';
-import { METRIC_KEYS } from '../exporters/metrics.js';
+import { LOG_METRIC_KEYS } from '../exporters/metrics.js';
 import { isUsableAnchorTime, persistReplayAnchor } from './replay-anchors.js';
 import {
   HISTORY_WINDOW_MS,
@@ -34,8 +34,9 @@ const log = createLogger('Sync');
 
 // Fixed log order for body-composition metrics, independent of the order in
 // which the adapter populates the payload; `weight` and `impedance` are logged
-// separately above.
-const BODY_COMP_LOG_KEYS = METRIC_KEYS.filter((k) => k !== 'weight' && k !== 'impedance');
+// separately above, and diagnostic values such as segment impedances not at
+// all (#497).
+const BODY_COMP_LOG_KEYS = LOG_METRIC_KEYS.filter((k) => k !== 'weight' && k !== 'impedance');
 const KG_METRICS = new Set<keyof BodyComposition>(['boneMass', 'muscleMass']);
 
 /** Tolerance for treating a historical replay weight as a duplicate of the last exported weight. */
@@ -96,6 +97,9 @@ function logBodyComp(payload: BodyComposition, weightUnit: WeightUnit, prefix = 
   log.info(`${p}Body composition:`);
   for (const k of BODY_COMP_LOG_KEYS) {
     const v = payload[k];
+    // A metric only some weigh-ins carry, or a withheld one (null), is logged
+    // only when it is there (#497).
+    if (v == null) continue;
     const display = KG_METRICS.has(k) ? fmtWeight(v, weightUnit) : String(v);
     log.info(`${p}  ${k}: ${display}`);
   }
@@ -294,6 +298,13 @@ async function exportFrame(
     `\n${tagPrefix}Measurement: ${fmtWeight(payload.weight, ctx.weightUnit)} / ${payload.impedance} Ohm`,
   );
   logBodyComp(payload, ctx.weightUnit, tag);
+  if (payload.bodyFatPercent === null) {
+    log.info(
+      `${tagPrefix}No measured body composition is usable for this weigh-in and ` +
+        'estimate_body_composition is off: body fat, water, bone mass, muscle mass, ' +
+        'visceral fat and physique rating are left empty.',
+    );
+  }
 
   // Dry-run signal is unified: ctx.dryRun OR (single-user) undefined exporters.
   // An empty exporter array is NOT a skip: it dispatches to nothing and reports

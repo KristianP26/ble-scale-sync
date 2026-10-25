@@ -211,6 +211,25 @@ describe('add-on option update_check', () => {
   });
 });
 
+describe('add-on option user_estimate_body_composition (#497)', () => {
+  it('is an add-on option, on by default, with a translation', () => {
+    expect(MANIFEST.options).toHaveProperty('user_estimate_body_composition', true);
+    expect(TRANSLATIONS.configuration).toHaveProperty('user_estimate_body_composition');
+  });
+
+  // A plain opt_bool would turn a missing key into false, and jq's // would
+  // turn an explicit false into true.
+  it('is read as an option that defaults to true', () => {
+    expect(RUN_SH).toMatch(
+      /^ {2}USER_ESTIMATE_BODY_COMPOSITION=\$\(opt_bool_default_true user_estimate_body_composition\)$/m,
+    );
+  });
+
+  it('is named as ignored in custom config mode when it is turned off', () => {
+    expect(customConfigBranch()).toMatch(/opt_bool_default_true user_estimate_body_composition/);
+  });
+});
+
 describe('add-on option adapter_privacy (#417)', () => {
   const SCHEMA = (
     parse(lf(readFileSync('ble-scale-sync-addon/config.yaml', 'utf8'))) as {

@@ -57,6 +57,35 @@ jobs:
       - name: Run tests
         run: npm test
 
+  # worker/ has its own lockfile and is otherwise only built by worker.yml on a
+  # push to main, so a Dependabot bump in /worker would first fail at deploy.
+  worker-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Install worker dependencies
+        run: npm ci
+        working-directory: worker
+
+      - name: TypeScript type check
+        run: npm run typecheck
+        working-directory: worker
+
+      # Bundles the Worker and validates wrangler.toml without credentials.
+      - name: Wrangler dry-run build
+        run: npx --no-install wrangler deploy --dry-run --outdir "$RUNNER_TEMP/worker-dist"
+        working-directory: worker
+        env:
+          WRANGLER_SEND_METRICS: 'false'
+
   python-check:
     runs-on: ubuntu-latest
 

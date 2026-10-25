@@ -46,6 +46,7 @@ import {
   type LinkObserver,
 } from './link-observer.js';
 import { isDeviceObjectGone } from './device-object.js';
+import { noteConnected, noteConnecting } from './disconnect-reasons.js';
 import { requireAdapterPrivacy } from './privacy.js';
 import { bleFailureKind, tagBleFailure } from '../failure-kind.js';
 
@@ -315,6 +316,7 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
         observer = obs;
         // The probe can take up to 2 s; a shutdown meanwhile must not send a Connect.
         throwIfAborted();
+        noteConnecting(formattedMac);
 
         t0 = Date.now();
         bleLog.debug(`Connect attempt ${attempt + 1}/${maxRetries + 1}...`);
@@ -329,6 +331,10 @@ export async function connectWithRecovery(ctx: ConnectRecoveryContext): Promise<
           abortSignal,
         );
         bleLog.debug(`Connected (took ${Date.now() - t0}ms)`);
+        // The one place every successful node-ble connect passes, the #297
+        // keep-discovery path included: the debug line for this connection's
+        // end is timed from here (#434).
+        noteConnected(formattedMac);
         obs.stop();
         observer = undefined;
         if (keepDiscovery) {

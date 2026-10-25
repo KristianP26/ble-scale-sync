@@ -283,6 +283,94 @@ describe('processReading: single-user', () => {
     ]);
   });
 
+  // #497: a metric only some weigh-ins carry is logged in its place, when it is there.
+  it('logs a skeletal muscle percentage after the muscle mass when the payload has one', async () => {
+    const ctx = makeCtx([dad]);
+    await processReading(
+      ctx,
+      rawReading(undefined, { ...FIXED_BODY_COMP, skeletalMusclePercent: 47.8 }),
+    );
+
+    const lines = logSpy.mock.calls.map((c) => String(c[0]).replace(/^[^[]*\[Sync\] /, ''));
+    const headerIdx = lines.lastIndexOf('Body composition:');
+    expect(lines.slice(headerIdx + 5, headerIdx + 8)).toEqual([
+      '  muscleMass: 65.00 kg',
+      '  skeletalMusclePercent: 47.8',
+      '  visceralFat: 5',
+    ]);
+  });
+
+  // #497: a withheld value is left out of the log rather than printed as null.
+  it('does not log withheld (null) values', async () => {
+    const ctx = makeCtx([dad]);
+    await processReading(
+      ctx,
+      rawReading(undefined, {
+        ...FIXED_BODY_COMP,
+        bodyFatPercent: null,
+        waterPercent: null,
+        boneMass: null,
+        muscleMass: null,
+        visceralFat: null,
+        physiqueRating: null,
+      }),
+    );
+
+    const lines = logSpy.mock.calls.map((c) => String(c[0]).replace(/^[^[]*\[Sync\] /, ''));
+    const headerIdx = lines.lastIndexOf('Body composition:');
+    expect(lines.slice(headerIdx + 1, headerIdx + 4)).toEqual([
+      '  bmi: 24',
+      '  bmr: 1800',
+      '  metabolicAge: 30',
+    ]);
+    expect(lines.filter((s) => s.includes('null'))).toEqual([]);
+  });
+
+  // #497: the log says why the body composition is empty.
+  it('says so when the body composition was withheld', async () => {
+    const ctx = makeCtx([dad]);
+    const withheld = {
+      ...FIXED_BODY_COMP,
+      bodyFatPercent: null,
+      waterPercent: null,
+      boneMass: null,
+      muscleMass: null,
+      visceralFat: null,
+      physiqueRating: null,
+    };
+    await processReading(ctx, rawReading(undefined, withheld));
+
+    const lines = logSpy.mock.calls.map((c) => String(c[0]).replace(/^[^[]*\[Sync\] /, ''));
+    expect(lines).toContain(
+      'No measured body composition is usable for this weigh-in and ' +
+        'estimate_body_composition is off: body fat, water, bone mass, muscle mass, ' +
+        'visceral fat and physique rating are left empty.',
+    );
+  });
+
+  it('says nothing about it for a weigh-in with body composition', async () => {
+    await processReading(makeCtx([dad]), rawReading());
+    const lines = logSpy.mock.calls.map((c) => String(c[0]));
+    expect(lines.some((s) => s.includes('estimate_body_composition'))).toBe(false);
+  });
+
+  // #497: segment impedances are diagnostics, not body composition.
+  it('does not log segment impedances', async () => {
+    const ctx = makeCtx([dad]);
+    await processReading(
+      ctx,
+      rawReading(undefined, {
+        ...FIXED_BODY_COMP,
+        impedanceTrunk20kHz: 22.2,
+        impedanceRightLeg100kHz: 208.5,
+      }),
+    );
+
+    const lines = logSpy.mock.calls.map((c) => String(c[0]));
+    expect(lines.some((s) => s.endsWith('Body composition:'))).toBe(true);
+    expect(lines.filter((s) => /impedance(Trunk|RightLeg)|22\.2|208\.5/.test(s))).toEqual([]);
+  });
+
   it('notifies the display with RAW scale weight, result with computed weight', async () => {
     const display = fakeDisplay();
     const ctx = makeCtx([dad], { display });

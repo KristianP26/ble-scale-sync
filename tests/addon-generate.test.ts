@@ -504,6 +504,27 @@ describe.skipIf(!HARNESS)(
         expect(config.global_exporters?.[0]).toMatchObject({ password: 'g\\w${y}' });
       });
 
+      // #497: written on the user only when off, so the default config above
+      // stays byte for byte what it was.
+      it('user_estimate_body_composition off, on the user', () => {
+        const r = generate({ options: { ...DEFAULTS, user_estimate_body_composition: false } });
+        const config = expectLoads(r);
+        expect(config.users[0].estimate_body_composition).toBe(false);
+        expect(r.text).toContain(
+          '    last_known_weight: null\n    estimate_body_composition: false\n\n',
+        );
+      });
+
+      it('user_estimate_body_composition on or missing writes nothing', () => {
+        const { user_estimate_body_composition: _on, ...missing } = DEFAULTS;
+        for (const options of [DEFAULTS, missing]) {
+          const r = generate({ options });
+          const config = expectLoads(r);
+          expect(config.users[0]).not.toHaveProperty('estimate_body_composition');
+          expect(r.text).not.toContain('estimate_body_composition');
+        }
+      });
+
       it('no_reading_rescan_delay as entered (#475)', () => {
         const r = generate({ options: { ...DEFAULTS, no_reading_rescan_delay: 900 } });
         const config = expectLoads(r);
@@ -1040,6 +1061,19 @@ describe.skipIf(!HARNESS)('run.sh custom_config and the transport options', () =
     const r = run(CUSTOM);
     expect(r.status).toBe(0);
     expect(r.stdout).not.toContain('transport options');
+  });
+
+  // #497: on by default, so only an explicit false is worth a word.
+  it('names user_estimate_body_composition as ignored only when it is off', () => {
+    const quiet = run(CUSTOM);
+    expect(quiet.status).toBe(0);
+    expect(quiet.stdout).not.toContain('user_estimate_body_composition');
+    const r = run({ ...CUSTOM, user_estimate_body_composition: false });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain(
+      "WARNING: custom_config is enabled, so the 'user_estimate_body_composition' option is ignored.",
+    );
+    expect(r.stdout).toContain("Set 'estimate_body_composition: false' on the user in");
   });
 
   // #471: the option has a default, so only a changed value is worth a word.

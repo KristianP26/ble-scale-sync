@@ -68,7 +68,8 @@
           "min": 50,
           "max": 70
         },
-        "last_known_weight": null
+        "last_known_weight": null,
+        "estimate_body_composition": false
       }
     ],
     "global_exporters": [

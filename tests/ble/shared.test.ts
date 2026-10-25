@@ -2390,6 +2390,17 @@ describe('completionHoldMs through waitForRawReading', () => {
 describe('R-MSC04 composition hold through waitForRawReading (#434)', () => {
   const hex = (h: string): Buffer => Buffer.from(h, 'hex');
   const PROFILE_187: UserProfile = { height: 187, age: 30, gender: 'male', isAthlete: false };
+  // The #117 record's segment impedances, exported whatever happens to its body
+  // fat (#497).
+  const SEGMENTS = {
+    segmentImpedance: {
+      trunk: { at20kHz: 22.2, at100kHz: 17.4 },
+      leftArm: { at20kHz: 310.4, at100kHz: 275.3 },
+      rightArm: { at20kHz: 305.5, at100kHz: 270.4 },
+      leftLeg: { at20kHz: 227.6, at100kHz: 201.7 },
+      rightLeg: { at20kHz: 234.6, at100kHz: 208.5 },
+    },
+  };
   /** The clock of the #117 capture's b3 (Unix 0x6a478eb1, UTC+10). */
   const captureClock = (): Date => {
     const d = new Date(0x6a478eb1 * 1000);
@@ -2452,9 +2463,9 @@ describe('R-MSC04 composition hold through waitForRawReading (#434)', () => {
       expect(s.adapter.isFinal(raw.reading)).toBe(true);
       // The record was computed for the guest b2 we wrote, so its body fat is
       // not exported (D038): the estimate, although PROFILE_187 passes the
-      // D022 height gate.
+      // D022 height gate. Its segment impedances go out all the same.
       expect(s.adapter.computeMetrics(raw.reading, PROFILE_187)).toEqual(
-        buildPayload(95.55, 0, {}, PROFILE_187),
+        buildPayload(95.55, 0, SEGMENTS, PROFILE_187),
       );
 
       // The guest b2 (PROFILE: 180.0 cm, no last weight -> 70.00 kg) and the
@@ -2569,9 +2580,10 @@ describe('R-MSC04 composition hold through waitForRawReading (#434)', () => {
         scaleComposition: expect.any(Object),
       });
       expect(s.adapter.isFinal(raw.reading)).toBe(true);
-      // Our guest b2 went out, so the estimate (D038).
+      // Our guest b2 went out, so the estimate (D038), with the segment
+      // impedances (#497).
       expect(s.adapter.computeMetrics(raw.reading, PROFILE_187)).toEqual(
-        buildPayload(95.55, 0, {}, PROFILE_187),
+        buildPayload(95.55, 0, SEGMENTS, PROFILE_187),
       );
       expect(s.write.writtenData.map((b) => Buffer.from(b).toString('hex'))).toEqual([
         '55aab20009000907081b58a9ff02ef',

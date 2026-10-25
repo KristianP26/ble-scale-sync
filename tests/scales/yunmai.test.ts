@@ -129,7 +129,7 @@ describe('YunmaiScaleAdapter', () => {
       // [17..18] here would give 23.31 % from the cut field and the XOR.
       const profile = defaultProfile({ gender: 'female', age: 30, height: 165 });
       expect(adapter.computeMetrics(reading, profile).bodyFatPercent).toBeCloseTo(
-        makeAdapter().computeMetrics({ weight: 80, impedance: 470 }, profile).bodyFatPercent,
+        makeAdapter().computeMetrics({ weight: 80, impedance: 470 }, profile).bodyFatPercent!,
         5,
       );
     });
@@ -416,10 +416,10 @@ describe('Yunmai when its own fat formula gives up (D-08, D028)', () => {
   it('derives water, muscle, bone and visceral fat from that same fat value', () => {
     const payload = makeAdapter().computeMetrics(reading(), profile);
     // Yunmai's water equation, (100 - fat) * 0.726, on the exported fat.
-    expect(payload.waterPercent).toBeCloseTo((100 - payload.bodyFatPercent) * 0.726, 1);
+    expect(payload.waterPercent).toBeCloseTo((100 - payload.bodyFatPercent!) * 0.726, 1);
     // Was 1, the rating Yunmai's formula gives a body with no fat at all.
     expect(payload.visceralFat).toBeGreaterThan(20);
-    expect(payload.bodyFatPercent + payload.waterPercent).toBeLessThan(100);
+    expect(payload.bodyFatPercent! + payload.waterPercent!).toBeLessThan(100);
     assertPayloadRanges(payload);
   });
 

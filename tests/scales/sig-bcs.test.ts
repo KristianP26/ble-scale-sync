@@ -216,7 +216,7 @@ describe('buildPayload bounds a scale-reported body fat (#405)', () => {
     const absurd = buildPayload(80, 0, { fat: 6553.5 }, PROFILE);
     const estimated = buildPayload(80, 0, {}, PROFILE);
 
-    expect(absurd.bodyFatPercent).toBeCloseTo(estimated.bodyFatPercent, 6);
+    expect(absurd.bodyFatPercent).toBeCloseTo(estimated.bodyFatPercent!, 6);
     expect(absurd.boneMass).toBeGreaterThan(0);
     expect(absurd.waterPercent).toBeGreaterThan(0);
     expect(absurd.muscleMass).toBeGreaterThan(0);

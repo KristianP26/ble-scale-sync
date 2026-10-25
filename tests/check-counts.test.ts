@@ -17,7 +17,7 @@ import { EXPORTER_REGISTRY } from '../src/exporters/registry.js';
 
 /**
  * Guard for #366. Adding an adapter or an exporter means the same number
- * appears in eight public places, and nothing used to check them against the
+ * appears in several public places, and nothing used to check them against the
  * code: `docs/faq.md` once shipped 33 in its JSON-LD block and 32 in the prose
  * two lines below.
  *
@@ -34,7 +34,7 @@ describe('derived counts', () => {
   // The cross-check that makes the rest trustworthy. The tool reads the two
   // registry files with regexes so it stays runnable by bare `node` with no
   // install step, and a silently wrong derivation combined with its `write`
-  // mode would rewrite eight public files to the wrong number.
+  // mode would rewrite every public occurrence to the wrong number.
   it('agrees with the registries as the app actually builds them', () => {
     expect(counts.registry).toBe(adapters.length);
     expect(counts.exporters).toBe(EXPORTER_REGISTRY.length);

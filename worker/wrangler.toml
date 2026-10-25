@@ -19,7 +19,7 @@ id = "716153b9797d4c5589aa976ee6f3cae2"
 # write, see src/rate-limit.ts. A real install checks once a day, so 5 per
 # minute per address is far above legitimate traffic. namespace_id is any
 # positive integer that no other rate limiter in this Cloudflare account uses.
-# Needs Wrangler 4.36.0 or later (the lockfile has 4.78.0).
+# Needs Wrangler 4.36.0 or later.
 [[ratelimits]]
 name = "STATS_LIMITER"
 namespace_id = "1001"

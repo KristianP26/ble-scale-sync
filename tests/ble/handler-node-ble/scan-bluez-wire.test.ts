@@ -339,3 +339,96 @@ describe.skipIf(!nodeBleInstalled)('scanAndReadRaw on the D-Bus seam (X-09)', ()
     await expect(record()).toMatchFileSnapshot('./bluez-wire/mac-gatt-debug.txt');
   });
 });
+
+/**
+ * BlueZ 5.83 and later say why a connection ended (Device1.Disconnected), and
+ * with DEBUG on the handler writes it down (#434). Asserted on the lines
+ * themselves rather than on scenario files: the rest of the cycle is what the
+ * files above already pin.
+ */
+describe.skipIf(!nodeBleInstalled)('why a connection ended, BlueZ 5.83 (#434)', () => {
+  const ENDED = /^\+\d+ms \[debug\] BlueZ: .* disconnected /;
+  const lines = (): string[] => bluez.transcript(t0);
+
+  /** Every line is there, in this order. */
+  function expectInOrder(all: string[], wanted: string[]): void {
+    const at = wanted.map((w) => all.indexOf(w));
+    expect(at.every((i) => i >= 0)).toBe(true);
+    expect(at).toEqual([...at].sort((a, b) => a - b));
+  }
+
+  async function debugOn(): Promise<void> {
+    const { setLogLevel, LogLevel } = await import('../../../src/logger.js');
+    setLogLevel(LogLevel.DEBUG);
+  }
+
+  /** The R-MSC04 of #434: one frame of an unsettled weight, then the link goes at 5.4 s. */
+  function droppingScale(): void {
+    bluez.advertise(GATT_MAC, {
+      connectable: true,
+      name: 'WIRE-GATT',
+      services: [
+        {
+          uuid: uuid('fff0'),
+          chars: [
+            { uuid: NOTIFY, flags: ['notify'] },
+            { uuid: WRITE, flags: ['write-without-response'] },
+          ],
+        },
+      ],
+      respond: (char, data): FakeNotification[] =>
+        char === WRITE && data.equals(Buffer.from([0x01]))
+          ? [{ afterMs: 200, charUuid: NOTIFY, data: frame(80.4, 0) }]
+          : [],
+      dropAfterConnectMs: 5400,
+      dropReason: 'remote',
+    });
+  }
+
+  it('the scale hangs up 5.4 s in: one line, with the reason and the time', async () => {
+    bluez.sendsDisconnectReason = true;
+    await debugOn();
+    droppingScale();
+    const outcome = await cycle({ targetMac: GATT_MAC });
+    expect(outcome).toEqual({ error: 'Scale disconnected before reading completed' });
+    const all = lines();
+    const ended = all.filter((l) => ENDED.test(l));
+    expect(ended).toEqual([
+      `+6900ms [debug] BlueZ: ${GATT_MAC} disconnected 5.40 s after connect: ` +
+        'org.bluez.Reason.Remote (Connection terminated by remote user) - the scale ended it',
+    ]);
+    // Before the teardown's own Disconnect: the scale's word, not ours.
+    expectInOrder(all, [
+      ended[0],
+      `+6900ms [debug] Disconnecting ${GATT_MAC} after the session...`,
+    ]);
+  });
+
+  it('a normal reading: our own Disconnect after reading shows as Local', async () => {
+    bluez.sendsDisconnectReason = true;
+    await debugOn();
+    gattScale();
+    const outcome = await cycle({ targetMac: GATT_MAC });
+    expect(outcome).toEqual({ reading: { weight: 80.5, impedance: 512 }, adapter: 'Wire GATT' });
+    const all = lines();
+    const ended = all.filter((l) => ENDED.test(l));
+    expect(ended).toEqual([
+      `+2100ms [debug] BlueZ: ${GATT_MAC} disconnected 0.60 s after connect: ` +
+        'org.bluez.Reason.Local (Connection terminated by local host) - this host ended it (this app, BlueZ or the kernel)',
+    ]);
+    // Sent before BlueZ answers the Disconnect, as device_disconnected() is.
+    expectInOrder(all, [
+      '+2100ms :1.1 Device1.Disconnect hci0/dev_AA_BB_CC_DD_EE_01',
+      ended[0],
+      '+2100ms [debug] Disconnect (after reading) answered in 0 ms',
+    ]);
+  });
+
+  it('without DEBUG: no match rule for it and no line', async () => {
+    bluez.sendsDisconnectReason = true;
+    droppingScale();
+    await cycle({ targetMac: GATT_MAC });
+    expect(lines().some((l) => l.includes('Device1.Disconnected'))).toBe(false);
+    expect(lines().some((l) => ENDED.test(l))).toBe(false);
+  });
+});

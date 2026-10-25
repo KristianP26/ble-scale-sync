@@ -82,6 +82,21 @@ describe('RunalyzeExporter', () => {
     expect(body.muscle_percentage).toBe(78);
   });
 
+  // #497: withheld values (null) are left out like unmeasured ones.
+  it('sends only the weight when the body composition was withheld', async () => {
+    await new RunalyzeExporter(defaultConfig).export({
+      ...samplePayload,
+      bodyFatPercent: null,
+      waterPercent: null,
+      boneMass: null,
+      muscleMass: null,
+      visceralFat: null,
+      physiqueRating: null,
+    });
+
+    expect(Object.keys(lastBody()).sort()).toEqual(['date_time', 'weight']);
+  });
+
   it('uses the current time for a live reading', async () => {
     const before = Date.now();
     await new RunalyzeExporter(defaultConfig).export(samplePayload);

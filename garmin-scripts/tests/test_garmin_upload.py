@@ -138,6 +138,43 @@ class WeightOnlyUploadTest(unittest.TestCase):
         self.assertEqual(kwargs["bmi"], 23.9)
 
 
+class WithheldValueUploadTest(unittest.TestCase):
+    """A composition value the user withheld arrives as JSON null (#497)."""
+
+    WITHHELD = (
+        "bodyFatPercent",
+        "waterPercent",
+        "boneMass",
+        "muscleMass",
+        "visceralFat",
+        "physiqueRating",
+    )
+
+    def payload(self):
+        # Through JSON, as the exporter sends it: null becomes None.
+        return json.loads(json.dumps({**FULL_PAYLOAD, **{k: None for k in self.WITHHELD}}))
+
+    def test_sends_each_withheld_value_as_none(self):
+        kwargs, _ = run_upload(self.payload())
+        for name in (
+            "percent_fat",
+            "percent_hydration",
+            "bone_mass",
+            "muscle_mass",
+            "visceral_fat_rating",
+            "physique_rating",
+        ):
+            with self.subTest(argument=name):
+                self.assertIsNone(kwargs[name])
+
+    def test_keeps_the_weight_bmi_bmr_and_metabolic_age(self):
+        kwargs, _ = run_upload(self.payload())
+        self.assertEqual(kwargs["weight"], 80.0)
+        self.assertEqual(kwargs["bmi"], 23.9)
+        self.assertEqual(kwargs["basal_met"], 1750)
+        self.assertEqual(kwargs["metabolic_age"], 30)
+
+
 class SkipMetabolicAgeUploadTest(unittest.TestCase):
     def test_leaves_metabolic_age_unset(self):
         kwargs, _ = run_upload({**FULL_PAYLOAD, "skip_metabolic_age": True})
@@ -232,7 +269,7 @@ def chained(outer, cause):
 class RejectedTokenTest(unittest.TestCase):
     """F-13: a 401 is Garmin refusing the saved token, which no retry fixes.
 
-    The shapes are the ones garminconnect 0.3.17 produces. Client._run_request
+    The shapes are the ones garminconnect 0.3.19 produces. Client._run_request
     raises GarminConnectConnectionError("API Error 401 ...") once its own
     refresh-and-retry has failed. At login, Garmin._load_social_profile wraps
     whatever its third attempt raised in GarminConnectAuthenticationError(

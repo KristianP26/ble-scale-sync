@@ -276,6 +276,11 @@ if [ "$CUSTOM_CONFIG" = "true" ]; then
     log "WARNING: custom_config is enabled, so the 'update_check' option is ignored."
     log "Set 'update_check: false' in $CUSTOM_PATH instead."
   fi
+  # And user_estimate_body_composition, a key of each user in the file (#497).
+  if [ "$(opt_bool_default_true user_estimate_body_composition)" = "false" ]; then
+    log "WARNING: custom_config is enabled, so the 'user_estimate_body_composition' option is ignored."
+    log "Set 'estimate_body_composition: false' on the user in $CUSTOM_PATH instead."
+  fi
   # The transport options are named together: each of them maps to a key of a
   # ble section in the file, not to a ble.<option> as the loop above says.
   _transport=$(transport_options_set $ESPHOME_OPTIONS $MQTT_PROXY_OPTIONS)
@@ -455,6 +460,7 @@ else
   USER_IS_ATHLETE=$(opt_bool user_is_athlete)
   USER_WEIGHT_MIN=$(opt_int user_weight_min 40)
   USER_WEIGHT_MAX=$(opt_int user_weight_max 150)
+  USER_ESTIMATE_BODY_COMPOSITION=$(opt_bool_default_true user_estimate_body_composition)
 
   MQTT_ENABLED=$(opt_bool_default_true mqtt_enabled)
   MQTT_AUTO=$(opt_bool_default_true mqtt_auto)
@@ -805,8 +811,10 @@ users:
     is_athlete: $USER_IS_ATHLETE
     weight_range: { min: $USER_WEIGHT_MIN, max: $USER_WEIGHT_MAX }
     last_known_weight: null
-
 YAML
+  # Only when off, so the default config stays byte for byte what it was (#497).
+  [ "$USER_ESTIMATE_BODY_COMPOSITION" = "false" ] && echo "    estimate_body_composition: false" >> "$FRESH"
+  echo "" >> "$FRESH"
 
   # ── Exporters ─────────────────────────────────────────────────────────
 

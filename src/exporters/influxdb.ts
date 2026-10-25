@@ -63,11 +63,15 @@ export function toLineProtocol(
   const tags = userSlug ? `,user=${userSlug}` : '';
   const fields: string[] = [];
 
+  // A metric only some weigh-ins carry, or a withheld one (null), is a field
+  // only when it is there (#497): line protocol has no null.
   for (const key of FLOAT_FIELDS) {
-    fields.push(`${key}=${data[key].toFixed(2)}`);
+    const v = data[key];
+    if (v != null) fields.push(`${key}=${v.toFixed(2)}`);
   }
   for (const key of INT_FIELDS) {
-    fields.push(`${key}=${Math.round(data[key])}i`);
+    const v = data[key];
+    if (v != null) fields.push(`${key}=${Math.round(v)}i`);
   }
 
   const tsMs = (timestamp ?? new Date()).getTime();
