@@ -71,3 +71,6 @@ strava-tokens/
 # VitePress
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+
+# Local planning notes from agent tooling, not tracked
+docs/superpowers/
