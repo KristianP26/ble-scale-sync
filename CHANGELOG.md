@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.37.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.36.0...v1.37.0) (2026-10-25)
+
+
+### Added
+
+* **addon:** user_estimate_body_composition option ([1d42686](https://github.com/KristianP26/ble-scale-sync/commit/1d42686c6ad2083331c59d8fa4000d4900e9f787))
+* **ble:** log why BlueZ ended a scale connection, in debug ([5a5dc59](https://github.com/KristianP26/ble-scale-sync/commit/5a5dc599cb4c2922e739b47d2f498f75d5250c1e))
+* **config:** users[].estimate_body_composition turns the BMI estimate off ([9475789](https://github.com/KristianP26/ble-scale-sync/commit/9475789a4c85bd638d62aa5bf2c1e56db1dab8e6))
+* **scales:** export the R-MSC04's own skeletal muscle percentage ([a2968ca](https://github.com/KristianP26/ble-scale-sync/commit/a2968ca1b9540a93ae64536b756e3f98a70128d6))
+* **scales:** export the R-MSC04's ten segment impedances as diagnostic values ([de3e6f6](https://github.com/KristianP26/ble-scale-sync/commit/de3e6f686f5f31ef917e28a01b4e92c59eaf7bd6))
+
+
+### Fixed
+
+* **ble:** log a dropped BlueZ device once instead of on every broadcast poll ([158d8a2](https://github.com/KristianP26/ble-scale-sync/commit/158d8a2b890ee3da23e4d9a4c4c105b995de838b))
+
+
+### Docs
+
+* HACS cannot distribute Supervisor add-ons ([43eee54](https://github.com/KristianP26/ble-scale-sync/commit/43eee545ce252dbab5414362fb9bddcb2f86e1b2))
+* on Linux, noble_driver does switch to a noble handler ([3202780](https://github.com/KristianP26/ble-scale-sync/commit/3202780bdf22b4ef221458fabfc887b2632e6dd3))
+* rewrite the docs site, README and add-on help to be shorter ([2b632c3](https://github.com/KristianP26/ble-scale-sync/commit/2b632c3be60b9c45b97219370c2b7fc7eac6c563))
+* say the R-MSC04 can still lose the connection on some weigh-ins ([31c33c0](https://github.com/KristianP26/ble-scale-sync/commit/31c33c0c1af606d795431f6fc5d2ba5d365a8dbd))
+* say the R-MSC04 profile byte is confirmed on one unit ([11259ab](https://github.com/KristianP26/ble-scale-sync/commit/11259aba52a55ed4ce22384c4f05045f19d2fede))
+
 ## [1.36.0](https://github.com/KristianP26/ble-scale-sync/compare/v1.35.0...v1.36.0) (2026-10-22)
 
 
