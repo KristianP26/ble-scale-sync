@@ -45,7 +45,7 @@ _Weight only_ means the weight is read and body composition is estimated from BM
 | Senssun Fat                                                            | Yes              | Model A only |
 | MGB (Swan / Icomon / YG)                                               | Yes              |       |
 | Hutbit 218008 / WL292                                                  | Yes              | Also sold under stock `SWAN` branding |
-| Robi S9, Healthkeep S11 (HEALTHKEEP-S11)                               | Weight only      | Fitdays app |
+| Robi S9, Healthkeep S11 (HEALTHKEEP-S11)                               | Weight only      |       |
 | Speediance Smart Scale FG2211WBF                                       | Yes              | Lefu/Icomon sibling of the Robi S9 |
 | Digoo DG-SO38H (Mengii)                                                | Yes              |       |
 | Excelvan CF369                                                         | Yes              |       |

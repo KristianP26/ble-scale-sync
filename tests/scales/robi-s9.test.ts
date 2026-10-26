@@ -82,48 +82,59 @@ describe('RobiS9Adapter', () => {
       expect(adapter.isComplete(reading!)).toBe(true);
     });
 
-    it('extracts the weight from the Healthkeep S11 A7 result record', () => {
+    // Healthkeep S11, real frames from a v1.37.0 DEBUG log (byte for byte).
+    // Weigh-in 1: A2 settled at 00 e8 08 = 59.40 kg, A7 record stamped 0x6adf6a46.
+    // Weigh-in 2, right after an add-on restart: A2 00 e7 72 = 59.25 kg, A7 0x6adf7986.
+    const S11_A2_UNSTABLE = '250700a2010000e86c0000000000000000000017';
+    const S11_A2_2 = '010700a2030000e772000000000000000000001e';
+    const S11_A7_1 = '412300a76adf6a462500e808000a002201560119';
+    const S11_A7_2 = '472300a76adf79862500e772000a003b01450119';
+    const S11_A7_P1 = '4123013c012c0122001d012b0114010700ff1203';
+    const S11_A7_P2 = '41230213725d0000000000000000000000000002';
+    const feed = (adapter: RobiS9Adapter, uuid: number, hex: string) =>
+      adapter.parseCharNotification(uuid16(uuid), Buffer.from(hex, 'hex'));
+
+    it('reads the Healthkeep S11 A7 record when it matches the A2 live weight', () => {
       const adapter = makeAdapter();
-      // Shape of a real HEALTHKEEP-S11 capture (v1.37.0, DEBUG) with the
-      // timestamp and weight replaced: [seq][23][00][a7][ts u32][1 byte]
-      // [weight u24 BE grams][...]; 01 24 f8 = 75000 g = 75.00 kg.
-      const a7 = Buffer.from('412300a76a000000250124f8000a002201560119', 'hex');
-      const reading = adapter.parseCharNotification(uuid16(0xffb3), a7);
+      adapter.onSessionStart();
+      expect(feed(adapter, 0xffb2, S11_A2_2)).toBeNull();
+      const reading = feed(adapter, 0xffb3, S11_A7_2);
       expect(reading).not.toBeNull();
-      expect(reading!.weight).toBeCloseTo(75.0, 2);
+      expect(reading!.weight).toBeCloseTo(59.25, 2);
       expect(reading!.impedance).toBe(0);
       expect(adapter.isComplete(reading!)).toBe(true);
     });
 
-    it('does not export the same S11 A7 record twice across sessions', () => {
+    it('ignores an S11 A7 record that arrives before any A2 frame', () => {
+      // After a restart the scale can offer its unacknowledged record first.
       const adapter = makeAdapter();
-      const a7 = Buffer.from('412300a76a000000250124f8000a002201560119', 'hex');
       adapter.onSessionStart();
-      expect(adapter.parseCharNotification(uuid16(0xffb3), a7)).not.toBeNull();
-      // Next connection: the unacknowledged record is offered again.
-      adapter.onSessionStart();
-      const resend = Buffer.from(a7);
-      resend[0] = 0x42;
-      expect(adapter.parseCharNotification(uuid16(0xffb3), resend)).toBeNull();
-      // A new weigh-in has a new timestamp.
-      adapter.onSessionStart();
-      const next = Buffer.from(a7);
-      next.writeUInt32BE(0x6a000100, 4);
-      expect(adapter.parseCharNotification(uuid16(0xffb3), next)).not.toBeNull();
+      expect(feed(adapter, 0xffb3, S11_A7_1)).toBeNull();
     });
 
-    it('ignores the follow-up packets of the S11 A7 record', () => {
+    it('ignores an S11 A7 record from an earlier weigh-in', () => {
       const adapter = makeAdapter();
-      const p1 = Buffer.from('4123013c012c0122001d012b0114010700ff1203', 'hex');
-      const p2 = Buffer.from('41230213725d0000000000000000000000000002', 'hex');
-      expect(adapter.parseCharNotification(uuid16(0xffb3), p1)).toBeNull();
-      expect(adapter.parseCharNotification(uuid16(0xffb3), p2)).toBeNull();
+      adapter.onSessionStart();
+      expect(feed(adapter, 0xffb2, S11_A2_2)).toBeNull();
+      expect(feed(adapter, 0xffb3, S11_A7_1)).toBeNull();
+      // The record of this weigh-in still completes the session.
+      expect(feed(adapter, 0xffb3, S11_A7_2)!.weight).toBeCloseTo(59.25, 2);
     });
 
-    it('ignores S11 A2 live frames', () => {
+    it('does not carry the A2 weight into the next session', () => {
       const adapter = makeAdapter();
-      const a2 = Buffer.from('250700a2010001244c0000000000000000000017', 'hex');
-      expect(adapter.parseCharNotification(uuid16(0xffb2), a2)).toBeNull();
+      adapter.onSessionStart();
+      feed(adapter, 0xffb2, S11_A2_2);
+      adapter.onSessionStart();
+      expect(feed(adapter, 0xffb3, S11_A7_2)).toBeNull();
+    });
+
+    it('ignores the follow-up packets of the S11 A7 record and S11 A2 frames', () => {
+      const adapter = makeAdapter();
+      adapter.onSessionStart();
+      expect(feed(adapter, 0xffb2, S11_A2_UNSTABLE)).toBeNull();
+      expect(feed(adapter, 0xffb3, S11_A7_P1)).toBeNull();
+      expect(feed(adapter, 0xffb3, S11_A7_P2)).toBeNull();
     });
 
     it('ignores A2 live frames (no final result yet)', () => {

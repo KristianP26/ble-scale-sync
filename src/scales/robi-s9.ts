@@ -53,12 +53,18 @@ const WEIGHT_DIV = 1000;
 // final result is a 35-byte A7 record on FFB3, split over three 20-byte
 // packets whose byte 2 is the packet index (00, 01, 02). The first packet is
 //   [seq][23][00][a7][unix ts u32 BE][1 byte][weight u24 BE grams][...]
-// and the scale resends the record every 10 s until it is acknowledged. The
-// weight matches the settled A2 live weight in the same capture.
+// (the same layout as the Speediance FG2211WBF record). The record is never
+// acknowledged, so the scale resends it every 10 s and can offer the record of
+// an earlier weigh-in right after connecting. An A7 is therefore taken only
+// when its weight equals the A2 live weight this session last saw.
 const A7_WEIGHT_OFFSET = 9;
+// A2 live frames: [seq][07][00][a2][state][00][weight u24 BE grams][...] (#248).
+const A2_WEIGHT_OFFSET = 6;
 
 /** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
 class RobiS9Session {
+  /** Weight of the last A2 live frame, in grams (0 = none yet). */
+  liveGrams = 0;
   cachedWeight = 0;
   cachedImpedance = 0;
   final = false;
@@ -103,8 +109,6 @@ export class RobiS9Adapter implements ScaleAdapterCore, GattWiring, MultiCharNot
   ];
 
   private s = new RobiS9Session();
-  // Survives sessions on purpose (see the A7 branch in parseCharNotification).
-  private lastA7Stamp: number | null = null;
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
@@ -164,19 +168,19 @@ export class RobiS9Adapter implements ScaleAdapterCore, GattWiring, MultiCharNot
       }
     }
 
+    if (data[3] === 0xa2 && data.length >= A2_WEIGHT_OFFSET + WEIGHT_BYTES) {
+      this.s.liveGrams = data.readUIntBE(A2_WEIGHT_OFFSET, WEIGHT_BYTES);
+    }
+
     // Healthkeep S11: final result as the first packet of the A7 record.
     if (data[3] === 0xa7 && data.length >= A7_WEIGHT_OFFSET + WEIGHT_BYTES) {
-      const w = data.readUIntBE(A7_WEIGHT_OFFSET, WEIGHT_BYTES) / WEIGHT_DIV;
-      // The record is never acknowledged, so the scale offers the same one
-      // again on the next connection; its timestamp tells the two apart.
-      const stamp = data.readUInt32BE(4);
-      if (stamp === this.lastA7Stamp) {
-        bleLog.debug('Robi S9: A7 record already exported, ignoring the resend');
-        return null;
-      }
-      if (w > 0 && Number.isFinite(w)) {
-        this.lastA7Stamp = stamp;
-        this.s.cachedWeight = w;
+      const grams = data.readUIntBE(A7_WEIGHT_OFFSET, WEIGHT_BYTES);
+      if (grams === 0 || grams !== this.s.liveGrams) {
+        bleLog.debug(
+          `Robi S9: A7 record (${grams} g) does not match this weigh-in (${this.s.liveGrams} g), ignoring it`,
+        );
+      } else {
+        this.s.cachedWeight = grams / WEIGHT_DIV;
         // The second A7 packet carries what look like per-segment impedances
         // (8-electrode scale), not decoded yet: BMI fallback as for A3.
         this.s.cachedImpedance = 0;
