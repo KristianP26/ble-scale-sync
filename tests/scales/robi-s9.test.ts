@@ -83,10 +83,12 @@ describe('RobiS9Adapter', () => {
     });
 
     // Healthkeep S11, real frames from a v1.37.0 DEBUG log (byte for byte).
-    // Weigh-in 1: A2 settled at 00 e8 08 = 59.40 kg, A7 record stamped 0x6adf6a46.
+    // Weigh-in 1: A2 settled (state 03) at 00 e8 08 = 59.40 kg, A7 stamped 0x6adf6a46.
     // Weigh-in 2, right after an add-on restart: A2 00 e7 72 = 59.25 kg, A7 0x6adf7986.
-    const S11_A2_UNSTABLE = '250700a2010000e86c0000000000000000000017';
-    const S11_A2_2 = '010700a2030000e772000000000000000000001e';
+    const S11_A2_1_SETTLING = '470700a2010000e8080000000000000000000013'; // state 01
+    const S11_A2_1_SETTLED = '6a0700a2030000e8080000000000000000000015'; // state 03
+    const S11_A2_1_OFF = '000700a2000000e8080000000000000000000012'; // state 00, stepped off
+    const S11_A2_2 = '010700a2030000e772000000000000000000001e'; // state 03
     const S11_A7_1 = '412300a76adf6a462500e808000a002201560119';
     const S11_A7_2 = '472300a76adf79862500e772000a003b01450119';
     const S11_A7_P1 = '4123013c012c0122001d012b0114010700ff1203';
@@ -94,7 +96,7 @@ describe('RobiS9Adapter', () => {
     const feed = (adapter: RobiS9Adapter, uuid: number, hex: string) =>
       adapter.parseCharNotification(uuid16(uuid), Buffer.from(hex, 'hex'));
 
-    it('reads the Healthkeep S11 A7 record when it matches the A2 live weight', () => {
+    it('reads the Healthkeep S11 A7 record when it matches the settled A2 weight', () => {
       const adapter = makeAdapter();
       adapter.onSessionStart();
       expect(feed(adapter, 0xffb2, S11_A2_2)).toBeNull();
@@ -103,10 +105,23 @@ describe('RobiS9Adapter', () => {
       expect(reading!.weight).toBeCloseTo(59.25, 2);
       expect(reading!.impedance).toBe(0);
       expect(adapter.isComplete(reading!)).toBe(true);
+      expect(adapter.dedupMark()).toBe(0x6adf7986);
+    });
+
+    it('takes the A2 weight only from a settled frame', () => {
+      const adapter = makeAdapter();
+      adapter.onSessionStart();
+      // A state-01 frame with the record's weight is not enough on its own.
+      expect(feed(adapter, 0xffb2, S11_A2_1_SETTLING)).toBeNull();
+      expect(feed(adapter, 0xffb3, S11_A7_1)).toBeNull();
+      // The settled frame is, and a state-00 frame after stepping off does not
+      // replace it.
+      expect(feed(adapter, 0xffb2, S11_A2_1_SETTLED)).toBeNull();
+      expect(feed(adapter, 0xffb2, S11_A2_1_OFF)).toBeNull();
+      expect(feed(adapter, 0xffb3, S11_A7_1)!.weight).toBeCloseTo(59.4, 2);
     });
 
     it('ignores an S11 A7 record that arrives before any A2 frame', () => {
-      // After a restart the scale can offer its unacknowledged record first.
       const adapter = makeAdapter();
       adapter.onSessionStart();
       expect(feed(adapter, 0xffb3, S11_A7_1)).toBeNull();
@@ -121,6 +136,40 @@ describe('RobiS9Adapter', () => {
       expect(feed(adapter, 0xffb3, S11_A7_2)!.weight).toBeCloseTo(59.25, 2);
     });
 
+    it('does not export the same S11 A7 record twice', () => {
+      // The scale is still awake at the next connection and offers the same
+      // record with its A2 frames still on that weight.
+      const adapter = makeAdapter();
+      adapter.onSessionStart();
+      feed(adapter, 0xffb2, S11_A2_2);
+      expect(feed(adapter, 0xffb3, S11_A7_2)).not.toBeNull();
+      adapter.onSessionStart();
+      expect(feed(adapter, 0xffb2, S11_A2_2)).toBeNull();
+      expect(feed(adapter, 0xffb3, S11_A7_2)).toBeNull();
+    });
+
+    it('keeps the exported stamp across a restart through the dedup mark', () => {
+      const before = makeAdapter();
+      before.onSessionStart();
+      feed(before, 0xffb2, S11_A2_2);
+      feed(before, 0xffb3, S11_A7_2);
+      const mark = before.dedupMark();
+      expect(mark).toBe(0x6adf7986);
+
+      const after = makeAdapter();
+      after.restoreDedupMark(mark!);
+      after.onSessionStart();
+      feed(after, 0xffb2, S11_A2_2);
+      expect(feed(after, 0xffb3, S11_A7_2)).toBeNull();
+    });
+
+    it('restores only a mark that can be an A7 stamp', () => {
+      const adapter = makeAdapter();
+      expect(adapter.dedupMark()).toBeUndefined();
+      for (const bad of [0, -1, 1.5, 2 ** 32, Number.NaN]) adapter.restoreDedupMark(bad);
+      expect(adapter.dedupMark()).toBeUndefined();
+    });
+
     it('does not carry the A2 weight into the next session', () => {
       const adapter = makeAdapter();
       adapter.onSessionStart();
@@ -129,10 +178,9 @@ describe('RobiS9Adapter', () => {
       expect(feed(adapter, 0xffb3, S11_A7_2)).toBeNull();
     });
 
-    it('ignores the follow-up packets of the S11 A7 record and S11 A2 frames', () => {
+    it('ignores the follow-up packets of the S11 A7 record', () => {
       const adapter = makeAdapter();
       adapter.onSessionStart();
-      expect(feed(adapter, 0xffb2, S11_A2_UNSTABLE)).toBeNull();
       expect(feed(adapter, 0xffb3, S11_A7_P1)).toBeNull();
       expect(feed(adapter, 0xffb3, S11_A7_P2)).toBeNull();
     });
