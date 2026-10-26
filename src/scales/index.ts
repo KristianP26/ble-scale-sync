@@ -13,6 +13,7 @@ import { PicoocMiniLiteAdapter } from './picooc-mini-lite.js';
 import { XiaomiS800Adapter } from './xiaomi-s800.js';
 import { XiaomiS400Adapter } from './xiaomi-s400.js';
 import { BeurerBf720Adapter } from './beurer-bf720.js';
+import { BeurerBf500Adapter } from './beurer-bf500.js';
 import { AndUc352bleAdapter } from './and-uc352ble.js';
 import { YunmaiScaleAdapter } from './yunmai.js';
 import { BeurerSanitasScaleAdapter } from './beurer-sanitas.js';
@@ -68,6 +69,9 @@ export const adapters: ScaleAdapter[] = [
   // and would otherwise be grabbed by the Mi Scale 2 adapter, so match them
   // first (by BF720/BF105 name or Beurer company id 0x0611).
   new BeurerBf720Adapter(),
+  // BF500 has its own vendor layout (service 0xFFFF) and needs an explicit
+  // measurement trigger; it outranks the BF720 adapter for the name "bf500".
+  new BeurerBf500Adapter(),
   // A&D UC-352BLE: SIG Weight Scale that needs a bond and the time written
   // before it sends (#408). Claimed by its name prefix only, never by the WSS
   // service, which the generic adapter keeps for nameless scales. Priority 225

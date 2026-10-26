@@ -11,7 +11,8 @@ Beurer and Sanitas scales pair over Bluetooth and keep their users in slots prot
 
 | Models | Adapter in the log | Needs |
 | --- | --- | --- |
-| Beurer BF720, BF105, BF500, BF788, BF915, BF950 | `Beurer BF720/BF105` | A bonded link and `users[].beurer_pin` |
+| Beurer BF720, BF105, BF788, BF915, BF950 | `Beurer BF720/BF105` | A bonded link and `users[].beurer_pin` |
+| Beurer BF500 | `Beurer BF500` | A bonded link and `users[].beurer_pin`; see [BF500](#bf500) |
 | Beurer BF700, BF710, BF800, Sanitas SBF70, SBF75 | `Beurer / Sanitas` | BF710: register it in the Beurer app first |
 | Sanitas SBF72, SBF73 | `Sanitas SBF72/73` | User slot 1 created in the vendor app |
 
@@ -103,6 +104,12 @@ On other models:
 If the scale refuses the registration, its slots are full; free one in the scale's menu.
 
 A new profile needs one weigh-in assigned to it on the scale. Until then the scale shows `U -` after weighing and sends nothing, which looks like a wrong consent code.
+
+### BF500
+
+The BF500 speaks the same consent protocol as the BF720 family, but keeps its vendor characteristics on another service (`0xFFFF`: user list `0xFFF1`, activity level `0xFFF2`). It also sends no weigh-in on its own after the consent: the adapter asks for one by writing to `0xFFF4`, as openScale does, which lights the scale's display. The BF720 adapter writes its user-list query to `0xFFF2`, which on a BF500 is the activity level, so a BF500 answers the consent with `OPERATION_FAILED`.
+
+A BF500 whose batteries were removed holds no user records, and every consent then fails with `OPERATION_FAILED`. Follow [Register a New User](#register-a-new-user): the adapter registers the user, consents to the slot the scale assigned and writes the profile (date of birth, sex, height) into it.
 
 ### Factory Reset and Deleting One User (BF915)
 

@@ -284,6 +284,55 @@
     ]
   },
   {
+    "name": "Beurer BF500",
+    "match": {
+      "priority": 221,
+      "custom": true,
+      "names": {
+        "includes": [
+          "bf500"
+        ]
+      }
+    },
+    "requiresBonding": true,
+    "charNotifyUuid": "00002a9d00001000800000805f9b34fb",
+    "charWriteUuid": "00002a2b00001000800000805f9b34fb",
+    "characteristics": [
+      {
+        "uuid": "00002a9d00001000800000805f9b34fb",
+        "type": "notify"
+      },
+      {
+        "uuid": "00002a9c00001000800000805f9b34fb",
+        "type": "notify"
+      },
+      {
+        "uuid": "00002a9f00001000800000805f9b34fb",
+        "type": "notify"
+      },
+      {
+        "uuid": "00002a9900001000800000805f9b34fb",
+        "type": "notify",
+        "optional": true
+      },
+      {
+        "uuid": "0000fff100001000800000805f9b34fb",
+        "type": "notify",
+        "optional": true
+      },
+      {
+        "uuid": "00002a2b00001000800000805f9b34fb",
+        "type": "write"
+      }
+    ],
+    "hooks": [
+      "onConnected",
+      "onSessionStart",
+      "onSessionEnd",
+      "parseCharNotification"
+    ]
+  },
+  {
     "name": "A&D UC-352BLE",
     "match": {
       "priority": 225,

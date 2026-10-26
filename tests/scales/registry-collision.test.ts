@@ -64,6 +64,7 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
     serviceUuids: ['fff0'],
   },
   'Beurer BF720/BF105': { localName: 'BF720', serviceUuids: [] },
+  'Beurer BF500': { localName: 'BF500', serviceUuids: [] },
   'Xiaomi Mi Smart Scale 2 (XMTZC04HM)': {
     localName: '',
     serviceUuids: ['181d'],

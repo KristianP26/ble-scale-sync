@@ -5,7 +5,7 @@ description: Every BLE smart scale brand and model BLE Scale Sync reads, how to 
 
 # Supported Scales
 
-BLE Scale Sync has **41 protocol adapters**, plus a catch-all for any scale that follows the Bluetooth weight-scale specification. Most adapters cover several rebrands.
+BLE Scale Sync has **42 protocol adapters**, plus a catch-all for any scale that follows the Bluetooth weight-scale specification. Most adapters cover several rebrands.
 
 ## Scale List
 
