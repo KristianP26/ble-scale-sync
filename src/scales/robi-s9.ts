@@ -49,6 +49,14 @@ const WEIGHT_OFFSET = 5;
 const WEIGHT_BYTES = 3;
 const WEIGHT_DIV = 1000;
 
+// Healthkeep S11 (same FFB0 family, Fitdays app) never sends an A3 frame. Its
+// final result is a 35-byte A7 record on FFB3, split over three 20-byte
+// packets whose byte 2 is the packet index (00, 01, 02). The first packet is
+//   [seq][23][00][a7][unix ts u32 BE][1 byte][weight u24 BE grams][...]
+// and the scale resends the record every 10 s until it is acknowledged. The
+// weight matches the settled A2 live weight in the same capture.
+const A7_WEIGHT_OFFSET = 9;
+
 /** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
 class RobiS9Session {
   cachedWeight = 0;
@@ -95,6 +103,8 @@ export class RobiS9Adapter implements ScaleAdapterCore, GattWiring, MultiCharNot
   ];
 
   private s = new RobiS9Session();
+  // Survives sessions on purpose (see the A7 branch in parseCharNotification).
+  private lastA7Stamp: number | null = null;
 
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
@@ -149,6 +159,26 @@ export class RobiS9Adapter implements ScaleAdapterCore, GattWiring, MultiCharNot
         // all-zero bytes after the weight. Emit 0 (BIA fallback) rather than a
         // guessed offset that could surface garbage; pin it from a future
         // known-impedance DEBUG capture (#248).
+        this.s.cachedImpedance = 0;
+        this.s.final = true;
+      }
+    }
+
+    // Healthkeep S11: final result as the first packet of the A7 record.
+    if (data[3] === 0xa7 && data.length >= A7_WEIGHT_OFFSET + WEIGHT_BYTES) {
+      const w = data.readUIntBE(A7_WEIGHT_OFFSET, WEIGHT_BYTES) / WEIGHT_DIV;
+      // The record is never acknowledged, so the scale offers the same one
+      // again on the next connection; its timestamp tells the two apart.
+      const stamp = data.readUInt32BE(4);
+      if (stamp === this.lastA7Stamp) {
+        bleLog.debug('Robi S9: A7 record already exported, ignoring the resend');
+        return null;
+      }
+      if (w > 0 && Number.isFinite(w)) {
+        this.lastA7Stamp = stamp;
+        this.s.cachedWeight = w;
+        // The second A7 packet carries what look like per-segment impedances
+        // (8-electrode scale), not decoded yet: BMI fallback as for A3.
         this.s.cachedImpedance = 0;
         this.s.final = true;
       }
