@@ -86,8 +86,9 @@ export const QN_BLE_OPTIONS = {
    * user in slot 2, and the scale accepts key 1000 only for that slot. The
    * slot cannot be read from the scale: set the one the debug log names for
    * the scale's own results (`user slot N`). On the 18-, 19- and 20-byte
-   * dialects; the first configured user's profile goes to that slot, and
-   * nothing is written to slot 1 then. Left unset it changes nothing.
+   * dialects; the first configured user's profile goes to that slot, nothing
+   * is written to slot 1 then, and nothing for a user slot goes out before the
+   * scale's 0x12 (#501). Left unset it changes nothing.
    */
   qn_user_slot: z.number().int().min(1).max(8).optional().nullable(),
   /**

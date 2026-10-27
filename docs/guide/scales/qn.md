@@ -67,7 +67,7 @@ All options apply on the next weigh-in without a restart. If one of them makes y
 
 ## User Slot
 
-The scale keeps up to eight users, each in a numbered slot with the key the vendor app registered it with. ble-scale-sync sends the profile of the first user in `config.yaml` to slot 1. If the vendor app registered you in another slot, set `qn_user_slot` (Experimental, 1 to 8) together with `qn_user_key`. The profile frame, the weight anchor and the request for stored weigh-ins then go to that slot, and once the scale has sent its scale-info frame nothing goes to slot 1. Without `qn_user_key` the option is ignored with a warning. A wrong slot sends the first user's profile to another person's slot, and the scale accepts key 1000 there too.
+The scale keeps up to eight users, each in a numbered slot with the key the vendor app registered it with. ble-scale-sync sends the profile of the first user in `config.yaml` to slot 1. If the vendor app registered you in another slot, set `qn_user_slot` (Experimental, 1 to 8) together with `qn_user_key`. The profile frame, the weight anchor and the request for stored weigh-ins then go to that slot. On the 18-, 19- and 20-byte dialects nothing goes to slot 1, and until the scale has sent its scale-info frame nothing goes to any slot. Without `qn_user_key` the option is ignored with a warning. A wrong slot sends the first user's profile to another person's slot, and the scale accepts key 1000 there too.
 
 To find the slot, weigh in once with `runtime.debug: true`. On the 20-byte dialect the result line names it:
 

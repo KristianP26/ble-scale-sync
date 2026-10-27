@@ -72,7 +72,8 @@ export class QnSession {
    * runs first, from the 0x12 seen at that point, so the ready-time A2 and the
    * A00D #2 profile frame always come from the same choice. A 0x12 that
    * arrives later (after a fallback handshake) does not change it. Null until
-   * decided.
+   * decided. With `ble.qn_user_slot` on a slot other than 1 nothing decides it
+   * before a 0x12 (holdsSlotFrames, #501).
    */
   appProfileSequence: boolean | null = null;
 
@@ -88,6 +89,9 @@ export class QnSession {
 
   /** One "refused the profile sent with ble.qn_user_key" line per session (#463). */
   visitRefusedLogged = false;
+
+  /** One "no frame for a user slot until a 0x12" line per session (#501). */
+  slotFramesHeldLogged = false;
 
   /** One anchor-fallback warning per session, reset in onConnected. */
   anchorFallbackWarned = false;

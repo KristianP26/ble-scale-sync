@@ -3178,16 +3178,118 @@ describe('AE02 dispatch (#75, #235)', () => {
           expect(slotOne(writes)).toEqual([]);
         });
 
-        // A 0x12 that comes after the fallback's ready step leaves openScale's
-        // profile frame (slot 1) in place; the A2 and 0x22 still carry the slot.
-        it('keeps the slot in START and the anchor pair when the 0x12 comes after a fallback ready', async () => {
+        // The fallback's ready step sent nothing for a slot and left the
+        // sequence undecided, so a 0x12 before its config request gets the
+        // vendor sequence for slot 2, not openScale's frame for slot 1.
+        it('sends the profile frame for slot 2 when the 0x12 comes after a fallback ready', async () => {
           const writes = await driveSteps(slotted(), P180, [
             { advance: 2701 },
             { frame: INFO_501, advance: 3000 },
           ]);
-          expect(profileFrames(writes)).toEqual([OPENSCALE_PROFILE]);
+          expect(profileFrames(writes)).toEqual([VISIT_SLOT2]);
           const startIndex = writes.findIndex((w) => w[0] === 0x22);
           expect(writes.slice(startIndex)).toEqual([START_SLOT2, TRIGGER_SLOT2, TRIGGER_SLOT2]);
+          expect(slotOne(writes)).toEqual([]);
+        });
+
+        // Without a 0x12 every frame this session could send for a slot is
+        // openScale's, for slot 1; the CS10G took that A2 in such a session.
+        /** Every frame that names a user slot: A00D, A2, A4 and 0x22. */
+        const slotFrames = (writes: number[][]): number[][] =>
+          writes.filter((w) => [0xa0, 0xa2, 0xa4, 0x22].includes(w[0]));
+        const HOLD_LINE =
+          'QN: no frame for a user slot until a scale-info frame (0x12) names the dialect: no ' +
+          'ready-time A2, no profile frame or START on the config request, no weight echo or ' +
+          're-query. ble.qn_user_slot is 2, and without a 0x12 they would be for user slot 1 ' +
+          '(#501)';
+
+        it.each<[string, AdapterRuntimeConfig, Array<{ frame?: Buffer; advance: number }>]>([
+          ['the fallback', {}, [{ advance: 6000 }]],
+          [
+            'the 0x14 and 0x21',
+            {},
+            [
+              { frame: READY_501, advance: 300 },
+              { frame: CONFIG_REQ_501, advance: 6000 },
+            ],
+          ],
+          [
+            'the fallback, with qn_report_byte, qn_weight_ack and qn_a4_prelude',
+            { qnReportByte: 252, qnWeightAck: true, qnA4Prelude: true },
+            [{ advance: 6000 }],
+          ],
+        ])(
+          'sends no frame for a user slot without a 0x12, the handshake driven by %s',
+          async (_name, o, steps) => {
+            const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+            try {
+              const writes = await driveSteps(slotted(o), P180, steps);
+              expect(slotFrames(writes)).toEqual([]);
+              // AE01 init, 0x13, 0x20 and `pass` still go out.
+              expect(writes.filter((w) => w[0] === 0xfe)).toHaveLength(1);
+              expect(writes.some((w) => w[0] === 0x13)).toBe(true);
+              expect(writes.some((w) => w[0] === 0x20)).toBe(true);
+              expect(writes).toContainEqual([0x02, 0x70, 0x61, 0x73, 0x73]);
+              const lines = debug.mock.calls.map((c) => String(c[0]));
+              expect(lines.filter((l) => l === HOLD_LINE)).toHaveLength(1);
+              expect(lines).toContain(
+                'QN: config request: not sending the profile frame until a 0x12 (#501)',
+              );
+            } finally {
+              debug.mockRestore();
+            }
+          },
+        );
+
+        // The skipped step is not marked as sent, so a 0x21 after a late 0x12
+        // still runs it, for slot 2.
+        it('runs the config-request step on a 0x21 that comes after a late 0x12', async () => {
+          const writes = await driveSteps(slotted(), P180, [
+            { advance: 3500 },
+            { frame: INFO_501, advance: 300 },
+            { frame: CONFIG_REQ_501, advance: 300 },
+            { frame: ACCEPTED_SLOT2, advance: 500 },
+          ]);
+          expect(profileFrames(writes)).toEqual([VISIT_SLOT2]);
+          const startIndex = writes.findIndex((w) => w[0] === 0x22);
+          expect(writes.slice(startIndex)).toEqual([START_SLOT2, TRIGGER_SLOT2, TRIGGER_SLOT2]);
+          expect(slotFrames(writes.slice(0, startIndex))).toEqual([VISIT_SLOT2]);
+        });
+
+        it('sends no weight echo before a 0x12', async () => {
+          const writes = await driveSteps(slotted({ qnWeightAck: true }), P180, [
+            { frame: LIVE_253, advance: 100 },
+          ]);
+          expect(writes.filter((w) => w[0] === 0xa2)).toEqual([]);
+          expect(writes.filter((w) => w[0] === 0x1f)).toHaveLength(1);
+        });
+
+        it('sends no stored-data re-query before a 0x12', async () => {
+          const writes = await driveSteps(slotted(), P180, [
+            { frame: NO_STORED_501, advance: 3500 },
+          ]);
+          expect(writes.filter((w) => w[0] === 0x22)).toEqual([]);
+        });
+
+        it('keeps the fallback frames of slot 1 when set to 1', async () => {
+          const steps = [{ advance: 6000 }];
+          const one = await driveSteps(slotted({ qnUserSlot: 1 }), P180, steps);
+          const keyOnly = makeAdapter();
+          keyOnly.configure({ qnUserKey: 1000 });
+          const plain = await driveSteps(keyOnly, P180, steps);
+          expect(profileFrames(one)).toEqual([OPENSCALE_PROFILE]);
+          expect(one.filter((w) => w[0] !== 0x20)).toEqual(plain.filter((w) => w[0] !== 0x20));
+        });
+
+        it('sends openScale frames for slot 1 after a classic 0x12', async () => {
+          const writes = await driveSteps(slotted(), P180, [
+            { frame: INFO_CLASSIC, advance: 300 },
+            { frame: READY_501, advance: 300 },
+            { frame: CONFIG_REQ_501, advance: 1000 },
+          ]);
+          expect(profileFrames(writes)).toEqual([OPENSCALE_PROFILE]);
+          expect(writes.filter((w) => w[0] === 0xa2 && w[2] === 0x01)).toHaveLength(1);
+          expect(writes.filter((w) => w[0] === 0x22 && w[4] === 0x03)).toHaveLength(1);
         });
 
         it('is ignored with one warning without ble.qn_user_key', async () => {

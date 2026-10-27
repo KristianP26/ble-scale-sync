@@ -202,10 +202,10 @@ export class QnScaleAdapter
   }
 
   /**
-   * The user slot every A2 and 0x22 of this session is for: the slot of the
-   * profile frame sent, and `ble.qn_user_slot` also when the handshake sent
-   * openScale's frame (a 0x12 after the fallback), so that nothing goes to
-   * slot 1 with the option set (#501). 1 otherwise.
+   * The user slot every A2 and 0x22 of this session is for: `ble.qn_user_slot`
+   * while it applies, which covers the weight echo before the profile frame;
+   * else the slot of the profile frame sent, else 1 (#501). Before a 0x12 none
+   * of these goes out with the option on another slot (holdsSlotFrames).
    */
   private writeSlot(): number {
     return this.configuredSlot() ?? this.s.visitSent?.slot ?? 1;
@@ -214,6 +214,30 @@ export class QnScaleAdapter
   /** ` for user slot N` for a debug line while `ble.qn_user_slot` applies, '' otherwise. */
   private slotNote(): string {
     return this.configuredSlot() === null ? '' : ` for user slot ${this.writeSlot()}`;
+  }
+
+  /**
+   * Whether the frames that name a user slot (every A2, the A00D frames, the
+   * 0x22, the A4 prelude) are not sent: with ble.qn_user_key and
+   * ble.qn_user_slot on a slot other than 1, until a 0x12 names the dialect.
+   * Before one the option may not apply (not on the classic dialect), and the
+   * frames this session could send are openScale's, for slot 1, not the
+   * configured user's: the CS10G took that A2 in a session without a 0x12 (#501).
+   */
+  private holdsSlotFrames(): boolean {
+    const slot = this.opts.userSlot;
+    if (this.opts.userKey === null || slot === null || slot === 1) return false;
+    if (this.s.kind !== 'unknown') return false;
+    if (!this.s.slotFramesHeldLogged) {
+      this.s.slotFramesHeldLogged = true;
+      bleLog.debug(
+        'QN: no frame for a user slot until a scale-info frame (0x12) names the dialect: no ' +
+          'ready-time A2, no profile frame or START on the config request, no weight echo or ' +
+          `re-query. ble.qn_user_slot is ${slot}, and without a 0x12 they would be for user ` +
+          'slot 1 (#501)',
+      );
+    }
+    return true;
   }
 
   /**
@@ -446,7 +470,9 @@ export class QnScaleAdapter
 
   /**
    * Fallback handshake for Linux node-ble where 0x12 may be lost.
-   * Sends AE01 init first, then the full handshake sequence.
+   * Sends AE01 init first, then the full handshake sequence. With
+   * ble.qn_user_slot on a slot other than 1 that is only the frames without a
+   * user slot (holdsSlotFrames, #501).
    */
   private async runFallbackHandshake(): Promise<void> {
     if (!this.ctx) return;
@@ -932,7 +958,7 @@ export class QnScaleAdapter
     // 20-byte frame: through the original layout it handed the scale 0.17 kg on
     // every frame, and the 19-byte dialect writes nothing back (#331). Sent
     // before the stability gate, fire and forget, like the 0x1F stable ACK below.
-    if (this.weightAckEnabled() && this.ctx && !twentyByteLive) {
+    if (this.weightAckEnabled() && this.ctx && !twentyByteLive && !this.holdsSlotFrames()) {
       void this.writeCmd(buildA2Frame(rawWeight, this.writeSlot()));
     }
 
@@ -1231,13 +1257,16 @@ export class QnScaleAdapter
 
   /**
    * Respond to 0x14 (ready) with 0x20 time sync + A2 user profile + AE01 auth.
-   * No A2 under the vendor-app profile sequence (see appProfileSequence).
+   * No A2 under the vendor-app profile sequence (see appProfileSequence), nor
+   * while the frames for a user slot are held (holdsSlotFrames), which also
+   * leaves the sequence undecided.
    */
   private async handleReady(): Promise<void> {
     if (this.s.timeSyncSent) return;
     this.s.timeSyncSent = true;
     const gen = this.sessionGeneration;
-    const appProfile = this.decideAppProfileSequence();
+    const held = this.holdsSlotFrames();
+    const appProfile = !held && this.decideAppProfileSequence();
     // 0x20 time sync: seconds since 2000-01-01, little-endian. See
     // TIME_SYNC_TRAILER for the 9-byte form and why it is opt-in. Its extra
     // byte is the host's UTC offset now, daylight saving included.
@@ -1261,7 +1290,9 @@ export class QnScaleAdapter
     // vendor-app profile sequence: neither the Arboleaf nor the Feelfit app
     // sends an A2 before START (D033, #463), and the CS10G app sends none at
     // ready time (#501). On the extended dialect that drops the ready-time
-    // anchor of `ble.qn_weight_ack` too; its anchor pair follows START.
+    // anchor of `ble.qn_weight_ack` too; its anchor pair follows START. Nor
+    // before a 0x12 with ble.qn_user_slot on another slot: this A2 is for
+    // slot 1 (holdsSlotFrames, #501).
     if (appProfile) {
       bleLog.debug(
         this.opts.userKey === null
@@ -1270,7 +1301,7 @@ export class QnScaleAdapter
           : `QN: no A2 before START on the ${this.dialectBytes()}-byte dialect, as the ` +
               'vendor app (ble.qn_user_key, #463)',
       );
-    } else if (this.ctx) {
+    } else if (this.ctx && !held) {
       // The anchor goes here ONLY on the 20-byte extended dialect. Everywhere
       // else `handleConfigRequest` sends it twice right after START instead,
       // which is where both Android captures of the Arboleaf app put it (#331,
@@ -1295,9 +1326,18 @@ export class QnScaleAdapter
     await this.writeAe01([0x02, 0x70, 0x61, 0x73, 0x73]);
   }
 
-  /** Respond to 0x21 (config request) with the A00D profile frame + 0x22 start measurement. */
+  /**
+   * Respond to 0x21 (config request) with the A00D profile frame + 0x22 start
+   * measurement. Skipped whole while the frames for a user slot are held
+   * (holdsSlotFrames); left unsent, the step still runs on a 0x21 that comes
+   * after a 0x12 in the same session.
+   */
   private async handleConfigRequest(): Promise<void> {
     if (this.s.historyResponseSent) return;
+    if (this.holdsSlotFrames()) {
+      bleLog.debug('QN: config request: not sending the profile frame until a 0x12 (#501)');
+      return;
+    }
     this.s.historyResponseSent = true;
     const appProfile = this.decideAppProfileSequence();
     // See sessionGeneration. The whole sequence spans several timers, and
@@ -1536,6 +1576,7 @@ export class QnScaleAdapter
    */
   scheduleStoredDataRetry(): void {
     if (!this.ctx || this.s.storedQueryAttempts >= MAX_STORED_QUERY_ATTEMPTS) return;
+    if (this.holdsSlotFrames()) return;
     if (this.s.storedRetryTimer) clearTimeout(this.s.storedRetryTimer);
     this.s.storedRetryTimer = setTimeout(() => {
       this.s.storedRetryTimer = null;
