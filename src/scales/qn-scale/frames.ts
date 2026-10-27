@@ -17,30 +17,35 @@ import {
 } from './constants.js';
 
 /**
- * Build the extended-dialect measurement trigger for a weight anchor in kg.
+ * Build the extended-dialect measurement trigger for a weight anchor in kg,
+ * for user slot `slot` (see buildA2Frame).
  *
  * Clamped to the u16 the field can hold, so a nonsense config value degrades to
  * a wrong anchor rather than a malformed frame.
  */
-export function buildMeasurementTrigger(weightKg: number): number[] {
-  return buildA2Frame(Math.round(weightKg * 100));
+export function buildMeasurementTrigger(weightKg: number, slot = 1): number[] {
+  return buildA2Frame(Math.round(weightKg * 100), slot);
 }
 
 /**
- * Build an A2 frame around a raw u16 payload.
+ * Build an A2 frame around a raw u16 payload, `a2 06 <slot> <raw u16 BE>`.
  *
  * Separate from `buildMeasurementTrigger` because the live acknowledgement
  * echoes the scale's OWN raw weight bytes back verbatim, which is independent
  * of `weightScaleFactor`; only the pre-stream anchor has to convert from kg.
+ *
+ * [2] is the user slot whose identify weight the frame sets, per the vendor's
+ * published SDK; the Arboleaf CS10G app sends `a2 06 02 ..` for the user it
+ * registered in slot 2 (#501). Slot 1 is the frame every earlier capture shows.
  */
 // DO NOT merge this with buildOpenScaleA2. That frame is `a2 06 01 32 <age>`,
 // the identical shape, and buildA2Frame((0x32 << 8) | age) would emit the same
 // bytes for every age the clamp accepts. They are deliberately different frames
 // whose payloads the scale reads differently, and the comment on
 // TRIGGER_WEIGHT_FALLBACK_KG in constants.ts says why.
-export function buildA2Frame(raw: number): number[] {
+export function buildA2Frame(raw: number, slot = 1): number[] {
   const v = Math.min(0xffff, Math.max(0, Math.round(raw)));
-  return withChecksum([0xa2, 0x06, 0x01, (v >> 8) & 0xff, v & 0xff]);
+  return withChecksum([0xa2, 0x06, slot & 0xff, (v >> 8) & 0xff, v & 0xff]);
 }
 
 /** openScale's ready-time A2, `a2 06 01 32 <age>`: see buildA2Frame for why it stays apart. */
@@ -53,9 +58,16 @@ export function buildUserDelete(mask: number): number[] {
   return withChecksum([0xa0, 0x0d, USER_DELETE_SUBCOMMAND, mask, 0, 0, 0, 0, 0, 0, 0, 0]);
 }
 
-/** The 0x22 start measurement / stored-data query with the session's protocol type. */
-export function buildStoredDataQuery(protocolType: number): number[] {
-  return withChecksum([0x22, 0x06, protocolType, 0x00, 0x03]);
+/**
+ * The 0x22 start measurement / stored-data query with the session's protocol
+ * type, `22 06 <protocol type> <mask u16 BE> <cs>`. Per the vendor's published
+ * SDK the mask selects the users whose stored weigh-ins the scale hands over,
+ * `1 | (1 << slot)`: `00 03` for slot 1, the frame of every earlier capture,
+ * and `00 05` for slot 2, as the Arboleaf CS10G app sends it (#501).
+ */
+export function buildStoredDataQuery(protocolType: number, slot = 1): number[] {
+  const mask = (1 | (1 << slot)) & 0xffff;
+  return withChecksum([0x22, 0x06, protocolType, (mask >> 8) & 0xff, mask & 0xff]);
 }
 
 /**
@@ -459,6 +471,8 @@ export const OPENSCALE_PROFILE_HEIGHT_MM = 1720;
 
 /** What the profile frame carries besides age, height and sex (#463). */
 export interface UserProfileFrameOptions {
+  /** User slot at [3]; 1 when unset (#501). */
+  slot?: number;
   /** User key at [4..5]; VENDOR_APP_USER_KEY (1000) when unset. */
   key?: number;
   /** Add VISIT_ATHLETE_STEP to the algorithm byte at [10]. */
@@ -469,7 +483,7 @@ export interface UserProfileFrameOptions {
  * Build the A00D #2 user profile frame ("visit") from an age, a height in cm
  * and a sex.
  *
- *   a0 0d 02 01 <key u16 BE> <sex> <age> <height mm, u16 BE> <algorithm> 02 <cs>
+ *   a0 0d 02 <slot> <key u16 BE> <sex> <age> <height mm, u16 BE> <algorithm> 02 <cs>
  *
  * Two vendor-app captures send this shape with the app user's configured age
  * at [7] and height in millimetres at [8..9], from different apps and scales:
@@ -505,7 +519,7 @@ export function buildUserProfileFrame(
     0xa0,
     0x0d,
     0x02,
-    0x01,
+    (opts.slot ?? 1) & 0xff,
     (key >> 8) & 0xff,
     key & 0xff,
     gender === 'female' ? 0x01 : 0x00,

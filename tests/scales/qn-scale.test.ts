@@ -2,8 +2,10 @@ import { describe, it, expect, vi } from 'vitest';
 import { jieliAuthResponseFrame } from '../../src/scales/qn-scale/jieli-auth.js';
 import { QnScaleAdapter } from '../../src/scales/qn-scale/index.js';
 import {
+  buildA2Frame,
   buildConfig,
   buildMeasurementTrigger,
+  buildStoredDataQuery,
   buildTimeSync,
   buildUserProfileFrame,
   decodeStoredRecord,
@@ -4131,6 +4133,39 @@ describe('buildUserProfileFrame (#331)', () => {
     expect(buildUserProfileFrame(26, 193, 'male', { athlete: false })).toEqual(ge);
     expect(buildUserProfileFrame(26, 193, 'male', { athlete: true })).toEqual([
       0xa0, 0x0d, 0x02, 0x01, 0x03, 0xe8, 0x00, 0x1a, 0x07, 0x8a, 0x0e, 0x02, 0x56,
+    ]);
+  });
+});
+
+// #501: the user slot of the A2, 0x22 and profile frames. Slot 1 is every
+// frame captured before #501; slot 2 is the Arboleaf CS10G app's, whose
+// `22 06 ff 00 05 2c` is in the reporter's capture. Every other slot is
+// derived from the vendor's published SDK.
+describe('user slot of the frame builders (#501)', () => {
+  it('keeps the slot-1 frames when no slot is given', () => {
+    expect(buildStoredDataQuery(0xff)).toEqual([0x22, 0x06, 0xff, 0x00, 0x03, 0x2a]);
+    expect(buildStoredDataQuery(0xff, 1)).toEqual(buildStoredDataQuery(0xff));
+    expect(buildA2Frame(0x1ced)).toEqual([0xa2, 0x06, 0x01, 0x1c, 0xed, 0xb2]);
+    expect(buildMeasurementTrigger(74.05, 1)).toEqual(buildMeasurementTrigger(74.05));
+    expect(buildUserProfileFrame(51, 182, 'male', { slot: 1 })).toEqual(
+      buildUserProfileFrame(51, 182),
+    );
+  });
+
+  it('asks the scale for slot 2 with the mask `00 05`, as the CS10G app does', () => {
+    expect(buildStoredDataQuery(0xff, 2)).toEqual([0x22, 0x06, 0xff, 0x00, 0x05, 0x2c]);
+  });
+
+  it('sets the mask bit of slot 8 in the high byte', () => {
+    expect(buildStoredDataQuery(0xff, 8)).toEqual([0x22, 0x06, 0xff, 0x01, 0x01, 0x29]);
+    expect(buildStoredDataQuery(0x00, 8)).toEqual([0x22, 0x06, 0x00, 0x01, 0x01, 0x2a]);
+  });
+
+  it('puts the slot at [2] of an A2 frame and [3] of the profile frame', () => {
+    expect(buildMeasurementTrigger(74.05, 2)).toEqual([0xa2, 0x06, 0x02, 0x1c, 0xed, 0xb3]);
+    expect(buildA2Frame(0x1ced, 8)).toEqual([0xa2, 0x06, 0x08, 0x1c, 0xed, 0xb9]);
+    expect(buildUserProfileFrame(51, 182, 'male', { slot: 2 })).toEqual([
+      0xa0, 0x0d, 0x02, 0x02, 0x03, 0xe8, 0x00, 0x33, 0x07, 0x1c, 0x04, 0x02, 0xf8,
     ]);
   });
 });
