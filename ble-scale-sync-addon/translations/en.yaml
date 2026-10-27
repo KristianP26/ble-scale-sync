@@ -44,9 +44,9 @@ configuration:
   qn_user_key:
     name: QN user key
     description: >-
-      QN scales with an 18- or 19-byte scale-info frame only. Try 1000 after
-      the QN protocol byte when the debug log says the scale did not accept
-      the profile; this app's user must be the vendor app's first user.
+      QN scales with a scale-info frame of 18 bytes or longer only. Try 1000
+      after the QN protocol byte when the debug log says the scale did not
+      accept the profile; this app's user must be the vendor app's first user.
   qn_a4_prelude:
     name: QN A4 prelude
     description: >-

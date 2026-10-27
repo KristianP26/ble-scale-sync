@@ -45,7 +45,7 @@ A weigh-in that worked logs `Measurement:` with the weight and impedance.
 Try these in order when the scale connects and completes the handshake, but no weight arrives. Change one thing per weigh-in and keep each option that helped. An unset option changes nothing.
 
 1. **`qn_protocol_byte`**: the protocol byte the handshake echoes back, 0 to 255. Try `0`, then `255`, then the `proto` value from the `QN: scale info` line if your log has one. A wrong byte gives no error, only silence.
-2. **`qn_user_key`**: 18- and 19-byte dialects only. Set `1000`, the key the Feelfit, Arboleaf and GE apps use, when the debug log shows `QN: the scale did not accept the profile for user slot 1 (#331)` and the display shows only the weight. The profile frame then carries this key and the first user's profile.
+2. **`qn_user_key`**: every dialect but the classic one, Experimental on the extended dialect. Set `1000`, the key the Feelfit, Arboleaf and GE apps use, when the debug log shows `QN: the scale did not accept the profile for user slot 1 (#331)` and the display shows only the weight. The profile frame then carries this key and the first user's profile.
 3. **`qn_weight_ack: true`**: sends the weight anchor right after the start command and acknowledges each live weight frame with its own weight, as the vendor apps do. On the 19-byte dialect it also sends the first user's age, height and sex. On by default on the extended dialect; `false` turns it off there.
 4. **`qn_time_sync_long: true`**, keeping `qn_weight_ack` on: sends the 9-byte clock frame with the host's UTC offset. In Docker set `TZ`, or the offset sent is UTC.
 5. **`qn_config_long: true`**, keeping both above: sends the 10-byte config frame the vendor app sends.
@@ -84,6 +84,8 @@ Weigh-ins the scale stored while nothing was connected arrive on the next connec
 
 The scale waits for a weight anchor close to the weight of the person on it. The anchor is the first user's `last_known_weight`, or the middle of their `weight_range` when that range lies between 20 and 250 kg and spans no more than 100 kg. Without either, the log warns `QN: no usable weight anchor in config` and a fixed value is sent. Once the scale streams, every frame is acknowledged with its own weight, so the anchor matters only for the start.
 
+With `qn_user_key` set, the start command and the anchor go out only after the scale answers the profile frame or after one second without an answer, as in the vendor app, and no anchor goes out when the scale reports ready, even with `qn_weight_ack: true`.
+
 ## Stored Weigh-Ins on the 18-Byte Dialect
 
 With `qn_user_key` set and the profile accepted, the app also asks an 18-byte scale for the weigh-ins it stored while nothing was connected. Those of user slot 1, or of no user, go out once with their own time to the exporters that [can record a past measurement](/exporters#historical-readings). Without the option such a weigh-in is not exported, and the normal log gives its weight and time so you can add it by hand.
@@ -98,7 +100,7 @@ Work through [Options](#options) in order. Make sure someone stands on the scale
 
 ### The display shows only the weight
 
-The scale refused the profile frame. Set `qn_user_key: 1000` (18- and 19-byte dialects). If the normal log then says `QN: the scale refused the profile frame sent with ble.qn_user_key 1000`, the vendor app set up slot 1 with another key or never set it up; check that the first user in `config.yaml` is the first user in the vendor app.
+The scale refused the profile frame. Set `qn_user_key: 1000` (not on the classic dialect). If the normal log then says `QN: the scale refused the profile frame sent with ble.qn_user_key 1000`, the vendor app set up slot 1 with another key or never set it up; check that the first user in `config.yaml` is the first user in the vendor app.
 
 ### The scale works for one person in the house only
 

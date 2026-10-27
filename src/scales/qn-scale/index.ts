@@ -52,6 +52,7 @@ import {
   TRIGGER_REPEATS,
   TRIGGER_WEIGHT_FALLBACK_KG,
   VENDOR_APP_USER_KEY,
+  VISIT_ANSWER_TIMEOUT_MS,
   VISIT_ATHLETE_MIN_AGE,
   WEIGHT_CERTAIN_MAX_KG,
   WEIGHT_CERTAIN_MIN_KG,
@@ -177,15 +178,16 @@ export class QnScaleAdapter
 
   /** Whether the 0x12 seen so far and the options call for the vendor-app profile sequence. */
   private wantsAppProfileSequence(): boolean {
+    const { kind } = this.s;
     return (
-      (this.opts.weightAck === true && this.s.kind === 'va19') ||
-      (this.opts.userKey !== null && (this.s.kind === 'va18' || this.s.kind === 'va19'))
+      (this.opts.weightAck === true && kind === 'va19') ||
+      (this.opts.userKey !== null && (kind === 'va18' || kind === 'va19' || kind === 'ext20'))
     );
   }
 
   /** Length of the 0x12 the vendor-app profile sequence was chosen for, for the log. */
   private dialectBytes(): number {
-    return this.s.kind === 'va18' ? 18 : 19;
+    return this.s.kind === 'va18' ? 18 : this.s.kind === 'va19' ? 19 : 20;
   }
 
   /**
@@ -730,6 +732,7 @@ export class QnScaleAdapter
     if (data[0] !== 0xa1 || data.length !== 6 || data[1] !== 0x06 || data[2] !== 0x02) return;
     if (!hasValidSumChecksum(data)) return;
     this.s.visitReply = { slot: data[3], ok: data[4] === 0x01 };
+    this.s.answerVisit();
     if (this.s.visitReply.ok && this.s.visitAcceptedAtMs === null) {
       this.s.visitAcceptedAtMs = Date.now();
     }
@@ -1205,7 +1208,9 @@ export class QnScaleAdapter
     // `0x32 <age>` puts that at over 128 kg (#331, #75). Kept by default: every
     // QN scale in the registry reads with it today. Not sent at all under the
     // vendor-app profile sequence: neither the Arboleaf nor the Feelfit app
-    // sends an A2 before START (D033, #463).
+    // sends an A2 before START (D033, #463), and the CS10G app sends none at
+    // ready time (#501). On the extended dialect that drops the ready-time
+    // anchor of `ble.qn_weight_ack` too; its anchor pair follows START.
     if (appProfile) {
       bleLog.debug(
         this.opts.userKey === null
@@ -1272,9 +1277,9 @@ export class QnScaleAdapter
     // age 33, 1720 mm) everywhere except the vendor-app profile sequence, which
     // gets the first user's age, height and sex the way the vendor apps send
     // them: the 19-byte dialect with `ble.qn_weight_ack` (#331, D033), and the
-    // 18- and 19-byte ones with `ble.qn_user_key`, which also sets the user key
-    // at [4..5] (#463, D055). The athlete step in [10] is the Feelfit app's on
-    // the 18-byte dialect only; see VISIT_ALGORITHM.
+    // 18-, 19- and 20-byte ones with `ble.qn_user_key`, which also sets the user
+    // key at [4..5] (#463, D055, #501). The athlete step in [10] is the Feelfit
+    // app's on the 18-byte dialect only; see VISIT_ALGORITHM.
     let msg2 = withChecksum([
       0xa0, 0x0d, 0x02, 0x01, 0x00, 0x08, 0x00, 0x21, 0x06, 0xb8, 0x04, 0x02,
     ]);
@@ -1295,17 +1300,35 @@ export class QnScaleAdapter
               `(ble.qn_user_key, ${this.dialectBytes()}-byte dialect, #463)`,
       );
     } else if (!appProfile && this.opts.userKey !== null && !this.wantsAppProfileSequence()) {
-      // An 18- or 19-byte 0x12 that came after the decision has its own line
-      // in parseNotification, so this one is only for a dialect without it.
+      // A 0x12 of 18 bytes or longer that came after the decision has its own
+      // line in onScaleInfo, so this one is only for a dialect without it.
       bleLog.debug(
         "QN: ble.qn_user_key is not used on this dialect, sending openScale's profile frame " +
-          '(18- and 19-byte scale-info frames only, #463)',
+          '(18-, 19- and 20-byte scale-info frames only, #463)',
       );
     }
     await this.writeCmd(msg2);
 
-    await wait(200);
-    if (!live()) return;
+    // The extended dialect's vendor sequence sends its START and anchor only
+    // once the scale has answered the profile frame, as the CS10G app does
+    // (#501) and the 18-byte dialect does with its 0x22 (D065). An answer that
+    // never comes holds them for VISIT_ANSWER_TIMEOUT_MS. Elsewhere, 200 ms.
+    if (appProfile && this.s.kind === 'ext20') {
+      const answered = await Promise.race([
+        this.s.visitAnswered.then(() => true),
+        wait(VISIT_ANSWER_TIMEOUT_MS).then(() => false),
+      ]);
+      if (!live()) return;
+      if (!answered) {
+        bleLog.debug(
+          `QN: no answer to the profile frame within ${VISIT_ANSWER_TIMEOUT_MS} ms, sending ` +
+            'START and the weight anchor anyway (ble.qn_user_key, #501)',
+        );
+      }
+    } else {
+      await wait(200);
+      if (!live()) return;
+    }
 
     // 0x22 start measurement / stored-data query with echoed protocol type.
     // Its send time is what the scale's first answer is measured against. On

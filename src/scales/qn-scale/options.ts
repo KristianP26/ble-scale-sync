@@ -64,12 +64,15 @@ export const QN_BLE_OPTIONS = {
    * that refuses openScale's frame (`a1 06 02 01 00`) shows only the weight,
    * and no scale in the logs has streamed a live weight after a refusal.
    *
-   * Set, the 18- and 19-byte dialects send the vendor-app profile frame with
-   * this key, the first user's age, height and sex, and on the 18-byte one the
-   * athlete setting, and skip openScale's ready-time A2. On the 19-byte
-   * dialect that happens without `qn_weight_ack` too. A wrong key leaves the
-   * scale refusing the frame, as without the option. The 20-byte and classic
-   * dialects ignore it. Left unset it changes nothing.
+   * Set, the 18-, 19- and 20-byte dialects send the vendor-app profile frame
+   * with this key, the first user's age, height and sex, and on the 18-byte
+   * one the athlete setting, and skip openScale's ready-time A2. On the
+   * 19-byte dialect that happens without `qn_weight_ack` too. On the 20-byte
+   * one the START and the weight anchor wait for the scale's answer to the
+   * profile frame, as the CS10G app sends them (#501), and the ready-time
+   * anchor of `qn_weight_ack` is not sent. A wrong key leaves the scale
+   * refusing the frame, as without the option. The classic dialect ignores
+   * it. Left unset it changes nothing.
    */
   qn_user_key: z.number().int().min(1).max(9999).optional().nullable(),
   /**

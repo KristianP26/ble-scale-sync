@@ -220,6 +220,22 @@ const LIVE_GE_235 = Buffer.from([
 const LIVE_GE_SLOT2 = derive(LIVE_GE_235, { 2: 0x02 });
 
 /**
+ * #501, an Arboleaf CS10G on the 20-byte extended dialect, byte for byte from
+ * the public DEBUG log of its 23:33 session apart from the MAC (as for #461
+ * above): its 0x12, ready frame, config request and the refusal of openScale's
+ * profile frame for user slot 1.
+ */
+const INFO_501 = Buffer.from([
+  0x12, 0x14, 0xff, 0x01, 0x00, 0x00, 0x00, 0x00, 0x02, 0x0e, 0x0f, 0x4a, 0x00, 0x04, 0x05, 0x03,
+  0xe2, 0x6f, 0x3b, 0x27,
+]);
+const READY_501 = Buffer.from([
+  0x14, 0x0c, 0xff, 0x01, 0x00, 0x01, 0x0a, 0x02, 0x0d, 0x00, 0xfd, 0x37,
+]);
+const CONFIG_REQ_501 = Buffer.from([0x21, 0x07, 0xff, 0x01, 0x64, 0x2d, 0xb9]);
+const REFUSED_501 = Buffer.from([0xa1, 0x06, 0x02, 0x01, 0x00, 0xaa]);
+
+/**
  * #501, an Arboleaf CS10G on the 20-byte extended dialect: the 0xB4 and the
  * 0xB1 of its 23:38 session, byte for byte from the public DEBUG log. The 0xB4
  * has [2] 03, which this dialect does not read, and no user ([4] f0); the
@@ -2807,10 +2823,8 @@ describe('AE02 dispatch (#75, #235)', () => {
         }
       });
 
-      it.each([
-        ['20-byte extended', makeExtendedScaleInfo()],
-        ['17-byte classic (#283)', INFO_283],
-      ])('changes nothing on the %s dialect', async (_name, info) => {
+      it('changes nothing on the 17-byte classic dialect (#283)', async () => {
+        const info = INFO_283;
         const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
         try {
           const profile = defaultProfile({ age: 51, height: 182, lastKnownWeight: 76 });
@@ -2827,6 +2841,193 @@ describe('AE02 dispatch (#75, #235)', () => {
         } finally {
           debug.mockRestore();
         }
+      });
+
+      // #501: the CS10G app sends the profile frame with key 1000 on this
+      // dialect, no A2 at ready time, and its 0x22 and A2 only after the
+      // scale's answer to the profile frame.
+      describe('on the 20-byte extended dialect (#501)', () => {
+        const P180 = defaultProfile({ age: 40, height: 180, lastKnownWeight: 78 });
+        // 7800 = 0x1e78.
+        const ANCHOR_78 = [0xa2, 0x06, 0x01, 0x1e, 0x78, 0x3f];
+        const START = [0x22, 0x06, 0xff, 0x00, 0x03, 0x2a];
+
+        /** Every write with its time in ms from the connect, after each step's frame and advance. */
+        async function driveTimed(
+          adapter: QnScaleAdapter,
+          steps: Array<{ frame?: Buffer; advance: number }>,
+        ): Promise<{ at: number; data: number[] }[]> {
+          vi.useFakeTimers();
+          try {
+            const t0 = Date.now();
+            const writes: { at: number; data: number[] }[] = [];
+            const ctx = {
+              write: async (_uuid: string, data: Buffer | number[]) => {
+                writes.push({ at: Date.now() - t0, data: [...data] });
+              },
+              read: async () => Buffer.alloc(0),
+              subscribe: async () => {},
+              profile: P180,
+              deviceAddress: '',
+              availableChars: new Set<string>(),
+            } as unknown as ConnectionContext;
+            adapter.onSessionStart?.();
+            await adapter.onConnected(ctx);
+            for (const step of steps) {
+              if (step.frame) adapter.parseNotification(step.frame);
+              await vi.advanceTimersByTimeAsync(step.advance);
+            }
+            return writes;
+          } finally {
+            vi.useRealTimers();
+          }
+        }
+
+        const HANDSHAKE_501 = [
+          { frame: INFO_501, advance: 300 },
+          { frame: READY_501, advance: 300 },
+          { frame: CONFIG_REQ_501, advance: 500 },
+        ];
+        const fff2 = (w: { data: number[] }[]) =>
+          w.map((x) => x.data).filter((d) => d[0] !== 0x20 && d[0] !== 0xfe && d[0] !== 0x02);
+
+        it('sends the vendor profile frame without the ready-time A2', async () => {
+          const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+          try {
+            const adapter = makeAdapter();
+            adapter.configure({ qnUserKey: 1000 });
+            const writes = await driveTimed(adapter, [
+              ...HANDSHAKE_501,
+              { frame: REFUSED_501, advance: 500 },
+            ]);
+            const visit = buildUserProfileFrame(40, 180, 'male', { key: 1000 });
+            expect(profileFrames(writes.map((w) => w.data))).toEqual([visit]);
+            expect(fff2(writes).filter((d) => d[0] !== 0x01)).toEqual([
+              [0x13, 0x09, 0xff, 0x01, 0x10, 0x00, 0x00, 0x00, 0x2c],
+              visit,
+              START,
+              ANCHOR_78,
+              ANCHOR_78,
+            ]);
+            const lines = debug.mock.calls.map((c) => String(c[0]));
+            expect(lines).toContain(
+              'QN: no A2 before START on the 20-byte dialect, as the vendor app ' +
+                '(ble.qn_user_key, #463)',
+            );
+            expect(lines).toContain(
+              'QN: A00D profile frame with key 1000, age 40, height 1800 mm, sex male, athlete ' +
+                'no (ble.qn_user_key, 20-byte dialect, #463)',
+            );
+            expect(lines.filter((l) => l.includes('is not used on this dialect'))).toEqual([]);
+          } finally {
+            debug.mockRestore();
+          }
+        });
+
+        it("sends START and the anchor pair on the scale's answer, not before", async () => {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000 });
+          const writes = await driveTimed(adapter, [
+            ...HANDSHAKE_501,
+            { frame: REFUSED_501, advance: 500 },
+          ]);
+          const visitAt = writes.find((w) => w.data[0] === 0xa0)!.at;
+          const answerAt = 1100;
+          // Nothing between the profile frame and the answer, 800 ms later.
+          expect(writes.filter((w) => w.at > visitAt && w.at < answerAt)).toEqual([]);
+          const after = writes.filter((w) => w.at >= answerAt);
+          expect(after).toEqual([
+            { at: answerAt, data: START },
+            { at: answerAt, data: ANCHOR_78 },
+            { at: answerAt + 150, data: ANCHOR_78 },
+          ]);
+        });
+
+        it('sends them VISIT_ANSWER_TIMEOUT_MS after the profile frame without an answer', async () => {
+          const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+          try {
+            const adapter = makeAdapter();
+            adapter.configure({ qnUserKey: 1000 });
+            const writes = await driveTimed(adapter, [...HANDSHAKE_501, { advance: 1500 }]);
+            const visitAt = writes.find((w) => w.data[0] === 0xa0)!.at;
+            expect(writes.filter((w) => w.at > visitAt)).toEqual([
+              { at: visitAt + 1000, data: START },
+              { at: visitAt + 1000, data: ANCHOR_78 },
+              { at: visitAt + 1150, data: ANCHOR_78 },
+            ]);
+            expect(debug.mock.calls.map((c) => String(c[0]))).toContain(
+              'QN: no answer to the profile frame within 1000 ms, sending START and the weight ' +
+                'anchor anyway (ble.qn_user_key, #501)',
+            );
+          } finally {
+            debug.mockRestore();
+          }
+        });
+
+        it('drops the ready-time anchor of qn_weight_ack and keeps the pair after START', async () => {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000, qnWeightAck: true });
+          const writes = (
+            await driveTimed(adapter, [...HANDSHAKE_501, { frame: REFUSED_501, advance: 500 }])
+          ).map((w) => w.data);
+          expect(preStartA2(writes)).toEqual([]);
+          const startIndex = writes.findIndex((w) => w[0] === 0x22);
+          expect(writes.slice(startIndex + 1)).toEqual([ANCHOR_78, ANCHOR_78]);
+        });
+
+        // The wait for the answer spans a whole second, so a session that ends
+        // and reconnects inside it must not get this one's START or anchor.
+        it('does not hand a reconnected session the START held for the answer', async () => {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000 });
+          const makeCtx = (sink: number[][]): ConnectionContext =>
+            ({
+              write: async (_uuid: string, data: Buffer | number[]) => {
+                sink.push([...data]);
+              },
+              read: async () => Buffer.alloc(0),
+              subscribe: async () => {},
+              profile: P180,
+              deviceAddress: '',
+              availableChars: new Set<string>(),
+            }) as unknown as ConnectionContext;
+          vi.useFakeTimers();
+          try {
+            const first: number[][] = [];
+            const second: number[][] = [];
+            adapter.onSessionStart?.();
+            await adapter.onConnected(makeCtx(first));
+            for (const step of HANDSHAKE_501) {
+              adapter.parseNotification(step.frame);
+              await vi.advanceTimersByTimeAsync(step.advance);
+            }
+            // The profile frame is out, START waits for the answer.
+            expect(first.some((w) => w[0] === 0xa0)).toBe(true);
+            expect(first.some((w) => w[0] === 0x22)).toBe(false);
+            adapter.onSessionEnd!();
+            adapter.onSessionStart?.();
+            await adapter.onConnected(makeCtx(second));
+            // Past the 1 s wait, short of the new session's 2 s fallback.
+            await vi.advanceTimersByTimeAsync(1000);
+            expect(second.filter((w) => w[0] === 0x22 || w[0] === 0xa2)).toEqual([]);
+            expect(first.filter((w) => w[0] === 0x22 || w[0] === 0xa2)).toEqual([]);
+          } finally {
+            vi.useRealTimers();
+          }
+        });
+
+        it("keeps openScale's frames and their timing without the key", async () => {
+          const writes = await driveTimed(makeAdapter(), [
+            ...HANDSHAKE_501,
+            { frame: REFUSED_501, advance: 500 },
+          ]);
+          expect(profileFrames(writes.map((w) => w.data))).toEqual([OPENSCALE_PROFILE]);
+          expect(preStartA2(writes.map((w) => w.data))).toEqual([
+            [0xa2, 0x06, 0x01, 0x32, 0x28, 0x03],
+          ]);
+          const visitAt = writes.find((w) => w.data[0] === 0xa0)!.at;
+          expect(writes.find((w) => w.data[0] === 0x22)!.at).toBe(visitAt + 200);
+        });
       });
 
       it('changes nothing on the fallback handshake without a 0x12', async () => {
@@ -4091,6 +4292,10 @@ describe('QN per-session reset ordering (#406)', () => {
       'sessionGeneration',
       'sessionStartedScaleSeconds',
       'ae01Chain',
+      // The answer to this session's profile frame (#501): a fresh promise and
+      // its resolver.
+      'visitAnswered',
+      'answerVisit',
       // Keyed by reading object; an earlier session's reading is never handed
       // back, so there is nothing to clear (#331).
       'provisionalReadings',

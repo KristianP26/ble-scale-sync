@@ -64,8 +64,10 @@ export class QnSession {
   /**
    * The vendor-app profile sequence: no ready-time A2, and the A00D #2 profile
    * frame from the first user's profile. Sent on the 19-byte dialect with
-   * `ble.qn_weight_ack` (#331, D033), and on the 18- and 19-byte dialects with
-   * `ble.qn_user_key` (#463, D055).
+   * `ble.qn_weight_ack` (#331, D033), on the 18- and 19-byte dialects with
+   * `ble.qn_user_key` (#463, D055), and with it on the 20-byte extended one
+   * too, where the 0x22 START and the weight anchor wait for the scale's
+   * answer to the profile frame (`visitAnswered`, #501).
    * Decided once, by whichever of the ready step and the config-request step
    * runs first, from the 0x12 seen at that point, so the ready-time A2 and the
    * A00D #2 profile frame always come from the same choice. A 0x12 that
@@ -73,6 +75,16 @@ export class QnSession {
    * decided.
    */
   appProfileSequence: boolean | null = null;
+
+  /**
+   * Settled by the scale's answer to the profile frame, `a1 06 02 ..`, whatever
+   * it says (`answerVisit`, from onProfileAnswer). The extended dialect's
+   * vendor sequence waits for it before its 0x22 START (#501).
+   */
+  answerVisit: () => void = () => {};
+  readonly visitAnswered = new Promise<void>((resolve) => {
+    this.answerVisit = resolve;
+  });
 
   /** One "refused the profile sent with ble.qn_user_key" line per session (#463). */
   visitRefusedLogged = false;
