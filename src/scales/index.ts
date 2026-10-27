@@ -10,6 +10,7 @@ import { SenssunIfB7Adapter } from './senssun-if-b7.js';
 import { OkokChipseaAdapter } from './okok-chipsea.js';
 import { EtekcityFit8sAdapter } from './etekcity-fit8s.js';
 import { PicoocMiniLiteAdapter } from './picooc-mini-lite.js';
+import { HuaweiCh100Adapter } from './huawei-ch100.js';
 import { XiaomiS800Adapter } from './xiaomi-s800.js';
 import { XiaomiS400Adapter } from './xiaomi-s400.js';
 import { BeurerBf720Adapter } from './beurer-bf720.js';
@@ -99,6 +100,10 @@ export const adapters: ScaleAdapter[] = [
   // PICOOC Mini Lite: broadcast-only, claimed by its exact name PICOOC-L; its
   // company id is its own address, so no id is declared (#408).
   new PicoocMiniLiteAdapter(),
+  // Huawei CH100 / AH100: claimed by its exact name only. It exposes 0x181B as
+  // well, so it outranks Mi Scale 2 (registry-check invariant); the FAA0 vendor
+  // service is shared with other Chipsea scales and is never claimed (#503).
+  new HuaweiCh100Adapter(),
   new MiScale2Adapter(),
   // Xiaomi Mijia S800 (ms116): broadcast-only, matches FE95 + product id 0x51E2
   // or its own name; no collision with any other adapter (#232).

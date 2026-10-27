@@ -21,7 +21,7 @@ BLE Scale Sync reads the scale on an always-on host instead of a phone. The tabl
 | Other targets             | InfluxDB, webhook, ntfy, [and more](/exporters)              | No               | Health Connect, Wger | No               |
 | Local file export         | CSV and JSONL                                                | SQLite           | No                   | No               |
 | Multi-user                | Automatic weight matching                                    | Manual selection | Per-user sync        | Per-account      |
-| Supported scales          | 41 protocol adapters                                         | Many brands      | Via openScale        | Own brand only   |
+| Supported scales          | 42 protocol adapters                                         | Many brands      | Via openScale        | Own brand only   |
 | Body composition          | [BIA from impedance](/body-composition)                      | Varies           | From openScale       | Varies           |
 | Docker                    | Multi-arch images                                            | No               | No                   | No               |
 | Open source               | GPL-3.0                                                      | GPL-3.0          | GPL-3.0              | No               |

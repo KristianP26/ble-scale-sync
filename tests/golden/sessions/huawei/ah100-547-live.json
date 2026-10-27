@@ -1,0 +1,64 @@
+{
+  "settled": {
+    "by": "reading",
+    "atMs": 9743
+  },
+  "reading": {
+    "weight": 87.6,
+    "impedance": 373,
+    "scaleComposition": {
+      "fat": 22.9,
+      "slot": 1,
+      "sent": {
+        "gender": "male",
+        "age": 30,
+        "height": 183
+      }
+    }
+  },
+  "history": [],
+  "subscribes": [
+    {
+      "seq": 0,
+      "atMs": 0,
+      "uuid": "faa2"
+    }
+  ],
+  "writes": [
+    {
+      "seq": 1,
+      "atMs": 457,
+      "uuid": "faa1",
+      "hex": "db082417876987698607",
+      "withResponse": true
+    },
+    {
+      "seq": 2,
+      "atMs": 1222,
+      "uuid": "faa1",
+      "hex": "dc0e09144d262e71648224f724bf13bc996146",
+      "withResponse": true
+    },
+    {
+      "seq": 3,
+      "atMs": 9743,
+      "uuid": "faa1",
+      "hex": "db021306",
+      "withResponse": true
+    }
+  ],
+  "rxDropped": 0,
+  "payload": {
+    "weight": 87.6,
+    "impedance": 373,
+    "bmi": 26.16,
+    "bodyFatPercent": 22.9,
+    "waterPercent": 56.28,
+    "boneMass": 2.84,
+    "muscleMass": 64.7,
+    "visceralFat": 10,
+    "physiqueRating": 5,
+    "bmr": 1874,
+    "metabolicAge": 31
+  }
+}

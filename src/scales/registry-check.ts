@@ -34,6 +34,9 @@ export const ORDERING_INVARIANTS: ReadonlyArray<readonly [string, string]> = [
   ['Eufy Smart Scale P2/P2 Pro', 'QN Scale'],
   ['QN Scale', 'Renpho ES-WBE28'],
   ['Beurer BF720/BF105', 'Xiaomi Mi Scale 2'],
+  // A CH100 exposes the SIG body composition service 0x181B, which Mi Scale 2
+  // claims from any advertiser; the name claim alone does not order them (#503).
+  ['Huawei CH100/AH100', 'Xiaomi Mi Scale 2'],
   ['Robi S9', 'MGB (Swan/Icomon/YG)'],
   // The FFB0 Lefu family resolves strictly Robi > Hutbit > MGB (#278). Robi
   // must outrank Hutbit so a named Robi carrying the OEM signature is never

@@ -60,6 +60,7 @@ If your scale is not found or its values look wrong, follow [Troubleshooting](ht
 - OKOK and Chipsea broadcast: public captures, checked against openScale and [ble_monitor](https://github.com/custom-components/ble_monitor).
 - PICOOC Mini Lite: openScale (dnsfdv) and the advertisement log in oliexdev/openScale#1512.
 - A&D UC-352BLE: the capture in oliexdev/openScale#1505 (mrblowntobits) and the GATT dump in [HEADS-project/ThingML-BLE](https://github.com/HEADS-project/ThingML-BLE).
+- Huawei CH100 and AH100: openScale (danieldorigatti, martinriedel), the captures in oliexdev/openScale#547 (dmitriytim) and testing on a CH100 by Otautahi.
 - QN-Scale, FITINDEX and a few others: reverse-engineered in this project.
 - Garmin upload: [garminconnect](https://github.com/cyberjunky/python-garminconnect) by cyberjunky.
 - BLE: [node-ble](https://github.com/chrvadala/node-ble) (Linux), [@abandonware/noble](https://github.com/abandonware/noble) (Windows), [@stoprocent/noble](https://github.com/stoprocent/noble) (macOS).

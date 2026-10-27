@@ -131,6 +131,9 @@ const FIXTURES: Record<string, BleDeviceInfo> = {
     address: '5C:31:3E:01:16:6D',
     serviceUuids: ['181d'],
   },
+  // #503: no CH100 advertisement is on record; its GATT (openScale#547) has
+  // 0x181B, which Mi Scale 2 claims, so the fixture carries it to pin the order.
+  'Huawei CH100/AH100': { localName: 'CH100', serviceUuids: ['181b'] },
   'Xiaomi Mi Scale 2': { localName: 'MIBFS', serviceUuids: [] },
   'Xiaomi Mijia Scale S800': { localName: 'Mijia Scale S800 A1AB', serviceUuids: [] },
   // Same FE95 service as the S800; the product id (0x3bd5 here) tells them apart.
@@ -240,6 +243,17 @@ describe('registry collision guard (#182)', () => {
       .filter(([, info]) => and!.matches(info))
       .map(([name]) => name);
     expect(claimed).toEqual(['A&D UC-352BLE']);
+  });
+
+  // #503: claimed by its exact name only; the FAA0 vendor service it shares
+  // with other Chipsea scales (Beurer BF950) is never claimed.
+  it('Huawei CH100/AH100 claims no fixture but its own', () => {
+    const huawei = adapters.find((a) => a.name === 'Huawei CH100/AH100');
+    expect(huawei).toBeDefined();
+    const claimed = Object.entries(FIXTURES)
+      .filter(([, info]) => huawei!.matches(info))
+      .map(([name]) => name);
+    expect(claimed).toEqual(['Huawei CH100/AH100']);
   });
 
   it('has no fixture for an adapter that is not registered', () => {

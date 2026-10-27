@@ -44,7 +44,7 @@ Yes. Set `update_check: false` in `config.yaml` (in the add-on, turn off the `up
 
 ### Is my scale supported?
 
-Check the [supported scales](/guide/supported-scales) page for the full list of 41 adapters. Most scales are detected automatically, without a MAC address; set `ble.scale_mac` afterwards so the app reads only yours.
+Check the [supported scales](/guide/supported-scales) page for the full list of 42 adapters. Most scales are detected automatically, without a MAC address; set `ble.scale_mac` afterwards so the app reads only yours.
 
 ### My scale is not listed. Can I add it?
 
