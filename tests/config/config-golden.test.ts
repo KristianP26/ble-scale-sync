@@ -86,6 +86,7 @@ ble:
   qn_report_byte: 2
   qn_weight_ack: true
   qn_user_key: 1234
+  qn_user_slot: 2
   qn_a4_prelude: true
   qn_time_sync_long: false
   qn_config_long: true
@@ -237,6 +238,7 @@ const RELOAD_EDITS: Record<string, Record<string, unknown>> = {
     out_of_range: 'warn',
     'users.0.last_known_weight': 90,
     'ble.qn_weight_ack': false,
+    'ble.qn_user_slot': 3,
     'ble.rmsc04_profile_byte': '5c',
   },
   'handler-and-adapter': {

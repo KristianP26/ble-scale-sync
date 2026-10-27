@@ -117,6 +117,20 @@ export class QnSession {
   live20C15: Buffer | null = null;
   visitSent: { slot: number; frame: readonly number[] } | null = null;
   visitReply: { slot: number; ok: boolean } | null = null;
+
+  /** The user slot of the profile frame this session sent, 1 if none (`ble.qn_user_slot`, #501). */
+  get profileSlot(): number {
+    return this.visitSent?.slot ?? 1;
+  }
+
+  /** The scale accepted the profile frame this session sent, for its slot (#501). */
+  get visitAccepted(): boolean {
+    return (
+      this.visitSent !== null &&
+      this.visitReply?.ok === true &&
+      this.visitReply.slot === this.visitSent.slot
+    );
+  }
   readyValueType: number | null = null;
   measuredAfterVisit = false;
   a4PreludeSent = false;

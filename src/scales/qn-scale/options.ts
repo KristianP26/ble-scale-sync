@@ -76,6 +76,21 @@ export const QN_BLE_OPTIONS = {
    */
   qn_user_key: z.number().int().min(1).max(9999).optional().nullable(),
   /**
+   * User slot the QN profile frame, the weight anchor and the 0x22 stored-data
+   * query are for, 1 to 8 (#501). Only with `qn_user_key`; without it this is
+   * ignored with a warning.
+   *
+   * Per the vendor's published SDK the scale keeps up to 8 users, each in a
+   * slot with the key the vendor app registered it with. ble-scale-sync sends
+   * slot 1 unless this is set; the Arboleaf CS10G app of #501 registered its
+   * user in slot 2, and the scale accepts key 1000 only for that slot. The
+   * slot cannot be read from the scale: set the one the debug log names for
+   * the scale's own results (`user slot N`). On the 18-, 19- and 20-byte
+   * dialects; the first configured user's profile goes to that slot, and
+   * nothing is written to slot 1 then. Left unset it changes nothing.
+   */
+  qn_user_slot: z.number().int().min(1).max(8).optional().nullable(),
+  /**
    * Send the two 0xA4 0x0F frames an Arboleaf vendor app sends between START
    * and the first live 0x10 weight frame (#331).
    *

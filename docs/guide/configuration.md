@@ -90,6 +90,7 @@ These keys change what the app sends to one family of scales. Leave them unset u
 | `qn_report_byte`      | (none)      | QN scales. Deletes the user slots this mask selects on the scale, 0 to 255, on every connection. See [QN scales](./scales/qn). |
 | `qn_weight_ack`       | Per dialect | QN scales. Send the weight anchor and acknowledge live weight frames. See [QN scales](./scales/qn). |
 | `qn_user_key`         | (none)      | QN scales with a scale-info frame of 18 bytes or longer. User key of the profile frame, 1 to 9999. See [QN scales](./scales/qn). |
+| `qn_user_slot`        | (none)      | QN scales with a scale-info frame of 18 bytes or longer. User slot of the profile frame, 1 to 8, only with `qn_user_key`. Experimental. See [QN scales](./scales/qn#user-slot). |
 | `qn_time_sync_long`   | `false`     | QN scales. Send the 9-byte time-sync frame with the host's UTC offset. See [QN scales](./scales/qn). |
 | `qn_config_long`      | `false`     | QN scales. Send the 10-byte config frame. See [QN scales](./scales/qn). |
 | `qn_a4_prelude`       | `false`     | QN scales. Send two extra `0xA4` frames the vendor app sends. They overwrite data the scale keeps for its first user. See [QN scales](./scales/qn). |

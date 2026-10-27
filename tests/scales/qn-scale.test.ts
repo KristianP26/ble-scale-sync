@@ -234,6 +234,8 @@ const READY_501 = Buffer.from([
 ]);
 const CONFIG_REQ_501 = Buffer.from([0x21, 0x07, 0xff, 0x01, 0x64, 0x2d, 0xb9]);
 const REFUSED_501 = Buffer.from([0xa1, 0x06, 0x02, 0x01, 0x00, 0xaa]);
+/** The CS10G's "no stored weigh-ins" of its 23:22 session, from the same log. */
+const NO_STORED_501 = Buffer.from([0x23, ...new Array<number>(18).fill(0), 0x23]);
 
 /**
  * #501, an Arboleaf CS10G on the 20-byte extended dialect: the 0xB4 and the
@@ -250,6 +252,29 @@ const B1_501 = Buffer.from(
   'hex',
 );
 
+/**
+ * #463, the Physiq's acceptance of the profile frame for user slot 1 and its
+ * stored record of 2026-10-13: 71.55 kg at 17:59:38Z, slot 1; the record's
+ * [16..17] zeroed, [19] recomputed.
+ */
+const VISIT_OK_463 = Buffer.from([0xa1, 0x06, 0x02, 0x01, 0x01, 0xab]);
+const RECORD_463 = Buffer.from([
+  0x23, 0x14, 0xff, 0x01, 0x01, 0x01, 0x0a, 0x2e, 0x61, 0x32, 0x1b, 0xf3, 0x10, 0xd9, 0x10, 0xfe,
+  0x00, 0x00, 0x00, 0x09,
+]);
+/**
+ * Answers and a record for user slot 2 (#501), derived: no 18-byte scale in
+ * the logs has a user in slot 2. ACCEPTED_SLOT2 is VISIT_OK_463 with [3] 02,
+ * byte for byte the CS10G's acceptance in the reporter's capture;
+ * REFUSED_SLOT2 is REFUSED_501 with [3] 02; RECORD_463_SLOT2 is RECORD_463
+ * with [5] 02.
+ */
+const ACCEPTED_SLOT2 = derive(VISIT_OK_463, { 3: 0x02 });
+/** VISIT_OK_463 with [3] 08, the last slot. */
+const ACCEPTED_SLOT8 = derive(VISIT_OK_463, { 3: 0x08 });
+const REFUSED_SLOT2 = derive(REFUSED_501, { 3: 0x02 });
+const RECORD_463_SLOT2 = derive(RECORD_463, { 5: 0x02 });
+
 /** Every derived frame: [name, frame, source, the indices changed on purpose]. */
 const DERIVED: [string, Buffer, Buffer, number[]][] = [
   ['CLASSIC_8450', CLASSIC_8450, STABLE_CLASSIC, [3, 4]],
@@ -264,6 +289,10 @@ const DERIVED: [string, Buffer, Buffer, number[]][] = [
   ['LIVE_253_2000', LIVE_253_2000, LIVE_253, [5, 6]],
   ['LIVE_253_NOT_ITS_LENGTH', LIVE_253_NOT_ITS_LENGTH, LIVE_253, [1]],
   ['LIVE_GE_SLOT2', LIVE_GE_SLOT2, LIVE_GE_235, [2]],
+  ['ACCEPTED_SLOT2', ACCEPTED_SLOT2, VISIT_OK_463, [3]],
+  ['ACCEPTED_SLOT8', ACCEPTED_SLOT8, VISIT_OK_463, [3]],
+  ['REFUSED_SLOT2', REFUSED_SLOT2, REFUSED_501, [3]],
+  ['RECORD_463_SLOT2', RECORD_463_SLOT2, RECORD_463, [5]],
 ];
 
 /** Build a fake AABB broadcast buffer with the given weight and stability. */
@@ -3030,6 +3059,229 @@ describe('AE02 dispatch (#75, #235)', () => {
         });
       });
 
+      // #501: the slot of the profile frame, and of every A2 and 0x22 of the
+      // session, on the 18-, 19- and 20-byte dialects with the key. Each call
+      // site that sends an A2 or a 0x22 has its own test.
+      describe('ble.qn_user_slot (#501)', () => {
+        const P180 = defaultProfile({ age: 40, height: 180, lastKnownWeight: 78 });
+        const VISIT_SLOT2 = buildUserProfileFrame(40, 180, 'male', { slot: 2, key: 1000 });
+        // 7800 = 0x1e78.
+        const TRIGGER_SLOT2 = [0xa2, 0x06, 0x02, 0x1e, 0x78, 0x40];
+        const START_SLOT2 = [0x22, 0x06, 0xff, 0x00, 0x05, 0x2c];
+        const HANDSHAKE_501 = [
+          { frame: INFO_501, advance: 300 },
+          { frame: READY_501, advance: 300 },
+          { frame: CONFIG_REQ_501, advance: 500 },
+        ];
+        const slotted = (o: AdapterRuntimeConfig = {}): QnScaleAdapter => {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000, qnUserSlot: 2, ...o });
+          return adapter;
+        };
+        /** A2 and 0x22 frames for slot 1: `a2 06 01 ..` and the mask `00 03`. */
+        const slotOne = (writes: number[][]): number[][] =>
+          writes.filter(
+            (w) => (w[0] === 0xa2 && w[2] === 0x01) || (w[0] === 0x22 && w[4] === 0x03),
+          );
+
+        it('sends the profile frame, START and the anchor pair for slot 2 on the 20-byte dialect', async () => {
+          const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+          try {
+            const writes = await driveSteps(slotted(), P180, [
+              ...HANDSHAKE_501,
+              { frame: ACCEPTED_SLOT2, advance: 500 },
+            ]);
+            expect(profileFrames(writes)).toEqual([VISIT_SLOT2]);
+            const startIndex = writes.findIndex((w) => w[0] === 0x22);
+            expect(writes.slice(startIndex)).toEqual([START_SLOT2, TRIGGER_SLOT2, TRIGGER_SLOT2]);
+            expect(slotOne(writes)).toEqual([]);
+            const lines = debug.mock.calls.map((c) => String(c[0]));
+            expect(lines).toContain(
+              'QN: A00D profile frame with key 1000, user slot 2, age 40, height 1800 mm, sex ' +
+                'male, athlete no (ble.qn_user_key, 20-byte dialect, #463)',
+            );
+            expect(lines).toContain('QN: the scale accepted the profile for user slot 2 (#331)');
+            expect(lines).toContain(
+              'QN: extended-dialect measurement trigger sent, weight anchor 78.00 kg for user ' +
+                'slot 2 (#235, #75)',
+            );
+          } finally {
+            debug.mockRestore();
+          }
+        });
+
+        it('sets the mask bit of slot 8 in the high byte of the 0x22', async () => {
+          const writes = await driveSteps(slotted({ qnUserSlot: 8 }), P180, [
+            ...HANDSHAKE_501,
+            { frame: ACCEPTED_SLOT8, advance: 500 },
+          ]);
+          expect(profileFrames(writes).map((w) => w[3])).toEqual([0x08]);
+          expect(writes.filter((w) => w[0] === 0x22)).toEqual([
+            [0x22, 0x06, 0xff, 0x01, 0x01, 0x29],
+          ]);
+          expect(writes.filter((w) => w[0] === 0xa2).map((w) => w[2])).toEqual([0x08, 0x08]);
+        });
+
+        it('asks for slot 2 again in the re-query after an empty 0x23', async () => {
+          const writes = await driveSteps(slotted(), P180, [
+            ...HANDSHAKE_501,
+            { frame: ACCEPTED_SLOT2, advance: 500 },
+            { frame: NO_STORED_501, advance: 3500 },
+          ]);
+          expect(writes.filter((w) => w[0] === 0x22)).toEqual([START_SLOT2, START_SLOT2]);
+        });
+
+        it('sends the 0x22 on the acceptance for slot 2 on the 18-byte dialect', async () => {
+          const writes = await driveSteps(slotted(), P180, [
+            { frame: INFO_461, advance: 300 },
+            { frame: READY_461, advance: 300 },
+            { frame: CONFIG_REQ_461, advance: 210 },
+            { frame: ACCEPTED_SLOT2, advance: 1000 },
+          ]);
+          expect(profileFrames(writes).map((w) => w[3])).toEqual([0x02]);
+          // Proto 0x00 on the 18-byte dialect; once, on the acceptance.
+          expect(writes.filter((w) => w[0] === 0x22)).toEqual([
+            [0x22, 0x06, 0x00, 0x00, 0x05, 0x2d],
+          ]);
+        });
+
+        it('sends the anchor pair after START and the weight echo for slot 2 on the 18-byte dialect', async () => {
+          const writes = await driveSteps(slotted({ qnWeightAck: true }), P180, [
+            { frame: INFO_461, advance: 300 },
+            { frame: READY_461, advance: 300 },
+            { frame: CONFIG_REQ_461, advance: 1000 },
+            { frame: LIVE_253, advance: 100 },
+          ]);
+          const a2 = writes.filter((w) => w[0] === 0xa2);
+          // The pair, then the echo of the live frame's own weight (0x2120).
+          expect(a2).toEqual([TRIGGER_SLOT2, TRIGGER_SLOT2, [0xa2, 0x06, 0x02, 0x21, 0x20, 0xeb]]);
+          expect(slotOne(writes)).toEqual([]);
+        });
+
+        it('sends the profile frame, START and the anchor pair for slot 2 on the 19-byte dialect', async () => {
+          const writes = await driveSteps(
+            slotted({ qnWeightAck: true }),
+            defaultProfile({ age: 51, height: 182, lastKnownWeight: 74.05 }),
+            [
+              { frame: ARBOLEAF_2A_INFO, advance: 300 },
+              { frame: ARBOLEAF_2A_READY, advance: 300 },
+              { frame: ARBOLEAF_2A_CONFIG_REQ, advance: 1000 },
+            ],
+          );
+          expect(profileFrames(writes)).toEqual([
+            buildUserProfileFrame(51, 182, 'male', { slot: 2, key: 1000 }),
+          ]);
+          const startIndex = writes.findIndex((w) => w[0] === 0x22);
+          // ANCHOR_2A for slot 2.
+          const anchor = [0xa2, 0x06, 0x02, 0x1c, 0xed, 0xb3];
+          expect(writes.slice(startIndex)).toEqual([START_SLOT2, anchor, anchor]);
+          expect(slotOne(writes)).toEqual([]);
+        });
+
+        // A 0x12 that comes after the fallback's ready step leaves openScale's
+        // profile frame (slot 1) in place; the A2 and 0x22 still carry the slot.
+        it('keeps the slot in START and the anchor pair when the 0x12 comes after a fallback ready', async () => {
+          const writes = await driveSteps(slotted(), P180, [
+            { advance: 2701 },
+            { frame: INFO_501, advance: 3000 },
+          ]);
+          expect(profileFrames(writes)).toEqual([OPENSCALE_PROFILE]);
+          const startIndex = writes.findIndex((w) => w[0] === 0x22);
+          expect(writes.slice(startIndex)).toEqual([START_SLOT2, TRIGGER_SLOT2, TRIGGER_SLOT2]);
+        });
+
+        it('is ignored with one warning without ble.qn_user_key', async () => {
+          const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+          try {
+            const adapter = makeAdapter();
+            adapter.configure({ qnUserSlot: 2 });
+            expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+              'QN: ble.qn_user_slot is set (2) without ble.qn_user_key, so it is ignored and ' +
+                'the profile frame goes to user slot 1. Set ble.qn_user_key too (#501).',
+            ]);
+            const steps = [...HANDSHAKE_501, { frame: REFUSED_501, advance: 500 }];
+            const writes = await driveSteps(adapter, P180, steps);
+            const plain = await driveSteps(makeAdapter(), P180, steps);
+            expect(writes.filter((w) => w[0] !== 0x20)).toEqual(plain.filter((w) => w[0] !== 0x20));
+          } finally {
+            warn.mockRestore();
+          }
+        });
+
+        it('does not send the A4 prelude, which writes slot 1, for another slot', async () => {
+          const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+          try {
+            const adapter = slotted({ qnA4Prelude: true });
+            expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+              'QN: ble.qn_a4_prelude is not sent with ble.qn_user_slot 2: its frames write user ' +
+                'slot 1 (#501).',
+            ]);
+            const writes = await driveSteps(adapter, P180, [
+              ...HANDSHAKE_501,
+              { frame: ACCEPTED_SLOT2, advance: 1000 },
+            ]);
+            expect(writes.filter((w) => w[0] === 0xa4)).toEqual([]);
+            // Slot 1 itself gets it as before.
+            const one = await driveSteps(slotted({ qnUserSlot: 1, qnA4Prelude: true }), P180, [
+              ...HANDSHAKE_501,
+              { frame: VISIT_OK_463, advance: 1000 },
+            ]);
+            expect(one.filter((w) => w[0] === 0xa4)).toHaveLength(2);
+          } finally {
+            warn.mockRestore();
+          }
+        });
+
+        it('warns when ble.qn_report_byte deletes the slot of ble.qn_user_slot', () => {
+          const warn = vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+          const lines = () =>
+            warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('qn_user_slot'));
+          try {
+            // 252 deletes slots 3 to 8.
+            slotted({ qnUserSlot: 3, qnReportByte: 252 });
+            expect(lines()).toEqual([
+              'QN: ble.qn_report_byte 252 selects user slot 3, the slot of ble.qn_user_slot, so ' +
+                'every QN session deletes that user from the scale before it sends the profile ' +
+                'frame (#461, #501).',
+            ]);
+            warn.mockClear();
+            slotted({ qnUserSlot: 2, qnReportByte: 252 });
+            expect(lines()).toEqual([]);
+          } finally {
+            warn.mockRestore();
+          }
+        });
+
+        it('names both options when the scale refuses the profile for the slot', async () => {
+          const info = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+          try {
+            await driveSteps(slotted(), P180, [
+              ...HANDSHAKE_501,
+              { frame: REFUSED_SLOT2, advance: 500 },
+            ]);
+            expect(
+              info.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('refused')),
+            ).toEqual([
+              'QN: the scale refused the profile frame sent with ble.qn_user_key 1000 for user ' +
+                'slot 2. Most likely the vendor app set up that slot with another key, or never ' +
+                'set it up. Check ble.qn_user_key and ble.qn_user_slot, and that the first user ' +
+                "in config.yaml is the vendor app's user in that slot (#463, #501).",
+            ]);
+          } finally {
+            info.mockRestore();
+          }
+        });
+
+        it('keeps every frame of slot 1 when set to 1', async () => {
+          const steps = [...HANDSHAKE_501, { frame: VISIT_OK_463, advance: 500 }];
+          const one = await driveSteps(slotted({ qnUserSlot: 1 }), P180, steps);
+          const keyOnly = makeAdapter();
+          keyOnly.configure({ qnUserKey: 1000 });
+          const plain = await driveSteps(keyOnly, P180, steps);
+          expect(one.filter((w) => w[0] !== 0x20)).toEqual(plain.filter((w) => w[0] !== 0x20));
+        });
+      });
+
       it('changes nothing on the fallback handshake without a 0x12', async () => {
         const profile = defaultProfile({ age: 51, height: 182 });
         const keyed = makeAdapter();
@@ -4872,14 +5124,8 @@ describe('QN stored record and impedance (#461)', () => {
       0x12, 0x12, 0xff, 0x01, 0x00, 0x00, 0x00, 0x00, 0x02, 0x13, 0x07, 0x16, 0x00, 0x01, 0x05,
       0x9f, 0x32, 0x2d,
     ]);
-    const VISIT_OK_463 = Buffer.from([0xa1, 0x06, 0x02, 0x01, 0x01, 0xab]);
     const MEASURING_463 = Buffer.from([
       0x10, 0x0f, 0xff, 0x01, 0x01, 0x1b, 0xf8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x33,
-    ]);
-    /** 71.55 kg at 2026-10-13T17:59:38Z, slot 1; [16..17] zeroed, [19] recomputed. */
-    const RECORD_463 = Buffer.from([
-      0x23, 0x14, 0xff, 0x01, 0x01, 0x01, 0x0a, 0x2e, 0x61, 0x32, 0x1b, 0xf3, 0x10, 0xd9, 0x10,
-      0xfe, 0x00, 0x00, 0x00, 0x09,
     ]);
     /** The live result after it, 71.60 kg / 507 Ohm; [11..12] zeroed, [14] recomputed. */
     const LIVE_463 = Buffer.from([
@@ -5298,15 +5544,11 @@ describe('QN stored record and impedance (#461)', () => {
       });
 
       it('does not export a record of another user slot', async () => {
-        // RECORD_463 with its slot [5] set to 2 and the checksum [19]
-        // recomputed: no real record of slot 2 exists, the 0x22 mask asks for
-        // slot 1 and unassigned records only.
-        const slot2 = Buffer.from(RECORD_463);
-        slot2[5] = 2;
-        slot2[19] = [...slot2.subarray(0, 19)].reduce((a, b) => a + b, 0) & 0xff;
+        // No real record of slot 2 exists; the 0x22 mask asks for slot 1 and
+        // unassigned records only.
         const { readings, lines } = await session(
           keyed(),
-          [...HANDSHAKE, slot2],
+          [...HANDSHAKE, RECORD_463_SLOT2],
           '2026-10-13T18:09:00Z',
         );
         expect(readings).toEqual([]);
@@ -5315,6 +5557,68 @@ describe('QN stored record and impedance (#461)', () => {
             'scale assigned it to its user slot 2, and ble-scale-sync sends the profile of ' +
             'slot 1 (#463)',
         );
+      });
+
+      describe('with ble.qn_user_slot (#501)', () => {
+        const SLOT2_HANDSHAKE: Step[] = [INFO_463, READY_461, CONFIG_REQ_461, ACCEPTED_SLOT2, 1000];
+        const slotted = (): QnScaleAdapter => {
+          const adapter = makeAdapter();
+          adapter.configure({ qnUserKey: 1000, qnUserSlot: 2 });
+          return adapter;
+        };
+
+        it('reports a record of that slot as history', async () => {
+          const { readings, lines } = await session(
+            slotted(),
+            [...SLOT2_HANDSHAKE, RECORD_463_SLOT2],
+            '2026-10-13T18:09:00Z',
+          );
+          expect(readings).toEqual([STORED]);
+          expect(lines).toContain(
+            'QN: stored weigh-in 71.55 kg at 2026-10-13T17:59:38.000Z, user slot 2, record 1 ' +
+              'of 1, reported as history (#463)',
+          );
+        });
+
+        it('does not export a record of slot 1', async () => {
+          const { readings, lines } = await session(
+            slotted(),
+            [...SLOT2_HANDSHAKE, RECORD_463],
+            '2026-10-13T18:09:00Z',
+          );
+          expect(readings).toEqual([]);
+          expect(lines).toContain(
+            'QN: a stored weigh-in (71.55 kg at 2026-10-13T17:59:38.000Z) is not exported: the ' +
+              'scale assigned it to its user slot 1, and ble-scale-sync sends the profile of ' +
+              'slot 2 (#463)',
+          );
+        });
+
+        it('does not hold a live weigh-in when the scale accepted another slot', async () => {
+          const adapter = slotted();
+          const { readings, lines } = await session(
+            adapter,
+            [INFO_463, READY_461, CONFIG_REQ_461, 350, VISIT_OK_463, 1000, MEASURING_463, LIVE_463],
+            STARTED_463,
+          );
+          expect(readings).toHaveLength(1);
+          expect(adapter.isFinal(readings[0])).toBe(true);
+          expect(lines.some((l) => l.startsWith('QN: holding the weigh-in'))).toBe(false);
+        });
+
+        it('does not export it when the scale accepted another slot than the one sent', async () => {
+          const { readings, lines } = await session(
+            slotted(),
+            [INFO_463, READY_461, CONFIG_REQ_461, VISIT_OK_463, 1000, RECORD_463_SLOT2],
+            '2026-10-13T18:09:00Z',
+          );
+          expect(readings).toEqual([]);
+          expect(lines).toContain(
+            'QN: a stored weigh-in (71.55 kg at 2026-10-13T17:59:38.000Z) is not exported: the ' +
+              'scale did not accept the profile for user slot 2 in this session, so it is not ' +
+              'known whose it is (#463)',
+          );
+        });
       });
 
       it('does not export it when the scale refused the profile in this session', async () => {
