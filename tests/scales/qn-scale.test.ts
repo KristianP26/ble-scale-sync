@@ -211,6 +211,29 @@ const INFO_GE_235 = Buffer.from([
   0xe0, 0x6f, 0x2b, 0x3d,
 ]);
 
+/** #235, a live 0x10 from the GE CS 10 G vendor-app capture: 78.70 kg, user slot 1. */
+const LIVE_GE_235 = Buffer.from([
+  0x10, 0x14, 0x01, 0x00, 0x11, 0x1e, 0xbe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x12,
+]);
+/** LIVE_GE_235 for user slot 2, as the #501 CS10G streams it: [2] 01 -> 02, [19] recomputed. */
+const LIVE_GE_SLOT2 = derive(LIVE_GE_235, { 2: 0x02 });
+
+/**
+ * #501, an Arboleaf CS10G on the 20-byte extended dialect: the 0xB4 and the
+ * 0xB1 of its 23:38 session, byte for byte from the public DEBUG log. The 0xB4
+ * has [2] 03, which this dialect does not read, and no user ([4] f0); the
+ * 0xB1 is the result of user slot 2, 77.95 kg.
+ */
+const B4_501 = Buffer.from(
+  'b42d0301f00401544e7132501e000000000000000000000000000000000000000000000000000000000000008d',
+  'hex',
+);
+const B1_501 = Buffer.from(
+  'b12d030102731e9d0a7209af0a7e09bf09d20870098608aa0061005d0a3309730a4909510a2709240af308d485',
+  'hex',
+);
+
 /** Every derived frame: [name, frame, source, the indices changed on purpose]. */
 const DERIVED: [string, Buffer, Buffer, number[]][] = [
   ['CLASSIC_8450', CLASSIC_8450, STABLE_CLASSIC, [3, 4]],
@@ -224,6 +247,7 @@ const DERIVED: [string, Buffer, Buffer, number[]][] = [
   ['RECORD_283_131', RECORD_283_131, RECORD_283, [9, 10]],
   ['LIVE_253_2000', LIVE_253_2000, LIVE_253, [5, 6]],
   ['LIVE_253_NOT_ITS_LENGTH', LIVE_253_NOT_ITS_LENGTH, LIVE_253, [1]],
+  ['LIVE_GE_SLOT2', LIVE_GE_SLOT2, LIVE_GE_235, [2]],
 ];
 
 /** Build a fake AABB broadcast buffer with the given weight and stability. */
@@ -1197,6 +1221,32 @@ describe('QnScaleAdapter', () => {
       });
     });
 
+    it('names the user slot of the result in its debug line (#501)', async () => {
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      try {
+        const results = () =>
+          debug.mock.calls
+            .map((c) => String(c[0]))
+            .filter((l) => l.startsWith('QN: extended result'));
+        await atConnect3(async () => {
+          const adapter = await extendedAdapter();
+          // [2] 03 is not a 0xB4 this dialect reads: dropped without a reading.
+          expect(adapter.parseNotification(B4_501)).toBeNull();
+          expect(adapter.parseNotification(B1_501)).toEqual({ weight: 77.95, impedance: 0 });
+          const fresh = stampB4(B4_PREVIOUS_SESSION, scaleSeconds('2026-08-19T18:06:30.000Z'));
+          expect((await extendedAdapter()).parseNotification(fresh)?.weight).toBe(75.2);
+        });
+        expect(results()).toEqual([
+          'QN: extended result 0xb1 decoded 77.95kg, user slot 2 (impedance sweep not yet ' +
+            'calibrated, emitting weight-only) #235',
+          'QN: extended result 0xb4 decoded 75.2kg, user slot 1 (impedance sweep not yet ' +
+            'calibrated, emitting weight-only) #235',
+        ]);
+      } finally {
+        debug.mockRestore();
+      }
+    });
+
     it('does not decode result frames on a non-extended dialect', async () => {
       await atConnect3(async () => {
         const adapter = makeAdapter(); // no extended 0x12 seen -> classic dialect
@@ -2165,11 +2215,7 @@ describe('AE02 dispatch (#75, #235)', () => {
       0x10, 0x14, 0x01, 0x00, 0x11, 0x1d, 0xc4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
       0x00, 0x00, 0x00, 0x00, 0x17,
     ]);
-    /** A live 0x10 from the GE CS 10 G vendor-app capture (#235): 78.70 kg. */
-    const GE_LIVE = Buffer.from([
-      0x10, 0x14, 0x01, 0x00, 0x11, 0x1e, 0xbe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x12,
-    ]);
+    const GE_LIVE = LIVE_GE_235;
     const arboleaf2a: HandshakeOptions = {
       ready: ARBOLEAF_2A_READY,
       configReq: ARBOLEAF_2A_CONFIG_REQ,
@@ -3343,6 +3389,29 @@ describe('AE02 dispatch (#75, #235)', () => {
       expect(adapter.parseNotification(GE_LIVE)).toBeNull();
       await Promise.resolve();
       expect(writes.slice(before).filter((w) => w[0] === 0xa2)).toEqual([]);
+    });
+
+    // [2] of the extended dialect's 20-byte live frame is the user slot (#501).
+    it.each([
+      ['user slot 1', GE_LIVE, 'QN: 20-byte live frame, weight 78.7 kg at [5..6], user slot 1, '],
+      [
+        'user slot 2',
+        LIVE_GE_SLOT2,
+        'QN: 20-byte live frame, weight 78.7 kg at [5..6], user slot 2, ',
+      ],
+    ])('names the %s of an extended 20-byte live frame', async (_name, frame, start) => {
+      const debug = vi.spyOn(bleLog, 'debug').mockImplementation(() => {});
+      try {
+        const adapter = makeAdapter();
+        await driveHandshake(adapter, makeExtendedScaleInfo());
+        expect(adapter.parseNotification(frame)).toBeNull();
+        const lines = debug.mock.calls
+          .map((c) => String(c[0]))
+          .filter((l) => l.startsWith('QN: 20-byte live frame'));
+        expect(lines).toEqual([start + 'not echoed and not yet decoded (#331)']);
+      } finally {
+        debug.mockRestore();
+      }
     });
 
     // The original layout reads [5] as its stability byte, which in this shape

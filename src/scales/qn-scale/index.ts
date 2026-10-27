@@ -852,12 +852,15 @@ export class QnScaleAdapter
     // 19-byte dialect decodes it in its handler. Elsewhere its [4] 0x11 puts it
     // in the original layout, which reads 0x0011, and whether the GE frame
     // shares the Arboleaf status and part bytes is not known, so it is logged
-    // once per session with the weight where the captures put it.
+    // once per session with the weight where the captures put it. On the
+    // extended dialect [2] is the user slot, as on the 19-byte one: the CS10G
+    // streams `10 14 02 ..` for the user its app registered in slot 2 (#501).
     const twentyByteLive = data.length === 20 && data[1] === 0x14;
     if (twentyByteLive && !this.s.twentyByteFrameLogged) {
       this.s.twentyByteFrameLogged = true;
       bleLog.debug(
         `QN: 20-byte live frame, weight ${data.readUInt16BE(5) / 100} kg at [5..6], ` +
+          (this.s.kind === 'ext20' ? `user slot ${data[2]}, ` : '') +
           'not echoed and not yet decoded (#331)',
       );
     }

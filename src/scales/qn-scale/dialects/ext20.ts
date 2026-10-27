@@ -8,7 +8,7 @@ import {
   RESULT_RECORD_CLOCK_TOLERANCE_SEC,
   SCALE_EPOCH_OFFSET,
 } from '../constants.js';
-import type { QnDialectHandler } from '../dialect.js';
+import { storedSlotLabel, type QnDialectHandler } from '../dialect.js';
 import { hasValidSumChecksum } from '../frames.js';
 import type { QnSession } from '../session.js';
 
@@ -84,9 +84,12 @@ function resultFrame(s: QnSession, data: Buffer): ScaleReading | null {
   if (weight <= RESULT_MIN_WEIGHT_KG || weight >= RESULT_MAX_WEIGHT_KG) return null;
 
   s.extendedResultEmitted = true;
+  // [4] is the user slot the scale took the weigh-in for, 0xf0 for none: the
+  // CS10G sends 0xB1 with [4] 02 for the user its app registered in slot 2
+  // (#501). Logged only, so a reporter can find the slot to set.
   bleLog.debug(
-    `QN: extended result 0x${data[0].toString(16)} decoded ${weight}kg ` +
-      '(impedance sweep not yet calibrated, emitting weight-only) #235',
+    `QN: extended result 0x${data[0].toString(16)} decoded ${weight}kg, ` +
+      `${storedSlotLabel(data[4])} (impedance sweep not yet calibrated, emitting weight-only) #235`,
   );
   return { weight, impedance: 0 };
 }
