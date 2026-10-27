@@ -296,7 +296,7 @@ A CSV file gets a header row on the first write; JSONL gets one JSON object per 
 
 ## Strava {#strava}
 
-Updates the weight in your Strava athlete profile. Requires a Strava API application.
+Updates the weight in your Strava athlete profile. Requires a Strava API application, which works only while the account that owns it has a Strava subscription; without one, the healthcheck and every update fail with HTTP 403.
 
 | Field           | Required | Default           | Description                                                                      |
 | --------------- | -------- | ----------------- | -------------------------------------------------------------------------------- |
