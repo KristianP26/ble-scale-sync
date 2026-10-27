@@ -391,6 +391,7 @@ describe.skipIf(!HARNESS)(
             qn_report_byte: '010',
             qn_weight_ack: 'yes',
             qn_user_key: ' 01000 ',
+            qn_user_slot: ' 02 ',
             qn_a4_prelude: 'true',
             qn_time_sync_long: 'off',
             qn_config_long: '1',
@@ -418,6 +419,7 @@ describe.skipIf(!HARNESS)(
           qn_report_byte: 10
           qn_weight_ack: true
           qn_user_key: 1000
+          qn_user_slot: 2
           qn_a4_prelude: true
           qn_time_sync_long: false
           qn_config_long: true
@@ -569,6 +571,44 @@ describe.skipIf(!HARNESS)(
         expectLoads(r);
         expect(r.text).not.toContain('qn_user_key');
         expect(r.stdout).not.toContain('qn_user_key');
+      });
+    });
+
+    // Like qn_user_key, for 1 to 8 (#501).
+    describe('qn_user_slot', () => {
+      it.each([
+        ['2', 2],
+        ['02', 2],
+        [' 8 ', 8],
+        ['1', 1],
+      ])('writes %j as %d, and opens the ble block on its own', (value, written) => {
+        const r = generate({ options: { ...DEFAULTS, qn_user_slot: value } });
+        const config = expectLoads(r);
+        expect(config.ble?.qn_user_slot).toBe(written);
+        expect(r.text).toContain(`ble:
+  qn_user_slot: ${written}
+`);
+        expect(r.stdout).not.toContain('qn_user_slot');
+      });
+
+      it.each(['0', '00', '9', '10', '99999999999', 'abc', '-1', '1.5'])(
+        'drops %j with a warning',
+        (value) => {
+          const r = generate({ options: { ...DEFAULTS, qn_user_slot: value } });
+          const config = expectLoads(r);
+          expect(config.ble?.qn_user_slot).toBeUndefined();
+          expect(r.text).not.toContain('qn_user_slot');
+          expect(r.stdout).toContain(
+            `WARNING: Invalid qn_user_slot '${value}' (expected 1 to 8). Ignoring.`,
+          );
+        },
+      );
+
+      it('writes nothing when it is empty', () => {
+        const r = generate({ options: { ...DEFAULTS, qn_user_slot: '' } });
+        expectLoads(r);
+        expect(r.text).not.toContain('qn_user_slot');
+        expect(r.stdout).not.toContain('qn_user_slot');
       });
     });
 
@@ -1037,6 +1077,15 @@ describe.skipIf(!HARNESS)('run.sh custom_config and the transport options', () =
       "WARNING: custom_config is enabled, so the 'qn_user_key' option is ignored.",
     );
     expect(r.stdout).toContain("Set 'ble.qn_user_key' in");
+  });
+
+  it('names qn_user_slot as ignored when it is set', () => {
+    const r = run({ ...CUSTOM, qn_user_slot: '2' });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain(
+      "WARNING: custom_config is enabled, so the 'qn_user_slot' option is ignored.",
+    );
+    expect(r.stdout).toContain("Set 'ble.qn_user_slot' in");
   });
 
   it('names qn_result_ack as ignored when it is set', () => {
