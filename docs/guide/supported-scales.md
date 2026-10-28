@@ -26,6 +26,7 @@ _Weight only_ means the weight is read and body composition is estimated from BM
 | Arboleaf (QN-Scale, 19-byte dialect)                                   | Yes              | Uses the body composition the scale computes; see [QN Scales](./scales/qn) |
 | Renpho ES-CS20M on service 0x1A10                                      | Yes              | See [Renpho Scales](./scales/renpho) |
 | Renpho ES-WBE28                                                        | Weight only      | Standard GATT variant |
+| Renpho A-R003                                                          | Weight only      | Experimental; advertises no name, so it needs `ble.scale_mac` on the default Linux transport and on macOS |
 | Renpho ES-26BB-B                                                       | Yes              |       |
 | Renpho R-MSC04 (MorphoScan Nova)                                       | Weight only      | The scale's own body fat with `ble.rmsc04_profile_byte`; see [Renpho Scales](./scales/renpho) |
 | 1byone / Eufy C1 / P1                                                  | Yes              |       |
