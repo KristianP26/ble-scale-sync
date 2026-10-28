@@ -56,7 +56,8 @@ import { isHistoricalReading } from '../interfaces/reading-time.js';
  * Mutual exclusion with QnScaleAdapter: RenphoScaleAdapter claims "renpho"
  * devices whose characteristics show the SIG consent pair and no QN pair, and,
  * before discovery, those that do NOT advertise the QN vendor services
- * (0xFFE0 / 0xFFF0). See matches().
+ * (0xFFE0 / 0xFFF0). A device with no name at all (the Renpho A-R003, #507) is
+ * claimed on the characteristics the family shares. See matches().
  */
 
 // Standard SIG characteristics.
@@ -78,6 +79,24 @@ const CHR_VENDOR_2AFF = uuid16(0x2aff);
 // QN vendor service UUIDs (used for exclusion).
 const SVC_QN_T1 = 'ffe0';
 const SVC_QN_T2 = 'fff0';
+
+/**
+ * What a nameless scale of this family must expose once its characteristics are
+ * known: the consent pair, body composition, the vendor pair the handshake
+ * writes and the vendor 0x2AFF profile write. The ES-WBE28 (#267 capture) and
+ * the A-R003 (#507 log) both have all six. 0xFFF1 / 0xFFF2 are not required
+ * because the ES-WBE28 lacks them. An ES-WBE28 firmware without 0xFFE2 and the
+ * profile characteristics (tests/fixtures/renpho/es-wbe28-consent-only.ts) is
+ * not claimed nameless; the consent pair alone is shared with Beurer.
+ */
+const NAMELESS_FAMILY_CHARS = [
+  CHR_UCP,
+  CHR_WEIGHT,
+  CHR_BODYCOMP,
+  CHR_VENDOR_NOTIFY,
+  CHR_VENDOR_WRITE,
+  CHR_VENDOR_2AFF,
+];
 
 // Vendor handshake, replayed verbatim from the app capture (writes to 0xFFE2).
 const HANDSHAKE: number[][] = [
@@ -140,26 +159,34 @@ export class RenphoScaleAdapter
   private s = new RenphoSession();
 
   /**
-   * Match "renpho" devices that are not QN-protocol scales.
+   * Match "renpho" devices that are not QN-protocol scales, and the nameless
+   * Renpho A-R003.
    *
-   * Once the characteristics are known they decide (D-04). The ES-WBE28 hosts
-   * its vendor 0xFFE1/0xFFE2 pair in a 0xFFE0 GATT service, so on any path that
-   * merges discovered services into `serviceUuids` the service rule below read
-   * it as a QN scale and declined it, and QN took it on the shared name: always
-   * on node-ble, where the pre-connect record has no services and QN wins on
-   * priority. Its characteristics tell the two apart: the SIG consent pair
-   * (0x2A9F User Control Point and 0x2A9D) and no QN pair (notify 0xFFF1 or
-   * 0xFFE1 AND write 0xFFF2 or 0xFFE3), whose write half it lacks (#267
-   * capture). `qn-scale/matching.ts` applies the mirror rule.
+   * A device with no name (the A-R003 advertises none, #507) is decided by its
+   * characteristics once they are known: all of NAMELESS_FAMILY_CHARS. The QN
+   * pair does not count against it there, because the A-R003 has 0xFFF1 /
+   * 0xFFF2 next to the SIG stack; QN's nameless fallback declines it on the
+   * SIG consent pair. Before discovery nothing claims it here.
+   *
+   * For a "renpho" name, once the characteristics are known they decide (D-04).
+   * The ES-WBE28 hosts its vendor 0xFFE1/0xFFE2 pair in a 0xFFE0 GATT service,
+   * so on any path that merges discovered services into `serviceUuids` the
+   * service rule below read it as a QN scale and declined it, and QN took it on
+   * the shared name: always on node-ble, where the pre-connect record has no
+   * services and QN wins on priority. Its characteristics tell the two apart:
+   * the SIG consent pair (0x2A9F User Control Point and 0x2A9D) and no QN pair
+   * (notify 0xFFF1 or 0xFFE1 AND write 0xFFF2 or 0xFFE3), whose write half it
+   * lacks (#267 capture). `qn-scale/matching.ts` applies the mirror rule.
    *
    * Before discovery, "renpho" devices that advertise a QN vendor service
-   * (0xFFE0 / 0xFFF0) are left to QnScaleAdapter, as before.
+   * (0xFFE0 / 0xFFF0) are left to QnScaleAdapter.
    */
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
+    const chars = (device.characteristicUuids || []).map((u) => normalizeUuid(u));
+    if (!name) return NAMELESS_FAMILY_CHARS.every((c) => chars.includes(c));
     if (!name.includes('renpho')) return false;
 
-    const chars = (device.characteristicUuids || []).map((u) => normalizeUuid(u));
     if (chars.length > 0) {
       if (qnCanRun(chars)) return false;
       if (chars.includes(uuid16(0x2a9f)) && chars.includes(uuid16(0x2a9d))) return true;
@@ -178,9 +205,9 @@ export class RenphoScaleAdapter
 
   async onConnected(ctx: ConnectionContext): Promise<void> {
     // Consent on the SIG User Control Point is what unlocks the stream, so it is
-    // the only hard requirement. The vendor 0xFFE2 service is not advertised (the
-    // matcher rejects devices that advertise 0xFFE0), so a firmware variant may
-    // not expose it; guard its writes rather than hard-requiring it (#267 review).
+    // the only hard requirement. The vendor 0xFFE2 service is not advertised, so a
+    // device picked on its advertisement alone (any "renpho" name) may not expose
+    // it; guard its writes rather than hard-requiring it (#267 review).
     if (!ctx.availableChars.has(CHR_UCP)) {
       throw new Error(
         `Renpho ES-WBE28: User Control Point (${CHR_UCP}) not discovered. ` +

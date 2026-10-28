@@ -6,6 +6,14 @@ import { matchesDescriptor } from '../../src/scales/match-descriptor.js';
 import { uuid16 } from '../../src/scales/body-comp-helpers.js';
 import type { BleDeviceInfo } from '../../src/interfaces/scale-adapter.js';
 import { M1690_ADVERT, M1690_FE95_PID_018E } from '../helpers/yunmai-m1690.js';
+import {
+  AR003_ADVERT,
+  AR003_ADVERT_NODE_BLE,
+  AR003_ADDRESS,
+  AR003_CHARS,
+  AR003_SERVICES,
+  ar003CharsWithout,
+} from '../helpers/renpho-a-r003.js';
 
 /**
  * Registry collision guard for #182.
@@ -405,6 +413,8 @@ describe('AC 27 advertisements (#458, #462, #466)', () => {
   });
 });
 
+const RENPHO = 'Renpho ES-WBE28';
+
 /**
  * Post-discovery collision guard.
  *
@@ -500,6 +510,18 @@ const WBE28_GATT_SERVICES = [0x181b, 0x181d, 0x181c, 0xffe0].map(uuid16);
 const WBE28_CHARS = [
   0x2a9d, 0x2a9c, 0x2a9f, 0xffe1, 0xffe2, 0x2a8c, 0x2a8e, 0x2a85, 0x2a80, 0x2aff,
 ].map(uuid16);
+
+// The A-R003 characteristics without the 0x181C User Data service's (the
+// service split is the helper's hypothesis).
+const AR003_CHARS_WITHOUT_USER_DATA = ar003CharsWithout(
+  0x2a8c,
+  0x2a80,
+  0x2a85,
+  0x2a8e,
+  0x2a99,
+  0x2a9f,
+  0x2aff,
+);
 
 // A&D UC-352BLE (#408): the GATT discovery dump in HEADS-project/ThingML-BLE,
 // another unit; every handle the capture in oliexdev/openScale#1505 touches
@@ -683,6 +705,114 @@ const POST_DISCOVERY: PostDiscoveryCase[] = [
     advertised: M1690_ADVERT,
     gatt: { ...M1690_GATT, advertisedServicesKnown: false },
     expected: 'Yunmai',
+  },
+  // Renpho A-R003 (#507), characteristics from the log, services a hypothesis
+  // (tests/helpers/renpho-a-r003.ts). Inlife claims its 0xFFF2 without 0xFFF4,
+  // and QN's nameless fallback its discovered 0xFFE0 / 0xFFF0.
+  {
+    label: 'A-R003 over the ESPHome proxy or mqtt-proxy host-initiated (characteristics only)',
+    advertised: AR003_ADVERT,
+    gatt: { characteristicUuids: AR003_CHARS },
+    expected: RENPHO,
+  },
+  {
+    label: 'A-R003 mqtt-proxy autonomous connect, no cached advertisement',
+    advertised: { localName: '', address: AR003_ADDRESS, serviceUuids: [] },
+    gatt: { characteristicUuids: AR003_CHARS },
+    expected: RENPHO,
+  },
+  {
+    label: 'A-R003 on noble with scale_mac (services known)',
+    advertised: AR003_ADVERT,
+    gatt: { serviceUuids: AR003_SERVICES, characteristicUuids: AR003_CHARS },
+    expected: RENPHO,
+  },
+  {
+    label: 'A-R003 on noble with scale_mac on macOS (no address)',
+    advertised: { ...AR003_ADVERT, address: undefined },
+    gatt: { serviceUuids: AR003_SERVICES, characteristicUuids: AR003_CHARS },
+    expected: RENPHO,
+  },
+  {
+    label: 'A-R003 on node-ble with scale_mac (services unknown)',
+    advertised: AR003_ADVERT_NODE_BLE,
+    gatt: {
+      serviceUuids: AR003_SERVICES,
+      characteristicUuids: AR003_CHARS,
+      advertisedServicesKnown: false,
+    },
+    expected: RENPHO,
+  },
+  // A partial discovery misses the set, and the scale falls to the adapter
+  // that claims what is left: QN where the transport passes the discovered
+  // services (no consent pair to stop its fallback), Inlife otherwise. On
+  // node-ble the 0x181C User Data service can be exported late (bluez#1489).
+  {
+    label: 'A-R003 on node-ble before 0x181C is exported goes to QN',
+    advertised: AR003_ADVERT_NODE_BLE,
+    gatt: {
+      serviceUuids: AR003_SERVICES.filter((u) => u !== uuid16(0x181c)),
+      characteristicUuids: AR003_CHARS_WITHOUT_USER_DATA,
+      advertisedServicesKnown: false,
+    },
+    expected: 'QN Scale',
+  },
+  {
+    label: 'A-R003 on node-ble without 0x2AFF goes to Inlife',
+    advertised: AR003_ADVERT_NODE_BLE,
+    gatt: {
+      serviceUuids: AR003_SERVICES,
+      characteristicUuids: ar003CharsWithout(0x2aff),
+      advertisedServicesKnown: false,
+    },
+    expected: 'Inlife',
+  },
+  {
+    label: 'A-R003 on noble before 0x181C is discovered goes to QN',
+    advertised: AR003_ADVERT,
+    gatt: {
+      serviceUuids: AR003_SERVICES.filter((u) => u !== uuid16(0x181c)),
+      characteristicUuids: AR003_CHARS_WITHOUT_USER_DATA,
+    },
+    expected: 'QN Scale',
+  },
+  {
+    label: 'A-R003 over a proxy without 0x2A9F goes to Inlife',
+    advertised: AR003_ADVERT,
+    gatt: { characteristicUuids: ar003CharsWithout(0x2a9f) },
+    expected: 'Inlife',
+  },
+  {
+    label: 'A-R003 over a proxy without 0x2AFF goes to Inlife',
+    advertised: AR003_ADVERT,
+    gatt: { characteristicUuids: ar003CharsWithout(0x2aff) },
+    expected: 'Inlife',
+  },
+  // A "renpho" name with these characteristics keeps the name rule, which
+  // declines the QN pair 0xFFF1 / 0xFFF2: QN takes it where the name reaches
+  // it with QN's services, Inlife over a proxy where the advertised 0x181D
+  // makes QN defer.
+  {
+    label: '"Renpho-Scale" with the A-R003 characteristics over a proxy goes to Inlife',
+    advertised: { ...AR003_ADVERT, localName: 'Renpho-Scale' },
+    gatt: { characteristicUuids: AR003_CHARS },
+    expected: 'Inlife',
+  },
+  {
+    label: '"Renpho-Scale" with the A-R003 characteristics on noble goes to QN',
+    advertised: { ...AR003_ADVERT, localName: 'Renpho-Scale' },
+    gatt: { serviceUuids: AR003_SERVICES, characteristicUuids: AR003_CHARS },
+    expected: 'QN Scale',
+  },
+  {
+    label: '"Renpho-Scale" with the A-R003 characteristics on node-ble goes to QN',
+    advertised: { ...AR003_ADVERT_NODE_BLE, localName: 'Renpho-Scale' },
+    gatt: {
+      serviceUuids: AR003_SERVICES,
+      characteristicUuids: AR003_CHARS,
+      advertisedServicesKnown: false,
+    },
+    expected: 'QN Scale',
   },
   // #408: Inlife used to claim it on the bare 0xFFF0 and then on 0xFFF2 without
   // 0xFFF4, and hold the connection while the scale kept asking for the time.

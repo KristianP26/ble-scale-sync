@@ -9,6 +9,13 @@ import {
   defaultProfile,
   assertPayloadRanges,
 } from '../helpers/scale-test-utils.js';
+import {
+  AR003_ADVERT,
+  AR003_ADVERT_NODE_BLE,
+  AR003_CHARS,
+  AR003_SERVICES,
+  ar003CharsWithout,
+} from '../helpers/renpho-a-r003.js';
 
 const CHR_WEIGHT = uuid16(0x2a9d);
 const CHR_BODYCOMP = uuid16(0x2a9c);
@@ -107,6 +114,113 @@ describe('RenphoScaleAdapter', () => {
       };
       expect(makeAdapter().matches(qn)).toBe(false);
       expect(new QnScaleAdapter().matches(qn)).toBe(true);
+    });
+
+    // #507: the A-R003 advertises no name (tests/helpers/renpho-a-r003.ts).
+    describe('nameless (Renpho A-R003, #507)', () => {
+      it('claims the characteristics: chars only (proxies) and with the services (noble, node-ble)', () => {
+        const a = makeAdapter();
+        expect(a.matches({ ...AR003_ADVERT, characteristicUuids: AR003_CHARS })).toBe(true);
+        expect(
+          a.matches({
+            ...AR003_ADVERT,
+            serviceUuids: ['181d', ...AR003_SERVICES],
+            characteristicUuids: AR003_CHARS,
+          }),
+        ).toBe(true);
+        // mqtt-proxy autonomous connect without a cached advertisement.
+        expect(
+          a.matches({ localName: '', serviceUuids: [], characteristicUuids: AR003_CHARS }),
+        ).toBe(true);
+      });
+
+      it('claims a nameless ES-WBE28 on the #267 characteristics', () => {
+        expect(
+          makeAdapter().matches({
+            localName: '',
+            serviceUuids: [],
+            characteristicUuids: [...ALL_CHARS],
+          }),
+        ).toBe(true);
+      });
+
+      // QN outranks Renpho, so these are what keep the A-R003 here (its
+      // hasSigConsent guard); registry-check.ts notes it at the QN > Renpho order.
+      it('leaves the A-R003 to Renpho: QN declines its advertisement and every shape after discovery', () => {
+        const qn = new QnScaleAdapter();
+        expect(qn.matches(AR003_ADVERT)).toBe(false);
+        // The proxies: characteristics only.
+        expect(qn.matches({ ...AR003_ADVERT, characteristicUuids: AR003_CHARS })).toBe(false);
+        // noble: advertised and discovered services together.
+        expect(
+          qn.matches({
+            ...AR003_ADVERT,
+            serviceUuids: ['181d', ...AR003_SERVICES],
+            characteristicUuids: AR003_CHARS,
+          }),
+        ).toBe(false);
+        // node-ble: discovered services only.
+        expect(
+          qn.matches({
+            ...AR003_ADVERT_NODE_BLE,
+            serviceUuids: AR003_SERVICES,
+            characteristicUuids: AR003_CHARS,
+          }),
+        ).toBe(false);
+      });
+
+      it.each([0x2a9f, 0x2a9d, 0x2a9c, 0xffe1, 0xffe2, 0x2aff].map((c) => [c.toString(16), c]))(
+        'declines the characteristics without 0x%s, even with the A-R003 advertisement',
+        (_hex, code) => {
+          expect(
+            makeAdapter().matches({
+              ...AR003_ADVERT,
+              characteristicUuids: ar003CharsWithout(code),
+            }),
+          ).toBe(false);
+        },
+      );
+
+      // The shapes of false-match-resolution.test.ts: a nameless BF788 (#229) and
+      // the BF950 characteristics (#255), both without 0xFFE1 / 0xFFE2 / 0x2AFF.
+      it('declines nameless Beurer BF788 and BF950 characteristics', () => {
+        const a = makeAdapter();
+        expect(
+          a.matches({
+            localName: '',
+            serviceUuids: [0x181b, 0x181d, 0x181c, 0xfff0].map(uuid16),
+            characteristicUuids: [0x2a9d, 0x2a9c, 0x2a9f, 0x2a9b].map(uuid16),
+          }),
+        ).toBe(false);
+        expect(
+          a.matches({
+            localName: '',
+            serviceUuids: [0x181b, 0x181d].map(uuid16),
+            characteristicUuids: [0x2a9d, 0x2a2f, 0xfaa1, 0xfaa2].map(uuid16),
+          }),
+        ).toBe(false);
+      });
+
+      it('declines an unrelated name with the A-R003 advertisement and characteristics', () => {
+        const a = makeAdapter();
+        expect(a.matches({ ...AR003_ADVERT, localName: 'Yunmai ISM' })).toBe(false);
+        expect(
+          a.matches({ ...AR003_ADVERT, localName: 'Yunmai ISM', characteristicUuids: AR003_CHARS }),
+        ).toBe(false);
+      });
+
+      // The name rule is unchanged: the A-R003 characteristics carry the QN
+      // pair 0xFFF1 / 0xFFF2, so a "renpho"-named unit of this shape is not
+      // claimed on them (registry-collision.test.ts shows where it lands).
+      it('declines a "renpho"-named device with the A-R003 characteristics', () => {
+        expect(
+          makeAdapter().matches({
+            ...AR003_ADVERT,
+            localName: 'Renpho-Scale',
+            characteristicUuids: AR003_CHARS,
+          }),
+        ).toBe(false);
+      });
     });
   });
 

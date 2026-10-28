@@ -24,6 +24,12 @@ const { adapters: registry } = await import('../../../src/scales/index.js');
 const { bleFailureKind } = await import('../../../src/ble/failure-kind.js');
 const { normalizeUuid } = await import('../../../src/ble/types.js');
 import type { BleChar, BleDevice } from '../../../src/ble/session/ports.js';
+import {
+  AR003_ADDRESS,
+  AR003_CHARS,
+  AR003_MSD,
+  AR003_SERVICES,
+} from '../../helpers/renpho-a-r003.js';
 import type { ScaleAdapter } from '../../../src/interfaces/scale-adapter.js';
 
 /**
@@ -216,6 +222,32 @@ describe('GATT snapshot refresh before a retry (#1489)', () => {
       h.buildCharMap.mock.invocationCallOrder[1],
     );
   }, 20_000);
+});
+
+/**
+ * #507: the nameless Renpho A-R003 on node-ble with scale_mac. BlueZ gives no
+ * name and no advertised services, only the manufacturer data; the services
+ * discovered here include 0xFFE0 / 0xFFF0 (QN's nameless fallback) and the
+ * characteristics 0xFFF2 without 0xFFF4 (Inlife's claim).
+ */
+describe('resolveAfterConnect: nameless Renpho A-R003 (#507)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('resolves to Renpho ES-WBE28 on the first enumeration', async () => {
+    const gatt = {
+      init: vi.fn().mockResolvedValue(undefined),
+      services: vi.fn().mockResolvedValue(AR003_SERVICES),
+      getPrimaryService: vi.fn(),
+    };
+    h.buildCharMap.mockResolvedValue(new Map(AR003_CHARS.map((u) => [u, {} as never])));
+
+    const adapter = await resolveAfterConnect(gatt as never, registry, '', AR003_ADDRESS, {
+      manufacturerData: { id: 0xffff, data: AR003_MSD },
+    });
+
+    expect(adapter.name).toBe('Renpho ES-WBE28');
+    expect(gatt.init).not.toHaveBeenCalled();
+  });
 });
 
 /**

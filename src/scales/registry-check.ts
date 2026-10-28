@@ -32,6 +32,11 @@ export interface RegistryCheckResult {
 export const ORDERING_INVARIANTS: ReadonlyArray<readonly [string, string]> = [
   ['Senssun Fat Scale', 'QN Scale'],
   ['Eufy Smart Scale P2/P2 Pro', 'QN Scale'],
+  // QN outranks Renpho on the shared "renpho" name. On a nameless device only
+  // QN's hasSigConsent guard (qn-scale/matching.ts) keeps its fallback off the
+  // A-R003, whose GATT services (inferred from its handles) include 0xFFE0 /
+  // 0xFFF0, which it would otherwise claim ahead of Renpho (#507). Loosen that
+  // guard and this order hands the A-R003 to QN.
   ['QN Scale', 'Renpho ES-WBE28'],
   ['Beurer BF720/BF105', 'Xiaomi Mi Scale 2'],
   // A CH100 exposes the SIG body composition service 0x181B, which Mi Scale 2
@@ -69,6 +74,11 @@ export const ORDERING_INVARIANTS: ReadonlyArray<readonly [string, string]> = [
   // there, a change for other scales. Name claims that never overlap, so the
   // overlap check below cannot see it (#408).
   ['Renpho ES-WBE28', 'A&D UC-352BLE'],
+  // The nameless A-R003 has 0xFFF2 and no 0xFFF4 next to its SIG stack, which
+  // is what Inlife's characteristic rule claims. Renpho must stay above it, or
+  // every transport that resolves after discovery hands the scale to Inlife
+  // (#507). Custom on both sides, so the overlap check below is silent.
+  ['Renpho ES-WBE28', 'Inlife'],
 ];
 
 /** Run structural checks over an adapter registry. Pure — no throw, no log. */

@@ -13,6 +13,7 @@ import { applyForcedAdapter } from '../../src/scales/force.js';
 import { bleLog, POST_READING_RECONNECT_MS, SessionTimeoutError } from '../../src/ble/types.js';
 import { bleFailureKind } from '../../src/ble/failure-kind.js';
 import { M1690_PROTOCOL_VERSION_REPLY } from '../helpers/yunmai-m1690.js';
+import { AR003_ADDRESS, ar003MqttChars } from '../helpers/renpho-a-r003.js';
 
 // Suppress log output during tests
 vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -2179,6 +2180,31 @@ describe('handler-mqtt-proxy', () => {
         .filter((l) => l.startsWith('Autonomous GATT connect from ESP32:'));
       expect(picked).toEqual([
         'Autonomous GATT connect from ESP32: Renpho ES-WBE28 (5C:31:3E:01:16:6D)',
+      ]);
+      await watcher.stop();
+    });
+
+    // #507: the nameless Renpho A-R003 connected with no cached advertisement.
+    // Its 0xFFF2 without 0xFFF4 is Inlife's claim; the family characteristics
+    // keep it on the ES-WBE28 adapter, which reads it.
+    it('picks Renpho ES-WBE28 for the nameless A-R003 on an autonomous connect (#507)', async () => {
+      const infoSpy = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+      vi.spyOn(bleLog, 'warn').mockImplementation(() => {});
+      vi.spyOn(bleLog, 'error').mockImplementation(() => {});
+      const watcher = new ReadingWatcher(MQTT_PROXY_CONFIG, [...realAdapters], undefined, PROFILE);
+      await watcher.start();
+
+      mockClient._simulateMessage(
+        `${PREFIX}/connected`,
+        JSON.stringify({ autonomous: true, address: AR003_ADDRESS, chars: ar003MqttChars() }),
+      );
+      await new Promise((r) => setTimeout(r, 50));
+
+      const picked = infoSpy.mock.calls
+        .map((c) => String(c[0]))
+        .filter((l) => l.startsWith('Autonomous GATT connect from ESP32:'));
+      expect(picked).toEqual([
+        `Autonomous GATT connect from ESP32: Renpho ES-WBE28 (${AR003_ADDRESS})`,
       ]);
       await watcher.stop();
     });
