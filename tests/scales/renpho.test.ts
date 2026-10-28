@@ -15,6 +15,8 @@ import {
   AR003_CHARS,
   AR003_MSD,
   AR003_SERVICES,
+  AR003_WEIGH_IN,
+  AR003_WEIGH_IN_NOW,
   ar003CharsWithout,
 } from '../helpers/renpho-a-r003.js';
 import { ADVERT_501 } from '../fixtures/qn/cs10g-501.js';
@@ -33,23 +35,36 @@ const CHR_VENDOR_2AFF = uuid16(0x2aff);
 // Live frames decoded from the physical-device btsnoop capture.
 // Weight frame 1374: flags 0x4E, raw 0x076A = 1898 → 94.9 kg (×0.05).
 const WSS_FRAME = Buffer.from('4e6a07ea0707040c1a06aa00000000', 'hex');
-// Body-comp packet 2 (frame 1477): flags 0x020C, impedance 0x0D00 = 3328 → 332.8 Ω.
+// Body-comp packet 2 (frame 1477), in Renpho's own layout, not SIG (#507): its
+// first two bytes are the body water. Read as flags 0x020C they put an
+// "impedance" at [7..8], 0x0D00 → 332.8 Ω, from the wrong offset.
 const BCS_PACKET2 = Buffer.from('0c02f901f70144000dec00a500290091020600', 'hex');
+// Frame 1374 without its flags' time bit: 94.9 kg, no SIG Date Time.
+const WSS_NO_TIME = Buffer.from('006a07', 'hex');
+// Made up: a single SIG packet (flags 0x0202, no bit 12) whose fields fill it,
+// Time Stamp 2026-07-04 12:26:08 and impedance 0x0D00 (tests/fixtures/renpho/es-wbe28.ts).
+const BCS_SINGLE_SIG = Buffer.from('0202f901ea0707040c1a08000d', 'hex');
+
+const hex = (h: string): Buffer => Buffer.from(h, 'hex');
 
 function makeAdapter() {
   return new RenphoScaleAdapter();
 }
 
-/** Run at the time the capture's weight frame is stamped, so it reads as live. */
-function atCaptureTime(fn: () => void): void {
+function atClock(now: Date | number, fn: () => void): void {
   vi.useFakeTimers();
-  vi.setSystemTime(new Date(2026, 6, 4, 12, 26, 10));
+  vi.setSystemTime(now);
   try {
     fn();
   } finally {
     vi.useRealTimers();
   }
 }
+
+/** Run at the time the capture's weight frame is stamped, so it reads as live. */
+const atCaptureTime = (fn: () => void): void => atClock(new Date(2026, 6, 4, 12, 26, 10), fn);
+/** Run just after the A-R003 weigh-in (tests/helpers/renpho-a-r003.ts), so it reads as live. */
+const atAr003Time = (fn: () => void): void => atClock(AR003_WEIGH_IN_NOW, fn);
 
 const ALL_CHARS = new Set([
   CHR_WEIGHT,
@@ -347,14 +362,91 @@ describe('RenphoScaleAdapter', () => {
       expect(reading!.weight).toBeCloseTo(94.9, 1);
     });
 
-    it('extracts impedance from a body-composition packet', () => {
+    // #507: walked as SIG, packet 2 gave 332.8 Ω, and this test confirmed it
+    // because the expected value was our own reading of the capture.
+    it('reads no impedance from the second body-composition packet, and ends the weigh-in', () => {
       atCaptureTime(() => {
         const a = makeAdapter();
         a.parseCharNotification(CHR_WEIGHT, WSS_FRAME);
         const reading = a.parseCharNotification(CHR_BODYCOMP, BCS_PACKET2);
         expect(reading).not.toBeNull();
         expect(reading!.weight).toBeCloseTo(94.9, 1);
+        expect(reading!.impedance).toBe(0);
+        expect(reading!.timestamp).toEqual(new Date(2026, 6, 4, 12, 26, 6));
+        expect(a.isFinal(reading!)).toBe(true);
+      });
+    });
+
+    it('ends the A-R003 weigh-in on its second body-composition packet, not the first', () => {
+      atAr003Time(() => {
+        const a = makeAdapter();
+        for (let i = 0; i < 6; i++) {
+          a.parseCharNotification(CHR_WEIGHT, hex(AR003_WEIGH_IN.progress));
+        }
+        a.parseCharNotification(CHR_WEIGHT, hex(AR003_WEIGH_IN.final));
+        const first = a.parseCharNotification(CHR_BODYCOMP, hex(AR003_WEIGH_IN.bcsPacket1));
+        expect(a.isFinal(first!)).toBe(false);
+        const reading = a.parseCharNotification(CHR_BODYCOMP, hex(AR003_WEIGH_IN.bcsPacket2));
+        expect(reading!.weight).toBeCloseTo(82.3, 2);
+        expect(reading!.impedance).toBe(0);
+        expect(a.isFinal(reading!)).toBe(true);
+      });
+    });
+
+    // Packet 1 is SIG (flag bit 12) and its Time Stamp still dates a weight
+    // that came without one.
+    it('dates a weight without a time by the Time Stamp of the A-R003 packet 1', () => {
+      atAr003Time(() => {
+        const a = makeAdapter();
+        a.parseCharNotification(CHR_WEIGHT, WSS_NO_TIME);
+        const reading = a.parseCharNotification(CHR_BODYCOMP, hex(AR003_WEIGH_IN.bcsPacket1));
+        expect(reading!.timestamp).toEqual(new Date(2026, 9, 28, 10, 53, 41));
+        expect(reading!.impedance).toBe(0);
+      });
+    });
+
+    // Recognition by body water: in both packets, 42 of the values 25.0-79.9 %
+    // give flags whose fields fill 19 bytes and claim a Time Stamp, which the
+    // Time Stamp test rejects ([4..5] is a resistance, a year before 1582);
+    // every other value fails the length test.
+    it.each([
+      ['#267 frame 1477', BCS_PACKET2],
+      ['the A-R003 packet 2', hex(AR003_WEIGH_IN.bcsPacket2)],
+    ])('reads %s as the vendor packet for every body water in [0..1]', (_label, packet) => {
+      const misread: number[] = [];
+      for (let water = 250; water <= 799; water++) {
+        const a = makeAdapter();
+        a.parseCharNotification(CHR_WEIGHT, WSS_NO_TIME);
+        const p = Buffer.from(packet);
+        p.writeUInt16LE(water, 0);
+        const reading = a.parseCharNotification(CHR_BODYCOMP, p)!;
+        if (reading.impedance !== 0 || !a.isFinal(reading)) misread.push(water);
+      }
+      expect(misread).toEqual([]);
+    });
+
+    it.each([
+      ['#267 frame 1477', BCS_PACKET2],
+      [
+        'frame 1477 with [0] odd (the SIG imperial bit)',
+        Buffer.from([0x0d, ...BCS_PACKET2.subarray(1)]),
+      ],
+      ['the A-R003 packet 2', hex(AR003_WEIGH_IN.bcsPacket2)],
+    ])('leaves the weight and its missing time as the 0x2A9D gave them: %s', (_label, packet) => {
+      const a = makeAdapter();
+      a.parseCharNotification(CHR_WEIGHT, WSS_NO_TIME);
+      const reading = a.parseCharNotification(CHR_BODYCOMP, packet);
+      expect(reading!.weight).toBeCloseTo(94.9, 2);
+      expect(reading!.timestamp).toBeUndefined();
+    });
+
+    it('still walks a single SIG packet whose flags describe it', () => {
+      atCaptureTime(() => {
+        const a = makeAdapter();
+        a.parseCharNotification(CHR_WEIGHT, WSS_NO_TIME);
+        const reading = a.parseCharNotification(CHR_BODYCOMP, BCS_SINGLE_SIG);
         expect(reading!.impedance).toBeCloseTo(332.8, 1);
+        expect(reading!.timestamp).toEqual(new Date(2026, 6, 4, 12, 26, 8));
       });
     });
 
@@ -375,21 +467,41 @@ describe('RenphoScaleAdapter', () => {
       atCaptureTime(() => {
         const a = makeAdapter();
         a.parseCharNotification(CHR_WEIGHT, WSS_FRAME);
-        expect(a.parseCharNotification(CHR_BODYCOMP, BCS_PACKET2)!.impedance).toBeCloseTo(332.8, 1);
+        expect(a.parseCharNotification(CHR_BODYCOMP, BCS_SINGLE_SIG)!.impedance).toBeCloseTo(
+          332.8,
+          1,
+        );
         const next = a.parseCharNotification(CHR_WEIGHT, WSS_FRAME);
         expect(next!.impedance).toBe(0);
         expect(a.isFinal(next!)).toBe(false);
       });
     });
 
-    // A stored record is buffered as history the moment it is emitted, so its
-    // impedance joins that reading instead of becoming a second export of it.
-    it('emits a stored record once, with the impedance that follows it', () => {
+    // The same for the second packet. On the A-R003 frames only that packet
+    // can make isFinal true; on the ES-WBE28 ones this passed with the 332.8 Ω
+    // misread before #507 too.
+    it('does not carry one weigh-in second body-composition packet onto the next weight', () => {
+      atAr003Time(() => {
+        const a = makeAdapter();
+        a.parseCharNotification(CHR_WEIGHT, hex(AR003_WEIGH_IN.final));
+        a.parseCharNotification(CHR_BODYCOMP, hex(AR003_WEIGH_IN.bcsPacket1));
+        const done = a.parseCharNotification(CHR_BODYCOMP, hex(AR003_WEIGH_IN.bcsPacket2));
+        expect(a.isFinal(done!)).toBe(true);
+        const next = a.parseCharNotification(CHR_WEIGHT, hex(AR003_WEIGH_IN.final));
+        expect(a.isFinal(next!)).toBe(false);
+      });
+    });
+
+    // A stored record is buffered as history the moment it is emitted, so a
+    // later 0x2A9C of it joins that reading instead of becoming a second export.
+    it('emits a stored record once: its second packet adds nothing, a later impedance joins it', () => {
       // Real clock: the July capture stamp is a stored record by now.
       const a = makeAdapter();
       const stored = a.parseCharNotification(CHR_WEIGHT, WSS_FRAME);
       expect(isHistoricalReading(stored!)).toBe(true);
       expect(a.parseCharNotification(CHR_BODYCOMP, BCS_PACKET2)).toBeNull();
+      expect(stored!.impedance).toBe(0);
+      expect(a.parseCharNotification(CHR_BODYCOMP, BCS_SINGLE_SIG)).toBeNull();
       expect(stored!.impedance).toBeCloseTo(332.8, 1);
     });
 
@@ -410,9 +522,16 @@ describe('RenphoScaleAdapter', () => {
 
     it('does not throw on a truncated body-comp frame that over-claims via flags', () => {
       const a = makeAdapter();
+      a.parseCharNotification(CHR_WEIGHT, WSS_NO_TIME);
       // flags 0x0300 claim body-water + impedance, but only fat% fits.
       const truncated = Buffer.from([0x00, 0x03, 0x12, 0x01]);
-      expect(() => a.parseCharNotification(CHR_BODYCOMP, truncated)).not.toThrow();
+      let reading: ReturnType<typeof a.parseCharNotification> = null;
+      expect(() => {
+        reading = a.parseCharNotification(CHR_BODYCOMP, truncated);
+      }).not.toThrow();
+      // Neither SIG nor the 19-byte vendor packet: nothing is read, nothing ends the weigh-in.
+      expect(reading!.impedance).toBe(0);
+      expect(a.isFinal(reading!)).toBe(false);
     });
   });
 
@@ -422,7 +541,7 @@ describe('RenphoScaleAdapter', () => {
       expect(a.isComplete({ weight: 80, impedance: 0 })).toBe(true);
       expect(a.isComplete({ weight: 0, impedance: 0 })).toBe(false);
     });
-    it('is final only once impedance has arrived', () => {
+    it('is not final on a weight alone, and final with an impedance', () => {
       const a = makeAdapter();
       expect(a.isFinal({ weight: 80, impedance: 0 })).toBe(false);
       expect(a.isFinal({ weight: 80, impedance: 332.8 })).toBe(true);

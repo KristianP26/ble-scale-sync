@@ -140,7 +140,9 @@ export const AR003_WEIGH_IN = {
    * 0x2A9C packet 2, 19 bytes in the layout of the logged one, with made-up
    * values: water 45.8 % (`ca 01`) at [0..1], resistances 480 and 476 at
    * [2..5], the rest 0. Read as SIG flags, [0..1] is 0x01CA, which claims a
-   * Time Stamp at [4..10] whose year (476) is not a date.
+   * Time Stamp at [4..10] whose year (476) is not a date. Unmodified, this is
+   * the only fixture packet that reaches the Time Stamp check of
+   * describesPacket (renpho.ts); the logged packet 2 does too (#507).
    */
   bcsPacket2: 'ca01e001dc0100000000000000000000000000',
 } as const;

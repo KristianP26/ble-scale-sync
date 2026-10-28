@@ -49,9 +49,10 @@ import { isHistoricalReading } from '../interfaces/reading-time.js';
  *
  * The consent user index (170) and code (9999) are the returning-user values
  * captured from the RENPHO app's own registration; they are fixed for this
- * device family. Body composition is recomputed on the host from raw impedance
- * (BIA) rather than trusting the scale's per-profile derived numbers, which are
- * only correct for the single profile the scale was registered with.
+ * device family. Body composition is computed on the host rather than taken
+ * from the scale's per-profile derived numbers, which are only correct for the
+ * single profile the scale was registered with. Until the impedance in the
+ * second 0x2A9C packet is confirmed (#507), that is the BMI estimate.
  *
  * Mutual exclusion with QnScaleAdapter: RenphoScaleAdapter claims "renpho"
  * devices whose characteristics show the SIG consent pair and no QN pair, and,
@@ -147,6 +148,44 @@ const KG_PER_UNIT = 0.05;
 const LB_PER_UNIT = 0.1;
 const LB_TO_KG = 0.45359237;
 
+/**
+ * The optional Body Composition Measurement fields after the mandatory body
+ * fat, in SIG bit order: (flag, size, field the walk keeps).
+ */
+const SIG_FIELDS: ReadonlyArray<[number, number, 'impedance' | 'weight' | null]> = [
+  [0x0002, 7, null], // timestamp
+  [0x0004, 1, null], // user id
+  [0x0008, 2, null], // basal metabolism
+  [0x0010, 2, null], // muscle %
+  [0x0020, 2, null], // muscle mass
+  [0x0040, 2, null], // fat free mass
+  [0x0080, 2, null], // soft lean mass
+  [0x0100, 2, null], // body water mass
+  [0x0200, 2, 'impedance'], // impedance ×0.1 Ω
+  [0x0400, 2, 'weight'], // weight ×step
+  [0x0800, 2, null], // height
+];
+
+// Body Composition Measurement flag bit 12: the measurement is split across
+// two packets, and the spec sets it in both (BCS 1.0, 3.2.1).
+const BCS_MULTIPLE_PACKET = 0x1000;
+// The second 0x2A9C packet of a weigh-in on the ES-WBE28 (#267) and the A-R003 (#507).
+const VENDOR_PACKET_LENGTH = 19;
+
+/**
+ * Whether a packet's flags describe it exactly, as a single SIG packet's must:
+ * the fields they claim fill it to the byte, and a claimed Time Stamp is a
+ * date. parseSigDateTime rejects the year 0 the spec allows for "unknown", so
+ * a single packet from a scale whose clock was never set fails here too; a
+ * looser check would walk a vendor packet whose second resistance is 0 as SIG.
+ */
+function describesPacket(data: Buffer, flags: number): boolean {
+  let len = 4; // flags + body fat
+  for (const [flag, size] of SIG_FIELDS) if (flags & flag) len += size;
+  if (len !== data.length) return false;
+  return !(flags & 0x0002) || parseSigDateTime(data, 4) !== undefined;
+}
+
 /** One weigh-in's state, replaced whole in onSessionStart (#394, SCALES.md). */
 class RenphoSession {
   cachedWeight = 0;
@@ -155,6 +194,8 @@ class RenphoSession {
   cachedTimestamp: Date | undefined;
   /** The current weigh-in's reading when it is a stored record (see buildReading). */
   storedRecord: ScaleReading | null = null;
+  /** The weigh-in's second 0x2A9C packet has arrived (parseVendorPacket). */
+  compositionDone = false;
 }
 
 export class RenphoScaleAdapter
@@ -180,8 +221,8 @@ export class RenphoScaleAdapter
     { uuid: CHR_VENDOR_WRITE, type: 'write' },
   ];
 
-  // Hold the link open briefly after the weight settles so the multi-packet
-  // body-composition indications (carrying impedance) can land.
+  // Hold the link open briefly after the weight settles so the two
+  // body-composition indications can land; the second ends the hold (isFinal).
   readonly completionHoldMs = 8000;
 
   private s = new RenphoSession();
@@ -340,7 +381,8 @@ export class RenphoScaleAdapter
    * the runtime (D027) instead of being exported as today's. And the impedance
    * kept from the previous weigh-in is dropped: it was held ("first impedance
    * seen") across frames, so a stored record's impedance completed the hold of
-   * the next weight with a value measured on another day.
+   * the next weight with a value measured on another day. The same goes for
+   * the previous weigh-in's second 0x2A9C packet.
    */
   private parseWeightMeasurement(data: Buffer): void {
     if (data.length < 3) return;
@@ -352,43 +394,38 @@ export class RenphoScaleAdapter
     if (!(weight > 0) || !Number.isFinite(weight)) return;
     this.s.cachedWeight = weight;
     this.s.cachedImpedance = 0;
+    this.s.compositionDone = false;
     this.s.storedRecord = null;
     this.s.cachedTimestamp = flags & 0x02 ? trustedScaleTime(parseSigDateTime(data, 3)) : undefined;
   }
 
   /**
-   * Decode a 0x2A9C Body Composition Measurement packet, extracting impedance
-   * (the profile-independent field we need for host-side BIA). RENPHO splits the
-   * measurement across two indications and its per-packet flags can advertise
-   * fields that don't actually fit; so we walk fields in SIG bit-order and stop
-   * the moment the buffer is exhausted. We keep the FIRST impedance seen.
+   * Decode a 0x2A9C Body Composition Measurement packet. RENPHO splits the
+   * measurement across two indications. The first is SIG (flag bit 12), but
+   * its flags advertise fields that don't fit, so we walk fields in SIG bit
+   * order and stop the moment the buffer is exhausted. The second is not SIG
+   * (#507): it has no bit 12, and its first two bytes are the body water, not
+   * flags. Walked as SIG, it gave an "impedance" from an offset that moved with
+   * the body water (332.8 ohm on the #267 capture). So a packet without bit 12
+   * is walked only when its flags describe it exactly, as a single SIG packet's
+   * do. We keep the FIRST impedance seen.
    */
   private parseBodyComposition(data: Buffer): void {
     if (data.length < 4) return;
     const flags = data.readUInt16LE(0);
+    if (!(flags & BCS_MULTIPLE_PACKET) && !describesPacket(data, flags)) {
+      if (data.length === VENDOR_PACKET_LENGTH) this.parseVendorPacket(data);
+      else bleLog.debug(`Renpho ES-WBE28: 0x2A9C packet not decoded: ${data.toString('hex')}`);
+      return;
+    }
     const imperial = (flags & 0x0001) !== 0;
     const step = imperial ? LB_PER_UNIT : KG_PER_UNIT;
     const n = data.length;
 
-    // (flag, size, field). null flag = always present. Order is the SIG bit order.
-    const plan: Array<[number | null, number, 'impedance' | 'weight' | null]> = [
-      [null, 2, null], // body fat % (mandatory) — ignored; we recompute from impedance
-      [0x0002, 7, null], // timestamp
-      [0x0004, 1, null], // user id
-      [0x0008, 2, null], // basal metabolism
-      [0x0010, 2, null], // muscle %
-      [0x0020, 2, null], // muscle mass
-      [0x0040, 2, null], // fat free mass
-      [0x0080, 2, null], // soft lean mass
-      [0x0100, 2, null], // body water mass
-      [0x0200, 2, 'impedance'], // impedance ×0.1 Ω
-      [0x0400, 2, 'weight'], // weight ×step
-      [0x0800, 2, null], // height
-    ];
-
-    let off = 2;
-    for (const [flag, size, field] of plan) {
-      if (flag !== null && !(flags & flag)) continue;
+    // After the flags and the mandatory body fat, which is not used (computeMetrics).
+    let off = 4;
+    for (const [flag, size, field] of SIG_FIELDS) {
+      if (!(flags & flag)) continue;
       if (off + size > n) break; // belongs to a later packet
       if (flag === 0x0002 && !this.s.cachedTimestamp) {
         // A weigh-in whose 0x2A9D carried no time can still be dated by this.
@@ -402,6 +439,21 @@ export class RenphoScaleAdapter
       }
       off += size;
     }
+  }
+
+  /**
+   * The second 0x2A9C packet of a weigh-in, in Renpho's own layout (#507): the
+   * body water at [0..1], then most likely two resistances in ohm at [2..3]
+   * and [4..5]. Which one is the impedance is not confirmed against the Renpho
+   * app, so nothing of the packet goes into the reading. It still completes
+   * the weigh-in, as no body composition follows it.
+   */
+  private parseVendorPacket(data: Buffer): void {
+    this.s.compositionDone = true;
+    bleLog.debug(
+      'Renpho ES-WBE28: second body-composition packet (Renpho layout), resistances ' +
+        `${data.readUInt16LE(2)} / ${data.readUInt16LE(4)} ohm not used yet (#507)`,
+    );
   }
 
   /**
@@ -431,21 +483,22 @@ export class RenphoScaleAdapter
   }
 
   isComplete(reading: ScaleReading): boolean {
-    // Weight is enough to resolve; the hold window waits for impedance.
+    // Weight is enough to resolve; the hold window waits for the body composition (isFinal).
     return reading.weight > 0;
   }
 
-  /** Resolve immediately once impedance has arrived (the rich reading). */
+  /** Resolve once the body composition is in: an impedance, or the second 0x2A9C packet. */
   isFinal(reading: ScaleReading): boolean {
-    return reading.impedance > 0;
+    return reading.impedance > 0 || this.s.compositionDone;
   }
 
   computeMetrics(reading: ScaleReading, profile: UserProfile): BodyComposition {
     const comp: ScaleBodyComp = {};
-    // Recompute body fat from raw impedance (BIA) when the impedance is inside
-    // the plausible whole-body band; otherwise buildPayload falls back to BMI
-    // estimation, which is better than a pinned floor or ceiling published as a
-    // measurement (#405).
+    // Body fat from the impedance (BIA) when it is inside the plausible
+    // whole-body band, though no packet of this family gives one yet
+    // (parseVendorPacket); otherwise buildPayload falls back to BMI estimation,
+    // which is better than a pinned floor or ceiling published as a measurement
+    // (#405).
     comp.fat = biaFatIfPlausible(reading.weight, reading.impedance, profile);
     return buildPayload(reading.weight, reading.impedance, comp, profile);
   }

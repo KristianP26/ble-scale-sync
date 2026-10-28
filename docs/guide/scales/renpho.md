@@ -13,7 +13,7 @@ The Renpho R-MSC04 (MorphoScan Nova) and newer ES-CS20M revisions on service 0x1
 | --- | --- | --- |
 | R-MSC04 (MorphoScan Nova) | `Renpho R-MSC04` | BMI estimate; the scale's own with `ble.rmsc04_profile_byte` |
 | ES-CS20M on service 0x1A10 | `ES-CS20M` | From the measured resistance |
-| ES-WBE28 | `Renpho ES-WBE28` | From the measured impedance |
+| ES-WBE28 | `Renpho ES-WBE28` | BMI estimate |
 | ES-26BB-B | `Renpho ES-26BB` | From the measured impedance |
 
 ## Setup

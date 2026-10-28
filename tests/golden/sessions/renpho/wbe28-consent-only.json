@@ -5,7 +5,7 @@
   },
   "reading": {
     "weight": 94.9,
-    "impedance": 332.8,
+    "impedance": 0,
     "timestamp": "2026-07-04T12:26:06.000Z"
   },
   "history": [],
@@ -43,14 +43,14 @@
   "rxDropped": 0,
   "payload": {
     "weight": 94.9,
-    "impedance": 332.8,
+    "impedance": 0,
     "bmi": 28.34,
-    "bodyFatPercent": 16.4,
-    "waterPercent": 61.03,
-    "boneMass": 3.33,
-    "muscleMass": 76,
-    "visceralFat": 7,
-    "physiqueRating": 9,
+    "bodyFatPercent": 24.71,
+    "waterPercent": 54.97,
+    "boneMass": 3,
+    "muscleMass": 68.45,
+    "visceralFat": 11,
+    "physiqueRating": 5,
     "bmr": 1947,
     "metabolicAge": 31
   }
