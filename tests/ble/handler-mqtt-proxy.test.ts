@@ -13,7 +13,7 @@ import { applyForcedAdapter } from '../../src/scales/force.js';
 import { bleLog, POST_READING_RECONNECT_MS, SessionTimeoutError } from '../../src/ble/types.js';
 import { bleFailureKind } from '../../src/ble/failure-kind.js';
 import { M1690_PROTOCOL_VERSION_REPLY } from '../helpers/yunmai-m1690.js';
-import { AR003_ADDRESS, ar003MqttChars } from '../helpers/renpho-a-r003.js';
+import { AR003_ADDRESS, AR003_MSD, ar003MqttChars } from '../helpers/renpho-a-r003.js';
 
 // Suppress log output during tests
 vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -3263,6 +3263,61 @@ describe('handler-mqtt-proxy', () => {
       expect(reresolved).toBeDefined();
       expect(reresolved).toContain('1byone (Eufy)');
       infoSpy.mockRestore();
+      mockClient.publishAsync = origPublish;
+      await watcher.stop();
+    });
+
+    // #507: the nameless Renpho A-R003 over a host-initiated connect. Its
+    // advertisement claims it before connecting, and the characteristics keep
+    // it there instead of Inlife.
+    it('host-initiated GATT drives the nameless A-R003 with Renpho ES-WBE28 (#507)', async () => {
+      const infoSpy = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
+      const renpho = realAdapters.find((a) => a.name === 'Renpho ES-WBE28')!;
+      const onConnected = vi
+        .spyOn(renpho, 'onConnected' as never)
+        .mockResolvedValue(undefined as never);
+      const watcher = new ReadingWatcher(
+        { ...MQTT_PROXY_CONFIG, auto_connect: false },
+        [...realAdapters],
+        undefined,
+        PROFILE,
+      );
+      await watcher.start();
+
+      const origPublish = mockClient.publishAsync;
+      mockClient.publishAsync = vi.fn(async (topic: string, payload?: string | Buffer) => {
+        if (topic === `${PREFIX}/connect`) {
+          queueMicrotask(() =>
+            mockClient._simulateMessage(
+              `${PREFIX}/connected`,
+              JSON.stringify({ address: AR003_ADDRESS, chars: ar003MqttChars() }),
+            ),
+          );
+        }
+        return origPublish(topic, payload);
+      });
+
+      mockClient._simulateMessage(
+        `${PREFIX}/scan/results`,
+        JSON.stringify([
+          {
+            address: AR003_ADDRESS,
+            name: '',
+            rssi: -60,
+            services: ['181d'],
+            manufacturer_id: 0xffff,
+            manufacturer_data: AR003_MSD.toString('hex'),
+          },
+        ]),
+      );
+      await new Promise((r) => setTimeout(r, 80));
+
+      const info = infoSpy.mock.calls.map((c) => String(c[0]));
+      expect(info).toContain(`Connecting via GATT proxy to Renpho ES-WBE28 (${AR003_ADDRESS})...`);
+      expect(info.some((l) => l.includes('Re-resolved adapter after GATT discovery'))).toBe(false);
+      expect(onConnected).toHaveBeenCalledTimes(1);
+      infoSpy.mockRestore();
+      onConnected.mockRestore();
       mockClient.publishAsync = origPublish;
       await watcher.stop();
     });

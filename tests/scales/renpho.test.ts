@@ -13,9 +13,11 @@ import {
   AR003_ADVERT,
   AR003_ADVERT_NODE_BLE,
   AR003_CHARS,
+  AR003_MSD,
   AR003_SERVICES,
   ar003CharsWithout,
 } from '../helpers/renpho-a-r003.js';
+import { ADVERT_501 } from '../fixtures/qn/cs10g-501.js';
 
 const CHR_WEIGHT = uuid16(0x2a9d);
 const CHR_BODYCOMP = uuid16(0x2a9c);
@@ -118,6 +120,19 @@ describe('RenphoScaleAdapter', () => {
 
     // #507: the A-R003 advertises no name (tests/helpers/renpho-a-r003.ts).
     describe('nameless (Renpho A-R003, #507)', () => {
+      const withMsd = (data: Buffer) => ({
+        ...AR003_ADVERT,
+        manufacturerData: { id: 0xffff, data },
+      });
+
+      it('claims the advertisement, with 0x181D or with no services reported (node-ble)', () => {
+        expect(makeAdapter().matches(AR003_ADVERT)).toBe(true);
+        expect(makeAdapter().matches(AR003_ADVERT_NODE_BLE)).toBe(true);
+        expect(makeAdapter().matches({ ...AR003_ADVERT, serviceUuids: [uuid16(0x181d)] })).toBe(
+          true,
+        );
+      });
+
       it('claims the characteristics: chars only (proxies) and with the services (noble, node-ble)', () => {
         const a = makeAdapter();
         expect(a.matches({ ...AR003_ADVERT, characteristicUuids: AR003_CHARS })).toBe(true);
@@ -168,6 +183,45 @@ describe('RenphoScaleAdapter', () => {
           }),
         ).toBe(false);
       });
+
+      it.each([
+        ['another address', { address: '02:00:00:00:00:02' }],
+        ['no address', { address: undefined }],
+        ['an address that is not a MAC (macOS)', { address: '<unknown>' }],
+        ['services without 0x181D', { serviceUuids: ['181b'] }],
+      ])('declines the advertisement heard with %s', (_label, over) => {
+        expect(makeAdapter().matches({ ...AR003_ADVERT, ...over })).toBe(false);
+      });
+
+      it('declines the payload under another company id, or one byte longer or shorter', () => {
+        const a = makeAdapter();
+        expect(
+          a.matches({ ...AR003_ADVERT, manufacturerData: { id: 0x1a10, data: AR003_MSD } }),
+        ).toBe(false);
+        expect(a.matches(withMsd(Buffer.concat([AR003_MSD, Buffer.from([0x00])])))).toBe(false);
+        expect(a.matches(withMsd(AR003_MSD.subarray(0, 16)))).toBe(false);
+        expect(a.matches({ ...AR003_ADVERT, manufacturerData: undefined })).toBe(false);
+      });
+
+      it('declines the address echoed in the forward order or at another offset', () => {
+        const forward = Buffer.from(AR003_MSD);
+        Buffer.from('020000000001', 'hex').copy(forward, 9);
+        expect(makeAdapter().matches(withMsd(forward))).toBe(false);
+        // The QN layout: the address little-endian at [5..10].
+        const qnOffset = Buffer.from(AR003_MSD);
+        qnOffset.fill(0, 9, 15);
+        Buffer.from('010000000002', 'hex').copy(qnOffset, 5);
+        expect(makeAdapter().matches(withMsd(qnOffset))).toBe(false);
+      });
+
+      // #501: a QN CS10G advertises 17 bytes under 0xFFFF too, its address at
+      // [5..10] (tests/fixtures/qn/cs10g-501.ts).
+      it.each([[[]], [['ffe0']], [['181d']]])(
+        'declines the 17-byte CS10G advertisement without a name, services %j',
+        (serviceUuids) => {
+          expect(makeAdapter().matches({ ...ADVERT_501, localName: '', serviceUuids })).toBe(false);
+        },
+      );
 
       it.each([0x2a9f, 0x2a9d, 0x2a9c, 0xffe1, 0xffe2, 0x2aff].map((c) => [c.toString(16), c]))(
         'declines the characteristics without 0x%s, even with the A-R003 advertisement',

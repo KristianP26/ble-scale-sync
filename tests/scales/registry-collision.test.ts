@@ -14,6 +14,7 @@ import {
   AR003_SERVICES,
   ar003CharsWithout,
 } from '../helpers/renpho-a-r003.js';
+import { ADVERT_501 } from '../fixtures/qn/cs10g-501.js';
 
 /**
  * Registry collision guard for #182.
@@ -413,7 +414,63 @@ describe('AC 27 advertisements (#458, #462, #466)', () => {
   });
 });
 
+// Renpho A-R003 (#507): no name, 0x181D, and 17 bytes under company 0xFFFF
+// with the scale's address little-endian at [9..14] (tests/helpers/renpho-a-r003.ts).
+// The paths that pick before connecting and never re-resolve (the ESPHome
+// single-shot scan, noble auto-discovery) keep this pick.
 const RENPHO = 'Renpho ES-WBE28';
+const AR003_ADVERTS: Array<{ label: string; info: BleDeviceInfo; expected: string | undefined }> = [
+  {
+    label: 'A-R003 with its advertised 0x181D (proxies, noble on Linux and Windows)',
+    info: AR003_ADVERT,
+    expected: RENPHO,
+  },
+  {
+    label: 'A-R003 on node-ble with scale_mac (no advertised services)',
+    info: AR003_ADVERT_NODE_BLE,
+    expected: RENPHO,
+  },
+  // CoreBluetooth hides the address, so nothing checks the echo there.
+  {
+    label: 'A-R003 on macOS (no address) stays Standard GATT',
+    info: { ...AR003_ADVERT, address: undefined },
+    expected: 'Standard GATT (BCS/WSS)',
+  },
+  // #501: the QN CS10G also sends 17 bytes under 0xFFFF, its address at [5..10].
+  {
+    label: 'nameless 17-byte CS10G (#501), no services, claims nothing',
+    info: { ...ADVERT_501, localName: '', serviceUuids: [] },
+    expected: undefined,
+  },
+  {
+    label: 'nameless 17-byte CS10G (#501) with 0xFFE0 stays QN',
+    info: { ...ADVERT_501, localName: '' },
+    expected: 'QN Scale',
+  },
+  {
+    label: 'nameless 17-byte CS10G (#501) with 0x181D stays Standard GATT',
+    info: { ...ADVERT_501, localName: '', serviceUuids: ['181d'] },
+    expected: 'Standard GATT (BCS/WSS)',
+  },
+  {
+    label: 'named 17-byte CS10G (#501) stays QN',
+    info: ADVERT_501,
+    expected: 'QN Scale',
+  },
+];
+
+describe('nameless Renpho A-R003 advertisements (#507)', () => {
+  it.each(AR003_ADVERTS)('$label', ({ info, expected }) => {
+    expect(resolveAdapter(info, adapters)?.name).toBe(expected);
+  });
+
+  it('is claimed by Renpho and the generic fallback only', () => {
+    expect(adapters.filter((a) => a.matches(AR003_ADVERT)).map((a) => a.name)).toEqual([
+      RENPHO,
+      'Standard GATT (BCS/WSS)',
+    ]);
+  });
+});
 
 /**
  * Post-discovery collision guard.

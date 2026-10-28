@@ -18,7 +18,7 @@ import {
 } from './body-comp-helpers.js';
 import { bleLog, normalizeUuid } from '../ble/types.js';
 import { qnCanRun } from './qn-scale/matching.js';
-import type { MatchDescriptor } from './match-descriptor.js';
+import { ownAddressBytes, uuidClaimHits, type MatchDescriptor } from './match-descriptor.js';
 import { parseSigDateTime, trustedScaleTime } from './sig-wss.js';
 import { isHistoricalReading } from '../interfaces/reading-time.js';
 
@@ -57,7 +57,8 @@ import { isHistoricalReading } from '../interfaces/reading-time.js';
  * devices whose characteristics show the SIG consent pair and no QN pair, and,
  * before discovery, those that do NOT advertise the QN vendor services
  * (0xFFE0 / 0xFFF0). A device with no name at all (the Renpho A-R003, #507) is
- * claimed on the characteristics the family shares. See matches().
+ * claimed on the characteristics the family shares, or before discovery on its
+ * advertisement. See matches().
  */
 
 // Standard SIG characteristics.
@@ -97,6 +98,33 @@ const NAMELESS_FAMILY_CHARS = [
   CHR_VENDOR_WRITE,
   CHR_VENDOR_2AFF,
 ];
+
+// The A-R003 advertisement (#507 log): company 0xFFFF, 17 bytes, the scale's
+// own address little-endian at [9..14]. The other bytes are not decoded.
+const AR003_COMPANY_ID = 0xffff;
+const AR003_MSD_LENGTH = 17;
+const AR003_ADDRESS_OFFSET = 9;
+
+/**
+ * Whether a nameless advertisement is the A-R003's. QN scales also use company
+ * 0xFFFF, with the address at [5..10] (a 17-byte one in #501) or an 0xAABB
+ * header of 19 bytes or more, so the length and the echo offset together keep
+ * them out. 0x181D is required whenever the transport reports advertised
+ * services; node-ble reports none before connecting.
+ */
+function isAr003Advertisement(device: BleDeviceInfo): boolean {
+  const msd = device.manufacturerData;
+  if (msd?.id !== AR003_COMPANY_ID || msd.data.length !== AR003_MSD_LENGTH) return false;
+  const services = device.serviceUuids ?? [];
+  if (services.length > 0 && !uuidClaimHits(['181d'], services)) return false;
+  const own = ownAddressBytes(device.address);
+  if (!own) return false;
+  const echoed = Buffer.from(msd.data.subarray(AR003_ADDRESS_OFFSET, AR003_ADDRESS_OFFSET + 6))
+    .reverse()
+    .toString('hex')
+    .toUpperCase();
+  return echoed === own;
+}
 
 // Vendor handshake, replayed verbatim from the app capture (writes to 0xFFE2).
 const HANDSHAKE: number[][] = [
@@ -166,7 +194,9 @@ export class RenphoScaleAdapter
    * characteristics once they are known: all of NAMELESS_FAMILY_CHARS. The QN
    * pair does not count against it there, because the A-R003 has 0xFFF1 /
    * 0xFFF2 next to the SIG stack; QN's nameless fallback declines it on the
-   * SIG consent pair. Before discovery nothing claims it here.
+   * SIG consent pair. Before discovery only its advertisement can claim it
+   * (isAr003Advertisement). Characteristics that miss the set win over a
+   * matching advertisement.
    *
    * For a "renpho" name, once the characteristics are known they decide (D-04).
    * The ES-WBE28 hosts its vendor 0xFFE1/0xFFE2 pair in a 0xFFE0 GATT service,
@@ -184,7 +214,11 @@ export class RenphoScaleAdapter
   matches(device: BleDeviceInfo): boolean {
     const name = (device.localName || '').toLowerCase();
     const chars = (device.characteristicUuids || []).map((u) => normalizeUuid(u));
-    if (!name) return NAMELESS_FAMILY_CHARS.every((c) => chars.includes(c));
+    if (!name) {
+      return chars.length > 0
+        ? NAMELESS_FAMILY_CHARS.every((c) => chars.includes(c))
+        : isAr003Advertisement(device);
+    }
     if (!name.includes('renpho')) return false;
 
     if (chars.length > 0) {
@@ -206,8 +240,9 @@ export class RenphoScaleAdapter
   async onConnected(ctx: ConnectionContext): Promise<void> {
     // Consent on the SIG User Control Point is what unlocks the stream, so it is
     // the only hard requirement. The vendor 0xFFE2 service is not advertised, so a
-    // device picked on its advertisement alone (any "renpho" name) may not expose
-    // it; guard its writes rather than hard-requiring it (#267 review).
+    // device picked on its advertisement alone (any "renpho" name, or the nameless
+    // A-R003 on a path that never re-resolves) may not expose it; guard its writes
+    // rather than hard-requiring it (#267 review).
     if (!ctx.availableChars.has(CHR_UCP)) {
       throw new Error(
         `Renpho ES-WBE28: User Control Point (${CHR_UCP}) not discovered. ` +
