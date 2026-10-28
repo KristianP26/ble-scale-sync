@@ -3273,9 +3273,8 @@ describe('handler-mqtt-proxy', () => {
     it('host-initiated GATT drives the nameless A-R003 with Renpho ES-WBE28 (#507)', async () => {
       const infoSpy = vi.spyOn(bleLog, 'info').mockImplementation(() => {});
       const renpho = realAdapters.find((a) => a.name === 'Renpho ES-WBE28')!;
-      const onConnected = vi
-        .spyOn(renpho, 'onConnected' as never)
-        .mockResolvedValue(undefined as never);
+      const onConnected = vi.fn(async () => {});
+      renpho.onConnected = onConnected;
       const watcher = new ReadingWatcher(
         { ...MQTT_PROXY_CONFIG, auto_connect: false },
         [...realAdapters],
@@ -3317,7 +3316,8 @@ describe('handler-mqtt-proxy', () => {
       expect(info.some((l) => l.includes('Re-resolved adapter after GATT discovery'))).toBe(false);
       expect(onConnected).toHaveBeenCalledTimes(1);
       infoSpy.mockRestore();
-      onConnected.mockRestore();
+      // An own property over the prototype method; deleting it restores the lookup.
+      delete renpho.onConnected;
       mockClient.publishAsync = origPublish;
       await watcher.stop();
     });
